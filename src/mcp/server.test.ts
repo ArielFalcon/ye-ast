@@ -359,13 +359,21 @@ test("a fault is a tool error carrying its kind and a redacted detail, with no f
   await session.close();
 });
 
-test("an unknown-symbol fault lists every entry that names no node", async () => {
-  const fault: ImpactFault = { kind: "unknown-symbol", detail: "no such symbol", entries: [{ file: "src/A.java", symbol: "A.gone" }, { file: "src/B.java", symbol: "B.gone" }] };
+test("an unknown-symbol fault lists every entry that names no node and what its file declares", async () => {
+  const fault: ImpactFault = {
+    kind: "unknown-symbol",
+    detail: "no such symbol",
+    entries: [
+      { file: "src/A.java", symbol: "A.gone", candidates: ["A.other", "A.used"] },
+      { file: "src/B.java", symbol: "B.gone", candidates: [] },
+    ],
+  };
   const { session } = await setup({ callers: async () => ({ ok: false, fault }) });
   const result = await session.callTool("ye_ast_callers", { targets: [{ file: "src/A.java", symbol: "A.gone" }] });
   assert.equal(result.isError, true);
-  assert.match(textOf(result), /src\/A\.java:A\.gone/);
-  assert.match(textOf(result), /src\/B\.java:B\.gone/);
+  const text = textOf(result);
+  assert.match(text, /src\/A\.java:A\.gone: declared in src\/A\.java: A\.other, A\.used/);
+  assert.match(text, /src\/B\.java:B\.gone: src\/B\.java declares no symbol/);
   await session.close();
 });
 

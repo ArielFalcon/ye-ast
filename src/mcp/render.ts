@@ -188,8 +188,13 @@ export function renderImporters(fact: Fact<ImportersValue>): string {
   return lines.join("\n");
 }
 
+/** What a fault entry can be told to the caller: the declarations of the file that could have been asked instead. */
+function declarationText(entry: { file: string; candidates: readonly string[] }): string {
+  return entry.candidates.length === 0 ? `${entry.file} declares no symbol` : `declared in ${entry.file}: ${entry.candidates.join(", ")}`;
+}
+
 export function renderFault(fault: { kind: string; detail: string } | ImpactFault): string {
-  const entries = "entries" in fault ? fault.entries.map((entry) => `\n  - ${entry.file}:${entry.symbol}`).join("") : "";
+  const entries = "entries" in fault ? fault.entries.map((entry) => `\n  - ${entry.file}:${entry.symbol}: ${declarationText(entry)}`).join("") : "";
   return `fault: ${fault.kind}\n${fault.detail.trim()}${entries}`;
 }
 

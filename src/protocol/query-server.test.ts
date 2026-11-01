@@ -273,14 +273,14 @@ test("every fault the ports answer maps to its own code, with its detail redacte
 
 test("an unknown symbol answers its code and names every entry, redacted", async () => {
   const { deps, behave } = fakes();
-  behave("callers", async () => ({ ok: false, fault: { kind: "unknown-symbol", detail: "no node", entries: [{ file: "a.ts", symbol: `run${SECRET}` }] } }));
+  behave("callers", async () => ({ ok: false, fault: { kind: "unknown-symbol", detail: "no node", entries: [{ file: "a.ts", symbol: `run${SECRET}`, candidates: [`load${SECRET}`] }] } }));
   const session = await untrusted(deps);
 
   session.send(request(1, METHOD.impactCallers, OPERATIONS[2].params));
   const answer = await session.receive();
 
   assert.equal(answer.error?.code, ERROR_CODE["unknown-symbol"]);
-  assert.deepEqual(answer.error?.data.entries, [{ file: "a.ts", symbol: `run${REDACTED}` }]);
+  assert.deepEqual(answer.error?.data.entries, [{ file: "a.ts", symbol: `run${REDACTED}`, candidates: [`load${REDACTED}`] }]);
 });
 
 test("a query family that throws answers `internal-error` with the first line of the message redacted, and the server keeps serving", async () => {

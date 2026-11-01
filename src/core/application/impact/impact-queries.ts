@@ -20,7 +20,7 @@ import type { AngularDeclaration, AngularDeclarationReader } from "../../ports/a
 import type { CodeGraph, CodeGraphReader, GraphSymbol, IndexSummary } from "../../ports/code-graph.port.ts";
 import type { Digest } from "../../ports/digest.port.ts";
 import type { IndexCache } from "../../ports/index-cache.port.ts";
-import type { CallersTarget, ImpactFault, ImpactOfChangeRequest, ImpactQueries, OfChangeFault } from "../../ports/impact-queries.port.ts";
+import type { CallersTarget, ImpactFault, ImpactOfChangeRequest, ImpactQueries, OfChangeFault, UnknownSymbolFault } from "../../ports/impact-queries.port.ts";
 import type { AtRevision, LiveSelector } from "../../ports/live-queries.port.ts";
 import type { PathMatcher } from "../../ports/path-matcher.port.ts";
 import { isEngineConfiguration } from "../../ports/staging-rules.ts";
@@ -394,6 +394,11 @@ function rangeChanges(targets: readonly CallersTarget[]): FileChange[] {
     .sort((a, b) => compareText(a.path, b.path));
 }
 
+/** What a file declares that a request can seed, so a symbol that names no node tells the caller what does. */
+function candidatesOf(symbols: readonly GraphSymbol[]): string[] {
+  return [...new Set(symbols.filter(isSeedable).map((symbol) => symbol.name))].sort(compareText);
+}
+
 interface WalkInput {
   store: CodeGraphReader;
   changes: readonly FileChange[];
@@ -409,8 +414,8 @@ interface WalkInput {
 interface ImpactRead {
   value: Pick<ImpactValue, "seeds" | "symbols" | "entrypoints" | "cost">;
   cuts: Cut[];
-  /** The requested symbols that name no node; the walk does not run when there is one. */
-  missing: { file: string; symbol: string }[];
+  /** The requested symbols that name no node, with what their file declares; the walk does not run when there is one. */
+  missing: UnknownSymbolFault["entries"];
 }
 
 function impactOf(input: WalkInput): ImpactRead {
@@ -421,7 +426,7 @@ function impactOf(input: WalkInput): ImpactRead {
   const symbols = store.symbolsInFiles([...new Set([...sourceChanges, ...componentFiles, ...requested.map(({ file }) => file)])]);
   const symbolsByFile = Map.groupBy(symbols, (symbol) => symbol.file);
   const asked = requested.map((target) => ({ target, found: (symbolsByFile.get(target.file) ?? []).filter((symbol) => isSeedable(symbol) && joinsFact(symbol, { path: target.file, line: symbol.startLine, symbol: target.symbol })) }));
-  const missing = asked.filter(({ found: nodes }) => nodes.length === 0).map(({ target }) => target);
+  const missing = asked.filter(({ found: nodes }) => nodes.length === 0).map(({ target }) => ({ ...target, candidates: candidatesOf(symbolsByFile.get(target.file) ?? []) }));
   if (missing.length > 0) return { value: { seeds: [], symbols: [], entrypoints: [], cost: { expansionsUsed: 0 } }, cuts: [], missing };
 
   const selection = selectSeeds({ files: changes }, symbolsByFile, componentsByResource);

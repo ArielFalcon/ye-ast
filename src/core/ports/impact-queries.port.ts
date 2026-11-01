@@ -55,7 +55,12 @@ interface ImpactImportersBase {
 export interface UnknownSymbolFault {
   kind: "unknown-symbol";
   detail: string;
-  entries: readonly { file: string; symbol: string }[];
+  entries: readonly {
+    file: string;
+    symbol: string;
+    /** The seedable declarations of the file, sorted and once each; empty when it declares none or is not indexed. */
+    candidates: readonly string[];
+  }[];
 }
 
 export type OfChangeFault = VcsFault | LiveFault;

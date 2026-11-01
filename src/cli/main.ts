@@ -78,7 +78,7 @@ export async function run(argv: readonly string[], io: CliIo, deps: CliDeps): Pr
   try {
     const result = await query();
     if (!result.ok) {
-      io.err(`ye-ast: ${result.fault.kind}: ${deps.redaction.redact(result.fault.detail.trim())}`);
+      for (const line of faultText(result.fault, deps.redaction)) io.err(line);
       return result.fault.kind === "aborted" ? EXIT_CODE.interrupted : EXIT_CODE.queryFailed;
     }
     io.out(JSON.stringify(deps.redaction.redactValue(result.value), null, 2));
@@ -87,6 +87,17 @@ export async function run(argv: readonly string[], io: CliIo, deps: CliDeps): Pr
     io.err(`ye-ast: internal fault: ${deps.redaction.redact(firstLine(error))}`);
     return EXIT_CODE.internalFault;
   }
+}
+
+/** Every line a fault prints: the kind and detail, then the symbol each entry named and what its file declares. */
+function faultText(fault: ImpactFault, redaction: Redaction): string[] {
+  const entries = fault.kind === "unknown-symbol" ? fault.entries.map((entry) => `  - ${entry.file}:${entry.symbol}: ${declarationText(entry)}`) : [];
+  return [`ye-ast: ${fault.kind}: ${redaction.redact(fault.detail.trim())}`, ...entries.map((line) => redaction.redact(line))];
+}
+
+/** What a fault entry can be told to the caller: the declarations of the file that could have been asked instead. */
+function declarationText(entry: { file: string; candidates: readonly string[] }): string {
+  return entry.candidates.length === 0 ? `${entry.file} declares no symbol` : `declared in ${entry.file}: ${entry.candidates.join(", ")}`;
 }
 
 async function runInstall(args: readonly string[], io: CliIo, deps: CliDeps): Promise<number> {

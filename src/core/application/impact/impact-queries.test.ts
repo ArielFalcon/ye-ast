@@ -384,7 +384,21 @@ test("a requested symbol that names no node at the revision is a typed failure n
   const answer = await callers({ targets: [{ file: "src/A.java", symbol: "f" }, { file: "src/A.java", symbol: "gone" }, { file: "src/B.java", symbol: "f" }] });
   assert.ok(!answer.ok);
   assert.equal(answer.fault.kind, "unknown-symbol");
-  assert.deepEqual(answer.fault.kind === "unknown-symbol" && answer.fault.entries, [{ file: "src/A.java", symbol: "gone" }, { file: "src/B.java", symbol: "f" }]);
+  assert.deepEqual(answer.fault.kind === "unknown-symbol" && answer.fault.entries, [
+    { file: "src/A.java", symbol: "gone", candidates: ["f"] },
+    { file: "src/B.java", symbol: "f", candidates: ["g"] },
+  ]);
+});
+
+test("a missing entry names the seedable declarations of its file, sorted and once each, and none for a file the index does not hold", async () => {
+  const nodes = [fakeNode("z", "function", "src/A.java", 1), fakeNode("a1", "method", "src/A.java", 5, 5, "a"), fakeNode("a2", "method", "src/A.java", 9, 9, "a"), fakeNode("d", "field", "src/A.java", 12)];
+  const { callers } = setup({ nodes });
+  const answer = await callers({ targets: [{ file: "src/A.java", symbol: "gone" }, { file: "src/Elsewhere.java", symbol: "x" }] });
+  assert.ok(!answer.ok);
+  assert.deepEqual(answer.fault.kind === "unknown-symbol" && answer.fault.entries, [
+    { file: "src/A.java", symbol: "gone", candidates: ["a", "z"] },
+    { file: "src/Elsewhere.java", symbol: "x", candidates: [] },
+  ]);
 });
 
 test("the walk budget reaches the callers fact as a cut, and the config digest covers the targets", async () => {

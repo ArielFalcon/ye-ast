@@ -333,11 +333,25 @@ test("a callers target that is neither file:symbol nor file:start-end with 1 <= 
   assert.equal(await run(["callers"], noRepository.io, noRepository.deps), EXIT_CODE.usage);
 });
 
-test("callers answers an unknown symbol with the query code, one line on stderr and nothing on stdout", async () => {
-  const { io, deps } = setupCallers({ ok: false, fault: { kind: "unknown-symbol", detail: "no symbol at the revision for A.java:gone", entries: [{ file: "A.java", symbol: "gone" }] } });
+test("callers answers an unknown symbol with the query code, one line per entry on stderr naming what the file declares, and nothing on stdout", async () => {
+  const { io, deps } = setupCallers({
+    ok: false,
+    fault: {
+      kind: "unknown-symbol",
+      detail: "no symbol at the revision for A.java:gone",
+      entries: [
+        { file: "A.java", symbol: "gone", candidates: ["load", "save"] },
+        { file: "B.java", symbol: "gone", candidates: [] },
+      ],
+    },
+  });
   assert.equal(await run(["callers", ".", "A.java:gone"], io, deps), EXIT_CODE.queryFailed);
   assert.deepEqual(io.stdout, []);
-  assert.equal(io.stderr.length, 1);
+  assert.deepEqual(io.stderr, [
+    "ye-ast: unknown-symbol: no symbol at the revision for A.java:gone",
+    "  - A.java:gone: declared in A.java: load, save",
+    "  - B.java:gone: B.java declares no symbol",
+  ]);
 });
 
 test("importers asks for the files at the revision and prints the fact", async () => {
