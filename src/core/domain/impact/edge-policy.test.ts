@@ -4,13 +4,14 @@ import { edgeConfidence, followsEdge, followsRelation, isIgnoredEdge, type EdgeS
 
 const follows = (kind: string, sourceKind: string, targetKind: string): boolean => followsEdge({ kind, sourceKind, targetKind });
 
-test("calls and instantiations from code are followed into any declaration", () => {
+test("calls and instantiations from code, a class field's initializer included, are followed into any declaration", () => {
   assert.equal(follows("calls", "method", "method"), true);
   assert.equal(follows("instantiates", "function", "class"), true);
   assert.equal(follows("calls", "variable", "function"), true);
   assert.equal(follows("calls", "file", "function"), false);
   assert.equal(follows("calls", "interface", "function"), false);
-  assert.equal(follows("calls", "field", "function"), false);
+  assert.equal(follows("calls", "field", "function"), true);
+  assert.equal(follows("instantiates", "property", "class"), true);
 });
 
 test("a reference into code, a class or a type that shapes data is followed", () => {
@@ -24,6 +25,7 @@ test("a reference into code, a class or a type that shapes data is followed", ()
 
 test("a reference from a field, a parameter or a file, or into one, is not followed", () => {
   assert.equal(follows("references", "field", "class"), false);
+  assert.equal(follows("references", "property", "interface"), false);
   assert.equal(follows("references", "parameter", "interface"), false);
   assert.equal(follows("references", "file", "function"), false);
   assert.equal(follows("references", "method", "field"), false);

@@ -24,9 +24,9 @@ export interface WalkedDeclaration {
 }
 
 const REFERENCED_BY: Readonly<Record<string, readonly string[]>> = {
-  calls: ["function", "method"],
+  calls: ["function", "method", "property"],
   instantiates: ["class", "component"],
-  references: ["function", "method", "constant", "variable", "class", "component", "interface", "type_alias", "enum"],
+  references: ["function", "method", "property", "constant", "variable", "class", "component", "interface", "type_alias", "enum"],
   extends: ["class", "component", "interface"],
   implements: ["class", "component", "interface"],
 };

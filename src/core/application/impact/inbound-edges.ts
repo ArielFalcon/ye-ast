@@ -54,7 +54,7 @@ export function createInboundEdges(reader: CodeGraphReader, isTestFile: (path: s
 
   const ownersCache = new Map<GraphNodeId, GraphSymbol[]>();
   function ownersOf(node: GraphSymbol): GraphSymbol[] {
-    if (node.kind !== "method") return [];
+    if (!(EDGE_POLICY.memberKinds as readonly string[]).includes(node.kind)) return [];
     let owners = ownersCache.get(node.id);
     if (owners === undefined) {
       const edges = reader.incomingEdges([node.id], ["contains"]);
@@ -180,13 +180,29 @@ export function createInboundEdges(reader: CodeGraphReader, isTestFile: (path: s
   }
 
   const referencesCache = new Map<string, ReadonlyMap<string, readonly GraphUnresolvedReference[]>>();
-  function referencesNamed(file: string, name: string): readonly GraphUnresolvedReference[] {
-    let byName = referencesCache.get(file);
-    if (byName === undefined) {
-      byName = Map.groupBy(reader.unresolvedReferences([file]), (reference) => reference.name);
-      referencesCache.set(file, byName);
+  /** The file's unresolved references by the name they use up to its first member: `this.svc.get` and `this.svc` under `this.svc`. */
+  function referencesThrough(file: string, receiver: string): readonly GraphUnresolvedReference[] {
+    let byReceiver = referencesCache.get(file);
+    if (byReceiver === undefined) {
+      byReceiver = Map.groupBy(
+        reader.unresolvedReferences([file]).filter((reference) => (EDGE_POLICY.fieldMemberUses as readonly string[]).includes(reference.kind)),
+        (reference) => reference.name.split(".").slice(0, 2).join("."),
+      );
+      referencesCache.set(file, byReceiver);
     }
-    return byName.get(name) ?? [];
+    return byReceiver.get(receiver) ?? [];
+  }
+
+  /** The uses of `node` by name through `this`, made by code inside a type that declares it. */
+  function ownUsesOf(node: GraphSymbol): InboundEdge[] {
+    const owners = ownersOf(node);
+    const uses = owners.length === 0 ? [] : referencesThrough(node.file, `this.${node.name}`);
+    load(uses.map((use) => use.from));
+    return uses.flatMap((use) => {
+      const from = symbolOf(use.from);
+      const inOwner = from !== undefined && owners.some((owner) => owner.file === from.file && owner.startLine <= from.startLine && from.endLine <= owner.endLine);
+      return inOwner && from.id !== node.id ? [{ from, confidence: EDGE_POLICY.relations.confidence, callLike: use.kind === "calls" }] : [];
+    });
   }
 
   const settledUses = new Set<string>();
@@ -204,7 +220,7 @@ export function createInboundEdges(reader: CodeGraphReader, isTestFile: (path: s
     for (const origin of fields) {
       const holder = declarationAt(origin.owner);
       if (holder === undefined || isTestFile(holder.file)) continue;
-      const uses = referencesNamed(holder.file, `this.${origin.field}.${node.name}`).filter((reference) => (EDGE_POLICY.fieldMemberUses as readonly string[]).includes(reference.kind));
+      const uses = referencesThrough(holder.file, `this.${origin.field}`).filter((reference) => reference.name === `this.${origin.field}.${node.name}`);
       if (uses.length === 0) continue;
       const held = "class" in origin.holds ? origin.holds.class : undefined;
       const holdsOwner = held !== undefined && owners.some((owner) => joinsFact(owner, { path: held.path, line: held.line, symbol: held.symbol }));
@@ -229,7 +245,7 @@ export function createInboundEdges(reader: CodeGraphReader, isTestFile: (path: s
       const followed = followedEdgesInto(node).filter(({ edge, source }) => !isTestFile(source.file) && followsEdge({ kind: edge.kind, sourceKind: source.kind, targetKind: node.kind }));
       const into = throughMember ? followed.filter(({ edge }) => (EDGE_POLICY.ownerThroughMember.edges as readonly string[]).includes(edge.kind)) : followed;
       const direct = into.map(({ edge, source }) => ({ from: source, confidence: edgeConfidence(edge), callLike: CALL_EDGE_KINDS.includes(edge.kind) }));
-      const bridged = throughMember ? direct : [...direct, ...bridgesOf(node, contractChanged), ...fieldUsesOf(node)];
+      const bridged = throughMember ? direct : [...direct, ...bridgesOf(node, contractChanged), ...fieldUsesOf(node), ...ownUsesOf(node)];
       const found = [...bridged, ...relatedTo(node, throughMember ? EDGE_POLICY.ownerThroughMember.relations : undefined)];
       const whole = throughMember ? found : [...found, ...importersOf(node, found.length === 0)];
       callers = strongestPerSymbol(whole.filter(({ from }) => from.id !== node.id)).sort((a, b) => comparePosition(a.from, b.from));

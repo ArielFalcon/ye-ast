@@ -17,6 +17,12 @@ test("a call that never resolved and shares its name tail with a walked method i
   assert.deepEqual(cuts, [{ kind: "unresolved-link", at: ["src/Repo.java::save", "src/A.java:4", "src/B.java:9"] }]);
 });
 
+test("a call or a reference that never resolved and names a walked class field is a cut at it", () => {
+  const total: WalkedDeclaration = { file: "src/store.ts", name: "total", kind: "property" };
+  const cuts = unresolvedLinkCuts([use("this.store.total", "calls", "src/page.ts", 7), use("store.total", "references", "src/view.ts", 2)], [total], []);
+  assert.deepEqual(cuts, [{ kind: "unresolved-link", at: ["src/store.ts::total", "src/page.ts:7", "src/view.ts:2"] }]);
+});
+
 test("an unresolved reference whose kind cannot point at the walked kind is no cut", () => {
   assert.deepEqual(unresolvedLinkCuts([use("repo.save", "instantiates"), use("save", "imports"), use("save", "extends")], [SAVE], []), []);
 });

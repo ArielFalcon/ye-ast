@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { relation, type RelationKind, type Relation, type SymbolRef } from "../../domain/relations/relation.ts";
 import type { GraphSymbol } from "../../ports/code-graph.port.ts";
 import { createInboundEdges, type InboundEdges } from "./inbound-edges.ts";
-import { fakeCodeGraph, fakeNode, type FakeEdge, type FakeNode } from "./fake-code-graph.testing.ts";
+import { fakeCodeGraph, fakeNode, type FakeEdge, type FakeNode, type FakeUnresolved } from "./fake-code-graph.testing.ts";
 
 const isTestFile = (path: string): boolean => path.includes("/test/");
 
@@ -16,8 +16,8 @@ interface Setup {
   scored(id: string, contractChanged?: boolean): [string, number, string | undefined][];
 }
 
-function setup(nodes: FakeNode[], edges: FakeEdge[], relations: readonly Relation[] = []): Setup {
-  const graph = fakeCodeGraph(nodes, edges);
+function setup(nodes: FakeNode[], edges: FakeEdge[], relations: readonly Relation[] = [], unresolved: readonly FakeUnresolved[] = []): Setup {
+  const graph = fakeCodeGraph(nodes, edges, unresolved);
   const inbound = createInboundEdges(graph, isTestFile, relations);
   const symbol = (id: string): GraphSymbol => {
     const [found] = graph.symbolsByIds([id as GraphSymbol["id"]]);
@@ -75,6 +75,27 @@ test("a type that references a DTO is a caller, a field that references it is no
     ["use", "alias", "field"].map((from) => ({ from, to: "Dto", kind: "references" })),
   );
   assert.deepEqual(s.callers("Dto"), ["use", "alias"]);
+});
+
+test("a use through this of a member, made inside the class that declares it, is a caller of that member", () => {
+  const nodes = [
+    fakeNode("Store", "class", B, 1, 30),
+    fakeNode("resource", "property", B, 3, 5),
+    fakeNode("total", "property", B, 7, 8),
+    fakeNode("load", "method", B, 10, 12),
+    fakeNode("lookalike", "method", B, 14, 16),
+    fakeNode("Other", "class", B, 40, 50),
+    fakeNode("elsewhere", "method", B, 42, 44),
+  ];
+  const edges = [...["resource", "total", "load", "lookalike"].map((to) => ({ from: "Store", to, kind: "contains" })), { from: "Other", to: "elsewhere", kind: "contains" }];
+  const unresolved = [
+    { from: "total", name: "this.resource.value", kind: "calls", file: B, line: 8 },
+    { from: "load", name: "this.resource", kind: "references", file: B, line: 11 },
+    { from: "lookalike", name: "this.resources.value", kind: "calls", file: B, line: 15 },
+    { from: "elsewhere", name: "this.resource.value", kind: "calls", file: B, line: 43 },
+  ];
+  const s = setup(nodes, edges, [], unresolved);
+  assert.deepEqual(s.callers("resource"), ["total", "load"]);
 });
 
 test("a subtype is a caller of its supertype", () => {

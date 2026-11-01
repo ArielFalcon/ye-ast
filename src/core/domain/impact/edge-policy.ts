@@ -6,12 +6,14 @@ const CODE_KINDS = ["function", "method", "class", "component", "constant", "var
 const REFERRER_KINDS = [...CODE_KINDS, "interface", "type_alias", "route"] as const;
 /** What a reference can point at and break: code, and the types that shape data (a DTO). */
 const REFERENCED_KINDS = ["function", "method", "constant", "variable", "class", "component", "interface", "type_alias", "enum"] as const;
+/** Class fields: their initializer is code that runs, so it calls and instantiates; what a field references is its type. */
+const FIELD_KINDS = ["property", "field"] as const;
 const TYPE_KINDS = ["class", "component", "interface"] as const;
 const ANGULAR_CLASS_KINDS = ["class", "component"] as const;
 
 export const EDGE_POLICY = {
   rules: [
-    { edges: ["calls", "instantiates"], from: CODE_KINDS, to: "any" },
+    { edges: ["calls", "instantiates"], from: [...CODE_KINDS, ...FIELD_KINDS], to: "any" },
     { edges: ["references"], from: REFERRER_KINDS, to: REFERENCED_KINDS },
     { edges: ["extends", "implements"], from: TYPE_KINDS, to: TYPE_KINDS },
   ],
@@ -21,8 +23,13 @@ export const EDGE_POLICY = {
    * so each is as certain as a resolved edge.
    */
   relations: { kinds: ["injects", "uses-component", "uses-directive", "uses-pipe"], from: ANGULAR_CLASS_KINDS, to: ANGULAR_CLASS_KINDS, confidence: 1 },
-  /** A method stands for the type that declares it, at the same depth. */
+  /** A member stands for the type that declares it, at the same depth. */
   ownerKinds: TYPE_KINDS,
+  /**
+   * The members that stand for their type. A reference named `this.<member>` or `this.<member>.<rest>`, made inside the
+   * type that declares the member, is a use of that member.
+   */
+  memberKinds: ["method", ...FIELD_KINDS],
   /**
    * What a type reached only through one of its members expands into: a subtype, and a template that renders it. Whoever
    * uses the member is reached through its own call edge, or through `fieldMemberUses`, and an injection into the type
