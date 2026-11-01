@@ -18,6 +18,7 @@ import { contentFingerprint, declaredScope, exportCuts } from "../../domain/map/
 import type { Result } from "../../domain/shared/result.ts";
 import type { AngularDeclaration, AngularDeclarationReader } from "../../ports/angular-declarations.port.ts";
 import type { CodeGraph, CodeGraphReader, GraphSymbol, IndexSummary } from "../../ports/code-graph.port.ts";
+import type { DynamicLoad, DynamicLoadReader } from "../../ports/dynamic-loads.port.ts";
 import type { Digest } from "../../ports/digest.port.ts";
 import type { IndexCache } from "../../ports/index-cache.port.ts";
 import type { CallersTarget, ImpactFault, ImpactOfChangeRequest, ImpactQueries, OfChangeFault, UnknownSymbolFault } from "../../ports/impact-queries.port.ts";
@@ -37,6 +38,8 @@ export interface ImpactQueriesDeps extends SnapshotReaderDeps {
   vcs: Vcs & VcsChanges;
   angular: AngularDeclarationReader;
   relations: RelationExtractor;
+  /** Reads the dynamic loads of the head's sources, so a load whose specifier is a literal names its module. */
+  dynamicLoads: DynamicLoadReader;
   graph: CodeGraph;
   /** Keeps full indexes by content; without it every call builds its own and discards it. */
   indexes?: IndexCache;
@@ -194,8 +197,9 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
         const { store, summary } = index;
         try {
           const found = await deps.relations.extract(headTree.sources);
+          const loads = await deps.dynamicLoads.extract(headTree.sources);
           if (signal?.aborted) return ABORTED;
-          const read = impactOf({ store, changes, requested, componentsByResource, found, headTree, summary, budget: request.budget ?? {} });
+          const read = impactOf({ store, changes, requested, componentsByResource, found, loads, headTree, summary, budget: request.budget ?? {} });
           if (read.missing.length > 0) {
             const names = read.missing.map(({ file, symbol }) => `${file}:${symbol}`).join(", ");
             return { ok: false, fault: { kind: "unknown-symbol", detail: `no symbol at the revision for ${names}`, entries: read.missing } };
@@ -229,9 +233,14 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
           const written = headTree.export.files.filter((file) => file.written && isCovered(file.path)).map((file) => file.path);
           const references = store.unresolvedReferences(written);
           const read = readImporters(store, covered, references);
+          const loadPlaces = await deps.dynamicLoads.extract(headTree.sources);
           const cuts = [
             ...fixed,
-            ...unresolvedLinkCuts(references.filter((reference) => kindOfChangedFile(reference.file) !== "test"), []),
+            ...unresolvedLinkCuts(
+              references.filter((reference) => kindOfChangedFile(reference.file) !== "test"),
+              [],
+              loadPlaces,
+            ),
             ...summary.filesNotIndexed.map((file): Cut => ({ kind: "no-extractor", at: [file] })),
             ...read.unheld.map((file): Cut => ({ kind: "no-extractor", at: [file] })),
           ];
@@ -354,8 +363,9 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
     const { store, summary } = index;
     try {
       const found = await deps.relations.extract(headTree.sources);
+      const loads = await deps.dynamicLoads.extract(headTree.sources);
       if (signal?.aborted) return ABORTED;
-      const read = impactOf({ store, changes: radius.files, requested: [], componentsByResource, found, headTree, summary, budget: request.budget ?? {} });
+      const read = impactOf({ store, changes: radius.files, requested: [], componentsByResource, found, loads, headTree, summary, budget: request.budget ?? {} });
       return { ok: true, value: impactFact(head.base(content, true), { ...value, ...read.value }, [...fixed, ...read.cuts]) };
     } finally {
       store.close();
@@ -406,6 +416,8 @@ interface WalkInput {
   requested: readonly { file: string; symbol: string }[];
   componentsByResource: ReadonlyMap<string, readonly ComponentRef[]>;
   found: readonly Finding<Relation>[];
+  /** Every dynamic load the reader found in the head's sources. */
+  loads: readonly DynamicLoad[];
   headTree: CommitExtraction;
   summary: Pick<IndexSummary, "filesNotIndexed">;
   budget: ImpactBudget;
@@ -419,7 +431,7 @@ interface ImpactRead {
 }
 
 function impactOf(input: WalkInput): ImpactRead {
-  const { store, changes, requested, componentsByResource, found, headTree, summary } = input;
+  const { store, changes, requested, componentsByResource, found, loads, headTree, summary } = input;
   const isTest = (path: string): boolean => kindOfChangedFile(path) === "test";
   const sourceChanges = changes.filter((file) => kindOfChangedFile(file.path) === "source" && !file.deleted).map((file) => file.path);
   const componentFiles = changes.flatMap((file) => (componentsByResource.get(file.path) ?? []).map((component) => component.file));
@@ -442,7 +454,7 @@ function impactOf(input: WalkInput): ImpactRead {
 
   const cuts: Cut[] = [
     ...walk.cuts,
-    ...unresolvedLinkCuts(unresolved, walked),
+    ...unresolvedLinkCuts(unresolved, walked, loads),
     ...removedDeclarationCuts(unresolved, selection.removed),
     ...unreadRelationCuts(unread, new Set(walked.map((symbol) => symbol.file)), templateOwners(componentsByResource)),
     ...summary.filesNotIndexed.map((file): Cut => ({ kind: "no-extractor", at: [file] })),

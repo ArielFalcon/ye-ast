@@ -10,6 +10,13 @@ export interface UnresolvedUse {
   line: number;
 }
 
+/** A dynamic load a source declares: where, and the module it names when its specifier is a string literal. */
+export interface DynamicLoadUse {
+  file: string;
+  line: number;
+  specifier?: string;
+}
+
 export interface WalkedDeclaration {
   file: string;
   name: string;
@@ -48,16 +55,23 @@ export function nameTail(name: string): string {
 /**
  * A walked declaration may have callers the index could not link: an unresolved reference whose name tail is its name
  * and whose kind can point at its kind is one cut at those references, led by the declaration they might call. A file
- * that loads modules by a name the index cannot resolve may load anything and is a cut of its own.
+ * that loads modules by a name the index cannot resolve may load anything and is a cut of its own, unless every dynamic
+ * load the reader found on that file and line has a string-literal specifier, which names its module like a static
+ * import; a file the reader did not read keeps the cut.
  */
-export function unresolvedLinkCuts(references: readonly UnresolvedUse[], walked: readonly WalkedDeclaration[]): Cut[] {
+export function unresolvedLinkCuts(references: readonly UnresolvedUse[], walked: readonly WalkedDeclaration[], loads: readonly DynamicLoadUse[]): Cut[] {
   const byName = Map.groupBy(walked, (declaration) => declaration.name);
   const hidden = new Map<string, Set<string>>();
   const loaders = new Map<string, Set<string>>();
+  const loadsAt = Map.groupBy(loads, (load) => placeAt(load.file, load.line));
+  const namesModule = (place: string): boolean => {
+    const here = loadsAt.get(place);
+    return here !== undefined && here.every((load) => load.specifier !== undefined);
+  };
   for (const reference of references) {
     const tail = nameTail(reference.name);
     const place = placeAt(reference.file, reference.line);
-    if (reference.kind === "calls" && DYNAMIC_LOADERS.has(tail)) loaders.set(reference.file, (loaders.get(reference.file) ?? new Set()).add(place));
+    if (reference.kind === "calls" && DYNAMIC_LOADERS.has(tail) && !namesModule(place)) loaders.set(reference.file, (loaders.get(reference.file) ?? new Set()).add(place));
     for (const declaration of byName.get(tail) ?? []) {
       if (!(REFERENCED_BY[reference.kind] ?? []).includes(declaration.kind)) continue;
       const key = declarationAnchor(declaration.file, declaration.name);

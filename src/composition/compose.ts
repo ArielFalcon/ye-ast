@@ -28,6 +28,7 @@ import { createSpringRoutesExtractor } from "../core/adapters/spring/spring-rout
 import { createJavaParser } from "../core/adapters/tree-sitter/java-parser.adapter.ts";
 import { createAngularDeclarationReader } from "../core/adapters/typescript/angular-declarations.adapter.ts";
 import { createAngularRoutesExtractor } from "../core/adapters/typescript/angular-routes.adapter.ts";
+import { createDynamicLoadReader } from "../core/adapters/typescript/dynamic-loads.adapter.ts";
 import { composeAngularRelations } from "./angular-relations.ts";
 import { EDGE_POLICY } from "../core/domain/impact/edge-policy.ts";
 import { sortFindings } from "../core/domain/entrypoints/finding-order.ts";
@@ -113,6 +114,7 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
     extractor,
     angular: createAngularDeclarationReader(),
     relations: composeAngularRelations(),
+    dynamicLoads: createDynamicLoadReader(),
     graph,
     ...(indexes && { indexes }),
     digest,

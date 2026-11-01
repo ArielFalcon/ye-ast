@@ -36,6 +36,7 @@ interface Options {
   unresolved?: FakeUnresolved[];
   declarations?: AngularDeclaration[];
   relations?: Finding<Relation>[];
+  loads?: { file: string; line: number; specifier?: string }[];
   exportBudget?: { maxEntries: number; maxBytes: number };
   exports?: Partial<Record<string, CommitExport>>;
   mergeBase?: string;
@@ -91,6 +92,7 @@ function setup(options: Options = {}) {
     extractor: { extract: async () => [] },
     angular: { read: async () => options.declarations ?? [] },
     relations: { extract: async () => options.relations ?? [] },
+    dynamicLoads: { extract: async () => options.loads ?? [] },
     graph,
     ...(options.cache && {
       indexes: {
@@ -295,6 +297,28 @@ test("an unresolved call in a test file does not cut the answer", async () => {
   const tree: CommitExport = { files: [{ path: "src/A.java", blob: "1", written: true }, { path: "src/test/java/ATest.java", blob: "2", written: true }], skipped: [] };
   const answer = fact(await setup({ changes, nodes: SOURCE_NODES, unresolved, exports: { [HEAD]: tree } }).ask());
   assert.equal(answer.status, "complete");
+});
+
+test("a dynamic load whose specifier is a literal names its module, so only a computed load cuts the answer", async () => {
+  const changes: Result<readonly FileChange[], VcsFault> = { ok: true, value: [change("src/A.java", { added: [{ start: 2, end: 2 }] })] };
+  const unresolved = [
+    { from: "g", name: "import", kind: "calls", file: "src/App.ts", line: 3 },
+    { from: "g", name: "import", kind: "calls", file: "src/Routes.ts", line: 8 },
+  ];
+  const tree: CommitExport = {
+    files: [
+      { path: "src/A.java", blob: "1", written: true },
+      { path: "src/App.ts", blob: "2", written: true },
+      { path: "src/Routes.ts", blob: "3", written: true },
+    ],
+    skipped: [],
+  };
+  const loads = [
+    { file: "src/App.ts", line: 3, specifier: "./app.component" },
+    { file: "src/Routes.ts", line: 8 },
+  ];
+  const answer = fact(await setup({ changes, nodes: SOURCE_NODES, edges: SOURCE_EDGES, unresolved, loads, exports: { [HEAD]: tree } }).ask());
+  assert.deepEqual(answer.status === "partial" && answer.cuts, [{ kind: "unresolved-link", at: ["src/Routes.ts", "src/Routes.ts:8"] }]);
 });
 
 test("a source file deleted whole that declared a name needs the index, and an unresolved reference to the name cuts the answer", async () => {
@@ -506,6 +530,13 @@ test("a file that loads modules by a computed name may import anything, so it cu
   const { importers } = setup({ nodes: SHOP_NODES, unresolved: [{ from: "x", name: "require", kind: "calls", file: "src/Late.java", line: 3 }], exports: { [HEAD]: SHOP_EXPORT } });
   const answer = importersFact(await importers({ files: ["src/Order.java"] }));
   assert.deepEqual(answer.status === "partial" && answer.cuts, [{ kind: "unresolved-link", at: ["src/Late.java", "src/Late.java:3"] }]);
+});
+
+test("a load whose specifier the reader read as a literal does not cut the importers answer", async () => {
+  const unresolved = [{ from: "x", name: "require", kind: "calls", file: "src/Late.java", line: 3 }];
+  const loads = [{ file: "src/Late.java", line: 3, specifier: "./late.js" }];
+  const { importers } = setup({ nodes: SHOP_NODES, unresolved, loads, exports: { [HEAD]: SHOP_EXPORT } });
+  assert.equal(importersFact(await importers({ files: ["src/Order.java"] })).status, "complete");
 });
 
 test("a computed-name load in a test file does not cut the importers answer", async () => {
