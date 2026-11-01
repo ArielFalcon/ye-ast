@@ -8,7 +8,7 @@
     "node": ">=24.15.0"
   },
   "bin": {
-    "ye-ast": "./dist/composition/main.js"
+    "ye-ast": "dist/composition/main.js"
   },
   "exports": {
     ".": {
