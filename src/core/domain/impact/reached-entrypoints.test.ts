@@ -54,6 +54,24 @@ test("an entrypoint the extractor could not read whole is reported by the innerm
   ]);
 });
 
+test("a route is reached through a reached guard of its own, joined by the guard's file and name; an inline or installed guard joins nothing", () => {
+  const guarded: Finding<Entrypoint> = {
+    status: "complete",
+    evidence: [],
+    value: {
+      kind: "ui-route",
+      name: "/orders",
+      path: "/orders",
+      component: { path: "src/app/orders.page.ts", symbol: "OrdersPage", line: 5 },
+      guards: [{ name: "authGuard", path: "src/app/auth.guard.ts" }, { name: "(inline)" }, { name: "canDeactivateForm", external: true }],
+    },
+  };
+  const reached = [node("authGuard", 8, 12, { file: "src/app/auth.guard.ts", depth: 0, confidence: 1 }), node("other", 20, 22, { file: "src/app/auth.guard.ts" })];
+
+  assert.deepEqual(reachedEntrypoints([guarded], reached).map((entry) => [entry.name, entry.handler.symbol, entry.depth, entry.confidence]), [["/orders", "OrdersPage", 0, 1]]);
+  assert.deepEqual(reachedEntrypoints([guarded], [node("authGuard", 8, 12, { file: "src/app/other.ts" }), node("(inline)", 1, 2, { file: "src/app/orders.page.ts" })]), []);
+});
+
 test("kinds come before names", () => {
   const listener: Finding<Entrypoint> = { status: "complete", evidence: [], value: { kind: "listener", name: "0", protocol: "kafka", destination: "a", handler: { path: "src/Orders.java", symbol: "Orders.a", line: 2 } } };
   const entries = reachedEntrypoints([listener, route("Orders.b", 6, "GET /b")], [node("a", 1, 3), node("b", 5, 7)]);

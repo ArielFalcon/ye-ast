@@ -12,9 +12,10 @@ export interface ReachedNode extends CodeNode {
 
 /**
  * The entrypoints the change reaches: those whose handler is a reached node, joined by the one join of facts to the
- * graph, and, for an entrypoint the extractor could not read whole, the innermost reached declaration at each location
- * it names. An entrypoint is reported once: at the shallowest depth, the strongest confidence and every seed of the
- * nodes that serve it.
+ * graph; a UI route whose own guard is a reached node, joined by the guard's file and name (a guard is a top-level
+ * declaration, unique by name in its module); and, for an entrypoint the extractor could not read whole, the innermost
+ * reached declaration at each location it names. An entrypoint is reported once: at the shallowest depth, the strongest
+ * confidence and every seed of the nodes that serve or guard it.
  */
 export function reachedEntrypoints(findings: readonly Finding<Entrypoint>[], reached: readonly ReachedNode[]): ReachedEntrypoint[] {
   const found = new Map<string, ReachedEntrypoint>();
@@ -27,7 +28,9 @@ export function reachedEntrypoints(findings: readonly Finding<Entrypoint>[], rea
     if (finding.status === "complete") {
       const handler = handlerOf(finding.value);
       if (handler === undefined) continue;
-      for (const node of reached.filter((candidate) => joinsFact(candidate, { path: handler.path, line: handler.line, symbol: handler.symbol }))) {
+      const guards = finding.value.kind === "ui-route" ? finding.value.guards : [];
+      const guarding = reached.filter((candidate) => guards.some((guard) => guard.path === candidate.file && guard.name === candidate.name));
+      for (const node of [...reached.filter((candidate) => joinsFact(candidate, { path: handler.path, line: handler.line, symbol: handler.symbol })), ...guarding]) {
         add({ kind: finding.value.kind, name: finding.value.name, handler, depth: node.depth, confidence: node.confidence, seeds: node.seeds });
       }
     } else {
