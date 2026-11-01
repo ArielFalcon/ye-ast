@@ -177,7 +177,7 @@ function countedLine(file: string, symbols: readonly ImpactedSymbol[]): string {
 function impactedSymbols(value: ImpactValue, detail: Detail): string[] {
   const seeds = seedKeys(value);
   const listed = value.symbols.filter((symbol) => symbol.depth !== 0 || !seeds.has(`${symbol.file}\0${symbol.symbol}\0${symbol.line}`));
-  if (listed.length === 0) return [`impacted symbols (0):`, NONE];
+  if (listed.length === 0) return ["impacted symbols (0):", NONE];
   const near = listed.filter((symbol) => symbol.depth <= LISTED_DEPTH);
   const deeper = listed.filter((symbol) => symbol.depth > LISTED_DEPTH);
   if (detail === "full" || deeper.length === 0) return [`impacted symbols (${listed.length}):`, ...groupedLines(listed)];

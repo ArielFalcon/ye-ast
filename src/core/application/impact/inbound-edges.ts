@@ -38,6 +38,10 @@ export interface InboundEdges {
 }
 
 const SUPERTYPE_EDGES = ["extends", "implements"];
+
+function isInside(inner: GraphSymbol, outer: GraphSymbol): boolean {
+  return inner.file === outer.file && outer.startLine <= inner.startLine && inner.endLine <= outer.endLine;
+}
 const USAGE_EDGES = ["calls", "instantiates", "references"];
 
 export function createInboundEdges(reader: CodeGraphReader, isTestFile: (path: string) => boolean, relations: readonly Relation[], fields: readonly FieldOrigin[] = []): InboundEdges {
@@ -200,8 +204,7 @@ export function createInboundEdges(reader: CodeGraphReader, isTestFile: (path: s
     load(uses.map((use) => use.from));
     return uses.flatMap((use) => {
       const from = symbolOf(use.from);
-      const inOwner = from !== undefined && owners.some((owner) => owner.file === from.file && owner.startLine <= from.startLine && from.endLine <= owner.endLine);
-      return inOwner && from.id !== node.id ? [{ from, confidence: EDGE_POLICY.relations.confidence, callLike: use.kind === "calls" }] : [];
+      return from !== undefined && owners.some((owner) => isInside(from, owner)) ? [{ from, confidence: EDGE_POLICY.relations.confidence, callLike: use.kind === "calls" }] : [];
     });
   }
 
@@ -229,7 +232,7 @@ export function createInboundEdges(reader: CodeGraphReader, isTestFile: (path: s
       load(uses.map((use) => use.from));
       for (const use of uses) {
         const from = symbolOf(use.from);
-        if (from === undefined || from.file !== holder.file || from.startLine < holder.startLine || from.endLine > holder.endLine) continue;
+        if (from === undefined || !isInside(from, holder)) continue;
         settledUses.add(settledUseKey(anchor, placeAt(use.file, use.line)));
         if (holdsOwner) callers.push({ from, confidence: EDGE_POLICY.relations.confidence, callLike: use.kind === "calls" });
       }
