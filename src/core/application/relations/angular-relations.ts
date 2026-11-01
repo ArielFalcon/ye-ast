@@ -1,5 +1,6 @@
 import { sortFindings } from "../../domain/entrypoints/finding-order.ts";
 import { classKey, type AngularClass, type Operand } from "../../domain/relations/angular-class.ts";
+import type { FieldOrigin } from "../../domain/relations/field-origin.ts";
 import { relation, type Relation, type SymbolRef } from "../../domain/relations/relation.ts";
 import type { Evidence, Finding, UnknownReason } from "../../domain/shared/fact.ts";
 import type { AngularMetadataReader } from "../../ports/angular-metadata.port.ts";
@@ -22,8 +23,8 @@ export function createAngularRelationExtractor(deps: AngularRelationsDeps): Rela
   return { extract: (files) => extractRelations(deps, files) };
 }
 
-async function extractRelations(deps: AngularRelationsDeps, files: readonly SourceFile[]): Promise<readonly Finding<Relation>[]> {
-  const { classes, findings } = await deps.metadata.read(files);
+async function extractRelations(deps: AngularRelationsDeps, files: readonly SourceFile[]): Promise<{ relations: readonly Finding<Relation>[]; fields: readonly FieldOrigin[] }> {
+  const { classes, findings, fields } = await deps.metadata.read(files);
   const contents = new Map(files.map((file) => [file.path, file.content]));
   const byKey = new Map(classes.map((candidate) => [classKey(candidate.ref), candidate]));
   const declaredIn = new Map<string, Extract<AngularClass, { kind: "module" }>[]>();
@@ -53,7 +54,7 @@ async function extractRelations(deps: AngularRelationsDeps, files: readonly Sour
     for (const problem of scope.problems) found.push(unknown("unresolved", problem));
     units.push({ component: candidate.ref, ...source, scope: scope.members });
   }
-  return sortFindings([...found, ...deps.templates.read(units)]);
+  return { relations: sortFindings([...found, ...deps.templates.read(units)]), fields };
 }
 
 function templateOf(component: Extract<AngularClass, { kind: "component" }>, template: NonNullable<Extract<AngularClass, { kind: "component" }>["template"]>, contents: ReadonlyMap<string, string>): { path: string; text: string; firstLine: number } | { unknown: Finding<never> } {

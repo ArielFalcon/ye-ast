@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { FileChange } from "../../domain/change/diff-reader.ts";
 import type { ImpactValue } from "../../domain/impact/impact-fact.ts";
+import type { FieldOrigin } from "../../domain/relations/field-origin.ts";
 import { relation, type Relation } from "../../domain/relations/relation.ts";
 import type { Fact, Finding } from "../../domain/shared/fact.ts";
 import { canonicalJson } from "../../domain/shared/canonical-json.ts";
@@ -36,6 +37,7 @@ interface Options {
   unresolved?: FakeUnresolved[];
   declarations?: AngularDeclaration[];
   relations?: Finding<Relation>[];
+  fields?: FieldOrigin[];
   loads?: { file: string; line: number; specifier?: string }[];
   exportBudget?: { maxEntries: number; maxBytes: number };
   exports?: Partial<Record<string, CommitExport>>;
@@ -91,7 +93,7 @@ function setup(options: Options = {}) {
     reader: { read: async () => [] },
     extractor: { extract: async () => [] },
     angular: { read: async () => options.declarations ?? [] },
-    relations: { extract: async () => options.relations ?? [] },
+    relations: { extract: async () => ({ relations: options.relations ?? [], fields: options.fields ?? [] }) },
     dynamicLoads: { extract: async () => options.loads ?? [] },
     graph,
     ...(options.cache && {
@@ -356,30 +358,47 @@ test("a class that injects a changed class is reached, and a walk whose Angular 
   assert.deepEqual(answer.status === "complete" && answer.value.symbols.map((symbol) => [symbol.symbol, symbol.depth, symbol.confidence]), [["Svc", 0, 1], ["Cmp", 1, 1]]);
 });
 
-test("a method of an injected class is called by the members that use it through the injection's binding, and only those places leave its cut", async () => {
+test("a reference through a field of known origin is a caller when the field holds the owner, and leaves the cut when it holds an unrelated type", async () => {
+  const SUB_FILE = "src/app/sub.ts";
   const nodes = [
     fakeNode("Svc", "class", SVC_FILE, 2, 9),
     fakeNode("get", "method", SVC_FILE, 4, 6),
-    fakeNode("Cmp", "class", CMP_FILE, 2, 12),
-    fakeNode("load", "method", CMP_FILE, 5, 7),
-    fakeNode("other", "method", CMP_FILE, 8, 10),
+    fakeNode("Sub", "class", SUB_FILE, 2, 9),
+    fakeNode("Cmp", "class", CMP_FILE, 2, 30),
+    fakeNode("viaSvc", "method", CMP_FILE, 5, 6),
+    fakeNode("viaHttp", "method", CMP_FILE, 8, 9),
+    fakeNode("viaMap", "method", CMP_FILE, 11, 12),
+    fakeNode("viaOther", "method", CMP_FILE, 14, 15),
+    fakeNode("viaSub", "method", CMP_FILE, 17, 18),
+    fakeNode("viaLocal", "method", CMP_FILE, 20, 21),
+    fakeNode("viaUnknown", "method", CMP_FILE, 23, 24),
   ];
-  const edges = [{ from: "Svc", to: "get", kind: "contains" }, { from: "Cmp", to: "load", kind: "contains" }, { from: "Cmp", to: "other", kind: "contains" }];
+  const members = ["viaSvc", "viaHttp", "viaMap", "viaOther", "viaSub", "viaLocal", "viaUnknown"];
+  const edges = [{ from: "Svc", to: "get", kind: "contains" }, { from: "Sub", to: "Svc", kind: "extends" }, ...members.map((to) => ({ from: "Cmp", to, kind: "contains" }))];
   const unresolved = [
-    { from: "load", name: "this.svc.get", kind: "calls", file: CMP_FILE, line: 6 },
-    { from: "other", name: "this.http.get", kind: "calls", file: CMP_FILE, line: 9 },
+    { from: "viaSvc", name: "this.svc.get", kind: "calls", file: CMP_FILE, line: 6 },
+    { from: "viaHttp", name: "this.http.get", kind: "calls", file: CMP_FILE, line: 9 },
+    { from: "viaMap", name: "this.cache.get", kind: "calls", file: CMP_FILE, line: 12 },
+    { from: "viaOther", name: "this.other.get", kind: "calls", file: CMP_FILE, line: 15 },
+    { from: "viaSub", name: "this.sub.get", kind: "calls", file: CMP_FILE, line: 18 },
+    { from: "viaLocal", name: "params.get", kind: "calls", file: CMP_FILE, line: 21 },
+    { from: "viaUnknown", name: "this.store.get", kind: "calls", file: CMP_FILE, line: 24 },
+  ];
+  const owner = { path: CMP_FILE, symbol: "Cmp", line: 3 };
+  const fields: FieldOrigin[] = [
+    { owner, field: "svc", holds: { class: { path: SVC_FILE, symbol: "Svc", line: 3 } } },
+    { owner, field: "http", holds: { external: "@angular/common/http#HttpClient" } },
+    { owner, field: "cache", holds: { external: "global#Map" } },
+    { owner, field: "other", holds: { class: { path: CMP_FILE, symbol: "Cmp", line: 3 } } },
+    { owner, field: "sub", holds: { class: { path: SUB_FILE, symbol: "Sub", line: 3 } } },
   ];
   const changes: Result<readonly FileChange[], VcsFault> = { ok: true, value: [change(SVC_FILE, { added: [{ start: 5, end: 5 }] })] };
-  const bound = relation("injects", { path: CMP_FILE, symbol: "Cmp", line: 3 }, { path: SVC_FILE, symbol: "Svc", line: 3 }, "svc");
-  const exports = { [HEAD]: { files: [{ path: SVC_FILE, blob: "1", written: true }, { path: CMP_FILE, blob: "2", written: true }], skipped: [] } };
+  const exports = { [HEAD]: { files: [SVC_FILE, CMP_FILE, SUB_FILE].map((path, index) => ({ path, blob: `${index}`, written: true })), skipped: [] } };
 
-  const answer = fact(await setup({ changes, nodes, edges, unresolved, exports, relations: [complete(bound)] }).ask());
-  assert.deepEqual(answer.status !== "unknown" && answer.value.symbols.map((symbol) => [symbol.symbol, symbol.depth, symbol.confidence]), [["Svc", 0, 1], ["get", 0, 1], ["Cmp", 1, 1], ["load", 1, 1]]);
-  assert.deepEqual(answer.status === "partial" && answer.cuts, [{ kind: "unresolved-link", at: [`${SVC_FILE}::get`, `${CMP_FILE}:9`] }]);
-
-  const unbound = fact(await setup({ changes, nodes, edges, unresolved, exports, relations: [complete(INJECTION)] }).ask());
-  assert.deepEqual(unbound.status !== "unknown" && unbound.value.symbols.map((symbol) => symbol.symbol), ["Svc", "get"]);
-  assert.deepEqual(unbound.status === "partial" && unbound.cuts, [{ kind: "unresolved-link", at: [`${SVC_FILE}::get`, `${CMP_FILE}:6`, `${CMP_FILE}:9`] }]);
+  const answer = fact(await setup({ changes, nodes, edges, unresolved, exports, fields }).ask());
+  assert.ok(answer.status === "partial");
+  assert.deepEqual(answer.value.symbols.filter((symbol) => symbol.file === CMP_FILE).map((symbol) => symbol.symbol), ["Cmp", "viaSvc"]);
+  assert.deepEqual(answer.cuts.find((cut) => cut.kind === "unresolved-link"), { kind: "unresolved-link", at: [`${SVC_FILE}::get`, `${CMP_FILE}:18`, `${CMP_FILE}:21`, `${CMP_FILE}:24`] });
 });
 
 test("a relation the reader could not place cuts the answer only in a file the walk reached", async () => {

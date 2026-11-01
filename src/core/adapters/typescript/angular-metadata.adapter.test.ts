@@ -35,11 +35,11 @@ function refs(operands: readonly Operand[]): string[] {
   return operands.map((operand) => ("ref" in operand ? operand.ref.symbol : `unresolved@${operand.unresolved.path}:${operand.unresolved.line}`));
 }
 
-test("a repository whose root manifest does not name @angular/core has no Angular class and no injection", async () => {
+test("a repository whose root manifest does not name @angular/core has no Angular class, no injection and no field", async () => {
   const files = { [SERVICE]: SERVICE_SOURCE, "src/app/a.ts": `${CORE}import { OrdersService } from './orders.service';\n@Component({})\nexport class A { s = inject(OrdersService); }\n` };
 
-  assert.deepEqual(await read(files, JSON.stringify({ dependencies: { react: "19.0.0" } })), { classes: [], findings: [] });
-  assert.deepEqual(await read(files, null), { classes: [], findings: [] });
+  assert.deepEqual(await read(files, JSON.stringify({ dependencies: { react: "19.0.0" } })), { classes: [], findings: [], fields: [] });
+  assert.deepEqual(await read(files, null), { classes: [], findings: [], fields: [] });
   assert.equal((await read(files)).findings.length, 1);
 });
 
@@ -54,14 +54,20 @@ test("inject(X) in a field, with or without options, relates the class to the cl
   assert.equal(finding?.status === "complete" && finding.value.from.line, 5);
 });
 
-test("an injection records the name it is stored in: a field, a constructor parameter or a constant; none when the call is not bound to a name", async () => {
-  const meta = await read({
-    [SERVICE]: SERVICE_SOURCE,
-    "src/app/a.ts": `${CORE}import { OrdersService } from './orders.service';\n\n@Injectable()\nexport class A {\n  private readonly orders = inject(OrdersService);\n}\n\n@Injectable()\nexport class B {\n  constructor(private readonly svc: OrdersService) {}\n}\n\nexport const guard = () => {\n  const local = inject(OrdersService);\n  return local;\n};\n\nexport function bare() {\n  return inject(OrdersService).toString();\n}\n`,
-  });
+test("a field fixed by its declaration holds what it injects or creates; a reassigned, static, plain-parameter or substituted one holds nothing known", async () => {
+  const manifest = JSON.stringify({ dependencies: { "@angular/core": "22.0.0", "@angular/common": "22.0.0" } });
+  const meta = await read(
+    {
+      [SERVICE]: SERVICE_SOURCE,
+      "src/app/other.service.ts": `${CORE}\nexport class OtherService {}\n`,
+      "src/app/providers.ts": `${CORE}import { OtherService } from './other.service';\n\nexport const PROVIDERS = [{ provide: OtherService, useFactory: () => null }];\n`,
+      "src/app/a.ts": `${CORE}import { HttpClient } from '@angular/common/http';\nimport { OrdersService } from './orders.service';\nimport { OtherService } from './other.service';\n\n@Injectable()\nexport class A {\n  private readonly orders = inject(OrdersService);\n  private readonly http = inject(HttpClient);\n  private readonly cache = new Map<string, number>();\n  private readonly other = inject(OtherService);\n  private moved = inject(OrdersService);\n  static shared = new Map();\n  constructor(private readonly svc: OrdersService, plain: OrdersService) {}\n  swap(): void {\n    this.moved = new OrdersService();\n  }\n}\n`,
+    },
+    manifest,
+  );
 
-  const bindings = meta.findings.map((finding) => (finding.status === "complete" ? `${finding.value.from.symbol}:${finding.value.binding ?? "-"}` : finding.reason));
-  assert.deepEqual(bindings.toSorted(), ["A:orders", "B:svc", "bare:-", "guard:local"]);
+  const fields = meta.fields.map(({ owner, field, holds }) => `${owner.symbol}.${field} ${"class" in holds ? `${holds.class.path}:${holds.class.symbol}` : holds.external}`);
+  assert.deepEqual(fields, ["A.cache global#Map", "A.http @angular/common/http#HttpClient", `A.orders ${SERVICE}:OrdersService`, `A.svc ${SERVICE}:OrdersService`]);
 });
 
 test("a name resolves through renames and barrels to the class that declares it, not to the barrel", async () => {

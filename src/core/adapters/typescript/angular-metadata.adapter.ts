@@ -2,7 +2,9 @@ import { posix } from "node:path";
 import ts from "typescript";
 import { isTypeScriptSource } from "../../domain/languages/typescript.ts";
 import type { AngularClass, Operand, TemplateSource } from "../../domain/relations/angular-class.ts";
+import type { FieldOrigin } from "../../domain/relations/field-origin.ts";
 import { relation, type Relation, type SymbolRef } from "../../domain/relations/relation.ts";
+import { compareText } from "../../domain/shared/code-node.ts";
 import type { Evidence, Finding, UnknownReason } from "../../domain/shared/fact.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { AngularMetadata, AngularMetadataReader } from "../../ports/angular-metadata.port.ts";
@@ -36,12 +38,18 @@ async function readMetadata(files: readonly SourceFile[]): Promise<AngularMetada
   const projects = pathsByProject([...contents.keys()].filter(isTypeScriptSource).sort(), angularProjects(files), ANGULAR_CORE);
   const classes: AngularClass[] = [];
   const findings: Finding<Relation>[] = [];
+  const fields: FieldOrigin[] = [];
   for (const [project, sources] of projects) {
     const metadata = await readProject(contents, project.dependencies, sources);
     classes.push(...metadata.classes);
     findings.push(...metadata.findings);
+    fields.push(...metadata.fields);
   }
-  return { classes: classes.sort((a, b) => (a.ref.path < b.ref.path ? -1 : a.ref.path > b.ref.path ? 1 : a.ref.line - b.ref.line)), findings };
+  return {
+    classes: classes.sort((a, b) => (a.ref.path < b.ref.path ? -1 : a.ref.path > b.ref.path ? 1 : a.ref.line - b.ref.line)),
+    findings,
+    fields: fields.sort((a, b) => compareText(a.owner.path, b.owner.path) || a.owner.line - b.owner.line || compareText(a.field, b.field)),
+  };
 }
 
 async function readProject(contents: ReadonlyMap<string, string>, dependencies: ReadonlySet<string>, sources: readonly string[]): Promise<AngularMetadata> {
@@ -158,11 +166,40 @@ async function readProject(contents: ReadonlyMap<string, string>, dependencies: 
       if ("class" in placed) {
         const from = { path: file, symbol: owner.name, line: owner.line };
         const key = `${from.path}\0${from.symbol}\0${placed.class.path}\0${placed.class.symbol}`;
-        if (!injects.has(key)) injects.set(key, { status: "complete", value: relation("injects", from, placed.class, injection.binding), evidence: [at] });
+        if (!injects.has(key)) injects.set(key, { status: "complete", value: relation("injects", from, placed.class), evidence: [at] });
       } else if (!("external" in placed)) findings.push(unknown("unresolved" in placed ? "unresolved" : "no-extractor", at));
     }
   }
-  return { classes, findings: [...findings, ...injects.values()] };
+  const originOf = async (file: string, reference: RawReference): Promise<FieldOrigin["holds"] | undefined> => {
+    const placed = await resolve(file, reference);
+    if ("class" in placed) return { class: placed.class };
+    const here = await parse(file);
+    const bound = here?.shape.imports.get(reference.name);
+    if ("external" in placed && bound !== undefined) return { external: `${bound.module}#${bound.imported === "*" ? (reference.member ?? "*") : bound.imported}` };
+    const global = "unresolved" in placed && here !== undefined && bound === undefined && reference.member === undefined && !here.shape.declared.has(reference.name);
+    return global ? { external: `global#${reference.name}` } : undefined;
+  };
+  const substituted = new Set<string>();
+  for (const file of sources) {
+    for (const reference of (await parse(file))?.angular.substituted ?? []) {
+      const holds = await originOf(file, reference);
+      if (holds !== undefined) substituted.add(holdsKey(holds));
+    }
+  }
+  const fields: FieldOrigin[] = [];
+  for (const file of sources) {
+    for (const raw of (await parse(file))?.angular.fields ?? []) {
+      if ("opaque" in raw.target) continue;
+      const holds = await originOf(file, raw.target.reference);
+      if (holds === undefined || (raw.via === "inject" && substituted.has(holdsKey(holds)))) continue;
+      fields.push({ owner: { path: file, symbol: raw.owner.name, line: raw.owner.line }, field: raw.field, holds });
+    }
+  }
+  return { classes, findings: [...findings, ...injects.values()], fields };
+}
+
+function holdsKey(holds: FieldOrigin["holds"]): string {
+  return "class" in holds ? `${holds.class.path}#${holds.class.symbol}` : holds.external;
 }
 
 function textOf(text: RawText | undefined): string | undefined {

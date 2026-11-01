@@ -1,6 +1,7 @@
 import { topLevelOf, isSeedable } from "../../domain/change/seeds.ts";
-import { declarationAnchor, placeAt, resolvedUseKey } from "../../domain/impact/impact-cuts.ts";
+import { declarationAnchor, placeAt, settledUseKey } from "../../domain/impact/impact-cuts.ts";
 import { CALL_EDGE_KINDS, EDGE_POLICY, edgeConfidence, FOLLOWED_EDGE_KINDS, followsEdge, followsRelation, isIgnoredEdge } from "../../domain/impact/edge-policy.ts";
+import type { FieldOrigin } from "../../domain/relations/field-origin.ts";
 import type { Relation, SymbolRef } from "../../domain/relations/relation.ts";
 import { comparePosition, joinsFact } from "../../domain/shared/code-node.ts";
 import type { CodeGraphReader, GraphEdge, GraphNodeId, GraphSymbol, GraphUnresolvedReference } from "../../ports/code-graph.port.ts";
@@ -32,14 +33,14 @@ export interface InboundEdges {
   callersOf(node: GraphSymbol, contractChanged: boolean, throughMember?: boolean): readonly InboundEdge[];
   /** The type that declares a method, which a reached method stands for at the same depth; none for any other symbol. */
   ownersOf(node: GraphSymbol): readonly GraphSymbol[];
-  /** The unresolved references `callersOf` read as uses of a member through an injection, by `resolvedUseKey`. */
-  resolvedUses(): ReadonlySet<string>;
+  /** The unresolved references `callersOf` settled through a field of fixed origin, by `settledUseKey`. */
+  settledUses(): ReadonlySet<string>;
 }
 
 const SUPERTYPE_EDGES = ["extends", "implements"];
 const USAGE_EDGES = ["calls", "instantiates", "references"];
 
-export function createInboundEdges(reader: CodeGraphReader, isTestFile: (path: string) => boolean, relations: readonly Relation[]): InboundEdges {
+export function createInboundEdges(reader: CodeGraphReader, isTestFile: (path: string) => boolean, relations: readonly Relation[], fields: readonly FieldOrigin[] = []): InboundEdges {
   const relationsByTargetFile = Map.groupBy(relations, (candidate) => candidate.to.path);
   const known = new Map<GraphNodeId, GraphSymbol | undefined>();
   const load = (ids: readonly GraphNodeId[]): void => {
@@ -178,37 +179,46 @@ export function createInboundEdges(reader: CodeGraphReader, isTestFile: (path: s
       });
   }
 
-  const referencesCache = new Map<string, readonly GraphUnresolvedReference[]>();
-  function referencesIn(file: string): readonly GraphUnresolvedReference[] {
-    let references = referencesCache.get(file);
-    if (references === undefined) {
-      references = reader.unresolvedReferences([file]);
-      referencesCache.set(file, references);
+  const referencesCache = new Map<string, ReadonlyMap<string, readonly GraphUnresolvedReference[]>>();
+  function referencesNamed(file: string, name: string): readonly GraphUnresolvedReference[] {
+    let byName = referencesCache.get(file);
+    if (byName === undefined) {
+      byName = Map.groupBy(reader.unresolvedReferences([file]), (reference) => reference.name);
+      referencesCache.set(file, byName);
     }
-    return references;
+    return byName.get(name) ?? [];
   }
 
-  const resolvedUses = new Set<string>();
-  /** The members of a class injecting the type that declares `node` which use `node` through the injection's binding. */
-  function injectedUsesOf(node: GraphSymbol): InboundEdge[] {
+  const settledUses = new Set<string>();
+  /**
+   * The references named `this.<field>.<member>` inside a class whose own field has a fixed origin: a field holding the
+   * type that declares `node` makes them callers of `node`; a field holding a type that is neither that type nor one of
+   * its subtypes settles them as no use of `node`. A field holding a subtype leaves them unsettled.
+   */
+  function fieldUsesOf(node: GraphSymbol): InboundEdge[] {
+    const owners = ownersOf(node);
+    if (owners.length === 0) return [];
     const anchor = declarationAnchor(node.file, node.name);
-    return ownersOf(node).flatMap((owner) =>
-      (relationsByTargetFile.get(owner.file) ?? [])
-        .filter((candidate) => candidate.kind === "injects" && candidate.binding !== undefined && joinsFact(owner, { path: candidate.to.path, line: candidate.to.line, symbol: candidate.to.symbol }))
-        .flatMap((candidate) => {
-          const injector = declarationAt(candidate.from);
-          if (injector === undefined || isTestFile(injector.file)) return [];
-          const names = [`this.${candidate.binding}.${node.name}`, `${candidate.binding}.${node.name}`];
-          const uses = referencesIn(injector.file).filter((reference) => names.includes(reference.name) && (EDGE_POLICY.injectedMemberUses as readonly string[]).includes(reference.kind));
-          load(uses.map((use) => use.from));
-          return uses.flatMap((use): InboundEdge[] => {
-            const from = symbolOf(use.from);
-            if (from === undefined || from.file !== injector.file || from.startLine < injector.startLine || from.endLine > injector.endLine) return [];
-            resolvedUses.add(resolvedUseKey(anchor, placeAt(use.file, use.line)));
-            return [{ from, confidence: EDGE_POLICY.relations.confidence, callLike: use.kind === "calls" }];
-          });
-        }),
-    );
+    const related = owners.flatMap((owner) => [owner, ...typesAround(owner, "down").map(({ type }) => type)]);
+    const callers: InboundEdge[] = [];
+    for (const origin of fields) {
+      const holder = declarationAt(origin.owner);
+      if (holder === undefined || isTestFile(holder.file)) continue;
+      const uses = referencesNamed(holder.file, `this.${origin.field}.${node.name}`).filter((reference) => (EDGE_POLICY.fieldMemberUses as readonly string[]).includes(reference.kind));
+      if (uses.length === 0) continue;
+      const held = "class" in origin.holds ? origin.holds.class : undefined;
+      const holdsOwner = held !== undefined && owners.some((owner) => joinsFact(owner, { path: held.path, line: held.line, symbol: held.symbol }));
+      const holdsRelated = held !== undefined && related.some((type) => joinsFact(type, { path: held.path, line: held.line, symbol: held.symbol }));
+      if (!holdsOwner && holdsRelated) continue;
+      load(uses.map((use) => use.from));
+      for (const use of uses) {
+        const from = symbolOf(use.from);
+        if (from === undefined || from.file !== holder.file || from.startLine < holder.startLine || from.endLine > holder.endLine) continue;
+        settledUses.add(settledUseKey(anchor, placeAt(use.file, use.line)));
+        if (holdsOwner) callers.push({ from, confidence: EDGE_POLICY.relations.confidence, callLike: use.kind === "calls" });
+      }
+    }
+    return callers;
   }
 
   const callersCache = new Map<string, InboundEdge[]>();
@@ -219,7 +229,7 @@ export function createInboundEdges(reader: CodeGraphReader, isTestFile: (path: s
       const followed = followedEdgesInto(node).filter(({ edge, source }) => !isTestFile(source.file) && followsEdge({ kind: edge.kind, sourceKind: source.kind, targetKind: node.kind }));
       const into = throughMember ? followed.filter(({ edge }) => (EDGE_POLICY.ownerThroughMember.edges as readonly string[]).includes(edge.kind)) : followed;
       const direct = into.map(({ edge, source }) => ({ from: source, confidence: edgeConfidence(edge), callLike: CALL_EDGE_KINDS.includes(edge.kind) }));
-      const bridged = throughMember ? direct : [...direct, ...bridgesOf(node, contractChanged), ...injectedUsesOf(node)];
+      const bridged = throughMember ? direct : [...direct, ...bridgesOf(node, contractChanged), ...fieldUsesOf(node)];
       const found = [...bridged, ...relatedTo(node, throughMember ? EDGE_POLICY.ownerThroughMember.relations : undefined)];
       const whole = throughMember ? found : [...found, ...importersOf(node, found.length === 0)];
       callers = strongestPerSymbol(whole.filter(({ from }) => from.id !== node.id)).sort((a, b) => comparePosition(a.from, b.from));
@@ -228,7 +238,7 @@ export function createInboundEdges(reader: CodeGraphReader, isTestFile: (path: s
     return callers;
   }
 
-  return { callersOf, ownersOf, resolvedUses: () => resolvedUses };
+  return { callersOf, ownersOf, settledUses: () => settledUses };
 }
 
 function strongestPerSymbol(edges: readonly InboundEdge[]): InboundEdge[] {

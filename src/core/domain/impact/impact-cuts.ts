@@ -44,8 +44,8 @@ export function placeAt(file: string, line: number, reason?: string): string {
   return reason === undefined ? `${file}:${line}` : `${file}:${line} ${reason}`;
 }
 
-/** The key of an unresolved reference at `place` that the walk read as a use of the declaration `anchor` names. */
-export function resolvedUseKey(anchor: string, place: string): string {
+/** The key of an unresolved reference at `place` whose relation to the declaration `anchor` names the walk settled. */
+export function settledUseKey(anchor: string, place: string): string {
   return `${anchor}\0${place}`;
 }
 
@@ -64,7 +64,7 @@ export function nameTail(name: string): string {
  * load the reader found on that file and line has a string-literal specifier, which names its module like a static
  * import; a file the reader did not read keeps the cut.
  */
-export function unresolvedLinkCuts(references: readonly UnresolvedUse[], walked: readonly WalkedDeclaration[], loads: readonly DynamicLoadUse[], resolved: ReadonlySet<string> = new Set()): Cut[] {
+export function unresolvedLinkCuts(references: readonly UnresolvedUse[], walked: readonly WalkedDeclaration[], loads: readonly DynamicLoadUse[], settled: ReadonlySet<string> = new Set()): Cut[] {
   const byName = Map.groupBy(walked, (declaration) => declaration.name);
   const hidden = new Map<string, Set<string>>();
   const loaders = new Map<string, Set<string>>();
@@ -80,7 +80,7 @@ export function unresolvedLinkCuts(references: readonly UnresolvedUse[], walked:
     for (const declaration of byName.get(tail) ?? []) {
       if (!(REFERENCED_BY[reference.kind] ?? []).includes(declaration.kind)) continue;
       const key = declarationAnchor(declaration.file, declaration.name);
-      if (resolved.has(resolvedUseKey(key, place))) continue;
+      if (settled.has(settledUseKey(key, place))) continue;
       hidden.set(key, (hidden.get(key) ?? new Set()).add(place));
     }
   }

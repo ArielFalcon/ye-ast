@@ -36,16 +36,22 @@ export interface RawInjection {
   owner?: { name: string; line: number };
   target: RawTarget;
   line: number;
-  binding?: string;
 }
 
-function bindingOf(name: ts.Node): { binding?: string } {
-  return ts.isIdentifier(name) ? { binding: name.text } : {};
+/** A field of a class that its declaration fixes: an `inject()` or a constructor parameter property, or a `new` expression. */
+export interface RawField {
+  owner: { name: string; line: number };
+  field: string;
+  target: RawTarget;
+  via: "inject" | "new";
 }
 
 export interface RawAngularFile {
   classes: RawAngularClass[];
   injections: RawInjection[];
+  fields: RawField[];
+  /** The tokens a provider of this file replaces: `{ provide: X, useClass | useExisting | useFactory | useValue }`, or the class an `@Injectable` with one of those options decorates. */
+  substituted: RawReference[];
   /** The top-level arrays of this file, by name, read as lists of operands. */
   arrays: Map<string, RawOperand[]>;
 }
@@ -57,7 +63,7 @@ const CONSTRUCTED = new Set([...Object.keys(KINDS), "Injectable"]);
 /** The Angular decorators, injection calls and top-level arrays of one parsed file. `shape` tells which names come from `@angular/core`. */
 export function readAngularMetadataFile(sf: ts.SourceFile, shape: Pick<RawRouteFile, "imports">): RawAngularFile {
   const line = (node: ts.Node): number => sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1;
-  const result: RawAngularFile = { classes: [], injections: [], arrays: new Map() };
+  const result: RawAngularFile = { classes: [], injections: [], fields: [], substituted: [], arrays: new Map() };
 
   /* The export of `@angular/core` an expression names: `inject`, or `core.inject` through a namespace import. */
   const coreName = (expression: ts.Expression): string | undefined => {
@@ -161,11 +167,31 @@ export function readAngularMetadataFile(sf: ts.SourceFile, shape: Pick<RawRouteF
         const inject = parameterDecorators.get("Inject");
         if (inject !== undefined) {
           const argument = inject.arguments[0];
-          result.injections.push({ owner, target: argument === undefined ? { opaque: true } : targetOf(argument), line: line(parameter), ...bindingOf(parameter.name) });
+          result.injections.push({ owner, target: argument === undefined ? { opaque: true } : targetOf(argument), line: line(parameter) });
         } else if (!parameterDecorators.has("Attribute")) {
           const reference = parameter.type === undefined ? undefined : typeReference(parameter.type);
-          if (reference !== undefined) result.injections.push({ owner, target: { reference }, line: line(parameter), ...bindingOf(parameter.name) });
+          if (reference !== undefined) result.injections.push({ owner, target: { reference }, line: line(parameter) });
         }
+      }
+    }
+  };
+
+  const fieldsOf = (node: ts.ClassDeclaration, name: ts.Identifier, constructed: boolean): void => {
+    const owner = { name: name.text, line: line(name) };
+    const assigned = assignedFields(node);
+    const fixed = (field: string): boolean => !assigned.has(field);
+    for (const member of node.members) {
+      if (ts.isPropertyDeclaration(member) && ts.isIdentifier(member.name) && member.initializer !== undefined && !isStatic(member) && fixed(member.name.text)) {
+        const initializer = bare(member.initializer);
+        if (ts.isCallExpression(initializer) && coreName(initializer.expression) === "inject" && initializer.arguments[0] !== undefined) result.fields.push({ owner, field: member.name.text, target: targetOf(initializer.arguments[0]), via: "inject" });
+        else if (ts.isNewExpression(initializer)) result.fields.push({ owner, field: member.name.text, target: targetOf(initializer.expression), via: "new" });
+      }
+      if (!constructed || !ts.isConstructorDeclaration(member)) continue;
+      for (const parameter of member.parameters) {
+        if (!ts.isIdentifier(parameter.name) || !ts.isParameterPropertyDeclaration(parameter, member) || !fixed(parameter.name.text)) continue;
+        const inject = decoratorsOf(parameter).get("Inject")?.arguments[0];
+        const reference = inject === undefined ? (parameter.type === undefined ? undefined : typeReference(parameter.type)) : referenceOf(inject);
+        if (reference !== undefined) result.fields.push({ owner, field: parameter.name.text, target: { reference }, via: "inject" });
       }
     }
   };
@@ -174,13 +200,20 @@ export function readAngularMetadataFile(sf: ts.SourceFile, shape: Pick<RawRouteF
     if (ts.isClassDeclaration(node) && node.name !== undefined) {
       const decorators = decoratorsOf(node);
       classOf(node.name, decorators);
-      if ([...decorators.keys()].some((decorated) => CONSTRUCTED.has(decorated))) parametersOf(node, node.name);
+      const constructed = [...decorators.keys()].some((decorated) => CONSTRUCTED.has(decorated));
+      if (constructed) parametersOf(node, node.name);
+      fieldsOf(node, node.name, constructed);
+      const injectable = decorators.get("Injectable")?.arguments[0];
+      if (injectable !== undefined && ts.isObjectLiteralExpression(injectable) && SUBSTITUTIONS.some((option) => propertyOf(injectable, option) !== undefined)) result.substituted.push({ name: node.name.text });
+    }
+    if (ts.isObjectLiteralExpression(node)) {
+      const provided = propertyOf(node, "provide");
+      const reference = provided === undefined ? undefined : referenceOf(provided);
+      if (reference !== undefined && SUBSTITUTIONS.some((option) => propertyOf(node, option) !== undefined)) result.substituted.push(reference);
     }
     if (ts.isCallExpression(node) && coreName(node.expression) === "inject" && node.arguments[0] !== undefined) {
       const owner = ownerOf(node, sf);
-      const holder = node.parent;
-      const binding = (ts.isPropertyDeclaration(holder) || ts.isVariableDeclaration(holder)) && holder.initializer === node ? bindingOf(holder.name) : {};
-      result.injections.push({ ...(owner !== undefined ? { owner: { name: owner.name.text, line: line(owner.name) } } : {}), target: targetOf(node.arguments[0]), line: line(node), ...binding });
+      result.injections.push({ ...(owner !== undefined ? { owner: { name: owner.name.text, line: line(owner.name) } } : {}), target: targetOf(node.arguments[0]), line: line(node) });
     }
     ts.forEachChild(node, visit);
   };
@@ -194,6 +227,31 @@ export function readAngularMetadataFile(sf: ts.SourceFile, shape: Pick<RawRouteF
     }
   }
   return result;
+}
+
+/** The provider options that give a token something other than its own class. */
+const SUBSTITUTIONS = ["useClass", "useExisting", "useFactory", "useValue"];
+
+function isStatic(member: ts.ClassElement): boolean {
+  return ts.canHaveModifiers(member) && (ts.getModifiers(member) ?? []).some((modifier) => modifier.kind === ts.SyntaxKind.StaticKeyword);
+}
+
+/** The fields a class assigns anywhere in its body, `this.x = …` or a compound assignment, besides their declaration. */
+function assignedFields(node: ts.ClassDeclaration): Set<string> {
+  const assigned = new Set<string>();
+  const visit = (current: ts.Node): void => {
+    if (
+      ts.isBinaryExpression(current) &&
+      current.operatorToken.kind >= ts.SyntaxKind.FirstAssignment &&
+      current.operatorToken.kind <= ts.SyntaxKind.LastAssignment &&
+      ts.isPropertyAccessExpression(current.left) &&
+      current.left.expression.kind === ts.SyntaxKind.ThisKeyword
+    )
+      assigned.add(current.left.name.text);
+    ts.forEachChild(current, visit);
+  };
+  for (const member of node.members) ts.forEachChild(member, visit);
+  return assigned;
 }
 
 function propertyOf(object: ts.ObjectLiteralExpression, name: string): ts.Expression | undefined {

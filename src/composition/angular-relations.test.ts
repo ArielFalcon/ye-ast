@@ -20,7 +20,7 @@ const SOURCES: SourceFile[] = [
 ];
 
 test("an injection and the uses of a template resolve to the classes the barrels re-export, and the same sources give the same findings", async () => {
-  const findings = await composeAngularRelations().extract(SOURCES);
+  const { relations: findings } = await composeAngularRelations().extract(SOURCES);
 
   assert.deepEqual(
     findings.map((finding) => (finding.status === "complete" ? [finding.value.kind, finding.value.from, finding.value.to, finding.evidence] : finding)),
@@ -31,5 +31,5 @@ test("an injection and the uses of a template resolve to the classes the barrels
       ["uses-pipe", { path: "src/app/shell/shell.component.ts", symbol: "ShellComponent", line: 6 }, { path: "src/app/ui/money.pipe.ts", symbol: "MoneyPipe", line: 3 }, [{ path: "src/app/shell/shell.html", line: 2 }]],
     ],
   );
-  assert.deepEqual(await composeAngularRelations().extract([...SOURCES].reverse()), findings);
+  assert.deepEqual(await composeAngularRelations().extract([...SOURCES].reverse()), await composeAngularRelations().extract(SOURCES));
 });

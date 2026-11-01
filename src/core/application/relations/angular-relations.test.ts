@@ -38,7 +38,7 @@ interface Run {
 
 async function run(classes: AngularClass[], files: SourceFile[] = [], metadataFindings: Finding<Relation>[] = []): Promise<Run> {
   const units: TemplateUnit[] = [];
-  const metadata: AngularMetadata = { classes, findings: metadataFindings };
+  const metadata: AngularMetadata = { classes, findings: metadataFindings, fields: [] };
   const extractor = createAngularRelationExtractor({
     metadata: { read: async () => metadata },
     templates: {
@@ -48,7 +48,7 @@ async function run(classes: AngularClass[], files: SourceFile[] = [], metadataFi
       },
     },
   });
-  return { findings: await extractor.extract(files), units };
+  return { findings: (await extractor.extract(files)).relations, units };
 }
 
 function scopeOf(result: Run, component: string): string[] {
