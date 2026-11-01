@@ -51,9 +51,11 @@ interface Setup {
   /** Per repository: its own routes and call sites. */
   repositories: Record<string, { entrypoints?: readonly Entrypoint[]; callSites?: readonly CallSite[]; cuts?: readonly Cut[]; trust?: "trusted" | "untrusted"; sha?: string }>;
   trigger?: ImpactValue;
+  /** The outward names the workspace read found no local repository for. */
+  unserved?: readonly string[];
 }
 
-function setup({ repositories, trigger = impactOf(REACHED) }: Setup) {
+function setup({ repositories, trigger = impactOf(REACHED), unserved = [] }: Setup) {
   const names = Object.keys(repositories).sort();
   const read: WorkspaceRepository[] = names.map((repo) => ({
     repo,
@@ -75,7 +77,7 @@ function setup({ repositories, trigger = impactOf(REACHED) }: Setup) {
         repositorySnapshots: read.map(({ repo, snapshot }) => ({ repo, snapshot })),
         sections: Object.fromEntries(names.map((repo) => [repo, section(repo)])),
         candidates: [],
-        unserved: [],
+        unserved: unserved.map((name) => ({ name, kind: "path-prefix" as const, evidence: [] })),
         repositories: read,
       };
       const triggerRepo = request.repo.id ?? request.repo.path.split("/").pop() ?? "";
@@ -237,4 +239,18 @@ test("links and the call sites of a section are listed by place, whatever order 
 
   assert.deepEqual(value.links.map(({ link }) => link.from.line), [12, 30]);
   assert.deepEqual(repoImpact(value, "shop-web").callSites.map((site) => site.line), [12, 30]);
+});
+
+test("a name a gateway in force routes to a repository is not listed as unserved, and a name is listed once", async () => {
+  const { queries } = setup({ repositories: { orders: ORDERS, "shop-web": { callSites: [callSite("shop-web", "orders-api/orders")] } }, unserved: ["geo-api", "orders-api", "geo-api"] });
+
+  assert.deepEqual(valueOf(await queries.callers(ASK)).workspace.unserved, ["geo-api"]);
+});
+
+test("a declared gateway that no call site names, or that routes to a repository not read, is reported as matching nothing", async () => {
+  const { queries } = setup({ repositories: { orders: ORDERS, "shop-web": { callSites: [callSite("shop-web", "edge/orders"), callSite("shop-web", "pay/charges")] } } });
+
+  const value = valueOf(await queries.callers({ ...ASK, gateways: [{ prefix: "edge", repo: "orders" }, { prefix: "legacy", repo: "orders" }, { prefix: "pay", repo: "billing" }] }));
+
+  assert.deepEqual(value.workspace.unmatchedGateways, [{ prefix: "legacy", repo: "orders" }, { prefix: "pay", repo: "billing" }]);
 });

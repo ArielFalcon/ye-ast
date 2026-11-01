@@ -75,7 +75,7 @@ function workspaceImpactFact(): Fact<WorkspaceImpactValue> {
   };
   const section = (value: object): Fact<never> => ({ ...base(), status: "complete", value }) as never;
   const value: WorkspaceImpactValue = {
-    workspace: { repos: ["shop", "shop-web"], gateways: [{ prefix: "orders-api", repo: "shop", basis: "route-overlap" }], unserved: ["geo-api"] },
+    workspace: { repos: ["shop", "shop-web"], gateways: [{ prefix: "orders-api", repo: "shop", basis: "route-overlap" }], unmatchedGateways: [{ prefix: "legacy", repo: "shop" }], unserved: ["geo-api"] },
     repositorySnapshots: [],
     trigger: { repo: "shop", mergeBase: "b".repeat(40) },
     sections: {
@@ -631,7 +631,7 @@ test("callers and impact without a workspace never reach the workspace family", 
   await session.close();
 });
 
-test("a workspace answer lists the links across repositories with their basis, the gateways in force, the unmatched and the external call sites", async () => {
+test("a workspace answer lists the links across repositories with their basis, the gateways in force, the declared ones that matched nothing, the unmatched and the external call sites", async () => {
   const { session } = await setup();
 
   const result = await session.callTool("ye_ast_callers", { targets: [{ file: "a", symbol: "f" }], workspace: WORKSPACE });
@@ -642,6 +642,7 @@ test("a workspace answer lists the links across repositories with their basis, t
   assert.match(text, /unmatched \(1\):\n\s+- src\/app\/order\.api\.ts:9 .* GET orders-api\/missing/);
   assert.match(text, /external \(1\):\n\s+- src\/app\/order\.api\.ts:11 .* GET geo-api\/provinces/);
   assert.match(text, /no local repository serves \(1\): geo-api/);
+  assert.match(text, /declared gateways that matched nothing \(1\):\n\s+- legacy -> shop/);
   assert.equal(text.match(/reached entrypoints \(/g)?.length, 1, "the bound repository's walk is printed once");
   await session.close();
 });

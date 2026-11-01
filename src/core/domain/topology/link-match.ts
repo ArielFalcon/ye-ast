@@ -125,7 +125,7 @@ function httpRoutes(repository: RepositoryEntrypoints): HttpRoute[] {
 }
 
 /** The first path segment of a call, which is the prefix a gateway routes. */
-function prefixOf(target: HttpTarget): string | undefined {
+export function prefixOf(target: HttpTarget): string | undefined {
   const [first] = pathSegments(target.path);
   return first === undefined || first === PARAMETER ? undefined : first;
 }

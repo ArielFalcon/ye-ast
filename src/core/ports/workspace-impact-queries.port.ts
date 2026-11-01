@@ -5,7 +5,7 @@ import type { ImpactedLink } from "../domain/topology/link.ts";
 import type { Fact, SnapshotRef } from "../domain/shared/fact.ts";
 import type { ScopeRequest } from "../domain/shared/scope.ts";
 import type { Result } from "../domain/shared/result.ts";
-import type { Gateway } from "../domain/topology/link-match.ts";
+import type { Gateway, GatewayDeclaration } from "../domain/topology/link-match.ts";
 import type { CallersTarget, ImpactFault } from "./impact-queries.port.ts";
 import type { WorkspaceFault, WorkspaceReposRequest, WorkspaceRepositoryRequest } from "./workspace-repos.port.ts";
 
@@ -22,7 +22,8 @@ export interface RepoImpact {
 }
 
 export interface WorkspaceImpactValue {
-  workspace: { repos: readonly string[]; gateways: readonly Gateway[]; unserved: readonly string[] };
+  /** `unmatchedGateways`: the declared gateways no call site names, or whose repository was not read. */
+  workspace: { repos: readonly string[]; gateways: readonly Gateway[]; unmatchedGateways: readonly GatewayDeclaration[]; unserved: readonly string[] };
   repositorySnapshots: readonly { repo: string; snapshot: SnapshotRef }[];
   trigger: { repo: string; mergeBase?: string };
   sections: Readonly<Record<string, Fact<RepoImpact>>>;

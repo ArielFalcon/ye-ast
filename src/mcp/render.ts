@@ -268,6 +268,8 @@ export function renderWorkspaceImpact(fact: Fact<WorkspaceImpactValue>, detail: 
   lines.push(`repositories (${value.workspace.repos.length}): ${value.repositorySnapshots.map(({ repo, snapshot }) => `${repo}@${snapshot.kind === "sha" ? snapshot.sha : snapshot.stateId}`).join(", ")}`);
   lines.push(`bound repository: ${value.trigger.repo}`);
   lines.push(`gateway prefixes (${value.workspace.gateways.length}):`, ...list(value.workspace.gateways.map(({ prefix, repo, basis }) => `  - ${prefix} -> ${repo} (${basis})`)));
+  const stale = value.workspace.unmatchedGateways;
+  if (stale.length > 0) lines.push(`declared gateways that matched nothing (${stale.length}):`, ...stale.map(({ prefix, repo }) => `  - ${prefix} -> ${repo}`));
   if (trigger !== undefined && trigger.status !== "unknown" && trigger.value.impact !== undefined) lines.push(...impactBody(trigger.value.impact, detail));
   lines.push(`links across repositories (${value.links.length}):`, ...list(value.links.map(impactedLinkLine)));
   lines.push("per repository:", ...value.workspace.repos.flatMap((repo) => (value.sections[repo] === undefined ? [] : repoImpactLines(repo, value.sections[repo] as Fact<RepoImpact>, detail, value.trigger.repo))));

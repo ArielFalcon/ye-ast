@@ -7,7 +7,7 @@ import type { Result } from "../../domain/shared/result.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
 import type { CallSite, HttpTarget } from "../../domain/topology/call-site.ts";
 import type { ImpactedLink, Link } from "../../domain/topology/link.ts";
-import { inferGateways, matchCallSite, type RepositoryEntrypoints } from "../../domain/topology/link-match.ts";
+import { inferGateways, matchCallSite, prefixOf, type GatewayDeclaration, type RepositoryEntrypoints } from "../../domain/topology/link-match.ts";
 import { directoryNameOf } from "../../domain/topology/repository-identity.ts";
 import type { CallersTarget, ImpactFault, ImpactQueries } from "../../ports/impact-queries.port.ts";
 import type { WorkspaceFault, WorkspaceRepository } from "../../ports/workspace-repos.port.ts";
@@ -89,7 +89,12 @@ export function createWorkspaceImpactQueries(deps: WorkspaceImpactDeps): Workspa
 
     const triggerBase = workspace.sections[trigger] ?? read.value;
     const value: WorkspaceImpactValue = {
-      workspace: { repos: workspace.workspace.repos, gateways, unserved: workspace.unserved.map(({ name }) => name) },
+      workspace: {
+        repos: workspace.workspace.repos,
+        gateways,
+        unmatchedGateways: unmatchedGateways(request.gateways ?? [], repositories),
+        unserved: [...new Set(workspace.unserved.map(({ name }) => name))].filter((name) => !gateways.some((gateway) => gateway.prefix === name)).sort(compareText),
+      },
       repositorySnapshots: workspace.repositorySnapshots,
       trigger: { repo: trigger, ...(impact?.mergeBase === undefined ? {} : { mergeBase: impact.mergeBase }) },
       sections,
@@ -175,6 +180,12 @@ function compareSite(a: CallSite, b: CallSite): number {
 
 function compareLink(a: ImpactedLink, b: ImpactedLink): number {
   return compareText(a.link.from.repo, b.link.from.repo) || compareText(a.link.from.file, b.link.from.file) || a.link.from.line - b.link.from.line || compareText(a.link.id, b.link.id);
+}
+
+function unmatchedGateways(declared: readonly GatewayDeclaration[], repositories: readonly { repo: string; callSites: readonly CallSite[] }[]): GatewayDeclaration[] {
+  const read = new Set(repositories.map(({ repo }) => repo));
+  const named = new Set(repositories.flatMap(({ callSites }) => callSites.flatMap((site) => (site.target.status === "complete" && "path" in site.target.value ? [prefixOf(site.target.value)] : []))));
+  return declared.filter((gateway) => !read.has(gateway.repo) || !named.has(gateway.prefix)).sort((a, b) => compareText(a.prefix, b.prefix) || compareText(a.repo, b.repo));
 }
 
 function baseOf(fact: FactBase): FactBase {
