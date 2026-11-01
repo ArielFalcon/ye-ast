@@ -146,14 +146,20 @@ export function composeCli(options: CompositionOptions = {}): (argv: readonly st
     exclude: createGitLocalExclude(),
     layer: createFixedLayerAdmin({ entrypoints: queries.entrypoints, store: createFixedLayerStore(), redaction: queries.redaction }),
   });
-  return (argv, io) => run(argv, io, { ...queries, install, mcpCommand: mcpCommandOf(), signal: options.signal ?? new AbortController().signal });
+  return (argv, io) => run(argv, io, { ...queries, install, mcpCommand: mcpCommandFor(ownEntrypoint()), signal: options.signal ?? new AbortController().signal });
+}
+
+const MCP_PACKAGE = "ye-ast-mcp";
+
+/** The entrypoint beside the running module: `main.ts` from a source checkout, `main.js` from the published build. */
+function ownEntrypoint(): string {
+  const own = fileURLToPath(import.meta.url);
+  return join(dirname(own), `main${extname(own)}`);
 }
 
 /** The command that starts this build: an installed package is reached by name, a source checkout through `tsx`. */
-function mcpCommandOf(): readonly string[] {
-  const own = fileURLToPath(import.meta.url);
-  const entrypoint = join(dirname(own), `main${extname(own)}`);
-  return entrypoint.includes(`${sep}node_modules${sep}`) ? ["npx", "--yes", "ye-ast"] : ["npx", "--yes", "tsx", entrypoint];
+export function mcpCommandFor(entrypoint: string): readonly string[] {
+  return entrypoint.includes(`${sep}node_modules${sep}`) ? ["npx", "--yes", MCP_PACKAGE] : ["npx", "--yes", "tsx", entrypoint];
 }
 
 function reportingFaultOnce(records: TrustRecordReader, redaction: Redaction, report: ((line: string) => void) | undefined): TrustRecordReader {

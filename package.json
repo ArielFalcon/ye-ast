@@ -1,5 +1,5 @@
 {
-  "name": "ye-ast",
+  "name": "ye-ast-mcp",
   "version": "0.1.0",
   "description": "Deterministic code truth engine: verifiable facts about a codebase for AI agents and harnesses.",
   "license": "Apache-2.0",

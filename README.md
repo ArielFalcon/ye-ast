@@ -2,9 +2,9 @@
 
 **Verifiable facts about a codebase, before an agent acts.**
 
-[![npm](https://img.shields.io/npm/v/ye-ast?color=black)](https://www.npmjs.com/package/ye-ast)
+[![npm](https://img.shields.io/npm/v/ye-ast-mcp?color=black)](https://www.npmjs.com/package/ye-ast-mcp)
 [![license](https://img.shields.io/badge/license-Apache--2.0-black)](LICENSE)
-[![node](https://img.shields.io/node/v/ye-ast?color=black)](package.json)
+[![node](https://img.shields.io/node/v/ye-ast-mcp?color=black)](package.json)
 
 An AI agent reads a few files, greps a few names and guesses the rest: what a change touches, which screen a component
 serves, what breaks if a function is renamed. ye-ast replaces the guess with **facts derived from code and git**, each
@@ -61,9 +61,11 @@ one-shot `ye-ast impact` in CI and an on-demand `ye_ast_impact` from an agent.
 Requires **Node.js 24.15 or newer** and **git 2.44 or newer** on `PATH`.
 
 ```bash
-npm install -g ye-ast        # or: npx ye-ast --version
+npm install -g ye-ast-mcp    # or: npx ye-ast-mcp --version
 ye-ast --version             # 0.1.0
 ```
+
+The package is `ye-ast-mcp`; the command it installs is `ye-ast`.
 
 ## Quickstart
 
@@ -87,7 +89,7 @@ by default), writes the fixed layer under `.ye-ast/`, keeps `.ye-ast/` and `.ye-
 **Claude Code** — `ye-ast install` prints the exact line for your machine:
 
 ```bash
-claude mcp add ye-ast -- npx --yes ye-ast mcp /path/to/your/repo
+claude mcp add ye-ast -- npx --yes ye-ast-mcp mcp /path/to/your/repo
 ```
 
 **OpenCode** — in `opencode.json`:
@@ -98,13 +100,13 @@ claude mcp add ye-ast -- npx --yes ye-ast mcp /path/to/your/repo
   "mcp": {
     "ye-ast": {
       "type": "local",
-      "command": ["npx", "-y", "ye-ast", "mcp", "/path/to/your/repo"]
+      "command": ["npx", "-y", "ye-ast-mcp", "mcp", "/path/to/your/repo"]
     }
   }
 }
 ```
 
-Any other stdio MCP client works the same way: command `npx`, arguments `-y ye-ast mcp <repo>`.
+Any other stdio MCP client works the same way: command `npx`, arguments `-y ye-ast-mcp mcp <repo>`.
 
 ## Trust model
 
@@ -154,7 +156,7 @@ Exit codes: `0` ok · `1` the query failed with a typed fault · `2` usage · `7
 For a host that embeds the engine in its own process:
 
 ```js
-import { composeQueries } from "ye-ast";
+import { composeQueries } from "ye-ast-mcp";
 
 const { entrypoints, impact } = composeQueries({ indexCache: "/var/cache/ye-ast" });
 const result = await impact.callers({ repo: "/path/to/repo", repoId: "my-app", revision: "HEAD", targets: [{ file: "src/checkout.ts", symbol: "placeOrder" }] });
@@ -202,7 +204,7 @@ Ask the user only if you cannot decide from context. `untrusted` is the safe def
 committed revision.
 
 ```bash
-npx --yes ye-ast install --trust untrusted /path/to/repo
+npx --yes ye-ast-mcp install --trust untrusted /path/to/repo
 ```
 
 Expected output, one item per line:
@@ -213,7 +215,7 @@ local exclude: added .ye-ast/ .ye-ast-graph/
 .ye-ast/README.md: written
 .ye-ast/entrypoints.json: written
 register the MCP server with Claude Code:
-claude mcp add ye-ast -- npx --yes ye-ast mcp /path/to/repo
+claude mcp add ye-ast -- npx --yes ye-ast-mcp mcp /path/to/repo
 ```
 
 The last line is the registration command for **this** machine. Use it verbatim in step 3.
@@ -227,7 +229,7 @@ consent from the fact that the repository is theirs.
 **Claude Code** — user scope, so it works in every project:
 
 ```bash
-claude mcp add ye-ast -s user -- npx --yes ye-ast mcp /path/to/repo
+claude mcp add ye-ast -s user -- npx --yes ye-ast-mcp mcp /path/to/repo
 ```
 
 Project scope instead of `-s user` writes `.mcp.json` and shares the registration with the team. Replace `-s user` with
@@ -240,7 +242,7 @@ Project scope instead of `-s user` writes `.mcp.json` and shares the registratio
   "mcp": {
     "ye-ast": {
       "type": "local",
-      "command": ["npx", "-y", "ye-ast", "mcp", "/path/to/repo"],
+      "command": ["npx", "-y", "ye-ast-mcp", "mcp", "/path/to/repo"],
       "enabled": true
     }
   }
@@ -255,7 +257,7 @@ name and its own path. Do not rely on the current working directory: an MCP clie
 Run the same query through the CLI. It is the same engine the MCP server uses:
 
 ```bash
-npx --yes ye-ast map /path/to/repo
+npx --yes ye-ast-mcp map /path/to/repo
 ```
 
 Expected: one JSON object on stdout with `schema`, `snapshot`, `producer`, `inputs`, `evidence`, `status` and `value`.

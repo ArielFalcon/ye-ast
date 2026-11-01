@@ -8,7 +8,7 @@ import { EXIT_CODE } from "../cli/main.ts";
 import { REDACTED } from "../core/ports/redaction.port.ts";
 import { createSha256Digest } from "../core/adapters/crypto/sha256-digest.adapter.ts";
 import { canonicalJson } from "../core/domain/shared/canonical-json.ts";
-import { composeCli, composeQueries } from "./compose.ts";
+import { composeCli, composeQueries, mcpCommandFor } from "./compose.ts";
 import { installedVersion } from "./installed-versions.ts";
 
 const GIT_ENV = {
@@ -56,6 +56,11 @@ afterEach(() => rmSync(workspace, { recursive: true, force: true }));
 function git(...args: string[]): string {
   return execFileSync("git", args, { cwd: repo, env: GIT_ENV, encoding: "utf8" }).trim();
 }
+
+test("the MCP registration names the published package when it runs from an installed one, and tsx from a source checkout", () => {
+  assert.deepEqual(mcpCommandFor("/work/ye-ast/src/composition/main.ts"), ["npx", "--yes", "tsx", "/work/ye-ast/src/composition/main.ts"]);
+  assert.deepEqual(mcpCommandFor("/app/node_modules/ye-ast-mcp/dist/composition/main.js"), ["npx", "--yes", "ye-ast-mcp"]);
+});
 
 test("map prints the route of a committed Spring controller and removes its temporary export", async () => {
   const stdout: string[] = [];
