@@ -1,207 +1,155 @@
-# ye-ast
+<div align="center">
 
-**Verifiable facts about a codebase, before an agent acts.**
+<img src="https://capsule-render.vercel.app/api?type=waving&height=180&color=0:111111,100:3a3a3a&text=ye-ast&fontColor=ffffff&fontSize=64&fontAlignY=38&desc=Your%20AI%20agent%20stops%20guessing%20how%20your%20code%20fits%20together&descAlignY=60&descSize=16" alt="ye-ast" width="100%" />
 
-[![npm](https://img.shields.io/npm/v/ye-ast-mcp?color=black)](https://www.npmjs.com/package/ye-ast-mcp)
-[![license](https://img.shields.io/badge/license-Apache--2.0-black)](LICENSE)
-[![node](https://img.shields.io/node/v/ye-ast-mcp?color=black)](package.json)
+<i>"What breaks if I rename this?" · "Which screen uses this?" · "Is this file really dead?" · "What does my branch touch?"</i>
 
-An AI agent reads a few files, greps a few names and guesses the rest: what a change touches, which screen a component
-serves, what breaks if a function is renamed. ye-ast replaces the guess with **facts derived from code and git**, each
-one carrying `path:line` evidence, the snapshot it was computed on and an explicit statement of how complete it is.
+[![npm](https://img.shields.io/npm/v/ye-ast-mcp?style=flat-square&color=111111&logo=npm)](https://www.npmjs.com/package/ye-ast-mcp)
+[![license](https://img.shields.io/badge/license-Apache--2.0-111111?style=flat-square)](LICENSE)
+[![node](https://img.shields.io/node/v/ye-ast-mcp?style=flat-square&color=111111&logo=nodedotjs)](package.json)
+[![MCP](https://img.shields.io/badge/MCP-stdio-111111?style=flat-square)](#3-register-the-mcp-server)
 
-No LLM runs inside the engine. Same input, same bytes.
+**[Why](#the-problem) · [What you get](#what-you-get) · [Try it](#try-it-in-two-minutes) · [Limits](#what-it-does-not-do) · [For AI agents →](#for-ai-agents-install-and-configure-ye-ast)**
 
-```console
-$ ye-ast map .
-{
-  "schema": "0.4.0",
-  "snapshot": { "repo": "my-app", "kind": "sha", "sha": "…" },
-  "producer": { "name": "ye-ast", "version": "0.2.0" },
-  "inputs": { "trust": "untrusted", "declaredScope": { … } },
-  "evidence": [ { "path": "src/app/routes.ts", "line": 12 } ],
-  "status": "complete",
-  "value": { "entrypoints": [ … ] }
-}
-```
-
-## What it answers
-
-| Question | Fact |
-|---|---|
-| What does my change affect? | Bounded impact walk from the merge base to the head: the symbols that reach the change, the entrypoints they serve, and the entrypoints the change adds, removes or alters |
-| Which screen or endpoint does this serve? | Entrypoints — UI routes, HTTP routes, message listeners, scheduled jobs — with the handler's `path:line` |
-| Who depends on this symbol or these lines? | Callers and the entrypoints they serve |
-| Is this file really unused? | Importers, users, and unresolved references, each listed |
-| What is even in this repository? | The entrypoint map of a revision, as the orientation starting point |
-
-Languages and frameworks today: **TypeScript** and **Java**, with **Angular** routes and **Spring** HTTP routes resolved.
-Everything else is reported as outside the declared scope, never silently ignored.
-
-## How it works
-
-```
-┌───────────────┐    stdio MCP     ┌────────────────────────────────────────┐
-│   AI agent    │ ───────────────► │  ye-ast mcp                            │
-│  Claude Code  │                  │  ye_ast_entrypoints  ye_ast_callers    │
-│  OpenCode     │ ◄─────────────── │  ye_ast_impact       ye_ast_importers  │
-└───────────────┘  facts + evidence└─────────────────┬──────────────────────┘
-                                                     │
-                       ┌─────────────────────────────┼──────────────────────────┐
-                       ▼                             ▼                          ▼
-                code index                   TypeScript / Java            git history
-                (codegraph)                  syntax, routes, DI           revisions + diff
-```
-
-The engine is a library with ports; the CLI and the MCP server are thin adapters over it. The same core answers a
-one-shot `ye-ast impact` in CI and an on-demand `ye_ast_impact` from an agent.
-
-## Install
-
-Requires **Node.js 24.15 or newer** and **git 2.44 or newer** on `PATH`.
-
-```bash
-npm install -g ye-ast-mcp    # or: npx ye-ast-mcp --version
-ye-ast --version             # 0.2.0
-```
-
-The package is `ye-ast-mcp`; the command it installs is `ye-ast`.
-
-## Quickstart
-
-```bash
-cd /path/to/your/repo
-ye-ast install --trust untrusted .   # declares the trust mode and writes the fixed layer
-ye-ast map .                         # the entrypoints of HEAD
-ye-ast impact --base main .          # what your branch affects
-ye-ast callers . src/checkout.ts:placeOrder     # who depends on a symbol
-ye-ast importers . src/checkout.ts              # who imports a file
-```
-
-`install` records your trust declaration **outside** the repository (`$XDG_CONFIG_HOME/ye-ast/`, `~/.config/ye-ast/`
-by default), writes the fixed layer under `.ye-ast/`, keeps `.ye-ast/` and `.ye-ast-graph/` out of git through
-`.git/info/exclude`, and prints the MCP registration command for that repository.
-
-## Use it from an agent
-
-`ye-ast mcp [<repo>]` serves four read-only tools over stdio. Register it once per client.
-
-**Claude Code** — `ye-ast install` prints the exact line for your machine:
-
-```bash
-claude mcp add ye-ast -- npx --yes ye-ast-mcp mcp /path/to/your/repo
-```
-
-**OpenCode** — in `opencode.json`:
-
-```json
-{
-  "$schema": "https://opencode.ai/config.json",
-  "mcp": {
-    "ye-ast": {
-      "type": "local",
-      "command": ["npx", "-y", "ye-ast-mcp", "mcp", "/path/to/your/repo"]
-    }
-  }
-}
-```
-
-Any other stdio MCP client works the same way: command `npx`, arguments `-y ye-ast-mcp mcp <repo>`.
-
-## Trust model
-
-The two modes describe the **repository**, not the machine, and are declared outside it. Nothing inside a repository can
-raise its own mode; with no declaration the CLI and the MCP server run `untrusted`.
-
-| Mode | What ye-ast does |
-|---|---|
-| `untrusted` (default) | Reads only a snapshot exported from git at a sha. No network, no repository manifest, no `.gitignore` of the repository, no repository code, no symlinks |
-| `trusted` | Adds `--live`: reads the working tree, uncommitted and untracked files included, from ye-ast's own mirror. Refreshes declared remotes with your own git |
-
-`--live` under `untrusted` is refused with exit code `1` and the `live-requires-trusted` fault. Declare `trusted` only
-when you trust the repository you are pointing at.
-
-## Reading a fact
-
-Every answer is one envelope, and its `status` is the part that matters:
-
-| `status` | Means |
-|---|---|
-| `complete` | Everything within `inputs.declaredScope` was read |
-| `partial` | The answer stops at each `cuts` entry; what lies past a cut is **not known** |
-| `unknown` | ye-ast cannot tell, and `reason` says why. **Never** read it as "no impact" |
-
-An empty result is never used to mean "nothing found".
-
-## Commands
-
-| Command | Answers |
-|---|---|
-| `ye-ast map [--revision <rev> \| --live] [scope] <repo>` | Entrypoints of a revision |
-| `ye-ast impact --base <rev> [--head <rev> \| --live] [scope] [budget] <repo>` | What depends on the change from the merge base to the head |
-| `ye-ast callers [--revision <rev> \| --live] [scope] [budget] <repo> <file>:<symbol> \| <file>:<start>-<end> …` | What depends on symbols or line ranges |
-| `ye-ast importers [--revision <rev> \| --live] [scope] <repo> <file> …` | Per file: importers, users and unresolved namers |
-| `ye-ast install --trust trusted\|untrusted [<repo>]` | Declares the trust mode, writes the fixed layer, prints the MCP registration |
-| `ye-ast serve` | The query protocol over stdio, one JSON-RPC 2.0 message per line |
-| `ye-ast mcp [<repo>]` | The stdio MCP server, read-only, bound to one repository |
-
-`scope` is `[--include <glob>]… [--exclude <glob>]…` over repository-relative paths; `--exclude` wins.
-`budget` is `[--depth <n>] [--hub-fan-in <n>] [--expansions <n>]`; none has a default, and a bound that stops a walk is
-reported as a cut. `--repo-id <id>` names the repository in every snapshot.
-
-Exit codes: `0` ok · `1` the query failed with a typed fault · `2` usage · `70` internal fault · `130` interrupted.
-
-## Use it as a library
-
-For a host that embeds the engine in its own process:
-
-```js
-import { composeQueries } from "ye-ast-mcp";
-
-const { entrypoints, impact } = composeQueries({ indexCache: "/var/cache/ye-ast" });
-const result = await impact.callers({ repo: "/path/to/repo", repoId: "my-app", revision: "HEAD", targets: [{ file: "src/checkout.ts", symbol: "placeOrder" }] });
-```
-
-`composeQueries` returns the read query families and `warmLive`; nothing it exposes can write.
-
-## Development
-
-```bash
-nvm use
-npm ci
-npm run check     # typecheck + architecture rules + 1000+ tests
-npm run cli -- map .
-```
-
-The layers are enforced by `npm run arch:check`: domain and ports never reach a Node built-in, application never reaches
-an adapter, and an entrypoint never imports another entrypoint.
-
-## License
-
-Apache-2.0. See [LICENSE](LICENSE).
+</div>
 
 ---
 
-# For AI agents: install and configure ye-ast
+## The problem
 
-You are an agent asked to add ye-ast to a repository. Follow these steps in order. Every command is exact; every
-expected result is stated. **Do not skip step 2 and do not choose `trusted` for the user.**
+You ask your AI agent to rename a function. It reads three files, greps the name, and says "done". Two days later a
+screen nobody tested is broken, because something called that function through a path the agent never opened.
 
-## 1. Check the preconditions
+It is not that the agent is bad. It just **can't see the whole map**. It sees a handful of files and fills the rest
+with a confident guess.
+
+## What ye-ast does about it
+
+ye-ast reads your repository and git history and hands your agent **the map**: who calls what, which screen or
+endpoint each piece of code ends up serving, and what your branch really touches. Every answer points to the exact
+file and line it came from, so the agent (and you) can check it.
+
+```mermaid
+flowchart LR
+    A["🤖 Your agent<br/><i>'what does this change break?'</i>"] -->|asks| Y["🧭 ye-ast"]
+    Y -->|reads| C["📁 Your code"]
+    Y -->|reads| G["🕓 Git history"]
+    Y -->|answers with proof| A
+```
+
+> [!TIP]
+> Think of it as giving your agent the "Find all references" and "Go to definition" a senior dev uses without
+> thinking, plus "which page of the app ends up running this?", all in one question.
+
+## What you get
+
+| | Before | With ye-ast |
+|---|---|---|
+| 🔁 **Renaming or deleting** | "I searched the name, looks unused" | The full list of callers, with file and line |
+| 🖥️ **"Where is this used?"** | The agent guesses from folder names | The real screens, API routes, listeners and jobs it reaches |
+| 🌿 **Before a pull request** | "I only changed two files" | Everything downstream of those two files, and the routes that changed |
+| 🗺️ **New repository** | Reading folders at random | A list of every way into the app, as a starting point |
+| ❓ **When it doesn't know** | Silence, read as "all good" | It says so, and tells you exactly where it stopped |
+
+That last row is the important one. ye-ast **never pretends**. If it can't finish an answer, it tells you where the
+answer ends instead of handing back an empty list that looks like "nothing to worry about".
+
+## Why you can trust it
+
+- 🎯 **No AI inside.** The answers come from code and git, not from another model. Same repo, same answer, every time.
+- 🔒 **Read-only.** It never writes to your code. Your agent can't use it to change anything.
+- 🛡️ **Safe by default.** Unless you say otherwise, it only reads what is committed, runs nothing from the
+  repository, and makes no network calls.
+- 🔌 **Works with your agent.** It speaks MCP, the standard way agents plug in tools. Claude Code, OpenCode and any
+  other MCP client work.
+
+## Try it in two minutes
+
+You need Node.js 24.15+ and git 2.44+. Then, inside any repository:
 
 ```bash
-node --version    # must be v24.15.0 or newer
-git --version     # must be 2.44 or newer
+npx ye-ast-mcp install --trust untrusted .
+```
+
+That's it. The command prints one line to connect it to your agent; paste it, and your agent now has four new tools.
+Or, easier: **give this README to your agent and ask it to set ye-ast up.** The second half is written for it.
+
+## What it does not do
+
+Being honest about the edges:
+
+- 🧩 **Languages today:** TypeScript and Java, with Angular routes and Spring HTTP routes understood. Code in other
+  languages is reported as "not covered", never silently skipped.
+- 🧠 **It answers structure, not intent.** "What reaches this?" yes. "Is this code good?" no.
+- 🚧 **Early days.** Version 0.x: the answers are solid, the surface may still change.
+
+---
+
+<div align="center">
+
+## For AI agents: install and configure ye-ast
+
+<sub>Everything below is written for an agent. Humans are welcome, but it gets technical from here.</sub>
+
+</div>
+
+You are an agent asked to add ye-ast to a repository and use it. Follow the steps in order. Every command is exact and
+every expected result is stated.
+
+> [!IMPORTANT]
+> **Do not skip step 2 and do not choose `trusted` for the user.** The trust mode is the user's decision.
+
+```mermaid
+flowchart TD
+    S1["1 · Check Node and git"] --> S2{"2 · Trust mode<br/>stated by the user?"}
+    S2 -->|"no / unsure"| U["install --trust untrusted"]
+    S2 -->|"user says trusted"| T["install --trust trusted"]
+    U --> S3["3 · Register the MCP server"]
+    T --> S3
+    S3 --> S4["4 · Verify with ye-ast map"]
+    S4 --> S5["5 · Use the four tools"]
+```
+
+### Contents
+
+1. [Check the preconditions](#1-check-the-preconditions)
+2. [Declare the trust mode](#2-declare-the-trust-mode)
+3. [Register the MCP server](#3-register-the-mcp-server)
+4. [Verify before reporting success](#4-verify-before-reporting-success)
+5. [Choose the tool](#5-choose-the-tool)
+6. [Read the answer correctly](#6-read-the-answer-correctly)
+7. [Failures and what they mean](#7-failures-and-what-they-mean)
+8. [Rules you must respect](#8-rules-you-must-respect)
+9. [CLI reference](#9-cli-reference)
+
+### 1. Check the preconditions
+
+```bash
+node --version                  # must be v24.15.0 or newer
+git --version                   # must be 2.44 or newer
 git rev-parse --show-toplevel   # must print the repository root
 ```
 
-If Node is older, stop and tell the user: the engine calls `node:sqlite` and refuses to run. If the working directory is
-not a git repository, stop: every fact reads git history.
+| If | Then |
+|---|---|
+| Node is older than 24.15 | Stop and tell the user. The engine uses `node:sqlite` and refuses to run. |
+| The directory is not a git repository | Stop. Every fact reads git history. |
+| `git rev-parse` prints a different root than the path you were given | Use the printed root as `<repo>` in every step below. |
 
-## 2. Declare the trust mode
+The npm package is `ye-ast-mcp`; the command it installs is `ye-ast`. Every step works without a global install
+through `npx --yes ye-ast-mcp …`. With `npm install -g ye-ast-mcp`, replace `npx --yes ye-ast-mcp` with `ye-ast`.
 
-Ask the user only if you cannot decide from context. `untrusted` is the safe default and works for every read against a
-committed revision.
+### 2. Declare the trust mode
+
+The two modes describe the **repository content**, not the machine, and are recorded **outside** the repository.
+Nothing inside a repository can raise its own mode. With no declaration, the CLI and the MCP server run `untrusted`.
+
+| Mode | What ye-ast does | Use when |
+|---|---|---|
+| `untrusted` (default) | Reads only a snapshot exported from git at a sha. No network request, no repository manifest, no repository `.gitignore`, no repository code, no symlinks. | Always, unless the user says otherwise. Every query against a committed revision works. |
+| `trusted` | Also allows `live`: reads the working tree (uncommitted and untracked files included) from ye-ast's own mirror, and refreshes declared remotes with the user's git. | Only when the user explicitly says the repository content is trusted. |
+
+Ask the user only if you cannot decide from context. Never infer consent from the fact that the repository is theirs.
 
 ```bash
 npx --yes ye-ast-mcp install --trust untrusted /path/to/repo
@@ -209,7 +157,7 @@ npx --yes ye-ast-mcp install --trust untrusted /path/to/repo
 
 Expected output, one item per line:
 
-```
+```text
 trust: untrusted (recorded outside the repository)
 local exclude: added .ye-ast/ .ye-ast-graph/
 .ye-ast/README.md: written
@@ -218,27 +166,39 @@ register the MCP server with Claude Code:
 claude mcp add ye-ast -- npx --yes ye-ast-mcp mcp /path/to/repo
 ```
 
-The last line is the registration command for **this** machine. Use it verbatim in step 3.
+What `install` did:
 
-Use `--trust trusted` only when the user explicitly says the repository content is trusted. It is the only way to enable
-`--live` and working-tree reads; it also allows ye-ast to refresh declared remotes with the user's git. Never infer
-consent from the fact that the repository is theirs.
+- recorded the trust declaration in `$XDG_CONFIG_HOME/ye-ast/` (`~/.config/ye-ast/` by default);
+- wrote the fixed layer under `.ye-ast/` (owned by `install`; never edit it by hand);
+- added `.ye-ast/` and `.ye-ast-graph/` to `.git/info/exclude`, so nothing reaches the user's commits;
+- printed the MCP registration for **this** machine. Use that last line in step 3.
 
-## 3. Register the MCP server
+### 3. Register the MCP server
 
-**Claude Code** — user scope, so it works in every project:
+One server instance is bound to **one** repository root. Always pass the path: an MCP client may start the server in
+any working directory.
+
+<details open>
+<summary><b>Claude Code</b></summary>
+
+User scope (available in every session):
 
 ```bash
 claude mcp add ye-ast -s user -- npx --yes ye-ast-mcp mcp /path/to/repo
 ```
 
-Project scope instead of `-s user` writes `.mcp.json` and shares the registration with the team. Replace `-s user` with
-`-s project`.
+Project scope (writes `.mcp.json`, shared with the team): replace `-s user` with `-s project`.
 
-**OpenCode** — merge into `opencode.json` (project) or the global config:
+</details>
+
+<details>
+<summary><b>OpenCode</b></summary>
+
+Merge into `opencode.json` (project) or the global config:
 
 ```json
 {
+  "$schema": "https://opencode.ai/config.json",
   "mcp": {
     "ye-ast": {
       "type": "local",
@@ -249,10 +209,32 @@ Project scope instead of `-s user` writes `.mcp.json` and shares the registratio
 }
 ```
 
-One server instance is bound to **one** repository root. For a second repository, register a second entry with its own
-name and its own path. Do not rely on the current working directory: an MCP client may start the server anywhere.
+</details>
 
-## 4. Verify before reporting success
+<details>
+<summary><b>Any other stdio MCP client</b></summary>
+
+| Field | Value |
+|---|---|
+| transport | stdio |
+| command | `npx` |
+| arguments | `-y`, `ye-ast-mcp`, `mcp`, `/path/to/repo` |
+
+</details>
+
+<details>
+<summary><b>More than one repository</b></summary>
+
+Register one entry per repository, each with its own name and path:
+
+```bash
+claude mcp add ye-ast-api -s user -- npx --yes ye-ast-mcp mcp /path/to/api
+claude mcp add ye-ast-web -s user -- npx --yes ye-ast-mcp mcp /path/to/web
+```
+
+</details>
+
+### 4. Verify before reporting success
 
 Run the same query through the CLI. It is the same engine the MCP server uses:
 
@@ -260,60 +242,214 @@ Run the same query through the CLI. It is the same engine the MCP server uses:
 npx --yes ye-ast-mcp map /path/to/repo
 ```
 
-Expected: one JSON object on stdout with `schema`, `snapshot`, `producer`, `inputs`, `evidence`, `status` and `value`.
-Then confirm `"status"` is `complete` or `partial` — both are valid answers — and that `value.entrypoints` is an object,
-not `null`. A non-zero exit code means the registration is not what failed; read step 6 first.
+- [ ] Exit code is `0`.
+- [ ] stdout is one JSON object with `schema`, `snapshot`, `producer`, `inputs`, `evidence`, `status` and `value`.
+- [ ] `status` is `complete` or `partial`. Both are valid answers.
+- [ ] `value.entrypoints` is an object, not `null`.
+- [ ] If the client lists MCP tools: `ye_ast_entrypoints`, `ye_ast_callers`, `ye_ast_importers` and `ye_ast_impact`
+      appear. The client may need a restart to pick up a new server.
 
-If your client lists MCP tools, the four names below must appear.
+A non-zero exit code is a query problem, not a registration problem: read [step 7](#7-failures-and-what-they-mean).
 
-## 5. Choose the tool
+### 5. Choose the tool
+
+```mermaid
+flowchart TD
+    Q{"What are you about to do?"}
+    Q -->|"Orient in an unfamiliar repo,<br/>find a route/listener/job handler"| E["ye_ast_entrypoints"]
+    Q -->|"Change, move or delete<br/>a symbol or line range"| C["ye_ast_callers"]
+    Q -->|"Move, rename or delete a file,<br/>or change its exports"| I["ye_ast_importers"]
+    Q -->|"Report work done<br/>or open a pull request"| P["ye_ast_impact"]
+```
 
 | Tool | Call it when | Key arguments |
 |---|---|---|
-| `ye_ast_entrypoints` | You are orienting in an unfamiliar repository, or you need the handler of a route, listener or job | `revision`, `live`, `scope` |
-| `ye_ast_callers` | Before changing, moving or deleting a symbol or a line range | `targets: [{ file, symbol }]` (a member as `Class.member`) or `[{ file, start, end }]`, `scope`, `budget`, `detail` |
-| `ye_ast_importers` | Before moving, renaming or deleting a file, or changing its exports | `files: [repo-relative paths]`, `scope` |
+| `ye_ast_entrypoints` | You are orienting, or you need the handler of a UI route, HTTP route, message listener or scheduled job | `revision`, `live`, `scope` |
+| `ye_ast_callers` | **Before** changing, moving or deleting a symbol or a line range | `targets: [{ file, symbol }]` (a member as `Class.member`) or `[{ file, start, end }]`, `revision`, `live`, `scope`, `budget`, `detail` |
+| `ye_ast_importers` | Before moving, renaming or deleting a file, or changing its exports | `files: [repo-relative paths]`, `revision`, `live`, `scope` |
 | `ye_ast_impact` | Before reporting work done or opening a pull request | `base` (the branch the work merges into), `head`, `live`, `scope`, `budget`, `detail` |
 
-Prefer these over `grep` and over your own inference whenever the decision depends on **what reaches what**. Do not use
-them to answer style, naming or syntax questions; they answer structure, not intent.
+How the arguments behave:
 
-`scope` is `{ include?: [globs], exclude?: [globs] }` over repository-relative paths; `exclude` wins. A path left out is
-not read, so keep the files that declare routes inside it. `detail: "full"` lists every impacted symbol in the text; by
-default it lists depth 0 and 1 and counts deeper ones per file, while the structured content always holds all of them.
-Call `ye_ast_callers` **before** deleting a declaration: once it is gone, `ye_ast_impact` can only list the places that
-still name it.
+| Argument | Meaning |
+|---|---|
+| `revision` / `head` | Any git revision. Default: `HEAD`. |
+| `live` | Read the working tree instead of a revision. Requires `trusted`; exclusive with `revision`/`head`. |
+| `scope` | `{ include?: [globs], exclude?: [globs] }` over repository-relative paths; `exclude` wins. A path left out is **not read**, so keep the files that declare routes inside it. |
+| `budget` | `{ depth?, hubFanIn?, expansions? }`, positive integers, no defaults. A bound that stops a walk is reported as a cut, never as a silent truncation. |
+| `detail` | Text listing for `callers` and `impact`. Default: depth 0 and 1 listed, deeper symbols counted per file. `"full"` lists every symbol. The structured content always holds all of them. |
 
-## 6. Read the answer correctly
+Working rules:
 
-- `status: "complete"` — everything inside `inputs.declaredScope` was read. Code outside that scope was not, and saying
-  "nothing depends on this" is only true **inside** the declared scope.
-- `status: "partial"` — the answer stops at each entry in `cuts`. What lies past a cut is unknown. Say so.
-  The server instructions say what to do at each cut kind; an `unresolved-link` lists places to open and decide.
-- `status: "unknown"` — `reason` explains why. Never translate it into "no impact".
-- An `isError` result carries a fault kind. `live-requires-trusted` means the repository must be declared `trusted`
-  before `live` works; answer from a revision meanwhile.
-- The `snapshot` in the answer tells you what was read: `{ kind: "sha", sha }` for a revision, `{ kind: "live" }` for the
-  working tree. Quote it when you report a fact.
-- `_meta["ye-ast/live"]` on a live answer means the working tree moved during the read and the answer may be stale.
+- Prefer these tools over `grep` and over your own inference whenever the decision depends on **what reaches what**.
+  Do not use them for style, naming or syntax questions.
+- Call `ye_ast_callers` **before** deleting a declaration. Once it is gone, `ye_ast_impact` can only list the places
+  that still name it.
+- Name symbols as they are declared in the file: `placeOrder`, or `OrderService.placeOrder` for a member.
+- Narrow with `scope` before raising `budget`: it is cheaper and keeps the answer focused.
 
-## 7. Failures and what they mean
+### 6. Read the answer correctly
+
+Every answer is one envelope:
+
+```text
+schema     contract version of the envelope
+snapshot   what was read: { kind: "sha", sha } or { kind: "live" }
+producer   ye-ast name and version
+inputs     trust mode, declared scope, budget
+evidence   [{ path, line }] that support the value
+status     complete | partial | unknown
+value      the fact itself
+```
+
+| `status` | Means | What you report |
+|---|---|---|
+| `complete` | Everything inside `inputs.declaredScope` was read | The answer, and that it holds **inside** the declared scope only |
+| `partial` | The answer stops at each entry in `cuts`; what lies past a cut is **not known** | The answer plus the cuts. The server instructions say what to do for each cut kind; an `unresolved-link` lists places to open and decide yourself |
+| `unknown` | ye-ast cannot tell; `reason` says why | The reason. **Never** translate it into "no impact" |
+
+> [!WARNING]
+> An empty list is never used to mean "nothing found". If you see `unknown` or a cut, say so to the user.
+
+Also:
+
+- Quote the `snapshot` when you report a fact, so the user knows which revision it describes.
+- `_meta["ye-ast/live"]` on a live answer means the working tree moved during the read; the answer may be stale.
+- An `isError` result carries a fault kind; see the next step.
+
+### 7. Failures and what they mean
 
 | Symptom | Cause | Action |
 |---|---|---|
 | `ye-ast: unreadable: …` | The path is not readable or not a git repository | Fix the path; do not retry blindly |
-| `ye-ast: live-requires-trusted` | `--live` used without a `trusted` declaration | Ask the user, or fall back to `--revision` |
+| `ye-ast: live-requires-trusted` | `live` used without a `trusted` declaration | Ask the user, or answer from a revision |
 | `ye-ast: unknown-symbol: …` | Nothing declares that symbol at that revision | Check the file and the name; the error lists what it found |
-| `ye-ast: deadline` | The walk ran out of its bound | Raise the budget or narrow the scope |
+| `ye-ast: deadline` | The walk ran out of its bound | Narrow `scope`, or raise `budget` |
 | `ye-ast: caller-budget` | A host-set export budget stopped the read | Raise the budget set by the host |
-| `ye-ast: unsupported-store: …` | An index store outside the supported schema | Let ye-ast rebuild the index |
-| exit `2` | Usage error | Re-read `ye-ast --help` |
-| exit `70` | Internal fault | Report the message; do not retry in a loop |
+| `ye-ast: unsupported-store: …` | An index store outside the supported schema | Let ye-ast rebuild its index |
+| Tools missing in the client | Server not registered, or client not restarted | Re-run step 3, restart the client, re-check step 4 |
 
-## 8. Rules you must respect
+| Exit code | Meaning |
+|---|---|
+| `0` | OK |
+| `1` | The query failed with a typed fault (table above) |
+| `2` | Usage error: re-read `ye-ast --help` |
+| `70` | Internal fault: report the message, do not retry in a loop |
+| `130` | Interrupted |
+
+### 8. Rules you must respect
 
 - ye-ast is **read-only** toward the repository. Never write, edit or delete files to make a query succeed.
 - Never fabricate a fact. If the answer is `unknown` or cut, report that.
 - Never mark a repository `trusted` on your own initiative.
 - Under `untrusted` ye-ast makes no network request; do not work around that by fetching the repository yourself.
-- The fixed layer under `.ye-ast/` belongs to the user's repository. Do not edit it by hand; `ye-ast install` owns it.
+- The fixed layer under `.ye-ast/` belongs to `ye-ast install`. Do not edit it by hand.
+
+### 9. CLI reference
+
+The CLI answers the same questions as the MCP tools, as one JSON object on stdout. Use it in scripts, CI, or to verify
+an MCP answer.
+
+```bash
+ye-ast map .                                    # entrypoints at HEAD
+ye-ast impact --base main .                     # what the current branch affects
+ye-ast callers . src/checkout.ts:placeOrder     # who depends on a symbol
+ye-ast callers . src/checkout.ts:40-72          # who depends on a line range
+ye-ast importers . src/checkout.ts              # who imports or uses a file
+ye-ast map --live .                             # the working tree (trusted only)
+```
+
+| Command | Answers |
+|---|---|
+| `ye-ast map [--revision <rev> \| --live] [scope] <repo>` | Entrypoints of a revision |
+| `ye-ast impact --base <rev> [--head <rev> \| --live] [scope] [budget] <repo>` | What depends on the change from the merge base to the head |
+| `ye-ast callers [--revision <rev> \| --live] [scope] [budget] <repo> <file>:<symbol> \| <file>:<start>-<end> …` | What depends on symbols or line ranges |
+| `ye-ast importers [--revision <rev> \| --live] [scope] <repo> <file> …` | Per file: importers, users and unresolved namers |
+| `ye-ast install --trust trusted\|untrusted [<repo>]` | Declares the trust mode, writes the fixed layer, prints the MCP registration |
+| `ye-ast mcp [<repo>]` | The stdio MCP server, read-only, bound to one repository |
+| `ye-ast serve` | The query protocol over stdio, one JSON-RPC 2.0 message per line |
+
+| Option group | Syntax |
+|---|---|
+| `scope` | `[--include <glob>]… [--exclude <glob>]…` over repository-relative paths; `--exclude` wins |
+| `budget` | `[--depth <n>] [--hub-fan-in <n>] [--expansions <n>]`; positive integers, no defaults |
+| identity | `--repo-id <id>` names the repository in every snapshot |
+| measurement | `--measure` writes one JSON measurement line per query and per index build to stderr, never stdout |
+
+<details>
+<summary><b>Embedding the engine as a library</b></summary>
+
+For a host that runs the engine in its own process:
+
+```js
+import { composeQueries } from "ye-ast-mcp";
+
+const { entrypoints, impact } = composeQueries({ indexCache: "/var/cache/ye-ast" });
+const result = await impact.callers({
+  repo: "/path/to/repo",
+  repoId: "my-app",
+  revision: "HEAD",
+  targets: [{ file: "src/checkout.ts", symbol: "placeOrder" }],
+});
+```
+
+`composeQueries` returns the read query families and `warmLive`; nothing it exposes can write.
+
+</details>
+
+<details>
+<summary><b>How it is built</b></summary>
+
+```mermaid
+flowchart LR
+    subgraph Entry["Driving adapters"]
+        CLI["ye-ast CLI"]
+        MCP["ye-ast mcp"]
+        PROTO["ye-ast serve"]
+    end
+    subgraph Core["Core library"]
+        UC["Query families<br/>entrypoints · callers · importers · impact"]
+    end
+    subgraph Tech["Driven adapters"]
+        IDX["Code index"]
+        LANG["TypeScript / Java<br/>syntax, routes, DI"]
+        GIT["git<br/>revisions, diff"]
+    end
+    CLI --> UC
+    MCP --> UC
+    PROTO --> UC
+    UC --> IDX
+    UC --> LANG
+    UC --> GIT
+```
+
+The core is a library with ports; the CLI, the MCP server and the query protocol are thin adapters over it. The same
+core answers a one-shot `ye-ast impact` in CI and an on-demand `ye_ast_impact` from an agent. Design records live in
+[docs/architecture](docs/architecture/README.md).
+
+</details>
+
+<details>
+<summary><b>Development</b></summary>
+
+```bash
+nvm use
+npm ci
+npm run check     # typecheck + architecture rules + tests
+npm run cli -- map .
+```
+
+`npm run arch:check` enforces the layers: domain and ports never reach a Node built-in, application never reaches an
+adapter, and an entrypoint never imports another entrypoint.
+
+</details>
+
+---
+
+<div align="center">
+
+Apache-2.0 · See [LICENSE](LICENSE)
+
+<img src="https://capsule-render.vercel.app/api?type=waving&height=90&color=0:3a3a3a,100:111111&section=footer" alt="" width="100%" />
+
+</div>
