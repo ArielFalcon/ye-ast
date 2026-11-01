@@ -178,7 +178,7 @@ test("impact reads a change of the bound repository, head defaulting to HEAD, an
   const text = textOf(result);
   assert.match(text, /status: complete/);
   assert.match(text, /src\/OrderService\.java:31 OrderService\.find/);
-  assert.match(text, /src\/OrderController\.java:17 OrderController\.one.*depth 2.*confidence 0\.75/);
+  assert.match(text, /src\/OrderController\.java\n {4}17 OrderController\.one \[method\] \(depth 2, confidence 0\.75, fan-in 3, via src\/OrderService\.java:OrderService\.find\)/);
   assert.match(text, /added http-route POST \/orders.*src\/OrderController\.java:40/);
   assert.match(text, /GET \/orders\/\{id\}.*src\/OrderController\.java:17.*depth 2/);
   await session.close();
@@ -221,16 +221,98 @@ test("importers forwards the files and renders importers, users and unresolved n
   await session.close();
 });
 
-test("a partial answer names the status and every cut with its place and limit", async () => {
+test("a partial answer counts its cuts in the status line and lists every one under a closing heading", async () => {
   const partial = impactFact({
     status: "partial",
     cuts: [{ kind: "depth", at: ["src/A.java:A.f", "src/B.java:B.g"], limit: 3 }, { kind: "hub", at: ["src/C.java:C.h"] }],
   } as Partial<Fact<ImpactValue>>);
   const { session } = await setup({ ofChange: async () => ({ ok: true, value: partial }) });
   const text = textOf(await session.callTool("ye_ast_impact", { base: "main" }));
-  assert.match(text, /status: partial/);
-  assert.match(text, /cut depth at src\/A\.java:A\.f, src\/B\.java:B\.g.*limit 3/);
-  assert.match(text, /cut hub at src\/C\.java:C\.h/);
+  const lines = text.split("\n");
+  assert.equal(lines[0], "status: partial (cuts: 1 depth, 1 hub)");
+  assert.match(text, /depth at src\/A\.java:A\.f, src\/B\.java:B\.g \(limit 3\)/);
+  assert.match(text, /hub \(1\): src\/C\.java:C\.h/);
+  assert.ok(text.indexOf("\ncuts:") > text.indexOf("impacted symbols"), "the cut list closes the answer");
+  await session.close();
+});
+
+test("cuts that name a single path are one line per kind listing every path", async () => {
+  const partial = {
+    ...base(),
+    status: "partial",
+    value: IMPORTERS,
+    cuts: [{ kind: "no-extractor", at: ["src/C.swift"] }, { kind: "no-extractor", at: ["src/A.swift"] }, { kind: "no-extractor", at: ["src/B.swift"] }],
+  } as Fact<ImportersValue>;
+  const { session } = await setup({ importers: async () => ({ ok: true, value: partial }) });
+  const text = textOf(await session.callTool("ye_ast_importers", { files: ["src/OrderService.java"] }));
+  assert.equal(text.split("\n")[0], "status: partial (cuts: 3 no-extractor)");
+  assert.match(text, /no-extractor \(3\): src\/A\.swift, src\/B\.swift, src\/C\.swift/);
+  await session.close();
+});
+
+test("an unresolved-link cut renders the places in its anchor's file as line numbers and other files as path:line", async () => {
+  const partial = impactFact({
+    status: "partial",
+    cuts: [{ kind: "unresolved-link", at: ["src/a.ts::A.f", "src/a.ts:18", "src/a.ts:123 no-extractor", "src/b.ts:7"] }],
+  } as Partial<Fact<ImpactValue>>);
+  const { session } = await setup({ ofChange: async () => ({ ok: true, value: partial }) });
+  const text = textOf(await session.callTool("ye_ast_impact", { base: "main" }));
+  assert.match(text, /unresolved-link at src\/a\.ts::A\.f: lines 18, 123 \(no-extractor\), src\/b\.ts:7/);
+  await session.close();
+});
+
+test("impacted symbols are grouped under their file, a seed at depth 0 is not printed twice and only a confidence below 1 or a fan-in above 0 is printed", async () => {
+  const grouped = impactFact({
+    value: {
+      seeds: [{ file: "src/a.ts", symbol: "A.seed", line: 1, basis: "requested" }],
+      symbols: [
+        { file: "src/a.ts", symbol: "A.seed", kind: "method", line: 1, depth: 0, confidence: 1, fanIn: 0, seeds: [0] },
+        { file: "src/a.ts", symbol: "A.other", kind: "method", line: 4, depth: 1, confidence: 1, fanIn: 0, seeds: [0] },
+        { file: "src/b.ts", symbol: "B.user", kind: "function", line: 9, depth: 2, confidence: 0.5, fanIn: 2, via: { file: "src/a.ts", symbol: "A.other" }, seeds: [0] },
+        { file: "src/b.ts", symbol: "B.helper", kind: "function", line: 2, depth: 2, confidence: 0.5, fanIn: 1, via: { file: "src/b.ts", symbol: "B.user" }, seeds: [0] },
+      ],
+      entrypoints: [],
+      cost: { expansionsUsed: 1 },
+    },
+  } as Partial<Fact<ImpactValue>>);
+  const { session } = await setup({ ofChange: async () => ({ ok: true, value: grouped }) });
+  const text = textOf(await session.callTool("ye_ast_impact", { base: "main" }));
+  assert.match(text, /impacted symbols \(3\):\n {2}src\/a\.ts\n {4}4 A\.other \[method\] \(depth 1\)\n {2}src\/b\.ts\n {4}9 B\.user \[function\] \(depth 2, confidence 0\.5, fan-in 2, via src\/a\.ts:A\.other\)\n {4}2 B\.helper \[function\] \(depth 2, confidence 0\.5, fan-in 1, via B\.user\)/);
+  assert.doesNotMatch(text, /A\.seed \[method\]/);
+  await session.close();
+});
+
+test("reached entrypoints print their confidence only when it is below 1", async () => {
+  const entrypoints = impactFact({
+    value: {
+      ...IMPACT,
+      entrypoints: [
+        { kind: "http-route", name: "GET /sure", handler: { path: "src/OrderController.java", symbol: "OrderController.one", line: 17 }, depth: 1, confidence: 1, seeds: [0] },
+        { kind: "http-route", name: "GET /maybe", handler: { path: "src/OrderController.java", symbol: "OrderController.one", line: 17 }, depth: 2, confidence: 0.4, seeds: [0] },
+      ],
+    },
+  } as Partial<Fact<ImpactValue>>);
+  const { session } = await setup({ ofChange: async () => ({ ok: true, value: entrypoints }) });
+  const text = textOf(await session.callTool("ye_ast_impact", { base: "main" }));
+  assert.match(text, /GET \/sure -> src\/OrderController\.java:17 OrderController\.one \(depth 1\)\n/);
+  assert.match(text, /GET \/maybe -> src\/OrderController\.java:17 OrderController\.one \(depth 2, confidence 0\.4\)/);
+  await session.close();
+});
+
+test("entrypoints closes with the cut list of the map and of its section", async () => {
+  const section = {
+    ...base(),
+    status: "partial",
+    value: [{ ...base(), status: "complete", value: ROUTE }],
+    cuts: [{ kind: "no-extractor", at: ["src/scripts/build.js"] }],
+  } as Fact<readonly Fact<Entrypoint>[]>;
+  const fact = { ...base(), status: "partial", value: { entrypoints: section }, cuts: [{ kind: "section", at: ["entrypoints"] }] } as EntrypointMapFact;
+  const { session } = await setup({ map: async () => ({ ok: true, value: fact }) });
+  const text = textOf(await session.callTool("ye_ast_entrypoints", {}));
+  const lines = text.split("\n");
+  assert.equal(lines[0], "status: partial (cuts: 1 section)");
+  assert.match(text, / {2}status: partial \(cuts: 1 no-extractor\)/);
+  assert.match(text, /\ncuts:\n {2}no-extractor \(1\): src\/scripts\/build\.js\n {2}section \(1\): entrypoints$/);
   await session.close();
 });
 
