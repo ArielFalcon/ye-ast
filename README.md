@@ -270,19 +270,26 @@ If your client lists MCP tools, the four names below must appear.
 
 | Tool | Call it when | Key arguments |
 |---|---|---|
-| `ye_ast_entrypoints` | You are orienting in an unfamiliar repository, or you need the handler of a route, listener or job | `revision`, `live` |
-| `ye_ast_callers` | Before changing, moving or deleting a symbol or a line range | `targets: [{ file, symbol }]` or `[{ file, start, end }]`, `budget` |
-| `ye_ast_importers` | Before moving, renaming or deleting a file, or changing its exports | `files: [repo-relative paths]` |
-| `ye_ast_impact` | Before reporting work done or opening a pull request | `base` (the branch the work merges into), `head`, `live` |
+| `ye_ast_entrypoints` | You are orienting in an unfamiliar repository, or you need the handler of a route, listener or job | `revision`, `live`, `scope` |
+| `ye_ast_callers` | Before changing, moving or deleting a symbol or a line range | `targets: [{ file, symbol }]` (a member as `Class.member`) or `[{ file, start, end }]`, `scope`, `budget`, `detail` |
+| `ye_ast_importers` | Before moving, renaming or deleting a file, or changing its exports | `files: [repo-relative paths]`, `scope` |
+| `ye_ast_impact` | Before reporting work done or opening a pull request | `base` (the branch the work merges into), `head`, `live`, `scope`, `budget`, `detail` |
 
 Prefer these over `grep` and over your own inference whenever the decision depends on **what reaches what**. Do not use
 them to answer style, naming or syntax questions; they answer structure, not intent.
+
+`scope` is `{ include?: [globs], exclude?: [globs] }` over repository-relative paths; `exclude` wins. A path left out is
+not read, so keep the files that declare routes inside it. `detail: "full"` lists every impacted symbol in the text; by
+default it lists depth 0 and 1 and counts deeper ones per file, while the structured content always holds all of them.
+Call `ye_ast_callers` **before** deleting a declaration: once it is gone, `ye_ast_impact` can only list the places that
+still name it.
 
 ## 6. Read the answer correctly
 
 - `status: "complete"` — everything inside `inputs.declaredScope` was read. Code outside that scope was not, and saying
   "nothing depends on this" is only true **inside** the declared scope.
 - `status: "partial"` — the answer stops at each entry in `cuts`. What lies past a cut is unknown. Say so.
+  The server instructions say what to do at each cut kind; an `unresolved-link` lists places to open and decide.
 - `status: "unknown"` — `reason` explains why. Never translate it into "no impact".
 - An `isError` result carries a fault kind. `live-requires-trusted` means the repository must be declared `trusted`
   before `live` works; answer from a revision meanwhile.

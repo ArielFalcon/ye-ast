@@ -11,7 +11,7 @@ import type { ImpactCallersRequest, ImpactFault, ImpactImportersRequest, ImpactO
 import { REDACTED, type Redaction } from "../core/ports/redaction.port.ts";
 import type { VcsFault } from "../core/ports/vcs.port.ts";
 import type { LiveFault } from "../core/ports/live-queries.port.ts";
-import { createMcpServer } from "./server.ts";
+import { createMcpServer, CUT_GUIDANCE } from "./server.ts";
 import { openSession, type Session } from "./test-session.ts";
 
 const SECRET = "hunter2-secret";
@@ -423,6 +423,25 @@ test("redaction is applied to the structured content and so to the text rendered
   await session.close();
 });
 
+test("every tool forwards the scope the caller sets and sends none it was not given", async () => {
+  const { session, calls } = await setup();
+  const scope = { include: ["src/app/**"], exclude: ["**/*.spec.ts"] };
+  await session.callTool("ye_ast_entrypoints", { scope });
+  await session.callTool("ye_ast_impact", { base: "main", scope });
+  await session.callTool("ye_ast_callers", { targets: [{ file: "src/a.ts", symbol: "A.f" }], scope: { exclude: ["**/*.spec.ts"] } });
+  await session.callTool("ye_ast_importers", { files: ["src/a.ts"], scope });
+  await session.callTool("ye_ast_importers", { files: ["src/a.ts"] });
+  assert.deepEqual([calls.map[0]?.scope, calls.ofChange[0]?.scope, calls.callers[0]?.scope, calls.importers[0]?.scope], [scope, scope, { exclude: ["**/*.spec.ts"] }, scope]);
+  assert.equal("scope" in (calls.importers[1] ?? {}), false);
+  await session.close();
+});
+
+test("the server instructions say what to do at every kind of cut", async () => {
+  const { session } = await setup();
+  for (const kind of Object.keys(CUT_GUIDANCE)) assert.ok(session.instructions?.includes(`- ${kind}: `), kind);
+  await session.close();
+});
+
 test("arguments that break the schema are refused before any query runs", async () => {
   const { session, calls } = await setup();
   const refused = [
@@ -432,9 +451,12 @@ test("arguments that break the schema are refused before any query runs", async 
     await session.callTool("ye_ast_importers", { files: [] }),
     await session.callTool("ye_ast_callers", { targets: [{ file: "a.java" }] }),
     await session.callTool("ye_ast_callers", { targets: [{ file: "a.java", start: 9, end: 3 }] }),
+    await session.callTool("ye_ast_entrypoints", { scope: { include: ["../outside/**"] } }),
+    await session.callTool("ye_ast_importers", { files: ["a.java"], scope: { exclude: ["src\\a.java"] } }),
+    await session.callTool("ye_ast_impact", { base: "main", scope: { include: [] } }),
   ];
-  assert.deepEqual(refused.map((result) => result.isError), [true, true, true, true, true, true]);
-  assert.deepEqual([calls.ofChange.length, calls.importers.length, calls.callers.length], [0, 0, 0]);
+  assert.deepEqual(refused.map((result) => result.isError), [true, true, true, true, true, true, true, true, true]);
+  assert.deepEqual([calls.map.length, calls.ofChange.length, calls.importers.length, calls.callers.length], [0, 0, 0, 0]);
   await session.close();
 });
 
