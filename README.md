@@ -17,7 +17,7 @@ $ ye-ast map .
 {
   "schema": "0.4.0",
   "snapshot": { "repo": "my-app", "kind": "sha", "sha": "…" },
-  "producer": { "name": "ye-ast", "version": "0.1.0" },
+  "producer": { "name": "ye-ast", "version": "0.2.0" },
   "inputs": { "trust": "untrusted", "declaredScope": { … } },
   "evidence": [ { "path": "src/app/routes.ts", "line": 12 } ],
   "status": "complete",
@@ -62,7 +62,7 @@ Requires **Node.js 24.15 or newer** and **git 2.44 or newer** on `PATH`.
 
 ```bash
 npm install -g ye-ast-mcp    # or: npx ye-ast-mcp --version
-ye-ast --version             # 0.1.0
+ye-ast --version             # 0.2.0
 ```
 
 The package is `ye-ast-mcp`; the command it installs is `ye-ast`.
