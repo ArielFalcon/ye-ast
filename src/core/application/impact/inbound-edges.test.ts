@@ -11,6 +11,7 @@ interface Setup {
   inbound: InboundEdges;
   symbol(id: string): GraphSymbol;
   callers(id: string, contractChanged?: boolean): string[];
+  throughMember(id: string): string[];
   callLike(id: string): boolean[];
   scored(id: string, contractChanged?: boolean): [string, number, string | undefined][];
 }
@@ -27,6 +28,7 @@ function setup(nodes: FakeNode[], edges: FakeEdge[], relations: readonly Relatio
     inbound,
     symbol,
     callers: (id, contractChanged = false) => inbound.callersOf(symbol(id), contractChanged).map((edge) => edge.from.id),
+    throughMember: (id) => inbound.callersOf(symbol(id), false, true).map((edge) => edge.from.id),
     callLike: (id) => inbound.callersOf(symbol(id), false).map((edge) => edge.callLike),
     scored: (id, contractChanged = false) => inbound.callersOf(symbol(id), contractChanged).map((edge) => [edge.from.id, edge.confidence, edge.bridge]),
   };
@@ -311,4 +313,17 @@ test("a method, a test file, or a missing class is no end of a relation", () => 
   );
   assert.deepEqual(s.callers("Target"), ["Real"]);
   assert.deepEqual(s.callers("Method"), []);
+});
+
+test("a type reached through one of its members follows a subtype and a template that renders it, not an injection into it", () => {
+  const nodes = [
+    fakeNode("Svc", "class", SVC, 3, 9, "Svc"),
+    fakeNode("Parent", "class", CMP, 10, 20, "Parent"),
+    fakeNode("Peer", "class", CMP, 30, 40, "Peer"),
+    fakeNode("Sub", "class", "src/app/sub.ts", 1, 9, "Sub"),
+  ];
+  const relations = [relation("uses-component", ref(CMP, "Parent", 11), ref(SVC, "Svc", 4)), relation("injects", ref(CMP, "Peer", 31), ref(SVC, "Svc", 4))];
+  const s = setup(nodes, [{ from: "Sub", to: "Svc", kind: "extends" }], relations);
+  assert.deepEqual(s.throughMember("Svc"), ["Parent", "Sub"]);
+  assert.deepEqual(s.callers("Svc"), ["Parent", "Peer", "Sub"]);
 });

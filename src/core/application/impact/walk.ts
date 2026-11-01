@@ -31,6 +31,8 @@ interface Rec {
   via?: GraphSymbol;
   /** Whether a changed contract can still flow down to the implementations. */
   contractChanged: boolean;
+  /** True when the walk entered it as the type that declares a reached member, which follows only whole-type rows. */
+  throughMember: boolean;
   fanIn: number;
   callers: readonly InboundEdge[];
 }
@@ -50,8 +52,8 @@ export function walkImpact(seeds: readonly GraphSymbol[], inbound: InboundEdges,
   const links: Link[] = [];
   let level: Rec[] = [];
 
-  function enter(symbol: GraphSymbol, depth: number, via: GraphSymbol | undefined, contractChanged: boolean, into: Rec[]): Rec {
-    const rec: Rec = { symbol, depth, ...(via === undefined ? {} : { via }), contractChanged, fanIn: 0, callers: [] };
+  function enter(symbol: GraphSymbol, depth: number, via: GraphSymbol | undefined, contractChanged: boolean, into: Rec[], throughMember = false): Rec {
+    const rec: Rec = { symbol, depth, ...(via === undefined ? {} : { via }), contractChanged, throughMember, fanIn: 0, callers: [] };
     recs.set(symbol.id, rec);
     into.push(rec);
     return rec;
@@ -59,7 +61,7 @@ export function walkImpact(seeds: readonly GraphSymbol[], inbound: InboundEdges,
 
   function enterOwners(rec: Rec, into: Rec[]): void {
     for (const owner of inbound.ownersOf(rec.symbol)) {
-      const ownerRec = recs.get(owner.id) ?? enter(owner, rec.depth, rec.symbol, false, into);
+      const ownerRec = recs.get(owner.id) ?? enter(owner, rec.depth, rec.symbol, false, into, true);
       links.push({ from: rec, to: ownerRec, confidence: 1 });
     }
   }
@@ -72,7 +74,7 @@ export function walkImpact(seeds: readonly GraphSymbol[], inbound: InboundEdges,
   for (let depth = 0; level.length > 0; depth++) {
     const next: Rec[] = [];
     for (const rec of level.toSorted((a, b) => comparePosition(a.symbol, b.symbol))) {
-      rec.callers = inbound.callersOf(rec.symbol, rec.contractChanged);
+      rec.callers = inbound.callersOf(rec.symbol, rec.contractChanged, rec.throughMember);
       rec.fanIn = rec.callers.filter((caller) => caller.callLike).length;
       if (budget.depth !== undefined && depth >= budget.depth) stopped.depth.push(rec);
       else if (budget.hubFanIn !== undefined && rec.fanIn > budget.hubFanIn) stopped.hub.push(rec);

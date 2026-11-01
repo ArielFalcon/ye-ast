@@ -23,6 +23,12 @@ export const EDGE_POLICY = {
   relations: { kinds: ["injects", "uses-component", "uses-directive", "uses-pipe"], from: ANGULAR_CLASS_KINDS, to: ANGULAR_CLASS_KINDS, confidence: 1 },
   /** A method stands for the type that declares it, at the same depth. */
   ownerKinds: TYPE_KINDS,
+  /**
+   * What a type reached only through one of its members expands into: a subtype, and a template that renders it. Whoever
+   * uses the member is reached through its own call edge, and an injection into the type says nothing about the member,
+   * so neither joins (ADR-0017). A type that is a seed, or that is reached through its own edges, keeps every row above.
+   */
+  ownerThroughMember: { edges: ["extends", "implements"], relations: ["uses-component", "uses-directive", "uses-pipe"] },
   /** A value or class that nothing calls is reached through the top-level code of the files that import it. */
   injectableKinds: ["constant", "variable", "class", "component"],
   /** The code a file runs at its top level, as the importer fallback and the top-level use of an import reach it. */

@@ -33,9 +33,9 @@ test("a symbol is expanded once and the walk ends on a cycle", () => {
   const asked: string[] = [];
   const counting = (inbound: InboundEdges): InboundEdges => ({
     ownersOf: inbound.ownersOf,
-    callersOf: (node, contractChanged) => {
+    callersOf: (node, contractChanged, throughMember) => {
       asked.push(node.id);
-      return inbound.callersOf(node, contractChanged);
+      return inbound.callersOf(node, contractChanged, throughMember);
     },
   });
   const result = walk([fn("a"), fn("b"), fn("c")], [call("b", "a"), call("c", "b"), call("a", "c"), call("c", "a")], ["a"], {}, counting);
@@ -76,13 +76,44 @@ test("a seed that is also reached from another seed stays at depth 0", () => {
   assert.deepEqual(result.reached.map((r) => [r.symbol.id, r.depth, r.seeds]), [["s1", 0, [0]], ["s2", 0, [0, 1]]]);
 });
 
-test("a reached method reaches its type at its own depth, through the method", () => {
+test("a reached method reaches its type at its own depth, through the method, and the type does not expand into whoever uses it", () => {
   const nodes = [fn("a"), fakeNode("m", "method", "src/O.ts", 5, 6), fakeNode("O", "class", "src/O.ts", 1, 9), fn("user", 3, "src/U.ts")];
   const edges = [call("m", "a"), { from: "O", to: "m", kind: "contains" }, call("user", "O")];
   const result = walk(nodes, edges, ["a"]);
-  assert.deepEqual(summary(result), ["a@0", "O@1", "m@1", "user@2"]);
+  assert.deepEqual(summary(result), ["a@0", "O@1", "m@1"]);
   assert.equal(result.reached.find((r) => r.symbol.id === "O")!.via?.id, "m");
   assert.equal(result.reached.find((r) => r.symbol.id === "O")!.confidence, 0.9);
+});
+
+test("a type reached through one of its members expands only into a subtype, not into whoever calls, references or instantiates it", () => {
+  const nodes = [
+    fn("a"),
+    fakeNode("m", "method", "src/O.ts", 5, 6),
+    fakeNode("O", "class", "src/O.ts", 1, 9),
+    fakeNode("Sub", "class", "src/Sub.ts", 1, 9),
+    fn("caller", 3, "src/U.ts"),
+    fn("holder", 3, "src/H.ts"),
+    fn("maker", 3, "src/M.ts"),
+  ];
+  const edges: FakeEdge[] = [
+    call("m", "a"),
+    { from: "O", to: "m", kind: "contains" },
+    call("caller", "O"),
+    { from: "holder", to: "O", kind: "references" },
+    { from: "maker", to: "O", kind: "instantiates" },
+    { from: "Sub", to: "O", kind: "extends" },
+  ];
+  assert.deepEqual(summary(walk(nodes, edges, ["a"])), ["a@0", "O@1", "m@1", "Sub@2"]);
+});
+
+test("a type reached through one of its members does not expand through the importers of its file", () => {
+  const nodes = [fn("a"), fakeNode("m", "method", "src/N.ts", 5, 6), fakeNode("N", "class", "src/N.ts", 1, 9), fakeNode("main.ts", "file", "src/main.ts", 1, 30), fakeNode("boot", "function", "src/main.ts", 2, 9)];
+  const edges: FakeEdge[] = [
+    call("m", "a"),
+    { from: "N", to: "m", kind: "contains" },
+    { from: "main.ts", to: "N", kind: "imports" },
+  ];
+  assert.deepEqual(summary(walk(nodes, edges, ["a"])), ["a@0", "N@1", "m@1"]);
 });
 
 test("the type of a seed method is reached at depth 0 and a seed type keeps no via", () => {

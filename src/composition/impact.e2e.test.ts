@@ -147,7 +147,6 @@ test("a changed helper reaches the route served through an interface, the same b
     ["OrderService.java:OrderService", 2],
     ["OrderService.java:find", 2],
     ["OrderController.java:OrderController", 3],
-    ["OrderController.java:OrderController", 3],
     ["OrderController.java:one", 3],
   ]);
   assert.deepEqual(first.fact.value.entrypoints.map((entry) => [entry.kind, entry.name, entry.depth, entry.seeds]), [["http-route", "GET /orders/{id}", 3, [0]]]);
@@ -292,7 +291,11 @@ import { OrderService } from "./order.service";
 
 @Component({ selector: "app-list", template: "<p>list</p>" })
 export class ListComponent {
-  constructor(private readonly orders: OrderService) {}
+  protected readonly label: string;
+
+  constructor(private readonly orders: OrderService) {
+    this.label = orders.find();
+  }
 }
 `,
   "src/app/page.component.ts": `import { Component } from "@angular/core";
@@ -309,7 +312,7 @@ export const routes: Routes = [{ path: "page", component: PageComponent }];
 `,
 });
 
-test("a changed service reaches the component that injects it and the route of the component that uses that one in its template, with no Angular cut", async () => {
+test("a changed service method reaches the component that calls it, the route of the component that renders that one, and no class that only injects the service", async () => {
   commit(ANGULAR_APP('"x"'), "base");
   commit({ "src/app/order.service.ts": ANGULAR_APP('"y"')["src/app/order.service.ts"]! });
 
@@ -322,9 +325,9 @@ test("a changed service reaches the component that injects it and the route of t
   assert.deepEqual(first.fact.value.symbols.map((symbol) => [place(symbol), symbol.depth, symbol.confidence]), [
     ["order.service.ts:OrderService", 0, 1],
     ["order.service.ts:find", 0, 1],
-    ["list.component.ts:ListComponent", 1, 1],
+    ["list.component.ts:ListComponent", 1, 0.9],
     ["list.component.ts:constructor", 1, 0.9],
-    ["page.component.ts:PageComponent", 2, 1],
+    ["page.component.ts:PageComponent", 2, 0.9],
     ["app.routes.ts:/page", 3, 0.9],
   ]);
   assert.deepEqual(first.fact.value.entrypoints.map((entry) => [entry.kind, entry.name, entry.depth]), [["ui-route", "/page", 2]]);
@@ -343,7 +346,7 @@ test("a changed template reaches the components that use its component, and the 
 
 test("an injection the reader cannot resolve cuts the answer at the file the walk reached", async () => {
   const files = ANGULAR_APP('"x"');
-  const list = files["src/app/list.component.ts"]!.replace("OrderService) {}", "OrderService, @Inject(TOKEN) other: unknown) {}").replace("import { Component }", "import { Component, Inject }");
+  const list = files["src/app/list.component.ts"]!.replace("OrderService) {", "OrderService, @Inject(TOKEN) other: unknown) {").replace("import { Component }", "import { Component, Inject }");
   commit({ ...files, "src/app/list.component.ts": list }, "base");
   commit({ "src/app/order.service.ts": ANGULAR_APP('"y"')["src/app/order.service.ts"]! });
 
