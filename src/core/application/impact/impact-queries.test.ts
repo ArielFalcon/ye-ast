@@ -356,6 +356,32 @@ test("a class that injects a changed class is reached, and a walk whose Angular 
   assert.deepEqual(answer.status === "complete" && answer.value.symbols.map((symbol) => [symbol.symbol, symbol.depth, symbol.confidence]), [["Svc", 0, 1], ["Cmp", 1, 1]]);
 });
 
+test("a method of an injected class is called by the members that use it through the injection's binding, and only those places leave its cut", async () => {
+  const nodes = [
+    fakeNode("Svc", "class", SVC_FILE, 2, 9),
+    fakeNode("get", "method", SVC_FILE, 4, 6),
+    fakeNode("Cmp", "class", CMP_FILE, 2, 12),
+    fakeNode("load", "method", CMP_FILE, 5, 7),
+    fakeNode("other", "method", CMP_FILE, 8, 10),
+  ];
+  const edges = [{ from: "Svc", to: "get", kind: "contains" }, { from: "Cmp", to: "load", kind: "contains" }, { from: "Cmp", to: "other", kind: "contains" }];
+  const unresolved = [
+    { from: "load", name: "this.svc.get", kind: "calls", file: CMP_FILE, line: 6 },
+    { from: "other", name: "this.http.get", kind: "calls", file: CMP_FILE, line: 9 },
+  ];
+  const changes: Result<readonly FileChange[], VcsFault> = { ok: true, value: [change(SVC_FILE, { added: [{ start: 5, end: 5 }] })] };
+  const bound = relation("injects", { path: CMP_FILE, symbol: "Cmp", line: 3 }, { path: SVC_FILE, symbol: "Svc", line: 3 }, "svc");
+  const exports = { [HEAD]: { files: [{ path: SVC_FILE, blob: "1", written: true }, { path: CMP_FILE, blob: "2", written: true }], skipped: [] } };
+
+  const answer = fact(await setup({ changes, nodes, edges, unresolved, exports, relations: [complete(bound)] }).ask());
+  assert.deepEqual(answer.status !== "unknown" && answer.value.symbols.map((symbol) => [symbol.symbol, symbol.depth, symbol.confidence]), [["Svc", 0, 1], ["get", 0, 1], ["Cmp", 1, 1], ["load", 1, 1]]);
+  assert.deepEqual(answer.status === "partial" && answer.cuts, [{ kind: "unresolved-link", at: [`${SVC_FILE}::get`, `${CMP_FILE}:9`] }]);
+
+  const unbound = fact(await setup({ changes, nodes, edges, unresolved, exports, relations: [complete(INJECTION)] }).ask());
+  assert.deepEqual(unbound.status !== "unknown" && unbound.value.symbols.map((symbol) => symbol.symbol), ["Svc", "get"]);
+  assert.deepEqual(unbound.status === "partial" && unbound.cuts, [{ kind: "unresolved-link", at: [`${SVC_FILE}::get`, `${CMP_FILE}:6`, `${CMP_FILE}:9`] }]);
+});
+
 test("a relation the reader could not place cuts the answer only in a file the walk reached", async () => {
   const reached = fact(await setup({ changes: SVC_CHANGE, nodes: ANGULAR_NODES, relations: [complete(INJECTION), unread(CMP_FILE, 5)] }).ask());
   assert.deepEqual(reached.status === "partial" && reached.cuts, [{ kind: "unresolved-link", at: [CMP_FILE, `${CMP_FILE}:5 unresolved`] }]);

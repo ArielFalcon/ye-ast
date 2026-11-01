@@ -25,10 +25,16 @@ export const EDGE_POLICY = {
   ownerKinds: TYPE_KINDS,
   /**
    * What a type reached only through one of its members expands into: a subtype, and a template that renders it. Whoever
-   * uses the member is reached through its own call edge, and an injection into the type says nothing about the member,
-   * so neither joins (ADR-0017). A type that is a seed, or that is reached through its own edges, keeps every row above.
+   * uses the member is reached through its own call edge, or through `injectedMemberUses`, and an injection into the type
+   * says nothing more about the member, so neither joins (ADR-0017). A type that is a seed, or that is reached through its
+   * own edges, keeps every row above.
    */
   ownerThroughMember: { edges: ["extends", "implements"], relations: ["uses-component", "uses-directive", "uses-pipe"] },
+  /**
+   * The references of these kinds that a class injecting a member's type makes through the injection's binding
+   * (`this.<binding>.<member>` or `<binding>.<member>`) are uses of the member, as certain as the injection.
+   */
+  injectedMemberUses: ["calls", "references"],
   /** A value or class that nothing calls is reached through the top-level code of the files that import it. */
   injectableKinds: ["constant", "variable", "class", "component"],
   /** The code a file runs at its top level, as the importer fallback and the top-level use of an import reach it. */

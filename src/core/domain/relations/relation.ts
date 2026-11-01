@@ -18,8 +18,10 @@ export interface Relation {
   name: string;
   from: SymbolRef;
   to: SymbolRef;
+  /** For `injects`: the field, parameter or constant the injection is stored in; absent when it is bound to no name. */
+  binding?: string;
 }
 
-export function relation(kind: RelationKind, from: SymbolRef, to: SymbolRef): Relation {
-  return { kind, name: `${from.symbol}>${to.symbol}`, from, to };
+export function relation(kind: RelationKind, from: SymbolRef, to: SymbolRef, binding?: string): Relation {
+  return { kind, name: `${from.symbol}>${to.symbol}`, from, to, ...(binding === undefined ? {} : { binding }) };
 }

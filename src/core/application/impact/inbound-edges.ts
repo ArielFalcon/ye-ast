@@ -1,8 +1,9 @@
 import { topLevelOf, isSeedable } from "../../domain/change/seeds.ts";
+import { declarationAnchor, placeAt, resolvedUseKey } from "../../domain/impact/impact-cuts.ts";
 import { CALL_EDGE_KINDS, EDGE_POLICY, edgeConfidence, FOLLOWED_EDGE_KINDS, followsEdge, followsRelation, isIgnoredEdge } from "../../domain/impact/edge-policy.ts";
 import type { Relation, SymbolRef } from "../../domain/relations/relation.ts";
 import { comparePosition, joinsFact } from "../../domain/shared/code-node.ts";
-import type { CodeGraphReader, GraphEdge, GraphNodeId, GraphSymbol } from "../../ports/code-graph.port.ts";
+import type { CodeGraphReader, GraphEdge, GraphNodeId, GraphSymbol, GraphUnresolvedReference } from "../../ports/code-graph.port.ts";
 
 /**
  * A symbol that depends on another, and how sure the store is of the dependence: 0 to 1. `bridge` says the dependence
@@ -31,6 +32,8 @@ export interface InboundEdges {
   callersOf(node: GraphSymbol, contractChanged: boolean, throughMember?: boolean): readonly InboundEdge[];
   /** The type that declares a method, which a reached method stands for at the same depth; none for any other symbol. */
   ownersOf(node: GraphSymbol): readonly GraphSymbol[];
+  /** The unresolved references `callersOf` read as uses of a member through an injection, by `resolvedUseKey`. */
+  resolvedUses(): ReadonlySet<string>;
 }
 
 const SUPERTYPE_EDGES = ["extends", "implements"];
@@ -175,6 +178,39 @@ export function createInboundEdges(reader: CodeGraphReader, isTestFile: (path: s
       });
   }
 
+  const referencesCache = new Map<string, readonly GraphUnresolvedReference[]>();
+  function referencesIn(file: string): readonly GraphUnresolvedReference[] {
+    let references = referencesCache.get(file);
+    if (references === undefined) {
+      references = reader.unresolvedReferences([file]);
+      referencesCache.set(file, references);
+    }
+    return references;
+  }
+
+  const resolvedUses = new Set<string>();
+  /** The members of a class injecting the type that declares `node` which use `node` through the injection's binding. */
+  function injectedUsesOf(node: GraphSymbol): InboundEdge[] {
+    const anchor = declarationAnchor(node.file, node.name);
+    return ownersOf(node).flatMap((owner) =>
+      (relationsByTargetFile.get(owner.file) ?? [])
+        .filter((candidate) => candidate.kind === "injects" && candidate.binding !== undefined && joinsFact(owner, { path: candidate.to.path, line: candidate.to.line, symbol: candidate.to.symbol }))
+        .flatMap((candidate) => {
+          const injector = declarationAt(candidate.from);
+          if (injector === undefined || isTestFile(injector.file)) return [];
+          const names = [`this.${candidate.binding}.${node.name}`, `${candidate.binding}.${node.name}`];
+          const uses = referencesIn(injector.file).filter((reference) => names.includes(reference.name) && (EDGE_POLICY.injectedMemberUses as readonly string[]).includes(reference.kind));
+          load(uses.map((use) => use.from));
+          return uses.flatMap((use): InboundEdge[] => {
+            const from = symbolOf(use.from);
+            if (from === undefined || from.file !== injector.file || from.startLine < injector.startLine || from.endLine > injector.endLine) return [];
+            resolvedUses.add(resolvedUseKey(anchor, placeAt(use.file, use.line)));
+            return [{ from, confidence: EDGE_POLICY.relations.confidence, callLike: use.kind === "calls" }];
+          });
+        }),
+    );
+  }
+
   const callersCache = new Map<string, InboundEdge[]>();
   function callersOf(node: GraphSymbol, contractChanged: boolean, throughMember = false): InboundEdge[] {
     const key = `${node.id}:${contractChanged}:${throughMember}`;
@@ -183,7 +219,7 @@ export function createInboundEdges(reader: CodeGraphReader, isTestFile: (path: s
       const followed = followedEdgesInto(node).filter(({ edge, source }) => !isTestFile(source.file) && followsEdge({ kind: edge.kind, sourceKind: source.kind, targetKind: node.kind }));
       const into = throughMember ? followed.filter(({ edge }) => (EDGE_POLICY.ownerThroughMember.edges as readonly string[]).includes(edge.kind)) : followed;
       const direct = into.map(({ edge, source }) => ({ from: source, confidence: edgeConfidence(edge), callLike: CALL_EDGE_KINDS.includes(edge.kind) }));
-      const bridged = throughMember ? direct : [...direct, ...bridgesOf(node, contractChanged)];
+      const bridged = throughMember ? direct : [...direct, ...bridgesOf(node, contractChanged), ...injectedUsesOf(node)];
       const found = [...bridged, ...relatedTo(node, throughMember ? EDGE_POLICY.ownerThroughMember.relations : undefined)];
       const whole = throughMember ? found : [...found, ...importersOf(node, found.length === 0)];
       callers = strongestPerSymbol(whole.filter(({ from }) => from.id !== node.id)).sort((a, b) => comparePosition(a.from, b.from));
@@ -192,7 +228,7 @@ export function createInboundEdges(reader: CodeGraphReader, isTestFile: (path: s
     return callers;
   }
 
-  return { callersOf, ownersOf };
+  return { callersOf, ownersOf, resolvedUses: () => resolvedUses };
 }
 
 function strongestPerSymbol(edges: readonly InboundEdge[]): InboundEdge[] {

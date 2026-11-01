@@ -445,7 +445,8 @@ function impactOf(input: WalkInput): ImpactRead {
   const requestedSymbols = new Set(asked.flatMap(({ found: nodes }) => nodes));
   const chosen = [...[...requestedSymbols].map((symbol): SelectedSeed<GraphSymbol> => ({ symbol, basis: "requested" })), ...selection.seeds.filter(({ symbol }) => !requestedSymbols.has(symbol))];
   const seeds = chosen.toSorted((a, b) => comparePosition(a.symbol, b.symbol));
-  const walk = walkImpact(seeds.map(({ symbol }) => symbol), createInboundEdges(store, isTest, found.flatMap((finding) => (finding.status === "complete" ? [finding.value] : []))), input.budget);
+  const inbound = createInboundEdges(store, isTest, found.flatMap((finding) => (finding.status === "complete" ? [finding.value] : [])));
+  const walk = walkImpact(seeds.map(({ symbol }) => symbol), inbound, input.budget);
 
   const sourceFiles = headTree.export.files.filter((file) => file.written && kindOfChangedFile(file.path) === "source").map((file) => file.path);
   const unresolved = store.unresolvedReferences(sourceFiles);
@@ -454,7 +455,7 @@ function impactOf(input: WalkInput): ImpactRead {
 
   const cuts: Cut[] = [
     ...walk.cuts,
-    ...unresolvedLinkCuts(unresolved, walked, loads),
+    ...unresolvedLinkCuts(unresolved, walked, loads, inbound.resolvedUses()),
     ...removedDeclarationCuts(unresolved, selection.removed),
     ...unreadRelationCuts(unread, new Set(walked.map((symbol) => symbol.file)), templateOwners(componentsByResource)),
     ...summary.filesNotIndexed.map((file): Cut => ({ kind: "no-extractor", at: [file] })),

@@ -158,7 +158,7 @@ async function readProject(contents: ReadonlyMap<string, string>, dependencies: 
       if ("class" in placed) {
         const from = { path: file, symbol: owner.name, line: owner.line };
         const key = `${from.path}\0${from.symbol}\0${placed.class.path}\0${placed.class.symbol}`;
-        if (!injects.has(key)) injects.set(key, { status: "complete", value: relation("injects", from, placed.class), evidence: [at] });
+        if (!injects.has(key)) injects.set(key, { status: "complete", value: relation("injects", from, placed.class, injection.binding), evidence: [at] });
       } else if (!("external" in placed)) findings.push(unknown("unresolved" in placed ? "unresolved" : "no-extractor", at));
     }
   }

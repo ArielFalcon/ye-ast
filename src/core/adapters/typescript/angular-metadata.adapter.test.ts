@@ -54,6 +54,16 @@ test("inject(X) in a field, with or without options, relates the class to the cl
   assert.equal(finding?.status === "complete" && finding.value.from.line, 5);
 });
 
+test("an injection records the name it is stored in: a field, a constructor parameter or a constant; none when the call is not bound to a name", async () => {
+  const meta = await read({
+    [SERVICE]: SERVICE_SOURCE,
+    "src/app/a.ts": `${CORE}import { OrdersService } from './orders.service';\n\n@Injectable()\nexport class A {\n  private readonly orders = inject(OrdersService);\n}\n\n@Injectable()\nexport class B {\n  constructor(private readonly svc: OrdersService) {}\n}\n\nexport const guard = () => {\n  const local = inject(OrdersService);\n  return local;\n};\n\nexport function bare() {\n  return inject(OrdersService).toString();\n}\n`,
+  });
+
+  const bindings = meta.findings.map((finding) => (finding.status === "complete" ? `${finding.value.from.symbol}:${finding.value.binding ?? "-"}` : finding.reason));
+  assert.deepEqual(bindings.toSorted(), ["A:orders", "B:svc", "bare:-", "guard:local"]);
+});
+
 test("a name resolves through renames and barrels to the class that declares it, not to the barrel", async () => {
   const meta = await read({
     [SERVICE]: SERVICE_SOURCE,

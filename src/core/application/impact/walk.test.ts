@@ -33,6 +33,7 @@ test("a symbol is expanded once and the walk ends on a cycle", () => {
   const asked: string[] = [];
   const counting = (inbound: InboundEdges): InboundEdges => ({
     ownersOf: inbound.ownersOf,
+    resolvedUses: inbound.resolvedUses,
     callersOf: (node, contractChanged, throughMember) => {
       asked.push(node.id);
       return inbound.callersOf(node, contractChanged, throughMember);

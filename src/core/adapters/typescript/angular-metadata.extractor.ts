@@ -36,6 +36,11 @@ export interface RawInjection {
   owner?: { name: string; line: number };
   target: RawTarget;
   line: number;
+  binding?: string;
+}
+
+function bindingOf(name: ts.Node): { binding?: string } {
+  return ts.isIdentifier(name) ? { binding: name.text } : {};
 }
 
 export interface RawAngularFile {
@@ -156,10 +161,10 @@ export function readAngularMetadataFile(sf: ts.SourceFile, shape: Pick<RawRouteF
         const inject = parameterDecorators.get("Inject");
         if (inject !== undefined) {
           const argument = inject.arguments[0];
-          result.injections.push({ owner, target: argument === undefined ? { opaque: true } : targetOf(argument), line: line(parameter) });
+          result.injections.push({ owner, target: argument === undefined ? { opaque: true } : targetOf(argument), line: line(parameter), ...bindingOf(parameter.name) });
         } else if (!parameterDecorators.has("Attribute")) {
           const reference = parameter.type === undefined ? undefined : typeReference(parameter.type);
-          if (reference !== undefined) result.injections.push({ owner, target: { reference }, line: line(parameter) });
+          if (reference !== undefined) result.injections.push({ owner, target: { reference }, line: line(parameter), ...bindingOf(parameter.name) });
         }
       }
     }
@@ -173,7 +178,9 @@ export function readAngularMetadataFile(sf: ts.SourceFile, shape: Pick<RawRouteF
     }
     if (ts.isCallExpression(node) && coreName(node.expression) === "inject" && node.arguments[0] !== undefined) {
       const owner = ownerOf(node, sf);
-      result.injections.push({ ...(owner !== undefined ? { owner: { name: owner.name.text, line: line(owner.name) } } : {}), target: targetOf(node.arguments[0]), line: line(node) });
+      const holder = node.parent;
+      const binding = (ts.isPropertyDeclaration(holder) || ts.isVariableDeclaration(holder)) && holder.initializer === node ? bindingOf(holder.name) : {};
+      result.injections.push({ ...(owner !== undefined ? { owner: { name: owner.name.text, line: line(owner.name) } } : {}), target: targetOf(node.arguments[0]), line: line(node), ...binding });
     }
     ts.forEachChild(node, visit);
   };
