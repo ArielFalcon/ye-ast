@@ -12,6 +12,7 @@ import { REDACTED, type Redaction } from "../core/ports/redaction.port.ts";
 import type { VcsFault } from "../core/ports/vcs.port.ts";
 import type { LiveFault } from "../core/ports/live-queries.port.ts";
 import type { WorkspaceQueries } from "../core/ports/workspace-queries.port.ts";
+import type { WorkspaceCallersRequest, WorkspaceImpactQueries, WorkspaceImpactValue, WorkspaceOfChangeRequest } from "../core/ports/workspace-impact-queries.port.ts";
 import { createMcpServer, CUT_GUIDANCE } from "./server.ts";
 import { openSession, type Session } from "./test-session.ts";
 
@@ -61,6 +62,33 @@ function impactFact(overrides: Partial<Fact<ImpactValue>> = {}): Fact<ImpactValu
   return { ...base(), status: "complete", value: IMPACT, ...overrides } as Fact<ImpactValue>;
 }
 
+const SITE = { repo: "shop-web", file: "src/app/order.api.ts", line: 7, symbol: "OrderApi.create", transport: "http" as const, target: { status: "complete" as const, value: { method: "POST" as const, path: "orders-api/orders" }, evidence: [] } };
+
+function workspaceImpactFact(): Fact<WorkspaceImpactValue> {
+  const link = {
+    id: "link-1",
+    from: { repo: "shop-web", file: SITE.file, line: 7, symbol: SITE.symbol },
+    to: { repo: "shop", kind: "http-route" as const, name: "GET /orders/{id}", handler: { path: "src/OrderController.java", symbol: "OrderController.one", line: 17 } },
+    transport: "http" as const,
+    basis: "route-overlap" as const,
+    confidence: 1,
+  };
+  const section = (value: object): Fact<never> => ({ ...base(), status: "complete", value }) as never;
+  const value: WorkspaceImpactValue = {
+    workspace: { repos: ["shop", "shop-web"], gateways: [{ prefix: "orders-api", repo: "shop", basis: "route-overlap" }], unserved: ["geo-api"] },
+    repositorySnapshots: [],
+    trigger: { repo: "shop", mergeBase: "b".repeat(40) },
+    sections: {
+      shop: section({ impact: IMPACT, callSites: [], unmatched: [], external: [] }),
+      "shop-web": section({ callSites: [SITE], unmatched: [{ ...SITE, line: 9, target: { status: "complete", value: { method: "GET", path: "orders-api/missing" }, evidence: [] } }], external: [{ ...SITE, line: 11, target: { status: "complete", value: { method: "GET", path: "geo-api/provinces" }, evidence: [] } }] }),
+    },
+    links: [{ link, direction: "upstream", reach: ["link-1"] }],
+  };
+  return { ...base(), status: "complete", value };
+}
+
+const WORKSPACE = { repos: [{ path: "/work/shop-web", id: "shop-web" }], gateways: [{ prefix: "edge", repo: "shop" }] };
+
 const IMPORTERS: ImportersValue = {
   files: [{ file: "src/OrderService.java", importers: ["src/OrderController.java"], users: ["src/OrderController.java", "src/Billing.java"], unresolvedNamers: ["src/Legacy.java"] }],
 };
@@ -74,6 +102,8 @@ const fakeRedaction: Redaction = {
 };
 
 interface Calls {
+  workspaceCallers: WorkspaceCallersRequest[];
+  workspaceOfChange: WorkspaceOfChangeRequest[];
   map: MapRequest[];
   ofChange: ImpactOfChangeRequest[];
   callers: ImpactCallersRequest[];
@@ -88,7 +118,7 @@ interface Answers {
 }
 
 async function setup(answers: Partial<Answers> = {}): Promise<{ session: Session; calls: Calls }> {
-  const calls: Calls = { map: [], ofChange: [], callers: [], importers: [] };
+  const calls: Calls = { map: [], ofChange: [], callers: [], importers: [], workspaceCallers: [], workspaceOfChange: [] };
   const entrypoints: EntrypointQueries = {
     map: (request) => {
       calls.map.push(request);
@@ -109,8 +139,18 @@ async function setup(answers: Partial<Answers> = {}): Promise<{ session: Session
       return (answers.importers ?? (async () => ({ ok: true, value: { ...base(), status: "complete", value: IMPORTERS } as Fact<ImportersValue> })))(request);
     },
   };
-  const workspace = { outwardNames: async () => ({ ok: true, value: { workspace: { repos: [] }, repositorySnapshots: [], sections: {}, candidates: [], unserved: [], repositories: [] } }) } as unknown as WorkspaceQueries;
-  const server = createMcpServer({ version: "0.0.0", entrypoints, impact, workspace, redaction: fakeRedaction, repository: REPOSITORY });
+  const workspace = { outwardNames: async () => ({ ok: true, value: { ...base(), status: "complete", value: { workspace: { repos: [] }, repositorySnapshots: [], sections: {}, candidates: [], unserved: [], repositories: [{ repo: "shop", path: "/work/shop", entrypoints: [], callSites: [] }] } } }) } as unknown as WorkspaceQueries;
+  const workspaceImpact: WorkspaceImpactQueries = {
+    callers: async (request) => {
+      calls.workspaceCallers.push(request);
+      return { ok: true, value: workspaceImpactFact() };
+    },
+    ofChange: async (request) => {
+      calls.workspaceOfChange.push(request);
+      return { ok: true, value: workspaceImpactFact() };
+    },
+  };
+  const server = createMcpServer({ version: "0.0.0", entrypoints, impact, workspace, workspaceImpact, redaction: fakeRedaction, repository: REPOSITORY });
   return { session: await openSession(server), calls };
 }
 
@@ -555,5 +595,101 @@ test("a live query refused under untrusted is an error result naming the command
 
   assert.equal(result.isError, true);
   assert.match(textOf(result), /live-requires-trusted[\s\S]*ye-ast install --trust trusted/);
+  await session.close();
+});
+
+test("callers and impact with a workspace ask the workspace family with the repositories and gateways given, and never the single-repository one", async () => {
+  const { session, calls } = await setup();
+
+  await session.callTool("ye_ast_callers", { revision: "topic", targets: [{ file: "src/OrderService.java", symbol: "OrderService.find" }], workspace: WORKSPACE, budget: { depth: 2 }, scope: { include: ["src/**"] } });
+  await session.callTool("ye_ast_impact", { base: "main", head: "topic", workspace: WORKSPACE });
+
+  assert.deepEqual([calls.callers, calls.ofChange], [[], []]);
+  assert.deepEqual(calls.workspaceCallers[0], {
+    repo: { path: REPOSITORY.path, id: REPOSITORY.repoId, revision: "topic" },
+    repos: [{ path: "/work/shop-web", id: "shop-web" }],
+    gateways: WORKSPACE.gateways,
+    targets: [{ file: "src/OrderService.java", symbol: "OrderService.find" }],
+    scope: { include: ["src/**"] },
+    budget: { depth: 2 },
+    signal: calls.workspaceCallers[0]?.signal,
+  });
+  assert.equal(calls.workspaceOfChange[0]?.base, "main");
+  assert.equal(calls.workspaceOfChange[0]?.head, "topic");
+  assert.deepEqual(calls.workspaceOfChange[0]?.repos, WORKSPACE.repos);
+  await session.close();
+});
+
+test("callers and impact without a workspace never reach the workspace family", async () => {
+  const { session, calls } = await setup();
+
+  await session.callTool("ye_ast_callers", { targets: [{ file: "a", symbol: "f" }] });
+  await session.callTool("ye_ast_impact", { base: "main" });
+
+  assert.deepEqual([calls.workspaceCallers, calls.workspaceOfChange], [[], []]);
+  assert.equal(calls.callers.length + calls.ofChange.length, 2);
+  await session.close();
+});
+
+test("a workspace answer lists the links across repositories with their basis, the gateways in force, the unmatched and the external call sites", async () => {
+  const { session } = await setup();
+
+  const result = await session.callTool("ye_ast_callers", { targets: [{ file: "a", symbol: "f" }], workspace: WORKSPACE });
+
+  const text = textOf(result);
+  assert.match(text, /orders-api -> shop \(route-overlap\)/);
+  assert.match(text, /shop-web:src\/app\/order\.api\.ts:7 OrderApi\.create -> shop GET \/orders\/\{id\} \(route-overlap, upstream\)/);
+  assert.match(text, /unmatched \(1\):\n\s+- src\/app\/order\.api\.ts:9 .* GET orders-api\/missing/);
+  assert.match(text, /external \(1\):\n\s+- src\/app\/order\.api\.ts:11 .* GET geo-api\/provinces/);
+  assert.match(text, /no local repository serves \(1\): geo-api/);
+  assert.equal(text.match(/reached entrypoints \(/g)?.length, 1, "the bound repository's walk is printed once");
+  await session.close();
+});
+
+test("live with a workspace is refused by the schema before any query runs", async () => {
+  const { session, calls } = await setup();
+
+  const results = [
+    await session.callTool("ye_ast_impact", { base: "main", live: true, workspace: WORKSPACE }).catch((error: Error) => error),
+    await session.callTool("ye_ast_callers", { live: true, targets: [{ file: "a", symbol: "f" }], workspace: WORKSPACE }).catch((error: Error) => error),
+  ];
+
+  for (const result of results) assert.equal(result instanceof Error || (result as { isError?: boolean }).isError === true, true);
+  assert.deepEqual([calls.workspaceCallers, calls.workspaceOfChange, calls.callers, calls.ofChange], [[], [], [], []]);
+  await session.close();
+});
+
+test("the workspace parameter names its repositories by a nested path, accepts gateways, and refuses what it does not define", async () => {
+  const { session, calls } = await setup();
+  const tools = await session.listTools();
+  for (const name of ["ye_ast_callers", "ye_ast_impact"]) {
+    const workspace = tools.find((tool) => tool.name === name)?.inputSchema.properties?.["workspace"] as { properties?: Record<string, { items?: { properties?: Record<string, unknown> } }> } | undefined;
+    assert.ok(workspace?.properties?.["repos"]?.items?.properties?.["path"] !== undefined, name);
+    assert.ok(workspace?.properties?.["gateways"] !== undefined, name);
+  }
+
+  const refused = await session.callTool("ye_ast_impact", { base: "main", workspace: { repos: [{ path: "/work/shop-web" }], remote: "https://example.test/x.git" } }).catch((error: Error) => error);
+
+  assert.equal(refused instanceof Error || (refused as { isError?: boolean }).isError === true, true);
+  assert.deepEqual(calls.workspaceOfChange, []);
+  await session.close();
+});
+
+test("the server instructions tell the agent to pass the other clones as the workspace of callers and impact", async () => {
+  const { session } = await setup();
+
+  assert.match(session.instructions ?? "", /workspace/);
+  assert.match(session.instructions ?? "", /ye_ast_callers[^\n]*workspace|workspace[^\n]*ye_ast_impact/);
+  await session.close();
+});
+
+test("the workspace tool answers the outward names without the repositories it read: no absolute path, no entrypoint list", async () => {
+  const { session } = await setup();
+
+  const result = await session.callTool("ye_ast_workspace", {});
+
+  const value = (result.structuredContent as { value: Record<string, unknown> }).value;
+  assert.equal("repositories" in value, false);
+  assert.deepEqual(Object.keys(value).sort(), ["candidates", "repositorySnapshots", "sections", "unserved", "workspace"]);
   await session.close();
 });

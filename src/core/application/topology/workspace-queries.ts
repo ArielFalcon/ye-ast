@@ -42,6 +42,7 @@ export function createWorkspaceQueries(deps: WorkspaceQueriesDeps): WorkspaceQue
       const extracted = await extractCommit(deps, request.path, sha, await directory(), scope, signal);
       if (!extracted.ok) return extracted;
       const { export: snapshotExport, findings, sources } = extracted.value;
+      const callSites = await deps.callSites.of(sources, repoId);
       const base = factBaseOf(deps, {
         repoId,
         sha,
@@ -54,10 +55,10 @@ export function createWorkspaceQueries(deps: WorkspaceQueriesDeps): WorkspaceQue
       return {
         ok: true,
         value: {
-          repository: { repo: repoId, path: request.path, snapshot: base.snapshot, entrypoints: findings },
+          repository: { repo: repoId, path: request.path, snapshot: base.snapshot, entrypoints: findings, callSites },
           base,
-          names: [...deps.evidence.names(sources), ...callSiteNames(repoId, await deps.callSites.of(sources, repoId))],
-          callSites: await deps.callSites.of(sources, repoId),
+          names: [...deps.evidence.names(sources), ...callSiteNames(repoId, callSites)],
+          callSites,
           identity: {
             repo: repoId,
             id: repoId,
@@ -111,7 +112,7 @@ export function createWorkspaceQueries(deps: WorkspaceQueriesDeps): WorkspaceQue
       const value: WorkspaceValue = {
         workspace: { repos: read.map((entry) => entry.repository.repo).sort(compareText), gateways: [...(request.gateways ?? [])].sort((a, b) => compareText(a.prefix, b.prefix)) },
         repositorySnapshots: read.map((entry) => ({ repo: entry.repository.repo, snapshot: entry.repository.snapshot })).sort((a, b) => compareText(a.repo, b.repo)),
-        sections,
+        sections: Object.fromEntries(Object.entries(sections).sort(([a], [b]) => compareText(a, b))),
         candidates: candidates.sort(compareCandidate),
         unserved: unserved.sort((a, b) => compareText(a.name, b.name) || compareText(a.kind, b.kind)),
         repositories: read.map((entry) => entry.repository).sort((a, b) => compareText(a.repo, b.repo)),

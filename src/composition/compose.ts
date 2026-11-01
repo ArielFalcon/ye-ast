@@ -11,6 +11,7 @@ import { createFixedLayerAdmin } from "../core/application/fixed-layer/fixed-lay
 import { createInstall } from "../core/application/install/install.ts";
 import { createImpactQueries } from "../core/application/impact/impact-queries.ts";
 import { createWorkspaceQueries } from "../core/application/topology/workspace-queries.ts";
+import { createWorkspaceImpactQueries } from "../core/application/topology/workspace-impact.ts";
 import { createIndexCache } from "../core/adapters/codegraph/cached-index.adapter.ts";
 import { createCodeGraph, SUPPORTED_STORE } from "../core/adapters/codegraph/codegraph.adapter.ts";
 import { STAGING_RULES_VERSION } from "../core/adapters/codegraph/stage-snapshot.ts";
@@ -40,6 +41,7 @@ import type { EntrypointExtractor } from "../core/ports/entrypoint-extractor.por
 import type { EntrypointQueries } from "../core/ports/entrypoint-queries.port.ts";
 import type { ImpactQueries } from "../core/ports/impact-queries.port.ts";
 import type { WorkspaceQueries } from "../core/ports/workspace-queries.port.ts";
+import type { WorkspaceImpactQueries } from "../core/ports/workspace-impact-queries.port.ts";
 import type { Redaction } from "../core/ports/redaction.port.ts";
 import type { TrustRecordReader } from "../core/ports/trust-record.port.ts";
 import type { ExportBudget } from "../core/ports/vcs.port.ts";
@@ -74,6 +76,7 @@ export interface ComposedQueries {
   entrypoints: EntrypointQueries;
   impact: ImpactQueries;
   workspace: WorkspaceQueries;
+  workspaceImpact: WorkspaceImpactQueries;
   redaction: Redaction;
   /**
    * Builds the live mirror of `repo` for the default scope when it is `trusted` and has none, so the first live query
@@ -158,7 +161,8 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
     ...budget,
     ...trust,
   });
-  return { version, entrypoints, impact, workspace, redaction, warmLive };
+  const workspaceImpact = createWorkspaceImpactQueries({ workspace, impact });
+  return { version, entrypoints, impact, workspace, workspaceImpact, redaction, warmLive };
 }
 
 export function composeCli(options: CompositionOptions = {}): (argv: readonly string[], io: CliIo) => Promise<number> {

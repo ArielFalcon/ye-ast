@@ -10,6 +10,9 @@ import type { ImpactFault } from "../core/ports/impact-queries.port.ts";
 import type { LiveStaleNotice } from "../core/ports/live-queries.port.ts";
 import type { NameCandidate, OutwardName } from "../core/domain/topology/outward-name.ts";
 import type { WorkspaceValue } from "../core/ports/workspace-queries.port.ts";
+import type { CallSite } from "../core/domain/topology/call-site.ts";
+import type { ImpactedLink } from "../core/domain/topology/link.ts";
+import type { RepoImpact, WorkspaceImpactValue } from "../core/ports/workspace-impact-queries.port.ts";
 
 const NONE = "  (none)";
 const CUTS = "cuts:";
@@ -190,22 +193,23 @@ function impactedSymbols(value: ImpactValue, detail: Detail): string[] {
   ];
 }
 
-export function renderImpact(fact: Fact<ImpactValue>, detail: Detail = "summary"): string {
-  const lines = headerLines(fact);
-  if (fact.status === "unknown") return lines.join("\n");
-  const { value } = fact;
-  if (value.mergeBase !== undefined) lines.push(`merge base: ${value.mergeBase}`);
-  lines.push(
+/** What an impact answer says about its walk, without its header or its cuts. */
+function impactBody(value: ImpactValue, detail: Detail): string[] {
+  return [
+    ...(value.mergeBase === undefined ? [] : [`merge base: ${value.mergeBase}`]),
     `seeds (${value.seeds.length}):`,
     ...list(value.seeds.map((seed) => `  - ${at(seed.file, seed.line)} ${seed.symbol} (${seed.basis})`)),
-  );
-  if (value.changedEntrypoints !== undefined) lines.push(`changed entrypoints (${value.changedEntrypoints.length}):`, ...list(value.changedEntrypoints.map(changedLine)));
-  lines.push(
+    ...(value.changedEntrypoints === undefined ? [] : [`changed entrypoints (${value.changedEntrypoints.length}):`, ...list(value.changedEntrypoints.map(changedLine))]),
     `reached entrypoints (${value.entrypoints.length}):`,
     ...list(value.entrypoints.map(reachedLine)),
     ...impactedSymbols(value, detail),
-    ...cutsBlock(cutsOf(fact)),
-  );
+  ];
+}
+
+export function renderImpact(fact: Fact<ImpactValue>, detail: Detail = "summary"): string {
+  const lines = headerLines(fact);
+  if (fact.status === "unknown") return lines.join("\n");
+  lines.push(...impactBody(fact.value, detail), ...cutsBlock(cutsOf(fact)));
   return lines.join("\n");
 }
 
@@ -226,6 +230,50 @@ export function renderImporters(fact: Fact<ImportersValue>): string {
 /** What a fault entry can be told to the caller: the declarations of the file that could have been asked instead. */
 function declarationText(entry: { file: string; candidates: readonly string[] }): string {
   return entry.candidates.length === 0 ? `${entry.file} declares no symbol` : `declared in ${entry.file}: ${entry.candidates.join(", ")}`;
+}
+
+function impactedLinkLine({ link, direction }: ImpactedLink): string {
+  const confidence = link.confidence < 1 ? `, confidence ${link.confidence}` : "";
+  const profiles = link.profiles === undefined ? "" : `, under ${link.profiles.join(", ")}`;
+  return `  - ${link.from.repo}:${at(link.from.file, link.from.line)} ${link.from.symbol} -> ${link.to.repo} ${link.to.name} (${link.basis}${confidence}${profiles}, ${direction})`;
+}
+
+function callSiteLine(site: CallSite): string {
+  const { target } = site;
+  const named = target.status !== "complete" ? "unknown" : "path" in target.value ? `${target.value.method} ${target.value.path}` : `${target.value.protocol} ${target.value.destination}`;
+  return `      - ${at(site.file, site.line)} ${site.symbol} -> ${named}`;
+}
+
+function callSiteBlock(label: string, sites: readonly CallSite[]): string[] {
+  return sites.length === 0 ? [] : [`    ${label} (${sites.length}):`, ...sites.map(callSiteLine)];
+}
+
+function repoImpactLines(repo: string, section: Fact<RepoImpact>, detail: Detail, bound: string): string[] {
+  if (section.status === "unknown") return [`  ${repo}: unknown (${section.reason})`];
+  const { value } = section;
+  return [
+    `  ${repo}: ${section.status}`,
+    ...callSiteBlock("call sites that land in what the walk reached", value.callSites),
+    ...(value.impact === undefined || repo === bound ? [] : impactBody(value.impact, detail).map((line) => `    ${line}`)),
+    ...callSiteBlock("unmatched", value.unmatched),
+    ...callSiteBlock("external", value.external),
+  ];
+}
+
+export function renderWorkspaceImpact(fact: Fact<WorkspaceImpactValue>, detail: Detail = "summary"): string {
+  const lines = headerLines(fact);
+  if (fact.status === "unknown") return lines.join("\n");
+  const { value } = fact;
+  const trigger = value.sections[value.trigger.repo];
+  lines.push(`repositories (${value.workspace.repos.length}): ${value.repositorySnapshots.map(({ repo, snapshot }) => `${repo}@${snapshot.kind === "sha" ? snapshot.sha : snapshot.stateId}`).join(", ")}`);
+  lines.push(`bound repository: ${value.trigger.repo}`);
+  lines.push(`gateway prefixes (${value.workspace.gateways.length}):`, ...list(value.workspace.gateways.map(({ prefix, repo, basis }) => `  - ${prefix} -> ${repo} (${basis})`)));
+  if (trigger !== undefined && trigger.status !== "unknown" && trigger.value.impact !== undefined) lines.push(...impactBody(trigger.value.impact, detail));
+  lines.push(`links across repositories (${value.links.length}):`, ...list(value.links.map(impactedLinkLine)));
+  lines.push("per repository:", ...value.workspace.repos.flatMap((repo) => (value.sections[repo] === undefined ? [] : repoImpactLines(repo, value.sections[repo] as Fact<RepoImpact>, detail, value.trigger.repo))));
+  lines.push(`no local repository serves (${value.workspace.unserved.length}): ${value.workspace.unserved.length === 0 ? "(none)" : value.workspace.unserved.join(", ")}`);
+  lines.push(...cutsBlock([...cutsOf(fact), ...Object.values(value.sections).flatMap(cutsOf)]));
+  return lines.join("\n");
 }
 
 export function renderFault(fault: { kind: string; detail: string } | ImpactFault): string {

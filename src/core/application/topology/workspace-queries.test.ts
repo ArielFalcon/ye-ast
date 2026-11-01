@@ -11,6 +11,7 @@ import type { WorkspaceValue } from "../../ports/workspace-queries.port.ts";
 import type { WorkspaceRepositoryRequest } from "../../ports/workspace-repos.port.ts";
 import type { OutwardName } from "../../domain/topology/outward-name.ts";
 import type { CallSiteReader } from "../../domain/topology/call-site.ts";
+import type { TrustRecordReader } from "../../ports/trust-record.port.ts";
 import type { PathMatcher } from "../../ports/path-matcher.port.ts";
 import type { WorkspaceQueriesDeps } from "./workspace-queries.ts";
 import { createWorkspaceQueries } from "./workspace-queries.ts";
@@ -27,7 +28,7 @@ type Repositories = Record<string, { files: Record<string, string>; remotes?: Re
 
 const matcher: PathMatcher = { matches: () => true };
 
-function setup(repositories: Repositories, callSites: CallSiteReader = { of: async () => [] }) {
+function setup(repositories: Repositories, callSites: CallSiteReader = { of: async () => [] }, trust?: TrustRecordReader) {
   let exported: string | undefined;
   const vcs: Vcs = {
     resolveCommit: async (repo): Promise<Result<string, VcsFault>> => (repositories[repo] === undefined ? { ok: false, fault: { kind: "not-repository-root", detail: repo } } : { ok: true, value: SHA }),
@@ -53,6 +54,7 @@ function setup(repositories: Repositories, callSites: CallSiteReader = { of: asy
     evidence: { names: () => repositories[exported ?? ""]?.names ?? [], artifacts: () => repositories[exported ?? ""]?.artifacts ?? [] },
     producer: { name: "ye-ast", version: "0.0.0" },
     engines: {},
+    ...(trust === undefined ? {} : { trust }),
   };
   return createWorkspaceQueries(deps);
 }
@@ -174,4 +176,16 @@ test("a path prefix and a host a call site names are outward names, and an undec
   const section = value.sections["shop-web"];
   assert.ok(section !== undefined);
   assert.deepEqual(section.value.names.map((name) => `${name.kind} ${name.name}`), ["http-host https://maps.example.com/geo", "path-prefix orders-api"]);
+});
+
+test("every repository of a request is read under its own trust declaration, and an undeclared one is untrusted", async () => {
+  const declared: Record<string, "trusted"> = { "/work/orders-svc": "trusted" };
+  const queries = setup({ "/work/shop-web": { files: {} }, "/work/orders-svc": { files: {} } }, undefined, { read: async (repo) => (declared[repo] === undefined ? { ok: true, value: undefined } : { ok: true, value: declared[repo] }) });
+
+  const result = await queries.outwardNames({ repo: { path: "/work/shop-web" }, repos: [{ path: "/work/orders-svc" }] });
+
+  assert.deepEqual(
+    Object.entries(valueOf(result).sections).map(([repo, section]) => `${repo} ${section.inputs.trust}`),
+    ["orders-svc trusted", "shop-web untrusted"],
+  );
 });

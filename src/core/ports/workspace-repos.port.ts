@@ -1,4 +1,5 @@
 import type { Entrypoint } from "../domain/entrypoints/entrypoint.ts";
+import type { CallSite } from "../domain/topology/call-site.ts";
 import type { Evidence, SnapshotRef, Finding } from "../domain/shared/fact.ts";
 import type { ScopeRequest } from "../domain/shared/scope.ts";
 import type { Result } from "../domain/shared/result.ts";
@@ -31,12 +32,13 @@ export interface WorkspaceSection {
   unresolved: readonly Evidence[];
 }
 
-/** One repository read for a workspace answer: its snapshot and the entrypoints of that snapshot. */
+/** One repository read for a workspace answer: its snapshot, the entrypoints of that snapshot and its call sites. */
 export interface WorkspaceRepository {
   repo: string;
   path: string;
   snapshot: SnapshotRef;
   entrypoints: readonly Finding<Entrypoint>[];
+  callSites: readonly CallSite[];
 }
 
 export type WorkspaceFault = VcsFault | LiveFault | { kind: "duplicate-repository"; detail: string };

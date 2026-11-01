@@ -34,6 +34,20 @@ class OrderController {
 }
 `;
 
+const COMPONENT = `import { HttpClient } from "@angular/common/http";
+import { inject } from "@angular/core";
+
+export class OrderPage {
+  private readonly http = inject(HttpClient);
+  open(): void {
+    this.http.get("shop-api/orders/7");
+  }
+  missing(): void {
+    this.http.get("shop-api/refunds/7");
+  }
+}
+`;
+
 const SERVER = pathToFileURL(join(import.meta.dirname, "mcp.ts")).href;
 const HOST = pathToFileURL(join(import.meta.dirname, "process-host.ts")).href;
 const MAIN = `import { runMcp } from ${JSON.stringify(SERVER)};
@@ -43,6 +57,7 @@ process.exitCode = await runMcp([], processHost({ signal: new AbortController().
 
 let workspace: string;
 let repo: string;
+let frontend: string;
 let scratchRoot: string;
 let child: ChildProcessWithoutNullStreams;
 let id = 0;
@@ -70,6 +85,13 @@ before(async () => {
   writeFileSync(controller, CONTROLLER);
   git("add", "-A");
   git("commit", "-q", "-m", "init");
+  frontend = join(workspace, "shop-web");
+  mkdirSync(join(frontend, "src/app"), { recursive: true });
+  writeFileSync(join(frontend, "src/app/order.page.ts"), COMPONENT);
+  const gitFrontend = (...args: string[]): string => execFileSync("git", args, { cwd: frontend, env: GIT_ENV, encoding: "utf8" }).trim();
+  gitFrontend("init", "-q", "-b", "main");
+  gitFrontend("add", "-A");
+  gitFrontend("commit", "-q", "-m", "init");
   const entry = join(workspace, "main.mts");
   writeFileSync(entry, MAIN);
   child = spawn(process.execPath, ["--import", import.meta.resolve("tsx"), entry], {
@@ -107,4 +129,24 @@ test("a real client over stdio lists the tools and reads the entrypoints fact th
   assert.equal(code, 0);
   assert.deepEqual(called.structuredContent, JSON.parse(printed.join("\n")));
   assert.match(called.content[0]?.text ?? "", /GET \/orders\/\{id\}.*OrderController\.java:\d+/);
+});
+
+test("callers with a workspace joins the call site of another repository to the route the symbol serves, and the answer is the same twice", async () => {
+  const ask = (): Promise<Reply> =>
+    request("tools/call", {
+      name: "ye_ast_callers",
+      arguments: { targets: [{ file: "src/main/java/shop/OrderController.java", symbol: "OrderController.one" }], workspace: { repos: [{ path: frontend }] } },
+    });
+
+  const first = (await ask()).result as { isError?: boolean; structuredContent: { status: string; value: { links: { link: { basis: string; from: { repo: string; line: number }; to: { repo: string; name: string } } }[]; sections: Record<string, { value: { impact?: { symbols: { symbol: string }[] }; unmatched: { line: number }[] } }> } }; content: { text: string }[] };
+  const second = (await ask()).result as typeof first;
+
+  assert.equal(first.isError, undefined);
+  assert.deepEqual(
+    first.structuredContent.value.links.map(({ link }) => `${link.from.repo}:${link.from.line} -> ${link.to.repo} ${link.to.name} (${link.basis})`),
+    ["shop-web:7 -> shop-service GET /orders/{id} (route-overlap)"],
+  );
+  assert.deepEqual(first.structuredContent.value.sections["shop-web"]?.value.unmatched.map((site) => site.line), [10]);
+  assert.ok((first.structuredContent.value.sections["shop-web"]?.value.impact?.symbols ?? []).some((symbol) => symbol.symbol.endsWith("open")));
+  assert.deepEqual(first, second);
 });

@@ -265,7 +265,7 @@ npx --yes ye-ast-mcp map /path/to/repo
 - [ ] stdout is one JSON object with `schema`, `snapshot`, `producer`, `inputs`, `evidence`, `status` and `value`.
 - [ ] `status` is `complete` or `partial`. Both are valid answers.
 - [ ] `value.entrypoints` is an object, not `null`.
-- [ ] If the client lists MCP tools: `ye_ast_entrypoints`, `ye_ast_callers`, `ye_ast_importers` and `ye_ast_impact`
+- [ ] If the client lists MCP tools: `ye_ast_entrypoints`, `ye_ast_callers`, `ye_ast_importers`, `ye_ast_impact` and `ye_ast_workspace`
       appear. The client may need a restart to pick up a new server.
 
 A non-zero exit code is a query problem, not a registration problem: read [step 7](#7-failures-and-what-they-mean).
@@ -279,14 +279,16 @@ flowchart TD
     Q -->|"Change, move or delete<br/>a symbol or line range"| C["ye_ast_callers"]
     Q -->|"Move, rename or delete a file,<br/>or change its exports"| I["ye_ast_importers"]
     Q -->|"Report work done<br/>or open a pull request"| P["ye_ast_impact"]
+    Q -->|"The work crosses repositories:<br/>who calls this from another clone"| W["ye_ast_workspace, then<br/>callers or impact with workspace"]
 ```
 
 | Tool | Call it when | Key arguments |
 |---|---|---|
 | `ye_ast_entrypoints` | You are orienting, or you need the handler of a UI route, HTTP route, message listener or scheduled job | `revision`, `live`, `scope` |
-| `ye_ast_callers` | **Before** changing, moving or deleting a symbol or a line range | `targets: [{ file, symbol }]` (a member as `Class.member`) or `[{ file, start, end }]`, `revision`, `live`, `scope`, `budget`, `detail` |
+| `ye_ast_callers` | **Before** changing, moving or deleting a symbol or a line range | `targets: [{ file, symbol }]` (a member as `Class.member`) or `[{ file, start, end }]`, `revision`, `live`, `scope`, `budget`, `detail`, `workspace` |
 | `ye_ast_importers` | Before moving, renaming or deleting a file, or changing its exports | `files: [repo-relative paths]`, `revision`, `live`, `scope` |
-| `ye_ast_impact` | Before reporting work done or opening a pull request | `base` (the branch the work merges into), `head`, `live`, `scope`, `budget`, `detail` |
+| `ye_ast_impact` | Before reporting work done or opening a pull request | `base` (the branch the work merges into), `head`, `live`, `scope`, `budget`, `detail`, `workspace` |
+| `ye_ast_workspace` | The work crosses repositories: it lists the hosts, path prefixes, configuration URLs, dependency coordinates, remotes and registries the repository writes outward, the local clones that serve each one, and the names no clone serves | `repos: [{ path, id?, revision? }]`, `gateways`, `revision`, `scope` |
 
 How the arguments behave:
 
@@ -294,6 +296,7 @@ How the arguments behave:
 |---|---|
 | `revision` / `head` | Any git revision. Default: `HEAD`. |
 | `live` | Read the working tree instead of a revision. Requires `trusted`; exclusive with `revision`/`head`. |
+| `workspace` | `{ repos: [{ path, id?, revision? }], gateways?: [{ prefix, repo }] }` on `callers` and `impact`: other **local** clones whose call sites are joined to the routes the walk reaches. The answer adds the links (with their basis: `exact`, `gateway-prefix`, `route-overlap`, `base-path`, `suffix`), what depends on those call sites in their own repository, the call sites that reached a declared service and matched none of its routes (`unmatched`), the ones that name a service no clone serves (`external`), and every call site whose target the code does not decide as a cut. A gateway prefix needs no declaration when the routes show it; `gateways` overrides it. Each clone is read at its own snapshot under its own trust declaration, with no network request; exclusive with `live`. Without `workspace` the answer says nothing about other repositories. |
 | `scope` | `{ include?: [globs], exclude?: [globs] }` over repository-relative paths; `exclude` wins. A path outside the scope is **not read**, so callers and entrypoints through it are not known; the answer names its scope under its status. Use it to keep one service or package apart, not to shorten an answer. |
 | `budget` | `{ depth?, hubFanIn?, expansions? }`, positive integers, no defaults. A bound that stops a walk is reported as a cut, never as a silent truncation. |
 | `detail` | Text listing for `callers` and `impact`. Default: depth 0 and 1 listed, deeper symbols counted per file. `"full"` lists every symbol. The structured content always holds all of them. |

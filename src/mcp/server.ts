@@ -11,8 +11,9 @@ import type { CallersTarget, ImpactQueries } from "../core/ports/impact-queries.
 import type { Redaction } from "../core/ports/redaction.port.ts";
 import { DEFAULT_REVISION } from "../core/ports/vcs.port.ts";
 import type { WorkspaceRepositoryRequest } from "../core/ports/workspace-repos.port.ts";
-import type { WorkspaceQueries } from "../core/ports/workspace-queries.port.ts";
-import { renderEntrypointMap, renderFault, renderImpact, renderImporters, renderStale, renderWorkspace, type Detail } from "./render.ts";
+import type { WorkspaceQueries, WorkspaceValue } from "../core/ports/workspace-queries.port.ts";
+import type { WorkspaceImpactQueries } from "../core/ports/workspace-impact-queries.port.ts";
+import { renderEntrypointMap, renderFault, renderImpact, renderImporters, renderStale, renderWorkspace, renderWorkspaceImpact, type Detail } from "./render.ts";
 
 /** The key of the result's `_meta` that carries a stale notice. */
 export const LIVE_META = "ye-ast/live";
@@ -23,6 +24,7 @@ export interface McpDeps {
   entrypoints: EntrypointQueries;
   impact: ImpactQueries;
   workspace: WorkspaceQueries;
+  workspaceImpact: WorkspaceImpactQueries;
   redaction: Redaction;
   /** The one repository every tool reads: its root and the stable name recorded in every snapshot. */
   repository: { path: string; repoId: string };
@@ -36,7 +38,7 @@ const COMPLETENESS = "The answer states its completeness: complete, partial with
  */
 export const CUT_GUIDANCE: Readonly<Record<Cut["kind"], string>> = {
   "unresolved-link":
-    "places that name the symbol where the index could not tell what the name points at; open each place to decide. After a declaration was removed, the places listed under it still name it, so each one breaks.",
+    "places that name the symbol where the index could not tell what the name points at; open each place to decide. After a declaration was removed, the places listed under it still name it, so each one breaks. In a workspace answer it is also a call site whose target the code does not decide, or that two repositories serve equally: open it and decide which repository it calls.",
   "no-extractor": "a file ye-ast cannot read, such as a template, a style sheet or a language outside the declared scope; read it yourself when it bears on the task.",
   "not-exported": "a path the snapshot left out, so nothing under it was read; read it yourself when it bears on the task.",
   depth: "the walk stopped at the depth bound; raise budget.depth, or ask ye_ast_callers about the symbol at the cut.",
@@ -59,7 +61,8 @@ When to call:
 - ye_ast_callers: before changing or deleting a function, method or class, or a range of lines, to learn what depends on it and which entrypoints it serves. Before deleting a declaration, ask here: once it is gone, ye_ast_impact can only list the places that still name it.
 - ye_ast_importers: before moving, renaming or deleting a file, or changing what it exports.
 - ye_ast_impact: after changing code and before reporting the work done or opening a pull request, with base set to the branch the change merges into; set live to true to include uncommitted edits. It repeats what ye_ast_callers already answered when the change stays inside the symbols asked about, so call ye_ast_impact once for the whole change before reporting it done, not once per symbol.
-- ye_ast_workspace: when the work crosses repositories (a frontend calling services, a service calling another, a message between them). It lists the hosts, path prefixes, configuration URLs, dependency coordinates, remotes and registries the repository writes outward, the local repository that serves each one and the basis that says why, and the names no repository given serves. Pass the other clones with repos, then pass the same calls again with workspace so the links between them are joined. It makes no network request: a name nothing serves is the next clone to make with your own tools.
+- ye_ast_workspace: when the work crosses repositories (a frontend calling services, a service calling another, a message between them). It lists the hosts, path prefixes, configuration URLs, dependency coordinates, remotes and registries the repository writes outward, the local repository that serves each one and the basis that says why, and the names no repository given serves. Pass the other clones with repos, then ask ye_ast_callers or ye_ast_impact again with workspace set to those repos so the call sites of the other repositories that land in what the walk reaches are joined. It makes no network request: a name nothing serves is the next clone to make with your own tools.
+- workspace on ye_ast_callers and ye_ast_impact: when the symbol or change can be called from another repository (a route or a handler a frontend or another service calls). Pass the other local clones as workspace.repos (a path each; gateways only when a path prefix routes to a repository and the code does not say it). The answer adds the links from call sites in those repositories to what the walk reaches, what depends on those call sites in their own repository, the call sites that reached a declared service and matched none of its routes (unmatched), the ones that name a service no repository given serves (external), and every call site it could not decide as a cut. A repository not passed is not read: an answer without workspace says nothing about other repositories. Each repository is read at its HEAD or the revision given, under its own trust declaration; live cannot be combined with workspace.
 - Every tool takes scope: include and exclude globs over repository-relative paths (exclude wins). A path outside the scope is not read at all, so callers and entrypoints through it are not known and the answer is complete only within the scope, which it names under its status. Use scope to keep one service or package of a repository apart; to shorten an answer, leave scope out and rely on detail.
 - ye-ast does not say which templates bind one input or output of a component; search the templates for the binding's name.
 
@@ -99,6 +102,29 @@ const budget = z
   .strictObject(BUDGET_FIELDS)
   .optional()
   .describe("Optional bounds on the walk; none applies unless set, and a bound that stops the walk is reported as a cut.");
+
+const workspaceRepo = z.strictObject({
+  path: z.string().min(1).describe("Path of the root of a local git repository."),
+  id: z.string().min(1).optional().describe("The name its snapshot carries; the directory name when omitted. Never a path."),
+  revision: z.string().min(1).optional().describe("The revision to read; HEAD when omitted."),
+});
+
+const gateways = z
+  .array(z.strictObject({ prefix: z.string().min(1).describe("The gateway prefix a call carries, such as a first path segment."), repo: z.string().min(1).describe("The repository id it routes to.") }))
+  .min(1)
+  .optional()
+  .describe("Prefixes the caller declares; a declared prefix overrides the one inferred from route overlap.");
+
+const workspace = z
+  .strictObject({
+    repos: z.array(workspaceRepo).min(1).describe("Other local repositories to read beside the bound one."),
+    gateways,
+  })
+  .optional()
+  .describe("Other local repositories whose call sites to join to what the walk reaches: the answer then also holds the links from them, what depends on those call sites, and the call sites that match nothing. Each is read at its own snapshot under its own trust declaration; live excludes it.");
+
+/** `live` reads the working tree of one repository; a workspace reads committed snapshots. */
+const withoutWorkspace = (value: { live?: boolean | undefined; workspace?: unknown }): boolean => !(value.live === true && value.workspace !== undefined);
 
 const detail = z
   .enum(["summary", "full"] satisfies Detail[])
@@ -163,6 +189,26 @@ const FACT_OUTPUT = z.looseObject({
   reason: z.string().optional().describe("Why an unknown answer cannot tell."),
 });
 
+function askedRepository(requested: { path: string; id?: string | undefined; revision?: string | undefined }): WorkspaceRepositoryRequest {
+  return {
+    path: requested.path,
+    ...(requested.id === undefined ? {} : { id: requested.id }),
+    ...(requested.revision === undefined ? {} : { revision: requested.revision }),
+  };
+}
+
+/** The other repositories of a `workspace` parameter, as the workspace family asks for them. */
+function workspaceOf(requested: z.infer<typeof workspace>): { repos: WorkspaceRepositoryRequest[]; gateways?: { prefix: string; repo: string }[] } | undefined {
+  return requested === undefined ? undefined : { repos: requested.repos.map(askedRepository), ...(requested.gateways === undefined ? {} : { gateways: requested.gateways }) };
+}
+
+/** The repositories a workspace read carries for the families that join over them are internal: they hold absolute paths and every entrypoint. */
+function withoutRepositories(fact: Fact<WorkspaceValue>): Fact<WorkspaceValue> {
+  if (fact.status === "unknown") return fact;
+  const { repositories: _read, ...value } = fact.value;
+  return { ...fact, value: value as WorkspaceValue };
+}
+
 function budgetOf(requested: z.infer<typeof budget>): { budget?: ImpactBudget } {
   const bounds: Partial<Record<WalkBoundsField, number>> = {};
   for (const field of WALK_BOUND_FIELDS) {
@@ -218,7 +264,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
     "ye_ast_impact",
     {
       title: "Impact of a change",
-      description: `What depends on the change from the merge base of base and head to head: the symbols that reach it, the entrypoints they serve and the entrypoints the change adds, removes or alters, with path:line evidence. Use it after changing code and before reporting the work done; live includes uncommitted edits. ${COMPLETENESS}`,
+      description: `What depends on the change from the merge base of base and head to head: the symbols that reach it, the entrypoints they serve and the entrypoints the change adds, removes or alters, with path:line evidence. Use it after changing code and before reporting the work done; live includes uncommitted edits. With workspace it also joins the call sites other local repositories make to the routes the change reaches. ${COMPLETENESS}`,
       inputSchema: z
         .strictObject({
           base: z.string().min(1).describe("The revision the change is read against."),
@@ -227,34 +273,69 @@ export function createMcpServer(deps: McpDeps): McpServer {
           scope,
           budget,
           detail,
+          workspace,
         })
-        .refine(excludes("head"), "live excludes head"),
+        .refine(excludes("head"), "live excludes head")
+        .refine(withoutWorkspace, "live excludes workspace"),
       outputSchema: FACT_OUTPUT,
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    ({ base, head, live: isLive, scope: paths, budget: requested, detail: listing }, ctx) =>
-      answer(
+    ({ base, head, live: isLive, scope: paths, budget: requested, detail: listing, workspace: others }, ctx) => {
+      const crossing = workspaceOf(others);
+      if (crossing !== undefined) {
+        return answer(
+          () =>
+            deps.workspaceImpact.ofChange({
+              repo: { path: repository.path, id: repository.repoId },
+              ...crossing,
+              base,
+              head: head ?? DEFAULT_REVISION,
+              ...scopeOf(paths),
+              ...budgetOf(requested),
+              signal: ctx.mcpReq.signal,
+            }),
+          (fact) => renderWorkspaceImpact(fact, listing),
+        );
+      }
+      return answer(
         (onStale) => {
           const at = atRevision(head, isLive, onStale);
           return deps.impact.ofChange({ repo: repository.path, repoId: repository.repoId, base, ...(at.live ? at : { head: at.revision }), ...scopeOf(paths), ...budgetOf(requested), signal: ctx.mcpReq.signal });
         },
         (fact) => renderImpact(fact, listing),
-      ),
+      );
+    },
   );
 
   server.registerTool(
     "ye_ast_callers",
     {
       title: "Callers of symbols or line ranges",
-      description: `What depends on the symbols or line ranges asked for at a revision: the callers they reach and the entrypoints those serve, with path:line evidence. A symbol that names no declaration is reported as an error. Use it before changing or deleting a symbol or a range of lines. ${COMPLETENESS}`,
+      description: `What depends on the symbols or line ranges asked for at a revision: the callers they reach and the entrypoints those serve, with path:line evidence. A symbol that names no declaration is reported as an error. Use it before changing or deleting a symbol or a range of lines. With workspace it also joins the call sites other local repositories make to the routes the symbols serve. ${COMPLETENESS}`,
       inputSchema: z
-        .strictObject({ revision, live, targets: z.array(target).min(1).describe("The symbols or line ranges to start from."), scope, budget, detail })
-        .refine(excludes("revision"), "live excludes revision"),
+        .strictObject({ revision, live, targets: z.array(target).min(1).describe("The symbols or line ranges to start from."), scope, budget, detail, workspace })
+        .refine(excludes("revision"), "live excludes revision")
+        .refine(withoutWorkspace, "live excludes workspace"),
       outputSchema: FACT_OUTPUT,
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    ({ revision: requested, live: isLive, targets, scope: paths, budget: bounds, detail: listing }, ctx) =>
-      answer(
+    ({ revision: requested, live: isLive, targets, scope: paths, budget: bounds, detail: listing, workspace: others }, ctx) => {
+      const crossing = workspaceOf(others);
+      if (crossing !== undefined) {
+        return answer(
+          () =>
+            deps.workspaceImpact.callers({
+              repo: { path: repository.path, id: repository.repoId, revision: requested ?? DEFAULT_REVISION },
+              ...crossing,
+              targets: targets as CallersTarget[],
+              ...scopeOf(paths),
+              ...budgetOf(bounds),
+              signal: ctx.mcpReq.signal,
+            }),
+          (fact) => renderWorkspaceImpact(fact, listing),
+        );
+      }
+      return answer(
         (onStale) =>
           deps.impact.callers({
             repo: repository.path,
@@ -266,7 +347,8 @@ export function createMcpServer(deps: McpDeps): McpServer {
             signal: ctx.mcpReq.signal,
           }),
         (fact) => renderImpact(fact, listing),
-      ),
+      );
+    },
   );
 
   server.registerTool(
@@ -287,18 +369,6 @@ export function createMcpServer(deps: McpDeps): McpServer {
       ),
   );
 
-  const askedRepository = (requested: { path: string; id?: string | undefined; revision?: string | undefined }): WorkspaceRepositoryRequest => ({
-    path: requested.path,
-    ...(requested.id === undefined ? {} : { id: requested.id }),
-    ...(requested.revision === undefined ? {} : { revision: requested.revision }),
-  });
-
-  const workspaceRepo = z.strictObject({
-    path: z.string().min(1).describe("Path of the root of a local git repository."),
-    id: z.string().min(1).optional().describe("The name its snapshot carries; the directory name when omitted. Never a path."),
-    revision: z.string().min(1).optional().describe("The revision to read; HEAD when omitted."),
-  });
-
   server.registerTool(
     "ye_ast_workspace",
     {
@@ -308,25 +378,23 @@ export function createMcpServer(deps: McpDeps): McpServer {
         revision,
         scope,
         repos: z.array(workspaceRepo).min(1).optional().describe("Other local repositories to read beside the bound one."),
-        gateways: z
-          .array(z.strictObject({ prefix: z.string().min(1).describe("The gateway prefix a call carries, such as a first path segment."), repo: z.string().min(1).describe("The repository id it routes to.") }))
-          .min(1)
-          .optional()
-          .describe("Prefixes the caller declares; a declared prefix overrides the one inferred from route overlap."),
+        gateways,
       }),
       outputSchema: FACT_OUTPUT,
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    ({ revision: requested, scope: paths, repos, gateways }, ctx) =>
+    ({ revision: requested, scope: paths, repos, gateways: requestedGateways }, ctx) =>
       answer(
-        () =>
-          deps.workspace.outwardNames({
+        async () => {
+          const read = await deps.workspace.outwardNames({
             repo: { path: repository.path, id: repository.repoId, ...(requested === undefined ? {} : { revision: requested }) },
             ...(repos === undefined ? {} : { repos: repos.map(askedRepository) }),
-            ...(gateways === undefined ? {} : { gateways }),
+            ...(requestedGateways === undefined ? {} : { gateways: requestedGateways }),
             ...scopeOf(paths),
             signal: ctx.mcpReq.signal,
-          }),
+          });
+          return read.ok ? { ok: true, value: withoutRepositories(read.value) } : read;
+        },
         renderWorkspace,
       ),
   );
