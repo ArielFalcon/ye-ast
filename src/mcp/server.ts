@@ -33,12 +33,13 @@ When to call:
 - ye_ast_entrypoints: when orienting in the repository, or to find the handler of an HTTP route, UI route, message listener or scheduled job.
 - ye_ast_callers: before changing or deleting a function, method or class, or a range of lines, to learn what depends on it and which entrypoints it serves.
 - ye_ast_importers: before moving, renaming or deleting a file, or changing what it exports.
-- ye_ast_impact: after changing code and before reporting the work done or opening a pull request, with base set to the branch the change merges into; set live to true to include uncommitted edits.
+- ye_ast_impact: after changing code and before reporting the work done or opening a pull request, with base set to the branch the change merges into; set live to true to include uncommitted edits. It repeats what ye_ast_callers already answered when the change stays inside the symbols asked about, so call ye_ast_impact once for the whole change before reporting it done, not once per symbol.
 
 Reading an answer:
 - status "complete": the result is everything within the declared scope (inputs.declaredScope); code in languages or frameworks outside it is not covered.
 - status "partial": the result stops at each listed cut; what lies past a cut is not known.
 - status "unknown": ye-ast cannot tell, and the reason says why; never read it as "no impact".
+- Every answer closes with a \`cuts:\` list holding every place past each cut, after the content; the status line only counts them by kind, so a partial answer read without its list reads as complete.
 - An isError result names a fault kind. "live-requires-trusted" means the user must declare the repository trusted with \`ye-ast install --trust trusted\` before live can be used; answer from a revision meanwhile.`;
 
 const revision = z.string().min(1).optional().describe("Git revision to read; HEAD when omitted.");
