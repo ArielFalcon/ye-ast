@@ -10,6 +10,7 @@ import type { Evidence, Fact } from "../../domain/shared/fact.ts";
 import type { WorkspaceValue } from "../../ports/workspace-queries.port.ts";
 import type { WorkspaceRepositoryRequest } from "../../ports/workspace-repos.port.ts";
 import type { OutwardName } from "../../domain/topology/outward-name.ts";
+import type { CallSiteReader } from "../../domain/topology/call-site.ts";
 import type { PathMatcher } from "../../ports/path-matcher.port.ts";
 import type { WorkspaceQueriesDeps } from "./workspace-queries.ts";
 import { createWorkspaceQueries } from "./workspace-queries.ts";
@@ -26,7 +27,7 @@ type Repositories = Record<string, { files: Record<string, string>; remotes?: Re
 
 const matcher: PathMatcher = { matches: () => true };
 
-function setup(repositories: Repositories) {
+function setup(repositories: Repositories, callSites: CallSiteReader = { of: async () => [] }) {
   let exported: string | undefined;
   const vcs: Vcs = {
     resolveCommit: async (repo): Promise<Result<string, VcsFault>> => (repositories[repo] === undefined ? { ok: false, fault: { kind: "not-repository-root", detail: repo } } : { ok: true, value: SHA }),
@@ -48,6 +49,7 @@ function setup(repositories: Repositories) {
     extractor,
     digest,
     matcher,
+    callSites,
     evidence: { names: () => repositories[exported ?? ""]?.names ?? [], artifacts: () => repositories[exported ?? ""]?.artifacts ?? [] },
     producer: { name: "ye-ast", version: "0.0.0" },
     engines: {},
@@ -146,4 +148,30 @@ test("every repository read is listed with its own snapshot, sorted by repositor
   assert.deepEqual(value.workspace.repos, ["orders-svc", "shop-web"]);
   assert.ok(result.ok);
   assert.equal(result.value.snapshot.repo, "shop-web");
+});
+
+test("a path prefix and a host a call site names are outward names, and an undecided call site cuts the section", async () => {
+  const callSites: CallSiteReader = {
+    of: async (_files, repo) =>
+      repo !== "shop-web"
+        ? []
+        : [
+            { repo, file: "src/app/order/order.api.ts", line: 7, symbol: "OrderApi.create", transport: "http", target: { status: "complete", value: { method: "POST", path: "orders-api/orders" }, evidence: [] } },
+            { repo, file: "src/app/map/route.service.ts", line: 85, symbol: "RouteService.fetchRoute", transport: "http", target: { status: "complete", value: { method: "GET", path: "{}", base: "https://maps.example.com/geo" }, evidence: [] } },
+            { repo, file: "src/app/core/auth/auth.service.ts", line: 48, symbol: "AuthService.refresh", transport: "http", target: { status: "unknown", reason: "unresolved", evidence: [{ path: "src/app/core/auth/auth.service.ts", line: 48 }] } },
+          ],
+  };
+  const queries = setup({ "/work/shop-web": { files: {} } }, callSites);
+
+  const result = await queries.outwardNames({ repo: { path: "/work/shop-web" } });
+
+  const value = valueOf(result);
+  assert.deepEqual(value.sections["shop-web"]?.status, "partial");
+  assert.deepEqual(
+    value.sections["shop-web"]?.status === "partial" ? value.sections["shop-web"].cuts.map((cut) => `${cut.kind} ${cut.at.join(" ")}`) : [],
+    ["unresolved-link src/app/core/auth/auth.service.ts src/app/core/auth/auth.service.ts:48"],
+  );
+  const section = value.sections["shop-web"];
+  assert.ok(section !== undefined);
+  assert.deepEqual(section.value.names.map((name) => `${name.kind} ${name.name}`), ["http-host https://maps.example.com/geo", "path-prefix orders-api"]);
 });

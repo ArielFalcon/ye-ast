@@ -26,6 +26,7 @@ import { createGitVcs } from "../core/adapters/git/git-vcs.adapter.ts";
 import { createGitWorkingTree } from "../core/adapters/git/git-working-tree.adapter.ts";
 import { createContractRoutes } from "../core/adapters/openapi/contract-document.adapter.ts";
 import { createWorkspaceEvidence } from "../core/adapters/workspace/outward-names.adapter.ts";
+import { createHttpCallSites } from "../core/adapters/typescript/http-call-sites.adapter.ts";
 import { createPatternRedaction } from "../core/adapters/redaction/pattern-redaction.adapter.ts";
 import { createSpringRoutesExtractor } from "../core/adapters/spring/spring-routes.adapter.ts";
 import { createJavaParser } from "../core/adapters/tree-sitter/java-parser.adapter.ts";
@@ -150,6 +151,7 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
     extractor,
     digest,
     matcher,
+    callSites: createHttpCallSites(),
     evidence: createWorkspaceEvidence(),
     producer: { name: PRODUCER_NAME, version },
     engines: entrypointEngines,

@@ -1,5 +1,5 @@
 import type { Entrypoint } from "../domain/entrypoints/entrypoint.ts";
-import type { SnapshotRef, Finding } from "../domain/shared/fact.ts";
+import type { Evidence, SnapshotRef, Finding } from "../domain/shared/fact.ts";
 import type { ScopeRequest } from "../domain/shared/scope.ts";
 import type { Result } from "../domain/shared/result.ts";
 import type { OutwardKind } from "../domain/topology/outward-name.ts";
@@ -26,7 +26,9 @@ export interface WorkspaceReposRequest {
 
 /** The outward names one repository states, with the places that state them. */
 export interface WorkspaceSection {
-  names: readonly { name: string; kind: OutwardKind; evidence: readonly { path: string; line: number; endLine?: number }[] }[];
+  names: readonly { name: string; kind: OutwardKind; evidence: readonly Evidence[] }[];
+  /** The call sites whose target the snapshot does not decide: each one is a place the answer cannot join. */
+  unresolved: readonly Evidence[];
 }
 
 /** One repository read for a workspace answer: its snapshot and the entrypoints of that snapshot. */

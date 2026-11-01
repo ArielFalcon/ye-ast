@@ -1,0 +1,499 @@
+import ts from "typescript";
+import { isPackageManifest, isTypeScriptSource } from "../../domain/languages/typescript.ts";
+import type { CallSite, HttpTarget } from "../../domain/topology/call-site.ts";
+import type { CallSiteReader } from "../../domain/topology/call-site.ts";
+import type { Finding } from "../../domain/shared/fact.ts";
+import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
+import { manifestDependencies, createModuleResolver, type ModuleResolver } from "./module-resolver.ts";
+
+const VERBS: ReadonlySet<string> = new Set(["get", "head", "post", "put", "patch", "delete", "options", "request"]);
+const HTTP_CLIENT_PACKAGE = "@angular/common/http";
+const PLACEHOLDER = "{}";
+
+/** What one file declares at its top level, and the classes it holds, as the reader needs them. */
+interface FileShape {
+  source: ts.SourceFile;
+  consts: Map<string, ts.Expression>;
+  imports: Map<string, { module: string; imported: string }>;
+  classes: Map<string, ts.ClassDeclaration>;
+}
+
+export function createHttpCallSites(): CallSiteReader {
+  return { of: async (files, repo) => read(files, repo) };
+}
+
+async function read(files: readonly SourceFile[], repo: string): Promise<readonly CallSite[]> {
+  /* The module resolver reads the config files of the snapshot too, so the map holds every source it was given. */
+  const texts = new Map(files.map((file) => [file.path, file.content]));
+  const shapes = new Map(files.filter((file) => isTypeScriptSource(file.path)).map((file) => [file.path, describe(file.path, file.content)]));
+  const dependencies = new Set(files.filter((file) => isPackageManifest(file.path)).flatMap((file) => [...manifestDependencies(file.content)]));
+  const modules = createModuleResolver(async (file) => texts.get(file), dependencies);
+  const wrappers = wrapperMethods(shapes);
+  const read = new Reader(shapes, modules, wrappers);
+  const found: CallSite[] = [];
+  for (const shape of shapes.values()) {
+    for (const call of calls(shape.source)) found.push(...(await read.callSite(shape, call, repo)));
+  }
+  return found.sort((a, b) => compareText(a.file, b.file) || a.line - b.line || compareText(a.symbol, b.symbol));
+}
+
+function compareText(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+function describe(path: string, text: string): FileShape {
+  const source = ts.createSourceFile(path, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const shape: FileShape = { source, consts: new Map(), imports: new Map(), classes: new Map() };
+  for (const statement of source.statements) {
+    if (ts.isImportDeclaration(statement) && ts.isStringLiteral(statement.moduleSpecifier)) {
+      const module = statement.moduleSpecifier.text;
+      collectImports(statement.importClause, module, shape.imports);
+      continue;
+    }
+    if (ts.isVariableStatement(statement)) {
+      for (const declaration of statement.declarationList.declarations) {
+        if (ts.isIdentifier(declaration.name) && declaration.initializer !== undefined) shape.consts.set(declaration.name.text, declaration.initializer);
+      }
+      continue;
+    }
+    if (ts.isClassDeclaration(statement) && statement.name !== undefined) shape.classes.set(statement.name.text, statement);
+  }
+  return shape;
+}
+
+function collectImports(clause: ts.ImportClause | undefined, module: string, into: Map<string, { module: string; imported: string }>): void {
+  if (clause === undefined) return;
+  if (clause.name !== undefined) into.set(clause.name.text, { module, imported: "default" });
+  if (clause.namedBindings === undefined) return;
+  if (ts.isNamespaceImport(clause.namedBindings)) into.set(clause.namedBindings.name.text, { module, imported: "*" });
+  else for (const element of clause.namedBindings.elements) into.set(element.name.text, { module, imported: element.propertyName?.text ?? element.name.text });
+}
+
+function calls(source: ts.SourceFile): ts.CallExpression[] {
+  const found: ts.CallExpression[] = [];
+  const walk = (node: ts.Node): void => {
+    if (ts.isCallExpression(node)) found.push(node);
+    ts.forEachChild(node, walk);
+  };
+  walk(source);
+  return found;
+}
+
+/** The methods of each repository class that reach an `HttpClient` verb, directly or through another method of the class. */
+/**
+ * The methods of each class another class injects that reach an `HttpClient` verb: a class the repository injects is a
+ * wrapper, and a call to one of its methods is where a repository makes a request.
+ */
+function wrapperMethods(shapes: ReadonlyMap<string, FileShape>): ReadonlyMap<string, ReadonlySet<string>> {
+  const injected = injectedClasses(shapes);
+  const held = new Map<string, ReadonlySet<string>>();
+  for (const shape of shapes.values()) {
+    for (const [name, classDeclaration] of shape.classes) {
+      if (!injected.has(name)) continue;
+      const reaching = reachingMethods(shape, classDeclaration);
+      if (reaching.length > 0) held.set(name, new Set(reaching));
+    }
+  }
+  return held;
+}
+
+/** The classes of the snapshot that some class of it injects, by name. */
+function injectedClasses(shapes: ReadonlyMap<string, FileShape>): ReadonlySet<string> {
+  const held = new Set<string>();
+  for (const shape of shapes.values()) {
+    const walk = (node: ts.Node): void => {
+      if (ts.isCallExpression(node) && node.expression.getText(shape.source) === "inject") {
+        const [first] = node.arguments;
+        if (first !== undefined && ts.isIdentifier(first)) held.add(first.text);
+      }
+      if (ts.isParameter(node) && node.type !== undefined) {
+        const name = typeName(node.type);
+        if (name !== undefined) held.add(name);
+      }
+      ts.forEachChild(node, walk);
+    };
+    walk(shape.source);
+  }
+  return held;
+}
+
+/** The methods of one class whose body reaches an HTTP verb of a receiver the class holds as its HTTP client. */
+function reachingMethods(shape: FileShape, classDeclaration: ts.ClassDeclaration): string[] {
+  const httpFields = httpClientFields(shape, classDeclaration);
+  if (httpFields.size === 0) return [];
+  const methods = new Map<string, ts.Node>();
+  for (const member of classDeclaration.members) {
+    if ((ts.isMethodDeclaration(member) || ts.isPropertyDeclaration(member)) && member.name !== undefined && ts.isIdentifier(member.name)) methods.set(member.name.text, member);
+  }
+  const reaching = new Set<string>();
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const [name, member] of methods) {
+      if (reaching.has(name)) continue;
+      if (reachesVerb(member, httpFields, reaching)) {
+        reaching.add(name);
+        changed = true;
+      }
+    }
+  }
+  return [...reaching];
+}
+
+/** The fields and constructor parameters of a class that hold an `HttpClient`, by the name the code uses them with. */
+function httpClientFields(shape: FileShape, classDeclaration: ts.ClassDeclaration): Set<string> {
+  const held = new Set<string>();
+  for (const member of classDeclaration.members) {
+    if (!ts.isPropertyDeclaration(member) || member.name === undefined || !ts.isIdentifier(member.name)) continue;
+    if (member.initializer !== undefined && injectsAngularHttpClient(shape, member.initializer)) held.add(member.name.text);
+    if (member.type !== undefined && isAngularHttpClientName(shape, typeName(member.type))) held.add(member.name.text);
+  }
+  for (const parameter of constructorParameters(classDeclaration)) {
+    if (!ts.isIdentifier(parameter.name) || parameter.type === undefined) continue;
+    if (isAngularHttpClientName(shape, typeName(parameter.type))) held.add(parameter.name.text);
+  }
+  return held;
+}
+
+function injectsAngularHttpClient(shape: FileShape, expression: ts.Expression): boolean {
+  if (!ts.isCallExpression(expression) || expression.arguments.length === 0) return false;
+  const first = expression.arguments[0];
+  if (first === undefined || !ts.isIdentifier(first)) return false;
+  return expression.expression.getText(shape.source) === "inject" && isAngularHttpClientName(shape, first.text);
+}
+
+/** Whether a name is Angular's `HttpClient`: the name alone is not enough, its import decides. */
+function isAngularHttpClientName(shape: FileShape, name: string | undefined): boolean {
+  if (name === undefined) return false;
+  const imported = shape.imports.get(name);
+  return name === "HttpClient" && imported?.module === HTTP_CLIENT_PACKAGE;
+}
+
+/** The parameter properties of a class's constructor: the fields a class declares by writing them in its signature. */
+function constructorParameters(classDeclaration: ts.ClassDeclaration): readonly ts.ParameterDeclaration[] {
+  return classDeclaration.members.flatMap((member) => (ts.isConstructorDeclaration(member) ? member.parameters : []));
+}
+
+function typeName(node: ts.TypeNode): string | undefined {
+  if (ts.isTypeReferenceNode(node) && ts.isIdentifier(node.typeName)) return node.typeName.text;
+  return undefined;
+}
+
+function reachesVerb(member: ts.Node, httpFields: ReadonlySet<string>, reaching: ReadonlySet<string>): boolean {
+  let found = false;
+  const visit = (node: ts.Node): void => {
+    if (found) return;
+    if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)) {
+      const name = node.expression.name.text;
+      const receiver = node.expression.expression;
+      if (VERBS.has(name) && ts.isPropertyAccessExpression(receiver) && receiver.expression.kind === ts.SyntaxKind.ThisKeyword && httpFields.has(receiver.name.text)) {
+        found = true;
+        return;
+      }
+      if (receiver.kind === ts.SyntaxKind.ThisKeyword && reaching.has(name)) {
+        found = true;
+        return;
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(member);
+  return found;
+}
+
+/** Reads one file's call sites, resolving the module specifiers it meets through the snapshot. */
+class Reader {
+  constructor(
+    private readonly shapes: ReadonlyMap<string, FileShape>,
+    private readonly modules: ModuleResolver,
+    private readonly wrappers: ReadonlyMap<string, ReadonlySet<string>>,
+  ) {}
+
+  async callSite(shape: FileShape, call: ts.CallExpression, repo: string): Promise<CallSite[]> {
+    if (this.forwardsItsOwnParameter(shape, call)) return [];
+    const target = await this.target(shape, call);
+    if (target === undefined) return [];
+    const start = shape.source.getLineAndCharacterOfPosition(call.getStart(shape.source)).line + 1;
+    const end = shape.source.getLineAndCharacterOfPosition(call.getEnd()).line + 1;
+    return [{ repo, file: shape.source.fileName, line: start, endLine: end, symbol: symbolOf(call) ?? "(top level)", transport: "http", target }];
+  }
+
+  /**
+   * A wrapper's own body is where the request is made, not where a repository calls one: its path parameter is supplied by
+   * the call to the wrapper, which is the call site. Forwarding a parameter is therefore not a call site of its own.
+   */
+  private forwardsItsOwnParameter(_shape: FileShape, call: ts.CallExpression): boolean {
+    const enclosing = enclosingMethod(call);
+    if (enclosing === undefined || enclosing.name === undefined) return false;
+    return this.wrappers.get(enclosing.of ?? "")?.has(enclosing.name) === true;
+  }
+
+  /** The target of the call when it is a request the project makes out of itself; undefined for every other call. */
+  private async target(shape: FileShape, call: ts.CallExpression): Promise<Finding<HttpTarget> | undefined> {
+    const callee = call.expression;
+    if (ts.isIdentifier(callee) && callee.text === "fetch") return this.request(shape, call, "GET");
+    if (!ts.isPropertyAccessExpression(callee)) return undefined;
+    const name = callee.name.text;
+    if (!VERBS.has(name) && name !== "fetch") return undefined;
+    const owner = await this.ownerClass(shape, callee.expression);
+    if (owner === undefined) return undefined;
+    const isHttpClient = isAngularHttpClientName(shape, owner);
+    const isWrapper = await this.wrapperOf(shape, owner, name === "fetch" ? "request" : name);
+    if (!isHttpClient && !isWrapper) return undefined;
+    return this.request(shape, call, name === "fetch" ? "GET" : verbOf(name), name === "request" ? await this.explicitMethod(shape, call) : undefined);
+  }
+
+  private async explicitMethod(shape: FileShape, call: ts.CallExpression): Promise<HttpTarget["method"] | undefined> {
+    const [method] = call.arguments;
+    if (method === undefined) return undefined;
+    const text = await this.evaluate(shape, method);
+    return text === undefined ? undefined : verbOf(text.toLowerCase());
+  }
+
+  private async request(shape: FileShape, call: ts.CallExpression, method: HttpTarget["method"], explicit?: HttpTarget["method"]): Promise<Finding<HttpTarget>> {
+    const at = { path: shape.source.fileName, line: lineOf(shape.source, call) };
+    const [first] = call.arguments;
+    const path = first === undefined ? undefined : await this.evaluate(shape, first);
+    if (path === undefined) return { status: "unknown", reason: "unresolved", evidence: [at] };
+    const base = await this.baseUrl(shape, call);
+    return { status: "complete", value: { method: explicit ?? method, path: normalizePath(path), ...(base === undefined ? {} : { base }) }, evidence: [at] };
+  }
+
+  private async baseUrl(shape: FileShape, call: ts.CallExpression): Promise<string | undefined> {
+    for (const argument of call.arguments.slice(1)) {
+      if (!ts.isObjectLiteralExpression(argument)) continue;
+      for (const property of argument.properties) {
+        if (ts.isPropertyAssignment(property) && property.name.getText(shape.source) === "baseUrl") return await this.evaluate(shape, property.initializer);
+      }
+    }
+    return undefined;
+  }
+
+  /** The name of the class a receiver is an instance of, through the field or parameter that holds it. */
+  private async ownerClass(shape: FileShape, receiver: ts.Expression): Promise<string | undefined> {
+    if (ts.isPropertyAccessExpression(receiver) && receiver.expression.kind === ts.SyntaxKind.ThisKeyword) {
+      return this.fieldType(shape, receiver.name.text);
+    }
+    if (ts.isIdentifier(receiver)) {
+      const local = shape.consts.get(receiver.text);
+      if (local !== undefined) return this.injectedType(shape, local);
+      return this.fieldType(shape, receiver.text);
+    }
+    return undefined;
+  }
+
+  private async fieldType(shape: FileShape, name: string): Promise<string | undefined> {
+    for (const declaration of shape.classes.values()) {
+      for (const member of declaration.members) {
+        if (member.name === undefined || !ts.isIdentifier(member.name) || member.name.text !== name) continue;
+        if (ts.isPropertyDeclaration(member) && member.initializer !== undefined) {
+          const injected = this.injectedType(shape, member.initializer);
+          if (injected !== undefined) return injected;
+        }
+        if (ts.isPropertyDeclaration(member) && member.type !== undefined) return typeName(member.type);
+        if (ts.isParameter(member) && member.type !== undefined) return typeName(member.type);
+      }
+      for (const parameter of constructorParameters(declaration)) {
+        if (ts.isIdentifier(parameter.name) && parameter.name.text === name && parameter.type !== undefined) return typeName(parameter.type);
+      }
+    }
+    return undefined;
+  }
+
+  private injectedType(shape: FileShape, expression: ts.Expression): string | undefined {
+    if (!ts.isCallExpression(expression) || expression.expression.getText(shape.source) !== "inject") return undefined;
+    const [first] = expression.arguments;
+    return first !== undefined && ts.isIdentifier(first) ? first.text : undefined;
+  }
+
+  /** Whether the class is a class another repository class injects whose method named `name` reaches an HTTP verb. */
+  private async wrapperOf(_shape: FileShape, className: string, name: string): Promise<boolean> {
+    return this.wrappers.get(className)?.has(name) === true;
+  }
+
+  /** The text a path expression comes down to, `{}` for every part the code fills at run time; undefined when the snapshot does not decide it. */
+  private async evaluate(shape: FileShape, expression: ts.Expression, trail: ReadonlySet<string> = new Set()): Promise<string | undefined> {
+    if (ts.isStringLiteral(expression) || ts.isNoSubstitutionTemplateLiteral(expression)) return expression.text;
+    if (ts.isTemplateExpression(expression)) {
+      let text = expression.head.text;
+      for (const span of expression.templateSpans) {
+        const part = await this.evaluate(shape, span.expression, trail);
+        text += part ?? PLACEHOLDER;
+        text += span.literal.text;
+      }
+      return text;
+    }
+    if (ts.isParenthesizedExpression(expression) || ts.isAsExpression(expression) || ts.isSatisfiesExpression(expression) || ts.isTypeAssertionExpression(expression)) {
+      return this.evaluate(shape, expression.expression, trail);
+    }
+    if (ts.isIdentifier(expression)) return this.evaluateName(shape, expression.text, trail);
+    if (ts.isPropertyAccessExpression(expression)) return this.evaluateProperty(shape, expression, trail);
+    if (ts.isCallExpression(expression)) return this.evaluateCall(shape, expression, trail);
+    return undefined;
+  }
+
+  private async evaluateName(shape: FileShape, name: string, trail: ReadonlySet<string>): Promise<string | undefined> {
+    const key = `${shape.source.fileName}\0${name}`;
+    if (trail.has(key)) return undefined;
+    const next = new Set(trail).add(key);
+    const local = shape.consts.get(name);
+    if (local !== undefined) return this.evaluate(shape, local, next);
+    const imported = shape.imports.get(name);
+    if (imported === undefined || imported.imported === "*") return undefined;
+    const target = await this.moduleShape(shape, imported.module);
+    if (target === undefined) return undefined;
+    const declaration = target.consts.get(imported.imported) ?? (await this.reexported(target, imported.imported, next));
+    return declaration === undefined ? undefined : this.evaluate(target, declaration, next);
+  }
+
+  /** A member of a constant object literal: `PATHS.token`, read through the object the name declares. */
+  private async evaluateProperty(shape: FileShape, expression: ts.PropertyAccessExpression, trail: ReadonlySet<string>): Promise<string | undefined> {
+    if (!ts.isIdentifier(expression.expression)) return undefined;
+    const held = await this.objectLiteral(shape, expression.expression.text, trail);
+    if (held === undefined) return undefined;
+    const property = held.properties.find((candidate): candidate is ts.PropertyAssignment => ts.isPropertyAssignment(candidate) && candidate.name.getText(held.getSourceFile()) === expression.name.text);
+    return property === undefined ? undefined : this.evaluate(shape, property.initializer, trail);
+  }
+
+  private async objectLiteral(shape: FileShape, name: string, trail: ReadonlySet<string>): Promise<ts.ObjectLiteralExpression | undefined> {
+    const local = shape.consts.get(name);
+    if (local !== undefined) return objectOf(local);
+    const imported = shape.imports.get(name);
+    if (imported === undefined || imported.imported === "*") return undefined;
+    if (trail.has(`${shape.source.fileName}\0${name}`)) return undefined;
+    const target = await this.moduleShape(shape, imported.module);
+    const held = target?.consts.get(imported.imported);
+    return held === undefined ? undefined : objectOf(held);
+  }
+
+  /** A function the call names, evaluated at its one returned expression: its parameters reach the path as placeholders. */
+  private async evaluateCall(shape: FileShape, call: ts.CallExpression, trail: ReadonlySet<string>): Promise<string | undefined> {
+    if (!ts.isIdentifier(call.expression)) return undefined;
+    const name = call.expression.text;
+    const { target, declaration } = (await this.declarationOf(shape, name)) ?? {};
+    if (target === undefined || declaration === undefined) return undefined;
+    return this.evaluateReturned(target, declaration, trail);
+  }
+
+  private async declarationOf(shape: FileShape, name: string): Promise<{ target: FileShape; declaration: ts.Expression | undefined } | undefined> {
+    const local = shape.consts.get(name);
+    if (local !== undefined) return { target: shape, declaration: local };
+    const localFunction = [...shape.source.statements].find((statement): statement is ts.FunctionDeclaration => ts.isFunctionDeclaration(statement) && statement.name?.text === name);
+    if (localFunction !== undefined) return { target: shape, declaration: firstReturn(localFunction) };
+    const imported = shape.imports.get(name);
+    if (imported === undefined || imported.imported === "*") return undefined;
+    const target = await this.moduleShape(shape, imported.module);
+    if (target === undefined) return undefined;
+    const declaration = target.consts.get(imported.imported);
+    if (declaration !== undefined) return { target, declaration };
+    const fn = [...target.source.statements].find((statement): statement is ts.FunctionDeclaration => ts.isFunctionDeclaration(statement) && statement.name?.text === imported.imported);
+    return fn === undefined ? undefined : { target, declaration: firstReturn(fn) };
+  }
+
+  private async evaluateReturned(target: FileShape, declaration: ts.Expression, trail: ReadonlySet<string>): Promise<string | undefined> {
+    if (ts.isArrowFunction(declaration) || ts.isFunctionExpression(declaration)) return this.evaluate(target, bodyExpression(declaration), trail);
+    return this.evaluate(target, declaration, trail);
+  }
+
+  private async reexported(shape: FileShape, name: string, trail: ReadonlySet<string>): Promise<ts.Expression | undefined> {
+    const imported = shape.imports.get(name);
+    if (imported === undefined) return undefined;
+    const target = await this.moduleShape(shape, imported.module);
+    if (target === undefined || trail.has(`${target.source.fileName}\0${imported.imported}`)) return undefined;
+    return target.consts.get(imported.imported);
+  }
+
+  private async moduleShape(shape: FileShape, specifier: string): Promise<FileShape | undefined> {
+    const resolved = await this.modules.resolve(shape.source.fileName, specifier);
+    return "file" in resolved ? this.shapes.get(resolved.file) : undefined;
+  }
+}
+
+function firstReturn(node: ts.FunctionDeclaration | ts.ArrowFunction | ts.FunctionExpression): ts.Expression {
+  if (!ts.isFunctionDeclaration(node)) return bodyExpression(node);
+  /* A function declaration's returned expression; the declaration itself when it returns nothing, which reads as unresolved. */
+  let returned: ts.Expression | undefined;
+  const visit = (child: ts.Node): void => {
+    if (returned !== undefined) return;
+    if (ts.isReturnStatement(child) && child.expression !== undefined) {
+      returned = child.expression;
+      return;
+    }
+    ts.forEachChild(child, visit);
+  };
+  visit(node);
+  return returned ?? ts.factory.createIdentifier("undefined");
+}
+
+function bodyExpression(node: ts.ArrowFunction | ts.FunctionExpression): ts.Expression {
+  return ts.isBlock(node.body) ? firstReturnInBlock(node.body) : node.body;
+}
+
+function firstReturnInBlock(block: ts.Block): ts.Expression {
+  let returned: ts.Expression | undefined;
+  const visit = (child: ts.Node): void => {
+    if (returned !== undefined) return;
+    if (ts.isReturnStatement(child) && child.expression !== undefined) {
+      returned = child.expression;
+      return;
+    }
+    ts.forEachChild(child, visit);
+  };
+  visit(block);
+  return returned ?? ts.factory.createIdentifier("undefined");
+}
+
+/** The object literal an initializer is, through the wrappers TypeScript lets an author write around it. */
+function objectOf(expression: ts.Expression): ts.ObjectLiteralExpression | undefined {
+  if (ts.isObjectLiteralExpression(expression)) return expression;
+  if (ts.isAsExpression(expression) || ts.isSatisfiesExpression(expression) || ts.isParenthesizedExpression(expression) || ts.isTypeAssertionExpression(expression)) return objectOf(expression.expression);
+  return undefined;
+}
+
+function verbOf(name: string): HttpTarget["method"] {
+  const upper = name.toUpperCase();
+  return (["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "TRACE"] as const).find((verb) => verb === upper) ?? "GET";
+}
+
+/** `:name` stands for a value the code fills, like `${expr}`; the query string is not part of the path a route serves. */
+function normalizePath(path: string): string {
+  const withoutQuery = path.split("?")[0] ?? path;
+  return withoutQuery
+    .split("/")
+    .map((segment) => (/^:[A-Za-z_][A-Za-z0-9_]*$/.test(segment) ? PLACEHOLDER : segment))
+    .join("/");
+}
+
+/** The method a node sits in, with the class that declares it and the parameters it declares. */
+function enclosingMethod(node: ts.Node): { name?: string; of?: string; parameters: readonly string[] } | undefined {
+  for (let current: ts.Node | undefined = node; current !== undefined; current = current.parent) {
+    if (ts.isMethodDeclaration(current)) {
+      const declared = [...current.parameters].flatMap((parameter) => (ts.isIdentifier(parameter.name) ? [parameter.name.text] : []));
+      const owner = ts.isClassDeclaration(current.parent) && current.parent.name !== undefined ? current.parent.name.text : undefined;
+      return { ...(ts.isIdentifier(current.name) ? { name: current.name.text } : {}), ...(owner === undefined ? {} : { of: owner }), parameters: declared };
+    }
+  }
+  return undefined;
+}
+
+function symbolOf(node: ts.Node): string | undefined {
+  let className: string | undefined;
+  let member: string | undefined;
+  for (let current: ts.Node | undefined = node; current !== undefined; current = current.parent) {
+    if (member === undefined && (ts.isMethodDeclaration(current) || ts.isPropertyDeclaration(current) || ts.isFunctionDeclaration(current) || ts.isArrowFunction(current)) && "name" in current) {
+      const name = current.name;
+      if (name !== undefined && ts.isIdentifier(name)) member = name.text;
+      else if (ts.isFunctionDeclaration(current)) member = current.name?.text;
+    }
+    if (ts.isClassDeclaration(current) && current.name !== undefined) {
+      className = current.name.text;
+      break;
+    }
+  }
+  if (className === undefined) return member;
+  return member === undefined ? className : `${className}.${member}`;
+}
+
+function lineOf(source: ts.SourceFile, node: ts.Node): number {
+  return source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1;
+}

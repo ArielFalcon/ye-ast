@@ -4,6 +4,7 @@ import { compareText } from "../../domain/shared/code-node.ts";
 import type { Result } from "../../domain/shared/result.ts";
 import { pathSelection, type PathSelection } from "../../domain/shared/scope.ts";
 import { gatherNames, sortEvidence, compareCandidate, type NameCandidate, type OutwardName } from "../../domain/topology/outward-name.ts";
+import { callSiteEvidence, type CallSite, type CallSiteReader } from "../../domain/topology/call-site.ts";
 import { directoryNameOf, nameCandidates, repositoryNameOf, type RepositoryIdentity } from "../../domain/topology/repository-identity.ts";
 import type { PathMatcher } from "../../ports/path-matcher.port.ts";
 import type { WorkspaceEvidence } from "../../ports/workspace-evidence.port.ts";
@@ -14,6 +15,7 @@ import { extractCommit, factBaseOf, trustOf, withScratch, type SnapshotReaderDep
 export interface WorkspaceQueriesDeps extends SnapshotReaderDeps {
   matcher: PathMatcher;
   evidence: WorkspaceEvidence;
+  callSites: CallSiteReader;
   engines: Readonly<Record<string, string>>;
 }
 
@@ -21,6 +23,7 @@ interface ReadRepository {
   repository: WorkspaceRepository;
   base: FactBase;
   names: readonly OutwardName[];
+  callSites: readonly CallSite[];
   identity: RepositoryIdentity;
 }
 
@@ -53,7 +56,8 @@ export function createWorkspaceQueries(deps: WorkspaceQueriesDeps): WorkspaceQue
         value: {
           repository: { repo: repoId, path: request.path, snapshot: base.snapshot, entrypoints: findings },
           base,
-          names: deps.evidence.names(sources),
+          names: [...deps.evidence.names(sources), ...callSiteNames(repoId, await deps.callSites.of(sources, repoId))],
+          callSites: await deps.callSites.of(sources, repoId),
           identity: {
             repo: repoId,
             id: repoId,
@@ -87,7 +91,14 @@ export function createWorkspaceQueries(deps: WorkspaceQueriesDeps): WorkspaceQue
       const unserved: OutwardName[] = [];
       for (const entry of read) {
         const names = gatherNames(entry.names);
-        sections[entry.repository.repo] = { ...(entry.base as FactBase), evidence: sortEvidence(names.flatMap((name) => name.evidence)), status: "complete", value: { names } };
+        const unresolved = entry.callSites.flatMap((site) => (site.target.status === "unknown" ? [callSiteEvidence(site)] : []));
+        const section: FactBase & { evidence: readonly { path: string; line: number }[] } = { ...(entry.base as FactBase), evidence: sortEvidence(names.flatMap((name) => name.evidence)) };
+        const cuts = unresolved.map((place) => ({ kind: "unresolved-link" as const, at: [place.path, `${place.path}:${place.line}`] }));
+        const [firstCut, ...restCuts] = cuts;
+        sections[entry.repository.repo] =
+          firstCut === undefined
+            ? { ...section, status: "complete", value: { names, unresolved } }
+            : { ...section, status: "partial", value: { names, unresolved }, cuts: [firstCut, ...restCuts] };
         for (const name of names) {
           const served = nameCandidates(name, identities);
           if (served.length === 0) unserved.push(name);
@@ -108,6 +119,20 @@ export function createWorkspaceQueries(deps: WorkspaceQueriesDeps): WorkspaceQue
       return { ok: true, value: composite({ ...trigger.base, evidence: [] }, value) };
     },
   };
+}
+
+/**
+ * The names a repository's call sites state about the world outside it: the base URL a call declares, and the first path
+ * segment it targets, which is the prefix a gateway routes. A parameter or the bare root states nothing.
+ */
+function callSiteNames(repo: string, callSites: readonly CallSite[]): OutwardName[] {
+  return callSites.flatMap((site): OutwardName[] => {
+    if (site.target.status !== "complete" || !("path" in site.target.value)) return [];
+    const { base, path } = site.target.value;
+    const evidence = [callSiteEvidence(site)];
+    const prefix = path.split("/").find((segment) => segment !== "");
+    return [...(base === undefined ? [] : [{ name: base, kind: "http-host" as const, evidence }]), ...(prefix === undefined || prefix === "{}" ? [] : [{ name: prefix, kind: "path-prefix" as const, evidence }])];
+  });
 }
 
 /** The composite of the sections, with the whole value beside them: complete only when every section is. */
