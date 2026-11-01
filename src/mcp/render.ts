@@ -145,17 +145,38 @@ function symbolLine(symbol: ImpactedSymbol, file: string): string {
   return `    ${symbol.line} ${symbol.symbol} [${symbol.kind}] (${facts.join(", ")})`;
 }
 
-/** The impacted symbols under the file that holds them, so the path is printed once per file. */
-function impactedSymbols(value: ImpactValue): string[] {
-  const seeds = seedKeys(value);
-  const listed = value.symbols.filter((symbol) => symbol.depth !== 0 || !seeds.has(`${symbol.file}\0${symbol.symbol}\0${symbol.line}`));
-  const lines = [`impacted symbols (${listed.length}):`];
-  if (listed.length === 0) return [...lines, NONE];
-  for (const [file, inFile] of Map.groupBy(listed, (symbol) => symbol.file)) lines.push(`  ${file}`, ...inFile.map((symbol) => symbolLine(symbol, file)));
-  return lines;
+/** How much of the impacted symbols the text lists: every one, or the direct ones with the deeper ones counted per file. */
+export type Detail = "summary" | "full";
+
+/** The deepest level a summary lists: the seeds' direct callers, the ones a change edits next to. */
+const LISTED_DEPTH = 1;
+
+function groupedLines(symbols: readonly ImpactedSymbol[]): string[] {
+  return [...Map.groupBy(symbols, (symbol) => symbol.file)].flatMap(([file, inFile]) => [`  ${file}`, ...inFile.map((symbol) => symbolLine(symbol, file))]);
 }
 
-export function renderImpact(fact: Fact<ImpactValue>): string {
+function countedLine(file: string, symbols: readonly ImpactedSymbol[]): string {
+  const depths = symbols.map((symbol) => symbol.depth);
+  const [low, high] = [Math.min(...depths), Math.max(...depths)];
+  return `  ${file}: ${symbols.length} at depth ${low === high ? low : `${low}-${high}`}`;
+}
+
+/** The impacted symbols under the file that holds them, so the path is printed once per file. */
+function impactedSymbols(value: ImpactValue, detail: Detail): string[] {
+  const seeds = seedKeys(value);
+  const listed = value.symbols.filter((symbol) => symbol.depth !== 0 || !seeds.has(`${symbol.file}\0${symbol.symbol}\0${symbol.line}`));
+  if (listed.length === 0) return [`impacted symbols (0):`, NONE];
+  const near = listed.filter((symbol) => symbol.depth <= LISTED_DEPTH);
+  const deeper = listed.filter((symbol) => symbol.depth > LISTED_DEPTH);
+  if (detail === "full" || deeper.length === 0) return [`impacted symbols (${listed.length}):`, ...groupedLines(listed)];
+  return [
+    `impacted symbols (${listed.length}): ${near.length} at depth 0-${LISTED_DEPTH} listed, ${deeper.length} deeper counted per file; detail "full" lists them`,
+    ...groupedLines(near),
+    ...[...Map.groupBy(deeper, (symbol) => symbol.file)].map(([file, inFile]) => countedLine(file, inFile)),
+  ];
+}
+
+export function renderImpact(fact: Fact<ImpactValue>, detail: Detail = "summary"): string {
   const lines = [...statusLines(fact), snapshotLine(fact.snapshot)];
   if (fact.status === "unknown") return lines.join("\n");
   const { value } = fact;
@@ -168,7 +189,7 @@ export function renderImpact(fact: Fact<ImpactValue>): string {
   lines.push(
     `reached entrypoints (${value.entrypoints.length}):`,
     ...list(value.entrypoints.map(reachedLine)),
-    ...impactedSymbols(value),
+    ...impactedSymbols(value, detail),
     ...cutsBlock(cutsOf(fact)),
   );
   return lines.join("\n");

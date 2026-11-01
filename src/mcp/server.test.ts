@@ -170,7 +170,7 @@ test("entrypoints forwards the revision asked for", async () => {
 
 test("impact reads a change of the bound repository, head defaulting to HEAD, and renders seeds, reached symbols and entrypoints", async () => {
   const { session, calls } = await setup();
-  const result = await session.callTool("ye_ast_impact", { base: "main" });
+  const result = await session.callTool("ye_ast_impact", { base: "main", detail: "full" });
   assert.deepEqual(calls.ofChange.map(({ repo, repoId, base: from, head, budget }) => ({ repo, repoId, from, head, budget })), [
     { repo: REPOSITORY.path, repoId: REPOSITORY.repoId, from: "main", head: "HEAD", budget: undefined },
   ]);
@@ -276,9 +276,32 @@ test("impacted symbols are grouped under their file, a seed at depth 0 is not pr
     },
   } as Partial<Fact<ImpactValue>>);
   const { session } = await setup({ ofChange: async () => ({ ok: true, value: grouped }) });
-  const text = textOf(await session.callTool("ye_ast_impact", { base: "main" }));
+  const text = textOf(await session.callTool("ye_ast_impact", { base: "main", detail: "full" }));
   assert.match(text, /impacted symbols \(3\):\n {2}src\/a\.ts\n {4}4 A\.other \[method\] \(depth 1\)\n {2}src\/b\.ts\n {4}9 B\.user \[function\] \(depth 2, confidence 0\.5, fan-in 2, via src\/a\.ts:A\.other\)\n {4}2 B\.helper \[function\] \(depth 2, confidence 0\.5, fan-in 1, via B\.user\)/);
   assert.doesNotMatch(text, /A\.seed \[method\]/);
+  await session.close();
+});
+
+test("by default impact lists the symbols at depth 0 and 1 and counts deeper ones per file, saying how to list them", async () => {
+  const deep = impactFact({
+    value: {
+      seeds: [{ file: "src/a.ts", symbol: "A.seed", line: 1, basis: "requested" }],
+      symbols: [
+        { file: "src/a.ts", symbol: "A.other", kind: "method", line: 4, depth: 1, confidence: 1, fanIn: 0, seeds: [0] },
+        { file: "src/b.ts", symbol: "B.user", kind: "function", line: 9, depth: 2, confidence: 1, fanIn: 0, seeds: [0] },
+        { file: "src/b.ts", symbol: "B.helper", kind: "function", line: 2, depth: 3, confidence: 1, fanIn: 0, seeds: [0] },
+        { file: "src/c.ts", symbol: "C.top", kind: "function", line: 5, depth: 2, confidence: 1, fanIn: 0, seeds: [0] },
+      ],
+      entrypoints: [],
+      cost: { expansionsUsed: 1 },
+    },
+  } as Partial<Fact<ImpactValue>>);
+  const { session } = await setup({ callers: async () => ({ ok: true, value: deep }) });
+  const result = await session.callTool("ye_ast_callers", { targets: [{ file: "src/a.ts", symbol: "A.seed" }] });
+  const text = textOf(result);
+  assert.match(text, /impacted symbols \(4\): 1 at depth 0-1 listed, 3 deeper counted per file; detail "full" lists them\n {2}src\/a\.ts\n {4}4 A\.other \[method\] \(depth 1\)\n {2}src\/b\.ts: 2 at depth 2-3\n {2}src\/c\.ts: 1 at depth 2/);
+  assert.doesNotMatch(text, /B\.user|C\.top/);
+  assert.deepEqual(result.structuredContent, JSON.parse(JSON.stringify(deep)));
   await session.close();
 });
 

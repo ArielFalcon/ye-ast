@@ -9,7 +9,7 @@ import type { EntrypointQueries } from "../core/ports/entrypoint-queries.port.ts
 import type { CallersTarget, ImpactQueries } from "../core/ports/impact-queries.port.ts";
 import type { Redaction } from "../core/ports/redaction.port.ts";
 import { DEFAULT_REVISION } from "../core/ports/vcs.port.ts";
-import { renderEntrypointMap, renderFault, renderImpact, renderImporters, renderStale } from "./render.ts";
+import { renderEntrypointMap, renderFault, renderImpact, renderImporters, renderStale, type Detail } from "./render.ts";
 
 /** The key of the result's `_meta` that carries a stale notice. */
 export const LIVE_META = "ye-ast/live";
@@ -39,6 +39,7 @@ Reading an answer:
 - status "complete": the result is everything within the declared scope (inputs.declaredScope); code in languages or frameworks outside it is not covered.
 - status "partial": the result stops at each listed cut; what lies past a cut is not known.
 - status "unknown": ye-ast cannot tell, and the reason says why; never read it as "no impact".
+- ye_ast_impact and ye_ast_callers list the symbols at depth 0 and 1 and count deeper ones per file; set detail to "full" when the deeper symbols themselves are needed.
 - Every answer closes with a \`cuts:\` list holding every place past each cut, after the content; the status line only counts them by kind, so a partial answer read without its list reads as complete.
 - An isError result names a fault kind. "live-requires-trusted" means the user must declare the repository trusted with \`ye-ast install --trust trusted\` before live can be used; answer from a revision meanwhile.`;
 
@@ -67,6 +68,11 @@ const budget = z
   .strictObject(BUDGET_FIELDS)
   .optional()
   .describe("Optional bounds on the walk; none applies unless set, and a bound that stops the walk is reported as a cut.");
+
+const detail = z
+  .enum(["summary", "full"] satisfies Detail[])
+  .optional()
+  .describe("How much of the impacted symbols the text lists: summary (the default) lists depth 0 and 1 and counts deeper ones per file; full lists every one. The structured content always holds every one.");
 
 const target = z.union([
   z.strictObject({ file: z.string().min(1), symbol: z.string().min(1) }).describe("A declaration by name."),
@@ -159,18 +165,19 @@ export function createMcpServer(deps: McpDeps): McpServer {
           head: z.string().min(1).optional().describe("The revision holding the change; HEAD when omitted."),
           live,
           budget,
+          detail,
         })
         .refine(excludes("head"), "live excludes head"),
       outputSchema: FACT_OUTPUT,
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    ({ base, head, live: isLive, budget: requested }, ctx) =>
+    ({ base, head, live: isLive, budget: requested, detail: listing }, ctx) =>
       answer(
         (onStale) => {
           const at = atRevision(head, isLive, onStale);
           return deps.impact.ofChange({ repo: repository.path, repoId: repository.repoId, base, ...(at.live ? at : { head: at.revision }), ...budgetOf(requested), signal: ctx.mcpReq.signal });
         },
-        renderImpact,
+        (fact) => renderImpact(fact, listing),
       ),
   );
 
@@ -180,12 +187,12 @@ export function createMcpServer(deps: McpDeps): McpServer {
       title: "Callers of symbols or line ranges",
       description: `What depends on the symbols or line ranges asked for at a revision: the callers they reach and the entrypoints those serve, with path:line evidence. A symbol that names no declaration is reported as an error. Use it before changing or deleting a symbol or a range of lines. ${COMPLETENESS}`,
       inputSchema: z
-        .strictObject({ revision, live, targets: z.array(target).min(1).describe("The symbols or line ranges to start from."), budget })
+        .strictObject({ revision, live, targets: z.array(target).min(1).describe("The symbols or line ranges to start from."), budget, detail })
         .refine(excludes("revision"), "live excludes revision"),
       outputSchema: FACT_OUTPUT,
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    ({ revision: requested, live: isLive, targets, budget: bounds }, ctx) =>
+    ({ revision: requested, live: isLive, targets, budget: bounds, detail: listing }, ctx) =>
       answer(
         (onStale) =>
           deps.impact.callers({
@@ -196,7 +203,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
             ...budgetOf(bounds),
             signal: ctx.mcpReq.signal,
           }),
-        renderImpact,
+        (fact) => renderImpact(fact, listing),
       ),
   );
 
