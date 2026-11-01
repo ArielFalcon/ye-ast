@@ -15,7 +15,7 @@ No LLM runs inside the engine. Same input, same bytes.
 ```console
 $ ye-ast map .
 {
-  "schema": "0.3.0",
+  "schema": "0.4.0",
   "snapshot": { "repo": "my-app", "kind": "sha", "sha": "…" },
   "producer": { "name": "ye-ast", "version": "0.1.0" },
   "inputs": { "trust": "untrusted", "declaredScope": { … } },

@@ -16,7 +16,12 @@ import {
 } from "../shared/fact.ts";
 import { sortedGlobs, type ScopeRequest } from "../shared/scope.ts";
 
-export type EntrypointMap = { entrypoints: Fact<readonly Fact<Entrypoint>[]> };
+/**
+ * The entrypoints of a snapshot. An item is a `Finding`, not a fact: it carries only what can differ per item (its
+ * status, value or reason, and its evidence), while the schema, snapshot, producer and inputs are the collection's
+ * ([RFC-0002](../../../docs/architecture/rfc/0002-facts-contract.md) rule 2).
+ */
+export type EntrypointMap = { entrypoints: Fact<readonly Finding<Entrypoint>[]> };
 
 export type EntrypointMapFact = CompleteFact<EntrypointMap> | PartialFact<EntrypointMap>;
 
@@ -69,12 +74,11 @@ export function contentFingerprint({ files, skipped, stopped }: MapExport): stri
 
 /** The section is cut, so the entrypoint table never looks complete, by every cause `exportCuts` names. */
 export function buildEntrypointMap(base: MapBase, findings: readonly Finding<Entrypoint>[], exported: MapExport): EntrypointMapFact {
-  const items = findings.map((finding): Fact<Entrypoint> => itemFact(base, finding));
   const [first, ...rest] = exportCuts(exported);
-  const section: Fact<readonly Fact<Entrypoint>[]> =
+  const section: Fact<readonly Finding<Entrypoint>[]> =
     first === undefined
-      ? { ...base, evidence: [], status: "complete", value: items }
-      : { ...base, evidence: [], status: "partial", value: items, cuts: [first, ...rest] };
+      ? { ...base, evidence: [], status: "complete", value: findings }
+      : { ...base, evidence: [], status: "partial", value: findings, cuts: [first, ...rest] };
   return composeSections({ ...base, evidence: [] }, { entrypoints: section });
 }
 
@@ -98,10 +102,4 @@ export function exportCuts(exported: MapExport): Cut[] {
 
 function cutsAt(kind: Cut["kind"], paths: readonly string[]): Cut[] {
   return paths.toSorted().map((path) => ({ kind, at: [path] }));
-}
-
-function itemFact(base: MapBase, finding: Finding<Entrypoint>): Fact<Entrypoint> {
-  return finding.status === "complete"
-    ? { ...base, evidence: finding.evidence, status: "complete", value: finding.value }
-    : { ...base, evidence: finding.evidence, status: "unknown", reason: finding.reason };
 }

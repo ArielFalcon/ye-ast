@@ -1,6 +1,6 @@
 import type { Entrypoint } from "../../domain/entrypoints/entrypoint.ts";
 import type { EntrypointMapFact } from "../../domain/map/entrypoint-map.ts";
-import type { Cut, Evidence, Fact, SnapshotRef } from "../../domain/shared/fact.ts";
+import type { Cut, Evidence, Finding, SnapshotRef } from "../../domain/shared/fact.ts";
 
 /** The Markdown an agent reads before the JSON: what the fact is about, how complete it is, and where each entrypoint is. */
 export function renderEntrypointsDigest(fact: EntrypointMapFact): string {
@@ -45,12 +45,12 @@ function cutLine(cut: Cut): string {
   return [`- \`${cut.kind}\` at \`${anchor ?? ""}\`${limit}`, ...places.map((place) => `  - \`${place}\``)].join("\n");
 }
 
-function entrypointLines(items: readonly Fact<Entrypoint>[]): string[] {
+function entrypointLines(items: readonly Finding<Entrypoint>[]): string[] {
   if (items.length === 0) return ["None found within the declared scope."];
   return items.map((item) => `- ${label(item)} at ${locations(item.evidence)}`);
 }
 
-function label(item: Fact<Entrypoint>): string {
+function label(item: Finding<Entrypoint>): string {
   return item.status === "unknown" ? `unknown (${item.reason})` : `\`${item.value.kind} ${item.value.name}\``;
 }
 

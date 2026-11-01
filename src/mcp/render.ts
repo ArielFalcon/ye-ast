@@ -5,7 +5,7 @@ import type { ImpactedSymbol, ImpactValue, ReachedEntrypoint } from "../core/dom
 import type { ImportersValue } from "../core/domain/impact/importers-fact.ts";
 import type { EntrypointMap } from "../core/domain/map/entrypoint-map.ts";
 import { compareText } from "../core/domain/shared/code-node.ts";
-import type { Cut, Evidence, Fact, SnapshotRef } from "../core/domain/shared/fact.ts";
+import type { Cut, Evidence, Fact, Finding, SnapshotRef } from "../core/domain/shared/fact.ts";
 import type { ImpactFault } from "../core/ports/impact-queries.port.ts";
 import type { LiveStaleNotice } from "../core/ports/live-queries.port.ts";
 
@@ -108,8 +108,8 @@ function entrypointLine(entrypoint: Entrypoint): string {
   return `  - ${entrypoint.kind} ${entrypoint.name} -> ${served}`;
 }
 
-function itemLine(item: Fact<Entrypoint>): string {
-  return item.status === "unknown" ? `  - unknown (${item.reason}) ${item.evidence.map(evidenceText).join(", ")}`.trimEnd() : entrypointLine(item.value) + (item.status === "partial" ? " [partial]" : "");
+function itemLine(item: Finding<Entrypoint>): string {
+  return item.status === "unknown" ? `  - unknown (${item.reason}) ${item.evidence.map(evidenceText).join(", ")}`.trimEnd() : entrypointLine(item.value);
 }
 
 export function renderEntrypointMap(fact: Fact<EntrypointMap>): string {

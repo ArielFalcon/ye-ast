@@ -1,5 +1,5 @@
 import type { EntrypointMapFact } from "../../domain/map/entrypoint-map.ts";
-import { sameIdentity, type Fact } from "../../domain/shared/fact.ts";
+import { sameIdentity, type Fact, type Finding } from "../../domain/shared/fact.ts";
 import type { EntrypointQueries } from "../../ports/entrypoint-queries.port.ts";
 import type { FixedLayerAdmin, FixedLayerRefresh } from "../../ports/fixed-layer-admin.port.ts";
 import type { FixedLayerStore } from "../../ports/fixed-layer-store.port.ts";
@@ -60,8 +60,7 @@ function sameStoredInputs(storedJson: string, fact: EntrypointMapFact): boolean 
 
 function unstorableReason(map: EntrypointMapFact): Extract<FixedLayerRefresh, { outcome: "not-written" }>["reason"] | undefined {
   const section = map.value.entrypoints;
-  const facts: Fact<unknown>[] = [map, section, ...(section.status === "unknown" ? [] : section.value)];
-  const reasons = facts.map(factReason);
+  const reasons = [factReason(map), factReason(section), ...(section.status === "unknown" ? [] : section.value.map(findingReason))];
   return reasons.includes("deadline") ? "deadline" : reasons.includes("index-unavailable") ? "index-unavailable" : undefined;
 }
 
@@ -69,4 +68,8 @@ function factReason(fact: Fact<unknown>): string | undefined {
   if (fact.status === "unknown") return fact.reason;
   if (fact.status === "partial") return fact.cuts.find((cut) => cut.kind === "deadline")?.kind;
   return undefined;
+}
+
+function findingReason(finding: Finding<unknown>): string | undefined {
+  return finding.status === "unknown" ? finding.reason : undefined;
 }

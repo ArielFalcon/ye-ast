@@ -189,7 +189,7 @@ test("the export budget is a profile value of the fact: another budget is anothe
   assert.notEqual(await configOf({ maxEntries: 10, maxBytes: 21 }), base);
 });
 
-test("the map states the scope it covers beside the digest of that scope, on the composite, the section and every item", async () => {
+test("the map states the scope it covers beside the digest of that scope, on the composite and on its section", async () => {
   const { deps } = setup({ files: [ORDERS], findings: [route("/orders", 12)] });
 
   const result = await createEntrypointQueries(deps).map(REQUEST);
@@ -197,21 +197,22 @@ test("the map states the scope it covers beside the digest of that scope, on the
   assert.ok(result.ok && result.value.status === "complete");
   const section = result.value.value.entrypoints;
   assert.ok(section.status === "complete");
-  for (const fact of [result.value, section, section.value[0]!]) {
+  for (const fact of [result.value, section]) {
     assert.deepEqual(fact.inputs.declaredScope, { languages: ["java", "typescript"], frameworks: ["angular", "spring"], include: [], exclude: [] });
     assert.equal(fact.inputs.scope, deps.digest.of(JSON.stringify(fact.inputs.declaredScope)));
   }
 });
 
-test("findings become item facts with the shared base and their own evidence", async () => {
+test("an item carries only what can differ per item, never the base of the collection", async () => {
   const unresolved: Finding<HttpRoute> = {
     status: "unknown",
     reason: "unresolved",
     evidence: [{ path: "src/Orders.java", line: 30 }],
   };
+  const served = route("/orders", 12);
   const { deps } = setup({
     files: [ORDERS],
-    findings: [route("/orders", 12), unresolved],
+    findings: [served, unresolved],
     engines: { "web-tree-sitter": "0.27.1", "tree-sitter-java": "0.23.5" },
   });
 
@@ -220,13 +221,10 @@ test("findings become item facts with the shared base and their own evidence", a
   assert.ok(result.ok && result.value.status === "complete");
   const section = result.value.value.entrypoints;
   assert.ok(section.status === "complete");
-  const [complete, unknown] = section.value;
-  assert.ok(complete?.status === "complete" && complete.value.kind === "http-route" && unknown?.status === "unknown");
-  assert.equal(complete.value.path, "/orders");
-  assert.deepEqual(complete.evidence, [{ path: "src/Orders.java", line: 12 }]);
-  assert.equal(unknown.reason, "unresolved");
-  assert.deepEqual(unknown.evidence, [{ path: "src/Orders.java", line: 30 }]);
-  for (const fact of [result.value, section, complete, unknown]) {
+  assert.deepEqual(section.value, [served, unresolved]);
+  assert.deepEqual(Object.keys(section.value[0]!).toSorted(), ["evidence", "status", "value"]);
+  assert.deepEqual(Object.keys(section.value[1]!).toSorted(), ["evidence", "reason", "status"]);
+  for (const fact of [result.value, section]) {
     assert.equal(fact.schema, SCHEMA);
     assert.deepEqual(fact.snapshot, { repo: "shop", kind: "sha", sha: SHA });
     assert.deepEqual(fact.producer, { name: "ye-ast", version: "9.9.9" });
