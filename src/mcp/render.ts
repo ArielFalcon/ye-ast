@@ -47,6 +47,18 @@ function statusLines(fact: Fact<unknown>, indent = ""): string[] {
   return [`${indent}status: partial (cuts: ${cutCounts(fact.cuts)})`];
 }
 
+/** The paths the caller narrowed the answer to, when it did: what lies outside them was not read, so it is not known. */
+function scopeLines({ inputs: { declaredScope } }: Fact<unknown>): string[] {
+  const parts = [["include", declaredScope.include], ["exclude", declaredScope.exclude]] as const;
+  const named = parts.filter(([, globs]) => globs.length > 0).map(([label, globs]) => `${label} ${globs.join(", ")}`);
+  return named.length === 0 ? [] : [`scope: ${named.join("; ")} (paths outside it were not read)`];
+}
+
+/** What every answer opens with: its completeness, the scope it is relative to, and the snapshot it read. */
+function headerLines(fact: Fact<unknown>): string[] {
+  return [...statusLines(fact), ...scopeLines(fact), snapshotLine(fact.snapshot)];
+}
+
 /** A place after its file: the line, and the reason it could not be read when it carries one. */
 function placeRest(place: string, prefix: string): string {
   const [line, ...reason] = place.slice(prefix.length).split(" ");
@@ -113,7 +125,7 @@ function itemLine(item: Finding<Entrypoint>): string {
 }
 
 export function renderEntrypointMap(fact: Fact<EntrypointMap>): string {
-  const lines = [...statusLines(fact), snapshotLine(fact.snapshot)];
+  const lines = headerLines(fact);
   if (fact.status === "unknown") return lines.join("\n");
   const section = fact.value.entrypoints;
   lines.push("entrypoints:", ...statusLines(section, "  "));
@@ -177,7 +189,7 @@ function impactedSymbols(value: ImpactValue, detail: Detail): string[] {
 }
 
 export function renderImpact(fact: Fact<ImpactValue>, detail: Detail = "summary"): string {
-  const lines = [...statusLines(fact), snapshotLine(fact.snapshot)];
+  const lines = headerLines(fact);
   if (fact.status === "unknown") return lines.join("\n");
   const { value } = fact;
   if (value.mergeBase !== undefined) lines.push(`merge base: ${value.mergeBase}`);
@@ -200,7 +212,7 @@ function namedFiles(label: string, files: readonly string[]): string {
 }
 
 export function renderImporters(fact: Fact<ImportersValue>): string {
-  const lines = [...statusLines(fact), snapshotLine(fact.snapshot)];
+  const lines = headerLines(fact);
   if (fact.status === "unknown") return lines.join("\n");
   for (const entry of fact.value.files) {
     lines.push(`  ${entry.file}`, namedFiles("importers", entry.importers), namedFiles("users", entry.users), namedFiles("unresolved namers", entry.unresolvedNamers));

@@ -275,7 +275,7 @@ How the arguments behave:
 |---|---|
 | `revision` / `head` | Any git revision. Default: `HEAD`. |
 | `live` | Read the working tree instead of a revision. Requires `trusted`; exclusive with `revision`/`head`. |
-| `scope` | `{ include?: [globs], exclude?: [globs] }` over repository-relative paths; `exclude` wins. A path left out is **not read**, so keep the files that declare routes inside it. |
+| `scope` | `{ include?: [globs], exclude?: [globs] }` over repository-relative paths; `exclude` wins. A path outside the scope is **not read**, so callers and entrypoints through it are not known; the answer names its scope under its status. Use it to keep one service or package apart, not to shorten an answer. |
 | `budget` | `{ depth?, hubFanIn?, expansions? }`, positive integers, no defaults. A bound that stops a walk is reported as a cut, never as a silent truncation. |
 | `detail` | Text listing for `callers` and `impact`. Default: depth 0 and 1 listed, deeper symbols counted per file. `"full"` lists every symbol. The structured content always holds all of them. |
 
@@ -286,7 +286,7 @@ Working rules:
 - Call `ye_ast_callers` **before** deleting a declaration. Once it is gone, `ye_ast_impact` can only list the places
   that still name it.
 - Name symbols as they are declared in the file: `placeOrder`, or `OrderService.placeOrder` for a member.
-- Narrow with `scope` before raising `budget`: it is cheaper and keeps the answer focused.
+- To shorten an answer, rely on `detail`, not `scope`: a scope hides whatever lies outside it, routes included.
 
 ### 6. Read the answer correctly
 

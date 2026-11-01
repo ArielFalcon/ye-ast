@@ -436,6 +436,17 @@ test("every tool forwards the scope the caller sets and sends none it was not gi
   await session.close();
 });
 
+test("an answer read within a caller's scope says so under its status, and one without a scope does not", async () => {
+  const declaredScope = { languages: ["java"], frameworks: ["spring"], include: ["src/app/**"], exclude: ["**/*.spec.ts", "src/legacy/**"] };
+  const scoped = impactFact({ inputs: { ...base().inputs, declaredScope } });
+  const { session } = await setup({ ofChange: async () => ({ ok: true, value: scoped }) });
+  const text = textOf(await session.callTool("ye_ast_impact", { base: "main" }));
+  assert.match(text, /^status: complete\nscope: include src\/app\/\*\*; exclude \*\*\/\*\.spec\.ts, src\/legacy\/\*\* \(paths outside it were not read\)\n/);
+  const plain = textOf(await session.callTool("ye_ast_importers", { files: ["src/a.ts"] }));
+  assert.doesNotMatch(plain, /^scope:/m);
+  await session.close();
+});
+
 test("the server instructions say what to do at every kind of cut", async () => {
   const { session } = await setup();
   for (const kind of Object.keys(CUT_GUIDANCE)) assert.ok(session.instructions?.includes(`- ${kind}: `), kind);

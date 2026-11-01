@@ -56,7 +56,7 @@ When to call:
 - ye_ast_callers: before changing or deleting a function, method or class, or a range of lines, to learn what depends on it and which entrypoints it serves. Before deleting a declaration, ask here: once it is gone, ye_ast_impact can only list the places that still name it.
 - ye_ast_importers: before moving, renaming or deleting a file, or changing what it exports.
 - ye_ast_impact: after changing code and before reporting the work done or opening a pull request, with base set to the branch the change merges into; set live to true to include uncommitted edits. It repeats what ye_ast_callers already answered when the change stays inside the symbols asked about, so call ye_ast_impact once for the whole change before reporting it done, not once per symbol.
-- Every tool takes scope: include and exclude globs over repository-relative paths (exclude wins), to keep an answer to the part of the repository the task is about. A path left out is not read: keep the files that declare routes inside the scope, or the entrypoints they declare are not reached.
+- Every tool takes scope: include and exclude globs over repository-relative paths (exclude wins). A path outside the scope is not read at all, so callers and entrypoints through it are not known and the answer is complete only within the scope, which it names under its status. Use scope to keep one service or package of a repository apart; to shorten an answer, leave scope out and rely on detail.
 - ye-ast does not say which templates bind one input or output of a component; search the templates for the binding's name.
 
 Reading an answer:
@@ -111,7 +111,7 @@ const scope = z
     exclude: globs.describe("Paths matching one of these globs are left out, even when included."),
   })
   .optional()
-  .describe("The part of the repository the answer covers, as globs over repository-relative paths; the whole declared scope when omitted.");
+  .describe("The part of the repository ye-ast reads, as globs over repository-relative paths; the whole repository when omitted. Paths outside it are not read, so callers and entrypoints through them are not known.");
 
 /** The scope the caller set, or nothing, so a query receives no scope it was not given. */
 function scopeOf(requested: z.infer<typeof scope>): { scope?: ScopeRequest } {
