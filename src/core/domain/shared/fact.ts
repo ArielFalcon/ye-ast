@@ -151,11 +151,15 @@ export type Fact<T> = CompleteFact<T> | PartialFact<T> | UnknownFact;
 export type Sections = Readonly<Record<string, Fact<unknown>>>;
 
 /** A composite is complete only when every section is; otherwise it carries one `section` cut per incomplete section. */
-export function composeSections<S extends Sections>(base: FactBase, sections: S): CompleteFact<S> | PartialFact<S> {
-  const [first, ...rest] = Object.keys(sections)
+export function incompleteSectionCuts(sections: Sections): Cut[] {
+  return Object.keys(sections)
     .filter((name) => sections[name]?.status !== "complete")
     .sort()
     .map((name): Cut => ({ kind: "section", at: [name] }));
+}
+
+export function composeSections<S extends Sections>(base: FactBase, sections: S): CompleteFact<S> | PartialFact<S> {
+  const [first, ...rest] = incompleteSectionCuts(sections);
   if (first === undefined) return { ...base, status: "complete", value: sections };
   return { ...base, status: "partial", value: sections, cuts: [first, ...rest] };
 }

@@ -4,7 +4,7 @@ import { devNull, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { createDiffReader, type FileChange } from "../../domain/change/diff-reader.ts";
 import type { Result } from "../../domain/shared/result.ts";
-import type { CommitExport, ExportBudget, ExportedFile, ExportPlan, ExportStop, SkippedEntry, Vcs, VcsChanges, VcsFault } from "../../ports/vcs.port.ts";
+import type { CommitExport, ExportBudget, ExportedFile, ExportPlan, ExportStop, RemoteRef, SkippedEntry, Vcs, VcsChanges, VcsFault } from "../../ports/vcs.port.ts";
 import { claimPath, isConfinedPath, type PathClaims } from "./export-path-rules.ts";
 
 export interface GitRun {
@@ -69,6 +69,8 @@ class CatFileProtocolError extends Error {
 
 const MODE = { symlink: "120000", submodule: "160000" } as const;
 const REVISION_NOT_FOUND = 1;
+const NO_CONFIG_VALUE = 1;
+const REMOTE_URL = /^remote\.(.+?)\.url (.*)$/;
 const ABORTED_FAULT: VcsFault = { kind: "aborted", detail: "interrupted by the caller" };
 export const ABORTED: Result<never, VcsFault> = { ok: false, fault: ABORTED_FAULT };
 const SPAWN_FAILED = -1;
@@ -219,7 +221,30 @@ export function createGitVcs(deps: GitDeps = defaultGitDeps): Vcs & VcsChanges {
     }
   }
 
-  return { resolveCommit, exportCommit, mergeBase, diffCommits, diffDirectories };
+  /** `remote.<name>.url` under an empty configuration: the repository's own remotes, never a rewrite of the machine's. */
+  async function remotes(repo: string, signal?: AbortSignal): Promise<Result<readonly RemoteRef[], VcsFault>> {
+    const run = await deps.runIsolatedGit(repo, ["config", "--get-regexp", "^remote\\..*\\.url$"], signal);
+    if (signal?.aborted) return ABORTED;
+    if (run.code !== 0 && run.code !== NO_CONFIG_VALUE) return gitFailed(run);
+    return { ok: true, value: parseRemotes(run.stdout.toString("utf8")) };
+  }
+
+  return { resolveCommit, exportCommit, mergeBase, diffCommits, diffDirectories, remotes };
+}
+
+function compareText(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+function parseRemotes(output: string): RemoteRef[] {
+  return output
+    .split("\n")
+    .flatMap((line) => {
+      const match = REMOTE_URL.exec(line);
+      return match === null ? [] : [{ name: match[1] ?? "", url: match[2] ?? "" }];
+    })
+    .filter((remote) => remote.name !== "" && remote.url !== "")
+    .sort((a, b) => compareText(a.name, b.name) || compareText(a.url, b.url));
 }
 
 /** Fails with `not-repository-root` when `repo` is a subdirectory of its repository. */

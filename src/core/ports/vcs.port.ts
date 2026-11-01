@@ -44,6 +44,12 @@ export interface ExportPlan {
 /** The revision a request reads when it names none. */
 export const DEFAULT_REVISION = "HEAD";
 
+/** A remote the repository declares, by the name it is configured under and the URL it points at. */
+export interface RemoteRef {
+  name: string;
+  url: string;
+}
+
 export interface VcsFault {
   kind:
     | "unknown-revision"
@@ -77,6 +83,12 @@ export interface Vcs {
    * answers `aborted`. On a fault `destination` holds an unspecified part of the commit and the caller discards it.
    */
   exportCommit(repo: string, sha: string, destination: string, plan: ExportPlan, signal?: AbortSignal): Promise<Result<CommitExport, VcsFault>>;
+  /**
+   * The remotes the repository declares, by name and URL, sorted by name then URL. Read from the repository's own
+   * configuration under an empty user and system configuration, so no `insteadOf` rewrite of the machine changes a URL.
+   * A repository with no remote answers an empty list.
+   */
+  remotes(repo: string, signal?: AbortSignal): Promise<Result<readonly RemoteRef[], VcsFault>>;
 }
 
 /** What two commits have in common and where they differ; separate from `Vcs` since a map needs neither. */

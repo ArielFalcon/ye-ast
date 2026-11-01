@@ -11,6 +11,7 @@ import type { ImpactCallersRequest, ImpactFault, ImpactImportersRequest, ImpactO
 import { REDACTED, type Redaction } from "../core/ports/redaction.port.ts";
 import type { VcsFault } from "../core/ports/vcs.port.ts";
 import type { LiveFault } from "../core/ports/live-queries.port.ts";
+import type { WorkspaceQueries } from "../core/ports/workspace-queries.port.ts";
 import { createMcpServer, CUT_GUIDANCE } from "./server.ts";
 import { openSession, type Session } from "./test-session.ts";
 
@@ -108,16 +109,17 @@ async function setup(answers: Partial<Answers> = {}): Promise<{ session: Session
       return (answers.importers ?? (async () => ({ ok: true, value: { ...base(), status: "complete", value: IMPORTERS } as Fact<ImportersValue> })))(request);
     },
   };
-  const server = createMcpServer({ version: "0.0.0", entrypoints, impact, redaction: fakeRedaction, repository: REPOSITORY });
+  const workspace = { outwardNames: async () => ({ ok: true, value: { workspace: { repos: [] }, repositorySnapshots: [], sections: {}, candidates: [], unserved: [], repositories: [] } }) } as unknown as WorkspaceQueries;
+  const server = createMcpServer({ version: "0.0.0", entrypoints, impact, workspace, redaction: fakeRedaction, repository: REPOSITORY });
   return { session: await openSession(server), calls };
 }
 
 const textOf = (result: { content: { text: string }[] }): string => result.content.map((block) => block.text).join("\n");
 
-test("lists the four read tools, each described, none taking a repository", async () => {
+test("lists the five read tools, each described, none taking a top-level repository selector", async () => {
   const { session } = await setup();
   const tools = await session.listTools();
-  assert.deepEqual(tools.map((tool) => tool.name).sort(), ["ye_ast_callers", "ye_ast_entrypoints", "ye_ast_impact", "ye_ast_importers"]);
+  assert.deepEqual(tools.map((tool) => tool.name).sort(), ["ye_ast_callers", "ye_ast_entrypoints", "ye_ast_impact", "ye_ast_importers", "ye_ast_workspace"]);
   for (const tool of tools) {
     assert.ok((tool.description ?? "").length > 0, tool.name);
     for (const forbidden of ["repo", "repoId", "path", "repository"]) assert.equal(tool.inputSchema.properties?.[forbidden], undefined, `${tool.name}.${forbidden}`);
@@ -127,6 +129,9 @@ test("lists the four read tools, each described, none taking a repository", asyn
   assert.deepEqual(required("ye_ast_importers"), ["files"]);
   assert.deepEqual(required("ye_ast_callers"), ["targets"]);
   assert.deepEqual(required("ye_ast_entrypoints"), []);
+  assert.deepEqual(required("ye_ast_workspace"), []);
+  const repos = tools.find((tool) => tool.name === "ye_ast_workspace")?.inputSchema.properties?.["repos"] as { items?: { properties?: Record<string, unknown> } } | undefined;
+  assert.ok(repos?.items?.properties?.["path"] !== undefined, "a passed repository is named by a nested path");
   await session.close();
 });
 

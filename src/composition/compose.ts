@@ -10,6 +10,7 @@ import { liveScope } from "../core/domain/snapshot/live-export.ts";
 import { createFixedLayerAdmin } from "../core/application/fixed-layer/fixed-layer-admin.ts";
 import { createInstall } from "../core/application/install/install.ts";
 import { createImpactQueries } from "../core/application/impact/impact-queries.ts";
+import { createWorkspaceQueries } from "../core/application/topology/workspace-queries.ts";
 import { createIndexCache } from "../core/adapters/codegraph/cached-index.adapter.ts";
 import { createCodeGraph, SUPPORTED_STORE } from "../core/adapters/codegraph/codegraph.adapter.ts";
 import { STAGING_RULES_VERSION } from "../core/adapters/codegraph/stage-snapshot.ts";
@@ -24,6 +25,7 @@ import { createGitLocalExclude } from "../core/adapters/git/git-local-exclude.ad
 import { createGitVcs } from "../core/adapters/git/git-vcs.adapter.ts";
 import { createGitWorkingTree } from "../core/adapters/git/git-working-tree.adapter.ts";
 import { createContractRoutes } from "../core/adapters/openapi/contract-document.adapter.ts";
+import { createWorkspaceEvidence } from "../core/adapters/workspace/outward-names.adapter.ts";
 import { createPatternRedaction } from "../core/adapters/redaction/pattern-redaction.adapter.ts";
 import { createSpringRoutesExtractor } from "../core/adapters/spring/spring-routes.adapter.ts";
 import { createJavaParser } from "../core/adapters/tree-sitter/java-parser.adapter.ts";
@@ -36,6 +38,7 @@ import { sortFindings } from "../core/domain/entrypoints/finding-order.ts";
 import type { EntrypointExtractor } from "../core/ports/entrypoint-extractor.port.ts";
 import type { EntrypointQueries } from "../core/ports/entrypoint-queries.port.ts";
 import type { ImpactQueries } from "../core/ports/impact-queries.port.ts";
+import type { WorkspaceQueries } from "../core/ports/workspace-queries.port.ts";
 import type { Redaction } from "../core/ports/redaction.port.ts";
 import type { TrustRecordReader } from "../core/ports/trust-record.port.ts";
 import type { ExportBudget } from "../core/ports/vcs.port.ts";
@@ -69,6 +72,7 @@ export interface ComposedQueries {
   version: string;
   entrypoints: EntrypointQueries;
   impact: ImpactQueries;
+  workspace: WorkspaceQueries;
   redaction: Redaction;
   /**
    * Builds the live mirror of `repo` for the default scope when it is `trusted` and has none, so the first live query
@@ -139,7 +143,20 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
     }
   };
   const impact = measurement === undefined ? bareImpact : measuredImpact(bareImpact, measurement);
-  return { version, entrypoints, impact, redaction, warmLive };
+  const workspace = createWorkspaceQueries({
+    vcs,
+    scratch,
+    reader,
+    extractor,
+    digest,
+    matcher,
+    evidence: createWorkspaceEvidence(),
+    producer: { name: PRODUCER_NAME, version },
+    engines: entrypointEngines,
+    ...budget,
+    ...trust,
+  });
+  return { version, entrypoints, impact, workspace, redaction, warmLive };
 }
 
 export function composeCli(options: CompositionOptions = {}): (argv: readonly string[], io: CliIo) => Promise<number> {

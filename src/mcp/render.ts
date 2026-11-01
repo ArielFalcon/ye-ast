@@ -8,6 +8,8 @@ import { compareText } from "../core/domain/shared/code-node.ts";
 import type { Cut, Evidence, Fact, Finding, SnapshotRef } from "../core/domain/shared/fact.ts";
 import type { ImpactFault } from "../core/ports/impact-queries.port.ts";
 import type { LiveStaleNotice } from "../core/ports/live-queries.port.ts";
+import type { NameCandidate, OutwardName } from "../core/domain/topology/outward-name.ts";
+import type { WorkspaceValue } from "../core/ports/workspace-queries.port.ts";
 
 const NONE = "  (none)";
 const CUTS = "cuts:";
@@ -234,4 +236,29 @@ export function renderFault(fault: { kind: string; detail: string } | ImpactFaul
 /** The line that opens the text of a live answer the working tree has moved past. */
 export function renderStale(notice: LiveStaleNotice): string {
   return `stale: the working tree changed after this answer, which reflects state ${notice.stateId}: ${notice.changed.join(", ")}`;
+}
+
+function candidateLine(candidate: NameCandidate): string {
+  return `  - ${candidate.name} -> ${candidate.repo} (${candidate.basis})`;
+}
+
+function outwardLine(name: OutwardName): string {
+  return `  - ${name.kind} ${name.name} (${name.evidence.map(evidenceText).join(", ")})`;
+}
+
+export function renderWorkspace(fact: Fact<WorkspaceValue>): string {
+  const lines = headerLines(fact);
+  if (fact.status === "unknown") return lines.join("\n");
+  const { value } = fact;
+  lines.push(`repositories (${value.workspace.repos.length}): ${value.repositorySnapshots.map(({ repo, snapshot }) => `${repo}@${snapshot.kind === "sha" ? snapshot.sha : snapshot.stateId}`).join(", ")}`);
+  lines.push("outward names:");
+  for (const repo of value.workspace.repos) {
+    const section = value.sections[repo];
+    if (section === undefined || section.status === "unknown") continue;
+    lines.push(`  ${repo}:`, ...list(section.value.names.map(outwardLine)));
+  }
+  lines.push(`served by a local repository (${value.candidates.length}):`, ...list(value.candidates.map(candidateLine)));
+  lines.push(`no local repository serves (${value.unserved.length}):`, ...list(value.unserved.map((name) => `  - ${name.kind} ${name.name}`)));
+  lines.push(...cutsBlock([...cutsOf(fact), ...Object.values(value.sections).flatMap(cutsOf)]));
+  return lines.join("\n");
 }

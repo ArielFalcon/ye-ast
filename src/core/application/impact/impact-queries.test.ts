@@ -65,6 +65,7 @@ function setup(options: Options = {}) {
       options.onDiffDirectories?.();
       return options.directoryChanges ?? { ok: true, value: [] };
     },
+    remotes: async () => ({ ok: true, value: [] }),
     exportCommit: async (_repo, sha, destination, plan) => {
       log.exported.push(sha);
       const listed = options.exports?.[sha] ?? { files: [{ path: "src/A.java", blob: "1", written: true }], skipped: [] };

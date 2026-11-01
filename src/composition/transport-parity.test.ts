@@ -7,6 +7,7 @@ import { declaredScope } from "../core/domain/map/entrypoint-map.ts";
 import { SCHEMA, type FactBase } from "../core/domain/shared/fact.ts";
 import type { EntrypointQueries } from "../core/ports/entrypoint-queries.port.ts";
 import type { ImpactQueries } from "../core/ports/impact-queries.port.ts";
+import type { WorkspaceQueries } from "../core/ports/workspace-queries.port.ts";
 import type { Install } from "../core/ports/install.port.ts";
 import { REDACTED, type Redaction } from "../core/ports/redaction.port.ts";
 import { createMcpServer } from "../mcp/server.ts";
@@ -36,6 +37,7 @@ const redaction: Redaction = {
 
 interface Family {
   impact: ImpactQueries;
+  workspace: WorkspaceQueries;
   budgets: (ImpactBudget | undefined)[];
 }
 
@@ -46,7 +48,8 @@ function family(): Family {
     return { ok: true, value: FACT } as never;
   };
   const impact = { ofChange: answer, callers: answer, importers: answer } as unknown as ImpactQueries;
-  return { impact, budgets };
+  const workspace = { outwardNames: answer } as unknown as WorkspaceQueries;
+  return { impact, workspace, budgets };
 }
 
 const entrypoints = { map: async () => ({ ok: true, value: {} }) } as unknown as EntrypointQueries;
@@ -89,6 +92,7 @@ async function throughMcp(budget: unknown, budgets: (ImpactBudget | undefined)[]
     version: "0.0.0",
     entrypoints,
     impact: { ofChange: async (request: { budget?: ImpactBudget }) => (budgets.push(request.budget), { ok: true, value: FACT } as never) } as unknown as ImpactQueries,
+    workspace: { outwardNames: async () => ({ ok: true, value: FACT } as never) } as unknown as WorkspaceQueries,
     redaction,
     repository: { path: REPO, repoId: "shop" },
   }));

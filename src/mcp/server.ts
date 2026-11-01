@@ -10,7 +10,9 @@ import type { EntrypointQueries } from "../core/ports/entrypoint-queries.port.ts
 import type { CallersTarget, ImpactQueries } from "../core/ports/impact-queries.port.ts";
 import type { Redaction } from "../core/ports/redaction.port.ts";
 import { DEFAULT_REVISION } from "../core/ports/vcs.port.ts";
-import { renderEntrypointMap, renderFault, renderImpact, renderImporters, renderStale, type Detail } from "./render.ts";
+import type { WorkspaceRepositoryRequest } from "../core/ports/workspace-repos.port.ts";
+import type { WorkspaceQueries } from "../core/ports/workspace-queries.port.ts";
+import { renderEntrypointMap, renderFault, renderImpact, renderImporters, renderStale, renderWorkspace, type Detail } from "./render.ts";
 
 /** The key of the result's `_meta` that carries a stale notice. */
 export const LIVE_META = "ye-ast/live";
@@ -20,6 +22,7 @@ export interface McpDeps {
   /** Read query families only: nothing here can write, by type. */
   entrypoints: EntrypointQueries;
   impact: ImpactQueries;
+  workspace: WorkspaceQueries;
   redaction: Redaction;
   /** The one repository every tool reads: its root and the stable name recorded in every snapshot. */
   repository: { path: string; repoId: string };
@@ -56,6 +59,7 @@ When to call:
 - ye_ast_callers: before changing or deleting a function, method or class, or a range of lines, to learn what depends on it and which entrypoints it serves. Before deleting a declaration, ask here: once it is gone, ye_ast_impact can only list the places that still name it.
 - ye_ast_importers: before moving, renaming or deleting a file, or changing what it exports.
 - ye_ast_impact: after changing code and before reporting the work done or opening a pull request, with base set to the branch the change merges into; set live to true to include uncommitted edits. It repeats what ye_ast_callers already answered when the change stays inside the symbols asked about, so call ye_ast_impact once for the whole change before reporting it done, not once per symbol.
+- ye_ast_workspace: when the work crosses repositories (a frontend calling services, a service calling another, a message between them). It lists the hosts, path prefixes, configuration URLs, dependency coordinates, remotes and registries the repository writes outward, the local repository that serves each one and the basis that says why, and the names no repository given serves. Pass the other clones with repos, then pass the same calls again with workspace so the links between them are joined. It makes no network request: a name nothing serves is the next clone to make with your own tools.
 - Every tool takes scope: include and exclude globs over repository-relative paths (exclude wins). A path outside the scope is not read at all, so callers and entrypoints through it are not known and the answer is complete only within the scope, which it names under its status. Use scope to keep one service or package of a repository apart; to shorten an answer, leave scope out and rely on detail.
 - ye-ast does not say which templates bind one input or output of a component; search the templates for the binding's name.
 
@@ -280,6 +284,50 @@ export function createMcpServer(deps: McpDeps): McpServer {
       answer(
         (onStale) => deps.impact.importers({ repo: repository.path, repoId: repository.repoId, ...atRevision(requested, isLive, onStale), files, ...scopeOf(paths), signal: ctx.mcpReq.signal }),
         renderImporters,
+      ),
+  );
+
+  const askedRepository = (requested: { path: string; id?: string | undefined; revision?: string | undefined }): WorkspaceRepositoryRequest => ({
+    path: requested.path,
+    ...(requested.id === undefined ? {} : { id: requested.id }),
+    ...(requested.revision === undefined ? {} : { revision: requested.revision }),
+  });
+
+  const workspaceRepo = z.strictObject({
+    path: z.string().min(1).describe("Path of the root of a local git repository."),
+    id: z.string().min(1).optional().describe("The name its snapshot carries; the directory name when omitted. Never a path."),
+    revision: z.string().min(1).optional().describe("The revision to read; HEAD when omitted."),
+  });
+
+  server.registerTool(
+    "ye_ast_workspace",
+    {
+      title: "Repositories a workspace names",
+      description: `The outward names this repository (and any repos passed) writes: HTTP hosts and path prefixes, configuration URLs, message destinations, dependency coordinates, its own remote and the registries it declares, each with path:line evidence; the local repositories that serve each name, with basis exact-name, artifact, remote or route-overlap; and the names no repository given serves. Use it to learn which clones a cross-repository question needs. It reads only local repositories and makes no network request. ${COMPLETENESS}`,
+      inputSchema: z.strictObject({
+        revision,
+        scope,
+        repos: z.array(workspaceRepo).min(1).optional().describe("Other local repositories to read beside the bound one."),
+        gateways: z
+          .array(z.strictObject({ prefix: z.string().min(1).describe("The gateway prefix a call carries, such as a first path segment."), repo: z.string().min(1).describe("The repository id it routes to.") }))
+          .min(1)
+          .optional()
+          .describe("Prefixes the caller declares; a declared prefix overrides the one inferred from route overlap."),
+      }),
+      outputSchema: FACT_OUTPUT,
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    },
+    ({ revision: requested, scope: paths, repos, gateways }, ctx) =>
+      answer(
+        () =>
+          deps.workspace.outwardNames({
+            repo: { path: repository.path, id: repository.repoId, ...(requested === undefined ? {} : { revision: requested }) },
+            ...(repos === undefined ? {} : { repos: repos.map(askedRepository) }),
+            ...(gateways === undefined ? {} : { gateways }),
+            ...scopeOf(paths),
+            signal: ctx.mcpReq.signal,
+          }),
+        renderWorkspace,
       ),
   );
 
