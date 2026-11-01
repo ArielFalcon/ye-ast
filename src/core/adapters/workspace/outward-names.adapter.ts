@@ -10,7 +10,7 @@ const PROPERTIES_URL = /^\s*[^#!\s][^=]*url\s*=\s*(\S+)\s*$/;
 const DEPENDENCY = /<dependency>([\s\S]*?)<\/dependency>/g;
 const REPOSITORY = /<repository>([\s\S]*?)<\/repository>/g;
 const TAG = /<([a-zA-Z]+)\s*>([^<]*)<\/\1>/g;
-const PARENT = /<parent>[\s\S]*?<\/parent>/;
+const ELEMENT = /<(\/?)([a-zA-Z]+)[^>]*?(\/?)>/g;
 
 export function createWorkspaceEvidence(): WorkspaceEvidence {
   return { names: (files) => gatherNames(files.flatMap(namesOf)), artifacts: (files) => [...new Set(files.flatMap(artifactsOf))].sort() };
@@ -99,11 +99,30 @@ function artifactsOf(file: SourceFile): string[] {
     return typeof name === "string" ? [name] : [];
   }
   if (!/(^|\/)pom\.xml$/.test(file.path)) return [];
-  const own = tagsOf(file.content.replace(PARENT, ""));
+  const own = projectTags(file.content);
   const artifactId = own.get("artifactId");
   if (artifactId === undefined) return [];
   const groupId = own.get("groupId");
   return [groupId === undefined ? artifactId : `${groupId}:${artifactId}`];
+}
+
+/** The text of the elements directly inside a pom's root element, where the project states its own coordinates. */
+function projectTags(content: string): Map<string, string> {
+  const tags = new Map<string, string>();
+  let depth = 0;
+  let open: { name: string; end: number } | undefined;
+  for (const match of content.matchAll(ELEMENT)) {
+    const [whole, closing, name = "", selfClosing] = match;
+    if (selfClosing === "/") continue;
+    if (closing === "/") {
+      if (depth === 2 && open?.name === name) tags.set(name, content.slice(open.end, match.index).trim());
+      depth -= 1;
+      continue;
+    }
+    depth += 1;
+    open = depth === 2 ? { name, end: match.index + whole.length } : open;
+  }
+  return tags;
 }
 
 function tagsOf(body: string): Map<string, string> {

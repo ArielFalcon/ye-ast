@@ -9,6 +9,7 @@ import { manifestDependencies, createModuleResolver, type ModuleResolver } from 
 const VERBS: ReadonlySet<string> = new Set(["get", "head", "post", "put", "patch", "delete", "options", "request"]);
 const HTTP_CLIENT_PACKAGE = "@angular/common/http";
 const PLACEHOLDER = "{}";
+const UNDECIDED = Symbol("undecided");
 
 /** What one file declares at its top level, and the classes it holds, as the reader needs them. */
 interface FileShape {
@@ -162,6 +163,23 @@ function injectsAngularHttpClient(shape: FileShape, expression: ts.Expression): 
   return expression.expression.getText(shape.source) === "inject" && isAngularHttpClientName(shape, first.text);
 }
 
+/** Whether an expression names `httpResource` or one of its variants (`httpResource.text`), imported from Angular. */
+function isHttpResource(shape: FileShape, callee: ts.Expression): boolean {
+  const named = ts.isPropertyAccessExpression(callee) ? callee.expression : callee;
+  return isHttpPackageName(shape, named, "httpResource");
+}
+
+function isHttpPackageName(shape: FileShape, expression: ts.Expression, name: string): boolean {
+  if (!ts.isIdentifier(expression)) return false;
+  const imported = shape.imports.get(expression.text);
+  return imported?.module === HTTP_CLIENT_PACKAGE && imported.imported === name;
+}
+
+function propertyOf(object: ts.ObjectLiteralExpression, name: string): ts.Expression | undefined {
+  const property = object.properties.find((candidate): candidate is ts.PropertyAssignment => ts.isPropertyAssignment(candidate) && candidate.name.getText() === name);
+  return property?.initializer;
+}
+
 /** Whether a name is Angular's `HttpClient`: the name alone is not enough, its import decides. */
 function isAngularHttpClientName(shape: FileShape, name: string | undefined): boolean {
   if (name === undefined) return false;
@@ -231,7 +249,8 @@ class Reader {
   /** The target of the call when it is a request the project makes out of itself; undefined for every other call. */
   private async target(shape: FileShape, call: ts.CallExpression): Promise<Finding<HttpTarget> | undefined> {
     const callee = call.expression;
-    if (ts.isIdentifier(callee) && callee.text === "fetch") return this.request(shape, call, "GET");
+    if (ts.isIdentifier(callee) && callee.text === "fetch") return this.request(shape, call, call.arguments[0], "GET");
+    if (isHttpResource(shape, callee)) return this.resource(shape, call);
     if (!ts.isPropertyAccessExpression(callee)) return undefined;
     const name = callee.name.text;
     if (!VERBS.has(name) && name !== "fetch") return undefined;
@@ -240,31 +259,49 @@ class Reader {
     const isHttpClient = isAngularHttpClientName(shape, owner);
     const isWrapper = await this.wrapperOf(shape, owner, name === "fetch" ? "request" : name);
     if (!isHttpClient && !isWrapper) return undefined;
-    return this.request(shape, call, name === "fetch" ? "GET" : verbOf(name), name === "request" ? await this.explicitMethod(shape, call) : undefined);
+    if (name !== "request") return this.request(shape, call, call.arguments[0], name === "fetch" ? "GET" : verbOf(name));
+    return this.explicitRequest(shape, call);
   }
 
-  private async explicitMethod(shape: FileShape, call: ts.CallExpression): Promise<HttpTarget["method"] | undefined> {
-    const [method] = call.arguments;
-    if (method === undefined) return undefined;
-    const text = await this.evaluate(shape, method);
+  /** `request(method, url)`, or `request(new HttpRequest(method, url))`: the method is an argument, never assumed. */
+  private async explicitRequest(shape: FileShape, call: ts.CallExpression): Promise<Finding<HttpTarget>> {
+    const [first, second] = call.arguments;
+    const sent = first !== undefined && ts.isNewExpression(first) && isHttpPackageName(shape, first.expression, "HttpRequest") ? first.arguments : undefined;
+    const [method, path] = sent ?? [first, second];
+    return this.request(shape, call, path, method === undefined ? undefined : await this.methodOf(shape, method));
+  }
+
+  /** `httpResource(() => url)` is a GET of the URL; `httpResource(() => ({ url, method }))` states its method, GET when it names none. */
+  private async resource(shape: FileShape, call: ts.CallExpression): Promise<Finding<HttpTarget>> {
+    const [first] = call.arguments;
+    const returned = first !== undefined && (ts.isArrowFunction(first) || ts.isFunctionExpression(first)) ? bodyExpression(first) : first;
+    const described = returned === undefined ? undefined : objectOf(returned);
+    if (described === undefined) return this.request(shape, call, returned, "GET");
+    const method = propertyOf(described, "method");
+    return this.request(shape, call, propertyOf(described, "url"), method === undefined ? "GET" : await this.methodOf(shape, method));
+  }
+
+  private async methodOf(shape: FileShape, expression: ts.Expression): Promise<HttpTarget["method"] | undefined> {
+    const text = await this.evaluate(shape, expression);
     return text === undefined ? undefined : verbOf(text.toLowerCase());
   }
 
-  private async request(shape: FileShape, call: ts.CallExpression, method: HttpTarget["method"], explicit?: HttpTarget["method"]): Promise<Finding<HttpTarget>> {
+  private async request(shape: FileShape, call: ts.CallExpression, pathExpression: ts.Expression | undefined, method: HttpTarget["method"] | undefined): Promise<Finding<HttpTarget>> {
     const at = { path: shape.source.fileName, line: lineOf(shape.source, call) };
-    const [first] = call.arguments;
-    const path = first === undefined ? undefined : await this.evaluate(shape, first);
-    if (path === undefined) return { status: "unknown", reason: "unresolved", evidence: [at] };
+    const unknown: Finding<HttpTarget> = { status: "unknown", reason: "unresolved", evidence: [at] };
+    const path = pathExpression === undefined ? undefined : await this.evaluate(shape, pathExpression);
+    if (path === undefined || method === undefined) return unknown;
     const base = await this.baseUrl(shape, call);
-    return { status: "complete", value: { method: explicit ?? method, path: normalizePath(path), ...(base === undefined ? {} : { base }) }, evidence: [at] };
+    if (base === UNDECIDED) return unknown;
+    return { status: "complete", value: { method, path: normalizePath(path), ...(base === undefined ? {} : { base }) }, evidence: [at] };
   }
 
-  private async baseUrl(shape: FileShape, call: ts.CallExpression): Promise<string | undefined> {
+  /** The base URL the call's options declare: undefined when they declare none, `UNDECIDED` when the snapshot does not decide it. */
+  private async baseUrl(shape: FileShape, call: ts.CallExpression): Promise<string | typeof UNDECIDED | undefined> {
     for (const argument of call.arguments.slice(1)) {
       if (!ts.isObjectLiteralExpression(argument)) continue;
-      for (const property of argument.properties) {
-        if (ts.isPropertyAssignment(property) && property.name.getText(shape.source) === "baseUrl") return await this.evaluate(shape, property.initializer);
-      }
+      const declared = propertyOf(argument, "baseUrl");
+      if (declared !== undefined) return (await this.evaluate(shape, declared)) ?? UNDECIDED;
     }
     return undefined;
   }

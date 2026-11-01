@@ -92,3 +92,33 @@ test("a base URL the call declares is carried beside the path", async () => {
 
   assert.deepEqual(sites(await reader.of([component], "shop-web")), ["GET /route via https://maps.example.com/directions@src/app/app.component.ts:7"]);
 });
+
+/** A component that holds `HttpClient` and makes the request the body lines state. */
+function component(...body: string[]): { path: string; content: string } {
+  return source(
+    "src/app/app.component.ts",
+    ["import { HttpClient, HttpRequest, httpResource } from '@angular/common/http'", "import { inject } from '@angular/core'", "export class AppComponent {", "  private readonly http = inject(HttpClient)", "  load(method: string): void {", ...body, "  }", "}"].join("\n"),
+  );
+}
+
+test("a request with an explicit method takes the method from its first argument and the path from its second", async () => {
+  assert.deepEqual(sites(await reader.of([component("    this.http.request('PUT', '/orders/7')")], "shop-web")), ["PUT /orders/7@src/app/app.component.ts:6"]);
+});
+
+test("a request whose method the snapshot does not decide is an unknown target, never a guessed method", async () => {
+  assert.deepEqual(sites(await reader.of([component("    this.http.request(method, '/orders/7')")], "shop-web")), ["unknown unresolved@src/app/app.component.ts:6"]);
+});
+
+test("a request sent as an HttpRequest takes its method and path from the request it constructs", async () => {
+  assert.deepEqual(sites(await reader.of([component("    this.http.request(new HttpRequest('DELETE', '/orders/7'))")], "shop-web")), ["DELETE /orders/7@src/app/app.component.ts:6"]);
+});
+
+test("an httpResource is a call site: a URL its function returns is a GET, a request object states its method", async () => {
+  const found = await reader.of([component("    httpResource(() => `/orders/${method}`)", "    httpResource.text(() => ({ url: '/receipts', method: 'POST' }))")], "shop-web");
+
+  assert.deepEqual(sites(found), ["GET /orders/{}@src/app/app.component.ts:6", "POST /receipts@src/app/app.component.ts:7"]);
+});
+
+test("a base URL the call declares but the snapshot does not decide is an unknown target, never a call with no base", async () => {
+  assert.deepEqual(sites(await reader.of([component("    this.http.get('/route', { baseUrl: method })")], "shop-web")), ["unknown unresolved@src/app/app.component.ts:6"]);
+});

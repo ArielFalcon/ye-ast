@@ -38,3 +38,9 @@ test("the artifact a repository declares as its own is read outside its parent b
 
   assert.deepEqual(evidence.artifacts([{ path: "pom.xml", content: pom }]), ["com.shop:events-lib"]);
 });
+
+test("the artifact a repository declares as its own ignores the coordinates of its dependencies and plugins", () => {
+  const pom = ["<project>", "  <groupId>com.shop</groupId>", "  <artifactId>orders-svc</artifactId>", "  <dependencies>", "    <dependency>", "      <groupId>com.shop</groupId>", "      <artifactId>events-lib</artifactId>", "    </dependency>", "  </dependencies>", "  <build>", "    <plugins>", "      <plugin>", "        <groupId>org.tools</groupId>", "        <artifactId>mutation-plugin</artifactId>", "      </plugin>", "    </plugins>", "  </build>", "</project>"].join("\n");
+
+  assert.deepEqual(evidence.artifacts([{ path: "pom.xml", content: pom }]), ["com.shop:orders-svc"]);
+});
