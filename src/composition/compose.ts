@@ -23,6 +23,7 @@ import { createPathMatcher } from "../core/adapters/fs/path-matcher.adapter.ts";
 import { createGitLocalExclude } from "../core/adapters/git/git-local-exclude.adapter.ts";
 import { createGitVcs } from "../core/adapters/git/git-vcs.adapter.ts";
 import { createGitWorkingTree } from "../core/adapters/git/git-working-tree.adapter.ts";
+import { createContractRoutes } from "../core/adapters/openapi/contract-document.adapter.ts";
 import { createPatternRedaction } from "../core/adapters/redaction/pattern-redaction.adapter.ts";
 import { createSpringRoutesExtractor } from "../core/adapters/spring/spring-routes.adapter.ts";
 import { createJavaParser } from "../core/adapters/tree-sitter/java-parser.adapter.ts";
@@ -79,9 +80,10 @@ export interface ComposedQueries {
 export function composeQueries(options: Omit<CompositionOptions, "signal"> = {}): ComposedQueries {
   const version = ownVersion();
   const angular = createAngularRoutesExtractor();
+  const contracts = createContractRoutes();
   const extractor: EntrypointExtractor = {
     extract: async (files) => {
-      const spring = await createSpringRoutesExtractor(await createJavaParser()).extract(files);
+      const spring = await createSpringRoutesExtractor(await createJavaParser(), contracts).extract(files);
       return sortFindings([...spring, ...(await angular.extract(files))]);
     },
   };

@@ -1,6 +1,7 @@
 import type { Entrypoint } from "../entrypoints/entrypoint.ts";
 import { isJavaSource } from "../languages/java.ts";
 import { isJvmBuildFile } from "../languages/jvm-build.ts";
+import { isContractDocument } from "../languages/openapi.ts";
 import { isUncoveredSource } from "../languages/uncovered.ts";
 import { isSpringConfigFile } from "../languages/spring-config.ts";
 import { isAngularTemplate, isModuleConfigFile, isPackageManifest, isTypeScriptSource } from "../languages/typescript.ts";
@@ -33,13 +34,14 @@ const SUBMODULE = "submodule";
 
 /**
  * What the export writes and digests: the Java sources the extractor parses, the build files it reads for a declared
- * source generator, the Spring config files it reads for the base path, and for Angular the TypeScript sources outside
+ * source generator, the contract documents it joins to the code that implements them, the Spring config files it reads
+ * for the base path, and for Angular the TypeScript sources outside
  * tests, the `package.json` files that name the framework of a project, the `tsconfig` files that resolve a module specifier and
  * the `.html` templates a component names, which the relation reader parses and a change to which must invalidate the
  * fact.
  */
 export function isInMapScope(path: string): boolean {
-  return isJavaSource(path) || isJvmBuildFile(path) || isSpringConfigFile(path) || isTypeScriptSource(path) || isPackageManifest(path) || isModuleConfigFile(path) || isAngularTemplate(path);
+  return isJavaSource(path) || isJvmBuildFile(path) || isContractDocument(path) || isSpringConfigFile(path) || isTypeScriptSource(path) || isPackageManifest(path) || isModuleConfigFile(path) || isAngularTemplate(path);
 }
 
 export function declaredScope(request: ScopeRequest = {}): DeclaredScope {

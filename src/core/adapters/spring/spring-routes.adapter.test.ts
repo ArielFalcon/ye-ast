@@ -1,8 +1,9 @@
 import { before, test } from "node:test";
 import assert from "node:assert/strict";
 import type { Entrypoint } from "../../domain/entrypoints/entrypoint.ts";
-import type { BasePath, HttpRoute } from "../../domain/entrypoints/http-route.ts";
+import type { BasePath, HttpMethod, HttpRoute } from "../../domain/entrypoints/http-route.ts";
 import type { Finding } from "../../domain/shared/fact.ts";
+import type { ContractOperation } from "../../ports/contract-routes.port.ts";
 import type { EntrypointExtractor, SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { Node } from "web-tree-sitter";
 import { createJavaParser, type JavaParser } from "../tree-sitter/java-parser.adapter.ts";
@@ -14,9 +15,11 @@ const MAIN = { path: "src/main/java/app/Main.java", content: BOOT };
 const ALIAS = "import org.springframework.core.annotation.AliasFor;";
 
 let extractor: EntrypointExtractor;
+let parser: JavaParser;
 
 before(async () => {
-  extractor = createSpringRoutesExtractor(await createJavaParser());
+  parser = await createJavaParser();
+  extractor = createSpringRoutesExtractor(parser);
 });
 
 function file(path: string, content: string): SourceFile {
@@ -2459,4 +2462,76 @@ test("a job whose cron is Spring's disabled marker is no entrypoint: Spring neve
   const findings = await extractor.extract([app("Jobs", `@Component class Jobs {\n  @Scheduled(cron = "-") void off() {}\n}`, `${SCHEDULING} ${COMPONENT}`)]);
 
   assert.deepEqual(findings, []);
+});
+
+const CONTRACT = "src/main/resources/openapi/api-definition.yaml";
+
+/** The extractor with the operations a contract document of the repository declares, as the port hands them over. */
+function contracting(operations: readonly Finding<ContractOperation>[]): EntrypointExtractor {
+  return createSpringRoutesExtractor(parser, { operations: () => operations });
+}
+
+function operation(operationId: string, method: HttpMethod, path: string, line = 5): Finding<ContractOperation> {
+  return { status: "complete", value: { operationId, method, path, document: CONTRACT, line }, evidence: [{ path: CONTRACT, line }] };
+}
+
+test("an @Override method that a contract operationId names is a route with the contract's verb and path", async () => {
+  const controller = app("OrdersController", `@RestController class OrdersController implements OrdersApi {\n  @Override public List<String> createNewOrder() { return null; }\n}`);
+  extractor = contracting([operation("createNewOrder", "POST", "/orders")]);
+
+  const findings = await extractor.extract([controller, MAIN]);
+
+  assert.deepEqual(routes(findings), ["POST /orders"]);
+  assert.deepEqual(handlers(findings), ["OrdersController.createNewOrder@5"]);
+  assert.deepEqual(
+    findings.flatMap((finding) => (finding.status === "complete" ? [finding.evidence.map((evidence) => `${evidence.path}:${evidence.line}`)] : [])),
+    [[`${controller.path}:5`, `${CONTRACT}:5`]],
+  );
+});
+
+test("a contract whose operations no class of the snapshot implements gives no route", async () => {
+  extractor = contracting([operation("addPet", "POST", "/pet"), operation("getPet", "GET", "/pet/{petId}")]);
+
+  const findings = await extractor.extract([app("OrdersController", `@RestController class OrdersController implements OrdersApi {\n  @Override public void createNewOrder() {}\n}`), MAIN]);
+
+  assert.deepEqual(routes(findings), []);
+  assert.deepEqual(gaps(findings), ["no-extractor@4", "no-extractor@5"]);
+});
+
+test("an override that no contract operation names stays an unknown item at the method", async () => {
+  extractor = contracting([operation("createNewOrder", "POST", "/orders")]);
+
+  const findings = await extractor.extract([
+    app("OrdersController", `@RestController class OrdersController implements OrdersApi {\n  @Override public void createNewOrder() {}\n  @Override public void deleteOrder() {}\n}`),
+  ]);
+
+  assert.deepEqual(routes(findings), ["POST /orders"]);
+  assert.deepEqual(gaps(findings), ["no-extractor@4", "no-extractor@6"]);
+});
+
+test("an operationId that two contract documents declare picks neither: the handler is unknown", async () => {
+  const other = { ...operation("createNewOrder", "PUT", "/orders"), evidence: [{ path: "swagger/other.yaml", line: 9 }] };
+  extractor = contracting([operation("createNewOrder", "POST", "/orders"), other]);
+
+  const findings = await extractor.extract([app("OrdersController", `@RestController class OrdersController implements OrdersApi {\n  @Override public void createNewOrder() {}\n}`)]);
+
+  assert.deepEqual(routes(findings), []);
+  assert.deepEqual(gaps(findings), ["no-extractor@4", "unresolved@5"]);
+});
+
+test("a handler that declares its own mapping keeps the route the annotation makes, never a second one from the contract", async () => {
+  extractor = contracting([operation("own", "POST", "/orders")]);
+
+  const findings = await extractor.extract([app("OrdersController", `@RestController @RequestMapping("/own") class OrdersController implements OrdersApi {\n  @Override @GetMapping("/own") public void own() {}\n}`)]);
+
+  assert.deepEqual(routes(findings), ["GET /own/own"]);
+});
+
+test("an override a contract names but that declares a mapping of its own keeps the absent supertype as an item", async () => {
+  extractor = contracting([operation("own", "GET", "/own")]);
+
+  const findings = await extractor.extract([app("OrdersController", `@RestController class OrdersController implements OrdersApi {\n  @Override @GetMapping("/own") public void own() {}\n}`)]);
+
+  assert.deepEqual(routes(findings), []);
+  assert.deepEqual(gaps(findings), ["no-extractor@4", "no-extractor@5"]);
 });

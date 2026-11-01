@@ -4,6 +4,7 @@ import type { BasePath, HttpMethod } from "../../domain/entrypoints/http-route.t
 import { isJavaSource, isJvmTestFile } from "../../domain/languages/java.ts";
 import { isSpringConfigFile, resourcesOfSource } from "../../domain/languages/spring-config.ts";
 import type { Evidence, Finding } from "../../domain/shared/fact.ts";
+import type { ContractOperation, ContractRoutes } from "../../ports/contract-routes.port.ts";
 import type { EntrypointExtractor, SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { JavaParser, JavaSyntaxTree } from "../tree-sitter/java-parser.adapter.ts";
 import { delegateMethodsOf, sourceGeneratorIn } from "./api-delegates.ts";
@@ -63,18 +64,45 @@ interface Controller {
   speculative: boolean;
   project: JavaProject;
   annotations: SpringAnnotations;
+  /** The contract operations of the repository, by the method name a generated interface gives them. */
+  operations: ContractIndex;
 }
 
-export function createSpringRoutesExtractor(parser: JavaParser): EntrypointExtractor {
-  return { extract: async (files) => extractRoutes(parser, files) };
+/** The operations of every contract document in the repository, by `operationId`; two documents may declare one name. */
+interface ContractIndex {
+  byOperationId: ReadonlyMap<string, readonly ContractOperation[]>;
+  /** A document the reader could not parse, as the item that reports it. */
+  faults: readonly Finding<never>[];
+}
+
+const NO_CONTRACTS: ContractRoutes = { operations: () => [] };
+
+function contractIndex(operations: readonly Finding<ContractOperation>[]): ContractIndex {
+  const byOperationId = new Map<string, ContractOperation[]>();
+  const faults: Finding<never>[] = [];
+  for (const finding of operations) {
+    if (finding.status === "unknown") {
+      faults.push(finding);
+      continue;
+    }
+    const held = byOperationId.get(finding.value.operationId);
+    if (held === undefined) byOperationId.set(finding.value.operationId, [finding.value]);
+    else held.push(finding.value);
+  }
+  return { byOperationId, faults };
+}
+
+export function createSpringRoutesExtractor(parser: JavaParser, contracts: ContractRoutes = NO_CONTRACTS): EntrypointExtractor {
+  return { extract: async (files) => extractRoutes(parser, files, contracts) };
 }
 
 type Parsed = { file: JavaFile } | { fault: Finding<never> };
 
-function extractRoutes(parser: JavaParser, files: readonly SourceFile[]): readonly Finding<Entrypoint>[] {
+function extractRoutes(parser: JavaParser, files: readonly SourceFile[], contracts: ContractRoutes): readonly Finding<Entrypoint>[] {
   const findings: Finding<MappedEntrypoint>[] = [];
   const trees: JavaSyntaxTree[] = [];
   const parsed: JavaFile[] = [];
+  const index = contractIndex(contracts.operations(files));
   try {
     for (const source of files) {
       if (!isJavaSource(source.path) || isJvmTestFile(source.path)) continue;
@@ -85,9 +113,9 @@ function extractRoutes(parser: JavaParser, files: readonly SourceFile[]): readon
     const project = createJavaProject(parsed);
     const annotations = createSpringAnnotations(project);
     const generator = sourceGeneratorIn(files);
-    findings.push(...project.unreadable.map((file) => unreadable(file.path, 1)));
+    findings.push(...index.faults, ...project.unreadable.map((file) => unreadable(file.path, 1)));
     for (const type of project.types) {
-      findings.push(...guarded(() => findingsOfType(type, project, annotations, generator), () => unknown("unresolved", [spanOf(type.file.path, type.node)])));
+      findings.push(...guarded(() => findingsOfType(type, project, annotations, generator, index), () => unknown("unresolved", [spanOf(type.file.path, type.node)])));
     }
     const readable = parsed.filter((file) => !project.unreadable.includes(file));
     const entrypoints = sortFindings(withPathPrefixes(findings, pathPrefixConfigurations(project, readable)));
@@ -121,10 +149,10 @@ function guarded(attempt: () => Finding<MappedEntrypoint>[], fallback: () => Fin
   }
 }
 
-function findingsOfType(type: TypeDecl, project: JavaProject, annotations: SpringAnnotations, generator: Evidence | undefined): Finding<MappedEntrypoint>[] {
+function findingsOfType(type: TypeDecl, project: JavaProject, annotations: SpringAnnotations, generator: Evidence | undefined, operations: ContractIndex): Finding<MappedEntrypoint>[] {
   const found: Finding<MappedEntrypoint>[] = [...routerFunctionsOf(type), ...foreignEndpointsOf(type, annotations)];
   if (type.kind !== "class" || type.isAbstract) return found;
-  const controller = controllerOf(type, project, annotations);
+  const controller = controllerOf(type, project, annotations, operations);
   if (controller !== undefined) found.push(...routesOf(controller));
   found.push(...delegateMethodsOf(type, project, annotations, generator));
   found.push(...listenersOf(type, project, annotations, isScannedBean(type, annotations)));
@@ -190,14 +218,14 @@ function withPathPrefixes(findings: readonly Finding<MappedEntrypoint>[], config
  * `@Controller`; a class mapping alone does not make a handler). A class that shows none is still reported when
  * something the sources do not give may supply one.
  */
-function controllerOf(type: TypeDecl, project: JavaProject, annotations: SpringAnnotations): Controller | undefined {
+function controllerOf(type: TypeDecl, project: JavaProject, annotations: SpringAnnotations, operations: ContractIndex): Controller | undefined {
   const hierarchy = project.hierarchy(type);
   const uses = hierarchy.types.map((member) => annotationUses(member.node, scopeOf(member)));
   const lookups = uses.map((own) => annotations.mappingIn(own));
   const classMapping = firstLookup(lookups);
   const stereotypes = uses.map((own) => annotations.stereotypeIn(own));
   const stereotype = stereotypes.find((candidate) => candidate === "controller") ?? stereotypes.find((candidate) => candidate !== "none") ?? "none";
-  const controller = { type, hierarchy, classMapping, project, annotations };
+  const controller = { type, hierarchy, classMapping, project, annotations, operations };
   const ambiguousSupertype = gapOf(hierarchy.gaps.find((gap) => gap.kind === "ambiguous"), "unresolved");
   if (stereotype === "controller") {
     const mappedAt = lookups.findIndex((lookup) => lookup !== undefined);
@@ -244,12 +272,30 @@ function routesOf(controller: Controller): Finding<MappedRoute>[] {
   const served = handlers.flatMap((method) => findingsOfHandler(controller, method));
   if (controller.speculative) return served;
   const classLibrary = controller.classMapping === undefined ? annotations.libraryAnnotationIn(annotationUses(type.node, scopeOf(type))) : undefined;
+  const missing = controller.hierarchy.gaps.filter((gap) => gap.kind === "missing");
   return [
     ...(classLibrary === undefined ? [] : [unknown("no-extractor", [spanOf(type.file.path, classLibrary.node)])]),
-    ...controller.hierarchy.gaps.filter((gap) => gap.kind === "missing").map((gap) => unknown("no-extractor", [spanOf(gap.file.path, gap.node)])),
+    ...(contractCoversOverrides(controller, handlers, missing) ? [] : missing.map((gap) => unknown("no-extractor", [spanOf(gap.file.path, gap.node)]))),
     ...undecided.map((method) => unknownAt(method, { reason: "unresolved", file: method.owner.file, node: method.node })),
     ...served,
   ];
+}
+
+/**
+ * A single interface the sources do not give, on a class with no mapping of its own, is fully read by a contract document
+ * when that contract names every method the class overrides: the contract is the interface's source, so nothing of it is
+ * left unknown. Two absent supertypes, a class mapping or an override no operation names leave the item in place.
+ */
+function contractCoversOverrides(controller: Controller, handlers: readonly MethodDecl[], missing: readonly SupertypeGap[]): boolean {
+  if (controller.classMapping !== undefined || missing.length !== 1 || missing[0]?.isInterface !== true) return false;
+  const overriding = handlers.filter((method) => method.overrides);
+  return (
+    overriding.length > 0 &&
+    overriding.every((method) => {
+      const join = contractJoin(controller, method);
+      return join !== undefined && "finding" in join && mappingOfMethod(method, controller.project, controller.annotations) === undefined;
+    })
+  );
 }
 
 /** The methods that serve a request: those of the class chain that no nearer class overrides, and the default methods of its interfaces that nothing overrides. */
@@ -283,6 +329,8 @@ function findingsOfHandler(controller: Controller, method: MethodDecl): Finding<
 function readHandler(controller: Controller, method: MethodDecl): Finding<MappedRoute>[] {
   const lookup = mappingOfMethod(method, controller.project, controller.annotations);
   if (lookup === undefined) {
+    const joined = controller.speculative ? undefined : contractJoin(controller, method);
+    if (joined !== undefined) return ["finding" in joined ? joined.finding : joined.ambiguous];
     const gap = controller.speculative ? undefined : unmappedGap(controller, method);
     return gap === undefined ? [] : [unknownAt(method, gap)];
   }
@@ -290,6 +338,35 @@ function readHandler(controller: Controller, method: MethodDecl): Finding<Mapped
   if (controller.blocking !== undefined) return [unknownAt(method, controller.blocking)];
   const classMapping = controller.classMapping !== undefined && "mapping" in controller.classMapping ? controller.classMapping.mapping : undefined;
   return routesOfHandler(method, lookup.mapping, classMapping, controller.project);
+}
+
+/**
+ * A handler a contract document names: an `@Override` method of a controller that implements an interface the sources do
+ * not give, joined to the contract's operation by `operationId` (RFC-0007 row S5). A name two operations of the repository
+ * declare picks neither.
+ */
+function contractJoin(controller: Controller, method: MethodDecl): { operation: ContractOperation; finding: Finding<MappedRoute> } | { ambiguous: Finding<never> } | undefined {
+  if (!method.overrides || !controller.hierarchy.gaps.some((gap) => gap.kind === "missing" && gap.isInterface)) return undefined;
+  const candidates = controller.operations.byOperationId.get(method.name);
+  if (candidates === undefined) return undefined;
+  const span = spanOf(method.owner.file.path, method.node);
+  if (candidates.length > 1) return { ambiguous: unknown("unresolved", [span, ...candidates.map((operation) => ({ path: operation.document, line: operation.line }))]) };
+  const [operation] = candidates;
+  if (operation === undefined) return undefined;
+  return {
+    operation,
+    finding: {
+      status: "complete",
+      value: {
+        kind: "http-route",
+        name: `${operation.method} ${operation.path}`,
+        method: operation.method,
+        path: operation.path,
+        handler: { path: span.path, symbol: `${method.owner.qualifiedName}.${method.name}`, line: span.line },
+      },
+      evidence: [span, { path: operation.document, line: operation.line }],
+    },
+  };
 }
 
 /** A method with no mapping of its own that may still be one: it carries a library annotation, or overrides a method of a supertype the sources do not give. */
