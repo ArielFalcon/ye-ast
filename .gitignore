@@ -1,0 +1,16 @@
+node_modules/
+dist/
+coverage/
+.codegraph/
+*.log
+.DS_Store
+
+# Internal design records and delivery process: kept locally, never published.
+docs/architecture/
+odd/
+.atl/
+
+# AI tooling configuration for development: kept locally, never published.
+.claude/
+AGENTS.md
+CLAUDE.md

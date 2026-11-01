@@ -1,0 +1,67 @@
+{
+  "name": "ye-ast",
+  "version": "0.1.0",
+  "description": "Deterministic code truth engine: verifiable facts about a codebase for AI agents and harnesses.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "engines": {
+    "node": ">=24.15.0"
+  },
+  "bin": {
+    "ye-ast": "./dist/composition/main.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/composition/compose.d.ts",
+      "default": "./dist/composition/compose.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ArielFalcon/ye-ast.git"
+  },
+  "homepage": "https://github.com/ArielFalcon/ye-ast#readme",
+  "bugs": {
+    "url": "https://github.com/ArielFalcon/ye-ast/issues"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "ai-agents",
+    "code-analysis",
+    "static-analysis",
+    "impact-analysis",
+    "code-graph",
+    "typescript",
+    "spring",
+    "angular"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "prepack": "npm run build",
+    "cli": "node --import tsx src/composition/main.ts",
+    "typecheck": "tsc --noEmit",
+    "arch:check": "depcruise src --config .dependency-cruiser.cjs",
+    "test": "node --import tsx --test \"src/**/*.test.ts\"",
+    "check": "npm run typecheck && npm run arch:check && npm test"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.2",
+    "dependency-cruiser": "18.7.0",
+    "tsx": "4.23.15"
+  },
+  "dependencies": {
+    "@angular/compiler": "22.2.4",
+    "@colbymchenry/codegraph": "1.6.2",
+    "@modelcontextprotocol/server": "2.4.0",
+    "tree-sitter-java": "0.23.5",
+    "typescript": "6.0.3",
+    "web-tree-sitter": "0.27.1",
+    "yaml": "2.9.1",
+    "zod": "4.6.7"
+  }
+}

@@ -1,0 +1,305 @@
+import { basename, resolve } from "node:path";
+import { parseArgs } from "node:util";
+import type { Result } from "../core/domain/shared/result.ts";
+import { isValidGlob, type ScopeRequest } from "../core/domain/shared/scope.ts";
+import type { EntrypointQueries, MapRequest } from "../core/ports/entrypoint-queries.port.ts";
+import type { ImpactBudget } from "../core/domain/impact/impact-fact.ts";
+import { isPositiveCount } from "../core/domain/shared/count.ts";
+import { WALK_BOUND_FIELDS, type WalkBoundsField } from "../core/domain/shared/fact.ts";
+import type { CallersTarget, ImpactCallersRequest, ImpactFault, ImpactImportersRequest, ImpactOfChangeRequest, ImpactQueries } from "../core/ports/impact-queries.port.ts";
+import { isTrustMode } from "../core/domain/shared/fact.ts";
+import { FIXED_LAYER_DIRECTORY } from "../core/ports/fixed-layer-store.port.ts";
+import type { Install, InstallOutcome, InstallRequest } from "../core/ports/install.port.ts";
+import type { LiveStaleNotice } from "../core/ports/live-queries.port.ts";
+import type { Redaction } from "../core/ports/redaction.port.ts";
+import { DEFAULT_REVISION } from "../core/ports/vcs.port.ts";
+
+/**
+ * `queryFailed`: the query answered with a typed fault. `usage`: the command line is wrong. `internalFault`: ye-ast
+ * itself failed unexpectedly (sysexits `EX_SOFTWARE`). `interrupted`: the caller aborted the query; a process killed
+ * by a signal exits with 128 plus the signal number instead.
+ */
+export const EXIT_CODE = { ok: 0, queryFailed: 1, usage: 2, internalFault: 70, interrupted: 130 } as const;
+
+export interface CliIo {
+  out(line: string): void;
+  err(line: string): void;
+}
+
+export interface CliDeps {
+  version: string;
+  entrypoints: EntrypointQueries;
+  impact: ImpactQueries;
+  install: Install;
+  /** The command that starts this build of ye-ast; `install` appends `mcp <repo>` and prints it as the MCP registration. */
+  mcpCommand: readonly string[];
+  /** Applied to every string that leaves the process on stdout or stderr. */
+  redaction: Redaction;
+  /** Aborted when the process is asked to stop. */
+  signal: AbortSignal;
+}
+
+const MEASURE_FLAG = "--measure";
+
+const USAGE = [
+  "usage: ye-ast --version | --help",
+  "       ye-ast map [--revision <rev> | --live] [--repo-id <id>] [scope] <repo>",
+  "       ye-ast impact --base <rev> [--head <rev> | --live] [--repo-id <id>] [scope] [budget] <repo>",
+  "       ye-ast callers [--revision <rev> | --live] [--repo-id <id>] [scope] [budget] <repo> <file>:<symbol> | <file>:<start>-<end> ...",
+  "       ye-ast importers [--revision <rev> | --live] [--repo-id <id>] [scope] <repo> <file> ...",
+  "       ye-ast install --trust trusted|untrusted [<repo>]   (declares the trust mode, writes the fixed layer under .ye-ast/, ignores ye-ast's folders locally, prints the MCP registration)",
+  "       ye-ast serve   (the query protocol, JSON-RPC 2.0, one message per line on stdin/stdout)",
+  "       ye-ast mcp [<repo>]   (stdio MCP server, read-only, bound to <repo> or the working directory)",
+  "--live: reads the working tree of a repository declared trusted (ye-ast install --trust trusted) instead of a revision; the first run builds ye-ast's mirror of it, and a stale answer is reported on stderr",
+  "scope: [--include <glob>]... [--exclude <glob>]...   (globs over repository-relative paths, on map, impact, callers and importers; without --include every path is included; --exclude wins)",
+  "budget: [--depth <n>] [--hub-fan-in <n>] [--expansions <n>]   (positive integers; none has a default)",
+  "measure: --measure   (one JSON measurement line per query and per index build, on stderr; never on stdout)",
+].join("\n");
+
+type Query = () => Promise<Result<unknown, ImpactFault>>;
+
+export async function run(argv: readonly string[], io: CliIo, deps: CliDeps): Promise<number> {
+  const [command, ...named] = argv;
+  const args = named.filter((argument) => argument !== MEASURE_FLAG);
+  if (command === "--version") {
+    io.out(deps.version);
+    return EXIT_CODE.ok;
+  }
+  if (command === "--help") {
+    io.out(USAGE);
+    return EXIT_CODE.ok;
+  }
+  if (command === "install") return runInstall(args, io, deps);
+  const query = queryOf(command, args, deps, io);
+  if (query === undefined) {
+    io.err(USAGE);
+    return EXIT_CODE.usage;
+  }
+  try {
+    const result = await query();
+    if (!result.ok) {
+      io.err(`ye-ast: ${result.fault.kind}: ${deps.redaction.redact(result.fault.detail.trim())}`);
+      return result.fault.kind === "aborted" ? EXIT_CODE.interrupted : EXIT_CODE.queryFailed;
+    }
+    io.out(JSON.stringify(deps.redaction.redactValue(result.value), null, 2));
+    return EXIT_CODE.ok;
+  } catch (error) {
+    io.err(`ye-ast: internal fault: ${deps.redaction.redact(firstLine(error))}`);
+    return EXIT_CODE.internalFault;
+  }
+}
+
+async function runInstall(args: readonly string[], io: CliIo, deps: CliDeps): Promise<number> {
+  const request = parseInstallRequest(args);
+  if (request === undefined) {
+    io.err(USAGE);
+    return EXIT_CODE.usage;
+  }
+  const out = (line: string): void => io.out(deps.redaction.redact(line));
+  try {
+    const result = await deps.install.run({ ...request, signal: deps.signal });
+    if (!result.ok) {
+      if (result.fault.trustRecorded) io.err(`ye-ast: trust ${request.trust} was recorded outside the repository before the install stopped`);
+      io.err(`ye-ast: ${result.fault.kind}: ${deps.redaction.redact(result.fault.detail.trim())}`);
+      return result.fault.kind === "aborted" ? EXIT_CODE.interrupted : EXIT_CODE.queryFailed;
+    }
+    for (const line of installReport(result.value, request.repo, deps.mcpCommand)) out(line);
+    return EXIT_CODE.ok;
+  } catch (error) {
+    io.err(`ye-ast: internal fault: ${deps.redaction.redact(firstLine(error))}`);
+    return EXIT_CODE.internalFault;
+  }
+}
+
+function installReport({ trust, excluded, layer }: InstallOutcome, repo: string, mcpCommand: readonly string[]): string[] {
+  const layerLines =
+    layer.outcome === "not-written"
+      ? [`fixed layer: not written (${layer.reason})`]
+      : layer.files.map((file) => `${FIXED_LAYER_DIRECTORY}/${file}: ${layer.outcome}`);
+  return [
+    `trust: ${trust} (recorded outside the repository)`,
+    excluded.length === 0 ? "local exclude: already held" : `local exclude: added ${excluded.join(" ")}`,
+    ...layerLines,
+    "register the MCP server with Claude Code:",
+    `claude mcp add ye-ast -- ${mcpCommand.map(shellWord).join(" ")} mcp ${shellWord(repo)}`,
+  ];
+}
+
+function shellWord(text: string): string {
+  return /^[\w@%+=:,./-]+$/.test(text) ? text : `'${text.replaceAll("'", "'\\''")}'`;
+}
+
+function queryOf(command: string | undefined, args: readonly string[], deps: CliDeps, io: CliIo): Query | undefined {
+  const { signal } = deps;
+  const onStale = ({ stateId, changed }: LiveStaleNotice): void =>
+    io.err(deps.redaction.redact(`ye-ast: stale: the working tree changed after this answer, which reflects state ${stateId}: ${changed.join(", ")}`));
+  switch (command) {
+    case "map": {
+      const request = parseMapRequest(args);
+      return request && (() => deps.entrypoints.map({ ...request, signal, ...(request.live && { onStale }) }));
+    }
+    case "impact": {
+      const request = parseImpactRequest(args);
+      return request && (() => deps.impact.ofChange({ ...request, signal, ...(request.live && { onStale }) }));
+    }
+    case "callers": {
+      const request = parseCallersRequest(args);
+      return request && (() => deps.impact.callers({ ...request, signal, ...(request.live && { onStale }) }));
+    }
+    case "importers": {
+      const request = parseImportersRequest(args);
+      return request && (() => deps.impact.importers({ ...request, signal, ...(request.live && { onStale }) }));
+    }
+    default:
+      return undefined;
+  }
+}
+
+function firstLine(error: unknown): string {
+  return (error instanceof Error ? error.message : String(error)).split("\n")[0]!.trim();
+}
+
+function repositoryOf(path: string, repoId: string | undefined): { repo: string; repoId: string } {
+  const repo = resolve(path);
+  return { repo, repoId: repoId ?? basename(repo) };
+}
+
+function parseMapRequest(args: readonly string[]): MapRequest | undefined {
+  try {
+    const { values, positionals } = parseArgs({
+      args: [...args],
+      options: { revision: { type: "string" }, live: { type: "boolean" }, "repo-id": { type: "string" }, ...SCOPE_OPTIONS },
+      allowPositionals: true,
+    });
+    const [path, ...extra] = positionals;
+    const scope = parseScope(values);
+    const at = atRevision(values);
+    if (path === undefined || extra.length > 0 || scope === undefined || at === undefined) return undefined;
+    return { ...repositoryOf(path, values["repo-id"]), ...at, ...scope };
+  } catch {
+    return undefined;
+  }
+}
+
+function parseInstallRequest(args: readonly string[]): Omit<InstallRequest, "signal"> | undefined {
+  try {
+    const { values, positionals } = parseArgs({ args: [...args], options: { trust: { type: "string" } }, allowPositionals: true });
+    const [path = ".", ...extra] = positionals;
+    if (!isTrustMode(values.trust) || extra.length > 0) return undefined;
+    return { ...repositoryOf(path, undefined), trust: values.trust };
+  } catch {
+    return undefined;
+  }
+}
+
+/** `--live` or a revision, never both; HEAD when neither is given. */
+function atRevision(values: { revision?: string | undefined; live?: boolean | undefined }): { live: true; revision?: undefined } | { revision: string; live?: undefined } | undefined {
+  if (values.live !== true) return { revision: values.revision ?? DEFAULT_REVISION };
+  return values.revision === undefined ? { live: true } : undefined;
+}
+
+const SCOPE_OPTIONS = { include: { type: "string", multiple: true }, exclude: { type: "string", multiple: true } } as const;
+
+type ScopeValues = { [Name in keyof typeof SCOPE_OPTIONS]?: string[] | undefined };
+
+/** The scope the flags name, `undefined` for an invalid glob, `{}` when no flag is given. */
+function parseScope(values: ScopeValues): { scope?: ScopeRequest } | undefined {
+  const scope: ScopeRequest = {};
+  for (const field of ["include", "exclude"] as const) {
+    const globs = values[field];
+    if (globs === undefined) continue;
+    if (!globs.every(isValidGlob)) return undefined;
+    scope[field] = globs;
+  }
+  return Object.keys(scope).length === 0 ? {} : { scope };
+}
+
+const BUDGET_OPTIONS = { depth: { type: "string" }, "hub-fan-in": { type: "string" }, expansions: { type: "string" } } as const;
+
+type BudgetValues = { [Name in keyof typeof BUDGET_OPTIONS]?: string | undefined };
+
+/** The budget the flags name, `undefined` for a value that is not a positive integer, `{}` when no flag is given. */
+function parseBudget(values: BudgetValues): ImpactBudget | undefined {
+  const named: Readonly<Record<WalkBoundsField, string | undefined>> = { depth: values.depth, hubFanIn: values["hub-fan-in"], expansions: values.expansions };
+  const budget: Partial<Record<WalkBoundsField, number>> = {};
+  for (const field of WALK_BOUND_FIELDS) {
+    const text = named[field];
+    if (text === undefined) continue;
+    const value = Number(text);
+    if (!/^[1-9]\d*$/.test(text) || !isPositiveCount(value)) return undefined;
+    budget[field] = value;
+  }
+  return budget;
+}
+
+function withBudget(budget: ImpactBudget): { budget?: ImpactBudget } {
+  return Object.keys(budget).length === 0 ? {} : { budget };
+}
+
+function parseImpactRequest(args: readonly string[]): ImpactOfChangeRequest | undefined {
+  try {
+    const { values, positionals } = parseArgs({
+      args: [...args],
+      options: { base: { type: "string" }, head: { type: "string" }, live: { type: "boolean" }, "repo-id": { type: "string" }, ...SCOPE_OPTIONS, ...BUDGET_OPTIONS },
+      allowPositionals: true,
+    });
+    const [path, ...extra] = positionals;
+    const budget = parseBudget(values);
+    const scope = parseScope(values);
+    const at = atRevision({ revision: values.head, live: values.live });
+    if (path === undefined || extra.length > 0 || values.base === undefined || budget === undefined || scope === undefined || at === undefined) return undefined;
+    return { ...repositoryOf(path, values["repo-id"]), base: values.base, ...(at.live ? { live: true as const } : { head: at.revision }), ...scope, ...withBudget(budget) };
+  } catch {
+    return undefined;
+  }
+}
+
+function parseCallersRequest(args: readonly string[]): ImpactCallersRequest | undefined {
+  try {
+    const { values, positionals } = parseArgs({
+      args: [...args],
+      options: { revision: { type: "string" }, live: { type: "boolean" }, "repo-id": { type: "string" }, ...SCOPE_OPTIONS, ...BUDGET_OPTIONS },
+      allowPositionals: true,
+    });
+    const [path, ...specs] = positionals;
+    const budget = parseBudget(values);
+    const targets = specs.map(parseTarget);
+    const scope = parseScope(values);
+    const at = atRevision(values);
+    if (path === undefined || targets.length === 0 || budget === undefined || scope === undefined || at === undefined || targets.some((target) => target === undefined)) return undefined;
+    return { ...repositoryOf(path, values["repo-id"]), ...at, targets: targets as CallersTarget[], ...scope, ...withBudget(budget) };
+  } catch {
+    return undefined;
+  }
+}
+
+function parseImportersRequest(args: readonly string[]): ImpactImportersRequest | undefined {
+  try {
+    const { values, positionals } = parseArgs({
+      args: [...args],
+      options: { revision: { type: "string" }, live: { type: "boolean" }, "repo-id": { type: "string" }, ...SCOPE_OPTIONS },
+      allowPositionals: true,
+    });
+    const [path, ...files] = positionals;
+    const scope = parseScope(values);
+    const at = atRevision(values);
+    if (path === undefined || files.length === 0 || scope === undefined || at === undefined) return undefined;
+    return { ...repositoryOf(path, values["repo-id"]), ...at, files, ...scope };
+  } catch {
+    return undefined;
+  }
+}
+
+const LINE_RANGE = /^([1-9]\d*)-([1-9]\d*)$/;
+
+/** `<file>:<symbol>` or `<file>:<start>-<end>`: what follows the last colon starting with a digit is a range, since no name does. */
+function parseTarget(spec: string): CallersTarget | undefined {
+  const colon = spec.lastIndexOf(":");
+  const file = spec.slice(0, colon);
+  const rest = spec.slice(colon + 1);
+  if (colon <= 0 || rest === "") return undefined;
+  if (!/^\d/.test(rest)) return { file, symbol: rest };
+  const range = LINE_RANGE.exec(rest);
+  const [start, end] = [Number(range?.[1]), Number(range?.[2])];
+  return Number.isSafeInteger(start) && Number.isSafeInteger(end) && start <= end ? { file, start, end } : undefined;
+}

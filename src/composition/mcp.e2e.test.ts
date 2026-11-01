@@ -1,0 +1,110 @@
+import { after, before, test } from "node:test";
+import assert from "node:assert/strict";
+import { execFileSync, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { createInterface } from "node:readline";
+import { pathToFileURL } from "node:url";
+import { composeCli } from "./compose.ts";
+
+const GIT_ENV = {
+  ...process.env,
+  GIT_CONFIG_GLOBAL: "/dev/null",
+  GIT_CONFIG_NOSYSTEM: "1",
+  GIT_AUTHOR_NAME: "test",
+  GIT_AUTHOR_EMAIL: "test@example.com",
+  GIT_COMMITTER_NAME: "test",
+  GIT_COMMITTER_EMAIL: "test@example.com",
+};
+
+const CONTROLLER = `package shop;
+
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+@RestController
+@RequestMapping("/orders")
+class OrderController {
+  @GetMapping("/{id}")
+  String one() {
+    return "x";
+  }
+}
+`;
+
+const SERVER = pathToFileURL(join(import.meta.dirname, "mcp.ts")).href;
+const HOST = pathToFileURL(join(import.meta.dirname, "process-host.ts")).href;
+const MAIN = `import { runMcp } from ${JSON.stringify(SERVER)};
+import { processHost } from ${JSON.stringify(HOST)};
+process.exitCode = await runMcp([], processHost({ signal: new AbortController().signal }));
+`;
+
+let workspace: string;
+let repo: string;
+let scratchRoot: string;
+let child: ChildProcessWithoutNullStreams;
+let id = 0;
+type Reply = { id?: number; result?: unknown; error?: unknown };
+const replies = new Map<number, (message: Reply) => void>();
+
+function request(method: string, params?: unknown): Promise<Reply> {
+  id += 1;
+  return new Promise((resolve) => {
+    replies.set(id, resolve);
+    child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, ...(params !== undefined && { params }) })}\n`);
+  });
+}
+
+before(async () => {
+  workspace = mkdtempSync(join(tmpdir(), "ye-ast-"));
+  repo = join(workspace, "shop-service");
+  scratchRoot = join(workspace, "scratch");
+  mkdirSync(repo);
+  mkdirSync(scratchRoot);
+  const git = (...args: string[]): string => execFileSync("git", args, { cwd: repo, env: GIT_ENV, encoding: "utf8" }).trim();
+  git("init", "-q", "-b", "main");
+  const controller = join(repo, "src/main/java/shop/OrderController.java");
+  mkdirSync(dirname(controller), { recursive: true });
+  writeFileSync(controller, CONTROLLER);
+  git("add", "-A");
+  git("commit", "-q", "-m", "init");
+  const entry = join(workspace, "main.mts");
+  writeFileSync(entry, MAIN);
+  child = spawn(process.execPath, ["--import", import.meta.resolve("tsx"), entry], {
+    cwd: repo,
+    env: { ...GIT_ENV, XDG_CACHE_HOME: join(workspace, "cache"), TMPDIR: scratchRoot },
+  });
+  child.stderr.pipe(process.stderr);
+  createInterface({ input: child.stdout }).on("line", (line) => {
+    const message = JSON.parse(line) as Reply;
+    if (message.id !== undefined) replies.get(message.id)?.(message);
+  });
+  await request("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "e2e", version: "0" } });
+  child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" })}\n`);
+});
+
+after(async () => {
+  child.stdin.end();
+  await new Promise((resolve) => child.once("close", resolve));
+  rmSync(workspace, { recursive: true, force: true });
+});
+
+test("a real client over stdio lists the tools and reads the entrypoints fact the CLI prints for the same repository", async () => {
+  const listed = (await request("tools/list")).result as { tools: { name: string }[] };
+  assert.ok(listed.tools.some((tool) => tool.name === "ye_ast_entrypoints"));
+
+  const called = (await request("tools/call", { name: "ye_ast_entrypoints", arguments: {} })).result as {
+    isError?: boolean;
+    structuredContent: unknown;
+    content: { text: string }[];
+  };
+  assert.equal(called.isError, undefined);
+
+  const printed: string[] = [];
+  const code = await composeCli({ scratchRoot })(["map", repo], { out: (line) => printed.push(line), err: () => {} });
+  assert.equal(code, 0);
+  assert.deepEqual(called.structuredContent, JSON.parse(printed.join("\n")));
+  assert.match(called.content[0]?.text ?? "", /GET \/orders\/\{id\}.*OrderController\.java:\d+/);
+});

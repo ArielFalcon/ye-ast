@@ -1,0 +1,287 @@
+import { afterEach, beforeEach, test } from "node:test";
+import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { EXIT_CODE } from "../cli/main.ts";
+import { REDACTED } from "../core/ports/redaction.port.ts";
+import { createSha256Digest } from "../core/adapters/crypto/sha256-digest.adapter.ts";
+import { canonicalJson } from "../core/domain/shared/canonical-json.ts";
+import { composeCli, composeQueries } from "./compose.ts";
+import { installedVersion } from "./installed-versions.ts";
+
+const GIT_ENV = {
+  ...process.env,
+  GIT_CONFIG_GLOBAL: "/dev/null",
+  GIT_CONFIG_NOSYSTEM: "1",
+  GIT_AUTHOR_NAME: "test",
+  GIT_AUTHOR_EMAIL: "test@example.com",
+  GIT_COMMITTER_NAME: "test",
+  GIT_COMMITTER_EMAIL: "test@example.com",
+};
+
+const CONTROLLER = `package shop;
+
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+@RestController
+@RequestMapping("/orders")
+class OrderController {
+  @GetMapping("/{id}")
+  String one() { return ""; }
+}
+`;
+
+let workspace: string;
+let repo: string;
+let scratchRoot: string;
+
+beforeEach(() => {
+  workspace = mkdtempSync(join(tmpdir(), "ye-ast-"));
+  repo = join(workspace, "shop-service");
+  scratchRoot = join(workspace, "scratch");
+  mkdirSync(join(repo, "src"), { recursive: true });
+  mkdirSync(scratchRoot);
+  git("init", "-q");
+  writeFileSync(join(repo, "src", "OrderController.java"), CONTROLLER);
+  git("add", "-A");
+  git("commit", "-q", "-m", "controller");
+});
+
+afterEach(() => rmSync(workspace, { recursive: true, force: true }));
+
+function git(...args: string[]): string {
+  return execFileSync("git", args, { cwd: repo, env: GIT_ENV, encoding: "utf8" }).trim();
+}
+
+test("map prints the route of a committed Spring controller and removes its temporary export", async () => {
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+  const cli = composeCli({ scratchRoot });
+
+  const code = await cli(["map", repo], { out: (line) => stdout.push(line), err: (line) => stderr.push(line) });
+
+  assert.equal(code, EXIT_CODE.ok);
+  assert.deepEqual(stderr, []);
+  const map = JSON.parse(stdout.join("\n"));
+  assert.equal(map.status, "complete");
+  assert.equal(map.snapshot.repo, "shop-service");
+  assert.deepEqual(map.inputs.declaredScope, { languages: ["java", "typescript"], frameworks: ["angular", "spring"], include: [], exclude: [] });
+  const items = map.value.entrypoints.value;
+  assert.equal(items.length, 1);
+  assert.equal(items[0].status, "complete");
+  assert.equal(items[0].value.method, "GET");
+  assert.equal(items[0].value.path, "/orders/{id}");
+  assert.equal(items[0].value.handler.path, "src/OrderController.java");
+  assert.deepEqual(readdirSync(scratchRoot), []);
+});
+
+test("map with --exclude over a real repository leaves the excluded controller out of the facts and declares the glob", async () => {
+  const stdout: string[] = [];
+  const cli = composeCli({ scratchRoot });
+
+  const code = await cli(["map", "--exclude", "src/**", repo], { out: (line) => stdout.push(line), err: () => undefined });
+
+  assert.equal(code, EXIT_CODE.ok);
+  const map = JSON.parse(stdout.join("\n"));
+  assert.equal(map.status, "complete");
+  assert.deepEqual(map.value.entrypoints.value, []);
+  assert.deepEqual(map.inputs.declaredScope.exclude, ["src/**"]);
+});
+
+test("map prints a route whose path holds a token with the token redacted", async () => {
+  const token = `ghp_${"a1B2".repeat(9)}`;
+  writeFileSync(join(repo, "src", "OrderController.java"), CONTROLLER.replace('"/{id}"', `"/hooks/${token}"`));
+  git("commit", "-q", "-am", "token in a path");
+  const stdout: string[] = [];
+
+  const code = await composeCli({ scratchRoot })(["map", repo], { out: (line) => stdout.push(line), err: () => undefined });
+
+  assert.equal(code, EXIT_CODE.ok);
+  assert.equal(stdout.join("\n").includes(token), false);
+  assert.equal(JSON.parse(stdout.join("\n")).value.entrypoints.value[0].value.path, `/orders/hooks/${REDACTED}`);
+});
+
+test("map cuts the entrypoints by a submodule and by a Kotlin source, which no extractor reads", async () => {
+  git("update-index", "--add", "--cacheinfo", `160000,${git("rev-parse", "HEAD")},services/orders`);
+  writeFileSync(join(repo, "src", "Billing.kt"), "class Billing");
+  git("add", "src/Billing.kt");
+  git("commit", "-q", "-m", "submodule and kotlin");
+  const stdout: string[] = [];
+
+  const code = await composeCli({ scratchRoot })(["map", repo], { out: (line) => stdout.push(line), err: () => undefined });
+
+  assert.equal(code, EXIT_CODE.ok);
+  const section = JSON.parse(stdout.join("\n")).value.entrypoints;
+  assert.equal(section.status, "partial");
+  assert.deepEqual(section.cuts, [
+    { kind: "not-exported", at: ["services/orders"] },
+    { kind: "no-extractor", at: ["src/Billing.kt"] },
+  ]);
+  assert.equal(section.value.length, 1);
+});
+
+test("map of a subdirectory fails with the query code and prints no fact", async () => {
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+
+  const code = await composeCli({ scratchRoot })(["map", join(repo, "src")], {
+    out: (line) => stdout.push(line),
+    err: (line) => stderr.push(line),
+  });
+
+  assert.equal(code, EXIT_CODE.queryFailed);
+  assert.deepEqual(stdout, []);
+  assert.equal(stderr.length, 1);
+  assert.deepEqual(readdirSync(scratchRoot), []);
+});
+
+async function mapOf(options: Parameters<typeof composeCli>[0] = {}) {
+  const stdout: string[] = [];
+  const code = await composeCli({ scratchRoot, ...options })(["map", repo], { out: (line) => stdout.push(line), err: () => undefined });
+  assert.equal(code, EXIT_CODE.ok);
+  return JSON.parse(stdout.join("\n"));
+}
+
+test("map of a commit that grows a Kotlin source and then a submodule never repeats a content digest", async () => {
+  const digests = [(await mapOf()).inputs.content];
+  mkdirSync(join(repo, "src", "main", "kotlin"), { recursive: true });
+  writeFileSync(join(repo, "src", "main", "kotlin", "Billing.kt"), "class Billing");
+  git("add", "-A");
+  git("commit", "-q", "-m", "kotlin");
+  digests.push((await mapOf()).inputs.content);
+  git("update-index", "--add", "--cacheinfo", `160000,${git("rev-parse", "HEAD")},services/orders`);
+  git("commit", "-q", "-m", "submodule");
+  digests.push((await mapOf()).inputs.content);
+
+  assert.equal(new Set(digests).size, 3);
+});
+
+function pomWith(groupId: string, artifactId: string): string {
+  return `<project>\n  <build>\n    <plugins>\n      <plugin>\n        <groupId>${groupId}</groupId>\n        <artifactId>${artifactId}</artifactId>\n      </plugin>\n    </plugins>\n  </build>\n</project>\n`;
+}
+
+test("map reads the build files of the commit: a declared source generator makes the delegate implementation unknown items, and changes the content digest", async () => {
+  writeFileSync(
+    join(repo, "src", "PetsServiceImpl.java"),
+    "package shop;\n\nimport com.acme.gen.PetsApiService;\nimport org.springframework.stereotype.Service;\n\n@Service\nclass PetsServiceImpl implements PetsApiService {\n  public String list() { return \"\"; }\n}\n",
+  );
+  writeFileSync(join(repo, "pom.xml"), pomWith("org.springframework.boot", "spring-boot-maven-plugin"));
+  git("add", "-A");
+  git("commit", "-q", "-m", "service and pom");
+  const without = await mapOf();
+  writeFileSync(join(repo, "pom.xml"), pomWith("org.openapitools", "openapi-generator-maven-plugin"));
+  git("commit", "-q", "-am", "generator");
+
+  const withGenerator = await mapOf();
+
+  assert.deepEqual(without.value.entrypoints.value.map((item: { status: string }) => item.status), ["complete"]);
+  assert.deepEqual(
+    withGenerator.value.entrypoints.value.map((item: { status: string; reason?: string }) => `${item.status}:${item.reason ?? ""}`),
+    ["complete:", "unknown:no-extractor"],
+  );
+  assert.deepEqual(withGenerator.value.entrypoints.value[1].evidence.map((span: { path: string; line: number }) => `${span.path}:${span.line}`), [
+    "src/PetsServiceImpl.java:8",
+    "src/PetsServiceImpl.java:7",
+    "pom.xml:6",
+  ]);
+  assert.notEqual(withGenerator.inputs.content, without.inputs.content);
+});
+
+test("map under a budget the commit exceeds is partial with a caller-budget cut and still removes its export", async () => {
+  const map = await mapOf({ exportBudget: { maxEntries: 0, maxBytes: Number.MAX_SAFE_INTEGER } });
+
+  assert.equal(map.status, "partial");
+  assert.deepEqual(map.value.entrypoints.cuts, [{ kind: "caller-budget", at: ["src/OrderController.java"], limit: 0 }]);
+  assert.deepEqual(map.value.entrypoints.value, []);
+  assert.deepEqual(readdirSync(scratchRoot), []);
+});
+
+test("map without a budget option takes the whole commit: only a host sets a budget", async () => {
+  const unbudgeted = await mapOf();
+
+  assert.deepEqual(unbudgeted.inputs.declaredConfig, {});
+  assert.equal(unbudgeted.inputs.config, createSha256Digest().of(canonicalJson({})));
+});
+
+const APP_ROUTES = `import { Routes } from '@angular/router';
+import { Home } from './home';
+
+export const routes: Routes = [
+  { path: 'home', component: Home },
+  { path: 'orders', loadChildren: () => import('./orders/orders.routes') },
+  { path: 'by-hand', matcher: urlMatcher, component: Home },
+];
+`;
+
+function addAngularApp(): void {
+  mkdirSync(join(repo, "web", "src", "app", "orders"), { recursive: true });
+  writeFileSync(join(repo, "web", "package.json"), JSON.stringify({ dependencies: { "@angular/router": "21.0.0" } }));
+  writeFileSync(join(repo, "package.json"), JSON.stringify({ dependencies: { "@angular/router": "21.0.0" } }));
+  writeFileSync(join(repo, "web", "src", "app", "app.routes.ts"), APP_ROUTES);
+  writeFileSync(join(repo, "web", "src", "app", "home.ts"), "@Component({})\nexport class Home {}\n");
+  writeFileSync(join(repo, "web", "src", "app", "orders", "orders.routes.ts"), "export default [{ path: ':id', component: Detail }] as Routes;\n");
+  git("add", "-A");
+  git("commit", "-q", "-m", "angular app");
+}
+
+test("map names the routes of an Angular app beside the Spring routes of the same commit, ordered by evidence and identical on two runs", async () => {
+  addAngularApp();
+
+  const first = await mapOf();
+  const second = await mapOf();
+
+  assert.equal(JSON.stringify(second), JSON.stringify(first));
+  const items = first.value.entrypoints.value;
+  assert.deepEqual(
+    items.map((item: { status: string; value?: { name: string }; reason?: string; evidence: { path: string; line: number }[] }) => `${item.evidence[0]?.path}:${item.evidence[0]?.line} ${item.value?.name ?? item.reason}`),
+    ["src/OrderController.java:10 GET /orders/{id}", "web/src/app/app.routes.ts:5 /home", "web/src/app/app.routes.ts:7 no-extractor", "web/src/app/orders/orders.routes.ts:1 /orders/:id"],
+  );
+  assert.deepEqual(items[1].value.component, { path: "web/src/app/home.ts", symbol: "Home", line: 2 });
+  assert.equal(first.inputs.engines.typescript, installedVersion("typescript"));
+  assert.deepEqual(Object.keys(first.inputs.engines).toSorted(), ["tree-sitter-java", "typescript", "web-tree-sitter"]);
+});
+
+test("map of a commit that changes only a TypeScript route changes the content digest, and a spec file beside it changes nothing", async () => {
+  addAngularApp();
+  const before = (await mapOf()).inputs.content;
+  writeFileSync(join(repo, "web", "src", "app", "home.spec.ts"), "describe('home', () => {});\n");
+  git("add", "-A");
+  git("commit", "-q", "-m", "spec");
+  const withSpec = (await mapOf()).inputs.content;
+  writeFileSync(join(repo, "web", "src", "app", "app.routes.ts"), APP_ROUTES.replace("'home'", "'start'"));
+  git("commit", "-q", "-am", "rename route");
+
+  assert.equal(withSpec, before);
+  assert.notEqual((await mapOf()).inputs.content, before);
+});
+
+test("map of a commit that changes only a template a component names changes the content digest and no entrypoint", async () => {
+  addAngularApp();
+  writeFileSync(join(repo, "web", "src", "app", "home.html"), "<p>one</p>\n");
+  git("add", "-A");
+  git("commit", "-q", "-m", "template");
+  const before = await mapOf();
+  writeFileSync(join(repo, "web", "src", "app", "home.html"), "<p>two</p>\n");
+  git("commit", "-q", "-am", "edit template");
+  const after = await mapOf();
+
+  assert.notEqual(after.inputs.content, before.inputs.content);
+  const names = (fact: typeof before): unknown[] => fact.value.entrypoints.value.map((item: { value?: unknown }) => item.value);
+  assert.deepEqual(names(after), names(before));
+});
+
+test("an importers fact declares no template engine and a callers fact declares it, since only callers reads Angular templates", async () => {
+  const { impact } = composeQueries({ scratchRoot });
+  const request = { repo, repoId: "shop-service", revision: "HEAD" };
+
+  const importers = await impact.importers({ ...request, files: ["README.md"] });
+  const callers = await impact.callers({ ...request, targets: [{ file: "README.md", start: 1, end: 1 }] });
+
+  assert.ok(importers.ok && callers.ok);
+  assert.equal("@angular/compiler" in importers.value.inputs.engines, false);
+  assert.equal(callers.value.inputs.engines["@angular/compiler"], installedVersion("@angular/compiler"));
+});

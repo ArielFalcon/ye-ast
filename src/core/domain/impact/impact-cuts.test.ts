@@ -1,0 +1,77 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { nameTail, removedDeclarationCuts, unreadRelationCuts, unresolvedLinkCuts, type UnresolvedUse, type WalkedDeclaration } from "./impact-cuts.ts";
+
+const SAVE: WalkedDeclaration = { file: "src/Repo.java", name: "save", kind: "method" };
+
+function use(name: string, kind: string, file = "src/Use.java", line = 3): UnresolvedUse {
+  return { name, kind, file, line };
+}
+
+test("the tail of a name is what follows its last separator", () => {
+  assert.deepEqual(["x.save", "this.svc.load", "Class.forName", "a::b", "Plain"].map(nameTail), ["save", "load", "forName", "b", "Plain"]);
+});
+
+test("a call that never resolved and shares its name tail with a walked method is a cut at it, with every place", () => {
+  const cuts = unresolvedLinkCuts([use("repo.save", "calls", "src/B.java", 9), use("other.save", "calls", "src/A.java", 4)], [SAVE]);
+  assert.deepEqual(cuts, [{ kind: "unresolved-link", at: ["src/Repo.java::save", "src/A.java:4", "src/B.java:9"] }]);
+});
+
+test("an unresolved reference whose kind cannot point at the walked kind is no cut", () => {
+  assert.deepEqual(unresolvedLinkCuts([use("repo.save", "instantiates"), use("save", "imports"), use("save", "extends")], [SAVE]), []);
+});
+
+test("an unresolved reference to a name no walked declaration has is no cut", () => {
+  assert.deepEqual(unresolvedLinkCuts([use("repo.find", "calls")], [SAVE]), []);
+});
+
+test("a file that loads a module by a computed name is a cut at the call, walked declarations or not", () => {
+  const cuts = unresolvedLinkCuts([use("require", "calls", "src/a.ts", 7), use("Class.forName", "calls", "src/B.java", 2), use("require", "references", "src/c.ts", 1)], []);
+  assert.deepEqual(cuts, [
+    { kind: "unresolved-link", at: ["src/a.ts", "src/a.ts:7"] },
+    { kind: "unresolved-link", at: ["src/B.java", "src/B.java:2"] },
+  ]);
+});
+
+test("two computed-name loads in one file are one cut led by the file, with both places", () => {
+  const cuts = unresolvedLinkCuts([use("require", "calls", "src/a.ts", 9), use("import", "calls", "src/a.ts", 2)], []);
+  assert.deepEqual(cuts, [{ kind: "unresolved-link", at: ["src/a.ts", "src/a.ts:2", "src/a.ts:9"] }]);
+});
+
+test("a reference at head that never resolved and names a removed declaration is a cut led by that declaration, with every place", () => {
+  const removed = [{ file: "src/Repo.java", name: "save" }];
+  const cuts = removedDeclarationCuts([use("repo.save", "calls", "src/B.java", 9), use("save", "references", "src/A.java", 4), use("repo.find", "calls")], removed);
+  assert.deepEqual(cuts, [{ kind: "unresolved-link", at: ["src/Repo.java::save", "src/A.java:4", "src/B.java:9"] }]);
+});
+
+test("a removed declaration nothing at head names is no cut", () => {
+  assert.deepEqual(removedDeclarationCuts([use("repo.find", "calls")], [{ file: "src/Repo.java", name: "save" }]), []);
+});
+
+test("the same name removed from two files is one cut per file", () => {
+  const removed = [
+    { file: "src/A.java", name: "save" },
+    { file: "src/B.java", name: "save" },
+  ];
+  assert.deepEqual(
+    removedDeclarationCuts([use("x.save", "calls", "src/C.java", 1)], removed).map((cut) => cut.at[0]),
+    ["src/A.java::save", "src/B.java::save"],
+  );
+});
+
+test("a relation the reader could not place is a cut only in a file the walk reached, with its place and reason", () => {
+  const unread = [
+    { path: "src/app/a.ts", line: 9, reason: "unresolved" },
+    { path: "src/app/a.ts", line: 3, reason: "no-extractor" },
+    { path: "src/app/far.ts", line: 4, reason: "unresolved" },
+  ];
+  assert.deepEqual(unreadRelationCuts(unread, new Set(["src/app/a.ts", "src/app/b.ts"]), new Map()), [{ kind: "unresolved-link", at: ["src/app/a.ts", "src/app/a.ts:3 no-extractor", "src/app/a.ts:9 unresolved"] }]);
+  assert.deepEqual(unreadRelationCuts([], new Set(["src/app/a.ts"]), new Map()), []);
+});
+
+test("an unreadable template is a cut when the walk reached a component that names it", () => {
+  const unread = [{ path: "src/app/page.html", line: 2, reason: "source-unreadable" }];
+  const owners = new Map([["src/app/page.html", ["src/app/page.ts"]]]);
+  assert.deepEqual(unreadRelationCuts(unread, new Set(["src/app/page.ts"]), owners), [{ kind: "unresolved-link", at: ["src/app/page.html", "src/app/page.html:2 source-unreadable"] }]);
+  assert.deepEqual(unreadRelationCuts(unread, new Set(["src/app/other.ts"]), owners), []);
+});

@@ -1,0 +1,31 @@
+import type { DeclaredScope } from "../shared/fact.ts";
+import { declaredScope, isInMapScope } from "../map/entrypoint-map.ts";
+import type { ScopeRequest } from "../shared/scope.ts";
+
+interface Blob {
+  path: string;
+  blob: string;
+}
+
+/**
+ * The export of a live tree, shaped like a commit's: every mirrored file, whose `written` says what an export would
+ * have written, and every skipped entry. `contentFingerprint` and the extraction read it unchanged.
+ */
+export function liveExport<S extends { path: string; reason: string }>(manifest: readonly Blob[], skipped: readonly S[]): { files: { path: string; blob: string; written: boolean }[]; skipped: S[] } {
+  return { files: manifest.map(({ path, blob }) => ({ path, blob, written: isInMapScope(path) })), skipped: [...skipped] };
+}
+
+/** The paths whose blob differs between two listings, or that only one of them holds, sorted. */
+export function changedPaths(base: readonly Blob[], live: readonly Blob[]): string[] {
+  const before = new Map(base.map((file) => [file.path, file.blob]));
+  const after = new Map(live.map((file) => [file.path, file.blob]));
+  const changed = new Set<string>();
+  for (const [path, blob] of after) if (before.get(path) !== blob) changed.add(path);
+  for (const path of before.keys()) if (!after.has(path)) changed.add(path);
+  return [...changed].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+}
+
+/** The declared scope of a fact over a working tree: git's ignore rules decide what is listed. */
+export function liveScope(request?: ScopeRequest): DeclaredScope {
+  return { ...declaredScope(request), ignored: "git" };
+}
