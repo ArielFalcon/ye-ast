@@ -138,7 +138,23 @@ function reachingMethods(shape: FileShape, classDeclaration: ts.ClassDeclaration
       }
     }
   }
-  return [...reaching];
+  const kept = new Set([...reaching].filter((name) => VERBS.has(name)));
+  for (const name of kept) {
+    const member = methods.get(name);
+    if (member !== undefined) for (const helper of thisCalls(member)) if (reaching.has(helper)) kept.add(helper);
+  }
+  return [...kept];
+}
+
+/** The methods of its own class a member calls through `this`. */
+function thisCalls(member: ts.Node): string[] {
+  const called: string[] = [];
+  const visit = (node: ts.Node): void => {
+    if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression) && node.expression.expression.kind === ts.SyntaxKind.ThisKeyword) called.push(node.expression.name.text);
+    ts.forEachChild(node, visit);
+  };
+  visit(member);
+  return called;
 }
 
 /** The fields and constructor parameters of a class that hold an `HttpClient`, by the name the code uses them with. */
@@ -197,18 +213,33 @@ function typeName(node: ts.TypeNode): string | undefined {
   return undefined;
 }
 
+/** Whether a member forwards one of its own parameters as the path of an HTTP verb, directly or through another wrapper method of its class. */
 function reachesVerb(member: ts.Node, httpFields: ReadonlySet<string>, reaching: ReadonlySet<string>): boolean {
+  const parameters = parametersOf(member);
+  const locals = localInitializers(member);
+  const derived = (expression: ts.Node, trail: ReadonlySet<string>): boolean => {
+    if (ts.isIdentifier(expression)) {
+      if (parameters.has(expression.text)) return true;
+      const initializer = locals.get(expression.text);
+      return initializer !== undefined && !trail.has(expression.text) && derived(initializer, new Set(trail).add(expression.text));
+    }
+    return ts.forEachChild(expression, (child) => derived(child, trail) || undefined) === true;
+  };
+  const forwardsParameter = (call: ts.CallExpression, name: string): boolean => {
+    const path = call.arguments[name === "request" ? 1 : 0];
+    return path !== undefined && derived(path, new Set());
+  };
   let found = false;
   const visit = (node: ts.Node): void => {
     if (found) return;
     if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)) {
       const name = node.expression.name.text;
       const receiver = node.expression.expression;
-      if (VERBS.has(name) && ts.isPropertyAccessExpression(receiver) && receiver.expression.kind === ts.SyntaxKind.ThisKeyword && httpFields.has(receiver.name.text)) {
+      if (VERBS.has(name) && ts.isPropertyAccessExpression(receiver) && receiver.expression.kind === ts.SyntaxKind.ThisKeyword && httpFields.has(receiver.name.text) && forwardsParameter(node, name)) {
         found = true;
         return;
       }
-      if (receiver.kind === ts.SyntaxKind.ThisKeyword && reaching.has(name)) {
+      if (receiver.kind === ts.SyntaxKind.ThisKeyword && reaching.has(name) && forwardsParameter(node, name)) {
         found = true;
         return;
       }
@@ -217,6 +248,23 @@ function reachesVerb(member: ts.Node, httpFields: ReadonlySet<string>, reaching:
   };
   visit(member);
   return found;
+}
+
+/** The variables a member declares in its body, by name, with what they are initialized to. */
+function localInitializers(member: ts.Node): ReadonlyMap<string, ts.Expression> {
+  const held = new Map<string, ts.Expression>();
+  const visit = (node: ts.Node): void => {
+    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer !== undefined) held.set(node.name.text, node.initializer);
+    ts.forEachChild(node, visit);
+  };
+  visit(member);
+  return held;
+}
+
+function parametersOf(member: ts.Node): ReadonlySet<string> {
+  const initializer = ts.isPropertyDeclaration(member) ? member.initializer : undefined;
+  const declared = ts.isMethodDeclaration(member) ? member.parameters : initializer !== undefined && (ts.isArrowFunction(initializer) || ts.isFunctionExpression(initializer)) ? initializer.parameters : [];
+  return new Set(declared.flatMap((parameter) => (ts.isIdentifier(parameter.name) ? [parameter.name.text] : [])));
 }
 
 /** Reads one file's call sites, resolving the module specifiers it meets through the snapshot. */

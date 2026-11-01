@@ -122,3 +122,23 @@ test("an httpResource is a call site: a URL its function returns is a GET, a req
 test("a base URL the call declares but the snapshot does not decide is an unknown target, never a call with no base", async () => {
   assert.deepEqual(sites(await reader.of([component("    this.http.get('/route', { baseUrl: method })")], "shop-web")), ["unknown unresolved@src/app/app.component.ts:6"]);
 });
+
+test("a class another class injects that makes its requests with paths it states keeps them as call sites: only a method that forwards its own parameter as the path is a wrapper", async () => {
+  const api = source(
+    "src/app/items/items.api.ts",
+    ["import { HttpClient } from '@angular/common/http'", "import { inject, Injectable } from '@angular/core'", "@Injectable({ providedIn: 'root' })", "export class ItemsApi {", "  private readonly http = inject(HttpClient)", "  featured(): void {", "    this.http.get('/items/featured')", "  }", "}"].join("\n"),
+  );
+  const page = source("src/app/items/items.page.ts", ["import { inject } from '@angular/core'", "import { ItemsApi } from './items.api'", "export class ItemsPage {", "  private readonly api = inject(ItemsApi)", "  load(): void {", "    this.api.featured()", "  }", "}"].join("\n"));
+
+  assert.deepEqual(sites(await reader.of([api, page], "shop-web")), ["GET /items/featured@src/app/items/items.api.ts:7"]);
+});
+
+test("a wrapper's path may be computed from its parameter; a method whose name is no verb keeps its own call site, since a call to it is not read as a request", async () => {
+  const client = source(
+    API,
+    ["import { HttpClient } from '@angular/common/http'", "import { inject, Injectable } from '@angular/core'", "@Injectable({ providedIn: 'root' })", "export class RestClientService {", "  private readonly http = inject(HttpClient)", "  get(path: string): void {", "    const url = this.resolve(path)", "    this.http.get(url)", "  }", "  item(id: string): void {", "    this.http.get(`/items/${id}`)", "  }", "  private resolve(path: string): string {", "    return path", "  }", "}"].join("\n"),
+  );
+  const page = source("src/app/items/items.page.ts", ["import { inject } from '@angular/core'", "import { RestClientService } from '../core/rest/services/client/rest-client.service'", "export class ItemsPage {", "  private readonly rest = inject(RestClientService)", "  load(): void {", "    this.rest.get('/items')", "    this.rest.item('7')", "  }", "}"].join("\n"));
+
+  assert.deepEqual(sites(await reader.of([client, page], "shop-web")), [`GET /items/{}@${API}:11`, "GET /items@src/app/items/items.page.ts:6"]);
+});
