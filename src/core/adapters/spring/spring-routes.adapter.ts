@@ -73,6 +73,8 @@ interface ContractIndex {
   byOperationId: ReadonlyMap<string, readonly ContractOperation[]>;
   /** A document the reader could not parse, as the item that reports it. */
   faults: readonly Finding<never>[];
+  /** The routes of a contract whose servers disagree on the path: their base path is not known. */
+  undecided: WeakSet<object>;
 }
 
 const NO_CONTRACTS: ContractRoutes = { operations: () => [] };
@@ -89,7 +91,7 @@ function contractIndex(operations: readonly Finding<ContractOperation>[]): Contr
     if (held === undefined) byOperationId.set(finding.value.operationId, [finding.value]);
     else held.push(finding.value);
   }
-  return { byOperationId, faults };
+  return { byOperationId, faults, undecided: new WeakSet() };
 }
 
 export function createSpringRoutesExtractor(parser: JavaParser, contracts: ContractRoutes = NO_CONTRACTS): EntrypointExtractor {
@@ -119,7 +121,7 @@ function extractRoutes(parser: JavaParser, files: readonly SourceFile[], contrac
     }
     const readable = parsed.filter((file) => !project.unreadable.includes(file));
     const entrypoints = sortFindings(withPathPrefixes(findings, pathPrefixConfigurations(project, readable)));
-    return withBasePaths(entrypoints, files, applicationModules(project, annotations), basePathConfigurations(project, readable, annotations));
+    return withBasePaths(entrypoints, files, applicationModules(project, annotations), basePathConfigurations(project, readable, annotations), index.undecided);
   } finally {
     for (const tree of trees) tree.dispose();
   }
@@ -169,6 +171,7 @@ function withBasePaths(
   files: readonly SourceFile[],
   applications: ReadonlySet<string>,
   inCode: readonly Evidence[],
+  undecided: WeakSet<object>,
 ): Finding<Entrypoint>[] {
   const configs = files.filter((file) => isSpringConfigFile(file.path)).toSorted((a, b) => compareText(a.path, b.path));
   const byModule = new Map<string, Finding<BasePath>>();
@@ -183,7 +186,7 @@ function withBasePaths(
     if (value.kind !== "http-route") return { ...finding, value };
     const resources = resourcesOfSource(value.handler.path);
     const basePath: Finding<BasePath> =
-      resources === undefined || !applications.has(resources)
+      undecided.has(finding) || resources === undefined || !applications.has(resources)
         ? { status: "unknown", reason: "unresolved", evidence: finding.evidence }
         : inCode.length > 0
           ? { status: "unknown", reason: "no-extractor", evidence: inCode }
@@ -353,20 +356,20 @@ function contractJoin(controller: Controller, method: MethodDecl): { operation: 
   if (candidates.length > 1) return { ambiguous: unknown("unresolved", [span, ...candidates.map((operation) => ({ path: operation.document, line: operation.line }))]) };
   const [operation] = candidates;
   if (operation === undefined) return undefined;
-  return {
-    operation,
-    finding: {
-      status: "complete",
-      value: {
-        kind: "http-route",
-        name: `${operation.method} ${operation.path}`,
-        method: operation.method,
-        path: operation.path,
-        handler: { path: span.path, symbol: `${method.owner.qualifiedName}.${method.name}`, line: span.line },
-      },
-      evidence: [span, { path: operation.document, line: operation.line }],
+  const path = operation.basePath === undefined || operation.basePath === "" ? operation.path : joinPath(operation.basePath, operation.path);
+  const finding: Finding<MappedRoute> = {
+    status: "complete",
+    value: {
+      kind: "http-route",
+      name: `${operation.method} ${path}`,
+      method: operation.method,
+      path,
+      handler: { path: span.path, symbol: `${method.owner.qualifiedName}.${method.name}`, line: span.line },
     },
+    evidence: [span, { path: operation.document, line: operation.line }],
   };
+  if (operation.basePath === undefined) controller.operations.undecided.add(finding);
+  return { operation, finding };
 }
 
 /** A method with no mapping of its own that may still be one: it carries a library annotation, or overrides a method of a supertype the sources do not give. */

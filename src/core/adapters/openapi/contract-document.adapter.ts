@@ -16,16 +16,40 @@ export function createContractRoutes(): ContractRoutes {
 function operationsOf(file: SourceFile): readonly Finding<ContractOperation>[] {
   const lineCounter = new LineCounter();
   let document: Document.Parsed;
+  let content: ContractContent | null;
   try {
     document = parseDocument(file.content, { lineCounter });
+    const first = document.errors[0];
+    if (first !== undefined) return [unreadable(file.path, first.linePos?.[0]?.line ?? 1)];
+    content = document.toJS() as ContractContent | null;
   } catch {
     return [unreadable(file.path, 1)];
   }
-  const first = document.errors[0];
-  if (first !== undefined) return [unreadable(file.path, first.linePos?.[0]?.line ?? 1)];
-  const content = document.toJS() as { openapi?: unknown; swagger?: unknown; paths?: unknown } | null;
   if (!declaresContract(content) || typeof content?.paths !== "object" || content.paths === null) return [];
-  return Object.entries(content.paths as Record<string, unknown>).flatMap(([path, item]) => operationsAt(file, document, lineCounter, path, item));
+  const basePath = basePathOf(content);
+  return Object.entries(content.paths as Record<string, unknown>).flatMap(([path, item]) => operationsAt(file, document, lineCounter, basePath, path, item));
+}
+
+interface ContractContent {
+  openapi?: unknown;
+  swagger?: unknown;
+  paths?: unknown;
+  basePath?: unknown;
+  servers?: unknown;
+}
+
+/** The path every operation is served under: Swagger 2.0 `basePath`, or the path part of the OpenAPI `servers`; `undefined` when the servers disagree. */
+function basePathOf(content: ContractContent): string | undefined {
+  if (content.swagger !== undefined) return typeof content.basePath === "string" ? normalized(content.basePath) : "";
+  const urls = Array.isArray(content.servers) ? content.servers.flatMap((server: { url?: unknown } | null) => (typeof server?.url === "string" ? [server.url] : [])) : [];
+  const paths = new Set(urls.map((url) => normalized(url.replace(/^([a-z][a-z0-9+.-]*:)?\/\/[^/?#]*/i, ""))));
+  return paths.size > 1 ? undefined : (paths.values().next().value ?? "");
+}
+
+function normalized(path: string): string {
+  const [bare = ""] = path.split(/[?#]/);
+  const trimmed = bare.replace(/\/+$/, "");
+  return trimmed === "" || trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
 }
 
 /** A document is a contract only when it says which contract it is: OpenAPI 3.x or Swagger 2.0. */
@@ -34,14 +58,14 @@ function declaresContract(content: { openapi?: unknown; swagger?: unknown } | nu
   return String(content?.swagger ?? "") === SWAGGER;
 }
 
-function operationsAt(file: SourceFile, document: Document.Parsed, lineCounter: LineCounter, path: string, item: unknown): Finding<ContractOperation>[] {
+function operationsAt(file: SourceFile, document: Document.Parsed, lineCounter: LineCounter, basePath: string | undefined, path: string, item: unknown): Finding<ContractOperation>[] {
   if (typeof item !== "object" || item === null) return [];
   return Object.entries(item as Record<string, unknown>).flatMap(([verb, operation]) => {
     if (!VERBS.has(verb) || typeof operation !== "object" || operation === null) return [];
     const { operationId } = operation as { operationId?: unknown };
     if (typeof operationId !== "string" || operationId === "") return [];
     const line = lineOf(document, lineCounter, ["paths", path, verb, "operationId"]);
-    return [{ status: "complete", value: { operationId, method: verb.toUpperCase() as HttpMethod, path, document: file.path, line }, evidence: [{ path: file.path, line }] }];
+    return [{ status: "complete", value: { operationId, method: verb.toUpperCase() as HttpMethod, path, basePath, document: file.path, line }, evidence: [{ path: file.path, line }] }];
   });
 }
 

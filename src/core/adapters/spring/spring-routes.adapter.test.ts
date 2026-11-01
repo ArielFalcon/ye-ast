@@ -2471,8 +2471,8 @@ function contracting(operations: readonly Finding<ContractOperation>[]): Entrypo
   return createSpringRoutesExtractor(parser, { operations: () => operations });
 }
 
-function operation(operationId: string, method: HttpMethod, path: string, line = 5): Finding<ContractOperation> {
-  return { status: "complete", value: { operationId, method, path, document: CONTRACT, line }, evidence: [{ path: CONTRACT, line }] };
+function operation(operationId: string, method: HttpMethod, path: string, line = 5, basePath: string | null = ""): Finding<ContractOperation> {
+  return { status: "complete", value: { operationId, method, path, basePath: basePath ?? undefined, document: CONTRACT, line }, evidence: [{ path: CONTRACT, line }] };
 }
 
 test("an @Override method that a contract operationId names is a route with the contract's verb and path", async () => {
@@ -2534,4 +2534,25 @@ test("an override a contract names but that declares a mapping of its own keeps 
 
   assert.deepEqual(routes(findings), []);
   assert.deepEqual(gaps(findings), ["no-extractor@4", "no-extractor@5"]);
+});
+
+test("a contract's base path leads the path of the route its operation makes", async () => {
+  const controller = app("OrdersController", `@RestController class OrdersController implements OrdersApi {\n  @Override public void createNewOrder() {}\n}`);
+  extractor = contracting([operation("createNewOrder", "POST", "/orders", 5, "/v2")]);
+
+  assert.deepEqual(routes(await extractor.extract([controller, MAIN])), ["POST /v2/orders"]);
+});
+
+test("a contract whose servers disagree on the path makes a route whose base path is unknown, at the contract", async () => {
+  const controller = app("OrdersController", `@RestController class OrdersController implements OrdersApi {\n  @Override public void createNewOrder() {}\n}`);
+  extractor = contracting([operation("createNewOrder", "POST", "/orders", 5, null)]);
+
+  const [finding] = await extractor.extract([controller, MAIN]);
+
+  assert.equal(finding?.status === "complete" && finding.value.kind === "http-route" && finding.value.path, "/orders");
+  assert.deepEqual(finding?.status === "complete" && finding.value.kind === "http-route" && finding.value.basePath, {
+    status: "unknown",
+    reason: "unresolved",
+    evidence: finding?.evidence,
+  });
 });

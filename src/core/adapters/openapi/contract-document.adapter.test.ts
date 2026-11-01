@@ -58,3 +58,50 @@ test("a contract document the parser rejects is one unknown item with the place 
 
   assert.deepEqual(reasons(findings), ["source-unreadable@2"]);
 });
+
+function basePaths(findings: readonly Finding<ContractOperation>[]): (string | undefined)[] {
+  return findings.flatMap((finding) => (finding.status === "complete" ? [finding.value.basePath] : []));
+}
+
+function withServers(servers: unknown): string {
+  return JSON.stringify({ openapi: "3.0.3", servers, paths: { "/pets": { get: { operationId: "listPets" } } } });
+}
+
+test("a document whose aliases exhaust the resource budget is one unknown item, never a thrown error", () => {
+  const level = (name: string, from: string) => `${name}: &${name} [${Array.from({ length: 10 }, () => `*${from}`).join(", ")}]`;
+  const document = ['openapi: 3.0.0', 'a: &a ["x", "x", "x", "x", "x", "x", "x", "x", "x", "x"]', level("b", "a"), level("c", "b"), level("d", "c"), "paths: {}"].join("\n");
+
+  const findings = routes.operations([{ path: "openapi/api-definition.yaml", content: document }]);
+
+  assert.deepEqual(reasons(findings), ["source-unreadable@1"]);
+});
+
+test("a Swagger 2.0 basePath is the base path of every operation", () => {
+  const document = JSON.stringify({ swagger: "2.0", basePath: "/v2/", paths: { "/pet": { post: { operationId: "addPet" } } } });
+
+  assert.deepEqual(basePaths(routes.operations([{ path: "openapi/swagger.json", content: document }])), ["/v2"]);
+});
+
+test("the path part of the one OpenAPI server is the base path: scheme and host are ignored, a relative URL is a path", () => {
+  const read = (url: string) => basePaths(routes.operations([{ path: "openapi/api.json", content: withServers([{ url }]) }]));
+
+  assert.deepEqual(read("https://api.example.com:8443/v1/?x=1"), ["/v1"]);
+  assert.deepEqual(read("/v1"), ["/v1"]);
+  assert.deepEqual(read("v1"), ["/v1"]);
+  assert.deepEqual(read("https://{region}.example.com/api/{version}"), ["/api/{version}"]);
+  assert.deepEqual(read("https://api.example.com"), [""]);
+});
+
+test("servers whose path parts agree give that path, and a document with no servers gives no base path", () => {
+  const agreeing = withServers([{ url: "https://a.example.com/v1" }, { url: "https://b.example.com/v1/" }]);
+
+  assert.deepEqual(basePaths(routes.operations([{ path: "openapi/api.json", content: agreeing }])), ["/v1"]);
+  assert.deepEqual(basePaths(routes.operations([{ path: "openapi/api.json", content: withServers(undefined) }])), [""]);
+  assert.deepEqual(basePaths(routes.operations([{ path: "openapi/api.json", content: withServers([]) }])), [""]);
+});
+
+test("servers whose path parts differ give no base path: it is undecided", () => {
+  const differing = withServers([{ url: "https://a.example.com/v1" }, { url: "https://b.example.com/v2" }]);
+
+  assert.deepEqual(basePaths(routes.operations([{ path: "openapi/api.json", content: differing }])), [undefined]);
+});

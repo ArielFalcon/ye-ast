@@ -10,6 +10,11 @@ export interface ContractOperation {
   operationId: string;
   method: HttpMethod;
   path: string;
+  /**
+   * What the contract puts before `path`: the Swagger 2.0 `basePath`, or the path part of its OpenAPI `servers`; empty when
+   * it declares none, `undefined` when its servers disagree.
+   */
+  basePath: string | undefined;
   /** The contract document that declares the operation, repository-relative. */
   document: string;
   /** The line of the `operationId` in that document. */
