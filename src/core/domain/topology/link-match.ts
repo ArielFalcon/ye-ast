@@ -36,7 +36,7 @@ export interface JoinResult {
   ambiguous?: AmbiguousMatch;
 }
 
-interface Match {
+export interface Match {
   route: HttpRoute;
   basis: LinkBasis;
   confidence: number;
@@ -136,7 +136,7 @@ function withoutPrefix(target: HttpTarget): HttpTarget {
 }
 
 /** What the call matches once its gateway prefix is removed: equal paths and configured base paths, never a suffix. */
-function matchBehindGateway(target: HttpTarget, routes: readonly HttpRoute[]): Match | undefined {
+export function matchBehindGateway(target: HttpTarget, routes: readonly HttpRoute[]): Match | undefined {
   const stripped = withoutPrefix(target);
   return exactMatch(stripped, routes) ?? basePathMatch(stripped, routes);
 }

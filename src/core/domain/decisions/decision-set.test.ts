@@ -1,0 +1,215 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import type { HttpRoute } from "../entrypoints/http-route.ts";
+import { canonicalJson } from "../shared/canonical-json.ts";
+import type { CallSite, HttpTarget } from "../topology/call-site.ts";
+import type { NameCandidate, OutwardName } from "../topology/outward-name.ts";
+import type { Decision, DecisionSet } from "./decision.ts";
+import { decisionsOf, type DecisionInput, type DecisionRepository } from "./decision-set.ts";
+
+function outward(name: string, kind: OutwardName["kind"] = "http-host", evidence: OutwardName["evidence"] = [{ path: "src/app.ts", line: 1 }]): OutwardName {
+  return { name, kind, evidence };
+}
+
+function candidate(name: string, repo: string, basis: NameCandidate["basis"] = "exact-name"): NameCandidate {
+  return { name, repo, basis, evidence: [{ path: `src/${repo}.ts`, line: 1 }] };
+}
+
+function route(path: string, handlerLine = 10, method: HttpRoute["method"] = "GET"): HttpRoute {
+  return {
+    kind: "http-route",
+    name: `${method} ${path}`,
+    method,
+    path,
+    handler: { path: `src/${path.slice(1)}.java`, symbol: "App.run", line: handlerLine },
+    basePath: { status: "unknown", reason: "unresolved", evidence: [] },
+  };
+}
+
+function call(repo: string, path: string, method: HttpTarget["method"] = "GET"): CallSite {
+  return { repo, file: `${repo}/src/app.ts`, line: 7, symbol: "Api.call", transport: "http", target: { status: "complete", value: { method, path }, evidence: [] } };
+}
+
+function repository(repo: string, overrides: Partial<DecisionRepository> = {}): DecisionRepository {
+  return { repo, names: [], callSites: [], entrypoints: [], trust: "untrusted", ...overrides };
+}
+
+function input(overrides: Partial<DecisionInput> = {}): DecisionInput {
+  return { trigger: "webapp", repositories: [repository("webapp")], candidates: [], unserved: [], gateways: [], ...overrides };
+}
+
+function byId(set: DecisionSet): Map<string, Decision> {
+  return new Map(set.decisions.map((decision) => [decision.id, decision]));
+}
+
+function ids(set: DecisionSet): string[] {
+  return set.decisions.map((decision) => decision.id);
+}
+
+function options(decision: Decision | undefined): string[] {
+  return decision === undefined ? [] : decision.options.map((option) => `${option.value}${option.recommended ? "*" : ""}${option.basis === undefined ? "" : `(${option.basis})`}`);
+}
+
+test("a membership decision recommends the unique strongest basis and records it on the option", () => {
+  const set = decisionsOf(input({ candidates: [candidate("orders", "orders", "remote"), candidate("orders", "orders-api", "exact-name"), candidate("orders", "orders-core", "artifact")] }));
+
+  assert.deepEqual(options(byId(set).get("membership:name:orders")), ["orders(remote)", "orders-api*(exact-name)", "orders-core(artifact)"]);
+});
+
+test("two membership candidates at the strongest basis recommend none", () => {
+  const set = decisionsOf(input({ candidates: [candidate("orders", "orders-a", "exact-name"), candidate("orders", "orders-b", "exact-name")] }));
+
+  assert.deepEqual(options(byId(set).get("membership:name:orders")), ["orders-a(exact-name)", "orders-b(exact-name)"]);
+});
+
+test("a candidate clone that states no name and that no name named is one optional membership decision", () => {
+  const set = decisionsOf(
+    input({
+      repositories: [repository("webapp"), repository("geo"), repository("named", { names: [outward("geo-api")] }), repository("served")],
+      candidates: [candidate("orders", "served", "artifact")],
+    }),
+  );
+
+  assert.deepEqual(ids(set), ["membership:clone:geo", "membership:name:orders"]);
+  const clone = byId(set).get("membership:clone:geo");
+  assert.deepEqual(options(clone), ["geo"]);
+  assert.equal(clone?.allowsFreeText, false);
+  assert.equal(clone?.required, false);
+});
+
+test("a name with candidates is a membership decision and never also a repository one", () => {
+  const set = decisionsOf(input({ repositories: [repository("webapp", { names: [outward("orders")] })], candidates: [candidate("orders", "orders")], unserved: [] }));
+
+  assert.deepEqual(ids(set), ["membership:name:orders"]);
+});
+
+test("an unserved name is one free-text decision carrying the places that write it", () => {
+  const set = decisionsOf(input({ unserved: [outward("geo-api", "http-host", [{ path: "src/geo.ts", line: 4 }])] }));
+
+  const decision = byId(set).get("repository:geo-api");
+  assert.deepEqual(decision?.options, []);
+  assert.equal(decision?.allowsFreeText, true);
+  assert.equal(decision?.required, false);
+  assert.deepEqual(decision?.evidence, [{ path: "src/geo.ts", line: 4 }]);
+});
+
+test("two unserved names that write one string are one decision with both places", () => {
+  const set = decisionsOf(
+    input({
+      unserved: [outward("geo-api", "path-prefix", [{ path: "b.ts", line: 2 }]), outward("geo-api", "http-host", [{ path: "a.ts", line: 1 }])],
+    }),
+  );
+
+  assert.deepEqual(ids(set), ["repository:geo-api"]);
+  assert.deepEqual(byId(set).get("repository:geo-api")?.evidence, [
+    { path: "a.ts", line: 1 },
+    { path: "b.ts", line: 2 },
+  ]);
+});
+
+test("a prefix that names a repository is not a gateway decision", () => {
+  const set = decisionsOf(
+    input({
+      repositories: [
+        repository("webapp", { names: [outward("orders")], callSites: [call("webapp", "/orders-api/refunds")] }),
+        repository("orders-api", { names: [outward("orders")], entrypoints: [route("/orders")] }),
+      ],
+    }),
+  );
+
+  assert.deepEqual(ids(set), []);
+});
+
+test("a prefix inferGateways infers is not a gateway decision", () => {
+  const set = decisionsOf(
+    input({
+      repositories: [
+        repository("webapp", { names: [outward("orders")], callSites: [call("webapp", "/orders-api/orders")] }),
+        repository("orders", { names: [outward("orders")], entrypoints: [route("/orders")] }),
+      ],
+    }),
+  );
+
+  assert.deepEqual(ids(set), []);
+});
+
+test("a prefix no route serves is a gateway decision with no option, citing the calls under it", () => {
+  const set = decisionsOf(
+    input({
+      repositories: [
+        repository("webapp", { names: [outward("orders")], callSites: [call("webapp", "/legacy/thing", "POST")] }),
+        repository("orders", { names: [outward("orders")], entrypoints: [route("/orders")] }),
+      ],
+    }),
+  );
+
+  const decision = byId(set).get("gateway:legacy");
+  assert.deepEqual(ids(set), ["gateway:legacy"]);
+  assert.deepEqual(decision?.options, []);
+  assert.equal(decision?.allowsFreeText, false);
+  assert.equal(decision?.required, false);
+  assert.deepEqual(decision?.evidence, [{ path: "webapp/src/app.ts", line: 7 }]);
+});
+
+test("a prefix two repositories match offers both and recommends none", () => {
+  const set = decisionsOf(
+    input({
+      repositories: [
+        repository("webapp", { names: [outward("orders")], callSites: [call("webapp", "/api/orders")] }),
+        repository("shop", { names: [outward("orders")], entrypoints: [route("/orders", 11)] }),
+        repository("billing", { names: [outward("orders")], entrypoints: [route("/orders", 22)] }),
+      ],
+    }),
+  );
+
+  assert.deepEqual(options(byId(set).get("gateway:api")), ["billing", "shop"]);
+});
+
+test("a repository without a trust record is a required decision offering both modes, and one with a record is not", () => {
+  const set = decisionsOf(
+    input({
+      repositories: [repository("webapp", { names: [outward("orders")], trust: "trusted" }), { repo: "geo", names: [outward("orders")], callSites: [], entrypoints: [] }],
+    }),
+  );
+
+  assert.deepEqual(ids(set), ["trust:geo"]);
+  const decision = byId(set).get("trust:geo");
+  assert.deepEqual(options(decision), ["trusted", "untrusted"]);
+  assert.equal(decision?.required, true);
+  assert.equal(decision?.allowsFreeText, false);
+});
+
+test("the decision set is sorted by id and two runs over one input are byte-identical", () => {
+  const build = (): DecisionInput =>
+    input({
+      repositories: [
+        repository("webapp", { names: [outward("orders")], callSites: [call("webapp", "/legacy/thing")], trust: "untrusted" }),
+        repository("geo"),
+        repository("orders", { names: [outward("orders")], entrypoints: [route("/orders")] }),
+      ],
+      candidates: [candidate("orders", "orders", "remote"), candidate("geo-api", "orders", "artifact")],
+      unserved: [outward("zeta-api"), outward("alpha-api")],
+    });
+
+  const first = decisionsOf(build());
+  assert.deepEqual(ids(first), [...ids(first)].sort());
+  assert.equal(canonicalJson(decisionsOf(build())), canonicalJson(first));
+});
+
+test("a name equal to a clone id gives two decisions, one per subject space", () => {
+  const set = decisionsOf(input({ repositories: [repository("webapp"), repository("orders")], candidates: [candidate("orders", "orders-api")] }));
+
+  assert.deepEqual(ids(set), ["membership:clone:orders", "membership:name:orders"]);
+});
+
+test("a prefix whose only match is the caller's own route offers no option", () => {
+  const set = decisionsOf(
+    input({
+      repositories: [repository("orders-svc", { callSites: [call("orders-svc", "orders-api/orders/{id}")], entrypoints: [route("/orders/{id}")] })],
+    }),
+  );
+
+  const decision = byId(set).get("gateway:orders-api");
+  assert.ok(decision !== undefined);
+  assert.deepEqual(options(decision), []);
+});
