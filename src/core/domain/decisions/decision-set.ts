@@ -6,6 +6,7 @@ import type { CallSite, HttpTarget } from "../topology/call-site.ts";
 import { callSiteEvidence, unresolvedPlace } from "../topology/call-site.ts";
 import { inferGateways, matchBehindGateway, prefixOf, type GatewayDeclaration, type RepositoryEntrypoints } from "../topology/link-match.ts";
 import { sortEvidence, type NameCandidate, type OutwardName } from "../topology/outward-name.ts";
+import type { RepositoryResolution } from "../topology/remote-snapshot.ts";
 import { decisionId, type Decision, type DecisionKind, type DecisionOption, type DecisionSet } from "./decision.ts";
 
 /** A repository as the decision rules read it: what it states, what it calls, what it serves and its trust record. */
@@ -28,13 +29,32 @@ export interface DecisionInput {
   gateways: readonly GatewayDeclaration[];
   /** The repositories the persisted declaration already holds: an answered membership is not asked again. */
   confirmed?: readonly string[];
+  /** What a refresh pinned per repository: the refs it consulted are the revisions a `revision` decision offers. */
+  resolutions?: readonly RepositoryResolution[];
+  /** The `origin` URL of a clone declared without a `remote`: the one remote a `remote` decision offers. */
+  origins?: readonly DecisionOrigin[];
+}
+
+/** A clone's own `origin` URL, read from its configuration: an option of a `remote` decision, never a recommendation. */
+export interface DecisionOrigin {
+  repo: string;
+  url: string;
 }
 
 const NAME_BASES = ["exact-name", "artifact", "remote"] as const;
 
 export function decisionsOf(input: DecisionInput): DecisionSet {
   const confirmed = new Set([input.trigger, ...(input.confirmed ?? [])]);
-  const decisions = [...membershipsByName(input, confirmed), ...membershipsByClone(input, confirmed), ...repositoryDecisions(input), ...libraryDecisions(input), ...gatewayDecisions(input), ...trustDecisions(input)];
+  const decisions = [
+    ...membershipsByName(input, confirmed),
+    ...membershipsByClone(input, confirmed),
+    ...repositoryDecisions(input),
+    ...libraryDecisions(input),
+    ...gatewayDecisions(input),
+    ...revisionDecisions(input),
+    ...remoteDecisions(input),
+    ...trustDecisions(input),
+  ];
   return { decisions: decisions.toSorted((a, b) => compareText(a.id, b.id)) };
 }
 
@@ -167,6 +187,38 @@ function gatewayDecisions(input: DecisionInput): Decision[] {
     });
     return decisionOf({ kind: "gateway", subject: prefix, evidence: under.map(({ site }) => callSiteEvidence(site)), options, allowsFreeText: false, required: false });
   });
+}
+
+/**
+ * One decision per refreshed repository the query could not read at the trigger's line: the branch the query pinned is
+ * recommended and every other ref the resolution consulted is an option, with free text for a name no listing stated
+ * (RFC-0014). A repository pinned by an explicit revision, or one pinned at the trigger's own line, leaves no gap.
+ */
+function revisionDecisions(input: DecisionInput): Decision[] {
+  return (input.resolutions ?? []).flatMap((resolution) => {
+    if (resolution.step !== "default-branch" && resolution.step !== "revision-unavailable") return [];
+    if (resolution.step === "default-branch" && resolution.consulted.length < 2) return [];
+    const options = resolution.consulted.flatMap((ref): DecisionOption[] =>
+      ref.sha === undefined
+        ? []
+        : [{ value: ref.branch, ...(resolution.step === "default-branch" ? { basis: "default-branch" as const } : {}), evidence: [], recommended: resolution.sha !== undefined && ref.sha === resolution.sha }],
+    );
+    return [decisionOf({ kind: "revision", subject: resolution.repo, evidence: [], options, allowsFreeText: true, required: false })];
+  });
+}
+
+/** One decision per repository declared without a `remote`: its clone's `origin` URL is the option, and no source of truth is ever preselected. */
+function remoteDecisions(input: DecisionInput): Decision[] {
+  return (input.origins ?? []).map(({ repo, url }) =>
+    decisionOf({
+      kind: "remote",
+      subject: repo,
+      evidence: [],
+      options: [{ value: url, basis: "origin", evidence: [{ path: ".git/config", line: 1, via: "origin" }], recommended: false }],
+      allowsFreeText: true,
+      required: false,
+    }),
+  );
 }
 
 /** One required decision per repository the host declared no trust for: both modes, neither recommended. */

@@ -8,6 +8,7 @@ import type { Result } from "../../domain/shared/result.ts";
 import type { CallSite } from "../../domain/topology/call-site.ts";
 import type { NameCandidate, OutwardName } from "../../domain/topology/outward-name.ts";
 import type { DecisionQueries, DecisionValue } from "../../ports/decision-queries.port.ts";
+import type { Vcs } from "../../ports/vcs.port.ts";
 import type { WorkspaceDefaults } from "../../ports/workspace-defaults.port.ts";
 import type { WorkspaceFault, WorkspaceRepository, WorkspaceSection } from "../../ports/workspace-repos.port.ts";
 import type { FactRead, WorkspaceQueries, WorkspaceRefresh, WorkspaceRequest, WorkspaceValue } from "../../ports/workspace-queries.port.ts";
@@ -75,7 +76,7 @@ function workspaceValue(gateways: readonly { prefix: string; repo: string }[] = 
 
 const REQUEST: WorkspaceRequest = { repo: { path: "/work/orders" }, repos: [{ path: "/work/shop-web" }, { path: "/work/billing" }] };
 
-function setup(answer: Result<Fact<WorkspaceValue>, WorkspaceFault>, defaults?: WorkspaceDefaults, refresh?: WorkspaceRefresh): { queries: DecisionQueries; asks: WorkspaceRequest[] } {
+function setup(answer: Result<Fact<WorkspaceValue>, WorkspaceFault>, defaults?: WorkspaceDefaults, refresh?: WorkspaceRefresh, vcs?: Pick<Vcs, "remotes">): { queries: DecisionQueries; asks: WorkspaceRequest[] } {
   const asks: WorkspaceRequest[] = [];
   const workspace: WorkspaceQueries = {
     outwardNames: async (request) => {
@@ -83,7 +84,18 @@ function setup(answer: Result<Fact<WorkspaceValue>, WorkspaceFault>, defaults?: 
       return answer.ok ? { ok: true, value: { fact: answer.value, ...(refresh === undefined ? {} : { refresh }) } } : answer;
     },
   };
-  return { queries: createDecisionQueries({ workspace, ...(defaults === undefined ? {} : { defaults }) }), asks };
+  return { queries: createDecisionQueries({ workspace, ...(defaults === undefined ? {} : { defaults }), ...(vcs === undefined ? {} : { vcs }) }), asks };
+}
+
+/** A git that states the origin URL of each clone named here, and every clone it was asked about. */
+function remotesOf(urls: Readonly<Record<string, string>>, asked: string[] = []): Pick<Vcs, "remotes"> {
+  return {
+    remotes: async (repo) => {
+      asked.push(repo);
+      const url = urls[repo];
+      return { ok: true, value: url === undefined ? [] : [{ name: "origin", url }] };
+    },
+  };
 }
 
 /** The declaration a repository persisted, as the defaults port answers it. */
@@ -241,4 +253,69 @@ test("the decision answer carries the refresh the workspace read consumed beside
   assert.deepEqual(after.value.refresh, REFRESH);
   assert.deepEqual(after.value.fact, before.value.fact);
   assert.equal("refresh" in after.value.fact, false);
+});
+
+test("a repository the request declares without a remote offers its clone's origin URL, and the bound repository is never read for one", async () => {
+  const asked: string[] = [];
+  const vcs = remotesOf({ "/work/billing": "https://git.example.com/billing.git", "/work/shop-web": "https://git.example.com/shop-web.git" }, asked);
+  const { queries } = setup({ ok: true, value: base(workspaceValue()) }, undefined, undefined, vcs);
+
+  const value = valueOf(await queries.decisions(REQUEST));
+
+  assert.deepEqual(asked, ["/work/billing", "/work/shop-web"]);
+  const remote = decisionOf(value, "remote:billing");
+  assert.deepEqual(remote.options.map((option) => `${option.value}${option.recommended ? "*" : ""}(${option.basis})`), ["https://git.example.com/billing.git(origin)"]);
+  assert.equal(remote.allowsFreeText, true);
+  assert.equal(value.decisions.some((decision) => decision.id === "remote:orders"), false);
+});
+
+test("a repository whose declaration states a remote is not read for an origin and is no remote decision", async () => {
+  const asked: string[] = [];
+  const vcs = remotesOf({ "/work/billing": "https://git.example.com/billing.git", "/work/shop-web": "https://git.example.com/shop-web.git" }, asked);
+  const { queries } = setup({ ok: true, value: base(workspaceValue()) }, undefined, undefined, vcs);
+
+  const value = valueOf(
+    await queries.decisions({ ...REQUEST, repos: [{ path: "/work/shop-web", remote: "https://git.example.com/shop-web.git" }, { path: "/work/billing" }] }),
+  );
+
+  assert.deepEqual(asked, ["/work/billing"]);
+  assert.deepEqual(value.decisions.filter((decision) => decision.kind === "remote").map((decision) => decision.id), ["remote:billing"]);
+});
+
+test("a clone's remotes that cannot be read fail the set with that fault", async () => {
+  const broken: Pick<Vcs, "remotes"> = { remotes: async () => ({ ok: false, fault: { kind: "git-failed", detail: "/work/billing: no repository" } }) };
+  const { queries } = setup({ ok: true, value: base(workspaceValue()) }, undefined, undefined, broken);
+
+  assert.deepEqual(await queries.decisions(REQUEST), { ok: false, fault: { kind: "git-failed", detail: "/work/billing: no repository" } });
+});
+
+test("a repository the refresh pinned at the default branch while the trigger's line differed is a revision decision, and the sidecar stays beside the fact", async () => {
+  const refresh: WorkspaceRefresh = {
+    resolution: [{ repo: "billing", step: "default-branch", consulted: [{ branch: "feature/web" }, { branch: "main", sha: OTHER_SHA }], sha: OTHER_SHA }],
+    freshness: [{ repo: "billing", url: "https://git.example.com/billing.git", freshness: { status: "verified" } }],
+  };
+  const { queries } = setup({ ok: true, value: base(workspaceValue()) }, undefined, refresh);
+
+  const result = await queries.decisions(REQUEST);
+
+  assert.ok(result.ok);
+  const revision = decisionOf(valueOf(result), "revision:billing");
+  assert.deepEqual(revision.options.map((option) => `${option.value}${option.recommended ? "*" : ""}(${option.basis})`), ["main*(default-branch)"]);
+  assert.equal(revision.allowsFreeText, true);
+  assert.equal(revision.required, false);
+  assert.deepEqual(result.value.refresh, refresh);
+});
+
+test("a vcs dep adds only remote decisions, leaving every other decision byte-identical", async () => {
+  const withoutVcs = valueOf(await setup({ ok: true, value: base(workspaceValue()) }).queries.decisions(REQUEST));
+  const withVcs = valueOf(await setup({ ok: true, value: base(workspaceValue()) }, undefined, undefined, remotesOf({ "/work/billing": "https://git.example.com/billing.git" })).queries.decisions(REQUEST));
+
+  assert.deepEqual(withVcs.decisions.filter((decision) => decision.kind !== "remote"), withoutVcs.decisions);
+  assert.deepEqual(withVcs.decisions.filter((decision) => decision.kind === "remote").map((decision) => decision.id), ["remote:billing"]);
+});
+
+test("a clone that states no origin offers no remote decision", async () => {
+  const value = valueOf(await setup({ ok: true, value: base(workspaceValue()) }, undefined, undefined, remotesOf({})).queries.decisions(REQUEST));
+
+  assert.deepEqual(value.decisions.filter((decision) => decision.kind === "remote"), []);
 });

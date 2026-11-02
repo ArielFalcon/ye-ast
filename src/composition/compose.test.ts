@@ -393,3 +393,31 @@ test("a trusted sibling whose remote is passed is read at the remote's sha, and 
     await session.close();
   }
 });
+
+test("a composed decisions answer offers the origin URL of a clone the request declares without a remote, and keeps it out of the workspace fact", async () => {
+  const origin = join(workspace, "orders-origin");
+  mkdirSync(origin);
+  const inOrigin = (...args: string[]): string => execFileSync("git", args, { cwd: origin, env: GIT_ENV, encoding: "utf8" }).trim();
+  inOrigin("init", "-q", "-b", "main");
+  writeFileSync(join(origin, "ORDERS.md"), "orders\n");
+  inOrigin("add", "-A");
+  inOrigin("commit", "-q", "-m", "orders");
+  const url = pathToFileURL(origin).href;
+  const sibling = join(workspace, "orders-svc");
+  execFileSync("git", ["clone", "-q", url, sibling], { env: GIT_ENV });
+
+  const queries = composeQueries({ scratchRoot });
+  const request = { repo: { path: repo, id: "shop-service" }, repos: [{ path: sibling, id: "orders" }] };
+  const read = await queries.workspace.outwardNames(request);
+  assert.ok(read.ok);
+  assert.equal(JSON.stringify(read.value.fact).includes(url), false, "the remote URL never reaches the workspace fact");
+
+  const result = await queries.decisions.decisions(request);
+  assert.ok(result.ok);
+  const value = (result.value.fact as { value: DecisionValue }).value;
+
+  const remote = value.decisions.find((decision) => decision.id === "remote:orders");
+  assert.deepEqual(remote?.options.map((option) => `${option.value}(${option.basis},${option.recommended})`), [`${url}(origin,false)`]);
+  assert.deepEqual(remote?.options[0]?.evidence, [{ path: ".git/config", line: 1, via: "origin" }]);
+  assert.equal(value.decisions.some((decision) => decision.id === "remote:shop-service"), false, "the bound repository declares nothing to confirm");
+});

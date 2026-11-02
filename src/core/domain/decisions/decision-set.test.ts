@@ -303,3 +303,56 @@ test("a prefix whose only match is the caller's own route offers no option", () 
   assert.ok(decision !== undefined);
   assert.deepEqual(options(decision), []);
 });
+
+test("a repository the query could not read at the trigger's line is a revision decision recommending the branch it pinned", () => {
+  const set = decisionsOf(
+    input({ resolutions: [{ repo: "orders", step: "default-branch", consulted: [{ branch: "feature/web" }, { branch: "main", sha: "b".repeat(40) }], sha: "b".repeat(40) }] }),
+  );
+
+  const decision = byId(set).get("revision:orders");
+  assert.deepEqual(options(decision), ["main*(default-branch)"]);
+  assert.equal(decision?.allowsFreeText, true);
+  assert.equal(decision?.required, false);
+});
+
+test("a revision the declaration asked for, the trigger's line itself, or a default with no other line leaves no revision decision", () => {
+  const set = decisionsOf(
+    input({
+      resolutions: [
+        { repo: "explicit", asked: "main", step: "explicit", consulted: [{ branch: "main", sha: "a".repeat(40) }], sha: "a".repeat(40) },
+        { repo: "same-line", step: "trigger-line", consulted: [{ branch: "feature/web", sha: "b".repeat(40) }], sha: "b".repeat(40) },
+        { repo: "no-line", step: "default-branch", consulted: [{ branch: "main", sha: "c".repeat(40) }], sha: "c".repeat(40) },
+      ],
+    }),
+  );
+
+  assert.deepEqual(ids(set), []);
+});
+
+test("a repository no step could pin is a revision decision with free text and no recommendation", () => {
+  const set = decisionsOf(input({ resolutions: [{ repo: "orders", step: "revision-unavailable", consulted: [{ branch: "feature/web" }] }] }));
+
+  const decision = byId(set).get("revision:orders");
+  assert.deepEqual(options(decision), []);
+  assert.equal(decision?.allowsFreeText, true);
+  assert.equal(decision?.required, false);
+});
+
+test("a repository declared without a remote offers its clone's origin URL with that basis, and recommends none", () => {
+  const set = decisionsOf(input({ origins: [{ repo: "billing", url: "https://git.example.com/billing.git" }] }));
+
+  const decision = byId(set).get("remote:billing");
+  assert.deepEqual(options(decision), ["https://git.example.com/billing.git(origin)"]);
+  assert.deepEqual(decision?.options[0]?.evidence, [{ path: ".git/config", line: 1, via: "origin" }]);
+  assert.equal(decision?.allowsFreeText, true);
+  assert.equal(decision?.required, false);
+});
+
+test("a revision-unavailable resolution offering a consulted ref that carries a sha recommends none", () => {
+  const set = decisionsOf(input({ resolutions: [{ repo: "orders", step: "revision-unavailable", consulted: [{ branch: "develop", sha: "d".repeat(40) }] }] }));
+
+  const decision = byId(set).get("revision:orders");
+  assert.deepEqual(options(decision), ["develop"]);
+  assert.equal(decision?.allowsFreeText, true);
+  assert.equal(decision?.required, false);
+});
