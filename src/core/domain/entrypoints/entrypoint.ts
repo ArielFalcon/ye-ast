@@ -1,12 +1,12 @@
 import type { Handler, HttpRoute } from "./http-route.ts";
 import type { UiRoute } from "./ui-route.ts";
 
-/** A method that consumes messages or events: `kafka <topic>`, `rabbit <queue>`, `jms <destination>` or `event <qualified type name>`. */
+/** A method that consumes messages or events: `kafka <topic>`, `rabbit <queue>`, `jms <destination>`, `event <qualified type name>` or `nats <subject>`. */
 export interface Listener {
   kind: "listener";
   name: string;
-  protocol: "kafka" | "rabbit" | "jms" | "event";
-  /** The topic, queue or destination it consumes, or the qualified name of the event type. */
+  protocol: "kafka" | "rabbit" | "jms" | "event" | "nats";
+  /** The topic, queue, destination or subject it consumes, or the qualified name of the event type. */
   destination: string;
   handler: Handler;
 }

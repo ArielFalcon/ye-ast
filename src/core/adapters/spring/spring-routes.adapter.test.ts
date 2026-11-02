@@ -2464,6 +2464,40 @@ test("a job whose cron is Spring's disabled marker is no entrypoint: Spring neve
   assert.deepEqual(findings, []);
 });
 
+const NATS = "import io.nats.client.Connection; import io.nats.client.JetStream; import io.nats.client.Message;";
+
+/** A Java source in package `app` with the NATS client imported; the body starts at line 4. */
+function nats(name: string, body: string, imports = ""): SourceFile {
+  return file(`src/main/java/app/${name}.java`, ["package app;", NATS, `${COMPONENT} ${imports}`, body].join("\n"));
+}
+
+test("a direct NATS subscription is a listener named by its subject, with or without a queue group, and JetStream subscribes the same way", async () => {
+  const source = nats(
+    "Consumers",
+    `@Component class Consumers {
+  private final Connection connection;
+  private final JetStream jetStream;
+  void plain() { connection.subscribe("orders.created", message -> handle(message)); }
+  void grouped() { connection.subscribe("orders.paid", "workers", message -> handle(message)); }
+  void stream() { jetStream.subscribe("orders.shipped", message -> handle(message)); }
+  void handle(Message message) {}
+}`,
+  );
+
+  const findings = await extractor.extract([source, MAIN]);
+
+  assert.deepEqual(listeners(findings), ["nats orders.created@Consumers.plain", "nats orders.paid@Consumers.grouped", "nats orders.shipped@Consumers.stream"]);
+});
+
+test("a NATS subscription whose subject the sources do not state is an unresolved item", async () => {
+  const findings = await extractor.extract([
+    nats("Consumers", `@Component class Consumers {\n  private final Connection connection;\n  void plain() { connection.subscribe(Subjects.ORDERS, message -> handle(message)); }\n  void handle(Message message) {}\n}`, "import com.lib.Subjects;"),
+  ]);
+
+  assert.deepEqual(listeners(findings), []);
+  assert.deepEqual(gaps(findings), ["unresolved@6"]);
+});
+
 const CONTRACT = "src/main/resources/openapi/api-definition.yaml";
 
 /** The extractor with the operations a contract document of the repository declares, as the port hands them over. */

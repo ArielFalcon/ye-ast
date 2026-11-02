@@ -3,7 +3,7 @@ import type { Job, Listener } from "../../domain/entrypoints/entrypoint.ts";
 import type { Handler } from "../../domain/entrypoints/http-route.ts";
 import type { Evidence, Finding } from "../../domain/shared/fact.ts";
 import { spanOf, unknown } from "./findings.ts";
-import { externalNames, namedChildren, scopeOf, type Evaluation, type Expr, type JavaProject, type MethodDecl, type Scope, type TypeDecl } from "./java-symbols.ts";
+import { namedChildren, qualifiedTypeName, scopeOf, type Evaluation, type Expr, type JavaProject, type MethodDecl, type Scope, type TypeDecl } from "./java-symbols.ts";
 import {
   annotationUseOf,
   annotationUses,
@@ -31,7 +31,6 @@ const DESTINATIONS: ReadonlyMap<string, DestinationAttributes> = new Map([
   [JMS_LISTENER, { protocol: "jms", attribute: "destination", unread: [] }],
 ]);
 const CRON_DISABLED = "-";
-const PACKAGE_SEGMENT = /^[a-z]/;
 const TRIGGERS: readonly string[] = ["cron", "fixedDelay", "fixedDelayString", "fixedRate", "fixedRateString"];
 const LONG_TRIGGERS: ReadonlySet<string> = new Set(["fixedDelay", "fixedRate"]);
 const READ: ReadonlySet<string> = new Set([...DESTINATIONS.keys(), ...EVENT_LISTENERS, SCHEDULED]);
@@ -131,20 +130,6 @@ function eventsOf(use: AnnotationUse, site: Site, project: JavaProject): Finding
   const [parameter, ...others] = parameters === null || parameters === undefined ? [] : namedChildren(parameters);
   if (site.method === undefined || parameter === undefined || others.length > 0) return [unknown("unresolved", [site.span])];
   return [event(parameter.childForFieldName("type"), scopeOf(site.method.owner), [site.span])];
-}
-
-/**
- * The qualified name of a type the sources declare, or that a single import, a qualified name or `java.lang` names. A
- * qualified name starts with a package, lowercase by Java's naming convention. A name that starts with a type no import
- * names may be a type of the file's package or of a wildcard import, so it is not resolved.
- */
-function qualifiedTypeName(name: string, scope: Scope, project: JavaProject): string | undefined {
-  const declared = project.lookupType(name, scope);
-  if (declared !== undefined) return declared === "ambiguous" ? undefined : declared.fqn;
-  const [candidate] = externalNames(name, scope.file, false);
-  const head = name.split(".")[0] ?? "";
-  const named = scope.file.singleImports.has(head) || (name.includes(".") && PACKAGE_SEGMENT.test(head)) || candidate === `java.lang.${name}`;
-  return named ? candidate : undefined;
 }
 
 /**

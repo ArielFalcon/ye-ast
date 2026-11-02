@@ -1,8 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { HttpRoute } from "../../domain/entrypoints/http-route.ts";
-import type { Entrypoint } from "../../domain/entrypoints/entrypoint.ts";
-import type { CallSite } from "../../domain/topology/call-site.ts";
+import type { Entrypoint, Listener } from "../../domain/entrypoints/entrypoint.ts";
+import type { CallSite, EventTarget } from "../../domain/topology/call-site.ts";
 import type { ImpactValue } from "../../domain/impact/impact-fact.ts";
 import type { CompleteFact, Cut, Fact, SnapshotRef } from "../../domain/shared/fact.ts";
 import type { Result } from "../../domain/shared/result.ts";
@@ -26,6 +26,18 @@ function callSite(repo: string, path: string, method: "GET" | "POST" | "DELETE" 
 
 function undecidedCallSite(repo: string, line: number): CallSite {
   return { repo, file: `src/app/${repo}.api.ts`, line, symbol: `${repo}.call${line}`, transport: "http", target: { status: "unknown", reason: "unresolved", evidence: [{ path: `src/app/${repo}.api.ts`, line }] } };
+}
+
+const CONSUMER = { path: "src/main/java/app/OrdersListener.java", symbol: "OrdersListener.on", line: 8 };
+
+function listener(destination: string, protocol: Listener["protocol"] = "kafka", handler = CONSUMER): Listener {
+  return { kind: "listener", name: `${protocol} ${destination}`, protocol, destination, handler };
+}
+
+function eventSite(repo: string, destination: string, line = 7): CallSite {
+  const file = `src/main/java/app/${repo}/Orders.java`;
+  const value: EventTarget = { protocol: "kafka", destination, role: "publish" };
+  return { repo, file, line, symbol: `${repo}.publish${line}`, transport: "event", target: { status: "complete", value, evidence: [] } };
 }
 
 function fact<T>(repo: string, trust: "trusted" | "untrusted", value: T, sha = SHA): Fact<T> {
@@ -253,4 +265,57 @@ test("a declared gateway that no call site names, or that routes to a repository
   const value = valueOf(await queries.callers({ ...ASK, gateways: [{ prefix: "edge", repo: "orders" }, { prefix: "legacy", repo: "orders" }, { prefix: "pay", repo: "billing" }] }));
 
   assert.deepEqual(value.workspace.unmatchedGateways, [{ prefix: "legacy", repo: "orders" }, { prefix: "pay", repo: "billing" }]);
+});
+
+const EVENT_REACHED: ImpactValue["entrypoints"] = [{ kind: "listener", name: "kafka orders.created", handler: CONSUMER, depth: 0, confidence: 1, seeds: [] }];
+
+test("a published destination a reached listener consumes is an upstream link, and an event site infers no gateway", async () => {
+  const { queries } = setup({ repositories: { orders: { entrypoints: [listener("orders.created")] }, "shop-web": { callSites: [eventSite("shop-web", "orders.created")] } }, trigger: impactOf(EVENT_REACHED) });
+
+  const value = valueOf(await queries.callers(ASK));
+
+  assert.deepEqual(
+    value.links.map(({ link, direction }) => `${direction} ${link.from.repo}:${link.from.line} -> ${link.to.repo} ${link.to.name} (${link.basis})`),
+    ["upstream shop-web:7 -> orders kafka orders.created (event-destination)"],
+  );
+  assert.deepEqual(value.workspace.gateways, []);
+});
+
+test("an event no listener consumes is external, never the drift of a service", async () => {
+  const { queries } = setup({ repositories: { orders: { entrypoints: [listener("orders.created")] }, "shop-web": { callSites: [eventSite("shop-web", "orders.missing")] } }, trigger: impactOf(EVENT_REACHED) });
+
+  const section = repoImpact(valueOf(await queries.callers(ASK)), "shop-web");
+
+  assert.deepEqual(section.external.map((site) => site.line), [7]);
+  assert.deepEqual(section.unmatched, []);
+});
+
+test("an event link that lands in a listener the walk did not reach is neither a link nor drift", async () => {
+  const { queries } = setup({
+    repositories: {
+      orders: { entrypoints: [listener("orders.created"), listener("orders.refunded", "kafka", { ...CONSUMER, symbol: "OrdersListener.refund", line: 20 })] },
+      "shop-web": { callSites: [eventSite("shop-web", "orders.refunded")] },
+    },
+    trigger: impactOf(EVENT_REACHED),
+  });
+
+  const section = repoImpact(valueOf(await queries.callers(ASK)), "shop-web");
+
+  assert.deepEqual(section.callSites, []);
+  assert.deepEqual(section.external, []);
+});
+
+test("an event two repositories consume is a cut of the section, never a pick", async () => {
+  const { queries } = setup({
+    repositories: { orders: { entrypoints: [listener("orders.created")] }, billing: { entrypoints: [listener("orders.created")] }, "shop-web": { callSites: [eventSite("shop-web", "orders.created")] } },
+    trigger: impactOf(EVENT_REACHED),
+  });
+
+  const result = await queries.callers({ ...ASK, repos: [{ path: "/work/shop-web" }, { path: "/work/billing" }] });
+
+  const value = valueOf(result);
+  const section = value.sections["shop-web"];
+  assert.deepEqual(value.links, []);
+  assert.ok(section?.status === "partial");
+  assert.deepEqual(section.cuts, [{ kind: "unresolved-link", at: ["src/main/java/app/shop-web/Orders.java", "src/main/java/app/shop-web/Orders.java:7"] }]);
 });

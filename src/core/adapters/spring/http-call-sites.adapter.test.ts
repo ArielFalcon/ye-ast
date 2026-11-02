@@ -2,7 +2,7 @@ import { before, test } from "node:test";
 import assert from "node:assert/strict";
 import type { CallSite, CallSiteReader } from "../../domain/topology/call-site.ts";
 import { createJavaParser } from "../tree-sitter/java-parser.adapter.ts";
-import { createJavaHttpCallSites } from "./http-call-sites.adapter.ts";
+import { createJavaHttpCallSites } from "./java-call-sites.adapter.ts";
 
 const WEB = ["org.springframework.web.client.RestTemplate", "org.springframework.web.client.RestClient", "org.springframework.http.HttpMethod", "org.springframework.stereotype.Service"];
 const RESOURCES = "src/main/resources/application.yml";

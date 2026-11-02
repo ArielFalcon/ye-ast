@@ -29,7 +29,7 @@ import { createContractRoutes } from "../core/adapters/openapi/contract-document
 import { createWorkspaceEvidence } from "../core/adapters/workspace/outward-names.adapter.ts";
 import { createHttpCallSites } from "../core/adapters/typescript/http-call-sites.adapter.ts";
 import { createPatternRedaction } from "../core/adapters/redaction/pattern-redaction.adapter.ts";
-import { createJavaHttpCallSites } from "../core/adapters/spring/http-call-sites.adapter.ts";
+import { createJavaCallSites } from "../core/adapters/spring/java-call-sites.adapter.ts";
 import { createSpringRoutesExtractor } from "../core/adapters/spring/spring-routes.adapter.ts";
 import { createJavaParser } from "../core/adapters/tree-sitter/java-parser.adapter.ts";
 import { createAngularDeclarationReader } from "../core/adapters/typescript/angular-declarations.adapter.ts";
@@ -101,8 +101,8 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
   const typescriptCallSites = createHttpCallSites();
   const callSites: CallSiteReader = {
     of: async (files, repo, libraries) => {
-      const java = await createJavaHttpCallSites(await createJavaParser()).of(files, repo, libraries);
-      return [...(await typescriptCallSites.of(files, repo)), ...java].sort((a, b) => compareText(a.file, b.file) || a.line - b.line);
+      const java = await createJavaCallSites(await createJavaParser()).of(files, repo, libraries);
+      return [...(await typescriptCallSites.of(files, repo)), ...java].sort((a, b) => compareText(a.file, b.file) || a.line - b.line || compareText(a.symbol, b.symbol));
     },
   };
   const vcs = createGitVcs();

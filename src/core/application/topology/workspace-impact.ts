@@ -5,9 +5,9 @@ import type { Cut, Fact, FactBase, PartialFact } from "../../domain/shared/fact.
 import { incompleteSectionCuts } from "../../domain/shared/fact.ts";
 import type { Result } from "../../domain/shared/result.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
-import type { CallSite, HttpTarget } from "../../domain/topology/call-site.ts";
+import type { CallSite, EventTarget, HttpTarget } from "../../domain/topology/call-site.ts";
 import type { ImpactedLink, Link } from "../../domain/topology/link.ts";
-import { inferGateways, matchCallSite, prefixOf, type GatewayDeclaration, type RepositoryEntrypoints } from "../../domain/topology/link-match.ts";
+import { inferGateways, matchCallSite, matchEventCallSite, prefixOf, type GatewayDeclaration, type JoinResult, type RepositoryEntrypoints } from "../../domain/topology/link-match.ts";
 import { directoryNameOf } from "../../domain/topology/repository-identity.ts";
 import type { CallersTarget, ImpactFault, ImpactQueries } from "../../ports/impact-queries.port.ts";
 import type { WorkspaceFault, WorkspaceRepository } from "../../ports/workspace-repos.port.ts";
@@ -52,22 +52,28 @@ export function createWorkspaceImpactQueries(deps: WorkspaceImpactDeps): Workspa
     const isReached = (link: Link): boolean => link.to.repo === trigger && reached.has(handlerKey(link.to.handler));
 
     const links = new Map<string, ImpactedLink>();
+    const settle = (part: Section, site: CallSite, joined: JoinResult): void => {
+      if (joined.ambiguous !== undefined) part.ambiguous.push(site);
+      else if (joined.unmatched !== undefined) part.unmatched.push(site);
+      else if (joined.link === undefined) part.external.push(site);
+      else if (isReached(joined.link)) {
+        links.set(joined.link.id, { link: joined.link, direction: "upstream", reach: [joined.link.id] });
+        part.callSites.push(site);
+      }
+    };
     const parts = new Map<string, Section>();
     for (const repository of repositories) {
       const part: Section = { callSites: [], unmatched: [], external: [], ambiguous: [] };
       parts.set(repository.repo, part);
       const others = entrypoints.filter((candidate) => candidate.repo !== repository.repo);
       for (const site of repository.callSites) {
-        const target = httpTargetOf(site);
-        if (target === undefined) continue;
-        const joined = matchCallSite(site, target, others, gateways);
-        if (joined.ambiguous !== undefined) part.ambiguous.push(site);
-        else if (joined.unmatched !== undefined) part.unmatched.push(site);
-        else if (joined.link === undefined) part.external.push(site);
-        else if (isReached(joined.link)) {
-          links.set(joined.link.id, { link: joined.link, direction: "upstream", reach: [joined.link.id] });
-          part.callSites.push(site);
+        const event = eventTargetOf(site);
+        if (event !== undefined) {
+          settle(part, site, matchEventCallSite(site, event, others));
+          continue;
         }
+        const target = httpTargetOf(site);
+        if (target !== undefined) settle(part, site, matchCallSite(site, target, others, gateways));
       }
     }
 
@@ -172,6 +178,10 @@ function routesOfRemoved(changes: readonly ChangedEntrypoint[]): HttpRoute[] {
 
 function httpTargetOf(site: CallSite): HttpTarget | undefined {
   return site.transport === "http" && site.target.status === "complete" && "path" in site.target.value ? site.target.value : undefined;
+}
+
+function eventTargetOf(site: CallSite): EventTarget | undefined {
+  return site.transport === "event" && site.target.status === "complete" && "protocol" in site.target.value ? site.target.value : undefined;
 }
 
 function compareSite(a: CallSite, b: CallSite): number {

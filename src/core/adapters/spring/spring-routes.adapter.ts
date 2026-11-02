@@ -8,10 +8,11 @@ import type { ContractOperation, ContractRoutes } from "../../ports/contract-rou
 import type { EntrypointExtractor, SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { JavaParser, JavaSyntaxTree } from "../tree-sitter/java-parser.adapter.ts";
 import { delegateMethodsOf, sourceGeneratorIn } from "./api-delegates.ts";
-import { basePathOf } from "./application-config.ts";
+import { basePathOf, configurationsOf } from "./application-config.ts";
 import { spanOf, unknown, unknownAt, type MappedEntrypoint, type MappedRoute } from "./findings.ts";
 import { foreignEndpointsOf } from "./foreign-endpoints.ts";
 import { listenersOf } from "./listeners.ts";
+import { natsListenersOf } from "./nats-listeners.ts";
 import { basePathConfigurations, pathPrefixConfigurations } from "./path-prefix.ts";
 import {
   counterpart,
@@ -40,6 +41,7 @@ import {
   type MappingLookup,
   type SpringAnnotations,
 } from "./request-mapping.ts";
+import { UrlText } from "./url-text.ts";
 
 const REQUEST_METHODS: ReadonlySet<string> = new Set(["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "TRACE"]);
 const ROUTER_FUNCTIONS: readonly string[] = [
@@ -114,10 +116,11 @@ function extractRoutes(parser: JavaParser, files: readonly SourceFile[], contrac
     }
     const project = createJavaProject(parsed);
     const annotations = createSpringAnnotations(project);
+    const text = new UrlText(project, configurationsOf(files.filter((file) => isSpringConfigFile(file.path))));
     const generator = sourceGeneratorIn(files);
     findings.push(...index.faults, ...project.unreadable.map((file) => unreadable(file.path, 1)));
     for (const type of project.types) {
-      findings.push(...guarded(() => findingsOfType(type, project, annotations, generator, index), () => unknown("unresolved", [spanOf(type.file.path, type.node)])));
+      findings.push(...guarded(() => findingsOfType(type, project, annotations, text, generator, index), () => unknown("unresolved", [spanOf(type.file.path, type.node)])));
     }
     const readable = parsed.filter((file) => !project.unreadable.includes(file));
     const entrypoints = sortFindings(withPathPrefixes(findings, pathPrefixConfigurations(project, readable)));
@@ -151,13 +154,14 @@ function guarded(attempt: () => Finding<MappedEntrypoint>[], fallback: () => Fin
   }
 }
 
-function findingsOfType(type: TypeDecl, project: JavaProject, annotations: SpringAnnotations, generator: Evidence | undefined, operations: ContractIndex): Finding<MappedEntrypoint>[] {
+function findingsOfType(type: TypeDecl, project: JavaProject, annotations: SpringAnnotations, text: UrlText, generator: Evidence | undefined, operations: ContractIndex): Finding<MappedEntrypoint>[] {
   const found: Finding<MappedEntrypoint>[] = [...routerFunctionsOf(type), ...foreignEndpointsOf(type, annotations)];
   if (type.kind !== "class" || type.isAbstract) return found;
   const controller = controllerOf(type, project, annotations, operations);
   if (controller !== undefined) found.push(...routesOf(controller));
   found.push(...delegateMethodsOf(type, project, annotations, generator));
   found.push(...listenersOf(type, project, annotations, isScannedBean(type, annotations)));
+  found.push(...natsListenersOf(type, project, text));
   return found;
 }
 

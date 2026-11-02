@@ -1,9 +1,9 @@
 import { isAlias, isMap, isScalar, isSeq, LineCounter, parseAllDocuments } from "yaml";
 import type { BasePath, BasePathKeys } from "../../domain/entrypoints/http-route.ts";
-import { profileOfConfigFile } from "../../domain/languages/spring-config.ts";
+import { profileOfConfigFile, resourcesOfSource } from "../../domain/languages/spring-config.ts";
 import type { Evidence, Finding } from "../../domain/shared/fact.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
-import { UNKNOWABLE_TEXT } from "./java-symbols.ts";
+import { UNKNOWABLE_TEXT, type JavaFile } from "./java-symbols.ts";
 
 /** Canonical names: Spring binds a key whatever its case and its dashes or underscores. */
 const BASE_PATH_KEYS: Readonly<Record<string, keyof BasePathKeys>> = {
@@ -143,6 +143,24 @@ export function configurationOf(files: readonly SourceFile[]): Configuration {
       if (undecided || values.size > 1 || (values.size === 1 && only === undefined)) return { status: "undecided" };
       return only === undefined ? { status: "absent" } : { status: "found", value: only };
     },
+  };
+}
+
+/**
+ * The configuration a source's own module declares: the files of the module that holds it when that module has any, the
+ * repository's otherwise. Each module is read once.
+ */
+export function configurationsOf(files: readonly SourceFile[]): (source: JavaFile) => Configuration {
+  const known = new Map<string, Configuration>();
+  return (source) => {
+    const resources = resourcesOfSource(source.path);
+    const key = resources ?? "";
+    const held = known.get(key);
+    if (held !== undefined) return held;
+    const own = files.filter((config) => resources !== undefined && config.path.startsWith(resources) && /^(config\/)?[^/]+$/.test(config.path.slice(resources.length)));
+    const configuration = configurationOf(own.length > 0 ? own : files);
+    known.set(key, configuration);
+    return configuration;
   };
 }
 

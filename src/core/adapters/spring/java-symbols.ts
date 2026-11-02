@@ -105,6 +105,8 @@ export interface JavaProject {
 }
 
 const PLATFORM_PACKAGES = ["org.springframework.", "java.", "javax.", "jakarta.", "lombok."];
+/** A package starts lowercase, so a qualified name whose first segment does is one. */
+const PACKAGE_SEGMENT = /^[a-z]/;
 const JAVA_LANG: ReadonlySet<string> = new Set([
   "Object",
   "Override",
@@ -181,6 +183,20 @@ export function externalNames(name: string, file: JavaFile, samePackage: boolean
   const own = file.packageName === "" ? name : `${file.packageName}.${name}`;
   const wildcards = file.onDemandImports.map((container) => `${container}.${name}`);
   return samePackage || wildcards.length === 0 ? [...wildcards, own] : wildcards;
+}
+
+/**
+ * The fully qualified name of a type the sources declare, or that a single import, a qualified name or `java.lang` names.
+ * A qualified name starts with a package, lowercase by Java's naming convention. A name that starts with a type no import
+ * names may be a type of the file's package or of a wildcard import, so it is not resolved.
+ */
+export function qualifiedTypeName(name: string, scope: Scope, project: JavaProject): string | undefined {
+  const declared = project.lookupType(name, scope);
+  if (declared !== undefined) return declared === "ambiguous" ? undefined : declared.fqn;
+  const [candidate] = externalNames(name, scope.file, false);
+  const head = name.split(".")[0] ?? "";
+  const named = scope.file.singleImports.has(head) || (name.includes(".") && PACKAGE_SEGMENT.test(head)) || candidate === `java.lang.${name}`;
+  return named ? candidate : undefined;
 }
 
 export function createJavaProject(files: readonly JavaFile[]): JavaProject {

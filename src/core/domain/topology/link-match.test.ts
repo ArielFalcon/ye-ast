@@ -1,9 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import type { Listener } from "../../domain/entrypoints/entrypoint.ts";
 import type { HttpRoute } from "../../domain/entrypoints/http-route.ts";
-import type { CallSite, HttpTarget } from "../../domain/topology/call-site.ts";
+import type { CallSite, EventTarget, HttpTarget } from "../../domain/topology/call-site.ts";
 import type { RepositoryEntrypoints } from "../../domain/topology/link-match.ts";
-import { inferGateways, matchCallSite } from "../../domain/topology/link-match.ts";
+import { inferGateways, matchCallSite, matchEventCallSite } from "../../domain/topology/link-match.ts";
 
 function route(method: HttpRoute["method"], path: string, handler = { path: "src/main/java/app/Orders.java", symbol: "Orders.orders", line: 10 }, basePath = {}): HttpRoute {
   return { kind: "http-route", name: `${method} ${path}`, method, path, handler, basePath: { status: "complete", value: { default: basePath, profiles: {} }, evidence: [] } };
@@ -128,3 +129,86 @@ test("a declared gateway overrides the inferred one, and a prefix two repositori
 function targetOf(call: CallSite): HttpTarget {
   return call.target.status === "complete" && "path" in call.target.value ? call.target.value : ({} as HttpTarget);
 }
+
+const CONSUMER = { path: "src/main/java/app/OrdersListener.java", symbol: "OrdersListener.on", line: 8 };
+
+function listener(protocol: Listener["protocol"], destination: string, handler = CONSUMER): Listener {
+  return { kind: "listener", name: `${protocol} ${destination}`, protocol, destination, handler };
+}
+
+function published(protocol: EventTarget["protocol"], destination: string, repo = "shop-web"): CallSite {
+  return {
+    repo,
+    file: "src/main/java/app/Orders.java",
+    line: 7,
+    symbol: "Orders.publish",
+    transport: "event",
+    target: { status: "complete", value: { protocol, destination, role: "publish" }, evidence: [] },
+  };
+}
+
+function eventTargetOf(call: CallSite): EventTarget {
+  return call.target.status === "complete" && "protocol" in call.target.value ? call.target.value : ({} as EventTarget);
+}
+
+function consumed(result: ReturnType<typeof matchEventCallSite>): string {
+  if (result.link === undefined) return result.ambiguous === undefined ? "none" : `ambiguous ${result.ambiguous.repos.join(",")}`;
+  const { basis, confidence, transport, to } = result.link;
+  return `${basis} ${confidence} ${transport} -> ${to.repo} ${to.kind} ${to.name} at ${to.handler.symbol}`;
+}
+
+function consumedBy(call: CallSite, listeners: readonly Listener[], repo = "orders"): string {
+  return consumed(matchEventCallSite(call, eventTargetOf(call), [{ repo, entrypoints: listeners }]));
+}
+
+test("a published destination equal to a listener's is one link at full confidence, for every protocol that matches by destination", () => {
+  for (const protocol of ["kafka", "rabbit", "jms", "event"] as const) {
+    assert.equal(consumedBy(published(protocol, "orders.created"), [listener(protocol, "orders.created")]), `event-destination 1 event -> orders listener ${protocol} orders.created at OrdersListener.on`);
+  }
+});
+
+test("a destination that differs in a literal token is no match", () => {
+  assert.equal(consumedBy(published("kafka", "orders.refunded"), [listener("kafka", "orders.created")]), "none");
+  assert.equal(consumedBy(published("nats", "orders.refunded"), [listener("nats", "orders.created")]), "none");
+});
+
+test("a listener of the repository that publishes is never a candidate", () => {
+  const call = published("kafka", "orders.created", "orders");
+
+  assert.equal(consumedBy(call, [listener("kafka", "orders.created")]), "none");
+});
+
+test("a listener that states another protocol does not consume the message", () => {
+  assert.equal(consumedBy(published("kafka", "orders.created"), [listener("jms", "orders.created")]), "none");
+});
+
+test("a NATS listener token `*` stands for exactly one token", () => {
+  assert.equal(consumedBy(published("nats", "orders.created"), [listener("nats", "orders.*")]), "event-destination 1 event -> orders listener nats orders.* at OrdersListener.on");
+  assert.equal(consumedBy(published("nats", "orders.created.eu"), [listener("nats", "orders.*")]), "none");
+});
+
+test("a NATS listener token `>` stands for one or more trailing tokens", () => {
+  assert.equal(consumedBy(published("nats", "orders.created.eu"), [listener("nats", "orders.>")]), "event-destination 1 event -> orders listener nats orders.> at OrdersListener.on");
+  assert.equal(consumedBy(published("nats", "orders"), [listener("nats", "orders.>")]), "none");
+});
+
+test("a token the publisher fills at run time stands for exactly one listener token", () => {
+  assert.equal(consumedBy(published("nats", "orders.{}.created"), [listener("nats", "orders.eu.created")]), "event-destination 1 event -> orders listener nats orders.eu.created at OrdersListener.on");
+  assert.equal(consumedBy(published("nats", "orders.created"), [listener("nats", "orders.eu.created")]), "none");
+});
+
+test("a destination two repositories consume is a cut, never a pick", () => {
+  const call = published("kafka", "orders.created");
+  const shared: RepositoryEntrypoints[] = [
+    { repo: "orders", entrypoints: [listener("kafka", "orders.created", { ...CONSUMER, symbol: "OrdersListener.on", line: 8 })] },
+    { repo: "billing", entrypoints: [listener("kafka", "orders.created", { ...CONSUMER, symbol: "BillingListener.on", line: 3 })] },
+  ];
+
+  assert.equal(consumed(matchEventCallSite(call, eventTargetOf(call), shared)), "ambiguous billing,orders");
+});
+
+test("a destination one repository consumes with two listeners is a cut as well", () => {
+  const call = published("kafka", "orders.created");
+
+  assert.equal(consumedBy(call, [listener("kafka", "orders.created"), listener("kafka", "orders.created", { ...CONSUMER, symbol: "OrdersListener.audit", line: 20 })]), "ambiguous orders");
+});

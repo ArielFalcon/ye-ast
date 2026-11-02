@@ -1,14 +1,10 @@
 import type { Node } from "web-tree-sitter";
 import type { HttpMethod } from "../../domain/entrypoints/http-route.ts";
-import { isJavaSource, isJvmTestFile } from "../../domain/languages/java.ts";
-import { isSpringConfigFile, resourcesOfSource } from "../../domain/languages/spring-config.ts";
-import type { Evidence, Finding } from "../../domain/shared/fact.ts";
+import type { Finding } from "../../domain/shared/fact.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
-import type { CallSite, CallSiteReader, HttpTarget } from "../../domain/topology/call-site.ts";
-import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
-import type { JavaParser, JavaSyntaxTree } from "../tree-sitter/java-parser.adapter.ts";
-import { configurationOf, type Configuration } from "./application-config.ts";
-import { spanOf } from "./findings.ts";
+import type { CallSite, HttpTarget } from "../../domain/topology/call-site.ts";
+import type { Configuration } from "./application-config.ts";
+import { complete, spanOf, unknownAtNode, withEvidence } from "./findings.ts";
 import {
   EXCHANGE_VERBS,
   FEIGN_CLIENT,
@@ -22,26 +18,17 @@ import {
   TEMPLATE_EXPLICIT,
   TEMPLATE_VERBS,
 } from "./http-client-vocabulary.ts";
-import { argumentsOf, assignmentsOf, descendants, isMember, localBindings, memberNodes, type Binding } from "./java-members.ts";
-import { createJavaProject, describeFile, externalNames, isPlatformName, namedChildren, scopeOf, type Expr, type JavaFile, type JavaProject, type MethodDecl, type TypeDecl } from "./java-symbols.ts";
+import { argumentsOf, assignmentsOf, localBindings, type Binding } from "./java-members.ts";
+import { holdersOf, invocationsOf, NO_VARIABLES, parametersOf, receiverOf, referencesParameter, symbolOf, type Invocation } from "./java-invocations.ts";
+import { externalNames, isPlatformName, scopeOf, type Expr, type JavaFile, type JavaProject, type TypeDecl } from "./java-symbols.ts";
 import { stringLiteralValue } from "./java-literals.ts";
 import { annotationUses, createSpringAnnotations, pathExpressions, type SpringAnnotations } from "./request-mapping.ts";
 import { isAnnotation, PLACEHOLDER, UrlText, type UrlScope } from "./url-text.ts";
 
 const UNDECIDED = Symbol("undecided");
-const LIBRARY_ROOT = "(library)";
 const ORIGIN = /^([a-zA-Z][a-zA-Z0-9+.-]*:\/\/[^/?#]*)([\s\S]*)$/;
-const NO_VARIABLES: ReadonlyMap<string, Binding> = new Map();
 
 type Declared = string | typeof UNDECIDED | undefined;
-
-/** One method call, with the type and member it is written in and the names that member declares. */
-interface Invocation {
-  node: Node;
-  type: TypeDecl;
-  member: Node | undefined;
-  locals: ReadonlyMap<string, Binding>;
-}
 
 /** A call of a standard client: the method and URL expressions it is given and the base URL its client declares. */
 interface Request {
@@ -57,49 +44,19 @@ interface Wrapper {
   called: boolean;
 }
 
-type Resolved = { decl: TypeDecl } | { fqn: string };
-
-export function createJavaHttpCallSites(parser: JavaParser): CallSiteReader {
-  return { of: async (files, repo, libraries = []) => readAll(parser, files, libraries, repo) };
-}
-
-function readAll(parser: JavaParser, files: readonly SourceFile[], libraries: readonly SourceFile[], repo: string): CallSite[] {
-  const trees: JavaSyntaxTree[] = [];
-  const parse = (sources: readonly SourceFile[]): JavaFile[] =>
-    sources
-      .filter((source) => isJavaSource(source.path) && !isJvmTestFile(source.path))
-      .flatMap((source) => {
-        try {
-          const result = parser.parse(source.content);
-          if (!result.ok) return [];
-          trees.push(result.value);
-          return [describeFile(source.path, result.value.root)];
-        } catch {
-          return [];
-        }
-      });
-  try {
-    const owned = parse(files);
-    const foreign = parse(libraries.map((source, index) => ({ ...source, path: `${LIBRARY_ROOT}/${index}/${source.path}` })));
-    return new JavaReader(createJavaProject([...owned, ...foreign]), files.filter((file) => isSpringConfigFile(file.path)), new Set(owned)).sites(repo);
-  } finally {
-    for (const tree of trees) tree.dispose();
-  }
-}
-
-class JavaReader {
+/** The HTTP requests a Java snapshot makes: one call site per request of a client the vocabulary knows. */
+export class JavaHttpReader {
   private readonly annotations: SpringAnnotations;
   private readonly text: UrlText;
-  private readonly configurations = new Map<string, Configuration>();
   private readonly wrappers = new Map<TypeDecl, Map<string, Wrapper>>();
 
   constructor(
     private readonly project: JavaProject,
-    private readonly configs: readonly SourceFile[],
+    configuration: (file: JavaFile) => Configuration,
     private readonly owned: ReadonlySet<JavaFile>,
   ) {
     this.annotations = createSpringAnnotations(project);
-    this.text = new UrlText(project, (file) => this.configurationFor(file));
+    this.text = new UrlText(project, configuration);
   }
 
   sites(repo: string): CallSite[] {
@@ -110,64 +67,37 @@ class JavaReader {
       if (request === undefined) continue;
       const wrapper = this.wrapperOf(request);
       if (wrapper) this.wrappers.set(invocation.type, new Map(this.wrappers.get(invocation.type)).set(wrapper.key, wrapper.wrapper));
-      else if (this.owned.has(invocation.type.file)) found.push(this.siteOf(repo, invocation, this.target(request, this.scopeOf(invocation, new Map())), invocation.node));
+      else if (this.owned.has(invocation.type.file)) found.push(this.siteOf(repo, invocation, this.target(request, this.scopeOf(invocation, new Map()))));
     }
     for (const invocation of invocations.filter(({ type }) => this.owned.has(type.file))) {
       const called = this.callOfWrapper(invocation);
-      if (called !== undefined) found.push(this.siteOf(repo, invocation, called, invocation.node));
+      if (called !== undefined) found.push(this.siteOf(repo, invocation, called));
       else {
         const library = this.libraryOf(invocation);
-        if (library !== undefined) found.push(this.siteOf(repo, invocation, unknownAt(invocation.type.file.path, invocation.node, library), invocation.node));
+        if (library !== undefined) found.push(this.siteOf(repo, invocation, unknownAtNode(invocation.type.file.path, invocation.node, library)));
       }
     }
     for (const wrappers of this.wrappers.values()) {
       for (const wrapper of wrappers.values()) {
         const { invocation } = wrapper.request;
-        if (!wrapper.called && this.owned.has(invocation.type.file)) found.push(this.siteOf(repo, invocation, unknownAt(invocation.type.file.path, invocation.node), invocation.node));
+        if (!wrapper.called && this.owned.has(invocation.type.file)) found.push(this.siteOf(repo, invocation, unknownAtNode(invocation.type.file.path, invocation.node)));
       }
     }
     for (const type of this.project.types.filter((candidate) => this.owned.has(candidate.file))) found.push(...this.declarations(repo, type));
     return found.sort((a, b) => compareText(a.file, b.file) || a.line - b.line || compareText(a.symbol, b.symbol) || compareText(a.target.status, b.target.status));
   }
 
-  private configurationFor(file: JavaFile): Configuration {
-    const resources = resourcesOfSource(file.path);
-    const key = resources ?? "";
-    const known = this.configurations.get(key);
-    if (known !== undefined) return known;
-    const own = this.configs.filter((config) => resources !== undefined && config.path.startsWith(resources) && /^(config\/)?[^/]+$/.test(config.path.slice(resources.length)));
-    const configuration = configurationOf(own.length > 0 ? own : this.configs);
-    this.configurations.set(key, configuration);
-    return configuration;
-  }
-
   private scopeOf(invocation: Invocation, env: UrlScope["env"]): UrlScope {
     return { type: invocation.type, locals: invocation.locals, env };
   }
 
-  private siteOf(repo: string, invocation: Invocation, target: Finding<HttpTarget>, at: Node): CallSite {
-    const span = spanOf(invocation.type.file.path, at);
+  private siteOf(repo: string, invocation: Invocation, target: Finding<HttpTarget>): CallSite {
+    const span = spanOf(invocation.type.file.path, invocation.node);
     return { repo, file: span.path, line: span.line, ...(span.endLine === span.line ? {} : { endLine: span.endLine }), symbol: symbolOf(invocation), transport: "http", target: withEvidence(target, span) };
   }
 
-  /** The type a receiver expression is an instance of, through the field, parameter or variable that holds it. */
-  private receiverOf(object: Node, invocation: Invocation): { binding: Binding; owner: TypeDecl | undefined; resolved: Resolved } | undefined {
-    const name = object.type === "identifier" ? object.text : object.type === "field_access" && object.childForFieldName("object")?.type === "this" ? object.childForFieldName("field")?.text : undefined;
-    if (name === undefined) return undefined;
-    const local = object.type === "identifier" ? invocation.locals.get(name) : undefined;
-    const field = local === undefined ? this.text.fieldOf(invocation.type, name) : undefined;
-    const binding = local ?? field?.binding;
-    const owner = field?.owner ?? invocation.type;
-    const resolved = binding === undefined ? undefined : this.resolve(binding.typeName, owner);
-    return binding === undefined || resolved === undefined ? undefined : { binding, owner: field?.owner, resolved };
-  }
-
-  private resolve(name: string, from: TypeDecl): Resolved | undefined {
-    const found = this.project.lookupType(name, scopeOf(from));
-    if (found === "ambiguous") return undefined;
-    if (found !== undefined) return { decl: found };
-    const [fqn] = externalNames(name, from.file, false);
-    return fqn === undefined ? undefined : { fqn };
+  private receiverOf(object: Node, invocation: Invocation) {
+    return receiverOf(object, invocation, this.project, this.text);
   }
 
   private requestOf(invocation: Invocation): Request | undefined {
@@ -253,23 +183,16 @@ class JavaReader {
     const name = node.childForFieldName("name")?.text ?? "";
     const object = node.childForFieldName("object");
     const args = argumentsOf(node);
-    const holders = this.holdersOf(object, invocation);
-    for (const holder of holders) {
+    for (const holder of holdersOf(object, invocation, this.project, this.text)) {
       const wrapper = this.wrappers.get(holder)?.get(`${name}/${args.length}`);
       if (wrapper === undefined) continue;
       wrapper.called = true;
       const env = new Map(wrapper.parameters.flatMap((parameter, index) => (args[index] === undefined ? [] : [[parameter, { node: args[index] as Node, scope: this.scopeOf(invocation, new Map()) }] as const])));
       const target = this.target(wrapper.request, this.scopeOf(wrapper.request.invocation, env));
       const declaring = wrapper.request.invocation.type;
-      return target.status === "unknown" && !this.owned.has(declaring.file) ? unknownAt(declaring.file.path, node, declaring.fqn) : target;
+      return target.status === "unknown" && !this.owned.has(declaring.file) ? unknownAtNode(declaring.file.path, node, declaring.fqn) : target;
     }
     return undefined;
-  }
-
-  private holdersOf(object: Node | null, invocation: Invocation): TypeDecl[] {
-    if (object === null || object.type === "this") return [...this.project.classChain(invocation.type)];
-    const receiver = this.receiverOf(object, invocation);
-    return receiver !== undefined && "decl" in receiver.resolved ? [...this.project.classChain(receiver.resolved.decl)] : [];
   }
 
   /** The library a call goes through when the sources of its client type are not read to the request. */
@@ -286,7 +209,7 @@ class JavaReader {
     const method = typeof request.method === "string" ? request.method : request.method === undefined ? undefined : this.methodOf(request.method, scope);
     const text = request.url === undefined ? undefined : this.text.of(request.url, scope);
     const target = text === undefined || method === undefined ? undefined : targetOf(text, request.base);
-    return target === undefined || method === undefined ? unknownAt(request.invocation.type.file.path, request.invocation.node) : complete({ method, ...target });
+    return target === undefined || method === undefined ? unknownAtNode(request.invocation.type.file.path, request.invocation.node) : complete({ method, ...target });
   }
 
   /** The HTTP method an expression names: `HttpMethod.GET`, `RequestMethod.GET`, `HttpMethod.valueOf("get")` or a string. */
@@ -320,7 +243,7 @@ class JavaReader {
   private feignOf(uses: Parameters<SpringAnnotations["mappingIn"]>[0], scope: UrlScope, feign: Parameters<typeof isAnnotation>[0]): Finding<HttpTarget>[] {
     const lookup = this.annotations.mappingIn(uses);
     if (lookup === undefined) return [];
-    const at = unknownAt(scope.type.file.path, feign.node);
+    const at = unknownAtNode(scope.type.file.path, feign.node);
     if ("gap" in lookup) return [at];
     const verb = lookup.mapping.verb ?? this.firstMethod(lookup.mapping.attributes.get("method"), scope);
     const url = feign.attributes.get("url")?.[0];
@@ -345,7 +268,7 @@ class JavaReader {
       const own = pathExpressions(use.attributes) ?? use.attributes.get("url") ?? [undefined];
       return own.map((expression) => {
         const path = this.attributeText(expression, scope);
-        if (verb === undefined || path === undefined || prefix === undefined) return unknownAt(scope.type.file.path, use.node);
+        if (verb === undefined || path === undefined || prefix === undefined) return unknownAtNode(scope.type.file.path, use.node);
         const absolute = splitOrigin(joinPath(prefix, path));
         return complete({ method: verb, ...(absolute.origin === undefined ? { path: joinPath(prefix, path) } : { base: absolute.origin, path: pathOf(absolute.rest) }) });
       });
@@ -362,35 +285,6 @@ class JavaReader {
   private attributeText(expression: Expr | undefined, scope: UrlScope): string | undefined {
     return expression === undefined ? "" : this.text.attribute(expression.node, scope);
   }
-}
-
-function invocationsOf(type: TypeDecl): Invocation[] {
-  return memberNodes(type).flatMap((member) => {
-    const locals = isMember(member) ? localBindings(member) : NO_VARIABLES;
-    return descendants(member)
-      .filter((node) => node.type === "method_invocation")
-      .map((node): Invocation => ({ node, type, member: isMember(member) ? member : undefined, locals }));
-  });
-}
-
-function symbolOf({ type, member }: Invocation): string {
-  const name = member?.type === "method_declaration" ? member.childForFieldName("name")?.text : undefined;
-  return name === undefined ? type.qualifiedName : `${type.qualifiedName}.${name}`;
-}
-
-function parametersOf(member: Node): string[] {
-  const list = member.childForFieldName("parameters");
-  return (list === null ? [] : namedChildren(list)).map((parameter) => parameter.childForFieldName("name")?.text ?? "");
-}
-
-/** Whether an expression reads a parameter of the method it is written in, directly or through a local variable. */
-function referencesParameter(expression: Node, invocation: Invocation, trail: ReadonlySet<string> = new Set()): boolean {
-  return [expression, ...descendants(expression)].some((node) => {
-    if (node.type !== "identifier") return false;
-    const binding = invocation.locals.get(node.text);
-    if (binding === undefined || trail.has(node.text)) return false;
-    return binding.node.type.endsWith("parameter") || (binding.initializer !== undefined && referencesParameter(binding.initializer, invocation, new Set(trail).add(node.text)));
-  });
 }
 
 function isFluentName(fqn: string): boolean {
@@ -437,21 +331,4 @@ function targetOf(text: string, client: Declared): { base?: string; path: string
   const path = absolute.origin === undefined ? joinPath(declared.rest, text) : pathOf(absolute.rest);
   const segments = path.split("/").filter((segment) => segment !== "");
   return segments.length > 0 && segments.every((segment) => segment === PLACEHOLDER) ? undefined : { ...(base === undefined ? {} : { base }), path };
-}
-
-function complete(value: HttpTarget): Finding<HttpTarget> {
-  return { status: "complete", value, evidence: [] };
-}
-
-function unknownAt(path: string, node: Node, via?: string): Finding<HttpTarget> {
-  const span = spanOf(path, node);
-  return { status: "unknown", reason: "unresolved", evidence: [via === undefined ? span : { ...span, via }] };
-}
-
-function withEvidence(target: Finding<HttpTarget>, span: Evidence): Finding<HttpTarget> {
-  if (target.status === "unknown") {
-    const via = target.evidence[0]?.via;
-    return { ...target, evidence: [via === undefined ? span : { ...span, via }] };
-  }
-  return { ...target, evidence: [{ path: span.path, line: span.line }] };
 }

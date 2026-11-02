@@ -1,7 +1,7 @@
-import type { Entrypoint } from "../entrypoints/entrypoint.ts";
+import type { Entrypoint, Listener } from "../entrypoints/entrypoint.ts";
 import type { HttpRoute } from "../entrypoints/http-route.ts";
 import { compareText } from "../shared/code-node.ts";
-import type { CallSite, HttpTarget } from "./call-site.ts";
+import type { CallSite, EventTarget, HttpTarget } from "./call-site.ts";
 import { linkIdentity, type Link, type LinkBasis } from "./link.ts";
 
 /** A repository's entrypoints, as the join reads them. */
@@ -21,9 +21,10 @@ export interface Gateway extends GatewayDeclaration {
   basis: "gateway-prefix" | "route-overlap";
 }
 
-/** A prefix two repositories could serve: a cut, never a pick. */
-interface AmbiguousPrefix {
-  prefix: string;
+/** What two repositories, or two consumers of one destination, matched: a cut, never a pick. */
+export interface AmbiguousMatch {
+  /** The prefix or destination that matched. */
+  key: string;
   repos: readonly string[];
 }
 
@@ -31,8 +32,8 @@ export interface JoinResult {
   link?: Link;
   /** The call reached a service the workspace declares and matched none of its routes: the service's drift. */
   unmatched?: string;
-  /** Two repositories matched the call at one rung of the ladder. */
-  ambiguous?: AmbiguousPrefix;
+  /** Two repositories matched the call at one rung of the ladder, or two listeners consume its destination. */
+  ambiguous?: AmbiguousMatch;
 }
 
 interface Match {
@@ -173,7 +174,7 @@ export function matchCallSite(site: CallSite, target: HttpTarget, repositories: 
   const prefix = prefixOf(target);
   const settled = (landed: ReturnType<typeof atRung>, basis?: Gateway["basis"]): JoinResult | undefined => {
     if (landed === undefined) return undefined;
-    if ("ambiguous" in landed) return { ambiguous: { prefix: prefix ?? target.path, repos: landed.ambiguous } };
+    if ("ambiguous" in landed) return { ambiguous: { key: prefix ?? target.path, repos: landed.ambiguous } };
     return { link: linkTo(site, landed.repo, basis === undefined ? landed.match : { ...landed.match, basis, confidence: landed.match.confidence }) };
   };
   const exact = settled(atRung(exactMatch, target, repositories));
@@ -210,4 +211,62 @@ export function inferGateways(calls: readonly CallSite[], repositories: readonly
     if (only !== undefined && others.length === 0) inferred.push({ prefix, repo: only.repo, basis: "route-overlap" });
   }
   return [...declared.map((gateway): Gateway => ({ ...gateway, basis: "gateway-prefix" })), ...inferred].sort((a, b) => compareText(a.prefix, b.prefix));
+}
+
+const NATS_SEPARATOR = ".";
+const NATS_ONE_TOKEN = "*";
+const NATS_REST = ">";
+/** A destination that matches is exact, so its link is at full confidence (decision 9). */
+const EVENT_CONFIDENCE = 1;
+
+function listenersOf(repository: RepositoryEntrypoints): Listener[] {
+  return repository.entrypoints.flatMap((entrypoint) => (entrypoint.kind === "listener" ? [entrypoint] : []));
+}
+
+/**
+ * Whether a consumed subject takes a published one: NATS compares token by token, where a listener's `*` stands for one
+ * token, its `>` for one or more trailing tokens, and a token the publisher fills at run time for one token as well.
+ */
+function sameSubject(published: string, consumed: string): boolean {
+  const tokens = published.split(NATS_SEPARATOR);
+  const pattern = consumed.split(NATS_SEPARATOR);
+  let index = 0;
+  for (; index < pattern.length; index++) {
+    const token = pattern[index];
+    if (token === NATS_REST) return index < tokens.length;
+    const own = tokens[index];
+    if (own === undefined) return false;
+    if (token !== NATS_ONE_TOKEN && own !== PARAMETER && token !== own) return false;
+  }
+  return index === tokens.length;
+}
+
+function consumes(target: EventTarget, listener: Listener): boolean {
+  return listener.protocol === target.protocol && (target.protocol === "nats" ? sameSubject(target.destination, listener.destination) : listener.destination === target.destination);
+}
+
+function eventLinkTo(site: CallSite, repo: string, listener: Listener): Link {
+  const link: Omit<Link, "id"> = {
+    from: { repo: site.repo, file: site.file, line: site.line, symbol: site.symbol },
+    to: { repo, kind: listener.kind, name: listener.name, handler: listener.handler },
+    transport: "event",
+    basis: "event-destination",
+    confidence: EVENT_CONFIDENCE,
+  };
+  return { ...link, id: linkIdentity(link) };
+}
+
+/**
+ * The link a published message makes against the listeners of the repositories given: those of another repository, with
+ * the protocol the message declares and a destination that takes it. One listener is one link; two listeners are a cut,
+ * whether they are in two repositories or in one.
+ */
+export function matchEventCallSite(site: CallSite, target: EventTarget, repositories: readonly RepositoryEntrypoints[]): JoinResult {
+  const reached = repositories
+    .filter((repository) => repository.repo !== site.repo)
+    .flatMap((repository) => listenersOf(repository).flatMap((listener) => (consumes(target, listener) ? [{ repo: repository.repo, listener }] : [])));
+  const [only, ...others] = reached;
+  if (only === undefined) return {};
+  if (others.length > 0) return { ambiguous: { key: target.destination, repos: [...new Set(reached.map(({ repo }) => repo))].sort(compareText) } };
+  return { link: eventLinkTo(site, only.repo, only.listener) };
 }
