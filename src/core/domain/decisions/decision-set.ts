@@ -3,7 +3,7 @@ import type { HttpRoute } from "../entrypoints/http-route.ts";
 import { compareText } from "../shared/code-node.ts";
 import { TRUST_MODES, type Evidence, type TrustMode } from "../shared/fact.ts";
 import type { CallSite, HttpTarget } from "../topology/call-site.ts";
-import { callSiteEvidence } from "../topology/call-site.ts";
+import { callSiteEvidence, unresolvedPlace } from "../topology/call-site.ts";
 import { inferGateways, matchBehindGateway, prefixOf, type GatewayDeclaration, type RepositoryEntrypoints } from "../topology/link-match.ts";
 import { sortEvidence, type NameCandidate, type OutwardName } from "../topology/outward-name.ts";
 import { decisionId, type Decision, type DecisionKind, type DecisionOption, type DecisionSet } from "./decision.ts";
@@ -31,7 +31,7 @@ export interface DecisionInput {
 const NAME_BASES = ["exact-name", "artifact", "remote"] as const;
 
 export function decisionsOf(input: DecisionInput): DecisionSet {
-  const decisions = [...membershipsByName(input), ...membershipsByClone(input), ...repositoryDecisions(input), ...gatewayDecisions(input), ...trustDecisions(input)];
+  const decisions = [...membershipsByName(input), ...membershipsByClone(input), ...repositoryDecisions(input), ...libraryDecisions(input), ...gatewayDecisions(input), ...trustDecisions(input)];
   return { decisions: decisions.toSorted((a, b) => compareText(a.id, b.id)) };
 }
 
@@ -103,6 +103,29 @@ function repositoryDecisions(input: DecisionInput): Decision[] {
   return groupsOf(input.unserved, (name) => name.name).map(([name, names]) =>
     decisionOf({ kind: "repository", subject: name, evidence: names.flatMap((held) => held.evidence), options: [], allowsFreeText: true, required: false }),
   );
+}
+
+/**
+ * One decision per library a cut names: every clone given is a candidate to confirm, and no fact states which one holds
+ * the library a FQN names, so none is recommended.
+ */
+function libraryDecisions(input: DecisionInput): Decision[] {
+  const cuts = input.repositories.flatMap((repository) =>
+    repository.callSites.flatMap((site) => {
+      const library = libraryOf(site);
+      return library === undefined ? [] : [{ library, site }];
+    }),
+  );
+  const options = input.repositories.map(({ repo }): DecisionOption => ({ value: repo, evidence: [], recommended: false }));
+  return groupsOf(cuts, (cut) => cut.library).map(([library, naming]) =>
+    decisionOf({ kind: "library", subject: library, evidence: naming.map(({ site }) => callSiteEvidence(site)), options, allowsFreeText: true, required: false }),
+  );
+}
+
+/** The library a cut names, when the target stays undecided through it. */
+function libraryOf(site: CallSite): string | undefined {
+  const { via } = unresolvedPlace(site);
+  return via === undefined || via === "" ? undefined : via;
 }
 
 /**

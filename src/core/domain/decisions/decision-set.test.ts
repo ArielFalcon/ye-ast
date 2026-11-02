@@ -30,6 +30,10 @@ function call(repo: string, path: string, method: HttpTarget["method"] = "GET"):
   return { repo, file: `${repo}/src/app.ts`, line: 7, symbol: "Api.call", transport: "http", target: { status: "complete", value: { method, path }, evidence: [] } };
 }
 
+function cut(repo: string, library?: string, at: { path: string; line: number } = { path: `${repo}/src/app.ts`, line: 7 }): CallSite {
+  return { repo, file: at.path, line: at.line, symbol: "Api.call", transport: "http", target: { status: "unknown", reason: "unresolved", evidence: [{ ...at, ...(library === undefined ? {} : { via: library }) }] } };
+}
+
 function repository(repo: string, overrides: Partial<DecisionRepository> = {}): DecisionRepository {
   return { repo, names: [], callSites: [], entrypoints: [], trust: "untrusted", ...overrides };
 }
@@ -105,6 +109,63 @@ test("two unserved names that write one string are one decision with both places
     { path: "a.ts", line: 1 },
     { path: "b.ts", line: 2 },
   ]);
+});
+
+test("a cut that names a library is one decision offering every clone, none recommended, with free text", () => {
+  const set = decisionsOf(
+    input({
+      repositories: [
+        repository("webapp", { names: [outward("orders")], callSites: [cut("webapp", "com.acme.OrdersClient")] }),
+        repository("orders", { names: [outward("orders")] }),
+        repository("billing", { names: [outward("orders")] }),
+      ],
+    }),
+  );
+
+  assert.deepEqual(ids(set), ["library:com.acme.OrdersClient"]);
+  const decision = byId(set).get("library:com.acme.OrdersClient");
+  assert.deepEqual(decision?.evidence, [{ path: "webapp/src/app.ts", line: 7 }]);
+  assert.deepEqual(options(decision), ["billing", "orders", "webapp"]);
+  assert.equal(decision?.allowsFreeText, true);
+  assert.equal(decision?.required, false);
+});
+
+test("two cuts that name one library are one decision with both places", () => {
+  const set = decisionsOf(
+    input({
+      repositories: [
+        repository("webapp", { names: [outward("orders")], callSites: [cut("webapp", "com.acme.OrdersClient", { path: "webapp/src/b.ts", line: 9 })] }),
+        repository("geo", { names: [outward("orders")], callSites: [cut("geo", "com.acme.OrdersClient", { path: "geo/src/a.ts", line: 3 })] }),
+      ],
+    }),
+  );
+
+  assert.deepEqual(ids(set), ["library:com.acme.OrdersClient"]);
+  assert.deepEqual(byId(set).get("library:com.acme.OrdersClient")?.evidence, [
+    { path: "geo/src/a.ts", line: 3 },
+    { path: "webapp/src/b.ts", line: 9 },
+  ]);
+});
+
+test("a call site that resolves, or a cut that names no library, is no library decision", () => {
+  const resolvedThroughLibrary: CallSite = {
+    repo: "webapp",
+    file: "webapp/src/ok.ts",
+    line: 5,
+    symbol: "Api.ok",
+    transport: "http",
+    target: { status: "complete", value: { method: "GET", path: "/orders" }, evidence: [{ path: "webapp/src/ok.ts", line: 5, via: "com.acme.OrdersClient" }] },
+  };
+  const set = decisionsOf(
+    input({
+      repositories: [
+        repository("webapp", { names: [outward("orders")], callSites: [cut("webapp"), cut("webapp", ""), resolvedThroughLibrary] }),
+        repository("orders", { names: [outward("orders")], entrypoints: [route("/orders")] }),
+      ],
+    }),
+  );
+
+  assert.deepEqual(ids(set), []);
 });
 
 test("a prefix that names a repository is not a gateway decision", () => {
@@ -183,7 +244,7 @@ test("the decision set is sorted by id and two runs over one input are byte-iden
   const build = (): DecisionInput =>
     input({
       repositories: [
-        repository("webapp", { names: [outward("orders")], callSites: [call("webapp", "/legacy/thing")], trust: "untrusted" }),
+        repository("webapp", { names: [outward("orders")], callSites: [call("webapp", "/legacy/thing"), cut("webapp", "com.acme.OrdersClient", { path: "webapp/src/cut.ts", line: 12 })], trust: "untrusted" }),
         repository("geo"),
         repository("orders", { names: [outward("orders")], entrypoints: [route("/orders")] }),
       ],
