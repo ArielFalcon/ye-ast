@@ -28,6 +28,15 @@ interface Declaration {
 
 type ConfigRead = { ok: true; documents: Declaration[][] } | { ok: false; line: number };
 
+/** Which keys of a file are kept: those it reads, and the prefixes on the way to one. */
+interface ReadKeys {
+  reads(key: string): boolean;
+  leads(key: string): boolean;
+}
+
+const BASE_PATH_KEYS_READ: ReadKeys = { reads: isReadKey, leads: leadsToReadKey };
+const EVERY_KEY: ReadKeys = { reads: () => true, leads: () => true };
+
 const GAP_PRECEDENCE: readonly Gap["reason"][] = ["unresolved", "no-extractor", "source-unreadable"];
 
 interface Gap {
@@ -49,7 +58,7 @@ export function basePathOf(files: readonly SourceFile[]): Finding<BasePath> {
       gaps.push({ reason: "no-extractor", evidence: [{ path: file.path, line: 1 }] });
       continue;
     }
-    const read = file.path.endsWith(".properties") ? readProperties(file.content) : readYaml(file.content);
+    const read = readConfig(file, BASE_PATH_KEYS_READ);
     if (!read.ok) {
       gaps.push({ reason: "source-unreadable", evidence: [{ path: file.path, line: read.line }] });
       continue;
@@ -99,6 +108,44 @@ export function basePathOf(files: readonly SourceFile[]): Finding<BasePath> {
   };
 }
 
+export type ConfiguredValue = { status: "found"; value: string } | { status: "absent" } | { status: "undecided" };
+
+export interface Configuration {
+  /** The string a key holds in the files; `undecided` when two files give it different values or the files cannot all be read. */
+  valueOf(key: string): ConfiguredValue;
+}
+
+/**
+ * Every key the configuration files of one module declare. Any file the snapshot cannot read as a whole (an XML properties
+ * file, a syntax error, an import, a condition other than a profile) leaves every key undecided, as it does a base path.
+ */
+export function configurationOf(files: readonly SourceFile[]): Configuration {
+  const declared = new Map<string, (string | undefined)[]>();
+  let undecided = false;
+  for (const file of files) {
+    const read = file.path.endsWith(".xml") ? ({ ok: false, line: 1 } as const) : readConfig(file, EVERY_KEY);
+    if (!read.ok) {
+      undecided = true;
+      continue;
+    }
+    for (const document of read.documents) {
+      if (documentProfile(document, profileOfConfigFile(file.path)) === null) undecided = true;
+      for (const { key, value } of document) {
+        if (key === IMPORT || key.startsWith(`${IMPORT}[`)) undecided = true;
+        else if (!key.startsWith(`${ACTIVATE}.`)) declared.set(key, [...(declared.get(key) ?? []), value]);
+      }
+    }
+  }
+  return {
+    valueOf(key) {
+      const values = new Set(declared.get(canonical(key)));
+      const [only] = values;
+      if (undecided || values.size > 1 || (values.size === 1 && only === undefined)) return { status: "undecided" };
+      return only === undefined ? { status: "absent" } : { status: "found", value: only };
+    },
+  };
+}
+
 /** The profile a document applies to (`""` for none), or null when its condition is one the snapshot cannot place under a single profile. */
 function documentProfile(document: readonly Declaration[], fileProfile: string | undefined): string | null {
   const conditions = document.filter((declaration) => declaration.key.startsWith(`${ACTIVATE}.`));
@@ -108,23 +155,27 @@ function documentProfile(document: readonly Declaration[], fileProfile: string |
   return condition.value;
 }
 
-function readYaml(content: string): ConfigRead {
+function readConfig(file: SourceFile, keys: ReadKeys): ConfigRead {
+  return file.path.endsWith(".properties") ? readProperties(file.content, keys) : readYaml(file.content, keys);
+}
+
+function readYaml(content: string, keys: ReadKeys): ConfigRead {
   const lineCounter = new LineCounter();
   const documents: Declaration[][] = [];
   for (const document of parseAllDocuments(content, { lineCounter, uniqueKeys: true, merge: false })) {
     const [error] = document.errors;
     if (error !== undefined) return { ok: false, line: lineCounter.linePos(error.pos[0]).line };
     const declarations: Declaration[] = [];
-    walkYaml(document.contents, [], 1, declarations, lineCounter);
+    walkYaml(document.contents, [], 1, declarations, lineCounter, keys);
     documents.push(declarations);
   }
   return { ok: true, documents };
 }
 
-function walkYaml(node: unknown, path: readonly string[], line: number, out: Declaration[], lines: LineCounter): void {
+function walkYaml(node: unknown, path: readonly string[], line: number, out: Declaration[], lines: LineCounter, keys: ReadKeys): void {
   const key = canonical(path.join("."));
   if (isAlias(node) || path.at(-1) === "<<") {
-    if (leadsToReadKey(key.replace(/\.?<<$/, ""))) out.push({ key, value: undefined, line });
+    if (keys.leads(key.replace(/\.?<<$/, ""))) out.push({ key, value: undefined, line });
     return;
   }
   if (isMap(node)) {
@@ -132,14 +183,14 @@ function walkYaml(node: unknown, path: readonly string[], line: number, out: Dec
       const name = isScalar(pair.key) ? String(pair.key.value) : undefined;
       const at = lines.linePos((isScalar(pair.key) && pair.key.range?.[0]) || 0).line;
       if (name === undefined) {
-        if (leadsToReadKey(key)) out.push({ key, value: undefined, line: at });
+        if (keys.leads(key)) out.push({ key, value: undefined, line: at });
         continue;
       }
-      walkYaml(pair.value, [...path, name], at, out, lines);
+      walkYaml(pair.value, [...path, name], at, out, lines, keys);
     }
     return;
   }
-  if (!isReadKey(key)) return;
+  if (!keys.reads(key)) return;
   if (isScalar(node) && typeof node.value === "string") out.push({ key, value: node.value, line });
   else if (key === ON_PROFILE && isSeq(node) && node.items.every((item) => isScalar(item) && typeof item.value === "string")) {
     out.push({ key, value: node.items.map((item) => (isScalar(item) ? String(item.value) : "")).join(","), line });
@@ -151,7 +202,7 @@ function walkYaml(node: unknown, path: readonly string[], line: number, out: Dec
  * documents unless the line before is a comment of the same prefix, and a comment that opens a document reopens the
  * previous one. Spring decodes the file as ISO-8859-1, so a value holding a character outside ASCII is not decided.
  */
-function readProperties(content: string): ConfigRead {
+function readProperties(content: string, keys: ReadKeys): ConfigRead {
   const lines = content.split(/\r\n|\r|\n/);
   const documents: { declarations: Declaration[]; entries: number }[] = [];
   let current = { declarations: [] as Declaration[], entries: 0 };
@@ -178,7 +229,7 @@ function readProperties(content: string): ConfigRead {
     if (entry === undefined) return { ok: false, line: start + 1 };
     current.entries++;
     const key = canonical(entry.key);
-    if (isReadKey(key)) current.declarations.push({ key, value: NON_ASCII.test(entry.raw) ? undefined : entry.value, line: start + 1 });
+    if (keys.reads(key)) current.declarations.push({ key, value: NON_ASCII.test(entry.raw) ? undefined : entry.value, line: start + 1 });
   }
   if (current.entries > 0) documents.push(current);
   return { ok: true, documents: documents.map((document) => document.declarations) };

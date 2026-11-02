@@ -178,6 +178,35 @@ test("a path prefix and a host a call site names are outward names, and an undec
   assert.deepEqual(section.value.names.map((name) => `${name.kind} ${name.name}`), ["http-host https://maps.example.com/geo", "path-prefix orders-api"]);
 });
 
+test("a repository that depends on another one given reads its calls through that repository's sources", async () => {
+  const calls: { repo: string; libraries: readonly string[] }[] = [];
+  const callSites: CallSiteReader = {
+    of: async (_files, repo, libraries) => {
+      calls.push({ repo, libraries: (libraries ?? []).map((file) => file.path) });
+      return [];
+    },
+  };
+  const queries = setup(
+    {
+      "/work/orders": {
+        files: { "pom.xml": "<project/>", "src/main/java/orders/Orders.java": "class Orders {}" },
+        names: [dependencyName("com.shop:shop-clients", "pom.xml", 20)],
+      },
+      "/work/shop-clients": { files: { "src/main/java/clients/RestClient.java": "interface RestClient {}" } },
+      "/work/billing": { files: { "pom.xml": "<project/>" } },
+    },
+    callSites,
+  );
+
+  await queries.outwardNames({ repo: { path: "/work/orders" }, repos: [{ path: "/work/shop-clients" }, { path: "/work/billing" }] });
+
+  assert.deepEqual(calls, [
+    { repo: "orders", libraries: ["src/main/java/clients/RestClient.java"] },
+    { repo: "shop-clients", libraries: [] },
+    { repo: "billing", libraries: [] },
+  ]);
+});
+
 test("every repository of a request is read under its own trust declaration, and an undeclared one is untrusted", async () => {
   const declared: Record<string, "trusted"> = { "/work/orders-svc": "trusted" };
   const queries = setup({ "/work/shop-web": { files: {} }, "/work/orders-svc": { files: {} } }, undefined, { read: async (repo) => (declared[repo] === undefined ? { ok: true, value: undefined } : { ok: true, value: declared[repo] }) });

@@ -35,10 +35,20 @@ export interface EventTarget {
 
 /** The call sites of a repository's snapshot, read from its sources; reading them resolves the modules they import. */
 export interface CallSiteReader {
-  of(files: readonly { path: string; content: string }[], repo: string): Promise<readonly CallSite[]>;
+  /**
+   * `libraries` are the sources of repositories the snapshot depends on: a call through a class they declare is read
+   * through their code, and none of their own calls is reported.
+   */
+  of(files: readonly { path: string; content: string }[], repo: string, libraries?: readonly { path: string; content: string }[]): Promise<readonly CallSite[]>;
 }
 
 /** The place a call site is written, as the evidence of the finding that reports it. */
 export function callSiteEvidence(site: CallSite): Evidence {
   return site.endLine === undefined ? { path: site.file, line: site.line } : { path: site.file, line: site.line, endLine: site.endLine };
+}
+
+/** The place of a call site whose target the snapshot does not decide, with the library the call goes through when it names one. */
+export function unresolvedPlace(site: CallSite): Evidence {
+  const via = site.target.status === "unknown" ? site.target.evidence[0]?.via : undefined;
+  return via === undefined ? callSiteEvidence(site) : { ...callSiteEvidence(site), via };
 }

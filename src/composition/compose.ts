@@ -29,6 +29,7 @@ import { createContractRoutes } from "../core/adapters/openapi/contract-document
 import { createWorkspaceEvidence } from "../core/adapters/workspace/outward-names.adapter.ts";
 import { createHttpCallSites } from "../core/adapters/typescript/http-call-sites.adapter.ts";
 import { createPatternRedaction } from "../core/adapters/redaction/pattern-redaction.adapter.ts";
+import { createJavaHttpCallSites } from "../core/adapters/spring/http-call-sites.adapter.ts";
 import { createSpringRoutesExtractor } from "../core/adapters/spring/spring-routes.adapter.ts";
 import { createJavaParser } from "../core/adapters/tree-sitter/java-parser.adapter.ts";
 import { createAngularDeclarationReader } from "../core/adapters/typescript/angular-declarations.adapter.ts";
@@ -37,6 +38,8 @@ import { createDynamicLoadReader } from "../core/adapters/typescript/dynamic-loa
 import { composeAngularRelations } from "./angular-relations.ts";
 import { EDGE_POLICY } from "../core/domain/impact/edge-policy.ts";
 import { sortFindings } from "../core/domain/entrypoints/finding-order.ts";
+import { compareText } from "../core/domain/shared/code-node.ts";
+import type { CallSiteReader } from "../core/domain/topology/call-site.ts";
 import type { EntrypointExtractor } from "../core/ports/entrypoint-extractor.port.ts";
 import type { EntrypointQueries } from "../core/ports/entrypoint-queries.port.ts";
 import type { ImpactQueries } from "../core/ports/impact-queries.port.ts";
@@ -93,6 +96,13 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
     extract: async (files) => {
       const spring = await createSpringRoutesExtractor(await createJavaParser(), contracts).extract(files);
       return sortFindings([...spring, ...(await angular.extract(files))]);
+    },
+  };
+  const typescriptCallSites = createHttpCallSites();
+  const callSites: CallSiteReader = {
+    of: async (files, repo, libraries) => {
+      const java = await createJavaHttpCallSites(await createJavaParser()).of(files, repo, libraries);
+      return [...(await typescriptCallSites.of(files, repo)), ...java].sort((a, b) => compareText(a.file, b.file) || a.line - b.line);
     },
   };
   const vcs = createGitVcs();
@@ -154,7 +164,7 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
     extractor,
     digest,
     matcher,
-    callSites: createHttpCallSites(),
+    callSites,
     evidence: createWorkspaceEvidence(),
     producer: { name: PRODUCER_NAME, version },
     engines: entrypointEngines,
