@@ -699,6 +699,28 @@ test("callers and impact without a workspace never reach the workspace family", 
   await session.close();
 });
 
+test("offline reaches every workspace-bearing request, and live is refused beside it before any query runs", async () => {
+  const { session, calls } = await setup();
+
+  await session.callTool("ye_ast_workspace", { offline: true });
+  await session.callTool("ye_ast_decisions", { offline: true });
+  await session.callTool("ye_ast_callers", { targets: [{ file: "a", symbol: "f" }], workspace: WORKSPACE, offline: true });
+  await session.callTool("ye_ast_impact", { base: "main", workspace: WORKSPACE, offline: true });
+
+  assert.deepEqual(calls.workspaceReads.map(({ offline: stated }) => stated), [true]);
+  assert.deepEqual(calls.decisions.map(({ offline: stated }) => stated), [true]);
+  assert.deepEqual(calls.workspaceCallers.map(({ offline: stated }) => stated), [true]);
+  assert.deepEqual(calls.workspaceOfChange.map(({ offline: stated }) => stated), [true]);
+
+  const refused = [
+    await session.callTool("ye_ast_callers", { live: true, offline: true, targets: [{ file: "a", symbol: "f" }] }).catch((error: Error) => error),
+    await session.callTool("ye_ast_impact", { base: "main", live: true, offline: true }).catch((error: Error) => error),
+  ];
+  for (const result of refused) assert.equal(result instanceof Error || (result as { isError?: boolean }).isError === true, true);
+  assert.deepEqual([calls.workspaceCallers.length, calls.workspaceOfChange.length], [1, 1]);
+  await session.close();
+});
+
 test("a workspace answer lists the links across repositories with their basis, the gateways in force, the declared ones that matched nothing, the unmatched and the external call sites", async () => {
   const { session } = await setup();
 

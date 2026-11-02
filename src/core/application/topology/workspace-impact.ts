@@ -67,6 +67,7 @@ export function createWorkspaceImpactQueries(deps: WorkspaceImpactDeps): Workspa
       repo: readsChange ? { ...request.repo, revision: triggerRevision } : request.repo,
       repos: inForce.value.repos,
       gateways: inForce.value.gateways,
+      ...(request.offline === undefined ? {} : { offline: request.offline }),
       ...(request.scope === undefined ? {} : { scope: request.scope }),
       ...(request.signal === undefined ? {} : { signal: request.signal }),
     });

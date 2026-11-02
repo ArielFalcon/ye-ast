@@ -124,10 +124,10 @@ export function createWorkspaceQueries(deps: WorkspaceQueriesDeps): WorkspaceQue
    * sha each one is read at. The trigger is read locally and never refreshed; a repository that declares no remote, or
    * whose record is not `trusted`, never reaches the network.
    */
-  async function refreshRemotes(repositories: readonly WorkspaceRepositoryRequest[], trigger: WorkspaceRepositoryRequest, signal: AbortSignal | undefined): Promise<Result<Refreshed, WorkspaceFault>> {
+  async function refreshRemotes(repositories: readonly WorkspaceRepositoryRequest[], trigger: WorkspaceRepositoryRequest, offline: boolean, signal: AbortSignal | undefined): Promise<Result<Refreshed, WorkspaceFault>> {
     const local: Refreshed = { pins: new Map() };
     const { refresh } = deps;
-    if (refresh === undefined) return { ok: true, value: local };
+    if (refresh === undefined || offline) return { ok: true, value: local };
 
     const candidates: Candidate[] = [];
     for (const declaration of repositories) {
@@ -213,7 +213,7 @@ export function createWorkspaceQueries(deps: WorkspaceQueriesDeps): WorkspaceQue
       const duplicate = ids.find((id, index) => ids.indexOf(id) !== index);
       if (duplicate !== undefined) return { ok: false, fault: { kind: "duplicate-repository", detail: duplicate } };
 
-      const refreshed = await refreshRemotes(asked.slice(1), request.repo, request.signal);
+      const refreshed = await refreshRemotes(asked.slice(1), request.repo, request.offline === true, request.signal);
       if (!refreshed.ok) return refreshed;
 
       const scope = pathSelection(declaredScope(), matcher.matches);

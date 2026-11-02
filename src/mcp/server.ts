@@ -85,6 +85,10 @@ const live = z
   .boolean()
   .optional()
   .describe("True reads the working tree, including staged, unstaged and untracked changes, instead of a revision; only for a repository declared trusted with `ye-ast install --trust trusted`. Excludes the revision.");
+const offline = z
+  .boolean()
+  .optional()
+  .describe("True reads every repository from its own clone and refreshes no declared remote, as under `untrusted`: the query reaches no network, even for a repository declared trusted with a remote. Only a query with workspace can refresh one; excludes live.");
 
 /** `live` and the revision it replaces are exclusive. */
 const excludes = (field: string) => (value: { live?: boolean | undefined } & Record<string, unknown>): boolean => !(value.live === true && value[field] !== undefined);
@@ -321,17 +325,19 @@ export function createMcpServer(deps: McpDeps): McpServer {
           base: z.string().min(1).describe("The revision the change is read against."),
           head: z.string().min(1).optional().describe("The revision holding the change; HEAD when omitted."),
           live,
+          offline,
           scope,
           budget,
           detail,
           workspace,
         })
         .refine(excludes("head"), "live excludes head")
+        .refine(excludes("offline"), "live excludes offline")
         .refine(withoutWorkspace, "live excludes workspace"),
       outputSchema: FACT_OUTPUT,
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    ({ base, head, live: isLive, scope: paths, budget: requested, detail: listing, workspace: others }, ctx) => {
+    ({ base, head, live: isLive, offline: isOffline, scope: paths, budget: requested, detail: listing, workspace: others }, ctx) => {
       const crossing = workspaceOf(others);
       if (crossing !== undefined) {
         return answer(
@@ -341,6 +347,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
               ...crossing,
               base,
               head: head ?? DEFAULT_REVISION,
+              ...(isOffline === undefined ? {} : { offline: isOffline }),
               ...scopeOf(paths),
               ...budgetOf(requested),
               signal: ctx.mcpReq.signal,
@@ -364,13 +371,14 @@ export function createMcpServer(deps: McpDeps): McpServer {
       title: "Callers of symbols or line ranges",
       description: `What depends on the symbols or line ranges asked for at a revision: the callers they reach and the entrypoints those serve, with path:line evidence. A symbol that names no declaration is reported as an error. Use it before changing or deleting a symbol or a range of lines. With workspace it also joins the call sites other local repositories make to the routes the symbols serve, and follows each link into its own repository. ${COMPLETENESS}`,
       inputSchema: z
-        .strictObject({ revision, live, targets: z.array(target).min(1).describe("The symbols or line ranges to start from."), scope, budget, detail, workspace })
+        .strictObject({ revision, live, offline, targets: z.array(target).min(1).describe("The symbols or line ranges to start from."), scope, budget, detail, workspace })
         .refine(excludes("revision"), "live excludes revision")
+        .refine(excludes("offline"), "live excludes offline")
         .refine(withoutWorkspace, "live excludes workspace"),
       outputSchema: FACT_OUTPUT,
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    ({ revision: requested, live: isLive, targets, scope: paths, budget: bounds, detail: listing, workspace: others }, ctx) => {
+    ({ revision: requested, live: isLive, offline: isOffline, targets, scope: paths, budget: bounds, detail: listing, workspace: others }, ctx) => {
       const crossing = workspaceOf(others);
       if (crossing !== undefined) {
         return answer(
@@ -379,6 +387,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
               repo: { path: repository.path, id: repository.repoId, revision: requested ?? DEFAULT_REVISION },
               ...crossing,
               targets: targets as CallersTarget[],
+              ...(isOffline === undefined ? {} : { offline: isOffline }),
               ...scopeOf(paths),
               ...budgetOf(bounds),
               signal: ctx.mcpReq.signal,
@@ -427,6 +436,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
       description: `The outward names this repository (and any repos passed) writes: HTTP hosts and path prefixes, configuration URLs, message destinations, dependency coordinates, its own remote and the registries it declares, each with path:line evidence; the local repositories that serve each name, with basis exact-name, artifact, remote or route-overlap; and the names no repository given serves. Use it to learn which clones a cross-repository question needs. It reads each repository from its own clone, and refreshes a declared remote only for a repository the user declared trusted. ${COMPLETENESS}`,
       inputSchema: z.strictObject({
         revision,
+        offline,
         scope,
         repos: workspaceRepos,
         gateways,
@@ -434,13 +444,14 @@ export function createMcpServer(deps: McpDeps): McpServer {
       outputSchema: FACT_OUTPUT,
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    ({ revision: requested, scope: paths, repos, gateways: requestedGateways }, ctx) =>
+    ({ revision: requested, offline: isOffline, scope: paths, repos, gateways: requestedGateways }, ctx) =>
       answer(
         async () => {
           const read = await deps.workspace.outwardNames({
             repo: { path: repository.path, id: repository.repoId, ...(requested === undefined ? {} : { revision: requested }) },
             ...(repos === undefined ? {} : { repos: repos.map(askedRepository) }),
             ...(requestedGateways === undefined ? {} : { gateways: requestedGateways }),
+            ...(isOffline === undefined ? {} : { offline: isOffline }),
             ...scopeOf(paths),
             signal: ctx.mcpReq.signal,
           });
@@ -455,17 +466,18 @@ export function createMcpServer(deps: McpDeps): McpServer {
     {
       title: "Gaps a workspace leaves to the user",
       description: `What the workspace does not state and only the user can fill: the clones that serve an outward name, the clones that state no name, the names no repository given serves, the prefixes that route nowhere and the repositories without a trust record. Each gap lists every option the workspace can verify with path:line evidence and marks the one a rule recommends; a gap whose answer is a value no fact states says so. Use it before \`ye-ast install --workspace\` to show the user a form; it reads the same repositories and writes nothing. ${COMPLETENESS}`,
-      inputSchema: z.strictObject({ revision, scope, repos: workspaceRepos, gateways }),
+      inputSchema: z.strictObject({ revision, offline, scope, repos: workspaceRepos, gateways }),
       outputSchema: FACT_OUTPUT,
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    ({ revision: requested, scope: paths, repos, gateways: requestedGateways }, ctx) =>
+    ({ revision: requested, offline: isOffline, scope: paths, repos, gateways: requestedGateways }, ctx) =>
       answer(
         () =>
           deps.decisions.decisions({
             repo: { path: repository.path, id: repository.repoId, ...(requested === undefined ? {} : { revision: requested }) },
             ...(repos === undefined ? {} : { repos: repos.map(askedRepository) }),
             ...(requestedGateways === undefined ? {} : { gateways: requestedGateways }),
+            ...(isOffline === undefined ? {} : { offline: isOffline }),
             ...scopeOf(paths),
             signal: ctx.mcpReq.signal,
           }),

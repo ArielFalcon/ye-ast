@@ -474,6 +474,29 @@ test("an untrusted repository with a remote is read from its own clone and the a
   assert.equal(JSON.stringify(read), JSON.stringify(readOf(await setup(repositories, undefined, trusted([TRIGGER])).outwardNames(request))));
 });
 
+test("an offline request refreshes no remote and reads every repository from its own clone, byte-identical to a workspace with no refresh at all", async () => {
+  const repositories: Repositories = { [TRIGGER]: { files: {} }, [SIBLING]: { files: {}, sha: LOCAL_SHA } };
+  const request = { repo: { path: TRIGGER }, repos: [{ path: SIBLING, remote: REMOTE }], offline: true };
+  const asked: RemoteRefreshRequest[] = [];
+  const queries = setup(
+    repositories,
+    undefined,
+    trusted([TRIGGER, SIBLING]),
+    undefined,
+    { answers: [refreshed(REMOTE, { branches: [{ name: "main", sha: REMOTE_SHA }], defaultBranch: "main" }, { status: "verified" }, MIRROR)], asked },
+  );
+
+  const result = await queries.outwardNames(request);
+  const read = readOf(result);
+  const value = valueOf(result);
+
+  assert.deepEqual(asked, []);
+  assert.equal("refresh" in read, false);
+  assert.equal(shaOf(value.repositorySnapshots.find(({ repo }) => repo === "orders-svc")?.snapshot), LOCAL_SHA);
+  assert.equal(value.repositories.find(({ repo }) => repo === "orders-svc")?.path, SIBLING);
+  assert.equal(JSON.stringify(read), JSON.stringify(readOf(await setup(repositories, undefined, trusted([TRIGGER, SIBLING])).outwardNames({ ...request, offline: true }))));
+});
+
 test("a failed refresh with a recorded listing still pins from it and answers the recorded freshness", async () => {
   const failed: RemoteFreshness = { status: "unverified", reason: "failed", lastVerifiedAt: "2026-11-02T10:00:00.000Z" };
   const queries = setup(

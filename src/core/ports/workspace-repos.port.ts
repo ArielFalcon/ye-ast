@@ -17,6 +17,11 @@ export interface WorkspaceReposRequest {
   /** Other local repositories the caller declares. */
   repos?: readonly WorkspaceRepositoryRequest[];
   scope?: ScopeRequest;
+  /**
+   * Reads every repository from its own clone and refreshes no declared remote, as under `untrusted`: the query reaches
+   * no network, even for a repository declared `trusted` with a `remote`.
+   */
+  offline?: boolean;
   signal?: AbortSignal;
 }
 
