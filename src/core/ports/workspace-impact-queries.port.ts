@@ -11,9 +11,9 @@ import type { WorkspaceFault, WorkspaceReposRequest, WorkspaceRepositoryRequest 
 
 /** What one repository contributes to a cross-repository answer. */
 export interface RepoImpact {
-  /** The trigger repository's own walk, or for another repository the walk from its call sites that landed in what the trigger's walk reached. */
+  /** The trigger repository's own walk, or for another repository the walk from the call sites the answer admitted there. */
   impact?: ImpactValue;
-  /** The call sites of this repository that reach an entrypoint the walk reached. */
+  /** The call sites of this repository that reach an entrypoint the answer's walks reached. */
   callSites: readonly CallSite[];
   /** The call sites that reached a declared service and matched none of its entrypoints. */
   unmatched: readonly CallSite[];
@@ -27,6 +27,7 @@ export interface WorkspaceImpactValue {
   repositorySnapshots: readonly { repo: string; snapshot: SnapshotRef }[];
   trigger: { repo: string; mergeBase?: string };
   sections: Readonly<Record<string, Fact<RepoImpact>>>;
+  /** Every link the answer admitted, once per `Link.id`, sorted by place: upstream when a walk reached its target, downstream when the change sends it onward. */
   links: readonly ImpactedLink[];
 }
 
@@ -47,8 +48,9 @@ export interface WorkspaceOfChangeRequest extends WorkspaceImpactBase {
 
 /**
  * The same answers the single-repository tools give, composed over a workspace: what reaches the symbols, line ranges or
- * change of the trigger repository, including the call sites of other repositories that land in what the walk reaches,
- * and what those call sites state about services no repository given serves.
+ * change of the trigger repository, including the call sites of other repositories that land in what a walk reaches,
+ * what those call sites state about services no repository given serves, and, for a change, the links it sends onward.
+ * The links chain: each one feeds a walk in its own repository, whose reached entrypoints the next join starts from.
  */
 export interface WorkspaceImpactQueries {
   callers(request: WorkspaceCallersRequest): Promise<Result<Fact<WorkspaceImpactValue>, ImpactFault | WorkspaceFault>>;

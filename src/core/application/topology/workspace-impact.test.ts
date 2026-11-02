@@ -3,13 +3,14 @@ import assert from "node:assert/strict";
 import type { HttpRoute } from "../../domain/entrypoints/http-route.ts";
 import type { Entrypoint, Listener } from "../../domain/entrypoints/entrypoint.ts";
 import type { CallSite, EventTarget } from "../../domain/topology/call-site.ts";
-import type { ImpactValue } from "../../domain/impact/impact-fact.ts";
+import type { ImpactValue, Seed } from "../../domain/impact/impact-fact.ts";
 import type { CompleteFact, Cut, Fact, SnapshotRef } from "../../domain/shared/fact.ts";
 import type { Result } from "../../domain/shared/result.ts";
-import type { ImpactCallersRequest, ImpactFault, ImpactQueries } from "../../ports/impact-queries.port.ts";
+import type { CallersTarget, ImpactCallersRequest, ImpactFault, ImpactOfChangeRequest, ImpactQueries } from "../../ports/impact-queries.port.ts";
 import type { WorkspaceQueries, WorkspaceValue } from "../../ports/workspace-queries.port.ts";
 import type { WorkspaceRepository, WorkspaceSection } from "../../ports/workspace-repos.port.ts";
 import type { WorkspaceImpactValue, RepoImpact } from "../../ports/workspace-impact-queries.port.ts";
+import { compareText } from "../../domain/shared/code-node.ts";
 import { createWorkspaceImpactQueries } from "./workspace-impact.ts";
 
 const SHA = "a".repeat(40);
@@ -34,9 +35,9 @@ function listener(destination: string, protocol: Listener["protocol"] = "kafka",
   return { kind: "listener", name: `${protocol} ${destination}`, protocol, destination, handler };
 }
 
-function eventSite(repo: string, destination: string, line = 7): CallSite {
+function eventSite(repo: string, destination: string, line = 7, protocol: EventTarget["protocol"] = "kafka"): CallSite {
   const file = `src/main/java/app/${repo}/Orders.java`;
-  const value: EventTarget = { protocol: "kafka", destination, role: "publish" };
+  const value: EventTarget = { protocol, destination, role: "publish" };
   return { repo, file, line, symbol: `${repo}.publish${line}`, transport: "event", target: { status: "complete", value, evidence: [] } };
 }
 
@@ -65,9 +66,34 @@ interface Setup {
   trigger?: ImpactValue;
   /** The outward names the workspace read found no local repository for. */
   unserved?: readonly string[];
+  /** Per repository: what a walk from one of its call sites reaches, by the line the walk is seeded with. */
+  reached?: Record<string, readonly WalkModel[]>;
 }
 
-function setup({ repositories, trigger = impactOf(REACHED), unserved = [] }: Setup) {
+/** One call site of a repository as its walk sees it: the line a range is seeded by, the declaration it sits in, and what the walk reaches. */
+interface WalkModel {
+  line: number;
+  declaration: number;
+  symbol: string;
+  entrypoints: ImpactValue["entrypoints"];
+}
+
+/** A walk seeded by line ranges: the declaration each range holds, and the entrypoints each declaration reaches. */
+function walkAnswer(model: readonly WalkModel[], targets: readonly CallersTarget[]): ImpactValue {
+  const found = targets.flatMap((target): { target: { file: string; start: number; end: number }; at: WalkModel }[] => {
+    if ("symbol" in target) return [];
+    const at = model.find((entry) => entry.line >= target.start && entry.line <= target.end);
+    return at === undefined ? [] : [{ target, at }];
+  });
+  const seeds: Seed[] = [
+    ...new Map(found.map(({ target, at }) => [`${target.file}\0${at.symbol}`, { file: target.file, symbol: at.symbol, line: at.declaration, basis: "requested" as const }])).values(),
+  ].sort((a, b) => compareText(a.file, b.file) || a.line - b.line || compareText(a.symbol, b.symbol));
+  const seedOf = (target: { file: string }, at: WalkModel): number => seeds.findIndex((seed) => seed.file === target.file && seed.symbol === at.symbol);
+  const entrypoints = found.flatMap(({ target, at }) => at.entrypoints.map((entrypoint) => ({ ...entrypoint, seeds: [seedOf(target, at)] })));
+  return { cost: { expansionsUsed: 0 }, seeds, symbols: [], entrypoints };
+}
+
+function setup({ repositories, trigger = impactOf(REACHED), unserved = [], reached = {} }: Setup) {
   const names = Object.keys(repositories).sort();
   const read: WorkspaceRepository[] = names.map((repo) => ({
     repo,
@@ -100,9 +126,11 @@ function setup({ repositories, trigger = impactOf(REACHED), unserved = [] }: Set
   const impact = {
     callers: async (request: ImpactCallersRequest): Promise<Result<Fact<ImpactValue>, ImpactFault>> => {
       walks.push(request);
-      return { ok: true, value: fact(request.repoId, "untrusted", request.repoId === "orders" ? trigger : impactOf([])) };
+      const model = reached[request.repoId];
+      const value = request.targets.some((target) => "symbol" in target) ? trigger : model === undefined ? impactOf([]) : walkAnswer(model, request.targets);
+      return { ok: true, value: fact(request.repoId, "untrusted", value) };
     },
-    ofChange: async (): Promise<Result<Fact<ImpactValue>, ImpactFault>> => ({ ok: true, value: fact("orders", "trusted", { ...trigger, mergeBase: OTHER_SHA }) }),
+    ofChange: async (request: ImpactOfChangeRequest): Promise<Result<Fact<ImpactValue>, ImpactFault>> => ({ ok: true, value: fact(request.repoId, "trusted", { ...trigger, mergeBase: OTHER_SHA }) }),
   } as unknown as ImpactQueries;
   return { queries: createWorkspaceImpactQueries({ workspace: read_, impact }), walks };
 }
@@ -318,4 +346,183 @@ test("an event two repositories consume is a cut of the section, never a pick", 
   assert.deepEqual(value.links, []);
   assert.ok(section?.status === "partial");
   assert.deepEqual(section.cuts, [{ kind: "unresolved-link", at: ["src/main/java/app/shop-web/Orders.java", "src/main/java/app/shop-web/Orders.java:7"] }]);
+});
+
+const CHARGES = { path: "src/main/java/app/payments/PaymentController.java", symbol: "PaymentController.charge", line: 12 };
+const REFUNDS = { path: "src/main/java/app/payments/PaymentController.java", symbol: "PaymentController.refund", line: 40 };
+const ORDER_CONTROLLER = { path: "src/main/java/app/orders/OrderController.java", symbol: "OrderController.create", line: 20 };
+const ORDER_LIST = { path: "src/main/java/app/orders/OrderController.java", symbol: "OrderController.list", line: 30 };
+const ORDER_PAGE = { path: "src/app/pages/order.page.ts", symbol: "OrderPage.submit", line: 5 };
+const NOTIFY = { path: "src/main/java/app/notifications/OrdersListener.java", symbol: "OrdersListener.on", line: 30 };
+
+function routeOf(handler: HttpRoute["handler"], method: HttpRoute["method"], path: string): HttpRoute {
+  return { kind: "http-route", name: `${method} ${path}`, method, path, handler, basePath: { status: "complete", value: { default: {}, profiles: {} }, evidence: [] } };
+}
+
+function reachedRoute(handler: HttpRoute["handler"], method: HttpRoute["method"], path: string): ImpactValue["entrypoints"][number] {
+  return { kind: "http-route", name: `${method} ${path}`, handler, depth: 0, confidence: 1, seeds: [] };
+}
+
+const askIn = (trigger: string, others: readonly string[]) => ({ repo: { path: `/work/${trigger}` }, repos: others.map((repo) => ({ path: `/work/${repo}` })), targets: ASK.targets });
+
+test("a chain of three repositories links hop by hop upstream, each link's reach naming the links crossed from the change", async () => {
+  const { queries } = setup({
+    repositories: {
+      payments: { entrypoints: [routeOf(CHARGES, "POST", "/charges")] },
+      orders: { entrypoints: [routeOf(ORDER_CONTROLLER, "POST", "/orders")], callSites: [callSite("orders", "payments/charges", "POST", 7)] },
+      webapp: { callSites: [callSite("webapp", "orders-api/orders", "POST", 9)] },
+    },
+    trigger: impactOf([reachedRoute(CHARGES, "POST", "/charges")]),
+    reached: { orders: [{ line: 7, declaration: 3, symbol: "orders.call7", entrypoints: [reachedRoute(ORDER_CONTROLLER, "POST", "/orders")] }] },
+  });
+
+  const value = valueOf(await queries.callers(askIn("payments", ["orders", "webapp"])));
+
+  const [hop, onward] = value.links;
+  assert.deepEqual(value.links.map(({ link, direction }) => `${direction} ${link.from.repo}:${link.from.line} -> ${link.to.repo} ${link.to.name}`), [
+    "upstream orders:7 -> payments POST /charges",
+    "upstream webapp:9 -> orders POST /orders",
+  ]);
+  assert.deepEqual(hop?.reach, [hop?.link.id]);
+  assert.deepEqual(onward?.reach, [hop?.link.id, onward?.link.id]);
+});
+
+test("a change sends links onward downstream, each link's reach naming the links crossed from it", async () => {
+  const { queries } = setup({
+    repositories: {
+      webapp: { callSites: [callSite("webapp", "orders-api/orders", "POST", 9), callSite("webapp", "payments/charges", "POST", 12)] },
+      orders: { entrypoints: [routeOf(ORDER_CONTROLLER, "POST", "/orders")], callSites: [callSite("orders", "payments/charges", "POST", 7)] },
+      payments: { entrypoints: [routeOf(CHARGES, "POST", "/charges")] },
+    },
+    trigger: impactOf([], { seeds: [{ file: "src/app/webapp.api.ts", symbol: "webapp.call9", line: 9, basis: "lines" }] }),
+    reached: { orders: [{ line: 7, declaration: 3, symbol: "orders.call7", entrypoints: [reachedRoute(ORDER_CONTROLLER, "POST", "/orders")] }] },
+  });
+
+  const value = valueOf(await queries.ofChange({ repo: { path: "/work/webapp" }, repos: [{ path: "/work/orders" }, { path: "/work/payments" }], base: "main", head: "HEAD" }));
+
+  const onward = value.links.find(({ link }) => link.from.repo === "webapp");
+  const next = value.links.find(({ link }) => link.from.repo === "orders");
+  assert.deepEqual(value.links.map(({ link, direction }) => `${direction} ${link.from.repo}:${link.from.line} -> ${link.to.repo} ${link.to.name}`), [
+    "downstream orders:7 -> payments POST /charges",
+    "downstream webapp:9 -> orders POST /orders",
+  ]);
+  assert.deepEqual(onward?.reach, [onward?.link.id]);
+  assert.deepEqual(next?.reach, [onward?.link.id, next?.link.id]);
+});
+
+test("a cycle between two repositories terminates and admits each link once", async () => {
+  const { queries, walks } = setup({
+    repositories: {
+      orders: { entrypoints: [routeOf(ORDER_CONTROLLER, "POST", "/orders")], callSites: [callSite("orders", "webapp/orders", "GET", 9)] },
+      webapp: { entrypoints: [routeOf(ORDER_PAGE, "GET", "/orders")], callSites: [callSite("webapp", "orders-api/orders", "POST", 7)] },
+    },
+    trigger: impactOf([reachedRoute(ORDER_CONTROLLER, "POST", "/orders")]),
+    reached: {
+      webapp: [{ line: 7, declaration: 2, symbol: "webapp.call7", entrypoints: [reachedRoute(ORDER_PAGE, "GET", "/orders")] }],
+      orders: [{ line: 9, declaration: 4, symbol: "orders.call9", entrypoints: [reachedRoute(ORDER_LIST, "GET", "/orders")] }],
+    },
+  });
+
+  const value = valueOf(await queries.callers({ repo: { path: "/work/orders" }, repos: [{ path: "/work/webapp" }], targets: ASK.targets }));
+
+  assert.deepEqual(value.links.map(({ link }) => `${link.from.repo}:${link.from.line} -> ${link.to.repo} ${link.to.name}`), [
+    "orders:9 -> webapp GET /orders",
+    "webapp:7 -> orders POST /orders",
+  ]);
+  assert.deepEqual(walks.map((walk) => `${walk.repoId}:${walk.targets.length}`), ["orders:1", "webapp:1", "orders:1"]);
+  assert.deepEqual(repoImpact(value, "orders").impact?.entrypoints.map(({ name }) => name), ["POST /orders"]);
+});
+
+test("a repository is walked once for the call sites one round admits, and again only when a fresh link feeds it", async () => {
+  const { queries, walks } = setup({
+    repositories: {
+      payments: { entrypoints: [routeOf(CHARGES, "POST", "/charges"), routeOf(REFUNDS, "GET", "/refunds")] },
+      orders: {
+        entrypoints: [routeOf(ORDER_CONTROLLER, "POST", "/orders"), routeOf(ORDER_LIST, "GET", "/orders")],
+        callSites: [callSite("orders", "payments/charges", "POST", 7), callSite("orders", "payments/refunds", "GET", 8)],
+      },
+      webapp: { callSites: [callSite("webapp", "orders-api/orders", "POST", 9), callSite("webapp", "orders-api/orders", "GET", 12)] },
+    },
+    trigger: impactOf([reachedRoute(CHARGES, "POST", "/charges"), reachedRoute(REFUNDS, "GET", "/refunds")]),
+    reached: {
+      orders: [
+        { line: 7, declaration: 3, symbol: "orders.call7", entrypoints: [reachedRoute(ORDER_CONTROLLER, "POST", "/orders")] },
+        { line: 8, declaration: 3, symbol: "orders.call8", entrypoints: [reachedRoute(ORDER_LIST, "GET", "/orders")] },
+      ],
+    },
+  });
+
+  const value = valueOf(await queries.callers(askIn("payments", ["orders", "webapp"])));
+
+  const [charges, refunds, posted, listed] = value.links;
+  assert.deepEqual(walks.map((walk) => walk.repoId), ["payments", "orders", "webapp"]);
+  assert.deepEqual(walks[1]?.targets.map((target) => ("start" in target ? target.start : -1)), [7, 8]);
+  assert.deepEqual(charges?.reach, [charges?.link.id]);
+  assert.deepEqual(refunds?.reach, [refunds?.link.id]);
+  assert.deepEqual(posted?.reach, [charges?.link.id, posted?.link.id]);
+  assert.deepEqual(listed?.reach, [refunds?.link.id, listed?.link.id]);
+});
+
+test("a removed route seeds its consumers, and the route they serve seeds the next repository", async () => {
+  const removed = impactOf([], { changedEntrypoints: [{ change: "removed", kind: "http-route", name: "DELETE /charges/{id}", handler: CHARGES }] });
+  const { queries } = setup({
+    repositories: {
+      payments: {},
+      orders: { entrypoints: [routeOf(ORDER_CONTROLLER, "DELETE", "/orders/{id}")], callSites: [callSite("orders", "payments/charges/:id", "DELETE", 7)] },
+      webapp: { callSites: [callSite("webapp", "orders-api/orders/:id", "DELETE", 9)] },
+    },
+    trigger: removed,
+    reached: { orders: [{ line: 7, declaration: 3, symbol: "orders.call7", entrypoints: [reachedRoute(ORDER_CONTROLLER, "DELETE", "/orders/{id}")] }] },
+  });
+
+  const value = valueOf(await queries.ofChange({ repo: { path: "/work/payments" }, repos: [{ path: "/work/orders" }, { path: "/work/webapp" }], base: "main", head: "HEAD" }));
+
+  const [hop, onward] = value.links;
+  assert.deepEqual(value.links.map(({ link }) => `${link.from.repo}:${link.from.line} -> ${link.to.repo} ${link.to.name}`), [
+    "orders:7 -> payments DELETE /charges/{id}",
+    "webapp:9 -> orders DELETE /orders/{id}",
+  ]);
+  assert.deepEqual(onward?.reach, [hop?.link.id, onward?.link.id]);
+});
+
+test("a published destination and the NATS listener it reaches carry a chain as an HTTP call and route do", async () => {
+  const { queries } = setup({
+    repositories: {
+      notifications: { entrypoints: [listener("orders.*", "nats", NOTIFY)] },
+      orders: { entrypoints: [routeOf(ORDER_CONTROLLER, "POST", "/orders")], callSites: [eventSite("orders", "orders.created", 7, "nats")] },
+      webapp: { callSites: [callSite("webapp", "orders-api/orders", "POST", 9)] },
+    },
+    trigger: impactOf([{ kind: "listener", name: "nats orders.*", handler: NOTIFY, depth: 0, confidence: 1, seeds: [] }]),
+    reached: { orders: [{ line: 7, declaration: 3, symbol: "orders.publish7", entrypoints: [reachedRoute(ORDER_CONTROLLER, "POST", "/orders")] }] },
+  });
+
+  const value = valueOf(await queries.callers(askIn("notifications", ["orders", "webapp"])));
+
+  const [published, called] = value.links;
+  assert.deepEqual(value.links.map(({ link }) => `${link.from.repo} -> ${link.to.repo} ${link.to.name} (${link.basis})`), [
+    "orders -> notifications nats orders.* (event-destination)",
+    "webapp -> orders POST /orders (route-overlap)",
+  ]);
+  assert.deepEqual(called?.reach, [published?.link.id, called?.link.id]);
+});
+
+test("a link both directions reach enters the answer once, with the nearest reach and the direction that reached it first", async () => {
+  const { queries } = setup({
+    repositories: {
+      orders: { entrypoints: [routeOf(ORDER_CONTROLLER, "POST", "/orders")], callSites: [callSite("orders", "webapp/orders", "GET", 9)] },
+      webapp: { entrypoints: [routeOf(ORDER_PAGE, "GET", "/orders")], callSites: [callSite("webapp", "orders-api/orders", "POST", 7)] },
+    },
+    trigger: impactOf([reachedRoute(ORDER_CONTROLLER, "POST", "/orders")], { seeds: [{ file: "src/app/orders.api.ts", symbol: "orders.call9", line: 9, basis: "lines" }] }),
+    reached: { webapp: [{ line: 7, declaration: 2, symbol: "webapp.call7", entrypoints: [reachedRoute(ORDER_PAGE, "GET", "/orders")] }] },
+  });
+
+  const value = valueOf(await queries.ofChange({ repo: { path: "/work/orders" }, repos: [{ path: "/work/webapp" }], base: "main", head: "HEAD" }));
+
+  const [onward, back] = value.links;
+  assert.deepEqual(value.links.map(({ link, direction }) => `${direction} ${link.from.repo}:${link.from.line} -> ${link.to.repo} ${link.to.name}`), [
+    "downstream orders:9 -> webapp GET /orders",
+    "upstream webapp:7 -> orders POST /orders",
+  ]);
+  assert.deepEqual(onward?.reach, [onward?.link.id]);
+  assert.deepEqual(back?.reach, [back?.link.id]);
 });
