@@ -9,6 +9,7 @@ import type { EntrypointQueries } from "../core/ports/entrypoint-queries.port.ts
 import type { ImpactQueries } from "../core/ports/impact-queries.port.ts";
 import type { WorkspaceQueries } from "../core/ports/workspace-queries.port.ts";
 import type { WorkspaceImpactQueries } from "../core/ports/workspace-impact-queries.port.ts";
+import type { DecisionQueries } from "../core/ports/decision-queries.port.ts";
 import type { Install } from "../core/ports/install.port.ts";
 import { REDACTED, type Redaction } from "../core/ports/redaction.port.ts";
 import { createMcpServer } from "../mcp/server.ts";
@@ -95,6 +96,7 @@ async function throughMcp(budget: unknown, budgets: (ImpactBudget | undefined)[]
     impact: { ofChange: async (request: { budget?: ImpactBudget }) => (budgets.push(request.budget), { ok: true, value: FACT } as never) } as unknown as ImpactQueries,
     workspace: { outwardNames: async () => ({ ok: true, value: FACT } as never) } as unknown as WorkspaceQueries,
     workspaceImpact: {} as unknown as WorkspaceImpactQueries,
+    decisions: {} as unknown as DecisionQueries,
     redaction,
     repository: { path: REPO, repoId: "shop" },
   }));

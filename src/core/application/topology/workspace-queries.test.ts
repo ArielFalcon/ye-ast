@@ -219,6 +219,10 @@ test("every repository of a request is read under its own trust declaration, and
     Object.entries(valueOf(result).sections).map(([repo, section]) => `${repo} ${section.inputs.trust}`),
     ["orders-svc trusted", "shop-web untrusted"],
   );
+  assert.deepEqual(
+    valueOf(result).repositories.map(({ repo, declaredTrust }) => `${repo} ${declaredTrust ?? "none"}`).sort(),
+    ["orders-svc trusted", "shop-web none"],
+  );
 });
 
 function persisted(manifest: WorkspaceManifest | undefined, asked: string[] = []): WorkspaceDefaults {

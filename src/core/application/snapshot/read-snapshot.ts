@@ -34,6 +34,12 @@ export async function trustOf(deps: Pick<SnapshotReaderDeps, "trust">, repo: str
   return (declared?.ok && declared.value) || "untrusted";
 }
 
+/** The trust the host declared for a repository: absent when it declared none, or when the record cannot be read. */
+export async function declaredTrustOf(deps: Pick<SnapshotReaderDeps, "trust">, repo: string): Promise<TrustMode | undefined> {
+  const declared = await deps.trust?.read(repo);
+  return declared?.ok ? declared.value : undefined;
+}
+
 export const LIVE_REQUIRES_TRUSTED: Result<never, LiveFault> = {
   ok: false,
   fault: { kind: "live-requires-trusted", detail: "a live query reads the working tree and needs a trusted repository: run `ye-ast install --trust trusted`" },

@@ -12,7 +12,9 @@ import { REDACTED, type Redaction } from "../core/ports/redaction.port.ts";
 import type { VcsFault } from "../core/ports/vcs.port.ts";
 import type { LiveFault } from "../core/ports/live-queries.port.ts";
 import type { WorkspaceQueries } from "../core/ports/workspace-queries.port.ts";
+import type { WorkspaceFault } from "../core/ports/workspace-repos.port.ts";
 import type { WorkspaceCallersRequest, WorkspaceImpactQueries, WorkspaceImpactValue, WorkspaceOfChangeRequest } from "../core/ports/workspace-impact-queries.port.ts";
+import type { DecisionQueries, DecisionsRequest, DecisionValue } from "../core/ports/decision-queries.port.ts";
 import { createMcpServer, CUT_GUIDANCE } from "./server.ts";
 import { openSession, type Session } from "./test-session.ts";
 
@@ -89,6 +91,37 @@ function workspaceImpactFact(): Fact<WorkspaceImpactValue> {
 
 const WORKSPACE = { repos: [{ path: "/work/shop-web", id: "shop-web" }], gateways: [{ prefix: "edge", repo: "shop" }] };
 
+const DECISIONS: DecisionValue = {
+  repositories: [{ repo: "shop", snapshot: { repo: "shop", kind: "sha", sha: "a".repeat(40) } }],
+  decisions: [
+    {
+      id: "membership:name:orders-api",
+      kind: "membership",
+      subject: "orders-api",
+      evidence: [{ path: "src/app/order.api.ts", line: 7 }],
+      options: [
+        { value: "orders", basis: "exact-name", evidence: [{ path: "src/app/order.api.ts", line: 7 }], recommended: true },
+        { value: "orders-core", basis: "artifact", evidence: [], recommended: false },
+      ],
+      allowsFreeText: true,
+      required: false,
+    },
+    {
+      id: "repository:geo.example.com",
+      kind: "repository",
+      subject: "geo.example.com",
+      evidence: [{ path: "src/app/geo.api.ts", line: 11 }],
+      options: [],
+      allowsFreeText: true,
+      required: false,
+    },
+  ],
+};
+
+function decisionFact(value: DecisionValue = DECISIONS): Fact<DecisionValue> {
+  return { ...base(), status: "complete", value };
+}
+
 const IMPORTERS: ImportersValue = {
   files: [{ file: "src/OrderService.java", importers: ["src/OrderController.java"], users: ["src/OrderController.java", "src/Billing.java"], unresolvedNamers: ["src/Legacy.java"] }],
 };
@@ -108,6 +141,7 @@ interface Calls {
   ofChange: ImpactOfChangeRequest[];
   callers: ImpactCallersRequest[];
   importers: ImpactImportersRequest[];
+  decisions: DecisionsRequest[];
 }
 
 interface Answers {
@@ -115,10 +149,11 @@ interface Answers {
   ofChange: (request: ImpactOfChangeRequest) => Promise<Result<Fact<ImpactValue>, VcsFault | LiveFault>>;
   callers: (request: ImpactCallersRequest) => Promise<Result<Fact<ImpactValue>, ImpactFault>>;
   importers: (request: ImpactImportersRequest) => Promise<Result<Fact<ImportersValue>, VcsFault | LiveFault>>;
+  decisions: (request: DecisionsRequest) => Promise<Result<Fact<DecisionValue>, WorkspaceFault>>;
 }
 
 async function setup(answers: Partial<Answers> = {}): Promise<{ session: Session; calls: Calls }> {
-  const calls: Calls = { map: [], ofChange: [], callers: [], importers: [], workspaceCallers: [], workspaceOfChange: [] };
+  const calls: Calls = { map: [], ofChange: [], callers: [], importers: [], workspaceCallers: [], workspaceOfChange: [], decisions: [] };
   const entrypoints: EntrypointQueries = {
     map: (request) => {
       calls.map.push(request);
@@ -150,16 +185,22 @@ async function setup(answers: Partial<Answers> = {}): Promise<{ session: Session
       return { ok: true, value: workspaceImpactFact() };
     },
   };
-  const server = createMcpServer({ version: "0.0.0", entrypoints, impact, workspace, workspaceImpact, redaction: fakeRedaction, repository: REPOSITORY });
+  const decisions: DecisionQueries = {
+    decisions: (request) => {
+      calls.decisions.push(request);
+      return (answers.decisions ?? (async () => ({ ok: true, value: decisionFact() })))(request);
+    },
+  };
+  const server = createMcpServer({ version: "0.0.0", entrypoints, impact, workspace, workspaceImpact, decisions, redaction: fakeRedaction, repository: REPOSITORY });
   return { session: await openSession(server), calls };
 }
 
 const textOf = (result: { content: { text: string }[] }): string => result.content.map((block) => block.text).join("\n");
 
-test("lists the five read tools, each described, none taking a top-level repository selector", async () => {
+test("lists the six read tools, each described, none taking a top-level repository selector", async () => {
   const { session } = await setup();
   const tools = await session.listTools();
-  assert.deepEqual(tools.map((tool) => tool.name).sort(), ["ye_ast_callers", "ye_ast_entrypoints", "ye_ast_impact", "ye_ast_importers", "ye_ast_workspace"]);
+  assert.deepEqual(tools.map((tool) => tool.name).sort(), ["ye_ast_callers", "ye_ast_decisions", "ye_ast_entrypoints", "ye_ast_impact", "ye_ast_importers", "ye_ast_workspace"]);
   for (const tool of tools) {
     assert.ok((tool.description ?? "").length > 0, tool.name);
     for (const forbidden of ["repo", "repoId", "path", "repository"]) assert.equal(tool.inputSchema.properties?.[forbidden], undefined, `${tool.name}.${forbidden}`);
@@ -170,8 +211,11 @@ test("lists the five read tools, each described, none taking a top-level reposit
   assert.deepEqual(required("ye_ast_callers"), ["targets"]);
   assert.deepEqual(required("ye_ast_entrypoints"), []);
   assert.deepEqual(required("ye_ast_workspace"), []);
-  const repos = tools.find((tool) => tool.name === "ye_ast_workspace")?.inputSchema.properties?.["repos"] as { items?: { properties?: Record<string, unknown> } } | undefined;
-  assert.ok(repos?.items?.properties?.["path"] !== undefined, "a passed repository is named by a nested path");
+  assert.deepEqual(required("ye_ast_decisions"), []);
+  for (const name of ["ye_ast_workspace", "ye_ast_decisions"]) {
+    const repos = tools.find((tool) => tool.name === name)?.inputSchema.properties?.["repos"] as { items?: { properties?: Record<string, unknown> } } | undefined;
+    assert.ok(repos?.items?.properties?.["path"] !== undefined, `a passed repository is named by a nested path, in ${name}`);
+  }
   await session.close();
 });
 
@@ -703,5 +747,40 @@ test("the workspace tool answers the outward names without the repositories it r
   const value = (result.structuredContent as { value: Record<string, unknown> }).value;
   assert.equal("repositories" in value, false);
   assert.deepEqual(Object.keys(value).sort(), ["candidates", "repositorySnapshots", "sections", "unserved", "workspace"]);
+  await session.close();
+});
+
+test("the decisions tool asks the decision family with the repositories and gateways given, and renders every decision with its options, the recommended one and the free text", async () => {
+  const { session, calls } = await setup();
+
+  const result = await session.callTool("ye_ast_decisions", { revision: "topic", repos: [{ path: "/work/shop-web", id: "shop-web" }], gateways: [{ prefix: "edge", repo: "shop" }], scope: { include: ["src/**"] } });
+
+  assert.equal(result.isError, undefined);
+  assert.deepEqual(calls.decisions.map(({ repo, repos, gateways, scope }) => ({ repo, repos, gateways, scope })), [
+    { repo: { path: REPOSITORY.path, id: REPOSITORY.repoId, revision: "topic" }, repos: [{ path: "/work/shop-web", id: "shop-web" }], gateways: [{ prefix: "edge", repo: "shop" }], scope: { include: ["src/**"] } },
+  ]);
+  assert.deepEqual(result.structuredContent, JSON.parse(JSON.stringify(decisionFact())));
+  const text = textOf(result);
+  assert.match(text, /^status: complete\n/);
+  assert.match(text, /repositories \(1\): shop@a{40}/);
+  assert.match(text, /decisions \(2\):/);
+  assert.match(text, /\n {2}membership orders-api\n {4}evidence: src\/app\/order\.api\.ts:7\n {4}- orders \(exact-name, recommended, src\/app\/order\.api\.ts:7\)\n {4}- orders-core \(artifact\)\n {4}free text/);
+  assert.match(text, /\n {2}repository geo\.example\.com\n {4}evidence: src\/app\/geo\.api\.ts:11\n {4}free text/);
+  await session.close();
+});
+
+test("the decisions tool reads the bound repository alone when no clones are passed, and a workspace with no gap says none", async () => {
+  const { session, calls } = await setup({ decisions: async (request) => {
+    calls.decisions.push(request);
+    return { ok: true, value: decisionFact({ decisions: [], repositories: [] }) };
+  } });
+
+  const result = await session.callTool("ye_ast_decisions", {});
+
+  assert.equal(calls.decisions[0]?.repos, undefined);
+  assert.equal("gateways" in (calls.decisions[0] ?? {}), false);
+  const text = textOf(result);
+  assert.match(text, /status: complete/);
+  assert.match(text, /decisions \(0\):\n {2}\(none\)/);
   await session.close();
 });

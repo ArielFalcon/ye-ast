@@ -4,12 +4,14 @@ import type { ChangedEntrypoint } from "../core/domain/impact/changed-entrypoint
 import type { ImpactedSymbol, ImpactValue, ReachedEntrypoint } from "../core/domain/impact/impact-fact.ts";
 import type { ImportersValue } from "../core/domain/impact/importers-fact.ts";
 import type { EntrypointMap } from "../core/domain/map/entrypoint-map.ts";
+import type { Decision, DecisionOption } from "../core/domain/decisions/decision.ts";
 import { compareText } from "../core/domain/shared/code-node.ts";
 import type { Cut, Evidence, Fact, Finding, SnapshotRef } from "../core/domain/shared/fact.ts";
 import type { ImpactFault } from "../core/ports/impact-queries.port.ts";
 import type { LiveStaleNotice } from "../core/ports/live-queries.port.ts";
 import type { NameCandidate, OutwardName } from "../core/domain/topology/outward-name.ts";
 import type { WorkspaceValue } from "../core/ports/workspace-queries.port.ts";
+import type { DecisionValue } from "../core/ports/decision-queries.port.ts";
 import type { CallSite } from "../core/domain/topology/call-site.ts";
 import type { ImpactedLink } from "../core/domain/topology/link.ts";
 import type { RepoImpact, WorkspaceImpactValue } from "../core/ports/workspace-impact-queries.port.ts";
@@ -310,5 +312,31 @@ export function renderWorkspace(fact: Fact<WorkspaceValue>): string {
   lines.push(`served by a local repository (${value.candidates.length}):`, ...list(value.candidates.map(candidateLine)));
   lines.push(`no local repository serves (${value.unserved.length}):`, ...list(value.unserved.map((name) => `  - ${name.kind} ${name.name}`)));
   lines.push(...cutsBlock([...cutsOf(fact), ...Object.values(value.sections).flatMap(cutsOf)]));
+  return lines.join("\n");
+}
+
+/** One value the workspace can verify, the facts that make it valid in parentheses, and the places that state them. */
+function optionLine(option: DecisionOption): string {
+  const facts = [...(option.basis === undefined ? [] : [option.basis]), ...(option.recommended ? ["recommended"] : []), ...option.evidence.map(evidenceText)];
+  return `    - ${option.value}${facts.length === 0 ? "" : ` (${facts.join(", ")})`}`;
+}
+
+/** One gap: what is missing, the places that motivated it, every option, and whether a value no fact states answers it. */
+function decisionLines(decision: Decision): string[] {
+  return [
+    `  ${decision.kind} ${decision.subject}`,
+    ...(decision.evidence.length === 0 ? [] : [`    evidence: ${decision.evidence.map(evidenceText).join(", ")}`]),
+    ...decision.options.map(optionLine),
+    ...(decision.allowsFreeText ? ["    free text: an answer no fact states is accepted"] : []),
+  ];
+}
+
+export function renderDecisions(fact: Fact<DecisionValue>): string {
+  const lines = headerLines(fact);
+  if (fact.status === "unknown") return lines.join("\n");
+  const { value } = fact;
+  lines.push(`repositories (${value.repositories.length}): ${value.repositories.map(({ repo, snapshot }) => `${repo}@${snapshot.kind === "sha" ? snapshot.sha : snapshot.stateId}`).join(", ")}`);
+  lines.push(`decisions (${value.decisions.length}):`, ...list(value.decisions.flatMap(decisionLines)));
+  lines.push(...cutsBlock(cutsOf(fact)));
   return lines.join("\n");
 }

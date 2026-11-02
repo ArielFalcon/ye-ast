@@ -8,6 +8,7 @@ import { EXIT_CODE } from "../cli/main.ts";
 import { REDACTED } from "../core/ports/redaction.port.ts";
 import { createSha256Digest } from "../core/adapters/crypto/sha256-digest.adapter.ts";
 import { canonicalJson } from "../core/domain/shared/canonical-json.ts";
+import type { DecisionValue } from "../core/ports/decision-queries.port.ts";
 import { composeCli, composeQueries, mcpCommandFor } from "./compose.ts";
 import { installedVersion } from "./installed-versions.ts";
 
@@ -32,6 +33,17 @@ import org.springframework.web.bind.annotation.RestController;
 class OrderController {
   @GetMapping("/{id}")
   String one() { return ""; }
+}
+`;
+
+const ORDER_PAGE = `import { HttpClient } from "@angular/common/http";
+import { inject } from "@angular/core";
+
+export class OrderPage {
+  private readonly http = inject(HttpClient);
+  open(): void {
+    this.http.get("shop-api/orders/7");
+  }
 }
 `;
 
@@ -289,4 +301,33 @@ test("an importers fact declares no template engine and a callers fact declares 
   assert.ok(importers.ok && callers.ok);
   assert.equal("@angular/compiler" in importers.value.inputs.engines, false);
   assert.equal(callers.value.inputs.engines["@angular/compiler"], installedVersion("@angular/compiler"));
+});
+
+test("the decisions family answers over a composed workspace read: an outward name no clone serves is a free-text decision", async () => {
+  const frontend = join(workspace, "shop-web");
+  mkdirSync(join(frontend, "src/app"), { recursive: true });
+  writeFileSync(join(frontend, "src/app/order.page.ts"), ORDER_PAGE);
+  const inFrontend = (...args: string[]): string => execFileSync("git", args, { cwd: frontend, env: GIT_ENV, encoding: "utf8" }).trim();
+  inFrontend("init", "-q");
+  inFrontend("add", "-A");
+  inFrontend("commit", "-q", "-m", "page");
+
+  const result = await composeQueries({ scratchRoot }).decisions.decisions({ repo: { path: repo }, repos: [{ path: frontend }] });
+
+  assert.ok(result.ok);
+  assert.equal(result.value.status, "complete");
+  const value = (result.value as { value: DecisionValue }).value;
+  assert.deepEqual(
+    value.repositories.map(({ repo: name }) => name),
+    ["shop-service", "shop-web"],
+  );
+  const unserved = value.decisions.find((decision) => decision.id === "repository:shop-api");
+  assert.ok(unserved !== undefined);
+  assert.equal(unserved.allowsFreeText, true);
+  assert.deepEqual(unserved.options, []);
+  assert.deepEqual(unserved.evidence, [{ path: "src/app/order.page.ts", line: 7, endLine: 7 }]);
+  assert.deepEqual(
+    value.decisions.filter((decision) => decision.kind === "trust").map((decision) => decision.id),
+    ["trust:shop-service", "trust:shop-web"],
+  );
 });

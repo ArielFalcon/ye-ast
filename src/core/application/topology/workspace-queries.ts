@@ -12,7 +12,7 @@ import type { WorkspaceDefaults } from "../../ports/workspace-defaults.port.ts";
 import type { WorkspaceEvidence } from "../../ports/workspace-evidence.port.ts";
 import type { WorkspaceFault, WorkspaceRepository, WorkspaceRepositoryRequest, WorkspaceSection } from "../../ports/workspace-repos.port.ts";
 import type { WorkspaceQueries, WorkspaceRequest, WorkspaceValue } from "../../ports/workspace-queries.port.ts";
-import { extractCommit, factBaseOf, trustOf, withScratch, type SnapshotReaderDeps } from "../snapshot/read-snapshot.ts";
+import { declaredTrustOf, extractCommit, factBaseOf, trustOf, withScratch, type SnapshotReaderDeps } from "../snapshot/read-snapshot.ts";
 import { workspaceInForce } from "./workspace-defaults.ts";
 
 export interface WorkspaceQueriesDeps extends SnapshotReaderDeps {
@@ -53,6 +53,7 @@ export function createWorkspaceQueries(deps: WorkspaceQueriesDeps): WorkspaceQue
       const extracted = await extractCommit(deps, request.path, sha, await directory(), scope, signal);
       if (!extracted.ok) return extracted;
       const { export: snapshotExport, findings, sources } = extracted.value;
+      const declaredTrust = await declaredTrustOf(deps, request.path);
       const base = factBaseOf(deps, {
         repoId,
         sha,
@@ -65,7 +66,7 @@ export function createWorkspaceQueries(deps: WorkspaceQueriesDeps): WorkspaceQue
       return {
         ok: true,
         value: {
-          repository: { repo: repoId, path: request.path, snapshot: base.snapshot, entrypoints: findings, callSites: [] },
+          repository: { repo: repoId, path: request.path, snapshot: base.snapshot, entrypoints: findings, callSites: [], ...(declaredTrust === undefined ? {} : { declaredTrust }) },
           base,
           stated: deps.evidence.names(sources),
           sources,

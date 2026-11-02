@@ -1,7 +1,7 @@
 import type { Entrypoint } from "../domain/entrypoints/entrypoint.ts";
 import type { CallSite } from "../domain/topology/call-site.ts";
 import type { WorkspaceRepositoryDeclaration } from "../domain/topology/workspace-manifest.ts";
-import type { Evidence, SnapshotRef, Finding } from "../domain/shared/fact.ts";
+import type { Evidence, SnapshotRef, Finding, TrustMode } from "../domain/shared/fact.ts";
 import type { ScopeRequest } from "../domain/shared/scope.ts";
 import type { Result } from "../domain/shared/result.ts";
 import type { OutwardKind } from "../domain/topology/outward-name.ts";
@@ -34,6 +34,8 @@ export interface WorkspaceRepository {
   snapshot: SnapshotRef;
   entrypoints: readonly Finding<Entrypoint>[];
   callSites: readonly CallSite[];
+  /** The trust the host declared for this repository; absent when it declared none. */
+  declaredTrust?: TrustMode;
 }
 
 export type WorkspaceFault = VcsFault | LiveFault | FixedLayerFault | { kind: "duplicate-repository"; detail: string };
