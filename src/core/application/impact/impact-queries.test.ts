@@ -573,6 +573,13 @@ test("a requested file outside the declared scope, or that the index holds nothi
   ]);
 });
 
+test("a requested file the snapshot does not hold is cut as not-exported, never as no-extractor", async () => {
+  const { importers } = setup({ nodes: SHOP_NODES, exports: { [HEAD]: SHOP_EXPORT } });
+  const answer = importersFact(await importers({ files: ["src/Order.java", "src/Ghost.java"] }));
+  assert.equal(answer.status, "partial");
+  assert.deepEqual(answer.status === "partial" && answer.cuts, [{ kind: "not-exported", at: ["src/Ghost.java"] }]);
+});
+
 test("a file that loads modules by a computed name may import anything, so it cuts the importers answer", async () => {
   const { importers } = setup({ nodes: SHOP_NODES, unresolved: [{ from: "x", name: "require", kind: "calls", file: "src/Late.java", line: 3 }], exports: { [HEAD]: SHOP_EXPORT } });
   const answer = importersFact(await importers({ files: ["src/Order.java"] }));

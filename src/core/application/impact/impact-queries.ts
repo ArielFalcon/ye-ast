@@ -232,6 +232,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
         const { store, summary } = index;
         try {
           const written = headTree.export.files.filter((file) => file.written && isCovered(file.path)).map((file) => file.path);
+          const held = new Set(headTree.export.files.map((file) => file.path));
           const references = store.unresolvedReferences(written);
           const read = readImporters(store, covered, references);
           const loadPlaces = await deps.dynamicLoads.extract(headTree.sources);
@@ -243,7 +244,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
               loadPlaces,
             ),
             ...summary.filesNotIndexed.map((file): Cut => ({ kind: "no-extractor", at: [file] })),
-            ...read.unheld.map((file): Cut => ({ kind: "no-extractor", at: [file] })),
+            ...read.unheld.map((file): Cut => ({ kind: held.has(file) ? "no-extractor" : "not-exported", at: [file] })),
           ];
           return { ok: true, value: impactFact(head.base(content, true), { files: read.files }, cuts) };
         } finally {
