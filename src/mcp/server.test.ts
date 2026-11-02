@@ -620,6 +620,17 @@ test("callers and impact with a workspace ask the workspace family with the repo
   await session.close();
 });
 
+test("a workspace with no repositories is accepted and asks the workspace family, which works over the persisted one", async () => {
+  const { session, calls } = await setup();
+
+  await session.callTool("ye_ast_callers", { targets: [{ file: "src/OrderService.java", symbol: "OrderService.find" }], workspace: {} });
+
+  assert.deepEqual(calls.callers, []);
+  assert.equal(calls.workspaceCallers.length, 1);
+  assert.equal(calls.workspaceCallers[0]?.repos, undefined);
+  await session.close();
+});
+
 test("callers and impact without a workspace never reach the workspace family", async () => {
   const { session, calls } = await setup();
 

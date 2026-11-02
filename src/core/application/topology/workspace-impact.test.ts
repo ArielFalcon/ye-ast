@@ -9,6 +9,8 @@ import type { Result } from "../../domain/shared/result.ts";
 import type { CallersTarget, ImpactCallersRequest, ImpactFault, ImpactOfChangeRequest, ImpactQueries } from "../../ports/impact-queries.port.ts";
 import type { WorkspaceQueries, WorkspaceValue } from "../../ports/workspace-queries.port.ts";
 import type { WorkspaceRepository, WorkspaceSection } from "../../ports/workspace-repos.port.ts";
+import type { WorkspaceDefaults, WorkspaceManifest } from "../../ports/workspace-defaults.port.ts";
+import type { WorkspaceRequest } from "../../ports/workspace-queries.port.ts";
 import type { WorkspaceImpactValue, RepoImpact } from "../../ports/workspace-impact-queries.port.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
 import { createWorkspaceImpactQueries } from "./workspace-impact.ts";
@@ -68,6 +70,8 @@ interface Setup {
   unserved?: readonly string[];
   /** Per repository: what a walk from one of its call sites reaches, by the line the walk is seeded with. */
   reached?: Record<string, readonly WalkModel[]>;
+  /** The workspace the bound repository persists. */
+  defaults?: WorkspaceDefaults;
 }
 
 /** One call site of a repository as its walk sees it: the line a range is seeded by, the declaration it sits in, and what the walk reaches. */
@@ -93,7 +97,7 @@ function walkAnswer(model: readonly WalkModel[], targets: readonly CallersTarget
   return { cost: { expansionsUsed: 0 }, seeds, symbols: [], entrypoints };
 }
 
-function setup({ repositories, trigger = impactOf(REACHED), unserved = [], reached = {} }: Setup) {
+function setup({ repositories, trigger = impactOf(REACHED), unserved = [], reached = {}, defaults }: Setup) {
   const names = Object.keys(repositories).sort();
   const read: WorkspaceRepository[] = names.map((repo) => ({
     repo,
@@ -108,10 +112,12 @@ function setup({ repositories, trigger = impactOf(REACHED), unserved = [], reach
     const [first, ...rest] = held?.cuts ?? [];
     return first === undefined ? complete : { ...complete, status: "partial", cuts: [first, ...rest] };
   };
+  const asks: WorkspaceRequest[] = [];
   const read_: WorkspaceQueries = {
     outwardNames: async (request) => {
+      asks.push(request);
       const value: WorkspaceValue = {
-        workspace: { repos: names, gateways: [] },
+        workspace: { repos: names, gateways: request.gateways ?? [] },
         repositorySnapshots: read.map(({ repo, snapshot }) => ({ repo, snapshot })),
         sections: Object.fromEntries(names.map((repo) => [repo, section(repo)])),
         candidates: [],
@@ -132,7 +138,7 @@ function setup({ repositories, trigger = impactOf(REACHED), unserved = [], reach
     },
     ofChange: async (request: ImpactOfChangeRequest): Promise<Result<Fact<ImpactValue>, ImpactFault>> => ({ ok: true, value: fact(request.repoId, "trusted", { ...trigger, mergeBase: OTHER_SHA }) }),
   } as unknown as ImpactQueries;
-  return { queries: createWorkspaceImpactQueries({ workspace: read_, impact }), walks };
+  return { queries: createWorkspaceImpactQueries({ workspace: read_, impact, ...(defaults === undefined ? {} : { defaults }) }), walks, asks };
 }
 
 const ASK = { repo: { path: "/work/orders" }, repos: [{ path: "/work/shop-web" }], targets: [{ file: HANDLER.path, symbol: HANDLER.symbol }] };
@@ -525,4 +531,74 @@ test("a link both directions reach enters the answer once, with the nearest reac
   ]);
   assert.deepEqual(onward?.reach, [onward?.link.id]);
   assert.deepEqual(back?.reach, [back?.link.id]);
+});
+
+function persisted(manifest: WorkspaceManifest | undefined, asked: string[] = []): WorkspaceDefaults {
+  return {
+    of: async (root) => {
+      asked.push(root);
+      return { ok: true, value: manifest };
+    },
+  };
+}
+
+const ASK_WITHOUT_REPOS = { repo: { path: "/work/orders" }, targets: [{ file: HANDLER.path, symbol: HANDLER.symbol }] };
+
+test("a request that names no repositories joins the persisted manifest's repositories with its gateways", async () => {
+  const asked: string[] = [];
+  const { queries, asks } = setup({
+    repositories: {
+      orders: { entrypoints: [route("POST", "/orders")] },
+      webapp: { callSites: [callSite("webapp", "orders-api/orders", "POST", 9)] },
+    },
+    defaults: persisted({ repos: [{ path: "/work/webapp" }], gateways: [{ prefix: "orders-api", repo: "orders" }] }, asked),
+  });
+
+  const value = valueOf(await queries.callers(ASK_WITHOUT_REPOS));
+
+  assert.deepEqual(asked, ["/work/orders"]);
+  assert.deepEqual(asks[0]?.repos, [{ path: "/work/webapp" }]);
+  assert.deepEqual(asks[0]?.gateways, [{ prefix: "orders-api", repo: "orders" }]);
+  assert.deepEqual(value.workspace.gateways.map((gateway) => `${gateway.prefix} ${gateway.repo} ${gateway.basis}`), ["orders-api orders gateway-prefix"]);
+  assert.deepEqual(value.links.map(({ link }) => `${link.from.repo} -> ${link.to.repo} ${link.to.name} (${link.basis})`), ["webapp -> orders POST /orders (gateway-prefix)"]);
+});
+
+test("a request that names repositories ignores the persisted workspace, its gateways included", async () => {
+  const asked: string[] = [];
+  const { queries, asks } = setup({
+    repositories: { orders: { entrypoints: [route("POST", "/orders")] }, webapp: { callSites: [callSite("webapp", "orders/orders")] } },
+    defaults: persisted({ repos: [{ path: "/work/webapp" }], gateways: [{ prefix: "orders-api", repo: "orders" }] }, asked),
+  });
+
+  const value = valueOf(await queries.callers({ ...ASK_WITHOUT_REPOS, repos: [{ path: "/work/webapp" }] }));
+
+  assert.deepEqual(asked, []);
+  assert.deepEqual(asks[0]?.gateways, []);
+  assert.deepEqual(value.workspace.gateways.filter((gateway) => gateway.basis === "gateway-prefix"), []);
+});
+
+test("a manifest that cannot be read is a fault and nothing is walked", async () => {
+  const { queries, walks } = setup({
+    repositories: { orders: { entrypoints: [route("POST", "/orders")] } },
+    defaults: { of: async () => ({ ok: false, fault: { kind: "unreadable", detail: ".ye-ast/workspace.json: repos: a non-empty array" } }) },
+  });
+
+  const result = await queries.callers(ASK_WITHOUT_REPOS);
+
+  assert.equal(result.ok, false);
+  assert.equal(result.ok === false && result.fault.kind, "unreadable");
+  assert.deepEqual(walks, []);
+});
+
+test("a repository that persists no manifest answers exactly as it does without one", async () => {
+  const repositories: Setup["repositories"] = {
+    orders: { entrypoints: [route("POST", "/orders")] },
+    webapp: { callSites: [callSite("webapp", "orders-api/orders", "POST", 9)] },
+  };
+  const request = { ...ASK_WITHOUT_REPOS, repos: [{ path: "/work/webapp" }] };
+
+  const without = await setup({ repositories }).queries.callers(request);
+  const withNone = await setup({ repositories, defaults: persisted(undefined) }).queries.callers(request);
+
+  assert.equal(JSON.stringify(withNone), JSON.stringify(without));
 });

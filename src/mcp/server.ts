@@ -61,8 +61,8 @@ When to call:
 - ye_ast_callers: before changing or deleting a function, method or class, or a range of lines, to learn what depends on it and which entrypoints it serves. Before deleting a declaration, ask here: once it is gone, ye_ast_impact can only list the places that still name it.
 - ye_ast_importers: before moving, renaming or deleting a file, or changing what it exports.
 - ye_ast_impact: after changing code and before reporting the work done or opening a pull request, with base set to the branch the change merges into; set live to true to include uncommitted edits. It repeats what ye_ast_callers already answered when the change stays inside the symbols asked about, so call ye_ast_impact once for the whole change before reporting it done, not once per symbol.
-- ye_ast_workspace: when the work crosses repositories (a frontend calling services, a service calling another, a message between them). It lists the hosts, path prefixes, configuration URLs, dependency coordinates, remotes and registries the repository writes outward, the local repository that serves each one and the basis that says why, and the names no repository given serves. Pass the other clones with repos, then ask ye_ast_callers or ye_ast_impact again with workspace set to those repos so the call sites of the other repositories that land in what the walk reaches are joined. It makes no network request: a name nothing serves is the next clone to make with your own tools.
-- workspace on ye_ast_callers and ye_ast_impact: when the symbol or change can be called from another repository (a route or a handler a frontend or another service calls). Pass the other local clones as workspace.repos (a path each; gateways only when a path prefix routes to a repository and the code does not say it). The answer adds the links from call sites in those repositories to what a walk reaches, and follows each link into its own repository, so a chain of repositories answers as one: what depends on those call sites in their own repository, the call sites that reached a declared service and matched none of its routes (unmatched), the ones that name a service no repository given serves (external), and every call site it could not decide as a cut. On ye_ast_impact the links also run the other way: what the change sends onward, each link naming the links crossed from it (reach). A repository not passed is not read: an answer without workspace says nothing about other repositories. Each repository is read at its HEAD or the revision given, under its own trust declaration; live cannot be combined with workspace.
+- ye_ast_workspace: when the work crosses repositories (a frontend calling services, a service calling another, a message between them). It lists the hosts, path prefixes, configuration URLs, dependency coordinates, remotes and registries the repository writes outward, the local repository that serves each one and the basis that says why, and the names no repository given serves. Pass the other clones with repos, or none to read the ones the repository persists, then ask ye_ast_callers or ye_ast_impact again with workspace set to those repos so the call sites of the other repositories that land in what the walk reaches are joined. It makes no network request: a name nothing serves is the next clone to make with your own tools.
+- workspace on ye_ast_callers and ye_ast_impact: when the symbol or change can be called from another repository (a route or a handler a frontend or another service calls). Pass the other local clones as workspace.repos (a path each; gateways only when a path prefix routes to a repository and the code does not say it), or pass workspace without repos to work over the repositories and gateways the user persisted with \`ye-ast install --workspace\`; a repository that persists none answers about itself alone. The answer adds the links from call sites in those repositories to what a walk reaches, and follows each link into its own repository, so a chain of repositories answers as one: what depends on those call sites in their own repository, the call sites that reached a declared service and matched none of its routes (unmatched), the ones that name a service no repository given serves (external), and every call site it could not decide as a cut. On ye_ast_impact the links also run the other way: what the change sends onward, each link naming the links crossed from it (reach). A repository not passed is not read: an answer without workspace says nothing about other repositories. Each repository is read at its HEAD or the revision given, under its own trust declaration; live cannot be combined with workspace.
 - Every tool takes scope: include and exclude globs over repository-relative paths (exclude wins). A path outside the scope is not read at all, so callers and entrypoints through it are not known and the answer is complete only within the scope, which it names under its status. Use scope to keep one service or package of a repository apart; to shorten an answer, leave scope out and rely on detail.
 - ye-ast does not say which templates bind one input or output of a component; search the templates for the binding's name.
 
@@ -117,11 +117,15 @@ const gateways = z
 
 const workspace = z
   .strictObject({
-    repos: z.array(workspaceRepo).min(1).describe("Other local repositories to read beside the bound one."),
+    repos: z
+      .array(workspaceRepo)
+      .min(1)
+      .optional()
+      .describe("Other local repositories to read beside the bound one; leave it out to use the repositories `ye-ast install --workspace` persisted for the bound repository."),
     gateways,
   })
   .optional()
-  .describe("Other local repositories whose call sites to join to what a walk reaches: the answer then also holds the links from them and from the repositories they chain into, what depends on those call sites, and the call sites that match nothing. Each is read at its own snapshot under its own trust declaration; live excludes it.");
+  .describe("Other local repositories whose call sites to join to what a walk reaches: the answer then also holds the links from them and from the repositories they chain into, what depends on those call sites, and the call sites that match nothing. Without repos the repositories and gateways the bound repository persists are used, and a repository that persists none answers about itself alone. Each is read at its own snapshot under its own trust declaration; live excludes it.");
 
 /** `live` reads the working tree of one repository; a workspace reads committed snapshots. */
 const withoutWorkspace = (value: { live?: boolean | undefined; workspace?: unknown }): boolean => !(value.live === true && value.workspace !== undefined);
@@ -197,9 +201,13 @@ function askedRepository(requested: { path: string; id?: string | undefined; rev
   };
 }
 
-/** The other repositories of a `workspace` parameter, as the workspace family asks for them. */
-function workspaceOf(requested: z.infer<typeof workspace>): { repos: WorkspaceRepositoryRequest[]; gateways?: { prefix: string; repo: string }[] } | undefined {
-  return requested === undefined ? undefined : { repos: requested.repos.map(askedRepository), ...(requested.gateways === undefined ? {} : { gateways: requested.gateways }) };
+/** The other repositories of a `workspace` parameter, as the workspace family asks for them; without `repos` it names none, and the persisted workspace is used. */
+function workspaceOf(requested: z.infer<typeof workspace>): { repos?: WorkspaceRepositoryRequest[]; gateways?: { prefix: string; repo: string }[] } | undefined {
+  if (requested === undefined) return undefined;
+  return {
+    ...(requested.repos === undefined ? {} : { repos: requested.repos.map(askedRepository) }),
+    ...(requested.gateways === undefined ? {} : { gateways: requested.gateways }),
+  };
 }
 
 /** The repositories a workspace read carries for the families that join over them are internal: they hold absolute paths and every entrypoint. */
@@ -377,7 +385,11 @@ export function createMcpServer(deps: McpDeps): McpServer {
       inputSchema: z.strictObject({
         revision,
         scope,
-        repos: z.array(workspaceRepo).min(1).optional().describe("Other local repositories to read beside the bound one."),
+        repos: z
+          .array(workspaceRepo)
+          .min(1)
+          .optional()
+          .describe("Other local repositories to read beside the bound one; leave it out to read the repositories the repository persists."),
         gateways,
       }),
       outputSchema: FACT_OUTPUT,

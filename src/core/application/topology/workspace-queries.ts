@@ -8,16 +8,20 @@ import { callSiteEvidence, unresolvedPlace, type CallSite, type CallSiteReader }
 import { directoryNameOf, nameCandidates, repositoryNameOf, type RepositoryIdentity } from "../../domain/topology/repository-identity.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { PathMatcher } from "../../ports/path-matcher.port.ts";
+import type { WorkspaceDefaults } from "../../ports/workspace-defaults.port.ts";
 import type { WorkspaceEvidence } from "../../ports/workspace-evidence.port.ts";
 import type { WorkspaceFault, WorkspaceRepository, WorkspaceRepositoryRequest, WorkspaceSection } from "../../ports/workspace-repos.port.ts";
 import type { WorkspaceQueries, WorkspaceRequest, WorkspaceValue } from "../../ports/workspace-queries.port.ts";
 import { extractCommit, factBaseOf, trustOf, withScratch, type SnapshotReaderDeps } from "../snapshot/read-snapshot.ts";
+import { workspaceInForce } from "./workspace-defaults.ts";
 
 export interface WorkspaceQueriesDeps extends SnapshotReaderDeps {
   matcher: PathMatcher;
   evidence: WorkspaceEvidence;
   callSites: CallSiteReader;
   engines: Readonly<Record<string, string>>;
+  /** The workspace the bound repository persists, which a request naming no repositories works over. */
+  defaults?: WorkspaceDefaults;
 }
 
 interface ReadRepository {
@@ -95,7 +99,9 @@ export function createWorkspaceQueries(deps: WorkspaceQueriesDeps): WorkspaceQue
 
   return {
     async outwardNames(request: WorkspaceRequest) {
-      const asked = [request.repo, ...(request.repos ?? [])];
+      const inForce = await workspaceInForce(request, deps.defaults);
+      if (!inForce.ok) return inForce;
+      const asked = [request.repo, ...inForce.value.repos];
       const ids = asked.map((repository) => repository.id ?? directoryNameOf(repository.path));
       const duplicate = ids.find((id, index) => ids.indexOf(id) !== index);
       if (duplicate !== undefined) return { ok: false, fault: { kind: "duplicate-repository", detail: duplicate } };
@@ -133,7 +139,7 @@ export function createWorkspaceQueries(deps: WorkspaceQueriesDeps): WorkspaceQue
       const trigger = read[0];
       if (trigger === undefined) return { ok: false, fault: { kind: "git-failed", detail: "a workspace request names no repository" } };
       const value: WorkspaceValue = {
-        workspace: { repos: resolved.map((entry) => entry.repository.repo).sort(compareText), gateways: [...(request.gateways ?? [])].sort((a, b) => compareText(a.prefix, b.prefix)) },
+        workspace: { repos: resolved.map((entry) => entry.repository.repo).sort(compareText), gateways: [...inForce.value.gateways].sort((a, b) => compareText(a.prefix, b.prefix)) },
         repositorySnapshots: resolved.map((entry) => ({ repo: entry.repository.repo, snapshot: entry.repository.snapshot })).sort((a, b) => compareText(a.repo, b.repo)),
         sections: Object.fromEntries(Object.entries(sections).sort(([a], [b]) => compareText(a, b))),
         candidates: candidates.sort(compareCandidate),

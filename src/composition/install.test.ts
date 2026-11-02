@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { EXIT_CODE } from "../cli/main.ts";
 import { RECORDS_DIRECTORY } from "../core/adapters/fs/trust-record.adapter.ts";
+import type { WorkspaceValue } from "../core/ports/workspace-queries.port.ts";
 import { composeCli, composeQueries } from "./compose.ts";
 import { processHost } from "./process-host.ts";
 
@@ -188,4 +189,37 @@ test("an install that stops after the trust was recorded says so and keeps the r
   assert.match(stderr[0]!, /recorded/);
   assert.equal(readdirSync(join(trustDirectory, RECORDS_DIRECTORY)).length, 1);
   assert.equal(readdirSync(repo).includes(".ye-ast"), false);
+});
+
+test("install --workspace persists the manifest under .ye-ast/ and a second run leaves it unchanged", async () => {
+  const manifest = join(workspace, "workspace.json");
+  writeFileSync(manifest, JSON.stringify({ gateways: [{ prefix: "orders-api", repo: "orders" }], repos: [{ path: "../orders-service" }, { path: "/work/shop" }] }));
+
+  const first = await cli("install", "--trust", "untrusted", "--workspace", manifest, repo);
+  const stored = readFileSync(join(repo, ".ye-ast", "workspace.json"), "utf8");
+  const second = await cli("install", "--trust", "untrusted", "--workspace", manifest, repo);
+
+  assert.equal(first.code, EXIT_CODE.ok, first.stderr.join("\n"));
+  assert.ok(first.stdout.some((line) => /^\.ye-ast\/workspace\.json: written$/.test(line)));
+  assert.deepEqual(JSON.parse(stored), { repos: [{ path: "../orders-service" }, { path: "/work/shop" }], gateways: [{ prefix: "orders-api", repo: "orders" }] });
+  assert.ok(second.stdout.some((line) => /^\.ye-ast\/workspace\.json: unchanged$/.test(line)));
+  assert.equal(readFileSync(join(repo, ".ye-ast", "workspace.json"), "utf8"), stored);
+});
+
+test("a workspace query that names no repositories works over the manifest install persisted", async () => {
+  const other = join(workspace, "orders-service");
+  mkdirSync(other);
+  execFileSync("git", ["init", "-q"], { cwd: other, env: GIT_ENV });
+  writeFileSync(join(other, "orders.txt"), "orders");
+  execFileSync("git", ["add", "-A"], { cwd: other, env: GIT_ENV });
+  execFileSync("git", ["commit", "-q", "-m", "orders"], { cwd: other, env: GIT_ENV });
+  const manifest = join(workspace, "workspace.json");
+  writeFileSync(manifest, JSON.stringify({ repos: [{ path: "../orders-service", id: "orders" }] }));
+  await cli("install", "--trust", "untrusted", "--workspace", manifest, repo);
+
+  const result = await composeQueries({ scratchRoot: join(workspace, "scratch"), trustDirectory }).workspace.outwardNames({ repo: { path: repo, id: "shop" } });
+
+  assert.ok(result.ok);
+  assert.notEqual(result.value.status, "unknown");
+  assert.deepEqual((result.value as { value: WorkspaceValue }).value.workspace.repos, ["orders", "shop"]);
 });

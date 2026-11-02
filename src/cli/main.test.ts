@@ -1,6 +1,8 @@
-import { test } from "node:test";
+import { test, after, before } from "node:test";
 import assert from "node:assert/strict";
-import { basename, resolve } from "node:path";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { basename, join, resolve } from "node:path";
 import type { EntrypointMapFact } from "../core/domain/map/entrypoint-map.ts";
 import { SCHEMA, type Fact } from "../core/domain/shared/fact.ts";
 import type { Result } from "../core/domain/shared/result.ts";
@@ -406,7 +408,7 @@ test("an invalid glob is a usage error that asks nothing", async () => {
 });
 
 test("install without --trust, with another value, or with two repositories is a usage error that installs nothing", async () => {
-  for (const argv of [["install", "."], ["install", "--trust", "." ], ["install", "--trust", "admin", "."], ["install", "--trust"], ["install", "--trust", "trusted", ".", "other"], ["install", "--trust", "trusted", "--bogus", "."]]) {
+  for (const argv of [["install", "."], ["install", "--trust", "." ], ["install", "--trust", "admin", "."], ["install", "--trust"], ["install", "--trust", "trusted", ".", "other"], ["install", "--trust", "trusted", "--bogus", "."], ["install", "--trust", "trusted", "--workspace", ""]]) {
     const { io, deps, installs } = setupInstall();
     assert.equal(await run(argv, io, deps), EXIT_CODE.usage, argv.join(" "));
     assert.deepEqual(installs, [], argv.join(" "));
@@ -489,6 +491,68 @@ test("install redacts what it prints and a crash of the use case is an internal 
   assert.equal(await run(["install", "--trust", "untrusted", "."], crashing.io, deps), EXIT_CODE.internalFault);
 
   assert.equal(leaking.io.stdout.join("\n").includes(SECRET), false);
+});
+
+let scratch: string;
+let counter = 0;
+
+before(async () => {
+  scratch = await mkdtemp(join(tmpdir(), "ye-ast-cli-install-"));
+});
+
+after(async () => {
+  await rm(scratch, { recursive: true, force: true });
+});
+
+/** A manifest file in the scratch directory; the CLI reads it, the core never does. */
+async function workspaceFile(content: string): Promise<string> {
+  counter += 1;
+  const path = join(scratch, `workspace-${counter}.json`);
+  await writeFile(path, content);
+  return path;
+}
+
+test("install reads the manifest the --workspace flag names and passes its text with the path it was read from", async () => {
+  const text = JSON.stringify({ repos: [{ path: "../shop-web" }] });
+  const path = await workspaceFile(text);
+  const { io, deps, installs } = setupInstall();
+
+  assert.equal(await run(["install", "--trust", "untrusted", "--workspace", path, "/work/shop"], io, deps), EXIT_CODE.ok);
+
+  assert.deepEqual(
+    installs.map(({ signal, ...request }) => (assert.equal(signal, deps.signal), request)),
+    [{ repo: "/work/shop", repoId: "shop", trust: "untrusted", workspace: { path, text } }],
+  );
+});
+
+test("install refuses a workspace file it cannot read before the install runs", async () => {
+  const { io, deps, installs } = setupInstall();
+
+  assert.equal(await run(["install", "--trust", "untrusted", "--workspace", join(scratch, "absent.json"), "."], io, deps), EXIT_CODE.queryFailed);
+
+  assert.deepEqual(installs, []);
+  assert.deepEqual(io.stdout, []);
+  assert.match(io.stderr.join("\n"), /workspace-invalid/);
+});
+
+test("install reports the manifest it persisted beside the files of the layer", async () => {
+  const path = await workspaceFile(JSON.stringify({ repos: [{ path: "../shop-web" }] }));
+  const written = setupInstall({ ok: true, value: { ...INSTALLED, workspace: { outcome: "written" } } });
+  const unchanged = setupInstall({ ok: true, value: { ...INSTALLED, workspace: { outcome: "unchanged" } } });
+
+  await run(["install", "--trust", "untrusted", "--workspace", path, "/work/shop"], written.io, written.deps);
+  await run(["install", "--trust", "untrusted", "--workspace", path, "/work/shop"], unchanged.io, unchanged.deps);
+
+  assert.ok(written.io.stdout.includes(".ye-ast/workspace.json: written"));
+  assert.ok(unchanged.io.stdout.includes(".ye-ast/workspace.json: unchanged"));
+});
+
+test("the usage names the --workspace flag of install", async () => {
+  const { io, deps } = setup();
+
+  assert.equal(await run(["--help"], io, deps), EXIT_CODE.ok);
+
+  assert.match(io.stdout.join("\n"), /install[^\n]*--workspace <file>/);
 });
 
 const REPO = resolve("some/checkout");

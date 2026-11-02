@@ -17,6 +17,7 @@ import { createCodeGraph, SUPPORTED_STORE } from "../core/adapters/codegraph/cod
 import { STAGING_RULES_VERSION } from "../core/adapters/codegraph/stage-snapshot.ts";
 import { createSha256Digest } from "../core/adapters/crypto/sha256-digest.adapter.ts";
 import { createFixedLayerStore } from "../core/adapters/fs/fixed-layer-store.adapter.ts";
+import { createWorkspaceDefaults } from "../core/adapters/fs/workspace-defaults.adapter.ts";
 import { createTrustRecords } from "../core/adapters/fs/trust-record.adapter.ts";
 import { createLiveMirror } from "../core/adapters/fs/live-mirror.adapter.ts";
 import { createFsSourceReader } from "../core/adapters/fs/fs-source-reader.adapter.ts";
@@ -157,6 +158,7 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
     }
   };
   const impact = measurement === undefined ? bareImpact : measuredImpact(bareImpact, measurement);
+  const defaults = createWorkspaceDefaults(createFixedLayerStore());
   const workspace = createWorkspaceQueries({
     vcs,
     scratch,
@@ -168,20 +170,23 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
     evidence: createWorkspaceEvidence(),
     producer: { name: PRODUCER_NAME, version },
     engines: entrypointEngines,
+    defaults,
     ...budget,
     ...trust,
   });
-  const workspaceImpact = createWorkspaceImpactQueries({ workspace, impact });
+  const workspaceImpact = createWorkspaceImpactQueries({ workspace, impact, defaults });
   return { version, entrypoints, impact, workspace, workspaceImpact, redaction, warmLive };
 }
 
 export function composeCli(options: CompositionOptions = {}): (argv: readonly string[], io: CliIo) => Promise<number> {
   const queries = composeQueries(options);
+  const store = createFixedLayerStore();
   const install = createInstall({
     vcs: createGitVcs(),
     trust: createTrustRecords(options.trustDirectory ?? null),
     exclude: createGitLocalExclude(),
-    layer: createFixedLayerAdmin({ entrypoints: queries.entrypoints, store: createFixedLayerStore(), redaction: queries.redaction }),
+    store,
+    layer: createFixedLayerAdmin({ entrypoints: queries.entrypoints, store, redaction: queries.redaction }),
   });
   return (argv, io) => run(argv, io, { ...queries, install, mcpCommand: mcpCommandFor(ownEntrypoint()), signal: options.signal ?? new AbortController().signal });
 }

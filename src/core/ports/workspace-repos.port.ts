@@ -1,21 +1,16 @@
 import type { Entrypoint } from "../domain/entrypoints/entrypoint.ts";
 import type { CallSite } from "../domain/topology/call-site.ts";
+import type { WorkspaceRepositoryDeclaration } from "../domain/topology/workspace-manifest.ts";
 import type { Evidence, SnapshotRef, Finding } from "../domain/shared/fact.ts";
 import type { ScopeRequest } from "../domain/shared/scope.ts";
 import type { Result } from "../domain/shared/result.ts";
 import type { OutwardKind } from "../domain/topology/outward-name.ts";
 import type { LiveFault } from "./live-queries.port.ts";
+import type { FixedLayerFault } from "./fixed-layer-store.port.ts";
 import type { VcsFault } from "./vcs.port.ts";
 
 /** One repository of a workspace request: where it is read from, and the name its snapshot carries. */
-export interface WorkspaceRepositoryRequest {
-  /** Path of the root of a git repository, local only. */
-  path: string;
-  /** The name the repository is known by; the directory name when absent. Never a path. */
-  id?: string;
-  /** The revision to read; HEAD when absent. */
-  revision?: string;
-}
+export type WorkspaceRepositoryRequest = WorkspaceRepositoryDeclaration;
 
 /** What a workspace request declares beyond the repository it is bound to. */
 export interface WorkspaceReposRequest {
@@ -41,4 +36,4 @@ export interface WorkspaceRepository {
   callSites: readonly CallSite[];
 }
 
-export type WorkspaceFault = VcsFault | LiveFault | { kind: "duplicate-repository"; detail: string };
+export type WorkspaceFault = VcsFault | LiveFault | FixedLayerFault | { kind: "duplicate-repository"; detail: string };

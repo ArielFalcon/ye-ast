@@ -4,6 +4,7 @@ import type { FixedLayerRefresh, FixedLayerRefreshFault } from "./fixed-layer-ad
 import type { LocalExcludeFault } from "./local-exclude.port.ts";
 import type { TrustRecordFault } from "./trust-record.port.ts";
 import type { VcsFault } from "./vcs.port.ts";
+import type { WorkspaceManifestFault } from "./workspace-defaults.port.ts";
 
 export interface InstallRequest {
   /** The root of a git repository. */
@@ -12,6 +13,8 @@ export interface InstallRequest {
   repoId: string;
   /** The user's declaration; there is no default. */
   trust: TrustMode;
+  /** A workspace manifest to persist, as its file states it, and the path it came from for the fault that names it. */
+  workspace?: { path: string; text: string };
   signal?: AbortSignal;
 }
 
@@ -20,9 +23,11 @@ export interface InstallOutcome {
   /** The lines this run added to the repository's local exclude file; empty when it already held them all. */
   excluded: readonly string[];
   layer: FixedLayerRefresh;
+  /** The manifest this run persisted and whether the stored bytes already were it; absent without a manifest. */
+  workspace?: { outcome: "written" | "unchanged" };
 }
 
-export type InstallFault = (VcsFault | TrustRecordFault | LocalExcludeFault | FixedLayerRefreshFault) & {
+export type InstallFault = (VcsFault | TrustRecordFault | LocalExcludeFault | FixedLayerRefreshFault | WorkspaceManifestFault) & {
   /** Whether the trust declaration was already recorded when the install stopped. */
   trustRecorded: boolean;
 };

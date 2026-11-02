@@ -1,4 +1,5 @@
 import { basename, resolve } from "node:path";
+import { readFile } from "node:fs/promises";
 import { parseArgs } from "node:util";
 import type { Result } from "../core/domain/shared/result.ts";
 import { isValidGlob, type ScopeRequest } from "../core/domain/shared/scope.ts";
@@ -13,6 +14,7 @@ import type { Install, InstallOutcome, InstallRequest } from "../core/ports/inst
 import type { LiveStaleNotice } from "../core/ports/live-queries.port.ts";
 import type { Redaction } from "../core/ports/redaction.port.ts";
 import { DEFAULT_REVISION } from "../core/ports/vcs.port.ts";
+import { WORKSPACE_MANIFEST_FILE, type WorkspaceManifestFault } from "../core/ports/workspace-defaults.port.ts";
 
 /**
  * `queryFailed`: the query answered with a typed fault. `usage`: the command line is wrong. `internalFault`: ye-ast
@@ -47,12 +49,13 @@ const USAGE = [
   "       ye-ast impact --base <rev> [--head <rev> | --live] [--repo-id <id>] [scope] [budget] <repo>",
   "       ye-ast callers [--revision <rev> | --live] [--repo-id <id>] [scope] [budget] <repo> <file>:<symbol> | <file>:<start>-<end> ...",
   "       ye-ast importers [--revision <rev> | --live] [--repo-id <id>] [scope] <repo> <file> ...",
-  "       ye-ast install --trust trusted|untrusted [<repo>]   (declares the trust mode, writes the fixed layer under .ye-ast/, ignores ye-ast's folders locally, prints the MCP registration)",
+  "       ye-ast install --trust trusted|untrusted [--workspace <file>] [<repo>]   (declares the trust mode, writes the fixed layer under .ye-ast/, ignores ye-ast's folders locally, prints the MCP registration)",
   "       ye-ast serve   (the query protocol, JSON-RPC 2.0, one message per line on stdin/stdout)",
   "       ye-ast mcp [<repo>]   (stdio MCP server, read-only, bound to <repo> or the working directory)",
   "--live: reads the working tree of a repository declared trusted (ye-ast install --trust trusted) instead of a revision; the first run builds ye-ast's mirror of it, and a stale answer is reported on stderr",
   "scope: [--include <glob>]... [--exclude <glob>]...   (globs over repository-relative paths, on map, impact, callers and importers; without --include every path is included; --exclude wins)",
   "budget: [--depth <n>] [--hub-fan-in <n>] [--expansions <n>]   (positive integers; none has a default)",
+  "workspace: --workspace <file>   (the workspace install persists as .ye-ast/workspace.json: { \"repos\": [{ \"path\", \"id\", \"revision\" }], \"gateways\": [{ \"prefix\", \"repo\" }] }; a relative repository path is stored as written and resolved against the installed repository)",
   "measure: --measure   (one JSON measurement line per query and per index build, on stderr; never on stdout)",
 ].join("\n");
 
@@ -101,14 +104,20 @@ function declarationText(entry: { file: string; candidates: readonly string[] })
 }
 
 async function runInstall(args: readonly string[], io: CliIo, deps: CliDeps): Promise<number> {
-  const request = parseInstallRequest(args);
-  if (request === undefined) {
+  const parsed = parseInstallRequest(args);
+  if (parsed === undefined) {
     io.err(USAGE);
     return EXIT_CODE.usage;
   }
+  const { workspaceFile, ...request } = parsed;
   const out = (line: string): void => io.out(deps.redaction.redact(line));
+  const workspace = workspaceFile === undefined ? undefined : await readWorkspaceFile(workspaceFile);
+  if (workspace !== undefined && !workspace.ok) {
+    io.err(deps.redaction.redact(`ye-ast: ${workspace.fault.kind}: ${workspace.fault.detail}`));
+    return EXIT_CODE.queryFailed;
+  }
   try {
-    const result = await deps.install.run({ ...request, signal: deps.signal });
+    const result = await deps.install.run({ ...request, ...(workspace === undefined ? {} : { workspace: workspace.value }), signal: deps.signal });
     if (!result.ok) {
       if (result.fault.trustRecorded) io.err(`ye-ast: trust ${request.trust} was recorded outside the repository before the install stopped`);
       io.err(`ye-ast: ${result.fault.kind}: ${deps.redaction.redact(result.fault.detail.trim())}`);
@@ -122,7 +131,16 @@ async function runInstall(args: readonly string[], io: CliIo, deps: CliDeps): Pr
   }
 }
 
-function installReport({ trust, excluded, layer }: InstallOutcome, repo: string, mcpCommand: readonly string[]): string[] {
+/** The manifest the user named: the CLI reads the file, since the core reads no environment. */
+async function readWorkspaceFile(path: string): Promise<Result<{ path: string; text: string }, WorkspaceManifestFault>> {
+  try {
+    return { ok: true, value: { path, text: await readFile(path, "utf8") } };
+  } catch (error) {
+    return { ok: false, fault: { kind: "workspace-invalid", detail: `${path}: ${firstLine(error)}` } };
+  }
+}
+
+function installReport({ trust, excluded, layer, workspace }: InstallOutcome, repo: string, mcpCommand: readonly string[]): string[] {
   const layerLines =
     layer.outcome === "not-written"
       ? [`fixed layer: not written (${layer.reason})`]
@@ -131,6 +149,7 @@ function installReport({ trust, excluded, layer }: InstallOutcome, repo: string,
     `trust: ${trust} (recorded outside the repository)`,
     excluded.length === 0 ? "local exclude: already held" : `local exclude: added ${excluded.join(" ")}`,
     ...layerLines,
+    ...(workspace === undefined ? [] : [`${FIXED_LAYER_DIRECTORY}/${WORKSPACE_MANIFEST_FILE}: ${workspace.outcome}`]),
     "register the MCP server with Claude Code:",
     `claude mcp add ye-ast -- ${mcpCommand.map(shellWord).join(" ")} mcp ${shellWord(repo)}`,
   ];
@@ -192,12 +211,18 @@ function parseMapRequest(args: readonly string[]): MapRequest | undefined {
   }
 }
 
-function parseInstallRequest(args: readonly string[]): Omit<InstallRequest, "signal"> | undefined {
+/** What the `install` flags name: the request, and the manifest file to read before it runs. */
+interface ParsedInstall extends Omit<InstallRequest, "signal" | "workspace"> {
+  /** The path of the manifest to persist, resolved against the working directory. */
+  workspaceFile?: string;
+}
+
+function parseInstallRequest(args: readonly string[]): ParsedInstall | undefined {
   try {
-    const { values, positionals } = parseArgs({ args: [...args], options: { trust: { type: "string" } }, allowPositionals: true });
+    const { values, positionals } = parseArgs({ args: [...args], options: { trust: { type: "string" }, workspace: { type: "string" } }, allowPositionals: true });
     const [path = ".", ...extra] = positionals;
-    if (!isTrustMode(values.trust) || extra.length > 0) return undefined;
-    return { ...repositoryOf(path, undefined), trust: values.trust };
+    if (!isTrustMode(values.trust) || extra.length > 0 || values.workspace === "") return undefined;
+    return { ...repositoryOf(path, undefined), trust: values.trust, ...(values.workspace === undefined ? {} : { workspaceFile: resolve(values.workspace) }) };
   } catch {
     return undefined;
   }

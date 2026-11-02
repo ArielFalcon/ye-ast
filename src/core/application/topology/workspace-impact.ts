@@ -26,13 +26,17 @@ import type { Reach } from "../../domain/topology/link.ts";
 import { inferGateways, matchCallSite, matchEventCallSite, prefixOf, type Gateway, type GatewayDeclaration, type JoinResult, type RepositoryEntrypoints } from "../../domain/topology/link-match.ts";
 import { directoryNameOf } from "../../domain/topology/repository-identity.ts";
 import type { CallersTarget, ImpactFault, ImpactQueries } from "../../ports/impact-queries.port.ts";
+import type { WorkspaceDefaults } from "../../ports/workspace-defaults.port.ts";
 import type { WorkspaceFault, WorkspaceRepository } from "../../ports/workspace-repos.port.ts";
 import type { WorkspaceQueries } from "../../ports/workspace-queries.port.ts";
 import type { RepoImpact, WorkspaceCallersRequest, WorkspaceImpactBase, WorkspaceImpactQueries, WorkspaceImpactValue, WorkspaceOfChangeRequest } from "../../ports/workspace-impact-queries.port.ts";
+import { workspaceInForce } from "./workspace-defaults.ts";
 
 export interface WorkspaceImpactDeps {
   workspace: WorkspaceQueries;
   impact: ImpactQueries;
+  /** The workspace the bound repository persists, which a request naming no repositories joins. */
+  defaults?: WorkspaceDefaults;
 }
 
 type Faults = WorkspaceFault | ImpactFault;
@@ -55,10 +59,12 @@ export function createWorkspaceImpactQueries(deps: WorkspaceImpactDeps): Workspa
    * symbols named and nothing about what they send onward.
    */
   async function compose(request: WorkspaceImpactBase, triggerRevision: string, walk: () => Promise<Result<Fact<ImpactValue>, ImpactFault>>, readsChange: boolean): Promise<Result<Fact<WorkspaceImpactValue>, Faults>> {
+    const inForce = await workspaceInForce(request, deps.defaults);
+    if (!inForce.ok) return inForce;
     const read = await deps.workspace.outwardNames({
       repo: { ...request.repo, revision: triggerRevision },
-      ...(request.repos === undefined ? {} : { repos: request.repos }),
-      ...(request.gateways === undefined ? {} : { gateways: request.gateways }),
+      repos: inForce.value.repos,
+      gateways: inForce.value.gateways,
       ...(request.scope === undefined ? {} : { scope: request.scope }),
       ...(request.signal === undefined ? {} : { signal: request.signal }),
     });
@@ -76,7 +82,7 @@ export function createWorkspaceImpactQueries(deps: WorkspaceImpactDeps): Workspa
       const own = entrypointsOf(repository);
       return repository.repo === trigger ? { ...own, entrypoints: [...own.entrypoints, ...removed] } : own;
     });
-    const gateways = inferGateways(repositories.flatMap((repository) => repository.callSites), entrypoints, request.gateways ?? []);
+    const gateways = inferGateways(repositories.flatMap((repository) => repository.callSites), entrypoints, inForce.value.gateways);
     const settled = settleAll(repositories, entrypoints, gateways);
 
     const upstream = await upstreamFixpoint(request, settled.joined, repositories, linkGraphOf(trigger, impact === undefined ? [] : reachedHandlers(impact)));
@@ -105,7 +111,7 @@ export function createWorkspaceImpactQueries(deps: WorkspaceImpactDeps): Workspa
       workspace: {
         repos: workspace.workspace.repos,
         gateways,
-        unmatchedGateways: unmatchedGateways(request.gateways ?? [], repositories),
+        unmatchedGateways: unmatchedGateways(inForce.value.gateways, repositories),
         unserved: [...new Set(workspace.unserved.map(({ name }) => name))].filter((name) => !gateways.some((gateway) => gateway.prefix === name)).sort(compareText),
       },
       repositorySnapshots: workspace.repositorySnapshots,
