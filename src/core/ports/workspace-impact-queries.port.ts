@@ -8,6 +8,7 @@ import type { Result } from "../domain/shared/result.ts";
 import type { Gateway, GatewayDeclaration } from "../domain/topology/link-match.ts";
 import type { CallersTarget, ImpactFault } from "./impact-queries.port.ts";
 import type { WorkspaceFault, WorkspaceReposRequest, WorkspaceRepositoryRequest } from "./workspace-repos.port.ts";
+import type { FactRead } from "./workspace-queries.port.ts";
 
 /** What one repository contributes to a cross-repository answer. */
 export interface RepoImpact {
@@ -53,6 +54,6 @@ export interface WorkspaceOfChangeRequest extends WorkspaceImpactBase {
  * The links chain: each one feeds a walk in its own repository, whose reached entrypoints the next join starts from.
  */
 export interface WorkspaceImpactQueries {
-  callers(request: WorkspaceCallersRequest): Promise<Result<Fact<WorkspaceImpactValue>, ImpactFault | WorkspaceFault>>;
-  ofChange(request: WorkspaceOfChangeRequest): Promise<Result<Fact<WorkspaceImpactValue>, ImpactFault | WorkspaceFault>>;
+  callers(request: WorkspaceCallersRequest): Promise<Result<FactRead<WorkspaceImpactValue>, ImpactFault | WorkspaceFault>>;
+  ofChange(request: WorkspaceOfChangeRequest): Promise<Result<FactRead<WorkspaceImpactValue>, ImpactFault | WorkspaceFault>>;
 }

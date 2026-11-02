@@ -1,8 +1,8 @@
 import type { Decision } from "../domain/decisions/decision.ts";
-import type { Fact, SnapshotRef } from "../domain/shared/fact.ts";
+import type { SnapshotRef } from "../domain/shared/fact.ts";
 import type { Result } from "../domain/shared/result.ts";
 import type { WorkspaceFault } from "./workspace-repos.port.ts";
-import type { WorkspaceRequest } from "./workspace-queries.port.ts";
+import type { FactRead, WorkspaceRequest } from "./workspace-queries.port.ts";
 
 /** The workspace the decision set is derived from: the bound repository, the clones passed and the gateways declared. */
 export type DecisionsRequest = WorkspaceRequest;
@@ -19,5 +19,5 @@ export interface DecisionValue {
  * the repositories without a trust record. The harness renders the set and the user answers it; nothing here writes.
  */
 export interface DecisionQueries {
-  decisions(request: DecisionsRequest): Promise<Result<Fact<DecisionValue>, WorkspaceFault>>;
+  decisions(request: DecisionsRequest): Promise<Result<FactRead<DecisionValue>, WorkspaceFault>>;
 }

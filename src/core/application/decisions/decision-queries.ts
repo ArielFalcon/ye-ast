@@ -8,7 +8,7 @@ import type { DecisionQueries, DecisionsRequest, DecisionValue } from "../../por
 import type { FixedLayerFault } from "../../ports/fixed-layer-store.port.ts";
 import type { WorkspaceDefaults } from "../../ports/workspace-defaults.port.ts";
 import type { WorkspaceFault, WorkspaceRepository, WorkspaceSection } from "../../ports/workspace-repos.port.ts";
-import type { WorkspaceQueries, WorkspaceValue } from "../../ports/workspace-queries.port.ts";
+import type { FactRead, WorkspaceQueries, WorkspaceValue } from "../../ports/workspace-queries.port.ts";
 
 export interface DecisionQueriesDeps {
   workspace: WorkspaceQueries;
@@ -18,7 +18,7 @@ export interface DecisionQueriesDeps {
 
 export function createDecisionQueries({ workspace, defaults }: DecisionQueriesDeps): DecisionQueries {
   return {
-    async decisions(request: DecisionsRequest): Promise<Result<Fact<DecisionValue>, WorkspaceFault>> {
+    async decisions(request: DecisionsRequest): Promise<Result<FactRead<DecisionValue>, WorkspaceFault>> {
       const read = await workspace.outwardNames(request);
       if (!read.ok) return read;
       const fact = read.value.fact;
@@ -36,7 +36,8 @@ export function createDecisionQueries({ workspace, defaults }: DecisionQueriesDe
         confirmed: confirmed.value,
       };
       const decisions = decisionsOf(input).decisions;
-      return { ok: true, value: decisionFact(fact, { decisions, repositories: value.repositorySnapshots }) };
+      const answer = decisionFact(fact, { decisions, repositories: value.repositorySnapshots });
+      return { ok: true, value: read.value.refresh === undefined ? { fact: answer } : { fact: answer, refresh: read.value.refresh } };
     },
   };
 }

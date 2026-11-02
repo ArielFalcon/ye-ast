@@ -28,7 +28,7 @@ import { directoryNameOf } from "../../domain/topology/repository-identity.ts";
 import type { CallersTarget, ImpactFault, ImpactQueries } from "../../ports/impact-queries.port.ts";
 import type { WorkspaceDefaults } from "../../ports/workspace-defaults.port.ts";
 import type { WorkspaceFault, WorkspaceRepository } from "../../ports/workspace-repos.port.ts";
-import type { WorkspaceQueries } from "../../ports/workspace-queries.port.ts";
+import type { FactRead, WorkspaceQueries } from "../../ports/workspace-queries.port.ts";
 import type { RepoImpact, WorkspaceCallersRequest, WorkspaceImpactBase, WorkspaceImpactQueries, WorkspaceImpactValue, WorkspaceOfChangeRequest } from "../../ports/workspace-impact-queries.port.ts";
 import { workspaceInForce } from "./workspace-defaults.ts";
 
@@ -58,7 +58,7 @@ export function createWorkspaceImpactQueries(deps: WorkspaceImpactDeps): Workspa
    * `readsChange` tells the two directions apart: a change has one of its own, a callers answer asks what depends on the
    * symbols named and nothing about what they send onward.
    */
-  async function compose(request: WorkspaceImpactBase, triggerRevision: string, walk: () => Promise<Result<Fact<ImpactValue>, ImpactFault>>, readsChange: boolean): Promise<Result<Fact<WorkspaceImpactValue>, Faults>> {
+  async function compose(request: WorkspaceImpactBase, triggerRevision: string, walk: () => Promise<Result<Fact<ImpactValue>, ImpactFault>>, readsChange: boolean): Promise<Result<FactRead<WorkspaceImpactValue>, Faults>> {
     const inForce = await workspaceInForce(request, deps.defaults);
     if (!inForce.ok) return inForce;
     const read = await deps.workspace.outwardNames({
@@ -128,7 +128,7 @@ export function createWorkspaceImpactQueries(deps: WorkspaceImpactDeps): Workspa
       sections,
       links: mergeLinks(upstream.value.graph, downstream.value),
     };
-    return { ok: true, value: composite(baseOf(triggerBase), value) };
+    return { ok: true, value: { fact: composite(baseOf(triggerBase), value), ...(read.value.refresh === undefined ? {} : { refresh: read.value.refresh }) } };
   }
 
   /** Every call site of the workspace joined once against the entrypoints of the other repositories, with the drift its section reports. */

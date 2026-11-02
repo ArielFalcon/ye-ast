@@ -34,12 +34,15 @@ export interface WorkspaceRefresh {
   freshness: readonly { repo: string; url: string; freshness: RemoteFreshness }[];
 }
 
-/** The answer of a workspace read: the fact, and the refreshes that decided what it read. */
-export interface WorkspaceRead {
-  fact: Fact<WorkspaceValue>;
+/** An answer that carries, beside its fact, what the read refreshed to decide it. */
+export interface FactRead<T> {
+  fact: Fact<T>;
   /** Absent when the query refreshed nothing, so an answer without a refresh carries no sidecar. */
   refresh?: WorkspaceRefresh;
 }
+
+/** The answer of a workspace read: the fact, and the refreshes that decided what it read. */
+export type WorkspaceRead = FactRead<WorkspaceValue>;
 
 export interface WorkspaceRequest extends WorkspaceReposRequest {
   /** The repository the request is bound to: the one whose snapshot anchors the answer. */

@@ -15,6 +15,7 @@ import type { WorkspaceQueries, WorkspaceRequest } from "../core/ports/workspace
 import type { WorkspaceFault } from "../core/ports/workspace-repos.port.ts";
 import type { WorkspaceCallersRequest, WorkspaceImpactQueries, WorkspaceImpactValue, WorkspaceOfChangeRequest } from "../core/ports/workspace-impact-queries.port.ts";
 import type { DecisionQueries, DecisionsRequest, DecisionValue } from "../core/ports/decision-queries.port.ts";
+import type { FactRead, WorkspaceRefresh } from "../core/ports/workspace-queries.port.ts";
 import { createMcpServer, CUT_GUIDANCE } from "./server.ts";
 import { openSession, type Session } from "./test-session.ts";
 
@@ -150,11 +151,13 @@ interface Answers {
   ofChange: (request: ImpactOfChangeRequest) => Promise<Result<Fact<ImpactValue>, VcsFault | LiveFault>>;
   callers: (request: ImpactCallersRequest) => Promise<Result<Fact<ImpactValue>, ImpactFault>>;
   importers: (request: ImpactImportersRequest) => Promise<Result<Fact<ImportersValue>, VcsFault | LiveFault>>;
-  decisions: (request: DecisionsRequest) => Promise<Result<Fact<DecisionValue>, WorkspaceFault>>;
+  decisions: (request: DecisionsRequest) => Promise<Result<FactRead<DecisionValue>, WorkspaceFault>>;
 }
 
-async function setup(answers: Partial<Answers> = {}): Promise<{ session: Session; calls: Calls }> {
+async function setup(answers: Partial<Answers> = {}, refresh?: WorkspaceRefresh): Promise<{ session: Session; calls: Calls }> {
   const calls: Calls = { map: [], ofChange: [], callers: [], importers: [], workspaceCallers: [], workspaceOfChange: [], workspaceReads: [], decisions: [] };
+  /** A fact with the sidecar a read that refreshed something carries, and without one when it refreshed nothing. */
+  const read = <T>(fact: Fact<T>): FactRead<T> => (refresh === undefined ? { fact } : { fact, refresh });
   const entrypoints: EntrypointQueries = {
     map: (request) => {
       calls.map.push(request);
@@ -180,24 +183,24 @@ async function setup(answers: Partial<Answers> = {}): Promise<{ session: Session
       calls.workspaceReads.push(request);
       return {
         ok: true,
-        value: { fact: { ...base(), status: "complete", value: { workspace: { repos: [] }, repositorySnapshots: [], sections: {}, candidates: [], unserved: [], repositories: [{ repo: "shop", path: "/work/shop", entrypoints: [], callSites: [] }] } } },
+        value: read({ ...base(), status: "complete", value: { workspace: { repos: [] }, repositorySnapshots: [], sections: {}, candidates: [], unserved: [], repositories: [{ repo: "shop", path: "/work/shop", entrypoints: [], callSites: [] }] } }),
       };
     },
   } as unknown as WorkspaceQueries;
   const workspaceImpact: WorkspaceImpactQueries = {
     callers: async (request) => {
       calls.workspaceCallers.push(request);
-      return { ok: true, value: workspaceImpactFact() };
+      return { ok: true, value: read(workspaceImpactFact()) };
     },
     ofChange: async (request) => {
       calls.workspaceOfChange.push(request);
-      return { ok: true, value: workspaceImpactFact() };
+      return { ok: true, value: read(workspaceImpactFact()) };
     },
   };
   const decisions: DecisionQueries = {
     decisions: (request) => {
       calls.decisions.push(request);
-      return (answers.decisions ?? (async () => ({ ok: true, value: decisionFact() })))(request);
+      return (answers.decisions ?? (async () => ({ ok: true, value: read(decisionFact()) })))(request);
     },
   };
   const server = createMcpServer({ version: "0.0.0", entrypoints, impact, workspace, workspaceImpact, decisions, redaction: fakeRedaction, repository: REPOSITORY });
@@ -794,7 +797,7 @@ test("the decisions tool asks the decision family with the repositories and gate
 test("the decisions tool reads the bound repository alone when no clones are passed, and a workspace with no gap says none", async () => {
   const { session, calls } = await setup({ decisions: async (request) => {
     calls.decisions.push(request);
-    return { ok: true, value: decisionFact({ decisions: [], repositories: [] }) };
+    return { ok: true, value: { fact: decisionFact({ decisions: [], repositories: [] }) } };
   } });
 
   const result = await session.callTool("ye_ast_decisions", {});
@@ -804,5 +807,50 @@ test("the decisions tool reads the bound repository alone when no clones are pas
   const text = textOf(result);
   assert.match(text, /status: complete/);
   assert.match(text, /decisions \(0\):\n {2}\(none\)/);
+  await session.close();
+});
+
+const REFRESH: WorkspaceRefresh = {
+  resolution: [{ repo: "orders", asked: "main", step: "explicit", consulted: [{ branch: "main", sha: "c".repeat(40) }], sha: "c".repeat(40) }],
+  freshness: [{ repo: "orders", url: "https://git.example.com/orders.git", freshness: { status: "verified" } }],
+};
+
+test("every workspace-bearing tool carries the freshness and the resolution beside the fact exactly when the read refreshed something", async () => {
+  const plain = await setup();
+  const refreshed = await setup(undefined, REFRESH);
+  const tools: [string, Record<string, unknown>][] = [
+    ["ye_ast_workspace", {}],
+    ["ye_ast_decisions", {}],
+    ["ye_ast_callers", { targets: [{ file: "src/OrderService.java", symbol: "OrderService.find" }], workspace: WORKSPACE }],
+    ["ye_ast_impact", { base: "main", workspace: WORKSPACE }],
+  ];
+
+  for (const [name, args] of tools) {
+    const before = (await plain.session.callTool(name, args)).structuredContent as Record<string, unknown>;
+    const after = (await refreshed.session.callTool(name, args)).structuredContent as Record<string, unknown>;
+    assert.equal("freshness" in before, false, `${name}: a read that refreshed nothing carries no freshness`);
+    assert.equal("resolution" in before, false, `${name}: a read that refreshed nothing carries no resolution`);
+    assert.deepEqual(after["freshness"], REFRESH.freshness, name);
+    assert.deepEqual(after["resolution"], REFRESH.resolution, name);
+    const { freshness: _freshness, resolution: _resolution, ...fact } = after;
+    assert.deepEqual(fact, before, `${name}: the fact is unchanged by the refresh`);
+  }
+
+  await plain.session.close();
+  await refreshed.session.close();
+});
+
+test("the sidecar is redacted with the composed redaction like every other value", async () => {
+  const leaking: WorkspaceRefresh = {
+    ...REFRESH,
+    freshness: [{ repo: "orders", url: `https://user:${SECRET}@git.example.com/orders.git`, freshness: { status: "unverified", reason: "failed", detail: `fatal: ${SECRET}` } }],
+  };
+  const { session } = await setup(undefined, leaking);
+
+  const result = await session.callTool("ye_ast_workspace", {});
+
+  const structured = JSON.stringify(result.structuredContent);
+  assert.doesNotMatch(structured, new RegExp(SECRET));
+  assert.match(structured, new RegExp(REDACTED.replace(/[[\]]/g, "\\$&")));
   await session.close();
 });

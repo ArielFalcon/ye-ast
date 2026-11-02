@@ -10,10 +10,11 @@ import type { NameCandidate, OutwardName } from "../../domain/topology/outward-n
 import type { DecisionQueries, DecisionValue } from "../../ports/decision-queries.port.ts";
 import type { WorkspaceDefaults } from "../../ports/workspace-defaults.port.ts";
 import type { WorkspaceFault, WorkspaceRepository, WorkspaceSection } from "../../ports/workspace-repos.port.ts";
-import type { WorkspaceQueries, WorkspaceRequest, WorkspaceValue } from "../../ports/workspace-queries.port.ts";
+import type { FactRead, WorkspaceQueries, WorkspaceRefresh, WorkspaceRequest, WorkspaceValue } from "../../ports/workspace-queries.port.ts";
 import { createDecisionQueries } from "./decision-queries.ts";
 
 const SHA = "a".repeat(40);
+const OTHER_SHA = "b".repeat(40);
 
 function base<T>(value: T): CompleteFact<T> {
   return {
@@ -74,12 +75,12 @@ function workspaceValue(gateways: readonly { prefix: string; repo: string }[] = 
 
 const REQUEST: WorkspaceRequest = { repo: { path: "/work/orders" }, repos: [{ path: "/work/shop-web" }, { path: "/work/billing" }] };
 
-function setup(answer: Result<Fact<WorkspaceValue>, WorkspaceFault>, defaults?: WorkspaceDefaults): { queries: DecisionQueries; asks: WorkspaceRequest[] } {
+function setup(answer: Result<Fact<WorkspaceValue>, WorkspaceFault>, defaults?: WorkspaceDefaults, refresh?: WorkspaceRefresh): { queries: DecisionQueries; asks: WorkspaceRequest[] } {
   const asks: WorkspaceRequest[] = [];
   const workspace: WorkspaceQueries = {
     outwardNames: async (request) => {
       asks.push(request);
-      return answer.ok ? { ok: true, value: { fact: answer.value } } : answer;
+      return answer.ok ? { ok: true, value: { fact: answer.value, ...(refresh === undefined ? {} : { refresh }) } } : answer;
     },
   };
   return { queries: createDecisionQueries({ workspace, ...(defaults === undefined ? {} : { defaults }) }), asks };
@@ -90,10 +91,10 @@ function declared(repos: readonly { path: string; id?: string }[]): WorkspaceDef
   return { of: async () => ({ ok: true, value: { repos } }) };
 }
 
-function valueOf(result: Result<Fact<DecisionValue>, WorkspaceFault>): DecisionValue {
+function valueOf(result: Result<FactRead<DecisionValue>, WorkspaceFault>): DecisionValue {
   assert.ok(result.ok);
-  assert.notEqual(result.value.status, "unknown");
-  return (result.value as { value: DecisionValue }).value;
+  assert.notEqual(result.value.fact.status, "unknown");
+  return (result.value.fact as { value: DecisionValue }).value;
 }
 
 function decisionOf(value: DecisionValue, id: string): Decision {
@@ -165,7 +166,7 @@ test("the decision fact carries the workspace read's base and the snapshot of ev
   assert.deepEqual(asks, [REQUEST]);
   assert.ok(result.ok);
   const { schema, snapshot, producer, inputs } = read;
-  assert.deepEqual(result.value, { schema, snapshot, producer, inputs, evidence: [], status: "complete", value: valueOf(result) });
+  assert.deepEqual(result.value.fact, { schema, snapshot, producer, inputs, evidence: [], status: "complete", value: valueOf(result) });
   assert.deepEqual(valueOf(result).repositories, read.value.repositorySnapshots);
 });
 
@@ -202,8 +203,8 @@ test("a partial workspace read keeps its cuts on the decision fact", async () =>
   const result = await queries.decisions(REQUEST);
 
   assert.ok(result.ok);
-  assert.equal(result.value.status, "partial");
-  assert.deepEqual(result.value.status === "partial" ? result.value.cuts : [], cuts);
+  assert.equal(result.value.fact.status, "partial");
+  assert.deepEqual(result.value.fact.status === "partial" ? result.value.fact.cuts : [], cuts);
 });
 
 test("a repository with no declared trust is a required decision, and one with a record is not", async () => {
@@ -218,7 +219,26 @@ test("a repository with no declared trust is a required decision, and one with a
   const result = await queries.decisions(REQUEST);
 
   assert.ok(result.ok);
-  assert.notEqual(result.value.status, "unknown");
-  const trust = (result.value as CompleteFact<DecisionValue>).value.decisions.filter((decision) => decision.kind === "trust");
+  assert.notEqual(result.value.fact.status, "unknown");
+  const trust = (result.value.fact as CompleteFact<DecisionValue>).value.decisions.filter((decision) => decision.kind === "trust");
   assert.deepEqual(trust.map((decision) => `${decision.id} ${decision.required} ${decision.options.map((option) => option.value).join(",")}`), ["trust:billing true trusted,untrusted"]);
+});
+
+const REFRESH: WorkspaceRefresh = {
+  resolution: [{ repo: "billing", step: "default-branch", consulted: [{ branch: "main", sha: OTHER_SHA }], sha: OTHER_SHA }],
+  freshness: [{ repo: "billing", url: "https://git.example.com/billing.git", freshness: { status: "verified" } }],
+};
+
+test("the decision answer carries the refresh the workspace read consumed beside the fact", async () => {
+  const plain = await setup({ ok: true, value: base(workspaceValue()) });
+  const refreshed = await setup({ ok: true, value: base(workspaceValue()) }, undefined, REFRESH);
+
+  const before = await plain.queries.decisions(REQUEST);
+  const after = await refreshed.queries.decisions(REQUEST);
+
+  assert.ok(before.ok && after.ok);
+  assert.equal("refresh" in before.value, false);
+  assert.deepEqual(after.value.refresh, REFRESH);
+  assert.deepEqual(after.value.fact, before.value.fact);
+  assert.equal("refresh" in after.value.fact, false);
 });

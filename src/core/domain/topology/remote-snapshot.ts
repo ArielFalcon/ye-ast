@@ -35,7 +35,9 @@ export interface RepositoryResolution {
 }
 
 /** Whether a query verified a remote, and why not; carried beside the fact, never inside it (ADR-0016 decision 4). */
-export type RemoteFreshness = { status: "verified" } | { status: "unverified"; reason: "failed" | "deadline" | "offline" | "refresh-in-progress"; lastVerifiedAt?: string };
+export type RemoteFreshness =
+  | { status: "verified" }
+  | { status: "unverified"; reason: "failed" | "deadline" | "offline" | "refresh-in-progress"; lastVerifiedAt?: string; detail?: string };
 
 const FULL_SHA = /^[0-9a-f]{40}$/i;
 

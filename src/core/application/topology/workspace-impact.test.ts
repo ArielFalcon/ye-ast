@@ -7,7 +7,7 @@ import type { ImpactValue, Seed } from "../../domain/impact/impact-fact.ts";
 import type { CompleteFact, Cut, Fact, SnapshotRef } from "../../domain/shared/fact.ts";
 import type { Result } from "../../domain/shared/result.ts";
 import type { CallersTarget, ImpactCallersRequest, ImpactFault, ImpactOfChangeRequest, ImpactQueries } from "../../ports/impact-queries.port.ts";
-import type { WorkspaceQueries, WorkspaceValue } from "../../ports/workspace-queries.port.ts";
+import type { FactRead, WorkspaceQueries, WorkspaceRefresh, WorkspaceValue } from "../../ports/workspace-queries.port.ts";
 import type { WorkspaceRepository, WorkspaceSection } from "../../ports/workspace-repos.port.ts";
 import type { WorkspaceDefaults, WorkspaceManifest } from "../../ports/workspace-defaults.port.ts";
 import type { WorkspaceRequest } from "../../ports/workspace-queries.port.ts";
@@ -74,6 +74,8 @@ interface Setup {
   reached?: Record<string, readonly WalkModel[]>;
   /** The workspace the bound repository persists. */
   defaults?: WorkspaceDefaults;
+  /** What the workspace read refreshed, carried beside the fact. */
+  refresh?: WorkspaceRefresh;
 }
 
 /** One call site of a repository as its walk sees it: the line a range is seeded by, the declaration it sits in, and what the walk reaches. */
@@ -99,7 +101,7 @@ function walkAnswer(model: readonly WalkModel[], targets: readonly CallersTarget
   return { cost: { expansionsUsed: 0 }, seeds, symbols: [], entrypoints };
 }
 
-function setup({ repositories, unavailable = [], trigger = impactOf(REACHED), unserved = [], reached = {}, defaults }: Setup) {
+function setup({ repositories, unavailable = [], trigger = impactOf(REACHED), unserved = [], reached = {}, defaults, refresh }: Setup) {
   const missing = new Set(unavailable);
   const names = Object.keys(repositories).filter((repo) => !missing.has(repo)).sort();
   const all = [...new Set([...names, ...unavailable])].sort();
@@ -134,7 +136,13 @@ function setup({ repositories, unavailable = [], trigger = impactOf(REACHED), un
         repositories: read,
       };
       const triggerRepo = request.repo.id ?? request.repo.path.split("/").pop() ?? "";
-      return { ok: true, value: { fact: { ...fact(triggerRepo, repositories[triggerRepo]?.trust ?? "untrusted", value), snapshot: read.find((entry) => entry.repo === triggerRepo)?.snapshot ?? read[0]!.snapshot } } };
+      return {
+        ok: true,
+        value: {
+          fact: { ...fact(triggerRepo, repositories[triggerRepo]?.trust ?? "untrusted", value), snapshot: read.find((entry) => entry.repo === triggerRepo)?.snapshot ?? read[0]!.snapshot },
+          ...(refresh === undefined ? {} : { refresh }),
+        },
+      };
     },
   };
   const walks: ImpactCallersRequest[] = [];
@@ -152,10 +160,10 @@ function setup({ repositories, unavailable = [], trigger = impactOf(REACHED), un
 
 const ASK = { repo: { path: "/work/orders" }, repos: [{ path: "/work/shop-web" }], targets: [{ file: HANDLER.path, symbol: HANDLER.symbol }] };
 
-function valueOf(result: Result<Fact<WorkspaceImpactValue>, unknown>): WorkspaceImpactValue {
+function valueOf(result: Result<FactRead<WorkspaceImpactValue>, unknown>): WorkspaceImpactValue {
   assert.ok(result.ok);
-  assert.notEqual(result.value.status, "unknown");
-  return (result.value as { value: WorkspaceImpactValue }).value;
+  assert.notEqual(result.value.fact.status, "unknown");
+  return (result.value.fact as { value: WorkspaceImpactValue }).value;
 }
 
 function repoImpact(value: WorkspaceImpactValue, repo: string): RepoImpact & { status: string } {
@@ -228,8 +236,8 @@ test("a call site whose target is undecided joins nothing and stays a cut naming
   assert.deepEqual(repoImpact(value, "shop-web").external, []);
   assert.ok(section?.status === "partial");
   assert.deepEqual(section.cuts, [{ kind: "unresolved-link", at: [place, `${place}:21`] }]);
-  assert.ok(result.ok && result.value.status === "partial");
-  assert.deepEqual(result.value.cuts, [{ kind: "section", at: ["shop-web"] }]);
+  assert.ok(result.ok && result.value.fact.status === "partial");
+  assert.deepEqual(result.value.fact.cuts, [{ kind: "section", at: ["shop-web"] }]);
 });
 
 test("a call two repositories serve equally is no link: it is a cut naming its place", async () => {
@@ -271,7 +279,7 @@ test("each section keeps the trust of its own repository and the answer keeps th
 
   assert.deepEqual(Object.entries(valueOf(result).sections).map(([repo, section]) => `${repo} ${section.inputs.trust}`), ["orders trusted", "shop-web untrusted"]);
   assert.ok(result.ok);
-  assert.equal(result.value.inputs.trust, "trusted");
+  assert.equal(result.value.fact.inputs.trust, "trusted");
 });
 
 test("a change answer carries the merge base, and a removed route still links the callers that name it", async () => {
@@ -618,9 +626,33 @@ test("a repository the read could not reach keeps its unknown section, so the an
   const result = await queries.callers(ASK);
 
   assert.ok(result.ok);
-  assert.equal(result.value.status, "partial");
-  assert.deepEqual(result.value.status === "partial" ? result.value.cuts : [], [{ kind: "section", at: ["orders-web"] }]);
+  assert.equal(result.value.fact.status, "partial");
+  assert.deepEqual(result.value.fact.status === "partial" ? result.value.fact.cuts : [], [{ kind: "section", at: ["orders-web"] }]);
   const section = valueOf(result).sections["orders-web"];
   assert.equal(section?.status, "unknown");
   assert.equal(section?.status === "unknown" ? section.reason : undefined, "revision-unavailable");
+});
+
+const REFRESH: WorkspaceRefresh = {
+  resolution: [{ repo: "shop-web", step: "trigger-line", consulted: [{ branch: "topic", sha: OTHER_SHA }], sha: OTHER_SHA }],
+  freshness: [{ repo: "shop-web", url: "https://git.example.com/shop-web.git", freshness: { status: "verified" } }],
+};
+
+test("a callers and a change answer carry the refresh the workspace read consumed beside the fact, and none when it refreshed nothing", async () => {
+  const repositories: Setup["repositories"] = { orders: ORDERS, "shop-web": { callSites: [callSite("shop-web", "orders-api/orders")] } };
+  const change = { repo: ASK.repo, repos: ASK.repos, base: OTHER_SHA, head: SHA };
+
+  const plain = setup({ repositories });
+  const refreshed = setup({ repositories, refresh: REFRESH });
+  const [beforeCallers, beforeChange] = [await plain.queries.callers(ASK), await plain.queries.ofChange(change)];
+  const [afterCallers, afterChange] = [await refreshed.queries.callers(ASK), await refreshed.queries.ofChange(change)];
+
+  assert.ok(beforeCallers.ok && beforeChange.ok && afterCallers.ok && afterChange.ok);
+  assert.equal("refresh" in beforeCallers.value, false);
+  assert.equal("refresh" in beforeChange.value, false);
+  assert.deepEqual(afterCallers.value.refresh, REFRESH);
+  assert.deepEqual(afterChange.value.refresh, REFRESH);
+  assert.deepEqual(afterCallers.value.fact, beforeCallers.value.fact);
+  assert.deepEqual(afterChange.value.fact, beforeChange.value.fact);
+  assert.equal("refresh" in afterCallers.value.fact || "refresh" in afterChange.value.fact, false);
 });

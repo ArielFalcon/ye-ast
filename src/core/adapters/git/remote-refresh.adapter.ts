@@ -25,6 +25,8 @@ const DIRECTORY_MODE = 0o700;
 const FILE_MODE = 0o600;
 const LOCK_POLL_MS = 50;
 const SPAWN_FAILED = -1;
+/** The most of git's stderr a freshness carries; the rest is dropped, never a fact. */
+const DETAIL_LIMIT = 2000;
 const SHALLOW_CHECK = ["rev-parse", "--is-shallow-repository"];
 const FULL_SHA = /^[0-9a-f]{40}([0-9a-f]{24})?$/i;
 
@@ -269,11 +271,12 @@ export function createRemoteRefresh(deps: RemoteRefreshDeps): RemoteRefresh {
     }
   }
 
-  async function unverified(url: string, mirror: string, reason: UnverifiedReason): Promise<RefreshedRemote> {
+  async function unverified(url: string, mirror: string, reason: UnverifiedReason, detail?: string): Promise<RefreshedRemote> {
     const record = await readRecord(mirror);
+    const stated = detail === undefined || detail.trim() === "" ? undefined : detail.trim().slice(0, DETAIL_LIMIT);
     const freshness: RemoteFreshness = record === undefined
-      ? { status: "unverified", reason }
-      : { status: "unverified", reason, lastVerifiedAt: record.verifiedAt };
+      ? { status: "unverified", reason, ...(stated === undefined ? {} : { detail: stated }) }
+      : { status: "unverified", reason, lastVerifiedAt: record.verifiedAt, ...(stated === undefined ? {} : { detail: stated }) };
     return {
       url,
       ...(record === undefined ? {} : { listing: record.listing }),
@@ -285,7 +288,7 @@ export function createRemoteRefresh(deps: RemoteRefreshDeps): RemoteRefresh {
   async function refreshMirror(url: string, mirror: string, signal?: AbortSignal): Promise<RefreshedRemote> {
     const listed = await runGit(mirror, ["ls-remote", "--symref", "--end-of-options", url], environment, signal);
     if (signal?.aborted) return unverified(url, mirror, "deadline");
-    if (listed.code !== 0) return unverified(url, mirror, "failed");
+    if (listed.code !== 0) return unverified(url, mirror, "failed", listed.stderr);
     const listing = parseListing(listed.stdout);
     for (const branch of listing.branches) {
       if (signal?.aborted) return unverified(url, mirror, "deadline");
@@ -297,7 +300,7 @@ export function createRemoteRefresh(deps: RemoteRefreshDeps): RemoteRefresh {
       if (valid.code !== 0) continue;
       const fetched = await runGit(mirror, fetchArguments(url, branch.name), environment, signal);
       if (signal?.aborted) return unverified(url, mirror, "deadline");
-      if (fetched.code !== 0) return unverified(url, mirror, "failed");
+      if (fetched.code !== 0) return unverified(url, mirror, "failed", fetched.stderr);
     }
     const verifiedAt = deps.now().toISOString();
     await writeRecord(mirror, listing, verifiedAt);
@@ -324,8 +327,8 @@ export function createRemoteRefresh(deps: RemoteRefreshDeps): RemoteRefresh {
       } finally {
         await releaseLock(lockFile);
       }
-    } catch {
-      return unverified(request.url, mirror, "failed");
+    } catch (error) {
+      return unverified(request.url, mirror, "failed", error instanceof Error ? error.message : String(error));
     }
   }
 

@@ -14,6 +14,8 @@ import type { DecisionValue } from "../core/ports/decision-queries.port.ts";
 import type { WorkspaceValue } from "../core/ports/workspace-queries.port.ts";
 import { composeCli, composeQueries, mcpCommandFor } from "./compose.ts";
 import { installedVersion } from "./installed-versions.ts";
+import { createMcpServer } from "../mcp/server.ts";
+import { openSession } from "../mcp/test-session.ts";
 
 const GIT_ENV = {
   ...process.env,
@@ -318,8 +320,8 @@ test("the decisions family answers over a composed workspace read: an outward na
   const result = await composeQueries({ scratchRoot }).decisions.decisions({ repo: { path: repo }, repos: [{ path: frontend }] });
 
   assert.ok(result.ok);
-  assert.equal(result.value.status, "complete");
-  const value = (result.value as { value: DecisionValue }).value;
+  assert.equal(result.value.fact.status, "complete");
+  const value = (result.value.fact as { value: DecisionValue }).value;
   assert.deepEqual(
     value.repositories.map(({ repo: name }) => name),
     ["shop-service", "shop-web"],
@@ -376,4 +378,18 @@ test("a trusted sibling whose remote is passed is read at the remote's sha, and 
   const snapshot = value.repositorySnapshots.find(({ repo: id }) => id === "orders")?.snapshot;
   assert.equal(snapshot?.kind === "sha" ? snapshot.sha : "", remoteSha);
   assert.equal(value.repositories.find(({ repo: id }) => id === "orders")?.path, join(cacheDirectory, "remotes", digest.of(url)));
+
+  const { version, entrypoints, impact, workspace: workspaceQueries, workspaceImpact, decisions, redaction } = composeQueries({ scratchRoot, trustDirectory, refresh });
+  const session = await openSession(createMcpServer({ version, entrypoints, impact, workspace: workspaceQueries, workspaceImpact, decisions, redaction, repository: { path: repo, repoId: "shop-service" } }));
+  try {
+    const answer = await session.callTool("ye_ast_callers", { targets: [{ file: "src/OrderController.java", symbol: "OrderController.one" }], workspace: {} });
+    const structured = answer.structuredContent as Record<string, unknown>;
+    assert.deepEqual(structured["freshness"], redaction.redactValue([{ repo: "orders", url, freshness: { status: "verified" } }]));
+    assert.equal((structured["resolution"] as { sha?: string }[])[0]?.sha, remoteSha);
+    const { freshness: _freshness, resolution: _resolution, ...fact } = structured;
+    assert.equal("freshness" in (structured["value"] as Record<string, unknown>) || "resolution" in (structured["value"] as Record<string, unknown>), false, "the sidecar stays outside the fact");
+    assert.equal(JSON.stringify(fact).includes(url), false, "the remote URL never reaches a fact");
+  } finally {
+    await session.close();
+  }
 });

@@ -263,8 +263,8 @@ test("a form-shaped answer set persisted by install closes every gap the next qu
   const gaps = async (ask: { repo: { path: string }; repos?: { path: string }[] }): Promise<string[]> => {
     const result = await composeQueries(options).decisions.decisions(ask);
     assert.ok(result.ok);
-    assert.notEqual(result.value.status, "unknown");
-    return (result.value as { value: DecisionValue }).value.decisions.map((decision) => decision.id);
+    assert.notEqual(result.value.fact.status, "unknown");
+    return (result.value.fact as { value: DecisionValue }).value.decisions.map((decision) => decision.id);
   };
 
   assert.deepEqual(await gaps({ repo: { path: repo }, repos: siblings.map((path) => ({ path })) }), [

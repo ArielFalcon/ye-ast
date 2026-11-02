@@ -373,8 +373,10 @@ test("a failed refresh answers the recorded listing and says failed", async () =
 
   const [answer] = await refresh.refresh([{ url }]);
 
+  const { detail, ...stated } = answer!.freshness as { status: string; reason?: string; lastVerifiedAt?: string; detail?: string };
   assert.deepEqual(answer!.listing, first!.listing);
-  assert.deepEqual(answer!.freshness, { status: "unverified", reason: "failed", lastVerifiedAt: NOW.toISOString() });
+  assert.deepEqual(stated, { status: "unverified", reason: "failed", lastVerifiedAt: NOW.toISOString() });
+  assert.ok((detail ?? "").length > 0, "the failure carries git's stderr, which redaction masks before it leaves");
   assert.equal(answer!.mirror, mirrorOf(cacheBase, url));
 });
 
@@ -385,7 +387,9 @@ test("the default protocols refuse a file:// URL", async () => {
 
   const [answer] = await createRemoteRefresh(depsFor(join(root, "cache"))).refresh([{ url: `file://${origin}` }]);
 
-  assert.deepEqual(answer!.freshness, { status: "unverified", reason: "failed" });
+  const { detail, ...stated } = answer!.freshness as { status: string; reason?: string; lastVerifiedAt?: string; detail?: string };
+  assert.deepEqual(stated, { status: "unverified", reason: "failed" });
+  assert.match(detail ?? "", /transport|not allowed|fatal/i);
 });
 
 test("the refresh environment allows exactly the injected protocols and never prompts", () => {
@@ -467,4 +471,28 @@ test("a directory open to other accounts is refused and no git runs", async () =
     freshness: { status: "unverified", reason: "failed", lastVerifiedAt: NOW.toISOString() },
     mirror: mirrorOf(cacheBase, url),
   });
+});
+
+test("a failure's detail is git's stderr only: bounded, and dropped when git said nothing", async () => {
+  const root = caseDirectory();
+  const origin = repository(join(root, "origin"));
+  commit(origin, "a.txt", "a\n");
+  const url = `file://${origin}`;
+  const cacheBase = join(root, "cache");
+  const [seeded] = await createRemoteRefresh(depsFor(cacheBase, { protocols: "file" })).refresh([{ url }]);
+  assert.deepEqual(seeded!.freshness, { status: "verified" });
+  const failsListingWith = (stderr: string) =>
+    async (_cwd: string, args: readonly string[]) => {
+      if (args.includes("ls-remote")) return { code: 1, stdout: "", stderr };
+      if (args.includes("--is-shallow-repository")) return { code: 0, stdout: "false\n", stderr: "" };
+      return { code: 0, stdout: "", stderr: "" };
+    };
+
+  const [bounded] = await createRemoteRefresh(depsFor(cacheBase, { protocols: "file", runGit: failsListingWith("f".repeat(5000)) })).refresh([{ url }]);
+  const [blank] = await createRemoteRefresh(depsFor(cacheBase, { protocols: "file", runGit: failsListingWith("  \n\t ") })).refresh([{ url }]);
+
+  const detailOf = (answer: { freshness: unknown } | undefined): string | undefined => (answer!.freshness as { detail?: string }).detail;
+  assert.equal(detailOf(bounded)?.length, 2000);
+  assert.equal(detailOf(blank), undefined);
+  assert.deepEqual(blank!.freshness, { status: "unverified", reason: "failed", lastVerifiedAt: NOW.toISOString() });
 });
