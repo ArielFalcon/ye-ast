@@ -336,8 +336,12 @@ value      the fact itself
 Also:
 
 - Quote the `snapshot` when you report a fact, so the user knows which revision it describes.
+- The text of every answer opens with `status`, the `declared scope` that status is relative to, the `scope` the caller
+  narrowed and the `snapshot`; a refreshed workspace answer adds a `remote:` line per remote and a `pinned:` line per
+  repository before them, so a text-only read loses nothing the fact's siblings carry.
 - `_meta["ye-ast/live"]` on a live answer means the working tree moved during the read; the answer may be stale.
-- An `isError` result carries a fault kind; see the next step.
+- An `isError` result carries a fault kind on its first text line and the same `{ kind, detail, entries? }` in
+  `_meta["ye-ast/fault"]`; see the next step.
 
 ### 7. Failures and what they mean
 

@@ -263,6 +263,13 @@ test("entrypoints reads the bound repository at HEAD by default and answers the 
   await session.close();
 });
 
+test("the header names the declared scope a complete status is relative to", async () => {
+  const { session } = await setup();
+  const text = textOf(await session.callTool("ye_ast_entrypoints", {}));
+  assert.match(text, /^declared scope: languages java; frameworks spring$/m);
+  await session.close();
+});
+
 test("entrypoints forwards the revision asked for", async () => {
   const { session, calls } = await setup();
   await session.callTool("ye_ast_entrypoints", { revision: "v1.2" });
@@ -279,7 +286,7 @@ test("impact reads a change of the bound repository, head defaulting to HEAD, an
   assert.deepEqual(result.structuredContent, JSON.parse(JSON.stringify(impactFact())));
   const text = textOf(result);
   assert.match(text, /status: complete/);
-  assert.match(text, /src\/OrderService\.java:31 OrderService\.find/);
+  assert.match(text, /^seeds \(1\):\n {2}src\/OrderService\.java\n {4}31 OrderService\.find \(lines\)$/m);
   assert.match(text, /src\/OrderController\.java\n {4}17 OrderController\.one \[method\] \(depth 2, confidence 0\.75, fan-in 3, via src\/OrderService\.java:OrderService\.find\)/);
   assert.match(text, /added http-route POST \/orders.*src\/OrderController\.java:40/);
   assert.match(text, /GET \/orders\/\{id\}.*src\/OrderController\.java:17.*depth 2/);
@@ -363,6 +370,31 @@ test("an unresolved-link cut renders the places in its anchor's file as line num
   await session.close();
 });
 
+test("the places of a cut are grouped under their file, every place kept and the path printed once", async () => {
+  const places = ["src/a.ts::A.f", ...["10", "11", "12", "40"].map((line) => `src/x.ts:${line}`), ...["7", "9"].map((line) => `src/y.ts:${line}`), "src/z.ts:3 no-extractor"];
+  const partial = impactFact({ status: "partial", cuts: [{ kind: "unresolved-link", at: places }] } as Partial<Fact<ImpactValue>>);
+  const { session } = await setup({ ofChange: async () => ({ ok: true, value: partial }) });
+  const text = textOf(await session.callTool("ye_ast_impact", { base: "main" }));
+  assert.match(text, /unresolved-link at src\/a\.ts::A\.f: src\/x\.ts: 10, 11, 12, 40, src\/y\.ts: 7, 9, src\/z\.ts \(no-extractor\):3$/m);
+  assert.equal(text.split("src/x.ts").length - 1, 1, "the path of a grouped file is printed once");
+  for (const line of ["10", "11", "12", "40"]) assert.match(text, new RegExp(`\\b${line}\\b`), `line ${line} survives the grouping`);
+  await session.close();
+});
+
+test("the seeds of an impact answer are grouped under their file, every seed kept", async () => {
+  const seeds = [
+    { file: "src/a.ts", symbol: "a", line: 3, basis: "lines" as const },
+    { file: "src/a.ts", symbol: "b", line: 9, basis: "top-level" as const },
+    { file: "src/b.ts", symbol: "c", line: 2, basis: "requested" as const },
+  ];
+  const fact = impactFact({ value: { ...IMPACT, seeds } } as Partial<Fact<ImpactValue>>);
+  const { session } = await setup({ ofChange: async () => ({ ok: true, value: fact }) });
+  const text = textOf(await session.callTool("ye_ast_impact", { base: "main" }));
+  assert.match(text, /^seeds \(3\):\n {2}src\/a\.ts\n {4}3 a \(lines\)\n {4}9 b \(top-level\)\n {2}src\/b\.ts\n {4}2 c \(requested\)$/m);
+  assert.equal(text.split("src/a.ts").length - 1, 1, "the path of a grouped file is printed once");
+  await session.close();
+});
+
 test("impacted symbols are grouped under their file, a seed at depth 0 is not printed twice and only a confidence below 1 or a fan-in above 0 is printed", async () => {
   const grouped = impactFact({
     value: {
@@ -435,7 +467,7 @@ test("entrypoints closes with the cut list of the map and of its section", async
   const { session } = await setup({ map: async () => ({ ok: true, value: fact }) });
   const text = textOf(await session.callTool("ye_ast_entrypoints", {}));
   const lines = text.split("\n");
-  assert.equal(lines[0], "status: partial (cuts: 1 section)");
+  assert.equal(lines[0], "status: partial (cuts: 1 section: entrypoints)");
   assert.match(text, / {2}status: partial \(cuts: 1 no-extractor\)/);
   assert.match(text, /\ncuts:\n {2}no-extractor \(1\): src\/scripts\/build\.js\n {2}section \(1\): entrypoints$/);
   await session.close();
@@ -463,12 +495,15 @@ test("an unknown entrypoint item is rendered unknown next to the routes found", 
   await session.close();
 });
 
-test("a verified-empty complete answer says none", async () => {
+test("a verified-empty complete answer counts its empty lists instead of spelling none", async () => {
   const empty = impactFact({ value: { seeds: [], symbols: [], entrypoints: [] } } as Partial<Fact<ImpactValue>>);
   const { session } = await setup({ ofChange: async () => ({ ok: true, value: empty }) });
   const text = textOf(await session.callTool("ye_ast_impact", { base: "main" }));
   assert.match(text, /status: complete/);
-  assert.match(text, /\(none\)/);
+  assert.match(text, /^seeds \(0\):$/m);
+  assert.match(text, /^reached entrypoints \(0\):$/m);
+  assert.match(text, /^impacted symbols \(0\):$/m);
+  assert.doesNotMatch(text, /\(none\)/);
   await session.close();
 });
 
@@ -481,6 +516,8 @@ test("a fault is a tool error carrying its kind and a redacted detail, with no f
   assert.match(text, /unknown-revision/);
   assert.match(text, new RegExp(`bad ref ${REDACTED.replace(/[[\]]/g, "\\$&")}`));
   assert.doesNotMatch(text, new RegExp(SECRET));
+  assert.deepEqual(result._meta?.["ye-ast/fault"], { kind: "unknown-revision", detail: `bad ref ${REDACTED}` });
+  assert.doesNotMatch(JSON.stringify(result._meta), new RegExp(SECRET));
   await session.close();
 });
 
@@ -499,6 +536,7 @@ test("an unknown-symbol fault lists every entry that names no node and what its 
   const text = textOf(result);
   assert.match(text, /src\/A\.java:A\.gone: declared in src\/A\.java: A\.other, A\.used/);
   assert.match(text, /src\/B\.java:B\.gone: src\/B\.java declares no symbol/);
+  assert.deepEqual(result._meta?.["ye-ast/fault"], fault);
   await session.close();
 });
 
@@ -543,7 +581,7 @@ test("an answer read within a caller's scope says so under its status, and one w
   const scoped = impactFact({ inputs: { ...base().inputs, declaredScope } });
   const { session } = await setup({ ofChange: async () => ({ ok: true, value: scoped }) });
   const text = textOf(await session.callTool("ye_ast_impact", { base: "main" }));
-  assert.match(text, /^status: complete\nscope: include src\/app\/\*\*; exclude \*\*\/\*\.spec\.ts, src\/legacy\/\*\* \(paths outside it were not read\)\n/);
+  assert.match(text, /^status: complete\ndeclared scope: languages java; frameworks spring\nscope: include src\/app\/\*\*; exclude \*\*\/\*\.spec\.ts, src\/legacy\/\*\* \(paths outside it were not read\)\nsnapshot: /);
   const plain = textOf(await session.callTool("ye_ast_importers", { files: ["src/a.ts"] }));
   assert.doesNotMatch(plain, /^scope:/m);
   await session.close();
@@ -828,7 +866,8 @@ test("the decisions tool reads the bound repository alone when no clones are pas
   assert.equal("gateways" in (calls.decisions[0] ?? {}), false);
   const text = textOf(result);
   assert.match(text, /status: complete/);
-  assert.match(text, /decisions \(0\):\n {2}\(none\)/);
+  assert.match(text, /^decisions \(0\):$/m);
+  assert.doesNotMatch(text, /\(none\)/);
   await session.close();
 });
 
@@ -860,6 +899,26 @@ test("every workspace-bearing tool carries the freshness and the resolution besi
 
   await plain.session.close();
   await refreshed.session.close();
+});
+
+test("a refreshed answer opens its text with the remote it verified and the sha it pinned", async () => {
+  const { session } = await setup(undefined, REFRESH);
+  const text = textOf(await session.callTool("ye_ast_workspace", {}));
+  assert.match(text, /^remote: orders https:\/\/git\.example\.com\/orders\.git verified$/m);
+  assert.match(text, new RegExp(`^pinned: orders asked main by explicit -> ${"c".repeat(40)} \\(consulted main ${"c".repeat(40)}\\)$`, "m"));
+  await session.close();
+});
+
+test("an unverified remote names why in the text, and a repository no step pinned says so", async () => {
+  const refresh: WorkspaceRefresh = {
+    resolution: [{ repo: "orders", asked: "release", step: "revision-unavailable", consulted: [{ branch: "release" }] }],
+    freshness: [{ repo: "orders", url: "https://git.example.com/orders.git", freshness: { status: "unverified", reason: "deadline", detail: "listing exceeded the deadline" } }],
+  };
+  const { session } = await setup(undefined, refresh);
+  const text = textOf(await session.callTool("ye_ast_workspace", {}));
+  assert.match(text, /^remote: orders https:\/\/git\.example\.com\/orders\.git unverified \(deadline\): listing exceeded the deadline$/m);
+  assert.match(text, /^pinned: orders asked release by revision-unavailable -> unpinned \(consulted release\)$/m);
+  await session.close();
 });
 
 test("the sidecar is redacted with the composed redaction like every other value", async () => {

@@ -7,17 +7,19 @@ import { isValidGlob, type ScopeRequest } from "../core/domain/shared/scope.ts";
 import type { LiveStaleNotice } from "../core/ports/live-queries.port.ts";
 import type { Result } from "../core/domain/shared/result.ts";
 import type { EntrypointQueries } from "../core/ports/entrypoint-queries.port.ts";
-import type { CallersTarget, ImpactQueries } from "../core/ports/impact-queries.port.ts";
+import type { CallersTarget, ImpactFault, ImpactQueries } from "../core/ports/impact-queries.port.ts";
 import type { Redaction } from "../core/ports/redaction.port.ts";
 import { DEFAULT_REVISION } from "../core/ports/vcs.port.ts";
 import type { WorkspaceRepositoryRequest } from "../core/ports/workspace-repos.port.ts";
 import type { FactRead, WorkspaceQueries, WorkspaceRefresh, WorkspaceValue } from "../core/ports/workspace-queries.port.ts";
 import type { WorkspaceImpactQueries } from "../core/ports/workspace-impact-queries.port.ts";
 import type { DecisionQueries } from "../core/ports/decision-queries.port.ts";
-import { renderDecisions, renderEntrypointMap, renderFault, renderImpact, renderImporters, renderStale, renderWorkspace, renderWorkspaceImpact, type Detail } from "./render.ts";
+import { renderDecisions, renderEntrypointMap, renderFault, renderImpact, renderImporters, renderRefresh, renderStale, renderWorkspace, renderWorkspaceImpact, type Detail } from "./render.ts";
 
 /** The key of the result's `_meta` that carries a stale notice. */
 export const LIVE_META = "ye-ast/live";
+/** The key of the result's `_meta` that carries the fault of an `isError` answer, beside the text that names its kind first. */
+export const FAULT_META = "ye-ast/fault";
 
 export interface McpDeps {
   version: string;
@@ -65,15 +67,16 @@ When to call:
 - ye_ast_impact: after changing code and before reporting the work done or opening a pull request, with base set to the branch the change merges into; set live to true to include uncommitted edits. It repeats what ye_ast_callers already answered when the change stays inside the symbols asked about, so call ye_ast_impact once for the whole change before reporting it done, not once per symbol.
 - ye_ast_workspace: when the work crosses repositories (a frontend calling services, a service calling another, a message between them). It lists the hosts, path prefixes, configuration URLs, dependency coordinates, remotes and registries the repository writes outward, the local repository that serves each one and the basis that says why, and the names no repository given serves. Pass the other clones with repos, or none to read the ones the repository persists, then ask ye_ast_callers or ye_ast_impact again with workspace set to those repos so the call sites of the other repositories that land in what the walk reaches are joined. It reads each repository from its own clone, and refreshes a declared remote only for a repository the user declared trusted; nothing else reaches the network: a name nothing serves is the next clone to make with your own tools.
 - ye_ast_decisions: when the workspace has gaps only the user can fill (a name no clone given serves, a clone that states no name, a prefix that routes nowhere, a repository with no trust record, a repository the remote could not pin at the trigger's line, a repository declared without a remote), and before \`ye-ast install --workspace\`, to show the user a form. It reads the same repositories as ye_ast_workspace and answers each gap with every option the workspace can verify, the places that make each one valid, and the option a rule recommends; a gap whose answer is a value no fact states says so. It writes nothing: render the options, then persist the answers with \`ye-ast install --workspace\` and \`ye-ast install --trust\`.
-- workspace on ye_ast_callers and ye_ast_impact: when the symbol or change can be called from another repository (a route or a handler a frontend or another service calls). Pass the other local clones as workspace.repos (a path each; gateways only when a path prefix routes to a repository and the code does not say it), or pass workspace without repos to work over the repositories and gateways the user persisted with \`ye-ast install --workspace\`; a repository that persists none answers about itself alone. The answer adds the links from call sites in those repositories to what a walk reaches, and follows each link into its own repository, so a chain of repositories answers as one: what depends on those call sites in their own repository, the call sites that reached a declared service and matched none of its routes (unmatched), the ones that name a service no repository given serves (external), and every call site it could not decide as a cut. On ye_ast_impact the links also run the other way: what the change sends onward, each link naming the links crossed from it (reach). A repository not passed is not read: an answer without workspace says nothing about other repositories. Each repository is read at its HEAD or the revision given, under its own trust declaration; a repository the user declared trusted whose remote is declared is refreshed and read at the sha the remote's listing pins. A refreshed answer carries freshness and resolution beside the fact, saying what this query verified and which sha each repository was pinned to. live cannot be combined with workspace.
+- workspace on ye_ast_callers and ye_ast_impact: when the symbol or change can be called from another repository (a route or a handler a frontend or another service calls). Pass the other local clones as workspace.repos (a path each; gateways only when a path prefix routes to a repository and the code does not say it), or pass workspace without repos to work over the repositories and gateways the user persisted with \`ye-ast install --workspace\`; a repository that persists none answers about itself alone. The answer adds the links from call sites in those repositories to what a walk reaches, and follows each link into its own repository, so a chain of repositories answers as one: what depends on those call sites in their own repository, the call sites that reached a declared service and matched none of its routes (unmatched), the ones that name a service no repository given serves (external), and every call site it could not decide as a cut. On ye_ast_impact the links also run the other way: what the change sends onward, each link naming the links crossed from it (reach). A repository not passed is not read: an answer without workspace says nothing about other repositories. Each repository is read at its HEAD or the revision given, under its own trust declaration; a repository the user declared trusted whose remote is declared is refreshed and read at the sha the remote's listing pins. A refreshed answer opens its text with a \`remote:\` line per remote saying whether this query verified it and why not, and a \`pinned:\` line per repository naming the step that chose its sha, and carries the same freshness and resolution beside the fact. live cannot be combined with workspace.
 - Every tool takes scope: include and exclude globs over repository-relative paths (exclude wins). A path outside the scope is not read at all, so callers and entrypoints through it are not known and the answer is complete only within the scope, which it names under its status. Use scope to keep one service or package of a repository apart; to shorten an answer, leave scope out and rely on detail.
 - ye-ast does not say which templates bind one input or output of a component; search the templates for the binding's name.
 
 Reading an answer:
-- status "complete": the result is everything within the declared scope (inputs.declaredScope); code in languages or frameworks outside it is not covered.
+- status "complete": the result is everything within the declared scope the answer prints on its second line (inputs.declaredScope); code in languages or frameworks outside it is not covered.
 - status "partial": the result stops at each listed cut; what lies past a cut is not known.
 - status "unknown": ye-ast cannot tell, and the reason says why; never read it as "no impact".
 - ye_ast_impact and ye_ast_callers list the symbols at depth 0 and 1 and count deeper ones per file; set detail to "full" when the deeper symbols themselves are needed.
+- confidence is 0-1 and printed only below 1: how strongly the edge that reached the symbol was resolved, 1 for a relation read from the code itself and lower for one the extractor inferred. fan-in is how many places call or instantiate the symbol, whether or not the walk followed them.
 - Every answer closes with a \`cuts:\` list holding every place past each cut, after the content; the status line only counts them by kind, so a partial answer read without its list reads as complete.
 - An isError result names a fault kind. "live-requires-trusted" means the user must declare the repository trusted with \`ye-ast install --trust trusted\` before live can be used; answer from a revision meanwhile. "unknown-symbol" lists what the file declares; ask again with one of those names.
 
@@ -271,7 +274,8 @@ export function createMcpServer(deps: McpDeps): McpServer {
   /**
    * The fact is redacted first and the text is rendered from the redacted fact, so neither carries a secret. A workspace
    * read answers its fact with the refresh beside it, attached as sibling keys of the structured content and never inside
-   * the fact, so the fact's bytes depend only on what it read (ADR-0016 decision 4).
+   * the fact, so the fact's bytes depend only on what it read (ADR-0016 decision 4). The text opens with the same
+   * response-level statuses it carries, so an answer read as text alone still knows what the refresh could not confirm.
    */
   async function answer<V, F extends { kind: string; detail: string }>(
     query: (onStale: (notice: LiveStaleNotice) => void) => Promise<Result<Fact<V> | FactRead<V>, F>>,
@@ -280,14 +284,14 @@ export function createMcpServer(deps: McpDeps): McpServer {
     try {
       let moved: LiveStaleNotice | undefined;
       const result = await query((notice) => void (moved = notice));
-      if (!result.ok) return failure(redaction.redact(renderFault(result.fault)));
+      if (!result.ok) return failure(result.fault);
       const read = "fact" in result.value ? result.value : { fact: result.value };
       const fact = redaction.redactValue(read.fact) as Fact<V>;
       const refresh = read.refresh === undefined ? undefined : (redaction.redactValue(read.refresh) as WorkspaceRefresh);
-      const text = render(fact);
       const stale = moved === undefined ? undefined : (redaction.redactValue(moved) as LiveStaleNotice);
+      const sidecar = [...(stale === undefined ? [] : [renderStale(stale)]), ...(refresh === undefined ? [] : renderRefresh(refresh))];
       return {
-        content: [{ type: "text", text: stale === undefined ? text : `${renderStale(stale)}\n${text}` }],
+        content: [{ type: "text", text: [...sidecar, render(fact)].join("\n") }],
         structuredContent: {
           ...fact,
           ...(refresh === undefined ? {} : { freshness: refresh.freshness, resolution: refresh.resolution }),
@@ -295,8 +299,20 @@ export function createMcpServer(deps: McpDeps): McpServer {
         ...(stale !== undefined && { _meta: { [LIVE_META]: stale } }),
       };
     } catch (error) {
-      return failure(`fault: internal-fault\n${redaction.redactError(error)}`);
+      return failure({ kind: "internal-fault", detail: redaction.redactError(error) });
     }
+  }
+
+  /**
+   * A fault is an `isError` result: the text names its kind on the first line, and `_meta` carries the same shape for a
+   * client that branches on it, never `structuredContent`, which is the fact envelope this tool declares as its output.
+   */
+  function failure(fault: { kind: string; detail: string } | ImpactFault): CallToolResult {
+    return {
+      isError: true,
+      content: [{ type: "text", text: redaction.redact(renderFault(fault)) }],
+      _meta: { [FAULT_META]: redaction.redactValue(fault) },
+    };
   }
 
   server.registerTool(
@@ -486,8 +502,4 @@ export function createMcpServer(deps: McpDeps): McpServer {
   );
 
   return server;
-}
-
-function failure(text: string): CallToolResult {
-  return { isError: true, content: [{ type: "text", text }] };
 }

@@ -1,7 +1,7 @@
 import type { Entrypoint } from "../core/domain/entrypoints/entrypoint.ts";
 import type { Handler } from "../core/domain/entrypoints/http-route.ts";
 import type { ChangedEntrypoint } from "../core/domain/impact/changed-entrypoints.ts";
-import type { ImpactedSymbol, ImpactValue, ReachedEntrypoint } from "../core/domain/impact/impact-fact.ts";
+import type { ImpactedSymbol, ImpactValue, ReachedEntrypoint, Seed } from "../core/domain/impact/impact-fact.ts";
 import type { ImportersValue } from "../core/domain/impact/importers-fact.ts";
 import type { EntrypointMap } from "../core/domain/map/entrypoint-map.ts";
 import type { Decision, DecisionOption } from "../core/domain/decisions/decision.ts";
@@ -10,10 +10,11 @@ import type { Cut, Evidence, Fact, Finding, SnapshotRef } from "../core/domain/s
 import type { ImpactFault } from "../core/ports/impact-queries.port.ts";
 import type { LiveStaleNotice } from "../core/ports/live-queries.port.ts";
 import type { NameCandidate, OutwardName } from "../core/domain/topology/outward-name.ts";
-import type { WorkspaceValue } from "../core/ports/workspace-queries.port.ts";
+import type { WorkspaceRefresh, WorkspaceValue } from "../core/ports/workspace-queries.port.ts";
 import type { DecisionValue } from "../core/ports/decision-queries.port.ts";
 import type { CallSite } from "../core/domain/topology/call-site.ts";
 import type { ImpactedLink } from "../core/domain/topology/link.ts";
+import type { RepositoryResolution } from "../core/domain/topology/remote-snapshot.ts";
 import type { RepoImpact, WorkspaceImpactValue } from "../core/ports/workspace-impact-queries.port.ts";
 
 const NONE = "  (none)";
@@ -40,10 +41,11 @@ function cutsByKind(cuts: readonly Cut[]): (readonly [Cut["kind"], readonly Cut[
   return [...Map.groupBy(cuts, (cut) => cut.kind)].toSorted(([a, ofA], [b, ofB]) => ofB.length - ofA.length || compareText(a, b));
 }
 
-/** The cuts of one kind, counted: the status line keeps the fact's size down to what the caller can act on. */
+/** The cuts of one kind, counted: the status line keeps the fact's size down to what the caller can act on. A section
+ * cut names the section, so the status line already says which one degraded. */
 function cutCounts(cuts: readonly Cut[]): string {
   return cutsByKind(cuts)
-    .map(([kind, ofKind]) => `${ofKind.length} ${kind}`)
+    .map(([kind, ofKind]) => `${ofKind.length} ${kind}${kind === "section" ? `: ${ofKind.flatMap((cut) => cut.at).join(", ")}` : ""}`)
     .join(", ");
 }
 
@@ -61,9 +63,18 @@ function scopeLines({ inputs: { declaredScope } }: Fact<unknown>): string[] {
   return named.length === 0 ? [] : [`scope: ${named.join("; ")} (paths outside it were not read)`];
 }
 
-/** What every answer opens with: its completeness, the scope it is relative to, and the snapshot it read. */
+/** The languages and frameworks a status is relative to. */
+function declaredScopeLines({ inputs: { declaredScope } }: Fact<unknown>): string[] {
+  const named = [
+    declaredScope.languages.length === 0 ? undefined : `languages ${declaredScope.languages.join(", ")}`,
+    declaredScope.frameworks.length === 0 ? undefined : `frameworks ${declaredScope.frameworks.join(", ")}`,
+  ].filter((part) => part !== undefined);
+  return named.length === 0 ? [] : [`declared scope: ${named.join("; ")}`];
+}
+
+/** What every answer opens with: its completeness, what that completeness covers, and the snapshot it read. */
 function headerLines(fact: Fact<unknown>): string[] {
-  return [...statusLines(fact), ...scopeLines(fact), snapshotLine(fact.snapshot)];
+  return [...statusLines(fact), ...declaredScopeLines(fact), ...scopeLines(fact), snapshotLine(fact.snapshot)];
 }
 
 /** A place after its file: the line, and the reason it could not be read when it carries one. */
@@ -81,7 +92,21 @@ function cutPlaces(cut: Cut): string {
   const here = places.filter((place) => place.startsWith(prefix)).map((place) => placeRest(place, prefix));
   const elsewhere = places.filter((place) => !place.startsWith(prefix));
   const lines = here.length === 0 ? [] : [`${here.length === 1 ? "line" : "lines"} ${here.join(", ")}`];
-  return `${anchor}: ${[...lines, ...elsewhere].join(", ")}`;
+  return `${anchor}: ${[...lines, ...groupedPlaces(elsewhere)].join(", ")}`;
+}
+
+/** The places grouped under their file, so a path repeated by every place is printed once and no place is dropped. */
+function groupedPlaces(places: readonly string[]): string[] {
+  const byFile = new Map<string, string[]>();
+  for (const place of places) {
+    const [pathLine = "", ...reason] = place.split(" ");
+    const colon = pathLine.lastIndexOf(":");
+    const file = colon === -1 ? pathLine : pathLine.slice(0, colon);
+    const line = colon === -1 ? "" : pathLine.slice(colon + 1);
+    const key = reason.length === 0 ? file : `${file} (${reason.join(" ")})`;
+    byFile.set(key, [...(byFile.get(key) ?? []), line].filter((part) => part !== ""));
+  }
+  return [...byFile].map(([head, lines]) => (lines.length === 0 ? head : lines.length === 1 ? `${head}:${lines[0]}` : `${head}: ${lines.join(", ")}`));
 }
 
 function cutLine(cut: Cut): string {
@@ -116,6 +141,10 @@ function cutsBlock(cuts: readonly Cut[]): string[] {
 
 function list(lines: readonly string[]): string[] {
   return lines.length === 0 ? [NONE] : [...lines];
+}
+
+function counted(label: string, items: readonly string[]): string {
+  return items.length === 0 ? `${label} (0):` : `${label} (${items.length}): ${items.join(", ")}`;
 }
 
 function handlerText(handler: Handler): string {
@@ -184,7 +213,7 @@ function countedLine(file: string, symbols: readonly ImpactedSymbol[]): string {
 function impactedSymbols(value: ImpactValue, detail: Detail): string[] {
   const seeds = seedKeys(value);
   const listed = value.symbols.filter((symbol) => symbol.depth !== 0 || !seeds.has(`${symbol.file}\0${symbol.symbol}\0${symbol.line}`));
-  if (listed.length === 0) return ["impacted symbols (0):", NONE];
+  if (listed.length === 0) return ["impacted symbols (0):"];
   const near = listed.filter((symbol) => symbol.depth <= LISTED_DEPTH);
   const deeper = listed.filter((symbol) => symbol.depth > LISTED_DEPTH);
   if (detail === "full" || deeper.length === 0) return [`impacted symbols (${listed.length}):`, ...groupedLines(listed)];
@@ -200,12 +229,20 @@ function impactBody(value: ImpactValue, detail: Detail): string[] {
   return [
     ...(value.mergeBase === undefined ? [] : [`merge base: ${value.mergeBase}`]),
     `seeds (${value.seeds.length}):`,
-    ...list(value.seeds.map((seed) => `  - ${at(seed.file, seed.line)} ${seed.symbol} (${seed.basis})`)),
-    ...(value.changedEntrypoints === undefined ? [] : [`changed entrypoints (${value.changedEntrypoints.length}):`, ...list(value.changedEntrypoints.map(changedLine))]),
+    ...groupedSeeds(value.seeds),
+    ...(value.changedEntrypoints === undefined ? [] : [`changed entrypoints (${value.changedEntrypoints.length}):`, ...value.changedEntrypoints.map(changedLine)]),
     `reached entrypoints (${value.entrypoints.length}):`,
-    ...list(value.entrypoints.map(reachedLine)),
+    ...value.entrypoints.map(reachedLine),
     ...impactedSymbols(value, detail),
   ];
+}
+
+/** The seeds under the file that holds them, so a path repeated by every seed is printed once. */
+function groupedSeeds(seeds: readonly Seed[]): string[] {
+  return [...Map.groupBy(seeds, (seed) => seed.file)].flatMap(([file, inFile]) => [
+    `  ${file}`,
+    ...inFile.map((seed) => `    ${seed.line} ${seed.symbol} (${seed.basis})`),
+  ]);
 }
 
 export function renderImpact(fact: Fact<ImpactValue>, detail: Detail = "summary"): string {
@@ -216,7 +253,8 @@ export function renderImpact(fact: Fact<ImpactValue>, detail: Detail = "summary"
 }
 
 function namedFiles(label: string, files: readonly string[]): string {
-  return `    ${label} (${files.length}): ${files.length === 0 ? "(none)" : files.join(", ")}`;
+  const head = `    ${label} (${files.length})`;
+  return files.length === 0 ? head : `${head}: ${files.join(", ")}`;
 }
 
 export function renderImporters(fact: Fact<ImportersValue>): string {
@@ -267,15 +305,15 @@ export function renderWorkspaceImpact(fact: Fact<WorkspaceImpactValue>, detail: 
   if (fact.status === "unknown") return lines.join("\n");
   const { value } = fact;
   const trigger = value.sections[value.trigger.repo];
-  lines.push(`repositories (${value.workspace.repos.length}): ${value.repositorySnapshots.map(({ repo, snapshot }) => `${repo}@${snapshot.kind === "sha" ? snapshot.sha : snapshot.stateId}`).join(", ")}`);
+  lines.push(counted("repositories", value.repositorySnapshots.map(({ repo, snapshot }) => `${repo}@${snapshot.kind === "sha" ? snapshot.sha : snapshot.stateId}`)));
   lines.push(`bound repository: ${value.trigger.repo}`);
-  lines.push(`gateway prefixes (${value.workspace.gateways.length}):`, ...list(value.workspace.gateways.map(({ prefix, repo, basis }) => `  - ${prefix} -> ${repo} (${basis})`)));
+  lines.push(`gateway prefixes (${value.workspace.gateways.length}):`, ...value.workspace.gateways.map(({ prefix, repo, basis }) => `  - ${prefix} -> ${repo} (${basis})`));
   const stale = value.workspace.unmatchedGateways;
   if (stale.length > 0) lines.push(`declared gateways that matched nothing (${stale.length}):`, ...stale.map(({ prefix, repo }) => `  - ${prefix} -> ${repo}`));
   if (trigger !== undefined && trigger.status !== "unknown" && trigger.value.impact !== undefined) lines.push(...impactBody(trigger.value.impact, detail));
-  lines.push(`links across repositories (${value.links.length}):`, ...list(value.links.map(impactedLinkLine)));
+  lines.push(`links across repositories (${value.links.length}):`, ...value.links.map(impactedLinkLine));
   lines.push("per repository:", ...value.workspace.repos.flatMap((repo) => (value.sections[repo] === undefined ? [] : repoImpactLines(repo, value.sections[repo] as Fact<RepoImpact>, detail, value.trigger.repo))));
-  lines.push(`no local repository serves (${value.workspace.unserved.length}): ${value.workspace.unserved.length === 0 ? "(none)" : value.workspace.unserved.join(", ")}`);
+  lines.push(counted("no local repository serves", value.workspace.unserved));
   lines.push(...cutsBlock([...cutsOf(fact), ...Object.values(value.sections).flatMap(cutsOf)]));
   return lines.join("\n");
 }
@@ -290,6 +328,26 @@ export function renderStale(notice: LiveStaleNotice): string {
   return `stale: the working tree changed after this answer, which reflects state ${notice.stateId}: ${notice.changed.join(", ")}`;
 }
 
+/** A remote the query refreshed: whether it verified it, and why not. */
+function remoteLine({ repo, url, freshness }: WorkspaceRefresh["freshness"][number]): string {
+  if (freshness.status === "verified") return `remote: ${repo} ${url} verified`;
+  const last = freshness.lastVerifiedAt === undefined ? "" : `, last verified ${freshness.lastVerifiedAt}`;
+  return `remote: ${repo} ${url} unverified (${freshness.reason}${last})${freshness.detail === undefined ? "" : `: ${freshness.detail}`}`;
+}
+
+/** The sha a refreshed repository was read at, and the rule step that chose it. */
+function pinnedLine({ repo, asked, step, consulted, tie, sha }: RepositoryResolution): string {
+  const asking = asked === undefined ? "" : ` asked ${asked}`;
+  const refs = consulted.length === 0 ? "" : ` (consulted ${consulted.map((ref) => (ref.sha === undefined ? ref.branch : `${ref.branch} ${ref.sha}`)).join(", ")})`;
+  const tied = tie === undefined ? "" : ` (tie: ${tie.join(", ")})`;
+  return `pinned: ${repo}${asking} by ${step} -> ${sha ?? "unpinned"}${refs}${tied}`;
+}
+
+/** The response-level lines a refreshed answer opens with, before the fact. */
+export function renderRefresh(refresh: WorkspaceRefresh): string[] {
+  return [...refresh.freshness.map(remoteLine), ...refresh.resolution.map(pinnedLine)];
+}
+
 function candidateLine(candidate: NameCandidate): string {
   return `  - ${candidate.name} -> ${candidate.repo} (${candidate.basis})`;
 }
@@ -302,15 +360,15 @@ export function renderWorkspace(fact: Fact<WorkspaceValue>): string {
   const lines = headerLines(fact);
   if (fact.status === "unknown") return lines.join("\n");
   const { value } = fact;
-  lines.push(`repositories (${value.workspace.repos.length}): ${value.repositorySnapshots.map(({ repo, snapshot }) => `${repo}@${snapshot.kind === "sha" ? snapshot.sha : snapshot.stateId}`).join(", ")}`);
+  lines.push(counted("repositories", value.repositorySnapshots.map(({ repo, snapshot }) => `${repo}@${snapshot.kind === "sha" ? snapshot.sha : snapshot.stateId}`)));
   lines.push("outward names:");
   for (const repo of value.workspace.repos) {
     const section = value.sections[repo];
     if (section === undefined || section.status === "unknown") continue;
     lines.push(`  ${repo}:`, ...list(section.value.names.map(outwardLine)));
   }
-  lines.push(`served by a local repository (${value.candidates.length}):`, ...list(value.candidates.map(candidateLine)));
-  lines.push(`no local repository serves (${value.unserved.length}):`, ...list(value.unserved.map((name) => `  - ${name.kind} ${name.name}`)));
+  lines.push(`served by a local repository (${value.candidates.length}):`, ...value.candidates.map(candidateLine));
+  lines.push(`no local repository serves (${value.unserved.length}):`, ...value.unserved.map((name) => `  - ${name.kind} ${name.name}`));
   lines.push(...cutsBlock([...cutsOf(fact), ...Object.values(value.sections).flatMap(cutsOf)]));
   return lines.join("\n");
 }
@@ -335,8 +393,8 @@ export function renderDecisions(fact: Fact<DecisionValue>): string {
   const lines = headerLines(fact);
   if (fact.status === "unknown") return lines.join("\n");
   const { value } = fact;
-  lines.push(`repositories (${value.repositories.length}): ${value.repositories.map(({ repo, snapshot }) => `${repo}@${snapshot.kind === "sha" ? snapshot.sha : snapshot.stateId}`).join(", ")}`);
-  lines.push(`decisions (${value.decisions.length}):`, ...list(value.decisions.flatMap(decisionLines)));
+  lines.push(counted("repositories", value.repositories.map(({ repo, snapshot }) => `${repo}@${snapshot.kind === "sha" ? snapshot.sha : snapshot.stateId}`)));
+  lines.push(`decisions (${value.decisions.length}):`, ...value.decisions.flatMap(decisionLines));
   lines.push(...cutsBlock(cutsOf(fact)));
   return lines.join("\n");
 }
