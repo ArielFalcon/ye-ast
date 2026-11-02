@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { EXIT_CODE } from "../cli/main.ts";
 import { RECORDS_DIRECTORY } from "../core/adapters/fs/trust-record.adapter.ts";
+import type { DecisionValue } from "../core/ports/decision-queries.port.ts";
 import type { WorkspaceValue } from "../core/ports/workspace-queries.port.ts";
 import { composeCli, composeQueries } from "./compose.ts";
 import { processHost } from "./process-host.ts";
@@ -222,4 +223,77 @@ test("a workspace query that names no repositories works over the manifest insta
   assert.ok(result.ok);
   assert.notEqual(result.value.status, "unknown");
   assert.deepEqual((result.value as { value: WorkspaceValue }).value.workspace.repos, ["orders", "shop"]);
+});
+
+const ORDER_PAGE = `import { HttpClient } from "@angular/common/http";
+import { inject } from "@angular/core";
+
+export class OrderPage {
+  private readonly http = inject(HttpClient);
+  open(): void {
+    this.http.get("shop-api/orders/7");
+  }
+}
+`;
+
+const CLIENT_CONFIG = ["spring:", "  clients:", "    systems:", "      orders:", "        endpoints:", "          getOrder:", "            url: http://orders-svc:8080/orders/{id}", "            method: GET"].join("\n");
+
+test("a form-shaped answer set persisted by install closes every gap the next query derives", async () => {
+  const sibling = (name: string): string => {
+    const root = join(workspace, name);
+    mkdirSync(join(root, "src"), { recursive: true });
+    writeFileSync(join(root, "src", "OrderController.java"), CONTROLLER);
+    const run = (...args: string[]): void => {
+      execFileSync("git", args, { cwd: root, env: GIT_ENV });
+    };
+    run("init", "-q");
+    run("add", "-A");
+    run("commit", "-q", "-m", name);
+    return root;
+  };
+  const siblings = ["orders-a", "orders-b", "orders-svc"].map(sibling);
+  mkdirSync(join(repo, "web", "src", "app"), { recursive: true });
+  mkdirSync(join(repo, "src", "main", "resources"), { recursive: true });
+  writeFileSync(join(repo, "web", "src", "app", "order.page.ts"), ORDER_PAGE);
+  writeFileSync(join(repo, "src", "main", "resources", "application.yaml"), CLIENT_CONFIG);
+  git("add", "-A");
+  git("commit", "-q", "-m", "client");
+
+  const options = { scratchRoot: join(workspace, "scratch"), trustDirectory };
+  const gaps = async (ask: { repo: { path: string }; repos?: { path: string }[] }): Promise<string[]> => {
+    const result = await composeQueries(options).decisions.decisions(ask);
+    assert.ok(result.ok);
+    assert.notEqual(result.value.status, "unknown");
+    return (result.value as { value: DecisionValue }).value.decisions.map((decision) => decision.id);
+  };
+
+  assert.deepEqual(await gaps({ repo: { path: repo }, repos: siblings.map((path) => ({ path })) }), [
+    "gateway:shop-api",
+    "membership:clone:orders-a",
+    "membership:clone:orders-b",
+    "membership:name:http://orders-svc:8080/orders/{id}",
+    "repository:shop-api",
+    "trust:orders-a",
+    "trust:orders-b",
+    "trust:orders-svc",
+    "trust:shop-service",
+  ]);
+
+  const manifest = join(workspace, "workspace.json");
+  writeFileSync(
+    manifest,
+    JSON.stringify({
+      repos: [
+        { path: "../orders-a", id: "orders-a", remote: "https://git.example.test/orders-a.git" },
+        { path: "../orders-b", id: "orders-b" },
+        { path: "../orders-svc", id: "orders-svc" },
+      ],
+      gateways: [{ prefix: "shop-api", repo: "orders-a" }],
+    }),
+  );
+  assert.equal((await cli("install", "--trust", "untrusted", "--workspace", manifest, repo)).code, EXIT_CODE.ok);
+  for (const path of siblings) assert.equal((await cli("install", "--trust", "untrusted", path)).code, EXIT_CODE.ok);
+  assert.match(readFileSync(join(repo, ".ye-ast", "workspace.json"), "utf8"), /"remote": "https:\/\/git\.example\.test\/orders-a\.git"/);
+
+  assert.deepEqual(await gaps({ repo: { path: repo } }), []);
 });

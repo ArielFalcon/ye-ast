@@ -178,7 +178,7 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
     ...trust,
   });
   const workspaceImpact = createWorkspaceImpactQueries({ workspace, impact, defaults });
-  const decisions = createDecisionQueries({ workspace });
+  const decisions = createDecisionQueries({ workspace, defaults });
   return { version, entrypoints, impact, workspace, workspaceImpact, decisions, redaction, warmLive };
 }
 

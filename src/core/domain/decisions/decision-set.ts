@@ -26,12 +26,15 @@ export interface DecisionInput {
   candidates: readonly NameCandidate[];
   unserved: readonly OutwardName[];
   gateways: readonly GatewayDeclaration[];
+  /** The repositories the persisted declaration already holds: an answered membership is not asked again. */
+  confirmed?: readonly string[];
 }
 
 const NAME_BASES = ["exact-name", "artifact", "remote"] as const;
 
 export function decisionsOf(input: DecisionInput): DecisionSet {
-  const decisions = [...membershipsByName(input), ...membershipsByClone(input), ...repositoryDecisions(input), ...libraryDecisions(input), ...gatewayDecisions(input), ...trustDecisions(input)];
+  const confirmed = new Set([input.trigger, ...(input.confirmed ?? [])]);
+  const decisions = [...membershipsByName(input, confirmed), ...membershipsByClone(input, confirmed), ...repositoryDecisions(input), ...libraryDecisions(input), ...gatewayDecisions(input), ...trustDecisions(input)];
   return { decisions: decisions.toSorted((a, b) => compareText(a.id, b.id)) };
 }
 
@@ -54,9 +57,12 @@ function compareOption(a: DecisionOption, b: DecisionOption): number {
   return compareText(a.value, b.value) || compareText(a.basis ?? "", b.basis ?? "");
 }
 
-/** One decision per outward name some clone serves: the clones, with the basis that names each one. */
-function membershipsByName(input: DecisionInput): Decision[] {
-  return groupsOf(input.candidates, (candidate) => candidate.name).map(([name, candidates]) => {
+/** One decision per outward name a clone the declaration does not hold yet serves: the clones, with the basis that names each one. */
+function membershipsByName(input: DecisionInput, confirmed: ReadonlySet<string>): Decision[] {
+  return groupsOf(
+    input.candidates.filter((candidate) => !confirmed.has(candidate.repo)),
+    (candidate) => candidate.name,
+  ).map(([name, candidates]) => {
     const recommended = strongestRepo(candidates);
     return decisionOf({
       kind: "membership",
@@ -81,10 +87,10 @@ function strongestRepo(candidates: readonly NameCandidate[]): string | undefined
   return atBest.length === 1 ? atBest[0]?.repo : undefined;
 }
 
-/** A clone the request passed that states no name and that no name named: keeping it is the only answer that adds it. */
-function membershipsByClone(input: DecisionInput): Decision[] {
+/** A clone the declaration does not hold yet that states no name and that no name named: keeping it is the only answer that adds it. */
+function membershipsByClone(input: DecisionInput, confirmed: ReadonlySet<string>): Decision[] {
   return input.repositories
-    .filter((repository) => repository.repo !== input.trigger && repository.names.length === 0 && !input.candidates.some((candidate) => candidate.repo === repository.repo))
+    .filter((repository) => !confirmed.has(repository.repo) && repository.names.length === 0 && !input.candidates.some((candidate) => candidate.repo === repository.repo))
     .map((repository) =>
       decisionOf({
         kind: "membership",
@@ -98,11 +104,15 @@ function membershipsByClone(input: DecisionInput): Decision[] {
     );
 }
 
-/** One decision per unserved name: no fact states where a name no clone serves lives, so only free text answers it. */
+/**
+ * One decision per unserved name: no fact states where a name no clone serves lives, so only free text answers it. A
+ * prefix a declared gateway routes was answered by that gateway, so it is no repository decision.
+ */
 function repositoryDecisions(input: DecisionInput): Decision[] {
-  return groupsOf(input.unserved, (name) => name.name).map(([name, names]) =>
-    decisionOf({ kind: "repository", subject: name, evidence: names.flatMap((held) => held.evidence), options: [], allowsFreeText: true, required: false }),
-  );
+  const routed = new Set(input.gateways.map((gateway) => gateway.prefix));
+  return groupsOf(input.unserved, (name) => name.name)
+    .filter(([name, names]) => !(routed.has(name) && names.every((occurrence) => occurrence.kind === "path-prefix")))
+    .map(([name, names]) => decisionOf({ kind: "repository", subject: name, evidence: names.flatMap((held) => held.evidence), options: [], allowsFreeText: true, required: false }));
 }
 
 /**

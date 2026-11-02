@@ -87,6 +87,35 @@ test("a name with candidates is a membership decision and never also a repositor
   assert.deepEqual(ids(set), ["membership:name:orders"]);
 });
 
+test("the bound repository and a clone the declaration holds are no membership candidates", () => {
+  const set = decisionsOf(
+    input({
+      repositories: [repository("webapp"), repository("orders")],
+      candidates: [candidate("orders", "webapp"), candidate("orders", "orders")],
+      confirmed: ["orders"],
+    }),
+  );
+
+  assert.deepEqual(ids(set), []);
+});
+
+test("a declared gateway answers the prefix's unserved name", () => {
+  const set = decisionsOf(input({ unserved: [outward("geo-api", "path-prefix")], gateways: [{ prefix: "geo-api", repo: "orders" }] }));
+
+  assert.deepEqual(ids(set), []);
+});
+
+test("an inferred gateway leaves the prefix's repository decision, since only a declared gateway answers it", () => {
+  const set = decisionsOf(
+    input({
+      repositories: [repository("webapp", { callSites: [call("webapp", "/orders-api/orders")] }), repository("orders", { names: [outward("orders")], entrypoints: [route("/orders")] })],
+      unserved: [outward("orders-api", "path-prefix")],
+    }),
+  );
+
+  assert.deepEqual(ids(set), ["repository:orders-api"]);
+});
+
 test("an unserved name is one free-text decision carrying the places that write it", () => {
   const set = decisionsOf(input({ unserved: [outward("geo-api", "http-host", [{ path: "src/geo.ts", line: 4 }])] }));
 

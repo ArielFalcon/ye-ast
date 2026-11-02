@@ -8,6 +8,7 @@ import type { Result } from "../../domain/shared/result.ts";
 import type { CallSite } from "../../domain/topology/call-site.ts";
 import type { NameCandidate, OutwardName } from "../../domain/topology/outward-name.ts";
 import type { DecisionQueries, DecisionValue } from "../../ports/decision-queries.port.ts";
+import type { WorkspaceDefaults } from "../../ports/workspace-defaults.port.ts";
 import type { WorkspaceFault, WorkspaceRepository, WorkspaceSection } from "../../ports/workspace-repos.port.ts";
 import type { WorkspaceQueries, WorkspaceRequest, WorkspaceValue } from "../../ports/workspace-queries.port.ts";
 import { createDecisionQueries } from "./decision-queries.ts";
@@ -52,18 +53,19 @@ function section(repo: string, names: readonly OutwardName[]): Fact<WorkspaceSec
 
 const ORDERS = repository("orders", { entrypoints: [served(route("/orders", 10))] });
 const BILLING = repository("billing", { entrypoints: [served(route("/orders", 20))] });
+const ORDERS_CORE = repository("orders-core");
 const WEB = repository("shop-web", { callSites: [callSite("shop-web", "geo-api/orders")] });
 
-function workspaceValue(): WorkspaceValue {
-  const read = [BILLING, ORDERS, WEB];
+function workspaceValue(gateways: readonly { prefix: string; repo: string }[] = []): WorkspaceValue {
+  const read = [BILLING, ORDERS, ORDERS_CORE, WEB];
   const candidates: NameCandidate[] = [
     { name: "orders-api", repo: "orders", basis: "exact-name", evidence: [{ path: "src/app/order.api.ts", line: 7 }] },
-    { name: "shared-api", repo: "orders", basis: "artifact", evidence: [{ path: "src/app/shared.api.ts", line: 3 }] },
+    { name: "shared-api", repo: "orders-core", basis: "artifact", evidence: [{ path: "src/app/shared.api.ts", line: 3 }] },
   ];
   return {
-    workspace: { repos: read.map(({ repo }) => repo), gateways: [] },
+    workspace: { repos: read.map(({ repo }) => repo), gateways },
     repositorySnapshots: read.map(({ repo, snapshot }) => ({ repo, snapshot })),
-    sections: { billing: section("billing", []), orders: section("orders", []), "shop-web": section("shop-web", [outward("shared-api")]) },
+    sections: { billing: section("billing", []), orders: section("orders", []), "orders-core": section("orders-core", []), "shop-web": section("shop-web", [outward("shared-api")]) },
     candidates,
     unserved: [{ name: "geo.example.com", kind: "http-host", evidence: [{ path: "src/app/geo.api.ts", line: 11 }] }],
     repositories: read,
@@ -72,7 +74,7 @@ function workspaceValue(): WorkspaceValue {
 
 const REQUEST: WorkspaceRequest = { repo: { path: "/work/orders" }, repos: [{ path: "/work/shop-web" }, { path: "/work/billing" }] };
 
-function setup(answer: Result<Fact<WorkspaceValue>, WorkspaceFault>): { queries: DecisionQueries; asks: WorkspaceRequest[] } {
+function setup(answer: Result<Fact<WorkspaceValue>, WorkspaceFault>, defaults?: WorkspaceDefaults): { queries: DecisionQueries; asks: WorkspaceRequest[] } {
   const asks: WorkspaceRequest[] = [];
   const workspace: WorkspaceQueries = {
     outwardNames: async (request) => {
@@ -80,7 +82,12 @@ function setup(answer: Result<Fact<WorkspaceValue>, WorkspaceFault>): { queries:
       return answer;
     },
   };
-  return { queries: createDecisionQueries({ workspace }), asks };
+  return { queries: createDecisionQueries({ workspace, ...(defaults === undefined ? {} : { defaults }) }), asks };
+}
+
+/** The declaration a repository persisted, as the defaults port answers it. */
+function declared(repos: readonly { path: string; id?: string }[]): WorkspaceDefaults {
+  return { of: async () => ({ ok: true, value: { repos } }) };
 }
 
 function valueOf(result: Result<Fact<DecisionValue>, WorkspaceFault>): DecisionValue {
@@ -100,18 +107,33 @@ test("each gap the workspace read states becomes one decision, in the domain's o
 
   const value = valueOf(await queries.decisions(REQUEST));
 
+  assert.deepEqual(value.decisions.map((decision) => decision.id), ["gateway:geo-api", "membership:clone:billing", "membership:name:shared-api", "repository:geo.example.com"]);
   assert.deepEqual(
-    value.decisions.map((decision) => decision.id),
-    ["gateway:geo-api", "membership:clone:billing", "membership:name:orders-api", "membership:name:shared-api", "repository:geo.example.com"],
-  );
-  assert.deepEqual(
-    decisionOf(value, "membership:name:orders-api").options.map((option) => `${option.value}${option.recommended ? "*" : ""}`),
-    ["orders*"],
+    decisionOf(value, "membership:name:shared-api").options.map((option) => `${option.value}${option.recommended ? "*" : ""}${option.basis === undefined ? "" : `(${option.basis})`}`),
+    ["orders-core*(artifact)"],
   );
   const unserved = decisionOf(value, "repository:geo.example.com");
   assert.deepEqual(unserved.options, []);
   assert.equal(unserved.allowsFreeText, true);
   assert.deepEqual(unserved.evidence, [{ path: "src/app/geo.api.ts", line: 11 }]);
+});
+
+test("a clone the persisted declaration holds is no membership decision, and a name the bound repository serves is none either", async () => {
+  const { queries } = setup({ ok: true, value: base(workspaceValue()) }, declared([
+    { path: "/work/billing", id: "billing" },
+    { path: "/work/orders-core", id: "orders-core" },
+  ]));
+
+  const ids = valueOf(await queries.decisions(REQUEST)).decisions.map((decision) => decision.id);
+
+  assert.deepEqual(ids, ["gateway:geo-api", "repository:geo.example.com"]);
+});
+
+test("a declaration that cannot be read fails the set with its fault", async () => {
+  const broken: WorkspaceDefaults = { of: async () => ({ ok: false, fault: { kind: "unreadable", detail: ".ye-ast/workspace.json: broken" } }) };
+  const { queries } = setup({ ok: true, value: base(workspaceValue()) }, broken);
+
+  assert.deepEqual(await queries.decisions(REQUEST), { ok: false, fault: { kind: "unreadable", detail: ".ye-ast/workspace.json: broken" } });
 });
 
 test("the options of a gateway come from the routes each repository serves behind the prefix", async () => {
@@ -148,9 +170,10 @@ test("the decision fact carries the workspace read's base and the snapshot of ev
 });
 
 test("a gateway the caller declares is not a gap", async () => {
-  const { queries } = setup({ ok: true, value: base(workspaceValue()) });
+  const gateways = [{ prefix: "geo-api", repo: "orders" }];
+  const { queries } = setup({ ok: true, value: base(workspaceValue(gateways)) });
 
-  const ids = valueOf(await queries.decisions({ ...REQUEST, gateways: [{ prefix: "geo-api", repo: "orders" }] })).decisions.map((decision) => decision.id);
+  const ids = valueOf(await queries.decisions({ ...REQUEST, gateways })).decisions.map((decision) => decision.id);
 
   assert.equal(ids.includes("gateway:geo-api"), false);
 });

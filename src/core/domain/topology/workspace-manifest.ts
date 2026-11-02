@@ -9,6 +9,8 @@ export interface WorkspaceRepositoryDeclaration {
   id?: string;
   /** The revision to read; HEAD when absent. */
   revision?: string;
+  /** The source of truth of the repository: an absolute URL or an scp-like git address; the local clone's when absent. */
+  remote?: string;
 }
 
 /**
@@ -50,11 +52,12 @@ export function parseWorkspaceManifest(text: string): Result<WorkspaceManifest, 
   const repositories: WorkspaceRepositoryDeclaration[] = [];
   for (const [index, entry] of repos.entries()) {
     if (!isRecord(entry)) return invalid(`repos[${index}]: an object`);
-    const { path, id, revision } = entry;
+    const { path, id, revision, remote } = entry;
     if (!isText(path)) return invalid(`repos[${index}].path: a non-empty string`);
     if (id !== undefined && !isText(id)) return invalid(`repos[${index}].id: a non-empty string`);
     if (revision !== undefined && !isText(revision)) return invalid(`repos[${index}].revision: a non-empty string`);
-    repositories.push({ path, ...(id === undefined ? {} : { id }), ...(revision === undefined ? {} : { revision }) });
+    if (remote !== undefined && !(isText(remote) && isRemote(remote))) return invalid(`repos[${index}].remote: a URL or an scp-like git address`);
+    repositories.push({ path, ...(id === undefined ? {} : { id }), ...(revision === undefined ? {} : { revision }), ...(remote === undefined ? {} : { remote }) });
   }
   const gateways = stated["gateways"];
   if (gateways !== undefined && !Array.isArray(gateways)) return invalid("gateways: an array");
@@ -90,4 +93,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isText(value: unknown): value is string {
   return typeof value === "string" && value !== "";
+}
+
+const SCHEME_URL = /^[a-z][a-z0-9+.-]*:\/\/\S+$/i;
+const SCP_URL = /^(?:[^\s/@]+@)?[^\s/:]+:\S+$/;
+
+/** A remote the refresh may read: an absolute URL with a scheme, or the scp-like address git also accepts. */
+function isRemote(value: string): boolean {
+  return /^[a-z][a-z0-9+.-]*:\/\//i.test(value) ? SCHEME_URL.test(value) : SCP_URL.test(value);
 }

@@ -5,14 +5,18 @@ import type { Result } from "../../domain/shared/result.ts";
 import type { OutwardName } from "../../domain/topology/outward-name.ts";
 import { directoryNameOf } from "../../domain/topology/repository-identity.ts";
 import type { DecisionQueries, DecisionsRequest, DecisionValue } from "../../ports/decision-queries.port.ts";
+import type { FixedLayerFault } from "../../ports/fixed-layer-store.port.ts";
+import type { WorkspaceDefaults } from "../../ports/workspace-defaults.port.ts";
 import type { WorkspaceFault, WorkspaceRepository, WorkspaceSection } from "../../ports/workspace-repos.port.ts";
 import type { WorkspaceQueries, WorkspaceValue } from "../../ports/workspace-queries.port.ts";
 
 export interface DecisionQueriesDeps {
   workspace: WorkspaceQueries;
+  /** The declaration the bound repository persists, whose repositories are answered membership. */
+  defaults?: WorkspaceDefaults;
 }
 
-export function createDecisionQueries({ workspace }: DecisionQueriesDeps): DecisionQueries {
+export function createDecisionQueries({ workspace, defaults }: DecisionQueriesDeps): DecisionQueries {
   return {
     async decisions(request: DecisionsRequest): Promise<Result<Fact<DecisionValue>, WorkspaceFault>> {
       const read = await workspace.outwardNames(request);
@@ -20,18 +24,29 @@ export function createDecisionQueries({ workspace }: DecisionQueriesDeps): Decis
       const fact = read.value;
       if (fact.status === "unknown") return { ok: false, fault: { kind: "git-failed", detail: "the workspace read answered nothing" } };
 
+      const confirmed = await confirmedOf(defaults, request.repo.path);
+      if (!confirmed.ok) return confirmed;
       const value = fact.value;
       const input: DecisionInput = {
         trigger: request.repo.id ?? directoryNameOf(request.repo.path),
         repositories: value.repositories.map((repository) => decisionRepositoryOf(repository, value)),
         candidates: value.candidates,
         unserved: value.unserved,
-        gateways: request.gateways ?? [],
+        gateways: value.workspace.gateways,
+        confirmed: confirmed.value,
       };
       const decisions = decisionsOf(input).decisions;
       return { ok: true, value: decisionFact(fact, { decisions, repositories: value.repositorySnapshots }) };
     },
   };
+}
+
+/** The repositories the bound repository's declaration holds: a clone it names was already answered as a member. */
+async function confirmedOf(defaults: WorkspaceDefaults | undefined, root: string): Promise<Result<readonly string[], FixedLayerFault>> {
+  if (defaults === undefined) return { ok: true, value: [] };
+  const persisted = await defaults.of(root);
+  if (!persisted.ok) return persisted;
+  return { ok: true, value: (persisted.value?.repos ?? []).map((repository) => repository.id ?? directoryNameOf(repository.path)) };
 }
 
 /** One repository as the decision rules read it: what its section states, what it calls, what it serves and its trust. */
