@@ -21,7 +21,7 @@ export function createDecisionQueries({ workspace, defaults }: DecisionQueriesDe
     async decisions(request: DecisionsRequest): Promise<Result<Fact<DecisionValue>, WorkspaceFault>> {
       const read = await workspace.outwardNames(request);
       if (!read.ok) return read;
-      const fact = read.value;
+      const fact = read.value.fact;
       if (fact.status === "unknown") return { ok: false, fault: { kind: "git-failed", detail: "the workspace read answered nothing" } };
 
       const confirmed = await confirmedOf(defaults, request.repo.path);

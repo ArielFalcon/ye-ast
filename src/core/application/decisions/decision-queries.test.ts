@@ -79,7 +79,7 @@ function setup(answer: Result<Fact<WorkspaceValue>, WorkspaceFault>, defaults?: 
   const workspace: WorkspaceQueries = {
     outwardNames: async (request) => {
       asks.push(request);
-      return answer;
+      return answer.ok ? { ok: true, value: { fact: answer.value } } : answer;
     },
   };
   return { queries: createDecisionQueries({ workspace, ...(defaults === undefined ? {} : { defaults }) }), asks };

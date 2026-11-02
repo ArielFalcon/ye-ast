@@ -99,6 +99,7 @@ export type UnknownReason =
   | "index-unavailable"
   | "source-unreadable"
   | "unresolved"
+  | "revision-unavailable"
   | "deadline";
 
 export interface Cut {

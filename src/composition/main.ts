@@ -12,7 +12,11 @@ if (import.meta.main) {
   const interrupts = watchInterrupts(process);
   const indexCache = indexCacheDirectory({ env: process.env, platform: process.platform, home: homedir() });
   const trustDirectory = trustRecordDirectory({ env: process.env, platform: process.platform, home: homedir() });
-  const options = { signal: interrupts.signal, ...(indexCache !== null && { indexCache }), ...(trustDirectory !== null && { trustDirectory }) };
+  const options = {
+    signal: interrupts.signal,
+    ...(indexCache !== null && { indexCache, cacheDirectory: indexCache }),
+    ...(trustDirectory !== null && { trustDirectory }),
+  };
   const argv = process.argv.slice(2);
   const [command, ...args] = argv;
   const measure = argv.includes("--measure") ? { measure: (line: string) => process.stderr.write(`${line}\n`) } : {};

@@ -55,7 +55,7 @@ const USAGE = [
   "--live: reads the working tree of a repository declared trusted (ye-ast install --trust trusted) instead of a revision; the first run builds ye-ast's mirror of it, and a stale answer is reported on stderr",
   "scope: [--include <glob>]... [--exclude <glob>]...   (globs over repository-relative paths, on map, impact, callers and importers; without --include every path is included; --exclude wins)",
   "budget: [--depth <n>] [--hub-fan-in <n>] [--expansions <n>]   (positive integers; none has a default)",
-  "workspace: --workspace <file>   (the workspace install persists as .ye-ast/workspace.json: { \"repos\": [{ \"path\", \"id\", \"revision\" }], \"gateways\": [{ \"prefix\", \"repo\" }] }; a relative repository path is stored as written and resolved against the installed repository)",
+  "workspace: --workspace <file>   (the workspace install persists as .ye-ast/workspace.json: { \"repos\": [{ \"path\", \"id\", \"revision\", \"remote\" }], \"gateways\": [{ \"prefix\", \"repo\" }] }; a relative repository path is stored as written and resolved against the installed repository, and a remote is the source of truth a trusted repository's queries refresh into ye-ast's own mirror)",
   "measure: --measure   (one JSON measurement line per query and per index build, on stderr; never on stdout)",
 ].join("\n");
 

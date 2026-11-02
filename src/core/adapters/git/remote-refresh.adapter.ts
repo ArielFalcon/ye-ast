@@ -15,7 +15,6 @@ export const DEFAULT_PROTOCOLS = "https:ssh";
 /** Names the process refreshing one mirror; its liveness decides whether the mirror answers or waits. */
 export const REFRESH_LOCK_SUFFIX = ".lock";
 
-const CACHE_DIRECTORY = "ye-ast";
 const MIRRORS_DIRECTORY = "remotes";
 const LISTING_FILE = "ye-ast-listing.json";
 const LISTING_VERSION = 1;
@@ -39,8 +38,8 @@ export interface RemoteGitRun {
 export type RunRemoteGit = (cwd: string, args: readonly string[], environment: NodeJS.ProcessEnv, signal?: AbortSignal) => Promise<RemoteGitRun>;
 
 export interface RemoteRefreshDeps {
-  /** The platform's user cache directory: the mirror lives at `<cacheBase>/ye-ast/remotes/<digest of the url>`. */
-  cacheBase: string;
+  /** ye-ast's own cache directory: the mirror lives at `<cacheDirectory>/remotes/<digest of the url>`. */
+  cacheDirectory: string;
   digest: Digest;
   pid: () => number;
   isAlive: (pid: number) => boolean;
@@ -56,7 +55,7 @@ export interface RemoteRefreshDeps {
 const getuid = (): number | undefined => (typeof process.getuid === "function" ? process.getuid() : undefined);
 const defaultOwnerUid = getuid();
 
-export const defaultRemoteRefreshDeps: Omit<RemoteRefreshDeps, "cacheBase" | "digest"> = {
+export const defaultRemoteRefreshDeps: Omit<RemoteRefreshDeps, "cacheDirectory" | "digest"> = {
   pid: () => process.pid,
   isAlive: (pid) => {
     try {
@@ -112,7 +111,7 @@ function seedArguments(seed: string): readonly string[] {
 }
 
 /**
- * Refreshes declared remotes into full bare mirrors under `<cacheBase>/ye-ast/remotes/`, keyed by a digest of the URL
+ * Refreshes declared remotes into full bare mirrors under `<cacheDirectory>/remotes/`, keyed by a digest of the URL
  * and shared across workspaces. A refresh takes a lock beside the mirror, lists the remote, fetches the shas the mirror
  * lacks and records the listing it verified; a query that finds a live holder answers the recorded listing with
  * freshness `refresh-in-progress`. A failure is the remote's freshness, never a fault.
@@ -124,7 +123,7 @@ export function createRemoteRefresh(deps: RemoteRefreshDeps): RemoteRefresh {
   const seedEnvironment: NodeJS.ProcessEnv = { ...environment, GIT_ALLOW_PROTOCOL: "file" };
   const ownerUid = deps.ownerUid ?? getuid();
 
-  const root = join(deps.cacheBase, CACHE_DIRECTORY);
+  const root = deps.cacheDirectory;
   const mirrors = join(root, MIRRORS_DIRECTORY);
 
   async function inspect(path: string): Promise<"absent" | "private" | "refused"> {
@@ -156,7 +155,7 @@ export function createRemoteRefresh(deps: RemoteRefreshDeps): RemoteRefresh {
   /** Ensures the cache chain exists and is private; safe to race, since a directory creation that loses is re-inspected. */
   async function prepareStore(signal?: AbortSignal): Promise<"ready" | "failed" | "deadline"> {
     try {
-      await mkdir(deps.cacheBase, { recursive: true, mode: DIRECTORY_MODE });
+      await mkdir(deps.cacheDirectory, { recursive: true, mode: DIRECTORY_MODE });
     } catch {
       return "failed";
     }

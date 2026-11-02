@@ -4,11 +4,14 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { EXIT_CODE } from "../cli/main.ts";
 import { REDACTED } from "../core/ports/redaction.port.ts";
 import { createSha256Digest } from "../core/adapters/crypto/sha256-digest.adapter.ts";
+import { createRemoteRefresh, defaultRemoteRefreshDeps } from "../core/adapters/git/remote-refresh.adapter.ts";
 import { canonicalJson } from "../core/domain/shared/canonical-json.ts";
 import type { DecisionValue } from "../core/ports/decision-queries.port.ts";
+import type { WorkspaceValue } from "../core/ports/workspace-queries.port.ts";
 import { composeCli, composeQueries, mcpCommandFor } from "./compose.ts";
 import { installedVersion } from "./installed-versions.ts";
 
@@ -330,4 +333,47 @@ test("the decisions family answers over a composed workspace read: an outward na
     value.decisions.filter((decision) => decision.kind === "trust").map((decision) => decision.id),
     ["trust:shop-service", "trust:shop-web"],
   );
+});
+
+test("a trusted sibling whose remote is passed is read at the remote's sha, and the answer carries the resolution and the freshness", async () => {
+  const cacheDirectory = join(workspace, "cache", "ye-ast");
+  const trustDirectory = join(workspace, "config", "ye-ast");
+  const origin = join(workspace, "orders-origin");
+  mkdirSync(origin);
+  const inOrigin = (...args: string[]): string => execFileSync("git", args, { cwd: origin, env: GIT_ENV, encoding: "utf8" }).trim();
+  inOrigin("init", "-q", "-b", "main");
+  writeFileSync(join(origin, "ORDERS.md"), "orders\n");
+  inOrigin("add", "-A");
+  inOrigin("commit", "-q", "-m", "orders");
+  const remoteSha = inOrigin("rev-parse", "HEAD");
+  const url = pathToFileURL(origin).href;
+
+  const sibling = join(workspace, "orders-svc");
+  execFileSync("git", ["clone", "-q", url, sibling], { env: GIT_ENV });
+  writeFileSync(join(sibling, "LOCAL.md"), "a local commit the remote does not hold\n");
+  execFileSync("git", ["add", "-A"], { cwd: sibling, env: GIT_ENV });
+  execFileSync("git", ["commit", "-q", "-m", "local"], { cwd: sibling, env: GIT_ENV });
+  const localSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: sibling, env: GIT_ENV, encoding: "utf8" }).trim();
+  assert.notEqual(localSha, remoteSha);
+
+  const manifest = join(workspace, "workspace.json");
+  writeFileSync(manifest, JSON.stringify({ repos: [{ path: "../orders-svc", id: "orders", remote: url }] }));
+  const install = composeCli({ scratchRoot, trustDirectory });
+  const quiet = { out: () => undefined, err: () => undefined };
+  assert.equal(await install(["install", "--trust", "trusted", sibling], quiet), EXIT_CODE.ok);
+  assert.equal(await install(["install", "--trust", "trusted", "--workspace", manifest, repo], quiet), EXIT_CODE.ok);
+
+  const digest = createSha256Digest();
+  const refresh = createRemoteRefresh({ ...defaultRemoteRefreshDeps, cacheDirectory, digest, protocols: "file" });
+  const result = await composeQueries({ scratchRoot, trustDirectory, refresh }).workspace.outwardNames({ repo: { path: repo, id: "shop-service" } });
+
+  assert.ok(result.ok);
+  const read = result.value;
+  assert.deepEqual(read.refresh?.freshness, [{ repo: "orders", url, freshness: { status: "verified" } }]);
+  assert.equal(read.refresh?.resolution[0]?.sha, remoteSha);
+  assert.notEqual(read.fact.status, "unknown");
+  const value = (read.fact as { value: WorkspaceValue }).value;
+  const snapshot = value.repositorySnapshots.find(({ repo: id }) => id === "orders")?.snapshot;
+  assert.equal(snapshot?.kind === "sha" ? snapshot.sha : "", remoteSha);
+  assert.equal(value.repositories.find(({ repo: id }) => id === "orders")?.path, join(cacheDirectory, "remotes", digest.of(url)));
 });

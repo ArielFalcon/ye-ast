@@ -26,6 +26,7 @@ import { createTempScratchDirectory } from "../core/adapters/fs/temp-scratch-dir
 import { createPathMatcher } from "../core/adapters/fs/path-matcher.adapter.ts";
 import { createGitLocalExclude } from "../core/adapters/git/git-local-exclude.adapter.ts";
 import { createGitVcs } from "../core/adapters/git/git-vcs.adapter.ts";
+import { createRemoteRefresh, defaultRemoteRefreshDeps } from "../core/adapters/git/remote-refresh.adapter.ts";
 import { createGitWorkingTree } from "../core/adapters/git/git-working-tree.adapter.ts";
 import { createContractRoutes } from "../core/adapters/openapi/contract-document.adapter.ts";
 import { createWorkspaceEvidence } from "../core/adapters/workspace/outward-names.adapter.ts";
@@ -48,6 +49,7 @@ import type { ImpactQueries } from "../core/ports/impact-queries.port.ts";
 import type { WorkspaceQueries } from "../core/ports/workspace-queries.port.ts";
 import type { WorkspaceImpactQueries } from "../core/ports/workspace-impact-queries.port.ts";
 import type { DecisionQueries } from "../core/ports/decision-queries.port.ts";
+import type { RemoteRefresh } from "../core/ports/remote-refresh.port.ts";
 import type { Redaction } from "../core/ports/redaction.port.ts";
 import type { TrustRecordReader } from "../core/ports/trust-record.port.ts";
 import type { ExportBudget } from "../core/ports/vcs.port.ts";
@@ -69,6 +71,10 @@ export interface CompositionOptions {
   exportBudget?: ExportBudget;
   /** Directory that keeps full indexes between calls; every call builds and discards its own when absent. */
   indexCache?: string;
+  /** ye-ast's per-user cache directory; with it, a trusted repository's declared remote is refreshed into a mirror under it. */
+  cacheDirectory?: string;
+  /** The refresh the workspace read calls; built from `cacheDirectory` when absent, and absent leaves every read local. */
+  refresh?: RemoteRefresh;
   /** Directory that holds the user's trust record; the queries read it and `install` writes it. Without one every repository is read `untrusted`. */
   trustDirectory?: string;
   /** Receives one redacted line, once per composition, when the trust record is refused or unreadable and a repository runs `untrusted` for that reason. */
@@ -162,6 +168,7 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
   };
   const impact = measurement === undefined ? bareImpact : measuredImpact(bareImpact, measurement);
   const defaults = createWorkspaceDefaults(createFixedLayerStore());
+  const refresh = options.refresh ?? (options.cacheDirectory === undefined ? undefined : createRemoteRefresh({ ...defaultRemoteRefreshDeps, cacheDirectory: options.cacheDirectory, digest }));
   const workspace = createWorkspaceQueries({
     vcs,
     scratch,
@@ -174,6 +181,7 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
     producer: { name: PRODUCER_NAME, version },
     engines: entrypointEngines,
     defaults,
+    ...(refresh === undefined ? {} : { refresh }),
     ...budget,
     ...trust,
   });

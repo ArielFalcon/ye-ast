@@ -65,6 +65,8 @@ const REACHED: ImpactValue["entrypoints"] = [{ kind: "http-route", name: "POST /
 interface Setup {
   /** Per repository: its own routes and call sites. */
   repositories: Record<string, { entrypoints?: readonly Entrypoint[]; callSites?: readonly CallSite[]; cuts?: readonly Cut[]; trust?: "trusted" | "untrusted"; sha?: string }>;
+  /** Repositories the read named but could not reach: their section is unknown and they are no repository read. */
+  unavailable?: readonly string[];
   trigger?: ImpactValue;
   /** The outward names the workspace read found no local repository for. */
   unserved?: readonly string[];
@@ -97,8 +99,10 @@ function walkAnswer(model: readonly WalkModel[], targets: readonly CallersTarget
   return { cost: { expansionsUsed: 0 }, seeds, symbols: [], entrypoints };
 }
 
-function setup({ repositories, trigger = impactOf(REACHED), unserved = [], reached = {}, defaults }: Setup) {
-  const names = Object.keys(repositories).sort();
+function setup({ repositories, unavailable = [], trigger = impactOf(REACHED), unserved = [], reached = {}, defaults }: Setup) {
+  const missing = new Set(unavailable);
+  const names = Object.keys(repositories).filter((repo) => !missing.has(repo)).sort();
+  const all = [...new Set([...names, ...unavailable])].sort();
   const read: WorkspaceRepository[] = names.map((repo) => ({
     repo,
     path: `/work/${repo}`,
@@ -112,20 +116,25 @@ function setup({ repositories, trigger = impactOf(REACHED), unserved = [], reach
     const [first, ...rest] = held?.cuts ?? [];
     return first === undefined ? complete : { ...complete, status: "partial", cuts: [first, ...rest] };
   };
+  /** The section of a repository the read pinned but could not reach: no content, and the reason it has none. */
+  const unreachable = (repo: string): Fact<WorkspaceSection> => {
+    const { value: _value, ...base } = fact(repo, "trusted", { names: [], unresolved: [] }) as CompleteFact<WorkspaceSection>;
+    return { ...base, status: "unknown", reason: "revision-unavailable" };
+  };
   const asks: WorkspaceRequest[] = [];
   const read_: WorkspaceQueries = {
     outwardNames: async (request) => {
       asks.push(request);
       const value: WorkspaceValue = {
-        workspace: { repos: names, gateways: request.gateways ?? [] },
+        workspace: { repos: all, gateways: request.gateways ?? [] },
         repositorySnapshots: read.map(({ repo, snapshot }) => ({ repo, snapshot })),
-        sections: Object.fromEntries(names.map((repo) => [repo, section(repo)])),
+        sections: Object.fromEntries(all.map((repo) => [repo, missing.has(repo) ? unreachable(repo) : section(repo)])),
         candidates: [],
         unserved: unserved.map((name) => ({ name, kind: "path-prefix" as const, evidence: [] })),
         repositories: read,
       };
       const triggerRepo = request.repo.id ?? request.repo.path.split("/").pop() ?? "";
-      return { ok: true, value: { ...fact(triggerRepo, repositories[triggerRepo]?.trust ?? "untrusted", value), snapshot: read.find((entry) => entry.repo === triggerRepo)?.snapshot ?? read[0]!.snapshot } };
+      return { ok: true, value: { fact: { ...fact(triggerRepo, repositories[triggerRepo]?.trust ?? "untrusted", value), snapshot: read.find((entry) => entry.repo === triggerRepo)?.snapshot ?? read[0]!.snapshot } } };
     },
   };
   const walks: ImpactCallersRequest[] = [];
@@ -601,4 +610,17 @@ test("a repository that persists no manifest answers exactly as it does without 
   const withNone = await setup({ repositories, defaults: persisted(undefined) }).queries.callers(request);
 
   assert.equal(JSON.stringify(withNone), JSON.stringify(without));
+});
+
+test("a repository the read could not reach keeps its unknown section, so the answer is partial and names why", async () => {
+  const { queries } = setup({ repositories: { orders: ORDERS, "shop-web": {} }, unavailable: ["orders-web"] });
+
+  const result = await queries.callers(ASK);
+
+  assert.ok(result.ok);
+  assert.equal(result.value.status, "partial");
+  assert.deepEqual(result.value.status === "partial" ? result.value.cuts : [], [{ kind: "section", at: ["orders-web"] }]);
+  const section = valueOf(result).sections["orders-web"];
+  assert.equal(section?.status, "unknown");
+  assert.equal(section?.status === "unknown" ? section.reason : undefined, "revision-unavailable");
 });

@@ -69,6 +69,8 @@ class CatFileProtocolError extends Error {
 
 const MODE = { symlink: "120000", submodule: "160000" } as const;
 const REVISION_NOT_FOUND = 1;
+/** `git symbolic-ref --quiet` answers a detached head, which no branch names, with exit code 1. */
+const HEAD_DETACHED = 1;
 const NO_CONFIG_VALUE = 1;
 const REMOTE_URL = /^remote\.(.+?)\.url (.*)$/;
 const ABORTED_FAULT: VcsFault = { kind: "aborted", detail: "interrupted by the caller" };
@@ -229,7 +231,16 @@ export function createGitVcs(deps: GitDeps = defaultGitDeps): Vcs & VcsChanges {
     return { ok: true, value: parseRemotes(run.stdout.toString("utf8")) };
   }
 
-  return { resolveCommit, exportCommit, mergeBase, diffCommits, diffDirectories, remotes };
+  /** The branch `HEAD` is on; a detached head names no line and `--quiet` answers the absence as exit code 1. */
+  async function headBranch(repo: string, signal?: AbortSignal): Promise<Result<string | undefined, VcsFault>> {
+    const run = await deps.runGit(repo, ["symbolic-ref", "--quiet", "--short", "HEAD"], signal);
+    if (signal?.aborted) return ABORTED;
+    if (run.code === HEAD_DETACHED) return { ok: true, value: undefined };
+    if (run.code !== 0) return gitFailed(run);
+    return { ok: true, value: run.stdout.toString("utf8").trim() };
+  }
+
+  return { resolveCommit, exportCommit, mergeBase, diffCommits, diffDirectories, remotes, headBranch };
 }
 
 function compareText(a: string, b: string): number {

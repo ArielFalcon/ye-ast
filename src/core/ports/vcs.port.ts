@@ -89,6 +89,11 @@ export interface Vcs {
    * A repository with no remote answers an empty list.
    */
   remotes(repo: string, signal?: AbortSignal): Promise<Result<readonly RemoteRef[], VcsFault>>;
+  /**
+   * The branch `HEAD` points at, by name; `undefined` on a detached head, which names no line. A path that is not a
+   * repository, or a git that cannot answer, is `git-failed`. Read from the repository alone: no network request.
+   */
+  headBranch(repo: string, signal?: AbortSignal): Promise<Result<string | undefined, VcsFault>>;
 }
 
 /** What two commits have in common and where they differ; separate from `Vcs` since a map needs neither. */

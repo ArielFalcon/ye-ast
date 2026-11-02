@@ -50,7 +50,7 @@ function family(): Family {
     return { ok: true, value: FACT } as never;
   };
   const impact = { ofChange: answer, callers: answer, importers: answer } as unknown as ImpactQueries;
-  const workspace = { outwardNames: answer } as unknown as WorkspaceQueries;
+  const workspace = { outwardNames: async () => ({ ok: true, value: { fact: FACT } } as never) } as unknown as WorkspaceQueries;
   return { impact, workspace, budgets };
 }
 
@@ -94,7 +94,7 @@ async function throughMcp(budget: unknown, budgets: (ImpactBudget | undefined)[]
     version: "0.0.0",
     entrypoints,
     impact: { ofChange: async (request: { budget?: ImpactBudget }) => (budgets.push(request.budget), { ok: true, value: FACT } as never) } as unknown as ImpactQueries,
-    workspace: { outwardNames: async () => ({ ok: true, value: FACT } as never) } as unknown as WorkspaceQueries,
+    workspace: { outwardNames: async () => ({ ok: true, value: { fact: FACT } } as never) } as unknown as WorkspaceQueries,
     workspaceImpact: {} as unknown as WorkspaceImpactQueries,
     decisions: {} as unknown as DecisionQueries,
     redaction,

@@ -69,9 +69,9 @@ function orphanBranchFrom(path: string, name: string, file: string, content: str
   return sha;
 }
 
-function depsFor(cacheBase: string, overrides: Partial<RemoteRefreshDeps> = {}): RemoteRefreshDeps {
+function depsFor(cacheDirectory: string, overrides: Partial<RemoteRefreshDeps> = {}): RemoteRefreshDeps {
   return {
-    cacheBase,
+    cacheDirectory,
     digest: DIGEST,
     pid: () => 4242,
     isAlive: () => true,
@@ -82,11 +82,11 @@ function depsFor(cacheBase: string, overrides: Partial<RemoteRefreshDeps> = {}):
 }
 
 function mirrorOf(cacheBase: string, url: string): string {
-  return join(cacheBase, "ye-ast", "remotes", DIGEST.of(url));
+  return join(cacheBase, "remotes", DIGEST.of(url));
 }
 
 function lockOf(cacheBase: string, url: string): string {
-  return join(cacheBase, "ye-ast", "remotes", `${DIGEST.of(url)}${REFRESH_LOCK_SUFFIX}`);
+  return join(cacheBase, "remotes", `${DIGEST.of(url)}${REFRESH_LOCK_SUFFIX}`);
 }
 
 function refs(path: string): string[] {
@@ -190,7 +190,7 @@ test("two requests that name one url share one refresh and one mirror", async ()
 
   assert.deepEqual(answers[0], answers[1]);
   assert.deepEqual(answers.map((answer) => answer.freshness), [{ status: "verified" }, { status: "verified" }]);
-  assert.deepEqual(readdirSync(join(cacheBase, "ye-ast", "remotes")), [DIGEST.of(url)]);
+  assert.deepEqual(readdirSync(join(cacheBase, "remotes")), [DIGEST.of(url)]);
   assert.equal(calls.filter((args) => args[0] === "ls-remote").length, 1);
 });
 
@@ -244,8 +244,7 @@ test("a shallow mirror is refused and removed", async () => {
   const url = `file://${origin}`;
   const cacheBase = join(root, "cache");
   const mirror = mirrorOf(cacheBase, url);
-  mkdirSync(join(cacheBase, "ye-ast"), { recursive: true, mode: 0o700 });
-  mkdirSync(join(cacheBase, "ye-ast", "remotes"), { recursive: true, mode: 0o700 });
+  mkdirSync(join(cacheBase, "remotes"), { recursive: true, mode: 0o700 });
   execFileSync("git", ["clone", "-q", "--bare", "--depth", "1", url, mirror], { env: GIT_ENV });
   chmodSync(mirror, 0o700);
 
@@ -451,7 +450,7 @@ test("a directory open to other accounts is refused and no git runs", async () =
   const url = `file://${origin}`;
   const cacheBase = join(root, "cache");
   const [first] = await createRemoteRefresh(depsFor(cacheBase, { protocols: "file" })).refresh([{ url }]);
-  chmodSync(join(cacheBase, "ye-ast", "remotes"), 0o755);
+  chmodSync(join(cacheBase, "remotes"), 0o755);
   const refresh = createRemoteRefresh(
     depsFor(cacheBase, {
       protocols: "file",

@@ -11,7 +11,7 @@ import type { ImpactCallersRequest, ImpactFault, ImpactImportersRequest, ImpactO
 import { REDACTED, type Redaction } from "../core/ports/redaction.port.ts";
 import type { VcsFault } from "../core/ports/vcs.port.ts";
 import type { LiveFault } from "../core/ports/live-queries.port.ts";
-import type { WorkspaceQueries } from "../core/ports/workspace-queries.port.ts";
+import type { WorkspaceQueries, WorkspaceRequest } from "../core/ports/workspace-queries.port.ts";
 import type { WorkspaceFault } from "../core/ports/workspace-repos.port.ts";
 import type { WorkspaceCallersRequest, WorkspaceImpactQueries, WorkspaceImpactValue, WorkspaceOfChangeRequest } from "../core/ports/workspace-impact-queries.port.ts";
 import type { DecisionQueries, DecisionsRequest, DecisionValue } from "../core/ports/decision-queries.port.ts";
@@ -137,6 +137,7 @@ const fakeRedaction: Redaction = {
 interface Calls {
   workspaceCallers: WorkspaceCallersRequest[];
   workspaceOfChange: WorkspaceOfChangeRequest[];
+  workspaceReads: WorkspaceRequest[];
   map: MapRequest[];
   ofChange: ImpactOfChangeRequest[];
   callers: ImpactCallersRequest[];
@@ -153,7 +154,7 @@ interface Answers {
 }
 
 async function setup(answers: Partial<Answers> = {}): Promise<{ session: Session; calls: Calls }> {
-  const calls: Calls = { map: [], ofChange: [], callers: [], importers: [], workspaceCallers: [], workspaceOfChange: [], decisions: [] };
+  const calls: Calls = { map: [], ofChange: [], callers: [], importers: [], workspaceCallers: [], workspaceOfChange: [], workspaceReads: [], decisions: [] };
   const entrypoints: EntrypointQueries = {
     map: (request) => {
       calls.map.push(request);
@@ -174,7 +175,15 @@ async function setup(answers: Partial<Answers> = {}): Promise<{ session: Session
       return (answers.importers ?? (async () => ({ ok: true, value: { ...base(), status: "complete", value: IMPORTERS } as Fact<ImportersValue> })))(request);
     },
   };
-  const workspace = { outwardNames: async () => ({ ok: true, value: { ...base(), status: "complete", value: { workspace: { repos: [] }, repositorySnapshots: [], sections: {}, candidates: [], unserved: [], repositories: [{ repo: "shop", path: "/work/shop", entrypoints: [], callSites: [] }] } } }) } as unknown as WorkspaceQueries;
+  const workspace = {
+    outwardNames: async (request: WorkspaceRequest) => {
+      calls.workspaceReads.push(request);
+      return {
+        ok: true,
+        value: { fact: { ...base(), status: "complete", value: { workspace: { repos: [] }, repositorySnapshots: [], sections: {}, candidates: [], unserved: [], repositories: [{ repo: "shop", path: "/work/shop", entrypoints: [], callSites: [] }] } } },
+      };
+    },
+  } as unknown as WorkspaceQueries;
   const workspaceImpact: WorkspaceImpactQueries = {
     callers: async (request) => {
       calls.workspaceCallers.push(request);
@@ -215,6 +224,7 @@ test("lists the six read tools, each described, none taking a top-level reposito
   for (const name of ["ye_ast_workspace", "ye_ast_decisions"]) {
     const repos = tools.find((tool) => tool.name === name)?.inputSchema.properties?.["repos"] as { items?: { properties?: Record<string, unknown> } } | undefined;
     assert.ok(repos?.items?.properties?.["path"] !== undefined, `a passed repository is named by a nested path, in ${name}`);
+    assert.ok(repos?.items?.properties?.["remote"] !== undefined, `a passed repository may declare its remote, in ${name}`);
   }
   await session.close();
 });
@@ -747,6 +757,18 @@ test("the workspace tool answers the outward names without the repositories it r
   const value = (result.structuredContent as { value: Record<string, unknown> }).value;
   assert.equal("repositories" in value, false);
   assert.deepEqual(Object.keys(value).sort(), ["candidates", "repositorySnapshots", "sections", "unserved", "workspace"]);
+  await session.close();
+});
+
+test("a passed repository's remote reaches the workspace family, and an empty one is refused before any query runs", async () => {
+  const { session, calls } = await setup();
+  const remote = "https://git.example.com/shop/web.git";
+
+  await session.callTool("ye_ast_workspace", { repos: [{ path: "/work/shop-web", id: "shop-web", remote }] });
+  const refused = await session.callTool("ye_ast_workspace", { repos: [{ path: "/work/shop-web", remote: "" }] }).catch((error: Error) => error);
+
+  assert.deepEqual(calls.workspaceReads.map(({ repos }) => repos), [[{ path: "/work/shop-web", id: "shop-web", remote }]]);
+  assert.equal(refused instanceof Error || (refused as { isError?: boolean }).isError === true, true);
   await session.close();
 });
 

@@ -63,9 +63,9 @@ When to call:
 - ye_ast_callers: before changing or deleting a function, method or class, or a range of lines, to learn what depends on it and which entrypoints it serves. Before deleting a declaration, ask here: once it is gone, ye_ast_impact can only list the places that still name it.
 - ye_ast_importers: before moving, renaming or deleting a file, or changing what it exports.
 - ye_ast_impact: after changing code and before reporting the work done or opening a pull request, with base set to the branch the change merges into; set live to true to include uncommitted edits. It repeats what ye_ast_callers already answered when the change stays inside the symbols asked about, so call ye_ast_impact once for the whole change before reporting it done, not once per symbol.
-- ye_ast_workspace: when the work crosses repositories (a frontend calling services, a service calling another, a message between them). It lists the hosts, path prefixes, configuration URLs, dependency coordinates, remotes and registries the repository writes outward, the local repository that serves each one and the basis that says why, and the names no repository given serves. Pass the other clones with repos, or none to read the ones the repository persists, then ask ye_ast_callers or ye_ast_impact again with workspace set to those repos so the call sites of the other repositories that land in what the walk reaches are joined. It makes no network request: a name nothing serves is the next clone to make with your own tools.
+- ye_ast_workspace: when the work crosses repositories (a frontend calling services, a service calling another, a message between them). It lists the hosts, path prefixes, configuration URLs, dependency coordinates, remotes and registries the repository writes outward, the local repository that serves each one and the basis that says why, and the names no repository given serves. Pass the other clones with repos, or none to read the ones the repository persists, then ask ye_ast_callers or ye_ast_impact again with workspace set to those repos so the call sites of the other repositories that land in what the walk reaches are joined. It reads each repository from its own clone, and refreshes a declared remote only for a repository the user declared trusted; nothing else reaches the network: a name nothing serves is the next clone to make with your own tools.
 - ye_ast_decisions: when the workspace has gaps only the user can fill (a name no clone given serves, a clone that states no name, a prefix that routes nowhere, a repository with no trust record), and before \`ye-ast install --workspace\`, to show the user a form. It reads the same repositories as ye_ast_workspace and answers each gap with every option the workspace can verify, the places that make each one valid, and the option a rule recommends; a gap whose answer is a value no fact states says so. It writes nothing: render the options, then persist the answers with \`ye-ast install --workspace\` and \`ye-ast install --trust\`.
-- workspace on ye_ast_callers and ye_ast_impact: when the symbol or change can be called from another repository (a route or a handler a frontend or another service calls). Pass the other local clones as workspace.repos (a path each; gateways only when a path prefix routes to a repository and the code does not say it), or pass workspace without repos to work over the repositories and gateways the user persisted with \`ye-ast install --workspace\`; a repository that persists none answers about itself alone. The answer adds the links from call sites in those repositories to what a walk reaches, and follows each link into its own repository, so a chain of repositories answers as one: what depends on those call sites in their own repository, the call sites that reached a declared service and matched none of its routes (unmatched), the ones that name a service no repository given serves (external), and every call site it could not decide as a cut. On ye_ast_impact the links also run the other way: what the change sends onward, each link naming the links crossed from it (reach). A repository not passed is not read: an answer without workspace says nothing about other repositories. Each repository is read at its HEAD or the revision given, under its own trust declaration; live cannot be combined with workspace.
+- workspace on ye_ast_callers and ye_ast_impact: when the symbol or change can be called from another repository (a route or a handler a frontend or another service calls). Pass the other local clones as workspace.repos (a path each; gateways only when a path prefix routes to a repository and the code does not say it), or pass workspace without repos to work over the repositories and gateways the user persisted with \`ye-ast install --workspace\`; a repository that persists none answers about itself alone. The answer adds the links from call sites in those repositories to what a walk reaches, and follows each link into its own repository, so a chain of repositories answers as one: what depends on those call sites in their own repository, the call sites that reached a declared service and matched none of its routes (unmatched), the ones that name a service no repository given serves (external), and every call site it could not decide as a cut. On ye_ast_impact the links also run the other way: what the change sends onward, each link naming the links crossed from it (reach). A repository not passed is not read: an answer without workspace says nothing about other repositories. Each repository is read at its HEAD or the revision given, under its own trust declaration; a repository the user declared trusted whose remote is declared is refreshed and read at the sha the remote's listing pins. live cannot be combined with workspace.
 - Every tool takes scope: include and exclude globs over repository-relative paths (exclude wins). A path outside the scope is not read at all, so callers and entrypoints through it are not known and the answer is complete only within the scope, which it names under its status. Use scope to keep one service or package of a repository apart; to shorten an answer, leave scope out and rely on detail.
 - ye-ast does not say which templates bind one input or output of a component; search the templates for the binding's name.
 
@@ -110,6 +110,11 @@ const workspaceRepo = z.strictObject({
   path: z.string().min(1).describe("Path of the root of a local git repository."),
   id: z.string().min(1).optional().describe("The name its snapshot carries; the directory name when omitted. Never a path."),
   revision: z.string().min(1).optional().describe("The revision to read; HEAD when omitted."),
+  remote: z
+    .string()
+    .min(1)
+    .optional()
+    .describe("The repository's source of truth: an absolute URL or an scp-like git address. Under `trusted` the query refreshes it into ye-ast's mirror and reads the repository there; under `untrusted` it is ignored."),
 });
 
 const gateways = z
@@ -202,11 +207,12 @@ const FACT_OUTPUT = z.looseObject({
   reason: z.string().optional().describe("Why an unknown answer cannot tell."),
 });
 
-function askedRepository(requested: { path: string; id?: string | undefined; revision?: string | undefined }): WorkspaceRepositoryRequest {
+function askedRepository(requested: { path: string; id?: string | undefined; revision?: string | undefined; remote?: string | undefined }): WorkspaceRepositoryRequest {
   return {
     path: requested.path,
     ...(requested.id === undefined ? {} : { id: requested.id }),
     ...(requested.revision === undefined ? {} : { revision: requested.revision }),
+    ...(requested.remote === undefined ? {} : { remote: requested.remote }),
   };
 }
 
@@ -390,7 +396,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
     "ye_ast_workspace",
     {
       title: "Repositories a workspace names",
-      description: `The outward names this repository (and any repos passed) writes: HTTP hosts and path prefixes, configuration URLs, message destinations, dependency coordinates, its own remote and the registries it declares, each with path:line evidence; the local repositories that serve each name, with basis exact-name, artifact, remote or route-overlap; and the names no repository given serves. Use it to learn which clones a cross-repository question needs. It reads only local repositories and makes no network request. ${COMPLETENESS}`,
+      description: `The outward names this repository (and any repos passed) writes: HTTP hosts and path prefixes, configuration URLs, message destinations, dependency coordinates, its own remote and the registries it declares, each with path:line evidence; the local repositories that serve each name, with basis exact-name, artifact, remote or route-overlap; and the names no repository given serves. Use it to learn which clones a cross-repository question needs. It reads each repository from its own clone, and refreshes a declared remote only for a repository the user declared trusted. ${COMPLETENESS}`,
       inputSchema: z.strictObject({
         revision,
         scope,
@@ -410,7 +416,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
             ...scopeOf(paths),
             signal: ctx.mcpReq.signal,
           });
-          return read.ok ? { ok: true, value: withoutRepositories(read.value) } : read;
+          return read.ok ? { ok: true, value: withoutRepositories(read.value.fact) } : read;
         },
         renderWorkspace,
       ),
@@ -420,7 +426,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
     "ye_ast_decisions",
     {
       title: "Gaps a workspace leaves to the user",
-      description: `What the workspace does not state and only the user can fill: the clones that serve an outward name, the clones that state no name, the names no repository given serves, the prefixes that route nowhere and the repositories without a trust record. Each gap lists every option the workspace can verify with path:line evidence and marks the one a rule recommends; a gap whose answer is a value no fact states says so. Use it before \`ye-ast install --workspace\` to show the user a form; it reads only local repositories and writes nothing. ${COMPLETENESS}`,
+      description: `What the workspace does not state and only the user can fill: the clones that serve an outward name, the clones that state no name, the names no repository given serves, the prefixes that route nowhere and the repositories without a trust record. Each gap lists every option the workspace can verify with path:line evidence and marks the one a rule recommends; a gap whose answer is a value no fact states says so. Use it before \`ye-ast install --workspace\` to show the user a form; it reads the same repositories and writes nothing. ${COMPLETENESS}`,
       inputSchema: z.strictObject({ revision, scope, repos: workspaceRepos, gateways }),
       outputSchema: FACT_OUTPUT,
       annotations: { readOnlyHint: true, openWorldHint: false },

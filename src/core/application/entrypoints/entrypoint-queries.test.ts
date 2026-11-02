@@ -54,6 +54,7 @@ function setup(overrides: Overrides = {}): Setup {
   const vcs: Vcs = {
     resolveCommit: async () => overrides.resolve ?? { ok: true, value: SHA },
     remotes: async () => ({ ok: true, value: [] }),
+    headBranch: async () => ({ ok: true, value: undefined }),
     exportCommit: async (_repo, _sha, _destination, plan) => {
       plans.push(plan);
       overrides.onExport?.();
@@ -418,6 +419,7 @@ test("the caller's signal reaches the version control port, which stops the git 
   deps.vcs = {
     resolveCommit: async (_repo, _revision, signal) => (seen.push(signal), { ok: true, value: SHA }),
     remotes: async () => ({ ok: true, value: [] }),
+    headBranch: async () => ({ ok: true, value: undefined }),
     exportCommit: async (_repo, _sha, _destination, _plan, signal) => (seen.push(signal), { ok: true, value: { files: [], skipped: [] } }),
   };
 

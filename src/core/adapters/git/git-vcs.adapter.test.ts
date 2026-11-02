@@ -941,3 +941,28 @@ test("a directory diff git cannot produce is git-failed and an aborted one answe
   assert.equal(!failed.ok && failed.fault.kind, "git-failed");
   assert.equal(!aborted.ok && aborted.fault.kind, "aborted");
 });
+
+test("headBranch names the branch HEAD points at", async () => {
+  write("a.txt", "a");
+  commitAll();
+  git("checkout", "-q", "-b", "feature");
+
+  assert.deepEqual(await createGitVcs().headBranch(repo), { ok: true, value: "feature" });
+});
+
+test("headBranch answers undefined on a detached head, which names no line", async () => {
+  write("a.txt", "a");
+  const sha = commitAll();
+  git("checkout", "-q", "--detach", sha);
+
+  assert.deepEqual(await createGitVcs().headBranch(repo), { ok: true, value: undefined });
+});
+
+test("headBranch answers git-failed outside a repository", async () => {
+  const outside = join(scratch, "outside");
+  mkdirSync(outside);
+
+  const result = await createGitVcs().headBranch(outside);
+
+  assert.equal(!result.ok && result.fault.kind, "git-failed");
+});

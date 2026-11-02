@@ -1,11 +1,12 @@
 import type { Fact, SnapshotRef } from "../domain/shared/fact.ts";
 import type { Result } from "../domain/shared/result.ts";
 import type { NameCandidate, OutwardName } from "../domain/topology/outward-name.ts";
+import type { RemoteFreshness, RepositoryResolution } from "../domain/topology/remote-snapshot.ts";
 import type { WorkspaceFault, WorkspaceReposRequest, WorkspaceRepositoryRequest, WorkspaceRepository, WorkspaceSection } from "./workspace-repos.port.ts";
 
 export interface WorkspaceValue {
   workspace: {
-    /** The ids of every repository read, sorted. */
+    /** The ids of every repository the request named, sorted. */
     repos: readonly string[];
     /** The gateway prefixes the caller declared, sorted by prefix. */
     gateways: readonly { prefix: string; repo: string }[];
@@ -22,6 +23,24 @@ export interface WorkspaceValue {
   repositories: readonly WorkspaceRepository[];
 }
 
+/**
+ * What a query refreshed before reading, carried beside the fact and never inside it (ADR-0016 decision 4): the sha each
+ * refreshed repository pinned, and whether each remote was verified.
+ */
+export interface WorkspaceRefresh {
+  /** One record per repository refreshed, sorted by repository. */
+  resolution: readonly RepositoryResolution[];
+  /** The freshness of each remote refreshed, sorted by repository then URL. */
+  freshness: readonly { repo: string; url: string; freshness: RemoteFreshness }[];
+}
+
+/** The answer of a workspace read: the fact, and the refreshes that decided what it read. */
+export interface WorkspaceRead {
+  fact: Fact<WorkspaceValue>;
+  /** Absent when the query refreshed nothing, so an answer without a refresh carries no sidecar. */
+  refresh?: WorkspaceRefresh;
+}
+
 export interface WorkspaceRequest extends WorkspaceReposRequest {
   /** The repository the request is bound to: the one whose snapshot anchors the answer. */
   repo: WorkspaceRepositoryRequest;
@@ -30,10 +49,11 @@ export interface WorkspaceRequest extends WorkspaceReposRequest {
 }
 
 /**
- * What a set of local repositories states about each other: the names each one writes outward, the local repository that
- * serves each name with its basis, and the names nothing given serves. Read without a network request, each repository
- * under its own trust declaration.
+ * What a set of repositories states about each other: the names each one writes outward, the local repository that
+ * serves each name with its basis, and the names nothing given serves. Each repository is read under its own trust
+ * declaration; under `trusted`, a declared remote is refreshed into ye-ast's mirror and the repository is read there at
+ * the pinned sha.
  */
 export interface WorkspaceQueries {
-  outwardNames(request: WorkspaceRequest): Promise<Result<Fact<WorkspaceValue>, WorkspaceFault>>;
+  outwardNames(request: WorkspaceRequest): Promise<Result<WorkspaceRead, WorkspaceFault>>;
 }

@@ -62,18 +62,21 @@ export function createWorkspaceImpactQueries(deps: WorkspaceImpactDeps): Workspa
     const inForce = await workspaceInForce(request, deps.defaults);
     if (!inForce.ok) return inForce;
     const read = await deps.workspace.outwardNames({
-      repo: { ...request.repo, revision: triggerRevision },
+      // A change reads the trigger at its head; a callers answer leaves the line to the workspace read, so a refresh
+      // scopes the trigger's branch by the repository itself rather than by the placeholder HEAD.
+      repo: readsChange ? { ...request.repo, revision: triggerRevision } : request.repo,
       repos: inForce.value.repos,
       gateways: inForce.value.gateways,
       ...(request.scope === undefined ? {} : { scope: request.scope }),
       ...(request.signal === undefined ? {} : { signal: request.signal }),
     });
     if (!read.ok) return read;
+    const fact = read.value.fact;
     const walked = await walk();
     if (!walked.ok) return walked;
-    if (read.value.status === "unknown") return { ok: false, fault: { kind: "git-failed", detail: "the workspace read answered nothing" } };
+    if (fact.status === "unknown") return { ok: false, fault: { kind: "git-failed", detail: "the workspace read answered nothing" } };
 
-    const workspace = read.value.value;
+    const workspace = fact.value;
     const trigger = request.repo.id ?? directoryNameOf(request.repo.path);
     const impact = walked.value.status === "unknown" ? undefined : walked.value.value;
     const repositories = workspace.repositories;
@@ -106,7 +109,13 @@ export function createWorkspaceImpactQueries(deps: WorkspaceImpactDeps): Workspa
       sections[repository.repo] = sectionOf(base, value, part.ambiguous);
     }
 
-    const triggerBase = workspace.sections[trigger] ?? read.value;
+    const triggerBase = workspace.sections[trigger] ?? fact;
+    // A repository the read could not reach keeps its unknown section, so this answer is partial and names why.
+    for (const repo of workspace.workspace.repos) {
+      if (sections[repo] !== undefined) continue;
+      const section = workspace.sections[repo];
+      if (section?.status === "unknown") sections[repo] = section;
+    }
     const value: WorkspaceImpactValue = {
       workspace: {
         repos: workspace.workspace.repos,

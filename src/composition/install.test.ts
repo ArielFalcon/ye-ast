@@ -221,8 +221,8 @@ test("a workspace query that names no repositories works over the manifest insta
   const result = await composeQueries({ scratchRoot: join(workspace, "scratch"), trustDirectory }).workspace.outwardNames({ repo: { path: repo, id: "shop" } });
 
   assert.ok(result.ok);
-  assert.notEqual(result.value.status, "unknown");
-  assert.deepEqual((result.value as { value: WorkspaceValue }).value.workspace.repos, ["orders", "shop"]);
+  assert.notEqual(result.value.fact.status, "unknown");
+  assert.deepEqual((result.value.fact as { value: WorkspaceValue }).value.workspace.repos, ["orders", "shop"]);
 });
 
 const ORDER_PAGE = `import { HttpClient } from "@angular/common/http";
