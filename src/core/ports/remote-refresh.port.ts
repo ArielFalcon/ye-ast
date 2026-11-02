@@ -4,6 +4,8 @@ import type { RemoteFreshness, RemoteListing } from "../domain/topology/remote-s
 export interface RemoteRefreshRequest {
   /** The source of truth the declaration states: the only URL the refresh reads, never a query parameter. */
   url: string;
+  /** The local clone of the same URL, when one exists: the first mirror is seeded from it, never fetched from. */
+  seed?: string;
 }
 
 /** What the refresh answered for one remote: the listing it verified, the freshness, and where its pinned sha is read. */
