@@ -500,15 +500,24 @@ test("a fault after the trust was recorded says so, with the mode, before naming
   assert.match(stopped.io.stderr[1]!, /git-failed/);
 });
 
-test("init redacts what it prints and a crash of the use case is an internal fault", async () => {
-  const leaking = setupInstall();
-  await run(["init", "--trust", "untrusted", `/work/${SECRET}`], leaking.io, leaking.deps);
+test("init prints its local report literally, so a path it names is not censored, and a crash of the use case is an internal fault", async () => {
+  const local = setupInstall();
+  await run(["init", "--trust", "untrusted", `/work/${SECRET}`], local.io, local.deps);
   const crashing = setup();
   const deps = { ...crashing.deps, install: { run: async (): Promise<never> => { throw new Error("boom"); } } };
 
   assert.equal(await run(["init", "--trust", "untrusted", "."], crashing.io, deps), EXIT_CODE.internalFault);
 
-  assert.equal(leaking.io.stdout.join("\n").includes(SECRET), false);
+  assert.equal(local.io.stdout.join("\n").includes(`/work/${SECRET}`), true);
+});
+
+test("an init fault line is redacted, since it leaves the process toward whoever reads the failure", async () => {
+  const failed = setupInstall({ ok: false, fault: { kind: "unwritable", detail: `cannot write /work/${SECRET}`, trustRecorded: false } });
+
+  assert.equal(await run(["init", "--trust", "untrusted", "."], failed.io, failed.deps), EXIT_CODE.queryFailed);
+
+  assert.equal(failed.io.stderr.join("\n").includes(SECRET), false);
+  assert.match(failed.io.stderr[0]!, /unwritable/);
 });
 
 let scratch: string;

@@ -114,7 +114,6 @@ async function runInit(args: readonly string[], io: CliIo, deps: CliDeps): Promi
       return EXIT_CODE.usage;
     }
     const { workspaceFile, ...request } = parsed;
-    const out = (line: string): void => io.out(deps.redaction.redact(line));
     const workspace = workspaceFile === undefined ? undefined : await readWorkspaceFile(workspaceFile);
     if (workspace !== undefined && !workspace.ok) {
       io.err(deps.redaction.redact(`ye-ast: ${workspace.fault.kind}: ${workspace.fault.detail}`));
@@ -126,7 +125,7 @@ async function runInit(args: readonly string[], io: CliIo, deps: CliDeps): Promi
       io.err(`ye-ast: ${result.fault.kind}: ${deps.redaction.redact(result.fault.detail.trim())}`);
       return result.fault.kind === "aborted" ? EXIT_CODE.interrupted : EXIT_CODE.queryFailed;
     }
-    for (const line of initReport(result.value, request.repo, deps.mcpCommand)) out(line);
+    for (const line of initReport(result.value, request.repo, deps.mcpCommand)) io.out(line);
     return EXIT_CODE.ok;
   } catch (error) {
     io.err(`ye-ast: internal fault: ${deps.redaction.redact(firstLine(error))}`);
