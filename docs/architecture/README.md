@@ -23,6 +23,7 @@ marked **Proposed** awaits the owner's acceptance.
 | [0014](adr/0014-angular-and-spring-from-own-extractors.md) | Angular and Spring from own extractors over parser libraries (TypeScript compiler API, `@angular/compiler`, tree-sitter-java), with the definition of done | Accepted |
 | [0015](adr/0015-index-reuse-by-content.md) | Index reuse by staged content; `sync`-derived indexes serve only live facts that record it | Accepted |
 | [0016](adr/0016-remote-refresh-under-trusted.md) | Under `trusted`, declared remotes are refreshed into ye-ast's own mirrors before a query; facts depend on pinned shas only. Supersedes the network clause of 0010 decision 4 for `trusted` | Accepted |
+| [0017](adr/0017-owner-of-a-member-expands-only-whole-type-edges.md) | The owner of a reached method is reached, but only whole-type edges are followed from it; the Angular injection binding turns `this.b.m` into a call of `m` | Accepted |
 
 ## Designs (RFC)
 
@@ -40,6 +41,10 @@ marked **Proposed** awaits the owner's acceptance.
 | [0010](rfc/0010-impact-queries.md) | Impact of a change, callers and importers: the request, the walk without default bounds, the fact and its completeness | Draft |
 | [0011](rfc/0011-cross-repository-impact.md) | Impact across repositories: links from call sites to entrypoints, upstream and downstream fixpoint, per-repository sections, the snapshot rule, reuse and completeness | Draft |
 | [0012](rfc/0012-observability-and-measurement.md) | Two records: the deterministic fact as the record of why, the host's measurement of what it cost; cost inside the fact, reproduction by input identity, where a baseline lives | Draft |
+| [0013](rfc/0013-trace-and-patterns.md) | Trace and patterns | Draft |
+| [0014](rfc/0014-workspace-decisions.md) | Workspace decisions: the gaps the code cannot fill, offered to the user | Draft |
+| [0015](rfc/0015-answer-coordinates.md) | `endLine` on seeds, impacted symbols and handlers, and `lines` on `via`, so an agent reads an exact span and an exact call site; refuses a snippet or a signature | Draft |
+| [0017](rfc/0017-answer-size-and-outline.md) | A counted elision is never longer than listing what it hides; `ye_ast_outline` answers the declaration spans and imports of a file without opening it | Draft |
 
 ## Pending decisions
 
