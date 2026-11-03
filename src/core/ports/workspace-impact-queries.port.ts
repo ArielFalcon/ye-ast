@@ -7,7 +7,7 @@ import type { ScopeRequest } from "../domain/shared/scope.ts";
 import type { Result } from "../domain/shared/result.ts";
 import type { Gateway, GatewayDeclaration } from "../domain/topology/link-match.ts";
 import type { CallersTarget, ImpactFault } from "./impact-queries.port.ts";
-import type { WorkspaceFault, WorkspaceReposRequest, WorkspaceRepositoryRequest } from "./workspace-repos.port.ts";
+import type { WorkspaceFault, WorkspaceReposRequest, WorkspaceRepositoryRequest, WorkspaceSource } from "./workspace-repos.port.ts";
 import type { FactRead } from "./workspace-queries.port.ts";
 
 /** What one repository contributes to a cross-repository answer. */
@@ -23,8 +23,8 @@ export interface RepoImpact {
 }
 
 export interface WorkspaceImpactValue {
-  /** `unmatchedGateways`: the declared gateways no call site names, or whose repository was not read. */
-  workspace: { repos: readonly string[]; gateways: readonly Gateway[]; unmatchedGateways: readonly GatewayDeclaration[]; unserved: readonly string[] };
+  /** `unmatchedGateways`: the declared gateways no call site names, or whose repository was not read; `source`: where `repos` came from. */
+  workspace: { repos: readonly string[]; gateways: readonly Gateway[]; unmatchedGateways: readonly GatewayDeclaration[]; unserved: readonly string[]; source: WorkspaceSource };
   repositorySnapshots: readonly { repo: string; snapshot: SnapshotRef }[];
   trigger: { repo: string; mergeBase?: string };
   sections: Readonly<Record<string, Fact<RepoImpact>>>;

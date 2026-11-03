@@ -2,7 +2,7 @@ import type { Fact, SnapshotRef } from "../domain/shared/fact.ts";
 import type { Result } from "../domain/shared/result.ts";
 import type { NameCandidate, OutwardName } from "../domain/topology/outward-name.ts";
 import type { RemoteFreshness, RepositoryResolution } from "../domain/topology/remote-snapshot.ts";
-import type { WorkspaceFault, WorkspaceReposRequest, WorkspaceRepositoryRequest, WorkspaceRepository, WorkspaceSection } from "./workspace-repos.port.ts";
+import type { WorkspaceFault, WorkspaceReposRequest, WorkspaceRepositoryRequest, WorkspaceRepository, WorkspaceSection, WorkspaceSource } from "./workspace-repos.port.ts";
 
 export interface WorkspaceValue {
   workspace: {
@@ -10,6 +10,8 @@ export interface WorkspaceValue {
     repos: readonly string[];
     /** The gateway prefixes the caller declared, sorted by prefix. */
     gateways: readonly { prefix: string; repo: string }[];
+    /** Where the repositories above came from; `none` says the answer covers the bound repository alone. */
+    source: WorkspaceSource;
   };
   /** One snapshot per repository read, sorted by repository. */
   repositorySnapshots: readonly { repo: string; snapshot: SnapshotRef }[];

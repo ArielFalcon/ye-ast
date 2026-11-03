@@ -32,6 +32,8 @@ function setup(
     layer?: Result<FixedLayerRefresh, FixedLayerRefreshFault>;
     store?: Result<void, FixedLayerFault>;
     files?: Record<string, string>;
+    /** The repositories the declaration names that the filesystem cannot read. */
+    unreadable?: readonly string[];
   } = {},
 ): Setup {
   const calls: string[] = [];
@@ -40,6 +42,7 @@ function setup(
   const vcs = {
     resolveCommit: async (repo: string, revision: string) => {
       calls.push(`resolve ${repo} ${revision}`);
+      if (overrides.unreadable?.includes(repo) === true) return { ok: false, value: undefined, fault: { kind: "not-repository-root", detail: `${repo} is inside its repository` } };
       return overrides.head ?? { ok: true, value: "a".repeat(40) };
     },
   } as unknown as Vcs;
@@ -71,7 +74,7 @@ function setup(
       return overrides.layer ?? { ok: true, value: WRITTEN };
     },
   };
-  return { calls, files, writes, install: createInstall({ vcs, trust, exclude, store, layer }) };
+  return { calls, files, writes, install: createInstall({ vcs, trust, exclude, store, layer, defaults: { resolve: (_root, manifest) => manifest } }) };
 }
 
 function manifestOf(value: unknown): string {
@@ -192,6 +195,18 @@ test("a manifest that is not one stops the install before the first write and na
     assert.deepEqual(writes, [], text);
     assert.equal(files.size, 0, text);
   }
+});
+
+test("a declaration whose repository the filesystem cannot read stops the install before the first write and names the entry", async () => {
+  const { calls, files, writes, install } = setup({ unreadable: ["/work/orders"] });
+  const text = manifestOf({ repos: [{ path: "/work/shop" }, { path: "/work/orders" }] });
+
+  const result = await install.run({ ...REQUEST, workspace: { path: "/tmp/ws.json", text } });
+
+  assert.deepEqual(result, { ok: false, fault: { kind: "not-repository-root", detail: "repos[0].path: /work/orders is inside its repository", trustRecorded: false } });
+  assert.deepEqual(calls, ["resolve /work/shop HEAD", "resolve /work/orders HEAD"]);
+  assert.deepEqual(writes, []);
+  assert.equal(files.size, 0);
 });
 
 test("without a manifest install never writes or removes one", async () => {

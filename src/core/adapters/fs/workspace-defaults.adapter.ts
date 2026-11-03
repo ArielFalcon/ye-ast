@@ -20,6 +20,8 @@ export function createWorkspaceDefaults(store: FixedLayerStore): WorkspaceDefaul
       }
       return { ok: true, value: resolvePaths(manifest.value, root) };
     },
+
+    resolve: (root, manifest) => resolvePaths(manifest, root),
   };
 }
 

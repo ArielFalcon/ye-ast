@@ -16,9 +16,24 @@ import type { CallSite } from "../core/domain/topology/call-site.ts";
 import type { ImpactedLink } from "../core/domain/topology/link.ts";
 import type { RepositoryResolution } from "../core/domain/topology/remote-snapshot.ts";
 import type { RepoImpact, WorkspaceImpactValue } from "../core/ports/workspace-impact-queries.port.ts";
+import type { WorkspaceSource } from "../core/ports/workspace-repos.port.ts";
+import { FIXED_LAYER_DIRECTORY } from "../core/ports/fixed-layer-store.port.ts";
+import { WORKSPACE_MANIFEST_FILE } from "../core/ports/workspace-defaults.port.ts";
 
 const NONE = "  (none)";
 const CUTS = "cuts:";
+
+/** What each source of the repositories in force is called in the text; `none` says what the answer then covers. */
+const SOURCE_TEXT: Readonly<Record<WorkspaceSource, string>> = {
+  request: "the request",
+  persisted: `${FIXED_LAYER_DIRECTORY}/${WORKSPACE_MANIFEST_FILE}`,
+  none: "nothing: this answer covers the bound repository alone (pass workspace.repos, or persist a declaration with ye-ast install --workspace)",
+};
+
+/** The line that says where the repositories the answer worked over came from, so one repository is never read as all of them. */
+function sourceLine(source: WorkspaceSource): string {
+  return `repositories declared by: ${SOURCE_TEXT[source]}`;
+}
 
 function at(path: string, line: number): string {
   return `${path}:${line}`;
@@ -56,11 +71,12 @@ function statusLines(fact: Fact<unknown>, indent = ""): string[] {
   return [`${indent}status: partial (cuts: ${cutCounts(fact.cuts)})`];
 }
 
-/** The paths the caller narrowed the answer to, when it did: what lies outside them was not read, so it is not known. */
+/** The paths the caller narrowed the answer to, when it did: what they select is read, and so is the configuration that
+ * interprets it. */
 function scopeLines({ inputs: { declaredScope } }: Fact<unknown>): string[] {
   const parts = [["include", declaredScope.include], ["exclude", declaredScope.exclude]] as const;
   const named = parts.filter(([, globs]) => globs.length > 0).map(([label, globs]) => `${label} ${globs.join(", ")}`);
-  return named.length === 0 ? [] : [`scope: ${named.join("; ")} (paths outside it were not read)`];
+  return named.length === 0 ? [] : [`scope: ${named.join("; ")} (the content it selects; the configuration that interprets it is read too)`];
 }
 
 /** The languages and frameworks a status is relative to. */
@@ -306,6 +322,7 @@ export function renderWorkspaceImpact(fact: Fact<WorkspaceImpactValue>, detail: 
   const { value } = fact;
   const trigger = value.sections[value.trigger.repo];
   lines.push(counted("repositories", value.repositorySnapshots.map(({ repo, snapshot }) => `${repo}@${snapshot.kind === "sha" ? snapshot.sha : snapshot.stateId}`)));
+  lines.push(sourceLine(value.workspace.source));
   lines.push(`bound repository: ${value.trigger.repo}`);
   lines.push(`gateway prefixes (${value.workspace.gateways.length}):`, ...value.workspace.gateways.map(({ prefix, repo, basis }) => `  - ${prefix} -> ${repo} (${basis})`));
   const stale = value.workspace.unmatchedGateways;
@@ -361,6 +378,7 @@ export function renderWorkspace(fact: Fact<WorkspaceValue>): string {
   if (fact.status === "unknown") return lines.join("\n");
   const { value } = fact;
   lines.push(counted("repositories", value.repositorySnapshots.map(({ repo, snapshot }) => `${repo}@${snapshot.kind === "sha" ? snapshot.sha : snapshot.stateId}`)));
+  lines.push(sourceLine(value.workspace.source));
   lines.push("outward names:");
   for (const repo of value.workspace.repos) {
     const section = value.sections[repo];
@@ -394,6 +412,7 @@ export function renderDecisions(fact: Fact<DecisionValue>): string {
   if (fact.status === "unknown") return lines.join("\n");
   const { value } = fact;
   lines.push(counted("repositories", value.repositories.map(({ repo, snapshot }) => `${repo}@${snapshot.kind === "sha" ? snapshot.sha : snapshot.stateId}`)));
+  lines.push(sourceLine(value.source));
   lines.push(`decisions (${value.decisions.length}):`, ...value.decisions.flatMap(decisionLines));
   lines.push(...cutsBlock(cutsOf(fact)));
   return lines.join("\n");

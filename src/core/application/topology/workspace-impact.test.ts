@@ -128,7 +128,7 @@ function setup({ repositories, unavailable = [], trigger = impactOf(REACHED), un
     outwardNames: async (request) => {
       asks.push(request);
       const value: WorkspaceValue = {
-        workspace: { repos: all, gateways: request.gateways ?? [] },
+        workspace: { repos: all, gateways: request.gateways ?? [], source: "request" },
         repositorySnapshots: read.map(({ repo, snapshot }) => ({ repo, snapshot })),
         sections: Object.fromEntries(all.map((repo) => [repo, missing.has(repo) ? unreachable(repo) : section(repo)])),
         candidates: [],
@@ -556,6 +556,7 @@ function persisted(manifest: WorkspaceManifest | undefined, asked: string[] = []
       asked.push(root);
       return { ok: true, value: manifest };
     },
+    resolve: (_root, resolved) => resolved,
   };
 }
 
@@ -597,7 +598,7 @@ test("a request that names repositories ignores the persisted workspace, its gat
 test("a manifest that cannot be read is a fault and nothing is walked", async () => {
   const { queries, walks } = setup({
     repositories: { orders: { entrypoints: [route("POST", "/orders")] } },
-    defaults: { of: async () => ({ ok: false, fault: { kind: "unreadable", detail: ".ye-ast/workspace.json: repos: a non-empty array" } }) },
+    defaults: { of: async () => ({ ok: false, fault: { kind: "unreadable", detail: ".ye-ast/workspace.json: repos: a non-empty array" } }), resolve: (_root, manifest) => manifest },
   });
 
   const result = await queries.callers(ASK_WITHOUT_REPOS);

@@ -12,6 +12,12 @@ import type { VcsFault } from "./vcs.port.ts";
 /** One repository of a workspace request: where it is read from, and the name its snapshot carries. */
 export type WorkspaceRepositoryRequest = WorkspaceRepositoryDeclaration;
 
+/**
+ * Where the repositories an answer worked over came from: the request that asked, the manifest the bound repository
+ * persists, or nowhere, which leaves the answer about the bound repository alone.
+ */
+export type WorkspaceSource = "request" | "persisted" | "none";
+
 /** What a workspace request declares beyond the repository it is bound to. */
 export interface WorkspaceReposRequest {
   /** Other local repositories the caller declares. */

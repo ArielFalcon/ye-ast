@@ -198,6 +198,7 @@ export function composeCli(options: CompositionOptions = {}): (argv: readonly st
     trust: createTrustRecords(options.trustDirectory ?? null),
     exclude: createGitLocalExclude(),
     store,
+    defaults: createWorkspaceDefaults(store),
     layer: createFixedLayerAdmin({ entrypoints: queries.entrypoints, store, redaction: queries.redaction }),
   });
   return (argv, io) => run(argv, io, { ...queries, install, mcpCommand: mcpCommandFor(ownEntrypoint()), signal: options.signal ?? new AbortController().signal });

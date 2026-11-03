@@ -78,7 +78,7 @@ function workspaceImpactFact(): Fact<WorkspaceImpactValue> {
   };
   const section = (value: object): Fact<never> => ({ ...base(), status: "complete", value }) as never;
   const value: WorkspaceImpactValue = {
-    workspace: { repos: ["shop", "shop-web"], gateways: [{ prefix: "orders-api", repo: "shop", basis: "route-overlap" }], unmatchedGateways: [{ prefix: "legacy", repo: "shop" }], unserved: ["geo-api"] },
+    workspace: { repos: ["shop", "shop-web"], gateways: [{ prefix: "orders-api", repo: "shop", basis: "route-overlap" }], unmatchedGateways: [{ prefix: "legacy", repo: "shop" }], unserved: ["geo-api"], source: "request" },
     repositorySnapshots: [],
     trigger: { repo: "shop", mergeBase: "b".repeat(40) },
     sections: {
@@ -94,6 +94,7 @@ const WORKSPACE = { repos: [{ path: "/work/shop-web", id: "shop-web" }], gateway
 
 const DECISIONS: DecisionValue = {
   repositories: [{ repo: "shop", snapshot: { repo: "shop", kind: "sha", sha: "a".repeat(40) } }],
+  source: "request",
   decisions: [
     {
       id: "membership:name:orders-api",
@@ -183,7 +184,7 @@ async function setup(answers: Partial<Answers> = {}, refresh?: WorkspaceRefresh)
       calls.workspaceReads.push(request);
       return {
         ok: true,
-        value: read({ ...base(), status: "complete", value: { workspace: { repos: [] }, repositorySnapshots: [], sections: {}, candidates: [], unserved: [], repositories: [{ repo: "shop", path: "/work/shop", entrypoints: [], callSites: [] }] } }),
+        value: read({ ...base(), status: "complete", value: { workspace: { repos: [], gateways: [], source: "none" }, repositorySnapshots: [], sections: {}, candidates: [], unserved: [], repositories: [{ repo: "shop", path: "/work/shop", entrypoints: [], callSites: [] }] } }),
       };
     },
   } as unknown as WorkspaceQueries;
@@ -236,6 +237,20 @@ test("the server instructions tell the agent when to call every tool", async () 
   const { session } = await setup();
   const tools = await session.listTools();
   for (const tool of tools) assert.ok(session.instructions?.includes(tool.name), tool.name);
+  await session.close();
+});
+
+test("the server instructions name the root every answer is relative to", async () => {
+  const { session } = await setup();
+  assert.ok(session.instructions?.includes(`${REPOSITORY.path} (id ${REPOSITORY.repoId})`), session.instructions);
+  assert.match(session.instructions ?? "", /Every path in an answer is relative to that root/);
+  await session.close();
+});
+
+test("a workspace answer says where its repositories came from, so one repository is never read as all of them", async () => {
+  const { session } = await setup();
+  const text = textOf(await session.callTool("ye_ast_workspace", {}));
+  assert.match(text, /^repositories declared by: nothing: this answer covers the bound repository alone/m);
   await session.close();
 });
 
@@ -581,7 +596,7 @@ test("an answer read within a caller's scope says so under its status, and one w
   const scoped = impactFact({ inputs: { ...base().inputs, declaredScope } });
   const { session } = await setup({ ofChange: async () => ({ ok: true, value: scoped }) });
   const text = textOf(await session.callTool("ye_ast_impact", { base: "main" }));
-  assert.match(text, /^status: complete\ndeclared scope: languages java; frameworks spring\nscope: include src\/app\/\*\*; exclude \*\*\/\*\.spec\.ts, src\/legacy\/\*\* \(paths outside it were not read\)\nsnapshot: /);
+  assert.match(text, /^status: complete\ndeclared scope: languages java; frameworks spring\nscope: include src\/app\/\*\*; exclude \*\*\/\*\.spec\.ts, src\/legacy\/\*\* \(the content it selects; the configuration that interprets it is read too\)\nsnapshot: /);
   const plain = textOf(await session.callTool("ye_ast_importers", { files: ["src/a.ts"] }));
   assert.doesNotMatch(plain, /^scope:/m);
   await session.close();
@@ -765,6 +780,7 @@ test("a workspace answer lists the links across repositories with their basis, t
   const result = await session.callTool("ye_ast_callers", { targets: [{ file: "a", symbol: "f" }], workspace: WORKSPACE });
 
   const text = textOf(result);
+  assert.match(text, /^repositories declared by: the request$/m);
   assert.match(text, /orders-api -> shop \(route-overlap\)/);
   assert.match(text, /shop-web:src\/app\/order\.api\.ts:7 OrderApi\.create -> shop GET \/orders\/\{id\} \(route-overlap, upstream\)/);
   assert.match(text, /unmatched \(1\):\n\s+- src\/app\/order\.api\.ts:9 .* GET orders-api\/missing/);
@@ -857,7 +873,7 @@ test("the decisions tool asks the decision family with the repositories and gate
 test("the decisions tool reads the bound repository alone when no clones are passed, and a workspace with no gap says none", async () => {
   const { session, calls } = await setup({ decisions: async (request) => {
     calls.decisions.push(request);
-    return { ok: true, value: { fact: decisionFact({ decisions: [], repositories: [] }) } };
+    return { ok: true, value: { fact: decisionFact({ decisions: [], repositories: [], source: "none" }) } };
   } });
 
   const result = await session.callTool("ye_ast_decisions", {});
@@ -866,6 +882,7 @@ test("the decisions tool reads the bound repository alone when no clones are pas
   assert.equal("gateways" in (calls.decisions[0] ?? {}), false);
   const text = textOf(result);
   assert.match(text, /status: complete/);
+  assert.match(text, /^repositories declared by: nothing: this answer covers the bound repository alone/m);
   assert.match(text, /^decisions \(0\):$/m);
   assert.doesNotMatch(text, /\(none\)/);
   await session.close();

@@ -274,6 +274,7 @@ function persisted(manifest: WorkspaceManifest | undefined, asked: string[] = []
       asked.push(root);
       return { ok: true, value: manifest };
     },
+    resolve: (_root, resolved) => resolved,
   };
 }
 
@@ -285,7 +286,7 @@ test("a request that names no repositories works over the persisted manifest's r
   const result = await queries.outwardNames({ repo: { path: "/work/shop-web" } });
 
   assert.deepEqual(asked, ["/work/shop-web"]);
-  assert.deepEqual(valueOf(result).workspace, { repos: ["orders-svc", "shop-web"], gateways: [{ prefix: "orders-api", repo: "orders-svc" }] });
+  assert.deepEqual(valueOf(result).workspace, { repos: ["orders-svc", "shop-web"], gateways: [{ prefix: "orders-api", repo: "orders-svc" }], source: "persisted" });
   assert.deepEqual(Object.keys(valueOf(result).sections), ["orders-svc", "shop-web"]);
 });
 
@@ -297,7 +298,7 @@ test("a request that names repositories ignores the persisted workspace, its gat
   const result = await queries.outwardNames({ repo: { path: "/work/shop-web" }, repos: [{ path: "/work/orders-svc" }] });
 
   assert.deepEqual(asked, []);
-  assert.deepEqual(valueOf(result).workspace, { repos: ["orders-svc", "shop-web"], gateways: [] });
+  assert.deepEqual(valueOf(result).workspace, { repos: ["orders-svc", "shop-web"], gateways: [], source: "request" });
 });
 
 test("a gateway the request declares itself wins over the one the manifest persists", async () => {
@@ -310,7 +311,7 @@ test("a gateway the request declares itself wins over the one the manifest persi
 });
 
 test("a manifest that cannot be read is the answer's fault, never an empty workspace", async () => {
-  const defaults: WorkspaceDefaults = { of: async () => ({ ok: false, fault: { kind: "unreadable", detail: ".ye-ast/workspace.json: repos: a non-empty array" } }) };
+  const defaults: WorkspaceDefaults = { of: async () => ({ ok: false, fault: { kind: "unreadable", detail: ".ye-ast/workspace.json: repos: a non-empty array" } }), resolve: (_root, manifest) => manifest };
   const queries = setup({ "/work/shop-web": { files: {} } }, undefined, undefined, defaults);
 
   const result = await queries.outwardNames({ repo: { path: "/work/shop-web" } });
@@ -327,6 +328,14 @@ test("a repository that persists no manifest answers exactly as it does without 
   const withNone = await setup(repositories, undefined, undefined, persisted(undefined)).outwardNames(request);
 
   assert.equal(JSON.stringify(withNone), JSON.stringify(without));
+});
+
+test("a request that names no repositories and finds no manifest says its answer covers the bound repository alone", async () => {
+  const queries = setup({ "/work/shop-web": { files: {} } }, undefined, undefined, persisted(undefined));
+
+  const result = await queries.outwardNames({ repo: { path: "/work/shop-web" } });
+
+  assert.deepEqual(valueOf(result).workspace, { repos: ["shop-web"], gateways: [], source: "none" });
 });
 
 const TRIGGER = "/work/shop-web";
@@ -412,6 +421,20 @@ test("the branch named like the trigger's line wins over the remote's default br
 
   assert.equal(shaOf(valueOf(result).repositorySnapshots.find(({ repo }) => repo === "orders-svc")?.snapshot), RELEASE_SHA);
   assert.deepEqual(read.refresh?.resolution, [{ repo: "orders-svc", step: "trigger-line", consulted: [{ branch: "release", sha: RELEASE_SHA }], sha: RELEASE_SHA }]);
+});
+
+test("a request naming HEAD as the trigger's revision scopes the refresh by the branch HEAD points at", async () => {
+  const queries = setup(
+    { [TRIGGER]: { files: {}, branch: "release" }, [SIBLING]: { files: {} }, [MIRROR]: mirrorWith([], [RELEASE_SHA]) },
+    undefined,
+    trusted([SIBLING]),
+    undefined,
+    { answers: [refreshed(REMOTE, { branches: [{ name: "main", sha: REMOTE_SHA }, { name: "release", sha: RELEASE_SHA }], defaultBranch: "main" }, { status: "verified" }, MIRROR)] },
+  );
+
+  const result = await queries.outwardNames({ repo: { path: TRIGGER, revision: "HEAD" }, repos: [{ path: SIBLING, remote: REMOTE }] });
+
+  assert.deepEqual(readOf(result).refresh?.resolution, [{ repo: "orders-svc", step: "trigger-line", consulted: [{ branch: "release", sha: RELEASE_SHA }], sha: RELEASE_SHA }]);
 });
 
 test("a pinned sha the mirror lacks is an unknown section naming that sha, and the repository is left out of the answer's repositories", async () => {

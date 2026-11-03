@@ -177,9 +177,9 @@ export function createWorkspaceQueries(deps: WorkspaceQueriesDeps): WorkspaceQue
     };
   }
 
-  /** The line the trigger is on: the revision the request names, else the branch its `HEAD` points at. */
+  /** The line the trigger is on: the revision the request names, or the branch its `HEAD` points at when it names HEAD or none. */
   async function triggerLine(trigger: WorkspaceRepositoryRequest, signal: AbortSignal | undefined): Promise<Result<string | undefined, VcsFault>> {
-    return trigger.revision === undefined ? vcs.headBranch(trigger.path, signal) : { ok: true, value: trigger.revision };
+    return trigger.revision === undefined || trigger.revision === DEFAULT_REVISION ? vcs.headBranch(trigger.path, signal) : { ok: true, value: trigger.revision };
   }
 
   function planOf(declaration: WorkspaceRepositoryRequest, repoId: string, pin: Pin | undefined): Plan {
@@ -268,6 +268,7 @@ export function createWorkspaceQueries(deps: WorkspaceQueriesDeps): WorkspaceQue
         workspace: {
           repos: [...resolved.map((entry) => entry.repository.repo), ...unavailable.map((entry) => entry.repoId)].sort(compareText),
           gateways: [...inForce.value.gateways].sort((a, b) => compareText(a.prefix, b.prefix)),
+          source: inForce.value.source,
         },
         repositorySnapshots: resolved.map((entry) => ({ repo: entry.repository.repo, snapshot: entry.repository.snapshot })).sort((a, b) => compareText(a.repo, b.repo)),
         sections: Object.fromEntries(Object.entries(sections).sort(([a], [b]) => compareText(a, b))),

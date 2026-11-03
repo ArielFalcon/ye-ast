@@ -57,8 +57,9 @@ const cutGuidance = Object.entries(CUT_GUIDANCE)
   .map(([kind, guidance]) => `  - ${kind}: ${guidance}`)
   .join("\n");
 
-/** What the agent reads at `initialize`: when each tool earns a call and how to read its answer. */
-export const INSTRUCTIONS = `ye-ast answers verifiable facts about the code of the repository this server is bound to. Every answer is derived from code and git, carries path:line evidence and the snapshot it read, and states its completeness. Prefer it over guessing from search results whenever a decision depends on what reaches what.
+/** What the agent reads at `initialize`: the root every answer is relative to, when each tool earns a call, and how to read one. */
+export function instructionsFor(repository: McpDeps["repository"]): string {
+  return `ye-ast answers verifiable facts about the code of the repository this server is bound to: ${repository.path} (id ${repository.repoId}). Every path in an answer is relative to that root, so open it there, never against the process working directory, which a client may set to anything. Every answer is derived from code and git, carries path:line evidence and the snapshot it read, and states its completeness. Prefer it over guessing from search results whenever a decision depends on what reaches what.
 
 When to call:
 - ye_ast_entrypoints: when orienting in the repository, or to find the handler of an HTTP route, UI route, message listener or scheduled job.
@@ -66,15 +67,16 @@ When to call:
 - ye_ast_importers: before moving, renaming or deleting a file, or changing what it exports.
 - ye_ast_impact: after changing code and before reporting the work done or opening a pull request, with base set to the branch the change merges into; set live to true to include uncommitted edits. It repeats what ye_ast_callers already answered when the change stays inside the symbols asked about, so call ye_ast_impact once for the whole change before reporting it done, not once per symbol.
 - ye_ast_workspace: when the work crosses repositories (a frontend calling services, a service calling another, a message between them). It lists the hosts, path prefixes, configuration URLs, dependency coordinates, remotes and registries the repository writes outward, the local repository that serves each one and the basis that says why, and the names no repository given serves. Pass the other clones with repos, or none to read the ones the repository persists, then ask ye_ast_callers or ye_ast_impact again with workspace set to those repos so the call sites of the other repositories that land in what the walk reaches are joined. It reads each repository from its own clone, and refreshes a declared remote only for a repository the user declared trusted; nothing else reaches the network: a name nothing serves is the next clone to make with your own tools.
-- ye_ast_decisions: when the workspace has gaps only the user can fill (a name no clone given serves, a clone that states no name, a prefix that routes nowhere, a repository with no trust record, a repository the remote could not pin at the trigger's line, a repository declared without a remote), and before \`ye-ast install --workspace\`, to show the user a form. It reads the same repositories as ye_ast_workspace and answers each gap with every option the workspace can verify, the places that make each one valid, and the option a rule recommends; a gap whose answer is a value no fact states says so. It writes nothing: render the options, then persist the answers with \`ye-ast install --workspace\` and \`ye-ast install --trust\`.
+- ye_ast_decisions: when the workspace has gaps only the user can fill (a name no clone given serves, a clone that states no name, a prefix that routes nowhere, a repository with no trust record, a repository the remote could not pin at the trigger's line, a repository declared without a remote), and before \`ye-ast install --workspace\`, to show the user a form. It reads the same repositories as ye_ast_workspace, says which declaration they came from, and answers each gap with every option the workspace can verify, the places that make each one valid, and the option a rule recommends; a gap whose answer is a value no fact states says so. It writes nothing: render the options, then persist the answers with \`ye-ast install --workspace\` and \`ye-ast install --trust\`.
 - workspace on ye_ast_callers and ye_ast_impact: when the symbol or change can be called from another repository (a route or a handler a frontend or another service calls). Pass the other local clones as workspace.repos (a path each; gateways only when a path prefix routes to a repository and the code does not say it), or pass workspace without repos to work over the repositories and gateways the user persisted with \`ye-ast install --workspace\`; a repository that persists none answers about itself alone. The answer adds the links from call sites in those repositories to what a walk reaches, and follows each link into its own repository, so a chain of repositories answers as one: what depends on those call sites in their own repository, the call sites that reached a declared service and matched none of its routes (unmatched), the ones that name a service no repository given serves (external), and every call site it could not decide as a cut. On ye_ast_impact the links also run the other way: what the change sends onward, each link naming the links crossed from it (reach). A repository not passed is not read: an answer without workspace says nothing about other repositories. Each repository is read at its HEAD or the revision given, under its own trust declaration; a repository the user declared trusted whose remote is declared is refreshed and read at the sha the remote's listing pins. A refreshed answer opens its text with a \`remote:\` line per remote saying whether this query verified it and why not, and a \`pinned:\` line per repository naming the step that chose its sha, and carries the same freshness and resolution beside the fact. live cannot be combined with workspace.
-- Every tool takes scope: include and exclude globs over repository-relative paths (exclude wins). A path outside the scope is not read at all, so callers and entrypoints through it are not known and the answer is complete only within the scope, which it names under its status. Use scope to keep one service or package of a repository apart; to shorten an answer, leave scope out and rely on detail.
+- Every tool takes scope: include and exclude globs over repository-relative paths (exclude wins). include selects the content the answer is about, and the configuration that interprets it (a package.json, a tsconfig, a build file, a Spring application file, an OpenAPI document) is read whatever the scope selects, so narrowing never hides what an extractor needs to place a source. exclude leaves a path out of both, and a path outside the scope is never answered about, so callers and entrypoints through it are not known and the answer is complete only within the scope, which it names under its status. Use scope to keep one service or package of a repository apart; to shorten an answer, leave scope out and rely on detail.
 - ye-ast does not say which templates bind one input or output of a component; search the templates for the binding's name.
 
 Reading an answer:
 - status "complete": the result is everything within the declared scope the answer prints on its second line (inputs.declaredScope); code in languages or frameworks outside it is not covered.
 - status "partial": the result stops at each listed cut; what lies past a cut is not known.
 - status "unknown": ye-ast cannot tell, and the reason says why; never read it as "no impact".
+- an item with reason "no-project": no package.json above that source places it in a project, so nothing says whether it declares routes; scope does not hide the manifest, unless an exclude glob leaves it out.
 - ye_ast_impact and ye_ast_callers list the symbols at depth 0 and 1 and count deeper ones per file; set detail to "full" when the deeper symbols themselves are needed.
 - confidence is 0-1 and printed only below 1: how strongly the edge that reached the symbol was resolved, 1 for a relation read from the code itself and lower for one the extractor inferred. fan-in is how many places call or instantiate the symbol, whether or not the walk followed them.
 - Every answer closes with a \`cuts:\` list holding every place past each cut, after the content; the status line only counts them by kind, so a partial answer read without its list reads as complete.
@@ -82,6 +84,7 @@ Reading an answer:
 
 What to do at each kind of cut:
 ${cutGuidance}`;
+}
 
 const revision = z.string().min(1).optional().describe("Git revision to read; HEAD when omitted.");
 const live = z
@@ -134,7 +137,7 @@ const workspaceRepos = z
   .array(workspaceRepo)
   .min(1)
   .optional()
-  .describe("Other local repositories to read beside the bound one; leave it out to read the repositories the repository persists.");
+  .describe("Other local repositories to read beside the bound one; leave it out to read the repositories the repository persists. The answer says which of the two declared them.");
 
 const workspace = z
   .strictObject({
@@ -146,7 +149,7 @@ const workspace = z
     gateways,
   })
   .optional()
-  .describe("Other local repositories whose call sites to join to what a walk reaches: the answer then also holds the links from them and from the repositories they chain into, what depends on those call sites, and the call sites that match nothing. Without repos the repositories and gateways the bound repository persists are used, and a repository that persists none answers about itself alone. Each is read at its own snapshot under its own trust declaration; live excludes it.");
+  .describe("Other local repositories whose call sites to join to what a walk reaches: the answer then also holds the links from them and from the repositories they chain into, what depends on those call sites, and the call sites that match nothing. Without repos the repositories and gateways the bound repository persists are used, and a repository that persists none answers about itself alone and says so. Each is read at its own snapshot under its own trust declaration; live excludes it.");
 
 /** `live` reads the working tree of one repository; a workspace reads committed snapshots. */
 const withoutWorkspace = (value: { live?: boolean | undefined; workspace?: unknown }): boolean => !(value.live === true && value.workspace !== undefined);
@@ -166,7 +169,7 @@ const scope = z
     exclude: globs.describe("Paths matching one of these globs are left out, even when included."),
   })
   .optional()
-  .describe("The part of the repository ye-ast reads, as globs over repository-relative paths; the whole repository when omitted. Paths outside it are not read, so callers and entrypoints through them are not known.");
+  .describe("The part of the repository the answer is about, as globs over repository-relative paths; the whole repository when omitted. include selects the content, and the configuration that interprets it (a manifest, a compiler configuration, a build file, a Spring configuration, a contract document) is read whatever the scope selects; exclude leaves a path out of both. A path outside the scope is not answered about, so callers and entrypoints through it are not known.");
 
 /** The scope the caller set, or nothing, so a query receives no scope it was not given. */
 function scopeOf(requested: z.infer<typeof scope>): { scope?: ScopeRequest } {
@@ -269,7 +272,7 @@ function budgetOf(requested: z.infer<typeof budget>): { budget?: ImpactBudget } 
 
 export function createMcpServer(deps: McpDeps): McpServer {
   const { redaction, repository } = deps;
-  const server = new McpServer({ name: "ye-ast", version: deps.version }, { instructions: INSTRUCTIONS });
+  const server = new McpServer({ name: "ye-ast", version: deps.version }, { instructions: instructionsFor(repository) });
 
   /**
    * The fact is redacted first and the text is rendered from the redacted fact, so neither carries a secret. A workspace

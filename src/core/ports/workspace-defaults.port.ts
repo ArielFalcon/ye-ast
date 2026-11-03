@@ -14,4 +14,9 @@ export interface WorkspaceDefaults {
    * persists none. A file that does not parse or does not validate is a fault, never an absent workspace.
    */
   of(root: string): Promise<Result<WorkspaceManifest | undefined, FixedLayerFault>>;
+  /**
+   * The same resolution `of` applies, for a manifest a caller holds before it is stored: `install` checks it against the
+   * filesystem without a write, so the paths it validates are exactly the ones a later read will use.
+   */
+  resolve(root: string, manifest: WorkspaceManifest): WorkspaceManifest;
 }

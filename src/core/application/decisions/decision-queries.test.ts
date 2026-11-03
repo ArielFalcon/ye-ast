@@ -65,7 +65,7 @@ function workspaceValue(gateways: readonly { prefix: string; repo: string }[] = 
     { name: "shared-api", repo: "orders-core", basis: "artifact", evidence: [{ path: "src/app/shared.api.ts", line: 3 }] },
   ];
   return {
-    workspace: { repos: read.map(({ repo }) => repo), gateways },
+    workspace: { repos: read.map(({ repo }) => repo), gateways, source: "request" },
     repositorySnapshots: read.map(({ repo, snapshot }) => ({ repo, snapshot })),
     sections: { billing: section("billing", []), orders: section("orders", []), "orders-core": section("orders-core", []), "shop-web": section("shop-web", [outward("shared-api")]) },
     candidates,
@@ -76,7 +76,7 @@ function workspaceValue(gateways: readonly { prefix: string; repo: string }[] = 
 
 const REQUEST: WorkspaceRequest = { repo: { path: "/work/orders" }, repos: [{ path: "/work/shop-web" }, { path: "/work/billing" }] };
 
-function setup(answer: Result<Fact<WorkspaceValue>, WorkspaceFault>, defaults?: WorkspaceDefaults, refresh?: WorkspaceRefresh, vcs?: Pick<Vcs, "remotes">): { queries: DecisionQueries; asks: WorkspaceRequest[] } {
+function setup(answer: Result<Fact<WorkspaceValue>, WorkspaceFault>, defaults?: WorkspaceDefaults, refresh?: WorkspaceRefresh, vcs: Pick<Vcs, "remotes"> = remotesOf({})): { queries: DecisionQueries; asks: WorkspaceRequest[] } {
   const asks: WorkspaceRequest[] = [];
   const workspace: WorkspaceQueries = {
     outwardNames: async (request) => {
@@ -84,7 +84,7 @@ function setup(answer: Result<Fact<WorkspaceValue>, WorkspaceFault>, defaults?: 
       return answer.ok ? { ok: true, value: { fact: answer.value, ...(refresh === undefined ? {} : { refresh }) } } : answer;
     },
   };
-  return { queries: createDecisionQueries({ workspace, ...(defaults === undefined ? {} : { defaults }), ...(vcs === undefined ? {} : { vcs }) }), asks };
+  return { queries: createDecisionQueries({ workspace, ...(defaults === undefined ? {} : { defaults }), vcs }), asks };
 }
 
 /** A git that states the origin URL of each clone named here, and every clone it was asked about. */
@@ -100,7 +100,7 @@ function remotesOf(urls: Readonly<Record<string, string>>, asked: string[] = [])
 
 /** The declaration a repository persisted, as the defaults port answers it. */
 function declared(repos: readonly { path: string; id?: string }[]): WorkspaceDefaults {
-  return { of: async () => ({ ok: true, value: { repos } }) };
+  return { of: async () => ({ ok: true, value: { repos } }), resolve: (_root, manifest) => manifest };
 }
 
 function valueOf(result: Result<FactRead<DecisionValue>, WorkspaceFault>): DecisionValue {
@@ -120,6 +120,7 @@ test("each gap the workspace read states becomes one decision, in the domain's o
 
   const value = valueOf(await queries.decisions(REQUEST));
 
+  assert.equal(value.source, "request", "the set says where its repositories came from");
   assert.deepEqual(value.decisions.map((decision) => decision.id), ["gateway:geo-api", "membership:clone:billing", "membership:name:shared-api", "repository:geo.example.com"]);
   assert.deepEqual(
     decisionOf(value, "membership:name:shared-api").options.map((option) => `${option.value}${option.recommended ? "*" : ""}${option.basis === undefined ? "" : `(${option.basis})`}`),
@@ -143,7 +144,7 @@ test("a clone the persisted declaration holds is no membership decision, and a n
 });
 
 test("a declaration that cannot be read fails the set with its fault", async () => {
-  const broken: WorkspaceDefaults = { of: async () => ({ ok: false, fault: { kind: "unreadable", detail: ".ye-ast/workspace.json: broken" } }) };
+  const broken: WorkspaceDefaults = { of: async () => ({ ok: false, fault: { kind: "unreadable", detail: ".ye-ast/workspace.json: broken" } }), resolve: (_root, manifest) => manifest };
   const { queries } = setup({ ok: true, value: base(workspaceValue()) }, broken);
 
   assert.deepEqual(await queries.decisions(REQUEST), { ok: false, fault: { kind: "unreadable", detail: ".ye-ast/workspace.json: broken" } });
@@ -306,7 +307,7 @@ test("a repository the refresh pinned at the default branch while the trigger's 
   assert.deepEqual(result.value.refresh, refresh);
 });
 
-test("a vcs dep adds only remote decisions, leaving every other decision byte-identical", async () => {
+test("a clone origin adds only remote decisions, leaving every other decision byte-identical", async () => {
   const withoutVcs = valueOf(await setup({ ok: true, value: base(workspaceValue()) }).queries.decisions(REQUEST));
   const withVcs = valueOf(await setup({ ok: true, value: base(workspaceValue()) }, undefined, undefined, remotesOf({ "/work/billing": "https://git.example.com/billing.git" })).queries.decisions(REQUEST));
 

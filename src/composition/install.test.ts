@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { EXIT_CODE } from "../cli/main.ts";
@@ -193,8 +193,18 @@ test("an install that stops after the trust was recorded says so and keeps the r
 });
 
 test("install --workspace persists the manifest under .ye-ast/ and a second run leaves it unchanged", async () => {
+  const committed = (path: string): string => {
+    mkdirSync(path);
+    execFileSync("git", ["init", "-q"], { cwd: path, env: GIT_ENV });
+    writeFileSync(join(path, "orders.txt"), "orders");
+    execFileSync("git", ["add", "-A"], { cwd: path, env: GIT_ENV });
+    execFileSync("git", ["commit", "-q", "-m", "orders"], { cwd: path, env: GIT_ENV });
+    return path;
+  };
+  committed(join(workspace, "orders-service"));
+  const billing = committed(join(workspace, "billing-service"));
   const manifest = join(workspace, "workspace.json");
-  writeFileSync(manifest, JSON.stringify({ gateways: [{ prefix: "orders-api", repo: "orders" }], repos: [{ path: "../orders-service" }, { path: "/work/shop" }] }));
+  writeFileSync(manifest, JSON.stringify({ gateways: [{ prefix: "orders-api", repo: "orders" }], repos: [{ path: "../orders-service" }, { path: billing }] }));
 
   const first = await cli("install", "--trust", "untrusted", "--workspace", manifest, repo);
   const stored = readFileSync(join(repo, ".ye-ast", "workspace.json"), "utf8");
@@ -202,9 +212,22 @@ test("install --workspace persists the manifest under .ye-ast/ and a second run 
 
   assert.equal(first.code, EXIT_CODE.ok, first.stderr.join("\n"));
   assert.ok(first.stdout.some((line) => /^\.ye-ast\/workspace\.json: written$/.test(line)));
-  assert.deepEqual(JSON.parse(stored), { repos: [{ path: "../orders-service" }, { path: "/work/shop" }], gateways: [{ prefix: "orders-api", repo: "orders" }] });
+  assert.deepEqual(JSON.parse(stored), { repos: [{ path: "../orders-service" }, { path: billing }], gateways: [{ prefix: "orders-api", repo: "orders" }] });
   assert.ok(second.stdout.some((line) => /^\.ye-ast\/workspace\.json: unchanged$/.test(line)));
   assert.equal(readFileSync(join(repo, ".ye-ast", "workspace.json"), "utf8"), stored);
+});
+
+test("install --workspace refuses a repository the query families cannot read, before it records anything", async () => {
+  mkdirSync(join(workspace, "not-a-repo"));
+  const manifest = join(workspace, "workspace.json");
+  writeFileSync(manifest, JSON.stringify({ repos: [{ path: "../not-a-repo" }] }));
+
+  const { code, stderr } = await cli("install", "--trust", "untrusted", "--workspace", manifest, repo);
+
+  assert.equal(code, EXIT_CODE.queryFailed);
+  assert.match(stderr.join("\n"), /^ye-ast: git-failed: repos\[0\]\.path: fatal: not a git repository/m);
+  assert.equal(existsSync(join(repo, ".ye-ast")), false);
+  assert.equal(existsSync(trustDirectory), false);
 });
 
 test("a workspace query that names no repositories works over the manifest install persisted", async () => {
@@ -222,7 +245,7 @@ test("a workspace query that names no repositories works over the manifest insta
 
   assert.ok(result.ok);
   assert.notEqual(result.value.fact.status, "unknown");
-  assert.deepEqual((result.value.fact as { value: WorkspaceValue }).value.workspace.repos, ["orders", "shop"]);
+  assert.deepEqual((result.value.fact as { value: WorkspaceValue }).value.workspace, { repos: ["orders", "shop"], gateways: [], source: "persisted" });
 });
 
 const ORDER_PAGE = `import { HttpClient } from "@angular/common/http";

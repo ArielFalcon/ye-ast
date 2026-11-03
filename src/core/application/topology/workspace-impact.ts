@@ -62,9 +62,7 @@ export function createWorkspaceImpactQueries(deps: WorkspaceImpactDeps): Workspa
     const inForce = await workspaceInForce(request, deps.defaults);
     if (!inForce.ok) return inForce;
     const read = await deps.workspace.outwardNames({
-      // A change reads the trigger at its head; a callers answer leaves the line to the workspace read, so a refresh
-      // scopes the trigger's branch by the repository itself rather than by the placeholder HEAD.
-      repo: readsChange ? { ...request.repo, revision: triggerRevision } : request.repo,
+      repo: { ...request.repo, revision: triggerRevision },
       repos: inForce.value.repos,
       gateways: inForce.value.gateways,
       ...(request.offline === undefined ? {} : { offline: request.offline }),
@@ -111,11 +109,8 @@ export function createWorkspaceImpactQueries(deps: WorkspaceImpactDeps): Workspa
     }
 
     const triggerBase = workspace.sections[trigger] ?? fact;
-    // A repository the read could not reach keeps its unknown section, so this answer is partial and names why.
-    for (const repo of workspace.workspace.repos) {
-      if (sections[repo] !== undefined) continue;
-      const section = workspace.sections[repo];
-      if (section?.status === "unknown") sections[repo] = section;
+    for (const [repo, section] of Object.entries(workspace.sections)) {
+      if (section.status === "unknown" && sections[repo] === undefined) sections[repo] = section;
     }
     const value: WorkspaceImpactValue = {
       workspace: {
@@ -123,6 +118,7 @@ export function createWorkspaceImpactQueries(deps: WorkspaceImpactDeps): Workspa
         gateways,
         unmatchedGateways: unmatchedGateways(inForce.value.gateways, repositories),
         unserved: [...new Set(workspace.unserved.map(({ name }) => name))].filter((name) => !gateways.some((gateway) => gateway.prefix === name)).sort(compareText),
+        source: inForce.value.source,
       },
       repositorySnapshots: workspace.repositorySnapshots,
       trigger: { repo: trigger, ...(impact?.mergeBase === undefined ? {} : { mergeBase: impact.mergeBase }) },

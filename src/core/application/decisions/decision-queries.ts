@@ -18,7 +18,7 @@ export interface DecisionQueriesDeps {
   /** The declaration the bound repository persists: it answers a membership already, and states which repositories name a remote. */
   defaults?: WorkspaceDefaults;
   /** Reads the remotes of a clone the declaration gives no `remote`, so that gap offers the clone's own `origin`. */
-  vcs?: Pick<Vcs, "remotes">;
+  vcs: Pick<Vcs, "remotes">;
 }
 
 export function createDecisionQueries({ workspace, defaults, vcs }: DecisionQueriesDeps): DecisionQueries {
@@ -47,7 +47,7 @@ export function createDecisionQueries({ workspace, defaults, vcs }: DecisionQuer
         ...(origins.value.length === 0 ? {} : { origins: origins.value }),
       };
       const decisions = decisionsOf(input).decisions;
-      const answer = decisionFact(fact, { decisions, repositories: value.repositorySnapshots });
+      const answer = decisionFact(fact, { decisions, repositories: value.repositorySnapshots, source: value.workspace.source });
       return { ok: true, value: read.value.refresh === undefined ? { fact: answer } : { fact: answer, refresh: read.value.refresh } };
     },
   };
@@ -66,12 +66,11 @@ async function declaredOf(defaults: WorkspaceDefaults | undefined, root: string)
  * remotes for the section's identity, and a clone that states none offers no option.
  */
 async function originsOf(
-  vcs: Pick<Vcs, "remotes"> | undefined,
+  vcs: Pick<Vcs, "remotes">,
   repositories: readonly WorkspaceRepository[],
   declarations: readonly WorkspaceRepositoryDeclaration[],
   trigger: string,
 ): Promise<Result<readonly DecisionOrigin[], WorkspaceFault>> {
-  if (vcs === undefined) return { ok: true, value: [] };
   const byRepo = new Map(declarations.map((declaration) => [declaration.id ?? directoryNameOf(declaration.path), declaration]));
   const origins: DecisionOrigin[] = [];
   for (const repository of repositories) {

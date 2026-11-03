@@ -1,7 +1,7 @@
 import type { Decision } from "../domain/decisions/decision.ts";
 import type { SnapshotRef } from "../domain/shared/fact.ts";
 import type { Result } from "../domain/shared/result.ts";
-import type { WorkspaceFault } from "./workspace-repos.port.ts";
+import type { WorkspaceFault, WorkspaceSource } from "./workspace-repos.port.ts";
 import type { FactRead, WorkspaceRequest } from "./workspace-queries.port.ts";
 
 /** The workspace the decision set is derived from: the bound repository, the clones passed and the gateways declared. */
@@ -11,6 +11,8 @@ export type DecisionsRequest = WorkspaceRequest;
 export interface DecisionValue {
   decisions: readonly Decision[];
   repositories: readonly { repo: string; snapshot: SnapshotRef }[];
+  /** Where the repositories this set was derived from came from; `none` says it read the bound repository alone. */
+  source: WorkspaceSource;
 }
 
 /**
