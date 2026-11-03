@@ -466,6 +466,25 @@ test("by default a cut names the declarations it could not settle to and the fil
   await session.close();
 });
 
+test("a declaration whose places are exactly another's points at it instead of printing them again", async () => {
+  const partial = impactFact({
+    status: "partial",
+    cuts: [
+      { kind: "unresolved-link", at: ["src/a.ts::A.h", "src/x.ts:1", "src/y.ts:2"] },
+      { kind: "unresolved-link", at: ["src/b.ts::B.g", "src/x.ts:1", "src/y.ts:2"] },
+      { kind: "unresolved-link", at: ["src/a.ts::A.f", "src/x.ts:1", "src/y.ts:2"] },
+    ],
+  } as Partial<Fact<ImpactValue>>);
+  const { session } = await setup({ ofChange: async () => ({ ok: true, value: partial }) });
+  const text = textOf(await session.callTool("ye_ast_impact", { base: "main" }));
+  assert.match(
+    text,
+    /unresolved-link \(3 declarations, 6 references; detail "full" lists every place\):\n {4}src\/a\.ts\n {6}A\.f: src\/x\.ts, src\/y\.ts\n {6}A\.h \(same places as A\.f\)\n {4}src\/b\.ts\n {6}B\.g \(same places as src\/a\.ts::A\.f\)$/m,
+  );
+  assert.equal(text.split("src/x.ts").length - 1, 1, "a list shared by three declarations is printed once");
+  await session.close();
+});
+
 test("the seeds of an impact answer are grouped under their file, with the basis printed once when the file shares it", async () => {
   const seeds = [
     { file: "src/a.ts", symbol: "a", line: 3, basis: "lines" as const },

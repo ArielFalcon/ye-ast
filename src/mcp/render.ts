@@ -153,28 +153,38 @@ function placeFiles(cut: Cut): string {
 }
 
 /** The declarations an unresolved reference could not be settled to, under the file that holds them, each with the files
- * its references sit in. An anchor that names a file alone is the cut itself: its places are that file. */
+ * its references sit in. A file that leads a cut of its own says so, and a declaration whose places are exactly those of
+ * another points at it instead of printing them a second time. */
 function unresolvedDeclarations(cuts: readonly Cut[]): string[] {
-  const byFile = new Map<string, { names: string[]; whole: boolean }>();
+  const whole = new Set<string>();
+  const entries: { file: string; name: string; files: string }[] = [];
   for (const cut of cuts) {
     const anchor = cut.at[0] ?? "";
     const settled = anchor.indexOf("::");
-    const file = settled === -1 ? anchor : anchor.slice(0, settled);
-    const entry = byFile.get(file) ?? { names: [], whole: false };
-    if (settled === -1) entry.whole = true;
-    else {
-      const files = placeFiles(cut);
-      entry.names.push(files === "" ? anchor.slice(settled + 2) : `${anchor.slice(settled + 2)}: ${files}`);
-    }
-    byFile.set(file, entry);
+    if (settled === -1) whole.add(anchor);
+    else entries.push({ file: anchor.slice(0, settled), name: anchor.slice(settled + 2), files: placeFiles(cut) });
+  }
+  entries.sort((a, b) => compareText(a.file, b.file) || compareText(a.name, b.name));
+  const canonical = new Map<string, { file: string; name: string }>();
+  for (const entry of entries) if (entry.files !== "" && !canonical.has(entry.files)) canonical.set(entry.files, { file: entry.file, name: entry.name });
+  const byFile = new Map<string, string[]>();
+  for (const entry of entries) {
+    const first = canonical.get(entry.files);
+    const same = first !== undefined && (first.file !== entry.file || first.name !== entry.name);
+    const line =
+      entry.files === "" ? entry.name
+      : !same ? `${entry.name}: ${entry.files}`
+      : `${entry.name} (same places as ${first.file === entry.file ? first.name : `${first.file}::${first.name}`})`;
+    byFile.set(entry.file, [...(byFile.get(entry.file) ?? []), line]);
   }
   const references = cuts.reduce((total, cut) => total + Math.max(0, cut.at.length - 1), 0);
+  const files = [...new Set([...whole, ...byFile.keys()])].sort(compareText);
   return [
     `  unresolved-link (${cuts.length} declarations, ${references} references; detail "full" lists every place):`,
-    ...[...byFile].flatMap(([file, { names, whole }]) => [
+    ...files.flatMap((file) => [
       `    ${file}`,
-      ...(whole ? ["      (the file itself)"] : []),
-      ...names.map((name) => `      ${name}`),
+      ...(whole.has(file) ? ["      (the file itself)"] : []),
+      ...(byFile.get(file) ?? []).map((line) => `      ${line}`),
     ]),
   ];
 }
