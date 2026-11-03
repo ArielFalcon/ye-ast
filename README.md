@@ -9,7 +9,7 @@
 [![node](https://img.shields.io/node/v/ye-ast-mcp?style=flat-square&color=111111&logo=nodedotjs)](package.json)
 [![MCP](https://img.shields.io/badge/MCP-stdio-111111?style=flat-square)](#3-register-the-mcp-server)
 
-**[Why](#why) · [What it does](#what-it-does) · [Try it](#try-it) · [Limits](#limits) · [For AI agents →](#for-ai-agents-install-and-configure-ye-ast) · [Live explorer →](https://arielfalcon.github.io/ye-ast/explorer/)**
+**[Why](#why) · [What it does](#what-it-does) · [Try it](#try-it) · [Limits](#limits) · [For AI agents →](#for-ai-agents-install-and-configure-ye-ast) · [Live explorer →](https://arielfalcon.github.io/ye-ast/)**
 
 </div>
 

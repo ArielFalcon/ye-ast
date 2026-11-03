@@ -532,11 +532,14 @@
     return term ? (LANG === "es" ? term.labelEs || term.label : term.label) : key;
   }
 
-  function refLink(ref) {
+  /** The blob view of this repository: a ref names a path in it, and the site is served from docs/, not from a clone. */
+const SOURCE_BASE = "https://github.com/ArielFalcon/ye-ast/blob/main/";
+
+function refLink(ref) {
     const match = /^(.+?):([\d-]+)$/.exec(ref);
     const path = match ? match[1] : ref;
     const line = match ? match[2].split("-")[0] : null;
-    return `<a href="../../${esc(path)}${line ? "#L" + line : ""}" target="_blank" rel="noreferrer">${esc(ref)}</a>`;
+    return `<a href="${SOURCE_BASE}${esc(path)}${line ? "#L" + line : ""}" target="_blank" rel="noreferrer">${esc(ref)}</a>`;
   }
 
   function layerDeps(layerId) {

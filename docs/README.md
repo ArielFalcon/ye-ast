@@ -2,10 +2,10 @@
 
 The unified site: the graph-first explorer plus the concept sections and the walk simulator from the original
 narrative explainer. The explainer itself stays on the author's machine as source material; this is the only site
-that is served, by GitHub Pages from `docs/`.
+that is served, by GitHub Pages from `docs/`, at its root.
 
 Open [`index.html`](index.html) (English) or [`es.html`](es.html) (Spanish). No build and no network request from the
-page.
+page. Every `path:line` reference opens the file in the repository on GitHub.
 
 ## What it does
 

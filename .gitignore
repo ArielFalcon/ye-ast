@@ -5,11 +5,10 @@ coverage/
 *.log
 .DS_Store
 
-# Documentation that never leaves this machine: design records, delivery process and the explainer's
-# source material. The one published site is docs/explorer/, served by GitHub Pages from /docs.
-docs/*
-!docs/explorer/
-!docs/.nojekyll
+# Documentation that never leaves this machine: design records and the explainer's source material.
+# The rest of docs/ is the published site, served by GitHub Pages from /docs.
+docs/architecture/
+docs/explainer/
 odd/
 .atl/
 
