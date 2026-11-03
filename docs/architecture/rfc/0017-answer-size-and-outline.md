@@ -120,6 +120,28 @@ The numbers come from a probe with no clock and no network, reproducible by inpu
 repository, revision and requests produce the same bytes twice. Timing stays where it lives today,
 `src/composition/measurement.ts`.
 
+**Measured** on the baseline the earlier RFCs use — name-webapp at `e8699653`, trust `trusted`, this branch's working
+tree, the text the model reads and the envelope the host reads:
+
+| Call | summary text | full text | saving | envelope |
+|---|---|---|---|---|
+| `ye_ast_entrypoints` (all) | 5,378 | 5,378 | 0 | 672 |
+| `ye_ast_callers RestClientService.get` | 15,249 | 63,296 | −48,047 (−76 %) | 876 |
+| `ye_ast_callers AuthService.getAccessToken` | 998 | 1,072 | −74 (−7 %) | 867 |
+| `ye_ast_callers formatRating` | 4,615 | 6,677 | −2,062 (−31 %) | 847 |
+| `ye_ast_callers AppButtonComponent` | 16,832 | 22,441 | −5,609 (−25 %) | 869 |
+
+No summary is longer than its full answer, and two runs give identical bytes. Two readings of the table matter for
+what follows:
+
+- The saving is concentrated: one call carries 48 KB of the 55 KB saved, so a summary is worth its line on a large
+  answer and near-worthless on a small one, which is exactly what the rule of section 1 encodes.
+- `AuthService.getAccessToken` saves 7 %: the counted line nearly costs what it hides. That answer is the first
+  candidate for the outline of section 2, because the remaining weight is the file the agent reads next, not the
+  answer.
+- `ye_ast_entrypoints` costs the same at both detail levels, so its summary carries no counted elision to pay for.
+- The envelope stays under 900 bytes on every call: what a host pays is not what a model pays.
+
 ## Open questions
 
 | # | Question | Recommendation |
