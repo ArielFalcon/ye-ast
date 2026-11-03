@@ -194,8 +194,9 @@ What `install` did:
 
 ### 3. Register the MCP server
 
-One server instance is bound to **one** repository root. Always pass the path: an MCP client may start the server in
-any working directory.
+One server instance is bound to **one** repository root, and the instructions it answers at `initialize` name that root:
+every path in an answer is relative to it. Always pass the path: an MCP client may start the server in any working
+directory.
 
 <details open>
 <summary><b>Claude Code</b></summary>
@@ -296,8 +297,8 @@ How the arguments behave:
 |---|---|
 | `revision` / `head` | Any git revision. Default: `HEAD`. |
 | `live` | Read the working tree instead of a revision. Requires `trusted`; exclusive with `revision`/`head`. |
-| `workspace` | `{ repos: [{ path, id?, revision? }], gateways?: [{ prefix, repo }] }` on `callers` and `impact`: other **local** clones whose call sites are joined to the routes and listeners the walk reaches. The answer adds the links (with their basis: `exact`, `gateway-prefix`, `route-overlap`, `base-path`, `suffix`, `event-destination`), each with its direction (`upstream` for what reaches the change, `downstream` for what a change sends onward) and the links crossed from the change (`reach`), followed to a fixpoint across repositories; what depends on those call sites in their own repository, the call sites that reached a declared service and matched none of its entrypoints (`unmatched`), the ones that name a service no clone serves (`external`), and every call site whose target the code does not decide as a cut. A gateway prefix needs no declaration when the routes show it; `gateways` overrides it, and a declared gateway no call site names, or whose repository was not passed, is listed as matching nothing. Without `repos` the repositories and gateways the user persisted with `ye-ast install --workspace <file>` are used, and a repository that persists none answers about itself alone; the manifest holds the same object, its relative paths resolved against the installed repository. Each clone is read at its own snapshot under its own trust declaration, with no network request; exclusive with `live`. Without `workspace` the answer says nothing about other repositories. |
-| `scope` | `{ include?: [globs], exclude?: [globs] }` over repository-relative paths; `exclude` wins. A path outside the scope is **not read**, so callers and entrypoints through it are not known; the answer names its scope under its status. Use it to keep one service or package apart, not to shorten an answer. |
+| `workspace` | `{ repos: [{ path, id?, revision? }], gateways?: [{ prefix, repo }] }` on `callers` and `impact`: other **local** clones whose call sites are joined to the routes and listeners the walk reaches. The answer adds the links (with their basis: `exact`, `gateway-prefix`, `route-overlap`, `base-path`, `suffix`, `event-destination`), each with its direction (`upstream` for what reaches the change, `downstream` for what a change sends onward) and the links crossed from the change (`reach`), followed to a fixpoint across repositories; what depends on those call sites in their own repository, the call sites that reached a declared service and matched none of its entrypoints (`unmatched`), the ones that name a service no clone serves (`external`), and every call site whose target the code does not decide as a cut. A gateway prefix needs no declaration when the routes show it; `gateways` overrides it, and a declared gateway no call site names, or whose repository was not passed, is listed as matching nothing. Without `repos` the repositories and gateways the user persisted with `ye-ast install --workspace <file>` are used, and a repository that persists none answers about itself alone; the manifest holds the same object, its relative paths resolved against the installed repository. Every answer says which of the two declared its repositories (`workspace.source`: `request`, `persisted` or `none`), so an answer about the bound repository alone is never read as a workspace with no impact. Each clone is read at its own snapshot under its own trust declaration, with no network request; exclusive with `live`. Without `workspace` the answer says nothing about other repositories. |
+| `scope` | `{ include?: [globs], exclude?: [globs] }` over repository-relative paths; `exclude` wins. `include` selects the content the answer is about, and the configuration that interprets it (a `package.json`, a `tsconfig`, a build file, a Spring `application` file, an OpenAPI document) is always read, so narrowing never hides what an extractor needs to place a source. A path outside the scope is **not answered about**, so callers and entrypoints through it are not known; the answer names its scope under its status. Use it to keep one service or package apart, not to shorten an answer. |
 | `budget` | `{ depth?, hubFanIn?, expansions? }`, positive integers, no defaults. A bound that stops a walk is reported as a cut, never as a silent truncation. |
 | `detail` | Text listing for `callers` and `impact`. Default: depth 0 and 1 listed, deeper symbols counted per file. `"full"` lists every symbol. The structured content always holds all of them. |
 
@@ -332,6 +333,16 @@ value      the fact itself
 
 > [!WARNING]
 > An empty list is never used to mean "nothing found". If you see `unknown` or a cut, say so to the user.
+
+An item can also be `unknown` inside a `complete` answer: an entrypoint whose target the sources do not resolve, or a
+source no `package.json` above it places in a project (`no-project`). The collection is complete because nothing bounded
+it; the item says what could not be known at its place (RFC-0002 rule 2).
+
+`complete` stays relative to the declared scope, and the scope now separates content from interpretation: `include`
+selects the content the answer is about, and the configuration that interprets it — a `package.json`, a `tsconfig`, a
+build file, a Spring `application` file, an OpenAPI document — is always read, so narrowing the scope never removes what
+an extractor needs to place a source. `exclude` still wins over both, and a path a tool is asked about outside the scope
+stays out of scope.
 
 Also:
 
@@ -391,7 +402,7 @@ ye-ast map --live .                             # the working tree (trusted only
 | `ye-ast impact --base <rev> [--head <rev> \| --live] [scope] [budget] <repo>` | What depends on the change from the merge base to the head |
 | `ye-ast callers [--revision <rev> \| --live] [scope] [budget] <repo> <file>:<symbol> \| <file>:<start>-<end> …` | What depends on symbols or line ranges |
 | `ye-ast importers [--revision <rev> \| --live] [scope] <repo> <file> …` | Per file: importers, users and unresolved namers |
-| `ye-ast install --trust trusted\|untrusted [--workspace <file>] [<repo>]` | Declares the trust mode, writes the fixed layer (and the workspace manifest given), prints the MCP registration |
+| `ye-ast install --trust trusted\|untrusted [--workspace <file>] [<repo>]` | Declares the trust mode, writes the fixed layer (and the workspace manifest given, once every repository it names is a readable repository root), prints the MCP registration |
 | `ye-ast mcp [<repo>]` | The stdio MCP server, read-only, bound to one repository |
 | `ye-ast serve` | The query protocol over stdio, one JSON-RPC 2.0 message per line |
 
