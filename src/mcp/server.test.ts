@@ -14,6 +14,7 @@ import type { LiveFault } from "../core/ports/live-queries.port.ts";
 import type { WorkspaceQueries, WorkspaceRequest } from "../core/ports/workspace-queries.port.ts";
 import type { WorkspaceFault } from "../core/ports/workspace-repos.port.ts";
 import type { WorkspaceCallersRequest, WorkspaceImpactQueries, WorkspaceImpactValue, WorkspaceOfChangeRequest } from "../core/ports/workspace-impact-queries.port.ts";
+import type { RepoImpact } from "../core/ports/workspace-impact-queries.port.ts";
 import type { DecisionQueries, DecisionsRequest, DecisionValue } from "../core/ports/decision-queries.port.ts";
 import type { FactRead, WorkspaceRefresh } from "../core/ports/workspace-queries.port.ts";
 import { createMcpServer, CUT_GUIDANCE } from "./server.ts";
@@ -153,6 +154,7 @@ interface Answers {
   callers: (request: ImpactCallersRequest) => Promise<Result<Fact<ImpactValue>, ImpactFault>>;
   importers: (request: ImpactImportersRequest) => Promise<Result<Fact<ImportersValue>, VcsFault | LiveFault>>;
   decisions: (request: DecisionsRequest) => Promise<Result<FactRead<DecisionValue>, WorkspaceFault>>;
+  workspaceOfChange: (request: WorkspaceOfChangeRequest) => Promise<Result<FactRead<WorkspaceImpactValue>, WorkspaceFault>>;
 }
 
 async function setup(answers: Partial<Answers> = {}, refresh?: WorkspaceRefresh): Promise<{ session: Session; calls: Calls }> {
@@ -195,7 +197,7 @@ async function setup(answers: Partial<Answers> = {}, refresh?: WorkspaceRefresh)
     },
     ofChange: async (request) => {
       calls.workspaceOfChange.push(request);
-      return { ok: true, value: read(workspaceImpactFact()) };
+      return (answers.workspaceOfChange ?? (async () => ({ ok: true as const, value: read(workspaceImpactFact()) })))(request);
     },
   };
   const decisions: DecisionQueries = {
@@ -407,6 +409,83 @@ test("a partial answer counts its cuts in the status line and lists every one un
   assert.match(text, /depth at src\/A\.java:A\.f, src\/B\.java:B\.g \(limit 3\)/);
   assert.match(text, /hub \(1\): src\/C\.java:C\.h/);
   assert.ok(text.indexOf("\ncuts:") > text.indexOf("impacted symbols"), "the cut list closes the answer");
+  await session.close();
+});
+
+test("a summary counts the cuts anchored at symbols past the listed depth per file and lists the rest", async () => {
+  const deep = impactFact({
+    status: "partial",
+    value: {
+      ...IMPACT,
+      seeds: [{ file: "src/a.ts", symbol: "A.seed", line: 1, basis: "requested" }],
+      symbols: [
+        { file: "src/a.ts", symbol: "A.other", kind: "method", line: 4, depth: 1, confidence: 1, fanIn: 0 },
+        { file: "src/b.ts", symbol: "B.user", kind: "function", line: 9, depth: 2, confidence: 1, fanIn: 0 },
+        { file: "src/c.ts", symbol: "C.top", kind: "function", line: 5, depth: 2, confidence: 1, fanIn: 0 },
+      ],
+      entrypoints: [],
+    },
+    cuts: [
+      { kind: "unresolved-link", at: ["src/a.ts::A.seed", "src/x.ts:5"] },
+      { kind: "hub", at: ["src/a.ts::A.other"] },
+      { kind: "unresolved-link", at: ["src/b.ts::B.user", "src/y.ts:7", "src/y.ts:9"] },
+      { kind: "depth", at: ["src/c.ts::C.top"], limit: 5 },
+      { kind: "no-extractor", at: ["src/z.swift"] },
+    ],
+  } as Partial<Fact<ImpactValue>>);
+  const { session } = await setup({ ofChange: async () => ({ ok: true, value: deep }) });
+  const text = textOf(await session.callTool("ye_ast_impact", { base: "main" }));
+  assert.match(text, /^status: partial \(cuts: 2 unresolved-link, 1 depth, 1 hub, 1 no-extractor\)$/m);
+  assert.match(text, /hub \(1\): src\/a\.ts::A\.other/);
+  assert.match(text, /A\.seed: src\/x\.ts/);
+  assert.match(text, /no-extractor \(1\): src\/z\.swift/);
+  assert.match(text, /summarized \(2 at symbols deeper than depth 1\): detail "full" lists them/);
+  assert.match(text, /^ {2}src\/b\.ts: 1 unresolved-link$/m);
+  assert.match(text, /^ {2}src\/c\.ts: 1 depth$/m);
+  assert.doesNotMatch(text, /src\/y\.ts/);
+  await session.close();
+});
+
+test("detail full lists every cut, including the ones a summary counts", async () => {
+  const deep = impactFact({
+    status: "partial",
+    value: {
+      ...IMPACT,
+      seeds: [{ file: "src/a.ts", symbol: "A.seed", line: 1, basis: "requested" }],
+      symbols: [
+        { file: "src/b.ts", symbol: "B.user", kind: "function", line: 9, depth: 2, confidence: 1, fanIn: 0 },
+        { file: "src/c.ts", symbol: "C.top", kind: "function", line: 5, depth: 2, confidence: 1, fanIn: 0 },
+      ],
+      entrypoints: [],
+    },
+    cuts: [
+      { kind: "unresolved-link", at: ["src/b.ts::B.user", "src/y.ts:7", "src/y.ts:9"] },
+      { kind: "depth", at: ["src/c.ts::C.top"], limit: 5 },
+    ],
+  } as Partial<Fact<ImpactValue>>);
+  const { session } = await setup({ ofChange: async () => ({ ok: true, value: deep }) });
+  const text = textOf(await session.callTool("ye_ast_impact", { base: "main", detail: "full" }));
+  assert.match(text, /unresolved-link at src\/b\.ts::B\.user: src\/y\.ts: 7, 9/);
+  assert.match(text, /depth \(1\): src\/c\.ts::C\.top \(limit 5\)/);
+  assert.doesNotMatch(text, /summarized/);
+  await session.close();
+});
+
+test("a workspace summary counts a section's cut anchored at a symbol past the listed depth", async () => {
+  const built = workspaceImpactFact();
+  const value = (built as { value: WorkspaceImpactValue }).value;
+  const section = {
+    ...built,
+    status: "partial",
+    value: { impact: IMPACT, callSites: [], unmatched: [], external: [] },
+    cuts: [{ kind: "unresolved-link", at: ["src/OrderController.java::OrderController.one", "src/app/page.ts:9"] }],
+  } as unknown as Fact<RepoImpact>;
+  const fact = { ...built, value: { ...value, sections: { ...value.sections, shop: section } } } as Fact<WorkspaceImpactValue>;
+  const { session } = await setup({ workspaceOfChange: async () => ({ ok: true, value: { fact } }) });
+  const text = textOf(await session.callTool("ye_ast_impact", { base: "main", workspace: WORKSPACE }));
+  assert.match(text, /summarized \(1 at symbols deeper than depth 1\): detail "full" lists them/);
+  assert.match(text, /^ {2}src\/OrderController\.java: 1 unresolved-link$/m);
+  assert.doesNotMatch(text, /src\/app\/page\.ts/);
   await session.close();
 });
 

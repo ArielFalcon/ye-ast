@@ -2,6 +2,7 @@ import type { Entrypoint } from "../core/domain/entrypoints/entrypoint.ts";
 import type { Handler } from "../core/domain/entrypoints/http-route.ts";
 import type { ChangedEntrypoint } from "../core/domain/impact/changed-entrypoints.ts";
 import type { ImpactedSymbol, ImpactValue, ReachedEntrypoint, Seed } from "../core/domain/impact/impact-fact.ts";
+import { declarationAnchor } from "../core/domain/impact/impact-cuts.ts";
 import type { ImportersValue } from "../core/domain/impact/importers-fact.ts";
 import type { EntrypointMap } from "../core/domain/map/entrypoint-map.ts";
 import type { Decision, DecisionOption } from "../core/domain/decisions/decision.ts";
@@ -200,9 +201,50 @@ function cutLines(cuts: readonly Cut[], detail: Detail): string[] {
   });
 }
 
-/** The cut list every answer closes with, so the answer content is read first and nothing is dropped. */
-function cutsBlock(cuts: readonly Cut[], detail: Detail = "summary"): string[] {
-  return cuts.length === 0 ? [] : [CUTS, ...cutLines(cuts, detail)];
+/** The depth each symbol a cut can stop at is reached at, keyed by the cut's lead: a summary tells a cut it lists from
+ * one it only counts by this. */
+export type CutDepths = ReadonlyMap<string, number>;
+
+/** The depths of the symbols these answers reached, merged: a symbol reached at two depths keeps the nearest. */
+export function cutDepths(...values: readonly ImpactValue[]): CutDepths {
+  const depths = new Map<string, number>();
+  const remember = (anchor: string, depth: number): void => {
+    const known = depths.get(anchor);
+    if (known === undefined || depth < known) depths.set(anchor, depth);
+  };
+  for (const value of values) {
+    for (const seed of value.seeds) remember(declarationAnchor(seed.file, seed.symbol), 0);
+    for (const symbol of value.symbols) remember(declarationAnchor(symbol.file, symbol.symbol), symbol.depth);
+  }
+  return depths;
+}
+
+/** The declaration a cut stops at, when its lead names one: a path alone stops at a file. */
+function cutAnchor(cut: Cut): string | undefined {
+  const lead = cut.at[0];
+  return lead !== undefined && lead.includes("::") ? lead : undefined;
+}
+
+/** Whether a summary counts a cut instead of listing it: only one proven to stop at a symbol it does not list. */
+function countedCut(cut: Cut, depths: CutDepths): boolean {
+  const anchor = cutAnchor(cut);
+  const depth = anchor === undefined ? undefined : depths.get(anchor);
+  return depth !== undefined && depth > LISTED_DEPTH;
+}
+
+/** The counted cuts per file, each with the kinds it holds: the file is what the caller names to see them. */
+function countedCutsByFile(cuts: readonly Cut[]): string[] {
+  const files = Map.groupBy(cuts, (cut) => (cutAnchor(cut) ?? "").split("::")[0] ?? "");
+  return [...files].toSorted(([a], [b]) => compareText(a, b)).map(([file, inFile]) => `  ${file}: ${cutsByKind(inFile).map(([kind, ofKind]) => `${ofKind.length} ${kind}`).join(", ")}`);
+}
+
+/** The cut list every answer closes with, so the answer content is read first and nothing is dropped. Without depths
+ * every cut is listed; with them a summary counts the ones anchored at symbols it does not list and says how to see them. */
+function cutsBlock(cuts: readonly Cut[], detail: Detail = "summary", depths?: CutDepths): string[] {
+  if (cuts.length === 0) return [];
+  const listed = depths === undefined ? cuts : cuts.filter((cut) => !countedCut(cut, depths));
+  const counted = depths === undefined ? [] : cuts.filter((cut) => countedCut(cut, depths));
+  return [CUTS, ...cutLines(listed, detail), ...(counted.length === 0 ? [] : [`  summarized (${counted.length} at symbols deeper than depth ${LISTED_DEPTH}): detail "full" lists them`, ...countedCutsByFile(counted)])];
 }
 
 function list(lines: readonly string[]): string[] {
@@ -311,7 +353,7 @@ function groupedSeeds(seeds: readonly Seed[]): string[] {
 export function renderImpact(fact: Fact<ImpactValue>, detail: Detail = "summary"): string {
   const lines = headerLines(fact);
   if (fact.status === "unknown") return lines.join("\n");
-  lines.push(...impactBody(fact.value, detail), ...cutsBlock(cutsOf(fact), detail));
+  lines.push(...impactBody(fact.value, detail), ...cutsBlock(cutsOf(fact), detail, detail === "full" ? undefined : cutDepths(fact.value)));
   return lines.join("\n");
 }
 
@@ -378,7 +420,8 @@ export function renderWorkspaceImpact(fact: Fact<WorkspaceImpactValue>, detail: 
   lines.push(`links across repositories (${value.links.length}):`, ...value.links.map(impactedLinkLine));
   lines.push("per repository:", ...value.workspace.repos.flatMap((repo) => (value.sections[repo] === undefined ? [] : repoImpactLines(repo, value.sections[repo] as Fact<RepoImpact>, detail, value.trigger.repo))));
   lines.push(counted("no local repository serves", value.workspace.unserved));
-  lines.push(...cutsBlock([...cutsOf(fact), ...Object.values(value.sections).flatMap(cutsOf)], detail));
+  const impacts = Object.values(value.sections).flatMap((section) => (section.status === "unknown" || section.value.impact === undefined ? [] : [section.value.impact]));
+  lines.push(...cutsBlock([...cutsOf(fact), ...Object.values(value.sections).flatMap(cutsOf)], detail, detail === "full" ? undefined : cutDepths(...impacts)));
   return lines.join("\n");
 }
 

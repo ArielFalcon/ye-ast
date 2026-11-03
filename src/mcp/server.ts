@@ -77,10 +77,10 @@ Reading an answer:
 - status "partial": the result stops at each listed cut; what lies past a cut is not known.
 - status "unknown": ye-ast cannot tell, and the reason says why; never read it as "no impact".
 - an item with reason "no-project": no package.json above that source places it in a project, so nothing says whether it declares routes; scope does not hide the manifest, unless an exclude glob leaves it out.
-- Every tool takes detail. A summary, the default, lists the symbols at depth 0 and 1 and, for a cut, the declarations it could not settle to; set detail to "full" when the deeper symbols themselves or the place of each unresolved reference are needed.
+- Every tool takes detail. A summary, the default, lists the symbols at depth 0 and 1, and for a cut the declarations it could not settle to; it counts per file the symbols past that depth and the cuts anchored at them. Set detail to "full" when the deeper symbols themselves, the place of each unresolved reference or every cut is needed.
 - The text is the answer: it lists what detail asks for, while the structured content beside it carries only the envelope, so nothing is paid for twice. A host that needs the fact itself passes full: true, which adds every value and every cut place to the structured content and leaves the text unchanged.
 - confidence is 0-1 and printed only below 1: how strongly the edge that reached the symbol was resolved, 1 for a relation read from the code itself and lower for one the extractor inferred. fan-in is how many places call or instantiate the symbol, whether or not the walk followed them.
-- Every answer closes with a \`cuts:\` list holding every place past each cut, after the content; the status line only counts them by kind, so a partial answer read without its list reads as complete.
+- Every answer closes with a \`cuts:\` list after the content: a summary lists the cuts anchored at the symbols it lists and counts the rest per file with their kinds, saying so, and detail "full" lists every place. The status line only counts them by kind, so a partial answer read without its list reads as complete.
 - An isError result names a fault kind. "live-requires-trusted" means the user must declare the repository trusted with \`ye-ast init --trust trusted\` before live can be used; answer from a revision meanwhile. "unknown-symbol" lists what the file declares; ask again with one of those names.
 
 What to do at each kind of cut:
@@ -162,7 +162,7 @@ const withoutWorkspace = (value: { live?: boolean | undefined; workspace?: unkno
 const detail = z
   .enum(["summary", "full"] satisfies Detail[])
   .optional()
-  .describe("How much the text lists: summary (the default) names the symbols at depth 0 and 1 and the declarations a cut could not settle to; full lists every symbol and every place a cut could not settle. The structured content carries none of it unless the full argument is true.");
+  .describe("How much the text lists: summary (the default) names the symbols at depth 0 and 1 and the declarations a cut could not settle to, and counts per file the symbols past that depth and the cuts anchored at them; full lists every symbol and every place a cut could not settle. The structured content carries none of it unless the full argument is true.");
 
 const full = z
   .boolean()
