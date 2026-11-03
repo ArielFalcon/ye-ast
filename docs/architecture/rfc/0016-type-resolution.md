@@ -353,7 +353,7 @@ proven to reach.** That is `RFC-0002` rule 2 applied to what the emitter already
 
 | # | Family at `HEAD~5` | Mechanism | Effect | Cost |
 |---|---|---|---|---|
-| S10 | 19 of the 24 unbound references: `console` 13, `caches` 6, `String` | A root the pinned `typescript` lib declares, and that no repository file declares, cannot name a repository declaration. Retire the place, as an `external@lib` proof | Up to 15% of the places leave the list | ~0 with a precomputed table (~30 KB); 223–227 ms once and a ~100 MB transient peak if parsed at runtime |
+| S10 | 19 of the 24 unbound references: `console` 13, `caches` 6, `String` — **done, 2026-11-03** | A root the pinned `typescript` lib declares, and that the snapshot declares no global of, cannot name a repository declaration. Retire the place, as an ambient proof | Measured: `HEAD~5` 76→**64** cuts and 126→**107** places, `HEAD~20` 190→**176**, `HEAD~60` 359→**334**, no symbol changed | ~0: a generated table of 2.545 names, 57 KB, with a drift test |
 | S11 | 26 references the file declares itself | Replace the file-level shadow refusal with an enclosing-scope check, conservative: a declaration in a scope that encloses the use keeps the `unknown` | Recovers what `ADR-0019` decision 3 gave up for 6% | ~0 folded into the parse `import-origins` already performs; 224–259 ms as a second pass |
 | S12 | every qualified reference whose root is unproven | Stop attributing it to the walked homonym: anchor it at the caller file, or at the declaration a settlement proved | The list stops lying; the count may not move | ~0 |
 | S13 | 33 `no-extractor` places | Not types: `unreadRelationCuts` names Angular and DI relations the extractor could not place. Understand the construct, or declare the scope | Up to 26% of the places | A slice of its own, inside the extractor |
@@ -378,6 +378,23 @@ Measured cost of the syntax-only mechanisms on the same application (1.138 sourc
 
 None of these empties the list. The receiver population needs a type and the `no-extractor` population needs an extractor.
 What S10 to S12 buy is a list that never names a declaration it cannot prove, at a cost the process already pays.
+
+### S10 measured
+
+Shipped 2026-11-03. The table is generated from the installed pin (`scripts/lib-globals.ts`) and a test fails while it
+drifts, so the names can never disagree with the compiler that would answer the same question. The snapshot's own global
+declarations are read from its `.d.ts` files and from any file that augments the global scope, so a repository that spells
+a lib name itself keeps its cut.
+
+| Base | Cuts | Places | Symbols |
+|---|---|---|---|
+| `HEAD~5` | 76 → **64** (−15,8%) | 126 → **107** (−15,1%) | 586 → 586 |
+| `HEAD~20` | 190 → **176** (−7,4%) | 612 → **576** (−5,9%) | 1.067 → 1.067 |
+| `HEAD~60` | 359 → **334** (−7,0%) | 5.836 → **5.765** (−1,2%) | 2.495 → 2.495 |
+
+No symbol moved, which is the point: this proof removes noise and never expands an answer. Cost: none measurable — the
+table is 57 KB of source compiled into the process and the snapshot's global check is a substring scan over the texts the
+adapter already holds.
 
 ## How these costs were measured
 

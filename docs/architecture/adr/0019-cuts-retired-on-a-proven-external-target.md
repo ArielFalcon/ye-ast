@@ -8,9 +8,10 @@
   [RFC-0010](../rfc/0010-impact-queries.md), [RFC-0016](../rfc/0016-type-resolution.md)
 
 **In short:** `unresolved-link` is emitted when an unresolved reference's name tail matches a declaration the walk
-reached. When the file imports that name from a package outside the repository, the reference cannot name that
-declaration and the cut is false. ye-ast now reads the file's own imports — syntax and the module configuration the
-snapshot already holds — and stops emitting it. No type root, no dependency, no `Program`.
+reached. When the file imports that name from a package outside the repository — or nothing binds it and the language's own
+libraries declare it — the reference cannot name that declaration and the cut is false. ye-ast reads the file's own
+imports and the pinned compiler's own lib names, syntax and the module configuration the snapshot already holds, and stops
+emitting it. No type root, no dependency, no `Program`.
 
 ## Context
 
@@ -43,21 +44,24 @@ population did not.
 
 ## Decision
 
-1. **A reference whose root identifier the file imports from outside the repository is no cut**, whatever name tail the
-   index matched. `unresolvedLinkCuts` takes the set of proofs already made, and a reference in it is never attributed to
-   a declaration. The unit is **the reference, never the line**: a proof is keyed by its place *and* the name it proves
-   (`externalPlaceKey`, `settledPlaceKey`), because a line holds several references and retiring the line would hide a
-   true cut that shares it. A hidden dependence is worse than a false cut, and that is the same reason decision 3 pays 6%
-   for a simpler shadowing rule. Measured on the same application's index: of the 10.896 places whose reference tail
-   matches a declaration somewhere, **468 (4,3%) carry more than one root name on the line**, so keying by the place would
-   have retired 468 cuts the proof never covered. That count is an upper bound: it is the whole index, specs included, and
-   not only what the walk reached.
+1. **A reference whose root identifier is provably external is no cut**, whatever name tail the index matched. There are
+   two proofs of that, and both are syntax: the file imports the root from outside the repository, or nothing binds it and
+   the language's own libraries declare it while the snapshot declares no global of that name. `unresolvedLinkCuts` takes
+   the set of proofs already made, and a reference in it is never attributed to a declaration. The unit is **the
+   reference, never the line**: a proof is keyed by its place *and* the name it proves (`externalPlaceKey`,
+   `settledPlaceKey`), because a line holds several references and retiring the line would hide a true cut that shares it.
+   A hidden dependence is worse than a false cut, and that is the same reason decision 3 pays 6% for a simpler shadowing
+   rule. Measured on the same application's index: of the 10.896 places whose reference tail matches a declaration
+   somewhere, **468 (4,3%) carry more than one root name on the line**, so keying by the place would have retired 468 cuts
+   the proof never covered. That count is an upper bound: it is the whole index, specs included, and not only what the walk
+   reached.
 2. **Only a proven external target retires.** A name imported from a repository file stays a cut: the reference may name
    the imported declaration, and turning that into an edge needs the declaration, which is the type layer's answer
    (`RFC-0016` S9).
 3. **The proof is conservative by construction.** A name the file declares in any scope is never retired, because that
-   declaration may shadow the import at the place the reference sits. A hidden dependence is worse than a false cut, and
-   the file-level rule costs 6% of the retirements to keep the soundness argument short.
+   declaration may shadow the import at the place the reference sits. For the ambient proof the snapshot is checked too: a
+   `.d.ts` or a global augmentation that declares the name keeps its cut. A hidden dependence is worse than a false cut,
+   and the file-level rule costs 6% of the retirements to keep the soundness argument short.
 4. **It needs no type root and no flag.** The same inputs and the same engine version give the same answer; there is no
    configuration a caller must supply for the fact to be complete.
 5. **It claims no completeness of its own.** The cut kind, the status rule and the unknown reasons are unchanged. A fact
@@ -70,10 +74,14 @@ population did not.
 
 - The cut list shrinks by 6% to 13% on the diffs measured, with no symbol gained: this removes noise, it does not extend
   the answer.
+- The ambient proof adds another **7% to 16% of the cuts** on the same three diffs (`HEAD~5` 76→64, `HEAD~20` 190→176,
+  `HEAD~60` 359→334), also with no symbol gained. Its table is generated from the installed `typescript` and a test fails
+  while it drifts, so moving the pin (`ADR-0007`) requires regenerating it, not remembering to.
 - A fact's bytes change without a new input field. The release that carries this is the invalidation boundary, exactly as
   any producer change is; no schema step is needed and none is taken.
 - A repository whose configuration ye-ast cannot read retires nothing: the import resolves nowhere, the place stays a cut.
-  That is the silent degradation the project asks for, and it never guesses external.
+  That is the silent degradation the project asks for, and it never guesses external. The same holds for a snapshot that
+  declares a global of its own: the ambient proof steps back and the place keeps its cut.
 - The remaining cut places are receiver-rooted names (`this.svc.get`), names with no import, and imports from the
   repository. Whether the type layer earns its +387 MB on those is `RFC-0016` S9, and it is now measurable against a
   smaller list.

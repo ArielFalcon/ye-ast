@@ -18,7 +18,7 @@ import type { TrustRecordReader } from "../../ports/trust-record.port.ts";
 import { fakeLive, type FakeLive } from "../live/fake-live.testing.ts";
 import type { LiveStaleNotice } from "../../ports/live-queries.port.ts";
 import { createImpactQueries, type ImpactQueriesDeps } from "./impact-queries.ts";
-import type { ImportOriginsReader } from "../../ports/import-origins.port.ts";
+import type { ImportOriginsReader, ImportOriginSite } from "../../ports/import-origins.port.ts";
 import type { ImportOrigin } from "../../domain/relations/resolved-reference.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 
@@ -144,14 +144,23 @@ function fact(answer: Result<Fact<ImpactValue>, OfChangeFault>): Fact<ImpactValu
 
 /** An import reader that proves exactly `names` external and answers `unknown` for every other site. */
 function externalImports(names: readonly string[]): ImportOriginsReader {
+  return origins((site) => (names.includes(site.name) ? { kind: "external", module: "rxjs" } : undefined));
+}
+
+/** An import reader that proves exactly `names` ambient — declared by the language's own libraries. */
+function ambientImports(names: readonly string[]): ImportOriginsReader {
+  return origins((site) => (names.includes(site.name) ? { kind: "ambient", name: site.name } : undefined));
+}
+
+function origins(answer: (site: ImportOriginSite) => ImportOrigin | undefined): ImportOriginsReader {
   return () => ({
     origins: async (sites) =>
-      sites.map(
-        (site): Finding<ImportOrigin> =>
-          names.includes(site.name)
-            ? { status: "complete", value: { kind: "external", module: "rxjs" }, evidence: [{ path: site.file, line: site.line }] }
-            : { status: "unknown", reason: "unresolved", evidence: [{ path: site.file, line: site.line }] },
-      ),
+      sites.map((site): Finding<ImportOrigin> => {
+        const value = answer(site);
+        return value === undefined
+          ? { status: "unknown", reason: "unresolved", evidence: [{ path: site.file, line: site.line }] }
+          : { status: "complete", value, evidence: [{ path: site.file, line: site.line }] };
+      }),
   });
 }
 
@@ -350,6 +359,21 @@ test("an external proof retires its own reference, never another one that shares
   const answer = fact(await setup({ changes, nodes, unresolved, exports, importOrigins: externalImports(["tap"]) }).ask());
 
   assert.deepEqual(answer.status === "partial" && answer.cuts, [{ kind: "unresolved-link", at: ["src/B.ts::save", "src/A.ts:7"] }]);
+});
+
+test("a reference rooted at a name the language's own libraries declare stops being a cut", async () => {
+  const changes: Result<readonly FileChange[], VcsFault> = { ok: true, value: [change("src/B.ts", { added: [{ start: 2, end: 2 }] })] };
+  const nodes = [fakeNode("log", "function", "src/B.ts", 1, 3)];
+  const unresolved = [{ from: "f", name: "console.log", kind: "calls", file: "src/A.ts", line: 7 }];
+  const exports: Options["exports"] = {
+    [HEAD]: { files: [{ path: "src/A.ts", blob: "1", written: true }, { path: "src/B.ts", blob: "2", written: true }], skipped: [] },
+  };
+
+  const withoutProof = fact(await setup({ changes, nodes, unresolved, exports }).ask());
+  const withProof = fact(await setup({ changes, nodes, unresolved, exports, importOrigins: ambientImports(["console"]) }).ask());
+
+  assert.deepEqual(withoutProof.status === "partial" && withoutProof.cuts, [{ kind: "unresolved-link", at: ["src/A.ts", "src/A.ts:7 console.log"] }]);
+  assert.equal(withProof.status, "complete");
 });
 
 test("the fact's inputs cover the content of both trees and the export budget", async () => {

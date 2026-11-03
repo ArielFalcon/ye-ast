@@ -20,9 +20,12 @@ export interface ImportOriginSite {
  */
 export interface ImportOrigins {
   /**
-   * One entry per site, in the order received. `unknown` when no import of the file names it, when the specifier
-   * resolves nowhere, or when the file declares that name itself: an import a local declaration may shadow proves
-   * nothing, and a hidden dependence is worse than a false cut.
+   * One entry per site, in the order received. `unknown` when the file declares the name itself, when the specifier
+   * resolves nowhere, or when nothing binds it and no library declares it: an import or a repository global a local
+   * declaration may shadow proves nothing, and a hidden dependence is worse than a false cut.
+   *
+   * `ambient` is the second proof of an external target (`RFC-0016` S10): nothing binds the name here, the language's own
+   * libraries declare it, and the snapshot declares no global of that name.
    */
   origins(sites: readonly ImportOriginSite[]): Promise<readonly Finding<ImportOrigin>[]>;
 }

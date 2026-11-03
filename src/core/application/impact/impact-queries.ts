@@ -501,7 +501,8 @@ async function externalPlacesOf(deps: ImpactQueriesDeps, store: CodeGraphReader,
   return new Set(
     asked.flatMap((site, index) => {
       const finding = findings[index];
-      return finding?.status === "complete" && finding.value.kind === "external" ? [externalPlaceKey(site.file, site.line, site.name)] : [];
+      const proven = finding?.status === "complete" && (finding.value.kind === "external" || finding.value.kind === "ambient");
+      return proven ? [externalPlaceKey(site.file, site.line, site.name)] : [];
     }),
   );
 }

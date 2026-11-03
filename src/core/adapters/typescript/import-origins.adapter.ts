@@ -5,6 +5,10 @@ import type { Evidence, Finding } from "../../domain/shared/fact.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { ImportOriginSite, ImportOrigins } from "../../ports/import-origins.port.ts";
 import { createModuleResolver, manifestDependencies, packageOf } from "./module-resolver.ts";
+import { TYPESCRIPT_LIB_GLOBALS } from "./typescript-lib-globals.ts";
+
+/** The names the pinned `typescript` declares, held once for the process rather than rebuilt per query. */
+const LIB_GLOBALS = new Set(TYPESCRIPT_LIB_GLOBALS);
 
 /** What one file's imports bind, and the names the file declares for itself. */
 interface FileShape {
@@ -42,11 +46,33 @@ export function createImportOrigins(sources: readonly SourceFile[]): ImportOrigi
     return held;
   };
 
+  /**
+   * The names the snapshot declares globally: a `.d.ts` anywhere, or a file that augments the global scope. A repository
+   * may spell a lib name itself, and retiring that name would hide a real declaration, so those names stay `unknown`.
+   */
+  let globals: ReadonlySet<string> | undefined;
+  const repositoryGlobals = (): ReadonlySet<string> => {
+    if (globals !== undefined) return globals;
+    const names = new Set<string>();
+    for (const [path, text] of texts) {
+      if (!path.endsWith(".d.ts") && !text.includes("declare global")) continue;
+      for (const name of declaredNames(ts.createSourceFile(path, text, ts.ScriptTarget.Latest, false))) names.add(name);
+    }
+    globals = names;
+    return names;
+  };
+
   const originOf = async (site: ImportOriginSite): Promise<Finding<ImportOrigin>> => {
     const evidence: Evidence[] = [{ path: site.file, line: site.line }];
     const { bindings, declared: names } = shapeOf(site.file);
+    /** A declaration of the file may shadow an import or a global at the place the reference sits, so it wins. */
+    if (names.has(site.name)) return { status: "unknown", reason: "unresolved", evidence };
     const specifier = bindings.get(site.name);
-    if (specifier === undefined || names.has(site.name)) return { status: "unknown", reason: "unresolved", evidence };
+    if (specifier === undefined) {
+      /** Nothing binds the name here: it is in scope only if the language's own libraries declare it. */
+      if (LIB_GLOBALS.has(site.name) && !repositoryGlobals().has(site.name)) return { status: "complete", value: { kind: "ambient", name: site.name }, evidence };
+      return { status: "unknown", reason: "unresolved", evidence };
+    }
     const resolved = await modules.resolve(site.file, specifier);
     if ("file" in resolved) return { status: "complete", value: { kind: "repository", file: resolved.file }, evidence };
     const module = packageOf(specifier);

@@ -60,8 +60,9 @@ export function rootedName(name: string): string {
 }
 
 /**
- * The key of a reference whose rooted name the file imports from outside the repository: the place and the root, never
- * the place alone. A line holds several references, so retiring the line would hide the ones the proof never covered.
+ * The key of a reference whose root a proof places outside the repository — an import binding, or a name the language's
+ * own libraries declare: the place and the root, never the place alone. A line holds several references, so retiring the
+ * line would hide the ones the proof never covered.
  */
 export function externalPlaceKey(file: string, line: number, root: string): string {
   return `${file}\0${line}\0external\0${root}`;

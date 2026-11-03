@@ -82,3 +82,24 @@ test("a bare specifier neither the manifest nor a path governs is unknown, not e
 
   assert.deepEqual(only(findings), { status: "unknown", reason: "unresolved", evidence: [{ path: "src/page.ts", line: 5 }] });
 });
+
+test("a name nothing binds but the language's own libraries declare is ambient, so no repository declaration can answer it", async () => {
+  const findings = await createImportOrigins(SOURCES).origins([{ file: "src/page.ts", line: 12, name: "console" }]);
+
+  assert.deepEqual(only(findings), { status: "complete", value: { kind: "ambient", name: "console" }, evidence: [{ path: "src/page.ts", line: 12 }] });
+});
+
+test("a name the file declares itself is unknown even when a library declares it", async () => {
+  const declared: SourceFile = { path: "src/page.ts", content: "export function run(): void {\n  const console = { log: () => undefined };\n  console.log();\n}\n" };
+  const findings = await createImportOrigins([CONFIG, MANIFEST, declared]).origins([{ file: "src/page.ts", line: 3, name: "console" }]);
+
+  assert.deepEqual(only(findings), { status: "unknown", reason: "unresolved", evidence: [{ path: "src/page.ts", line: 3 }] });
+});
+
+test("a name the snapshot declares globally is never ambient, because the repository may own it", async () => {
+  const global: SourceFile = { path: "src/globals.d.ts", content: "declare global {\n  var caches: unknown;\n}\nexport {};\n" };
+  const page: SourceFile = { path: "src/cache.ts", content: "export function run(): void {\n  caches.open('x');\n}\n" };
+  const findings = await createImportOrigins([CONFIG, MANIFEST, global, page]).origins([{ file: "src/cache.ts", line: 2, name: "caches" }]);
+
+  assert.deepEqual(only(findings), { status: "unknown", reason: "unresolved", evidence: [{ path: "src/cache.ts", line: 2 }] });
+});
