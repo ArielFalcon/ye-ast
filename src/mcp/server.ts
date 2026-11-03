@@ -78,6 +78,7 @@ Reading an answer:
 - status "unknown": ye-ast cannot tell, and the reason says why; never read it as "no impact".
 - an item with reason "no-project": no package.json above that source places it in a project, so nothing says whether it declares routes; scope does not hide the manifest, unless an exclude glob leaves it out.
 - ye_ast_impact and ye_ast_callers list the symbols at depth 0 and 1 and count deeper ones per file; set detail to "full" when the deeper symbols themselves are needed.
+- The text is the answer: it lists the symbols the detail asks for and every cut place, while the structured content beside it carries only the envelope, so nothing is paid for twice. A host that needs the fact itself passes full: true, which adds every value and every cut place to the structured content and leaves the text unchanged.
 - confidence is 0-1 and printed only below 1: how strongly the edge that reached the symbol was resolved, 1 for a relation read from the code itself and lower for one the extractor inferred. fan-in is how many places call or instantiate the symbol, whether or not the walk followed them.
 - Every answer closes with a \`cuts:\` list holding every place past each cut, after the content; the status line only counts them by kind, so a partial answer read without its list reads as complete.
 - An isError result names a fault kind. "live-requires-trusted" means the user must declare the repository trusted with \`ye-ast init --trust trusted\` before live can be used; answer from a revision meanwhile. "unknown-symbol" lists what the file declares; ask again with one of those names.
@@ -161,7 +162,12 @@ const withoutWorkspace = (value: { live?: boolean | undefined; workspace?: unkno
 const detail = z
   .enum(["summary", "full"] satisfies Detail[])
   .optional()
-  .describe("How much of the impacted symbols the text lists: summary (the default) lists depth 0 and 1 and counts deeper ones per file; full lists every one. The structured content always holds every one.");
+  .describe("How much of the impacted symbols the text lists: summary (the default) lists depth 0 and 1 and counts deeper ones per file; full lists every one. The text is the only place the symbols appear unless the full argument is true.");
+
+const full = z
+  .boolean()
+  .optional()
+  .describe("Hosts only: returns the whole fact, including every impacted symbol and every cut place.");
 
 const globs = z
   .array(z.string().refine(isValidGlob, "a glob is relative to the repository root, with / separators and no empty, . or .. segment"))
@@ -265,6 +271,12 @@ function withoutRepositories(fact: Fact<WorkspaceValue>): Fact<WorkspaceValue> {
   return { ...fact, value: value as WorkspaceValue };
 }
 
+/** The envelope a tool answers by default: the fact without the family's `value` and without the cut places the text already prints. */
+function withoutPayload<V>(fact: Fact<V>): Record<string, unknown> {
+  const { value: _value, cuts: _cuts, ...envelope } = fact as Fact<V> & { value?: unknown; cuts?: readonly Cut[] };
+  return envelope;
+}
+
 function budgetOf(requested: z.infer<typeof budget>): { budget?: ImpactBudget } {
   const bounds: Partial<Record<WalkBoundsField, number>> = {};
   for (const field of WALK_BOUND_FIELDS) {
@@ -279,7 +291,9 @@ export function createMcpServer(deps: McpDeps): McpServer {
   const server = new McpServer({ name: "ye-ast", version: deps.version }, { instructions: instructionsFor(repository) });
 
   /**
-   * The fact is redacted first and the text is rendered from the redacted fact, so neither carries a secret. A workspace
+   * The fact is redacted first and the text is rendered from the redacted fact, so neither carries a secret. The
+   * structured content carries the envelope alone unless `full` asks for the whole fact: the text is what an agent
+   * reads, and duplicating the fact cost it a multiple of the answer for a payload only a host consumes. A workspace
    * read answers its fact with the refresh beside it, attached as sibling keys of the structured content and never inside
    * the fact, so the fact's bytes depend only on what it read (ADR-0016 decision 4). The text opens with the same
    * response-level statuses it carries, so an answer read as text alone still knows what the refresh could not confirm.
@@ -287,6 +301,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
   async function answer<V, F extends { kind: string; detail: string }>(
     query: (onStale: (notice: LiveStaleNotice) => void) => Promise<Result<Fact<V> | FactRead<V>, F>>,
     render: (fact: Fact<V>) => string,
+    full: boolean,
   ): Promise<CallToolResult> {
     try {
       let moved: LiveStaleNotice | undefined;
@@ -300,7 +315,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
       return {
         content: [{ type: "text", text: [...sidecar, render(fact)].join("\n") }],
         structuredContent: {
-          ...fact,
+          ...(full ? fact : withoutPayload(fact)),
           ...(refresh === undefined ? {} : { freshness: refresh.freshness, resolution: refresh.resolution }),
         } as unknown as Record<string, unknown>,
         ...(stale !== undefined && { _meta: { [LIVE_META]: stale } }),
@@ -327,14 +342,15 @@ export function createMcpServer(deps: McpDeps): McpServer {
     {
       title: "Entrypoints of a revision",
       description: `Lists the entrypoints of the repository at a revision: HTTP routes, UI routes, message listeners and scheduled jobs, each with the handler's path:line. Use it to orient in the repository or to find where a request, message or job is handled. ${COMPLETENESS}`,
-      inputSchema: z.strictObject({ revision, live, scope }).refine(excludes("revision"), "live excludes revision"),
+      inputSchema: z.strictObject({ revision, live, scope, full }).refine(excludes("revision"), "live excludes revision"),
       outputSchema: FACT_OUTPUT,
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    ({ revision: requested, live: isLive, scope: paths }, ctx) =>
+    ({ revision: requested, live: isLive, scope: paths, full: whole }, ctx) =>
       answer(
         (onStale) => deps.entrypoints.map({ repo: repository.path, repoId: repository.repoId, ...atRevision(requested, isLive, onStale), ...scopeOf(paths), signal: ctx.mcpReq.signal }),
         renderEntrypointMap,
+        whole === true,
       ),
   );
 
@@ -353,6 +369,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
           budget,
           detail,
           workspace,
+          full,
         })
         .refine(excludes("head"), "live excludes head")
         .refine(excludes("offline"), "live excludes offline")
@@ -360,7 +377,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
       outputSchema: FACT_OUTPUT,
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    ({ base, head, live: isLive, offline: isOffline, scope: paths, budget: requested, detail: listing, workspace: others }, ctx) => {
+    ({ base, head, live: isLive, offline: isOffline, scope: paths, budget: requested, detail: listing, workspace: others, full: whole }, ctx) => {
       const crossing = workspaceOf(others);
       if (crossing !== undefined) {
         return answer(
@@ -376,6 +393,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
               signal: ctx.mcpReq.signal,
             }),
           (fact) => renderWorkspaceImpact(fact, listing),
+          whole === true,
         );
       }
       return answer(
@@ -384,6 +402,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
           return deps.impact.ofChange({ repo: repository.path, repoId: repository.repoId, base, ...(at.live ? at : { head: at.revision }), ...scopeOf(paths), ...budgetOf(requested), signal: ctx.mcpReq.signal });
         },
         (fact) => renderImpact(fact, listing),
+        whole === true,
       );
     },
   );
@@ -394,14 +413,14 @@ export function createMcpServer(deps: McpDeps): McpServer {
       title: "Callers of symbols or line ranges",
       description: `What depends on the symbols or line ranges asked for at a revision: the callers they reach and the entrypoints those serve, with path:line evidence. A symbol that names no declaration is reported as an error. Use it before changing or deleting a symbol or a range of lines. With workspace it also joins the call sites other local repositories make to the routes the symbols serve, and follows each link into its own repository. ${COMPLETENESS}`,
       inputSchema: z
-        .strictObject({ revision, live, offline, targets: z.array(target).min(1).describe("The symbols or line ranges to start from."), scope, budget, detail, workspace })
+        .strictObject({ revision, live, offline, targets: z.array(target).min(1).describe("The symbols or line ranges to start from."), scope, budget, detail, workspace, full })
         .refine(excludes("revision"), "live excludes revision")
         .refine(excludes("offline"), "live excludes offline")
         .refine(withoutWorkspace, "live excludes workspace"),
       outputSchema: FACT_OUTPUT,
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    ({ revision: requested, live: isLive, offline: isOffline, targets, scope: paths, budget: bounds, detail: listing, workspace: others }, ctx) => {
+    ({ revision: requested, live: isLive, offline: isOffline, targets, scope: paths, budget: bounds, detail: listing, workspace: others, full: whole }, ctx) => {
       const crossing = workspaceOf(others);
       if (crossing !== undefined) {
         return answer(
@@ -416,6 +435,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
               signal: ctx.mcpReq.signal,
             }),
           (fact) => renderWorkspaceImpact(fact, listing),
+          whole === true,
         );
       }
       return answer(
@@ -430,6 +450,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
             signal: ctx.mcpReq.signal,
           }),
         (fact) => renderImpact(fact, listing),
+        whole === true,
       );
     },
   );
@@ -440,15 +461,16 @@ export function createMcpServer(deps: McpDeps): McpServer {
       title: "Importers of files",
       description: `Per file, the files that import it, the files that use it and the files holding a reference to its names that the index could not resolve. Use it before moving, renaming or deleting a file, or changing its exports. ${COMPLETENESS}`,
       inputSchema: z
-        .strictObject({ revision, live, files: z.array(z.string().min(1)).min(1).describe("Repository-relative paths."), scope })
+        .strictObject({ revision, live, files: z.array(z.string().min(1)).min(1).describe("Repository-relative paths."), scope, full })
         .refine(excludes("revision"), "live excludes revision"),
       outputSchema: FACT_OUTPUT,
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    ({ revision: requested, live: isLive, files, scope: paths }, ctx) =>
+    ({ revision: requested, live: isLive, files, scope: paths, full: whole }, ctx) =>
       answer(
         (onStale) => deps.impact.importers({ repo: repository.path, repoId: repository.repoId, ...atRevision(requested, isLive, onStale), files, ...scopeOf(paths), signal: ctx.mcpReq.signal }),
         renderImporters,
+        whole === true,
       ),
   );
 
@@ -463,11 +485,12 @@ export function createMcpServer(deps: McpDeps): McpServer {
         scope,
         repos: workspaceRepos,
         gateways,
+        full,
       }),
       outputSchema: FACT_OUTPUT,
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    ({ revision: requested, offline: isOffline, scope: paths, repos, gateways: requestedGateways }, ctx) =>
+    ({ revision: requested, offline: isOffline, scope: paths, repos, gateways: requestedGateways, full: whole }, ctx) =>
       answer(
         async () => {
           const read = await deps.workspace.outwardNames({
@@ -481,6 +504,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
           return read.ok ? { ok: true, value: { fact: withoutRepositories(read.value.fact), ...(read.value.refresh === undefined ? {} : { refresh: read.value.refresh }) } } : read;
         },
         renderWorkspace,
+        whole === true,
       ),
   );
 
@@ -489,11 +513,11 @@ export function createMcpServer(deps: McpDeps): McpServer {
     {
       title: "Gaps a workspace leaves to the user",
       description: `What the workspace does not state and only the user can fill: the clones that serve an outward name, the clones that state no name, the names no repository given serves, the prefixes that route nowhere and the repositories without a trust record. Each gap lists every option the workspace can verify with path:line evidence and marks the one a rule recommends; a gap whose answer is a value no fact states says so. Use it before \`ye-ast init --workspace\` to show the user a form; it reads the same repositories and writes nothing. ${COMPLETENESS}`,
-      inputSchema: z.strictObject({ revision, offline, scope, repos: workspaceRepos, gateways }),
+      inputSchema: z.strictObject({ revision, offline, scope, repos: workspaceRepos, gateways, full }),
       outputSchema: FACT_OUTPUT,
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    ({ revision: requested, offline: isOffline, scope: paths, repos, gateways: requestedGateways }, ctx) =>
+    ({ revision: requested, offline: isOffline, scope: paths, repos, gateways: requestedGateways, full: whole }, ctx) =>
       answer(
         () =>
           deps.decisions.decisions({
@@ -505,6 +529,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
             signal: ctx.mcpReq.signal,
           }),
         renderDecisions,
+        whole === true,
       ),
   );
 

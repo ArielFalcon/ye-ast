@@ -25,8 +25,6 @@ export interface ImpactedSymbol {
   /** The callers that call or instantiate the symbol, whether or not the walk followed them; the hub bound counts the same. */
   fanIn: number;
   via?: { file: string; symbol: string };
-  /** Indexes into `ImpactValue.seeds`. */
-  seeds: readonly number[];
 }
 
 export interface ReachedEntrypoint {

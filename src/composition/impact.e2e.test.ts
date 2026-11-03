@@ -152,6 +152,17 @@ test("a changed helper reaches the route served through an interface, the same b
   assert.deepEqual(first.fact.value.entrypoints.map((entry) => [entry.kind, entry.name, entry.depth, entry.seeds]), [["http-route", "GET /orders/{id}", 3, [0]]]);
 });
 
+test("an impacted symbol carries no seed indexes, while the entrypoint it serves carries them", async () => {
+  commit(SHOP, "base");
+  commit({ "src/main/java/shop/Util.java": UTIL("s.trim()") });
+
+  const result = await impact("--base", "HEAD~1");
+
+  assert.equal(result.code, EXIT_CODE.ok, result.stderr);
+  assert.deepEqual(result.fact.value.entrypoints.map((entry) => [entry.kind, entry.name, entry.seeds]), [["http-route", "GET /orders/{id}", [0]]]);
+  assert.deepEqual(result.fact.value.symbols.filter((symbol) => "seeds" in symbol), []);
+});
+
 test("the change is read from the merge base: what the base branch did after the fork is not in it", async () => {
   const fork = commit(SHOP, "base");
   git("checkout", "-q", "-b", "feature");

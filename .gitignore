@@ -5,9 +5,8 @@ coverage/
 *.log
 .DS_Store
 
-# Documentation that never leaves this machine: design records and the explainer's source material.
-# The rest of docs/ is the published site, served by GitHub Pages from /docs.
-docs/architecture/
+# The explainer's source material never leaves this machine. The rest of docs/ is the published site, served by
+# GitHub Pages from /docs, and the design records under docs/architecture travel with the code they decide.
 docs/explainer/
 odd/
 .atl/

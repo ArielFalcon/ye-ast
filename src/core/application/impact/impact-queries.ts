@@ -477,7 +477,7 @@ function impactOf(input: WalkInput): ImpactRead {
   const value = {
     cost: walk.cost,
     seeds: seeds.map(({ symbol, basis }): Seed => ({ file: symbol.file, symbol: symbol.name, line: symbol.startLine, basis })),
-    symbols: walk.reached.map(({ symbol, depth, confidence, fanIn, via, seeds: reaching }): ImpactedSymbol => ({
+    symbols: walk.reached.map(({ symbol, depth, confidence, fanIn, via }): ImpactedSymbol => ({
       file: symbol.file,
       symbol: symbol.name,
       kind: symbol.kind,
@@ -486,7 +486,6 @@ function impactOf(input: WalkInput): ImpactRead {
       confidence,
       fanIn,
       ...(via === undefined ? {} : { via: { file: via.file, symbol: via.name } }),
-      seeds: reaching,
     })),
     entrypoints: reachedEntrypoints(
       headTree.findings,

@@ -117,7 +117,7 @@ test("a real client over stdio lists the tools and reads the entrypoints fact th
   const listed = (await request("tools/list")).result as { tools: { name: string }[] };
   assert.ok(listed.tools.some((tool) => tool.name === "ye_ast_entrypoints"));
 
-  const called = (await request("tools/call", { name: "ye_ast_entrypoints", arguments: {} })).result as {
+  const called = (await request("tools/call", { name: "ye_ast_entrypoints", arguments: { full: true } })).result as {
     isError?: boolean;
     structuredContent: unknown;
     content: { text: string }[];
@@ -135,7 +135,7 @@ test("callers with a workspace joins the call site of another repository to the 
   const ask = (): Promise<Reply> =>
     request("tools/call", {
       name: "ye_ast_callers",
-      arguments: { targets: [{ file: "src/main/java/shop/OrderController.java", symbol: "OrderController.one" }], workspace: { repos: [{ path: frontend }] } },
+      arguments: { targets: [{ file: "src/main/java/shop/OrderController.java", symbol: "OrderController.one" }], workspace: { repos: [{ path: frontend }] }, full: true },
     });
 
   const first = (await ask()).result as { isError?: boolean; structuredContent: { status: string; value: { links: { link: { basis: string; from: { repo: string; line: number }; to: { repo: string; name: string } } }[]; sections: Record<string, { value: { impact?: { symbols: { symbol: string }[] }; unmatched: { line: number }[] } }> } }; content: { text: string }[] };
