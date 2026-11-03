@@ -1,8 +1,8 @@
 # Architecture explorer
 
 The unified site: the graph-first explorer plus the concept sections and the walk simulator from the original
-narrative explainer. The original [`../explainer/`](../explainer/) stays on disk as source material; this is the site
-that is served.
+narrative explainer. The explainer itself stays on the author's machine as source material; this is the only site
+that is served, by GitHub Pages from `docs/`.
 
 Open [`index.html`](index.html) (English) or [`es.html`](es.html) (Spanish). No build and no network request from the
 page.
@@ -75,5 +75,5 @@ tailscale serve --bg --https=8444 http://127.0.0.1:8081
 - `hub fan-in` is defined inline in the rules bounds block and again under the simulator controls; `fan-in` and
   `hub fan-in` stay in the glossary with localized labels.
 - Every module file and every flow `refs` path exists; every internal hash target exists.
-- The old `docs/explainer/` is archived source, not a second served site.
+- The old explainer is archived source on the author's machine, not tracked and not a second served site.
 - `npm run check` is unaffected: this folder adds no file under `src/`.

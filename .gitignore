@@ -5,8 +5,11 @@ coverage/
 *.log
 .DS_Store
 
-# Internal design records and delivery process: kept locally, never published.
-docs/architecture/
+# Documentation that never leaves this machine: design records, delivery process and the explainer's
+# source material. The one published site is docs/explorer/, served by GitHub Pages from /docs.
+docs/*
+!docs/explorer/
+!docs/.nojekyll
 odd/
 .atl/
 
