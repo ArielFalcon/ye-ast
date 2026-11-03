@@ -1,20 +1,13 @@
 import { compareText } from "../../domain/shared/code-node.ts";
-import type { OutlineFile } from "../../domain/outline/outline-fact.ts";
+import type { OutlineFile, OutlineValue } from "../../domain/outline/outline-fact.ts";
 import type { CodeGraphReader } from "../../ports/code-graph.port.ts";
-
-export interface OutlineRead {
-  /** One entry per requested file the index holds a node of, in path order. */
-  files: OutlineFile[];
-  /** The requested files the index holds no node of. */
-  unheld: string[];
-}
 
 /** A file, an import or an export is structure, not a declaration a reader opens. */
 const NOT_A_DECLARATION: readonly string[] = ["file", "import", "export"];
 const IMPORT = "imports";
 
 /** The shape of every requested file, read from the graph the other queries already use: no file is opened. */
-export function readOutline(store: CodeGraphReader, requested: readonly string[]): OutlineRead {
+export function readOutline(store: CodeGraphReader, requested: readonly string[]): OutlineValue {
   const files: OutlineFile[] = [];
   const unheld: string[] = [];
   for (const file of sortedUnique(requested)) {

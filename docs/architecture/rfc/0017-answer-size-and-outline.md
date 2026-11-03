@@ -25,7 +25,7 @@ out. Neither added the one rule that keeps the result honest: **a summary that i
 is a regression, not a summary**. Nothing measures it today, so it can appear with any renderer change and no test
 would notice.
 
-## 1. The rule: a summary is never longer than the full answer
+## 1. The rule: a counted elision is never longer than listing what it hides
 
 **Evidence that the rule is missing.** `src/mcp/render.ts:344-357`, `impactedSymbols`: a summary replaces every symbol
 past depth 1 with one line. After `159f46f` that line is:
@@ -106,7 +106,7 @@ question an agent asks after `impact` names twelve files, and it is the one no q
 **Why this does not reverse RFC-0015.** That RFC refuses a snippet or a signature *inside an impact answer*, where the
 argument is that `kind` plus the qualified name is already enough to decide whether to open the file. The outline is
 asked by a caller who has already decided to open it, and it answers with exactly what RFC-0015 called enough: a kind, a
-qualified name and a span. The refusal stands; this is the other half of the same design.
+name and a span. The refusal stands; this is the other half of the same design.
 
 **Reuse, not a new parser.** The declaration list comes from the readers that already exist: the TypeScript compiler
 API inside `core/adapters/typescript/` (ADR-0008), the Angular extractor, `tree-sitter-java`. A language with no reader
@@ -138,7 +138,10 @@ tree, the text the model reads and the envelope the host reads:
 | `ye_ast_callers formatRating` | 4,615 | 6,677 | −2,062 (−31 %) | 847 |
 | `ye_ast_callers AppButtonComponent` | 16,832 | 22,441 | −5,609 (−25 %) | 869 |
 
-No summary is longer than its full answer, and two runs give identical bytes. Two readings of the table matter for
+No counted elision is longer than listing what it hides, and two runs give identical bytes. The rule governs counts, not
+every elision: a summary that names the declarations of an unresolved reference instead of its places is a different
+presentation, and for a single place it costs more than the plain listing (292 bytes against 225 on the fixture below).
+That is deliberate and reasoned in section 1; reading this table as "no summary is ever longer" would be wrong. Two readings of the table matter for
 what follows:
 
 - The saving is concentrated: one call carries 48 KB of the 55 KB saved, so a summary is worth its line on a large

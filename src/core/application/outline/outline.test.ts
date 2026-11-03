@@ -29,8 +29,7 @@ test("a file answers its declarations in line order with their spans, and a file
   ]);
 });
 
-test("imports name the files the edges reach once each, never the file itself", () => {
-  const store = fakeCodeGraph(
+test("imports name the files the edges reach once each, never the file itself", () => {  const store = fakeCodeGraph(
     [
       fakeNode("a", "file", "src/a.ts", 1, 9),
       fakeNode("a.own", "function", "src/a.ts", 3, 7, "own"),
@@ -47,5 +46,15 @@ test("imports name the files the edges reach once each, never the file itself", 
   );
   const read = readOutline(store, ["src/a.ts"]);
   assert.deepEqual(read.files.map((file) => file.imports), [["src/b.ts", "src/c.ts"]]);
+  assert.deepEqual(read.unheld, []);
+});
+
+test("an imports edge whose target the store does not know names no file", () => {
+  const store = fakeCodeGraph(
+    [fakeNode("a", "file", "src/a.ts", 1, 9), fakeNode("a.own", "function", "src/a.ts", 3, 7, "own")],
+    [{ from: "a", to: "gone", kind: "imports", line: 1 }],
+  );
+  const read = readOutline(store, ["src/a.ts"]);
+  assert.deepEqual(read.files.map((file) => file.imports), [[]]);
   assert.deepEqual(read.unheld, []);
 });

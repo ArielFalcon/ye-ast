@@ -1233,7 +1233,14 @@ test("the sidecar is redacted with the composed redaction like every other value
   await session.close();
 });
 
-test("a summary never renders longer than the full answer it stands for", async () => {
+/** A counted summary is only a summary when counting costs no more than listing what it hides. Every renderer with a
+ * counted block asserts through this, so the rule is inherited rather than re-argued. */
+function assertCountedSummaryShorter(summary: string, full: string): void {
+  const bytes = (text: string): number => Buffer.byteLength(text, "utf8");
+  assert.ok(bytes(summary) <= bytes(full), `summary is ${bytes(summary)} bytes against ${bytes(full)} for the full answer`);
+}
+
+test("the counted elision of a summary never renders longer than listing what it hides", async () => {
   const one = impactFact({
     value: {
       seeds: [{ file: "src/a.ts", symbol: "A.seed", line: 1, basis: "requested" }],
@@ -1249,6 +1256,6 @@ test("a summary never renders longer than the full answer it stands for", async 
   const { session } = await setup({ ofChange: async () => ({ ok: true, value: one }) });
   const summary = textOf(await session.callTool("ye_ast_impact", { base: "main" }));
   const full = textOf(await session.callTool("ye_ast_impact", { base: "main", detail: "full" }));
-  assert.ok(summary.length <= full.length, `summary is ${summary.length} bytes against ${full.length} for the full answer`);
+  assertCountedSummaryShorter(summary, full);
   await session.close();
 });
