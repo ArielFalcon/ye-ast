@@ -9,6 +9,8 @@ export const METHOD = {
   impactCallers: "impact.callers",
   impactImporters: "impact.importers",
   outlineFiles: "outline.files",
+  workspaceOutwardNames: "workspace.outwardNames",
+  decisionsDecisions: "decisions.decisions",
 } as const;
 
 /** The closed set of answers a call can fail with: JSON-RPC's own, one per fault family of the ports, and the protocol's. */
@@ -30,6 +32,9 @@ export const ERROR_CODE = {
   "trust-unsupported": -32009,
   "trust-not-declared": -32010,
   unreadable: -32011,
+  unwritable: -32012,
+  "invalid-name": -32013,
+  "duplicate-repository": -32014,
 } as const;
 
 export type ErrorKind = keyof typeof ERROR_CODE;

@@ -64,6 +64,9 @@ async function throughCli(args: readonly string[], budgets: (ImpactBudget | unde
     version: "0.0.0",
     entrypoints,
     impact: { ofChange: async (request: { budget?: ImpactBudget }) => (budgets.push(request.budget), { ok: true, value: FACT } as never) } as unknown as ImpactQueries,
+    outline: {} as OutlineQueries,
+    workspace: {} as WorkspaceQueries,
+    decisions: {} as DecisionQueries,
     install,
     mcpCommand: ["/bin/ye-ast"],
     redaction,
@@ -81,7 +84,7 @@ async function throughProtocol(budget: unknown, budgets: (ImpactBudget | undefin
     JSON.stringify({ jsonrpc: "2.0", id: 2, method: "impact.ofChange", params: { repo: REPO, repoId: "shop", base: "HEAD", head: "HEAD", budget } }),
   ];
   await serveQueries(
-    { version: "0.0.0", entrypoints, impact: { ofChange: async (request: { budget?: ImpactBudget }) => (budgets.push(request.budget), { ok: true, value: FACT } as never) } as unknown as ImpactQueries, outline: {} as OutlineQueries, redaction },
+    { version: "0.0.0", entrypoints, impact: { ofChange: async (request: { budget?: ImpactBudget }) => (budgets.push(request.budget), { ok: true, value: FACT } as never) } as unknown as ImpactQueries, outline: {} as OutlineQueries, workspace: {} as WorkspaceQueries, decisions: {} as DecisionQueries, redaction },
     { input: Readable.from(lines.map((line) => `${line}\n`)), output: { write: (chunk: string) => void (written += chunk) } },
   );
   const answers = written.split("\n").filter(Boolean).map((line) => JSON.parse(line) as { id?: number; result?: unknown; error?: unknown });
@@ -152,6 +155,9 @@ test("every surface that names a trust mode refuses one the domain does not know
     version: "0.0.0",
     entrypoints,
     impact: family().impact,
+    outline: {} as OutlineQueries,
+    workspace: {} as WorkspaceQueries,
+    decisions: {} as DecisionQueries,
     install,
     mcpCommand: ["/bin/ye-ast"],
     redaction,
@@ -161,7 +167,7 @@ test("every surface that names a trust mode refuses one the domain does not know
 
   let written = "";
   await serveQueries(
-    { version: "0.0.0", entrypoints, impact: family().impact, outline: {} as OutlineQueries, redaction },
+    { version: "0.0.0", entrypoints, impact: family().impact, outline: {} as OutlineQueries, workspace: {} as WorkspaceQueries, decisions: {} as DecisionQueries, redaction },
     {
       input: Readable.from([`${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "trust.declare", params: { mode: "sometimes" } })}\n`]),
       output: { write: (chunk: string) => void (written += chunk) },

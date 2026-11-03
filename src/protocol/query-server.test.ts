@@ -5,6 +5,8 @@ import { PassThrough } from "node:stream";
 import type { EntrypointQueries } from "../core/ports/entrypoint-queries.port.ts";
 import type { ImpactFault, ImpactQueries } from "../core/ports/impact-queries.port.ts";
 import type { OutlineQueries } from "../core/ports/outline-queries.port.ts";
+import type { WorkspaceQueries } from "../core/ports/workspace-queries.port.ts";
+import type { DecisionQueries } from "../core/ports/decision-queries.port.ts";
 import { REDACTED, type Redaction } from "../core/ports/redaction.port.ts";
 import type { Result } from "../core/domain/shared/result.ts";
 import { ERROR_CODE, METHOD, PROTOCOL, type ErrorKind } from "./protocol.ts";
@@ -52,6 +54,8 @@ function fakes(): Fakes {
     entrypoints: { map: answer("map") } as EntrypointQueries,
     impact: { ofChange: answer("ofChange"), callers: answer("callers"), importers: answer("importers") } as ImpactQueries,
     outline: { outline: answer("outline") } as OutlineQueries,
+    workspace: { outwardNames: answer("outwardNames") } as WorkspaceQueries,
+    decisions: { decisions: answer("decisions") } as DecisionQueries,
   };
   return { deps, calls, behave: (operation, behavior) => void behaviors.set(operation, behavior) };
 }
@@ -181,6 +185,17 @@ const OPERATIONS = [
   },
   { method: METHOD.impactImporters, operation: "importers", params: { repo: "/work/shop", repoId: "shop", revision: "v2", files: ["a.ts", "b.ts"] } },
   { method: METHOD.outlineFiles, operation: "outline", params: { repo: "/work/shop", repoId: "shop", revision: "v2", files: ["a.ts", "b.ts"] } },
+  {
+    method: METHOD.workspaceOutwardNames,
+    operation: "outwardNames",
+    params: {
+      repo: { path: "/work/shop", id: "shop", revision: "v2" },
+      repos: [{ path: "/work/web", id: "web" }, { path: "/work/mail", remote: "https://git.example/mail.git" }],
+      gateways: [{ prefix: "api", repo: "shop" }],
+      offline: true,
+    },
+  },
+  { method: METHOD.decisionsDecisions, operation: "decisions", params: { repo: { path: "/work/shop", id: "shop" }, offline: false } },
 ] as const;
 
 for (const { method, operation, params } of OPERATIONS) {
@@ -222,6 +237,27 @@ test("a scope that is not an object of valid glob lists, or names another field,
 
   for (const [id, scope] of scopes.entries()) session.send(request(id, METHOD.entrypointsMap, { ...MAP_PARAMS, scope }));
   for (let n = 0; n < scopes.length; n++) assert.equal((await session.receive()).error?.code, ERROR_CODE["invalid-params"]);
+  assert.deepEqual(calls, []);
+});
+
+test("a workspace request names each repository as an object and takes no field the family does not read", async () => {
+  const { deps, calls } = fakes();
+  const session = await untrusted(deps);
+  const invalid = [
+    { repo: "/work/shop" },
+    { repo: { path: "" } },
+    { repo: { path: "/work/shop", repoId: "shop" } },
+    { repo: { path: "/work/shop" }, revision: "HEAD" },
+    { repo: { path: "/work/shop" }, repos: [] },
+    { repo: { path: "/work/shop" }, repos: [{ path: "/work/web", branch: "main" }] },
+    { repo: { path: "/work/shop" }, gateways: [{ prefix: "api" }] },
+    { repo: { path: "/work/shop" }, offline: "yes" },
+  ];
+
+  for (const [batch, method] of [METHOD.workspaceOutwardNames, METHOD.decisionsDecisions].entries()) {
+    for (const [index, params] of invalid.entries()) session.send(request(batch * invalid.length + index, method, params));
+    for (const [index] of invalid.entries()) assert.equal((await session.receive()).error?.code, ERROR_CODE["invalid-params"], `${method} ${index}`);
+  }
   assert.deepEqual(calls, []);
 });
 

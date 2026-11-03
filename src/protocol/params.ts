@@ -6,6 +6,9 @@ import { isWalkBoundField, WALK_BOUND_FIELDS, type WalkBoundsField } from "../co
 import type { MapRequest } from "../core/ports/entrypoint-queries.port.ts";
 import type { CallersTarget, ImpactCallersRequest, ImpactImportersRequest, ImpactOfChangeRequest } from "../core/ports/impact-queries.port.ts";
 import type { OutlineRequest } from "../core/ports/outline-queries.port.ts";
+import type { WorkspaceRequest } from "../core/ports/workspace-queries.port.ts";
+import type { DecisionsRequest } from "../core/ports/decision-queries.port.ts";
+import type { WorkspaceRepositoryRequest } from "../core/ports/workspace-repos.port.ts";
 import { isId, isRecord } from "./guards.ts";
 import { isTrustMode, type TrustMode } from "../core/domain/shared/fact.ts";
 import type { RequestId } from "./protocol.ts";
@@ -95,6 +98,29 @@ function fileOf(value: unknown): string {
   return value;
 }
 
+function repositoryOf(value: unknown): WorkspaceRepositoryRequest {
+  if (!isRecord(value)) throw new InvalidParamsError("a repository must be an object");
+  const fields = only(value, ["path", "id", "revision", "remote"]);
+  return {
+    path: text(fields, "path"),
+    ...(fields.id === undefined ? {} : { id: text(fields, "id") }),
+    ...(fields.revision === undefined ? {} : { revision: text(fields, "revision") }),
+    ...(fields.remote === undefined ? {} : { remote: text(fields, "remote") }),
+  };
+}
+
+function gatewayOf(value: unknown): { prefix: string; repo: string } {
+  if (!isRecord(value)) throw new InvalidParamsError("a gateway must be an object");
+  const fields = only(value, ["prefix", "repo"]);
+  return { prefix: text(fields, "prefix"), repo: text(fields, "repo") };
+}
+
+function flag(params: Params, key: string): boolean {
+  const value = params[key];
+  if (typeof value !== "boolean") throw new InvalidParamsError(`${key} must be a boolean`);
+  return value;
+}
+
 /** The deadline in milliseconds from receipt, when the call carries one. */
 export function deadlineOf(params: unknown): number | undefined {
   if (!isRecord(params) || params[DEADLINE_PARAM] === undefined) return undefined;
@@ -126,6 +152,21 @@ export function readImporters(params: unknown): Omit<AtRevision<ImpactImportersR
 export function readOutline(params: unknown): Omit<Extract<OutlineRequest, { live?: undefined }>, "signal"> {
   const p = only(params, ["repo", "repoId", "revision", "files", "scope"]);
   return { repo: text(p, "repo"), repoId: text(p, "repoId"), revision: text(p, "revision"), files: list(p, "files", fileOf), ...scopeOf(p) };
+}
+
+export function readWorkspace(params: unknown): Omit<WorkspaceRequest, "signal"> {
+  const p = only(params, ["repo", "repos", "gateways", "scope", "offline"]);
+  return {
+    repo: repositoryOf(p.repo),
+    ...(p.repos === undefined ? {} : { repos: list(p, "repos", repositoryOf) }),
+    ...(p.gateways === undefined ? {} : { gateways: list(p, "gateways", gatewayOf) }),
+    ...scopeOf(p),
+    ...(p.offline === undefined ? {} : { offline: flag(p, "offline") }),
+  };
+}
+
+export function readDecisions(params: unknown): Omit<DecisionsRequest, "signal"> {
+  return readWorkspace(params);
 }
 
 export function readTrustMode(params: unknown): TrustMode {
