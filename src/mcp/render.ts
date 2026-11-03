@@ -141,22 +141,41 @@ function singlePathLine(kind: Cut["kind"], cuts: readonly Cut[]): string {
   return `  ${kind} (${cuts.length}): ${listed}`;
 }
 
-/** The declarations an unresolved reference could not be settled to, under the file that holds them. The place it was
- * referenced from is printed only with detail "full": the count says how blind the answer is, and a caller debugging one
- * miss asks again. */
+/** The files the places of a cut sit in, without their lines: a place is `path:line`, a reason following a space. */
+function placeFiles(cut: Cut): string {
+  const files = new Set<string>();
+  for (const place of cut.at.slice(1)) {
+    const [pathLine = ""] = place.split(" ");
+    const colon = pathLine.lastIndexOf(":");
+    files.add(colon === -1 ? pathLine : pathLine.slice(0, colon));
+  }
+  return [...files].sort(compareText).join(", ");
+}
+
+/** The declarations an unresolved reference could not be settled to, under the file that holds them, each with the files
+ * its references sit in. An anchor that names a file alone is the cut itself: its places are that file. */
 function unresolvedDeclarations(cuts: readonly Cut[]): string[] {
-  const byFile = new Map<string, string[]>();
+  const byFile = new Map<string, { names: string[]; whole: boolean }>();
   for (const cut of cuts) {
     const anchor = cut.at[0] ?? "";
     const settled = anchor.indexOf("::");
     const file = settled === -1 ? anchor : anchor.slice(0, settled);
-    const name = settled === -1 ? "" : anchor.slice(settled + 2);
-    byFile.set(file, name === "" ? (byFile.get(file) ?? []) : [...(byFile.get(file) ?? []), name]);
+    const entry = byFile.get(file) ?? { names: [], whole: false };
+    if (settled === -1) entry.whole = true;
+    else {
+      const files = placeFiles(cut);
+      entry.names.push(files === "" ? anchor.slice(settled + 2) : `${anchor.slice(settled + 2)}: ${files}`);
+    }
+    byFile.set(file, entry);
   }
   const references = cuts.reduce((total, cut) => total + Math.max(0, cut.at.length - 1), 0);
   return [
     `  unresolved-link (${cuts.length} declarations, ${references} references; detail "full" lists every place):`,
-    ...[...byFile].flatMap(([file, names]) => [`    ${file}`, ...names.map((name) => `      ${name}`)]),
+    ...[...byFile].flatMap(([file, { names, whole }]) => [
+      `    ${file}`,
+      ...(whole ? ["      (the file itself)"] : []),
+      ...names.map((name) => `      ${name}`),
+    ]),
   ];
 }
 

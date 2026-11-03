@@ -446,18 +446,22 @@ test("with detail full, the places of a cut are grouped under their file, every 
   await session.close();
 });
 
-test("by default a cut lists the declarations it could not settle to, grouped under their file, and no place", async () => {
+test("by default a cut names the declarations it could not settle to and the files their references sit in, never a line", async () => {
   const partial = impactFact({
     status: "partial",
     cuts: [
       { kind: "unresolved-link", at: ["src/a.ts::A.f", "src/x.ts:10", "src/x.ts:11", "src/y.ts:7"] },
       { kind: "unresolved-link", at: ["src/a.ts::A.g", "src/x.ts:10"] },
+      { kind: "unresolved-link", at: ["src/z.ts", "src/z.ts:4"] },
     ],
   } as Partial<Fact<ImpactValue>>);
   const { session } = await setup({ ofChange: async () => ({ ok: true, value: partial }) });
   const text = textOf(await session.callTool("ye_ast_impact", { base: "main" }));
-  assert.match(text, /unresolved-link \(2 declarations, 4 references; detail "full" lists every place\):\n {4}src\/a\.ts\n {6}A\.f\n {6}A\.g$/m);
-  assert.equal(text.split("src/x.ts").length - 1, 0, "a summary prints no place");
+  assert.match(
+    text,
+    /unresolved-link \(3 declarations, 5 references; detail "full" lists every place\):\n {4}src\/a\.ts\n {6}A\.f: src\/x\.ts, src\/y\.ts\n {6}A\.g: src\/x\.ts\n {4}src\/z\.ts\n {6}\(the file itself\)$/m,
+  );
+  assert.doesNotMatch(text, /src\/x\.ts:\d/, "a summary prints no line of a place");
   assert.equal(text.split("src/a.ts").length - 1, 1, "the file of the declarations is printed once");
   await session.close();
 });
