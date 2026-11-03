@@ -348,8 +348,10 @@ function impactedSymbols(value: ImpactValue, detail: Detail): string[] {
   const near = listed.filter((symbol) => symbol.depth <= LISTED_DEPTH);
   const deeper = listed.filter((symbol) => symbol.depth > LISTED_DEPTH);
   if (detail === "full" || deeper.length === 0) return [`impacted symbols (${listed.length}):`, ...groupedLines(listed)];
+  const deepest = Math.max(...deeper.map((symbol) => symbol.depth));
+  const anchor = near.length === 0 ? "a seed listed here" : "a symbol listed here";
   return [
-    `impacted symbols (${listed.length}): ${near.length} at depth 0-${LISTED_DEPTH} listed, ${deeper.length} deeper not listed; detail "full" lists them`,
+    `impacted symbols (${listed.length}): ${near.length} at depth 0-${LISTED_DEPTH} listed, ${deeper.length} deeper (to depth ${deepest}) not listed; ask ye_ast_callers about ${anchor} to see one ring further, or detail "full" for all`,
     ...groupedLines(near),
   ];
 }

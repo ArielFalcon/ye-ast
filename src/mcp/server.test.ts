@@ -681,10 +681,34 @@ test("by default impact lists the symbols at depth 0 and 1 and says how many dee
   const { session } = await setup({ callers: async () => ({ ok: true, value: deep }) });
   const result = await session.callTool("ye_ast_callers", { targets: [{ file: "src/a.ts", symbol: "A.seed" }] });
   const text = textOf(result);
-  assert.match(text, /impacted symbols \(4\): 1 at depth 0-1 listed, 3 deeper not listed; detail "full" lists them\n {2}src\/a\.ts\n {4}4 A\.other \[method\] \(depth 1\)$/m);
+  assert.match(
+    text,
+    /impacted symbols \(4\): 1 at depth 0-1 listed, 3 deeper \(to depth 3\) not listed; ask ye_ast_callers about a symbol listed here to see one ring further, or detail "full" for all\n {2}src\/a\.ts\n {4}4 A\.other \[method\] \(depth 1\)$/m,
+  );
   assert.doesNotMatch(text, /at depth 2-3|src\/c\.ts: 1 at depth/);
   assert.doesNotMatch(text, /B\.user|C\.top/);
   assert.deepEqual(result.structuredContent, envelopeOf(deep));
+  const full = textOf(await session.callTool("ye_ast_callers", { targets: [{ file: "src/a.ts", symbol: "A.seed" }], detail: "full" }));
+  assert.doesNotMatch(full, /to see one ring further/, "a full answer leaves nothing to extend");
+  assert.match(full, /B\.user|C\.top/);
+  await session.close();
+});
+
+test("a summary whose symbols are all deeper points at the seeds it does list", async () => {
+  const deep = impactFact({
+    value: {
+      seeds: [{ file: "src/a.ts", symbol: "A.seed", line: 1, basis: "requested" }],
+      symbols: [
+        { file: "src/b.ts", symbol: "B.user", kind: "function", line: 9, depth: 2, confidence: 1, fanIn: 0 },
+        { file: "src/c.ts", symbol: "C.top", kind: "function", line: 5, depth: 2, confidence: 1, fanIn: 0 },
+      ],
+      entrypoints: [],
+      cost: { expansionsUsed: 1 },
+    },
+  } as Partial<Fact<ImpactValue>>);
+  const { session } = await setup({ callers: async () => ({ ok: true, value: deep }) });
+  const text = textOf(await session.callTool("ye_ast_callers", { targets: [{ file: "src/a.ts", symbol: "A.seed" }] }));
+  assert.match(text, /2 deeper \(to depth 2\) not listed; ask ye_ast_callers about a seed listed here to see one ring further/);
   await session.close();
 });
 
