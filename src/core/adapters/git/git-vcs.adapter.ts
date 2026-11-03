@@ -4,6 +4,7 @@ import { devNull, tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { createDiffReader, type FileChange } from "../../domain/change/diff-reader.ts";
 import type { Result } from "../../domain/shared/result.ts";
+import { isFullObjectId } from "../../domain/shared/revision.ts";
 import type { CommitExport, ExportBudget, ExportedFile, ExportPlan, ExportStop, RemoteRef, SkippedEntry, Vcs, VcsChanges, VcsFault } from "../../ports/vcs.port.ts";
 import { claimPath, isConfinedPath, type PathClaims } from "./export-path-rules.ts";
 
@@ -188,7 +189,7 @@ export function createGitVcs(deps: GitDeps = defaultGitDeps): Vcs & VcsChanges {
   }
 
   async function mergeBase(repo: string, first: string, second: string, signal?: AbortSignal): Promise<Result<string, VcsFault>> {
-    if (!isFullSha(first) || !isFullSha(second)) return { ok: false, fault: { kind: "unknown-revision", detail: "a merge base takes full commit shas" } };
+    if (!isFullObjectId(first) || !isFullObjectId(second)) return { ok: false, fault: { kind: "unknown-revision", detail: "a merge base takes full commit shas" } };
     const run = await deps.runIsolatedGit(repo, ["merge-base", "--end-of-options", first, second], signal);
     if (signal?.aborted) return ABORTED;
     if (run.code === REVISION_NOT_FOUND) return { ok: false, fault: { kind: "no-merge-base", detail: `${first} and ${second} share no history` } };
@@ -197,7 +198,7 @@ export function createGitVcs(deps: GitDeps = defaultGitDeps): Vcs & VcsChanges {
   }
 
   async function diffCommits(repo: string, base: string, head: string, signal?: AbortSignal): Promise<Result<readonly FileChange[], VcsFault>> {
-    if (!isFullSha(base) || !isFullSha(head)) return { ok: false, fault: { kind: "unknown-revision", detail: "a diff takes full commit shas" } };
+    if (!isFullObjectId(base) || !isFullObjectId(head)) return { ok: false, fault: { kind: "unknown-revision", detail: "a diff takes full commit shas" } };
     const reader = createDiffReader();
     const run = await deps.streamLines(repo, [...DIFF_ARGUMENTS, base, head], (line) => reader.push(line), signal);
     if (signal?.aborted) return ABORTED;
@@ -320,12 +321,6 @@ const DIFF_OPTIONS: readonly string[] = [
 ];
 
 const DIFF_ARGUMENTS: readonly string[] = ["diff-tree", "-r", "-p", ...DIFF_OPTIONS];
-
-const FULL_SHA = /^[0-9a-f]{40}([0-9a-f]{24})?$/;
-
-function isFullSha(value: string): boolean {
-  return FULL_SHA.test(value);
-}
 
 function errorDetail(error: unknown): string {
   return error instanceof Error ? error.message : String(error);

@@ -5,6 +5,7 @@ import { chmod, link, lstat, mkdir, readFile, rename, rm, writeFile } from "node
 import { join } from "node:path";
 import { compareText } from "../../domain/shared/code-node.ts";
 import { privateToOwner } from "../../domain/shared/private-to-owner.ts";
+import { isFullObjectId } from "../../domain/shared/revision.ts";
 import type { RemoteBranch, RemoteFreshness, RemoteListing } from "../../domain/topology/remote-snapshot.ts";
 import type { Digest } from "../../ports/digest.port.ts";
 import type { RefreshedRemote, RemoteRefresh, RemoteRefreshRequest } from "../../ports/remote-refresh.port.ts";
@@ -29,7 +30,6 @@ const SPAWN_FAILED = -1;
 /** The most of git's stderr a freshness carries; the rest is dropped, never a fact. */
 const DETAIL_LIMIT = 2000;
 const SHALLOW_CHECK = ["rev-parse", "--is-shallow-repository"];
-const FULL_SHA = /^[0-9a-f]{40}([0-9a-f]{24})?$/i;
 
 export interface RemoteGitRun {
   code: number;
@@ -370,7 +370,7 @@ function parseListing(output: string): RemoteListing {
       if (right === "HEAD" && target.startsWith(HEADS)) defaultBranch = target.slice(HEADS.length);
       continue;
     }
-    if (!right.startsWith(HEADS) || !FULL_SHA.test(left)) continue;
+    if (!right.startsWith(HEADS) || !isFullObjectId(left)) continue;
     const name = right.slice(HEADS.length);
     if (name !== "") branches.push({ name, sha: left });
   }

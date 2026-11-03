@@ -1,3 +1,5 @@
+import { isFullObjectId } from "../shared/revision.ts";
+
 /** One branch a remote's own listing states, with the sha the listing named for it. */
 export interface RemoteBranch {
   name: string;
@@ -39,8 +41,6 @@ export type RemoteFreshness =
   | { status: "verified" }
   | { status: "unverified"; reason: "failed" | "deadline" | "offline" | "refresh-in-progress"; lastVerifiedAt?: string; detail?: string };
 
-const FULL_SHA = /^[0-9a-f]{40}$/i;
-
 /**
  * Chooses one revision for a repository from the remote's listing and the trigger's line, by steps 1, 5 and 6: an
  * explicit revision wins; else the branch named like the trigger's line; else the remote's default branch; else
@@ -50,7 +50,7 @@ export function resolveRemoteSnapshot(repo: string, asked: string | undefined, t
   const branches = new Map(listing.branches.map((branch) => [branch.name, branch.sha]));
 
   if (asked !== undefined) {
-    if (FULL_SHA.test(asked)) return { repo, asked, step: "explicit", consulted: [], sha: asked };
+    if (isFullObjectId(asked)) return { repo, asked, step: "explicit", consulted: [], sha: asked };
     const sha = branches.get(asked);
     return sha === undefined ? { repo, asked, step: "revision-unavailable", consulted: [{ branch: asked }] } : { repo, asked, step: "explicit", consulted: [{ branch: asked, sha }], sha };
   }
