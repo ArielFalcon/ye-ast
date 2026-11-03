@@ -24,24 +24,22 @@ ye-ast gives the agent **the map**: every answer carries the file and line it ca
 never a silent empty list. The questions it settles:
 
 - **What does my branch touch?** Everything downstream of the change, plus the routes it adds, removes or alters.
-- **Who calls this?** Every caller of a function or a line range, before you rename or delete it.
+- **Who calls this?** Every caller of a function or a line range (in every repository related, not just the current one), before you rename or delete it.
 - **Which screen or endpoint ends up running this?** UI routes, HTTP endpoints, message listeners and scheduled jobs.
 - **Is this file really dead?** Who imports it and who uses it, file by file.
 
 It is deterministic and read-only: the answers come from your code and your git history, never from a model, so the same
 repository gives the same bytes. It runs nothing from your repository, needs no secret, and under the default
-`untrusted` mode makes no network request. It speaks MCP, so Claude Code, OpenCode and any other client can use it.
+`untrusted` mode makes no network request. It speaks MCP, so Claude Code, OpenCode, Codex and any other client can use it.
 
 ```bash
 npx ye-ast-mcp init --trust untrusted .   # one command; paste the line it prints into your agent
 ```
 
 TypeScript and Java today, with Angular routes and Spring endpoints; anything else is reported as not covered. It answers
-structure, not intent: "what reaches this?", never "is this code good?". Version 0.x: solid answers, a surface that may
-still change.
+structure, not intent: "what reaches this?", never "is this code good?". Version 0.x: solid answers, a surface that may (will) change.
 
-**Markdown descriptions are boring.** [Walk the graph yourself](https://arielfalcon.github.io/ye-ast/) — the same answers,
-as an interactive map of the layers, the modules and the walk an agent takes.
+**Markdown descriptions are boring.** [Walk the graph yourself](https://arielfalcon.github.io/ye-ast/).
 
 ---
 
