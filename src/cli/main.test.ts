@@ -8,6 +8,8 @@ import { SCHEMA, type Fact } from "../core/domain/shared/fact.ts";
 import type { Result } from "../core/domain/shared/result.ts";
 import type { EntrypointQueries, MapRequest } from "../core/ports/entrypoint-queries.port.ts";
 import type { ImpactCallersRequest, ImpactFault, ImpactImportersRequest, ImpactOfChangeRequest, ImpactQueries } from "../core/ports/impact-queries.port.ts";
+import type { OutlineQueries, OutlineRequest } from "../core/ports/outline-queries.port.ts";
+import type { OutlineValue } from "../core/domain/outline/outline-fact.ts";
 import type { ImportersValue } from "../core/domain/impact/importers-fact.ts";
 import type { ImpactValue } from "../core/domain/impact/impact-fact.ts";
 import { REDACTED, type Redaction } from "../core/ports/redaction.port.ts";
@@ -76,7 +78,7 @@ function setup(answer: Result<EntrypointMapFact, VcsFault | LiveFault> = { ok: t
       return { ok: true, value: INSTALLED };
     },
   };
-  return { requests, installs, signal, io: recordingIo(), deps: { version: VERSION, entrypoints, impact, install, mcpCommand: ["npx", "--yes", "tsx", MCP_ENTRYPOINT], redaction, repositoryName: async (repo: string): Promise<Result<string, VcsFault>> => ({ ok: true, value: basename(repo) }), signal } };
+  return { requests, installs, signal, io: recordingIo(), deps: { version: VERSION, entrypoints, impact, outline: { outline: async () => ({ ok: false, fault: { kind: "git-failed", detail: "not exercised" } }) } as OutlineQueries, install, mcpCommand: ["npx", "--yes", "tsx", MCP_ENTRYPOINT], redaction, repositoryName: async (repo: string): Promise<Result<string, VcsFault>> => ({ ok: true, value: basename(repo) }), signal } };
 }
 
 const MCP_ENTRYPOINT = "/opt/ye-ast/src/composition/main.ts";
@@ -125,6 +127,20 @@ function setupCallers(answer: Result<Fact<ImpactValue>, ImpactFault> = { ok: tru
     },
   };
   return { ...base, requests, deps: { ...base.deps, impact } };
+}
+
+const OUTLINE_VALUE: OutlineValue = { files: [{ file: "src/A.java", declarations: [{ kind: "method", name: "run", line: 3, endLine: 9 }], imports: [] }], unheld: [] };
+
+function setupOutline(answer?: Result<Fact<OutlineValue>, VcsFault | LiveFault>) {
+  const base = setup();
+  const requests: OutlineRequest[] = [];
+  const outline: OutlineQueries = {
+    outline: async (request) => {
+      requests.push(request);
+      return answer ?? ({ ok: true, value: { ...IMPACT, status: "complete", value: OUTLINE_VALUE } as Fact<OutlineValue> } as const);
+    },
+  };
+  return { ...base, requests, deps: { ...base.deps, outline } };
 }
 
 function setupImporters(answer: Result<Fact<ImportersValue>, VcsFault | LiveFault> = { ok: true, value: IMPORTERS }) {
@@ -382,6 +398,24 @@ test("importers asks for the files at the revision and prints the fact", async (
   const flagged = setupImporters();
   await run(["importers", "--revision", "v1", "--repo-id", "shop", ".", "src/A.java"], flagged.io, flagged.deps);
   assert.deepEqual([flagged.requests[0]?.revision, flagged.requests[0]?.repoId], ["v1", "shop"]);
+});
+
+test("outline asks for the files at the revision and prints the fact", async () => {
+  const defaults = setupOutline();
+  assert.equal(await run(["outline", "some/checkout", "src/A.java", "src/B.java"], defaults.io, defaults.deps), EXIT_CODE.ok);
+  assert.deepEqual(JSON.parse(defaults.io.stdout.join("\n")), { ...IMPACT, status: "complete", value: OUTLINE_VALUE });
+  assert.deepEqual(defaults.requests, [{ repo: resolve("some/checkout"), repoId: "checkout", revision: "HEAD", files: ["src/A.java", "src/B.java"], signal: defaults.signal }]);
+  const flagged = setupOutline();
+  await run(["outline", "--revision", "v1", "--repo-id", "shop", ".", "src/A.java"], flagged.io, flagged.deps);
+  assert.deepEqual([flagged.requests[0]?.revision, flagged.requests[0]?.repoId], ["v1", "shop"]);
+});
+
+test("outline without a repository or without files is a usage error", async () => {
+  for (const argv of [["outline"], ["outline", "."]]) {
+    const { io, deps, requests } = setupOutline();
+    assert.equal(await run(argv, io, deps), EXIT_CODE.usage, argv.join(" "));
+    assert.deepEqual(requests, []);
+  }
 });
 
 test("importers without a repository, without files, or with a budget flag is a usage error", async () => {
