@@ -346,14 +346,39 @@ test("a repository no step could pin is a revision decision with free text and n
   assert.equal(decision?.required, false);
 });
 
-test("a repository declared without a remote offers its clone's origin URL with that basis, and recommends none", () => {
-  const set = decisionsOf(input({ origins: [{ repo: "billing", url: "https://git.example.com/billing.git" }] }));
+test("a repository declared without a remote offers its clone's own remote URL with that basis, and recommends none", () => {
+  const set = decisionsOf(input({ origins: [{ repo: "billing", remotes: [{ url: "https://git.example.com/billing.git", remote: "origin" }] }] }));
 
   const decision = byId(set).get("remote:billing");
   assert.deepEqual(options(decision), ["https://git.example.com/billing.git(origin)"]);
   assert.deepEqual(decision?.options[0]?.evidence, [{ path: ".git/config", line: 1, via: "origin" }]);
   assert.equal(decision?.allowsFreeText, true);
   assert.equal(decision?.required, false);
+});
+
+test("a clone that states several remotes is one remote decision offering each, the one it came from as evidence", () => {
+  const set = decisionsOf(
+    input({
+      origins: [
+        {
+          repo: "billing",
+          remotes: [
+            { url: "https://git.example.com/me/billing.git", remote: "origin" },
+            { url: "https://git.example.com/shop/billing.git", remote: "upstream" },
+          ],
+        },
+      ],
+    }),
+  );
+
+  assert.deepEqual(
+    set.decisions.map((decision) => decision.id),
+    ["remote:billing"],
+  );
+  assert.deepEqual(byId(set).get("remote:billing")?.options.map((option) => `${option.value} ${option.evidence.map((place) => place.via).join(",")}`), [
+    "https://git.example.com/me/billing.git origin",
+    "https://git.example.com/shop/billing.git upstream",
+  ]);
 });
 
 test("a revision-unavailable resolution offering a consulted ref that carries a sha recommends none", () => {

@@ -5,7 +5,7 @@ import { compareText } from "../../domain/shared/code-node.ts";
 import type { Result } from "../../domain/shared/result.ts";
 import type { OutwardName } from "../../domain/topology/outward-name.ts";
 import { directoryNameOf } from "../../domain/topology/repository-identity.ts";
-import type { WorkspaceRepositoryDeclaration } from "../../domain/topology/workspace-manifest.ts";
+import { isRemoteAddress, type WorkspaceRepositoryDeclaration } from "../../domain/topology/workspace-manifest.ts";
 import type { DecisionQueries, DecisionsRequest, DecisionValue } from "../../ports/decision-queries.port.ts";
 import type { FixedLayerFault } from "../../ports/fixed-layer-store.port.ts";
 import type { Vcs } from "../../ports/vcs.port.ts";
@@ -62,8 +62,9 @@ async function declaredOf(defaults: WorkspaceDefaults | undefined, root: string)
 }
 
 /**
- * The `origin` URL of every repository in force the declaration gives no `remote`: the workspace read already read its
- * remotes for the section's identity, and a clone that states none offers no option.
+ * The own remotes of every repository in force the declaration gives no `remote`, one entry per repository: the workspace
+ * read already read their remotes for the section's identity, and a remote the declaration would not accept as an
+ * address is no option, while a repository that states none leaves no gap to ask.
  */
 async function originsOf(
   vcs: Pick<Vcs, "remotes">,
@@ -79,8 +80,9 @@ async function originsOf(
     if (declaration === undefined || declaration.remote !== undefined) continue;
     const remotes = await vcs.remotes(repository.path);
     if (!remotes.ok) return { ok: false, fault: remotes.fault };
-    const origin = remotes.value.find((remote) => remote.name === "origin");
-    if (origin !== undefined) origins.push({ repo: repository.repo, url: origin.url });
+    if (remotes.value.length === 0) continue;
+    const accepted = remotes.value.filter((remote) => isRemoteAddress(remote.url)).map((remote) => ({ url: remote.url, remote: remote.name }));
+    origins.push({ repo: repository.repo, remotes: accepted.toSorted((a, b) => compareText(a.remote, b.remote)) });
   }
   return { ok: true, value: origins.toSorted((a, b) => compareText(a.repo, b.repo)) };
 }

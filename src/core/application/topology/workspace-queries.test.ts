@@ -146,6 +146,27 @@ test("a name that matches the tail of a repository's remote is served with basis
   assert.deepEqual(valueOf(result).candidates.map((candidate) => `${candidate.repo} ${candidate.basis}`), ["library remote"]);
 });
 
+test("a name a clone's upstream states cites the remote that states it, never the one that does not", async () => {
+  const queries = setup({
+    "/work/shop-web": { files: {}, names: [dependencyName("events-lib", "package.json", 3)] },
+    "/work/library": {
+      files: {},
+      remotes: [
+        { name: "origin", url: "git@github.com:shop/billing.git" },
+        { name: "upstream", url: "git@github.com:shop/events-lib.git" },
+      ],
+    },
+  });
+
+  const result = await queries.outwardNames({ repo: { path: "/work/shop-web" }, repos: [{ path: "/work/library" }] });
+
+  const candidates = valueOf(result).candidates;
+  assert.deepEqual(
+    candidates.map((candidate) => `${candidate.repo} ${candidate.basis} ${candidate.evidence.map((place) => `${place.path}:${place.line}${place.via === undefined ? "" : ` via ${place.via}`}`).join(", ")}`),
+    ["library remote package.json:3, .git/config:1 via upstream"],
+  );
+});
+
 test("a name no repository given serves is listed as unserved, and the service label decides what is compared", async () => {
   const queries = setup({
     "/work/shop-web": { files: {}, names: [configurationName("http://geo-svc.b2c:8080/addresses", "src/main/resources/application.yaml", 7)] },

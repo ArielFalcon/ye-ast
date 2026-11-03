@@ -56,7 +56,7 @@ export function parseWorkspaceManifest(text: string): Result<WorkspaceManifest, 
     if (!isText(path)) return invalid(`repos[${index}].path: a non-empty string`);
     if (id !== undefined && !isText(id)) return invalid(`repos[${index}].id: a non-empty string`);
     if (revision !== undefined && !isText(revision)) return invalid(`repos[${index}].revision: a non-empty string`);
-    if (remote !== undefined && !(isText(remote) && isRemote(remote))) return invalid(`repos[${index}].remote: a URL or an scp-like git address`);
+    if (remote !== undefined && !(isText(remote) && isRemoteAddress(remote))) return invalid(`repos[${index}].remote: a URL or an scp-like git address`);
     repositories.push({ path, ...(id === undefined ? {} : { id }), ...(revision === undefined ? {} : { revision }), ...(remote === undefined ? {} : { remote }) });
   }
   const gateways = stated["gateways"];
@@ -98,7 +98,7 @@ function isText(value: unknown): value is string {
 const SCHEME_URL = /^[a-z][a-z0-9+.-]*:\/\/\S+$/i;
 const SCP_URL = /^(?:[^\s/@]+@)?[^\s/:]+:\S+$/;
 
-/** A remote the refresh may read: an absolute URL with a scheme, or the scp-like address git also accepts. */
-function isRemote(value: string): boolean {
+/** A remote the declaration accepts and a trusted refresh may read: an absolute URL with a scheme, or the scp-like address git also accepts. */
+export function isRemoteAddress(value: string): boolean {
   return /^[a-z][a-z0-9+.-]*:\/\//i.test(value) ? SCHEME_URL.test(value) : SCP_URL.test(value);
 }

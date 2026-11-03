@@ -2,6 +2,14 @@ import { compareText } from "../shared/code-node.ts";
 import type { Evidence } from "../shared/fact.ts";
 import { serviceLabel, sortEvidence, type NameCandidate, type OutwardName } from "./outward-name.ts";
 
+/** A remote a repository states: the name it answers to in its own configuration, and the repository name its URL ends with. */
+export interface RepositoryRemote {
+  /** The remote's name in the clone's configuration: `origin`, `upstream`. */
+  remote: string;
+  /** The repository name the remote's URL ends with: the last segment of `host/owner/name`, without `.git`. */
+  repository: string;
+}
+
 /** What a repository can be recognized by: the name it is known under, the artifacts its build declares, its remotes. */
 export interface RepositoryIdentity {
   repo: string;
@@ -9,12 +17,18 @@ export interface RepositoryIdentity {
   id: string;
   /** The coordinates the repository's own build declares: a Maven `groupId:artifactId`, an npm package name. */
   artifacts: readonly string[];
-  /** The repository name each of its remotes ends with, without `.git`. */
-  remotes: readonly string[];
+  /** Every remote the clone states, so a name it carries is cited by the remote that carries it and no other. */
+  remotes: readonly RepositoryRemote[];
   evidence: readonly Evidence[];
 }
 
 const BASES = ["exact-name", "artifact", "remote"] as const;
+
+/** One value a repository states for a basis, with the places that state it. */
+interface Recognition {
+  value: string;
+  evidence: readonly Evidence[];
+}
 
 /**
  * The local repositories that serve a name, strongest basis first. A name equal to a repository's id is `exact-name`; one
@@ -27,22 +41,29 @@ export function nameCandidates(name: OutwardName, identities: readonly Repositor
   return identities
     .flatMap((identity): NameCandidate[] => {
       for (const basis of BASES) {
-        if (recognizedBy(identity, basis).includes(label)) return [{ name: name.name, repo: identity.id, basis, evidence: [...sortEvidence(name.evidence), ...identity.evidence] }];
+        const matched = recognizedBy(identity, basis).filter((recognition) => recognition.value === label);
+        if (matched.length > 0) {
+          return [{ name: name.name, repo: identity.id, basis, evidence: [...sortEvidence(name.evidence), ...sortEvidence(matched.flatMap((recognition) => recognition.evidence))] }];
+        }
       }
       return [];
     })
     .sort((a, b) => compareText(a.repo, b.repo) || compareText(a.basis, b.basis));
 }
 
-function recognizedBy(identity: RepositoryIdentity, basis: (typeof BASES)[number]): readonly string[] {
+function recognizedBy(identity: RepositoryIdentity, basis: (typeof BASES)[number]): readonly Recognition[] {
   switch (basis) {
     case "exact-name":
-      return [identity.id];
+      return [{ value: identity.id, evidence: identity.evidence }];
     case "artifact":
-      return identity.artifacts.map((coordinate) => coordinate.split(/[:/]/).filter(Boolean).pop() ?? coordinate);
+      return identity.artifacts.map((coordinate) => ({ value: lastSegmentOf(coordinate), evidence: identity.evidence }));
     case "remote":
-      return identity.remotes;
+      return identity.remotes.map(({ remote, repository }) => ({ value: repository, evidence: identity.evidence.filter((place) => place.via === remote) }));
   }
+}
+
+function lastSegmentOf(coordinate: string): string {
+  return coordinate.split(/[:/]/).filter(Boolean).pop() ?? coordinate;
 }
 
 /** The last segment of a path, with either separator and any trailing one: the directory a repository root ends in. */
@@ -54,6 +75,5 @@ export function directoryNameOf(path: string): string {
 /** The repository name a remote URL ends with, without its `.git` suffix: `host/owner/name` names `name`. */
 export function repositoryNameOf(url: string): string {
   const withoutQuery = url.split(/[?#]/)[0] ?? url;
-  const tail = withoutQuery.split(/[/:]/).filter(Boolean).pop() ?? "";
-  return tail.replace(/\.git$/i, "");
+  return lastSegmentOf(withoutQuery).replace(/\.git$/i, "");
 }

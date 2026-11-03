@@ -35,10 +35,11 @@ export interface DecisionInput {
   origins?: readonly DecisionOrigin[];
 }
 
-/** A clone's own `origin` URL, read from its configuration: an option of a `remote` decision, never a recommendation. */
+/** A clone's own remotes, read from its configuration: the options of one `remote` decision, never a recommendation. */
 export interface DecisionOrigin {
   repo: string;
-  url: string;
+  /** Every remote the clone states that the declaration accepts, sorted by remote name. */
+  remotes: readonly { url: string; remote: string }[];
 }
 
 const NAME_BASES = ["exact-name", "artifact", "remote"] as const;
@@ -213,14 +214,18 @@ function revisionDecisions(input: DecisionInput): Decision[] {
   });
 }
 
-/** One decision per repository declared without a `remote`: its clone's `origin` URL is the option, and no source of truth is ever preselected. */
+/**
+ * One decision per repository declared without a `remote` that states at least one: every remote the declaration would
+ * accept as an address is an option, with the place in its configuration that states it, and no source of truth is ever
+ * preselected.
+ */
 function remoteDecisions(input: DecisionInput): Decision[] {
-  return (input.origins ?? []).map(({ repo, url }) =>
+  return (input.origins ?? []).map(({ repo, remotes }) =>
     decisionOf({
       kind: "remote",
       subject: repo,
       evidence: [],
-      options: [{ value: url, basis: "origin", evidence: [{ path: ".git/config", line: 1, via: "origin" }], recommended: false }],
+      options: remotes.map(({ url, remote }): DecisionOption => ({ value: url, basis: "origin", evidence: [{ path: ".git/config", line: 1, via: remote }], recommended: false })),
       allowsFreeText: true,
       required: false,
     }),

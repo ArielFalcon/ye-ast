@@ -8,7 +8,7 @@ import type { Result } from "../../domain/shared/result.ts";
 import type { CallSite } from "../../domain/topology/call-site.ts";
 import type { NameCandidate, OutwardName } from "../../domain/topology/outward-name.ts";
 import type { DecisionQueries, DecisionValue } from "../../ports/decision-queries.port.ts";
-import type { Vcs } from "../../ports/vcs.port.ts";
+import type { Vcs, RemoteRef } from "../../ports/vcs.port.ts";
 import type { WorkspaceDefaults } from "../../ports/workspace-defaults.port.ts";
 import type { WorkspaceFault, WorkspaceRepository, WorkspaceSection } from "../../ports/workspace-repos.port.ts";
 import type { FactRead, WorkspaceQueries, WorkspaceRefresh, WorkspaceRequest, WorkspaceValue } from "../../ports/workspace-queries.port.ts";
@@ -87,13 +87,14 @@ function setup(answer: Result<Fact<WorkspaceValue>, WorkspaceFault>, defaults?: 
   return { queries: createDecisionQueries({ workspace, ...(defaults === undefined ? {} : { defaults }), vcs }), asks };
 }
 
-/** A git that states the origin URL of each clone named here, and every clone it was asked about. */
-function remotesOf(urls: Readonly<Record<string, string>>, asked: string[] = []): Pick<Vcs, "remotes"> {
+/** A git that states the remotes of each clone named here, and every clone it was asked about. */
+function remotesOf(stated: Readonly<Record<string, string | readonly RemoteRef[]>>, asked: string[] = []): Pick<Vcs, "remotes"> {
   return {
     remotes: async (repo) => {
       asked.push(repo);
-      const url = urls[repo];
-      return { ok: true, value: url === undefined ? [] : [{ name: "origin", url }] };
+      const remotes = stated[repo];
+      if (remotes === undefined) return { ok: true, value: [] };
+      return { ok: true, value: typeof remotes === "string" ? [{ name: "origin", url: remotes }] : remotes };
     },
   };
 }
@@ -256,18 +257,40 @@ test("the decision answer carries the refresh the workspace read consumed beside
   assert.equal("refresh" in after.value.fact, false);
 });
 
-test("a repository the request declares without a remote offers its clone's origin URL, and the bound repository is never read for one", async () => {
+test("a repository the request declares without a remote offers each remote its clone states, and the bound repository is never read for one", async () => {
   const asked: string[] = [];
-  const vcs = remotesOf({ "/work/billing": "https://git.example.com/billing.git", "/work/shop-web": "https://git.example.com/shop-web.git" }, asked);
+  const vcs = remotesOf(
+    {
+      "/work/billing": [
+        { name: "origin", url: "https://git.example.com/me/billing.git" },
+        { name: "upstream", url: "https://git.example.com/shop/billing.git" },
+      ],
+      "/work/shop-web": "https://git.example.com/shop-web.git",
+    },
+    asked,
+  );
   const { queries } = setup({ ok: true, value: base(workspaceValue()) }, undefined, undefined, vcs);
 
   const value = valueOf(await queries.decisions(REQUEST));
 
   assert.deepEqual(asked, ["/work/billing", "/work/shop-web"]);
   const remote = decisionOf(value, "remote:billing");
-  assert.deepEqual(remote.options.map((option) => `${option.value}${option.recommended ? "*" : ""}(${option.basis})`), ["https://git.example.com/billing.git(origin)"]);
+  assert.deepEqual(
+    remote.options.map((option) => `${option.value}${option.recommended ? "*" : ""}(${option.basis} ${option.evidence.map((place) => place.via).join(",")})`),
+    ["https://git.example.com/me/billing.git(origin origin)", "https://git.example.com/shop/billing.git(origin upstream)"],
+  );
   assert.equal(remote.allowsFreeText, true);
   assert.equal(value.decisions.some((decision) => decision.id === "remote:orders"), false);
+});
+
+test("a remote the declaration would refuse as an address is no option, and the gap keeps its free text", async () => {
+  const vcs = remotesOf({ "/work/billing": [{ name: "origin", url: "/srv/git/billing.git" }] });
+  const { queries } = setup({ ok: true, value: base(workspaceValue()) }, undefined, undefined, vcs);
+
+  const remote = decisionOf(valueOf(await queries.decisions(REQUEST)), "remote:billing");
+
+  assert.deepEqual(remote.options, []);
+  assert.equal(remote.allowsFreeText, true);
 });
 
 test("a repository whose declaration states a remote is not read for an origin and is no remote decision", async () => {

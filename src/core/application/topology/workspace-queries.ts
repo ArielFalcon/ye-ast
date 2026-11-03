@@ -111,7 +111,7 @@ export function createWorkspaceQueries(deps: WorkspaceQueriesDeps): WorkspaceQue
             repo: repoId,
             id: repoId,
             artifacts: deps.evidence.artifacts(sources),
-            remotes: remotes.value.map((remote) => repositoryNameOf(remote.url)),
+            remotes: remotes.value.map((remote) => ({ remote: remote.name, repository: repositoryNameOf(remote.url) })),
             evidence: remotes.value.map((remote) => ({ path: ".git/config", line: 1, via: remote.name })),
           },
         },

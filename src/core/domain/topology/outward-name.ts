@@ -79,8 +79,9 @@ export function gatherNames(names: readonly OutwardName[]): OutwardName[] {
   return [...held.values()].sort(compareOutwardName);
 }
 
+/** The places, one per place: the same line reached two ways is two places, so the `via` that reached it is part of it. */
 export function sortEvidence(evidence: readonly Evidence[]): Evidence[] {
   const seen = new Map<string, Evidence>();
-  for (const place of evidence) seen.set(`${place.path}\0${place.line}`, place);
+  for (const place of evidence) seen.set(`${place.path}\0${place.line}\0${place.via ?? ""}`, place);
   return [...seen.values()].sort((a, b) => compareText(a.path, b.path) || a.line - b.line);
 }
