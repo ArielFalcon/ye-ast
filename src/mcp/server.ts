@@ -8,13 +8,14 @@ import type { LiveStaleNotice } from "../core/ports/live-queries.port.ts";
 import type { Result } from "../core/domain/shared/result.ts";
 import type { EntrypointQueries } from "../core/ports/entrypoint-queries.port.ts";
 import type { CallersTarget, ImpactFault, ImpactQueries } from "../core/ports/impact-queries.port.ts";
+import type { OutlineQueries } from "../core/ports/outline-queries.port.ts";
 import type { Redaction } from "../core/ports/redaction.port.ts";
 import { DEFAULT_REVISION } from "../core/ports/vcs.port.ts";
 import type { WorkspaceRepositoryRequest } from "../core/ports/workspace-repos.port.ts";
 import type { FactRead, WorkspaceQueries, WorkspaceRefresh, WorkspaceValue } from "../core/ports/workspace-queries.port.ts";
 import type { WorkspaceImpactQueries } from "../core/ports/workspace-impact-queries.port.ts";
 import type { DecisionQueries } from "../core/ports/decision-queries.port.ts";
-import { renderDecisions, renderEntrypointMap, renderFault, renderImpact, renderImporters, renderRefresh, renderStale, renderWorkspace, renderWorkspaceImpact, type Detail } from "./render.ts";
+import { renderDecisions, renderEntrypointMap, renderFault, renderImpact, renderImporters, renderOutline, renderRefresh, renderStale, renderWorkspace, renderWorkspaceImpact, type Detail } from "./render.ts";
 
 /** The key of the result's `_meta` that carries a stale notice. */
 export const LIVE_META = "ye-ast/live";
@@ -26,6 +27,7 @@ export interface McpDeps {
   /** Read query families only: nothing here can write, by type. */
   entrypoints: EntrypointQueries;
   impact: ImpactQueries;
+  outline: OutlineQueries;
   workspace: WorkspaceQueries;
   workspaceImpact: WorkspaceImpactQueries;
   decisions: DecisionQueries;
@@ -78,6 +80,8 @@ Reading an answer:
 - status "unknown": ye-ast cannot tell, and the reason says why; never read it as "no impact".
 - an item with reason "no-project": no package.json above that source places it in a project, so nothing says whether it declares routes; scope does not hide the manifest, unless an exclude glob leaves it out.
 - Every tool takes detail. A summary, the default, lists the symbols at depth 0 and 1, and for a cut the declarations it could not settle to; it leaves the symbols past that depth out with their count, and counts per file the cuts anchored at them. Full lists every symbol and every place a cut could not settle. Set detail to "full" when the deeper symbols themselves, the place of each unresolved reference or every cut is needed. For one ring past the listed symbols, ask ye_ast_callers about one of them: it answers that branch alone in one call, which costs less than full when one branch matters and more turns when every branch does.
+- Before reading a file you did not write, ask ye_ast_outline for it: it answers the span of every declaration and the files it imports, so you read the ranges you need instead of the whole file. A file it cannot tell about is listed in the cuts; read that one whole.
+
 - The text is the answer: it lists what detail asks for, while the structured content beside it carries only the envelope, so nothing is paid for twice. A host that needs the fact itself passes full: true, which adds every value and every cut place to the structured content and leaves the text unchanged.
 - A place prints its span when its declaration is longer than one line (\`src/a.ts:3-9\`). A reached symbol prints \`via src/b.ts:B.user at 14, 21, 33\`: the lines are the places inside the symbol itself, in its own file, where it depends on B.user, and every one of them is a place to change; never assume one use per symbol. \`at\` with no reason is a call; \`(reference)\` means it only names the symbol; \`(call)\`, \`(reference)\`, \`(contains)\`, \`(dispatch)\`, \`(relation)\` and \`(import)\` in parentheses with no line name a dependence the store placed no line for, so look at the symbol rather than searching for a call site.
 - confidence is 0-1 and printed only below 1: how strongly the edge that reached the symbol was resolved, 1 for a relation read from the code itself and lower for one the extractor inferred. fan-in is how many places call or instantiate the symbol, whether or not the walk followed them.
@@ -476,6 +480,25 @@ export function createMcpServer(deps: McpDeps): McpServer {
       answer(
         (onStale) => deps.impact.importers({ repo: repository.path, repoId: repository.repoId, ...atRevision(requested, isLive, onStale), files, ...scopeOf(paths), signal: ctx.mcpReq.signal }),
         (fact) => renderImporters(fact, listing),
+        whole === true,
+      ),
+  );
+
+  server.registerTool(
+    "ye_ast_outline",
+    {
+      title: "Shape of files",
+      description: `Per file, the declarations a reader can open by line span and the files it imports, read from the index: no file is opened. Call it before reading a file you did not write, so you read only the ranges a change touches instead of the whole file. A file it cannot tell about is a cut, never an empty list. ${COMPLETENESS}`,
+      inputSchema: z
+        .strictObject({ revision, live, files: z.array(z.string().min(1)).min(1).describe("Repository-relative paths."), scope, detail, full })
+        .refine(excludes("revision"), "live excludes revision"),
+      outputSchema: FACT_OUTPUT,
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    },
+    ({ revision: requested, live: isLive, files, scope: paths, detail: listing, full: whole }, ctx) =>
+      answer(
+        (onStale) => deps.outline.outline({ repo: repository.path, repoId: repository.repoId, ...atRevision(requested, isLive, onStale), files, ...scopeOf(paths), signal: ctx.mcpReq.signal }),
+        (fact) => renderOutline(fact, listing),
         whole === true,
       ),
   );

@@ -4,6 +4,7 @@ import type { ChangedEntrypoint } from "../core/domain/impact/changed-entrypoint
 import type { ImpactedSymbol, ImpactValue, ReachedEntrypoint, Seed } from "../core/domain/impact/impact-fact.ts";
 import { declarationAnchor } from "../core/domain/impact/impact-cuts.ts";
 import type { ImportersValue } from "../core/domain/impact/importers-fact.ts";
+import type { OutlineValue } from "../core/domain/outline/outline-fact.ts";
 import type { EntrypointMap } from "../core/domain/map/entrypoint-map.ts";
 import type { Decision, DecisionOption } from "../core/domain/decisions/decision.ts";
 import { compareText } from "../core/domain/shared/code-node.ts";
@@ -410,6 +411,18 @@ export function renderImporters(fact: Fact<ImportersValue>, detail: Detail = "su
   if (fact.status === "unknown") return lines.join("\n");
   for (const entry of fact.value.files) {
     lines.push(`  ${entry.file}`, namedFiles("importers", entry.importers), namedFiles("users", entry.users), namedFiles("unresolved namers", entry.unresolvedNamers));
+  }
+  lines.push(...cutsBlock(cutsOf(fact), detail));
+  return lines.join("\n");
+}
+
+export function renderOutline(fact: Fact<OutlineValue>, detail: Detail = "summary"): string {
+  const lines = headerLines(fact);
+  if (fact.status === "unknown") return lines.join("\n");
+  for (const entry of fact.value.files) {
+    lines.push(`  ${entry.file}`);
+    lines.push(...(entry.declarations.length === 0 ? ["    declares nothing"] : entry.declarations.map((declaration) => `    ${spanText(declaration.line, declaration.endLine)} ${declaration.name} [${declaration.kind}]`)));
+    if (entry.imports.length > 0) lines.push(`    imports: ${entry.imports.join(", ")}`);
   }
   lines.push(...cutsBlock(cutsOf(fact), detail));
   return lines.join("\n");

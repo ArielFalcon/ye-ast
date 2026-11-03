@@ -11,6 +11,7 @@ import type { LiveRetentionPolicy } from "../core/domain/snapshot/live-retention
 import { createFixedLayerAdmin } from "../core/application/fixed-layer/fixed-layer-admin.ts";
 import { createInstall } from "../core/application/install/install.ts";
 import { createImpactQueries } from "../core/application/impact/impact-queries.ts";
+import { createOutlineQueries } from "../core/application/outline/outline-queries.ts";
 import { createWorkspaceQueries } from "../core/application/topology/workspace-queries.ts";
 import { createWorkspaceImpactQueries } from "../core/application/topology/workspace-impact.ts";
 import { createDecisionQueries } from "../core/application/decisions/decision-queries.ts";
@@ -47,6 +48,7 @@ import type { CallSiteReader } from "../core/domain/topology/call-site.ts";
 import type { EntrypointExtractor } from "../core/ports/entrypoint-extractor.port.ts";
 import type { EntrypointQueries } from "../core/ports/entrypoint-queries.port.ts";
 import type { ImpactQueries } from "../core/ports/impact-queries.port.ts";
+import type { OutlineQueries } from "../core/ports/outline-queries.port.ts";
 import type { WorkspaceQueries } from "../core/ports/workspace-queries.port.ts";
 import type { WorkspaceImpactQueries } from "../core/ports/workspace-impact-queries.port.ts";
 import type { DecisionQueries } from "../core/ports/decision-queries.port.ts";
@@ -94,6 +96,7 @@ export interface ComposedQueries {
   version: string;
   entrypoints: EntrypointQueries;
   impact: ImpactQueries;
+  outline: OutlineQueries;
   workspace: WorkspaceQueries;
   workspaceImpact: WorkspaceImpactQueries;
   decisions: DecisionQueries;
@@ -178,6 +181,21 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
     }
   };
   const impact = measurement === undefined ? bareImpact : measuredImpact(bareImpact, measurement);
+  const outline = createOutlineQueries({
+    vcs,
+    scratch,
+    reader,
+    extractor,
+    graph,
+    ...(indexes && { indexes }),
+    digest,
+    matcher,
+    producer: { name: PRODUCER_NAME, version },
+    engines: { ...entrypointEngines, [CODEGRAPH_PACKAGE]: codegraph },
+    live,
+    ...budget,
+    ...trust,
+  });
   const defaults = createWorkspaceDefaults(createFixedLayerStore());
   const refresh = options.refresh ?? (options.cacheDirectory === undefined ? undefined : createRemoteRefresh({ ...defaultRemoteRefreshDeps, cacheDirectory: options.cacheDirectory, digest }));
   const workspace = createWorkspaceQueries({
@@ -198,7 +216,7 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
   });
   const workspaceImpact = createWorkspaceImpactQueries({ workspace, impact, defaults });
   const decisions = createDecisionQueries({ workspace, defaults, vcs });
-  return { version, entrypoints, impact, workspace, workspaceImpact, decisions, redaction, repositoryName: (repo, signal) => vcs.repositoryName(repo, signal), warmLive };
+  return { version, entrypoints, impact, outline, workspace, workspaceImpact, decisions, redaction, repositoryName: (repo, signal) => vcs.repositoryName(repo, signal), warmLive };
 }
 
 export function composeCli(options: CompositionOptions = {}): (argv: readonly string[], io: CliIo) => Promise<number> {

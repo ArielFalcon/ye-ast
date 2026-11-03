@@ -2,11 +2,12 @@ import type { Readable } from "node:stream";
 import type { Result } from "../core/domain/shared/result.ts";
 import type { EntrypointQueries } from "../core/ports/entrypoint-queries.port.ts";
 import type { ImpactFault, ImpactQueries } from "../core/ports/impact-queries.port.ts";
+import type { OutlineQueries } from "../core/ports/outline-queries.port.ts";
 import { isLiveFault } from "../core/ports/live-queries.port.ts";
 import type { Redaction } from "../core/ports/redaction.port.ts";
 import { isId, isRecord } from "./guards.ts";
 import { readLines } from "./lines.ts";
-import { deadlineOf, InvalidParamsError, readCallers, readCancelledId, readImporters, readMap, readOfChange, readTrustMode } from "./params.ts";
+import { deadlineOf, InvalidParamsError, readCallers, readCancelledId, readImporters, readMap, readOfChange, readOutline, readTrustMode } from "./params.ts";
 import { ERROR_CODE, METHOD, PROTOCOL, type ErrorKind, type RequestId } from "./protocol.ts";
 
 /** What a host may ask of ye-ast: the read query families only, so no write is reachable through the protocol. */
@@ -14,6 +15,7 @@ export interface QueryServerDeps {
   version: string;
   entrypoints: EntrypointQueries;
   impact: ImpactQueries;
+  outline: OutlineQueries;
   redaction: Redaction;
 }
 
@@ -54,6 +56,13 @@ const OPERATIONS = new Map<string, (deps: QueryServerDeps, params: unknown) => C
     (deps, params) => {
       const request = readImporters(params);
       return (signal) => deps.impact.importers({ ...request, signal });
+    },
+  ],
+  [
+    METHOD.outlineFiles,
+    (deps, params) => {
+      const request = readOutline(params);
+      return (signal) => deps.outline.outline({ ...request, signal });
     },
   ],
 ]);

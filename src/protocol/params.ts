@@ -5,6 +5,7 @@ import type { AtRevision } from "../core/ports/live-queries.port.ts";
 import { isWalkBoundField, WALK_BOUND_FIELDS, type WalkBoundsField } from "../core/domain/shared/fact.ts";
 import type { MapRequest } from "../core/ports/entrypoint-queries.port.ts";
 import type { CallersTarget, ImpactCallersRequest, ImpactImportersRequest, ImpactOfChangeRequest } from "../core/ports/impact-queries.port.ts";
+import type { OutlineRequest } from "../core/ports/outline-queries.port.ts";
 import { isId, isRecord } from "./guards.ts";
 import { isTrustMode, type TrustMode } from "../core/domain/shared/fact.ts";
 import type { RequestId } from "./protocol.ts";
@@ -118,6 +119,11 @@ export function readCallers(params: unknown): Omit<AtRevision<ImpactCallersReque
 }
 
 export function readImporters(params: unknown): Omit<AtRevision<ImpactImportersRequest>, "signal"> {
+  const p = only(params, ["repo", "repoId", "revision", "files", "scope"]);
+  return { repo: text(p, "repo"), repoId: text(p, "repoId"), revision: text(p, "revision"), files: list(p, "files", fileOf), ...scopeOf(p) };
+}
+
+export function readOutline(params: unknown): Omit<Extract<OutlineRequest, { live?: undefined }>, "signal"> {
   const p = only(params, ["repo", "repoId", "revision", "files", "scope"]);
   return { repo: text(p, "repo"), repoId: text(p, "repoId"), revision: text(p, "revision"), files: list(p, "files", fileOf), ...scopeOf(p) };
 }

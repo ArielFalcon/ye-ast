@@ -8,6 +8,7 @@ export const METHOD = {
   impactOfChange: "impact.ofChange",
   impactCallers: "impact.callers",
   impactImporters: "impact.importers",
+  outlineFiles: "outline.files",
 } as const;
 
 /** The closed set of answers a call can fail with: JSON-RPC's own, one per fault family of the ports, and the protocol's. */

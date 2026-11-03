@@ -1,6 +1,6 @@
-import { compareText } from "../../domain/shared/code-node.ts";
-import { NOT_DECLARED_KINDS } from "../../domain/impact/importers-fact.ts";
+import { NOT_DECLARED_KINDS, sortedUnique } from "../../domain/impact/importers-fact.ts";
 import type { OutlineFile, OutlineValue } from "../../domain/outline/outline-fact.ts";
+import { compareText } from "../../domain/shared/code-node.ts";
 import type { CodeGraphReader } from "../../ports/code-graph.port.ts";
 
 const IMPORT = "imports";
@@ -16,7 +16,7 @@ export function readOutline(store: CodeGraphReader, requested: readonly string[]
       continue;
     }
     const targets = store.outgoingEdges(nodes.map((node) => node.id)).filter((edge) => edge.kind === IMPORT).map((edge) => edge.target);
-    const imported = store.symbolsByIds(sortedUniqueIds(targets)).map((symbol) => symbol.file);
+    const imported = store.symbolsByIds([...new Set(targets)]).map((symbol) => symbol.file);
     files.push({
       file,
       declarations: nodes
@@ -27,12 +27,4 @@ export function readOutline(store: CodeGraphReader, requested: readonly string[]
     });
   }
   return { files, unheld };
-}
-
-function sortedUnique(values: readonly string[]): string[] {
-  return [...new Set(values)].toSorted(compareText);
-}
-
-function sortedUniqueIds<T>(values: readonly T[]): T[] {
-  return [...new Set(values)];
 }
