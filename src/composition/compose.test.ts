@@ -383,7 +383,7 @@ test("a trusted sibling whose remote is passed is read at the remote's sha, and 
   const { version, entrypoints, impact, workspace: workspaceQueries, workspaceImpact, decisions, redaction } = composeQueries({ scratchRoot, trustDirectory, refresh });
   const session = await openSession(createMcpServer({ version, entrypoints, impact, workspace: workspaceQueries, workspaceImpact, decisions, redaction, repository: { path: repo, repoId: "shop-service" } }));
   try {
-    const answer = await session.callTool("ye_ast_callers", { targets: [{ file: "src/OrderController.java", symbol: "OrderController.one" }], workspace: {} });
+    const answer = await session.callTool("ye_ast_callers", { targets: [{ file: "src/OrderController.java", symbol: "OrderController.one" }], workspace: {}, full: true });
     const structured = answer.structuredContent as Record<string, unknown>;
     assert.deepEqual(structured["freshness"], redaction.redactValue([{ repo: "orders", url, freshness: { status: "verified" } }]));
     assert.equal((structured["resolution"] as { sha?: string }[])[0]?.sha, remoteSha);

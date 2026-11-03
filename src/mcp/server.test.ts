@@ -210,6 +210,56 @@ async function setup(answers: Partial<Answers> = {}, refresh?: WorkspaceRefresh)
 
 const textOf = (result: { content: { text: string }[] }): string => result.content.map((block) => block.text).join("\n");
 
+/** The fact without the family's payload: what a tool answers in its structured content unless asked for the whole one. */
+function envelopeOf(fact: object): Record<string, unknown> {
+  const { value: _value, cuts: _cuts, ...envelope } = JSON.parse(JSON.stringify(fact)) as Record<string, unknown>;
+  return envelope;
+}
+
+const TOOL_CALLS: [string, Record<string, unknown>][] = [
+  ["ye_ast_entrypoints", {}],
+  ["ye_ast_impact", { base: "main" }],
+  ["ye_ast_callers", { targets: [{ file: "src/a.ts", symbol: "A.f" }] }],
+  ["ye_ast_importers", { files: ["src/a.ts"] }],
+  ["ye_ast_workspace", {}],
+  ["ye_ast_decisions", {}],
+];
+
+test("by default every tool answers the envelope alone, keeping a partial status without the places the text names", async () => {
+  const partial = impactFact({ status: "partial", cuts: [{ kind: "depth", at: ["src/A.java::f"], limit: 1 }] } as Partial<Fact<ImpactValue>>);
+  const { session } = await setup({ ofChange: async () => ({ ok: true, value: partial }) });
+
+  for (const [name, args] of TOOL_CALLS) {
+    const result = await session.callTool(name, args);
+    const structured = result.structuredContent as Record<string, unknown>;
+    assert.equal("value" in structured, false, `${name}: no value`);
+    assert.equal("cuts" in structured, false, `${name}: no cut places`);
+    assert.deepEqual(Object.keys(structured).toSorted(), ["evidence", "inputs", "producer", "schema", "snapshot", "status"], name);
+  }
+
+  const impact = await session.callTool("ye_ast_impact", { base: "main" });
+  assert.equal((impact.structuredContent as { status: string }).status, "partial");
+  assert.match(textOf(impact), /src\/A\.java::f/);
+  await session.close();
+});
+
+test("full adds the value and every cut place to the structured content and leaves the text byte for byte", async () => {
+  const cuts = [{ kind: "depth", at: ["src/A.java::f"], limit: 1 }] as const;
+  const partial = impactFact({ status: "partial", cuts } as Partial<Fact<ImpactValue>>);
+  const { session } = await setup({ ofChange: async () => ({ ok: true, value: partial }) });
+
+  for (const [name, args] of TOOL_CALLS) {
+    const plain = await session.callTool(name, args);
+    const whole = await session.callTool(name, { ...args, full: true });
+    assert.equal(textOf(whole), textOf(plain), `${name}: the text is the same in both modes`);
+    assert.equal("value" in (whole.structuredContent as Record<string, unknown>), true, `${name}: value`);
+  }
+
+  const whole = await session.callTool("ye_ast_impact", { base: "main", full: true });
+  assert.deepEqual(whole.structuredContent, JSON.parse(JSON.stringify(partial)));
+  await session.close();
+});
+
 test("lists the six read tools, each described, none taking a top-level repository selector", async () => {
   const { session } = await setup();
   const tools = await session.listTools();
@@ -270,7 +320,7 @@ test("entrypoints reads the bound repository at HEAD by default and answers the 
   assert.equal(calls.map[0]?.repo, REPOSITORY.path);
   assert.equal(calls.map[0]?.repoId, REPOSITORY.repoId);
   assert.equal(calls.map[0]?.revision, "HEAD");
-  assert.deepEqual(result.structuredContent, JSON.parse(JSON.stringify(mapFact())));
+  assert.deepEqual(result.structuredContent, envelopeOf(mapFact()));
   const text = textOf(result);
   assert.match(text, /status: complete/);
   assert.match(text, /GET \/orders\/\{id\}/);
@@ -298,7 +348,7 @@ test("impact reads a change of the bound repository, head defaulting to HEAD, an
   assert.deepEqual(calls.ofChange.map(({ repo, repoId, base: from, head, budget }) => ({ repo, repoId, from, head, budget })), [
     { repo: REPOSITORY.path, repoId: REPOSITORY.repoId, from: "main", head: "HEAD", budget: undefined },
   ]);
-  assert.deepEqual(result.structuredContent, JSON.parse(JSON.stringify(impactFact())));
+  assert.deepEqual(result.structuredContent, envelopeOf(impactFact()));
   const text = textOf(result);
   assert.match(text, /status: complete/);
   assert.match(text, /^seeds \(1\):\n {2}src\/OrderService\.java\n {4}31 OrderService\.find \(lines\)$/m);
@@ -415,10 +465,10 @@ test("impacted symbols are grouped under their file, a seed at depth 0 is not pr
     value: {
       seeds: [{ file: "src/a.ts", symbol: "A.seed", line: 1, basis: "requested" }],
       symbols: [
-        { file: "src/a.ts", symbol: "A.seed", kind: "method", line: 1, depth: 0, confidence: 1, fanIn: 0, seeds: [0] },
-        { file: "src/a.ts", symbol: "A.other", kind: "method", line: 4, depth: 1, confidence: 1, fanIn: 0, seeds: [0] },
-        { file: "src/b.ts", symbol: "B.user", kind: "function", line: 9, depth: 2, confidence: 0.5, fanIn: 2, via: { file: "src/a.ts", symbol: "A.other" }, seeds: [0] },
-        { file: "src/b.ts", symbol: "B.helper", kind: "function", line: 2, depth: 2, confidence: 0.5, fanIn: 1, via: { file: "src/b.ts", symbol: "B.user" }, seeds: [0] },
+        { file: "src/a.ts", symbol: "A.seed", kind: "method", line: 1, depth: 0, confidence: 1, fanIn: 0 },
+        { file: "src/a.ts", symbol: "A.other", kind: "method", line: 4, depth: 1, confidence: 1, fanIn: 0 },
+        { file: "src/b.ts", symbol: "B.user", kind: "function", line: 9, depth: 2, confidence: 0.5, fanIn: 2, via: { file: "src/a.ts", symbol: "A.other" } },
+        { file: "src/b.ts", symbol: "B.helper", kind: "function", line: 2, depth: 2, confidence: 0.5, fanIn: 1, via: { file: "src/b.ts", symbol: "B.user" } },
       ],
       entrypoints: [],
       cost: { expansionsUsed: 1 },
@@ -436,10 +486,10 @@ test("by default impact lists the symbols at depth 0 and 1 and counts deeper one
     value: {
       seeds: [{ file: "src/a.ts", symbol: "A.seed", line: 1, basis: "requested" }],
       symbols: [
-        { file: "src/a.ts", symbol: "A.other", kind: "method", line: 4, depth: 1, confidence: 1, fanIn: 0, seeds: [0] },
-        { file: "src/b.ts", symbol: "B.user", kind: "function", line: 9, depth: 2, confidence: 1, fanIn: 0, seeds: [0] },
-        { file: "src/b.ts", symbol: "B.helper", kind: "function", line: 2, depth: 3, confidence: 1, fanIn: 0, seeds: [0] },
-        { file: "src/c.ts", symbol: "C.top", kind: "function", line: 5, depth: 2, confidence: 1, fanIn: 0, seeds: [0] },
+        { file: "src/a.ts", symbol: "A.other", kind: "method", line: 4, depth: 1, confidence: 1, fanIn: 0 },
+        { file: "src/b.ts", symbol: "B.user", kind: "function", line: 9, depth: 2, confidence: 1, fanIn: 0 },
+        { file: "src/b.ts", symbol: "B.helper", kind: "function", line: 2, depth: 3, confidence: 1, fanIn: 0 },
+        { file: "src/c.ts", symbol: "C.top", kind: "function", line: 5, depth: 2, confidence: 1, fanIn: 0 },
       ],
       entrypoints: [],
       cost: { expansionsUsed: 1 },
@@ -450,7 +500,7 @@ test("by default impact lists the symbols at depth 0 and 1 and counts deeper one
   const text = textOf(result);
   assert.match(text, /impacted symbols \(4\): 1 at depth 0-1 listed, 3 deeper counted per file; detail "full" lists them\n {2}src\/a\.ts\n {4}4 A\.other \[method\] \(depth 1\)\n {2}src\/b\.ts: 2 at depth 2-3\n {2}src\/c\.ts: 1 at depth 2/);
   assert.doesNotMatch(text, /B\.user|C\.top/);
-  assert.deepEqual(result.structuredContent, JSON.parse(JSON.stringify(deep)));
+  assert.deepEqual(result.structuredContent, envelopeOf(deep));
   await session.close();
 });
 
@@ -571,7 +621,7 @@ test("a query that throws is a tool error with a redacted message", async () => 
 test("redaction is applied to the structured content and so to the text rendered from it", async () => {
   const leaking = impactFact({ value: { ...IMPACT, seeds: [{ file: `src/${SECRET}.java`, symbol: "S.f", line: 1, basis: "lines" }] } } as Partial<Fact<ImpactValue>>);
   const { session } = await setup({ ofChange: async () => ({ ok: true, value: leaking }) });
-  const result = await session.callTool("ye_ast_impact", { base: "main" });
+  const result = await session.callTool("ye_ast_impact", { base: "main", full: true });
   assert.doesNotMatch(JSON.stringify(result.structuredContent), new RegExp(SECRET));
   assert.match(JSON.stringify(result.structuredContent), new RegExp(REDACTED.replace(/[[\]]/g, "\\$&")));
   assert.doesNotMatch(textOf(result), new RegExp(SECRET));
@@ -662,7 +712,7 @@ test("live on each tool asks for the working tree with no revision, and the fact
   const requests: Record<string, unknown>[] = [calls.map[0], calls.ofChange[0], calls.callers[0], calls.importers[0]].map((request) => ({ ...request }));
   assert.deepEqual(requests.map((request) => [request.live, request.revision, request.head]), [[true, undefined, undefined], [true, undefined, undefined], [true, undefined, undefined], [true, undefined, undefined]]);
   assert.equal(calls.ofChange[0]?.base, "main");
-  assert.deepEqual(results[0]?.structuredContent, mapFact());
+  assert.deepEqual(results[0]?.structuredContent, envelopeOf(mapFact()));
   assert.equal(results.every((result) => result._meta === undefined && !textOf(result).startsWith("stale:")), true);
   await session.close();
 });
@@ -694,7 +744,7 @@ test("an answer the working tree moved past opens its text with a stale line and
 
   assert.match(textOf(result), /^stale: .*state s1: src\/A\.java, src\/\[REDACTED\]\.java\nstatus: complete/);
   assert.deepEqual(result._meta, { "ye-ast/live": { stateId: "s1", changed: ["src/A.java", `src/${REDACTED}.java`] } });
-  assert.deepEqual(result.structuredContent, mapFact());
+  assert.deepEqual(result.structuredContent, envelopeOf(mapFact()));
   await session.close();
 });
 
@@ -831,7 +881,7 @@ test("the server instructions tell the agent to pass the other clones as the wor
 test("the workspace tool answers the outward names without the repositories it read: no absolute path, no entrypoint list", async () => {
   const { session } = await setup();
 
-  const result = await session.callTool("ye_ast_workspace", {});
+  const result = await session.callTool("ye_ast_workspace", { full: true });
 
   const value = (result.structuredContent as { value: Record<string, unknown> }).value;
   assert.equal("repositories" in value, false);
@@ -860,7 +910,7 @@ test("the decisions tool asks the decision family with the repositories and gate
   assert.deepEqual(calls.decisions.map(({ repo, repos, gateways, scope }) => ({ repo, repos, gateways, scope })), [
     { repo: { path: REPOSITORY.path, id: REPOSITORY.repoId, revision: "topic" }, repos: [{ path: "/work/shop-web", id: "shop-web" }], gateways: [{ prefix: "edge", repo: "shop" }], scope: { include: ["src/**"] } },
   ]);
-  assert.deepEqual(result.structuredContent, JSON.parse(JSON.stringify(decisionFact())));
+  assert.deepEqual(result.structuredContent, envelopeOf(decisionFact()));
   const text = textOf(result);
   assert.match(text, /^status: complete\n/);
   assert.match(text, /repositories \(1\): shop@a{40}/);
