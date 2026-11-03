@@ -28,6 +28,7 @@ export const ERROR_CODE = {
   deadline: -32008,
   "trust-unsupported": -32009,
   "trust-not-declared": -32010,
+  unreadable: -32011,
 } as const;
 
 export type ErrorKind = keyof typeof ERROR_CODE;

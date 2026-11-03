@@ -272,7 +272,7 @@ test("a changed source file the index holds no symbol of cuts the answer at that
 
 test("a call that never resolved to a walked name cuts the answer, and the head's own export cuts are in the fact", async () => {
   const changes: Result<readonly FileChange[], VcsFault> = { ok: true, value: [change("src/A.java", { added: [{ start: 2, end: 2 }] })] };
-  const unresolved = [{ from: "g", name: "x.f", kind: "calls", file: "src/B.java", line: 7 }];
+  const unresolved = [{ from: "g", name: "f", kind: "calls", file: "src/B.java", line: 7 }];
   const left: CommitExport = {
     files: [{ path: "src/A.java", blob: "1", written: true }, { path: "src/B.java", blob: "2", written: true }],
     skipped: [{ path: "src/Link.java", reason: "symlink" }],
@@ -361,7 +361,7 @@ test("a class that injects a changed class is reached, and a walk whose Angular 
   assert.deepEqual(answer.status === "complete" && answer.value.symbols.map((symbol) => [symbol.symbol, symbol.depth, symbol.confidence]), [["Svc", 0, 1], ["Cmp", 1, 1]]);
 });
 
-test("a reference through a field of known origin is a caller when the field holds the owner, and leaves the cut when it holds an unrelated type", async () => {
+test("a reference through a field of known origin is a caller when the field holds the owner, and leaves a cut at the caller's file when it holds an unrelated type", async () => {
   const SUB_FILE = "src/app/sub.ts";
   const nodes = [
     fakeNode("Svc", "class", SVC_FILE, 2, 9),
@@ -401,7 +401,7 @@ test("a reference through a field of known origin is a caller when the field hol
   const answer = fact(await setup({ changes, nodes, edges, unresolved, exports, fields }).ask());
   assert.ok(answer.status === "partial");
   assert.deepEqual(answer.value.symbols.filter((symbol) => symbol.file === CMP_FILE).map((symbol) => symbol.symbol), ["Cmp", "viaSvc"]);
-  assert.deepEqual(answer.cuts.find((cut) => cut.kind === "unresolved-link"), { kind: "unresolved-link", at: [`${SVC_FILE}::get`, `${CMP_FILE}:18`, `${CMP_FILE}:21`, `${CMP_FILE}:24`] });
+  assert.deepEqual(answer.cuts.find((cut) => cut.kind === "unresolved-link"), { kind: "unresolved-link", at: [CMP_FILE, `${CMP_FILE}:18`, `${CMP_FILE}:21`, `${CMP_FILE}:24`] });
 });
 
 test("a relation the reader could not place cuts the answer only in a file the walk reached", async () => {

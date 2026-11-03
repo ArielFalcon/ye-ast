@@ -1,5 +1,5 @@
-import { spawn } from "node:child_process";
-import { mkdir, mkdtemp, open, rm, symlink, type FileHandle } from "node:fs/promises";
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { mkdir, mkdtemp, open, rm, stat, symlink, type FileHandle } from "node:fs/promises";
 import { devNull, tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { createDiffReader, type FileChange } from "../../domain/change/diff-reader.ts";
@@ -11,6 +11,8 @@ export interface GitRun {
   code: number;
   stdout: Buffer;
   stderr: string;
+  /** Why the process never ran: a root no command can start in, or a missing `git`. */
+  spawnFailure?: "unreadable-root";
 }
 
 /** Receives the blobs one after another: `start` of the next comes after `finish` of the previous. */
@@ -330,7 +332,7 @@ function errorDetail(error: unknown): string {
 }
 
 export function gitFailed(run: GitRun): Result<never, VcsFault> {
-  return { ok: false, fault: { kind: "git-failed", detail: run.stderr } };
+  return run.spawnFailure === "unreadable-root" ? { ok: false, fault: { kind: "unreadable", detail: run.stderr } } : { ok: false, fault: { kind: "git-failed", detail: run.stderr } };
 }
 
 interface ListedEntry {
@@ -452,7 +454,12 @@ function spawnGit(
   isolated: boolean,
   signal?: AbortSignal,
 ): Promise<GitRun> {
-  const child = spawn("git", args, { cwd: repo, env: gitEnvironment(process.env, isolated), stdio: ["pipe", "pipe", "pipe"], signal });
+  let child: ChildProcessWithoutNullStreams;
+  try {
+    child = spawn("git", args, { cwd: repo, env: gitEnvironment(process.env, isolated), stdio: ["pipe", "pipe", "pipe"], signal });
+  } catch (error) {
+    return failedSpawn(error, repo);
+  }
   const stderr: Buffer[] = [];
   child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
   child.stdin.on("error", () => undefined);
@@ -465,11 +472,25 @@ function spawnGit(
     child.kill();
     throw error;
   });
-  return Promise.allSettled([consumed, exited]).then(([consumption, exit]) => {
+  return Promise.allSettled([consumed, exited]).then(async ([consumption, exit]) => {
     if (consumption.status === "rejected") return failedRun(consumption.reason);
-    if (exit.status === "rejected") return failedRun(exit.reason);
+    if (exit.status === "rejected") return failedSpawn(exit.reason, repo);
     return { code: exit.value, stdout: consumption.value, stderr: Buffer.concat(stderr).toString("utf8") };
   });
+}
+
+/** A process that never ran: its root is unreadable, or the machine has no `git` to start. */
+async function failedSpawn(reason: unknown, repo: string): Promise<GitRun> {
+  return (await startsInRoot(repo)) ? failedRun(reason) : { code: SPAWN_FAILED, stdout: Buffer.alloc(0), stderr: repo, spawnFailure: "unreadable-root" };
+}
+
+/** Whether a process can start in `path`: the only thing a spawn failure cannot tell from a missing binary. */
+async function startsInRoot(path: string): Promise<boolean> {
+  try {
+    return (await stat(path)).isDirectory();
+  } catch {
+    return false;
+  }
 }
 
 function failedRun(reason: unknown): GitRun {

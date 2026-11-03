@@ -28,7 +28,7 @@ function isModelModeSecretValue(match: string): boolean {
   return isHighEntropyBareToken(value);
 }
 
-const NAMED_SECRET_PATTERNS: Array<{ name: string; p: RegExp; skip?: (m: string) => boolean; modelSkip?: (m: string) => boolean }> = [
+const NAMED_SECRET_PATTERNS: Array<{ name: string; p: RegExp; skip?: (m: string, offset: number, text: string) => boolean; modelSkip?: (m: string) => boolean }> = [
   { name: "slack-webhook", p: /https:\/\/hooks\.slack\.com\/services\/[A-Za-z0-9/]+/g },
   { name: "stripe-key", p: /\b(?:sk|pk)_(?:test|live)_[A-Za-z0-9]+\b/g },
   { name: "aws-access-key", p: /\bAKIA[0-9A-Z]{16}\b/g },
@@ -50,14 +50,16 @@ const NAMED_SECRET_PATTERNS: Array<{ name: string; p: RegExp; skip?: (m: string)
     /* Negative lookbehinds exclude lockfile integrity hashes (`sha512-<base64>`): their body is not a secret. skip still drops pure-hex runs (git SHAs). */
     name: "base64-secret",
     p: /(?<![A-Za-z0-9+/=])(?<!sha1-)(?<!sha256-)(?<!sha384-)(?<!sha512-)[A-Za-z0-9+/=]{40,}(?![A-Za-z0-9+/=])/g,
-    skip: (m) => /^[0-9a-f]+$/i.test(m) || isPathLikeRun(m),
+    skip: (m, offset, text) => /^[0-9a-f]+$/i.test(m) || isPathLikeRun(m, pathTokenAt(text, offset, m.length)),
   },
 ];
 
-/* A ≥40-char [A-Za-z0-9+/=] run also matches real code (paths with `/`, long camelCase identifiers). Escapes requiring no `+`/`=`: a PATH (≥3 slashes) or a camelCase/PascalCase identifier (word segments ≥2, at least one ≥3). */
+/* A ≥40-char [A-Za-z0-9+/=] run also matches real code: a path with `/`, a long camelCase identifier. The run stops
+   at `-`, `.` or `_`, so a path is judged by the whole token around it, never by the run alone. */
 const MAX_IDENTIFIER_LEN = 64;
 const CASE_TRANSITION_RE = /[a-z][A-Z]/;
 const WORD_SEGMENT_RE = /[A-Z]?[a-z]+|[A-Z]+(?![a-z])/g;
+const PATH_CHARACTER = /[A-Za-z0-9+/=._~%\\-]/;
 function isIdentifierShape(m: string): boolean {
   if (m.length > MAX_IDENTIFIER_LEN) return false;
   if (/[0-9]/.test(m)) return false;
@@ -65,12 +67,28 @@ function isIdentifierShape(m: string): boolean {
   const segments = m.match(WORD_SEGMENT_RE) ?? [];
   return segments.length > 0 && segments.every((s) => s.length >= 2) && segments.some((s) => s.length >= 3);
 }
-function isPathLikeRun(m: string): boolean {
-  if (m.includes("+") || m.includes("=")) return false;
-  if (!m.includes("/")) return isIdentifierShape(m);
-  const segments = m.split("/");
-  if (segments.length < 4) return false;
-  return segments.every((s) => s.length >= 1 && s.length <= 80);
+
+/** The run of path characters a match sits in: a path continues through the `-`, `.` and `_` the pattern stops at. */
+function pathTokenAt(text: string, offset: number, length: number): string {
+  let start = offset;
+  while (start > 0 && PATH_CHARACTER.test(text[start - 1] ?? "")) start--;
+  let end = offset + length;
+  while (end < text.length && PATH_CHARACTER.test(text[end] ?? "")) end++;
+  return text.slice(start, end);
+}
+
+/** A segment long enough to be an encoded secret and shaped like one: both cases and a digit. */
+function isBase64Segment(segment: string): boolean {
+  return segment.length >= 20 && /[a-z]/.test(segment) && /[A-Z]/.test(segment) && /[0-9]/.test(segment);
+}
+
+/** Whether the match is code: a path of at least three segments (absolute or relative), or a camelCase identifier. */
+function isPathLikeRun(match: string, token: string): boolean {
+  if (match.includes("+") || match.includes("=")) return false;
+  if (!token.includes("/")) return isIdentifierShape(match);
+  if (token.length < 40) return false;
+  const segments = token.split("/").filter((segment) => segment !== "");
+  return segments.length >= 3 && segments.every((segment) => segment.length <= 80) && !segments.some(isBase64Segment);
 }
 
 /* Greedy `\S+` may swallow a trailing quote that is the secret's own character or that belongs to enclosing prose. If that quote already appears in the body, it is part of the secret; if not, re-emit it so surrounding markup is not corrupted. */
@@ -114,8 +132,8 @@ export function sanitizeText(input: string, mode: RedactionMode = "issue", byVal
 
   for (const { name, p, skip, modelSkip } of NAMED_SECRET_PATTERNS) {
     let redactions = 0;
-    out = out.replace(p, (m) => {
-      if (skip?.(m)) return m;
+    out = out.replace(p, (m, offset: number) => {
+      if (skip?.(m, offset, out)) return m;
       if (mode === "model" && modelSkip?.(m)) return m;
       redactions++;
       return redactPreservingTrailingQuote(m);
@@ -140,12 +158,15 @@ export function containsSecrets(text: string, mode: RedactionMode = "issue"): bo
   const masked = text.replace(DATA_URI_RE, "");
   for (const { p, skip, modelSkip } of NAMED_SECRET_PATTERNS) {
     p.lastIndex = 0;
-    const hasConditionalSkip = Boolean(skip) || (mode === "model" && Boolean(modelSkip));
-    if (hasConditionalSkip) {
-      const ms = masked.match(p);
-      const isRealSecret = (m: string): boolean => !(skip?.(m) ?? false) && !(mode === "model" && modelSkip?.(m));
-      if (ms?.some(isRealSecret)) return true;
-    } else if (p.test(masked)) {
+    const conditional = skip !== undefined || (mode === "model" && modelSkip !== undefined);
+    if (!conditional) {
+      if (p.test(masked)) return true;
+      continue;
+    }
+    for (const found of masked.matchAll(p)) {
+      const m = found[0];
+      if (skip?.(m, found.index ?? 0, masked)) continue;
+      if (mode === "model" && modelSkip?.(m)) continue;
       return true;
     }
   }

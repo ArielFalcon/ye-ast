@@ -2,24 +2,48 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { nameTail, removedDeclarationCuts, unreadRelationCuts, unresolvedLinkCuts, type UnresolvedUse, type WalkedDeclaration } from "./impact-cuts.ts";
 
-const SAVE: WalkedDeclaration = { file: "src/Repo.java", name: "save", kind: "method" };
+const SAVE: WalkedDeclaration = { file: "src/Repo.java", name: "save", kind: "method", qualifiedName: "Repo::save" };
 
 function use(name: string, kind: string, file = "src/Use.java", line = 3): UnresolvedUse {
   return { name, kind, file, line };
+}
+
+function qualified(name: string, kind: string, candidates: readonly string[], file = "src/Use.java", line = 3): UnresolvedUse {
+  return { name, kind, file, line, candidates };
 }
 
 test("the tail of a name is what follows its last separator", () => {
   assert.deepEqual(["x.save", "this.svc.load", "Class.forName", "a::b", "Plain"].map(nameTail), ["save", "load", "forName", "b", "Plain"]);
 });
 
-test("a call that never resolved and shares its name tail with a walked method is a cut at it, with every place", () => {
-  const cuts = unresolvedLinkCuts([use("repo.save", "calls", "src/B.java", 9), use("other.save", "calls", "src/A.java", 4)], [SAVE], []);
+test("a bare call that never resolved and shares a walked method's name is a cut at it, with every place", () => {
+  const cuts = unresolvedLinkCuts([use("save", "calls", "src/B.java", 9), use("save", "calls", "src/A.java", 4)], [SAVE], []);
   assert.deepEqual(cuts, [{ kind: "unresolved-link", at: ["src/Repo.java::save", "src/A.java:4", "src/B.java:9"] }]);
 });
 
-test("a call or a reference that never resolved and names a walked class field is a cut at it", () => {
-  const total: WalkedDeclaration = { file: "src/store.ts", name: "total", kind: "property" };
-  const cuts = unresolvedLinkCuts([use("this.store.total", "calls", "src/page.ts", 7), use("store.total", "references", "src/view.ts", 2)], [total], []);
+test("a qualified call the index considered for the walked declaration is a cut at it", () => {
+  const cuts = unresolvedLinkCuts([qualified("this.repo.save", "calls", ["Repo::save"], "src/Use.java", 5)], [SAVE], []);
+  assert.deepEqual(cuts, [{ kind: "unresolved-link", at: ["src/Repo.java::save", "src/Use.java:5"] }]);
+});
+
+test("a qualified call whose receiver the index attributed to no candidate is never a cut at a homonym, but cuts the caller's file", () => {
+  const resolve: WalkedDeclaration = { file: "src/app/address.service.ts", name: "resolve", kind: "method", qualifiedName: "AddressService::resolve" };
+  const cuts = unresolvedLinkCuts([qualified("Promise.resolve", "calls", [], "src/app/order.component.ts", 12)], [resolve], []);
+  assert.deepEqual(cuts, [{ kind: "unresolved-link", at: ["src/app/order.component.ts", "src/app/order.component.ts:12"] }]);
+});
+
+test("a qualified call the index considered for another declaration cuts the caller's file, not the walked one", () => {
+  const cuts = unresolvedLinkCuts([qualified("this.repo.save", "calls", ["Other::save"], "src/Use.java", 5)], [SAVE], []);
+  assert.deepEqual(cuts, [{ kind: "unresolved-link", at: ["src/Use.java", "src/Use.java:5"] }]);
+});
+
+test("a qualified call whose tail names no walked declaration is no cut", () => {
+  assert.deepEqual(unresolvedLinkCuts([use("Promise.resolve", "calls"), use("repo.find", "calls")], [SAVE], []), []);
+});
+
+test("a call or a reference that never resolved and names a walked class field is a cut at it when the index considered it", () => {
+  const total: WalkedDeclaration = { file: "src/store.ts", name: "total", kind: "property", qualifiedName: "Sale::total" };
+  const cuts = unresolvedLinkCuts([qualified("this.sale.total", "calls", ["Sale::total"], "src/page.ts", 7), qualified("sale.total", "references", ["Sale::total"], "src/view.ts", 2)], [total], []);
   assert.deepEqual(cuts, [{ kind: "unresolved-link", at: ["src/store.ts::total", "src/page.ts:7", "src/view.ts:2"] }]);
 });
 

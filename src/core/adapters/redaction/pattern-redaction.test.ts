@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { sanitizeText } from "./pattern-redaction.adapter.ts";
+import { assertNoSecretLeak, sanitizeText } from "./pattern-redaction.adapter.ts";
 
 test("redacts secrets (api key, token)", () => {
   const { text: out } = sanitizeText("const apiKey = sk-abc123XYZ\ntoken: ghs_supersecretvalue");
@@ -208,6 +208,26 @@ test("does NOT redact long Java identifiers or paths with >30-char segments (bot
   assert.match(out, /populateCoursesDescriptionMultilingualUseCase/);
   assert.match(out, /CourseSearcherAlgorithmTemplate\.java/);
   assert.doesNotMatch(out, /\[REDACTED\]/);
+});
+
+test("does NOT redact an absolute path: the empty leading segment is part of the path", () => {
+  const path = "/home/analista/proyectos/clientes/acme/facturacion/src";
+  const { text: out, detection } = sanitizeText(`- ${path}`);
+  assert.equal(out, `- ${path}`);
+  assert.deepEqual(detection.patterns, []);
+  assert.doesNotThrow(() => assertNoSecretLeak(out, "issue", "probe"));
+});
+
+test("does NOT redact a hyphenated path whose match stops at the hyphen, because the token is the path", () => {
+  const path = "/home/desarrollador/proyectos/clientes/acme-webapp/src/main/java";
+  assert.equal(sanitizeText(`- ${path}`).text, `- ${path}`);
+});
+
+test("still redacts a base64 run whose slashes split it into segments, when a long segment is base64-shaped", () => {
+  const blob = "AbCdEfGhIjKlMnOpQrStUvWxYz012345/aB3xK9mQ2pL5vR8tY1wZ4nJ7hG0sD6fE/zz/QQ";
+  const { text: out } = sanitizeText(blob);
+  assert.doesNotMatch(out, /aB3xK9mQ2pL5vR8tY1wZ4nJ7hG0sD6fE/);
+  assert.match(out, /\[REDACTED\]/);
 });
 
 /* Twin of platform/telemetry/sanitizer.test.ts — keep in lockstep. isPathLikeRun's no-slash
