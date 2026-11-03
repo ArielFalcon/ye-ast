@@ -244,6 +244,7 @@ function addAngularApp(): void {
   writeFileSync(join(repo, "web", "package.json"), JSON.stringify({ dependencies: { "@angular/router": "21.0.0" } }));
   writeFileSync(join(repo, "package.json"), JSON.stringify({ dependencies: { "@angular/router": "21.0.0" } }));
   writeFileSync(join(repo, "web", "src", "app", "app.routes.ts"), APP_ROUTES);
+  writeFileSync(join(repo, "web", "src", "main.ts"), `import { provideRouter } from '@angular/router';\nimport { routes } from './app/app.routes';\nprovideRouter(routes);\n`);
   writeFileSync(join(repo, "web", "src", "app", "home.ts"), "@Component({})\nexport class Home {}\n");
   writeFileSync(join(repo, "web", "src", "app", "orders", "orders.routes.ts"), "export default [{ path: ':id', component: Detail }] as Routes;\n");
   git("add", "-A");

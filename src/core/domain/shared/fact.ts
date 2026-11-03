@@ -95,6 +95,7 @@ export interface Evidence {
 
 export type UnknownReason =
   | "no-extractor"
+  | "no-project"
   | "out-of-scope"
   | "index-unavailable"
   | "source-unreadable"

@@ -39,8 +39,14 @@ test("a repository whose root manifest does not name @angular/core has no Angula
   const files = { [SERVICE]: SERVICE_SOURCE, "src/app/a.ts": `${CORE}import { OrdersService } from './orders.service';\n@Component({})\nexport class A { s = inject(OrdersService); }\n` };
 
   assert.deepEqual(await read(files, JSON.stringify({ dependencies: { react: "19.0.0" } })), { classes: [], findings: [], fields: [] });
-  assert.deepEqual(await read(files, null), { classes: [], findings: [], fields: [] });
   assert.equal((await read(files)).findings.length, 1);
+});
+
+test("a TypeScript source no package.json above it holds is unknown with reason no-project, never silence", async () => {
+  const meta = await read({ [SERVICE]: SERVICE_SOURCE }, null);
+
+  assert.deepEqual(summary(meta), [`no-project @ ${SERVICE}:1`]);
+  assert.deepEqual(meta.classes, []);
 });
 
 test("inject(X) in a field, with or without options, relates the class to the class X is imported from", async () => {

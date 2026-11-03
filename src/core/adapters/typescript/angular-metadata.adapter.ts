@@ -35,11 +35,11 @@ type Placed = { class: SymbolRef } | { array: { key: string; file: string; opera
 
 async function readMetadata(files: readonly SourceFile[]): Promise<AngularMetadata> {
   const contents = new Map(files.map((file) => [file.path, file.content]));
-  const projects = pathsByProject([...contents.keys()].filter(isTypeScriptSource).sort(), angularProjects(files), ANGULAR_CORE);
+  const { byProject, orphaned } = pathsByProject([...contents.keys()].filter(isTypeScriptSource).sort(), files, ANGULAR_CORE);
   const classes: AngularClass[] = [];
-  const findings: Finding<Relation>[] = [];
+  const findings: Finding<Relation>[] = orphaned.map((path) => unknown("no-project", { path, line: 1 }));
   const fields: FieldOrigin[] = [];
-  for (const [project, sources] of projects) {
+  for (const [project, sources] of byProject) {
     const metadata = await readProject(contents, project.dependencies, sources);
     classes.push(...metadata.classes);
     findings.push(...metadata.findings);

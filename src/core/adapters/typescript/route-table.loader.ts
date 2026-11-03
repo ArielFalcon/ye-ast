@@ -312,7 +312,7 @@ export async function loadRouteTables(candidates: readonly string[], read: Sourc
       }
     }
   }
-  const roots = declared ? built.filter((table) => declaredRoots.has(table)) : rootsOf(built, loads);
+  const roots = declared ? built.filter((table) => declaredRoots.has(table)) : [];
   const reached = new Set<RouteTable>();
   const reach = (table: RouteTable): void => {
     if (reached.has(table)) return;
@@ -323,32 +323,9 @@ export async function loadRouteTables(candidates: readonly string[], read: Sourc
   return {
     roots,
     declared,
-    unreached: declared ? built.filter((table) => !reached.has(table)) : [],
+    unreached: declared ? built.filter((table) => !reached.has(table)) : built,
     unparsed,
     unresolvedReferences: [...unresolvedReferences.values()].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : a.line - b.line)),
     unresolvedConfigurations,
   };
-}
-
-/**
- * The tables no table loads, then, for tables that only load each other or themselves, the first of each such group in
- * file order, so that no table is left out because the tables above it loop.
- */
-function rootsOf(built: readonly RouteTable[], loads: ReadonlyMap<RouteTable, ReadonlySet<RouteTable>>): RouteTable[] {
-  const loaded = new Set([...loads.values()].flatMap((tables) => [...tables]));
-  const covered = new Set<RouteTable>();
-  const cover = (table: RouteTable): void => {
-    if (covered.has(table)) return;
-    covered.add(table);
-    for (const child of loads.get(table) ?? []) cover(child);
-  };
-  const roots: RouteTable[] = [];
-  for (const candidates of [built.filter((table) => !loaded.has(table)), built]) {
-    for (const candidate of candidates) {
-      if (covered.has(candidate)) continue;
-      roots.push(candidate);
-      cover(candidate);
-    }
-  }
-  return roots;
 }

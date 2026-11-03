@@ -21,9 +21,9 @@ export function createAngularRoutesExtractor(): EntrypointExtractor {
 
 async function extractRoutes(files: readonly SourceFile[]): Promise<readonly Finding<Entrypoint>[]> {
   const contents = new Map(files.map((file) => [file.path, file.content]));
-  const projects = pathsByProject([...contents.keys()].filter(isTypeScriptSource), angularProjects(files), ANGULAR_ROUTER);
-  const found: Finding<Entrypoint>[] = [];
-  for (const [project, sources] of projects) found.push(...(await extractProject(sources, project.dependencies, contents)));
+  const { byProject, orphaned } = pathsByProject([...contents.keys()].filter(isTypeScriptSource), files, ANGULAR_ROUTER);
+  const found: Finding<Entrypoint>[] = orphaned.map((path) => unknown("no-project", { path, line: 1 }));
+  for (const [project, sources] of byProject) found.push(...(await extractProject(sources, project.dependencies, contents)));
   return sortFindings(found);
 }
 
@@ -33,7 +33,8 @@ async function extractProject(sources: readonly string[], dependencies: Readonly
   const walk: Walk = { findings: [], blockers: loaded.declared ? [] : unresolvedReferences };
   for (const root of roots) routesOf(root, enter(root, { segments: [], guards: [], conditional: false, above: new Set() }), walk);
   for (const configuration of loaded.unresolvedConfigurations) walk.findings.push(unknown(configuration.reason, configuration));
-  for (const table of loaded.unreached) unreachedRoutesOf(table.entries, unresolvedReferences, walk.findings);
+  const noRoot: UnknownReason | undefined = loaded.declared ? undefined : "unresolved";
+  for (const table of loaded.unreached) unreachedRoutesOf(table.entries, unresolvedReferences, walk.findings, noRoot);
   for (const path of unparsed) walk.findings.push(unknown("source-unreadable", { path, line: 1 }));
   return walk.findings;
 }
@@ -51,11 +52,11 @@ interface Walk {
  * A table no declared root reaches may be dead code, the table an unresolved reference should have loaded, or a root the
  * extractor does not recognize: its routes are unknown, never named and never an empty answer.
  */
-function unreachedRoutesOf(entries: readonly RouteEntry[], references: readonly Evidence[], findings: Finding<Entrypoint>[]): void {
+function unreachedRoutesOf(entries: readonly RouteEntry[], references: readonly Evidence[], findings: Finding<Entrypoint>[], reason?: UnknownReason): void {
   for (const entry of entries) {
     if (entry.spread || entry.redirect || entry.unreadable !== undefined) continue;
-    if (entry.component !== undefined) findings.push(unknown(references.length > 0 ? "unresolved" : "no-extractor", { path: entry.file, line: entry.line, endLine: entry.endLine }, ...references));
-    unreachedRoutesOf(entry.children, references, findings);
+    if (entry.component !== undefined) findings.push(unknown(reason ?? (references.length > 0 ? "unresolved" : "no-extractor"), { path: entry.file, line: entry.line, endLine: entry.endLine }, ...references));
+    unreachedRoutesOf(entry.children, references, findings, reason);
   }
 }
 

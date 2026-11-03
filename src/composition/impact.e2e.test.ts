@@ -255,13 +255,13 @@ test("a changed Java record, which the index gives no symbol, seeds nothing and 
   assert.deepEqual(result.fact.cuts, [{ kind: "no-extractor", at: ["src/main/java/shop/Money.java"] }]);
 });
 
-test("a change to a file no extractor reads is a cut at that file", async () => {
-  commit({ ...SHOP, "scripts/tool.py": "print(1)\n" }, "base");
-  commit({ "scripts/tool.py": "print(2)\n" });
+test("a change to a JVM source no extractor reads is a cut at that file, and one in a language no framework reads is not", async () => {
+  commit({ ...SHOP, "scripts/tool.kt": "fun main() {}\n", "scripts/tool.py": "print(1)\n" }, "base");
+  commit({ "scripts/tool.kt": "fun main() { println(2) }\n", "scripts/tool.py": "print(2)\n" });
 
   const result = await impact("--base", "HEAD~1");
 
-  assert.deepEqual(result.fact.cuts, [{ kind: "no-extractor", at: ["scripts/tool.py"] }]);
+  assert.deepEqual(result.fact.cuts, [{ kind: "no-extractor", at: ["scripts/tool.kt"] }]);
   assert.deepEqual(result.fact.value.seeds, []);
 });
 
@@ -309,6 +309,11 @@ export class PageComponent {}
 import { PageComponent } from "./page.component";
 
 export const routes: Routes = [{ path: "page", component: PageComponent }];
+`,
+  "src/main.ts": `import { provideRouter } from "@angular/router";
+import { routes } from "./app/app.routes";
+
+provideRouter(routes);
 `,
 });
 

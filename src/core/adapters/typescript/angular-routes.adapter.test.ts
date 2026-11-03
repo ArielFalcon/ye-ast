@@ -9,14 +9,17 @@ import { createAngularRoutesExtractor } from "./angular-routes.adapter.ts";
 const PACKAGE = JSON.stringify({ dependencies: { "@angular/core": "21.0.0", "@angular/router": "21.0.0" } });
 const ROUTES = "src/app/app.routes.ts";
 const HEADER = "import { Routes } from '@angular/router';\n";
+/** A real application declares its root table, so the extractor never has to guess which table is the root. */
+const APP_MAIN = "import { provideRouter } from '@angular/router';\nimport { routes } from './app/app.routes';\nbootstrap(App, { providers: [provideRouter(routes)] });\n";
 
-function sources(files: Record<string, string>, manifest: string | null = PACKAGE): SourceFile[] {
+function sources(files: Record<string, string>, manifest: string | null = PACKAGE, root = true): SourceFile[] {
   const all = manifest === null ? files : { "package.json": manifest, ...files };
-  return Object.entries(all).map(([path, content]) => ({ path, content }));
+  const declared = root && !("src/main.ts" in all) ? { ...all, "src/main.ts": APP_MAIN } : all;
+  return Object.entries(declared).map(([path, content]) => ({ path, content }));
 }
 
-function extract(files: Record<string, string>, manifest: string | null = PACKAGE): Promise<readonly Finding<Entrypoint>[]> {
-  return createAngularRoutesExtractor().extract(sources(files, manifest));
+function extract(files: Record<string, string>, manifest: string | null = PACKAGE, root = true): Promise<readonly Finding<Entrypoint>[]> {
+  return createAngularRoutesExtractor().extract(sources(files, manifest, root));
 }
 
 /** The table of a root routes file: the body starts at line 3, one line further per line of `header`. */
@@ -41,9 +44,22 @@ test("a repository whose root manifest does not name @angular/router has no UI r
   const files = table("  { path: 'home', component: Home },");
 
   assert.deepEqual(await extract(files, JSON.stringify({ dependencies: { react: "19.0.0" } })), []);
-  assert.deepEqual(await extract(files, null), []);
   assert.deepEqual(await extract(files, "{ not json"), []);
   assert.deepEqual(names(await extract(files, JSON.stringify({ devDependencies: { "@angular/router": "21.0.0" } }))), ["/home"]);
+});
+
+test("without a root declaration in the sources, no table is named: each entry that shows a component is unknown", async () => {
+  const findings = await extract(table("  { path: '', component: Home },"), PACKAGE, false);
+
+  assert.deepEqual(names(findings), []);
+  assert.deepEqual(unknowns(findings), [`unresolved@${ROUTES}:3`]);
+});
+
+test("a TypeScript source no package.json above it holds is unknown with reason no-project, never silence", async () => {
+  const files = table("  { path: 'home', component: Home },");
+
+  assert.deepEqual(unknowns(await extract(files, null, false)), ["no-project@src/app/app.routes.ts:1"]);
+  assert.deepEqual(names(await extract(files, null)), []);
 });
 
 test("a route that shows a component is named after its full path from the root table, parent paths joined", async () => {
@@ -205,7 +221,7 @@ test("while any child reference of the repository is unresolved, no table is nam
     "src/app/orphan.routes.ts": `${HEADER}export const ORPHAN: Routes = [\n  { path: 'step', component: Step },\n];\n`,
   };
 
-  const findings = await extract(files);
+  const findings = await extract(files, PACKAGE, false);
 
   assert.deepEqual(names(findings), []);
   const wouldBe = findings.filter((finding) => finding.evidence[0]?.path === "src/app/orphan.routes.ts");
@@ -254,13 +270,17 @@ test("tables that load each other end in an unresolved item at the entry that cl
   assert.deepEqual(unknowns(findings), ["unresolved@src/app/b.routes.ts:3"]);
 });
 
-test("tables that only load each other are read once, from the first of them in file order", async () => {
+test("two tables that load each other stop at the entry that closes the cycle", async () => {
   const lazy = (to: string, path: string): string => `${HEADER}export const routes: Routes = [\n  { path: '${path}', component: P, loadChildren: () => import('./${to}.routes') },\n];\n`;
-  const files = { "src/app/a.routes.ts": lazy("b", "to-b"), "src/app/b.routes.ts": lazy("a", "to-a") };
+  const files = {
+    ...table("  { path: 'root', component: R, loadChildren: () => import('./a.routes') },"),
+    "src/app/a.routes.ts": lazy("b", "to-b"),
+    "src/app/b.routes.ts": lazy("a", "to-a"),
+  };
 
   const findings = await extract(files);
 
-  assert.deepEqual(names(findings), ["/to-b", "/to-b/to-a"]);
+  assert.deepEqual(names(findings), ["/root/to-b", "/root", "/root/to-b/to-a"]);
   assert.deepEqual(unknowns(findings), ["unresolved@src/app/b.routes.ts:3"]);
 });
 
@@ -387,7 +407,7 @@ test("findings come out sorted by evidence location whatever the order of the so
     "src/a.routes.ts": table("  { path: 'b', component: B },\n  { path: 'a', component: A },")[ROUTES]!,
     "src/m.routes.ts": table("  { path: 'm', component: M, matcher: m },")[ROUTES]!,
   };
-  const forward = sources(files);
+  const forward = sources(files, PACKAGE, false);
   const extractor = createAngularRoutesExtractor();
 
   const first = await extractor.extract(forward);
@@ -512,11 +532,12 @@ test("a named array, local or imported, is the children of an entry", async () =
 
 test("a table is a route array whatever type it is annotated with: an alias of Route[], an interface derived from Route, or none", async () => {
   const header = "type AppRoutes = Route[];\ninterface ScreenRoute extends Omit<Route, 'children'> { label: string }";
-  const files = {
-    [ROUTES]: `${HEADER}${header}\nexport const a: AppRoutes = [{ path: 'a', component: A }];\nexport const b: ScreenRoute[] = [{ path: 'b', component: B, label: 'B' }];\nexport const c = [{ path: 'c', component: C }] satisfies Route[];\n`,
-  };
+  const table = `${HEADER}${header}\nexport const a: AppRoutes = [{ path: 'a', component: A }];\nexport const b: ScreenRoute[] = [{ path: 'b', component: B, label: 'B' }];\nexport const c = [{ path: 'c', component: C }] satisfies Route[];\n`;
 
-  assert.deepEqual(names(await extract(files)), ["/a", "/b", "/c"]);
+  for (const name of ["a", "b", "c"]) {
+    const main = `import { provideRouter } from '@angular/router';\nimport { ${name} } from './app/app.routes';\nprovideRouter(${name});\n`;
+    assert.deepEqual(names(await extract({ [ROUTES]: table, "src/main.ts": main })), [`/${name}`]);
+  }
 });
 
 test("a helper that returns a route array literal is the table of a call without arguments; with arguments it is unknown with no-extractor", async () => {
@@ -680,6 +701,7 @@ test("an app under a subfolder has its routes read, with repository-relative pat
     { path: "frontend/package.json", content: PACKAGE },
     { path: "frontend/src/app/app.routes.ts", content: APP_ROUTES("home") },
     { path: "frontend/src/app/home.ts", content: HOME },
+    { path: "frontend/src/main.ts", content: "import { provideRouter } from '@angular/router';\nimport { routes } from './app/app.routes';\nprovideRouter(routes);\n" },
   ]);
   assert.deepEqual(names(findings), ["/home"]);
   const [route] = uiRoutes(findings);
@@ -691,20 +713,20 @@ test("two apps in one repository declaring the same route stay two routes, told 
     { path: "web/package.json", content: PACKAGE },
     { path: "web/src/app.routes.ts", content: APP_ROUTES("home") },
     { path: "web/src/home.ts", content: HOME },
+    { path: "web/src/main.ts", content: "import { provideRouter } from '@angular/router';\nimport { routes } from './app.routes';\nprovideRouter(routes);\n" },
     { path: "admin/package.json", content: PACKAGE },
     { path: "admin/src/app.routes.ts", content: APP_ROUTES("home") },
     { path: "admin/src/home.ts", content: HOME },
+    { path: "admin/src/main.ts", content: "import { provideRouter } from '@angular/router';\nimport { routes } from './app.routes';\nprovideRouter(routes);\n" },
   ]);
   assert.deepEqual(uiRoutes(findings).map((route) => [route.name, handlerPath(route)]), [["/home", "admin/src/home.ts"], ["/home", "web/src/home.ts"]]);
 });
 
-test("a source outside every project, or in a project that does not name the router, has no route", async () => {
+test("a source in a project that does not name the router has no route", async () => {
   const findings = await createAngularRoutesExtractor().extract([
     { path: "frontend/package.json", content: JSON.stringify({ dependencies: { "@angular/core": "21.0.0" } }) },
     { path: "frontend/src/app.routes.ts", content: APP_ROUTES("home") },
     { path: "frontend/src/home.ts", content: HOME },
-    { path: "other/app.routes.ts", content: APP_ROUTES("home") },
-    { path: "other/home.ts", content: HOME },
   ]);
   assert.deepEqual(findings, []);
 });

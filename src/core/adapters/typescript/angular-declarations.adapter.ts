@@ -13,7 +13,7 @@ export function createAngularDeclarationReader(): AngularDeclarationReader {
 }
 
 function readDeclarations(files: readonly SourceFile[]): AngularDeclaration[] {
-  const inProjects = new Set([...pathsByProject(files.map((file) => file.path).filter(isTypeScriptSource), angularProjects(files), ANGULAR_CORE).values()].flat());
+  const inProjects = new Set([...pathsByProject(files.map((file) => file.path).filter(isTypeScriptSource), files, ANGULAR_CORE).byProject.values()].flat());
   return files.filter((file) => inProjects.has(file.path) && file.content.includes(ANGULAR_CORE)).flatMap(declarationsOf);
 }
 
