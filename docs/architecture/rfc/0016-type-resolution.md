@@ -354,7 +354,7 @@ proven to reach.** That is `RFC-0002` rule 2 applied to what the emitter already
 | # | Family at `HEAD~5` | Mechanism | Effect | Cost |
 |---|---|---|---|---|
 | S10 | 19 of the 24 unbound references: `console` 13, `caches` 6, `String` — **done, 2026-11-03** | A root the pinned `typescript` lib declares, and that the snapshot declares no global of, cannot name a repository declaration. Retire the place, as an ambient proof | Measured: `HEAD~5` 76→**64** cuts and 126→**107** places, `HEAD~20` 190→**176**, `HEAD~60` 359→**334**, no symbol changed | ~0: a generated table of 2.545 names, 57 KB, with a drift test |
-| S11 | 26 references the file declares itself | Replace the file-level shadow refusal with an enclosing-scope check, conservative: a declaration in a scope that encloses the use keeps the `unknown` | Recovers what `ADR-0019` decision 3 gave up for 6% | ~0 folded into the parse `import-origins` already performs; 224–259 ms as a second pass |
+| S11 | 26 references the file declares itself | Replace the file-level shadow refusal with an enclosing-scope check, conservative: a declaration in a scope that encloses the use keeps the `unknown` | **Measured, not shipped**: the file-level rule blocks only 2 of the 107 places at `HEAD~5` and none at `HEAD~20` or `HEAD~60`, and a scope check recovers neither, because both declarations enclose their use | ~0 folded into the parse `import-origins` already performs |
 | S12 | every qualified reference whose root is unproven | Stop attributing it to the walked homonym: anchor it at the caller file, or at the declaration a settlement proved | The list stops lying; the count may not move | ~0 |
 | S13 | 33 `no-extractor` places | Not types: `unreadRelationCuts` names Angular and DI relations the extractor could not place. Understand the construct, or declare the scope | Up to 26% of the places | A slice of its own, inside the extractor |
 | — | 43 receiver-rooted references | The one family that needs the checker, which S9 measured as not paying | — | +2,2 to +2,9 s and +300 to +480 MB per query, growing in a server |
@@ -395,6 +395,15 @@ a lib name itself keeps its cut.
 No symbol moved, which is the point: this proof removes noise and never expands an answer. Cost: none measurable — the
 table is 57 KB of source compiled into the process and the snapshot's global check is a substring scan over the texts the
 adapter already holds.
+
+### S11 measured, and not shipped
+
+The scope-aware shadow rule was implemented and measured before it was kept, and it changed nothing: `HEAD~5` stayed at
+64 cuts and 107 places, and the two larger diffs were identical. The reason is not the rule but the population. Removing
+the shadow refusal altogether — the most permissive version — retires only **2 of the 107 places**, and both declarations
+enclose their use, so no scope check can recover them. The file-level refusal `ADR-0019` decision 3 chose therefore costs
+**1,9% of the places at `HEAD~5` and nothing at the other two bases**, not the 6% of retirements that decision estimated
+from the probe rows. The simpler rule stays and `ADR-0019` is corrected.
 
 ## How these costs were measured
 

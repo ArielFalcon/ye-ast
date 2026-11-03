@@ -60,8 +60,11 @@ population did not.
    (`RFC-0016` S9).
 3. **The proof is conservative by construction.** A name the file declares in any scope is never retired, because that
    declaration may shadow the import at the place the reference sits. For the ambient proof the snapshot is checked too: a
-   `.d.ts` or a global augmentation that declares the name keeps its cut. A hidden dependence is worse than a false cut,
-   and the file-level rule costs 6% of the retirements to keep the soundness argument short.
+   `.d.ts` or a global augmentation that declares the name keeps its cut. A hidden dependence is worse than a false cut.
+   **Measured, the simplification costs almost nothing**: removing the refusal entirely retires 2 of the 107 places at
+   `HEAD~5` and none at `HEAD~20` or `HEAD~60`, and a scope-aware rule (`RFC-0016` S11) recovers neither, because both
+   declarations enclose their use. The 6% this decision was justified with was a share of the probe's candidate rows, not
+   of the places a fact reports.
 4. **It needs no type root and no flag.** The same inputs and the same engine version give the same answer; there is no
    configuration a caller must supply for the fact to be complete.
 5. **It claims no completeness of its own.** The cut kind, the status rule and the unknown reasons are unchanged. A fact
