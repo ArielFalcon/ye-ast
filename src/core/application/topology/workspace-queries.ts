@@ -3,7 +3,7 @@ import { incompleteSectionCuts, type Cut, type Fact, type FactBase, type TrustMo
 import { compareText } from "../../domain/shared/code-node.ts";
 import type { Result } from "../../domain/shared/result.ts";
 import { pathSelection, type PathSelection } from "../../domain/shared/scope.ts";
-import { gatherNames, sortEvidence, compareCandidate, type NameCandidate, type OutwardName } from "../../domain/topology/outward-name.ts";
+import { gatherCandidates, gatherNames, sortEvidence, type NameCandidate, type OutwardName } from "../../domain/topology/outward-name.ts";
 import { callSiteEvidence, unresolvedPlace, type CallSite, type CallSiteReader } from "../../domain/topology/call-site.ts";
 import { directoryNameOf, nameCandidates, repositoryNameOf, type RepositoryIdentity } from "../../domain/topology/repository-identity.ts";
 import { resolveRemoteSnapshot, type RemoteFreshness, type RepositoryResolution } from "../../domain/topology/remote-snapshot.ts";
@@ -272,8 +272,8 @@ export function createWorkspaceQueries(deps: WorkspaceQueriesDeps): WorkspaceQue
         },
         repositorySnapshots: resolved.map((entry) => ({ repo: entry.repository.repo, snapshot: entry.repository.snapshot })).sort((a, b) => compareText(a.repo, b.repo)),
         sections: Object.fromEntries(Object.entries(sections).sort(([a], [b]) => compareText(a, b))),
-        candidates: candidates.sort(compareCandidate),
-        unserved: unserved.sort((a, b) => compareText(a.name, b.name) || compareText(a.kind, b.kind)),
+        candidates: gatherCandidates(candidates),
+        unserved: gatherNames(unserved),
         repositories: resolved.map((entry) => ({ ...entry.repository, callSites: entry.callSites })).sort((a, b) => compareText(a.repo, b.repo)),
       };
       const fact = composite({ ...trigger.base, evidence: [] }, value);

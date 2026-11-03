@@ -197,6 +197,36 @@ test("the same name written twice is one name with both places", async () => {
   assert.deepEqual(section.evidence.map((place: Evidence) => place.path), ["src/main/resources/application.yaml", "src/main/resources/config/application.yaml"]);
 });
 
+test("the same dependency declared by two repositories and served by none is one unserved name with both places", async () => {
+  const queries = setup({
+    "/work/shop-web": { files: {}, names: [dependencyName("org.example:payments-core", "pom.xml", 12)] },
+    "/work/orders-svc": { files: {}, names: [dependencyName("org.example:payments-core", "build.gradle", 5)] },
+  });
+
+  const result = await queries.outwardNames({ repo: { path: "/work/shop-web" }, repos: [{ path: "/work/orders-svc" }] });
+
+  assert.deepEqual(
+    valueOf(result).unserved.map((name) => `${name.kind} ${name.name} (${name.evidence.map((place) => `${place.path}:${place.line}`).join(", ")})`),
+    ["dependency org.example:payments-core (build.gradle:5, pom.xml:12)"],
+  );
+});
+
+test("a name two configuration lines state and one repository serves is one candidate with both lines", async () => {
+  const url = "http://ms-name-restaurants.b2c:8080/restaurants/{restaurantId}";
+  const queries = setup({
+    "/work/shop-web": { files: {}, names: [configurationName(url, "src/main/resources/application.yaml", 77)] },
+    "/work/reporting": { files: {}, names: [configurationName(url, "src/main/resources/application.yaml", 91)] },
+    "/work/ms-name-restaurants": { files: {} },
+  });
+
+  const result = await queries.outwardNames({ repo: { path: "/work/shop-web" }, repos: [{ path: "/work/reporting" }, { path: "/work/ms-name-restaurants" }] });
+
+  assert.deepEqual(
+    valueOf(result).candidates.map((candidate) => `${candidate.name} -> ${candidate.repo} (${candidate.basis}) (${candidate.evidence.map((place) => `${place.path}:${place.line}`).join(", ")})`),
+    [`${url} -> ms-name-restaurants (exact-name) (src/main/resources/application.yaml:77, src/main/resources/application.yaml:91)`],
+  );
+});
+
 test("two repositories asked under one id are a fault, never one answer for both", async () => {
   const queries = setup({ "/work/a": { files: {} }, "/work/b": { files: {} } });
   const repos: WorkspaceRepositoryRequest[] = [{ path: "/work/a", id: "shop" }];

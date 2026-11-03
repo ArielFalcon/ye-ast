@@ -79,6 +79,17 @@ export function gatherNames(names: readonly OutwardName[]): OutwardName[] {
   return [...held.values()].sort(compareOutwardName);
 }
 
+/** The same candidate reached twice is one candidate, its evidence gathered and sorted. */
+export function gatherCandidates(candidates: readonly NameCandidate[]): NameCandidate[] {
+  const held = new Map<string, NameCandidate>();
+  for (const candidate of candidates) {
+    const key = `${candidate.name}\0${candidate.repo}\0${candidate.basis}`;
+    const known = held.get(key);
+    held.set(key, known === undefined ? candidate : { ...known, evidence: sortEvidence([...known.evidence, ...candidate.evidence]) });
+  }
+  return [...held.values()].sort(compareCandidate);
+}
+
 /** The places, one per place: the same line reached two ways is two places, so the `via` that reached it is part of it. */
 export function sortEvidence(evidence: readonly Evidence[]): Evidence[] {
   const seen = new Map<string, Evidence>();
