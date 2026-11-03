@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { pathSelection } from "../../domain/shared/scope.ts";
 import { liveScope } from "../../domain/snapshot/live-export.ts";
 import type { LiveStaleNotice } from "../../ports/live-queries.port.ts";
-import { fakeLive, VERSIONS, type FakeLive } from "./fake-live.testing.ts";
+import { fakeLive, NOW, VERSIONS, type FakeLive } from "./fake-live.testing.ts";
 import { openLive, type LiveTree } from "./live-tree.ts";
 
 const SCOPE = liveScope();
@@ -203,4 +203,143 @@ test("the listing is filtered by the scope's selection before it is mirrored", a
 
   assert.ok(only.ok);
   assert.deepEqual(fake.state.current?.manifest.map((entry) => entry.path), ["src/A.java"]);
+});
+
+test("a sweep that cannot read the mirrors leaves the answer and its stateId as they were", async () => {
+  const control = await tree(fakeLive({ "src/A.java": "1" }));
+  const refused = fakeLive({ "src/A.java": "1" });
+  refused.engine.usage = { ok: false, fault: { kind: "unreadable", detail: "cannot read the live directory" } };
+  const thrown = fakeLive({ "src/A.java": "1" });
+  thrown.deps.mirror.usage = async () => {
+    throw new Error("boom");
+  };
+
+  const refusedTree = await tree(refused);
+  const thrownTree = await tree(thrown);
+
+  assert.equal(refusedTree.stateId, control.stateId);
+  assert.equal(thrownTree.stateId, control.stateId);
+  assert.deepEqual(refusedTree.export, control.export);
+});
+
+test("the sweep discards the mirrors the policy names, keeps the one being answered, and leaves the answer alone", async () => {
+  const fake = fakeLive({ "src/A.java": "1" });
+  const first = await tree(fake);
+  fake.discarded.length = 0;
+  const current = fake.locations[0]!.scope;
+  const dayMs = 24 * 60 * 60 * 1000;
+  fake.engine.usage = {
+    ok: true,
+    value: {
+      scopes: [
+        { scope: current, versions: VERSIONS, bytes: 0, lastUsedMs: NOW - 30 * dayMs, locked: false },
+        { scope: "unused", versions: VERSIONS, bytes: 0, lastUsedMs: NOW - 30 * dayMs, locked: false },
+      ],
+      debris: ["gone.state.json"],
+    },
+  };
+
+  const again = await tree(fake);
+
+  assert.deepEqual(fake.discarded, ["unused"]);
+  assert.deepEqual(fake.debrisRemoved, [["gone.state.json"]]);
+  assert.equal(again.stateId, first.stateId);
+});
+
+test("every successful refresh touches the state, including one that writes nothing", async () => {
+  const fake = fakeLive({ "src/A.java": "1" });
+  await tree(fake);
+  const writes = fake.calls.filter((call) => call === "writeState").length;
+
+  await tree(fake);
+
+  assert.equal(fake.calls.filter((call) => call === "writeState").length, writes);
+  assert.equal(fake.touches, 2);
+
+  fake.engine.touch = { ok: false, fault: { kind: "write-failed", detail: "read-only" } };
+  const answered = await tree(fake);
+  assert.equal(answered.stateId, fake.state.current?.stateId);
+});
+
+function clear(fake: FakeLive): void {
+  fake.calls.length = 0;
+  fake.staged.length = 0;
+  fake.pruned.length = 0;
+  fake.syncs.length = 0;
+  fake.built.length = 0;
+  fake.synced.length = 0;
+}
+
+test("the index tree holds only the paths the export writes, so a test file never reaches the engine", async () => {
+  const fake = fakeLive({ "src/a.ts": "1", "src/a.spec.ts": "1", "README.md": "1" });
+
+  const held = await tree(fake);
+
+  assert.equal(held.root, "/index");
+  assert.deepEqual(fake.built, ["/index"]);
+  assert.deepEqual(fake.staged, [["src/a.ts"]]);
+  assert.deepEqual(fake.state.current?.indexed, ["src/a.ts"]);
+});
+
+test("an edit, an added and a deleted map-scope file reach the index tree and its store, and a non-map edit reaches neither", async () => {
+  const fake = fakeLive({ "src/a.ts": "1", "src/b.ts": "1", "README.md": "1" });
+  await tree(fake);
+  clear(fake);
+
+  fake.tree.set("src/a.ts", "2");
+  fake.tree.set("src/c.ts", "1");
+  fake.tree.delete("src/b.ts");
+  const edited = await tree(fake);
+
+  assert.deepEqual(fake.staged, [["src/a.ts", "src/c.ts"]]);
+  assert.deepEqual(fake.pruned, [["src/b.ts"]]);
+  assert.deepEqual(fake.synced, ["/index"]);
+  assert.deepEqual(fake.syncs, [["src/a.ts", "src/b.ts", "src/c.ts"]]);
+  assert.deepEqual(fake.state.current?.indexed, ["src/a.ts", "src/c.ts"]);
+  assert.equal(edited.root, "/index");
+
+  clear(fake);
+  fake.tree.set("README.md", "2");
+  await tree(fake);
+
+  assert.deepEqual([fake.staged, fake.pruned, fake.syncs, fake.builds], [[], [], [], 1]);
+});
+
+test("a query that reads no store stages no index tree and reads the mirror itself", async () => {
+  const fake = fakeLive({ "src/a.ts": "1", "src/a.spec.ts": "1" });
+
+  const mapped = await tree(fake, false);
+
+  assert.equal(mapped.root, "/mirror");
+  assert.deepEqual(fake.staged, []);
+  assert.deepEqual(fake.built, []);
+});
+
+test("a state the mirror cannot read as one discards the mirror and rebuilds the store in full exactly once", async () => {
+  const fake = fakeLive({ "src/A.java": "1" });
+  fake.state.current = null;
+
+  const first = await tree(fake);
+
+  assert.deepEqual(fake.calls.filter((call) => ["discard", "buildMirror"].includes(call)), ["discard", "buildMirror"]);
+  assert.deepEqual(first.origin, { kind: "full" });
+  clear(fake);
+
+  await tree(fake);
+
+  assert.deepEqual(fake.calls.filter((call) => ["discard", "buildMirror"].includes(call)), []);
+});
+
+test("a store whose sync cannot run is rebuilt in full over the index tree", async () => {
+  const fake = fakeLive({ "src/a.ts": "1", "src/a.spec.ts": "1" });
+  await tree(fake);
+  clear(fake);
+  fake.tree.set("src/a.ts", "2");
+  fake.engine.sync = { ok: false, fault: { kind: "store-unreadable", detail: "damaged" } };
+  fake.engine.build = { ok: true, value: { ...(fake.engine.build.ok ? fake.engine.build.value : (undefined as never)), filesNotIndexed: [] } };
+
+  await tree(fake);
+
+  assert.deepEqual(fake.built, ["/index"]);
+  assert.deepEqual(fake.state.current?.indexed, ["src/a.ts"]);
 });

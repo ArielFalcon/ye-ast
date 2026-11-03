@@ -29,7 +29,7 @@ import type { PathMatcher } from "../../ports/path-matcher.port.ts";
 import { isEngineConfiguration } from "../../ports/staging-rules.ts";
 import type { FieldOrigin } from "../../domain/relations/field-origin.ts";
 import type { RelationExtractor } from "../relations/relation-extractor.ts";
-import type { Vcs, VcsChanges, VcsFault } from "../../ports/vcs.port.ts";
+import type { CommitExport, Vcs, VcsChanges, VcsFault } from "../../ports/vcs.port.ts";
 import { openLive, type LiveDeps, type LiveTree } from "../live/live-tree.ts";
 import { ABORTED, extractCommit, extractExport, factBaseOf, LIVE_REQUIRES_TRUSTED, trustOf, withScratch, type CommitExtraction, type SnapshotReaderDeps } from "../snapshot/read-snapshot.ts";
 import { readImporters } from "./importers.ts";
@@ -89,7 +89,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
   async function indexHead(headTree: CommitExtraction, headDirectory: string, directory: () => Promise<string>, signal: AbortSignal | undefined): Promise<HeadIndex | "aborted" | "unavailable"> {
     if (deps.indexes !== undefined) {
       const kept = await deps.indexes.obtain({ content: digest.of(contentFingerprint(headTree.export)), snapshot: headDirectory, signal });
-      if (kept.ok) return kept.value;
+      if (kept.ok) return { store: kept.value.store, summary: notHeldInExport(kept.value.summary.filesNotIndexed, headTree.export) };
       if (kept.fault.kind === "aborted") return "aborted";
       if (kept.fault.kind !== "cache-unavailable") return "unavailable";
     }
@@ -97,7 +97,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
     const indexed = await deps.graph.index(headDirectory, storeDirectory, signal);
     if (!indexed.ok) return indexed.fault.kind === "aborted" ? "aborted" : "unavailable";
     const opened = deps.graph.open(storeDirectory);
-    return opened.ok ? { store: opened.value, summary: indexed.value } : "unavailable";
+    return opened.ok ? { store: opened.value, summary: notHeldInExport(indexed.value.filesNotIndexed, headTree.export) } : "unavailable";
   }
 
   /** The fact base of a snapshot: a commit's carries the host's export budget, the live tree reads none. */
@@ -116,7 +116,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
       base: (content, store = false) => factBase(trust, snapshot, content, spec, scope, store ? tree.origin : undefined),
       open: async () => {
         const opened = deps.graph.open(tree.root);
-        return opened.ok ? { store: opened.value, summary: { filesNotIndexed: tree.notHeld } } : "unavailable";
+        return opened.ok ? { store: opened.value, summary: notHeldInExport(tree.notHeld, extraction.export) } : "unavailable";
       },
     };
   }
@@ -391,6 +391,15 @@ function unknownFact(base: FactBase, reason: "index-unavailable" | "source-unrea
 interface HeadIndex {
   store: CodeGraphReader;
   summary: Pick<IndexSummary, "filesNotIndexed">;
+}
+
+/**
+ * The files of the index's universe the store did not hold, limited to what the head export staged: the engine reads
+ * the whole mirror and a commit's whole listing, so a path the export never wrote could not be read by this answer.
+ */
+function notHeldInExport(notHeld: readonly string[], exported: CommitExport): Pick<IndexSummary, "filesNotIndexed"> {
+  const staged = new Set(exported.files.filter((file) => file.written).map((file) => file.path));
+  return { filesNotIndexed: notHeld.filter((path) => staged.has(path)) };
 }
 
 /** The targets once each, in a fixed order, so the same request in any order is the same fact. */

@@ -772,7 +772,7 @@ test("live with a revision or a head is refused by the schema before any query r
   await session.close();
 });
 
-test("an answer the working tree moved past opens its text with a stale line and carries the notice in _meta, with the fact untouched", async () => {
+test("an answer the working tree moved past opens its text with a stale line and carries the notice in _meta and beside the fact, with the fact untouched", async () => {
   const { session } = await setup({
     map: async (request) => {
       request.live === true && request.onStale?.({ stateId: "s1", changed: ["src/A.java", `src/${SECRET}.java`] });
@@ -782,9 +782,10 @@ test("an answer the working tree moved past opens its text with a stale line and
 
   const result = await session.callTool("ye_ast_entrypoints", { live: true });
 
+  const notice = { stateId: "s1", changed: ["src/A.java", `src/${REDACTED}.java`] };
   assert.match(textOf(result), /^stale: .*state s1: src\/A\.java, src\/\[REDACTED\]\.java\nstatus: complete/);
-  assert.deepEqual(result._meta, { "ye-ast/live": { stateId: "s1", changed: ["src/A.java", `src/${REDACTED}.java`] } });
-  assert.deepEqual(result.structuredContent, envelopeOf(mapFact()));
+  assert.deepEqual(result._meta, { "ye-ast/live": notice });
+  assert.deepEqual(result.structuredContent, { ...envelopeOf(mapFact()), live: notice });
   await session.close();
 });
 

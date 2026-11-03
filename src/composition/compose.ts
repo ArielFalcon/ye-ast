@@ -7,6 +7,7 @@ import { openLive, type LiveDeps } from "../core/application/live/live-tree.ts";
 import { declaredScope } from "../core/domain/map/entrypoint-map.ts";
 import { pathSelection } from "../core/domain/shared/scope.ts";
 import { liveScope } from "../core/domain/snapshot/live-export.ts";
+import type { LiveRetentionPolicy } from "../core/domain/snapshot/live-retention.ts";
 import { createFixedLayerAdmin } from "../core/application/fixed-layer/fixed-layer-admin.ts";
 import { createInstall } from "../core/application/install/install.ts";
 import { createImpactQueries } from "../core/application/impact/impact-queries.ts";
@@ -61,6 +62,10 @@ const ENTRYPOINT_ENGINES = ["web-tree-sitter", "tree-sitter-java", "typescript"]
 const TEMPLATE_ENGINE = "@angular/compiler";
 const CODEGRAPH_PACKAGE = "@colbymchenry/codegraph";
 const POLICY_DIGEST_LENGTH = 12;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** What a host keeps of the live tree unless it overrides it (RFC-0010 "Retention"): three scopes, 14 days, 512 MiB. */
+const LIVE_RETENTION: LiveRetentionPolicy = { keepScopes: 3, unusedForMs: 14 * DAY_MS, maxBytes: 512 * 1024 * 1024 };
 
 export interface CompositionOptions {
   /** Directory that holds the temporary exports; the system temporary directory by default. */
@@ -81,6 +86,8 @@ export interface CompositionOptions {
   reportTrustFault?: (line: string) => void;
   /** Receives one measurement line per query and per index build; without it nothing is measured. */
   measure?: MeasurementSink;
+  /** How many live mirrors stay and for how long; the defaults of RFC-0010 "Retention" unless a host overrides them. */
+  liveRetention?: LiveRetentionPolicy;
 }
 
 export interface ComposedQueries {
@@ -135,6 +142,8 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
     graph,
     digest,
     versions: { codegraph, store: JSON.stringify(SUPPORTED_STORE), staging: STAGING_RULES_VERSION },
+    retention: options.liveRetention ?? LIVE_RETENTION,
+    now: () => Date.now(),
   };
   const bareEntrypoints = createEntrypointQueries({ vcs, scratch, reader, extractor, digest, matcher, producer: { name: PRODUCER_NAME, version }, engines: entrypointEngines, live, ...budget, ...trust });
   const entrypoints = measurement === undefined ? bareEntrypoints : measuredEntrypoints(bareEntrypoints, measurement);

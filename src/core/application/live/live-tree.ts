@@ -3,6 +3,7 @@ import type { DeclaredScope, IndexOrigin } from "../../domain/shared/fact.ts";
 import type { PathSelection } from "../../domain/shared/scope.ts";
 import type { Result } from "../../domain/shared/result.ts";
 import { liveExport } from "../../domain/snapshot/live-export.ts";
+import { retentionDiscards, type LiveRetentionPolicy, type LiveScopeUsage } from "../../domain/snapshot/live-retention.ts";
 import type { CodeGraph } from "../../ports/code-graph.port.ts";
 import type { Digest } from "../../ports/digest.port.ts";
 import type { LiveFault, LiveStaleNotice } from "../../ports/live-queries.port.ts";
@@ -17,6 +18,10 @@ export interface LiveDeps {
   digest: Digest;
   /** The engines the mirror is valid for; a recorded state built by others is discarded. */
   versions: MirrorVersions;
+  /** How many mirrors stay and for how long; composition supplies the values. */
+  retention: LiveRetentionPolicy;
+  /** The clock the sweep reads, supplied by composition: the core reads no wall clock. */
+  now: () => number;
 }
 
 /** The refresh did not finish: the deadline or an interruption cut it, or the engine could not build the index. */
@@ -29,7 +34,10 @@ export type LiveFailure = LiveFault | VcsFault | LiveUnavailable;
 
 /** The mirror as one query reads it, valid until `openLive` returns: its lock is held until then. */
 export interface LiveTree {
-  /** The directory the extractors and the engine read. */
+  /**
+   * The directory the extractors and the engine read: the index tree when the query reads the store, the mirror
+   * itself otherwise, since both hold every path the export writes.
+   */
   root: string;
   export: CommitExport;
   stateId: string;
@@ -68,7 +76,8 @@ const sorted = (paths: Iterable<string>): string[] => [...new Set(paths)].sort((
 /**
  * One live query (RFC-0010 "Live head"): takes the mirror's lock, brings the mirror up to date with the working tree,
  * runs `use` on it and releases the lock whatever `use` does, then says whether the tree moved meanwhile. Nothing here
- * runs a program the repository names or reads a file outside the mirror's own copy.
+ * runs a program the repository names or reads a file outside the mirror's own copy. Once the answer is built it sweeps
+ * the mirrors of other scopes, as RFC-0010 "Retention" describes.
  */
 export async function openLive<A>(deps: LiveDeps, request: OpenLive, use: (tree: LiveTree) => Promise<A>): Promise<Result<A, LiveFailure>> {
   const { mirror, workingTree, digest } = deps;
@@ -83,6 +92,7 @@ export async function openLive<A>(deps: LiveDeps, request: OpenLive, use: (tree:
     const refreshed = await refresh(deps, request, location);
     if (!refreshed.ok) return refreshed;
     const { tree, state } = refreshed.value;
+    await mirror.touch(location);
     answered = await use(tree);
     reflected = { state, stateId: tree.stateId };
   } finally {
@@ -96,7 +106,32 @@ export async function openLive<A>(deps: LiveDeps, request: OpenLive, use: (tree:
       if (moved.ok && moved.value.length > 0) request.onStale({ stateId: reflected.stateId, changed: moved.value });
     }
   }
+  await sweep(deps, repo, location.scope);
   return { ok: true, value: answered };
+}
+
+/**
+ * Discards what the retention policy names, once per query and after the answer: it measures the live directory, decides
+ * in the core and removes one mirror at a time. It never fails the query it follows, and what it cannot read or remove
+ * the mirror keeps.
+ */
+async function sweep(deps: LiveDeps, repo: string, current: string): Promise<void> {
+  try {
+    const measured = await deps.mirror.usage(repo);
+    if (!measured.ok) return;
+    const scopes: LiveScopeUsage[] = measured.value.scopes.map((scope) => ({
+      scope: scope.scope,
+      bytes: scope.bytes,
+      lastUsedMs: scope.lastUsedMs,
+      locked: scope.locked,
+      versionsMatch: scope.versions !== null && sameVersions(scope.versions, deps.versions),
+    }));
+    const discards = retentionDiscards({ scopes, debris: measured.value.debris }, current, deps.retention, deps.now());
+    for (const scope of discards.scopes) await deps.mirror.discard({ repo, scope });
+    if (discards.debris.length > 0) await deps.mirror.discardDebris(repo, discards.debris);
+  } catch {
+    return;
+  }
 }
 
 interface Refreshed {
@@ -111,7 +146,7 @@ async function refresh(deps: LiveDeps, request: OpenLive, location: MirrorLocati
   const recorded = await mirror.readState(location);
   if (!recorded.ok) return mirrorFailure(recorded.fault);
   let state = recorded.value;
-  if (state !== null && !sameVersions(state.versions, versions)) {
+  if (state === null || !sameVersions(state.versions, versions)) {
     const discarded = await mirror.discard(location);
     if (!discarded.ok) return mirrorFailure(discarded.fault);
     state = null;
@@ -129,61 +164,78 @@ async function refresh(deps: LiveDeps, request: OpenLive, location: MirrorLocati
   const { manifest, skipped, changed } = reconciled.value;
   const exported = liveExport(manifest, skipped);
   const stateId = digest.of(contentFingerprint(exported));
-  const behind = sorted([...(state?.pending ?? []), ...changed]);
+
+  // The store's universe is the export's written set, never the listing: a test file the export does not write must not
+  // reach the engine, or the live answer would diverge from the commit's (RFC-0010 "The mirror").
+  const written = exported.files.filter((file) => file.written).map((file) => file.path);
+  const writtenSet = new Set(written);
+  const held = state?.indexed ?? [];
+  const staging = sorted([...(state?.pending ?? []), ...changed].filter((path) => writtenSet.has(path)));
+  const pruning = held.filter((path) => !writtenSet.has(path));
+  const behind = sorted([...staging, ...pruning]);
 
   const current: MirrorState = {
     versions,
     manifest,
     skipped,
     notHeld: state?.notHeld ?? [],
+    indexed: held,
     fullBuildStateId: state?.fullBuildStateId ?? "",
     stateId,
     pending: behind,
   };
   const moved = state === null || JSON.stringify([state.manifest, state.skipped]) !== JSON.stringify([manifest, skipped]) || state.pending.length !== behind.length;
-  const tree = (held: MirrorState): LiveTree => ({
-    root: mirror.root(location),
+  const tree = (heldState: MirrorState): LiveTree => ({
+    root: request.store ? mirror.indexRoot(location) : mirror.root(location),
     export: exported,
     stateId,
-    notHeld: request.store ? held.notHeld : [],
-    origin: request.store ? (held.fullBuildStateId === stateId ? { kind: "full" } : { kind: "sync", base: held.fullBuildStateId }) : undefined,
+    notHeld: request.store ? heldState.notHeld : [],
+    origin: request.store ? (heldState.fullBuildStateId === stateId ? { kind: "full" } : { kind: "sync", base: heldState.fullBuildStateId }) : undefined,
     location,
   });
 
   const needsBuild = current.fullBuildStateId === "";
   if (!request.store || (!needsBuild && behind.length === 0)) {
     if (moved) {
-      const written = await mirror.writeState(location, current);
-      if (!written.ok) return mirrorFailure(written.fault);
+      const writtenState = await mirror.writeState(location, current);
+      if (!writtenState.ok) return mirrorFailure(writtenState.fault);
     }
     return { ok: true, value: { tree: tree(current), state: current } };
   }
 
   const begun = await mirror.writeState(location, current);
   if (!begun.ok) return mirrorFailure(begun.fault);
-  const root = mirror.root(location);
+  const indexRoot = mirror.indexRoot(location);
+  if (staging.length > 0) {
+    const staged = await mirror.materialize(location, staging, indexRoot, signal);
+    if (!staged.ok) return mirrorFailure(staged.fault);
+  }
+  if (pruning.length > 0) {
+    const pruned = await mirror.prune(location, pruning, signal);
+    if (!pruned.ok) return mirrorFailure(pruned.fault);
+  }
   let full = needsBuild;
   let notHeld: readonly string[];
   if (needsBuild) {
-    const built = await graph.buildMirror(root, signal);
+    const built = await graph.buildMirror(indexRoot, signal);
     if (!built.ok) return unavailable(built.fault.detail);
     notHeld = built.value.filesNotIndexed;
   } else {
-    const synced = await graph.syncMirror(root, behind, signal);
+    const synced = await graph.syncMirror(indexRoot, behind, signal);
     if (synced.ok) {
       notHeld = sorted([...synced.value.filesNotIndexed, ...synced.value.filesFailed]);
     } else if (synced.fault.kind === "aborted") {
       return unavailable(synced.fault.detail);
     } else {
-      const rebuilt = await graph.buildMirror(root, signal);
+      const rebuilt = await graph.buildMirror(indexRoot, signal);
       if (!rebuilt.ok) return unavailable(rebuilt.fault.detail);
       notHeld = rebuilt.value.filesNotIndexed;
       full = true;
     }
   }
-  const committed: MirrorState = { ...current, notHeld: sorted(notHeld), fullBuildStateId: full ? stateId : current.fullBuildStateId, pending: [] };
-  const written = await mirror.writeState(location, committed);
-  if (!written.ok) return mirrorFailure(written.fault);
+  const committed: MirrorState = { ...current, notHeld: sorted(notHeld), indexed: sorted(written), fullBuildStateId: full ? stateId : current.fullBuildStateId, pending: [] };
+  const writtenState = await mirror.writeState(location, committed);
+  if (!writtenState.ok) return mirrorFailure(writtenState.fault);
   return { ok: true, value: { tree: tree(committed), state: committed } };
 }
 

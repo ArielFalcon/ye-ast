@@ -5,6 +5,8 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, 
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { EXIT_CODE } from "../cli/main.ts";
+import { createCodeGraph } from "../core/adapters/codegraph/codegraph.adapter.ts";
+import { isInMapScope } from "../core/domain/map/entrypoint-map.ts";
 import { composeCli } from "./compose.ts";
 
 const GIT_ENV = {
@@ -208,4 +210,76 @@ test("a staged edit, an unstaged edit, an untracked file and a deleted file each
     assert.deepEqual(live.fact.inputs.origin, { kind: "sync", base: fullBuild }, name);
     assert.equal(live.fact.snapshot.stateId, (await ye("map", ["--live"])).fact.snapshot.stateId, name);
   }
+});
+
+const TS_A = `export function used(): number {
+  return 1;
+}
+`;
+
+const TS_SPEC = `import { used } from "./a";
+
+export const value = used();
+`;
+
+const TS_DIR = "src/ts/";
+
+const liveDirectory = (): string => join(repo, ".ye-ast-graph", "live");
+
+const scopeDirectory = (): string =>
+  join(liveDirectory(), readdirSync(liveDirectory()).find((name) => !name.endsWith(".state.json") && !name.endsWith(".lock"))!);
+
+const indexTree = (): string => join(scopeDirectory(), ".ye-ast-graph", "index-tree");
+
+function filesUnder(root: string): string[] {
+  return readdirSync(root, { recursive: true, withFileTypes: true })
+    .filter((entry) => entry.isFile())
+    .map((entry) => join(entry.parentPath, entry.name).slice(root.length + 1))
+    .sort();
+}
+
+test("a test file the export never writes is answered the same live and at its sha", async () => {
+  commit({ [`${TS_DIR}a.ts`]: TS_A, [`${TS_DIR}a.spec.ts`]: TS_SPEC }, "typescript fixture");
+  await trust("trusted");
+
+  const live = await ye("importers", ["--live"], [`${TS_DIR}a.spec.ts`]);
+  const sha = await ye("importers", [], [`${TS_DIR}a.spec.ts`]);
+
+  assert.equal(live.code, EXIT_CODE.ok, live.stderr);
+  assert.equal(live.fact.status, sha.fact.status);
+  assert.deepEqual(live.fact.value, sha.fact.value);
+});
+
+test("the first live query stages the files the export writes and nothing else, and the engine never sees a test file", async () => {
+  commit({ [`${TS_DIR}a.ts`]: TS_A, [`${TS_DIR}a.spec.ts`]: TS_SPEC, "docs/notes.md": "# notes\n" }, "typescript fixture");
+  await trust("trusted");
+
+  const answer = await ye("impact", ["--base", "HEAD", "--live"]);
+
+  assert.equal(answer.code, EXIT_CODE.ok, answer.stderr);
+  const listed = execFileSync("git", ["ls-files", "-z", "--cached", "--others", "--exclude-standard"], { cwd: repo, env: GIT_ENV, encoding: "utf8" }).split("\0").filter((path) => path !== "");
+  const staged = filesUnder(indexTree()).filter((path) => !path.startsWith(".ye-ast-graph/"));
+  assert.deepEqual(staged, listed.filter((path) => isInMapScope(path)).sort());
+  assert.ok(listed.length > staged.length);
+
+  const opened = createCodeGraph().open(indexTree());
+  assert.equal(opened.ok, true, opened.ok ? "" : opened.fault.detail);
+  if (!opened.ok) return;
+  try {
+    assert.deepEqual(opened.value.symbolsInFiles([`${TS_DIR}a.spec.ts`]), []);
+    assert.ok(opened.value.symbolsInFiles([`${TS_DIR}a.ts`]).some((symbol) => symbol.name === "used"));
+  } finally {
+    opened.value.close();
+  }
+});
+
+test("two live queries over the same tree answer byte for byte, and the index tree changes neither content nor stateId", async () => {
+  await trust("trusted");
+
+  const first = await ye("impact", ["--base", "HEAD", "--live"]);
+  const second = await ye("impact", ["--base", "HEAD", "--live"]);
+
+  assert.equal(first.code, EXIT_CODE.ok, first.stderr);
+  assert.equal(first.stdout, second.stdout);
+  assert.equal(first.fact.snapshot.stateId, (await ye("map", [])).fact.inputs.content);
 });

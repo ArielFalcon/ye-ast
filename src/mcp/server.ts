@@ -244,6 +244,10 @@ const FACT_OUTPUT = z.looseObject({
     .readonly()
     .optional()
     .describe("Present only when the query refreshed a declared remote: per repository, what was asked, the rule step that chose its sha, the refs consulted and the sha pinned. A sibling of the fact, never a field of it."),
+  live: z
+    .looseObject({ stateId: z.string(), changed: z.array(z.string()).readonly() })
+    .optional()
+    .describe("Present only when the working tree moved after this answer was built: the state the answer reflects and the paths that changed since. A sibling of the fact, never a field of it."),
 });
 
 function askedRepository(requested: { path: string; id?: string | undefined; revision?: string | undefined; remote?: string | undefined }): WorkspaceRepositoryRequest {
@@ -317,6 +321,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
         structuredContent: {
           ...(full ? fact : withoutPayload(fact)),
           ...(refresh === undefined ? {} : { freshness: refresh.freshness, resolution: refresh.resolution }),
+          ...(stale === undefined ? {} : { live: stale }),
         } as unknown as Record<string, unknown>,
         ...(stale !== undefined && { _meta: { [LIVE_META]: stale } }),
       };

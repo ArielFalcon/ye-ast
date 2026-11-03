@@ -44,6 +44,7 @@ const state = (manifest: readonly MirrorEntry[] = []): MirrorState => ({
   manifest,
   skipped: [{ path: "link", reason: "symlink" }],
   notHeld: ["a.bin"],
+  indexed: ["a.ts"],
   fullBuildStateId: "full",
   stateId: "state",
   pending: ["b.ts"],
@@ -52,6 +53,54 @@ const state = (manifest: readonly MirrorEntry[] = []): MirrorState => ({
 test("the mirror root is under the repository's store directory, per scope", async () => {
   const { repo, location } = await fresh();
   assert.equal(createLiveMirror().root(location), join(repo, ".ye-ast-graph", "live", "default"));
+});
+
+test("the index tree sits under the mirror's engine directory, so the mirror's own listing never reaches it", async () => {
+  const { repo, location } = await fresh();
+  await writeFile(join(repo, "a.ts"), "a");
+  const mirror = createLiveMirror();
+  ok(await mirror.reconcile(location, listed("a.ts"), [], []));
+
+  assert.equal(mirror.indexRoot(location), join(repo, ".ye-ast-graph", "live", "default", ".ye-ast-graph", "index-tree"));
+
+  ok(await mirror.materialize(location, ["a.ts"], mirror.indexRoot(location)));
+  assert.equal(await readFile(join(mirror.indexRoot(location), "a.ts"), "utf8"), "a");
+  assert.deepEqual(ok(await mirror.reconcile(location, listed("a.ts"), [], [])).manifest.map((entry) => entry.path), ["a.ts"]);
+  assert.equal(await readFile(join(mirror.indexRoot(location), "a.ts"), "utf8"), "a");
+});
+
+test("prune removes the paths it is given and the directories they empty, and leaves the store and the mirror alone", async () => {
+  const { repo, location } = await fresh();
+  await mkdir(join(repo, "deep", "gone"), { recursive: true });
+  await writeFile(join(repo, "deep", "gone", "x.ts"), "x");
+  await writeFile(join(repo, "keep.ts"), "k");
+  const mirror = createLiveMirror();
+  ok(await mirror.reconcile(location, listed("deep/gone/x.ts", "keep.ts"), [], []));
+  const index = mirror.indexRoot(location);
+  ok(await mirror.materialize(location, ["deep/gone/x.ts", "keep.ts"], index));
+  await mkdir(join(index, ".ye-ast-graph"));
+  await writeFile(join(index, ".ye-ast-graph", "engine.db"), "db");
+
+  ok(await mirror.prune(location, ["deep/gone/x.ts", "missing.ts", "../escape"]));
+
+  await assert.rejects(lstat(join(index, "deep")));
+  assert.equal(await readFile(join(index, "keep.ts"), "utf8"), "k");
+  assert.equal(await readFile(join(index, ".ye-ast-graph", "engine.db"), "utf8"), "db");
+  assert.equal(await readFile(join(mirror.root(location), "deep", "gone", "x.ts"), "utf8"), "x");
+});
+
+test("prune of a mirror that does not exist succeeds and an aborted signal answers aborted", async () => {
+  const { location } = await fresh();
+  const mirror = createLiveMirror();
+  assert.deepEqual(await mirror.prune(location, ["a.ts"]), { ok: true, value: undefined });
+
+  const deleted = await fresh();
+  await writeFile(join(deleted.repo, "a.ts"), "a");
+  ok(await mirror.reconcile(deleted.location, listed("a.ts"), [], []));
+  ok(await mirror.materialize(deleted.location, ["a.ts"], mirror.indexRoot(deleted.location)));
+  const controller = new AbortController();
+  controller.abort();
+  assert.equal(faultKind(await mirror.prune(deleted.location, ["a.ts"], controller.signal)), "aborted");
 });
 
 test("reconcile copies listed files, records their git blob ids and answers sorted", async () => {
@@ -317,7 +366,7 @@ test("an absent, malformed or wrongly shaped state reads as null", async () => {
   assert.equal(ok(await mirror.readState(location)), null);
   await writeFile(file, JSON.stringify({ version: 1, ...state([{ path: "a", size: "1" } as unknown as MirrorEntry]) }));
   assert.equal(ok(await mirror.readState(location)), null);
-  await writeFile(file, JSON.stringify({ version: 2, ...state() }));
+  await writeFile(file, JSON.stringify({ version: 1, ...state() }));
   assert.equal(ok(await mirror.readState(location)), null);
 });
 
@@ -367,17 +416,21 @@ test("the state lives beside the lock, so a rebuild that empties the engine's st
   assert.equal((await lstat(join(repo, ".ye-ast-graph", "live", "default.state.json"))).isFile(), true);
 });
 
-test("discard removes the mirror with its store and state but never the lock", async () => {
+test("discard removes the mirror with its index tree, store and state but never the lock", async () => {
   const { repo, location } = await fresh();
   await writeFile(join(repo, "a.ts"), "a");
   const mirror = createLiveMirror();
   ok(await mirror.reconcile(location, listed("a.ts"), [], []));
+  ok(await mirror.materialize(location, ["a.ts"], mirror.indexRoot(location)));
+  await mkdir(join(mirror.indexRoot(location), ".ye-ast-graph"), { recursive: true, mode: 0o700 });
+  await writeFile(join(mirror.indexRoot(location), ".ye-ast-graph", "engine.db"), "db");
   ok(await mirror.writeState(location, state()));
   const lock = ok(await mirror.lock(location));
 
   ok(await mirror.discard(location));
 
   await assert.rejects(lstat(mirror.root(location)));
+  await assert.rejects(lstat(mirror.indexRoot(location)));
   assert.equal((await lstat(join(repo, ".ye-ast-graph", "live", "default.lock"))).isFile(), true);
   await assert.rejects(lstat(join(repo, ".ye-ast-graph", "live", "default.state.json")));
   assert.equal(ok(await mirror.readState(location)), null);
@@ -472,4 +525,83 @@ test("concurrent lock calls never hold the lock at once", async () => {
 
   assert.equal(peak, 1);
   assert.equal(completed, total);
+});
+
+test("the usage of a repository that keeps no mirror is empty", async () => {
+  const { repo } = await fresh();
+
+  assert.deepEqual(ok(await createLiveMirror().usage(repo)), { scopes: [], debris: [] });
+});
+
+test("usage measures a scope from its state, its index tree and its store, its last use from the state's mtime, whether its lock is live, and calls only a stale temporary file debris", async () => {
+  const { repo } = await fresh();
+  const mirror = createLiveMirror({ ...defaultLiveMirrorDeps, isAlive: (pid) => pid === 4242 });
+  const one = { repo, scope: "one" };
+  const two = { repo, scope: "two" };
+  const three = { repo, scope: "three" };
+  for (const location of [one, two, three]) ok(await mirror.reconcile(location, [], [], []));
+  ok(await mirror.writeState(one, state([{ path: "a.ts", size: 10, mtimeNs: "1", blob: "a" }, { path: "b.ts", size: 5, mtimeNs: "2", blob: "b" }])));
+  await mkdir(join(mirror.root(one), ".ye-ast-graph"), { mode: 0o700 });
+  await writeFile(join(mirror.root(one), ".ye-ast-graph", "engine.db"), "x".repeat(100));
+  await mkdir(join(mirror.indexRoot(one), ".ye-ast-graph"), { recursive: true, mode: 0o700 });
+  await writeFile(join(mirror.indexRoot(one), "a.ts"), "i".repeat(20));
+  await writeFile(join(mirror.indexRoot(one), ".ye-ast-graph", "engine.db"), "s".repeat(30));
+  await writeFile(join(mirror.root(one), "not-in-the-manifest.ts"), "y".repeat(5_000));
+  ok(await mirror.writeState(two, state([{ path: "c.ts", size: 7, mtimeNs: "3", blob: "c" }])));
+  const live = join(repo, ".ye-ast-graph", "live");
+  await writeFile(join(live, "one.lock"), "4242");
+  await writeFile(join(live, "two.lock"), "9999");
+  await writeFile(join(live, "three.lock"), "not a pid");
+  await utimes(join(live, "one.state.json"), 1_000_000, 1_000_000);
+  await utimes(join(live, "two.state.json"), 2_000_000, 2_000_000);
+  await writeFile(join(live, "gone.state.json"), "{}");
+  await writeFile(join(live, ".c0ffee.tmp"), "");
+  await utimes(join(live, ".c0ffee.tmp"), 1_000_000, 1_000_000);
+  await writeFile(join(live, "young.tmp"), "");
+
+  const usage = ok(await mirror.usage(repo));
+
+  assert.deepEqual(usage.scopes, [
+    { scope: "one", versions: state().versions, bytes: 165, lastUsedMs: 1_000_000_000, locked: true },
+    { scope: "three", versions: null, bytes: 0, lastUsedMs: null, locked: false },
+    { scope: "two", versions: state().versions, bytes: 7, lastUsedMs: 2_000_000_000, locked: false },
+  ]);
+  assert.deepEqual(usage.debris, [".c0ffee.tmp", "gone.state.json"]);
+});
+
+test("discardDebris removes exactly the entries it is told to and never reaches outside the live directory", async () => {
+  const { repo } = await fresh();
+  const mirror = createLiveMirror();
+  const location = { repo, scope: "kept" };
+  ok(await mirror.reconcile(location, [], [], []));
+  ok(await mirror.writeState(location, state()));
+  const live = join(repo, ".ye-ast-graph", "live");
+  await writeFile(join(live, "gone.state.json"), "{}");
+  await writeFile(join(live, ".c0ffee.tmp"), "");
+  const outside = join(repo, "outside.txt");
+  await writeFile(outside, "outside");
+  await symlink(outside, join(live, "linked.tmp"));
+
+  ok(await mirror.discardDebris(repo, ["gone.state.json", ".c0ffee.tmp", "linked.tmp", "../outside.txt", "kept"]));
+
+  await assert.rejects(lstat(join(live, "gone.state.json")));
+  await assert.rejects(lstat(join(live, ".c0ffee.tmp")));
+  assert.equal(await readFile(outside, "utf8"), "outside");
+  assert.equal((await lstat(join(live, "linked.tmp"))).isSymbolicLink(), true);
+  assert.equal((await lstat(join(live, "kept"))).isDirectory(), true);
+});
+
+test("touch moves the state's modification time and leaves its bytes as they are", async () => {
+  const { repo } = await fresh();
+  const location = { repo, scope: "default" };
+  const mirror = createLiveMirror({ ...defaultLiveMirrorDeps, now: () => 1_700_000_000_000 });
+  ok(await mirror.writeState(location, state()));
+  const file = join(repo, ".ye-ast-graph", "live", "default.state.json");
+  await utimes(file, 1_000_000, 1_000_000);
+  const bytes = await readFile(file, "utf8");
+
+  ok(await mirror.touch(location));
+
+  assert.equal(Math.round((await stat(file)).mtimeMs), 1_700_000_000_000);
+  assert.equal(await readFile(file, "utf8"), bytes);
 });

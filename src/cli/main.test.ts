@@ -627,7 +627,7 @@ test("a live query refused under untrusted exits with the query code and names t
   assert.match(io.stderr.join("\n"), /live-requires-trusted.*ye-ast init --trust trusted/);
 });
 
-test("a working tree that moved after the answer is one redacted stderr line naming the changed paths, and the fact and the exit code stay", async () => {
+test("a working tree that moved after the answer is one redacted stderr line naming the changed paths, and the fact, the notice beside it and the exit code stay", async () => {
   const { io, deps } = setup();
   const entrypoints: EntrypointQueries = {
     map: async (request) => {
@@ -638,9 +638,22 @@ test("a working tree that moved after the answer is one redacted stderr line nam
 
   assert.equal(await run(["map", "--live", "."], io, { ...deps, entrypoints }), EXIT_CODE.ok);
 
-  assert.deepEqual(JSON.parse(io.stdout.join("\n")), MAP);
+  const { live, ...fact } = JSON.parse(io.stdout.join("\n")) as Record<string, unknown>;
+  assert.deepEqual(live, { stateId: "s1", changed: ["src/A.java", `src/${REDACTED}.java`] });
+  assert.deepEqual(fact, MAP);
   assert.equal(io.stderr.length, 1);
   assert.match(io.stderr[0]!, /^ye-ast: stale: .*state s1: src\/A\.java, src\/\[REDACTED\]\.java$/);
+});
+
+test("a live answer the tree did not move past carries no notice beside the fact", async () => {
+  const { io, deps } = setup();
+
+  assert.equal(await run(["map", "--live", "."], io, deps), EXIT_CODE.ok);
+
+  const printed = JSON.parse(io.stdout.join("\n")) as Record<string, unknown>;
+  assert.equal("live" in printed, false);
+  assert.deepEqual(printed, MAP);
+  assert.deepEqual(io.stderr, []);
 });
 
 test("the usage and the help name --live", async () => {

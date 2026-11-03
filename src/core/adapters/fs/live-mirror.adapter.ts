@@ -1,18 +1,30 @@
 import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
-import type { BigIntStats, Stats } from "node:fs";
-import { copyFile, link, lstat, mkdir, open, readFile, rename, rm, rmdir, writeFile } from "node:fs/promises";
+import type { BigIntStats, Dirent, Stats } from "node:fs";
+import { copyFile, link, lstat, mkdir, open, readFile, readdir, rename, rm, rmdir, utimes, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { privateToOwner } from "../../domain/shared/private-to-owner.ts";
 import type { Result } from "../../domain/shared/result.ts";
 import { INDEX_STORE_DIRECTORY } from "../../ports/code-graph.port.ts";
 import { isEngineConfiguration, isEngineEntry } from "../../ports/staging-rules.ts";
-import type { LiveMirror, MirrorEntry, MirrorFault, MirrorLocation, MirrorLock, MirrorReconciliation, MirrorState } from "../../ports/live-mirror.port.ts";
+import type { LiveMirror, MirrorEntry, MirrorFault, MirrorLocation, MirrorLock, MirrorReconciliation, MirrorScopeUsage, MirrorState, MirrorUsage } from "../../ports/live-mirror.port.ts";
 import type { SkippedEntry } from "../../ports/vcs.port.ts";
 
 export const LIVE_DIRECTORY = "live";
 export const STATE_SUFFIX = ".state.json";
-const STATE_FORMAT_VERSION = 1;
+const INDEX_TREE_DIRECTORY = "index-tree";
+const LOCK_SUFFIX = ".lock";
+const TEMPORARY_SUFFIX = ".tmp";
+/**
+ * How old a leftover temporary file must be before the sweep calls it debris: a sibling between writing one and linking
+ * or renaming it is still using it, and removing that one would fail its query.
+ */
+const TEMPORARY_STALE_MS = 60 * 60 * 1000;
+/**
+ * Version 2 adds the index tree: the store moved from the mirror root to `indexRoot`, so a version 1 state records a
+ * full build of a store that no longer exists and is discarded, which rebuilds the scope once.
+ */
+const STATE_FORMAT_VERSION = 2;
 const DIRECTORY_MODE = 0o700;
 const FILE_MODE = 0o600;
 const LOCK_POLL_MS = 50;
@@ -25,6 +37,8 @@ export interface LiveMirrorDeps {
   isAlive: (pid: number) => boolean;
   sleep: (ms: number, signal?: AbortSignal) => Promise<void>;
   copyFile: (from: string, to: string) => Promise<void>;
+  /** The clock the sweep's touch reads. */
+  now: () => number;
 }
 
 export const defaultLiveMirrorDeps: LiveMirrorDeps = {
@@ -44,6 +58,7 @@ export const defaultLiveMirrorDeps: LiveMirrorDeps = {
       signal?.addEventListener("abort", () => { clearTimeout(timer); resolve(); }, { once: true });
     }),
   copyFile: (from, to) => copyFile(from, to, constants.COPYFILE_FICLONE),
+  now: Date.now,
 };
 
 type Failure = Result<never, MirrorFault>;
@@ -60,6 +75,7 @@ export function createLiveMirror(deps: LiveMirrorDeps = defaultLiveMirrorDeps): 
   const storeOf = (location: MirrorLocation): string => join(location.repo, INDEX_STORE_DIRECTORY);
   const liveOf = (location: MirrorLocation): string => join(storeOf(location), LIVE_DIRECTORY);
   const rootOf = (location: MirrorLocation): string => join(liveOf(location), location.scope);
+  const indexRootOf = (location: MirrorLocation): string => join(rootOf(location), INDEX_STORE_DIRECTORY, INDEX_TREE_DIRECTORY);
   const lockOf = (location: MirrorLocation): string => join(liveOf(location), `${location.scope}.lock`);
   const stateOf = (location: MirrorLocation): string => join(liveOf(location), `${location.scope}${STATE_SUFFIX}`);
 
@@ -100,7 +116,7 @@ export function createLiveMirror(deps: LiveMirrorDeps = defaultLiveMirrorDeps): 
   }
 
   async function tryCreateLock(file: string, pid: number): Promise<Result<boolean, MirrorFault>> {
-    const temporary = `${file}.${randomUUID()}.tmp`;
+    const temporary = `${file}.${randomUUID()}${TEMPORARY_SUFFIX}`;
     try {
       await writeFile(temporary, String(pid), { mode: FILE_MODE, flag: "wx" });
       await link(temporary, file);
@@ -120,6 +136,25 @@ export function createLiveMirror(deps: LiveMirrorDeps = defaultLiveMirrorDeps): 
       return null;
     }
     return { text, pid: /^[1-9]\d*$/.test(text.trim()) ? Number(text.trim()) : null };
+  }
+
+  async function readRecord(file: string): Promise<MirrorState | null> {
+    try {
+      return parseState(JSON.parse(await readFile(file, "utf8")));
+    } catch {
+      return null;
+    }
+  }
+
+  async function liveDirectory(repo: string): Promise<Result<string | null, MirrorFault>> {
+    const store = join(repo, INDEX_STORE_DIRECTORY);
+    const presence = await inspect(store);
+    if (!presence.ok) return presence;
+    if (presence.value === "absent") return { ok: true, value: null };
+    const live = join(store, LIVE_DIRECTORY);
+    const found = await inspect(live);
+    if (!found.ok) return found;
+    return { ok: true, value: found.value === "absent" ? null : live };
   }
 
   async function capture(repo: string, root: string, path: string, before: BigIntStats, copy: boolean): Promise<Result<MirrorEntry, MirrorFault>> {
@@ -166,6 +201,8 @@ export function createLiveMirror(deps: LiveMirrorDeps = defaultLiveMirrorDeps): 
   return {
     root: rootOf,
 
+    indexRoot: indexRootOf,
+
     async lock(location, signal) {
       const prepared = await prepare(location, "live", true);
       if (!prepared.ok) return prepared;
@@ -191,24 +228,14 @@ export function createLiveMirror(deps: LiveMirrorDeps = defaultLiveMirrorDeps): 
       const prepared = await prepare(location, "live", false);
       if (!prepared.ok) return prepared;
       if (!prepared.value) return { ok: true, value: null };
-      let text: string;
-      try {
-        text = await readFile(stateOf(location), "utf8");
-      } catch {
-        return { ok: true, value: null };
-      }
-      try {
-        return { ok: true, value: parseState(JSON.parse(text)) };
-      } catch {
-        return { ok: true, value: null };
-      }
+      return { ok: true, value: await readRecord(stateOf(location)) };
     },
 
     async writeState(location, state) {
       const prepared = await prepare(location, "live", true);
       if (!prepared.ok) return prepared;
       const file = stateOf(location);
-      const temporary = join(dirname(file), `.${randomUUID()}.tmp`);
+      const temporary = join(dirname(file), `.${randomUUID()}${TEMPORARY_SUFFIX}`);
       try {
         await writeFile(temporary, `${JSON.stringify({ version: STATE_FORMAT_VERSION, ...state }, null, 2)}\n`, { mode: FILE_MODE, flag: "wx" });
         await rename(temporary, file);
@@ -328,6 +355,24 @@ export function createLiveMirror(deps: LiveMirrorDeps = defaultLiveMirrorDeps): 
       return { ok: true, value: undefined };
     },
 
+    async prune(location, paths, signal) {
+      const prepared = await prepare(location, "root", false);
+      if (!prepared.ok) return prepared;
+      if (!prepared.value) return { ok: true, value: undefined };
+      const root = indexRootOf(location);
+      try {
+        for (const path of paths) {
+          if (signal?.aborted) return aborted();
+          if (unsafe(path) || isEngineEntry(path)) continue;
+          await rm(join(root, path), { force: true });
+          await prune(root, path);
+        }
+        return { ok: true, value: undefined };
+      } catch (error) {
+        return fault("write-failed", error);
+      }
+    },
+
     async discard(location) {
       const prepared = await prepare(location, "root", false);
       if (!prepared.ok) return prepared;
@@ -335,6 +380,93 @@ export function createLiveMirror(deps: LiveMirrorDeps = defaultLiveMirrorDeps): 
       try {
         await rm(stateOf(location), { force: true });
         await rm(rootOf(location), { recursive: true, force: true });
+        return { ok: true, value: undefined };
+      } catch (error) {
+        return fault("write-failed", error);
+      }
+    },
+
+    async usage(repo) {
+      const found = await liveDirectory(repo);
+      if (!found.ok) return found;
+      if (found.value === null) return { ok: true, value: { scopes: [], debris: [] } };
+      const live = found.value;
+      let entries: Dirent[];
+      try {
+        entries = await readdir(live, { withFileTypes: true });
+      } catch (error) {
+        return fault("unreadable", error);
+      }
+
+      const directories: string[] = [];
+      const states = new Map<string, number>();
+      const debris: string[] = [];
+      const now = deps.now();
+      for (const entry of entries) {
+        if (entry.isDirectory()) {
+          directories.push(entry.name);
+          continue;
+        }
+        if (!entry.isFile()) continue;
+        if (entry.name.endsWith(STATE_SUFFIX)) {
+          const scope = entry.name.slice(0, -STATE_SUFFIX.length);
+          const status = await lstat(join(live, entry.name)).catch(() => null);
+          if (status !== null) states.set(scope, status.mtimeMs);
+          continue;
+        }
+        if (entry.name.endsWith(TEMPORARY_SUFFIX)) {
+          const status = await lstat(join(live, entry.name)).catch(() => null);
+          if (status !== null && now - status.mtimeMs > TEMPORARY_STALE_MS) debris.push(entry.name);
+        }
+      }
+      for (const scope of [...states.keys()]) {
+        if (directories.includes(scope)) continue;
+        states.delete(scope);
+        debris.push(`${scope}${STATE_SUFFIX}`);
+      }
+
+      const scopes: MirrorScopeUsage[] = [];
+      for (const scope of [...directories].sort(compare)) {
+        const location: MirrorLocation = { repo, scope };
+        const record = await readRecord(stateOf(location));
+        const holder = await readHolder(lockOf(location));
+        const manifestBytes = record === null ? 0 : record.manifest.reduce((sum, entry) => sum + entry.size, 0);
+        scopes.push({
+          scope,
+          versions: record?.versions ?? null,
+          bytes: manifestBytes + (await directoryBytes(join(rootOf(location), INDEX_STORE_DIRECTORY))),
+          lastUsedMs: states.get(scope) ?? null,
+          locked: holder !== null && holder.pid !== null && deps.isAlive(holder.pid),
+        });
+      }
+      return { ok: true, value: { scopes, debris: debris.sort(compare) } };
+    },
+
+    async touch(location) {
+      const prepared = await prepare(location, "live", false);
+      if (!prepared.ok) return prepared;
+      if (!prepared.value) return { ok: true, value: undefined };
+      const at = new Date(deps.now());
+      try {
+        await utimes(stateOf(location), at, at);
+        return { ok: true, value: undefined };
+      } catch (error) {
+        return errorCode(error) === "ENOENT" ? { ok: true, value: undefined } : fault("write-failed", error);
+      }
+    },
+
+    async discardDebris(repo, entries) {
+      const found = await liveDirectory(repo);
+      if (!found.ok) return found;
+      if (found.value === null) return { ok: true, value: undefined };
+      const live = found.value;
+      try {
+        for (const entry of entries) {
+          if (entry === "" || entry === "." || entry === ".." || /[/\\\0]/.test(entry)) continue;
+          const status = await lstat(join(live, entry)).catch(() => null);
+          if (status === null || !status.isFile()) continue;
+          await rm(join(live, entry), { force: true });
+        }
         return { ok: true, value: undefined };
       } catch (error) {
         return fault("write-failed", error);
@@ -350,6 +482,21 @@ function lockHeld(file: string, pid: number): MirrorLock {
       if (text?.trim() === String(pid)) await rm(file, { force: true });
     },
   };
+}
+
+/** The bytes a directory's regular files occupy, from `readdir` and `stat` alone; a directory that cannot be read counts as none. */
+async function directoryBytes(directory: string): Promise<number> {
+  let total = 0;
+  try {
+    for (const entry of await readdir(directory, { recursive: true, withFileTypes: true })) {
+      if (!entry.isFile()) continue;
+      const status = await lstat(join(entry.parentPath, entry.name)).catch(() => null);
+      if (status !== null && status.isFile()) total += status.size;
+    }
+  } catch {
+    return 0;
+  }
+  return total;
 }
 
 async function parentState(repo: string, path: string, cache: Map<string, "ok" | "link" | "missing">): Promise<"ok" | "link" | "missing"> {
@@ -399,13 +546,13 @@ function compare(a: string, b: string): number {
 
 function parseState(value: unknown): MirrorState | null {
   if (!isRecord(value) || value.version !== STATE_FORMAT_VERSION) return null;
-  const { versions, manifest, skipped, notHeld, fullBuildStateId, stateId, pending } = value;
+  const { versions, manifest, skipped, notHeld, indexed, fullBuildStateId, stateId, pending } = value;
   if (!isRecord(versions) || typeof versions.codegraph !== "string" || typeof versions.store !== "string" || typeof versions.staging !== "string") return null;
   if (!Array.isArray(manifest) || !manifest.every(isEntry) || !Array.isArray(skipped) || !skipped.every(isSkipped)) return null;
-  if (!isStrings(notHeld) || !isStrings(pending) || typeof fullBuildStateId !== "string" || typeof stateId !== "string") return null;
+  if (!isStrings(notHeld) || !isStrings(indexed) || !isStrings(pending) || typeof fullBuildStateId !== "string" || typeof stateId !== "string") return null;
   return {
     versions: { codegraph: versions.codegraph, store: versions.store, staging: versions.staging },
-    manifest, skipped, notHeld, fullBuildStateId, stateId, pending,
+    manifest, skipped, notHeld, indexed, fullBuildStateId, stateId, pending,
   };
 }
 

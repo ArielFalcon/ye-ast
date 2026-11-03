@@ -55,7 +55,7 @@ const USAGE = [
   "       ye-ast serve   (the query protocol, JSON-RPC 2.0, one message per line on stdin/stdout)",
   "       ye-ast mcp [<repo>]   (stdio MCP server, read-only, bound to <repo> or the working directory)",
   "--repo-id: the name every fact carries; the directory name of the repository's main worktree when omitted, so every worktree of one repository answers the same name",
-  "--live: reads the working tree of a repository declared trusted (ye-ast init --trust trusted) instead of a revision; the first run builds ye-ast's mirror of it, and a stale answer is reported on stderr",
+  "--live: reads the working tree of a repository declared trusted (ye-ast init --trust trusted) instead of a revision; the first run builds ye-ast's mirror of it, and a stale answer is reported on stderr and as a live sibling of the fact in the JSON",
   "scope: [--include <glob>]... [--exclude <glob>]...   (globs over repository-relative paths, on map, impact, callers and importers; without --include every path is included; --exclude wins)",
   "budget: [--depth <n>] [--hub-fan-in <n>] [--expansions <n>]   (positive integers; none has a default)",
   "workspace: --workspace <file>   (the workspace init persists as .ye-ast/workspace.json: { \"repos\": [{ \"path\", \"id\", \"revision\", \"remote\" }], \"gateways\": [{ \"prefix\", \"repo\" }] }; a relative repository path is stored as written and resolved against the installed repository, and a remote is the source of truth a trusted repository's queries refresh into ye-ast's own mirror)",
@@ -63,6 +63,17 @@ const USAGE = [
 ].join("\n");
 
 type Query = () => Promise<Result<unknown, ImpactFault>>;
+
+/** The stale notice a live query reports once its answer is built, when the working tree moved. */
+interface StaleWatch {
+  notice?: LiveStaleNotice;
+}
+
+/** What the CLI prints for an answer: its fact, and the stale notice beside it as the same response-level sibling the MCP carries. */
+function printedAnswer(redaction: Redaction, value: unknown, notice: LiveStaleNotice | undefined): unknown {
+  const fact = redaction.redactValue(value);
+  return notice === undefined ? fact : { ...(fact as Record<string, unknown>), live: redaction.redactValue(notice) };
+}
 
 export async function run(argv: readonly string[], io: CliIo, deps: CliDeps): Promise<number> {
   const [command, ...named] = argv;
@@ -77,7 +88,8 @@ export async function run(argv: readonly string[], io: CliIo, deps: CliDeps): Pr
   }
   if (command === "init") return runInit(args, io, deps);
   try {
-    const query = await queryOf(command, args, deps, io);
+    const moved: StaleWatch = {};
+    const query = await queryOf(command, args, deps, io, moved);
     if (query === undefined) {
       io.err(USAGE);
       return EXIT_CODE.usage;
@@ -87,7 +99,7 @@ export async function run(argv: readonly string[], io: CliIo, deps: CliDeps): Pr
       for (const line of faultText(result.fault, deps.redaction)) io.err(line);
       return result.fault.kind === "aborted" ? EXIT_CODE.interrupted : EXIT_CODE.queryFailed;
     }
-    io.out(JSON.stringify(deps.redaction.redactValue(result.value), null, 2));
+    io.out(JSON.stringify(printedAnswer(deps.redaction, result.value, moved.notice), null, 2));
     return EXIT_CODE.ok;
   } catch (error) {
     io.err(`ye-ast: internal fault: ${deps.redaction.redact(firstLine(error))}`);
@@ -161,10 +173,12 @@ function shellWord(text: string): string {
   return /^[\w@%+=:,./-]+$/.test(text) ? text : `'${text.replaceAll("'", "'\\''")}'`;
 }
 
-async function queryOf(command: string | undefined, args: readonly string[], deps: CliDeps, io: CliIo): Promise<Query | undefined> {
+async function queryOf(command: string | undefined, args: readonly string[], deps: CliDeps, io: CliIo, moved: StaleWatch): Promise<Query | undefined> {
   const { signal } = deps;
-  const onStale = ({ stateId, changed }: LiveStaleNotice): void =>
-    io.err(deps.redaction.redact(`ye-ast: stale: the working tree changed after this answer, which reflects state ${stateId}: ${changed.join(", ")}`));
+  const onStale = (notice: LiveStaleNotice): void => {
+    moved.notice = notice;
+    io.err(deps.redaction.redact(`ye-ast: stale: the working tree changed after this answer, which reflects state ${notice.stateId}: ${notice.changed.join(", ")}`));
+  };
   switch (command) {
     case "map": {
       const request = await parseMapRequest(args, deps);

@@ -221,7 +221,7 @@ test("the walk is seeded from the change and its depth bound reaches the fact as
   assert.deepEqual(bounded.status === "partial" && bounded.cuts, [{ kind: "depth", at: ["src/A.java::f"], limit: 0 }]);
 });
 
-test("a file the index did not hold, and a file the export left out, cut the answer", async () => {
+test("a file the export left out cuts the answer, and one the index did not hold outside what the export staged does not", async () => {
   const changes: Result<readonly FileChange[], VcsFault> = { ok: true, value: [change("src/A.java")] };
   const skipped: CommitExport = { files: [{ path: "src/A.java", blob: "1", written: true }], skipped: [{ path: "src/Link.java", reason: "symlink" }] };
   const { ask } = setup({
@@ -231,10 +231,26 @@ test("a file the index did not hold, and a file the export left out, cut the ans
     exports: { [FORK]: skipped },
   });
   const answer = fact(await ask());
-  assert.deepEqual(answer.status === "partial" && answer.cuts, [
-    { kind: "no-extractor", at: ["src/out/X.java"] },
-    { kind: "not-exported", at: ["src/Link.java"] },
-  ]);
+  assert.deepEqual(answer.status === "partial" && answer.cuts, [{ kind: "not-exported", at: ["src/Link.java"] }]);
+});
+
+test("a staged file the index does not hold still cuts the answer at that file", async () => {
+  const changes: Result<readonly FileChange[], VcsFault> = { ok: true, value: [change("src/A.java")] };
+  const staged: CommitExport = {
+    files: [
+      { path: "src/A.java", blob: "1", written: true },
+      { path: "src/out/X.java", blob: "2", written: true },
+    ],
+    skipped: [],
+  };
+  const { ask } = setup({
+    changes,
+    nodes: SOURCE_NODES,
+    index: { ok: true, value: { ...SUMMARY, filesNotIndexed: ["src/out/X.java"] } },
+    exports: { [HEAD]: staged },
+  });
+  const answer = fact(await ask());
+  assert.deepEqual(answer.status === "partial" && answer.cuts, [{ kind: "no-extractor", at: ["src/out/X.java"] }]);
 });
 
 test("the config digest covers the walk budget, and the same request gives the same fact", async () => {
@@ -782,22 +798,51 @@ test("every live impact operation under untrusted is refused as a typed fault be
 
 const LIVE_NODES = [fakeNode("f", "function", "src/A.java", 1, 3), fakeNode("g", "function", "src/B.java", 1, 3)];
 
-test("a live callers query reads the store the mirror holds, records where it came from, and turns the files it does not hold into no-extractor cuts", async () => {
+test("a live callers query reads the store the mirror holds, records where it came from, and cuts nothing for a file the mirror holds outside what the export staged", async () => {
   const live = fakeLive({ "src/A.java": "1", "src/B.java": "1" });
   live.engine.build = { ok: true, value: { ...SUMMARY, filesNotIndexed: ["src/Odd.java"] } };
   const { log, queries } = setup({ trust: TRUSTED, live, nodes: LIVE_NODES, edges: SOURCE_EDGES });
 
   const answer = callersFact(await queries.callers({ ...LIVE_BASE, targets: [{ file: "src/A.java", symbol: "f" }], live: true }));
 
-  assert.equal(answer.status, "partial");
-  assert.deepEqual(answer.status === "partial" && answer.cuts, [{ kind: "no-extractor", at: ["src/Odd.java"] }]);
-  assert.deepEqual(answer.status === "partial" && answer.value.symbols.map((symbol) => symbol.symbol), ["f", "g"]);
+  assert.equal(answer.status, "complete");
+  assert.deepEqual(answer.status === "complete" && answer.value.symbols.map((symbol) => symbol.symbol), ["f", "g"]);
   assert.deepEqual(answer.snapshot, { repo: "repo", kind: "live", head: HEAD, stateId: answer.inputs.content });
   assert.deepEqual(answer.inputs.origin, { kind: "full" });
   assert.deepEqual(answer.inputs.declaredScope.ignored, "git");
   assert.equal(log.indexed, 0);
   assert.equal(log.closed, 1);
   assert.deepEqual(live.held, { locks: 1, released: 1 });
+});
+
+test("a live callers query cuts a file the mirror and the export hold but the store does not", async () => {
+  const live = fakeLive({ "src/A.java": "1", "src/B.java": "1", "src/Odd.java": "1" });
+  live.engine.build = { ok: true, value: { ...SUMMARY, filesNotIndexed: ["src/Odd.java"] } };
+  const { queries } = setup({ trust: TRUSTED, live, nodes: LIVE_NODES, edges: SOURCE_EDGES });
+
+  const answer = callersFact(await queries.callers({ ...LIVE_BASE, targets: [{ file: "src/A.java", symbol: "f" }], live: true }));
+
+  assert.deepEqual(answer.status === "partial" && answer.cuts, [{ kind: "no-extractor", at: ["src/Odd.java"] }]);
+});
+
+test("a live importers query cuts nothing for a file the mirror holds outside what the export staged", async () => {
+  const live = fakeLive({ "src/Order.java": "1" });
+  live.engine.build = { ok: true, value: { ...SUMMARY, filesNotIndexed: ["src/Odd.java"] } };
+  const { queries } = setup({ trust: TRUSTED, live, nodes: SHOP_NODES });
+
+  const answer = importersFact(await queries.importers({ ...LIVE_BASE, files: ["src/Order.java"], live: true }));
+
+  assert.equal(answer.status, "complete");
+});
+
+test("a live importers query cuts a file the mirror and the export hold but the store does not", async () => {
+  const live = fakeLive({ "src/Order.java": "1", "src/Odd.java": "1" });
+  live.engine.build = { ok: true, value: { ...SUMMARY, filesNotIndexed: ["src/Odd.java"] } };
+  const { queries } = setup({ trust: TRUSTED, live, nodes: SHOP_NODES });
+
+  const answer = importersFact(await queries.importers({ ...LIVE_BASE, files: ["src/Order.java"], live: true }));
+
+  assert.deepEqual(answer.status === "partial" && answer.cuts, [{ kind: "no-extractor", at: ["src/Odd.java"] }]);
 });
 
 test("a live fact that read no store carries no index origin", async () => {
