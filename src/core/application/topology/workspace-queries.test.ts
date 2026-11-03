@@ -320,6 +320,8 @@ test("every repository of a request is read under its own trust declaration, and
   );
 });
 
+const TRUSTED: TrustRecordReader = { read: async () => ({ ok: true, value: "trusted" }) };
+
 function persisted(manifest: WorkspaceManifest | undefined, asked: string[] = []): WorkspaceDefaults {
   return {
     of: async (root) => {
@@ -333,13 +335,25 @@ function persisted(manifest: WorkspaceManifest | undefined, asked: string[] = []
 test("a request that names no repositories works over the persisted manifest's repositories and gateways", async () => {
   const asked: string[] = [];
   const defaults = persisted({ repos: [{ path: "/work/orders-svc" }], gateways: [{ prefix: "orders-api", repo: "orders-svc" }] }, asked);
-  const queries = setup({ "/work/shop-web": { files: {} }, "/work/orders-svc": { files: {} } }, undefined, undefined, defaults);
+  const queries = setup({ "/work/shop-web": { files: {} }, "/work/orders-svc": { files: {} } }, undefined, TRUSTED, defaults);
 
   const result = await queries.outwardNames({ repo: { path: "/work/shop-web" } });
 
   assert.deepEqual(asked, ["/work/shop-web"]);
   assert.deepEqual(valueOf(result).workspace, { repos: ["orders-svc", "shop-web"], gateways: [{ prefix: "orders-api", repo: "orders-svc" }], source: "persisted" });
   assert.deepEqual(Object.keys(valueOf(result).sections), ["orders-svc", "shop-web"]);
+});
+
+test("a repository the trust mode does not trust states no workspace: its persisted manifest is never read", async () => {
+  const asked: string[] = [];
+  const defaults = persisted({ repos: [{ path: "/work/orders-svc" }], gateways: [{ prefix: "orders-api", repo: "orders-svc" }] }, asked);
+  const queries = setup({ "/work/shop-web": { files: {} }, "/work/orders-svc": { files: {} } }, undefined, undefined, defaults);
+
+  const result = await queries.outwardNames({ repo: { path: "/work/shop-web" } });
+
+  assert.deepEqual(asked, []);
+  assert.deepEqual(valueOf(result).workspace, { repos: ["shop-web"], gateways: [], source: "none" });
+  assert.deepEqual(Object.keys(valueOf(result).sections), ["shop-web"]);
 });
 
 test("a request that names repositories ignores the persisted workspace, its gateways included", async () => {
@@ -355,7 +369,7 @@ test("a request that names repositories ignores the persisted workspace, its gat
 
 test("a gateway the request declares itself wins over the one the manifest persists", async () => {
   const defaults = persisted({ repos: [{ path: "/work/orders-svc" }], gateways: [{ prefix: "orders-api", repo: "orders-svc" }] });
-  const queries = setup({ "/work/shop-web": { files: {} }, "/work/orders-svc": { files: {} } }, undefined, undefined, defaults);
+  const queries = setup({ "/work/shop-web": { files: {} }, "/work/orders-svc": { files: {} } }, undefined, TRUSTED, defaults);
 
   const result = await queries.outwardNames({ repo: { path: "/work/shop-web" }, gateways: [{ prefix: "legacy", repo: "orders-svc" }] });
 
@@ -364,7 +378,7 @@ test("a gateway the request declares itself wins over the one the manifest persi
 
 test("a manifest that cannot be read is the answer's fault, never an empty workspace", async () => {
   const defaults: WorkspaceDefaults = { of: async () => ({ ok: false, fault: { kind: "unreadable", detail: ".ye-ast/workspace.json: repos: a non-empty array" } }), resolve: (_root, manifest) => manifest };
-  const queries = setup({ "/work/shop-web": { files: {} } }, undefined, undefined, defaults);
+  const queries = setup({ "/work/shop-web": { files: {} } }, undefined, TRUSTED, defaults);
 
   const result = await queries.outwardNames({ repo: { path: "/work/shop-web" } });
 

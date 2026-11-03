@@ -206,7 +206,7 @@ export function createWorkspaceQueries(deps: WorkspaceQueriesDeps): WorkspaceQue
 
   return {
     async outwardNames(request: WorkspaceRequest) {
-      const inForce = await workspaceInForce(request, deps.defaults);
+      const inForce = await workspaceInForce(request, deps.defaults, await trustOf(deps, request.repo.path));
       if (!inForce.ok) return inForce;
       const asked = [request.repo, ...inForce.value.repos];
       const ids = asked.map((repository) => repository.id ?? directoryNameOf(repository.path));

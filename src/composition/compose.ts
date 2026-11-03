@@ -230,7 +230,7 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
     ...budget,
     ...trust,
   });
-  const workspaceImpact = createWorkspaceImpactQueries({ workspace, impact, defaults });
+  const workspaceImpact = createWorkspaceImpactQueries({ workspace, impact, defaults, ...trust });
   const decisions = createDecisionQueries({ workspace, defaults, vcs });
   return { version, entrypoints, impact, outline, workspace, workspaceImpact, decisions, redaction, repositoryName: (repo, signal) => vcs.repositoryName(repo, signal), warmLive };
 }
