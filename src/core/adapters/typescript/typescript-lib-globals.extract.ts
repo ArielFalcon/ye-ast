@@ -21,17 +21,17 @@ export function libGlobalNames(): readonly string[] {
       if (ts.isVariableStatement(node)) {
         for (const declaration of node.declarationList.declarations) if (ts.isIdentifier(declaration.name)) names.add(declaration.name.text);
       }
-      const named = node as ts.Node & { name?: ts.Node };
-      if (
-        (ts.isClassDeclaration(node) || ts.isFunctionDeclaration(node) || ts.isInterfaceDeclaration(node) || ts.isTypeAliasDeclaration(node) || ts.isEnumDeclaration(node) || ts.isModuleDeclaration(node)) &&
-        named.name !== undefined &&
-        ts.isIdentifier(named.name)
-      ) {
-        names.add(named.name.text);
-      }
+      const name = declarationName(node);
+      if (name !== undefined) names.add(name);
       ts.forEachChild(node, visit);
     };
     visit(tree);
   }
   return [...names].sort();
+}
+
+/** The name a declaration the libraries write at their top level gives the global scope. */
+function declarationName(node: ts.Node): string | undefined {
+  const declares = ts.isClassDeclaration(node) || ts.isFunctionDeclaration(node) || ts.isInterfaceDeclaration(node) || ts.isTypeAliasDeclaration(node) || ts.isEnumDeclaration(node) || ts.isModuleDeclaration(node);
+  return declares && node.name !== undefined && ts.isIdentifier(node.name) ? node.name.text : undefined;
 }
