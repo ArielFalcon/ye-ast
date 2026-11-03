@@ -1,0 +1,699 @@
+<!doctype html>
+<html lang="es" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ye-ast — explorador de arquitectura</title>
+<meta name="description" content="Grafo interactivo de la arquitectura de ye-ast: capas, módulos, puertos, adapters y los flujos que los cruzan.">
+<link rel="stylesheet" href="styles.css">
+<link rel="stylesheet" href="concepts.css">
+</head>
+<body>
+<a class="skip" href="#graph-canvas">Saltar al grafo</a>
+
+<header class="bar">
+  <a class="brand" href="es.html" aria-label="Explorador de arquitectura de ye-ast">
+    <span class="brand-mark" aria-hidden="true">y</span>
+    <span class="brand-text">ye-ast <span>/ arquitectura</span></span>
+  </a>
+  <div class="bar-tools">
+    <div class="level-switch" role="tablist" aria-label="Nivel del grafo">
+      <button type="button" data-level="layers" role="tab">Capas</button>
+      <button type="button" data-level="modules" role="tab" class="is-active">Módulos</button>
+      <button type="button" data-level="files" role="tab">Archivos</button>
+    </div>
+    <a class="concepts-link" href="#concepts">Conceptos</a>
+    <a class="lang-switch" href="index.html" hreflang="en" lang="en" aria-label="View in English">EN</a>
+    <button class="icon-button" id="theme-toggle" type="button" aria-pressed="false" aria-label="Cambiar al tema claro">◐</button>
+  </div>
+</header>
+
+<main class="workspace">
+  <aside class="panel flows-panel" aria-label="Flujos y pasos">
+    <div class="panel-head"><h2>Flujos</h2><span>7</span></div>
+    <div class="flow-list" id="flow-list"></div>
+    <div class="panel-head"><h2>Pasos</h2></div>
+    <div class="step-list" id="step-list"></div>
+    <div class="legend">
+      <p><i class="swatch active"></i> activo en este paso</p>
+      <p><i class="swatch node"></i> módulo</p>
+      <p><i class="swatch edge"></i> flujo de una petición</p>
+      <p class="legend-title">Aristas</p>
+      <p><i class="swatch edge-calls"></i> llamada</p>
+      <p><i class="swatch edge-uses"></i> uso</p>
+      <p><i class="swatch edge-implements"></i> implementa</p>
+      <p><i class="swatch edge-wires"></i> cableado</p>
+    </div>
+    <p class="panel-note">Las flechas muestran el sentido de una petición. La regla de dependencias es el orden de las capas, no el sentido de la flecha.</p>
+    <a class="panel-link" href="#concepts">Conceptos y glosario ↓</a>
+  </aside>
+
+  <section class="panel graph-panel" aria-label="Grafo de arquitectura">
+    <div class="graph-head">
+      <div class="graph-title">
+        <p class="eyebrow" id="flow-kicker">Flujo</p>
+        <h1 id="flow-title">impact</h1>
+        <p id="flow-question"></p>
+      </div>
+      <div class="zoom-tools">
+        <button type="button" id="zoom-out" aria-label="Alejar">−</button>
+        <span id="zoom-label">100%</span>
+        <button type="button" id="zoom-in" aria-label="Acercar">+</button>
+        <button type="button" id="zoom-fit" class="text-button">Ajustar</button>
+      </div>
+    </div>
+
+    <div class="graph-canvas" id="graph-canvas">
+      <svg id="graph-svg" role="img" aria-label="Grafo de arquitectura por capas">
+        <g id="graph-viewport">
+          <g id="graph-bands"></g>
+          <g id="graph-edges"></g>
+          <g id="graph-nodes"></g>
+        </g>
+      </svg>
+      <div class="callout-layer" id="callout-layer">
+        <svg class="callout-svg" aria-hidden="true"><path id="callout-line"></path></svg>
+        <div class="callout-card" id="callout-card" aria-live="polite"></div>
+      </div>
+    </div>
+
+    <div class="graph-foot">
+      <span id="graph-status"></span>
+      <div class="step-controls">
+        <button type="button" id="step-prev" aria-label="Paso anterior">←</button>
+        <span id="step-count">1 / 8</span>
+        <button type="button" id="step-next" aria-label="Paso siguiente">→</button>
+        <button type="button" id="step-play">Reproducir</button>
+      </div>
+    </div>
+  </section>
+
+  <aside class="panel info-panel" id="info-panel" aria-live="polite"></aside>
+</main>
+
+<section class="docs" id="concepts">
+  
+    <nav class="docs-nav" aria-label="Conceptos">
+      <a href="#facts">Contrato de fact</a>
+      <a href="#concept-rules">Reglas</a>
+      <a href="#simulator">Simulador</a>
+      <a href="#concept-runs">Ejecuciones</a>
+      <a href="#trust">Confianza</a>
+      <a href="#surfaces">Superficies</a>
+      <a href="#concept-glossary">Glosario</a>
+      <a href="#sources">Fuentes</a>
+    </nav>
+  <div class="docs-inner">
+    <section id="facts" class="doc-section">
+      <div class="section-head">
+        <p class="kicker">El contrato de fact</p>
+        <h2>Una respuesta que puede decir “no lo sé”.</h2>
+        <p class="section-lede">Cada query devuelve un <code>Fact</code>. El estado no es una nota al pie: decide si un resultado vacío significa “no hay” o “no se vio”.</p>
+      </div>
+
+      <div class="status-grid">
+        <article class="status-card" data-status="complete">
+          <p class="status-tag">complete</p>
+          <h3>La frontera quedó vacía.</h3>
+          <p>Nada que pudiera añadir un llamador quedó sin ver. El valor es todo lo que hay dentro del alcance declarado.</p>
+          <p class="status-foot">Léelo como: <strong>dentro de este alcance, esta es la respuesta completa.</strong></p>
+        </article>
+        <article class="status-card" data-status="partial">
+          <p class="status-tag">partial</p>
+          <h3>Algo detuvo el trabajo.</h3>
+          <p>Cada causa es un <strong>corte</strong>, y cada corte nombra dónde se detuvo: un límite, un nombre sin resolver, un archivo sin extractor, una ruta fuera del export.</p>
+          <p class="status-foot">Léelo como: <strong>lo que está más allá de un corte no se conoce.</strong></p>
+        </article>
+        <article class="status-card" data-status="unknown">
+          <p class="status-tag">unknown</p>
+          <h3>No hay respuesta posible.</h3>
+          <p>La razón dice por qué: <code>index-unavailable</code>, <code>source-unreadable</code>, <code>out-of-scope</code>…</p>
+          <p class="status-foot">Nunca lo leas como <strong>“no hay impacto”.</strong></p>
+        </article>
+      </div>
+
+      <div class="identity-card">
+        <div>
+          <p class="mini-kicker">Qué hace que un fact sea el mismo fact</p>
+          <h3>schema + inputs + producer</h3>
+          <p>La identidad es la única clave de invalidación. Cambia el alcance, el contenido, la config o la versión de un engine y es un fact distinto.</p>
+          <p class="ref"><code>src/core/domain/shared/fact.ts:172-178</code> · RFC-0002 regla 5</p>
+        </div>
+        <div class="input-chips" aria-label="Inputs del fact">
+          <span><em>confianza</em> trusted | untrusted</span>
+          <span><em>alcance</em> lenguajes, frameworks, include, exclude</span>
+          <span><em>content</em> digest de los bytes exportados</span>
+          <span><em>config</em> límite, targets, files</span>
+          <span><em>origin</em> full | sync</span>
+          <span><em>engines</em> versiones exactas</span>
+        </div>
+      </div>
+
+      <div class="cut-block">
+        <div class="cut-copy">
+          <p class="mini-kicker">La taxonomía de cortes</p>
+          <h3>Nueve formas de ser honesto.</h3>
+          <p>Son los mismos nombres que el servidor MCP entrega a un agente, con la acción que toca en cada uno (<code>src/mcp/server.ts:39-50</code>).</p>
+        </div>
+        <div class="table-wrap">
+          <table class="data-table stack-mobile">
+            <thead><tr><th>Corte</th><th>Qué significa</th><th>Qué debería hacer un consumidor</th></tr></thead>
+            <tbody>
+              <tr><td><code>depth</code></td><td>El recorrido se detuvo en el límite de profundidad.</td><td>Sube <code>budget.depth</code>, o pregunta por el símbolo del corte con <code>callers</code>.</td></tr>
+              <tr><td><code>hub</code></td><td>Un símbolo alcanzado tiene más llamadores de tipo llamada que el presupuesto <code>hubFanIn</code>, así que el recorrido no lo expandió. El símbolo sigue en la respuesta; lo que se detiene es el ascenso a través de él.</td><td>Sube <code>hubFanIn</code>, o pregunta con <code>callers</code> solo por ese símbolo.</td></tr>
+              <tr><td><code>caller-budget</code></td><td>Se agotó <code>expansions</code>, o un presupuesto de export detuvo el snapshot.</td><td>Sube el límite, o acota la petición con alcance.</td></tr>
+              <tr><td><code>unresolved-link</code></td><td>Un nombre que el índice no pudo resolver puede apuntar a un símbolo caminado.</td><td>Abre cada lugar y decide; tras una eliminación, cada lugar que aún lo nombra se rompe.</td></tr>
+              <tr><td><code>no-extractor</code></td><td>Un archivo que ye-ast no puede leer: una plantilla, una hoja de estilos, un lenguaje sin extractor.</td><td>Léelo tú cuando importe para la tarea.</td></tr>
+              <tr><td><code>not-exported</code></td><td>Una ruta que el snapshot dejó fuera (symlink, submódulo, ruta insegura).</td><td>Léela tú; no se leyó nada debajo.</td></tr>
+              <tr><td><code>deadline</code></td><td>Se acabó el tiempo antes de que la respuesta estuviera completa.</td><td>Pregunta otra vez; acota el alcance si se repite.</td></tr>
+              <tr><td><code>section</code></td><td>Una sección de una respuesta compuesta no se pudo producir.</td><td>El resto se mantiene; volver a preguntar puede completarla.</td></tr>
+              <tr><td><code>node-cap</code></td><td>Un recorrido se detuvo en un tope de nodos.</td><td>Acota el alcance o pregunta por menos símbolos.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="playground">
+        <div class="playground-controls">
+          <p class="mini-kicker">Construir un status</p>
+          <h3>Elige lo que vio el motor.</h3>
+          <label class="switch"><input type="checkbox" data-cut-toggle="depth"> un límite de profundidad detuvo el recorrido</label>
+          <label class="switch"><input type="checkbox" data-cut-toggle="hub"> un hub superó <code>hubFanIn</code></label>
+          <label class="switch"><input type="checkbox" data-cut-toggle="unresolved-link"> un nombre nunca se resolvió</label>
+          <label class="switch"><input type="checkbox" data-cut-toggle="no-extractor"> un archivo fuente no tiene extractor</label>
+          <label class="switch"><input type="checkbox" data-cut-toggle="not-exported"> una ruta quedó fuera del export</label>
+          <label class="switch"><input type="checkbox" id="fact-unknown"> el índice no se pudo abrir</label>
+          <button class="button small" type="button" id="fact-reset">Reiniciar</button>
+        </div>
+        <div class="playground-output">
+          <div class="output-head"><span>status</span><strong id="fact-status" class="pill">complete</strong></div>
+          <pre id="fact-json" class="code-block"></pre>
+          <p class="playground-note">Un fact partial puede nacer de un archivo que el cambio nunca tocó: cualquier fuente sin extractor es un corte. El fixture de Angular de abajo muestra exactamente eso.</p>
+        </div>
+      </div>
+    </section>
+
+    
+    <section class="doc-section" id="concept-rules">
+      
+      <div class="section-head">
+        <p class="kicker">Reglas del recorrido</p>
+        <h2>Qué es una dependencia y qué es un corte.</h2>
+        <p class="section-lede">El grafo muestra los módulos. Estas son las reglas que deciden qué aristas sigue un recorrido y qué puede ver la respuesta.</p>
+      </div>
+
+      <div class="bounds-help">
+        <h3>Los límites, y qué nombra cada uno</h3>
+        <dl>
+          <dt>profundidad</dt>
+          <dd>Cuántos saltos desde la semilla puede subir el recorrido. La semilla está en profundidad 0; sus llamadores directos en profundidad 1.</dd>
+          <dt>hub fan-in</dt>
+          <dd>El <strong>fan-in</strong> es el número de llamadores de tipo llamada que tiene un símbolo: la cuenta de aristas de llamada que apuntan a él, se hayan seguido o no. El <strong>hub fan-in</strong> es un presupuesto opcional sobre esa cuenta. Cuando un símbolo alcanzado tiene más llamadores de tipo llamada que el presupuesto, el recorrido no lo expande y emite un corte <code>hub</code> en ese símbolo. No es el número de llamadas que hace el símbolo, y no lo elimina de la respuesta: detiene el ascenso a través de una utilidad compartida que, de otro modo, arrastraría todo el repositorio.</dd>
+          <dt>expansiones</dt>
+          <dd>Cuántos símbolos alcanzados puede expandir el recorrido. Cuenta símbolos expandidos, no nodos alcanzados.</dd>
+          <dt>deadline</dt>
+          <dd>Un límite de tiempo de reloj. Un fact cortado por ese límite queda fuera de la promesa de determinismo y nunca se almacena.</dd>
+        </dl>
+      </div>
+      <div class="deep-dives">
+        <h3>Cuatro mecánicas que deciden la respuesta</h3>
+        <details>
+          <summary><span>01</span> El tipo declarante a la misma profundidad, y luego se detiene <em>ADR-0017</em></summary>
+          <div class="details-body">
+            <p>Una ruta nombra una clase, no un método. Cuando el recorrido alcanza un método, también alcanza el tipo que lo declara, a la misma profundidad y con confianza 1 (<code>walk.ts:62-67</code>). Ese tipo se expande solo por aristas de tipo completo: <code>extends</code>, <code>implements</code> y <code>uses-component</code> / <code>uses-directive</code> / <code>uses-pipe</code> de Angular. No se expande hacia quien lo inyecta o importa; de lo contrario, un solo miembro alcanzado arrastraría el mundo.</p>
+            <p class="ref"><code>src/core/domain/impact/edge-policy.ts:33-39</code> · <code>src/core/application/impact/inbound-edges.ts:60-70</code></p>
+          </div>
+        </details>
+        <details>
+          <summary><span>02</span> Dispatch de interfaz, en ambos sentidos <em>derivado por ye-ast</em></summary>
+          <div class="details-body">
+            <p>Los puentes <code>interface-impl</code> de codegraph se detienen en silencio después de 40 por par clase-supertipo, así que ye-ast deriva los suyos: un método y el método del mismo nombre de un tipo por encima, para cada nodo alcanzado; hacia abajo solo cuando la declaración alcanzada es el contrato que cambió, porque una declaración cambiada cambia lo que sus implementaciones deben cumplir. Un camino que subió nunca vuelve a bajar a un hermano.</p>
+            <p class="ref"><code>src/core/application/impact/inbound-edges.ts:126-137</code> · <code>src/core/domain/impact/edge-policy.ts:50-55</code></p>
+          </div>
+        </details>
+        <details>
+          <summary><span>03</span> El problema de <code>this.field.member</code> <em>origen de campo</em></summary>
+          <div class="details-body">
+            <p><code>this.auth.login()</code> es una referencia sin resolver, no una arista de llamada. Si la clase declara <code>auth</code> con un origen fijo, ye-ast resuelve el uso: un campo que contiene el tipo del miembro convierte el código en llamador; un campo que contiene un tipo no relacionado lo resuelve como ningún uso; un campo que contiene un subtipo lo deja sin resolver. Por eso el recorrido puede seguir dispatch real sin convertir cada método del mismo nombre en llamador.</p>
+            <p class="ref"><code>src/core/application/impact/inbound-edges.ts:211-241</code> · <code>src/core/domain/impact/edge-policy.ts:40-45</code></p>
+          </div>
+        </details>
+        <details>
+          <summary><span>04</span> La confianza es un camino de máxima confianza, no un conteo <em>max-min</em></summary>
+          <div class="details-body">
+            <p>Un camino es tan seguro como su arista menos segura. El recorrido calcula la arista más fuerte entre las más débiles desde cualquier semilla sobre todos los caminos; una arista heurística sin puntuación cuenta 0.3. En la ejecución real: <code>1</code> en la semilla, <code>0.9</code> en <code>login</code>, <code>0.85</code> en <code>onSubmit</code>. El fan-in es otra cosa: cuenta los llamadores de tipo llamada, se hayan seguido o no, para que un renderizador pueda clasificar o colapsar hubs sin que el fact los corte.</p>
+            <p class="ref"><code>src/core/application/impact/walk.ts:139-153</code> · <code>src/core/domain/impact/edge-policy.ts:77-101</code></p>
+          </div>
+        </details>
+
+        <details class="policy-details">
+          <summary><span>05</span> La política de aristas completa, fila por fila <em>la tabla que lee el recorrido</em></summary>
+          <div class="details-body">
+            <div class="table-wrap">
+              <table class="data-table stack-mobile">
+                <thead><tr><th>Arista hacia un nodo alcanzado</th><th>Seguida</th><th>Por qué</th></tr></thead>
+                <tbody>
+                  <tr><td><code>calls</code>, <code>instantiates</code> desde una función, método, clase, componente, constante, variable o inicializador de campo</td><td>sí</td><td>El comportamiento depende del destino.</td></tr>
+                  <tr><td>Un <code>this.&lt;member&gt;</code> o <code>this.&lt;member&gt;.&lt;rest&gt;</code> sin resolver dentro de la clase que lo declara</td><td>sí</td><td>El propio código de la clase usa el miembro.</td></tr>
+                  <tr><td><code>references</code> hacia una función, método, valor o clase</td><td>sí</td><td>La fuente lo usa.</td></tr>
+                  <tr><td><code>references</code> hacia una interfaz o type alias (un DTO)</td><td>sí</td><td>Un cambio de tipo rompe a sus usuarios; qayaba no sigue estas.</td></tr>
+                  <tr><td><code>extends</code>, <code>implements</code> hacia una clase o interfaz</td><td>sí</td><td>Un subtipo depende de su supertipo.</td></tr>
+                  <tr><td>Método de interfaz → método de implementación del mismo nombre, derivado por ye-ast</td><td>sí, ambos sentidos</td><td>Dispatch en tiempo de ejecución; los puentes <code>interface-impl</code> de codegraph se detienen en silencio después de 40 por par.</td></tr>
+                  <tr><td>Un método alcanzado → su tipo, a la misma profundidad; desde ese tipo solo <code>extends</code>/<code>implements</code> y <code>uses-*</code></td><td>sí</td><td>Las rutas y componentes nombran la clase, no el método; ADR-0017 conserva la clase y evita que se expanda hacia los injectors.</td></tr>
+                  <tr><td><code>imports</code> hacia un nodo de archivo</td><td>no</td><td>Un nodo de archivo no lleva a ningún lado.</td></tr>
+                  <tr><td><code>imports</code> hacia un símbolo</td><td>sí cuando se usa</td><td>Solo cuando el código top-level del archivo que importa lo usa.</td></tr>
+                  <tr><td>Una clase inyectable sin llamador → el código top-level de sus importers</td><td>sí</td><td>Inyección sin una llamada estática.</td></tr>
+                  <tr><td><code>injects</code>, <code>uses-component</code>, <code>uses-directive</code>, <code>uses-pipe</code></td><td>sí, confianza 1</td><td>Se leen de las fuentes Angular, no se adivinan.</td></tr>
+                  <tr><td><code>navigates</code></td><td>no</td><td>Un router link es navegación, no dependencia.</td></tr>
+                  <tr><td>Las aristas <code>angular-template</code> y <code>angular-event</code> de codegraph</td><td>no</td><td>ADR-0014; las relaciones A2/A4 propias de ye-ast traen las suyas.</td></tr>
+                  <tr><td>Cualquier arista desde un archivo de test</td><td>no</td><td>Los tests no son llamadores; el alcance declarado lo dice.</td></tr>
+                  <tr><td>Contención</td><td>no</td><td>Estructura, no dependencia.</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <p class="ref">La tabla es parte de la versión del producer, así que un cambio en ella invalida facts. <code>src/core/domain/impact/edge-policy.ts:14-58</code> · <code>docs/architecture/rfc/0010-impact-queries.md:88-109</code></p>
+          </div>
+        </details>
+      </div>
+    </section>
+    <section class="doc-section" id="concept-sim">
+      <div class="simulator" id="simulator">
+        <div class="sim-head">
+          <div>
+            <p class="mini-kicker">Simulador del recorrido</p>
+            <h3>La política, en un repositorio de juguete.</h3>
+            <p>El motor no se ejecuta en esta página. Esto es un modelo fiel del recorrido sobre un grafo pequeño: la misma política de aristas, la expansión de tipos declarantes, la confianza y los cortes. Cada regla que aplica está citada abajo.</p>
+          </div>
+          <div class="sim-scenarios" role="group" aria-label="Escenarios de semilla">
+            <button class="chip is-active" type="button" data-scenario="token">cambiar validateToken</button>
+            <button class="chip" type="button" data-scenario="credentials">cambiar el tipo Credentials</button>
+            <button class="chip" type="button" data-scenario="chart">cambiar ChartComponent</button>
+            <button class="chip" type="button" data-scenario="guard">cambiar AuthGuard.canActivate</button>
+            <button class="chip" type="button" data-scenario="logger">llamadores de Logger.log</button>
+            <button class="chip" type="button" data-scenario="lazy">carga computada</button>
+          </div>
+        </div>
+
+        <div class="sim-controls">
+          <label class="field">profundidad <input type="number" id="sim-depth" min="1" max="9" inputmode="numeric" placeholder="∞"></label>
+          <label class="field">hub fan-in <input type="number" id="sim-hub" min="1" max="99" inputmode="numeric" placeholder="∞"></label>
+          <label class="field">expansiones <input type="number" id="sim-exp" min="1" max="99" inputmode="numeric" placeholder="∞"></label>
+          <label class="switch"><input type="checkbox" id="sim-references" checked> seguir <code>references</code></label>
+          <label class="switch"><input type="checkbox" id="sim-relations" checked> seguir relaciones Angular</label>
+          <label class="switch" title="El motor real nunca sigue aristas desde archivos de test."><input type="checkbox" id="sim-uncovered"> añadir un archivo sin extractor al cambio</label>
+          <div class="sim-actions">
+            <button class="button small primary" type="button" id="sim-run">Ejecutar</button>
+            <button class="button small" type="button" id="sim-step">Paso</button>
+            <button class="button small" type="button" id="sim-reset">Reiniciar</button>
+          </div>
+          <p class="sim-help"><strong>hub fan-in</strong> es un presupuesto sobre el fan-in: el número de llamadores de tipo llamada que puede tener un símbolo antes de que el recorrido deje de expandirlo y emita un corte <code>hub</code>. Déjalo vacío para no aplicar límite. La <strong>profundidad</strong> cuenta saltos desde la semilla; las <strong>expansiones</strong> cuentan símbolos expandidos.</p>
+        </div>
+
+        <div class="sim-legend" aria-label="Leyenda">
+          <span><i class="dot seed"></i> semilla</span>
+          <span><i class="dot reached"></i> alcanzado</span>
+          <span><i class="dot unreached"></i> no alcanzado</span>
+          <span><i class="line followed"></i> seguida</span>
+          <span><i class="line rejected"></i> archivo de test (rechazada)</span>
+          <span><i class="line ignored"></i> navegación / importación de archivo (ignorada)</span>
+          <span><i class="dot entry"></i> punto de entrada</span>
+          <span class="legend-note">Las flechas apuntan en el sentido de la llamada. El recorrido va en sentido inverso, contra ellas.</span>
+        </div>
+
+        <div class="sim-stage">
+          <div class="sim-canvas">
+          <svg id="walk-svg" viewBox="0 0 1000 600" role="img" aria-labelledby="walk-title walk-desc">
+            <title id="walk-title">Recorrido de impact sobre el repositorio de juguete</title>
+            <desc id="walk-desc">Un grafo de símbolos. El recorrido empieza en la semilla y sube hacia sus llamadores, nivel por nivel.</desc>
+            <defs>
+              <marker id="sim-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                <path d="M 0 0 L 10 5 L 0 10 z" class="sim-arrow-head"></path>
+              </marker>
+            </defs>
+            <g id="sim-edges"></g>
+            <g id="sim-routes"></g>
+            <g id="sim-nodes"></g>
+            <g id="sim-unreached-label"></g>
+          </svg>
+          </div>
+
+          <aside class="sim-readout" aria-live="polite">
+            <div class="readout-top">
+              <span class="mini-kicker">respuesta</span>
+              <strong id="sim-status" class="pill ok">complete</strong>
+            </div>
+            <dl class="readout-stats">
+              <div><dt>profundidad</dt><dd id="sim-depth-out">0</dd></div>
+              <div><dt>expansiones</dt><dd id="sim-expansions-out">0</dd></div>
+              <div><dt>puntos de entrada</dt><dd id="sim-entry-out">0</dd></div>
+              <div><dt>cortes</dt><dd id="sim-cuts-out">0</dd></div>
+            </dl>
+            <div id="sim-cuts" class="readout-cuts"></div>
+            <div id="sim-entrypoints" class="readout-entrypoints"></div>
+          </aside>
+        </div>
+
+        <div class="sim-unreached" id="sim-unreached" aria-live="polite"></div>
+        <details class="sim-policy" id="sim-policy-wrap">
+          <summary><span>traza de política</span><em id="sim-policy-count">aristas que el recorrido no siguió</em></summary>
+          <div class="details-body sim-policy-list" id="sim-policy"></div>
+        </details>
+
+        <div class="sim-table-wrap">
+          <table class="data-table sim-table">
+            <caption>Símbolos alcanzados, en el orden en que el fact real los escribe</caption>
+            <thead><tr><th>prof.</th><th>símbolo</th><th>archivo</th><th>confianza</th><th>fan-in</th><th>vía</th></tr></thead>
+            <tbody id="sim-table"></tbody>
+          </table>
+        </div>
+
+        <p class="sim-note">El grafo de juguete es ilustrativo; las reglas no. Solo se dibujan los símbolos alcanzados: la tira de abajo lista el resto, y la traza de política nombra cada arista que el recorrido rechazó y por qué. El recorrido expande cada símbolo una vez, entra al tipo declarante de un método alcanzado a la misma profundidad y sigue solo las filas de la política de aristas. Un archivo de test nunca es llamador. La navegación no es dependencia. Una importación de archivo no lleva a ningún lado.</p>
+      </div>
+
+      
+    </section>
+    <section class="doc-section" id="concept-runs">
+      <div class="real-runs">
+        <div class="real-head reveal">
+          <p class="mini-kicker">Ejecución de referencia</p>
+          <h3>Dos ejecuciones reales, capturadas de este checkout.</h3>
+          <p>Los dos fixtures se crearon fuera del worktree, se leyeron como <code>untrusted</code> y se consultaron con este build. Los valores de abajo salen del JSON, no están inventados.</p>
+        </div>
+
+        <article class="run-card reveal" data-run="complete">
+          <header>
+            <div><p class="run-kind">TypeScript plano</p><h4>completo</h4></div>
+            <span class="pill ok">complete</span>
+          </header>
+          <pre class="command small">ye-ast impact &lt;repo&gt; --base HEAD~1</pre>
+          <p class="run-note">La semilla es <code>validateToken</code>. El recorrido sube hasta <code>AuthService.login</code> y <code>AuthController.loginHandler</code>; las clases se unen a la misma profundidad que sus métodos. En este fixture no hay puntos de entrada, y eso no es un fallo.</p>
+          <div class="run-table" data-render="complete"><div class="fact-list">
+      <div class="fact-row seed">
+        <span class="fact-depth">0</span>
+        <span class="fact-main"><strong>validateToken</strong><span title="src/auth/token.ts">token.ts</span><span>fan-in 1</span></span>
+        <span class="fact-conf">1</span>
+      </div>
+      <div class="fact-row">
+        <span class="fact-depth">1</span>
+        <span class="fact-main"><strong>AuthService</strong><span title="src/auth/auth.service.ts">auth.service.ts</span><span>fan-in 0</span></span>
+        <span class="fact-conf">0.9</span>
+      </div>
+      <div class="fact-row">
+        <span class="fact-depth">1</span>
+        <span class="fact-main"><strong>login</strong><span title="src/auth/auth.service.ts">auth.service.ts</span><span>fan-in 1</span></span>
+        <span class="fact-conf">0.9</span>
+      </div>
+      <div class="fact-row">
+        <span class="fact-depth">2</span>
+        <span class="fact-main"><strong>AuthController</strong><span title="src/auth/auth.controller.ts">auth.controller.ts</span><span>fan-in 0</span></span>
+        <span class="fact-conf">0.85</span>
+      </div>
+      <div class="fact-row">
+        <span class="fact-depth">2</span>
+        <span class="fact-main"><strong>loginHandler</strong><span title="src/auth/auth.controller.ts">auth.controller.ts</span><span>fan-in 0</span></span>
+        <span class="fact-conf">0.85</span>
+      </div></div></div>
+          <p class="run-foot">snapshot <code>4e00fd9b293a</code> · merge base <code>8dba227feee2</code> · trust <code>untrusted</code></p>
+        </article>
+
+        <article class="run-card reveal" data-run="partial">
+          <header>
+            <div><p class="run-kind">Rutas Angular</p><h4>parcial, y útil</h4></div>
+            <span class="pill warn">partial</span>
+          </header>
+          <pre class="command small">ye-ast impact &lt;repo&gt; --base HEAD~1</pre>
+          <p class="run-note">El mismo cambio, ahora con una tabla de rutas. El componente <code>LoginComponent</code> se alcanza a través de <code>onSubmit</code>, y el join hace aparecer <code>/login</code>. El cut viene del snapshot: un archivo <code>.rb</code> no tiene extractor. El cambio nunca lo tocó.</p>
+          <div class="run-table" data-render="partial"><div class="fact-list">
+      <div class="fact-row seed">
+        <span class="fact-depth">0</span>
+        <span class="fact-main"><strong>validateToken</strong><span title="src/auth/token.ts">token.ts</span><span>fan-in 1</span></span>
+        <span class="fact-conf">1</span>
+      </div>
+      <div class="fact-row">
+        <span class="fact-depth">1</span>
+        <span class="fact-main"><strong>AuthService</strong><span title="src/auth/auth.service.ts">auth.service.ts</span><span>fan-in 0</span></span>
+        <span class="fact-conf">0.9</span>
+      </div>
+      <div class="fact-row">
+        <span class="fact-depth">1</span>
+        <span class="fact-main"><strong>login</strong><span title="src/auth/auth.service.ts">auth.service.ts</span><span>fan-in 1</span></span>
+        <span class="fact-conf">0.9</span>
+      </div>
+      <div class="fact-row">
+        <span class="fact-depth">2</span>
+        <span class="fact-main"><strong>LoginComponent</strong><span title="src/ui/login.component.ts">login.component.ts</span><span>fan-in 0</span></span>
+        <span class="fact-conf">0.85</span>
+      </div>
+      <div class="fact-row">
+        <span class="fact-depth">2</span>
+        <span class="fact-main"><strong>onSubmit</strong><span title="src/ui/login.component.ts">login.component.ts</span><span>fan-in 0</span></span>
+        <span class="fact-conf">0.85</span>
+      </div>
+        <div class="fact-row entry">
+          <span class="fact-depth">2</span>
+          <span class="fact-main"><strong>/login</strong><span title="src/ui/login.component.ts">login.component.ts</span></span>
+          <span class="fact-conf">0.85</span>
+        </div></div></div>
+          <p class="run-foot">snapshot <code>2dff4ecee21a</code> · merge base <code>d2a9f2b9368b</code> · cut <code>no-extractor</code> en <code>src/legacy/report.rb</code></p>
+        </article>
+      </div>
+      <details class="fixture">
+        <summary><span>el fixture</span><em>el código detrás de la ejecución</em></summary>
+        <div class="fixture-body">
+          <div class="fixture-grid">
+            <div>
+              <p class="fixture-file">src/auth/token.ts</p>
+              <pre><code>export function validateToken(token: string): boolean {
+  return token.length &gt; 40; // cambiado: era &gt; 20
+}</code></pre>
+            </div>
+            <div>
+              <p class="fixture-file">src/auth/auth.service.ts</p>
+              <pre><code>export class AuthService {
+  login(token: string): boolean {
+    return validateToken(token);
+  }
+}</code></pre>
+            </div>
+            <div>
+              <p class="fixture-file">src/ui/login.component.ts</p>
+              <pre><code>@Component({ selector: "app-login", … })
+export class LoginComponent {
+  constructor(private readonly auth: AuthService) {}
+
+  onSubmit(token: string): boolean {
+    return this.auth.login(token);
+  }
+}</code></pre>
+            </div>
+            <div>
+              <p class="fixture-file">src/app.routes.ts</p>
+              <pre><code>export const routes = [
+  { path: "login", component: LoginComponent },
+  { path: "dashboard", component: DashboardComponent,
+    canActivate: [AuthGuard] },
+];</code></pre>
+            </div>
+          </div>
+          <p class="fixture-note">Este es el fixture de Angular detrás de la ejecución partial; la ejecución plana solo cambia el caller, un <code>AuthController</code> en vez del componente. El cambio toca una línea de <code>token.ts</code>. El recorrido sube tres saltos, y el join convierte el componente en <code>/login</code>. El archivo de test que también llama a <code>login</code> está en el repositorio, pero nunca es llamador: los tests quedan fuera del recorrido por política.</p>
+        </div>
+      </details>
+
+      
+    </section>
+    <section id="trust" class="doc-section">
+      <div class="section-head">
+        <p class="kicker">Confianza y snapshots</p>
+        <h2>Dos modos, una regla: el repositorio nunca eleva su propio confianza.</h2>
+        <p class="section-lede">El trust describe el contenido del repositorio, nunca la máquina. Se declara fuera del repositorio: un host lo hace a través de la librería o del protocolo, un usuario a través de <code>ye-ast install</code> o de un flag. Sin declaración, el CLI y el servidor MCP corren <code>untrusted</code>.</p>
+      </div>
+
+      <div class="trust-lanes">
+        <article class="lane" data-trust="untrusted">
+          <header><span class="pill">default</span><h3>untrusted</h3></header>
+          <p>Lee solo un snapshot exportado desde git en un sha, nunca el repositorio en sí.</p>
+          <ol class="lane-steps">
+            <li><span>01</span> Resuelve la revisión a un sha completo.</li>
+            <li><span>02</span> <code>ls-tree</code> lista el árbol; solo se seleccionan los archivos dentro del scope.</li>
+            <li><span>03</span> <code>cat-file --batch</code> streamea cada blob a un directorio scratch.</li>
+            <li><span>04</span> Los extractores y codegraph leen el <em>export</em>, no el checkout.</li>
+            <li><span>05</span> El fact registra el sha y el digest de contenido.</li>
+          </ol>
+          <ul class="lane-invariants">
+            <li>No se ejecuta código del repositorio.</li>
+            <li>No se honra ningún manifiesto, <code>.gitignore</code>, config de engine ni índice preconstruido del repositorio.</li>
+            <li>Sin symlinks, sin red.</li>
+          </ul>
+        </article>
+
+        <article class="lane" data-trust="trusted">
+          <header><span class="pill ok">declarado</span><h3>trusted</h3></header>
+          <p>Añade el working tree y el refresh de remotes, siempre hacia el store propio de ye-ast.</p>
+          <ol class="lane-steps">
+            <li><span>01</span> El mismo camino de export en un sha.</li>
+            <li><span>02</span> <code>--live</code> sustituye <code>head</code>/<code>revision</code> por el working tree.</li>
+            <li><span>03</span> git lista rutas con <code>ls-files -z --cached --others --exclude-standard</code>.</li>
+            <li><span>04</span> ye-ast las copia y hashea en su espejo; codegraph lee el espejo.</li>
+            <li><span>05</span> Un lock, un state file y <code>sync({ paths })</code> mantienen el grafo de esos bytes.</li>
+          </ol>
+          <ul class="lane-invariants">
+            <li><code>--live</code> se rechaza bajo <code>untrusted</code> con <code>live-requires-trusted</code>.</li>
+            <li>Las ediciones se copian, nunca se hard-linkean.</li>
+            <li>Una respuesta stale lo dice por stderr; el fact no cambia.</li>
+          </ul>
+        </article>
+      </div>
+
+      <div class="callout">
+        <p><strong>La regla de live:</strong> un fact live describe bytes que ye-ast copió y hasheó, y el grafo que lee es el grafo de esos mismos bytes. El motor nunca camina el repositorio.</p>
+        <p class="ref"><code>docs/architecture/rfc/0010-impact-queries.md</code> “Live head” · <code>src/core/application/snapshot/read-snapshot.ts:32-40</code></p>
+      </div>
+
+      <div class="invariants">
+        <div><p class="mini-kicker">Invariantes</p><h3>Lo que nunca se mueve</h3></div>
+        <ul>
+          <li><strong>Solo lectura hacia los agentes.</strong> El servidor MCP recibe solo query families de lectura, así que una escritura es imposible por tipo (<code>src/mcp/server.ts:21-31</code>).</li>
+          <li><strong>Determinismo.</strong> Salida ordenada, rutas relativas al repositorio, sin ids internos del índice, el snapshot en cada fact.</li>
+          <li><strong>Redaction antes de la salida.</strong> Los patrones siempre; los secretos by-value solo en el proceso que ya los tiene.</li>
+          <li><strong>Fallar fuerte, degradar explícitamente.</strong> Un fallo tipado o un <code>unknown</code>/<code>partial</code> explícito, nunca un resultado vacío.</li>
+          <li><strong>codegraph solo a través de su adaptador.</strong> El SQL crudo vive solo ahí, con versión comprobada; la telemetría siempre está apagada y su shim de CLI nunca se llama.</li>
+        </ul>
+      </div>
+    </section>
+
+    
+    <section id="surfaces" class="doc-section">
+      <div class="section-head">
+        <p class="kicker">Superficies</p>
+        <h2>Tres formas de entrar, un solo conjunto de decisiones.</h2>
+        <p class="section-lede">Un adaptador de entrada convierte una petición externa en una llamada y da forma a la respuesta. Nunca alcanza un adaptador ni un caso de uso directamente; composición inyecta las query families.</p>
+      </div>
+
+      <div class="surface-diagram" aria-hidden="true">
+        <div class="surface-node"><strong>CLI</strong><span>map · impact · llamadores · importers · install</span></div>
+        <div class="surface-node"><strong>MCP</strong><span>ye_ast_entrypoints · impact · ye_ast_callers · ye_ast_importers · workspace</span></div>
+        <div class="surface-node"><strong>protocol</strong><span>JSON-RPC 2.0 · un mensaje por línea</span></div>
+        <div class="surface-merge">⟶</div>
+        <div class="surface-core"><strong>las mismas query families</strong><span>EntrypointQueries · ImpactQueries · WorkspaceQueries</span></div>
+      </div>
+
+      <div class="table-wrap">
+        <table class="data-table">
+          <caption>Puntos de entrada</caption>
+          <thead><tr><th>Superficie</th><th>Qué expone</th><th>Dónde</th></tr></thead>
+          <tbody>
+            <tr><td><code>ye-ast map</code></td><td>Los puntos de entrada de una revisión; <code>--live</code> para un working tree trusted.</td><td><code>src/cli/main.ts:167-170</code></td></tr>
+            <tr><td><code>ye-ast impact</code></td><td>El cambio desde el merge base hasta head; límite; alcance.</td><td><code>src/cli/main.ts:171-174</code></td></tr>
+            <tr><td><code>ye-ast callers</code></td><td>Alcanzabilidad inversa desde símbolos o rangos de líneas.</td><td><code>src/cli/main.ts:175-178</code></td></tr>
+            <tr><td><code>ye-ast importers</code></td><td>Importers, users y namers sin resolver por archivo.</td><td><code>src/cli/main.ts:179-182</code></td></tr>
+            <tr><td><code>ye-ast install</code></td><td>Escribe el confianza record, el exclude local y la fixed layer; imprime el registro MCP.</td><td><code>src/core/application/install/install.ts:23-45</code></td></tr>
+            <tr><td><code>ye-ast mcp</code></td><td>Servidor MCP stdio atado a un repositorio; tools de solo lectura.</td><td><code>src/composition/mcp.ts</code></td></tr>
+            <tr><td><code>ye-ast serve</code></td><td>El protocolo de query sobre stdio; stdout solo lleva líneas de protocolo.</td><td><code>src/protocol/query-server.ts</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="mcp-note">
+        <p><strong>Solo lectura por tipo.</strong> <code>McpDeps</code> solo contiene <code>EntrypointQueries</code>, <code>ImpactQueries</code>, <code>WorkspaceQueries</code> y <code>WorkspaceImpactQueries</code>. No hay ningún método de escritura al que llamar, así que un agente no puede alcanzar uno por error.</p>
+        <p>El servidor MCP también entrega la guía de cortes como instrucciones: el agente aprende qué hacer en cada corte, no solo que existe.</p>
+      </div>
+    </section>
+
+    
+    <section class="doc-section" id="concept-glossary">
+      
+      <div class="section-head">
+        <p class="kicker">Glosario</p>
+        <h2>Términos que usan el grafo y el fact.</h2>
+        <p class="section-lede">Busca un término; las etiquetas técnicas se quedan en forma de código y la definición las explica en lenguaje llano.</p>
+      </div>
+      <div class="glossary-toolbar">
+        <label for="glossary-filter">Buscar</label>
+        <input id="glossary-filter" type="search" placeholder="fan-in, cut, semilla, snapshot…">
+        <span id="glossary-count"></span>
+      </div>
+      <dl class="glossary-grid" id="glossary-grid"></dl>
+    </section>
+    <section id="sources" class="doc-section">
+      <div class="section-head">
+        <p class="kicker">Fuentes y límites</p>
+        <h2>Fuentes y límites.</h2>
+        <p class="section-lede">Evidencia, comandos de reproducción y límites de la respuesta. Los enlaces apuntan al código y a los registros de decisión.</p>
+      </div>
+
+      
+
+      <div class="table-wrap evidence-table">
+        <table class="data-table stack-mobile">
+          <caption>Evidencia de las afirmaciones materiales</caption>
+          <thead><tr><th>Afirmación</th><th>Dónde se decide</th></tr></thead>
+          <tbody>
+            <tr><td>La regla de dependencias y la tabla de placement</td><td><code>AGENTS.md</code> · <code>.dependency-cruiser.cjs</code> · <code>docs/architecture/rfc/0001-architecture-and-layers.md</code></td></tr>
+            <tr><td>El cambio es <code>merge-base(base, head)..head</code></td><td><code>src/core/application/impact/impact-queries.ts:260-267</code> · RFC-0010 “The change”</td></tr>
+            <tr><td>El diff fija cada opción que cambia los hunks</td><td><code>src/core/adapters/git/git-vcs.adapter.ts:276-288</code></td></tr>
+            <tr><td>Una ejecución aislada de git vacía la config del usuario y del sistema</td><td><code>src/core/adapters/git/git-vcs.adapter.ts:404-412</code></td></tr>
+            <tr><td>Semillas: lines, top-level, resource, requested</td><td><code>src/core/domain/change/seeds.ts:53-87</code> · RFC-0010 “Seeds”</td></tr>
+            <tr><td>La tabla de política de aristas</td><td><code>src/core/domain/impact/edge-policy.ts:14-58</code></td></tr>
+            <tr><td>Expansión de tipo declarante y su parada</td><td><code>src/core/application/impact/walk.ts:62-67</code> · ADR-0017</td></tr>
+            <tr><td>Puentes de interfaz, en ambos sentidos</td><td><code>src/core/application/impact/inbound-edges.ts:126-137</code></td></tr>
+            <tr><td>Resolución de origen de campo</td><td><code>src/core/application/impact/inbound-edges.ts:211-241</code></td></tr>
+            <tr><td>La confianza es un camino max-min: la arista más débil de la mejor ruta</td><td><code>src/core/application/impact/walk.ts:139-153</code></td></tr>
+            <tr><td>El único join: archivo, span, simple name</td><td><code>src/core/domain/shared/code-node.ts:20-27</code></td></tr>
+            <tr><td>Unión de puntos de entrada, guardas, manejadores unknown</td><td><code>src/core/domain/impact/reached-entrypoints.ts:20-44</code></td></tr>
+            <tr><td>Cortes y el estado del fact</td><td><code>src/core/domain/impact/impact-cuts.ts</code> · <code>src/core/domain/impact/impact-fact.ts:66-72</code></td></tr>
+            <tr><td>La fact base y sus inputs</td><td><code>src/core/application/snapshot/read-snapshot.ts:116-134</code> · <code>src/core/domain/shared/fact.ts:120-142</code></td></tr>
+            <tr><td>El confianza se lee fuera del repositorio</td><td><code>src/core/application/snapshot/read-snapshot.ts:32-40</code> · ADR-0010</td></tr>
+            <tr><td>Live head, espejo, lock, sync</td><td><code>docs/architecture/rfc/0010-impact-queries.md</code> “Live head” · <code>src/core/application/live/live-tree.ts</code></td></tr>
+            <tr><td>El servidor MCP es de solo lectura por tipo</td><td><code>src/mcp/server.ts:21-31</code></td></tr>
+            <tr><td>La guía de cortes que recibe un agente</td><td><code>src/mcp/server.ts:39-50</code></td></tr>
+            <tr><td>El protocolo de query es JSON-RPC 2.0 sobre stdio</td><td><code>src/protocol/query-server.ts</code> · ADR-0011</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="limits">
+        <div>
+          <p class="mini-kicker">Límites de esta página</p>
+          <h3>Bordes honestos</h3>
+        </div>
+        <ul>
+          <li>El simulador modela el algoritmo; no es el motor. Usa las mismas filas de política sobre un grafo más pequeño, pero codegraph, el compilador de TypeScript y git no se ejecutan.</li>
+          <li>Las ejecuciones reales vienen de dos repositorios fixture creados para esta página. No forman parte de la suite de tests y no están commiteados.</li>
+          <li>La página cubre las superficies del MVP (librería, CLI, MCP, protocolo). Hooks y el daemon son posteriores; el atlas los marca “después” a propósito.</li>
+          <li>Los números de línea son de este checkout (2026-11-02, versión 0.2.0, schema 0.4.0). Un refactor los mueve.</li>
+        </ul>
+      </div>
+
+      <div class="reproduce">
+        <p class="mini-kicker">Reproducir la evidencia</p>
+        <pre class="code-block"># los dos fixtures son repositorios git normales
+node --import tsx src/composition/main.ts map      &lt;fixture&gt;
+node --import tsx src/composition/main.ts impact   &lt;fixture&gt; --base HEAD~1
+node --import tsx src/composition/main.ts callers  &lt;fixture&gt; src/auth/token.ts:validateToken
+node --import tsx src/composition/main.ts importers &lt;fixture&gt; src/auth/token.ts
+
+# la puerta de arquitectura
+npm run check</pre>
+      </div>
+
+      <footer class="page-footer">
+        <p><strong>ye-ast</strong> · motor determinista de verdad de código · Apache-2.0</p>
+        <p>Página construida desde el código, no desde una descripción del código. <a href="#concepts">Volver arriba ↑</a></p>
+      </footer>
+    </section>
+  
+  </div>
+</section>
+
+<noscript>Este explorador dibuja el grafo con JavaScript. Actívalo para usar el grafo y los flujos.</noscript>
+<script src="modules.en.js"></script>
+<script src="modules.es.js"></script>
+<script src="data.js"></script>
+<script src="sim-ui.js"></script>
+<script src="glossary.js"></script>
+<script src="content.es.js"></script>
+<script src="graph.js"></script>
+<script src="concepts.js"></script>
+<script src="simulator.js"></script>
+</body>
+</html>
