@@ -102,7 +102,7 @@ function setup(options: Options = {}) {
     reader: { read: async () => options.sources ?? [] },
     extractor: { extract: async () => [] },
     angular: { read: async () => options.declarations ?? [] },
-    relations: { extract: async () => ({ relations: options.relations ?? [], fields: options.fields ?? [] }) },
+    relations: { extract: async () => ({ relations: options.relations ?? [], fields: options.fields ?? [], locals: [] }) },
     dynamicLoads: { extract: async () => options.loads ?? [] },
     graph,
     ...(options.cache && {

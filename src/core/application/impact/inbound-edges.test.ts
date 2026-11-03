@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { relation, type RelationKind, type Relation, type SymbolRef } from "../../domain/relations/relation.ts";
+import type { LocalOrigin } from "../../domain/relations/field-origin.ts";
 import type { GraphSymbol } from "../../ports/code-graph.port.ts";
 import { createInboundEdges, type InboundEdges, type SettledReference } from "./inbound-edges.ts";
 import { fakeCodeGraph, fakeNode, type FakeEdge, type FakeNode, type FakeUnresolved } from "./fake-code-graph.testing.ts";
@@ -23,9 +24,10 @@ function setup(
   relations: readonly Relation[] = [],
   unresolved: readonly FakeUnresolved[] = [],
   settled: readonly SettledReference[] = [],
+  locals: readonly LocalOrigin[] = [],
 ): Setup {
   const graph = fakeCodeGraph(nodes, edges, unresolved);
-  const inbound = createInboundEdges(graph, isTestFile, relations, [], settled);
+  const inbound = createInboundEdges(graph, isTestFile, relations, [], settled, locals);
   const symbol = (id: string): GraphSymbol => {
     const [found] = graph.symbolsByIds([id as GraphSymbol["id"]]);
     assert.ok(found, id);
@@ -397,4 +399,36 @@ test("the walk expands a settled reference, so the caller of the new caller is r
       ["second", 2],
     ],
   );
+});
+
+test("a call on a local a function takes from inject() is a caller of the method it names, at its line", () => {
+  const owner: SymbolRef = { path: B, symbol: "guard", line: 5 };
+  const s = setup(
+    [fakeNode("svc", "class", A, 1, 50, "Svc"), fakeNode("target", "method", A, 10, 12, "list"), fakeNode("guard", "function", B, 5, 20, "guard")],
+    [{ from: "svc", to: "target", kind: "contains" }],
+    [],
+    [{ from: "guard", name: "orders.list", kind: "calls", file: B, line: 7 }],
+    [],
+    [{ owner, local: "orders", holds: { class: { path: A, symbol: "Svc", line: 1 } } }],
+  );
+
+  assert.deepEqual(s.scored("target"), [["guard", 1, undefined]]);
+  assert.deepEqual(s.inbound.callersOf(s.symbol("target"), false)[0]?.lines, [7]);
+});
+
+test("a local name two owners of one file share is not settled: the place keeps its cut", () => {
+  const s = setup(
+    [fakeNode("svc", "class", A, 1, 50, "Svc"), fakeNode("target", "method", A, 10, 12, "list"), fakeNode("one", "function", B, 5, 8, "one"), fakeNode("two", "function", B, 12, 15, "two")],
+    [{ from: "svc", to: "target", kind: "contains" }],
+    [],
+    [{ from: "one", name: "orders.list", kind: "calls", file: B, line: 7 }],
+    [],
+    [
+      { owner: { path: B, symbol: "one", line: 5 }, local: "orders", holds: { class: { path: A, symbol: "Svc", line: 1 } } },
+      { owner: { path: B, symbol: "two", line: 12 }, local: "orders", holds: { class: { path: A, symbol: "Svc", line: 1 } } },
+    ],
+  );
+
+  assert.deepEqual(s.callers("target"), []);
+  assert.deepEqual(s.inbound.settledUses().size, 0);
 });

@@ -2,7 +2,7 @@ import { posix } from "node:path";
 import ts from "typescript";
 import { isTypeScriptSource } from "../../domain/languages/typescript.ts";
 import type { AngularClass, Operand, TemplateSource } from "../../domain/relations/angular-class.ts";
-import type { FieldOrigin } from "../../domain/relations/field-origin.ts";
+import type { FieldOrigin, LocalOrigin } from "../../domain/relations/field-origin.ts";
 import { relation, type Relation, type SymbolRef } from "../../domain/relations/relation.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
 import type { Evidence, Finding, UnknownReason } from "../../domain/shared/fact.ts";
@@ -39,16 +39,19 @@ async function readMetadata(files: readonly SourceFile[]): Promise<AngularMetada
   const classes: AngularClass[] = [];
   const findings: Finding<Relation>[] = orphaned.map((path) => unknown("no-project", { path, line: 1 }));
   const fields: FieldOrigin[] = [];
+  const locals: LocalOrigin[] = [];
   for (const [project, sources] of byProject) {
     const metadata = await readProject(contents, project.dependencies, sources);
     classes.push(...metadata.classes);
     findings.push(...metadata.findings);
     fields.push(...metadata.fields);
+    locals.push(...metadata.locals);
   }
   return {
     classes: classes.sort((a, b) => (a.ref.path < b.ref.path ? -1 : a.ref.path > b.ref.path ? 1 : a.ref.line - b.ref.line)),
     findings,
     fields: fields.sort((a, b) => compareText(a.owner.path, b.owner.path) || a.owner.line - b.owner.line || compareText(a.field, b.field)),
+    locals: locals.sort((a, b) => compareText(a.owner.path, b.owner.path) || a.owner.line - b.owner.line || compareText(a.local, b.local)),
   };
 }
 
@@ -145,6 +148,7 @@ async function readProject(contents: ReadonlyMap<string, string>, dependencies: 
   const classes: AngularClass[] = [];
   const findings: Finding<Relation>[] = [];
   const injects = new Map<string, Finding<Relation>>();
+  const pendingLocals = new Map<string, LocalOrigin>();
   for (const file of sources) {
     const source = await parse(file);
     if (source === undefined) {
@@ -167,6 +171,10 @@ async function readProject(contents: ReadonlyMap<string, string>, dependencies: 
         const from = { path: file, symbol: owner.name, line: owner.line };
         const key = `${from.path}\0${from.symbol}\0${placed.class.path}\0${placed.class.symbol}`;
         if (!injects.has(key)) injects.set(key, { status: "complete", value: relation("injects", from, placed.class), evidence: [at] });
+        if (injection.local !== undefined) {
+          const localKey = `${key}\0${injection.local}`;
+          if (!pendingLocals.has(localKey)) pendingLocals.set(localKey, { owner: from, local: injection.local, holds: { class: placed.class } });
+        }
       } else if (!("external" in placed)) findings.push(unknown("unresolved" in placed ? "unresolved" : "no-extractor", at));
     }
   }
@@ -195,7 +203,8 @@ async function readProject(contents: ReadonlyMap<string, string>, dependencies: 
       fields.push({ owner: { path: file, symbol: raw.owner.name, line: raw.owner.line }, field: raw.field, holds });
     }
   }
-  return { classes, findings: [...findings, ...injects.values()], fields };
+  const locals = [...pendingLocals.values()].filter((candidate) => !substituted.has(holdsKey(candidate.holds)));
+  return { classes, findings: [...findings, ...injects.values()], fields, locals };
 }
 
 function holdsKey(holds: FieldOrigin["holds"]): string {

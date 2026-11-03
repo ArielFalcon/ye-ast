@@ -34,6 +34,8 @@ export type RawTarget = { reference: RawReference } | { opaque: true };
 /** An `inject()` call, a constructor parameter of a decorated class or an `@Inject` parameter, with the declaration it sits in. */
 export interface RawInjection {
   owner?: { name: string; line: number };
+  /** The local the call initializes, when it is the whole initializer of a variable declaration. */
+  local?: string;
   target: RawTarget;
   line: number;
 }
@@ -213,7 +215,13 @@ export function readAngularMetadataFile(sf: ts.SourceFile, shape: Pick<RawRouteF
     }
     if (ts.isCallExpression(node) && coreName(node.expression) === "inject" && node.arguments[0] !== undefined) {
       const owner = ownerOf(node, sf);
-      result.injections.push({ ...(owner !== undefined ? { owner: { name: owner.name.text, line: line(owner.name) } } : {}), target: targetOf(node.arguments[0]), line: line(node) });
+      const local = ts.isVariableDeclaration(node.parent) && ts.isIdentifier(node.parent.name) ? node.parent.name.text : undefined;
+      result.injections.push({
+        ...(owner !== undefined ? { owner: { name: owner.name.text, line: line(owner.name) } } : {}),
+        ...(local !== undefined ? { local } : {}),
+        target: targetOf(node.arguments[0]),
+        line: line(node),
+      });
     }
     ts.forEachChild(node, visit);
   };

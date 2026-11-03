@@ -10,3 +10,13 @@ export interface FieldOrigin {
   field: string;
   holds: { class: SymbolRef } | { external: string };
 }
+
+/**
+ * A local a declaration fixes: the class a function or constant takes from `inject()`. Calls made through it name the
+ * members of that class, which the index leaves unresolved because it types no local.
+ */
+export interface LocalOrigin {
+  owner: SymbolRef;
+  local: string;
+  holds: { class: SymbolRef };
+}

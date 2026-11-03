@@ -28,7 +28,7 @@ import type { CallersTarget, ImpactFault, ImpactOfChangeRequest, ImpactQueries, 
 import type { AtRevision, LiveSelector } from "../../ports/live-queries.port.ts";
 import type { PathMatcher } from "../../ports/path-matcher.port.ts";
 import { isEngineConfiguration } from "../../ports/staging-rules.ts";
-import type { FieldOrigin } from "../../domain/relations/field-origin.ts";
+import type { FieldOrigin, LocalOrigin } from "../../domain/relations/field-origin.ts";
 import type { RelationExtractor } from "../relations/relation-extractor.ts";
 import type { CommitExport, Vcs, VcsChanges, VcsFault } from "../../ports/vcs.port.ts";
 import { openLive, type LiveDeps, type LiveTree } from "../live/live-tree.ts";
@@ -139,10 +139,10 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
         if (index === "unavailable") return { ok: true, value: { ...head.base(content), status: "unknown", reason: "index-unavailable" } };
         const { store, summary } = index;
         try {
-          const { relations: found, fields } = await deps.relations.extract(headTree.sources);
+          const { relations: found, fields, locals } = await deps.relations.extract(headTree.sources);
           const loads = await deps.dynamicLoads.extract(headTree.sources);
           if (signal?.aborted) return ABORTED;
-          const read = impactOf({ store, changes, requested, componentsByResource, found, fields, loads, headTree, summary, budget: request.budget ?? {}, external: await externalPlacesOf(deps, store, headTree), ...typeResolutionOf(content, headTree.sources) });
+          const read = impactOf({ store, changes, requested, componentsByResource, found, fields, locals, loads, headTree, summary, budget: request.budget ?? {}, external: await externalPlacesOf(deps, store, headTree), ...typeResolutionOf(content, headTree.sources) });
           if (read.missing.length > 0) {
             const names = read.missing.map(({ file, symbol }) => `${file}:${symbol}`).join(", ");
             return { ok: false, fault: { kind: "unknown-symbol", detail: `no symbol at the revision for ${names}`, entries: read.missing } };
@@ -310,10 +310,10 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
     if (index === "unavailable") return unknownFact(head.base(content), "index-unavailable");
     const { store, summary } = index;
     try {
-      const { relations: found, fields } = await deps.relations.extract(headTree.sources);
+      const { relations: found, fields, locals } = await deps.relations.extract(headTree.sources);
       const loads = await deps.dynamicLoads.extract(headTree.sources);
       if (signal?.aborted) return ABORTED;
-      const read = impactOf({ store, changes: radius.files, requested: [], componentsByResource, found, fields, loads, headTree, summary, budget: request.budget ?? {}, external: await externalPlacesOf(deps, store, headTree), ...typeResolutionOf(content, headTree.sources) });
+      const read = impactOf({ store, changes: radius.files, requested: [], componentsByResource, found, fields, locals, loads, headTree, summary, budget: request.budget ?? {}, external: await externalPlacesOf(deps, store, headTree), ...typeResolutionOf(content, headTree.sources) });
       return { ok: true, value: impactFact(head.base(content, true), { ...value, ...read.value }, [...fixed, ...read.cuts]) };
     } finally {
       store.close();
@@ -424,6 +424,8 @@ interface WalkInput {
   found: readonly Finding<Relation>[];
   /** The class fields whose declaration fixes what they hold. */
   fields: readonly FieldOrigin[];
+  /** The locals a function or constant takes from `inject()`, and what they hold. */
+  locals: readonly LocalOrigin[];
   /** Every dynamic load the reader found in the head's sources. */
   loads: readonly DynamicLoad[];
   headTree: CommitExtraction;
@@ -443,7 +445,7 @@ interface ImpactRead {
 }
 
 function impactOf(input: WalkInput): ImpactRead {
-  const { store, changes, requested, componentsByResource, found, fields, loads, headTree, summary, typeResolution } = input;
+  const { store, changes, requested, componentsByResource, found, fields, locals, loads, headTree, summary, typeResolution } = input;
   const isTest = (path: string): boolean => kindOfChangedFile(path) === "test";
   const sourceChanges = changes.filter((file) => kindOfChangedFile(file.path) === "source" && !file.deleted).map((file) => file.path);
   const componentFiles = changes.flatMap((file) => (componentsByResource.get(file.path) ?? []).map((component) => component.file));
@@ -460,7 +462,7 @@ function impactOf(input: WalkInput): ImpactRead {
   const sourceFiles = sourceFilesOf(headTree);
   const unresolved = store.unresolvedReferences(sourceFiles);
   const settled = settledReferences(unresolved, typeResolution);
-  const inbound = createInboundEdges(store, isTest, found.flatMap((finding) => (finding.status === "complete" ? [finding.value] : [])), fields, settled);
+  const inbound = createInboundEdges(store, isTest, found.flatMap((finding) => (finding.status === "complete" ? [finding.value] : [])), fields, settled, locals);
   const walk = walkImpact(seeds.map(({ symbol }) => symbol), inbound, input.budget);
 
   const walked = walk.reached.map(({ symbol }) => symbol);
