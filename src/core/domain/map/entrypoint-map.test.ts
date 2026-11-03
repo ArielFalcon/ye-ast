@@ -23,10 +23,26 @@ test("a template the export left out is a not-exported cut", () => {
   assert.deepEqual(cuts, [{ kind: "not-exported", at: ["src/app/big.component.html"] }]);
 });
 
-test("a source in a language with no extractor is a no-extractor cut, as impact cuts it", () => {
-  const exported = exportOf("b1", { files: [{ path: "web/src/app/app.routes.js", blob: "b1", written: false }] });
+test("a JVM source no extractor parses, which Spring could still read, is a no-extractor cut", () => {
+  const files = ["src/main/kotlin/Order.kt", "src/Order.java"].map((path) => ({ path, blob: "b1", written: false }));
 
-  assert.deepEqual(exportCuts(exported), [{ kind: "no-extractor", at: ["web/src/app/app.routes.js"] }]);
+  assert.deepEqual(exportCuts(exportOf("b1", { files })), [{ kind: "no-extractor", at: ["src/main/kotlin/Order.kt"] }]);
+});
+
+test("a source in a language no declared framework reads is outside the declared scope, so it is no cut", () => {
+  const paths = ["ios/App/AppDelegate.swift", "scripts/inject-env.mjs", "eslint.config.js", "web/src/app/app.routes.js", "src/Order.java"];
+  const exported = exportOf("b1", { files: paths.map((path) => ({ path, blob: "b1", written: false })) });
+
+  assert.deepEqual(exportCuts(exported), []);
+});
+
+test("a repository that holds no source of a declared language cuts every source it cannot read", () => {
+  const files = ["app.py", "src/Order.kt"].map((path) => ({ path, blob: "b1", written: false }));
+
+  assert.deepEqual(exportCuts(exportOf("b1", { files })), [
+    { kind: "no-extractor", at: ["app.py"] },
+    { kind: "no-extractor", at: ["src/Order.kt"] },
+  ]);
 });
 
 test("the declared scope keeps the map's languages and frameworks and carries the requested globs sorted, each once", () => {

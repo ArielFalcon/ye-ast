@@ -421,6 +421,15 @@ test("a changed template no component names through templateUrl is a cut at that
   ]);
 });
 
+test("a changed source no declared framework reads cuts nothing, and one in a repository with no declared source cuts", async () => {
+  const foreign: Result<readonly FileChange[], VcsFault> = { ok: true, value: ["ios/App/AppDelegate.swift", "scripts/inject-env.mjs", "eslint.config.js"].map((path) => change(path)) };
+  assert.equal(fact(await setup({ changes: foreign }).ask()).status, "complete");
+
+  const python = { files: [{ path: "app.py", blob: "1", written: true }], skipped: [] };
+  const outside = fact(await setup({ changes: { ok: true, value: [change("app.py")] }, exports: { [BASE]: python, [HEAD]: python } }).ask());
+  assert.deepEqual(outside.status === "partial" && outside.cuts, [{ kind: "no-extractor", at: ["app.py"] }]);
+});
+
 function callersFact(answer: Result<Fact<ImpactValue>, ImpactFault>): Fact<ImpactValue> {
   assert.ok(answer.ok, JSON.stringify(answer));
   return answer.value;
@@ -718,6 +727,31 @@ test("an importers request naming a file outside the scope is unknown out-of-sco
   assert.equal(log.indexed, 0);
   const served = importersFact(await importers({ files: ["src/Order.java"], scope: { exclude: ["gen/"] } }));
   assert.equal(answer.inputs.content, served.inputs.content);
+});
+
+test("a request for the configuration the export read outside the include is still out of scope", async () => {
+  const manifest = "package.json";
+  const exports = { [HEAD]: { files: [...SHOP_EXPORT.files, { path: manifest, blob: manifest, written: true }], skipped: [] } satisfies CommitExport };
+  const { log, importers } = setup({ nodes: SHOP_NODES, exports });
+
+  const answer = importersFact(await importers({ files: [manifest], scope: { include: ["src/"] } }));
+
+  assert.equal(answer.status, "unknown");
+  assert.equal(answer.status === "unknown" && answer.reason, "out-of-scope");
+  assert.deepEqual(log.plans[0]?.wanted, [...SHOP_EXPORT.files.map((file) => file.path), manifest]);
+});
+
+test("an impact answer reads the configuration that interprets the change, even when the include leaves it out", async () => {
+  const manifest = "package.json";
+  const head: CommitExport = { files: [{ path: "src/A.java", blob: "1", written: true }, { path: manifest, blob: "2", written: true }], skipped: [] };
+  const { log, ask } = setup({ changes: CHANGES, exports: { [HEAD]: head, [FORK]: head } });
+
+  await ask({ scope: { include: ["src/"] } });
+
+  assert.deepEqual(log.plans.map((plan) => plan.wanted), [
+    ["src/A.java", manifest],
+    ["src/A.java", manifest],
+  ]);
 });
 
 test("every impact operation records the mode the trust record declares for the repository", async () => {

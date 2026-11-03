@@ -1,10 +1,8 @@
 import type { Entrypoint } from "../entrypoints/entrypoint.ts";
+import { isExtractorConfiguration } from "../languages/configuration.ts";
 import { isJavaSource } from "../languages/java.ts";
-import { isJvmBuildFile } from "../languages/jvm-build.ts";
-import { isContractDocument } from "../languages/openapi.ts";
-import { isUncoveredSource } from "../languages/uncovered.ts";
-import { isSpringConfigFile } from "../languages/spring-config.ts";
-import { isAngularTemplate, isModuleConfigFile, isPackageManifest, isTypeScriptSource } from "../languages/typescript.ts";
+import { cutsCompleteness } from "../languages/uncovered.ts";
+import { isAngularTemplate, isTypeScriptSource } from "../languages/typescript.ts";
 import {
   composeSections,
   type CompleteFact,
@@ -33,15 +31,12 @@ const MAP_SCOPE = { languages: ["java", "typescript"], frameworks: ["angular", "
 const SUBMODULE = "submodule";
 
 /**
- * What the export writes and digests: the Java sources the extractor parses, the build files it reads for a declared
- * source generator, the contract documents it joins to the code that implements them, the Spring config files it reads
- * for the base path, and for Angular the TypeScript sources outside
- * tests, the `package.json` files that name the framework of a project, the `tsconfig` files that resolve a module specifier and
- * the `.html` templates a component names, which the relation reader parses and a change to which must invalidate the
- * fact.
+ * What the export writes and digests: the Java sources the extractor parses, the TypeScript sources outside tests, the
+ * `.html` templates a component names, which the relation reader parses and a change to which must invalidate the fact,
+ * and every configuration file an extractor reads to interpret them (`isExtractorConfiguration`).
  */
 export function isInMapScope(path: string): boolean {
-  return isJavaSource(path) || isJvmBuildFile(path) || isContractDocument(path) || isSpringConfigFile(path) || isTypeScriptSource(path) || isPackageManifest(path) || isModuleConfigFile(path) || isAngularTemplate(path);
+  return isJavaSource(path) || isTypeScriptSource(path) || isAngularTemplate(path) || isExtractorConfiguration(path);
 }
 
 export function declaredScope(request: ScopeRequest = {}): DeclaredScope {
@@ -64,14 +59,20 @@ export interface MapExport {
  * the export.
  */
 export function contentFingerprint({ files, skipped, stopped }: MapExport): string {
+  const declared = holdsDeclaredSource(files);
   const parts: [string, ...string[]][] = [
     ...files
-      .filter((file) => isInMapScope(file.path) || isUncoveredSource(file.path))
+      .filter((file) => isInMapScope(file.path) || cutsCompleteness(file.path, declared))
       .map((file): [string, ...string[]] => [isInMapScope(file.path) ? "source" : "unsupported", file.path, file.blob]),
     ...skipped.map((entry): [string, ...string[]] => ["skipped", entry.path, entry.reason]),
     ...(stopped === undefined ? [] : [["stopped", stopped.at] satisfies [string, ...string[]]]),
   ];
   return JSON.stringify(parts.map((part) => JSON.stringify(part)).toSorted());
+}
+
+/** Whether the export holds a source of a declared language, so the repository has something an answer can read. */
+export function holdsDeclaredSource(files: MapExport["files"]): boolean {
+  return files.some((file) => isJavaSource(file.path) || isTypeScriptSource(file.path));
 }
 
 /** The section is cut, so the entrypoint table never looks complete, by every cause `exportCuts` names. */
@@ -86,9 +87,10 @@ export function buildEntrypointMap(base: MapBase, findings: readonly Finding<Ent
 
 /**
  * What the export leaves unread: a budget that stopped it (`caller-budget`), every in-scope path or submodule it left
- * out (`not-exported`) and every listed source file whose language has no extractor (`no-extractor`).
+ * out (`not-exported`) and every listed source an answer could have derived from (`no-extractor`).
  */
 export function exportCuts(exported: MapExport): Cut[] {
+  const declared = holdsDeclaredSource(exported.files);
   return [
     ...(exported.stopped === undefined ? [] : [{ kind: "caller-budget", at: [exported.stopped.at], limit: exported.stopped.limit } satisfies Cut]),
     ...cutsAt(
@@ -97,7 +99,7 @@ export function exportCuts(exported: MapExport): Cut[] {
     ),
     ...cutsAt(
       "no-extractor",
-      exported.files.map((file) => file.path).filter(isUncoveredSource),
+      exported.files.map((file) => file.path).filter((path) => cutsCompleteness(path, declared)),
     ),
   ];
 }

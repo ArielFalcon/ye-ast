@@ -10,6 +10,7 @@ import type { ScratchDirectory } from "../../ports/scratch-directory.port.ts";
 import type { SourceReader } from "../../ports/source-reader.port.ts";
 import type { CommitExport, ExportBudget, ExportedFile, ExportPlan, ExportStop, SkippedEntry, Vcs, VcsFault } from "../../ports/vcs.port.ts";
 import { declaredScope } from "../../domain/map/entrypoint-map.ts";
+import { isPackageManifest } from "../../domain/languages/typescript.ts";
 import { createEntrypointQueries, type EntrypointQueriesDeps } from "./entrypoint-queries.ts";
 import { fakeLive, type FakeLive } from "../live/fake-live.testing.ts";
 import type { LiveStaleNotice } from "../../ports/live-queries.port.ts";
@@ -113,6 +114,15 @@ function route(path: string, line: number): Finding<HttpRoute> {
 const ORDERS: ListedFile = { path: "src/Orders.java", blob: "b1" };
 const README: ListedFile = { path: "README.md", blob: "b2" };
 const BILLING: ListedFile = { path: "src/Billing.java", blob: "b4" };
+const COMPONENT: ListedFile = { path: "src/app/home.component.ts", blob: "b10" };
+const MANIFEST: ListedFile = { path: "package.json", blob: "b11" };
+
+/**
+ * The rule of the Angular extractor: a source it places in a project through the manifest above it answers a route,
+ * and one it cannot place is an unknown item with reason `no-project` (S1).
+ */
+const angularRoutes: EntrypointExtractor["extract"] = async (files) =>
+  files.some((file) => isPackageManifest(file.path)) ? [route("/home", 7)] : [{ status: "unknown", reason: "no-project", evidence: [{ path: COMPONENT.path, line: 1 }] }];
 
 test("a resolve fault is returned typed and leaves no scratch directory behind", async () => {
   const { deps, created, removed } = setup({ resolve: { ok: false, fault: { kind: "unknown-revision", detail: "main" } } });
@@ -554,4 +564,29 @@ test("a live map reports the paths that changed while it was answered", async ()
   assert.ok(answer.ok);
   assert.deepEqual(notices.map((notice) => notice.changed), [["src/Orders.java"]]);
   assert.equal(notices[0]?.stateId, answer.value.snapshot.kind === "live" ? answer.value.snapshot.stateId : "");
+});
+
+test("an include reads the configuration that interprets the sources it selects, at a revision and on the live tree", async () => {
+  const atRevision = await createEntrypointQueries(setup({ files: [COMPONENT, MANIFEST], extract: angularRoutes }).deps).map({ ...REQUEST, scope: { include: ["src/**"] } });
+  const live = fakeLive({ [COMPONENT.path]: COMPONENT.blob, [MANIFEST.path]: MANIFEST.blob }, DIGEST);
+  const onLive = await createEntrypointQueries(setup({ trust: TRUSTED, live, files: [COMPONENT, MANIFEST], extract: angularRoutes }).deps).map({ ...LIVE_REQUEST, scope: { include: ["src/**"] } });
+
+  for (const answer of [atRevision, onLive]) {
+    assert.ok(answer.ok);
+    const section = answer.value.value.entrypoints;
+    assert.ok(section.status === "complete");
+    assert.deepEqual(section.value.map((item) => item.status), ["complete"]);
+  }
+});
+
+test("an exclude leaves the configuration out, so the sources it interprets are unknown", async () => {
+  const { deps, plans } = setup({ files: [COMPONENT, MANIFEST], extract: angularRoutes });
+
+  const result = await createEntrypointQueries(deps).map({ ...REQUEST, scope: { exclude: [MANIFEST.path] } });
+
+  assert.ok(result.ok);
+  assert.equal(plans[0]!.write(MANIFEST.path), false);
+  const section = result.value.value.entrypoints;
+  assert.ok(section.status === "complete");
+  assert.deepEqual(section.value.map((item) => item.status), ["unknown"]);
 });

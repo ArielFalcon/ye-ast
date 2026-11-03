@@ -1,5 +1,6 @@
 import { buildEntrypointMap, contentFingerprint, declaredScope } from "../../domain/map/entrypoint-map.ts";
-import { pathSelection } from "../../domain/shared/scope.ts";
+import { isExtractorConfiguration } from "../../domain/languages/configuration.ts";
+import { exportSelection } from "../../domain/shared/scope.ts";
 import { liveScope } from "../../domain/snapshot/live-export.ts";
 import type { Result } from "../../domain/shared/result.ts";
 import type { EntrypointQueries } from "../../ports/entrypoint-queries.port.ts";
@@ -27,7 +28,8 @@ export function createEntrypointQueries(deps: EntrypointQueriesDeps): Entrypoint
     const head = await vcs.resolveCommit(repo, "HEAD", signal);
     if (!head.ok) return head;
     const scope = liveScope(requested);
-    const opened = await openLive(deps.live, { repo, scope, selected: pathSelection(scope, deps.matcher.matches), store: false, signal, onStale }, async (tree) => {
+    const exported = exportSelection(scope, deps.matcher.matches, isExtractorConfiguration);
+    const opened = await openLive(deps.live, { repo, scope, selected: exported, store: false, signal, onStale }, async (tree) => {
       const extracted = await extractExport(deps, tree.root, tree.export, signal);
       if (!extracted.ok) return extracted;
       const base = {
@@ -50,7 +52,8 @@ export function createEntrypointQueries(deps: EntrypointQueriesDeps): Entrypoint
 
       return withScratch(deps.scratch, async (directory) => {
         const scope = declaredScope(requested);
-        const extracted = await extractCommit(deps, repo, sha, await directory(), pathSelection(scope, deps.matcher.matches), signal);
+        const exported = exportSelection(scope, deps.matcher.matches, isExtractorConfiguration);
+        const extracted = await extractCommit(deps, repo, sha, await directory(), exported, signal);
         if (!extracted.ok) return extracted;
         const { export: mapExport, findings } = extracted.value;
         const declaredConfig = deps.budget === undefined ? {} : { exportBudget: { maxEntries: deps.budget.maxEntries, maxBytes: deps.budget.maxBytes } };

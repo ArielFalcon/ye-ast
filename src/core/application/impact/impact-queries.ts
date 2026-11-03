@@ -8,13 +8,15 @@ import { sortedUnique, type ImportersValue } from "../../domain/impact/importers
 import { impactFact, type ImpactBudget, type ImpactedSymbol, type ImpactValue, type Seed } from "../../domain/impact/impact-fact.ts";
 import { reachedEntrypoints } from "../../domain/impact/reached-entrypoints.ts";
 import type { Relation } from "../../domain/relations/relation.ts";
+import { isExtractorConfiguration } from "../../domain/languages/configuration.ts";
 import { isAngularTemplate } from "../../domain/languages/typescript.ts";
+import { cutsCompleteness } from "../../domain/languages/uncovered.ts";
 import { comparePosition, compareText, joinsFact } from "../../domain/shared/code-node.ts";
 import type { Entrypoint } from "../../domain/entrypoints/entrypoint.ts";
 import { sortedEngines, type Cut, type DeclaredConfig, type DeclaredScope, type Evidence, type Fact, type FactBase, type Finding, type IndexOrigin, type SnapshotRef, type TrustMode, type UnknownFact } from "../../domain/shared/fact.ts";
-import { pathSelection, type PathSelection, type ScopeRequest } from "../../domain/shared/scope.ts";
+import { exportSelection, pathSelection, type PathSelection, type ScopeRequest } from "../../domain/shared/scope.ts";
 import { changedPaths, liveScope } from "../../domain/snapshot/live-export.ts";
-import { contentFingerprint, declaredScope, exportCuts } from "../../domain/map/entrypoint-map.ts";
+import { contentFingerprint, declaredScope, exportCuts, holdsDeclaredSource } from "../../domain/map/entrypoint-map.ts";
 import type { Result } from "../../domain/shared/result.ts";
 import type { AngularDeclaration, AngularDeclarationReader } from "../../ports/angular-declarations.port.ts";
 import type { CodeGraph, CodeGraphReader, GraphSymbol, IndexSummary } from "../../ports/code-graph.port.ts";
@@ -135,7 +137,8 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
       if (!head.ok) return head;
       const scope = liveScope(request.scope);
       const selected = pathSelection(scope, deps.matcher.matches);
-      const opened = await openLive(deps.live, { repo, scope, selected, store: true, signal, onStale: request.onStale }, async (tree) => {
+      const exported = exportSelection(scope, deps.matcher.matches, isExtractorConfiguration);
+      const opened = await openLive(deps.live, { repo, scope, selected: exported, store: true, signal, onStale: request.onStale }, async (tree) => {
         const extracted = await extractExport(deps, tree.root, tree.export, signal);
         return extracted.ok ? read(liveReading(tree, extracted.value, trust, scope, selected, head.value, repoId, spec)) : extracted;
       });
@@ -146,13 +149,14 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
 
     const scope = declaredScope(request.scope);
     const selected = pathSelection(scope, deps.matcher.matches);
+    const exported = exportSelection(scope, deps.matcher.matches, isExtractorConfiguration);
     const head = await vcs.resolveCommit(repo, request.revision, signal);
     if (!head.ok) return head;
     const trust = await trustOf(deps, repo);
     const snapshot: SnapshotRef = { repo: repoId, kind: "sha", sha: head.value };
     return withScratch(deps.scratch, async (directory) => {
       const headDirectory = await directory();
-      const headTree = await extractCommit(deps, repo, head.value, headDirectory, selected, signal);
+      const headTree = await extractCommit(deps, repo, head.value, headDirectory, exported, signal);
       if (!headTree.ok) return headTree;
       return read({
         tree: headTree.value,
@@ -258,6 +262,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
     const { repo, signal } = request;
     const scope = declaredScope(request.scope);
     const selected = pathSelection(scope, deps.matcher.matches);
+    const exported = exportSelection(scope, deps.matcher.matches, isExtractorConfiguration);
     const base = await vcs.resolveCommit(repo, request.base, signal);
     if (!base.ok) return base;
     const head = await vcs.resolveCommit(repo, request.head, signal);
@@ -278,9 +283,9 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
 
     return withScratch(deps.scratch, async (directory): Promise<Answer> => {
       const headDirectory = await directory();
-      const headTree = await extractCommit(deps, repo, head.value, headDirectory, selected, signal);
+      const headTree = await extractCommit(deps, repo, head.value, headDirectory, exported, signal);
       if (!headTree.ok) return headTree;
-      const baseTree = mergeBase === head.value ? headTree : await extractCommit(deps, repo, mergeBase, await directory(), selected, signal);
+      const baseTree = mergeBase === head.value ? headTree : await extractCommit(deps, repo, mergeBase, await directory(), exported, signal);
       if (!baseTree.ok) return baseTree;
       const reading: HeadReading = {
         tree: headTree.value,
@@ -299,6 +304,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
     if (trust !== "trusted" || live === undefined) return LIVE_REQUIRES_TRUSTED;
     const scope = liveScope(request.scope);
     const selected = pathSelection(scope, deps.matcher.matches);
+    const exported = exportSelection(scope, deps.matcher.matches, isExtractorConfiguration);
     const base = await vcs.resolveCommit(repo, request.base, signal);
     if (!base.ok) return base;
     const head = await vcs.resolveCommit(repo, LIVE_HEAD, signal);
@@ -308,11 +314,11 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
     const mergeBase = merge.value;
     const spec: FactSpec = { declaredConfig: walkBounds(request.budget), engines: angularReadingEngines };
 
-    const opened = await openLive(live, { repo, scope, selected, store: true, signal, onStale: request.onStale }, (tree) =>
+    const opened = await openLive(live, { repo, scope, selected: exported, store: true, signal, onStale: request.onStale }, (tree) =>
       withScratch(deps.scratch, async (directory): Promise<Answer> => {
         const liveTree = await extractExport(deps, tree.root, tree.export, signal);
         if (!liveTree.ok) return liveTree;
-        const baseTree = await extractCommit(deps, repo, mergeBase, await directory(), selected, signal);
+        const baseTree = await extractCommit(deps, repo, mergeBase, await directory(), exported, signal);
         if (!baseTree.ok) return baseTree;
         const reading = liveReading(tree, liveTree.value, trust, scope, selected, head.value, repoId, spec);
 
@@ -346,10 +352,13 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
     if (signal?.aborted) return ABORTED;
     const componentsByResource = resourcesOf(declarations);
     const content = JSON.stringify([contentFingerprint(baseTree.export), contentFingerprint(headTree.export)]);
+    const declared = holdsDeclaredSource(headTree.export.files);
     const fixed = [
       ...exportCuts(headTree.export),
       ...(sameTree ? [] : exportCuts(baseTree.export)),
-      ...radius.files.filter((file) => kindOfChangedFile(file.path) === "uncovered" || (isAngularTemplate(file.path) && !componentsByResource.has(file.path))).map((file): Cut => ({ kind: "no-extractor", at: [file.path] })),
+      ...radius.files
+        .filter((file) => cutsCompleteness(file.path, declared) || (isAngularTemplate(file.path) && !componentsByResource.has(file.path)))
+        .map((file): Cut => ({ kind: "no-extractor", at: [file.path] })),
     ];
     const entrypointChanges = changedEntrypoints(entrypointsOf(baseTree.findings), entrypointsOf(headTree.findings));
     const value: ImpactValue = { mergeBase: radius.mergeBase, seeds: [], changedEntrypoints: entrypointChanges, symbols: [], entrypoints: [], cost: { expansionsUsed: 0 } };
