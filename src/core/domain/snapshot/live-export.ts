@@ -12,7 +12,15 @@ interface Blob {
  * have written, and every skipped entry. `contentFingerprint` and the extraction read it unchanged.
  */
 export function liveExport<S extends { path: string; reason: string }>(manifest: readonly Blob[], skipped: readonly S[]): { files: { path: string; blob: string; written: boolean }[]; skipped: S[] } {
-  return { files: manifest.map(({ path, blob }) => ({ path, blob, written: isInMapScope(path) })), skipped: [...skipped] };
+  return { files: manifest.map(({ path, blob }) => ({ path, blob, written: isWritten(path) })), skipped: [...skipped] };
+}
+
+/**
+ * Whether an export writes this path, which is also the universe of the store a live answer reads. One rule, two
+ * consumers: the export marks it `written`, and the mirror copies exactly those paths and no others.
+ */
+export function isWritten(path: string): boolean {
+  return isInMapScope(path);
 }
 
 /** The paths whose blob differs between two listings, or that only one of them holds, sorted. */

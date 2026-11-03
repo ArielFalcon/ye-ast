@@ -22,9 +22,10 @@ const TEMPORARY_SUFFIX = ".tmp";
 const TEMPORARY_STALE_MS = 60 * 60 * 1000;
 /**
  * Version 2 adds the index tree: the store moved from the mirror root to `indexRoot`, so a version 1 state records a
- * full build of a store that no longer exists and is discarded, which rebuilds the scope once.
+ * full build of a store that no longer exists and is discarded, which rebuilds the scope once. Version 3 keeps only
+ * the paths an export writes, so a version 2 state records copies nothing reads and is discarded the same way.
  */
-const STATE_FORMAT_VERSION = 2;
+const STATE_FORMAT_VERSION = 3;
 const DIRECTORY_MODE = 0o700;
 const FILE_MODE = 0o600;
 const LOCK_POLL_MS = 50;
@@ -33,6 +34,12 @@ const SKIP_REASONS: ReadonlySet<string> = new Set(["symlink", "submodule", "unsa
 export interface LiveMirrorDeps {
   /** The account the mirror directories must belong to; `undefined` where the platform has no such notion, which skips the ownership and mode checks. */
   ownerUid: number | undefined;
+  /**
+   * Whether the export writes a path: the mirror copies exactly those and fingerprints the rest without keeping them,
+   * since no query reads them. The host names the rule; the adapter never decides what content matters. `true` when no
+   * host names one, which copies more and never fewer.
+   */
+  writes: (path: string) => boolean;
   pid: () => number;
   isAlive: (pid: number) => boolean;
   sleep: (ms: number, signal?: AbortSignal) => Promise<void>;
@@ -43,6 +50,7 @@ export interface LiveMirrorDeps {
 
 export const defaultLiveMirrorDeps: LiveMirrorDeps = {
   ownerUid: process.getuid?.(),
+  writes: () => true,
   pid: () => process.pid,
   isAlive: (pid) => {
     try {
@@ -292,7 +300,7 @@ export function createLiveMirror(deps: LiveMirrorDeps = defaultLiveMirrorDeps): 
       for (const { path, stat } of pending) {
         if (signal?.aborted) return aborted();
         const configuration = isEngineConfiguration(path);
-        const entry = await capture(location.repo, root, path, stat, !configuration);
+        const entry = await capture(location.repo, root, path, stat, deps.writes(path) && !configuration);
         if (!entry.ok) return entry;
         next.push(entry.value);
         if (configuration) {

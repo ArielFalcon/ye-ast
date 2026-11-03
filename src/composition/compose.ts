@@ -5,8 +5,9 @@ import { createEntrypointQueries } from "../core/application/entrypoints/entrypo
 import { trustOf } from "../core/application/snapshot/read-snapshot.ts";
 import { openLive, type LiveDeps } from "../core/application/live/live-tree.ts";
 import { declaredScope } from "../core/domain/map/entrypoint-map.ts";
-import { pathSelection } from "../core/domain/shared/scope.ts";
-import { liveScope } from "../core/domain/snapshot/live-export.ts";
+import { exportSelection, pathSelection } from "../core/domain/shared/scope.ts";
+import { isWritten, liveScope } from "../core/domain/snapshot/live-export.ts";
+import { isExtractorConfiguration } from "../core/domain/languages/configuration.ts";
 import type { LiveRetentionPolicy } from "../core/domain/snapshot/live-retention.ts";
 import { createFixedLayerAdmin } from "../core/application/fixed-layer/fixed-layer-admin.ts";
 import { createInstall } from "../core/application/install/install.ts";
@@ -22,7 +23,7 @@ import { createSha256Digest } from "../core/adapters/crypto/sha256-digest.adapte
 import { createFixedLayerStore } from "../core/adapters/fs/fixed-layer-store.adapter.ts";
 import { createWorkspaceDefaults } from "../core/adapters/fs/workspace-defaults.adapter.ts";
 import { createTrustRecords } from "../core/adapters/fs/trust-record.adapter.ts";
-import { createLiveMirror } from "../core/adapters/fs/live-mirror.adapter.ts";
+import { createLiveMirror, defaultLiveMirrorDeps } from "../core/adapters/fs/live-mirror.adapter.ts";
 import { createFsSourceReader } from "../core/adapters/fs/fs-source-reader.adapter.ts";
 import { createTempScratchDirectory } from "../core/adapters/fs/temp-scratch-directory.adapter.ts";
 import { createPathMatcher } from "../core/adapters/fs/path-matcher.adapter.ts";
@@ -148,7 +149,7 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
   const codegraph = installedVersion(CODEGRAPH_PACKAGE);
   const live: LiveDeps = {
     workingTree: createGitWorkingTree(),
-    mirror: createLiveMirror(),
+    mirror: createLiveMirror({ ...defaultLiveMirrorDeps, writes: isWritten }),
     graph,
     digest,
     versions: { codegraph, store: JSON.stringify(SUPPORTED_STORE), staging: STAGING_RULES_VERSION },
@@ -190,7 +191,7 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
     try {
       if ((await trustOf(trust ?? {}, repo)) !== "trusted") return null;
       const scope = liveScope();
-      const warmed = await openLive(live, { repo, scope, selected: pathSelection(declaredScope(), matcher.matches), store: true, signal }, async () => undefined);
+      const warmed = await openLive(live, { repo, scope, selected: exportSelection(scope, matcher.matches, isExtractorConfiguration), store: true, signal }, async () => undefined);
       return warmed.ok ? null : redaction.redact(`ye-ast: live index not built (${warmed.fault.kind}): ${warmed.fault.detail}`);
     } catch (error) {
       return redaction.redact(`ye-ast: live index not built: ${redaction.redactError(error)}`);
