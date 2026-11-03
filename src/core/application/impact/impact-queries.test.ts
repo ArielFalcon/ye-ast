@@ -14,7 +14,8 @@ import type { ImportersValue } from "../../domain/impact/importers-fact.ts";
 import type { CommitExport, Vcs, VcsChanges, VcsFault } from "../../ports/vcs.port.ts";
 import type { AngularDeclaration } from "../../ports/angular-declarations.port.ts";
 import { fakeCodeGraph, fakeNode, type FakeEdge, type FakeNode, type FakeUnresolved } from "./fake-code-graph.testing.ts";
-import type { TrustRecordReader } from "../../ports/trust-record.port.ts";import { fakeLive, type FakeLive } from "../live/fake-live.testing.ts";
+import type { TrustRecordReader } from "../../ports/trust-record.port.ts";
+import { fakeLive, type FakeLive } from "../live/fake-live.testing.ts";
 import type { LiveStaleNotice } from "../../ports/live-queries.port.ts";
 import { createImpactQueries, type ImpactQueriesDeps } from "./impact-queries.ts";
 import type { ImportOriginsReader } from "../../ports/import-origins.port.ts";
@@ -139,6 +140,19 @@ function setup(options: Options = {}) {
 function fact(answer: Result<Fact<ImpactValue>, OfChangeFault>): Fact<ImpactValue> {
   assert.ok(answer.ok, JSON.stringify(answer));
   return answer.value;
+}
+
+/** An import reader that proves exactly `names` external and answers `unknown` for every other site. */
+function externalImports(names: readonly string[]): ImportOriginsReader {
+  return () => ({
+    origins: async (sites) =>
+      sites.map(
+        (site): Finding<ImportOrigin> =>
+          names.includes(site.name)
+            ? { status: "complete", value: { kind: "external", module: "rxjs" }, evidence: [{ path: site.file, line: site.line }] }
+            : { status: "unknown", reason: "unresolved", evidence: [{ path: site.file, line: site.line }] },
+      ),
+  });
 }
 
 const SOURCE_NODES = [fakeNode("f", "function", "src/A.java", 1, 3), fakeNode("g", "function", "src/B.java", 1, 3)];
@@ -314,21 +328,28 @@ test("a reference whose rooted name the file imports from outside the repository
   const exports: Options["exports"] = {
     [HEAD]: { files: [{ path: "src/A.ts", blob: "1", written: true }, { path: "src/B.ts", blob: "2", written: true }], skipped: [] },
   };
-  const imports = (names: readonly string[]): ImportOriginsReader => () => ({
-    origins: async (sites) =>
-      sites.map(
-        (site): Finding<ImportOrigin> =>
-          names.includes(site.name)
-            ? { status: "complete", value: { kind: "external", module: "rxjs" }, evidence: [{ path: site.file, line: site.line }] }
-            : { status: "unknown", reason: "unresolved", evidence: [{ path: site.file, line: site.line }] },
-      ),
-  });
 
   const withoutImports = fact(await setup({ changes, nodes, unresolved, exports }).ask());
-  const withImports = fact(await setup({ changes, nodes, unresolved, exports, importOrigins: imports(["tap"]) }).ask());
+  const withImports = fact(await setup({ changes, nodes, unresolved, exports, importOrigins: externalImports(["tap"]) }).ask());
 
   assert.deepEqual(withoutImports.status === "partial" && withoutImports.cuts, [{ kind: "unresolved-link", at: ["src/B.ts::tap", "src/A.ts:7"] }]);
   assert.equal(withImports.status, "complete");
+});
+
+test("an external proof retires its own reference, never another one that shares its line", async () => {
+  const changes: Result<readonly FileChange[], VcsFault> = { ok: true, value: [change("src/B.ts", { added: [{ start: 2, end: 2 }] })] };
+  const nodes = [fakeNode("tap", "function", "src/B.ts", 1, 3), fakeNode("save", "function", "src/B.ts", 1, 3)];
+  const unresolved = [
+    { from: "f", name: "tap", kind: "calls", file: "src/A.ts", line: 7 },
+    { from: "f", name: "save", kind: "calls", file: "src/A.ts", line: 7 },
+  ];
+  const exports: Options["exports"] = {
+    [HEAD]: { files: [{ path: "src/A.ts", blob: "1", written: true }, { path: "src/B.ts", blob: "2", written: true }], skipped: [] },
+  };
+
+  const answer = fact(await setup({ changes, nodes, unresolved, exports, importOrigins: externalImports(["tap"]) }).ask());
+
+  assert.deepEqual(answer.status === "partial" && answer.cuts, [{ kind: "unresolved-link", at: ["src/B.ts::save", "src/A.ts:7"] }]);
 });
 
 test("the fact's inputs cover the content of both trees and the export budget", async () => {

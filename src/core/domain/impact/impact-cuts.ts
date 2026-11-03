@@ -54,6 +54,24 @@ export function settledUseKey(anchor: string, place: string): string {
   return `${anchor}\0${place}`;
 }
 
+/** The identifier a qualified name is rooted at: `a.b()` is rooted at `a`, and `this.svc.get` at `this`. */
+export function rootedName(name: string): string {
+  return name.split(/[.:#]/)[0] ?? name;
+}
+
+/**
+ * The key of a reference whose rooted name the file imports from outside the repository: the place and the root, never
+ * the place alone. A line holds several references, so retiring the line would hide the ones the proof never covered.
+ */
+export function externalPlaceKey(file: string, line: number, root: string): string {
+  return `${file}\0${line}\0external\0${root}`;
+}
+
+/** The key of a reference a type layer settled onto a declaration the walk reached: the place and the name it settled. */
+export function settledPlaceKey(file: string, line: number, name: string): string {
+  return `${file}\0${line}\0settled\0${name}`;
+}
+
 function unresolvedLinkAt(anchor: string, places: Iterable<string>): Cut {
   return { kind: "unresolved-link", at: [anchor, ...[...places].sort()] };
 }
@@ -103,10 +121,11 @@ export function unresolvedLinkCuts(
     const tail = nameTail(reference.name);
     const place = placeAt(reference.file, reference.line);
     /**
-     * A place whose target is known is no cut, whatever the tail matched: a type layer may name the declaration without
-     * any name tail, and a file's own imports may prove the name belongs outside the repository.
+     * A reference whose own root the file imports from outside, or whose own name a type layer settled onto a walked
+     * declaration, is no cut. The proof is keyed by the place *and the name*: a line holds several references, and
+     * retiring the line would hide a true cut that shares it.
      */
-    if (known.has(place)) continue;
+    if (known.has(externalPlaceKey(reference.file, reference.line, rootedName(reference.name))) || known.has(settledPlaceKey(reference.file, reference.line, reference.name))) continue;
     /** The same place, named by the reference as written: the reader settles a reference it is told, without opening the file. */
     const named = placeAt(reference.file, reference.line, reference.name);
     if (reference.kind === "calls" && DYNAMIC_LOADERS.has(tail) && !namesModule(place)) loaders.set(reference.file, (loaders.get(reference.file) ?? new Set()).add(named));

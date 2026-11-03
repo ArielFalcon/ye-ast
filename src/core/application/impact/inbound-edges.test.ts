@@ -368,7 +368,7 @@ function settledSetup(kind: string): Setup {
     [{ from: "second", to: "first", kind: "calls", confidence: 1 }],
     [],
     [],
-    [{ from: "first" as never, file: "src/A.java", line: 10, kind, target: { file: SETTLED_TARGET, symbol: "target", line: 1 } }],
+    [{ from: "first" as never, file: "src/A.java", line: 10, kind, name: "target", target: { file: SETTLED_TARGET, symbol: "target", line: 1 } }],
   );
 }
 

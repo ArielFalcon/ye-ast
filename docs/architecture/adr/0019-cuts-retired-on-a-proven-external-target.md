@@ -43,9 +43,15 @@ population did not.
 
 ## Decision
 
-1. **A place whose root identifier the file imports from outside the repository is no cut**, whatever name tail the
-   index matched. `unresolvedLinkCuts` takes the set of places whose target is known, and a place in it is never
-   attributed to a declaration.
+1. **A reference whose root identifier the file imports from outside the repository is no cut**, whatever name tail the
+   index matched. `unresolvedLinkCuts` takes the set of proofs already made, and a reference in it is never attributed to
+   a declaration. The unit is **the reference, never the line**: a proof is keyed by its place *and* the name it proves
+   (`externalPlaceKey`, `settledPlaceKey`), because a line holds several references and retiring the line would hide a
+   true cut that shares it. A hidden dependence is worse than a false cut, and that is the same reason decision 3 pays 6%
+   for a simpler shadowing rule. Measured on the same application's index: of the 10.896 places whose reference tail
+   matches a declaration somewhere, **468 (4,3%) carry more than one root name on the line**, so keying by the place would
+   have retired 468 cuts the proof never covered. That count is an upper bound: it is the whole index, specs included, and
+   not only what the walk reached.
 2. **Only a proven external target retires.** A name imported from a repository file stays a cut: the reference may name
    the imported declaration, and turning that into an edge needs the declaration, which is the type layer's answer
    (`RFC-0016` S9).
@@ -54,8 +60,9 @@ population did not.
    the file-level rule costs 6% of the retirements to keep the soundness argument short.
 4. **It needs no type root and no flag.** The same inputs and the same engine version give the same answer; there is no
    configuration a caller must supply for the fact to be complete.
-5. **It does not claim completeness.** Retiring a subset leaves the answer `partial` with a shorter list. The cut kind,
-   the status and the unknown reasons are unchanged.
+5. **It claims no completeness of its own.** The cut kind, the status rule and the unknown reasons are unchanged. A fact
+   becomes `complete` only when the retired cut was its only one; on the measured application the list shrank and every
+   answer stayed `partial`, which is what the numbers above show.
 6. **The port is declared by the consumer and wired by composition.** `core/ports/import-origins.port.ts`; the adapter
    parses one file at a time and drops the tree. No use case imports a parser and no adapter reads another adapter.
 

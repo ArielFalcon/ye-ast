@@ -48,6 +48,8 @@ export interface SettledReference {
   file: string;
   line: number;
   kind: string;
+  /** The name the reference used, as the layer was asked about it: the unit a retired cut is keyed by. */
+  name: string;
   target: { file: string; symbol: string; line: number };
 }
 

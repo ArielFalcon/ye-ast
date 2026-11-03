@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { nameTail, placeAt, removedDeclarationCuts, unreadRelationCuts, unresolvedLinkCuts, type UnresolvedUse, type WalkedDeclaration } from "./impact-cuts.ts";
+import { externalPlaceKey, nameTail, removedDeclarationCuts, settledPlaceKey, unreadRelationCuts, unresolvedLinkCuts, type UnresolvedUse, type WalkedDeclaration } from "./impact-cuts.ts";
 
 const SAVE: WalkedDeclaration = { file: "src/Repo.java", name: "save", kind: "method", qualifiedName: "Repo::save" };
 
@@ -25,7 +25,31 @@ test("a place a type layer settled is no cut at all, whatever name tail the inde
   const reference = use("save", "calls", "src/B.java", 9);
 
   assert.deepEqual(unresolvedLinkCuts([reference], [SAVE], []), [{ kind: "unresolved-link", at: ["src/Repo.java::save", "src/B.java:9"] }]);
-  assert.deepEqual(unresolvedLinkCuts([reference], [SAVE], [], new Set(), new Set([placeAt("src/B.java", 9)])), []);
+  assert.deepEqual(unresolvedLinkCuts([reference], [SAVE], [], new Set(), new Set([settledPlaceKey("src/B.java", 9, "save")])), []);
+});
+
+test("an external proof retires the reference whose own root it proves", () => {
+  const proven = use("inject.save", "calls", "src/Use.java", 3);
+
+  assert.deepEqual(unresolvedLinkCuts([proven], [SAVE], [], new Set(), new Set([externalPlaceKey("src/Use.java", 3, "inject")])), []);
+});
+
+test("an external proof never retires another reference that shares its line", () => {
+  const proven = use("inject.save", "calls", "src/Use.java", 3);
+  const other = use("repo.save", "calls", "src/Use.java", 3);
+
+  assert.deepEqual(unresolvedLinkCuts([proven, other], [SAVE], [], new Set(), new Set([externalPlaceKey("src/Use.java", 3, "inject")])), [
+    { kind: "unresolved-link", at: ["src/Use.java", "src/Use.java:3 repo.save"] },
+  ]);
+});
+
+test("a settlement retires the reference it names, never another reference that shares its line", () => {
+  const settledUse = qualified("this.a.save", "calls", ["Repo::save"], "src/Use.java", 7);
+  const other = qualified("this.b.save", "calls", ["Repo::save"], "src/Use.java", 7);
+
+  assert.deepEqual(unresolvedLinkCuts([settledUse, other], [SAVE], [], new Set(), new Set([settledPlaceKey("src/Use.java", 7, "this.a.save")])), [
+    { kind: "unresolved-link", at: ["src/Repo.java::save", "src/Use.java:7"] },
+  ]);
 });
 
 test("a qualified call the index considered for the walked declaration is a cut at it", () => {

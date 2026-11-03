@@ -136,7 +136,10 @@ Three defects were found by measuring, and each is a correction to this RFC:
 
 1. **The settlement was keyed by `(declaration, place)`.** The port settles a place onto node Y while
    `unresolvedLinkCuts` attributes the same place to node X by name tail, so the two keys never met. Measured: an empty
-   intersection. `impact-cuts.ts:106` now drops a place whose settled target the walk reached, keyed by the place alone.
+   intersection. `impact-cuts.ts` now drops a reference whose settled target the walk reached. Keyed by the place **alone**
+   that first fix was too coarse: it retired every reference on the line, and a second reference sharing it lost a true
+   cut. Both proofs are now keyed by the place and the name they prove —`settledPlaceKey` by the name as written,
+   `externalPlaceKey` by the rooted name.
 2. **`column` points at the start of the expression, not at the callee.** For `this.svc.get` the index reports the
    receiver's column, so `nameNodeAt` had to ascend from a call expression to its callee's name.
 3. **The program's options never carry `paths`.** Composition calls `createTypeResolution` without `options`
@@ -193,12 +196,15 @@ that shadows the import makes that assertion false, and a hidden impact is worse
 the shipped rule refuses **any** file that declares the name anywhere (`ADR-0019` decision 3): it gives up those 6% and
 keeps the argument short enough to be obviously right.
 
-> Retire the place only when the root identifier has an import binding and the file declares no name spelled the same.
+> Retire **the reference**, never the line: the proof is keyed by its place *and* its rooted name
+> (`impact-cuts.ts`, `externalPlaceKey`), because a line holds several references and retiring the line hides the ones
+> the proof never covered. And retire it only when the root identifier has an import binding and the file declares no name
+> spelled the same.
 
 A retirement changes when `unresolved-link` is emitted, so it touches `RFC-0002` rule 2 and the completeness rule of
-`RFC-0010`; it took its own record, `ADR-0019`. It does not move a fact to `complete`: retiring a subset leaves the rest,
-so the answer stays `partial` with a shorter list. The win is the list, never the status, and the measurement above
-confirms it: no symbol changed.
+`RFC-0010`; it took its own record, `ADR-0019`. It moves a fact to `complete` only when the retired cut was the fact's
+only one; on the measured application it shrank the list and left the status `partial`, and no symbol changed. The win is
+the list, not a status claimed in general.
 
 ### B. The type layer reads no `paths`, and this RFC specifies a wiring the architecture forbids
 

@@ -4,7 +4,7 @@ import type { FileChange } from "../../domain/change/diff-reader.ts";
 import { isSeedable, selectSeeds, type ComponentRef, type SelectedSeed } from "../../domain/change/seeds.ts";
 import { changedEntrypoints } from "../../domain/impact/changed-entrypoints.ts";
 import { EDGE_POLICY } from "../../domain/impact/edge-policy.ts";
-import { declarationAnchor, placeAt, removedDeclarationCuts, unreadRelationCuts, unresolvedLinkCuts, type UnreadRelation } from "../../domain/impact/impact-cuts.ts";
+import { declarationAnchor, externalPlaceKey, nameTail, removedDeclarationCuts, rootedName, settledPlaceKey, unreadRelationCuts, unresolvedLinkCuts, type UnreadRelation } from "../../domain/impact/impact-cuts.ts";
 import { sortedUnique, type ImportersValue } from "../../domain/impact/importers-fact.ts";
 import { impactFact, type ImpactBudget, type ImpactedSymbol, type ImpactValue, type Seed } from "../../domain/impact/impact-fact.ts";
 import { reachedEntrypoints } from "../../domain/impact/reached-entrypoints.ts";
@@ -472,17 +472,6 @@ function candidatesOf(symbols: readonly GraphSymbol[]): string[] {
   return [...new Set(symbols.filter(isSeedable).map((symbol) => symbol.name))].sort(compareText);
 }
 
-/** The name a reference uses, up to its first member: `this.svc.get` names `get`. */
-function simpleName(name: string): string {
-  const parts = name.split(".");
-  return parts[parts.length - 1] ?? name;
-}
-
-/** The identifier a name is rooted at: `a.b()` is rooted at `a`, and `this.svc.get` at `this`. */
-function rootedName(name: string): string {
-  return name.split(/[.:#]/)[0] ?? name;
-}
-
 /** The head's sources the walk reads: written, in scope, and of a kind an extractor covers. */
 function sourceFilesOf(headTree: CommitExtraction): string[] {
   return headTree.export.files.filter((file) => file.written && kindOfChangedFile(file.path) === "source").map((file) => file.path);
@@ -512,7 +501,7 @@ async function externalPlacesOf(deps: ImpactQueriesDeps, store: CodeGraphReader,
   return new Set(
     asked.flatMap((site, index) => {
       const finding = findings[index];
-      return finding?.status === "complete" && finding.value.kind === "external" ? [placeAt(site.file, site.line)] : [];
+      return finding?.status === "complete" && finding.value.kind === "external" ? [externalPlaceKey(site.file, site.line, site.name)] : [];
     }),
   );
 }
@@ -526,11 +515,11 @@ function settledReferences(unresolved: readonly GraphUnresolvedReference[], port
   if (port === undefined) return [];
   const candidates = unresolved.filter((reference) => (EDGE_POLICY.typeResolvedKinds as readonly string[]).includes(reference.kind));
   if (candidates.length === 0) return [];
-  const findings = port.resolve(candidates.map((reference) => ({ file: reference.file, line: reference.line, column: reference.column, symbol: simpleName(reference.name) })));
+  const findings = port.resolve(candidates.map((reference) => ({ file: reference.file, line: reference.line, column: reference.column, symbol: nameTail(reference.name) })));
   return candidates.flatMap((reference, index): SettledReference[] => {
     const finding = findings[index];
     if (finding?.status !== "complete" || finding.value.kind !== "repository") return [];
-    return [{ from: reference.from, file: reference.file, line: reference.line, kind: reference.kind, target: { file: finding.value.file, symbol: finding.value.symbol, line: finding.value.line } }];
+    return [{ from: reference.from, file: reference.file, line: reference.line, kind: reference.kind, name: reference.name, target: { file: finding.value.file, symbol: finding.value.symbol, line: finding.value.line } }];
   });
 }
 
@@ -590,7 +579,7 @@ function impactOf(input: WalkInput): ImpactRead {
    */
   const reachedAnchors = new Set(walked.map((symbol) => declarationAnchor(symbol.file, symbol.name)));
   const settledPlaces = new Set(
-    settled.filter((reference) => reachedAnchors.has(declarationAnchor(reference.target.file, reference.target.symbol))).map((reference) => placeAt(reference.file, reference.line)),
+    settled.filter((reference) => reachedAnchors.has(declarationAnchor(reference.target.file, reference.target.symbol))).map((reference) => settledPlaceKey(reference.file, reference.line, reference.name)),
   );
   /** Both proofs of a known target: a settled declaration the walk reached, and an import that names something outside. */
   const knownPlaces = new Set([...settledPlaces, ...(input.external ?? [])]);
