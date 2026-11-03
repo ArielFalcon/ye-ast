@@ -77,8 +77,8 @@ Reading an answer:
 - status "partial": the result stops at each listed cut; what lies past a cut is not known.
 - status "unknown": ye-ast cannot tell, and the reason says why; never read it as "no impact".
 - an item with reason "no-project": no package.json above that source places it in a project, so nothing says whether it declares routes; scope does not hide the manifest, unless an exclude glob leaves it out.
-- ye_ast_impact and ye_ast_callers list the symbols at depth 0 and 1 and count deeper ones per file; set detail to "full" when the deeper symbols themselves are needed.
-- The text is the answer: it lists the symbols the detail asks for and every cut place, while the structured content beside it carries only the envelope, so nothing is paid for twice. A host that needs the fact itself passes full: true, which adds every value and every cut place to the structured content and leaves the text unchanged.
+- Every tool takes detail. A summary, the default, lists the symbols at depth 0 and 1 and, for a cut, the declarations it could not settle to; set detail to "full" when the deeper symbols themselves or the place of each unresolved reference are needed.
+- The text is the answer: it lists what detail asks for, while the structured content beside it carries only the envelope, so nothing is paid for twice. A host that needs the fact itself passes full: true, which adds every value and every cut place to the structured content and leaves the text unchanged.
 - confidence is 0-1 and printed only below 1: how strongly the edge that reached the symbol was resolved, 1 for a relation read from the code itself and lower for one the extractor inferred. fan-in is how many places call or instantiate the symbol, whether or not the walk followed them.
 - Every answer closes with a \`cuts:\` list holding every place past each cut, after the content; the status line only counts them by kind, so a partial answer read without its list reads as complete.
 - An isError result names a fault kind. "live-requires-trusted" means the user must declare the repository trusted with \`ye-ast init --trust trusted\` before live can be used; answer from a revision meanwhile. "unknown-symbol" lists what the file declares; ask again with one of those names.
@@ -162,7 +162,7 @@ const withoutWorkspace = (value: { live?: boolean | undefined; workspace?: unkno
 const detail = z
   .enum(["summary", "full"] satisfies Detail[])
   .optional()
-  .describe("How much of the impacted symbols the text lists: summary (the default) lists depth 0 and 1 and counts deeper ones per file; full lists every one. The text is the only place the symbols appear unless the full argument is true.");
+  .describe("How much the text lists: summary (the default) names the symbols at depth 0 and 1 and the declarations a cut could not settle to; full lists every symbol and every place a cut could not settle. The structured content carries none of it unless the full argument is true.");
 
 const full = z
   .boolean()
@@ -342,14 +342,14 @@ export function createMcpServer(deps: McpDeps): McpServer {
     {
       title: "Entrypoints of a revision",
       description: `Lists the entrypoints of the repository at a revision: HTTP routes, UI routes, message listeners and scheduled jobs, each with the handler's path:line. Use it to orient in the repository or to find where a request, message or job is handled. ${COMPLETENESS}`,
-      inputSchema: z.strictObject({ revision, live, scope, full }).refine(excludes("revision"), "live excludes revision"),
+      inputSchema: z.strictObject({ revision, live, scope, detail, full }).refine(excludes("revision"), "live excludes revision"),
       outputSchema: FACT_OUTPUT,
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    ({ revision: requested, live: isLive, scope: paths, full: whole }, ctx) =>
+    ({ revision: requested, live: isLive, scope: paths, detail: listing, full: whole }, ctx) =>
       answer(
         (onStale) => deps.entrypoints.map({ repo: repository.path, repoId: repository.repoId, ...atRevision(requested, isLive, onStale), ...scopeOf(paths), signal: ctx.mcpReq.signal }),
-        renderEntrypointMap,
+        (fact) => renderEntrypointMap(fact, listing),
         whole === true,
       ),
   );
@@ -461,15 +461,15 @@ export function createMcpServer(deps: McpDeps): McpServer {
       title: "Importers of files",
       description: `Per file, the files that import it, the files that use it and the files holding a reference to its names that the index could not resolve. Use it before moving, renaming or deleting a file, or changing its exports. ${COMPLETENESS}`,
       inputSchema: z
-        .strictObject({ revision, live, files: z.array(z.string().min(1)).min(1).describe("Repository-relative paths."), scope, full })
+        .strictObject({ revision, live, files: z.array(z.string().min(1)).min(1).describe("Repository-relative paths."), scope, detail, full })
         .refine(excludes("revision"), "live excludes revision"),
       outputSchema: FACT_OUTPUT,
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    ({ revision: requested, live: isLive, files, scope: paths, full: whole }, ctx) =>
+    ({ revision: requested, live: isLive, files, scope: paths, detail: listing, full: whole }, ctx) =>
       answer(
         (onStale) => deps.impact.importers({ repo: repository.path, repoId: repository.repoId, ...atRevision(requested, isLive, onStale), files, ...scopeOf(paths), signal: ctx.mcpReq.signal }),
-        renderImporters,
+        (fact) => renderImporters(fact, listing),
         whole === true,
       ),
   );
@@ -485,12 +485,13 @@ export function createMcpServer(deps: McpDeps): McpServer {
         scope,
         repos: workspaceRepos,
         gateways,
+        detail,
         full,
       }),
       outputSchema: FACT_OUTPUT,
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    ({ revision: requested, offline: isOffline, scope: paths, repos, gateways: requestedGateways, full: whole }, ctx) =>
+    ({ revision: requested, offline: isOffline, scope: paths, repos, gateways: requestedGateways, detail: listing, full: whole }, ctx) =>
       answer(
         async () => {
           const read = await deps.workspace.outwardNames({
@@ -503,7 +504,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
           });
           return read.ok ? { ok: true, value: { fact: withoutRepositories(read.value.fact), ...(read.value.refresh === undefined ? {} : { refresh: read.value.refresh }) } } : read;
         },
-        renderWorkspace,
+        (fact) => renderWorkspace(fact, listing),
         whole === true,
       ),
   );
@@ -513,11 +514,11 @@ export function createMcpServer(deps: McpDeps): McpServer {
     {
       title: "Gaps a workspace leaves to the user",
       description: `What the workspace does not state and only the user can fill: the clones that serve an outward name, the clones that state no name, the names no repository given serves, the prefixes that route nowhere and the repositories without a trust record. Each gap lists every option the workspace can verify with path:line evidence and marks the one a rule recommends; a gap whose answer is a value no fact states says so. Use it before \`ye-ast init --workspace\` to show the user a form; it reads the same repositories and writes nothing. ${COMPLETENESS}`,
-      inputSchema: z.strictObject({ revision, offline, scope, repos: workspaceRepos, gateways, full }),
+      inputSchema: z.strictObject({ revision, offline, scope, repos: workspaceRepos, gateways, detail, full }),
       outputSchema: FACT_OUTPUT,
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    ({ revision: requested, offline: isOffline, scope: paths, repos, gateways: requestedGateways, full: whole }, ctx) =>
+    ({ revision: requested, offline: isOffline, scope: paths, repos, gateways: requestedGateways, detail: listing, full: whole }, ctx) =>
       answer(
         () =>
           deps.decisions.decisions({
@@ -528,7 +529,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
             ...scopeOf(paths),
             signal: ctx.mcpReq.signal,
           }),
-        renderDecisions,
+        (fact) => renderDecisions(fact, listing),
         whole === true,
       ),
   );

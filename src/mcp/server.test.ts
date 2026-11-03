@@ -424,25 +424,41 @@ test("cuts that name a single path are one line per kind listing every path", as
   await session.close();
 });
 
-test("an unresolved-link cut renders the places in its anchor's file as line numbers and other files as path:line", async () => {
+test("with detail full, an unresolved-link cut renders the places in its anchor's file as line numbers and other files as path:line", async () => {
   const partial = impactFact({
     status: "partial",
     cuts: [{ kind: "unresolved-link", at: ["src/a.ts::A.f", "src/a.ts:18", "src/a.ts:123 no-extractor", "src/b.ts:7"] }],
   } as Partial<Fact<ImpactValue>>);
   const { session } = await setup({ ofChange: async () => ({ ok: true, value: partial }) });
-  const text = textOf(await session.callTool("ye_ast_impact", { base: "main" }));
+  const text = textOf(await session.callTool("ye_ast_impact", { base: "main", detail: "full" }));
   assert.match(text, /unresolved-link at src\/a\.ts::A\.f: lines 18, 123 \(no-extractor\), src\/b\.ts:7/);
   await session.close();
 });
 
-test("the places of a cut are grouped under their file, every place kept and the path printed once", async () => {
+test("with detail full, the places of a cut are grouped under their file, every place kept and the path printed once", async () => {
   const places = ["src/a.ts::A.f", ...["10", "11", "12", "40"].map((line) => `src/x.ts:${line}`), ...["7", "9"].map((line) => `src/y.ts:${line}`), "src/z.ts:3 no-extractor"];
   const partial = impactFact({ status: "partial", cuts: [{ kind: "unresolved-link", at: places }] } as Partial<Fact<ImpactValue>>);
   const { session } = await setup({ ofChange: async () => ({ ok: true, value: partial }) });
-  const text = textOf(await session.callTool("ye_ast_impact", { base: "main" }));
+  const text = textOf(await session.callTool("ye_ast_impact", { base: "main", detail: "full" }));
   assert.match(text, /unresolved-link at src\/a\.ts::A\.f: src\/x\.ts: 10, 11, 12, 40, src\/y\.ts: 7, 9, src\/z\.ts \(no-extractor\):3$/m);
   assert.equal(text.split("src/x.ts").length - 1, 1, "the path of a grouped file is printed once");
   for (const line of ["10", "11", "12", "40"]) assert.match(text, new RegExp(`\\b${line}\\b`), `line ${line} survives the grouping`);
+  await session.close();
+});
+
+test("by default a cut lists the declarations it could not settle to, grouped under their file, and no place", async () => {
+  const partial = impactFact({
+    status: "partial",
+    cuts: [
+      { kind: "unresolved-link", at: ["src/a.ts::A.f", "src/x.ts:10", "src/x.ts:11", "src/y.ts:7"] },
+      { kind: "unresolved-link", at: ["src/a.ts::A.g", "src/x.ts:10"] },
+    ],
+  } as Partial<Fact<ImpactValue>>);
+  const { session } = await setup({ ofChange: async () => ({ ok: true, value: partial }) });
+  const text = textOf(await session.callTool("ye_ast_impact", { base: "main" }));
+  assert.match(text, /unresolved-link \(2 declarations, 4 references; detail "full" lists every place\):\n {4}src\/a\.ts\n {6}A\.f\n {6}A\.g$/m);
+  assert.equal(text.split("src/x.ts").length - 1, 0, "a summary prints no place");
+  assert.equal(text.split("src/a.ts").length - 1, 1, "the file of the declarations is printed once");
   await session.close();
 });
 
@@ -481,7 +497,7 @@ test("impacted symbols are grouped under their file, a seed at depth 0 is not pr
   await session.close();
 });
 
-test("by default impact lists the symbols at depth 0 and 1 and counts deeper ones per file, saying how to list them", async () => {
+test("by default impact lists the symbols at depth 0 and 1 and says how many deeper ones it does not list", async () => {
   const deep = impactFact({
     value: {
       seeds: [{ file: "src/a.ts", symbol: "A.seed", line: 1, basis: "requested" }],
@@ -498,7 +514,8 @@ test("by default impact lists the symbols at depth 0 and 1 and counts deeper one
   const { session } = await setup({ callers: async () => ({ ok: true, value: deep }) });
   const result = await session.callTool("ye_ast_callers", { targets: [{ file: "src/a.ts", symbol: "A.seed" }] });
   const text = textOf(result);
-  assert.match(text, /impacted symbols \(4\): 1 at depth 0-1 listed, 3 deeper counted per file; detail "full" lists them\n {2}src\/a\.ts\n {4}4 A\.other \[method\] \(depth 1\)\n {2}src\/b\.ts: 2 at depth 2-3\n {2}src\/c\.ts: 1 at depth 2/);
+  assert.match(text, /impacted symbols \(4\): 1 at depth 0-1 listed, 3 deeper not listed; detail "full" lists them\n {2}src\/a\.ts\n {4}4 A\.other \[method\] \(depth 1\)$/m);
+  assert.doesNotMatch(text, /at depth 2-3|src\/c\.ts: 1 at depth/);
   assert.doesNotMatch(text, /B\.user|C\.top/);
   assert.deepEqual(result.structuredContent, envelopeOf(deep));
   await session.close();

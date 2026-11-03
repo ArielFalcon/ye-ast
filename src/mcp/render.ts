@@ -141,9 +141,30 @@ function singlePathLine(kind: Cut["kind"], cuts: readonly Cut[]): string {
   return `  ${kind} (${cuts.length}): ${listed}`;
 }
 
-/** Every cut once: those that name a single path grouped per kind with every path listed, the rest one line each. */
-function cutLines(cuts: readonly Cut[]): string[] {
+/** The declarations an unresolved reference could not be settled to, under the file that holds them. The place it was
+ * referenced from is printed only with detail "full": the count says how blind the answer is, and a caller debugging one
+ * miss asks again. */
+function unresolvedDeclarations(cuts: readonly Cut[]): string[] {
+  const byFile = new Map<string, string[]>();
+  for (const cut of cuts) {
+    const anchor = cut.at[0] ?? "";
+    const settled = anchor.indexOf("::");
+    const file = settled === -1 ? anchor : anchor.slice(0, settled);
+    const name = settled === -1 ? "" : anchor.slice(settled + 2);
+    byFile.set(file, name === "" ? (byFile.get(file) ?? []) : [...(byFile.get(file) ?? []), name]);
+  }
+  const references = cuts.reduce((total, cut) => total + Math.max(0, cut.at.length - 1), 0);
+  return [
+    `  unresolved-link (${cuts.length} declarations, ${references} references; detail "full" lists every place):`,
+    ...[...byFile].flatMap(([file, names]) => [`    ${file}`, ...names.map((name) => `      ${name}`)]),
+  ];
+}
+
+/** Every cut once: those that name a single path grouped per kind with every path listed, the rest one line each. Under
+ * a summary, an unresolved link keeps only what it could not settle to. */
+function cutLines(cuts: readonly Cut[], detail: Detail): string[] {
   return cutsByKind(cuts).flatMap(([kind, ofKind]) => {
+    if (kind === "unresolved-link" && detail !== "full") return unresolvedDeclarations(ofKind);
     const single = ofKind.filter((cut) => cut.at.length === 1);
     const rest = ofKind.filter((cut) => cut.at.length > 1).toSorted((a, b) => compareText(a.at.join("\0"), b.at.join("\0")));
     return [...(single.length === 0 ? [] : [singlePathLine(kind, single)]), ...rest.map(cutLine)];
@@ -151,8 +172,8 @@ function cutLines(cuts: readonly Cut[]): string[] {
 }
 
 /** The cut list every answer closes with, so the answer content is read first and nothing is dropped. */
-function cutsBlock(cuts: readonly Cut[]): string[] {
-  return cuts.length === 0 ? [] : [CUTS, ...cutLines(cuts)];
+function cutsBlock(cuts: readonly Cut[], detail: Detail = "summary"): string[] {
+  return cuts.length === 0 ? [] : [CUTS, ...cutLines(cuts, detail)];
 }
 
 function list(lines: readonly string[]): string[] {
@@ -176,13 +197,13 @@ function itemLine(item: Finding<Entrypoint>): string {
   return item.status === "unknown" ? `  - unknown (${item.reason}) ${item.evidence.map(evidenceText).join(", ")}`.trimEnd() : entrypointLine(item.value);
 }
 
-export function renderEntrypointMap(fact: Fact<EntrypointMap>): string {
+export function renderEntrypointMap(fact: Fact<EntrypointMap>, detail: Detail = "summary"): string {
   const lines = headerLines(fact);
   if (fact.status === "unknown") return lines.join("\n");
   const section = fact.value.entrypoints;
   lines.push("entrypoints:", ...statusLines(section, "  "));
   if (section.status !== "unknown") lines.push(...list(section.value.map(itemLine)));
-  lines.push(...cutsBlock([...cutsOf(fact), ...cutsOf(section)]));
+  lines.push(...cutsBlock([...cutsOf(fact), ...cutsOf(section)], detail));
   return lines.join("\n");
 }
 
@@ -219,12 +240,6 @@ function groupedLines(symbols: readonly ImpactedSymbol[]): string[] {
   return [...Map.groupBy(symbols, (symbol) => symbol.file)].flatMap(([file, inFile]) => [`  ${file}`, ...inFile.map((symbol) => symbolLine(symbol, file))]);
 }
 
-function countedLine(file: string, symbols: readonly ImpactedSymbol[]): string {
-  const depths = symbols.map((symbol) => symbol.depth);
-  const [low, high] = [Math.min(...depths), Math.max(...depths)];
-  return `  ${file}: ${symbols.length} at depth ${low === high ? low : `${low}-${high}`}`;
-}
-
 /** The impacted symbols under the file that holds them, so the path is printed once per file. */
 function impactedSymbols(value: ImpactValue, detail: Detail): string[] {
   const seeds = seedKeys(value);
@@ -234,9 +249,8 @@ function impactedSymbols(value: ImpactValue, detail: Detail): string[] {
   const deeper = listed.filter((symbol) => symbol.depth > LISTED_DEPTH);
   if (detail === "full" || deeper.length === 0) return [`impacted symbols (${listed.length}):`, ...groupedLines(listed)];
   return [
-    `impacted symbols (${listed.length}): ${near.length} at depth 0-${LISTED_DEPTH} listed, ${deeper.length} deeper counted per file; detail "full" lists them`,
+    `impacted symbols (${listed.length}): ${near.length} at depth 0-${LISTED_DEPTH} listed, ${deeper.length} deeper not listed; detail "full" lists them`,
     ...groupedLines(near),
-    ...[...Map.groupBy(deeper, (symbol) => symbol.file)].map(([file, inFile]) => countedLine(file, inFile)),
   ];
 }
 
@@ -268,7 +282,7 @@ function groupedSeeds(seeds: readonly Seed[]): string[] {
 export function renderImpact(fact: Fact<ImpactValue>, detail: Detail = "summary"): string {
   const lines = headerLines(fact);
   if (fact.status === "unknown") return lines.join("\n");
-  lines.push(...impactBody(fact.value, detail), ...cutsBlock(cutsOf(fact)));
+  lines.push(...impactBody(fact.value, detail), ...cutsBlock(cutsOf(fact), detail));
   return lines.join("\n");
 }
 
@@ -277,13 +291,13 @@ function namedFiles(label: string, files: readonly string[]): string {
   return files.length === 0 ? head : `${head}: ${files.join(", ")}`;
 }
 
-export function renderImporters(fact: Fact<ImportersValue>): string {
+export function renderImporters(fact: Fact<ImportersValue>, detail: Detail = "summary"): string {
   const lines = headerLines(fact);
   if (fact.status === "unknown") return lines.join("\n");
   for (const entry of fact.value.files) {
     lines.push(`  ${entry.file}`, namedFiles("importers", entry.importers), namedFiles("users", entry.users), namedFiles("unresolved namers", entry.unresolvedNamers));
   }
-  lines.push(...cutsBlock(cutsOf(fact)));
+  lines.push(...cutsBlock(cutsOf(fact), detail));
   return lines.join("\n");
 }
 
@@ -335,7 +349,7 @@ export function renderWorkspaceImpact(fact: Fact<WorkspaceImpactValue>, detail: 
   lines.push(`links across repositories (${value.links.length}):`, ...value.links.map(impactedLinkLine));
   lines.push("per repository:", ...value.workspace.repos.flatMap((repo) => (value.sections[repo] === undefined ? [] : repoImpactLines(repo, value.sections[repo] as Fact<RepoImpact>, detail, value.trigger.repo))));
   lines.push(counted("no local repository serves", value.workspace.unserved));
-  lines.push(...cutsBlock([...cutsOf(fact), ...Object.values(value.sections).flatMap(cutsOf)]));
+  lines.push(...cutsBlock([...cutsOf(fact), ...Object.values(value.sections).flatMap(cutsOf)], detail));
   return lines.join("\n");
 }
 
@@ -377,7 +391,7 @@ function outwardLine(name: OutwardName): string {
   return `  - ${name.kind} ${name.name} (${name.evidence.map(evidenceText).join(", ")})`;
 }
 
-export function renderWorkspace(fact: Fact<WorkspaceValue>): string {
+export function renderWorkspace(fact: Fact<WorkspaceValue>, detail: Detail = "summary"): string {
   const lines = headerLines(fact);
   if (fact.status === "unknown") return lines.join("\n");
   const { value } = fact;
@@ -391,7 +405,7 @@ export function renderWorkspace(fact: Fact<WorkspaceValue>): string {
   }
   lines.push(`served by a local repository (${value.candidates.length}):`, ...value.candidates.map(candidateLine));
   lines.push(`no local repository serves (${value.unserved.length}):`, ...value.unserved.map((name) => `  - ${name.kind} ${name.name}`));
-  lines.push(...cutsBlock([...cutsOf(fact), ...Object.values(value.sections).flatMap(cutsOf)]));
+  lines.push(...cutsBlock([...cutsOf(fact), ...Object.values(value.sections).flatMap(cutsOf)], detail));
   return lines.join("\n");
 }
 
@@ -411,13 +425,13 @@ function decisionLines(decision: Decision): string[] {
   ];
 }
 
-export function renderDecisions(fact: Fact<DecisionValue>): string {
+export function renderDecisions(fact: Fact<DecisionValue>, detail: Detail = "summary"): string {
   const lines = headerLines(fact);
   if (fact.status === "unknown") return lines.join("\n");
   const { value } = fact;
   lines.push(counted("repositories", value.repositories.map(({ repo, snapshot }) => `${repo}@${snapshot.kind === "sha" ? snapshot.sha : snapshot.stateId}`)));
   lines.push(sourceLine(value.source));
   lines.push(`decisions (${value.decisions.length}):`, ...value.decisions.flatMap(decisionLines));
-  lines.push(...cutsBlock(cutsOf(fact)));
+  lines.push(...cutsBlock(cutsOf(fact), detail));
   return lines.join("\n");
 }
