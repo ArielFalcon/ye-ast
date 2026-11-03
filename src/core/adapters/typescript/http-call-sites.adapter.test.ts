@@ -63,6 +63,150 @@ test("a parameter the code fills at run time is a placeholder: `${expr}` and `:n
   assert.deepEqual(sites(await reader.of([component], "shop-web")), ["GET orders/{}/lines@src/app/app.component.ts:6", "DELETE orders/{}@src/app/app.component.ts:7"]);
 });
 
+test("a path part that names a field of the class is the value its initializer states", async () => {
+  const service = source(
+    "src/app/order/order.service.ts",
+    ["import { HttpClient } from '@angular/common/http'", "import { inject } from '@angular/core'", "export class OrderService {", "  private readonly base = 'shop-api'", "  private readonly http = inject(HttpClient)", "  load(): void {", "    this.http.get(`${this.base}/orders/7`)", "  }", "}"].join("\n"),
+  );
+
+  assert.deepEqual(sites(await reader.of([service], "shop-web")), ["GET shop-api/orders/7@src/app/order/order.service.ts:7"]);
+});
+
+test("a path part that names a static member is the value its initializer states", async () => {
+  const service = source(
+    "src/app/order/order.api.ts",
+    ["import { HttpClient } from '@angular/common/http'", "import { inject } from '@angular/core'", "export class OrderApi {", "  private static readonly BASE = 'shop-api'", "  private readonly http = inject(HttpClient)", "  load(): void {", "    this.http.get(`${OrderApi.BASE}/orders`)", "  }", "}"].join("\n"),
+  );
+
+  assert.deepEqual(sites(await reader.of([service], "shop-web")), ["GET shop-api/orders@src/app/order/order.api.ts:7"]);
+});
+
+test("a field whose initializer the snapshot does not decide keeps the path undecided", async () => {
+  const service = source(
+    "src/app/order/order.service.ts",
+    ["import { HttpClient } from '@angular/common/http'", "import { inject } from '@angular/core'", "export class OrderService {", "  private readonly base = this.pick()", "  private readonly http = inject(HttpClient)", "  private pick(): string { return 'shop-api' }", "  load(): void {", "    this.http.get(`${this.base}/orders`)", "  }", "}"].join("\n"),
+  );
+
+  assert.deepEqual(sites(await reader.of([service], "shop-web")), ["unknown unresolved@src/app/order/order.service.ts:8"]);
+});
+
+test("a static member of an imported class resolves through the import", async () => {
+  const api = source("src/app/order/order.api.ts", ["export class OrderApi {", "  static readonly BASE = 'shop-api'", "}"].join("\n"));
+  const service = source(
+    "src/app/order/order.service.ts",
+    ["import { HttpClient } from '@angular/common/http'", "import { inject } from '@angular/core'", "import { OrderApi } from './order.api'", "export class OrderService {", "  private readonly http = inject(HttpClient)", "  load(): void {", "    this.http.get(`${OrderApi.BASE}/orders`)", "  }", "}"].join("\n"),
+  );
+
+  assert.deepEqual(sites(await reader.of([api, service], "shop-web")), ["GET shop-api/orders@src/app/order/order.service.ts:7"]);
+});
+
+test("a name a barrel re-exports with `export *` resolves through it", async () => {
+  const orders = source("src/app/api/orders.ts", "export const ORDERS = 'orders-api/orders'");
+  const barrel = source("src/app/api/index.ts", "export * from './orders'");
+  const service = source(
+    "src/app/order/order.service.ts",
+    ["import { HttpClient } from '@angular/common/http'", "import { inject } from '@angular/core'", "import { ORDERS } from '../api'", "export class OrderService {", "  private readonly http = inject(HttpClient)", "  load(): void {", "    this.http.get(ORDERS)", "  }", "}"].join("\n"),
+  );
+
+  assert.deepEqual(sites(await reader.of([orders, barrel, service], "shop-web")), ["GET orders-api/orders@src/app/order/order.service.ts:7"]);
+});
+
+test("a name a barrel re-exports by name resolves through it", async () => {
+  const orders = source("src/app/api/orders.ts", "export const ORDERS = 'orders-api/orders'");
+  const barrel = source("src/app/api/index.ts", "export { ORDERS } from './orders'");
+  const service = source(
+    "src/app/order/order.service.ts",
+    ["import { HttpClient } from '@angular/common/http'", "import { inject } from '@angular/core'", "import { ORDERS } from '../api'", "export class OrderService {", "  private readonly http = inject(HttpClient)", "  load(): void {", "    this.http.get(ORDERS)", "  }", "}"].join("\n"),
+  );
+
+  assert.deepEqual(sites(await reader.of([orders, barrel, service], "shop-web")), ["GET orders-api/orders@src/app/order/order.service.ts:7"]);
+});
+
+test("a member read through a namespace import resolves", async () => {
+  const paths = source("src/app/api/paths.ts", "export const ORDERS = 'orders-api/orders'");
+  const service = source(
+    "src/app/order/order.service.ts",
+    ["import { HttpClient } from '@angular/common/http'", "import { inject } from '@angular/core'", "import * as api from '../api/paths'", "export class OrderService {", "  private readonly http = inject(HttpClient)", "  load(): void {", "    this.http.get(api.ORDERS)", "  }", "}"].join("\n"),
+  );
+
+  assert.deepEqual(sites(await reader.of([paths, service], "shop-web")), ["GET orders-api/orders@src/app/order/order.service.ts:7"]);
+});
+
+test("a member of a default-exported object resolves", async () => {
+  const environment = source("src/environments/environment.ts", "export default { apiUrl: 'shop-api' }");
+  const service = source(
+    "src/app/order/order.service.ts",
+    ["import { HttpClient } from '@angular/common/http'", "import { inject } from '@angular/core'", "import environment from '../../environments/environment'", "export class OrderService {", "  private readonly http = inject(HttpClient)", "  load(): void {", "    this.http.get(`${environment.apiUrl}/orders`)", "  }", "}"].join("\n"),
+  );
+
+  assert.deepEqual(sites(await reader.of([environment, service], "shop-web")), ["GET shop-api/orders@src/app/order/order.service.ts:7"]);
+});
+
+test("a path two literals add resolves", async () => {
+  const service = source(
+    "src/app/order/order.service.ts",
+    ["import { HttpClient } from '@angular/common/http'", "import { inject } from '@angular/core'", "const BASE = 'orders-api'", "export class OrderService {", "  private readonly http = inject(HttpClient)", "  load(): void {", "    this.http.get(BASE + '/orders')", "  }", "}"].join("\n"),
+  );
+
+  assert.deepEqual(sites(await reader.of([service], "shop-web")), ["GET orders-api/orders@src/app/order/order.service.ts:7"]);
+});
+
+test("a barrel cycle is undecided, never a hang", async () => {
+  const a = source("src/app/api/a.ts", "export * from './b'");
+  const b = source("src/app/api/b.ts", "export * from './a'");
+  const service = source(
+    "src/app/order/order.service.ts",
+    ["import { HttpClient } from '@angular/common/http'", "import { inject } from '@angular/core'", "import { ORDERS } from './api/a'", "export class OrderService {", "  private readonly http = inject(HttpClient)", "  load(): void {", "    this.http.get(ORDERS)", "  }", "}"].join("\n"),
+  );
+
+  assert.deepEqual(sites(await reader.of([a, b, service], "shop-web")), ["unknown unresolved@src/app/order/order.service.ts:7"]);
+});
+
+test("a parameter that shadows a const of the file is still a value the code fills at run time", async () => {
+  const service = source(
+    "src/app/order/order.service.ts",
+    ["import { HttpClient } from '@angular/common/http'", "import { inject } from '@angular/core'", "const BASE = 'orders-api'", "export class OrderService {", "  private readonly http = inject(HttpClient)", "  load(BASE: string): void {", "    this.http.get(`${BASE}/orders`)", "  }", "}"].join("\n"),
+  );
+
+  assert.deepEqual(sites(await reader.of([service], "shop-web")), ["GET {}/orders@src/app/order/order.service.ts:7"]);
+});
+
+test("a const a method declares with a literal initializer resolves", async () => {
+  const service = source(
+    "src/app/order/order.service.ts",
+    ["import { HttpClient } from '@angular/common/http'", "import { inject } from '@angular/core'", "export class OrderService {", "  private readonly http = inject(HttpClient)", "  load(): void {", "    const base = 'orders-api'", "    this.http.get(`${base}/orders`)", "  }", "}"].join("\n"),
+  );
+
+  assert.deepEqual(sites(await reader.of([service], "shop-web")), ["GET orders-api/orders@src/app/order/order.service.ts:7"]);
+});
+
+test("a path part imported from a module the snapshot does not hold is undecided, never a value the code fills at run time", async () => {
+  const service = source(
+    "src/app/order/order.service.ts",
+    ["import { HttpClient } from '@angular/common/http'", "import { inject } from '@angular/core'", "import { BASE } from './missing.api'", "export class OrderService {", "  private readonly http = inject(HttpClient)", "  load(): void {", "    this.http.get(`${BASE}/orders`)", "  }", "}"].join("\n"),
+  );
+
+  assert.deepEqual(sites(await reader.of([service], "shop-web")), ["unknown unresolved@src/app/order/order.service.ts:7"]);
+});
+
+test("a variable a method declares from its own parameter is still a value the code fills at run time", async () => {
+  const service = source(
+    "src/app/order/order.service.ts",
+    ["import { HttpClient } from '@angular/common/http'", "import { inject } from '@angular/core'", "export class OrderService {", "  private readonly http = inject(HttpClient)", "  load(orderId: string): void {", "    const url = orderId", "    this.http.get(`${url}/lines`)", "  }", "}"].join("\n"),
+  );
+
+  assert.deepEqual(sites(await reader.of([service], "shop-web")), ["GET {}/lines@src/app/order/order.service.ts:7"]);
+});
+
+test("a path held as a member of a constant object literal still resolves", async () => {
+  const service = source(
+    "src/app/order/order.service.ts",
+    ["import { HttpClient } from '@angular/common/http'", "import { inject } from '@angular/core'", "const PATHS = { orders: 'orders-api/orders' }", "export class OrderService {", "  private readonly http = inject(HttpClient)", "  load(): void {", "    this.http.get(PATHS.orders)", "  }", "}"].join("\n"),
+  );
+
+  assert.deepEqual(sites(await reader.of([service], "shop-web")), ["GET orders-api/orders@src/app/order/order.service.ts:7"]);
+});
+
 test("a call through a wrapper the repository declares is a call site: the wrapper's own parameter is the path", async () => {
   const component = source(
     "src/app/order/order.api.ts",
