@@ -1,4 +1,4 @@
-import { kindOfChangedFile } from "../../domain/change/changed-file.ts";
+import { isReadableFile } from "../../domain/change/changed-file.ts";
 import { sortedUnique } from "../../domain/impact/importers-fact.ts";
 import { contentFingerprint, exportCuts } from "../../domain/map/entrypoint-map.ts";
 import type { Cut, Evidence, Fact } from "../../domain/shared/fact.ts";
@@ -15,9 +15,6 @@ export interface OutlineQueriesDeps extends HeadReaderDeps {
   engines: Readonly<Record<string, string>>;
 }
 
-/** Whether the index holds a file of this kind: the same rule the importers fact states for its answers. */
-const isCovered = (path: string): boolean => ["source", "test"].includes(kindOfChangedFile(path));
-
 export function createOutlineQueries(deps: OutlineQueriesDeps): OutlineQueries {
   const headReader = createHeadReader(deps);
   const engines = sortedEngines(deps.engines);
@@ -32,8 +29,8 @@ export function createOutlineQueries(deps: OutlineQueriesDeps): OutlineQueries {
         const content = contentFingerprint(headTree.export);
         const outside = files.filter((file) => !head.selected(file));
         if (outside.length > 0) return { ok: true, value: { ...head.base(content), evidence: outside.map((path): Evidence => ({ path, line: 1 })), status: "unknown", reason: "out-of-scope" } };
-        const fixed = [...exportCuts(headTree.export), ...files.filter((file) => !isCovered(file)).map((file): Cut => ({ kind: "no-extractor", at: [file] }))];
-        const covered = files.filter(isCovered);
+        const fixed = [...exportCuts(headTree.export), ...files.filter((file) => !isReadableFile(file)).map((file): Cut => ({ kind: "no-extractor", at: [file] }))];
+        const covered = files.filter(isReadableFile);
         if (covered.length === 0) return { ok: true, value: withCuts(head.base(content), { files: [], unheld: covered }, fixed) };
 
         const index = await head.open();

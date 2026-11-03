@@ -1,5 +1,5 @@
 import { blastRadius, type BlastRadius } from "../../domain/change/blast-radius.ts";
-import { kindOfChangedFile } from "../../domain/change/changed-file.ts";
+import { isReadableFile, kindOfChangedFile } from "../../domain/change/changed-file.ts";
 import type { FileChange } from "../../domain/change/diff-reader.ts";
 import { isSeedable, selectSeeds, type ComponentRef, type SelectedSeed } from "../../domain/change/seeds.ts";
 import { changedEntrypoints } from "../../domain/impact/changed-entrypoints.ts";
@@ -156,7 +156,6 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
 
     async importers(request) {
       const files = sortedUnique(request.files);
-      const isCovered = (path: string): boolean => ["source", "test"].includes(kindOfChangedFile(path));
       const spec: FactSpec = { declaredConfig: { files }, engines: importersEngines };
 
       return headReader.atHead(request, spec, async (head): Promise<Result<Fact<ImportersValue>, VcsFault>> => {
@@ -164,8 +163,8 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
         const content = contentFingerprint(headTree.export);
         const outside = files.filter((file) => !head.selected(file));
         if (outside.length > 0) return { ok: true, value: { ...head.base(content), evidence: outside.map((path): Evidence => ({ path, line: 1 })), status: "unknown", reason: "out-of-scope" } };
-        const fixed = [...exportCuts(headTree.export), ...files.filter((file) => !isCovered(file)).map((file): Cut => ({ kind: "no-extractor", at: [file] }))];
-        const covered = files.filter(isCovered);
+        const fixed = [...exportCuts(headTree.export), ...files.filter((file) => !isReadableFile(file)).map((file): Cut => ({ kind: "no-extractor", at: [file] }))];
+        const covered = files.filter(isReadableFile);
         if (covered.length === 0) return { ok: true, value: impactFact(head.base(content), { files: [] }, fixed) };
 
         const index = await head.open();
@@ -173,7 +172,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
         if (index === "unavailable") return { ok: true, value: { ...head.base(content), status: "unknown", reason: "index-unavailable" } };
         const { store, summary } = index;
         try {
-          const written = headTree.export.files.filter((file) => file.written && isCovered(file.path)).map((file) => file.path);
+          const written = headTree.export.files.filter((file) => file.written && isReadableFile(file.path)).map((file) => file.path);
           const held = new Set(headTree.export.files.map((file) => file.path));
           const references = store.unresolvedReferences(written);
           const read = readImporters(store, covered, references);
