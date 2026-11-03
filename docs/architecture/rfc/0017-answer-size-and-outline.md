@@ -39,21 +39,28 @@ lists a nearer one, the summary is roughly 150 bytes **larger** than `detail: "f
 `cutsBlock` (`src/mcp/render.ts:262-268`): a counted cut costs a `summarized (…)` line plus a per-file count line,
 against the single cut line it hides.
 
-**The rule.** For every answer and every detail level, `bytes(render(fact, "summary")) <= bytes(render(fact,
-"full"))`. A renderer that would break it renders the full body instead of the counted line. On a tie the summary
-stands, so the answer keeps saying what it left out.
+**The rule.** A counted elision is used only when it is not longer than listing what it counts, everything else in
+that block equal: the renderer builds both texts and keeps the shorter, and a tie keeps the count so the answer still
+says what it left out.
 
-**Why this is not a size threshold.** The renderer compares two texts it has already produced, not a count against a
-constant. There is no number in the rule: a fixture with one hidden symbol collapses to the full body, a fixture with
-three keeps the summary. The comparison is the invariant itself.
+The comparison is against **the same detail level**, not against `detail: "full"`. The cuts block holds two different
+elisions: the counted one this rule governs, and a summary that names the declarations a cut could not settle to
+instead of its places. The second is a different presentation of the same fact, not a count. Letting its bytes decide
+would flip the shape of a cut for reasons unrelated to the fact, and would make a deterministic contract depend on
+how long a path happens to be. Measured on the fixture of the existing cut tests: the declaration form costs more than
+the plain listing for one cut and less for many, so a byte rule there would change the answer's shape with the size of
+the fixture.
 
 **Scope.** Every renderer with a counted block: `impact`, `callers`, `importers`, `entrypoints`, `workspace`,
 `decisions`, and the `cuts:` block each one closes with. A new renderer inherits the rule through the shared test
 helper, not through a review.
 
-**Acceptance.** A test over an impact answer with one deeper symbol in a file that already lists a nearer one asserts
-the invariant; another asserts it over the counted-cut block; both fail on `159f46f` and pass after the change. The
-existing fixtures keep their exact text, so no accepted output changes except where the rule fires.
+**Acceptance, measured.** An impact answer whose summary counts one deeper symbol in a file that already lists a
+nearer one renders **415 bytes against 295** for the full body, 41 % more. After the rule it renders the full body,
+which is the correct answer at that size. Three fixtures that asserted a counted rendering were shown to be too small
+for counting to pay — the count line is about 200 characters, so it only wins once it stands for several lines — and
+are enlarged until it does, with the assertions they carry unchanged. A new test holds the invariant on the collapsing
+fixture.
 
 ## 2. The outline: the shape of a file, with coordinates
 
