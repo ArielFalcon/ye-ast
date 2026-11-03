@@ -10,6 +10,7 @@ import type { Result } from "../../domain/shared/result.ts";
 import {
   createCodeGraph,
   defaultCodeGraphDeps,
+  siblingScript,
   SUPPORTED_STORE,
   type CodeGraphDeps,
   type IndexerRun,
@@ -300,6 +301,14 @@ test("the bundle is resolved from the platform package in node_modules, never fr
   const bundle = defaultCodeGraphDeps.resolveBundle();
   assert.ok(bundle !== null);
   assert.ok(bundle.includes(join("node_modules", "@colbymchenry", `codegraph-${process.platform}-${process.arch}`, "lib", "dist")));
+});
+
+test("the child script carries the extension of the module that spawns it, so the published build finds it", () => {
+  const emitted = siblingScript("file:///pkg/dist/core/adapters/codegraph/codegraph.adapter.js", "index-snapshot.child");
+  const source = siblingScript("file:///repo/src/core/adapters/codegraph/codegraph.adapter.ts", "index-snapshot.child");
+
+  assert.equal(emitted, join("/pkg/dist/core/adapters/codegraph", "index-snapshot.child.js"));
+  assert.equal(source, join("/repo/src/core/adapters/codegraph", "index-snapshot.child.ts"));
 });
 
 test("the indexer runs the child with the V8 flag and the resolved bundle, never codegraph's launcher", async () => {

@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import { devNull } from "node:os";
-import { dirname, join, resolve, sep } from "node:path";
+import { dirname, extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { readdir, realpath, rm } from "node:fs/promises";
 import type { CodeGraph as SdkGraph, Edge, Node } from "@colbymchenry/codegraph";
@@ -43,8 +43,16 @@ export interface CodeGraphDeps {
   runIndexer(command: string, args: readonly string[], env: NodeJS.ProcessEnv, signal?: AbortSignal): Promise<IndexerRun>;
 }
 
-const CHILD_SCRIPT = fileURLToPath(new URL("./index-snapshot.child.ts", import.meta.url));
-const SYNC_SCRIPT = fileURLToPath(new URL("./sync-mirror.child.ts", import.meta.url));
+/**
+ * The sibling script of the running module, with that module's own extension: the emitted `.js` of a published build, or
+ * the `.ts` of a source checkout. A literal `.ts` here names a file the published build never carries.
+ */
+export function siblingScript(moduleUrl: string, name: string): string {
+  return fileURLToPath(new URL(`./${name}${extname(fileURLToPath(moduleUrl))}`, moduleUrl));
+}
+
+const CHILD_SCRIPT = siblingScript(import.meta.url, "index-snapshot.child");
+const SYNC_SCRIPT = siblingScript(import.meta.url, "sync-mirror.child");
 const INHERITED_VARIABLES = ["PATH", "HOME", "USERPROFILE", "TMPDIR", "TEMP", "TMP", "SystemRoot"] as const;
 const ABORTED: Result<never, CodeGraphFault> = { ok: false, fault: { kind: "aborted", detail: "interrupted by the caller" } };
 const STDERR_DETAIL_BYTES = 2000;
