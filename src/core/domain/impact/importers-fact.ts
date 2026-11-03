@@ -1,4 +1,4 @@
-import { nameTail, type UnresolvedUse } from "./impact-cuts.ts";
+import { isBareName, type UnresolvedUse } from "./impact-cuts.ts";
 
 /** Who depends on one file, as repo-relative paths sorted by code unit; the file itself is never listed. */
 export interface ImportedFile {
@@ -25,14 +25,26 @@ function stemOf(file: string): string {
   return dot > 0 ? name.slice(0, dot) : name;
 }
 
+/** The segments a reference is made of: a module path, a qualifier, a member. */
+function segmentsOf(name: string): string[] {
+  return name.split(/[.:#\\/]/);
+}
+
 /**
- * The other files with an unresolved reference whose name, or the tail of it, is one of the file's declared names, or
- * whose name holds the file's stem.
+ * The other files with an unresolved reference that names one of the file's declared names, one of its qualified names
+ * the index considered, or a segment equal to the file's stem; a qualified reference the index attributed to no
+ * candidate names none of them, so a homonym elsewhere is never a namer.
  */
-export function unresolvedNamersOf(file: string, declared: ReadonlySet<string>, references: readonly UnresolvedUse[]): string[] {
+export function unresolvedNamersOf(file: string, declared: ReadonlySet<string>, qualified: ReadonlySet<string>, references: readonly UnresolvedUse[]): string[] {
   const stem = stemOf(file);
-  const namers = references.filter((reference) => reference.file !== file && (reference.name.includes(stem) || declared.has(reference.name) || declared.has(nameTail(reference.name))));
+  const namers = references.filter((reference) => reference.file !== file && namesIt(reference, declared, qualified, stem));
   return sortedUnique(namers.map((reference) => reference.file));
+}
+
+function namesIt(reference: UnresolvedUse, declared: ReadonlySet<string>, qualified: ReadonlySet<string>, stem: string): boolean {
+  if (segmentsOf(reference.name).includes(stem)) return true;
+  if (isBareName(reference.name)) return declared.has(reference.name);
+  return (reference.candidates ?? []).some((candidate) => qualified.has(candidate));
 }
 
 export function sortedUnique(values: readonly string[]): string[] {

@@ -27,11 +27,12 @@ export function readImporters(store: CodeGraphReader, requested: readonly string
     const from = (accept: (edge: GraphEdge) => boolean): string[] =>
       sortedUnique(edges.filter(accept).flatMap((edge) => sourceFiles.get(edge.source) ?? []).filter((other) => other !== file));
     const declared = new Set(nodes.filter((node) => !NOT_DECLARED_KINDS.includes(node.kind)).map((node) => node.name));
+    const qualified = new Set(nodes.map((node) => node.qualifiedName));
     files.push({
       file,
       importers: from((edge) => edge.kind === IMPORT),
       users: from((edge) => edge.kind !== CONTAINMENT),
-      unresolvedNamers: unresolvedNamersOf(file, declared, references),
+      unresolvedNamers: unresolvedNamersOf(file, declared, qualified, references),
     });
   }
   return { files, unheld };

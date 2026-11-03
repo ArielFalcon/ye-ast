@@ -4,10 +4,13 @@ import type { Cut } from "../shared/fact.ts";
 
 /** A reference the index could not resolve to a declaration. */
 export interface UnresolvedUse {
+  /** The name as written, qualifier included: `Promise.resolve`, `this.svc.get`. */
   name: string;
   kind: string;
   file: string;
   line: number;
+  /** The declarations the index considered for this reference, by qualified name; absent when it considered none. */
+  candidates?: readonly string[];
 }
 
 /** A dynamic load a source declares: where, and the module it names when its specifier is a string literal. */
@@ -21,6 +24,8 @@ export interface WalkedDeclaration {
   file: string;
   name: string;
   kind: string;
+  /** The name that places the declaration in its container: `AddressService::resolve`. */
+  qualifiedName: string;
 }
 
 const REFERENCED_BY: Readonly<Record<string, readonly string[]>> = {
@@ -57,16 +62,31 @@ export function nameTail(name: string): string {
   return name.slice(Math.max(name.lastIndexOf("."), name.lastIndexOf(":"), name.lastIndexOf("#")) + 1);
 }
 
+/** Whether the reference names a declaration without qualifying it, so its tail is the whole name. */
+export function isBareName(name: string): boolean {
+  return !/[.:#]/.test(name);
+}
+
 /**
- * A walked declaration may have callers the index could not link: an unresolved reference whose name tail is its name
- * and whose kind can point at its kind is one cut at those references, led by the declaration they might call. A file
- * that loads modules by a name the index cannot resolve may load anything and is a cut of its own, unless every dynamic
- * load the reader found on that file and line has a string-literal specifier, which names its module like a static
- * import; a file the reader did not read keeps the cut.
+ * Whether a reference names a declaration. A bare reference names the declaration of that name; a qualified one names
+ * only a declaration the index considered for it, so a receiver that never resolved is never read as a homonym.
+ */
+function namesDeclaration(reference: UnresolvedUse, declaration: WalkedDeclaration): boolean {
+  return isBareName(reference.name) ? reference.name === declaration.name : (reference.candidates ?? []).includes(declaration.qualifiedName);
+}
+
+/**
+ * A walked declaration may have callers the index could not link: an unresolved reference that names it is one cut at
+ * those references, led by the declaration they might call. A qualified reference no candidate attributes to the walked
+ * declaration cuts the caller's file instead, led by it, so the name it might reach is not left out. A file that loads
+ * modules by a name the index cannot resolve may load anything and is a cut of its own, unless every dynamic load the
+ * reader found on that file and line has a string-literal specifier, which names its module like a static import; a file
+ * the reader did not read keeps the cut.
  */
 export function unresolvedLinkCuts(references: readonly UnresolvedUse[], walked: readonly WalkedDeclaration[], loads: readonly DynamicLoadUse[], settled: ReadonlySet<string> = new Set()): Cut[] {
   const byName = Map.groupBy(walked, (declaration) => declaration.name);
   const hidden = new Map<string, Set<string>>();
+  const unattributed = new Map<string, Set<string>>();
   const loaders = new Map<string, Set<string>>();
   const loadsAt = Map.groupBy(loads, (load) => placeAt(load.file, load.line));
   const namesModule = (place: string): boolean => {
@@ -77,16 +97,20 @@ export function unresolvedLinkCuts(references: readonly UnresolvedUse[], walked:
     const tail = nameTail(reference.name);
     const place = placeAt(reference.file, reference.line);
     if (reference.kind === "calls" && DYNAMIC_LOADERS.has(tail) && !namesModule(place)) loaders.set(reference.file, (loaders.get(reference.file) ?? new Set()).add(place));
-    for (const declaration of byName.get(tail) ?? []) {
-      if (!(REFERENCED_BY[reference.kind] ?? []).includes(declaration.kind)) continue;
+    const pointing = (byName.get(tail) ?? []).filter((declaration) => (REFERENCED_BY[reference.kind] ?? []).includes(declaration.kind));
+    const attributing = pointing.filter((declaration) => namesDeclaration(reference, declaration));
+    for (const declaration of attributing) {
       const key = declarationAnchor(declaration.file, declaration.name);
       if (settled.has(settledUseKey(key, place))) continue;
       hidden.set(key, (hidden.get(key) ?? new Set()).add(place));
     }
+    const decided = pointing.some((declaration) => settled.has(settledUseKey(declarationAnchor(declaration.file, declaration.name), place)));
+    if (attributing.length === 0 && pointing.length > 0 && !decided) unattributed.set(reference.file, (unattributed.get(reference.file) ?? new Set()).add(place));
   }
   return [
     ...[...hidden].map(([declaration, places]) => unresolvedLinkAt(declaration, places)),
     ...[...loaders].map(([file, places]) => unresolvedLinkAt(file, places)),
+    ...[...unattributed].map(([file, places]) => unresolvedLinkAt(file, places)),
   ];
 }
 

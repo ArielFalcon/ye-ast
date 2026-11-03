@@ -214,7 +214,7 @@ class UtilTest {
   assert.equal(result.fact.value.symbols.some((symbol) => symbol.symbol === "one"), true);
 });
 
-test("a call the index could not link to the changed method's name cuts the answer there", async () => {
+test("a call the index could not link cuts the caller's file, never a homonym of the changed method's name", async () => {
   const stray = `package shop;
 
 class Stray {
@@ -229,7 +229,7 @@ class Stray {
   const result = await impact("--base", "HEAD~1");
 
   assert.equal(result.fact.status, "partial");
-  assert.deepEqual(result.fact.cuts, [{ kind: "unresolved-link", at: ["src/main/java/shop/Util.java::fmt", "src/main/java/shop/Stray.java:5"] }]);
+  assert.deepEqual(result.fact.cuts, [{ kind: "unresolved-link", at: ["src/main/java/shop/Stray.java", "src/main/java/shop/Stray.java:5"] }]);
 });
 
 test("a source file deleted whole leaves no seed, and the caller that still names its method is a cut", async () => {
