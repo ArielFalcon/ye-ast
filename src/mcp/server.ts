@@ -80,6 +80,8 @@ Reading an answer:
 - status "unknown": ye-ast cannot tell, and the reason says why; never read it as "no impact".
 - an item with reason "no-project": no package.json above that source places it in a project, so nothing says whether it declares routes; scope does not hide the manifest, unless an exclude glob leaves it out.
 - Every tool takes detail. A summary, the default, lists the symbols at depth 0 and 1, and for a cut the declarations it could not settle to; it leaves the symbols past that depth out with their count, and counts per file the cuts anchored at them. Full lists every symbol and every place a cut could not settle. Set detail to "full" when the deeper symbols themselves, the place of each unresolved reference or every cut is needed. For one ring past the listed symbols, ask ye_ast_callers about one of them: it answers that branch alone in one call, which costs less than full when one branch matters and more turns when every branch does.
+- The index is built from each repository's production sources: a TypeScript test file is not written to it, so no answer names a test as an importer, a caller or a cut, and "complete" means complete over the production sources. A change also breaks the tests that exercise it; open them yourself when the change touches a surface they cover.
+
 - Before reading a file you did not write, ask ye_ast_outline for it: it answers the span of every declaration and the files it imports, so you read the ranges you need instead of the whole file. A file it cannot tell about is listed in the cuts; read that one whole.
 
 - The text is the answer: it lists what detail asks for, while the structured content beside it carries only the envelope, so nothing is paid for twice. A host that needs the fact itself passes full: true, which adds every value and every cut place to the structured content and leaves the text unchanged.
@@ -469,7 +471,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
     "ye_ast_importers",
     {
       title: "Importers of files",
-      description: `Per file, the files that import it, the files that use it and the files holding a reference to its names that the index could not resolve. Use it before moving, renaming or deleting a file, or changing its exports. ${COMPLETENESS}`,
+      description: `Per file, the files that import it, the files that use it and the files holding a reference to its names that the index could not resolve. Use it before moving, renaming or deleting a file, or changing its exports. A TypeScript test file is outside the index, so it is never named here. ${COMPLETENESS}`,
       inputSchema: z
         .strictObject({ revision, live, files: z.array(z.string().min(1)).min(1).describe("Repository-relative paths."), scope, detail, full })
         .refine(excludes("revision"), "live excludes revision"),
