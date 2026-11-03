@@ -339,7 +339,7 @@ test("a dynamic load whose specifier is a literal names its module, so only a co
     { file: "src/Routes.ts", line: 8 },
   ];
   const answer = fact(await setup({ changes, nodes: SOURCE_NODES, edges: SOURCE_EDGES, unresolved, loads, exports: { [HEAD]: tree } }).ask());
-  assert.deepEqual(answer.status === "partial" && answer.cuts, [{ kind: "unresolved-link", at: ["src/Routes.ts", "src/Routes.ts:8"] }]);
+  assert.deepEqual(answer.status === "partial" && answer.cuts, [{ kind: "unresolved-link", at: ["src/Routes.ts", "src/Routes.ts:8 import"] }]);
 });
 
 test("a source file deleted whole that declared a name needs the index, and an unresolved reference to the name cuts the answer", async () => {
@@ -417,7 +417,7 @@ test("a reference through a field of known origin is a caller when the field hol
   const answer = fact(await setup({ changes, nodes, edges, unresolved, exports, fields }).ask());
   assert.ok(answer.status === "partial");
   assert.deepEqual(answer.value.symbols.filter((symbol) => symbol.file === CMP_FILE).map((symbol) => symbol.symbol), ["Cmp", "viaSvc"]);
-  assert.deepEqual(answer.cuts.find((cut) => cut.kind === "unresolved-link"), { kind: "unresolved-link", at: [CMP_FILE, `${CMP_FILE}:18`, `${CMP_FILE}:21`, `${CMP_FILE}:24`] });
+  assert.deepEqual(answer.cuts.find((cut) => cut.kind === "unresolved-link"), { kind: "unresolved-link", at: [CMP_FILE, `${CMP_FILE}:18 this.sub.get`, `${CMP_FILE}:21 params.get`, `${CMP_FILE}:24 this.store.get`] });
 });
 
 test("a relation the reader could not place cuts the answer only in a file the walk reached", async () => {
@@ -648,7 +648,7 @@ test("a requested file the snapshot does not hold is cut as not-exported, never 
 test("a file that loads modules by a computed name may import anything, so it cuts the importers answer", async () => {
   const { importers } = setup({ nodes: SHOP_NODES, unresolved: [{ from: "x", name: "require", kind: "calls", file: "src/Late.java", line: 3 }], exports: { [HEAD]: SHOP_EXPORT } });
   const answer = importersFact(await importers({ files: ["src/Order.java"] }));
-  assert.deepEqual(answer.status === "partial" && answer.cuts, [{ kind: "unresolved-link", at: ["src/Late.java", "src/Late.java:3"] }]);
+  assert.deepEqual(answer.status === "partial" && answer.cuts, [{ kind: "unresolved-link", at: ["src/Late.java", "src/Late.java:3 require"] }]);
 });
 
 test("a load whose specifier the reader read as a literal does not cut the importers answer", async () => {

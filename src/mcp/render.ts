@@ -158,16 +158,27 @@ function placeFiles(cut: Cut): string {
   return [...files].sort(compareText).join(", ");
 }
 
+/** The references a file-led cut could not settle, as written, sorted and deduplicated: the reader settles each one by
+ * reading it, without opening the file. */
+function placeReasons(cut: Cut): string[] {
+  const reasons = new Set<string>();
+  for (const place of cut.at.slice(1)) {
+    const [, ...reason] = place.split(" ");
+    if (reason.length > 0) reasons.add(reason.join(" "));
+  }
+  return [...reasons].sort(compareText);
+}
+
 /** The declarations an unresolved reference could not be settled to, under the file that holds them, each with the files
- * its references sit in. A file that leads a cut of its own says so, and a declaration whose places are exactly those of
- * another points at it instead of printing them a second time. */
+ * its references sit in. A file that leads a cut of its own names the references it holds, and a declaration whose places
+ * are exactly those of another points at it instead of printing them a second time. */
 function unresolvedDeclarations(cuts: readonly Cut[]): string[] {
-  const whole = new Set<string>();
+  const whole = new Map<string, string[]>();
   const entries: { file: string; name: string; files: string }[] = [];
   for (const cut of cuts) {
     const anchor = cut.at[0] ?? "";
     const settled = anchor.indexOf("::");
-    if (settled === -1) whole.add(anchor);
+    if (settled === -1) whole.set(anchor, placeReasons(cut));
     else entries.push({ file: anchor.slice(0, settled), name: anchor.slice(settled + 2), files: placeFiles(cut) });
   }
   entries.sort((a, b) => compareText(a.file, b.file) || compareText(a.name, b.name));
@@ -184,14 +195,17 @@ function unresolvedDeclarations(cuts: readonly Cut[]): string[] {
     byFile.set(entry.file, [...(byFile.get(entry.file) ?? []), line]);
   }
   const references = cuts.reduce((total, cut) => total + Math.max(0, cut.at.length - 1), 0);
-  const files = [...new Set([...whole, ...byFile.keys()])].sort(compareText);
+  const files = [...new Set([...whole.keys(), ...byFile.keys()])].sort(compareText);
   return [
     `  unresolved-link (${cuts.length} declarations, ${references} references; detail "full" lists every place):`,
-    ...files.flatMap((file) => [
-      `    ${file}`,
-      ...(whole.has(file) ? ["      (the file itself)"] : []),
-      ...(byFile.get(file) ?? []).map((line) => `      ${line}`),
-    ]),
+    ...files.flatMap((file) => {
+      const named = whole.get(file);
+      return [
+        named === undefined || named.length === 0 ? `    ${file}` : `    ${file}: ${named.join(", ")}`,
+        ...(named !== undefined && named.length === 0 ? ["      (the file itself)"] : []),
+        ...(byFile.get(file) ?? []).map((line) => `      ${line}`),
+      ];
+    }),
   ];
 }
 

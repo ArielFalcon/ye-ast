@@ -96,7 +96,9 @@ export function unresolvedLinkCuts(references: readonly UnresolvedUse[], walked:
   for (const reference of references) {
     const tail = nameTail(reference.name);
     const place = placeAt(reference.file, reference.line);
-    if (reference.kind === "calls" && DYNAMIC_LOADERS.has(tail) && !namesModule(place)) loaders.set(reference.file, (loaders.get(reference.file) ?? new Set()).add(place));
+    /** The same place, named by the reference as written: the reader settles a reference it is told, without opening the file. */
+    const named = placeAt(reference.file, reference.line, reference.name);
+    if (reference.kind === "calls" && DYNAMIC_LOADERS.has(tail) && !namesModule(place)) loaders.set(reference.file, (loaders.get(reference.file) ?? new Set()).add(named));
     const pointing = (byName.get(tail) ?? []).filter((declaration) => (REFERENCED_BY[reference.kind] ?? []).includes(declaration.kind));
     const attributing = pointing.filter((declaration) => namesDeclaration(reference, declaration));
     for (const declaration of attributing) {
@@ -105,7 +107,7 @@ export function unresolvedLinkCuts(references: readonly UnresolvedUse[], walked:
       hidden.set(key, (hidden.get(key) ?? new Set()).add(place));
     }
     const decided = pointing.some((declaration) => settled.has(settledUseKey(declarationAnchor(declaration.file, declaration.name), place)));
-    if (attributing.length === 0 && pointing.length > 0 && !decided) unattributed.set(reference.file, (unattributed.get(reference.file) ?? new Set()).add(place));
+    if (attributing.length === 0 && pointing.length > 0 && !decided) unattributed.set(reference.file, (unattributed.get(reference.file) ?? new Set()).add(named));
   }
   return [
     ...[...hidden].map(([declaration, places]) => unresolvedLinkAt(declaration, places)),

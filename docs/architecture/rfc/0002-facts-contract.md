@@ -60,7 +60,9 @@ interface Evidence { path: string; line: number; endLine?: number; via?: string;
 
 `Cut.at` names where the computation stopped, in one grammar: `at[0]` is the anchor, a repository-relative `path` or
 `path::symbol` (for a `section` cut, the section name); every following entry is a place, `path:line`, optionally followed
-by one space and the reason it is named. A cut over several anchors is one cut per anchor. A consumer reads the file of a
+by one space and the reason it is named: for a reference the index could not attribute, that reason is the reference as
+written (`req.context.get`), the one datum that lets the reader settle the place without opening the file. A cut over
+several anchors is one cut per anchor. A consumer reads the file of a
 cut from `at[0]` and its call sites from the rest, without parsing anything else. What each kind puts there: for a
 `not-exported` cut, the in-scope path that the export of the snapshot left out because it is a symlink, an unsafe path
 or a case collision, or any submodule, since its content may hold in-scope files, so the answer never looks complete

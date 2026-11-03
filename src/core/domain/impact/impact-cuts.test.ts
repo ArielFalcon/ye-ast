@@ -26,15 +26,15 @@ test("a qualified call the index considered for the walked declaration is a cut 
   assert.deepEqual(cuts, [{ kind: "unresolved-link", at: ["src/Repo.java::save", "src/Use.java:5"] }]);
 });
 
-test("a qualified call whose receiver the index attributed to no candidate is never a cut at a homonym, but cuts the caller's file", () => {
+test("a qualified call whose receiver the index attributed to no candidate is never a cut at a homonym, but cuts the caller's file and names the reference", () => {
   const resolve: WalkedDeclaration = { file: "src/app/address.service.ts", name: "resolve", kind: "method", qualifiedName: "AddressService::resolve" };
   const cuts = unresolvedLinkCuts([qualified("Promise.resolve", "calls", [], "src/app/order.component.ts", 12)], [resolve], []);
-  assert.deepEqual(cuts, [{ kind: "unresolved-link", at: ["src/app/order.component.ts", "src/app/order.component.ts:12"] }]);
+  assert.deepEqual(cuts, [{ kind: "unresolved-link", at: ["src/app/order.component.ts", "src/app/order.component.ts:12 Promise.resolve"] }]);
 });
 
 test("a qualified call the index considered for another declaration cuts the caller's file, not the walked one", () => {
   const cuts = unresolvedLinkCuts([qualified("this.repo.save", "calls", ["Other::save"], "src/Use.java", 5)], [SAVE], []);
-  assert.deepEqual(cuts, [{ kind: "unresolved-link", at: ["src/Use.java", "src/Use.java:5"] }]);
+  assert.deepEqual(cuts, [{ kind: "unresolved-link", at: ["src/Use.java", "src/Use.java:5 this.repo.save"] }]);
 });
 
 test("a qualified call whose tail names no walked declaration is no cut", () => {
@@ -58,14 +58,14 @@ test("an unresolved reference to a name no walked declaration has is no cut", ()
 test("a file that loads a module by a computed name is a cut at the call, walked declarations or not", () => {
   const cuts = unresolvedLinkCuts([use("require", "calls", "src/a.ts", 7), use("Class.forName", "calls", "src/B.java", 2), use("require", "references", "src/c.ts", 1)], [], []);
   assert.deepEqual(cuts, [
-    { kind: "unresolved-link", at: ["src/a.ts", "src/a.ts:7"] },
-    { kind: "unresolved-link", at: ["src/B.java", "src/B.java:2"] },
+    { kind: "unresolved-link", at: ["src/a.ts", "src/a.ts:7 require"] },
+    { kind: "unresolved-link", at: ["src/B.java", "src/B.java:2 Class.forName"] },
   ]);
 });
 
 test("two computed-name loads in one file are one cut led by the file, with both places", () => {
   const cuts = unresolvedLinkCuts([use("require", "calls", "src/a.ts", 9), use("import", "calls", "src/a.ts", 2)], [], []);
-  assert.deepEqual(cuts, [{ kind: "unresolved-link", at: ["src/a.ts", "src/a.ts:2", "src/a.ts:9"] }]);
+  assert.deepEqual(cuts, [{ kind: "unresolved-link", at: ["src/a.ts", "src/a.ts:2 import", "src/a.ts:9 require"] }]);
 });
 
 test("a load whose specifier is a literal names its module and is no cut, and a place with any computed load stays one", () => {
@@ -77,8 +77,8 @@ test("a load whose specifier is a literal names its module and is no cut, and a 
     { file: "src/read.ts", line: 1 },
   ];
   assert.deepEqual(unresolvedLinkCuts(references, [], loads), [
-    { kind: "unresolved-link", at: ["src/routes.ts", "src/routes.ts:8"] },
-    { kind: "unresolved-link", at: ["src/read.ts", "src/read.ts:1"] },
+    { kind: "unresolved-link", at: ["src/routes.ts", "src/routes.ts:8 import"] },
+    { kind: "unresolved-link", at: ["src/read.ts", "src/read.ts:1 import"] },
   ]);
 });
 

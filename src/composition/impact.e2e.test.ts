@@ -240,7 +240,7 @@ class Stray {
   const result = await impact("--base", "HEAD~1");
 
   assert.equal(result.fact.status, "partial");
-  assert.deepEqual(result.fact.cuts, [{ kind: "unresolved-link", at: ["src/main/java/shop/Stray.java", "src/main/java/shop/Stray.java:5"] }]);
+  assert.deepEqual(result.fact.cuts, [{ kind: "unresolved-link", at: ["src/main/java/shop/Stray.java", "src/main/java/shop/Stray.java:5 Missing.fmt"] }]);
 });
 
 test("a source file deleted whole leaves no seed, and the caller that still names its method is a cut", async () => {
