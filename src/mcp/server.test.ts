@@ -52,7 +52,7 @@ const IMPACT: ImpactValue = {
   mergeBase: "b".repeat(40),
   seeds: [{ file: "src/OrderService.java", symbol: "OrderService.find", line: 31, basis: "lines" }],
   changedEntrypoints: [{ change: "added", kind: "http-route", name: "POST /orders", handler: { path: "src/OrderController.java", symbol: "OrderController.create", line: 40 } }],
-  symbols: [{ file: "src/OrderController.java", symbol: "OrderController.one", kind: "method", line: 17, depth: 2, confidence: 0.75, fanIn: 3, via: { file: "src/OrderService.java", symbol: "OrderService.find" }, seeds: [0] }],
+  symbols: [{ file: "src/OrderController.java", symbol: "OrderController.one", kind: "method", line: 17, depth: 2, confidence: 0.75, fanIn: 3, via: { file: "src/OrderService.java", symbol: "OrderService.find" } }],
   entrypoints: [{ kind: "http-route", name: "GET /orders/{id}", handler: ROUTE.kind === "http-route" ? ROUTE.handler : never(), depth: 2, confidence: 0.75, seeds: [0] }],
   cost: { expansionsUsed: 0 },
 };
