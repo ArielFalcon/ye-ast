@@ -19,6 +19,8 @@ export async function runMcp(args: readonly string[], host: ProcessHost): Promis
   }
   const repo = resolve(host.cwd, path ?? ".");
   const queries = host.queries({ trustRecord: true });
+  const named = await queries.repositoryName(repo, host.signal);
+  const repoId = named.ok ? named.value : basename(repo);
   const wire = new StdioServerTransport(host.stdin, host.stdout);
   const closed = new Promise<void>((done) => {
     const close = wire.close.bind(wire);
@@ -27,7 +29,7 @@ export async function runMcp(args: readonly string[], host: ProcessHost): Promis
       done();
     };
   });
-  const handle = serveStdio(() => createMcpServer({ ...queries, repository: { path: repo, repoId: basename(repo) } }), {
+  const handle = serveStdio(() => createMcpServer({ ...queries, repository: { path: repo, repoId } }), {
     transport: wire,
     onerror: (error) => host.err(`ye-ast: ${queries.redaction.redactError(error)}`),
   });

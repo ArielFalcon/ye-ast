@@ -66,6 +66,7 @@ async function throughCli(args: readonly string[], budgets: (ImpactBudget | unde
     install,
     mcpCommand: ["/bin/ye-ast"],
     redaction,
+    repositoryName: async () => ({ ok: true, value: "repo" }),
     signal: new AbortController().signal,
   });
   return code === 0;
@@ -152,6 +153,7 @@ test("every surface that names a trust mode refuses one the domain does not know
     install,
     mcpCommand: ["/bin/ye-ast"],
     redaction,
+    repositoryName: async () => ({ ok: true, value: "repo" }),
     signal: new AbortController().signal,
   });
 

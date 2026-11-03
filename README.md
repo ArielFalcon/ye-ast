@@ -351,7 +351,7 @@ ye-ast map --live .                             # the working tree (trusted only
 |---|---|
 | `scope` | `[--include <glob>]… [--exclude <glob>]…` over repository-relative paths; `--exclude` wins |
 | `budget` | `[--depth <n>] [--hub-fan-in <n>] [--expansions <n>]`; positive integers, no defaults |
-| identity | `--repo-id <id>` names the repository in every snapshot |
+| identity | `--repo-id <id>` names the repository in every snapshot; without it the name is the directory of the repository's main worktree, so every linked worktree of one repository answers the same name |
 | measurement | `--measure` writes one JSON measurement line per query and per index build to stderr, never stdout |
 
 <details>

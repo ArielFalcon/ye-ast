@@ -94,6 +94,13 @@ export interface Vcs {
    * repository, or a git that cannot answer, is `git-failed`. Read from the repository alone: no network request.
    */
   headBranch(repo: string, signal?: AbortSignal): Promise<Result<string | undefined, VcsFault>>;
+  /**
+   * The name the repository answers to: the directory name of its main worktree, which every linked worktree shares with
+   * the clone that holds it, so one repository keeps one name whatever worktree a query is bound to. A subdirectory
+   * answers `not-repository-root`; a bare repository or a path that is no repository is `git-failed`. Read from the
+   * repository alone: no network request.
+   */
+  repositoryName(repo: string, signal?: AbortSignal): Promise<Result<string, VcsFault>>;
 }
 
 /** What two commits have in common and where they differ; separate from `Vcs` since a map needs neither. */

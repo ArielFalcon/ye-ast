@@ -13,7 +13,7 @@ import { FIXED_LAYER_DIRECTORY } from "../core/ports/fixed-layer-store.port.ts";
 import type { Install, InstallOutcome, InstallRequest } from "../core/ports/install.port.ts";
 import type { LiveStaleNotice } from "../core/ports/live-queries.port.ts";
 import type { Redaction } from "../core/ports/redaction.port.ts";
-import { DEFAULT_REVISION } from "../core/ports/vcs.port.ts";
+import { DEFAULT_REVISION, type Vcs } from "../core/ports/vcs.port.ts";
 import { WORKSPACE_MANIFEST_FILE, type WorkspaceManifestFault } from "../core/ports/workspace-defaults.port.ts";
 
 /**
@@ -37,6 +37,8 @@ export interface CliDeps {
   mcpCommand: readonly string[];
   /** Applied to every string that leaves the process on stdout or stderr. */
   redaction: Redaction;
+  /** The name a repository answers to; `--repo-id` overrides it. */
+  repositoryName: Vcs["repositoryName"];
   /** Aborted when the process is asked to stop. */
   signal: AbortSignal;
 }
@@ -52,6 +54,7 @@ const USAGE = [
   "       ye-ast init --trust trusted|untrusted [--workspace <file>] [<repo>]   (declares the trust mode, writes the fixed layer under .ye-ast/, ignores ye-ast's folders locally, prints the MCP registration)",
   "       ye-ast serve   (the query protocol, JSON-RPC 2.0, one message per line on stdin/stdout)",
   "       ye-ast mcp [<repo>]   (stdio MCP server, read-only, bound to <repo> or the working directory)",
+  "--repo-id: the name every fact carries; the directory name of the repository's main worktree when omitted, so every worktree of one repository answers the same name",
   "--live: reads the working tree of a repository declared trusted (ye-ast init --trust trusted) instead of a revision; the first run builds ye-ast's mirror of it, and a stale answer is reported on stderr",
   "scope: [--include <glob>]... [--exclude <glob>]...   (globs over repository-relative paths, on map, impact, callers and importers; without --include every path is included; --exclude wins)",
   "budget: [--depth <n>] [--hub-fan-in <n>] [--expansions <n>]   (positive integers; none has a default)",
@@ -73,12 +76,12 @@ export async function run(argv: readonly string[], io: CliIo, deps: CliDeps): Pr
     return EXIT_CODE.ok;
   }
   if (command === "init") return runInit(args, io, deps);
-  const query = queryOf(command, args, deps, io);
-  if (query === undefined) {
-    io.err(USAGE);
-    return EXIT_CODE.usage;
-  }
   try {
+    const query = await queryOf(command, args, deps, io);
+    if (query === undefined) {
+      io.err(USAGE);
+      return EXIT_CODE.usage;
+    }
     const result = await query();
     if (!result.ok) {
       for (const line of faultText(result.fault, deps.redaction)) io.err(line);
@@ -104,19 +107,19 @@ function declarationText(entry: { file: string; candidates: readonly string[] })
 }
 
 async function runInit(args: readonly string[], io: CliIo, deps: CliDeps): Promise<number> {
-  const parsed = parseInitRequest(args);
-  if (parsed === undefined) {
-    io.err(USAGE);
-    return EXIT_CODE.usage;
-  }
-  const { workspaceFile, ...request } = parsed;
-  const out = (line: string): void => io.out(deps.redaction.redact(line));
-  const workspace = workspaceFile === undefined ? undefined : await readWorkspaceFile(workspaceFile);
-  if (workspace !== undefined && !workspace.ok) {
-    io.err(deps.redaction.redact(`ye-ast: ${workspace.fault.kind}: ${workspace.fault.detail}`));
-    return EXIT_CODE.queryFailed;
-  }
   try {
+    const parsed = await parseInitRequest(args, deps);
+    if (parsed === undefined) {
+      io.err(USAGE);
+      return EXIT_CODE.usage;
+    }
+    const { workspaceFile, ...request } = parsed;
+    const out = (line: string): void => io.out(deps.redaction.redact(line));
+    const workspace = workspaceFile === undefined ? undefined : await readWorkspaceFile(workspaceFile);
+    if (workspace !== undefined && !workspace.ok) {
+      io.err(deps.redaction.redact(`ye-ast: ${workspace.fault.kind}: ${workspace.fault.detail}`));
+      return EXIT_CODE.queryFailed;
+    }
     const result = await deps.install.run({ ...request, ...(workspace === undefined ? {} : { workspace: workspace.value }), signal: deps.signal });
     if (!result.ok) {
       if (result.fault.trustRecorded) io.err(`ye-ast: trust ${request.trust} was recorded outside the repository before init stopped`);
@@ -159,25 +162,25 @@ function shellWord(text: string): string {
   return /^[\w@%+=:,./-]+$/.test(text) ? text : `'${text.replaceAll("'", "'\\''")}'`;
 }
 
-function queryOf(command: string | undefined, args: readonly string[], deps: CliDeps, io: CliIo): Query | undefined {
+async function queryOf(command: string | undefined, args: readonly string[], deps: CliDeps, io: CliIo): Promise<Query | undefined> {
   const { signal } = deps;
   const onStale = ({ stateId, changed }: LiveStaleNotice): void =>
     io.err(deps.redaction.redact(`ye-ast: stale: the working tree changed after this answer, which reflects state ${stateId}: ${changed.join(", ")}`));
   switch (command) {
     case "map": {
-      const request = parseMapRequest(args);
+      const request = await parseMapRequest(args, deps);
       return request && (() => deps.entrypoints.map({ ...request, signal, ...(request.live && { onStale }) }));
     }
     case "impact": {
-      const request = parseImpactRequest(args);
+      const request = await parseImpactRequest(args, deps);
       return request && (() => deps.impact.ofChange({ ...request, signal, ...(request.live && { onStale }) }));
     }
     case "callers": {
-      const request = parseCallersRequest(args);
+      const request = await parseCallersRequest(args, deps);
       return request && (() => deps.impact.callers({ ...request, signal, ...(request.live && { onStale }) }));
     }
     case "importers": {
-      const request = parseImportersRequest(args);
+      const request = await parseImportersRequest(args, deps);
       return request && (() => deps.impact.importers({ ...request, signal, ...(request.live && { onStale }) }));
     }
     default:
@@ -189,12 +192,22 @@ function firstLine(error: unknown): string {
   return (error instanceof Error ? error.message : String(error)).split("\n")[0]!.trim();
 }
 
-function repositoryOf(path: string, repoId: string | undefined): { repo: string; repoId: string } {
+/** What naming a repository needs, so a command that parses one asks for no query family it will not run. */
+type RepositoryNaming = Pick<CliDeps, "repositoryName" | "signal">;
+
+/**
+ * The repository a command line names and the name it answers to: the one the caller gave, or the one git states, so every
+ * worktree of one repository carries the same name. A name never fails a command before its own query does: whatever git
+ * cannot name keeps the directory name.
+ */
+async function repositoryOf(deps: RepositoryNaming, path: string, repoId: string | undefined): Promise<{ repo: string; repoId: string }> {
   const repo = resolve(path);
-  return { repo, repoId: repoId ?? basename(repo) };
+  if (repoId !== undefined) return { repo, repoId };
+  const named = await deps.repositoryName(repo, deps.signal).catch(() => undefined);
+  return { repo, repoId: named?.ok ? named.value : basename(repo) };
 }
 
-function parseMapRequest(args: readonly string[]): MapRequest | undefined {
+async function parseMapRequest(args: readonly string[], deps: RepositoryNaming): Promise<MapRequest | undefined> {
   try {
     const { values, positionals } = parseArgs({
       args: [...args],
@@ -205,7 +218,7 @@ function parseMapRequest(args: readonly string[]): MapRequest | undefined {
     const scope = parseScope(values);
     const at = atRevision(values);
     if (path === undefined || extra.length > 0 || scope === undefined || at === undefined) return undefined;
-    return { ...repositoryOf(path, values["repo-id"]), ...at, ...scope };
+    return { ...(await repositoryOf(deps, path, values["repo-id"])), ...at, ...scope };
   } catch {
     return undefined;
   }
@@ -217,12 +230,12 @@ interface ParsedInit extends Omit<InstallRequest, "signal" | "workspace"> {
   workspaceFile?: string;
 }
 
-function parseInitRequest(args: readonly string[]): ParsedInit | undefined {
+async function parseInitRequest(args: readonly string[], deps: RepositoryNaming): Promise<ParsedInit | undefined> {
   try {
     const { values, positionals } = parseArgs({ args: [...args], options: { trust: { type: "string" }, workspace: { type: "string" } }, allowPositionals: true });
     const [path = ".", ...extra] = positionals;
     if (!isTrustMode(values.trust) || extra.length > 0 || values.workspace === "") return undefined;
-    return { ...repositoryOf(path, undefined), trust: values.trust, ...(values.workspace === undefined ? {} : { workspaceFile: resolve(values.workspace) }) };
+    return { ...(await repositoryOf(deps, path, undefined)), trust: values.trust, ...(values.workspace === undefined ? {} : { workspaceFile: resolve(values.workspace) }) };
   } catch {
     return undefined;
   }
@@ -272,7 +285,7 @@ function withBudget(budget: ImpactBudget): { budget?: ImpactBudget } {
   return Object.keys(budget).length === 0 ? {} : { budget };
 }
 
-function parseImpactRequest(args: readonly string[]): ImpactOfChangeRequest | undefined {
+async function parseImpactRequest(args: readonly string[], deps: RepositoryNaming): Promise<ImpactOfChangeRequest | undefined> {
   try {
     const { values, positionals } = parseArgs({
       args: [...args],
@@ -284,13 +297,13 @@ function parseImpactRequest(args: readonly string[]): ImpactOfChangeRequest | un
     const scope = parseScope(values);
     const at = atRevision({ revision: values.head, live: values.live });
     if (path === undefined || extra.length > 0 || values.base === undefined || budget === undefined || scope === undefined || at === undefined) return undefined;
-    return { ...repositoryOf(path, values["repo-id"]), base: values.base, ...(at.live ? { live: true as const } : { head: at.revision }), ...scope, ...withBudget(budget) };
+    return { ...(await repositoryOf(deps, path, values["repo-id"])), base: values.base, ...(at.live ? { live: true as const } : { head: at.revision }), ...scope, ...withBudget(budget) };
   } catch {
     return undefined;
   }
 }
 
-function parseCallersRequest(args: readonly string[]): ImpactCallersRequest | undefined {
+async function parseCallersRequest(args: readonly string[], deps: RepositoryNaming): Promise<ImpactCallersRequest | undefined> {
   try {
     const { values, positionals } = parseArgs({
       args: [...args],
@@ -303,13 +316,13 @@ function parseCallersRequest(args: readonly string[]): ImpactCallersRequest | un
     const scope = parseScope(values);
     const at = atRevision(values);
     if (path === undefined || targets.length === 0 || budget === undefined || scope === undefined || at === undefined || targets.some((target) => target === undefined)) return undefined;
-    return { ...repositoryOf(path, values["repo-id"]), ...at, targets: targets as CallersTarget[], ...scope, ...withBudget(budget) };
+    return { ...(await repositoryOf(deps, path, values["repo-id"])), ...at, targets: targets as CallersTarget[], ...scope, ...withBudget(budget) };
   } catch {
     return undefined;
   }
 }
 
-function parseImportersRequest(args: readonly string[]): ImpactImportersRequest | undefined {
+async function parseImportersRequest(args: readonly string[], deps: RepositoryNaming): Promise<ImpactImportersRequest | undefined> {
   try {
     const { values, positionals } = parseArgs({
       args: [...args],
@@ -320,7 +333,7 @@ function parseImportersRequest(args: readonly string[]): ImpactImportersRequest 
     const scope = parseScope(values);
     const at = atRevision(values);
     if (path === undefined || files.length === 0 || scope === undefined || at === undefined) return undefined;
-    return { ...repositoryOf(path, values["repo-id"]), ...at, files, ...scope };
+    return { ...(await repositoryOf(deps, path, values["repo-id"])), ...at, files, ...scope };
   } catch {
     return undefined;
   }

@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { mkdir, mkdtemp, open, rm, symlink, type FileHandle } from "node:fs/promises";
 import { devNull, tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { createDiffReader, type FileChange } from "../../domain/change/diff-reader.ts";
 import type { Result } from "../../domain/shared/result.ts";
 import type { CommitExport, ExportBudget, ExportedFile, ExportPlan, ExportStop, RemoteRef, SkippedEntry, Vcs, VcsChanges, VcsFault } from "../../ports/vcs.port.ts";
@@ -239,7 +239,29 @@ export function createGitVcs(deps: GitDeps = defaultGitDeps): Vcs & VcsChanges {
     return { ok: true, value: run.stdout.toString("utf8").trim() };
   }
 
-  return { resolveCommit, exportCommit, mergeBase, diffCommits, diffDirectories, remotes, headBranch };
+  async function repositoryName(repo: string, signal?: AbortSignal): Promise<Result<string, VcsFault>> {
+    const root = await ensureRepositoryRoot(deps, repo, signal);
+    if (!root.ok) return root;
+    const run = await deps.runGit(repo, ["worktree", "list", "--porcelain", "-z"], signal);
+    if (signal?.aborted) return ABORTED;
+    if (run.code !== 0) return gitFailed(run);
+    const main = mainWorktreeOf(run.stdout.toString("utf8"));
+    if (main === undefined) return { ok: false, fault: { kind: "git-failed", detail: "git listed no worktree" } };
+    return { ok: true, value: basename(main) };
+  }
+
+  return { resolveCommit, exportCommit, mergeBase, diffCommits, diffDirectories, remotes, headBranch, repositoryName };
+}
+
+/**
+ * The first record `git worktree list --porcelain -z` states: the main worktree, which every linked worktree of the
+ * repository shares, so its directory name is the name of the repository itself. NUL-separated records leave the path
+ * unquoted, whatever characters it holds.
+ */
+function mainWorktreeOf(output: string): string | undefined {
+  const record = output.split("\0").find((field) => field.startsWith("worktree "));
+  const path = record?.slice("worktree ".length);
+  return path === undefined || path === "" ? undefined : path;
 }
 
 function compareText(a: string, b: string): number {

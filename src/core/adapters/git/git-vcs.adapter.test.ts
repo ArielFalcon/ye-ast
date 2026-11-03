@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import type { Result } from "../../domain/shared/result.ts";
 import type { ExportPlan } from "../../ports/vcs.port.ts";
 import { createGitVcs, defaultGitDeps, gitEnvironment, type BlobSink, type GitDeps } from "./git-vcs.adapter.ts";
@@ -240,6 +240,18 @@ test("a GIT_DIR inherited from the calling process does not redirect the export"
   } finally {
     delete process.env.GIT_DIR;
   }
+});
+
+test("a linked worktree answers the name of the clone that holds it, so one repository keeps one name", async () => {
+  write("src/a.txt", "a");
+  commitAll();
+  const worktree = join(scratch, "repo-fix-121");
+  git("worktree", "add", "-q", "-b", "fix/121", worktree);
+
+  const vcs = createGitVcs();
+
+  assert.deepEqual(await vcs.repositoryName(repo), { ok: true, value: basename(repo) });
+  assert.deepEqual(await vcs.repositoryName(worktree), { ok: true, value: basename(repo) });
 });
 
 test("a git failure while resolving the sha stays a git-failed fault", async () => {

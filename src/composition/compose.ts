@@ -52,7 +52,7 @@ import type { DecisionQueries } from "../core/ports/decision-queries.port.ts";
 import type { RemoteRefresh } from "../core/ports/remote-refresh.port.ts";
 import type { Redaction } from "../core/ports/redaction.port.ts";
 import type { TrustRecordReader } from "../core/ports/trust-record.port.ts";
-import type { ExportBudget } from "../core/ports/vcs.port.ts";
+import type { ExportBudget, Vcs } from "../core/ports/vcs.port.ts";
 import { installedVersion, ownVersion } from "./installed-versions.ts";
 import { measuredEntrypoints, measuredGraph, measuredImpact, type MeasurementSink } from "./measurement.ts";
 
@@ -91,6 +91,8 @@ export interface ComposedQueries {
   workspaceImpact: WorkspaceImpactQueries;
   decisions: DecisionQueries;
   redaction: Redaction;
+  /** The name a repository answers to: the directory name of its main worktree, which every linked worktree shares. */
+  repositoryName: Vcs["repositoryName"];
   /**
    * Builds the live mirror of `repo` for the default scope when it is `trusted` and has none, so the first live query
    * finds it ready. Resolves to a redacted line describing why it could not, or `null`; it never rejects.
@@ -187,14 +189,15 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
   });
   const workspaceImpact = createWorkspaceImpactQueries({ workspace, impact, defaults });
   const decisions = createDecisionQueries({ workspace, defaults, vcs });
-  return { version, entrypoints, impact, workspace, workspaceImpact, decisions, redaction, warmLive };
+  return { version, entrypoints, impact, workspace, workspaceImpact, decisions, redaction, repositoryName: (repo, signal) => vcs.repositoryName(repo, signal), warmLive };
 }
 
 export function composeCli(options: CompositionOptions = {}): (argv: readonly string[], io: CliIo) => Promise<number> {
   const queries = composeQueries(options);
+  const vcs = createGitVcs();
   const store = createFixedLayerStore();
   const install = createInstall({
-    vcs: createGitVcs(),
+    vcs,
     trust: createTrustRecords(options.trustDirectory ?? null),
     exclude: createGitLocalExclude(),
     store,

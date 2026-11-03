@@ -21,7 +21,11 @@ interface Harness {
   start: (args: readonly string[]) => void;
 }
 
-function harness(overrides: Partial<ProcessHost> = {}, warmLive: (repo: string) => Promise<string | null> = async () => null): Harness {
+function harness(
+  overrides: Partial<ProcessHost> = {},
+  warmLive: (repo: string) => Promise<string | null> = async () => null,
+  repositoryName: ComposedQueries["repositoryName"] = async () => ({ ok: false, fault: { kind: "git-failed", detail: "stub" } }),
+): Harness {
   const stdin = new PassThrough();
   const stdout = new PassThrough();
   const maps: MapRequest[] = [];
@@ -38,6 +42,7 @@ function harness(overrides: Partial<ProcessHost> = {}, warmLive: (repo: string) 
     },
     impact: {},
     redaction: { redactError: () => REDACTED },
+    repositoryName,
     warmLive: async (repo: string) => {
       warmed.push(repo);
       return warmLive(repo);
@@ -106,6 +111,18 @@ test("a relative repository argument is resolved against the working directory",
   await h.call("tools/call", { name: "ye_ast_entrypoints", arguments: {} });
   assert.equal(h.maps[0]?.repo, "/work/projects/shop");
   assert.equal(h.maps[0]?.repoId, "shop");
+  h.stdin.end();
+  await h.finished();
+});
+
+test("a worktree is bound to the name of the repository that holds it, not to its own directory name", async () => {
+  const h = harness({}, async () => null, async () => ({ ok: true, value: "shop-service" }));
+  h.start(["shop-service-fix-121"]);
+  await open(h);
+  await h.call("tools/call", { name: "ye_ast_entrypoints", arguments: {} });
+
+  assert.equal(h.maps[0]?.repo, "/work/projects/shop-service-fix-121");
+  assert.equal(h.maps[0]?.repoId, "shop-service");
   h.stdin.end();
   await h.finished();
 });

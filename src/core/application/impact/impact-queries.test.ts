@@ -67,6 +67,7 @@ function setup(options: Options = {}) {
     },
     remotes: async () => ({ ok: true, value: [] }),
     headBranch: async () => ({ ok: true, value: undefined }),
+    repositoryName: async () => ({ ok: true, value: "shop" }),
     exportCommit: async (_repo, sha, destination, plan) => {
       log.exported.push(sha);
       const listed = options.exports?.[sha] ?? { files: [{ path: "src/A.java", blob: "1", written: true }], skipped: [] };

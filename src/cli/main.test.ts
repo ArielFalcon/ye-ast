@@ -76,7 +76,7 @@ function setup(answer: Result<EntrypointMapFact, VcsFault | LiveFault> = { ok: t
       return { ok: true, value: INSTALLED };
     },
   };
-  return { requests, installs, signal, io: recordingIo(), deps: { version: VERSION, entrypoints, impact, install, mcpCommand: ["npx", "--yes", "tsx", MCP_ENTRYPOINT], redaction, signal } };
+  return { requests, installs, signal, io: recordingIo(), deps: { version: VERSION, entrypoints, impact, install, mcpCommand: ["npx", "--yes", "tsx", MCP_ENTRYPOINT], redaction, repositoryName: async (repo: string): Promise<Result<string, VcsFault>> => ({ ok: true, value: basename(repo) }), signal } };
 }
 
 const MCP_ENTRYPOINT = "/opt/ye-ast/src/composition/main.ts";
@@ -169,7 +169,7 @@ test("--measure is accepted by a query and leaves stdout carrying only the fact"
   assert.deepEqual(io.stderr, []);
 });
 
-test("map defaults the revision to HEAD and the repository id to the directory name, and honours both flags", async () => {
+test("map defaults the revision to HEAD and the repository id to the name git states for it, and honours both flags", async () => {
   const defaults = setup();
   await run(["map", "some/checkout"], defaults.io, defaults.deps);
   assert.deepEqual(defaults.requests, [
@@ -181,6 +181,24 @@ test("map defaults the revision to HEAD and the repository id to the directory n
   assert.deepEqual(flagged.requests, [
     { repo: resolve("some/checkout"), repoId: "shop", revision: "release/1", signal: flagged.signal },
   ]);
+});
+
+test("a worktree is bound to the name of the repository that holds it, not to its own directory name", async () => {
+  const base = setup();
+  const deps = { ...base.deps, repositoryName: async (): Promise<Result<string, VcsFault>> => ({ ok: true, value: "shop-service" }) };
+
+  await run(["map", "some/checkout-fix-121"], base.io, deps);
+
+  assert.equal(base.requests[0]?.repoId, "shop-service");
+});
+
+test("a repository git cannot name keeps the directory name, so the query answers its own fault", async () => {
+  const base = setup();
+  const deps = { ...base.deps, repositoryName: async (): Promise<Result<string, VcsFault>> => ({ ok: false, fault: { kind: "not-repository-root", detail: "inside" } }) };
+
+  await run(["map", "some/checkout"], base.io, deps);
+
+  assert.equal(base.requests[0]?.repoId, basename("some/checkout"));
 });
 
 test("a failed query writes to stderr only and exits with the query code", async () => {

@@ -73,6 +73,7 @@ function setup(
     },
     remotes: async (repo) => ({ ok: true, value: repositories[repo]?.remotes ?? [] }),
     headBranch: async (repo) => ({ ok: true, value: repositories[repo]?.branch }),
+    repositoryName: async () => ({ ok: true, value: "library" }),
     exportCommit: async (repo, _sha, _destination, plan) => {
       exported = repo;
       const files: ExportedFile[] = Object.keys(repositories[repo]?.files ?? {}).map((path) => ({ path, blob: path, written: plan.write(path) }));
