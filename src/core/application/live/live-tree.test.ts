@@ -33,6 +33,20 @@ test("the first query holds the lock, builds the index in full, records the stat
   assert.deepEqual(fake.deps.versions, VERSIONS);
 });
 
+test("a state that claims a completed build whose store cannot be opened rebuilds the scope in full", async () => {
+  const fake = fakeLive({ "src/A.java": "1" });
+  await tree(fake);
+  fake.openable.value = false;
+
+  const again = await tree(fake);
+
+  assert.equal(fake.builds, 2, "the store the state named could not be opened, so the scope is built again");
+  assert.deepEqual(fake.syncs, []);
+  assert.deepEqual(again.origin, { kind: "full" });
+  assert.equal(fake.state.current?.fullBuildStateId, again.stateId);
+  assert.deepEqual(fake.state.current?.pending, []);
+});
+
 test("a second query with no edit runs no build and no sync", async () => {
   const fake = fakeLive({ "src/A.java": "1" });
   await tree(fake);

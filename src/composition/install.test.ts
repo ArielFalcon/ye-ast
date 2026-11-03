@@ -239,7 +239,7 @@ test("a workspace query that names no repositories works over the manifest insta
   execFileSync("git", ["commit", "-q", "-m", "orders"], { cwd: other, env: GIT_ENV });
   const manifest = join(workspace, "workspace.json");
   writeFileSync(manifest, JSON.stringify({ repos: [{ path: "../orders-service", id: "orders" }] }));
-  await cli("init", "--trust", "untrusted", "--workspace", manifest, repo);
+  await cli("init", "--trust", "trusted", "--workspace", manifest, repo);
 
   const result = await composeQueries({ scratchRoot: join(workspace, "scratch"), trustDirectory }).workspace.outwardNames({ repo: { path: repo, id: "shop" } });
 
@@ -314,7 +314,7 @@ test("a form-shaped answer set persisted by install closes every gap the next qu
       gateways: [{ prefix: "shop-api", repo: "orders-a" }],
     }),
   );
-  assert.equal((await cli("init", "--trust", "untrusted", "--workspace", manifest, repo)).code, EXIT_CODE.ok);
+  assert.equal((await cli("init", "--trust", "trusted", "--workspace", manifest, repo)).code, EXIT_CODE.ok);
   for (const path of siblings) assert.equal((await cli("init", "--trust", "untrusted", path)).code, EXIT_CODE.ok);
   assert.match(readFileSync(join(repo, ".ye-ast", "workspace.json"), "utf8"), /"remote": "https:\/\/git\.example\.test\/orders-a\.git"/);
 

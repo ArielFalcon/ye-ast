@@ -26,17 +26,21 @@ import type { Reach } from "../../domain/topology/link.ts";
 import { inferGateways, matchCallSite, matchEventCallSite, prefixOf, type Gateway, type GatewayDeclaration, type JoinResult, type RepositoryEntrypoints } from "../../domain/topology/link-match.ts";
 import { directoryNameOf } from "../../domain/topology/repository-identity.ts";
 import type { CallersTarget, ImpactFault, ImpactQueries } from "../../ports/impact-queries.port.ts";
+import type { TrustRecordReader } from "../../ports/trust-record.port.ts";
 import type { WorkspaceDefaults } from "../../ports/workspace-defaults.port.ts";
 import type { WorkspaceFault, WorkspaceRepository } from "../../ports/workspace-repos.port.ts";
 import type { FactRead, WorkspaceQueries } from "../../ports/workspace-queries.port.ts";
 import type { RepoImpact, WorkspaceCallersRequest, WorkspaceImpactBase, WorkspaceImpactQueries, WorkspaceImpactValue, WorkspaceOfChangeRequest } from "../../ports/workspace-impact-queries.port.ts";
+import { trustOf } from "../snapshot/read-snapshot.ts";
 import { workspaceInForce } from "./workspace-defaults.ts";
 
 export interface WorkspaceImpactDeps {
   workspace: WorkspaceQueries;
   impact: ImpactQueries;
-  /** The workspace the bound repository persists, which a request naming no repositories joins. */
+  /** The workspace the bound repository persists, which a request naming no repositories joins under `trusted`. */
   defaults?: WorkspaceDefaults;
+  /** The user's declarations; without one every repository is read `untrusted`, which never honours a persisted workspace. */
+  trust?: TrustRecordReader;
 }
 
 type Faults = WorkspaceFault | ImpactFault;
@@ -59,7 +63,8 @@ export function createWorkspaceImpactQueries(deps: WorkspaceImpactDeps): Workspa
    * symbols named and nothing about what they send onward.
    */
   async function compose(request: WorkspaceImpactBase, triggerRevision: string, walk: () => Promise<Result<Fact<ImpactValue>, ImpactFault>>, readsChange: boolean): Promise<Result<FactRead<WorkspaceImpactValue>, Faults>> {
-    const inForce = await workspaceInForce(request, deps.defaults);
+    const triggerTrust = deps.trust === undefined ? "untrusted" : await trustOf({ trust: deps.trust }, request.repo.path);
+    const inForce = await workspaceInForce(request, deps.defaults, triggerTrust);
     if (!inForce.ok) return inForce;
     const read = await deps.workspace.outwardNames({
       repo: { ...request.repo, revision: triggerRevision },

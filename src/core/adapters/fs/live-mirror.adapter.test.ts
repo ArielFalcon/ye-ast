@@ -7,6 +7,7 @@ import { join } from "node:path";
 import type { Result } from "../../domain/shared/result.ts";
 import type { MirrorEntry, MirrorFault, MirrorLocation, MirrorState } from "../../ports/live-mirror.port.ts";
 import type { WorkingTreePath } from "../../ports/working-tree.port.ts";
+import { isWritten } from "../../domain/snapshot/live-export.ts";
 import { createLiveMirror, defaultLiveMirrorDeps } from "./live-mirror.adapter.ts";
 import type { LiveMirrorDeps } from "./live-mirror.adapter.ts";
 
@@ -115,6 +116,20 @@ test("reconcile copies listed files, records their git blob ids and answers sort
   assert.deepEqual(result.manifest.map((entry) => entry.path), ["a.ts", "src/b.ts"]);
   assert.deepEqual(result.changed, ["a.ts", "src/b.ts"]);
   assert.equal(await readFile(join(mirror.root(location), "src", "b.ts"), "utf8"), "export const b = 1;\n");
+});
+
+test("a path the export does not write is fingerprinted but never copied", async () => {
+  const { repo, location } = await fresh();
+  await mkdir(join(repo, "src"));
+  await writeFile(join(repo, "src", "A.java"), "class A {}\n");
+  await writeFile(join(repo, "NOTES.md"), "# notes\n");
+  const mirror = createLiveMirror({ ...defaultLiveMirrorDeps, writes: isWritten });
+
+  const result = ok(await mirror.reconcile(location, listed("src/A.java", "NOTES.md"), [], []));
+
+  assert.deepEqual(result.manifest.map((entry) => entry.path), ["NOTES.md", "src/A.java"]);
+  assert.equal(await readFile(join(mirror.root(location), "src", "A.java"), "utf8"), "class A {}\n");
+  await assert.rejects(lstat(join(mirror.root(location), "NOTES.md")), /ENOENT/);
 });
 
 test("a blob id equals git hash-object for the same bytes", async () => {

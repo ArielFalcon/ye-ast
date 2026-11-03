@@ -139,6 +139,20 @@ test("under untrusted, every live query is refused with the command that trusts 
   assert.equal(existsSync(join(repo, ".ye-ast-graph")), false);
 });
 
+test("the mirror keeps only what an export writes and still fingerprints the rest", async () => {
+  await trust("trusted");
+  commit({ "NOTES.md": "# notes\n", [`${DIR}Util.java`]: UTIL("x") });
+
+  const answer = await ye("map", ["--live"]);
+
+  assert.equal(answer.code, EXIT_CODE.ok, answer.stderr);
+  const scope = stateFile().slice(0, -".state.json".length);
+  assert.equal(existsSync(join(scope, DIR, "Util.java")), true, "a source the export writes is in the mirror");
+  assert.equal(existsSync(join(scope, "NOTES.md")), false, "a path no query reads is not copied");
+  const state = JSON.parse(readFileSync(stateFile(), "utf8")) as { manifest: { path: string }[] };
+  assert.equal(state.manifest.some((entry) => entry.path === "NOTES.md"), true, "the fingerprint still covers it");
+});
+
 test("--live with --head is a usage error", async () => {
   assert.equal((await ye("impact", ["--base", "HEAD", "--live", "--head", "HEAD"])).code, EXIT_CODE.usage);
 });

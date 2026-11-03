@@ -9,6 +9,7 @@ import type { Result } from "../../domain/shared/result.ts";
 import type { CallersTarget, ImpactCallersRequest, ImpactFault, ImpactOfChangeRequest, ImpactQueries } from "../../ports/impact-queries.port.ts";
 import type { FactRead, WorkspaceQueries, WorkspaceRefresh, WorkspaceValue } from "../../ports/workspace-queries.port.ts";
 import type { WorkspaceRepository, WorkspaceSection } from "../../ports/workspace-repos.port.ts";
+import type { TrustRecordReader } from "../../ports/trust-record.port.ts";
 import type { WorkspaceDefaults, WorkspaceManifest } from "../../ports/workspace-defaults.port.ts";
 import type { WorkspaceRequest } from "../../ports/workspace-queries.port.ts";
 import type { WorkspaceImpactValue, RepoImpact } from "../../ports/workspace-impact-queries.port.ts";
@@ -17,6 +18,7 @@ import { createWorkspaceImpactQueries } from "./workspace-impact.ts";
 
 const SHA = "a".repeat(40);
 const OTHER_SHA = "b".repeat(40);
+const TRUSTED: TrustRecordReader = { read: async () => ({ ok: true, value: "trusted" }) };
 const HANDLER = { path: "src/main/java/app/Orders.java", symbol: "Orders.create", line: 10 };
 
 function route(method: HttpRoute["method"], path: string, symbol = "Orders.create", line = 10): HttpRoute {
@@ -72,8 +74,10 @@ interface Setup {
   unserved?: readonly string[];
   /** Per repository: what a walk from one of its call sites reaches, by the line the walk is seeded with. */
   reached?: Record<string, readonly WalkModel[]>;
-  /** The workspace the bound repository persists. */
+  /** The workspace the bound repository persists, honoured only when the trigger is `trusted`. */
   defaults?: WorkspaceDefaults;
+  /** The declared trust of the trigger; absent reads it `untrusted`, which never honours the persisted workspace. */
+  trust?: TrustRecordReader;
   /** What the workspace read refreshed, carried beside the fact. */
   refresh?: WorkspaceRefresh;
 }
@@ -101,7 +105,7 @@ function walkAnswer(model: readonly WalkModel[], targets: readonly CallersTarget
   return { cost: { expansionsUsed: 0 }, seeds, symbols: [], entrypoints };
 }
 
-function setup({ repositories, unavailable = [], trigger = impactOf(REACHED), unserved = [], reached = {}, defaults, refresh }: Setup) {
+function setup({ repositories, unavailable = [], trigger = impactOf(REACHED), unserved = [], reached = {}, defaults, trust, refresh }: Setup) {
   const missing = new Set(unavailable);
   const names = Object.keys(repositories).filter((repo) => !missing.has(repo)).sort();
   const all = [...new Set([...names, ...unavailable])].sort();
@@ -155,7 +159,7 @@ function setup({ repositories, unavailable = [], trigger = impactOf(REACHED), un
     },
     ofChange: async (request: ImpactOfChangeRequest): Promise<Result<Fact<ImpactValue>, ImpactFault>> => ({ ok: true, value: fact(request.repoId, "trusted", { ...trigger, mergeBase: OTHER_SHA }) }),
   } as unknown as ImpactQueries;
-  return { queries: createWorkspaceImpactQueries({ workspace: read_, impact, ...(defaults === undefined ? {} : { defaults }) }), walks, asks };
+  return { queries: createWorkspaceImpactQueries({ workspace: read_, impact, ...(defaults === undefined ? {} : { defaults }), ...(trust === undefined ? {} : { trust }) }), walks, asks };
 }
 
 const ASK = { repo: { path: "/work/orders" }, repos: [{ path: "/work/shop-web" }], targets: [{ file: HANDLER.path, symbol: HANDLER.symbol }] };
@@ -570,6 +574,7 @@ test("a request that names no repositories joins the persisted manifest's reposi
       webapp: { callSites: [callSite("webapp", "orders-api/orders", "POST", 9)] },
     },
     defaults: persisted({ repos: [{ path: "/work/webapp" }], gateways: [{ prefix: "orders-api", repo: "orders" }] }, asked),
+    trust: TRUSTED,
   });
 
   const value = valueOf(await queries.callers(ASK_WITHOUT_REPOS));
@@ -599,6 +604,7 @@ test("a manifest that cannot be read is a fault and nothing is walked", async ()
   const { queries, walks } = setup({
     repositories: { orders: { entrypoints: [route("POST", "/orders")] } },
     defaults: { of: async () => ({ ok: false, fault: { kind: "unreadable", detail: ".ye-ast/workspace.json: repos: a non-empty array" } }), resolve: (_root, manifest) => manifest },
+    trust: TRUSTED,
   });
 
   const result = await queries.callers(ASK_WITHOUT_REPOS);
