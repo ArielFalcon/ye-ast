@@ -55,6 +55,7 @@ export interface VcsFault {
     | "unknown-revision"
     | "git-failed"
     | "not-repository-root"
+    | "unreadable"
     | "object-missing"
     | "no-merge-base"
     | "export-write-failed"

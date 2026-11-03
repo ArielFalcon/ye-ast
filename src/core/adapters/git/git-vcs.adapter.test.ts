@@ -254,10 +254,11 @@ test("a linked worktree answers the name of the clone that holds it, so one repo
   assert.deepEqual(await vcs.repositoryName(worktree), { ok: true, value: basename(repo) });
 });
 
-test("a git failure while resolving the sha stays a git-failed fault", async () => {
+test("a missing root while exporting is unreadable, since no command starts in it", async () => {
   const result = await createGitVcs().exportCommit(join(scratch, "missing"), "1".repeat(40), destination, EVERYTHING);
 
-  assert.equal(!result.ok && result.fault.kind, "git-failed");
+  assert.equal(!result.ok && result.fault.kind, "unreadable");
+  assert.deepEqual(readdirSync(destination), []);
 });
 
 test("the repository's own attributes do not hide or rewrite a file", async () => {
@@ -366,6 +367,40 @@ test("a partial clone never fetches a missing blob from its promisor remote, whi
   assert.throws(() => execFileSync("git", ["cat-file", "-e", blobId], offline));
   assert.equal(!result.ok && result.fault.kind, "object-missing");
   assert.deepEqual(readdirSync(destination), []);
+});
+
+test("a repository root that does not exist answers unreadable, with the path, instead of a bare git failure", async () => {
+  const missing = join(scratch, "absent-root");
+
+  const resolved = await createGitVcs().resolveCommit(missing, "HEAD");
+  const named = await createGitVcs().repositoryName(missing);
+
+  assert.deepEqual(resolved, { ok: false, fault: { kind: "unreadable", detail: missing } });
+  assert.deepEqual(named, { ok: false, fault: { kind: "unreadable", detail: missing } });
+});
+
+test("a root that is a file answers unreadable, since no git command can run in it", async () => {
+  const file = join(scratch, "root-file");
+  writeFileSync(file, "");
+
+  const resolved = await createGitVcs().resolveCommit(file, "HEAD");
+
+  assert.deepEqual(resolved, { ok: false, fault: { kind: "unreadable", detail: file } });
+});
+
+test("a machine without git and a readable root answers git-failed, naming the binary", { skip: process.platform === "win32" }, async () => {
+  const bin = join(scratch, "empty-bin");
+  mkdirSync(bin);
+  const path = process.env.PATH;
+  process.env.PATH = bin;
+  try {
+    const resolved = await createGitVcs().resolveCommit(repo, "HEAD");
+
+    assert.equal(!resolved.ok && resolved.fault.kind, "git-failed");
+    assert.match(!resolved.ok ? resolved.fault.detail : "", /git/);
+  } finally {
+    process.env.PATH = path;
+  }
 });
 
 test("a subdirectory of a repository is refused, so the whole repository is never mapped under the subdirectory's name", async () => {

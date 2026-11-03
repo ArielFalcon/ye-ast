@@ -299,7 +299,7 @@ Also:
 
 | Symptom | Cause | Action |
 |---|---|---|
-| `ye-ast: unreadable: …` | The path is not readable or not a git repository | Fix the path; do not retry blindly |
+| `ye-ast: unreadable: …` | The path does not exist, is not a directory, or the account cannot read it | Fix the path; do not retry blindly |
 | `ye-ast: live-requires-trusted` | `live` used without a `trusted` declaration | Ask the user, or answer from a revision |
 | `ye-ast: unknown-symbol: …` | Nothing declares that symbol at that revision | Check the file and the name; the error lists what it found |
 | `ye-ast: deadline` | The walk ran out of its bound | Narrow `scope`, or raise `budget` |
