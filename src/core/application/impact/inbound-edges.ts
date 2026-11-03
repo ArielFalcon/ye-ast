@@ -1,3 +1,4 @@
+import type { DependenceBasis } from "../../domain/impact/impact-fact.ts";
 import { topLevelOf, isSeedable } from "../../domain/change/seeds.ts";
 import { declarationAnchor, placeAt, settledUseKey } from "../../domain/impact/impact-cuts.ts";
 import { CALL_EDGE_KINDS, EDGE_POLICY, edgeConfidence, FOLLOWED_EDGE_KINDS, followsEdge, followsRelation, isIgnoredEdge } from "../../domain/impact/edge-policy.ts";
@@ -14,8 +15,10 @@ export interface InboundEdge {
   from: GraphSymbol;
   confidence: number;
   bridge?: "up" | "down";
-  /** Whether a call or an instantiation is among the edges that make the symbol a caller. */
-  callLike: boolean;
+  /** Every place inside `from` where the dependence happens, in line order; empty when the store places none. */
+  lines: readonly number[];
+  /** What the dependence is; `call` when a call or an instantiation is among them. */
+  basis: DependenceBasis;
 }
 
 /**
@@ -130,7 +133,7 @@ export function createInboundEdges(reader: CodeGraphReader, isTestFile: (path: s
         typesAround(owner, bridge).flatMap(({ type, confidence }) =>
           methodsOf(type)
             .filter((candidate) => candidate.name === method.name)
-            .map((from) => ({ from, confidence, bridge, callLike: false })),
+            .map((from) => ({ from, confidence, bridge, basis: "dispatch" as const, lines: [] })),
         ),
       ),
     );
@@ -158,7 +161,7 @@ export function createInboundEdges(reader: CodeGraphReader, isTestFile: (path: s
         if (source?.kind === "file") importing.push({ file: source.file, confidence: edgeConfidence(edge) });
       }
     }
-    return importing.filter(({ file }) => !isTestFile(file)).flatMap(({ file, confidence }) => topLevelCodeOf(file).map((from) => ({ from, confidence, callLike: false })));
+    return importing.filter(({ file }) => !isTestFile(file)).flatMap(({ file, confidence }) => topLevelCodeOf(file).map((from) => ({ from, confidence, basis: "import" as const, lines: [] })));
   }
 
   const symbolsCache = new Map<string, GraphSymbol[]>();
@@ -179,7 +182,7 @@ export function createInboundEdges(reader: CodeGraphReader, isTestFile: (path: s
         const from = declarationAt(candidate.from);
         return from === undefined || isTestFile(from.file) || !followsRelation({ kind: candidate.kind, sourceKind: from.kind, targetKind: node.kind })
           ? []
-          : [{ from, confidence: EDGE_POLICY.relations.confidence, callLike: false }];
+          : [{ from, confidence: EDGE_POLICY.relations.confidence, basis: "relation" as const, lines: [] }];
       });
   }
 
@@ -204,7 +207,7 @@ export function createInboundEdges(reader: CodeGraphReader, isTestFile: (path: s
     load(uses.map((use) => use.from));
     return uses.flatMap((use) => {
       const from = symbolOf(use.from);
-      return from !== undefined && owners.some((owner) => isInside(from, owner)) ? [{ from, confidence: EDGE_POLICY.relations.confidence, callLike: use.kind === "calls" }] : [];
+      return from !== undefined && owners.some((owner) => isInside(from, owner)) ? [{ from, confidence: EDGE_POLICY.relations.confidence, basis: use.kind === "calls" ? "call" : "reference", lines: [use.line] }] : [];
     });
   }
 
@@ -234,7 +237,7 @@ export function createInboundEdges(reader: CodeGraphReader, isTestFile: (path: s
         const from = symbolOf(use.from);
         if (from === undefined || !isInside(from, holder)) continue;
         settledUses.add(settledUseKey(anchor, placeAt(use.file, use.line)));
-        if (holdsOwner) callers.push({ from, confidence: EDGE_POLICY.relations.confidence, callLike: use.kind === "calls" });
+        if (holdsOwner) callers.push({ from, confidence: EDGE_POLICY.relations.confidence, basis: use.kind === "calls" ? "call" : "reference", lines: [use.line] });
       }
     }
     return callers;
@@ -247,7 +250,12 @@ export function createInboundEdges(reader: CodeGraphReader, isTestFile: (path: s
     if (callers === undefined) {
       const followed = followedEdgesInto(node).filter(({ edge, source }) => !isTestFile(source.file) && followsEdge({ kind: edge.kind, sourceKind: source.kind, targetKind: node.kind }));
       const into = throughMember ? followed.filter(({ edge }) => (EDGE_POLICY.ownerThroughMember.edges as readonly string[]).includes(edge.kind)) : followed;
-      const direct = into.map(({ edge, source }) => ({ from: source, confidence: edgeConfidence(edge), callLike: CALL_EDGE_KINDS.includes(edge.kind) }));
+      const direct = into.map(({ edge, source }) => ({
+        from: source,
+        confidence: edgeConfidence(edge),
+        basis: CALL_EDGE_KINDS.includes(edge.kind) ? ("call" as const) : ("reference" as const),
+        lines: edge.line === null ? [] : [edge.line],
+      }));
       const bridged = throughMember ? direct : [...direct, ...bridgesOf(node, contractChanged), ...fieldUsesOf(node), ...ownUsesOf(node)];
       const found = [...bridged, ...relatedTo(node, throughMember ? EDGE_POLICY.ownerThroughMember.relations : undefined)];
       const whole = throughMember ? found : [...found, ...importersOf(node, found.length === 0)];
@@ -260,12 +268,32 @@ export function createInboundEdges(reader: CodeGraphReader, isTestFile: (path: s
   return { callersOf, ownersOf, settledUses: () => settledUses };
 }
 
+interface Gathered {
+  /** The strongest dependence from that symbol. */
+  edge: InboundEdge;
+  lines: Set<number>;
+  /** Whether a call or an instantiation is among the merged dependences. */
+  calls: boolean;
+}
+
 function strongestPerSymbol(edges: readonly InboundEdge[]): InboundEdge[] {
-  const strongest = new Map<GraphNodeId, InboundEdge>();
+  const gathered = new Map<GraphNodeId, Gathered>();
   for (const edge of edges) {
-    const held = strongest.get(edge.from.id);
-    const callLike = edge.callLike || (held?.callLike ?? false);
-    strongest.set(edge.from.id, held === undefined || edge.confidence > held.confidence ? { ...edge, callLike } : { ...held, callLike });
+    const id = edge.from.id;
+    const held = gathered.get(id);
+    const lines = held?.lines ?? new Set<number>();
+    for (const line of edge.lines) lines.add(line);
+    gathered.set(id, {
+      edge: held === undefined || edge.confidence > held.edge.confidence ? edge : held.edge,
+      lines,
+      calls: (held?.calls ?? false) || edge.basis === "call",
+    });
   }
-  return [...strongest.values()];
+  return [...gathered.values()].map(({ edge, lines, calls }) => ({
+    from: edge.from,
+    confidence: edge.confidence,
+    ...(edge.bridge === undefined ? {} : { bridge: edge.bridge }),
+    lines: [...lines].sort((a, b) => a - b),
+    basis: calls ? "call" : edge.basis,
+  }));
 }

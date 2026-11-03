@@ -138,7 +138,7 @@ test("a changed helper reaches the route served through an interface, the same b
   assert.equal(first.stdout, second.stdout);
   assert.deepEqual(readdirSync(scratchRoot), []);
   assert.equal(first.fact.status, "complete");
-  assert.deepEqual(first.fact.value.seeds, [{ file: "src/main/java/shop/Util.java", symbol: "fmt", line: 4, basis: "lines" }]);
+  assert.deepEqual(first.fact.value.seeds, [{ file: "src/main/java/shop/Util.java", symbol: "fmt", line: 4, endLine: 6, basis: "lines" }]);
   assert.deepEqual(first.fact.value.symbols.map((symbol) => [place(symbol), symbol.depth]), [
     ["Util.java:Util", 0],
     ["Util.java:fmt", 0],

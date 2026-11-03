@@ -142,14 +142,15 @@ interface ImpactValue {
   entrypoints: ReachedEntrypoint[];
 }
 
-interface Seed { file: string; symbol: string; line: number; basis: "lines" | "top-level" | "resource" | "requested" }
+interface Seed { file: string; symbol: string; line: number; endLine?: number; basis: "lines" | "top-level" | "resource" | "requested" }
 
 interface ChangedEntrypoint { change: "added" | "removed" | "altered"; kind: Entrypoint["kind"]; name: string; handler: Handler }
 
 interface ImpactedSymbol {
-  file: string; symbol: string; kind: string; line: number;
+  file: string; symbol: string; kind: string; line: number; endLine?: number;
   depth: number; confidence: number; fanIn: number;
-  via?: { file: string; symbol: string };
+  /** lines are every place inside this symbol's file where it depends on the symbol it was reached through. */
+  via?: { file: string; symbol: string; lines?: readonly number[]; basis: "call" | "reference" | "contains" | "dispatch" | "relation" | "import" };
 }
 
 interface ReachedEntrypoint {
@@ -157,6 +158,13 @@ interface ReachedEntrypoint {
   depth: number; confidence: number; seeds: number[];
 }
 ```
+
+`endLine` is the declaration's last line and is present only when the declaration spans more than one line, the
+convention `Evidence` already follows. `via.lines` are **every** place inside the reached symbol's own file where it
+depends on the symbol that reached it, in line order: a symbol that calls another three times is three places to change.
+`via.basis` says what the dependence is — `call` when a call or an instantiation is among the merged edges, `reference`
+when it only names the symbol, and `contains`, `dispatch`, `relation` or `import` for the structural dependences the walk
+follows — so a place with no line is never silent.
 
 `ImportersValue` (`impact.importers`), per requested file in path order, each list sorted and repo-relative, the file
 itself never listed:

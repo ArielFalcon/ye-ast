@@ -83,7 +83,7 @@ test("a route carries the exact span of its handler: the annotations through the
         name: "GET /orders",
         method: "GET",
         path: "/orders",
-        handler: { path: source.path, symbol: "OrderController.list", line: 5 },
+        handler: { path: source.path, symbol: "OrderController.list", line: 5, endLine: 10 },
         basePath: { status: "complete", value: { default: {}, profiles: {} }, evidence: [] },
       },
       evidence: [{ path: source.path, line: 5, endLine: 10 }],
@@ -2218,7 +2218,7 @@ test("a class-level Kafka or Rabbit listener is one item per destination, handle
   assert.deepEqual(listeners(findings), ["kafka orders@Orders", "kafka refunds@Orders", "rabbit payments@Payments"]);
   assert.deepEqual(findings[0], {
     status: "complete",
-    value: { kind: "listener", name: "kafka orders", protocol: "kafka", destination: "orders", handler: { path: orders.path, symbol: "Orders", line: 4 } },
+    value: { kind: "listener", name: "kafka orders", protocol: "kafka", destination: "orders", handler: { path: orders.path, symbol: "Orders", line: 4, endLine: 6 } },
     evidence: [{ path: orders.path, line: 4, endLine: 6 }],
   });
 });

@@ -179,7 +179,10 @@ text already prints — `schema`, `snapshot`, `producer`, `inputs`, `status`, `r
 cost a measured answer 1.5× to 6× its text (683 771 characters of fact against 144 691 of text), and a machine that
 needs the whole fact has the library and `serve`; `full: true` puts it back beside the same text, byte for byte. The
 text rendering opens with the status, the declared scope that status is relative to and the snapshot,
-states `path:line` evidence, counts the cuts by kind on the status line and closes with their full list, so the answer is
+states `path:line` evidence, the span of every declaration longer than one line (`src/a.ts:3-9`), and every place where a
+reached symbol depends on the one that reached it (`via src/b.ts:B.user at 14, 21, 33`), naming the dependence instead
+when the store places no line for it (`(call)`, `(reference)`, `(contains)`, `(dispatch)`, `(relation)`, `(import)`), counts
+the cuts by kind on the status line and closes with their full list, so the answer is
 read before the price of its completeness. The response-level statuses a fact must not carry — staleness and a refresh —
 open the text with a `stale:`, `remote:` or `pinned:` line, the same statuses `_meta` and the fact's siblings carry, so
 the text alone loses nothing. A fault is an `isError` result: its text names the kind on the first line and `_meta`

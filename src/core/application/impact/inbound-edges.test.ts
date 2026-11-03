@@ -12,7 +12,7 @@ interface Setup {
   symbol(id: string): GraphSymbol;
   callers(id: string, contractChanged?: boolean): string[];
   throughMember(id: string): string[];
-  callLike(id: string): boolean[];
+  basis(id: string): string[];
   scored(id: string, contractChanged?: boolean): [string, number, string | undefined][];
 }
 
@@ -29,7 +29,7 @@ function setup(nodes: FakeNode[], edges: FakeEdge[], relations: readonly Relatio
     symbol,
     callers: (id, contractChanged = false) => inbound.callersOf(symbol(id), contractChanged).map((edge) => edge.from.id),
     throughMember: (id) => inbound.callersOf(symbol(id), false, true).map((edge) => edge.from.id),
-    callLike: (id) => inbound.callersOf(symbol(id), false).map((edge) => edge.callLike),
+    basis: (id) => inbound.callersOf(symbol(id), false).map((edge) => edge.basis),
     scored: (id, contractChanged = false) => inbound.callersOf(symbol(id), contractChanged).map((edge) => [edge.from.id, edge.confidence, edge.bridge]),
   };
 }
@@ -289,7 +289,7 @@ test("a class that injects or uses another in its template is a certain caller o
     kinds.map((kind, index) => relation(kind, ref(CMP, kind, 10 * (index + 1) + 1), ref(SVC, "Target", 4))),
   );
   assert.deepEqual(s.scored("Target"), kinds.map((kind) => [kind, 1, undefined]));
-  assert.deepEqual(s.callLike("Target"), [false, false, false, false]);
+  assert.deepEqual(s.basis("Target"), ["relation", "relation", "relation", "relation"]);
 });
 
 test("a relation joins its classes by file, a line inside the span and the simple name, never by position alone", () => {

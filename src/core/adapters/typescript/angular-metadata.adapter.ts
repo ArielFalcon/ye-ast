@@ -78,9 +78,9 @@ async function readProject(contents: ReadonlyMap<string, string>, dependencies: 
 
   const place = async (file: string, name: string): Promise<Placed> => {
     const target = await parse(file);
-    const line = target?.shape.declared.get(name);
-    if (target === undefined || line === undefined) return { unresolved: true };
-    if (target.shape.classes.has(name)) return { class: { path: file, symbol: name, line } };
+    const span = target?.shape.declared.get(name);
+    if (target === undefined || span === undefined) return { unresolved: true };
+    if (target.shape.classes.has(name)) return { class: { path: file, symbol: name, line: span.line } };
     const operands = target.angular.arrays.get(name);
     return operands === undefined ? { token: true } : { array: { key: `${file}\0${name}`, file, operands } };
   };

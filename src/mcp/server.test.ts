@@ -53,7 +53,7 @@ const IMPACT: ImpactValue = {
   mergeBase: "b".repeat(40),
   seeds: [{ file: "src/OrderService.java", symbol: "OrderService.find", line: 31, basis: "lines" }],
   changedEntrypoints: [{ change: "added", kind: "http-route", name: "POST /orders", handler: { path: "src/OrderController.java", symbol: "OrderController.create", line: 40 } }],
-  symbols: [{ file: "src/OrderController.java", symbol: "OrderController.one", kind: "method", line: 17, depth: 2, confidence: 0.75, fanIn: 3, via: { file: "src/OrderService.java", symbol: "OrderService.find" } }],
+  symbols: [{ file: "src/OrderController.java", symbol: "OrderController.one", kind: "method", line: 17, depth: 2, confidence: 0.75, fanIn: 3, via: { file: "src/OrderService.java", symbol: "OrderService.find", lines: [44], basis: "call" } }],
   entrypoints: [{ kind: "http-route", name: "GET /orders/{id}", handler: ROUTE.kind === "http-route" ? ROUTE.handler : never(), depth: 2, confidence: 0.75, seeds: [0] }],
   cost: { expansionsUsed: 0 },
 };
@@ -354,7 +354,7 @@ test("impact reads a change of the bound repository, head defaulting to HEAD, an
   const text = textOf(result);
   assert.match(text, /status: complete/);
   assert.match(text, /^seeds \(1\):\n {2}src\/OrderService\.java \(lines\)\n {4}31 OrderService\.find$/m);
-  assert.match(text, /src\/OrderController\.java\n {4}17 OrderController\.one \[method\] \(depth 2, confidence 0\.75, fan-in 3, via src\/OrderService\.java:OrderService\.find\)/);
+  assert.match(text, /src\/OrderController\.java\n {4}17 OrderController\.one \[method\] \(depth 2, confidence 0\.75, fan-in 3, via src\/OrderService\.java:OrderService\.find at 44\)/);
   assert.match(text, /added http-route POST \/orders.*src\/OrderController\.java:40/);
   assert.match(text, /GET \/orders\/\{id\}.*src\/OrderController\.java:17.*depth 2/);
   await session.close();
@@ -578,6 +578,43 @@ test("the seeds of an impact answer are grouped under their file, with the basis
   await session.close();
 });
 
+test("a symbol prints the span it covers and the place inside itself where it depends on the one that reached it", async () => {
+  const value: ImpactValue = {
+    seeds: [{ file: "src/a.ts", symbol: "A.seed", line: 3, endLine: 9, basis: "requested" }],
+    symbols: [
+      { file: "src/b.ts", symbol: "B.user", kind: "function", line: 40, endLine: 58, depth: 1, confidence: 1, fanIn: 0, via: { file: "src/a.ts", symbol: "A.seed", lines: [44, 51, 63], basis: "call" } },
+      { file: "src/c.ts", symbol: "C.one", kind: "constant", line: 7, depth: 2, confidence: 1, fanIn: 0, via: { file: "src/b.ts", symbol: "B.user", basis: "dispatch" } },
+      { file: "src/d.ts", symbol: "D.type", kind: "class", line: 9, depth: 2, confidence: 1, fanIn: 0, via: { file: "src/b.ts", symbol: "B.user", lines: [12], basis: "reference" } },
+    ],
+    entrypoints: [],
+    cost: { expansionsUsed: 0 },
+  };
+  const fact = impactFact({ value } as Partial<Fact<ImpactValue>>);
+  const { session } = await setup({ ofChange: async () => ({ ok: true, value: fact }) });
+  const text = textOf(await session.callTool("ye_ast_impact", { base: "main", detail: "full" }));
+  assert.match(text, /^seeds \(1\):\n {2}src\/a\.ts \(requested\)\n {4}3-9 A\.seed$/m);
+  assert.match(text, /^ {2}src\/b\.ts\n {4}40-58 B\.user \[function\] \(depth 1, via src\/a\.ts:A\.seed at 44, 51, 63\)$/m);
+  assert.match(text, /^ {4}7 C\.one \[constant\] \(depth 2, via src\/b\.ts:B\.user \(dispatch\)\)$/m);
+  assert.match(text, /^ {4}9 D\.type \[class\] \(depth 2, via src\/b\.ts:B\.user at 12 \(reference\)\)$/m);
+  await session.close();
+});
+
+test("a one-line declaration prints one line and a handler prints its span", async () => {
+  const value: ImpactValue = {
+    seeds: [{ file: "src/a.ts", symbol: "A.seed", line: 3, basis: "requested" }],
+    symbols: [],
+    entrypoints: [{ kind: "http-route", name: "GET /orders/{id}", handler: { path: "src/OrderController.java", symbol: "OrderController.one", line: 17, endLine: 31 }, depth: 1, confidence: 1, seeds: [0] }],
+    cost: { expansionsUsed: 0 },
+  };
+  const fact = impactFact({ value } as Partial<Fact<ImpactValue>>);
+  const { session } = await setup({ ofChange: async () => ({ ok: true, value: fact }) });
+  const text = textOf(await session.callTool("ye_ast_impact", { base: "main" }));
+  assert.match(text, /^ {4}3 A\.seed$/m);
+  assert.match(text, /-> src\/OrderController\.java:17-31 OrderController\.one \(depth 1\)$/m);
+  assert.doesNotMatch(text, /3-3/);
+  await session.close();
+});
+
 test("impacted symbols are grouped under their file, a seed at depth 0 is not printed twice and only a confidence below 1 or a fan-in above 0 is printed", async () => {
   const grouped = impactFact({
     value: {
@@ -585,8 +622,8 @@ test("impacted symbols are grouped under their file, a seed at depth 0 is not pr
       symbols: [
         { file: "src/a.ts", symbol: "A.seed", kind: "method", line: 1, depth: 0, confidence: 1, fanIn: 0 },
         { file: "src/a.ts", symbol: "A.other", kind: "method", line: 4, depth: 1, confidence: 1, fanIn: 0 },
-        { file: "src/b.ts", symbol: "B.user", kind: "function", line: 9, depth: 2, confidence: 0.5, fanIn: 2, via: { file: "src/a.ts", symbol: "A.other" } },
-        { file: "src/b.ts", symbol: "B.helper", kind: "function", line: 2, depth: 2, confidence: 0.5, fanIn: 1, via: { file: "src/b.ts", symbol: "B.user" } },
+        { file: "src/b.ts", symbol: "B.user", kind: "function", line: 9, depth: 2, confidence: 0.5, fanIn: 2, via: { file: "src/a.ts", symbol: "A.other", lines: [44], basis: "call" } },
+        { file: "src/b.ts", symbol: "B.helper", kind: "function", line: 2, depth: 2, confidence: 0.5, fanIn: 1, via: { file: "src/b.ts", symbol: "B.user", lines: [7], basis: "call" } },
       ],
       entrypoints: [],
       cost: { expansionsUsed: 1 },
@@ -594,7 +631,7 @@ test("impacted symbols are grouped under their file, a seed at depth 0 is not pr
   } as Partial<Fact<ImpactValue>>);
   const { session } = await setup({ ofChange: async () => ({ ok: true, value: grouped }) });
   const text = textOf(await session.callTool("ye_ast_impact", { base: "main", detail: "full" }));
-  assert.match(text, /impacted symbols \(3\):\n {2}src\/a\.ts\n {4}4 A\.other \[method\] \(depth 1\)\n {2}src\/b\.ts\n {4}9 B\.user \[function\] \(depth 2, confidence 0\.5, fan-in 2, via src\/a\.ts:A\.other\)\n {4}2 B\.helper \[function\] \(depth 2, confidence 0\.5, fan-in 1, via B\.user\)/);
+  assert.match(text, /impacted symbols \(3\):\n {2}src\/a\.ts\n {4}4 A\.other \[method\] \(depth 1\)\n {2}src\/b\.ts\n {4}9 B\.user \[function\] \(depth 2, confidence 0\.5, fan-in 2, via src\/a\.ts:A\.other at 44\)\n {4}2 B\.helper \[function\] \(depth 2, confidence 0\.5, fan-in 1, via B\.user at 7\)/);
   assert.doesNotMatch(text, /A\.seed \[method\]/);
   await session.close();
 });

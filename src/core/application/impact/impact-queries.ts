@@ -13,7 +13,7 @@ import { isAngularTemplate } from "../../domain/languages/typescript.ts";
 import { cutsCompleteness } from "../../domain/languages/uncovered.ts";
 import { comparePosition, compareText, joinsFact } from "../../domain/shared/code-node.ts";
 import type { Entrypoint } from "../../domain/entrypoints/entrypoint.ts";
-import { sortedEngines, type Cut, type DeclaredConfig, type DeclaredScope, type Evidence, type Fact, type FactBase, type Finding, type IndexOrigin, type SnapshotRef, type TrustMode, type UnknownFact } from "../../domain/shared/fact.ts";
+import { declarationSpan, sortedEngines, type Cut, type DeclaredConfig, type DeclaredScope, type Evidence, type Fact, type FactBase, type Finding, type IndexOrigin, type SnapshotRef, type TrustMode, type UnknownFact } from "../../domain/shared/fact.ts";
 import { exportSelection, pathSelection, type PathSelection, type ScopeRequest } from "../../domain/shared/scope.ts";
 import { changedPaths, liveScope } from "../../domain/snapshot/live-export.ts";
 import { contentFingerprint, declaredScope, exportCuts, holdsDeclaredSource } from "../../domain/map/entrypoint-map.ts";
@@ -485,16 +485,26 @@ function impactOf(input: WalkInput): ImpactRead {
   ];
   const value = {
     cost: walk.cost,
-    seeds: seeds.map(({ symbol, basis }): Seed => ({ file: symbol.file, symbol: symbol.name, line: symbol.startLine, basis })),
+    seeds: seeds.map(({ symbol, basis }): Seed => ({ file: symbol.file, symbol: symbol.name, line: symbol.startLine, ...declarationSpan(symbol.startLine, symbol.endLine), basis })),
     symbols: walk.reached.map(({ symbol, depth, confidence, fanIn, via }): ImpactedSymbol => ({
       file: symbol.file,
       symbol: symbol.name,
       kind: symbol.kind,
       line: symbol.startLine,
+      ...declarationSpan(symbol.startLine, symbol.endLine),
       depth,
       confidence,
       fanIn,
-      ...(via === undefined ? {} : { via: { file: via.file, symbol: via.name } }),
+      ...(via === undefined
+        ? {}
+        : {
+            via: {
+              file: via.symbol.file,
+              symbol: via.symbol.name,
+              ...(via.lines.length === 0 ? {} : { lines: via.lines }),
+              basis: via.basis,
+            },
+          }),
     })),
     entrypoints: reachedEntrypoints(
       headTree.findings,

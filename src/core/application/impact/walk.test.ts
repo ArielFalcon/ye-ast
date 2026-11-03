@@ -26,7 +26,7 @@ const summary = (result: ReturnType<typeof walk>) => result.reached.map((r) => `
 test("callers are reached level by level with the symbol that first reached them", () => {
   const result = walk([fn("a"), fn("b"), fn("c"), fn("d")], [call("b", "a"), call("c", "b"), call("d", "a")], ["a"]);
   assert.deepEqual(summary(result), ["a@0", "b@1", "d@1", "c@2"]);
-  assert.deepEqual(result.reached.map((r) => r.via?.id), [undefined, "a", "a", "b"]);
+  assert.deepEqual(result.reached.map((r) => r.via?.symbol.id), [undefined, "a", "a", "b"]);
 });
 
 test("a symbol is expanded once and the walk ends on a cycle", () => {
@@ -57,7 +57,7 @@ test("confidence is the strongest weakest edge over every path, not that of the 
 test("a level is expanded in position order whatever order the seeds came in", () => {
   const nodes = [fn("zseed", 1, "src/z.ts"), fn("aseed", 1, "src/a.ts"), fn("shared")];
   const result = walk(nodes, [call("shared", "zseed"), call("shared", "aseed")], ["zseed", "aseed"]);
-  assert.equal(result.reached.find((r) => r.symbol.id === "shared")!.via?.id, "aseed");
+  assert.equal(result.reached.find((r) => r.symbol.id === "shared")!.via?.symbol.id, "aseed");
 });
 
 test("a path is as sure as its weakest edge wherever that edge is, and seeds flow through every level", () => {
@@ -82,7 +82,7 @@ test("a reached method reaches its type at its own depth, through the method, an
   const edges = [call("m", "a"), { from: "O", to: "m", kind: "contains" }, call("user", "O")];
   const result = walk(nodes, edges, ["a"]);
   assert.deepEqual(summary(result), ["a@0", "O@1", "m@1"]);
-  assert.equal(result.reached.find((r) => r.symbol.id === "O")!.via?.id, "m");
+  assert.equal(result.reached.find((r) => r.symbol.id === "O")!.via?.symbol.id, "m");
   assert.equal(result.reached.find((r) => r.symbol.id === "O")!.confidence, 0.9);
 });
 
@@ -121,9 +121,9 @@ test("the type of a seed method is reached at depth 0 and a seed type keeps no v
   const nodes = [fakeNode("m", "method", "src/O.ts", 5, 6), fakeNode("O", "class", "src/O.ts", 1, 9)];
   const edges: FakeEdge[] = [{ from: "O", to: "m", kind: "contains" }];
   const both = walk(nodes, edges, ["m", "O"]);
-  assert.deepEqual(both.reached.map((r) => [r.symbol.id, r.depth, r.via?.id]), [["O", 0, undefined], ["m", 0, undefined]]);
+  assert.deepEqual(both.reached.map((r) => [r.symbol.id, r.depth, r.via?.symbol.id]), [["O", 0, undefined], ["m", 0, undefined]]);
   const methodOnly = walk(nodes, edges, ["m"]);
-  assert.deepEqual(methodOnly.reached.map((r) => [r.symbol.id, r.depth, r.via?.id]), [["O", 0, "m"], ["m", 0, undefined]]);
+  assert.deepEqual(methodOnly.reached.map((r) => [r.symbol.id, r.depth, r.via?.symbol.id]), [["O", 0, "m"], ["m", 0, undefined]]);
 });
 
 test("each reached symbol reports its callers, those past the bound included", () => {

@@ -94,8 +94,8 @@ export interface RawRouteFile {
   constants: Map<string, RawValue>;
   /** Local name → the module and the export of each import. */
   imports: Map<string, RawImport>;
-  /** The names this file declares at its top level, with the line of each. */
-  declared: Map<string, number>;
+  /** The names this file declares at its top level, with the span of each. */
+  declared: Map<string, RawSpan>;
   /** The declared names that are classes. */
   classes: Set<string>;
   /** What the file exports, by exported name, and the modules it re-exports whole (`export * from`). */
@@ -160,13 +160,13 @@ export function readAngularRouteFile(sf: ts.SourceFile): RawRouteFile | undefine
   if (diagnostics.length > 0) return undefined;
   const line = (pos: number): number => sf.getLineAndCharacterOfPosition(pos).line + 1;
   const imports = new Map<string, RawImport>();
-  const declared = new Map<string, number>();
+  const declared = new Map<string, RawSpan>();
   const classes = new Set<string>();
   const exports = new Map<string, RawExport>();
   const stars: string[] = [];
   const hasModifier = (statement: ts.Node, kind: ts.SyntaxKind): boolean => ts.canHaveModifiers(statement) && (ts.getModifiers(statement) ?? []).some((m) => m.kind === kind);
-  const declare = (name: ts.Identifier): void => {
-    declared.set(name.text, line(name.getStart(sf)));
+  const declare = (name: ts.Identifier, node: ts.Node): void => {
+    declared.set(name.text, { line: line(name.getStart(sf)), endLine: line(node.end) });
   };
   const exportDeclared = (statement: ts.Node, name: string): void => {
     if (!hasModifier(statement, ts.SyntaxKind.ExportKeyword)) return;
@@ -206,7 +206,7 @@ export function readAngularRouteFile(sf: ts.SourceFile): RawRouteFile | undefine
     } else if (ts.isVariableStatement(statement)) {
       for (const decl of statement.declarationList.declarations) {
         if (!ts.isIdentifier(decl.name)) continue;
-        declare(decl.name);
+        declare(decl.name, decl);
         exportDeclared(statement, decl.name.text);
         if (decl.initializer === undefined) continue;
         const name = decl.name.text;
@@ -223,14 +223,14 @@ export function readAngularRouteFile(sf: ts.SourceFile): RawRouteFile | undefine
         }
       }
     } else if (ts.isEnumDeclaration(statement)) {
-      declare(statement.name);
+      declare(statement.name, statement);
       exportDeclared(statement, statement.name.text);
       for (const member of statement.members) {
         const value = member.initializer ? stringOf(member.initializer) : undefined;
         if (value !== undefined) constants.set(`${statement.name.text}.${member.name.getText(sf)}`, { literal: value });
       }
     } else if ((ts.isFunctionDeclaration(statement) || ts.isClassDeclaration(statement)) && statement.name) {
-      declare(statement.name);
+      declare(statement.name, statement);
       if (ts.isClassDeclaration(statement)) classes.add(statement.name.text);
       exportDeclared(statement, statement.name.text);
     }

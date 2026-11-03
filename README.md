@@ -259,7 +259,7 @@ schema     contract version of the envelope
 snapshot   what was read: { kind: "sha", sha } or { kind: "live" }
 producer   ye-ast name and version
 inputs     trust mode, declared scope, budget
-evidence   [{ path, line }] that support the value
+evidence   [{ path, line, endLine? }] that support the value
 status     complete | partial | unknown
 value      the fact itself (the MCP's structured content carries it only with full: true)
 ```
@@ -289,6 +289,13 @@ Also:
 - An MCP tool's `structuredContent` holds the envelope alone — `status`, `reason` and `evidence`, never `value` and never
   the cut places: the text is the answer, and nothing is paid for twice. A host that needs the fact itself passes
   `full: true` to any tool and gets `value` and every cut place beside the same text, byte for byte.
+- A place carries its span when its declaration is longer than one line: `src/a.ts:3-9`. An impacted symbol or a seed
+  prints the same span (`3-9 A.seed`), so a read can name exactly the range it needs.
+- A symbol reached through another one prints `via <file>:<symbol> at <lines>`: the lines are **inside the symbol itself**,
+  the places where it depends on what reached it, and every one of them is a place to change — never assume one use per
+  symbol. When the store places no line for that dependence, the same slot names what it is instead: `(call)`,
+  `(reference)`, `(contains)`, `(dispatch)`, `(relation)`, `(import)`; none of them is a missing answer. An `at` list with
+  no parenthetical is a call.
 - The text of every answer opens with `status`, the `declared scope` that status is relative to, the `scope` the caller
   narrowed and the `snapshot`; a refreshed workspace answer adds a `remote:` line per remote and a `pinned:` line per
   repository before them, so a text-only read loses nothing the fact's siblings carry.

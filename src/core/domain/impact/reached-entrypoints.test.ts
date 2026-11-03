@@ -50,7 +50,7 @@ test("an entrypoint the extractor could not read whole is reported by the innerm
   const unknown: Finding<Entrypoint> = { status: "unknown", reason: "unresolved", evidence: [{ path: "src/Orders.java", line: 12 }] };
   const reached = [node("Orders", 3, 30, { depth: 0 }), node("list", 10, 14)];
   assert.deepEqual(reachedEntrypoints([unknown], reached), [
-    { kind: "unknown", handler: { path: "src/Orders.java", symbol: "list", line: 10 }, depth: 1, confidence: 0.9, seeds: [0] },
+    { kind: "unknown", handler: { path: "src/Orders.java", symbol: "list", line: 10, endLine: 14 }, depth: 1, confidence: 0.9, seeds: [0] },
   ]);
 });
 

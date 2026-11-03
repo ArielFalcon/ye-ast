@@ -8,10 +8,19 @@ import type { ChangedEntrypoint } from "./changed-entrypoints.ts";
 /** Optional bounds on the walk; none has a default, and each one that stops the walk becomes a cut. */
 export type ImpactBudget = WalkBounds;
 
+/**
+ * What a dependence the walk followed is: a call or an instantiation, a use that only names the symbol, or one of the
+ * structural dependences (containment, dispatch, a declared relation, an import).
+ */
+export type DependenceBasis = "call" | "reference" | "contains" | "dispatch" | "relation" | "import";
+
 export interface Seed {
   file: string;
   symbol: string;
+  /** The declaration's first line. */
   line: number;
+  /** The declaration's last line; absent when the declaration spans one line. */
+  endLine?: number;
   basis: SeedBasis;
 }
 
@@ -20,11 +29,17 @@ export interface ImpactedSymbol {
   symbol: string;
   kind: string;
   line: number;
+  /** The declaration's last line; absent when the declaration spans one line. */
+  endLine?: number;
   depth: number;
   confidence: number;
   /** The callers that call or instantiate the symbol, whether or not the walk followed them; the hub bound counts the same. */
   fanIn: number;
-  via?: { file: string; symbol: string };
+  /**
+   * The dependence that first reached the symbol: `lines` are the places inside this symbol's own file where it depends
+   * on `via`, in line order, and `basis` says what that dependence is.
+   */
+  via?: { file: string; symbol: string; lines?: readonly number[]; basis: DependenceBasis };
 }
 
 export interface ReachedEntrypoint {

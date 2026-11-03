@@ -13,6 +13,8 @@ export interface FakeEdge {
   from: string;
   to: string;
   kind: string;
+  /** The place inside `from` where the dependence happens; absent stands for a store entry with no position. */
+  line?: number;
   confidence?: number | null;
   provenance?: GraphEdge["provenance"];
   synthesizedBy?: string | null;
@@ -41,7 +43,7 @@ export function fakeCodeGraph(nodes: readonly FakeNode[], edges: readonly FakeEd
     source: handle(e.from),
     target: handle(e.to),
     kind: e.kind,
-    line: null,
+    line: e.line ?? null,
     column: null,
     confidence: e.confidence ?? null,
     provenance: e.provenance ?? null,

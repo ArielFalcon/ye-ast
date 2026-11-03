@@ -1,5 +1,6 @@
 import type { Entrypoint } from "../entrypoints/entrypoint.ts";
 import { compareText, joinsFact, type CodeNode } from "../shared/code-node.ts";
+import { declarationSpan } from "../shared/fact.ts";
 import type { Finding } from "../shared/fact.ts";
 import { handlerOf } from "./changed-entrypoints.ts";
 import type { ReachedEntrypoint } from "./impact-fact.ts";
@@ -37,7 +38,7 @@ export function reachedEntrypoints(findings: readonly Finding<Entrypoint>[], rea
       for (const place of finding.evidence) {
         const holding = reached.filter((candidate) => joinsFact(candidate, { path: place.path, line: place.line }));
         const innermost = holding.toSorted((a, b) => span(a) - span(b))[0];
-        if (innermost !== undefined) add({ kind: "unknown", handler: { path: innermost.file, symbol: innermost.name, line: innermost.startLine }, depth: innermost.depth, confidence: innermost.confidence, seeds: innermost.seeds });
+        if (innermost !== undefined) add({ kind: "unknown", handler: { path: innermost.file, symbol: innermost.name, line: innermost.startLine, ...declarationSpan(innermost.startLine, innermost.endLine) }, depth: innermost.depth, confidence: innermost.confidence, seeds: innermost.seeds });
       }
     }
   }

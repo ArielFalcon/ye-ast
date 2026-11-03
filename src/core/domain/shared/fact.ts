@@ -3,7 +3,7 @@ import { canonicalJson } from "./canonical-json.ts";
 export type SchemaVersion = `${number}.${number}.${number}`;
 
 /** The schema version of every fact this build produces. */
-export const SCHEMA: SchemaVersion = "0.5.0";
+export const SCHEMA: SchemaVersion = "0.6.0";
 
 export type SnapshotRef =
   | { repo: string; kind: "sha"; sha: string }
@@ -91,6 +91,11 @@ export interface Evidence {
   endLine?: number;
   via?: string;
   confidence?: number;
+}
+
+/** The last line of a place, and nothing when it spans one line: one line is the common case and takes no field. */
+export function declarationSpan(line: number, endLine: number | undefined): { endLine?: number } {
+  return endLine === undefined || endLine === line ? {} : { endLine };
 }
 
 export type UnknownReason =

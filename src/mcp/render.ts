@@ -36,8 +36,13 @@ function sourceLine(source: WorkspaceSource): string {
   return `repositories declared by: ${SOURCE_TEXT[source]}`;
 }
 
-function at(path: string, line: number): string {
-  return `${path}:${line}`;
+/** A place: its line, and the last line when the declaration spans more than one. */
+function spanText(line: number, endLine?: number): string {
+  return endLine === undefined ? `${line}` : `${line}-${endLine}`;
+}
+
+function placeText(path: string, line: number, endLine?: number): string {
+  return `${path}:${spanText(line, endLine)}`;
 }
 
 function snapshotLine(snapshot: SnapshotRef): string {
@@ -45,7 +50,7 @@ function snapshotLine(snapshot: SnapshotRef): string {
 }
 
 function evidenceText(evidence: Evidence): string {
-  return at(evidence.path, evidence.line) + (evidence.endLine === undefined ? "" : `-${evidence.endLine}`);
+  return placeText(evidence.path, evidence.line, evidence.endLine);
 }
 
 function cutsOf(fact: Fact<unknown>): readonly Cut[] {
@@ -256,7 +261,15 @@ function counted(label: string, items: readonly string[]): string {
 }
 
 function handlerText(handler: Handler): string {
-  return `${at(handler.path, handler.line)} ${handler.symbol}`;
+  return `${placeText(handler.path, handler.line, handler.endLine)} ${handler.symbol}`;
+}
+
+/** The dependence that reached a symbol: where it depends on it, and what that dependence is. */
+function viaText(via: NonNullable<ImpactedSymbol["via"]>, file: string): string {
+  const where = via.file === file ? via.symbol : `${via.file}:${via.symbol}`;
+  if (via.lines === undefined || via.lines.length === 0) return `${where} (${via.basis})`;
+  const at = `at ${via.lines.join(", ")}`;
+  return via.basis === "call" ? `${where} ${at}` : `${where} ${at} (${via.basis})`;
 }
 
 function entrypointLine(entrypoint: Entrypoint): string {
@@ -297,8 +310,8 @@ function symbolLine(symbol: ImpactedSymbol, file: string): string {
   const facts = [`depth ${symbol.depth}`];
   if (symbol.confidence < 1) facts.push(`confidence ${symbol.confidence}`);
   if (symbol.fanIn > 0) facts.push(`fan-in ${symbol.fanIn}`);
-  if (symbol.via !== undefined) facts.push(`via ${symbol.via.file === file ? symbol.via.symbol : `${symbol.via.file}:${symbol.via.symbol}`}`);
-  return `    ${symbol.line} ${symbol.symbol} [${symbol.kind}] (${facts.join(", ")})`;
+  if (symbol.via !== undefined) facts.push(`via ${viaText(symbol.via, file)}`);
+  return `    ${spanText(symbol.line, symbol.endLine)} ${symbol.symbol} [${symbol.kind}] (${facts.join(", ")})`;
 }
 
 /** How much of the impacted symbols the text lists: every one, or the direct ones with the deeper ones counted per file. */
@@ -345,8 +358,8 @@ function groupedSeeds(seeds: readonly Seed[]): string[] {
     const bases = new Set(inFile.map((seed) => seed.basis));
     const [shared] = bases;
     return bases.size === 1 && shared !== undefined
-      ? [`  ${file} (${shared})`, ...inFile.map((seed) => `    ${seed.line} ${seed.symbol}`)]
-      : [`  ${file}`, ...inFile.map((seed) => `    ${seed.line} ${seed.symbol} (${seed.basis})`)];
+      ? [`  ${file} (${shared})`, ...inFile.map((seed) => `    ${spanText(seed.line, seed.endLine)} ${seed.symbol}`)]
+      : [`  ${file}`, ...inFile.map((seed) => `    ${spanText(seed.line, seed.endLine)} ${seed.symbol} (${seed.basis})`)];
   });
 }
 
@@ -380,13 +393,13 @@ function declarationText(entry: { file: string; candidates: readonly string[] })
 function impactedLinkLine({ link, direction }: ImpactedLink): string {
   const confidence = link.confidence < 1 ? `, confidence ${link.confidence}` : "";
   const profiles = link.profiles === undefined ? "" : `, under ${link.profiles.join(", ")}`;
-  return `  - ${link.from.repo}:${at(link.from.file, link.from.line)} ${link.from.symbol} -> ${link.to.repo} ${link.to.name} (${link.basis}${confidence}${profiles}, ${direction})`;
+  return `  - ${link.from.repo}:${placeText(link.from.file, link.from.line)} ${link.from.symbol} -> ${link.to.repo} ${link.to.name} (${link.basis}${confidence}${profiles}, ${direction})`;
 }
 
 function callSiteLine(site: CallSite): string {
   const { target } = site;
   const named = target.status !== "complete" ? "unknown" : "path" in target.value ? `${target.value.method} ${target.value.path}` : `${target.value.protocol} ${target.value.destination}`;
-  return `      - ${at(site.file, site.line)} ${site.symbol} -> ${named}`;
+  return `      - ${placeText(site.file, site.line)} ${site.symbol} -> ${named}`;
 }
 
 function callSiteBlock(label: string, sites: readonly CallSite[]): string[] {

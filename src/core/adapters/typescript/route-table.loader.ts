@@ -1,5 +1,6 @@
 import type { Handler } from "../../domain/entrypoints/http-route.ts";
 import type { RouteGuard } from "../../domain/entrypoints/ui-route.ts";
+import { declarationSpan } from "../../domain/shared/fact.ts";
 import type { UnknownReason } from "../../domain/shared/fact.ts";
 import { parseAngularRouteFile, type RawChildRef, type RawComponent, type RawEntry, type RawGuard, type RawRouteFile, type RawTable, type RawValue } from "./angular-router.extractor.ts";
 import { createDeclarationLookup, type Declaration } from "./declaration-lookup.ts";
@@ -126,8 +127,10 @@ export async function loadRouteTables(candidates: readonly string[], read: Sourc
   const handlerOf = async (declaration: Declaration | undefined): Promise<Handler | "unknown"> => {
     if (declaration === undefined) return "unknown";
     const declaring = await parse(declaration.file);
-    const line = declaring?.classes.has(declaration.name) ? declaring.declared.get(declaration.name) : undefined;
-    return line === undefined ? "unknown" : { path: declaration.file, symbol: declaration.name, line };
+    const span = declaring?.classes.has(declaration.name) ? declaring.declared.get(declaration.name) : undefined;
+    return span === undefined
+      ? "unknown"
+      : { path: declaration.file, symbol: declaration.name, line: span.line, ...declarationSpan(span.line, span.endLine) };
   };
   const componentOf = async (file: string, raw: RawRouteFile, component: RawComponent): Promise<Handler | "unknown"> => {
     if ("opaque" in component) return "unknown";

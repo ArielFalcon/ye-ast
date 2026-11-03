@@ -3,6 +3,7 @@ import { sortFindings } from "../../domain/entrypoints/finding-order.ts";
 import type { BasePath, HttpMethod } from "../../domain/entrypoints/http-route.ts";
 import { isJavaSource, isJvmTestFile } from "../../domain/languages/java.ts";
 import { isSpringConfigFile, resourcesOfSource } from "../../domain/languages/spring-config.ts";
+import { declarationSpan } from "../../domain/shared/fact.ts";
 import type { Evidence, Finding } from "../../domain/shared/fact.ts";
 import type { ContractOperation, ContractRoutes } from "../../ports/contract-routes.port.ts";
 import type { EntrypointExtractor, SourceFile } from "../../ports/entrypoint-extractor.port.ts";
@@ -368,7 +369,7 @@ function contractJoin(controller: Controller, method: MethodDecl): { operation: 
       name: `${operation.method} ${path}`,
       method: operation.method,
       path,
-      handler: { path: span.path, symbol: `${method.owner.qualifiedName}.${method.name}`, line: span.line },
+      handler: { path: span.path, symbol: `${method.owner.qualifiedName}.${method.name}`, line: span.line, ...declarationSpan(span.line, span.endLine) },
     },
     evidence: [span, { path: operation.document, line: operation.line }],
   };
@@ -430,7 +431,7 @@ function routesOfHandler(handler: MethodDecl, mapping: Mapping, classMapping: Ma
               method,
               path: routePath,
               ...(version === undefined ? {} : { version }),
-              handler: { path: span.path, symbol: `${handler.owner.qualifiedName}.${handler.name}`, line: span.line },
+              handler: { path: span.path, symbol: `${handler.owner.qualifiedName}.${handler.name}`, line: span.line, ...declarationSpan(span.line, span.endLine) },
             },
             evidence: [span],
           });

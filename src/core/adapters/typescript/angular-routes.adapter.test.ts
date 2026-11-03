@@ -708,6 +708,15 @@ test("an app under a subfolder has its routes read, with repository-relative pat
   assert.deepEqual(route && handlerPath(route), "frontend/src/app/home.ts");
 });
 
+test("the component a route renders carries the span of its declaration", async () => {
+  const findings = await extract({
+    ...table("  { path: 'home', component: Home },", "import { Home } from './home';"),
+    "src/app/home.ts": "export class Home {\n  title = 'home';\n}\n",
+  });
+  const [route] = uiRoutes(findings);
+  assert.deepEqual(route?.component, { path: "src/app/home.ts", symbol: "Home", line: 1, endLine: 3 });
+});
+
 test("two apps in one repository declaring the same route stay two routes, told apart by handler", async () => {
   const findings = await createAngularRoutesExtractor().extract([
     { path: "web/package.json", content: PACKAGE },

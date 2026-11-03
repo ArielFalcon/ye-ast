@@ -26,7 +26,10 @@ export interface BasePath {
 export interface Handler {
   path: string;
   symbol: string;
+  /** The declaration's first line. */
   line: number;
+  /** The declaration's last line; absent when the declaration spans one line. */
+  endLine?: number;
 }
 
 /** `ANY` is a mapping that names no verb. A route is identified by its method, path, version and handler. */

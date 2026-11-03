@@ -457,10 +457,49 @@ test("a requested symbol seeds the walk with the basis requested, and the value 
   const answer = callersFact(await callers({ targets: [{ file: "src/A.java", symbol: "f" }] }));
   assert.equal(answer.status, "complete");
   const value = answer.status === "complete" ? answer.value : undefined;
-  assert.deepEqual(value?.seeds, [{ file: "src/A.java", symbol: "f", line: 1, basis: "requested" }]);
+  assert.deepEqual(value?.seeds, [{ file: "src/A.java", symbol: "f", line: 1, endLine: 3, basis: "requested" }]);
   assert.deepEqual(value?.symbols.map((symbol) => [symbol.symbol, symbol.depth]), [["f", 0], ["g", 1]]);
   assert.equal(value !== undefined && ("mergeBase" in value || "changedEntrypoints" in value), false);
   assert.deepEqual(answer.snapshot, { repo: "repo", kind: "sha", sha: HEAD });
+});
+
+test("a reached symbol names every place inside itself where it depends on the symbol that reached it", async () => {
+  const nodes = [fakeNode("f", "function", "src/A.java", 1, 3), fakeNode("g", "function", "src/B.java", 10, 40)];
+  const edges = [
+    { from: "g", to: "f", kind: "calls", confidence: 0.9, line: 14 },
+    { from: "g", to: "f", kind: "calls", confidence: 0.9, line: 21 },
+    { from: "g", to: "f", kind: "references", confidence: 0.9, line: 33 },
+  ];
+  const answer = callersFact(await setup({ nodes, edges }).callers({ targets: [{ file: "src/A.java", symbol: "f" }] }));
+  const reached = answer.status === "complete" ? answer.value.symbols.find((symbol) => symbol.symbol === "g") : undefined;
+  assert.deepEqual(reached?.via, { file: "src/A.java", symbol: "f", lines: [14, 21, 33], basis: "call" });
+  assert.equal(reached?.endLine, 40);
+});
+
+test("a dependence that is a use and not a call says so, so a reference is never read as a signature to change", async () => {
+  const nodes = [fakeNode("f", "function", "src/A.java", 1, 3), fakeNode("g", "function", "src/B.java", 10, 20)];
+  const edges = [{ from: "g", to: "f", kind: "references", confidence: 0.9, line: 7 }];
+  const answer = callersFact(await setup({ nodes, edges }).callers({ targets: [{ file: "src/A.java", symbol: "f" }] }));
+  const reached = answer.status === "complete" ? answer.value.symbols.find((symbol) => symbol.symbol === "g") : undefined;
+  assert.deepEqual(reached?.via, { file: "src/A.java", symbol: "f", lines: [7], basis: "reference" });
+});
+
+test("a dependence the walk never places names its reason instead of leaving the line silent", async () => {
+  const nodes = [fakeNode("C", "class", "src/A.java", 1, 40), fakeNode("C.m", "method", "src/A.java", 5, 9, "m")];
+  const edges = [{ from: "C", to: "C.m", kind: "contains" }];
+  const answer = callersFact(await setup({ nodes, edges }).callers({ targets: [{ file: "src/A.java", symbol: "m" }] }));
+  const owner = answer.status === "complete" ? answer.value.symbols.find((symbol) => symbol.symbol === "C") : undefined;
+  assert.deepEqual(owner?.via, { file: "src/A.java", symbol: "m", basis: "contains" });
+});
+
+test("a declaration carries its last line only when it spans more than one line", async () => {
+  const nodes = [fakeNode("f", "function", "src/A.java", 1, 3), fakeNode("one", "function", "src/B.java", 7, 7)];
+  const answer = callersFact(await setup({ nodes }).callers({ targets: [{ file: "src/A.java", symbol: "f" }, { file: "src/B.java", symbol: "one" }] }));
+  const value = answer.status === "complete" ? answer.value : undefined;
+  assert.deepEqual(value?.seeds, [
+    { file: "src/A.java", symbol: "f", line: 1, endLine: 3, basis: "requested" },
+    { file: "src/B.java", symbol: "one", line: 7, basis: "requested" },
+  ]);
 });
 
 test("a requested line range seeds like changed lines do: the innermost symbol it touches, by lines", async () => {
@@ -473,7 +512,7 @@ test("a requested line range seeds like changed lines do: the innermost symbol i
 test("a symbol that is both requested and inside a requested range seeds once, as requested", async () => {
   const { callers } = setup({ nodes: SOURCE_NODES, edges: SOURCE_EDGES });
   const answer = callersFact(await callers({ targets: [{ file: "src/A.java", start: 1, end: 2 }, { file: "src/A.java", symbol: "f" }] }));
-  assert.deepEqual(answer.status === "complete" && answer.value.seeds, [{ file: "src/A.java", symbol: "f", line: 1, basis: "requested" }]);
+  assert.deepEqual(answer.status === "complete" && answer.value.seeds, [{ file: "src/A.java", symbol: "f", line: 1, endLine: 3, basis: "requested" }]);
 });
 
 test("a requested symbol that names no node at the revision is a typed failure naming the entries, even beside one that exists", async () => {

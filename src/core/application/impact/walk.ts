@@ -1,9 +1,18 @@
-import type { ImpactBudget } from "../../domain/impact/impact-fact.ts";
+import type { DependenceBasis, ImpactBudget } from "../../domain/impact/impact-fact.ts";
 import { declarationAnchor } from "../../domain/impact/impact-cuts.ts";
 import type { Cut } from "../../domain/shared/fact.ts";
 import { comparePosition } from "../../domain/shared/code-node.ts";
 import type { GraphNodeId, GraphSymbol } from "../../ports/code-graph.port.ts";
 import type { InboundEdge, InboundEdges } from "./inbound-edges.ts";
+
+/** The dependence that reached a symbol: the symbol it came through, and where this one depends on it. */
+export interface Via {
+  symbol: GraphSymbol;
+  /** The places in the reached symbol's own file where it depends on `symbol`, in line order; empty when the store places none. */
+  lines: readonly number[];
+  /** What the dependence is. */
+  basis: DependenceBasis;
+}
 
 export interface ReachedSymbol {
   symbol: GraphSymbol;
@@ -13,7 +22,7 @@ export interface ReachedSymbol {
   /** The callers that call or instantiate the symbol, which is what the hub bound counts. */
   fanIn: number;
   /** The symbol that first reached it, in position order, at the level before (or the method it stands for). */
-  via?: GraphSymbol;
+  via?: Via;
   /** Indexes into the seeds the walk started from. */
   seeds: readonly number[];
 }
@@ -28,7 +37,7 @@ export interface Walk {
 interface Rec {
   symbol: GraphSymbol;
   depth: number;
-  via?: GraphSymbol;
+  via?: Via;
   /** Whether a changed contract can still flow down to the implementations. */
   contractChanged: boolean;
   /** True when the walk entered it as the type that declares a reached member, which follows only whole-type rows. */
@@ -43,6 +52,10 @@ interface Link {
   confidence: number;
 }
 
+function placeOn(symbol: GraphSymbol, dependence: InboundEdge): Via {
+  return { symbol, lines: dependence.lines, basis: dependence.basis };
+}
+
 /**
  * Inbound from the seeds, level by level in position order, each symbol expanded once, so the walk ends on any graph.
  * A reached method also reaches its type at its own level. The seeds are distinct symbols.
@@ -52,7 +65,7 @@ export function walkImpact(seeds: readonly GraphSymbol[], inbound: InboundEdges,
   const links: Link[] = [];
   let level: Rec[] = [];
 
-  function enter(symbol: GraphSymbol, depth: number, via: GraphSymbol | undefined, contractChanged: boolean, into: Rec[], throughMember = false): Rec {
+  function enter(symbol: GraphSymbol, depth: number, via: Via | undefined, contractChanged: boolean, into: Rec[], throughMember = false): Rec {
     const rec: Rec = { symbol, depth, ...(via === undefined ? {} : { via }), contractChanged, throughMember, fanIn: 0, callers: [] };
     recs.set(symbol.id, rec);
     into.push(rec);
@@ -61,7 +74,7 @@ export function walkImpact(seeds: readonly GraphSymbol[], inbound: InboundEdges,
 
   function enterOwners(rec: Rec, into: Rec[]): void {
     for (const owner of inbound.ownersOf(rec.symbol)) {
-      const ownerRec = recs.get(owner.id) ?? enter(owner, rec.depth, rec.symbol, false, into, true);
+      const ownerRec = recs.get(owner.id) ?? enter(owner, rec.depth, { symbol: rec.symbol, lines: [], basis: "contains" }, false, into, true);
       links.push({ from: rec, to: ownerRec, confidence: 1 });
     }
   }
@@ -75,7 +88,7 @@ export function walkImpact(seeds: readonly GraphSymbol[], inbound: InboundEdges,
     const next: Rec[] = [];
     for (const rec of level.toSorted((a, b) => comparePosition(a.symbol, b.symbol))) {
       rec.callers = inbound.callersOf(rec.symbol, rec.contractChanged, rec.throughMember);
-      rec.fanIn = rec.callers.filter((caller) => caller.callLike).length;
+      rec.fanIn = rec.callers.filter((caller) => caller.basis === "call").length;
       if (budget.depth !== undefined && depth >= budget.depth) stopped.depth.push(rec);
       else if (budget.hubFanIn !== undefined && rec.fanIn > budget.hubFanIn) stopped.hub.push(rec);
       else if (budget.expansions !== undefined && expansions >= budget.expansions) stopped.expansions.push(rec);
@@ -84,7 +97,7 @@ export function walkImpact(seeds: readonly GraphSymbol[], inbound: InboundEdges,
         for (const caller of rec.callers) {
           let target = recs.get(caller.from.id);
           if (target === undefined) {
-            target = enter(caller.from, depth + 1, rec.symbol, false, next);
+            target = enter(caller.from, depth + 1, placeOn(rec.symbol, caller), false, next);
             enterOwners(target, next);
           }
           links.push({ from: rec, to: target, confidence: caller.confidence });
