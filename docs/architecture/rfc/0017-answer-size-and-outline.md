@@ -1,0 +1,125 @@
+# RFC-0017: An answer-size rule and a file outline an agent reads around
+
+- Status: Draft, 2026-11-03
+- Related: [RFC-0002](0002-facts-contract.md) (facts, determinism, cuts), [RFC-0005](0005-transports.md) (MCP and CLI),
+  [RFC-0010](0010-impact-queries.md) (impact value), [RFC-0012](0012-observability-and-measurement.md) (measurement by
+  input identity), [RFC-0015](0015-answer-coordinates.md) (answer coordinates and what it refuses to add),
+  [ADR-0001](../adr/0001-product-scope-and-priority.md), [ADR-0007](../adr/0007-dependency-versions.md) (exact pins),
+  [ADR-0013](../adr/0013-coverage-grows-only-with-evidence.md) (coverage grows with evidence)
+
+**In short:** two proposals that answer the same complaint from opposite ends. First, a rendering rule: a summary is
+never longer in bytes than the full answer it summarizes, whatever the answer holds. Second, one new read-only tool
+that answers the shape of a file — its imports and its declarations with a start and an end line — so an agent that has
+already decided to open a file reads the spans it needs instead of the whole file.
+
+## Why
+
+An agent building a change reads `ye_ast_impact`, gets a list of files, and then reads those files whole. The queries
+answer *where*; nothing answers *what is inside this file and where*. On this repository, `src/mcp/server.ts` and
+`src/mcp/render.ts` are 544 and 536 lines, 69 KB together, and the part a change actually touches is one or two
+functions.
+
+The rendering side has the mirror-image problem. The size work of `odd/tasks/mcp-answer-precision.md` and
+`odd/tasks/mcp-latency-and-size.md` made answers smaller, and commit `159f46f` made a summary name the ring it leaves
+out. Neither added the one rule that keeps the result honest: **a summary that is longer than the answer it stands for
+is a regression, not a summary**. Nothing measures it today, so it can appear with any renderer change and no test
+would notice.
+
+## 1. The rule: a summary is never longer than the full answer
+
+**Evidence that the rule is missing.** `src/mcp/render.ts:344-357`, `impactedSymbols`: a summary replaces every symbol
+past depth 1 with one line. After `159f46f` that line is:
+
+```
+impacted symbols (12): 11 at depth 0-1 listed, 1 deeper (to depth 6) not listed; ask ye_ast_callers about a symbol listed here to see one ring further, or detail "full" for all
+```
+
+About 200 characters, standing for one hidden symbol line of about 50. With one deeper symbol in a file that already
+lists a nearer one, the summary is roughly 150 bytes **larger** than `detail: "full"`. The same shape exists in
+`cutsBlock` (`src/mcp/render.ts:262-268`): a counted cut costs a `summarized (…)` line plus a per-file count line,
+against the single cut line it hides.
+
+**The rule.** For every answer and every detail level, `bytes(render(fact, "summary")) <= bytes(render(fact,
+"full"))`. A renderer that would break it renders the full body instead of the counted line. On a tie the summary
+stands, so the answer keeps saying what it left out.
+
+**Why this is not a size threshold.** The renderer compares two texts it has already produced, not a count against a
+constant. There is no number in the rule: a fixture with one hidden symbol collapses to the full body, a fixture with
+three keeps the summary. The comparison is the invariant itself.
+
+**Scope.** Every renderer with a counted block: `impact`, `callers`, `importers`, `entrypoints`, `workspace`,
+`decisions`, and the `cuts:` block each one closes with. A new renderer inherits the rule through the shared test
+helper, not through a review.
+
+**Acceptance.** A test over an impact answer with one deeper symbol in a file that already lists a nearer one asserts
+the invariant; another asserts it over the counted-cut block; both fail on `159f46f` and pass after the change. The
+existing fixtures keep their exact text, so no accepted output changes except where the rule fires.
+
+## 2. The outline: the shape of a file, with coordinates
+
+**The question it answers.** "I have decided I must open this file. What is inside, and which ranges matter?" It is the
+question an agent asks after `impact` names twelve files, and it is the one no query answers today.
+
+**The fact.**
+
+| Field | Shape | Why |
+|---|---|---|
+| `path` | repo-relative | every fact in this repository (RFC-0002) |
+| `lines` | `number` | the size of the file at that revision, so the caller can see what the outline stands for |
+| `declarations[]` | `{ kind, name, line, endLine }` | `kind` uses the vocabulary the other facts already use (`function`, `method`, `class`, `type`, …); the span is the retrieval pointer |
+| `imports[]` | `{ module, line }` | the strongest single signal for "does this file belong to my change" |
+| `omitted` | `{ declarations, imports }` | a summary that elides says how many; zero is printed, not implied |
+
+- **The pointer is a coordinate, not a handle.** `path:line-endLine`; the agent expands it with its own file reader. No
+  hash, no cache, no TTL, no server-held state: the same request over the same revision gives the same bytes
+  (RFC-0002 rule 3, RFC-0015).
+- **A file with no reader is `unknown` with a reason, never an empty list.** The existing vocabulary applies
+  (`no-extractor`, `not-exported` in `src/mcp/server.ts:44-53`): an empty `declarations` array means "the file declares
+  nothing", which is a different fact from "ye-ast cannot parse this file".
+- **No threshold decides whether to answer.** A ten-line file returns its outline with `omitted` at zero. The caller
+  sees that nothing was gained and reads the file whole; the code has no branch on a line count.
+
+**What it refuses to carry.**
+
+| Candidate | Why not |
+|---|---|
+| Parameter lists, return types, generic parameters | It is the signature RFC-0015 refused (`0015-answer-coordinates.md:105`), and it is not needed: a name, a kind and a span decide whether to open the range |
+| Any line of source | The same refusal: facts about code, not code (RFC-0015, RFC-0002) |
+| A body or a diff | Out of scope; the agent's own reader answers the body |
+| A partial outline over an arbitrary range | A second request shape for the same fact in its first release; open question 5 |
+| A token count | No tokenizer runs in this repository (RFC-0015:133); a tokenizer is a dependency (ADR-0007) |
+
+**Why this does not reverse RFC-0015.** That RFC refuses a snippet or a signature *inside an impact answer*, where the
+argument is that `kind` plus the qualified name is already enough to decide whether to open the file. The outline is
+asked by a caller who has already decided to open it, and it answers with exactly what RFC-0015 called enough: a kind, a
+qualified name and a span. The refusal stands; this is the other half of the same design.
+
+**Reuse, not a new parser.** The declaration list comes from the readers that already exist: the TypeScript compiler
+API inside `core/adapters/typescript/` (ADR-0008), the Angular extractor, `tree-sitter-java`. A language with no reader
+answers `unknown`; coverage grows only with evidence (ADR-0013).
+
+**Read-only, and untrusted-safe.** The tool is a read query family like the others: nothing an agent reaches exposes a
+write. Under `untrusted` it reads the export only, never the working tree, and it adds no network request. Paths and
+declaration names are the same exposure the impact answers already carry; the redaction patterns apply as everywhere.
+
+## 3. Measurement
+
+The rule of section 1 is enforceable in bytes, and the value of section 2 is comparable in bytes: for a set of files,
+`sum(outline bytes + bytes of the spans the agent reads) < sum(whole file bytes)`. Bytes, not tokens, because no
+tokenizer runs here and a token claim would be unmeasured (RFC-0015:133). Any place this RFC quotes a token figure, it
+is marked as an estimate.
+
+The numbers come from a probe with no clock and no network, reproducible by input identity (RFC-0012): the same
+repository, revision and requests produce the same bytes twice. Timing stays where it lives today,
+`src/composition/measurement.ts`.
+
+## Open questions
+
+| # | Question | Recommendation |
+|---|---|---|
+| 1 | A new tool, or a parameter on an existing one? `odd/tasks/mcp-latency-and-size.md` L2 chose a parameter (`expand`) over a tool, because the same fact selected differently needs no server-held handle | A new tool: `expand` selects *more of the same fact*, while an outline answers *a different fact* about a different subject (a file, not a symbol). One tool per question is what the existing names already do (`impact`, `callers`, `importers`) |
+| 2 | Does the tool take explicit `files`, or a `scope`? | Explicit `files`, resolved through the same `scope` as the other tools, because the caller's file list comes from an answer it already has |
+| 3 | Does the outline list imports at all, or only declarations? | Yes, module string and line only: it is what tells an agent whether the file belongs to its change, and it is one short line per import |
+| 4 | Does the rule of section 1 also apply to `structuredContent`? | No: the envelope is the host's contract and the text is what the model reads (`src/mcp/server.ts:305`). The rule governs the text |
+| 5 | Should one release also answer an outline for a line range? | No. Two request shapes over the same fact before one measurement exists is the complexity this RFC refuses |
+| 6 | Is a counted block ever allowed to exceed the full answer when the count is large? | Never: the rule has no exception. If the full body is shorter, the full body is the correct answer |
