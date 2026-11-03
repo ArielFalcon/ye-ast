@@ -1,4 +1,4 @@
-import type { CodeGraph, CodeGraphFault, IndexSummary, MirrorSyncSummary } from "../../ports/code-graph.port.ts";
+import type { CodeGraph, CodeGraphFault, CodeGraphReader, IndexSummary, MirrorSyncSummary } from "../../ports/code-graph.port.ts";
 import type { MirrorEntry, MirrorFault, MirrorState, MirrorUsage, MirrorVersions, LiveMirror, MirrorLocation } from "../../ports/live-mirror.port.ts";
 import type { SkippedEntry } from "../../ports/vcs.port.ts";
 import type { WorkingTree } from "../../ports/working-tree.port.ts";
@@ -43,6 +43,8 @@ export interface FakeLive {
   /** Entries each debris removal named, in call order. */
   debrisRemoved: string[][];
   touches: number;
+  /** Whether the engine store opens; set it between queries to make the store behind a committed state unreachable. */
+  openable: { value: boolean };
   engine: {
     build: Result<IndexSummary, CodeGraphFault>;
     sync: Result<MirrorSyncSummary, CodeGraphFault>;
@@ -73,6 +75,7 @@ export function fakeLive(initial: Record<string, string> = {}, digest: Digest = 
     discarded: [],
     debrisRemoved: [],
     touches: 0,
+    openable: { value: true },
     engine: {
       build: { ok: true, value: SUMMARY },
       sync: { ok: true, value: { ...SUMMARY, filesFailed: [] } },
@@ -168,7 +171,10 @@ export function fakeLive(initial: Record<string, string> = {}, digest: Digest = 
       fake.syncs.push([...paths]);
       return fake.engine.sync;
     },
-    open: () => ({ ok: false, fault: { kind: "store-unreadable", detail: "not used" } }),
+    open: (() =>
+      fake.openable.value
+        ? { ok: true, value: { close: () => undefined } }
+        : { ok: false, fault: { kind: "store-unreadable", detail: "the store cannot be opened" } }) as CodeGraph["open"],
   };
   fake.deps = { workingTree, mirror, graph, digest, versions: VERSIONS, retention: RETENTION, now: () => NOW };
   return fake;

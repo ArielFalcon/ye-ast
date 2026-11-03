@@ -63,6 +63,14 @@ function unavailable(detail: string): Result<never, LiveUnavailable> {
   return { ok: false, fault: { kind: "unavailable", detail } };
 }
 
+/** Whether the store a committed state names can still be opened: the state is a claim, and the open is the proof. */
+function storeServes(deps: LiveDeps, root: string): boolean {
+  const opened = deps.graph.open(root);
+  if (!opened.ok) return false;
+  opened.value.close();
+  return true;
+}
+
 function mirrorFailure(fault: MirrorFault): Result<never, LiveFailure> {
   return fault.kind === "aborted" ? unavailable(fault.detail) : { ok: false, fault: { kind: "live-mirror-failed", detail: `${fault.kind}: ${fault.detail}` } };
 }
@@ -170,9 +178,9 @@ async function refresh(deps: LiveDeps, request: OpenLive, location: MirrorLocati
   const written = exported.files.filter((file) => file.written).map((file) => file.path);
   const writtenSet = new Set(written);
   const held = state?.indexed ?? [];
-  const staging = sorted([...(state?.pending ?? []), ...changed].filter((path) => writtenSet.has(path)));
-  const pruning = held.filter((path) => !writtenSet.has(path));
-  const behind = sorted([...staging, ...pruning]);
+  let staging = sorted([...(state?.pending ?? []), ...changed].filter((path) => writtenSet.has(path)));
+  let pruning = held.filter((path) => !writtenSet.has(path));
+  let behind = sorted([...staging, ...pruning]);
 
   const current: MirrorState = {
     versions,
@@ -184,6 +192,19 @@ async function refresh(deps: LiveDeps, request: OpenLive, location: MirrorLocati
     stateId,
     pending: behind,
   };
+
+  // A committed state records what the engine last built; only opening the store proves it is still there. A store that
+  // was removed, truncated or left unreadable behind such a state is rebuilt here, under the lock this refresh already
+  // holds, instead of answering `unknown` with `index-unavailable` to every later query (RFC-0005 "First index").
+  const claimsBuild = current.fullBuildStateId !== "" && behind.length === 0;
+  if (request.store && claimsBuild && !storeServes(deps, mirror.indexRoot(location))) {
+    current.fullBuildStateId = "";
+    staging = sorted(written);
+    pruning = [];
+    behind = sorted(written);
+    current.pending = behind;
+  }
+
   const moved = state === null || JSON.stringify([state.manifest, state.skipped]) !== JSON.stringify([manifest, skipped]) || state.pending.length !== behind.length;
   const tree = (heldState: MirrorState): LiveTree => ({
     root: request.store ? mirror.indexRoot(location) : mirror.root(location),
