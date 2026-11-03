@@ -147,8 +147,12 @@ cached and two runs per cell:
 
 Peak RSS 541–576 MB → 844–1.056 MB. The port removes **0 to 3 cuts** for **+2,2 to +2,9 s** and **+300 to +480 MB**. It is
 not gap B's doing: with gap B reverted the same root removes zero cuts too. At `HEAD~5` it settles 39 of the 93 references
-the cuts are about, none of them onto a declaration the walk reached, which is why no place disappears. The full table,
-the composition of what the remaining cuts are, and the recommendation are `RFC-0016`, "S9 measured".
+the cuts are about, none of them onto a declaration the walk reached, which is why no place disappears.
+
+In the shape that actually runs as a server the cost is per query, not per process: four identical `serve` queries hold
+526–676 MB without a root, and grow 804 → 1.054 → 1.155 → 1.481 MB with one. The `Program` is built once across those four,
+so the growth is the live program plus allocations the collector never reclaims. The full table, the composition of what
+the remaining cuts are, and the recommendation are `RFC-0016`, "S9 measured".
 
 So the port is inert without a host-supplied type root and worth 0–3 cuts with one. Whether it stays shipped is the
 owner's decision; this record recommends retiring it and `--type-root` in their own slice, and keeping `ADR-0019`, which

@@ -321,6 +321,28 @@ What this leaves is a decision, not a measurement: whether a capability that is 
 and removes 0–3 cuts should stay shipped. The recommendation is to retire the port and `--type-root` in their own slice
 and keep S8, which needs no root and removes 6% to 13% of the cuts on the same diff.
 
+### The same numbers in the shape that runs as a server
+
+Everything above is a **one-shot CLI** peak, and the process exits. A long-lived `serve`/`mcp` server was measured directly
+on the same repository, four identical queries, sampling the resident set between them:
+
+| | After query 1 | 2 | 3 | 4 |
+|---|---|---|---|---|
+| No type root | 526 MB | 675 MB | 601 MB | 676 MB |
+| With a type root | 804 MB | 1.054 MB | 1.155 MB | **1.481 MB** |
+
+Without a root the process settles and oscillates: it keeps roughly the high-water mark of its largest query, because a
+Node process does not hand freed heap back to the operating system. That is the steady state a user's editor holds while
+the server is open, and it is already true today.
+
+With a root it **grows by roughly 200 MB per query and does not settle**, to 1,5 GB after four. The `Program` is built
+only once — instrumented, one build across those four queries — so the growth is not a second program; it is the live
+program plus per-query allocations the collector never reclaims. The +300 to +480 MB of the one-shot table is therefore
+the *optimistic* reading of the port's cost: in the shape the MCP actually runs, its cost is per query.
+
+The syntax-only mechanisms do not change this envelope: `import-origins` is built per query and dropped, and the ambient
+table is a fixed few hundred kilobytes.
+
 ## How these costs were measured
 
 Every number above is a **peak RSS** and a wall clock taken from one-shot CLI runs with the index already cached:
