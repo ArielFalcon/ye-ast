@@ -351,7 +351,7 @@ test("impact reads a change of the bound repository, head defaulting to HEAD, an
   assert.deepEqual(result.structuredContent, envelopeOf(impactFact()));
   const text = textOf(result);
   assert.match(text, /status: complete/);
-  assert.match(text, /^seeds \(1\):\n {2}src\/OrderService\.java\n {4}31 OrderService\.find \(lines\)$/m);
+  assert.match(text, /^seeds \(1\):\n {2}src\/OrderService\.java \(lines\)\n {4}31 OrderService\.find$/m);
   assert.match(text, /src\/OrderController\.java\n {4}17 OrderController\.one \[method\] \(depth 2, confidence 0\.75, fan-in 3, via src\/OrderService\.java:OrderService\.find\)/);
   assert.match(text, /added http-route POST \/orders.*src\/OrderController\.java:40/);
   assert.match(text, /GET \/orders\/\{id\}.*src\/OrderController\.java:17.*depth 2/);
@@ -446,7 +446,7 @@ test("the places of a cut are grouped under their file, every place kept and the
   await session.close();
 });
 
-test("the seeds of an impact answer are grouped under their file, every seed kept", async () => {
+test("the seeds of an impact answer are grouped under their file, with the basis printed once when the file shares it", async () => {
   const seeds = [
     { file: "src/a.ts", symbol: "a", line: 3, basis: "lines" as const },
     { file: "src/a.ts", symbol: "b", line: 9, basis: "top-level" as const },
@@ -455,7 +455,7 @@ test("the seeds of an impact answer are grouped under their file, every seed kep
   const fact = impactFact({ value: { ...IMPACT, seeds } } as Partial<Fact<ImpactValue>>);
   const { session } = await setup({ ofChange: async () => ({ ok: true, value: fact }) });
   const text = textOf(await session.callTool("ye_ast_impact", { base: "main" }));
-  assert.match(text, /^seeds \(3\):\n {2}src\/a\.ts\n {4}3 a \(lines\)\n {4}9 b \(top-level\)\n {2}src\/b\.ts\n {4}2 c \(requested\)$/m);
+  assert.match(text, /^seeds \(3\):\n {2}src\/a\.ts\n {4}3 a \(lines\)\n {4}9 b \(top-level\)\n {2}src\/b\.ts \(requested\)\n {4}2 c$/m);
   assert.equal(text.split("src/a.ts").length - 1, 1, "the path of a grouped file is printed once");
   await session.close();
 });

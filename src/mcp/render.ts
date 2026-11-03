@@ -253,12 +253,16 @@ function impactBody(value: ImpactValue, detail: Detail): string[] {
   ];
 }
 
-/** The seeds under the file that holds them, so a path repeated by every seed is printed once. */
+/** The seeds under the file that holds them, so a path repeated by every seed is printed once. A basis the whole file
+ * shares is printed with the file; a file that mixes bases keeps one beside each seed. */
 function groupedSeeds(seeds: readonly Seed[]): string[] {
-  return [...Map.groupBy(seeds, (seed) => seed.file)].flatMap(([file, inFile]) => [
-    `  ${file}`,
-    ...inFile.map((seed) => `    ${seed.line} ${seed.symbol} (${seed.basis})`),
-  ]);
+  return [...Map.groupBy(seeds, (seed) => seed.file)].flatMap(([file, inFile]) => {
+    const bases = new Set(inFile.map((seed) => seed.basis));
+    const [shared] = bases;
+    return bases.size === 1 && shared !== undefined
+      ? [`  ${file} (${shared})`, ...inFile.map((seed) => `    ${seed.line} ${seed.symbol}`)]
+      : [`  ${file}`, ...inFile.map((seed) => `    ${seed.line} ${seed.symbol} (${seed.basis})`)];
+  });
 }
 
 export function renderImpact(fact: Fact<ImpactValue>, detail: Detail = "summary"): string {
