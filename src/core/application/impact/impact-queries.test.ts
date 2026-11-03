@@ -318,21 +318,21 @@ test("a changed source file the index holds no symbol of cuts the answer at that
 
 test("a call that never resolved to a walked name cuts the answer, and the head's own export cuts are in the fact", async () => {
   const changes: Result<readonly FileChange[], VcsFault> = { ok: true, value: [change("src/A.java", { added: [{ start: 2, end: 2 }] })] };
-  const unresolved = [{ from: "g", name: "f", kind: "calls", file: "src/B.java", line: 7 }];
+  const unresolved = [{ from: "g", name: "f", kind: "calls", file: "src/A.java", line: 7 }];
   const left: CommitExport = {
     files: [{ path: "src/A.java", blob: "1", written: true }, { path: "src/B.java", blob: "2", written: true }],
     skipped: [{ path: "src/Link.java", reason: "symlink" }],
   };
   const answer = fact(await setup({ changes, nodes: SOURCE_NODES, edges: SOURCE_EDGES, unresolved, exports: { [HEAD]: left } }).ask());
   assert.deepEqual(answer.status === "partial" && answer.cuts, [
-    { kind: "unresolved-link", at: ["src/A.java::f", "src/B.java:7"] },
+    { kind: "unresolved-link", at: ["src/A.java::f", "src/A.java:7"] },
     { kind: "not-exported", at: ["src/Link.java"] },
   ]);
 });
 
 test("a reference whose rooted name the file imports from outside the repository stops being a cut, without any type root", async () => {
-  const changes: Result<readonly FileChange[], VcsFault> = { ok: true, value: [change("src/B.ts", { added: [{ start: 2, end: 2 }] })] };
-  const nodes = [fakeNode("tap", "function", "src/B.ts", 1, 3)];
+  const changes: Result<readonly FileChange[], VcsFault> = { ok: true, value: [change("src/A.ts", { added: [{ start: 2, end: 2 }] })] };
+  const nodes = [fakeNode("tap", "function", "src/A.ts", 1, 3)];
   const unresolved = [{ from: "f", name: "tap", kind: "calls", file: "src/A.ts", line: 7 }];
   const exports: Options["exports"] = {
     [HEAD]: { files: [{ path: "src/A.ts", blob: "1", written: true }, { path: "src/B.ts", blob: "2", written: true }], skipped: [] },
@@ -341,13 +341,13 @@ test("a reference whose rooted name the file imports from outside the repository
   const withoutImports = fact(await setup({ changes, nodes, unresolved, exports }).ask());
   const withImports = fact(await setup({ changes, nodes, unresolved, exports, importOrigins: externalImports(["tap"]) }).ask());
 
-  assert.deepEqual(withoutImports.status === "partial" && withoutImports.cuts, [{ kind: "unresolved-link", at: ["src/B.ts::tap", "src/A.ts:7"] }]);
+  assert.deepEqual(withoutImports.status === "partial" && withoutImports.cuts, [{ kind: "unresolved-link", at: ["src/A.ts::tap", "src/A.ts:7"] }]);
   assert.equal(withImports.status, "complete");
 });
 
 test("an external proof retires its own reference, never another one that shares its line", async () => {
-  const changes: Result<readonly FileChange[], VcsFault> = { ok: true, value: [change("src/B.ts", { added: [{ start: 2, end: 2 }] })] };
-  const nodes = [fakeNode("tap", "function", "src/B.ts", 1, 3), fakeNode("save", "function", "src/B.ts", 1, 3)];
+  const changes: Result<readonly FileChange[], VcsFault> = { ok: true, value: [change("src/A.ts", { added: [{ start: 2, end: 2 }] })] };
+  const nodes = [fakeNode("tap", "function", "src/A.ts", 1, 3), fakeNode("save", "function", "src/A.ts", 1, 3)];
   const unresolved = [
     { from: "f", name: "tap", kind: "calls", file: "src/A.ts", line: 7 },
     { from: "f", name: "save", kind: "calls", file: "src/A.ts", line: 7 },
@@ -358,7 +358,7 @@ test("an external proof retires its own reference, never another one that shares
 
   const answer = fact(await setup({ changes, nodes, unresolved, exports, importOrigins: externalImports(["tap"]) }).ask());
 
-  assert.deepEqual(answer.status === "partial" && answer.cuts, [{ kind: "unresolved-link", at: ["src/B.ts::save", "src/A.ts:7"] }]);
+  assert.deepEqual(answer.status === "partial" && answer.cuts, [{ kind: "unresolved-link", at: ["src/A.ts::save", "src/A.ts:7"] }]);
 });
 
 test("a reference rooted at a name the language's own libraries declare stops being a cut", async () => {

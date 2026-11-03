@@ -355,14 +355,14 @@ proven to reach.** That is `RFC-0002` rule 2 applied to what the emitter already
 |---|---|---|---|---|
 | S10 | 19 of the 24 unbound references: `console` 13, `caches` 6, `String` — **done, 2026-11-03** | A root the pinned `typescript` lib declares, and that the snapshot declares no global of, cannot name a repository declaration. Retire the place, as an ambient proof | Measured: `HEAD~5` 76→**64** cuts and 126→**107** places, `HEAD~20` 190→**176**, `HEAD~60` 359→**334**, no symbol changed | ~0: a generated table of 2.545 names, 57 KB, with a drift test |
 | S11 | 26 references the file declares itself | Replace the file-level shadow refusal with an enclosing-scope check, conservative: a declaration in a scope that encloses the use keeps the `unknown` | **Measured, not shipped**: the file-level rule blocks only 2 of the 107 places at `HEAD~5` and none at `HEAD~20` or `HEAD~60`, and a scope check recovers neither, because both declarations enclose their use | ~0 folded into the parse `import-origins` already performs |
-| S12 | every qualified reference whose root is unproven | Stop attributing it to the walked homonym: anchor it at the caller file, or at the declaration a settlement proved | The list stops lying; the count may not move | ~0 |
-| S13 | 33 `no-extractor` places | Not types: `unreadRelationCuts` names Angular and DI relations the extractor could not place. Understand the construct, or declare the scope | Up to 26% of the places | A slice of its own, inside the extractor |
+| S12 | every bare reference whose declaration lives in another file it never imported | A bare name is file-scoped: attribute it only to a declaration of its own file, or to the one its import binding names; otherwise cut the caller's file and name the reference | Measured: 7 of the 22 anchored places at `HEAD~5` stop naming a declaration they cannot reach; the list keeps its length | ~0: the same pass over the imports |
+| S13 | 33 `no-extractor` places at `HEAD~5` (30,8% of them), 49 places and 16 `no-extractor` cuts at `HEAD~60` (1,1%) | Not types: `unreadRelationCuts` names Angular and DI relations the extractor could not place. Understand the construct, or declare the scope | Small diffs of Angular wiring lose up to a third of their places; large diffs gain ~1% | A slice of its own, inside the extractor |
 | — | 43 receiver-rooted references | The one family that needs the checker, which S9 measured as not paying | — | +2,2 to +2,9 s and +300 to +480 MB per query, growing in a server |
 
 Two rules hold for whichever of these lands:
 
-1. **No slice claims completeness of its own.** S10 and S11 retire places, so a fact may move to `complete` when the
-   retired cut was its only one; that is `ADR-0019` decision 5, not a new claim.
+1. **No slice claims completeness of its own.** S10 retires places, so a fact may move to `complete` when the retired cut
+   was its only one; that is `ADR-0019` decision 5, not a new claim.
 2. **S12 may not shorten the list.** Re-anchoring keeps the fact `partial`, because the reference still names something
    outside the answer. It removes the false attribution, which is the harm, not the count.
 
@@ -398,12 +398,33 @@ adapter already holds.
 
 ### S11 measured, and not shipped
 
-The scope-aware shadow rule was implemented and measured before it was kept, and it changed nothing: `HEAD~5` stayed at
+The scope-aware shadow rule was implemented and measured before being kept, and it changed nothing: `HEAD~5` stayed at
 64 cuts and 107 places, and the two larger diffs were identical. The reason is not the rule but the population. Removing
 the shadow refusal altogether — the most permissive version — retires only **2 of the 107 places**, and both declarations
 enclose their use, so no scope check can recover them. The file-level refusal `ADR-0019` decision 3 chose therefore costs
 **1,9% of the places at `HEAD~5` and nothing at the other two bases**, not the 6% of retirements that decision estimated
 from the probe rows. The simpler rule stays and `ADR-0019` is corrected.
+
+### S12 measured
+
+Shipped 2026-11-03. A bare name cannot leave its file: an unresolved `params()`, `onClick()` or `write()` was attributed to
+a declaration of that name in an unrelated file the reference never imported. Measured at `HEAD~5`, those attributions were
+`params` in `paginated-resource.ts` read as `order-checkout.store.ts::params`, and `onClick` in a map control read as
+`dialog.component.ts::onClick`.
+
+| Base | Cuts | Places | Anchored places | Symbols |
+|---|---|---|---|---|
+| `HEAD~5` | 64 → **62** | 107 → 107 | 22 → **15** | 586 → 586 |
+| `HEAD~20` | 176 → **172** | 576 → **567** | — | 1.067 → 1.067 |
+| `HEAD~60` | 334 → **311** | 5.765 → **5.729** | — | 2.495 → 2.495 |
+
+The list keeps its length: 7 places leave a declaration for the caller's file, where the reference is named. The places
+that disappear are duplicates — one place was listed under every homonym of that name, and it is now listed once. No
+symbol moved, because nothing became reachable that was not.
+
+**What is left is only the receiver population and the extractor's own gaps.** No further syntax proof can shorten the
+list: a `this.svc.get` whose receiver type is not written in the syntax needs the checker, and S9 measured the checker as
+not paying.
 
 ## How these costs were measured
 

@@ -87,11 +87,20 @@ export function isBareName(name: string): boolean {
 }
 
 /**
- * Whether a reference names a declaration. A bare reference names the declaration of that name; a qualified one names
+ * Whether a reference names a declaration. A bare name is file-scoped, so it names a declaration of its own file, or
+ * the one its import binds — never a homonym in another file it never imported (`RFC-0016` S12). A qualified one names
  * only a declaration the index considered for it, so a receiver that never resolved is never read as a homonym.
  */
-function namesDeclaration(reference: UnresolvedUse, declaration: WalkedDeclaration): boolean {
-  return isBareName(reference.name) ? reference.name === declaration.name : (reference.candidates ?? []).includes(declaration.qualifiedName);
+function namesDeclaration(reference: UnresolvedUse, declaration: WalkedDeclaration, bound: ReadonlyMap<string, string>): boolean {
+  if (!isBareName(reference.name)) return (reference.candidates ?? []).includes(declaration.qualifiedName);
+  if (reference.name !== declaration.name) return false;
+  if (reference.file === declaration.file) return true;
+  return bound.get(bareBindingKey(reference.file, reference.line, reference.name)) === declaration.file;
+}
+
+/** The key of a bare reference a binding proves: the place it sits and the name it uses. */
+export function bareBindingKey(file: string, line: number, name: string): string {
+  return `${file}\0${line}\0${name}`;
 }
 
 /**
@@ -108,6 +117,7 @@ export function unresolvedLinkCuts(
   loads: readonly DynamicLoadUse[],
   settled: ReadonlySet<string> = new Set(),
   known: ReadonlySet<string> = new Set(),
+  bound: ReadonlyMap<string, string> = new Map(),
 ): Cut[] {
   const byName = Map.groupBy(walked, (declaration) => declaration.name);
   const hidden = new Map<string, Set<string>>();
@@ -131,7 +141,7 @@ export function unresolvedLinkCuts(
     const named = placeAt(reference.file, reference.line, reference.name);
     if (reference.kind === "calls" && DYNAMIC_LOADERS.has(tail) && !namesModule(place)) loaders.set(reference.file, (loaders.get(reference.file) ?? new Set()).add(named));
     const pointing = (byName.get(tail) ?? []).filter((declaration) => (REFERENCED_BY[reference.kind] ?? []).includes(declaration.kind));
-    const attributing = pointing.filter((declaration) => namesDeclaration(reference, declaration));
+    const attributing = pointing.filter((declaration) => namesDeclaration(reference, declaration, bound));
     for (const declaration of attributing) {
       const key = declarationAnchor(declaration.file, declaration.name);
       if (settled.has(settledUseKey(key, place))) continue;

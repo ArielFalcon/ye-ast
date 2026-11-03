@@ -4,7 +4,7 @@ import type { FileChange } from "../../domain/change/diff-reader.ts";
 import { isSeedable, selectSeeds, type ComponentRef, type SelectedSeed } from "../../domain/change/seeds.ts";
 import { changedEntrypoints } from "../../domain/impact/changed-entrypoints.ts";
 import { EDGE_POLICY } from "../../domain/impact/edge-policy.ts";
-import { declarationAnchor, externalPlaceKey, nameTail, removedDeclarationCuts, rootedName, settledPlaceKey, unreadRelationCuts, unresolvedLinkCuts, type UnreadRelation } from "../../domain/impact/impact-cuts.ts";
+import { bareBindingKey, declarationAnchor, externalPlaceKey, nameTail, removedDeclarationCuts, rootedName, settledPlaceKey, unreadRelationCuts, unresolvedLinkCuts, type UnreadRelation } from "../../domain/impact/impact-cuts.ts";
 import { sortedUnique, type ImportersValue } from "../../domain/impact/importers-fact.ts";
 import { impactFact, type ImpactBudget, type ImpactedSymbol, type ImpactValue, type Seed } from "../../domain/impact/impact-fact.ts";
 import { reachedEntrypoints } from "../../domain/impact/reached-entrypoints.ts";
@@ -247,7 +247,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
           const { relations: found, fields } = await deps.relations.extract(headTree.sources);
           const loads = await deps.dynamicLoads.extract(headTree.sources);
           if (signal?.aborted) return ABORTED;
-          const read = impactOf({ store, changes, requested, componentsByResource, found, fields, loads, headTree, summary, budget: request.budget ?? {}, external: await externalPlacesOf(deps, store, headTree), ...typeResolutionOf(content, headTree.sources) });
+          const read = impactOf({ store, changes, requested, componentsByResource, found, fields, loads, headTree, summary, budget: request.budget ?? {}, proofs: await proofsOf(deps, store, headTree), ...typeResolutionOf(content, headTree.sources) });
           if (read.missing.length > 0) {
             const names = read.missing.map(({ file, symbol }) => `${file}:${symbol}`).join(", ");
             return { ok: false, fault: { kind: "unknown-symbol", detail: `no symbol at the revision for ${names}`, entries: read.missing } };
@@ -419,7 +419,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
       const { relations: found, fields } = await deps.relations.extract(headTree.sources);
       const loads = await deps.dynamicLoads.extract(headTree.sources);
       if (signal?.aborted) return ABORTED;
-      const read = impactOf({ store, changes: radius.files, requested: [], componentsByResource, found, fields, loads, headTree, summary, budget: request.budget ?? {}, external: await externalPlacesOf(deps, store, headTree), ...typeResolutionOf(content, headTree.sources) });
+      const read = impactOf({ store, changes: radius.files, requested: [], componentsByResource, found, fields, loads, headTree, summary, budget: request.budget ?? {}, proofs: await proofsOf(deps, store, headTree), ...typeResolutionOf(content, headTree.sources) });
       return { ok: true, value: impactFact(head.base(content, true), { ...value, ...read.value }, [...fixed, ...read.cuts]) };
     } finally {
       store.close();
@@ -485,9 +485,15 @@ function sourceFilesOf(headTree: CommitExtraction): string[] {
  * and no `Program`. A rooted name the file declares itself is never retired: a declaration may shadow the import, and a
  * hidden dependence is worse than a false cut.
  */
-async function externalPlacesOf(deps: ImpactQueriesDeps, store: CodeGraphReader, headTree: CommitExtraction): Promise<ReadonlySet<string>> {
+/**
+ * The two proofs a file's own imports make about the references the index could not settle: the places whose root the
+ * proof places outside the repository, and the file a bare name imported from the repository resolves to. The first
+ * retires a cut (`ADR-0019`); the second is what lets a bare reference be attributed to the declaration it actually
+ * names instead of to a homonym (`RFC-0016` S12). A file the reader does not know proves nothing.
+ */
+async function proofsOf(deps: ImpactQueriesDeps, store: CodeGraphReader, headTree: CommitExtraction): Promise<ReferenceProofs> {
   const reader = deps.importOrigins;
-  if (reader === undefined) return new Set();
+  if (reader === undefined) return { external: new Set(), bound: new Map() };
   const sites = new Map<string, ImportOriginSite>();
   for (const reference of store.unresolvedReferences(sourceFilesOf(headTree))) {
     if (reference.kind === "imports") continue;
@@ -495,16 +501,18 @@ async function externalPlacesOf(deps: ImpactQueriesDeps, store: CodeGraphReader,
     if (name === "" || name === "this" || name === "super") continue;
     sites.set(`${reference.file}\u0000${reference.line}\u0000${name}`, { file: reference.file, line: reference.line, name });
   }
-  if (sites.size === 0) return new Set();
+  if (sites.size === 0) return { external: new Set(), bound: new Map() };
   const asked = [...sites.values()];
   const findings = await reader(headTree.sources).origins(asked);
-  return new Set(
-    asked.flatMap((site, index) => {
-      const finding = findings[index];
-      const proven = finding?.status === "complete" && (finding.value.kind === "external" || finding.value.kind === "ambient");
-      return proven ? [externalPlaceKey(site.file, site.line, site.name)] : [];
-    }),
-  );
+  const external = new Set<string>();
+  const bound = new Map<string, string>();
+  for (const [index, site] of asked.entries()) {
+    const finding = findings[index];
+    if (finding?.status !== "complete") continue;
+    if (finding.value.kind === "external" || finding.value.kind === "ambient") external.add(externalPlaceKey(site.file, site.line, site.name));
+    if (finding.value.kind === "repository") bound.set(bareBindingKey(site.file, site.line, site.name), finding.value.file);
+  }
+  return { external, bound };
 }
 
 /**
@@ -524,6 +532,14 @@ function settledReferences(unresolved: readonly GraphUnresolvedReference[], port
   });
 }
 
+/** What a file's own imports prove about the references the index could not settle. */
+interface ReferenceProofs {
+  /** Places whose root a proof puts outside the repository: an import binding, or an ambient library name. */
+  external: ReadonlySet<string>;
+  /** The file a bare name imported from the repository resolves to, keyed by `bareBindingKey`. */
+  bound: ReadonlyMap<string, string>;
+}
+
 interface WalkInput {
   store: CodeGraphReader;
   changes: readonly FileChange[];
@@ -540,8 +556,8 @@ interface WalkInput {
   budget: ImpactBudget;
   /** Settles the references the index could not, when a type root is available. */
   typeResolution?: TypeResolution;
-  /** The places the head's own imports prove are outside the repository, so no cut is attributed to them. */
-  external?: ReadonlySet<string>;
+  /** The two proofs the head's own imports make: what is outside the repository, and what a bare name binds to. */
+  proofs?: ReferenceProofs;
 }
 
 interface ImpactRead {
@@ -583,12 +599,12 @@ function impactOf(input: WalkInput): ImpactRead {
     settled.filter((reference) => reachedAnchors.has(declarationAnchor(reference.target.file, reference.target.symbol))).map((reference) => settledPlaceKey(reference.file, reference.line, reference.name)),
   );
   /** Both proofs of a known target: a settled declaration the walk reached, and an import that names something outside. */
-  const knownPlaces = new Set([...settledPlaces, ...(input.external ?? [])]);
+  const knownPlaces = new Set([...settledPlaces, ...(input.proofs?.external ?? [])]);
   const unread = found.flatMap((finding): UnreadRelation[] => (finding.status === "unknown" ? finding.evidence.slice(0, 1).map(({ path, line }) => ({ path, line, reason: finding.reason })) : []));
 
   const cuts: Cut[] = [
     ...walk.cuts,
-    ...unresolvedLinkCuts(unresolved, walked, loads, inbound.settledUses(), knownPlaces),
+    ...unresolvedLinkCuts(unresolved, walked, loads, inbound.settledUses(), knownPlaces, input.proofs?.bound),
     ...removedDeclarationCuts(unresolved, selection.removed),
     ...unreadRelationCuts(unread, new Set(walked.map((symbol) => symbol.file)), templateOwners(componentsByResource)),
     ...summary.filesNotIndexed.map((file): Cut => ({ kind: "no-extractor", at: [file] })),
