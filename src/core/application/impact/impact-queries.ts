@@ -31,28 +31,23 @@ import type { FieldOrigin } from "../../domain/relations/field-origin.ts";
 import type { RelationExtractor } from "../relations/relation-extractor.ts";
 import type { CommitExport, Vcs, VcsChanges, VcsFault } from "../../ports/vcs.port.ts";
 import { openLive, type LiveDeps, type LiveTree } from "../live/live-tree.ts";
-import { ABORTED, extractCommit, extractExport, factBaseOf, LIVE_REQUIRES_TRUSTED, trustOf, withScratch, type CommitExtraction, type SnapshotReaderDeps } from "../snapshot/read-snapshot.ts";
+import { ABORTED, extractCommit, extractExport, factBaseOf, LIVE_REQUIRES_TRUSTED, trustOf, withScratch, type CommitExtraction } from "../snapshot/read-snapshot.ts";
+import { createHeadReader, type FactSpec, type HeadIndex, type HeadReaderDeps, type HeadReading, type Revisioned } from "../snapshot/head-reading.ts";
 import { readImporters } from "./importers.ts";
 import { createInboundEdges } from "./inbound-edges.ts";
 import { walkImpact } from "./walk.ts";
 
-export interface ImpactQueriesDeps extends SnapshotReaderDeps {
+export interface ImpactQueriesDeps extends HeadReaderDeps {
   /** The walk reads the change between two revisions, which no other family asks for. */
   vcs: Vcs & VcsChanges;
   angular: AngularDeclarationReader;
   relations: RelationExtractor;
   /** Reads the dynamic loads of the head's sources, so a load whose specifier is a literal names its module. */
   dynamicLoads: DynamicLoadReader;
-  graph: CodeGraph;
-  /** Keeps full indexes by content; without it every call builds its own and discards it. */
-  indexes?: IndexCache;
-  matcher: PathMatcher;
   /** Version of each engine every operation runs on, by package name. */
   engines: Readonly<Record<string, string>>;
   /** Version of each engine only the operations that read Angular declarations and templates add. */
   angularEngines: Readonly<Record<string, string>>;
-  /** What a live query reads; without it a live query is refused as under `untrusted`. */
-  live?: LiveDeps;
 }
 
 /** A live query reads the working tree against the commit HEAD names. */
@@ -60,112 +55,13 @@ const LIVE_HEAD = "HEAD";
 
 type Answer = Result<Fact<ImpactValue>, OfChangeFault>;
 
-/** What one operation adds to the fact base of every fact it answers. */
-interface FactSpec {
-  declaredConfig: DeclaredConfig;
-  engines: Readonly<Record<string, string>>;
-}
-
-/** The head of a query as the operation reads it: a commit's export or the mirror, with the means to index it. */
-interface HeadReading {
-  tree: CommitExtraction;
-  selected: PathSelection;
-  /** The fact base for `content`; `store` is true for a fact that read the index, which records where it came from. */
-  base(content: string, store?: boolean): FactBase;
-  /** The head's index; the caller closes its store. */
-  open(): Promise<HeadIndex | "aborted" | "unavailable">;
-}
-
-type Revisioned = { repo: string; repoId: string; scope?: ScopeRequest; signal?: AbortSignal } & ({ revision: string; live?: undefined } | ({ revision?: undefined } & LiveSelector));
 
 export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
   const { vcs, digest } = deps;
   const importersEngines = sortedEngines(deps.engines);
   const angularReadingEngines = sortedEngines({ ...deps.engines, ...deps.angularEngines });
-  const exportBudget: Pick<DeclaredConfig, "exportBudget"> = deps.budget === undefined ? {} : { exportBudget: { maxEntries: deps.budget.maxEntries, maxBytes: deps.budget.maxBytes } };
   const walkBounds = (budget: ImpactBudget | undefined): Pick<DeclaredConfig, "walk"> => (budget === undefined ? {} : { walk: { ...budget } });
-
-  /** The head's index: the kept one for its staged content when there is a cache, otherwise one built into a store of its own. The caller closes the store. */
-  async function indexHead(headTree: CommitExtraction, headDirectory: string, directory: () => Promise<string>, signal: AbortSignal | undefined): Promise<HeadIndex | "aborted" | "unavailable"> {
-    if (deps.indexes !== undefined) {
-      const kept = await deps.indexes.obtain({ content: digest.of(contentFingerprint(headTree.export)), snapshot: headDirectory, signal });
-      if (kept.ok) return { store: kept.value.store, summary: notHeldInExport(kept.value.summary.filesNotIndexed, headTree.export) };
-      if (kept.fault.kind === "aborted") return "aborted";
-      if (kept.fault.kind !== "cache-unavailable") return "unavailable";
-    }
-    const storeDirectory = await directory();
-    const indexed = await deps.graph.index(headDirectory, storeDirectory, signal);
-    if (!indexed.ok) return indexed.fault.kind === "aborted" ? "aborted" : "unavailable";
-    const opened = deps.graph.open(storeDirectory);
-    return opened.ok ? { store: opened.value, summary: notHeldInExport(indexed.value.filesNotIndexed, headTree.export) } : "unavailable";
-  }
-
-  /** The fact base of a snapshot: a commit's carries the host's export budget, the live tree reads none. */
-  function factBase(trust: TrustMode, snapshot: SnapshotRef, content: string, spec: FactSpec, scope: DeclaredScope, origin: IndexOrigin | undefined): FactBase {
-    const sha = snapshot.kind === "sha" ? snapshot.sha : snapshot.kind === "live" ? snapshot.head : "";
-    const declaredConfig: DeclaredConfig = { ...(snapshot.kind === "sha" ? exportBudget : {}), ...spec.declaredConfig };
-    return { ...factBaseOf(deps, { repoId: snapshot.repo, sha, trust, scope, content, declaredConfig, engines: spec.engines, ...(origin === undefined ? {} : { origin }) }), snapshot };
-  }
-
-  /** The head of a live query: the mirror under the lock, its store opened where the engine left it. */
-  function liveReading(tree: LiveTree, extraction: CommitExtraction, trust: TrustMode, scope: DeclaredScope, selected: PathSelection, head: string, repoId: string, spec: FactSpec): HeadReading {
-    const snapshot: SnapshotRef = { repo: repoId, kind: "live", head, stateId: tree.stateId };
-    return {
-      tree: extraction,
-      selected,
-      base: (content, store = false) => factBase(trust, snapshot, content, spec, scope, store ? tree.origin : undefined),
-      open: async () => {
-        const opened = deps.graph.open(tree.root);
-        return opened.ok ? { store: opened.value, summary: notHeldInExport(tree.notHeld, extraction.export) } : "unavailable";
-      },
-    };
-  }
-
-  /** What a live query answers when the refresh did not finish: `unknown`, with a state id of nothing read. */
-  function unavailableLive(trust: TrustMode, scope: DeclaredScope, head: string, repoId: string, spec: FactSpec): UnknownFact {
-    const unread = digest.of(JSON.stringify([head]));
-    return { ...factBase(trust, { repo: repoId, kind: "live", head, stateId: unread }, unread, spec, scope, undefined), status: "unknown", reason: "index-unavailable" };
-  }
-
-  /** The one place a revisioned operation reads its head, at a commit or on the live tree, so its body is written once. */
-  async function atHead<V, E>(request: Revisioned, spec: FactSpec, read: (head: HeadReading) => Promise<Result<Fact<V>, E>>): Promise<Result<Fact<V>, E | OfChangeFault>> {
-    const { repo, repoId, signal } = request;
-    if (request.live === true) {
-      const trust = await trustOf(deps, repo);
-      if (trust !== "trusted" || deps.live === undefined) return LIVE_REQUIRES_TRUSTED;
-      const head = await vcs.resolveCommit(repo, LIVE_HEAD, signal);
-      if (!head.ok) return head;
-      const scope = liveScope(request.scope);
-      const selected = pathSelection(scope, deps.matcher.matches);
-      const exported = exportSelection(scope, deps.matcher.matches, isExtractorConfiguration);
-      const opened = await openLive(deps.live, { repo, scope, selected: exported, store: true, signal, onStale: request.onStale }, async (tree) => {
-        const extracted = await extractExport(deps, tree.root, tree.export, signal);
-        return extracted.ok ? read(liveReading(tree, extracted.value, trust, scope, selected, head.value, repoId, spec)) : extracted;
-      });
-      if (opened.ok) return opened.value;
-      const { fault } = opened;
-      return fault.kind === "unavailable" ? { ok: true, value: unavailableLive(trust, scope, head.value, repoId, spec) } : { ok: false, fault };
-    }
-
-    const scope = declaredScope(request.scope);
-    const selected = pathSelection(scope, deps.matcher.matches);
-    const exported = exportSelection(scope, deps.matcher.matches, isExtractorConfiguration);
-    const head = await vcs.resolveCommit(repo, request.revision, signal);
-    if (!head.ok) return head;
-    const trust = await trustOf(deps, repo);
-    const snapshot: SnapshotRef = { repo: repoId, kind: "sha", sha: head.value };
-    return withScratch(deps.scratch, async (directory) => {
-      const headDirectory = await directory();
-      const headTree = await extractCommit(deps, repo, head.value, headDirectory, exported, signal);
-      if (!headTree.ok) return headTree;
-      return read({
-        tree: headTree.value,
-        selected,
-        base: (content, store = false) => factBase(trust, snapshot, content, spec, scope, store ? { kind: "full" } : undefined),
-        open: () => indexHead(headTree.value, headDirectory, directory, signal),
-      });
-    });
-  }
+  const headReader = createHeadReader(deps);
 
   return {
     async ofChange(request) {
@@ -179,7 +75,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
       const changes = rangeChanges(targets);
       const spec: FactSpec = { declaredConfig: { ...walkBounds(request.budget), targets: targets.map(targetKey) }, engines: angularReadingEngines };
 
-      return atHead(request, spec, async (head): Promise<Result<Fact<ImpactValue>, ImpactFault>> => {
+      return headReader.atHead(request, spec, async (head): Promise<Result<Fact<ImpactValue>, ImpactFault>> => {
         const headTree = head.tree;
         const content = contentFingerprint(headTree.export);
         const outside = targets.filter((target) => !head.selected(target.file));
@@ -221,7 +117,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
       const isCovered = (path: string): boolean => ["source", "test"].includes(kindOfChangedFile(path));
       const spec: FactSpec = { declaredConfig: { files }, engines: importersEngines };
 
-      return atHead(request, spec, async (head): Promise<Result<Fact<ImportersValue>, VcsFault>> => {
+      return headReader.atHead(request, spec, async (head): Promise<Result<Fact<ImportersValue>, VcsFault>> => {
         const headTree = head.tree;
         const content = contentFingerprint(headTree.export);
         const outside = files.filter((file) => !head.selected(file));
@@ -274,7 +170,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
 
     const snapshot: SnapshotRef = { repo: request.repoId, kind: "sha", sha: head.value };
     const spec: FactSpec = { declaredConfig: walkBounds(request.budget), engines: angularReadingEngines };
-    const baseOfHead = (content: string): FactBase => factBase(trust, snapshot, content, spec, scope, undefined);
+    const baseOfHead = (content: string): FactBase => headReader.factBase(trust, snapshot, content, spec, scope, undefined);
 
     const diff = await vcs.diffCommits(repo, mergeBase, head.value, signal);
     if (!diff.ok) return diff.fault.kind === "git-failed" ? unknownFact(baseOfHead(JSON.stringify([mergeBase, head.value])), "source-unreadable") : diff;
@@ -290,8 +186,8 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
       const reading: HeadReading = {
         tree: headTree.value,
         selected,
-        base: (content, store = false) => (store ? factBase(trust, snapshot, content, spec, scope, { kind: "full" }) : baseOfHead(content)),
-        open: () => indexHead(headTree.value, headDirectory, directory, signal),
+        base: (content, store = false) => (store ? headReader.factBase(trust, snapshot, content, spec, scope, { kind: "full" }) : baseOfHead(content)),
+        open: () => headReader.indexHead(headTree.value, headDirectory, directory, signal),
       };
       return readChange({ request, radius, head: reading, baseTree: baseTree.value, sameTree: baseTree === headTree, unreadable: JSON.stringify([mergeBase, head.value]) });
     });
@@ -320,7 +216,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
         if (!liveTree.ok) return liveTree;
         const baseTree = await extractCommit(deps, repo, mergeBase, await directory(), exported, signal);
         if (!baseTree.ok) return baseTree;
-        const reading = liveReading(tree, liveTree.value, trust, scope, selected, head.value, repoId, spec);
+        const reading = headReader.liveReading(tree, liveTree.value, trust, scope, selected, head.value, repoId, spec);
 
         const changed = changedPaths(baseTree.value.export.files, tree.export.files).filter((path) => !isEngineConfiguration(path));
         const [before, after] = [await directory(), await directory()];
@@ -340,7 +236,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
     );
     if (opened.ok) return opened.value;
     const { fault } = opened;
-    return fault.kind === "unavailable" ? { ok: true, value: unavailableLive(trust, scope, head.value, repoId, spec) } : { ok: false, fault };
+    return fault.kind === "unavailable" ? { ok: true, value: headReader.unavailableLive(trust, scope, head.value, repoId, spec) } : { ok: false, fault };
   }
 
   /** Everything `ofChange` does once it holds the diff and both trees; a commit and the live tree differ only in how they got here. */
@@ -388,19 +284,6 @@ function unknownFact(base: FactBase, reason: "index-unavailable" | "source-unrea
   return { ok: true, value: { ...base, status: "unknown", reason } };
 }
 
-interface HeadIndex {
-  store: CodeGraphReader;
-  summary: Pick<IndexSummary, "filesNotIndexed">;
-}
-
-/**
- * The files of the index's universe the store did not hold, limited to what the head export staged: the engine reads
- * the whole mirror and a commit's whole listing, so a path the export never wrote could not be read by this answer.
- */
-function notHeldInExport(notHeld: readonly string[], exported: CommitExport): Pick<IndexSummary, "filesNotIndexed"> {
-  const staged = new Set(exported.files.filter((file) => file.written).map((file) => file.path));
-  return { filesNotIndexed: notHeld.filter((path) => staged.has(path)) };
-}
 
 /** The targets once each, in a fixed order, so the same request in any order is the same fact. */
 function distinctTargets(targets: readonly CallersTarget[]): CallersTarget[] {
