@@ -267,6 +267,20 @@ test("a base URL the call declares but the snapshot does not decide is an unknow
   assert.deepEqual(sites(await reader.of([component("    this.http.get('/route', { baseUrl: method })")], "shop-web")), ["unknown unresolved@src/app/app.component.ts:6"]);
 });
 
+test("a request whose base the snapshot does not decide still states the method and the path the code writes", async () => {
+  const [site] = await reader.of([component("    this.http.get('/route', { baseUrl: method })")], "shop-web");
+
+  assert.equal(site?.target.status, "unknown");
+  assert.deepEqual(site?.stated, { method: "GET", path: "/route" });
+});
+
+test("a request whose method the snapshot does not decide states no request", async () => {
+  const [site] = await reader.of([component("    this.http.request(method, '/orders/7')")], "shop-web");
+
+  assert.equal(site?.target.status, "unknown");
+  assert.equal(site?.stated, undefined);
+});
+
 test("a class another class injects that makes its requests with paths it states keeps them as call sites: only a method that forwards its own parameter as the path is a wrapper", async () => {
   const api = source(
     "src/app/items/items.api.ts",

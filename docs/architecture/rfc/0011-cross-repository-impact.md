@@ -418,9 +418,11 @@ Accepted by the owner on 2026-11-01: "Confirmo todo".
   `Link.id`. A repository holding an impacted call site is walked with `impact.callers` over that call site's line, at the
   snapshot read, so the answer also names what depends on the call site there (a frontend's UI routes, for instance). A
   call site whose target the code does not decide joins nothing and stays an `unresolved-link` cut of its repository's
-  section; so does a call two repositories serve equally. Sections are sorted by repository and carry that repository's
-  own snapshot and trust; the answer's own trust is the bound repository's. `ye_ast_workspace` no longer answers the
-  repositories it read (absolute paths and every entrypoint were internal).
+  section; so does a call two repositories serve equally. Each unresolved call site carries the declaration it is
+  written in, its transport, the library it goes through and, when only the base is undecided, the request the code
+  writes (`GET /route`), so the text settles it without opening the file. Sections are sorted by repository and carry
+  that repository's own snapshot and trust; the answer's own trust is the bound repository's. `ye_ast_workspace` no
+  longer answers the repositories it read (absolute paths and every entrypoint were internal).
 - Slice 4 (service-to-service call sites): `RestTemplate` (its verbs, and `exchange`/`execute` taking the method as an
   argument), the `RestClient` and `WebClient` fluent chains (the verb or `method()`, and the base URL a builder sets),
   Feign and `@HttpExchange` interfaces (one call per mapped method, the type's mapping leading the method's), URLs from

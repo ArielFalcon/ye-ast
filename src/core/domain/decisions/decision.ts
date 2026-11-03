@@ -1,4 +1,5 @@
 import type { Evidence } from "../shared/fact.ts";
+import type { OutwardKind } from "../topology/outward-name.ts";
 
 /** The closed list of gaps the code cannot fill (RFC-0014): one kind per question a fact does not answer. */
 export type DecisionKind = "membership" | "repository" | "library" | "gateway" | "revision" | "remote" | "trust";
@@ -23,6 +24,8 @@ export interface Decision {
   subject: string;
   /** The places that motivated the gap; empty when no place states it. */
   evidence: readonly Evidence[];
+  /** The outward kinds a `repository` subject is written with, sorted; absent when the subject is no outward name. */
+  outwardKinds?: readonly OutwardKind[];
   options: readonly DecisionOption[];
   /** Whether an answer may be a value no fact states, marked as free text instead of offered as an option. */
   allowsFreeText: boolean;

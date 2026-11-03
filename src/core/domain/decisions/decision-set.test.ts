@@ -140,6 +140,19 @@ test("two unserved names that write one string are one decision with both places
   ]);
 });
 
+test("a repository decision records the outward kinds its subject is written with, so a dependency is told from a prefix", () => {
+  const set = decisionsOf(input({ unserved: [outward("@angular/core", "dependency"), outward("orders-api", "path-prefix")] }));
+
+  assert.deepEqual(byId(set).get("repository:@angular/core")?.outwardKinds, ["dependency"]);
+  assert.deepEqual(byId(set).get("repository:orders-api")?.outwardKinds, ["path-prefix"]);
+});
+
+test("one name written with two kinds is one decision that records both, sorted", () => {
+  const set = decisionsOf(input({ unserved: [outward("geo-api", "path-prefix"), outward("geo-api", "http-host")] }));
+
+  assert.deepEqual(byId(set).get("repository:geo-api")?.outwardKinds, ["http-host", "path-prefix"]);
+});
+
 test("a cut that names a library is one decision offering every clone, none recommended, with free text", () => {
   const set = decisionsOf(
     input({

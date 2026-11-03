@@ -4,7 +4,7 @@ import { compareText } from "../../domain/shared/code-node.ts";
 import type { Result } from "../../domain/shared/result.ts";
 import { pathSelection, type PathSelection } from "../../domain/shared/scope.ts";
 import { gatherCandidates, gatherNames, sortEvidence, type NameCandidate, type OutwardName } from "../../domain/topology/outward-name.ts";
-import { callSiteEvidence, unresolvedPlace, type CallSite, type CallSiteReader } from "../../domain/topology/call-site.ts";
+import { callSiteEvidence, unresolvedCallSite, type CallSite, type CallSiteReader } from "../../domain/topology/call-site.ts";
 import { directoryNameOf, nameCandidates, repositoryNameOf, type RepositoryIdentity } from "../../domain/topology/repository-identity.ts";
 import { resolveRemoteSnapshot, type RemoteFreshness, type RepositoryResolution } from "../../domain/topology/remote-snapshot.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
@@ -248,7 +248,7 @@ export function createWorkspaceQueries(deps: WorkspaceQueriesDeps): WorkspaceQue
       const unserved: OutwardName[] = [];
       for (const entry of resolved) {
         const names = gatherNames(entry.names);
-        const unresolved = entry.callSites.flatMap((site) => (site.target.status === "unknown" ? [unresolvedPlace(site)] : []));
+        const unresolved = entry.callSites.flatMap((site) => (site.target.status === "unknown" ? [unresolvedCallSite(site)] : []));
         const section: FactBase & { evidence: readonly { path: string; line: number }[] } = { ...(entry.base as FactBase), evidence: sortEvidence(names.flatMap((name) => name.evidence)) };
         const cuts = unresolved.map((place) => ({ kind: "unresolved-link" as const, at: [place.path, `${place.path}:${place.line}`, ...(place.via === undefined ? [] : [`library ${place.via}`])] }));
         const [firstCut, ...restCuts] = cuts;

@@ -13,11 +13,12 @@ import type { OutlineValue } from "../core/domain/outline/outline-fact.ts";
 import { REDACTED, type Redaction } from "../core/ports/redaction.port.ts";
 import type { VcsFault } from "../core/ports/vcs.port.ts";
 import type { LiveFault } from "../core/ports/live-queries.port.ts";
-import type { WorkspaceQueries, WorkspaceRequest } from "../core/ports/workspace-queries.port.ts";
-import type { WorkspaceFault } from "../core/ports/workspace-repos.port.ts";
+import type { WorkspaceQueries, WorkspaceRequest, WorkspaceValue } from "../core/ports/workspace-queries.port.ts";
+import type { WorkspaceFault, WorkspaceSection } from "../core/ports/workspace-repos.port.ts";
 import type { WorkspaceCallersRequest, WorkspaceImpactQueries, WorkspaceImpactValue, WorkspaceOfChangeRequest } from "../core/ports/workspace-impact-queries.port.ts";
 import type { RepoImpact } from "../core/ports/workspace-impact-queries.port.ts";
 import type { DecisionQueries, DecisionsRequest, DecisionValue } from "../core/ports/decision-queries.port.ts";
+import type { OutwardName } from "../core/domain/topology/outward-name.ts";
 import type { FactRead, WorkspaceRefresh } from "../core/ports/workspace-queries.port.ts";
 import { createMcpServer, CUT_GUIDANCE } from "./server.ts";
 import { openSession, type Session } from "./test-session.ts";
@@ -127,6 +128,37 @@ function decisionFact(value: DecisionValue = DECISIONS): Fact<DecisionValue> {
   return { ...base(), status: "complete", value };
 }
 
+const DEPENDENCIES: readonly OutwardName[] = [
+  { name: "@angular/core", kind: "dependency", evidence: [{ path: "package.json", line: 36 }] },
+  { name: "@capacitor/core", kind: "dependency", evidence: [{ path: "package.json", line: 49 }] },
+  { name: "rxjs", kind: "dependency", evidence: [{ path: "package.json", line: 74 }] },
+];
+
+const PREFIX: OutwardName = { name: "orders-api", kind: "path-prefix", evidence: [{ path: "src/app/order.api.ts", line: 7 }] };
+
+function workspaceFact(): Fact<WorkspaceValue> {
+  const names = [PREFIX, ...DEPENDENCIES];
+  const section: Fact<WorkspaceSection> = {
+    ...base(),
+    status: "partial",
+    value: { names, unresolved: [{ path: "src/app/order.api.ts", line: 9, endLine: 12, symbol: "OrderApi.create", transport: "http", stated: { method: "GET", path: "/orders" } }] },
+    cuts: [{ kind: "unresolved-link", at: ["src/app/order.api.ts", "src/app/order.api.ts:9"] }],
+  };
+  return {
+    ...base(),
+    status: "partial",
+    cuts: [{ kind: "section", at: ["shop"] }],
+    value: {
+      workspace: { repos: ["shop"], gateways: [], source: "request" },
+      repositorySnapshots: [{ repo: "shop", snapshot: { repo: "shop", kind: "sha", sha: "a".repeat(40) } }],
+      sections: { shop: section },
+      candidates: [],
+      unserved: names,
+      repositories: [],
+    },
+  };
+}
+
 const OUTLINE: OutlineValue = {
   files: [
     {
@@ -172,6 +204,7 @@ interface Answers {
   callers: (request: ImpactCallersRequest) => Promise<Result<Fact<ImpactValue>, ImpactFault>>;
   importers: (request: ImpactImportersRequest) => Promise<Result<Fact<ImportersValue>, VcsFault | LiveFault>>;
   outline: (request: OutlineRequest) => Promise<Result<Fact<OutlineValue>, VcsFault | LiveFault>>;
+  outwardNames: (request: WorkspaceRequest) => Promise<Result<FactRead<WorkspaceValue>, WorkspaceFault>>;
   decisions: (request: DecisionsRequest) => Promise<Result<FactRead<DecisionValue>, WorkspaceFault>>;
   workspaceOfChange: (request: WorkspaceOfChangeRequest) => Promise<Result<FactRead<WorkspaceImpactValue>, WorkspaceFault>>;
 }
@@ -203,10 +236,7 @@ async function setup(answers: Partial<Answers> = {}, refresh?: WorkspaceRefresh)
   const workspace = {
     outwardNames: async (request: WorkspaceRequest) => {
       calls.workspaceReads.push(request);
-      return {
-        ok: true,
-        value: read({ ...base(), status: "complete", value: { workspace: { repos: [], gateways: [], source: "none" }, repositorySnapshots: [], sections: {}, candidates: [], unserved: [], repositories: [{ repo: "shop", path: "/work/shop", entrypoints: [], callSites: [] }] } }),
-      };
+      return (answers.outwardNames ?? (async () => ({ ok: true, value: read({ ...base(), status: "complete", value: { workspace: { repos: [], gateways: [], source: "none" }, repositorySnapshots: [], sections: {}, candidates: [], unserved: [], repositories: [{ repo: "shop", path: "/work/shop", entrypoints: [], callSites: [] }] } }) })))(request);
     },
   } as unknown as WorkspaceQueries;
   const workspaceImpact: WorkspaceImpactQueries = {
@@ -1247,8 +1277,8 @@ test("the decisions tool asks the decision family with the repositories and gate
   assert.match(text, /^status: complete\n/);
   assert.match(text, /repositories \(1\): shop@a{40}/);
   assert.match(text, /decisions \(2\):/);
-  assert.match(text, /\n {2}membership orders-api\n {4}evidence: src\/app\/order\.api\.ts:7\n {4}- orders \(exact-name, recommended, src\/app\/order\.api\.ts:7\)\n {4}- orders-core \(artifact\)\n {4}free text/);
-  assert.match(text, /\n {2}repository geo\.example\.com\n {4}evidence: src\/app\/geo\.api\.ts:11\n {4}free text/);
+  assert.match(text, /\n {2}membership \(1\):\n {4}orders-api\n {6}evidence: src\/app\/order\.api\.ts:7\n {6}- orders \(exact-name, recommended, src\/app\/order\.api\.ts:7\)\n {6}- orders-core \(artifact\)\n {6}free text/);
+  assert.match(text, /\n {2}repository \(1\):\n {4}geo\.example\.com\n {6}evidence: src\/app\/geo\.api\.ts:11\n {6}free text/);
   await session.close();
 });
 
@@ -1267,6 +1297,70 @@ test("the decisions tool reads the bound repository alone when no clones are pas
   assert.match(text, /^repositories declared by: nothing: this answer covers the bound repository alone/m);
   assert.match(text, /^decisions \(0\):$/m);
   assert.doesNotMatch(text, /\(none\)/);
+  await session.close();
+});
+
+const DEPENDENCY_GAP: DecisionValue = {
+  ...DECISIONS,
+  decisions: [
+    ...DECISIONS.decisions,
+    { id: "repository:@angular/core", kind: "repository", subject: "@angular/core", evidence: [{ path: "package.json", line: 36 }], outwardKinds: ["dependency"], options: [], allowsFreeText: true, required: false },
+  ],
+};
+
+test("a workspace summary groups the outward names by kind and counts the dependency coordinates no repository serves", async () => {
+  const { session } = await setup({ outwardNames: async () => ({ ok: true, value: { fact: workspaceFact() } }) });
+
+  const text = textOf(await session.callTool("ye_ast_workspace", {}));
+
+  assert.match(text, /^outward names \(4\):$/m);
+  assert.match(text, / {2}shop:\n {4}path-prefix \(1\):\n {6}- orders-api \(src\/app\/order\.api\.ts:7\)\n {4}dependency \(3\): no repository given serves them; detail "full" lists them/);
+  assert.match(text, /^no local repository serves \(4\): 3 dependency counted; detail "full" lists them$/m);
+  assert.doesNotMatch(text, /- dependency @angular\/core/);
+  await session.close();
+});
+
+test("a workspace full answer lists the dependency coordinates its summary counts", async () => {
+  const { session } = await setup({ outwardNames: async () => ({ ok: true, value: { fact: workspaceFact() } }) });
+
+  const text = textOf(await session.callTool("ye_ast_workspace", { detail: "full" }));
+
+  assert.match(text, / {4}dependency \(3\):\n {6}- @angular\/core \(package\.json:36\)\n {6}- @capacitor\/core \(package\.json:49\)\n {6}- rxjs \(package\.json:74\)/);
+  assert.match(text, /^no local repository serves \(4\):$/m);
+  assert.match(text, / {2}- dependency @angular\/core$/m);
+  await session.close();
+});
+
+test("a workspace answer names each unresolved call site with its declaration, its transport and the request it writes", async () => {
+  const { session } = await setup({ outwardNames: async () => ({ ok: true, value: { fact: workspaceFact() } }) });
+
+  const text = textOf(await session.callTool("ye_ast_workspace", {}));
+
+  assert.match(text, /^unresolved call sites \(1\):$/m);
+  assert.match(text, / {2}shop:\n {4}src\/app\/order\.api\.ts\n {6}9-12 OrderApi\.create \(http\) GET \/orders/);
+  assert.doesNotMatch(text, /\(the file itself\)/);
+  assert.doesNotMatch(text, /unresolved-link/);
+  await session.close();
+});
+
+test("a decisions summary groups the gaps by kind and counts the free-text-only dependency gaps", async () => {
+  const { session } = await setup({ decisions: async () => ({ ok: true, value: { fact: decisionFact(DEPENDENCY_GAP) } }) });
+
+  const text = textOf(await session.callTool("ye_ast_decisions", {}));
+
+  assert.match(text, /^decisions \(3\):$/m);
+  assert.match(text, / {2}repository \(2\): 1 dependency counted \(free text only\); detail "full" lists them/);
+  assert.match(text, / {4}geo\.example\.com/);
+  assert.doesNotMatch(text, /@angular\/core/);
+  await session.close();
+});
+
+test("a decisions full answer lists the dependency gaps its summary counts", async () => {
+  const { session } = await setup({ decisions: async () => ({ ok: true, value: { fact: decisionFact(DEPENDENCY_GAP) } }) });
+
+  const text = textOf(await session.callTool("ye_ast_decisions", { detail: "full" }));
+
+  assert.match(text, / {4}@angular\/core\n {6}evidence: package\.json:36\n {6}free text/);
   await session.close();
 });
 
@@ -1360,4 +1454,14 @@ test("the counted elision of a summary never renders longer than listing what it
   const full = textOf(await session.callTool("ye_ast_impact", { base: "main", detail: "full" }));
   assertCountedSummaryShorter(summary, full);
   await session.close();
+});
+
+test("the counted elision of a workspace and a decisions summary never renders longer than listing what it hides", async () => {
+  const workspace = await setup({ outwardNames: async () => ({ ok: true, value: { fact: workspaceFact() } }) });
+  assertCountedSummaryShorter(textOf(await workspace.session.callTool("ye_ast_workspace", {})), textOf(await workspace.session.callTool("ye_ast_workspace", { detail: "full" })));
+  await workspace.session.close();
+
+  const decisions = await setup({ decisions: async () => ({ ok: true, value: { fact: decisionFact(DEPENDENCY_GAP) } }) });
+  assertCountedSummaryShorter(textOf(await decisions.session.callTool("ye_ast_decisions", {})), textOf(await decisions.session.callTool("ye_ast_decisions", { detail: "full" })));
+  await decisions.session.close();
 });
