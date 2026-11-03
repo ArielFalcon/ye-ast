@@ -1,4 +1,5 @@
 import { canonicalJson } from "./canonical-json.ts";
+import { compareText } from "./code-node.ts";
 
 export type SchemaVersion = `${number}.${number}.${number}`;
 
@@ -182,4 +183,24 @@ export type FactIdentity = Pick<FactBase, "schema" | "inputs" | "producer">;
 /** A stored fact stands while its identity is the one the current run would write. */
 export function sameIdentity(a: FactIdentity, b: FactIdentity): boolean {
   return canonicalJson([a.schema, a.inputs, a.producer]) === canonicalJson([b.schema, b.inputs, b.producer]);
+}
+
+const CUT_RANK: Record<Cut["kind"], number> = {
+  depth: 0,
+  hub: 1,
+  "caller-budget": 2,
+  "node-cap": 3,
+  deadline: 4,
+  "unresolved-link": 5,
+  "no-extractor": 6,
+  "not-exported": 7,
+  section: 8,
+};
+
+/** Complete only when nothing cut the answer; otherwise partial with the cuts in kind order, each once. */
+export function withCuts<T>(base: FactBase, value: T, cuts: readonly Cut[]): CompleteFact<T> | PartialFact<T> {
+  const [first, ...rest] = [...new Map(cuts.map((cut) => [JSON.stringify(cut), cut])).values()].sort(
+    (a, b) => CUT_RANK[a.kind] - CUT_RANK[b.kind] || compareText(a.at.join("\0"), b.at.join("\0")),
+  );
+  return first === undefined ? { ...base, status: "complete", value } : { ...base, status: "partial", value, cuts: [first, ...rest] };
 }
