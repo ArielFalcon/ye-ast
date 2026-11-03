@@ -19,6 +19,11 @@ interface ImpactOfChangeBase {
   repoId: string;
   /** The revision the change is read against: the change starts at its merge base with `head`. */
   base: string;
+  /**
+   * Globs over the changed paths: only the change's paths they select seed the walk. The repository is still read whole,
+   * so callers outside the selection are known. Without it the whole change seeds.
+   */
+  changed?: readonly string[];
   scope?: ScopeRequest;
   /** Bounds on the walk; without one the walk runs to its end. */
   budget?: ImpactBudget;
@@ -63,7 +68,15 @@ export interface UnknownSymbolFault {
   }[];
 }
 
-export type OfChangeFault = VcsFault | LiveFault;
+/** A `changed` glob that selected none of the paths the change touches; `globs` lists every one that did not. */
+export interface UnknownChangePathFault {
+  kind: "unknown-change-path";
+  detail: string;
+  /** The globs that selected no changed path, sorted and once each. */
+  globs: readonly string[];
+}
+
+export type OfChangeFault = VcsFault | LiveFault | UnknownChangePathFault;
 export type ImpactFault = OfChangeFault | UnknownSymbolFault;
 
 export interface ImpactQueries {

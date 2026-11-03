@@ -525,6 +525,7 @@ test("the usage names the workspace and decisions commands, and the scope help n
   assert.match(help, /ye-ast decisions \[--revision <rev>\] \[--repo-id <id>\] \[--offline\] \[scope\] <repo>/);
   assert.match(help, /importers, outline, workspace and decisions/);
   assert.match(help, /--offline:/);
+  assert.match(help, /--changed <glob>/);
 });
 
 test("importers without a repository, without files, or with a budget flag is a usage error", async () => {
@@ -556,6 +557,24 @@ test("--include and --exclude, repeatable, reach the scope of map, impact, calle
   const onlyExclude = setup();
   await run(["map", "--exclude", "gen/**", "."], onlyExclude.io, onlyExclude.deps);
   assert.deepEqual(onlyExclude.requests[0]?.scope, { exclude: ["gen/**"] });
+});
+
+test("--changed, repeatable, reaches the change selection, and none given leaves it out", async () => {
+  const selected = setupImpact();
+  await run(["impact", "--base", "main", "--changed", "src/a/**", "--changed", "src/b/**", "."], selected.io, selected.deps);
+  assert.deepEqual(selected.requests[0]?.changed, ["src/a/**", "src/b/**"]);
+
+  const bare = setupImpact();
+  await run(["impact", "--base", "main", "."], bare.io, bare.deps);
+  assert.equal("changed" in bare.requests[0]!, false);
+});
+
+test("an invalid changed glob is a usage error that asks nothing", async () => {
+  for (const glob of ["", "./x/**", "../x"]) {
+    const { io, deps, requests } = setupImpact();
+    assert.equal(await run(["impact", "--base", "main", "--changed", glob, "."], io, deps), EXIT_CODE.usage, glob);
+    assert.deepEqual(requests, []);
+  }
 });
 
 test("an invalid glob is a usage error that asks nothing", async () => {

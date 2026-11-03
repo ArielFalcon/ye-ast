@@ -35,6 +35,7 @@ export const ERROR_CODE = {
   unwritable: -32012,
   "invalid-name": -32013,
   "duplicate-repository": -32014,
+  "unknown-change-path": -32015,
 } as const;
 
 export type ErrorKind = keyof typeof ERROR_CODE;

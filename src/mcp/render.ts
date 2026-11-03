@@ -95,9 +95,17 @@ function declaredScopeLines({ inputs: { declaredScope } }: Fact<unknown>): strin
   return named.length === 0 ? [] : [`declared scope: ${named.join("; ")}`];
 }
 
+/** The part of the change the caller selected: paths, not content, so the walk stayed whole. */
+function changedLines({ inputs: { declaredConfig } }: Fact<unknown>): string[] {
+  const changed = declaredConfig.changed;
+  return changed === undefined || changed.length === 0
+    ? []
+    : [`change: only paths matching ${changed.join(", ")} (the repository is indexed whole; callers outside the selection are known; the rest of the change is not answered about)`];
+}
+
 /** What every answer opens with: its completeness, what that completeness covers, and the snapshot it read. */
 function headerLines(fact: Fact<unknown>): string[] {
-  return [...statusLines(fact), ...declaredScopeLines(fact), ...scopeLines(fact), snapshotLine(fact.snapshot)];
+  return [...statusLines(fact), ...declaredScopeLines(fact), ...scopeLines(fact), ...changedLines(fact), snapshotLine(fact.snapshot)];
 }
 
 /** A place after its file: the line, and the reason it could not be read when it carries one. */
@@ -375,7 +383,7 @@ function impactBody(value: ImpactValue, detail: Detail): string[] {
   return [
     ...(value.mergeBase === undefined ? [] : [`merge base: ${value.mergeBase}`]),
     `seeds (${value.seeds.length}):`,
-    ...groupedSeeds(value.seeds),
+    ...groupedSeeds(value.seeds, detail),
     ...(value.changedEntrypoints === undefined ? [] : [`changed entrypoints (${value.changedEntrypoints.length}):`, ...value.changedEntrypoints.map(changedLine)]),
     `reached entrypoints (${value.entrypoints.length}):`,
     ...value.entrypoints.map(reachedLine),
@@ -385,7 +393,7 @@ function impactBody(value: ImpactValue, detail: Detail): string[] {
 
 /** The seeds under the file that holds them, so a path repeated by every seed is printed once. A basis the whole file
  * shares is printed with the file; a file that mixes bases keeps one beside each seed. */
-function groupedSeeds(seeds: readonly Seed[]): string[] {
+function seedListing(seeds: readonly Seed[]): string[] {
   return [...Map.groupBy(seeds, (seed) => seed.file)].flatMap(([file, inFile]) => {
     const bases = new Set(inFile.map((seed) => seed.basis));
     const [shared] = bases;
@@ -393,6 +401,33 @@ function groupedSeeds(seeds: readonly Seed[]): string[] {
       ? [`  ${file} (${shared})`, ...inFile.map((seed) => `    ${spanText(seed.line, seed.endLine)} ${seed.symbol}`)]
       : [`  ${file}`, ...inFile.map((seed) => `    ${spanText(seed.line, seed.endLine)} ${seed.symbol} (${seed.basis})`)];
   });
+}
+
+/** The seeds a summary counts: the ones a caller asked for by name listed, the rest per file and basis. */
+function seedSummary(seeds: readonly Seed[]): string[] {
+  const requested = seeds.filter((seed) => seed.basis === "requested");
+  const rest = seeds.filter((seed) => seed.basis !== "requested");
+  const requestedFiles = [...Map.groupBy(requested, (seed) => seed.file)].toSorted(([a], [b]) => compareText(a, b));
+  const counted = new Map<string, { file: string; basis: Seed["basis"]; count: number }>();
+  for (const seed of rest) {
+    const key = `${seed.file}\0${seed.basis}`;
+    const held = counted.get(key);
+    counted.set(key, { file: seed.file, basis: seed.basis, count: (held?.count ?? 0) + 1 });
+  }
+  const groups = [...counted.values()].toSorted((a, b) => compareText(a.file, b.file) || compareText(a.basis, b.basis));
+  return [
+    ...requestedFiles.flatMap(([file, inFile]) => [`  ${file} (requested)`, ...inFile.map((seed) => `    ${spanText(seed.line, seed.endLine)} ${seed.symbol}`)]),
+    ...groups.map(({ file, basis, count }) => `  ${file} (${basis}): ${count} ${count === 1 ? "seed" : "seeds"}`),
+    ...(rest.length === 0 ? [] : ['  detail "full" lists every seed']),
+  ];
+}
+
+/** The seeds of a summary, or the full listing when counting them would cost more bytes than naming them. */
+function groupedSeeds(seeds: readonly Seed[], detail: Detail): string[] {
+  const listing = seedListing(seeds);
+  if (detail === "full") return listing;
+  const summary = seedSummary(seeds);
+  return size(summary) <= size(listing) ? summary : listing;
 }
 
 export function renderImpact(fact: Fact<ImpactValue>, detail: Detail = "summary"): string {

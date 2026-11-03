@@ -55,7 +55,7 @@ const MEASURE_FLAG = "--measure";
 const USAGE = [
   "usage: ye-ast --version | --help",
   "       ye-ast map [--revision <rev> | --live] [--repo-id <id>] [scope] <repo>",
-  "       ye-ast impact --base <rev> [--head <rev> | --live] [--repo-id <id>] [scope] [budget] <repo>",
+  "       ye-ast impact --base <rev> [--head <rev> | --live] [--repo-id <id>] [scope] [changed] [budget] <repo>",
   "       ye-ast callers [--revision <rev> | --live] [--repo-id <id>] [scope] [budget] <repo> <file>:<symbol> | <file>:<start>-<end> ...",
   "       ye-ast importers [--revision <rev> | --live] [--repo-id <id>] [scope] <repo> <file> ...",
   "       ye-ast outline [--revision <rev> | --live] [--repo-id <id>] [scope] <repo> <file> ...",
@@ -68,6 +68,7 @@ const USAGE = [
   "--live: reads the working tree of a repository declared trusted (ye-ast init --trust trusted) instead of a revision; the first run builds ye-ast's mirror of it, and a stale answer is reported on stderr and as a live sibling of the fact in the JSON",
   "--offline: reads every repository from its own clone and refreshes no declared remote, as under untrusted; only workspace and decisions take it",
   "scope: [--include <glob>]... [--exclude <glob>]...   (globs over repository-relative paths, on map, impact, callers, importers, outline, workspace and decisions; without --include every path is included; --exclude wins)",
+  "changed: [--changed <glob>]...   (impact only: globs over the changed paths; only the change's paths they select seed the walk, while the repository is read whole, so callers outside them are known; a glob that selects no changed path is an error)",
   "budget: [--depth <n>] [--hub-fan-in <n>] [--expansions <n>]   (positive integers; none has a default)",
   "workspace: --workspace <file>   (the workspace init persists as .ye-ast/workspace.json: { \"repos\": [{ \"path\", \"id\", \"revision\", \"remote\" }], \"gateways\": [{ \"prefix\", \"repo\" }] }; a relative repository path is stored as written and resolved against the installed repository, and a remote is the source of truth a trusted repository's queries refresh into ye-ast's own mirror)",
   "measure: --measure   (one JSON measurement line per query and per index build, on stderr; never on stdout)",
@@ -286,6 +287,17 @@ function atRevision(values: { revision?: string | undefined; live?: boolean | un
 
 const SCOPE_OPTIONS = { include: { type: "string", multiple: true }, exclude: { type: "string", multiple: true } } as const;
 
+const CHANGED_OPTION = { changed: { type: "string", multiple: true } } as const;
+
+type ChangedValues = { [Name in keyof typeof CHANGED_OPTION]?: string[] | undefined };
+
+/** The selection over the change the flags name, `undefined` for a glob that is not valid, `{}` when no flag is given. */
+function parseChanged(values: ChangedValues): { changed?: readonly string[] } | undefined {
+  const globs = values.changed;
+  if (globs === undefined) return {};
+  return globs.every(isValidGlob) ? { changed: globs } : undefined;
+}
+
 type ScopeValues = { [Name in keyof typeof SCOPE_OPTIONS]?: string[] | undefined };
 
 /** The scope the flags name, `undefined` for an invalid glob, `{}` when no flag is given. */
@@ -326,15 +338,16 @@ async function parseImpactRequest(args: readonly string[], deps: RepositoryNamin
   try {
     const { values, positionals } = parseArgs({
       args: [...args],
-      options: { base: { type: "string" }, head: { type: "string" }, live: { type: "boolean" }, "repo-id": { type: "string" }, ...SCOPE_OPTIONS, ...BUDGET_OPTIONS },
+      options: { base: { type: "string" }, head: { type: "string" }, live: { type: "boolean" }, "repo-id": { type: "string" }, ...SCOPE_OPTIONS, ...CHANGED_OPTION, ...BUDGET_OPTIONS },
       allowPositionals: true,
     });
     const [path, ...extra] = positionals;
     const budget = parseBudget(values);
     const scope = parseScope(values);
+    const changed = parseChanged(values);
     const at = atRevision({ revision: values.head, live: values.live });
-    if (path === undefined || extra.length > 0 || values.base === undefined || budget === undefined || scope === undefined || at === undefined) return undefined;
-    return { ...(await repositoryOf(deps, path, values["repo-id"])), base: values.base, ...(at.live ? { live: true as const } : { head: at.revision }), ...scope, ...withBudget(budget) };
+    if (path === undefined || extra.length > 0 || values.base === undefined || budget === undefined || scope === undefined || changed === undefined || at === undefined) return undefined;
+    return { ...(await repositoryOf(deps, path, values["repo-id"])), base: values.base, ...(at.live ? { live: true as const } : { head: at.revision }), ...scope, ...changed, ...withBudget(budget) };
   } catch {
     return undefined;
   }

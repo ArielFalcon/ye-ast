@@ -127,7 +127,7 @@ export async function serveQueries(deps: QueryServerDeps, streams: QueryServerSt
       const { fault } = result;
       if (fault.kind === "aborted" && timedOut) return fail(id, "deadline", `the deadline of ${deadline} ms elapsed`);
       if (isLiveFault(fault)) return fail(id, "internal-error", redaction.redact(fault.detail.trim()));
-      const data = fault.kind === "unknown-symbol" ? { entries: redaction.redactValue(fault.entries) } : {};
+      const data = fault.kind === "unknown-symbol" ? { entries: redaction.redactValue(fault.entries) } : fault.kind === "unknown-change-path" ? { globs: redaction.redactValue(fault.globs) } : {};
       fail(id, fault.kind, redaction.redact(fault.detail.trim()), data);
     } catch (error) {
       fail(id, "internal-error", firstLine(redaction.redactError(error)));

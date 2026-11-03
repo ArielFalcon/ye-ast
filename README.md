@@ -227,7 +227,7 @@ flowchart TD
 | `ye_ast_entrypoints` | You are orienting, or you need the handler of a UI route, HTTP route, message listener or scheduled job | `revision`, `live`, `scope` |
 | `ye_ast_callers` | **Before** changing, moving or deleting a symbol or a line range | `targets: [{ file, symbol }]` (a member as `Class.member`) or `[{ file, start, end }]`, `revision`, `live`, `scope`, `budget`, `detail`, `workspace` |
 | `ye_ast_importers` | Before moving, renaming or deleting a file, or changing its exports | `files: [repo-relative paths]`, `revision`, `live`, `scope` |
-| `ye_ast_impact` | Before reporting work done or opening a pull request | `base` (the branch the work merges into), `head`, `live`, `scope`, `budget`, `detail`, `workspace` |
+| `ye_ast_impact` | Before reporting work done or opening a pull request | `base` (the branch the work merges into), `head`, `live`, `changed`, `scope`, `budget`, `detail`, `workspace` |
 | `ye_ast_workspace` | The work crosses repositories: it lists the hosts, path prefixes, configuration URLs, dependency coordinates, remotes and registries the repository writes outward, the local clones that serve each one, and the names no clone serves | `repos: [{ path, id?, revision? }]`, `gateways`, `revision`, `scope` |
 
 How the arguments behave:
@@ -238,8 +238,9 @@ How the arguments behave:
 | `live` | Read the working tree instead of a revision. Requires `trusted`; exclusive with `revision`/`head`. |
 | `workspace` | `{ repos: [{ path, id?, revision? }], gateways?: [{ prefix, repo }] }` on `callers` and `impact`: other **local** clones whose call sites are joined to the routes and listeners the walk reaches. The answer adds the links (with their basis: `exact`, `gateway-prefix`, `route-overlap`, `base-path`, `suffix`, `event-destination`), each with its direction (`upstream` for what reaches the change, `downstream` for what a change sends onward) and the links crossed from the change (`reach`), followed to a fixpoint across repositories; what depends on those call sites in their own repository, the call sites that reached a declared service and matched none of its entrypoints (`unmatched`), the ones that name a service no clone serves (`external`), and every call site whose target the code does not decide as a cut. A gateway prefix needs no declaration when the routes show it; `gateways` overrides it, and a declared gateway no call site names, or whose repository was not passed, is listed as matching nothing. Without `repos` the repositories and gateways the user persisted with `ye-ast init --workspace <file>` are used, and a repository that persists none answers about itself alone; the manifest holds the same object, its relative paths resolved against the installed repository. A repository the request does not name keeps the directory name of its path in every snapshot, so a linked worktree is passed with `id` set to the name of the clone that holds it when both must answer as one; the repository a command is bound to is always named after its main worktree. Every answer says which of the two declared its repositories (`workspace.source`: `request`, `persisted` or `none`), so an answer about the bound repository alone is never read as a workspace with no impact. Each clone is read at its own snapshot under its own trust declaration, with no network request; exclusive with `live`. Without `workspace` the answer says nothing about other repositories. |
 | `scope` | `{ include?: [globs], exclude?: [globs] }` over repository-relative paths; `exclude` wins. `include` selects the content the answer is about, and the configuration that interprets it (a `package.json`, a `tsconfig`, a build file, a Spring `application` file, an OpenAPI document) is always read, so narrowing never hides what an extractor needs to place a source. A path outside the scope is **not answered about**, so callers and entrypoints through it are not known; the answer names its scope under its status. Use it to keep one service or package apart, not to shorten an answer. |
+| `changed` | On `impact`, globs over the changed paths the scope leaves: only the change's paths they select seed the walk, while the repository is still indexed whole, so callers outside the selection are known. Use it on a large change to answer one area at a time. A glob that selects no changed path is an error, never an empty answer. A file the index could not read stays a cut even when the selection leaves it out: its blindness belongs to the whole walk. |
 | `budget` | `{ depth?, hubFanIn?, expansions? }`, positive integers, no defaults. A bound that stops a walk is reported as a cut, never as a silent truncation. |
-| `detail` | Text listing for `callers` and `impact`. Default: depth 0 and 1 listed, deeper symbols left out with their count and how deep the walk went, and the cuts anchored at those deeper symbols counted per file with their kinds. To see one ring further, ask `callers` about a listed symbol, which answers that branch alone in one call. `"full"` lists every symbol and every cut in one answer. The structured content holds them only with `full: true`. |
+| `detail` | Text listing for `callers` and `impact`. Default: depth 0 and 1 listed, the seeds a caller asked for by name listed, each file's remaining seeds counted with their basis when that is shorter than listing them, deeper symbols left out with their count and how deep the walk went, and the cuts anchored at those deeper symbols counted per file with their kinds. To see one ring further, ask `callers` about a listed symbol, which answers that branch alone in one call. `"full"` lists every symbol, every seed and every cut in one answer. The structured content holds them only with `full: true`. |
 
 Working rules:
 
@@ -249,6 +250,8 @@ Working rules:
   that still name it.
 - Name symbols as they are declared in the file: `placeOrder`, or `OrderService.placeOrder` for a member.
 - To shorten an answer, rely on `detail`, not `scope`: a scope hides whatever lies outside it, routes included.
+- On a change that touches many files, pass `changed` with the globs of the area you are answering about. Unlike `scope`,
+  it never hides a caller: the repository is still indexed whole.
 
 ### 6. Read the answer correctly
 
@@ -258,7 +261,7 @@ Every answer is one envelope:
 schema     contract version of the envelope
 snapshot   what was read: { kind: "sha", sha } or { kind: "live" }
 producer   ye-ast name and version
-inputs     trust mode, declared scope, budget
+inputs     trust mode, declared scope, change selection, budget
 evidence   [{ path, line, endLine? }] that support the value
 status     complete | partial | unknown
 value      the fact itself (the MCP's structured content carries it only with full: true)
@@ -266,7 +269,7 @@ value      the fact itself (the MCP's structured content carries it only with fu
 
 | `status` | Means | What you report |
 |---|---|---|
-| `complete` | Everything inside `inputs.declaredScope` was read | The answer, and that it holds **inside** the declared scope only |
+| `complete` | Everything inside `inputs.declaredScope`, and the part of the change `inputs.declaredConfig.changed` selects, was read | The answer, and that it holds **inside** the declared scope and selection only |
 | `partial` | The answer stops at each entry in `cuts`; what lies past a cut is **not known** | The answer plus the cuts. The server instructions say what to do for each cut kind; an `unresolved-link` lists places to open and decide yourself |
 | `unknown` | ye-ast cannot tell; `reason` says why | The reason. **Never** translate it into "no impact" |
 
@@ -348,7 +351,7 @@ ye-ast map --live .                             # the working tree (trusted only
 | Command | Answers |
 |---|---|
 | `ye-ast map [--revision <rev> \| --live] [scope] <repo>` | Entrypoints of a revision |
-| `ye-ast impact --base <rev> [--head <rev> \| --live] [scope] [budget] <repo>` | What depends on the change from the merge base to the head |
+| `ye-ast impact --base <rev> [--head <rev> \| --live] [scope] [changed] [budget] <repo>` | What depends on the change from the merge base to the head |
 | `ye-ast callers [--revision <rev> \| --live] [scope] [budget] <repo> <file>:<symbol> \| <file>:<start>-<end> …` | What depends on symbols or line ranges |
 | `ye-ast importers [--revision <rev> \| --live] [scope] <repo> <file> …` | Per file: importers, users and unresolved namers |
 | `ye-ast outline [--revision <rev> \| --live] [scope] <repo> <file> …` | Per file: its declarations with their spans, and what it imports |

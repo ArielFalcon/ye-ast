@@ -60,7 +60,7 @@ function fakes(): Fakes {
   return { deps, calls, behave: (operation, behavior) => void behaviors.set(operation, behavior) };
 }
 
-type Message = { jsonrpc: string; id?: unknown; method?: string; params?: any; result?: any; error?: { code: number; message: string; data: { kind: string; entries?: unknown } } };
+type Message = { jsonrpc: string; id?: unknown; method?: string; params?: any; result?: any; error?: { code: number; message: string; data: { kind: string; entries?: unknown; globs?: unknown } } };
 
 interface Session {
   send(message: unknown): void;
@@ -230,6 +230,27 @@ for (const { method, operation, params } of OPERATIONS) {
   });
 }
 
+test("impact.ofChange passes changed to ofChange as a typed value", async () => {
+  const { deps, calls } = fakes();
+  const session = await untrusted(deps);
+
+  session.send(request(1, METHOD.impactOfChange, { ...OPERATIONS[1].params, changed: ["src/a/**"] }));
+  await session.receive();
+
+  assert.deepEqual(calls[0]?.request.changed, ["src/a/**"]);
+});
+
+test("a changed list that is empty or not a valid glob list is an invalid param", async () => {
+  const { deps, calls } = fakes();
+  const session = await untrusted(deps);
+  const lists: unknown[] = [[], [""], ["./x/**"], [1], "src/a/**"];
+
+  for (const [id, changed] of lists.entries()) session.send(request(id, METHOD.impactOfChange, { ...OPERATIONS[1].params, changed }));
+  for (let n = 0; n < lists.length; n++) assert.equal((await session.receive()).error?.code, ERROR_CODE["invalid-params"]);
+
+  assert.deepEqual(calls, []);
+});
+
 test("a scope that is not an object of valid glob lists, or names another field, is an invalid param", async () => {
   const { deps, calls } = fakes();
   const session = await untrusted(deps);
@@ -320,6 +341,18 @@ test("an unknown symbol answers its code and names every entry, redacted", async
 
   assert.equal(answer.error?.code, ERROR_CODE["unknown-symbol"]);
   assert.deepEqual(answer.error?.data.entries, [{ file: "a.ts", symbol: `run${REDACTED}`, candidates: [`load${REDACTED}`] }]);
+});
+
+test("an unknown change path answers its code and names every glob, redacted", async () => {
+  const { deps, behave } = fakes();
+  behave("ofChange", async () => ({ ok: false, fault: { kind: "unknown-change-path", detail: "no changed path", globs: [`src/${SECRET}/**`] } }));
+  const session = await untrusted(deps);
+
+  session.send(request(1, METHOD.impactOfChange, OPERATIONS[1].params));
+  const answer = await session.receive();
+
+  assert.equal(answer.error?.code, ERROR_CODE["unknown-change-path"]);
+  assert.deepEqual(answer.error?.data.globs, [`src/${REDACTED}/**`]);
 });
 
 test("a query family that throws answers `internal-error` with the first line of the message redacted, and the server keeps serving", async () => {

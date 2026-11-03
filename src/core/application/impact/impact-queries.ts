@@ -1,5 +1,6 @@
 import { blastRadius, type BlastRadius } from "../../domain/change/blast-radius.ts";
 import { isReadableFile, kindOfChangedFile } from "../../domain/change/changed-file.ts";
+import { selectChange } from "../../domain/change/change-selection.ts";
 import type { FileChange } from "../../domain/change/diff-reader.ts";
 import { isSeedable, selectSeeds, type ComponentRef, type SelectedSeed } from "../../domain/change/seeds.ts";
 import { changedEntrypoints } from "../../domain/impact/changed-entrypoints.ts";
@@ -15,7 +16,7 @@ import { cutsCompleteness } from "../../domain/languages/uncovered.ts";
 import { comparePosition, compareText, joinsFact } from "../../domain/shared/code-node.ts";
 import type { Entrypoint } from "../../domain/entrypoints/entrypoint.ts";
 import { declarationSpan, sortedEngines, type Cut, type DeclaredConfig, type DeclaredScope, type Evidence, type Fact, type FactBase, type Finding, type IndexOrigin, type SnapshotRef, type TrustMode, type UnknownFact } from "../../domain/shared/fact.ts";
-import { exportSelection, pathSelection, type PathSelection, type ScopeRequest } from "../../domain/shared/scope.ts";
+import { exportSelection, pathSelection, sortedGlobs, type PathSelection, type ScopeRequest } from "../../domain/shared/scope.ts";
 import { changedPaths, liveScope } from "../../domain/snapshot/live-export.ts";
 import { contentFingerprint, declaredScope, exportCuts, holdsDeclaredSource } from "../../domain/map/entrypoint-map.ts";
 import type { Result } from "../../domain/shared/result.ts";
@@ -82,6 +83,11 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
   const importersEngines = sortedEngines(deps.engines);
   const angularReadingEngines = sortedEngines({ ...deps.engines, ...deps.angularEngines });
   const walkBounds = (budget: ImpactBudget | undefined): Pick<DeclaredConfig, "walk"> => (budget === undefined ? {} : { walk: { ...budget } });
+  /** The config a change fact records: the walk bounds, and the selection when the caller set one. */
+  const changeConfig = (request: Pick<ImpactOfChangeRequest, "budget" | "changed">): DeclaredConfig => {
+    const changed = request.changed === undefined || request.changed.length === 0 ? undefined : sortedGlobs(request.changed);
+    return { ...walkBounds(request.budget), ...(changed === undefined ? {} : { changed }) };
+  };
   const headReader = createHeadReader(deps);
 
   /**
@@ -210,7 +216,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
     const mergeBase = merge.value;
 
     const snapshot: SnapshotRef = { repo: request.repoId, kind: "sha", sha: head.value };
-    const spec: FactSpec = { declaredConfig: walkBounds(request.budget), engines: angularReadingEngines };
+    const spec: FactSpec = { declaredConfig: changeConfig(request), engines: angularReadingEngines };
     const baseOfHead = (content: string): FactBase => headReader.factBase(trust, snapshot, content, spec, scope, undefined);
 
     const diff = await vcs.diffCommits(repo, mergeBase, head.value, signal);
@@ -249,7 +255,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
     const merge = await vcs.mergeBase(repo, base.value, head.value, signal);
     if (!merge.ok) return merge;
     const mergeBase = merge.value;
-    const spec: FactSpec = { declaredConfig: walkBounds(request.budget), engines: angularReadingEngines };
+    const spec: FactSpec = { declaredConfig: changeConfig(request), engines: angularReadingEngines };
 
     const opened = await openLive(live, { repo, scope, selected: exported, store: true, signal, onStale: request.onStale }, (tree) =>
       withScratch(deps.scratch, async (directory): Promise<Answer> => {
@@ -284,6 +290,11 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
   async function readChange(input: { request: ImpactOfChangeRequest; radius: BlastRadius; head: HeadReading; baseTree: CommitExtraction; sameTree: boolean; unreadable: string }): Promise<Answer> {
     const { request, radius, head, baseTree, sameTree } = input;
     const { signal } = request;
+    const selection = selectChange(radius.files, request.changed, deps.matcher.matches);
+    if (selection.unmatched.length > 0) {
+      return { ok: false, fault: { kind: "unknown-change-path", detail: `the change leaves ${radius.files.length} changed files in the answer's scope; no changed path matches ${selection.unmatched.join(", ")}`, globs: selection.unmatched } };
+    }
+    const changes = selection.files;
     const headTree = head.tree;
     const declarations = await deps.angular.read(headTree.sources);
     if (signal?.aborted) return ABORTED;
@@ -293,14 +304,15 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
     const fixed = [
       ...exportCuts(headTree.export),
       ...(sameTree ? [] : exportCuts(baseTree.export)),
-      ...radius.files
+      ...changes
         .filter((file) => cutsCompleteness(file.path, declared) || (isAngularTemplate(file.path) && !componentsByResource.has(file.path)))
         .map((file): Cut => ({ kind: "no-extractor", at: [file.path] })),
     ];
-    const entrypointChanges = changedEntrypoints(entrypointsOf(baseTree.findings), entrypointsOf(headTree.findings));
+    const entrypointSelected = pathSelection({ include: request.changed ?? [], exclude: [] }, deps.matcher.matches);
+    const entrypointChanges = changedEntrypoints(entrypointsOf(baseTree.findings), entrypointsOf(headTree.findings)).filter((change) => entrypointSelected(change.handler.path));
     const value: ImpactValue = { mergeBase: radius.mergeBase, seeds: [], changedEntrypoints: entrypointChanges, symbols: [], entrypoints: [], cost: { expansionsUsed: 0 } };
 
-    const needsGraph = radius.files.some(
+    const needsGraph = changes.some(
       (file) => (kindOfChangedFile(file.path) === "source" && (!file.deleted || file.removedNames.length > 0)) || componentsByResource.has(file.path),
     );
     if (!needsGraph) return { ok: true, value: impactFact(head.base(content), value, fixed) };
@@ -313,7 +325,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
       const { relations: found, fields, locals } = await deps.relations.extract(headTree.sources);
       const loads = await deps.dynamicLoads.extract(headTree.sources);
       if (signal?.aborted) return ABORTED;
-      const read = impactOf({ store, changes: radius.files, requested: [], componentsByResource, found, fields, locals, loads, headTree, summary, budget: request.budget ?? {}, proofs: await proofsOf(deps, store, headTree), ...typeResolutionOf(content, headTree.sources) });
+      const read = impactOf({ store, changes, requested: [], componentsByResource, found, fields, locals, loads, headTree, summary, budget: request.budget ?? {}, proofs: await proofsOf(deps, store, headTree), ...typeResolutionOf(content, headTree.sources) });
       return { ok: true, value: impactFact(head.base(content, true), { ...value, ...read.value }, [...fixed, ...read.cuts]) };
     } finally {
       store.close();

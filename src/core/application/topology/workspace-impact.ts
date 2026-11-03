@@ -253,6 +253,7 @@ export function createWorkspaceImpactQueries(deps: WorkspaceImpactDeps): Workspa
             repoId: request.repo.id ?? directoryNameOf(request.repo.path),
             base: request.base,
             head: request.repo.revision ?? request.head,
+            ...(request.changed === undefined ? {} : { changed: request.changed }),
             ...(request.scope === undefined ? {} : { scope: request.scope }),
             ...(request.budget === undefined ? {} : { budget: request.budget }),
             ...(request.signal === undefined ? {} : { signal: request.signal }),

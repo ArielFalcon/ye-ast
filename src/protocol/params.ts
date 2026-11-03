@@ -135,8 +135,16 @@ export function readMap(params: unknown): Omit<AtRevision<MapRequest>, "signal">
 }
 
 export function readOfChange(params: unknown): Omit<AtRevision<ImpactOfChangeRequest>, "signal"> {
-  const p = only(params, ["repo", "repoId", "base", "head", "scope", "budget"]);
-  return { repo: text(p, "repo"), repoId: text(p, "repoId"), base: text(p, "base"), head: text(p, "head"), ...scopeOf(p), ...budgetOf(p) };
+  const p = only(params, ["repo", "repoId", "base", "head", "changed", "scope", "budget"]);
+  return {
+    repo: text(p, "repo"),
+    repoId: text(p, "repoId"),
+    base: text(p, "base"),
+    head: text(p, "head"),
+    ...(p.changed === undefined ? {} : { changed: list(p, "changed", globOf) }),
+    ...scopeOf(p),
+    ...budgetOf(p),
+  };
 }
 
 export function readCallers(params: unknown): Omit<AtRevision<ImpactCallersRequest>, "signal"> {

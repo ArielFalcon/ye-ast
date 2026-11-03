@@ -112,7 +112,7 @@ interface Impact {
   code: number;
   stdout: string;
   stderr: string;
-  fact: { status: string; value: ImpactValue; cuts?: Cut[]; reason?: string };
+  fact: { status: string; value: ImpactValue; cuts?: Cut[]; reason?: string; inputs?: { config: string; declaredConfig: { changed?: readonly string[] } } };
 }
 
 async function ye(command: string, args: string[], tail: string[] = [], options: { indexCache?: string } = {}): Promise<Impact> {
@@ -205,6 +205,104 @@ test("routes the change adds, removes and alters are reported at depth 0 by the 
     ["altered", "GET /orders/{orderId}", "OrderController.one"],
     ["added", "POST /orders", "OrderController.create"],
   ]);
+});
+
+test("changed seeds only the selected changed paths, while a caller in an unselected changed file is still reached", async () => {
+  commit(SHOP, "base");
+  commit({
+    "src/main/java/shop/Util.java": UTIL("s.trim()"),
+    "src/main/java/shop/OrderServiceImpl.java": IMPL.replace('return Util.fmt("x");', 'return Util.fmt("x") + Util.fmt("y");'),
+  });
+
+  const result = await impact("--base", "HEAD~1", "--changed", "src/main/java/shop/Util.java");
+
+  assert.equal(result.code, EXIT_CODE.ok, result.stderr);
+  assert.deepEqual(result.fact.value.seeds.map(place), ["Util.java:fmt"]);
+  assert.equal(result.fact.value.symbols.some((symbol) => symbol.file === "src/main/java/shop/OrderServiceImpl.java" && symbol.symbol === "find"), true);
+  assert.deepEqual(result.fact.inputs?.declaredConfig.changed, ["src/main/java/shop/Util.java"]);
+});
+
+test("a changed glob that selects none of the change's paths fails with the glob named", async () => {
+  commit(SHOP, "base");
+  commit({ "src/main/java/shop/Util.java": UTIL("s.trim()") });
+
+  const result = await impact("--base", "HEAD~1", "--changed", "src/z/**");
+
+  assert.equal(result.code, EXIT_CODE.queryFailed);
+  assert.equal(result.stdout, "");
+  assert.match(result.stderr, /unknown-change-path/);
+  assert.match(result.stderr, /src\/z\/\*\*/);
+});
+
+test("changed leaves out an entrypoint the change alters in an unselected file", async () => {
+  commit(SHOP, "base");
+  commit({
+    "src/main/java/shop/Util.java": UTIL("s.trim()"),
+    "src/main/java/shop/OrderController.java": CONTROLLER(ONE.replace("/{id}", "/{orderId}")),
+  });
+
+  const all = await impact("--base", "HEAD~1");
+  const selected = await impact("--base", "HEAD~1", "--changed", "src/main/java/shop/Util.java");
+
+  assert.deepEqual((all.fact.value.changedEntrypoints ?? []).map((entry) => entry.change), ["altered"]);
+  assert.deepEqual(selected.fact.value.changedEntrypoints, []);
+});
+
+test("a changed selection covering the whole change answers the same value and records the selection", async () => {
+  commit(SHOP, "base");
+  commit({ "src/main/java/shop/Util.java": UTIL("s.trim()") });
+
+  const all = await impact("--base", "HEAD~1");
+  const selected = await impact("--base", "HEAD~1", "--changed", "src/**");
+
+  assert.deepEqual(selected.fact.value, all.fact.value);
+  assert.equal(all.fact.inputs?.declaredConfig.changed, undefined);
+  assert.deepEqual(selected.fact.inputs?.declaredConfig.changed, ["src/**"]);
+  assert.notEqual(selected.fact.inputs?.config, all.fact.inputs?.config);
+});
+
+test("the changed globs are deduplicated and sorted, so the same selection in another order is the same answer", async () => {
+  commit(SHOP, "base");
+  commit({ "src/main/java/shop/Util.java": UTIL("s.trim()"), "src/main/java/shop/OrderServiceImpl.java": IMPL.replace('Util.fmt("x")', 'Util.fmt("y")') });
+
+  const first = await impact("--base", "HEAD~1", "--changed", "src/main/java/shop/OrderServiceImpl.java", "--changed", "src/main/java/shop/Util.java");
+  const second = await impact("--base", "HEAD~1", "--changed", "src/main/java/shop/Util.java", "--changed", "src/main/java/shop/OrderServiceImpl.java", "--changed", "src/main/java/shop/Util.java");
+
+  assert.equal(first.stdout, second.stdout);
+  assert.deepEqual(first.fact.inputs?.declaredConfig.changed, ["src/main/java/shop/OrderServiceImpl.java", "src/main/java/shop/Util.java"]);
+});
+
+test("a declaration removed in an unselected file raises no cut for the selection", async () => {
+  const util = (methods: string): string => `package shop;\n\npublic class Util {\n${methods}}\n`;
+  const caller = (extra: string): string => `package shop;\n\npublic class Caller {\n  public String run() { return Util.helper(); }\n${extra}}\n`;
+  commit({ "src/main/java/shop/Util.java": util('  public static String helper() { return "x"; }\n'), "src/main/java/shop/Caller.java": caller("") }, "base");
+  commit({ "src/main/java/shop/Util.java": util(""), "src/main/java/shop/Caller.java": caller('  public String other() { return ""; }\n') });
+
+  const result = await impact("--base", "HEAD~1", "--changed", "src/main/java/shop/Caller.java");
+
+  assert.equal(result.code, EXIT_CODE.ok, result.stderr);
+  assert.deepEqual(result.fact.value.seeds.map((seed) => seed.symbol), ["other"]);
+  assert.equal((result.fact.cuts ?? []).some((cut) => cut.kind === "unresolved-link" && cut.at[0]?.includes("Util.java::helper")), false);
+});
+
+test("a changed file no extractor reads is a cut only when the selection names it", async () => {
+  commit({ ...SHOP, "web/stray.html": "<p>one</p>\n" }, "base");
+  commit({ "web/stray.html": "<p>two</p>\n", "src/main/java/shop/Util.java": UTIL("s.trim()") });
+
+  const all = await impact("--base", "HEAD~1");
+  const selected = await impact("--base", "HEAD~1", "--changed", "src/main/java/shop/Util.java");
+
+  assert.deepEqual(all.fact.cuts, [{ kind: "no-extractor", at: ["web/stray.html"] }]);
+  assert.equal(selected.fact.cuts, undefined);
+});
+
+test("a changed file the index could not read stays a cut even when the selection leaves it out", async () => {
+  commit({ ...SHOP, "scripts/tool.kt": "fun main() {}\n" }, "base");
+  commit({ "scripts/tool.kt": "fun main() { println(2) }\n", "src/main/java/shop/Util.java": UTIL("s.trim()") });
+
+  const selected = await impact("--base", "HEAD~1", "--changed", "src/main/java/shop/Util.java");
+
+  assert.deepEqual(selected.fact.cuts, [{ kind: "no-extractor", at: ["scripts/tool.kt"] }]);
 });
 
 test("a test that calls a changed helper is not a caller", async () => {

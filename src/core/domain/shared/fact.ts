@@ -61,6 +61,8 @@ export interface DeclaredConfig {
   targets?: readonly string[];
   /** The files `impact.importers` was asked about. */
   files?: readonly string[];
+  /** The globs over the changed paths `impact.ofChange` was asked to seed from, in their fixed order. */
+  changed?: readonly string[];
   /** What the export may take from a commit, when the host bounded it. */
   exportBudget?: { maxEntries: number; maxBytes: number };
 }

@@ -72,14 +72,15 @@ When to call:
 - ye_ast_decisions: when the workspace has gaps only the user can fill (a name no clone given serves, a clone that states no name, a prefix that routes nowhere, a repository with no trust record, a repository the remote could not pin at the trigger's line, a repository declared without a remote), and before \`ye-ast init --workspace\`, to show the user a form. It reads the same repositories as ye_ast_workspace, says which declaration they came from, and answers each gap with every option the workspace can verify, the places that make each one valid, and the option a rule recommends; a gap whose answer is a value no fact states says so. It writes nothing: render the options, then persist the answers with \`ye-ast init --workspace\` and \`ye-ast init --trust\`.
 - workspace on ye_ast_callers and ye_ast_impact: when the symbol or change can be called from another repository (a route or a handler a frontend or another service calls). Pass the other local clones as workspace.repos (a path each; gateways only when a path prefix routes to a repository and the code does not say it), or pass workspace without repos to work over the repositories and gateways the user persisted with \`ye-ast init --workspace\`; a repository that persists none answers about itself alone. The answer adds the links from call sites in those repositories to what a walk reaches, and follows each link into its own repository, so a chain of repositories answers as one: what depends on those call sites in their own repository, the call sites that reached a declared service and matched none of its routes (unmatched), the ones that name a service no repository given serves (external), and every call site it could not decide as a cut. On ye_ast_impact the links also run the other way: what the change sends onward, each link naming the links crossed from it (reach). A repository not passed is not read: an answer without workspace says nothing about other repositories. Each repository is read at its HEAD or the revision given, under its own trust declaration; a repository the user declared trusted whose remote is declared is refreshed and read at the sha the remote's listing pins. A refreshed answer opens its text with a \`remote:\` line per remote saying whether this query verified it and why not, and a \`pinned:\` line per repository naming the step that chose its sha, and carries the same freshness and resolution beside the fact. live cannot be combined with workspace.
 - Every tool takes scope: include and exclude globs over repository-relative paths (exclude wins). include selects the content the answer is about, and the configuration that interprets it (a package.json, a tsconfig, a build file, a Spring application file, an OpenAPI document) is read whatever the scope selects, so narrowing never hides what an extractor needs to place a source. exclude leaves a path out of both, and a path outside the scope is never answered about, so callers and entrypoints through it are not known and the answer is complete only within the scope, which it names under its status. Use scope to keep one service or package of a repository apart; to shorten an answer, leave scope out and rely on detail.
+- ye_ast_impact takes changed: globs over the changed paths. Only the changed paths they select seed the walk, while the repository is still indexed whole, so a caller outside the selection is still known. Use it on a large change to answer one area at a time; a glob that selects no changed path is an error, never an empty answer.
 - ye-ast does not say which templates bind one input or output of a component; search the templates for the binding's name.
 
 Reading an answer:
-- status "complete": the result is everything within the declared scope the answer prints on its second line (inputs.declaredScope); code in languages or frameworks outside it is not covered.
+- status "complete": the result is everything within the declared scope and the change selection the answer prints under its status (inputs.declaredScope, inputs.declaredConfig.changed); code in languages or frameworks outside it is not covered.
 - status "partial": the result stops at each listed cut; what lies past a cut is not known.
 - status "unknown": ye-ast cannot tell, and the reason says why; never read it as "no impact".
 - an item with reason "no-project": no package.json above that source places it in a project, so nothing says whether it declares routes; scope does not hide the manifest, unless an exclude glob leaves it out.
-- Every tool takes detail. A summary, the default, lists the symbols at depth 0 and 1, and for a cut the declarations it could not settle to; it leaves the symbols past that depth out with their count, and counts per file the cuts anchored at them. Full lists every symbol and every place a cut could not settle. Set detail to "full" when the deeper symbols themselves, the place of each unresolved reference or every cut is needed. For one ring past the listed symbols, ask ye_ast_callers about one of them: it answers that branch alone in one call, which costs less than full when one branch matters and more turns when every branch does.
+- Every tool takes detail. A summary, the default, lists the symbols at depth 0 and 1, the seeds the caller asked for by name, and each file's remaining seeds with their count and basis; it leaves the symbols past that depth out with their count, and counts per file the cuts anchored at them. Full lists every symbol, every seed and every place a cut could not settle. Set detail to "full" when the deeper symbols themselves, a seed's name, the place of each unresolved reference or every cut is needed. For one ring past the listed symbols, ask ye_ast_callers about one of them: it answers that branch alone in one call, which costs less than full when one branch matters and more turns when every branch does.
 - The index is built from each repository's production sources: a TypeScript test file is not written to it, so no answer names a test as an importer, a caller or a cut, and "complete" means complete over the production sources. A change also breaks the tests that exercise it; open them yourself when the change touches a surface they cover.
 
 - Before reading a file you did not write, ask ye_ast_outline for it: it answers the span of every declaration and the files it imports, so you read the ranges you need instead of the whole file. A file it cannot tell about is listed in the cuts; read that one whole.
@@ -88,7 +89,7 @@ Reading an answer:
 - A place prints its span when its declaration is longer than one line (\`src/a.ts:3-9\`). A reached symbol prints \`via src/b.ts:B.user at 14, 21, 33\`: the lines are the places inside the symbol itself, in its own file, where it depends on B.user, and every one of them is a place to change; never assume one use per symbol. \`at\` with no reason is a call; \`(reference)\` means it only names the symbol; \`(call)\`, \`(reference)\`, \`(contains)\`, \`(dispatch)\`, \`(relation)\` and \`(import)\` in parentheses with no line name a dependence the store placed no line for, so look at the symbol rather than searching for a call site.
 - confidence is 0-1 and printed only below 1: how strongly the edge that reached the symbol was resolved, 1 for a relation read from the code itself and lower for one the extractor inferred. fan-in is how many places call or instantiate the symbol, whether or not the walk followed them.
 - Every answer closes with a \`cuts:\` list after the content: a summary names the declaration an unresolved link stopped at, or the file it led and the references it could not attribute, so each one is settled by reading it; a cut anchored at a symbol the summary does not list is counted per file with its kind, saying so, and detail "full" lists every place. The status line only counts them by kind, so a partial answer read without its list reads as complete.
-- An isError result names a fault kind. "live-requires-trusted" means the user must declare the repository trusted with \`ye-ast init --trust trusted\` before live can be used; answer from a revision meanwhile. "unknown-symbol" lists what the file declares; ask again with one of those names.
+- An isError result names a fault kind. "live-requires-trusted" means the user must declare the repository trusted with \`ye-ast init --trust trusted\` before live can be used; answer from a revision meanwhile. "unknown-symbol" lists what the file declares; ask again with one of those names. "unknown-change-path" means a changed glob selected no path the change touches; fix the glob or drop it.
 
 What to do at each kind of cut:
 ${cutGuidance}`;
@@ -370,7 +371,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
     "ye_ast_impact",
     {
       title: "Impact of a change",
-      description: `What depends on the change from the merge base of base and head to head: the symbols that reach it, the entrypoints they serve and the entrypoints the change adds, removes or alters, with path:line evidence. Use it after changing code and before reporting the work done; live includes uncommitted edits. With workspace it also joins the call sites other local repositories make to the routes the change reaches, follows them into their own repositories, and lists what the change sends onward. ${COMPLETENESS}`,
+      description: `What depends on the change from the merge base of base and head to head: the symbols that reach it, the entrypoints they serve and the entrypoints the change adds, removes or alters, with path:line evidence. Use it after changing code and before reporting the work done; live includes uncommitted edits. With changed, only the changed paths its globs select seed the walk, while the repository is still indexed whole, so callers outside the selection are known; use it on a large change to answer one area at a time. With workspace it also joins the call sites other local repositories make to the routes the change reaches, follows them into their own repositories, and lists what the change sends onward. ${COMPLETENESS}`,
       inputSchema: z
         .strictObject({
           base: z.string().min(1).describe("The revision the change is read against."),
@@ -378,6 +379,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
           live,
           offline,
           scope,
+          changed: globs.describe("Only the changed paths matching one of these globs seed the walk; the repository is still indexed whole, so callers outside them are known. A glob that selects no changed path is an error. The whole change when omitted."),
           budget,
           detail,
           workspace,
@@ -389,7 +391,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
       outputSchema: FACT_OUTPUT,
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    ({ base, head, live: isLive, offline: isOffline, scope: paths, budget: requested, detail: listing, workspace: others, full: whole }, ctx) => {
+    ({ base, head, live: isLive, offline: isOffline, scope: paths, changed, budget: requested, detail: listing, workspace: others, full: whole }, ctx) => {
       const crossing = workspaceOf(others);
       if (crossing !== undefined) {
         return answer(
@@ -400,6 +402,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
               base,
               head: head ?? DEFAULT_REVISION,
               ...(isOffline === undefined ? {} : { offline: isOffline }),
+              ...(changed === undefined ? {} : { changed }),
               ...scopeOf(paths),
               ...budgetOf(requested),
               signal: ctx.mcpReq.signal,
@@ -411,7 +414,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
       return answer(
         (onStale) => {
           const at = atRevision(head, isLive, onStale);
-          return deps.impact.ofChange({ repo: repository.path, repoId: repository.repoId, base, ...(at.live ? at : { head: at.revision }), ...scopeOf(paths), ...budgetOf(requested), signal: ctx.mcpReq.signal });
+          return deps.impact.ofChange({ repo: repository.path, repoId: repository.repoId, base, ...(at.live ? at : { head: at.revision }), ...(changed === undefined ? {} : { changed }), ...scopeOf(paths), ...budgetOf(requested), signal: ctx.mcpReq.signal });
         },
         (fact) => renderImpact(fact, listing),
         whole === true,

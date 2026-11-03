@@ -23,6 +23,7 @@ marked **Proposed** awaits the owner's acceptance.
 | [0014](adr/0014-angular-and-spring-from-own-extractors.md) | Angular and Spring from own extractors over parser libraries (TypeScript compiler API, `@angular/compiler`, tree-sitter-java), with the definition of done | Accepted |
 | [0015](adr/0015-index-reuse-by-content.md) | Index reuse by staged content; `sync`-derived indexes serve only live facts that record it | Accepted |
 | [0016](adr/0016-remote-refresh-under-trusted.md) | Under `trusted`, declared remotes are refreshed into ye-ast's own mirrors before a query; facts depend on pinned shas only. Supersedes the network clause of 0010 decision 4 for `trusted` | Accepted |
+| [0017](adr/0017-owner-of-a-member-expands-only-whole-type-edges.md) | A type reached through one of its members expands only through whole-type edges | Accepted |
 | [0018](adr/0018-type-information-as-a-fact-input.md) | A fact may settle a reference with `typescript`'s compiler API in process, from a type root outside the snapshot; the root is an input of every fact that used it. Measured: as an edge source it removes one cut | Proposed |
 | [0019](adr/0019-cuts-retired-on-a-proven-external-target.md) | A cut is not emitted when the file's own imports prove its target outside the repository; no type root, and a file-level shadow rule that gives up 6% of the retirements. Measured: 6% to 13% fewer cuts | Proposed |
 
@@ -42,7 +43,12 @@ marked **Proposed** awaits the owner's acceptance.
 | [0010](rfc/0010-impact-queries.md) | Impact of a change, callers and importers: the request, the walk without default bounds, the fact and its completeness | Draft |
 | [0011](rfc/0011-cross-repository-impact.md) | Impact across repositories: links from call sites to entrypoints, upstream and downstream fixpoint, per-repository sections, the snapshot rule, reuse and completeness | Draft |
 | [0012](rfc/0012-observability-and-measurement.md) | Two records: the deterministic fact as the record of why, the host's measurement of what it cost; cost inside the fact, reproduction by input identity, where a baseline lives | Draft |
+| [0013](rfc/0013-trace-and-patterns.md) | `trace` and `patterns`: two read-only query families for an agent that must understand a repository and plan a change | Draft |
+| [0014](rfc/0014-workspace-decisions.md) | Workspace decisions: the gaps the code cannot fill, offered to the user as options each verifiable with `path:line` | Draft |
+| [0015](rfc/0015-answer-coordinates.md) | Answer coordinates an agent can act on: `endLine` on the values that name a place and the call-site line on `via`, from data the walk already reads | Draft |
 | [0016](rfc/0016-type-resolution.md) | A synchronous port over `ts.createProgram` for the references the index cannot settle, a type root outside the snapshot, and the three gaps a measurement exposed: false cuts proven external, unread `paths`, and codegraph's undocumented coordinates | Draft |
+| [0017](rfc/0017-answer-size-and-outline.md) | A counted elision is never longer than listing what it hides, and a file outline with declaration spans an agent reads around | Draft |
+| [0018](rfc/0018-change-selection.md) | `changed` on `impact.ofChange`: globs over the changed paths select what seeds the walk while the repository stays indexed whole, so callers outside the selection are still known | Draft |
 
 ## Pending decisions
 

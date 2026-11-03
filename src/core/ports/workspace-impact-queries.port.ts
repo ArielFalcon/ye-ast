@@ -45,6 +45,8 @@ export interface WorkspaceCallersRequest extends WorkspaceImpactBase {
 export interface WorkspaceOfChangeRequest extends WorkspaceImpactBase {
   base: string;
   head: string;
+  /** Globs over the trigger repository's changed paths; applied to the trigger's change, never to another repository. */
+  changed?: readonly string[];
 }
 
 /**

@@ -7,7 +7,7 @@ import type { Entrypoint } from "../core/domain/entrypoints/entrypoint.ts";
 import { SCHEMA, type Fact, type FactBase } from "../core/domain/shared/fact.ts";
 import type { Result } from "../core/domain/shared/result.ts";
 import type { EntrypointQueries, MapRequest } from "../core/ports/entrypoint-queries.port.ts";
-import type { ImpactCallersRequest, ImpactFault, ImpactImportersRequest, ImpactOfChangeRequest, ImpactQueries } from "../core/ports/impact-queries.port.ts";
+import type { ImpactCallersRequest, ImpactFault, ImpactImportersRequest, ImpactOfChangeRequest, ImpactQueries, OfChangeFault } from "../core/ports/impact-queries.port.ts";
 import type { OutlineQueries, OutlineRequest } from "../core/ports/outline-queries.port.ts";
 import type { OutlineValue } from "../core/domain/outline/outline-fact.ts";
 import { REDACTED, type Redaction } from "../core/ports/redaction.port.ts";
@@ -168,7 +168,7 @@ interface Calls {
 
 interface Answers {
   map: (request: MapRequest) => Promise<Result<EntrypointMapFact, VcsFault | LiveFault>>;
-  ofChange: (request: ImpactOfChangeRequest) => Promise<Result<Fact<ImpactValue>, VcsFault | LiveFault>>;
+  ofChange: (request: ImpactOfChangeRequest) => Promise<Result<Fact<ImpactValue>, OfChangeFault>>;
   callers: (request: ImpactCallersRequest) => Promise<Result<Fact<ImpactValue>, ImpactFault>>;
   importers: (request: ImpactImportersRequest) => Promise<Result<Fact<ImportersValue>, VcsFault | LiveFault>>;
   outline: (request: OutlineRequest) => Promise<Result<Fact<OutlineValue>, VcsFault | LiveFault>>;
@@ -418,6 +418,21 @@ test("impact forwards head and the budget bounds the caller sets", async () => {
   await session.close();
 });
 
+test("impact forwards the changed selection", async () => {
+  const { session, calls } = await setup();
+  await session.callTool("ye_ast_impact", { base: "main", changed: ["src/a/**", "src/b/**"] });
+  assert.deepEqual(calls.ofChange[0]?.changed, ["src/a/**", "src/b/**"]);
+  await session.close();
+});
+
+test("an answer read with a changed selection says the repository is indexed whole", async () => {
+  const fact = impactFact({ inputs: { ...base().inputs, declaredConfig: { changed: ["src/a/**"] } } });
+  const { session } = await setup({ ofChange: async () => ({ ok: true, value: fact }) });
+  const text = textOf(await session.callTool("ye_ast_impact", { base: "main" }));
+  assert.match(text, /^change: only paths matching src\/a\/\*\* \(the repository is indexed whole; callers outside the selection are known; the rest of the change is not answered about\)$/m);
+  await session.close();
+});
+
 test("callers forwards symbol and line-range targets at a revision", async () => {
   const { session, calls } = await setup();
   const result = await session.callTool("ye_ast_callers", {
@@ -653,6 +668,30 @@ test("a declaration whose places are exactly another's points at it instead of p
   await session.close();
 });
 
+test("a summary counts the seeds of a large change per file and basis, and detail full lists them", async () => {
+  const seeds = Array.from({ length: 12 }, (_, index) => ({ file: "src/a.ts", symbol: `a${index}`, line: index + 1, basis: "lines" as const }));
+  const fact = impactFact({ value: { ...IMPACT, seeds, symbols: [], entrypoints: [], changedEntrypoints: [] } } as Partial<Fact<ImpactValue>>);
+  const { session } = await setup({ ofChange: async () => ({ ok: true, value: fact }) });
+  const summary = textOf(await session.callTool("ye_ast_impact", { base: "main" }));
+  assert.match(summary, /^seeds \(12\):\n {2}src\/a\.ts \(lines\): 12 seeds\n {2}detail "full" lists every seed$/m);
+  const full = textOf(await session.callTool("ye_ast_impact", { base: "main", detail: "full" }));
+  assert.match(full, /^seeds \(12\):\n {2}src\/a\.ts \(lines\)\n {4}1 a0\n/m);
+  assert.equal(full.split("src/a.ts").length - 1, 1);
+  await session.close();
+});
+
+test("a summary lists the seeds a caller asked for and counts the change seeds beside them", async () => {
+  const seeds = [
+    { file: "src/a.ts", symbol: "asked", line: 1, basis: "requested" as const },
+    ...Array.from({ length: 10 }, (_, index) => ({ file: "src/a.ts", symbol: `a${index}`, line: index + 2, basis: "lines" as const })),
+  ];
+  const fact = impactFact({ value: { ...IMPACT, seeds, symbols: [], entrypoints: [], changedEntrypoints: [] } } as Partial<Fact<ImpactValue>>);
+  const { session } = await setup({ ofChange: async () => ({ ok: true, value: fact }) });
+  const summary = textOf(await session.callTool("ye_ast_impact", { base: "main" }));
+  assert.match(summary, /^seeds \(11\):\n {2}src\/a\.ts \(requested\)\n {4}1 asked\n {2}src\/a\.ts \(lines\): 10 seeds\n {2}detail "full" lists every seed$/m);
+  await session.close();
+});
+
 test("the seeds of an impact answer are grouped under their file, with the basis printed once when the file shares it", async () => {
   const seeds = [
     { file: "src/a.ts", symbol: "a", line: 3, basis: "lines" as const },
@@ -884,6 +923,17 @@ test("an unknown-symbol fault lists every entry that names no node and what its 
   await session.close();
 });
 
+test("an unknown-change-path fault names the globs that selected no changed path", async () => {
+  const fault: ImpactFault = { kind: "unknown-change-path", detail: "no changed path matches src/z/**", globs: ["src/z/**"] };
+  const { session } = await setup({ ofChange: async () => ({ ok: false, fault }) });
+  const result = await session.callTool("ye_ast_impact", { base: "main" });
+  assert.equal(result.isError, true);
+  assert.match(textOf(result), /^fault: unknown-change-path$/m);
+  assert.match(textOf(result), /src\/z\/\*\*/);
+  assert.deepEqual(result._meta?.["ye-ast/fault"], fault);
+  await session.close();
+});
+
 test("a query that throws is a tool error with a redacted message", async () => {
   const { session } = await setup({
     map: async () => {
@@ -949,8 +999,9 @@ test("arguments that break the schema are refused before any query runs", async 
     await session.callTool("ye_ast_entrypoints", { scope: { include: ["../outside/**"] } }),
     await session.callTool("ye_ast_importers", { files: ["a.java"], scope: { exclude: ["src\\a.java"] } }),
     await session.callTool("ye_ast_impact", { base: "main", scope: { include: [] } }),
+    await session.callTool("ye_ast_impact", { base: "main", changed: ["./x/**"] }),
   ];
-  assert.deepEqual(refused.map((result) => result.isError), [true, true, true, true, true, true, true, true, true]);
+  assert.deepEqual(refused.map((result) => result.isError), [true, true, true, true, true, true, true, true, true, true]);
   assert.deepEqual([calls.map.length, calls.ofChange.length, calls.importers.length, calls.callers.length], [0, 0, 0, 0]);
   await session.close();
 });
@@ -1042,7 +1093,7 @@ test("callers and impact with a workspace ask the workspace family with the repo
   const { session, calls } = await setup();
 
   await session.callTool("ye_ast_callers", { revision: "topic", targets: [{ file: "src/OrderService.java", symbol: "OrderService.find" }], workspace: WORKSPACE, budget: { depth: 2 }, scope: { include: ["src/**"] } });
-  await session.callTool("ye_ast_impact", { base: "main", head: "topic", workspace: WORKSPACE });
+  await session.callTool("ye_ast_impact", { base: "main", head: "topic", workspace: WORKSPACE, changed: ["src/**"] });
 
   assert.deepEqual([calls.callers, calls.ofChange], [[], []]);
   assert.deepEqual(calls.workspaceCallers[0], {
@@ -1057,6 +1108,7 @@ test("callers and impact with a workspace ask the workspace family with the repo
   assert.equal(calls.workspaceOfChange[0]?.base, "main");
   assert.equal(calls.workspaceOfChange[0]?.head, "topic");
   assert.deepEqual(calls.workspaceOfChange[0]?.repos, WORKSPACE.repos);
+  assert.deepEqual(calls.workspaceOfChange[0]?.changed, ["src/**"]);
   await session.close();
 });
 

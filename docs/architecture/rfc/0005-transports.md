@@ -93,17 +93,17 @@ integer of at most 2147483647 (the largest delay a timer honours); when it elaps
 | `trust.declare` | request | `mode` | `{"trust": "untrusted"}` |
 | `cancel` | notification, host to server | `id`, the request to abort | none; the request is answered `aborted` |
 | `entrypoints.map` | request | `repo`, `repoId`, `revision`, `scope?` | the entrypoints fact |
-| `impact.ofChange` | request | `repo`, `repoId`, `base`, `head`, `scope?`, `budget?` | the impact fact |
+| `impact.ofChange` | request | `repo`, `repoId`, `base`, `head`, `changed?`, `scope?`, `budget?` | the impact fact |
 | `impact.callers` | request | `repo`, `repoId`, `revision`, `targets` (`{file, symbol}` or `{file, start, end}`), `scope?`, `budget?` | the impact fact |
 | `impact.importers` | request | `repo`, `repoId`, `revision`, `files`, `scope?` | the impact fact |
 
-`budget` is `{depth?, hubFanIn?, expansions?}`, positive integers. `scope` is `{include?, exclude?}`, lists of non-empty globs over repository-relative paths ([RFC-0002](0002-facts-contract.md) rule 4); the CLI takes them as the repeatable `--include <glob>` and `--exclude <glob>` of `map`, `impact`, `callers` and `importers`. A result is the fact, redacted at egress.
+`budget` is `{depth?, hubFanIn?, expansions?}`, positive integers. `scope` is `{include?, exclude?}`, lists of non-empty globs over repository-relative paths ([RFC-0002](0002-facts-contract.md) rule 4); the CLI takes them as the repeatable `--include <glob>` and `--exclude <glob>` of `map`, `impact`, `callers` and `importers`. `changed` is a list of non-empty globs over the changed paths ([RFC-0018](0018-change-selection.md)); the CLI takes it as the repeatable `--changed <glob>` of `impact`. A result is the fact, redacted at egress.
 
 ### Errors
 
 An error is `{code, message, data: {kind}}`; `kind` names the code and `data` adds `entries` for `unknown-symbol`, each
-`{file, symbol, candidates}` where `candidates` names the seedable declarations of the file, sorted and once each. The
-set is closed:
+`{file, symbol, candidates}` where `candidates` names the seedable declarations of the file, sorted and once each, and
+`globs` for `unknown-change-path`. The set is closed:
 
 | Kind | Code | Meaning |
 |---|---|---|
@@ -124,6 +124,7 @@ set is closed:
 | `trust-unsupported` | -32009 | the declared trust mode has no path yet |
 | `trust-not-declared` | -32010 | a query came before `trust.declare` |
 | `unreadable` | -32011 | the path does not exist, is not a directory, or the account cannot read it |
+| `unknown-change-path` | -32015 | a `changed` glob selects no path the change touches |
 
 ## Fixed layer (MVP)
 
