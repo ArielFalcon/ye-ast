@@ -71,20 +71,27 @@ question an agent asks after `impact` names twelve files, and it is the one no q
 
 | Field | Shape | Why |
 |---|---|---|
-| `path` | repo-relative | every fact in this repository (RFC-0002) |
-| `lines` | `number` | the size of the file at that revision, so the caller can see what the outline stands for |
+| `file` | repo-relative | every fact in this repository (RFC-0002) |
 | `declarations[]` | `{ kind, name, line, endLine }` | `kind` uses the vocabulary the other facts already use (`function`, `method`, `class`, `type`, …); the span is the retrieval pointer |
-| `imports[]` | `{ module, line }` | the strongest single signal for "does this file belong to my change" |
-| `omitted` | `{ declarations, imports }` | a summary that elides says how many; zero is printed, not implied |
+| `imports[]` | repo-relative file | the strongest single signal for "does this file belong to my change" |
+| `unheld[]` | repo-relative file, at the value level | a requested file the index holds no node of: what it declares cannot be told, which is not "nothing" |
 
-- **The pointer is a coordinate, not a handle.** `path:line-endLine`; the agent expands it with its own file reader. No
+- **Read from the graph, not from a parser.** `CodeGraphReader.symbolsInFiles(files)`
+  (`src/core/ports/code-graph.port.ts:93`) already answers with `kind`, `name`, `qualifiedName`, `file`, `startLine` and
+  `endLine` (`GraphSymbol`, lines 49-58), and `outgoingEdges` (line 99) carries the `imports` edges. The outline is a
+  projection over a port four queries already use, so no reader, no parser and no dependency is added.
+- **It carries no file length and no elision.** Both were in the first draft and both are gone: a file's length needs a
+  source read the projection does not do, and the caller gets it from the read it makes anyway; and with every
+  declaration listed there is nothing to omit, so there is no budget and no `omitted` field to keep honest. A large file
+  answers a large outline, which is still a fraction of the file, and the rule of section 1 protects the caller.
+- **The pointer is a coordinate, not a handle.** `file:line-endLine`; the agent expands it with its own file reader. No
   hash, no cache, no TTL, no server-held state: the same request over the same revision gives the same bytes
   (RFC-0002 rule 3, RFC-0015).
-- **A file with no reader is `unknown` with a reason, never an empty list.** The existing vocabulary applies
-  (`no-extractor`, `not-exported` in `src/mcp/server.ts:44-53`): an empty `declarations` array means "the file declares
-  nothing", which is a different fact from "ye-ast cannot parse this file".
-- **No threshold decides whether to answer.** A ten-line file returns its outline with `omitted` at zero. The caller
-  sees that nothing was gained and reads the file whole; the code has no branch on a line count.
+- **A file the index does not hold is `unheld`, never an empty list.** The MCP fault vocabulary carries it as
+  `no-extractor`/`not-exported` (`src/mcp/server.ts:44-53`): an empty `declarations` array means the file declares
+  nothing, which is a different fact.
+- **No threshold decides whether to answer.** Every requested file is answered or listed as `unheld`; no branch compares
+  a count with a constant.
 
 **What it refuses to carry.**
 
@@ -148,7 +155,7 @@ what follows:
 |---|---|---|
 | 1 | A new tool, or a parameter on an existing one? `odd/tasks/mcp-latency-and-size.md` L2 chose a parameter (`expand`) over a tool, because the same fact selected differently needs no server-held handle | A new tool: `expand` selects *more of the same fact*, while an outline answers *a different fact* about a different subject (a file, not a symbol). One tool per question is what the existing names already do (`impact`, `callers`, `importers`) |
 | 2 | Does the tool take explicit `files`, or a `scope`? | Explicit `files`, resolved through the same `scope` as the other tools, because the caller's file list comes from an answer it already has |
-| 3 | Does the outline list imports at all, or only declarations? | Yes, module string and line only: it is what tells an agent whether the file belongs to its change, and it is one short line per import |
+| 3 | Does the outline list imports at all, or only declarations? | Settled by the amendment: yes, as repo-relative files resolved from the graph's `imports` edges. A package outside the repository is not an edge, and the caller sees those by reading the header it already has |
 | 4 | Does the rule of section 1 also apply to `structuredContent`? | No: the envelope is the host's contract and the text is what the model reads (`src/mcp/server.ts:305`). The rule governs the text |
 | 5 | Should one release also answer an outline for a line range? | No. Two request shapes over the same fact before one measurement exists is the complexity this RFC refuses |
 | 6 | Is a counted block ever allowed to exceed the full answer when the count is large? | Never: the rule has no exception. If the full body is shorter, the full body is the correct answer |
