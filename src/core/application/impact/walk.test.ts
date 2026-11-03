@@ -249,3 +249,23 @@ test("a symbol the caller budget stopped is reached and does not count as expand
   assert.equal(result.cost.expansionsUsed, 1);
   assert.deepEqual(result.cuts.map((cut) => cut.kind), ["caller-budget"]);
 });
+
+test("an interface-to-implementation hop spends no depth: the dispatch target sits at the method's own level", () => {
+  const nodes = [
+    fakeNode("I", "class", "src/A.java", 1, 10, "I"),
+    fakeNode("mI", "method", "src/A.java", 5, 6, "m"),
+    fakeNode("Impl", "class", "src/A.java", 20, 30, "Impl"),
+    fakeNode("mImpl", "method", "src/A.java", 25, 26, "m"),
+    fakeNode("c", "method", "src/B.java", 3, 4, "c"),
+  ];
+  const edges: FakeEdge[] = [
+    { from: "I", to: "mI", kind: "contains" },
+    { from: "Impl", to: "mImpl", kind: "contains" },
+    { from: "Impl", to: "I", kind: "implements" },
+    { from: "c", to: "mI", kind: "calls" },
+  ];
+
+  const result = walk(nodes, edges, ["mImpl"], { depth: 1 });
+  assert.deepEqual(summary(result), ["I@0", "mI@0", "Impl@0", "mImpl@0", "c@1"]);
+  assert.deepEqual(result.cuts, []);
+});
