@@ -59,7 +59,7 @@ import type { Redaction } from "../core/ports/redaction.port.ts";
 import type { TrustRecordReader } from "../core/ports/trust-record.port.ts";
 import type { ExportBudget, Vcs } from "../core/ports/vcs.port.ts";
 import { installedVersion, ownVersion } from "./installed-versions.ts";
-import { measuredEntrypoints, measuredGraph, measuredImpact, type MeasurementSink } from "./measurement.ts";
+import { measuredDecisions, measuredEntrypoints, measuredGraph, measuredImpact, measuredOutline, measuredWorkspace, type MeasurementSink } from "./measurement.ts";
 
 const PRODUCER_NAME = "ye-ast";
 const ENTRYPOINT_ENGINES = ["web-tree-sitter", "tree-sitter-java", "typescript"] as const;
@@ -197,7 +197,7 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
     }
   };
   const impact = measurement === undefined ? bareImpact : measuredImpact(bareImpact, measurement);
-  const outline = createOutlineQueries({
+  const bareOutline = createOutlineQueries({
     vcs,
     scratch,
     reader,
@@ -212,9 +212,10 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
     ...budget,
     ...trust,
   });
+  const outline = measurement === undefined ? bareOutline : measuredOutline(bareOutline, measurement);
   const defaults = createWorkspaceDefaults(createFixedLayerStore());
   const refresh = options.refresh ?? (options.cacheDirectory === undefined ? undefined : createRemoteRefresh({ ...defaultRemoteRefreshDeps, cacheDirectory: options.cacheDirectory, digest }));
-  const workspace = createWorkspaceQueries({
+  const bareWorkspace = createWorkspaceQueries({
     vcs,
     scratch,
     reader,
@@ -230,8 +231,12 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
     ...budget,
     ...trust,
   });
-  const workspaceImpact = createWorkspaceImpactQueries({ workspace, impact, defaults, ...trust });
-  const decisions = createDecisionQueries({ workspace, defaults, vcs });
+  const workspace = measurement === undefined ? bareWorkspace : measuredWorkspace(bareWorkspace, measurement);
+  // The workspace impact is measured through the impact family it walks with; handing it the measured workspace would
+  // write a second line for the read it shares with that walk.
+  const workspaceImpact = createWorkspaceImpactQueries({ workspace: bareWorkspace, impact, defaults, ...trust });
+  const bareDecisions = createDecisionQueries({ workspace: bareWorkspace, defaults, vcs });
+  const decisions = measurement === undefined ? bareDecisions : measuredDecisions(bareDecisions, measurement);
   return { version, entrypoints, impact, outline, workspace, workspaceImpact, decisions, redaction, repositoryName: (repo, signal) => vcs.repositoryName(repo, signal), warmLive };
 }
 

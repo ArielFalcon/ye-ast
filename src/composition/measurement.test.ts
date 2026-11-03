@@ -8,7 +8,7 @@ import type { CodeGraph } from "../core/ports/code-graph.port.ts";
 import type { EntrypointQueries } from "../core/ports/entrypoint-queries.port.ts";
 import type { ImpactQueries } from "../core/ports/impact-queries.port.ts";
 import { REDACTED, type Redaction } from "../core/ports/redaction.port.ts";
-import { measuredEntrypoints, measuredGraph, measuredImpact } from "./measurement.ts";
+import { measuredEntrypoints, measuredGraph, measuredImpact, measuredOutline } from "./measurement.ts";
 
 const SECRET = "s3cr3t";
 const SHA = "a".repeat(40);
@@ -163,4 +163,44 @@ test("a measurement channel that throws never fails the query it describes", asy
   };
   const answer = await measuredEntrypoints(entrypointsOf(fact("complete")), { sink, redaction }).map({ repo: "/work/shop", repoId: "shop", revision: "HEAD" });
   assert.equal(answer.ok, true);
+});
+
+test("an index build that answers a fault reports that fault, never built", async () => {
+  const { lines, sink } = collecting();
+  const graph: CodeGraph = {
+    index: async () => ({ ok: false, fault: { kind: "store-unreadable", detail: "the store vanished" } }),
+    open: () => ({ ok: false, fault: { kind: "unsupported-store", detail: "" } }),
+    buildMirror: async () => ({ ok: false, fault: { kind: "index-failed", detail: "" } }),
+    syncMirror: async () => ({ ok: false, fault: { kind: "index-failed", detail: "" } }),
+  };
+
+  const answer = await measuredGraph(graph, { sink, redaction }).index("snapshot", "/nonexistent-store");
+
+  assert.equal(answer.ok, false);
+  assert.equal(recordOf(lines[0]).outcome, "store-unreadable");
+});
+
+test("a mirror build emits the index line a live session would otherwise hide", async () => {
+  const { lines, sink } = collecting();
+  const summary = { filesIndexed: 1, filesSkipped: 0, filesErrored: 0, filesNotIndexed: [], versions: { codegraph: "1.6.2", schema: 11, extraction: 27 } };
+  const graph: CodeGraph = {
+    index: async () => ({ ok: false, fault: { kind: "index-failed", detail: "" } }),
+    open: () => ({ ok: false, fault: { kind: "unsupported-store", detail: "" } }),
+    buildMirror: async () => ({ ok: true, value: summary }),
+    syncMirror: async () => ({ ok: true, value: { ...summary, filesFailed: [] } }),
+  };
+
+  await measuredGraph(graph, { sink, redaction }).buildMirror("/mirror");
+
+  assert.equal(recordOf(lines[0]).event, "index");
+  assert.equal(recordOf(lines[0]).outcome, "built");
+});
+
+test("an outline query emits its own query line", async () => {
+  const { lines, sink } = collecting();
+  const queries = { outline: async () => ({ ok: true, value: fact("complete") }) as never };
+
+  await measuredOutline(queries, { sink, redaction }).outline({ repo: "/work/shop", repoId: "shop", files: [] } as never);
+
+  assert.equal(recordOf(lines[0]).method, "outline");
 });

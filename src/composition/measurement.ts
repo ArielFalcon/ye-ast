@@ -1,7 +1,11 @@
 import { readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { performance } from "node:perf_hooks";
-import type { CodeGraph } from "../core/ports/code-graph.port.ts";
+import type { Result } from "../core/domain/shared/result.ts";
+import { INDEX_STORE_DIRECTORY, type CodeGraph } from "../core/ports/code-graph.port.ts";
+import type { DecisionQueries } from "../core/ports/decision-queries.port.ts";
+import type { OutlineQueries } from "../core/ports/outline-queries.port.ts";
+import type { WorkspaceQueries } from "../core/ports/workspace-queries.port.ts";
 import type { EntrypointQueries } from "../core/ports/entrypoint-queries.port.ts";
 import type { ImpactQueries } from "../core/ports/impact-queries.port.ts";
 import type { Redaction } from "../core/ports/redaction.port.ts";
@@ -31,25 +35,41 @@ export function measuredImpact(queries: ImpactQueries, deps: MeasurementDeps): I
 }
 
 /** The index side of the graph, measured: a build is the one expensive event a session can hide. */
+export function measuredOutline(queries: OutlineQueries, deps: MeasurementDeps): OutlineQueries {
+  return { outline: (request) => measured("outline", () => queries.outline(request), deps) };
+}
+
+export function measuredWorkspace(queries: WorkspaceQueries, deps: MeasurementDeps): WorkspaceQueries {
+  return { outwardNames: (request) => measured("workspace.outwardNames", () => queries.outwardNames(request), deps) };
+}
+
+export function measuredDecisions(queries: DecisionQueries, deps: MeasurementDeps): DecisionQueries {
+  return { decisions: (request) => measured("decisions.decisions", () => queries.decisions(request), deps) };
+}
+
+/** The index side of the graph, measured: a build is the one expensive event a session can hide. */
 export function measuredGraph(graph: CodeGraph, deps: MeasurementDeps): CodeGraph {
   return {
-    index: async (snapshot, store, signal) => {
-      const started = performance.now();
-      try {
-        const result = await graph.index(snapshot, store, signal);
-        const buildMs = elapsed(started);
-        const storeBytes = result.ok ? await bytesOf(store) : 0;
-        report({ event: "index", outcome: "built", build_ms: buildMs, store_bytes: storeBytes }, deps);
-        return result;
-      } catch (error) {
-        report({ event: "index", outcome: "threw", build_ms: elapsed(started) }, deps);
-        throw error;
-      }
-    },
+    index: (snapshot, store, signal) => measuredBuild(() => graph.index(snapshot, store, signal), store, deps),
     open: (store) => graph.open(store),
-    buildMirror: (mirror, signal) => graph.buildMirror(mirror, signal),
-    syncMirror: (mirror, paths, signal) => graph.syncMirror(mirror, paths, signal),
+    buildMirror: (mirror, signal) => measuredBuild(() => graph.buildMirror(mirror, signal), join(mirror, INDEX_STORE_DIRECTORY), deps),
+    syncMirror: (mirror, paths, signal) => measuredBuild(() => graph.syncMirror(mirror, paths, signal), join(mirror, INDEX_STORE_DIRECTORY), deps),
   };
+}
+
+/** One index line per build: `built` only when a store came out of it, the fault's own kind otherwise. */
+async function measuredBuild<T, F extends { kind: string }>(call: () => Promise<Result<T, F>>, store: string, deps: MeasurementDeps): Promise<Result<T, F>> {
+  const started = performance.now();
+  try {
+    const result = await call();
+    const buildMs = elapsed(started);
+    const storeBytes = result.ok ? await bytesOf(store) : 0;
+    report({ event: "index", outcome: result.ok ? "built" : result.fault.kind, build_ms: buildMs, store_bytes: storeBytes }, deps);
+    return result;
+  } catch (error) {
+    report({ event: "index", outcome: "threw", build_ms: elapsed(started) }, deps);
+    throw error;
+  }
 }
 
 interface Measured {
