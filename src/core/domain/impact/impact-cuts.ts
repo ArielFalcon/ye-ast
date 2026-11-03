@@ -83,7 +83,13 @@ function namesDeclaration(reference: UnresolvedUse, declaration: WalkedDeclarati
  * reader found on that file and line has a string-literal specifier, which names its module like a static import; a file
  * the reader did not read keeps the cut.
  */
-export function unresolvedLinkCuts(references: readonly UnresolvedUse[], walked: readonly WalkedDeclaration[], loads: readonly DynamicLoadUse[], settled: ReadonlySet<string> = new Set()): Cut[] {
+export function unresolvedLinkCuts(
+  references: readonly UnresolvedUse[],
+  walked: readonly WalkedDeclaration[],
+  loads: readonly DynamicLoadUse[],
+  settled: ReadonlySet<string> = new Set(),
+  known: ReadonlySet<string> = new Set(),
+): Cut[] {
   const byName = Map.groupBy(walked, (declaration) => declaration.name);
   const hidden = new Map<string, Set<string>>();
   const unattributed = new Map<string, Set<string>>();
@@ -96,6 +102,11 @@ export function unresolvedLinkCuts(references: readonly UnresolvedUse[], walked:
   for (const reference of references) {
     const tail = nameTail(reference.name);
     const place = placeAt(reference.file, reference.line);
+    /**
+     * A place whose target is known is no cut, whatever the tail matched: a type layer may name the declaration without
+     * any name tail, and a file's own imports may prove the name belongs outside the repository.
+     */
+    if (known.has(place)) continue;
     /** The same place, named by the reference as written: the reader settles a reference it is told, without opening the file. */
     const named = placeAt(reference.file, reference.line, reference.name);
     if (reference.kind === "calls" && DYNAMIC_LOADERS.has(tail) && !namesModule(place)) loaders.set(reference.file, (loaders.get(reference.file) ?? new Set()).add(named));

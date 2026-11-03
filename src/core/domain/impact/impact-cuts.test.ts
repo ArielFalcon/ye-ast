@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { nameTail, removedDeclarationCuts, unreadRelationCuts, unresolvedLinkCuts, type UnresolvedUse, type WalkedDeclaration } from "./impact-cuts.ts";
+import { nameTail, placeAt, removedDeclarationCuts, unreadRelationCuts, unresolvedLinkCuts, type UnresolvedUse, type WalkedDeclaration } from "./impact-cuts.ts";
 
 const SAVE: WalkedDeclaration = { file: "src/Repo.java", name: "save", kind: "method", qualifiedName: "Repo::save" };
 
@@ -19,6 +19,13 @@ test("the tail of a name is what follows its last separator", () => {
 test("a bare call that never resolved and shares a walked method's name is a cut at it, with every place", () => {
   const cuts = unresolvedLinkCuts([use("save", "calls", "src/B.java", 9), use("save", "calls", "src/A.java", 4)], [SAVE], []);
   assert.deepEqual(cuts, [{ kind: "unresolved-link", at: ["src/Repo.java::save", "src/A.java:4", "src/B.java:9"] }]);
+});
+
+test("a place a type layer settled is no cut at all, whatever name tail the index had tried", () => {
+  const reference = use("save", "calls", "src/B.java", 9);
+
+  assert.deepEqual(unresolvedLinkCuts([reference], [SAVE], []), [{ kind: "unresolved-link", at: ["src/Repo.java::save", "src/B.java:9"] }]);
+  assert.deepEqual(unresolvedLinkCuts([reference], [SAVE], [], new Set(), new Set([placeAt("src/B.java", 9)])), []);
 });
 
 test("a qualified call the index considered for the walked declaration is a cut at it", () => {

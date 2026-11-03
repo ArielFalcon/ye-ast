@@ -42,13 +42,32 @@ export interface InboundEdges {
 
 const SUPERTYPE_EDGES = ["extends", "implements"];
 
+/** A reference a type layer settled: where the use sits, and the declaration it names. */
+export interface SettledReference {
+  from: GraphNodeId;
+  file: string;
+  line: number;
+  kind: string;
+  target: { file: string; symbol: string; line: number };
+}
+
 function isInside(inner: GraphSymbol, outer: GraphSymbol): boolean {
   return inner.file === outer.file && outer.startLine <= inner.startLine && inner.endLine <= outer.endLine;
 }
 const USAGE_EDGES = ["calls", "instantiates", "references"];
 
-export function createInboundEdges(reader: CodeGraphReader, isTestFile: (path: string) => boolean, relations: readonly Relation[], fields: readonly FieldOrigin[] = []): InboundEdges {
+export function createInboundEdges(
+  reader: CodeGraphReader,
+  isTestFile: (path: string) => boolean,
+  relations: readonly Relation[],
+  fields: readonly FieldOrigin[] = [],
+  settled: readonly SettledReference[] = [],
+): InboundEdges {
   const relationsByTargetFile = Map.groupBy(relations, (candidate) => candidate.to.path);
+  const settledByTargetFile = Map.groupBy(
+    settled.filter((reference) => (EDGE_POLICY.typeResolvedKinds as readonly string[]).includes(reference.kind)),
+    (reference) => reference.target.file,
+  );
   const known = new Map<GraphNodeId, GraphSymbol | undefined>();
   const load = (ids: readonly GraphNodeId[]): void => {
     const missing = [...new Set(ids)].filter((id) => !known.has(id));
@@ -243,6 +262,24 @@ export function createInboundEdges(reader: CodeGraphReader, isTestFile: (path: s
     return callers;
   }
 
+  /**
+   * The references a type layer settled onto `node`: the walk follows them, so what the resolution reached is expanded
+   * like any other dependence. A place the layer settled is no `unresolved-link` cut, and that is decided by the caller
+   * on the place itself, not on the name tail (RFC-0016, S4).
+   */
+  function typeResolvedUsesOf(node: GraphSymbol): InboundEdge[] {
+    const candidates = (settledByTargetFile.get(node.file) ?? []).filter((reference) => joinsFact(node, { path: reference.target.file, line: reference.target.line, symbol: reference.target.symbol }));
+    if (candidates.length === 0) return [];
+    load(candidates.map((reference) => reference.from));
+    const callers: InboundEdge[] = [];
+    for (const reference of candidates) {
+      const from = symbolOf(reference.from);
+      if (from === undefined || isTestFile(from.file)) continue;
+      callers.push({ from, confidence: EDGE_POLICY.relations.confidence, basis: reference.kind === "calls" || reference.kind === "instantiates" ? "call" : "reference", lines: [reference.line] });
+    }
+    return callers;
+  }
+
   const callersCache = new Map<string, InboundEdge[]>();
   function callersOf(node: GraphSymbol, contractChanged: boolean, throughMember = false): InboundEdge[] {
     const key = `${node.id}:${contractChanged}:${throughMember}`;
@@ -256,7 +293,7 @@ export function createInboundEdges(reader: CodeGraphReader, isTestFile: (path: s
         basis: CALL_EDGE_KINDS.includes(edge.kind) ? ("call" as const) : ("reference" as const),
         lines: edge.line === null ? [] : [edge.line],
       }));
-      const bridged = throughMember ? direct : [...direct, ...bridgesOf(node, contractChanged), ...fieldUsesOf(node), ...ownUsesOf(node)];
+      const bridged = throughMember ? direct : [...direct, ...bridgesOf(node, contractChanged), ...fieldUsesOf(node), ...ownUsesOf(node), ...typeResolvedUsesOf(node)];
       const found = [...bridged, ...relatedTo(node, throughMember ? EDGE_POLICY.ownerThroughMember.relations : undefined)];
       const whole = throughMember ? found : [...found, ...importersOf(node, found.length === 0)];
       callers = strongestPerSymbol(whole.filter(({ from }) => from.id !== node.id)).sort((a, b) => comparePosition(a.from, b.from));

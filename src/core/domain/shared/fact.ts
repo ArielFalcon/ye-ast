@@ -3,7 +3,7 @@ import { canonicalJson } from "./canonical-json.ts";
 export type SchemaVersion = `${number}.${number}.${number}`;
 
 /** The schema version of every fact this build produces. */
-export const SCHEMA: SchemaVersion = "0.6.0";
+export const SCHEMA: SchemaVersion = "0.7.0";
 
 export type SnapshotRef =
   | { repo: string; kind: "sha"; sha: string }
@@ -81,6 +81,11 @@ export interface FactInputs {
   declaredConfig: DeclaredConfig;
   /** Where the index the fact read came from; absent when the fact read no index. */
   origin?: IndexOrigin;
+  /**
+   * The type root a resolution read, by its identity; absent when none answered, which is not the same as a root that
+   * settled nothing (`ADR-0018` decision 4).
+   */
+  typeRoot?: { identity: string };
   /** Version of each engine that produced the fact, by package name; only the engines that took part. */
   engines: Readonly<Record<string, string>>;
 }

@@ -13,7 +13,7 @@ export interface ModuleResolver {
 const EXTENSIONS = ["cts", "mts", "ts"] as const;
 const CONFIG_NAMES = ["tsconfig.json", "jsconfig.json"] as const;
 
-function packageOf(specifier: string): string | undefined {
+export function packageOf(specifier: string): string | undefined {
   if (specifier.startsWith(".") || specifier.startsWith("/")) return undefined;
   const parts = specifier.split("/");
   return specifier.startsWith("@") ? parts.slice(0, 2).join("/") : parts[0];

@@ -44,7 +44,9 @@ import { EDGE_POLICY } from "../core/domain/impact/edge-policy.ts";
 import { sortFindings } from "../core/domain/entrypoints/finding-order.ts";
 import { compareText } from "../core/domain/shared/code-node.ts";
 import type { CallSiteReader } from "../core/domain/topology/call-site.ts";
-import type { EntrypointExtractor } from "../core/ports/entrypoint-extractor.port.ts";
+import type { EntrypointExtractor, SourceFile } from "../core/ports/entrypoint-extractor.port.ts";
+import { createTypeResolution } from "../core/adapters/typescript/type-resolution.adapter.ts";
+import { createImportOrigins } from "../core/adapters/typescript/import-origins.adapter.ts";
 import type { EntrypointQueries } from "../core/ports/entrypoint-queries.port.ts";
 import type { ImpactQueries } from "../core/ports/impact-queries.port.ts";
 import type { WorkspaceQueries } from "../core/ports/workspace-queries.port.ts";
@@ -88,6 +90,11 @@ export interface CompositionOptions {
   measure?: MeasurementSink;
   /** How many live mirrors stay and for how long; the defaults of RFC-0010 "Retention" unless a host overrides them. */
   liveRetention?: LiveRetentionPolicy;
+  /**
+   * Directory holding the declarations of the dependencies a type layer reads, laid out like a `node_modules` tree
+   * (ADR-0018). Without it no type information answers, and every fact is the one ye-ast gives today.
+   */
+  typeRoot?: string;
 }
 
 export interface ComposedQueries {
@@ -148,6 +155,13 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
   const bareEntrypoints = createEntrypointQueries({ vcs, scratch, reader, extractor, digest, matcher, producer: { name: PRODUCER_NAME, version }, engines: entrypointEngines, live, ...budget, ...trust });
   const entrypoints = measurement === undefined ? bareEntrypoints : measuredEntrypoints(bareEntrypoints, measurement);
   const indexes = options.indexCache === undefined ? undefined : createIndexCache({ directory: options.indexCache, graph, digest, codegraph });
+  const typeRoot =
+    options.typeRoot === undefined
+      ? undefined
+      : {
+          identity: digest.of(`type-root\u0000${options.typeRoot}`),
+          resolution: (sources: readonly SourceFile[]) => createTypeResolution({ sources: sources.map(({ path, content }) => ({ path, text: content })), typeRoot: options.typeRoot as string }),
+        };
   const bareImpact = createImpactQueries({
     vcs,
     scratch,
@@ -166,6 +180,8 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
     live,
     ...budget,
     ...trust,
+    ...(typeRoot === undefined ? {} : { typeRoot }),
+    importOrigins: (sources: readonly SourceFile[]) => createImportOrigins(sources),
   });
   const warmLive = async (repo: string, signal?: AbortSignal): Promise<string | null> => {
     try {
