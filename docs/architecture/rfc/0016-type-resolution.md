@@ -1,9 +1,10 @@
 # RFC-0016: Type resolution
 
-- Status: Draft, 2026-11-03. S0, S4, S7, S8 and S9 measured; S8 is the slice that carries the value (6% to 13% of the cuts,
-  no type root), and S9 shows the port buys 0 to 3 cuts for +2,2 to +2,9 s and +300 to +480 MB. Read `S4 measured`,
-  `The three gaps the measurement exposed` and `S9 measured` before the design below. The remaining families are planned as
-  S10 to S13 in "What would close the remaining families".
+- Status: Draft, 2026-11-03. S0, S4, S7, S8, S9, S10, S12 and S13 measured; S8 and S13 are the slices that carry the
+  value (6% to 13% of the cuts from the import proof, 12% to 40% from the DI reader), both with no type root. S9 shows the
+  port buys 0 to 3 cuts for +2,2 to +2,9 s and +300 to +480 MB. Read `S4 measured`, `The three gaps the measurement
+  exposed` and `S9 measured` before the design below; the family plan and what each slice measured are in "What would
+  close the remaining families".
 - Related: [ADR-0008](../adr/0008-typescript-compiler-api-source.md), [ADR-0010](../adr/0010-trust-modes.md),
   [ADR-0013](../adr/0013-coverage-grows-only-with-evidence.md), [ADR-0015](../adr/0015-index-reuse-by-content.md),
   [ADR-0018](../adr/0018-type-information-as-a-fact-input.md), [RFC-0002](0002-facts-contract.md),
@@ -356,7 +357,7 @@ proven to reach.** That is `RFC-0002` rule 2 applied to what the emitter already
 | S10 | 19 of the 24 unbound references: `console` 13, `caches` 6, `String` — **done, 2026-11-03** | A root the pinned `typescript` lib declares, and that the snapshot declares no global of, cannot name a repository declaration. Retire the place, as an ambient proof | Measured: `HEAD~5` 76→**64** cuts and 126→**107** places, `HEAD~20` 190→**176**, `HEAD~60` 359→**334**, no symbol changed | ~0: a generated table of 2.545 names, 57 KB, with a drift test |
 | S11 | 26 references the file declares itself | Replace the file-level shadow refusal with an enclosing-scope check, conservative: a declaration in a scope that encloses the use keeps the `unknown` | **Measured, not shipped**: the file-level rule blocks only 2 of the 107 places at `HEAD~5` and none at `HEAD~20` or `HEAD~60`, and a scope check recovers neither, because both declarations enclose their use | ~0 folded into the parse `import-origins` already performs |
 | S12 | every bare reference whose declaration lives in another file it never imported | A bare name is file-scoped: attribute it only to a declaration of its own file, or to the one its import binding names; otherwise cut the caller's file and name the reference | Measured: 7 of the 22 anchored places at `HEAD~5` stop naming a declaration they cannot reach; the list keeps its length | ~0: the same pass over the imports |
-| S13 | 33 `no-extractor` places at `HEAD~5` (30,8% of them), 49 places and 16 `no-extractor` cuts at `HEAD~60` (1,1%) | Not types: `unreadRelationCuts` names Angular and DI relations the extractor could not place. Understand the construct, or declare the scope | Small diffs of Angular wiring lose up to a third of their places; large diffs gain ~1% | A slice of its own, inside the extractor |
+| S13 | 33 `no-extractor` places at `HEAD~5` (30,8% of them), 49 places and 16 `no-extractor` cuts at `HEAD~60` (1,1%) — **done, 2026-11-03** | The DI reader already knew the token it injects; `inject(TOKEN)` only became unreadable because a token is not a class. Relate the class to the token's declaration, as it already does for a class | Measured: `HEAD~5` 62→**37** cuts and 107→**78** places, `no-extractor` places 33→**4**; `HEAD~20` 172→**141**; `HEAD~60` 311→**273**, no symbol changed | Inside the extractor: one branch of the DI reader, no new parse |
 | — | 43 receiver-rooted references | The one family that needs the checker, which S9 measured as not paying | — | +2,2 to +2,9 s and +300 to +480 MB per query, growing in a server |
 
 Two rules hold for whichever of these lands:
@@ -425,6 +426,24 @@ symbol moved, because nothing became reachable that was not.
 **What is left is only the receiver population and the extractor's own gaps.** No further syntax proof can shorten the
 list: a `this.svc.get` whose receiver type is not written in the syntax needs the checker, and S9 measured the checker as
 not paying.
+
+### S13 measured
+
+Shipped 2026-11-03. The population was not the route extractor at all: all 33 places at `HEAD~5` were `inject(TOKEN)`
+field initializers, and the DI reader already resolved the token — it only refused to relate a class to anything that is
+not a class, so an `InjectionToken` became an unreadable relation and its place a cut. Relating the class to the token's
+declaration is the same `injects` relation the reader already emitted for a service.
+
+| Base | Cuts | Places | `no-extractor` places | Symbols |
+|---|---|---|---|---|
+| `HEAD~5` | 62 → **37** (−40,3%) | 107 → **78** | 33 → **4** | 586 → 586 |
+| `HEAD~20` | 172 → **141** (−18,0%) | 576 → **530** | 49 → **4** | 1.067 → 1.067 |
+| `HEAD~60` | 311 → **273** (−12,2%) | 5.729 → **5.683** | 49 → **3** | 2.495 → 2.495 |
+
+The four places that remain are `inject(ElementRef<HTMLElement>)`: the argument is a type instantiation, so the reader
+cannot name it and the cut stays, which a fixture pins. No symbol moved, because a token is a value nothing calls.
+
+This was the largest cut reduction after S8, and it came from a branch of code that already had the answer.
 
 ## How these costs were measured
 

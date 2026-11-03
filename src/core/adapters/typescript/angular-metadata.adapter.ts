@@ -30,8 +30,8 @@ interface Parsed {
   angular: RawAngularFile;
 }
 
-/** What a name comes down to. */
-type Placed = { class: SymbolRef } | { array: { key: string; file: string; operands: readonly RawOperand[] } } | { token: true } | { external: true } | { unresolved: true };
+/** What a name comes down to: a class, an array of operands, a declared value that is not a class (an `InjectionToken`), a member of one, or nothing usable. */
+type Placed = { class: SymbolRef } | { array: { key: string; file: string; operands: readonly RawOperand[] } } | { token: SymbolRef } | { member: true } | { external: true } | { unresolved: true };
 
 async function readMetadata(files: readonly SourceFile[]): Promise<AngularMetadata> {
   const contents = new Map(files.map((file) => [file.path, file.content]));
@@ -82,7 +82,7 @@ async function readProject(contents: ReadonlyMap<string, string>, dependencies: 
     if (target === undefined || span === undefined) return { unresolved: true };
     if (target.shape.classes.has(name)) return { class: { path: file, symbol: name, line: span.line } };
     const operands = target.angular.arrays.get(name);
-    return operands === undefined ? { token: true } : { array: { key: `${file}\0${name}`, file, operands } };
+    return operands === undefined ? { token: { path: file, symbol: name, line: span.line } } : { array: { key: `${file}\0${name}`, file, operands } };
   };
   const through = async (from: string, module: string, imported: string): Promise<Placed> => {
     const resolution = await resolver.resolve(from, module);
@@ -97,8 +97,8 @@ async function readProject(contents: ReadonlyMap<string, string>, dependencies: 
     const bound = here.shape.imports.get(reference.name);
     if (reference.member !== undefined && bound?.imported === "*") return through(file, bound.module, reference.member);
     const head = here.shape.declared.has(reference.name) ? await place(file, reference.name) : bound === undefined ? { unresolved: true as const } : await through(file, bound.module, bound.imported);
-    /* A member of a class, an enum or an object is a value, not a class. */
-    return reference.member !== undefined && !("unresolved" in head) && !("external" in head) ? { token: true } : head;
+    /* A member of a class, an enum or an object is a value whose own span this read does not know. */
+    return reference.member !== undefined && !("unresolved" in head) && !("external" in head) ? { member: true } : head;
   };
   const operandsOf = async (file: string, raws: readonly RawOperand[], trail: ReadonlySet<string> = new Set()): Promise<Operand[]> => {
     const operands: Operand[] = [];
@@ -163,10 +163,12 @@ async function readProject(contents: ReadonlyMap<string, string>, dependencies: 
         continue;
       }
       const placed = await resolve(file, target.reference);
-      if ("class" in placed) {
-        const from = { path: file, symbol: owner.name, line: owner.line };
-        const key = `${from.path}\0${from.symbol}\0${placed.class.path}\0${placed.class.symbol}`;
-        if (!injects.has(key)) injects.set(key, { status: "complete", value: relation("injects", from, placed.class), evidence: [at] });
+      const from = { path: file, symbol: owner.name, line: owner.line };
+      /* A token is a declaration of the repository like any other: what it injects is a dependence the walk can follow. */
+      const to = "class" in placed ? placed.class : "token" in placed ? placed.token : undefined;
+      if (to !== undefined) {
+        const key = `${from.path}\0${from.symbol}\0${to.path}\0${to.symbol}`;
+        if (!injects.has(key)) injects.set(key, { status: "complete", value: relation("injects", from, to), evidence: [at] });
       } else if (!("external" in placed)) findings.push(unknown("unresolved" in placed ? "unresolved" : "no-extractor", at));
     }
   }

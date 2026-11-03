@@ -95,14 +95,28 @@ test("a constructor parameter type of a decorated class is injected, also as a p
   assert.deepEqual(summary(meta), ["A > OrdersService (src/app/orders.service.ts:3) @ src/app/a.ts:6", "B > OrdersService (src/app/orders.service.ts:3) @ src/app/a.ts:15"]);
 });
 
-test("@Inject(X) relates to X when it is a class and is unknown with no-extractor when it names a token, a member of a value or an expression", async () => {
+test("a class and a declared token both relate; a member of a value and an expression stay unknown with no-extractor", async () => {
   const meta = await read({
     [SERVICE]: SERVICE_SOURCE,
     "src/app/tokens.ts": `${CORE}export const API_URL = new InjectionToken<string>('api');\nexport class Tokens {\n  static API = 'x';\n}\n`,
     "src/app/a.ts": `${CORE}import { OrdersService } from './orders.service';\nimport { API_URL, Tokens } from './tokens';\n\n@Injectable()\nexport class A {\n  constructor(\n    @Inject(OrdersService) a: object,\n    @Inject(API_URL) b: string,\n    @Inject('legacy') c: string,\n  ) {}\n  d = inject(API_URL);\n  e = inject(Tokens.API);\n}\n`,
   });
 
-  assert.deepEqual(summary(meta), ["no-extractor @ src/app/a.ts:9", "no-extractor @ src/app/a.ts:10", "no-extractor @ src/app/a.ts:12", "no-extractor @ src/app/a.ts:13", "A > OrdersService (src/app/orders.service.ts:3) @ src/app/a.ts:8"]);
+  assert.deepEqual(summary(meta), [
+    "no-extractor @ src/app/a.ts:10",
+    "no-extractor @ src/app/a.ts:13",
+    "A > OrdersService (src/app/orders.service.ts:3) @ src/app/a.ts:8",
+    "A > API_URL (src/app/tokens.ts:2) @ src/app/a.ts:9",
+  ]);
+});
+
+test("an injection whose argument is a type instantiation stays unknown with no-extractor, never a guessed token", async () => {
+  const meta = await read({
+    [SERVICE]: SERVICE_SOURCE,
+    "src/app/a.ts": `${CORE}\n@Injectable()\nexport class A {\n  private readonly element = inject(ElementRef<HTMLElement>);\n}\n`,
+  });
+
+  assert.deepEqual(summary(meta), ["no-extractor @ src/app/a.ts:5"]);
 });
 
 test("the top-level function or constant that calls inject() is the owner (a guard written as an arrow constant, an interceptor as a function declaration), unless a class holds the call", async () => {
