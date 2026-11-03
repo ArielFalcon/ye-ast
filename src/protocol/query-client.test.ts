@@ -3,6 +3,9 @@ import assert from "node:assert/strict";
 import { PassThrough } from "node:stream";
 import type { EntrypointQueries } from "../core/ports/entrypoint-queries.port.ts";
 import type { ImpactQueries } from "../core/ports/impact-queries.port.ts";
+import type { OutlineQueries } from "../core/ports/outline-queries.port.ts";
+import type { WorkspaceQueries } from "../core/ports/workspace-queries.port.ts";
+import type { DecisionQueries } from "../core/ports/decision-queries.port.ts";
 import type { Redaction } from "../core/ports/redaction.port.ts";
 import { ERROR_CODE, METHOD, PROTOCOL } from "./protocol.ts";
 import { connectQueryClient, ConnectionClosedError, ProtocolMismatchError, QueryError } from "./query-client.ts";
@@ -21,7 +24,7 @@ const PARAMS = { repo: "/work/shop", repoId: "shop", revision: "HEAD" };
 function pair(map: EntrypointQueries["map"]): { streams: { input: PassThrough; output: PassThrough }; written: string[]; done: Promise<void> } {
   const toServer = new PassThrough();
   const toClient = new PassThrough();
-  const deps: QueryServerDeps = { version: "1.2.3", redaction: identity, entrypoints: { map }, impact: {} as ImpactQueries };
+  const deps: QueryServerDeps = { version: "1.2.3", redaction: identity, entrypoints: { map }, impact: {} as ImpactQueries, outline: {} as OutlineQueries, workspace: {} as WorkspaceQueries, decisions: {} as DecisionQueries };
   const written: string[] = [];
   toServer.on("data", (chunk: Buffer) => written.push(chunk.toString()));
   return { streams: { input: toClient, output: toServer }, written, done: serveQueries(deps, { input: toServer, output: toClient }) };

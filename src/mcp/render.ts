@@ -4,6 +4,7 @@ import type { ChangedEntrypoint } from "../core/domain/impact/changed-entrypoint
 import type { ImpactedSymbol, ImpactValue, ReachedEntrypoint, Seed } from "../core/domain/impact/impact-fact.ts";
 import { declarationAnchor } from "../core/domain/impact/impact-cuts.ts";
 import type { ImportersValue } from "../core/domain/impact/importers-fact.ts";
+import type { OutlineValue } from "../core/domain/outline/outline-fact.ts";
 import type { EntrypointMap } from "../core/domain/map/entrypoint-map.ts";
 import type { Decision, DecisionOption } from "../core/domain/decisions/decision.ts";
 import { compareText } from "../core/domain/shared/code-node.ts";
@@ -259,13 +260,23 @@ function countedCutsByFile(cuts: readonly Cut[]): string[] {
   return [...files].toSorted(([a], [b]) => compareText(a, b)).map(([file, inFile]) => `  ${file}: ${cutsByKind(inFile).map(([kind, ofKind]) => `${ofKind.length} ${kind}`).join(", ")}`);
 }
 
+/** The bytes a block costs with its line breaks, so a summary is held to the answer it stands for. */
+function size(lines: readonly string[]): number {
+  return lines.reduce((total, line) => total + Buffer.byteLength(line, "utf8") + 1, 0);
+}
+
 /** The cut list every answer closes with, so the answer content is read first and nothing is dropped. Without depths
- * every cut is listed; with them a summary counts the ones anchored at symbols it does not list and says how to see them. */
+ * every cut is listed; with them a summary counts the ones anchored at symbols it does not list and says how to see
+ * them, unless counting costs more than listing: a summary is never longer than the answer it stands for. */
 function cutsBlock(cuts: readonly Cut[], detail: Detail = "summary", depths?: CutDepths): string[] {
   if (cuts.length === 0) return [];
   const listed = depths === undefined ? cuts : cuts.filter((cut) => !countedCut(cut, depths));
   const counted = depths === undefined ? [] : cuts.filter((cut) => countedCut(cut, depths));
-  return [CUTS, ...cutLines(listed, detail), ...(counted.length === 0 ? [] : [`  summarized (${counted.length} at symbols deeper than depth ${LISTED_DEPTH}): detail "full" lists them`, ...countedCutsByFile(counted)])];
+  const listing = [CUTS, ...cutLines(listed, detail)];
+  if (counted.length === 0) return listing;
+  const all = [CUTS, ...cutLines(cuts, detail)];
+  const summarized = [...listing, `  summarized (${counted.length} at symbols deeper than depth ${LISTED_DEPTH}): detail "full" lists them`, ...countedCutsByFile(counted)];
+  return size(summarized) <= size(all) ? summarized : all;
 }
 
 function list(lines: readonly string[]): string[] {
@@ -340,20 +351,23 @@ function groupedLines(symbols: readonly ImpactedSymbol[]): string[] {
   return [...Map.groupBy(symbols, (symbol) => symbol.file)].flatMap(([file, inFile]) => [`  ${file}`, ...inFile.map((symbol) => symbolLine(symbol, file))]);
 }
 
-/** The impacted symbols under the file that holds them, so the path is printed once per file. */
+/** The impacted symbols under the file that holds them, so the path is printed once per file. A summary that would
+ * print more bytes than the answer it stands for lists them instead. */
 function impactedSymbols(value: ImpactValue, detail: Detail): string[] {
   const seeds = seedKeys(value);
   const listed = value.symbols.filter((symbol) => symbol.depth !== 0 || !seeds.has(`${symbol.file}\0${symbol.symbol}\0${symbol.line}`));
   if (listed.length === 0) return ["impacted symbols (0):"];
+  const full = [`impacted symbols (${listed.length}):`, ...groupedLines(listed)];
   const near = listed.filter((symbol) => symbol.depth <= LISTED_DEPTH);
   const deeper = listed.filter((symbol) => symbol.depth > LISTED_DEPTH);
-  if (detail === "full" || deeper.length === 0) return [`impacted symbols (${listed.length}):`, ...groupedLines(listed)];
+  if (detail === "full" || deeper.length === 0) return full;
   const deepest = Math.max(...deeper.map((symbol) => symbol.depth));
   const anchor = near.length === 0 ? "a seed listed here" : "a symbol listed here";
-  return [
+  const summarized = [
     `impacted symbols (${listed.length}): ${near.length} at depth 0-${LISTED_DEPTH} listed, ${deeper.length} deeper (to depth ${deepest}) not listed; ask ye_ast_callers about ${anchor} to see one ring further, or detail "full" for all`,
     ...groupedLines(near),
   ];
+  return size(summarized) <= size(full) ? summarized : full;
 }
 
 /** What an impact answer says about its walk, without its header or its cuts. */
@@ -398,6 +412,18 @@ export function renderImporters(fact: Fact<ImportersValue>, detail: Detail = "su
   if (fact.status === "unknown") return lines.join("\n");
   for (const entry of fact.value.files) {
     lines.push(`  ${entry.file}`, namedFiles("importers", entry.importers), namedFiles("users", entry.users), namedFiles("unresolved namers", entry.unresolvedNamers));
+  }
+  lines.push(...cutsBlock(cutsOf(fact), detail));
+  return lines.join("\n");
+}
+
+export function renderOutline(fact: Fact<OutlineValue>, detail: Detail = "summary"): string {
+  const lines = headerLines(fact);
+  if (fact.status === "unknown") return lines.join("\n");
+  for (const entry of fact.value.files) {
+    lines.push(`  ${entry.file}`);
+    lines.push(...(entry.declarations.length === 0 ? ["    declares nothing"] : entry.declarations.map((declaration) => `    ${spanText(declaration.line, declaration.endLine)} ${declaration.name} [${declaration.kind}]`)));
+    if (entry.imports.length > 0) lines.push(`    imports: ${entry.imports.join(", ")}`);
   }
   lines.push(...cutsBlock(cutsOf(fact), detail));
   return lines.join("\n");

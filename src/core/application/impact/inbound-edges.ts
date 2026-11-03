@@ -2,7 +2,7 @@ import type { DependenceBasis } from "../../domain/impact/impact-fact.ts";
 import { topLevelOf, isSeedable } from "../../domain/change/seeds.ts";
 import { declarationAnchor, placeAt, settledUseKey } from "../../domain/impact/impact-cuts.ts";
 import { CALL_EDGE_KINDS, EDGE_POLICY, edgeConfidence, FOLLOWED_EDGE_KINDS, followsEdge, followsRelation, isIgnoredEdge } from "../../domain/impact/edge-policy.ts";
-import type { FieldOrigin } from "../../domain/relations/field-origin.ts";
+import type { FieldOrigin, LocalOrigin } from "../../domain/relations/field-origin.ts";
 import type { Relation, SymbolRef } from "../../domain/relations/relation.ts";
 import { comparePosition, joinsFact } from "../../domain/shared/code-node.ts";
 import type { CodeGraphReader, GraphEdge, GraphNodeId, GraphSymbol, GraphUnresolvedReference } from "../../ports/code-graph.port.ts";
@@ -58,14 +58,24 @@ function isInside(inner: GraphSymbol, outer: GraphSymbol): boolean {
 }
 const USAGE_EDGES = ["calls", "instantiates", "references"];
 
+/** The declarations a relation ends at, and the only ones that can own a local an `inject()` call initializes. */
+const DECLARATION_KINDS: readonly string[] = [...EDGE_POLICY.relations.from, "function"];
+
 export function createInboundEdges(
   reader: CodeGraphReader,
   isTestFile: (path: string) => boolean,
   relations: readonly Relation[],
   fields: readonly FieldOrigin[] = [],
   settled: readonly SettledReference[] = [],
+  locals: readonly LocalOrigin[] = [],
 ): InboundEdges {
   const relationsByTargetFile = Map.groupBy(relations, (candidate) => candidate.to.path);
+  /** The local names more than one owner of one file declares: an ambiguous name settles nothing. */
+  const sharedLocalNames = new Map<string, number>();
+  for (const origin of locals) {
+    const key = `${origin.owner.path}\0${origin.local}`;
+    sharedLocalNames.set(key, (sharedLocalNames.get(key) ?? 0) + 1);
+  }
   const settledByTargetFile = Map.groupBy(
     settled.filter((reference) => (EDGE_POLICY.typeResolvedKinds as readonly string[]).includes(reference.kind)),
     (reference) => reference.target.file,
@@ -186,13 +196,13 @@ export function createInboundEdges(
   }
 
   const symbolsCache = new Map<string, GraphSymbol[]>();
-  const declarationAt = ({ path, symbol, line }: SymbolRef): GraphSymbol | undefined => {
+  const declarationAt = ({ path, symbol, line }: SymbolRef, kinds: readonly string[] = EDGE_POLICY.relations.from): GraphSymbol | undefined => {
     let inFile = symbolsCache.get(path);
     if (inFile === undefined) {
-      inFile = reader.symbolsInFiles([path]).filter((candidate) => (EDGE_POLICY.relations.from as readonly string[]).includes(candidate.kind));
+      inFile = reader.symbolsInFiles([path]).filter((candidate) => DECLARATION_KINDS.includes(candidate.kind));
       symbolsCache.set(path, inFile);
     }
-    return inFile.find((candidate) => joinsFact(candidate, { path, line, symbol }));
+    return inFile.find((candidate) => kinds.includes(candidate.kind) && joinsFact(candidate, { path, line, symbol }));
   };
 
   /** The classes whose injection or template use of `node` ye-ast read from the sources, only of `kinds` when given. */
@@ -282,6 +292,35 @@ export function createInboundEdges(
     return callers;
   }
 
+  /**
+   * The calls made through a local a function takes from `inject()`: `const svc = inject(Svc); svc.member()`. The index
+   * types no local, so the reference stays unsettled; the binding proves which declaration the member names, and the
+   * place it sits is settled, so the member's `unresolved-link` cut retires.
+   */
+  function localUsesOf(node: GraphSymbol): InboundEdge[] {
+    const owners = ownersOf(node);
+    if (owners.length === 0 || locals.length === 0) return [];
+    const anchor = declarationAnchor(node.file, node.name);
+    const callers: InboundEdge[] = [];
+    for (const origin of locals) {
+      const held = origin.holds.class;
+      if ((sharedLocalNames.get(`${origin.owner.path}\0${origin.local}`) ?? 0) > 1) continue;
+      if (!owners.some((owner) => joinsFact(owner, { path: held.path, line: held.line, symbol: held.symbol }))) continue;
+      const holder = declarationAt(origin.owner, DECLARATION_KINDS);
+      if (holder === undefined || isTestFile(holder.file)) continue;
+      const name = `${origin.local}.${node.name}`;
+      const uses = referencesThrough(holder.file, name).filter((reference) => reference.name === name);
+      load(uses.map((use) => use.from));
+      for (const use of uses) {
+        const from = symbolOf(use.from);
+        if (from === undefined || !isInside(from, holder)) continue;
+        settledUses.add(settledUseKey(anchor, placeAt(use.file, use.line)));
+        callers.push({ from, confidence: EDGE_POLICY.relations.confidence, basis: use.kind === "calls" ? "call" : "reference", lines: [use.line] });
+      }
+    }
+    return callers;
+  }
+
   const callersCache = new Map<string, InboundEdge[]>();
   function callersOf(node: GraphSymbol, contractChanged: boolean, throughMember = false): InboundEdge[] {
     const key = `${node.id}:${contractChanged}:${throughMember}`;
@@ -295,7 +334,7 @@ export function createInboundEdges(
         basis: CALL_EDGE_KINDS.includes(edge.kind) ? ("call" as const) : ("reference" as const),
         lines: edge.line === null ? [] : [edge.line],
       }));
-      const bridged = throughMember ? direct : [...direct, ...bridgesOf(node, contractChanged), ...fieldUsesOf(node), ...ownUsesOf(node), ...typeResolvedUsesOf(node)];
+      const bridged = throughMember ? direct : [...direct, ...bridgesOf(node, contractChanged), ...fieldUsesOf(node), ...localUsesOf(node), ...ownUsesOf(node), ...typeResolvedUsesOf(node)];
       const found = [...bridged, ...relatedTo(node, throughMember ? EDGE_POLICY.ownerThroughMember.relations : undefined)];
       const whole = throughMember ? found : [...found, ...importersOf(node, found.length === 0)];
       callers = strongestPerSymbol(whole.filter(({ from }) => from.id !== node.id)).sort((a, b) => comparePosition(a.from, b.from));

@@ -142,14 +142,14 @@ test("a changed helper reaches the route served through an interface, the same b
   assert.deepEqual(first.fact.value.symbols.map((symbol) => [place(symbol), symbol.depth]), [
     ["Util.java:Util", 0],
     ["Util.java:fmt", 0],
+    ["OrderService.java:OrderService", 1],
+    ["OrderService.java:find", 1],
     ["OrderServiceImpl.java:OrderServiceImpl", 1],
     ["OrderServiceImpl.java:find", 1],
-    ["OrderService.java:OrderService", 2],
-    ["OrderService.java:find", 2],
-    ["OrderController.java:OrderController", 3],
-    ["OrderController.java:one", 3],
+    ["OrderController.java:OrderController", 2],
+    ["OrderController.java:one", 2],
   ]);
-  assert.deepEqual(first.fact.value.entrypoints.map((entry) => [entry.kind, entry.name, entry.depth, entry.seeds]), [["http-route", "GET /orders/{id}", 3, [0]]]);
+  assert.deepEqual(first.fact.value.entrypoints.map((entry) => [entry.kind, entry.name, entry.depth, entry.seeds]), [["http-route", "GET /orders/{id}", 2, [0]]]);
 });
 
 test("an impacted symbol carries no seed indexes, while the entrypoint it serves carries them", async () => {

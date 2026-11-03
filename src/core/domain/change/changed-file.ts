@@ -14,3 +14,9 @@ export function kindOfChangedFile(path: string): ChangedFileKind {
   if (isUncoveredSource(path)) return "uncovered";
   return "other";
 }
+
+/** Whether an extractor reads this file: a source the index describes, or a test. `uncovered` and `other` are not read. */
+export function isReadableFile(path: string): boolean {
+  const kind = kindOfChangedFile(path);
+  return kind === "source" || kind === "test";
+}

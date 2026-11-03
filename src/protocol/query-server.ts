@@ -2,11 +2,15 @@ import type { Readable } from "node:stream";
 import type { Result } from "../core/domain/shared/result.ts";
 import type { EntrypointQueries } from "../core/ports/entrypoint-queries.port.ts";
 import type { ImpactFault, ImpactQueries } from "../core/ports/impact-queries.port.ts";
+import type { OutlineQueries } from "../core/ports/outline-queries.port.ts";
+import type { WorkspaceQueries } from "../core/ports/workspace-queries.port.ts";
+import type { DecisionQueries } from "../core/ports/decision-queries.port.ts";
+import type { WorkspaceFault } from "../core/ports/workspace-repos.port.ts";
 import { isLiveFault } from "../core/ports/live-queries.port.ts";
 import type { Redaction } from "../core/ports/redaction.port.ts";
 import { isId, isRecord } from "./guards.ts";
 import { readLines } from "./lines.ts";
-import { deadlineOf, InvalidParamsError, readCallers, readCancelledId, readImporters, readMap, readOfChange, readTrustMode } from "./params.ts";
+import { deadlineOf, InvalidParamsError, readCallers, readCancelledId, readDecisions, readImporters, readMap, readOfChange, readOutline, readTrustMode, readWorkspace } from "./params.ts";
 import { ERROR_CODE, METHOD, PROTOCOL, type ErrorKind, type RequestId } from "./protocol.ts";
 
 /** What a host may ask of ye-ast: the read query families only, so no write is reachable through the protocol. */
@@ -14,6 +18,9 @@ export interface QueryServerDeps {
   version: string;
   entrypoints: EntrypointQueries;
   impact: ImpactQueries;
+  outline: OutlineQueries;
+  workspace: WorkspaceQueries;
+  decisions: DecisionQueries;
   redaction: Redaction;
 }
 
@@ -24,7 +31,7 @@ export interface QueryServerStreams {
   signal?: AbortSignal;
 }
 
-type Call = (signal: AbortSignal) => Promise<Result<unknown, ImpactFault>>;
+type Call = (signal: AbortSignal) => Promise<Result<unknown, ImpactFault | WorkspaceFault>>;
 
 /** Each operation reads and validates its params up front, so an invalid one is answered before any work starts. */
 const OPERATIONS = new Map<string, (deps: QueryServerDeps, params: unknown) => Call>([
@@ -54,6 +61,27 @@ const OPERATIONS = new Map<string, (deps: QueryServerDeps, params: unknown) => C
     (deps, params) => {
       const request = readImporters(params);
       return (signal) => deps.impact.importers({ ...request, signal });
+    },
+  ],
+  [
+    METHOD.outlineFiles,
+    (deps, params) => {
+      const request = readOutline(params);
+      return (signal) => deps.outline.outline({ ...request, signal });
+    },
+  ],
+  [
+    METHOD.workspaceOutwardNames,
+    (deps, params) => {
+      const request = readWorkspace(params);
+      return (signal) => deps.workspace.outwardNames({ ...request, signal });
+    },
+  ],
+  [
+    METHOD.decisionsDecisions,
+    (deps, params) => {
+      const request = readDecisions(params);
+      return (signal) => deps.decisions.decisions({ ...request, signal });
     },
   ],
 ]);

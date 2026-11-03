@@ -8,6 +8,10 @@ import type { ImpactBudget } from "../core/domain/impact/impact-fact.ts";
 import { isPositiveCount } from "../core/domain/shared/count.ts";
 import { WALK_BOUND_FIELDS, type WalkBoundsField } from "../core/domain/shared/fact.ts";
 import type { CallersTarget, ImpactCallersRequest, ImpactFault, ImpactImportersRequest, ImpactOfChangeRequest, ImpactQueries } from "../core/ports/impact-queries.port.ts";
+import type { OutlineQueries, OutlineRequest } from "../core/ports/outline-queries.port.ts";
+import type { WorkspaceQueries, WorkspaceRequest } from "../core/ports/workspace-queries.port.ts";
+import type { WorkspaceFault } from "../core/ports/workspace-repos.port.ts";
+import type { DecisionQueries, DecisionsRequest } from "../core/ports/decision-queries.port.ts";
 import { isTrustMode } from "../core/domain/shared/fact.ts";
 import { FIXED_LAYER_DIRECTORY } from "../core/ports/fixed-layer-store.port.ts";
 import type { Install, InstallOutcome, InstallRequest } from "../core/ports/install.port.ts";
@@ -32,6 +36,9 @@ export interface CliDeps {
   version: string;
   entrypoints: EntrypointQueries;
   impact: ImpactQueries;
+  outline: OutlineQueries;
+  workspace: WorkspaceQueries;
+  decisions: DecisionQueries;
   install: Install;
   /** The command that starts this build of ye-ast; `init` appends `mcp <repo>` and prints it as the MCP registration. */
   mcpCommand: readonly string[];
@@ -51,19 +58,23 @@ const USAGE = [
   "       ye-ast impact --base <rev> [--head <rev> | --live] [--repo-id <id>] [scope] [budget] <repo>",
   "       ye-ast callers [--revision <rev> | --live] [--repo-id <id>] [scope] [budget] <repo> <file>:<symbol> | <file>:<start>-<end> ...",
   "       ye-ast importers [--revision <rev> | --live] [--repo-id <id>] [scope] <repo> <file> ...",
+  "       ye-ast outline [--revision <rev> | --live] [--repo-id <id>] [scope] <repo> <file> ...",
+  "       ye-ast workspace [--revision <rev>] [--repo-id <id>] [--offline] [scope] <repo>",
+  "       ye-ast decisions [--revision <rev>] [--repo-id <id>] [--offline] [scope] <repo>",
   "       ye-ast init --trust trusted|untrusted [--workspace <file>] [<repo>]   (declares the trust mode, writes the fixed layer under .ye-ast/, ignores ye-ast's folders locally, prints the MCP registration)",
   "       ye-ast serve   (the query protocol, JSON-RPC 2.0, one message per line on stdin/stdout)",
   "       ye-ast mcp [<repo>]   (stdio MCP server, read-only, bound to <repo> or the working directory)",
   "--repo-id: the name every fact carries; the directory name of the repository's main worktree when omitted, so every worktree of one repository answers the same name",
   "--live: reads the working tree of a repository declared trusted (ye-ast init --trust trusted) instead of a revision; the first run builds ye-ast's mirror of it, and a stale answer is reported on stderr and as a live sibling of the fact in the JSON",
-  "scope: [--include <glob>]... [--exclude <glob>]...   (globs over repository-relative paths, on map, impact, callers and importers; without --include every path is included; --exclude wins)",
+  "--offline: reads every repository from its own clone and refreshes no declared remote, as under untrusted; only workspace and decisions take it",
+  "scope: [--include <glob>]... [--exclude <glob>]...   (globs over repository-relative paths, on map, impact, callers, importers, outline, workspace and decisions; without --include every path is included; --exclude wins)",
   "budget: [--depth <n>] [--hub-fan-in <n>] [--expansions <n>]   (positive integers; none has a default)",
   "workspace: --workspace <file>   (the workspace init persists as .ye-ast/workspace.json: { \"repos\": [{ \"path\", \"id\", \"revision\", \"remote\" }], \"gateways\": [{ \"prefix\", \"repo\" }] }; a relative repository path is stored as written and resolved against the installed repository, and a remote is the source of truth a trusted repository's queries refresh into ye-ast's own mirror)",
   "measure: --measure   (one JSON measurement line per query and per index build, on stderr; never on stdout)",
   "--type-root <dir>: the directory holding the dependency declarations a type layer reads, laid out like a node_modules tree; without it no type information answers and every fact is the one ye-ast gives today",
 ].join("\n");
 
-type Query = () => Promise<Result<unknown, ImpactFault>>;
+type Query = () => Promise<Result<unknown, ImpactFault | WorkspaceFault>>;
 
 /** The stale notice a live query reports once its answer is built, when the working tree moved. */
 interface StaleWatch {
@@ -109,7 +120,7 @@ export async function run(argv: readonly string[], io: CliIo, deps: CliDeps): Pr
 }
 
 /** Every line a fault prints: the kind and detail, then the symbol each entry named and what its file declares. */
-function faultText(fault: ImpactFault, redaction: Redaction): string[] {
+function faultText(fault: ImpactFault | WorkspaceFault, redaction: Redaction): string[] {
   const entries = fault.kind === "unknown-symbol" ? fault.entries.map((entry) => `  - ${entry.file}:${entry.symbol}: ${declarationText(entry)}`) : [];
   return [`ye-ast: ${fault.kind}: ${redaction.redact(fault.detail.trim())}`, ...entries.map((line) => redaction.redact(line))];
 }
@@ -196,6 +207,18 @@ async function queryOf(command: string | undefined, args: readonly string[], dep
     case "importers": {
       const request = await parseImportersRequest(args, deps);
       return request && (() => deps.impact.importers({ ...request, signal, ...(request.live && { onStale }) }));
+    }
+    case "outline": {
+      const request = await parseOutlineRequest(args, deps);
+      return request && (() => deps.outline.outline({ ...request, signal, ...(request.live && { onStale }) }));
+    }
+    case "workspace": {
+      const request = await parseWorkspaceRequest(args, deps);
+      return request && (() => deps.workspace.outwardNames({ ...request, signal }));
+    }
+    case "decisions": {
+      const request = await parseDecisionsRequest(args, deps);
+      return request && (() => deps.decisions.decisions({ ...request, signal }));
     }
     default:
       return undefined;
@@ -334,6 +357,44 @@ async function parseCallersRequest(args: readonly string[], deps: RepositoryNami
   } catch {
     return undefined;
   }
+}
+
+async function parseOutlineRequest(args: readonly string[], deps: RepositoryNaming): Promise<OutlineRequest | undefined> {
+  try {
+    const { values, positionals } = parseArgs({
+      args: [...args],
+      options: { revision: { type: "string" }, live: { type: "boolean" }, "repo-id": { type: "string" }, ...SCOPE_OPTIONS },
+      allowPositionals: true,
+    });
+    const [path, ...files] = positionals;
+    const scope = parseScope(values);
+    const at = atRevision(values);
+    if (path === undefined || files.length === 0 || scope === undefined || at === undefined) return undefined;
+    return { ...(await repositoryOf(deps, path, values["repo-id"])), ...at, files, ...scope };
+  } catch {
+    return undefined;
+  }
+}
+
+async function parseWorkspaceRequest(args: readonly string[], deps: RepositoryNaming): Promise<WorkspaceRequest | undefined> {
+  try {
+    const { values, positionals } = parseArgs({
+      args: [...args],
+      options: { revision: { type: "string" }, "repo-id": { type: "string" }, offline: { type: "boolean" }, ...SCOPE_OPTIONS },
+      allowPositionals: true,
+    });
+    const [path, ...extra] = positionals;
+    const scope = parseScope(values);
+    if (path === undefined || extra.length > 0 || scope === undefined) return undefined;
+    const { repo, repoId } = await repositoryOf(deps, path, values["repo-id"]);
+    return { repo: { path: repo, id: repoId, revision: values.revision ?? DEFAULT_REVISION }, ...scope, ...(values.offline === true ? { offline: true } : {}) };
+  } catch {
+    return undefined;
+  }
+}
+
+function parseDecisionsRequest(args: readonly string[], deps: RepositoryNaming): Promise<DecisionsRequest | undefined> {
+  return parseWorkspaceRequest(args, deps);
 }
 
 async function parseImportersRequest(args: readonly string[], deps: RepositoryNaming): Promise<ImpactImportersRequest | undefined> {

@@ -86,7 +86,13 @@ export function walkImpact(seeds: readonly GraphSymbol[], inbound: InboundEdges,
   let expansions = 0;
   for (let depth = 0; level.length > 0; depth++) {
     const next: Rec[] = [];
-    for (const rec of level.toSorted((a, b) => comparePosition(a.symbol, b.symbol))) {
+    /** The current level, plus every symbol a dispatch bridge puts there: a hop between an interface and its implementation costs no depth. */
+    const queue = level.toSorted((a, b) => comparePosition(a.symbol, b.symbol));
+    const handled = new Set<Rec>();
+    for (let index = 0; index < queue.length; index++) {
+      const rec = queue[index]!;
+      if (handled.has(rec)) continue;
+      handled.add(rec);
       rec.callers = inbound.callersOf(rec.symbol, rec.contractChanged, rec.throughMember);
       rec.fanIn = rec.callers.filter((caller) => caller.basis === "call").length;
       if (budget.depth !== undefined && depth >= budget.depth) stopped.depth.push(rec);
@@ -95,10 +101,12 @@ export function walkImpact(seeds: readonly GraphSymbol[], inbound: InboundEdges,
       else {
         expansions += 1;
         for (const caller of rec.callers) {
+          const free = caller.bridge !== undefined;
+          const into = free ? queue : next;
           let target = recs.get(caller.from.id);
           if (target === undefined) {
-            target = enter(caller.from, depth + 1, placeOn(rec.symbol, caller), false, next);
-            enterOwners(target, next);
+            target = enter(caller.from, free ? depth : depth + 1, placeOn(rec.symbol, caller), false, into);
+            enterOwners(target, into);
           }
           links.push({ from: rec, to: target, confidence: caller.confidence });
         }

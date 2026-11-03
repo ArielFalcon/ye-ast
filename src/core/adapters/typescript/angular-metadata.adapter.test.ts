@@ -38,7 +38,7 @@ function refs(operands: readonly Operand[]): string[] {
 test("a repository whose root manifest does not name @angular/core has no Angular class, no injection and no field", async () => {
   const files = { [SERVICE]: SERVICE_SOURCE, "src/app/a.ts": `${CORE}import { OrdersService } from './orders.service';\n@Component({})\nexport class A { s = inject(OrdersService); }\n` };
 
-  assert.deepEqual(await read(files, JSON.stringify({ dependencies: { react: "19.0.0" } })), { classes: [], findings: [], fields: [] });
+  assert.deepEqual(await read(files, JSON.stringify({ dependencies: { react: "19.0.0" } })), { classes: [], findings: [], fields: [], locals: [] });
   assert.equal((await read(files)).findings.length, 1);
 });
 
@@ -243,4 +243,15 @@ test("an app under a subfolder has its injections read, with repository-relative
     { path: "frontend/src/page.ts", content: `${CORE}import { OrdersService } from './orders.service';\n@Injectable()\nexport class Page {\n  orders = inject(OrdersService);\n}\n` },
   ]);
   assert.deepEqual(summary(meta), ["Page > OrdersService (frontend/src/orders.service.ts:3) @ frontend/src/page.ts:5"]);
+});
+
+test("a local a function takes from inject() is a binding of that function to the class it names", async () => {
+  const meta = await read({
+    [SERVICE]: SERVICE_SOURCE,
+    "src/app/guard.ts": `${CORE}import { OrdersService } from './orders.service';\nexport const guard = () => {\n  const orders = inject(OrdersService);\n  orders.list();\n};\n`,
+  });
+
+  assert.deepEqual(meta.locals, [
+    { owner: { path: "src/app/guard.ts", symbol: "guard", line: 3 }, local: "orders", holds: { class: { path: SERVICE, symbol: "OrdersService", line: 3 } } },
+  ]);
 });

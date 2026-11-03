@@ -8,6 +8,8 @@ import { SCHEMA, type Fact, type FactBase } from "../core/domain/shared/fact.ts"
 import type { Result } from "../core/domain/shared/result.ts";
 import type { EntrypointQueries, MapRequest } from "../core/ports/entrypoint-queries.port.ts";
 import type { ImpactCallersRequest, ImpactFault, ImpactImportersRequest, ImpactOfChangeRequest, ImpactQueries } from "../core/ports/impact-queries.port.ts";
+import type { OutlineQueries, OutlineRequest } from "../core/ports/outline-queries.port.ts";
+import type { OutlineValue } from "../core/domain/outline/outline-fact.ts";
 import { REDACTED, type Redaction } from "../core/ports/redaction.port.ts";
 import type { VcsFault } from "../core/ports/vcs.port.ts";
 import type { LiveFault } from "../core/ports/live-queries.port.ts";
@@ -125,6 +127,21 @@ function decisionFact(value: DecisionValue = DECISIONS): Fact<DecisionValue> {
   return { ...base(), status: "complete", value };
 }
 
+const OUTLINE: OutlineValue = {
+  files: [
+    {
+      file: "src/Order.java",
+      declarations: [
+        { kind: "class", name: "Order", line: 3, endLine: 40 },
+        { kind: "method", name: "total", line: 20, endLine: 24 },
+      ],
+      imports: ["src/Money.java"],
+    },
+    { file: "src/Empty.java", declarations: [], imports: [] },
+  ],
+  unheld: ["src/Gone.swift"],
+};
+
 const IMPORTERS: ImportersValue = {
   files: [{ file: "src/OrderService.java", importers: ["src/OrderController.java"], users: ["src/OrderController.java", "src/Billing.java"], unresolvedNamers: ["src/Legacy.java"] }],
 };
@@ -145,6 +162,7 @@ interface Calls {
   ofChange: ImpactOfChangeRequest[];
   callers: ImpactCallersRequest[];
   importers: ImpactImportersRequest[];
+  outline: OutlineRequest[];
   decisions: DecisionsRequest[];
 }
 
@@ -153,12 +171,13 @@ interface Answers {
   ofChange: (request: ImpactOfChangeRequest) => Promise<Result<Fact<ImpactValue>, VcsFault | LiveFault>>;
   callers: (request: ImpactCallersRequest) => Promise<Result<Fact<ImpactValue>, ImpactFault>>;
   importers: (request: ImpactImportersRequest) => Promise<Result<Fact<ImportersValue>, VcsFault | LiveFault>>;
+  outline: (request: OutlineRequest) => Promise<Result<Fact<OutlineValue>, VcsFault | LiveFault>>;
   decisions: (request: DecisionsRequest) => Promise<Result<FactRead<DecisionValue>, WorkspaceFault>>;
   workspaceOfChange: (request: WorkspaceOfChangeRequest) => Promise<Result<FactRead<WorkspaceImpactValue>, WorkspaceFault>>;
 }
 
 async function setup(answers: Partial<Answers> = {}, refresh?: WorkspaceRefresh): Promise<{ session: Session; calls: Calls }> {
-  const calls: Calls = { map: [], ofChange: [], callers: [], importers: [], workspaceCallers: [], workspaceOfChange: [], workspaceReads: [], decisions: [] };
+  const calls: Calls = { map: [], ofChange: [], callers: [], importers: [], outline: [], workspaceCallers: [], workspaceOfChange: [], workspaceReads: [], decisions: [] };
   /** A fact with the sidecar a read that refreshed something carries, and without one when it refreshed nothing. */
   const read = <T>(fact: Fact<T>): FactRead<T> => (refresh === undefined ? { fact } : { fact, refresh });
   const entrypoints: EntrypointQueries = {
@@ -200,13 +219,19 @@ async function setup(answers: Partial<Answers> = {}, refresh?: WorkspaceRefresh)
       return (answers.workspaceOfChange ?? (async () => ({ ok: true as const, value: read(workspaceImpactFact()) })))(request);
     },
   };
+  const outline: OutlineQueries = {
+    outline: (request) => {
+      calls.outline.push(request);
+      return (answers.outline ?? (async () => ({ ok: true, value: { ...base(), status: "complete", value: OUTLINE } as Fact<OutlineValue> })))(request);
+    },
+  };
   const decisions: DecisionQueries = {
     decisions: (request) => {
       calls.decisions.push(request);
       return (answers.decisions ?? (async () => ({ ok: true, value: read(decisionFact()) })))(request);
     },
   };
-  const server = createMcpServer({ version: "0.0.0", entrypoints, impact, workspace, workspaceImpact, decisions, redaction: fakeRedaction, repository: REPOSITORY });
+  const server = createMcpServer({ version: "0.0.0", entrypoints, impact, outline, workspace, workspaceImpact, decisions, redaction: fakeRedaction, repository: REPOSITORY });
   return { session: await openSession(server), calls };
 }
 
@@ -262,10 +287,34 @@ test("full adds the value and every cut place to the structured content and leav
   await session.close();
 });
 
-test("lists the six read tools, each described, none taking a top-level repository selector", async () => {
+test("the outline lists each declaration with its span and the files it imports, and a file it cannot tell is a cut", async () => {
+  const { session } = await setup({
+    outline: async (request) => ({
+      ok: true,
+      value: {
+        ...base(),
+        status: "partial",
+        value: OUTLINE,
+        cuts: [{ kind: "not-exported", at: ["src/Gone.swift"] }],
+        inputs: { ...base().inputs, declaredConfig: { files: request.files } },
+      } as Fact<OutlineValue>,
+    }),
+  });
+  const text = textOf(await session.callTool("ye_ast_outline", { files: ["src/Order.java", "src/Empty.java", "src/Gone.swift"] }));
+
+  assert.match(text, /^ {2}src\/Order\.java$/m);
+  assert.match(text, /^ {4}3-40 Order \[class\]$/m);
+  assert.match(text, /^ {4}20-24 total \[method\]$/m);
+  assert.match(text, /^ {4}imports: src\/Money\.java$/m);
+  assert.match(text, /^ {2}src\/Empty\.java\n {4}declares nothing$/m);
+  assert.match(text, /not-exported \(1\): src\/Gone\.swift/);
+  await session.close();
+});
+
+test("lists the seven read tools, each described, none taking a top-level repository selector", async () => {
   const { session } = await setup();
   const tools = await session.listTools();
-  assert.deepEqual(tools.map((tool) => tool.name).sort(), ["ye_ast_callers", "ye_ast_decisions", "ye_ast_entrypoints", "ye_ast_impact", "ye_ast_importers", "ye_ast_workspace"]);
+  assert.deepEqual(tools.map((tool) => tool.name).sort(), ["ye_ast_callers", "ye_ast_decisions", "ye_ast_entrypoints", "ye_ast_impact", "ye_ast_importers", "ye_ast_outline", "ye_ast_workspace"]);
   for (const tool of tools) {
     assert.ok((tool.description ?? "").length > 0, tool.name);
     for (const forbidden of ["repo", "repoId", "path", "repository"]) assert.equal(tool.inputSchema.properties?.[forbidden], undefined, `${tool.name}.${forbidden}`);
@@ -273,6 +322,7 @@ test("lists the six read tools, each described, none taking a top-level reposito
   const required = (name: string): string[] => tools.find((tool) => tool.name === name)?.inputSchema.required ?? [];
   assert.deepEqual(required("ye_ast_impact"), ["base"]);
   assert.deepEqual(required("ye_ast_importers"), ["files"]);
+  assert.deepEqual(required("ye_ast_outline"), ["files"]);
   assert.deepEqual(required("ye_ast_callers"), ["targets"]);
   assert.deepEqual(required("ye_ast_entrypoints"), []);
   assert.deepEqual(required("ye_ast_workspace"), []);
@@ -420,29 +470,40 @@ test("a summary counts the cuts anchored at symbols past the listed depth per fi
       seeds: [{ file: "src/a.ts", symbol: "A.seed", line: 1, basis: "requested" }],
       symbols: [
         { file: "src/a.ts", symbol: "A.other", kind: "method", line: 4, depth: 1, confidence: 1, fanIn: 0 },
-        { file: "src/b.ts", symbol: "B.user", kind: "function", line: 9, depth: 2, confidence: 1, fanIn: 0 },
-        { file: "src/c.ts", symbol: "C.top", kind: "function", line: 5, depth: 2, confidence: 1, fanIn: 0 },
+        { file: "src/b.ts", symbol: "B.one", kind: "function", line: 9, depth: 2, confidence: 1, fanIn: 0 },
+        { file: "src/b.ts", symbol: "B.two", kind: "function", line: 19, depth: 2, confidence: 1, fanIn: 0 },
+        { file: "src/b.ts", symbol: "B.three", kind: "function", line: 29, depth: 2, confidence: 1, fanIn: 0 },
+        { file: "src/b.ts", symbol: "B.four", kind: "function", line: 39, depth: 2, confidence: 1, fanIn: 0 },
+        { file: "src/b.ts", symbol: "B.five", kind: "function", line: 49, depth: 2, confidence: 1, fanIn: 0 },
+        { file: "src/b.ts", symbol: "B.six", kind: "function", line: 59, depth: 2, confidence: 1, fanIn: 0 },
+        { file: "src/b.ts", symbol: "B.seven", kind: "function", line: 69, depth: 2, confidence: 1, fanIn: 0 },
+        { file: "src/b.ts", symbol: "B.eight", kind: "function", line: 79, depth: 2, confidence: 1, fanIn: 0 },
       ],
       entrypoints: [],
     },
     cuts: [
       { kind: "unresolved-link", at: ["src/a.ts::A.seed", "src/x.ts:5"] },
       { kind: "hub", at: ["src/a.ts::A.other"] },
-      { kind: "unresolved-link", at: ["src/b.ts::B.user", "src/y.ts:7", "src/y.ts:9"] },
-      { kind: "depth", at: ["src/c.ts::C.top"], limit: 5 },
+      { kind: "depth", at: ["src/b.ts::B.one"], limit: 5 },
+      { kind: "depth", at: ["src/b.ts::B.two"], limit: 5 },
+      { kind: "depth", at: ["src/b.ts::B.three"], limit: 5 },
+      { kind: "depth", at: ["src/b.ts::B.four"], limit: 5 },
+      { kind: "depth", at: ["src/b.ts::B.five"], limit: 5 },
+      { kind: "depth", at: ["src/b.ts::B.six"], limit: 5 },
+      { kind: "depth", at: ["src/b.ts::B.seven"], limit: 5 },
+      { kind: "depth", at: ["src/b.ts::B.eight"], limit: 5 },
       { kind: "no-extractor", at: ["src/z.swift"] },
     ],
   } as Partial<Fact<ImpactValue>>);
   const { session } = await setup({ ofChange: async () => ({ ok: true, value: deep }) });
   const text = textOf(await session.callTool("ye_ast_impact", { base: "main" }));
-  assert.match(text, /^status: partial \(cuts: 2 unresolved-link, 1 depth, 1 hub, 1 no-extractor\)$/m);
+  assert.match(text, /^status: partial \(cuts: 8 depth, 1 hub, 1 no-extractor, 1 unresolved-link\)$/m);
   assert.match(text, /hub \(1\): src\/a\.ts::A\.other/);
   assert.match(text, /A\.seed: src\/x\.ts/);
   assert.match(text, /no-extractor \(1\): src\/z\.swift/);
-  assert.match(text, /summarized \(2 at symbols deeper than depth 1\): detail "full" lists them/);
-  assert.match(text, /^ {2}src\/b\.ts: 1 unresolved-link$/m);
-  assert.match(text, /^ {2}src\/c\.ts: 1 depth$/m);
-  assert.doesNotMatch(text, /src\/y\.ts/);
+  assert.match(text, /summarized \(8 at symbols deeper than depth 1\): detail "full" lists them/);
+  assert.match(text, /^ {2}src\/b\.ts: 8 depth$/m);
+  assert.doesNotMatch(text, /B\.one/);
   await session.close();
 });
 
@@ -673,6 +734,11 @@ test("by default impact lists the symbols at depth 0 and 1 and says how many dee
         { file: "src/b.ts", symbol: "B.user", kind: "function", line: 9, depth: 2, confidence: 1, fanIn: 0 },
         { file: "src/b.ts", symbol: "B.helper", kind: "function", line: 2, depth: 3, confidence: 1, fanIn: 0 },
         { file: "src/c.ts", symbol: "C.top", kind: "function", line: 5, depth: 2, confidence: 1, fanIn: 0 },
+        { file: "src/d.ts", symbol: "D.top", kind: "function", line: 5, depth: 2, confidence: 1, fanIn: 0 },
+        { file: "src/e.ts", symbol: "E.top", kind: "function", line: 5, depth: 2, confidence: 1, fanIn: 0 },
+        { file: "src/f.ts", symbol: "F.top", kind: "function", line: 5, depth: 2, confidence: 1, fanIn: 0 },
+        { file: "src/g.ts", symbol: "G.top", kind: "function", line: 5, depth: 2, confidence: 1, fanIn: 0 },
+        { file: "src/h.ts", symbol: "H.top", kind: "function", line: 5, depth: 2, confidence: 1, fanIn: 0 },
       ],
       entrypoints: [],
       cost: { expansionsUsed: 1 },
@@ -683,7 +749,7 @@ test("by default impact lists the symbols at depth 0 and 1 and says how many dee
   const text = textOf(result);
   assert.match(
     text,
-    /impacted symbols \(4\): 1 at depth 0-1 listed, 3 deeper \(to depth 3\) not listed; ask ye_ast_callers about a symbol listed here to see one ring further, or detail "full" for all\n {2}src\/a\.ts\n {4}4 A\.other \[method\] \(depth 1\)$/m,
+    /impacted symbols \(9\): 1 at depth 0-1 listed, 8 deeper \(to depth 3\) not listed; ask ye_ast_callers about a symbol listed here to see one ring further, or detail "full" for all\n {2}src\/a\.ts\n {4}4 A\.other \[method\] \(depth 1\)$/m,
   );
   assert.doesNotMatch(text, /at depth 2-3|src\/c\.ts: 1 at depth/);
   assert.doesNotMatch(text, /B\.user|C\.top/);
@@ -701,6 +767,11 @@ test("a summary whose symbols are all deeper points at the seeds it does list", 
       symbols: [
         { file: "src/b.ts", symbol: "B.user", kind: "function", line: 9, depth: 2, confidence: 1, fanIn: 0 },
         { file: "src/c.ts", symbol: "C.top", kind: "function", line: 5, depth: 2, confidence: 1, fanIn: 0 },
+        { file: "src/d.ts", symbol: "D.top", kind: "function", line: 5, depth: 2, confidence: 1, fanIn: 0 },
+        { file: "src/e.ts", symbol: "E.top", kind: "function", line: 5, depth: 2, confidence: 1, fanIn: 0 },
+        { file: "src/f.ts", symbol: "F.top", kind: "function", line: 5, depth: 2, confidence: 1, fanIn: 0 },
+        { file: "src/g.ts", symbol: "G.top", kind: "function", line: 5, depth: 2, confidence: 1, fanIn: 0 },
+        { file: "src/h.ts", symbol: "H.top", kind: "function", line: 5, depth: 2, confidence: 1, fanIn: 0 },
       ],
       entrypoints: [],
       cost: { expansionsUsed: 1 },
@@ -708,7 +779,7 @@ test("a summary whose symbols are all deeper points at the seeds it does list", 
   } as Partial<Fact<ImpactValue>>);
   const { session } = await setup({ callers: async () => ({ ok: true, value: deep }) });
   const text = textOf(await session.callTool("ye_ast_callers", { targets: [{ file: "src/a.ts", symbol: "A.seed" }] }));
-  assert.match(text, /2 deeper \(to depth 2\) not listed; ask ye_ast_callers about a seed listed here to see one ring further/);
+  assert.match(text, /7 deeper \(to depth 2\) not listed; ask ye_ast_callers about a seed listed here to see one ring further/);
   await session.close();
 });
 
@@ -1209,5 +1280,32 @@ test("the sidecar is redacted with the composed redaction like every other value
   const structured = JSON.stringify(result.structuredContent);
   assert.doesNotMatch(structured, new RegExp(SECRET));
   assert.match(structured, new RegExp(REDACTED.replace(/[[\]]/g, "\\$&")));
+  await session.close();
+});
+
+/** A counted summary is only a summary when counting costs no more than listing what it hides. Every renderer with a
+ * counted block asserts through this, so the rule is inherited rather than re-argued. */
+function assertCountedSummaryShorter(summary: string, full: string): void {
+  const bytes = (text: string): number => Buffer.byteLength(text, "utf8");
+  assert.ok(bytes(summary) <= bytes(full), `summary is ${bytes(summary)} bytes against ${bytes(full)} for the full answer`);
+}
+
+test("the counted elision of a summary never renders longer than listing what it hides", async () => {
+  const one = impactFact({
+    value: {
+      seeds: [{ file: "src/a.ts", symbol: "A.seed", line: 1, basis: "requested" }],
+      symbols: [
+        { file: "src/a.ts", symbol: "A.seed", kind: "method", line: 1, depth: 0, confidence: 1, fanIn: 0 },
+        { file: "src/a.ts", symbol: "A.other", kind: "method", line: 4, depth: 1, confidence: 1, fanIn: 0 },
+        { file: "src/a.ts", symbol: "A.deep", kind: "method", line: 40, depth: 4, confidence: 1, fanIn: 0 },
+      ],
+      entrypoints: [],
+      cost: { expansionsUsed: 1 },
+    },
+  } as Partial<Fact<ImpactValue>>);
+  const { session } = await setup({ ofChange: async () => ({ ok: true, value: one }) });
+  const summary = textOf(await session.callTool("ye_ast_impact", { base: "main" }));
+  const full = textOf(await session.callTool("ye_ast_impact", { base: "main", detail: "full" }));
+  assertCountedSummaryShorter(summary, full);
   await session.close();
 });
