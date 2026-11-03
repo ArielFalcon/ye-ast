@@ -538,7 +538,7 @@ test("by default a cut names the declarations it could not settle to and the fil
   const text = textOf(await session.callTool("ye_ast_impact", { base: "main" }));
   assert.match(
     text,
-    /unresolved-link \(3 declarations, 5 references; detail "full" lists every place\):\n {4}src\/a\.ts\n {6}A\.f: src\/x\.ts, src\/y\.ts\n {6}A\.g: src\/x\.ts\n {4}src\/z\.ts\n {6}\(the file itself\)$/m,
+    /unresolved-link \(1 file, 2 declarations, 5 references; detail "full" lists every place\):\n {4}src\/a\.ts\n {6}A\.f: src\/x\.ts, src\/y\.ts\n {6}A\.g: src\/x\.ts\n {4}src\/z\.ts\n {6}\(the file itself\)$/m,
   );
   assert.doesNotMatch(text, /src\/x\.ts:\d/, "a summary prints no line of a place");
   assert.equal(text.split("src/a.ts").length - 1, 1, "the file of the declarations is printed once");
@@ -556,6 +556,20 @@ test("a summary names the references of a cut the file leads, so the reader sett
   assert.doesNotMatch(text, /the file itself/);
   const full = textOf(await session.callTool("ye_ast_impact", { base: "main", detail: "full" }));
   assert.match(full, /unresolved-link at src\/z\.ts: lines 4 \(Promise\.resolve\), 9 \(req\.context\.get\)/);
+  await session.close();
+});
+
+test("two cuts led by the same file keep every reference they name", async () => {
+  const partial = impactFact({
+    status: "partial",
+    cuts: [
+      { kind: "unresolved-link", at: ["src/z.ts", "src/z.ts:4 Promise.resolve"] },
+      { kind: "unresolved-link", at: ["src/z.ts", "src/z.ts:9 req.context.get"] },
+    ],
+  } as Partial<Fact<ImpactValue>>);
+  const { session } = await setup({ ofChange: async () => ({ ok: true, value: partial }) });
+  const text = textOf(await session.callTool("ye_ast_impact", { base: "main" }));
+  assert.match(text, /^ {4}src\/z\.ts: Promise\.resolve, req\.context\.get$/m);
   await session.close();
 });
 

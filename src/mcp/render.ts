@@ -178,7 +178,7 @@ function unresolvedDeclarations(cuts: readonly Cut[]): string[] {
   for (const cut of cuts) {
     const anchor = cut.at[0] ?? "";
     const settled = anchor.indexOf("::");
-    if (settled === -1) whole.set(anchor, placeReasons(cut));
+    if (settled === -1) whole.set(anchor, [...new Set([...(whole.get(anchor) ?? []), ...placeReasons(cut)])]);
     else entries.push({ file: anchor.slice(0, settled), name: anchor.slice(settled + 2), files: placeFiles(cut) });
   }
   entries.sort((a, b) => compareText(a.file, b.file) || compareText(a.name, b.name));
@@ -196,8 +196,10 @@ function unresolvedDeclarations(cuts: readonly Cut[]): string[] {
   }
   const references = cuts.reduce((total, cut) => total + Math.max(0, cut.at.length - 1), 0);
   const files = [...new Set([...whole.keys(), ...byFile.keys()])].sort(compareText);
+  const named = (count: number, one: string, many: string): string => `${count} ${count === 1 ? one : many}`;
+  const settled = [whole.size === 0 ? undefined : named(whole.size, "file", "files"), entries.length === 0 ? undefined : named(entries.length, "declaration", "declarations")].filter((part) => part !== undefined);
   return [
-    `  unresolved-link (${cuts.length} declarations, ${references} references; detail "full" lists every place):`,
+    `  unresolved-link (${settled.join(", ")}, ${named(references, "reference", "references")}; detail "full" lists every place):`,
     ...files.flatMap((file) => {
       const named = whole.get(file);
       return [
