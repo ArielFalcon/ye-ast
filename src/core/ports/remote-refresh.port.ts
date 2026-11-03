@@ -22,7 +22,7 @@ export interface RefreshedRemote {
 /**
  * Refreshes declared remotes into ye-ast's own mirrors under `trusted`, with the user's git and credentials: one listing
  * per remote, and the commits the mirror lacks. A failure is the remote's freshness, never a fault of the query. Under
- * `untrusted`, or with `--offline`, no implementation is called.
+ * `untrusted`, or with `offline`, no implementation is called.
  */
 export interface RemoteRefresh {
   refresh(requests: readonly RemoteRefreshRequest[], signal?: AbortSignal): Promise<readonly RefreshedRemote[]>;

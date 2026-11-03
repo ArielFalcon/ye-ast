@@ -231,7 +231,6 @@ export function createGitVcs(deps: GitDeps = defaultGitDeps): Vcs & VcsChanges {
     return { ok: true, value: parseRemotes(run.stdout.toString("utf8")) };
   }
 
-  /** The branch `HEAD` is on; a detached head names no line and `--quiet` answers the absence as exit code 1. */
   async function headBranch(repo: string, signal?: AbortSignal): Promise<Result<string | undefined, VcsFault>> {
     const run = await deps.runGit(repo, ["symbolic-ref", "--quiet", "--short", "HEAD"], signal);
     if (signal?.aborted) return ABORTED;

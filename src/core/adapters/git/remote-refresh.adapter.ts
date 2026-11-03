@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import type { Stats } from "node:fs";
 import { chmod, link, lstat, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { compareText } from "../../domain/shared/code-node.ts";
 import { privateToOwner } from "../../domain/shared/private-to-owner.ts";
 import type { RemoteBranch, RemoteFreshness, RemoteListing } from "../../domain/topology/remote-snapshot.ts";
 import type { Digest } from "../../ports/digest.port.ts";
@@ -373,7 +374,7 @@ function parseListing(output: string): RemoteListing {
     const name = right.slice(HEADS.length);
     if (name !== "") branches.push({ name, sha: left });
   }
-  branches.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  branches.sort((a, b) => compareText(a.name, b.name));
   return { branches, ...(defaultBranch === undefined ? {} : { defaultBranch }) };
 }
 
