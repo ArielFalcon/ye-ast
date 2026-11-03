@@ -1,7 +1,8 @@
 # RFC-0016: Type resolution
 
-- Status: Draft, 2026-11-03. S4 measured: the wiring removes one cut, so the port is not the slice that carries the value.
-  Read `S4 measured` and `The three gaps the measurement exposed` before the design below.
+- Status: Draft, 2026-11-03. S0, S4, S7, S8 and S9 measured; S8 is the slice that carries the value (6% to 13% of the cuts,
+  no type root), and S9 shows the port buys 0 to 3 cuts for +2,2 to +2,9 s and +300 to +480 MB. Read `S4 measured`,
+  `The three gaps the measurement exposed` and `S9 measured` before the design below.
 - Related: [ADR-0008](../adr/0008-typescript-compiler-api-source.md), [ADR-0010](../adr/0010-trust-modes.md),
   [ADR-0013](../adr/0013-coverage-grows-only-with-evidence.md), [ADR-0015](../adr/0015-index-reuse-by-content.md),
   [ADR-0018](../adr/0018-type-information-as-a-fact-input.md), [RFC-0002](0002-facts-contract.md),
@@ -267,10 +268,58 @@ adapter is re-evaluated after A instead of before it.
 |---|---|---|---|
 | S7 | **A guard on the coordinate** (gap C) — **done, 2026-11-03** | A site whose identifier does not spell the reference's name is `unknown`, never a wrong `external` (`type-resolution.adapter.ts`) | Every wrong verdict produced by a misread coordinate becomes `unknown`; a fixture asserts no answer is given about a name that was not read, and removing the guard fails it |
 | S8 | **Retire the false cuts** (gap A) — **done, 2026-11-03**, `ADR-0019` | `core/ports/import-origins.port.ts` and its adapter, consumed before the walk, with the file-level shadow rule; **no type root** | Measured: `HEAD~5` 84→73 cuts, `HEAD~20` 201→184, `HEAD~60` 374→350; a shadowed import keeps its cut; a true cut is never retired; a file whose configuration cannot be read retires nothing |
-| S9 | **Re-evaluate the port** (gaps B and C) | Only if the remaining cut places — receiver-rooted names and names with no import — are worth +387 MB | The measured delta of S8 with the port and without it, against the 350 cuts and the +2,1 s and +387 MB recorded above |
+| S9 | **Re-evaluate the port** (gaps B and C) — **measured, 2026-11-03**: does not earn its cost | The measured delta of S8 with the port and without it, after gaps B and C were fixed | `HEAD~5` 76→76 cuts, `HEAD~20` 190→187, `HEAD~60` 359→356, for +2,2 to +2,9 s and +300 to +480 MB. The section below records it |
 
 S4 is superseded by S8 as the slice that changes an answer. Its wiring stays in the branch as the record of the
 measurement and as the base of S9; nothing of it merges before S8 shows what it adds.
+
+## S9 measured: the port buys 0 to 3 cuts
+
+Measured on 2026-11-03 on the same application, commit `e8699653`, with S8, the coordinate guard and gap B in place, the
+index already cached, two runs per cell, `--type-root <repo>/node_modules` as the root:
+
+| Base | Cuts, no root | Cuts, with root | Places, no root | Places, with root | Symbols |
+|---|---|---|---|---|---|
+| `HEAD~5` | 76 | **76** | 126 | **126** | 586 → 587 |
+| `HEAD~20` | 190 | **187** | 612 | **604** | 1.067 → 1.072 |
+| `HEAD~60` | 359 | **356** | 5.836 | **5.819** | 2.495 → 2.542 |
+
+| | No type root | With one | Delta |
+|---|---|---|---|
+| Query (index cached) | 3,02–3,66 s | 5,52–6,54 s | **+2,2 to +2,9 s** |
+| `maximum resident set size` | 541–576 MB | 844–1.056 MB | **+300 to +480 MB** |
+
+**Gap B does not cost a cut; it was measured against its own absence to say so.** With `declaredOptionsOf` reverted and the
+same type root, the answers are identical at `HEAD~5` (76 cuts, 126 places, 586 symbols) and 359 cuts / 2.496 symbols at
+`HEAD~60`, against 356 / 2.542 with it. So reading the snapshot's configuration retires **3 cuts and adds 46 symbols** on
+the largest diff: it is a correctness fix, never a regression, and the earlier claim in this section that it weakened the
+port was a comparison across two different bases (before and after S8), not a measurement of B.
+
+### What the remaining cuts are
+
+At `HEAD~5`, 76 cuts reach 126 places. Classified against the index and the shipped import proof:
+
+| What the place is | Places | Of the 93 attributed references |
+|---|---|---|
+| `no-extractor`: the file's kind has no extractor | 33 (26%) | — |
+| rooted at `this`/`super`, so it needs a receiver's type | — | 43 (46%) |
+| a name the file declares itself, which the retirement refuses by design | — | 26 (28%) |
+| neither imported nor declared: `console` 13, `caches` 6, `String`, DOM globals | — | 24 (26%) |
+
+**The port settles 39 of those 93 references onto repository declarations, none external, and 54 it cannot settle.** None
+of the 39 lands on a declaration the walk reached, and that is exactly why it removes no cut: a settlement retires a place
+only when the walk expanded it, and an edge to a declaration nothing else reached changes no answer.
+
+So a quarter of the remaining list is not a type question at all, nearly half is the receiver population the port was
+supposed to rescue, and it resolves those references without any of them mattering to the walk. That is the measurement,
+not an opinion: `+2,2 to +2,9 s` and `+300 to +480 MB` buy 0 to 3 places out of 126.
+
+The three cuts `HEAD~5` reports over the 73 of `ADR-0019` are not a regression: keying a retirement by the line hid true
+cuts that shared it, and the reference-scoped key restores them.
+
+What this leaves is a decision, not a measurement: whether a capability that is inert without a host-supplied type root
+and removes 0–3 cuts should stay shipped. The recommendation is to retire the port and `--type-root` in their own slice
+and keep S8, which needs no root and removes 6% to 13% of the cuts on the same diff.
 
 ## How these costs were measured
 

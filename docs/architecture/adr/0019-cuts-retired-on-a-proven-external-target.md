@@ -81,7 +81,8 @@ population did not.
 
 ## Not decided here
 
-- Whether the type layer merges (`RFC-0016` S9): it now needs to prove itself against 350 cuts instead of 374.
+- Whether the type layer merges (`RFC-0016` S9): measured on 2026-11-03, it removes 0 to 3 cuts for +2,2 to +2,9 s and
+  +300 to +480 MB, so the recommendation is to retire it and keep this record's proof, which needs no root.
 - The budget that stops a `Program` and what a fact does when it is reached (`RFC-0016` question 4).
 - Any Java equivalent of an import-binding proof: the Java extractor reads annotations, not resolution, and no
   measurement of what it loses exists yet.

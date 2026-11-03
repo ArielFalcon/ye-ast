@@ -136,13 +136,23 @@ cut list, and the type layer can shorten it only by proving that a cut is false,
 That is `RFC-0016` gap A, and it does not need a `Program` for most of its effect: an import binding plus the existing
 `module-resolver` proves 55% of the cut places in 369 ms, without a type root, a `Program` or `node_modules`.
 
-This record stays `Proposed` until the owner decides three things: whether a cut whose target is provably external stops
-being a cut, whether the port stays once that is measured, and whether a host under `untrusted` supplies a type root at
-all — decision 6 means qayaba, which declares `untrusted` for every run, gets nothing from this record without one.
+**The second was measured on 2026-11-03.** With S8, the coordinate guard and gap B in place, on `e8699653` with the index
+cached and two runs per cell:
 
-**The first of those was decided on 2026-11-03** and shipped as `ADR-0019`: a cut whose target a file's own imports prove
-external is no longer emitted, without a type root. Measured, it removes 6% to 13% of the cuts of a real diff and changes
-no symbol. The port itself remains unmerged, and now has to justify +387 MB against a list that is already smaller.
+| Base | Cuts, no root | Cuts, with root | Symbols | Query, no root → with |
+|---|---|---|---|---|
+| `HEAD~5` | 76 | 76 | 586 → 587 | 3,02–3,28 s → 5,72–5,85 s |
+| `HEAD~20` | 190 | 187 | 1.067 → 1.072 | 3,33 s → 5,52 s |
+| `HEAD~60` | 359 | 356 | 2.495 → 2.542 | 3,66 s → 6,54 s |
+
+Peak RSS 541–576 MB → 844–1.056 MB. The port removes **0 to 3 cuts** for **+2,2 to +2,9 s** and **+300 to +480 MB**. It is
+not gap B's doing: with gap B reverted the same root removes zero cuts too. At `HEAD~5` it settles 39 of the 93 references
+the cuts are about, none of them onto a declaration the walk reached, which is why no place disappears. The full table,
+the composition of what the remaining cuts are, and the recommendation are `RFC-0016`, "S9 measured".
+
+So the port is inert without a host-supplied type root and worth 0–3 cuts with one. Whether it stays shipped is the
+owner's decision; this record recommends retiring it and `--type-root` in their own slice, and keeping `ADR-0019`, which
+needs no root and removes 6% to 13% of the cuts on the same diff.
 
 Two defects found while measuring were independent of that decision and stood on their own: the adapter trusted a
 coordinate codegraph does not promise (`RFC-0016` gap C), and it resolved modules without the repository's `paths`
