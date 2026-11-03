@@ -2,7 +2,8 @@
 
 - Status: Draft, 2026-11-03. S0, S4, S7, S8 and S9 measured; S8 is the slice that carries the value (6% to 13% of the cuts,
   no type root), and S9 shows the port buys 0 to 3 cuts for +2,2 to +2,9 s and +300 to +480 MB. Read `S4 measured`,
-  `The three gaps the measurement exposed` and `S9 measured` before the design below.
+  `The three gaps the measurement exposed` and `S9 measured` before the design below. The remaining families are planned as
+  S10 to S13 in "What would close the remaining families".
 - Related: [ADR-0008](../adr/0008-typescript-compiler-api-source.md), [ADR-0010](../adr/0010-trust-modes.md),
   [ADR-0013](../adr/0013-coverage-grows-only-with-evidence.md), [ADR-0015](../adr/0015-index-reuse-by-content.md),
   [ADR-0018](../adr/0018-type-information-as-a-fact-input.md), [RFC-0002](0002-facts-contract.md),
@@ -271,7 +272,8 @@ adapter is re-evaluated after A instead of before it.
 | S9 | **Re-evaluate the port** (gaps B and C) — **measured, 2026-11-03**: does not earn its cost | The measured delta of S8 with the port and without it, after gaps B and C were fixed | `HEAD~5` 76→76 cuts, `HEAD~20` 190→187, `HEAD~60` 359→356, for +2,2 to +2,9 s and +300 to +480 MB. The section below records it |
 
 S4 is superseded by S8 as the slice that changes an answer. Its wiring stays in the branch as the record of the
-measurement and as the base of S9; nothing of it merges before S8 shows what it adds.
+measurement and as the base of S9; nothing of it merges before S8 shows what it adds. What is left after S9 is not
+another port: the remaining families are planned as S10 to S13 in "What would close the remaining families".
 
 ## S9 measured: the port buys 0 to 3 cuts
 
@@ -343,6 +345,40 @@ the *optimistic* reading of the port's cost: in the shape the MCP actually runs,
 The syntax-only mechanisms do not change this envelope: `import-origins` is built per query and dropped, and the ambient
 table is a fixed few hundred kilobytes.
 
+## What would close the remaining families
+
+The list above is not one problem. It is four, and only one of them is the type layer's. The rule that orders the work is
+narrower than "remove the cut": **a place may stay in the list, but it may not name a declaration the reference was never
+proven to reach.** That is `RFC-0002` rule 2 applied to what the emitter already knows, and it is what S8 started.
+
+| # | Family at `HEAD~5` | Mechanism | Effect | Cost |
+|---|---|---|---|---|
+| S10 | 19 of the 24 unbound references: `console` 13, `caches` 6, `String` | A root the pinned `typescript` lib declares, and that no repository file declares, cannot name a repository declaration. Retire the place, as an `external@lib` proof | Up to 15% of the places leave the list | ~0 with a precomputed table (~30 KB); 223–227 ms once and a ~100 MB transient peak if parsed at runtime |
+| S11 | 26 references the file declares itself | Replace the file-level shadow refusal with an enclosing-scope check, conservative: a declaration in a scope that encloses the use keeps the `unknown` | Recovers what `ADR-0019` decision 3 gave up for 6% | ~0 folded into the parse `import-origins` already performs; 224–259 ms as a second pass |
+| S12 | every qualified reference whose root is unproven | Stop attributing it to the walked homonym: anchor it at the caller file, or at the declaration a settlement proved | The list stops lying; the count may not move | ~0 |
+| S13 | 33 `no-extractor` places | Not types: `unreadRelationCuts` names Angular and DI relations the extractor could not place. Understand the construct, or declare the scope | Up to 26% of the places | A slice of its own, inside the extractor |
+| — | 43 receiver-rooted references | The one family that needs the checker, which S9 measured as not paying | — | +2,2 to +2,9 s and +300 to +480 MB per query, growing in a server |
+
+Two rules hold for whichever of these lands:
+
+1. **No slice claims completeness of its own.** S10 and S11 retire places, so a fact may move to `complete` when the
+   retired cut was its only one; that is `ADR-0019` decision 5, not a new claim.
+2. **S12 may not shorten the list.** Re-anchoring keeps the fact `partial`, because the reference still names something
+   outside the answer. It removes the false attribution, which is the harm, not the count.
+
+Measured cost of the syntax-only mechanisms on the same application (1.138 sources, 70 files holding cut places):
+
+| | Latency | Memory |
+|---|---|---|
+| lib declared names parsed at runtime (107 files, 2.538 names) | 223–227 ms, once per process | set ~0,1 MB retained, ~100 MB transient peak |
+| the same names as a precomputed table | ~0 | ~30 KB |
+| a second syntax pass over the 70 files that hold places | 224–259 ms | ~25 MB transient, nothing retained |
+| the same pass folded into `import-origins`'s own parse | ~0 marginal | 0 |
+| `createDeclarationLookup` over a repository import | ms per file, lazy | ~0 |
+
+None of these empties the list. The receiver population needs a type and the `no-extractor` population needs an extractor.
+What S10 to S12 buy is a list that never names a declaration it cannot prove, at a cost the process already pays.
+
 ## How these costs were measured
 
 Every number above is a **peak RSS** and a wall clock taken from one-shot CLI runs with the index already cached:
@@ -355,9 +391,8 @@ Every number above is a **peak RSS** and a wall clock taken from one-shot CLI ru
 one-shot run, where the process ends with that peak; a long-lived daemon keeps only what its queries still reference, and
 a memoized `Program` is one of the few things that stays.
 
-A delta is reported only when the two configurations' three runs do not overlap. That is why the type root's +387 MB and
-the import binding's +128 MB are stated as numbers, and why no latency delta is: the wall clock of repeated runs moves
-more than the difference between them. A single run is never the evidence.
+A delta is reported only when the two configurations' runs or their ranges do not overlap, which is why the type root's
++387 MB, the import binding's +128 MB and S9's +2,2 to +2,9 s are stated as numbers. A single run is never the evidence.
 
 The floor decomposes exactly, each imported alone: an empty Node process 43 MB, `tsx` +15, the `typescript` compiler API
 +140, `codegraph` +53, and ye-ast's own entry point +19, for **272 MB before a repository is touched**. What a query adds
