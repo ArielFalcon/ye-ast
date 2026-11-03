@@ -273,6 +273,7 @@ test("a path prefix and a host a call site names are outward names, and an undec
   const section = value.sections["shop-web"];
   assert.ok(section !== undefined);
   assert.deepEqual(section.value.names.map((name) => `${name.kind} ${name.name}`), ["http-host https://maps.example.com/geo", "path-prefix orders-api"]);
+  assert.deepEqual(section.value.unresolved, [{ path: "src/app/core/auth/auth.service.ts", line: 48, symbol: "AuthService.refresh", transport: "http" }]);
 });
 
 test("a repository that depends on another one given reads its calls through that repository's sources", async () => {

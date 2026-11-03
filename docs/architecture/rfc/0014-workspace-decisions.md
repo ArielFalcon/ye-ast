@@ -88,7 +88,7 @@ The list is closed. Every option comes from a fact with evidence; the engine nev
 | `membership`, one per name (`membership:name:<name>`) | an outward name has at least one candidate clone | the clones serving that name, each with its basis (`nameCandidates`) | the strongest basis; two at one basis recommend none |
 | `membership`, one per clone (`membership:clone:<repo>`) | a candidate clone the request passed names nothing | keep it in the workspace, or drop it | none |
 | `repository` | an outward name no clone given serves (`unserved`) | free text: a local path or a URL; "leave it unserved" | none: the engine cannot know where a name lives |
-| `library` | a call-site cut names a library (`via`, `unresolvedPlace`) | the clones given, each as a candidate to confirm; free text | none: no fact states which clone is the library a FQN names |
+| `library` | a call-site cut names a library (`via`, `unresolvedCallSite`) | the clones given, each as a candidate to confirm; free text | none: no fact states which clone is the library a FQN names |
 | `gateway` | a prefix appears in call sites, matches no repository by name, and `inferGateways` did not infer it (zero or two or more matches) | the repositories whose routes match a call another repository makes under the prefix once it is stripped (`matchBehindGateway`); "leave it unmatched" | none: zero or two or more matches, by construction |
 | `revision` | a repository is read at `HEAD` while the trigger's line differs | the branches the remote's listing states; free text | the branch with the trigger's line name; otherwise the remote's default branch; otherwise none |
 | `remote` | a repository is declared without a `remote` | the clone's own remote URLs as evidence; free text | none: a source of truth is a security decision, confirmed never preselected |
@@ -208,6 +208,11 @@ the host's.
   still leaves it, because only a declaration states where the name lives. A name written twice with different kinds is
   one decision with both places. On the probe workspace the 121 names no repository serves are decisions, third-party
   coordinates included: the set is complete by design, and the harness decides what it renders.
+- `repository` decisions carry `outwardKinds`, the outward kinds their subject is written with, sorted. The fact still
+  states every gap; the MCP answer is what turns the set into a form: it groups the gaps by kind (trust, gateway,
+  library, repository, membership, remote, revision) and a summary counts the free-text-only dependency gaps, listing
+  them only under `detail: "full"`. A dependency coordinate stays a decision, as above; it stops burying the gaps a
+  human can answer.
 - `gateway` is one decision per prefix no repository id names and no gateway in force routes. Its options are the
   repositories whose routes match a call under the prefix once it is stripped, with the matched route as evidence; there
   is no recommendation, because zero or two or more matches are what leaves the gap. The caller's own repository is

@@ -1,6 +1,6 @@
 import ts from "typescript";
 import { isPackageManifest, isTypeScriptSource } from "../../domain/languages/typescript.ts";
-import type { CallSite, HttpTarget } from "../../domain/topology/call-site.ts";
+import type { CallSite, HttpTarget, StatedRequest } from "../../domain/topology/call-site.ts";
 import type { CallSiteReader } from "../../domain/topology/call-site.ts";
 import type { Finding } from "../../domain/shared/fact.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
@@ -344,6 +344,12 @@ function scopeOfCall(call: ts.CallExpression): Scope {
   return enclosing === undefined ? NO_SCOPE : scopeOf(enclosing);
 }
 
+/** A call's target, and the request the code states when the snapshot cannot decide where it goes. */
+interface ReadTarget {
+  target: Finding<HttpTarget>;
+  stated?: StatedRequest;
+}
+
 /** Reads one file's call sites, resolving the module specifiers it meets through the snapshot. */
 class Reader {
   constructor(
@@ -354,11 +360,11 @@ class Reader {
 
   async callSite(shape: FileShape, call: ts.CallExpression, repo: string): Promise<CallSite[]> {
     if (this.forwardsItsOwnParameter(shape, call)) return [];
-    const target = await this.target(shape, call);
-    if (target === undefined) return [];
+    const read = await this.target(shape, call);
+    if (read === undefined) return [];
     const start = shape.source.getLineAndCharacterOfPosition(call.getStart(shape.source)).line + 1;
     const end = shape.source.getLineAndCharacterOfPosition(call.getEnd()).line + 1;
-    return [{ repo, file: shape.source.fileName, line: start, endLine: end, symbol: symbolOf(call) ?? "(top level)", transport: "http", target }];
+    return [{ repo, file: shape.source.fileName, line: start, endLine: end, symbol: symbolOf(call) ?? "(top level)", transport: "http", target: read.target, ...(read.stated === undefined ? {} : { stated: read.stated }) }];
   }
 
   /**
@@ -373,7 +379,7 @@ class Reader {
   }
 
   /** The target of the call when it is a request the project makes out of itself; undefined for every other call. */
-  private async target(shape: FileShape, call: ts.CallExpression): Promise<Finding<HttpTarget> | undefined> {
+  private async target(shape: FileShape, call: ts.CallExpression): Promise<ReadTarget | undefined> {
     const callee = call.expression;
     if (ts.isIdentifier(callee) && callee.text === "fetch") return this.request(shape, call, call.arguments[0], "GET");
     if (isHttpResource(shape, callee)) return this.resource(shape, call);
@@ -390,7 +396,7 @@ class Reader {
   }
 
   /** `request(method, url)`, or `request(new HttpRequest(method, url))`: the method is an argument, never assumed. */
-  private async explicitRequest(shape: FileShape, call: ts.CallExpression): Promise<Finding<HttpTarget>> {
+  private async explicitRequest(shape: FileShape, call: ts.CallExpression): Promise<ReadTarget> {
     const [first, second] = call.arguments;
     const sent = first !== undefined && ts.isNewExpression(first) && isHttpPackageName(shape, first.expression, "HttpRequest") ? first.arguments : undefined;
     const [method, path] = sent ?? [first, second];
@@ -398,7 +404,7 @@ class Reader {
   }
 
   /** `httpResource(() => url)` is a GET of the URL; `httpResource(() => ({ url, method }))` states its method, GET when it names none. */
-  private async resource(shape: FileShape, call: ts.CallExpression): Promise<Finding<HttpTarget>> {
+  private async resource(shape: FileShape, call: ts.CallExpression): Promise<ReadTarget> {
     const [first] = call.arguments;
     const returned = first !== undefined && (ts.isArrowFunction(first) || ts.isFunctionExpression(first)) ? bodyExpression(first) : first;
     const described = returned === undefined ? undefined : objectOf(returned);
@@ -412,14 +418,15 @@ class Reader {
     return text === undefined ? undefined : verbOf(text.toLowerCase());
   }
 
-  private async request(shape: FileShape, call: ts.CallExpression, pathExpression: ts.Expression | undefined, method: HttpTarget["method"] | undefined): Promise<Finding<HttpTarget>> {
+  private async request(shape: FileShape, call: ts.CallExpression, pathExpression: ts.Expression | undefined, method: HttpTarget["method"] | undefined): Promise<ReadTarget> {
     const at = { path: shape.source.fileName, line: lineOf(shape.source, call) };
-    const unknown: Finding<HttpTarget> = { status: "unknown", reason: "unresolved", evidence: [at] };
+    const unknown: ReadTarget = { target: { status: "unknown", reason: "unresolved", evidence: [at] } };
     const path = pathExpression === undefined ? undefined : textOf(await this.evaluate(shape, pathExpression, scopeOfCall(call)));
     if (path === undefined || method === undefined) return unknown;
     const base = await this.baseUrl(shape, call);
-    if (base === UNDECIDED) return unknown;
-    return { status: "complete", value: { method, path: normalizePath(path), ...(base === undefined ? {} : { base }) }, evidence: [at] };
+    const written = normalizePath(path);
+    if (base === UNDECIDED) return { ...unknown, stated: { method, path: written } };
+    return { target: { status: "complete", value: { method, path: written, ...(base === undefined ? {} : { base }) }, evidence: [at] } };
   }
 
   /** The base URL the call's options declare: undefined when they declare none, `UNDECIDED` when the snapshot does not decide it. */

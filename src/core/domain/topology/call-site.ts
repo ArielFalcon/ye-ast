@@ -1,5 +1,5 @@
 import type { HttpMethod } from "../entrypoints/http-route.ts";
-import type { Evidence, Finding } from "../shared/fact.ts";
+import { declarationSpan, type Evidence, type Finding } from "../shared/fact.ts";
 
 /** A call one repository makes out of itself: an HTTP request or a published message, with where it is written. */
 export interface CallSite {
@@ -12,11 +12,19 @@ export interface CallSite {
   symbol: string;
   transport: "http" | "event";
   target: Finding<HttpTarget | EventTarget>;
+  /** The request the code writes, when the snapshot decides everything about it but the base it reaches. */
+  stated?: StatedRequest;
+}
+
+/** The request an HTTP call writes when the snapshot cannot decide its base: the method and the path. */
+export interface StatedRequest {
+  method: HttpMethod;
+  path: string;
 }
 
 /**
- * A request as the code writes it. `path` is a pattern: a `{}` segment is a parameter the code fills at run time, and the
- * base URL is a finding of its own, `unknown` when the snapshot does not decide it.
+ * A request as the code writes it. `path` is a pattern: a `{}` segment is a parameter the code fills at run time, and
+ * the base URL is a finding of its own, `unknown` when the snapshot does not decide it.
  */
 export interface HttpTarget {
   method: HttpMethod;
@@ -42,13 +50,38 @@ export interface CallSiteReader {
   of(files: readonly { path: string; content: string }[], repo: string, libraries?: readonly { path: string; content: string }[]): Promise<readonly CallSite[]>;
 }
 
+/**
+ * A call site whose target the snapshot does not decide, with what is known about it: the declaration it is written in,
+ * the transport, the library it goes through and, when only the base is undecided, the request it writes. Enough to act
+ * on it without opening the file.
+ */
+export interface UnresolvedCallSite {
+  path: string;
+  line: number;
+  endLine?: number;
+  symbol: string;
+  transport: CallSite["transport"];
+  /** The library the call goes through, when the snapshot names one. */
+  via?: string;
+  /** The request the code writes, when the snapshot decides everything but where it goes. */
+  stated?: StatedRequest;
+}
+
 /** The place a call site is written, as the evidence of the finding that reports it. */
 export function callSiteEvidence(site: CallSite): Evidence {
   return site.endLine === undefined ? { path: site.file, line: site.line } : { path: site.file, line: site.line, endLine: site.endLine };
 }
 
-/** The place of a call site whose target the snapshot does not decide, with the library the call goes through when it names one. */
-export function unresolvedPlace(site: CallSite): Evidence {
+/** A call site the snapshot cannot decide, as the workspace reports it: what is known, never only its place. */
+export function unresolvedCallSite(site: CallSite): UnresolvedCallSite {
   const via = site.target.status === "unknown" ? site.target.evidence[0]?.via : undefined;
-  return via === undefined ? callSiteEvidence(site) : { ...callSiteEvidence(site), via };
+  return {
+    path: site.file,
+    line: site.line,
+    ...declarationSpan(site.line, site.endLine),
+    symbol: site.symbol,
+    transport: site.transport,
+    ...(via === undefined ? {} : { via }),
+    ...(site.stated === undefined ? {} : { stated: site.stated }),
+  };
 }

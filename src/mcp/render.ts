@@ -6,15 +6,15 @@ import { declarationAnchor } from "../core/domain/impact/impact-cuts.ts";
 import type { ImportersValue } from "../core/domain/impact/importers-fact.ts";
 import type { OutlineValue } from "../core/domain/outline/outline-fact.ts";
 import type { EntrypointMap } from "../core/domain/map/entrypoint-map.ts";
-import type { Decision, DecisionOption } from "../core/domain/decisions/decision.ts";
+import type { Decision, DecisionKind, DecisionOption } from "../core/domain/decisions/decision.ts";
 import { compareText } from "../core/domain/shared/code-node.ts";
 import type { Cut, Evidence, Fact, Finding, SnapshotRef } from "../core/domain/shared/fact.ts";
 import type { ImpactFault } from "../core/ports/impact-queries.port.ts";
 import type { LiveStaleNotice } from "../core/ports/live-queries.port.ts";
-import type { NameCandidate, OutwardName } from "../core/domain/topology/outward-name.ts";
+import type { NameCandidate, OutwardKind, OutwardName } from "../core/domain/topology/outward-name.ts";
 import type { WorkspaceRefresh, WorkspaceValue } from "../core/ports/workspace-queries.port.ts";
 import type { DecisionValue } from "../core/ports/decision-queries.port.ts";
-import type { CallSite } from "../core/domain/topology/call-site.ts";
+import type { CallSite, UnresolvedCallSite } from "../core/domain/topology/call-site.ts";
 import type { ImpactedLink } from "../core/domain/topology/link.ts";
 import type { RepositoryResolution } from "../core/domain/topology/remote-snapshot.ts";
 import type { RepoImpact, WorkspaceImpactValue } from "../core/ports/workspace-impact-queries.port.ts";
@@ -551,42 +551,140 @@ function candidateLine(candidate: NameCandidate): string {
   return `  - ${candidate.name} -> ${candidate.repo} (${candidate.basis})`;
 }
 
-function outwardLine(name: OutwardName): string {
-  return `  - ${name.kind} ${name.name} (${name.evidence.map(evidenceText).join(", ")})`;
+/** The order the text lists outward kinds in: what the repository calls first, what it consumes last. */
+const OUTWARD_ORDER: Readonly<Record<OutwardKind, number>> = {
+  "path-prefix": 0,
+  "http-host": 1,
+  "configuration-url": 2,
+  destination: 3,
+  registry: 4,
+  remote: 5,
+  dependency: 6,
+};
+
+/** The order the text lists decisions in: a form is filled top-down by what blocks the answer, then by what locates a clone. */
+const DECISION_ORDER: Readonly<Record<DecisionKind, number>> = {
+  trust: 0,
+  gateway: 1,
+  library: 2,
+  repository: 3,
+  membership: 4,
+  remote: 5,
+  revision: 6,
+};
+
+/** The items grouped by the rank their key holds in `order`, the groups in that order. */
+function groupedByRank<T, K extends string>(items: readonly T[], keyOf: (item: T) => K, order: Readonly<Record<K, number>>): [K, T[]][] {
+  return [...Map.groupBy(items, keyOf)].toSorted(([a], [b]) => order[a] - order[b]);
+}
+
+/** The names of one repository under their kind: a summary lists a dependency only when a repository given serves it,
+ * and counts the rest, since a dependency is what the repository consumes and not what it calls. */
+function namesBlock(names: readonly OutwardName[], served: ReadonlySet<string>, detail: Detail): string[] {
+  return groupedByRank(names, (name) => name.kind, OUTWARD_ORDER).flatMap(([kind, ofKind]) => {
+    const listed = detail === "full" || kind !== "dependency" ? ofKind : ofKind.filter((name) => served.has(name.name));
+    const counted = ofKind.length - listed.length;
+    const head =
+      counted === 0 ? `    ${kind} (${ofKind.length}):`
+      : counted === ofKind.length ? `    ${kind} (${ofKind.length}): no repository given serves them; detail "full" lists them`
+      : `    ${kind} (${ofKind.length}): ${counted} no repository given serves; detail "full" lists them`;
+    const line = (name: OutwardName): string => `      - ${name.name} (${name.evidence.map(evidenceText).join(", ")})`;
+    const listing = [head, ...ofKind.map(line)];
+    const summarized = [head, ...listed.map(line)];
+    return counted === 0 || size(summarized) <= size(listing) ? summarized : listing;
+  });
+}
+
+/** The names no repository given serves: a summary lists what the repository could call and counts the coordinates it consumes. */
+function unservedBlock(unserved: readonly OutwardName[], detail: Detail): string[] {
+  if (unserved.length === 0) return ["no local repository serves (0):", NONE];
+  const listed = detail === "full" ? unserved : unserved.filter((name) => name.kind !== "dependency");
+  const counted = unserved.length - listed.length;
+  const head = `no local repository serves (${unserved.length}):`;
+  const listing = [head, ...unserved.map((name) => `  - ${name.kind} ${name.name}`)];
+  if (counted === 0) return listing;
+  const summarized = [`${head} ${counted} dependency counted; detail "full" lists them`, ...listed.map((name) => `  - ${name.kind} ${name.name}`)];
+  return size(summarized) <= size(listing) ? summarized : listing;
+}
+
+/** The unresolved call sites under the file that holds them, sorted, each with the request it writes when the code states it. */
+function unresolvedListing(sites: readonly UnresolvedCallSite[]): string[] {
+  const sorted = [...sites].toSorted((a, b) => compareText(a.path, b.path) || a.line - b.line || compareText(a.symbol, b.symbol));
+  return [...Map.groupBy(sorted, (site) => site.path)].flatMap(([path, inFile]) => [`    ${path}`, ...inFile.map(unresolvedLine)]);
+}
+
+function unresolvedLine(site: UnresolvedCallSite): string {
+  const through = site.via === undefined ? "" : `, through ${site.via}`;
+  const stated = site.stated === undefined ? "" : ` ${site.stated.method} ${site.stated.path}`;
+  return `      ${spanText(site.line, site.endLine)} ${site.symbol} (${site.transport}${through})${stated}`;
+}
+
+/** The call sites no repository given decides, so the caller settles each one by reading its declaration, never the file. */
+function unresolvedBlock(value: WorkspaceValue): string[] {
+  const sections = value.workspace.repos.flatMap((repo) => {
+    const section = value.sections[repo];
+    return section === undefined || section.status === "unknown" || section.value.unresolved.length === 0 ? [] : [[repo, section.value.unresolved] as const];
+  });
+  if (sections.length === 0) return [];
+  return [
+    `unresolved call sites (${sections.reduce((total, [, sites]) => total + sites.length, 0)}):`,
+    ...sections.flatMap(([repo, sites]) => [`  ${repo}:`, ...unresolvedListing(sites)]),
+  ];
 }
 
 export function renderWorkspace(fact: Fact<WorkspaceValue>, detail: Detail = "summary"): string {
   const lines = headerLines(fact);
   if (fact.status === "unknown") return lines.join("\n");
   const { value } = fact;
+  const served = new Set(value.candidates.map((candidate) => candidate.name));
+  const sections = value.workspace.repos.flatMap((repo) => {
+    const section = value.sections[repo];
+    return section === undefined || section.status === "unknown" ? [] : [[repo, section.value.names] as const];
+  });
   lines.push(counted("repositories", value.repositorySnapshots.map(({ repo, snapshot }) => `${repo}@${snapshot.kind === "sha" ? snapshot.sha : snapshot.stateId}`)));
   lines.push(sourceLine(value.workspace.source));
-  lines.push("outward names:");
-  for (const repo of value.workspace.repos) {
-    const section = value.sections[repo];
-    if (section === undefined || section.status === "unknown") continue;
-    lines.push(`  ${repo}:`, ...list(section.value.names.map(outwardLine)));
-  }
+  lines.push(`outward names (${sections.reduce((total, [, names]) => total + names.length, 0)}):`);
+  for (const [repo, names] of sections) lines.push(`  ${repo}:`, ...namesBlock(names, served, detail));
   lines.push(`served by a local repository (${value.candidates.length}):`, ...value.candidates.map(candidateLine));
-  lines.push(`no local repository serves (${value.unserved.length}):`, ...value.unserved.map((name) => `  - ${name.kind} ${name.name}`));
-  lines.push(...cutsBlock([...cutsOf(fact), ...Object.values(value.sections).flatMap(cutsOf)], detail));
+  lines.push(...unservedBlock(value.unserved, detail));
+  lines.push(...unresolvedBlock(value));
+  const cuts = [...cutsOf(fact), ...Object.values(value.sections).flatMap(cutsOf)].filter((cut) => cut.kind !== "unresolved-link");
+  lines.push(...cutsBlock(cuts, detail));
   return lines.join("\n");
 }
 
 /** One value the workspace can verify, the facts that make it valid in parentheses, and the places that state them. */
 function optionLine(option: DecisionOption): string {
   const facts = [...(option.basis === undefined ? [] : [option.basis]), ...(option.recommended ? ["recommended"] : []), ...option.evidence.map(evidenceText)];
-  return `    - ${option.value}${facts.length === 0 ? "" : ` (${facts.join(", ")})`}`;
+  return `      - ${option.value}${facts.length === 0 ? "" : ` (${facts.join(", ")})`}`;
 }
 
 /** One gap: what is missing, the places that motivated it, every option, and whether a value no fact states answers it. */
 function decisionLines(decision: Decision): string[] {
   return [
-    `  ${decision.kind} ${decision.subject}`,
-    ...(decision.evidence.length === 0 ? [] : [`    evidence: ${decision.evidence.map(evidenceText).join(", ")}`]),
+    `    ${decision.subject}`,
+    ...(decision.evidence.length === 0 ? [] : [`      evidence: ${decision.evidence.map(evidenceText).join(", ")}`]),
     ...decision.options.map(optionLine),
-    ...(decision.allowsFreeText ? ["    free text: an answer no fact states is accepted"] : []),
+    ...(decision.allowsFreeText ? ["      free text: an answer no fact states is accepted"] : []),
   ];
+}
+
+/** Whether a decision is a dependency coordinate no repository given serves: free text only, so a summary counts it. */
+function dependencyGap(decision: Decision): boolean {
+  const kinds = decision.outwardKinds ?? [];
+  return decision.kind === "repository" && decision.options.length === 0 && kinds.length > 0 && kinds.every((kind) => kind === "dependency");
+}
+
+/** The gaps under their kind, the ones that block first: a summary counts the dependency coordinates a form cannot answer. */
+function decisionsBlock(decisions: readonly Decision[], detail: Detail): string[] {
+  return groupedByRank(decisions, (decision) => decision.kind, DECISION_ORDER).flatMap(([kind, ofKind]) => {
+    const listed = detail === "full" ? ofKind : ofKind.filter((decision) => !dependencyGap(decision));
+    const counted = ofKind.length - listed.length;
+    const head = counted === 0 ? `  ${kind} (${ofKind.length}):` : `  ${kind} (${ofKind.length}): ${counted} dependency counted (free text only); detail "full" lists them`;
+    const listing = [head, ...ofKind.flatMap(decisionLines)];
+    const summarized = [head, ...listed.flatMap(decisionLines)];
+    return counted === 0 || size(summarized) <= size(listing) ? summarized : listing;
+  });
 }
 
 export function renderDecisions(fact: Fact<DecisionValue>, detail: Detail = "summary"): string {
@@ -595,7 +693,8 @@ export function renderDecisions(fact: Fact<DecisionValue>, detail: Detail = "sum
   const { value } = fact;
   lines.push(counted("repositories", value.repositories.map(({ repo, snapshot }) => `${repo}@${snapshot.kind === "sha" ? snapshot.sha : snapshot.stateId}`)));
   lines.push(sourceLine(value.source));
-  lines.push(`decisions (${value.decisions.length}):`, ...value.decisions.flatMap(decisionLines));
+  lines.push(`decisions (${value.decisions.length}):`, ...decisionsBlock(value.decisions, detail));
   lines.push(...cutsBlock(cutsOf(fact), detail));
   return lines.join("\n");
 }
+

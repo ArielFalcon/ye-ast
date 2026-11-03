@@ -3,9 +3,9 @@ import type { HttpRoute } from "../entrypoints/http-route.ts";
 import { compareText } from "../shared/code-node.ts";
 import { TRUST_MODES, type Evidence, type TrustMode } from "../shared/fact.ts";
 import type { CallSite, HttpTarget } from "../topology/call-site.ts";
-import { callSiteEvidence, unresolvedPlace } from "../topology/call-site.ts";
+import { callSiteEvidence, unresolvedCallSite } from "../topology/call-site.ts";
 import { inferGateways, matchBehindGateway, prefixOf, type GatewayDeclaration, type RepositoryEntrypoints } from "../topology/link-match.ts";
-import { sortEvidence, type NameCandidate, type OutwardName } from "../topology/outward-name.ts";
+import { sortEvidence, type NameCandidate, type OutwardKind, type OutwardName } from "../topology/outward-name.ts";
 import type { RepositoryResolution } from "../topology/remote-snapshot.ts";
 import { decisionId, type Decision, type DecisionKind, type DecisionOption, type DecisionSet } from "./decision.ts";
 
@@ -65,13 +65,15 @@ interface Gap {
   scope?: string;
   subject: string;
   evidence: readonly Evidence[];
+  /** The outward kinds the subject is written with, for a kind whose subject is an outward name. */
+  outwardKinds?: readonly OutwardKind[];
   options: readonly DecisionOption[];
   allowsFreeText: boolean;
   required: boolean;
 }
 
-function decisionOf({ kind, scope, subject, evidence, options, allowsFreeText, required }: Gap): Decision {
-  return { id: decisionId(kind, subject, scope), kind, subject, evidence: sortEvidence(evidence), options: options.toSorted(compareOption), allowsFreeText, required };
+function decisionOf({ kind, scope, subject, evidence, outwardKinds, options, allowsFreeText, required }: Gap): Decision {
+  return { id: decisionId(kind, subject, scope), kind, subject, evidence: sortEvidence(evidence), ...(outwardKinds === undefined ? {} : { outwardKinds }), options: options.toSorted(compareOption), allowsFreeText, required };
 }
 
 function compareOption(a: DecisionOption, b: DecisionOption): number {
@@ -133,7 +135,17 @@ function repositoryDecisions(input: DecisionInput): Decision[] {
   const routed = new Set(input.gateways.map((gateway) => gateway.prefix));
   return groupsOf(input.unserved, (name) => name.name)
     .filter(([name, names]) => !(routed.has(name) && names.every((occurrence) => occurrence.kind === "path-prefix")))
-    .map(([name, names]) => decisionOf({ kind: "repository", subject: name, evidence: names.flatMap((held) => held.evidence), options: [], allowsFreeText: true, required: false }));
+    .map(([name, names]) =>
+      decisionOf({
+        kind: "repository",
+        subject: name,
+        evidence: names.flatMap((held) => held.evidence),
+        outwardKinds: [...new Set(names.map((occurrence) => occurrence.kind))].sort(compareText),
+        options: [],
+        allowsFreeText: true,
+        required: false,
+      }),
+    );
 }
 
 /**
@@ -155,7 +167,7 @@ function libraryDecisions(input: DecisionInput): Decision[] {
 
 /** The library a cut names, when the target stays undecided through it. */
 function libraryOf(site: CallSite): string | undefined {
-  const { via } = unresolvedPlace(site);
+  const { via } = unresolvedCallSite(site);
   return via === undefined || via === "" ? undefined : via;
 }
 
