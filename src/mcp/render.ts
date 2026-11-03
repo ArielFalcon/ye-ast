@@ -274,8 +274,9 @@ function cutsBlock(cuts: readonly Cut[], detail: Detail = "summary", depths?: Cu
   const counted = depths === undefined ? [] : cuts.filter((cut) => countedCut(cut, depths));
   const listing = [CUTS, ...cutLines(listed, detail)];
   if (counted.length === 0) return listing;
+  const all = [CUTS, ...cutLines(cuts, detail)];
   const summarized = [...listing, `  summarized (${counted.length} at symbols deeper than depth ${LISTED_DEPTH}): detail "full" lists them`, ...countedCutsByFile(counted)];
-  return size(summarized) <= size([CUTS, ...cutLines(cuts, detail)]) ? summarized : [CUTS, ...cutLines(cuts, detail)];
+  return size(summarized) <= size(all) ? summarized : all;
 }
 
 function list(lines: readonly string[]): string[] {
