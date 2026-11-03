@@ -118,7 +118,11 @@ const budget = z
 
 const workspaceRepo = z.strictObject({
   path: z.string().min(1).describe("Path of the root of a local git repository."),
-  id: z.string().min(1).optional().describe("The name its snapshot carries; the directory name when omitted. Never a path."),
+  id: z
+    .string()
+    .min(1)
+    .optional()
+    .describe("The name its snapshot carries; the directory name of the path when omitted, so a linked worktree keeps its own name: pass the repository's name when a clone and its worktrees must answer as one. Never a path."),
   revision: z.string().min(1).optional().describe("The revision to read; HEAD when omitted."),
   remote: z
     .string()
