@@ -8,16 +8,28 @@ import { trustRecordDirectory } from "./trust-record-directory.ts";
 import { processHost } from "./process-host.ts";
 import { runServe } from "./serve.ts";
 
+const TYPE_ROOT_FLAG = "--type-root";
+
+/** A flag the entrypoint consumes itself: its value, and the arguments without it, so no command has to know it. */
+function takeFlag(argv: readonly string[], flag: string): { value: string | undefined; argv: string[] } {
+  const index = argv.indexOf(flag);
+  if (index < 0) return { value: undefined, argv: [...argv] };
+  const value = argv[index + 1];
+  return { value, argv: [...argv.slice(0, index), ...(value === undefined ? [] : argv.slice(index + 2))] };
+}
+
 if (import.meta.main) {
   const interrupts = watchInterrupts(process);
   const indexCache = indexCacheDirectory({ env: process.env, platform: process.platform, home: homedir() });
   const trustDirectory = trustRecordDirectory({ env: process.env, platform: process.platform, home: homedir() });
+  const root = takeFlag(process.argv.slice(2), TYPE_ROOT_FLAG);
   const options = {
     signal: interrupts.signal,
     ...(indexCache !== null && { indexCache, cacheDirectory: indexCache }),
     ...(trustDirectory !== null && { trustDirectory }),
+    ...(root.value === undefined ? {} : { typeRoot: root.value }),
   };
-  const argv = process.argv.slice(2);
+  const argv = root.argv;
   const [command, ...args] = argv;
   const measure = argv.includes("--measure") ? { measure: (line: string) => process.stderr.write(`${line}\n`) } : {};
   const code =

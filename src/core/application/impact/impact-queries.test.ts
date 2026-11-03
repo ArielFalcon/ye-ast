@@ -14,10 +14,12 @@ import type { ImportersValue } from "../../domain/impact/importers-fact.ts";
 import type { CommitExport, Vcs, VcsChanges, VcsFault } from "../../ports/vcs.port.ts";
 import type { AngularDeclaration } from "../../ports/angular-declarations.port.ts";
 import { fakeCodeGraph, fakeNode, type FakeEdge, type FakeNode, type FakeUnresolved } from "./fake-code-graph.testing.ts";
-import type { TrustRecordReader } from "../../ports/trust-record.port.ts";
-import { fakeLive, type FakeLive } from "../live/fake-live.testing.ts";
+import type { TrustRecordReader } from "../../ports/trust-record.port.ts";import { fakeLive, type FakeLive } from "../live/fake-live.testing.ts";
 import type { LiveStaleNotice } from "../../ports/live-queries.port.ts";
 import { createImpactQueries, type ImpactQueriesDeps } from "./impact-queries.ts";
+import type { ImportOriginsReader } from "../../ports/import-origins.port.ts";
+import type { ImportOrigin } from "../../domain/relations/resolved-reference.ts";
+import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 
 const HEAD = "a".repeat(40);
 const BASE = "b".repeat(40);
@@ -50,6 +52,10 @@ interface Options {
   /** What `diffDirectories` answers. */
   directoryChanges?: Result<readonly FileChange[], VcsFault>;
   onDiffDirectories?: () => void;
+  /** The head's sources, as the export reader hands them over. */
+  sources?: SourceFile[];
+  /** Reads the imports of those sources, as composition wires it. */
+  importOrigins?: ImportOriginsReader;
 }
 
 function setup(options: Options = {}) {
@@ -93,7 +99,7 @@ function setup(options: Options = {}) {
       },
       remove: async (path) => void log.removed.push(path),
     },
-    reader: { read: async () => [] },
+    reader: { read: async () => options.sources ?? [] },
     extractor: { extract: async () => [] },
     angular: { read: async () => options.declarations ?? [] },
     relations: { extract: async () => ({ relations: options.relations ?? [], fields: options.fields ?? [] }) },
@@ -115,6 +121,7 @@ function setup(options: Options = {}) {
     ...(options.exportBudget && { budget: options.exportBudget }),
     ...(options.trust && { trust: options.trust }),
     ...(options.live && { live: options.live.deps }),
+    ...(options.importOrigins && { importOrigins: options.importOrigins }),
   };
   const request: AtRevision<ImpactOfChangeRequest> = { repo: "/repo", repoId: "repo", base: "base", head: "head", ...(options.signal && { signal: options.signal }) };
   const queries = createImpactQueries(deps);
@@ -298,6 +305,30 @@ test("a call that never resolved to a walked name cuts the answer, and the head'
     { kind: "unresolved-link", at: ["src/A.java::f", "src/B.java:7"] },
     { kind: "not-exported", at: ["src/Link.java"] },
   ]);
+});
+
+test("a reference whose rooted name the file imports from outside the repository stops being a cut, without any type root", async () => {
+  const changes: Result<readonly FileChange[], VcsFault> = { ok: true, value: [change("src/B.ts", { added: [{ start: 2, end: 2 }] })] };
+  const nodes = [fakeNode("tap", "function", "src/B.ts", 1, 3)];
+  const unresolved = [{ from: "f", name: "tap", kind: "calls", file: "src/A.ts", line: 7 }];
+  const exports: Options["exports"] = {
+    [HEAD]: { files: [{ path: "src/A.ts", blob: "1", written: true }, { path: "src/B.ts", blob: "2", written: true }], skipped: [] },
+  };
+  const imports = (names: readonly string[]): ImportOriginsReader => () => ({
+    origins: async (sites) =>
+      sites.map(
+        (site): Finding<ImportOrigin> =>
+          names.includes(site.name)
+            ? { status: "complete", value: { kind: "external", module: "rxjs" }, evidence: [{ path: site.file, line: site.line }] }
+            : { status: "unknown", reason: "unresolved", evidence: [{ path: site.file, line: site.line }] },
+      ),
+  });
+
+  const withoutImports = fact(await setup({ changes, nodes, unresolved, exports }).ask());
+  const withImports = fact(await setup({ changes, nodes, unresolved, exports, importOrigins: imports(["tap"]) }).ask());
+
+  assert.deepEqual(withoutImports.status === "partial" && withoutImports.cuts, [{ kind: "unresolved-link", at: ["src/B.ts::tap", "src/A.ts:7"] }]);
+  assert.equal(withImports.status, "complete");
 });
 
 test("the fact's inputs cover the content of both trees and the export budget", async () => {

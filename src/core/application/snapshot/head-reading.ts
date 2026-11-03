@@ -20,6 +20,8 @@ export interface HeadReaderDeps extends SnapshotReaderDeps {
   matcher: PathMatcher;
   /** What a live query reads; without it a live query is refused as under `untrusted`. */
   live?: LiveDeps;
+  /** The type root a fact records as an input when it settles references with a compiler, so the fact invalidates with it. */
+  typeRoot?: { identity: string };
 }
 
 /** What one operation adds to the fact base of every fact it answers. */
@@ -78,7 +80,8 @@ export function createHeadReader(deps: HeadReaderDeps): HeadReader {
   const factBase = (trust: TrustMode, snapshot: SnapshotRef, content: string, spec: FactSpec, scope: DeclaredScope, origin: IndexOrigin | undefined): FactBase => {
     const sha = snapshot.kind === "sha" ? snapshot.sha : snapshot.kind === "live" ? snapshot.head : "";
     const declaredConfig: DeclaredConfig = { ...(snapshot.kind === "sha" ? exportBudget : {}), ...spec.declaredConfig };
-    return { ...factBaseOf(deps, { repoId: snapshot.repo, sha, trust, scope, content, declaredConfig, engines: spec.engines, ...(origin === undefined ? {} : { origin }) }), snapshot };
+    const typeRoot = deps.typeRoot === undefined ? {} : { typeRoot: { identity: deps.typeRoot.identity } };
+    return { ...factBaseOf(deps, { repoId: snapshot.repo, sha, trust, scope, content, declaredConfig, engines: spec.engines, ...(origin === undefined ? {} : { origin }), ...typeRoot }), snapshot };
   };
 
   const indexHead = async (headTree: CommitExtraction, headDirectory: string, directory: () => Promise<string>, signal: AbortSignal | undefined): Promise<HeadIndex | "aborted" | "unavailable"> => {

@@ -2,8 +2,9 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { relation, type RelationKind, type Relation, type SymbolRef } from "../../domain/relations/relation.ts";
 import type { GraphSymbol } from "../../ports/code-graph.port.ts";
-import { createInboundEdges, type InboundEdges } from "./inbound-edges.ts";
+import { createInboundEdges, type InboundEdges, type SettledReference } from "./inbound-edges.ts";
 import { fakeCodeGraph, fakeNode, type FakeEdge, type FakeNode, type FakeUnresolved } from "./fake-code-graph.testing.ts";
+import { walkImpact } from "./walk.ts";
 
 const isTestFile = (path: string): boolean => path.includes("/test/");
 
@@ -16,9 +17,15 @@ interface Setup {
   scored(id: string, contractChanged?: boolean): [string, number, string | undefined][];
 }
 
-function setup(nodes: FakeNode[], edges: FakeEdge[], relations: readonly Relation[] = [], unresolved: readonly FakeUnresolved[] = []): Setup {
+function setup(
+  nodes: FakeNode[],
+  edges: FakeEdge[],
+  relations: readonly Relation[] = [],
+  unresolved: readonly FakeUnresolved[] = [],
+  settled: readonly SettledReference[] = [],
+): Setup {
   const graph = fakeCodeGraph(nodes, edges, unresolved);
-  const inbound = createInboundEdges(graph, isTestFile, relations);
+  const inbound = createInboundEdges(graph, isTestFile, relations, [], settled);
   const symbol = (id: string): GraphSymbol => {
     const [found] = graph.symbolsByIds([id as GraphSymbol["id"]]);
     assert.ok(found, id);
@@ -347,4 +354,47 @@ test("a type reached through one of its members follows a subtype and a template
   const s = setup(nodes, [{ from: "Sub", to: "Svc", kind: "extends" }], relations);
   assert.deepEqual(s.throughMember("Svc"), ["Parent", "Sub"]);
   assert.deepEqual(s.callers("Svc"), ["Parent", "Peer", "Sub"]);
+});
+
+const SETTLED_TARGET = "src/C.java";
+
+function settledSetup(kind: string): Setup {
+  return setup(
+    [
+      fakeNode("target", "method", SETTLED_TARGET, 1),
+      fakeNode("first", "method", "src/A.java", 10),
+      fakeNode("second", "method", "src/B.java", 20),
+    ],
+    [{ from: "second", to: "first", kind: "calls", confidence: 1 }],
+    [],
+    [],
+    [{ from: "first" as never, file: "src/A.java", line: 10, kind, target: { file: SETTLED_TARGET, symbol: "target", line: 1 } }],
+  );
+}
+
+test("a reference a type layer settled is a caller at the place it sits, with the basis of its kind", () => {
+  const s = settledSetup("calls");
+
+  assert.deepEqual(s.callers("target"), ["first"]);
+  assert.deepEqual(s.basis("target"), ["call"]);
+});
+
+test("a kind that names a module specifier is not settled here, however the layer answered it", () => {
+  const s = settledSetup("imports");
+
+  assert.deepEqual(s.callers("target"), []);
+});
+
+test("the walk expands a settled reference, so the caller of the new caller is reached too", () => {
+  const s = settledSetup("calls");
+  const walk = walkImpact([s.symbol("target")], s.inbound);
+
+  assert.deepEqual(
+    walk.reached.map(({ symbol, depth }) => [symbol.id, depth]),
+    [
+      ["target", 0],
+      ["first", 1],
+      ["second", 2],
+    ],
+  );
 });

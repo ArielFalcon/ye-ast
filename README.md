@@ -364,6 +364,7 @@ ye-ast map --live .                             # the working tree (trusted only
 | `budget` | `[--depth <n>] [--hub-fan-in <n>] [--expansions <n>]`; positive integers, no defaults |
 | identity | `--repo-id <id>` names the repository in every snapshot; without it the name is the directory of the repository's main worktree, so every linked worktree of one repository answers the same name |
 | measurement | `--measure` writes one JSON measurement line per query and per index build to stderr, never stdout |
+| type information | `--type-root <dir>` names the directory holding the dependency declarations a type layer reads, laid out like a `node_modules` tree; without it no type information answers and every fact is the one ye-ast gives today |
 
 <details>
 <summary><b>Embedding the engine as a library</b></summary>
