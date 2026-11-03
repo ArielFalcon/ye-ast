@@ -197,12 +197,18 @@ function gatewayDecisions(input: DecisionInput): Decision[] {
 function revisionDecisions(input: DecisionInput): Decision[] {
   return (input.resolutions ?? []).flatMap((resolution) => {
     if (resolution.step !== "default-branch" && resolution.step !== "revision-unavailable") return [];
-    if (resolution.step === "default-branch" && resolution.consulted.length < 2) return [];
-    const options = resolution.consulted.flatMap((ref): DecisionOption[] =>
-      ref.sha === undefined
-        ? []
-        : [{ value: ref.branch, ...(resolution.step === "default-branch" ? { basis: "default-branch" as const } : {}), evidence: [], recommended: resolution.sha !== undefined && ref.sha === resolution.sha }],
-    );
+    const diverged = resolution.consulted.some((ref) => ref.sha === undefined);
+    if (resolution.step === "default-branch" && !diverged) return [];
+    const options = resolution.consulted
+      .filter((ref) => ref.sha !== undefined)
+      .map(
+        (ref): DecisionOption => ({
+          value: ref.branch,
+          ...(resolution.step === "default-branch" ? { basis: "default-branch" as const } : {}),
+          evidence: [],
+          recommended: ref.sha === resolution.sha,
+        }),
+      );
     return [decisionOf({ kind: "revision", subject: resolution.repo, evidence: [], options, allowsFreeText: true, required: false })];
   });
 }

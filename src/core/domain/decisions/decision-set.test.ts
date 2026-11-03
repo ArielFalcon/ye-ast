@@ -329,6 +329,14 @@ test("a revision the declaration asked for, the trigger's line itself, or a defa
   assert.deepEqual(ids(set), []);
 });
 
+test("a default branch whose consulted refs all carry a sha is no gap, so only a diverged remote is", () => {
+  const decisions = (consulted: readonly { branch: string; sha?: string }[]): string[] =>
+    ids(decisionsOf(input({ resolutions: [{ repo: "orders", step: "default-branch", consulted, sha: "b".repeat(40) }] })));
+
+  assert.deepEqual(decisions([{ branch: "main", sha: "b".repeat(40) }, { branch: "release/2", sha: "c".repeat(40) }]), []);
+  assert.deepEqual(decisions([{ branch: "feature/web" }, { branch: "main", sha: "b".repeat(40) }]), ["revision:orders"]);
+});
+
 test("a repository no step could pin is a revision decision with free text and no recommendation", () => {
   const set = decisionsOf(input({ resolutions: [{ repo: "orders", step: "revision-unavailable", consulted: [{ branch: "feature/web" }] }] }));
 
