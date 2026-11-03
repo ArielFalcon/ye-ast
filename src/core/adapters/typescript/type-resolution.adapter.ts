@@ -5,6 +5,7 @@ import type { ReferenceSite, ResolvedTarget } from "../../domain/relations/resol
 import { nameTail } from "../../domain/impact/impact-cuts.ts";
 import type { Evidence, Finding } from "../../domain/shared/fact.ts";
 import type { TypeResolution } from "../../ports/type-resolution.port.ts";
+import { declaredOptionsOf } from "./module-resolver.ts";
 
 /** A source the snapshot holds, repository-relative and without a leading slash. */
 export interface SnapshotSource {
@@ -54,8 +55,9 @@ export function createTypeResolution(
   request: TypeResolutionRequest,
   deps: TypeResolutionDeps = defaultTypeResolutionDeps(request.typeRoot),
 ): TypeResolution {
-  const options = compilerOptions(request.options);
   const sources = new Map(request.sources.map((source) => [source.path, source.text]));
+  /** The snapshot's own configuration decides how its import specifiers resolve; without one the defaults hold. */
+  const options = compilerOptions(request.options ?? declaredOptionsOf(sources, ".", SNAPSHOT));
   const read = reader(sources, deps);
   const host = compilerHost(read, deps, options);
   const program = ts.createProgram({ rootNames: [...sources.keys()].map((path) => `${SNAPSHOT}/${path}`), options, host });
@@ -71,17 +73,20 @@ export function createTypeResolution(
 /**
  * A repository's `types` list names packages to include by name, so it is emptied: only what a source imports is read,
  * and a snapshot cannot make the compiler open a package nobody names. `createProgram` never loads `tsconfig` `plugins`
- * either; that vector exists only in a language server.
+ * either; that vector exists only in a language server. `noEmit` and `composite` are forced last: a resolution reads,
+ * it never writes a program or a project reference.
  */
 function compilerOptions(given: ts.CompilerOptions | undefined): ts.CompilerOptions {
   return {
-    noEmit: true,
     skipLibCheck: true,
     allowJs: true,
     target: ts.ScriptTarget.ES2022,
     moduleResolution: ts.ModuleResolutionKind.Bundler,
     ...given,
     types: [],
+    plugins: [],
+    noEmit: true,
+    composite: false,
   };
 }
 

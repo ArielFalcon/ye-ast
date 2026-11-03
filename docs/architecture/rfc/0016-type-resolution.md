@@ -206,26 +206,40 @@ A retirement changes when `unresolved-link` is emitted, so it touches `RFC-0002`
 only one; on the measured application it shrank the list and left the status `partial`, and no symbol changed. The win is
 the list, not a status claimed in general.
 
-### B. The type layer reads no `paths`, and this RFC specifies a wiring the architecture forbids
+### B. The type layer read no `paths`, and this RFC named a wiring the architecture does not actually forbid
 
-`type-resolution.adapter.ts:14-20` accepts `options?: ts.CompilerOptions` and `compilerOptions()` (`:75-85`) spreads
-them, so the field works; `compose.ts:162` passes none, so the program resolves modules without the application's
-`paths`, `baseUrl` or `extends`.
+`type-resolution.adapter.ts` accepts `options?: ts.CompilerOptions` and `compilerOptions()` spreads them, so the field
+worked; composition passed none, so the program resolved modules without the application's `paths`, `baseUrl` or
+`extends`.
 
-The symptom is a wrong answer, not a missing one: `AddressService`, a class of the application, is reported as
-`external:@angular/core` at `location-picker.component.ts:49`. Measured, 36 cut-place rows are a repository import the
-checker calls `external`.
+The symptom was a wrong answer, not a missing one: `AddressService`, a class of the application, was reported as
+`external:@angular/core` at `location-picker.component.ts:49`. Measured then, 36 cut-place rows were a repository import
+the checker called `external`.
 
-This RFC says the options come "from the snapshot's `tsconfig.json`/`jsconfig.json` through the existing
-`module-resolver.ts`". **That wiring is not allowed.** Both files live under `core/adapters`, and the dependency rule in
-`AGENTS.md` forbids an adapter importing another adapter; the only frozen exception is `spring` reading `tree-sitter`'s
-syntax trees. The sentence describes a fix the architecture rejects, and it was written before the adapter existed.
+**Fixed.** The adapter derives its options from the snapshot it already holds. `declaredOptionsOf`
+(`module-resolver.ts`) reads the nearest `tsconfig`/`jsconfig` synchronously over the in-memory source map, `extends`
+included, and rebases every path it produces under the program's synthetic root, so `paths` and `baseUrl` point at the
+files the program actually has. `configOptions` is the only place the tree is parsed: `createModuleResolver` and the type
+adapter both call it, so there is one parser for one fact and no second owner. Composition still passes nothing, which is
+correct: it does not own the configuration.
+
+**A correction to the paragraph this section used to carry.** It said the wiring was forbidden, and cited `AGENTS.md`,
+which this repository does not have. The rule is `RFC-0001` layer table —`core/adapters` never imports another adapter—
+together with `.dependency-cruiser.cjs`'s `adapters-are-independent`, which forbids reaching a **different** adapter
+family while allowing reuse inside `adapters/typescript/`. `module-resolver.ts` is not an adapter under the project's own
+definition: it has no process boundary and exports a function over a reader. `import-origins.adapter.ts` already imports
+it in shipped code, the same shape. So no port is needed, and the `DeclaredModuleConfig` row below is retired.
 
 | Shape | Cost | Verdict |
 |---|---|---|
-| Composition parses the config and passes `ts.CompilerOptions` | A second parser for one fact, beside `module-resolver.ts:90-125` | Rejected: two owners of one fact, which the project calls a defect |
-| Extract config parsing into a port (`DeclaredModuleConfig`) with one adapter over `ts.parseConfigFileTextToJson`, consumed by both | A refactor of an existing module plus one port | **The only shape that keeps one owner**, and the honest fix if the type layer stays |
-| Stop asking the program to resolve modules and let `module-resolver` answer, as in gap A | Nothing new | **The cheapest**, and it is what gap A already needs |
+| Composition parses the config and passes `ts.CompilerOptions` | A second parser for one fact, beside `module-resolver.ts` | Rejected: two owners of one fact, which the project calls a defect |
+| Extract config parsing into a port (`DeclaredModuleConfig`) with one adapter, consumed by both | A refactor of an existing module plus one port | **Retired**: `configOptions` already is the one parse, and a port would add a vocabulary without removing a parser |
+| The adapter derives the options from the snapshot it is given, through the same parse | Nothing new; one function beside the resolver | **Shipped**: no second parser, no composition owned configuration, no new port |
+| Stop asking the program to resolve modules and let `module-resolver` answer | Nothing new | Not taken: it answers `imports`, not the receiver a `this.x` call needs |
+
+The fixture asserts it: a call whose specifier only the snapshot's own `paths` resolves reaches the repository
+declaration, and one reached through an `extends` chain does too. Re-running the 36-row count needs the probe workspace
+outside this repository; the fixtures are the proof that lives here.
 
 ### C. codegraph's coordinates are not a contract, and the adapter trusts them
 
@@ -472,4 +486,4 @@ S6 adds is where that directory comes from in production, and the profile field 
 | 8 | Does `importers` join the first wiring, or keep its own path? | **Keep its path in S4 and declare it.** `impact-queries.ts:240-241` reads unresolved references itself; bringing `importers` in later is a slice of its own, but until then both answers must be able to disagree and say why |
 | 9 | Is a cut retired on an import binding alone, or does it need the checker? | **The import binding (S8, shipped).** It removes 6% to 13% of the cuts on the diffs measured, at no wall-clock cost; the checker adds only the receiver-rooted names, which is what S9 measures. The shadow rule is file-level and deliberately gives up 6% of the retirements |
 | 10 | Does a retired cut make the fact `complete`? | **No.** The measured runs stay `partial` and change no symbol. The feature buys a shorter list, not a status, and it must not claim one |
-| 11 | Where does the module configuration come from, if the type layer stays? | **A port (`DeclaredModuleConfig`) with one adapter, consumed by `module-resolver` and the type adapter.** Adapter-to-adapter imports are forbidden, and composition parsing the config a second time creates a second owner of one fact |
+| 11 | Where does the module configuration come from, if the type layer stays? | **Answered by the snapshot itself.** `declaredOptionsOf` reads the nearest `tsconfig`/`jsconfig` from the sources the adapter already holds, and `configOptions` is the one parse both it and `module-resolver` call. No port, no composition-owned configuration, and no second parser. The `DeclaredModuleConfig` port the earlier draft recommended is retired: `module-resolver` is a helper without a process boundary, not an adapter, and reuse inside `adapters/typescript/` is what `import-origins` already does |

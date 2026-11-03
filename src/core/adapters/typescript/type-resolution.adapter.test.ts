@@ -51,6 +51,29 @@ const PAGE = source(
 
 const API = source("src/api.ts", ["import { remote } from '@dep/lib';", "export function call(): void {", "  remote();", "}", ""].join("\n"));
 
+const DECLARED_CONFIG = source(
+  "tsconfig.json",
+  JSON.stringify({ compilerOptions: { baseUrl: ".", paths: { "@app/*": ["src/*"] } } }),
+);
+
+const ALIASED_SERVICE = source("src/address.service.ts", ["export class AddressService {", "  resolve(): number {", "    return 1;", "  }", "}", ""].join("\n"));
+
+const ALIASED_PAGE = source(
+  "src/page.alias.ts",
+  ["import { AddressService } from '@app/address.service';", "export function run(): number {", "  return new AddressService().resolve();", "}", ""].join("\n"),
+);
+
+const EXTENDED_BASE = source(
+  "tsconfig.base.json",
+  JSON.stringify({ compilerOptions: { baseUrl: ".", paths: { "@lib/*": ["src/lib/*"] } } }),
+);
+
+const EXTENDED_ROOT = source("tsconfig.json", JSON.stringify({ extends: "./tsconfig.base.json" }));
+
+const LIB_FORMAT = source("src/lib/format.ts", ["export function format(): number {", "  return 1;", "}", ""].join("\n"));
+
+const LIB_PAGE = source("src/lib.page.ts", ["import { format } from '@lib/format';", "export function run(): number {", "  return format();", "}", ""].join("\n"));
+
 test("a call through a class field resolves to the declaration of its member, with its span", () => {
   const sources = [STORE, PAGE];
   const resolution = createTypeResolution({ sources, typeRoot: "/nowhere" }, deps());
@@ -93,6 +116,32 @@ test("a call the type root declares is external, named after the package that de
 
   assert.deepEqual(only(resolution.resolve([siteAt(sources, "src/api.ts", "remote")])).status, "complete");
   assert.deepEqual(targetOf(only(resolution.resolve([siteAt(sources, "src/api.ts", "remote")]))), { kind: "external", module: "@dep/lib" });
+});
+
+test("a call whose import only the snapshot's own `paths` resolves reaches the repository declaration", () => {
+  const sources = [DECLARED_CONFIG, ALIASED_SERVICE, ALIASED_PAGE];
+  const resolution = createTypeResolution({ sources, typeRoot: "/nowhere" }, deps());
+
+  assert.deepEqual(targetOf(only(resolution.resolve([siteAt(sources, "src/page.alias.ts", "resolve")]))), {
+    kind: "repository",
+    file: "src/address.service.ts",
+    symbol: "resolve",
+    line: 2,
+    endLine: 4,
+  });
+});
+
+test("a configuration reached through `extends` decides the paths a call resolves through", () => {
+  const sources = [EXTENDED_BASE, EXTENDED_ROOT, LIB_FORMAT, LIB_PAGE];
+  const resolution = createTypeResolution({ sources, typeRoot: "/nowhere" }, deps());
+
+  assert.deepEqual(targetOf(only(resolution.resolve([siteAt(sources, "src/lib.page.ts", "format")]))), {
+    kind: "repository",
+    file: "src/lib/format.ts",
+    symbol: "format",
+    line: 1,
+    endLine: 3,
+  });
 });
 
 test("a site whose file the snapshot does not hold is unknown, not an empty answer", () => {

@@ -144,10 +144,13 @@ all — decision 6 means qayaba, which declares `untrusted` for every run, gets 
 external is no longer emitted, without a type root. Measured, it removes 6% to 13% of the cuts of a real diff and changes
 no symbol. The port itself remains unmerged, and now has to justify +387 MB against a list that is already smaller.
 
-Two defects found while measuring are independent of that decision and stand on their own: the adapter trusts a
-coordinate codegraph does not promise (`RFC-0016` gap C), and it resolves modules without the repository's `paths`
-because composition passes no `options` (`gap B`) — and this record's companion RFC specifies a wiring, adapter reading
-adapter, that the dependency rule forbids.
+Two defects found while measuring were independent of that decision and stood on their own: the adapter trusted a
+coordinate codegraph does not promise (`RFC-0016` gap C), and it resolved modules without the repository's `paths`
+because composition passed no `options` (`gap B`). Both are fixed. The coordinate is guarded: a position that does not
+spell the reference's name answers `unknown`. The configuration is read from the snapshot through the one parse
+`module-resolver` already performs, so the adapter no longer answers `external` about a repository declaration; the
+earlier claim that an adapter may not reach `module-resolver` was wrong about what that module is — a helper with no
+process boundary, already imported by `import-origins` in shipped code.
 
 ## Not decided here
 
