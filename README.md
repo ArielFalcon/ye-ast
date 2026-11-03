@@ -90,7 +90,7 @@ code index alone leaves unresolved.</sub>
 With Node.js 24.15+ and git 2.44+, inside any repository:
 
 ```bash
-npx ye-ast-mcp install --trust untrusted .
+npx ye-ast-mcp init --trust untrusted .
 ```
 
 It prints one line that connects it to your agent. Or just **hand this README to your agent**: the second half is
@@ -121,8 +121,8 @@ every expected result is stated.
 ```mermaid
 flowchart TD
     S1["1 · Check Node and git"] --> S2{"2 · Trust mode<br/>stated by the user?"}
-    S2 -->|"no / unsure"| U["install --trust untrusted"]
-    S2 -->|"user says trusted"| T["install --trust trusted"]
+    S2 -->|"no / unsure"| U["init --trust untrusted"]
+    S2 -->|"user says trusted"| T["init --trust trusted"]
     U --> S3["3 · Register the MCP server"]
     T --> S3
     S3 --> S4["4 · Verify with ye-ast map"]
@@ -171,7 +171,7 @@ Nothing inside a repository can raise its own mode. With no declaration, the CLI
 Ask the user only if you cannot decide from context. Never infer consent from the fact that the repository is theirs.
 
 ```bash
-npx --yes ye-ast-mcp install --trust untrusted /path/to/repo
+npx --yes ye-ast-mcp init --trust untrusted /path/to/repo
 ```
 
 Expected output, one item per line:
@@ -185,10 +185,10 @@ register the MCP server with Claude Code:
 claude mcp add ye-ast -- npx --yes ye-ast-mcp mcp /path/to/repo
 ```
 
-What `install` did:
+What `init` did:
 
 - recorded the trust declaration in `$XDG_CONFIG_HOME/ye-ast/` (`~/.config/ye-ast/` by default);
-- wrote the fixed layer under `.ye-ast/` (owned by `install`; never edit it by hand);
+- wrote the fixed layer under `.ye-ast/` (owned by `init`; never edit it by hand);
 - added `.ye-ast/` and `.ye-ast-graph/` to `.git/info/exclude`, so nothing reaches the user's commits;
 - printed the MCP registration for **this** machine. Use that last line in step 3.
 
@@ -297,7 +297,7 @@ How the arguments behave:
 |---|---|
 | `revision` / `head` | Any git revision. Default: `HEAD`. |
 | `live` | Read the working tree instead of a revision. Requires `trusted`; exclusive with `revision`/`head`. |
-| `workspace` | `{ repos: [{ path, id?, revision? }], gateways?: [{ prefix, repo }] }` on `callers` and `impact`: other **local** clones whose call sites are joined to the routes and listeners the walk reaches. The answer adds the links (with their basis: `exact`, `gateway-prefix`, `route-overlap`, `base-path`, `suffix`, `event-destination`), each with its direction (`upstream` for what reaches the change, `downstream` for what a change sends onward) and the links crossed from the change (`reach`), followed to a fixpoint across repositories; what depends on those call sites in their own repository, the call sites that reached a declared service and matched none of its entrypoints (`unmatched`), the ones that name a service no clone serves (`external`), and every call site whose target the code does not decide as a cut. A gateway prefix needs no declaration when the routes show it; `gateways` overrides it, and a declared gateway no call site names, or whose repository was not passed, is listed as matching nothing. Without `repos` the repositories and gateways the user persisted with `ye-ast install --workspace <file>` are used, and a repository that persists none answers about itself alone; the manifest holds the same object, its relative paths resolved against the installed repository. Every answer says which of the two declared its repositories (`workspace.source`: `request`, `persisted` or `none`), so an answer about the bound repository alone is never read as a workspace with no impact. Each clone is read at its own snapshot under its own trust declaration, with no network request; exclusive with `live`. Without `workspace` the answer says nothing about other repositories. |
+| `workspace` | `{ repos: [{ path, id?, revision? }], gateways?: [{ prefix, repo }] }` on `callers` and `impact`: other **local** clones whose call sites are joined to the routes and listeners the walk reaches. The answer adds the links (with their basis: `exact`, `gateway-prefix`, `route-overlap`, `base-path`, `suffix`, `event-destination`), each with its direction (`upstream` for what reaches the change, `downstream` for what a change sends onward) and the links crossed from the change (`reach`), followed to a fixpoint across repositories; what depends on those call sites in their own repository, the call sites that reached a declared service and matched none of its entrypoints (`unmatched`), the ones that name a service no clone serves (`external`), and every call site whose target the code does not decide as a cut. A gateway prefix needs no declaration when the routes show it; `gateways` overrides it, and a declared gateway no call site names, or whose repository was not passed, is listed as matching nothing. Without `repos` the repositories and gateways the user persisted with `ye-ast init --workspace <file>` are used, and a repository that persists none answers about itself alone; the manifest holds the same object, its relative paths resolved against the installed repository. Every answer says which of the two declared its repositories (`workspace.source`: `request`, `persisted` or `none`), so an answer about the bound repository alone is never read as a workspace with no impact. Each clone is read at its own snapshot under its own trust declaration, with no network request; exclusive with `live`. Without `workspace` the answer says nothing about other repositories. |
 | `scope` | `{ include?: [globs], exclude?: [globs] }` over repository-relative paths; `exclude` wins. `include` selects the content the answer is about, and the configuration that interprets it (a `package.json`, a `tsconfig`, a build file, a Spring `application` file, an OpenAPI document) is always read, so narrowing never hides what an extractor needs to place a source. A path outside the scope is **not answered about**, so callers and entrypoints through it are not known; the answer names its scope under its status. Use it to keep one service or package apart, not to shorten an answer. |
 | `budget` | `{ depth?, hubFanIn?, expansions? }`, positive integers, no defaults. A bound that stops a walk is reported as a cut, never as a silent truncation. |
 | `detail` | Text listing for `callers` and `impact`. Default: depth 0 and 1 listed, deeper symbols counted per file. `"full"` lists every symbol. The structured content always holds all of them. |
@@ -380,7 +380,7 @@ Also:
 - Never fabricate a fact. If the answer is `unknown` or cut, report that.
 - Never mark a repository `trusted` on your own initiative.
 - Under `untrusted` ye-ast makes no network request; do not work around that by fetching the repository yourself.
-- The fixed layer under `.ye-ast/` belongs to `ye-ast install`. Do not edit it by hand.
+- The fixed layer under `.ye-ast/` belongs to `ye-ast init`. Do not edit it by hand.
 
 ### 9. CLI reference
 
@@ -402,7 +402,7 @@ ye-ast map --live .                             # the working tree (trusted only
 | `ye-ast impact --base <rev> [--head <rev> \| --live] [scope] [budget] <repo>` | What depends on the change from the merge base to the head |
 | `ye-ast callers [--revision <rev> \| --live] [scope] [budget] <repo> <file>:<symbol> \| <file>:<start>-<end> …` | What depends on symbols or line ranges |
 | `ye-ast importers [--revision <rev> \| --live] [scope] <repo> <file> …` | Per file: importers, users and unresolved namers |
-| `ye-ast install --trust trusted\|untrusted [--workspace <file>] [<repo>]` | Declares the trust mode, writes the fixed layer (and the workspace manifest given, once every repository it names is a readable repository root), prints the MCP registration |
+| `ye-ast init --trust trusted\|untrusted [--workspace <file>] [<repo>]` | Declares the trust mode, writes the fixed layer (and the workspace manifest given, once every repository it names is a readable repository root), prints the MCP registration |
 | `ye-ast mcp [<repo>]` | The stdio MCP server, read-only, bound to one repository |
 | `ye-ast serve` | The query protocol over stdio, one JSON-RPC 2.0 message per line |
 

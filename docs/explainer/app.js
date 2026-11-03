@@ -190,7 +190,7 @@
       may: "core/ports, core/domain",
       never: "core/adapters, the core's decisions",
       facts: [
-        "The delivery order puts the library, map, install, serve and the stdio MCP first; hooks and a daemon after.",
+        "The delivery order puts the library, map, init, serve and the stdio MCP first; hooks and a daemon after.",
         "The daemon will host lifecycle, the socket server, watcher scheduling and the single writer.",
       ],
       files: ["docs/architecture/adr/0005-runtime-topology-and-delivery-order.md"],

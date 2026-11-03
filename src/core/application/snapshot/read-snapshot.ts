@@ -42,7 +42,7 @@ export async function declaredTrustOf(deps: Pick<SnapshotReaderDeps, "trust">, r
 
 export const LIVE_REQUIRES_TRUSTED: Result<never, LiveFault> = {
   ok: false,
-  fault: { kind: "live-requires-trusted", detail: "a live query reads the working tree and needs a trusted repository: run `ye-ast install --trust trusted`" },
+  fault: { kind: "live-requires-trusted", detail: "a live query reads the working tree and needs a trusted repository: run `ye-ast init --trust trusted`" },
 };
 
 export interface CommitExtraction {

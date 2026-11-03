@@ -506,7 +506,7 @@ test("a live map under untrusted is refused as a typed fault before anything is 
     const answer = await createEntrypointQueries(deps).map(LIVE_REQUEST);
 
     assert.equal(!answer.ok && answer.fault.kind, "live-requires-trusted");
-    assert.match(!answer.ok ? answer.fault.detail : "", /ye-ast install --trust trusted/);
+    assert.match(!answer.ok ? answer.fault.detail : "", /ye-ast init --trust trusted/);
     assert.deepEqual([live.calls, created, readPaths, plans], [[], [], [], []]);
   }
 });

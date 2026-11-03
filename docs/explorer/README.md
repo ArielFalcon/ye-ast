@@ -14,7 +14,7 @@ page.
 | Graph | Six layers, 37 modules and 68 edges: entrypoints, composition, application, domain, ports and adapters. |
 | Levels | `Layers` is an overview: select a band to read its description, its modules and its cross-layer dependency counts, then open the module graph deliberately. `Modules` shows every module; `Files` shows the files of the current step's module while keeping the flow, its steps and the step explanation available. |
 | Zoom | Wheel zoom, drag pan, two-pointer pinch, `+`/`−`/`Fit`; URL hash like `#impact/7`. |
-| Flows | `impact`, `map`, `callers`, `importers`, `workspace`, `install` and `live`; 31 steps in total. |
+| Flows | `impact`, `map`, `callers`, `importers`, `workspace`, `init` and `live`; 31 steps in total. |
 | Step | Highlights the nodes and edges of the step, dims the rest, anchors a callout to a node with a leader line and opens an explanation with why, relations, nodes, terms and evidence. |
 | Node | Clicking a node pauses the flow and switches the header to `Node inspection`; `Back to flow` restores the exact flow and step. The panel shows role, what it may import, what it never reaches, its facts and its files. |
 | Concepts | Fact contract and cuts; edge policy and mechanics; a bounds block that explains depth, `fan-in`, `hub fan-in`, expansions and deadline inline; walk simulator; real executions and fixture; trust; surfaces; glossary; sources. |

@@ -5,7 +5,7 @@ import { parseWorkspaceManifest, type WorkspaceManifest } from "../../domain/top
 import { WORKSPACE_MANIFEST_FILE, type WorkspaceDefaults } from "../../ports/workspace-defaults.port.ts";
 
 /**
- * The workspace `ye-ast install --workspace` persisted under the fixed layer of a repository. A relative repository path
+ * The workspace `ye-ast init --workspace` persisted under the fixed layer of a repository. A relative repository path
  * was stored as written, so it is resolved against the root here, never against the process working directory.
  */
 export function createWorkspaceDefaults(store: FixedLayerStore): WorkspaceDefaults {

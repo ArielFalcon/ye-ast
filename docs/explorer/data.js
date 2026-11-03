@@ -495,14 +495,14 @@ window.EXPLORER_DATA = {
       ],
     },
     {
-      id: "install",
-      label: "install",
+      id: "init",
+      label: "init",
       question: "How does a repository become trusted, excluded and covered by the fixed layer?",
       terms: ["trust", "port", "adapter"],
       steps: [
         {
           title: "The request",
-          body: "<p><code>ye-ast install --trust trusted|untrusted</code> writes a declaration outside the repository and prepares ye-ast's own folders.</p>",
+          body: "<p><code>ye-ast init --trust trusted|untrusted</code> writes a declaration outside the repository and prepares ye-ast's own folders.</p>",
           focus: ["cli", "app-install"],
           edges: [["cli", "app-install"]],
           callout: "app-install",

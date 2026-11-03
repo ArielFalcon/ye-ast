@@ -91,7 +91,7 @@ window.EXPLAINER_ES = {
       may: "core/ports, core/domain",
       never: "core/adapters, las decisiones del core",
       facts: [
-        "El orden de entrega pone primero la librería, map, install, serve y el MCP stdio; hooks y un daemon después.",
+        "El orden de entrega pone primero la librería, map, init, serve y el MCP stdio; hooks y un daemon después.",
         "El daemon alojará el ciclo de vida, el servidor de socket, la programación del watcher y el escritor único.",
       ],
     },

@@ -407,8 +407,8 @@ test("an invalid glob is a usage error that asks nothing", async () => {
   }
 });
 
-test("install without --trust, with another value, or with two repositories is a usage error that installs nothing", async () => {
-  for (const argv of [["install", "."], ["install", "--trust", "." ], ["install", "--trust", "admin", "."], ["install", "--trust"], ["install", "--trust", "trusted", ".", "other"], ["install", "--trust", "trusted", "--bogus", "."], ["install", "--trust", "trusted", "--workspace", ""]]) {
+test("init without --trust, with another value, or with two repositories is a usage error that installs nothing", async () => {
+  for (const argv of [["init", "."], ["init", "--trust", "." ], ["init", "--trust", "admin", "."], ["init", "--trust"], ["init", "--trust", "trusted", ".", "other"], ["init", "--trust", "trusted", "--bogus", "."], ["init", "--trust", "trusted", "--workspace", ""]]) {
     const { io, deps, installs } = setupInstall();
     assert.equal(await run(argv, io, deps), EXIT_CODE.usage, argv.join(" "));
     assert.deepEqual(installs, [], argv.join(" "));
@@ -416,20 +416,20 @@ test("install without --trust, with another value, or with two repositories is a
   }
 });
 
-test("install passes the declared mode, the resolved repository and its directory name, and defaults the repository to the working directory", async () => {
+test("init passes the declared mode, the resolved repository and its directory name, and defaults the repository to the working directory", async () => {
   const named = setupInstall();
-  assert.equal(await run(["install", "--trust", "trusted", "../shop"], named.io, named.deps), EXIT_CODE.ok);
+  assert.equal(await run(["init", "--trust", "trusted", "../shop"], named.io, named.deps), EXIT_CODE.ok);
   const implicit = setupInstall();
-  assert.equal(await run(["install", "--trust", "untrusted"], implicit.io, implicit.deps), EXIT_CODE.ok);
+  assert.equal(await run(["init", "--trust", "untrusted"], implicit.io, implicit.deps), EXIT_CODE.ok);
 
   assert.deepEqual(named.installs.map(({ signal, ...request }) => (assert.equal(signal, named.signal), request)), [{ repo: resolve("../shop"), repoId: "shop", trust: "trusted" }]);
   assert.deepEqual(implicit.installs.map(({ signal: _, ...request }) => request), [{ repo: resolve("."), repoId: basename(resolve(".")), trust: "untrusted" }]);
 });
 
-test("install reports the trust, the exclude lines, each file of the fixed layer and the command that registers the MCP server", async () => {
+test("init reports the trust, the exclude lines, each file of the fixed layer and the command that registers the MCP server", async () => {
   const { io, deps } = setupInstall();
 
-  assert.equal(await run(["install", "--trust", "untrusted", "/work/shop"], io, deps), EXIT_CODE.ok);
+  assert.equal(await run(["init", "--trust", "untrusted", "/work/shop"], io, deps), EXIT_CODE.ok);
 
   const text = io.stdout.join("\n");
   assert.match(text, /untrusted/);
@@ -440,11 +440,11 @@ test("install reports the trust, the exclude lines, each file of the fixed layer
   assert.deepEqual(io.stderr, []);
 });
 
-test("install tells an unchanged layer, an already excluded folder and a layer that was not written, and why", async () => {
+test("init tells an unchanged layer, an already excluded folder and a layer that was not written, and why", async () => {
   const unchanged = setupInstall({ ok: true, value: { ...INSTALLED, excluded: [], layer: { outcome: "unchanged", files: ["README.md", "entrypoints.json"] } } });
-  await run(["install", "--trust", "untrusted", "/work/shop"], unchanged.io, unchanged.deps);
+  await run(["init", "--trust", "untrusted", "/work/shop"], unchanged.io, unchanged.deps);
   const cut = setupInstall({ ok: true, value: { ...INSTALLED, layer: { outcome: "not-written", reason: "deadline" } } });
-  await run(["install", "--trust", "untrusted", "/work/shop"], cut.io, cut.deps);
+  await run(["init", "--trust", "untrusted", "/work/shop"], cut.io, cut.deps);
 
   assert.match(unchanged.io.stdout.join("\n"), /\.ye-ast\/README\.md.*unchanged/);
   assert.doesNotMatch(unchanged.io.stdout.join("\n"), /\.ye-ast-graph\/ /);
@@ -452,20 +452,20 @@ test("install tells an unchanged layer, an already excluded folder and a layer t
   assert.match(cut.io.stdout.join("\n"), /not written.*deadline/);
 });
 
-test("install prints the registration command with the paths quoted for a shell", async () => {
+test("init prints the registration command with the paths quoted for a shell", async () => {
   const { io, deps } = setupInstall();
 
-  await run(["install", "--trust", "untrusted", "/work/my shop"], io, { ...deps, mcpCommand: ["npx", "--yes", "tsx", "/opt/it's/main.ts"] });
+  await run(["init", "--trust", "untrusted", "/work/my shop"], io, { ...deps, mcpCommand: ["npx", "--yes", "tsx", "/opt/it's/main.ts"] });
 
   assert.ok(io.stdout.includes(`claude mcp add ye-ast -- npx --yes tsx '/opt/it'\\''s/main.ts' mcp '/work/my shop'`));
 });
 
-test("an install fault is one stderr line with the fault kind and exits with the query-failed code; an aborted one exits interrupted", async () => {
+test("an init fault is one stderr line with the fault kind and exits with the query-failed code; an aborted one exits interrupted", async () => {
   const failed = setupInstall({ ok: false, fault: { kind: "unwritable", detail: "read-only", trustRecorded: false } });
   const aborted = setupInstall({ ok: false, fault: { kind: "aborted", detail: "stop", trustRecorded: true } });
 
-  assert.equal(await run(["install", "--trust", "untrusted", "."], failed.io, failed.deps), EXIT_CODE.queryFailed);
-  assert.equal(await run(["install", "--trust", "untrusted", "."], aborted.io, aborted.deps), EXIT_CODE.interrupted);
+  assert.equal(await run(["init", "--trust", "untrusted", "."], failed.io, failed.deps), EXIT_CODE.queryFailed);
+  assert.equal(await run(["init", "--trust", "untrusted", "."], aborted.io, aborted.deps), EXIT_CODE.interrupted);
 
   assert.equal(failed.io.stderr.length, 1);
   assert.match(failed.io.stderr[0]!, /unwritable/);
@@ -475,20 +475,20 @@ test("an install fault is one stderr line with the fault kind and exits with the
 test("a fault after the trust was recorded says so, with the mode, before naming the fault", async () => {
   const stopped = setupInstall({ ok: false, fault: { kind: "git-failed", detail: "dubious ownership", trustRecorded: true } });
 
-  assert.equal(await run(["install", "--trust", "trusted", "."], stopped.io, stopped.deps), EXIT_CODE.queryFailed);
+  assert.equal(await run(["init", "--trust", "trusted", "."], stopped.io, stopped.deps), EXIT_CODE.queryFailed);
 
   assert.equal(stopped.io.stderr.length, 2);
   assert.match(stopped.io.stderr[0]!, /trusted/);
   assert.match(stopped.io.stderr[1]!, /git-failed/);
 });
 
-test("install redacts what it prints and a crash of the use case is an internal fault", async () => {
+test("init redacts what it prints and a crash of the use case is an internal fault", async () => {
   const leaking = setupInstall();
-  await run(["install", "--trust", "untrusted", `/work/${SECRET}`], leaking.io, leaking.deps);
+  await run(["init", "--trust", "untrusted", `/work/${SECRET}`], leaking.io, leaking.deps);
   const crashing = setup();
   const deps = { ...crashing.deps, install: { run: async (): Promise<never> => { throw new Error("boom"); } } };
 
-  assert.equal(await run(["install", "--trust", "untrusted", "."], crashing.io, deps), EXIT_CODE.internalFault);
+  assert.equal(await run(["init", "--trust", "untrusted", "."], crashing.io, deps), EXIT_CODE.internalFault);
 
   assert.equal(leaking.io.stdout.join("\n").includes(SECRET), false);
 });
@@ -512,12 +512,12 @@ async function workspaceFile(content: string): Promise<string> {
   return path;
 }
 
-test("install reads the manifest the --workspace flag names and passes its text with the path it was read from", async () => {
+test("init reads the manifest the --workspace flag names and passes its text with the path it was read from", async () => {
   const text = JSON.stringify({ repos: [{ path: "../shop-web" }] });
   const path = await workspaceFile(text);
   const { io, deps, installs } = setupInstall();
 
-  assert.equal(await run(["install", "--trust", "untrusted", "--workspace", path, "/work/shop"], io, deps), EXIT_CODE.ok);
+  assert.equal(await run(["init", "--trust", "untrusted", "--workspace", path, "/work/shop"], io, deps), EXIT_CODE.ok);
 
   assert.deepEqual(
     installs.map(({ signal, ...request }) => (assert.equal(signal, deps.signal), request)),
@@ -525,34 +525,34 @@ test("install reads the manifest the --workspace flag names and passes its text 
   );
 });
 
-test("install refuses a workspace file it cannot read before the install runs", async () => {
+test("init refuses a workspace file it cannot read before the install runs", async () => {
   const { io, deps, installs } = setupInstall();
 
-  assert.equal(await run(["install", "--trust", "untrusted", "--workspace", join(scratch, "absent.json"), "."], io, deps), EXIT_CODE.queryFailed);
+  assert.equal(await run(["init", "--trust", "untrusted", "--workspace", join(scratch, "absent.json"), "."], io, deps), EXIT_CODE.queryFailed);
 
   assert.deepEqual(installs, []);
   assert.deepEqual(io.stdout, []);
   assert.match(io.stderr.join("\n"), /workspace-invalid/);
 });
 
-test("install reports the manifest it persisted beside the files of the layer", async () => {
+test("init reports the manifest it persisted beside the files of the layer", async () => {
   const path = await workspaceFile(JSON.stringify({ repos: [{ path: "../shop-web" }] }));
   const written = setupInstall({ ok: true, value: { ...INSTALLED, workspace: { outcome: "written" } } });
   const unchanged = setupInstall({ ok: true, value: { ...INSTALLED, workspace: { outcome: "unchanged" } } });
 
-  await run(["install", "--trust", "untrusted", "--workspace", path, "/work/shop"], written.io, written.deps);
-  await run(["install", "--trust", "untrusted", "--workspace", path, "/work/shop"], unchanged.io, unchanged.deps);
+  await run(["init", "--trust", "untrusted", "--workspace", path, "/work/shop"], written.io, written.deps);
+  await run(["init", "--trust", "untrusted", "--workspace", path, "/work/shop"], unchanged.io, unchanged.deps);
 
   assert.ok(written.io.stdout.includes(".ye-ast/workspace.json: written"));
   assert.ok(unchanged.io.stdout.includes(".ye-ast/workspace.json: unchanged"));
 });
 
-test("the usage names the --workspace flag of install", async () => {
+test("the usage names the --workspace flag of init", async () => {
   const { io, deps } = setup();
 
   assert.equal(await run(["--help"], io, deps), EXIT_CODE.ok);
 
-  assert.match(io.stdout.join("\n"), /install[^\n]*--workspace <file>/);
+  assert.match(io.stdout.join("\n"), /ye-ast init[^\n]*--workspace <file>/);
 });
 
 const REPO = resolve("some/checkout");
@@ -592,12 +592,12 @@ test("--live together with --revision or --head is a usage error that asks nothi
 });
 
 test("a live query refused under untrusted exits with the query code and names the command that trusts the repository", async () => {
-  const refused: Result<never, LiveFault> = { ok: false, fault: { kind: "live-requires-trusted", detail: "run `ye-ast install --trust trusted`" } };
+  const refused: Result<never, LiveFault> = { ok: false, fault: { kind: "live-requires-trusted", detail: "run `ye-ast init --trust trusted`" } };
   const { io, deps } = setup(refused);
 
   assert.equal(await run(["map", "--live", "."], io, deps), EXIT_CODE.queryFailed);
   assert.deepEqual(io.stdout, []);
-  assert.match(io.stderr.join("\n"), /live-requires-trusted.*ye-ast install --trust trusted/);
+  assert.match(io.stderr.join("\n"), /live-requires-trusted.*ye-ast init --trust trusted/);
 });
 
 test("a working tree that moved after the answer is one redacted stderr line naming the changed paths, and the fact and the exit code stay", async () => {
@@ -620,7 +620,7 @@ test("the usage and the help name --live", async () => {
   const { io, deps } = setup();
   await run(["--help"], io, deps);
   assert.match(io.stdout.join("\n"), /--live/);
-  assert.match(io.stdout.join("\n"), /ye-ast install --trust trusted/);
+  assert.match(io.stdout.join("\n"), /ye-ast init --trust trusted/);
 });
 
 test("without --live no query asks for a stale notice", async () => {

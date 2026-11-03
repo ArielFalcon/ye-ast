@@ -145,7 +145,7 @@ test("the three transports accept and refuse the same budget, and hand the use c
 });
 
 test("every surface that names a trust mode refuses one the domain does not know", async () => {
-  const cli = await run(["install", "--trust", "sometimes", REPO], { out: () => undefined, err: () => undefined }, {
+  const cli = await run(["init", "--trust", "sometimes", REPO], { out: () => undefined, err: () => undefined }, {
     version: "0.0.0",
     entrypoints,
     impact: family().impact,

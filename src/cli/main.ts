@@ -33,7 +33,7 @@ export interface CliDeps {
   entrypoints: EntrypointQueries;
   impact: ImpactQueries;
   install: Install;
-  /** The command that starts this build of ye-ast; `install` appends `mcp <repo>` and prints it as the MCP registration. */
+  /** The command that starts this build of ye-ast; `init` appends `mcp <repo>` and prints it as the MCP registration. */
   mcpCommand: readonly string[];
   /** Applied to every string that leaves the process on stdout or stderr. */
   redaction: Redaction;
@@ -49,13 +49,13 @@ const USAGE = [
   "       ye-ast impact --base <rev> [--head <rev> | --live] [--repo-id <id>] [scope] [budget] <repo>",
   "       ye-ast callers [--revision <rev> | --live] [--repo-id <id>] [scope] [budget] <repo> <file>:<symbol> | <file>:<start>-<end> ...",
   "       ye-ast importers [--revision <rev> | --live] [--repo-id <id>] [scope] <repo> <file> ...",
-  "       ye-ast install --trust trusted|untrusted [--workspace <file>] [<repo>]   (declares the trust mode, writes the fixed layer under .ye-ast/, ignores ye-ast's folders locally, prints the MCP registration)",
+  "       ye-ast init --trust trusted|untrusted [--workspace <file>] [<repo>]   (declares the trust mode, writes the fixed layer under .ye-ast/, ignores ye-ast's folders locally, prints the MCP registration)",
   "       ye-ast serve   (the query protocol, JSON-RPC 2.0, one message per line on stdin/stdout)",
   "       ye-ast mcp [<repo>]   (stdio MCP server, read-only, bound to <repo> or the working directory)",
-  "--live: reads the working tree of a repository declared trusted (ye-ast install --trust trusted) instead of a revision; the first run builds ye-ast's mirror of it, and a stale answer is reported on stderr",
+  "--live: reads the working tree of a repository declared trusted (ye-ast init --trust trusted) instead of a revision; the first run builds ye-ast's mirror of it, and a stale answer is reported on stderr",
   "scope: [--include <glob>]... [--exclude <glob>]...   (globs over repository-relative paths, on map, impact, callers and importers; without --include every path is included; --exclude wins)",
   "budget: [--depth <n>] [--hub-fan-in <n>] [--expansions <n>]   (positive integers; none has a default)",
-  "workspace: --workspace <file>   (the workspace install persists as .ye-ast/workspace.json: { \"repos\": [{ \"path\", \"id\", \"revision\", \"remote\" }], \"gateways\": [{ \"prefix\", \"repo\" }] }; a relative repository path is stored as written and resolved against the installed repository, and a remote is the source of truth a trusted repository's queries refresh into ye-ast's own mirror)",
+  "workspace: --workspace <file>   (the workspace init persists as .ye-ast/workspace.json: { \"repos\": [{ \"path\", \"id\", \"revision\", \"remote\" }], \"gateways\": [{ \"prefix\", \"repo\" }] }; a relative repository path is stored as written and resolved against the installed repository, and a remote is the source of truth a trusted repository's queries refresh into ye-ast's own mirror)",
   "measure: --measure   (one JSON measurement line per query and per index build, on stderr; never on stdout)",
 ].join("\n");
 
@@ -72,7 +72,7 @@ export async function run(argv: readonly string[], io: CliIo, deps: CliDeps): Pr
     io.out(USAGE);
     return EXIT_CODE.ok;
   }
-  if (command === "install") return runInstall(args, io, deps);
+  if (command === "init") return runInit(args, io, deps);
   const query = queryOf(command, args, deps, io);
   if (query === undefined) {
     io.err(USAGE);
@@ -103,8 +103,8 @@ function declarationText(entry: { file: string; candidates: readonly string[] })
   return entry.candidates.length === 0 ? `${entry.file} declares no symbol` : `declared in ${entry.file}: ${entry.candidates.join(", ")}`;
 }
 
-async function runInstall(args: readonly string[], io: CliIo, deps: CliDeps): Promise<number> {
-  const parsed = parseInstallRequest(args);
+async function runInit(args: readonly string[], io: CliIo, deps: CliDeps): Promise<number> {
+  const parsed = parseInitRequest(args);
   if (parsed === undefined) {
     io.err(USAGE);
     return EXIT_CODE.usage;
@@ -119,11 +119,11 @@ async function runInstall(args: readonly string[], io: CliIo, deps: CliDeps): Pr
   try {
     const result = await deps.install.run({ ...request, ...(workspace === undefined ? {} : { workspace: workspace.value }), signal: deps.signal });
     if (!result.ok) {
-      if (result.fault.trustRecorded) io.err(`ye-ast: trust ${request.trust} was recorded outside the repository before the install stopped`);
+      if (result.fault.trustRecorded) io.err(`ye-ast: trust ${request.trust} was recorded outside the repository before init stopped`);
       io.err(`ye-ast: ${result.fault.kind}: ${deps.redaction.redact(result.fault.detail.trim())}`);
       return result.fault.kind === "aborted" ? EXIT_CODE.interrupted : EXIT_CODE.queryFailed;
     }
-    for (const line of installReport(result.value, request.repo, deps.mcpCommand)) out(line);
+    for (const line of initReport(result.value, request.repo, deps.mcpCommand)) out(line);
     return EXIT_CODE.ok;
   } catch (error) {
     io.err(`ye-ast: internal fault: ${deps.redaction.redact(firstLine(error))}`);
@@ -140,7 +140,7 @@ async function readWorkspaceFile(path: string): Promise<Result<{ path: string; t
   }
 }
 
-function installReport({ trust, excluded, layer, workspace }: InstallOutcome, repo: string, mcpCommand: readonly string[]): string[] {
+function initReport({ trust, excluded, layer, workspace }: InstallOutcome, repo: string, mcpCommand: readonly string[]): string[] {
   const layerLines =
     layer.outcome === "not-written"
       ? [`fixed layer: not written (${layer.reason})`]
@@ -211,13 +211,13 @@ function parseMapRequest(args: readonly string[]): MapRequest | undefined {
   }
 }
 
-/** What the `install` flags name: the request, and the manifest file to read before it runs. */
-interface ParsedInstall extends Omit<InstallRequest, "signal" | "workspace"> {
+/** What the `init` flags name: the request, and the manifest file to read before it runs. */
+interface ParsedInit extends Omit<InstallRequest, "signal" | "workspace"> {
   /** The path of the manifest to persist, resolved against the working directory. */
   workspaceFile?: string;
 }
 
-function parseInstallRequest(args: readonly string[]): ParsedInstall | undefined {
+function parseInitRequest(args: readonly string[]): ParsedInit | undefined {
   try {
     const { values, positionals } = parseArgs({ args: [...args], options: { trust: { type: "string" }, workspace: { type: "string" } }, allowPositionals: true });
     const [path = ".", ...extra] = positionals;

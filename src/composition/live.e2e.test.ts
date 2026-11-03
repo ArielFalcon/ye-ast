@@ -119,7 +119,7 @@ async function ye(command: string, args: string[], tail: string[] = []): Promise
 }
 
 async function trust(mode: "trusted" | "untrusted"): Promise<void> {
-  const installed = await composeCli({ scratchRoot, trustDirectory })(["install", "--trust", mode, repo], { out: () => undefined, err: () => undefined });
+  const installed = await composeCli({ scratchRoot, trustDirectory })(["init", "--trust", mode, repo], { out: () => undefined, err: () => undefined });
   assert.equal(installed, EXIT_CODE.ok);
 }
 
@@ -132,7 +132,7 @@ test("under untrusted, every live query is refused with the command that trusts 
 
     assert.equal(answer.code, EXIT_CODE.queryFailed, command);
     assert.equal(answer.stdout, "");
-    assert.match(answer.stderr, /live-requires-trusted.*ye-ast install --trust trusted/);
+    assert.match(answer.stderr, /live-requires-trusted.*ye-ast init --trust trusted/);
   }
   assert.equal(existsSync(join(repo, ".ye-ast-graph")), false);
 });

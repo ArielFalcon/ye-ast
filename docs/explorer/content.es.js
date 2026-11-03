@@ -360,13 +360,13 @@ window.EXPLORER_ES = {
         },
       ],
     },
-    install: {
-      label: "install",
+    init: {
+      label: "init",
       question: "¿Cómo se declara un repositorio trusted, se excluye y se cubre con la capa fija?",
       steps: [
         {
           title: "La petición",
-          body: "<p><code>ye-ast install --trust trusted|untrusted</code> escribe una declaración fuera del repositorio y prepara las carpetas propias de ye-ast.</p>",
+          body: "<p><code>ye-ast init --trust trusted|untrusted</code> escribe una declaración fuera del repositorio y prepara las carpetas propias de ye-ast.</p>",
           calloutText: "Install es un caso de uso con su propia superficie de escritura.",
         },
         {

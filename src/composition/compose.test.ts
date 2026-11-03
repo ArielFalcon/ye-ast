@@ -363,8 +363,8 @@ test("a trusted sibling whose remote is passed is read at the remote's sha, and 
   writeFileSync(manifest, JSON.stringify({ repos: [{ path: "../orders-svc", id: "orders", remote: url }] }));
   const install = composeCli({ scratchRoot, trustDirectory });
   const quiet = { out: () => undefined, err: () => undefined };
-  assert.equal(await install(["install", "--trust", "trusted", sibling], quiet), EXIT_CODE.ok);
-  assert.equal(await install(["install", "--trust", "trusted", "--workspace", manifest, repo], quiet), EXIT_CODE.ok);
+  assert.equal(await install(["init", "--trust", "trusted", sibling], quiet), EXIT_CODE.ok);
+  assert.equal(await install(["init", "--trust", "trusted", "--workspace", manifest, repo], quiet), EXIT_CODE.ok);
 
   const digest = createSha256Digest();
   const refresh = createRemoteRefresh({ ...defaultRemoteRefreshDeps, cacheDirectory, digest, protocols: "file" });

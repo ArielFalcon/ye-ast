@@ -2,7 +2,7 @@ import type { Result } from "../domain/shared/result.ts";
 import type { WorkspaceManifest } from "../domain/topology/workspace-manifest.ts";
 import type { FixedLayerFault } from "./fixed-layer-store.port.ts";
 
-/** The file of the fixed layer that holds the workspace `ye-ast install --workspace` persisted. */
+/** The file of the fixed layer that holds the workspace `ye-ast init --workspace` persisted. */
 export const WORKSPACE_MANIFEST_FILE = "workspace.json";
 
 export type { WorkspaceManifest, WorkspaceManifestFault } from "../domain/topology/workspace-manifest.ts";

@@ -699,12 +699,12 @@ test("an answer the working tree moved past opens its text with a stale line and
 });
 
 test("a live query refused under untrusted is an error result naming the command that trusts the repository", async () => {
-  const { session } = await setup({ map: async () => ({ ok: false, fault: { kind: "live-requires-trusted", detail: "run `ye-ast install --trust trusted`" } }) });
+  const { session } = await setup({ map: async () => ({ ok: false, fault: { kind: "live-requires-trusted", detail: "run `ye-ast init --trust trusted`" } }) });
 
   const result = await session.callTool("ye_ast_entrypoints", { live: true });
 
   assert.equal(result.isError, true);
-  assert.match(textOf(result), /live-requires-trusted[\s\S]*ye-ast install --trust trusted/);
+  assert.match(textOf(result), /live-requires-trusted[\s\S]*ye-ast init --trust trusted/);
   await session.close();
 });
 

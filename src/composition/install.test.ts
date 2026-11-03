@@ -69,8 +69,8 @@ async function mapTrust(path = repo): Promise<string> {
   return JSON.parse(stdout.join("\n")).inputs.trust;
 }
 
-test("install records the trust outside the repository, writes the fixed layer, excludes ye-ast's folders and prints the registration", async () => {
-  const { code, stdout, stderr } = await cli("install", "--trust", "untrusted", repo);
+test("init records the trust outside the repository, writes the fixed layer, excludes ye-ast's folders and prints the registration", async () => {
+  const { code, stdout, stderr } = await cli("init", "--trust", "untrusted", repo);
 
   assert.equal(code, EXIT_CODE.ok, stderr.join("\n"));
   assert.ok(stdout.some((line) => /^\.ye-ast\/entrypoints\.json: written$/.test(line)));
@@ -80,11 +80,11 @@ test("install records the trust outside the repository, writes the fixed layer, 
   assert.deepEqual(JSON.parse(readFileSync(join(trustDirectory, RECORDS_DIRECTORY, recordName!), "utf8")), { version: 1, repository: realpathSync(repo), trust: "untrusted" });
 });
 
-test("install writes nothing in the repository but .ye-ast/ and the local exclude file, and leaves git status clean", async () => {
+test("init writes nothing in the repository but .ye-ast/ and the local exclude file, and leaves git status clean", async () => {
   const before = readdirSync(repo).sort();
   const tracked = git("ls-files", "-s");
 
-  const { code } = await cli("install", "--trust", "trusted", repo);
+  const { code } = await cli("init", "--trust", "trusted", repo);
 
   assert.equal(code, EXIT_CODE.ok);
   assert.deepEqual(readdirSync(repo).sort(), [...before, ".ye-ast"].sort());
@@ -95,19 +95,19 @@ test("install writes nothing in the repository but .ye-ast/ and the local exclud
 });
 
 test("a second install changes nothing: the layer is unchanged and the exclude file is not extended", async () => {
-  await cli("install", "--trust", "untrusted", repo);
+  await cli("init", "--trust", "untrusted", repo);
   const exclude = readFileSync(join(repo, ".git", "info", "exclude"), "utf8");
 
-  const { code, stdout } = await cli("install", "--trust", "untrusted", repo);
+  const { code, stdout } = await cli("init", "--trust", "untrusted", repo);
 
   assert.equal(code, EXIT_CODE.ok);
   assert.ok(stdout.some((line) => /^\.ye-ast\/entrypoints\.json: unchanged$/.test(line)));
   assert.equal(readFileSync(join(repo, ".git", "info", "exclude"), "utf8"), exclude);
 });
 
-test("install of a subdirectory or of a directory without a repository records nothing", async () => {
-  const subdirectory = await cli("install", "--trust", "trusted", join(repo, "src"));
-  const bare = await cli("install", "--trust", "trusted", workspace);
+test("init of a subdirectory or of a directory without a repository records nothing", async () => {
+  const subdirectory = await cli("init", "--trust", "trusted", join(repo, "src"));
+  const bare = await cli("init", "--trust", "trusted", workspace);
 
   assert.equal(subdirectory.code, EXIT_CODE.queryFailed);
   assert.equal(bare.code, EXIT_CODE.queryFailed);
@@ -118,16 +118,16 @@ test("install of a subdirectory or of a directory without a repository records n
 test("map reads untrusted without a record, the recorded mode after install, and the new mode after a reinstall", async () => {
   assert.equal(await mapTrust(), "untrusted");
 
-  await cli("install", "--trust", "trusted", repo);
+  await cli("init", "--trust", "trusted", repo);
   assert.equal(await mapTrust(), "trusted");
 
-  await cli("install", "--trust", "untrusted", repo);
+  await cli("init", "--trust", "untrusted", repo);
   assert.equal(await mapTrust(), "untrusted");
   assert.equal(JSON.parse(readFileSync(join(repo, ".ye-ast", "entrypoints.json"), "utf8")).inputs.trust, "untrusted");
 });
 
 test("the impact operations read the record too", async () => {
-  await cli("install", "--trust", "trusted", repo);
+  await cli("init", "--trust", "trusted", repo);
 
   const { code, stdout, stderr } = await cli("importers", repo, "src/OrderController.java");
 
@@ -145,14 +145,14 @@ test("another spelling of the repository's directory reads the same record, and 
   execFileSync("git", ["add", "-A"], { cwd: other, env: GIT_ENV });
   execFileSync("git", ["commit", "-q", "-m", "a"], { cwd: other, env: GIT_ENV });
 
-  await cli("install", "--trust", "trusted", link);
+  await cli("init", "--trust", "trusted", link);
 
   assert.equal(await mapTrust(repo), "trusted");
   assert.equal(await mapTrust(other), "untrusted");
 });
 
 test("the MCP host reads the record and the query-protocol host ignores it", async () => {
-  await cli("install", "--trust", "trusted", repo);
+  await cli("init", "--trust", "trusted", repo);
   const host = processHost({ signal: new AbortController().signal, trustDirectory });
   const mapped = async (queries: ReturnType<typeof host.queries>): Promise<string> => {
     const result = await queries.entrypoints.map({ repo, repoId: "shop", revision: "HEAD" });
@@ -165,7 +165,7 @@ test("the MCP host reads the record and the query-protocol host ignores it", asy
 });
 
 test("a refused trust record runs the repository untrusted and says so once", async () => {
-  await cli("install", "--trust", "trusted", repo);
+  await cli("init", "--trust", "trusted", repo);
   chmodSync(trustDirectory, 0o777);
   const lines: string[] = [];
   const queries = composeQueries({ scratchRoot: join(workspace, "scratch"), trustDirectory, reportTrustFault: (line) => lines.push(line) });
@@ -179,12 +179,12 @@ test("a refused trust record runs the repository untrusted and says so once", as
   assert.match(lines[0]!, /refused/);
 });
 
-test("an install that stops after the trust was recorded says so and keeps the record", async () => {
+test("an init that stops after the trust was recorded says so and keeps the record", async () => {
   const exclude = join(repo, ".git", "info", "exclude");
   rmSync(exclude);
   symlinkSync(join(workspace, "elsewhere.txt"), exclude);
 
-  const { code, stderr } = await cli("install", "--trust", "trusted", repo);
+  const { code, stderr } = await cli("init", "--trust", "trusted", repo);
 
   assert.equal(code, EXIT_CODE.queryFailed);
   assert.match(stderr[0]!, /recorded/);
@@ -192,7 +192,7 @@ test("an install that stops after the trust was recorded says so and keeps the r
   assert.equal(readdirSync(repo).includes(".ye-ast"), false);
 });
 
-test("install --workspace persists the manifest under .ye-ast/ and a second run leaves it unchanged", async () => {
+test("init --workspace persists the manifest under .ye-ast/ and a second run leaves it unchanged", async () => {
   const committed = (path: string): string => {
     mkdirSync(path);
     execFileSync("git", ["init", "-q"], { cwd: path, env: GIT_ENV });
@@ -206,9 +206,9 @@ test("install --workspace persists the manifest under .ye-ast/ and a second run 
   const manifest = join(workspace, "workspace.json");
   writeFileSync(manifest, JSON.stringify({ gateways: [{ prefix: "orders-api", repo: "orders" }], repos: [{ path: "../orders-service" }, { path: billing }] }));
 
-  const first = await cli("install", "--trust", "untrusted", "--workspace", manifest, repo);
+  const first = await cli("init", "--trust", "untrusted", "--workspace", manifest, repo);
   const stored = readFileSync(join(repo, ".ye-ast", "workspace.json"), "utf8");
-  const second = await cli("install", "--trust", "untrusted", "--workspace", manifest, repo);
+  const second = await cli("init", "--trust", "untrusted", "--workspace", manifest, repo);
 
   assert.equal(first.code, EXIT_CODE.ok, first.stderr.join("\n"));
   assert.ok(first.stdout.some((line) => /^\.ye-ast\/workspace\.json: written$/.test(line)));
@@ -217,12 +217,12 @@ test("install --workspace persists the manifest under .ye-ast/ and a second run 
   assert.equal(readFileSync(join(repo, ".ye-ast", "workspace.json"), "utf8"), stored);
 });
 
-test("install --workspace refuses a repository the query families cannot read, before it records anything", async () => {
+test("init --workspace refuses a repository the query families cannot read, before it records anything", async () => {
   mkdirSync(join(workspace, "not-a-repo"));
   const manifest = join(workspace, "workspace.json");
   writeFileSync(manifest, JSON.stringify({ repos: [{ path: "../not-a-repo" }] }));
 
-  const { code, stderr } = await cli("install", "--trust", "untrusted", "--workspace", manifest, repo);
+  const { code, stderr } = await cli("init", "--trust", "untrusted", "--workspace", manifest, repo);
 
   assert.equal(code, EXIT_CODE.queryFailed);
   assert.match(stderr.join("\n"), /^ye-ast: git-failed: repos\[0\]\.path: fatal: not a git repository/m);
@@ -239,7 +239,7 @@ test("a workspace query that names no repositories works over the manifest insta
   execFileSync("git", ["commit", "-q", "-m", "orders"], { cwd: other, env: GIT_ENV });
   const manifest = join(workspace, "workspace.json");
   writeFileSync(manifest, JSON.stringify({ repos: [{ path: "../orders-service", id: "orders" }] }));
-  await cli("install", "--trust", "untrusted", "--workspace", manifest, repo);
+  await cli("init", "--trust", "untrusted", "--workspace", manifest, repo);
 
   const result = await composeQueries({ scratchRoot: join(workspace, "scratch"), trustDirectory }).workspace.outwardNames({ repo: { path: repo, id: "shop" } });
 
@@ -314,8 +314,8 @@ test("a form-shaped answer set persisted by install closes every gap the next qu
       gateways: [{ prefix: "shop-api", repo: "orders-a" }],
     }),
   );
-  assert.equal((await cli("install", "--trust", "untrusted", "--workspace", manifest, repo)).code, EXIT_CODE.ok);
-  for (const path of siblings) assert.equal((await cli("install", "--trust", "untrusted", path)).code, EXIT_CODE.ok);
+  assert.equal((await cli("init", "--trust", "untrusted", "--workspace", manifest, repo)).code, EXIT_CODE.ok);
+  for (const path of siblings) assert.equal((await cli("init", "--trust", "untrusted", path)).code, EXIT_CODE.ok);
   assert.match(readFileSync(join(repo, ".ye-ast", "workspace.json"), "utf8"), /"remote": "https:\/\/git\.example\.test\/orders-a\.git"/);
 
   assert.deepEqual(await gaps({ repo: { path: repo } }), []);

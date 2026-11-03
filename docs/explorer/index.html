@@ -505,7 +505,7 @@ export class LoginComponent {
       <div class="section-head">
         <p class="kicker">Trust &amp; snapshots</p>
         <h2>Two modes, one rule: the repository never raises its own trust.</h2>
-        <p class="section-lede">Trust describes the repository content, never the machine. It is declared outside the repository: by a host through the library or the protocol, by a user through <code>ye-ast install</code> or a flag. Without a declaration, the CLI and the MCP server run <code>untrusted</code>.</p>
+        <p class="section-lede">Trust describes the repository content, never the machine. It is declared outside the repository: by a host through the library or the protocol, by a user through <code>ye-ast init</code> or a flag. Without a declaration, the CLI and the MCP server run <code>untrusted</code>.</p>
       </div>
 
       <div class="trust-lanes">
@@ -586,7 +586,7 @@ export class LoginComponent {
             <tr><td><code>ye-ast impact</code></td><td>The change from the merge base to head; bounds; scope.</td><td><code>src/cli/main.ts:171-174</code></td></tr>
             <tr><td><code>ye-ast callers</code></td><td>Inbound reachability from symbols or line ranges.</td><td><code>src/cli/main.ts:175-178</code></td></tr>
             <tr><td><code>ye-ast importers</code></td><td>Importers, users and unresolved namers per file.</td><td><code>src/cli/main.ts:179-182</code></td></tr>
-            <tr><td><code>ye-ast install</code></td><td>Writes the trust record, the local exclude and the fixed layer; prints the MCP registration.</td><td><code>src/core/application/install/install.ts:23-45</code></td></tr>
+            <tr><td><code>ye-ast init</code></td><td>Writes the trust record, the local exclude and the fixed layer; prints the MCP registration.</td><td><code>src/core/application/install/install.ts:23-45</code></td></tr>
             <tr><td><code>ye-ast mcp</code></td><td>stdio MCP server bound to one repository; read-only tools.</td><td><code>src/composition/mcp.ts</code></td></tr>
             <tr><td><code>ye-ast serve</code></td><td>The query protocol over stdio; stdout carries only protocol lines.</td><td><code>src/protocol/query-server.ts</code></td></tr>
           </tbody>

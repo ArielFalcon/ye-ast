@@ -27,7 +27,7 @@ const CUTS = "cuts:";
 const SOURCE_TEXT: Readonly<Record<WorkspaceSource, string>> = {
   request: "the request",
   persisted: `${FIXED_LAYER_DIRECTORY}/${WORKSPACE_MANIFEST_FILE}`,
-  none: "nothing: this answer covers the bound repository alone (pass workspace.repos, or persist a declaration with ye-ast install --workspace)",
+  none: "nothing: this answer covers the bound repository alone (pass workspace.repos, or persist a declaration with ye-ast init --workspace)",
 };
 
 /** The line that says where the repositories the answer worked over came from, so one repository is never read as all of them. */

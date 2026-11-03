@@ -19,7 +19,7 @@ export type FixedLayerRefreshFault = VcsFault | LiveFault | FixedLayerFault;
 
 /**
  * Writes the fixed layer of a repository: the only write ye-ast makes to a repository's folder, and only to
- * `.ye-ast/`. A host reaches it through the library and `ye-ast install`. No entrypoint that faces an agent (the MCP
+ * `.ye-ast/`. A host reaches it through the library and `ye-ast init`. No entrypoint that faces an agent (the MCP
  * server, the query protocol) may import it or receive it; composition hands it to the install command alone.
  */
 export interface FixedLayerAdmin {

@@ -33,7 +33,7 @@ export type InstallFault = (VcsFault | TrustRecordFault | LocalExcludeFault | Fi
 };
 
 /**
- * `ye-ast install`: the one command that declares trust, edits the local exclude file and writes the fixed layer of a
+ * `ye-ast init`: the one command that declares trust, edits the local exclude file and writes the fixed layer of a
  * repository. Only the CLI receives it; no transport that faces an agent may.
  */
 export interface Install {
