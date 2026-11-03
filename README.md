@@ -9,98 +9,39 @@
 [![node](https://img.shields.io/node/v/ye-ast-mcp?style=flat-square&color=111111&logo=nodedotjs)](package.json)
 [![MCP](https://img.shields.io/badge/MCP-stdio-111111?style=flat-square)](#3-register-the-mcp-server)
 
-**[Why](#why) · [What it does](#what-it-does) · [Try it](#try-it) · [Limits](#limits) · [For AI agents →](#for-ai-agents-install-and-configure-ye-ast) · [Live explorer →](https://arielfalcon.github.io/ye-ast/)**
+**[What is ye-ast](#what-is-ye-ast) · [Live explorer →](https://arielfalcon.github.io/ye-ast/) · [For AI agents →](#for-ai-agents-install-and-configure-ye-ast)**
 
 </div>
 
 ---
 
-## Why
+## What is ye-ast
 
-Your AI agent sees a handful of files and guesses the rest. It renames a function, says "done", and two days later a
+Your AI agent reads a handful of files and guesses the rest: it renames a function, says "done", and two days later a
 screen that called it through a path the agent never opened is broken.
 
-ye-ast gives your agent **the map**: who calls what, which screen or endpoint each piece of code ends up serving, and
-what your branch really touches. Every answer points to the file and line it came from.
+ye-ast gives the agent **the map**: every answer carries the file and line it came from, or an explicit "I cannot tell",
+never a silent empty list. The questions it settles:
 
-```mermaid
-flowchart LR
-    A["Your agent<br/><i>'what does this change break?'</i>"] -->|asks| Y["ye-ast"]
-    Y -->|reads| C["Your code"]
-    Y -->|reads| G["Git history"]
-    Y -->|answers with file:line proof| A
-```
+- **What does my branch touch?** Everything downstream of the change, plus the routes it adds, removes or alters.
+- **Who calls this?** Every caller of a function or a line range, before you rename or delete it.
+- **Which screen or endpoint ends up running this?** UI routes, HTTP endpoints, message listeners and scheduled jobs.
+- **Is this file really dead?** Who imports it and who uses it, file by file.
 
-## What it does
-
-<table>
-<tr>
-<td width="36" valign="top"><img src="https://api.iconify.design/lucide/git-pull-request.svg?color=%238b949e" width="24" alt="" /></td>
-<td>
-<b>What does my branch touch?</b> Everything downstream of your change, plus the routes it adds, removes or alters.<br/>
-<sub><b>Under the hood:</b> every path is scored by its weakest link, because a chain of calls is only as sure as its
-least sure step. The walk covers an 18,000-node graph in about 10 ms. It measures from where you branched off, so
-work merged after you never shows up as yours.</sub>
-</td>
-</tr>
-<tr>
-<td valign="top"><img src="https://api.iconify.design/lucide/network.svg?color=%238b949e" width="24" alt="" /></td>
-<td>
-<b>Who calls this?</b> Every caller of a function or a range of lines, before you rename or delete it.<br/>
-<sub><b>Under the hood:</b> it resolves calls made through injected services, which a text search can't connect and the
-code index alone leaves unresolved.</sub>
-</td>
-</tr>
-<tr>
-<td valign="top"><img src="https://api.iconify.design/lucide/monitor-smartphone.svg?color=%238b949e" width="24" alt="" /></td>
-<td>
-<b>Which screen ends up running this?</b> UI routes, HTTP endpoints, message listeners and scheduled jobs.<br/>
-<sub><b>Under the hood:</b> touch a route guard and it tells you every screen behind it.</sub>
-</td>
-</tr>
-<tr>
-<td valign="top"><img src="https://api.iconify.design/lucide/file-x.svg?color=%238b949e" width="24" alt="" /></td>
-<td><b>Is this file dead?</b> Who imports it and who uses it, file by file.</td>
-</tr>
-<tr>
-<td valign="top"><img src="https://api.iconify.design/lucide/map.svg?color=%238b949e" width="24" alt="" /></td>
-<td><b>What's in this repo?</b> Every way into the app, as the starting point in an unfamiliar codebase.</td>
-</tr>
-<tr>
-<td valign="top"><img src="https://api.iconify.design/lucide/circle-help.svg?color=%238b949e" width="24" alt="" /></td>
-<td>
-<b>When it doesn't know, it says so.</b> No empty list that reads as "all clear".<br/>
-<sub><b>Under the hood:</b> each place it couldn't settle comes back as a <code>file:line</code> to open, never a silent guess.</sub>
-</td>
-</tr>
-</table>
-
-## Why trust it
-
-| | |
-|---|---|
-| <img src="https://api.iconify.design/lucide/cpu.svg?color=%238b949e" width="20" alt="" /> | **No AI inside.** Answers come from code and git. Same repo, same bytes, every time. |
-| <img src="https://api.iconify.design/lucide/lock.svg?color=%238b949e" width="20" alt="" /> | **Read-only.** Your agent can't use it to change anything. |
-| <img src="https://api.iconify.design/lucide/shield-check.svg?color=%238b949e" width="20" alt="" /> | **Safe by default.** It reads committed code straight from git, runs nothing from the repo and makes no network calls. |
-| <img src="https://api.iconify.design/lucide/zap.svg?color=%238b949e" width="20" alt="" /> | **Keeps up with your edits.** When you allow it, it re-reads only what changed: 370 ms instead of 2.4 s on a 1,100-file repo. |
-| <img src="https://api.iconify.design/lucide/plug.svg?color=%238b949e" width="20" alt="" /> | **Plugs into your agent.** It speaks MCP, so Claude Code, OpenCode and any other MCP client work. |
-
-## Try it
-
-With Node.js 24.15+ and git 2.44+, inside any repository:
+It is deterministic and read-only: the answers come from your code and your git history, never from a model, so the same
+repository gives the same bytes. It runs nothing from your repository, needs no secret, and under the default
+`untrusted` mode makes no network request. It speaks MCP, so Claude Code, OpenCode and any other client can use it.
 
 ```bash
-npx ye-ast-mcp init --trust untrusted .
+npx ye-ast-mcp init --trust untrusted .   # one command; paste the line it prints into your agent
 ```
 
-It prints one line that connects it to your agent. Or just **hand this README to your agent**: the second half is
-written for it.
+TypeScript and Java today, with Angular routes and Spring endpoints; anything else is reported as not covered. It answers
+structure, not intent: "what reaches this?", never "is this code good?". Version 0.x: solid answers, a surface that may
+still change.
 
-## Limits
-
-- <img src="https://api.iconify.design/lucide/puzzle.svg?color=%238b949e" width="16" alt="" /> **TypeScript and Java** today, with Angular routes and Spring HTTP routes. Anything else is reported as not covered.
-- <img src="https://api.iconify.design/lucide/brain.svg?color=%238b949e" width="16" alt="" /> **Structure, not intent.** "What reaches this?" yes. "Is this code good?" no.
-- <img src="https://api.iconify.design/lucide/construction.svg?color=%238b949e" width="16" alt="" /> **Version 0.x.** Solid answers; the surface may still change.
+**Markdown descriptions are boring.** [Walk the graph yourself](https://arielfalcon.github.io/ye-ast/) — the same answers,
+as an interactive map of the layers, the modules and the walk an agent takes.
 
 ---
 
