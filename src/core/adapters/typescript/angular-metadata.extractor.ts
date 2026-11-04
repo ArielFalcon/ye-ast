@@ -122,6 +122,11 @@ export function readAngularMetadataFile(sf: ts.SourceFile, shape: Pick<RawRouteF
     const reference = referenceOf(expression);
     return reference === undefined ? { opaque: true } : { reference };
   };
+  /** Erased token arguments identify a relation; field/local receiver evidence keeps its existing syntax contract. */
+  const injectionTargetOf = (expression: ts.Expression): RawTarget => {
+    const e = bare(expression);
+    return ts.isExpressionWithTypeArguments(e) ? (e.typeArguments?.length ? targetOf(e.expression) : { opaque: true }) : targetOf(e);
+  };
   const operandsOf = (expression: ts.Expression): RawOperand[] => {
     const e = bare(expression);
     if (ts.isArrayLiteralExpression(e)) return e.elements.flatMap((element) => operandsOf(element));
@@ -190,7 +195,7 @@ export function readAngularMetadataFile(sf: ts.SourceFile, shape: Pick<RawRouteF
         const inject = parameterDecorators.get("Inject");
         if (inject !== undefined) {
           const argument = inject.arguments[0];
-          result.injections.push({ owner, target: argument === undefined ? { opaque: true } : targetOf(argument), line: line(parameter) });
+          result.injections.push({ owner, target: argument === undefined ? { opaque: true } : injectionTargetOf(argument), line: line(parameter) });
         } else if (!parameterDecorators.has("Attribute")) {
           const reference = parameter.type === undefined ? undefined : typeReference(parameter.type);
           if (reference !== undefined) result.injections.push({ owner, target: { reference }, line: line(parameter) });
@@ -236,7 +241,7 @@ export function readAngularMetadataFile(sf: ts.SourceFile, shape: Pick<RawRouteF
     }
     if (ts.isCallExpression(node) && coreName(node.expression) === "inject" && node.arguments[0] !== undefined) {
       const owner = ownerOf(node, sf);
-      const declaration = ts.isVariableDeclaration(node.parent) && ts.isIdentifier(node.parent.name) && ts.isVariableDeclarationList(node.parent.parent) && (node.parent.parent.flags & ts.NodeFlags.Const) !== 0 ? node.parent : undefined;
+      const declaration = referenceOf(node.arguments[0]) !== undefined && ts.isVariableDeclaration(node.parent) && ts.isIdentifier(node.parent.name) && ts.isVariableDeclarationList(node.parent.parent) && (node.parent.parent.flags & ts.NodeFlags.Const) !== 0 ? node.parent : undefined;
       const local = declaration !== undefined && ts.isIdentifier(declaration.name) ? declaration.name.text : undefined;
       const statement = declaration?.parent.parent;
       const block = statement !== undefined && ts.isVariableStatement(statement) && ts.isBlock(statement.parent) ? statement.parent : undefined;
@@ -257,7 +262,7 @@ export function readAngularMetadataFile(sf: ts.SourceFile, shape: Pick<RawRouteF
         ...(local !== undefined ? { local } : {}),
         ...(declaration !== undefined && block !== undefined ? { localScope: { start: declaration.end, end: block.end } } : {}),
         ...(inline && at !== undefined ? { inlineMember: { name: access.name.text, line: at.line + 1, column: at.character + 1, referenceName: `${root}().${access.name.text}` } } : {}),
-        target: targetOf(node.arguments[0]),
+        target: injectionTargetOf(node.arguments[0]),
         line: line(node),
       });
     }

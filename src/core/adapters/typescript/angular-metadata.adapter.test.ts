@@ -108,15 +108,38 @@ test("a class and a declared token both relate; a member of a value and an expre
     "A > OrdersService (src/app/orders.service.ts:3) @ src/app/a.ts:8",
     "A > API_URL (src/app/tokens.ts:2) @ src/app/a.ts:9",
   ]);
+  assert.deepEqual(meta.memberUses ?? [], []);
 });
 
-test("an injection whose argument is a type instantiation stays unknown with no-extractor, never a guessed token", async () => {
+test("an unbound instantiated token remains unresolved", async () => {
   const meta = await read({
     [SERVICE]: SERVICE_SOURCE,
     "src/app/a.ts": `${CORE}\n@Injectable()\nexport class A {\n  private readonly element = inject(ElementRef<HTMLElement>);\n}\n`,
   });
 
-  assert.deepEqual(summary(meta), ["no-extractor @ src/app/a.ts:5"]);
+  assert.deepEqual(summary(meta), ["unresolved @ src/app/a.ts:5"]);
+});
+
+test("instantiated imported tokens resolve through aliases and namespaces in injection positions", async () => {
+  const meta = await read({
+    [SERVICE]: SERVICE_SOURCE,
+    "src/app/a.ts": `${CORE}import { OrdersService as Alias } from './orders.service';\nimport * as ns from './orders.service';\n@Injectable()\nexport class A {\n  field = inject(Alias<string>);\n  constructor(@Inject(ns.OrdersService<number>) value: unknown) {}\n}\nexport function guard() { return inject((ns.OrdersService<string>)); }\n`,
+  });
+  assert.deepEqual(summary(meta), [
+    "A > OrdersService (src/app/orders.service.ts:3) @ src/app/a.ts:6",
+    "guard > OrdersService (src/app/orders.service.ts:3) @ src/app/a.ts:9",
+  ]);
+});
+
+test("instantiated external, unresolved, dynamic and shadowed tokens retain their existing boundaries", async () => {
+  const meta = await read({
+    [SERVICE]: SERVICE_SOURCE,
+    "src/app/a.ts": `${CORE}import { ElementRef } from '@angular/core';\nimport { Gone } from './missing';\nimport { OrdersService } from './orders.service';\nexport const external = () => inject(ElementRef<HTMLElement>);\nexport const missing = () => inject(Gone<string>);\nexport const dynamic = () => inject(select()<string>);\nexport function shadow(OrdersService: any) { return inject(OrdersService<string>); }\nexport const malformed = () => inject(OrdersService<>);\n`,
+  });
+  assert.deepEqual(summary(meta), ["unresolved @ src/app/a.ts:6", "no-extractor @ src/app/a.ts:7", "unresolved @ src/app/a.ts:8", "no-extractor @ src/app/a.ts:9"]);
+  assert.deepEqual(meta.memberUses ?? [], []);
+  const shadowedApi = await read({ [SERVICE]: SERVICE_SOURCE, "src/app/b.ts": `${CORE}import { OrdersService } from './orders.service';\nexport function run(inject: any) { return inject(OrdersService<string>); }\n` });
+  assert.deepEqual(summary(shadowedApi), []);
 });
 
 test("the top-level function or constant that calls inject() is the owner (a guard written as an arrow constant, an interceptor as a function declaration), unless a class holds the call", async () => {
@@ -550,6 +573,26 @@ test("shadowed injected tokens cannot create field or local origins", async () =
   assert.deepEqual(meta.locals, []);
   assert.ok(meta.findings.some((finding) => finding.status === "unknown"));
 });
+
+test("an instantiated token relation does not grant inline member proof", async () => {
+  const meta = await memberProofs("export function run() { inject(Store<string>).write(); }");
+  assert.ok(meta.findings.some((finding) => finding.status === "complete" && finding.value.to.symbol === "Store"));
+  assert.deepEqual(meta.memberUses, []);
+});
+
+for (const [form, code] of [
+  ["field", "export class Holder { store = inject(Store<string>); run() { this.store.write(); } }"],
+  ["constructor property", "@Injectable() export class Holder { constructor(@Inject(Store<string>) private store: Store) {} run() { this.store.write(); } }"],
+  ["constant local", "export function run() { const store = inject(Store<string>); store.write(); }"],
+] as const) {
+  test(`an instantiated token in a ${form} establishes a relation without receiver identity`, async () => {
+    const meta = await memberProofs(code);
+    assert.ok(meta.findings.some((finding) => finding.status === "complete" && finding.value.to.symbol === "Store"), code);
+    assert.deepEqual(meta.memberUses, [], code);
+    assert.deepEqual(meta.fields, [], code);
+    assert.deepEqual(meta.locals, [], code);
+  });
+}
 
 test("an inline InjectionToken or malformed project does not prove a member", async () => {
   const token = await memberProofs("export const token = new InjectionToken('t'); export function run() { inject(token).write(); }");

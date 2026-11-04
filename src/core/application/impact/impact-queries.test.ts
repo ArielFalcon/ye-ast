@@ -33,6 +33,7 @@ function change(path: string, overrides: Partial<FileChange> = {}): FileChange {
 }
 
 interface Options {
+  declarationEvidence?: ImpactQueriesDeps["declarationEvidence"];
   changes?: Result<readonly FileChange[], VcsFault>;
   index?: Result<IndexSummary, CodeGraphFault>;
   open?: Result<CodeGraphReader, CodeGraphFault>;
@@ -127,6 +128,7 @@ function setup(options: Options = {}) {
     ...(options.exportBudget && { budget: options.exportBudget }),
     ...(options.trust && { trust: options.trust }),
     ...(options.live && { live: options.live.deps }),
+    ...(options.declarationEvidence && { declarationEvidence: options.declarationEvidence }),
     ...(options.importOrigins && { importOrigins: options.importOrigins }),
     ...(options.typeRoot && { typeRoot: options.typeRoot }),
     ...(options.moduleDependencies && { moduleDependencies: options.moduleDependencies }),
@@ -1356,3 +1358,45 @@ for (const live of [false, true]) {
     if (mirror) assert.deepEqual(mirror.held, { locks: 1, released: 1 });
   });
 }
+
+
+test("change query uses declaration evidence only for removed candidates without changing seeds", async () => {
+  const path = "src/a.ts";
+  const changes = { ok: true, value: [change(path, { removedNames: ["effect", "save"], added: [] })] } as const;
+  const unresolved = ["effect", "save"].map((name, index) => ({ from: "use", name, kind: "calls", file: "src/use.ts", line: index + 1 }));
+  const setupOptions = { changes, unresolved, exports: { [HEAD]: { files: [{ path: "src/use.ts", blob: "1", written: true }], skipped: [] } }, nodes: [fakeNode("use", "function", "src/use.ts", 1, 3)], snapshotSources: { [FORK]: [{ path, content: "before" }], [HEAD]: [{ path, content: "after" }] } };
+  const baseline = fact(await setup(setupOptions).ask());
+  const answer = fact(await setup({ ...setupOptions, declarationEvidence: { validate: (input) => {
+    assert.deepEqual(input, { path, base: "before", head: "after", deleted: false, names: ["effect", "save"] });
+    return ["save", "not-a-candidate"];
+  } } }).ask());
+  assert.deepEqual(answer.status === "partial" && answer.cuts, [{ kind: "unresolved-link", at: ["src/a.ts::save", "src/use.ts:2"] }]);
+  assert.equal(baseline.status === "partial" && baseline.cuts.length, 2);
+  assert.notEqual(answer.status, "unknown");
+  assert.notEqual(baseline.status, "unknown");
+  if (answer.status !== "unknown" && baseline.status !== "unknown") assert.deepEqual(answer.value, baseline.value);
+});
+
+
+test("cancellation during declaration validation stops the query and closes the graph", async () => {
+  const controller = new AbortController();
+  const query = setup({
+    changes: { ok: true, value: [change("src/a.ts", { removedNames: ["save"] })] },
+    signal: controller.signal,
+    declarationEvidence: { validate: ({ names }) => { controller.abort(); return names; } },
+  });
+  const answer = await query.ask();
+  assert.equal(answer.ok, false);
+  if (!answer.ok) assert.equal(answer.fault.kind, "aborted");
+  assert.equal(query.log.closed, 1);
+});
+
+test("multiple change records for one path are validated together once", async () => {
+  let calls = 0;
+  const query = setup({
+    changes: { ok: true, value: [change("src/a.ts", { removedNames: ["first"] }), change("src/a.ts", { removedNames: ["second"] })] },
+    declarationEvidence: { validate: ({ names }) => { calls++; assert.deepEqual(names, ["first", "second"]); return names; } },
+  });
+  await query.ask();
+  assert.equal(calls, 1);
+});

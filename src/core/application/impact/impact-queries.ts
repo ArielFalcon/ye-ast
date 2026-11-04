@@ -1,3 +1,4 @@
+import type { DeclarationEvidenceReader } from "../../ports/declaration-evidence.port.ts";
 import { blastRadius, type BlastRadius } from "../../domain/change/blast-radius.ts";
 import { isReadableFile, kindOfChangedFile } from "../../domain/change/changed-file.ts";
 import { selectChange } from "../../domain/change/change-selection.ts";
@@ -77,6 +78,7 @@ export interface ImpactQueriesDeps extends HeadReaderDeps {
    */
   importOrigins?: ImportOriginsReader;
   moduleDependencies?: ModuleDependenciesReader;
+  declarationEvidence?: DeclarationEvidenceReader;
 }
 
 /** A live query reads the working tree against the commit HEAD names. */
@@ -382,7 +384,21 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
       if (signal?.aborted) return ABORTED;
       const proofs = await proofsOf(deps, store, headTree, request.signal);
       if (request.signal?.aborted) return ABORTED;
-      const read = impactOf({ store, changes, requested: [], componentsByResource, found, fields, locals, memberUses, loads, headTree, summary, budget: request.budget ?? {}, proofs, ...typeResolutionOf(content, headTree.sources) });
+      const baseSources = new Map(baseTree.sources.map((source) => [source.path, source.content]));
+      const headSources = new Map(headTree.sources.map((source) => [source.path, source.content]));
+      const byPath = Map.groupBy(changes.filter((file) => file.removedNames.length > 0), (file) => file.path);
+      const validated = new Map<string, ReadonlySet<string>>();
+      for (const [path, files] of byPath) {
+        if (deps.declarationEvidence === undefined || signal?.aborted || files.some((file) => file.deleted !== files[0]!.deleted)) continue;
+        const names = [...new Set(files.flatMap((file) => file.removedNames))];
+        validated.set(path, new Set(deps.declarationEvidence.validate({ path, base: baseSources.get(path), head: headSources.get(path), deleted: files[0]!.deleted, names })));
+      }
+      const validatedChanges = changes.map((file) => {
+        const retained = validated.get(file.path);
+        return retained === undefined ? file : { ...file, removedNames: file.removedNames.filter((name) => retained.has(name)) };
+      });
+      if (signal?.aborted) return ABORTED;
+      const read = impactOf({ store, changes: validatedChanges, requested: [], componentsByResource, found, fields, locals, memberUses, loads, headTree, summary, budget: request.budget ?? {}, proofs, ...typeResolutionOf(content, headTree.sources) });
       return { ok: true, value: impactFact(head.base(content, true), { ...value, ...read.value }, [...unaccounted([...fixed, ...read.cuts]), ...moduleCuts]) };
     } finally {
       store.close();

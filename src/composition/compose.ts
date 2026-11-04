@@ -1,3 +1,4 @@
+import { createDeclarationEvidenceReader } from "../core/adapters/typescript/declaration-evidence.adapter.ts";
 import { createSnapshotDataCache } from "../core/application/snapshot/snapshot-data-cache.ts";
 import { withSnapshotPreparation } from "../core/application/snapshot/prepared-snapshot.ts";
 import type { ImpactQueriesDeps } from "../core/application/impact/impact-queries.ts";
@@ -197,6 +198,7 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
     ...(typeRoot === undefined ? {} : { typeRoot }),
     importOrigins: (sources: readonly SourceFile[]) => createImportOrigins(sources),
     moduleDependencies: createModuleDependenciesReader(),
+    declarationEvidence: createDeclarationEvidenceReader(),
   };
   const bareImpact = createImpactQueries(impactDeps);
   const warmLive = async (repo: string, signal?: AbortSignal): Promise<string | null> => {
