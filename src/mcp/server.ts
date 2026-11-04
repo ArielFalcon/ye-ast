@@ -210,14 +210,27 @@ const snapshot = z.discriminatedUnion("kind", [
 ]);
 const cut = z.looseObject({ kind: z.string(), at: z.array(z.string()) });
 const baseFact = {
-  schema: z.string(), snapshot, producer: z.looseObject({ name: z.string(), version: z.string() }),
-  inputs: z.looseObject({ trust: z.enum(TRUST_MODES), declaredScope: z.looseObject({ languages: z.array(z.string()), frameworks: z.array(z.string()) }) }),
+  schema: z.string(),
+  snapshot,
+  producer: z.looseObject({ name: z.string(), version: z.string() }),
+  inputs: z.looseObject({
+    trust: z.enum(TRUST_MODES),
+    declaredScope: z.looseObject({ languages: z.array(z.string()), frameworks: z.array(z.string()) }),
+  }),
   evidence: z.array(evidence),
 };
 const sidecars = {
   repositoryRoots: z.array(z.looseObject({ repo: z.string(), path: z.string() })).optional(),
-  freshness: z.array(z.looseObject({ repo: z.string(), url: z.string(), freshness: z.looseObject({ status: z.enum(["verified", "unverified"]) }) })).optional(),
-  resolution: z.array(z.looseObject({ repo: z.string(), step: z.string(), consulted: z.array(z.looseObject({ branch: z.string() })) })).optional(),
+  freshness: z.array(z.looseObject({
+    repo: z.string(),
+    url: z.string(),
+    freshness: z.looseObject({ status: z.enum(["verified", "unverified"]) }),
+  })).optional(),
+  resolution: z.array(z.looseObject({
+    repo: z.string(),
+    step: z.string(),
+    consulted: z.array(z.looseObject({ branch: z.string() })),
+  })).optional(),
   live: z.looseObject({ stateId: z.string(), changed: z.array(z.string()) }).optional(),
 };
 const receipt = z.discriminatedUnion("status", [
@@ -228,7 +241,9 @@ const receipt = z.discriminatedUnion("status", [
 const factOf = (value: z.ZodType) => z.discriminatedUnion("status", [
   z.looseObject({ ...baseFact, status: z.literal("complete"), value }),
   z.looseObject({ ...baseFact, status: z.literal("partial"), value, cuts: z.array(cut).min(1) }),
-  z.looseObject({ ...baseFact, status: z.literal("unknown"), reason: z.string() }).refine((f) => !("value" in f)).meta({ not: { required: ["value"] } }),
+  z.looseObject({ ...baseFact, status: z.literal("unknown"), reason: z.string() })
+    .refine((fact) => !("value" in fact))
+    .meta({ not: { required: ["value"] } }),
 ]);
 const provenance = z.discriminatedUnion("status", [
   z.looseObject({ ...baseFact, status: z.literal("complete") }),
@@ -239,41 +254,112 @@ const strings = z.array(z.string());
 const position = z.looseObject({ file: z.string(), symbol: z.string(), line: z.number() });
 const handler = z.looseObject({ path: z.string(), symbol: z.string(), line: z.number() });
 const impact = z.looseObject({
-  seeds: z.array(position), symbols: z.array(position),
+  seeds: z.array(position),
+  symbols: z.array(position),
   entrypoints: z.array(z.looseObject({ handler, seeds: z.array(z.number()) })),
   cost: z.looseObject({ expansionsUsed: z.number() }),
-  modules: z.looseObject({ origins: z.array(z.looseObject({ file: z.string(), change: z.string() })), modules: z.array(z.looseObject({ file: z.string(), snapshot: z.string(), depth: z.number(), origins: z.array(z.number()) })), cost: z.looseObject({ expansionsUsed: z.number() }) }).optional(),
+  modules: z.looseObject({
+    origins: z.array(z.looseObject({ file: z.string(), change: z.string() })),
+    modules: z.array(z.looseObject({
+      file: z.string(),
+      snapshot: z.string(),
+      depth: z.number(),
+      origins: z.array(z.number()),
+    })),
+    cost: z.looseObject({ expansionsUsed: z.number() }),
+  }).optional(),
 });
 const snapshots = z.array(z.looseObject({ repo: z.string(), snapshot }));
 const workspaceIdentity = z.looseObject({ repos: strings, source: z.string() });
 const callTarget = z.discriminatedUnion("status", [
-  z.looseObject({ status: z.literal("complete"), value: z.union([
-    z.looseObject({ method: z.string(), path: z.string() }),
-    z.looseObject({ protocol: z.enum(["kafka", "rabbit", "jms", "event", "nats"]), destination: z.string(), role: z.literal("publish") }),
-  ]), evidence: z.array(evidence) }),
-  z.looseObject({ status: z.literal("unknown"), reason: z.string(), evidence: z.array(evidence) }).refine((target) => !("value" in target)).meta({ not: { required: ["value"] } }),
+  z.looseObject({
+    status: z.literal("complete"),
+    value: z.union([
+      z.looseObject({ method: z.string(), path: z.string() }),
+      z.looseObject({ protocol: z.enum(["kafka", "rabbit", "jms", "event", "nats"]), destination: z.string(), role: z.literal("publish") }),
+    ]),
+    evidence: z.array(evidence),
+  }),
+  z.looseObject({ status: z.literal("unknown"), reason: z.string(), evidence: z.array(evidence) })
+    .refine((target) => !("value" in target))
+    .meta({ not: { required: ["value"] } }),
 ]);
-const callSite = z.looseObject({ repo: z.string(), file: z.string(), line: z.number(), symbol: z.string(), transport: z.enum(["http", "event"]), target: callTarget });
-const workspaceImpact = z.looseObject({ workspace: workspaceIdentity, repositorySnapshots: snapshots, trigger: z.looseObject({ repo: z.string() }), sections: z.record(z.string(), factOf(z.looseObject({ reads: z.array(z.looseObject({ kind: z.string(), fact: provenance })), impact: impact.optional(), callSites: z.array(callSite), unmatched: z.array(callSite), external: z.array(callSite) }))), links: z.array(z.looseObject({ link: z.looseObject({ id: z.string(), from: z.looseObject({ repo: z.string(), file: z.string(), symbol: z.string(), line: z.number() }), to: z.looseObject({ repo: z.string(), name: z.string(), handler }) }), direction: z.string(), reach: strings })) });
+const callSite = z.looseObject({
+  repo: z.string(),
+  file: z.string(),
+  line: z.number(),
+  symbol: z.string(),
+  transport: z.enum(["http", "event"]),
+  target: callTarget,
+});
+const workspaceImpact = z.looseObject({
+  workspace: workspaceIdentity,
+  repositorySnapshots: snapshots,
+  trigger: z.looseObject({ repo: z.string() }),
+  sections: z.record(z.string(), factOf(z.looseObject({
+    reads: z.array(z.looseObject({ kind: z.string(), fact: provenance })),
+    impact: impact.optional(),
+    callSites: z.array(callSite),
+    unmatched: z.array(callSite),
+    external: z.array(callSite),
+  }))),
+  links: z.array(z.looseObject({
+    link: z.looseObject({
+      id: z.string(),
+      from: z.looseObject({ repo: z.string(), file: z.string(), symbol: z.string(), line: z.number() }),
+      to: z.looseObject({ repo: z.string(), name: z.string(), handler }),
+    }),
+    direction: z.string(),
+    reach: strings,
+  })),
+});
 const repositoryEvidence = z.looseObject({ repo: z.string(), path: z.string(), line: z.number() });
 const outwardName = z.looseObject({ name: z.string(), kind: z.string(), evidence: z.array(evidence) });
 const repoOutwardName = z.looseObject({ name: z.string(), kind: z.string(), evidence: z.array(repositoryEvidence) });
 const candidate = z.looseObject({ name: z.string(), repo: z.string(), basis: z.string(), evidence: z.array(repositoryEvidence) });
-const decision = z.looseObject({ id: z.string(), kind: z.string(), subject: z.string(), evidence: z.array(repositoryEvidence), options: z.array(z.looseObject({ value: z.string(), evidence: z.array(repositoryEvidence), recommended: z.boolean() })), allowsFreeText: z.boolean(), required: z.boolean() });
+const decision = z.looseObject({
+  id: z.string(),
+  kind: z.string(),
+  subject: z.string(),
+  evidence: z.array(repositoryEvidence),
+  options: z.array(z.looseObject({ value: z.string(), evidence: z.array(repositoryEvidence), recommended: z.boolean() })),
+  allowsFreeText: z.boolean(),
+  required: z.boolean(),
+});
 const entrypoint = z.discriminatedUnion("kind", [
   z.looseObject({ kind: z.enum(["http-route", "listener", "job"]), name: z.string(), handler }),
   z.looseObject({ kind: z.literal("ui-route"), name: z.string(), component: z.union([handler, z.literal("unknown")]) }),
 ]);
 const finding = z.discriminatedUnion("status", [
   z.looseObject({ status: z.literal("complete"), value: entrypoint, evidence: z.array(evidence) }),
-  z.looseObject({ status: z.literal("unknown"), reason: z.string(), evidence: z.array(evidence) }).refine((item) => !("value" in item)).meta({ not: { required: ["value"] } }),
+  z.looseObject({ status: z.literal("unknown"), reason: z.string(), evidence: z.array(evidence) })
+    .refine((item) => !("value" in item))
+    .meta({ not: { required: ["value"] } }),
 ]);
 const shapes = {
   entrypoints: z.looseObject({ entrypoints: factOf(z.array(finding)) }),
   impact: z.union([impact, workspaceImpact]),
-  importers: z.looseObject({ files: z.array(z.looseObject({ file: z.string(), importers: strings, users: strings, unresolvedNamers: strings })) }),
-  outline: z.looseObject({ files: z.array(z.looseObject({ file: z.string(), declarations: z.array(z.looseObject({ kind: z.string(), name: z.string(), line: z.number(), endLine: z.number() })), imports: strings })), unheld: strings }),
-  workspace: z.looseObject({ workspace: workspaceIdentity, repositorySnapshots: snapshots, sections: z.record(z.string(), factOf(z.looseObject({ names: z.array(outwardName), unresolved: z.array(z.looseObject({ path: z.string(), line: z.number(), symbol: z.string() })) }))), candidates: z.array(candidate), unserved: z.array(repoOutwardName) }),
+  importers: z.looseObject({
+    files: z.array(z.looseObject({ file: z.string(), importers: strings, users: strings, unresolvedNamers: strings })),
+  }),
+  outline: z.looseObject({
+    files: z.array(z.looseObject({
+      file: z.string(),
+      declarations: z.array(z.looseObject({ kind: z.string(), name: z.string(), line: z.number(), endLine: z.number() })),
+      imports: strings,
+    })),
+    unheld: strings,
+  }),
+  workspace: z.looseObject({
+    workspace: workspaceIdentity,
+    repositorySnapshots: snapshots,
+    sections: z.record(z.string(), factOf(z.looseObject({
+      names: z.array(outwardName),
+      unresolved: z.array(z.looseObject({ path: z.string(), line: z.number(), symbol: z.string() })),
+    }))),
+    candidates: z.array(candidate),
+    unserved: z.array(repoOutwardName),
+  }),
   decisions: z.looseObject({ decisions: z.array(decision), repositories: snapshots, source: z.string() }),
 };
 /** Validate the envelope and public containers used by navigation; domain unions remain owned by the core. */
@@ -281,7 +367,9 @@ function outputFor(value: z.ZodType) {
   const full = z.discriminatedUnion("status", [
     z.looseObject({ ...baseFact, ...sidecars, mode: z.literal("full"), status: z.literal("complete"), value }),
     z.looseObject({ ...baseFact, ...sidecars, mode: z.literal("full"), status: z.literal("partial"), value, cuts: z.array(cut).min(1) }),
-    z.looseObject({ ...baseFact, ...sidecars, mode: z.literal("full"), status: z.literal("unknown"), reason: z.string() }).refine((f) => !("value" in f)).meta({ not: { required: ["value"] } }),
+    z.looseObject({ ...baseFact, ...sidecars, mode: z.literal("full"), status: z.literal("unknown"), reason: z.string() })
+      .refine((fact) => !("value" in fact))
+      .meta({ not: { required: ["value"] } }),
   ]);
   const branches = z.union([receipt, full]);
   const json = z.toJSONSchema(branches, { target: "draft-7" });
@@ -346,25 +434,43 @@ export function createMcpServer(deps: McpDeps): McpServer {
       if (!result.ok) return failure(result.fault);
       const read = "fact" in result.value ? result.value : { fact: result.value };
       const fact = redaction.redactValue(read.fact) as Fact<V>;
-      const repositoryRoots = read.repositoryRoots === undefined ? undefined : redaction.redactValue(read.repositoryRoots) as FactRead<V>["repositoryRoots"];
+      const repositoryRoots = read.repositoryRoots === undefined
+        ? undefined
+        : redaction.redactValue(read.repositoryRoots) as FactRead<V>["repositoryRoots"];
       const refresh = read.refresh === undefined ? undefined : (redaction.redactValue(read.refresh) as WorkspaceRefresh);
       const stale = moved === undefined ? undefined : (redaction.redactValue(moved) as LiveStaleNotice);
       if (mode === "full") {
         return {
           content: [{ type: "text", text: [
-            `status: ${fact.status}\nfull structured result: structuredContent`, render(fact, mode),
+            `status: ${fact.status}\nfull structured result: structuredContent`,
+            render(fact, mode),
             ...(repositoryRoots === undefined ? [] : ["Repository locations: match repositoryRoots[].repo to evidence ownership; repositoryRoots[].path locates the clone on disk, while evidence paths are relative to its repository at the recorded snapshot."]),
             ...(refresh === undefined ? [] : ["Remote context: inspect freshness and resolution for the repositories used; pinned revisions do not imply verified freshness."]),
             ...(stale === undefined ? [] : ["Live context: inspect live.stateId and live.changed before comparing this result with the current working tree."]),
           ].filter((part) => part !== "").join("\n") }],
-          structuredContent: { ...fact, mode, ...(repositoryRoots === undefined ? {} : { repositoryRoots }), ...(refresh === undefined ? {} : { freshness: refresh.freshness, resolution: refresh.resolution }), ...(stale === undefined ? {} : { live: stale }) },
+          structuredContent: {
+            ...fact,
+            mode,
+            ...(repositoryRoots === undefined ? {} : { repositoryRoots }),
+            ...(refresh === undefined ? {} : { freshness: refresh.freshness, resolution: refresh.resolution }),
+            ...(stale === undefined ? {} : { live: stale }),
+          },
           ...(stale === undefined ? {} : { _meta: { [LIVE_META]: stale } }),
         };
       }
-      const sidecar = [...(stale === undefined ? [] : [renderStale(stale)]), ...(refresh === undefined ? [] : renderRefresh(refresh)), ...(repositoryRoots ?? []).map(({ repo, path }) => `repository root: ${repo} -> ${path}`)];
+      const sidecar = [
+        ...(stale === undefined ? [] : [renderStale(stale)]),
+        ...(refresh === undefined ? [] : renderRefresh(refresh)),
+        ...(repositoryRoots ?? []).map(({ repo, path }) => `repository root: ${repo} -> ${path}`),
+      ];
       return {
         content: [{ type: "text", text: [...sidecar, render(fact, mode)].join("\n") }],
-        structuredContent: { mode, status: fact.status, snapshot: fact.snapshot, ...(fact.status === "unknown" ? { reason: fact.reason } : {}) },
+        structuredContent: {
+          mode,
+          status: fact.status,
+          snapshot: fact.snapshot,
+          ...(fact.status === "unknown" ? { reason: fact.reason } : {}),
+        },
         ...(stale === undefined ? {} : { _meta: { [LIVE_META]: stale } }),
       };
     } catch (error) {

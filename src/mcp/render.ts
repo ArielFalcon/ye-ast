@@ -99,12 +99,11 @@ function declaredScopeLines({ inputs: { declaredScope } }: Fact<unknown>): strin
   return named.length === 0 ? [] : [`declared scope: ${named.join("; ")}`];
 }
 
-/** The part of the change the caller selected: paths, not content, so the walk stayed whole. */
 function changedLines({ inputs: { declaredConfig } }: Fact<unknown>): string[] {
   const changed = declaredConfig.changed;
   return changed === undefined || changed.length === 0
     ? []
-    : [`change: only paths matching ${changed.join(", ")} (the repository is indexed whole; callers outside the selection are known; the rest of the change is not answered about)`];
+    : [`change: only paths matching ${changed.join(", ")} (callers outside the selection remain eligible within scope; recorded cuts limit coverage; the rest of the change is not answered about)`];
 }
 
 /** What every answer opens with: its completeness, what that completeness covers, and the snapshot it read. */
@@ -868,8 +867,8 @@ function namesBlock(names: readonly OutwardName[], served: ReadonlySet<string>, 
     const counted = ofKind.length - listed.length;
     const head =
       counted === 0 ? `    ${kind} (${ofKind.length}):`
-      : counted === ofKind.length ? `    ${kind} (${ofKind.length}): no repository given serves them; mode "details" lists them`
-      : `    ${kind} (${ofKind.length}): ${counted} no repository given serves; mode "details" lists them`;
+      : counted === ofKind.length ? `    ${kind} (${ofKind.length}): no repository given serves them; mode "details" lists them; mode: "full" retains all recorded names`
+      : `    ${kind} (${ofKind.length}): ${counted} no repository given serves; mode "details" lists them; mode: "full" retains all recorded names`;
     const line = (name: OutwardName): string => `      - ${name.name} (${name.evidence.map(evidenceText).join(", ")})`;
     const listing = [head, ...ofKind.map(line)];
     const summarized = [head, ...listed.map(line)];
@@ -885,7 +884,7 @@ function unservedBlock(unserved: readonly RepositoryOutwardName[], detail: Respo
   const head = `no local repository serves (${unserved.length}):`;
   const listing = [head, ...unserved.map((name) => `  - ${name.kind} ${name.name}${name.evidence.length === 0 ? "" : ` (${name.evidence.map(repositoryEvidenceText).join(", ")})`}`)];
   if (counted === 0) return listing;
-  const summarized = [`${head} ${counted} dependency counted; mode "details" lists them`, ...listed.map((name) => `  - ${name.kind} ${name.name}${name.evidence.length === 0 ? "" : ` (${name.evidence.map(repositoryEvidenceText).join(", ")})`}`)];
+  const summarized = [`${head} ${counted} dependency counted; mode "details" lists them; mode: "full" retains all recorded names`, ...listed.map((name) => `  - ${name.kind} ${name.name}${name.evidence.length === 0 ? "" : ` (${name.evidence.map(repositoryEvidenceText).join(", ")})`}`)];
   return size(summarized) <= size(listing) ? summarized : listing;
 }
 

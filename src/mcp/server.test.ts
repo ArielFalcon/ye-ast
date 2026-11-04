@@ -794,12 +794,23 @@ test("impact forwards the changed selection", async () => {
   await session.close();
 });
 
-test("an answer read with a changed selection says the repository is indexed whole", async () => {
-  const fact = impactFact({ inputs: { ...base().inputs, declaredConfig: { changed: ["src/a/**"] } } });
+test("a changed selection keeps callers eligible only within scope and recorded limits", async () => {
+  const fact = impactFact({
+    inputs: { ...base().inputs, declaredScope: { ...base().inputs.declaredScope, include: ["src/allowed/**"] }, declaredConfig: { changed: ["src/allowed/a/**"] } },
+    status: "partial",
+    cuts: [{ kind: "depth", at: ["src/allowed/b.ts::B.user"], limit: 1 }],
+  } as Partial<Fact<ImpactValue>>);
   const { session } = await setup({ ofChange: async () => ({ ok: true, value: fact }) });
-  const text = textOf(await session.callTool("ye_ast_impact", { base: "main" }));
-  assert.match(text, /^change: only paths matching src\/a\/\*\* \(the repository is indexed whole; callers outside the selection are known; the rest of the change is not answered about\)$/m);
-  await session.close();
+  try {
+    const text = textOf(await session.callTool("ye_ast_impact", { base: "main" }));
+    const change = text.split("\n").find((line) => line.startsWith("change:")) ?? "";
+    assert.match(change, /src\/allowed\/a\/\*\*/);
+    assert.match(change, /callers outside.*eligible.*scope/i);
+    assert.match(change, /cuts|limits/i);
+    assert.doesNotMatch(change, /indexed whole|callers outside.*are known/i);
+    assert.match(text, /scope: include src\/allowed\/\*\*/);
+    assert.match(text, /status: partial.*depth/);
+  } finally { await session.close(); }
 });
 
 test("callers forwards symbol and line-range targets at a revision", async () => {
@@ -1803,7 +1814,13 @@ test("a workspace summary groups the outward names by kind and counts the depend
 
   assert.match(text, /^outward names \(4\):$/m);
   assert.match(text, / {2}shop:\n {4}path-prefix \(1\):\n {6}- orders-api \(src\/app\/order\.api\.ts:7\)\n {4}dependency \(3\): no repository given serves them; mode "details" lists them/);
-  assert.match(text, /^no local repository serves \(4\): 3 dependency counted; mode "details" lists them$/m);
+  assert.match(text, /^no local repository serves \(4\): 3 dependency counted; mode "details" lists them/m);
+  const namesLine = text.split("\n").find((line) => line.includes("dependency (3): no repository given serves")) ?? "";
+  const unservedLine = text.split("\n").find((line) => line.startsWith("no local repository serves (4):")) ?? "";
+  for (const line of [namesLine, unservedLine]) {
+    assert.match(line, /mode "details"/);
+    assert.match(line, /mode: "full"/);
+  }
   assert.doesNotMatch(text, /- dependency @angular\/core/);
   await session.close();
 });
