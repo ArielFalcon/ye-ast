@@ -21,6 +21,7 @@ import { createImpactQueries, type ImpactQueriesDeps } from "./impact-queries.ts
 import type { ImportOriginsReader, ImportOriginSite } from "../../ports/import-origins.port.ts";
 import type { ImportOrigin } from "../../domain/relations/resolved-reference.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
+import type { ModuleDependenciesReader } from "../../ports/module-dependencies.port.ts";
 
 const HEAD = "a".repeat(40);
 const BASE = "b".repeat(40);
@@ -57,6 +58,8 @@ interface Options {
   sources?: SourceFile[];
   /** Reads the imports of those sources, as composition wires it. */
   importOrigins?: ImportOriginsReader;
+  moduleDependencies?: ModuleDependenciesReader;
+  snapshotSources?: Partial<Record<string, SourceFile[]>>;
 }
 
 function setup(options: Options = {}) {
@@ -100,7 +103,7 @@ function setup(options: Options = {}) {
       },
       remove: async (path) => void log.removed.push(path),
     },
-    reader: { read: async () => options.sources ?? [] },
+    reader: { read: async (root) => options.snapshotSources?.[log.plans.find((plan) => plan.destination === root)?.sha ?? ""] ?? options.sources ?? [] },
     extractor: { extract: async () => [] },
     angular: { read: async () => options.declarations ?? [] },
     relations: { extract: async () => ({ relations: options.relations ?? [], fields: options.fields ?? [], locals: [] }) },
@@ -123,6 +126,7 @@ function setup(options: Options = {}) {
     ...(options.trust && { trust: options.trust }),
     ...(options.live && { live: options.live.deps }),
     ...(options.importOrigins && { importOrigins: options.importOrigins }),
+    ...(options.moduleDependencies && { moduleDependencies: options.moduleDependencies }),
   };
   const request: AtRevision<ImpactOfChangeRequest> = { repo: "/repo", repoId: "repo", base: "base", head: "head", ...(options.signal && { signal: options.signal }) };
   const queries = createImpactQueries(deps);
@@ -141,6 +145,37 @@ function fact(answer: Result<Fact<ImpactValue>, OfChangeFault>): Fact<ImpactValu
   assert.ok(answer.ok, JSON.stringify(answer));
   return answer.value;
 }
+
+test("a base module omitted by export is not classified as a newly added module", async () => {
+  const path = "src/index.ts";
+  const { ask } = setup({
+    changes: { ok: true, value: [change(path)] },
+    exports: {
+      [HEAD]: { files: [{ path, blob: "head", written: true }], skipped: [] },
+      [FORK]: { files: [{ path, blob: "base", written: false }], skipped: [] },
+    },
+    snapshotSources: { [HEAD]: [{ path, content: "export * from './service';" }], [FORK]: [] },
+    moduleDependencies: { extract: async (sources) => ({ files: sources.map((source) => ({ file: source.path, statements: [source.content], moduleOnly: true })), dependencies: [], unread: [] }) },
+  });
+  const answer = fact(await ask());
+  assert.equal(answer.status, "partial");
+  assert.equal(answer.value.modules?.origins.some((origin) => origin.change === "added") ?? false, false);
+});
+
+test("cancellation after the base module read prevents another parse and indexing", async () => {
+  const controller = new AbortController();
+  let reads = 0;
+  const { ask, log } = setup({
+    signal: controller.signal,
+    changes: { ok: true, value: [change("src/index.ts")] },
+    moduleDependencies: { extract: async () => { reads++; controller.abort(); return { files: [], dependencies: [], unread: [] }; } },
+  });
+  const answer = await ask();
+  assert.ok(!answer.ok && answer.fault.kind === "aborted");
+  assert.equal(reads, 1);
+  assert.equal(log.indexed, 0);
+  assert.deepEqual(log.removed, log.created.toReversed());
+});
 
 /** An import reader that proves exactly `names` external and answers `unknown` for every other site. */
 function externalImports(names: readonly string[]): ImportOriginsReader {
@@ -1103,4 +1138,32 @@ test("an export budget travels in clear beside the config digest", async () => {
   const answer = fact(await ask());
   assert.deepEqual(answer.inputs.declaredConfig.exportBudget, { maxEntries: 10, maxBytes: 100 });
   assert.equal(answer.inputs.config, canonicalJson(answer.inputs.declaredConfig));
+});
+
+test("certified module coverage does not add legacy dynamic load cuts", async () => {
+  const path = "src/index.ts";
+  const { ask } = setup({
+    changes: { ok: true, value: [change(path)] },
+    exports: { [HEAD]: { files: [{ path, blob: "head", written: true }], skipped: [] }, [FORK]: { files: [{ path, blob: "base", written: true }], skipped: [] } },
+    snapshotSources: { [HEAD]: [{ path, content: "new" }], [FORK]: [{ path, content: "old" }] },
+    loads: [{ file: path, line: 1 }],
+    moduleDependencies: { extract: async (sources) => ({ files: sources.map((source) => ({ file: source.path, statements: [source.content], moduleOnly: true })), dependencies: [], unread: [], untraversed: [] }) },
+  });
+  const answer = fact(await ask());
+  assert.equal(answer.status, "complete");
+});
+
+test("JSON changes are staged and contribute to the content fingerprint", async () => {
+  const path = "src/data.json";
+  const make = (blob: string) => setup({
+    changes: { ok: true, value: [change(path)] },
+    exports: { [HEAD]: { files: [{ path, blob, written: true }], skipped: [] }, [FORK]: { files: [{ path, blob: "base", written: true }], skipped: [] } },
+    moduleDependencies: { extract: async () => ({ files: [], dependencies: [], unread: [], untraversed: [] }) },
+  });
+  const a = make("one");
+  const b = make("two");
+  const first = fact(await a.ask());
+  const second = fact(await b.ask());
+  assert.ok(a.log.plans.every((plan) => plan.wanted.includes(path)));
+  assert.notEqual(first.inputs.content, second.inputs.content);
 });

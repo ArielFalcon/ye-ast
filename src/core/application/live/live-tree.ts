@@ -2,7 +2,7 @@ import { contentFingerprint } from "../../domain/map/entrypoint-map.ts";
 import type { DeclaredScope, IndexOrigin } from "../../domain/shared/fact.ts";
 import type { PathSelection } from "../../domain/shared/scope.ts";
 import type { Result } from "../../domain/shared/result.ts";
-import { liveExport } from "../../domain/snapshot/live-export.ts";
+import { isWritten, liveExport } from "../../domain/snapshot/live-export.ts";
 import { retentionDiscards, type LiveRetentionPolicy, type LiveScopeUsage } from "../../domain/snapshot/live-retention.ts";
 import type { CodeGraph } from "../../ports/code-graph.port.ts";
 import type { Digest } from "../../ports/digest.port.ts";
@@ -171,7 +171,7 @@ async function refresh(deps: LiveDeps, request: OpenLive, location: MirrorLocati
   if (!reconciled.ok) return mirrorFailure(reconciled.fault);
   const { manifest, skipped, changed } = reconciled.value;
   const exported = liveExport(manifest, skipped);
-  const stateId = digest.of(contentFingerprint(exported));
+  const stateId = digest.of(contentFingerprint(exported, isWritten));
 
   // The store's universe is the export's written set, never the listing: a test file the export does not write must not
   // reach the engine, or the live answer would diverge from the commit's (RFC-0010 "The mirror").

@@ -109,7 +109,7 @@ interface Answer {
   code: number;
   stdout: string;
   stderr: string;
-  fact: { status: string; value: any; snapshot: { kind: string; stateId?: string; head?: string }; inputs: { content: string; origin?: { kind: string; base?: string }; declaredScope: { ignored?: string } }; reason?: string };
+  fact: { status: string; value: any; cuts?: { kind: string; at: string[] }[]; snapshot: { kind: string; stateId?: string; head?: string }; inputs: { content: string; origin?: { kind: string; base?: string }; declaredScope: { ignored?: string } }; reason?: string };
 }
 
 async function ye(command: string, args: string[], tail: string[] = []): Promise<Answer> {
@@ -126,6 +126,23 @@ async function trust(mode: "trusted" | "untrusted"): Promise<void> {
 }
 
 const stateFile = (): string => join(repo, ".ye-ast-graph", "live", readdirSync(join(repo, ".ye-ast-graph", "live")).find((name) => name.endsWith(".state.json"))!);
+
+test("live JSON edits reach their importing module and agree with committing the same bytes", async () => {
+  commit({ "src/data.json": '{"value":1}\n', "src/use.ts": "import data from './data.json'; export const value = data.value;\n" });
+  await trust("trusted");
+  const before = await ye("importers", ["--live"], ["src/data.json"]);
+  write({ "src/data.json": '{"value":2}\n' });
+  const live = await ye("impact", ["--base", "HEAD", "--live", "--changed", "src/data.json"]);
+  assert.equal(live.fact.status, "complete", live.stdout);
+  assert.deepEqual(live.fact.value.modules?.origins, [{ file: "src/data.json", change: "modified" }]);
+  assert.deepEqual(live.fact.value.modules?.modules.filter((module: { file: string }) => module.file === "src/use.ts").map((module: { snapshot: string }) => module.snapshot), ["base", "head"]);
+  const after = await ye("importers", ["--live"], ["src/data.json"]);
+  assert.notEqual(before.fact.inputs.content, after.fact.inputs.content);
+  assert.notEqual(before.fact.snapshot.stateId, after.fact.snapshot.stateId);
+  commit({});
+  const revision = await ye("impact", ["--base", "HEAD~1", "--changed", "src/data.json"]);
+  assert.deepEqual(live.fact.value, revision.fact.value);
+});
 
 test("under untrusted, every live query is refused with the command that trusts the repository and nothing is written", async () => {
   for (const [command, tail] of [["map", []], ["impact", ["--base", "HEAD"]], ["callers", [`${DIR}Util.java:fmt`]], ["importers", [`${DIR}Util.java`]]] as const) {
@@ -252,7 +269,7 @@ function filesUnder(root: string): string[] {
     .sort();
 }
 
-test("a test file the export never writes is answered the same live and at its sha", async () => {
+test("importers exposes omitted live tests as cuts while revision snapshots read them", async () => {
   commit({ [`${TS_DIR}a.ts`]: TS_A, [`${TS_DIR}a.spec.ts`]: TS_SPEC }, "typescript fixture");
   await trust("trusted");
 
@@ -260,8 +277,10 @@ test("a test file the export never writes is answered the same live and at its s
   const sha = await ye("importers", [], [`${TS_DIR}a.spec.ts`]);
 
   assert.equal(live.code, EXIT_CODE.ok, live.stderr);
-  assert.equal(live.fact.status, sha.fact.status);
-  assert.deepEqual(live.fact.value, sha.fact.value);
+  assert.equal(live.fact.status, "partial");
+  assert.ok(live.fact.cuts?.some((cut) => cut.kind === "not-exported" && cut.at.includes(`${TS_DIR}a.spec.ts`)));
+  assert.equal(sha.fact.status, "complete");
+  assert.equal((sha.fact.value as unknown as { files: { file: string }[] }).files[0]?.file, `${TS_DIR}a.spec.ts`);
 });
 
 test("the first live query stages the files the export writes and nothing else, and the engine never sees a test file", async () => {

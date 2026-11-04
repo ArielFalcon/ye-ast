@@ -22,6 +22,7 @@ export interface SnapshotReaderDeps {
   extractor: EntrypointExtractor;
   digest: Digest;
   producer: Producer;
+  sourceSelection?: PathSelection;
   /** What the export may take from a commit, when the host bounds it; the repository cannot raise it. */
   budget?: ExportBudget;
   /** The user's declarations; without one every repository is read `untrusted`. */
@@ -72,7 +73,7 @@ export async function withScratch<T>(scratch: ScratchDirectory, use: (directory:
  * cuts it.
  */
 export async function extractCommit(
-  deps: Pick<SnapshotReaderDeps, "vcs" | "reader" | "extractor" | "budget">,
+  deps: Pick<SnapshotReaderDeps, "vcs" | "reader" | "extractor" | "budget" | "sourceSelection">,
   repo: string,
   sha: string,
   destination: string,
@@ -80,7 +81,7 @@ export async function extractCommit(
   signal?: AbortSignal,
 ): Promise<Result<CommitExtraction, VcsFault>> {
   const { vcs } = deps;
-  const listed = await vcs.exportCommit(repo, sha, destination, { write: (path) => selected(path) && isInMapScope(path), ...(deps.budget && { budget: deps.budget }) }, signal);
+  const listed = await vcs.exportCommit(repo, sha, destination, { write: (path) => selected(path) && (deps.sourceSelection ?? isInMapScope)(path), ...(deps.budget && { budget: deps.budget }) }, signal);
   if (!listed.ok) return listed;
   const exported: CommitExport = { ...listed.value, files: listed.value.files.filter((file) => selected(file.path)), skipped: listed.value.skipped.filter((entry) => selected(entry.path)) };
   if (signal?.aborted) return ABORTED;

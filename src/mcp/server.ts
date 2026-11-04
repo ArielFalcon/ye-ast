@@ -44,12 +44,12 @@ const COMPLETENESS = "The answer states its completeness: complete, partial with
  */
 export const CUT_GUIDANCE: Readonly<Record<Cut["kind"], string>> = {
   "unresolved-link":
-    "places that name the symbol where the index could not tell what the name points at; open each place to decide. After a declaration was removed, the places listed under it still name it, so each one breaks. In a workspace answer it is a call site whose target the code does not decide, or one two repositories serve equally: the answer lists it with the declaration it is written in, its transport, the library it goes through and, when only the base is undecided, the request it writes, so decide which repository it calls from that line.",
+    "places that name the symbol where the index could not tell what the name points at; open each place to decide. After a declaration was removed, the places listed under it are unresolved candidates, not proven broken dependencies: verify their bindings and targets before deciding whether they still use it. In a workspace answer it is a call site whose target the code does not decide, or one two repositories serve equally: the answer lists it with the declaration it is written in, its transport, the library it goes through and, when only the base is undecided, the request it writes, so decide which repository it calls from that line.",
   "no-extractor": "a file ye-ast cannot read, such as a template, a style sheet or a language outside the declared scope; read it yourself when it bears on the task.",
   "not-exported": "a path the snapshot left out, so nothing under it was read; read it yourself when it bears on the task.",
-  depth: "the walk stopped at the depth bound; raise budget.depth, or ask ye_ast_callers about the symbol at the cut.",
-  hub: "a symbol with more callers than budget.hubFanIn was not expanded; raise the bound, or ask ye_ast_callers about it alone.",
-  "caller-budget": "a bound stopped the work: on a walk it is budget.expansions, so raise it; on an entrypoint map it is the export budget the host set, so narrow the request with scope.",
+  depth: "the walk stopped at the depth bound; raise budget.depth, query a boundary symbol with ye_ast_callers, or read direct module consumers with ye_ast_importers at the indicated snapshot.",
+  hub: "a symbol or module with more direct consumers than budget.hubFanIn was not expanded; raise the bound if that branch matters. Querying it alone does not remove the bound.",
+  "caller-budget": "a bound stopped the work: on a walk it is budget.expansions, counted separately for symbols and modules, with the module allowance shared by base and head; on an entrypoint map it is the host's export budget. Adjust the applicable bound or narrow the request.",
   "node-cap": "the walk stopped at the node cap; narrow the request with scope or ask about fewer symbols.",
   deadline: "time ran out before the answer was whole; ask again, with a narrower scope when it repeats.",
   section: "one section of a composite answer could not be produced; the rest stands, and asking again may complete it.",
@@ -116,9 +116,9 @@ const count = z.int().positive();
 
 /** Exhaustive over the fields, so a bound added to `ImpactBudget` fails to compile until it is described here. */
 const BUDGET_FIELDS: Readonly<Record<WalkBoundsField, z.ZodOptional<z.ZodNumber>>> = {
-  depth: count.optional().describe("The deepest level of callers reached."),
-  hubFanIn: count.optional().describe("The most callers a symbol may have to be expanded."),
-  expansions: count.optional().describe("The most symbols whose callers are followed."),
+  depth: count.optional().describe("The deepest dependency level in each symbol or module walk."),
+  hubFanIn: count.optional().describe("The most direct consumers a symbol or module may have to be expanded."),
+  expansions: count.optional().describe("The maximum expansions per walk: symbols separately from modules; the module allowance spans base and head."),
 };
 const budget = z
   .strictObject(BUDGET_FIELDS)
@@ -474,7 +474,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
     "ye_ast_importers",
     {
       title: "Importers of files",
-      description: `Per file, the files that import it, the files that use it and the files holding a reference to its names that the index could not resolve. Use it before moving, renaming or deleting a file, or changing its exports. A TypeScript test file is outside the index, so it is never named here. ${COMPLETENESS}`,
+      description: `Per file, static importers, separate reexporters, dynamic importers, type importers, users and unresolved namers. Static TypeScript module resolution fills missing alias/barrel edges. A revision query includes exported test consumers; a live mirror that omitted them remains partial. Use before moving, renaming or deleting a file, or changing its exports. Module dependence does not prove use by every declaration. ${COMPLETENESS}`,
       inputSchema: z
         .strictObject({ revision, live, files: z.array(z.string().min(1)).min(1).describe("Repository-relative paths."), scope, detail, full })
         .refine(excludes("revision"), "live excludes revision"),

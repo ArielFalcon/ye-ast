@@ -2,6 +2,7 @@ import type { Entrypoint } from "../core/domain/entrypoints/entrypoint.ts";
 import type { Handler } from "../core/domain/entrypoints/http-route.ts";
 import type { ChangedEntrypoint } from "../core/domain/impact/changed-entrypoints.ts";
 import type { ImpactedSymbol, ImpactValue, ReachedEntrypoint, Seed } from "../core/domain/impact/impact-fact.ts";
+import type { ModuleImpactValue } from "../core/domain/impact/module-dependency.ts";
 import { declarationAnchor } from "../core/domain/impact/impact-cuts.ts";
 import type { ImportersValue } from "../core/domain/impact/importers-fact.ts";
 import type { OutlineValue } from "../core/domain/outline/outline-fact.ts";
@@ -388,6 +389,20 @@ function impactBody(value: ImpactValue, detail: Detail): string[] {
     `reached entrypoints (${value.entrypoints.length}):`,
     ...value.entrypoints.map(reachedLine),
     ...impactedSymbols(value, detail),
+    ...(value.modules === undefined ? [] : moduleLines(value.modules, detail)),
+  ];
+}
+
+function moduleLines(value: ModuleImpactValue, detail: Detail): string[] {
+  const listed = detail === "full" ? value.modules : value.modules.filter((module) => module.depth <= LISTED_DEPTH);
+  const omitted = value.modules.length - listed.length;
+  return [
+    `module origins (${value.origins.length}):`,
+    ...value.origins.map((origin) => `  ${origin.file} (${origin.change})`),
+    `module dependencies (${value.modules.length}, not symbol or entrypoint impact):`,
+    ...listed.map((module) => `  ${module.snapshot} ${module.file} (depth ${module.depth}, origins ${module.origins.join(", ")})${module.via === undefined ? "" : ` via ${module.via.kind} ${module.via.file} at ${module.file}:${module.via.line}${module.via.typeOnly ? " (type-only)" : ""}`}`),
+    ...(omitted === 0 ? [] : [`  ${omitted} deeper module dependencies not listed; detail "full" lists their evidence, or ye_ast_importers reads direct consumers at a snapshot.`]),
+    `module expansions: ${value.cost.expansionsUsed}`,
   ];
 }
 
@@ -446,7 +461,7 @@ export function renderImporters(fact: Fact<ImportersValue>, detail: Detail = "su
   const lines = headerLines(fact);
   if (fact.status === "unknown") return lines.join("\n");
   for (const entry of fact.value.files) {
-    lines.push(`  ${entry.file}`, namedFiles("importers", entry.importers), namedFiles("users", entry.users), namedFiles("unresolved namers", entry.unresolvedNamers));
+    lines.push(`  ${entry.file}`, namedFiles("importers", entry.importers), ...(entry.reexporters === undefined ? [] : [namedFiles("reexporters", entry.reexporters)]), ...(entry.dynamicImporters === undefined ? [] : [namedFiles("dynamic importers", entry.dynamicImporters)]), ...(entry.typeImporters === undefined ? [] : [namedFiles("type importers", entry.typeImporters)]), namedFiles("users", entry.users), namedFiles("unresolved namers", entry.unresolvedNamers));
   }
   lines.push(...cutsBlock(cutsOf(fact), detail));
   return lines.join("\n");

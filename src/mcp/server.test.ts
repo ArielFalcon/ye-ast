@@ -424,6 +424,30 @@ test("entrypoints forwards the revision asked for", async () => {
   await session.close();
 });
 
+test("module dependencies have separate provenance and summary never masquerades as symbol impact", async () => {
+  const value: ImpactValue = {
+    seeds: [], symbols: [], entrypoints: [], cost: { expansionsUsed: 0 },
+    modules: {
+      origins: [{ file: "src/index.ts", change: "modified" }],
+      modules: [
+        { file: "src/index.ts", snapshot: "head", depth: 0, origins: [0] },
+        ...Array.from({ length: 10 }, (_, index) => ({ file: `src/consumer-${index}.ts`, snapshot: "head" as const, depth: index + 1, origins: [0], via: { file: "src/index.ts", line: 4, specifier: "@public", kind: "import" as const, typeOnly: true } })),
+      ], cost: { expansionsUsed: 11 },
+    },
+  };
+  const { session } = await setup({ ofChange: async () => ({ ok: true, value: { ...base(), status: "complete", value } }) });
+  try {
+    const summary = textOf(await session.callTool("ye_ast_impact", { base: "main" }));
+    assert.match(summary, /module dependencies/);
+    assert.match(summary, /not symbol or entrypoint impact/);
+    assert.doesNotMatch(summary, /src\/consumer-9.ts/);
+    const result = await session.callTool("ye_ast_impact", { base: "main", full: true, detail: "full" });
+    assert.deepEqual(((result.structuredContent as { value: ImpactValue }).value).modules, value.modules);
+    assert.match(textOf(result), /src\/consumer-9.ts/);
+    assert.match(textOf(result), /reached entrypoints \(0\)/);
+  } finally { await session.close(); }
+});
+
 test("impact reads a change of the bound repository, head defaulting to HEAD, and renders seeds, reached symbols and entrypoints", async () => {
   const { session, calls } = await setup();
   const result = await session.callTool("ye_ast_impact", { base: "main", detail: "full" });

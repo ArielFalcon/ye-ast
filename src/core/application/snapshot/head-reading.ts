@@ -86,7 +86,7 @@ export function createHeadReader(deps: HeadReaderDeps): HeadReader {
 
   const indexHead = async (headTree: CommitExtraction, headDirectory: string, directory: () => Promise<string>, signal: AbortSignal | undefined): Promise<HeadIndex | "aborted" | "unavailable"> => {
     if (deps.indexes !== undefined) {
-      const kept = await deps.indexes.obtain({ content: deps.digest.of(contentFingerprint(headTree.export)), snapshot: headDirectory, signal });
+      const kept = await deps.indexes.obtain({ content: deps.digest.of(contentFingerprint(headTree.export, deps.sourceSelection)), snapshot: headDirectory, signal });
       if (kept.ok) return { store: kept.value.store, summary: notHeldInExport(kept.value.summary.filesNotIndexed, headTree.export) };
       if (kept.fault.kind === "aborted") return "aborted";
       if (kept.fault.kind !== "cache-unavailable") return "unavailable";

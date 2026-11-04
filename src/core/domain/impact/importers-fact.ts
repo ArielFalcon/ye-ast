@@ -3,8 +3,11 @@ import { isBareName, type UnresolvedUse } from "./impact-cuts.ts";
 /** Who depends on one file, as repo-relative paths sorted by code unit; the file itself is never listed. */
 export interface ImportedFile {
   file: string;
-  /** Files with an `imports` edge into the file or a symbol it declares, test files included. */
+  /** Direct static imports and indexed imports into the file or its declarations, test files included when exported. */
   importers: readonly string[];
+  reexporters?: readonly string[];
+  dynamicImporters?: readonly string[];
+  typeImporters?: readonly string[];
   /** Files with an edge of any kind but containment into the file or a symbol it declares, test files included. */
   users: readonly string[];
   /** Files holding a reference the index could not resolve that names the file or a symbol it declares. */

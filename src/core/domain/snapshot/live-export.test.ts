@@ -22,3 +22,7 @@ test("the live scope is the declared scope plus the git ignore rule", () => {
   assert.deepEqual(liveScope({ include: ["src/**"] }).ignored, "git");
   assert.deepEqual(liveScope({ include: ["src/**"] }).include, ["src/**"]);
 });
+
+test("live export writes JSON module resource candidates", () => {
+  assert.equal(liveExport([{ path: "src/data.json", blob: "1" }], []).files[0]?.written, true);
+});

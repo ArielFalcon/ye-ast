@@ -112,7 +112,7 @@ interface Impact {
   code: number;
   stdout: string;
   stderr: string;
-  fact: { status: string; value: ImpactValue; cuts?: Cut[]; reason?: string; inputs?: { config: string; declaredConfig: { changed?: readonly string[] } } };
+  fact: { status: string; value: ImpactValue; cuts?: Cut[]; reason?: string; inputs?: { content: string; config: string; declaredConfig: { changed?: readonly string[] } } };
 }
 
 async function ye(command: string, args: string[], tail: string[] = [], options: { indexCache?: string } = {}): Promise<Impact> {
@@ -126,6 +126,149 @@ async function ye(command: string, args: string[], tail: string[] = [], options:
 const impact = (...args: string[]): Promise<Impact> => ye("impact", args);
 
 const place = (symbol: { file: string; symbol: string }): string => `${symbol.file.split("/").pop()}:${symbol.symbol}`;
+
+test("an export-only barrel reports alias consumers without manufacturing symbol seeds or entrypoints", async () => {
+  commit({
+    "tsconfig.json": JSON.stringify({ compilerOptions: { baseUrl: ".", paths: { "@public": ["src/index.ts"] } } }),
+    "src/service.ts": "export function notify() { return 'ok'; }\n",
+    "src/index.ts": "export { notify } from './service';\n",
+    "src/bridge.ts": "export * from '@public';\n",
+    "src/consumer.ts": "import { notify } from './bridge';\nexport function run() { return notify(); }\n",
+  }, "base");
+  commit({ "src/index.ts": "export { notify as send } from './service';\n" });
+
+  const answer = await impact("--base", "HEAD~1", "--changed", "src/index.ts");
+  assert.notEqual(answer.fact.status, "unknown", answer.stdout);
+  const value = answer.fact.value;
+  assert.deepEqual(value.seeds, []);
+  assert.deepEqual(value.symbols, []);
+  assert.deepEqual(value.entrypoints, []);
+  assert.deepEqual(value.modules?.origins, [{ file: "src/index.ts", change: "modified" }]);
+  assert.deepEqual(value.modules?.modules.map((module) => [module.snapshot, module.file, module.depth]), [
+    ["base", "src/index.ts", 0], ["base", "src/bridge.ts", 1], ["base", "src/consumer.ts", 2],
+    ["head", "src/index.ts", 0], ["head", "src/bridge.ts", 1], ["head", "src/consumer.ts", 2],
+  ]);
+  assert.equal(answer.fact.cuts?.some((cut) => cut.kind === "no-extractor" && cut.at.includes("src/index.ts")) ?? false, false);
+});
+
+test("importers includes alias imports and distinguishes reexporters when the graph omits file edges", async () => {
+  commit({
+    "tsconfig.json": JSON.stringify({ compilerOptions: { baseUrl: ".", paths: { "@public": ["src/index.ts"] } } }),
+    "src/service.ts": "export class Service {}\n",
+    "src/index.ts": "export { Service } from './service';\n",
+    "src/consumer.ts": "import { Service } from '@public';\nexport const instance = new Service();\n",
+    "src/bridge.ts": "export * from '@public';\n",
+    "src/consumer.spec.ts": "import { Service } from '@public';\nexport const testService = new Service();\n",
+  });
+  const answer = await ye("importers", [], ["src/index.ts"]);
+  const value = answer.fact.value as unknown as { files: { file: string; importers: string[]; reexporters?: string[]; users: string[] }[] };
+  const file = value.files.find((item) => item.file === "src/index.ts");
+  assert.ok(file);
+  assert.deepEqual(file.importers, ["src/consumer.spec.ts", "src/consumer.ts"]);
+  assert.deepEqual(file.reexporters, ["src/bridge.ts"]);
+  assert.ok(file.users.includes("src/bridge.ts"));
+  commit({ "src/consumer.spec.ts": "export const unrelated = 1;\n" });
+  const changed = await ye("importers", [], ["src/index.ts"], { indexCache: cacheRoot });
+  const changedValue = changed.fact.value as unknown as typeof value;
+  assert.deepEqual(changedValue.files.find((item) => item.file === "src/index.ts")?.importers, ["src/consumer.ts"]);
+  assert.notEqual(answer.fact.inputs?.content, changed.fact.inputs?.content);
+});
+
+test("a deleted barrel keeps base consumers and reports unresolved current imports", async () => {
+  commit({
+    "src/service.ts": "export class Service {}\n",
+    "src/index.ts": "export { Service } from './service';\n",
+    "src/consumer.ts": "import { Service } from './index';\nexport const instance = new Service();\n",
+  }, "base");
+  rmSync(join(repo, "src/index.ts"));
+  commit({});
+  const answer = await impact("--base", "HEAD~1", "--changed", "src/index.ts");
+  assert.equal(answer.fact.status, "partial", answer.stdout);
+  assert.deepEqual(answer.fact.value.modules?.origins, [{ file: "src/index.ts", change: "deleted" }]);
+  assert.ok(answer.fact.value.modules?.modules.some((module) => module.snapshot === "base" && module.file === "src/consumer.ts"));
+  assert.equal(answer.fact.value.modules?.modules.some((module) => module.snapshot === "head" && module.file === "src/index.ts"), false);
+  assert.ok(answer.fact.cuts?.some((cut) => cut.kind === "unresolved-link" && cut.at.some((place) => place.includes("src/consumer.ts:1"))));
+});
+
+test("a renamed barrel does not conflate dependencies from the two snapshots", async () => {
+  commit({
+    "src/service.ts": "export class Service {}\n",
+    "src/index.ts": "export { Service } from './service';\n",
+    "src/consumer.ts": "import { Service } from './index';\nexport const instance = new Service();\n",
+  }, "base");
+  rmSync(join(repo, "src/index.ts"));
+  commit({ "src/public.ts": "export { Service } from './service';\n", "src/consumer.ts": "import { Service } from './public';\nexport const instance = new Service();\n" });
+  const answer = await impact("--base", "HEAD~1", "--changed", "src/index.ts", "--changed", "src/public.ts");
+  const modules = answer.fact.value.modules;
+  assert.deepEqual(modules?.origins, [{ file: "src/index.ts", change: "deleted" }, { file: "src/public.ts", change: "added" }]);
+  assert.deepEqual(modules?.modules.filter((module) => module.file === "src/consumer.ts").map((module) => [module.snapshot, module.via?.file, module.origins]), [
+    ["base", "src/index.ts", [0]], ["head", "src/public.ts", [1]],
+  ]);
+  assert.deepEqual(answer.fact.value.seeds, []);
+  assert.deepEqual(answer.fact.value.entrypoints, []);
+});
+
+test("a literal dynamic module consumer is reached conditionally without declaration seeds", async () => {
+  commit({
+    "src/service.ts": "export class Service {}\n",
+    "src/index.ts": "export { Service } from './service';\n",
+    "src/consumer.ts": "export const load = () => import('./index');\n",
+  }, "base");
+  commit({ "src/index.ts": "export { Service as PublicService } from './service';\n" });
+  const answer = await impact("--base", "HEAD~1", "--changed", "src/index.ts");
+  assert.equal(answer.fact.status, "complete", answer.stdout);
+  assert.deepEqual(answer.fact.value.seeds, []);
+  assert.deepEqual(answer.fact.value.entrypoints, []);
+  assert.deepEqual(answer.fact.value.modules?.modules.filter((module) => module.file === "src/consumer.ts").map((module) => [module.snapshot, module.via?.form]), [["base", "dynamic-import"], ["head", "dynamic-import"]]);
+});
+
+test("module coverage keeps computed same-line references and reports unresolved literals once per snapshot", async () => {
+  commit({
+    "src/service.ts": "export class Service {}\n",
+    "src/index.ts": "export { Service } from './service';\n",
+    "src/consumer.ts": "import('./index'); import(name); import('./missing');\n",
+  }, "base");
+  commit({ "src/index.ts": "export { Service as PublicService } from './service';\n" });
+  const answer = await impact("--base", "HEAD~1", "--changed", "src/index.ts");
+  assert.equal(answer.fact.status, "partial", answer.stdout);
+  const moduleCuts = answer.fact.cuts?.filter((cut) => cut.at[0]?.startsWith("module:")) ?? [];
+  assert.equal(moduleCuts.filter((cut) => cut.at.some((place) => place.includes("./missing"))).length, 2);
+  assert.equal(moduleCuts.filter((cut) => cut.at.some((place) => place.includes("outside module traversal"))).length, 2);
+});
+
+test("JSON changes reach resource consumers, builtin Node imports stay external and resource bytes invalidate facts", async () => {
+  commit({
+    "src/data.json": '{"value":1}\n',
+    "src/consumer.ts": "import data from './data.json'; import 'node:crypto'; export const value = data.value;\n",
+  }, "base");
+  commit({ "src/data.json": '{"value":2}\n' });
+  const answer = await impact("--base", "HEAD~1", "--changed", "src/data.json");
+  assert.equal(answer.fact.status, "complete", answer.stdout);
+  assert.deepEqual(answer.fact.value.seeds, []);
+  assert.deepEqual(answer.fact.value.symbols, []);
+  assert.deepEqual(answer.fact.value.modules?.origins, [{ file: "src/data.json", change: "modified" }]);
+  assert.deepEqual(answer.fact.value.modules?.modules.filter((module) => module.file === "src/consumer.ts").map((module) => module.snapshot), ["base", "head"]);
+  const imported = await ye("importers", [], ["src/data.json"]);
+  assert.equal(imported.fact.status, "complete", imported.stdout);
+  assert.ok(JSON.stringify(imported.fact.value).includes("src/consumer.ts"));
+  commit({ "src/data.json": '{"value":3}\n' });
+  const changed = await ye("importers", [], ["src/data.json"], { indexCache: cacheRoot });
+  assert.notEqual(imported.fact.inputs?.content, changed.fact.inputs?.content);
+});
+
+test("resource modifications keep both snapshots when their first import is added or last import removed", async () => {
+  commit({ "src/data.json": '{"value":1}\n', "src/use.ts": "export const value = 1;\n" }, "base");
+  commit({ "src/data.json": '{"value":2}\n', "src/use.ts": "import data from './data.json'; export const value = data.value;\n" });
+  const added = await impact("--base", "HEAD~1", "--changed", "src/data.json");
+  assert.equal(added.fact.status, "complete", added.stdout);
+  assert.deepEqual(added.fact.value.modules?.origins, [{ file: "src/data.json", change: "modified" }]);
+  assert.deepEqual(added.fact.value.modules?.modules.filter((module) => module.file === "src/use.ts").map((module) => module.snapshot), ["head"]);
+  commit({ "src/data.json": '{"value":3}\n', "src/use.ts": "export const value = 3;\n" });
+  const removed = await impact("--base", "HEAD~1", "--changed", "src/data.json");
+  assert.equal(removed.fact.status, "complete", removed.stdout);
+  assert.deepEqual(removed.fact.value.modules?.origins, [{ file: "src/data.json", change: "modified" }]);
+  assert.deepEqual(removed.fact.value.modules?.modules.filter((module) => module.file === "src/use.ts").map((module) => module.snapshot), ["base"]);
+});
 
 test("a changed helper reaches the route served through an interface, the same bytes on every run, and leaves no export behind", async () => {
   commit(SHOP, "base");

@@ -1,3 +1,4 @@
+import { isJsonModuleResource } from "../languages/typescript.ts";
 import type { DeclaredScope } from "../shared/fact.ts";
 import { declaredScope, isInMapScope } from "../map/entrypoint-map.ts";
 import type { ScopeRequest } from "../shared/scope.ts";
@@ -20,7 +21,7 @@ export function liveExport<S extends { path: string; reason: string }>(manifest:
  * consumers: the export marks it `written`, and the mirror copies exactly those paths and no others.
  */
 export function isWritten(path: string): boolean {
-  return isInMapScope(path);
+  return isInMapScope(path) || isJsonModuleResource(path);
 }
 
 /** The paths whose blob differs between two listings, or that only one of them holds, sorted. */

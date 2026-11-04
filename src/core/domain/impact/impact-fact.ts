@@ -3,8 +3,9 @@ import type { Handler } from "../entrypoints/http-route.ts";
 import type { SeedBasis } from "../change/seeds.ts";
 import type { WalkBounds } from "../shared/fact.ts";
 import type { ChangedEntrypoint } from "./changed-entrypoints.ts";
+import type { ModuleImpactValue } from "./module-dependency.ts";
 
-/** Optional bounds on the walk; none has a default, and each one that stops the walk becomes a cut. */
+/** Bounds apply independently to symbol and module walks, each with its own expansion cost. */
 export type ImpactBudget = WalkBounds;
 
 /**
@@ -59,6 +60,7 @@ export interface ImpactValue {
   changedEntrypoints?: readonly ChangedEntrypoint[];
   symbols: readonly ImpactedSymbol[];
   entrypoints: readonly ReachedEntrypoint[];
+  modules?: ModuleImpactValue;
   /** The symbols whose callers the walk followed; `0` when the answer needed no walk. */
   cost: { expansionsUsed: number };
 }

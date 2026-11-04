@@ -58,12 +58,12 @@ export interface MapExport {
  * every uncovered source that produces a cut, every skipped entry with its reason, and where a budget stopped
  * the export.
  */
-export function contentFingerprint({ files, skipped, stopped }: MapExport): string {
+export function contentFingerprint({ files, skipped, stopped }: MapExport, sourceSelection: (path: string) => boolean = isInMapScope): string {
   const declared = holdsDeclaredSource(files);
   const parts: [string, ...string[]][] = [
     ...files
-      .filter((file) => isInMapScope(file.path) || cutsCompleteness(file.path, declared))
-      .map((file): [string, ...string[]] => [isInMapScope(file.path) ? "source" : "unsupported", file.path, file.blob]),
+      .filter((file) => sourceSelection(file.path) || cutsCompleteness(file.path, declared))
+      .map((file): [string, ...string[]] => [sourceSelection(file.path) ? "source" : "unsupported", file.path, file.blob]),
     ...skipped.map((entry): [string, ...string[]] => ["skipped", entry.path, entry.reason]),
     ...(stopped === undefined ? [] : [["stopped", stopped.at] satisfies [string, ...string[]]]),
   ];

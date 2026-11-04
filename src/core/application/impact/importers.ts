@@ -1,6 +1,8 @@
+import { isJsonModuleResource } from "../../domain/languages/typescript.ts";
 import { NOT_DECLARED_KINDS, sortedUnique, unresolvedNamersOf, type ImportedFile } from "../../domain/impact/importers-fact.ts";
 import type { UnresolvedUse } from "../../domain/impact/impact-cuts.ts";
 import type { CodeGraphReader, GraphEdge } from "../../ports/code-graph.port.ts";
+import type { ModuleDependencies } from "../../domain/impact/module-dependency.ts";
 
 export interface ImportersRead {
   /** One entry per requested file the index holds, in path order. */
@@ -13,12 +15,24 @@ export interface ImportersRead {
 const CONTAINMENT = "contains";
 const IMPORT = "imports";
 
-export function readImporters(store: CodeGraphReader, requested: readonly string[], references: readonly UnresolvedUse[]): ImportersRead {
+export function readImporters(store: CodeGraphReader, requested: readonly string[], references: readonly UnresolvedUse[], modules?: ModuleDependencies): ImportersRead {
   const files: ImportedFile[] = [];
   const unheld: string[] = [];
+  const parsed = new Set(modules?.files.map(({ file }) => file));
+  const resources = new Set(modules?.files.filter((entry) => entry.resource === true).map(({ file }) => file));
+  const direct = new Map<string, { imports: Set<string>; reexports: Set<string>; dynamic: Set<string>; types: Set<string> }>();
+  for (const edge of modules?.dependencies ?? []) {
+    if (edge.target.kind !== "repository") continue;
+    const held = direct.get(edge.target.file) ?? { imports: new Set<string>(), reexports: new Set<string>(), dynamic: new Set<string>(), types: new Set<string>() };
+    if (edge.kind === "reexport") held.reexports.add(edge.file);
+    else if (edge.form === "dynamic-import") held.dynamic.add(edge.file);
+    else if (edge.form === "type-query") held.types.add(edge.file);
+    else held.imports.add(edge.file);
+    direct.set(edge.target.file, held);
+  }
   for (const file of sortedUnique(requested)) {
     const nodes = store.symbolsInFiles([file]);
-    if (nodes.length === 0) {
+    if ((isJsonModuleResource(file) && !resources.has(file)) || (nodes.length === 0 && !parsed.has(file))) {
       unheld.push(file);
       continue;
     }
@@ -28,10 +42,17 @@ export function readImporters(store: CodeGraphReader, requested: readonly string
       sortedUnique(edges.filter(accept).flatMap((edge) => sourceFiles.get(edge.source) ?? []).filter((other) => other !== file));
     const declared = new Set(nodes.filter((node) => !NOT_DECLARED_KINDS.includes(node.kind)).map((node) => node.name));
     const qualified = new Set(nodes.map((node) => node.qualifiedName));
+    const consumers = direct.get(file);
+    const imports = consumers?.imports ?? new Set<string>();
+    const reexports = consumers?.reexports ?? new Set<string>();
+    const dynamic = consumers?.dynamic ?? new Set<string>();
+    const types = consumers?.types ?? new Set<string>();
     files.push({
       file,
-      importers: from((edge) => edge.kind === IMPORT),
-      users: from((edge) => edge.kind !== CONTAINMENT),
+      importers: sortedUnique([...from((edge) => edge.kind === IMPORT).filter((source) => !(reexports.has(source) || dynamic.has(source) || types.has(source)) || imports.has(source)), ...imports].filter((source) => source !== file)),
+      ...(modules === undefined ? {} : { reexporters: sortedUnique([...reexports].filter((source) => source !== file)) }),
+      ...(modules === undefined ? {} : { dynamicImporters: sortedUnique([...dynamic].filter((source) => source !== file)), typeImporters: sortedUnique([...types].filter((source) => source !== file)) }),
+      users: sortedUnique([...from((edge) => edge.kind !== CONTAINMENT), ...imports, ...reexports, ...dynamic, ...types].filter((source) => source !== file)),
       unresolvedNamers: unresolvedNamersOf(file, declared, qualified, references),
     });
   }

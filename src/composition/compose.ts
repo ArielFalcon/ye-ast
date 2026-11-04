@@ -49,6 +49,7 @@ import type { CallSiteReader } from "../core/domain/topology/call-site.ts";
 import type { EntrypointExtractor, SourceFile } from "../core/ports/entrypoint-extractor.port.ts";
 import { createTypeResolution } from "../core/adapters/typescript/type-resolution.adapter.ts";
 import { createImportOrigins } from "../core/adapters/typescript/import-origins.adapter.ts";
+import { createModuleDependenciesReader } from "../core/adapters/typescript/module-dependencies.adapter.ts";
 import type { EntrypointQueries } from "../core/ports/entrypoint-queries.port.ts";
 import type { ImpactQueries } from "../core/ports/impact-queries.port.ts";
 import type { OutlineQueries } from "../core/ports/outline-queries.port.ts";
@@ -152,7 +153,7 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
     mirror: createLiveMirror({ ...defaultLiveMirrorDeps, writes: isWritten }),
     graph,
     digest,
-    versions: { codegraph, store: JSON.stringify(SUPPORTED_STORE), staging: STAGING_RULES_VERSION },
+    versions: { codegraph, store: JSON.stringify(SUPPORTED_STORE), staging: `${STAGING_RULES_VERSION}:json-resources-v1` },
     retention: options.liveRetention ?? LIVE_RETENTION,
     now: () => Date.now(),
   };
@@ -186,6 +187,7 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
     ...trust,
     ...(typeRoot === undefined ? {} : { typeRoot }),
     importOrigins: (sources: readonly SourceFile[]) => createImportOrigins(sources),
+    moduleDependencies: createModuleDependenciesReader(),
   });
   const warmLive = async (repo: string, signal?: AbortSignal): Promise<string | null> => {
     try {

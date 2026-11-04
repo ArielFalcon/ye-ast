@@ -188,6 +188,12 @@ test("the stateId is the digest of the listing's fingerprint, so equal listings 
   assert.notEqual(one.stateId, other.stateId);
 });
 
+test("a JSON resource edit changes live state identity even when source declarations do not change", async () => {
+  const before = await tree(fakeLive({ "src/A.java": "same", "src/data.json": "1" }));
+  const after = await tree(fakeLive({ "src/A.java": "same", "src/data.json": "2" }));
+  assert.notEqual(before.stateId, after.stateId);
+});
+
 test("an edit after the answer is built is reported as stale with the changed paths", async () => {
   const fake = fakeLive({ "src/A.java": "1", "src/B.java": "1" });
   const notices: LiveStaleNotice[] = [];
