@@ -17,8 +17,9 @@ import type { WorkspaceDefaults } from "../../ports/workspace-defaults.port.ts";
 import type { WorkspaceEvidence } from "../../ports/workspace-evidence.port.ts";
 import type { WorkspaceFault, WorkspaceRepository, WorkspaceRepositoryRequest, WorkspaceSection } from "../../ports/workspace-repos.port.ts";
 import type { WorkspaceQueries, WorkspaceRead, WorkspaceRefresh, WorkspaceRequest, WorkspaceValue } from "../../ports/workspace-queries.port.ts";
-import { declaredTrustOf, extractCommit, factBaseOf, trustOf, withScratch, type SnapshotReaderDeps } from "../snapshot/read-snapshot.ts";
+import { declaredTrustOf, factBaseOf, trustOf, withScratch, type SnapshotReaderDeps } from "../snapshot/read-snapshot.ts";
 import { withAuthorizedRemotes, workspaceInForce } from "./workspace-defaults.ts";
+import { prepareCommit } from "../snapshot/prepared-snapshot.ts";
 
 export interface WorkspaceQueriesDeps extends SnapshotReaderDeps {
   matcher: PathMatcher;
@@ -90,10 +91,12 @@ export function createWorkspaceQueries(deps: WorkspaceQueriesDeps): WorkspaceQue
     const remotes = await vcs.remotes(declared, signal);
     if (!remotes.ok) return remotes;
     const sha = resolved.value;
-    const declaredTrust = await declaredTrustOf(deps, declared);
-    const trust = declaredTrust ?? "untrusted";
     return withScratch(deps.scratch, async (directory) => {
-      const extracted = await extractCommit(deps, source, sha, await directory(), selection, signal);
+      const declaredTrust = await declaredTrustOf(deps, declared);
+      const trust = declaredTrust ?? "untrusted";
+      const prepared = await prepareCommit(deps, source, sha, directory, selection, { scope, trust }, signal);
+      if (!prepared.ok) return prepared;
+      const extracted = await prepared.value.extract(signal);
       if (!extracted.ok) return extracted;
       const { export: snapshotExport, findings, sources } = extracted.value;
       const selected = pathSelection(scope, matcher.matches);

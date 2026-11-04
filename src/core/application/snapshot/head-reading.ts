@@ -10,7 +10,8 @@ import type { LiveFault, LiveSelector } from "../../ports/live-queries.port.ts";
 import type { PathMatcher } from "../../ports/path-matcher.port.ts";
 import type { CommitExport, Vcs, VcsFault } from "../../ports/vcs.port.ts";
 import { openLive, type LiveDeps, type LiveTree } from "../live/live-tree.ts";
-import { ABORTED, extractCommit, extractExport, factBaseOf, LIVE_REQUIRES_TRUSTED, trustOf, withScratch, type CommitExtraction, type SnapshotReaderDeps } from "./read-snapshot.ts";
+import { ABORTED, extractExport, readSources, factBaseOf, LIVE_REQUIRES_TRUSTED, trustOf, withScratch, type CommitExtraction, type PreparedCommit, type SnapshotReaderDeps } from "./read-snapshot.ts";
+import { prepareCommit } from "./prepared-snapshot.ts";
 
 /** What reading the head of a query needs: the snapshot reader plus the index of what it exported. */
 export interface HeadReaderDeps extends SnapshotReaderDeps {
@@ -36,8 +37,9 @@ export interface HeadIndex {
 }
 
 /** The head of a query as the operation reads it: a commit's export or the mirror, with the means to index it. */
-export interface HeadReading {
-  tree: CommitExtraction;
+export interface HeadReading<Tree extends Pick<CommitExtraction, "export"> = CommitExtraction> {
+  tree: Tree;
+  prepared?: PreparedCommit;
   selected: PathSelection;
   /** The fact base for `content`; `store` is true for a fact that read the index, which records where it came from. */
   base(content: string, store?: boolean): FactBase;
@@ -61,14 +63,17 @@ export function notHeldInExport(notHeld: readonly string[], exported: CommitExpo
 }
 
 export interface HeadReader {
+  /** Reads a head export and its index without loading sources or extracting entrypoints. */
+  atExport<V, E>(request: Revisioned, spec: FactSpec, read: (head: HeadReading<Pick<CommitExtraction, "export">>) => Promise<Result<Fact<V>, E>>): Promise<Result<Fact<V>, E | VcsFault | LiveFault>>;
+  atSources<V, E>(request: Revisioned, spec: FactSpec, read: (head: HeadReading<Pick<CommitExtraction, "export" | "sources">>) => Promise<Result<Fact<V>, E>>): Promise<Result<Fact<V>, E | VcsFault | LiveFault>>;
   /** The one place a revisioned operation reads its head, at a commit or on the live tree, so its body is written once. */
   atHead<V, E>(request: Revisioned, spec: FactSpec, read: (head: HeadReading) => Promise<Result<Fact<V>, E>>): Promise<Result<Fact<V>, E | VcsFault | LiveFault>>;
   /** The fact base of a snapshot: a commit's carries the host's export budget, the live tree reads none. */
   factBase(trust: TrustMode, snapshot: SnapshotRef, content: string, spec: FactSpec, scope: DeclaredScope, origin: IndexOrigin | undefined): FactBase;
   /** The head's index; the caller closes its store. */
-  indexHead(headTree: CommitExtraction, headDirectory: string, directory: () => Promise<string>, signal: AbortSignal | undefined): Promise<HeadIndex | "aborted" | "unavailable">;
+  indexHead(headTree: Pick<CommitExtraction, "export">, headDirectory: string, directory: () => Promise<string>, signal: AbortSignal | undefined): Promise<HeadIndex | "aborted" | "unavailable">;
   /** The head of a live query: the mirror under the lock, its store opened where the engine left it. */
-  liveReading(tree: LiveTree, extraction: CommitExtraction, trust: TrustMode, scope: DeclaredScope, selected: PathSelection, head: string, repoId: string, spec: FactSpec): HeadReading;
+  liveReading<Tree extends Pick<CommitExtraction, "export">>(tree: LiveTree, extraction: Tree, trust: TrustMode, scope: DeclaredScope, selected: PathSelection, head: string, repoId: string, spec: FactSpec): HeadReading<Tree>;
   /** What a live query answers when the refresh did not finish: `unknown`, with a state id of nothing read. */
   unavailableLive(trust: TrustMode, scope: DeclaredScope, head: string, repoId: string, spec: FactSpec): UnknownFact;
 }
@@ -84,7 +89,7 @@ export function createHeadReader(deps: HeadReaderDeps): HeadReader {
     return { ...factBaseOf(deps, { repoId: snapshot.repo, sha, trust, scope, content, declaredConfig, engines: spec.engines, ...(origin === undefined ? {} : { origin }), ...typeRoot }), snapshot };
   };
 
-  const indexHead = async (headTree: CommitExtraction, headDirectory: string, directory: () => Promise<string>, signal: AbortSignal | undefined): Promise<HeadIndex | "aborted" | "unavailable"> => {
+  const indexHead = async (headTree: Pick<CommitExtraction, "export">, headDirectory: string, directory: () => Promise<string>, signal: AbortSignal | undefined): Promise<HeadIndex | "aborted" | "unavailable"> => {
     if (deps.indexes !== undefined) {
       const kept = await deps.indexes.obtain({ content: deps.digest.of(contentFingerprint(headTree.export)), snapshot: headDirectory, signal });
       if (kept.ok) return { store: kept.value.store, summary: notHeldInExport(kept.value.summary.filesNotIndexed, headTree.export) };
@@ -98,7 +103,7 @@ export function createHeadReader(deps: HeadReaderDeps): HeadReader {
     return opened.ok ? { store: opened.value, summary: notHeldInExport(indexed.value.filesNotIndexed, headTree.export) } : "unavailable";
   };
 
-  const liveReading = (tree: LiveTree, extraction: CommitExtraction, trust: TrustMode, scope: DeclaredScope, selected: PathSelection, head: string, repoId: string, spec: FactSpec): HeadReading => {
+  const liveReading = <Tree extends Pick<CommitExtraction, "export">>(tree: LiveTree, extraction: Tree, trust: TrustMode, scope: DeclaredScope, selected: PathSelection, head: string, repoId: string, spec: FactSpec): HeadReading<Tree> => {
     const snapshot: SnapshotRef = { repo: repoId, kind: "live", head, stateId: tree.stateId };
     return {
       tree: extraction,
@@ -116,7 +121,7 @@ export function createHeadReader(deps: HeadReaderDeps): HeadReader {
     return { ...factBase(trust, { repo: repoId, kind: "live", head, stateId: unread }, unread, spec, scope, undefined), status: "unknown", reason: "index-unavailable" };
   };
 
-  const atHead = async <V, E>(request: Revisioned, spec: FactSpec, read: (head: HeadReading) => Promise<Result<Fact<V>, E>>): Promise<Result<Fact<V>, E | VcsFault | LiveFault>> => {
+  const atSnapshot = async <V, E>(request: Revisioned, spec: FactSpec, read: (head: HeadReading<Pick<CommitExtraction, "export">>, root: string) => Promise<Result<Fact<V>, E>>): Promise<Result<Fact<V>, E | VcsFault | LiveFault>> => {
     const { repo, repoId, signal } = request;
     if (request.live === true) {
       const trust = await trustOf(deps, repo);
@@ -127,8 +132,8 @@ export function createHeadReader(deps: HeadReaderDeps): HeadReader {
       const selected = pathSelection(scope, deps.matcher.matches);
       const exported = exportSelection(scope, deps.matcher.matches, isExtractorConfiguration);
       const opened = await openLive(deps.live, { repo, scope, selected: exported, store: true, signal, onStale: request.onStale }, async (tree) => {
-        const extracted = await extractExport(deps, tree.root, tree.export, signal);
-        return extracted.ok ? read(liveReading(tree, extracted.value, trust, scope, selected, head.value, repoId, spec)) : extracted;
+        if (signal?.aborted) return ABORTED;
+        return read(liveReading(tree, { export: tree.export }, trust, scope, selected, head.value, repoId, spec), tree.root);
       });
       if (opened.ok) return opened.value;
       const { fault } = opened;
@@ -144,17 +149,28 @@ export function createHeadReader(deps: HeadReaderDeps): HeadReader {
     const trust = await trustOf(deps, repo);
     const snapshot: SnapshotRef = { repo: repoId, kind: "sha", sha: head.value };
     return withScratch(deps.scratch, async (directory) => {
-      const headDirectory = await directory();
-      const headTree = await extractCommit(deps, source, head.value, headDirectory, exported, signal);
-      if (!headTree.ok) return headTree;
+      const prepared = await prepareCommit(deps, source, head.value, directory, exported, { scope, trust }, signal);
+      if (!prepared.ok) return prepared;
+      const { root: headDirectory, tree: headTree } = prepared.value;
       return read({
-        tree: headTree.value,
+        tree: headTree,
+        prepared: prepared.value,
         selected,
         base: (content, store = false) => factBase(trust, snapshot, content, spec, scope, store ? { kind: "full" } : undefined),
-        open: () => indexHead(headTree.value, headDirectory, directory, signal),
-      });
+        open: () => indexHead(headTree, headDirectory, directory, signal),
+      }, headDirectory);
     });
   };
 
-  return { atHead, factBase, indexHead, liveReading, unavailableLive };
+  const atHead = <V, E>(request: Revisioned, spec: FactSpec, read: (head: HeadReading) => Promise<Result<Fact<V>, E>>): Promise<Result<Fact<V>, E | VcsFault | LiveFault>> => atSnapshot<V, E | VcsFault>(request, spec, async (head, root) => {
+    const extracted = head.prepared === undefined ? await extractExport(deps, root, head.tree.export, request.signal) : await head.prepared.extract(request.signal);
+    return extracted.ok ? read({ ...head, tree: extracted.value }) : extracted;
+  });
+
+  const atSources = <V, E>(request: Revisioned, spec: FactSpec, read: (head: HeadReading<Pick<CommitExtraction, "export" | "sources">>) => Promise<Result<Fact<V>, E>>): Promise<Result<Fact<V>, E | VcsFault | LiveFault>> => atSnapshot<V, E | VcsFault>(request, spec, async (head, root) => {
+    const loaded = head.prepared === undefined ? await readSources(deps, root, head.tree.export, request.signal) : await head.prepared.sources(request.signal);
+    return loaded.ok ? read({ ...head, tree: loaded.value }) : loaded;
+  });
+
+  return { atHead, atSources, atExport: atSnapshot, factBase, indexHead, liveReading, unavailableLive };
 }

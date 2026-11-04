@@ -592,3 +592,15 @@ test("an exclude leaves the configuration out, so the sources it interprets are 
   assert.ok(section.status === "complete");
   assert.deepEqual(section.value.map((item) => item.status), ["unknown"]);
 });
+
+test("live reads bypass the cross-request SHA data cache", async () => {
+  const live = fakeLive({ "src/Orders.java": "b1" });
+  const { deps, readPaths } = setup({ live, trust: { read: async () => ({ ok: true, value: "trusted" }) } });
+  let cacheCalls = 0;
+  deps.snapshotCache = { get: () => { cacheCalls++; return undefined; }, put: () => { cacheCalls++; } };
+  const queries = createEntrypointQueries(deps);
+  for (let i = 0; i < 2; i++) assert.ok((await queries.map({ repo: REQUEST.repo, repoId: REQUEST.repoId, live: true })).ok);
+  assert.equal(cacheCalls, 0);
+  assert.deepEqual(readPaths, ["src/Orders.java", "src/Orders.java"]);
+  assert.deepEqual(live.held, { locks: 2, released: 2 });
+});

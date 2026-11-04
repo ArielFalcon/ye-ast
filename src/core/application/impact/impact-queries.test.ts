@@ -60,7 +60,7 @@ interface Options {
 }
 
 function setup(options: Options = {}) {
-  const log = { exported: [] as string[], plans: [] as { sha: string; destination: string; wanted: string[] }[], compared: [] as [string, string][], created: [] as string[], removed: [] as string[], indexed: 0, closed: 0, obtained: [] as string[] };
+  const log = { exported: [] as string[], plans: [] as { sha: string; destination: string; wanted: string[] }[], compared: [] as [string, string][], created: [] as string[], removed: [] as string[], indexed: 0, closed: 0, reads: 0, extractions: 0, obtained: [] as string[] };
   const nodes = options.nodes ?? [];
   const reader: CodeGraphReader = { ...fakeCodeGraph(nodes, options.edges ?? [], options.unresolved ?? []), close: () => void log.closed++ };
   const vcs: Vcs & VcsChanges = {
@@ -100,8 +100,8 @@ function setup(options: Options = {}) {
       },
       remove: async (path) => void log.removed.push(path),
     },
-    reader: { read: async () => options.sources ?? [] },
-    extractor: { extract: async () => [] },
+    reader: { read: async () => { log.reads++; return options.sources ?? []; } },
+    extractor: { extract: async () => { log.extractions++; return []; } },
     angular: { read: async () => options.declarations ?? [] },
     relations: { extract: async () => ({ relations: options.relations ?? [], fields: options.fields ?? [], locals: [] }) },
     dynamicLoads: { extract: async () => options.loads ?? [] },
@@ -1125,3 +1125,16 @@ test("an export budget travels in clear beside the config digest", async () => {
   assert.deepEqual(answer.inputs.declaredConfig.exportBudget, { maxEntries: 10, maxBytes: 100 });
   assert.equal(answer.inputs.config, canonicalJson(answer.inputs.declaredConfig));
 });
+
+for (const live of [false, true]) {
+  test(`a ${live ? "live" : "revisioned"} importers query loads dynamic sources without extracting entrypoints`, async () => {
+    const mirror = live ? fakeLive({ "src/A.java": "1" }) : undefined;
+    const { queries, log } = setup({ ...(mirror && { live: mirror, trust: TRUSTED }), loads: [{ file: "src/B.java", line: 9, specifier: "./A" }] });
+    const answer = await queries.importers({ repo: "/repo", repoId: "repo", files: ["src/A.java"], ...(live ? { live: true } : { revision: "HEAD" }) });
+    assert.ok(answer.ok);
+    assert.equal(log.reads, 1);
+    assert.equal(log.extractions, 0);
+    assert.equal(log.closed, 1);
+    if (mirror) assert.deepEqual(mirror.held, { locks: 1, released: 1 });
+  });
+}

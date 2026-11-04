@@ -9,7 +9,8 @@ import type { LiveFault } from "../../ports/live-queries.port.ts";
 import type { PathMatcher } from "../../ports/path-matcher.port.ts";
 import type { VcsFault } from "../../ports/vcs.port.ts";
 import { asFault, openLive, type LiveDeps } from "../live/live-tree.ts";
-import { extractCommit, extractExport, factBaseOf, LIVE_REQUIRES_TRUSTED, trustOf, withScratch, type SnapshotReaderDeps } from "../snapshot/read-snapshot.ts";
+import { extractExport, factBaseOf, LIVE_REQUIRES_TRUSTED, trustOf, withScratch, type SnapshotReaderDeps } from "../snapshot/read-snapshot.ts";
+import { prepareCommit } from "../snapshot/prepared-snapshot.ts";
 
 export interface EntrypointQueriesDeps extends SnapshotReaderDeps {
   matcher: PathMatcher;
@@ -53,11 +54,14 @@ export function createEntrypointQueries(deps: EntrypointQueriesDeps): Entrypoint
       return withScratch(deps.scratch, async (directory) => {
         const scope = declaredScope(requested);
         const exported = exportSelection(scope, deps.matcher.matches, isExtractorConfiguration);
-        const extracted = await extractCommit(deps, repo, sha, await directory(), exported, signal);
+        const trust = await trustOf(deps, repo);
+        const prepared = await prepareCommit(deps, repo, sha, directory, exported, { scope, trust }, signal);
+        if (!prepared.ok) return prepared;
+        const extracted = await prepared.value.extract(signal);
         if (!extracted.ok) return extracted;
         const { export: mapExport, findings } = extracted.value;
         const declaredConfig = deps.budget === undefined ? {} : { exportBudget: { maxEntries: deps.budget.maxEntries, maxBytes: deps.budget.maxBytes } };
-        const base = factBaseOf(deps, { repoId, sha, trust: await trustOf(deps, repo), scope, content: contentFingerprint(mapExport), declaredConfig, engines: deps.engines });
+        const base = factBaseOf(deps, { repoId, sha, trust, scope, content: contentFingerprint(mapExport), declaredConfig, engines: deps.engines });
         return { ok: true, value: buildEntrypointMap(base, findings, mapExport) };
       });
     },

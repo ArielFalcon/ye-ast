@@ -79,6 +79,24 @@ the library passes its own values. Measurements so far, as the evidence a future
 Without a budget, a commit whose subtrees repeat (10^6 entries listed from 8 objects) still grows the listing's
 bookkeeping with the entry count, about 1 KB per listed entry; that is the case a host bounds today with `maxEntries`.
 
+## Snapshot data retained between requests
+
+[ADR-0020](../adr/0020-host-budgeted-snapshot-memory-cache.md) permits an optional in-memory cache for completed SHA
+source reads and entrypoint extraction. [ADR-0021](../adr/0021-enable-snapshot-memory-cache-by-default.md) enables it by default with 32 MiB. A host overrides
+the budget with `composeQueries({ snapshotCacheBytes })` (also accepted by `composeCli`); an explicit zero disables it. It is a composition setting, never a repository setting
+or an agent tool argument. Zero or an invalid byte budget disables retention.
+
+The budget counts UTF-8 bytes of retained keys and serialized data, including metadata. Admission evicts the
+least-recently-used entries until they fit; an entry larger than the whole budget is not admitted. The count excludes
+Node's heap bookkeeping, in-flight query data and transient serialization buffers. The cache stores serialized bytes,
+so it holds no source objects, ASTs, temporary-directory paths, open stores or final facts.
+
+Every query still resolves its revision, reads current trust and exports Git into a fresh temporary directory.
+Reuse additionally checks the effective source, SHA, scope, export budget and exact current export listing and cuts.
+Only successfully completed stages are retained, without shared in-flight work or cancellation. `live` bypasses this
+cache; export-only queries do not restore source data. The lifetime is one composition; dropping it releases retention.
+Cache settings affect cost only and are not fact inputs. The default allocates entries lazily; it reserves no memory up front and retains no export on disk.
+
 ## Versioning
 
 The manifest and profile carry a schema version. Every fact records the inputs it depends on

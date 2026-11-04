@@ -42,6 +42,7 @@ import { walkImpact } from "./walk.ts";
 import type { TypeResolution } from "../../ports/type-resolution.port.ts";
 import type { ImportOriginSite, ImportOriginsReader } from "../../ports/import-origins.port.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
+import { prepareCommit } from "../snapshot/prepared-snapshot.ts";
 
 export interface ImpactQueriesDeps extends HeadReaderDeps {
   /** The walk reads the change between two revisions, which no other family asks for. */
@@ -164,7 +165,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
       const files = sortedUnique(request.files);
       const spec: FactSpec = { declaredConfig: { files }, engines: importersEngines };
 
-      return headReader.atHead(request, spec, async (head): Promise<Result<Fact<ImportersValue>, VcsFault>> => {
+      return headReader.atSources(request, spec, async (head): Promise<Result<Fact<ImportersValue>, VcsFault>> => {
         const headTree = head.tree;
         const content = contentFingerprint(headTree.export);
         const outside = files.filter((file) => !head.selected(file));
@@ -225,10 +226,14 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
     const radius = blastRadius(mergeBase, diff.value.filter((file) => selected(file.path)));
 
     return withScratch(deps.scratch, async (directory): Promise<Answer> => {
-      const headDirectory = await directory();
-      const headTree = await extractCommit(deps, repo, head.value, headDirectory, exported, signal);
+      const preparedHead = await prepareCommit(deps, repo, head.value, directory, exported, { scope, trust }, signal);
+      if (!preparedHead.ok) return preparedHead;
+      const headDirectory = preparedHead.value.root;
+      const headTree = await preparedHead.value.extract(signal);
       if (!headTree.ok) return headTree;
-      const baseTree = mergeBase === head.value ? headTree : await extractCommit(deps, repo, mergeBase, await directory(), exported, signal);
+      const preparedBase = mergeBase === head.value ? preparedHead : await prepareCommit(deps, repo, mergeBase, directory, exported, { scope, trust }, signal);
+      if (!preparedBase.ok) return preparedBase;
+      const baseTree = mergeBase === head.value ? headTree : await preparedBase.value.extract(signal);
       if (!baseTree.ok) return baseTree;
       const reading: HeadReading = {
         tree: headTree.value,
