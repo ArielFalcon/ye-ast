@@ -55,3 +55,35 @@ test("the dependencies of a manifest are the names in dependencies, devDependenc
   assert.equal(manifestDependencies(undefined).size, 0);
   assert.equal(manifestDependencies("{ nope").size, 0);
 });
+
+test("only validated node-prefixed builtins are external without reading sources", async () => {
+  let reads = 0;
+  const resolver = createModuleResolver(async () => { reads++; return undefined; }, new Set());
+  assert.deepEqual(await resolver.resolve("src/app.ts", "node:fs/promises"), { external: true });
+  assert.deepEqual(await resolver.resolve("src/app.ts", "node:fs/promises"), { external: true });
+  assert.equal(reads, 0);
+  assert.ok("unresolved" in await resolver.resolve("src/app.ts", "node:not-a-real-builtin"));
+});
+
+test("explicit JSON resources resolve only when opted in and present", async () => {
+  const files: Record<string, string> = {
+    "tsconfig.json": '{ "compilerOptions": { "baseUrl": ".", "paths": { "@data/*": ["data/*"] } } }',
+    "data/config.json": "not parsed as JSON",
+    "data/index.json": "{}",
+    "data/only.json.ts": "",
+  };
+  const reads = new Map<string, number>();
+  const read = async (file: string) => { reads.set(file, (reads.get(file) ?? 0) + 1); return files[file]; };
+  const resolver = createModuleResolver(read, new Set(), { jsonModules: true });
+  assert.deepEqual(await resolver.resolve("src/app.ts", "../data/config.json"), { file: "data/config.json" });
+  assert.deepEqual(await resolver.resolve("src/app.ts", "../data/config.json"), { file: "data/config.json" });
+  assert.equal(reads.get("data/config.json"), 1);
+  assert.deepEqual(await resolver.resolve("src/app.ts", "@data/config.json"), { file: "data/config.json" });
+  assert.deepEqual(await resolver.resolve("src/app.ts", "data/config.json"), { file: "data/config.json" });
+  for (const specifier of ["../data/missing.json", "@data/missing.json", "@data/only.json", "../data/config", "../data", "../../data/config.json"]) {
+    assert.ok("unresolved" in await resolver.resolve("src/app.ts", specifier), specifier);
+  }
+  const defaultResolver = createModuleResolver(read, new Set());
+  assert.ok("unresolved" in await defaultResolver.resolve("src/app.ts", "../data/config.json"));
+  assert.ok("unresolved" in await defaultResolver.resolve("src/app.ts", "@data/config.json"));
+});

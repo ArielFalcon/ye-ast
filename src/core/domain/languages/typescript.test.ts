@@ -53,3 +53,9 @@ test("an Angular template is an .html or .htm file outside node_modules", () => 
   assert.equal(isAngularTemplate("src/app/page.xhtml"), false);
   assert.equal(isAngularTemplate("node_modules/pkg/page.html"), false);
 });
+
+test("JSON module resources exclude installed packages and resolver configuration", async () => {
+  const { isJsonModuleResource } = await import("./typescript.ts");
+  assert.equal(isJsonModuleResource("src/data.json"), true);
+  for (const path of ["package.json", "src/tsconfig.app.json", "node_modules/pkg/data.json", "src/data.json.bak"]) assert.equal(isJsonModuleResource(path), false, path);
+});

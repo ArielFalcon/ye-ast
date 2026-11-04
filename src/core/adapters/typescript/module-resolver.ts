@@ -1,6 +1,7 @@
 import { posix } from "node:path";
+import { isBuiltin } from "node:module";
 import ts from "typescript";
-import { isTypeScriptSource } from "../../domain/languages/typescript.ts";
+import { isTypeScriptFile } from "../../domain/languages/typescript.ts";
 
 export type SourceReader = (file: string) => Promise<string | undefined>;
 
@@ -81,7 +82,7 @@ export function manifestDependencies(manifest: string | undefined): Set<string> 
  * reader cannot give is absent. A specifier no configuration resolves is external when the manifest names its package,
  * otherwise unresolved with the reason. No program is built and no file the resolution does not ask for is read.
  */
-export function createModuleResolver(read: SourceReader, dependencies: ReadonlySet<string>): ModuleResolver {
+export function createModuleResolver(read: SourceReader, dependencies: ReadonlySet<string>, options?: { jsonModules?: boolean }): ModuleResolver {
   const exists = new Map<string, Promise<boolean>>();
   const present = (file: string): Promise<boolean> => {
     let held = exists.get(file);
@@ -94,8 +95,11 @@ export function createModuleResolver(read: SourceReader, dependencies: ReadonlyS
   const relative = async (from: string, specifier: string): Promise<ModuleResolution> => {
     const base = posix.normalize(posix.join(posix.dirname(from), specifier));
     if (base.startsWith("..")) return { unresolved: `${specifier} leaves the repository` };
+    if (options?.jsonModules && specifier.endsWith(".json")) {
+      return await present(base) ? { file: base } : { unresolved: `${specifier} names no file` };
+    }
     const tried = [base, ...EXTENSIONS.map((ext) => `${base}.${ext}`), ...EXTENSIONS.map((ext) => `${base}/index.${ext}`)];
-    for (const file of tried) if (isTypeScriptSource(file) && (await present(file))) return { file };
+    for (const file of tried) if (isTypeScriptFile(file) && (await present(file))) return { file };
     return { unresolved: `${specifier} names no file` };
   };
 
@@ -150,18 +154,24 @@ export function createModuleResolver(read: SourceReader, dependencies: ReadonlyS
     const external = pkg !== undefined && dependencies.has(pkg);
     const config = await configOf(posix.dirname(from));
     if (config === undefined) return external ? { external: true } : { unresolved: `${specifier} is not relative and no module configuration governs ${from}` };
-    const { options } = config;
-    if (external && options.paths === undefined && options.baseUrl === undefined) return { external: true };
+    const compilerOptions = config.options;
+    if (external && compilerOptions.paths === undefined && compilerOptions.baseUrl === undefined) return { external: true };
+    const explicitJson = options?.jsonModules === true && specifier.endsWith(".json");
     const resolved = await settle((host) =>
-      ts.resolveModuleName(specifier, absolute(from), { ...options, allowJs: true, moduleResolution: options.moduleResolution ?? ts.ModuleResolutionKind.Bundler }, host).resolvedModule,
+      ts.resolveModuleName(specifier, absolute(from), { ...compilerOptions, allowJs: true, resolveJsonModule: options?.jsonModules === true, moduleResolution: compilerOptions.moduleResolution ?? ts.ModuleResolutionKind.Bundler }, explicitJson ? { ...host, fileExists: (file) => file.endsWith(".json") && host.fileExists(file) } : host).resolvedModule,
     );
     if (resolved === undefined) return external ? { external: true } : { unresolved: `${specifier} matches no \`paths\` or \`baseUrl\` entry of ${config.file}` };
     if (resolved.isExternalLibraryImport === true) return { external: true };
     const file = resolved.resolvedFileName.replace(/^\//, "");
-    return isTypeScriptSource(file) ? { file } : { unresolved: `${specifier} resolves to ${file}, which is no TypeScript source` };
+    return (explicitJson ? file.endsWith(".json") : isTypeScriptFile(file)) ? { file } : { unresolved: `${specifier} resolves to ${file}, which is no TypeScript source` };
   };
 
   return {
-    resolve: (from, specifier) => (specifier.startsWith(".") ? relative(from, specifier) : specifier.startsWith("/") ? Promise.resolve({ unresolved: `${specifier} is an absolute path` }) : aliased(from, specifier)),
+    resolve(from, specifier) {
+      if (specifier.startsWith("node:")) return Promise.resolve(isBuiltin(specifier) ? { external: true } : { unresolved: `${specifier} is not a Node builtin` });
+      if (specifier.startsWith(".")) return relative(from, specifier);
+      if (specifier.startsWith("/")) return Promise.resolve({ unresolved: `${specifier} is an absolute path` });
+      return aliased(from, specifier);
+    },
   };
 }

@@ -13,7 +13,11 @@ export function isTypeScriptTestFile(path: string): boolean {
 
 /** A TypeScript module an extractor parses: not a declaration file, a test, or an installed package. */
 export function isTypeScriptSource(path: string): boolean {
-  return SOURCE.test(path) && !DECLARATION.test(path) && !isTypeScriptTestFile(path) && !INSTALLED_PACKAGES.test(path);
+  return isTypeScriptFile(path) && !isTypeScriptTestFile(path);
+}
+
+export function isTypeScriptFile(path: string): boolean {
+  return SOURCE.test(path) && !DECLARATION.test(path) && !INSTALLED_PACKAGES.test(path);
 }
 
 const MANIFEST = /(^|\/)package\.json$/;
@@ -31,4 +35,9 @@ export function isModuleConfigFile(path: string): boolean {
 /** A template file a `templateUrl` can name, which the relation reader parses for the components a template uses. */
 export function isAngularTemplate(path: string): boolean {
   return TEMPLATE.test(path) && !INSTALLED_PACKAGES.test(path);
+}
+
+/** An explicit JSON resource eligible for module resolution, excluding configuration and installed packages. */
+export function isJsonModuleResource(path: string): boolean {
+  return path.endsWith(".json") && !INSTALLED_PACKAGES.test(path) && !isPackageManifest(path) && !isModuleConfigFile(path);
 }
