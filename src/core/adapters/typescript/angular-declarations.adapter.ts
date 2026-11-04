@@ -1,5 +1,6 @@
 import { posix } from "node:path";
 import ts from "typescript";
+import { sourceTree } from "./source-tree.ts";
 import { isTypeScriptSource } from "../../domain/languages/typescript.ts";
 import type { AngularDeclaration, AngularDeclarationReader, AngularDecorator } from "../../ports/angular-declarations.port.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
@@ -18,7 +19,7 @@ function readDeclarations(files: readonly SourceFile[]): AngularDeclaration[] {
 }
 
 function declarationsOf(file: SourceFile): AngularDeclaration[] {
-  const source = ts.createSourceFile(file.path, file.content, ts.ScriptTarget.Latest, false, ts.ScriptKind.TS);
+  const source = sourceTree(file, ts.ScriptTarget.Latest, false, ts.ScriptKind.TS);
   const found: AngularDeclaration[] = [];
   for (const statement of source.statements) {
     if (!ts.isClassDeclaration(statement) || statement.name === undefined) continue;

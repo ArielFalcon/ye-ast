@@ -5,6 +5,9 @@ import { isTypeScriptSource } from "../../domain/languages/typescript.ts";
 import type { Evidence, Finding, UnknownReason } from "../../domain/shared/fact.ts";
 import type { EntrypointExtractor, SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import { angularProjects, pathsByProject } from "./angular-projects.ts";
+import { sourceTree } from "./source-tree.ts";
+import ts from "typescript";
+import { readAngularRouteFile } from "./angular-router.extractor.ts";
 import { loadRouteTables, type RouteEntry, type RouteTable, type UnresolvedReference } from "./route-table.loader.ts";
 
 const ANGULAR_ROUTER = "@angular/router";
@@ -20,15 +23,18 @@ export function createAngularRoutesExtractor(): EntrypointExtractor {
 }
 
 async function extractRoutes(files: readonly SourceFile[]): Promise<readonly Finding<Entrypoint>[]> {
-  const contents = new Map(files.map((file) => [file.path, file.content]));
+  const contents = new Map(files.map((file) => [file.path, file]));
   const { byProject, orphaned } = pathsByProject([...contents.keys()].filter(isTypeScriptSource), files, ANGULAR_ROUTER);
   const found: Finding<Entrypoint>[] = orphaned.map((path) => unknown("no-project", { path, line: 1 }));
   for (const [project, sources] of byProject) found.push(...(await extractProject(sources, project.dependencies, contents)));
   return sortFindings(found);
 }
 
-async function extractProject(sources: readonly string[], dependencies: ReadonlySet<string>, contents: ReadonlyMap<string, string>): Promise<Finding<Entrypoint>[]> {
-  const loaded = await loadRouteTables(sources, async (path) => contents.get(path), dependencies);
+async function extractProject(sources: readonly string[], dependencies: ReadonlySet<string>, contents: ReadonlyMap<string, SourceFile>): Promise<Finding<Entrypoint>[]> {
+  const loaded = await loadRouteTables(sources, async (path) => contents.get(path)?.content, dependencies, (path) => {
+    const file = contents.get(path);
+    return file === undefined ? undefined : readAngularRouteFile(sourceTree(file, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS));
+  });
   const { roots, unparsed, unresolvedReferences } = loaded;
   const walk: Walk = { findings: [], blockers: loaded.declared ? [] : unresolvedReferences };
   for (const root of roots) routesOf(root, enter(root, { segments: [], guards: [], conditional: false, above: new Set() }), walk);

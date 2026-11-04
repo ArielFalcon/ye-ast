@@ -1,4 +1,5 @@
 import ts from "typescript";
+import { sourceTree } from "./source-tree.ts";
 import { isPackageManifest, isTypeScriptSource } from "../../domain/languages/typescript.ts";
 import type { CallSite, HttpTarget, StatedRequest } from "../../domain/topology/call-site.ts";
 import type { CallSiteReader } from "../../domain/topology/call-site.ts";
@@ -54,7 +55,7 @@ export function createHttpCallSites(): CallSiteReader {
 async function read(files: readonly SourceFile[], repo: string): Promise<readonly CallSite[]> {
   /* The module resolver reads the config files of the snapshot too, so the map holds every source it was given. */
   const texts = new Map(files.map((file) => [file.path, file.content]));
-  const shapes = new Map(files.filter((file) => isTypeScriptSource(file.path)).map((file) => [file.path, describe(file.path, file.content)]));
+  const shapes = new Map(files.filter((file) => isTypeScriptSource(file.path)).map((file) => [file.path, describe(file)]));
   const dependencies = new Set(files.filter((file) => isPackageManifest(file.path)).flatMap((file) => [...manifestDependencies(file.content)]));
   const modules = createModuleResolver(async (file) => texts.get(file), dependencies);
   const wrappers = wrapperMethods(shapes);
@@ -70,8 +71,8 @@ function compareText(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
 }
 
-function describe(path: string, text: string): FileShape {
-  const source = ts.createSourceFile(path, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+function describe(file: SourceFile): FileShape {
+  const source = sourceTree(file, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
   const shape: FileShape = { source, consts: new Map(), imports: new Map(), reexports: new Map(), stars: [], classes: new Map() };
   for (const statement of source.statements) {
     if (ts.isImportDeclaration(statement) && ts.isStringLiteral(statement.moduleSpecifier)) {

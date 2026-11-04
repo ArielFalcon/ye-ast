@@ -1,5 +1,6 @@
 import { posix } from "node:path";
 import ts from "typescript";
+import { sourceTree } from "./source-tree.ts";
 import { isTypeScriptSource } from "../../domain/languages/typescript.ts";
 import type { AngularClass, Operand, TemplateSource } from "../../domain/relations/angular-class.ts";
 import type { FieldOrigin, LocalOrigin } from "../../domain/relations/field-origin.ts";
@@ -34,7 +35,7 @@ interface Parsed {
 type Placed = { class: SymbolRef } | { array: { key: string; file: string; operands: readonly RawOperand[] } } | { token: SymbolRef } | { member: true } | { external: true } | { unresolved: true };
 
 async function readMetadata(files: readonly SourceFile[]): Promise<AngularMetadata> {
-  const contents = new Map(files.map((file) => [file.path, file.content]));
+  const contents = new Map(files.map((file) => [file.path, file]));
   const { byProject, orphaned } = pathsByProject([...contents.keys()].filter(isTypeScriptSource).sort(), files, ANGULAR_CORE);
   const classes: AngularClass[] = [];
   const findings: Finding<Relation>[] = orphaned.map((path) => unknown("no-project", { path, line: 1 }));
@@ -55,8 +56,8 @@ async function readMetadata(files: readonly SourceFile[]): Promise<AngularMetada
   };
 }
 
-async function readProject(contents: ReadonlyMap<string, string>, dependencies: ReadonlySet<string>, sources: readonly string[]): Promise<AngularMetadata> {
-  const read = async (path: string): Promise<string | undefined> => contents.get(path);
+async function readProject(contents: ReadonlyMap<string, SourceFile>, dependencies: ReadonlySet<string>, sources: readonly string[]): Promise<AngularMetadata> {
+  const read = async (path: string): Promise<string | undefined> => contents.get(path)?.content;
   const resolver = createModuleResolver(read, dependencies);
   const parsed = new Map<string, Promise<Parsed | undefined>>();
   const parse = (file: string): Promise<Parsed | undefined> => {
@@ -65,7 +66,7 @@ async function readProject(contents: ReadonlyMap<string, string>, dependencies: 
       held = (async () => {
         const source = await read(file);
         if (source === undefined) return undefined;
-        const sf = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+        const sf = sourceTree(contents.get(file)!, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
         const shape = readAngularRouteFile(sf);
         return shape === undefined ? undefined : { shape, angular: readAngularMetadataFile(sf, shape) };
       })();
