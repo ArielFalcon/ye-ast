@@ -775,3 +775,106 @@ test("a callback parameter and an unproved same-line call are evaluated separate
   const both = await impact("--base", "HEAD~2", "--changed", "src/address.ts");
   assert.ok((both.fact.cuts ?? []).some((cut) => cut.at[0] === "src/address.ts::resolve" && cut.at.includes("src/use.ts:1")), both.stdout);
 });
+
+
+test("fixed own-member proofs exclude a changed free-function homonym and follow the actual method", async () => {
+  commit({
+    "package.json": '{"dependencies":{"@angular/core":"21"}}',
+    "src/free.ts": "export function write() { return 1; }\n",
+    "src/store.ts": "export class Store { write() { return 1; } }\n",
+    "src/owner.ts": "import { Injectable, inject } from '@angular/core';\nimport { Store } from './store';\n@Injectable()\nexport class Owner { readonly store = inject(Store); run() { this.store.write(); } }\n",
+  }, "base");
+  commit({ "src/free.ts": "export function write() { return 2; }\n" });
+  const unrelated = await impact("--base", "HEAD~1", "--changed", "src/free.ts");
+  assert.equal(unrelated.fact.status, "complete", JSON.stringify(unrelated.fact.cuts));
+  assert.deepEqual(unrelated.fact.value.symbols.map(({ file, symbol }) => [file, symbol]), [["src/free.ts", "write"]]);
+  const scoped = await impact("--base", "HEAD~1", "--changed", "src/free.ts", "--include", "src/**");
+  assert.equal(scoped.fact.status, "partial");
+  commit({ "src/store.ts": "export class Store { write() { return 2; } }\n" });
+  const actual = await impact("--base", "HEAD~1", "--changed", "src/store.ts");
+  assert.ok(actual.fact.value.symbols.some(({ file, symbol }) => file === "src/owner.ts" && symbol === "run"), JSON.stringify(actual.fact));
+  assert.equal(actual.fact.value.symbols.some(({ file }) => file === "src/free.ts"), false);
+});
+
+
+test("an inherited call keeps uncertainty when a subclass replaces the field target", async () => {
+  commit({
+    "package.json": '{"dependencies":{"@angular/core":"21"}}',
+    "src/store.ts": "export class Store { write() { return 1; } }\n",
+    "src/other.ts": "export class Other { write() { return 1; } }\n",
+    "src/owner.ts": "import { inject } from '@angular/core';\nimport { Store } from './store';\nimport { Other } from './other';\nexport class Owner { store = inject(Store); run() { this.store.write(); } }\nexport class Child extends Owner { override store = inject(Other); }\n",
+  }, "base");
+  commit({ "src/other.ts": "export class Other { write() { return 2; } }\n" });
+  const answer = await impact("--base", "HEAD~1", "--changed", "src/other.ts");
+  assert.equal(answer.fact.status, "partial", JSON.stringify(answer.fact));
+  assert.ok(answer.fact.cuts?.some((cut) => cut.kind === "unresolved-link" && cut.at.some((place) => place.includes("this.store.write"))));
+});
+
+
+test("inline class injection reaches only its actual caller and retains an unresolved neighbor", async () => {
+  commit({
+    "package.json": '{"dependencies":{"@angular/core":"21"}}',
+    "src/svc.ts": "export class Svc { hit() { return 1; } }\n",
+    "src/setup.ts": "import { inject } from '@angular/core';\nimport { Svc } from './svc';\nexport function boot() { return inject(Svc).hit(); }\nexport function peer() { return 0; }\n",
+  }, "base");
+  commit({ "src/svc.ts": "export class Svc { hit() { return 2; } }\n" });
+  const answer = await impact("--base", "HEAD~1", "--changed", "src/svc.ts");
+  assert.ok(answer.fact.value.symbols.some(({ file, symbol }) => file === "src/setup.ts" && symbol === "boot"), JSON.stringify(answer.fact));
+  assert.equal(answer.fact.value.symbols.some(({ symbol }) => symbol === "peer"), false);
+  assert.equal(answer.fact.status, "complete", JSON.stringify(answer.fact.cuts));
+  const scoped = await impact("--base", "HEAD~1", "--changed", "src/svc.ts", "--include", "src/**");
+  assert.equal(scoped.fact.status, "partial", JSON.stringify(scoped.fact));
+  assert.equal(scoped.fact.value.symbols.some(({ symbol }) => symbol === "boot"), false);
+  commit({ "src/svc.ts": "export class Svc { hit() { return 3; } }\n", "src/setup.ts": "import { inject } from '@angular/core';\nimport { Svc } from './svc';\nexport function boot() { inject(Svc).hit(); other().hit(); }\nexport function peer() { return 0; }\n" });
+  const neighbor = await impact("--base", "HEAD~1", "--changed", "src/svc.ts");
+  assert.equal(neighbor.fact.status, "partial");
+  assert.ok(neighbor.fact.value.symbols.some(({ symbol }) => symbol === "boot"));
+  assert.ok(neighbor.fact.cuts?.some((cut) => cut.at.some((place) => place.includes("other().hit"))));
+});
+
+
+test("source-visible field mutation cannot be settled by the previous field origin", async () => {
+  commit({
+    "package.json": '{"dependencies":{"@angular/core":"21"}}',
+    "src/store.ts": "export class Store { write() { return 1; } }\n",
+    "src/other.ts": "export class Other { write() { return 1; } }\n",
+    "src/owner.ts": "import { inject } from '@angular/core';\nimport { Store } from './store';\nimport { Other } from './other';\nexport class Owner { store = inject(Store); run() { this.store.write(); } }\nexport function replace(owner: Owner) { owner.store = new Other(); }\n",
+  }, "base");
+  commit({ "src/other.ts": "export class Other { write() { return 2; } }\n" });
+  const answer = await impact("--base", "HEAD~1", "--changed", "src/other.ts");
+  assert.equal(answer.fact.status, "partial", JSON.stringify(answer.fact));
+  assert.ok(answer.fact.cuts?.some((cut) => cut.kind === "unresolved-link" && cut.at.some((place) => place.includes("this.store.write"))));
+  commit({ "src/store.ts": "export class Store { write() { return 2; } }\n" });
+  const initialTarget = await impact("--base", "HEAD~1", "--changed", "src/store.ts");
+  assert.ok(initialTarget.fact.value.symbols.some(({ symbol }) => symbol === "run"), JSON.stringify(initialTarget.fact));
+  assert.equal(initialTarget.fact.status, "partial", JSON.stringify(initialTarget.fact));
+  assert.ok(initialTarget.fact.cuts?.some((cut) => cut.kind === "unresolved-link" && cut.at.some((place) => place.includes("this.store.write"))));
+});
+
+
+test("a reassigned injection local retains uncertainty instead of certifying its initial method", async () => {
+  commit({
+    "package.json": '{"dependencies":{"@angular/core":"21"}}',
+    "src/store.ts": "export class Store { hit() { return 1; } }\n",
+    "src/other.ts": "export class Other { hit() { return 1; } }\n",
+    "src/setup.ts": "import { inject } from '@angular/core';\nimport { Store } from './store';\nimport { Other } from './other';\nexport function boot() { let svc = inject(Store); svc = inject(Other); svc.hit(); }\n",
+  }, "base");
+  commit({ "src/store.ts": "export class Store { hit() { return 2; } }\n" });
+  const answer = await impact("--base", "HEAD~1", "--changed", "src/store.ts");
+  assert.equal(answer.fact.status, "partial", JSON.stringify(answer.fact));
+  assert.equal(answer.fact.value.symbols.some(({ symbol }) => symbol === "boot"), false);
+});
+
+
+test("a constant injection local reaches its real method caller through exact evidence", async () => {
+  commit({
+    "package.json": '{"dependencies":{"@angular/core":"21"}}',
+    "src/store.ts": "export class Store { hit() { return 1; } }\n",
+    "src/setup.ts": "import { inject } from '@angular/core';\nimport { Store } from './store';\nexport function boot() { const svc = inject(Store); return svc.hit(); }\nexport function peer() { return 0; }\n",
+  }, "base");
+  commit({ "src/store.ts": "export class Store { hit() { return 2; } }\n" });
+  const answer = await impact("--base", "HEAD~1", "--changed", "src/store.ts");
+  assert.equal(answer.fact.status, "complete", JSON.stringify(answer.fact));
+  assert.ok(answer.fact.value.symbols.some(({ symbol }) => symbol === "boot"));
+  assert.equal(answer.fact.value.symbols.some(({ symbol }) => symbol === "peer"), false);
+});

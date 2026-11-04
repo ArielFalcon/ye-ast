@@ -246,3 +246,17 @@ test("missing_column_never_retires", () => {
   const imagined = referenceKey(legacy)!;
   assert.deepEqual(unresolvedLinkCuts([withoutColumn], [SAVE], [], new Set(), new Set([imagined])), [{ kind: "unresolved-link", at: ["src/Repo.java::save", "src/Repo.java:2"] }]);
 });
+
+
+test("a joined member target excludes only a distinct expanded declaration and exact occurrence", () => {
+  const reference = qualified("this.store.save", "calls", [SAVE.qualifiedName]);
+  const key = referenceKey(reference)!;
+  const members = { targets: new Map([[key, "src/Other.java::save"]]), expanded: new Set(["src/Repo.java::save"]) };
+  assert.deepEqual(unresolvedLinkCuts([reference], [SAVE], [], new Set(), new Set(), new Map(), members), []);
+  const baseline = unresolvedLinkCuts([reference], [SAVE], []);
+  assert.deepEqual(unresolvedLinkCuts([reference], [SAVE], [], new Set(), new Set(), new Map(), { ...members, expanded: new Set() }), baseline);
+  assert.deepEqual(unresolvedLinkCuts([reference], [SAVE], [], new Set(), new Set(), new Map(), { ...members, targets: new Map([[key, "src/Repo.java::save"]]) }), baseline);
+  const neighbor = { ...reference, column: 10 };
+  assert.deepEqual(unresolvedLinkCuts([neighbor], [SAVE], [], new Set(), new Set(), new Map(), members), baseline);
+  assert.deepEqual(unresolvedLinkCuts([reference, reference], [SAVE], [], new Set(), new Set(), new Map(), members), baseline);
+});

@@ -1,3 +1,4 @@
+import type { MemberUseOrigin, MemberProofContext } from "../../domain/relations/member-use.ts";
 import type { FieldOrigin, LocalOrigin } from "../../domain/relations/field-origin.ts";
 import type { Relation } from "../../domain/relations/relation.ts";
 import type { Finding } from "../../domain/shared/fact.ts";
@@ -12,7 +13,8 @@ export interface RelationExtractor {
    * The injection and template relations the in-scope sources declare: TypeScript sources and the template files they
    * name. A relation is a `complete` finding; what the sources name but cannot be placed is an `unknown` finding at its
    * location. Sorted by evidence location, then by kind and name, so the same sources give the same output. `fields`
-   * are the class fields whose declaration fixes what they hold, and `locals` the locals a function takes from `inject()`.
+   * describe class-field initializers, and `locals` constant locals initialized by `inject()`.
+   * Presence of `memberUses`, including an empty list, supersedes field-origin settlements and local-origin member bridges.
    */
-  extract(files: readonly SourceFile[]): Promise<{ relations: readonly Finding<Relation>[]; fields: readonly FieldOrigin[]; locals: readonly LocalOrigin[] }>;
+  extract(files: readonly SourceFile[], options?: { memberProofs?: MemberProofContext }): Promise<{ relations: readonly Finding<Relation>[]; fields: readonly FieldOrigin[]; locals: readonly LocalOrigin[]; memberUses?: readonly MemberUseOrigin[] }>;
 }

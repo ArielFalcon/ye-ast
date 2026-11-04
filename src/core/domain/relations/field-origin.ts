@@ -1,7 +1,7 @@
 import type { SymbolRef } from "./relation.ts";
 
 /**
- * A class's own field whose value its declaration fixes for the life of the instance: what it injects or creates. `holds`
+ * A class field's injected or constructed initializer. Exact member settlement also requires scope and stability evidence. `holds`
  * names a class of the repository, or a type from outside it as `<module>#<name>` (`global#<name>` for a name the file
  * neither imports nor declares).
  */
@@ -12,8 +12,7 @@ export interface FieldOrigin {
 }
 
 /**
- * A local a declaration fixes: the class a function or constant takes from `inject()`. Calls made through it name the
- * members of that class, which the index leaves unresolved because it types no local.
+ * A constant local's initial injected class. A member call also requires evidence of lexical binding and stability.
  */
 export interface LocalOrigin {
   owner: SymbolRef;

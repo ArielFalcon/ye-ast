@@ -30,6 +30,12 @@ export interface WalkedDeclaration {
   qualifiedName: string;
 }
 
+/** Exact occurrence keys name their joined target anchors; only distinct admitted anchors can be excluded. */
+export interface MemberReferenceProofs {
+  targets: ReadonlyMap<string, string>;
+  expanded: ReadonlySet<string>;
+}
+
 const REFERENCED_BY: Readonly<Record<string, readonly string[]>> = {
   calls: ["function", "method", "property"],
   instantiates: ["class", "component"],
@@ -121,9 +127,11 @@ export function unresolvedLinkCuts(
   settled: ReadonlySet<string> = new Set(),
   known: ReadonlySet<string> = new Set(),
   bound: ReadonlyMap<string, string> = new Map(),
+  members?: MemberReferenceProofs,
 ): Cut[] {
   const unique = uniqueReferenceKeys(references);
   const byName = Map.groupBy(walked, (declaration) => declaration.name);
+  const pointingCache = new Map<string, readonly WalkedDeclaration[]>();
   const hidden = new Map<string, Set<string>>();
   const unattributed = new Map<string, Set<string>>();
   const loaders = new Map<string, Set<string>>();
@@ -145,14 +153,25 @@ export function unresolvedLinkCuts(
     /** The same place, named by the reference as written: the reader settles a reference it is told, without opening the file. */
     const named = placeAt(reference.file, reference.line, reference.name);
     if (reference.kind === "calls" && DYNAMIC_LOADERS.has(tail) && !namesModule(place)) loaders.set(reference.file, (loaders.get(reference.file) ?? new Set()).add(named));
-    const pointing = (byName.get(tail) ?? []).filter((declaration) => (REFERENCED_BY[reference.kind] ?? []).includes(declaration.kind));
-    const attributing = pointing.filter((declaration) => namesDeclaration(reference, declaration, bound, proofKey));
+    const pointingKey = JSON.stringify([tail, reference.kind]);
+    let pointing = pointingCache.get(pointingKey);
+    if (pointing === undefined) {
+      pointing = (byName.get(tail) ?? []).filter((declaration) => (REFERENCED_BY[reference.kind] ?? []).includes(declaration.kind));
+      pointingCache.set(pointingKey, pointing);
+    }
+    const attributing = !isBareName(reference.name) && (reference.candidates?.length ?? 0) === 0 ? [] : pointing.filter((declaration) => namesDeclaration(reference, declaration, bound, proofKey));
+    const actual = proofKey === undefined ? undefined : members?.targets.get(proofKey);
+    const settledAt = (declaration: WalkedDeclaration): boolean => {
+      if (proofKey === undefined) return false;
+      const anchor = declarationAnchor(declaration.file, declaration.name);
+      return (settled.size > 0 && settled.has(declarationUseKey(anchor, proofKey))) || (actual !== undefined && actual !== anchor && members?.expanded.has(anchor) === true);
+    };
     for (const declaration of attributing) {
       const key = declarationAnchor(declaration.file, declaration.name);
-      if (proofKey !== undefined && settled.has(declarationUseKey(key, proofKey))) continue;
+      if (settledAt(declaration)) continue;
       hidden.set(key, (hidden.get(key) ?? new Set()).add(place));
     }
-    const decided = pointing.some((declaration) => proofKey !== undefined && settled.has(declarationUseKey(declarationAnchor(declaration.file, declaration.name), proofKey)));
+    const decided = pointing.some(settledAt);
     if (attributing.length === 0 && pointing.length > 0 && !decided) unattributed.set(reference.file, (unattributed.get(reference.file) ?? new Set()).add(named));
   }
   return [

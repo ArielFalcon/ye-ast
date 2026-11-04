@@ -1,8 +1,8 @@
 # Explicit Receiver Origins Implementation Plan
 
-> For implementers: apply the project's test-first workflow, one behavior at a time. Every checkbox below is pending. Do not implement the excluded inference cases.
+> For implementers: apply the project's test-first workflow, one behavior at a time. Do not implement the excluded inference cases.
 
-**Status:** Proposed; executable after the reference-identity work unit.
+**Status:** Implemented and integrated with conservative source-evidence limits. The procedural checklist below is the original plan; the implementation record supersedes changed signatures and eligibility semantics.
 
 **Goal:** Consume fixed receiver evidence already available, resolving exact own-instance member uses without attributing them to a homonymous free function.
 
@@ -48,7 +48,7 @@ export interface MemberUseOrigin {
 
 `reference.column` is the existing 1-based UTF-16 source coordinate. The raw graph column stays 0-based UTF-16; convert `raw.column + 1` only when matching to this source proof. `name` is the full admitted reference spelling (`this.store.write`), not the root or tail alone. `owner` is the enclosing class/top-level declaration used for containment; `receiver` is the actual source class, `member` its exact implementation declaration. No AST or graph node id crosses this port.
 
-Define `MemberProofContext { completeSource: boolean }` in the same domain file. Add optional `memberUses?: readonly MemberUseOrigin[]` to AngularMetadata and RelationExtractor's result. Add optional second options argument `{ memberProofs?: MemberProofContext }` to both `AngularMetadataReader.read` and `RelationExtractor.extract`; absent/false context disables only NEW member-use proofs, preserving old fields/locals. Existing injections, fields and locals keep their values. Add final optional `memberUses: readonly MemberUseOrigin[] = []` to `createInboundEdges`; forward it through ImpactQueries WalkInput. C later uses the same channel; no second port or generic value-flow framework.
+Define `MemberProofContext { completeSource: boolean }` in the same domain file. Add optional `memberUses?: readonly MemberUseOrigin[]` to AngularMetadata and RelationExtractor's result. Add optional second options argument `{ memberProofs?: MemberProofContext }` to both `AngularMetadataReader.read` and `RelationExtractor.extract`; absent/false context disables new member-use proofs. With an explicitly supplied context the native reader returns `memberUses: []` when it cannot prove a use, preventing legacy settlement fallback; a reader that omits the channel retains compatibility. Add optional argument 8 `memberUses?: readonly MemberUseOrigin[]` to `createInboundEdges`; forward it through ImpactQueries WalkInput. C later uses the same channel; no second port or generic value-flow framework.
 
 ## Review focus
 
@@ -95,3 +95,13 @@ The graph storage and public Fact shapes need no change. Internal metadata addit
 Constructor-body `this.field = new KnownClass()` and `const local = new KnownClass()` are genuine currently unsupported patterns reproduced in receiver-evidence.json, but they are **not included in this first repair**. They need a separate stability/scope proof and a measured affected population. `this.impl = new Supercluster(...)` and `db.table(...)` examples need external member/return evidence and are not justified by a field annotation alone. Signals are a large separate family; this plan does not solve them accidentally.
 
 **Concrete derived-fact invalidation:** increment `EDGE_POLICY.referenceProofVersion` to 2. Composition already hashes EDGE_POLICY into the impact producer version. Keep repeated identical requests deterministic and compare producer identity to the previous work-unit baseline. Do not add a second cache namespace or alter graph database schemas.
+
+## Integrated implementation record (2026-11-04)
+
+- A supplies the canonical occurrence key and validated-occurrence argument 7 of `createInboundEdges`; the optional member channel is argument 8. An absent channel differs from an empty one. Native reads with an explicitly supplied incomplete context return an empty channel, authorizing no settlement.
+- B and C share `MemberUseOrigin`, source stability checks, target lookup, graph joins and the domain proof index. No second resolver, dependency, transport rule or graph schema was added. Field-origin edges remain potential paths but cannot settle references under the native channel. Legacy local bridges are replaced by the same exact evidence for supported, unambiguous constant locals.
+- Review regressions cover derived-field replacement, observable mutation, reassigned/shadowed/escaped locals, ambiguous occurrences, wrong source spans and same-line unresolved neighbors. Real CLI fixtures verify fixed fields, inline injection and constant locals; incomplete source and unsupported forms retain cuts.
+- Full integrated verification and the pinned-application result are recorded in `docs/explainer/audits/2026-11-04-name-webapp-cuts/symbol-implementation/integrated-result.md`. The audit is local evidence, not a claim that all pending symbols are resolved.
+- Proof version 3 invalidates derived facts. Whole-file shadow guards and project-wide mutation/provider refusals intentionally retain some valid cuts. This implementation does not infer arbitrary factory results, signal/resource receivers, runtime overrides or external type providers.
+
+Observed pinned-application result after integration: branch cuts 271 to 300 against the A+B baseline before final settlement-authority corrections; symbols 1,514 to 1,511, with 41 entrypoints and 761 seeds retained. `merchantExistsGuard`, `menuExistsGuard` and their routes consumer lose the former local-call inference while their unresolved calls remain cuts. The selected lifecycle inline call remains unproved. These capabilities have positive CLI coverage, but no demonstrated cut reduction on this application.

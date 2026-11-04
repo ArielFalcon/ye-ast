@@ -1,4 +1,5 @@
 import ts from "typescript";
+import { declaredName, declaredNames } from "./syntax-names.ts";
 import { isPackageManifest, isTypeScriptSource } from "../../domain/languages/typescript.ts";
 import type { ImportOrigin } from "../../domain/relations/resolved-reference.ts";
 import type { Evidence, Finding } from "../../domain/shared/fact.ts";
@@ -223,33 +224,4 @@ function bind(clause: ts.ImportClause | undefined, specifier: string, into: Map<
   if (named === undefined) return;
   if (ts.isNamespaceImport(named)) into.set(named.name.text, specifier);
   else for (const element of named.elements) into.set(element.name.text, specifier);
-}
-
-/** Every name the file binds in any scope: a variable, a parameter, a function, a class, a type or a destructured key. */
-function declaredNames(tree: ts.SourceFile): ReadonlySet<string> {
-  const names = new Set<string>();
-  const visit = (node: ts.Node): void => {
-    const name = declaredName(node);
-    if (name !== undefined) names.add(name);
-    node.forEachChild(visit);
-  };
-  visit(tree);
-  return names;
-}
-
-function declaredName(node: ts.Node): string | undefined {
-  if (
-    !ts.isVariableDeclaration(node) &&
-    !ts.isParameter(node) &&
-    !ts.isBindingElement(node) &&
-    !ts.isFunctionDeclaration(node) &&
-    !ts.isClassDeclaration(node) &&
-    !ts.isInterfaceDeclaration(node) &&
-    !ts.isTypeAliasDeclaration(node) &&
-    !ts.isEnumDeclaration(node)
-  ) {
-    return undefined;
-  }
-  const name = node.name;
-  return name !== undefined && ts.isIdentifier(name) ? name.text : undefined;
 }

@@ -124,6 +124,25 @@ change to it invalidates facts.
 Edges ye-ast derives (interface bridges, and the Angular injection and template relations of rows A2 and A4) enter through one port of
 inbound edges that codegraph's edges also feed, so a new row never changes the walk.
 
+Exact member evidence uses the same `MemberUseOrigin` value for a direct fixed field, a supported constant local,
+and an inline Angular `inject(Class).method()` call. The TypeScript adapter owns syntax, import/token binding and
+source-visible stability checks. The application uniquely joins owner, receiver, own concrete method and full
+occurrence to the graph. The domain excludes only the corresponding candidate; the actual method must be expanded
+before its occurrence can settle. The per-query index stores one actual target per occurrence and a set of expanded
+anchors, rather than one proof per homonym/site combination.
+
+When the native member channel is present, including an empty array, it alone authorizes member settlements.
+Existing field-origin edges remain potential impact paths, but cannot settle a reference or exclude another target.
+Local-origin bridges require the exact channel instead: supported constants must have an unambiguous binding and
+only admitted direct member reads within their owner and block. Older injected readers that omit the channel retain
+the legacy behavior. These optional metadata values do not change the public fact or graph schema.
+
+New proofs require a fully staged, unfiltered source selection, successful parsing and an unambiguous Angular project.
+Provider substitutions, shadowing, observable receiver/member mutation, escape and unsupported syntax withhold proof.
+The current checks conservatively refuse some valid uses across a whole file or project; they do not simulate runtime
+DI configuration. Missing evidence remains a cut. `EDGE_POLICY.referenceProofVersion` is 3 and participates in the
+existing producer digest; syntax and proof changes invalidate derived facts without rebuilding an unchanged graph.
+
 ### Confidence and fan-in
 
 Each reached symbol carries the widest-path confidence: the strongest weakest edge over all paths, with a heuristic

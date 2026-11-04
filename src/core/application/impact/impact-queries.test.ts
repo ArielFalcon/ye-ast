@@ -41,6 +41,7 @@ interface Options {
   unresolved?: FakeUnresolved[];
   declarations?: AngularDeclaration[];
   relations?: Finding<Relation>[];
+  relationReader?: ImpactQueriesDeps["relations"];
   fields?: FieldOrigin[];
   loads?: { file: string; line: number; specifier?: string }[];
   exportBudget?: { maxEntries: number; maxBytes: number };
@@ -107,7 +108,7 @@ function setup(options: Options = {}) {
     reader: { read: async (root) => options.snapshotSources?.[log.plans.find((plan) => plan.destination === root)?.sha ?? ""] ?? options.sources ?? [] },
     extractor: { extract: async () => [] },
     angular: { read: async () => options.declarations ?? [] },
-    relations: { extract: async () => ({ relations: options.relations ?? [], fields: options.fields ?? [], locals: [] }) },
+    relations: options.relationReader ?? { extract: async () => ({ relations: options.relations ?? [], fields: options.fields ?? [], locals: [] }) },
     dynamicLoads: { extract: async () => options.loads ?? [] },
     graph,
     ...(options.cache && {
@@ -1252,4 +1253,56 @@ test("same-line type settlements remain distinct when only one target expands", 
   assert.equal(unlimited.status, "complete");
   const limited = fact(await setup(opts).ask({ budget: { expansions: 1 } }));
   assert.ok(limited.status === "partial" && limited.cuts.some((cut) => cut.at.includes(`${source}:1 b.hit`)));
+});
+
+
+test("member proof context gates exact contrary-target exclusions without reaching the actual caller", async () => {
+  const free = "src/free.ts", store = "src/store.ts", owner = "src/owner.ts";
+  const sources = [free, store, owner].map((path) => ({ path, content: "" }));
+  const exported = { files: sources.map(({ path }) => ({ path, blob: "1", written: true })), skipped: [] };
+  const proof = { owner: { path: owner, symbol: "Owner", line: 1 }, receiver: { path: store, symbol: "Store", line: 1 }, member: { path: store, symbol: "write", line: 3 }, reference: { file: owner, line: 7, column: 1, symbol: "write", name: "this.store.write", kind: "calls" as const } };
+  const contexts: boolean[] = [];
+  const make = (overrides: Partial<Options> = {}) => setup({
+    sources, exports: { [HEAD]: exported },
+    nodes: [fakeNode("free", "function", free, 1, 3, "write"), fakeNode("Store", "class", store, 1, 10), fakeNode("member", "method", store, 3, 4, "write"), fakeNode("Owner", "class", owner, 1, 20), fakeNode("caller", "method", owner, 5, 9)],
+    edges: [{ from: "Store", to: "member", kind: "contains" }, { from: "Owner", to: "caller", kind: "contains" }],
+    unresolved: [{ from: "caller", file: owner, line: 7, column: 0, name: "this.store.write", kind: "calls" }],
+    importOrigins: origins(() => undefined),
+    relationReader: { extract: async (_sources, options) => {
+      contexts.push(options?.memberProofs?.completeSource === true);
+      return { relations: [], fields: [], locals: [], memberUses: options?.memberProofs?.completeSource ? [proof] : [] };
+    } },
+    ...overrides,
+  });
+  const { callers } = make();
+  const answer = callersFact(await callers({ targets: [{ file: free, symbol: "write" }] }));
+  assert.equal(answer.status, "complete");
+  assert.deepEqual(answer.value.symbols.map(({ file, symbol }) => [file, symbol]), [[free, "write"]]);
+  const scoped = callersFact(await callers({ targets: [{ file: free, symbol: "write" }], scope: { include: ["src/**"] } }));
+  assert.equal(scoped.status, "partial");
+  assert.deepEqual(contexts, [true, false]);
+  const incomplete: Options[] = [
+    { exports: { [HEAD]: { ...exported, skipped: [{ path: "elsewhere", reason: "symlink" }] } } },
+    { exports: { [HEAD]: { ...exported, stopped: { at: "z.ts", limit: 0 } } } },
+    { exports: { [HEAD]: { ...exported, files: exported.files.map((file) => file.path === store ? { ...file, written: false } : file) } } },
+    { sources: sources.filter(({ path }) => path !== store) },
+  ];
+  for (const options of incomplete) {
+    const partial = callersFact(await make(options).callers({ targets: [{ file: free, symbol: "write" }] }));
+    assert.equal(partial.status, "partial");
+    assert.equal(contexts.at(-1), false);
+  }
+});
+
+
+test("cancellation after member metadata stops the query and closes the graph", async () => {
+  const controller = new AbortController();
+  const { callers, log } = setup({
+    signal: controller.signal,
+    nodes: [fakeNode("f", "function", "src/A.java", 1, 3)],
+    relationReader: { extract: async () => { controller.abort(); return { relations: [], fields: [], locals: [], memberUses: [] }; } },
+  });
+  const result = await callers({ targets: [{ file: "src/A.java", symbol: "f" }] });
+  assert.ok(!result.ok && result.fault.kind === "aborted");
+  assert.equal(log.closed, 1);
 });

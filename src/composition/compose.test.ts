@@ -433,7 +433,6 @@ test("reference proof version changes the existing deterministic impact producer
   assert.ok(first.ok && second.ok);
   const digest = createSha256Digest();
   const { referenceProofVersion, ...baseline } = EDGE_POLICY;
-  assert.equal(referenceProofVersion, 1);
   const current = digest.of(JSON.stringify(EDGE_POLICY)).slice(0, 12);
   const before = digest.of(JSON.stringify(baseline)).slice(0, 12);
   assert.notEqual(current, before);

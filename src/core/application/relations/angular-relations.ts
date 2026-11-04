@@ -1,5 +1,6 @@
 import { sortFindings } from "../../domain/entrypoints/finding-order.ts";
 import { classKey, type AngularClass, type Operand } from "../../domain/relations/angular-class.ts";
+import type { MemberUseOrigin, MemberProofContext } from "../../domain/relations/member-use.ts";
 import type { FieldOrigin, LocalOrigin } from "../../domain/relations/field-origin.ts";
 import { relation, type Relation, type SymbolRef } from "../../domain/relations/relation.ts";
 import type { Evidence, Finding, UnknownReason } from "../../domain/shared/fact.ts";
@@ -20,11 +21,11 @@ export interface AngularRelationsDeps {
  * template files a `templateUrl` names are read from the sources given.
  */
 export function createAngularRelationExtractor(deps: AngularRelationsDeps): RelationExtractor {
-  return { extract: (files) => extractRelations(deps, files) };
+  return { extract: (files, options) => extractRelations(deps, files, options) };
 }
 
-async function extractRelations(deps: AngularRelationsDeps, files: readonly SourceFile[]): Promise<{ relations: readonly Finding<Relation>[]; fields: readonly FieldOrigin[]; locals: readonly LocalOrigin[] }> {
-  const { classes, findings, fields, locals } = await deps.metadata.read(files);
+async function extractRelations(deps: AngularRelationsDeps, files: readonly SourceFile[], options?: { memberProofs?: MemberProofContext }): Promise<{ relations: readonly Finding<Relation>[]; fields: readonly FieldOrigin[]; locals: readonly LocalOrigin[]; memberUses?: readonly MemberUseOrigin[] }> {
+  const { classes, findings, fields, locals, memberUses } = await deps.metadata.read(files, options);
   const contents = new Map(files.map((file) => [file.path, file.content]));
   const byKey = new Map(classes.map((candidate) => [classKey(candidate.ref), candidate]));
   const declaredIn = new Map<string, Extract<AngularClass, { kind: "module" }>[]>();
@@ -54,7 +55,7 @@ async function extractRelations(deps: AngularRelationsDeps, files: readonly Sour
     for (const problem of scope.problems) found.push(unknown("unresolved", problem));
     units.push({ component: candidate.ref, ...source, scope: scope.members });
   }
-  return { relations: sortFindings([...found, ...deps.templates.read(units)]), fields, locals };
+  return { relations: sortFindings([...found, ...deps.templates.read(units)]), fields, locals, ...(memberUses === undefined ? {} : { memberUses }) };
 }
 
 function templateOf(component: Extract<AngularClass, { kind: "component" }>, template: NonNullable<Extract<AngularClass, { kind: "component" }>["template"]>, contents: ReadonlyMap<string, string>): { path: string; text: string; firstLine: number } | { unknown: Finding<never> } {

@@ -11,6 +11,7 @@ import { sortedUnique, type ImportersValue } from "../../domain/impact/importers
 import { impactFact, type ImpactBudget, type ImpactedSymbol, type ImpactValue, type Seed } from "../../domain/impact/impact-fact.ts";
 import { reachedEntrypoints } from "../../domain/impact/reached-entrypoints.ts";
 import type { Relation } from "../../domain/relations/relation.ts";
+import type { MemberProofContext, MemberUseOrigin } from "../../domain/relations/member-use.ts";
 import { isExtractorConfiguration } from "../../domain/languages/configuration.ts";
 import { isAngularTemplate, isJsonModuleResource, isTypeScriptFile, isTypeScriptSource } from "../../domain/languages/typescript.ts";
 import { moduleImpact, moduleResources } from "../../domain/impact/module-impact.ts";
@@ -155,13 +156,13 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
         if (index === "unavailable") return { ok: true, value: { ...head.base(content), status: "unknown", reason: "index-unavailable" } };
         const { store, summary } = index;
         try {
-          const { relations: found, fields, locals } = await deps.relations.extract(headTree.sources);
+          const { relations: found, fields, locals, memberUses } = await deps.relations.extract(headTree.sources, { memberProofs: memberProofContext(headTree, declaredScope(request.scope)) });
           if (signal?.aborted) return ABORTED;
           const loads = await deps.dynamicLoads.extract(headTree.sources);
           if (signal?.aborted) return ABORTED;
           const proofs = await proofsOf(deps, store, headTree, request.signal);
           if (signal?.aborted) return ABORTED;
-          const read = impactOf({ store, changes, requested, componentsByResource, found, fields, locals, loads, headTree, summary, budget: request.budget ?? {}, proofs, ...typeResolutionOf(content, headTree.sources) });
+          const read = impactOf({ store, changes, requested, componentsByResource, found, fields, locals, memberUses, loads, headTree, summary, budget: request.budget ?? {}, proofs, ...typeResolutionOf(content, headTree.sources) });
           if (read.missing.length > 0) {
             const names = read.missing.map(({ file, symbol }) => `${file}:${symbol}`).join(", ");
             return { ok: false, fault: { kind: "unknown-symbol", detail: `no symbol at the revision for ${names}`, entries: read.missing } };
@@ -368,18 +369,24 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
     if (index === "unavailable") return unknownFact(head.base(content), "index-unavailable");
     const { store, summary } = index;
     try {
-      const { relations: found, fields, locals } = await deps.relations.extract(headTree.sources);
+      const { relations: found, fields, locals, memberUses } = await deps.relations.extract(headTree.sources, { memberProofs: memberProofContext(headTree, declaredScope(request.scope)) });
       if (signal?.aborted) return ABORTED;
       const loads = await deps.dynamicLoads.extract(headTree.sources);
       if (signal?.aborted) return ABORTED;
       const proofs = await proofsOf(deps, store, headTree, request.signal);
       if (request.signal?.aborted) return ABORTED;
-      const read = impactOf({ store, changes, requested: [], componentsByResource, found, fields, locals, loads, headTree, summary, budget: request.budget ?? {}, proofs, ...typeResolutionOf(content, headTree.sources) });
+      const read = impactOf({ store, changes, requested: [], componentsByResource, found, fields, locals, memberUses, loads, headTree, summary, budget: request.budget ?? {}, proofs, ...typeResolutionOf(content, headTree.sources) });
       return { ok: true, value: impactFact(head.base(content, true), { ...value, ...read.value }, [...unaccounted([...fixed, ...read.cuts]), ...moduleCuts]) };
     } finally {
       store.close();
     }
   }
+}
+
+function memberProofContext(tree: Pick<CommitExtraction, "export" | "sources">, scope: DeclaredScope): MemberProofContext {
+  if (scope.include.length > 0 || scope.exclude.length > 0 || tree.export.stopped !== undefined || tree.export.skipped.length > 0) return { completeSource: false };
+  const sources = new Set(tree.sources.map(({ path }) => path));
+  return { completeSource: tree.export.files.every(({ path, written }) => !isTypeScriptSource(path) || (written && sources.has(path))) };
 }
 
 function moduleCoverage(read: ModuleDependencies, tree: CommitExtraction, changes: readonly FileChange[]): ModuleDependencies {
@@ -509,6 +516,7 @@ interface WalkInput {
   fields: readonly FieldOrigin[];
   /** The locals a function or constant takes from `inject()`, and what they hold. */
   locals: readonly LocalOrigin[];
+  memberUses: readonly MemberUseOrigin[] | undefined;
   /** Every dynamic load the reader found in the head's sources. */
   loads: readonly DynamicLoad[];
   headTree: CommitExtraction;
@@ -528,7 +536,7 @@ interface ImpactRead {
 }
 
 function impactOf(input: WalkInput): ImpactRead {
-  const { store, changes, requested, componentsByResource, found, fields, locals, loads, headTree, summary, typeResolution } = input;
+  const { store, changes, requested, componentsByResource, found, fields, locals, memberUses, loads, headTree, summary, typeResolution } = input;
   const isTest = (path: string): boolean => kindOfChangedFile(path) === "test";
   const sourceChanges = changes.filter((file) => kindOfChangedFile(file.path) === "source" && !file.deleted).map((file) => file.path);
   const componentFiles = changes.flatMap((file) => (componentsByResource.get(file.path) ?? []).map((component) => component.file));
@@ -545,7 +553,7 @@ function impactOf(input: WalkInput): ImpactRead {
   const sourceFiles = sourceFilesOf(headTree);
   const unresolved = store.unresolvedReferences(sourceFiles);
   const settled = settledReferences(unresolved, typeResolution, input.proofs?.validOccurrences ?? new Set());
-  const inbound = createInboundEdges(store, isTest, found.flatMap((finding) => (finding.status === "complete" ? [finding.value] : [])), fields, settled, locals, input.proofs?.validOccurrences ?? new Set());
+  const inbound = createInboundEdges(store, isTest, found.flatMap((finding) => (finding.status === "complete" ? [finding.value] : [])), fields, settled, locals, input.proofs?.validOccurrences ?? new Set(), memberUses);
   const walk = walkImpact(seeds.map(({ symbol }) => symbol), inbound, input.budget);
 
   const walked = walk.reached.map(({ symbol }) => symbol);
@@ -565,7 +573,7 @@ function impactOf(input: WalkInput): ImpactRead {
 
   const cuts: Cut[] = [
     ...walk.cuts,
-    ...unresolvedLinkCuts(unresolved, walked, loads, inbound.settledUses(walk.expanded, reachedIds), knownPlaces, input.proofs?.bound),
+    ...unresolvedLinkCuts(unresolved, walked, loads, inbound.settledUses(walk.expanded, reachedIds), knownPlaces, input.proofs?.bound, inbound.memberProofs(walk.expanded)),
     ...removedDeclarationCuts(unresolved, selection.removed, knownPlaces, input.proofs?.bound, input.proofs?.localParameters),
     ...unreadRelationCuts(unread, new Set(walked.map((symbol) => symbol.file)), templateOwners(componentsByResource)),
     ...summary.filesNotIndexed.map((file): Cut => ({ kind: "no-extractor", at: [file] })),

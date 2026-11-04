@@ -1,3 +1,4 @@
+import type { MemberUseOrigin, MemberProofContext } from "../domain/relations/member-use.ts";
 import type { AngularClass } from "../domain/relations/angular-class.ts";
 import type { FieldOrigin, LocalOrigin } from "../domain/relations/field-origin.ts";
 import type { Relation } from "../domain/relations/relation.ts";
@@ -13,9 +14,11 @@ export interface AngularMetadata {
   fields: readonly FieldOrigin[];
   /** The locals a function or constant takes from `inject()`, sorted by owner and local; none whose token a provider replaces. */
   locals: readonly LocalOrigin[];
+  /** When present, this is the sole member-settlement evidence; an empty list authorizes no settlement. */
+  memberUses?: readonly MemberUseOrigin[];
 }
 
 export interface AngularMetadataReader {
   /** Reads the Angular classes and the injection relations of the in-scope TypeScript sources. */
-  read(files: readonly SourceFile[]): Promise<AngularMetadata>;
+  read(files: readonly SourceFile[], options?: { memberProofs?: MemberProofContext }): Promise<AngularMetadata>;
 }

@@ -168,3 +168,20 @@ test("the findings are the metadata reader's and the template reader's together,
   assert.deepEqual(forward.findings, backward.findings);
   assert.deepEqual(summary(forward.findings), ["injects Host>Svc@2", "uses-directive Host>Tooltip@9", "uses-directive Outer>Tooltip@9"]);
 });
+
+
+test("member proof eligibility and exact uses pass through relation extraction", async () => {
+  const proof = { owner: ref("Owner"), receiver: ref("Store"), member: ref("write"), reference: { file: "src/owner.ts", line: 9, column: 4, name: "this.store.write", kind: "calls" as const } };
+  const options = { memberProofs: { completeSource: true } };
+  let received: unknown;
+  const extractor = createAngularRelationExtractor({
+    metadata: { read: async (_files, context) => {
+      received = context;
+      return { classes: [], findings: [], fields: [], locals: [], memberUses: [proof] };
+    } },
+    templates: { read: () => [] },
+  });
+  const result = await extractor.extract([], options);
+  assert.deepEqual(received, options);
+  assert.deepEqual(result.memberUses, [proof]);
+});
