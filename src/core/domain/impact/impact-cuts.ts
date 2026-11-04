@@ -9,6 +9,8 @@ export interface UnresolvedUse {
   kind: string;
   file: string;
   line: number;
+  column?: number;
+  from?: string;
   /** The declarations the index considered for this reference, by qualified name; absent when it considered none. */
   candidates?: readonly string[];
 }
@@ -49,9 +51,24 @@ export function placeAt(file: string, line: number, reason?: string): string {
   return reason === undefined ? `${file}:${line}` : `${file}:${line} ${reason}`;
 }
 
-/** The key of an unresolved reference at `place` whose relation to the declaration `anchor` names the walk settled. */
-export function settledUseKey(anchor: string, place: string): string {
-  return `${anchor}\0${place}`;
+/** Exact raw graph occurrence; missing or invalid coordinates cannot support a proof. */
+export function referenceKey(reference: Pick<UnresolvedUse, "file" | "line" | "column" | "from" | "name" | "kind">): string | undefined {
+  if (!Number.isInteger(reference.line) || reference.line < 1 || !Number.isInteger(reference.column) || reference.column! < 0 || !reference.from) return undefined;
+  return JSON.stringify([reference.file, reference.line, reference.column, reference.from, reference.name, reference.kind]);
+}
+
+export function declarationUseKey(anchor: string, occurrence: string): string {
+  return JSON.stringify([anchor, occurrence]);
+}
+
+/** Duplicate full graph tuples cannot identify either occurrence uniquely. */
+export function uniqueReferenceKeys(references: readonly UnresolvedUse[]): ReadonlySet<string> {
+  const counts = new Map<string, number>();
+  for (const reference of references) {
+    const key = referenceKey(reference);
+    if (key !== undefined) counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  return new Set([...counts].filter(([, count]) => count === 1).map(([key]) => key));
 }
 
 /** The identifier a qualified name is rooted at: `a.b()` is rooted at `a`, and `this.svc.get` at `this`. */
@@ -59,22 +76,9 @@ export function rootedName(name: string): string {
   return name.split(/[.:#]/)[0] ?? name;
 }
 
-/**
- * The key of a reference whose root a proof places outside the repository — an import binding, or a name the language's
- * own libraries declare: the place and the root, never the place alone. A line holds several references, so retiring the
- * line would hide the ones the proof never covered.
- */
-export function externalPlaceKey(file: string, line: number, root: string): string {
-  return `${file}\0${line}\0external\0${root}`;
-}
-
-/** The key of a reference a type layer settled onto a declaration the walk reached: the place and the name it settled. */
-export function settledPlaceKey(file: string, line: number, name: string): string {
-  return `${file}\0${line}\0settled\0${name}`;
-}
-
-function isKnownReference(reference: UnresolvedUse, known: ReadonlySet<string>): boolean {
-  return known.has(externalPlaceKey(reference.file, reference.line, rootedName(reference.name))) || known.has(settledPlaceKey(reference.file, reference.line, reference.name));
+function isKnownReference(reference: UnresolvedUse, known: ReadonlySet<string>, unique: ReadonlySet<string>): boolean {
+  const key = referenceKey(reference);
+  return key !== undefined && unique.has(key) && known.has(key);
 }
 
 function unresolvedLinkAt(anchor: string, places: Iterable<string>): Cut {
@@ -95,16 +99,11 @@ export function isBareName(name: string): boolean {
  * the one its import binds — never a homonym in another file it never imported (`RFC-0016` S12). A qualified one names
  * only a declaration the index considered for it, so a receiver that never resolved is never read as a homonym.
  */
-function namesDeclaration(reference: UnresolvedUse, declaration: WalkedDeclaration, bound: ReadonlyMap<string, string>): boolean {
+function namesDeclaration(reference: UnresolvedUse, declaration: WalkedDeclaration, bound: ReadonlyMap<string, string>, proofKey: string | undefined): boolean {
   if (!isBareName(reference.name)) return (reference.candidates ?? []).includes(declaration.qualifiedName);
   if (reference.name !== declaration.name) return false;
   if (reference.file === declaration.file) return true;
-  return bound.get(bareBindingKey(reference.file, reference.line, reference.name)) === declaration.file;
-}
-
-/** The key of a bare reference a binding proves: the place it sits and the name it uses. */
-export function bareBindingKey(file: string, line: number, name: string): string {
-  return `${file}\0${line}\0${name}`;
+  return proofKey !== undefined && bound.get(proofKey) === declaration.file;
 }
 
 /**
@@ -123,6 +122,7 @@ export function unresolvedLinkCuts(
   known: ReadonlySet<string> = new Set(),
   bound: ReadonlyMap<string, string> = new Map(),
 ): Cut[] {
+  const unique = uniqueReferenceKeys(references);
   const byName = Map.groupBy(walked, (declaration) => declaration.name);
   const hidden = new Map<string, Set<string>>();
   const unattributed = new Map<string, Set<string>>();
@@ -133,25 +133,26 @@ export function unresolvedLinkCuts(
     return here !== undefined && here.every((load) => load.specifier !== undefined);
   };
   for (const reference of references) {
+    const occurrence = referenceKey(reference);
+    const proofKey = occurrence !== undefined && unique.has(occurrence) ? occurrence : undefined;
     const tail = nameTail(reference.name);
     const place = placeAt(reference.file, reference.line);
     /**
      * A reference whose own root the file imports from outside, or whose own name a type layer settled onto a walked
-     * declaration, is no cut. The proof is keyed by the place *and the name*: a line holds several references, and
-     * retiring the line would hide a true cut that shares it.
+     * declaration, is no cut. The proof is keyed by the complete graph occurrence, before line-based output aggregation.
      */
-    if (isKnownReference(reference, known)) continue;
+    if (isKnownReference(reference, known, unique)) continue;
     /** The same place, named by the reference as written: the reader settles a reference it is told, without opening the file. */
     const named = placeAt(reference.file, reference.line, reference.name);
     if (reference.kind === "calls" && DYNAMIC_LOADERS.has(tail) && !namesModule(place)) loaders.set(reference.file, (loaders.get(reference.file) ?? new Set()).add(named));
     const pointing = (byName.get(tail) ?? []).filter((declaration) => (REFERENCED_BY[reference.kind] ?? []).includes(declaration.kind));
-    const attributing = pointing.filter((declaration) => namesDeclaration(reference, declaration, bound));
+    const attributing = pointing.filter((declaration) => namesDeclaration(reference, declaration, bound, proofKey));
     for (const declaration of attributing) {
       const key = declarationAnchor(declaration.file, declaration.name);
-      if (settled.has(settledUseKey(key, place))) continue;
+      if (proofKey !== undefined && settled.has(declarationUseKey(key, proofKey))) continue;
       hidden.set(key, (hidden.get(key) ?? new Set()).add(place));
     }
-    const decided = pointing.some((declaration) => settled.has(settledUseKey(declarationAnchor(declaration.file, declaration.name), place)));
+    const decided = pointing.some((declaration) => proofKey !== undefined && settled.has(declarationUseKey(declarationAnchor(declaration.file, declaration.name), proofKey)));
     if (attributing.length === 0 && pointing.length > 0 && !decided) unattributed.set(reference.file, (unattributed.get(reference.file) ?? new Set()).add(named));
   }
   return [
@@ -170,14 +171,19 @@ export function removedDeclarationCuts(
   removed: readonly RemovedDeclaration[],
   known: ReadonlySet<string> = new Set(),
   bound: ReadonlyMap<string, string> = new Map(),
+  localParameters: ReadonlySet<string> = new Set(),
 ): Cut[] {
+  const unique = uniqueReferenceKeys(references);
   const byName = Map.groupBy(removed, (declaration) => declaration.name);
   const places = new Map<string, Set<string>>();
   for (const reference of references) {
-    if (isKnownReference(reference, known)) continue;
-    const imported = isBareName(reference.name) ? bound.get(bareBindingKey(reference.file, reference.line, reference.name)) : undefined;
+    if (isKnownReference(reference, known, unique)) continue;
+    const key = referenceKey(reference);
+    const proofKey = key !== undefined && unique.has(key) ? key : undefined;
+    const imported = isBareName(reference.name) && proofKey !== undefined ? bound.get(proofKey) : undefined;
     for (const declaration of byName.get(nameTail(reference.name)) ?? []) {
       if (imported !== undefined && imported !== declaration.file) continue;
+      if (proofKey !== undefined && localParameters.has(proofKey) && reference.kind === "calls" && isBareName(reference.name) && reference.file !== declaration.file) continue;
       const key = declarationAnchor(declaration.file, declaration.name);
       places.set(key, (places.get(key) ?? new Set()).add(placeAt(reference.file, reference.line)));
     }

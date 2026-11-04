@@ -28,4 +28,4 @@ export type ResolvedTarget =
  * the language's own libraries declare. `external` and `ambient` both mean no repository declaration can be named, so
  * both retire the cut a name tail attributed (`RFC-0016` S10).
  */
-export type ImportOrigin = { kind: "repository"; file: string } | { kind: "external"; module: string } | { kind: "ambient"; name: string };
+export type ImportOrigin = { kind: "repository"; file: string } | { kind: "external"; module: string } | { kind: "ambient"; name: string } | { kind: "local-parameter"; name: string };

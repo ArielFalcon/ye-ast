@@ -62,8 +62,10 @@ export function createImportOrigins(sources: readonly SourceFile[]): ImportOrigi
     return names;
   };
 
-  const originOf = async (site: ImportOriginSite): Promise<Finding<ImportOrigin>> => {
+  const originOf = async (site: ImportOriginSite, syntax: "valid" | "local" | "unknown"): Promise<Finding<ImportOrigin>> => {
     const evidence: Evidence[] = [{ path: site.file, line: site.line }];
+    if (syntax === "unknown") return { status: "unknown", reason: "unresolved", evidence };
+    if (syntax === "local") return { status: "complete", value: { kind: "local-parameter", name: site.name }, evidence };
     const { bindings, declared: names } = shapeOf(site.file);
     /** A declaration of the file may shadow an import or a global at the place the reference sits, so it wins. */
     if (names.has(site.name)) return { status: "unknown", reason: "unresolved", evidence };
@@ -80,13 +82,132 @@ export function createImportOrigins(sources: readonly SourceFile[]): ImportOrigi
     return { status: "unknown", reason: "unresolved", evidence };
   };
 
-  return { origins: (sites) => Promise.all(sites.map(originOf)) };
+  return { origins: async (sites, signal) => {
+    const results: (Finding<ImportOrigin> & { occurrence?: true })[] = sites.map((site) => ({ status: "unknown", reason: "unresolved", evidence: [{ path: site.file, line: site.line }] }));
+    const grouped = Map.groupBy(sites.map((site, index) => ({ site, index })), ({ site }) => site.file);
+    for (const [file, group] of grouped) {
+      if (signal?.aborted) break;
+      const text = texts.get(file);
+      const checked = text === undefined || !isTypeScriptSource(file) ? undefined : checkSites(file, text, group);
+      if (checked !== undefined) shapes.set(file, checked.shape);
+      const checks = checked?.matches ?? new Map<number, "valid" | "local">();
+      for (const { site, index } of group) {
+        const syntax = checks.get(index) ?? "unknown";
+        const finding = await originOf(site, syntax);
+        results[index] = syntax === "unknown" ? finding : { ...finding, occurrence: true };
+      }
+    }
+    return results;
+  } };
+}
+
+/** Check each graph spelling at its exact 1-based UTF-16 position in one temporary tree. */
+function checkSites(file: string, text: string, group: readonly { site: ImportOriginSite; index: number }[]): { matches: Map<number, "valid" | "local">; shape: FileShape } {
+  const result = new Map<number, "valid" | "local">();
+  let tree: ts.SourceFile | undefined;
+  const diagnostics = ts.transpileModule(text, { fileName: file, reportDiagnostics: true, compilerOptions: { noResolve: true, target: ts.ScriptTarget.Latest, module: ts.ModuleKind.Preserve }, transformers: { before: [() => (source) => { tree = source; return source; }] } }).diagnostics ?? [];
+  if (tree === undefined || diagnostics.some((diagnostic) => diagnostic.category === ts.DiagnosticCategory.Error)) return { matches: result, shape: { bindings: new Map(), declared: new Set() } };
+  const source = tree;
+  const shape = describeTree(source);
+  const starts = source.getLineStarts();
+  const wanted = new Map<number, { site: ImportOriginSite; index: number }[]>();
+  for (const item of group) {
+    const { site } = item;
+    if (!Number.isInteger(site.line) || site.line < 1 || !Number.isInteger(site.column) || site.column! < 1 || site.line > starts.length || !site.fullName || !site.kind) continue;
+    const start = starts[site.line - 1]!;
+    const point = start + site.column! - 1;
+    const end = site.line < starts.length ? starts[site.line]! : text.length;
+    if (point >= end || point >= text.length) continue;
+    const list = wanted.get(point) ?? [];
+    list.push(item); wanted.set(point, list);
+  }
+  const matches = new Map<number, ts.Node[]>();
+  const visit = (node: ts.Node): void => {
+    const candidates = wanted.get(node.getStart(source));
+    if (candidates !== undefined) for (const { site, index } of candidates) {
+      const expr = site.kind === "calls" && ts.isCallExpression(node) ? node.expression : site.kind === "instantiates" && ts.isNewExpression(node) ? node.expression : undefined;
+      if (expr !== undefined && syntaxName(expr, source) === site.fullName) {
+        const found = matches.get(index) ?? []; found.push(expr); matches.set(index, found);
+      } else if (matchesReferenceKind(node, site.kind) && syntaxName(node, source) === site.fullName) {
+        const found = matches.get(index) ?? []; found.push(node); matches.set(index, found);
+      }
+    }
+    node.forEachChild(visit);
+  };
+  visit(source);
+  const scopes = new WeakMap<ts.Node, { unsafe: boolean; names: ReadonlySet<string> }>();
+  for (const { site, index } of group) {
+    const found = matches.get(index);
+    if (found?.length !== 1) continue;
+    const node = found[0]!;
+    result.set(index, site.kind === "calls" && ts.isIdentifier(node) && node.text === site.name && localParameter(node, site.name, scopes) ? "local" : "valid");
+  }
+  return { matches: result, shape };
+}
+
+/** Check the syntax role as well as spelling and position; a declaration is not a use. */
+function matchesReferenceKind(node: ts.Node, kind: string | undefined): boolean {
+  if (!ts.isIdentifier(node) && !ts.isPropertyAccessExpression(node)) return false;
+  const parent = node.parent;
+  if (ts.isImportSpecifier(parent) || ts.isImportClause(parent) || ts.isNamespaceImport(parent) || ts.isExportSpecifier(parent)) return false;
+  if ("name" in parent && parent.name === node && !ts.isPropertyAccessExpression(parent) && !ts.isShorthandPropertyAssignment(parent)) return false;
+  if (kind === "references") return true;
+  if (kind === "function_ref") return !ts.isPartOfTypeNode(node);
+  if (kind === "extends" || kind === "implements") {
+    return ts.isExpressionWithTypeArguments(parent) && parent.expression === node && ts.isHeritageClause(parent.parent) && parent.parent.token === (kind === "extends" ? ts.SyntaxKind.ExtendsKeyword : ts.SyntaxKind.ImplementsKeyword);
+  }
+  if (kind === "decorates") return ts.isDecorator(parent) || (ts.isCallExpression(parent) && parent.expression === node && ts.isDecorator(parent.parent));
+  return false;
+}
+
+/** Match the graph's spelling, which omits the arguments of a nested call. */
+function syntaxName(node: ts.Node, tree: ts.SourceFile): string {
+  if (ts.isPropertyAccessExpression(node)) return `${syntaxName(node.expression, tree)}.${node.name.text}`;
+  if (ts.isCallExpression(node)) return `${syntaxName(node.expression, tree)}()`;
+  return node.getText(tree);
+}
+
+/** Prove only the nearest supported function-expression parameter; all uncertain scopes are refused. */
+function localParameter(callee: ts.Identifier, name: string, scopes: WeakMap<ts.Node, { unsafe: boolean; names: ReadonlySet<string> }>): boolean {
+  let node: ts.Node | undefined = callee.parent;
+  let owner: ts.ArrowFunction | ts.FunctionExpression | undefined;
+  while (node !== undefined) {
+    if (ts.isWithStatement(node)) return false;
+    if (ts.isFunctionLike(node)) {
+      if (!ts.isArrowFunction(node) && !ts.isFunctionExpression(node)) return false;
+      owner = node; break;
+    }
+    node = node.parent;
+  }
+  if (owner === undefined || owner.body === undefined || callee.pos < owner.body.pos) return false;
+  if (owner.parameters.some((parameter) => !ts.isIdentifier(parameter.name) || parameter.dotDotDotToken !== undefined || parameter.initializer !== undefined)) return false;
+  if (owner.parameters.filter((parameter) => ts.isIdentifier(parameter.name) && parameter.name.text === name).length !== 1) return false;
+  let summary = scopes.get(owner);
+  if (summary === undefined) {
+    let unsafe = false;
+    const names = new Set<string>();
+    const visit = (current: ts.Node): void => {
+      if (ts.isWithStatement(current) || (ts.isCallExpression(current) && ts.isIdentifier(current.expression) && current.expression.text === "eval")) unsafe = true;
+      const declared = declaredName(current);
+      if (declared !== undefined) names.add(declared);
+      if (ts.isFunctionLike(current) || ts.isClassLike(current) || ts.isModuleDeclaration(current)) return;
+      current.forEachChild(visit);
+    };
+    visit(owner.body);
+    summary = { unsafe, names };
+    scopes.set(owner, summary);
+  }
+  return !summary.unsafe && !summary.names.has(name);
 }
 
 /** What one file imports and what it binds, read from one tree that is dropped when this returns. */
 function describe(file: string, text: string): FileShape {
   /** No parent pointers: the two walks below descend, and a parent on every node doubles what a tree costs. */
   const tree = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, false, ts.ScriptKind.TS);
+  return describeTree(tree);
+}
+
+function describeTree(tree: ts.SourceFile): FileShape {
   const bindings = new Map<string, string>();
   for (const statement of tree.statements) {
     if (ts.isImportDeclaration(statement) && ts.isStringLiteral(statement.moduleSpecifier)) bind(statement.importClause, statement.moduleSpecifier.text, bindings);

@@ -11,7 +11,7 @@
 reached. When the file imports that name from a package outside the repository — or nothing binds it and the language's own
 libraries declare it — the reference cannot name that declaration and the cut is false. ye-ast reads the file's own
 imports and the pinned compiler's own lib names, syntax and the module configuration the snapshot already holds, and stops
-emitting it. No type root, no dependency, no `Program`.
+emitting it. No type root, no dependency and no project-wide type-checking `Program`.
 
 ## Context
 
@@ -48,8 +48,10 @@ population did not.
    two proofs of that, and both are syntax: the file imports the root from outside the repository, or nothing binds it and
    the language's own libraries declare it while the snapshot declares no global of that name. `unresolvedLinkCuts` takes
    the set of proofs already made, and a reference in it is never attributed to a declaration. The unit is **the
-   reference, never the line**: a proof is keyed by its place *and* the name it proves (`externalPlaceKey`,
-   `settledPlaceKey`), because a line holds several references and retiring the line would hide a true cut that shares it.
+   reference, never the line**: a proof is keyed by file, raw graph line and column, source ID, full name and kind.
+   Coordinates must be valid and the full occurrence and syntax match must be unique. Missing, stale or ambiguous
+   positions prove nothing. Raw graph columns are zero-based UTF-16; source ports receive one-based columns.
+   `Cut.at` remains line-based, after all occurrences have been evaluated.
    A hidden dependence is worse than a false cut, and that is the same reason decision 3 pays 6% for a simpler shadowing
    rule. Measured on the same application's index: of the 10.896 places whose reference tail matches a declaration
    somewhere, **468 (4,3%) carry more than one root name on the line**, so keying by the place would have retired 468 cuts
@@ -70,8 +72,12 @@ population did not.
 5. **It claims no completeness of its own.** The cut kind, the status rule and the unknown reasons are unchanged. A fact
    becomes `complete` only when the retired cut was its only one; on the measured application the list shrank and every
    answer stayed `partial`, which is what the numbers above show.
-6. **The port is declared by the consumer and wired by composition.** `core/ports/import-origins.port.ts`; the adapter
-   parses one file at a time and drops the tree. No use case imports a parser and no adapter reads another adapter.
+6. **A callback parameter is a different lexical declaration**, only for an exact bare call to a supported simple
+   parameter. It excludes attribution to a removed homonym in another file; it neither identifies the callback value
+   nor creates an edge. Unsupported scope syntax or a parse error leaves the candidate in place.
+7. **The port is declared by the consumer and wired by composition.** `core/ports/import-origins.port.ts`; the adapter
+   checks one file at a time and drops the tree. Its public isolated transpilation API creates a single-file compiler
+   program internally for syntax diagnostics; it does not load or type-check the project. No use case imports a parser and no adapter reads another adapter.
 
 ## Consequences
 
@@ -80,8 +86,8 @@ population did not.
 - The ambient proof adds another **7% to 16% of the cuts** on the same three diffs (`HEAD~5` 76→64, `HEAD~20` 190→176,
   `HEAD~60` 359→334), also with no symbol gained. Its table is generated from the installed `typescript` and a test fails
   while it drifts, so moving the pin (`ADR-0007`) requires regenerating it, not remembering to.
-- A fact's bytes change without a new input field. The release that carries this is the invalidation boundary, exactly as
-  any producer change is; no schema step is needed and none is taken.
+- A fact's bytes change without a new input field. `EDGE_POLICY.referenceProofVersion` participates in the existing
+  producer digest and invalidates derived facts; no graph or fact schema step is needed.
 - A repository whose configuration ye-ast cannot read retires nothing: the import resolves nowhere, the place stays a cut.
   That is the silent degradation the project asks for, and it never guesses external. The same holds for a snapshot that
   declares a global of its own: the ambient proof steps back and the place keeps its cut.

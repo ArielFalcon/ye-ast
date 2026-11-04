@@ -1,15 +1,15 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { bareBindingKey, externalPlaceKey, nameTail, removedDeclarationCuts, settledPlaceKey, unreadRelationCuts, unresolvedLinkCuts, type UnresolvedUse, type WalkedDeclaration } from "./impact-cuts.ts";
+import { referenceKey, nameTail, removedDeclarationCuts, unreadRelationCuts, unresolvedLinkCuts, type UnresolvedUse, type WalkedDeclaration } from "./impact-cuts.ts";
 
 const SAVE: WalkedDeclaration = { file: "src/Repo.java", name: "save", kind: "method", qualifiedName: "Repo::save" };
 
 function use(name: string, kind: string, file = "src/Use.java", line = 3): UnresolvedUse {
-  return { name, kind, file, line };
+  return { name, kind, file, line, from: "caller", column: 0 };
 }
 
 function qualified(name: string, kind: string, candidates: readonly string[], file = "src/Use.java", line = 3): UnresolvedUse {
-  return { name, kind, file, line, candidates };
+  return { name, kind, file, line, from: "caller", column: 0, candidates };
 }
 
 test("the tail of a name is what follows its last separator", () => {
@@ -28,7 +28,7 @@ test("a bare call in another file is never attributed to a homonym it did not im
 });
 
 test("a bare call a binding proves is a cut at the declaration that binding names", () => {
-  const bound = new Map([[bareBindingKey("src/Use.java", 5, "save"), "src/Repo.java"]]);
+  const bound = new Map([[referenceKey(use("save", "calls", "src/Use.java", 5))!, "src/Repo.java"]]);
   const cuts = unresolvedLinkCuts([use("save", "calls", "src/Use.java", 5)], [SAVE], [], new Set(), new Set(), bound);
 
   assert.deepEqual(cuts, [{ kind: "unresolved-link", at: ["src/Repo.java::save", "src/Use.java:5"] }]);
@@ -38,20 +38,20 @@ test("a place a type layer settled is no cut at all, whatever name tail the inde
   const reference = use("save", "calls", "src/Repo.java", 9);
 
   assert.deepEqual(unresolvedLinkCuts([reference], [SAVE], []), [{ kind: "unresolved-link", at: ["src/Repo.java::save", "src/Repo.java:9"] }]);
-  assert.deepEqual(unresolvedLinkCuts([reference], [SAVE], [], new Set(), new Set([settledPlaceKey("src/Repo.java", 9, "save")])), []);
+  assert.deepEqual(unresolvedLinkCuts([reference], [SAVE], [], new Set(), new Set([referenceKey(reference)!])), []);
 });
 
 test("an external proof retires the reference whose own root it proves", () => {
   const proven = use("inject.save", "calls", "src/Use.java", 3);
 
-  assert.deepEqual(unresolvedLinkCuts([proven], [SAVE], [], new Set(), new Set([externalPlaceKey("src/Use.java", 3, "inject")])), []);
+  assert.deepEqual(unresolvedLinkCuts([proven], [SAVE], [], new Set(), new Set([referenceKey(proven)!])), []);
 });
 
 test("an external proof never retires another reference that shares its line", () => {
   const proven = use("inject.save", "calls", "src/Use.java", 3);
   const other = use("repo.save", "calls", "src/Use.java", 3);
 
-  assert.deepEqual(unresolvedLinkCuts([proven, other], [SAVE], [], new Set(), new Set([externalPlaceKey("src/Use.java", 3, "inject")])), [
+  assert.deepEqual(unresolvedLinkCuts([proven, other], [SAVE], [], new Set(), new Set([referenceKey(proven)!])), [
     { kind: "unresolved-link", at: ["src/Use.java", "src/Use.java:3 repo.save"] },
   ]);
 });
@@ -60,7 +60,7 @@ test("a settlement retires the reference it names, never another reference that 
   const settledUse = qualified("this.a.save", "calls", ["Repo::save"], "src/Use.java", 7);
   const other = qualified("this.b.save", "calls", ["Repo::save"], "src/Use.java", 7);
 
-  assert.deepEqual(unresolvedLinkCuts([settledUse, other], [SAVE], [], new Set(), new Set([settledPlaceKey("src/Use.java", 7, "this.a.save")])), [
+  assert.deepEqual(unresolvedLinkCuts([settledUse, other], [SAVE], [], new Set(), new Set([referenceKey(settledUse)!])), [
     { kind: "unresolved-link", at: ["src/Repo.java::save", "src/Use.java:7"] },
   ]);
 });
@@ -139,7 +139,7 @@ test("a removed declaration nothing at head names is no cut", () => {
 test("a removed name never captures a reference whose own root is proven external", () => {
   const removed = [{ file: "src/Repo.java", name: "save" }];
   const references = [use("library.save", "calls"), use("repo.save", "calls")];
-  const known = new Set([externalPlaceKey("src/Use.java", 3, "library")]);
+  const known = new Set([referenceKey(references[0]!)!]);
 
   assert.deepEqual(removedDeclarationCuts(references, removed, known), [
     { kind: "unresolved-link", at: ["src/Repo.java::save", "src/Use.java:3"] },
@@ -151,7 +151,7 @@ test("a removed name keeps an unsettled reference sharing a settled reference's 
   const removed = [{ file: "src/Repo.java", name: "save" }];
   const settled = use("this.current.save", "calls");
   const unknown = use("this.previous.save", "calls");
-  const known = new Set([settledPlaceKey(settled.file, settled.line, settled.name)]);
+  const known = new Set([referenceKey(settled)!]);
 
   assert.deepEqual(removedDeclarationCuts([settled], removed, known), []);
   assert.deepEqual(removedDeclarationCuts([settled, unknown], removed, known), [
@@ -162,7 +162,7 @@ test("a removed name keeps an unsettled reference sharing a settled reference's 
 test("a removed bare name is attributed only to the file its import proves when that proof is available", () => {
   const reference = use("save", "calls");
   const removed = [{ file: "src/Previous.java", name: "save" }, { file: "src/Current.java", name: "save" }];
-  const bound = new Map([[bareBindingKey(reference.file, reference.line, reference.name), "src/Current.java"]]);
+  const bound = new Map([[referenceKey(reference)!, "src/Current.java"]]);
 
   assert.deepEqual(removedDeclarationCuts([reference], removed, new Set(), bound), [
     { kind: "unresolved-link", at: ["src/Current.java::save", "src/Use.java:3"] },
@@ -195,4 +195,54 @@ test("an unreadable template is a cut when the walk reached a component that nam
   const owners = new Map([["src/app/page.html", ["src/app/page.ts"]]]);
   assert.deepEqual(unreadRelationCuts(unread, new Set(["src/app/page.ts"]), owners), [{ kind: "unresolved-link", at: ["src/app/page.html", "src/app/page.html:2 source-unreadable"] }]);
   assert.deepEqual(unreadRelationCuts(unread, new Set(["src/app/other.ts"]), owners), []);
+});
+
+test("same_line_same_name_only_exact_proof_retires", async () => {
+  const { referenceKey } = await import("./impact-cuts.ts");
+  const first = { ...use("save", "calls", "src/Repo.java", 9), from: "a", column: 0 };
+  const second = { ...first, column: 8 };
+  assert.deepEqual(unresolvedLinkCuts([first, second], [SAVE], [], new Set(), new Set([referenceKey(first)!])), [{ kind: "unresolved-link", at: ["src/Repo.java::save", "src/Repo.java:9"] }]);
+});
+
+test("ambiguous_exact_occurrence_keeps_both", async () => {
+  const { referenceKey } = await import("./impact-cuts.ts");
+  const occurrence = { ...use("save", "calls", "src/Repo.java", 9), from: "a", column: 0 };
+  assert.deepEqual(unresolvedLinkCuts([occurrence, { ...occurrence }], [SAVE], [], new Set(), new Set([referenceKey(occurrence)!])), [{ kind: "unresolved-link", at: ["src/Repo.java::save", "src/Repo.java:9"] }]);
+});
+
+test("reference identity preserves all tuple fields and rejects missing coordinates", () => {
+  const base = { file: "a\0b", line: 1, column: 0, from: "c", name: "inject", kind: "calls" };
+  const variants = [{ ...base, name: "inject().hit" }, { ...base, kind: "references" }, { ...base, from: "d" }, { ...base, file: "a", from: "b\0c" }];
+  assert.equal(new Set([referenceKey(base), ...variants.map(referenceKey)]).size, 5);
+  const { column: _column, ...noColumn } = base;
+  assert.equal(referenceKey(noColumn), undefined);
+  assert.equal(referenceKey({ ...base, column: -1 }), undefined);
+  assert.equal(referenceKey({ ...base, line: 0 }), undefined);
+});
+
+test("local callback excludes only a bare call to a removed declaration in another file", () => {
+  const local = { ...use("resolve", "calls", "src/promise.ts", 1), column: 4 };
+  const unknown = { ...local, column: 20 };
+  const qualified = { ...local, name: "obj.resolve", column: 30 };
+  const removed = [{ file: "src/address.ts", name: "resolve" }, { file: "src/promise.ts", name: "resolve" }];
+  const proof = new Set([referenceKey(local)!]);
+  assert.deepEqual(removedDeclarationCuts([local], removed, new Set(), new Map(), proof), [{ kind: "unresolved-link", at: ["src/promise.ts::resolve", "src/promise.ts:1"] }]);
+  assert.equal(removedDeclarationCuts([local, unknown, qualified], removed, new Set(), new Map(), proof).length, 2);
+  const { column: _column, ...noColumn } = local;
+  assert.equal(removedDeclarationCuts([noColumn], removed, new Set(), new Map(), proof).length, 2);
+});
+
+test("anchor settlement does not retire another occurrence on the same line", async () => {
+  const { declarationUseKey } = await import("./impact-cuts.ts");
+  const a = { ...qualified("this.a.save", "calls", ["Repo::save"], "src/Use.java", 7), column: 0 };
+  const b = { ...a, column: 20 };
+  const settled = new Set([declarationUseKey("src/Repo.java::save", referenceKey(a)!)]);
+  assert.deepEqual(unresolvedLinkCuts([a, b], [SAVE], [], settled), [{ kind: "unresolved-link", at: ["src/Repo.java::save", "src/Use.java:7"] }]);
+});
+
+test("missing_column_never_retires", () => {
+  const legacy = use("save", "calls", "src/Repo.java", 2);
+  const { column: _column, ...withoutColumn } = legacy;
+  const imagined = referenceKey(legacy)!;
+  assert.deepEqual(unresolvedLinkCuts([withoutColumn], [SAVE], [], new Set(), new Set([imagined])), [{ kind: "unresolved-link", at: ["src/Repo.java::save", "src/Repo.java:2"] }]);
 });

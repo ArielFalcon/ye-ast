@@ -34,6 +34,7 @@ test("a symbol is expanded once and the walk ends on a cycle", () => {
   const counting = (inbound: InboundEdges): InboundEdges => ({
     ownersOf: inbound.ownersOf,
     settledUses: inbound.settledUses,
+    joinedTypeUses: inbound.joinedTypeUses,
     callersOf: (node, contractChanged, throughMember) => {
       asked.push(node.id);
       return inbound.callersOf(node, contractChanged, throughMember);
@@ -268,4 +269,12 @@ test("an interface-to-implementation hop spends no depth: the dispatch target si
   const result = walk(nodes, edges, ["mImpl"], { depth: 1 });
   assert.deepEqual(summary(result), ["I@0", "mI@0", "Impl@0", "mImpl@0", "c@1"]);
   assert.deepEqual(result.cuts, []);
+});
+
+test("expanded IDs include only nodes admitted by walk bounds", () => {
+  const nodes = [fn("a"), fn("b"), fn("c")];
+  const edges = [call("b", "a"), call("c", "b")];
+  assert.deepEqual([...walk(nodes, edges, ["a"], { depth: 1 }).expanded], ["a"]);
+  assert.deepEqual([...walk(nodes, edges, ["a"], { expansions: 0 }).expanded], []);
+  assert.deepEqual([...walk(nodes, edges, ["a"], { hubFanIn: 0 }).expanded], []);
 });

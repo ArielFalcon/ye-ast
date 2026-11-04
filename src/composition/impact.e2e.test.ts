@@ -765,3 +765,13 @@ test("map builds no index and never touches the cache", async () => {
   assert.equal(code, EXIT_CODE.ok);
   assert.equal(existsSync(cacheRoot), false);
 });
+
+test("a callback parameter and an unproved same-line call are evaluated separately", async () => {
+  commit({ "src/address.ts": "export function resolve() {}\n", "src/use.ts": "export function run() { return new Promise(resolve => resolve(1)); }\n" }, "base");
+  commit({ "src/address.ts": "export function other() {}\n" });
+  const local = await impact("--base", "HEAD~1", "--changed", "src/address.ts");
+  assert.equal((local.fact.cuts ?? []).some((cut) => cut.at[0] === "src/address.ts::resolve"), false, local.stdout);
+  commit({ "src/use.ts": "export function run() { new Promise(resolve => resolve(1)); resolve(); }\n" });
+  const both = await impact("--base", "HEAD~2", "--changed", "src/address.ts");
+  assert.ok((both.fact.cuts ?? []).some((cut) => cut.at[0] === "src/address.ts::resolve" && cut.at.includes("src/use.ts:1")), both.stdout);
+});

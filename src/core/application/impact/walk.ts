@@ -29,6 +29,8 @@ export interface ReachedSymbol {
 
 export interface Walk {
   reached: readonly ReachedSymbol[];
+  /** IDs whose expansion was admitted by all walk bounds. */
+  expanded: ReadonlySet<GraphNodeId>;
   cuts: readonly Cut[];
   /** The symbols whose callers the walk followed. */
   cost: { expansionsUsed: number };
@@ -84,6 +86,7 @@ export function walkImpact(seeds: readonly GraphSymbol[], inbound: InboundEdges,
 
   const stopped = { depth: [] as Rec[], hub: [] as Rec[], expansions: [] as Rec[] };
   let expansions = 0;
+  const expanded = new Set<GraphNodeId>();
   for (let depth = 0; level.length > 0; depth++) {
     const next: Rec[] = [];
     /** The current level, plus every symbol a dispatch bridge puts there: a hop between an interface and its implementation costs no depth. */
@@ -100,6 +103,7 @@ export function walkImpact(seeds: readonly GraphSymbol[], inbound: InboundEdges,
       else if (budget.expansions !== undefined && expansions >= budget.expansions) stopped.expansions.push(rec);
       else {
         expansions += 1;
+        expanded.add(rec.symbol.id);
         for (const caller of rec.callers) {
           const free = caller.bridge !== undefined;
           const into = free ? queue : next;
@@ -135,6 +139,7 @@ export function walkImpact(seeds: readonly GraphSymbol[], inbound: InboundEdges,
   };
   return {
     reached,
+    expanded,
     cuts: [...cutAt("depth", stopped.depth, budget.depth), ...cutAt("hub", stopped.hub, budget.hubFanIn), ...cutAt("caller-budget", stopped.expansions, budget.expansions)],
     cost: { expansionsUsed: expansions },
   };

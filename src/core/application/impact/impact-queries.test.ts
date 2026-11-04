@@ -58,6 +58,7 @@ interface Options {
   sources?: SourceFile[];
   /** Reads the imports of those sources, as composition wires it. */
   importOrigins?: ImportOriginsReader;
+  typeRoot?: ImpactQueriesDeps["typeRoot"];
   moduleDependencies?: ModuleDependenciesReader;
   snapshotSources?: Partial<Record<string, SourceFile[]>>;
 }
@@ -126,6 +127,7 @@ function setup(options: Options = {}) {
     ...(options.trust && { trust: options.trust }),
     ...(options.live && { live: options.live.deps }),
     ...(options.importOrigins && { importOrigins: options.importOrigins }),
+    ...(options.typeRoot && { typeRoot: options.typeRoot }),
     ...(options.moduleDependencies && { moduleDependencies: options.moduleDependencies }),
   };
   const request: AtRevision<ImpactOfChangeRequest> = { repo: "/repo", repoId: "repo", base: "base", head: "head", ...(options.signal && { signal: options.signal }) };
@@ -190,11 +192,11 @@ function ambientImports(names: readonly string[]): ImportOriginsReader {
 function origins(answer: (site: ImportOriginSite) => ImportOrigin | undefined): ImportOriginsReader {
   return () => ({
     origins: async (sites) =>
-      sites.map((site): Finding<ImportOrigin> => {
+      sites.map((site): Finding<ImportOrigin> & { occurrence: true } => {
         const value = answer(site);
         return value === undefined
-          ? { status: "unknown", reason: "unresolved", evidence: [{ path: site.file, line: site.line }] }
-          : { status: "complete", value, evidence: [{ path: site.file, line: site.line }] };
+          ? { status: "unknown", reason: "unresolved", evidence: [{ path: site.file, line: site.line }], occurrence: true }
+          : { status: "complete", value, evidence: [{ path: site.file, line: site.line }], occurrence: true };
       }),
   });
 }
@@ -368,7 +370,7 @@ test("a call that never resolved to a walked name cuts the answer, and the head'
 test("a reference whose rooted name the file imports from outside the repository stops being a cut, without any type root", async () => {
   const changes: Result<readonly FileChange[], VcsFault> = { ok: true, value: [change("src/A.ts", { added: [{ start: 2, end: 2 }] })] };
   const nodes = [fakeNode("tap", "function", "src/A.ts", 1, 3)];
-  const unresolved = [{ from: "f", name: "tap", kind: "calls", file: "src/A.ts", line: 7 }];
+  const unresolved = [{ from: "f", name: "tap", kind: "calls", file: "src/A.ts", line: 7, column: 0 }];
   const exports: Options["exports"] = {
     [HEAD]: { files: [{ path: "src/A.ts", blob: "1", written: true }, { path: "src/B.ts", blob: "2", written: true }], skipped: [] },
   };
@@ -384,8 +386,8 @@ test("an external proof retires its own reference, never another one that shares
   const changes: Result<readonly FileChange[], VcsFault> = { ok: true, value: [change("src/A.ts", { added: [{ start: 2, end: 2 }] })] };
   const nodes = [fakeNode("tap", "function", "src/A.ts", 1, 3), fakeNode("save", "function", "src/A.ts", 1, 3)];
   const unresolved = [
-    { from: "f", name: "tap", kind: "calls", file: "src/A.ts", line: 7 },
-    { from: "f", name: "save", kind: "calls", file: "src/A.ts", line: 7 },
+    { from: "f", name: "tap", kind: "calls", file: "src/A.ts", line: 7, column: 0 },
+    { from: "f", name: "save", kind: "calls", file: "src/A.ts", line: 7, column: 0 },
   ];
   const exports: Options["exports"] = {
     [HEAD]: { files: [{ path: "src/A.ts", blob: "1", written: true }, { path: "src/B.ts", blob: "2", written: true }], skipped: [] },
@@ -399,7 +401,7 @@ test("an external proof retires its own reference, never another one that shares
 test("a reference rooted at a name the language's own libraries declare stops being a cut", async () => {
   const changes: Result<readonly FileChange[], VcsFault> = { ok: true, value: [change("src/B.ts", { added: [{ start: 2, end: 2 }] })] };
   const nodes = [fakeNode("log", "function", "src/B.ts", 1, 3)];
-  const unresolved = [{ from: "f", name: "console.log", kind: "calls", file: "src/A.ts", line: 7 }];
+  const unresolved = [{ from: "f", name: "console.log", kind: "calls", file: "src/A.ts", line: 7, column: 0 }];
   const exports: Options["exports"] = {
     [HEAD]: { files: [{ path: "src/A.ts", blob: "1", written: true }, { path: "src/B.ts", blob: "2", written: true }], skipped: [] },
   };
@@ -477,9 +479,9 @@ test("lines removed between symbols that declared a name cut the answer at the r
 test("removed-declaration cuts receive the head's exact import proofs without hiding unknown candidates", async () => {
   const useFile = "src/use.ts";
   const unresolved = [
-    { from: "use", name: "Promise.resolve", kind: "calls", file: useFile, line: 2 },
-    { from: "use", name: "save", kind: "calls", file: useFile, line: 3 },
-    { from: "use", name: "service.resolve", kind: "calls", file: useFile, line: 4 },
+    { from: "use", name: "Promise.resolve", kind: "calls", file: useFile, line: 2, column: 0 },
+    { from: "use", name: "save", kind: "calls", file: useFile, line: 3, column: 0 },
+    { from: "use", name: "service.resolve", kind: "calls", file: useFile, line: 4, column: 0 },
   ];
   const changes = { ok: true, value: [change("src/gone.ts", { deleted: true, added: [], removedNames: ["resolve", "save"] })] } as const;
   const exports = { [HEAD]: { files: [{ path: useFile, blob: "1", written: true }], skipped: [] } };
@@ -523,13 +525,13 @@ test("a reference through a field of known origin is a caller when the field hol
   const members = ["viaSvc", "viaHttp", "viaMap", "viaOther", "viaSub", "viaLocal", "viaUnknown"];
   const edges = [{ from: "Svc", to: "get", kind: "contains" }, { from: "Sub", to: "Svc", kind: "extends" }, ...members.map((to) => ({ from: "Cmp", to, kind: "contains" }))];
   const unresolved = [
-    { from: "viaSvc", name: "this.svc.get", kind: "calls", file: CMP_FILE, line: 6 },
-    { from: "viaHttp", name: "this.http.get", kind: "calls", file: CMP_FILE, line: 9 },
-    { from: "viaMap", name: "this.cache.get", kind: "calls", file: CMP_FILE, line: 12 },
-    { from: "viaOther", name: "this.other.get", kind: "calls", file: CMP_FILE, line: 15 },
-    { from: "viaSub", name: "this.sub.get", kind: "calls", file: CMP_FILE, line: 18 },
-    { from: "viaLocal", name: "params.get", kind: "calls", file: CMP_FILE, line: 21 },
-    { from: "viaUnknown", name: "this.store.get", kind: "calls", file: CMP_FILE, line: 24 },
+    { from: "viaSvc", name: "this.svc.get", kind: "calls", file: CMP_FILE, line: 6, column: 0 },
+    { from: "viaHttp", name: "this.http.get", kind: "calls", file: CMP_FILE, line: 9, column: 0 },
+    { from: "viaMap", name: "this.cache.get", kind: "calls", file: CMP_FILE, line: 12, column: 0 },
+    { from: "viaOther", name: "this.other.get", kind: "calls", file: CMP_FILE, line: 15, column: 0 },
+    { from: "viaSub", name: "this.sub.get", kind: "calls", file: CMP_FILE, line: 18, column: 0 },
+    { from: "viaLocal", name: "params.get", kind: "calls", file: CMP_FILE, line: 21, column: 0 },
+    { from: "viaUnknown", name: "this.store.get", kind: "calls", file: CMP_FILE, line: 24, column: 0 },
   ];
   const owner = { path: CMP_FILE, symbol: "Cmp", line: 3 };
   const fields: FieldOrigin[] = [
@@ -542,7 +544,7 @@ test("a reference through a field of known origin is a caller when the field hol
   const changes: Result<readonly FileChange[], VcsFault> = { ok: true, value: [change(SVC_FILE, { added: [{ start: 5, end: 5 }] })] };
   const exports = { [HEAD]: { files: [SVC_FILE, CMP_FILE, SUB_FILE].map((path, index) => ({ path, blob: `${index}`, written: true })), skipped: [] } };
 
-  const answer = fact(await setup({ changes, nodes, edges, unresolved, exports, fields }).ask());
+  const answer = fact(await setup({ changes, nodes, edges, unresolved, exports, fields, importOrigins: origins(() => undefined) }).ask());
   assert.ok(answer.status === "partial");
   assert.deepEqual(answer.value.symbols.filter((symbol) => symbol.file === CMP_FILE).map((symbol) => symbol.symbol), ["Cmp", "viaSvc"]);
   assert.deepEqual(answer.cuts.find((cut) => cut.kind === "unresolved-link"), { kind: "unresolved-link", at: [CMP_FILE, `${CMP_FILE}:18 this.sub.get`, `${CMP_FILE}:21 params.get`, `${CMP_FILE}:24 this.store.get`] });
@@ -1166,4 +1168,88 @@ test("JSON changes are staged and contribute to the content fingerprint", async 
   const second = fact(await b.ask());
   assert.ok(a.log.plans.every((plan) => plan.wanted.includes(path)));
   assert.notEqual(first.inputs.content, second.inputs.content);
+});
+
+test("type settlement requires unique joined target expanded and caller reached", async () => {
+  const target = "src/target.ts", source = "src/source.ts";
+  const references = [{ from: "caller", file: source, line: 2, column: 0, name: "hit", kind: "calls" }];
+  const observed: number[] = [];
+  const typeRoot: NonNullable<Options["typeRoot"]> = { identity: "test", resolution: () => ({ resolve: (sites) => sites.map((site) => { observed.push(site.column); return { status: "complete", value: { kind: "repository", file: target, symbol: "hit", line: 2, endLine: 2 }, evidence: [] }; }) }) };
+  const common: Options = {
+    changes: { ok: true, value: [change(target, { added: [{ start: 2, end: 2 }] })] },
+    nodes: [fakeNode("hit", "function", target, 1, 3), fakeNode("caller", "function", source, 1, 3)],
+    unresolved: references, exports: { [HEAD]: { files: [target, source].map((path) => ({ path, blob: path, written: true })), skipped: [] } },
+    importOrigins: origins(() => undefined), typeRoot,
+  };
+  const bounded = fact(await setup(common).ask({ budget: { depth: 0 } }));
+  assert.ok(bounded.status === "partial" && bounded.cuts.some((cut) => cut.kind === "unresolved-link"));
+  const admitted = fact(await setup(common).ask({ budget: { depth: 1 } }));
+  assert.equal(admitted.status, "complete");
+  assert.ok(admitted.value.symbols.some((symbol) => symbol.symbol === "caller"));
+  assert.ok(observed.every((column) => column === 1));
+  const missing = fact(await setup({ ...common, nodes: [fakeNode("hit", "function", target, 1, 3)] }).ask());
+  assert.ok(missing.status === "partial" && missing.cuts.some((cut) => cut.kind === "unresolved-link"));
+  const missingTarget: NonNullable<Options["typeRoot"]> = { identity: "missing", resolution: () => ({ resolve: (sites) => sites.map(() => ({ status: "complete", value: { kind: "repository", file: "src/absent.ts", symbol: "hit", line: 1, endLine: 1 }, evidence: [] })) }) };
+  const unjoined = fact(await setup({ ...common, typeRoot: missingTarget }).ask());
+  assert.ok(unjoined.status === "partial" && unjoined.cuts.some((cut) => cut.kind === "unresolved-link"));
+  const ambiguous = fact(await setup({ ...common, nodes: [...common.nodes!, fakeNode("overload", "function", target, 1, 3, "hit")] }).ask());
+  assert.ok(ambiguous.status === "partial" && ambiguous.cuts.some((cut) => cut.kind === "unresolved-link"));
+});
+
+test("local callback proof excludes only its own removed-declaration occurrence and creates no edge", async () => {
+  const source = "src/promise.ts";
+  const removed = change("src/address.ts", { deleted: true, added: [], removedNames: ["resolve"] });
+  const unresolved = [
+    { from: "use", file: source, line: 2, column: 20, name: "resolve", kind: "calls" },
+    { from: "use", file: source, line: 2, column: 40, name: "resolve", kind: "calls" },
+  ];
+  const common: Options = { changes: { ok: true, value: [removed] }, nodes: [fakeNode("use", "function", source, 1, 3)], unresolved,
+    exports: { [HEAD]: { files: [{ path: source, blob: "1", written: true }], skipped: [] } },
+    importOrigins: origins((site) => site.column === 21 ? { kind: "local-parameter", name: "resolve" } : undefined) };
+  const answer = fact(await setup(common).ask());
+  assert.ok(answer.status === "partial");
+  assert.deepEqual(answer.cuts, [{ kind: "unresolved-link", at: ["src/address.ts::resolve", "src/promise.ts:2"] }]);
+  assert.deepEqual(answer.value.symbols, []);
+  const onlyLocal = fact(await setup({ ...common, unresolved: [unresolved[0]!] }).ask());
+  assert.equal(onlyLocal.status, "complete");
+  assert.deepEqual(onlyLocal.value.symbols, []);
+});
+
+test("cancellation during origin batch stops before the walk", async () => {
+  const controller = new AbortController();
+  const source = "src/use.ts";
+  const reader: ImportOriginsReader = () => ({ origins: async () => { controller.abort(); return []; } });
+  const result = await setup({ signal: controller.signal, changes: { ok: true, value: [change("src/target.ts")] }, nodes: [fakeNode("target", "function", "src/target.ts", 1)], unresolved: [{ from: "use", file: source, line: 1, column: 0, name: "target", kind: "calls" }], exports: { [HEAD]: { files: [source, "src/target.ts"].map((path) => ({ path, blob: path, written: true })), skipped: [] } }, importOrigins: reader }).ask();
+  assert.ok(!result.ok && result.fault.kind === "aborted");
+});
+
+test("same line type settlements leave an unproved neighbor and preserve the reached caller", async () => {
+  const target = "src/target.ts", source = "src/source.ts";
+  const references = [0, 8].map((column) => ({ from: "caller", file: source, line: 2, column, name: "hit", kind: "calls" }));
+  const typeRoot: NonNullable<Options["typeRoot"]> = { identity: "test", resolution: () => ({ resolve: (sites) => sites.map((site) => site.column === 1 ? { status: "complete", value: { kind: "repository", file: target, symbol: "hit", line: 2, endLine: 2 }, evidence: [] } : { status: "unknown", reason: "unresolved", evidence: [] }) }) };
+  const answer = fact(await setup({ changes: { ok: true, value: [change(target, { added: [{ start: 2, end: 2 }] })] }, nodes: [fakeNode("hit", "function", target, 1, 3), fakeNode("caller", "function", source, 1, 3)], unresolved: references, exports: { [HEAD]: { files: [target, source].map((path) => ({ path, blob: path, written: true })), skipped: [] } }, importOrigins: origins(() => undefined), typeRoot }).ask());
+  assert.ok(answer.status === "partial");
+  assert.ok(answer.value.symbols.some((symbol) => symbol.symbol === "caller"));
+  assert.ok(answer.cuts.some((cut) => cut.at.includes("src/source.ts:2 hit")));
+});
+
+test("field settlement does not hide a same-line unverified use", async () => {
+  const target = "src/svc.ts", source = "src/cmp.ts";
+  const refs = [0, 12].map((column) => ({ from: "caller", file: source, line: 2, column, name: "this.svc.hit", kind: "calls" }));
+  const validateFirst: ImportOriginsReader = () => ({ origins: async (sites) => sites.map((site) => ({ status: "unknown" as const, reason: "unresolved" as const, evidence: [], ...(site.column === 1 ? { occurrence: true as const } : {}) })) });
+  const answer = fact(await setup({ changes: { ok: true, value: [change(target, { added: [{ start: 3, end: 3 }] })] }, nodes: [fakeNode("Svc", "class", target, 1, 5), fakeNode("hit", "method", target, 3, 3), fakeNode("Cmp", "class", source, 1, 5), fakeNode("caller", "method", source, 2, 2)], edges: [{ from: "Svc", to: "hit", kind: "contains" }, { from: "Cmp", to: "caller", kind: "contains" }], unresolved: refs, fields: [{ owner: { path: source, symbol: "Cmp", line: 1 }, field: "svc", holds: { class: { path: target, symbol: "Svc", line: 1 } } }], exports: { [HEAD]: { files: [target, source].map((path) => ({ path, blob: path, written: true })), skipped: [] } }, importOrigins: validateFirst }).ask());
+  assert.ok(answer.status === "partial");
+  assert.ok(answer.value.symbols.some((symbol) => symbol.symbol === "caller"));
+  assert.ok(answer.cuts.some((cut) => cut.at.includes("src/cmp.ts:2 this.svc.hit")));
+});
+
+test("same-line type settlements remain distinct when only one target expands", async () => {
+  const source = "src/use.ts", first = "src/a.ts", second = "src/b.ts";
+  const refs = [{ from: "caller", file: source, line: 1, column: 0, name: "a.hit", kind: "calls" }, { from: "caller", file: source, line: 1, column: 9, name: "b.hit", kind: "calls" }];
+  const typeRoot: NonNullable<Options["typeRoot"]> = { identity: "two", resolution: () => ({ resolve: (sites) => sites.map((site) => ({ status: "complete", value: { kind: "repository", file: site.column === 1 ? first : second, symbol: "hit", line: 1, endLine: 1 }, evidence: [] })) }) };
+  const opts: Options = { changes: { ok: true, value: [change(first), change(second)] }, nodes: [fakeNode("a", "function", first, 1, 1, "hit"), fakeNode("b", "function", second, 1, 1, "hit"), fakeNode("caller", "function", source, 1, 1)], unresolved: refs, exports: { [HEAD]: { files: [first, second, source].map((path) => ({ path, blob: path, written: true })), skipped: [] } }, typeRoot, importOrigins: origins(() => undefined) };
+  const unlimited = fact(await setup(opts).ask());
+  assert.equal(unlimited.status, "complete");
+  const limited = fact(await setup(opts).ask({ budget: { expansions: 1 } }));
+  assert.ok(limited.status === "partial" && limited.cuts.some((cut) => cut.at.includes(`${source}:1 b.hit`)));
 });

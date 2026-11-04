@@ -26,6 +26,7 @@ export interface FakeUnresolved {
   kind: string;
   file: string;
   line: number;
+  column?: number;
 }
 
 const handle = (id: string): GraphNodeId => id as GraphNodeId;
@@ -57,7 +58,7 @@ export function fakeCodeGraph(nodes: readonly FakeNode[], edges: readonly FakeEd
     incomingEdges: (targets, kinds) => edges.filter((e) => targets.includes(handle(e.to)) && (kinds === undefined || kinds.includes(e.kind))).map(edge),
     outgoingEdges: (sources, kinds) => edges.filter((e) => sources.includes(handle(e.from)) && (kinds === undefined || kinds.includes(e.kind))).map(edge),
     unresolvedReferences: (files): readonly GraphUnresolvedReference[] =>
-      unresolved.filter((u) => files.includes(u.file)).map((u) => ({ from: handle(u.from), name: u.name, kind: u.kind, file: u.file, line: u.line, column: 0, candidates: [] })),
+      unresolved.filter((u) => files.includes(u.file)).map((u) => ({ from: handle(u.from), name: u.name, kind: u.kind, file: u.file, line: u.line, column: u.column ?? Number.NaN, candidates: [] })),
     close: () => undefined,
   };
 }

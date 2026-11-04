@@ -83,7 +83,11 @@ cut. The base metadata is read only when the selected change deletes a non-sourc
 Removed-declaration cuts list unresolved **candidates**, not proven broken dependencies. They reuse the same exact
 external, ambient and reached-settlement proofs as the ordinary walk. A bare import proven to bind another repository
 file cannot be attributed to the removed homonym. An unknown binding remains a candidate; a proof for one rooted name or
-settled reference never suppresses another reference on the same line.
+settled reference never suppresses another reference on the same line. Proofs identify the full graph occurrence
+(file, raw line and column, source ID, full name and kind), with unique syntax and graph matches. A bare call proven
+to bind a supported callback parameter excludes a removed homonym in another file only; it does not resolve the callback
+target or add a call edge. Missing or ambiguous coordinates leave the candidate. A type settlement retires a cut only
+when its uniquely joined target was expanded and its joined source reached by the walk.
 
 ### Entrypoints of the change
 

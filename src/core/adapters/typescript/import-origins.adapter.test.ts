@@ -31,6 +31,10 @@ const PAGE: SourceFile = {
     "  function map(): void {}",
     "  map();",
     "}",
+    "Store();",
+    "helper();",
+    "filter();",
+    "console.log();",
     "",
   ].join("\n"),
 };
@@ -45,29 +49,29 @@ function only(findings: readonly Finding<ImportOrigin>[]): Finding<ImportOrigin>
 }
 
 test("an aliased specifier names a file of the repository, decided by the snapshot's own paths", async () => {
-  const findings = await createImportOrigins(SOURCES).origins([{ file: "src/page.ts", line: 1, name: "Store" }]);
+  const findings = await createImportOrigins(SOURCES).origins([{ file: "src/page.ts", line: 11, column: 1, name: "Store", fullName: "Store", kind: "calls" }]);
 
-  assert.deepEqual(only(findings), { status: "complete", value: { kind: "repository", file: "src/store.ts" }, evidence: [{ path: "src/page.ts", line: 1 }] });
+  assert.deepEqual(only(findings), { status: "complete", value: { kind: "repository", file: "src/store.ts" }, occurrence: true, evidence: [{ path: "src/page.ts", line: 11 }] });
 });
 
 test("a relative specifier names a file of the repository", async () => {
-  const findings = await createImportOrigins(SOURCES).origins([{ file: "src/page.ts", line: 4, name: "helper" }]);
+  const findings = await createImportOrigins(SOURCES).origins([{ file: "src/page.ts", line: 12, column: 1, name: "helper", fullName: "helper", kind: "calls" }]);
 
-  assert.deepEqual(only(findings), { status: "complete", value: { kind: "repository", file: "src/local.ts" }, evidence: [{ path: "src/page.ts", line: 4 }] });
+  assert.deepEqual(only(findings), { status: "complete", value: { kind: "repository", file: "src/local.ts" }, occurrence: true, evidence: [{ path: "src/page.ts", line: 12 }] });
 });
 
 test("a package the manifest declares is outside the repository, named after the package", async () => {
-  const findings = await createImportOrigins(SOURCES).origins([{ file: "src/page.ts", line: 3, name: "filter" }]);
+  const findings = await createImportOrigins(SOURCES).origins([{ file: "src/page.ts", line: 13, column: 1, name: "filter", fullName: "filter", kind: "calls" }]);
 
-  assert.deepEqual(only(findings), { status: "complete", value: { kind: "external", module: "rxjs" }, evidence: [{ path: "src/page.ts", line: 3 }] });
+  assert.deepEqual(only(findings), { status: "complete", value: { kind: "external", module: "rxjs" }, occurrence: true, evidence: [{ path: "src/page.ts", line: 13 }] });
 });
 
 test("a name the file declares itself is unknown even when an import names it, since the declaration may shadow it", async () => {
   const withoutDeclaration: SourceFile = { path: "src/page.ts", content: "import { map } from 'rxjs/operators';\nexport function run(): void {\n  map();\n}\n" };
-  const declared = await createImportOrigins([CONFIG, MANIFEST, withoutDeclaration]).origins([{ file: "src/page.ts", line: 3, name: "map" }]);
+  const declared = await createImportOrigins([CONFIG, MANIFEST, withoutDeclaration]).origins([{ file: "src/page.ts", line: 3, column: 3, name: "map", fullName: "map", kind: "calls" }]);
   const shadowed = await createImportOrigins(SOURCES).origins([{ file: "src/page.ts", line: 9, name: "map" }]);
 
-  assert.deepEqual(only(declared), { status: "complete", value: { kind: "external", module: "rxjs" }, evidence: [{ path: "src/page.ts", line: 3 }] });
+  assert.deepEqual(only(declared), { status: "complete", value: { kind: "external", module: "rxjs" }, occurrence: true, evidence: [{ path: "src/page.ts", line: 3 }] });
   assert.deepEqual(only(shadowed), { status: "unknown", reason: "unresolved", evidence: [{ path: "src/page.ts", line: 9 }] });
 });
 
@@ -84,9 +88,9 @@ test("a bare specifier neither the manifest nor a path governs is unknown, not e
 });
 
 test("a name nothing binds but the language's own libraries declare is ambient, so no repository declaration can answer it", async () => {
-  const findings = await createImportOrigins(SOURCES).origins([{ file: "src/page.ts", line: 12, name: "console" }]);
+  const findings = await createImportOrigins(SOURCES).origins([{ file: "src/page.ts", line: 14, column: 1, name: "console", fullName: "console.log", kind: "calls" }]);
 
-  assert.deepEqual(only(findings), { status: "complete", value: { kind: "ambient", name: "console" }, evidence: [{ path: "src/page.ts", line: 12 }] });
+  assert.deepEqual(only(findings), { status: "complete", value: { kind: "ambient", name: "console" }, occurrence: true, evidence: [{ path: "src/page.ts", line: 14 }] });
 });
 
 test("a name the file declares itself is unknown even when a library declares it", async () => {
@@ -102,4 +106,110 @@ test("a name the snapshot declares globally is never ambient, because the reposi
   const findings = await createImportOrigins([CONFIG, MANIFEST, global, page]).origins([{ file: "src/cache.ts", line: 2, name: "caches" }]);
 
   assert.deepEqual(only(findings), { status: "unknown", reason: "unresolved", evidence: [{ path: "src/cache.ts", line: 2 }] });
+});
+
+test("callback_parameter_bare_call_is_local and wrong coordinates remain unknown", async () => {
+  const text = "const x = new Promise(resolve => resolve(value));";
+  const file = "src/callback.ts";
+  const column = text.indexOf("resolve(value)") + 1;
+  const reader = createImportOrigins([{ path: file, content: text }]);
+  const results = await reader.origins([
+    { file, line: 1, column, name: "resolve", fullName: "resolve", kind: "calls" },
+    { file, line: 1, column: column + 1, name: "resolve", fullName: "resolve", kind: "calls" },
+  ]);
+  assert.equal(results[0]?.status, "complete");
+  if (results[0]?.status === "complete") assert.deepEqual(results[0].value, { kind: "local-parameter", name: "resolve" });
+  assert.equal(results[1]?.status, "unknown");
+});
+
+test("local parameter proof handles Unicode, nested parameters and same-line uses", async () => {
+  const file = "src/callback.ts";
+  const text = "const x='é😀'; outside(); run(resolve => resolve(1)); resolve(2); run(resolve => run(resolve => resolve(3)));";
+  const reader = createImportOrigins([{ path: file, content: text }]);
+  const points = [text.indexOf("outside()"), text.indexOf("resolve(1)"), text.indexOf("resolve(2)"), text.indexOf("resolve(3)")];
+  const results = await reader.origins(points.map((offset, i) => ({ file, line: 1, column: offset + 1, name: i === 0 ? "outside" : "resolve", fullName: i === 0 ? "outside" : "resolve", kind: "calls" })));
+  assert.deepEqual(results.map((f) => f.status === "complete" ? f.value.kind : "unknown"), ["unknown", "local-parameter", "unknown", "local-parameter"]);
+});
+
+test("local parameter refuses unsupported syntax and malformed files", async () => {
+  const examples = [
+    "run((...resolve) => resolve());", "run((resolve = other) => resolve());", "run(({resolve}) => resolve());",
+    "run(resolve => resolve.x());", "run(resolve => { eval('x'); resolve(); });", "run(resolve => { const resolve = other; resolve(); });",
+    "run(resolve => resolve( ;",
+  ];
+  for (const [i, text] of examples.entries()) {
+    const file = `src/bad${i}.ts`;
+    const offset = text.lastIndexOf(i === 3 ? "resolve.x" : "resolve(");
+    const result = await createImportOrigins([{ path: file, content: text }]).origins([{ file, line: 1, column: offset + 1, name: "resolve", fullName: i === 3 ? "resolve.x" : "resolve", kind: "calls" }]);
+    assert.notEqual(result[0]?.status === "complete" ? result[0].value.kind : "unknown", "local-parameter", text);
+  }
+});
+
+test("first-column call is validated and missing or wrong points are unknown", async () => {
+  const file = "src/first.ts";
+  const reader = createImportOrigins([{ path: file, content: "Promise.resolve();" }]);
+  const found = await reader.origins([
+    { file, line: 1, column: 1, name: "Promise", fullName: "Promise.resolve", kind: "calls" },
+    { file, line: 1, column: 2, name: "Promise", fullName: "Promise.resolve", kind: "calls" },
+    { file, line: 1, name: "Promise", fullName: "Promise.resolve", kind: "calls" },
+  ]);
+  assert.equal(found[0]?.status, "complete");
+  assert.equal(found[1]?.status, "unknown");
+  assert.equal(found[2]?.status, "unknown");
+});
+
+test("nested calls at the same point retain distinct names", async () => {
+  const file = "src/nested.ts";
+  const text = "inject(Svc).hit();";
+  const reader = createImportOrigins([{ path: file, content: text }]);
+  const found = await reader.origins([
+    { file, line: 1, column: 1, name: "inject", fullName: "inject", kind: "calls" },
+    { file, line: 1, column: 1, name: "inject()", fullName: "inject().hit", kind: "calls" },
+  ]);
+  assert.deepEqual(found.map((f) => f.occurrence), [true, true]);
+});
+
+test("outer import shadowed by a callback parameter proves only the local occurrence", async () => {
+  const file = "src/shadow.ts";
+  const text = "import { resolve } from 'rxjs'; resolve(); run(resolve => resolve());";
+  const first = text.indexOf("resolve();"), second = text.lastIndexOf("resolve()");
+  const found = await createImportOrigins([MANIFEST, { path: file, content: text }]).origins([first, second].map((point) => ({ file, line: 1, column: point + 1, name: "resolve", fullName: "resolve", kind: "calls" })));
+  assert.equal(found[0]?.status, "unknown");
+  assert.ok(found[1]?.status === "complete" && found[1].value.kind === "local-parameter");
+});
+
+test("a callback call at raw column zero is local", async () => {
+  const file = "src/first.ts";
+  const text = "run(resolve => {\nresolve(value);\n});";
+  const found = await createImportOrigins([{ path: file, content: text }]).origins([{ file, line: 2, column: 1, name: "resolve", fullName: "resolve", kind: "calls" }]);
+  assert.ok(found[0]?.status === "complete" && found[0].value.kind === "local-parameter");
+});
+
+test("function reference in a call argument validates its own coordinate", async () => {
+  const file = "src/use.ts";
+  const text = "import { Store } from './store'; const value = inject(Store);";
+  const column = text.lastIndexOf("Store") + 1;
+  const result = await createImportOrigins([STORE, { path: file, content: text }]).origins([{ file, line: 1, column, name: "Store", fullName: "Store", kind: "function_ref" }]);
+  assert.ok(result[0]?.occurrence === true && result[0].status === "complete" && result[0].value.kind === "repository");
+});
+
+test("reference kinds reject declaration names at stale coordinates", async () => {
+  const file = "src/stale.ts", text = "class Store {}";
+  const found = await createImportOrigins([{ path: file, content: text }]).origins(["references", "function_ref"].map((kind) => ({ file, line: 1, column: 7, name: "Store", fullName: "Store", kind })));
+  assert.deepEqual(found.map((finding) => finding.occurrence), [undefined, undefined]);
+});
+
+test("missing source and unsupported TSX are unknown", async () => {
+  const reader = createImportOrigins([{ path: "src/view.tsx", content: "run(resolve => resolve())" }]);
+  const found = await reader.origins(["src/missing.ts", "src/view.tsx"].map((file) => ({ file, line: 1, column: 16, name: "resolve", fullName: "resolve", kind: "calls" })));
+  assert.ok(found.every((item) => item.status === "unknown" && item.occurrence === undefined));
+});
+
+test("nested function bindings and eval do not contaminate an outer callback scope", async () => {
+  const file = "src/scopes.ts";
+  const text = "run(resolve => { function nested() { const resolve = other; eval('x'); } resolve(1); });";
+  const results = await createImportOrigins([{ path: file, content: text }]).origins([
+    { file, line: 1, column: text.indexOf("resolve(1)") + 1, name: "resolve", fullName: "resolve", kind: "calls" },
+  ]);
+  assert.ok(results[0]?.status === "complete" && results[0].value.kind === "local-parameter");
 });

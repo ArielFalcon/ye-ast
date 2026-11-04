@@ -1,6 +1,6 @@
 import type { DependenceBasis } from "../../domain/impact/impact-fact.ts";
 import { topLevelOf, isSeedable } from "../../domain/change/seeds.ts";
-import { declarationAnchor, placeAt, settledUseKey } from "../../domain/impact/impact-cuts.ts";
+import { declarationAnchor, declarationUseKey, referenceKey, uniqueReferenceKeys } from "../../domain/impact/impact-cuts.ts";
 import { CALL_EDGE_KINDS, EDGE_POLICY, edgeConfidence, FOLLOWED_EDGE_KINDS, followsEdge, followsRelation, isIgnoredEdge } from "../../domain/impact/edge-policy.ts";
 import type { FieldOrigin, LocalOrigin } from "../../domain/relations/field-origin.ts";
 import type { Relation, SymbolRef } from "../../domain/relations/relation.ts";
@@ -36,8 +36,9 @@ export interface InboundEdges {
   callersOf(node: GraphSymbol, contractChanged: boolean, throughMember?: boolean): readonly InboundEdge[];
   /** The type that declares a method, which a reached method stands for at the same depth; none for any other symbol. */
   ownersOf(node: GraphSymbol): readonly GraphSymbol[];
-  /** The unresolved references `callersOf` settled through a field of fixed origin, by `settledUseKey`. */
-  settledUses(): ReadonlySet<string>;
+  /** Candidate-specific settlements, restricted to admitted expansions and reached sources when sets are supplied. */
+  settledUses(expanded?: ReadonlySet<GraphNodeId>, reached?: ReadonlySet<GraphNodeId>): ReadonlySet<string>;
+  joinedTypeUses(): readonly { reference: SettledReference; target: GraphNodeId; source: GraphNodeId }[];
 }
 
 const SUPERTYPE_EDGES = ["extends", "implements"];
@@ -47,8 +48,9 @@ export interface SettledReference {
   from: GraphNodeId;
   file: string;
   line: number;
+  column: number;
   kind: string;
-  /** The name the reference used, as the layer was asked about it: the unit a retired cut is keyed by. */
+  /** The full name the reference used, retained as part of its occurrence key. */
   name: string;
   target: { file: string; symbol: string; line: number };
 }
@@ -61,6 +63,10 @@ const USAGE_EDGES = ["calls", "instantiates", "references"];
 /** The declarations a relation ends at, and the only ones that can own a local an `inject()` call initializes. */
 const DECLARATION_KINDS: readonly string[] = [...EDGE_POLICY.relations.from, "function"];
 
+function holdsReference(source: GraphSymbol, use: Pick<GraphUnresolvedReference, "file" | "line">): boolean {
+  return source.file === use.file && source.startLine <= use.line && use.line <= source.endLine;
+}
+
 export function createInboundEdges(
   reader: CodeGraphReader,
   isTestFile: (path: string) => boolean,
@@ -68,6 +74,7 @@ export function createInboundEdges(
   fields: readonly FieldOrigin[] = [],
   settled: readonly SettledReference[] = [],
   locals: readonly LocalOrigin[] = [],
+  validOccurrences?: ReadonlySet<string>,
 ): InboundEdges {
   const relationsByTargetFile = Map.groupBy(relations, (candidate) => candidate.to.path);
   /** The local names more than one owner of one file declares: an ambiguous name settles nothing. */
@@ -242,7 +249,26 @@ export function createInboundEdges(
     });
   }
 
-  const settledUses = new Set<string>();
+  const settledUses: { key: string; target: GraphNodeId; source?: GraphNodeId }[] = [];
+  const joinedTypeUses: { reference: SettledReference; target: GraphNodeId; source: GraphNodeId }[] = [];
+  const uniqueAnchors = new Map<string, ReadonlySet<string>>();
+  const uniqueAnchor = (node: GraphSymbol): boolean => {
+    let unique = uniqueAnchors.get(node.file);
+    if (unique === undefined) {
+      const counts = new Map<string, number>();
+      for (const candidate of reader.symbolsInFiles([node.file])) counts.set(candidate.name, (counts.get(candidate.name) ?? 0) + 1);
+      unique = new Set([...counts].filter(([, count]) => count === 1).map(([name]) => name));
+      uniqueAnchors.set(node.file, unique);
+    }
+    return unique.has(node.name);
+  };
+  const uniqueByFile = new Map<string, ReadonlySet<string>>();
+  const uniqueUse = (use: GraphUnresolvedReference): string | undefined => {
+    let unique = uniqueByFile.get(use.file);
+    if (unique === undefined) { unique = uniqueReferenceKeys(reader.unresolvedReferences([use.file])); uniqueByFile.set(use.file, unique); }
+    const key = referenceKey(use);
+    return key !== undefined && unique.has(key) && (validOccurrences === undefined || validOccurrences.has(key)) ? key : undefined;
+  };
   /**
    * The references named `this.<field>.<member>` inside a class whose own field has a fixed origin: a field holding the
    * type that declares `node` makes them callers of `node`; a field holding a type that is neither that type nor one of
@@ -266,8 +292,10 @@ export function createInboundEdges(
       load(uses.map((use) => use.from));
       for (const use of uses) {
         const from = symbolOf(use.from);
-        if (from === undefined || !isInside(from, holder)) continue;
-        settledUses.add(settledUseKey(anchor, placeAt(use.file, use.line)));
+        if (from === undefined || !isInside(from, holder) || !holdsReference(from, use)) continue;
+        const occurrence = uniqueUse(use);
+        if (occurrence === undefined) continue;
+        if (uniqueAnchor(node)) settledUses.push({ key: declarationUseKey(anchor, occurrence), target: node.id, ...(holdsOwner ? { source: from.id } : {}) });
         if (holdsOwner) callers.push({ from, confidence: EDGE_POLICY.relations.confidence, basis: use.kind === "calls" ? "call" : "reference", lines: [use.line] });
       }
     }
@@ -279,14 +307,24 @@ export function createInboundEdges(
    * like any other dependence. A place the layer settled is no `unresolved-link` cut, and that is decided by the caller
    * on the place itself, not on the name tail (RFC-0016, S4).
    */
+  const targetMatches = new Map<string, readonly GraphSymbol[]>();
   function typeResolvedUsesOf(node: GraphSymbol): InboundEdge[] {
-    const candidates = (settledByTargetFile.get(node.file) ?? []).filter((reference) => joinsFact(node, { path: reference.target.file, line: reference.target.line, symbol: reference.target.symbol }));
+    const candidates = (settledByTargetFile.get(node.file) ?? []).filter((reference) => {
+      const targetKey = JSON.stringify([reference.target.file, reference.target.line, reference.target.symbol]);
+      let matches = targetMatches.get(targetKey);
+      if (matches === undefined) {
+        matches = reader.symbolsInFiles([reference.target.file]).filter((symbol) => joinsFact(symbol, { path: reference.target.file, line: reference.target.line, symbol: reference.target.symbol }));
+        targetMatches.set(targetKey, matches);
+      }
+      return matches.length === 1 && matches[0]!.id === node.id;
+    });
     if (candidates.length === 0) return [];
     load(candidates.map((reference) => reference.from));
     const callers: InboundEdge[] = [];
     for (const reference of candidates) {
       const from = symbolOf(reference.from);
-      if (from === undefined || isTestFile(from.file)) continue;
+      if (from === undefined || isTestFile(from.file) || !holdsReference(from, reference) || from.id === node.id) continue;
+      joinedTypeUses.push({ reference, target: node.id, source: from.id });
       callers.push({ from, confidence: EDGE_POLICY.relations.confidence, basis: reference.kind === "calls" || reference.kind === "instantiates" ? "call" : "reference", lines: [reference.line] });
     }
     return callers;
@@ -313,8 +351,10 @@ export function createInboundEdges(
       load(uses.map((use) => use.from));
       for (const use of uses) {
         const from = symbolOf(use.from);
-        if (from === undefined || !isInside(from, holder)) continue;
-        settledUses.add(settledUseKey(anchor, placeAt(use.file, use.line)));
+        if (from === undefined || !isInside(from, holder) || !holdsReference(from, use)) continue;
+        const occurrence = uniqueUse(use);
+        if (occurrence === undefined) continue;
+        if (uniqueAnchor(node)) settledUses.push({ key: declarationUseKey(anchor, occurrence), target: node.id, source: from.id });
         callers.push({ from, confidence: EDGE_POLICY.relations.confidence, basis: use.kind === "calls" ? "call" : "reference", lines: [use.line] });
       }
     }
@@ -343,7 +383,7 @@ export function createInboundEdges(
     return callers;
   }
 
-  return { callersOf, ownersOf, settledUses: () => settledUses };
+  return { callersOf, ownersOf, settledUses: (expanded, reached) => new Set(settledUses.filter((use) => (expanded === undefined || expanded.has(use.target)) && (use.source === undefined || reached === undefined || reached.has(use.source))).map((use) => use.key)), joinedTypeUses: () => joinedTypeUses };
 }
 
 interface Gathered {

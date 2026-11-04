@@ -370,7 +370,7 @@ function settledSetup(kind: string): Setup {
     [{ from: "second", to: "first", kind: "calls", confidence: 1 }],
     [],
     [],
-    [{ from: "first" as never, file: "src/A.java", line: 10, kind, name: "target", target: { file: SETTLED_TARGET, symbol: "target", line: 1 } }],
+    [{ from: "first" as never, file: "src/A.java", line: 10, column: 0, kind, name: "target", target: { file: SETTLED_TARGET, symbol: "target", line: 1 } }],
   );
 }
 
@@ -407,7 +407,7 @@ test("a call on a local a function takes from inject() is a caller of the method
     [fakeNode("svc", "class", A, 1, 50, "Svc"), fakeNode("target", "method", A, 10, 12, "list"), fakeNode("guard", "function", B, 5, 20, "guard")],
     [{ from: "svc", to: "target", kind: "contains" }],
     [],
-    [{ from: "guard", name: "orders.list", kind: "calls", file: B, line: 7 }],
+    [{ from: "guard", name: "orders.list", kind: "calls", file: B, line: 7, column: 0 }],
     [],
     [{ owner, local: "orders", holds: { class: { path: A, symbol: "Svc", line: 1 } } }],
   );
@@ -432,3 +432,40 @@ test("a local name two owners of one file share is not settled: the place keeps 
   assert.deepEqual(s.callers("target"), []);
   assert.deepEqual(s.inbound.settledUses().size, 0);
 });
+
+test("an ambiguous declaration anchor cannot settle another same-name declaration", () => {
+  const owner: SymbolRef = { path: B, symbol: "guard", line: 5 };
+  const s = setup(
+    [fakeNode("svc", "class", A, 1, 50, "Svc"), fakeNode("target", "method", A, 10, 12, "list"), fakeNode("other", "method", A, 20, 22, "list"), fakeNode("guard", "function", B, 5, 20, "guard")],
+    [{ from: "svc", to: "target", kind: "contains" }, { from: "svc", to: "other", kind: "contains" }], [],
+    [{ from: "guard", name: "orders.list", kind: "calls", file: B, line: 7, column: 0 }], [],
+    [{ owner, local: "orders", holds: { class: { path: A, symbol: "Svc", line: 1 } } }],
+  );
+  s.inbound.callersOf(s.symbol("target"), false);
+  assert.equal(s.inbound.settledUses().size, 0);
+});
+
+test("missing occurrence coordinates cannot produce a local-origin edge", () => {
+  const owner: SymbolRef = { path: B, symbol: "guard", line: 5 };
+  const s = setup([fakeNode("svc", "class", A, 1, 50, "Svc"), fakeNode("target", "method", A, 10, 12, "list"), fakeNode("guard", "function", B, 5, 20, "guard")], [{ from: "svc", to: "target", kind: "contains" }], [], [{ from: "guard", name: "orders.list", kind: "calls", file: B, line: 7 }], [], [{ owner, local: "orders", holds: { class: { path: A, symbol: "Svc", line: 1 } } }]);
+  assert.deepEqual(s.callers("target"), []);
+  assert.equal(s.inbound.settledUses().size, 0);
+});
+
+for (const origin of ["field", "local"] as const) {
+  test(`${origin} origin rejects an occurrence outside its stated source symbol`, () => {
+    const graph = fakeCodeGraph([
+      fakeNode("svc", "class", A, 1, 30, "Svc"), fakeNode("target", "method", A, 10, 12, "list"),
+      fakeNode("owner", origin === "field" ? "class" : "function", B, 1, 40, "Owner"), fakeNode("wrong", "method", B, 5, 8, "wrong"),
+    ], [{ from: "svc", to: "target", kind: "contains" }, { from: "owner", to: "wrong", kind: "contains" }], [
+      { from: "wrong", file: B, line: 15, column: 0, name: origin === "field" ? "this.orders.list" : "orders.list", kind: "calls" },
+    ]);
+    const owner = { path: B, symbol: "Owner", line: 1 };
+    const holds = { class: { path: A, symbol: "Svc", line: 1 } };
+    const inbound = createInboundEdges(graph, isTestFile, [], origin === "field" ? [{ owner, field: "orders", holds }] : [], [], origin === "local" ? [{ owner, local: "orders", holds }] : []);
+    const [target] = graph.symbolsByIds(["target" as GraphSymbol["id"]]);
+    assert.ok(target);
+    assert.deepEqual(inbound.callersOf(target, false), []);
+    assert.equal(inbound.settledUses().size, 0);
+  });
+}

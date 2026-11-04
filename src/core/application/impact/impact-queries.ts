@@ -6,7 +6,7 @@ import type { FileChange } from "../../domain/change/diff-reader.ts";
 import { isSeedable, selectSeeds, type ComponentRef, type SelectedSeed } from "../../domain/change/seeds.ts";
 import { changedEntrypoints } from "../../domain/impact/changed-entrypoints.ts";
 import { EDGE_POLICY } from "../../domain/impact/edge-policy.ts";
-import { bareBindingKey, declarationAnchor, externalPlaceKey, nameTail, removedDeclarationCuts, rootedName, settledPlaceKey, unreadRelationCuts, unresolvedLinkCuts, type UnreadRelation } from "../../domain/impact/impact-cuts.ts";
+import { nameTail, referenceKey, uniqueReferenceKeys, removedDeclarationCuts, rootedName, unreadRelationCuts, unresolvedLinkCuts, type UnreadRelation } from "../../domain/impact/impact-cuts.ts";
 import { sortedUnique, type ImportersValue } from "../../domain/impact/importers-fact.ts";
 import { impactFact, type ImpactBudget, type ImpactedSymbol, type ImpactValue, type Seed } from "../../domain/impact/impact-fact.ts";
 import { reachedEntrypoints } from "../../domain/impact/reached-entrypoints.ts";
@@ -159,7 +159,9 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
           if (signal?.aborted) return ABORTED;
           const loads = await deps.dynamicLoads.extract(headTree.sources);
           if (signal?.aborted) return ABORTED;
-          const read = impactOf({ store, changes, requested, componentsByResource, found, fields, locals, loads, headTree, summary, budget: request.budget ?? {}, proofs: await proofsOf(deps, store, headTree), ...typeResolutionOf(content, headTree.sources) });
+          const proofs = await proofsOf(deps, store, headTree, request.signal);
+          if (signal?.aborted) return ABORTED;
+          const read = impactOf({ store, changes, requested, componentsByResource, found, fields, locals, loads, headTree, summary, budget: request.budget ?? {}, proofs, ...typeResolutionOf(content, headTree.sources) });
           if (read.missing.length > 0) {
             const names = read.missing.map(({ file, symbol }) => `${file}:${symbol}`).join(", ");
             return { ok: false, fault: { kind: "unknown-symbol", detail: `no symbol at the revision for ${names}`, entries: read.missing } };
@@ -370,7 +372,9 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
       if (signal?.aborted) return ABORTED;
       const loads = await deps.dynamicLoads.extract(headTree.sources);
       if (signal?.aborted) return ABORTED;
-      const read = impactOf({ store, changes, requested: [], componentsByResource, found, fields, locals, loads, headTree, summary, budget: request.budget ?? {}, proofs: await proofsOf(deps, store, headTree), ...typeResolutionOf(content, headTree.sources) });
+      const proofs = await proofsOf(deps, store, headTree, request.signal);
+      if (request.signal?.aborted) return ABORTED;
+      const read = impactOf({ store, changes, requested: [], componentsByResource, found, fields, locals, loads, headTree, summary, budget: request.budget ?? {}, proofs, ...typeResolutionOf(content, headTree.sources) });
       return { ok: true, value: impactFact(head.base(content, true), { ...value, ...read.value }, [...unaccounted([...fixed, ...read.cuts]), ...moduleCuts]) };
     } finally {
       store.close();
@@ -429,7 +433,7 @@ function sourceFilesOf(headTree: CommitExtraction): string[] {
  * of the repository, so the cut the index attributes to it is false and stops being emitted (`RFC-0016` gap A).
  *
  * The proof is the file's own imports plus the snapshot's module configuration, so it needs no type root, no dependency
- * and no `Program`. A rooted name the file declares itself is never retired: a declaration may shadow the import, and a
+ * and no project-wide type-checking `Program`. A rooted name the file declares itself is never retired: a declaration may shadow the import, and a
  * hidden dependence is worse than a false cut.
  */
 /**
@@ -438,28 +442,32 @@ function sourceFilesOf(headTree: CommitExtraction): string[] {
  * retires a cut (`ADR-0019`); the second is what lets a bare reference be attributed to the declaration it actually
  * names instead of to a homonym (`RFC-0016` S12). A file the reader does not know proves nothing.
  */
-async function proofsOf(deps: ImpactQueriesDeps, store: CodeGraphReader, headTree: CommitExtraction): Promise<ReferenceProofs> {
+async function proofsOf(deps: ImpactQueriesDeps, store: CodeGraphReader, headTree: CommitExtraction, signal?: AbortSignal): Promise<ReferenceProofs> {
   const reader = deps.importOrigins;
-  if (reader === undefined) return { external: new Set(), bound: new Map() };
-  const sites = new Map<string, ImportOriginSite>();
-  for (const reference of store.unresolvedReferences(sourceFilesOf(headTree))) {
-    if (reference.kind === "imports") continue;
-    const name = rootedName(reference.name);
-    if (name === "" || name === "this" || name === "super") continue;
-    sites.set(`${reference.file}\u0000${reference.line}\u0000${name}`, { file: reference.file, line: reference.line, name });
-  }
-  if (sites.size === 0) return { external: new Set(), bound: new Map() };
-  const asked = [...sites.values()];
-  const findings = await reader(headTree.sources).origins(asked);
   const external = new Set<string>();
   const bound = new Map<string, string>();
-  for (const [index, site] of asked.entries()) {
+  const localParameters = new Set<string>();
+  const validOccurrences = new Set<string>();
+  if (reader === undefined) return { external, bound, localParameters, validOccurrences };
+  const references = store.unresolvedReferences(sourceFilesOf(headTree));
+  const unique = uniqueReferenceKeys(references);
+  const asked = references.flatMap((reference) => {
+    const key = referenceKey(reference);
+    const name = rootedName(reference.name);
+    if (key === undefined || !unique.has(key) || reference.kind === "imports" || !name) return [];
+    const site: ImportOriginSite = { file: reference.file, line: reference.line, column: reference.column + 1, name, fullName: reference.name, kind: reference.kind };
+    return [{ key, reference, site }];
+  });
+  const findings = await reader(headTree.sources).origins(asked.map(({ site }) => site), signal);
+  for (const [index, { key, reference }] of asked.entries()) {
     const finding = findings[index];
-    if (finding?.status !== "complete") continue;
-    if (finding.value.kind === "external" || finding.value.kind === "ambient") external.add(externalPlaceKey(site.file, site.line, site.name));
-    if (finding.value.kind === "repository") bound.set(bareBindingKey(site.file, site.line, site.name), finding.value.file);
+    if (finding?.occurrence === true) validOccurrences.add(key);
+    if (finding?.status !== "complete" || finding.occurrence !== true) continue;
+    if (finding.value.kind === "external" || finding.value.kind === "ambient") external.add(key);
+    if (finding.value.kind === "repository") bound.set(key, finding.value.file);
+    if (finding.value.kind === "local-parameter" && reference.name === finding.value.name && reference.kind === "calls") localParameters.add(key);
   }
-  return { external, bound };
+  return { external, bound, localParameters, validOccurrences };
 }
 
 /**
@@ -467,15 +475,16 @@ async function proofsOf(deps: ImpactQueriesDeps, store: CodeGraphReader, headTre
  * declaration are asked (`EDGE_POLICY.typeResolvedKinds`), and only a target inside the repository becomes an edge: an
  * external target is a leaf the walk does not follow, and no root means no settlement at all.
  */
-function settledReferences(unresolved: readonly GraphUnresolvedReference[], port: TypeResolution | undefined): SettledReference[] {
+function settledReferences(unresolved: readonly GraphUnresolvedReference[], port: TypeResolution | undefined, validOccurrences: ReadonlySet<string>): SettledReference[] {
   if (port === undefined) return [];
-  const candidates = unresolved.filter((reference) => (EDGE_POLICY.typeResolvedKinds as readonly string[]).includes(reference.kind));
+  const unique = uniqueReferenceKeys(unresolved);
+  const candidates = unresolved.filter((reference) => { const key = referenceKey(reference); return key !== undefined && unique.has(key) && validOccurrences.has(key) && (EDGE_POLICY.typeResolvedKinds as readonly string[]).includes(reference.kind); });
   if (candidates.length === 0) return [];
-  const findings = port.resolve(candidates.map((reference) => ({ file: reference.file, line: reference.line, column: reference.column, symbol: nameTail(reference.name) })));
+  const findings = port.resolve(candidates.map((reference) => ({ file: reference.file, line: reference.line, column: reference.column + 1, symbol: nameTail(reference.name) })));
   return candidates.flatMap((reference, index): SettledReference[] => {
     const finding = findings[index];
     if (finding?.status !== "complete" || finding.value.kind !== "repository") return [];
-    return [{ from: reference.from, file: reference.file, line: reference.line, kind: reference.kind, name: reference.name, target: { file: finding.value.file, symbol: finding.value.symbol, line: finding.value.line } }];
+    return [{ from: reference.from, file: reference.file, line: reference.line, column: reference.column, kind: reference.kind, name: reference.name, target: { file: finding.value.file, symbol: finding.value.symbol, line: finding.value.line } }];
   });
 }
 
@@ -483,8 +492,10 @@ function settledReferences(unresolved: readonly GraphUnresolvedReference[], port
 interface ReferenceProofs {
   /** Places whose root a proof puts outside the repository: an import binding, or an ambient library name. */
   external: ReadonlySet<string>;
-  /** The file a bare name imported from the repository resolves to, keyed by `bareBindingKey`. */
+  /** The file a bare name imported from the repository resolves to, keyed by the complete occurrence. */
   bound: ReadonlyMap<string, string>;
+  localParameters: ReadonlySet<string>;
+  validOccurrences: ReadonlySet<string>;
 }
 
 interface WalkInput {
@@ -533,8 +544,8 @@ function impactOf(input: WalkInput): ImpactRead {
   const seeds = chosen.toSorted((a, b) => comparePosition(a.symbol, b.symbol));
   const sourceFiles = sourceFilesOf(headTree);
   const unresolved = store.unresolvedReferences(sourceFiles);
-  const settled = settledReferences(unresolved, typeResolution);
-  const inbound = createInboundEdges(store, isTest, found.flatMap((finding) => (finding.status === "complete" ? [finding.value] : [])), fields, settled, locals);
+  const settled = settledReferences(unresolved, typeResolution, input.proofs?.validOccurrences ?? new Set());
+  const inbound = createInboundEdges(store, isTest, found.flatMap((finding) => (finding.status === "complete" ? [finding.value] : [])), fields, settled, locals, input.proofs?.validOccurrences ?? new Set());
   const walk = walkImpact(seeds.map(({ symbol }) => symbol), inbound, input.budget);
 
   const walked = walk.reached.map(({ symbol }) => symbol);
@@ -543,18 +554,19 @@ function impactOf(input: WalkInput): ImpactRead {
    * name tail the index could not settle is no longer a cut. A settled target the walk never reached keeps its cut,
    * since nothing was expanded for it.
    */
-  const reachedAnchors = new Set(walked.map((symbol) => declarationAnchor(symbol.file, symbol.name)));
-  const settledPlaces = new Set(
-    settled.filter((reference) => reachedAnchors.has(declarationAnchor(reference.target.file, reference.target.symbol))).map((reference) => settledPlaceKey(reference.file, reference.line, reference.name)),
-  );
-  /** Both proofs of a known target: a settled declaration the walk reached, and an import that names something outside. */
+  const reachedIds = new Set(walked.map((symbol) => symbol.id));
+  const settledPlaces = new Set(inbound.joinedTypeUses().flatMap(({ reference, target, source }) => {
+    const key = referenceKey(reference);
+    return key !== undefined && walk.expanded.has(target) && reachedIds.has(source) ? [key] : [];
+  }));
+  /** Both proofs of a known target: an admitted joined settlement and an import that names something outside. */
   const knownPlaces = new Set([...settledPlaces, ...(input.proofs?.external ?? [])]);
   const unread = found.flatMap((finding): UnreadRelation[] => (finding.status === "unknown" ? finding.evidence.slice(0, 1).map(({ path, line }) => ({ path, line, reason: finding.reason })) : []));
 
   const cuts: Cut[] = [
     ...walk.cuts,
-    ...unresolvedLinkCuts(unresolved, walked, loads, inbound.settledUses(), knownPlaces, input.proofs?.bound),
-    ...removedDeclarationCuts(unresolved, selection.removed, knownPlaces, input.proofs?.bound),
+    ...unresolvedLinkCuts(unresolved, walked, loads, inbound.settledUses(walk.expanded, reachedIds), knownPlaces, input.proofs?.bound),
+    ...removedDeclarationCuts(unresolved, selection.removed, knownPlaces, input.proofs?.bound, input.proofs?.localParameters),
     ...unreadRelationCuts(unread, new Set(walked.map((symbol) => symbol.file)), templateOwners(componentsByResource)),
     ...summary.filesNotIndexed.map((file): Cut => ({ kind: "no-extractor", at: [file] })),
     ...selection.withoutSymbols.map((file): Cut => ({ kind: "no-extractor", at: [file] })),

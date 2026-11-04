@@ -6,6 +6,11 @@ import type { SourceFile } from "./entrypoint-extractor.port.ts";
 export interface ImportOriginSite {
   file: string;
   line: number;
+  /** 1-based UTF-16 column, normalized from the graph. */
+  column?: number;
+  /** Full graph spelling and kind, for validating the exact occurrence. */
+  fullName?: string;
+  kind?: string;
   /** The identifier the name is rooted at: `a.b()` is rooted at `a`, and `this.svc.get` at `this`. */
   name: string;
 }
@@ -27,7 +32,7 @@ export interface ImportOrigins {
    * `ambient` is the second proof of an external target (`RFC-0016` S10): nothing binds the name here, the language's own
    * libraries declare it, and the snapshot declares no global of that name.
    */
-  origins(sites: readonly ImportOriginSite[]): Promise<readonly Finding<ImportOrigin>[]>;
+  origins(sites: readonly ImportOriginSite[], signal?: AbortSignal): Promise<readonly (Finding<ImportOrigin> & { occurrence?: true })[]>;
 }
 
 /** Reads the import bindings of one snapshot; composition supplies it, so no use case imports a parser. */
