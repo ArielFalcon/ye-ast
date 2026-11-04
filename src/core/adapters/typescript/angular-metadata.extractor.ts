@@ -63,6 +63,7 @@ export interface RawMemberEvidence {
   escapedClasses: Set<string>;
   unsafeMembers: Set<string>;
   unknownMutation: boolean;
+  unknownBinding: boolean;
   unknownProvider: boolean;
 }
 
@@ -85,7 +86,7 @@ const CONSTRUCTED = new Set([...Object.keys(KINDS), "Injectable"]);
 export function readAngularMetadataFile(sf: ts.SourceFile, shape: Pick<RawRouteFile, "imports">, proveMembers = false, coreExternal = true): RawAngularFile {
   const line = (node: ts.Node): number => sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1;
   const declarations = declarationCounts(sf);
-  const result: RawAngularFile = { classes: [], memberEvidence: proveMembers ? readMemberEvidence(sf, declarations) : { methods: [], calls: [], localCalls: [], reads: new Map(), declarations, escapedClasses: new Set(), unsafeMembers: new Set(), unknownMutation: false, unknownProvider: false }, injections: [], fields: [], substituted: [], arrays: new Map() };
+  const result: RawAngularFile = { classes: [], memberEvidence: proveMembers ? readMemberEvidence(sf, declarations) : { methods: [], calls: [], localCalls: [], reads: new Map(), declarations, escapedClasses: new Set(), unsafeMembers: new Set(), unknownMutation: false, unknownBinding: false, unknownProvider: false }, injections: [], fields: [], substituted: [], arrays: new Map() };
 
   /* The export of `@angular/core` an expression names: `inject`, or `core.inject` through a namespace import. */
   const coreName = (expression: ts.Expression): string | undefined => {
@@ -332,7 +333,7 @@ function ownerOf(node: ts.Node, sf: ts.SourceFile): { name: ts.Identifier } | un
 }
 
 function readMemberEvidence(sf: ts.SourceFile, declarations: Map<string, number>): RawMemberEvidence {
-  const result: RawMemberEvidence = { methods: [], calls: [], localCalls: [], reads: new Map(), declarations, escapedClasses: new Set(), unsafeMembers: new Set(), unknownMutation: false, unknownProvider: false };
+  const result: RawMemberEvidence = { methods: [], calls: [], localCalls: [], reads: new Map(), declarations, escapedClasses: new Set(), unsafeMembers: new Set(), unknownMutation: false, unknownBinding: false, unknownProvider: false };
   const unsafeFields = new Set<string>();
   const escapedOwners = result.escapedClasses;
   const key = (owner: ts.ClassDeclaration, field: string): string => `${owner.name?.text}\0${owner.name === undefined ? 0 : sf.getLineAndCharacterOfPosition(owner.name.getStart(sf)).line + 1}\0${field}`;
@@ -356,7 +357,20 @@ function readMemberEvidence(sf: ts.SourceFile, declarations: Map<string, number>
       const name = "name" in parent && parent.name === node && !ts.isShorthandPropertyAssignment(parent);
       if (!name) result.reads.set(node.text, (result.reads.get(node.text) ?? 0) + 1);
     }
-    if (ts.isWithStatement(node) || (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === "eval")) result.unknownMutation = true;
+    if (ts.isWithStatement(node) || (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === "eval")) {
+      result.unknownMutation = true;
+      result.unknownBinding = true;
+    }
+    if (ts.isReturnStatement(node) && node.expression !== undefined) {
+      for (let scope = node.parent; scope !== undefined && scope !== sf; scope = scope.parent) {
+        if (!ts.isFunctionLike(scope)) continue;
+        if (ts.isConstructorDeclaration(scope) && ts.isClassDeclaration(scope.parent) && scope.parent.name !== undefined) {
+          const owner = scope.parent;
+          escapedOwners.add(`${owner.name!.text}\0${sf.getLineAndCharacterOfPosition(owner.name!.getStart(sf)).line + 1}`);
+        }
+        break;
+      }
+    }
     if (ts.isCallExpression(node) && !ts.isCallChain(node) && node.typeArguments === undefined && ts.isPropertyAccessExpression(node.expression) && !ts.isPropertyAccessChain(node.expression) && ts.isIdentifier(node.expression.expression)) {
       const owner = ownerOf(node, sf);
       if (owner !== undefined) {

@@ -1,3 +1,4 @@
+import type { ReferenceSite } from "./resolved-reference.ts";
 import type { SymbolRef } from "./relation.ts";
 
 /**
@@ -17,5 +18,7 @@ export interface FieldOrigin {
 export interface LocalOrigin {
   owner: SymbolRef;
   local: string;
+  /** Source-certified calls through this binding, for potential reach only. */
+  calls?: readonly (ReferenceSite & { name: string; kind: "calls" })[];
   holds: { class: SymbolRef };
 }

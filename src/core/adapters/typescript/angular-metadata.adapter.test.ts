@@ -592,3 +592,32 @@ test("a reassigned or shadowed injection local is not an exact member target", a
     "export function boot() { const svc = inject(Store); eval('mutate(svc)'); svc.write(); }",
   ]) assert.deepEqual((await memberProofs(source)).memberUses, [], source);
 });
+
+test("const local calls retain potential sites despite unrelated mutation and overloads", async () => {
+  const source = "export function boot() { const svc = inject(Store); svc.write(); }";
+  for (const complete of [true, false]) {
+    const meta = await memberProofs(source, "export class Store { write(x: string): void; write(x: number): void; write(x: any) {} }", { "src/other.ts": "Object.assign({}, {});" }, complete);
+    assert.deepEqual(meta.memberUses, []);
+    assert.deepEqual(meta.locals[0]?.calls?.map(({ name }) => name), ["svc.write"]);
+  }
+});
+
+test("unsafe local bindings do not admit potential call sites", async () => {
+  for (const source of [
+    "export function boot() { let svc = inject(Store); svc = other; svc.write(); }",
+    "export function boot() { const svc = inject(Store); run((svc: any) => svc.write()); }",
+    "export function boot() { const svc = inject(Store); publish(svc); svc.write(); }",
+    "export function boot() { svc.write(); const svc = inject(Store); }",
+    "export function boot() { const svc = inject(Store); eval('mutate(svc)'); svc.write(); }",
+    "export function boot() { const svc = inject(Store); with (other) { svc.write(); } }",
+  ]) assert.deepEqual((await memberProofs(source)).locals.flatMap((local) => local.calls ?? []), [], source);
+});
+
+test("unrelated unknown providers do not suppress potential local sites; known substitutions do", async () => {
+  const owner = "export function boot() { const svc = inject(Store); svc.write(); }";
+  const unknown = await memberProofs(owner, undefined, { "src/providers.ts": "const providers = [{ provide: unknownToken(), useValue: 1 }];" });
+  assert.equal(unknown.locals[0]?.calls?.length, 1);
+  assert.deepEqual(unknown.memberUses, []);
+  const replaced = await memberProofs(owner, undefined, { "src/providers.ts": "import { Store } from './store'; const providers = [{ provide: Store, useValue: {} }];" });
+  assert.deepEqual(replaced.locals, []);
+});

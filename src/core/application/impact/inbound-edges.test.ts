@@ -553,3 +553,17 @@ for (const receiver of ["field", "local"] as const) {
     assert.equal(exact.settledUses().size, 0);
   });
 }
+
+test("certified local call adds potential reach but never settles under a native channel", () => {
+  const nodes = [fakeNode("Svc", "class", SVC, 1, 10), fakeNode("hit", "method", SVC, 3, 4), fakeNode("Owner", "function", CMP, 1, 20), fakeNode("caller", "method", CMP, 5, 9), fakeNode("outside", "function", CMP, 30, 40)];
+  const edges: FakeEdge[] = [{ from: "Svc", to: "hit", kind: "contains" }, { from: "Owner", to: "caller", kind: "contains" }];
+  const site = { file: CMP, line: 7, column: 1, name: "svc.hit", kind: "calls" as const };
+  const origin = { owner: ref(CMP, "Owner", 1), local: "svc", holds: { class: ref(SVC, "Svc", 1) }, calls: [site] };
+  for (const [column, from, expected] of [[0, "caller", 1], [1, "caller", 0], [0, "outside", 0]] as const) {
+    const graph = fakeCodeGraph(nodes, edges, [{ from, file: CMP, line: 7, column, name: "svc.hit", kind: "calls" }]);
+    const [target] = graph.symbolsByIds(["hit" as GraphSymbol["id"]]); assert.ok(target);
+    const inbound = createInboundEdges(graph, isTestFile, [], [], [], [origin], undefined, []);
+    assert.equal(inbound.callersOf(target, false).length, expected);
+    assert.equal(inbound.settledUses().size, 0);
+  }
+});

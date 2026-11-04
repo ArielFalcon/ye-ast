@@ -9,7 +9,7 @@ import { compareText } from "../../domain/shared/code-node.ts";
 import type { Evidence, Finding, UnknownReason } from "../../domain/shared/fact.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { AngularMetadata, AngularMetadataReader } from "../../ports/angular-metadata.port.ts";
-import { readAngularMetadataFile, type RawAngularClass, type RawAngularFile, type RawInstanceMethod, type RawOperand, type RawReference, type RawTemplate, type RawText } from "./angular-metadata.extractor.ts";
+import { readAngularMetadataFile, type RawAngularClass, type RawAngularFile, type RawInstanceMethod, type RawInjection, type RawOperand, type RawReference, type RawTemplate, type RawText } from "./angular-metadata.extractor.ts";
 import { readAngularRouteFile, type RawRouteFile } from "./angular-router.extractor.ts";
 import { createDeclarationLookup } from "./declaration-lookup.ts";
 import { manifestsOf, pathsByProject, projectOf } from "./angular-projects.ts";
@@ -46,7 +46,7 @@ async function readMetadata(files: readonly SourceFile[], proof?: MemberProofCon
   const manifests = manifestsOf(files);
   for (const [project, sources] of byProject) {
     const complete = proof?.completeSource === true && byProject.size === 1 && contents.size === files.length && orphaned.length === 0 && sources.length === sourcePaths.length && sources.every((path) => projectOf(path, manifests)?.directory === project.directory);
-    const metadata = await readProject(contents, project.dependencies, sources, complete);
+    const metadata = await readProject(contents, project.dependencies, sources, complete, proof !== undefined);
     classes.push(...metadata.classes);
     findings.push(...metadata.findings);
     fields.push(...metadata.fields);
@@ -62,7 +62,7 @@ async function readMetadata(files: readonly SourceFile[], proof?: MemberProofCon
   };
 }
 
-async function readProject(contents: ReadonlyMap<string, string>, dependencies: ReadonlySet<string>, sources: readonly string[], proveMembers: boolean): Promise<AngularMetadata> {
+async function readProject(contents: ReadonlyMap<string, string>, dependencies: ReadonlySet<string>, sources: readonly string[], proveMembers: boolean, collectSites: boolean): Promise<AngularMetadata> {
   const read = async (path: string): Promise<string | undefined> => contents.get(path);
   const resolver = createModuleResolver(read, dependencies);
   const sourceSet = new Set(sources);
@@ -78,7 +78,7 @@ async function readProject(contents: ReadonlyMap<string, string>, dependencies: 
         if (shape === undefined) return undefined;
         const usesCore = [...shape.imports.values()].some((binding) => binding.module === ANGULAR_CORE);
         const coreExternal = usesCore && "external" in await resolver.resolve(file, ANGULAR_CORE);
-        return { shape, angular: readAngularMetadataFile(sf, shape, proveMembers, coreExternal) };
+        return { shape, angular: readAngularMetadataFile(sf, shape, collectSites, coreExternal) };
       })();
       parsed.set(file, held);
     }
@@ -220,7 +220,7 @@ async function readProject(contents: ReadonlyMap<string, string>, dependencies: 
     for (const reference of providerSource?.angular.substituted ?? []) {
       const binding = providerSource?.shape.imports.has(reference.name);
       const count = providerSource?.angular.memberEvidence.declarations.get(reference.name) ?? 0;
-      if (proveMembers && (binding ? count !== 0 : count !== 1)) unknownSubstitution = true;
+      if (collectSites && (binding ? count !== 0 : count !== 1)) unknownSubstitution = true;
       const holds = await originOf(file, reference);
       if (holds !== undefined) substituted.add(holdsKey(holds));
       else unknownSubstitution = true;
@@ -238,6 +238,29 @@ async function readProject(contents: ReadonlyMap<string, string>, dependencies: 
     }
   }
   const locals = [...pendingLocals.values()].filter((candidate) => !substituted.has(holdsKey(candidate.holds)));
+  const localSites = new Map<RawInjection, NonNullable<RawInjection["inlineMember"]>[]>();
+  if (collectSites) {
+    for (const file of sources) {
+      const source = await parse(file);
+      if (source === undefined) continue;
+      const evidence = source.angular.memberEvidence;
+      if (evidence.unknownBinding) continue;
+      const calls = Map.groupBy(evidence.localCalls, (call) => call.local);
+      for (const injection of source.angular.injections) {
+        const { owner, local, localScope, target } = injection;
+        if (owner === undefined || local === undefined || localScope === undefined || "opaque" in target || source.shape.imports.has(local) || evidence.declarations.get(local) !== 1 || evidence.declarations.get(owner.name) !== 1 || source.shape.declared.get(owner.name)?.line !== owner.line || !stableRoot(source, target.reference)) continue;
+        const uses = (calls.get(local) ?? []).filter((call) => call.owner.name === owner.name && call.owner.line === owner.line && call.offset >= localScope.start && call.offset < localScope.end);
+        if (evidence.reads.get(local) !== uses.length) continue;
+        const placed = await resolve(file, target.reference);
+        if (!("class" in placed) || substituted.has(holdsKey(placed))) continue;
+        const origin = locals.find((candidate) => candidate.owner.path === file && candidate.owner.line === owner.line && candidate.owner.symbol === owner.name && candidate.local === local && holdsKey(candidate.holds) === holdsKey(placed));
+        if (origin === undefined) continue;
+        const admitted = uses.map((call) => ({ name: call.member, line: call.line, column: call.column, referenceName: `${local}.${call.member}` }));
+        localSites.set(injection, admitted);
+        if (admitted.length > 0) origin.calls = admitted.map((call) => ({ file, line: call.line, column: call.column, name: call.referenceName, kind: "calls" }));
+      }
+    }
+  }
   const memberUses: MemberUseOrigin[] = [];
   if (proveMembers && !unknownSubstitution) {
     const parsedSources = await Promise.all(sources.map(parse));
@@ -296,15 +319,11 @@ async function readProject(contents: ReadonlyMap<string, string>, dependencies: 
           const member = await memberOf(file, source, raw.target.reference, receiver, call.member);
           if (member !== undefined) memberUses.push({ owner: field.owner, receiver, member, reference: { file, line: call.line, column: call.column, name: `this.${call.field}.${call.member}`, kind: "calls" } });
         }
-        const localCalls = Map.groupBy(evidence.localCalls, (call) => call.local);
         for (const injection of source.angular.injections) {
-          const { owner, inlineMember, target, local, localScope } = injection;
+          const { owner, inlineMember, target } = injection;
           if (owner === undefined || "opaque" in target || evidence.declarations.get(owner.name) !== 1 || source.shape.declared.get(owner.name)?.line !== owner.line) continue;
           const calls = inlineMember === undefined ? [] : [inlineMember];
-          if (local !== undefined && localScope !== undefined && !source.shape.imports.has(local) && evidence.declarations.get(local) === 1) {
-            const uses = (localCalls.get(local) ?? []).filter((call) => call.owner.name === owner.name && call.owner.line === owner.line && call.offset >= localScope.start && call.offset < localScope.end);
-            if (evidence.reads.get(local) === uses.length) calls.push(...uses.map((call) => ({ name: call.member, line: call.line, column: call.column, referenceName: `${local}.${call.member}` })));
-          }
+          calls.push(...(localSites.get(injection) ?? []));
           if (calls.length === 0) continue;
           const placed = await resolve(file, target.reference);
           if (!("class" in placed)) continue;

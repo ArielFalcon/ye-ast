@@ -345,11 +345,10 @@ export function createInboundEdges(
 
   /**
    * The calls made through a local a function takes from `inject()`: `const svc = inject(Svc); svc.member()`. The index
-   * types no local, so the reference stays unsettled; the binding proves which declaration the member names, and the
-   * place it sits is settled, so the member's `unresolved-link` cut retires.
+   * types no local. Certified sites give potential reach only when the native member channel is present; older
+   * readers without that channel retain the legacy settlement behavior.
    */
   function localUsesOf(node: GraphSymbol): InboundEdge[] {
-    if (memberUses !== undefined) return [];
     const owners = ownersOf(node);
     if (owners.length === 0 || locals.length === 0) return [];
     const anchor = declarationAnchor(node.file, node.name);
@@ -368,7 +367,8 @@ export function createInboundEdges(
         if (from === undefined || !isInside(from, holder) || !holdsReference(from, use)) continue;
         const occurrence = uniqueUse(use);
         if (occurrence === undefined) continue;
-        if (uniqueAnchor(node)) settledUses.push({ key: declarationUseKey(anchor, occurrence), target: node.id, source: from.id });
+        if (memberUses !== undefined && !origin.calls?.some((site) => site.file === use.file && site.line === use.line && site.column === use.column + 1 && site.name === use.name && site.kind === use.kind)) continue;
+        if (memberUses === undefined && uniqueAnchor(node)) settledUses.push({ key: declarationUseKey(anchor, occurrence), target: node.id, source: from.id });
         callers.push({ from, confidence: EDGE_POLICY.relations.confidence, basis: use.kind === "calls" ? "call" : "reference", lines: [use.line] });
       }
     }

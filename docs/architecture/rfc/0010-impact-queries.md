@@ -133,14 +133,18 @@ anchors, rather than one proof per homonym/site combination.
 
 When the native member channel is present, including an empty array, it alone authorizes member settlements.
 Existing field-origin edges remain potential impact paths, but cannot settle a reference or exclude another target.
-Local-origin bridges require the exact channel instead: supported constants must have an unambiguous binding and
-only admitted direct member reads within their owner and block. Older injected readers that omit the channel retain
-the legacy behavior. These optional metadata values do not change the public fact or graph schema.
+Local origins may also carry source-certified direct call sites for an unambiguous constant binding within its owner
+and block. These sites add potential callers without settling references or excluding candidates, even when exact
+member proof is unavailable. Older injected readers that omit the channel retain the legacy behavior. These optional
+metadata values do not change the public fact or graph schema.
 
 New proofs require a fully staged, unfiltered source selection, successful parsing and an unambiguous Angular project.
 Provider substitutions, shadowing, observable receiver/member mutation, escape and unsupported syntax withhold proof.
+A constructor with an explicit value-return cannot establish exclusive instance identity; returns in nested
+functions do not invalidate the enclosing constructor. Potential local call sites require lexical binding evidence
+independently of project-wide member stability and refuse dynamic binding constructs such as direct eval/with.
 The current checks conservatively refuse some valid uses across a whole file or project; they do not simulate runtime
-DI configuration. Missing evidence remains a cut. `EDGE_POLICY.referenceProofVersion` is 3 and participates in the
+DI configuration. Missing evidence remains a cut. `EDGE_POLICY.referenceProofVersion` is 4 and participates in the
 existing producer digest; syntax and proof changes invalidate derived facts without rebuilding an unchanged graph.
 
 ### Confidence and fan-in
