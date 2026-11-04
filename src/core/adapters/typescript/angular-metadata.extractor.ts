@@ -1,5 +1,6 @@
 import ts from "typescript";
 import { declarationCounts } from "./syntax-names.ts";
+import { privateRecordWriteTargets } from "./private-record-writes.ts";
 import { bare, type RawRouteFile } from "./angular-router.extractor.ts";
 
 const ANGULAR_CORE = "@angular/core";
@@ -340,6 +341,7 @@ function ownerOf(node: ts.Node, sf: ts.SourceFile): { name: ts.Identifier } | un
 function readMemberEvidence(sf: ts.SourceFile, declarations: Map<string, number>): RawMemberEvidence {
   const result: RawMemberEvidence = { methods: [], calls: [], localCalls: [], reads: new Map(), declarations, escapedClasses: new Set(), unsafeMembers: new Set(), unknownMutation: false, unknownBinding: false, unknownProvider: false };
   const unsafeFields = new Set<string>();
+  const privateWrites = privateRecordWriteTargets(sf, declarations);
   const escapedOwners = result.escapedClasses;
   const key = (owner: ts.ClassDeclaration, field: string): string => `${owner.name?.text}\0${owner.name === undefined ? 0 : sf.getLineAndCharacterOfPosition(owner.name.getStart(sf)).line + 1}\0${field}`;
   const ownerOfThis = (node: ts.Node): ts.ClassDeclaration | undefined => {
@@ -352,8 +354,8 @@ function readMemberEvidence(sf: ts.SourceFile, declarations: Map<string, number>
     return undefined;
   };
   const markWrite = (node: ts.Node): void => {
-    if (ts.isElementAccessExpression(node)) result.unknownMutation = true;
-    if (ts.isPropertyAccessExpression(node)) result.unsafeMembers.add(node.name.text);
+    if (ts.isElementAccessExpression(node) && !privateWrites.has(node)) result.unknownMutation = true;
+    if (ts.isPropertyAccessExpression(node) && !privateWrites.has(node)) result.unsafeMembers.add(node.name.text);
     ts.forEachChild(node, markWrite);
   };
   const visit = (node: ts.Node): void => {

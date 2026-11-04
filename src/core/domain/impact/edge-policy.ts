@@ -12,7 +12,7 @@ const TYPE_KINDS = ["class", "component", "interface"] as const;
 const ANGULAR_CLASS_KINDS = ["class", "component"] as const;
 
 export const EDGE_POLICY = {
-  referenceProofVersion: 6,
+  referenceProofVersion: 7,
   rules: [
     { edges: ["calls", "instantiates"], from: [...CODE_KINDS, ...FIELD_KINDS], to: "any" },
     { edges: ["references"], from: REFERRER_KINDS, to: REFERENCED_KINDS },
