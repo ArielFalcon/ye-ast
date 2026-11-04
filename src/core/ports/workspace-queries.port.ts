@@ -1,6 +1,6 @@
 import type { Fact, SnapshotRef } from "../domain/shared/fact.ts";
 import type { Result } from "../domain/shared/result.ts";
-import type { NameCandidate, OutwardName } from "../domain/topology/outward-name.ts";
+import type { NameCandidate, RepositoryOutwardName } from "../domain/topology/outward-name.ts";
 import type { RemoteFreshness, RepositoryResolution } from "../domain/topology/remote-snapshot.ts";
 import type { WorkspaceFault, WorkspaceReposRequest, WorkspaceRepositoryRequest, WorkspaceRepository, WorkspaceSection, WorkspaceSource } from "./workspace-repos.port.ts";
 
@@ -20,7 +20,7 @@ export interface WorkspaceValue {
   /** The names a local repository serves, with the basis that says why. */
   candidates: readonly NameCandidate[];
   /** The names no repository given serves: the agent's next step. */
-  unserved: readonly OutwardName[];
+  unserved: readonly RepositoryOutwardName[];
   /** The repositories read, for the query families that join over them. */
   repositories: readonly WorkspaceRepository[];
 }
@@ -39,6 +39,10 @@ export interface WorkspaceRefresh {
 /** An answer that carries, beside its fact, what the read refreshed to decide it. */
 export interface FactRead<T> {
   fact: Fact<T>;
+  /** Original declared clone roots, carried outside deterministic facts. */
+  repositoryRoots?: readonly { repo: string; path: string }[];
+  /** Internal read locations, which can be mirrors; excluded from deterministic facts. */
+  repositorySources?: readonly { repo: string; path: string }[];
   /** Absent when the query refreshed nothing, so an answer without a refresh carries no sidecar. */
   refresh?: WorkspaceRefresh;
 }

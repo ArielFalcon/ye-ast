@@ -24,7 +24,7 @@ export function createOutlineQueries(deps: OutlineQueriesDeps): OutlineQueries {
       const files = sortedUnique(request.files);
       const spec: FactSpec = { declaredConfig: { files }, engines };
 
-      return headReader.atHead(request, spec, async (head): Promise<Result<Fact<OutlineValue>, OutlineFault>> => {
+      return headReader.atExport(request, spec, async (head): Promise<Result<Fact<OutlineValue>, OutlineFault>> => {
         const headTree = head.tree;
         const content = contentFingerprint(headTree.export);
         const outside = files.filter((file) => !head.selected(file));

@@ -38,6 +38,8 @@ export type ImpactCallersRequest = ImpactCallersBase & AtRevision;
 
 interface ImpactCallersBase {
   repo: string;
+  /** Snapshot read location when it differs from the declared clone whose trust applies. */
+  source?: string;
   repoId: string;
   targets: readonly CallersTarget[];
   scope?: ScopeRequest;

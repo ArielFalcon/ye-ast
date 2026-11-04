@@ -35,7 +35,7 @@ interface Recognition {
  * equal to a coordinate or to the tail of a remote is `artifact` or `remote`. Nothing weaker is reported: a candidate the
  * agent confirms is still a fact about a name.
  */
-export function nameCandidates(name: OutwardName, identities: readonly RepositoryIdentity[]): NameCandidate[] {
+export function nameCandidates(name: OutwardName, identities: readonly RepositoryIdentity[], sourceRepo: string): NameCandidate[] {
   const label = serviceLabel(name);
   if (label === "") return [];
   return identities
@@ -43,7 +43,7 @@ export function nameCandidates(name: OutwardName, identities: readonly Repositor
       for (const basis of BASES) {
         const matched = recognizedBy(identity, basis).filter((recognition) => recognition.value === label);
         if (matched.length > 0) {
-          return [{ name: name.name, repo: identity.id, basis, evidence: [...sortEvidence(name.evidence), ...sortEvidence(matched.flatMap((recognition) => recognition.evidence))] }];
+          return [{ name: name.name, repo: identity.id, basis, evidence: sortEvidence([...name.evidence.map((place) => ({ ...place, repo: sourceRepo })), ...matched.flatMap((recognition) => recognition.evidence.map((place) => ({ ...place, repo: identity.repo })))]) }];
         }
       }
       return [];

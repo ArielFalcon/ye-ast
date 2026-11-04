@@ -1,5 +1,7 @@
 import { compareText } from "../shared/code-node.ts";
 import type { Evidence } from "../shared/fact.ts";
+import type { RepositoryEvidence } from "../shared/repository-evidence.ts";
+import { canonicalJson } from "../shared/canonical-json.ts";
 
 /**
  * What a repository states about the world outside it. A name is one fact: the host, prefix, coordinate or destination the
@@ -14,19 +16,21 @@ export type OutwardKind =
   | "remote"
   | "registry";
 
-export interface OutwardName {
+export interface OutwardName<E extends Evidence = Evidence> {
   /** The name as it is compared with a repository's identity: a host, a first path segment, a coordinate, a destination. */
   name: string;
   kind: OutwardKind;
-  evidence: readonly Evidence[];
+  evidence: readonly E[];
 }
+
+export type RepositoryOutwardName = OutwardName<RepositoryEvidence>;
 
 /** One local repository that serves a name, and the basis that says why. */
 export interface NameCandidate {
   name: string;
   repo: string;
   basis: "exact-name" | "artifact" | "remote" | "route-overlap";
-  evidence: readonly Evidence[];
+  evidence: readonly RepositoryEvidence[];
 }
 
 const FIRST_LABEL = /^[^.:/]+/;
@@ -69,8 +73,8 @@ export function compareCandidate(a: NameCandidate, b: NameCandidate): number {
 }
 
 /** The same name written twice is one name, its evidence gathered and sorted. */
-export function gatherNames(names: readonly OutwardName[]): OutwardName[] {
-  const held = new Map<string, OutwardName>();
+export function gatherNames<E extends Evidence>(names: readonly OutwardName<E>[]): OutwardName<E>[] {
+  const held = new Map<string, OutwardName<E>>();
   for (const name of names) {
     const key = `${name.kind}\0${name.name}`;
     const known = held.get(key);
@@ -90,9 +94,13 @@ export function gatherCandidates(candidates: readonly NameCandidate[]): NameCand
   return [...held.values()].sort(compareCandidate);
 }
 
-/** The places, one per place: the same line reached two ways is two places, so the `via` that reached it is part of it. */
-export function sortEvidence(evidence: readonly Evidence[]): Evidence[] {
-  const seen = new Map<string, Evidence>();
-  for (const place of evidence) seen.set(`${place.path}\0${place.line}\0${place.via ?? ""}`, place);
-  return [...seen.values()].sort((a, b) => compareText(a.path, b.path) || a.line - b.line);
+/** Each distinct evidence value, ordered deterministically without losing repository or span. */
+export function sortEvidence<E extends Evidence>(evidence: readonly E[]): E[] {
+  const seen = new Map<string, E>();
+  for (const place of evidence) seen.set(canonicalJson(place), place);
+  return [...seen.values()].sort((a, b) => {
+    const repoA = "repo" in a && typeof a.repo === "string" ? a.repo : "";
+    const repoB = "repo" in b && typeof b.repo === "string" ? b.repo : "";
+    return compareText(a.path, b.path) || a.line - b.line || compareText(repoA, repoB) || compareText(canonicalJson(a), canonicalJson(b));
+  });
 }

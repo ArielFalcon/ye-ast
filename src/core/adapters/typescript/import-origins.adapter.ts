@@ -1,5 +1,6 @@
 import ts from "typescript";
 import { declaredName, declaredNames } from "./syntax-names.ts";
+import { sourceTree } from "./source-tree.ts";
 import { isPackageManifest, isTypeScriptSource } from "../../domain/languages/typescript.ts";
 import type { ImportOrigin } from "../../domain/relations/resolved-reference.ts";
 import type { Evidence, Finding } from "../../domain/shared/fact.ts";
@@ -28,20 +29,19 @@ interface FileShape {
  */
 export function createImportOrigins(sources: readonly SourceFile[]): ImportOrigins {
   const texts = new Map(sources.map((file) => [file.path, file.content]));
+  const files = new Map(sources.map((file) => [file.path, file]));
   const dependencies = new Set(sources.filter((file) => isPackageManifest(file.path)).flatMap((file) => [...manifestDependencies(file.content)]));
   const modules = createModuleResolver(async (file) => texts.get(file), dependencies);
   const shapes = new Map<string, FileShape>();
 
   /**
-   * A file is read when a site asks about it, and its tree is dropped at once: what a file imports and what it declares
-   * is all the answer needs. Holding every tree, or every file of a snapshot, would cost the process tens of megabytes
-   * for two small maps.
+   * A file is read when a site asks about it; its imports and declarations are held as a shape.
    */
   const shapeOf = (file: string): FileShape => {
     let held = shapes.get(file);
     if (held === undefined) {
       const text = texts.get(file);
-      held = text === undefined || !isTypeScriptSource(file) ? { bindings: new Map<string, string>(), declared: new Set<string>() } : describe(file, text);
+      held = text === undefined || !isTypeScriptSource(file) ? { bindings: new Map<string, string>(), declared: new Set<string>() } : describe(files.get(file)!);
       shapes.set(file, held);
     }
     return held;
@@ -201,10 +201,10 @@ function localParameter(callee: ts.Identifier, name: string, scopes: WeakMap<ts.
   return !summary.unsafe && !summary.names.has(name);
 }
 
-/** What one file imports and what it binds, read from one tree that is dropped when this returns. */
-function describe(file: string, text: string): FileShape {
+/** What one file imports and what it binds. */
+function describe(file: SourceFile): FileShape {
   /** No parent pointers: the two walks below descend, and a parent on every node doubles what a tree costs. */
-  const tree = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, false, ts.ScriptKind.TS);
+  const tree = sourceTree(file, ts.ScriptTarget.Latest, false, ts.ScriptKind.TS);
   return describeTree(tree);
 }
 

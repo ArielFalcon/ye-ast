@@ -1,4 +1,5 @@
 import ts from "typescript";
+import { sourceTree } from "./source-tree.ts";
 import { isPackageManifest, isTypeScriptSource } from "../../domain/languages/typescript.ts";
 import type { CallSite, HttpTarget, StatedRequest } from "../../domain/topology/call-site.ts";
 import type { CallSiteReader } from "../../domain/topology/call-site.ts";
@@ -58,7 +59,7 @@ export function createHttpCallSites(): CallSiteReader {
 async function read(files: readonly SourceFile[], repo: string): Promise<readonly CallSite[]> {
   /* The module resolver reads the config files of the snapshot too, so the map holds every source it was given. */
   const texts = new Map(files.map((file) => [file.path, file.content]));
-  const shapes = new Map(files.filter((file) => isTypeScriptSource(file.path)).map((file) => [file.path, describe(file.path, file.content)]));
+  const shapes = new Map(files.filter((file) => isTypeScriptSource(file.path)).map((file) => [file.path, describe(file)]));
   const dependencies = new Set(files.filter((file) => isPackageManifest(file.path)).flatMap((file) => [...manifestDependencies(file.content)]));
   const modules = createModuleResolver(async (file) => texts.get(file), dependencies);
   const wrappers = wrapperMethods(shapes);
@@ -74,8 +75,8 @@ function compareText(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
 }
 
-function describe(path: string, text: string): FileShape {
-  const source = ts.createSourceFile(path, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+function describe(file: SourceFile): FileShape {
+  const source = sourceTree(file, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
   const shape: FileShape = { source, bindings: sourceBindings(source), unsafeEncoder: mayOverrideEncoder(source), consts: new Map(), imports: new Map(), reexports: new Map(), stars: [], classes: new Map() };
   for (const statement of source.statements) {
     if (ts.isImportDeclaration(statement) && ts.isStringLiteral(statement.moduleSpecifier)) {
@@ -418,7 +419,7 @@ class Reader {
     if (read === undefined) return [];
     const start = shape.source.getLineAndCharacterOfPosition(call.getStart(shape.source)).line + 1;
     const end = shape.source.getLineAndCharacterOfPosition(call.getEnd()).line + 1;
-    return [{ repo, file: shape.source.fileName, line: start, endLine: end, symbol: symbolOf(call) ?? "(top level)", transport: "http", target: read.target, ...(read.stated === undefined ? {} : { stated: read.stated }) }];
+    return [{ repo, file: shape.source.fileName, line: start, endLine: end, symbol: symbolOf(call) ?? "(top level)", ancestors: ancestorsOf(call, shape.source), transport: "http", target: read.target, ...(read.stated === undefined ? {} : { stated: read.stated }) }];
   }
 
   /**
@@ -871,11 +872,22 @@ function textOf(evaluation: Evaluation | undefined): string | undefined {
   return evaluation?.kind === "text" ? evaluation.text : undefined;
 }
 
+function ancestorsOf(node: ts.Node, source: ts.SourceFile): { symbol: string; line: number; endLine: number }[] {
+  const ancestors: { symbol: string; line: number; endLine: number }[] = [];
+  for (let current: ts.Node | undefined = node.parent; current !== undefined; current = current.parent) {
+    if (!(ts.isClassDeclaration(current) || ts.isClassExpression(current) || ts.isMethodDeclaration(current) || ts.isPropertyDeclaration(current) || ts.isFunctionDeclaration(current) || ts.isFunctionExpression(current) || ts.isVariableDeclaration(current))) continue;
+    const name = current.name;
+    if (name === undefined || !ts.isIdentifier(name)) continue;
+    ancestors.push({ symbol: name.text, line: lineOf(source, current), endLine: source.getLineAndCharacterOfPosition(current.getEnd()).line + 1 });
+  }
+  return ancestors;
+}
+
 function symbolOf(node: ts.Node): string | undefined {
   let className: string | undefined;
   let member: string | undefined;
   for (let current: ts.Node | undefined = node; current !== undefined; current = current.parent) {
-    if (member === undefined && (ts.isMethodDeclaration(current) || ts.isPropertyDeclaration(current) || ts.isFunctionDeclaration(current) || ts.isArrowFunction(current)) && "name" in current) {
+    if (member === undefined && (ts.isMethodDeclaration(current) || ts.isPropertyDeclaration(current) || ts.isFunctionDeclaration(current) || ts.isFunctionExpression(current) || (ts.isVariableDeclaration(current) && current.initializer !== undefined && (ts.isArrowFunction(current.initializer) || ts.isFunctionExpression(current.initializer))))) {
       const name = current.name;
       if (name !== undefined && ts.isIdentifier(name)) member = name.text;
       else if (ts.isFunctionDeclaration(current)) member = current.name?.text;

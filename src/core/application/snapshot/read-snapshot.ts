@@ -17,6 +17,8 @@ export const ABORTED: Result<never, VcsFault> = { ok: false, fault: { kind: "abo
 /** What reading a revision into an extracted snapshot needs; every query family starts here. */
 export interface SnapshotReaderDeps {
   vcs: Vcs;
+  preparation?: SnapshotPreparation;
+  snapshotCache?: SnapshotDataCache;
   scratch: ScratchDirectory;
   reader: SourceReader;
   extractor: EntrypointExtractor;
@@ -53,6 +55,28 @@ export interface CommitExtraction {
   findings: readonly Finding<Entrypoint>[];
 }
 
+export interface SnapshotData {
+  sources: readonly SourceFile[];
+  findings?: readonly Finding<Entrypoint>[];
+}
+
+/** Serialized immutable data only: no scratch paths, compiler trees, readers or in-flight work. */
+export interface SnapshotDataCache {
+  get(key: string): SnapshotData | undefined;
+  put(key: string, data: SnapshotData): void;
+}
+
+export interface PreparedCommit {
+  root: string;
+  tree: Pick<CommitExtraction, "export">;
+  sources(signal?: AbortSignal): Promise<Result<Pick<CommitExtraction, "export" | "sources">, VcsFault>>;
+  extract(signal?: AbortSignal): Promise<Result<CommitExtraction, VcsFault>>;
+}
+
+export interface SnapshotPreparation {
+  obtain(key: string, deps: SnapshotReaderDeps, build: (root: string) => Promise<Result<PreparedCommit, VcsFault>>): Promise<Result<PreparedCommit, VcsFault>>;
+}
+
 /** Runs `use` with a way to make temporary directories, and removes every one of them afterwards, newest first. */
 export async function withScratch<T>(scratch: ScratchDirectory, use: (directory: () => Promise<string>) => Promise<T>): Promise<T> {
   const directories: string[] = [];
@@ -67,11 +91,21 @@ export async function withScratch<T>(scratch: ScratchDirectory, use: (directory:
   }
 }
 
-/**
- * Exports the selected files in map scope of the commit `sha` into `destination`, an empty directory, and extracts the
- * entrypoints from them. A path `selected` rejects is dropped from the export, so nothing downstream lists, hashes or
- * cuts it.
- */
+/** Exports selected map-scope files, preserving the listing and cuts used by every snapshot consumer. */
+export async function exportCommit(
+  deps: Pick<SnapshotReaderDeps, "vcs" | "budget" | "sourceSelection">,
+  repo: string,
+  sha: string,
+  destination: string,
+  selected: PathSelection,
+  signal?: AbortSignal,
+): Promise<Result<CommitExport, VcsFault>> {
+  const listed = await deps.vcs.exportCommit(repo, sha, destination, { write: (path) => selected(path) && (deps.sourceSelection ?? isInMapScope)(path), ...(deps.budget && { budget: deps.budget }) }, signal);
+  if (!listed.ok) return listed;
+  if (signal?.aborted) return ABORTED;
+  return { ok: true, value: { ...listed.value, files: listed.value.files.filter((file) => selected(file.path)), skipped: listed.value.skipped.filter((entry) => selected(entry.path)) } };
+}
+
 export async function extractCommit(
   deps: Pick<SnapshotReaderDeps, "vcs" | "reader" | "extractor" | "budget" | "sourceSelection">,
   repo: string,
@@ -80,12 +114,8 @@ export async function extractCommit(
   selected: PathSelection,
   signal?: AbortSignal,
 ): Promise<Result<CommitExtraction, VcsFault>> {
-  const { vcs } = deps;
-  const listed = await vcs.exportCommit(repo, sha, destination, { write: (path) => selected(path) && (deps.sourceSelection ?? isInMapScope)(path), ...(deps.budget && { budget: deps.budget }) }, signal);
-  if (!listed.ok) return listed;
-  const exported: CommitExport = { ...listed.value, files: listed.value.files.filter((file) => selected(file.path)), skipped: listed.value.skipped.filter((entry) => selected(entry.path)) };
-  if (signal?.aborted) return ABORTED;
-  return extractExport(deps, destination, exported, signal);
+  const exported = await exportCommit(deps, repo, sha, destination, selected, signal);
+  return exported.ok ? extractExport(deps, destination, exported.value, signal) : exported;
 }
 
 /** Reads the files `exported` marks written from `root` and extracts the entrypoints from them; `extractCommit` and a live query share it. */
@@ -95,14 +125,29 @@ export async function extractExport(
   exported: CommitExport,
   signal?: AbortSignal,
 ): Promise<Result<CommitExtraction, VcsFault>> {
-  const sources = await deps.reader.read(
-    root,
-    exported.files.filter((file) => file.written).map((file) => file.path),
-  );
+  const read = await readSources(deps, root, exported, signal);
+  return read.ok ? extractSources(deps, read.value, signal) : read;
+}
+
+export async function readSources(
+  deps: Pick<SnapshotReaderDeps, "reader">,
+  root: string,
+  exported: CommitExport,
+  signal?: AbortSignal,
+): Promise<Result<Pick<CommitExtraction, "export" | "sources">, VcsFault>> {
   if (signal?.aborted) return ABORTED;
-  const findings = await deps.extractor.extract(sources);
+  const sources = await deps.reader.read(root, exported.files.filter((file) => file.written).map((file) => file.path));
+  return signal?.aborted ? ABORTED : { ok: true, value: { export: exported, sources } };
+}
+
+export async function extractSources(
+  deps: Pick<SnapshotReaderDeps, "extractor">,
+  tree: Pick<CommitExtraction, "export" | "sources">,
+  signal?: AbortSignal,
+): Promise<Result<CommitExtraction, VcsFault>> {
   if (signal?.aborted) return ABORTED;
-  return { ok: true, value: { export: exported, sources, findings } };
+  const findings = await deps.extractor.extract(tree.sources);
+  return signal?.aborted ? ABORTED : { ok: true, value: { ...tree, findings } };
 }
 
 /** What one fact states about the revision it read; the rest is derived. */

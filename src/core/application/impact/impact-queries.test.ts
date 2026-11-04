@@ -4,7 +4,7 @@ import type { FileChange } from "../../domain/change/diff-reader.ts";
 import type { ImpactValue } from "../../domain/impact/impact-fact.ts";
 import type { FieldOrigin } from "../../domain/relations/field-origin.ts";
 import { relation, type Relation } from "../../domain/relations/relation.ts";
-import type { Fact, Finding } from "../../domain/shared/fact.ts";
+import { sameIdentity, type Fact, type Finding } from "../../domain/shared/fact.ts";
 import { canonicalJson } from "../../domain/shared/canonical-json.ts";
 import type { Result } from "../../domain/shared/result.ts";
 import type { CodeGraph, CodeGraphFault, CodeGraphReader, IndexSummary } from "../../ports/code-graph.port.ts";
@@ -65,7 +65,7 @@ interface Options {
 }
 
 function setup(options: Options = {}) {
-  const log = { exported: [] as string[], plans: [] as { sha: string; destination: string; wanted: string[] }[], compared: [] as [string, string][], created: [] as string[], removed: [] as string[], indexed: 0, closed: 0, obtained: [] as string[] };
+  const log = { exported: [] as string[], plans: [] as { sha: string; destination: string; wanted: string[] }[], compared: [] as [string, string][], created: [] as string[], removed: [] as string[], indexed: 0, closed: 0, reads: 0, extractions: 0, obtained: [] as string[] };
   const nodes = options.nodes ?? [];
   const reader: CodeGraphReader = { ...fakeCodeGraph(nodes, options.edges ?? [], options.unresolved ?? []), close: () => void log.closed++ };
   const vcs: Vcs & VcsChanges = {
@@ -105,8 +105,8 @@ function setup(options: Options = {}) {
       },
       remove: async (path) => void log.removed.push(path),
     },
-    reader: { read: async (root) => options.snapshotSources?.[log.plans.find((plan) => plan.destination === root)?.sha ?? ""] ?? options.sources ?? [] },
-    extractor: { extract: async () => [] },
+    reader: { read: async (root) => { log.reads++; return options.snapshotSources?.[log.plans.find((plan) => plan.destination === root)?.sha ?? ""] ?? options.sources ?? []; } },
+    extractor: { extract: async () => { log.extractions++; return []; } },
     angular: { read: async () => options.declarations ?? [] },
     relations: options.relationReader ?? { extract: async () => ({ relations: options.relations ?? [], fields: options.fields ?? [], locals: [] }) },
     dynamicLoads: { extract: async () => options.loads ?? [] },
@@ -247,6 +247,44 @@ test("an unknown answered after the export carries the content of the successful
   const knownImporters = importersFact(await setup(served).importers({ files: ["src/A.java"] }));
   assert.equal(unknownImporters.status, "unknown");
   assert.equal(contentOf(unknownImporters), contentOf(knownImporters));
+});
+
+test("ofChange identities distinguish resolved merge bases even when their exported trees match", async () => {
+  const otherFork = "d".repeat(40);
+  const changes = { ok: true, value: [change("src/A.java")] } as const;
+  for (const options of [{}, { changes, cache: true as const }, { changes, index: { ok: false, fault: { kind: "index-failed", detail: "x" } } as const }]) {
+    const first = setup({ ...options, mergeBase: FORK });
+    const second = setup({ ...options, mergeBase: otherFork });
+    const original = fact(await first.ask());
+    const different = fact(await second.ask());
+    const alias = fact(await first.ask({ base: "another-alias" }));
+    assert.equal(sameIdentity(original, different), false);
+    assert.equal(sameIdentity(original, alias), true);
+    if (original.status !== "unknown" && different.status !== "unknown") {
+      assert.equal(original.value.mergeBase, FORK);
+      assert.equal(different.value.mergeBase, otherFork);
+    }
+    if (options.cache) assert.deepEqual(first.log.obtained, second.log.obtained.concat(second.log.obtained));
+  }
+});
+
+test("live ofChange identities distinguish resolved merge bases for matching trees and unavailable indexes", async () => {
+  const otherFork = "d".repeat(40);
+  for (const unavailable of [false, true]) {
+    const live = fakeLive({ "src/A.java": "1" });
+    if (unavailable) live.engine.lock = { ok: false, fault: { kind: "aborted", detail: "waiting" } };
+    const first = setup({ trust: TRUSTED, live, mergeBase: FORK });
+    const second = setup({ trust: TRUSTED, live, mergeBase: otherFork });
+    const request = { ...LIVE_BASE, base: "base", live: true } as const;
+    const original = fact(await first.queries.ofChange(request));
+    const different = fact(await second.queries.ofChange(request));
+    assert.equal(sameIdentity(original, different), false);
+    if (!unavailable && original.status !== "unknown" && different.status !== "unknown") {
+      assert.equal(original.value.mergeBase, FORK);
+      assert.equal(different.value.mergeBase, otherFork);
+      assert.deepEqual(original.snapshot, different.snapshot);
+    }
+  }
 });
 
 test("a change with no source and no resource builds no index and is a complete empty answer", async () => {
@@ -1306,3 +1344,15 @@ test("cancellation after member metadata stops the query and closes the graph", 
   assert.ok(!result.ok && result.fault.kind === "aborted");
   assert.equal(log.closed, 1);
 });
+for (const live of [false, true]) {
+  test(`a ${live ? "live" : "revisioned"} importers query loads dynamic sources without extracting entrypoints`, async () => {
+    const mirror = live ? fakeLive({ "src/A.java": "1" }) : undefined;
+    const { queries, log } = setup({ ...(mirror && { live: mirror, trust: TRUSTED }), loads: [{ file: "src/B.java", line: 9, specifier: "./A" }] });
+    const answer = await queries.importers({ repo: "/repo", repoId: "repo", files: ["src/A.java"], ...(live ? { live: true } : { revision: "HEAD" }) });
+    assert.ok(answer.ok);
+    assert.equal(log.reads, 1);
+    assert.equal(log.extractions, 0);
+    assert.equal(log.closed, 1);
+    if (mirror) assert.deepEqual(mirror.held, { locks: 1, released: 1 });
+  });
+}

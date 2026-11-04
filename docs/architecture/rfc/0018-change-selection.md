@@ -17,7 +17,11 @@ An agent asked `impact --live` on a 249-file branch of name-webapp and got 762 s
 `unresolved-link` cuts, and reported the unscoped answer as unusable. The cuts are not new: RFC-0016 measured
 name-webapp at `HEAD~60` with 273 cuts after S10 and S13. The seeds are the change itself, and the summary used to
 print every one: `groupedSeeds` ignored `detail`. That is fixed here too: a summary lists the seeds a caller asked for
-by name and counts the rest per file and basis, and never prints more bytes than the listing (the rule of RFC-0017).
+by name and counts the rest globally by selection basis, including the number of declarations and files. Each reached
+entrypoint also names one contributing seed with its location and basis, plus the count of other origins, using the
+entrypoint's seed indices. This preserves actionable origin evidence without listing every declaration. `detail: "full"`
+lists every seed. The summary never prints more bytes than the listing (the rule of RFC-0017): when a small listing
+is shorter, it is used instead. The structured fact and its seed indices are unchanged.
 
 The agent's two existing levers are both wrong for this question:
 

@@ -1,10 +1,11 @@
 import type { ChangedEntrypoint } from "../../domain/impact/changed-entrypoints.ts";
 import type { ImpactValue, Seed } from "../../domain/impact/impact-fact.ts";
 import type { HttpMethod, HttpRoute } from "../../domain/entrypoints/http-route.ts";
-import type { Cut, Fact, FactBase, PartialFact } from "../../domain/shared/fact.ts";
-import { incompleteSectionCuts } from "../../domain/shared/fact.ts";
+import type { Cut, Fact, FactBase } from "../../domain/shared/fact.ts";
+import { incompleteSectionCuts, provenanceOf, withCuts } from "../../domain/shared/fact.ts";
 import type { Result } from "../../domain/shared/result.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
+import { compositeBase } from "../../domain/topology/composite-inputs.ts";
 import type { CallSite, EventTarget, HttpTarget } from "../../domain/topology/call-site.ts";
 import {
   admitDownstream,
@@ -27,6 +28,7 @@ import { inferGateways, matchCallSite, matchEventCallSite, prefixOf, type Gatewa
 import { directoryNameOf } from "../../domain/topology/repository-identity.ts";
 import type { CallersTarget, ImpactFault, ImpactQueries } from "../../ports/impact-queries.port.ts";
 import type { TrustRecordReader } from "../../ports/trust-record.port.ts";
+import type { Digest } from "../../ports/digest.port.ts";
 import type { WorkspaceDefaults } from "../../ports/workspace-defaults.port.ts";
 import type { WorkspaceFault, WorkspaceRepository } from "../../ports/workspace-repos.port.ts";
 import type { FactRead, WorkspaceQueries } from "../../ports/workspace-queries.port.ts";
@@ -37,6 +39,7 @@ import { workspaceInForce } from "./workspace-defaults.ts";
 export interface WorkspaceImpactDeps {
   workspace: WorkspaceQueries;
   impact: ImpactQueries;
+  digest: Digest;
   /** The workspace the bound repository persists, which a request naming no repositories joins under `trusted`. */
   defaults?: WorkspaceDefaults;
   /** The user's declarations; without one every repository is read `untrusted`, which never honours a persisted workspace. */
@@ -45,12 +48,14 @@ export interface WorkspaceImpactDeps {
 
 type Faults = WorkspaceFault | ImpactFault;
 type Section = { callSites: CallSite[]; unmatched: CallSite[]; external: CallSite[]; ambiguous: CallSite[] };
+type ReadLocations = ReadonlyMap<string, { root: string; source: string }>;
 
 /** What the fixpoint upstream holds when no link is left to admit. */
 interface UpstreamWalk {
   graph: LinkGraph;
   /** Per repository, the walk from the call sites the answer admitted there, as its section reports it. */
   impacts: Map<string, ImpactValue>;
+  facts: Map<string, Fact<ImpactValue>[]>;
   /** Per repository, the call sites the answer admitted there. */
   sites: Map<string, CallSite[]>;
 }
@@ -62,7 +67,7 @@ export function createWorkspaceImpactQueries(deps: WorkspaceImpactDeps): Workspa
    * `readsChange` tells the two directions apart: a change has one of its own, a callers answer asks what depends on the
    * symbols named and nothing about what they send onward.
    */
-  async function compose(request: WorkspaceImpactBase, triggerRevision: string, walk: () => Promise<Result<Fact<ImpactValue>, ImpactFault>>, readsChange: boolean): Promise<Result<FactRead<WorkspaceImpactValue>, Faults>> {
+  async function compose(request: WorkspaceImpactBase, triggerRevision: string, walk: (revision: string) => Promise<Result<Fact<ImpactValue>, ImpactFault>>, readsChange: boolean): Promise<Result<FactRead<WorkspaceImpactValue>, Faults>> {
     const triggerTrust = deps.trust === undefined ? "untrusted" : await trustOf({ trust: deps.trust }, request.repo.path);
     const inForce = await workspaceInForce(request, deps.defaults, triggerTrust);
     if (!inForce.ok) return inForce;
@@ -76,14 +81,17 @@ export function createWorkspaceImpactQueries(deps: WorkspaceImpactDeps): Workspa
     });
     if (!read.ok) return read;
     const fact = read.value.fact;
-    const walked = await walk();
-    if (!walked.ok) return walked;
     if (fact.status === "unknown") return { ok: false, fault: { kind: "git-failed", detail: "the workspace read answered nothing" } };
 
     const workspace = fact.value;
     const trigger = request.repo.id ?? directoryNameOf(request.repo.path);
+    const pinned = workspace.sections[trigger]?.snapshot;
+    const walked = await walk(pinned?.kind === "sha" ? pinned.sha : triggerRevision);
+    if (!walked.ok) return walked;
     const impact = walked.value.status === "unknown" ? undefined : walked.value.value;
     const repositories = workspace.repositories;
+    const roots = new Map((read.value.repositoryRoots ?? []).map(({ repo, path }) => [repo, path]));
+    const sources: ReadLocations = new Map((read.value.repositorySources ?? []).map(({ repo, path }) => [repo, { root: roots.get(repo) ?? path, source: path }]));
     const removed = impact?.changedEntrypoints === undefined ? [] : routesOfRemoved(impact.changedEntrypoints);
     const entrypoints = repositories.map((repository) => {
       const own = entrypointsOf(repository);
@@ -92,9 +100,9 @@ export function createWorkspaceImpactQueries(deps: WorkspaceImpactDeps): Workspa
     const gateways = inferGateways(repositories.flatMap((repository) => repository.callSites), entrypoints, inForce.value.gateways);
     const settled = settleAll(repositories, entrypoints, gateways);
 
-    const upstream = await upstreamFixpoint(request, settled.joined, repositories, linkGraphOf(trigger, impact === undefined ? [] : reachedHandlers(impact)));
+    const upstream = await upstreamFixpoint(request, settled.joined, repositories, sources, linkGraphOf(trigger, impact === undefined ? [] : reachedHandlers(impact)));
     if (!upstream.ok) return upstream;
-    const downstream = await downstreamFixpoint(request, settled.joined, repositories, trigger, readsChange && impact !== undefined ? impact.seeds : []);
+    const downstream = await downstreamFixpoint(request, settled.joined, repositories, sources, trigger, readsChange && impact !== undefined ? impact.seeds : []);
     if (!downstream.ok) return downstream;
 
     const sections: Record<string, Fact<RepoImpact>> = {};
@@ -105,15 +113,21 @@ export function createWorkspaceImpactQueries(deps: WorkspaceImpactDeps): Workspa
       part.callSites.push(...(upstream.value.sites.get(repository.repo) ?? []));
       const walkOf = repository.repo === trigger ? impact : upstream.value.impacts.get(repository.repo);
       const value: RepoImpact = {
+        reads: [
+          { kind: "discovery", fact: provenanceOf(base) },
+          ...(repository.repo === trigger ? [{ kind: "trigger" as const, fact: provenanceOf(walked.value) }] : []),
+          ...(upstream.value.facts.get(repository.repo) ?? []).map((walk) => ({ kind: "upstream" as const, fact: provenanceOf(walk) })),
+          ...(downstream.value.facts.get(repository.repo) ?? []).map((walk) => ({ kind: "downstream" as const, fact: provenanceOf(walk) })),
+        ],
         ...(walkOf === undefined ? {} : { impact: walkOf }),
         callSites: part.callSites.sort(compareSite),
         unmatched: part.unmatched.sort(compareSite),
         external: part.external.sort(compareSite),
       };
-      sections[repository.repo] = sectionOf(base, value, part.ambiguous);
+      sections[repository.repo] = sectionOf(base, value, part.ambiguous, deps.digest);
     }
 
-    const triggerBase = workspace.sections[trigger] ?? fact;
+    const triggerBase = sections[trigger] ?? fact;
     for (const [repo, section] of Object.entries(workspace.sections)) {
       if (section.status === "unknown" && sections[repo] === undefined) sections[repo] = section;
     }
@@ -128,9 +142,13 @@ export function createWorkspaceImpactQueries(deps: WorkspaceImpactDeps): Workspa
       repositorySnapshots: workspace.repositorySnapshots,
       trigger: { repo: trigger, ...(impact?.mergeBase === undefined ? {} : { mergeBase: impact.mergeBase }) },
       sections,
-      links: mergeLinks(upstream.value.graph, downstream.value),
+      links: mergeLinks(upstream.value.graph, downstream.value.graph),
     };
-    return { ok: true, value: { fact: composite(baseOf(triggerBase), value), ...(read.value.refresh === undefined ? {} : { refresh: read.value.refresh }) } };
+    const config = walked.value.inputs.declaredConfig;
+    const declared = { repos: workspace.workspace.repos, gateways: inForce.value.gateways.toSorted((a, b) => compareText(a.prefix, b.prefix) || compareText(a.repo, b.repo)), source: inForce.value.source, budget: request.budget, ...("targets" in request ? { targets: request.targets } : {}), ...("changed" in request ? { changed: request.changed } : {}) };
+    const reads = Object.entries(sections).flatMap(([repo, section]) => section.status === "unknown" ? [{ kind: `discovery:${repo}`, fact: provenanceOf(section) }] : section.value.reads.map(({ kind, fact }) => ({ kind: `${kind}:${repo}`, fact })));
+    const base = compositeBase(baseOf(triggerBase), reads, declared, (text) => deps.digest.of(text), config);
+    return { ok: true, value: { fact: composite(base, value), ...(read.value.refresh === undefined ? {} : { refresh: read.value.refresh }), ...(read.value.repositoryRoots === undefined ? {} : { repositoryRoots: read.value.repositoryRoots }) } };
   }
 
   /** Every call site of the workspace joined once against the entrypoints of the other repositories, with the drift its section reports. */
@@ -164,21 +182,24 @@ export function createWorkspaceImpactQueries(deps: WorkspaceImpactDeps): Workspa
    * handlers that walk reaches are the seeds of the next join, until no link is left to admit. Each repository is walked
    * once per fresh seed set, so a repository no new link feeds is never read again.
    */
-  async function upstreamFixpoint(request: WorkspaceImpactBase, joined: readonly JoinedSite[], repositories: readonly WorkspaceRepository[], start: LinkGraph): Promise<Result<UpstreamWalk, ImpactFault>> {
+  async function upstreamFixpoint(request: WorkspaceImpactBase, joined: readonly JoinedSite[], repositories: readonly WorkspaceRepository[], sources: ReadLocations, start: LinkGraph): Promise<Result<UpstreamWalk, ImpactFault>> {
     let graph = start;
     const impacts = new Map<string, ImpactValue>();
+    const facts = new Map<string, Fact<ImpactValue>[]>();
     const sites = new Map<string, CallSite[]>();
     for (;;) {
       graph = admitUpstream(graph, joined);
       const walking = repositories.filter((repository) => graph.pending.has(repository.repo));
-      if (walking.length === 0) return { ok: true, value: { graph, impacts, sites } };
+      if (walking.length === 0) return { ok: true, value: { graph, impacts, facts, sites } };
       for (const repository of walking) {
         const targets = [...(sites.get(repository.repo) ?? []), ...(graph.pending.get(repository.repo) ?? []).map(({ site }) => site)];
-        const walkOf = await consumerWalk(request, repository, targets);
+        const walkOf = await consumerWalk(request, repository, sources, targets);
         if (walkOf !== undefined && "fault" in walkOf) return { ok: false, fault: walkOf.fault };
-        if (walkOf !== undefined) impacts.set(repository.repo, walkOf);
+        if (walkOf !== undefined) facts.set(repository.repo, [...(facts.get(repository.repo) ?? []), walkOf]);
+        const impact = walkOf?.status === "unknown" ? undefined : walkOf?.value;
+        if (impact !== undefined) impacts.set(repository.repo, impact);
         sites.set(repository.repo, targets);
-        graph = feedUpstream(graph, repository.repo, walkOf === undefined ? new Map() : reachedBy(walkOf.seeds, walkOf.entrypoints, targets));
+        graph = feedUpstream(graph, repository.repo, impact === undefined ? new Map() : reachedBy(impact.seeds, impact.entrypoints, targets));
       }
     }
   }
@@ -188,24 +209,26 @@ export function createWorkspaceImpactQueries(deps: WorkspaceImpactDeps): Workspa
    * all its call sites, which keeps the call sites whose walk reaches the handler the link fed; those are the links out
    * of it, until no link is left to admit.
    */
-  async function downstreamFixpoint(request: WorkspaceImpactBase, joined: readonly JoinedSite[], repositories: readonly WorkspaceRepository[], trigger: string, seeds: readonly Seed[]): Promise<Result<DownstreamGraph, ImpactFault>> {
+  async function downstreamFixpoint(request: WorkspaceImpactBase, joined: readonly JoinedSite[], repositories: readonly WorkspaceRepository[], sources: ReadLocations, trigger: string, seeds: readonly Seed[]): Promise<Result<{ graph: DownstreamGraph; facts: Map<string, Fact<ImpactValue>[]> }, ImpactFault>> {
     let graph = downstreamGraph();
+    const facts = new Map<string, Fact<ImpactValue>[]>();
     const egress = new Map<string, Map<string, Reach>>();
     mergeEgress(egress, trigger, changeEgress(trigger, seeds, repositories.flatMap((repository) => repository.callSites)));
     const reached = new Map<string, Map<string, readonly CallSite[]>>();
     const egressed = new Map<string, number>();
     for (;;) {
       const next = admitDownstream(graph, joined, egress);
-      if (next.links.size === graph.links.size) return { ok: true, value: graph };
+      if (next.links.size === graph.links.size) return { ok: true, value: { graph, facts } };
       graph = next;
       for (const repository of repositories) {
         const fed = graph.fed.get(repository.repo);
         if (fed === undefined || egressed.get(repository.repo) === fed.size) continue;
         let walkOf = reached.get(repository.repo);
         if (walkOf === undefined) {
-          const answered = await consumerWalk(request, repository, repository.callSites);
+          const answered = await consumerWalk(request, repository, sources, repository.callSites);
           if (answered !== undefined && "fault" in answered) return { ok: false, fault: answered.fault };
-          walkOf = answered === undefined ? new Map() : reachedBy(answered.seeds, answered.entrypoints, repository.callSites);
+          if (answered !== undefined) facts.set(repository.repo, [...(facts.get(repository.repo) ?? []), answered]);
+          walkOf = answered === undefined || answered.status === "unknown" ? new Map() : reachedBy(answered.value.seeds, answered.value.entrypoints, repository.callSites);
           reached.set(repository.repo, walkOf);
         }
         mergeEgress(egress, repository.repo, egressReach(walkOf, fed));
@@ -215,11 +238,14 @@ export function createWorkspaceImpactQueries(deps: WorkspaceImpactDeps): Workspa
   }
 
   /** What depends on the call sites given, read in the repository that holds them. */
-  async function consumerWalk(request: WorkspaceImpactBase, repository: WorkspaceRepository, sites: readonly CallSite[]): Promise<ImpactValue | { fault: ImpactFault } | undefined> {
+  async function consumerWalk(request: WorkspaceImpactBase, repository: WorkspaceRepository, sources: ReadLocations, sites: readonly CallSite[]): Promise<Fact<ImpactValue> | { fault: ImpactFault } | undefined> {
     if (sites.length === 0) return undefined;
+    const source = sources.get(repository.repo);
+    if (source === undefined) return { fault: { kind: "git-failed", detail: `no read location for ${repository.repo}` } };
     const targets: CallersTarget[] = sites.map((site) => ({ file: site.file, start: site.line, end: site.endLine ?? site.line }));
     const answered = await deps.impact.callers({
-      repo: repository.path,
+      repo: source.root,
+      ...(source.source === source.root ? {} : { source: source.source }),
       repoId: repository.repo,
       revision: repository.snapshot.kind === "sha" ? repository.snapshot.sha : "HEAD",
       targets,
@@ -228,7 +254,7 @@ export function createWorkspaceImpactQueries(deps: WorkspaceImpactDeps): Workspa
       ...(request.signal === undefined ? {} : { signal: request.signal }),
     });
     if (!answered.ok) return { fault: answered.fault };
-    return answered.value.status === "unknown" ? undefined : answered.value.value;
+    return answered.value;
   }
 
   return {
@@ -236,11 +262,11 @@ export function createWorkspaceImpactQueries(deps: WorkspaceImpactDeps): Workspa
       compose(
         request,
         request.repo.revision ?? "HEAD",
-        () =>
+        (revision) =>
           deps.impact.callers({
             repo: request.repo.path,
             repoId: request.repo.id ?? directoryNameOf(request.repo.path),
-            revision: request.repo.revision ?? "HEAD",
+            revision,
             targets: request.targets,
             ...(request.scope === undefined ? {} : { scope: request.scope }),
             ...(request.budget === undefined ? {} : { budget: request.budget }),
@@ -252,12 +278,12 @@ export function createWorkspaceImpactQueries(deps: WorkspaceImpactDeps): Workspa
       compose(
         request,
         request.repo.revision ?? request.head,
-        () =>
+        (revision) =>
           deps.impact.ofChange({
             repo: request.repo.path,
             repoId: request.repo.id ?? directoryNameOf(request.repo.path),
             base: request.base,
-            head: request.repo.revision ?? request.head,
+            head: revision,
             ...(request.changed === undefined ? {} : { changed: request.changed }),
             ...(request.scope === undefined ? {} : { scope: request.scope }),
             ...(request.budget === undefined ? {} : { budget: request.budget }),
@@ -320,14 +346,15 @@ function baseOf(fact: FactBase): FactBase {
  * One repository's section: its own fact base, so its snapshot and trust travel with it; the call sites its snapshot
  * could not decide stay cuts, and so do the call sites two repositories matched equally.
  */
-function sectionOf(section: Fact<{ unresolved: readonly unknown[] }>, value: RepoImpact, ambiguous: readonly CallSite[]): Fact<RepoImpact> {
+function sectionOf(section: Fact<{ unresolved: readonly unknown[] }>, value: RepoImpact, ambiguous: readonly CallSite[], digest: Digest): Fact<RepoImpact> {
+  if (section.status === "unknown") return section;
   const cuts: Cut[] = [
-    ...(section.status === "partial" ? section.cuts : []),
+    ...value.reads.flatMap(({ kind, fact }, index): readonly Cut[] => fact.status === "partial" ? fact.cuts : fact.status === "unknown" ? [{ kind: "section", at: [kind, String(index)] }] : []),
     ...ambiguous.map((site): Cut => ({ kind: "unresolved-link", at: [site.file, `${site.file}:${site.line}`] })),
   ];
-  const base = { ...baseOf(section), evidence: section.evidence };
-  const [first, ...rest] = cuts;
-  return first === undefined ? { ...base, status: "complete", value } : ({ ...base, status: "partial", value, cuts: [first, ...rest] } satisfies PartialFact<RepoImpact>);
+  const triggerWalk = value.reads.find(({ kind }) => kind === "trigger")?.fact;
+  const base = compositeBase({ ...baseOf(section), evidence: section.evidence }, value.reads, {}, (text) => digest.of(text), triggerWalk?.inputs.declaredConfig ?? section.inputs.declaredConfig);
+  return withCuts(base, value, cuts);
 }
 
 /** Complete only when every section is. */

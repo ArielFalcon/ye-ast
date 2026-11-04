@@ -10,14 +10,14 @@ test("one line reached two ways is two places, so the library that reached it is
 
   assert.deepEqual(
     sorted.map((place) => place.via),
-    ["com.shop.Orders", "com.shop.Events"],
+    ["com.shop.Events", "com.shop.Orders"],
   );
 });
 
 const NAME = "http://ms-orders.b2c:8080/orders/{orderId}";
 
 function candidate(basis: NameCandidate["basis"], paths: readonly [string, number][]): NameCandidate {
-  return { name: NAME, repo: "ms-orders", basis, evidence: paths.map(([path, line]) => ({ path, line })) };
+  return { name: NAME, repo: "ms-orders", basis, evidence: paths.map(([path, line]) => ({ path, line, repo: "ms-orders" })) };
 }
 
 test("the same served name reached twice is one candidate, its evidence gathered and sorted", () => {
@@ -29,8 +29,8 @@ test("the same served name reached twice is one candidate, its evidence gathered
       repo: "ms-orders",
       basis: "exact-name",
       evidence: [
-        { path: "svc/src/main/resources/application.yaml", line: 77 },
-        { path: "web/src/main/resources/application.yaml", line: 91 },
+        { path: "svc/src/main/resources/application.yaml", line: 77, repo: "ms-orders" },
+        { path: "web/src/main/resources/application.yaml", line: 91, repo: "ms-orders" },
       ],
     },
   ]);
@@ -43,4 +43,24 @@ test("the same served name under two bases is two candidates, in the domain's or
     gathered.map((each) => `${each.name} -> ${each.repo} (${each.basis}) pom.xml:${each.evidence[0]?.line}`),
     [`${NAME} -> ms-orders (artifact) pom.xml:3`, `${NAME} -> ms-orders (exact-name) pom.xml:7`],
   );
+});
+
+test("candidate evidence preserves the caller and serving clone at identical coordinates", async () => {
+  const { nameCandidates } = await import("./repository-identity.ts");
+  const place = { path: "src/app.ts", line: 7 };
+  const candidates = nameCandidates({ name: "service", kind: "http-host", evidence: [place] }, [{ repo: "server", id: "service", artifacts: [], remotes: [], evidence: [place] }], "caller");
+  assert.deepEqual(candidates[0]?.evidence, [{ ...place, repo: "caller" }, { ...place, repo: "server" }]);
+});
+
+test("gathered names preserve equal coordinates from distinct repositories", async () => {
+  const { gatherNames } = await import("./outward-name.ts");
+  const names = ["a", "b"].map((repo) => ({ name: "external", kind: "http-host" as const, evidence: [{ repo, path: "src/app.ts", line: 7 }] }));
+  assert.deepEqual(gatherNames(names)[0]?.evidence.map((place) => place.repo), ["a", "b"]);
+});
+
+test("evidence identity includes span, confidence and via with deterministic ordering", () => {
+  const places = [{ path: "src/a.ts", line: 7, endLine: 9, confidence: 0.5, via: "x" }, { path: "src/a.ts", line: 7, endLine: 8, confidence: 0.5, via: "x" }, { path: "src/a.ts", line: 7, endLine: 8, confidence: 0.8, via: "x" }];
+  const forward = sortEvidence([...places, places[0]!]);
+  assert.equal(forward.length, 3);
+  assert.deepEqual(sortEvidence([...places].reverse()), forward);
 });

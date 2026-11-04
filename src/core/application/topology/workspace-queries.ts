@@ -1,9 +1,11 @@
-import { contentFingerprint, declaredScope } from "../../domain/map/entrypoint-map.ts";
-import { incompleteSectionCuts, type Cut, type Fact, type FactBase, type TrustMode, type UnknownFact } from "../../domain/shared/fact.ts";
+import { contentFingerprint, declaredScope, exportCuts } from "../../domain/map/entrypoint-map.ts";
+import { isExtractorConfiguration } from "../../domain/languages/configuration.ts";
+import { incompleteSectionCuts, provenanceOf, withCuts, type Cut, type DeclaredScope, type Fact, type FactBase, type TrustMode, type UnknownFact } from "../../domain/shared/fact.ts";
+import { compositeBase } from "../../domain/topology/composite-inputs.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
 import type { Result } from "../../domain/shared/result.ts";
-import { pathSelection, type PathSelection } from "../../domain/shared/scope.ts";
-import { gatherCandidates, gatherNames, sortEvidence, type NameCandidate, type OutwardName } from "../../domain/topology/outward-name.ts";
+import { exportSelection, pathSelection, type PathSelection } from "../../domain/shared/scope.ts";
+import { gatherCandidates, gatherNames, sortEvidence, type NameCandidate, type OutwardName, type RepositoryOutwardName } from "../../domain/topology/outward-name.ts";
 import { callSiteEvidence, unresolvedCallSite, type CallSite, type CallSiteReader } from "../../domain/topology/call-site.ts";
 import { directoryNameOf, nameCandidates, repositoryNameOf, type RepositoryIdentity } from "../../domain/topology/repository-identity.ts";
 import { resolveRemoteSnapshot, type RemoteFreshness, type RepositoryResolution } from "../../domain/topology/remote-snapshot.ts";
@@ -15,8 +17,9 @@ import type { WorkspaceDefaults } from "../../ports/workspace-defaults.port.ts";
 import type { WorkspaceEvidence } from "../../ports/workspace-evidence.port.ts";
 import type { WorkspaceFault, WorkspaceRepository, WorkspaceRepositoryRequest, WorkspaceSection } from "../../ports/workspace-repos.port.ts";
 import type { WorkspaceQueries, WorkspaceRead, WorkspaceRefresh, WorkspaceRequest, WorkspaceValue } from "../../ports/workspace-queries.port.ts";
-import { declaredTrustOf, extractCommit, factBaseOf, trustOf, withScratch, type SnapshotReaderDeps } from "../snapshot/read-snapshot.ts";
-import { workspaceInForce } from "./workspace-defaults.ts";
+import { declaredTrustOf, factBaseOf, trustOf, withScratch, type SnapshotReaderDeps } from "../snapshot/read-snapshot.ts";
+import { withAuthorizedRemotes, workspaceInForce } from "./workspace-defaults.ts";
+import { prepareCommit } from "../snapshot/prepared-snapshot.ts";
 
 export interface WorkspaceQueriesDeps extends SnapshotReaderDeps {
   matcher: PathMatcher;
@@ -31,11 +34,13 @@ export interface WorkspaceQueriesDeps extends SnapshotReaderDeps {
 
 interface ReadRepository {
   repository: WorkspaceRepository;
+  source: string;
   base: FactBase;
   /** What the sources and the build state; the names of the call sites join them once those are read. */
   stated: readonly OutwardName[];
   sources: readonly SourceFile[];
   identity: RepositoryIdentity;
+  cuts: readonly Cut[];
 }
 
 interface Resolved extends ReadRepository {
@@ -79,7 +84,7 @@ const ORIGIN = "origin";
 export function createWorkspaceQueries(deps: WorkspaceQueriesDeps): WorkspaceQueries {
   const { vcs, matcher } = deps;
 
-  async function readRepository(at: ReadSource, scope: PathSelection, signal: AbortSignal | undefined): Promise<Result<ReadRepository, WorkspaceFault>> {
+  async function readRepository(at: ReadSource, selection: PathSelection, scope: DeclaredScope, signal: AbortSignal | undefined): Promise<Result<ReadRepository, WorkspaceFault>> {
     const { repoId, source, declared } = at;
     const resolved = await vcs.resolveCommit(source, at.revision, signal);
     if (!resolved.ok) return resolved;
@@ -87,30 +92,37 @@ export function createWorkspaceQueries(deps: WorkspaceQueriesDeps): WorkspaceQue
     if (!remotes.ok) return remotes;
     const sha = resolved.value;
     return withScratch(deps.scratch, async (directory) => {
-      const extracted = await extractCommit(deps, source, sha, await directory(), scope, signal);
+      const declaredTrust = await declaredTrustOf(deps, declared);
+      const trust = declaredTrust ?? "untrusted";
+      const prepared = await prepareCommit(deps, source, sha, directory, selection, { scope, trust }, signal);
+      if (!prepared.ok) return prepared;
+      const extracted = await prepared.value.extract(signal);
       if (!extracted.ok) return extracted;
       const { export: snapshotExport, findings, sources } = extracted.value;
-      const declaredTrust = await declaredTrustOf(deps, declared);
+      const selected = pathSelection(scope, matcher.matches);
+      const selectedSources = sources.filter(({ path }) => selected(path));
       const base = factBaseOf(deps, {
         repoId,
         sha,
-        trust: await trustOf(deps, declared),
-        scope: declaredScope(),
-        content: contentFingerprint(snapshotExport),
-        declaredConfig: {},
+        trust,
+        scope,
+        content: JSON.stringify({ export: contentFingerprint(snapshotExport), declaredTrust: declaredTrust ?? null, remotes: remotes.value.map(({ name, url }) => ({ name, repository: repositoryNameOf(url) })).toSorted((a, b) => compareText(a.name, b.name) || compareText(a.repository ?? "", b.repository ?? "")) }),
+        declaredConfig: deps.budget === undefined ? {} : { exportBudget: deps.budget },
         engines: deps.engines,
       });
       return {
         ok: true,
         value: {
-          repository: { repo: repoId, path: source, snapshot: base.snapshot, entrypoints: findings, callSites: [], ...(declaredTrust === undefined ? {} : { declaredTrust }) },
+          repository: { repo: repoId, snapshot: base.snapshot, entrypoints: findings.filter((finding) => finding.evidence.length === 0 || finding.evidence.some(({ path }) => selected(path))), callSites: [], ...(declaredTrust === undefined ? {} : { declaredTrust }) },
+          source,
           base,
-          stated: deps.evidence.names(sources),
+          stated: deps.evidence.names(selectedSources),
           sources,
+          cuts: exportCuts(snapshotExport),
           identity: {
             repo: repoId,
             id: repoId,
-            artifacts: deps.evidence.artifacts(sources),
+            artifacts: deps.evidence.artifacts(selectedSources),
             remotes: remotes.value.map((remote) => ({ remote: remote.name, repository: repositoryNameOf(remote.url) })),
             evidence: remotes.value.map((remote) => ({ path: ".git/config", line: 1, via: remote.name })),
           },
@@ -192,13 +204,13 @@ export function createWorkspaceQueries(deps: WorkspaceQueriesDeps): WorkspaceQue
    * The call sites of each repository. A repository that depends on another one given, by the artifact or name the
    * dependency states, reads the calls it makes through that repository's classes with its sources.
    */
-  async function withCallSites(read: readonly ReadRepository[], identities: readonly RepositoryIdentity[]): Promise<Resolved[]> {
+  async function withCallSites(read: readonly ReadRepository[], identities: readonly RepositoryIdentity[], selected: PathSelection): Promise<Resolved[]> {
     const resolved: Resolved[] = [];
     for (const entry of read) {
       const libraries = read.filter(
-        (other) => other !== entry && entry.stated.some((name) => name.kind === "dependency" && nameCandidates(name, identities).some((candidate) => candidate.repo === other.identity.id)),
+        (other) => other !== entry && entry.stated.some((name) => name.kind === "dependency" && nameCandidates(name, identities, entry.repository.repo).some((candidate) => candidate.repo === other.identity.id)),
       );
-      const callSites = await deps.callSites.of(entry.sources, entry.repository.repo, libraries.flatMap((library) => library.sources));
+      const callSites = (await deps.callSites.of(entry.sources, entry.repository.repo, libraries.flatMap((library) => library.sources))).filter((site) => selected(site.file));
       resolved.push({ ...entry, callSites, names: [...entry.stated, ...callSiteNames(entry.repository.repo, callSites)] });
     }
     return resolved;
@@ -206,17 +218,24 @@ export function createWorkspaceQueries(deps: WorkspaceQueriesDeps): WorkspaceQue
 
   return {
     async outwardNames(request: WorkspaceRequest) {
-      const inForce = await workspaceInForce(request, deps.defaults, await trustOf(deps, request.repo.path));
+      const trust = await trustOf(deps, request.repo.path);
+      const inForce = await workspaceInForce(request, deps.defaults, trust);
       if (!inForce.ok) return inForce;
       const asked = [request.repo, ...inForce.value.repos];
       const ids = asked.map((repository) => repository.id ?? directoryNameOf(repository.path));
       const duplicate = ids.find((id, index) => ids.indexOf(id) !== index);
       if (duplicate !== undefined) return { ok: false, fault: { kind: "duplicate-repository", detail: duplicate } };
 
-      const refreshed = await refreshRemotes(asked.slice(1), request.repo, request.offline === true, request.signal);
+      const authority = inForce.value.source === "request" && deps.refresh !== undefined && request.offline !== true
+        ? await workspaceInForce({ repo: request.repo }, deps.defaults, trust)
+        : inForce;
+      if (!authority.ok) return authority;
+      const refreshable = withAuthorizedRemotes(asked.slice(1), authority.value.repos);
+      const refreshed = await refreshRemotes(refreshable, request.repo, request.offline === true, request.signal);
       if (!refreshed.ok) return refreshed;
 
-      const scope = pathSelection(declaredScope(), matcher.matches);
+      const scope = declaredScope(request.scope);
+      const selection = exportSelection(scope, matcher.matches, isExtractorConfiguration);
       const read: ReadRepository[] = [];
       const unavailable: { repoId: string; sha: string }[] = [];
       for (const [index, declaration] of asked.entries()) {
@@ -226,7 +245,7 @@ export function createWorkspaceQueries(deps: WorkspaceQueriesDeps): WorkspaceQue
           unavailable.push({ repoId, sha: plan.sha });
           continue;
         }
-        const result = await readRepository(plan.at, scope, request.signal);
+        const result = await readRepository(plan.at, selection, scope, request.signal);
         if (result.ok) {
           read.push(result.value);
           continue;
@@ -242,27 +261,23 @@ export function createWorkspaceQueries(deps: WorkspaceQueriesDeps): WorkspaceQue
       if (trigger === undefined) return { ok: false, fault: { kind: "git-failed", detail: "a workspace request names no repository" } };
 
       const identities = read.map((entry) => entry.identity);
-      const resolved = await withCallSites(read, identities);
+      const resolved = await withCallSites(read, identities, pathSelection(scope, matcher.matches));
       const sections: Record<string, Fact<WorkspaceSection>> = {};
       const candidates: NameCandidate[] = [];
-      const unserved: OutwardName[] = [];
+      const unserved: RepositoryOutwardName[] = [];
       for (const entry of resolved) {
         const names = gatherNames(entry.names);
         const unresolved = entry.callSites.flatMap((site) => (site.target.status === "unknown" ? [unresolvedCallSite(site)] : []));
         const section: FactBase & { evidence: readonly { path: string; line: number }[] } = { ...(entry.base as FactBase), evidence: sortEvidence(names.flatMap((name) => name.evidence)) };
-        const cuts = unresolved.map((place) => ({ kind: "unresolved-link" as const, at: [place.path, `${place.path}:${place.line}`, ...(place.via === undefined ? [] : [`library ${place.via}`])] }));
-        const [firstCut, ...restCuts] = cuts;
-        sections[entry.repository.repo] =
-          firstCut === undefined
-            ? { ...section, status: "complete", value: { names, unresolved } }
-            : { ...section, status: "partial", value: { names, unresolved }, cuts: [firstCut, ...restCuts] };
+        const cuts = [...entry.cuts, ...unresolved.map((place) => ({ kind: "unresolved-link" as const, at: [place.path, `${place.path}:${place.line}`, ...(place.via === undefined ? [] : [`library ${place.via}`])] }))];
+        sections[entry.repository.repo] = withCuts(section, { names, unresolved }, cuts);
         for (const name of names) {
-          const served = nameCandidates(name, identities);
-          if (served.length === 0) unserved.push(name);
+          const served = nameCandidates(name, identities, entry.repository.repo);
+          if (served.length === 0) unserved.push({ ...name, evidence: name.evidence.map((place) => ({ ...place, repo: entry.repository.repo })) });
           candidates.push(...served);
         }
       }
-      for (const entry of unavailable) sections[entry.repoId] = unavailableSection(deps, entry.repoId, entry.sha);
+      for (const entry of unavailable) sections[entry.repoId] = unavailableSection(deps, entry.repoId, entry.sha, scope);
 
       const value: WorkspaceValue = {
         workspace: {
@@ -276,8 +291,11 @@ export function createWorkspaceQueries(deps: WorkspaceQueriesDeps): WorkspaceQue
         unserved: gatherNames(unserved),
         repositories: resolved.map((entry) => ({ ...entry.repository, callSites: entry.callSites })).sort((a, b) => compareText(a.repo, b.repo)),
       };
-      const fact = composite({ ...trigger.base, evidence: [] }, value);
-      return { ok: true, value: { fact, ...(refreshed.value.refresh === undefined ? {} : { refresh: refreshed.value.refresh }) } };
+      const base = compositeBase({ ...trigger.base, evidence: [] }, Object.entries(value.sections).map(([repo, section]) => ({ kind: `discovery:${repo}`, fact: provenanceOf(section) })), { repos: value.workspace.repos, gateways: value.workspace.gateways, source: value.workspace.source }, (text) => deps.digest.of(text));
+      const fact = composite(base, value);
+      const repositoryRoots = asked.map((repository, index) => ({ repo: ids[index]!, path: repository.path })).toSorted((a, b) => compareText(a.repo, b.repo));
+      const repositorySources = resolved.map(({ repository, source }) => ({ repo: repository.repo, path: source })).toSorted((a, b) => compareText(a.repo, b.repo));
+      return { ok: true, value: { fact, repositoryRoots, repositorySources, ...(refreshed.value.refresh === undefined ? {} : { refresh: refreshed.value.refresh }) } };
     },
   };
 }
@@ -286,9 +304,9 @@ export function createWorkspaceQueries(deps: WorkspaceQueriesDeps): WorkspaceQue
  * A repository the refresh pinned a revision for and no copy holds: its section says so, and it names the sha the
  * snapshot stands for. No content was read, so the content digest stands for none.
  */
-function unavailableSection(deps: WorkspaceQueriesDeps, repoId: string, sha: string): UnknownFact {
+function unavailableSection(deps: WorkspaceQueriesDeps, repoId: string, sha: string, scope: DeclaredScope): UnknownFact {
   const trust: TrustMode = "trusted";
-  return { ...factBaseOf(deps, { repoId, sha, trust, scope: declaredScope(), content: "", declaredConfig: {}, engines: deps.engines }), status: "unknown", reason: "revision-unavailable" };
+  return { ...factBaseOf(deps, { repoId, sha, trust, scope, content: "", declaredConfig: deps.budget === undefined ? {} : { exportBudget: deps.budget }, engines: deps.engines }), status: "unknown", reason: "revision-unavailable" };
 }
 
 /**

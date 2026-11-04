@@ -41,7 +41,6 @@ export interface WorkspaceSection {
 /** One repository read for a workspace answer: its snapshot, the entrypoints of that snapshot and its call sites. */
 export interface WorkspaceRepository {
   repo: string;
-  path: string;
   snapshot: SnapshotRef;
   entrypoints: readonly Finding<Entrypoint>[];
   callSites: readonly CallSite[];

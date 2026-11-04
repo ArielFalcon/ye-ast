@@ -47,6 +47,7 @@ import { walkImpact } from "./walk.ts";
 import type { TypeResolution } from "../../ports/type-resolution.port.ts";
 import type { ImportOriginSite, ImportOriginsReader } from "../../ports/import-origins.port.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
+import { prepareCommit } from "../snapshot/prepared-snapshot.ts";
 
 export interface ImpactQueriesDeps extends HeadReaderDeps {
   /** The walk reads the change between two revisions, which no other family asks for. */
@@ -178,7 +179,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
       const files = sortedUnique(request.files);
       const spec: FactSpec = { declaredConfig: { files }, engines: importersEngines };
 
-      return importerReader.atHead(request, spec, async (head): Promise<Result<Fact<ImportersValue>, VcsFault>> => {
+      return importerReader.atSources(request, spec, async (head): Promise<Result<Fact<ImportersValue>, VcsFault>> => {
         const headTree = head.tree;
         const content = contentFingerprint(headTree.export, importerSource);
         const outside = files.filter((file) => !head.selected(file));
@@ -245,10 +246,14 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
     const radius = blastRadius(mergeBase, diff.value.filter((file) => selected(file.path)));
 
     return withScratch(deps.scratch, async (directory): Promise<Answer> => {
-      const headDirectory = await directory();
-      const headTree = await extractCommit(changeDeps, repo, head.value, headDirectory, exported, signal);
+      const preparedHead = await prepareCommit(changeDeps, repo, head.value, directory, exported, { scope, trust }, signal);
+      if (!preparedHead.ok) return preparedHead;
+      const headDirectory = preparedHead.value.root;
+      const headTree = await preparedHead.value.extract(signal);
       if (!headTree.ok) return headTree;
-      const baseTree = mergeBase === head.value ? headTree : await extractCommit(changeDeps, repo, mergeBase, await directory(), exported, signal);
+      const preparedBase = mergeBase === head.value ? preparedHead : await prepareCommit(changeDeps, repo, mergeBase, directory, exported, { scope, trust }, signal);
+      if (!preparedBase.ok) return preparedBase;
+      const baseTree = mergeBase === head.value ? headTree : await preparedBase.value.extract(signal);
       if (!baseTree.ok) return baseTree;
       const reading: HeadReading = {
         tree: headTree.value,
@@ -279,7 +284,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
 
     const opened = await openLive(live, { repo, scope, selected: exported, store: true, signal, onStale: request.onStale }, (tree) =>
       withScratch(deps.scratch, async (directory): Promise<Answer> => {
-        const liveTree = await extractExport(deps, tree.root, tree.export, signal);
+        const liveTree = await extractExport(changeDeps, tree.root, tree.export, signal);
         if (!liveTree.ok) return liveTree;
         const baseTree = await extractCommit(changeDeps, repo, mergeBase, await directory(), exported, signal);
         if (!baseTree.ok) return baseTree;
@@ -303,7 +308,9 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
     );
     if (opened.ok) return opened.value;
     const { fault } = opened;
-    return fault.kind === "unavailable" ? { ok: true, value: headReader.unavailableLive(trust, scope, head.value, repoId, spec) } : { ok: false, fault };
+    if (fault.kind !== "unavailable") return { ok: false, fault };
+    const unavailable = headReader.unavailableLive(trust, scope, head.value, repoId, spec);
+    return unknownFact(headReader.factBase(trust, unavailable.snapshot, JSON.stringify([mergeBase, head.value]), spec, scope, undefined), "index-unavailable");
   }
 
   /** Everything `ofChange` does once it holds the diff and both trees; a commit and the live tree differ only in how they got here. */
@@ -321,7 +328,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
     const before = !sameTree && changes.some((file) => file.deleted && !isReadableFile(file.path)) ? await deps.angular.read(baseTree.sources) : [];
     if (signal?.aborted) return ABORTED;
     const { owners: componentsByResource, covered } = resourceImpact(declarations, before, changes);
-    const content = JSON.stringify([contentFingerprint(baseTree.export, moduleSource), contentFingerprint(headTree.export, moduleSource)]);
+    const content = JSON.stringify([radius.mergeBase, contentFingerprint(baseTree.export, moduleSource), contentFingerprint(headTree.export, moduleSource)]);
     const declared = holdsDeclaredSource(headTree.export.files);
     const fixed = [
       ...exportCuts(headTree.export),
@@ -394,6 +401,7 @@ function moduleCoverage(read: ModuleDependencies, tree: CommitExtraction, change
   const accounted = new Set([...read.files.map(({ file }) => file), ...read.unread.map(({ file }) => file)]);
   const listed = new Set(tree.export.files.map(({ path }) => path));
   const missing = changes.filter(({ path }) => (isTypeScriptSource(path) || isJsonModuleResource(path)) && !accounted.has(path)
+    && !(isJsonModuleResource(path) && tree.sources.some((source) => source.path === path))
     && (listed.has(path) || tree.export.stopped !== undefined || tree.export.skipped.some((entry) => entry.path === path || path.startsWith(`${entry.path}/`))));
   return missing.length === 0 ? read : { ...read, unread: [...read.unread, ...missing.map(({ path }) => ({ file: path, reason: "source-unreadable" as const }))] };
 }

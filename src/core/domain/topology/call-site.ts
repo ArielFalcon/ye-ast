@@ -10,6 +10,8 @@ export interface CallSite {
   endLine?: number;
   /** The enclosing declaration, by the entrypoint join's simple name. */
   symbol: string;
+  /** Named declarations enclosing this site in the source AST, nearest first. */
+  ancestors?: readonly { symbol: string; line: number; endLine: number }[];
   transport: "http" | "event";
   target: Finding<HttpTarget | EventTarget>;
   /** The request the code writes, when the snapshot decides everything about it but the base it reaches. */

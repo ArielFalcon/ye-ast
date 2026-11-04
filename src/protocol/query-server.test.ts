@@ -181,7 +181,7 @@ const OPERATIONS = [
   {
     method: METHOD.impactCallers,
     operation: "callers",
-    params: { repo: "/work/shop", repoId: "shop", revision: "v1", targets: [{ file: "a.ts", symbol: "run" }, { file: "b.ts", start: 2, end: 9 }], budget: BUDGET },
+    params: { repo: "/work/shop", source: "/mirrors/shop", repoId: "shop", revision: "v1", targets: [{ file: "a.ts", symbol: "run" }, { file: "b.ts", start: 2, end: 9 }], budget: BUDGET },
   },
   { method: METHOD.impactImporters, operation: "importers", params: { repo: "/work/shop", repoId: "shop", revision: "v2", files: ["a.ts", "b.ts"] } },
   { method: METHOD.outlineFiles, operation: "outline", params: { repo: "/work/shop", repoId: "shop", revision: "v2", files: ["a.ts", "b.ts"] } },

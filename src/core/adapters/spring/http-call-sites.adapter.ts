@@ -19,7 +19,7 @@ import {
   TEMPLATE_VERBS,
 } from "./http-client-vocabulary.ts";
 import { argumentsOf, assignmentsOf, localBindings, type Binding } from "./java-members.ts";
-import { holdersOf, invocationsOf, NO_VARIABLES, parametersOf, receiverOf, referencesParameter, symbolOf, type Invocation } from "./java-invocations.ts";
+import { ancestorsOf, holdersOf, invocationsOf, NO_VARIABLES, parametersOf, receiverOf, referencesParameter, symbolOf, type Invocation } from "./java-invocations.ts";
 import { externalNames, isPlatformName, scopeOf, type Expr, type JavaFile, type JavaProject, type TypeDecl } from "./java-symbols.ts";
 import { stringLiteralValue } from "./java-literals.ts";
 import { annotationUses, createSpringAnnotations, pathExpressions, type SpringAnnotations } from "./request-mapping.ts";
@@ -93,7 +93,7 @@ export class JavaHttpReader {
 
   private siteOf(repo: string, invocation: Invocation, target: Finding<HttpTarget>): CallSite {
     const span = spanOf(invocation.type.file.path, invocation.node);
-    return { repo, file: span.path, line: span.line, ...(span.endLine === span.line ? {} : { endLine: span.endLine }), symbol: symbolOf(invocation), transport: "http", target: withEvidence(target, span) };
+    return { repo, file: span.path, line: span.line, ...(span.endLine === span.line ? {} : { endLine: span.endLine }), symbol: symbolOf(invocation), ancestors: ancestorsOf(invocation.node), transport: "http", target: withEvidence(target, span) };
   }
 
   private receiverOf(object: Node, invocation: Invocation) {
@@ -235,7 +235,7 @@ export class JavaHttpReader {
       const declared = feign === undefined ? this.exchangeOf(uses, scope, exchange) : this.feignOf(uses, scope, feign);
       return declared.map((target) => {
         const span = spanOf(type.file.path, method.node);
-        return { repo, file: span.path, line: span.line, ...(span.endLine === span.line ? {} : { endLine: span.endLine }), symbol: `${type.qualifiedName}.${method.name}`, transport: "http" as const, target: withEvidence(target, span) };
+        return { repo, file: span.path, line: span.line, ...(span.endLine === span.line ? {} : { endLine: span.endLine }), symbol: `${type.qualifiedName}.${method.name}`, ancestors: ancestorsOf(method.node), transport: "http" as const, target: withEvidence(target, span) };
       });
     });
   }

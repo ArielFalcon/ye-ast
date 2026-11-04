@@ -80,13 +80,13 @@ type ChildTable = { file: string; raw: RawRouteFile; table: RawTable };
  * down to exactly one declaration is unresolved. Each table is built once and shared by the entries that load it.
  * Returns the root tables, the candidates that do not parse and the unresolved child references.
  */
-export async function loadRouteTables(candidates: readonly string[], read: SourceReader, dependencies: ReadonlySet<string>): Promise<LoadedRouteTables> {
+export async function loadRouteTables(candidates: readonly string[], read: SourceReader, dependencies: ReadonlySet<string>, parseSource?: (file: string) => RawRouteFile | undefined): Promise<LoadedRouteTables> {
   const resolver = createModuleResolver(read, dependencies);
   const parsed = new Map<string, Promise<RawRouteFile | undefined>>();
   const parse = (file: string): Promise<RawRouteFile | undefined> => {
     let held = parsed.get(file);
     if (held === undefined) {
-      held = read(file).then((source) => (source === undefined ? undefined : parseAngularRouteFile(file, source)));
+      held = read(file).then((source) => (source === undefined ? undefined : parseSource === undefined ? parseAngularRouteFile(file, source) : parseSource(file)));
       parsed.set(file, held);
     }
     return held;

@@ -3,16 +3,16 @@ import assert from "node:assert/strict";
 import type { HttpRoute } from "../entrypoints/http-route.ts";
 import { canonicalJson } from "../shared/canonical-json.ts";
 import type { CallSite, HttpTarget } from "../topology/call-site.ts";
-import type { NameCandidate, OutwardName } from "../topology/outward-name.ts";
+import type { NameCandidate, OutwardName, RepositoryOutwardName } from "../topology/outward-name.ts";
 import type { Decision, DecisionSet } from "./decision.ts";
 import { decisionsOf, type DecisionInput, type DecisionRepository } from "./decision-set.ts";
 
-function outward(name: string, kind: OutwardName["kind"] = "http-host", evidence: OutwardName["evidence"] = [{ path: "src/app.ts", line: 1 }]): OutwardName {
-  return { name, kind, evidence };
+function outward(name: string, kind: OutwardName["kind"] = "http-host", evidence: OutwardName["evidence"] = [{ path: "src/app.ts", line: 1 }]): RepositoryOutwardName {
+  return { name, kind, evidence: evidence.map((place) => ({ ...place, repo: "webapp" })) };
 }
 
 function candidate(name: string, repo: string, basis: NameCandidate["basis"] = "exact-name"): NameCandidate {
-  return { name, repo, basis, evidence: [{ path: `src/${repo}.ts`, line: 1 }] };
+  return { name, repo, basis, evidence: [{ path: `src/${repo}.ts`, line: 1, repo }] };
 }
 
 function route(path: string, handlerLine = 10, method: HttpRoute["method"] = "GET"): HttpRoute {
@@ -123,7 +123,7 @@ test("an unserved name is one free-text decision carrying the places that write 
   assert.deepEqual(decision?.options, []);
   assert.equal(decision?.allowsFreeText, true);
   assert.equal(decision?.required, false);
-  assert.deepEqual(decision?.evidence, [{ path: "src/geo.ts", line: 4 }]);
+  assert.deepEqual(decision?.evidence, [{ path: "src/geo.ts", line: 4, repo: "webapp" }]);
 });
 
 test("two unserved names that write one string are one decision with both places", () => {
@@ -135,8 +135,8 @@ test("two unserved names that write one string are one decision with both places
 
   assert.deepEqual(ids(set), ["repository:geo-api"]);
   assert.deepEqual(byId(set).get("repository:geo-api")?.evidence, [
-    { path: "a.ts", line: 1 },
-    { path: "b.ts", line: 2 },
+    { path: "a.ts", line: 1, repo: "webapp" },
+    { path: "b.ts", line: 2, repo: "webapp" },
   ]);
 });
 
@@ -166,7 +166,7 @@ test("a cut that names a library is one decision offering every clone, none reco
 
   assert.deepEqual(ids(set), ["library:com.acme.OrdersClient"]);
   const decision = byId(set).get("library:com.acme.OrdersClient");
-  assert.deepEqual(decision?.evidence, [{ path: "webapp/src/app.ts", line: 7 }]);
+  assert.deepEqual(decision?.evidence, [{ path: "webapp/src/app.ts", line: 7, repo: "webapp" }]);
   assert.deepEqual(options(decision), ["billing", "orders", "webapp"]);
   assert.equal(decision?.allowsFreeText, true);
   assert.equal(decision?.required, false);
@@ -184,8 +184,8 @@ test("two cuts that name one library are one decision with both places", () => {
 
   assert.deepEqual(ids(set), ["library:com.acme.OrdersClient"]);
   assert.deepEqual(byId(set).get("library:com.acme.OrdersClient")?.evidence, [
-    { path: "geo/src/a.ts", line: 3 },
-    { path: "webapp/src/b.ts", line: 9 },
+    { path: "geo/src/a.ts", line: 3, repo: "geo" },
+    { path: "webapp/src/b.ts", line: 9, repo: "webapp" },
   ]);
 });
 
@@ -251,7 +251,7 @@ test("a prefix no route serves is a gateway decision with no option, citing the 
   assert.deepEqual(decision?.options, []);
   assert.equal(decision?.allowsFreeText, false);
   assert.equal(decision?.required, false);
-  assert.deepEqual(decision?.evidence, [{ path: "webapp/src/app.ts", line: 7 }]);
+  assert.deepEqual(decision?.evidence, [{ path: "webapp/src/app.ts", line: 7, repo: "webapp" }]);
 });
 
 test("a prefix two repositories match offers both and recommends none", () => {
@@ -364,7 +364,7 @@ test("a repository declared without a remote offers its clone's own remote URL w
 
   const decision = byId(set).get("remote:billing");
   assert.deepEqual(options(decision), ["https://git.example.com/billing.git(origin)"]);
-  assert.deepEqual(decision?.options[0]?.evidence, [{ path: ".git/config", line: 1, via: "origin" }]);
+  assert.deepEqual(decision?.options[0]?.evidence, [{ path: ".git/config", line: 1, via: "origin", repo: "billing" }]);
   assert.equal(decision?.allowsFreeText, true);
   assert.equal(decision?.required, false);
 });
@@ -401,4 +401,21 @@ test("a revision-unavailable resolution offering a consulted ref that carries a 
   assert.deepEqual(options(decision), ["develop"]);
   assert.equal(decision?.allowsFreeText, true);
   assert.equal(decision?.required, false);
+});
+
+test("decision evidence retains the owners of identical call and route coordinates", () => {
+  const shared = { path: "src/app.ts", line: 7 };
+  const invoke = (repo: string): CallSite => ({ ...call(repo, "/api/orders"), file: shared.path, line: shared.line });
+  const handler = { ...route("/orders"), handler: { path: shared.path, line: shared.line, symbol: "App.run" } };
+  const set = decisionsOf(input({ repositories: [repository("webapp", { callSites: [invoke("webapp"), cut("webapp", "Library", shared)] }), repository("other", { callSites: [invoke("other"), cut("other", "Library", shared)] }), repository("server-a", { entrypoints: [handler] }), repository("server-b", { entrypoints: [handler] })] }));
+  assert.deepEqual(byId(set).get("library:Library")?.evidence, [{ ...shared, repo: "other" }, { ...shared, repo: "webapp" }]);
+  const gateway = byId(set).get("gateway:api");
+  assert.deepEqual(gateway?.evidence, [{ ...shared, repo: "other" }, { ...shared, repo: "webapp" }]);
+  assert.deepEqual(gateway?.options.map((option) => option.evidence), [[{ ...shared, repo: "server-a" }], [{ ...shared, repo: "server-b" }]]);
+});
+
+test("one unserved name retains identical locations from both repositories", () => {
+  const evidence = ["alpha", "beta"].map((repo) => ({ repo, path: "src/app.ts", line: 7 }));
+  const set = decisionsOf(input({ unserved: [{ name: "external", kind: "http-host", evidence }] }));
+  assert.deepEqual(byId(set).get("repository:external")?.evidence, evidence);
 });

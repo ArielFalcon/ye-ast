@@ -1,4 +1,5 @@
 import ts from "typescript";
+import { sourceTree } from "./source-tree.ts";
 import { isTypeScriptSource } from "../../domain/languages/typescript.ts";
 import type { DynamicLoadReader, DynamicLoad } from "../../ports/dynamic-loads.port.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
@@ -15,7 +16,7 @@ export function createDynamicLoadReader(): DynamicLoadReader {
 }
 
 function loadsOf(file: SourceFile): DynamicLoad[] {
-  const source = ts.createSourceFile(file.path, file.content, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const source = sourceTree(file, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
   const loads: DynamicLoad[] = [];
   const visit = (node: ts.Node): void => {
     if (ts.isCallExpression(node) && loadsModule(node)) {

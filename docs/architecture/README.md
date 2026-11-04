@@ -26,6 +26,8 @@ marked **Proposed** awaits the owner's acceptance.
 | [0017](adr/0017-owner-of-a-member-expands-only-whole-type-edges.md) | A type reached through one of its members expands only through whole-type edges | Accepted |
 | [0018](adr/0018-type-information-as-a-fact-input.md) | A fact may settle a reference with `typescript`'s compiler API in process, from a type root outside the snapshot; the root is an input of every fact that used it. Measured: as an edge source it removes one cut | Proposed |
 | [0019](adr/0019-cuts-retired-on-a-proven-external-target.md) | A cut is not emitted when the file's own imports prove its target outside the repository; no type root, and a file-level shadow rule that gives up 6% of the retirements. Measured: 6% to 13% fewer cuts | Proposed |
+| [0020](adr/0020-host-budgeted-snapshot-memory-cache.md) | Serialized snapshot data in memory, bounded by a host-overridable byte budget; Git exports stay temporary | Accepted |
+| [0021](adr/0021-enable-snapshot-memory-cache-by-default.md) | Snapshot data cache enabled by default with 32 MiB; host override and explicit zero preserved | Accepted |
 
 ## Designs (RFC)
 

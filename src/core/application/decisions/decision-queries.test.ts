@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import type { Decision } from "../../domain/decisions/decision.ts";
 import type { Entrypoint } from "../../domain/entrypoints/entrypoint.ts";
 import type { HttpRoute } from "../../domain/entrypoints/http-route.ts";
-import { SCHEMA, type CompleteFact, type Fact, type Finding, type PartialFact } from "../../domain/shared/fact.ts";
+import { SCHEMA, sameIdentity, type CompleteFact, type Fact, type Finding, type PartialFact } from "../../domain/shared/fact.ts";
 import type { Result } from "../../domain/shared/result.ts";
 import type { CallSite } from "../../domain/topology/call-site.ts";
 import type { NameCandidate, OutwardName } from "../../domain/topology/outward-name.ts";
@@ -42,7 +42,7 @@ function callSite(repo: string, path: string): CallSite {
 }
 
 function repository(repo: string, overrides: Partial<WorkspaceRepository> = {}): WorkspaceRepository {
-  return { repo, path: `/work/${repo}`, snapshot: { repo, kind: "sha", sha: SHA }, entrypoints: [], callSites: [], declaredTrust: "untrusted", ...overrides };
+  return { repo, snapshot: { repo, kind: "sha", sha: SHA }, entrypoints: [], callSites: [], declaredTrust: "untrusted", ...overrides };
 }
 
 function outward(name: string): OutwardName {
@@ -61,15 +61,15 @@ const WEB = repository("shop-web", { callSites: [callSite("shop-web", "geo-api/o
 function workspaceValue(gateways: readonly { prefix: string; repo: string }[] = []): WorkspaceValue {
   const read = [BILLING, ORDERS, ORDERS_CORE, WEB];
   const candidates: NameCandidate[] = [
-    { name: "orders-api", repo: "orders", basis: "exact-name", evidence: [{ path: "src/app/order.api.ts", line: 7 }] },
-    { name: "shared-api", repo: "orders-core", basis: "artifact", evidence: [{ path: "src/app/shared.api.ts", line: 3 }] },
+    { name: "orders-api", repo: "orders", basis: "exact-name", evidence: [{ repo: "shop-web", path: "src/app/order.api.ts", line: 7 }] },
+    { name: "shared-api", repo: "orders-core", basis: "artifact", evidence: [{ repo: "shop-web", path: "src/app/shared.api.ts", line: 3 }] },
   ];
   return {
     workspace: { repos: read.map(({ repo }) => repo), gateways, source: "request" },
     repositorySnapshots: read.map(({ repo, snapshot }) => ({ repo, snapshot })),
     sections: { billing: section("billing", []), orders: section("orders", []), "orders-core": section("orders-core", []), "shop-web": section("shop-web", [outward("shared-api")]) },
     candidates,
-    unserved: [{ name: "geo.example.com", kind: "http-host", evidence: [{ path: "src/app/geo.api.ts", line: 11 }] }],
+    unserved: [{ name: "geo.example.com", kind: "http-host", evidence: [{ repo: "shop-web", path: "src/app/geo.api.ts", line: 11 }] }],
     repositories: read,
   };
 }
@@ -84,7 +84,7 @@ function setup(answer: Result<Fact<WorkspaceValue>, WorkspaceFault>, defaults?: 
       return answer.ok ? { ok: true, value: { fact: answer.value, ...(refresh === undefined ? {} : { refresh }) } } : answer;
     },
   };
-  return { queries: createDecisionQueries({ workspace, ...(defaults === undefined ? {} : { defaults }), vcs }), asks };
+  return { queries: createDecisionQueries({ workspace, digest: { of: (text) => `digest(${text})` }, ...(defaults === undefined ? {} : { defaults }), vcs }), asks };
 }
 
 /** A git that states the remotes of each clone named here, and every clone it was asked about. */
@@ -100,7 +100,7 @@ function remotesOf(stated: Readonly<Record<string, string | readonly RemoteRef[]
 }
 
 /** The declaration a repository persisted, as the defaults port answers it. */
-function declared(repos: readonly { path: string; id?: string }[]): WorkspaceDefaults {
+function declared(repos: readonly { path: string; id?: string; remote?: string }[]): WorkspaceDefaults {
   return { of: async () => ({ ok: true, value: { repos } }), resolve: (_root, manifest) => manifest };
 }
 
@@ -130,11 +130,12 @@ test("each gap the workspace read states becomes one decision, in the domain's o
   const unserved = decisionOf(value, "repository:geo.example.com");
   assert.deepEqual(unserved.options, []);
   assert.equal(unserved.allowsFreeText, true);
-  assert.deepEqual(unserved.evidence, [{ path: "src/app/geo.api.ts", line: 11 }]);
+  assert.deepEqual(unserved.evidence, [{ repo: "shop-web", path: "src/app/geo.api.ts", line: 11 }]);
 });
 
 test("a clone the persisted declaration holds is no membership decision, and a name the bound repository serves is none either", async () => {
-  const { queries } = setup({ ok: true, value: base(workspaceValue()) }, declared([
+  const original = base(workspaceValue());
+  const { queries } = setup({ ok: true, value: { ...original, inputs: { ...original.inputs, trust: "trusted" } } }, declared([
     { path: "/work/billing", id: "billing" },
     { path: "/work/orders-core", id: "orders-core" },
   ]));
@@ -146,9 +147,20 @@ test("a clone the persisted declaration holds is no membership decision, and a n
 
 test("a declaration that cannot be read fails the set with its fault", async () => {
   const broken: WorkspaceDefaults = { of: async () => ({ ok: false, fault: { kind: "unreadable", detail: ".ye-ast/workspace.json: broken" } }), resolve: (_root, manifest) => manifest };
-  const { queries } = setup({ ok: true, value: base(workspaceValue()) }, broken);
+  const original = base(workspaceValue());
+  const { queries } = setup({ ok: true, value: { ...original, inputs: { ...original.inputs, trust: "trusted" } } }, broken);
 
   assert.deepEqual(await queries.decisions(REQUEST), { ok: false, fault: { kind: "unreadable", detail: ".ye-ast/workspace.json: broken" } });
+});
+
+test("untrusted decisions never read a persisted workspace", async () => {
+  let reads = 0;
+  const defaults: WorkspaceDefaults = { of: async () => { reads++; return { ok: false, fault: { kind: "unreadable", detail: "forbidden" } }; }, resolve: (_root, manifest) => manifest };
+  const { queries } = setup({ ok: true, value: base(workspaceValue()) }, defaults);
+  const result = await queries.decisions(REQUEST);
+  assert.ok(result.ok);
+  assert.equal(reads, 0);
+  assert.ok(valueOf(result).decisions.some(({ id }) => id === "membership:clone:billing"));
 });
 
 test("the options of a gateway come from the routes each repository serves behind the prefix", async () => {
@@ -179,8 +191,9 @@ test("the decision fact carries the workspace read's base and the snapshot of ev
 
   assert.deepEqual(asks, [REQUEST]);
   assert.ok(result.ok);
-  const { schema, snapshot, producer, inputs } = read;
-  assert.deepEqual(result.value.fact, { schema, snapshot, producer, inputs, evidence: [], status: "complete", value: valueOf(result) });
+  const { schema, snapshot, producer } = read;
+  assert.deepEqual({ schema: result.value.fact.schema, snapshot: result.value.fact.snapshot, producer: result.value.fact.producer }, { schema, snapshot, producer });
+  assert.equal(sameIdentity(result.value.fact, read), false);
   assert.deepEqual(valueOf(result).repositories, read.value.repositorySnapshots);
 });
 
@@ -225,7 +238,7 @@ test("a repository with no declared trust is a required decision, and one with a
   const value = workspaceValue();
   const repositories = value.repositories.map((repository) =>
     repository.repo === "billing"
-      ? { repo: repository.repo, path: repository.path, snapshot: repository.snapshot, entrypoints: repository.entrypoints, callSites: repository.callSites }
+      ? { repo: repository.repo, snapshot: repository.snapshot, entrypoints: repository.entrypoints, callSites: repository.callSites }
       : repository,
   );
   const { queries } = setup({ ok: true, value: base<WorkspaceValue>({ ...value, repositories }) });
@@ -253,7 +266,7 @@ test("the decision answer carries the refresh the workspace read consumed beside
   assert.ok(before.ok && after.ok);
   assert.equal("refresh" in before.value, false);
   assert.deepEqual(after.value.refresh, REFRESH);
-  assert.deepEqual(after.value.fact, before.value.fact);
+  assert.equal(sameIdentity(after.value.fact, before.value.fact), false);
   assert.equal("refresh" in after.value.fact, false);
 });
 
@@ -296,7 +309,8 @@ test("a remote the declaration would refuse as an address is no option, and the 
 test("a repository whose declaration states a remote is not read for an origin and is no remote decision", async () => {
   const asked: string[] = [];
   const vcs = remotesOf({ "/work/billing": "https://git.example.com/billing.git", "/work/shop-web": "https://git.example.com/shop-web.git" }, asked);
-  const { queries } = setup({ ok: true, value: base(workspaceValue()) }, undefined, undefined, vcs);
+  const original = base(workspaceValue());
+  const { queries } = setup({ ok: true, value: { ...original, inputs: { ...original.inputs, trust: "trusted" } } }, declared([{ path: "/work/shop-web", remote: "https://git.example.com/shop-web.git" }]), undefined, vcs);
 
   const value = valueOf(
     await queries.decisions({ ...REQUEST, repos: [{ path: "/work/shop-web", remote: "https://git.example.com/shop-web.git" }, { path: "/work/billing" }] }),
@@ -304,6 +318,21 @@ test("a repository whose declaration states a remote is not read for an origin a
 
   assert.deepEqual(asked, ["/work/billing"]);
   assert.deepEqual(value.decisions.filter((decision) => decision.kind === "remote").map((decision) => decision.id), ["remote:billing"]);
+});
+
+test("a request remote does not answer a remote decision", async () => {
+  const vcs = remotesOf({ "/work/shop-web": "https://git.example.com/shop-web.git" });
+  const { queries } = setup({ ok: true, value: base(workspaceValue()) }, undefined, undefined, vcs);
+  const value = valueOf(await queries.decisions({ ...REQUEST, repos: [{ path: "/work/shop-web", remote: "https://attacker.example/repo" }] }));
+  assert.ok(value.decisions.some(({ id }) => id === "remote:shop-web"));
+});
+
+test("decision identity includes the origins read after workspace discovery", async () => {
+  const workspace = { ok: true as const, value: base(workspaceValue()) };
+  const a = await setup(workspace, undefined, undefined, remotesOf({ "/work/shop-web": "https://one.example/repo" })).queries.decisions(REQUEST);
+  const b = await setup(workspace, undefined, undefined, remotesOf({ "/work/shop-web": "https://two.example/repo" })).queries.decisions(REQUEST);
+  assert.ok(a.ok && b.ok);
+  assert.equal(sameIdentity(a.value.fact, b.value.fact), false);
 });
 
 test("a clone's remotes that cannot be read fail the set with that fault", async () => {

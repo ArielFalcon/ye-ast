@@ -104,15 +104,21 @@ and are not carried: row 3 uses the literal-segment signal alone.
 ## Upstream, downstream and the chain
 
 Both directions use one primitive per repository: an RFC-0010 inbound walk (`impact.callers`, `0010:30-31`) seeded by
-symbols or line ranges, whose `ImpactedSymbol.seeds` field names the seeds that reach each node (`0010:131-136`). They
-differ only in the join applied to its result.
+symbols or line ranges. A reached entrypoint carries the indices of the seeds that reach it in `ReachedEntrypoint.seeds`.
+The initial outgoing-call selection also uses structural declaration ownership, independently of the inbound walk.
 
 | Step | Upstream: who calls what changed | Downstream: what a change sends onward |
 |---|---|---|
 | 1. Seed set in repository R | R's `changedEntrypoints` and `entrypoints` from `impact.ofChange` (`0010:119-125`) on the first hop; later, the handlers of the links that fed R | R's symbols from `impact.ofChange` on the first hop; later, the handlers of the links that fed R |
-| 2. Join | links whose `to` is a seed entrypoint (a removed or altered route also matches against the merge base's entrypoints, which RFC-0010 extracts, since consumers of the old path break) | links whose `from.symbol` or line is inside a reached symbol (file, line in span, simple name: the one owner join of `0010:102-107`) |
+| 2. Join | links whose `to` is a seed entrypoint (a removed or altered route also matches against the merge base's entrypoints, which RFC-0010 extracts, since consumers of the old path break) | on the first hop, call sites whose immediate owner or verified named AST ancestor matches a changed seed's file, simple name and declaration span; later, call sites whose inbound walk reaches the fed handler |
 | 3. Next repository | the repository of each link's call site; `impact.callers` seeded by that call site's line range finds its symbols and reached entrypoints, which are the seeds of the next join | the repository each link lands in; one `impact.callers` walk seeded by all of that repository's call sites keeps the call sites whose walk reaches the fed handler (`seeds` states which), which are the links out of it |
 | Stop | no link not yet admitted | same |
+
+Structural ownership selects calls written inside a changed class or outer function, including nested declarations.
+`CallSite.ancestors` records the source AST's named enclosing declarations with their line spans, nearest first. A
+matching ancestor must fit within the seed's span; position alone never joins unrelated names. This selection does
+not add dependency edges: `reachedBy` still joins each walk seed to a call site's immediate owner using file, line
+span and simple name. Unsupported or dynamic calls remain subject to the extractor's declared coverage.
 
 The sequence is a fixpoint over the finite set of links: a link enters the answer once, keyed by `Link.id`, and a
 repository is walked again only when a fresh link feeds it. No hop count or size constant ends it, as in qayaba's
@@ -163,7 +169,13 @@ interface WorkspaceImpactValue {
   sections: Record<string, Fact<RepoImpact>>;              // one fact per repository, at its own snapshot
   links: ImpactedLink[];                                   // { link, direction, reach: string[], detail }
 }
-interface RepoImpact { impact?: ImpactValue; callSites: CallSiteSummary; outOfScope: string[] }
+interface RepoImpact {
+  reads: { kind: "discovery" | "trigger" | "upstream" | "downstream"; fact: FactProvenance }[];
+  impact?: ImpactValue;
+  callSites: CallSite[];
+  unmatched: CallSite[];
+  external: CallSite[];
+}
 ```
 
 Each section is an RFC-0002 fact of its repository (`fact.ts:67-96`); the composite follows rule 2
@@ -174,12 +186,23 @@ one `SnapshotRef` (`fact.ts:69`); it names the trigger repository's head, and th
 repository id, links by `Link.id`, repository snapshots by repository. Redaction at egress applies to every section
 like `map`.
 
+`FactProvenance` retains a read's complete envelope without its `value`: snapshot, producer, inputs, evidence and
+`complete`, `partial` with cuts, or `unknown` with its reason. Each section retains discovery and every walk that
+contributed. An unknown walk alongside known discovery makes the section partial; its named reason and any independent
+cuts remain available together. The trigger walk uses the SHA discovery already resolved, and its declared selection
+and bounds remain the composite's declared configuration.
+
+The transport carries `repositoryRoots` (declared clone roots) and the internal workspace read carries
+`repositorySources` (actual snapshot locations, including mirrors). Neither belongs in the fact. A consumer walk reads
+the pinned SHA from its source and resolves trust against its declared clone; a mirror's path cannot replace the
+repository's trust identity. MCP exposes clone roots for navigation and omits internal sources.
+
 Invalidation (RFC-0002 rule 5), per section and for the composite:
 
 | Level | Valid while |
 |---|---|
-| a section | its own `inputs` equal the current ones: the repository's content digest, scope, config and engines |
-| the composite | every section's `inputs.content` is unchanged, `inputs.config` (the budget and the `boundaries[]` digest) is unchanged and the manifest digest is unchanged; `inputs.content` of the composite is the digest of the sorted pairs (repository, section content digest) |
+| a section | the sorted identities and snapshots of all its contributing reads, their statuses and limits, and its declared configuration are unchanged |
+| the composite | every contributing read's identity and snapshot, the repository and gateway declarations, and the requested targets, change selection and bounds are unchanged; a change read includes its resolved merge-base SHA even when the tree bytes match another commit |
 | a new repository declared | the manifest digest changes, so the stored fact is invalid; a consumer added later cannot leave a stale `complete` |
 
 ## Reuse: cached and verified

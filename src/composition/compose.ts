@@ -1,3 +1,7 @@
+import { createSnapshotDataCache } from "../core/application/snapshot/snapshot-data-cache.ts";
+import { withSnapshotPreparation } from "../core/application/snapshot/prepared-snapshot.ts";
+import type { ImpactQueriesDeps } from "../core/application/impact/impact-queries.ts";
+import type { WorkspaceQueriesDeps } from "../core/application/topology/workspace-queries.ts";
 import { dirname, extname, join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { run, type CliIo } from "../cli/main.ts";
@@ -69,6 +73,7 @@ const TEMPLATE_ENGINE = "@angular/compiler";
 const CODEGRAPH_PACKAGE = "@colbymchenry/codegraph";
 const POLICY_DIGEST_LENGTH = 12;
 const DAY_MS = 24 * 60 * 60 * 1000;
+const SNAPSHOT_CACHE_BYTES = 32 * 1024 * 1024;
 
 /** What a host keeps of the live tree unless it overrides it (RFC-0010 "Retention"): three scopes, 14 days, 512 MiB. */
 const LIVE_RETENTION: LiveRetentionPolicy = { keepScopes: 3, unusedForMs: 14 * DAY_MS, maxBytes: 512 * 1024 * 1024 };
@@ -82,6 +87,8 @@ export interface CompositionOptions {
   exportBudget?: ExportBudget;
   /** Directory that keeps full indexes between calls; every call builds and discards its own when absent. */
   indexCache?: string;
+  /** UTF-8 bytes retained as serialized snapshot entries, keys included; 32 MiB by default, zero disables retention. */
+  snapshotCacheBytes?: number;
   /** ye-ast's per-user cache directory; with it, a trusted repository's declared remote is refreshed into a mirror under it. */
   cacheDirectory?: string;
   /** The refresh the workspace read calls; built from `cacheDirectory` when absent, and absent leaves every read local. */
@@ -141,6 +148,7 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
   const reader = createFsSourceReader();
   const digest = createSha256Digest();
   const matcher = createPathMatcher();
+  const snapshotCache = { snapshotCache: createSnapshotDataCache(options.snapshotCacheBytes ?? SNAPSHOT_CACHE_BYTES) };
   const entrypointEngines = Object.fromEntries(ENTRYPOINT_ENGINES.map((name) => [name, installedVersion(name)]));
   const budget = options.exportBudget && { budget: options.exportBudget };
   const redaction = createPatternRedaction();
@@ -157,7 +165,7 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
     retention: options.liveRetention ?? LIVE_RETENTION,
     now: () => Date.now(),
   };
-  const bareEntrypoints = createEntrypointQueries({ vcs, scratch, reader, extractor, digest, matcher, producer: { name: PRODUCER_NAME, version }, engines: entrypointEngines, live, ...budget, ...trust });
+  const bareEntrypoints = createEntrypointQueries({ vcs, scratch, reader, extractor, digest, matcher, producer: { name: PRODUCER_NAME, version }, engines: entrypointEngines, live, ...snapshotCache, ...budget, ...trust });
   const entrypoints = measurement === undefined ? bareEntrypoints : measuredEntrypoints(bareEntrypoints, measurement);
   const indexes = options.indexCache === undefined ? undefined : createIndexCache({ directory: options.indexCache, graph, digest, codegraph });
   const typeRoot =
@@ -167,11 +175,12 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
           identity: digest.of(`type-root\u0000${options.typeRoot}`),
           resolution: (sources: readonly SourceFile[]) => createTypeResolution({ sources: sources.map(({ path, content }) => ({ path, text: content })), typeRoot: options.typeRoot as string }),
         };
-  const bareImpact = createImpactQueries({
+  const impactDeps: ImpactQueriesDeps = {
     vcs,
     scratch,
     reader,
     extractor,
+    ...snapshotCache,
     angular: createAngularDeclarationReader(),
     relations: composeAngularRelations(),
     dynamicLoads: createDynamicLoadReader(),
@@ -188,7 +197,8 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
     ...(typeRoot === undefined ? {} : { typeRoot }),
     importOrigins: (sources: readonly SourceFile[]) => createImportOrigins(sources),
     moduleDependencies: createModuleDependenciesReader(),
-  });
+  };
+  const bareImpact = createImpactQueries(impactDeps);
   const warmLive = async (repo: string, signal?: AbortSignal): Promise<string | null> => {
     try {
       if ((await trustOf(trust ?? {}, repo)) !== "trusted") return null;
@@ -201,6 +211,7 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
   };
   const impact = measurement === undefined ? bareImpact : measuredImpact(bareImpact, measurement);
   const bareOutline = createOutlineQueries({
+    ...snapshotCache,
     vcs,
     scratch,
     reader,
@@ -218,7 +229,8 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
   const outline = measurement === undefined ? bareOutline : measuredOutline(bareOutline, measurement);
   const defaults = createWorkspaceDefaults(createFixedLayerStore());
   const refresh = options.refresh ?? (options.cacheDirectory === undefined ? undefined : createRemoteRefresh({ ...defaultRemoteRefreshDeps, cacheDirectory: options.cacheDirectory, digest }));
-  const bareWorkspace = createWorkspaceQueries({
+  const workspaceDeps: WorkspaceQueriesDeps = {
+    ...snapshotCache,
     vcs,
     scratch,
     reader,
@@ -233,12 +245,24 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
     ...(refresh === undefined ? {} : { refresh }),
     ...budget,
     ...trust,
-  });
+  };
+  const bareWorkspace = createWorkspaceQueries(workspaceDeps);
   const workspace = measurement === undefined ? bareWorkspace : measuredWorkspace(bareWorkspace, measurement);
   // The workspace impact is measured through the impact family it walks with; handing it the measured workspace would
   // write a second line for the read it shares with that walk.
-  const workspaceImpact = createWorkspaceImpactQueries({ workspace: bareWorkspace, impact, defaults, ...trust });
-  const bareDecisions = createDecisionQueries({ workspace: bareWorkspace, defaults, vcs });
+  const inWorkspaceOperation = <T>(use: (queries: WorkspaceImpactQueries) => Promise<T>): Promise<T> => withSnapshotPreparation(scratch, async (preparation) => {
+    const operationImpact = createImpactQueries({ ...impactDeps, preparation });
+    return use(createWorkspaceImpactQueries({
+      workspace: createWorkspaceQueries({ ...workspaceDeps, preparation }),
+      impact: measurement === undefined ? operationImpact : measuredImpact(operationImpact, measurement),
+      defaults, digest, ...trust,
+    }));
+  });
+  const workspaceImpact: WorkspaceImpactQueries = {
+    callers: (request) => inWorkspaceOperation((queries) => queries.callers(request)),
+    ofChange: (request) => inWorkspaceOperation((queries) => queries.ofChange(request)),
+  };
+  const bareDecisions = createDecisionQueries({ workspace: bareWorkspace, defaults, vcs, digest });
   const decisions = measurement === undefined ? bareDecisions : measuredDecisions(bareDecisions, measurement);
   return { version, entrypoints, impact, outline, workspace, workspaceImpact, decisions, redaction, repositoryName: (repo, signal) => vcs.repositoryName(repo, signal), warmLive };
 }

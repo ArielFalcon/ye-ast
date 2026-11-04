@@ -1,3 +1,4 @@
+import { createDecisionQueries } from "../decisions/decision-queries.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { EntrypointExtractor } from "../../ports/entrypoint-extractor.port.ts";
@@ -6,7 +7,7 @@ import type { Result } from "../../domain/shared/result.ts";
 import type { ScratchDirectory } from "../../ports/scratch-directory.port.ts";
 import type { SourceReader } from "../../ports/source-reader.port.ts";
 import type { Digest } from "../../ports/digest.port.ts";
-import type { Evidence, Fact, SnapshotRef } from "../../domain/shared/fact.ts";
+import { sameIdentity, type Evidence, type Fact, type SnapshotRef } from "../../domain/shared/fact.ts";
 import type { WorkspaceRead, WorkspaceValue } from "../../ports/workspace-queries.port.ts";
 import type { RefreshedRemote, RemoteRefreshRequest } from "../../ports/remote-refresh.port.ts";
 import type { RemoteFreshness, RemoteListing } from "../../domain/topology/remote-snapshot.ts";
@@ -18,6 +19,8 @@ import type { PathMatcher } from "../../ports/path-matcher.port.ts";
 import type { WorkspaceDefaults, WorkspaceManifest } from "../../ports/workspace-defaults.port.ts";
 import type { WorkspaceQueriesDeps } from "./workspace-queries.ts";
 import { createWorkspaceQueries } from "./workspace-queries.ts";
+import { createWorkspaceImpactQueries } from "./workspace-impact.ts";
+import type { ImpactQueries } from "../../ports/impact-queries.port.ts";
 
 const SHA = "a".repeat(40);
 
@@ -45,6 +48,8 @@ type Repositories = Record<
     holds?: readonly string[];
     /** The branch `HEAD` points at; a detached head when absent. */
     branch?: string;
+    stopped?: CommitExport["stopped"];
+    skipped?: CommitExport["skipped"];
   }
 >;
 
@@ -62,6 +67,8 @@ function setup(
   trust?: TrustRecordReader,
   defaults?: WorkspaceDefaults,
   refresh?: RefreshSetup,
+  scoped = false,
+  resolveHead?: () => string,
 ) {
   let exported: string | undefined;
   const vcs: Vcs = {
@@ -69,7 +76,7 @@ function setup(
       const held = repositories[repo];
       if (held === undefined) return { ok: false, fault: { kind: "not-repository-root", detail: repo } };
       if (/^[0-9a-f]{40}$/.test(revision) && held.holds !== undefined && !held.holds.includes(revision)) return { ok: false, fault: { kind: "unknown-revision", detail: revision } };
-      return { ok: true, value: /^[0-9a-f]{40}$/.test(revision) ? revision : (held.sha ?? SHA) };
+      return { ok: true, value: /^[0-9a-f]{40}$/.test(revision) ? revision : (revision === "HEAD" && resolveHead !== undefined ? resolveHead() : (held.sha ?? SHA)) };
     },
     remotes: async (repo) => ({ ok: true, value: repositories[repo]?.remotes ?? [] }),
     headBranch: async (repo) => ({ ok: true, value: repositories[repo]?.branch }),
@@ -77,7 +84,7 @@ function setup(
     exportCommit: async (repo, _sha, _destination, plan) => {
       exported = repo;
       const files: ExportedFile[] = Object.keys(repositories[repo]?.files ?? {}).map((path) => ({ path, blob: path, written: plan.write(path) }));
-      return { ok: true, value: { files, skipped: [] } };
+      return { ok: true, value: { files, skipped: repositories[repo]?.skipped ?? [], ...(repositories[repo]?.stopped === undefined ? {} : { stopped: repositories[repo].stopped }) } };
     },
   };
   const scratch: ScratchDirectory = { create: async () => "/scratch", remove: async () => undefined };
@@ -90,20 +97,94 @@ function setup(
     reader,
     extractor,
     digest,
-    matcher,
+    matcher: scoped ? { matches: (path, glob) => path === glob || (glob.endsWith("/**") && path.startsWith(glob.slice(0, -2))) } : matcher,
     callSites,
-    evidence: { names: () => repositories[exported ?? ""]?.names ?? [], artifacts: () => repositories[exported ?? ""]?.artifacts ?? [] },
+    evidence: { names: (sources) => scoped ? sources.map(({ path }) => configurationName(path, path, 1)) : repositories[exported ?? ""]?.names ?? [], artifacts: () => repositories[exported ?? ""]?.artifacts ?? [] },
     producer: { name: "ye-ast", version: "0.0.0" },
     engines: {},
     ...(trust === undefined ? {} : { trust }),
     ...(defaults === undefined ? {} : { defaults }),
     ...(refresh === undefined ? {} : { refresh: { refresh: async (requests) => {
       refresh.asked?.push(...requests);
-      return requests.map((request) => refresh.answers.find((answer) => answer.url === request.url)!);
+      return requests.map((request) => refresh.answers.find((answer) => answer.url === request.url) ?? { url: request.url, freshness: { status: "unverified" as const, reason: "failed" as const } });
     } } }),
   };
   return createWorkspaceQueries(deps);
 }
+
+test("workspace scope selects source findings while keeping extractor configuration unless excluded", async () => {
+  let parsed: readonly string[] = [];
+  const callSites: CallSiteReader = { of: async (sources) => { parsed = sources.map(({ path }) => path); return []; } };
+  const queries = setup({ "/work/app": { files: { "src/a.ts": "", "src/keep.ts": "", "other/b.ts": "", "tsconfig.json": "" } } }, callSites, undefined, undefined, undefined, true);
+  const request = { repo: { path: "/work/app" }, scope: { include: ["src/**"], exclude: ["src/a.ts"] } };
+  const result = await queries.outwardNames(request);
+  const section = valueOf(result).sections.app;
+  assert.ok(section && section.status !== "unknown");
+  assert.deepEqual(section.value.names.map(({ name }) => name), ["src/keep.ts"]);
+  assert.deepEqual(parsed.toSorted(), ["src/keep.ts", "tsconfig.json"]);
+  assert.deepEqual(section.inputs.declaredScope.include, ["src/**"]);
+  assert.deepEqual(section.inputs.declaredScope.exclude, ["src/a.ts"]);
+});
+
+test("a stopped workspace export keeps its budget cut", async () => {
+  const queries = setup({ "/work/app": { files: {}, stopped: { at: "src/next.ts", limit: 2 } } });
+  const result = await queries.outwardNames({ repo: { path: "/work/app" } });
+  const section = valueOf(result).sections.app;
+  assert.equal(section?.status, "partial");
+  assert.deepEqual(section?.status === "partial" && section.cuts, [{ kind: "caller-budget", at: ["src/next.ts"], limit: 2 }]);
+});
+
+test("an in-scope source skipped by export remains a repository cut", async () => {
+  const queries = setup({ "/work/app": { files: {}, skipped: [{ path: "src/missing.ts", reason: "symlink" }] } });
+  const section = valueOf(await queries.outwardNames({ repo: { path: "/work/app" } })).sections.app;
+  assert.equal(section?.status, "partial");
+  assert.deepEqual(section?.status === "partial" && section.cuts, [{ kind: "not-exported", at: ["src/missing.ts"] }]);
+});
+
+test("workspace identity includes every repository snapshot and the declared gateways", async () => {
+  const request = { repo: { path: "/work/app" }, repos: [{ path: "/work/sibling" }] };
+  const first = setup({ "/work/app": { files: {} }, "/work/sibling": { files: {}, sha: "b".repeat(40) } });
+  const second = setup({ "/work/app": { files: {} }, "/work/sibling": { files: {}, sha: "c".repeat(40) } });
+  const a = readOf(await first.outwardNames(request)).fact;
+  const b = readOf(await second.outwardNames(request)).fact;
+  const changedContent = readOf(await setup({ "/work/app": { files: {} }, "/work/sibling": { files: { "src/new.ts": "changed" }, sha: "b".repeat(40) } }).outwardNames(request)).fact;
+  const gateway = readOf(await first.outwardNames({ ...request, gateways: [{ prefix: "api", repo: "sibling" }] })).fact;
+  assert.equal(sameIdentity(a, b), false);
+  assert.equal(sameIdentity(a, changedContent), false);
+  assert.equal(sameIdentity(a, gateway), false);
+  assert.equal(JSON.stringify(a), JSON.stringify(readOf(await first.outwardNames(request)).fact));
+});
+
+test("workspace returns original declared repository roots outside the fact", async () => {
+  const queries = setup({ "/work/app": { files: {} }, "/work/sibling": { files: {} } });
+  const read = readOf(await queries.outwardNames({ repo: { path: "/work/app", id: "z" }, repos: [{ path: "/work/sibling", id: "a" }] }));
+  assert.deepEqual(read.repositoryRoots, [{ repo: "a", path: "/work/sibling" }, { repo: "z", path: "/work/app" }]);
+  assert.equal(JSON.stringify(read.fact).includes("/work/"), false);
+});
+
+test("a moving HEAD cannot mix discovery and the trigger walk", async () => {
+  let head = "a".repeat(40);
+  const discovery = setup({ "/work/app": { files: {}, branch: "release" } }, undefined, undefined, undefined, undefined, false, () => head);
+  let revision = "";
+  const workspace = { outwardNames: async (ask: Parameters<typeof discovery.outwardNames>[0]) => {
+    const result = await discovery.outwardNames(ask);
+    head = "b".repeat(40);
+    return result;
+  } };
+  const impact = { callers: async (ask: { revision: string }) => {
+    revision = ask.revision;
+    const resolved = ask.revision === "HEAD" ? head : ask.revision;
+    const found = readOf(await discovery.outwardNames({ repo: { path: "/work/app", revision: resolved } })).fact;
+    return { ok: true as const, value: { ...found, status: "complete" as const, value: { seeds: [], symbols: [], entrypoints: [], cost: { expansionsUsed: 0 } } } };
+  } } as unknown as ImpactQueries;
+  const result = await createWorkspaceImpactQueries({ workspace, impact, digest: { of: (text) => text } }).callers({ repo: { path: "/work/app" }, targets: [{ file: "src/a.ts", symbol: "a" }] });
+  assert.ok(result.ok && result.value.fact.status !== "unknown");
+  assert.equal(revision, "a".repeat(40));
+  assert.deepEqual(result.value.fact.snapshot, { repo: "app", kind: "sha", sha: "a".repeat(40) });
+  const section = result.value.fact.value.sections.app;
+  assert.ok(section && section.status !== "unknown");
+  assert.deepEqual(section.value.reads.map(({ fact }) => fact.snapshot.kind === "sha" && fact.snapshot.sha), ["a".repeat(40), "a".repeat(40)]);
+});
 
 function configurationName(name: string, path: string, line: number): OutwardName {
   return { name, kind: "configuration-url", evidence: [{ path, line }] };
@@ -164,7 +245,7 @@ test("a name a clone's upstream states cites the remote that states it, never th
   const candidates = valueOf(result).candidates;
   assert.deepEqual(
     candidates.map((candidate) => `${candidate.repo} ${candidate.basis} ${candidate.evidence.map((place) => `${place.path}:${place.line}${place.via === undefined ? "" : ` via ${place.via}`}`).join(", ")}`),
-    ["library remote package.json:3, .git/config:1 via upstream"],
+    ["library remote .git/config:1 via upstream, package.json:3"],
   );
 });
 
@@ -413,6 +494,21 @@ const REMOTE_SHA = "b".repeat(40);
 const RELEASE_SHA = "c".repeat(40);
 const LOCAL_SHA = "d".repeat(40);
 
+test("a request remote cannot choose a refresh destination", async () => {
+  const asked: RemoteRefreshRequest[] = [];
+  const queries = setup({ [TRIGGER]: { files: {} }, [SIBLING]: { files: {}, sha: LOCAL_SHA } }, undefined, trusted([TRIGGER, SIBLING]), undefined, { answers: [], asked });
+  const result = await queries.outwardNames({ repo: { path: TRIGGER }, repos: [{ path: SIBLING, remote: REMOTE }] });
+  assert.deepEqual(asked, []);
+  assert.equal(shaOf(valueOf(result).repositorySnapshots.find(({ repo }) => repo === "orders-svc")?.snapshot), LOCAL_SHA);
+});
+
+test("a persisted remote remains authoritative when a request names its clone", async () => {
+  const asked: RemoteRefreshRequest[] = [];
+  const queries = setup({ [TRIGGER]: { files: {} }, [SIBLING]: { files: {} }, [MIRROR]: mirrorWith([], [REMOTE_SHA]) }, undefined, trusted([TRIGGER, SIBLING]), persisted({ repos: [{ path: SIBLING, remote: REMOTE }] }), { answers: [refreshed(REMOTE, { branches: [{ name: "main", sha: REMOTE_SHA }], defaultBranch: "main" }, { status: "verified" }, MIRROR)], asked });
+  await queries.outwardNames({ repo: { path: TRIGGER }, repos: [{ path: SIBLING, remote: "https://attacker.example/repo" }] });
+  assert.deepEqual(asked.map(({ url }) => url), [REMOTE]);
+});
+
 /** The trust record a host declared: `trusted` for the paths given, undeclared for the rest. */
 function trusted(paths: readonly string[]): TrustRecordReader {
   return { read: async (repo) => ({ ok: true, value: paths.includes(repo) ? "trusted" : undefined }) };
@@ -436,8 +532,8 @@ test("a trusted repository with a remote is read at the remote's default-branch 
   const queries = setup(
     { [TRIGGER]: { files: {} }, [SIBLING]: { files: {}, remotes: [{ name: "origin", url: REMOTE }] }, [MIRROR]: mirrorWith([configurationName("http://orders.internal/orders", "src/orders.yaml", 4)], [REMOTE_SHA]) },
     undefined,
-    trusted([SIBLING]),
-    undefined,
+    trusted([TRIGGER, SIBLING]),
+    persisted({ repos: [{ path: SIBLING, remote: REMOTE }] }),
     { answers: [refreshed(REMOTE, { branches: [{ name: "main", sha: REMOTE_SHA }], defaultBranch: "main" }, { status: "verified" }, MIRROR)], asked },
   );
 
@@ -448,7 +544,8 @@ test("a trusted repository with a remote is read at the remote's default-branch 
   assert.deepEqual(asked, [{ url: REMOTE, seed: SIBLING }]);
   assert.equal(read.fact.status, "complete");
   assert.equal(shaOf(value.repositorySnapshots.find(({ repo }) => repo === "orders-svc")?.snapshot), REMOTE_SHA);
-  assert.equal(value.repositories.find(({ repo }) => repo === "orders-svc")?.path, MIRROR);
+  assert.equal(read.repositorySources?.find(({ repo }) => repo === "orders-svc")?.path, MIRROR);
+  assert.equal(read.repositoryRoots?.find(({ repo }) => repo === "orders-svc")?.path, SIBLING);
   const section = value.sections["orders-svc"];
   assert.ok(section !== undefined && section.status === "complete");
   assert.deepEqual(section.value.names.map(({ name }) => name), ["http://orders.internal/orders"]);
@@ -462,8 +559,8 @@ test("an explicit revision of a refreshed repository picks that branch of the re
   const queries = setup(
     { [TRIGGER]: { files: {} }, [SIBLING]: { files: {} }, [MIRROR]: mirrorWith([], [RELEASE_SHA]) },
     undefined,
-    trusted([SIBLING]),
-    undefined,
+    trusted([TRIGGER, SIBLING]),
+    persisted({ repos: [{ path: SIBLING, remote: REMOTE }] }),
     { answers: [refreshed(REMOTE, { branches: [{ name: "main", sha: REMOTE_SHA }, { name: "release", sha: RELEASE_SHA }], defaultBranch: "main" }, { status: "verified" }, MIRROR)] },
   );
 
@@ -478,8 +575,8 @@ test("the branch named like the trigger's line wins over the remote's default br
   const queries = setup(
     { [TRIGGER]: { files: {}, branch: "release" }, [SIBLING]: { files: {} }, [MIRROR]: mirrorWith([], [RELEASE_SHA]) },
     undefined,
-    trusted([SIBLING]),
-    undefined,
+    trusted([TRIGGER, SIBLING]),
+    persisted({ repos: [{ path: SIBLING, remote: REMOTE }] }),
     { answers: [refreshed(REMOTE, { branches: [{ name: "main", sha: REMOTE_SHA }, { name: "release", sha: RELEASE_SHA }], defaultBranch: "main" }, { status: "verified" }, MIRROR)] },
   );
 
@@ -494,8 +591,8 @@ test("a request naming HEAD as the trigger's revision scopes the refresh by the 
   const queries = setup(
     { [TRIGGER]: { files: {}, branch: "release" }, [SIBLING]: { files: {} }, [MIRROR]: mirrorWith([], [RELEASE_SHA]) },
     undefined,
-    trusted([SIBLING]),
-    undefined,
+    trusted([TRIGGER, SIBLING]),
+    persisted({ repos: [{ path: SIBLING, remote: REMOTE }] }),
     { answers: [refreshed(REMOTE, { branches: [{ name: "main", sha: REMOTE_SHA }, { name: "release", sha: RELEASE_SHA }], defaultBranch: "main" }, { status: "verified" }, MIRROR)] },
   );
 
@@ -508,8 +605,8 @@ test("a pinned sha the mirror lacks is an unknown section naming that sha, and t
   const queries = setup(
     { [TRIGGER]: { files: {} }, [SIBLING]: { files: {}, sha: LOCAL_SHA }, [MIRROR]: mirrorWith([], []) },
     undefined,
-    trusted([SIBLING]),
-    undefined,
+    trusted([TRIGGER, SIBLING]),
+    persisted({ repos: [{ path: SIBLING, remote: REMOTE }] }),
     { answers: [refreshed(REMOTE, { branches: [{ name: "main", sha: REMOTE_SHA }], defaultBranch: "main" }, { status: "verified" }, MIRROR)] },
   );
 
@@ -519,6 +616,7 @@ test("a pinned sha the mirror lacks is an unknown section naming that sha, and t
 
   const section = value.sections["orders-svc"];
   assert.ok(section !== undefined && section.status === "unknown");
+  assert.equal(read.repositoryRoots?.find(({ repo }) => repo === "orders-svc")?.path, SIBLING);
   assert.equal(section.reason, "revision-unavailable");
   assert.equal(section.snapshot.kind === "sha" ? section.snapshot.sha : "", REMOTE_SHA);
   assert.equal(value.repositories.some(({ repo }) => repo === "orders-svc"), false);
@@ -532,8 +630,8 @@ test("a listing that chooses no sha leaves the section unknown with the local cl
   const queries = setup(
     { [TRIGGER]: { files: {} }, [SIBLING]: { files: {}, sha: LOCAL_SHA }, [MIRROR]: mirrorWith([], []) },
     undefined,
-    trusted([SIBLING]),
-    undefined,
+    trusted([TRIGGER, SIBLING]),
+    persisted({ repos: [{ path: SIBLING, remote: REMOTE }] }),
     { answers: [refreshed(REMOTE, { branches: [{ name: "draft", sha: REMOTE_SHA }] }, { status: "verified" }, MIRROR)] },
   );
 
@@ -560,7 +658,7 @@ test("an untrusted repository with a remote is read from its own clone and the a
   assert.deepEqual(asked, []);
   assert.equal("refresh" in read, false);
   assert.equal(shaOf(value.repositorySnapshots.find(({ repo }) => repo === "orders-svc")?.snapshot), LOCAL_SHA);
-  assert.equal(value.repositories.find(({ repo }) => repo === "orders-svc")?.path, SIBLING);
+  assert.equal(read.repositorySources?.find(({ repo }) => repo === "orders-svc")?.path, SIBLING);
   assert.equal(JSON.stringify(read), JSON.stringify(readOf(await setup(repositories, undefined, trusted([TRIGGER])).outwardNames(request))));
 });
 
@@ -572,7 +670,7 @@ test("an offline request refreshes no remote and reads every repository from its
     repositories,
     undefined,
     trusted([TRIGGER, SIBLING]),
-    undefined,
+    persisted({ repos: [{ path: SIBLING, remote: REMOTE }] }),
     { answers: [refreshed(REMOTE, { branches: [{ name: "main", sha: REMOTE_SHA }], defaultBranch: "main" }, { status: "verified" }, MIRROR)], asked },
   );
 
@@ -583,7 +681,7 @@ test("an offline request refreshes no remote and reads every repository from its
   assert.deepEqual(asked, []);
   assert.equal("refresh" in read, false);
   assert.equal(shaOf(value.repositorySnapshots.find(({ repo }) => repo === "orders-svc")?.snapshot), LOCAL_SHA);
-  assert.equal(value.repositories.find(({ repo }) => repo === "orders-svc")?.path, SIBLING);
+  assert.equal(read.repositorySources?.find(({ repo }) => repo === "orders-svc")?.path, SIBLING);
   assert.equal(JSON.stringify(read), JSON.stringify(readOf(await setup(repositories, undefined, trusted([TRIGGER, SIBLING])).outwardNames({ ...request, offline: true }))));
 });
 
@@ -592,8 +690,8 @@ test("a failed refresh with a recorded listing still pins from it and answers th
   const queries = setup(
     { [TRIGGER]: { files: {} }, [SIBLING]: { files: {} }, [MIRROR]: mirrorWith([], [REMOTE_SHA]) },
     undefined,
-    trusted([SIBLING]),
-    undefined,
+    trusted([TRIGGER, SIBLING]),
+    persisted({ repos: [{ path: SIBLING, remote: REMOTE }] }),
     { answers: [refreshed(REMOTE, { branches: [{ name: "main", sha: REMOTE_SHA }], defaultBranch: "main" }, failed, MIRROR)] },
   );
 
@@ -611,13 +709,33 @@ test("the trigger repository is read locally even when it declares a remote", as
     { [TRIGGER]: { files: {}, sha: LOCAL_SHA, remotes: [{ name: "origin", url: triggerRemote }] }, [SIBLING]: { files: {} }, [MIRROR]: mirrorWith([], [REMOTE_SHA]) },
     undefined,
     trusted([TRIGGER, SIBLING]),
-    undefined,
+    persisted({ repos: [{ path: SIBLING, remote: REMOTE }] }),
     { answers: [refreshed(REMOTE, { branches: [{ name: "main", sha: REMOTE_SHA }], defaultBranch: "main" }, { status: "verified" }, MIRROR)], asked },
   );
 
-  const value = valueOf(await queries.outwardNames({ repo: { path: TRIGGER, remote: triggerRemote }, repos: [{ path: SIBLING, remote: REMOTE }] }));
+  const result = await queries.outwardNames({ repo: { path: TRIGGER, remote: triggerRemote }, repos: [{ path: SIBLING, remote: REMOTE }] });
+  const value = valueOf(result);
+  const read = readOf(result);
 
   assert.deepEqual(asked.map(({ url }) => url), [REMOTE]);
   assert.equal(shaOf(value.repositorySnapshots.find(({ repo }) => repo === "shop-web")?.snapshot), LOCAL_SHA);
-  assert.equal(value.repositories.find(({ repo }) => repo === "shop-web")?.path, TRIGGER);
+  assert.equal(read.repositorySources?.find(({ repo }) => repo === "shop-web")?.path, TRIGGER);
+});
+
+test("an absent trust declaration and an explicit untrusted declaration have distinct workspace and decision identities", async () => {
+  const repositories = { "/work/app": { files: {} } };
+  const absent = setup(repositories);
+  const explicit = setup(repositories, undefined, { read: async () => ({ ok: true, value: "untrusted" }) });
+  const request = { repo: { path: "/work/app" } };
+  const before = readOf(await absent.outwardNames(request)).fact;
+  const after = readOf(await explicit.outwardNames(request)).fact;
+  assert.equal(before.inputs.trust, after.inputs.trust);
+  assert.equal(sameIdentity(before, after), false);
+  const decisionQueries = (workspace: ReturnType<typeof setup>) => createDecisionQueries({ workspace, digest: { of: (value) => value }, vcs: { remotes: async () => ({ ok: true, value: [] }) } });
+  const unknownTrust = await decisionQueries(absent).decisions(request);
+  const knownTrust = await decisionQueries(explicit).decisions(request);
+  assert.ok(unknownTrust.ok && knownTrust.ok && unknownTrust.value.fact.status !== "unknown" && knownTrust.value.fact.status !== "unknown");
+  assert.ok(unknownTrust.value.fact.value.decisions.some((decision) => decision.kind === "trust"));
+  assert.equal(knownTrust.value.fact.value.decisions.some((decision) => decision.kind === "trust"), false);
+  assert.equal(sameIdentity(unknownTrust.value.fact, knownTrust.value.fact), false);
 });

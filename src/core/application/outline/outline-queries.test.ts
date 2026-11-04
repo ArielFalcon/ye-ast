@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { fakeCodeGraph, fakeNode } from "../impact/fake-code-graph.testing.ts";
+import { fakeLive, type FakeLive } from "../live/fake-live.testing.ts";
 import { createOutlineQueries, type OutlineQueriesDeps } from "./outline-queries.ts";
 
 const SHA = "a".repeat(40);
@@ -8,15 +9,17 @@ const SUMMARY = { filesIndexed: 1, filesSkipped: 0, filesErrored: 0, filesNotInd
 const STORE = "/scratch/store";
 
 interface Options {
+  live?: FakeLive;
   /** The paths the commit export wrote, so the index's own list of what it could not hold is meaningful. */
   written?: readonly string[];
   nodes?: Parameters<typeof fakeCodeGraph>[0];
   /** What the path matcher answers for a repository path and a declared glob; every glob matches by default. */
   matches?: (path: string, glob: string) => boolean;
+  snapshotCache?: OutlineQueriesDeps["snapshotCache"];
 }
 
 function setup(options: Options = {}) {
-  const log = { closed: 0 };
+  const log = { closed: 0, reads: 0, extractions: 0 };
   const store = { ...fakeCodeGraph(options.nodes ?? [], []), close: () => void (log.closed += 1) };
   const written = options.written ?? [];
   const deps = {
@@ -25,13 +28,15 @@ function setup(options: Options = {}) {
       exportCommit: async () => ({ ok: true, value: { files: written.map((path) => ({ path, blob: "1", written: true })), skipped: [] } }),
     },
     scratch: { create: async () => "/scratch/head", remove: async () => undefined },
-    reader: { read: async () => [] },
-    extractor: { extract: () => [] },
+    reader: { read: async () => { log.reads++; return []; } },
+    extractor: { extract: () => { log.extractions++; return []; } },
     digest: { of: (value: string) => `digest:${value}` },
     producer: { name: "ye-ast", version: "0.0.0" },
     matcher: { matches: options.matches ?? (() => true) },
     graph: { index: async () => ({ ok: true, value: SUMMARY }), open: () => ({ ok: true, value: store }) },
     engines: {},
+    ...(options.snapshotCache && { snapshotCache: options.snapshotCache }),
+    ...(options.live && { live: options.live.deps, trust: { read: async () => ({ ok: true, value: "trusted" }) } }),
   } as unknown as OutlineQueriesDeps;
   return { queries: createOutlineQueries(deps), log, store };
 }
@@ -75,4 +80,49 @@ test("a file the index holds answers its declarations and closes the store", asy
   assert.equal(fact?.status, "complete");
   assert.deepEqual(fact?.value, { files: [{ file: "src/Order.java", declarations: [{ kind: "method", name: "total", line: 20, endLine: 24 }], imports: [] }], unheld: [] });
   assert.equal(log.closed, 1, "the store is closed on every path that opened it");
+});
+
+for (const live of [false, true]) {
+  test(`a ${live ? "live" : "revisioned"} outline reads the index without loading sources or extracting entrypoints`, async () => {
+    const mirror = live ? fakeLive({ "src/Order.java": "1" }) : undefined;
+    const { queries, log } = setup({
+      written: ["src/Order.java"],
+      nodes: [fakeNode("Order.total", "method", "src/Order.java", 20, 24, "total")],
+      ...(mirror && { live: mirror }),
+    });
+
+    const answer = await queries.outline({ repo: "/work/shop", repoId: "shop", files: ["src/Order.java"], ...(live ? { live: true } : { revision: "HEAD" }) });
+
+    assert.ok(answer.ok);
+    assert.equal(answer.value.status, "complete");
+    assert.deepEqual(answer.value.value, { files: [{ file: "src/Order.java", declarations: [{ kind: "method", name: "total", line: 20, endLine: 24 }], imports: [] }], unheld: [] });
+    assert.equal(log.reads, 0);
+    assert.equal(log.extractions, 0);
+    assert.equal(log.closed, 1);
+    if (mirror) assert.deepEqual(mirror.held, { locks: 1, released: 1 });
+  });
+}
+
+test("an aborted live outline returns the cancellation fault before reading its index", async () => {
+  const mirror = fakeLive({ "src/Order.java": "1" });
+  const { queries, log } = setup({ live: mirror });
+  const controller = new AbortController();
+  controller.abort();
+
+  const answer = await queries.outline({ repo: "/work/shop", repoId: "shop", files: ["src/Order.java"], live: true, signal: controller.signal });
+
+  assert.ok(!answer.ok);
+  assert.equal(answer.fault.kind, "aborted");
+  assert.equal(log.closed, 0);
+  assert.deepEqual(mirror.held, { locks: 1, released: 1 });
+});
+
+test("an export-only outline never restores retained source data", async () => {
+  let restored = 0;
+  const { queries, log } = setup({ written: ["src/Order.java"], nodes: [fakeNode("Order.total", "method", "src/Order.java", 20, 24, "total")], snapshotCache: { get: () => { restored++; return { sources: [] }; }, put: () => undefined } });
+  const answer = await queries.outline({ repo: "/work/shop", repoId: "shop", revision: "HEAD", files: ["src/Order.java"] });
+  assert.ok(answer.ok && answer.value.status === "complete");
+  assert.equal(restored, 0);
+  assert.equal(log.reads, 0);
+  assert.equal(log.extractions, 0);
 });

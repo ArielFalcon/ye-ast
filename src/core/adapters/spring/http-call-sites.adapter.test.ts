@@ -9,6 +9,18 @@ const RESOURCES = "src/main/resources/application.yml";
 
 let reader: CallSiteReader;
 
+test("Java HTTP sites carry their actual named AST ancestors", async () => {
+  const client = java("BillingClient", ["class BillingClient {", "  RestTemplate rt;", "  void send() {", "    rt.getForObject(\"http://billing/orders\", String.class);", "  }", "}"].join("\n"));
+  const [site] = await reader.of([client], "orders-svc");
+  assert.deepEqual(site?.ancestors, [{ symbol: "send", line: 8, endLine: 10 }, { symbol: "BillingClient", line: 6, endLine: 11 }]);
+});
+
+test("declarative HTTP sites carry their actual named AST ancestors", async () => {
+  const client = java("CatalogApi", ["@HttpExchange(\"/catalog\")", "interface CatalogApi {", "  @GetExchange(\"/products\") String product();", "}"].join("\n"), ["org.springframework.web.service.annotation.*"]);
+  const [site] = await reader.of([client], "orders-svc");
+  assert.deepEqual(site?.ancestors, [{ symbol: "product", line: 5, endLine: 5 }, { symbol: "CatalogApi", line: 3, endLine: 6 }]);
+});
+
 before(async () => {
   reader = createJavaHttpCallSites(await createJavaParser());
 });

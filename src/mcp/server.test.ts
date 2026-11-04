@@ -1,10 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { AjvJsonSchemaValidator } from "@modelcontextprotocol/server/validators/ajv";
 import type { EntrypointMapFact } from "../core/domain/map/entrypoint-map.ts";
 import type { ImpactValue } from "../core/domain/impact/impact-fact.ts";
 import type { ImportersValue } from "../core/domain/impact/importers-fact.ts";
 import type { Entrypoint } from "../core/domain/entrypoints/entrypoint.ts";
-import { SCHEMA, type Fact, type FactBase } from "../core/domain/shared/fact.ts";
+import { SCHEMA, type Cut, type Fact, type FactBase } from "../core/domain/shared/fact.ts";
 import type { Result } from "../core/domain/shared/result.ts";
 import type { EntrypointQueries, MapRequest } from "../core/ports/entrypoint-queries.port.ts";
 import type { ImpactCallersRequest, ImpactFault, ImpactImportersRequest, ImpactOfChangeRequest, ImpactQueries, OfChangeFault } from "../core/ports/impact-queries.port.ts";
@@ -80,7 +81,7 @@ function workspaceImpactFact(): Fact<WorkspaceImpactValue> {
     basis: "route-overlap" as const,
     confidence: 1,
   };
-  const section = (value: object): Fact<never> => ({ ...base(), status: "complete", value }) as never;
+  const section = (value: Omit<RepoImpact, "reads">): Fact<RepoImpact> => ({ ...base(), status: "complete", value: { ...value, reads: [] } });
   const value: WorkspaceImpactValue = {
     workspace: { repos: ["shop", "shop-web"], gateways: [{ prefix: "orders-api", repo: "shop", basis: "route-overlap" }], unmatchedGateways: [{ prefix: "legacy", repo: "shop" }], unserved: ["geo-api"], source: "request" },
     repositorySnapshots: [],
@@ -104,9 +105,9 @@ const DECISIONS: DecisionValue = {
       id: "membership:name:orders-api",
       kind: "membership",
       subject: "orders-api",
-      evidence: [{ path: "src/app/order.api.ts", line: 7 }],
+      evidence: [{ path: "src/app/order.api.ts", line: 7, repo: "shop-web" }],
       options: [
-        { value: "orders", basis: "exact-name", evidence: [{ path: "src/app/order.api.ts", line: 7 }], recommended: true },
+        { value: "orders", basis: "exact-name", evidence: [{ path: "src/app/order.api.ts", line: 7, repo: "shop-web" }], recommended: true },
         { value: "orders-core", basis: "artifact", evidence: [], recommended: false },
       ],
       allowsFreeText: true,
@@ -116,7 +117,7 @@ const DECISIONS: DecisionValue = {
       id: "repository:geo.example.com",
       kind: "repository",
       subject: "geo.example.com",
-      evidence: [{ path: "src/app/geo.api.ts", line: 11 }],
+      evidence: [{ path: "src/app/geo.api.ts", line: 11, repo: "shop-web" }],
       options: [],
       allowsFreeText: true,
       required: false,
@@ -153,7 +154,7 @@ function workspaceFact(): Fact<WorkspaceValue> {
       repositorySnapshots: [{ repo: "shop", snapshot: { repo: "shop", kind: "sha", sha: "a".repeat(40) } }],
       sections: { shop: section },
       candidates: [],
-      unserved: names,
+      unserved: names.map((name) => ({ ...name, evidence: name.evidence.map((place) => ({ ...place, repo: "shop" })) })),
       repositories: [],
     },
   };
@@ -236,7 +237,7 @@ async function setup(answers: Partial<Answers> = {}, refresh?: WorkspaceRefresh)
   const workspace = {
     outwardNames: async (request: WorkspaceRequest) => {
       calls.workspaceReads.push(request);
-      return (answers.outwardNames ?? (async () => ({ ok: true, value: read({ ...base(), status: "complete", value: { workspace: { repos: [], gateways: [], source: "none" }, repositorySnapshots: [], sections: {}, candidates: [], unserved: [], repositories: [{ repo: "shop", path: "/work/shop", entrypoints: [], callSites: [] }] } }) })))(request);
+      return (answers.outwardNames ?? (async () => ({ ok: true, value: read({ ...base(), status: "complete", value: { workspace: { repos: [], gateways: [], source: "none" }, repositorySnapshots: [], sections: {}, candidates: [], unserved: [], repositories: [{ repo: "shop", snapshot: base().snapshot, entrypoints: [], callSites: [] }] } }) })))(request);
     },
   } as unknown as WorkspaceQueries;
   const workspaceImpact: WorkspaceImpactQueries = {
@@ -296,11 +297,27 @@ test("by default every tool answers the envelope alone, keeping a partial status
 
   const impact = await session.callTool("ye_ast_impact", { base: "main" });
   assert.equal((impact.structuredContent as { status: string }).status, "partial");
-  assert.match(textOf(impact), /src\/A\.java::f/);
+  assert.match(textOf(impact), /depth \(1\); limit 1/);
   await session.close();
 });
 
-test("full adds the value and every cut place to the structured content and leaves the text byte for byte", async () => {
+test("workspace repository roots accompany the answer without entering the fact", async () => {
+  const repositoryRoots = [{ repo: "shop", path: REPOSITORY.path }, { repo: "shop-web", path: "/clones/frontend" }];
+  const fact = workspaceFact();
+  const { session } = await setup({ outwardNames: async () => ({ ok: true, value: { fact, repositoryRoots } }) });
+
+  for (const full of [false, true]) {
+    const result = await session.callTool("ye_ast_workspace", { full });
+    const structured = result.structuredContent as Record<string, unknown>;
+    assert.deepEqual(structured["repositoryRoots"], repositoryRoots);
+    assert.match(textOf(result), /repository root: shop-web -> \/clones\/frontend/);
+    assert.equal(JSON.stringify(structured["inputs"]).includes("/clones/frontend"), false);
+    assert.equal(JSON.stringify(structured["value"])?.includes("/clones/frontend") ?? false, false);
+  }
+  await session.close();
+});
+
+test("full adds the value and every cut place while other tools retain their text", async () => {
   const cuts = [{ kind: "depth", at: ["src/A.java::f"], limit: 1 }] as const;
   const partial = impactFact({ status: "partial", cuts } as Partial<Fact<ImpactValue>>);
   const { session } = await setup({ ofChange: async () => ({ ok: true, value: partial }) });
@@ -308,7 +325,7 @@ test("full adds the value and every cut place to the structured content and leav
   for (const [name, args] of TOOL_CALLS) {
     const plain = await session.callTool(name, args);
     const whole = await session.callTool(name, { ...args, full: true });
-    assert.equal(textOf(whole), textOf(plain), `${name}: the text is the same in both modes`);
+    if (name !== "ye_ast_importers") assert.equal(textOf(whole), textOf(plain), `${name}: the text is the same in both modes`);
     assert.equal("value" in (whole.structuredContent as Record<string, unknown>), true, `${name}: value`);
   }
 
@@ -349,7 +366,7 @@ test("lists the seven read tools, each described, none taking a top-level reposi
     assert.ok((tool.description ?? "").length > 0, tool.name);
     for (const forbidden of ["repo", "repoId", "path", "repository"]) assert.equal(tool.inputSchema.properties?.[forbidden], undefined, `${tool.name}.${forbidden}`);
   }
-  const required = (name: string): string[] => tools.find((tool) => tool.name === name)?.inputSchema.required ?? [];
+  const required = (name: string): readonly string[] => tools.find((tool) => tool.name === name)?.inputSchema.required ?? [];
   assert.deepEqual(required("ye_ast_impact"), ["base"]);
   assert.deepEqual(required("ye_ast_importers"), ["files"]);
   assert.deepEqual(required("ye_ast_outline"), ["files"]);
@@ -360,7 +377,7 @@ test("lists the seven read tools, each described, none taking a top-level reposi
   for (const name of ["ye_ast_workspace", "ye_ast_decisions"]) {
     const repos = tools.find((tool) => tool.name === name)?.inputSchema.properties?.["repos"] as { items?: { properties?: Record<string, unknown> } } | undefined;
     assert.ok(repos?.items?.properties?.["path"] !== undefined, `a passed repository is named by a nested path, in ${name}`);
-    assert.ok(repos?.items?.properties?.["remote"] !== undefined, `a passed repository may declare its remote, in ${name}`);
+    assert.equal(repos?.items?.properties?.["remote"], undefined, `a query cannot declare a refresh destination, in ${name}`);
   }
   await session.close();
 });
@@ -372,10 +389,46 @@ test("the server instructions tell the agent when to call every tool", async () 
   await session.close();
 });
 
-test("the server instructions name the root every answer is relative to", async () => {
+test("tool discovery publishes the same live exclusions that calls enforce", async () => {
+  const { session, calls } = await setup();
+  try {
+    const tools = await session.listTools();
+    const cases: [string, Record<string, unknown>, string[]][] = [
+      ["ye_ast_impact", { base: "main" }, ["head", "offline", "workspace"]],
+      ["ye_ast_callers", { targets: [{ file: "a", symbol: "f" }] }, ["revision", "offline", "workspace"]],
+      ["ye_ast_entrypoints", {}, ["revision"]],
+      ["ye_ast_importers", { files: ["a"] }, ["revision"]],
+      ["ye_ast_outline", { files: ["a"] }, ["revision"]],
+    ];
+    for (const [name, args, fields] of cases) {
+      const schema = tools.find((tool) => tool.name === name)?.inputSchema;
+      assert.ok(schema, name);
+      const validate = new AjvJsonSchemaValidator().getValidator(schema);
+      assert.deepEqual(schema?.allOf, fields.map((field) => ({
+        not: { properties: { live: { const: true } }, required: ["live", field] },
+      })), name);
+      for (const field of fields) {
+        const value = field === "offline" ? false : field === "workspace" ? {} : "main";
+        assert.equal(validate({ ...args, live: true, [field]: value }).valid, false, name);
+        assert.equal(validate({ ...args, live: false, [field]: value }).valid, true, name);
+        const result = await session.callTool(name, { ...args, live: true, [field]: value });
+        assert.equal(result.isError, true, `${name}: live excludes the presence of ${field}`);
+      }
+      assert.equal(validate({ ...args, live: true }).valid, true, name);
+      assert.equal(validate(args).valid, true, name);
+    }
+    assert.equal(calls.ofChange.length + calls.callers.length + calls.map.length + calls.importers.length + calls.outline.length + calls.workspaceOfChange.length + calls.workspaceCallers.length, 0);
+    const allowed = await session.callTool("ye_ast_impact", { base: "main", live: false, head: "feature", offline: false });
+    assert.notEqual(allowed.isError, true);
+    assert.equal(calls.ofChange[0]?.head, "feature");
+  } finally {
+    await session.close();
+  }
+});
+
+test("the server instructions name the bound repository root", async () => {
   const { session } = await setup();
   assert.ok(session.instructions?.includes(`${REPOSITORY.path} (id ${REPOSITORY.repoId})`), session.instructions);
-  assert.match(session.instructions ?? "", /Every path in an answer is relative to that root/);
   await session.close();
 });
 
@@ -503,20 +556,109 @@ test("callers forwards symbol and line-range targets at a revision", async () =>
   await session.close();
 });
 
-test("importers forwards the files and renders importers, users and unresolved namers per file", async () => {
+test("importers forwards the files and identifies disjoint file relationships", async () => {
   const { session, calls } = await setup();
-  const result = await session.callTool("ye_ast_importers", { files: ["src/OrderService.java"], revision: "topic" });
+  const result = await session.callTool("ye_ast_importers", { files: ["src/OrderService.java"], revision: "topic", detail: "full" });
   assert.deepEqual(calls.importers[0]?.files, ["src/OrderService.java"]);
   assert.equal(calls.importers[0]?.revision, "topic");
   const text = textOf(result);
   assert.match(text, /src\/OrderService\.java/);
-  assert.match(text, /importers.*src\/OrderController\.java/);
-  assert.match(text, /users.*src\/Billing\.java/);
-  assert.match(text, /unresolved namers.*src\/Legacy\.java/);
+  assert.match(text, /importers[\s\S]*src\/OrderController\.java/);
+  assert.match(text, /additional users[\s\S]*src\/Billing\.java/);
+  assert.match(text, /unresolved-only candidates.*src\/Legacy\.java/);
   await session.close();
 });
 
-test("a partial answer counts its cuts in the status line and lists every one under a closing heading", async () => {
+const OVERLAPPING_IMPORTERS: ImportersValue = {
+  files: [{
+    file: "src/OrderService.java",
+    importers: ["src/Imported.java", "src/Shared.java"],
+    users: ["src/Imported.java", "src/Shared.java", "src/Used.java", "src/UsedPending.java"],
+    unresolvedNamers: ["src/Candidate.java", "src/Shared.java", "src/UsedPending.java"],
+  }],
+};
+
+test("importers detail lists each related file once and preserves pending matches on resolved links", async () => {
+  const { session } = await setup({ importers: async () => ({ ok: true, value: { ...base(), status: "complete", value: OVERLAPPING_IMPORTERS } }) });
+  const result = await session.callTool("ye_ast_importers", { files: ["src/OrderService.java"], detail: "full" });
+  const text = textOf(result);
+  for (const path of ["src/Imported.java", "src/Shared.java", "src/Used.java", "src/UsedPending.java", "src/Candidate.java"]) {
+    assert.equal(text.split(path).length - 1, 1, path);
+  }
+  assert.match(text, /related files \(5 distinct\)/);
+  assert.match(text, /importers \(2\):\n +with unresolved name matches \(1\): src\/Shared\.java\n +without unresolved name matches \(1\): src\/Imported\.java/);
+  assert.match(text, /additional users \(2\):\n +with unresolved name matches \(1\): src\/UsedPending\.java\n +without unresolved name matches \(1\): src\/Used\.java/);
+  assert.match(text, /unresolved-only candidates \(1\): src\/Candidate\.java/);
+  assert.match(text, /2 files with resolved links also have unresolved name matches/);
+  assert.match(text, /not establish additional dependencies/);
+  await session.close();
+});
+
+test("importers summary counts omitted file identities without adding overlapping categories", async () => {
+  const paths = Array.from({ length: 18 }, (_, i) => `src/app/core/auth/consumers/consumer-${String(i).padStart(2, "0")}.ts`);
+  const value: ImportersValue = { files: [{ file: "src/auth.service.ts", importers: paths, users: paths, unresolvedNamers: paths.slice(1) }] };
+  const { session } = await setup({ importers: async () => ({ ok: true, value: { ...base(), status: "complete", value } }) });
+  const text = textOf(await session.callTool("ye_ast_importers", { files: ["src/auth.service.ts"] }));
+  assert.match(text, /related files \(18 distinct\)/);
+  assert.match(text, /importers \(18\)/);
+  assert.match(text, /additional users \(0\)/);
+  assert.match(text, /unresolved-only candidates \(0\)/);
+  assert.match(text, /17 files with resolved links also have unresolved name matches/);
+  for (const path of paths) assert.equal(text.includes(path), false, path);
+  assert.match(text, /detail: "full"/);
+  assert.match(text, /full: true/);
+  const detail = textOf(await session.callTool("ye_ast_importers", { files: ["src/auth.service.ts"], detail: "full" }));
+  assert.ok(Buffer.byteLength(text) <= Buffer.byteLength(detail));
+  await session.close();
+});
+
+test("importers full keeps the original overlapping fact and cuts without repeating file lists in text", async () => {
+  const fact: Fact<ImportersValue> = { ...base(), status: "partial", value: OVERLAPPING_IMPORTERS, cuts: [{ kind: "no-extractor", at: ["src/Unread.java"] }] };
+  const { session } = await setup({ importers: async () => ({ ok: true, value: fact }) });
+  for (const detail of ["summary", "full"]) {
+    const result = await session.callTool("ye_ast_importers", { files: ["src/OrderService.java"], full: true, detail });
+    assert.deepEqual(result.structuredContent, fact);
+    const text = textOf(result);
+    assert.match(text, /status: partial/);
+    assert.match(text, /structuredContent/);
+    assert.equal(text.includes("src/Shared.java"), false);
+    assert.equal(text.includes("src/Unread.java"), false);
+  }
+  await session.close();
+});
+
+test("importers summary keeps a shorter listing rather than a longer counted omission", async () => {
+  const value: ImportersValue = { files: [{ file: "a.ts", importers: ["b.ts"], users: ["b.ts"], unresolvedNamers: [] }] };
+  const { session } = await setup({ importers: async () => ({ ok: true, value: { ...base(), status: "complete", value } }) });
+  const summary = textOf(await session.callTool("ye_ast_importers", { files: ["a.ts"] }));
+  const detail = textOf(await session.callTool("ye_ast_importers", { files: ["a.ts"], detail: "full" }));
+  assert.equal(summary, detail);
+  assert.equal(summary.split("b.ts").length - 1, 1);
+  await session.close();
+});
+
+test("importers distinguishes a complete empty result from an unknown result in every presentation", async () => {
+  const empty: Fact<ImportersValue> = { ...base(), status: "complete", value: { files: [{ file: "a.ts", importers: [], users: [], unresolvedNamers: [] }] } };
+  const unknown: Fact<ImportersValue> = { ...base(), status: "unknown", reason: "index-unavailable" };
+  for (const fact of [empty, unknown]) {
+    const { session } = await setup({ importers: async () => ({ ok: true, value: fact }) });
+    for (const presentation of [{}, { detail: "full" }, { full: true }]) {
+      const result = await session.callTool("ye_ast_importers", { files: ["a.ts"], ...presentation });
+      assert.equal((result.structuredContent as Fact<ImportersValue>).status, fact.status);
+      const text = textOf(result);
+      if (fact.status === "unknown") {
+        assert.match(text, /index-unavailable/);
+        assert.equal(text.includes("related files"), false);
+      } else if (!("full" in presentation)) {
+        assert.match(text, /related files \(0 distinct\)/);
+        assert.equal(text.includes("omitted"), false);
+      }
+    }
+    await session.close();
+  }
+});
+
+test("a partial answer counts its cuts in the status line and keeps applicable limits under a closing heading", async () => {
   const partial = impactFact({
     status: "partial",
     cuts: [{ kind: "depth", at: ["src/A.java:A.f", "src/B.java:B.g"], limit: 3 }, { kind: "hub", at: ["src/C.java:C.h"] }],
@@ -525,13 +667,13 @@ test("a partial answer counts its cuts in the status line and lists every one un
   const text = textOf(await session.callTool("ye_ast_impact", { base: "main" }));
   const lines = text.split("\n");
   assert.equal(lines[0], "status: partial (cuts: 1 depth, 1 hub)");
-  assert.match(text, /depth at src\/A\.java:A\.f, src\/B\.java:B\.g \(limit 3\)/);
-  assert.match(text, /hub \(1\): src\/C\.java:C\.h/);
+  assert.match(text, /depth \(1\); limit 3/);
+  assert.match(text, /hub \(1\)/);
   assert.ok(text.indexOf("\ncuts:") > text.indexOf("impacted symbols"), "the cut list closes the answer");
   await session.close();
 });
 
-test("a summary counts the cuts anchored at symbols past the listed depth per file and lists the rest", async () => {
+test("an impact summary counts every cut kind and keeps its bound regardless of symbol depth", async () => {
   const deep = impactFact({
     status: "partial",
     value: {
@@ -567,16 +709,15 @@ test("a summary counts the cuts anchored at symbols past the listed depth per fi
   const { session } = await setup({ ofChange: async () => ({ ok: true, value: deep }) });
   const text = textOf(await session.callTool("ye_ast_impact", { base: "main" }));
   assert.match(text, /^status: partial \(cuts: 8 depth, 1 hub, 1 no-extractor, 1 unresolved-link\)$/m);
-  assert.match(text, /hub \(1\): src\/a\.ts::A\.other/);
-  assert.match(text, /A\.seed: src\/x\.ts/);
-  assert.match(text, /no-extractor \(1\): src\/z\.swift/);
-  assert.match(text, /summarized \(8 at symbols deeper than depth 1\): detail "full" lists them/);
-  assert.match(text, /^ {2}src\/b\.ts: 8 depth$/m);
-  assert.doesNotMatch(text, /B\.one/);
+  assert.match(text, /depth \(8\); limit 5/);
+  assert.match(text, /hub \(1\)/);
+  assert.match(text, /no-extractor \(1\)/);
+  assert.match(text, /unresolved-link \(1\)/);
+  assert.doesNotMatch(text, /B\.one|src\/x\.ts/);
   await session.close();
 });
 
-test("detail full lists every cut, including the ones a summary counts", async () => {
+test("impact detail localizes every cut anchor while full JSON retains every reference place", async () => {
   const deep = impactFact({
     status: "partial",
     value: {
@@ -594,27 +735,29 @@ test("detail full lists every cut, including the ones a summary counts", async (
     ],
   } as Partial<Fact<ImpactValue>>);
   const { session } = await setup({ ofChange: async () => ({ ok: true, value: deep }) });
-  const text = textOf(await session.callTool("ye_ast_impact", { base: "main", detail: "full" }));
-  assert.match(text, /unresolved-link at src\/b\.ts::B\.user: src\/y\.ts: 7, 9/);
+  const result = await session.callTool("ye_ast_impact", { base: "main", detail: "full", full: true });
+  const text = textOf(result);
+  assert.deepEqual(result.structuredContent, deep);
+  assert.match(text, /src\/b\.ts[\s\S]*B\.user: 1 cut, 2 reference places/);
+  assert.doesNotMatch(text, /src\/y\.ts/);
   assert.match(text, /depth \(1\): src\/c\.ts::C\.top \(limit 5\)/);
   assert.doesNotMatch(text, /summarized/);
   await session.close();
 });
 
-test("a workspace summary counts a section's cut anchored at a symbol past the listed depth", async () => {
+test("a workspace summary attributes counted cuts to their repository", async () => {
   const built = workspaceImpactFact();
   const value = (built as { value: WorkspaceImpactValue }).value;
-  const section = {
-    ...built,
+  const section: Fact<RepoImpact> = {
+    ...base(),
     status: "partial",
-    value: { impact: IMPACT, callSites: [], unmatched: [], external: [] },
+    value: { reads: [], impact: IMPACT, callSites: [], unmatched: [], external: [] },
     cuts: [{ kind: "unresolved-link", at: ["src/OrderController.java::OrderController.one", "src/app/page.ts:9"] }],
-  } as unknown as Fact<RepoImpact>;
+  };
   const fact = { ...built, value: { ...value, sections: { ...value.sections, shop: section } } } as Fact<WorkspaceImpactValue>;
   const { session } = await setup({ workspaceOfChange: async () => ({ ok: true, value: { fact } }) });
   const text = textOf(await session.callTool("ye_ast_impact", { base: "main", workspace: WORKSPACE }));
-  assert.match(text, /summarized \(1 at symbols deeper than depth 1\): detail "full" lists them/);
-  assert.match(text, /^ {2}src\/OrderController\.java: 1 unresolved-link$/m);
+  assert.match(text, /cuts for repository shop:[\s\S]*unresolved-link \(1\)/);
   assert.doesNotMatch(text, /src\/app\/page\.ts/);
   await session.close();
 });
@@ -638,8 +781,8 @@ test("with detail full, an unresolved-link cut renders the places in its anchor'
     status: "partial",
     cuts: [{ kind: "unresolved-link", at: ["src/a.ts::A.f", "src/a.ts:18", "src/a.ts:123 no-extractor", "src/b.ts:7"] }],
   } as Partial<Fact<ImpactValue>>);
-  const { session } = await setup({ ofChange: async () => ({ ok: true, value: partial }) });
-  const text = textOf(await session.callTool("ye_ast_impact", { base: "main", detail: "full" }));
+  const { session } = await setup({ importers: async () => ({ ok: true, value: { ...partial, value: IMPORTERS } }) });
+  const text = textOf(await session.callTool("ye_ast_importers", { files: ["src/OrderService.java"], detail: "full" }));
   assert.match(text, /unresolved-link at src\/a\.ts::A\.f: lines 18, 123 \(no-extractor\), src\/b\.ts:7/);
   await session.close();
 });
@@ -647,8 +790,8 @@ test("with detail full, an unresolved-link cut renders the places in its anchor'
 test("with detail full, the places of a cut are grouped under their file, every place kept and the path printed once", async () => {
   const places = ["src/a.ts::A.f", ...["10", "11", "12", "40"].map((line) => `src/x.ts:${line}`), ...["7", "9"].map((line) => `src/y.ts:${line}`), "src/z.ts:3 no-extractor"];
   const partial = impactFact({ status: "partial", cuts: [{ kind: "unresolved-link", at: places }] } as Partial<Fact<ImpactValue>>);
-  const { session } = await setup({ ofChange: async () => ({ ok: true, value: partial }) });
-  const text = textOf(await session.callTool("ye_ast_impact", { base: "main", detail: "full" }));
+  const { session } = await setup({ importers: async () => ({ ok: true, value: { ...partial, value: IMPORTERS } }) });
+  const text = textOf(await session.callTool("ye_ast_importers", { files: ["src/OrderService.java"], detail: "full" }));
   assert.match(text, /unresolved-link at src\/a\.ts::A\.f: src\/x\.ts: 10, 11, 12, 40, src\/y\.ts: 7, 9, src\/z\.ts \(no-extractor\):3$/m);
   assert.equal(text.split("src/x.ts").length - 1, 1, "the path of a grouped file is printed once");
   for (const line of ["10", "11", "12", "40"]) assert.match(text, new RegExp(`\\b${line}\\b`), `line ${line} survives the grouping`);
@@ -664,8 +807,8 @@ test("by default a cut names the declarations it could not settle to and the fil
       { kind: "unresolved-link", at: ["src/z.ts", "src/z.ts:4"] },
     ],
   } as Partial<Fact<ImpactValue>>);
-  const { session } = await setup({ ofChange: async () => ({ ok: true, value: partial }) });
-  const text = textOf(await session.callTool("ye_ast_impact", { base: "main" }));
+  const { session } = await setup({ importers: async () => ({ ok: true, value: { ...partial, value: IMPORTERS } }) });
+  const text = textOf(await session.callTool("ye_ast_importers", { files: ["src/OrderService.java"] }));
   assert.match(
     text,
     /unresolved-link \(1 file, 2 declarations, 5 references; detail "full" lists every place\):\n {4}src\/a\.ts\n {6}A\.f: src\/x\.ts, src\/y\.ts\n {6}A\.g: src\/x\.ts\n {4}src\/z\.ts\n {6}\(the file itself\)$/m,
@@ -680,11 +823,11 @@ test("a summary names the references of a cut the file leads, so the reader sett
     status: "partial",
     cuts: [{ kind: "unresolved-link", at: ["src/z.ts", "src/z.ts:4 Promise.resolve", "src/z.ts:9 req.context.get"] }],
   } as Partial<Fact<ImpactValue>>);
-  const { session } = await setup({ ofChange: async () => ({ ok: true, value: partial }) });
-  const text = textOf(await session.callTool("ye_ast_impact", { base: "main" }));
+  const { session } = await setup({ importers: async () => ({ ok: true, value: { ...partial, value: IMPORTERS } }) });
+  const text = textOf(await session.callTool("ye_ast_importers", { files: ["src/OrderService.java"] }));
   assert.match(text, /^ {4}src\/z\.ts: Promise\.resolve, req\.context\.get$/m);
   assert.doesNotMatch(text, /the file itself/);
-  const full = textOf(await session.callTool("ye_ast_impact", { base: "main", detail: "full" }));
+  const full = textOf(await session.callTool("ye_ast_importers", { files: ["src/OrderService.java"], detail: "full" }));
   assert.match(full, /unresolved-link at src\/z\.ts: lines 4 \(Promise\.resolve\), 9 \(req\.context\.get\)/);
   await session.close();
 });
@@ -697,8 +840,8 @@ test("two cuts led by the same file keep every reference they name", async () =>
       { kind: "unresolved-link", at: ["src/z.ts", "src/z.ts:9 req.context.get"] },
     ],
   } as Partial<Fact<ImpactValue>>);
-  const { session } = await setup({ ofChange: async () => ({ ok: true, value: partial }) });
-  const text = textOf(await session.callTool("ye_ast_impact", { base: "main" }));
+  const { session } = await setup({ importers: async () => ({ ok: true, value: { ...partial, value: IMPORTERS } }) });
+  const text = textOf(await session.callTool("ye_ast_importers", { files: ["src/OrderService.java"] }));
   assert.match(text, /^ {4}src\/z\.ts: Promise\.resolve, req\.context\.get$/m);
   await session.close();
 });
@@ -712,8 +855,8 @@ test("a declaration whose places are exactly another's points at it instead of p
       { kind: "unresolved-link", at: ["src/a.ts::A.f", "src/x.ts:1", "src/y.ts:2"] },
     ],
   } as Partial<Fact<ImpactValue>>);
-  const { session } = await setup({ ofChange: async () => ({ ok: true, value: partial }) });
-  const text = textOf(await session.callTool("ye_ast_impact", { base: "main" }));
+  const { session } = await setup({ importers: async () => ({ ok: true, value: { ...partial, value: IMPORTERS } }) });
+  const text = textOf(await session.callTool("ye_ast_importers", { files: ["src/OrderService.java"] }));
   assert.match(
     text,
     /unresolved-link \(3 declarations, 6 references; detail "full" lists every place\):\n {4}src\/a\.ts\n {6}A\.f: src\/x\.ts, src\/y\.ts\n {6}A\.h \(same places as A\.f\)\n {4}src\/b\.ts\n {6}B\.g \(same places as src\/a\.ts::A\.f\)$/m,
@@ -722,15 +865,41 @@ test("a declaration whose places are exactly another's points at it instead of p
   await session.close();
 });
 
-test("a summary counts the seeds of a large change per file and basis, and detail full lists them", async () => {
-  const seeds = Array.from({ length: 12 }, (_, index) => ({ file: "src/a.ts", symbol: `a${index}`, line: index + 1, basis: "lines" as const }));
+test("unresolved declarations at different lines in one file do not claim the same places", async () => {
+  const partial = impactFact({ status: "partial", cuts: [
+    { kind: "unresolved-link", at: ["src/a.ts::A", "src/use.ts:10"] },
+    { kind: "unresolved-link", at: ["src/a.ts::B", "src/use.ts:90"] },
+  ] } as Partial<Fact<ImpactValue>>);
+  const { session } = await setup({ importers: async () => ({ ok: true, value: { ...partial, value: IMPORTERS } }) });
+  const text = textOf(await session.callTool("ye_ast_importers", { files: ["src/OrderService.java"] }));
+  assert.doesNotMatch(text, /same places as/);
+  await session.close();
+});
+
+test("workspace unknown repository reason is visible in summary and full text", async () => {
+  const fact = workspaceFact();
+  if (fact.status === "unknown") throw new Error("fixture");
+  const unknown: Fact<WorkspaceSection> = { ...base(), status: "unknown", reason: "revision-unavailable", evidence: [] };
+  const value = { ...fact.value, sections: { shop: unknown } };
+  const { session } = await setup({ outwardNames: async () => ({ ok: true, value: { fact: { ...fact, value } } }) });
+  for (const detail of ["summary", "full"] as const) {
+    const text = textOf(await session.callTool("ye_ast_workspace", { detail }));
+    assert.match(text, /shop: unknown \(revision-unavailable\)/);
+  }
+  await session.close();
+});
+
+test("both impact text levels count unselected change origins while full JSON preserves them", async () => {
+  const seeds = Array.from({ length: 12 }, (_, index) => ({ file: `src/feature-${index}.ts`, symbol: `a${index}`, line: index + 1, basis: index % 2 === 0 ? "lines" as const : "top-level" as const }));
   const fact = impactFact({ value: { ...IMPACT, seeds, symbols: [], entrypoints: [], changedEntrypoints: [] } } as Partial<Fact<ImpactValue>>);
   const { session } = await setup({ ofChange: async () => ({ ok: true, value: fact }) });
   const summary = textOf(await session.callTool("ye_ast_impact", { base: "main" }));
-  assert.match(summary, /^seeds \(12\):\n {2}src\/a\.ts \(lines\): 12 seeds\n {2}detail "full" lists every seed$/m);
-  const full = textOf(await session.callTool("ye_ast_impact", { base: "main", detail: "full" }));
-  assert.match(full, /^seeds \(12\):\n {2}src\/a\.ts \(lines\)\n {4}1 a0\n/m);
-  assert.equal(full.split("src/a.ts").length - 1, 1);
+  assert.match(summary, /^seeds \(12\):\n {2}change origins: 12 declarations across 12 files \(lines 6, top-level 6\); full: true includes every seed$/m);
+  assert.doesNotMatch(summary, /src\/feature-/);
+  const full = await session.callTool("ye_ast_impact", { base: "main", detail: "full", full: true });
+  assert.deepEqual(full.structuredContent, fact);
+  assert.doesNotMatch(textOf(full), /src\/feature-/);
+  assert.match(textOf(full), /change origins: 12 declarations across 12 files/);
   await session.close();
 });
 
@@ -742,7 +911,7 @@ test("a summary lists the seeds a caller asked for and counts the change seeds b
   const fact = impactFact({ value: { ...IMPACT, seeds, symbols: [], entrypoints: [], changedEntrypoints: [] } } as Partial<Fact<ImpactValue>>);
   const { session } = await setup({ ofChange: async () => ({ ok: true, value: fact }) });
   const summary = textOf(await session.callTool("ye_ast_impact", { base: "main" }));
-  assert.match(summary, /^seeds \(11\):\n {2}src\/a\.ts \(requested\)\n {4}1 asked\n {2}src\/a\.ts \(lines\): 10 seeds\n {2}detail "full" lists every seed$/m);
+  assert.match(summary, /^seeds \(11\):\n {2}src\/a\.ts \(requested\)\n {4}1 asked\n {2}change origins: 10 declarations across 1 file \(lines 10\); full: true includes every seed$/m);
   await session.close();
 });
 
@@ -752,9 +921,9 @@ test("the seeds of an impact answer are grouped under their file, with the basis
     { file: "src/a.ts", symbol: "b", line: 9, basis: "top-level" as const },
     { file: "src/b.ts", symbol: "c", line: 2, basis: "requested" as const },
   ];
-  const fact = impactFact({ value: { ...IMPACT, seeds } } as Partial<Fact<ImpactValue>>);
+  const fact = impactFact({ value: { ...IMPACT, seeds, entrypoints: [] } } as Partial<Fact<ImpactValue>>);
   const { session } = await setup({ ofChange: async () => ({ ok: true, value: fact }) });
-  const text = textOf(await session.callTool("ye_ast_impact", { base: "main" }));
+  const text = textOf(await session.callTool("ye_ast_impact", { base: "main", detail: "full" }));
   assert.match(text, /^seeds \(3\):\n {2}src\/a\.ts\n {4}3 a \(lines\)\n {4}9 b \(top-level\)\n {2}src\/b\.ts \(requested\)\n {4}2 c$/m);
   assert.equal(text.split("src/a.ts").length - 1, 1, "the path of a grouped file is printed once");
   await session.close();
@@ -768,7 +937,7 @@ test("a symbol prints the span it covers and the place inside itself where it de
       { file: "src/c.ts", symbol: "C.one", kind: "constant", line: 7, depth: 2, confidence: 1, fanIn: 0, via: { file: "src/b.ts", symbol: "B.user", basis: "dispatch" } },
       { file: "src/d.ts", symbol: "D.type", kind: "class", line: 9, depth: 2, confidence: 1, fanIn: 0, via: { file: "src/b.ts", symbol: "B.user", lines: [12], basis: "reference" } },
     ],
-    entrypoints: [],
+    entrypoints: [{ kind: "http-route", name: "GET /one", handler: { path: "src/c.ts", symbol: "C.one", line: 7 }, depth: 2, confidence: 1, seeds: [0] }, { kind: "http-route", name: "GET /type", handler: { path: "src/d.ts", symbol: "D.type", line: 9 }, depth: 2, confidence: 1, seeds: [0] }],
     cost: { expansionsUsed: 0 },
   };
   const fact = impactFact({ value } as Partial<Fact<ImpactValue>>);
@@ -807,7 +976,7 @@ test("impacted symbols are grouped under their file, a seed at depth 0 is not pr
         { file: "src/b.ts", symbol: "B.user", kind: "function", line: 9, depth: 2, confidence: 0.5, fanIn: 2, via: { file: "src/a.ts", symbol: "A.other", lines: [44], basis: "call" } },
         { file: "src/b.ts", symbol: "B.helper", kind: "function", line: 2, depth: 2, confidence: 0.5, fanIn: 1, via: { file: "src/b.ts", symbol: "B.user", lines: [7], basis: "call" } },
       ],
-      entrypoints: [],
+      entrypoints: [{ kind: "http-route", name: "GET /user", handler: { path: "src/b.ts", symbol: "B.user", line: 9 }, depth: 2, confidence: 0.5, seeds: [0] }, { kind: "http-route", name: "GET /helper", handler: { path: "src/b.ts", symbol: "B.helper", line: 2 }, depth: 2, confidence: 0.5, seeds: [0] }],
       cost: { expansionsUsed: 1 },
     },
   } as Partial<Fact<ImpactValue>>);
@@ -818,7 +987,7 @@ test("impacted symbols are grouped under their file, a seed at depth 0 is not pr
   await session.close();
 });
 
-test("by default impact lists the symbols at depth 0 and 1 and says how many deeper ones it does not list", async () => {
+test("callers summary counts dependency depths and detail identifies the nearest evidence frontier", async () => {
   const deep = impactFact({
     value: {
       seeds: [{ file: "src/a.ts", symbol: "A.seed", line: 1, basis: "requested" }],
@@ -840,20 +1009,17 @@ test("by default impact lists the symbols at depth 0 and 1 and says how many dee
   const { session } = await setup({ callers: async () => ({ ok: true, value: deep }) });
   const result = await session.callTool("ye_ast_callers", { targets: [{ file: "src/a.ts", symbol: "A.seed" }] });
   const text = textOf(result);
-  assert.match(
-    text,
-    /impacted symbols \(9\): 1 at depth 0-1 listed, 8 deeper \(to depth 3\) not listed; ask ye_ast_callers about a symbol listed here to see one ring further, or detail "full" for all\n {2}src\/a\.ts\n {4}4 A\.other \[method\] \(depth 1\)$/m,
-  );
-  assert.doesNotMatch(text, /at depth 2-3|src\/c\.ts: 1 at depth/);
+  assert.match(text, /by depth: 1: 1, 2: 7, 3: 1/);
   assert.doesNotMatch(text, /B\.user|C\.top/);
   assert.deepEqual(result.structuredContent, envelopeOf(deep));
   const full = textOf(await session.callTool("ye_ast_callers", { targets: [{ file: "src/a.ts", symbol: "A.seed" }], detail: "full" }));
-  assert.doesNotMatch(full, /to see one ring further/, "a full answer leaves nothing to extend");
-  assert.match(full, /B\.user|C\.top/);
+  assert.match(full, /4 A\.other/);
+  assert.match(full, /8 other symbols; full: true/);
+  assert.doesNotMatch(full, /B\.user|C\.top/);
   await session.close();
 });
 
-test("a summary whose symbols are all deeper points at the seeds it does list", async () => {
+test("callers summary retains requested targets while counting deeper consequences", async () => {
   const deep = impactFact({
     value: {
       seeds: [{ file: "src/a.ts", symbol: "A.seed", line: 1, basis: "requested" }],
@@ -872,7 +1038,8 @@ test("a summary whose symbols are all deeper points at the seeds it does list", 
   } as Partial<Fact<ImpactValue>>);
   const { session } = await setup({ callers: async () => ({ ok: true, value: deep }) });
   const text = textOf(await session.callTool("ye_ast_callers", { targets: [{ file: "src/a.ts", symbol: "A.seed" }] }));
-  assert.match(text, /7 deeper \(to depth 2\) not listed; ask ye_ast_callers about a seed listed here to see one ring further/);
+  assert.match(text, /by depth: 2: 7/);
+  assert.match(text, /1 A\.seed/);
   await session.close();
 });
 
@@ -973,6 +1140,7 @@ test("an unknown-symbol fault lists every entry that names no node and what its 
   const text = textOf(result);
   assert.match(text, /src\/A\.java:A\.gone: declared in src\/A\.java: A\.other, A\.used/);
   assert.match(text, /src\/B\.java:B\.gone: src\/B\.java declares no symbol/);
+  assert.ok(text.includes("targets") && text.includes("ye_ast_outline"));
   assert.deepEqual(result._meta?.["ye-ast/fault"], fault);
   await session.close();
 });
@@ -984,6 +1152,7 @@ test("an unknown-change-path fault names the globs that selected no changed path
   assert.equal(result.isError, true);
   assert.match(textOf(result), /^fault: unknown-change-path$/m);
   assert.match(textOf(result), /src\/z\/\*\*/);
+  assert.ok(textOf(result).includes("Remove changed") && textOf(result).includes("within the declared scope"));
   assert.deepEqual(result._meta?.["ye-ast/fault"], fault);
   await session.close();
 });
@@ -1218,7 +1387,7 @@ test("a workspace answer lists the links across repositories with their basis, t
   const text = textOf(result);
   assert.match(text, /^repositories declared by: the request$/m);
   assert.match(text, /orders-api -> shop \(route-overlap\)/);
-  assert.match(text, /shop-web:src\/app\/order\.api\.ts:7 OrderApi\.create -> shop GET \/orders\/\{id\} \(route-overlap, upstream\)/);
+  assert.match(text, /shop-web:src\/app\/order\.api\.ts:7 OrderApi\.create -> shop GET \/orders\/\{id\} -> src\/OrderController\.java:17 OrderController\.one \(route-overlap, upstream; reach: 1\)/);
   assert.match(text, /unmatched \(1\):\n\s+- src\/app\/order\.api\.ts:9 .* GET orders-api\/missing/);
   assert.match(text, /external \(1\):\n\s+- src\/app\/order\.api\.ts:11 .* GET geo-api\/provinces/);
   assert.match(text, /no local repository serves \(1\): geo-api/);
@@ -1275,15 +1444,21 @@ test("the workspace tool answers the outward names without the repositories it r
   await session.close();
 });
 
-test("a passed repository's remote reaches the workspace family, and an empty one is refused before any query runs", async () => {
+test("an agent-selected remote is refused before any workspace query runs", async () => {
   const { session, calls } = await setup();
   const remote = "https://git.example.com/shop/web.git";
-
-  await session.callTool("ye_ast_workspace", { repos: [{ path: "/work/shop-web", id: "shop-web", remote }] });
-  const refused = await session.callTool("ye_ast_workspace", { repos: [{ path: "/work/shop-web", remote: "" }] }).catch((error: Error) => error);
-
-  assert.deepEqual(calls.workspaceReads.map(({ repos }) => repos), [[{ path: "/work/shop-web", id: "shop-web", remote }]]);
-  assert.equal(refused instanceof Error || (refused as { isError?: boolean }).isError === true, true);
+  const repos = [{ path: "/work/shop-web", id: "shop-web", remote }];
+  const requests = [
+    ["ye_ast_workspace", { repos }],
+    ["ye_ast_decisions", { repos }],
+    ["ye_ast_callers", { targets: [{ file: "src/Order.java", symbol: "Order" }], workspace: { repos } }],
+    ["ye_ast_impact", { base: "main", workspace: { repos } }],
+  ] as const;
+  for (const [name, args] of requests) {
+    const refused = await session.callTool(name, args).catch((error: Error) => error);
+    assert.equal(refused instanceof Error || (refused as { isError?: boolean }).isError === true, true, name);
+  }
+  assert.deepEqual([calls.workspaceReads, calls.decisions, calls.workspaceCallers, calls.workspaceOfChange], [[], [], [], []]);
   await session.close();
 });
 
@@ -1301,8 +1476,8 @@ test("the decisions tool asks the decision family with the repositories and gate
   assert.match(text, /^status: complete\n/);
   assert.match(text, /repositories \(1\): shop@a{40}/);
   assert.match(text, /decisions \(2\):/);
-  assert.match(text, /\n {2}membership \(1\):\n {4}orders-api\n {6}evidence: src\/app\/order\.api\.ts:7\n {6}- orders \(exact-name, recommended, src\/app\/order\.api\.ts:7\)\n {6}- orders-core \(artifact\)\n {6}free text/);
-  assert.match(text, /\n {2}repository \(1\):\n {4}geo\.example\.com\n {6}evidence: src\/app\/geo\.api\.ts:11\n {6}free text/);
+  assert.match(text, /\n {2}membership \(1\):\n {4}orders-api\n {6}evidence: shop-web:src\/app\/order\.api\.ts:7\n {6}- orders \(exact-name, recommended, shop-web:src\/app\/order\.api\.ts:7\)\n {6}- orders-core \(artifact\)\n {6}free text/);
+  assert.match(text, /\n {2}repository \(1\):\n {4}geo\.example\.com\n {6}evidence: shop-web:src\/app\/geo\.api\.ts:11\n {6}free text/);
   await session.close();
 });
 
@@ -1328,7 +1503,7 @@ const DEPENDENCY_GAP: DecisionValue = {
   ...DECISIONS,
   decisions: [
     ...DECISIONS.decisions,
-    { id: "repository:@angular/core", kind: "repository", subject: "@angular/core", evidence: [{ path: "package.json", line: 36 }], outwardKinds: ["dependency"], options: [], allowsFreeText: true, required: false },
+    { id: "repository:@angular/core", kind: "repository", subject: "@angular/core", evidence: [{ path: "package.json", line: 36, repo: "shop" }], outwardKinds: ["dependency"], options: [], allowsFreeText: true, required: false },
   ],
 };
 
@@ -1351,7 +1526,7 @@ test("a workspace full answer lists the dependency coordinates its summary count
 
   assert.match(text, / {4}dependency \(3\):\n {6}- @angular\/core \(package\.json:36\)\n {6}- @capacitor\/core \(package\.json:49\)\n {6}- rxjs \(package\.json:74\)/);
   assert.match(text, /^no local repository serves \(4\):$/m);
-  assert.match(text, / {2}- dependency @angular\/core$/m);
+  assert.match(text, / {2}- dependency @angular\/core \(shop:package\.json:36\)$/m);
   await session.close();
 });
 
@@ -1384,7 +1559,7 @@ test("a decisions full answer lists the dependency gaps its summary counts", asy
 
   const text = textOf(await session.callTool("ye_ast_decisions", { detail: "full" }));
 
-  assert.match(text, / {4}@angular\/core\n {6}evidence: package\.json:36\n {6}free text/);
+  assert.match(text, / {4}@angular\/core\n {6}evidence: shop:package\.json:36\n {6}free text/);
   await session.close();
 });
 
@@ -1443,13 +1618,17 @@ test("the sidecar is redacted with the composed redaction like every other value
     ...REFRESH,
     freshness: [{ repo: "orders", url: `https://user:${SECRET}@git.example.com/orders.git`, freshness: { status: "unverified", reason: "failed", detail: `fatal: ${SECRET}` } }],
   };
-  const { session } = await setup(undefined, leaking);
+  const { session } = await setup({ outwardNames: async () => ({
+    ok: true,
+    value: { fact: workspaceFact(), refresh: leaking, repositoryRoots: [{ repo: "orders", path: `/clones/${SECRET}` }] },
+  }) });
 
   const result = await session.callTool("ye_ast_workspace", {});
 
   const structured = JSON.stringify(result.structuredContent);
   assert.doesNotMatch(structured, new RegExp(SECRET));
   assert.match(structured, new RegExp(REDACTED.replace(/[[\]]/g, "\\$&")));
+  assert.doesNotMatch(textOf(result), new RegExp(SECRET));
   await session.close();
 });
 
@@ -1488,4 +1667,143 @@ test("the counted elision of a workspace and a decisions summary never renders l
   const decisions = await setup({ decisions: async () => ({ ok: true, value: { fact: decisionFact(DEPENDENCY_GAP) } }) });
   assertCountedSummaryShorter(textOf(await decisions.session.callTool("ye_ast_decisions", {})), textOf(await decisions.session.callTool("ye_ast_decisions", { detail: "full" })));
   await decisions.session.close();
+});
+
+test("decision text and structured full retain each evidence repository", async () => {
+  const evidence = [{ repo: "caller", path: "src/app.ts", line: 7 }, { repo: "server", path: "src/app.ts", line: 7 }];
+  const decision = { ...DECISIONS.decisions[0]!, evidence, options: [{ value: "server", evidence, recommended: true }] };
+  const { session } = await setup({ decisions: async () => ({ ok: true, value: { fact: decisionFact({ ...DECISIONS, decisions: [decision] }) } }) });
+  const result = await session.callTool("ye_ast_decisions", { detail: "full", full: true });
+  const text = textOf(result);
+  assert.match(text, /caller:src\/app\.ts:7/);
+  assert.match(text, /server:src\/app\.ts:7/);
+  const structured = result.structuredContent as { value: DecisionValue };
+  assert.deepEqual(structured.value.decisions[0]?.evidence, evidence);
+  await session.close();
+});
+
+test("impact text presents consequences before seeds", async () => {
+  const { session } = await setup();
+  const text = textOf(await session.callTool("ye_ast_impact", { base: "main", full: true }));
+  const positions = ["changed entrypoints (", "reached entrypoints (", "impacted symbols (", "seeds ("].map((label) => text.indexOf(label));
+  assert.ok(positions.every((position) => position >= 0));
+  assert.deepEqual(positions, positions.toSorted((a, b) => a - b));
+  await session.close();
+});
+
+test("workspace impact text presents every repository's consequences before any walk's seeds", async () => {
+  const built = workspaceImpactFact();
+  assert.notEqual(built.status, "unknown");
+  if (built.status === "unknown") return;
+  const consumer = (repo: string): Fact<RepoImpact> => ({
+    ...base({ snapshot: { repo, kind: "sha", sha: "c".repeat(40) } }),
+    status: "complete",
+    value: {
+      reads: [],
+      impact: { ...IMPACT, seeds: [{ file: "src/api.ts", symbol: `${repo}.send`, line: 5, basis: "requested" }] },
+      callSites: [{ ...SITE, repo }],
+      unmatched: [],
+      external: [],
+    },
+  });
+  const fact: Fact<WorkspaceImpactValue> = {
+    ...built,
+    status: "partial",
+    value: {
+      ...built.value,
+      workspace: { ...built.value.workspace, repos: ["shop", "shop-mobile", "shop-web"] },
+      sections: { ...built.value.sections, "shop-mobile": consumer("shop-mobile"), "shop-web": consumer("shop-web") },
+    },
+    cuts: [{ kind: "no-extractor", at: ["src/unknown.swift"] }],
+  };
+  const { session } = await setup({ workspaceOfChange: async () => ({ ok: true, value: { fact } }) });
+  for (const detail of ["summary", "full"] as const) {
+    const text = textOf(await session.callTool("ye_ast_impact", { base: "main", workspace: WORKSPACE, detail, full: true }));
+    const consequences = [...text.matchAll(/^\s*(?:changed entrypoints|reached entrypoints|impacted symbols|call sites that land in what the walk reached|links across repositories) \(/gm)].map((match) => match.index);
+    const seeds = [...text.matchAll(/^\s*seeds \(/gm)].map((match) => match.index);
+    assert.equal(seeds.length, 3);
+    assert.ok(Math.max(...consequences) < Math.min(...seeds), text);
+    assert.ok(text.indexOf("per repository:") < Math.min(...seeds));
+    assert.ok(text.lastIndexOf("no-extractor (") > Math.max(...seeds));
+    assert.match(text, /shop-mobile/);
+    assert.match(text, /shop-web/);
+  }
+  await session.close();
+});
+
+test("workspace impact text names an unknown contributing read beside independent discovery cuts", async () => {
+  const built = workspaceImpactFact();
+  assert.notEqual(built.status, "unknown");
+  if (built.status === "unknown") return;
+  const cuts: [Cut] = [{ kind: "not-exported", at: ["src/omitted.ts"] }];
+  const section: Fact<RepoImpact> = {
+    ...base(),
+    status: "partial",
+    cuts,
+    value: {
+      reads: [
+        { kind: "discovery", fact: { ...base(), status: "partial", cuts: [cuts[0]!] } },
+        { kind: "trigger", fact: { ...base(), status: "unknown", reason: "index-unavailable" } },
+      ],
+      callSites: [], unmatched: [], external: [],
+    },
+  };
+  const fact: Fact<WorkspaceImpactValue> = { ...built, status: "partial", cuts: [{ kind: "section", at: ["shop"] }], value: { ...built.value, sections: { shop: section } } };
+  const { session } = await setup({ workspaceOfChange: async () => ({ ok: true, value: { fact } }) });
+  for (const detail of ["summary", "full"] as const) {
+    const text = textOf(await session.callTool("ye_ast_impact", { base: "main", workspace: WORKSPACE, detail }));
+    assert.match(text, /shop: partial[\s\S]*trigger: unknown \(index-unavailable\)/);
+    assert.match(text, /not-exported/);
+    if (detail === "full") assert.match(text, /src\/omitted\.ts/);
+  }
+  await session.close();
+});
+
+
+test("impact detail retains a selected origin association while both text modes preserve the full structured fact", async () => {
+  const seeds: ImpactValue["seeds"] = [
+    { file: "src/unrelated/unrelated.service.ts", symbol: "Unrelated", line: 3, basis: "top-level" },
+    { file: "src/services/checkout.service.ts", symbol: "checkout", line: 12, endLine: 20, basis: "lines" },
+    { file: "src/pages/checkout.component.ts", symbol: "Checkout", line: 30, endLine: 45, basis: "resource" },
+  ];
+  const fact = impactFact({ value: {
+    ...IMPACT,
+    seeds,
+    entrypoints: [{ ...IMPACT.entrypoints[0]!, seeds: [2, 1] }],
+  } } as Partial<Fact<ImpactValue>>);
+  const { session } = await setup({ ofChange: async () => ({ ok: true, value: fact }) });
+  const summary = await session.callTool("ye_ast_impact", { base: "main", full: true });
+  const full = await session.callTool("ye_ast_impact", { base: "main", detail: "full", full: true });
+  for (const result of [summary, full]) {
+    assert.deepEqual(result.structuredContent, fact);
+  }
+  assert.doesNotMatch(textOf(summary), /one verified origin/);
+  assert.match(textOf(full), /one verified origin: src\/pages\/checkout\.component\.ts:30-45 Checkout \(resource\)/);
+  assert.match(textOf(full), /1 other origin; full: true includes all/);
+  assert.doesNotMatch(textOf(summary), /src\/unrelated\/unrelated\.service\.ts/);
+  assert.doesNotMatch(textOf(full), /src\/unrelated\/unrelated\.service\.ts/);
+  await session.close();
+});
+
+test("impact revision errors explain which selectors to correct without inventing a successful result", async () => {
+  const fault = { kind: "unknown-revision" as const, detail: "base does not resolve to a commit" };
+  const { session } = await setup({ ofChange: async () => ({ ok: false, fault }) });
+  try {
+    const result = await session.callTool("ye_ast_impact", { base: "missing" });
+    assert.equal(result.isError, true);
+    assert.ok(textOf(result).includes("base/head") && textOf(result).includes("workspace") && textOf(result).includes("local commit"));
+    assert.deepEqual(result._meta?.["ye-ast/fault"], fault);
+    assert.equal(result.structuredContent, undefined);
+  } finally { await session.close(); }
+});
+
+test("impact live trust errors offer a committed alternative and leave trust to the user", async () => {
+  const fault = { kind: "live-requires-trusted" as const, detail: "live snapshot unavailable without declared trust" };
+  const { session } = await setup({ ofChange: async () => ({ ok: false, fault }) });
+  try {
+    const result = await session.callTool("ye_ast_impact", { base: "main", live: true });
+    assert.equal(result.isError, true);
+    assert.ok(textOf(result).includes("Omit live") && textOf(result).includes("committed") && textOf(result).includes("user"));
+    assert.deepEqual(result._meta?.["ye-ast/fault"], fault);
+  } finally { await session.close(); }
 });
