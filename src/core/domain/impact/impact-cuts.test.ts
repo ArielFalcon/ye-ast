@@ -136,6 +136,39 @@ test("a removed declaration nothing at head names is no cut", () => {
   assert.deepEqual(removedDeclarationCuts([use("repo.find", "calls")], [{ file: "src/Repo.java", name: "save" }]), []);
 });
 
+test("a removed name never captures a reference whose own root is proven external", () => {
+  const removed = [{ file: "src/Repo.java", name: "save" }];
+  const references = [use("library.save", "calls"), use("repo.save", "calls")];
+  const known = new Set([externalPlaceKey("src/Use.java", 3, "library")]);
+
+  assert.deepEqual(removedDeclarationCuts(references, removed, known), [
+    { kind: "unresolved-link", at: ["src/Repo.java::save", "src/Use.java:3"] },
+  ]);
+  assert.deepEqual(removedDeclarationCuts([references[0]!], removed, known), []);
+});
+
+test("a removed name keeps an unsettled reference sharing a settled reference's line", () => {
+  const removed = [{ file: "src/Repo.java", name: "save" }];
+  const settled = use("this.current.save", "calls");
+  const unknown = use("this.previous.save", "calls");
+  const known = new Set([settledPlaceKey(settled.file, settled.line, settled.name)]);
+
+  assert.deepEqual(removedDeclarationCuts([settled], removed, known), []);
+  assert.deepEqual(removedDeclarationCuts([settled, unknown], removed, known), [
+    { kind: "unresolved-link", at: ["src/Repo.java::save", "src/Use.java:3"] },
+  ]);
+});
+
+test("a removed bare name is attributed only to the file its import proves when that proof is available", () => {
+  const reference = use("save", "calls");
+  const removed = [{ file: "src/Previous.java", name: "save" }, { file: "src/Current.java", name: "save" }];
+  const bound = new Map([[bareBindingKey(reference.file, reference.line, reference.name), "src/Current.java"]]);
+
+  assert.deepEqual(removedDeclarationCuts([reference], removed, new Set(), bound), [
+    { kind: "unresolved-link", at: ["src/Current.java::save", "src/Use.java:3"] },
+  ]);
+});
+
 test("the same name removed from two files is one cut per file", () => {
   const removed = [
     { file: "src/A.java", name: "save" },

@@ -439,6 +439,23 @@ test("lines removed between symbols that declared a name cut the answer at the r
   assert.deepEqual(answer.status === "partial" && answer.cuts, [{ kind: "unresolved-link", at: ["src/A.java::helper", "src/A.java:22"] }]);
 });
 
+test("removed-declaration cuts receive the head's exact import proofs without hiding unknown candidates", async () => {
+  const useFile = "src/use.ts";
+  const unresolved = [
+    { from: "use", name: "Promise.resolve", kind: "calls", file: useFile, line: 2 },
+    { from: "use", name: "save", kind: "calls", file: useFile, line: 3 },
+    { from: "use", name: "service.resolve", kind: "calls", file: useFile, line: 4 },
+  ];
+  const changes = { ok: true, value: [change("src/gone.ts", { deleted: true, added: [], removedNames: ["resolve", "save"] })] } as const;
+  const exports = { [HEAD]: { files: [{ path: useFile, blob: "1", written: true }], skipped: [] } };
+  const answer = fact(await setup({
+    changes, exports, unresolved,
+    nodes: [fakeNode("use", "function", useFile, 1, 5)],
+    importOrigins: origins((site) => site.name === "Promise" ? { kind: "ambient", name: "Promise" } : site.name === "save" ? { kind: "repository", file: "src/other.ts" } : undefined),
+  }).ask());
+  assert.deepEqual(answer.status === "partial" && answer.cuts, [{ kind: "unresolved-link", at: ["src/gone.ts::resolve", `${useFile}:4`] }]);
+});
+
 const SVC_FILE = "src/app/svc.ts";
 const CMP_FILE = "src/app/cmp.ts";
 const ANGULAR_NODES = [fakeNode("Svc", "class", SVC_FILE, 2, 9), fakeNode("Cmp", "class", CMP_FILE, 2, 9), fakeNode("Far", "class", "src/app/far.ts", 2, 9)];

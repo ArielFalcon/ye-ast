@@ -500,7 +500,7 @@ function impactOf(input: WalkInput): ImpactRead {
   const cuts: Cut[] = [
     ...walk.cuts,
     ...unresolvedLinkCuts(unresolved, walked, loads, inbound.settledUses(), knownPlaces, input.proofs?.bound),
-    ...removedDeclarationCuts(unresolved, selection.removed),
+    ...removedDeclarationCuts(unresolved, selection.removed, knownPlaces, input.proofs?.bound),
     ...unreadRelationCuts(unread, new Set(walked.map((symbol) => symbol.file)), templateOwners(componentsByResource)),
     ...summary.filesNotIndexed.map((file): Cut => ({ kind: "no-extractor", at: [file] })),
     ...selection.withoutSymbols.map((file): Cut => ({ kind: "no-extractor", at: [file] })),

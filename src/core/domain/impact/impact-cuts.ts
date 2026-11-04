@@ -73,6 +73,10 @@ export function settledPlaceKey(file: string, line: number, name: string): strin
   return `${file}\0${line}\0settled\0${name}`;
 }
 
+function isKnownReference(reference: UnresolvedUse, known: ReadonlySet<string>): boolean {
+  return known.has(externalPlaceKey(reference.file, reference.line, rootedName(reference.name))) || known.has(settledPlaceKey(reference.file, reference.line, reference.name));
+}
+
 function unresolvedLinkAt(anchor: string, places: Iterable<string>): Cut {
   return { kind: "unresolved-link", at: [anchor, ...[...places].sort()] };
 }
@@ -136,7 +140,7 @@ export function unresolvedLinkCuts(
      * declaration, is no cut. The proof is keyed by the place *and the name*: a line holds several references, and
      * retiring the line would hide a true cut that shares it.
      */
-    if (known.has(externalPlaceKey(reference.file, reference.line, rootedName(reference.name))) || known.has(settledPlaceKey(reference.file, reference.line, reference.name))) continue;
+    if (isKnownReference(reference, known)) continue;
     /** The same place, named by the reference as written: the reader settles a reference it is told, without opening the file. */
     const named = placeAt(reference.file, reference.line, reference.name);
     if (reference.kind === "calls" && DYNAMIC_LOADERS.has(tail) && !namesModule(place)) loaders.set(reference.file, (loaders.get(reference.file) ?? new Set()).add(named));
@@ -161,11 +165,19 @@ export function unresolvedLinkCuts(
  * A declaration removed whole leaves no node for a caller to reach, so a reference at head that never resolved and names
  * it is the only trace: one cut per removed declaration, at every such reference.
  */
-export function removedDeclarationCuts(references: readonly UnresolvedUse[], removed: readonly RemovedDeclaration[]): Cut[] {
+export function removedDeclarationCuts(
+  references: readonly UnresolvedUse[],
+  removed: readonly RemovedDeclaration[],
+  known: ReadonlySet<string> = new Set(),
+  bound: ReadonlyMap<string, string> = new Map(),
+): Cut[] {
   const byName = Map.groupBy(removed, (declaration) => declaration.name);
   const places = new Map<string, Set<string>>();
   for (const reference of references) {
+    if (isKnownReference(reference, known)) continue;
+    const imported = isBareName(reference.name) ? bound.get(bareBindingKey(reference.file, reference.line, reference.name)) : undefined;
     for (const declaration of byName.get(nameTail(reference.name)) ?? []) {
+      if (imported !== undefined && imported !== declaration.file) continue;
       const key = declarationAnchor(declaration.file, declaration.name);
       places.set(key, (places.get(key) ?? new Set()).add(placeAt(reference.file, reference.line)));
     }

@@ -73,6 +73,11 @@ A requested line range seeds through the rows above, as the added lines of a fil
 seedable node of its file with that simple name (the join below), so overloads all seed; a symbol that is both requested
 and inside a requested range is one seed, `requested`.
 
+Removed-declaration cuts list unresolved **candidates**, not proven broken dependencies. They reuse the same exact
+external, ambient and reached-settlement proofs as the ordinary walk. A bare import proven to bind another repository
+file cannot be attributed to the removed homonym. An unknown binding remains a candidate; a proof for one rooted name or
+settled reference never suppresses another reference on the same line.
+
 ### Entrypoints of the change
 
 ye-ast's own extractors run at the merge base as well as at `head`; they need no index. Entrypoints the change adds,
