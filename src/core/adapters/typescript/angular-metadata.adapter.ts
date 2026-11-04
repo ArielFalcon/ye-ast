@@ -15,8 +15,12 @@ import { readAngularRouteFile, type RawRouteFile } from "./angular-router.extrac
 import { createDeclarationLookup } from "./declaration-lookup.ts";
 import { manifestsOf, pathsByProject, projectOf } from "./angular-projects.ts";
 import { createModuleResolver } from "./module-resolver.ts";
+import { providerIdentityEvidence, type ProviderIdentityEvidence } from "./provider-identity.ts";
 
 const ANGULAR_CORE = "@angular/core";
+const NO_PROVIDER_IDENTITY: ProviderIdentityEvidence = {
+  tokens: new Set(), exportedTokens: new Set(), imports: new Map(), importNames: new Set(), writes: new Set(), memberWrites: new Set(),
+};
 
 /**
  * The Angular classes and injection relations of each project (the directory of a `package.json` that names
@@ -30,6 +34,7 @@ export function createAngularMetadataReader(): AngularMetadataReader {
 interface Parsed {
   shape: RawRouteFile;
   angular: RawAngularFile;
+  identity: ProviderIdentityEvidence;
 }
 
 /** What a name comes down to: a class, an array of operands, a declared value that is not a class (an `InjectionToken`), a member of one, or nothing usable. */
@@ -79,7 +84,8 @@ async function readProject(contents: ReadonlyMap<string, SourceFile>, dependenci
         if (shape === undefined) return undefined;
         const usesCore = [...shape.imports.values()].some((binding) => binding.module === ANGULAR_CORE);
         const coreExternal = usesCore && "external" in await resolver.resolve(file, ANGULAR_CORE);
-        return { shape, angular: readAngularMetadataFile(sf, shape, collectSites, coreExternal) };
+        const angular = readAngularMetadataFile(sf, shape, collectSites, coreExternal);
+        return { shape, angular, identity: proveMembers ? providerIdentityEvidence(sf, coreExternal, angular.memberEvidence.declarations) : NO_PROVIDER_IDENTITY };
       })();
       parsed.set(file, held);
     }
@@ -216,6 +222,23 @@ async function readProject(contents: ReadonlyMap<string, SourceFile>, dependenci
   };
   const substituted = new Set<string>();
   let unknownSubstitution = false;
+  const allSources = await Promise.all(sources.map(parse));
+  const writtenImport = allSources.some((source) => source !== undefined && (
+    [...source.identity.writes].some((name) => source.identity.importNames.has(name))
+    || [...source.identity.memberWrites].some((name) => source.identity.imports.get(name)?.imported === "*")
+  ));
+  const distinctToken = async (file: string, reference: RawReference): Promise<boolean> => {
+    const source = await parse(file);
+    if (source === undefined || writtenImport || !stableRoot(source, reference) || source.identity.writes.has(reference.name)) return false;
+    const binding = source.identity.imports.get(reference.name);
+    if (binding === undefined) return reference.member === undefined && source.identity.tokens.has(reference.name);
+    const name = binding.imported === "*" ? reference.member : reference.member === undefined ? binding.imported : undefined;
+    if (name === undefined) return false;
+    const targetFile = await fileOf(file, binding.module);
+    if (targetFile === undefined || !sourceSet.has(targetFile)) return false;
+    const target = await parse(targetFile);
+    return target !== undefined && target.identity.exportedTokens.has(name) && !target.identity.writes.has(name) && target.angular.memberEvidence.declarations.get(name) === 1;
+  };
   for (const file of sources) {
     const providerSource = await parse(file);
     for (const reference of providerSource?.angular.substituted ?? []) {
@@ -224,7 +247,7 @@ async function readProject(contents: ReadonlyMap<string, SourceFile>, dependenci
       if (collectSites && (binding ? count !== 0 : count !== 1)) unknownSubstitution = true;
       const holds = await originOf(file, reference);
       if (holds !== undefined) substituted.add(holdsKey(holds));
-      else unknownSubstitution = true;
+      else if (!(await distinctToken(file, reference))) unknownSubstitution = true;
     }
   }
   const fields: FieldOrigin[] = [];
@@ -275,7 +298,7 @@ async function readProject(contents: ReadonlyMap<string, SourceFile>, dependenci
         const evidence = source.angular.memberEvidence;
         const root = reference.name;
         const imported = source.shape.imports.has(root);
-        if (unknownMutation || unsafe.has(name) || (imported ? evidence.declarations.has(root) : evidence.declarations.get(root) !== 1)) return undefined;
+        if (unknownMutation || writtenImport || unsafe.has(name) || source.identity.writes.has(root) || (imported ? evidence.declarations.has(root) : evidence.declarations.get(root) !== 1)) return undefined;
         if (imported) {
           const binding = source.shape.imports.get(root)!;
           const importedName = binding.imported === "*" ? reference.member : binding.imported;
@@ -294,7 +317,7 @@ async function readProject(contents: ReadonlyMap<string, SourceFile>, dependenci
         }
         if (substituted.has(holdsKey({ class: receiver })) || !sourceSet.has(receiver.path)) return undefined;
         const target = await parse(receiver.path);
-        if (target === undefined || target.angular.memberEvidence.declarations.get(receiver.symbol) !== 1 || target.angular.memberEvidence.escapedClasses.has(`${receiver.symbol}\0${receiver.line}`)) return undefined;
+        if (target === undefined || target.identity.writes.has(receiver.symbol) || target.angular.memberEvidence.declarations.get(receiver.symbol) !== 1 || target.angular.memberEvidence.escapedClasses.has(`${receiver.symbol}\0${receiver.line}`)) return undefined;
         let indexed = methodsByFile.get(receiver.path);
         if (indexed === undefined) {
           indexed = Map.groupBy(target.angular.memberEvidence.methods, (method) => `${method.className}\0${method.classLine}\0${method.name}`);
