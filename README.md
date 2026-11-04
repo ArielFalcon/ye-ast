@@ -235,12 +235,12 @@ How the arguments behave:
 | Argument | Meaning |
 |---|---|
 | `revision` / `head` | Any git revision. Default: `HEAD`. |
-| `live` | Read the working tree instead of a revision. Requires `trusted`; exclusive with `revision`/`head`. |
+| `live` | Read the working tree instead of a revision. Requires `trusted`; when true, omit `revision`/`head`, `workspace` and `offline` (including `offline: false`). Workspace traversal uses committed snapshots. |
 | `workspace` | `{ repos: [{ path, id?, revision? }], gateways?: [{ prefix, repo }] }` on `callers` and `impact`: other **local** clones whose call sites are joined to the routes and listeners the walk reaches. The answer adds the links (with their basis: `exact`, `gateway-prefix`, `route-overlap`, `base-path`, `suffix`, `event-destination`), each with its direction (`upstream` for what reaches the change, `downstream` for what a change sends onward) and the links crossed from the change (`reach`), followed to a fixpoint across repositories; what depends on those call sites in their own repository, the call sites that reached a declared service and matched none of its entrypoints (`unmatched`), the ones that name a service no clone serves (`external`), and every call site whose target the code does not decide as a cut. A gateway prefix needs no declaration when the routes show it; `gateways` overrides it, and a declared gateway no call site names, or whose repository was not passed, is listed as matching nothing. Without `repos` the repositories and gateways the user persisted with `ye-ast init --workspace <file>` are used, and a repository that persists none answers about itself alone; the manifest holds the same object, its relative paths resolved against the installed repository. A repository the request does not name keeps the directory name of its path in every snapshot, so a linked worktree is passed with `id` set to the name of the clone that holds it when both must answer as one; the repository a command is bound to is always named after its main worktree. Every answer says which of the two declared its repositories (`workspace.source`: `request`, `persisted` or `none`), so an answer about the bound repository alone is never read as a workspace with no impact. Each clone is read at its own snapshot under its own trust declaration, with no network request; exclusive with `live`. Without `workspace` the answer says nothing about other repositories. |
 | `scope` | `{ include?: [globs], exclude?: [globs] }` over repository-relative paths; `exclude` wins. `include` selects the content the answer is about, and the configuration that interprets it (a `package.json`, a `tsconfig`, a build file, a Spring `application` file, an OpenAPI document) is always read, so narrowing never hides what an extractor needs to place a source. A path outside the scope is **not answered about**, so callers and entrypoints through it are not known; the answer names its scope under its status. Use it to keep one service or package apart, not to shorten an answer. |
 | `changed` | On `impact`, globs over the changed paths the scope leaves: only the change's paths they select seed the walk, while the repository is still indexed whole, so callers outside the selection are known. Use it on a large change to answer one area at a time. A glob that selects no changed path is an error, never an empty answer. A file the index could not read stays a cut even when the selection leaves it out: its blindness belongs to the whole walk. |
-| `budget` | `{ depth?, hubFanIn?, expansions? }`, positive integers, no defaults. A bound that stops a walk is reported as a cut, never as a silent truncation. |
-| `detail` | Text listing for `callers` and `impact`. Default: depth 0 and 1 listed, the seeds a caller asked for by name listed, each file's remaining seeds counted with their basis when that is shorter than listing them, deeper symbols left out with their count and how deep the walk went, and the cuts anchored at those deeper symbols counted per file with their kinds. To see one ring further, ask `callers` about a listed symbol, which answers that branch alone in one call. `"full"` lists every symbol, every seed and every cut in one answer. The structured content holds them only with `full: true`. |
+| `budget` | `{ depth?, hubFanIn?, expansions? }`, positive integers, no defaults. Limits traversal work, not response length. `depth` counts incoming dependency levels, not hops between services. A bound that stops a walk is reported as a cut, never as a silent truncation. |
+| `detail` | Text presentation: on `impact` and `callers`, `"summary"` (default) identifies entrypoints and counts supporting symbols, change origins and cuts. `"full"` adds compact recorded evidence, dependency locations and cut anchors for investigation; it is not exhaustive. Explicitly requested targets remain named. Other tools retain their existing summary/full text. Both levels keep the same analysis and snapshots. Use `full: true` for every recorded item in `structuredContent`. |
 
 `importers` presents three disjoint groups per target: importers, additional users without an import edge, and
 unresolved-only candidates without a resolved link. Its distinct-file count counts each path once. A file with a
@@ -250,6 +250,34 @@ The default summary counts groups when that is shorter than listing them; use `d
 With `full: true`, the original overlapping `importers`, `users` and `unresolvedNamers` arrays and all cuts remain in
 `structuredContent`; text becomes a short status acknowledgment. These presentation choices preserve coverage,
 snapshots and completeness. Pin `revision` to the returned SHA when requesting another presentation of the same read.
+
+For `impact`, start with `{"base":"main"}` (replace the branch with the actual merge destination).
+Use `{"base":"main","live":true,"changed":["src/api/**"]}` for trusted working-tree changes in one area,
+retaining consumers elsewhere within scope. Use
+`{"base":"main","changed":["src/api/**"],"workspace":{},"offline":true}` for committed cross-repository
+analysis with eligible persisted workspace membership and no remote refresh. Omitting `workspace` is a local query;
+`workspace: {}` enables persisted defaults and reports when none exist. `offline` has no effect on local queries.
+
+To expand an answer reproducibly, set `head` to its recorded SHA and retain `base` and `changed`; for a workspace,
+also pin the other repositories to their recorded revisions. Repeating a live query can read a different state.
+
+Impact text locates both the call site and destination handler of each cross-repository link. The numbered `reach`
+references identify the recorded links crossed from the change, nearest first; they do not invent a path inside a
+repository. A shared `via` heading applies to the declarations indented beneath it and retains their dependency
+locations. Workspace cuts are grouped by their owning repository so identical relative paths in different clones
+remain distinct. Impact/callers detailed text shows one verified origin association per entrypoint, without ranking
+it or claiming a complete call chain. Its symbol evidence covers the nearest recorded consequence depth and the
+reached handlers; other symbols are counted, with a literal listing when shorter. Change origins supplying that
+evidence remain localizable. Cut details keep anchors and limits while counting repeated reference places.
+Unserved names can be counted in either text level. Use `full: true` for exhaustive symbols, seeds, associations,
+reference places and names. Counted omissions concern presentation, while `partial` and cuts describe missing
+analysis coverage. Related `outline`, `callers` or `importers` queries do not filter the original impact fact.
+
+Impact/callers answers close with a contextual investigation guide. It identifies useful full-JSON lookups,
+matching fields and joins for the data present: entrypoint origin indexes belong to that walk's seed array,
+workspace links join by link ID, and repository evidence stays in its owning section. Unknown answers guide you
+to reason/evidence instead of an absent value. Fault responses retain their typed metadata and explain an applicable
+correction or the prerequisite to inspect before retrying.
 
 Working rules:
 
@@ -279,7 +307,7 @@ value      the fact itself (the MCP's structured content carries it only with fu
 | `status` | Means | What you report |
 |---|---|---|
 | `complete` | Everything inside `inputs.declaredScope`, and the part of the change `inputs.declaredConfig.changed` selects, was read | The answer, and that it holds **inside** the declared scope and selection only |
-| `partial` | The answer stops at each entry in `cuts`; what lies past a cut is **not known** | The answer plus the cuts. The server instructions say what to do for each cut kind; an `unresolved-link` lists places to open and decide yourself |
+| `partial` | The answer stops at each entry in `cuts`; what lies past a cut is **not known** | Inspect cuts whose missing information matters to the task. Increase a traversal bound when applicable; ambiguous targets, dynamic URLs and missing extractors require source evidence or a declaration, not a larger walk budget. |
 | `unknown` | ye-ast cannot tell; `reason` says why | The reason. **Never** translate it into "no impact" |
 
 > [!WARNING]

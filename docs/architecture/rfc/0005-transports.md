@@ -172,7 +172,17 @@ An error is `{code, message, data: {kind}}`; `kind` names the code and `data` ad
 | `ye_ast_importers` | `revision?` or `live?`, `files` | the importers of files |
 
 `live` is a boolean that reads the working tree ([Live freshness](#live-freshness)); the strict schema refuses it
-together with `revision` (or `head`). Under `untrusted` the tool answers `isError` with `live-requires-trusted`.
+together with `revision` (or `head`). Impact and callers also exclude `workspace` and the presence of `offline`,
+even when false: a live read is local, while workspace traversal reads committed snapshots. Both runtime validation
+and the published JSON Schema express these exclusions from the same field list. Under `untrusted` the tool answers
+`isError` with `live-requires-trusted`.
+
+On impact, `base` selects the merge base with `head`, not necessarily a direct base-to-head diff. `changed` selects
+which changed paths seed traversal while consumers elsewhere within `scope` remain eligible. `scope` restricts coverage;
+`budget` limits traversal work, not text length, and `depth` counts dependency levels rather than service hops. Omitting
+`workspace` selects local analysis; an empty object enables eligible persisted membership, with its source stated in the
+answer. `offline` only affects workspace reads. To expand the same committed result, reuse its head SHA, comparison
+base and per-repository snapshots; a repeated live read may observe another working-tree state.
 
 Every tool also takes `full`, a host's opt-in: by default `structuredContent` carries the envelope alone, and `true`
 adds the whole fact, every impacted symbol and every cut place included.
@@ -198,10 +208,10 @@ path-only arrays. With `full: true`, text carries status (and the reason when un
 result, without repeating the lists or cut locations. Response-level stale notices remain available as usual.
 
 The text rendering opens with the status, the declared scope that status is relative to and the snapshot,
-states `path:line` evidence, the span of every declaration longer than one line (`src/a.ts:3-9`), and every place where a
-reached symbol depends on the one that reached it (`via src/b.ts:B.user at 14, 21, 33`), naming the dependence instead
+states `path:line` evidence, the span of each presented declaration longer than one line (`src/a.ts:3-9`), and recorded places where a
+presented symbol depends on the one that reached it (`via src/b.ts:B.user at 14, 21, 33`), naming the dependence instead
 when the store places no line for it (`(call)`, `(reference)`, `(contains)`, `(dispatch)`, `(relation)`, `(import)`), counts
-the cuts by kind on the status line and closes with their full list, so the answer is
+the cuts by kind on the status line and closes with their projection at the requested detail, so the answer is
 read before the price of its completeness. The response-level statuses a fact must not carry — staleness and a refresh —
 open the text with a `stale:`, `remote:` or `pinned:` line, the same statuses `_meta` and the fact's siblings carry, so
 the text alone loses nothing. A fault is an `isError` result: its text names the kind on the first line and `_meta`
@@ -214,6 +224,29 @@ callers answer already said about the symbols it stays inside) and how to read `
 cut list that closes every answer. Each tool description repeats its own "use it when". Every tool declares the fact envelope as its `outputSchema` (an
 object root, extra members allowed, `value` and `cuts` optional and left to the family), and the SDK checks each answer
 against it; that optionality is what lets the default envelope and the `full` one both conform.
+
+Impact/callers summary identifies consequences and counts supporting symbols by recorded depth, change origins by
+basis and cuts by kind and applicable limit. Detailed text adds one concrete verified origin association for each
+reached entrypoint, without ranking it or claiming a complete call chain. It shows the nearest recorded consequence
+depth and the reached-handler symbols, retaining dependency evidence, confidence and coordinates; the other symbols
+are counted, with a literal fallback when shorter. Explicitly requested targets and seed declarations supplying the
+shown dependency context remain localizable. Consecutive symbols sharing identical `via` context can share a heading
+when shorter, preserving symbol order, spans, dependency locations and reasons in either text level.
+
+Cross-repository links locate their destination handlers and show recorded `reach` using the displayed link numbers,
+nearest to the change first. Cut details retain anchors and limits and count unresolved reference places rather than
+printing every place. Both cuts and their summaries remain scoped to the owning repository; paths from different
+clones are never merged. Unserved names can be counted in both text levels. Exhaustive seeds, symbols, origin
+associations, cut places and unserved names remain available through `full: true` in `structuredContent`, not through
+the compact detailed text. Counted omissions do not change completeness or traversal. A related follow-up query is
+not a filter over the original fact.
+
+The impact/callers text closes with an investigation guide derived from the recorded data and status. It explains
+how to select relevant full-JSON records and resolve their relationships: entrypoint seed indexes within one walk,
+symbol dependency locations, repository-scoped evidence and cross-repository reach IDs. Absent categories are not
+advertised as containing evidence. Unknown facts point to reason/evidence, and fault text preserves its typed kind,
+cause and candidate data while adding a supported correction or prerequisite for retry. This navigation does not
+execute a query or guarantee that the client filters structured data outside model context.
 
 ## Live freshness
 

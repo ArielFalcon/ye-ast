@@ -7,8 +7,8 @@
   [ADR-0001](../adr/0001-product-scope-and-priority.md), [ADR-0007](../adr/0007-dependency-versions.md) (exact pins),
   [ADR-0013](../adr/0013-coverage-grows-only-with-evidence.md) (coverage grows with evidence)
 
-**In short:** two proposals that answer the same complaint from opposite ends. First, a rendering rule: a summary is
-never longer in bytes than the full answer it summarizes, whatever the answer holds. Second, one new read-only tool
+**In short:** two proposals that answer the same complaint from opposite ends. First, a rendering rule: a counted
+elision is never longer in bytes than listing what it hides at the same detail level. Second, one new read-only tool
 that answers the shape of a file — its imports and its declarations with a start and an end line — so an agent that has
 already decided to open a file reads the spans it needs instead of the whole file.
 
@@ -26,6 +26,13 @@ is a regression, not a summary**. Nothing measures it today, so it can appear wi
 would notice.
 
 ## 1. The rule: a counted elision is never longer than listing what it hides
+
+The examples and measurements in this section describe the historical impact projection. Impact/callers now use
+summary to identify consequences and detailed text to show compact investigation evidence; `detail: "full"` no
+longer means an exhaustive text listing. All recorded items remain available through `full: true` in
+`structuredContent`. The counted-elision rule still compares equivalent text blocks at the same detail level; it
+does not require expanding all origin associations or every unresolved reference place into text. See
+[RFC-0005](0005-transports.md) for the current projection and recovery contract.
 
 **Evidence that the rule is missing.** `src/mcp/render.ts:344-357`, `impactedSymbols`: a summary replaces every symbol
 past depth 1 with one line. After `159f46f` that line is:

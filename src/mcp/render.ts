@@ -2,7 +2,6 @@ import type { Entrypoint } from "../core/domain/entrypoints/entrypoint.ts";
 import type { Handler } from "../core/domain/entrypoints/http-route.ts";
 import type { ChangedEntrypoint } from "../core/domain/impact/changed-entrypoints.ts";
 import type { ImpactedSymbol, ImpactValue, ReachedEntrypoint, Seed } from "../core/domain/impact/impact-fact.ts";
-import { declarationAnchor } from "../core/domain/impact/impact-cuts.ts";
 import type { ImportedFile, ImportersValue } from "../core/domain/impact/importers-fact.ts";
 import type { OutlineValue } from "../core/domain/outline/outline-fact.ts";
 import type { EntrypointMap } from "../core/domain/map/entrypoint-map.ts";
@@ -232,60 +231,13 @@ function cutLines(cuts: readonly Cut[], detail: Detail): string[] {
   });
 }
 
-/** The depth each symbol a cut can stop at is reached at, keyed by the cut's lead: a summary tells a cut it lists from
- * one it only counts by this. */
-export type CutDepths = ReadonlyMap<string, number>;
-
-/** The depths of the symbols these answers reached, merged: a symbol reached at two depths keeps the nearest. */
-export function cutDepths(...values: readonly ImpactValue[]): CutDepths {
-  const depths = new Map<string, number>();
-  const remember = (anchor: string, depth: number): void => {
-    const known = depths.get(anchor);
-    if (known === undefined || depth < known) depths.set(anchor, depth);
-  };
-  for (const value of values) {
-    for (const seed of value.seeds) remember(declarationAnchor(seed.file, seed.symbol), 0);
-    for (const symbol of value.symbols) remember(declarationAnchor(symbol.file, symbol.symbol), symbol.depth);
-  }
-  return depths;
-}
-
-/** The declaration a cut stops at, when its lead names one: a path alone stops at a file. */
-function cutAnchor(cut: Cut): string | undefined {
-  const lead = cut.at[0];
-  return lead !== undefined && lead.includes("::") ? lead : undefined;
-}
-
-/** Whether a summary counts a cut instead of listing it: only one proven to stop at a symbol it does not list. */
-function countedCut(cut: Cut, depths: CutDepths): boolean {
-  const anchor = cutAnchor(cut);
-  const depth = anchor === undefined ? undefined : depths.get(anchor);
-  return depth !== undefined && depth > LISTED_DEPTH;
-}
-
-/** The counted cuts per file, each with the kinds it holds: the file is what the caller names to see them. */
-function countedCutsByFile(cuts: readonly Cut[]): string[] {
-  const files = Map.groupBy(cuts, (cut) => (cutAnchor(cut) ?? "").split("::")[0] ?? "");
-  return [...files].toSorted(([a], [b]) => compareText(a, b)).map(([file, inFile]) => `  ${file}: ${cutsByKind(inFile).map(([kind, ofKind]) => `${ofKind.length} ${kind}`).join(", ")}`);
-}
-
 /** The bytes a block costs with its line breaks, so a summary is held to the answer it stands for. */
 function size(lines: readonly string[]): number {
   return lines.reduce((total, line) => total + Buffer.byteLength(line, "utf8") + 1, 0);
 }
 
-/** The cut list every answer closes with, so the answer content is read first and nothing is dropped. Without depths
- * every cut is listed; with them a summary counts the ones anchored at symbols it does not list and says how to see
- * them, unless counting costs more than listing: a summary is never longer than the answer it stands for. */
-function cutsBlock(cuts: readonly Cut[], detail: Detail = "summary", depths?: CutDepths): string[] {
-  if (cuts.length === 0) return [];
-  const listed = depths === undefined ? cuts : cuts.filter((cut) => !countedCut(cut, depths));
-  const counted = depths === undefined ? [] : cuts.filter((cut) => countedCut(cut, depths));
-  const listing = [CUTS, ...cutLines(listed, detail)];
-  if (counted.length === 0) return listing;
-  const all = [CUTS, ...cutLines(cuts, detail)];
-  const summarized = [...listing, `  summarized (${counted.length} at symbols deeper than depth ${LISTED_DEPTH}): detail "full" lists them`, ...countedCutsByFile(counted)];
-  return size(summarized) <= size(all) ? summarized : all;
+function cutsBlock(cuts: readonly Cut[], detail: Detail = "summary"): string[] {
+  return cuts.length === 0 ? [] : [CUTS, ...cutLines(cuts, detail)];
 }
 
 function list(lines: readonly string[]): string[] {
@@ -331,14 +283,15 @@ function changedLine(change: ChangedEntrypoint): string {
   return `  - ${change.change} ${change.kind} ${change.name} -> ${handlerText(change.handler)}`;
 }
 
-function reachedLines(reached: ReachedEntrypoint, seeds: readonly Seed[]): string[] {
+function reachedLines(reached: ReachedEntrypoint, seeds: readonly Seed[], detail: Detail): string[] {
   const name = reached.name === undefined ? reached.kind : `${reached.kind} ${reached.name}`;
   const confidence = reached.confidence < 1 ? `, confidence ${reached.confidence}` : "";
   const origin = seeds[reached.seeds[0] ?? -1];
   const others = reached.seeds.length - 1;
   return [
     `  - ${name} -> ${handlerText(reached.handler)} (depth ${reached.depth}${confidence})`,
-    ...(origin === undefined ? [] : [`    origin: ${placeText(origin.file, origin.line, origin.endLine)} ${origin.symbol} (${origin.basis})${others > 0 ? `; ${others} other ${others === 1 ? "origin" : "origins"}` : ""}`]),
+    ...(detail === "summary" && reached.seeds.length > 0 ? [`    origins: ${reached.seeds.length}`] : []),
+    ...(detail === "summary" || origin === undefined ? [] : [`    one verified origin: ${placeText(origin.file, origin.line, origin.endLine)} ${origin.symbol} (${origin.basis})${others > 0 ? `; ${others} other ${others === 1 ? "origin" : "origins"}; full: true includes all` : ""}`]),
   ];
 }
 
@@ -347,41 +300,63 @@ function seedKeys(value: ImpactValue): Set<string> {
   return new Set(value.seeds.map((seed) => `${seed.file}\0${seed.symbol}\0${seed.line}`));
 }
 
-function symbolLine(symbol: ImpactedSymbol, file: string): string {
+function symbolLine(symbol: ImpactedSymbol, file: string, includeVia = true): string {
   const facts = [`depth ${symbol.depth}`];
   if (symbol.confidence < 1) facts.push(`confidence ${symbol.confidence}`);
   if (symbol.fanIn > 0) facts.push(`fan-in ${symbol.fanIn}`);
-  if (symbol.via !== undefined) facts.push(`via ${viaText(symbol.via, file)}`);
+  if (includeVia && symbol.via !== undefined) facts.push(`via ${viaText(symbol.via, file)}`);
   return `    ${spanText(symbol.line, symbol.endLine)} ${symbol.symbol} [${symbol.kind}] (${facts.join(", ")})`;
 }
 
-/** How much of the impacted symbols the text lists: every one, or the direct ones with the deeper ones counted per file. */
 export type Detail = "summary" | "full";
 
-/** The deepest level a summary lists: the seeds' direct callers, the ones a change edits next to. */
-const LISTED_DEPTH = 1;
-
 function groupedLines(symbols: readonly ImpactedSymbol[]): string[] {
-  return [...Map.groupBy(symbols, (symbol) => symbol.file)].flatMap(([file, inFile]) => [`  ${file}`, ...inFile.map((symbol) => symbolLine(symbol, file))]);
+  return [...Map.groupBy(symbols, (symbol) => symbol.file)].flatMap(([file, inFile]) => {
+    const lines = [`  ${file}`];
+    for (let start = 0; start < inFile.length;) {
+      const first = inFile[start]!;
+      const via = first.via === undefined ? undefined : viaText(first.via, file);
+      let end = start + 1;
+      while (via !== undefined && end < inFile.length) {
+        const next = inFile[end]!;
+        if (next.via === undefined || viaText(next.via, file) !== via) break;
+        end++;
+      }
+      const run = inFile.slice(start, end);
+      const listing = run.map((symbol) => symbolLine(symbol, file));
+      const grouped = [`    via ${via}`, ...run.map((symbol) => `  ${symbolLine(symbol, file, false)}`)];
+      lines.push(...(via !== undefined && size(grouped) <= size(listing) ? grouped : listing));
+      start = end;
+    }
+    return lines;
+  });
 }
 
-/** The impacted symbols under the file that holds them, so the path is printed once per file. A summary that would
- * print more bytes than the answer it stands for lists them instead. */
-function impactedSymbols(value: ImpactValue, detail: Detail): string[] {
+function consequenceSymbols(value: ImpactValue): readonly ImpactedSymbol[] {
   const seeds = seedKeys(value);
-  const listed = value.symbols.filter((symbol) => symbol.depth !== 0 || !seeds.has(`${symbol.file}\0${symbol.symbol}\0${symbol.line}`));
-  if (listed.length === 0) return ["impacted symbols (0):"];
-  const full = [`impacted symbols (${listed.length}):`, ...groupedLines(listed)];
-  const near = listed.filter((symbol) => symbol.depth <= LISTED_DEPTH);
-  const deeper = listed.filter((symbol) => symbol.depth > LISTED_DEPTH);
-  if (detail === "full" || deeper.length === 0) return full;
-  const deepest = Math.max(...deeper.map((symbol) => symbol.depth));
-  const anchor = near.length === 0 ? "a seed listed here" : "a symbol listed here";
-  const summarized = [
-    `impacted symbols (${listed.length}): ${near.length} at depth 0-${LISTED_DEPTH} listed, ${deeper.length} deeper (to depth ${deepest}) not listed; ask ye_ast_callers about ${anchor} to see one ring further, or detail "full" for all`,
-    ...groupedLines(near),
-  ];
-  return size(summarized) <= size(full) ? summarized : full;
+  return value.symbols.filter((symbol) => symbol.depth !== 0 || !seeds.has(`${symbol.file}\0${symbol.symbol}\0${symbol.line}`));
+}
+
+function investigationSymbols(value: ImpactValue): readonly ImpactedSymbol[] {
+  const symbols = consequenceSymbols(value);
+  const nearest = symbols.reduce((depth, symbol) => Math.min(depth, symbol.depth), Infinity);
+  return symbols.filter((symbol) => symbol.depth === nearest || value.entrypoints.some(({ handler }) => handler.path === symbol.file && handler.line === symbol.line && handler.symbol === symbol.symbol));
+}
+
+function impactedSymbols(value: ImpactValue, detail: Detail): string[] {
+  const symbols = consequenceSymbols(value);
+  const header = `impacted symbols (${symbols.length}):`;
+  if (symbols.length === 0) return [header];
+  const literal = [header, ...groupedLines(symbols)];
+  if (detail === "summary") {
+    const depths = [...Map.groupBy(symbols, (symbol) => symbol.depth)].toSorted(([a], [b]) => a - b);
+    const counted = [header, `  by depth: ${depths.map(([depth, group]) => `${depth}: ${group.length}`).join(", ")}; detail "full" shows investigation evidence; full: true includes every symbol`];
+    return size(counted) <= size(literal) ? counted : literal;
+  }
+  const shown = investigationSymbols(value);
+  const omitted = symbols.length - shown.length;
+  const evidence = [header, `  evidence view: nearest recorded depth ${shown.reduce((depth, symbol) => Math.min(depth, symbol.depth), Infinity)} and reached handlers`, ...groupedLines(shown), ...(omitted === 0 ? [] : [`  ${omitted} other ${omitted === 1 ? "symbol" : "symbols"}; full: true includes all`])];
+  return omitted > 0 && size(evidence) <= size(literal) ? evidence : literal;
 }
 
 /** What an impact answer says about its walk, without its header or its cuts. */
@@ -390,13 +365,23 @@ function impactBody(value: ImpactValue, detail: Detail): string[] {
     ...(value.mergeBase === undefined ? [] : [`merge base: ${value.mergeBase}`]),
     ...(value.changedEntrypoints === undefined ? [] : [`changed entrypoints (${value.changedEntrypoints.length}):`, ...value.changedEntrypoints.map(changedLine)]),
     `reached entrypoints (${value.entrypoints.length}):`,
-    ...value.entrypoints.flatMap((entrypoint) => reachedLines(entrypoint, value.seeds)),
+    ...(detail === "summary" && value.entrypoints.some((entrypoint) => entrypoint.seeds.length > 0) ? [`  origin associations (${value.entrypoints.reduce((total, entrypoint) => total + entrypoint.seeds.length, 0)}): counted below; detail "full" shows one per entrypoint; full: true includes all`] : []),
+    ...value.entrypoints.flatMap((entrypoint) => reachedLines(entrypoint, value.seeds, detail)),
     ...impactedSymbols(value, detail),
   ];
 }
 
 function impactSeeds(value: ImpactValue, detail: Detail): string[] {
-  return [`seeds (${value.seeds.length}):`, ...groupedSeeds(value.seeds, detail)];
+  if (detail === "summary") return [`seeds (${value.seeds.length}):`, ...groupedSeeds(value.seeds)];
+  const dependencies = new Set(investigationSymbols(value).flatMap((symbol) => symbol.via === undefined ? [] : [`${symbol.via.file}\0${symbol.via.symbol}`]));
+  const shown: Seed[] = [];
+  const omitted: Seed[] = [];
+  for (const seed of value.seeds) {
+    (seed.basis === "requested" || dependencies.has(`${seed.file}\0${seed.symbol}`) ? shown : omitted).push(seed);
+  }
+  const evidence = [...seedListing(shown), ...seedSummary(omitted)];
+  const literal = seedListing(value.seeds);
+  return [`seeds (${value.seeds.length}):`, ...(size(evidence) <= size(literal) ? evidence : literal)];
 }
 
 /** The seeds under the file that holds them, so a path repeated by every seed is printed once. A basis the whole file
@@ -419,22 +404,103 @@ function seedSummary(seeds: readonly Seed[]): string[] {
   const bases = [...Map.groupBy(rest, (seed) => seed.basis)].toSorted(([a], [b]) => compareText(a, b)).map(([basis, group]) => `${basis} ${group.length}`);
   return [
     ...seedListing(requested),
-    ...(rest.length === 0 ? [] : [`  change origins: ${rest.length} ${rest.length === 1 ? "declaration" : "declarations"} across ${files.size} ${files.size === 1 ? "file" : "files"} (${bases.join(", ")}); detail "full" lists every seed`]),
+    ...(rest.length === 0 ? [] : [`  change origins: ${rest.length} ${rest.length === 1 ? "declaration" : "declarations"} across ${files.size} ${files.size === 1 ? "file" : "files"} (${bases.join(", ")}); full: true includes every seed`]),
   ];
 }
 
 /** The seeds of a summary, or the full listing when counting them would cost more bytes than naming them. */
-function groupedSeeds(seeds: readonly Seed[], detail: Detail): string[] {
+function groupedSeeds(seeds: readonly Seed[]): string[] {
   const listing = seedListing(seeds);
-  if (detail === "full") return listing;
   const summary = seedSummary(seeds);
   return size(summary) <= size(listing) ? summary : listing;
 }
 
+function impactCuts(cuts: readonly Cut[], detail: Detail): string[] {
+  if (cuts.length === 0) return [];
+  const groups = cutsByKind(cuts);
+  if (detail === "summary") return [CUTS, ...groups.map(([kind, group]) => {
+    const limits = [...new Set(group.flatMap((cut) => cut.limit === undefined ? [] : [cut.limit]))].toSorted((a, b) => a - b);
+    return `  ${kind} (${group.length})${limits.length === 0 ? "" : `; ${limits.length === 1 ? "limit" : "limits"} ${limits.join(", ")}`}`;
+  }), '  detail "full" locates cut anchors; full: true includes every place'];
+  return [CUTS, ...groups.flatMap(([kind, group]) => {
+    if (kind !== "unresolved-link") return cutLines(group, "full");
+    const byFile = Map.groupBy(group, (cut) => (cut.at[0] ?? "").split("::")[0] ?? "");
+    return [`  ${kind} (${group.length}):`, ...[...byFile].toSorted(([a], [b]) => compareText(a, b)).flatMap(([file, inFile]) => [
+      `    ${file}`,
+      ...[...Map.groupBy(inFile, (cut) => cut.at[0] ?? "")].toSorted(([a], [b]) => compareText(a, b)).map(([anchor, records]) => {
+        const name = anchor.includes("::") ? anchor.slice(anchor.indexOf("::") + 2) : "(the file itself)";
+        const places = records.reduce((total, cut) => total + Math.max(0, cut.at.length - 1), 0);
+        const reasons = anchor.includes("::") ? [] : [...new Set(records.flatMap(placeReasons))].sort(compareText);
+        const limits = [...new Set(records.flatMap((cut) => cut.limit === undefined ? [] : [cut.limit]))].toSorted((a, b) => a - b);
+        return `      ${name}: ${records.length} ${records.length === 1 ? "cut" : "cuts"}, ${places} reference ${places === 1 ? "place" : "places"}${limits.length === 0 ? "" : `; limits ${limits.join(", ")}`}${reasons.length === 0 ? "" : `; ${reasons.join(", ")}`}`;
+      }),
+    ])];
+  }), '  reference places counted; full: true includes every place'];
+}
+
+function impactLookups(value: ImpactValue, path: string): string[] {
+  const lines: string[] = [];
+  if (value.entrypoints.length > 0) lines.push(`  To explain a listed entrypoint, select ${path}.entrypoints by kind/name and handler.path, handler.symbol, handler.line. Its seeds are zero-based indexes into ${path}.seeds; resolve those indexes to recover all associated origins, not a complete call chain.`);
+  if (value.symbols.length > 0) lines.push(`  To inspect a dependency omitted from text, filter ${path}.symbols by file, symbol and line. Read via.file/symbol for its recorded dependency; via.lines are locations in that symbol's own file, not in via.file. Preserve via.basis and confidence when interpreting it.`);
+  if (value.seeds.length > 0 && value.entrypoints.length === 0) lines.push(`  To identify the walk origins, match ${path}.seeds by file, symbol and line; basis distinguishes requested targets from change-derived origins.`);
+  if ((value.changedEntrypoints?.length ?? 0) > 0) lines.push(`  To inspect entrypoints added, removed or altered by the diff, filter ${path}.changedEntrypoints by change, kind/name and handler identity; these are distinct from reached entrypoints.`);
+  return lines;
+}
+
+function impactCutLookup(cuts: readonly Cut[], path: string): string[] {
+  if (cuts.length === 0) return [];
+  return [
+    `  Before treating this result as exhaustive, inspect ${path}: filter by kind and the relevant anchor in at; a recorded limit explains where coverage stopped. Full JSON does not extend that coverage.`,
+    ...(cuts.some((cut) => cut.kind === "unresolved-link") ? [`  For unresolved-link in ${path}, at[0] names the unresolved file/declaration anchor and the remaining at entries locate potential references; they are not verified calls.`] : []),
+  ];
+}
+
+function impactSnapshotGuide(snapshot: SnapshotRef, mergeBase?: string): string {
+  if (snapshot.kind === "live") return "  Keep evidence at the same snapshot: a live stateId is an identity, not a request selector. Repeating live can observe different content; HEAD alone does not reproduce that working-tree state.";
+  const selector = mergeBase === undefined ? `revision ${JSON.stringify(snapshot.sha)}` : `head ${JSON.stringify(snapshot.sha)} and base ${JSON.stringify(mergeBase)}`;
+  return `  Keep the same snapshot when repeating this query: ${selector}; retain the declared scope and change selection. For a related callers/outline/importers query use revision ${JSON.stringify(snapshot.sha)} instead of impact base/head; it answers a new question, not a filter over this result.`;
+}
+
+function unknownImpactGuide(): string[] {
+  return ["Investigation guide:", "  Analysis is unknown, not a verified absence of impact. Inspect reason and evidence in structuredContent (full: true includes the full fact) to establish the missing prerequisite before retrying; there is no value to search."];
+}
+
+function localImpactGuide(fact: Fact<ImpactValue> & { status: "complete" | "partial" }): string[] {
+  const lookups = impactLookups(fact.value, "value");
+  return [
+    "Investigation guide:",
+    "  Full JSON navigation (available with full: true): paths below are relative to structuredContent; query the returned payload directly when already included.",
+    ...lookups,
+    ...(lookups.length === 0 ? ["  There are no recorded consequences or walk origins in this answer. Read inputs.declaredScope and inputs.declaredConfig before interpreting that scoped emptiness."] : []),
+    ...impactCutLookup(cutsOf(fact), "cuts"),
+    impactSnapshotGuide(fact.snapshot, fact.value.mergeBase),
+  ];
+}
+
+function workspaceImpactGuide(fact: Fact<WorkspaceImpactValue> & { status: "complete" | "partial" }): string[] {
+  const { value } = fact;
+  const trigger = value.sections[value.trigger.repo];
+  const originPath = `value.sections[${JSON.stringify(value.trigger.repo)}].value.impact`;
+  const impacts = Object.values(value.sections).flatMap((section) => section.status === "unknown" || section.value.impact === undefined ? [] : [section.value.impact]);
+  return [
+    "Investigation guide:",
+    "  Full JSON navigation (available with full: true): paths below are relative to structuredContent; query the returned payload directly when already included.",
+    ...(Object.keys(value.sections).length === 0 ? [] : ["  Select value.sections by the exact repository key, not a shared relative file path. Check section.status and, when present, section.reason/cuts and section.value.reads[].fact status/reason before using its evidence; an unknown section has no value."]),
+    ...(trigger?.status !== "unknown" && trigger?.value.impact !== undefined ? [`  The originating repository's walk is at ${originPath}.`, ...impactLookups(trigger.value.impact, originPath)] : []),
+    ...(impacts.length === 0 ? [] : ["  Other repository walks are at value.sections[repo].value.impact only when that field exists. In each walk, entrypoints[].seeds indexes that same walk's seeds array; never join origins across repositories."]),
+    ...(value.links.length === 0 ? [] : ["  To follow a cross-repository consequence, filter value.links by link.from (repo/file/symbol/line) or link.to (repo/name/handler). Each reach contains link IDs in recorded order: resolve them against value.links[].link.id, not the text's display numbers. Retain direction, basis and confidence; reach does not establish an unrecorded path inside a repository."]),
+    ...(value.workspace.unserved.length === 0 ? [] : ["  For missing service coverage, inspect value.workspace.unserved and section.value.external when present. Use ye_ast_workspace to investigate outward-name evidence and candidate local repositories; adding workspace.repos changes the query's coverage rather than filtering this fact."]),
+    ...impactCutLookup(cutsOf(fact), "cuts"),
+    ...(Object.values(value.sections).some((section) => section.status === "partial") ? ["  Repository-local limits remain in value.sections[repo].cuts; inspect contributing section.value.reads[].fact too. Do not treat a complete independent read as resolving an unknown contributing read."] : []),
+    "  Preserve each repository's revision from value.repositorySnapshots when repeating a workspace query; evidence paths belong to their owning repository.",
+    impactSnapshotGuide(fact.snapshot, value.trigger.mergeBase),
+  ];
+}
+
 export function renderImpact(fact: Fact<ImpactValue>, detail: Detail = "summary"): string {
   const lines = headerLines(fact);
-  if (fact.status === "unknown") return lines.join("\n");
-  lines.push(...impactBody(fact.value, detail), ...impactSeeds(fact.value, detail), ...cutsBlock(cutsOf(fact), detail, detail === "full" ? undefined : cutDepths(fact.value)));
+  if (fact.status === "unknown") return [...lines, ...unknownImpactGuide()].join("\n");
+  lines.push(...impactBody(fact.value, detail), ...impactSeeds(fact.value, detail), ...impactCuts(cutsOf(fact), detail), ...localImpactGuide(fact));
   return lines.join("\n");
 }
 
@@ -502,10 +568,11 @@ function declarationText(entry: { file: string; candidates: readonly string[] })
   return entry.candidates.length === 0 ? `${entry.file} declares no symbol` : `declared in ${entry.file}: ${entry.candidates.join(", ")}`;
 }
 
-function impactedLinkLine({ link, direction }: ImpactedLink): string {
+function impactedLinkLine({ link, direction, reach }: ImpactedLink, indexes: ReadonlyMap<string, number>): string {
   const confidence = link.confidence < 1 ? `, confidence ${link.confidence}` : "";
   const profiles = link.profiles === undefined ? "" : `, under ${link.profiles.join(", ")}`;
-  return `  - ${link.from.repo}:${placeText(link.from.file, link.from.line)} ${link.from.symbol} -> ${link.to.repo} ${link.to.name} (${link.basis}${confidence}${profiles}, ${direction})`;
+  const chain = reach.length === 0 ? "" : `; reach: ${reach.map((id) => indexes.get(id) ?? id).join(", ")}`;
+  return `  - ${indexes.get(link.id)}. ${link.from.repo}:${placeText(link.from.file, link.from.line)} ${link.from.symbol} -> ${link.to.repo} ${link.to.name} -> ${handlerText(link.to.handler)} (${link.basis}${confidence}${profiles}, ${direction}${chain})`;
 }
 
 function callSiteLine(site: CallSite): string {
@@ -533,7 +600,7 @@ function repoImpactLines(repo: string, section: Fact<RepoImpact>, detail: Detail
 
 export function renderWorkspaceImpact(fact: Fact<WorkspaceImpactValue>, detail: Detail = "summary"): string {
   const lines = headerLines(fact);
-  if (fact.status === "unknown") return lines.join("\n");
+  if (fact.status === "unknown") return [...lines, ...unknownImpactGuide()].join("\n");
   const { value } = fact;
   const trigger = value.sections[value.trigger.repo];
   lines.push(counted("repositories", value.repositorySnapshots.map(({ repo, snapshot }) => `${repo}@${snapshot.kind === "sha" ? snapshot.sha : snapshot.stateId}`)));
@@ -543,22 +610,51 @@ export function renderWorkspaceImpact(fact: Fact<WorkspaceImpactValue>, detail: 
   const stale = value.workspace.unmatchedGateways;
   if (stale.length > 0) lines.push(`declared gateways that matched nothing (${stale.length}):`, ...stale.map(({ prefix, repo }) => `  - ${prefix} -> ${repo}`));
   if (trigger !== undefined && trigger.status !== "unknown" && trigger.value.impact !== undefined) lines.push(...impactBody(trigger.value.impact, detail));
-  lines.push(`links across repositories (${value.links.length}):`, ...value.links.map(impactedLinkLine));
+  const linkIndexes = new Map(value.links.map(({ link }, index) => [link.id, index + 1]));
+  lines.push(`links across repositories (${value.links.length}):${value.links.some(({ reach }) => reach.length > 0) ? " reach lists link numbers nearest to the change first" : ""}`, ...value.links.map((link) => impactedLinkLine(link, linkIndexes)));
   lines.push("per repository:", ...value.workspace.repos.flatMap((repo) => (value.sections[repo] === undefined ? [] : repoImpactLines(repo, value.sections[repo] as Fact<RepoImpact>, detail, value.trigger.repo))));
-  lines.push(counted("no local repository serves", value.workspace.unserved));
+  const unserved = counted("no local repository serves", value.workspace.unserved);
+  const unservedSummary = `no local repository serves (${value.workspace.unserved.length}): full: true includes all names`;
+  lines.push(value.workspace.unserved.length > 0 && size([unservedSummary]) <= size([unserved]) ? unservedSummary : unserved);
   lines.push("walk origins:", ...value.workspace.repos.flatMap((repo) => {
     const section = value.sections[repo];
     if (section === undefined || section.status === "unknown" || section.value.impact === undefined) return [];
     return [`  ${repo}:`, ...impactSeeds(section.value.impact, detail).map((line) => `    ${line}`)];
   }));
-  const impacts = Object.values(value.sections).flatMap((section) => (section.status === "unknown" || section.value.impact === undefined ? [] : [section.value.impact]));
-  lines.push(...cutsBlock([...cutsOf(fact), ...Object.values(value.sections).flatMap(cutsOf)], detail, detail === "full" ? undefined : cutDepths(...impacts)));
+  lines.push(...impactCuts(cutsOf(fact), detail));
+  for (const repo of value.workspace.repos) {
+    const section = value.sections[repo];
+    if (section === undefined || section.status !== "partial") continue;
+    lines.push(`cuts for repository ${repo}:`, ...impactCuts(section.cuts, detail).slice(1));
+  }
+  lines.push(...workspaceImpactGuide(fact));
   return lines.join("\n");
+}
+
+function faultRecovery(kind: string): string {
+  switch (kind) {
+    case "unknown-change-path": return "Correct the nonmatching changed globs. Remove changed to investigate all changes within the declared scope; full/detail or a larger walk budget cannot fix a path-selection mismatch.";
+    case "unknown-symbol": return "Use a listed declaration or an inclusive line range in targets. If needed, call ye_ast_outline for these files at the same revision to locate declaration spans; candidate names are alternatives, not an automatic substitution.";
+    case "unknown-revision": return "Select a revision that resolves to a local commit. For impact check base/head, for other queries check revision, and for workspace check the identified repository's revision; inspect the reported cause before retrying.";
+    case "no-merge-base": return "Choose base/head commits with a common ancestor. This query uses a merge-base diff; unrelated histories cannot be replaced silently with a direct diff.";
+    case "not-repository-root": return "Use the repository root for the bound server or the indicated workspace repository path, rather than a subdirectory.";
+    case "object-missing": return "Use a local clone containing the required Git objects for this revision. A partial clone may lack them; this error does not authorize an automatic download.";
+    case "live-requires-trusted": return "Omit live and select a committed head (impact) or revision (other queries). Declaring trust is a user decision; repository content cannot grant it.";
+    case "unsupported-object-format": return "For a live-read object-format limitation, omit live and try a committed head/revision appropriate to the tool; inspect any remaining limitation rather than assuming coverage is restored.";
+    case "live-mirror-failed": return "Inspect the reported mirror/copy cause. If committed content answers the question, omit live and select that commit; it does not represent uncommitted edits.";
+    case "unreadable":
+    case "export-write-failed": return "Inspect the reported path and underlying read/write cause, including permissions or available space when indicated. Correct that prerequisite before retrying; this kind alone does not identify which repository or engine-owned resource failed.";
+    case "duplicate-repository": return "Remove the duplicate repository declaration identified by the cause and retain the intended repository identity and revision.";
+    case "git-failed": return "Inspect the reported Git/workspace cause and repository path. Correct the stated prerequisite before retrying; changing text detail does not repair this failure.";
+    case "aborted": return "The caller cancelled the work. Request it again only if still needed and the cancellation no longer applies.";
+    case "internal-fault": return "Inspect the redacted cause. If reproducible, report the fault kind, query and snapshot context without secrets; no parameter change is guaranteed to repair an internal failure.";
+    default: return "Inspect the redacted cause and typed fault metadata to identify the missing prerequisite; retry only after that condition can change. A fault provides no fact to inspect with full.";
+  }
 }
 
 export function renderFault(fault: { kind: string; detail: string } | ImpactFault): string {
   const entries = "entries" in fault ? fault.entries.map((entry) => `\n  - ${entry.file}:${entry.symbol}: ${declarationText(entry)}`).join("") : "";
-  return `fault: ${fault.kind}\n${fault.detail.trim()}${entries}`;
+  return `fault: ${fault.kind}\n${fault.detail.trim()}${entries}\nNext step: ${faultRecovery(fault.kind)}`;
 }
 
 /** The line that opens the text of a live answer the working tree has moved past. */

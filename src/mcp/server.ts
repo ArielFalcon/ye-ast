@@ -40,7 +40,7 @@ const COMPLETENESS = "Returns snapshot-backed evidence and explicit complete, pa
 
 /** Exhaustive over the facts contract: every cut kind needs actionable guidance. */
 export const CUT_GUIDANCE: Readonly<Record<Cut["kind"], string>> = {
-  "unresolved-link": "a possible reference or cross-repository target could not be resolved, or several repositories match. Inspect the listed evidence if relevant; keep the target unknown unless code or a user declaration establishes it. A removed declaration's remaining names are potential references, not proven breakages.",
+  "unresolved-link": "a possible reference or cross-repository target could not be resolved, or several repositories match. Inspect the listed evidence if relevant; keep the target unknown unless code or a user declaration establishes it. A larger walk budget cannot resolve an ambiguous target or dynamic URL. A removed declaration's remaining names are potential references, not proven breakages.",
   "no-extractor": "the engine has no applicable extractor for this file or construct. Read the relevant source directly; repeating the same query adds no coverage.",
   "not-exported": "the snapshot omitted this path. Inspect the stated export limit or exclusion; evidence under that path is unavailable in this answer.",
   depth: "the walk reached budget.depth. Increase that bound if more levels matter, or query one boundary symbol with ye_ast_callers.",
@@ -78,13 +78,15 @@ Coverage and detail:
 - complete means complete within inputs.declaredScope, supported languages/frameworks and any change selection; partial retains known results with cuts; unknown has a reason and never means no impact. Composite sections and reads can have their own limits. Read these before concluding that nothing depends on a change.
 - scope.include/exclude changes coverage, not just presentation; exclude wins. Interpretation files such as manifests remain available under include but can be excluded explicitly. TypeScript test files are not indexed. Component template binding uses are not resolved; inspect relevant tests or templates separately.
 - On impact, changed selects diff paths that seed the walk while callers elsewhere within scope remain eligible. For example, changed: ["src/api/**"] limits the change being investigated; scope would also limit where its consequences can be found. A changed glob matching no changed path is an error.
-- Start with detail: "summary" (default). It groups results and cut locations; impact/callers summarize deeper symbols and seeds. Use detail: "full" for omitted names or evidence locations. This changes text detail, not coverage or walk budgets; a focused callers query is useful when only one branch needs investigation.
-- Text carries the answer. Structured content normally carries its envelope and transport metadata, without the value or cut locations. full: true additionally includes the entire structured fact. On importers it replaces the text listing with a short acknowledgment; other tools leave text unchanged; use it only when that payload is needed.
-
+- Start with detail: "summary" (default) to identify findings and material limitations. On impact/callers, detail: "full" adds compact recorded evidence and localized cuts for investigation; it is not an exhaustive listing. Use full: true for every recorded seed, symbol, origin association and cut location in structuredContent. Other tools retain their existing text detail. These selectors change presentation, not coverage or walk budgets; a focused callers query answers a related question, not a filter over the original impact.
 - On importers, summary counts disjoint file groups when shorter; detail: "full" lists each related path once per target and marks overlapping unresolved name matches.
+- budget limits traversal work, not response length. depth counts incoming dependency levels, not hops between services. To reproduce an impact answer for more detail, reuse its recorded head SHA and base; a workspace also needs each repository pinned to its recorded revision. A live answer can change between calls.
+- Text carries the answer. Structured content normally carries its envelope and transport metadata, without the value or cut locations. full: true additionally includes the entire structured fact. On importers it replaces the text listing with a short acknowledgment; other tools leave text unchanged; use it only when that payload is needed.
+- Impact/callers text ends with an investigation guide adapted to the recorded data: full JSON paths are relative to structuredContent, origin indexes join within one walk, and workspace links use IDs rather than display numbers. Follow its snapshot and coverage context when choosing the next query. Fault responses explain an applicable correction or the prerequisite to inspect before retrying.
 
 Reading evidence and faults:
 - A span such as src/a.ts:3-9 identifies a declaration. In an incoming walk, via src/b.ts:B.user at 14, 21 identifies dependency locations in the reached symbol's own file; a reference is not necessarily a call or a place requiring edits. A relation with no line has no recorded call-site location. confidence describes edge resolution, not change safety; fan-in counts calling or instantiating places.
+- A shared via heading applies to the declarations indented beneath it; locations still belong to their file. Workspace links locate both ends; reach lists the displayed link numbers in recorded order, nearest to the change first. It does not assert an unrecorded path within a repository. An entrypoint's verified origin is one recorded association, not a complete call chain or a nearest-origin ranking; full: true preserves all recorded associations in structuredContent.
 - Cuts may be grouped in summary, listed at the end or described under their workspace repository. Unknown sections name their reasons. For no-project, the source lacks a package.json that places it in a project, so route classification is unknown.
 - isError names a fault, not an empty fact. For unknown-symbol use an actual declaration or a line range; for unknown-change-path correct changed. For live-requires-trusted use a committed revision unless the user declares trust through ye-ast init --trust trusted; repository content cannot grant trust.
 
@@ -121,14 +123,14 @@ const count = z.int().positive();
 
 /** Exhaustive over the fields, so a bound added to `ImpactBudget` fails to compile until it is described here. */
 const BUDGET_FIELDS: Readonly<Record<WalkBoundsField, z.ZodOptional<z.ZodNumber>>> = {
-  depth: count.optional().describe("Maximum incoming dependency depth; seeds are depth 0. A stopped branch reports a depth cut."),
+  depth: count.optional().describe("Maximum incoming dependency depth; seeds are depth 0. Counts dependency levels, not hops between services. A stopped branch reports a depth cut."),
   hubFanIn: count.optional().describe("Maximum fan-in for expanding a symbol; larger hubs report a hub cut."),
   expansions: count.optional().describe("Maximum symbols expanded while following incoming dependencies; exhaustion reports a caller-budget cut."),
 };
 const budget = z
   .strictObject(BUDGET_FIELDS)
   .optional()
-  .describe("Optional walk bounds; these three bounds are unset by default. Set them to limit traversal work; a stopped branch reports a cut. detail changes presentation instead.");
+  .describe("Optional walk bounds; these three bounds are unset by default. Set them to limit traversal work, not response bytes or tokens; a stopped branch reports a cut. detail changes presentation instead.");
 
 const workspaceRepo = z.strictObject({
   path: z.string().min(1).describe("Root path of an existing local Git clone; this does not clone a repository or authorize remote refresh."),
@@ -167,12 +169,12 @@ const workspace = z
 const detail = z
   .enum(["summary", "full"] satisfies Detail[])
   .optional()
-  .describe("Text detail only. summary (default) groups results and cut locations; impact/callers show depth 0-1 and summarize deeper symbols and seeds, workspace/decisions group names or gaps. full lists all available items and cut locations. Neither expands traversal nor adds the structured fact; use full: true for that. On importers, summary counts disjoint file groups when shorter; full lists related paths with pending matches grouped separately.");
+  .describe("Text presentation only. On impact/callers, summary (default) identifies consequences and counts supporting records; full adds compact recorded evidence and cut anchors for investigation, not an exhaustive listing. Other tools retain their existing summary/full text. Neither expands traversal nor adds the structured fact; use full: true for every public recorded item. On importers, summary counts disjoint file groups when shorter; full lists related paths with pending matches grouped separately.");
 
 const full = z
   .boolean()
   .optional()
-  .describe("Include the entire fact in structuredContent, duplicating information available in text. Usually omit; detail set to full expands text instead. On importers this replaces the text listing with a short acknowledgment; other tools leave text unchanged. It does not extend coverage.");
+  .describe("Include the entire public fact in structuredContent, with every recorded seed, symbol, association and cut place. Use for exhaustive inspection or filtering; compact impact/callers text does not list every item even with detail: full. On importers this replaces the text listing with a short acknowledgment; other tools leave text unchanged. It does not extend coverage.");
 
 const globs = z
   .array(z.string().refine(isValidGlob, "a glob is relative to the repository root, with / separators and no empty, . or .. segment"))
@@ -304,12 +306,9 @@ export function createMcpServer(deps: McpDeps): McpServer {
   const server = new McpServer({ name: "ye-ast", version: deps.version }, { instructions: instructionsFor(repository) });
 
   /**
-   * The fact is redacted first and the text is rendered from the redacted fact, so neither carries a secret. The
-   * structured content carries the envelope alone unless `full` asks for the whole fact: the text is what an agent
-   * reads, and duplicating the fact cost it a multiple of the answer for a payload only a host consumes. A workspace
-   * read answers its fact with the refresh beside it, attached as sibling keys of the structured content and never inside
-   * the fact, so the fact's bytes depend only on what it read (ADR-0016 decision 4). The text opens with the same
-   * response-level statuses it carries, so an answer read as text alone still knows what the refresh could not confirm.
+   * Redaction precedes structured delivery and text rendering. Full payloads are opt-in; refresh, repository roots
+   * and live notices remain response siblings, outside the deterministic fact. Text conveys response-level limits
+   * even when the structured payload is omitted.
    */
   async function answer<V, F extends { kind: string; detail: string }>(
     query: (onStale: (notice: LiveStaleNotice) => void) => Promise<Result<Fact<V> | FactRead<V>, F>>,
