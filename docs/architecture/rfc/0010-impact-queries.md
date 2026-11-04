@@ -73,6 +73,13 @@ A requested line range seeds through the rows above, as the added lines of a fil
 seedable node of its file with that simple name (the join below), so overloads all seed; a symbol that is both requested
 and inside a requested range is one seed, `requested`.
 
+A deleted component resource is also read through the merge base's decorator metadata. An owner that survives at the
+same file and declaration name seeds at its **head** location, even when it now names another resource. A lost owner is
+accounted for only when the selected change includes its declaration removal; that removal follows the unresolved-name
+rule above, not a fabricated head seed. Every former owner must be accounted for. A same-named component at another path
+does not establish identity, and an orphan resource or an owner excluded by `changed` keeps the template's `no-extractor`
+cut. The base metadata is read only when the selected change deletes a non-source file.
+
 Removed-declaration cuts list unresolved **candidates**, not proven broken dependencies. They reuse the same exact
 external, ambient and reached-settlement proofs as the ordinary walk. A bare import proven to bind another repository
 file cannot be attributed to the removed homonym. An unknown binding remains a candidate; a proof for one rooted name or

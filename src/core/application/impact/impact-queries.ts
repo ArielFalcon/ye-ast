@@ -1,6 +1,7 @@
 import { blastRadius, type BlastRadius } from "../../domain/change/blast-radius.ts";
 import { isReadableFile, kindOfChangedFile } from "../../domain/change/changed-file.ts";
 import { selectChange } from "../../domain/change/change-selection.ts";
+import { resourceImpact, resourceOwners } from "../../domain/change/resource-impact.ts";
 import type { FileChange } from "../../domain/change/diff-reader.ts";
 import { isSeedable, selectSeeds, type ComponentRef, type SelectedSeed } from "../../domain/change/seeds.ts";
 import { changedEntrypoints } from "../../domain/impact/changed-entrypoints.ts";
@@ -20,7 +21,7 @@ import { exportSelection, pathSelection, sortedGlobs, type PathSelection, type S
 import { changedPaths, liveScope } from "../../domain/snapshot/live-export.ts";
 import { contentFingerprint, declaredScope, exportCuts, holdsDeclaredSource } from "../../domain/map/entrypoint-map.ts";
 import type { Result } from "../../domain/shared/result.ts";
-import type { AngularDeclaration, AngularDeclarationReader } from "../../ports/angular-declarations.port.ts";
+import type { AngularDeclarationReader } from "../../ports/angular-declarations.port.ts";
 import type { CodeGraph, CodeGraphReader, GraphSymbol, GraphUnresolvedReference, IndexSummary } from "../../ports/code-graph.port.ts";
 import type { DynamicLoad, DynamicLoadReader } from "../../ports/dynamic-loads.port.ts";
 import type { Digest } from "../../ports/digest.port.ts";
@@ -130,7 +131,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
         if (outside.length > 0) return { ok: true, value: { ...head.base(content), evidence: outside.map(evidenceOfTarget), status: "unknown", reason: "out-of-scope" } };
         const declarations = await deps.angular.read(headTree.sources);
         if (signal?.aborted) return ABORTED;
-        const componentsByResource = resourcesOf(declarations);
+        const componentsByResource = resourceOwners(declarations);
         const fixed = [
           ...exportCuts(headTree.export),
           ...changes.filter((file) => kindOfChangedFile(file.path) !== "source" && !componentsByResource.has(file.path)).map((file): Cut => ({ kind: "no-extractor", at: [file.path] })),
@@ -298,14 +299,16 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
     const headTree = head.tree;
     const declarations = await deps.angular.read(headTree.sources);
     if (signal?.aborted) return ABORTED;
-    const componentsByResource = resourcesOf(declarations);
+    const before = !sameTree && changes.some((file) => file.deleted && !isReadableFile(file.path)) ? await deps.angular.read(baseTree.sources) : [];
+    if (signal?.aborted) return ABORTED;
+    const { owners: componentsByResource, covered } = resourceImpact(declarations, before, changes);
     const content = JSON.stringify([contentFingerprint(baseTree.export), contentFingerprint(headTree.export)]);
     const declared = holdsDeclaredSource(headTree.export.files);
     const fixed = [
       ...exportCuts(headTree.export),
       ...(sameTree ? [] : exportCuts(baseTree.export)),
       ...changes
-        .filter((file) => cutsCompleteness(file.path, declared) || (isAngularTemplate(file.path) && !componentsByResource.has(file.path)))
+        .filter((file) => cutsCompleteness(file.path, declared) || (isAngularTemplate(file.path) && !covered.has(file.path)))
         .map((file): Cut => ({ kind: "no-extractor", at: [file.path] })),
     ];
     const entrypointSelected = pathSelection({ include: request.changed ?? [], exclude: [] }, deps.matcher.matches);
@@ -536,13 +539,6 @@ function impactOf(input: WalkInput): ImpactRead {
   return { value, cuts, missing: [] };
 }
 
-function resourcesOf(declarations: readonly AngularDeclaration[]): Map<string, ComponentRef[]> {
-  const byResource = new Map<string, ComponentRef[]>();
-  for (const declaration of declarations) {
-    for (const resource of declaration.resources) byResource.set(resource, [...(byResource.get(resource) ?? []), { file: declaration.file, name: declaration.name, line: declaration.line }]);
-  }
-  return byResource;
-}
 
 function templateOwners(componentsByResource: ReadonlyMap<string, readonly ComponentRef[]>): Map<string, string[]> {
   return new Map([...componentsByResource].map(([resource, components]) => [resource, components.map((component) => component.file)]));

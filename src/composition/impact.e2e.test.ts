@@ -458,6 +458,35 @@ test("a changed template reaches the components that use its component, and the 
   assert.deepEqual(result.fact.value.entrypoints.map((entry) => [entry.kind, entry.name, entry.depth]), [["ui-route", "/page", 0]]);
 });
 
+test("a deleted template selected alone seeds its surviving owner from the base snapshot at its head location", async () => {
+  const files = ANGULAR_APP('"x"');
+  commit(files, "base");
+  rmSync(join(repo, "src/app/page.component.html"));
+  commit({
+    "src/app/page.component.ts": `\n\n${files["src/app/page.component.ts"]!.replace("./page.component.html", "./new.component.html")}`,
+    "src/app/new.component.html": "<app-list></app-list>\n",
+  });
+  const result = await impact("--base", "HEAD~1", "--changed", "src/app/page.component.html");
+  assert.equal(result.fact.status, "complete", JSON.stringify(result.fact.cuts));
+  assert.deepEqual(result.fact.value.seeds.map((seed) => [seed.file, seed.symbol, seed.basis]), [["src/app/page.component.ts", "PageComponent", "resource"]]);
+  assert.deepEqual(result.fact.value.entrypoints.map((entry) => entry.name), ["/page"]);
+});
+
+test("a moved component's old template is covered by its selected removal, never by a same-name guess", async () => {
+  const component = (resource: string): string => `import { Component } from '@angular/core';\n@Component({ selector: 'app-page', templateUrl: './${resource}' })\nexport class Page {}\n`;
+  commit({ "package.json": '{"dependencies":{"@angular/core":"21"}}', "src/page.ts": component("old.html"), "src/old.html": "<p>old</p>" }, "base");
+  rmSync(join(repo, "src/page.ts"));
+  rmSync(join(repo, "src/old.html"));
+  commit({ "src/new/page.ts": component("page.html"), "src/new/page.html": "<p>new</p>" });
+  const all = await impact("--base", "HEAD~1");
+  assert.equal(all.fact.status, "complete", JSON.stringify(all.fact.cuts));
+  assert.deepEqual(all.fact.value.seeds.map((seed) => [seed.file, seed.symbol]), [["src/new/page.ts", "Page"]]);
+  const selected = await impact("--base", "HEAD~1", "--changed", "src/old.html");
+  assert.equal(selected.fact.status, "partial");
+  assert.deepEqual(selected.fact.cuts, [{ kind: "no-extractor", at: ["src/old.html"] }]);
+  assert.deepEqual(selected.fact.value.seeds, []);
+});
+
 test("an injection the reader cannot resolve cuts the answer at the file the walk reached", async () => {
   const files = ANGULAR_APP('"x"');
   const list = files["src/app/list.component.ts"]!.replace("OrderService) {", "OrderService, @Inject(TOKEN) other: unknown) {").replace("import { Component }", "import { Component, Inject }");
