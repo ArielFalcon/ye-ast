@@ -226,7 +226,7 @@ flowchart TD
 |---|---|---|
 | `ye_ast_entrypoints` | You are orienting, or you need the handler of a UI route, HTTP route, message listener or scheduled job | `revision`, `live`, `scope` |
 | `ye_ast_callers` | **Before** changing, moving or deleting a symbol or a line range | `targets: [{ file, symbol }]` (a member as `Class.member`) or `[{ file, start, end }]`, `revision`, `live`, `scope`, `budget`, `detail`, `workspace` |
-| `ye_ast_importers` | Before moving, renaming or deleting a file, or changing its exports | `files: [repo-relative paths]`, `revision`, `live`, `scope` |
+| `ye_ast_importers` | Before moving, renaming or deleting a file, or changing its exports | `files: [repo-relative paths]`, `revision`, `live`, `scope`, `detail`, `full` |
 | `ye_ast_impact` | Before reporting work done or opening a pull request | `base` (the branch the work merges into), `head`, `live`, `changed`, `scope`, `budget`, `detail`, `workspace` |
 | `ye_ast_workspace` | The work crosses repositories: it lists the hosts, path prefixes, configuration URLs, dependency coordinates, remotes and registries the repository writes outward, the local clones that serve each one, and the names no clone serves | `repos: [{ path, id?, revision? }]`, `gateways`, `revision`, `scope` |
 
@@ -241,6 +241,15 @@ How the arguments behave:
 | `changed` | On `impact`, globs over the changed paths the scope leaves: only the change's paths they select seed the walk, while the repository is still indexed whole, so callers outside the selection are known. Use it on a large change to answer one area at a time. A glob that selects no changed path is an error, never an empty answer. A file the index could not read stays a cut even when the selection leaves it out: its blindness belongs to the whole walk. |
 | `budget` | `{ depth?, hubFanIn?, expansions? }`, positive integers, no defaults. A bound that stops a walk is reported as a cut, never as a silent truncation. |
 | `detail` | Text listing for `callers` and `impact`. Default: depth 0 and 1 listed, the seeds a caller asked for by name listed, each file's remaining seeds counted with their basis when that is shorter than listing them, deeper symbols left out with their count and how deep the walk went, and the cuts anchored at those deeper symbols counted per file with their kinds. To see one ring further, ask `callers` about a listed symbol, which answers that branch alone in one call. `"full"` lists every symbol, every seed and every cut in one answer. The structured content holds them only with `full: true`. |
+
+`importers` presents three disjoint groups per target: importers, additional users without an import edge, and
+unresolved-only candidates without a resolved link. Its distinct-file count counts each path once. A file with a
+resolved link may also have unresolved name matches; detailed text groups those files separately without listing
+them again as candidates. An import does not prove declaration usage, and a name match does not prove a dependency.
+The default summary counts groups when that is shorter than listing them; use `detail: "full"` for paths.
+With `full: true`, the original overlapping `importers`, `users` and `unresolvedNamers` arrays and all cuts remain in
+`structuredContent`; text becomes a short status acknowledgment. These presentation choices preserve coverage,
+snapshots and completeness. Pin `revision` to the returned SHA when requesting another presentation of the same read.
 
 Working rules:
 
@@ -291,7 +300,7 @@ Also:
 - Quote the `snapshot` when you report a fact, so the user knows which revision it describes.
 - An MCP tool's `structuredContent` holds the envelope alone — `status`, `reason` and `evidence`, never `value` and never
   the cut places: the text is the answer, and nothing is paid for twice. A host that needs the fact itself passes
-  `full: true` to any tool and gets `value` and every cut place beside the same text, byte for byte.
+  `full: true` to any tool and gets `value` and every cut place. Text stays unchanged except on `importers`, which returns a short status acknowledgment instead of repeating the lists.
 - A place carries its span when its declaration is longer than one line: `src/a.ts:3-9`. An impacted symbol or a seed
   prints the same span (`3-9 A.seed`), so a read can name exactly the range it needs.
 - A symbol reached through another one prints `via <file>:<symbol> at <lines>`: the lines are **inside the symbol itself**,

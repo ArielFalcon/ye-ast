@@ -316,7 +316,7 @@ test("workspace repository roots accompany the answer without entering the fact"
   await session.close();
 });
 
-test("full adds the value and every cut place to the structured content and leaves the text byte for byte", async () => {
+test("full adds the value and every cut place while other tools retain their text", async () => {
   const cuts = [{ kind: "depth", at: ["src/A.java::f"], limit: 1 }] as const;
   const partial = impactFact({ status: "partial", cuts } as Partial<Fact<ImpactValue>>);
   const { session } = await setup({ ofChange: async () => ({ ok: true, value: partial }) });
@@ -324,7 +324,7 @@ test("full adds the value and every cut place to the structured content and leav
   for (const [name, args] of TOOL_CALLS) {
     const plain = await session.callTool(name, args);
     const whole = await session.callTool(name, { ...args, full: true });
-    assert.equal(textOf(whole), textOf(plain), `${name}: the text is the same in both modes`);
+    if (name !== "ye_ast_importers") assert.equal(textOf(whole), textOf(plain), `${name}: the text is the same in both modes`);
     assert.equal("value" in (whole.structuredContent as Record<string, unknown>), true, `${name}: value`);
   }
 
@@ -494,17 +494,106 @@ test("callers forwards symbol and line-range targets at a revision", async () =>
   await session.close();
 });
 
-test("importers forwards the files and renders importers, users and unresolved namers per file", async () => {
+test("importers forwards the files and identifies disjoint file relationships", async () => {
   const { session, calls } = await setup();
-  const result = await session.callTool("ye_ast_importers", { files: ["src/OrderService.java"], revision: "topic" });
+  const result = await session.callTool("ye_ast_importers", { files: ["src/OrderService.java"], revision: "topic", detail: "full" });
   assert.deepEqual(calls.importers[0]?.files, ["src/OrderService.java"]);
   assert.equal(calls.importers[0]?.revision, "topic");
   const text = textOf(result);
   assert.match(text, /src\/OrderService\.java/);
-  assert.match(text, /importers.*src\/OrderController\.java/);
-  assert.match(text, /users.*src\/Billing\.java/);
-  assert.match(text, /unresolved namers.*src\/Legacy\.java/);
+  assert.match(text, /importers[\s\S]*src\/OrderController\.java/);
+  assert.match(text, /additional users[\s\S]*src\/Billing\.java/);
+  assert.match(text, /unresolved-only candidates.*src\/Legacy\.java/);
   await session.close();
+});
+
+const OVERLAPPING_IMPORTERS: ImportersValue = {
+  files: [{
+    file: "src/OrderService.java",
+    importers: ["src/Imported.java", "src/Shared.java"],
+    users: ["src/Imported.java", "src/Shared.java", "src/Used.java", "src/UsedPending.java"],
+    unresolvedNamers: ["src/Candidate.java", "src/Shared.java", "src/UsedPending.java"],
+  }],
+};
+
+test("importers detail lists each related file once and preserves pending matches on resolved links", async () => {
+  const { session } = await setup({ importers: async () => ({ ok: true, value: { ...base(), status: "complete", value: OVERLAPPING_IMPORTERS } }) });
+  const result = await session.callTool("ye_ast_importers", { files: ["src/OrderService.java"], detail: "full" });
+  const text = textOf(result);
+  for (const path of ["src/Imported.java", "src/Shared.java", "src/Used.java", "src/UsedPending.java", "src/Candidate.java"]) {
+    assert.equal(text.split(path).length - 1, 1, path);
+  }
+  assert.match(text, /related files \(5 distinct\)/);
+  assert.match(text, /importers \(2\):\n +with unresolved name matches \(1\): src\/Shared\.java\n +without unresolved name matches \(1\): src\/Imported\.java/);
+  assert.match(text, /additional users \(2\):\n +with unresolved name matches \(1\): src\/UsedPending\.java\n +without unresolved name matches \(1\): src\/Used\.java/);
+  assert.match(text, /unresolved-only candidates \(1\): src\/Candidate\.java/);
+  assert.match(text, /2 files with resolved links also have unresolved name matches/);
+  assert.match(text, /not establish additional dependencies/);
+  await session.close();
+});
+
+test("importers summary counts omitted file identities without adding overlapping categories", async () => {
+  const paths = Array.from({ length: 18 }, (_, i) => `src/app/core/auth/consumers/consumer-${String(i).padStart(2, "0")}.ts`);
+  const value: ImportersValue = { files: [{ file: "src/auth.service.ts", importers: paths, users: paths, unresolvedNamers: paths.slice(1) }] };
+  const { session } = await setup({ importers: async () => ({ ok: true, value: { ...base(), status: "complete", value } }) });
+  const text = textOf(await session.callTool("ye_ast_importers", { files: ["src/auth.service.ts"] }));
+  assert.match(text, /related files \(18 distinct\)/);
+  assert.match(text, /importers \(18\)/);
+  assert.match(text, /additional users \(0\)/);
+  assert.match(text, /unresolved-only candidates \(0\)/);
+  assert.match(text, /17 files with resolved links also have unresolved name matches/);
+  for (const path of paths) assert.equal(text.includes(path), false, path);
+  assert.match(text, /detail: "full"/);
+  assert.match(text, /full: true/);
+  const detail = textOf(await session.callTool("ye_ast_importers", { files: ["src/auth.service.ts"], detail: "full" }));
+  assert.ok(Buffer.byteLength(text) <= Buffer.byteLength(detail));
+  await session.close();
+});
+
+test("importers full keeps the original overlapping fact and cuts without repeating file lists in text", async () => {
+  const fact: Fact<ImportersValue> = { ...base(), status: "partial", value: OVERLAPPING_IMPORTERS, cuts: [{ kind: "no-extractor", at: ["src/Unread.java"] }] };
+  const { session } = await setup({ importers: async () => ({ ok: true, value: fact }) });
+  for (const detail of ["summary", "full"]) {
+    const result = await session.callTool("ye_ast_importers", { files: ["src/OrderService.java"], full: true, detail });
+    assert.deepEqual(result.structuredContent, fact);
+    const text = textOf(result);
+    assert.match(text, /status: partial/);
+    assert.match(text, /structuredContent/);
+    assert.equal(text.includes("src/Shared.java"), false);
+    assert.equal(text.includes("src/Unread.java"), false);
+  }
+  await session.close();
+});
+
+test("importers summary keeps a shorter listing rather than a longer counted omission", async () => {
+  const value: ImportersValue = { files: [{ file: "a.ts", importers: ["b.ts"], users: ["b.ts"], unresolvedNamers: [] }] };
+  const { session } = await setup({ importers: async () => ({ ok: true, value: { ...base(), status: "complete", value } }) });
+  const summary = textOf(await session.callTool("ye_ast_importers", { files: ["a.ts"] }));
+  const detail = textOf(await session.callTool("ye_ast_importers", { files: ["a.ts"], detail: "full" }));
+  assert.equal(summary, detail);
+  assert.equal(summary.split("b.ts").length - 1, 1);
+  await session.close();
+});
+
+test("importers distinguishes a complete empty result from an unknown result in every presentation", async () => {
+  const empty: Fact<ImportersValue> = { ...base(), status: "complete", value: { files: [{ file: "a.ts", importers: [], users: [], unresolvedNamers: [] }] } };
+  const unknown: Fact<ImportersValue> = { ...base(), status: "unknown", reason: "index-unavailable" };
+  for (const fact of [empty, unknown]) {
+    const { session } = await setup({ importers: async () => ({ ok: true, value: fact }) });
+    for (const presentation of [{}, { detail: "full" }, { full: true }]) {
+      const result = await session.callTool("ye_ast_importers", { files: ["a.ts"], ...presentation });
+      assert.equal((result.structuredContent as Fact<ImportersValue>).status, fact.status);
+      const text = textOf(result);
+      if (fact.status === "unknown") {
+        assert.match(text, /index-unavailable/);
+        assert.equal(text.includes("related files"), false);
+      } else if (!("full" in presentation)) {
+        assert.match(text, /related files \(0 distinct\)/);
+        assert.equal(text.includes("omitted"), false);
+      }
+    }
+    await session.close();
+  }
 });
 
 test("a partial answer counts its cuts in the status line and lists every one under a closing heading", async () => {

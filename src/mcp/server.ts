@@ -15,7 +15,7 @@ import type { WorkspaceRepositoryRequest } from "../core/ports/workspace-repos.p
 import type { FactRead, WorkspaceQueries, WorkspaceRefresh, WorkspaceValue } from "../core/ports/workspace-queries.port.ts";
 import type { WorkspaceImpactQueries } from "../core/ports/workspace-impact-queries.port.ts";
 import type { DecisionQueries } from "../core/ports/decision-queries.port.ts";
-import { renderDecisions, renderEntrypointMap, renderFault, renderImpact, renderImporters, renderOutline, renderRefresh, renderStale, renderWorkspace, renderWorkspaceImpact, type Detail } from "./render.ts";
+import { renderDecisions, renderEntrypointMap, renderFault, renderImpact, renderImporters, renderOutline, renderRefresh, renderStale, renderStructuredImporters, renderWorkspace, renderWorkspaceImpact, type Detail } from "./render.ts";
 
 /** The key of the result's `_meta` that carries a stale notice. */
 export const LIVE_META = "ye-ast/live";
@@ -63,7 +63,7 @@ Choose by question:
 - ye_ast_entrypoints: where are HTTP/UI routes, message listeners and scheduled jobs handled?
 - ye_ast_callers: what depends on an existing declaration or line range, and which entrypoints reach it? Add workspace for incoming links from other repositories.
 - ye_ast_impact: what depends on a diff from a merge base, and which entrypoints changed? Supply base; add workspace for incoming links and what the change sends onward.
-- ye_ast_importers: which files import or use a file, and which only name it without a resolved link? Useful for file moves and export changes.
+- ye_ast_importers: which files import or otherwise link to a file, and which have unresolved name matches? Useful for file moves and export changes.
 - ye_ast_outline: what declarations, line spans and imports does a file have? Use it to choose source ranges when needed; read a known relevant range directly.
 - ye_ast_workspace: which outward names do the supplied repositories state, and which repositories may serve them? Use it when cross-repository membership is unclear.
 - ye_ast_decisions: which workspace configuration gaps need user input, and which options have evidence? Use for configuration or before ye-ast init --workspace; recommendations do not settle the user's choices and the tool writes nothing.
@@ -79,7 +79,9 @@ Coverage and detail:
 - scope.include/exclude changes coverage, not just presentation; exclude wins. Interpretation files such as manifests remain available under include but can be excluded explicitly. TypeScript test files are not indexed. Component template binding uses are not resolved; inspect relevant tests or templates separately.
 - On impact, changed selects diff paths that seed the walk while callers elsewhere within scope remain eligible. For example, changed: ["src/api/**"] limits the change being investigated; scope would also limit where its consequences can be found. A changed glob matching no changed path is an error.
 - Start with detail: "summary" (default). It groups results and cut locations; impact/callers summarize deeper symbols and seeds. Use detail: "full" for omitted names or evidence locations. This changes text detail, not coverage or walk budgets; a focused callers query is useful when only one branch needs investigation.
-- Text carries the answer. Structured content normally carries its envelope and transport metadata, without the value or cut locations. full: true additionally includes the entire structured fact and leaves text unchanged; use it only when that payload is needed.
+- Text carries the answer. Structured content normally carries its envelope and transport metadata, without the value or cut locations. full: true additionally includes the entire structured fact. On importers it replaces the text listing with a short acknowledgment; other tools leave text unchanged; use it only when that payload is needed.
+
+- On importers, summary counts disjoint file groups when shorter; detail: "full" lists each related path once per target and marks overlapping unresolved name matches.
 
 Reading evidence and faults:
 - A span such as src/a.ts:3-9 identifies a declaration. In an incoming walk, via src/b.ts:B.user at 14, 21 identifies dependency locations in the reached symbol's own file; a reference is not necessarily a call or a place requiring edits. A relation with no line has no recorded call-site location. confidence describes edge resolution, not change safety; fan-in counts calling or instantiating places.
@@ -160,12 +162,12 @@ const withoutWorkspace = (value: { live?: boolean | undefined; workspace?: unkno
 const detail = z
   .enum(["summary", "full"] satisfies Detail[])
   .optional()
-  .describe("Text detail only. summary (default) groups results and cut locations; impact/callers show depth 0-1 and summarize deeper symbols and seeds, workspace/decisions group names or gaps. full lists all available items and cut locations. Neither expands traversal nor adds the structured fact; use full: true for that.");
+  .describe("Text detail only. summary (default) groups results and cut locations; impact/callers show depth 0-1 and summarize deeper symbols and seeds, workspace/decisions group names or gaps. full lists all available items and cut locations. Neither expands traversal nor adds the structured fact; use full: true for that. On importers, summary counts disjoint file groups when shorter; full lists related paths with pending matches grouped separately.");
 
 const full = z
   .boolean()
   .optional()
-  .describe("Include the entire fact in structuredContent, duplicating information available in text. Usually omit; detail set to full expands text instead. This flag leaves text unchanged.");
+  .describe("Include the entire fact in structuredContent, duplicating information available in text. Usually omit; detail set to full expands text instead. On importers this replaces the text listing with a short acknowledgment; other tools leave text unchanged. It does not extend coverage.");
 
 const globs = z
   .array(z.string().refine(isValidGlob, "a glob is relative to the repository root, with / separators and no empty, . or .. segment"))
@@ -470,7 +472,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
     "ye_ast_importers",
     {
       title: "Importers of files",
-      description: `For each file, lists importing files, files using its declarations and unresolved namers. Use to investigate file moves, renames, deletions or export changes. Unresolved namers are potential references, not verified dependencies. For declaration-level incoming traversal and reached entrypoints use ye_ast_callers; this tool answers file-level relationships. ${COMPLETENESS}`,
+      description: `For each target, reports distinct related files as importers, additional users without an import edge, and unresolved-only candidates without a resolved link. Files with resolved links may also have unresolved name matches; detailed text annotates that overlap without repeating paths. Use to investigate file moves, renames, deletions or export changes. An import edge does not prove a declaration is used. Unresolved name matches do not prove dependencies or additional affected files. Summary counts groups when shorter; detail: "full" lists paths; full: true returns the original overlapping lists and cuts in structuredContent with a short text acknowledgment. For declaration-level incoming traversal and reached entrypoints use ye_ast_callers; this tool answers file-level relationships. ${COMPLETENESS}`,
       inputSchema: z
         .strictObject({ revision, live, files: z.array(z.string().min(1)).min(1).describe("Repository-relative paths."), scope, detail, full })
         .refine(excludes("revision"), "live excludes revision"),
@@ -480,7 +482,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
     ({ revision: requested, live: isLive, files, scope: paths, detail: listing, full: whole }, ctx) =>
       answer(
         (onStale) => deps.impact.importers({ repo: repository.path, repoId: repository.repoId, ...atRevision(requested, isLive, onStale), files, ...scopeOf(paths), signal: ctx.mcpReq.signal }),
-        (fact) => renderImporters(fact, listing),
+        (fact) => whole === true ? renderStructuredImporters(fact) : renderImporters(fact, listing),
         whole === true,
       ),
   );

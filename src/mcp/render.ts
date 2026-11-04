@@ -3,7 +3,7 @@ import type { Handler } from "../core/domain/entrypoints/http-route.ts";
 import type { ChangedEntrypoint } from "../core/domain/impact/changed-entrypoints.ts";
 import type { ImpactedSymbol, ImpactValue, ReachedEntrypoint, Seed } from "../core/domain/impact/impact-fact.ts";
 import { declarationAnchor } from "../core/domain/impact/impact-cuts.ts";
-import type { ImportersValue } from "../core/domain/impact/importers-fact.ts";
+import type { ImportedFile, ImportersValue } from "../core/domain/impact/importers-fact.ts";
 import type { OutlineValue } from "../core/domain/outline/outline-fact.ts";
 import type { EntrypointMap } from "../core/domain/map/entrypoint-map.ts";
 import type { Decision, DecisionKind, DecisionOption } from "../core/domain/decisions/decision.ts";
@@ -438,19 +438,51 @@ export function renderImpact(fact: Fact<ImpactValue>, detail: Detail = "summary"
   return lines.join("\n");
 }
 
-function namedFiles(label: string, files: readonly string[]): string {
-  const head = `    ${label} (${files.length})`;
-  return files.length === 0 ? head : `${head}: ${files.join(", ")}`;
+function importerFiles(entry: ImportedFile, detail: Detail): string[] {
+  const importers = new Set(entry.importers);
+  const linked = new Set([...entry.importers, ...entry.users]);
+  const unresolved = new Set(entry.unresolvedNamers);
+  const groups: readonly (readonly [string, readonly string[]])[] = [
+    ["importers", entry.importers],
+    ["additional users", entry.users.filter((file) => !importers.has(file))],
+    ["unresolved-only candidates", entry.unresolvedNamers.filter((file) => !linked.has(file))],
+  ];
+  const overlapping = [...linked].filter((file) => unresolved.has(file)).length;
+  const notes = [
+    ...(overlapping === 0 ? [] : [`    ${overlapping} files with resolved links also have unresolved name matches.`]),
+    ...(unresolved.size === 0 ? [] : ["    Unresolved name matches do not establish additional dependencies."]),
+  ];
+  const count = groups.reduce((total, [, files]) => total + files.length, 0);
+  const heading = `    related files (${count} distinct)`;
+  const listing = groups.flatMap(([label, files]) => {
+    const head = `    ${label} (${files.length})`;
+    if (files.length === 0) return [head];
+    const pending = files.filter((file) => linked.has(file) && unresolved.has(file));
+    if (pending.length === 0) return [`${head}: ${files.join(", ")}`];
+    const remaining = files.filter((file) => !unresolved.has(file));
+    return [
+      `${head}:`,
+      `      with unresolved name matches (${pending.length}): ${pending.join(", ")}`,
+      ...(remaining.length === 0 ? [] : [`      without unresolved name matches (${remaining.length}): ${remaining.join(", ")}`]),
+    ];
+  });
+  const summary = [
+    ...groups.map(([label, files]) => `    ${label} (${files.length})`),
+    ...(count === 0 ? [] : ['    File paths omitted; use detail: "full" to list them, or full: true for the original structured fact.']),
+  ];
+  return [heading, ...(detail === "summary" && size(summary) <= size(listing) ? summary : listing), ...notes];
 }
 
 export function renderImporters(fact: Fact<ImportersValue>, detail: Detail = "summary"): string {
   const lines = headerLines(fact);
   if (fact.status === "unknown") return lines.join("\n");
-  for (const entry of fact.value.files) {
-    lines.push(`  ${entry.file}`, namedFiles("importers", entry.importers), namedFiles("users", entry.users), namedFiles("unresolved namers", entry.unresolvedNamers));
-  }
+  for (const entry of fact.value.files) lines.push(`  ${entry.file}`, ...importerFiles(entry, detail));
   lines.push(...cutsBlock(cutsOf(fact), detail));
   return lines.join("\n");
+}
+
+export function renderStructuredImporters(fact: Fact<ImportersValue>): string {
+  return [statusLines(fact)[0], "full structured result: structuredContent"].join("\n");
 }
 
 export function renderOutline(fact: Fact<OutlineValue>, detail: Detail = "summary"): string {

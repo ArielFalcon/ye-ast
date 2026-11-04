@@ -182,8 +182,22 @@ reads; `structuredContent` carries the redacted envelope without the family's `v
 text already prints — `schema`, `snapshot`, `producer`, `inputs`, `status`, `reason` when the answer is unknown, and
 `evidence` — so a `partial` status stays machine-checkable while its places live in the text. Duplicating the fact
 cost a measured answer 1.5× to 6× its text (683 771 characters of fact against 144 691 of text), and a machine that
-needs the whole fact has the library and `serve`; `full: true` puts it back beside the same text, byte for byte. The
-text rendering opens with the status, the declared scope that status is relative to and the snapshot,
+needs the whole fact has the library and `serve`; `full: true` puts it back beside the same text, byte for byte, except
+on `importers`, where the text becomes a short status acknowledgment pointing to `structuredContent`.
+
+The `importers` text projection partitions each target's related paths into importers, additional users that are not
+importers, and unresolved-only candidates absent from both resolved-link lists. Every related path is listed at most
+once per target. Files with resolved links and unresolved name matches remain in their resolved-link group; detailed
+text splits that group by the presence of pending matches. Summary counts these disjoint groups, their distinct-file
+total and overlapping pending matches when shorter than the detailed listing; otherwise it keeps the listing
+([RFC-0017](0017-answer-size-and-outline.md)). Counted omissions point to `detail: "full"` for paths and `full: true`
+for the original structured fact. The underlying `ImportersValue` arrays continue to overlap; presentation never
+changes the fact, its completeness or its query identity. Imports do not prove declaration usage, and unresolved
+name matches do not establish dependencies or additional affected files. No reference location is invented from the
+path-only arrays. With `full: true`, text carries status (and the reason when unknown) and a pointer to the structured
+result, without repeating the lists or cut locations. Response-level stale notices remain available as usual.
+
+The text rendering opens with the status, the declared scope that status is relative to and the snapshot,
 states `path:line` evidence, the span of every declaration longer than one line (`src/a.ts:3-9`), and every place where a
 reached symbol depends on the one that reached it (`via src/b.ts:B.user at 14, 21, 33`), naming the dependence instead
 when the store places no line for it (`(call)`, `(reference)`, `(contains)`, `(dispatch)`, `(relation)`, `(import)`), counts
