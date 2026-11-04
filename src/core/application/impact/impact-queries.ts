@@ -283,7 +283,9 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
     );
     if (opened.ok) return opened.value;
     const { fault } = opened;
-    return fault.kind === "unavailable" ? { ok: true, value: headReader.unavailableLive(trust, scope, head.value, repoId, spec) } : { ok: false, fault };
+    if (fault.kind !== "unavailable") return { ok: false, fault };
+    const unavailable = headReader.unavailableLive(trust, scope, head.value, repoId, spec);
+    return unknownFact(headReader.factBase(trust, unavailable.snapshot, JSON.stringify([mergeBase, head.value]), spec, scope, undefined), "index-unavailable");
   }
 
   /** Everything `ofChange` does once it holds the diff and both trees; a commit and the live tree differ only in how they got here. */
@@ -299,7 +301,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
     const declarations = await deps.angular.read(headTree.sources);
     if (signal?.aborted) return ABORTED;
     const componentsByResource = resourcesOf(declarations);
-    const content = JSON.stringify([contentFingerprint(baseTree.export), contentFingerprint(headTree.export)]);
+    const content = JSON.stringify([radius.mergeBase, contentFingerprint(baseTree.export), contentFingerprint(headTree.export)]);
     const declared = holdsDeclaredSource(headTree.export.files);
     const fixed = [
       ...exportCuts(headTree.export),

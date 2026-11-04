@@ -1,11 +1,12 @@
 import type { Entrypoint } from "../entrypoints/entrypoint.ts";
 import type { HttpRoute } from "../entrypoints/http-route.ts";
 import { compareText } from "../shared/code-node.ts";
-import { TRUST_MODES, type Evidence, type TrustMode } from "../shared/fact.ts";
+import { TRUST_MODES, type TrustMode } from "../shared/fact.ts";
+import type { RepositoryEvidence } from "../shared/repository-evidence.ts";
 import type { CallSite, HttpTarget } from "../topology/call-site.ts";
 import { callSiteEvidence, unresolvedCallSite } from "../topology/call-site.ts";
 import { inferGateways, matchBehindGateway, prefixOf, type GatewayDeclaration, type RepositoryEntrypoints } from "../topology/link-match.ts";
-import { sortEvidence, type NameCandidate, type OutwardKind, type OutwardName } from "../topology/outward-name.ts";
+import { sortEvidence, type NameCandidate, type OutwardKind, type OutwardName, type RepositoryOutwardName } from "../topology/outward-name.ts";
 import type { RepositoryResolution } from "../topology/remote-snapshot.ts";
 import { decisionId, type Decision, type DecisionKind, type DecisionOption, type DecisionSet } from "./decision.ts";
 
@@ -25,7 +26,7 @@ export interface DecisionInput {
   trigger: string;
   repositories: readonly DecisionRepository[];
   candidates: readonly NameCandidate[];
-  unserved: readonly OutwardName[];
+  unserved: readonly RepositoryOutwardName[];
   gateways: readonly GatewayDeclaration[];
   /** The repositories the persisted declaration already holds: an answered membership is not asked again. */
   confirmed?: readonly string[];
@@ -64,7 +65,7 @@ interface Gap {
   /** The subject space, when a kind has two: `membership` asks about a name and about a clone. */
   scope?: string;
   subject: string;
-  evidence: readonly Evidence[];
+  evidence: readonly RepositoryEvidence[];
   /** The outward kinds the subject is written with, for a kind whose subject is an outward name. */
   outwardKinds?: readonly OutwardKind[];
   options: readonly DecisionOption[];
@@ -161,7 +162,7 @@ function libraryDecisions(input: DecisionInput): Decision[] {
   );
   const options = input.repositories.map(({ repo }): DecisionOption => ({ value: repo, evidence: [], recommended: false }));
   return groupsOf(cuts, (cut) => cut.library).map(([library, naming]) =>
-    decisionOf({ kind: "library", subject: library, evidence: naming.map(({ site }) => callSiteEvidence(site)), options, allowsFreeText: true, required: false }),
+    decisionOf({ kind: "library", subject: library, evidence: naming.map(({ site }) => ({ ...callSiteEvidence(site), repo: site.repo })), options, allowsFreeText: true, required: false }),
   );
 }
 
@@ -194,11 +195,11 @@ function gatewayDecisions(input: DecisionInput): Decision[] {
       const matched = under.flatMap(({ site, target }) => {
         if (site.repo === repo) return [];
         const match = matchBehindGateway(target, own);
-        return match === undefined ? [] : [{ path: match.route.handler.path, line: match.route.handler.line }];
+        return match === undefined ? [] : [{ path: match.route.handler.path, line: match.route.handler.line, repo }];
       });
       return matched.length === 0 ? [] : [{ value: repo, evidence: sortEvidence(matched), recommended: false }];
     });
-    return decisionOf({ kind: "gateway", subject: prefix, evidence: under.map(({ site }) => callSiteEvidence(site)), options, allowsFreeText: false, required: false });
+    return decisionOf({ kind: "gateway", subject: prefix, evidence: under.map(({ site }) => ({ ...callSiteEvidence(site), repo: site.repo })), options, allowsFreeText: false, required: false });
   });
 }
 
@@ -237,7 +238,7 @@ function remoteDecisions(input: DecisionInput): Decision[] {
       kind: "remote",
       subject: repo,
       evidence: [],
-      options: remotes.map(({ url, remote }): DecisionOption => ({ value: url, basis: "origin", evidence: [{ path: ".git/config", line: 1, via: remote }], recommended: false })),
+      options: remotes.map(({ url, remote }): DecisionOption => ({ value: url, basis: "origin", evidence: [{ path: ".git/config", line: 1, via: remote, repo }], recommended: false })),
       allowsFreeText: true,
       required: false,
     }),

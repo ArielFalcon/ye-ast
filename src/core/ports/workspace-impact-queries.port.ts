@@ -2,7 +2,7 @@ import type { ImpactBudget } from "../domain/impact/impact-fact.ts";
 import type { ImpactValue } from "../domain/impact/impact-fact.ts";
 import type { CallSite } from "../domain/topology/call-site.ts";
 import type { ImpactedLink } from "../domain/topology/link.ts";
-import type { Fact, SnapshotRef } from "../domain/shared/fact.ts";
+import type { Fact, FactProvenance, SnapshotRef } from "../domain/shared/fact.ts";
 import type { ScopeRequest } from "../domain/shared/scope.ts";
 import type { Result } from "../domain/shared/result.ts";
 import type { Gateway, GatewayDeclaration } from "../domain/topology/link-match.ts";
@@ -12,6 +12,8 @@ import type { FactRead } from "./workspace-queries.port.ts";
 
 /** What one repository contributes to a cross-repository answer. */
 export interface RepoImpact {
+  /** Every actual read that contributed, without duplicating its value. */
+  reads: readonly { kind: "discovery" | "trigger" | "upstream" | "downstream"; fact: FactProvenance }[];
   /** The trigger repository's own walk, or for another repository the walk from the call sites the answer admitted there. */
   impact?: ImpactValue;
   /** The call sites of this repository that reach an entrypoint the answer's walks reached. */

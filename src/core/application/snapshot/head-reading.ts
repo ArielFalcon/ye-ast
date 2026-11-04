@@ -46,7 +46,7 @@ export interface HeadReading {
 }
 
 /** A revisioned request: the repository, what it selects, and the revision or the live tree it reads. */
-export type Revisioned = { repo: string; repoId: string; scope?: ScopeRequest; signal?: AbortSignal } & ({ revision: string; live?: undefined } | ({ revision?: undefined } & LiveSelector));
+export type Revisioned = { repo: string; source?: string; repoId: string; scope?: ScopeRequest; signal?: AbortSignal } & ({ revision: string; live?: undefined } | ({ revision?: undefined } & LiveSelector));
 
 /** A live query reads the working tree against the commit HEAD names. */
 const LIVE_HEAD = "HEAD";
@@ -138,13 +138,14 @@ export function createHeadReader(deps: HeadReaderDeps): HeadReader {
     const scope = declaredScope(request.scope);
     const selected = pathSelection(scope, deps.matcher.matches);
     const exported = exportSelection(scope, deps.matcher.matches, isExtractorConfiguration);
-    const head = await vcs.resolveCommit(repo, request.revision, signal);
+    const source = request.source ?? repo;
+    const head = await vcs.resolveCommit(source, request.revision, signal);
     if (!head.ok) return head;
     const trust = await trustOf(deps, repo);
     const snapshot: SnapshotRef = { repo: repoId, kind: "sha", sha: head.value };
     return withScratch(deps.scratch, async (directory) => {
       const headDirectory = await directory();
-      const headTree = await extractCommit(deps, repo, head.value, headDirectory, exported, signal);
+      const headTree = await extractCommit(deps, source, head.value, headDirectory, exported, signal);
       if (!headTree.ok) return headTree;
       return read({
         tree: headTree.value,

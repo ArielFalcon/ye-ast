@@ -94,8 +94,12 @@ integer of at most 2147483647 (the largest delay a timer honours); when it elaps
 | `cancel` | notification, host to server | `id`, the request to abort | none; the request is answered `aborted` |
 | `entrypoints.map` | request | `repo`, `repoId`, `revision`, `scope?` | the entrypoints fact |
 | `impact.ofChange` | request | `repo`, `repoId`, `base`, `head`, `changed?`, `scope?`, `budget?` | the impact fact |
-| `impact.callers` | request | `repo`, `repoId`, `revision`, `targets` (`{file, symbol}` or `{file, start, end}`), `scope?`, `budget?` | the impact fact |
+| `impact.callers` | request | `repo`, `source?`, `repoId`, `revision`, `targets` (`{file, symbol}` or `{file, start, end}`), `scope?`, `budget?` | the impact fact |
 | `impact.importers` | request | `repo`, `repoId`, `revision`, `files`, `scope?` | the impact fact |
+
+`source` on `impact.callers` is an optional snapshot read location supplied by a host composing workspace reads.
+`repo` remains the declared clone whose trust applies; omitting `source` reads that clone. MCP does not expose this
+internal workspace choice as a tool argument.
 
 `budget` is `{depth?, hubFanIn?, expansions?}`, positive integers. `scope` is `{include?, exclude?}`, lists of non-empty globs over repository-relative paths ([RFC-0002](0002-facts-contract.md) rule 4); the CLI takes them as the repeatable `--include <glob>` and `--exclude <glob>` of `map`, `impact`, `callers` and `importers`. `changed` is a list of non-empty globs over the changed paths ([RFC-0018](0018-change-selection.md)); the CLI takes it as the repeatable `--changed <glob>` of `impact`. A result is the fact, redacted at egress.
 

@@ -4,7 +4,7 @@ import type { FileChange } from "../../domain/change/diff-reader.ts";
 import type { ImpactValue } from "../../domain/impact/impact-fact.ts";
 import type { FieldOrigin } from "../../domain/relations/field-origin.ts";
 import { relation, type Relation } from "../../domain/relations/relation.ts";
-import type { Fact, Finding } from "../../domain/shared/fact.ts";
+import { sameIdentity, type Fact, type Finding } from "../../domain/shared/fact.ts";
 import { canonicalJson } from "../../domain/shared/canonical-json.ts";
 import type { Result } from "../../domain/shared/result.ts";
 import type { CodeGraph, CodeGraphFault, CodeGraphReader, IndexSummary } from "../../ports/code-graph.port.ts";
@@ -209,6 +209,44 @@ test("an unknown answered after the export carries the content of the successful
   const knownImporters = importersFact(await setup(served).importers({ files: ["src/A.java"] }));
   assert.equal(unknownImporters.status, "unknown");
   assert.equal(contentOf(unknownImporters), contentOf(knownImporters));
+});
+
+test("ofChange identities distinguish resolved merge bases even when their exported trees match", async () => {
+  const otherFork = "d".repeat(40);
+  const changes = { ok: true, value: [change("src/A.java")] } as const;
+  for (const options of [{}, { changes, cache: true as const }, { changes, index: { ok: false, fault: { kind: "index-failed", detail: "x" } } as const }]) {
+    const first = setup({ ...options, mergeBase: FORK });
+    const second = setup({ ...options, mergeBase: otherFork });
+    const original = fact(await first.ask());
+    const different = fact(await second.ask());
+    const alias = fact(await first.ask({ base: "another-alias" }));
+    assert.equal(sameIdentity(original, different), false);
+    assert.equal(sameIdentity(original, alias), true);
+    if (original.status !== "unknown" && different.status !== "unknown") {
+      assert.equal(original.value.mergeBase, FORK);
+      assert.equal(different.value.mergeBase, otherFork);
+    }
+    if (options.cache) assert.deepEqual(first.log.obtained, second.log.obtained.concat(second.log.obtained));
+  }
+});
+
+test("live ofChange identities distinguish resolved merge bases for matching trees and unavailable indexes", async () => {
+  const otherFork = "d".repeat(40);
+  for (const unavailable of [false, true]) {
+    const live = fakeLive({ "src/A.java": "1" });
+    if (unavailable) live.engine.lock = { ok: false, fault: { kind: "aborted", detail: "waiting" } };
+    const first = setup({ trust: TRUSTED, live, mergeBase: FORK });
+    const second = setup({ trust: TRUSTED, live, mergeBase: otherFork });
+    const request = { ...LIVE_BASE, base: "base", live: true } as const;
+    const original = fact(await first.queries.ofChange(request));
+    const different = fact(await second.queries.ofChange(request));
+    assert.equal(sameIdentity(original, different), false);
+    if (!unavailable && original.status !== "unknown" && different.status !== "unknown") {
+      assert.equal(original.value.mergeBase, FORK);
+      assert.equal(different.value.mergeBase, otherFork);
+      assert.deepEqual(original.snapshot, different.snapshot);
+    }
+  }
 });
 
 test("a change with no source and no resource builds no index and is a complete empty answer", async () => {

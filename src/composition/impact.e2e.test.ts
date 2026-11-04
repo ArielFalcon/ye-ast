@@ -7,7 +7,7 @@ import { dirname, join } from "node:path";
 import { EXIT_CODE } from "../cli/main.ts";
 import type { ImpactValue } from "../core/domain/impact/impact-fact.ts";
 import type { Cut } from "../core/domain/shared/fact.ts";
-import { composeCli } from "./compose.ts";
+import { composeCli, composeQueries } from "./compose.ts";
 
 const GIT_ENV = {
   ...process.env,
@@ -126,6 +126,49 @@ async function ye(command: string, args: string[], tail: string[] = [], options:
 const impact = (...args: string[]): Promise<Impact> => ye("impact", args);
 
 const place = (symbol: { file: string; symbol: string }): string => `${symbol.file.split("/").pop()}:${symbol.symbol}`;
+
+test("a changed method's real graph seed joins its qualified HTTP call site downstream", async () => {
+  const sibling = join(workspace, "orders");
+  mkdirSync(sibling);
+  execFileSync("git", ["init", "-q", "-b", "main"], { cwd: sibling, env: GIT_ENV });
+  mkdirSync(join(sibling, "src"));
+  writeFileSync(join(sibling, "src", "OrderController.java"), `import org.springframework.web.bind.annotation.*;
+@RestController class OrderController {
+  @GetMapping("/orders") public String get() { return "ok"; }
+}`);
+  execFileSync("git", ["add", "-A"], { cwd: sibling, env: GIT_ENV });
+  execFileSync("git", ["commit", "-q", "-m", "base"], { cwd: sibling, env: GIT_ENV });
+  const source = (extra: string) => `import { HttpClient } from "@angular/common/http";
+export class OrderApi {
+  constructor(private http: HttpClient) {}
+  checkout() {
+    ${extra}
+    return this.http.get("orders-api/orders");
+  }
+}`;
+  commit({ "src/app/order.api.ts": source("") }, "base");
+  commit({ "src/app/order.api.ts": source("const marker = 1;") }, "change");
+  const queries = composeQueries({ scratchRoot });
+  const discovery = await queries.workspace.outwardNames({ repo: { path: repo, id: "web" }, repos: [{ path: sibling, id: "orders" }] });
+  assert.ok(discovery.ok && discovery.value.fact.status !== "unknown");
+  const roots = [{ repo: "orders", path: sibling }, { repo: "web", path: repo }];
+  assert.deepEqual(discovery.value.repositoryRoots, roots);
+  assert.equal(JSON.stringify(discovery.value.fact).includes(workspace), false);
+  assert.deepEqual(discovery.value.fact.value.repositories.find(({ repo: id }) => id === "web")?.callSites.map(({ symbol }) => symbol), ["OrderApi.checkout"]);
+  const result = await queries.workspaceImpact.ofChange({ repo: { path: repo, id: "web" }, repos: [{ path: sibling, id: "orders" }], base: "HEAD~1", head: "HEAD", changed: ["src/app/order.api.ts"], budget: { depth: 1 } });
+  assert.ok(result.ok);
+  assert.deepEqual(result.value.fact.inputs.declaredConfig, { changed: ["src/app/order.api.ts"], walk: { depth: 1 } });
+  assert.deepEqual(result.value.repositoryRoots, roots);
+  const decisions = await queries.decisions.decisions({ repo: { path: repo, id: "web" }, repos: [{ path: sibling, id: "orders" }] });
+  assert.ok(decisions.ok);
+  assert.deepEqual(decisions.value.repositoryRoots, roots);
+  assert.notEqual(result.value.fact.status, "unknown");
+  const value = result.value.fact.status === "unknown" ? undefined : result.value.fact.value;
+  const section = value?.sections.web;
+  assert.ok(section && section.status !== "unknown");
+  assert.ok(section.value.impact?.seeds.some(({ symbol }) => symbol === "checkout"));
+  assert.ok(value?.links.some(({ direction, link }) => direction === "downstream" && link.from.repo === "web" && link.to.repo === "orders"));
+});
 
 test("a changed helper reaches the route served through an interface, the same bytes on every run, and leaves no export behind", async () => {
   commit(SHOP, "base");

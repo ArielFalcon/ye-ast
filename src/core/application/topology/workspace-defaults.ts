@@ -18,6 +18,15 @@ export interface WorkspaceAsk {
   gateways?: readonly { prefix: string; repo: string }[];
 }
 
+/** A request selects clones and revisions; only a persisted declaration authorizes a refresh destination. */
+export function withAuthorizedRemotes(repos: readonly WorkspaceRepositoryRequest[], persisted: readonly WorkspaceRepositoryRequest[]): WorkspaceRepositoryRequest[] {
+  const authorized = new Map(persisted.map((repository) => [repository.path, repository.remote]));
+  return repos.map(({ remote: _remote, ...repository }) => {
+    const remote = authorized.get(repository.path);
+    return remote === undefined ? repository : { ...repository, remote };
+  });
+}
+
 /**
  * The workspace a request works over: the repositories and gateways it names, or, when it names none and the trust mode
  * lets the repository state it, the ones the repository persists. A request that names repositories overrides the

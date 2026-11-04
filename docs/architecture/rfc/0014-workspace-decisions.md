@@ -50,10 +50,12 @@ type DecisionKind =
   | "remote"       // which URL is the source of truth of a repository
   | "trust";       // trusted or untrusted, per repository
 
+type RepositoryEvidence = Evidence & { repo: string }; // path is relative to this repository
+
 interface DecisionOption {
   value: string;                                   // a path, a URL, a branch, a repository id, a trust mode
   basis?: "exact-name" | "artifact" | "remote" | "default-branch" | "origin";
-  evidence: readonly Evidence[];
+  evidence: readonly RepositoryEvidence[];
   recommended: boolean;
 }
 
@@ -61,7 +63,7 @@ interface Decision {
   id: string;                                      // stable: `${kind}:${subject}`, scoped when a kind has two subject spaces
   kind: DecisionKind;
   subject: string;                                 // the name, the library FQN, the prefix, the repository, the clone
-  evidence: readonly Evidence[];                   // the file:line that motivated the gap
+  evidence: readonly RepositoryEvidence[];         // repository and file:line that motivated the gap
   options: readonly DecisionOption[];
   allowsFreeText: boolean;
   required: boolean;                               // trust is required; a gateway is not

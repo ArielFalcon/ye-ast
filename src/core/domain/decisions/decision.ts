@@ -1,4 +1,4 @@
-import type { Evidence } from "../shared/fact.ts";
+import type { RepositoryEvidence } from "../shared/repository-evidence.ts";
 import type { OutwardKind } from "../topology/outward-name.ts";
 
 /** The closed list of gaps the code cannot fill (RFC-0014): one kind per question a fact does not answer. */
@@ -12,7 +12,7 @@ export interface DecisionOption {
   /** A repository id, a prefix, a path, a URL, a branch or a trust mode, as the kind's rule states it. */
   value: string;
   basis?: DecisionBasis;
-  evidence: readonly Evidence[];
+  evidence: readonly RepositoryEvidence[];
   recommended: boolean;
 }
 
@@ -23,7 +23,7 @@ export interface Decision {
   kind: DecisionKind;
   subject: string;
   /** The places that motivated the gap; empty when no place states it. */
-  evidence: readonly Evidence[];
+  evidence: readonly RepositoryEvidence[];
   /** The outward kinds a `repository` subject is written with, sorted; absent when the subject is no outward name. */
   outwardKinds?: readonly OutwardKind[];
   options: readonly DecisionOption[];

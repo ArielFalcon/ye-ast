@@ -4,7 +4,7 @@ import type { EntrypointMapFact } from "../core/domain/map/entrypoint-map.ts";
 import type { ImpactValue } from "../core/domain/impact/impact-fact.ts";
 import type { ImportersValue } from "../core/domain/impact/importers-fact.ts";
 import type { Entrypoint } from "../core/domain/entrypoints/entrypoint.ts";
-import { SCHEMA, type Fact, type FactBase } from "../core/domain/shared/fact.ts";
+import { SCHEMA, type Cut, type Fact, type FactBase } from "../core/domain/shared/fact.ts";
 import type { Result } from "../core/domain/shared/result.ts";
 import type { EntrypointQueries, MapRequest } from "../core/ports/entrypoint-queries.port.ts";
 import type { ImpactCallersRequest, ImpactFault, ImpactImportersRequest, ImpactOfChangeRequest, ImpactQueries, OfChangeFault } from "../core/ports/impact-queries.port.ts";
@@ -80,7 +80,7 @@ function workspaceImpactFact(): Fact<WorkspaceImpactValue> {
     basis: "route-overlap" as const,
     confidence: 1,
   };
-  const section = (value: object): Fact<never> => ({ ...base(), status: "complete", value }) as never;
+  const section = (value: Omit<RepoImpact, "reads">): Fact<RepoImpact> => ({ ...base(), status: "complete", value: { ...value, reads: [] } });
   const value: WorkspaceImpactValue = {
     workspace: { repos: ["shop", "shop-web"], gateways: [{ prefix: "orders-api", repo: "shop", basis: "route-overlap" }], unmatchedGateways: [{ prefix: "legacy", repo: "shop" }], unserved: ["geo-api"], source: "request" },
     repositorySnapshots: [],
@@ -104,9 +104,9 @@ const DECISIONS: DecisionValue = {
       id: "membership:name:orders-api",
       kind: "membership",
       subject: "orders-api",
-      evidence: [{ path: "src/app/order.api.ts", line: 7 }],
+      evidence: [{ path: "src/app/order.api.ts", line: 7, repo: "shop-web" }],
       options: [
-        { value: "orders", basis: "exact-name", evidence: [{ path: "src/app/order.api.ts", line: 7 }], recommended: true },
+        { value: "orders", basis: "exact-name", evidence: [{ path: "src/app/order.api.ts", line: 7, repo: "shop-web" }], recommended: true },
         { value: "orders-core", basis: "artifact", evidence: [], recommended: false },
       ],
       allowsFreeText: true,
@@ -116,7 +116,7 @@ const DECISIONS: DecisionValue = {
       id: "repository:geo.example.com",
       kind: "repository",
       subject: "geo.example.com",
-      evidence: [{ path: "src/app/geo.api.ts", line: 11 }],
+      evidence: [{ path: "src/app/geo.api.ts", line: 11, repo: "shop-web" }],
       options: [],
       allowsFreeText: true,
       required: false,
@@ -153,7 +153,7 @@ function workspaceFact(): Fact<WorkspaceValue> {
       repositorySnapshots: [{ repo: "shop", snapshot: { repo: "shop", kind: "sha", sha: "a".repeat(40) } }],
       sections: { shop: section },
       candidates: [],
-      unserved: names,
+      unserved: names.map((name) => ({ ...name, evidence: name.evidence.map((place) => ({ ...place, repo: "shop" })) })),
       repositories: [],
     },
   };
@@ -236,7 +236,7 @@ async function setup(answers: Partial<Answers> = {}, refresh?: WorkspaceRefresh)
   const workspace = {
     outwardNames: async (request: WorkspaceRequest) => {
       calls.workspaceReads.push(request);
-      return (answers.outwardNames ?? (async () => ({ ok: true, value: read({ ...base(), status: "complete", value: { workspace: { repos: [], gateways: [], source: "none" }, repositorySnapshots: [], sections: {}, candidates: [], unserved: [], repositories: [{ repo: "shop", path: "/work/shop", entrypoints: [], callSites: [] }] } }) })))(request);
+      return (answers.outwardNames ?? (async () => ({ ok: true, value: read({ ...base(), status: "complete", value: { workspace: { repos: [], gateways: [], source: "none" }, repositorySnapshots: [], sections: {}, candidates: [], unserved: [], repositories: [{ repo: "shop", snapshot: base().snapshot, entrypoints: [], callSites: [] }] } }) })))(request);
     },
   } as unknown as WorkspaceQueries;
   const workspaceImpact: WorkspaceImpactQueries = {
@@ -300,6 +300,22 @@ test("by default every tool answers the envelope alone, keeping a partial status
   await session.close();
 });
 
+test("workspace repository roots accompany the answer without entering the fact", async () => {
+  const repositoryRoots = [{ repo: "shop", path: REPOSITORY.path }, { repo: "shop-web", path: "/clones/frontend" }];
+  const fact = workspaceFact();
+  const { session } = await setup({ outwardNames: async () => ({ ok: true, value: { fact, repositoryRoots } }) });
+
+  for (const full of [false, true]) {
+    const result = await session.callTool("ye_ast_workspace", { full });
+    const structured = result.structuredContent as Record<string, unknown>;
+    assert.deepEqual(structured["repositoryRoots"], repositoryRoots);
+    assert.match(textOf(result), /repository root: shop-web -> \/clones\/frontend/);
+    assert.equal(JSON.stringify(structured["inputs"]).includes("/clones/frontend"), false);
+    assert.equal(JSON.stringify(structured["value"])?.includes("/clones/frontend") ?? false, false);
+  }
+  await session.close();
+});
+
 test("full adds the value and every cut place to the structured content and leaves the text byte for byte", async () => {
   const cuts = [{ kind: "depth", at: ["src/A.java::f"], limit: 1 }] as const;
   const partial = impactFact({ status: "partial", cuts } as Partial<Fact<ImpactValue>>);
@@ -360,7 +376,7 @@ test("lists the seven read tools, each described, none taking a top-level reposi
   for (const name of ["ye_ast_workspace", "ye_ast_decisions"]) {
     const repos = tools.find((tool) => tool.name === name)?.inputSchema.properties?.["repos"] as { items?: { properties?: Record<string, unknown> } } | undefined;
     assert.ok(repos?.items?.properties?.["path"] !== undefined, `a passed repository is named by a nested path, in ${name}`);
-    assert.ok(repos?.items?.properties?.["remote"] !== undefined, `a passed repository may declare its remote, in ${name}`);
+    assert.equal(repos?.items?.properties?.["remote"], undefined, `a query cannot declare a refresh destination, in ${name}`);
   }
   await session.close();
 });
@@ -372,10 +388,9 @@ test("the server instructions tell the agent when to call every tool", async () 
   await session.close();
 });
 
-test("the server instructions name the root every answer is relative to", async () => {
+test("the server instructions name the bound repository root", async () => {
   const { session } = await setup();
   assert.ok(session.instructions?.includes(`${REPOSITORY.path} (id ${REPOSITORY.repoId})`), session.instructions);
-  assert.match(session.instructions ?? "", /Every path in an answer is relative to that root/);
   await session.close();
 });
 
@@ -580,12 +595,12 @@ test("detail full lists every cut, including the ones a summary counts", async (
 test("a workspace summary counts a section's cut anchored at a symbol past the listed depth", async () => {
   const built = workspaceImpactFact();
   const value = (built as { value: WorkspaceImpactValue }).value;
-  const section = {
-    ...built,
+  const section: Fact<RepoImpact> = {
+    ...base(),
     status: "partial",
-    value: { impact: IMPACT, callSites: [], unmatched: [], external: [] },
+    value: { reads: [], impact: IMPACT, callSites: [], unmatched: [], external: [] },
     cuts: [{ kind: "unresolved-link", at: ["src/OrderController.java::OrderController.one", "src/app/page.ts:9"] }],
-  } as unknown as Fact<RepoImpact>;
+  };
   const fact = { ...built, value: { ...value, sections: { ...value.sections, shop: section } } } as Fact<WorkspaceImpactValue>;
   const { session } = await setup({ workspaceOfChange: async () => ({ ok: true, value: { fact } }) });
   const text = textOf(await session.callTool("ye_ast_impact", { base: "main", workspace: WORKSPACE }));
@@ -698,15 +713,42 @@ test("a declaration whose places are exactly another's points at it instead of p
   await session.close();
 });
 
-test("a summary counts the seeds of a large change per file and basis, and detail full lists them", async () => {
-  const seeds = Array.from({ length: 12 }, (_, index) => ({ file: "src/a.ts", symbol: `a${index}`, line: index + 1, basis: "lines" as const }));
+test("unresolved declarations at different lines in one file do not claim the same places", async () => {
+  const partial = impactFact({ status: "partial", cuts: [
+    { kind: "unresolved-link", at: ["src/a.ts::A", "src/use.ts:10"] },
+    { kind: "unresolved-link", at: ["src/a.ts::B", "src/use.ts:90"] },
+  ] } as Partial<Fact<ImpactValue>>);
+  const { session } = await setup({ ofChange: async () => ({ ok: true, value: partial }) });
+  const text = textOf(await session.callTool("ye_ast_impact", { base: "main" }));
+  assert.doesNotMatch(text, /same places as/);
+  await session.close();
+});
+
+test("workspace unknown repository reason is visible in summary and full text", async () => {
+  const fact = workspaceFact();
+  if (fact.status === "unknown") throw new Error("fixture");
+  const unknown: Fact<WorkspaceSection> = { ...base(), status: "unknown", reason: "revision-unavailable", evidence: [] };
+  const value = { ...fact.value, sections: { shop: unknown } };
+  const { session } = await setup({ outwardNames: async () => ({ ok: true, value: { fact: { ...fact, value } } }) });
+  for (const detail of ["summary", "full"] as const) {
+    const text = textOf(await session.callTool("ye_ast_workspace", { detail }));
+    assert.match(text, /shop: unknown \(revision-unavailable\)/);
+  }
+  await session.close();
+});
+
+test("a summary counts change seeds across files by basis, and detail full lists them", async () => {
+  const seeds = Array.from({ length: 12 }, (_, index) => ({ file: `src/feature-${index}.ts`, symbol: `a${index}`, line: index + 1, basis: index % 2 === 0 ? "lines" as const : "top-level" as const }));
   const fact = impactFact({ value: { ...IMPACT, seeds, symbols: [], entrypoints: [], changedEntrypoints: [] } } as Partial<Fact<ImpactValue>>);
   const { session } = await setup({ ofChange: async () => ({ ok: true, value: fact }) });
   const summary = textOf(await session.callTool("ye_ast_impact", { base: "main" }));
-  assert.match(summary, /^seeds \(12\):\n {2}src\/a\.ts \(lines\): 12 seeds\n {2}detail "full" lists every seed$/m);
+  assert.match(summary, /^seeds \(12\):\n {2}change origins: 12 declarations across 12 files \(lines 6, top-level 6\); detail "full" lists every seed$/m);
+  assert.doesNotMatch(summary, /src\/feature-/);
   const full = textOf(await session.callTool("ye_ast_impact", { base: "main", detail: "full" }));
-  assert.match(full, /^seeds \(12\):\n {2}src\/a\.ts \(lines\)\n {4}1 a0\n/m);
-  assert.equal(full.split("src/a.ts").length - 1, 1);
+  for (const seed of seeds) {
+    assert.ok(full.includes(`${seed.file} (${seed.basis})`));
+    assert.ok(full.includes(`${seed.line} ${seed.symbol}`));
+  }
   await session.close();
 });
 
@@ -718,7 +760,7 @@ test("a summary lists the seeds a caller asked for and counts the change seeds b
   const fact = impactFact({ value: { ...IMPACT, seeds, symbols: [], entrypoints: [], changedEntrypoints: [] } } as Partial<Fact<ImpactValue>>);
   const { session } = await setup({ ofChange: async () => ({ ok: true, value: fact }) });
   const summary = textOf(await session.callTool("ye_ast_impact", { base: "main" }));
-  assert.match(summary, /^seeds \(11\):\n {2}src\/a\.ts \(requested\)\n {4}1 asked\n {2}src\/a\.ts \(lines\): 10 seeds\n {2}detail "full" lists every seed$/m);
+  assert.match(summary, /^seeds \(11\):\n {2}src\/a\.ts \(requested\)\n {4}1 asked\n {2}change origins: 10 declarations across 1 file \(lines 10\); detail "full" lists every seed$/m);
   await session.close();
 });
 
@@ -728,9 +770,9 @@ test("the seeds of an impact answer are grouped under their file, with the basis
     { file: "src/a.ts", symbol: "b", line: 9, basis: "top-level" as const },
     { file: "src/b.ts", symbol: "c", line: 2, basis: "requested" as const },
   ];
-  const fact = impactFact({ value: { ...IMPACT, seeds } } as Partial<Fact<ImpactValue>>);
+  const fact = impactFact({ value: { ...IMPACT, seeds, entrypoints: [] } } as Partial<Fact<ImpactValue>>);
   const { session } = await setup({ ofChange: async () => ({ ok: true, value: fact }) });
-  const text = textOf(await session.callTool("ye_ast_impact", { base: "main" }));
+  const text = textOf(await session.callTool("ye_ast_impact", { base: "main", detail: "full" }));
   assert.match(text, /^seeds \(3\):\n {2}src\/a\.ts\n {4}3 a \(lines\)\n {4}9 b \(top-level\)\n {2}src\/b\.ts \(requested\)\n {4}2 c$/m);
   assert.equal(text.split("src/a.ts").length - 1, 1, "the path of a grouped file is printed once");
   await session.close();
@@ -1251,15 +1293,21 @@ test("the workspace tool answers the outward names without the repositories it r
   await session.close();
 });
 
-test("a passed repository's remote reaches the workspace family, and an empty one is refused before any query runs", async () => {
+test("an agent-selected remote is refused before any workspace query runs", async () => {
   const { session, calls } = await setup();
   const remote = "https://git.example.com/shop/web.git";
-
-  await session.callTool("ye_ast_workspace", { repos: [{ path: "/work/shop-web", id: "shop-web", remote }] });
-  const refused = await session.callTool("ye_ast_workspace", { repos: [{ path: "/work/shop-web", remote: "" }] }).catch((error: Error) => error);
-
-  assert.deepEqual(calls.workspaceReads.map(({ repos }) => repos), [[{ path: "/work/shop-web", id: "shop-web", remote }]]);
-  assert.equal(refused instanceof Error || (refused as { isError?: boolean }).isError === true, true);
+  const repos = [{ path: "/work/shop-web", id: "shop-web", remote }];
+  const requests = [
+    ["ye_ast_workspace", { repos }],
+    ["ye_ast_decisions", { repos }],
+    ["ye_ast_callers", { targets: [{ file: "src/Order.java", symbol: "Order" }], workspace: { repos } }],
+    ["ye_ast_impact", { base: "main", workspace: { repos } }],
+  ] as const;
+  for (const [name, args] of requests) {
+    const refused = await session.callTool(name, args).catch((error: Error) => error);
+    assert.equal(refused instanceof Error || (refused as { isError?: boolean }).isError === true, true, name);
+  }
+  assert.deepEqual([calls.workspaceReads, calls.decisions, calls.workspaceCallers, calls.workspaceOfChange], [[], [], [], []]);
   await session.close();
 });
 
@@ -1277,8 +1325,8 @@ test("the decisions tool asks the decision family with the repositories and gate
   assert.match(text, /^status: complete\n/);
   assert.match(text, /repositories \(1\): shop@a{40}/);
   assert.match(text, /decisions \(2\):/);
-  assert.match(text, /\n {2}membership \(1\):\n {4}orders-api\n {6}evidence: src\/app\/order\.api\.ts:7\n {6}- orders \(exact-name, recommended, src\/app\/order\.api\.ts:7\)\n {6}- orders-core \(artifact\)\n {6}free text/);
-  assert.match(text, /\n {2}repository \(1\):\n {4}geo\.example\.com\n {6}evidence: src\/app\/geo\.api\.ts:11\n {6}free text/);
+  assert.match(text, /\n {2}membership \(1\):\n {4}orders-api\n {6}evidence: shop-web:src\/app\/order\.api\.ts:7\n {6}- orders \(exact-name, recommended, shop-web:src\/app\/order\.api\.ts:7\)\n {6}- orders-core \(artifact\)\n {6}free text/);
+  assert.match(text, /\n {2}repository \(1\):\n {4}geo\.example\.com\n {6}evidence: shop-web:src\/app\/geo\.api\.ts:11\n {6}free text/);
   await session.close();
 });
 
@@ -1304,7 +1352,7 @@ const DEPENDENCY_GAP: DecisionValue = {
   ...DECISIONS,
   decisions: [
     ...DECISIONS.decisions,
-    { id: "repository:@angular/core", kind: "repository", subject: "@angular/core", evidence: [{ path: "package.json", line: 36 }], outwardKinds: ["dependency"], options: [], allowsFreeText: true, required: false },
+    { id: "repository:@angular/core", kind: "repository", subject: "@angular/core", evidence: [{ path: "package.json", line: 36, repo: "shop" }], outwardKinds: ["dependency"], options: [], allowsFreeText: true, required: false },
   ],
 };
 
@@ -1327,7 +1375,7 @@ test("a workspace full answer lists the dependency coordinates its summary count
 
   assert.match(text, / {4}dependency \(3\):\n {6}- @angular\/core \(package\.json:36\)\n {6}- @capacitor\/core \(package\.json:49\)\n {6}- rxjs \(package\.json:74\)/);
   assert.match(text, /^no local repository serves \(4\):$/m);
-  assert.match(text, / {2}- dependency @angular\/core$/m);
+  assert.match(text, / {2}- dependency @angular\/core \(shop:package\.json:36\)$/m);
   await session.close();
 });
 
@@ -1360,7 +1408,7 @@ test("a decisions full answer lists the dependency gaps its summary counts", asy
 
   const text = textOf(await session.callTool("ye_ast_decisions", { detail: "full" }));
 
-  assert.match(text, / {4}@angular\/core\n {6}evidence: package\.json:36\n {6}free text/);
+  assert.match(text, / {4}@angular\/core\n {6}evidence: shop:package\.json:36\n {6}free text/);
   await session.close();
 });
 
@@ -1419,13 +1467,17 @@ test("the sidecar is redacted with the composed redaction like every other value
     ...REFRESH,
     freshness: [{ repo: "orders", url: `https://user:${SECRET}@git.example.com/orders.git`, freshness: { status: "unverified", reason: "failed", detail: `fatal: ${SECRET}` } }],
   };
-  const { session } = await setup(undefined, leaking);
+  const { session } = await setup({ outwardNames: async () => ({
+    ok: true,
+    value: { fact: workspaceFact(), refresh: leaking, repositoryRoots: [{ repo: "orders", path: `/clones/${SECRET}` }] },
+  }) });
 
   const result = await session.callTool("ye_ast_workspace", {});
 
   const structured = JSON.stringify(result.structuredContent);
   assert.doesNotMatch(structured, new RegExp(SECRET));
   assert.match(structured, new RegExp(REDACTED.replace(/[[\]]/g, "\\$&")));
+  assert.doesNotMatch(textOf(result), new RegExp(SECRET));
   await session.close();
 });
 
@@ -1464,4 +1516,118 @@ test("the counted elision of a workspace and a decisions summary never renders l
   const decisions = await setup({ decisions: async () => ({ ok: true, value: { fact: decisionFact(DEPENDENCY_GAP) } }) });
   assertCountedSummaryShorter(textOf(await decisions.session.callTool("ye_ast_decisions", {})), textOf(await decisions.session.callTool("ye_ast_decisions", { detail: "full" })));
   await decisions.session.close();
+});
+
+test("decision text and structured full retain each evidence repository", async () => {
+  const evidence = [{ repo: "caller", path: "src/app.ts", line: 7 }, { repo: "server", path: "src/app.ts", line: 7 }];
+  const decision = { ...DECISIONS.decisions[0]!, evidence, options: [{ value: "server", evidence, recommended: true }] };
+  const { session } = await setup({ decisions: async () => ({ ok: true, value: { fact: decisionFact({ ...DECISIONS, decisions: [decision] }) } }) });
+  const result = await session.callTool("ye_ast_decisions", { detail: "full", full: true });
+  const text = textOf(result);
+  assert.match(text, /caller:src\/app\.ts:7/);
+  assert.match(text, /server:src\/app\.ts:7/);
+  const structured = result.structuredContent as { value: DecisionValue };
+  assert.deepEqual(structured.value.decisions[0]?.evidence, evidence);
+  await session.close();
+});
+
+test("impact text presents consequences before seeds", async () => {
+  const { session } = await setup();
+  const text = textOf(await session.callTool("ye_ast_impact", { base: "main", full: true }));
+  const positions = ["changed entrypoints (", "reached entrypoints (", "impacted symbols (", "seeds ("].map((label) => text.indexOf(label));
+  assert.ok(positions.every((position) => position >= 0));
+  assert.deepEqual(positions, positions.toSorted((a, b) => a - b));
+  await session.close();
+});
+
+test("workspace impact text presents every repository's consequences before any walk's seeds", async () => {
+  const built = workspaceImpactFact();
+  assert.notEqual(built.status, "unknown");
+  if (built.status === "unknown") return;
+  const consumer = (repo: string): Fact<RepoImpact> => ({
+    ...base({ snapshot: { repo, kind: "sha", sha: "c".repeat(40) } }),
+    status: "complete",
+    value: {
+      reads: [],
+      impact: { ...IMPACT, seeds: [{ file: "src/api.ts", symbol: `${repo}.send`, line: 5, basis: "requested" }] },
+      callSites: [{ ...SITE, repo }],
+      unmatched: [],
+      external: [],
+    },
+  });
+  const fact: Fact<WorkspaceImpactValue> = {
+    ...built,
+    status: "partial",
+    value: {
+      ...built.value,
+      workspace: { ...built.value.workspace, repos: ["shop", "shop-mobile", "shop-web"] },
+      sections: { ...built.value.sections, "shop-mobile": consumer("shop-mobile"), "shop-web": consumer("shop-web") },
+    },
+    cuts: [{ kind: "no-extractor", at: ["src/unknown.swift"] }],
+  };
+  const { session } = await setup({ workspaceOfChange: async () => ({ ok: true, value: { fact } }) });
+  for (const detail of ["summary", "full"] as const) {
+    const text = textOf(await session.callTool("ye_ast_impact", { base: "main", workspace: WORKSPACE, detail, full: true }));
+    const consequences = [...text.matchAll(/^\s*(?:changed entrypoints|reached entrypoints|impacted symbols|call sites that land in what the walk reached|links across repositories) \(/gm)].map((match) => match.index);
+    const seeds = [...text.matchAll(/^\s*seeds \(/gm)].map((match) => match.index);
+    assert.equal(seeds.length, 3);
+    assert.ok(Math.max(...consequences) < Math.min(...seeds), text);
+    assert.ok(text.indexOf("per repository:") < Math.min(...seeds));
+    assert.ok(text.lastIndexOf("no-extractor (") > Math.max(...seeds));
+    assert.match(text, /shop-mobile/);
+    assert.match(text, /shop-web/);
+  }
+  await session.close();
+});
+
+test("workspace impact text names an unknown contributing read beside independent discovery cuts", async () => {
+  const built = workspaceImpactFact();
+  assert.notEqual(built.status, "unknown");
+  if (built.status === "unknown") return;
+  const cuts: [Cut] = [{ kind: "not-exported", at: ["src/omitted.ts"] }];
+  const section: Fact<RepoImpact> = {
+    ...base(),
+    status: "partial",
+    cuts,
+    value: {
+      reads: [
+        { kind: "discovery", fact: { ...base(), status: "partial", cuts: [cuts[0]!] } },
+        { kind: "trigger", fact: { ...base(), status: "unknown", reason: "index-unavailable" } },
+      ],
+      callSites: [], unmatched: [], external: [],
+    },
+  };
+  const fact: Fact<WorkspaceImpactValue> = { ...built, status: "partial", cuts: [{ kind: "section", at: ["shop"] }], value: { ...built.value, sections: { shop: section } } };
+  const { session } = await setup({ workspaceOfChange: async () => ({ ok: true, value: { fact } }) });
+  for (const detail of ["summary", "full"] as const) {
+    const text = textOf(await session.callTool("ye_ast_impact", { base: "main", workspace: WORKSPACE, detail }));
+    assert.match(text, /shop: partial[\s\S]*trigger: unknown \(index-unavailable\)/);
+    assert.match(text, /not-exported/);
+    assert.match(text, /src\/omitted\.ts/);
+  }
+  await session.close();
+});
+
+
+test("reached entrypoints retain a selected seed's location and basis when change origins are summarized", async () => {
+  const seeds: ImpactValue["seeds"] = [
+    { file: "src/unrelated/unrelated.service.ts", symbol: "Unrelated", line: 3, basis: "top-level" },
+    { file: "src/services/checkout.service.ts", symbol: "checkout", line: 12, endLine: 20, basis: "lines" },
+    { file: "src/pages/checkout.component.ts", symbol: "Checkout", line: 30, endLine: 45, basis: "resource" },
+  ];
+  const fact = impactFact({ value: {
+    ...IMPACT,
+    seeds,
+    entrypoints: [{ ...IMPACT.entrypoints[0]!, seeds: [2, 1] }],
+  } } as Partial<Fact<ImpactValue>>);
+  const { session } = await setup({ ofChange: async () => ({ ok: true, value: fact }) });
+  const summary = await session.callTool("ye_ast_impact", { base: "main", full: true });
+  const full = await session.callTool("ye_ast_impact", { base: "main", detail: "full", full: true });
+  for (const result of [summary, full]) {
+    assert.match(textOf(result), /origin: src\/pages\/checkout\.component\.ts:30-45 Checkout \(resource\); 1 other origin/);
+    assert.deepEqual(result.structuredContent, fact);
+  }
+  assert.doesNotMatch(textOf(summary), /src\/unrelated\/unrelated\.service\.ts/);
+  assert.match(textOf(full), /src\/unrelated\/unrelated\.service\.ts/);
+  await session.close();
 });

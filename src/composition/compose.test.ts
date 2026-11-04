@@ -331,7 +331,7 @@ test("the decisions family answers over a composed workspace read: an outward na
   assert.ok(unserved !== undefined);
   assert.equal(unserved.allowsFreeText, true);
   assert.deepEqual(unserved.options, []);
-  assert.deepEqual(unserved.evidence, [{ path: "src/app/order.page.ts", line: 7, endLine: 7 }]);
+  assert.deepEqual(unserved.evidence, [{ repo: "shop-web", path: "src/app/order.page.ts", line: 7, endLine: 7 }]);
   assert.deepEqual(
     value.decisions.filter((decision) => decision.kind === "trust").map((decision) => decision.id),
     ["trust:shop-service", "trust:shop-web"],
@@ -378,7 +378,7 @@ test("a trusted sibling whose remote is passed is read at the remote's sha, and 
   const value = (read.fact as { value: WorkspaceValue }).value;
   const snapshot = value.repositorySnapshots.find(({ repo: id }) => id === "orders")?.snapshot;
   assert.equal(snapshot?.kind === "sha" ? snapshot.sha : "", remoteSha);
-  assert.equal(value.repositories.find(({ repo: id }) => id === "orders")?.path, join(cacheDirectory, "remotes", digest.of(url)));
+  assert.equal(read.repositorySources?.find(({ repo: id }) => id === "orders")?.path, join(cacheDirectory, "remotes", digest.of(url)));
 
   const { version, entrypoints, impact, outline, workspace: workspaceQueries, workspaceImpact, decisions, redaction } = composeQueries({ scratchRoot, trustDirectory, refresh });
   const session = await openSession(createMcpServer({ version, entrypoints, impact, outline, workspace: workspaceQueries, workspaceImpact, decisions, redaction, repository: { path: repo, repoId: "shop-service" } }));
@@ -419,6 +419,43 @@ test("a composed decisions answer offers the origin URL of a clone the request d
 
   const remote = value.decisions.find((decision) => decision.id === "remote:orders");
   assert.deepEqual(remote?.options.map((option) => `${option.value}(${option.basis},${option.recommended})`), [`${url}(origin,false)`]);
-  assert.deepEqual(remote?.options[0]?.evidence, [{ path: ".git/config", line: 1, via: "origin" }]);
+  assert.deepEqual(remote?.options[0]?.evidence, [{ repo: "orders", path: ".git/config", line: 1, via: "origin" }]);
   assert.equal(value.decisions.some((decision) => decision.id === "remote:shop-service"), false, "the bound repository declares nothing to confirm");
+});
+
+
+test("a trusted remote consumer is walked from its mirror with the declared clone's trust", async () => {
+  const origin = join(workspace, "web-origin");
+  const sibling = join(workspace, "shop-web");
+  const trustDirectory = join(workspace, "trust");
+  const cacheDirectory = join(workspace, "cache");
+  mkdirSync(origin);
+  const atOrigin = (...args: string[]): string => execFileSync("git", args, { cwd: origin, env: GIT_ENV, encoding: "utf8" }).trim();
+  atOrigin("init", "-q", "-b", "main");
+  writeFileSync(join(origin, "README.md"), "web");
+  atOrigin("add", "-A");
+  atOrigin("commit", "-q", "-m", "base");
+  const url = pathToFileURL(origin).href;
+  execFileSync("git", ["clone", "-q", url, sibling], { env: GIT_ENV });
+  mkdirSync(join(origin, "src"));
+  writeFileSync(join(origin, "src", "order.page.ts"), ORDER_PAGE);
+  atOrigin("add", "-A");
+  atOrigin("commit", "-q", "-m", "client call");
+  const sha = atOrigin("rev-parse", "HEAD");
+  const manifest = join(workspace, "workspace.json");
+  writeFileSync(manifest, JSON.stringify({ repos: [{ path: "../shop-web", id: "web", remote: url }], gateways: [{ prefix: "shop-api", repo: "shop-service" }] }));
+  const install = composeCli({ scratchRoot, trustDirectory });
+  const quiet = { out: () => undefined, err: () => undefined };
+  assert.equal(await install(["init", "--trust", "trusted", sibling], quiet), EXIT_CODE.ok);
+  assert.equal(await install(["init", "--trust", "trusted", "--workspace", manifest, repo], quiet), EXIT_CODE.ok);
+  const refresh = createRemoteRefresh({ ...defaultRemoteRefreshDeps, cacheDirectory, digest: createSha256Digest(), protocols: "file" });
+  const { workspaceImpact } = composeQueries({ scratchRoot, trustDirectory, refresh });
+  const result = await workspaceImpact.callers({ repo: { path: repo, id: "shop-service" }, targets: [{ file: "src/OrderController.java", symbol: "OrderController.one" }] });
+  assert.ok(result.ok && result.value.fact.status !== "unknown");
+  const section = result.value.fact.value.sections.web;
+  assert.ok(section && section.status !== "unknown");
+  assert.deepEqual(section.snapshot, { repo: "web", kind: "sha", sha });
+  assert.ok(section.value.reads.some(({ kind }) => kind === "upstream"));
+  assert.ok(section.value.reads.every(({ fact }) => fact.inputs.trust === "trusted"), JSON.stringify(section.value.reads.map(({ kind, fact }) => [kind, fact.inputs.trust])));
+  assert.equal(section.value.impact?.seeds[0]?.symbol, "open");
 });

@@ -4,7 +4,7 @@ import type { HttpRoute } from "../../domain/entrypoints/http-route.ts";
 import type { Entrypoint, Listener } from "../../domain/entrypoints/entrypoint.ts";
 import type { CallSite, EventTarget } from "../../domain/topology/call-site.ts";
 import type { ImpactValue, Seed } from "../../domain/impact/impact-fact.ts";
-import type { CompleteFact, Cut, Fact, SnapshotRef } from "../../domain/shared/fact.ts";
+import { sameIdentity, type CompleteFact, type Cut, type Fact, type SnapshotRef } from "../../domain/shared/fact.ts";
 import type { Result } from "../../domain/shared/result.ts";
 import type { CallersTarget, ImpactCallersRequest, ImpactFault, ImpactOfChangeRequest, ImpactQueries } from "../../ports/impact-queries.port.ts";
 import type { FactRead, WorkspaceQueries, WorkspaceRefresh, WorkspaceValue } from "../../ports/workspace-queries.port.ts";
@@ -80,6 +80,7 @@ interface Setup {
   trust?: TrustRecordReader;
   /** What the workspace read refreshed, carried beside the fact. */
   refresh?: WorkspaceRefresh;
+  walkFact?: (repo: string, answer: Fact<ImpactValue>) => Fact<ImpactValue>;
 }
 
 /** One call site of a repository as its walk sees it: the line a range is seeded by, the declaration it sits in, and what the walk reaches. */
@@ -105,13 +106,12 @@ function walkAnswer(model: readonly WalkModel[], targets: readonly CallersTarget
   return { cost: { expansionsUsed: 0 }, seeds, symbols: [], entrypoints };
 }
 
-function setup({ repositories, unavailable = [], trigger = impactOf(REACHED), unserved = [], reached = {}, defaults, trust, refresh }: Setup) {
+function setup({ repositories, unavailable = [], trigger = impactOf(REACHED), unserved = [], reached = {}, defaults, trust, refresh, walkFact = (_repo, answer) => answer }: Setup) {
   const missing = new Set(unavailable);
   const names = Object.keys(repositories).filter((repo) => !missing.has(repo)).sort();
   const all = [...new Set([...names, ...unavailable])].sort();
   const read: WorkspaceRepository[] = names.map((repo) => ({
     repo,
-    path: `/work/${repo}`,
     snapshot: { repo, kind: "sha", sha: repositories[repo]?.sha ?? SHA },
     entrypoints: (repositories[repo]?.entrypoints ?? []).map((value) => ({ status: "complete" as const, value, evidence: [] })),
     callSites: repositories[repo]?.callSites ?? [],
@@ -144,6 +144,8 @@ function setup({ repositories, unavailable = [], trigger = impactOf(REACHED), un
         ok: true,
         value: {
           fact: { ...fact(triggerRepo, repositories[triggerRepo]?.trust ?? "untrusted", value), snapshot: read.find((entry) => entry.repo === triggerRepo)?.snapshot ?? read[0]!.snapshot },
+          repositorySources: read.map(({ repo }) => ({ repo, path: `/work/${repo}` })),
+          repositoryRoots: all.map((repo) => ({ repo, path: `/work/${repo}` })),
           ...(refresh === undefined ? {} : { refresh }),
         },
       };
@@ -155,11 +157,11 @@ function setup({ repositories, unavailable = [], trigger = impactOf(REACHED), un
       walks.push(request);
       const model = reached[request.repoId];
       const value = request.targets.some((target) => "symbol" in target) ? trigger : model === undefined ? impactOf([]) : walkAnswer(model, request.targets);
-      return { ok: true, value: fact(request.repoId, "untrusted", value) };
+      return { ok: true, value: walkFact(request.repoId, fact(request.repoId, "untrusted", value)) };
     },
     ofChange: async (request: ImpactOfChangeRequest): Promise<Result<Fact<ImpactValue>, ImpactFault>> => ({ ok: true, value: fact(request.repoId, "trusted", { ...trigger, mergeBase: OTHER_SHA }) }),
   } as unknown as ImpactQueries;
-  return { queries: createWorkspaceImpactQueries({ workspace: read_, impact, ...(defaults === undefined ? {} : { defaults }), ...(trust === undefined ? {} : { trust }) }), walks, asks };
+  return { queries: createWorkspaceImpactQueries({ workspace: read_, impact, digest: { of: (text) => `digest(${text})` }, ...(defaults === undefined ? {} : { defaults }), ...(trust === undefined ? {} : { trust }) }), walks, asks };
 }
 
 const ASK = { repo: { path: "/work/orders" }, repos: [{ path: "/work/shop-web" }], targets: [{ file: HANDLER.path, symbol: HANDLER.symbol }] };
@@ -178,6 +180,55 @@ function repoImpact(value: WorkspaceImpactValue, repo: string): RepoImpact & { s
 
 const pathOf = (site: CallSite): string => (site.target.status === "complete" && "path" in site.target.value ? site.target.value.path : "?");
 const ORDERS = { entrypoints: [route("POST", "/orders"), route("GET", "/refunds", "Orders.refunds", 30)] };
+
+test("an unavailable trigger walk remains named and makes the workspace partial", async () => {
+  const { queries } = setup({ repositories: { orders: ORDERS }, walkFact: (_repo, answer) => ({ ...answer, status: "unknown", reason: "index-unavailable" }) });
+  const result = await queries.callers(ASK);
+  assert.ok(result.ok);
+  assert.equal(result.value.fact.status, "partial");
+  const section = valueOf(result).sections.orders;
+  assert.equal(section?.status, "partial");
+  assert.deepEqual(section?.status === "partial" && section.value.reads.map(({ kind, fact }) => [kind, fact.status, fact.status === "unknown" ? fact.reason : undefined]), [["discovery", "complete", undefined], ["trigger", "unknown", "index-unavailable"]]);
+});
+
+test("an unknown consumer preserves both discovery cuts and its named reason", async () => {
+  const { queries } = setup({ repositories: { orders: ORDERS, "shop-web": { callSites: [callSite("shop-web", "orders-api/orders")], cuts: [{ kind: "not-exported", at: ["src/missing.ts"] }] } }, walkFact: (repo, answer) => repo === "shop-web" ? { ...answer, status: "unknown", reason: "index-unavailable" } : answer });
+  const result = await queries.callers(ASK);
+  const section = valueOf(result).sections["shop-web"];
+  assert.equal(section?.status, "partial");
+  assert.ok(section?.status === "partial");
+  assert.ok(section.cuts.some(({ kind }) => kind === "not-exported"));
+  assert.ok(section.cuts.some(({ kind, at }) => kind === "section" && at[0] === "upstream"));
+  assert.deepEqual(section.value.reads.map(({ kind, fact }) => [kind, fact.status]), [["discovery", "partial"], ["upstream", "unknown"]]);
+  assert.equal(section.value.reads[1]?.fact.status === "unknown" && section.value.reads[1].fact.reason, "index-unavailable");
+});
+
+test("a consumer walk retains its depth cut", async () => {
+  const { queries } = setup({ repositories: { orders: ORDERS, "shop-web": { callSites: [callSite("shop-web", "orders-api/orders")] } }, walkFact: (repo, answer) => repo === "shop-web" && answer.status === "complete" ? { ...answer, status: "partial", cuts: [{ kind: "depth", at: ["src/app/shop-web.api.ts"], limit: 1 }] } : answer });
+  const result = await queries.callers(ASK);
+  const section = valueOf(result).sections["shop-web"];
+  assert.equal(section?.status, "partial");
+  assert.deepEqual(section?.status === "partial" && section.cuts, [{ kind: "depth", at: ["src/app/shop-web.api.ts"], limit: 1 }]);
+});
+
+test("the trigger walk uses the snapshot resolved by workspace discovery", async () => {
+  const { queries, walks } = setup({ repositories: { orders: { ...ORDERS, sha: OTHER_SHA } } });
+  await queries.callers(ASK);
+  assert.equal(walks[0]?.revision, OTHER_SHA);
+});
+
+test("composite identity distinguishes changed selection and walk bounds", async () => {
+  const { queries } = setup({ repositories: { orders: ORDERS, "shop-web": {} } });
+  const ask = { repo: { path: "/work/orders" }, base: "main", head: "HEAD", changed: ["src/a.ts"], budget: { depth: 1 } };
+  const a = await queries.ofChange(ask);
+  const b = await queries.ofChange({ ...ask, changed: ["src/b.ts"] });
+  const c = await queries.ofChange({ ...ask, budget: { depth: 2 } });
+  const again = await queries.ofChange(ask);
+  assert.ok(a.ok && b.ok && c.ok && again.ok);
+  assert.equal(sameIdentity(a.value.fact, b.value.fact), false);
+  assert.equal(sameIdentity(a.value.fact, c.value.fact), false);
+  assert.equal(JSON.stringify(a), JSON.stringify(again));
+});
 
 test("a call site of another repository that lands in a reached route is an upstream link, inferred by route overlap when no gateway is declared", async () => {
   const { queries } = setup({ repositories: { orders: ORDERS, "shop-web": { callSites: [callSite("shop-web", "orders-api/orders")] } } });
@@ -437,6 +488,22 @@ test("a change sends links onward downstream, each link's reach naming the links
   assert.deepEqual(next?.reach, [onward?.link.id, next?.link.id]);
 });
 
+test("a downstream consumer's expansion cut remains on its repository section", async () => {
+  const { queries } = setup({
+    repositories: {
+      webapp: { callSites: [callSite("webapp", "orders-api/orders", "POST", 9)] },
+      orders: { entrypoints: [routeOf(ORDER_CONTROLLER, "POST", "/orders")], callSites: [callSite("orders", "payments/charges", "POST", 7)] },
+      payments: { entrypoints: [routeOf(CHARGES, "POST", "/charges")] },
+    },
+    trigger: impactOf([], { seeds: [{ file: "src/app/webapp.api.ts", symbol: "call9", line: 9, basis: "lines" }] }),
+    walkFact: (repo, answer) => repo === "orders" && answer.status === "complete" ? { ...answer, status: "partial", cuts: [{ kind: "caller-budget", at: ["orders.call7"], limit: 1 }] } : answer,
+  });
+  const result = await queries.ofChange({ repo: { path: "/work/webapp" }, repos: [{ path: "/work/orders" }, { path: "/work/payments" }], base: "main", head: "HEAD" });
+  const section = valueOf(result).sections.orders;
+  assert.equal(section?.status, "partial");
+  assert.deepEqual(section?.status === "partial" && section.cuts, [{ kind: "caller-budget", at: ["orders.call7"], limit: 1 }]);
+});
+
 test("a cycle between two repositories terminates and admits each link once", async () => {
   const { queries, walks } = setup({
     repositories: {
@@ -458,6 +525,8 @@ test("a cycle between two repositories terminates and admits each link once", as
   ]);
   assert.deepEqual(walks.map((walk) => `${walk.repoId}:${walk.targets.length}`), ["orders:1", "webapp:1", "orders:1"]);
   assert.deepEqual(repoImpact(value, "orders").impact?.entrypoints.map(({ name }) => name), ["POST /orders"]);
+  assert.deepEqual(repoImpact(value, "orders").reads.map(({ kind }) => kind), ["discovery", "trigger", "upstream"]);
+  assert.ok(repoImpact(value, "orders").reads.every(({ fact }) => !("value" in fact)));
 });
 
 test("a repository is walked once for the call sites one round admits, and again only when a fresh link feeds it", async () => {

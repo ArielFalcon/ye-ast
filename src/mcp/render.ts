@@ -11,7 +11,8 @@ import { compareText } from "../core/domain/shared/code-node.ts";
 import type { Cut, Evidence, Fact, Finding, SnapshotRef } from "../core/domain/shared/fact.ts";
 import type { ImpactFault } from "../core/ports/impact-queries.port.ts";
 import type { LiveStaleNotice } from "../core/ports/live-queries.port.ts";
-import type { NameCandidate, OutwardKind, OutwardName } from "../core/domain/topology/outward-name.ts";
+import type { NameCandidate, OutwardKind, OutwardName, RepositoryOutwardName } from "../core/domain/topology/outward-name.ts";
+import type { RepositoryEvidence } from "../core/domain/shared/repository-evidence.ts";
 import type { WorkspaceRefresh, WorkspaceValue } from "../core/ports/workspace-queries.port.ts";
 import type { DecisionValue } from "../core/ports/decision-queries.port.ts";
 import type { CallSite, UnresolvedCallSite } from "../core/domain/topology/call-site.ts";
@@ -183,19 +184,19 @@ function placeReasons(cut: Cut): string[] {
  * are exactly those of another points at it instead of printing them a second time. */
 function unresolvedDeclarations(cuts: readonly Cut[]): string[] {
   const whole = new Map<string, string[]>();
-  const entries: { file: string; name: string; files: string }[] = [];
+  const entries: { file: string; name: string; files: string; places: string }[] = [];
   for (const cut of cuts) {
     const anchor = cut.at[0] ?? "";
     const settled = anchor.indexOf("::");
     if (settled === -1) whole.set(anchor, [...new Set([...(whole.get(anchor) ?? []), ...placeReasons(cut)])]);
-    else entries.push({ file: anchor.slice(0, settled), name: anchor.slice(settled + 2), files: placeFiles(cut) });
+    else entries.push({ file: anchor.slice(0, settled), name: anchor.slice(settled + 2), files: placeFiles(cut), places: JSON.stringify([...new Set(cut.at.slice(1))].sort(compareText)) });
   }
   entries.sort((a, b) => compareText(a.file, b.file) || compareText(a.name, b.name));
   const canonical = new Map<string, { file: string; name: string }>();
-  for (const entry of entries) if (entry.files !== "" && !canonical.has(entry.files)) canonical.set(entry.files, { file: entry.file, name: entry.name });
+  for (const entry of entries) if (entry.files !== "" && !canonical.has(entry.places)) canonical.set(entry.places, { file: entry.file, name: entry.name });
   const byFile = new Map<string, string[]>();
   for (const entry of entries) {
-    const first = canonical.get(entry.files);
+    const first = canonical.get(entry.places);
     const same = first !== undefined && (first.file !== entry.file || first.name !== entry.name);
     const line =
       entry.files === "" ? entry.name
@@ -330,10 +331,15 @@ function changedLine(change: ChangedEntrypoint): string {
   return `  - ${change.change} ${change.kind} ${change.name} -> ${handlerText(change.handler)}`;
 }
 
-function reachedLine(reached: ReachedEntrypoint): string {
+function reachedLines(reached: ReachedEntrypoint, seeds: readonly Seed[]): string[] {
   const name = reached.name === undefined ? reached.kind : `${reached.kind} ${reached.name}`;
   const confidence = reached.confidence < 1 ? `, confidence ${reached.confidence}` : "";
-  return `  - ${name} -> ${handlerText(reached.handler)} (depth ${reached.depth}${confidence})`;
+  const origin = seeds[reached.seeds[0] ?? -1];
+  const others = reached.seeds.length - 1;
+  return [
+    `  - ${name} -> ${handlerText(reached.handler)} (depth ${reached.depth}${confidence})`,
+    ...(origin === undefined ? [] : [`    origin: ${placeText(origin.file, origin.line, origin.endLine)} ${origin.symbol} (${origin.basis})${others > 0 ? `; ${others} other ${others === 1 ? "origin" : "origins"}` : ""}`]),
+  ];
 }
 
 /** A seed is already listed, so a symbol reached at depth 0 that stands for one is not printed twice. */
@@ -382,13 +388,15 @@ function impactedSymbols(value: ImpactValue, detail: Detail): string[] {
 function impactBody(value: ImpactValue, detail: Detail): string[] {
   return [
     ...(value.mergeBase === undefined ? [] : [`merge base: ${value.mergeBase}`]),
-    `seeds (${value.seeds.length}):`,
-    ...groupedSeeds(value.seeds, detail),
     ...(value.changedEntrypoints === undefined ? [] : [`changed entrypoints (${value.changedEntrypoints.length}):`, ...value.changedEntrypoints.map(changedLine)]),
     `reached entrypoints (${value.entrypoints.length}):`,
-    ...value.entrypoints.map(reachedLine),
+    ...value.entrypoints.flatMap((entrypoint) => reachedLines(entrypoint, value.seeds)),
     ...impactedSymbols(value, detail),
   ];
+}
+
+function impactSeeds(value: ImpactValue, detail: Detail): string[] {
+  return [`seeds (${value.seeds.length}):`, ...groupedSeeds(value.seeds, detail)];
 }
 
 /** The seeds under the file that holds them, so a path repeated by every seed is printed once. A basis the whole file
@@ -403,22 +411,15 @@ function seedListing(seeds: readonly Seed[]): string[] {
   });
 }
 
-/** The seeds a summary counts: the ones a caller asked for by name listed, the rest per file and basis. */
+/** Requested declarations remain explicit; the other origins are counted across the change, by selection basis. */
 function seedSummary(seeds: readonly Seed[]): string[] {
   const requested = seeds.filter((seed) => seed.basis === "requested");
   const rest = seeds.filter((seed) => seed.basis !== "requested");
-  const requestedFiles = [...Map.groupBy(requested, (seed) => seed.file)].toSorted(([a], [b]) => compareText(a, b));
-  const counted = new Map<string, { file: string; basis: Seed["basis"]; count: number }>();
-  for (const seed of rest) {
-    const key = `${seed.file}\0${seed.basis}`;
-    const held = counted.get(key);
-    counted.set(key, { file: seed.file, basis: seed.basis, count: (held?.count ?? 0) + 1 });
-  }
-  const groups = [...counted.values()].toSorted((a, b) => compareText(a.file, b.file) || compareText(a.basis, b.basis));
+  const files = new Set(rest.map((seed) => seed.file));
+  const bases = [...Map.groupBy(rest, (seed) => seed.basis)].toSorted(([a], [b]) => compareText(a, b)).map(([basis, group]) => `${basis} ${group.length}`);
   return [
-    ...requestedFiles.flatMap(([file, inFile]) => [`  ${file} (requested)`, ...inFile.map((seed) => `    ${spanText(seed.line, seed.endLine)} ${seed.symbol}`)]),
-    ...groups.map(({ file, basis, count }) => `  ${file} (${basis}): ${count} ${count === 1 ? "seed" : "seeds"}`),
-    ...(rest.length === 0 ? [] : ['  detail "full" lists every seed']),
+    ...seedListing(requested),
+    ...(rest.length === 0 ? [] : [`  change origins: ${rest.length} ${rest.length === 1 ? "declaration" : "declarations"} across ${files.size} ${files.size === 1 ? "file" : "files"} (${bases.join(", ")}); detail "full" lists every seed`]),
   ];
 }
 
@@ -433,7 +434,7 @@ function groupedSeeds(seeds: readonly Seed[], detail: Detail): string[] {
 export function renderImpact(fact: Fact<ImpactValue>, detail: Detail = "summary"): string {
   const lines = headerLines(fact);
   if (fact.status === "unknown") return lines.join("\n");
-  lines.push(...impactBody(fact.value, detail), ...cutsBlock(cutsOf(fact), detail, detail === "full" ? undefined : cutDepths(fact.value)));
+  lines.push(...impactBody(fact.value, detail), ...impactSeeds(fact.value, detail), ...cutsBlock(cutsOf(fact), detail, detail === "full" ? undefined : cutDepths(fact.value)));
   return lines.join("\n");
 }
 
@@ -490,6 +491,7 @@ function repoImpactLines(repo: string, section: Fact<RepoImpact>, detail: Detail
   const { value } = section;
   return [
     `  ${repo}: ${section.status}`,
+    ...value.reads.flatMap(({ kind, fact }) => fact.status === "unknown" ? [`    ${kind}: unknown (${fact.reason})`] : []),
     ...callSiteBlock("call sites that land in what the walk reached", value.callSites),
     ...(value.impact === undefined || repo === bound ? [] : impactBody(value.impact, detail).map((line) => `    ${line}`)),
     ...callSiteBlock("unmatched", value.unmatched),
@@ -512,6 +514,11 @@ export function renderWorkspaceImpact(fact: Fact<WorkspaceImpactValue>, detail: 
   lines.push(`links across repositories (${value.links.length}):`, ...value.links.map(impactedLinkLine));
   lines.push("per repository:", ...value.workspace.repos.flatMap((repo) => (value.sections[repo] === undefined ? [] : repoImpactLines(repo, value.sections[repo] as Fact<RepoImpact>, detail, value.trigger.repo))));
   lines.push(counted("no local repository serves", value.workspace.unserved));
+  lines.push("walk origins:", ...value.workspace.repos.flatMap((repo) => {
+    const section = value.sections[repo];
+    if (section === undefined || section.status === "unknown" || section.value.impact === undefined) return [];
+    return [`  ${repo}:`, ...impactSeeds(section.value.impact, detail).map((line) => `    ${line}`)];
+  }));
   const impacts = Object.values(value.sections).flatMap((section) => (section.status === "unknown" || section.value.impact === undefined ? [] : [section.value.impact]));
   lines.push(...cutsBlock([...cutsOf(fact), ...Object.values(value.sections).flatMap(cutsOf)], detail, detail === "full" ? undefined : cutDepths(...impacts)));
   return lines.join("\n");
@@ -548,7 +555,7 @@ export function renderRefresh(refresh: WorkspaceRefresh): string[] {
 }
 
 function candidateLine(candidate: NameCandidate): string {
-  return `  - ${candidate.name} -> ${candidate.repo} (${candidate.basis})`;
+  return `  - ${candidate.name} -> ${candidate.repo} (${candidate.basis}${candidate.evidence.length === 0 ? "" : `; ${candidate.evidence.map(repositoryEvidenceText).join(", ")}`})`;
 }
 
 /** The order the text lists outward kinds in: what the repository calls first, what it consumes last. */
@@ -596,14 +603,14 @@ function namesBlock(names: readonly OutwardName[], served: ReadonlySet<string>, 
 }
 
 /** The names no repository given serves: a summary lists what the repository could call and counts the coordinates it consumes. */
-function unservedBlock(unserved: readonly OutwardName[], detail: Detail): string[] {
+function unservedBlock(unserved: readonly RepositoryOutwardName[], detail: Detail): string[] {
   if (unserved.length === 0) return ["no local repository serves (0):", NONE];
   const listed = detail === "full" ? unserved : unserved.filter((name) => name.kind !== "dependency");
   const counted = unserved.length - listed.length;
   const head = `no local repository serves (${unserved.length}):`;
-  const listing = [head, ...unserved.map((name) => `  - ${name.kind} ${name.name}`)];
+  const listing = [head, ...unserved.map((name) => `  - ${name.kind} ${name.name}${name.evidence.length === 0 ? "" : ` (${name.evidence.map(repositoryEvidenceText).join(", ")})`}`)];
   if (counted === 0) return listing;
-  const summarized = [`${head} ${counted} dependency counted; detail "full" lists them`, ...listed.map((name) => `  - ${name.kind} ${name.name}`)];
+  const summarized = [`${head} ${counted} dependency counted; detail "full" lists them`, ...listed.map((name) => `  - ${name.kind} ${name.name}${name.evidence.length === 0 ? "" : ` (${name.evidence.map(repositoryEvidenceText).join(", ")})`}`)];
   return size(summarized) <= size(listing) ? summarized : listing;
 }
 
@@ -643,6 +650,10 @@ export function renderWorkspace(fact: Fact<WorkspaceValue>, detail: Detail = "su
   });
   lines.push(counted("repositories", value.repositorySnapshots.map(({ repo, snapshot }) => `${repo}@${snapshot.kind === "sha" ? snapshot.sha : snapshot.stateId}`)));
   lines.push(sourceLine(value.workspace.source));
+  for (const repo of value.workspace.repos) {
+    const section = value.sections[repo];
+    if (section?.status === "unknown") lines.push(`  ${repo}: unknown (${section.reason})`);
+  }
   lines.push(`outward names (${sections.reduce((total, [, names]) => total + names.length, 0)}):`);
   for (const [repo, names] of sections) lines.push(`  ${repo}:`, ...namesBlock(names, served, detail));
   lines.push(`served by a local repository (${value.candidates.length}):`, ...value.candidates.map(candidateLine));
@@ -653,9 +664,12 @@ export function renderWorkspace(fact: Fact<WorkspaceValue>, detail: Detail = "su
   return lines.join("\n");
 }
 
-/** One value the workspace can verify, the facts that make it valid in parentheses, and the places that state them. */
+function repositoryEvidenceText(evidence: RepositoryEvidence): string {
+  return `${evidence.repo}:${evidenceText(evidence)}`;
+}
+
 function optionLine(option: DecisionOption): string {
-  const facts = [...(option.basis === undefined ? [] : [option.basis]), ...(option.recommended ? ["recommended"] : []), ...option.evidence.map(evidenceText)];
+  const facts = [...(option.basis === undefined ? [] : [option.basis]), ...(option.recommended ? ["recommended"] : []), ...option.evidence.map(repositoryEvidenceText)];
   return `      - ${option.value}${facts.length === 0 ? "" : ` (${facts.join(", ")})`}`;
 }
 
@@ -663,7 +677,7 @@ function optionLine(option: DecisionOption): string {
 function decisionLines(decision: Decision): string[] {
   return [
     `    ${decision.subject}`,
-    ...(decision.evidence.length === 0 ? [] : [`      evidence: ${decision.evidence.map(evidenceText).join(", ")}`]),
+    ...(decision.evidence.length === 0 ? [] : [`      evidence: ${decision.evidence.map(repositoryEvidenceText).join(", ")}`]),
     ...decision.options.map(optionLine),
     ...(decision.allowsFreeText ? ["      free text: an answer no fact states is accepted"] : []),
   ];

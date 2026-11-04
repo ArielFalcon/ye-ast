@@ -163,6 +163,17 @@ export type Finding<T> =
 
 export type Fact<T> = CompleteFact<T> | PartialFact<T> | UnknownFact;
 
+/** A read's fact envelope without its payload. */
+export type FactProvenance = (FactBase & { status: "complete" }) | (FactBase & { status: "partial"; cuts: readonly [Cut, ...Cut[]] }) | UnknownFact;
+
+export function provenanceOf<T>(fact: Fact<T>): FactProvenance {
+  const { schema, snapshot, producer, inputs, evidence } = fact;
+  const base = { schema, snapshot, producer, inputs, evidence };
+  if (fact.status === "unknown") return { ...base, status: "unknown", reason: fact.reason };
+  if (fact.status === "partial") return { ...base, status: "partial", cuts: fact.cuts };
+  return { ...base, status: "complete" };
+}
+
 export type Sections = Readonly<Record<string, Fact<unknown>>>;
 
 /** A composite is complete only when every section is; otherwise it carries one `section` cut per incomplete section. */

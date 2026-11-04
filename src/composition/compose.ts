@@ -235,8 +235,8 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
   const workspace = measurement === undefined ? bareWorkspace : measuredWorkspace(bareWorkspace, measurement);
   // The workspace impact is measured through the impact family it walks with; handing it the measured workspace would
   // write a second line for the read it shares with that walk.
-  const workspaceImpact = createWorkspaceImpactQueries({ workspace: bareWorkspace, impact, defaults, ...trust });
-  const bareDecisions = createDecisionQueries({ workspace: bareWorkspace, defaults, vcs });
+  const workspaceImpact = createWorkspaceImpactQueries({ workspace: bareWorkspace, impact, defaults, digest, ...trust });
+  const bareDecisions = createDecisionQueries({ workspace: bareWorkspace, defaults, vcs, digest });
   const decisions = measurement === undefined ? bareDecisions : measuredDecisions(bareDecisions, measurement);
   return { version, entrypoints, impact, outline, workspace, workspaceImpact, decisions, redaction, repositoryName: (repo, signal) => vcs.repositoryName(repo, signal), warmLive };
 }

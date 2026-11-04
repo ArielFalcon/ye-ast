@@ -148,8 +148,8 @@ export function readOfChange(params: unknown): Omit<AtRevision<ImpactOfChangeReq
 }
 
 export function readCallers(params: unknown): Omit<AtRevision<ImpactCallersRequest>, "signal"> {
-  const p = only(params, ["repo", "repoId", "revision", "targets", "scope", "budget"]);
-  return { repo: text(p, "repo"), repoId: text(p, "repoId"), revision: text(p, "revision"), targets: list(p, "targets", targetOf), ...scopeOf(p), ...budgetOf(p) };
+  const p = only(params, ["repo", "source", "repoId", "revision", "targets", "scope", "budget"]);
+  return { repo: text(p, "repo"), ...(p.source === undefined ? {} : { source: text(p, "source") }), repoId: text(p, "repoId"), revision: text(p, "revision"), targets: list(p, "targets", targetOf), ...scopeOf(p), ...budgetOf(p) };
 }
 
 export function readImporters(params: unknown): Omit<AtRevision<ImpactImportersRequest>, "signal"> {
