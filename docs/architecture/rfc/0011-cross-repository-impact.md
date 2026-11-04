@@ -62,6 +62,16 @@ symbol, so two calls in one method stay two links. A link is made only by a join
 and an `Entrypoint` of the declared repositories; ye-ast runs no repository code (AGENTS.md), and its only network use
 is the refresh of declared remotes under `trusted` ([ADR-0016](../adr/0016-remote-refresh-under-trusted.md)).
 
+The TypeScript HTTP evaluator reads lexical bindings, including destructuring, enclosing functions, blocks, catches and
+loops; an inner binding wins and a local initializer is evaluated in its declaration's scope. Function-scoped `var`
+bindings do not escape nested functions or classes. Immutable AST scopes are memoized by node, and file bindings are
+collected once per source instead of rescanned for every request.
+
+An unshadowed global `encodeURIComponent` is a supported static transformation: literal text is encoded, and an identifier
+explicitly typed `string` may remain a parameter placeholder within a known path. Unsupported arguments, shadowed
+encoders, visible writes or an escaping global object in the provided snapshot keep the evaluation unknown. No repository
+function is executed. A whole run-time URL such as `fetch(url)` remains unknown when `url` names a run-time parameter.
+
 | Transport | Call-site side | Entrypoint side | Matched by | Confidence |
 |---|---|---|---|---|
 | http | `CallSite` with `HttpTarget` | `HttpRoute` (`http-route.ts:33-43`) | verb equal or route `ANY`; path segments equal, parameters stand for any parameter, then the base-path ladder below | 1.0; 0.6 when a placeholder of the call consumed a parameter of the route (parity, `openapi-http-resolver.adapter.ts:334-336`) |

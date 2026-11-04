@@ -15,6 +15,8 @@ const RUN_TIME_VALUE: Evaluation = { kind: "value" };
 /** What one file declares at its top level, and the classes it holds, as the reader needs them. */
 interface FileShape {
   source: ts.SourceFile;
+  bindings: ReadonlySet<string>;
+  unsafeEncoder: boolean;
   consts: Map<string, ts.Expression>;
   imports: Map<string, { module: string; imported: string }>;
   /** The names this file re-exports from another module: `export { X } from './m'`. */
@@ -30,9 +32,11 @@ interface FileShape {
 interface Scope {
   names: ReadonlySet<string>;
   locals: ReadonlyMap<string, ts.Expression>;
+  strings: ReadonlySet<string>;
 }
 
-const NO_SCOPE: Scope = { names: new Set(), locals: new Map() };
+const NO_SCOPE: Scope = { names: new Set(), locals: new Map(), strings: new Set() };
+const LEXICAL_SCOPES = new WeakMap<ts.Node, Scope>();
 
 /** The names the code being evaluated binds at run time: a path part that names one is `{}`, never undecided. */
 type RunTime = ReadonlySet<string>;
@@ -72,7 +76,7 @@ function compareText(a: string, b: string): number {
 
 function describe(path: string, text: string): FileShape {
   const source = ts.createSourceFile(path, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
-  const shape: FileShape = { source, consts: new Map(), imports: new Map(), reexports: new Map(), stars: [], classes: new Map() };
+  const shape: FileShape = { source, bindings: sourceBindings(source), unsafeEncoder: mayOverrideEncoder(source), consts: new Map(), imports: new Map(), reexports: new Map(), stars: [], classes: new Map() };
   for (const statement of source.statements) {
     if (ts.isImportDeclaration(statement) && ts.isStringLiteral(statement.moduleSpecifier)) {
       const module = statement.moduleSpecifier.text;
@@ -316,32 +320,78 @@ function parametersOf(member: ts.Node): RunTime {
 }
 
 function parameterNames(parameters: readonly ts.ParameterDeclaration[]): RunTime {
-  return new Set(parameters.flatMap((parameter) => (ts.isIdentifier(parameter.name) ? [parameter.name.text] : [])));
+  return new Set(parameters.flatMap((parameter) => bindingNames(parameter.name)));
 }
 
-/** The names a member's body declares as variables. */
-function declaredNames(member: ts.Node): RunTime {
-  const held = new Set<string>();
-  const visit = (node: ts.Node): void => {
-    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name)) held.add(node.name.text);
-    ts.forEachChild(node, visit);
-  };
-  visit(member);
-  return held;
+function bindingNames(name: ts.BindingName): string[] {
+  return ts.isIdentifier(name) ? [name.text] : name.elements.flatMap((element) => ts.isBindingElement(element) ? bindingNames(element.name) : []);
 }
 
 /** The names a function or method binds, and what the variables it declares are initialized to. */
 function scopeOf(declaration: ts.MethodDeclaration | ts.FunctionDeclaration | ts.ArrowFunction | ts.FunctionExpression): Scope {
-  return { names: new Set([...parameterNames(declaration.parameters), ...declaredNames(declaration)]), locals: localInitializers(declaration) };
+  const point = declaration.body ?? declaration;
+  return lexicalScope(point, true);
 }
 
 /**
- * The scope the code at a call runs in: the parameters of the method that holds it and the variables that method
- * declares. A name of this scope is a value the code fills at run time, whatever the file also declares with that name.
+ * The lexical bindings visible at a call, with inner declarations taking precedence over outer declarations.
  */
 function scopeOfCall(call: ts.CallExpression): Scope {
-  const enclosing = enclosingMethodDeclaration(call);
-  return enclosing === undefined ? NO_SCOPE : scopeOf(enclosing);
+  return lexicalScope(call);
+}
+
+function lexicalScope(point: ts.Node, includePoint = false): Scope {
+  const node = includePoint ? point : point.parent;
+  if (node === undefined || ts.isSourceFile(node)) return NO_SCOPE;
+  const cached = LEXICAL_SCOPES.get(node);
+  if (cached !== undefined) return cached;
+  const outer = lexicalScope(node);
+  const names = new Set<string>();
+  const locals = new Map<string, ts.Expression>();
+  const strings = new Set<string>();
+  const bind = (name: ts.BindingName, initializer?: ts.Expression, type?: ts.TypeNode): void => {
+    for (const text of bindingNames(name)) {
+      if (names.has(text)) continue;
+      names.add(text);
+      if (ts.isIdentifier(name) && initializer !== undefined) locals.set(text, initializer);
+      if (ts.isIdentifier(name) && type?.kind === ts.SyntaxKind.StringKeyword) strings.add(text);
+    }
+  };
+  if (ts.isBlock(node) || ts.isCaseBlock(node)) {
+    const statements = ts.isBlock(node) ? node.statements : node.clauses.flatMap((clause) => [...clause.statements]);
+    for (const statement of statements) {
+      if (ts.isVariableStatement(statement) && (statement.declarationList.flags & ts.NodeFlags.BlockScoped) !== 0) for (const declaration of statement.declarationList.declarations) bind(declaration.name, declaration.initializer, declaration.type);
+      if ((ts.isFunctionDeclaration(statement) || ts.isClassDeclaration(statement)) && statement.name !== undefined) bind(statement.name);
+    }
+  }
+  if ((ts.isFunctionExpression(node) || ts.isClassExpression(node)) && node.name !== undefined) bind(node.name);
+  if ((ts.isFunctionLike(node) && "parameters" in node) || ts.isClassStaticBlockDeclaration(node)) {
+    if ("parameters" in node) for (const parameter of node.parameters) bind(parameter.name, undefined, parameter.type);
+    const visitVar = (child: ts.Node): void => {
+      if (ts.isFunctionLike(child) || ts.isClassLike(child) || ts.isModuleDeclaration(child)) return;
+      if (ts.isVariableDeclarationList(child) && (child.flags & ts.NodeFlags.BlockScoped) === 0) for (const declaration of child.declarations) bind(declaration.name);
+      ts.forEachChild(child, visitVar);
+    };
+    if ("body" in node && node.body !== undefined) visitVar(node.body);
+  }
+  if (ts.isCatchClause(node) && node.variableDeclaration !== undefined) bind(node.variableDeclaration.name);
+  if ((ts.isForStatement(node) || ts.isForInStatement(node) || ts.isForOfStatement(node)) && node.initializer !== undefined && ts.isVariableDeclarationList(node.initializer)) {
+    for (const declaration of node.initializer.declarations) bind(declaration.name, declaration.initializer, declaration.type);
+  }
+  if (names.size === 0) {
+    LEXICAL_SCOPES.set(node, outer);
+    return outer;
+  }
+  for (const name of outer.names) {
+    if (names.has(name)) continue;
+    names.add(name);
+    const initializer = outer.locals.get(name);
+    if (initializer !== undefined) locals.set(name, initializer);
+    if (outer.strings.has(name)) strings.add(name);
+  }
+  const scope = { names, locals, strings };
+  LEXICAL_SCOPES.set(node, scope);
+  return scope;
 }
 
 /** A call's target, and the request the code states when the snapshot cannot decide where it goes. */
@@ -352,11 +402,15 @@ interface ReadTarget {
 
 /** Reads one file's call sites, resolving the module specifiers it meets through the snapshot. */
 class Reader {
+  private readonly unsafeEncoder: boolean;
+
   constructor(
     private readonly shapes: ReadonlyMap<string, FileShape>,
     private readonly modules: ModuleResolver,
     private readonly wrappers: ReadonlyMap<string, ReadonlySet<string>>,
-  ) {}
+  ) {
+    this.unsafeEncoder = [...shapes.values()].some((shape) => shape.unsafeEncoder);
+  }
 
   async callSite(shape: FileShape, call: ts.CallExpression, repo: string): Promise<CallSite[]> {
     if (this.forwardsItsOwnParameter(shape, call)) return [];
@@ -507,7 +561,7 @@ class Reader {
     }
     if (ts.isIdentifier(expression)) return this.evaluateName(shape, expression.text, scope, trail);
     if (ts.isPropertyAccessExpression(expression)) return this.evaluateProperty(shape, expression, trail);
-    if (ts.isCallExpression(expression)) return this.evaluateCall(shape, expression, trail);
+    if (ts.isCallExpression(expression)) return this.evaluateCall(shape, expression, scope, trail);
     return undefined;
   }
 
@@ -520,7 +574,7 @@ class Reader {
     const local = scope.locals.get(name);
     if (local !== undefined) {
       const visited = `${shape.source.fileName}\0local ${name}`;
-      const held = trail.has(visited) ? undefined : await this.evaluate(shape, local, scope, new Set(trail).add(visited));
+      const held = trail.has(visited) ? undefined : await this.evaluate(shape, local, lexicalScope(local), new Set(trail).add(visited));
       return held ?? RUN_TIME_VALUE;
     }
     if (scope.names.has(name)) return RUN_TIME_VALUE;
@@ -627,8 +681,22 @@ class Reader {
   }
 
   /** A function the call names, evaluated at its one returned expression: its own parameters are the run-time values. */
-  private async evaluateCall(shape: FileShape, call: ts.CallExpression, trail: ReadonlySet<string>): Promise<Evaluation | undefined> {
+  private async evaluateCall(shape: FileShape, call: ts.CallExpression, scope: Scope, trail: ReadonlySet<string>): Promise<Evaluation | undefined> {
     if (!ts.isIdentifier(call.expression)) return undefined;
+    if (scope.names.has(call.expression.text)) return undefined;
+    if (call.expression.text === "encodeURIComponent" && !this.unsafeEncoder && !shape.imports.has(call.expression.text) && !shape.bindings.has(call.expression.text)) {
+      if (call.arguments.length !== 1) return undefined;
+      const argument = call.arguments[0];
+      if (argument === undefined) return undefined;
+      const value = await this.evaluate(shape, argument, scope, trail);
+      if (value?.kind === "value") return ts.isIdentifier(argument) && scope.strings.has(argument.text) ? value : undefined;
+      if (value === undefined || value.text.includes(PLACEHOLDER)) return undefined;
+      try {
+        return stated(encodeURIComponent(value.text));
+      } catch {
+        return undefined;
+      }
+    }
     const found = await this.callTargetOf(shape, call.expression.text);
     return found === undefined ? undefined : this.evaluateReturned(found.target, found.declaration, found.scope, trail);
   }
@@ -657,6 +725,63 @@ class Reader {
     const resolved = await this.modules.resolve(shape.source.fileName, specifier);
     return "file" in resolved ? this.shapes.get(resolved.file) : undefined;
   }
+}
+
+function sourceBindings(source: ts.SourceFile): ReadonlySet<string> {
+  const names = new Set<string>();
+  for (const statement of source.statements) {
+    if (ts.isVariableStatement(statement)) for (const declaration of statement.declarationList.declarations) for (const name of bindingNames(declaration.name)) names.add(name);
+    if ((ts.isFunctionDeclaration(statement) || ts.isClassDeclaration(statement) || ts.isEnumDeclaration(statement) || ts.isModuleDeclaration(statement)) && statement.name !== undefined) names.add(statement.name.text);
+  }
+  const visit = (node: ts.Node): void => {
+    if (ts.isFunctionLike(node) || ts.isClassLike(node) || ts.isModuleDeclaration(node)) return;
+    if (ts.isVariableDeclarationList(node) && (node.flags & ts.NodeFlags.BlockScoped) === 0) for (const declaration of node.declarations) for (const name of bindingNames(declaration.name)) names.add(name);
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+  return names;
+}
+
+function mayOverrideEncoder(source: ts.SourceFile): boolean {
+  const globalNames = new Set(["globalThis", "window", "global", "self"]);
+  const globalObject = (node: ts.Node): node is ts.Expression => {
+    if (ts.isIdentifier(node)) return globalNames.has(node.text);
+    if (ts.isAsExpression(node) || ts.isTypeAssertionExpression(node) || ts.isParenthesizedExpression(node) || ts.isNonNullExpression(node) || ts.isSatisfiesExpression(node)) return globalObject(node.expression);
+    if (ts.isPropertyAccessExpression(node)) return globalObject(node.expression) && globalNames.has(node.name.text);
+    if (ts.isElementAccessExpression(node)) return globalObject(node.expression) && (!ts.isStringLiteralLike(node.argumentExpression) || globalNames.has(node.argumentExpression.text));
+    return false;
+  };
+  const target = (node: ts.Node): boolean => {
+    if (ts.isIdentifier(node)) return node.text === "encodeURIComponent";
+    if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) {
+      if (!globalObject(node.expression)) return false;
+      return ts.isPropertyAccessExpression(node) ? node.name.text === "encodeURIComponent" : !ts.isStringLiteralLike(node.argumentExpression) || node.argumentExpression.text === "encodeURIComponent";
+    }
+    return ts.forEachChild(node, (child) => target(child) || undefined) === true;
+  };
+  const visit = (node: ts.Node): boolean => {
+    if (globalObject(node)) {
+      const directParent = node.parent;
+      if ((ts.isPropertyAccessExpression(directParent) || ts.isPropertyAssignment(directParent) || ts.isVariableDeclaration(directParent)) && directParent.name === node) return false;
+      let reference: ts.Expression = node;
+      while (true) {
+        const parent = reference.parent;
+        if ((ts.isAsExpression(parent) || ts.isTypeAssertionExpression(parent) || ts.isParenthesizedExpression(parent) || ts.isNonNullExpression(parent) || ts.isSatisfiesExpression(parent)) && parent.expression === reference) reference = parent;
+        else if ((ts.isPropertyAccessExpression(parent) || ts.isElementAccessExpression(parent)) && parent.expression === reference && globalObject(parent)) reference = parent;
+        else break;
+      }
+      const parent = reference.parent;
+      const inspected = ts.isTypeOfExpression(parent) || (ts.isBinaryExpression(parent) && parent.operatorToken.kind === ts.SyntaxKind.InKeyword && parent.right === reference);
+      const receiver = (ts.isPropertyAccessExpression(parent) || ts.isElementAccessExpression(parent)) && parent.expression === reference;
+      if (!inspected && !receiver) return true;
+    }
+    if (ts.isBinaryExpression(node) && node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment && node.operatorToken.kind <= ts.SyntaxKind.LastAssignment && target(node.left)) return true;
+    if ((ts.isPrefixUnaryExpression(node) || ts.isPostfixUnaryExpression(node)) && (node.operator === ts.SyntaxKind.PlusPlusToken || node.operator === ts.SyntaxKind.MinusMinusToken) && target(node.operand)) return true;
+    if (ts.isDeleteExpression(node) && target(node.expression)) return true;
+    if ((ts.isForInStatement(node) || ts.isForOfStatement(node)) && !ts.isVariableDeclarationList(node.initializer) && target(node.initializer)) return true;
+    return ts.forEachChild(node, (child) => visit(child) || undefined) === true;
+  };
+  return visit(source);
 }
 
 function firstReturn(node: ts.FunctionDeclaration | ts.ArrowFunction | ts.FunctionExpression): ts.Expression {

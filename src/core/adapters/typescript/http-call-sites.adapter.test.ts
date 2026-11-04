@@ -5,6 +5,114 @@ import { createHttpCallSites } from "./http-call-sites.adapter.ts";
 
 const reader = createHttpCallSites();
 
+test("lexical bindings include destructuring and exclude sibling scopes", async () => {
+  const file = source("scope.ts", [
+    "import { HttpClient } from '@angular/common/http'",
+    "const route = 'outer'",
+    "class Client {",
+    "  constructor(private http: HttpClient) {}",
+    "  load(request: unknown, outer: string) {",
+    "    const { profile, nested: { coordinates } } = request as any",
+    "    const nested = (route: string) => this.http.get(`/api/${route}/${profile}/${coordinates}/${outer}`)",
+    "    { const route = 'sibling'; }",
+    "    this.http.get(`/api/${route}`)",
+    "  }",
+    "}",
+  ].join("\n"));
+  assert.deepEqual(sites(await reader.of([file], "repo")), ["GET /api/{}/{}/{}/{}@scope.ts:7", "GET /api/outer@scope.ts:9"]);
+});
+
+test("encoding global string values and runtime bindings is safe, but shadowed or unknown encoders are not assumed", async () => {
+  const file = source("encoding.ts", [
+    "import { HttpClient } from '@angular/common/http'",
+    "class Client {",
+    " constructor(private http: HttpClient) {}",
+    " load(id: string) {",
+    "  this.http.get(`/api/${encodeURIComponent(id)}`)",
+    "  this.http.get(`/api/${encodeURIComponent('a b')}`)",
+    "  this.http.get(`/api/${encodeURIComponent(missing)}`)",
+    "  { const encodeURIComponent = custom; this.http.get(`/api/${encodeURIComponent(id)}`) }",
+    "  fetch(id)",
+    " }",
+    "}",
+  ].join("\n"));
+  assert.deepEqual(sites(await reader.of([file], "repo")), ["GET /api/{}@encoding.ts:5", "GET /api/a%20b@encoding.ts:6", "unknown unresolved@encoding.ts:7", "unknown unresolved@encoding.ts:8", "unknown unresolved@encoding.ts:9"]);
+});
+
+test("initializers use their own lexical scope rather than a nested caller's shadow", async () => {
+  const file = source("capture.ts", [
+    "import { HttpClient } from '@angular/common/http'",
+    "class Client { constructor(private http: HttpClient) {}",
+    " load() { const prefix = 'outer'; const path = prefix;",
+    "  ((prefix: string) => this.http.get(`/api/${path}`))('inner')",
+    " } }",
+  ].join("\n"));
+  assert.deepEqual(sites(await reader.of([file], "repo")), ["GET /api/outer@capture.ts:4"]);
+});
+
+test("an imported encoder is not treated as the global built-in", async () => {
+  const file = source("imported.ts", [
+    "import { HttpClient } from '@angular/common/http'",
+    "import { encodeURIComponent } from './missing'",
+    "class Client { constructor(private http: HttpClient) {}",
+    " load(id: string) { this.http.get(`/api/${encodeURIComponent(id)}`) } }",
+  ].join("\n"));
+  assert.deepEqual(sites(await reader.of([file], "repo")), ["unknown unresolved@imported.ts:4"]);
+});
+
+test("a named function expression shadows the global encoder inside its own body", async () => {
+  const file = source("named.ts", "const fn = function encodeURIComponent(id: string) { if (id === 'x') return 'custom'; return fetch(`/api/${encodeURIComponent('x')}`) }");
+  assert.deepEqual(sites(await reader.of([file], "repo")), ["unknown unresolved@named.ts:1"]);
+});
+
+test("a written global encoder is not evaluated as the built-in, even from another snapshot module", async () => {
+  const mutation = source("mutation.ts", "encodeURIComponent = () => 'custom';");
+  const direct = source("direct.ts", "fetch(`/api/${encodeURIComponent('x')}`)");
+  assert.deepEqual(sites(await reader.of([mutation, direct], "repo")), ["unknown unresolved@direct.ts:1"]);
+  const property = source("property.ts", "globalThis.encodeURIComponent = () => 'custom'; fetch(`/api/${encodeURIComponent('x')}`)");
+  assert.deepEqual(sites(await reader.of([property], "repo")), ["unknown unresolved@property.ts:1"]);
+  const escape = source("escape.ts", "Object.assign(globalThis, { encodeURIComponent: () => 'custom' }); fetch(`/api/${encodeURIComponent('x')}`)");
+  assert.deepEqual(sites(await reader.of([escape], "repo")), ["unknown unresolved@escape.ts:1"]);
+  const alias = source("alias.ts", "globalThis['window'].encodeURIComponent = () => 'custom'; fetch(`/api/${encodeURIComponent('x')}`)");
+  assert.deepEqual(sites(await reader.of([alias], "repo")), ["unknown unresolved@alias.ts:1"]);
+});
+
+test("a class static block's var does not shadow its enclosing function's route", async () => {
+  const file = source("static.ts", "const route = 'outer'; function load() { class Nested { static { var route = 'inner' } } fetch(`/api/${route}`) }");
+  assert.deepEqual(sites(await reader.of([file], "repo")), ["GET /api/outer@static.ts:1"]);
+});
+
+test("global object inspection and unrelated property names do not count as escaping the global object", async () => {
+  const file = source("read.ts", "typeof window; 'ontouchstart' in globalThis; const position = { global: true }; position.global; (globalThis as any).location; fetch(`/api/${encodeURIComponent('x')}`)");
+  assert.deepEqual(sites(await reader.of([file], "repo")), ["GET /api/x@read.ts:1"]);
+});
+
+test("function-scoped var bindings shadow outer constants outside their block", async () => {
+  const file = source("var.ts", [
+    "import { HttpClient } from '@angular/common/http'",
+    "const route = 'wrong'",
+    "class Client { constructor(private http: HttpClient) {}",
+    " load(value: string) { if (value) { var route = value }",
+    "  this.http.get(`/api/${route}`) } }",
+  ].join("\n"));
+  assert.deepEqual(sites(await reader.of([file], "repo")), ["GET /api/{}@var.ts:5"]);
+});
+
+test("a top-level block var shadows the global encoder and unknown typed arguments stay undecided", async () => {
+  const shadow = source("shadow.ts", [
+    "import { HttpClient } from '@angular/common/http'",
+    "if (true) { var encodeURIComponent = custom }",
+    "class Client { constructor(private http: HttpClient) {}",
+    " load(id: string) { this.http.get(`/api/${encodeURIComponent(id)}`) } }",
+  ].join("\n"));
+  const typed = source("typed.ts", [
+    "import { HttpClient } from '@angular/common/http'",
+    "class Client { constructor(private http: HttpClient) {}",
+    " load(id: unknown) { this.http.get(`/api/${encodeURIComponent(id)}`) } }",
+  ].join("\n"));
+  assert.deepEqual(sites(await reader.of([shadow, typed], "repo")), ["unknown unresolved@shadow.ts:4", "unknown unresolved@typed.ts:3"]);
+});
+
 function source(path: string, content: string): { path: string; content: string } {
   return { path, content };
 }
