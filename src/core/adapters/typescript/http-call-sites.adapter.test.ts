@@ -1,5 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import type { Seed, ReachedEntrypoint } from "../../domain/impact/impact-fact.ts";
+import { handlerKey, reachedBy } from "../../domain/topology/link-graph.ts";
 import type { CallSite } from "../../domain/topology/call-site.ts";
 import { createHttpCallSites } from "./http-call-sites.adapter.ts";
 
@@ -10,6 +12,38 @@ function source(path: string, content: string): { path: string; content: string 
 }
 
 const API = "src/app/core/rest/services/client/rest-client.service.ts";
+
+test("HTTP sites carry their actual named AST ancestors", async () => {
+  const component = source("src/client.ts", ["import { HttpClient } from '@angular/common/http'", "class Client {", "  constructor(private http: HttpClient) {}", "  send() {", "    function nested() {", "      this.http.get('/orders')", "    }", "  }", "}"].join("\n"));
+  const [site] = await reader.of([component], "web");
+  assert.deepEqual(site?.ancestors, [{ symbol: "nested", line: 5, endLine: 7 }, { symbol: "send", line: 4, endLine: 8 }, { symbol: "Client", line: 2, endLine: 9 }]);
+});
+
+test("inbound joins use a named nested function's owner instead of its enclosing method", async () => {
+  const component = source("src/client.ts", [
+    "import { HttpClient } from '@angular/common/http'",
+    "class Client {",
+    "  constructor(private http: HttpClient) {}",
+    "  send() {",
+    "    const nested = () => this.http.get('/orders')",
+    "    const callback = function inner() { return this.http.get('/products') }",
+    "  }",
+    "}",
+  ].join("\n"));
+  const sites = await reader.of([component], "web");
+  const handler = { path: "src/controller.ts", symbol: "Controller.get", line: 3 };
+  const reached: ReachedEntrypoint = { kind: "http-route", name: "GET /orders", handler, depth: 1, confidence: 1, seeds: [0] };
+  const outer: Seed = { file: component.path, symbol: "send", line: 4, endLine: 7, basis: "requested" };
+  assert.deepEqual(sites.map((site) => site.symbol), ["Client.nested", "Client.inner"]);
+  assert.deepEqual(sites[0]?.ancestors?.map((ancestor) => ancestor.symbol), ["nested", "send", "Client"]);
+  assert.deepEqual(sites[1]?.ancestors?.map((ancestor) => ancestor.symbol), ["inner", "callback", "send", "Client"]);
+  assert.equal(reachedBy([outer], [reached], sites).size, 0);
+  for (const [index, symbol] of ["nested", "inner"].entries()) {
+    const line = index + 5;
+    const seed: Seed = { ...outer, symbol, line, endLine: line };
+    assert.deepEqual(reachedBy([seed], [reached], sites).get(handlerKey(handler)), [sites[index]]);
+  }
+});
 
 /** The rest client of a project: its methods take the path and reach `HttpClient`, so they are wrappers. */
 const REST_CLIENT = [

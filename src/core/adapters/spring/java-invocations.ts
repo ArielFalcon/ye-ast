@@ -4,6 +4,7 @@ import { externalNames, namedChildren, scopeOf, type JavaProject, type TypeDecl 
 import type { UrlText } from "./url-text.ts";
 
 export const NO_VARIABLES: ReadonlyMap<string, Binding> = new Map();
+const DECLARATIONS: ReadonlySet<string> = new Set(["class_declaration", "interface_declaration", "enum_declaration", "record_declaration", "annotation_type_declaration", "method_declaration", "constructor_declaration", "compact_constructor_declaration"]);
 
 /** One method call, with the type and member it is written in and the names that member declares. */
 export interface Invocation {
@@ -35,6 +36,16 @@ export function invocationsOf(type: TypeDecl): Invocation[] {
 export function symbolOf({ type, member }: Invocation): string {
   const name = member?.type === "method_declaration" ? member.childForFieldName("name")?.text : undefined;
   return name === undefined ? type.qualifiedName : `${type.qualifiedName}.${name}`;
+}
+
+export function ancestorsOf(node: Node): { symbol: string; line: number; endLine: number }[] {
+  const ancestors: { symbol: string; line: number; endLine: number }[] = [];
+  for (let current: Node | null = node; current !== null; current = current.parent) {
+    if (!DECLARATIONS.has(current.type)) continue;
+    const name = current.childForFieldName("name")?.text;
+    if (name !== undefined) ancestors.push({ symbol: name, line: current.startPosition.row + 1, endLine: current.endPosition.row + 1 });
+  }
+  return ancestors;
 }
 
 export function parametersOf(member: Node): string[] {

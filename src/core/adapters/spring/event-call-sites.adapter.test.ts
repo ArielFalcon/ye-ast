@@ -8,6 +8,12 @@ const SERVICE = "org.springframework.stereotype.Service";
 
 let reader: CallSiteReader;
 
+test("Java event sites carry their actual named AST ancestors", async () => {
+  const client = java("Orders", ["class Orders {", "  KafkaTemplate<String, String> kafka;", "  void send() {", "    kafka.send(\"orders\", \"x\");", "  }", "}"].join("\n"), ["org.springframework.kafka.core.KafkaTemplate"]);
+  const [site] = await reader.of([client], "orders-svc");
+  assert.deepEqual(site?.ancestors, [{ symbol: "send", line: 5, endLine: 7 }, { symbol: "Orders", line: 3, endLine: 8 }]);
+});
+
 before(async () => {
   reader = createJavaEventCallSites(await createJavaParser());
 });

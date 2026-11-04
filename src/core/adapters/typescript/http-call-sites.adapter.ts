@@ -364,7 +364,7 @@ class Reader {
     if (read === undefined) return [];
     const start = shape.source.getLineAndCharacterOfPosition(call.getStart(shape.source)).line + 1;
     const end = shape.source.getLineAndCharacterOfPosition(call.getEnd()).line + 1;
-    return [{ repo, file: shape.source.fileName, line: start, endLine: end, symbol: symbolOf(call) ?? "(top level)", transport: "http", target: read.target, ...(read.stated === undefined ? {} : { stated: read.stated }) }];
+    return [{ repo, file: shape.source.fileName, line: start, endLine: end, symbol: symbolOf(call) ?? "(top level)", ancestors: ancestorsOf(call, shape.source), transport: "http", target: read.target, ...(read.stated === undefined ? {} : { stated: read.stated }) }];
   }
 
   /**
@@ -746,11 +746,22 @@ function textOf(evaluation: Evaluation | undefined): string | undefined {
   return evaluation?.kind === "text" ? evaluation.text : undefined;
 }
 
+function ancestorsOf(node: ts.Node, source: ts.SourceFile): { symbol: string; line: number; endLine: number }[] {
+  const ancestors: { symbol: string; line: number; endLine: number }[] = [];
+  for (let current: ts.Node | undefined = node.parent; current !== undefined; current = current.parent) {
+    if (!(ts.isClassDeclaration(current) || ts.isClassExpression(current) || ts.isMethodDeclaration(current) || ts.isPropertyDeclaration(current) || ts.isFunctionDeclaration(current) || ts.isFunctionExpression(current) || ts.isVariableDeclaration(current))) continue;
+    const name = current.name;
+    if (name === undefined || !ts.isIdentifier(name)) continue;
+    ancestors.push({ symbol: name.text, line: lineOf(source, current), endLine: source.getLineAndCharacterOfPosition(current.getEnd()).line + 1 });
+  }
+  return ancestors;
+}
+
 function symbolOf(node: ts.Node): string | undefined {
   let className: string | undefined;
   let member: string | undefined;
   for (let current: ts.Node | undefined = node; current !== undefined; current = current.parent) {
-    if (member === undefined && (ts.isMethodDeclaration(current) || ts.isPropertyDeclaration(current) || ts.isFunctionDeclaration(current) || ts.isArrowFunction(current)) && "name" in current) {
+    if (member === undefined && (ts.isMethodDeclaration(current) || ts.isPropertyDeclaration(current) || ts.isFunctionDeclaration(current) || ts.isFunctionExpression(current) || (ts.isVariableDeclaration(current) && current.initializer !== undefined && (ts.isArrowFunction(current.initializer) || ts.isFunctionExpression(current.initializer))))) {
       const name = current.name;
       if (name !== undefined && ts.isIdentifier(name)) member = name.text;
       else if (ts.isFunctionDeclaration(current)) member = current.name?.text;

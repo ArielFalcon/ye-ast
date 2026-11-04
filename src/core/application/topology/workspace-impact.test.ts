@@ -98,9 +98,9 @@ function walkAnswer(model: readonly WalkModel[], targets: readonly CallersTarget
     return at === undefined ? [] : [{ target, at }];
   });
   const seeds: Seed[] = [
-    ...new Map(found.map(({ target, at }) => [`${target.file}\0${at.symbol}`, { file: target.file, symbol: at.symbol, line: at.declaration, basis: "requested" as const }])).values(),
+    ...new Map(found.map(({ target, at }) => [`${target.file}\0${at.symbol}`, { file: target.file, symbol: at.symbol.split(".").at(-1)!, line: at.declaration, endLine: target.end, basis: "requested" as const }])).values(),
   ].sort((a, b) => compareText(a.file, b.file) || a.line - b.line || compareText(a.symbol, b.symbol));
-  const seedOf = (target: { file: string }, at: WalkModel): number => seeds.findIndex((seed) => seed.file === target.file && seed.symbol === at.symbol);
+  const seedOf = (target: { file: string }, at: WalkModel): number => seeds.findIndex((seed) => seed.file === target.file && seed.symbol === at.symbol.split(".").at(-1));
   const entrypoints = found.flatMap(({ target, at }) => at.entrypoints.map((entrypoint) => ({ ...entrypoint, seeds: [seedOf(target, at)] })));
   return { cost: { expansionsUsed: 0 }, seeds, symbols: [], entrypoints };
 }
@@ -421,7 +421,7 @@ test("a change sends links onward downstream, each link's reach naming the links
       orders: { entrypoints: [routeOf(ORDER_CONTROLLER, "POST", "/orders")], callSites: [callSite("orders", "payments/charges", "POST", 7)] },
       payments: { entrypoints: [routeOf(CHARGES, "POST", "/charges")] },
     },
-    trigger: impactOf([], { seeds: [{ file: "src/app/webapp.api.ts", symbol: "webapp.call9", line: 9, basis: "lines" }] }),
+    trigger: impactOf([], { seeds: [{ file: "src/app/webapp.api.ts", symbol: "call9", line: 9, basis: "lines" }] }),
     reached: { orders: [{ line: 7, declaration: 3, symbol: "orders.call7", entrypoints: [reachedRoute(ORDER_CONTROLLER, "POST", "/orders")] }] },
   });
 
@@ -539,7 +539,7 @@ test("a link both directions reach enters the answer once, with the nearest reac
       orders: { entrypoints: [routeOf(ORDER_CONTROLLER, "POST", "/orders")], callSites: [callSite("orders", "webapp/orders", "GET", 9)] },
       webapp: { entrypoints: [routeOf(ORDER_PAGE, "GET", "/orders")], callSites: [callSite("webapp", "orders-api/orders", "POST", 7)] },
     },
-    trigger: impactOf([reachedRoute(ORDER_CONTROLLER, "POST", "/orders")], { seeds: [{ file: "src/app/orders.api.ts", symbol: "orders.call9", line: 9, basis: "lines" }] }),
+    trigger: impactOf([reachedRoute(ORDER_CONTROLLER, "POST", "/orders")], { seeds: [{ file: "src/app/orders.api.ts", symbol: "call9", line: 9, basis: "lines" }] }),
     reached: { webapp: [{ line: 7, declaration: 2, symbol: "webapp.call7", entrypoints: [reachedRoute(ORDER_PAGE, "GET", "/orders")] }] },
   });
 

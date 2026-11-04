@@ -6,7 +6,7 @@ import type { Configuration } from "./application-config.ts";
 import { EVENT_CLIENT_NAME, PUBLISH_CLIENTS, PUBLISH_METHOD_NAME, type PublishClient } from "./event-vocabulary.ts";
 import { complete, spanOf, unknownAtNode, withEvidence } from "./findings.ts";
 import { argumentsOf, typeNameOf } from "./java-members.ts";
-import { holdersOf, invocationsOf, parametersOf, receiverOf, referencesParameter, symbolOf, type Invocation } from "./java-invocations.ts";
+import { ancestorsOf, holdersOf, invocationsOf, parametersOf, receiverOf, referencesParameter, symbolOf, type Invocation } from "./java-invocations.ts";
 import { isPlatformName, qualifiedTypeName, scopeOf, type JavaFile, type JavaProject, type TypeDecl } from "./java-symbols.ts";
 import { PLACEHOLDER, UrlText, type UrlScope } from "./url-text.ts";
 
@@ -76,7 +76,7 @@ export class JavaEventReader {
 
   private siteOf(repo: string, invocation: Invocation, target: Finding<EventTarget>): CallSite {
     const span = spanOf(invocation.type.file.path, invocation.node);
-    return { repo, file: span.path, line: span.line, ...(span.endLine === span.line ? {} : { endLine: span.endLine }), symbol: symbolOf(invocation), transport: "event", target: withEvidence(target, span) };
+    return { repo, file: span.path, line: span.line, ...(span.endLine === span.line ? {} : { endLine: span.endLine }), symbol: symbolOf(invocation), ancestors: ancestorsOf(invocation.node), transport: "event", target: withEvidence(target, span) };
   }
 
   /** The publish a call makes, when its receiver is a client the vocabulary knows and its method names a destination. */

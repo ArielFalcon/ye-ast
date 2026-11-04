@@ -1,6 +1,7 @@
 import type { Handler } from "../entrypoints/http-route.ts";
 import type { ReachedEntrypoint, Seed } from "../impact/impact-fact.ts";
-import { compareText } from "../shared/code-node.ts";
+import { nameTail } from "../impact/impact-cuts.ts";
+import { compareText, joinsFact } from "../shared/code-node.ts";
 import type { CallSite } from "./call-site.ts";
 import { compareLink, type ImpactedLink, type Reach } from "./link.ts";
 import type { JoinResult } from "./link-match.ts";
@@ -74,15 +75,15 @@ export function admitUpstream(graph: LinkGraph, joined: readonly JoinedSite[]): 
 /**
  * What a walk from a batch of call sites reached, by handler: the call sites whose walk leads to it. A seed is the
  * declaration the walk was asked about, and a call site states the declaration it is written in, so the two join on
- * their file and simple name.
+ * their file, declaration span and simple name.
  */
 export function reachedBy(seeds: readonly Seed[], entrypoints: readonly ReachedEntrypoint[], sites: readonly CallSite[]): Map<string, CallSite[]> {
-  const byPlace = Map.groupBy(sites, (site) => `${site.file}\0${site.symbol}`);
+  const byFile = Map.groupBy(sites, (site) => site.file);
   const reached = new Map<string, CallSite[]>();
   for (const entrypoint of entrypoints) {
     const leading = entrypoint.seeds.flatMap((index) => {
       const seed = seeds[index];
-      return seed === undefined ? [] : (byPlace.get(`${seed.file}\0${seed.symbol}`) ?? []);
+      return seed === undefined ? [] : (byFile.get(seed.file) ?? []).filter((site) => siteJoinsSeed(seed, site));
     });
     if (leading.length === 0) continue;
     const key = handlerKey(entrypoint.handler);
@@ -144,11 +145,16 @@ export function admitDownstream(graph: DownstreamGraph, joined: readonly JoinedS
   return { links, fed };
 }
 
+function siteJoinsSeed(seed: Seed, site: CallSite): boolean {
+  return joinsFact({ file: seed.file, name: nameTail(seed.symbol), startLine: seed.line, endLine: seed.endLine ?? seed.line }, { path: site.file, line: site.line, symbol: site.symbol });
+}
+
 /** The call sites inside the symbols a change touched, the change itself as the reach that sends each onward. */
 export function changeEgress(trigger: string, seeds: readonly Seed[], sites: readonly CallSite[]): Map<string, Reach> {
   return new Map(
     sites
-      .filter((site) => site.repo === trigger && seeds.some((seed) => seed.file === site.file && seed.symbol === site.symbol))
+      .filter((site) => site.repo === trigger && seeds.some((seed) => siteJoinsSeed(seed, site) || (site.ancestors ?? []).some((ancestor) =>
+        joinsFact({ file: seed.file, name: nameTail(seed.symbol), startLine: seed.line, endLine: seed.endLine ?? seed.line }, { path: site.file, line: ancestor.line, symbol: ancestor.symbol }) && ancestor.endLine <= (seed.endLine ?? seed.line))))
       .map((site) => [callSiteKey(site), [] as Reach]),
   );
 }
