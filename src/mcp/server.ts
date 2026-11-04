@@ -1,5 +1,6 @@
 import { McpServer, type CallToolResult } from "@modelcontextprotocol/server";
 import { z } from "zod";
+import { responseModeSchema, type ResponseMode, type ResponseRenderer } from "./presentation.ts";
 import type { ImpactBudget } from "../core/domain/impact/impact-fact.ts";
 import { TRUST_MODES, WALK_BOUND_FIELDS, type WalkBoundsField } from "../core/domain/shared/fact.ts";
 import type { Cut, Fact } from "../core/domain/shared/fact.ts";
@@ -15,7 +16,7 @@ import type { WorkspaceRepositoryRequest } from "../core/ports/workspace-repos.p
 import type { FactRead, WorkspaceQueries, WorkspaceRefresh, WorkspaceValue } from "../core/ports/workspace-queries.port.ts";
 import type { WorkspaceImpactQueries } from "../core/ports/workspace-impact-queries.port.ts";
 import type { DecisionQueries } from "../core/ports/decision-queries.port.ts";
-import { renderDecisions, renderEntrypointMap, renderFault, renderImpact, renderImporters, renderOutline, renderRefresh, renderStale, renderStructuredImporters, renderWorkspace, renderWorkspaceImpact, type Detail } from "./render.ts";
+import { renderDecisions, renderEntrypointMap, renderFault, renderImpact, renderImporters, renderOutline, renderRefresh, renderStale, renderWorkspace, renderWorkspaceImpact } from "./render.ts";
 
 /** The key of the result's `_meta` that carries a stale notice. */
 export const LIVE_META = "ye-ast/live";
@@ -72,21 +73,19 @@ Snapshots and repositories:
 - Local queries default to HEAD. Use revision, or head on impact, to select a committed snapshot. For trusted working-tree edits use live: true instead; it excludes revision/head, workspace and offline. Impact still requires base.
 - Without workspace, callers and impact cover the bound repository only. workspace: {} enables the persisted workspace when available; workspace.repos supplies other local clones explicitly. workspace and decisions also accept repos directly. Untrusted repositories cannot supply their own workspace defaults. Repositories not included are not read, and missing clones are not downloaded.
 - Workspace queries use each repository's snapshot and trust declaration. A trusted repository's persisted remote may be refreshed into an engine-owned mirror; request arguments cannot authorize a new remote. offline: true prevents refresh and reads local clones. Inspect remote freshness, revision resolution and section/read limits before relying on a cross-repository result.
-- Local evidence paths are relative to the bound root; workspace evidence is relative to its owning repository. Use repositoryRoots (printed as repository root lines) to locate declared clones, never the process working directory. Evidence refers to the recorded snapshot; local files may have different content or line numbers.
+- Local evidence paths are relative to the bound root; workspace evidence is relative to its owning repository. Use repositoryRoots (printed as repository root lines) to locate declared clones, never the process working directory. A foreign callers/outline coordinate needs a server bound to that clone; there is no repo selector. Evidence refers to the recorded snapshot; local files may have different content or line numbers.
 
 Coverage and detail:
 - complete means complete within inputs.declaredScope, supported languages/frameworks and any change selection; partial retains known results with cuts; unknown has a reason and never means no impact. Composite sections and reads can have their own limits. Read these before concluding that nothing depends on a change.
 - scope.include/exclude changes coverage, not just presentation; exclude wins. Interpretation files such as manifests remain available under include but can be excluded explicitly. TypeScript test files are not indexed. Component template binding uses are not resolved; inspect relevant tests or templates separately.
 - On impact, changed selects diff paths that seed the walk while callers elsewhere within scope remain eligible. For example, changed: ["src/api/**"] limits the change being investigated; scope would also limit where its consequences can be found. A changed glob matching no changed path is an error.
-- Start with detail: "summary" (default) to identify findings and material limitations. On impact/callers, detail: "full" adds compact recorded evidence and localized cuts for investigation; it is not an exhaustive listing. Use full: true for every recorded seed, symbol, origin association and cut location in structuredContent. Other tools retain their existing text detail. These selectors change presentation, not coverage or walk budgets; a focused callers query answers a related question, not a filter over the original impact.
-- On importers, summary counts disjoint file groups when shorter; detail: "full" lists each related path once per target and marks overlapping unresolved name matches.
+- Select mode directly: "summary" (default) identifies findings and limitations; "details" adds recorded explanatory evidence and locations; "full" returns the complete redacted public fact in structuredContent and a brief contextual guide in text. Text modes return a strict receipt with mode, status, snapshot and reason only when unknown. Modes do not change coverage, snapshots or traversal. A client may expose both text and structured content to a model.
 - budget limits traversal work, not response length. depth counts incoming dependency levels, not hops between services. To reproduce an impact answer for more detail, reuse its recorded head SHA and base; a workspace also needs each repository pinned to its recorded revision. A live answer can change between calls.
-- Text carries the answer. Structured content normally carries its envelope and transport metadata, without the value or cut locations. full: true additionally includes the entire structured fact. On importers it replaces the text listing with a short acknowledgment; other tools leave text unchanged; use it only when that payload is needed.
-- Impact/callers text ends with an investigation guide adapted to the recorded data: full JSON paths are relative to structuredContent, origin indexes join within one walk, and workspace links use IDs rather than display numbers. Follow its snapshot and coverage context when choosing the next query. Fault responses explain an applicable correction or the prerequisite to inspect before retrying.
+- When useful, impact/callers text includes an investigation guide adapted to the recorded data: full JSON paths are relative to structuredContent, origin indexes join within one walk, and workspace links use IDs rather than display numbers. Follow its snapshot and coverage context when choosing the next query. Fault responses explain an applicable correction or the prerequisite to inspect before retrying.
 
 Reading evidence and faults:
 - A span such as src/a.ts:3-9 identifies a declaration. In an incoming walk, via src/b.ts:B.user at 14, 21 identifies dependency locations in the reached symbol's own file; a reference is not necessarily a call or a place requiring edits. A relation with no line has no recorded call-site location. confidence describes edge resolution, not change safety; fan-in counts calling or instantiating places.
-- A shared via heading applies to the declarations indented beneath it; locations still belong to their file. Workspace links locate both ends; reach lists the displayed link numbers in recorded order, nearest to the change first. It does not assert an unrecorded path within a repository. An entrypoint's verified origin is one recorded association, not a complete call chain or a nearest-origin ranking; full: true preserves all recorded associations in structuredContent.
+- A shared via heading applies to the declarations indented beneath it; locations still belong to their file. Workspace links locate both ends; reach lists the displayed link numbers in recorded order, nearest to the change first. It does not assert an unrecorded path within a repository. An entrypoint's verified origin is one recorded association, not a complete call chain or a nearest-origin ranking; mode: "full" preserves all recorded associations in structuredContent.
 - Cuts may be grouped in summary, listed at the end or described under their workspace repository. Unknown sections name their reasons. For no-project, the source lacks a package.json that places it in a project, so route classification is unknown.
 - isError names a fault, not an empty fact. For unknown-symbol use an actual declaration or a line range; for unknown-change-path correct changed. For live-requires-trusted use a committed revision unless the user declares trust through ye-ast init --trust trusted; repository content cannot grant trust.
 
@@ -130,7 +129,7 @@ const BUDGET_FIELDS: Readonly<Record<WalkBoundsField, z.ZodOptional<z.ZodNumber>
 const budget = z
   .strictObject(BUDGET_FIELDS)
   .optional()
-  .describe("Optional walk bounds; these three bounds are unset by default. Set them to limit traversal work, not response bytes or tokens; a stopped branch reports a cut. detail changes presentation instead.");
+  .describe("Optional walk bounds; these three bounds are unset by default. Set them to limit traversal work, not response bytes or tokens; a stopped branch reports a cut. mode changes presentation instead.");
 
 const workspaceRepo = z.strictObject({
   path: z.string().min(1).describe("Root path of an existing local Git clone; this does not clone a repository or authorize remote refresh."),
@@ -166,16 +165,6 @@ const workspace = z
   .optional()
   .describe("Enable cross-repository traversal. Omit for a local answer; {} uses eligible persisted repositories/gateways, or only the bound repository when none exist. An explicit repos list selects other clones. Includes incoming call-site links; impact also follows outgoing links. Uses committed snapshots and excludes live: true.");
 
-const detail = z
-  .enum(["summary", "full"] satisfies Detail[])
-  .optional()
-  .describe("Text presentation only. On impact/callers, summary (default) identifies consequences and counts supporting records; full adds compact recorded evidence and cut anchors for investigation, not an exhaustive listing. Other tools retain their existing summary/full text. Neither expands traversal nor adds the structured fact; use full: true for every public recorded item. On importers, summary counts disjoint file groups when shorter; full lists related paths with pending matches grouped separately.");
-
-const full = z
-  .boolean()
-  .optional()
-  .describe("Include the entire public fact in structuredContent, with every recorded seed, symbol, association and cut place. Use for exhaustive inspection or filtering; compact impact/callers text does not list every item even with detail: full. On importers this replaces the text listing with a short acknowledgment; other tools leave text unchanged. It does not extend coverage.");
-
 const globs = z
   .array(z.string().refine(isValidGlob, "a glob is relative to the repository root, with / separators and no empty, . or .. segment"))
   .min(1)
@@ -186,7 +175,7 @@ const scope = z
     exclude: globs.describe("Paths matching one of these globs are left out, even when included."),
   })
   .optional()
-  .describe("Coverage restriction using repository-relative globs; all paths when omitted, exclude wins. include retains configuration needed to interpret sources; exclude can remove it too. Callers and entrypoints outside scope are unknown. For shorter text use detail; on impact use changed to select seeds without excluding callers.");
+  .describe("Coverage restriction using repository-relative globs; all paths when omitted, exclude wins. include retains configuration needed to interpret sources; exclude can remove it too. Callers and entrypoints outside scope are unknown. For shorter text use mode: summary; on impact use changed to select seeds without excluding callers.");
 
 /** The scope the caller set, or nothing, so a query receives no scope it was not given. */
 function scopeOf(requested: z.infer<typeof scope>): { scope?: ScopeRequest } {
@@ -215,52 +204,95 @@ const target = z.union([
 
 const evidence = z.looseObject({ path: z.string(), line: z.int() });
 
-/** The fact envelope every tool answers; `value` is the family's own shape, rendered in the text content. */
-const FACT_OUTPUT = z.looseObject({
-  schema: z.string().describe("The schema version of the fact."),
-  snapshot: z.looseObject({ repo: z.string(), kind: z.enum(["sha", "live"]) }).describe("The revision (sha) or working-tree state (live) the fact read."),
-  producer: z.looseObject({ name: z.string(), version: z.string() }),
-  inputs: z
-    .looseObject({ trust: z.enum(TRUST_MODES), declaredScope: z.looseObject({ languages: z.array(z.string()).readonly(), frameworks: z.array(z.string()).readonly() }) })
-    .describe("What decided the fact; declaredScope is what completeness is relative to."),
-  evidence: z.array(evidence).readonly().describe("Repo-relative path:line locations the fact rests on."),
-  status: z.enum(["complete", "partial", "unknown"]),
-  value: z.unknown().optional().describe("The complete structured payload, included only with full: true when status is not unknown."),
-  cuts: z
-    .array(z.looseObject({ kind: z.string(), at: z.array(z.string()).readonly() }))
-    .readonly()
-    .optional()
-    .describe("Where a partial answer stops, and why."),
-  reason: z.string().optional().describe("Why an unknown answer cannot tell."),
-  repositoryRoots: z
-    .array(z.strictObject({ repo: z.string(), path: z.string() }))
-    .readonly()
-    .optional()
-    .describe("Local clone paths for the repository ids in a workspace answer. Transport metadata, outside the fact; evidence still refers to the recorded snapshot."),
-  freshness: z
-    .array(z.looseObject({ repo: z.string(), url: z.string(), freshness: z.looseObject({ status: z.enum(["verified", "unverified"]), reason: z.enum(["failed", "deadline", "offline", "refresh-in-progress"]).optional(), lastVerifiedAt: z.string().optional(), detail: z.string().optional() }) }))
-    .readonly()
-    .optional()
-    .describe("Present only when the query refreshed a declared remote: per remote, whether this query verified it and, when it did not, why and what git said. A sibling of the fact, never a field of it."),
-  resolution: z
-    .array(
-      z.looseObject({
-        repo: z.string(),
-        asked: z.string().optional(),
-        step: z.enum(["explicit", "trigger-line", "default-branch", "revision-unavailable"]),
-        consulted: z.array(z.looseObject({ branch: z.string(), sha: z.string().optional() })).readonly(),
-        tie: z.array(z.string()).readonly().optional(),
-        sha: z.string().optional(),
-      }),
-    )
-    .readonly()
-    .optional()
-    .describe("Present only when the query refreshed a declared remote: per repository, what was asked, the rule step that chose its sha, the refs consulted and the sha pinned. A sibling of the fact, never a field of it."),
-  live: z
-    .looseObject({ stateId: z.string(), changed: z.array(z.string()).readonly() })
-    .optional()
-    .describe("Present only when the working tree moved after this answer was built: the state the answer reflects and the paths that changed since. A sibling of the fact, never a field of it."),
+const snapshot = z.discriminatedUnion("kind", [
+  z.looseObject({ repo: z.string(), kind: z.literal("sha"), sha: z.string() }),
+  z.looseObject({ repo: z.string(), kind: z.literal("live"), head: z.string(), stateId: z.string() }),
+]);
+const cut = z.looseObject({ kind: z.string(), at: z.array(z.string()) });
+const baseFact = {
+  schema: z.string(), snapshot, producer: z.looseObject({ name: z.string(), version: z.string() }),
+  inputs: z.looseObject({ trust: z.enum(TRUST_MODES), declaredScope: z.looseObject({ languages: z.array(z.string()), frameworks: z.array(z.string()) }) }),
+  evidence: z.array(evidence),
+};
+const sidecars = {
+  repositoryRoots: z.array(z.looseObject({ repo: z.string(), path: z.string() })).optional(),
+  freshness: z.array(z.looseObject({ repo: z.string(), url: z.string(), freshness: z.looseObject({ status: z.enum(["verified", "unverified"]) }) })).optional(),
+  resolution: z.array(z.looseObject({ repo: z.string(), step: z.string(), consulted: z.array(z.looseObject({ branch: z.string() })) })).optional(),
+  live: z.looseObject({ stateId: z.string(), changed: z.array(z.string()) }).optional(),
+};
+const receipt = z.discriminatedUnion("status", [
+  z.strictObject({ mode: z.enum(["summary", "details"]), status: z.literal("complete"), snapshot }),
+  z.strictObject({ mode: z.enum(["summary", "details"]), status: z.literal("partial"), snapshot }),
+  z.strictObject({ mode: z.enum(["summary", "details"]), status: z.literal("unknown"), snapshot, reason: z.string() }),
+]);
+const factOf = (value: z.ZodType) => z.discriminatedUnion("status", [
+  z.looseObject({ ...baseFact, status: z.literal("complete"), value }),
+  z.looseObject({ ...baseFact, status: z.literal("partial"), value, cuts: z.array(cut).min(1) }),
+  z.looseObject({ ...baseFact, status: z.literal("unknown"), reason: z.string() }).refine((f) => !("value" in f)).meta({ not: { required: ["value"] } }),
+]);
+const provenance = z.discriminatedUnion("status", [
+  z.looseObject({ ...baseFact, status: z.literal("complete") }),
+  z.looseObject({ ...baseFact, status: z.literal("partial"), cuts: z.array(cut).min(1) }),
+  z.looseObject({ ...baseFact, status: z.literal("unknown"), reason: z.string() }),
+]);
+const strings = z.array(z.string());
+const position = z.looseObject({ file: z.string(), symbol: z.string(), line: z.number() });
+const handler = z.looseObject({ path: z.string(), symbol: z.string(), line: z.number() });
+const impact = z.looseObject({
+  seeds: z.array(position), symbols: z.array(position),
+  entrypoints: z.array(z.looseObject({ handler, seeds: z.array(z.number()) })),
+  cost: z.looseObject({ expansionsUsed: z.number() }),
+  modules: z.looseObject({ origins: z.array(z.looseObject({ file: z.string(), change: z.string() })), modules: z.array(z.looseObject({ file: z.string(), snapshot: z.string(), depth: z.number(), origins: z.array(z.number()) })), cost: z.looseObject({ expansionsUsed: z.number() }) }).optional(),
 });
+const snapshots = z.array(z.looseObject({ repo: z.string(), snapshot }));
+const workspaceIdentity = z.looseObject({ repos: strings, source: z.string() });
+const callTarget = z.discriminatedUnion("status", [
+  z.looseObject({ status: z.literal("complete"), value: z.union([
+    z.looseObject({ method: z.string(), path: z.string() }),
+    z.looseObject({ protocol: z.enum(["kafka", "rabbit", "jms", "event", "nats"]), destination: z.string(), role: z.literal("publish") }),
+  ]), evidence: z.array(evidence) }),
+  z.looseObject({ status: z.literal("unknown"), reason: z.string(), evidence: z.array(evidence) }).refine((target) => !("value" in target)).meta({ not: { required: ["value"] } }),
+]);
+const callSite = z.looseObject({ repo: z.string(), file: z.string(), line: z.number(), symbol: z.string(), transport: z.enum(["http", "event"]), target: callTarget });
+const workspaceImpact = z.looseObject({ workspace: workspaceIdentity, repositorySnapshots: snapshots, trigger: z.looseObject({ repo: z.string() }), sections: z.record(z.string(), factOf(z.looseObject({ reads: z.array(z.looseObject({ kind: z.string(), fact: provenance })), impact: impact.optional(), callSites: z.array(callSite), unmatched: z.array(callSite), external: z.array(callSite) }))), links: z.array(z.looseObject({ link: z.looseObject({ id: z.string(), from: z.looseObject({ repo: z.string(), file: z.string(), symbol: z.string(), line: z.number() }), to: z.looseObject({ repo: z.string(), name: z.string(), handler }) }), direction: z.string(), reach: strings })) });
+const repositoryEvidence = z.looseObject({ repo: z.string(), path: z.string(), line: z.number() });
+const outwardName = z.looseObject({ name: z.string(), kind: z.string(), evidence: z.array(evidence) });
+const repoOutwardName = z.looseObject({ name: z.string(), kind: z.string(), evidence: z.array(repositoryEvidence) });
+const candidate = z.looseObject({ name: z.string(), repo: z.string(), basis: z.string(), evidence: z.array(repositoryEvidence) });
+const decision = z.looseObject({ id: z.string(), kind: z.string(), subject: z.string(), evidence: z.array(repositoryEvidence), options: z.array(z.looseObject({ value: z.string(), evidence: z.array(repositoryEvidence), recommended: z.boolean() })), allowsFreeText: z.boolean(), required: z.boolean() });
+const entrypoint = z.discriminatedUnion("kind", [
+  z.looseObject({ kind: z.enum(["http-route", "listener", "job"]), name: z.string(), handler }),
+  z.looseObject({ kind: z.literal("ui-route"), name: z.string(), component: z.union([handler, z.literal("unknown")]) }),
+]);
+const finding = z.discriminatedUnion("status", [
+  z.looseObject({ status: z.literal("complete"), value: entrypoint, evidence: z.array(evidence) }),
+  z.looseObject({ status: z.literal("unknown"), reason: z.string(), evidence: z.array(evidence) }).refine((item) => !("value" in item)).meta({ not: { required: ["value"] } }),
+]);
+const shapes = {
+  entrypoints: z.looseObject({ entrypoints: factOf(z.array(finding)) }),
+  impact: z.union([impact, workspaceImpact]),
+  importers: z.looseObject({ files: z.array(z.looseObject({ file: z.string(), importers: strings, users: strings, unresolvedNamers: strings })) }),
+  outline: z.looseObject({ files: z.array(z.looseObject({ file: z.string(), declarations: z.array(z.looseObject({ kind: z.string(), name: z.string(), line: z.number(), endLine: z.number() })), imports: strings })), unheld: strings }),
+  workspace: z.looseObject({ workspace: workspaceIdentity, repositorySnapshots: snapshots, sections: z.record(z.string(), factOf(z.looseObject({ names: z.array(outwardName), unresolved: z.array(z.looseObject({ path: z.string(), line: z.number(), symbol: z.string() })) }))), candidates: z.array(candidate), unserved: z.array(repoOutwardName) }),
+  decisions: z.looseObject({ decisions: z.array(decision), repositories: snapshots, source: z.string() }),
+};
+/** Validate the envelope and public containers used by navigation; domain unions remain owned by the core. */
+function outputFor(value: z.ZodType) {
+  const full = z.discriminatedUnion("status", [
+    z.looseObject({ ...baseFact, ...sidecars, mode: z.literal("full"), status: z.literal("complete"), value }),
+    z.looseObject({ ...baseFact, ...sidecars, mode: z.literal("full"), status: z.literal("partial"), value, cuts: z.array(cut).min(1) }),
+    z.looseObject({ ...baseFact, ...sidecars, mode: z.literal("full"), status: z.literal("unknown"), reason: z.string() }).refine((f) => !("value" in f)).meta({ not: { required: ["value"] } }),
+  ]);
+  const branches = z.union([receipt, full]);
+  const json = z.toJSONSchema(branches, { target: "draft-7" });
+  return z.looseObject({}).refine((result) => branches.safeParse(result).success).meta({ anyOf: json.anyOf });
+}
+export const ENTRYPOINTS_OUTPUT = outputFor(shapes.entrypoints);
+export const IMPACT_OUTPUT = outputFor(shapes.impact);
+export const IMPORTERS_OUTPUT = outputFor(shapes.importers);
+export const OUTLINE_OUTPUT = outputFor(shapes.outline);
+export const WORKSPACE_OUTPUT = outputFor(shapes.workspace);
+export const DECISIONS_OUTPUT = outputFor(shapes.decisions);
 
 function askedRepository(requested: { path: string; id?: string | undefined; revision?: string | undefined }): WorkspaceRepositoryRequest {
   return {
@@ -286,12 +318,6 @@ function withoutRepositories(fact: Fact<WorkspaceValue>): Fact<WorkspaceValue> {
   return { ...fact, value: value as WorkspaceValue };
 }
 
-/** The envelope a tool answers by default: the fact without the family's `value` and without the cut places the text already prints. */
-function withoutPayload<V>(fact: Fact<V>): Record<string, unknown> {
-  const { value: _value, cuts: _cuts, ...envelope } = fact as Fact<V> & { value?: unknown; cuts?: readonly Cut[] };
-  return envelope;
-}
-
 function budgetOf(requested: z.infer<typeof budget>): { budget?: ImpactBudget } {
   const bounds: Partial<Record<WalkBoundsField, number>> = {};
   for (const field of WALK_BOUND_FIELDS) {
@@ -306,14 +332,13 @@ export function createMcpServer(deps: McpDeps): McpServer {
   const server = new McpServer({ name: "ye-ast", version: deps.version }, { instructions: instructionsFor(repository) });
 
   /**
-   * Redaction precedes structured delivery and text rendering. Full payloads are opt-in; refresh, repository roots
-   * and live notices remain response siblings, outside the deterministic fact. Text conveys response-level limits
-   * even when the structured payload is omitted.
+   * Redaction precedes rendering. Full facts carry response siblings; text modes expose a minimal receipt and
+   * convey response-level limits in text.
    */
   async function answer<V, F extends { kind: string; detail: string }>(
     query: (onStale: (notice: LiveStaleNotice) => void) => Promise<Result<Fact<V> | FactRead<V>, F>>,
-    render: (fact: Fact<V>) => string,
-    full: boolean,
+    mode: ResponseMode,
+    render: ResponseRenderer<V>,
   ): Promise<CallToolResult> {
     try {
       let moved: LiveStaleNotice | undefined;
@@ -324,16 +349,23 @@ export function createMcpServer(deps: McpDeps): McpServer {
       const repositoryRoots = read.repositoryRoots === undefined ? undefined : redaction.redactValue(read.repositoryRoots) as FactRead<V>["repositoryRoots"];
       const refresh = read.refresh === undefined ? undefined : (redaction.redactValue(read.refresh) as WorkspaceRefresh);
       const stale = moved === undefined ? undefined : (redaction.redactValue(moved) as LiveStaleNotice);
+      if (mode === "full") {
+        return {
+          content: [{ type: "text", text: [
+            `status: ${fact.status}\nfull structured result: structuredContent`, render(fact, mode),
+            ...(repositoryRoots === undefined ? [] : ["Repository locations: match repositoryRoots[].repo to evidence ownership; repositoryRoots[].path locates the clone on disk, while evidence paths are relative to its repository at the recorded snapshot."]),
+            ...(refresh === undefined ? [] : ["Remote context: inspect freshness and resolution for the repositories used; pinned revisions do not imply verified freshness."]),
+            ...(stale === undefined ? [] : ["Live context: inspect live.stateId and live.changed before comparing this result with the current working tree."]),
+          ].filter((part) => part !== "").join("\n") }],
+          structuredContent: { ...fact, mode, ...(repositoryRoots === undefined ? {} : { repositoryRoots }), ...(refresh === undefined ? {} : { freshness: refresh.freshness, resolution: refresh.resolution }), ...(stale === undefined ? {} : { live: stale }) },
+          ...(stale === undefined ? {} : { _meta: { [LIVE_META]: stale } }),
+        };
+      }
       const sidecar = [...(stale === undefined ? [] : [renderStale(stale)]), ...(refresh === undefined ? [] : renderRefresh(refresh)), ...(repositoryRoots ?? []).map(({ repo, path }) => `repository root: ${repo} -> ${path}`)];
       return {
-        content: [{ type: "text", text: [...sidecar, render(fact)].join("\n") }],
-        structuredContent: {
-          ...(full ? fact : withoutPayload(fact)),
-          ...(repositoryRoots === undefined ? {} : { repositoryRoots }),
-          ...(refresh === undefined ? {} : { freshness: refresh.freshness, resolution: refresh.resolution }),
-          ...(stale === undefined ? {} : { live: stale }),
-        } as unknown as Record<string, unknown>,
-        ...(stale !== undefined && { _meta: { [LIVE_META]: stale } }),
+        content: [{ type: "text", text: [...sidecar, render(fact, mode)].join("\n") }],
+        structuredContent: { mode, status: fact.status, snapshot: fact.snapshot, ...(fact.status === "unknown" ? { reason: fact.reason } : {}) },
+        ...(stale === undefined ? {} : { _meta: { [LIVE_META]: stale } }),
       };
     } catch (error) {
       return failure({ kind: "internal-fault", detail: redaction.redactError(error) });
@@ -357,15 +389,15 @@ export function createMcpServer(deps: McpDeps): McpServer {
     {
       title: "Entrypoints of a revision",
       description: `Lists supported HTTP routes, UI routes, message listeners and scheduled jobs with handler locations. Use to orient in a repository or locate where a request, message or job is handled. To trace what depends on a known handler use ye_ast_callers; to inspect consequences of a diff use ye_ast_impact. ${COMPLETENESS}`,
-      inputSchema: liveSchema({ revision, live, scope, detail, full }, ["revision"]),
-      outputSchema: FACT_OUTPUT,
+      inputSchema: liveSchema({ revision, live, scope, mode: responseModeSchema }, ["revision"]),
+      outputSchema: ENTRYPOINTS_OUTPUT,
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    ({ revision: requested, live: isLive, scope: paths, detail: listing, full: whole }, ctx) =>
+    ({ revision: requested, live: isLive, scope: paths, mode }, ctx) =>
       answer(
         (onStale) => deps.entrypoints.map({ repo: repository.path, repoId: repository.repoId, ...atRevision(requested, isLive, onStale), ...scopeOf(paths), signal: ctx.mcpReq.signal }),
-        (fact) => renderEntrypointMap(fact, listing),
-        whole === true,
+        mode,
+        renderEntrypointMap,
       ),
   );
 
@@ -382,14 +414,13 @@ export function createMcpServer(deps: McpDeps): McpServer {
         scope,
         changed: globs.describe("Diff-path globs selecting which changes seed traversal; all changed paths when omitted. Callers outside changed remain eligible within scope. This does not restrict consequence coverage like scope does. A glob matching no changed path is an error."),
         budget,
-        detail,
+        mode: responseModeSchema,
         workspace,
-        full,
       }, ["head", "offline", "workspace"]),
-      outputSchema: FACT_OUTPUT,
+      outputSchema: IMPACT_OUTPUT,
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    ({ base, head, live: isLive, offline: isOffline, scope: paths, changed, budget: requested, detail: listing, workspace: others, full: whole }, ctx) => {
+    ({ base, head, live: isLive, offline: isOffline, scope: paths, changed, budget: requested, mode, workspace: others }, ctx) => {
       const crossing = workspaceOf(others);
       if (crossing !== undefined) {
         return answer(
@@ -405,8 +436,8 @@ export function createMcpServer(deps: McpDeps): McpServer {
               ...budgetOf(requested),
               signal: ctx.mcpReq.signal,
             }),
-          (fact) => renderWorkspaceImpact(fact, listing),
-          whole === true,
+          mode,
+          renderWorkspaceImpact,
         );
       }
       return answer(
@@ -414,8 +445,8 @@ export function createMcpServer(deps: McpDeps): McpServer {
           const at = atRevision(head, isLive, onStale);
           return deps.impact.ofChange({ repo: repository.path, repoId: repository.repoId, base, ...(at.live ? at : { head: at.revision }), ...(changed === undefined ? {} : { changed }), ...scopeOf(paths), ...budgetOf(requested), signal: ctx.mcpReq.signal });
         },
-        (fact) => renderImpact(fact, listing),
-        whole === true,
+        mode,
+        renderImpact,
       );
     },
   );
@@ -425,11 +456,11 @@ export function createMcpServer(deps: McpDeps): McpServer {
     {
       title: "Callers of symbols or line ranges",
       description: `Traces incoming dependents of existing declarations or line ranges and reports the entrypoints that reach them, with dependency locations. Use when the starting symbols or ranges are known and no diff is needed. targets accepts names or inclusive line ranges; names match their final segment and may select several declarations in one file. A missing declaration is an error. With workspace, follows incoming cross-repository call-site links; use ye_ast_impact for a diff and its outgoing links. ${COMPLETENESS}`,
-      inputSchema: liveSchema({ revision, live, offline, targets: z.array(target).min(1).describe("The symbols or line ranges to start from."), scope, budget, detail, workspace, full }, ["revision", "offline", "workspace"]),
-      outputSchema: FACT_OUTPUT,
+      inputSchema: liveSchema({ revision, live, offline, targets: z.array(target).min(1).describe("The symbols or line ranges to start from."), scope, budget, mode: responseModeSchema, workspace }, ["revision", "offline", "workspace"]),
+      outputSchema: IMPACT_OUTPUT,
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    ({ revision: requested, live: isLive, offline: isOffline, targets, scope: paths, budget: bounds, detail: listing, workspace: others, full: whole }, ctx) => {
+    ({ revision: requested, live: isLive, offline: isOffline, targets, scope: paths, budget: bounds, mode, workspace: others }, ctx) => {
       const crossing = workspaceOf(others);
       if (crossing !== undefined) {
         return answer(
@@ -443,8 +474,8 @@ export function createMcpServer(deps: McpDeps): McpServer {
               ...budgetOf(bounds),
               signal: ctx.mcpReq.signal,
             }),
-          (fact) => renderWorkspaceImpact(fact, listing),
-          whole === true,
+          mode,
+          renderWorkspaceImpact,
         );
       }
       return answer(
@@ -458,8 +489,8 @@ export function createMcpServer(deps: McpDeps): McpServer {
             ...budgetOf(bounds),
             signal: ctx.mcpReq.signal,
           }),
-        (fact) => renderImpact(fact, listing),
-        whole === true,
+        mode,
+        renderImpact,
       );
     },
   );
@@ -468,16 +499,16 @@ export function createMcpServer(deps: McpDeps): McpServer {
     "ye_ast_importers",
     {
       title: "Importers of files",
-      description: `For each target, reports distinct related files as static importers, reexporters, dynamic importers, type importers, additional users without a module edge, and unresolved-only candidates without a resolved link. A file is listed in its first matching group; the structured fact retains overlapping module forms. Files with resolved links may also have unresolved name matches; detailed text annotates that overlap without repeating paths. Use to investigate file moves, renames, deletions or export changes. An import edge does not prove a declaration is used. Static TypeScript resolution includes alias and barrel module edges. Revision queries include exported test consumers; a live mirror that omits them remains partial. Unresolved name matches do not prove dependencies or additional affected files. Summary counts groups when shorter; detail: "full" lists paths; full: true returns the original overlapping lists and cuts in structuredContent with a short text acknowledgment. For declaration-level incoming traversal and reached entrypoints use ye_ast_callers; this tool answers file-level relationships. ${COMPLETENESS}`,
-      inputSchema: liveSchema({ revision, live, files: z.array(z.string().min(1)).min(1).describe("Repository-relative paths."), scope, detail, full }, ["revision"]),
-      outputSchema: FACT_OUTPUT,
+      description: `For each target, reports distinct related files as static importers, reexporters, dynamic importers, type importers, additional users without a module edge, and unresolved-only candidates without a resolved link. A file is listed in its first matching group; the structured fact retains overlapping module forms. Files with resolved links may also have unresolved name matches; detailed text annotates that overlap without repeating paths. Use to investigate file moves, renames, deletions or export changes. An import edge does not prove a declaration is used. Static TypeScript resolution includes alias and barrel module edges. Revision queries include exported test consumers; a live mirror that omits them remains partial. Unresolved name matches do not prove dependencies or additional affected files. For declaration-level incoming traversal and reached entrypoints use ye_ast_callers; this tool answers file-level relationships. ${COMPLETENESS}`,
+      inputSchema: liveSchema({ revision, live, files: z.array(z.string().min(1)).min(1).describe("Repository-relative paths."), scope, mode: responseModeSchema }, ["revision"]),
+      outputSchema: IMPORTERS_OUTPUT,
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    ({ revision: requested, live: isLive, files, scope: paths, detail: listing, full: whole }, ctx) =>
+    ({ revision: requested, live: isLive, files, scope: paths, mode }, ctx) =>
       answer(
         (onStale) => deps.impact.importers({ repo: repository.path, repoId: repository.repoId, ...atRevision(requested, isLive, onStale), files, ...scopeOf(paths), signal: ctx.mcpReq.signal }),
-        (fact) => whole === true ? renderStructuredImporters(fact) : renderImporters(fact, listing),
-        whole === true,
+        mode,
+        renderImporters,
       ),
   );
 
@@ -486,15 +517,15 @@ export function createMcpServer(deps: McpDeps): McpServer {
     {
       title: "Shape of files",
       description: `Returns indexed declarations with line spans and imports for each requested file, without returning source text. Use when that structure helps choose source ranges to read; read a known relevant range directly. A file the index cannot describe is reported as a cut, not an empty list. Match revision or live to the source you will inspect. ${COMPLETENESS}`,
-      inputSchema: liveSchema({ revision, live, files: z.array(z.string().min(1)).min(1).describe("Repository-relative paths."), scope, detail, full }, ["revision"]),
-      outputSchema: FACT_OUTPUT,
+      inputSchema: liveSchema({ revision, live, files: z.array(z.string().min(1)).min(1).describe("Repository-relative paths."), scope, mode: responseModeSchema }, ["revision"]),
+      outputSchema: OUTLINE_OUTPUT,
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    ({ revision: requested, live: isLive, files, scope: paths, detail: listing, full: whole }, ctx) =>
+    ({ revision: requested, live: isLive, files, scope: paths, mode }, ctx) =>
       answer(
         (onStale) => deps.outline.outline({ repo: repository.path, repoId: repository.repoId, ...atRevision(requested, isLive, onStale), files, ...scopeOf(paths), signal: ctx.mcpReq.signal }),
-        (fact) => renderOutline(fact, listing),
-        whole === true,
+        mode,
+        renderOutline,
       ),
   );
 
@@ -509,13 +540,12 @@ export function createMcpServer(deps: McpDeps): McpServer {
         scope,
         repos: workspaceRepos,
         gateways,
-        detail,
-        full,
+        mode: responseModeSchema,
       }),
-      outputSchema: FACT_OUTPUT,
+      outputSchema: WORKSPACE_OUTPUT,
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    ({ revision: requested, offline: isOffline, scope: paths, repos, gateways: requestedGateways, detail: listing, full: whole }, ctx) =>
+    ({ revision: requested, offline: isOffline, scope: paths, repos, gateways: requestedGateways, mode }, ctx) =>
       answer(
         async () => {
           const read = await deps.workspace.outwardNames({
@@ -528,8 +558,8 @@ export function createMcpServer(deps: McpDeps): McpServer {
           });
           return read.ok ? { ok: true, value: { ...read.value, fact: withoutRepositories(read.value.fact) } } : read;
         },
-        (fact) => renderWorkspace(fact, listing),
-        whole === true,
+        mode,
+        renderWorkspace,
       ),
   );
 
@@ -538,11 +568,11 @@ export function createMcpServer(deps: McpDeps): McpServer {
     {
       title: "Gaps a workspace leaves to the user",
       description: `Lists workspace configuration gaps requiring user input, evidence-backed options and rule-based recommendations; some gaps allow only a user-supplied value. Use to prepare workspace/trust configuration or a form before ye-ast init --workspace. Gaps concern repository membership, identity, gateways, trust or remote resolution; recommendations are configuration suggestions, not judgments of code or proposed changes. Reads repositories using the workspace rules and writes no configuration. ${COMPLETENESS}`,
-      inputSchema: z.strictObject({ revision, offline, scope, repos: workspaceRepos, gateways, detail, full }),
-      outputSchema: FACT_OUTPUT,
+      inputSchema: z.strictObject({ revision, offline, scope, repos: workspaceRepos, gateways, mode: responseModeSchema }),
+      outputSchema: DECISIONS_OUTPUT,
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    ({ revision: requested, offline: isOffline, scope: paths, repos, gateways: requestedGateways, detail: listing, full: whole }, ctx) =>
+    ({ revision: requested, offline: isOffline, scope: paths, repos, gateways: requestedGateways, mode }, ctx) =>
       answer(
         () =>
           deps.decisions.decisions({
@@ -553,8 +583,8 @@ export function createMcpServer(deps: McpDeps): McpServer {
             ...scopeOf(paths),
             signal: ctx.mcpReq.signal,
           }),
-        (fact) => renderDecisions(fact, listing),
-        whole === true,
+        mode,
+        renderDecisions,
       ),
   );
 

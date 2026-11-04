@@ -215,6 +215,9 @@ the host's.
   library, repository, membership, remote, revision) and a summary counts the free-text-only dependency gaps, listing
   them only under `detail: "full"`. A dependency coordinate stays a decision, as above; it stops burying the gaps a
   human can answer.
+
+  Historical presentation: `detail` is now rejected. The current [MCP contract](0005-transports.md#mcp-mvp-in-process-stdio) uses
+  `mode: "details"` to explain recorded gaps and `mode: "full"` for exhaustive structured data.
 - `gateway` is one decision per prefix no repository id names and no gateway in force routes. Its options are the
   repositories whose routes match a call under the prefix once it is stripped, with the matched route as evidence; there
   is no recommendation, because zero or two or more matches are what leaves the gap. The caller's own repository is

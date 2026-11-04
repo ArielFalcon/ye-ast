@@ -21,18 +21,16 @@ functions.
 
 The rendering side has the mirror-image problem. The size work of `odd/tasks/mcp-answer-precision.md` and
 `odd/tasks/mcp-latency-and-size.md` made answers smaller, and commit `159f46f` made a summary name the ring it leaves
-out. Neither added the one rule that keeps the result honest: **a summary that is longer than the answer it stands for
-is a regression, not a summary**. Nothing measures it today, so it can appear with any renderer change and no test
+out. Neither added the one rule that keeps the result honest: **a counted elision longer than the literal text it replaces is a regression**. Nothing measures it today, so it can appear with any renderer change and no test
 would notice.
 
 ## 1. The rule: a counted elision is never longer than listing what it hides
 
-The examples and measurements in this section describe the historical impact projection. Impact/callers now use
-summary to identify consequences and detailed text to show compact investigation evidence; `detail: "full"` no
-longer means an exhaustive text listing. All recorded items remain available through `full: true` in
-`structuredContent`. The counted-elision rule still compares equivalent text blocks at the same detail level; it
-does not require expanding all origin associations or every unresolved reference place into text. See
-[RFC-0005](0005-transports.md) for the current projection and recovery contract.
+The examples and measurements below retain the historical selector labels and projection. The current MCP contract
+uses `mode: "summary"`, `mode: "details"` and `mode: "full"`: details is explanatory text; full delivers the
+complete public fact and a navigation guide. The counted-elision rule compares an elision with the literal listing
+it replaces within the same text projection. It does not guarantee that summary is smaller than details or full JSON,
+and does not require expanding all associations into text. See [RFC-0005](0005-transports.md).
 
 **Evidence that the rule is missing.** `src/mcp/render.ts:344-357`, `impactedSymbols`: a summary replaces every symbol
 past depth 1 with one line. After `159f46f` that line is:
@@ -50,7 +48,7 @@ against the single cut line it hides.
 that block equal: the renderer builds both texts and keeps the shorter, and a tie keeps the count so the answer still
 says what it left out.
 
-The comparison is against **the same detail level**, not against `detail: "full"`. The cuts block holds two different
+The comparison is against **the same text projection**; the historical `detail: "full"` comparison below is context, not a current selector. The cuts block holds two different
 elisions: the counted one this rule governs, and a summary that names the declarations a cut could not settle to
 instead of its places. The second is a different presentation of the same fact, not a count. Letting its bytes decide
 would flip the shape of a cut for reasons unrelated to the fact, and would make a deterministic contract depend on
@@ -135,7 +133,8 @@ repository, revision and requests produce the same bytes twice. Timing stays whe
 `src/composition/measurement.ts`.
 
 **Measured** on the baseline the earlier RFCs use — name-webapp at `e8699653`, trust `trusted`, this branch's working
-tree, the text the model reads and the envelope the host reads:
+tree, counting text and structured content separately. The table's historical `summary` and `full` labels refer to
+text detail levels under the old selector, not current `mode: "full"`:
 
 | Call | summary text | full text | saving | envelope |
 |---|---|---|---|---|
@@ -157,7 +156,8 @@ what follows:
   candidate for the outline of section 2, because the remaining weight is the file the agent reads next, not the
   answer.
 - `ye_ast_entrypoints` costs the same at both detail levels, so its summary carries no counted elision to pay for.
-- The envelope stays under 900 bytes on every call: what a host pays is not what a model pays.
+- The historical envelope stayed under 900 bytes on every call. A client may expose both channels; these wire sizes
+  do not establish what a model saw.
 
 ## Open questions
 
@@ -166,7 +166,7 @@ what follows:
 | 1 | A new tool, or a parameter on an existing one? `odd/tasks/mcp-latency-and-size.md` L2 chose a parameter (`expand`) over a tool, because the same fact selected differently needs no server-held handle | A new tool: `expand` selects *more of the same fact*, while an outline answers *a different fact* about a different subject (a file, not a symbol). One tool per question is what the existing names already do (`impact`, `callers`, `importers`) |
 | 2 | Does the tool take explicit `files`, or a `scope`? | Explicit `files`, resolved through the same `scope` as the other tools, because the caller's file list comes from an answer it already has |
 | 3 | Does the outline list imports at all, or only declarations? | Settled by the amendment: yes, as repo-relative files resolved from the graph's `imports` edges. A package outside the repository is not an edge, and the caller sees those by reading the header it already has |
-| 4 | Does the rule of section 1 also apply to `structuredContent`? | No: the envelope is the host's contract and the text is what the model reads (`src/mcp/server.ts:305`). The rule governs the text |
+| 4 | Does the rule of section 1 also apply to `structuredContent`? | No: the rule compares alternatives within one text projection, not text against structured JSON; clients may expose both channels |
 | 5 | Should one release also answer an outline for a line range? | No. Two request shapes over the same fact before one measurement exists is the complexity this RFC refuses |
 | 6 | Is a counted block ever allowed to exceed the full answer when the count is large? | Never: the rule has no exception. If the full body is shorter, the full body is the correct answer |
 | 7 | Does a counted answer also name `ye_ast_outline` for the files it leaves an agent to read? | Not now. It costs about 120 bytes on every answer that lists files — 0.7 % of the 15.2 KB answer and 11 % of the 998-byte one — and nothing measures that an agent would act on it; the guidance lives in the tool description and in `INSTRUCTIONS`, where `159f46f` already put the `ye_ast_callers` pointer that had a measured saving behind it. Reopen with evidence from sessions: files named by an answer read whole, or an outline never called after it ships |

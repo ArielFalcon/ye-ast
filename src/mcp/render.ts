@@ -1,3 +1,4 @@
+import type { ResponseMode } from "./presentation.ts";
 import type { Entrypoint } from "../core/domain/entrypoints/entrypoint.ts";
 import type { Handler } from "../core/domain/entrypoints/http-route.ts";
 import type { ChangedEntrypoint } from "../core/domain/impact/changed-entrypoints.ts";
@@ -211,7 +212,7 @@ function unresolvedDeclarations(cuts: readonly Cut[]): string[] {
   const named = (count: number, one: string, many: string): string => `${count} ${count === 1 ? one : many}`;
   const settled = [whole.size === 0 ? undefined : named(whole.size, "file", "files"), entries.length === 0 ? undefined : named(entries.length, "declaration", "declarations")].filter((part) => part !== undefined);
   return [
-    `  unresolved-link (${settled.join(", ")}, ${named(references, "reference", "references")}; detail "full" lists every place):`,
+    `  unresolved-link (${settled.join(", ")}, ${named(references, "reference", "references")}; mode "details" lists every place):`,
     ...files.flatMap((file) => {
       const named = whole.get(file);
       return [
@@ -225,9 +226,9 @@ function unresolvedDeclarations(cuts: readonly Cut[]): string[] {
 
 /** Every cut once: those that name a single path grouped per kind with every path listed, the rest one line each. Under
  * a summary, an unresolved link keeps only what it could not settle to. */
-function cutLines(cuts: readonly Cut[], detail: Detail): string[] {
+function cutLines(cuts: readonly Cut[], detail: ResponseMode): string[] {
   return cutsByKind(cuts).flatMap(([kind, ofKind]) => {
-    if (kind === "unresolved-link" && detail !== "full") return unresolvedDeclarations(ofKind);
+    if (kind === "unresolved-link" && detail !== "details") return unresolvedDeclarations(ofKind);
     const single = ofKind.filter((cut) => cut.at.length === 1);
     const rest = ofKind.filter((cut) => cut.at.length > 1).toSorted((a, b) => compareText(a.at.join("\0"), b.at.join("\0")));
     return [...(single.length === 0 ? [] : [singlePathLine(kind, single)]), ...rest.map(cutLine)];
@@ -239,7 +240,7 @@ function size(lines: readonly string[]): number {
   return lines.reduce((total, line) => total + Buffer.byteLength(line, "utf8") + 1, 0);
 }
 
-function cutsBlock(cuts: readonly Cut[], detail: Detail = "summary"): string[] {
+function cutsBlock(cuts: readonly Cut[], detail: ResponseMode = "summary"): string[] {
   return cuts.length === 0 ? [] : [CUTS, ...cutLines(cuts, detail)];
 }
 
@@ -263,8 +264,12 @@ function viaText(via: NonNullable<ImpactedSymbol["via"]>, file: string): string 
   return via.basis === "call" ? `${where} ${at}` : `${where} ${at} (${via.basis})`;
 }
 
+function entrypointLocation(entrypoint: Entrypoint): string {
+  return entrypoint.kind === "ui-route" ? (entrypoint.component === "unknown" ? "component unknown" : handlerText(entrypoint.component)) : handlerText(entrypoint.handler);
+}
+
 function entrypointLine(entrypoint: Entrypoint): string {
-  const served = entrypoint.kind === "ui-route" ? (entrypoint.component === "unknown" ? "component unknown" : handlerText(entrypoint.component)) : handlerText(entrypoint.handler);
+  const served = entrypointLocation(entrypoint);
   return `  - ${entrypoint.kind} ${entrypoint.name} -> ${served}`;
 }
 
@@ -272,12 +277,95 @@ function itemLine(item: Finding<Entrypoint>): string {
   return item.status === "unknown" ? `  - unknown (${item.reason}) ${item.evidence.map(evidenceText).join(", ")}`.trimEnd() : entrypointLine(item.value);
 }
 
-export function renderEntrypointMap(fact: Fact<EntrypointMap>, detail: Detail = "summary"): string {
+function entrypointContext(entrypoint: Entrypoint): string[] {
+  if (entrypoint.kind === "ui-route") {
+    return entrypoint.guards.length === 0 ? ["    no own guards recorded"] : [
+      `    own guards (${entrypoint.guards.length}):`,
+      ...entrypoint.guards.map((guard) => `      - ${guard.name}${guard.path === undefined ? "" : ` (${guard.path})`}${guard.external === true ? " (external)" : ""}`),
+    ];
+  }
+  if (entrypoint.kind !== "http-route") return [];
+  const base = entrypoint.basePath;
+  if (base.status === "unknown") return [`    base path unknown (${base.reason})${base.evidence.length === 0 ? "" : `: ${base.evidence.map(evidenceText).join(", ")}`}`];
+  const profiles = Object.keys(base.value.profiles).length;
+  return [`    base path defaults: ${JSON.stringify(base.value.default)}${profiles === 0 ? "" : `; ${profiles} profile-specific settings, mode: "full" includes them`}`];
+}
+
+/** Repeated extraction evidence can support several findings without repeating the same coordinates. */
+function entrypointItems(items: readonly Finding<Entrypoint>[], detail: ResponseMode): string[] {
+  if (detail !== "details") {
+    const lines: string[] = [];
+    for (let index = 0; index < items.length;) {
+      const first = items[index]!;
+      if (first.status === "unknown") { lines.push(itemLine(first)); index++; continue; }
+      const location = entrypointLocation(first.value);
+      let end = index + 1;
+      while (end < items.length) {
+        const next = items[end]!;
+        if (next.status === "unknown" || entrypointLocation(next.value) !== location) break;
+        end++;
+      }
+      const group = items.slice(index, end);
+      const listing = group.map(itemLine);
+      const shared = [`  served by ${location}`, ...group.map((item) => item.status === "complete" ? `    - ${item.value.kind} ${item.value.name}` : itemLine(item))];
+      lines.push(...(group.length > 1 && size(shared) < size(listing) ? shared : listing));
+      index = end;
+    }
+    return list(lines);
+  }
+  const lines: string[] = [];
+  for (let index = 0; index < items.length;) {
+    const first = items[index]!;
+    if (first.status === "unknown" || first.evidence.length === 0) {
+      lines.push(itemLine(first), ...(first.status === "complete" ? entrypointContext(first.value) : []));
+      index++;
+      continue;
+    }
+    const key = JSON.stringify(first.evidence);
+    let end = index + 1;
+    while (end < items.length && items[end]!.status === "complete" && JSON.stringify(items[end]!.evidence) === key) end++;
+    const evidence = first.evidence.map((place) => `${evidenceText(place)}${place.via === undefined ? "" : ` via ${place.via}`}${place.confidence === undefined ? "" : ` confidence ${place.confidence}`}`).join(", ");
+    const findings = items.slice(index, end).map(itemLine);
+    const separate = findings.flatMap((line) => [line, `    evidence: ${evidence}`]);
+    const shared = [`  evidence shared by ${findings.length} findings: ${evidence}`, ...findings];
+    lines.push(...(findings.length > 1 && size(shared) < size(separate) ? shared : separate));
+    const contexts = items.slice(index, end).flatMap((item) => item.status === "complete" ? [entrypointContext(item.value)] : []);
+    const contextKeys = new Set(contexts.map((context) => JSON.stringify(context)));
+    if (contextKeys.size === 1) {
+      if (findings.length > 1 && (contexts[0]?.length ?? 0) > 0) lines.push("  The following context applies to all findings above:");
+      lines.push(...(contexts[0] ?? []));
+    }
+    else for (const item of items.slice(index, end)) if (item.status === "complete") lines.push(`  ${item.value.kind} ${item.value.name}:`, ...entrypointContext(item.value));
+    index = end;
+  }
+  return list(lines);
+}
+
+export function renderEntrypointMap(fact: Fact<EntrypointMap>, detail: ResponseMode = "summary"): string {
+  if (detail === "full") {
+    if (fact.status === "unknown") return "Inspect reason and evidence; the result has no value.";
+    const section = fact.value.entrypoints;
+    return section.status === "unknown"
+      ? "Check value.entrypoints.status, reason and evidence; this section has no value."
+      : `Check value.entrypoints.status and value.entrypoints.value; match each complete finding in value.entrypoints.value[].value by kind/name and handler or component coordinates. Inspect basePath status and evidence for HTTP routes; unknown findings carry reason and evidence, and partial sections carry cuts.${section.value.some((item) => item.status === "complete" && item.value.kind === "ui-route") ? " For UI routes, match kind and name, then inspect value.entrypoints.value[].value.guards; these are each route's own guards, not inherited or runtime restrictions." : ""}`;
+  }
   const lines = headerLines(fact);
   if (fact.status === "unknown") return lines.join("\n");
   const section = fact.value.entrypoints;
   lines.push("entrypoints:", ...statusLines(section, "  "));
-  if (section.status !== "unknown") lines.push(...list(section.value.map(itemLine)));
+  if (section.status !== "unknown") {
+    const known = section.value.filter((item) => item.status === "complete").length;
+    const unknown = section.value.length - known;
+    const unknownBases = section.value.filter((item) => item.status === "complete" && item.value.kind === "http-route" && item.value.basePath.status === "unknown").length;
+    const uiRoutes = section.value.flatMap((item) => item.status === "complete" && item.value.kind === "ui-route" ? [item.value] : []);
+    const guardCount = uiRoutes.reduce((total, route) => total + route.guards.length, 0);
+    const guardedRoutes = uiRoutes.filter((route) => route.guards.length > 0).length;
+    const guardNote = uiRoutes.length === 0 ? [] : [
+      ...(detail === "summary" && guardCount > 0 ? [`  ${guardCount} own guards across ${guardedRoutes} routes; mode: "full" locates them at value.entrypoints.value[].value.guards after matching route kind and name.`] : []),
+      "  Only each route's own guards are recorded; inherited or runtime restrictions are not established here.",
+    ];
+    lines.push(`  findings: ${known} known, ${unknown} unknown`, ...(unknownBases === 0 ? [] : [`  base path unknown for ${unknownBases} ${unknownBases === 1 ? "route" : "routes"}`]), ...guardNote, ...entrypointItems(section.value, detail));
+  }
   lines.push(...cutsBlock([...cutsOf(fact), ...cutsOf(section)], detail));
   return lines.join("\n");
 }
@@ -286,7 +374,7 @@ function changedLine(change: ChangedEntrypoint): string {
   return `  - ${change.change} ${change.kind} ${change.name} -> ${handlerText(change.handler)}`;
 }
 
-function reachedLines(reached: ReachedEntrypoint, seeds: readonly Seed[], detail: Detail): string[] {
+function reachedLines(reached: ReachedEntrypoint, seeds: readonly Seed[], detail: ResponseMode): string[] {
   const name = reached.name === undefined ? reached.kind : `${reached.kind} ${reached.name}`;
   const confidence = reached.confidence < 1 ? `, confidence ${reached.confidence}` : "";
   const origin = seeds[reached.seeds[0] ?? -1];
@@ -294,7 +382,7 @@ function reachedLines(reached: ReachedEntrypoint, seeds: readonly Seed[], detail
   return [
     `  - ${name} -> ${handlerText(reached.handler)} (depth ${reached.depth}${confidence})`,
     ...(detail === "summary" && reached.seeds.length > 0 ? [`    origins: ${reached.seeds.length}`] : []),
-    ...(detail === "summary" || origin === undefined ? [] : [`    one verified origin: ${placeText(origin.file, origin.line, origin.endLine)} ${origin.symbol} (${origin.basis})${others > 0 ? `; ${others} other ${others === 1 ? "origin" : "origins"}; full: true includes all` : ""}`]),
+    ...(detail === "summary" || origin === undefined ? [] : [`    one verified origin: ${placeText(origin.file, origin.line, origin.endLine)} ${origin.symbol} (${origin.basis})${others > 0 ? `; ${others} other ${others === 1 ? "origin" : "origins"}; mode: "full" includes all` : ""}`]),
   ];
 }
 
@@ -311,7 +399,6 @@ function symbolLine(symbol: ImpactedSymbol, file: string, includeVia = true): st
   return `    ${spanText(symbol.line, symbol.endLine)} ${symbol.symbol} [${symbol.kind}] (${facts.join(", ")})`;
 }
 
-export type Detail = "summary" | "full";
 
 function groupedLines(symbols: readonly ImpactedSymbol[]): string[] {
   return [...Map.groupBy(symbols, (symbol) => symbol.file)].flatMap(([file, inFile]) => {
@@ -346,49 +433,79 @@ function investigationSymbols(value: ImpactValue): readonly ImpactedSymbol[] {
   return symbols.filter((symbol) => symbol.depth === nearest || value.entrypoints.some(({ handler }) => handler.path === symbol.file && handler.line === symbol.line && handler.symbol === symbol.symbol));
 }
 
-function impactedSymbols(value: ImpactValue, detail: Detail): string[] {
+function impactedSymbols(value: ImpactValue, detail: ResponseMode): string[] {
   const symbols = consequenceSymbols(value);
   const header = `impacted symbols (${symbols.length}):`;
   if (symbols.length === 0) return [header];
   const literal = [header, ...groupedLines(symbols)];
   if (detail === "summary") {
     const depths = [...Map.groupBy(symbols, (symbol) => symbol.depth)].toSorted(([a], [b]) => a - b);
-    const counted = [header, `  by depth: ${depths.map(([depth, group]) => `${depth}: ${group.length}`).join(", ")}; detail "full" shows investigation evidence; full: true includes every symbol`];
+    const counted = [header, `  by depth: ${depths.map(([depth, group]) => `${depth}: ${group.length}`).join(", ")}; mode "details" shows investigation evidence; mode: "full" includes every symbol`];
     return size(counted) <= size(literal) ? counted : literal;
   }
   const shown = investigationSymbols(value);
   const omitted = symbols.length - shown.length;
-  const evidence = [header, `  evidence view: nearest recorded depth ${shown.reduce((depth, symbol) => Math.min(depth, symbol.depth), Infinity)} and reached handlers`, ...groupedLines(shown), ...(omitted === 0 ? [] : [`  ${omitted} other ${omitted === 1 ? "symbol" : "symbols"}; full: true includes all`])];
+  const evidence = [header, `  evidence view: nearest recorded depth ${shown.reduce((depth, symbol) => Math.min(depth, symbol.depth), Infinity)} and reached handlers`, ...groupedLines(shown), ...(omitted === 0 ? [] : [`  ${omitted} other ${omitted === 1 ? "symbol" : "symbols"}; mode: "full" includes all`])];
   return omitted > 0 && size(evidence) <= size(literal) ? evidence : literal;
 }
 
 /** What an impact answer says about its walk, without its header or its cuts. */
-function impactBody(value: ImpactValue, detail: Detail): string[] {
+function impactBody(value: ImpactValue, detail: ResponseMode): string[] {
   return [
     ...(value.mergeBase === undefined ? [] : [`merge base: ${value.mergeBase}`]),
     ...(value.changedEntrypoints === undefined ? [] : [`changed entrypoints (${value.changedEntrypoints.length}):`, ...value.changedEntrypoints.map(changedLine)]),
     `reached entrypoints (${value.entrypoints.length}):`,
-    ...(detail === "summary" && value.entrypoints.some((entrypoint) => entrypoint.seeds.length > 0) ? [`  origin associations (${value.entrypoints.reduce((total, entrypoint) => total + entrypoint.seeds.length, 0)}): counted below; detail "full" shows one per entrypoint; full: true includes all`] : []),
+    ...(detail === "details" && value.entrypoints.some((entrypoint) => entrypoint.seeds.length > 0) ? ["  A recorded origin is an association, not a complete call chain."] : []),
+    ...(detail === "summary" && value.entrypoints.some((entrypoint) => entrypoint.seeds.length > 0) ? [`  origin associations (${value.entrypoints.reduce((total, entrypoint) => total + entrypoint.seeds.length, 0)}): counted below; mode "details" shows one per entrypoint; mode: "full" includes all`] : []),
     ...value.entrypoints.flatMap((entrypoint) => reachedLines(entrypoint, value.seeds, detail)),
     ...impactedSymbols(value, detail),
     ...(value.modules === undefined ? [] : moduleLines(value.modules, detail)),
   ];
 }
 
-function moduleLines(value: ModuleImpactValue, detail: Detail): string[] {
-  const listed = detail === "full" ? value.modules : value.modules.filter((module) => module.depth <= MODULE_LISTED_DEPTH);
-  const omitted = value.modules.length - listed.length;
+function moduleLines(value: ModuleImpactValue, detail: ResponseMode): string[] {
+  const originListing = value.origins.map((origin) => `  ${origin.file} (${origin.change})`);
+  const counts = [...Map.groupBy(value.origins, (origin) => origin.change)].map(([change, group]) => `${group.length} ${change}`).join(", ");
+  const originCount = [`  ${value.origins.length} origins (${counts}); mode: "full" includes every origin`];
+  const origins = value.origins.length > 0 && size(originCount) < size(originListing) ? originCount : originListing;
+  const nearest = value.modules.reduce((depth, module) => module.depth > 0 ? Math.min(depth, module.depth) : depth, Infinity);
+  const shown = value.modules.filter((module) => module.depth === 0 || module.depth === nearest);
+  type Module = ModuleImpactValue["modules"][number];
+  const context = (module: Module): string => {
+    const count = module.origins.length;
+    const first = value.origins[module.origins[0] ?? -1];
+    const example = detail === "details" && first !== undefined ? `; origin ${first.file} (${first.change})` : "";
+    return `${count} origin ${count === 1 ? "association" : "associations"}${example}${count > (example === "" ? 0 : 1) ? '; mode: "full" includes all' : ""}`;
+  };
+  const line = (module: Module, includeContext = true): string =>
+    `  ${module.snapshot} ${module.file} (depth ${module.depth}${includeContext ? `, ${context(module)}` : ""})${module.via === undefined ? "" : ` via ${module.via.kind} ${module.via.file} at ${module.file}:${module.via.line}${module.via.typeOnly ? " (type-only)" : ""}`}`;
+  const grouped = (modules: readonly Module[]): string[] => {
+    const lines: string[] = [];
+    for (let start = 0; start < modules.length;) {
+      const first = modules[start]!;
+      const key = JSON.stringify(first.origins);
+      let end = start + 1;
+      while (end < modules.length && JSON.stringify(modules[end]!.origins) === key) end++;
+      const run = modules.slice(start, end);
+      const separate = run.map((module) => line(module));
+      const shared = [`  shared ${context(first)}:`, ...run.map((module) => `  ${line(module, false)}`)];
+      lines.push(...(run.length > 1 && size(shared) < size(separate) ? shared : separate));
+      start = end;
+    }
+    return lines;
+  };
+  const listing = grouped(value.modules);
+  const omitted = value.modules.length - shown.length;
+  const compact = [...grouped(shown), ...(omitted === 0 ? [] : [`  ${omitted} deeper module dependencies not listed; mode: "full" includes their recorded evidence.`])];
+  const selected = omitted > 0 && size(compact) < size(listing) ? compact : listing;
   return [
-    `module origins (${value.origins.length}):`,
-    ...value.origins.map((origin) => `  ${origin.file} (${origin.change})`),
-    `module dependencies (${value.modules.length}, not symbol or entrypoint impact):`,
-    ...listed.map((module) => `  ${module.snapshot} ${module.file} (depth ${module.depth}, origins ${module.origins.join(", ")})${module.via === undefined ? "" : ` via ${module.via.kind} ${module.via.file} at ${module.file}:${module.via.line}${module.via.typeOnly ? " (type-only)" : ""}`}`),
-    ...(omitted === 0 ? [] : [`  ${omitted} deeper module dependencies not listed; detail "full" lists their evidence, or ye_ast_importers reads direct consumers at a snapshot.`]),
+    `module origins (${value.origins.length}):`, ...origins,
+    `module dependencies (${value.modules.length}, not symbol or entrypoint impact):`, ...selected,
     `module expansions: ${value.cost.expansionsUsed}`,
   ];
 }
 
-function impactSeeds(value: ImpactValue, detail: Detail): string[] {
+function impactSeeds(value: ImpactValue, detail: ResponseMode): string[] {
   if (detail === "summary") return [`seeds (${value.seeds.length}):`, ...groupedSeeds(value.seeds)];
   const dependencies = new Set(investigationSymbols(value).flatMap((symbol) => symbol.via === undefined ? [] : [`${symbol.via.file}\0${symbol.via.symbol}`]));
   const shown: Seed[] = [];
@@ -421,7 +538,7 @@ function seedSummary(seeds: readonly Seed[]): string[] {
   const bases = [...Map.groupBy(rest, (seed) => seed.basis)].toSorted(([a], [b]) => compareText(a, b)).map(([basis, group]) => `${basis} ${group.length}`);
   return [
     ...seedListing(requested),
-    ...(rest.length === 0 ? [] : [`  change origins: ${rest.length} ${rest.length === 1 ? "declaration" : "declarations"} across ${files.size} ${files.size === 1 ? "file" : "files"} (${bases.join(", ")}); full: true includes every seed`]),
+    ...(rest.length === 0 ? [] : [`  change origins: ${rest.length} ${rest.length === 1 ? "declaration" : "declarations"} across ${files.size} ${files.size === 1 ? "file" : "files"} (${bases.join(", ")}); mode: "full" includes every seed`]),
   ];
 }
 
@@ -432,15 +549,15 @@ function groupedSeeds(seeds: readonly Seed[]): string[] {
   return size(summary) <= size(listing) ? summary : listing;
 }
 
-function impactCuts(cuts: readonly Cut[], detail: Detail): string[] {
+function impactCuts(cuts: readonly Cut[], detail: ResponseMode): string[] {
   if (cuts.length === 0) return [];
   const groups = cutsByKind(cuts);
   if (detail === "summary") return [CUTS, ...groups.map(([kind, group]) => {
     const limits = [...new Set(group.flatMap((cut) => cut.limit === undefined ? [] : [cut.limit]))].toSorted((a, b) => a - b);
     return `  ${kind} (${group.length})${limits.length === 0 ? "" : `; ${limits.length === 1 ? "limit" : "limits"} ${limits.join(", ")}`}`;
-  }), '  detail "full" locates cut anchors; full: true includes every place'];
+  }), '  mode "details" locates cut anchors; mode: "full" includes every place'];
   return [CUTS, ...groups.flatMap(([kind, group]) => {
-    if (kind !== "unresolved-link") return cutLines(group, "full");
+    if (kind !== "unresolved-link") return cutLines(group, "details");
     const byFile = Map.groupBy(group, (cut) => (cut.at[0] ?? "").split("::")[0] ?? "");
     return [`  ${kind} (${group.length}):`, ...[...byFile].toSorted(([a], [b]) => compareText(a, b)).flatMap(([file, inFile]) => [
       `    ${file}`,
@@ -452,14 +569,15 @@ function impactCuts(cuts: readonly Cut[], detail: Detail): string[] {
         return `      ${name}: ${records.length} ${records.length === 1 ? "cut" : "cuts"}, ${places} reference ${places === 1 ? "place" : "places"}${limits.length === 0 ? "" : `; limits ${limits.join(", ")}`}${reasons.length === 0 ? "" : `; ${reasons.join(", ")}`}`;
       }),
     ])];
-  }), '  reference places counted; full: true includes every place'];
+  }), '  reference places counted; mode: "full" includes every place'];
 }
 
 function impactLookups(value: ImpactValue, path: string): string[] {
   const lines: string[] = [];
-  if (value.entrypoints.length > 0) lines.push(`  To explain a listed entrypoint, select ${path}.entrypoints by kind/name and handler.path, handler.symbol, handler.line. Its seeds are zero-based indexes into ${path}.seeds; resolve those indexes to recover all associated origins, not a complete call chain.`);
+  if (value.entrypoints.length > 0) lines.push(`  To inspect a reached entrypoint, select ${path}.entrypoints by kind/name and handler.path, handler.symbol, handler.line. Its seeds are zero-based indexes into ${path}.seeds; resolve those indexes to recover all associated origins, not a complete call chain.`);
   if (value.symbols.length > 0) lines.push(`  To inspect a dependency omitted from text, filter ${path}.symbols by file, symbol and line. Read via.file/symbol for its recorded dependency; via.lines are locations in that symbol's own file, not in via.file. Preserve via.basis and confidence when interpreting it.`);
   if (value.seeds.length > 0 && value.entrypoints.length === 0) lines.push(`  To identify the walk origins, match ${path}.seeds by file, symbol and line; basis distinguishes requested targets from change-derived origins.`);
+  if (value.modules !== undefined && (value.modules.origins.length > 0 || value.modules.modules.length > 0)) lines.push(`  Inspect ${path}.modules.origins and ${path}.modules.modules; each module origin index joins that origins array. Module dependencies are distinct from symbol impact.`);
   if ((value.changedEntrypoints?.length ?? 0) > 0) lines.push(`  To inspect entrypoints added, removed or altered by the diff, filter ${path}.changedEntrypoints by change, kind/name and handler identity; these are distinct from reached entrypoints.`);
   return lines;
 }
@@ -479,14 +597,15 @@ function impactSnapshotGuide(snapshot: SnapshotRef, mergeBase?: string): string 
 }
 
 function unknownImpactGuide(): string[] {
-  return ["Investigation guide:", "  Analysis is unknown, not a verified absence of impact. Inspect reason and evidence in structuredContent (full: true includes the full fact) to establish the missing prerequisite before retrying; there is no value to search."];
+  return ["Investigation guide:", "  Analysis is unknown, not a verified absence of impact. Inspect reason and evidence in structuredContent (full mode includes the full fact) to establish the missing prerequisite before retrying; there is no value to search."];
 }
 
-function localImpactGuide(fact: Fact<ImpactValue> & { status: "complete" | "partial" }): string[] {
+function localImpactGuide(fact: Fact<ImpactValue> & { status: "complete" | "partial" }, mode: ResponseMode = "details"): string[] {
   const lookups = impactLookups(fact.value, "value");
+  if (lookups.length === 0 && fact.status === "complete") return ["There are no recorded consequences or walk origins within the declared scope and change selection."];
   return [
     "Investigation guide:",
-    "  Full JSON navigation (available with full: true): paths below are relative to structuredContent; query the returned payload directly when already included.",
+    mode === "full" ? "  JSON navigation: paths below are relative to structuredContent." : "  Full JSON navigation (available in full mode): paths below are relative to structuredContent; query the returned payload directly when already included.",
     ...lookups,
     ...(lookups.length === 0 ? ["  There are no recorded consequences or walk origins in this answer. Read inputs.declaredScope and inputs.declaredConfig before interpreting that scoped emptiness."] : []),
     ...impactCutLookup(cutsOf(fact), "cuts"),
@@ -494,34 +613,36 @@ function localImpactGuide(fact: Fact<ImpactValue> & { status: "complete" | "part
   ];
 }
 
-function workspaceImpactGuide(fact: Fact<WorkspaceImpactValue> & { status: "complete" | "partial" }): string[] {
+function workspaceImpactGuide(fact: Fact<WorkspaceImpactValue> & { status: "complete" | "partial" }, mode: ResponseMode = "details"): string[] {
   const { value } = fact;
   const trigger = value.sections[value.trigger.repo];
   const originPath = `value.sections[${JSON.stringify(value.trigger.repo)}].value.impact`;
-  const impacts = Object.values(value.sections).flatMap((section) => section.status === "unknown" || section.value.impact === undefined ? [] : [section.value.impact]);
+  const otherImpacts = Object.entries(value.sections).flatMap(([repo, section]) => repo === value.trigger.repo || section.status === "unknown" || section.value.impact === undefined ? [] : [section.value.impact]);
   return [
     "Investigation guide:",
-    "  Full JSON navigation (available with full: true): paths below are relative to structuredContent; query the returned payload directly when already included.",
+    mode === "full" ? "  JSON navigation: paths below are relative to structuredContent." : "  Full JSON navigation (available in full mode): paths below are relative to structuredContent; query the returned payload directly when already included.",
     ...(Object.keys(value.sections).length === 0 ? [] : ["  Select value.sections by the exact repository key, not a shared relative file path. Check section.status and, when present, section.reason/cuts and section.value.reads[].fact status/reason before using its evidence; an unknown section has no value."]),
     ...(trigger?.status !== "unknown" && trigger?.value.impact !== undefined ? [`  The originating repository's walk is at ${originPath}.`, ...impactLookups(trigger.value.impact, originPath)] : []),
-    ...(impacts.length === 0 ? [] : ["  Other repository walks are at value.sections[repo].value.impact only when that field exists. In each walk, entrypoints[].seeds indexes that same walk's seeds array; never join origins across repositories."]),
+    ...(otherImpacts.length === 0 ? [] : ["  Other repository walks are at value.sections[repo].value.impact only when that field exists. In each walk, entrypoints[].seeds indexes that same walk's seeds array; never join origins across repositories."]),
     ...(value.links.length === 0 ? [] : ["  To follow a cross-repository consequence, filter value.links by link.from (repo/file/symbol/line) or link.to (repo/name/handler). Each reach contains link IDs in recorded order: resolve them against value.links[].link.id, not the text's display numbers. Retain direction, basis and confidence; reach does not establish an unrecorded path inside a repository."]),
     ...(value.workspace.unserved.length === 0 ? [] : ["  For missing service coverage, inspect value.workspace.unserved and section.value.external when present. Use ye_ast_workspace to investigate outward-name evidence and candidate local repositories; adding workspace.repos changes the query's coverage rather than filtering this fact."]),
     ...impactCutLookup(cutsOf(fact), "cuts"),
     ...(Object.values(value.sections).some((section) => section.status === "partial") ? ["  Repository-local limits remain in value.sections[repo].cuts; inspect contributing section.value.reads[].fact too. Do not treat a complete independent read as resolving an unknown contributing read."] : []),
-    "  Preserve each repository's revision from value.repositorySnapshots when repeating a workspace query; evidence paths belong to their owning repository.",
+    "  Preserve each repository's revision from value.repositorySnapshots when repeating a workspace query; evidence paths belong to their owning repository. Related callers or outline queries are bound to their server repository; use an instance bound to the owning clone for foreign coordinates.",
     impactSnapshotGuide(fact.snapshot, value.trigger.mergeBase),
   ];
 }
 
-export function renderImpact(fact: Fact<ImpactValue>, detail: Detail = "summary"): string {
+export function renderImpact(fact: Fact<ImpactValue>, detail: ResponseMode = "summary"): string {
+  if (detail === "full") return (fact.status === "unknown" ? unknownImpactGuide() : localImpactGuide(fact, "full")).join("\n");
   const lines = headerLines(fact);
   if (fact.status === "unknown") return [...lines, ...unknownImpactGuide()].join("\n");
-  lines.push(...impactBody(fact.value, detail), ...impactSeeds(fact.value, detail), ...impactCuts(cutsOf(fact), detail), ...localImpactGuide(fact));
+  const hasOmissions = fact.status === "partial" || fact.value.entrypoints.some((entrypoint) => entrypoint.seeds.length > 1) || consequenceSymbols(fact.value).length > investigationSymbols(fact.value).length || fact.value.modules !== undefined;
+  lines.push(...impactBody(fact.value, detail), ...impactSeeds(fact.value, detail), ...impactCuts(cutsOf(fact), detail), ...(hasOmissions ? localImpactGuide(fact) : []));
   return lines.join("\n");
 }
 
-function importerFiles(entry: ImportedFile, detail: Detail): string[] {
+function importerFiles(entry: ImportedFile, detail: ResponseMode): string[] {
   const moduleGroups: readonly (readonly [string, readonly string[] | undefined])[] = [
     ["importers", entry.importers], ["reexporters", entry.reexporters], ["dynamic importers", entry.dynamicImporters], ["type importers", entry.typeImporters],
   ];
@@ -558,24 +679,23 @@ function importerFiles(entry: ImportedFile, detail: Detail): string[] {
   });
   const summary = [
     ...groups.map(([label, files]) => `    ${label} (${files.length})`),
-    ...(count === 0 ? [] : ['    File paths omitted; use detail: "full" to list them, or full: true for the original structured fact.']),
+    ...(count === 0 ? [] : ['    File paths omitted; use mode: "details" to list them, or mode: "full" for the original structured fact.']),
   ];
   return [heading, ...(detail === "summary" && size(summary) <= size(listing) ? summary : listing), ...notes];
 }
 
-export function renderImporters(fact: Fact<ImportersValue>, detail: Detail = "summary"): string {
+export function renderImporters(fact: Fact<ImportersValue>, detail: ResponseMode = "summary"): string {
+  if (detail === "full") return fact.status === "unknown" ? "Inspect reason and evidence; the result has no value." : "Select value.files by file; inspect importers and users for recorded links and unresolvedNamers for unconfirmed matches. These are paths only, with no relationship line locations; inspect cuts for partial results.";
   const lines = headerLines(fact);
   if (fact.status === "unknown") return lines.join("\n");
   for (const entry of fact.value.files) lines.push(`  ${entry.file}`, ...importerFiles(entry, detail));
+  if (fact.value.files.some((entry) => entry.importers.length + entry.users.length + entry.unresolvedNamers.length > 0)) lines.push("  These relationships are paths only; no relationship line locations were recorded.");
   lines.push(...cutsBlock(cutsOf(fact), detail));
   return lines.join("\n");
 }
 
-export function renderStructuredImporters(fact: Fact<ImportersValue>): string {
-  return [statusLines(fact)[0], "full structured result: structuredContent"].join("\n");
-}
-
-export function renderOutline(fact: Fact<OutlineValue>, detail: Detail = "summary"): string {
+export function renderOutline(fact: Fact<OutlineValue>, detail: ResponseMode = "summary"): string {
+  if (detail === "full") return fact.status === "unknown" ? "Inspect reason and evidence; the result has no value." : "Select value.files by file; declarations contain name, kind, line and endLine, and imports are paths. Inspect value.unheld for unavailable files and cuts when partial.";
   const lines = headerLines(fact);
   if (fact.status === "unknown") return lines.join("\n");
   for (const entry of fact.value.files) {
@@ -583,6 +703,7 @@ export function renderOutline(fact: Fact<OutlineValue>, detail: Detail = "summar
     lines.push(...(entry.declarations.length === 0 ? ["    declares nothing"] : entry.declarations.map((declaration) => `    ${spanText(declaration.line, declaration.endLine)} ${declaration.name} [${declaration.kind}]`)));
     if (entry.imports.length > 0) lines.push(`    imports: ${entry.imports.join(", ")}`);
   }
+  if (fact.value.unheld.length > 0) lines.push(`unheld files (${fact.value.unheld.length}): ${fact.value.unheld.join(", ")}; their declarations are unknown.`);
   lines.push(...cutsBlock(cutsOf(fact), detail));
   return lines.join("\n");
 }
@@ -609,7 +730,7 @@ function callSiteBlock(label: string, sites: readonly CallSite[]): string[] {
   return sites.length === 0 ? [] : [`    ${label} (${sites.length}):`, ...sites.map(callSiteLine)];
 }
 
-function repoImpactLines(repo: string, section: Fact<RepoImpact>, detail: Detail, bound: string): string[] {
+function repoImpactLines(repo: string, section: Fact<RepoImpact>, detail: ResponseMode, bound: string): string[] {
   if (section.status === "unknown") return [`  ${repo}: unknown (${section.reason})`];
   const { value } = section;
   return [
@@ -622,7 +743,8 @@ function repoImpactLines(repo: string, section: Fact<RepoImpact>, detail: Detail
   ];
 }
 
-export function renderWorkspaceImpact(fact: Fact<WorkspaceImpactValue>, detail: Detail = "summary"): string {
+export function renderWorkspaceImpact(fact: Fact<WorkspaceImpactValue>, detail: ResponseMode = "summary"): string {
+  if (detail === "full") return (fact.status === "unknown" ? unknownImpactGuide() : workspaceImpactGuide(fact, "full")).join("\n");
   const lines = headerLines(fact);
   if (fact.status === "unknown") return [...lines, ...unknownImpactGuide()].join("\n");
   const { value } = fact;
@@ -635,10 +757,11 @@ export function renderWorkspaceImpact(fact: Fact<WorkspaceImpactValue>, detail: 
   if (stale.length > 0) lines.push(`declared gateways that matched nothing (${stale.length}):`, ...stale.map(({ prefix, repo }) => `  - ${prefix} -> ${repo}`));
   if (trigger !== undefined && trigger.status !== "unknown" && trigger.value.impact !== undefined) lines.push(...impactBody(trigger.value.impact, detail));
   const linkIndexes = new Map(value.links.map(({ link }, index) => [link.id, index + 1]));
+  if (value.links.some(({ direction }) => direction === "downstream")) lines.push("Downstream links identify invoked destinations; a destination is not necessarily affected by the change.");
   lines.push(`links across repositories (${value.links.length}):${value.links.some(({ reach }) => reach.length > 0) ? " reach lists link numbers nearest to the change first" : ""}`, ...value.links.map((link) => impactedLinkLine(link, linkIndexes)));
   lines.push("per repository:", ...value.workspace.repos.flatMap((repo) => (value.sections[repo] === undefined ? [] : repoImpactLines(repo, value.sections[repo] as Fact<RepoImpact>, detail, value.trigger.repo))));
   const unserved = counted("no local repository serves", value.workspace.unserved);
-  const unservedSummary = `no local repository serves (${value.workspace.unserved.length}): full: true includes all names`;
+  const unservedSummary = `no local repository serves (${value.workspace.unserved.length}): mode: "full" includes all names`;
   lines.push(value.workspace.unserved.length > 0 && size([unservedSummary]) <= size([unserved]) ? unservedSummary : unserved);
   lines.push("walk origins:", ...value.workspace.repos.flatMap((repo) => {
     const section = value.sections[repo];
@@ -657,7 +780,7 @@ export function renderWorkspaceImpact(fact: Fact<WorkspaceImpactValue>, detail: 
 
 function faultRecovery(kind: string): string {
   switch (kind) {
-    case "unknown-change-path": return "Correct the nonmatching changed globs. Remove changed to investigate all changes within the declared scope; full/detail or a larger walk budget cannot fix a path-selection mismatch.";
+    case "unknown-change-path": return "Correct the nonmatching changed globs. Remove changed to investigate all changes within the declared scope; changing mode or a larger walk budget cannot fix a path-selection mismatch.";
     case "unknown-symbol": return "Use a listed declaration or an inclusive line range in targets. If needed, call ye_ast_outline for these files at the same revision to locate declaration spans; candidate names are alternatives, not an automatic substitution.";
     case "unknown-revision": return "Select a revision that resolves to a local commit. For impact check base/head, for other queries check revision, and for workspace check the identified repository's revision; inspect the reported cause before retrying.";
     case "no-merge-base": return "Choose base/head commits with a common ancestor. This query uses a merge-base diff; unrelated histories cannot be replaced silently with a direct diff.";
@@ -669,7 +792,7 @@ function faultRecovery(kind: string): string {
     case "unreadable":
     case "export-write-failed": return "Inspect the reported path and underlying read/write cause, including permissions or available space when indicated. Correct that prerequisite before retrying; this kind alone does not identify which repository or engine-owned resource failed.";
     case "duplicate-repository": return "Remove the duplicate repository declaration identified by the cause and retain the intended repository identity and revision.";
-    case "git-failed": return "Inspect the reported Git/workspace cause and repository path. Correct the stated prerequisite before retrying; changing text detail does not repair this failure.";
+    case "git-failed": return "Inspect the reported Git/workspace cause and repository path. Correct the stated prerequisite before retrying; changing presentation mode does not repair this failure.";
     case "aborted": return "The caller cancelled the work. Request it again only if still needed and the cancellation no longer applies.";
     case "internal-fault": return "Inspect the redacted cause. If reproducible, report the fault kind, query and snapshot context without secrets; no parameter change is guaranteed to repair an internal failure.";
     default: return "Inspect the redacted cause and typed fault metadata to identify the missing prerequisite; retry only after that condition can change. A fault provides no fact to inspect with full.";
@@ -739,14 +862,14 @@ function groupedByRank<T, K extends string>(items: readonly T[], keyOf: (item: T
 
 /** The names of one repository under their kind: a summary lists a dependency only when a repository given serves it,
  * and counts the rest, since a dependency is what the repository consumes and not what it calls. */
-function namesBlock(names: readonly OutwardName[], served: ReadonlySet<string>, detail: Detail): string[] {
+function namesBlock(names: readonly OutwardName[], served: ReadonlySet<string>, detail: ResponseMode): string[] {
   return groupedByRank(names, (name) => name.kind, OUTWARD_ORDER).flatMap(([kind, ofKind]) => {
-    const listed = detail === "full" || kind !== "dependency" ? ofKind : ofKind.filter((name) => served.has(name.name));
+    const listed = detail === "details" || kind !== "dependency" ? ofKind : ofKind.filter((name) => served.has(name.name));
     const counted = ofKind.length - listed.length;
     const head =
       counted === 0 ? `    ${kind} (${ofKind.length}):`
-      : counted === ofKind.length ? `    ${kind} (${ofKind.length}): no repository given serves them; detail "full" lists them`
-      : `    ${kind} (${ofKind.length}): ${counted} no repository given serves; detail "full" lists them`;
+      : counted === ofKind.length ? `    ${kind} (${ofKind.length}): no repository given serves them; mode "details" lists them`
+      : `    ${kind} (${ofKind.length}): ${counted} no repository given serves; mode "details" lists them`;
     const line = (name: OutwardName): string => `      - ${name.name} (${name.evidence.map(evidenceText).join(", ")})`;
     const listing = [head, ...ofKind.map(line)];
     const summarized = [head, ...listed.map(line)];
@@ -755,14 +878,14 @@ function namesBlock(names: readonly OutwardName[], served: ReadonlySet<string>, 
 }
 
 /** The names no repository given serves: a summary lists what the repository could call and counts the coordinates it consumes. */
-function unservedBlock(unserved: readonly RepositoryOutwardName[], detail: Detail): string[] {
+function unservedBlock(unserved: readonly RepositoryOutwardName[], detail: ResponseMode): string[] {
   if (unserved.length === 0) return ["no local repository serves (0):", NONE];
-  const listed = detail === "full" ? unserved : unserved.filter((name) => name.kind !== "dependency");
+  const listed = detail === "details" ? unserved : unserved.filter((name) => name.kind !== "dependency");
   const counted = unserved.length - listed.length;
   const head = `no local repository serves (${unserved.length}):`;
   const listing = [head, ...unserved.map((name) => `  - ${name.kind} ${name.name}${name.evidence.length === 0 ? "" : ` (${name.evidence.map(repositoryEvidenceText).join(", ")})`}`)];
   if (counted === 0) return listing;
-  const summarized = [`${head} ${counted} dependency counted; detail "full" lists them`, ...listed.map((name) => `  - ${name.kind} ${name.name}${name.evidence.length === 0 ? "" : ` (${name.evidence.map(repositoryEvidenceText).join(", ")})`}`)];
+  const summarized = [`${head} ${counted} dependency counted; mode "details" lists them`, ...listed.map((name) => `  - ${name.kind} ${name.name}${name.evidence.length === 0 ? "" : ` (${name.evidence.map(repositoryEvidenceText).join(", ")})`}`)];
   return size(summarized) <= size(listing) ? summarized : listing;
 }
 
@@ -791,7 +914,8 @@ function unresolvedBlock(value: WorkspaceValue): string[] {
   ];
 }
 
-export function renderWorkspace(fact: Fact<WorkspaceValue>, detail: Detail = "summary"): string {
+export function renderWorkspace(fact: Fact<WorkspaceValue>, detail: ResponseMode = "summary"): string {
+  if (detail === "full") return fact.status === "unknown" ? "Inspect reason and evidence; the result has no value." : "Match value.sections by repository and check each section status, reason and cuts; value.repositorySnapshots identifies each revision. Inspect value.candidates by name and repo for basis and evidence, and value.unserved for unmatched names.";
   const lines = headerLines(fact);
   if (fact.status === "unknown") return lines.join("\n");
   const { value } = fact;
@@ -811,8 +935,13 @@ export function renderWorkspace(fact: Fact<WorkspaceValue>, detail: Detail = "su
   lines.push(`served by a local repository (${value.candidates.length}):`, ...value.candidates.map(candidateLine));
   lines.push(...unservedBlock(value.unserved, detail));
   lines.push(...unresolvedBlock(value));
-  const cuts = [...cutsOf(fact), ...Object.values(value.sections).flatMap(cutsOf)].filter((cut) => cut.kind !== "unresolved-link");
-  lines.push(...cutsBlock(cuts, detail));
+  lines.push(...cutsBlock(cutsOf(fact), detail));
+  for (const [repo, section] of Object.entries(value.sections)) {
+    if (section.status !== "partial") continue;
+    const unresolved = section.cuts.filter((cut) => cut.kind === "unresolved-link");
+    const other = section.cuts.filter((cut) => cut.kind !== "unresolved-link");
+    lines.push(`cuts for repository ${repo}:`, ...cutsBlock(other, detail).slice(1), ...impactCuts(unresolved, detail).slice(1));
+  }
   return lines.join("\n");
 }
 
@@ -842,18 +971,19 @@ function dependencyGap(decision: Decision): boolean {
 }
 
 /** The gaps under their kind, the ones that block first: a summary counts the dependency coordinates a form cannot answer. */
-function decisionsBlock(decisions: readonly Decision[], detail: Detail): string[] {
+function decisionsBlock(decisions: readonly Decision[], detail: ResponseMode): string[] {
   return groupedByRank(decisions, (decision) => decision.kind, DECISION_ORDER).flatMap(([kind, ofKind]) => {
-    const listed = detail === "full" ? ofKind : ofKind.filter((decision) => !dependencyGap(decision));
+    const listed = detail === "details" ? ofKind : ofKind.filter((decision) => !dependencyGap(decision));
     const counted = ofKind.length - listed.length;
-    const head = counted === 0 ? `  ${kind} (${ofKind.length}):` : `  ${kind} (${ofKind.length}): ${counted} dependency counted (free text only); detail "full" lists them`;
+    const head = counted === 0 ? `  ${kind} (${ofKind.length}):` : `  ${kind} (${ofKind.length}): ${counted} dependency counted (free text only); mode "details" lists them`;
     const listing = [head, ...ofKind.flatMap(decisionLines)];
     const summarized = [head, ...listed.flatMap(decisionLines)];
     return counted === 0 || size(summarized) <= size(listing) ? summarized : listing;
   });
 }
 
-export function renderDecisions(fact: Fact<DecisionValue>, detail: Detail = "summary"): string {
+export function renderDecisions(fact: Fact<DecisionValue>, detail: ResponseMode = "summary"): string {
+  if (detail === "full") return fact.status === "unknown" ? "Inspect reason and evidence; the result has no value." : "Select value.decisions by kind and subject; inspect evidence, options[].basis and options[].recommended. Match evidence repositories to value.repositories snapshots.";
   const lines = headerLines(fact);
   if (fact.status === "unknown") return lines.join("\n");
   const { value } = fact;

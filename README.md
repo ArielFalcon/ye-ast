@@ -134,8 +134,8 @@ What `init` did:
 ### 3. Register the MCP server
 
 One server instance is bound to **one** repository root, and the instructions it answers at `initialize` name that root:
-every path in an answer is relative to it. Always pass the path: an MCP client may start the server in any working
-directory.
+local evidence paths are relative to it; workspace evidence paths are relative to their owning repository. Always
+pass the path: an MCP client may start the server in any working directory.
 
 <details open>
 <summary><b>Claude Code</b></summary>
@@ -205,7 +205,7 @@ npx --yes ye-ast-mcp map /path/to/repo
 - [ ] stdout is one JSON object with `schema`, `snapshot`, `producer`, `inputs`, `evidence`, `status` and `value`.
 - [ ] `status` is `complete` or `partial`. Both are valid answers.
 - [ ] `value.entrypoints` is an object, not `null`.
-- [ ] If the client lists MCP tools: `ye_ast_entrypoints`, `ye_ast_callers`, `ye_ast_importers`, `ye_ast_impact` and `ye_ast_workspace`
+- [ ] If the client lists MCP tools: `ye_ast_entrypoints`, `ye_ast_callers`, `ye_ast_importers`, `ye_ast_impact`, `ye_ast_outline`, `ye_ast_workspace` and `ye_ast_decisions`
       appear. The client may need a restart to pick up a new server.
 
 A non-zero exit code is a query problem, not a registration problem: read [step 7](#7-failures-and-what-they-mean).
@@ -224,11 +224,13 @@ flowchart TD
 
 | Tool | Call it when | Key arguments |
 |---|---|---|
-| `ye_ast_entrypoints` | You are orienting, or you need the handler of a UI route, HTTP route, message listener or scheduled job | `revision`, `live`, `scope` |
-| `ye_ast_callers` | **Before** changing, moving or deleting a symbol or a line range | `targets: [{ file, symbol }]` (a member as `Class.member`) or `[{ file, start, end }]`, `revision`, `live`, `scope`, `budget`, `detail`, `workspace` |
-| `ye_ast_importers` | Before moving, renaming or deleting a file, or changing its exports | `files: [repo-relative paths]`, `revision`, `live`, `scope`, `detail`, `full` |
-| `ye_ast_impact` | Before reporting work done or opening a pull request | `base` (the branch the work merges into), `head`, `live`, `changed`, `scope`, `budget`, `detail`, `workspace` |
-| `ye_ast_workspace` | The work crosses repositories: it lists the hosts, path prefixes, configuration URLs, dependency coordinates, remotes and registries the repository writes outward, the local clones that serve each one, and the names no clone serves | `repos: [{ path, id?, revision? }]`, `gateways`, `revision`, `scope` |
+| `ye_ast_entrypoints` | Find supported HTTP/UI routes, listeners and jobs | `revision`, `live`, `scope`, `mode` |
+| `ye_ast_callers` | Find dependents and reached entrypoints for a declaration or line range | `targets`, `revision`, `live`, `scope`, `budget`, `workspace`, `mode` |
+| `ye_ast_importers` | Investigate file moves, renames and export changes | `files`, `revision`, `live`, `scope`, `mode` |
+| `ye_ast_impact` | Investigate consequences of a diff | `base`, `head`, `live`, `changed`, `scope`, `budget`, `workspace`, `mode` |
+| `ye_ast_outline` | Find declarations, spans and imports in selected files | `files`, `revision`, `live`, `scope`, `mode` |
+| `ye_ast_workspace` | Discover outward names and candidate local repositories | `repos`, `gateways`, `revision`, `offline`, `scope`, `mode` |
+| `ye_ast_decisions` | Find workspace configuration gaps and evidence-backed options | `repos`, `gateways`, `revision`, `offline`, `scope`, `mode` |
 
 How the arguments behave:
 
@@ -236,20 +238,22 @@ How the arguments behave:
 |---|---|
 | `revision` / `head` | Any git revision. Default: `HEAD`. |
 | `live` | Read the working tree instead of a revision. Requires `trusted`; when true, omit `revision`/`head`, `workspace` and `offline` (including `offline: false`). Workspace traversal uses committed snapshots. |
-| `workspace` | `{ repos: [{ path, id?, revision? }], gateways?: [{ prefix, repo }] }` on `callers` and `impact`: other **local** clones whose call sites are joined to the routes and listeners the walk reaches. The answer adds the links (with their basis: `exact`, `gateway-prefix`, `route-overlap`, `base-path`, `suffix`, `event-destination`), each with its direction (`upstream` for what reaches the change, `downstream` for what a change sends onward) and the links crossed from the change (`reach`), followed to a fixpoint across repositories; what depends on those call sites in their own repository, the call sites that reached a declared service and matched none of its entrypoints (`unmatched`), the ones that name a service no clone serves (`external`), and every call site whose target the code does not decide as a cut. A gateway prefix needs no declaration when the routes show it; `gateways` overrides it, and a declared gateway no call site names, or whose repository was not passed, is listed as matching nothing. Without `repos` the repositories and gateways the user persisted with `ye-ast init --workspace <file>` are used, and a repository that persists none answers about itself alone; the manifest holds the same object, its relative paths resolved against the installed repository. A repository the request does not name keeps the directory name of its path in every snapshot, so a linked worktree is passed with `id` set to the name of the clone that holds it when both must answer as one; the repository a command is bound to is always named after its main worktree. Every answer says which of the two declared its repositories (`workspace.source`: `request`, `persisted` or `none`), so an answer about the bound repository alone is never read as a workspace with no impact. Each clone is read at its own snapshot under its own trust declaration, with no network request; exclusive with `live`. Without `workspace` the answer says nothing about other repositories. |
-| `scope` | `{ include?: [globs], exclude?: [globs] }` over repository-relative paths; `exclude` wins. `include` selects the content the answer is about, and the configuration that interprets it (a `package.json`, a `tsconfig`, a build file, a Spring `application` file, an OpenAPI document) is always read, so narrowing never hides what an extractor needs to place a source. A path outside the scope is **not answered about**, so callers and entrypoints through it are not known; the answer names its scope under its status. Use it to keep one service or package apart, not to shorten an answer. |
-| `changed` | On `impact`, globs over the changed paths the scope leaves: only the change's paths they select seed the walk, while the repository is still indexed whole, so callers outside the selection are known. Use it on a large change to answer one area at a time. A glob that selects no changed path is an error, never an empty answer. A file the index could not read stays a cut even when the selection leaves it out: its blindness belongs to the whole walk. |
+| `workspace` | `{ repos: [{ path, id?, revision? }], gateways?: [{ prefix, repo }] }` on `callers` and `impact`: other **local** clones whose call sites are joined to the routes and listeners the walk reaches. The answer adds the links (with their basis: `exact`, `gateway-prefix`, `route-overlap`, `base-path`, `suffix`, `event-destination`), each with its direction (`upstream` for what reaches the change, `downstream` for what a change sends onward) and the links crossed from the change (`reach`), followed to a fixpoint across repositories; what depends on those call sites in their own repository, the call sites that reached a declared service and matched none of its entrypoints (`unmatched`), the ones that name a service no clone serves (`external`), and every call site whose target the code does not decide as a cut. A gateway prefix needs no declaration when the routes show it; `gateways` overrides it, and a declared gateway no call site names, or whose repository was not passed, is listed as matching nothing. Without `repos` the repositories and gateways the user persisted with `ye-ast init --workspace <file>` are used, and a repository that persists none answers about itself alone; the manifest holds the same object, its relative paths resolved against the installed repository. A repository the request does not name keeps the directory name of its path in every snapshot, so a linked worktree is passed with `id` set to the name of the clone that holds it when both must answer as one; the repository a command is bound to is always named after its main worktree. Every answer says which of the two declared its repositories (`workspace.source`: `request`, `persisted` or `none`), so an answer about the bound repository alone is never read as a workspace with no impact. Each clone is read at its own snapshot under its own trust declaration; trusted persisted remotes may refresh unless `offline: true`. Exclusive with `live`. Without `workspace` the answer says nothing about other repositories. |
+| `scope` | `{ include?: [globs], exclude?: [globs] }` over repository-relative paths; `exclude` wins. `include` selects the content the answer is about, and the configuration that interprets it (a `package.json`, a `tsconfig`, a build file, a Spring `application` file, an OpenAPI document) remains available under `include`; an explicit `exclude` can remove it. A path outside the scope is **not answered about**, so callers and entrypoints through it are not known; the answer names its scope under its status. Use it to keep one service or package apart, not to shorten an answer. |
+| `changed` | On `impact`, globs over the changed paths the scope leaves: only the change's paths they select seed the walk. Callers outside that selection remain eligible within the declared scope, subject to recorded cuts; `changed` does not itself narrow consequence coverage. Use it on a large change to answer one area at a time. A glob that selects no changed path is an error, never an empty answer. A file the index could not read stays a cut even when the selection leaves it out: its blindness belongs to the whole walk. |
 | `budget` | `{ depth?, hubFanIn?, expansions? }`, positive integers, no defaults. Limits traversal work, not response length. `depth` counts incoming dependency levels, not hops between services. A bound that stops a walk is reported as a cut, never as a silent truncation. |
-| `detail` | Text presentation: on `impact` and `callers`, `"summary"` (default) identifies entrypoints and counts supporting symbols, change origins and cuts. `"full"` adds compact recorded evidence, dependency locations and cut anchors for investigation; it is not exhaustive. Explicitly requested targets remain named. Other tools retain their existing summary/full text. Both levels keep the same analysis and snapshots. Use `full: true` for every recorded item in `structuredContent`. |
+| `mode` | `"summary"` (default) identifies findings and limits; `"details"` adds recorded explanatory evidence and locations; `"full"` returns the full redacted public fact in `structuredContent` with a contextual text guide. Choose any mode directly. None changes coverage, traversal or snapshots. |
 
 `importers` presents three disjoint groups per target: importers, additional users without an import edge, and
 unresolved-only candidates without a resolved link. Its distinct-file count counts each path once. A file with a
 resolved link may also have unresolved name matches; detailed text groups those files separately without listing
 them again as candidates. An import does not prove declaration usage, and a name match does not prove a dependency.
-The default summary counts groups when that is shorter than listing them; use `detail: "full"` for paths.
-With `full: true`, the original overlapping `importers`, `users` and `unresolvedNamers` arrays and all cuts remain in
-`structuredContent`; text becomes a short status acknowledgment. These presentation choices preserve coverage,
-snapshots and completeness. Pin `revision` to the returned SHA when requesting another presentation of the same read.
+The default summary counts groups when that is shorter than listing them; use `mode: "details"` for paths.
+With `mode: "full"`, the original overlapping `importers`, `users` and `unresolvedNamers` arrays and all cuts remain in
+`structuredContent`; text acknowledges the status and guides navigation. These presentation choices preserve coverage,
+snapshots and completeness. For a committed read, pin `revision` to the returned SHA when requesting another
+presentation. A live `head` and `stateId` identify working-tree content that cannot be pinned or retrieved by
+`revision`; another live call may observe different content. Do not combine `live` with `revision`.
 
 For `impact`, start with `{"base":"main"}` (replace the branch with the actual merge destination).
 Use `{"base":"main","live":true,"changed":["src/api/**"]}` for trusted working-tree changes in one area,
@@ -258,7 +262,7 @@ retaining consumers elsewhere within scope. Use
 analysis with eligible persisted workspace membership and no remote refresh. Omitting `workspace` is a local query;
 `workspace: {}` enables persisted defaults and reports when none exist. `offline` has no effect on local queries.
 
-To expand an answer reproducibly, set `head` to its recorded SHA and retain `base` and `changed`; for a workspace,
+To repeat the same committed question, set `head` to its recorded SHA and retain `base` and `changed`; for a workspace,
 also pin the other repositories to their recorded revisions. Repeating a live query can read a different state.
 
 Impact text locates both the call site and destination handler of each cross-repository link. The numbered `reach`
@@ -269,11 +273,11 @@ remain distinct. Impact/callers detailed text shows one verified origin associat
 it or claiming a complete call chain. Its symbol evidence covers the nearest recorded consequence depth and the
 reached handlers; other symbols are counted, with a literal listing when shorter. Change origins supplying that
 evidence remain localizable. Cut details keep anchors and limits while counting repeated reference places.
-Unserved names can be counted in either text level. Use `full: true` for exhaustive symbols, seeds, associations,
+Unserved names can be counted in either text level. Use `mode: "full"` for exhaustive symbols, seeds, associations,
 reference places and names. Counted omissions concern presentation, while `partial` and cuts describe missing
 analysis coverage. Related `outline`, `callers` or `importers` queries do not filter the original impact fact.
 
-Impact/callers answers close with a contextual investigation guide. It identifies useful full-JSON lookups,
+When needed, impact/callers answers include a contextual investigation guide. It identifies useful full-JSON lookups,
 matching fields and joins for the data present: entrypoint origin indexes belong to that walk's seed array,
 workspace links join by link ID, and repository evidence stays in its owning section. Unknown answers guide you
 to reason/evidence instead of an absent value. Fault responses retain their typed metadata and explain an applicable
@@ -281,27 +285,27 @@ correction or the prerequisite to inspect before retrying.
 
 Working rules:
 
-- Prefer these tools over `grep` and over your own inference whenever the decision depends on **what reaches what**.
-  Do not use them for style, naming or syntax questions.
-- Call `ye_ast_callers` **before** deleting a declaration. Once it is gone, `ye_ast_impact` can only list the places
-  that still name it.
+- Use the tools when their recorded facts answer the question; they do not judge style, naming or syntax.
+- When investigating a declaration before deletion, `ye_ast_callers` can identify its dependents. After deletion,
+  `ye_ast_impact` can only report remaining recorded evidence.
 - Name symbols as they are declared in the file: `placeOrder`, or `OrderService.placeOrder` for a member.
-- To shorten an answer, rely on `detail`, not `scope`: a scope hides whatever lies outside it, routes included.
-- On a change that touches many files, pass `changed` with the globs of the area you are answering about. Unlike `scope`,
-  it never hides a caller: the repository is still indexed whole.
+- To shorten an answer, use `mode`, not `scope`: a scope hides whatever lies outside it, routes included.
+- On a change that touches many files, pass `changed` with the globs of the area you are answering about. Callers
+  outside that selection remain eligible within `scope`, subject to recorded cuts; `changed` does not itself narrow
+  consequence coverage.
 
 ### 6. Read the answer correctly
 
-Every answer is one envelope:
+A CLI or query-protocol fact has this envelope; MCP text modes return a smaller receipt as described below:
 
 ```text
 schema     contract version of the envelope
-snapshot   what was read: { kind: "sha", sha } or { kind: "live" }
+snapshot   what was read: { repo, kind: "sha", sha } or { repo, kind: "live", head, stateId }
 producer   ye-ast name and version
 inputs     trust mode, declared scope, change selection, budget
 evidence   [{ path, line, endLine? }] that support the value
 status     complete | partial | unknown
-value      the fact itself (the MCP's structured content carries it only with full: true)
+value      the fact itself (in MCP structured content when mode is "full" and status is known)
 ```
 
 | `status` | Means | What you report |
@@ -311,7 +315,7 @@ value      the fact itself (the MCP's structured content carries it only with fu
 | `unknown` | ye-ast cannot tell; `reason` says why | The reason. **Never** translate it into "no impact" |
 
 > [!WARNING]
-> An empty list is never used to mean "nothing found". If you see `unknown` or a cut, say so to the user.
+> A complete empty list means no recorded result within its declared scope. `unknown` or a cut is not proof of absence; report the limitation.
 
 An item can also be `unknown` inside a `complete` answer: an entrypoint whose target the sources do not resolve, or a
 source no `package.json` above it places in a project (`no-project`). The collection is complete because nothing bounded
@@ -326,19 +330,30 @@ stays out of scope.
 Also:
 
 - Quote the `snapshot` when you report a fact, so the user knows which revision it describes.
-- An MCP tool's `structuredContent` holds the envelope alone — `status`, `reason` and `evidence`, never `value` and never
-  the cut places: the text is the answer, and nothing is paid for twice. A host that needs the fact itself passes
-  `full: true` to any tool and gets `value` and every cut place. Text stays unchanged except on `importers`, which returns a short status acknowledgment instead of repeating the lists.
+- MCP summary/details return a strict receipt: `{ mode, status, snapshot }`, plus `reason` exactly when status is
+  unknown. They do not include the fact body, cuts or sidecar arrays. Full returns the redacted fact plus `mode` and
+  applicable `repositoryRoots`, `freshness`, `resolution` and `live` siblings; `_meta["ye-ast/live"]` also carries a
+  stale notice. Full known facts require a value, partial facts require cuts, and unknown facts require a reason and no
+  value. The published output schemas validate the common envelope, snapshot identity and principal family containers
+  and coordinates, not every domain leaf. Full payloads permit additive public fields; receipts are strict.
+- The migration is breaking: replace `detail: "summary"` with `mode: "summary"`, `detail: "full"` with
+  `mode: "details"`, and `full: true` with `mode: "full"`. The old arguments are rejected, including `full: false`;
+  there are no compatibility aliases. A client may expose both text and structured content to a model; do not assume
+  either channel is hidden. Full text guides the structured result instead of repeating the family listing.
+- Coverage exclusions, traversal cuts and presentation omissions are different: scope excludes analysis, cuts record
+  bounded or unresolved analysis, and omissions count recorded items hidden from text and recoverable in full.
+- Tools are bound to the launch repository. Workspace results qualify evidence by owning repository and snapshot;
+  to ask `callers` or `outline` about a foreign coordinate, use a server bound to that clone. No `repo` selector or
+  selective/paged result API is currently exposed. [ADR-0022](docs/architecture/adr/0022-typed-query-replay-and-selective-evidence.md)
+  records follow-up designs, not implemented calls.
 - A place carries its span when its declaration is longer than one line: `src/a.ts:3-9`. An impacted symbol or a seed
   prints the same span (`3-9 A.seed`), so a read can name exactly the range it needs.
 - A symbol reached through another one prints `via <file>:<symbol> at <lines>`: the lines are **inside the symbol itself**,
-  the places where it depends on what reached it, and every one of them is a place to change — never assume one use per
-  symbol. When the store places no line for that dependence, the same slot names what it is instead: `(call)`,
+  the places where it depends on what reached it; a recorded dependency does not by itself prove a change is needed. When the store places no line for that dependence, the same slot names what it is instead: `(call)`,
   `(reference)`, `(contains)`, `(dispatch)`, `(relation)`, `(import)`; none of them is a missing answer. An `at` list with
   no parenthetical is a call.
-- The text of every answer opens with `status`, the `declared scope` that status is relative to, the `scope` the caller
-  narrowed and the `snapshot`; a refreshed workspace answer adds a `remote:` line per remote and a `pinned:` line per
-  repository before them, so a text-only read loses nothing the fact's siblings carry.
+- Summary and details state status, scope and snapshot; refreshed reads also show remote freshness and pinned revisions.
+  Full text acknowledges the status and guides navigation of the structured result and its available sidecars.
 - `_meta["ye-ast/live"]` on a live answer means the working tree moved during the read; the answer may be stale.
 - An `isError` result carries a fault kind on its first text line and the same `{ kind, detail, entries? }` in
   `_meta["ye-ast/fault"]`; see the next step.

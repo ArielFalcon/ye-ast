@@ -117,9 +117,9 @@ test("a real client over stdio lists the tools and reads the entrypoints fact th
   const listed = (await request("tools/list")).result as { tools: { name: string }[] };
   assert.ok(listed.tools.some((tool) => tool.name === "ye_ast_entrypoints"));
 
-  const called = (await request("tools/call", { name: "ye_ast_entrypoints", arguments: { full: true } })).result as {
+  const called = (await request("tools/call", { name: "ye_ast_entrypoints", arguments: { mode: "full" } })).result as {
     isError?: boolean;
-    structuredContent: unknown;
+    structuredContent: Record<string, unknown>;
     content: { text: string }[];
   };
   assert.equal(called.isError, undefined);
@@ -127,18 +127,27 @@ test("a real client over stdio lists the tools and reads the entrypoints fact th
   const printed: string[] = [];
   const code = await composeCli({ scratchRoot })(["map", repo], { out: (line) => printed.push(line), err: () => {} });
   assert.equal(code, 0);
-  assert.deepEqual(called.structuredContent, JSON.parse(printed.join("\n")));
-  assert.match(called.content[0]?.text ?? "", /GET \/orders\/\{id\}.*OrderController\.java:\d+/);
+  const { mode, ...fact } = called.structuredContent;
+  assert.equal(mode, "full");
+  assert.deepEqual(fact, JSON.parse(printed.join("\n")));
+  assert.match(called.content[0]?.text ?? "", /value\.entrypoints\.value/);
+  assert.doesNotMatch(called.content[0]?.text ?? "", /GET \/orders\/\{id\}/);
+  const summary = (await request("tools/call", { name: "ye_ast_entrypoints", arguments: {} })).result as {
+    isError?: boolean; structuredContent: Record<string, unknown>; content: { text: string }[];
+  };
+  assert.equal(summary.isError, undefined);
+  assert.deepEqual(summary.structuredContent, { mode: "summary", status: fact["status"], snapshot: fact["snapshot"] });
+  assert.match(summary.content[0]?.text ?? "", /GET \/orders\/\{id\}.*OrderController\.java:\d+/);
 });
 
 test("callers with a workspace joins the call site of another repository to the route the symbol serves, and the answer is the same twice", async () => {
   const ask = (): Promise<Reply> =>
     request("tools/call", {
       name: "ye_ast_callers",
-      arguments: { targets: [{ file: "src/main/java/shop/OrderController.java", symbol: "OrderController.one" }], workspace: { repos: [{ path: frontend }] }, full: true },
+      arguments: { targets: [{ file: "src/main/java/shop/OrderController.java", symbol: "OrderController.one" }], workspace: { repos: [{ path: frontend }] }, mode: "full" },
     });
 
-  const first = (await ask()).result as { isError?: boolean; structuredContent: { status: string; value: { links: { link: { basis: string; from: { repo: string; line: number }; to: { repo: string; name: string } } }[]; sections: Record<string, { value: { impact?: { symbols: { symbol: string }[] }; unmatched: { line: number }[] } }> } }; content: { text: string }[] };
+  const first = (await ask()).result as { isError?: boolean; structuredContent: { mode: string; status: string; snapshot: unknown; value: { links: { link: { basis: string; from: { repo: string; line: number }; to: { repo: string; name: string } } }[]; sections: Record<string, { value: { impact?: { symbols: { symbol: string }[] }; unmatched: { line: number }[] } }> } }; content: { text: string }[] };
   const second = (await ask()).result as typeof first;
 
   assert.equal(first.isError, undefined);
@@ -149,4 +158,23 @@ test("callers with a workspace joins the call site of another repository to the 
   assert.deepEqual(first.structuredContent.value.sections["shop-web"]?.value.unmatched.map((site) => site.line), [10]);
   assert.ok((first.structuredContent.value.sections["shop-web"]?.value.impact?.symbols ?? []).some((symbol) => symbol.symbol.endsWith("open")));
   assert.deepEqual(first, second);
+  assert.match(first.content[0]?.text ?? "", /value\.sections/);
+  const args = { targets: [{ file: "src/main/java/shop/OrderController.java", symbol: "OrderController.one" }], workspace: { repos: [{ path: frontend }] } };
+  for (const mode of ["summary", "details"] as const) {
+    const result = (await request("tools/call", { name: "ye_ast_callers", arguments: { ...args, mode } })).result as { isError?: boolean; structuredContent: Record<string, unknown>; content: { text: string }[] };
+    assert.equal(result.isError, undefined);
+    assert.deepEqual(result.structuredContent, { mode, status: first.structuredContent.status, snapshot: first.structuredContent.snapshot });
+    assert.match(result.content[0]?.text ?? "", /shop-web:src\/app\/order\.page\.ts:7/);
+  }
+  const localArgs = { targets: args.targets };
+  const localFull = (await request("tools/call", { name: "ye_ast_callers", arguments: { ...localArgs, mode: "full" } })).result as { isError?: boolean; structuredContent: Record<string, unknown>; content: { text: string }[] };
+  assert.equal(localFull.isError, undefined);
+  assert.equal(localFull.structuredContent["mode"], "full");
+  assert.match(localFull.content[0]?.text ?? "", /value\.seeds/);
+  for (const mode of ["summary", "details"] as const) {
+    const local = (await request("tools/call", { name: "ye_ast_callers", arguments: { ...localArgs, mode } })).result as { isError?: boolean; structuredContent: Record<string, unknown>; content: { text: string }[] };
+    assert.equal(local.isError, undefined);
+    assert.deepEqual(local.structuredContent, { mode, status: localFull.structuredContent["status"], snapshot: localFull.structuredContent["snapshot"] });
+    assert.match(local.content[0]?.text ?? "", /OrderController\.one/);
+  }
 });

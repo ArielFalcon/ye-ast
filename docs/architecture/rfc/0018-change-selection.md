@@ -8,8 +8,8 @@
   protocol, three doors), [ADR-0013](../adr/0013-coverage-grows-only-with-evidence.md) (coverage grows with evidence)
 
 **In short:** `impact.ofChange` gains `changed`, globs over the changed paths. Only the changed paths these globs
-select seed the walk; the repository is still indexed whole, so a caller outside the selection is still known. It is a
-request input, not a content scope: unlike `scope`, it never hides a caller.
+select seed the walk. Callers outside that selection remain eligible within the declared scope, subject to recorded
+cuts. It is a request input, not a content scope: `changed` does not itself narrow consequence coverage.
 
 ## Why
 
@@ -22,6 +22,10 @@ entrypoint also names one contributing seed with its location and basis, plus th
 entrypoint's seed indices. This preserves actionable origin evidence without listing every declaration. `detail: "full"`
 lists every seed. The summary never prints more bytes than the listing (the rule of RFC-0017): when a small listing
 is shorter, it is used instead. The structured fact and its seed indices are unchanged.
+
+The preceding presentation describes the historical selector. The current [MCP contract](0005-transports.md#mcp-mvp-in-process-stdio)
+rejects `detail`; `mode: "details"` supplies explanatory evidence without promising every seed, and `mode: "full"`
+preserves every recorded seed in the structured result.
 
 The agent's two existing levers are both wrong for this question:
 

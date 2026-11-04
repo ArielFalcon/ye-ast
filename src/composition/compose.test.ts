@@ -384,11 +384,12 @@ test("a trusted sibling whose remote is passed is read at the remote's sha, and 
   const { version, entrypoints, impact, outline, workspace: workspaceQueries, workspaceImpact, decisions, redaction } = composeQueries({ scratchRoot, trustDirectory, refresh });
   const session = await openSession(createMcpServer({ version, entrypoints, impact, outline, workspace: workspaceQueries, workspaceImpact, decisions, redaction, repository: { path: repo, repoId: "shop-service" } }));
   try {
-    const answer = await session.callTool("ye_ast_callers", { targets: [{ file: "src/OrderController.java", symbol: "OrderController.one" }], workspace: {}, full: true });
+    const answer = await session.callTool("ye_ast_callers", { targets: [{ file: "src/OrderController.java", symbol: "OrderController.one" }], workspace: {}, mode: "full" });
     const structured = answer.structuredContent as Record<string, unknown>;
+    assert.equal(structured["mode"], "full");
     assert.deepEqual(structured["freshness"], redaction.redactValue([{ repo: "orders", url, freshness: { status: "verified" } }]));
     assert.equal((structured["resolution"] as { sha?: string }[])[0]?.sha, remoteSha);
-    const { freshness: _freshness, resolution: _resolution, ...fact } = structured;
+    const { mode: _mode, freshness: _freshness, resolution: _resolution, repositoryRoots: _roots, live: _live, ...fact } = structured;
     assert.equal("freshness" in (structured["value"] as Record<string, unknown>) || "resolution" in (structured["value"] as Record<string, unknown>), false, "the sidecar stays outside the fact");
     assert.equal(JSON.stringify(fact).includes(url), false, "the remote URL never reaches a fact");
   } finally {

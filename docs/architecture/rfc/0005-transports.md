@@ -52,11 +52,9 @@ declaration the CLI and the MCP server run `untrusted`. The record is one file p
 to another account or is open to the group or others is refused, never repaired; a record that cannot be used reads as
 no declaration, the fact runs `untrusted`, and the CLI and `ye-ast mcp` write one line naming the fault on stderr. The CLI and
 `ye-ast mcp` read it for the repository they run on and record the mode in every fact's `inputs.trust`; `ye-ast serve`
-ignores it, since its host declares the mode with `trust.declare`, and keeps refusing `trusted`. Every read still goes
-through the git export at a sha, and the live tree and the repository's manifest are outside this slice, so today a
-`trusted` record changes `inputs.trust` and nothing else. Slice 3 of [RFC-0010](0010-impact-queries.md#live-head-slice-3)
-adds the `live` selector, which reads the working tree through ye-ast's mirror and only under `trusted`; `serve` keeps
-refusing `trusted` in that slice.
+ignores it, since its host declares the mode with `trust.declare`, and keeps refusing `trusted`. Committed reads use
+a git export. Trusted CLI/MCP reads may use `live` through ye-ast's working-tree mirror as described in
+[RFC-0010](0010-impact-queries.md#live-head-slice-3); `serve` continues to refuse `trusted`.
 
 ## Query server (MVP)
 
@@ -153,100 +151,57 @@ An error is `{code, message, data: {kind}}`; `kind` names the code and `data` ad
 
 ## MCP (MVP: in-process stdio)
 
-- Built on `@modelcontextprotocol/server`, the stable v2 line of the MCP TypeScript SDK
-  ([ADR-0007](../adr/0007-dependency-versions.md)).
-- Receives only read query families; a write is impossible by type. No tool asks for a reindex: a `live` snapshot stays
-  fresh through [Live freshness](#live-freshness).
-- Tools answer questions codegraph's own MCP does not: impact with completeness, entrypoints reaching a symbol, route
-  table, consumers and contract of an operation, change scope, status. No duplicate of `codegraph_explore`.
-- Answers rendered from structured facts with a token budget, `path:line` evidence and explicit `unknown`. qayaba's
-  `explore-answer.ts` is not reused: it parses codegraph's Markdown output.
-- Keeps its snapshot open for the session.
-- Takes no `scope` yet: its tools run with the empty `include` and `exclude`.
+The read-only MCP server uses the stable v2 TypeScript SDK and binds local queries to its launch repository. It
+exposes no index administration or write tool. A workspace reads declared clones under their own trust and snapshots;
+a foreign coordinate needs an instance bound to its owning clone for a local follow-up. `repo`, selective retrieval
+and pagination are not current selectors; [ADR-0022](../adr/0022-typed-query-replay-and-selective-evidence.md)
+records follow-up designs.
 
-| Tool | Params | Answers |
+| Tool | Question | Main arguments besides `mode` |
 |---|---|---|
-| `ye_ast_entrypoints` | `revision?` or `live?` | the entrypoints of the repository |
-| `ye_ast_impact` | `base`, `head?` or `live?`, `budget?` | what depends on the change from the merge base to the head |
-| `ye_ast_callers` | `revision?` or `live?`, `targets`, `budget?` | the callers of symbols or line ranges |
-| `ye_ast_importers` | `revision?` or `live?`, `files` | the importers of files |
+| `ye_ast_entrypoints` | Where are routes, listeners and jobs handled? | `revision`, `live`, `scope` |
+| `ye_ast_impact` | What depends on a diff? | `base`, `head`, `live`, `changed`, `scope`, `budget`, `workspace`, `offline` |
+| `ye_ast_callers` | What depends on a declaration or range? | `targets`, `revision`, `live`, `scope`, `budget`, `workspace`, `offline` |
+| `ye_ast_importers` | Which files import or name a file? | `files`, `revision`, `live`, `scope` |
+| `ye_ast_outline` | Which declarations, spans and imports are in selected files? | `files`, `revision`, `live`, `scope` |
+| `ye_ast_workspace` | Which outward names and candidate repositories are recorded? | `repos`, `gateways`, `revision`, `offline`, `scope` |
+| `ye_ast_decisions` | Which workspace configuration gaps need user input? | `repos`, `gateways`, `revision`, `offline`, `scope` |
 
-`live` is a boolean that reads the working tree ([Live freshness](#live-freshness)); the strict schema refuses it
-together with `revision` (or `head`). Impact and callers also exclude `workspace` and the presence of `offline`,
-even when false: a live read is local, while workspace traversal reads committed snapshots. Both runtime validation
-and the published JSON Schema express these exclusions from the same field list. Under `untrusted` the tool answers
-`isError` with `live-requires-trusted`.
+All tools accept `mode: "summary" | "details" | "full"`. Summary is the default and identifies findings and
+limits; details adds recorded explanatory evidence and locations; full returns the complete redacted public fact
+with a brief contextual JSON guide rather than repeating the family listing. All modes can be selected directly and
+leave the query, snapshot, analysis coverage and traversal bounds unchanged. Replace the former `detail: "summary"`,
+`detail: "full"` and `full: true` with `mode: "summary"`, `mode: "details"` and `mode: "full"`, respectively.
+Strict input schemas reject those former controls, including `full: false`; no compatibility alias exists.
+Older RFC-0014 and RFC-0018 descriptions of `detail: "full"` predate this migration; the contract in this section
+supersedes those references.
 
-On impact, `base` selects the merge base with `head`, not necessarily a direct base-to-head diff. `changed` selects
-which changed paths seed traversal while consumers elsewhere within `scope` remain eligible. `scope` restricts coverage;
-`budget` limits traversal work, not text length, and `depth` counts dependency levels rather than service hops. Omitting
-`workspace` selects local analysis; an empty object enables eligible persisted membership, with its source stated in the
-answer. `offline` only affects workspace reads. To expand the same committed result, reuse its head SHA, comparison
-base and per-repository snapshots; a repeated live read may observe another working-tree state.
+Summary/details structured content is a strict receipt with `mode`, `status`, `snapshot` and `reason` exactly for
+unknown status. A SHA snapshot carries `repo`, `kind`, `sha`; a live snapshot carries `repo`, `kind`, `head`,
+`stateId`. Full carries the fact and `mode`, plus applicable `repositoryRoots`, `freshness`, `resolution` and `live`
+response siblings. A stale notice is also in `_meta["ye-ast/live"]`. Known full facts require a value; partial facts
+also require cuts; unknown facts require a reason and no value. Full permits additive public fields. Per-family
+`outputSchema` validation covers the common envelope, identities and principal containers/coordinates: entrypoints,
+local or workspace impact/callers, importers, outline, workspace, and decisions. It does not duplicate every domain
+union. Internal workspace repository reads and `repositorySources` are excluded from public output. Faults are
+`isError` responses with redacted typed metadata under `_meta["ye-ast/fault"]`, not success receipts.
 
-Every tool also takes `full`, a host's opt-in: by default `structuredContent` carries the envelope alone, and `true`
-adds the whole fact, every impacted symbol and every cut place included.
+A client may expose both text and `structuredContent` to a model; the server does not guarantee channel hiding or
+client-side filtering. Full structured delivery need not be duplicated in text. These are wire contracts, not measured
+model exposure or adoption.
 
-All tools are read-only, take strict schemas and are bound to the repository given at launch. The text is what an agent
-reads; `structuredContent` carries the redacted envelope without the family's `value` and without the cut places the
-text already prints — `schema`, `snapshot`, `producer`, `inputs`, `status`, `reason` when the answer is unknown, and
-`evidence` — so a `partial` status stays machine-checkable while its places live in the text. Duplicating the fact
-cost a measured answer 1.5× to 6× its text (683 771 characters of fact against 144 691 of text), and a machine that
-needs the whole fact has the library and `serve`; `full: true` puts it back beside the same text, byte for byte, except
-on `importers`, where the text becomes a short status acknowledgment pointing to `structuredContent`.
+`scope` changes analysis coverage; excluded paths are unknown, not counted presentation omissions. `changed` selects
+diff paths that seed impact while in-scope consumers elsewhere remain eligible. `budget` limits traversal work and
+records cuts; a presentation omission counts recorded items and does not itself make the fact partial. A related
+callers, outline or importers query answers a new question, not a filter over an existing impact. Importer links are
+path-only; unresolved names are candidates, not verified dependencies. Workspace links keep their owners, basis,
+confidence and direction; an outgoing destination is not automatically an affected consumer.
 
-The `importers` text projection partitions each target's related paths into importers, additional users that are not
-importers, and unresolved-only candidates absent from both resolved-link lists. Every related path is listed at most
-once per target. Files with resolved links and unresolved name matches remain in their resolved-link group; detailed
-text splits that group by the presence of pending matches. Summary counts these disjoint groups, their distinct-file
-total and overlapping pending matches when shorter than the detailed listing; otherwise it keeps the listing
-([RFC-0017](0017-answer-size-and-outline.md)). Counted omissions point to `detail: "full"` for paths and `full: true`
-for the original structured fact. The underlying `ImportersValue` arrays continue to overlap; presentation never
-changes the fact, its completeness or its query identity. Imports do not prove declaration usage, and unresolved
-name matches do not establish dependencies or additional affected files. No reference location is invented from the
-path-only arrays. With `full: true`, text carries status (and the reason when unknown) and a pointer to the structured
-result, without repeating the lists or cut locations. Response-level stale notices remain available as usual.
-
-The text rendering opens with the status, the declared scope that status is relative to and the snapshot,
-states `path:line` evidence, the span of each presented declaration longer than one line (`src/a.ts:3-9`), and recorded places where a
-presented symbol depends on the one that reached it (`via src/b.ts:B.user at 14, 21, 33`), naming the dependence instead
-when the store places no line for it (`(call)`, `(reference)`, `(contains)`, `(dispatch)`, `(relation)`, `(import)`), counts
-the cuts by kind on the status line and closes with their projection at the requested detail, so the answer is
-read before the price of its completeness. The response-level statuses a fact must not carry — staleness and a refresh —
-open the text with a `stale:`, `remote:` or `pinned:` line, the same statuses `_meta` and the fact's siblings carry, so
-the text alone loses nothing. A fault is an `isError` result: its text names the kind on the first line and `_meta`
-carries `{ kind, detail, entries? }` under `ye-ast/fault`, never `structuredContent`, which is the fact envelope every
-tool declares as its `outputSchema`.
-
-The server answers `initialize` with `instructions`: when each tool earns a call (orientation, before changing a symbol,
-before moving a file, the whole change at once before reporting it done, because the impact answer repeats what the
-callers answer already said about the symbols it stays inside) and how to read `complete`, `partial`, `unknown` and the
-cut list that closes every answer. Each tool description repeats its own "use it when". Every tool declares the fact envelope as its `outputSchema` (an
-object root, extra members allowed, `value` and `cuts` optional and left to the family), and the SDK checks each answer
-against it; that optionality is what lets the default envelope and the `full` one both conform.
-
-Impact/callers summary identifies consequences and counts supporting symbols by recorded depth, change origins by
-basis and cuts by kind and applicable limit. Detailed text adds one concrete verified origin association for each
-reached entrypoint, without ranking it or claiming a complete call chain. It shows the nearest recorded consequence
-depth and the reached-handler symbols, retaining dependency evidence, confidence and coordinates; the other symbols
-are counted, with a literal fallback when shorter. Explicitly requested targets and seed declarations supplying the
-shown dependency context remain localizable. Consecutive symbols sharing identical `via` context can share a heading
-when shorter, preserving symbol order, spans, dependency locations and reasons in either text level.
-
-Cross-repository links locate their destination handlers and show recorded `reach` using the displayed link numbers,
-nearest to the change first. Cut details retain anchors and limits and count unresolved reference places rather than
-printing every place. Both cuts and their summaries remain scoped to the owning repository; paths from different
-clones are never merged. Unserved names can be counted in both text levels. Exhaustive seeds, symbols, origin
-associations, cut places and unserved names remain available through `full: true` in `structuredContent`, not through
-the compact detailed text. Counted omissions do not change completeness or traversal. A related follow-up query is
-not a filter over the original fact.
-
-The impact/callers text closes with an investigation guide derived from the recorded data and status. It explains
-how to select relevant full-JSON records and resolve their relationships: entrypoint seed indexes within one walk,
-symbol dependency locations, repository-scoped evidence and cross-repository reach IDs. Absent categories are not
-advertised as containing evidence. Unknown facts point to reason/evidence, and fault text preserves its typed kind,
-cause and candidate data while adding a supported correction or prerequisite for retry. This navigation does not
-execute a query or guarantee that the client filters structured data outside model context.
+`live: true` requires trusted mode and excludes revision/head, workspace and the presence of offline, even false;
+workspace traversal uses committed snapshots. `offline: true` prevents remote refresh; trusted persisted remotes may
+otherwise refresh. To repeat a committed query preserve its recorded head/base and workspace pins; live state may
+change between calls. The CLI and query protocol continue to expose their existing fact formats and are not governed
+by MCP presentation mode.
 
 ## Live freshness
 
@@ -268,9 +223,9 @@ refreshes ye-ast's mirror of the working tree before it answers:
    (`stateId`) and the changed paths; the state the tree is in now is not named, since only hashing the changed files
    would tell. It is a response-level sibling of the fact, never a field of it, so the fact keeps the bytes of the
    answer for the state it reflects. The CLI keeps the fact on stdout, prints the redacted `{ stateId, changed }` under
-   `live` beside it, and writes one redacted stderr line with both, exit code unchanged. The MCP tool opens its text
-   with a `stale:` line, adds the redacted `live` sibling to `structuredContent` beside the untouched fact, and carries
-   the same `{ stateId, changed }` in the result's `_meta` under `ye-ast/live`.
+   `live` beside it, and writes one redacted stderr line with both, exit code unchanged. MCP summary/details open their text with a `stale:` line and retain a minimal receipt; full carries a redacted
+   `live` sibling beside the fact and references it in the guide. Every mode carries the same redacted
+   `{ stateId, changed }` in `_meta` under `ye-ast/live`.
 4. No tool asks for a reindex, so the MCP stays read-only.
 
 Staleness is a property of the response, not a fact status ([RFC-0002](0002-facts-contract.md) rule 8). qayaba measured

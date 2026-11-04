@@ -15,7 +15,8 @@ optional, from schema `0.5.0` to `0.6.0`.
 
 The fact is correct and complete about the graph, and it stops one step short of the edit. Measured on a real Angular
 webapp (name-webapp at `e8699653`, 9 probe requests of `odd/probes/mcp-answer-precision/`, stdio MCP client, this
-branch's working tree):
+branch's working tree). These are historical measurements under the then-current selectors and do not describe the
+current response modes:
 
 | Call | text | `structuredContent` |
 |---|---|---|
@@ -77,11 +78,11 @@ interface Handler { path: string; symbol: string; line: number; endLine?: number
 | Rule | Statement |
 |---|---|
 | R1 | `endLine` is present only when the declaration spans more than one line, the convention `Evidence` and `CallSite` already follow (`src/core/domain/topology/call-site.ts:47`). A one-line declaration prints `264`, never `264-264`. |
-| R2 | `via.lines` holds **every** place inside the reached symbol's own file where it depends on `via`, sorted and without duplicates, never the first one: a symbol that calls another three times is three places to change, and answering one leaves the edit incomplete. The answer never collapses them (`strongestPerSymbol` in `src/core/application/impact/inbound-edges.ts` merges by source and used to keep one line). |
+| R2 | `via.lines` holds **every** place inside the reached symbol's own file where it depends on `via`, sorted and without duplicates, never the first one: a symbol with three recorded dependence locations retains all three; a dependence alone does not prove an edit is needed. The full fact preserves them (`strongestPerSymbol` in `src/core/application/impact/inbound-edges.ts` merges by source and used to keep one line). |
 | R3 | `via.basis` says what the dependence is, always: `call` when a call or an instantiation is among the merged edges, `reference` when it only names the symbol, and `contains`, `dispatch`, `relation` or `import` for the structural ones the walk follows (a member's type at the same depth, a dispatch bridge, an Angular injection or template use, the top-level code of an importing file). |
 | R4 | `endLine >= line` for every value, and never above the declaration the store reports. |
 | R5 | Determinism holds: two runs of the same request over the same snapshot give identical bytes (RFC-0002 rule 3). Every added value is a field of the store read for that snapshot, so no clock and no extra I/O enter the answer. |
-| R6 | The CLI and the MCP print the same numbers for the same fact; the text is the fact, shortened, never reshaped. |
+| R6 | CLI and MCP preserve the same recorded coordinates; MCP text may group or omit recorded evidence with truthful recovery. |
 
 Text, current and proposed (the numbers are from a real answer):
 
@@ -96,7 +97,8 @@ Text, current and proposed (the numbers are from a real answer):
     (depth 2, via B.user)                             ->     (depth 2, via src/b.ts:B.user (contains))
 ```
 
-`structuredContent` carries the same fields as JSON, so a client that branches on the envelope sees them too.
+In the current MCP contract, `mode: "full"` carries these fields in the structured fact. Summary/details receipts
+carry only mode, status, snapshot and an unknown reason when applicable.
 
 ## What this refuses to add
 
@@ -119,21 +121,14 @@ to each one, over the tree that precedes it:
 | `via.lines` and `via.basis` | +1.09 KB | none by default |
 | **total** | **+2.18 KB (+3.8 % of 57.4 KB)** | **0 B; the fields ride with the value under `full: true`** |
 
-The text and the envelope are counted separately because they are read by different consumers. The model reads the text
-(`src/mcp/server.ts:305`); `structuredContent` carries the envelope alone, so the new fields cost nothing unless a host
-passes `full: true`, where they travel with the `value` they belong to (about 27.7 KB over those 9 answers, measured on
-the full payload).
+The table records the historical `full: true` selector and its then-current delivery; those byte counts are not a
+measurement of the current modes. Today `mode: "full"` includes the structured fact and the text modes carry minimal
+receipts. Text and structured content are measured separately because they are distinct wire channels, but a client
+may expose either or both to a model. No tokenizer or model exposure was measured.
 
-Two notes a reader of this section needs:
-
-- The text grew 3.8 % over a baseline the cut work had already shortened from 72.9 KB to 57.4 KB for those answers, so
-  the same bytes are a larger share. The recorded probe reduced the ten practical tasks from 429.5 KB to 157.4 KB
-  (`odd/tasks/mcp-answer-precision.md`, L18 and L19), and this hands back about a twentieth of that saving.
-- Added characters are digits and dashes, which tokenize worse per character than prose, so the token growth is probably
-  larger than the character growth. Not measured; no tokenizer runs in this repository.
-
-Added characters are digits and dashes, which tokenize worse per character than prose, so the token growth is probably
-larger than the character growth. Not measured; no tokenizer runs in this repository.
+The historical text grew 3.8 % over the cut-work baseline of 57.4 KB for those answers. The recorded probe also
+reported 429.5 KB and 157.4 KB for ten practical tasks (`odd/tasks/mcp-answer-precision.md`, L18–L19); these figures
+are historical and are not a current-mode comparison.
 
 ## Placement and edits
 

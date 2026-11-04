@@ -12,7 +12,7 @@ export interface ToolInfo {
   name: string;
   description?: string;
   inputSchema: JsonSchemaType;
-  outputSchema?: { type?: string; properties?: Record<string, unknown>; required?: string[] };
+  outputSchema?: JsonSchemaType;
 }
 
 /** A raw JSON-RPC client over the in-memory transport: the SDK ships no client in the server package. */
