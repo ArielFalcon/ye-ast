@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { AjvJsonSchemaValidator } from "@modelcontextprotocol/server/validators/ajv";
 import type { EntrypointMapFact } from "../core/domain/map/entrypoint-map.ts";
 import type { ImpactValue } from "../core/domain/impact/impact-fact.ts";
 import type { ImportersValue } from "../core/domain/impact/importers-fact.ts";
@@ -365,7 +366,7 @@ test("lists the seven read tools, each described, none taking a top-level reposi
     assert.ok((tool.description ?? "").length > 0, tool.name);
     for (const forbidden of ["repo", "repoId", "path", "repository"]) assert.equal(tool.inputSchema.properties?.[forbidden], undefined, `${tool.name}.${forbidden}`);
   }
-  const required = (name: string): string[] => tools.find((tool) => tool.name === name)?.inputSchema.required ?? [];
+  const required = (name: string): readonly string[] => tools.find((tool) => tool.name === name)?.inputSchema.required ?? [];
   assert.deepEqual(required("ye_ast_impact"), ["base"]);
   assert.deepEqual(required("ye_ast_importers"), ["files"]);
   assert.deepEqual(required("ye_ast_outline"), ["files"]);
@@ -386,6 +387,43 @@ test("the server instructions tell the agent when to call every tool", async () 
   const tools = await session.listTools();
   for (const tool of tools) assert.ok(session.instructions?.includes(tool.name), tool.name);
   await session.close();
+});
+
+test("tool discovery publishes the same live exclusions that calls enforce", async () => {
+  const { session, calls } = await setup();
+  try {
+    const tools = await session.listTools();
+    const cases: [string, Record<string, unknown>, string[]][] = [
+      ["ye_ast_impact", { base: "main" }, ["head", "offline", "workspace"]],
+      ["ye_ast_callers", { targets: [{ file: "a", symbol: "f" }] }, ["revision", "offline", "workspace"]],
+      ["ye_ast_entrypoints", {}, ["revision"]],
+      ["ye_ast_importers", { files: ["a"] }, ["revision"]],
+      ["ye_ast_outline", { files: ["a"] }, ["revision"]],
+    ];
+    for (const [name, args, fields] of cases) {
+      const schema = tools.find((tool) => tool.name === name)?.inputSchema;
+      assert.ok(schema, name);
+      const validate = new AjvJsonSchemaValidator().getValidator(schema);
+      assert.deepEqual(schema?.allOf, fields.map((field) => ({
+        not: { properties: { live: { const: true } }, required: ["live", field] },
+      })), name);
+      for (const field of fields) {
+        const value = field === "offline" ? false : field === "workspace" ? {} : "main";
+        assert.equal(validate({ ...args, live: true, [field]: value }).valid, false, name);
+        assert.equal(validate({ ...args, live: false, [field]: value }).valid, true, name);
+        const result = await session.callTool(name, { ...args, live: true, [field]: value });
+        assert.equal(result.isError, true, `${name}: live excludes the presence of ${field}`);
+      }
+      assert.equal(validate({ ...args, live: true }).valid, true, name);
+      assert.equal(validate(args).valid, true, name);
+    }
+    assert.equal(calls.ofChange.length + calls.callers.length + calls.map.length + calls.importers.length + calls.outline.length + calls.workspaceOfChange.length + calls.workspaceCallers.length, 0);
+    const allowed = await session.callTool("ye_ast_impact", { base: "main", live: false, head: "feature", offline: false });
+    assert.notEqual(allowed.isError, true);
+    assert.equal(calls.ofChange[0]?.head, "feature");
+  } finally {
+    await session.close();
+  }
 });
 
 test("the server instructions name the bound repository root", async () => {

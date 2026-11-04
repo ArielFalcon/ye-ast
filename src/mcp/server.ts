@@ -102,8 +102,16 @@ const offline = z
   .optional()
   .describe("Prevent remote refresh and read local clones for a workspace query, including workspace/decisions. Otherwise trusted repositories may refresh persisted remotes. Has no effect on local-only queries. Omit this field with live: true.");
 
-/** `live` and the revision it replaces are exclusive. */
-const excludes = (field: string) => (value: { live?: boolean | undefined } & Record<string, unknown>): boolean => !(value.live === true && value[field] !== undefined);
+/** Runtime validation and tool discovery share the same working-tree exclusions. */
+function liveSchema<S extends z.ZodRawShape>(shape: S, fields: readonly (keyof S & string)[]) {
+  let schema = z.strictObject(shape);
+  for (const field of fields) {
+    schema = schema.refine((value: Record<string, unknown>) => !(value["live"] === true && value[field] !== undefined), `live excludes ${field}`);
+  }
+  return schema.meta({
+    allOf: fields.map((field) => ({ not: { properties: { live: { const: true } }, required: ["live", field] } })),
+  });
+}
 
 /** The revision to read, or the working tree with the callback that learns of a change after the answer. */
 function atRevision(requested: string | undefined, isLive: boolean | undefined, onStale: (notice: LiveStaleNotice) => void): { revision: string; live?: undefined } | { live: true; onStale: (notice: LiveStaleNotice) => void; revision?: undefined } {
@@ -155,9 +163,6 @@ const workspace = z
   })
   .optional()
   .describe("Enable cross-repository traversal. Omit for a local answer; {} uses eligible persisted repositories/gateways, or only the bound repository when none exist. An explicit repos list selects other clones. Includes incoming call-site links; impact also follows outgoing links. Uses committed snapshots and excludes live: true.");
-
-/** `live` reads the working tree of one repository; a workspace reads committed snapshots. */
-const withoutWorkspace = (value: { live?: boolean | undefined; workspace?: unknown }): boolean => !(value.live === true && value.workspace !== undefined);
 
 const detail = z
   .enum(["summary", "full"] satisfies Detail[])
@@ -353,7 +358,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
     {
       title: "Entrypoints of a revision",
       description: `Lists supported HTTP routes, UI routes, message listeners and scheduled jobs with handler locations. Use to orient in a repository or locate where a request, message or job is handled. To trace what depends on a known handler use ye_ast_callers; to inspect consequences of a diff use ye_ast_impact. ${COMPLETENESS}`,
-      inputSchema: z.strictObject({ revision, live, scope, detail, full }).refine(excludes("revision"), "live excludes revision"),
+      inputSchema: liveSchema({ revision, live, scope, detail, full }, ["revision"]),
       outputSchema: FACT_OUTPUT,
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
@@ -370,22 +375,18 @@ export function createMcpServer(deps: McpDeps): McpServer {
     {
       title: "Impact of a change",
       description: `Traces incoming dependents of changed declarations from the merge base of base and head to head, and reports affected entrypoints plus entrypoints added, removed or altered. Use for a diff; base is required and head defaults to HEAD. Use live for trusted local edits, or changed to select diff paths without excluding callers elsewhere within scope. With workspace, also follows incoming cross-repository call sites and what the change sends onward. Use ye_ast_callers when the question concerns existing symbols without a diff; results inform investigation, not change approval. ${COMPLETENESS}`,
-      inputSchema: z
-        .strictObject({
-          base: z.string().min(1).describe("Required comparison revision, usually the destination branch (for example main). The diff starts at its merge base with head; it is not necessarily a direct base-to-head diff."),
-          head: z.string().min(1).optional().describe("Committed revision holding the change; HEAD when omitted. Omit with live: true."),
-          live,
-          offline,
-          scope,
-          changed: globs.describe("Diff-path globs selecting which changes seed traversal; all changed paths when omitted. Callers outside changed remain eligible within scope. This does not restrict consequence coverage like scope does. A glob matching no changed path is an error."),
-          budget,
-          detail,
-          workspace,
-          full,
-        })
-        .refine(excludes("head"), "live excludes head")
-        .refine(excludes("offline"), "live excludes offline")
-        .refine(withoutWorkspace, "live excludes workspace"),
+      inputSchema: liveSchema({
+        base: z.string().min(1).describe("Required comparison revision, usually the destination branch (for example main). The diff starts at its merge base with head; it is not necessarily a direct base-to-head diff."),
+        head: z.string().min(1).optional().describe("Committed revision holding the change; HEAD when omitted. Omit with live: true."),
+        live,
+        offline,
+        scope,
+        changed: globs.describe("Diff-path globs selecting which changes seed traversal; all changed paths when omitted. Callers outside changed remain eligible within scope. This does not restrict consequence coverage like scope does. A glob matching no changed path is an error."),
+        budget,
+        detail,
+        workspace,
+        full,
+      }, ["head", "offline", "workspace"]),
       outputSchema: FACT_OUTPUT,
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
@@ -425,11 +426,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
     {
       title: "Callers of symbols or line ranges",
       description: `Traces incoming dependents of existing declarations or line ranges and reports the entrypoints that reach them, with dependency locations. Use when the starting symbols or ranges are known and no diff is needed. targets accepts names or inclusive line ranges; names match their final segment and may select several declarations in one file. A missing declaration is an error. With workspace, follows incoming cross-repository call-site links; use ye_ast_impact for a diff and its outgoing links. ${COMPLETENESS}`,
-      inputSchema: z
-        .strictObject({ revision, live, offline, targets: z.array(target).min(1).describe("The symbols or line ranges to start from."), scope, budget, detail, workspace, full })
-        .refine(excludes("revision"), "live excludes revision")
-        .refine(excludes("offline"), "live excludes offline")
-        .refine(withoutWorkspace, "live excludes workspace"),
+      inputSchema: liveSchema({ revision, live, offline, targets: z.array(target).min(1).describe("The symbols or line ranges to start from."), scope, budget, detail, workspace, full }, ["revision", "offline", "workspace"]),
       outputSchema: FACT_OUTPUT,
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
@@ -473,9 +470,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
     {
       title: "Importers of files",
       description: `For each target, reports distinct related files as importers, additional users without an import edge, and unresolved-only candidates without a resolved link. Files with resolved links may also have unresolved name matches; detailed text annotates that overlap without repeating paths. Use to investigate file moves, renames, deletions or export changes. An import edge does not prove a declaration is used. Unresolved name matches do not prove dependencies or additional affected files. Summary counts groups when shorter; detail: "full" lists paths; full: true returns the original overlapping lists and cuts in structuredContent with a short text acknowledgment. For declaration-level incoming traversal and reached entrypoints use ye_ast_callers; this tool answers file-level relationships. ${COMPLETENESS}`,
-      inputSchema: z
-        .strictObject({ revision, live, files: z.array(z.string().min(1)).min(1).describe("Repository-relative paths."), scope, detail, full })
-        .refine(excludes("revision"), "live excludes revision"),
+      inputSchema: liveSchema({ revision, live, files: z.array(z.string().min(1)).min(1).describe("Repository-relative paths."), scope, detail, full }, ["revision"]),
       outputSchema: FACT_OUTPUT,
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
@@ -492,9 +487,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
     {
       title: "Shape of files",
       description: `Returns indexed declarations with line spans and imports for each requested file, without returning source text. Use when that structure helps choose source ranges to read; read a known relevant range directly. A file the index cannot describe is reported as a cut, not an empty list. Match revision or live to the source you will inspect. ${COMPLETENESS}`,
-      inputSchema: z
-        .strictObject({ revision, live, files: z.array(z.string().min(1)).min(1).describe("Repository-relative paths."), scope, detail, full })
-        .refine(excludes("revision"), "live excludes revision"),
+      inputSchema: liveSchema({ revision, live, files: z.array(z.string().min(1)).min(1).describe("Repository-relative paths."), scope, detail, full }, ["revision"]),
       outputSchema: FACT_OUTPUT,
       annotations: { readOnlyHint: true, openWorldHint: false },
     },

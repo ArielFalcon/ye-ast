@@ -1,5 +1,5 @@
 import { InMemoryTransport, type JSONRPCMessage } from "@modelcontextprotocol/server";
-import type { McpServer } from "@modelcontextprotocol/server";
+import type { JsonSchemaType, McpServer } from "@modelcontextprotocol/server";
 
 export interface ToolResult {
   content: { type: string; text: string }[];
@@ -11,7 +11,7 @@ export interface ToolResult {
 export interface ToolInfo {
   name: string;
   description?: string;
-  inputSchema: { properties?: Record<string, unknown>; required?: string[] };
+  inputSchema: JsonSchemaType;
   outputSchema?: { type?: string; properties?: Record<string, unknown>; required?: string[] };
 }
 
