@@ -177,6 +177,7 @@ interface ImpactValue {
   mergeBase?: string;                       // ofChange only
   seeds: Seed[];
   changedEntrypoints?: ChangedEntrypoint[]; // ofChange only
+  changedContracts?: ChangedContract[];     // ofChange only, when not empty
   symbols: ImpactedSymbol[];
   entrypoints: ReachedEntrypoint[];
 }
@@ -184,6 +185,11 @@ interface ImpactValue {
 interface Seed { file: string; symbol: string; line: number; endLine?: number; basis: "lines" | "top-level" | "resource" | "requested" }
 
 interface ChangedEntrypoint { change: "added" | "removed" | "altered"; kind: Entrypoint["kind"]; name: string; handler: Handler }
+
+interface ChangedContract {
+  change: "added" | "removed" | "altered"; method: HttpMethod; path: string; operationId?: string;
+  document: string; line: number; parts?: ("request" | "response")[]; // parts: altered only
+}
 
 interface ImpactedSymbol {
   file: string; symbol: string; kind: string; line: number; endLine?: number;
@@ -197,6 +203,14 @@ interface ReachedEntrypoint {
   depth: number; confidence: number; seeds: number[];
 }
 ```
+
+`changedContracts` are the operations of the contract documents (RFC-0007 row S5) the change added, removed or altered,
+told apart by document, verb and path. An operation is altered when the data of its request or response differs between
+the merge base and the head, `parts` naming which; it is reported only when the change touched its document or a file
+its references reach. It says the operation's wire contract changed, not which consumer reads the changed data: calling
+an operation never proves reading a field. A touched reference the snapshot cannot follow is an `unresolved-link` cut at
+`<document>:<operation line> <ref>`, and a touched document the parser rejects a `no-extractor` cut at it. Schema 0.13.0
+adds the field.
 
 `endLine` is the declaration's last line and is present only when the declaration spans more than one line, the
 convention `Evidence` already follows. `via.lines` are **every** place inside the reached symbol's own file where it

@@ -4,6 +4,7 @@ import { renderFactHeader as headerLines, renderFactStatus as statusLines, snaps
 import type { ResponseMode, RenderContext } from "./presentation.ts";
 import type { Entrypoint } from "../core/domain/entrypoints/entrypoint.ts";
 import type { Handler } from "../core/domain/entrypoints/http-route.ts";
+import type { ChangedContract } from "../core/domain/impact/changed-contracts.ts";
 import type { ChangedEntrypoint } from "../core/domain/impact/changed-entrypoints.ts";
 import type { ImpactedSymbol, ImpactValue, ReachedEntrypoint, Seed } from "../core/domain/impact/impact-fact.ts";
 import type { ModuleImpactValue } from "../core/domain/impact/module-dependency.ts";
@@ -426,6 +427,12 @@ function changedLine(change: ChangedEntrypoint): string {
   return `  - ${change.change} ${change.kind} ${change.name} -> ${handlerText(change.handler)}`;
 }
 
+function changedContractLine(change: ChangedContract): string {
+  const name = change.operationId === undefined ? "" : ` (${change.operationId})`;
+  const parts = change.parts === undefined ? "" : ` ${change.parts.join(" and ")}`;
+  return `  - ${change.change} ${change.method} ${change.path}${name}${parts} at ${change.document}:${change.line}`;
+}
+
 function reachedLines(reached: ReachedEntrypoint, seeds: readonly Seed[], detail: ResponseMode, owner: ImpactOwner, sharedLookup = false, sharedOrigin = false, selectable = true): string[] {
   const name = reached.name === undefined ? reached.kind : `${reached.kind} ${reached.name}`;
   const confidence = reached.confidence < 1 ? `, confidence ${reached.confidence}` : "";
@@ -548,6 +555,7 @@ function impactBody(value: ImpactValue, detail: ResponseMode, owner: ImpactOwner
     ...(context?.recovery?.status === "unavailable" ? [`  Recovery unavailable (${context.recovery.reason}); recorded coordinates do not establish an executable replay.`] : []),
     ...(value.mergeBase === undefined ? [] : [`merge base: ${value.mergeBase}`]),
     ...(value.changedEntrypoints === undefined ? [] : [`changed entrypoints (${value.changedEntrypoints.length}):`, ...value.changedEntrypoints.map(changedLine)]),
+    ...(value.changedContracts === undefined ? [] : [`changed contracts (${value.changedContracts.length}):`, ...value.changedContracts.map(changedContractLine)]),
     `reached entrypoints (${value.entrypoints.length}):`,
     ...(detail === "details" && value.entrypoints.some((entrypoint) => entrypoint.seeds.length > 1) ? [value.entrypoints.length === 1
       ? `  ${categoryRecovery({ full: "has all origins." })}`

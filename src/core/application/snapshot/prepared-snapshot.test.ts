@@ -273,7 +273,7 @@ function impactQueriesFor(deps: SnapshotReaderDeps) {
       ...deps, matcher: { matches: () => true }, engines: {},
       vcs: Object.assign(deps.vcs, { mergeBase: async () => ({ ok: true as const, value: SHA }), diffCommits: async () => ({ ok: true as const, value: [] }), diffDirectories: async () => ({ ok: true as const, value: [] }) }),
       graph: { index: async () => unavailable, open: () => unavailable, buildMirror: async () => unavailable, syncMirror: async () => unavailable },
-      angular: { read: async () => [] }, relations: { extract: async () => ({ relations: [], fields: [], locals: [] }) }, dynamicLoads: { extract: async () => [] }, angularEngines: {},
+      angular: { read: async () => [] }, relations: { extract: async () => ({ relations: [], fields: [], locals: [] }) }, dynamicLoads: { extract: async () => [] }, contracts: { operations: () => [] }, angularEngines: {},
     });
 }
 

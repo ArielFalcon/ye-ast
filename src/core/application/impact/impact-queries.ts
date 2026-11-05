@@ -5,6 +5,7 @@ import { selectChange } from "../../domain/change/change-selection.ts";
 import { resourceImpact, resourceOwners } from "../../domain/change/resource-impact.ts";
 import type { FileChange } from "../../domain/change/diff-reader.ts";
 import { isSeedable, selectSeeds, type ComponentRef, type SelectedSeed } from "../../domain/change/seeds.ts";
+import { changedContracts } from "../../domain/impact/changed-contracts.ts";
 import { changedEntrypoints } from "../../domain/impact/changed-entrypoints.ts";
 import { EDGE_POLICY } from "../../domain/impact/edge-policy.ts";
 import { nameTail, referenceKey, uniqueReferenceKeys, removedDeclarationCuts, rootedName, unreadRelationCuts, unresolvedLinkCuts, type UnreadRelation } from "../../domain/impact/impact-cuts.ts";
@@ -47,12 +48,14 @@ import { walkImpact } from "./walk.ts";
 import type { TypeResolution } from "../../ports/type-resolution.port.ts";
 import type { ImportOriginSite, ImportOriginsReader } from "../../ports/import-origins.port.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
+import type { ContractRoutes } from "../../ports/contract-routes.port.ts";
 import { prepareCommit } from "../snapshot/prepared-snapshot.ts";
 
 export interface ImpactQueriesDeps extends HeadReaderDeps {
   /** The walk reads the change between two revisions, which no other family asks for. */
   vcs: Vcs & VcsChanges;
   angular: AngularDeclarationReader;
+  contracts: ContractRoutes;
   relations: RelationExtractor;
   /** Reads the dynamic loads of the head's sources, so a load whose specifier is a literal names its module. */
   dynamicLoads: DynamicLoadReader;
@@ -336,7 +339,10 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
     ];
     const entrypointSelected = pathSelection({ include: request.changed ?? [], exclude: [] }, deps.matcher.matches);
     const entrypointChanges = changedEntrypoints(entrypointsOf(baseTree.findings), entrypointsOf(headTree.findings)).filter((change) => entrypointSelected(change.handler.path));
-    const value: ImpactValue = { mergeBase: radius.mergeBase, seeds: [], changedEntrypoints: entrypointChanges, symbols: [], entrypoints: [], cost: { expansionsUsed: 0 } };
+    const changedPaths = new Set(radius.files.map((file) => file.path));
+    const contracts = changedContracts(deps.contracts.operations(baseTree.sources), deps.contracts.operations(headTree.sources), (path) => changedPaths.has(path) && entrypointSelected(path));
+    fixed.push(...contracts.cuts);
+    const value: ImpactValue = { mergeBase: radius.mergeBase, seeds: [], changedEntrypoints: entrypointChanges, ...(contracts.changes.length === 0 ? {} : { changedContracts: contracts.changes }), symbols: [], entrypoints: [], cost: { expansionsUsed: 0 } };
 
     let moduleRead: ReturnType<typeof moduleImpact> | undefined;
     const moduleReader = deps.moduleDependencies;

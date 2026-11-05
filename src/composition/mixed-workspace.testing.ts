@@ -82,7 +82,7 @@ export function realWorkspaceFixture(scratchRoot: string, roots: readonly string
   const trust: TrustRecordReader = { read: async (root) => ({ ok: true, value: roots.includes(root) ? "trusted" : undefined }) };
   const common = { vcs, scratch, reader, extractor, digest, matcher, graph, live, trust, producer: { name: "ye-ast", version }, engines };
   const impactDeps: ImpactQueriesDeps = { ...common, engines: { ...engines, "@colbymchenry/codegraph": codegraph },
-    angular: createAngularDeclarationReader(), relations: composeAngularRelations(), dynamicLoads: createDynamicLoadReader(),
+    angular: createAngularDeclarationReader(), contracts, relations: composeAngularRelations(), dynamicLoads: createDynamicLoadReader(),
     angularEngines: { "@angular/compiler": installedVersion("@angular/compiler") },
     importOrigins: (sources) => createImportOrigins(sources), moduleDependencies: createModuleDependenciesReader(), declarationEvidence: createDeclarationEvidenceReader() };
   const workspaceDeps: WorkspaceQueriesDeps = { ...common, callSites, evidence: createWorkspaceEvidence() };

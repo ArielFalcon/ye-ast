@@ -1607,6 +1607,14 @@ test("both impact text levels count unselected change origins while full JSON pr
   await session.close();
 });
 
+test("impact text names each changed contract operation with the side of the exchange that changed", async () => {
+  const changedContracts = [{ change: "altered" as const, method: "GET" as const, path: "/orders", operationId: "getOrders", document: "openapi/api.yaml", line: 6, parts: ["response" as const] }];
+  const fact = impactFact({ value: { ...IMPACT, changedContracts } } as Partial<Fact<ImpactValue>>);
+  const { session } = await setup({ ofChange: async () => ({ ok: true, value: fact }) });
+  assert.match(textOf(await session.callTool("ye_ast_impact", { base: "main" })), /^changed contracts \(1\):\n {2}- altered GET \/orders \(getOrders\) response at openapi\/api\.yaml:6$/m);
+  await session.close();
+});
+
 test("a summary lists the seeds a caller asked for and counts the change seeds beside them", async () => {
   const seeds = [
     { file: "src/a.ts", symbol: "asked", line: 1, basis: "requested" as const },
