@@ -110,3 +110,29 @@ test("entrypoint guidance does not advertise selection when recovery is unavaila
   assert.doesNotMatch(text, /Selection lookup:/);
   assert.match(text, /findingIndex/);
 });
+
+test("importer omitted paths share one recovery instruction across target files", async () => {
+  const { renderImporters } = await import("./render.ts");
+  const paths = Array.from({length: 30}, (_, i) => `src/long/dependency/path/${i}.ts`);
+  const fact = { ...base, status: "complete", value: { files: ["a.ts", "b.ts"].map(file => ({file, importers: paths, users: [], unresolvedNamers: []})) } };
+  const text = renderImporters(fact as never);
+  assert.equal(text.split("File paths omitted;").length - 1, 1);
+  assert.ok(text.includes("a.ts") && text.includes("b.ts"));
+  assert.equal(text.split("related files (30 distinct)").length - 1, 2);
+});
+
+test("handler and module examples obey the same registered-tool capability policy as cuts", () => {
+  const fact = { ...base, status: "complete", value: { ...impact, entrypoints: impact.entrypoints.map(row => ({ ...row, handler: { ...row.handler, endLine: 12 } })) } } as unknown as Fact<ImpactValue>;
+  for (const mode of ["summary", "details"] as const) {
+    const unsupported = renderImpact(fact, mode, { tool: "entrypoints" });
+    assert.doesNotMatch(unsupported, /"kind":"handler-origins"|"kind":"module-origins"/);
+    assert.match(unsupported, /"path":"src\/h.ts","symbol":"run","line":7/);
+    assert.match(unsupported, /base src\/m.ts/);
+    const callers = renderImpact(fact, mode, { tool: "callers" });
+    assert.match(callers, /"kind":"handler-origins"/);
+    assert.doesNotMatch(callers, /"kind":"module-origins"/);
+    const supported = renderImpact(fact, mode, { tool: "impact" });
+    assert.match(supported, /"kind":"handler-origins"/);
+    assert.match(supported, /"kind":"module-origins"/);
+  }
+});

@@ -1,3 +1,6 @@
+import { canSelect, categoryRecovery, literalSelection } from "./presentation-guidance.ts";
+import type { CutOwner, ImpactOwner, EvidenceSelection } from "./select-evidence.ts";
+import { renderFactHeader as headerLines, renderFactStatus as statusLines, snapshotLine, evidenceText, cutsByKind } from "./presentation-context.ts";
 import type { ResponseMode, RenderContext } from "./presentation.ts";
 import type { Entrypoint } from "../core/domain/entrypoints/entrypoint.ts";
 import type { Handler } from "../core/domain/entrypoints/http-route.ts";
@@ -25,7 +28,7 @@ import type { WorkspaceSource } from "../core/ports/workspace-repos.port.ts";
 import { FIXED_LAYER_DIRECTORY } from "../core/ports/fixed-layer-store.port.ts";
 import { WORKSPACE_MANIFEST_FILE } from "../core/ports/workspace-defaults.port.ts";
 import { canonicalJson } from "../core/domain/shared/canonical-json.ts";
-import { preferShorterText, shareExactContext } from "./presentation-sharing.ts";
+import { blockBytes as size, preferShorterText, shareExactContext } from "./presentation-sharing.ts";
 
 const NONE = "  (none)";
 const CUTS = "cuts:";
@@ -52,65 +55,8 @@ function placeText(path: string, line: number, endLine?: number): string {
   return `${path}:${spanText(line, endLine)}`;
 }
 
-function snapshotLine(snapshot: SnapshotRef): string {
-  return snapshot.kind === "sha" ? `snapshot: ${snapshot.repo} @ ${snapshot.sha}` : `snapshot: ${snapshot.repo} live @ ${snapshot.head} (${snapshot.stateId})`;
-}
-
-function evidenceText(evidence: Evidence): string {
-  return placeText(evidence.path, evidence.line, evidence.endLine);
-}
-
 function cutsOf(fact: Fact<unknown>): readonly Cut[] {
   return fact.status === "partial" ? fact.cuts : [];
-}
-
-/** The cuts grouped by kind, the kind that cut most first: the price the caller can act on leads the list. */
-function cutsByKind(cuts: readonly Cut[]): (readonly [Cut["kind"], readonly Cut[]])[] {
-  return [...Map.groupBy(cuts, (cut) => cut.kind)].toSorted(([a, ofA], [b, ofB]) => ofB.length - ofA.length || compareText(a, b));
-}
-
-/** The cuts of one kind, counted: the status line keeps the fact's size down to what the caller can act on. A section
- * cut names the section, so the status line already says which one degraded. */
-function cutCounts(cuts: readonly Cut[]): string {
-  return cutsByKind(cuts)
-    .map(([kind, ofKind]) => `${ofKind.length} ${kind}${kind === "section" ? `: ${ofKind.flatMap((cut) => cut.at).join(", ")}` : ""}`)
-    .join(", ");
-}
-
-/** The completeness of a fact: its status, the cut count per kind, and where an unknown one cannot tell. */
-function statusLines(fact: Fact<unknown>, indent = ""): string[] {
-  if (fact.status === "complete") return [`${indent}status: complete`];
-  if (fact.status === "unknown") return [`${indent}status: unknown (${fact.reason})`, ...fact.evidence.map((evidence) => `${indent}  evidence: ${evidenceText(evidence)}`)];
-  return [`${indent}status: partial (cuts: ${cutCounts(fact.cuts)})`];
-}
-
-/** The paths the caller narrowed the answer to, when it did: what they select is read, and so is the configuration that
- * interprets it. */
-function scopeLines({ inputs: { declaredScope } }: Fact<unknown>): string[] {
-  const parts = [["include", declaredScope.include], ["exclude", declaredScope.exclude]] as const;
-  const named = parts.filter(([, globs]) => globs.length > 0).map(([label, globs]) => `${label} ${globs.join(", ")}`);
-  return named.length === 0 ? [] : [`scope: ${named.join("; ")} (the content it selects; the configuration that interprets it is read too)`];
-}
-
-/** The languages and frameworks a status is relative to. */
-function declaredScopeLines({ inputs: { declaredScope } }: Fact<unknown>): string[] {
-  const named = [
-    declaredScope.languages.length === 0 ? undefined : `languages ${declaredScope.languages.join(", ")}`,
-    declaredScope.frameworks.length === 0 ? undefined : `frameworks ${declaredScope.frameworks.join(", ")}`,
-  ].filter((part) => part !== undefined);
-  return named.length === 0 ? [] : [`declared scope: ${named.join("; ")}`];
-}
-
-function changedLines({ inputs: { declaredConfig } }: Fact<unknown>): string[] {
-  const changed = declaredConfig.changed;
-  return changed === undefined || changed.length === 0
-    ? []
-    : [`change: only paths matching ${changed.join(", ")} (callers outside the selection remain eligible within scope; recorded cuts limit coverage; the rest of the change is not answered about)`];
-}
-
-/** What every answer opens with: its completeness, what that completeness covers, and the snapshot it read. */
-function headerLines(fact: Fact<unknown>): string[] {
-  return [...statusLines(fact), ...declaredScopeLines(fact), ...scopeLines(fact), ...changedLines(fact), snapshotLine(fact.snapshot)];
 }
 
 /** A place after its file: the line, and the reason it could not be read when it carries one. */
@@ -236,18 +182,15 @@ function cutLines(cuts: readonly Cut[], detail: ResponseMode): string[] {
   });
 }
 
-/** The bytes a block costs with its line breaks, so a summary is held to the answer it stands for. */
-function size(lines: readonly string[]): number {
-  return lines.reduce((total, line) => total + Buffer.byteLength(line, "utf8") + 1, 0);
-}
-
-function cutCoordinates(cuts: readonly Cut[], owner: object, detail: ResponseMode, context?: RenderContext): string[] {
+function cutCoordinates(cuts: readonly Cut[], owner: CutOwner, detail: ResponseMode, context?: RenderContext): string[] {
   const shown = new Set<Cut["kind"]>();
   return cuts.flatMap((cut, cutIndex) => {
     if (detail === "summary" && shown.has(cut.kind)) return [];
     shown.add(cut.kind);
     const anchor = detail === "summary" ? "" : ` (anchor ${JSON.stringify(cut.at[0])})`;
-    return [`  ${context?.recovery?.status === "unavailable" ? "recorded coordinates" : "lookup example"}: ${JSON.stringify({ kind: "cut-places", owner, cutIndex })}${anchor}`];
+    const selection = {kind: "cut-places", owner, cutIndex} as const;
+    const selectable = context === undefined || canSelect(context, selection, owner.kind === "section" || owner.kind === "read");
+    return [`  ${!selectable ? "recorded coordinates" : "lookup example"}: ${literalSelection({ kind: "cut-places", owner, cutIndex })}${anchor}`];
   });
 }
 
@@ -299,7 +242,7 @@ function entrypointContext(entrypoint: Entrypoint): string[] {
   const base = entrypoint.basePath;
   if (base.status === "unknown") return [`    base path unknown (${base.reason})${base.evidence.length === 0 ? "" : `: ${base.evidence.map(evidenceText).join(", ")}`}`];
   const profiles = Object.keys(base.value.profiles).length;
-  return [`    base path defaults: ${JSON.stringify(base.value.default)}${profiles === 0 ? "" : `; ${profiles} profile-specific settings, mode: "full" includes them`}`];
+  return [`    base path defaults: ${JSON.stringify(base.value.default)}${profiles === 0 ? "" : `; ${profiles} profile-specific settings, ${categoryRecovery({ full: "includes them" })}`}`];
 }
 
 function unknownFindingRun(items: readonly Finding<Entrypoint>[], start: number): { end: number; lines: string[] } {
@@ -394,7 +337,7 @@ export function renderEntrypointMap(fact: Fact<EntrypointMap>, detail: ResponseM
     const guardCount = uiRoutes.reduce((total, route) => total + route.guards.length, 0);
     const guardedRoutes = uiRoutes.filter((route) => route.guards.length > 0).length;
     const guardNote = uiRoutes.length === 0 ? [] : [
-      ...(detail === "summary" && guardCount > 0 ? [`  ${guardCount} own guards across ${guardedRoutes} routes; mode: "full" locates them at value.entrypoints.value[].value.guards after matching route kind and name.`] : []),
+      ...(detail === "summary" && guardCount > 0 ? [`  ${guardCount} own guards across ${guardedRoutes} routes; ${categoryRecovery({ full: "locates them at value.entrypoints.value[].value.guards after matching route kind and name." })}`] : []),
       "  Only each route's own guards are recorded; inherited or runtime restrictions are not established here.",
     ];
     lines.push(`  findings: ${known} known, ${unknown} unknown`, ...(unknownBases === 0 ? [] : [`  base path unknown for ${unknownBases} ${unknownBases === 1 ? "route" : "routes"}`]), ...guardNote, ...entrypointItems(section.value, detail));
@@ -407,19 +350,19 @@ function changedLine(change: ChangedEntrypoint): string {
   return `  - ${change.change} ${change.kind} ${change.name} -> ${handlerText(change.handler)}`;
 }
 
-function reachedLines(reached: ReachedEntrypoint, seeds: readonly Seed[], detail: ResponseMode, owner: object, sharedLookup = false, sharedOrigin = false, selectable = true): string[] {
+function reachedLines(reached: ReachedEntrypoint, seeds: readonly Seed[], detail: ResponseMode, owner: ImpactOwner, sharedLookup = false, sharedOrigin = false, selectable = true): string[] {
   const name = reached.name === undefined ? reached.kind : `${reached.kind} ${reached.name}`;
   const confidence = reached.confidence < 1 ? `, confidence ${reached.confidence}` : "";
   const origin = seeds[reached.seeds[0] ?? -1];
   const others = reached.seeds.length - 1;
   return [
-    `  - ${name} (depth ${reached.depth}${confidence}${reached.handler.endLine === undefined ? "" : `, endLine ${reached.handler.endLine}`}); ${sharedLookup || !selectable ? `handler: ${JSON.stringify({ path: reached.handler.path, symbol: reached.handler.symbol, line: reached.handler.line })}` : `lookup example: ${JSON.stringify({ kind: "handler-origins", owner, handler: { path: reached.handler.path, symbol: reached.handler.symbol, line: reached.handler.line } })}`}`,
+    `  - ${name} (depth ${reached.depth}${confidence}${reached.handler.endLine === undefined ? "" : `, endLine ${reached.handler.endLine}`}); ${sharedLookup || !selectable ? `handler: ${JSON.stringify({ path: reached.handler.path, symbol: reached.handler.symbol, line: reached.handler.line })}` : `lookup example: ${literalSelection({ kind: "handler-origins", owner, handler: { path: reached.handler.path, symbol: reached.handler.symbol, line: reached.handler.line } })}`}`,
     ...(detail === "summary" && reached.seeds.length > 0 ? [`    origins: ${reached.seeds.length}`] : []),
     ...(detail === "summary" || origin === undefined || sharedOrigin ? [] : [`    one verified origin: ${placeText(origin.file, origin.line, origin.endLine)} ${origin.symbol} (${origin.basis})${others > 0 ? `; ${others} other ${others === 1 ? "origin" : "origins"}` : ""}`]),
   ];
 }
 
-function reachedGroup(value: ImpactValue, detail: ResponseMode, owner: object, selectable = true): string[] {
+function reachedGroup(value: ImpactValue, detail: ResponseMode, owner: ImpactOwner, selectable = true): string[] {
   const support = shareExactContext(value.entrypoints, (entrypoint) => ({
     indices: entrypoint.seeds,
     support: entrypoint.seeds.map((index) => value.seeds[index]),
@@ -451,7 +394,7 @@ function reachedGroup(value: ImpactValue, detail: ResponseMode, owner: object, s
   if (first === undefined || !selectable) return literal;
   const { path, symbol, line } = first.handler;
   const shared = [
-    `  Handler lookup: combine each row's handler object with kind and owner from this complete select example: ${JSON.stringify({ kind: "handler-origins", owner, handler: { path, symbol, line } })}`,
+    `  Handler lookup: combine each row's handler object with kind and owner from this complete select example: ${literalSelection({ kind: "handler-origins", owner, handler: { path, symbol, line } })}`,
     ...rows(true),
   ];
   return preferShorterText(literal.join("\n"), shared.join("\n")) === shared.join("\n") ? shared : literal;
@@ -511,37 +454,40 @@ function impactedSymbols(value: ImpactValue, detail: ResponseMode): string[] {
   const literal = [header, ...groupedLines(symbols)];
   if (detail === "summary") {
     const depths = [...Map.groupBy(symbols, (symbol) => symbol.depth)].toSorted(([a], [b]) => a - b);
-    const counted = [header, `  by depth: ${depths.map(([depth, group]) => `${depth}: ${group.length}`).join(", ")}; mode "details" shows investigation evidence; mode: "full" includes every symbol`];
+    const counted = [header, `  by depth: ${depths.map(([depth, group]) => `${depth}: ${group.length}`).join(", ")}; mode "details" shows investigation evidence; ${categoryRecovery({ full: "includes every symbol" })}`];
     return size(counted) <= size(literal) ? counted : literal;
   }
   const shown = investigationSymbols(value);
   const omitted = symbols.length - shown.length;
-  const evidence = [header, `  evidence view: nearest recorded depth ${shown.reduce((depth, symbol) => Math.min(depth, symbol.depth), Infinity)} and reached handlers`, ...groupedLines(shown), ...(omitted === 0 ? [] : [`  ${omitted} other ${omitted === 1 ? "symbol" : "symbols"}; mode: "full" includes all`])];
+  const evidence = [header, `  evidence view: nearest recorded depth ${shown.reduce((depth, symbol) => Math.min(depth, symbol.depth), Infinity)} and reached handlers`, ...groupedLines(shown), ...(omitted === 0 ? [] : [`  ${omitted} other ${omitted === 1 ? "symbol" : "symbols"}; ${categoryRecovery({ full: "includes all" })}`])];
   return omitted > 0 && size(evidence) <= size(literal) ? evidence : literal;
 }
 
 /** What an impact answer says about its walk, without its header or its cuts. */
-function impactBody(value: ImpactValue, detail: ResponseMode, owner: object, context?: RenderContext): string[] {
+function impactBody(value: ImpactValue, detail: ResponseMode, owner: ImpactOwner, context?: RenderContext): string[] {
+  const selectable = (selection: EvidenceSelection) => context === undefined || canSelect(context, selection, owner.kind === "section");
+  const handler = value.entrypoints[0]?.handler;
+  const module = value.modules?.modules[0];
   return [
     ...(context?.recovery?.status === "unavailable" ? [`  Recovery unavailable (${context.recovery.reason}); recorded coordinates do not establish an executable replay.`] : []),
     ...(value.mergeBase === undefined ? [] : [`merge base: ${value.mergeBase}`]),
     ...(value.changedEntrypoints === undefined ? [] : [`changed entrypoints (${value.changedEntrypoints.length}):`, ...value.changedEntrypoints.map(changedLine)]),
     `reached entrypoints (${value.entrypoints.length}):`,
     ...(detail === "details" && value.entrypoints.some((entrypoint) => entrypoint.seeds.length > 1) ? [value.entrypoints.length === 1
-      ? '  mode: "full" has all origins.'
-      : '  Origin counts and examples below: mode: "full" includes all recorded associations for this owner.'] : []),
+      ? `  ${categoryRecovery({ full: "has all origins." })}`
+      : `  Origin counts and examples below: ${categoryRecovery({ full: "includes all" })} recorded associations for this owner.`] : []),
     ...(detail === "details" && value.entrypoints.some((entrypoint) => entrypoint.seeds.length > 0) ? ["  A recorded origin is an association, not a complete call chain."] : []),
-    ...(detail === "summary" && value.entrypoints.some((entrypoint) => entrypoint.seeds.length > 0) ? [`  origin associations (${value.entrypoints.reduce((total, entrypoint) => total + entrypoint.seeds.length, 0)}): counted below; mode "details" shows one per entrypoint; mode: "full" includes all`] : []),
-    ...reachedGroup(value, detail, owner, context?.recovery?.status !== "unavailable"),
+    ...(detail === "summary" && value.entrypoints.some((entrypoint) => entrypoint.seeds.length > 0) ? [`  origin associations (${value.entrypoints.reduce((total, entrypoint) => total + entrypoint.seeds.length, 0)}): counted below; mode "details" shows one per entrypoint; ${categoryRecovery({ full: "includes all" })}`] : []),
+    ...reachedGroup(value, detail, owner, handler === undefined || selectable({ kind: "handler-origins", owner, handler: { path: handler.path, symbol: handler.symbol, line: handler.line } })),
     ...impactedSymbols(value, detail),
-    ...(value.modules === undefined ? [] : moduleLines(value.modules, detail, owner, context?.tool !== "callers" && context?.recovery?.status !== "unavailable")),
+    ...(value.modules === undefined ? [] : moduleLines(value.modules, detail, owner, module === undefined || selectable({ kind: "module-origins", owner, module: { file: module.file, snapshot: module.snapshot } }))),
   ];
 }
 
-function moduleLines(value: ModuleImpactValue, detail: ResponseMode, owner: object, selectable = true): string[] {
+function moduleLines(value: ModuleImpactValue, detail: ResponseMode, owner: ImpactOwner, selectable = true): string[] {
   const originListing = value.origins.map((origin) => `  ${origin.file} (${origin.change})`);
   const counts = [...Map.groupBy(value.origins, (origin) => origin.change)].map(([change, group]) => `${group.length} ${change}`).join(", ");
-  const originCount = [`  ${value.origins.length} origins (${counts}); mode: "full" includes every origin`];
+  const originCount = [`  ${value.origins.length} origins (${counts}); ${categoryRecovery({ full: "includes every origin" })}`];
   const origins = value.origins.length > 0 && size(originCount) < size(originListing) ? originCount : originListing;
   const nearest = value.modules.reduce((depth, module) => module.depth > 0 ? Math.min(depth, module.depth) : depth, Infinity);
   const shown = value.modules.filter((module) => module.depth === 0 || module.depth === nearest);
@@ -553,7 +499,7 @@ function moduleLines(value: ModuleImpactValue, detail: ResponseMode, owner: obje
     return `${count} origin ${count === 1 ? "association" : "associations"}${example}`;
   };
   const line = (module: Module, includeContext = true, sharedLookup = false): string =>
-    `  ${!selectable ? `${module.snapshot} ${module.file}` : ""}${!selectable ? "" : ` [${sharedLookup ? `module: ${JSON.stringify({ file: module.file, snapshot: module.snapshot })}` : `lookup example: ${JSON.stringify({ kind: "module-origins", owner, module: { file: module.file, snapshot: module.snapshot } })}`}]`} (depth ${module.depth}${includeContext ? `, ${context(module)}` : ""})${module.via === undefined ? "" : ` via ${module.via.kind} ${module.via.file} at line ${module.via.line} in this module${module.via.typeOnly ? " (type-only)" : ""}`}`;
+    `  ${!selectable ? `${module.snapshot} ${module.file}` : ""}${!selectable ? "" : ` [${sharedLookup ? `module: ${JSON.stringify({ file: module.file, snapshot: module.snapshot })}` : `lookup example: ${literalSelection({ kind: "module-origins", owner, module: { file: module.file, snapshot: module.snapshot } })}`}]`} (depth ${module.depth}${includeContext ? `, ${context(module)}` : ""})${module.via === undefined ? "" : ` via ${module.via.kind} ${module.via.file} at line ${module.via.line} in this module${module.via.typeOnly ? " (type-only)" : ""}`}`;
   const grouped = (modules: readonly Module[], sharedLookup = false): string[] => {
     const lines: string[] = [];
     for (let start = 0; start < modules.length;) {
@@ -577,7 +523,7 @@ function moduleLines(value: ModuleImpactValue, detail: ResponseMode, owner: obje
   const selected = useCompact ? compact : listing;
   const first = selectedModules[0];
   const lookupShared = first === undefined || !selectable ? selected : [
-    `  Module lookup: combine each row's module object with kind and owner from this complete select example: ${JSON.stringify({ kind: "module-origins", owner, module: { file: first.file, snapshot: first.snapshot } })}`,
+    `  Module lookup: combine each row's module object with kind and owner from this complete select example: ${literalSelection({ kind: "module-origins", owner, module: { file: first.file, snapshot: first.snapshot } })}`,
     ...grouped(selectedModules, true),
     ...(useCompact && omitted > 0 ? [`  ${omitted} deeper module dependencies not listed; mode: "full" includes their recorded evidence.`] : []),
   ];
@@ -585,8 +531,8 @@ function moduleLines(value: ModuleImpactValue, detail: ResponseMode, owner: obje
     `module origins (${value.origins.length}):`, ...origins,
     `module dependencies (${value.modules.length}, not symbol or entrypoint impact):`,
     ...(value.modules.some((module) => module.origins.length > (detail === "details" ? 1 : 0)) ? [selectedModules.length === 1
-      ? '  mode: "full" has all origins.'
-      : '  Origin counts/examples below belong to each module; mode: "full" includes all recorded associations for this owner.'] : []), ...(size(lookupShared) < size(selected) ? lookupShared : selected),
+      ? `  ${categoryRecovery({ full: "has all origins." })}`
+      : `  Origin counts/examples below belong to each module; ${categoryRecovery({ full: "includes all" })} recorded associations for this owner.`] : []), ...(size(lookupShared) < size(selected) ? lookupShared : selected),
     `module expansions: ${value.cost.expansionsUsed}`,
   ];
 }
@@ -624,7 +570,7 @@ function seedSummary(seeds: readonly Seed[]): string[] {
   const bases = [...Map.groupBy(rest, (seed) => seed.basis)].toSorted(([a], [b]) => compareText(a, b)).map(([basis, group]) => `${basis} ${group.length}`);
   return [
     ...seedListing(requested),
-    ...(rest.length === 0 ? [] : [`  change origins: ${rest.length} ${rest.length === 1 ? "declaration" : "declarations"} across ${files.size} ${files.size === 1 ? "file" : "files"} (${bases.join(", ")}); mode: "full" includes every seed`]),
+    ...(rest.length === 0 ? [] : [`  change origins: ${rest.length} ${rest.length === 1 ? "declaration" : "declarations"} across ${files.size} ${files.size === 1 ? "file" : "files"} (${bases.join(", ")}); ${categoryRecovery({ full: "includes every seed" })}`]),
   ];
 }
 
@@ -747,7 +693,12 @@ export function renderImpact(fact: Fact<ImpactValue>, detail: ResponseMode = "su
   return lines.join("\n");
 }
 
-function importerFiles(entry: ImportedFile, detail: ResponseMode): string[] {
+/** Importer-specific wording; the shared policy supplies general mode conventions. */
+function importerPathRecovery(): string {
+  return '    File paths omitted; use mode: "details" to list them, or mode: "full" for the original structured fact.';
+}
+
+function importerFiles(entry: ImportedFile, detail: ResponseMode): { lines: string[]; omitted: boolean } {
   const moduleGroups: readonly (readonly [string, readonly string[] | undefined])[] = [
     ["importers", entry.importers], ["reexporters", entry.reexporters], ["dynamic importers", entry.dynamicImporters], ["type importers", entry.typeImporters],
   ];
@@ -784,16 +735,23 @@ function importerFiles(entry: ImportedFile, detail: ResponseMode): string[] {
   });
   const summary = [
     ...groups.map(([label, files]) => `    ${label} (${files.length})`),
-    ...(count === 0 ? [] : ['    File paths omitted; use mode: "details" to list them, or mode: "full" for the original structured fact.']),
+    ...(count === 0 ? [] : [importerPathRecovery()]),
   ];
-  return [heading, ...(detail === "summary" && size(summary) <= size(listing) ? summary : listing), ...notes];
+  const omitted = detail === "summary" && count > 0 && size(summary) <= size(listing);
+  return { lines: [heading, ...(omitted ? summary.slice(0, groups.length) : listing), ...notes], omitted };
 }
 
 export function renderImporters(fact: Fact<ImportersValue>, detail: ResponseMode = "summary"): string {
   if (detail === "full") return fact.status === "unknown" ? "Inspect reason and evidence; the result has no value." : "Select value.files by file; inspect importers and users for recorded links and unresolvedNamers for unconfirmed matches. These are paths only, with no relationship line locations; inspect cuts for partial results.";
   const lines = headerLines(fact);
   if (fact.status === "unknown") return lines.join("\n");
-  for (const entry of fact.value.files) lines.push(`  ${entry.file}`, ...importerFiles(entry, detail));
+  let omitted = false;
+  for (const entry of fact.value.files) {
+    const block = importerFiles(entry, detail);
+    lines.push(`  ${entry.file}`, ...block.lines);
+    omitted ||= block.omitted;
+  }
+  if (omitted) lines.push(importerPathRecovery());
   if (fact.value.files.some((entry) => entry.importers.length + entry.users.length + entry.unresolvedNamers.length > 0)) lines.push("  These relationships are paths only; no relationship line locations were recorded.");
   lines.push(...cutsBlock(cutsOf(fact), detail));
   return lines.join("\n");
@@ -866,7 +824,7 @@ export function renderWorkspaceImpact(fact: Fact<WorkspaceImpactValue>, detail: 
   lines.push(`links across repositories (${value.links.length}):${value.links.some(({ reach }) => reach.length > 0) ? " reach lists link numbers nearest to the change first" : ""}`, ...value.links.map((link) => impactedLinkLine(link, linkIndexes)));
   lines.push("per repository:", ...value.workspace.repos.flatMap((repo) => (value.sections[repo] === undefined ? [] : repoImpactLines(repo, value.sections[repo] as Fact<RepoImpact>, detail, value.trigger.repo, context))));
   const unserved = counted("no local repository serves", value.workspace.unserved);
-  const unservedSummary = `no local repository serves (${value.workspace.unserved.length}): mode: "full" includes all names`;
+  const unservedSummary = `no local repository serves (${value.workspace.unserved.length}): ${categoryRecovery({ full: "includes all" })} names`;
   lines.push(value.workspace.unserved.length > 0 && size([unservedSummary]) <= size([unserved]) ? unservedSummary : unserved);
   lines.push("walk origins:", ...value.workspace.repos.flatMap((repo) => {
     const section = value.sections[repo];
@@ -978,8 +936,8 @@ function namesBlock(names: readonly OutwardName[], served: ReadonlySet<string>, 
     const counted = ofKind.length - listed.length;
     const head =
       counted === 0 ? `    ${kind} (${ofKind.length}):`
-      : counted === ofKind.length ? `    ${kind} (${ofKind.length}): no repository given serves them; mode "details" lists them; mode: "full" retains all recorded names`
-      : `    ${kind} (${ofKind.length}): ${counted} no repository given serves; mode "details" lists them; mode: "full" retains all recorded names`;
+      : counted === ofKind.length ? `    ${kind} (${ofKind.length}): no repository given serves them; ${categoryRecovery({ details: "lists them", full: "retains all recorded names" })}`
+      : `    ${kind} (${ofKind.length}): ${counted} no repository given serves; ${categoryRecovery({ details: "lists them", full: "retains all recorded names" })}`;
     const line = (name: OutwardName): string => `      - ${name.name} (${name.evidence.map(evidenceText).join(", ")})`;
     const listing = [head, ...ofKind.map(line)];
     const summarized = [head, ...listed.map(line)];
@@ -995,7 +953,7 @@ function unservedBlock(unserved: readonly RepositoryOutwardName[], detail: Respo
   const head = `no local repository serves (${unserved.length}):`;
   const listing = [head, ...unserved.map((name) => `  - ${name.kind} ${name.name}${name.evidence.length === 0 ? "" : ` (${name.evidence.map(repositoryEvidenceText).join(", ")})`}`)];
   if (counted === 0) return listing;
-  const summarized = [`${head} ${counted} dependency counted; mode "details" lists them; mode: "full" retains all recorded names`, ...listed.map((name) => `  - ${name.kind} ${name.name}${name.evidence.length === 0 ? "" : ` (${name.evidence.map(repositoryEvidenceText).join(", ")})`}`)];
+  const summarized = [`${head} ${counted} dependency counted; ${categoryRecovery({ details: "lists them", full: "retains all recorded names" })}`, ...listed.map((name) => `  - ${name.kind} ${name.name}${name.evidence.length === 0 ? "" : ` (${name.evidence.map(repositoryEvidenceText).join(", ")})`}`)];
   return size(summarized) <= size(listing) ? summarized : listing;
 }
 
@@ -1097,7 +1055,7 @@ function decisionsBlock(decisions: readonly Decision[], detail: ResponseMode): s
   const literal = groups.flatMap(([kind, ofKind]) => {
     const listed = detail === "details" ? ofKind : ofKind.filter((decision) => !dependencyGap(decision));
     const counted = ofKind.length - listed.length;
-    const head = counted === 0 ? `  ${kind} (${ofKind.length}):` : `  ${kind} (${ofKind.length}): ${counted} dependency counted (free text only); mode "details" lists them`;
+    const head = counted === 0 ? `  ${kind} (${ofKind.length}):` : `  ${kind} (${ofKind.length}): ${counted} dependency counted (free text only); ${categoryRecovery({ details: "lists them" })}`;
     const listing = [head, ...ofKind.flatMap(decisionLines)];
     const summarized = [head, ...listed.flatMap(decisionLines)];
     return counted === 0 || size(summarized) <= size(listing) ? summarized : listing;
@@ -1128,7 +1086,7 @@ function decisionsBlock(decisions: readonly Decision[], detail: ResponseMode): s
   const expanded = groups.flatMap(([kind, ofKind]) => {
     const shown = visible.filter((decision) => ofKind.includes(decision));
     const counted = ofKind.length - shown.length;
-    const head = counted === 0 ? `  ${kind} (${ofKind.length}):` : `  ${kind} (${ofKind.length}): ${counted} dependency counted (free text only); mode "details" lists them`;
+    const head = counted === 0 ? `  ${kind} (${ofKind.length}):` : `  ${kind} (${ofKind.length}): ${counted} dependency counted (free text only); ${categoryRecovery({ details: "lists them" })}`;
     return [head, ...shown.flatMap((decision) => {
       const reference = shared.get(canonicalJson(decision.evidence));
       return [`    ${decision.subject}`, ...(decision.evidence.length === 0 ? [] : [reference === undefined ? `      evidence: ${decision.evidence.map(repositoryEvidenceText).join(", ")}` : `      evidence ${reference}`]), ...decision.options.map(optionLine), ...(decision.allowsFreeText ? [shareFreeText ? "      free text allowed" : "      free text: an answer no fact states is accepted"] : [])];

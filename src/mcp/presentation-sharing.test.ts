@@ -18,3 +18,9 @@ test('chooses shorter complete UTF-8 layout and keeps literal on ties', () => {
   assert.equal(preferShorterText('abc', 'xyz'), 'abc');
   assert.equal(preferShorterText('abc', 'éé'), 'abc');
 });
+
+test('scores complete line blocks including UTF-8 and terminating newlines', async () => {
+  const { blockBytes } = await import('./presentation-sharing.ts');
+  assert.equal(blockBytes([]), 0);
+  assert.equal(blockBytes(['é', 'a']), 5);
+});

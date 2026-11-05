@@ -303,6 +303,10 @@ zero-item page is not an unknown or unavailable source, which carries its actual
 not change analysis scope or traversal budgets. The public redaction boundary also applies to evidence and recipes;
 internal source sidecars are not exposed.
 
+MCP text responses share status, scope, snapshot and recovery conventions across tools. Selected evidence keeps
+each read's owner and uncertainty, with explicit snapshot/scope/configuration overrides. When importer paths are
+counted, one recovery instruction covers the target-file category; each target retains its own counts.
+
 Selected source text retains root context, read owners and analysis (including unknown reasons), and owner limits. Reads explicitly inherit matching snapshot, trust, declared scope and configuration; overrides are printed. Complete provenance catalogs remain in `structuredContent.source`. Handler and module categories provide literal selector examples; each row keeps its named JSON coordinate, distinct span/depth/confidence and origin facts. Shared origin headings apply only to the stated following rows. Category recovery rules cover recorded counts/examples without adding presentation caps. Structured provenance, recovery and pagination contracts are unchanged.
 
 `importers` presents three disjoint groups per target: importers, additional users without an import edge, and

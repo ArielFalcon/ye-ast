@@ -283,6 +283,24 @@ confidence and direction; an outgoing destination is not automatically an affect
 `live: true` requires the repository’s current trusted declaration and excludes revision/head for that repository. Workspace and decisions accept a top-level choice and member choices; callers and impact accept the same through `workspace`. Offline may coexist with workspace live selections and prevents committed remote refresh; a live member never refreshes its remote. Local-only live retains the exclusion of offline. Captures are not one atomic instant. A live replay captures again and compares head and stateId; it cannot retrieve an earlier working tree. The CLI and query protocol continue to expose their existing fact formats and are not governed
 by MCP presentation mode.
 
+## Shared MCP presentation ownership
+
+Response shaping remains in the driving adapter, as defined by RFC-0001.
+
+| Layer / concern | Owner | Production consumers | Rules retained by family |
+|---|---|---|---|
+| Request, redaction, receipt and recovery assembly | `src/mcp/server.ts` | Seven registered tools | Existing schemas and dispatch |
+| Ordinary status/scope/change/snapshot and selected provenance | `presentation-context.ts`: `renderFactHeader`, `renderFactStatus`, `renderSourceContext` | All seven ordinary tools; selected entrypoints/callers/impact through `render-evidence.ts` | Ordinary field eligibility; selected read owner, analysis and overrides |
+| Exact context equality and complete UTF-8 layout scoring | `presentation-sharing.ts`: `shareExactContext`, `preferShorterText`, `blockBytes` | Family blocks in `render.ts` | Row membership, order, multiplicity, equality keys and tie rules |
+| Category recovery wording | `presentation-guidance.ts`: `categoryRecovery` | Entry point profiles/guards; impact/callers origins; workspace names/unserved; decisions dependencies | Counts, eligible modes, category meaning, own guards, permissions |
+| Literal typed selectors | `presentation-guidance.ts`: `literalSelection` | Handler/module origins and cut coordinates | `canSelect` checks actual recovery, owner and supported capabilities against evidence schemas |
+| Family projections | `render.ts`, `render-evidence.ts` | All seven tools and selected pages | Association versus call chain, via/typeOnly/base/head, importer overlap, workspace exact equality, decision option associations |
+
+Outline shares context and layout policy; it has no supported evidence selection or omitted inventory policy.
+Importer path-omission wording remains in its family renderer; its placement is once per category. Handler, module and cut selector eligibility all consult the shared `canSelect` policy.
+Presentation primitives never select domain records or infer query capabilities. Importer recovery is printed once
+per response category while each target keeps its existing counts and chosen listing membership.
+
 ## Live freshness
 
 A `live` snapshot exists under `trusted` only and is designed in

@@ -548,7 +548,12 @@ test("every tool delivers mode receipts and a full fact", async () => {
         const receipt = result.structuredContent as Record<string, unknown>;
         assert.equal(receipt["mode"], mode, name);
         assert.deepEqual(Object.keys(receipt).toSorted(), ["ye_ast_entrypoints", "ye_ast_callers", "ye_ast_impact"].includes(name) ? ["mode", "recovery", "snapshot", "status"] : ["mode", "snapshot", "status"], name);
-        assert.ok(textOf(result).length > 0, name);
+        assert.ok(textOf(result).startsWith(`status: ${receipt["status"]}`), name);
+        assert.ok(textOf(result).includes("snapshot:"), name);
+        if (!["ye_ast_entrypoints", "ye_ast_callers", "ye_ast_impact"].includes(name)) {
+          assert.equal("recovery" in receipt, false, name);
+          assert.ok(!textOf(result).includes("lookup example:"), name);
+        }
       }
       assert.deepEqual(await session.callTool(name, args), await session.callTool(name, { ...args, mode: "summary" }), name);
       const whole = await session.callTool(name, { ...args, mode: "full" });

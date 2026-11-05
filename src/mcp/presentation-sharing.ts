@@ -23,3 +23,8 @@ export function shareExactContext<T, C>(rows: readonly T[], contextOf: (row: T) 
 export function preferShorterText(literal: string, shared: string): string {
   return Buffer.byteLength(shared, "utf8") < Buffer.byteLength(literal, "utf8") ? shared : literal;
 }
+
+/** Include each line terminator, matching the renderer block comparison contract. */
+export function blockBytes(lines: readonly string[]): number {
+  return lines.reduce((total, line) => total + Buffer.byteLength(line, "utf8") + 1, 0);
+}
