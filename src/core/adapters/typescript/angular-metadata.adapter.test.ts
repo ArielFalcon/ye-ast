@@ -741,3 +741,38 @@ test("reading, passing or optionally calling a field leaves it safe; only a writ
     assert.deepEqual((await memberProofs(`export class Owner { store = new Store(); run() { this.store.write(); ${change}; } }`)).memberUses, [], change);
   assert.deepEqual((await memberProofs("export class Owner { store = new Store(); store2 = 1; run() { this.store.write(); } get store() { return other; } }")).memberUses, []);
 });
+
+test("a subclass member makes that member unsafe only on the classes above it", async () => {
+  const unrelated = { "src/child.ts": "class Base { store = 1; write() {} } export class Child extends Base { store = 2; write() {} constructor() { super(); this.store = 3; } }" };
+  assert.equal((await memberProofs(OWNER, undefined, unrelated)).memberUses?.length, PROVEN);
+  for (const child of [
+    "import { Owner } from './owner'; export class Child extends Owner { store = new Other(); }",
+    "import { Owner } from './owner'; class Middle extends Owner {} export class Child extends Middle { store = new Other(); }",
+    "import * as owners from './owner'; export class Child extends owners.Owner { constructor() { super(); this.store = new Other(); } }",
+    "export class Child extends mixin(Base) { store = new Other(); }",
+  ]) assert.deepEqual((await memberProofs(OWNER, undefined, { "src/child.ts": child })).memberUses, [], child);
+});
+
+test("a receiver class whose base is unplaced or may construct another object proves none of its members", async () => {
+  assert.equal((await memberProofs(OWNER, "import { ErrorHandler } from '@angular/core'; export class Store extends ErrorHandler { write() {} }")).memberUses?.length, PROVEN);
+  assert.equal((await memberProofs(OWNER, undefined, { "src/error.ts": "export class Failure extends Error { write() {} }" })).memberUses?.length, PROVEN);
+  assert.deepEqual((await memberProofs(OWNER, undefined, { "src/error.ts": "import { Error } from './missing'; export class Failure extends Error { write() {} }" })).memberUses, []);
+  for (const target of [
+    "export class Store extends mixin(Object) { write() {} }",
+    "class Base { constructor() { return {}; } } class Middle extends Base {} export class Store extends Middle { write() {} }",
+  ]) assert.deepEqual((await memberProofs(OWNER, target)).memberUses, [], target);
+});
+
+test("a class a build-time file replacement may swap proves none of its members, and only that class", async () => {
+  const slot = { "src/slot.ts": "export { Store } from './store';", "src/other.ts": "export class Other { write() {} }" };
+  const owner = "import { Other } from './other'; export class Owner { store = new Store(); other = new Other(); run() { this.store.write(); this.other.write(); } }";
+  const replacing = (replace: string) => ({ ...slot, "angular.json": JSON.stringify({ projects: { app: { architect: { build: { configurations: { native: { fileReplacements: [{ replace, with: "src/native.ts" }] } } } } } } }) });
+  const proven = async (extra: Record<string, string>) => ((await memberProofs(owner, undefined, extra)).memberUses ?? []).map((use) => use.receiver.symbol).sort();
+  assert.deepEqual(await proven(slot), ["Other", "Store"]);
+  assert.deepEqual(await proven(replacing("src/slot.ts")), ["Other"]);
+  assert.deepEqual(await proven(replacing("./src/../src/store.ts")), ["Other"]);
+  assert.deepEqual(await proven(replacing("src/absent.ts")), ["Other", "Store"]);
+  assert.deepEqual(await proven({ ...replacing("src/slot.ts"), "src/slot.ts": "export * from './store';" }), ["Other"]);
+  assert.deepEqual(await proven({ ...slot, "angular.json": "{" }), []);
+  assert.deepEqual(await proven({ ...slot, "angular.json": JSON.stringify({ fileReplacements: [{ with: "src/native.ts" }] }) }), []);
+});

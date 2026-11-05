@@ -13,6 +13,11 @@ test("an Angular template is in the map's scope, so the export writes it for the
   assert.equal(isInMapScope("docs/notes.md"), false);
 });
 
+test("an Angular workspace is in the map's scope, so the relation reader sees the sources it replaces at build time", () => {
+  assert.equal(isInMapScope("angular.json"), true);
+  assert.equal(isInMapScope("src/app/data.json"), false);
+});
+
 test("a changed template changes the content digest, and the same template gives the same digest", () => {
   assert.notEqual(contentFingerprint(exportOf("blob-1")), contentFingerprint(exportOf("blob-2")));
   assert.equal(contentFingerprint(exportOf("blob-1")), contentFingerprint(exportOf("blob-1")));

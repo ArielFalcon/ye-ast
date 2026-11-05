@@ -5,6 +5,7 @@ const TEST_DIRECTORY = /(^|\/)__tests__\//;
 const INSTALLED_PACKAGES = /(^|\/)node_modules\//;
 const TEMPLATE = /\.html?$/;
 const MODULE_CONFIG = /(^|\/)[tj]sconfig(\.[^/]+)?\.json$/;
+const ANGULAR_WORKSPACE = /(^|\/)angular\.json$/;
 
 /** A TypeScript test: a `.test` or `.spec` module, or one under `__tests__`. */
 export function isTypeScriptTestFile(path: string): boolean {
@@ -30,6 +31,11 @@ export function isPackageManifest(path: string): boolean {
 /** A `tsconfig` or `jsconfig` file, `extends` targets included, that tells how a module specifier resolves. */
 export function isModuleConfigFile(path: string): boolean {
   return MODULE_CONFIG.test(path) && !INSTALLED_PACKAGES.test(path);
+}
+
+/** An Angular workspace file, whose `fileReplacements` swap one source for another at build time. */
+export function isAngularWorkspace(path: string): boolean {
+  return ANGULAR_WORKSPACE.test(path) && !INSTALLED_PACKAGES.test(path);
 }
 
 /** A template file a `templateUrl` can name, which the relation reader parses for the components a template uses. */

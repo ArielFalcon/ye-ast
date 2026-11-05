@@ -68,6 +68,8 @@ export type RawWriteTarget =
   | { unplaced: true };
 /** A write to `member` of the target, or to members no syntax names when `member` is absent. */
 export interface RawWrite { target: RawWriteTarget; member?: string; line: number }
+/** `base` is the extended class as written: a platform class the file neither declares nor imports, or none when the heritage expression names no class (`extends mixin(Base)`). */
+export interface RawSubclass { name?: string; line: number; base?: RawReference | "platform"; members: Set<string> }
 export interface RawMemberEvidence {
   methods: RawInstanceMethod[];
   calls: RawFieldCall[];
@@ -76,8 +78,8 @@ export interface RawMemberEvidence {
   declarations: Map<string, number>;
   escapedClasses: Set<string>;
   writes: RawWrite[];
-  /** The members a subclass declares, by name. */
-  subclassMembers: Set<string>;
+  /** The classes that extend another, with the class they extend and the instance members they declare or assign. */
+  subclasses: RawSubclass[];
   /** `ns.Name` references through a namespace import: with the imports, what the file can name. */
   qualified: RawReference[];
   /** A mutation API (`Object.assign`, `Reflect.set`, …) used as a value: what it changes cannot be bounded. */
@@ -110,7 +112,7 @@ const CONSTRUCTED = new Set([...Object.keys(KINDS), "Injectable"]);
 export function readAngularMetadataFile(sf: ts.SourceFile, shape: Pick<RawRouteFile, "imports">, proveMembers = false, coreExternal = true): RawAngularFile {
   const line = (node: ts.Node): number => sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1;
   const declarations = declarationCounts(sf);
-  const result: RawAngularFile = { classes: [], memberEvidence: proveMembers ? readMemberEvidence(sf, declarations, shape) : { methods: [], calls: [], localCalls: [], reads: new Map(), declarations, escapedClasses: new Set(), writes: [], subclassMembers: new Set(), qualified: [], escapedMutator: false, unknownBinding: false, unknownProvider: false }, injections: [], fields: [], substituted: [], arrays: new Map() };
+  const result: RawAngularFile = { classes: [], memberEvidence: proveMembers ? readMemberEvidence(sf, declarations, shape) : { methods: [], calls: [], localCalls: [], reads: new Map(), declarations, escapedClasses: new Set(), writes: [], subclasses: [], qualified: [], escapedMutator: false, unknownBinding: false, unknownProvider: false }, injections: [], fields: [], substituted: [], arrays: new Map() };
 
   /* The export of `@angular/core` an expression names: `inject`, or `core.inject` through a namespace import. */
   const coreName = (expression: ts.Expression): string | undefined => {
@@ -376,7 +378,7 @@ const MUTATORS: Readonly<Record<string, Readonly<Record<string, number | "keys" 
 };
 
 function readMemberEvidence(sf: ts.SourceFile, declarations: Map<string, number>, shape: Pick<RawRouteFile, "imports">): RawMemberEvidence {
-  const result: RawMemberEvidence = { methods: [], calls: [], localCalls: [], reads: new Map(), declarations, escapedClasses: new Set(), writes: [], subclassMembers: new Set(), qualified: [], escapedMutator: false, unknownBinding: false, unknownProvider: false };
+  const result: RawMemberEvidence = { methods: [], calls: [], localCalls: [], reads: new Map(), declarations, escapedClasses: new Set(), writes: [], subclasses: [], qualified: [], escapedMutator: false, unknownBinding: false, unknownProvider: false };
   const redeclared = new Set<string>();
   const escapedOwners = result.escapedClasses;
   const lineOf = (node: ts.Node): number => sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1;
@@ -391,6 +393,7 @@ function readMemberEvidence(sf: ts.SourceFile, declarations: Map<string, number>
     return undefined;
   };
   const owned = (owner: ts.ClassDeclaration): { name: string; line: number } => ({ name: owner.name!.text, line: lineOf(owner.name!) });
+  const subclassOf = new Map<ts.ClassDeclaration, RawSubclass>();
   const literalLocals = new Set<string>();
   const topLevelClasses = new Set<string>();
   const collect = (node: ts.Node): void => {
@@ -452,9 +455,9 @@ function readMemberEvidence(sf: ts.SourceFile, declarations: Map<string, number>
     const target = targetOf(object);
     if (target === undefined) return;
     result.writes.push({ target, ...(member === undefined ? {} : { member }), line: lineOf(at) });
-    const owner = "self" in target ? ownerOfThis(unwrapped(object)) : undefined;
-    if (owner?.heritageClauses?.some((clause) => clause.token === ts.SyntaxKind.ExtendsKeyword) !== true) return;
-    if (member !== undefined) result.subclassMembers.add(member);
+    const subclass = "self" in target ? subclassOf.get(ownerOfThis(unwrapped(object))!) : undefined;
+    if (subclass === undefined) return;
+    if (member !== undefined) subclass.members.add(member);
     else result.writes.push({ target: { unplaced: true }, line: lineOf(at) });
   };
   const literalKey = (expression: ts.Expression | undefined): string | undefined =>
@@ -511,16 +514,22 @@ function readMemberEvidence(sf: ts.SourceFile, declarations: Map<string, number>
     }
     if (ts.isPropertyAccessExpression(node) && ts.isIdentifier(node.expression) && (declarations.get(node.expression.text) ?? 0) === 0 && shape.imports.get(node.expression.text)?.imported === "*") result.qualified.push({ name: node.expression.text, member: node.name.text });
     if (ts.isQualifiedName(node) && ts.isIdentifier(node.left) && shape.imports.get(node.left.text)?.imported === "*") result.qualified.push({ name: node.left.text, member: node.right.text });
-    if (ts.isClassLike(node) && node.heritageClauses?.some((clause) => clause.token === ts.SyntaxKind.ExtendsKeyword)) {
+    const heritage = ts.isClassLike(node) ? node.heritageClauses?.find((clause) => clause.token === ts.SyntaxKind.ExtendsKeyword)?.types[0] : undefined;
+    if (ts.isClassLike(node) && heritage !== undefined) {
+      const written = namespaced(heritage.expression);
+      const base = written !== undefined && written.member === undefined && (declarations.get(written.name) ?? 0) === 0 && !shape.imports.has(written.name) && LIB_GLOBALS.has(written.name) ? "platform" : written;
+      const subclass: RawSubclass = { ...(node.name === undefined ? {} : { name: node.name.text }), line: lineOf(node.name ?? node), ...(base === undefined ? {} : { base }), members: new Set() };
+      result.subclasses.push(subclass);
+      if (ts.isClassDeclaration(node)) subclassOf.set(node, subclass);
       for (const member of node.members) {
         if (isStatic(member)) continue;
         if (member.name !== undefined) {
-          if (ts.isIdentifier(member.name) || ts.isStringLiteral(member.name)) result.subclassMembers.add(member.name.text);
+          if (ts.isIdentifier(member.name) || ts.isStringLiteral(member.name)) subclass.members.add(member.name.text);
           else result.writes.push({ target: { unplaced: true }, line: lineOf(member) });
         }
         if (ts.isConstructorDeclaration(member)) {
           for (const parameter of member.parameters) {
-            if (ts.isParameterPropertyDeclaration(parameter, member) && ts.isIdentifier(parameter.name)) result.subclassMembers.add(parameter.name.text);
+            if (ts.isParameterPropertyDeclaration(parameter, member) && ts.isIdentifier(parameter.name)) subclass.members.add(parameter.name.text);
           }
         }
       }

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { isAngularTemplate, isModuleConfigFile, isPackageManifest, isTypeScriptSource } from "./typescript.ts";
+import { isAngularTemplate, isAngularWorkspace, isJsonModuleResource, isModuleConfigFile, isPackageManifest, isTypeScriptSource } from "./typescript.ts";
 
 test("a TypeScript source is a .ts, .mts or .cts file that is neither a declaration file nor a test nor generated output", () => {
   assert.equal(isTypeScriptSource("src/app/app.routes.ts"), true);
@@ -58,4 +58,12 @@ test("JSON module resources exclude installed packages and resolver configuratio
   const { isJsonModuleResource } = await import("./typescript.ts");
   assert.equal(isJsonModuleResource("src/data.json"), true);
   for (const path of ["package.json", "src/tsconfig.app.json", "node_modules/pkg/data.json", "src/data.json.bak"]) assert.equal(isJsonModuleResource(path), false, path);
+});
+
+test("an angular.json at any depth, outside node_modules, is an Angular workspace that stays a JSON module resource", () => {
+  assert.equal(isAngularWorkspace("angular.json"), true);
+  assert.equal(isAngularWorkspace("apps/web/angular.json"), true);
+  assert.equal(isAngularWorkspace("my-angular.json"), false);
+  assert.equal(isAngularWorkspace("node_modules/pkg/angular.json"), false);
+  assert.equal(isJsonModuleResource("angular.json"), true);
 });

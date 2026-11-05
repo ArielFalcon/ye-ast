@@ -1,7 +1,7 @@
 import { posix } from "node:path";
 import ts from "typescript";
 import { sourceTree } from "./source-tree.ts";
-import { isTypeScriptSource } from "../../domain/languages/typescript.ts";
+import { isAngularWorkspace, isTypeScriptSource } from "../../domain/languages/typescript.ts";
 import type { AngularClass, Operand, TemplateSource } from "../../domain/relations/angular-class.ts";
 import type { MemberProofContext, MemberSubstitute, MemberUseOrigin } from "../../domain/relations/member-use.ts";
 import type { FieldOrigin, LocalOrigin } from "../../domain/relations/field-origin.ts";
@@ -50,9 +50,10 @@ async function readMetadata(files: readonly SourceFile[], proof?: MemberProofCon
   const locals: LocalOrigin[] = [];
   const memberUses: MemberUseOrigin[] = [];
   const manifests = manifestsOf(files);
+  const replaced = replacedFiles(files);
   for (const [project, sources] of byProject) {
     const scope = proof?.completeSource === true && contents.size === files.length
-      ? { sites: new Set(sources.filter((path) => projectOf(path, manifests)?.directory === project.directory)), evidence: sourcePaths }
+      ? { sites: new Set(sources.filter((path) => projectOf(path, manifests)?.directory === project.directory)), evidence: sourcePaths, ...(replaced === undefined ? {} : { replaced }) }
       : undefined;
     const metadata = await readProject(contents, project.dependencies, sources, scope, proof !== undefined);
     classes.push(...metadata.classes);
@@ -70,10 +71,44 @@ async function readMetadata(files: readonly SourceFile[], proof?: MemberProofCon
   };
 }
 
-/** Where proofs may sit (the sources of the project's own manifest), and every source whose writes and providers can reach them. */
+/**
+ * Where proofs may sit (the sources of the project's own manifest), every source whose writes and providers can reach
+ * them, and the files an Angular workspace replaces at build time; `replaced` is absent when a workspace file is unreadable.
+ */
 interface ProofScope {
   sites: ReadonlySet<string>;
   evidence: readonly string[];
+  replaced?: ReadonlySet<string>;
+}
+
+/** Every `fileReplacements` source the Angular workspaces name, relative to the repository; undefined when one cannot be read. */
+function replacedFiles(files: readonly SourceFile[]): ReadonlySet<string> | undefined {
+  const replaced = new Set<string>();
+  for (const file of files.filter(({ path }) => isAngularWorkspace(path))) {
+    let workspace: unknown;
+    try {
+      workspace = JSON.parse(file.content);
+    } catch {
+      return undefined;
+    }
+    const pending = [workspace];
+    for (let value = pending.pop(); value !== undefined; value = pending.pop()) {
+      if (typeof value !== "object" || value === null) continue;
+      for (const [key, nested] of Object.entries(value)) {
+        if (key !== "fileReplacements") {
+          pending.push(nested);
+          continue;
+        }
+        if (!Array.isArray(nested)) return undefined;
+        for (const entry of nested) {
+          const source = (entry as { replace?: unknown } | null)?.replace;
+          if (typeof source !== "string") return undefined;
+          replaced.add(posix.normalize(posix.join(posix.dirname(file.path), source)));
+        }
+      }
+    }
+  }
+  return replaced;
 }
 
 async function readProject(contents: ReadonlyMap<string, SourceFile>, dependencies: ReadonlySet<string>, sources: readonly string[], scope: ProofScope | undefined, collectSites: boolean): Promise<AngularMetadata> {
@@ -294,9 +329,9 @@ async function readProject(contents: ReadonlyMap<string, SourceFile>, dependenci
    * A mutation API used as a value, a replaced export of an installed package (every token it constructs could become any
    * class) and an unreadable source have no bound, and then nothing is proven.
    */
-  async function risksOf(evidence: readonly string[]): Promise<{ reaches: (receiver: SymbolRef, member: string) => boolean; substitutesOf: (receiver: SymbolRef) => readonly MemberSubstitute[] | undefined } | undefined> {
+  async function risksOf({ evidence, replaced }: ProofScope): Promise<{ reaches: (receiver: SymbolRef, member: string) => boolean; substitutesOf: (receiver: SymbolRef) => readonly MemberSubstitute[] | undefined } | undefined> {
     const parsedEvidence = await Promise.all(evidence.map(async (file) => ({ file, source: await parse(file) })));
-    if (parsedEvidence.some(({ source }) => source === undefined || source.angular.memberEvidence.escapedMutator)) return undefined;
+    if (replaced === undefined || parsedEvidence.some(({ source }) => source === undefined || source.angular.memberEvidence.escapedMutator)) return undefined;
     let unbounded = false;
     const classKey = (ref: SymbolRef): string => `${ref.path}\0${ref.symbol}\0${ref.line}`;
     const unsafe = new Set<string>();
@@ -348,7 +383,6 @@ async function readProject(contents: ReadonlyMap<string, SourceFile>, dependenci
     for (const { file, source } of parsedEvidence) {
       const parsedSource = source!;
       const evidenceOf = parsedSource.angular.memberEvidence;
-      for (const name of evidenceOf.subclassMembers) names.add(name);
       for (const write of evidenceOf.writes) await place(file, parsedSource, write);
       if (evidenceOf.unknownProvider) await unplaced(file, parsedSource);
       for (const substitution of parsedSource.angular.substituted) {
@@ -371,6 +405,52 @@ async function readProject(contents: ReadonlyMap<string, SourceFile>, dependenci
         else substitutes.set(classKey(holds.class), [...(substitutes.get(classKey(holds.class)) ?? []), { class: by.class, at: { path: file, line: substitution.line } }]);
       }
     }
+    /**
+     * A subclass member reaches that member on every class above the subclass, whose code may read it on a subclass
+     * instance; a base it cannot place makes them unsafe on every class. A constructor above it that may return another object
+     * leaves the subclass's own instances unknown.
+     */
+    const subclasses = parsedEvidence.flatMap(({ file, source }) => source!.angular.memberEvidence.subclasses.map((subclass) => ({ file, source: source!, subclass })));
+    const byClass = new Map<string, (typeof subclasses)[number]>(subclasses.flatMap((entry) => (entry.subclass.name === undefined ? [] : [[`${entry.file}\0${entry.subclass.name}\0${entry.subclass.line}`, entry] as const])));
+    for (const { file, source, subclass } of subclasses) {
+      const visited = new Set<string>();
+      let at: { file: string; base?: RawReference | "platform" } | undefined = { file, ...(subclass.base === undefined ? {} : { base: subclass.base }) };
+      const self = subclass.name === undefined ? undefined : { path: file, symbol: subclass.name, line: subclass.line };
+      while (at !== undefined) {
+        const placed: Placed = at.base === "platform" ? { external: true } : at.base === undefined ? { unresolved: true } : await resolve(at.file, at.base);
+        if (!("class" in placed)) {
+          if (!("external" in placed)) for (const member of subclass.members) await unplaced(file, source, member);
+          break;
+        }
+        const ancestor = placed.class;
+        if (visited.has(classKey(ancestor))) break;
+        visited.add(classKey(ancestor));
+        for (const member of subclass.members) reach(ancestor, member);
+        if (self !== undefined && (await parse(ancestor.path))?.angular.memberEvidence.escapedClasses.has(`${ancestor.symbol}\0${ancestor.line}`) !== false) reach(self);
+        const above = byClass.get(classKey(ancestor));
+        at = above === undefined ? undefined : { file: above.file, ...(above.subclass.base === undefined ? {} : { base: above.subclass.base }) };
+      }
+    }
+    /** A build may swap a replaced file for another, so every class it exports may be another class there. */
+    const exportedClasses = async (file: string, seen: Set<string>): Promise<SymbolRef[]> => {
+      const source = await parse(file);
+      if (seen.has(file) || source === undefined) return [];
+      seen.add(file);
+      const exported = await Promise.all([...source.shape.exports.values()].map(async (entry): Promise<SymbolRef[]> => {
+        if ("local" in entry) {
+          const placed = await resolve(file, { name: entry.local });
+          return "class" in placed ? [placed.class] : [];
+        }
+        const placed = await through(file, entry.module, entry.imported);
+        return "class" in placed ? [placed.class] : [];
+      }));
+      const starred = await Promise.all(source.shape.stars.map(async (module) => {
+        const target = await fileOf(file, module);
+        return target === undefined ? [] : exportedClasses(target, seen);
+      }));
+      return [...exported, ...starred].flat();
+    };
+    for (const file of evidence.filter((path) => replaced.has(path))) for (const ref of await exportedClasses(file, new Set())) reach(ref);
     if (unbounded) return undefined;
     return {
       reaches: (receiver, member) => names.has(member) || unsafe.has(`${classKey(receiver)}\0${member}`) || unsafe.has(`${classKey(receiver)}\0*`),
@@ -378,7 +458,7 @@ async function readProject(contents: ReadonlyMap<string, SourceFile>, dependenci
     };
   }
   const memberUses: MemberUseOrigin[] = [];
-  const risks = scope === undefined ? undefined : await risksOf(scope.evidence);
+  const risks = scope === undefined ? undefined : await risksOf(scope);
   if (scope !== undefined && risks !== undefined) {
     const fieldsByOwner = Map.groupBy(proofFields, (field) => `${field.owner.path}\0${field.owner.line}\0${field.field}`);
     const resolvedImports = new Map<string, Promise<{ file: string; name: string } | undefined>>();

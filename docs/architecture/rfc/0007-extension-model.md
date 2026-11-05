@@ -55,8 +55,8 @@ reuse code that moves from qayaba ([ADR-0012](../adr/0012-foundation-before-qaya
   `package.json`, at any depth outside `node_modules`, that names `@angular/core` or `@angular/router`; a source belongs
   to the nearest project above it and a source with none is not read. Each project whose manifest names
   `@angular/router` has every TypeScript source of it outside tests, declaration files and `node_modules` parsed once (`.ts`, `.mts`,
-  `.cts`; JavaScript and TSX route files are not read; a folder named `build`, `out`, `tmp` or `vendor` is read); the map exports, reads and digests those sources, every `package.json` and every
-  `tsconfig*.json` or `jsconfig*.json`. Nothing is built or run.
+  `.cts`; JavaScript and TSX route files are not read; a folder named `build`, `out`, `tmp` or `vendor` is read); the map exports, reads and digests those sources, every `package.json`, every
+  `tsconfig*.json` or `jsconfig*.json` and every `angular.json`. Nothing is built or run.
   - One `ui-route` item per route entry that shows a component (`component`, `loadComponent`, or the default export of a
     lazily loaded module), named as [RFC-0001](0001-architecture-and-layers.md) says. It carries the class the entry
     shows (file, symbol and line of the class declaration, or `unknown` when the sources do not name one class) and its
