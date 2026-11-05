@@ -1104,7 +1104,7 @@ export function renderWorkspace(fact: Fact<WorkspaceValue>, detail: ResponseMode
   const validOwner = (repo: string): boolean => {
     const section = value.sections[repo];
     const snapshots = value.repositorySnapshots.filter((item) => item.repo === repo);
-    return repos.filter((item) => item === repo).length === 1 && section !== undefined && section.status !== "unknown" && snapshots.length === 1 && canonicalJson(section.snapshot) === canonicalJson(snapshots[0]!.snapshot);
+    return repos.filter((item) => item === repo).length === 1 && section !== undefined && section.status !== "unknown" && section.snapshot.repo === repo && snapshots.length === 1 && snapshots[0]!.snapshot.repo === repo && canonicalJson(section.snapshot) === canonicalJson(snapshots[0]!.snapshot);
   };
   const qualified = sections.flatMap(([repo, names]) => names.map((name, index) => ({ repo, index, name: { ...name, evidence: name.evidence.map((evidence) => ({ ...evidence, repo })) } })));
   const ordered = sections.flatMap(([repo, names]) => groupedByRank(names, (name) => name.kind, OUTWARD_ORDER).flatMap(([, group]) => group.map((name) => ({ ...name, evidence: name.evidence.map((evidence) => ({ ...evidence, repo })) }))));

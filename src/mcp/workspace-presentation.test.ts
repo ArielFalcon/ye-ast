@@ -27,6 +27,11 @@ test("mixed unserved references reconstruct original order, multiplicity and qua
   const invalidText = renderWorkspace({ ...base, status: "complete", value: invalid } as never, "details");
   assert.doesNotMatch(invalidText, /  - outward "b"\[/);
   assert.match(invalidText, /b:src\/a-long-shared-location.ts:2/);
+  const wrongSnapshot = snapshot("wrong");
+  const bothWrong = { ...value, sections: { ...value.sections, b: { ...value.sections.b, snapshot: wrongSnapshot } }, repositorySnapshots: value.repositorySnapshots.map(item => item.repo === "b" ? { ...item, snapshot: wrongSnapshot } : item) };
+  const wrongOwnerText = renderWorkspace({ ...base, status: "complete", value: bothWrong } as never, "details");
+  assert.doesNotMatch(wrongOwnerText, /  - outward "b"\[/);
+  assert.match(wrongOwnerText, /b:src\/a-long-shared-location.ts:2/);
   assert.equal(JSON.stringify(fact), before);
 });
 
