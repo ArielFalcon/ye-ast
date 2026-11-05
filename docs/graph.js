@@ -184,9 +184,9 @@
   }
 
   function shadeOf(x, y, w, h) {
-    const group = el("g", { transform: `translate(${x} ${y})`, "aria-hidden": "true" });
-    const top = Math.round(h * 0.74);
-    group.appendChild(el("rect", { x: 2, y: top, width: w - 4, height: h - top - 2, class: "gnode-shade" }));
+    const group = el("g", { transform: `translate(${x} ${y + h - NODE_H})`, "aria-hidden": "true" });
+    const top = Math.round(NODE_H * 0.74);
+    group.appendChild(el("rect", { x: 2, y: top, width: w - 4, height: NODE_H - top - 2, class: "gnode-shade" }));
     return group;
   }
 
@@ -278,8 +278,14 @@
         if (event.key === "Enter" || event.key === " ") { event.preventDefault(); selectNode(module.key); }
       });
       nodesGroup.appendChild(group);
-      fitText(group.querySelector(".gnode-sub"), position.w - 24);
     });
+  }
+
+  function fitNodeSubtitles() {
+    for (const text of $$(".gnode-sub", nodesGroup)) {
+      const position = POSITIONS.get(text.parentNode.dataset.key);
+      if (position) fitText(text, position.w - 24);
+    }
   }
 
   function fitText(text, width) {
@@ -314,7 +320,6 @@
     const center = compact ? { x: 30, y: 20, w: 330, h: 70 } : { x: 420, y: 210, w: 260, h: 86 };
     const hub = el("g", { class: "gnode is-files-hub", "data-key": module.key, "data-layer": module.layer });
     hub.appendChild(el("rect", { x: center.x, y: center.y, width: center.w, height: center.h, rx: 2 }));
-    hub.appendChild(shadeOf(center.x, center.y, center.w, Math.min(center.h, NODE_H)));
     hub.appendChild(el("text", { x: center.x + 16, y: center.y + 30, class: "gnode-name" }, module.name));
     hub.appendChild(el("text", { x: center.x + 16, y: center.y + 50, class: "gnode-sub" }, module.sub));
     hub.appendChild(el("text", { x: center.x + 16, y: center.y + 70, class: "gnode-tag" }, fileCountLabel(module.files.length)));
@@ -356,6 +361,7 @@
       graphStatus.textContent = `${T.modules}: ${MODULES.length}`;
     }
     applyFocus();
+    if (state.level === "modules") fitNodeSubtitles();
     renderFlowHeader();
     renderStepList();
     renderInfoPanel();

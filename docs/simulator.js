@@ -316,7 +316,7 @@
     labelGroup.appendChild(svgEl("text", { x: width - 46, y: 16, class: "sim-axis", "text-anchor": "end" }, T.callsDirection));
     labelGroup.appendChild(svgEl("line", { x1: 40, y1: 42, x2: width - 40, y2: 42, class: "sim-axis-line" }));
     for (let depth = 0; depth <= result.maxDepth; depth += 1) {
-      labelGroup.appendChild(svgEl("text", { x: 96 + depth * 186 + 77, y: 34, class: "sim-axis", "text-anchor": "middle" }, `${T.depth} ${depth}`));
+      labelGroup.appendChild(svgEl("text", { x: 96 + depth * 186 + 77, y: 34, class: "sim-axis sim-axis-depth", "data-depth": depth, "text-anchor": "middle" }, `${T.depth} ${depth}`));
     }
 
     for (const edge of SIM.edges) {
@@ -328,6 +328,7 @@
       const cls = ["sim-edge", followed ? "followed" : rejected ? "rejected" : "ignored"].join(" ");
       const path = svgEl("path", {
         d: nodePath(from, to),
+        ...(followed ? { pathLength: 100 } : {}),
         class: cls,
         "data-from": edge.from,
         "data-to": edge.to,
@@ -339,14 +340,18 @@
       edgesGroup.appendChild(path);
     }
 
+    const placedAtDepth = new Map();
     for (const node of SIM.nodes) {
       const position = positions.get(node.id);
       if (position === undefined) continue;
       const item = result.reached.find((candidate) => candidate.node.id === node.id);
+      const order = placedAtDepth.get(item.depth) ?? 0;
+      placedAtDepth.set(item.depth, order + 1);
       const group = svgEl("g", {
         class: "sim-node",
         "data-node": node.id,
         "data-depth": item.depth,
+        style: `--i:${order}`,
       });
       group.classList.add("is-reached");
       if (item.depth === 0) group.classList.add("is-seed");
@@ -376,7 +381,7 @@
       let x = handler.x + 172;
       if (x + 136 > width - 8) x = handler.x - 144;
       const y = handler.y + count * 30 - 2;
-      const group = svgEl("g", { class: "sim-route" });
+      const group = svgEl("g", { class: "sim-route", "data-depth": base.depth });
       group.appendChild(svgEl("rect", { x, y, width: 136, height: 26, rx: 13 }));
       group.appendChild(svgEl("text", { x: x + 10, y: y + 17 }, entry.name));
       group.appendChild(svgEl("title", {}, `${entry.kind} ${entry.name} · ${T.joinedTo} ${NODE.get(anchorId).name} · ${T.depth} ${entry.depth}`));
@@ -384,6 +389,7 @@
       const link = svgEl("path", {
         d: `M ${handler.x + (x > handler.x ? 154 : 0)} ${handler.y + 25} C ${handler.x + (x > handler.x ? 190 : -36)} ${handler.y + 25}, ${x + (x > handler.x ? -20 : 156)} ${y + 13}, ${x + (x > handler.x ? 0 : 136)} ${y + 13}`,
         class: "sim-route-link",
+        "data-depth": base.depth,
         "marker-end": "url(#sim-arrow)",
       });
       routesGroup.appendChild(link);
@@ -408,13 +414,13 @@
   }
 
   function renderReadout(result) {
-    simStatus.textContent = result.status;
+    setStamped(simStatus, result.status);
     simStatus.classList.toggle("ok", result.status === "complete");
     simStatus.classList.toggle("warn", result.status === "partial");
-    $("#sim-depth-out").textContent = result.maxDepth;
-    $("#sim-expansions-out").textContent = result.expansions;
-    $("#sim-entry-out").textContent = result.entrypoints.length;
-    $("#sim-cuts-out").textContent = result.cuts.length;
+    setStamped($("#sim-depth-out"), result.maxDepth);
+    setStamped($("#sim-expansions-out"), result.expansions);
+    setStamped($("#sim-entry-out"), result.entrypoints.length);
+    setStamped($("#sim-cuts-out"), result.cuts.length);
     simCuts.innerHTML = result.cuts.length === 0
       ? `<p class="readout-empty">${esc(T.noCuts)}</p>`
       : result.cuts.map((cut) => `<p class="cut-item">${esc(cut.kind)}<br>${cut.at.map(esc).join("<br>")}${cut.limit === undefined ? "" : `<br>${esc(T.limit)} ${cut.limit}`}</p>`).join("");
@@ -471,6 +477,25 @@
       const fromDepth = Number(path.dataset.fromDepth);
       path.classList.toggle("is-live", Math.max(toDepth, fromDepth) <= visibleDepth);
     }
+    for (const route of $$("#sim-routes [data-depth]")) route.classList.toggle("is-hidden", Number(route.dataset.depth) > visibleDepth);
+    for (const label of $$("#sim-unreached-label .sim-axis-depth")) {
+      const depth = Number(label.dataset.depth);
+      label.classList.toggle("is-current", depth === visibleDepth);
+      label.classList.toggle("is-passed", depth < visibleDepth);
+    }
+  }
+
+  function stamp(element) {
+    element.classList.remove("is-stamped");
+    void element.getBoundingClientRect();
+    element.classList.add("is-stamped");
+  }
+
+  function setStamped(element, value) {
+    const text = String(value);
+    if (element.textContent === text) return;
+    element.textContent = text;
+    stamp(element);
   }
 
   function stopPlay() {
@@ -482,9 +507,17 @@
     currentResult = walk(options());
     renderGraph(currentResult);
     renderReadout(currentResult);
-    visibleDepth = animate ? 0 : currentResult.maxDepth;
+    if (!animate) {
+      visibleDepth = prefersReduced ? currentResult.maxDepth : -1;
+      applyVisibility();
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        visibleDepth = currentResult.maxDepth;
+        applyVisibility();
+      }));
+      return;
+    }
+    visibleDepth = 0;
     applyVisibility();
-    if (!animate) return;
     const tick = () => {
       if (currentResult === null || visibleDepth >= currentResult.maxDepth) { playTimer = null; return; }
       visibleDepth += 1;

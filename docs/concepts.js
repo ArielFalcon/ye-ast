@@ -75,7 +75,13 @@
     cuts.sort((a, b) => CUT_RANK[a.kind] - CUT_RANK[b.kind]);
     const unknown = factUnknown.checked;
     const status = unknown ? "unknown" : cuts.length > 0 ? "partial" : "complete";
+    const changed = factStatus.textContent !== status;
     factStatus.textContent = status;
+    if (changed) {
+      factStatus.classList.remove("is-stamped");
+      void factStatus.getBoundingClientRect();
+      factStatus.classList.add("is-stamped");
+    }
     factStatus.classList.toggle("ok", status === "complete");
     factStatus.classList.toggle("warn", status === "partial");
     factStatus.classList.toggle("bad", status === "unknown");
@@ -94,22 +100,51 @@
   }
   renderFact();
 
-  /* ── scroll reveal ────────────────────────────────────────────────── */
+  /* ── motion: sections rise from their horizon, sequences build piece by piece ── */
 
-  const reveals = $$(".docs .reveal");
-  if (reveals.length > 0) {
-    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    if (reduced || !("IntersectionObserver" in window)) {
-      for (const element of reveals) element.classList.add("is-in");
-    } else {
-      const observer = new IntersectionObserver((entries) => {
-        for (const entry of entries) {
-          if (!entry.isIntersecting) continue;
-          entry.target.classList.add("is-in");
-          observer.unobserve(entry.target);
-        }
-      }, { rootMargin: "0px 0px -8% 0px", threshold: 0.05 });
-      for (const element of reveals) observer.observe(element);
+  const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const BUILDS = [".status-grid", ".trust-lanes", ".lane-steps", ".surface-diagram", ".fact-list", ".glossary-grid", ".input-chips"];
+  for (const container of $$(BUILDS.map((selector) => `.docs ${selector}`).join(","))) {
+    container.classList.add("build");
+    Array.from(container.children).forEach((child, index) => child.style.setProperty("--i", String(Math.min(index, 12))));
+  }
+  const rising = $$(".docs .doc-section, .docs .reveal, .docs .build");
+  document.documentElement.classList.add("has-motion");
+  if (reduced || !("IntersectionObserver" in window)) {
+    for (const element of rising) element.classList.add("is-in");
+  } else {
+    const observer = new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        if (!entry.isIntersecting) continue;
+        entry.target.classList.add("is-in");
+        observer.unobserve(entry.target);
+      }
+    }, { rootMargin: "0px 0px -12% 0px", threshold: 0.08 });
+    for (const element of rising) observer.observe(element);
+  }
+
+  const nav = $(".docs-nav");
+  if (nav && "IntersectionObserver" in window) {
+    const marker = document.createElement("span");
+    marker.className = "docs-nav-marker";
+    marker.setAttribute("aria-hidden", "true");
+    nav.appendChild(marker);
+    const links = $$("a[href^='#']", nav);
+    const linkFor = new Map(links.map((link) => [link.getAttribute("href").slice(1), link]));
+    const mark = (link) => {
+      for (const candidate of links) candidate.classList.toggle("is-current", candidate === link);
+      if (link) {
+        marker.style.width = `${link.offsetWidth}px`;
+        marker.style.transform = `translateX(${link.offsetLeft}px)`;
+      }
+      marker.classList.toggle("is-visible", Boolean(link));
+    };
+    const spy = new IntersectionObserver((entries) => {
+      for (const entry of entries) if (entry.isIntersecting) mark(linkFor.get(entry.target.id));
+    }, { rootMargin: "-35% 0px -60% 0px" });
+    for (const id of linkFor.keys()) {
+      const target = document.getElementById(id);
+      if (target) spy.observe(target);
     }
   }
 })();
