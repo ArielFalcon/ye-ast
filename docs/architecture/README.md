@@ -28,6 +28,7 @@ marked **Proposed** awaits the owner's acceptance.
 | [0019](adr/0019-cuts-retired-on-a-proven-external-target.md) | A cut is not emitted when the file's own imports prove its target outside the repository; no type root, and a file-level shadow rule that gives up 6% of the retirements. Measured: 6% to 13% fewer cuts | Proposed |
 | [0020](adr/0020-host-budgeted-snapshot-memory-cache.md) | Serialized snapshot data in memory, bounded by a host-overridable byte budget; Git exports stay temporary | Accepted |
 | [0021](adr/0021-enable-snapshot-memory-cache-by-default.md) | Snapshot data cache enabled by default with 32 MiB; host override and explicit zero preserved | Accepted |
+| [0022](adr/0022-typed-query-replay-and-selective-evidence.md) | Typed selection on existing tools, explicit projections, verified query replay, declared repository targeting, mixed snapshots and result-bound pagination | Accepted |
 
 ## Designs (RFC)
 
