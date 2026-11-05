@@ -120,6 +120,8 @@ export function createModuleResolver(read: SourceReader, dependencies: ReadonlyS
     return held;
   };
 
+  /** The compiler reads only the importing file's directory, the specifier and files the reader holds fixed, so each pair is resolved once. */
+  const resolutions = new Map<string, Promise<ts.ResolvedModuleFull | undefined>>();
   const aliased = async (from: string, specifier: string): Promise<ModuleResolution> => {
     const pkg = packageOf(specifier);
     const external = pkg !== undefined && dependencies.has(pkg);
@@ -128,9 +130,15 @@ export function createModuleResolver(read: SourceReader, dependencies: ReadonlyS
     const compilerOptions = config.options;
     if (external && compilerOptions.paths === undefined && compilerOptions.baseUrl === undefined) return { external: true };
     const explicitJson = options?.jsonModules === true && specifier.endsWith(".json");
-    const resolved = await settle((host) =>
-      ts.resolveModuleName(specifier, absolute(from), { ...compilerOptions, allowJs: true, resolveJsonModule: options?.jsonModules === true, moduleResolution: compilerOptions.moduleResolution ?? ts.ModuleResolutionKind.Bundler }, explicitJson ? { ...host, fileExists: (file) => file.endsWith(".json") && host.fileExists(file) } : host).resolvedModule,
-    );
+    const key = JSON.stringify([posix.dirname(from), specifier]);
+    let pending = resolutions.get(key);
+    if (pending === undefined) {
+      pending = settle((host) =>
+        ts.resolveModuleName(specifier, absolute(from), { ...compilerOptions, allowJs: true, resolveJsonModule: options?.jsonModules === true, moduleResolution: compilerOptions.moduleResolution ?? ts.ModuleResolutionKind.Bundler }, explicitJson ? { ...host, fileExists: (file) => file.endsWith(".json") && host.fileExists(file) } : host).resolvedModule,
+      );
+      resolutions.set(key, pending);
+    }
+    const resolved = await pending;
     if (resolved === undefined) return external ? { external: true } : { unresolved: `${specifier} matches no \`paths\` or \`baseUrl\` entry of ${config.file}` };
     if (resolved.isExternalLibraryImport === true) return { external: true };
     const file = resolved.resolvedFileName.replace(/^\//, "");

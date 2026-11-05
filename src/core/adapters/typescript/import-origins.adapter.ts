@@ -106,10 +106,9 @@ export function createImportOrigins(sources: readonly SourceFile[]): ImportOrigi
 /** Check each graph spelling at its exact 1-based UTF-16 position in one temporary tree. */
 function checkSites(file: string, text: string, group: readonly { site: ImportOriginSite; index: number }[]): { matches: Map<number, "valid" | "local">; shape: FileShape } {
   const result = new Map<number, "valid" | "local">();
-  let tree: ts.SourceFile | undefined;
-  const diagnostics = ts.transpileModule(text, { fileName: file, reportDiagnostics: true, compilerOptions: { noResolve: true, target: ts.ScriptTarget.Latest, module: ts.ModuleKind.Preserve }, transformers: { before: [() => (source) => { tree = source; return source; }] } }).diagnostics ?? [];
-  if (tree === undefined || diagnostics.some((diagnostic) => diagnostic.category === ts.DiagnosticCategory.Error)) return { matches: result, shape: { bindings: new Map(), declared: new Set() } };
-  const source = tree;
+  const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
+  const diagnostics = (source as ts.SourceFile & { parseDiagnostics: readonly ts.Diagnostic[] }).parseDiagnostics;
+  if (diagnostics.some((diagnostic) => diagnostic.category === ts.DiagnosticCategory.Error)) return { matches: result, shape: { bindings: new Map(), declared: new Set() } };
   const shape = describeTree(source);
   const starts = source.getLineStarts();
   const wanted = new Map<number, { site: ImportOriginSite; index: number }[]>();
