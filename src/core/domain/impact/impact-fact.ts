@@ -37,11 +37,12 @@ export interface ImpactedSymbol {
   /** The callers that call or instantiate the symbol, whether or not the walk followed them; the hub bound counts the same. */
   fanIn: number;
   /**
-   * The dependence that first reached the symbol: `lines` are the places inside this symbol's own file where it depends
-   * on `via`, in line order, and `basis` says what that dependence is. `substitutes` are the classes a provider may
-   * inject instead of the receiver the call was proven on, each with the provider's site.
+   * The dependence that first reached the symbol: `lines` are the places inside this symbol's own file, or inside
+   * `resource` when present (the template of a component), where it depends on `via`, in line order, and `basis` says
+   * what that dependence is. `substitutes` are the classes a provider may inject instead of the receiver the call was
+   * proven on, each with the provider's site.
    */
-  via?: { file: string; symbol: string; lines?: readonly number[]; basis: DependenceBasis; substitutes?: readonly ReceiverSubstitute[] };
+  via?: { file: string; symbol: string; resource?: string; lines?: readonly number[]; basis: DependenceBasis; substitutes?: readonly ReceiverSubstitute[] };
 }
 
 export interface ReceiverSubstitute {

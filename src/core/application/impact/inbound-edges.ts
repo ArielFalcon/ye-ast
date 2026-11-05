@@ -20,6 +20,8 @@ export interface InboundEdge {
   bridge?: "up" | "down";
   /** Locations of the selected confidence and category, in line order; empty when the store places none. */
   lines: readonly number[];
+  /** The file `lines` are in when it is not `from`'s own: the template of a component. */
+  resource?: string;
   /** The category of the selected evidence; observed call existence is kept separately for fan-in. */
   basis: DependenceBasis;
   /** The classes a provider may inject instead of the receiver a proven member call names. */
@@ -341,8 +343,9 @@ export function createInboundEdges(
   const memberSymbols = new Map<string, ReadonlyMap<string, readonly GraphSymbol[]>>();
   const memberReferences = new Map<string, ReadonlyMap<string, readonly GraphUnresolvedReference[]>>();
   const memberSiteKey = (site: { line: number; column: number; name: string; kind: string }): string => JSON.stringify([site.line, site.column, site.name, site.kind]);
-  const joinedMembers = new Map<MemberUseOrigin, { member: GraphSymbol; from: GraphSymbol; occurrence: string; line: number } | undefined>();
-  function joinMember(proof: MemberUseOrigin): { member: GraphSymbol; from: GraphSymbol; occurrence: string; line: number } | undefined {
+  interface JoinedMember { member: GraphSymbol; from: GraphSymbol; occurrence: string; line: number; resource?: string }
+  const joinedMembers = new Map<MemberUseOrigin, JoinedMember | undefined>();
+  function joinMember(proof: MemberUseOrigin): JoinedMember | undefined {
     if (joinedMembers.has(proof)) return joinedMembers.get(proof);
     const matches = (ref: SymbolRef, kind: string): readonly GraphSymbol[] => {
       const key = JSON.stringify([kind, ref.path, ref.line, ref.symbol]);
@@ -361,21 +364,29 @@ export function createInboundEdges(
     const owners = [...EDGE_POLICY.injectableKinds, "function"].flatMap((kind) => matches(proof.owner, kind));
     const receivers = matches(proof.receiver, "class");
     const members = matches(proof.member, "method");
+    const ownsMember = (member: GraphSymbol, receiver: GraphSymbol): boolean => { const memberOwners = ownersOf(member); return memberOwners.length === 1 && memberOwners[0]!.id === receiver.id; };
+    if (proof.template === true) {
+      const owner = owners[0];
+      const result = owners.length === 1 && receivers.length === 1 && members.length === 1 && !isTestFile(proof.reference.file) && !isTestFile(owner!.file) && ownsMember(members[0]!, receivers[0]!)
+        ? { member: members[0]!, from: owner!, occurrence: JSON.stringify([proof.reference.file, proof.reference.line, proof.reference.column, proof.reference.name]), line: proof.reference.line, ...(proof.reference.file === owner!.file ? {} : { resource: proof.reference.file }) }
+        : undefined;
+      joinedMembers.set(proof, result);
+      return result;
+    }
     let sites = memberReferences.get(proof.reference.file);
     if (sites === undefined) {
       sites = Map.groupBy(reader.unresolvedReferences([proof.reference.file]), (ref) => memberSiteKey({ ...ref, column: ref.column + 1 }));
       memberReferences.set(proof.reference.file, sites);
     }
     const refs = sites.get(memberSiteKey(proof.reference)) ?? [];
-    let result: { member: GraphSymbol; from: GraphSymbol; occurrence: string; line: number } | undefined;
+    let result: JoinedMember | undefined;
     if (owners.length === 1 && receivers.length === 1 && members.length === 1 && refs.length === 1 && !isTestFile(proof.reference.file)) {
       const use = refs[0]!;
       load([use.from]);
       const from = symbolOf(use.from);
       const occurrence = uniqueUse(use);
       const member = members[0]!;
-      const memberOwners = ownersOf(member);
-      if (from !== undefined && occurrence !== undefined && isInside(from, owners[0]!) && holdsReference(from, use) && memberOwners.length === 1 && memberOwners[0]!.id === receivers[0]!.id) result = { member, from, occurrence, line: use.line };
+      if (from !== undefined && occurrence !== undefined && isInside(from, owners[0]!) && holdsReference(from, use) && ownsMember(member, receivers[0]!)) result = { member, from, occurrence, line: use.line };
     }
     joinedMembers.set(proof, result);
     return result;
@@ -383,16 +394,18 @@ export function createInboundEdges(
   function indexMemberUses(): void {
     if (membersIndexed) return;
     membersIndexed = true;
-    const joined = (memberUses ?? []).flatMap((proof) => { const use = joinMember(proof); return use === undefined ? [] : [{ ...use, substitutes: proof.substitutes }]; });
+    const joined = (memberUses ?? []).flatMap((proof) => { const use = joinMember(proof); return use === undefined ? [] : [{ ...use, substitutes: proof.substitutes, template: proof.template === true }]; });
     for (const [occurrence, group] of Map.groupBy(joined, (use) => use.occurrence)) {
       if (group.length !== 1) continue;
       const use = group[0]!;
-      const anchor = declarationAnchor(use.member.file, use.member.name);
-      /** A receiver a provider may replace settles its own member's place, but cannot exclude a substitute's homonym. */
-      if (use.substitutes === undefined) memberTargets.set(occurrence, anchor);
-      if (uniqueAnchor(use.member)) settledUses.push({ key: declarationUseKey(anchor, occurrence), target: use.member.id, source: use.from.id });
+      if (!use.template) {
+        const anchor = declarationAnchor(use.member.file, use.member.name);
+        /** A receiver a provider may replace settles its own member's place, but cannot exclude a substitute's homonym. */
+        if (use.substitutes === undefined) memberTargets.set(occurrence, anchor);
+        if (uniqueAnchor(use.member)) settledUses.push({ key: declarationUseKey(anchor, occurrence), target: use.member.id, source: use.from.id });
+      }
       const callers = memberCallers.get(use.member.id) ?? [];
-      callers.push({ from: use.from, confidence: EDGE_POLICY.relations.confidence, basis: "call", lines: [use.line], ...(use.substitutes === undefined ? {} : { substitutes: use.substitutes }) });
+      callers.push({ from: use.from, confidence: EDGE_POLICY.relations.confidence, basis: "call", lines: [use.line], ...(use.resource === undefined ? {} : { resource: use.resource }), ...(use.substitutes === undefined ? {} : { substitutes: use.substitutes }) });
       memberCallers.set(use.member.id, callers);
     }
   }
@@ -445,12 +458,13 @@ function strongestPerSymbol(edges: readonly InboundEdge[]): InboundEdge[] {
     (a.lines[0] ?? Infinity) - (b.lines[0] ?? Infinity) ||
     compareText(a.basis, b.basis) ||
     compareText(a.bridge ?? "", b.bridge ?? "") ||
+    compareText(a.resource ?? "", b.resource ?? "") ||
     Number(a.substitutes !== undefined) - Number(b.substitutes !== undefined));
   for (const edge of ordered) {
     const held = gathered.get(edge.from.id);
     let selected = held?.edge;
     if (selected === undefined || edge.confidence > selected.confidence) selected = edge;
-    else if (edge.confidence === selected.confidence && edge.basis === selected.basis && edge.bridge === selected.bridge && edge.substitutes === selected.substitutes) {
+    else if (edge.confidence === selected.confidence && edge.basis === selected.basis && edge.bridge === selected.bridge && edge.resource === selected.resource && edge.substitutes === selected.substitutes) {
       selected = { ...selected, lines: [...new Set([...selected.lines, ...edge.lines])].sort((a, b) => a - b) };
     }
     gathered.set(edge.from.id, {

@@ -46,6 +46,7 @@ async function run(classes: AngularClass[], files: SourceFile[] = [], metadataFi
         units.push(...given);
         return [];
       },
+      memberCalls: () => [],
     },
   });
   return { findings: (await extractor.extract(files)).relations, units };
@@ -179,9 +180,9 @@ test("member proof eligibility and exact uses pass through relation extraction",
       received = context;
       return { classes: [], findings: [], fields: [], locals: [], memberUses: [proof] };
     } },
-    templates: { read: () => [] },
+    templates: { read: () => [], memberCalls: () => [] },
   });
   const result = await extractor.extract([], options);
-  assert.deepEqual(received, options);
+  assert.deepEqual((received as typeof options).memberProofs, options.memberProofs);
   assert.deepEqual(result.memberUses, [proof]);
 });

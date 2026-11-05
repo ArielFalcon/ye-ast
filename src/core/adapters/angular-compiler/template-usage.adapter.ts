@@ -1,12 +1,17 @@
 import {
+  Binary,
+  Call,
   ClassPropertyMapping,
   CombinedRecursiveAstVisitor,
   CssSelector,
+  ImplicitReceiver,
   MatchSource,
   ParseErrorLevel,
   parseTemplate,
+  PropertyRead,
   R3TargetBinder,
   SelectorMatcher,
+  ThisReceiver,
   type BindingPipe,
   type BoundTarget,
   type DirectiveMeta,
@@ -16,7 +21,7 @@ import {
 import { relation, type Relation, type RelationKind, type SymbolRef } from "../../domain/relations/relation.ts";
 import { sortFindings } from "../../domain/entrypoints/finding-order.ts";
 import type { Evidence, Finding, UnknownReason } from "../../domain/shared/fact.ts";
-import type { ScopeMember, TemplateUnit, TemplateUsageReader } from "../../ports/template-usage.port.ts";
+import type { ScopeMember, TemplateMemberCall, TemplateUnit, TemplateUsageReader } from "../../ports/template-usage.port.ts";
 
 /**
  * Templates parsed with ye-ast's own `@angular/compiler` (never the analysed repository's copy, which would run its
@@ -24,7 +29,38 @@ import type { ScopeMember, TemplateUnit, TemplateUsageReader } from "../../ports
  * desugaring and the control-flow blocks included; nothing is type-checked.
  */
 export function createTemplateUsageReader(): TemplateUsageReader {
-  return { read: (units) => sortFindings(units.flatMap(usagesOf)) };
+  return { read: (units) => sortFindings(units.flatMap(usagesOf)), memberCalls };
+}
+
+function memberCalls(template: Pick<TemplateUnit, "path" | "text" | "firstLine">): TemplateMemberCall[] {
+  const parsed = parseTemplate(template.text, template.path);
+  if ((parsed.errors ?? []).some((error) => error.level === ParseErrorLevel.ERROR)) return [];
+  const bound = new R3TargetBinder(new SelectorMatcher<DirectiveMeta[]>()).bind({ template: parsed.nodes });
+  const ownField = (ast: unknown): ast is PropertyRead =>
+    ast instanceof PropertyRead && (ast.receiver instanceof ImplicitReceiver || ast.receiver instanceof ThisReceiver) && bound.getExpressionTarget(ast) === null;
+  const calls: { field: string; member: string; offset: number }[] = [];
+  const written = new Set<string>();
+  const visitor = new (class extends CombinedRecursiveAstVisitor {
+    override visitCall(call: Call, context?: unknown): void {
+      const callee = call.receiver;
+      if (callee instanceof PropertyRead && ownField(callee.receiver)) calls.push({ field: callee.receiver.name, member: callee.name, offset: call.sourceSpan.start });
+      super.visitCall(call, context);
+    }
+
+    override visitBinary(binary: Binary, context?: unknown): void {
+      if (Binary.isAssignmentOperation(binary.operation) && ownField(binary.left)) written.add(binary.left.name);
+      super.visitBinary(binary, context);
+    }
+  })();
+  for (const node of parsed.nodes) visitor.visit(node);
+  const lineStarts = [0, ...[...template.text.matchAll(/\n/g)].map((match) => match.index + 1)];
+  return calls
+    .filter((call) => !written.has(call.field))
+    .sort((a, b) => a.offset - b.offset)
+    .map(({ field, member, offset }) => {
+      const index = lineStarts.findLastIndex((start) => start <= offset);
+      return { file: template.path, line: template.firstLine + index, column: offset - lineStarts[index]! + 1, field, member };
+    });
 }
 
 type Member = Exclude<ScopeMember, { kind: "pipe" }>;

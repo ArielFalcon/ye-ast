@@ -8,6 +8,8 @@ export interface MemberUseOrigin {
   reference: ReferenceSite & { name: string; kind: "calls" };
   /** The classes a provider may inject instead of the receiver (`useClass`, `useExisting`), with the provider's site. */
   substitutes?: readonly MemberSubstitute[];
+  /** The call sits in the owner's template, which has no graph reference: the owner itself is the caller. */
+  template?: true;
 }
 
 export interface MemberSubstitute {

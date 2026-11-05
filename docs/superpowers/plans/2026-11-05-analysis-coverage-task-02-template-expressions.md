@@ -131,3 +131,59 @@ Real applications (rough text counts, not bound facts): one local Angular applic
 - Forward template → method → HTTP tracing belongs to a future `trace` feature, not this task.
 
 Checks: `npm run check` passed before and after this documentation update. Scratch evidence is under `/tmp/ye-ast-t2-hXcq` and was not removed.
+
+### Implementation
+
+Owner decision, 2026-11-05: "Aplica las soluciones que recomiendes para las decisiones abiertas". Option 1 landed as
+[ADR-0024](../../architecture/adr/0024-template-member-calls-join-as-component-calls.md), amending the ADR-0017 amendment.
+
+Contract choice: an optional `template: true` on the existing `MemberUseOrigin`, not a new relation kind. The proof
+keeps the existing producer (the Angular metadata adapter's member checks), the existing join (`joinMember` in
+`inbound-edges.ts`) and the existing uniqueness and test-file rules, so no second walk and no parallel join exist. The
+template reader gains `memberCalls(template)`; the application hands it to the metadata reader as the optional
+`templateCalls` read option, because the template text depends on the classes that reader returns. The only public
+shape change is optional `ImpactedSymbol.via.resource` (the template file the lines are in): fact schema `0.16.0`
+(RFC-0002 rule 6). `EDGE_POLICY.referenceProofVersion` 10 → 11 changes the impact producer digest
+(`0.4.0+edge-policy.e98d5a56243d` → `0.4.0+edge-policy.a9dcd6d7ab82`).
+
+Admitted: `field.member(...)` or `this.field.member(...)` whose `field` the binder binds to the component, never
+assigned in that template; the field is an `inject()` origin of the component, used in the class only to call members;
+the member is the receiver class's single concrete method. Everything the class-side proof refuses (provider
+substitution, observable mutation, escape, shadowed Angular imports) refuses the template call too.
+
+Conformance fixture `src/composition/template-member-use.test.ts` (RED first through `impact.callers` and
+`impact.ofChange`, then GREEN):
+
+| Question | Before (`653685f`) | After |
+| --- | --- | --- |
+| callers `ArchiveApi.archive` | `complete`, only `ArchiveApi`/`archive` | `ArchivePage` (`via.lines [4]`), `ReportPage` (`via.resource` `report.page.html`, `lines [2]`), `ThisPage`; entrypoints include `/archive`, `/report` |
+| impact of a body change to `archive` | `complete`, no component, no route | `ArchivePage`, `/archive` |
+| `@let api`, `@for (api of …)`, `#api`, `api = new ArchiveApi()`, `(click)="… api = other"`, callable field `archive = () => …`, overloaded `archive` | no caller | still no caller (one test each) |
+
+Break proof: dropping the binder check fails the three local controls; dropping `ThisReceiver`, the template-write
+filter, the `inject()` requirement or `via.resource` fails its test; in the join, dropping the member-owner check, the
+test-file checks or member uniqueness fails `inbound-edges.test.ts` "a template member proof …"; dropping the resource
+from the MCP text fails `render.test.ts`.
+
+Measured on two real local Angular applications (read-only, HEAD of each; one with 148 templates, one with 87 templates
+under its `store/` project), scratch scripts under the implementation scratch directory:
+
+| | App 1 | App 2 |
+| --- | --- | --- |
+| template `field.member()` candidates reported by the reader | 189 | 128 |
+| template member-use proofs admitted | 0 | 0 |
+| class-side member-use proofs admitted, before and after | 0 | 0 |
+| why: project-wide gate | provider substitution unclassified, and observable mutation | observable mutation |
+| with both gates lifted (diagnostic copy, not shipped) | 144 class-side, 0 template | 57 class-side, 0 template |
+| template candidates refused with gates lifted | field used otherwise in the class 97, no `inject()` field origin 64, field name used otherwise anywhere 17, member name unsafe 11 | field used otherwise 111, external or opaque origin 12, field name unsafe 4, no field origin 1 |
+| `callers` reach before → after | identical (4 symbols, 1 entrypoint) | identical (6 symbols, 1 entrypoint) |
+| one warm `callers` run, wall / max RSS (single run each) | 3.72 s / 830 MiB → 3.78 s / 831 MiB | 2.40 s / 542 MiB → 2.40 s / 546 MiB |
+
+New callers or entrypoints recovered on the real applications: none, so there was nothing to sample for false
+associations; the fixture is the only admitted evidence. The rule is sound but, under the inherited gates, inert on these
+codebases. Deferred, each needing its own evidence: narrowing the project-wide substitution and mutation gates; field
+uses outside method bodies (signal `computed` initializers) that mark the field unsafe; signal-store members that are
+not class methods; and option 2 (an `unresolved-link` cut for a template use the proof refuses), which would at least
+stop these answers from claiming `complete`.
+
+Checks: `npm run check` passed.

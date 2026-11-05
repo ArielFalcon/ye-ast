@@ -156,3 +156,9 @@ test("handler and module examples obey the same registered-tool capability polic
     assert.match(supported, /"kind":"module-origins"/);
   }
 });
+
+test("a dependence placed in a component's template names the template beside its lines", () => {
+  const symbol = { file: "src/report.page.ts", symbol: "ReportPage", kind: "class", line: 3, endLine: 9, depth: 1, confidence: 1, fanIn: 0, via: { file: "src/archive.api.ts", symbol: "archive", resource: "src/report.page.html", lines: [2], basis: "call" } };
+  const fact = { ...base, status: "complete", cuts: [], value: { ...impact, symbols: [symbol] } } as unknown as Fact<ImpactValue>;
+  assert.ok(renderImpact(fact, "details").includes("via src/archive.api.ts:archive at src/report.page.html 2"), renderImpact(fact, "details"));
+});

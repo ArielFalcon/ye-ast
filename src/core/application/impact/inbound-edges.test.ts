@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { declarationAnchor } from "../../domain/impact/impact-cuts.ts";
 import { relation, type RelationKind, type Relation, type SymbolRef } from "../../domain/relations/relation.ts";
 import type { LocalOrigin } from "../../domain/relations/field-origin.ts";
+import type { MemberUseOrigin } from "../../domain/relations/member-use.ts";
 import type { GraphSymbol } from "../../ports/code-graph.port.ts";
 import { createInboundEdges, type InboundEdges } from "./inbound-edges.ts";
 import { fakeCodeGraph, fakeNode, type FakeEdge, type FakeNode, type FakeUnresolved } from "./fake-code-graph.testing.ts";
@@ -594,4 +595,27 @@ test("equal-basis locations merge only at the selected confidence", () => {
   assert.equal(edge?.basis, "call");
   assert.equal(edge?.confidence, 0.9);
   assert.deepEqual(edge?.lines, [8, 10]);
+});
+
+test("a template member proof makes its component a caller only for a test-free member of the proven receiver", () => {
+  const API = "src/api.ts";
+  const OTHER = "src/other.ts";
+  const nodes = [
+    fakeNode("Api", "class", API, 1, 10), fakeNode("archive", "method", API, 3, 5),
+    fakeNode("Other", "class", OTHER, 1, 10), fakeNode("otherArchive", "method", OTHER, 3, 5, "archive"),
+    fakeNode("Twin", "class", "src/twin.ts", 1, 10), fakeNode("twinA", "method", "src/twin.ts", 3, 5, "archive"), fakeNode("twinB", "method", "src/twin.ts", 3, 6, "archive"),
+    fakeNode("Page", "component", "src/page.ts", 1, 9), fakeNode("Misowned", "component", "src/misowned.ts", 1, 9), fakeNode("Tested", "component", "src/test/tested.ts", 1, 9),
+  ];
+  const graph = fakeCodeGraph(nodes, [{ from: "Api", to: "archive", kind: "contains" }, { from: "Other", to: "otherArchive", kind: "contains" }, { from: "Twin", to: "twinA", kind: "contains" }, { from: "Twin", to: "twinB", kind: "contains" }]);
+  const proof = (owner: SymbolRef, receiver: SymbolRef, file: string): MemberUseOrigin => ({ owner, receiver, member: ref(receiver.path, "archive", 3), reference: { file, line: 2, column: 5, name: "api.archive", kind: "calls" }, template: true });
+  const inbound = createInboundEdges(graph, isTestFile, [], [], [], new Set(), [
+    proof(ref("src/page.ts", "Page", 1), ref(API, "Api", 1), "src/page.html"),
+    { ...proof(ref("src/misowned.ts", "Misowned", 1), ref(OTHER, "Other", 1), "src/misowned.ts"), member: ref(API, "archive", 3) },
+    proof(ref("src/page.ts", "Page", 1), ref("src/twin.ts", "Twin", 1), "src/page.html"),
+    proof(ref("src/test/tested.ts", "Tested", 1), ref(API, "Api", 1), "src/test/tested.html"),
+  ]);
+  const [target, twin] = graph.symbolsByIds(["archive" as GraphSymbol["id"], "twinA" as GraphSymbol["id"]]);
+  assert.ok(target && twin);
+  assert.deepEqual(inbound.callersOf(target, false).map((edge) => [edge.from.id, edge.basis, edge.lines, edge.resource]), [["Page", "call", [2], "src/page.html"]]);
+  assert.deepEqual(inbound.callersOf(twin, false), []);
 });

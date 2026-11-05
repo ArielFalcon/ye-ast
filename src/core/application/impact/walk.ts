@@ -9,8 +9,10 @@ import type { InboundEdge, InboundEdges } from "./inbound-edges.ts";
 /** The dependence that reached a symbol: the symbol it came through, and where this one depends on it. */
 export interface Via {
   symbol: GraphSymbol;
-  /** The places in the reached symbol's own file where it depends on `symbol`, in line order; empty when the store places none. */
+  /** The places in the reached symbol's own file, or in `resource`, where it depends on `symbol`, in line order; empty when the store places none. */
   lines: readonly number[];
+  /** The file `lines` are in when it is not the reached symbol's own: the template of a component. */
+  resource?: string;
   /** What the dependence is. */
   basis: DependenceBasis;
   /** The classes a provider may inject instead of the receiver a proven call names. */
@@ -58,7 +60,7 @@ interface Link {
 }
 
 function placeOn(symbol: GraphSymbol, dependence: InboundEdge): Via {
-  return { symbol, lines: dependence.lines, basis: dependence.basis, ...(dependence.substitutes === undefined ? {} : { substitutes: dependence.substitutes }) };
+  return { symbol, lines: dependence.lines, ...(dependence.resource === undefined ? {} : { resource: dependence.resource }), basis: dependence.basis, ...(dependence.substitutes === undefined ? {} : { substitutes: dependence.substitutes }) };
 }
 
 /**

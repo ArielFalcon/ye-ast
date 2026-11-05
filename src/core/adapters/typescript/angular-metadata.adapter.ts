@@ -9,7 +9,7 @@ import { relation, type Relation, type SymbolRef } from "../../domain/relations/
 import { compareText } from "../../domain/shared/code-node.ts";
 import type { Evidence, Finding, UnknownReason } from "../../domain/shared/fact.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
-import type { AngularMetadata, AngularMetadataReader } from "../../ports/angular-metadata.port.ts";
+import type { AngularMetadata, AngularMetadataReader, AngularMetadataReadOptions } from "../../ports/angular-metadata.port.ts";
 import { readAngularMetadataFile, type RawAngularClass, type RawAngularFile, type RawInstanceMethod, type RawInjection, type RawOperand, type RawReference, type RawTemplate, type RawText, type RawWrite } from "./angular-metadata.extractor.ts";
 import { readAngularRouteFile, type RawRouteFile } from "./angular-router.extractor.ts";
 import { createDeclarationLookup } from "./declaration-lookup.ts";
@@ -28,7 +28,7 @@ const NO_PROVIDER_IDENTITY: ProviderIdentityEvidence = {
  * and barrels to the class that declares it; an installed package's class is not a relation of the repository.
  */
 export function createAngularMetadataReader(): AngularMetadataReader {
-  return { read: async (files, options) => readMetadata(files, options?.memberProofs) };
+  return { read: async (files, options) => readMetadata(files, options?.memberProofs, options?.templateCalls) };
 }
 
 interface Parsed {
@@ -40,7 +40,7 @@ interface Parsed {
 /** What a name comes down to: a class, an array of operands, a declared value that is not a class (an `InjectionToken`), a member of one, or nothing usable. */
 type Placed = { class: SymbolRef } | { array: { key: string; file: string; operands: readonly RawOperand[] } } | { token: SymbolRef } | { member: true } | { external: true } | { unresolved: true };
 
-async function readMetadata(files: readonly SourceFile[], proof?: MemberProofContext): Promise<AngularMetadata> {
+async function readMetadata(files: readonly SourceFile[], proof?: MemberProofContext, templateCalls?: AngularMetadataReadOptions["templateCalls"]): Promise<AngularMetadata> {
   const contents = new Map(files.map((file) => [file.path, file]));
   const sourcePaths = [...contents.keys()].filter(isTypeScriptSource).sort();
   const { byProject, orphaned } = pathsByProject(sourcePaths, files, ANGULAR_CORE);
@@ -55,7 +55,7 @@ async function readMetadata(files: readonly SourceFile[], proof?: MemberProofCon
     const scope = proof?.completeSource === true && contents.size === files.length
       ? { sites: new Set(sources.filter((path) => projectOf(path, manifests)?.directory === project.directory)), evidence: sourcePaths, ...(replaced === undefined ? {} : { replaced }) }
       : undefined;
-    const metadata = await readProject(contents, project.dependencies, sources, scope, proof !== undefined);
+    const metadata = await readProject(contents, project.dependencies, sources, scope, proof !== undefined, templateCalls);
     classes.push(...metadata.classes);
     findings.push(...metadata.findings);
     fields.push(...metadata.fields);
@@ -111,7 +111,7 @@ function replacedFiles(files: readonly SourceFile[]): ReadonlySet<string> | unde
   return replaced;
 }
 
-async function readProject(contents: ReadonlyMap<string, SourceFile>, dependencies: ReadonlySet<string>, sources: readonly string[], scope: ProofScope | undefined, collectSites: boolean): Promise<AngularMetadata> {
+async function readProject(contents: ReadonlyMap<string, SourceFile>, dependencies: ReadonlySet<string>, sources: readonly string[], scope: ProofScope | undefined, collectSites: boolean, templateCalls?: AngularMetadataReadOptions["templateCalls"]): Promise<AngularMetadata> {
   const proveMembers = scope !== undefined;
   const read = async (path: string): Promise<string | undefined> => contents.get(path)?.content;
   const resolver = createModuleResolver(read, dependencies);
@@ -505,17 +505,24 @@ async function readProject(contents: ReadonlyMap<string, SourceFile>, dependenci
       const evidence = source.angular.memberEvidence;
       const rawFieldsByOwner = Map.groupBy(source.angular.fields, (field) => `${field.owner.line}\0${field.owner.name}\0${field.field}`);
       const angularShadow = [...source.shape.imports].some(([name, binding]) => binding.module === ANGULAR_CORE && evidence.declarations.has(name));
-      for (const call of evidence.calls) {
-        if (evidence.declarations.get(call.owner.name) !== 1) continue;
+      const proveFieldCall = async (call: { owner: { name: string; line: number }; field: string; member: string }, reference: MemberUseOrigin["reference"], template: boolean): Promise<void> => {
+        if (evidence.declarations.get(call.owner.name) !== 1) return;
         const candidates = fieldsByOwner.get(`${file}\0${call.owner.line}\0${call.field}`) ?? [];
         const rawFields = rawFieldsByOwner.get(`${call.owner.line}\0${call.owner.name}\0${call.field}`) ?? [];
-        if (candidates.length !== 1 || rawFields.length !== 1) continue;
+        if (candidates.length !== 1 || rawFields.length !== 1) return;
         const field = candidates[0]!;
         const raw = rawFields[0]!;
-        if (risks.reaches(field.owner, call.field) || !("class" in field.holds) || "opaque" in raw.target || (raw.via === "inject" && angularShadow)) continue;
+        if (risks.reaches(field.owner, call.field) || !("class" in field.holds) || "opaque" in raw.target || (raw.via === "inject" && angularShadow) || (template && raw.via !== "inject")) return;
         const receiver = field.holds.class;
         const proof = await memberOf(file, source, raw.target.reference, receiver, call.member);
-        if (proof !== undefined) memberUses.push(proven(field.owner, receiver, proof, { file, line: call.line, column: call.column, name: `this.${call.field}.${call.member}`, kind: "calls" }));
+        if (proof !== undefined) memberUses.push({ ...proven(field.owner, receiver, proof, reference), ...(template ? { template: true as const } : {}) });
+      };
+      for (const call of evidence.calls) await proveFieldCall(call, { file, line: call.line, column: call.column, name: `this.${call.field}.${call.member}`, kind: "calls" }, false);
+      for (const component of classes) {
+        if (templateCalls === undefined || component.kind !== "component" || component.ref.path !== file) continue;
+        const owner = { name: component.ref.symbol, line: component.ref.line };
+        if (evidence.escapedClasses.has(`${owner.name}\0${owner.line}`)) continue;
+        for (const call of templateCalls(component)) await proveFieldCall({ owner, field: call.field, member: call.member }, { file: call.file, line: call.line, column: call.column, name: `${call.field}.${call.member}`, kind: "calls" }, true);
       }
       for (const injection of source.angular.injections) {
         const { owner, inlineMember, target } = injection;

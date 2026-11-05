@@ -131,12 +131,21 @@ occurrence to the graph. The domain excludes only the corresponding candidate; t
 before its occurrence can settle. The per-query index stores one actual target per occurrence and a set of expanded
 anchors, rather than one proof per homonym/site combination.
 
+A component's template call `field.member(...)` is the same value with `template` set
+([ADR-0024](../adr/0024-template-member-calls-join-as-component-calls.md)). The template reader names the call only when
+Angular's binder binds `field` to the component, not to a template local (`@let`, `@for`, `#ref`, `let-`), and the
+template never assigns the field; the TypeScript adapter proves it like a class's own `this.field.member()` call, and
+also requires an `inject()` origin. The application joins it without a graph
+reference: the component is the caller, at the relation confidence, and `via.resource` names the template file when it
+is not the component's own. It settles no reference, because a template holds none.
+
 When the native member channel is present, including an empty array, it alone authorizes member settlements.
 Existing field-origin edges remain potential impact paths, but cannot settle a reference or exclude another target.
 Local origins may also carry source-certified direct call sites for an unambiguous constant binding within its owner
 and block. These sites add potential callers without settling references or excluding candidates, even when exact
 member proof is unavailable. Older injected readers that omit the channel retain the legacy behavior. These optional
-metadata values do not change the public fact or graph schema.
+metadata values do not change the graph schema; the public fact gains only the optional `via.substitutes` of a qualified
+proof and the optional `via.resource` of a template proof.
 
 New proofs require a fully staged, unfiltered source selection and successful parsing. Proofs sit only in sources of
 the Angular project's own manifest; every other TypeScript source (another project, a nested non-Angular package, a
@@ -172,7 +181,7 @@ A constructor with an explicit value-return cannot establish exclusive instance 
 functions do not invalidate the enclosing constructor. Potential local call sites require lexical binding evidence
 independently of project-wide member stability and refuse dynamic binding constructs such as direct eval/with.
 The checks do not simulate runtime DI configuration. Missing evidence remains a cut. `EDGE_POLICY.referenceProofVersion`
-is 13 and participates in the existing producer digest; syntax and proof changes invalidate derived facts without
+is 14 and participates in the existing producer digest; syntax and proof changes invalidate derived facts without
 rebuilding an unchanged graph.
 
 ### Confidence and fan-in

@@ -14,10 +14,24 @@ export interface TemplateUnit {
   scope: readonly ScopeMember[];
 }
 
+/** A template call `field.member(...)` whose `field` the compiler binds to the component, not to a template local. */
+export interface TemplateMemberCall {
+  file: string;
+  line: number;
+  column: number;
+  field: string;
+  member: string;
+}
+
 export interface TemplateUsageReader {
   /**
    * The components, directives and pipes of each unit's scope that its template uses. A template that does not parse,
    * an element two components match and a pipe name two pipes in scope share are unknown items, never edges.
    */
   read(units: readonly TemplateUnit[]): readonly Finding<Relation>[];
+  /**
+   * The member calls through the component's own fields in one template, in text order. A template that does not parse
+   * and a field the template assigns give none.
+   */
+  memberCalls(template: Pick<TemplateUnit, "path" | "text" | "firstLine">): readonly TemplateMemberCall[];
 }

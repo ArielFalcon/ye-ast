@@ -233,7 +233,7 @@ function viaText(via: NonNullable<ImpactedSymbol["via"]>, file: string): string 
   const where = via.file === file ? via.symbol : `${via.file}:${via.symbol}`;
   const marker = via.substitutes === undefined ? "" : ` ${SUBSTITUTION_MARKER}`;
   if (via.lines === undefined || via.lines.length === 0) return `${where} (${via.basis})${marker}`;
-  const at = `at ${via.lines.join(", ")}`;
+  const at = `at ${via.resource === undefined ? "" : `${via.resource} `}${via.lines.join(", ")}`;
   return `${via.basis === "call" ? `${where} ${at}` : `${where} ${at} (${via.basis})`}${marker}`;
 }
 
@@ -738,7 +738,7 @@ function impactCutBlock(cuts: readonly Cut[], detail: ResponseMode, owner: CutOw
 function impactLookups(value: ImpactValue, path: string, context?: RenderContext): string[] {
   const lines: string[] = [];
   if (value.entrypoints.length > 0) lines.push(`  To inspect a reached entrypoint, select ${path}.entrypoints by kind/name and handler.path, handler.symbol, handler.line. Its seeds are zero-based indexes into ${path}.seeds; resolve those indexes to recover all associated origins, not a complete call chain.`);
-  if (value.symbols.length > 0) lines.push(`  To inspect a dependency omitted from text, filter ${path}.symbols by file, symbol and line. Read via.file/symbol for its recorded dependency; via.lines are locations in that symbol's own file, not in via.file. Preserve via.basis and confidence when interpreting it.`);
+  if (value.symbols.length > 0) lines.push(`  To inspect a dependency omitted from text, filter ${path}.symbols by file, symbol and line. Read via.file/symbol for its recorded dependency; via.lines are locations in that symbol's own file, or in via.resource when present, not in via.file. Preserve via.basis and confidence when interpreting it.`);
   if (value.seeds.length > 0 && value.entrypoints.length === 0) lines.push(`  To identify the walk origins, match ${path}.seeds by file, symbol and line; basis distinguishes requested targets from change-derived origins.`);
   if (value.modules !== undefined && (value.modules.origins.length > 0 || value.modules.modules.length > 0)) lines.push(`  Inspect ${path}.modules.origins and ${path}.modules.modules; each module origin index joins that origins array. Module dependencies are distinct from symbol impact.`);
   if ((value.changedEntrypoints?.length ?? 0) > 0) lines.push(`  To inspect entrypoints added, removed or altered by the diff, filter ${path}.changedEntrypoints by change, kind/name and handler identity; these are distinct from reached entrypoints.`);
