@@ -339,3 +339,29 @@ test("a Java source whose parsing throws is an unknown source-unreadable site at
   const sites = await createJavaHttpCallSites(parser).of([explodes], "orders-svc");
   assert.deepEqual(sites.map((site) => site.target), [{ status: "unknown", reason: "source-unreadable", evidence: [{ path: explodes.path, line: 1 }] }]);
 });
+
+test("source method summaries preserve argument scopes through multiple forwarding methods and cycles", async () => {
+  const source = java("Flow", `class Flow {
+    RestTemplate rt;
+    void leaf(String url) { rt.getForObject(url, String.class); }
+    void middle(String path) { leaf("http://catalog" + path); }
+    void outer(String key) { middle(key); }
+    void load() { String route = "/items"; outer(route); }
+    void cycle(String key) { cycle(key); }
+  }`);
+  const sites = await reader.of([source], "service");
+  assert.equal(sites.length, 1);
+  assert.equal(sites[0]?.symbol, "Flow.load");
+  assert.deepEqual(sites[0]?.target.status === "complete" && sites[0].target.value, { method: "GET", base: "http://catalog", path: "/items" });
+});
+
+test("interface dispatch evaluates all source implementations without selecting a disagreeing target", async () => {
+  const source = java("Dispatch", `interface Gateway { void send(String path); }
+    class First implements Gateway { RestTemplate rt; public void send(String path) { rt.getForObject("http://one" + path, String.class); } }
+    class Second implements Gateway { RestTemplate rt; public void send(String path) { rt.getForObject("http://two" + path, String.class); } }
+    class Dispatch { Gateway gateway; void load() { gateway.send("/items"); } }`);
+  const sites = await reader.of([source], "service");
+  assert.equal(sites.length, 1);
+  assert.equal(sites[0]?.symbol, "Dispatch.load");
+  assert.equal(sites[0]?.target.status, "unknown");
+});

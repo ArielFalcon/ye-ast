@@ -1,3 +1,4 @@
+import { JavaMethodFlow } from "./java-method-flow.ts";
 import type { Node } from "web-tree-sitter";
 import type { HttpMethod } from "../../domain/entrypoints/http-route.ts";
 import type { Finding } from "../../domain/shared/fact.ts";
@@ -19,7 +20,7 @@ import {
   TEMPLATE_VERBS,
 } from "./http-client-vocabulary.ts";
 import { argumentsOf, assignmentsOf, localBindings, type Binding } from "./java-members.ts";
-import { ancestorsOf, holdersOf, invocationsOf, NO_VARIABLES, parametersOf, receiverOf, referencesParameter, symbolOf, type Invocation } from "./java-invocations.ts";
+import { ancestorsOf, NO_VARIABLES, receiverOf, symbolOf, type Invocation } from "./java-invocations.ts";
 import { externalNames, scopeOf, type Expr, type JavaFile, type JavaProject, type TypeDecl } from "./java-symbols.ts";
 import { stringLiteralValue } from "./java-literals.ts";
 import { annotationUses, createSpringAnnotations, pathExpressions, type SpringAnnotations } from "./request-mapping.ts";
@@ -44,17 +45,12 @@ interface ReadTarget {
   stated?: StatedRequest;
 }
 
-interface Wrapper {
-  request: Request;
-  parameters: readonly string[];
-  called: boolean;
-}
+
 
 /** The HTTP requests a Java snapshot makes: one call site per request of a client the vocabulary knows. */
 export class JavaHttpReader {
   private readonly annotations: SpringAnnotations;
   private readonly text: UrlText;
-  private readonly wrappers = new Map<TypeDecl, Map<string, Wrapper>>();
 
   constructor(
     private readonly project: JavaProject,
@@ -67,26 +63,28 @@ export class JavaHttpReader {
 
   sites(repo: string): CallSite[] {
     const found: CallSite[] = [];
-    const invocations = this.project.types.flatMap((type) => invocationsOf(type));
-    for (const invocation of invocations) {
-      const request = this.requestOf(invocation);
-      if (request === undefined) continue;
-      const wrapper = this.wrapperOf(request);
-      if (wrapper) this.wrappers.set(invocation.type, new Map(this.wrappers.get(invocation.type)).set(wrapper.key, wrapper.wrapper));
-      else if (this.owned.has(invocation.type.file)) found.push(this.siteOf(repo, invocation, this.target(request, this.scopeOf(invocation, new Map()))));
-    }
-    for (const invocation of invocations.filter(({ type }) => this.owned.has(type.file))) {
-      const called = this.callOfWrapper(invocation);
-      if (called !== undefined) found.push(this.siteOf(repo, invocation, called));
-      else {
+    const flow = new JavaMethodFlow<Request>(this.project, this.text, (call) => this.requestOf(call));
+    for (const invocation of flow.invocations.filter((call) => this.owned.has(call.type.file))) {
+      if (flow.nested(invocation)) continue;
+      const scope = this.scopeOf(invocation, new Map());
+      const direct = this.requestOf(invocation);
+      if (direct !== undefined) {
+        found.push(this.siteOf(repo, invocation, this.target(direct, scope)));
+        continue;
+      }
+      const expanded = flow.expand(invocation, scope);
+      if (expanded !== undefined) {
+        const values = expanded.map(({ leaf, scope }) => this.target(leaf, scope));
+        const signatures = new Set(values.map((value) => JSON.stringify(value.target.status === "unknown" ? value.target.status : value.target.value)));
+        const target = signatures.size === 1 ? values[0] : { target: unknownAtNode(invocation.type.file.path, invocation.node) };
+        if (target !== undefined) {
+          const declaring = expanded[0]?.leaf.invocation.type;
+          const library = declaring !== undefined && !this.owned.has(declaring.file) ? declaring.fqn : undefined;
+          found.push(this.siteOf(repo, invocation, target.target.status === "unknown" && library !== undefined ? { ...target, target: unknownAtNode(invocation.type.file.path, invocation.node, library) } : target));
+        }
+      } else {
         const library = this.libraryOf(invocation);
         if (library !== undefined) found.push(this.siteOf(repo, invocation, { target: unknownAtNode(invocation.type.file.path, invocation.node, library) }));
-      }
-    }
-    for (const wrappers of this.wrappers.values()) {
-      for (const wrapper of wrappers.values()) {
-        const { invocation } = wrapper.request;
-        if (!wrapper.called && this.owned.has(invocation.type.file)) found.push(this.siteOf(repo, invocation, { target: unknownAtNode(invocation.type.file.path, invocation.node) }));
       }
     }
     for (const type of this.project.types.filter((candidate) => this.owned.has(candidate.file))) found.push(...this.declarations(repo, type));
@@ -167,39 +165,6 @@ export class JavaHttpReader {
     const distinct = new Set(bases);
     const [only] = distinct;
     return distinct.size > 1 ? UNDECIDED : only;
-  }
-
-  /** A request whose URL or method only a parameter of its own method decides is a wrapper: its callers make the calls. */
-  private wrapperOf(request: Request): { key: string; wrapper: Wrapper } | undefined {
-    const { invocation } = request;
-    const member = invocation.member;
-    if (member?.type !== "method_declaration") return undefined;
-    const scope = this.scopeOf(invocation, new Map());
-    const expressions = [request.url, typeof request.method === "object" ? request.method : undefined].filter((node): node is Node => node !== undefined);
-    const text = request.url === undefined ? undefined : this.text.of(request.url, scope);
-    const resolved = text === undefined ? undefined : targetOf(text, request.base);
-    const undecided = resolved === undefined || resolved.base === UNDECIDED || (typeof request.method === "object" && this.methodOf(request.method, scope) === undefined);
-    if (!undecided || !expressions.some((node) => referencesParameter(node, invocation))) return undefined;
-    const parameters = parametersOf(member);
-    return { key: `${member.childForFieldName("name")?.text}/${parameters.length}`, wrapper: { request, parameters, called: false } };
-  }
-
-  /** The target of a call to a wrapper, read with its parameters bound to the call's arguments. */
-  private callOfWrapper(invocation: Invocation): ReadTarget | undefined {
-    const { node } = invocation;
-    const name = node.childForFieldName("name")?.text ?? "";
-    const object = node.childForFieldName("object");
-    const args = argumentsOf(node);
-    for (const holder of holdersOf(object, invocation, this.project, this.text)) {
-      const wrapper = this.wrappers.get(holder)?.get(`${name}/${args.length}`);
-      if (wrapper === undefined) continue;
-      wrapper.called = true;
-      const env = new Map(wrapper.parameters.flatMap((parameter, index) => (args[index] === undefined ? [] : [[parameter, { node: args[index] as Node, scope: this.scopeOf(invocation, new Map()) }] as const])));
-      const read = this.target(wrapper.request, this.scopeOf(wrapper.request.invocation, env));
-      const declaring = wrapper.request.invocation.type;
-      return read.target.status === "unknown" && !this.owned.has(declaring.file) ? { ...read, target: unknownAtNode(declaring.file.path, node, declaring.fqn) } : read;
-    }
-    return undefined;
   }
 
   /** The library a call goes through when the sources of its client type are not read to the request. */

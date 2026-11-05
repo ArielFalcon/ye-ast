@@ -1,3 +1,4 @@
+import { JavaMethodFlow } from "./java-method-flow.ts";
 import type { Node } from "web-tree-sitter";
 import { compareText } from "../../domain/shared/code-node.ts";
 import type { Finding } from "../../domain/shared/fact.ts";
@@ -6,7 +7,7 @@ import type { Configuration } from "./application-config.ts";
 import { EVENT_CLIENT_NAME, PUBLISH_CLIENTS, PUBLISH_METHOD_NAME, type PublishClient } from "./event-vocabulary.ts";
 import { complete, spanOf, unknownAtNode, withEvidence } from "./findings.ts";
 import { argumentsOf, typeNameOf } from "./java-members.ts";
-import { ancestorsOf, holdersOf, invocationsOf, parametersOf, receiverOf, referencesParameter, symbolOf, type Invocation } from "./java-invocations.ts";
+import { ancestorsOf, receiverOf, symbolOf, type Invocation } from "./java-invocations.ts";
 import { qualifiedTypeName, scopeOf, type JavaFile, type JavaProject, type TypeDecl } from "./java-symbols.ts";
 import { PLACEHOLDER, UrlText, type UrlScope } from "./url-text.ts";
 
@@ -17,18 +18,13 @@ interface Publish {
   argument: Node;
 }
 
-interface Wrapper {
-  publish: Publish;
-  parameters: readonly string[];
-  called: boolean;
-}
+
 
 const TOKEN_SEPARATOR = ".";
 
 /** The messages a Java snapshot publishes: one call site per publish of a client the vocabulary knows. */
 export class JavaEventReader {
   private readonly text: UrlText;
-  private readonly wrappers = new Map<TypeDecl, Map<string, Wrapper>>();
 
   constructor(
     private readonly project: JavaProject,
@@ -40,31 +36,24 @@ export class JavaEventReader {
 
   sites(repo: string): CallSite[] {
     const found: CallSite[] = [];
-    const invocations = this.project.types.flatMap((type) => invocationsOf(type));
-    for (const invocation of invocations) {
-      const publish = this.publishOf(invocation);
-      if (publish === undefined) continue;
-      const wrapper = this.wrapperOf(publish);
-      if (wrapper !== undefined) {
-        const held = this.wrappers.get(invocation.type) ?? new Map<string, Wrapper>();
-        held.set(wrapper.key, wrapper.wrapper);
-        this.wrappers.set(invocation.type, held);
-      } else if (this.owned.has(invocation.type.file)) {
-        found.push(this.siteOf(repo, invocation, this.target(publish, this.scopeOf(invocation, new Map()))));
+    const flow = new JavaMethodFlow<Publish>(this.project, this.text, (call) => this.publishOf(call));
+    for (const invocation of flow.invocations.filter((call) => this.owned.has(call.type.file))) {
+      if (flow.nested(invocation)) continue;
+      const scope = this.scopeOf(invocation, new Map());
+      const direct = this.publishOf(invocation);
+      if (direct !== undefined) {
+        found.push(this.siteOf(repo, invocation, this.target(direct, scope)));
+        continue;
       }
-    }
-    for (const invocation of invocations.filter(({ type }) => this.owned.has(type.file))) {
-      const called = this.callOfWrapper(invocation);
-      if (called !== undefined) found.push(this.siteOf(repo, invocation, called));
-      else {
+      const expanded = flow.expand(invocation, scope);
+      if (expanded !== undefined) {
+        const values = expanded.map(({ leaf, scope }) => this.target(leaf, scope));
+        const signatures = new Set(values.map((value) => JSON.stringify(value.status === "unknown" ? value.status : value.value)));
+        const target = signatures.size === 1 ? values[0] : unknownAtNode(invocation.type.file.path, invocation.node);
+        if (target !== undefined) found.push(this.siteOf(repo, invocation, target));
+      } else {
         const library = this.libraryOf(invocation);
         if (library !== undefined) found.push(this.siteOf(repo, invocation, unknownAtNode(invocation.type.file.path, invocation.node, library)));
-      }
-    }
-    for (const wrappers of this.wrappers.values()) {
-      for (const wrapper of wrappers.values()) {
-        const { invocation } = wrapper.publish;
-        if (!wrapper.called && this.owned.has(invocation.type.file)) found.push(this.siteOf(repo, invocation, unknownAtNode(invocation.type.file.path, invocation.node)));
       }
     }
     return found.sort((a, b) => compareText(a.file, b.file) || a.line - b.line || compareText(a.symbol, b.symbol) || compareText(a.target.status, b.target.status));
@@ -92,34 +81,6 @@ export class JavaEventReader {
     const args = argumentsOf(node);
     const argument = args[destination(args.length)];
     return argument === undefined ? undefined : { invocation, client, argument };
-  }
-
-  /** A publish whose destination only a parameter of its own method decides is a wrapper: its callers make the calls. */
-  private wrapperOf(publish: Publish): { key: string; wrapper: Wrapper } | undefined {
-    const { invocation } = publish;
-    const member = invocation.member;
-    if (member?.type !== "method_declaration") return undefined;
-    if (this.destination(publish, this.scopeOf(invocation, new Map())) !== undefined) return undefined;
-    if (!referencesParameter(publish.argument, invocation)) return undefined;
-    const parameters = parametersOf(member);
-    return { key: `${member.childForFieldName("name")?.text}/${parameters.length}`, wrapper: { publish, parameters, called: false } };
-  }
-
-  /** The target of a call to a wrapper, read with its parameters bound to the call's arguments. */
-  private callOfWrapper(invocation: Invocation): Finding<EventTarget> | undefined {
-    const { node } = invocation;
-    const name = node.childForFieldName("name")?.text ?? "";
-    const args = argumentsOf(node);
-    for (const holder of holdersOf(node.childForFieldName("object"), invocation, this.project, this.text)) {
-      const wrapper = this.wrappers.get(holder)?.get(`${name}/${args.length}`);
-      if (wrapper === undefined) continue;
-      wrapper.called = true;
-      const env = new Map(wrapper.parameters.flatMap((parameter, index) => (args[index] === undefined ? [] : [[parameter, { node: args[index] as Node, scope: this.scopeOf(invocation, new Map()) }] as const])));
-      const target = this.target(wrapper.publish, this.scopeOf(wrapper.publish.invocation, env));
-      const declaring = wrapper.publish.invocation.type;
-      return target.status === "unknown" && !this.owned.has(declaring.file) ? unknownAtNode(declaring.file.path, node, declaring.fqn) : target;
-    }
-    return undefined;
   }
 
   /** The library a publish goes through when the sources of its client type are not read to the destination. */

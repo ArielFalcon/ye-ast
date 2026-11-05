@@ -20,6 +20,8 @@ export interface UrlScope {
   type: TypeDecl;
   locals: ReadonlyMap<string, Binding>;
   env: ReadonlyMap<string, Closure>;
+  receiver?: TypeDecl;
+  configurationFile?: JavaFile;
 }
 
 const PLACEHOLDER_IN_TEXT = /\$\{([^${}:]+)(?::([^${}]*))?\}/;
