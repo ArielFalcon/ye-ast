@@ -101,9 +101,14 @@ function semanticOf(query: ComposeQuery): SemanticQuery {
   return semantic;
 }
 
+/** The query as the caller wrote it: its canonical key, family and every position it held in `queries`. */
+function queryLabel(query: Pick<Planned, "key" | "requestIndices">, family: string): string {
+  return `Query ${query.key} (${family}, queries[${query.requestIndices.join(", ")}])`;
+}
+
 function sourceFault(query: Planned, cause: QueryFault): SourceFault {
   const family = familyOf(query.query.name);
-  return { kind: "composition-source-fault", detail: `Query ${query.key} (${family}) failed: ${cause.kind}`, queryKey: query.key, family, requestIndices: query.requestIndices, cause };
+  return { kind: "composition-source-fault", detail: `${queryLabel(query, family)} failed: ${cause.kind}`, queryKey: query.key, family, requestIndices: query.requestIndices, cause };
 }
 
 type LinkedRun = {
@@ -227,9 +232,9 @@ function verifySource(query: Planned, source: ExecutedSource): Failure | undefin
   const base = { kind: "composition-source-fault" as const, queryKey: query.key, family: source.family, requestIndices: query.requestIndices };
   switch (verified.fault.code) {
     case "result-changed":
-      return failure({ ...base, detail: `Query ${query.key} (${source.family}) result changed`, cause: { kind: "result-changed", detail: "Source result changed", stage: "source-identity", expected: verified.fault.expected, actual: verified.fault.actual } });
+      return failure({ ...base, detail: `${queryLabel(query, source.family)} result changed`, cause: { kind: "result-changed", detail: "Source result changed", stage: "source-identity", expected: verified.fault.expected, actual: verified.fault.actual } });
     case "replay-unavailable":
-      return failure({ ...base, detail: `Query ${query.key} (${source.family}) cannot be verified`, cause: { kind: "replay-unavailable", detail: "Source identity unavailable", stage: "source-identity", reason: verified.fault.reason } });
+      return failure({ ...base, detail: `${queryLabel(query, source.family)} cannot be verified`, cause: { kind: "replay-unavailable", detail: "Source identity unavailable", stage: "source-identity", reason: verified.fault.reason } });
     case "invalid-cursor":
       return failure({ kind: "internal-fault", detail: `Query ${query.key} carries a malformed recovery identity` });
   }
