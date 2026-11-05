@@ -210,6 +210,28 @@ test("does NOT redact long Java identifiers or paths with >30-char segments (bot
   assert.doesNotMatch(out, /\[REDACTED\]/);
 });
 
+test("versioned code filenames remain navigable in deep paths", () => {
+  for (const path of [
+    "src/main/java/org/acme/orders/rest/controller/v12/OrdersRestControllerV12.java",
+    "src/main/java/org/acme/orders/rest/controller/v2/OrderHistoryRestController2.java",
+  ]) {
+    const input = JSON.stringify({ file: path, declaredConfig: { files: [path] } });
+    const result = sanitizeText(input);
+    assert.equal(result.text, input);
+    assert.equal(result.detection.redacted, false);
+    assert.doesNotThrow(() => assertNoSecretLeak(result.text, "issue", "code-path"));
+  }
+});
+
+test("a source extension and numeric suffix do not disguise an encoded secret path segment", () => {
+  const blob = "AbCdEfGhIjKlMnOpQrStUvWxYzAbCdEfGhIjKlMnOpV12";
+  const input = `src/main/java/org/acme/${blob}.java`;
+  const result = sanitizeText(input);
+  assert.equal(result.detection.redacted, true);
+  assert.doesNotMatch(result.text, /AbCdEfGhIjKlMnOp/);
+  assert.doesNotThrow(() => assertNoSecretLeak(result.text, "issue", "encoded-path"));
+});
+
 test("does NOT redact an absolute path: the empty leading segment is part of the path", () => {
   const path = "/home/analista/proyectos/clientes/acme/facturacion/src";
   const { text: out, detection } = sanitizeText(`- ${path}`);

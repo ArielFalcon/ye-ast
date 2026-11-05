@@ -79,7 +79,15 @@ function pathTokenAt(text: string, offset: number, length: number): string {
 
 /** A segment long enough to be an encoded secret and shaped like one: both cases and a digit. */
 function isBase64Segment(segment: string): boolean {
-  return segment.length >= 20 && /[a-z]/.test(segment) && /[A-Z]/.test(segment) && /[0-9]/.test(segment);
+  return segment.length >= 20 && /[a-z]/.test(segment) && /[A-Z]/.test(segment) && /[0-9]/.test(segment) && !isVersionedSourceFilename(segment);
+}
+
+function isVersionedSourceFilename(segment: string): boolean {
+  const dot = segment.lastIndexOf(".");
+  if (dot === -1 || !/^[a-z]+$/.test(segment.slice(dot + 1))) return false;
+  const stem = segment.slice(0, dot);
+  const unversioned = stem.replace(/(?:[Vv])?\d+$/, "");
+  return unversioned !== stem && isIdentifierShape(unversioned);
 }
 
 /** Whether the match is code: a path of at least three segments (absolute or relative), or a camelCase identifier. */
