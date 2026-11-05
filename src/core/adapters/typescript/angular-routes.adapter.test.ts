@@ -231,7 +231,7 @@ test("while any child reference of the repository is unresolved, no table is nam
   assert.equal(home?.status, "unknown");
 });
 
-test("a route lists the guards of its ancestors, then its own, root first and without repeats, through lazy sections too", async () => {
+test("a route records its own guards through lazy sections, without ancestor guards", async () => {
   const header = "const a = () => true;\nconst b = () => true;\nconst m = () => true;";
   const body = [
     "  { path: 'p', canMatch: [m], canActivate: [a], children: [",
@@ -243,7 +243,7 @@ test("a route lists the guards of its ancestors, then its own, root first and wi
 
   const routes = uiRoutes(await extract(files));
 
-  assert.deepEqual(routes.map((route) => [route.name, route.guards.map((guard) => guard.name)]), [["/p/c", ["m", "a", "b"]], ["/p/l/x", ["m", "a", "b", "(inline)"]]]);
+  assert.deepEqual(routes.map((route) => [route.name, route.guards.map((guard) => guard.name)]), [["/p/c", ["a", "b"]], ["/p/l/x", ["(inline)"]]]);
 });
 
 test("a route table under a folder named like build output is read; one under node_modules is not", async () => {
@@ -651,7 +651,7 @@ test("a named outlet applies to the whole subtree of its entry; a child that nam
   assert.deepEqual(unknowns(findings), [`no-extractor@${ROUTES}:6`, `unresolved@${ROUTES}:8`]);
 });
 
-test("canActivateChild guards the descendants of its entry, never the entry; the other guard keys guard the entry and its descendants", async () => {
+test("canActivateChild is not an own guard of the entry or its descendants", async () => {
   const body = [
     "  { path: 'x', component: A, canActivateChild: [child], canLoad: [load], children: [",
     "    { path: 'y', component: A },",
@@ -660,7 +660,7 @@ test("canActivateChild guards the descendants of its entry, never the entry; the
 
   const routes = uiRoutes(await extract(table(body)));
 
-  assert.deepEqual(routes.map((route) => [route.name, route.guards.map((guard) => guard.name)]), [["/x", ["load"]], ["/x/y", ["load", "child"]]]);
+  assert.deepEqual(routes.map((route) => [route.name, route.guards.map((guard) => guard.name)]), [["/x", ["load"]], ["/x/y", []]]);
 });
 
 test("a guard list given as a name or with spreads resolves to the guards it holds; one that cannot be read makes the route unknown at the list, and so every route beneath", async () => {
@@ -738,4 +738,17 @@ test("a source in a project that does not name the router has no route", async (
     { path: "frontend/src/home.ts", content: HOME },
   ]);
   assert.deepEqual(findings, []);
+});
+
+test("each nested route records only its own guards when components and guards are reused", async () => {
+  const body = [
+    "  { path: 'group', component: Page, canActivate: [guard], children: [",
+    "    { path: '', component: Page, canActivate: [guard] },",
+    "    { path: ':id', component: Page, children: [{ path: 'detail', component: Page }] },",
+    "  ] },",
+  ].join("\n");
+  const routes = uiRoutes(await extract(table(body, "const guard = () => true;")));
+  assert.deepEqual(routes.map((route) => [route.name, route.guards.map((guard) => guard.name)]), [
+    ["/group", ["guard"]], ["/group", ["guard"]], ["/group/:id", []], ["/group/:id/detail", []],
+  ]);
 });

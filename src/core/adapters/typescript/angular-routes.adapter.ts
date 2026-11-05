@@ -37,7 +37,7 @@ async function extractProject(sources: readonly string[], dependencies: Readonly
   });
   const { roots, unparsed, unresolvedReferences } = loaded;
   const walk: Walk = { findings: [], blockers: loaded.declared ? [] : unresolvedReferences };
-  for (const root of roots) routesOf(root, enter(root, { segments: [], guards: [], conditional: false, above: new Set() }), walk);
+  for (const root of roots) routesOf(root, enter(root, { segments: [], conditional: false, above: new Set() }), walk);
   for (const configuration of loaded.unresolvedConfigurations) walk.findings.push(unknown(configuration.reason, configuration));
   const noRoot: UnknownReason | undefined = loaded.declared ? undefined : "unresolved";
   for (const table of loaded.unreached) unreachedRoutesOf(table.entries, unresolvedReferences, walk.findings, noRoot);
@@ -69,7 +69,6 @@ function unreachedRoutesOf(entries: readonly RouteEntry[], references: readonly 
 /** What an entry inherits from the entries and tables above it. */
 interface Context {
   segments: readonly string[];
-  guards: readonly RouteGuard[];
   outlet?: string;
   /** Where a guard list above could not be read: nothing beneath it has known guards. */
   guardsProblem?: UnresolvedReference;
@@ -114,7 +113,7 @@ function routeOf(entry: RouteEntry, context: Context, walk: Walk): void {
   }
   const outlet = entry.outlet ?? context.outlet;
   const segments = [...context.segments, ...entry.path.split("/").filter((segment) => segment !== "")];
-  const guards = withoutRepeats([...context.guards, ...entry.guards]);
+  const guards = withoutRepeats(entry.guards);
   const guardsProblem = context.guardsProblem ?? entry.guardsProblem;
   if (entry.component !== undefined) {
     if (guardsProblem !== undefined) findings.push(unknown("unresolved", guardsProblem, at));
@@ -126,7 +125,6 @@ function routeOf(entry: RouteEntry, context: Context, walk: Walk): void {
   const beneath: Context = {
     ...context,
     segments,
-    guards: withoutRepeats([...guards, ...entry.childGuards]),
     ...(outlet !== undefined ? { outlet } : {}),
     ...((guardsProblem ?? entry.childGuardsProblem) !== undefined ? { guardsProblem: (guardsProblem ?? entry.childGuardsProblem)! } : {}),
   };
