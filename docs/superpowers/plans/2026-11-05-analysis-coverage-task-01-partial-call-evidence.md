@@ -84,3 +84,69 @@ Plan meaningful tests through the Java reader and workspace query family; follow
 Record the baseline and candidate public payloads, retained evidence, false links, latency and memory under the same inputs. Do not claim additional reach unless a separately verified link is recovered. Finish implementation verification with `npm run check`, `git diff --check` and a global search for other places that discard the same existing evidence.
 
 Return a task-specific investigation report and improved plan: verified root causes, ownership, proposed signatures/contracts, tests, compatibility decisions, risks and an implement/narrow/defer/reject recommendation. Report exact commands and observed results, not assumed outcomes.
+
+## Outcome
+
+Implemented on 2026-11-05 from `98b9cc5`, after the owner authorized implementation. Classification: **preserved
+evidence**. No dependency or cross-service link is recovered; every target that was `unknown` stays `unknown` and every
+`unresolved-link` cut stays.
+
+### Root causes (verified)
+
+1. Java extraction: `targetOf` in `src/core/adapters/spring/http-call-sites.adapter.ts` returned `undefined` for a
+   relative URL under a client base the snapshot does not decide (`UNDECIDED`), and `target` collapsed that into a bare
+   unknown finding. The Feign path did the same when its `url`/`name` attribute was not decided.
+2. Workspace impact: `RepoImpact` had no field for the discovery record. `workspace-impact.ts` kept only the discovery
+   provenance (without value) and its cuts, so declaration, transport, library and stated request were dropped.
+
+### What changed
+
+- `JavaHttpReader` returns the target with an optional `stated` (a local `ReadTarget`, the TypeScript reader's
+  precedent). `targetOf` keeps the path with base `UNDECIDED`; `target`, wrapper calls and Feign clients turn that into
+  an unknown target plus `stated: { method, path }`. The wrapper rule (`wrapperOf`) still treats an undecided base as
+  undecided. An undecided method, a URL whose text is not decided, or a URL a run-time part leads (`{}` first) states
+  nothing.
+- `RepoImpact.unresolved: UnresolvedCallSite[]` is copied from the section's own discovery fact
+  (`workspace.sections[repo]`), never merged across repositories; ambiguous sites stay cuts only.
+- MCP: the `ye_ast_impact`/`ye_ast_callers` output schema validates `sections[repo].value.unresolved` (shared
+  `unresolvedCallSite` zod shape, also used by `ye_ast_workspace`); summary/details text lists the section's unresolved
+  sites with the existing `unresolvedListing`, as `ye_ast_workspace` already does.
+- Fact schema `0.12.0` -> `0.13.0` (RFC-0002 rule 6, a field added). RFC-0002 and the RFC-0011 envelope updated.
+
+### Evidence
+
+Scratch reproduction through `composeQueries().workspaceImpact.callers` with two git repositories (`orders` serving
+`GET /orders`, `consumer` with the brief's `RestClient` client), trigger `OrderController.list`:
+
+| Field | Before (`98b9cc5`) | After (`1168f6b`) |
+| --- | --- | --- |
+| discovery `unresolved[0]` | `{path, line: 6, symbol: "OrdersClient.load", transport: "http"}` | same plus `stated: {method: "GET", path: "/orders"}` |
+| impact `sections.consumer.value.unresolved` | absent | the same record, `stated` included |
+| impact `sections.consumer.cuts` | `unresolved-link` at `OrdersClient.java:6` | unchanged |
+| `links` / composite status | `0` / `partial` (cut `section consumer`) | unchanged |
+
+Single runs, not a benchmark: 1454 ms / 267 MB RSS before, 637 ms / 246 MB after (the first run includes cold parser
+and cache setup); no latency or memory claim is made.
+
+Tests (RED observed for the stated reason, then GREEN, each break-proofed with a type-correct mutation):
+
+- `http-call-sites.adapter.test.ts`: undecided base states the request; undecided method or a `String.format` URL led
+  by a run-time part states nothing (negative control, fails when the method guard or the leading-placeholder guard is
+  removed); a wrapper call states its arguments' request; a Feign client with an undecided `url` states each mapping.
+- `workspace-impact.test.ts`: each section carries its own discovery's records (fails when emptied or merged across
+  repositories).
+- `server.test.ts`: the output schema rejects a malformed `unresolved` entry (runtime and JSON schema); the section
+  text lists the record with its stated request.
+
+`npm run check`: typecheck, arch check and 2,244 tests pass. `git diff --check` clean.
+
+### Not changed, and why
+
+- `@HttpExchange` with an undecided type-level prefix, and Feign with a decided but non-absolute `url`: the undecided
+  part can hold path segments, so no path is known; they stay unknown without `stated`. No reproduced need.
+- Concatenations whose first operand is undecided (`base + "/orders"`) are undecided text in `UrlText`, so they state
+  nothing: the base may carry a path prefix. This is the "never infer a known path" rule, not a gap.
+- `decision-set.ts` reads only `via` from unresolved sites; whether decisions should show `stated` is a separate
+  question.
+- No full-mode guide line was added for `value.unresolved`; ADR-0022 selection is unchanged (the cuts remain the
+  selectable records). No new response API.
