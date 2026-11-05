@@ -41,9 +41,20 @@ test("whole-category reference requires the same order as the displayed names", 
   const value = { workspace: { repos: ["a"], source: "request" }, repositorySnapshots: [{ repo: "a", snapshot: base.snapshot }], sections: { a: { ...base, status: "complete", value: { names, unresolved: [] } } }, candidates: [], unserved: [...unserved].reverse() };
   const text = renderWorkspace({ ...base, status: "complete", value } as never, "details");
   assert.doesNotMatch(text, /all recorded outward names are unserved/);
-  const indexes = [...text.matchAll(/^  - outward "a"\[(\d+)\]$/gm)].map(m => Number(m[1]));
+  const runs = [...text.matchAll(/^  outward ("[^"]+") indexes (\[[^\n]+\])$/gm)];
+  assert.equal(runs.length, 1);
+  assert.equal(JSON.parse(runs[0]![1]!), "a");
+  const indexes = JSON.parse(runs[0]![2]!);
   assert.deepEqual(indexes, names.map((_, i) => names.length - i - 1));
+  for (const name of names) assert.equal(text.split(name.name).length - 1, 1);
   for (let i = 0; i < names.length; i++) assert.ok(text.includes(`- [${i}] ${names[i]!.name} (`));
+  const bSnapshot = { ...base.snapshot, repo: "b" };
+  const bNames = unserved.map(name => ({ ...name, evidence: name.evidence.map(evidence => ({ ...evidence, repo: "b" })) }));
+  const multi = { ...value, workspace: { repos: ["a", "b"], source: "request" }, repositorySnapshots: [...value.repositorySnapshots, { repo: "b", snapshot: bSnapshot }], sections: { ...value.sections, b: { ...value.sections.a, snapshot: bSnapshot } }, unserved: [...unserved, ...bNames, ...unserved] };
+  const multiText = renderWorkspace({ ...base, status: "complete", value: multi } as never, "details");
+  const multiRuns = [...multiText.matchAll(/^  outward ("[^"]+") indexes (\[[^\n]+\])$/gm)].map(m => ({ repo: JSON.parse(m[1]!), indexes: JSON.parse(m[2]!) }));
+  const forward = names.map((_, index) => index);
+  assert.deepEqual(multiRuns, [{ repo: "a", indexes: forward }, { repo: "b", indexes: forward }, { repo: "a", indexes: forward }]);
 });
 
 test("invalid snapshot ownership and tiny results retain literal rows", () => {
@@ -57,4 +68,12 @@ test("invalid snapshot ownership and tiny results retain literal rows", () => {
   }
   const empty = { ...value, unserved: [], sections: { a: { ...base, status: "complete", value: { names: [], unresolved: [] } } } };
   assert.match(renderWorkspace({ ...base, status: "complete", value: empty } as never, "details"), /no local repository serves \(0\)/);
+});
+
+test("index permutations cannot hide evidence relationship metadata", () => {
+  const names = Array.from({ length: 20 }, (_, i) => ({ kind: "http-host", name: `service-with-a-long-name-${i}.example`, evidence: [{ path: "src/long-evidence-path.ts", line: i + 1, via: "fetch", confidence: 0.6 }] }));
+  const unserved = names.map(name => ({ ...name, evidence: name.evidence.map(evidence => ({ ...evidence, repo: "a" })) })).reverse();
+  const value = { workspace: { repos: ["a"], source: "request" }, repositorySnapshots: [{ repo: "a", snapshot: base.snapshot }], sections: { a: { ...base, status: "complete", value: { names, unresolved: [] } } }, candidates: [], unserved };
+  const text = renderWorkspace({ ...base, status: "complete", value } as never, "details");
+  assert.match(text, /"via":"fetch","confidence":0\.6/);
 });
