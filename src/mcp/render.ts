@@ -988,15 +988,16 @@ function groupedByRank<T, K extends string>(items: readonly T[], keyOf: (item: T
 
 /** The names of one repository under their kind: a summary lists a dependency only when a repository given serves it,
  * and counts the rest, since a dependency is what the repository consumes and not what it calls. */
-function namesBlock(names: readonly OutwardName[], served: ReadonlySet<string>, detail: ResponseMode): string[] {
-  return groupedByRank(names, (name) => name.kind, OUTWARD_ORDER).flatMap(([kind, ofKind]) => {
-    const listed = detail === "details" || kind !== "dependency" ? ofKind : ofKind.filter((name) => served.has(name.name));
+function namesBlock(names: readonly OutwardName[], served: ReadonlySet<string>, detail: ResponseMode, indexed = false): string[] {
+  const entries = names.map((name, index) => ({ name, index }));
+  return groupedByRank(entries, (entry) => entry.name.kind, OUTWARD_ORDER).flatMap(([kind, ofKind]) => {
+    const listed = detail === "details" || kind !== "dependency" ? ofKind : ofKind.filter(({ name }) => served.has(name.name));
     const counted = ofKind.length - listed.length;
     const head =
       counted === 0 ? `    ${kind} (${ofKind.length}):`
       : counted === ofKind.length ? `    ${kind} (${ofKind.length}): no repository given serves them; ${categoryRecovery({ details: "lists them", full: "retains all recorded names" })}`
       : `    ${kind} (${ofKind.length}): ${counted} no repository given serves; ${categoryRecovery({ details: "lists them", full: "retains all recorded names" })}`;
-    const line = (name: OutwardName): string => `      - ${name.name} (${name.evidence.map(evidenceText).join(", ")})`;
+    const line = ({ name, index }: { name: OutwardName; index: number }): string => `      - ${indexed ? `[${index}] ` : ""}${name.name} (${indexed ? JSON.stringify(name.evidence) : name.evidence.map(evidenceText).join(", ")})`;
     const listing = [head, ...ofKind.map(line)];
     const summarized = [head, ...listed.map(line)];
     return counted === 0 || size(summarized) <= size(listing) ? summarized : listing;
@@ -1056,21 +1057,40 @@ export function renderWorkspace(fact: Fact<WorkspaceValue>, detail: ResponseMode
     const section = value.sections[repo];
     if (section?.status === "unknown") lines.push(`  ${repo}: unknown (${section.reason})`);
   }
-  lines.push(`outward names (${sections.reduce((total, [, names]) => total + names.length, 0)}):`);
-  for (const [repo, names] of sections) lines.push(`  ${repo}:`, ...namesBlock(names, served, detail));
-  lines.push(`served by a local repository (${value.candidates.length}):`, ...value.candidates.map(candidateLine));
+  const heading = `outward names (${sections.reduce((total, [, names]) => total + names.length, 0)}):`;
+  const candidates = [`served by a local repository (${value.candidates.length}):`, ...value.candidates.map(candidateLine)];
+  const literalNames = [heading, ...sections.flatMap(([repo, names]) => [`  ${repo}:`, ...namesBlock(names, served, detail)])];
   const literalUnserved = unservedBlock(value.unserved, detail);
   const repos = value.workspace.repos;
-  const ownersValid = repos.length > 0 && new Set(repos).size === repos.length && repos.every((repo) => {
+  const validOwner = (repo: string): boolean => {
     const section = value.sections[repo];
     const snapshots = value.repositorySnapshots.filter((item) => item.repo === repo);
-    return section !== undefined && section.status !== "unknown" && snapshots.length === 1 && canonicalJson(section.snapshot) === canonicalJson(snapshots[0]!.snapshot);
-  });
-  const qualified = sections.flatMap(([repo, names]) => names.map((name) => ({ ...name, evidence: name.evidence.map((evidence) => ({ ...evidence, repo })) })));
-  const exact = ownersValid && qualified.length > 0 && qualified.every((name) => name.evidence.length > 0) && (detail === "details" || qualified.every((name) => name.kind !== "dependency" || served.has(name.name)))
-    && canonicalJson(qualified.map(canonicalJson).sort(compareText)) === canonicalJson(value.unserved.map(canonicalJson).sort(compareText));
+    return repos.filter((item) => item === repo).length === 1 && section !== undefined && section.status !== "unknown" && snapshots.length === 1 && canonicalJson(section.snapshot) === canonicalJson(snapshots[0]!.snapshot);
+  };
+  const qualified = sections.flatMap(([repo, names]) => names.map((name, index) => ({ repo, index, name: { ...name, evidence: name.evidence.map((evidence) => ({ ...evidence, repo })) } })));
+  const ordered = sections.flatMap(([repo, names]) => groupedByRank(names, (name) => name.kind, OUTWARD_ORDER).flatMap(([, group]) => group.map((name) => ({ ...name, evidence: name.evidence.map((evidence) => ({ ...evidence, repo })) }))));
+  const exact = repos.length > 0 && repos.every(validOwner) && qualified.length > 0 && qualified.every(({ name }) => name.evidence.length > 0 && name.evidence.every((evidence) => evidence.via === undefined && evidence.confidence === undefined))
+    && (detail === "details" || qualified.every(({ name }) => name.kind !== "dependency" || served.has(name.name)))
+    && canonicalJson(ordered) === canonicalJson(value.unserved);
   const reference = [`no local repository serves (${value.unserved.length}): all recorded outward names are unserved; see ${repos.length === 1 ? repos[0] : "the repository sections"} above.`];
-  lines.push(...(exact && size(reference) < size(literalUnserved) ? reference : literalUnserved));
+  const normal = [...literalNames, ...candidates, ...(exact && size(reference) < size(literalUnserved) ? reference : literalUnserved)];
+  const indexedNames = [heading, ...sections.flatMap(([repo, names]) => [`  ${repo}:`, ...namesBlock(names, served, "details", true)])];
+  const available = new Map<string, (typeof qualified)[number]>();
+  for (const item of qualified) {
+    if (item.name.evidence.length === 0 || !validOwner(item.repo)) continue;
+    const key = canonicalJson(item.name);
+    if (!available.has(key)) available.set(key, item);
+  }
+  const refs = value.unserved.map((name) => name.evidence.length === 0 ? undefined : available.get(canonicalJson(name)));
+  const mixed = [
+    ...indexedNames, ...candidates,
+    `no local repository serves (${value.unserved.length}): outward references identify the repository and name index above, in unserved order.`,
+    ...value.unserved.map((name, index) => {
+      const ref = refs[index];
+      return ref === undefined ? `  - ${name.kind} ${name.name}${name.evidence.length === 0 ? "" : ` (${name.evidence.map(repositoryEvidenceText).join(", ")})`}` : `  - outward ${JSON.stringify(ref.repo)}[${ref.index}]`;
+    }),
+  ];
+  lines.push(...(refs.some((ref) => ref !== undefined) && size(mixed) < size(normal) ? mixed : normal));
   lines.push(...unresolvedBlock(value));
   lines.push(...cutsBlock(cutsOf(fact), detail));
   for (const [repo, section] of Object.entries(value.sections)) {
