@@ -6,7 +6,7 @@ import { incompleteSectionCuts, provenanceOf, withCuts } from "../../domain/shar
 import type { Result } from "../../domain/shared/result.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
 import { compositeBase } from "../../domain/topology/composite-inputs.ts";
-import type { CallSite, EventTarget, HttpTarget } from "../../domain/topology/call-site.ts";
+import type { CallSite } from "../../domain/topology/call-site.ts";
 import {
   admitDownstream,
   admitUpstream,
@@ -25,7 +25,8 @@ import {
 } from "../../domain/topology/link-graph.ts";
 import type { ImpactedLink, Reach } from "../../domain/topology/link.ts";
 import type { ChangedContract } from "../../domain/impact/changed-contracts.ts";
-import { inferGateways, matchCallSite, matchEventCallSite, prefixOf, type Gateway, type GatewayDeclaration, type JoinResult, type RepositoryEntrypoints } from "../../domain/topology/link-match.ts";
+import { prefixOf, type GatewayDeclaration, type JoinResult } from "../../domain/topology/link-match.ts";
+import { entrypointsOf, joinWorkspace } from "./workspace-join.ts";
 import { directoryNameOf } from "../../domain/topology/repository-identity.ts";
 import type { CallersTarget, ImpactCallersRequest, ImpactFault, ImpactOfChangeRequest, ImpactQueries } from "../../ports/impact-queries.port.ts";
 import type { Digest } from "../../ports/digest.port.ts";
@@ -114,17 +115,17 @@ function workspaceImpactQueries(deps: WorkspaceImpactDeps, captured?: CapturedWa
       const own = entrypointsOf(repository);
       return repository.repo === trigger ? { ...own, entrypoints: [...own.entrypoints, ...removed] } : own;
     });
-    const gateways = inferGateways(repositories.flatMap((repository) => repository.callSites), entrypoints, workspace.workspace.gateways);
-    const settled = settleAll(repositories, entrypoints, gateways);
+    const { gateways, joined } = joinWorkspace(repositories, entrypoints, workspace.workspace.gateways);
+    const parts = driftOf(repositories, joined);
 
-    const upstream = await upstreamFixpoint(request, settled.joined, repositories, sources, linkGraphOf(trigger, impact === undefined ? [] : reachedHandlers(impact)));
+    const upstream = await upstreamFixpoint(request, joined, repositories, sources, linkGraphOf(trigger, impact === undefined ? [] : reachedHandlers(impact)));
     if (!upstream.ok) return upstream;
-    const downstream = await downstreamFixpoint(request, settled.joined, repositories, sources, trigger, readsChange && impact !== undefined ? impact.seeds : []);
+    const downstream = await downstreamFixpoint(request, joined, repositories, sources, trigger, readsChange && impact !== undefined ? impact.seeds : []);
     if (!downstream.ok) return downstream;
 
     const sections: Record<string, Fact<RepoImpact>> = Object.create(null);
     for (const repository of repositories) {
-      const part = settled.parts.get(repository.repo);
+      const part = parts.get(repository.repo);
       const base = workspace.sections[repository.repo];
       if (part === undefined || base === undefined) continue;
       part.callSites.push(...(upstream.value.sites.get(repository.repo) ?? []));
@@ -169,30 +170,14 @@ function workspaceImpactQueries(deps: WorkspaceImpactDeps, captured?: CapturedWa
     return { ok: true, value: { fact: composite(base, value), ...(read.value.workspaceReplay === undefined ? {} : { workspaceReplay: read.value.workspaceReplay }), ...(read.value.refresh === undefined ? {} : { refresh: read.value.refresh }), ...(read.value.repositoryRoots === undefined ? {} : { repositoryRoots: read.value.repositoryRoots }) } };
   }
 
-  /** Every call site of the workspace joined once against the entrypoints of the other repositories, with the drift its section reports. */
-  function settleAll(repositories: readonly WorkspaceRepository[], entrypoints: readonly RepositoryEntrypoints[], gateways: readonly Gateway[]): { joined: JoinedSite[]; parts: Map<string, Section> } {
-    const joined: JoinedSite[] = [];
-    const parts = new Map<string, Section>();
-    for (const repository of repositories) {
-      const part: Section = { callSites: [], unmatched: [], external: [], ambiguous: [] };
-      parts.set(repository.repo, part);
-      const others = entrypoints.filter((candidate) => candidate.repo !== repository.repo);
-      for (const site of repository.callSites) {
-        const event = eventTargetOf(site);
-        if (event !== undefined) {
-          const answer = matchEventCallSite(site, event, others);
-          drift(part, site, answer);
-          joined.push({ site, joined: answer });
-          continue;
-        }
-        const target = httpTargetOf(site);
-        if (target === undefined) continue;
-        const answer = matchCallSite(site, target, others, gateways);
-        drift(part, site, answer);
-        joined.push({ site, joined: answer });
-      }
+  /** The drift each section reports, from the one join of the workspace. */
+  function driftOf(repositories: readonly WorkspaceRepository[], joined: readonly JoinedSite[]): Map<string, Section> {
+    const parts = new Map<string, Section>(repositories.map((repository) => [repository.repo, { callSites: [], unmatched: [], external: [], ambiguous: [] }]));
+    for (const { site, joined: answer } of joined) {
+      const part = parts.get(site.repo);
+      if (part !== undefined) drift(part, site, answer);
     }
-    return { joined, parts };
+    return parts;
   }
 
   /**
@@ -385,10 +370,6 @@ export function createCapturedWorkspaceImpactQueries(deps: { operation: Workspac
   };
 }
 
-function entrypointsOf(repository: WorkspaceRepository): RepositoryEntrypoints {
-  return { repo: repository.repo, entrypoints: repository.entrypoints.flatMap((finding) => (finding.status === "complete" ? [finding.value] : [])) };
-}
-
 function reachedHandlers(impact: ImpactValue): Set<string> {
   return new Set([
     ...impact.entrypoints.map(({ handler }) => handlerKey(handler)),
@@ -426,14 +407,6 @@ function routesOfRemoved(changes: readonly ChangedEntrypoint[]): HttpRoute[] {
     if (method === undefined || path === undefined || !HTTP_METHODS.has(method)) return [];
     return [{ kind: "http-route", name: change.name, method: method as HttpMethod, path, handler: change.handler, basePath: { status: "unknown", reason: "unresolved", evidence: [] } }];
   });
-}
-
-function httpTargetOf(site: CallSite): HttpTarget | undefined {
-  return site.transport === "http" && site.target.status === "complete" && "path" in site.target.value ? site.target.value : undefined;
-}
-
-function eventTargetOf(site: CallSite): EventTarget | undefined {
-  return site.transport === "event" && site.target.status === "complete" && "protocol" in site.target.value ? site.target.value : undefined;
 }
 
 function compareSite(a: CallSite, b: CallSite): number {

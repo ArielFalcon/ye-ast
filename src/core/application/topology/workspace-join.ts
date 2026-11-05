@@ -1,0 +1,47 @@
+import type { CallSite, EventTarget, HttpTarget } from "../../domain/topology/call-site.ts";
+import type { JoinedSite } from "../../domain/topology/link-graph.ts";
+import { inferGateways, matchCallSite, matchEventCallSite, type Gateway, type GatewayDeclaration, type RepositoryEntrypoints } from "../../domain/topology/link-match.ts";
+import type { WorkspaceRepository } from "../../ports/workspace-repos.port.ts";
+
+/** Every call site of a workspace joined once against the entrypoints of the other repositories read. */
+export interface WorkspaceJoin {
+  /** The gateways in force: those declared, and those inferred from the overlap of calls and routes. */
+  gateways: Gateway[];
+  /** Each call site whose target its snapshot decides, with what the join answered, in repository then reading order. */
+  joined: JoinedSite[];
+}
+
+/** A repository's entrypoints as the join reads them: the complete findings only. */
+export function entrypointsOf(repository: WorkspaceRepository): RepositoryEntrypoints {
+  return { repo: repository.repo, entrypoints: repository.entrypoints.flatMap((finding) => (finding.status === "complete" ? [finding.value] : [])) };
+}
+
+/**
+ * The one join of a workspace: a published message against the listeners of the other repositories, an HTTP call by the
+ * ladder of RFC-0011 under the gateways in force. A call site whose target its snapshot does not decide joins nothing.
+ */
+export function joinWorkspace(repositories: readonly WorkspaceRepository[], entrypoints: readonly RepositoryEntrypoints[], declared: readonly GatewayDeclaration[]): WorkspaceJoin {
+  const gateways = inferGateways(repositories.flatMap((repository) => repository.callSites), entrypoints, declared);
+  const joined: JoinedSite[] = [];
+  for (const repository of repositories) {
+    const others = entrypoints.filter((candidate) => candidate.repo !== repository.repo);
+    for (const site of repository.callSites) {
+      const event = eventTargetOf(site);
+      if (event !== undefined) {
+        joined.push({ site, joined: matchEventCallSite(site, event, others) });
+        continue;
+      }
+      const target = httpTargetOf(site);
+      if (target !== undefined) joined.push({ site, joined: matchCallSite(site, target, others, gateways) });
+    }
+  }
+  return { gateways, joined };
+}
+
+function httpTargetOf(site: CallSite): HttpTarget | undefined {
+  return site.transport === "http" && site.target.status === "complete" && "path" in site.target.value ? site.target.value : undefined;
+}
+
+function eventTargetOf(site: CallSite): EventTarget | undefined {
+  return site.transport === "event" && site.target.status === "complete" && "protocol" in site.target.value ? site.target.value : undefined;
+}
