@@ -52,7 +52,7 @@ La composición no necesita una implementación por pareja o triple. Cada famili
 
 La exploración utilizó el proyecto indexado `Users-arielyumn-.t3-worktrees-ye-ast-t3-f0c80fb3`, `search_graph`, `get_code_snippet` y búsquedas estructurales. El índice existía; no se reindexó ni se creó un artefacto del grafo. Se comparó el snippet completo de `createMcpServer` con las líneas actuales 493–888: igualdad exacta, 27.170 caracteres. Las lecturas de archivos actuales prevalecen sobre el índice y los estados históricos de documentos.
 
-El checkout compartido avanzó durante el análisis: de `b17e4ca37e82de1a0c27303f98d9914a6d8faca7` a `fe153d5110b65bac1ecca280949c1bc905f069e5`. Había además modificaciones de análisis/resolución de llamadas de otro trabajo. Las líneas de este plan son ayudas de navegación; los símbolos y contratos son la referencia estable. Antes de T1 hay que comprobar nuevamente HEAD y el diff, sin revertir trabajo ajeno.
+El checkout compartido avanzó durante el análisis: de `b17e4ca37e82de1a0c27303f98d9914a6d8faca7` a `fe153d5110b65bac1ecca280949c1bc905f069e5`, y durante la revisión a `98b9cc5e9a81010b632aa34f2424122f06080a58`. Había además modificaciones de análisis/resolución de llamadas de otro trabajo. Se inspeccionó el delta posterior de server/compact-schema: reducción editorial de discovery, definiciones alcanzables y separación de analysis summary, conservando la estrategia de schemas runtime. El match del snippet anterior es evidencia puntual de frescura, no un hash del checkout final. Las líneas de este plan son ayudas de navegación; los símbolos y contratos son la referencia estable. Antes de T1 hay que comprobar nuevamente HEAD y el diff, sin revertir trabajo ajeno.
 
 No se encontró un `AGENTS.md` físico en el checkout ni en los ancestros comprobados; se aplicaron las instrucciones proporcionadas con el encargo. La ruta `.claude/skills/ye-ast-testing/SKILL.md` citada por planes antiguos no existía en la inspección. Las pruebas y criterios necesarios están definidos aquí. Engram no estaba expuesto entre las herramientas disponibles; no se afirma haber guardado memoria.
 
@@ -165,6 +165,8 @@ Un agente que aún no conoce el archivo del handler consulta primero entrypoints
 
 El lote no eleva autoridad: `repo` sigue siendo un ID declarado y los miembros workspace explícitos conservan exactamente su semántica actual de paths, trust y remotos. Un candidato descubierto no se añade al catálogo ni a otra consulta automáticamente. `offline` se conserva por consulta; no se inventa un default global que cambie decisions o refrescos.
 
+Las claves internas de deduplicación de queries pueden contener argumentos originales, pero nunca salen del proceso. `queryKey` en faults es `q1:<ordinal>` de la secuencia única ordenada y puede acompañarse de los índices originales de entrada; no es el hash de argumentos potencialmente secretos. Si dos invocaciones distintas terminan en el mismo SourceId autorizado, se conserva una sola fuente y se elige su RepeatRequest por menor canonical JSON de receta pública. No hay «primero gana» para datos semánticos ni recetas elegidas según el orden de entrada.
+
 **Límites de la operación nueva:** `1..16` consultas suministradas, antes de deduplicarlas; máximo `1.048.576` bytes UTF-8 de `canonicalJson(input)`. El primer límite permite dos consultas por familia más dos comparaciones concretas y evita fan-out arbitrario; el segundo acota el transporte de argumentos, no la cantidad de evidencia ni tokens. Son límites operativos de versión 1, no umbrales de utilidad derivados de mediciones. Se describen y prueban en descubrimiento. No se crea un parámetro de configuración ni una dependencia para ellos.
 
 No se impone en esta versión un tope nuevo de bytes de salida ni un top-N silencioso: las herramientas existentes tampoco lo garantizan. El resultado puede ser grande si las preguntas lo son; el coste es proporcional a los hechos solicitados y a su soporte. Se procesa una fuente a la vez para no retener simultáneamente los siete cuerpos más su copia normalizada. T7 medirá pico de memoria/tamaño y registrará cuándo esta decisión necesite reconsiderarse. Una futura cota de salida deberá fallar explícitamente o definir una proyección recuperable; no podrá recortar el grafo y llamarlo completo.
@@ -207,7 +209,9 @@ type SourcePayload =
 
 `ExecutedSource` contiene esa unión pública redactada, su consulta validada, la información de recovery existente cuando aplica y un `RedactionIdentityGuard`. Este guard indica qué coordenadas/campos de identidad cambiaron al redactar comparando original y público **dentro del runner**. No exporta valores originales ni hashes de secretos. Se obtiene antes de descartar el original. Las ramas de la unión se recorren exhaustivamente con `never`, no con detección heurística de propiedades ni `Fact<unknown>` para despachar familias.
 
-Las salidas privadas del core se filtran antes de construir `SourcePayload`; el tipo workspace público elimina `repositories`, y `PublicRead` elimina `repositorySources`. El guard de redacción tiene `{changedIdentityPointers:readonly string[], changedArguments:boolean, changedSnapshot:boolean}`: solo pointers/cambios, sin valores privados. `QueryExecutionDeps` se define en el runner con los seis puertos actuales más redaction/digest; `McpDeps` lo extiende y añade version/bindings. `QueryExecutionContext = {deps:QueryExecutionDeps,catalog:ReturnType<typeof repositoryCatalog>,signal?:AbortSignal}`. Así el runner no importa server y no crea un ciclo de tipos. `QueryFault` es la unión de los faults actuales de esos puertos y `RepositoryTargetFault`; exceptions se convierten en el `internal-fault` redactado actual. `ExecutedSource = SourcePayload & { query:SemanticQuery; recovery?:Recovery; identityGuard:RedactionIdentityGuard }`.
+Las salidas privadas del core se filtran antes de construir `SourcePayload`; el tipo workspace público elimina `repositories`, y `PublicRead` elimina `repositorySources`. El guard de redacción tiene `{changedIdentityPointers:readonly string[], changedArguments:boolean, changedSnapshot:boolean}`: solo pointers/cambios, sin valores privados; los pointers refieren a posiciones públicas, nunca a claves secretas originales. Si la redacción de claves impide ese mapping, se marca el owner entero afectado. `QueryExecutionDeps` se define en el runner con los seis puertos actuales más redaction/digest; `McpDeps` lo extiende y añade version/bindings. `QueryExecutionContext = {deps:QueryExecutionDeps,catalog:ReturnType<typeof repositoryCatalog>,signal?:AbortSignal}`. Así el runner no importa server y no crea un ciclo de tipos. `QueryFault` es la unión de los faults actuales de esos puertos, `RepositoryTargetFault` e `internal-fault`. `ExecutedSource = SourcePayload & { query:SemanticQuery; recovery?:Recovery; identityGuard:RedactionIdentityGuard; live?:LiveStaleNotice }`. El runner captura el callback onStale local en ese último campo; `workspaceLive`, roots y refresh permanecen en PublicRead. No se pierde la noticia local al extraer `answer`.
+
+Se conservan todos los reads **expuestos** por esos contratos. Un digest de inputs no se decodifica como provenance adicional. En particular, DecisionValue publica el vector pero no las secciones/inputs de cada repositorio: conocer su SHA no revela su trust ni su cobertura. No se atribuye el trust del trigger a evidencia extranjera. Esa evidencia puede compartir una coordenada física verificada, pero una conexión semántica que requiera el contexto extranjero ausente queda bloqueada y se informa context-mismatch/unavailable. No se introduce una consulta extra implícita para completar ese contexto.
 
 El renderer original sigue recibiendo su `Fact<V>`. `answer` consume el resultado tipado del runner para aplicar su presentación/selección actual. No convierte primero a JSON MCP para que luego el compositor vuelva a decodificarlo.
 
@@ -236,7 +240,7 @@ type EvidenceOrigin =
   | { kind: "snapshot"; snapshot: SnapshotId }
   | { kind: "query-context"; read: ReadId };
 type EvidenceRecord = {
-  id: EvidenceId; origin: EvidenceOrigin;
+  id: EvidenceId; origin: EvidenceOrigin; repo: string;
   value: Evidence; supports: readonly Support[];
 };
 type AnchorRecord = {
@@ -247,7 +251,7 @@ type SymbolNameRef = { file: FileId; symbol: string }; // no inventa una línea
 type BoundAnchor =
   | { status: "resolved"; entity: EntityId }
   | { status: "unresolved"; anchor: AnchorId;
-      reason: "ambiguous" | "redacted" | "conflicting-coordinate" };
+      reason: "ambiguous" | "redacted" | "conflicting-coordinate" | "missing-provenance" };
 ```
 
 Los strings de `pointer` son JSON Pointers de salida generados por el adaptador (RFC 6901, escapado `~0`/`~1`). Localizan el soporte en el hecho público original, por ejemplo `/value/sections/shop/value/impact/symbols/2`. No son un selector ejecutable suministrado por el cliente. Índices y pointers siempre se interpretan junto al `SourceId`; no son IDs globales de entidades.
@@ -256,10 +260,10 @@ Las tablas son:
 
 | Tabla | Campos obligatorios / significado |
 |---|---|
-| `snapshots` | `{id, value: SnapshotRef}`; una representación por snapshot exacto |
+| `snapshots` | `{id, value: SnapshotRef, identity:"exact"|"redacted"}`; una representación por snapshot exacto. Un valor de identidad alterado por redacción se marca redacted, se mantiene local a su source y no participa en joins |
 | `sources` | `{id, family, branch?, rootRead, snapshotVector, requestIndex}`; `branch` solo impact/callers; vector actual completo y ordenado por repo |
 | `reads` | `{id, source, owner: CutOwner, schema, producer, inputs: FactInputs, snapshot, evidence: EvidenceId[], analysis}`; `analysis` es unión complete / partial con `cuts: Cut[]` no vacíos / unknown con reason. Añadir `readKind` en owners `read` usando `RepoImpact.reads[].kind` |
-| `files` | `{id, snapshot, path, supports}`; identifica una coordenada de archivo, sin afirmar que el archivo existe o está indexado por el mero hecho de nombrarlo |
+| `files` | `{id, repo, origin:EvidenceOrigin, path, supports}`; origin snapshot identifica coordenada física; origin query-context conserva un path cuyo snapshot falta, sin autorizar joins. Ninguna forma afirma existencia o indexación por el mero hecho de nombrarlo |
 | `anchors` | Coordenadas declarativas originales; no confundidas con líneas de call site. `endLine` ausente se conserva ausente |
 | `evidence` | `EvidenceRecord`; el objeto completo incluye `via` y confidence. Igual ubicación con distinto `via`/confidence comparte archivo, pero sigue siendo evidencia distinta |
 | `parts` | Unión `Part` definida abajo, con `{id, supports}`; conserva asociaciones e información semántica original |
@@ -280,12 +284,12 @@ Todos los miembros llevan `id: PartId` y `supports: readonly Support[]`. Esta ta
 |---|---|
 | `entrypoint` | `entry: EntryData`; unión de `HttpRoute`, `UiRoute`, `Listener`, `Job`. Sustituir handler/component conocido por `AnchorId`; conservar `component:"unknown"`, path/outlet/guards, method/version, protocolo/destination y trigger. `HttpRoute.basePath` se convierte a `EvidenceFinding<BasePath>` |
 | `unknown-finding` | `{reason: UnknownReason, evidence: EvidenceId[]}`; posición/owner en supports, sin identidad de ruta inventada |
-| `seed` | `{anchor: AnchorId, basis: SeedBasis, comparison?: ComparisonData}`; un target requested no se llama cambio. `ComparisonData = {repo, mergeBase, head: SnapshotId}` solo cuando el impacto registra merge base |
+| `seed` | `{anchor: AnchorId, basis: SeedBasis, comparison?: ComparisonRef}`; un target requested no se llama cambio. `ComparisonData = {repo:string, mergeBase:string, head: SnapshotId}` solo cuando el impacto registra merge base; `ComparisonRef` discrimina available/unavailable como se fija en §8 |
 | `symbol-reach` | `{anchor: AnchorId, kindName: ImpactedSymbol["kind"], depth, confidence, fanIn, via?: ViaData}`; `ViaData = {target: SymbolNameRef, lines?: readonly number[], basis: DependenceBasis}`. Las líneas pertenecen al símbolo alcanzado, no al destino |
-| `entrypoint-reach` | `{kindName: ReachedEntrypoint["kind"], name?: string, handler: AnchorId, depth, confidence, seeds: PartId[]}`; convertir los índices usando la tabla de semillas del mismo owner |
-| `entrypoint-change` | `{change: ChangedEntrypoint["change"], kindName, name, handler: AnchorId, comparison: ComparisonData}`; removed usa merge base; added/altered, head. Altered no aporta la coordenada anterior |
-| `module-origin` | `{comparison: ComparisonData, file: string, change: ModuleOrigin["change"]}`; describe un diff, sin inventar existencia en head para deleted |
-| `module-reach` | `{file: FileId, side: ReachedModule["snapshot"], depth, origins: PartId[], via?: ReachedModule["via"]}`; base resuelve merge base del owner, head su snapshot. Los índices de origins nunca se buscan en seeds |
+| `entrypoint-reach` | `{kindName: ReachedEntrypoint["kind"], name?: string, handler: AnchorId, depth:number, confidence:number, seeds: OriginReference[]}`; convertir los índices usando la tabla de semillas del mismo owner, conservando el índice original |
+| `entrypoint-change` | `{change: ChangedEntrypoint["change"], kindName:ChangedEntrypoint["kind"], name:string, handler: AnchorId, comparison: ComparisonRef}`; removed usa merge base; added/altered, head. Altered no aporta la coordenada anterior |
+| `module-origin` | `{comparison: ComparisonRef, file: string, change: ModuleOrigin["change"]}`; describe un diff, sin inventar existencia en head para deleted |
+| `module-reach` | `{file: FileId, side: ReachedModule["snapshot"], depth:number, origins: OriginReference[], via?: ReachedModule["via"]}`; base resuelve merge base del owner, head su snapshot. Los índices de origins nunca se buscan en seeds |
 | `file-dependency` | `{from: FileId, to: FileId, category: "importer"|"reexporter"|"dynamic-importer"|"type-importer"|"user"|"unresolved-namer"|"outline-import"}`. La ausencia de una categoría opcional se conserva en `file-query` |
 | `file-query` | `{file: FileId, presentCategories: readonly FileCategory[]}`; distingue campo opcional ausente de categoría presente vacía; `FileCategory` son las seis categorías de `ImportedFile` |
 | `outline-declaration` | `{anchor: AnchorId, kindName: OutlineDeclaration["kind"]}`; conserva cada aparición, incluso duplicados dentro de una fuente que puedan indicar ambigüedad |
@@ -301,6 +305,8 @@ Todos los miembros llevan `id: PartId` y `supports: readonly Support[]`. Esta ta
 | `walk-cost` | `{owner: ReadId, walk:"symbols"|"modules", expansionsUsed:number}`; son costes registrados por análisis, no costes de deduplicación ni cardinalidades de entidades |
 
 `FileCategory` usa los nombres originales `importers`, `reexporters`, `dynamicImporters`, `typeImporters`, `users`, `unresolvedNamers`; el adaptador los traduce a `category` mediante una tabla exhaustiva. `CallSiteData` define `location:{file:FileId,line:number,endLine?:number}`, mantiene `repo`, `symbol` y `ancestors` literales. `LinkData.from` utiliza la misma ubicación de call site más `repo/symbol`; `LinkData.to` conserva `repo/kind/name` más `handler:AnchorId`. No se tipa un call site como declaración.
+
+`OriginReference = {status:"present",index:number,part:PartId}|{status:"missing",index:number}`. Las relaciones origin solo se construyen para present; una referencia inválida conserva el número que el hecho registró y emite missing-origin-reference. No se reindexa a cero, no se elimina del conteo de referencias registradas y no provoca una referencia wire colgante.
 
 `EntryData`, `ViaData`, `ComparisonData`, `CallSiteData`, `LinkData`, `DecisionOptionData` y las uniones de contexto son alias cerrados de los campos descritos; se implementan y validan en T2. El esquema runtime cubre sus campos opcionales originales, incluidos `guards`, `profiles`, `ancestors`, `stated`, `typeOnly`, `form` y evidence finding desconocido. Añadir un campo al dominio requiere revisar el adaptador mediante las pruebas de conservación; no se permite descartarlo silenciosamente para pasar typecheck.
 
@@ -321,11 +327,11 @@ Hay siete familias; las dos variantes workspace de impact/callers son adaptacion
 
 ### 4.5 Evidencia cuyo snapshot no está demostrado
 
-Para un `Evidence` local, el owner leído suministra repo/snapshot. Para `RepositoryEvidence`, resolver su `repo` en el vector de esa fuente; no usar el snapshot del trigger. Si falta o contradice el vector, conservar `origin:{kind:"query-context",read}` y emitir `missing-provenance`; no inventar un SHA.
+Para un `Evidence` local, el owner leído suministra repo/snapshot. Para `RepositoryEvidence`, resolver su `repo` en el vector de esa fuente; no usar el snapshot del trigger. `EvidenceRecord.repo` conserva ese propietario aunque el origen sea query-context; `value` contiene los campos de Evidence sin duplicar repo. Si falta o contradice el vector, conservar `origin:{kind:"query-context",read}` y emitir `missing-provenance`; no inventar un SHA.
 
 Una opción de decisions con `basis:"origin"` está respaldada por la configuración externa que `buildDecisions` leyó, aunque señale `.git/config:1`. Su evidencia se marca `query-context`, nunca `snapshot`. Las decisiones de trust/membresía/revisión también conservan su contexto de lectura; sus options sin evidence no se rellenan. El resto de evidence code/config de repositorio solo usa `snapshot` cuando el vector lo identifica. Esta clasificación viene del tipo/kind/basis del productor, no de regex del path.
 
-La deduplicación de `Evidence` exige igualdad de origin y del objeto completo; una coordenada de commit y una evidencia de contexto externo no son el mismo soporte. `shares-evidence` solo expresa coincidencia del soporte, nunca causalidad entre los hallazgos que lo citan.
+La deduplicación de `Evidence` exige igualdad de origin, repo y del objeto completo; una coordenada de commit y una evidencia de contexto externo no son el mismo soporte. `shares-evidence` solo expresa coincidencia del soporte, nunca causalidad entre los hallazgos que lo citan.
 
 ## 5. Parte B: unión, identidad y compatibilidad
 
@@ -334,20 +340,20 @@ La deduplicación de `Evidence` exige igualdad de origin y del objeto completo; 
 | Objeto | Clave canónica y guards |
 |---|---|
 | Snapshot | Todos los campos de `SnapshotRef` en canonical JSON. No acortar SHAs ni stateId para comparar |
-| Archivo | SnapshotId + path relativo exacto. Sin case-folding, basename, realpath de archivos analizados ni resolución de symlinks añadida |
+| Archivo | Origin snapshot + path relativo exacto; sin snapshot demostrado, query-context + repo + path es solo una referencia local sin join transversal. Sin case-folding, basename, realpath de archivos analizados ni resolución de symlinks añadida |
 | Anchor declarativo | FileId + symbol literal + line + presencia/valor de endLine. El nombre simple solo se usa dentro de `joinsFact`, no como identidad global |
 | Declaración outline | FileId + name + line + endLine + kind. Si una misma fuente conserva varias apariciones indistinguibles, registrar ambigüedad: el ID interno fue proyectado fuera y no puede recuperarse por adivinación |
 | Entidad declarativa sin outline | Anchor exacto compartido cuando no hay contradicción. No fusionar nombres calificados distintos por sus últimos segmentos |
 | Entidad con outline | Declaración outline única y anchors que pasan `joinsFact` y los guards de esta sección. Las grafías originales permanecen en anchors; se presenta una entidad con aliases respaldados |
 | Entrypoint | Snapshot y campos de identidad de su unión discriminada: HTTP method/path/version/handler; UI path/outlet/component; listener protocol/destination/handler; job trigger/handler. `basePath`/guards son observaciones conservadas, no strings borrados. Un reached entrypoint con información menor se conecta solo a un candidato único |
-| Evidence | Origin exacto + `canonicalJson(Evidence)`; union de supports. Dos citas del mismo sitio no son dos confirmaciones independientes |
+| Evidence | Origin exacto + repo + `canonicalJson(Evidence)`; union de supports. Dos citas del mismo sitio no son dos confirmaciones independientes |
 | Relación | Kind, endpoints canónicos y basis/calificadores semánticos. Cada atestación conserva su contexto requerido; contextos incompatibles no se funden en una afirmación conjunta. La ubicación y confidence del testigo no se maximizan |
 | Decision | Contexto de lectura + `Decision.id` + contenido de gap/opciones; conflictos de opciones quedan como variantes de contexto, sin unión de recomendaciones |
 | Parte | Discriminante + payload tipado con refs y contexto semántico aplicable; supports se unen como conjunto. El orden de colecciones con semántica propia se conserva |
 
-Los IDs son `prefix + Digest.of(canonicalJson(["mcp-composition-v1", kind, key]))`. `SourceId` usa familia/branch, contexto semántico normalizado y el hecho público redactado completo antes de normalizar; incluye schema, producer, inputs, value/status/reason y provenance. Para las tres familias con recovery se reutiliza la preparación del contexto existente, sin cambiar `mcp-r1`. Las otras cuatro normalizan el repo seleccionado, snapshot/vector, scope/config efectivos y argumentos semánticos no ligados a presentación. Se excluyen roots absolutos y sidecars de frescura, no membresía, trust o provenance. Los paths explícitos de membresía se representan para identidad mediante los IDs y la declaración efectiva del contexto, sin publicar un hash del path ni borrar su efecto de selección.
+Los IDs son `prefix + Digest.of(canonicalJson(["mcp-composition-v1", kind, key]))`. `SourceId` usa familia/branch, contexto semántico normalizado y el hecho público redactado completo antes de normalizar; incluye schema, producer, inputs, value/status/reason y provenance. Para las tres familias con recovery se reutiliza la preparación del contexto existente, sin cambiar `mcp-r1`. Las otras cuatro normalizan repo seleccionado, snapshot/vector y scope/config efectivos; usan files/targets de declaredConfig cuando existen, no otro normalizador. La selección revision/HEAD se sustituye por el snapshot actual para identidad; las elecciones de membresía/source y política offline se conservan con su contexto efectivo. Se excluyen roots absolutos y sidecars de frescura, no membresía, trust o provenance. Los paths explícitos de membresía se representan para identidad mediante los IDs y la declaración efectiva del contexto, sin publicar un hash del path ni borrar su efecto de selección.
 
-`ReadId` incluye SourceId y owner; no se inventa la equivalencia de dos lecturas por compartir snapshot. `PartId` puede compartir representación entre fuentes cuando payload y contexto lo permiten; sus supports retienen todas las apariciones públicas. Los arrays de referencias de `outline-file`, origins, evidence findings y reach mantienen el orden y multiplicidad originales. Deduplicar el objeto referenciado no borra la diferencia entre una aparición repetida en una fuente y el mismo soporte aportado por dos fuentes.
+`ReadId` incluye SourceId y owner; no se inventa la equivalencia de dos lecturas por compartir snapshot. `PartId` puede compartir representación entre fuentes cuando payload y contexto lo permiten; sus supports retienen todas las apariciones públicas. Excepción necesaria: una parte `workspace-link` usa `SourceId + owner + pointer` para su ID antes de resolver reach. Después se completan sus referencias mediante un índice de Link.id del mismo source; esto permite self/cyclic reach sin intentar calcular un hash recursivo de PartIds. Las relaciones workspace-match deduplican sus valores independientes de esos reach/observaciones. Los arrays de referencias de `outline-file`, origins, evidence findings y reach mantienen el orden y multiplicidad originales. Deduplicar el objeto referenciado no borra la diferencia entre una aparición repetida en una fuente y el mismo soporte aportado por dos fuentes.
 
 No se usarán IDs numéricos asignados al insertar. Los IDs wire completos son opacos; el renderer puede asignar `S1`, `N1`, `R1` después de ordenar las tablas y debe dar una leyenda inequívoca. No son IDs persistentes reutilizables sin su composición/source.
 
@@ -374,9 +380,9 @@ Compatibilidad no se trata como una equivalencia transitiva. Si A y B no compart
 
 `materializeEvidence` trabaja sobre **todas** las observaciones acumuladas, no fusiona aliases de forma irreversible durante la llegada de fuentes:
 
-1. Construir candidatos outline por archivo exacto y snapshot. Retener duplicidad dentro de una fuente como ambigüedad potencial.
-2. Aplicar `joinsFact` al anchor y al candidato (`name`, `startLine=line`, `endLine`). Exigir un único candidato y compatibilidad; si varios spans anidados lo aceptan con el mismo nombre, no elegir el más pequeño implícitamente.
-3. Si ambas fuentes aportan endLine, exigir coherencia; si discrepan, conservar valores y emitir `conflicting-coordinate`. Un line dentro de un span puede ser una anotación/decorador; no se reescribe como inicio hasta que el join único lo demuestra.
+1. Construir candidatos outline por archivo exacto y snapshot de identidad exacta. Una File con origin query-context o un snapshot redacted no produce candidato transversal. Retener duplicidad dentro de una fuente como ambigüedad potencial.
+2. Aplicar `joinsFact` al anchor y al candidato (`name`, `startLine=line`, `endLine`). Si el handler incluye una anotación anterior al inicio que reporta outline, se permite la comprobación inversa: la línea outline debe estar dentro del span explícito del handler, con el mismo archivo y nombre simple exacto comprobados por `joinsFact`. No se usa solo solapamiento ni solo nombre. Exigir un único candidato y compatibilidad; si varios spans anidados lo aceptan, no elegir el más pequeño implícitamente.
+3. Exigir el mismo final conocido de declaración; si discrepa, conservar valores y emitir `conflicting-coordinate`, sin binding único. En los tipos cuyo contrato dice que omitir endLine representa una línea, su final efectivo para este guard es line, manteniendo el campo omitido en wire. Distintos inicios por anotación son compatibles solo con la comprobación de span anterior y el mismo final; se conservan ambos anchors originales y se usa la declaración outline como identidad canónica, sin reescribir la observación del otro productor.
 4. Unir anchors iguales y aliases demostrados con esa declaración. Sin outline, solo igualdad exacta de anchors. Un campo redactado bloquea el join transversal aunque dos strings redactados coincidan.
 5. Resolver `ViaData.target` solo contra declaraciones/seeds/símbolos del **mismo read propietario** que identifican un destino único por file y symbol literal. Si ese read no lo resuelve, puede anotarse un candidato outline único compatible, pero la relación se marca `endpoint-resolved-from-outline` y conserva ambos soportes. Nunca usar solo el último segmento para elegir entre varios destinos.
 
@@ -384,7 +390,7 @@ Si el modelo público no permite separar dos declaraciones idénticas en línea/
 
 ### 5.4 Unión algebraica y orden
 
-`normalizeSource(source): EvidenceSet` produce observaciones inmutables con sus contextos. `mergeEvidence(left, right): EvidenceSet` hace unión por claves canónicas de esos datos; no renderiza, resuelve aliases ni elimina conflictos. `materializeEvidence(set): CompositionGraph` calcula bindings, relaciones, conexiones e issues a partir del conjunto entero.
+`normalizeSource(source: ExecutedSource, digest: Digest): EvidenceSet` produce observaciones inmutables con sus contextos. `mergeEvidence(left: EvidenceSet, right: EvidenceSet): EvidenceSet` hace unión por claves canónicas de esos datos; no renderiza, resuelve aliases ni elimina conflictos. `materializeEvidence(set: EvidenceSet, digest: Digest): MaterializedComposition` calcula bindings, relaciones, conexiones e issues a partir del conjunto entero; `MaterializedComposition = {graph:CompositionGraph,issues:readonly CompositionIssue[]}`.
 
 Para sets de evidencia compatibles fijos se exige:
 
@@ -515,13 +521,33 @@ type ComposeFull = {
 
 `SourceDescriptor` es `{id,family,branch?,rootRead,requestIndex,snapshotVector,analysis:Analysis}`. En receipt, `rootRead` es una referencia descriptiva y se acompaña del estado de raíz más los límites agrupados de sus reads en `coverage`, sin prometer acceso a una tabla ausente. Full usa `graph.sources` con la misma forma; no repite una segunda tabla sources al nivel superior.
 
-`CoverageSummary` tiene `{reads:{complete:number,partial:number,unknown:number}, unknowns:{source,owner,reason}[], limits:{source,owner,kind,limit?,cuts,places}[], issues:CompositionIssue[]}`. Los conteos son de **lecturas registradas**, incluyen owners anidados y no se presentan como análisis independientes ni huecos disjuntos. Se conservan unknown findings y basePath/component desconocidos en partes y se cuentan aparte mediante `CompositionCounts.unknownFindings`; no cambian artificialmente el status de su colección.
+`CoverageSummary` tiene `{reads:{complete:number,partial:number,unknown:number}, unknowns:{source:SourceId,owner:CutOwner,reason:UnknownReason}[], limits:{source:SourceId,owner:CutOwner,kind:Cut["kind"],limit?:number,cuts:number,places:number}[], issues:CompositionIssue[]}`. Los conteos son de **lecturas registradas**, incluyen owners anidados y no se presentan como análisis independientes ni huecos disjuntos. Los findings/component desconocidos se conservan en partes y tienen conteos separados definidos a continuación; no cambian artificialmente el status de su colección.
 
-`CompositionCounts` contiene `{sources,reads,files,anchors,entities,evidence,parts,relations,connections,unknownFindings}`; se cuentan objetos únicos de las tablas correspondientes. `CompositionDelivery` agrupa por SourceId las raíces/freshness/resolution/live/workspaceLive públicas ya redactadas. No forma parte de la identidad ni de una prueba de atomicidad/frescura verificada. Summary/details muestran sus avisos materiales en texto; full conserva todos los sidecars públicos presentes, sin serializarlos otra vez en el texto.
+`CompositionCounts` contiene `{sources,reads,files,anchors,entities,evidence,parts,relations,connections,unknownFindings,unknownComponents}`; se cuentan objetos únicos de las tablas correspondientes. `unknownFindings` cuenta Finding.status unknown de entrypoints, basePath y target de call site; no vuelve a contar reads unknown. `unknownComponents` cuenta component unknown dentro de UI routes conocidas, que no es un Finding desconocido. `CompositionDelivery` agrupa por SourceId las raíces/freshness/resolution/live/workspaceLive públicas ya redactadas. No forma parte de la identidad ni de una prueba de atomicidad/frescura verificada. Summary/details muestran sus avisos materiales en texto; full conserva todos los sidecars públicos presentes, sin serializarlos otra vez en el texto.
 
 `CompositionGraph` incluye las tablas de 4.2; `issues` se transmite una sola vez en `coverage.issues`, y el tipo de grafo interno puede referir esa misma colección sin duplicarla en wire. La entrada de cada read y source es autosuficiente para resolver todos los IDs que usan las partes/relaciones/conexiones de full. Un verificador de integridad comprueba cada referencia y cada owner; missing `reach` explícito es un estado permitido, no una referencia colgante accidental.
 
-`CompositionIssue` es la unión cerrada de objetos con discriminante `kind`: `snapshot-difference`, `context-mismatch`, `ambiguous-declaration`, `conflicting-coordinate`, `unresolved-endpoint`, `missing-provenance`, `missing-origin-reference`, `missing-link-reference`, `redacted-identity`. Cada rama requiere `sources:SourceId[]`, `reads:ReadId[]` y los anchors/part refs pertinentes según el kind; `context-mismatch` incluye `field:"trust"|"producer"|"schema"|"engine"|"typeRoot"|"workspace"`. No se añade una bolsa libre de detalles con información privada.
+`CompositionIssue` lleva siempre `{sources:readonly SourceId[],reads:readonly ReadId[]}` más exactamente una de las siguientes ramas; no se añade una bolsa libre de detalles privados:
+
+```ts
+type IssueDetail =
+  | {kind:"snapshot-difference";repo:string;snapshots:readonly SnapshotId[]}
+  | {kind:"context-mismatch";field:"trust"|"producer"|"schema"|"engine"|"typeRoot"|"workspace";reason:"different"|"unavailable"}
+  | {kind:"ambiguous-declaration";anchor:AnchorId;candidates:readonly PartId[]}
+  | {kind:"conflicting-coordinate";anchors:readonly AnchorId[]}
+  | {kind:"unresolved-endpoint";part:PartId;target:SymbolNameRef}
+  | {kind:"missing-provenance";repo:string;part?:PartId;side?:"base"|"head"}
+  | {kind:"missing-origin-reference";part:PartId;table:"seeds"|"module-origins";index:number}
+  | {kind:"missing-link-reference";part:PartId;linkId:string;position:number}
+  | {kind:"redacted-identity";owner:CutOwner;pointer?:string};
+type CompositionIssue = {
+  sources:readonly SourceId[];reads:readonly ReadId[];
+} & IssueDetail;
+```
+
+Las arrays que representan sets de IDs de una issue/connection se ordenan antes de calcular keys. `ConnectionId` usa rule y refs de parts/relations/entities; supports no afectan su identidad y se unen como conjunto. Una issue no apunta a un candidato suprimido de full; si falta la coordenada, contiene solo los identificadores y el owner realmente conocidos.
+
+`shared-support`/`shares-evidence` pueden declarar igualdad física de una evidencia sin igualar la interpretación de sus reads. Se etiquetan como coincidencia de ubicación/soporte y preservan context-mismatch cuando procede; las conexiones que atribuyen dependencias, origen de cambio o alcance siguen requiriendo los guards semánticos completos.
 
 ### 7.2 Modos
 
@@ -611,6 +637,8 @@ Si una clave cambia con redacción, su ID se deriva de su contenido público má
 
 Una relación workspace necesita snapshots reales de ambos extremos y contexto compatible. Si solo se conoce el repo destino pero falta su snapshot, se conserva LinkData como parte con `missing-provenance`, sin file/entity global ni nuevas conexiones. Un Link de una fuente no se resuelve a cualquier Link con el mismo id de otra: se comprueba el vector y los calificadores. Reach con ID faltante mantiene `status:"missing"`; un `reach` autorreferente registrado no se expande recursivamente.
 
+Para que la forma tipada siga siendo válida en ese caso, sus coordenadas usan FileIds con `origin:query-context` y AnchorIds locales a ese read; esos archivos son referencias locales, no identidades físicas globales. Si una parte necesita `ComparisonData` pero no se registró mergeBase, no fabrica un comparison: retiene una variante `comparison:{status:"unavailable",reason:"missing-provenance",read:ReadId}`. La forma conocida es `comparison:{status:"available",value:ComparisonData}` en seeds cuando aplica, entrypoint-change y module-origin; las reglas change-dependent/base requieren la variante available. `ComparisonRef` es el alias de esa unión. Un módulo base o un removed handler sin base demostrada usa ubicación query-context y missing-provenance, nunca ubicación head. Esto conserva el dato relativo sin atribuirlo al head.
+
 Si dos consultas diferentes se vuelven indistinguibles tras redacción de sus claves, no se unen sus SourceIds. Antes de procesar, el coordinador ya tiene consultas únicas ordenadas; asigna a las fuentes afectadas un discriminador ordinal local de esa secuencia y deriva su ID solo de ese ordinal y datos públicos. No publica hashes de argumentos privados. El guard desactiva verification en ese conjunto y la equivalencia transversal de esas identidades; los duplicados exactos de la misma consulta ya se eliminaron antes. La invariancia exigida sigue aplicándose a las permutaciones del mismo conjunto ordenado de consultas, no a comparar conjuntos distintos de secretos redactados.
 
 Las rutas absolutas permitidas como argumentos workspace solo se devuelven si sobreviven a la redacción existente. Las raíces públicas y frescura se agrupan como delivery; nunca entran en identidad de entidad. No se interpreta repositorio disponible como confianza ni se usa un gap trust de decisions para aplicarla. Toda repetición revalida autoridad actual mediante los puertos originales.
@@ -625,7 +653,7 @@ Las rutas absolutas permitidas como argumentos workspace solo se devuelven si so
 | Nuevo `src/mcp/query-runner.ts` | `executeQuery`, catálogo/puertos/filtrado/redacción/sidecars, guard de identidad redactada y preparation de recovery. Único despacho semántico para herramientas originales y composición |
 | Existente `src/mcp/server.ts` | Registro, controles originales select/page, assembly de receipts/facts y faults. Añadir registro compose mediante coordinador; conservar exports actuales de output schemas |
 | Nuevo `src/mcp/composition-contract.ts` | Tipos cerrados de EvidenceSet, tablas, Part, relaciones, conexiones, issues, requests/receipts/full; sin I/O |
-| Nuevo `src/mcp/composition-normalize.ts` | `normalizeSource(source: ExecutedSource): EvidenceSet`; siete adaptadores exhaustivos, remapping índices y clasificación de origen de evidencia; sin inferir relaciones |
+| Nuevo `src/mcp/composition-normalize.ts` | `normalizeSource(source: ExecutedSource, digest: Digest): EvidenceSet`; siete adaptadores exhaustivos, remapping índices y clasificación de origen de evidencia; sin inferir relaciones |
 | Nuevo `src/mcp/compose-evidence.ts` | `mergeEvidence`, `materializeEvidence`, `validateCompositionReferences`, generación única de claves/IDs/guards y reglas de §§5–6; sin I/O ni ejecución de queries |
 | Nuevo `src/mcp/composition-schema.ts` | `COMPOSE_INPUT`, `COMPOSE_OUTPUT`; esquemas runtime completos de la unión y tablas, refinamientos wire/integridad estructural, límites de request |
 | Nuevo `src/mcp/compose-request.ts` | `runComposition(input: ComposeInput, ctx: QueryExecutionContext): Promise<Result<CompositionResult, ComposeFault>>`; preflight, dedup/orden de consultas, deadline/cancel, acumulación, verification y descriptors/requests. `CompositionResult` es la unión independiente del modo que el renderer recibe, no `CallToolResult` |
@@ -680,3 +708,268 @@ T7 definirá un corpus cerrado con expected claims, claims prohibidos, Evidence/
 El mismo consumidor/modelo/configuración recibe baseline y composición en orden contrabalanceado; tres permutaciones de las fuentes y dos ejecuciones por condición detectan variación básica sin llamarse prueba estadística de generalización. Registrar modelo y versión disponibles, instrucciones, datos/pins, orden, respuestas crudas, coste expuesto y adjudicación. No requerir prosa idéntica. Una cita válida debe resolver al soporte que realmente demuestra su claim; compartir ubicación no basta para aprobar causalidad.
 
 La evaluación distingue `pass`, `fail`, `not_evaluated`. Cualquier conexión fabricada, rotura inferida solo por reach, desconocido presentado como vacío, cruce de snapshots o opción de decisions inventada es fail. Las diferencias de legibilidad/recall y tamaño se informan por caso; no se sustituyen por un único score favorable. Si no hay acceso autorizado a un consumidor LLM, la herramienta puede estar verificada estructuralmente pero la utilidad de síntesis queda `not_evaluated`; no se anuncia como probada.
+
+## 11. Plan de ejecución ordenado
+
+Todos los comandos y resultados de esta sección son **futuros/esperados**, no evidencia de esta sesión de diseño. Antes de ejecutar: leer este documento completo, HEAD/status actuales y las instrucciones vigentes. Trabajar sobre los cambios integrados del checkout, sin restaurar versiones antiguas de server/render ni tests de otros agentes. T1 no autoriza por sí misma ninguna modificación del motor de análisis.
+
+Secuencia: **T1 → T2 → T3 → T4 → T5 → T6 → T7 → T8**. T2/T3 mantienen privados los contratos hasta que T4/T5 puedan publicarlos completos. Las tareas pueden revisarse por sus entregables; no se mezclan autores simultáneos de `server.ts`. El responsable de integración es el único propietario de ese archivo durante cada paso. No se requiere hacer commits para comprobar una tarea; Git/publicación sigue sujeto a la autorización de la sesión ejecutora.
+
+### T1. Un único despacho tipado compartido con las herramientas existentes
+
+**Propiedad:** crear `src/mcp/query-schema.ts`, `src/mcp/query-runner.ts`, `src/mcp/query-runner.test.ts`. Modificar `src/mcp/server.ts`, `src/mcp/recovery.ts` solo para extraer/reusar la preparación actual, y los imports necesarios de `src/mcp/server.test.ts`. No extraer todos los output schemas ni cambiar sus exports.
+
+**Consume:** `McpDeps`, `repositoryCatalog`, siete contratos actuales de input, puertos y las tres funciones Recovery actuales.
+
+**Produce:** `SemanticArguments<F>`, `SemanticQuery`, esquemas semánticos/completos; `QueryExecutionDeps`, `QueryExecutionContext`, `ExecutedSource`, `QueryFault`; `executeQuery(query, ctx)` de §4.1. Los helpers internos de recovery siguen generando los mismos mcp-r1 y recetas. `answer` conserva selección, cursores, modos y canal de fallo.
+
+- [ ] Escribir `query-runner.test.ts`: un spy de cada puerto comprueba forwards exactos en entrypoints, impact/callers local y workspace, importers, outline, workspace y decisions. Comprobar el `repo/path/repoId` seleccionado, targets/ranges, base/head/live, changed, scope, budget, offline/replay y signal. Incluir repo `constructor` y mismo archivo en dos roots.
+- [ ] Añadir pruebas «sin despacho»: repo desconocido y combinaciones inválidas actuales (`revision+live`, replay sin workspace, select/page desparejados en originales). Las variantes semánticas rechazan mode/select/page/expect en su propio objeto.
+- [ ] Añadir tests de frontera pública: eliminar `repositorySources` y workspace.repositories, conservar root snapshots/reads y sidecars públicos, idéntica redacción/recovery a las herramientas actuales; el guard detecta coordinates/argumentos redactados sin contener sus valores originales.
+- [ ] Ejecutar `node --import tsx --test src/mcp/query-runner.test.ts`. **Esperado antes de implementar:** fallo por exports inexistentes, no por error de fixture.
+- [ ] Implementar la extracción y adaptar las siete registrations a ese runner. Los callbacks antiguos no mantienen un segundo switch de despacho. `QueryExecutionDeps` vive fuera de server para evitar import circular. Mantener nombres/exports de `ENTRYPOINTS_OUTPUT`…`DECISIONS_OUTPUT`.
+- [ ] Ejecutar `node --import tsx --test src/mcp/query-runner.test.ts src/mcp/server.test.ts src/mcp/repository-targeting.test.ts src/mcp/evidence-schema.test.ts src/mcp/compact-schema.test.ts` y `npm run typecheck` / `npm run arch:check`. **Esperado:** pasan; no cambios en modo/recovery/source de consultas originales ni nuevas dependencias de MCP a application/adapters.
+
+**Entregable revisable:** un despacho común, comportamiento público original conservado y controles de redacción observables. No se anuncia compose todavía.
+
+### T2. Normalizar las siete familias sin perder significado
+
+**Propiedad:** crear `src/mcp/composition-contract.ts`, `src/mcp/composition-normalize.ts`, `src/mcp/composition-normalize.test.ts` y helper de pruebas `src/mcp/composition-fixtures.ts`. Crear el núcleo de claves puras en `src/mcp/compose-evidence.ts` que consumen los adaptadores; T3 continuará ese mismo archivo secuencialmente. No modificar core.
+
+**Consume:** `ExecutedSource`, `Digest`, tipos de dominio/ports enumerados en §4.
+
+**Produce:** todos los aliases cerrados de §§4–7, `EvidenceSet`, `normalizeSource(source,digest)`. El fixture exporta `sourceFixture(family, overrides)` especializado mediante overloads por familia, construido con tipos concretos. No añadir un helper `any` que salte los invariantes de los hechos.
+
+- [ ] Escribir tests `normalizes every public family without presentation parsing`, parametrizados sobre las siete familias y ambas ramas de impact/callers. Assertions: todos los supports resuelven owner/pointer; no hay `value` para unknown; todos los arrays de evidencia originales se recuperan siguiendo sus refs, con orden y duplicados; producer/inputs/reads/cuts son exactos.
+- [ ] Escribir casos de conservación significativos: HTTP basePath unknown; UI component unknown con guards/outlet; dos aliases del mismo handler; módulos base/head con seedIndex/originIndex distintos de cero; importers con `users` solapados, dynamic/type/reexport opcionales ausentes y presentes vacíos; outline.unheld; `CallSite.ancestors/stated`; links con self-reach y reach missing.
+- [ ] Escribir `decision preserves all option semantics and context evidence`: distintos basis/recommended, options vacías frente a freeText, required, outwardKinds y evidencia origin `.git/config`. Esta última tiene origin query-context; evidencia de repo ajeno usa el snapshot de ese repo. Falta de snapshot genera missing-provenance y no un file/entity inventado.
+- [ ] Ejecutar `node --import tsx --test src/mcp/composition-normalize.test.ts`. **Esperado inicial:** fallos por contratos/función faltantes.
+- [ ] Implementar adaptadores exhaustivos, keys/refs y catálogo de fuentes/reads. Mantener cada aparición mediante supports/referencias ordenadas aunque se comparta su objeto. `module-origin` describe comparación, no existencia de archivo deleted en head. Index fuera de rango se conserva como issue con parte/contexto original, nunca apunta al origen cero.
+- [ ] Añadir un test de conservación que en fixtures completos compara una proyección semántica reconstruida desde las tablas con el hecho público original; la proyección solo excluye duplicación de objetos/orden de claves y sidecars separados. Enumerar expresamente campos opcionales, no un test que replique el mismo switch del normalizador.
+- [ ] Ejecutar `node --import tsx --test src/mcp/composition-normalize.test.ts` y `npm run typecheck`. **Esperado:** siete familias cubiertas, todos los campos/estados/asociaciones comprobados y ninguna lectura de texto/source añadida.
+
+**Entregable:** partes tipadas completas con conservación demostrada; cero relaciones inferidas por los adaptadores.
+
+### T3. Unión canónica, guards, relaciones y conexiones acotadas
+
+**Propiedad:** completar `src/mcp/compose-evidence.ts`; crear `src/mcp/compose-evidence.test.ts` y `src/mcp/composition-properties.test.ts`; ajustar únicamente los tipos necesarios de `composition-contract.ts` en consonancia con este documento.
+
+**Consume:** `EvidenceSet`, `Digest`, `joinsFact`, `compareText`, `canonicalJson` y reglas §§5–6.
+
+**Produce:** `mergeEvidence(left,right):EvidenceSet`, `materializeEvidence(set,digest):MaterializedComposition`, `validateCompositionReferences(graph):Result<void,CompositionInvariantFault>`. `CompositionInvariantFault = {kind:"invalid-composition-reference",table:string,id:string,field:string}`; los valores son identificadores públicos. Las issues semánticas no son este fallo interno.
+
+- [ ] Escribir `merges exact duplicate relation and unions provenance`: impact y callers sobre C→S producen una `symbol-dependence` con supports de ambos, un S, un C y una evidence idéntica; depth/confidence/fanIn/budget permanecen en las partes/reads de cada fuente.
+- [ ] Escribir `handler joins unique outline through joinsFact`: nombre calificado del handler y nombre simple outline, archivo/snapshot exactos y span coherente; resultado una declaración. Añadir handler cuyo inicio incluye una anotación y outline empieza una línea después, con final idéntico: binding único y ambos anchors conservados. Casos negativos: homónimo en otro repo/snapshot, overloads, dos apariciones indistinguibles en una fuente, dos candidatos anidados válidos, distinto final efectivo (incluido endLine omitido), prefix/case diferente. No escoger «el primero».
+- [ ] Escribir `unresolved via does not invent endpoint`: destino nombrado sin línea y varias declaraciones posibles mantiene `ViaData` y unresolved-endpoint; un destino único del mismo read u outline compatible obtiene su soporte completo. `basis:reference` no produce calls, `basis:call` no se etiqueta como llamada exclusiva frente a instanciación.
+- [ ] Escribir tests base/head y module-only; Link.id repetido con snapshots distintos; profiles/basis distintos; named candidate no convertido en Link; categorías user/importer/unresolved distintas; evidencia compartida entre decisions/workspace solo produce shared-support cuando el origin es exacto.
+- [ ] Escribir guards con snapshots/live/trust/producer/schema/engine/typeRoot/membresía/gateways diferentes, y scope/budget/targets distintos. Los positivos conservan todas las lecturas; los negativos no producen conexiones entre afirmaciones incompatibles. Incluir A(X=1), B(sin X), C(X=2): B no habilita una conexión A+C.
+- [ ] Escribir propiedades sin librería nueva: generar permutaciones completas de tres sets pequeños con solapamiento real y de sus duplicados; probar ambos parentizados, commutatividad e idempotencia con `assert.deepEqual`. Añadir la tercera fuente que vuelve ambiguo el join; la materialización final es igual en todos los órdenes.
+- [ ] Ejecutar `node --import tsx --test src/mcp/compose-evidence.test.ts src/mcp/composition-properties.test.ts`. **Esperado inicial:** funciones/reglas faltantes o assertion semántica fallida.
+- [ ] Implementar unión de observaciones y materialización separadas. IDs/tablas/supports ordenados por claves; atestaciones conservan contextKey propio. No cierres transitivos, max confidence, suma de counts solapados, union-find irreversible ni parseo de Cut.at/via.
+- [ ] Ejecutar los dos tests anteriores junto con `src/mcp/composition-normalize.test.ts`, typecheck y architecture. **Esperado:** igualdad canónica de sets compatibles, variantes incompatibles visibles y referencias completas.
+- [ ] Probar sensibilidad en copia local temporal del cambio o mutación restaurada: quitar repo/stateId de la key, elegir primer candidato o convertir importer a call debe romper los tests correspondientes. Registrar el fallo observado y restaurar; no dejar mutaciones ni ejecutar esta técnica sobre trabajo ajeno.
+
+**Entregable:** un solo algoritmo de acumulación y cinco reglas de conexión cerradas; no una matriz de pipelines por familia.
+
+### T4. Invocación stateless, límites, verification y cancelación
+
+**Propiedad:** crear `src/mcp/compose-request.ts`, `src/mcp/compose-request.test.ts` y `src/mcp/composition-schema.ts` con inputs y tipos output de modo independiente. Modificar `src/mcp/server.ts` para registrar compose solo cuando T5 complete su salida/guía. `server.test.ts` recibe tests públicos de la nueva operación; no cambiar puertos/core de decisions.
+
+**Consume:** T1 executeQuery, T2 normalizeSource, T3 merge/materialize/integridad; recetas y faults originales.
+
+**Produce:** `ComposeInput`, `ComposeQuery`, `COMPOSE_INPUT`, `runComposition(input,ctx):Promise<Result<CompositionResult,ComposeFault>>`, `CompositionResult = {graph,coverage,counts,verification,requests,delivery?}` con los tipos de §7. `ComposeFault` es la unión cerrada de §3.4; no se llama a otro MCP server dentro del servidor.
+
+- [ ] Escribir preflight tests: 0/1/16/17 queries, bytes exactamente en/bajo/sobre 1.048.576 usando UTF-8 multibyte; nested mode/select/page; nombre desconocido/compose recursivo; expect mcp-r1 en outline; deadline inválido; dos expectations incompatibles. Spies prueban **cero despachos** en todos los casos inválidos. El test de bytes calcula el input completo, no asume un carácter = byte.
+- [ ] Escribir `duplicate queries execute once and preserve assertions`: consultas idénticas con y sin expect ejecutan una vez y verifican el expect; assertions incompatibles fallan antes. Requests permutadas producen sources/graph/verification iguales para resultados inmutables.
+- [ ] Escribir `uses public existing ports on every new call`: dos composiciones con los mismos argumentos ejecutan nuevamente los spies del runner, aunque el core pueda usar sus caches. Una sesión recién creada no necesita calentamiento ni handles previos.
+- [ ] Escribir tests de faults/unknown/deadline/cancel: unknown se conserva sin partes ficticias; un fallo real de la tercera fuente entrega isError sin graph parcial; cancellation durante query bloqueada se propaga y no ejecuta la siguiente; timer/listener se limpia al terminar/fallar; tiempo agotado antes de entrega impide éxito. Core partial con deadline se entrega no afirmado con verification unavailable; expect falla.
+- [ ] Escribir verification/repeat tests: mcp-r1 de las tres familias permanece igual y `requests` pinned incluye su assertion; las cuatro restantes son fresh con schema original estricto y sin replay inventado. Cambiar decisions.options por contexto externo cambia SourceId/CompositionIdentity; repetir con expect falla, sin retener el original. Una identity redacted collision produce fuentes separadas y verification unavailable sin valores/hashes secretos.
+- [ ] Ejecutar `node --import tsx --test src/mcp/compose-request.test.ts`. **Esperado inicial:** falta de coordinador/validación; los tests de errores no pasan simplemente porque toda consulta falle.
+- [ ] Implementar preflight, orden/dedup, ejecución secuencial, ceder al event loop, acumulación y limpieza. Preasignar ordinal de consultas únicas para identidades redactadas; ordenar/depurar requests por source al producir la salida. Calcular identidad con source IDs únicos, no con índices de input ni timestamps. Comprobar sources expect y composición expect antes de emitir contenido.
+- [ ] Ejecutar `node --import tsx --test src/mcp/compose-request.test.ts src/mcp/query-runner.test.ts` y typecheck/architecture. **Esperado:** todos los caminos verificados; ninguna API de retention, trust write, decisions replay o source reader añadida.
+
+**Entregable:** invocación utilizable que obtiene sus propios resultados autorizados; el mismo input completo permite recalcular sin estado final oculto.
+
+### T5. Contrato wire, modos compactos y navegación a fuentes
+
+**Propiedad:** completar `src/mcp/composition-schema.ts`; crear `src/mcp/render-composition.ts`, `src/mcp/render-composition.test.ts`, `src/mcp/composition-schema.test.ts`. Modificar `src/mcp/server.ts`, `compact-schema.ts`, `compact-schema.test.ts`, `presentation.ts` y `presentation-guidance.ts` solo en su nueva superficie compose. Las siete familias y sus renderizadores mantienen comportamiento.
+
+**Consume:** `CompositionResult`, tablas/refs e issues materializadas; `ResponseMode`, presentation sharing/contexto existentes y las requests de T4.
+
+**Produce:** `COMPOSE_OUTPUT`, `renderComposition(result,mode):string`, formas ComposeReceipt/ComposeFull y una guía compacta de compose. `compactOutput` distingue `McpOperation` de `ToolFamily` y usa una guía especializada para compose sin contaminar los Records de familias analíticas.
+
+- [ ] Escribir schema tests con Ajv SDK y el Standard Schema original: full válido conserva todas las tablas; receipt no aparenta un Fact; rechazar read unknown sin reason, partial sin cuts, evidencia de snapshot sin origin, parte/conexión sin refs/soporte, option sin recommended y snapshots live incompletos. Las integridades entre IDs se verifican además mediante `validateCompositionReferences`, sin inventar keywords Draft-7.
+- [ ] Escribir renderer tests por hechos/IDs: handler+outline se presenta una vez con aliases y evidencia; L1 duplicado tiene una relación y ambos supports; importers y reference quedan distintos; snapshots/live incompatibles se declaran; unknown/partial/cortes/decisions options son legibles. Details declara todos los IDs de sujetos que cita, y el full text no repite sus tablas.
+- [ ] Escribir test de contenido omitido: cada categoría de soporte omitida en summary/details tiene conteo registrado y navegación válida. La ruta original select/page solo se sugiere cuando requests lleva recovery mcp-r1 aplicable; outline/source text y decisions replay no se sugieren. Summary y details pueden coincidir si no hay evidencia adicional útil.
+- [ ] Escribir fixture de solapamiento deliberado: `blockBytes(composeDetails) < blockBytes(concatenatedOriginalDetails)` y todos los hechos/unknowns requeridos siguen presentes por assertions de significado. No aplicar el umbral a casos sin solapamiento ni a size total de distinta cobertura.
+- [ ] Ejecutar `node --import tsx --test src/mcp/composition-schema.test.ts src/mcp/render-composition.test.ts`. **Esperado inicial:** output/renderer faltantes.
+- [ ] Implementar schema runtime completo y los tres modos. Full assembly expone `graph.sources` una sola vez; receipt expone descriptors/requests/coverage sin referencias que aparenten una tabla disponible. Reusar igualdad exacta y `preferShorterText`; no aplicar truncado/top-N ni mezclar análisis/cobertura con modo.
+- [ ] Publicar compose con readOnlyHint/openWorldHint coherentes, input estricto y guía aproximada declarada. Probar que una combinación que pasa la guía pero viola runtime no ejecuta queries. Registrar bytes del catálogo antes/después; los budgets históricos no se inflan sin documentar el incremento concreto de esta operación.
+- [ ] Ejecutar `node --import tsx --test src/mcp/render-composition.test.ts src/mcp/composition-schema.test.ts src/mcp/server.test.ts src/mcp/compact-schema.test.ts src/mcp/presentation-guidance.test.ts` y typecheck/architecture. **Esperado:** contratos originales válidos y nueva operación coherente en ambos canales.
+
+**Entregable:** resultado autosuficiente en details y exhaustivo en full; identidad y procedencia se entregan una sola vez en sus tablas/canales correspondientes.
+
+### T6. Integración real MCP y pruebas de adquisición/orden en frío y caliente
+
+**Propiedad:** crear `src/composition/mcp-evidence-composition.e2e.test.ts`. Reutilizar helpers existentes de sesión/stdio y patrones de fixtures de `mcp.e2e.test.ts` y los dos audits, sin convertir sus límites históricos en afirmaciones universales ni modificar sus resultados anteriores.
+
+**Consume:** nueva herramienta registrada y las siete originales; Git y composed queries reales en repositorios temporales.
+
+**Produce:** pruebas de comportamiento sobre el transporte MCP y un fixture autocontenido con dos repositorios, dos SHAs base/head, Spring entrypoints, TS consumer/imports/calls, nombre externo no servido, decisiones verificables y trust stores aislados.
+
+- [ ] Escribir un test que arranca stdio y pide todas las siete familias dentro de compose, más cada consulta original full. Comparar hechos relevantes normalizados contra sus fuentes exactas; no comparar solo conteos o buscar `GET` en un string. Comprobar semántica de options/basis/recommended/freeText/required de decisions, no únicamente igualdad entre dos lecturas.
+- [ ] Ejecutar `node --import tsx --test src/composition/mcp-evidence-composition.e2e.test.ts`. **Esperado inicial contra baseline sin compose:** tool desconocida; si ya está implementada, introducir primero la assertion nueva que falle por la laguna concreta, sin fabricar un fallo de harness.
+- [ ] Añadir adquisiciones completas entrypoints→outline→callers, impact→callers e importers→outline tomando los argumentos de cada respuesta. Añadir **desde Link.to**, no desde entrypoints, la transferencia a outline y callers extranjeros usando snapshot del repo destino. El catálogo incluye roots distintos con el mismo path relativo; un destino ausente produce la limitación/fallo declarado.
+- [ ] Para el conjunto independiente ya fijado, probar las 5.040 permutaciones de siete fuentes **en la función pura** con evidencia real capturada una vez, no 5.040 procesos/indexaciones. Para transporte, ejecutar tres órdenes representativos (original, inverso, intercalado por repo) en sesiones frías y calientes, y ambos parentizados de un triple con soporte compartido.
+- [ ] Congelar SHAs completos, repo IDs, membresía/gateways, scope, budget/targets/changed y offline. Para cada sesión fría crear nuevos directorios index/cache/scratch; para caliente repetir en la misma instancia. Si cambia `inputs.origin`, comprobar y registrar la diferencia de provenance y verificar el grafo semántico compatible por separado; no borrarla de la identity ni llamarla contradicción factual.
+- [ ] Intercalar selección/page originales y una consulta ajena antes de repetir compose; pinned recipes/expect deben seguir verificándose sin handles. Con trusted live aislado, cambiar un archivo entre capturas: se obtiene snapshot-difference o falla expect, nunca unificación por head. Bajar trust o cambiar membresía invalida replay conforme a los puertos originales.
+- [ ] Añadir prueba pública de cancelación y salida tras error de consulta; verificar que el proceso responde a otra llamada después y que no permanecen recursos temporales/locks de la operación abortada.
+- [ ] Ejecutar `node --import tsx --test src/composition/mcp-evidence-composition.e2e.test.ts src/composition/mcp.e2e.test.ts src/composition/mcp-local-composition.audit.test.ts src/composition/mcp-workspace-composition.audit.test.ts`. **Esperado:** pasan los casos nuevos y regresiones; resultados acotados al fixture. No reutilizar los «13 passed» históricos como salida de este comando.
+
+**Entregable:** evidencia de invocación real y de transferencias dependientes, separada de la invariancia de acumulación y de las variaciones reales de contexto.
+
+### T7. Medir coste completo y síntesis respaldada del consumidor
+
+**Propiedad:** crear `scripts/evaluate-mcp-composition.ts`, `scripts/evaluate-mcp-composition.test.ts`, `docs/evaluations/mcp-composition/README.md`, `docs/evaluations/mcp-composition/cases.json` y un directorio de resultados por run bajo `docs/evaluations/mcp-composition/runs/<run-id>/`. Reutilizar el fixture real de T6 mediante un helper de fixture de pruebas con propiedad explícita compartida secuencial; no copiar lógica de composición en el evaluador. No añadir un cliente/model SDK ni nuevas dependencias.
+
+**Consume:** fuentes/composición actuales sobre SHAs equivalentes y rúbrica §10. El run-id lo elige el evaluador como nombre de artefacto; nunca entra en identities de evidencia.
+
+**Produce:** corpus con `requiredClaims`, `forbiddenClaims`, coordenadas/IDs válidos, incertidumbres requeridas; mediciones JSON y prompts/respuestas/adjudicaciones inspectables. El script tiene dos modos concretos: `--prepare <out-dir>` genera inputs/prompts/métricas reproducibles; `--score <run-dir> --responses <responses.jsonl> --judgments <judgments.json>` valida integridad, citas y rúbrica. No llama automáticamente a servicios ni finge una evaluación LLM al generar prompts.
+
+- [ ] Escribir tests del evaluador con respuestas controladas: cita inexistente, soporte que solo demuestra import pero claim dice call, reach que se declara breakage, unknown vacío, cruce live/snapshot y option recommended inventada deben fallar. Variantes de prosa con los mismos claims respaldados pasan; responses ausentes quedan not_evaluated. La adjudicación humana/LLM de significado no se sustituye por regex de prosa.
+- [ ] Ejecutar `node --import tsx --test scripts/evaluate-mcp-composition.test.ts`. **Esperado inicial:** evaluador ausente.
+- [ ] Implementar preparación con entradas y salidas completas, bytes por canal/discovery/request/response y costes del recorrido entero; wall time y memoria se etiquetan con caché/entorno. Definir el formato de `responses.jsonl` como `{caseId,condition,order,replicate,model,answer,claims:[{id,text,citations:[]}],uncertainties:[]}` y judgments por esos mismos IDs con verdict/motivo/soportes. Los IDs de claims pertenecen al corpus, no a regex sobre texto libre.
+- [ ] Ejecutar `node --import tsx scripts/evaluate-mcp-composition.ts --prepare /tmp/ye-ast-composition-eval`. **Esperado:** artefactos con las siete familias, baseline/candidato equivalentes y métricas verificables; síntesis marcada not_evaluated hasta tener respuestas reales. Copiar a results los artefactos de evaluación autorizados, redactando cualquier dato de entorno privado.
+- [ ] Evaluar con un consumidor autorizado usando exactamente prompts/condiciones §10.3, guardar respuestas crudas y adjudicar claims/citas/incertidumbre. No escoger un proveedor o credencial por inferencia del plan. Si la sesión no dispone de consumidor autorizado, dejar esta casilla pendiente y registrar esa limitación concreta.
+- [ ] Ejecutar `node --import tsx scripts/evaluate-mcp-composition.ts --score /tmp/ye-ast-composition-eval --responses /tmp/ye-ast-composition-eval/responses.jsonl --judgments /tmp/ye-ast-composition-eval/judgments.json`. **Esperado con datos completos:** informe por caso/condición, fallos materiales visibles y ninguna afirmación de prosa idéntica u optimalidad general. El score no puede declarar pass de síntesis con archivos vacíos o faltantes.
+- [ ] Comparar tamaño y grounding sobre solapamiento, no solapamiento, parcial y conjunto de siete familias. Ajustar solo presentación que no cambie evidencia si hay regresión; cualquier nueva semántica requiere volver a las tareas propietarias y a sus tests. No modificar la rúbrica para aprobar una conexión fabricada.
+
+**Entregable:** evidencia separada de compresión estructural, coste total y utilidad del agente; los resultados no evaluados permanecen como tales.
+
+### T8. Documentación de uso, migración y gate integrado
+
+**Propiedad:** modificar `README.md`, `docs/architecture/rfc/0005-transports.md`, `docs/mcp-schema-compaction.md` y este plan únicamente para marcar ejecución/evidencia. Añadir una nota de ampliación junto a ADR-0022 si el responsable de arquitectura lo exige en implementación; no reescribir su decisión histórica ni crear un prerequisito oculto. No tocar las ramas de documentación concurrentes sin integrar primero su contenido.
+
+**Consume:** comportamiento final y resultados observados de T1–T7.
+
+**Produce:** documentación que un consumidor puede seguir con una sesión MCP nueva, comando y contrato de compose, siete familias/ocho operaciones, defaults/límites, ejemplos, pinned frente a fresh y recuperación original real.
+
+- [ ] Documentar la adquisición de coordenadas antes de componer, ejemplos de §7, coste de repetir consultas, absence de source text y frontera de decisiones/trust. Nombrar las cuatro familias fresh sin sugerir select/page o replay de decisions.
+- [ ] Registrar incrementos de tamaño de catálogo y resultados de T7 con fuente/modelo/fecha/coverage, sin atribuir al diseño pruebas históricas del lead o de otros auditores. Si síntesis sigue not_evaluated, decirlo en el informe de entrega y no marcar esa aceptación como completada.
+- [ ] Ejecutar `npm run typecheck`, `npm run arch:check` y los comandos focalizados de T1–T7. **Esperado:** todos pasan; cualquier fallo baseline se identifica con evidencia y no se oculta como omitido.
+- [ ] Ejecutar `npm run check` como gate final de implementación, una vez integrados todos los cambios, y `git diff --check`. **Esperado:** sin errores, tests pertinentes pasan. No ejecutar esta suite solo por editar el plan ni repetirla si no hay cambios/fallos nuevos.
+- [ ] Revisar diff y API final: ningún puerto de escritura nuevo, caché de resultados, parsing de presentación, dependencia nueva, schema Fact modificado o lógica por pareja. Verificar que todos los pointers/refs de un full resuelven o están tipados explícitamente missing.
+- [ ] Revisar cobertura de requisitos con la tabla siguiente y reportar exactamente lo ejecutado/no evaluado. No declarar composición óptima, cobertura universal ni aprobación de cambios de código a partir de la evaluación.
+
+**Entregable:** cambio listo para revisión e integración conforme a la autorización de la sesión. Publicación/commit no se deducen de este plan.
+
+## 12. Cobertura de requisitos → tareas y pruebas
+
+| Requisito del encargo | Contrato | Tareas / prueba decisiva |
+|---|---|---|
+| A: identificar las partes de siete familias por tipos | §4, inventario §2 | T1 dispatcher; T2 conservación por familia, unknown y opcionales |
+| B: unir/presentar con soporte y sin repetición | §§5–7 | T3 duplicate relation/support y aliases; T5 details autosuficiente |
+| No concatenación ni pipelines por pareja | §§3,6,9 | T3 reglas finitas; T4 unión de queries cerrada; T8 revisión diff |
+| Identidad repo/snapshot/live exacta | §§5.1–5.3 | T3 SHA/live/stateId negativos; T6 mutación live/owner extranjero |
+| Imports ≠ calls; reach ≠ breakage; origins ≠ cadena | §§4.4,6 | T2 categorías; T3 relaciones negativas; T7 claims prohibidos |
+| Provenance, cuts, scopes/budgets y desconocidos fieles | §§4.2,5.2,7 | T2 reconstrucción; T3 contextos; T5 textos y counts por owner |
+| Orden, asociatividad, idempotencia con evidencia fija | §5.4 | T3 permutaciones/parentizados/ambigüedad nueva; T6 7! puro y órdenes reales acotados |
+| Orden de adquisición distinto del merge | §§3.1,5.4,10.2 | T6 triple dependiente completo y transferencia Link.to |
+| Entrypoints+outline, impact+callers, importers separado | §§6,7.3 | T3 tres ejemplos semánticos; T6 hechos reales |
+| Sin snippet inventado | §§2,4.4 | T2 solo OutlineValue; T5 guía; T8 búsqueda/revisión de superficie |
+| Invocación concreta y autoridad sin estado final | §3 | T4 llamada repetida ejecuta puertos; T6 sesión fría/stdio |
+| Límites, validación, faults y cancelación | §§3.2–3.4 | T4 tamaños/multibyte/queries/expect/deadline/cancel; T6 proceso recuperable |
+| Modes/full/select/page/replay compatibles | §§7.1–7.4,9.2 | T1 regresión originales; T4 pinned/fresh; T5 schemas; T6 intercalación |
+| Trust/redacción/frescura/membresía | §§5.2,8 | T2 query-context; T3 compatibilidad no transitiva; T4 colisión redactada; T6 declaración actual |
+| Guía compacta aproximada, runtime autoritativo | §§2,9.2 | T1/T5 schemas reales y combos que guía acepta/runtime rechaza |
+| Optimización medible sin promesa universal | §10 | T5 overlap local; T7 coste completo, no overlap y limitaciones |
+| Síntesis LLM con grounding/citas/incertidumbre | §10.3 | T7 respuestas reales y adjudicación; no_evaluated si faltan |
+| Plan autosuficiente y propietarios exactos | §§9,11 | T1–T8 interfaces/checks; auto-revisión §14 |
+
+## 13. Riesgos y decisiones que quedan cerradas
+
+| Riesgo o coste | Respuesta de este plan |
+|---|---|
+| Coordenadas públicas insuficientes para identidad perfecta | Guards conservadores y ambigüedad explícita; no añadir GraphNodeId transversal ni lecturas implícitas. Si fixtures reales muestran pérdida de utilidad, será una ampliación de contrato separada, no un fallback heurístico |
+| Volver a analizar puede costar más que concatenar datos ya disponibles | Se mide coste completo; operación opt-in, herramientas individuales conservadas. No se cambia ADR-0020/0021 ni se retienen resultados para ocultar ese coste |
+| Cuerpos grandes, hasta 16 consultas, sin límite de salida | Una fuente original a la vez, normal form acumulada y agrupación exacta; medir memoria/tamaño. No vender esta versión como paginador general ni reducir scope silenciosamente |
+| Decisions depende de datos externos y no admite replay | Se compone su lectura actual, se conserva contexto y se verifica por digest al repetir; estrategia fresh explícita. Añadir su replay cambiaría opciones/resolución y se ha descartado para esta versión |
+| Input móvil o mutación entre operaciones | Snapshots/particiones visibles, expect falla, no atomicidad de batch. Consumidor puede fijar SHAs y usar recipes disponibles |
+| El shared checkout cambia mientras se implementa | Integración por símbolos y tests de puertos, baseline/source manifest por ejecución. Ningún diff ajeno se revierte por asumir los hashes de este documento |
+| Transformación tipada descarta un campo nuevo del dominio | Fixtures de conservación con opcionales significativos, exhaustividad de unions y revisión de adapters al cambiar schema/producer |
+| El LLM interpreta mal relaciones o incertidumbre | Evaluación de claims/citas prohibidos y no solo bytes; formato determinista y términos acotados; reportar síntesis no evaluada cuando corresponda |
+
+No quedan decisiones de API o de arquitectura necesarias marcadas TBD: se eligen nueva operación acotada, coordinación servidor/consumidor, unión sin store, siete adaptadores, reglas finitas, salida normalizada, estrategias pinned/fresh y ausencia de paginación de composición. Lo pendiente es **evidencia de implementación y evaluación**, no una preferencia rutinaria del usuario. El acceso futuro a un consumidor LLM es un recurso de evaluación: su ausencia no bloquea construir los contratos, pero sí afirmar utilidad de síntesis validada.
+
+## 14. Auto-revisión y evidencia de este encargo de planificación
+
+- Se revisó cobertura de los requisitos contra T1–T8, preservando explícitamente las dos partes A/B y la integración pública.
+- Se revisaron identidades distintas: SourceId y mcp-r1 no se intercambian; mcp-c1 verifica el conjunto; declaration anchor no es call site; module origins y symbol seeds usan tablas diferentes.
+- Se revisó asociatividad: se unen observaciones antes de resolver aliases; incompatibilidad no se propaga transitivamente mediante una tercera fuente.
+- Se revisó el wire: receipt y full tienen discriminantes nuevos; source tables/requests no requieren estado oculto; los originales mantienen sus outputs; unknown no tiene value inventado.
+- Se revisó la proporcionalidad: ninguna dependencia nueva, pipeline language, almacén, source reader, replay decisions o puerto universal. Los nuevos módulos tienen responsabilidades concretas del transporte.
+
+Durante este encargo solo se crea/edita este documento. La verificación real del plan consiste en lecturas de fuente/contratos, comprobación de frescura de `createMcpServer`, revisión de tipos/ownership y `git diff --check` sobre el documento. Las suites T1–T8 son instrucciones futuras; no se han ejecutado para afirmar que la funcionalidad propuesta ya existe o pasa pruebas.
+
+Verificación documental observada el 2026-11-05:
+
+- `git diff --check -- docs/superpowers/plans/2026-11-05-transversal-mcp-evidence-composition.md`: exit 0, sin avisos. También pasó la comprobación `git diff --no-index --check /dev/null <documento>` cuando se verificó como archivo nuevo.
+- Un script Python de lectura comprobó ocho links locales existentes, fences Markdown equilibrados, T1–T8 en orden, 60 pasos pendientes, ausencia de marcadores de conflicto y presencia de las firmas/tipos normativos revisados. No es un typecheck de implementación.
+- `git status --short` al cerrar la revisión mostraba únicamente este documento modificado respecto del HEAD compartido; este diseñador no ejecutó commit, push, instalación ni cambios de producción/tests.
+- No se ejecutaron `npm test`, `npm run check`, typecheck de código ni evaluación LLM. Engram seguía sin herramientas disponibles; no se ha guardado memoria ni un resumen de sesión mediante ese servicio.
+
+## 15. Adenda 2026-11-05: corrección de la presentación compacta (receipt y texto)
+
+Esta adenda registra una decisión de presentación tomada tras medir el criterio de §10.1. No cambia §§4–7.1 del grafo, la normalización, la identidad, `CompositionResult` ni `ComposeFull`. Full sigue siendo la fuente exhaustiva y autorizada.
+
+**Síntoma.** En la ejecución `2026-11-05-prepare-1`, details (texto + structured) superaba al baseline en dos de los tres casos de solapamiento deliberado: handler-outline 4762 frente a 1647 bytes, y seven-families 17259 frente a 13033 bytes.
+
+**Causa raíz.** El receipt y el texto compacto mezclaban metadatos de auditoría con la entrega al consumidor:
+
+- el receipt copiaba descriptors con ids de 64 hex, vectores, rootRead y los arrays exhaustivos de coverage, que solo sirven para navegar un grafo que summary/details no entregan;
+- el texto repetía manuales invariantes (Terms, instrucciones de verificación y navegación, definiciones de reglas en cada línea) y el contexto de procedencia completo de cada grupo de reads;
+- además, listaba la misma observación en dos secciones, porque la cobertura de una parte dependía del orden de renderizado y no de su tipo.
+
+**Decisión: un hecho, un canal, una vez.**
+
+1. **ComposeReceipt.** Contiene `kind`, `compositionSchema`, `mode`, `verification`, `requests` completos y `sources[]` en orden de `requestIndex`, cada uno como `{family, branch?, requestIndex, analysis}`. `coverage` se reduce a `{reads, unknowns, limits, issues}`, donde los tres últimos son conteos. Se eliminan `counts`, los ids de fuente, `rootRead`, `snapshotVector` y los arrays de coverage, que siguen íntegros en full con las mismas queries.
+2. **Texto compacto.**
+   - Se suprimen los manuales invariantes.
+   - Las advertencias de cada tipo de relación o regla de conexión se dicen una vez, en el primer objeto de ese tipo; las reglas que solo nombran a sus miembros no llevan texto.
+   - Trust y scope declarado se imprimen una vez; producer, schema y typeRoot solo cuando difieren, agrupados por valor exacto. Engines y el origen del índice quedan en full; una incompatibilidad sigue apareciendo como issue.
+   - La estrategia de cada request queda en el receipt; el texto solo declara la indisponibilidad.
+   - Un archivo outline y sus declaraciones forman un único bloque de sujeto, reclamado por tipo antes de renderizar.
+   - Lecturas con el mismo análisis o la misma lista de evidencia se agrupan por igualdad exacta.
+   - Las roots se imprimen una por repositorio cuando todas las fuentes coinciden.
+   - Full solo da conteos y punteros por tabla.
+3. **Lo que no cambia.** Cada corte, unknown, issue, opción de decisión, snapshot y coordenada de evidencia se sigue imprimiendo. No hay top-N, ni inferencia nueva, ni parsing de prosa, ni reglas por caso o familia.
+
+**Resultado medido** en una ejecución nueva del evaluador sobre el código actual (details, texto/structured):
+
+| Caso | Baseline | Compuesto |
+|---|---|---|
+| handler-outline | 1136/511 = 1647 | 931/926 = 1857 |
+| change-duplicate-dependence | 7463/1455 = 8918 | 3170/1684 = 4854 |
+| seven-families | 10688/2345 = 13033 | 5471/3514 = 8985 |
+
+**Brecha restante: arquitectónica, no de presentación.** En handler-outline, `verification` más los `requests` completos ya ocupan 673 bytes (artefacto redactado), frente a 511 del canal structured completo del baseline. Las líneas exactamente duplicadas del baseline suman solo 208 bytes. Por tanto, aun con un receipt mínimo, el contrato de repetición por respuesta (receta fresh de outline e identidad mcp-c1) supera la redundancia recuperable de dos respuestas pequeñas.
+
+El ajuste mínimo de API que lo acercaría sería quitar `sources` y `coverage` del receipt, puesto que el texto ya los declara. Su efecto medido es 1540 frente a 1519 bytes redactados: sigue sin cumplirse. Decidirlo corresponde al lead. Full sigue siendo 2,4–4,3 veces mayor que el full original y no se presenta como optimizado.
+
+
+## 16. Integración final: una sola ubicación por responsabilidad
+
+Esta sección prevalece sobre la forma anterior de receipt de §§7/15. La raíz de la sobrecarga era la mezcla de la representación auditable con la entrega al agente: se repetían en dos canales las fuentes, estados, cobertura y navegación. El contrato definitivo de summary/details es `{kind:"composition-receipt",compositionSchema:1,mode,verification,requests}`. El texto conserva fuentes, snapshots, todos los hallazgos y límites materiales. Full conserva sin pérdida el grafo, provenance, coverage, counts y delivery. S# corresponde a requests[#-1]. No se reenvían hechos ni se almacenan resultados: las recetas seguras permanecen completas.
+
+La navegación disponible se enseña una vez en instructions y está tipada en requests.strategy. Se eliminan de cada respuesta las instrucciones redundantes y la frase vacía «Omitted: no observation»; summary conserva los conteos de omisiones reales. Esta regla depende de las responsabilidades de cada canal, nunca de nombres de casos o combinaciones. Las tres aceptaciones de solapamiento quedan activas sin TODO y verifican ambos canales más la conservación de hechos/límites. El fallo de handler-outline no necesitaba handles: todavía había duplicación en el contrato de entrega. Full permanece exhaustivo y puede ser mayor que las fuentes originales; no se anuncia como formato de mínima longitud.
+
+La identidad de observación y la procedencia se mantienen separadas del propósito de una conexión. Corroborar la misma importación positiva o el mismo soporte exacto no deriva una nueva dependencia: conserva productores originales distintos y exige igualdad de nombre del productor, schema, trust, engines comunes y snapshots. Las conexiones que derivan significado conservan igualdad estricta de versión. No se analizan sufijos de versión. El constructor de Part tiene además un guard de tipos que prohíbe id/supports en cualquier payload futuro, evitando toda la clase de colisiones entre datos de dominio y metadatos.
+
+Verificación integrada y medidas finales: consultar el informe de entrega y docs/evaluations/mcp-composition/runs/2026-11-05-delivery-final; no atribuir al código final las medidas de los prototipos anteriores.
+
+
+## 17. Separar presencia de colección y cantidad de observaciones
+
+La prueba de consumidor diagnosticó que el literal changedEntrypoints=present podía interpretarse como cambios existentes aunque el array original fuera vacío. La causa era mezclar forma de serialización con contenido del dominio. La solución común es RecordedCollectionState = {state:absent}|{state:present,count:number}, aplicado tanto al contexto de impacto como a las categorías de importers. Count es longitud de observaciones registradas, preservando duplicados; no es cardinalidad de dependencias únicas. El renderer muestra cero o «not provided», nunca infiere cardinalidad a partir de presencia. La reconstrucción conserva absent, vacío y no vacío. Los fixtures de regresión de presentación usan ahora el run semantic-final, que tiene el contrato actual; los runs anteriores y sus consumidores se conservan como evidencia diagnóstica.
+
+El evaluador usa posiciones JSON Pointer cuando el consumidor repite IDs entre claims/uncertainties, en vez de sobrescribir afirmaciones. Toda cita debe resolver; una proposición necesita soporte del tipo pertinente y puede añadir contexto válido. La relevancia semántica sigue requiriendo adjudicación, y no se reparan respuestas ni referencias inexistentes. El piloto se acota y se informa por run; no sustituye el corpus de 64 respuestas ni demuestra generalización.
