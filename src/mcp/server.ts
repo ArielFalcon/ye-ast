@@ -494,11 +494,12 @@ export function createMcpServer(deps: McpDeps): McpServer {
   }
 
   const annotations = { readOnlyHint: true, openWorldHint: false };
+  const REPLAY_GUIDE = { replay: "Copy verbatim from the recovery recipe of a previous workspace answer; requires workspace." };
 
   server.registerTool("ye_ast_compose", {
     title: "Compose evidence from related queries",
     description: "Run 1..16 queries of the other ye_ast tools in one call when they share entities, e.g. callers of a symbol plus the entrypoints of its repository. Combines findings, keeping each source's coverage, trust and snapshot checks. Each queries[].arguments takes the same analysis arguments as the named tool (no mode, select or page); queries rerun in a fixed order and nothing is stored. Generic dependencies do not prove breakage. Request limit: 1 MiB of canonical JSON.",
-    inputSchema: compactInput(COMPOSE_INPUT, { undescribedIn: "queries" }),
+    inputSchema: compactInput(COMPOSE_INPUT, { arguments: "The arguments of the tool named in name, without mode, select or page." }),
     annotations,
   }, async (input, ctx) => {
     try {
@@ -529,7 +530,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
     {
       title: "Impact of a change",
       description: "Use to review a change: traces changed declarations from merge-base(base, head) to head, their incoming dependents, reached entrypoints and entrypoints added, removed or altered. base is required; head defaults to HEAD; live reads trusted uncommitted edits. workspace adds incoming and outgoing cross-repository links. For an unchanged symbol use ye_ast_callers.",
-      inputSchema: compactInput(TOOL_INPUTS.impact),
+      inputSchema: compactInput(TOOL_INPUTS.impact, REPLAY_GUIDE),
       annotations,
     },
     (args: ToolArguments<"impact">, ctx) =>
@@ -541,7 +542,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
     {
       title: "Callers of symbols or line ranges",
       description: "Use before changing, renaming or deleting an existing declaration: traces its incoming dependents and the entrypoints reaching it, with dependency locations. Target a name (matches the final segment, possibly several declarations) or an inclusive line range; an unknown name is an error. workspace adds incoming cross-repository call sites. For a diff use ye_ast_impact.",
-      inputSchema: compactInput(TOOL_INPUTS.callers),
+      inputSchema: compactInput(TOOL_INPUTS.callers, REPLAY_GUIDE),
       annotations,
     },
     (args: ToolArguments<"callers">, ctx) =>

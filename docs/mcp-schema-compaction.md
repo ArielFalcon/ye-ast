@@ -156,3 +156,22 @@ Internal shorthand in the published guidance was replaced with plain definitions
 the walk), manifests kept readable under include, per-repository section and file-read limits, base-side line numbers
 from the merge-base commit, and head/stateId as the identity of a captured working tree. The catalogue measures 43,152
 bytes.
+
+
+### Opaque composition arguments and replay (2026-11-06)
+
+A bounded A/B run (`ye-ast_test` run `20261105T221452Z-slim-catalogue-ab-347195`; 12 explicit-use sessions, one
+repository, one model, exploratory) compared the 43,152-byte catalogue with a slim variant. All sessions answered
+correctly. Agents copied `replay` verbatim from recovery recipes with or without its published shape, and composed
+queries at least as well with generic `queries[].arguments`. A loose `select` cost extra calls in both sessions that
+needed it, so `select` keeps its full published shape.
+
+`compactInput` therefore publishes `ye_ast_compose` `queries[].arguments` and the `replay` of `ye_ast_callers` and
+`ye_ast_impact` as described objects; the server validates both against the original schemas, so a malformed value
+is still refused before any query runs. The published guide accepts any object there; tests assert the server
+refusal instead. The superseded composition description stripping is removed.
+
+Two `select` aids came out of the same run: an invalid `select` now names every selection shape its tool accepts
+(previously `select: Invalid input`), and full answers with cuts print a copyable `cut-places` lookup example when
+selection is available. `scripts/measure-mcp-catalog.ts` records 32,958 catalogue bytes. Codex reported unchanged
+input tokens between catalogues in that run, so the effect on model context depends on the client.

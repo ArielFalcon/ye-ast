@@ -57,9 +57,12 @@ test("catalogue advertises useful guides within budget", async () => {
     assert.equal(compose.inputSchema.type, "object");
     assert.ok(compose.inputSchema.properties?.queries);
     assert.equal(createHash("sha256").update(JSON.stringify(canonicalConstraints(compose.inputSchema))).digest("hex"), COMPOSE_CONSTRAINTS, "ye_ast_compose: argument contract");
-    const { description: queriesGuide, ...queryShapes } = compose.inputSchema.properties.queries as Record<string, unknown>;
-    assert.ok(queriesGuide);
-    assert.doesNotMatch(JSON.stringify(queryShapes), /"description":"/);
+    const variants = (compose.inputSchema.properties.queries as { items: { oneOf: { properties: Record<string, { const?: string; type?: string; description?: string }> }[] } }).items.oneOf;
+    assert.deepEqual(variants.map((variant) => variant.properties["name"]?.const), Object.keys(INPUT_CONSTRAINTS));
+    for (const variant of variants) {
+      assert.equal(variant.properties["arguments"]?.type, "object");
+      assert.match(variant.properties["arguments"]?.description ?? "", /tool named in name/);
+    }
     new AjvJsonSchemaValidator().getValidator(compose.inputSchema);
     for (const tool of originals) {
       assert.equal(tool.inputSchema.type, "object");
@@ -92,14 +95,14 @@ test("input guide preserves root fields and delegates refinements", async () => 
 
 const INPUT_CONSTRAINTS: Record<string, string> = {
   ye_ast_entrypoints: "03757c2aa7f4941dc35cfcaefdae1542276de4b33c2a7d0feea6523de2101bb1",
-  ye_ast_impact: "03a47f4294d6ced7236d78981e41031ece9a0e8b1ee709076b1933f06f73e372",
-  ye_ast_callers: "86de12422509f4746dbb220ac6fe12b4ad95e5a1dcb8ee3e5f322fd725eac66d",
+  ye_ast_impact: "f62a8a60a9877663f22d720fc0d41694adb6db660bb5003a7e7b21145e253d20",
+  ye_ast_callers: "894a7aa967a3fb5502c54c57884941655d33886c7dab3831bb54c3316d6f60cd",
   ye_ast_importers: "d99d6f4643edcc0cfd0114018fe1faa2a7a2df6e2930e2c767acd9960ae39aca",
   ye_ast_outline: "d99d6f4643edcc0cfd0114018fe1faa2a7a2df6e2930e2c767acd9960ae39aca",
   ye_ast_workspace: "be2953f74d297b7d286e974b18b488c4137a6f1f9c5c94385701b1fdd2893244",
   ye_ast_decisions: "be2953f74d297b7d286e974b18b488c4137a6f1f9c5c94385701b1fdd2893244",
 };
-const COMPOSE_CONSTRAINTS = "b8aef41da3e104b891ae30334ba772f7d25e3d221ba3f8804670ee7cea0274c9";
+const COMPOSE_CONSTRAINTS = "a92ed5067d8ac46ebc38e979293f06784a52a221126b791d450b8293ecc3bb71";
 function canonicalConstraints(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(canonicalConstraints);
   if (value === null || typeof value !== "object") return value;
