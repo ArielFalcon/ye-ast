@@ -18,7 +18,7 @@ S7: Corpus stdio acceptance and resource comparison.
 | Shared summary propagation | Spring adapter port | fix: propagate Java client summaries through source calls | implemented; subscription helpers pending |
 | Object and configuration values | UrlText and adapter fixtures | fix: evaluate source object and keyed configuration values | implemented |
 | Standard client vocabulary | HTTP adapter fixture | feat: read standard OkHttp requests | implemented |
-| Integration and measurements | npm run check and real stdio MCP | docs: record Java value-flow validation | pending |
+| Integration and measurements | npm run check and real stdio MCP | docs: record Java value-flow validation | measured; NATS acceptance incomplete |
 
 ## Log
 
@@ -29,3 +29,8 @@ S7: Corpus stdio acceptance and resource comparison.
 - Configuration defaults distinguish absent from undecided. Recursive placeholders track active keys instead of a depth threshold.
 - Public fixtures pass for source event returns and template-method subscription overrides. Binary-only facade subject reporting and helper subscription propagation remain acceptance gaps; no vocabulary entry was added for an application library.
 - Twelve type-correct mutations were rejected by their targeted public-seam tests. Full validation and external corpus measurements are recorded in the delivery report.
+
+- Delivery gate: `npm run check` passed 2,383 tests with no failures; focused Spring verification passed 244 tests. Twelve type-correct mutants were killed. Repeated source inventories are byte-identical.
+- Source corpus HTTP observations changed from 0 complete / 9 unresolved to 10 complete / 1 unresolved; dynamic override remains unknown. Real workspace MCP HTTP links changed from 10 to 14 and unresolved call markers from 21 to 13. NATS facade cuts and decided-subject counts remain unchanged.
+- Observed individual cold MCP tool time: 40.191 s reference, 14.408 s change. Wrapper-reported peak RSS: 1,096,744,960 bytes reference, 1,049,853,952 bytes change. Shared-host single-run measurements do not establish a performance guarantee.
+- Status remains partial: binary-facade stated subjects and helper subscriptions still need implementation and acceptance. Fact schema and MCP response summaries are unchanged.
