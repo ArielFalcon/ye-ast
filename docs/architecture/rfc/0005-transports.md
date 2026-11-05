@@ -190,8 +190,8 @@ selects a canonical launch root and an external catalog of existing worktree roo
 ID; omission selects launch. Repeated identical ID/root declarations coalesce, while aliases and collisions fail at
 startup. A declaration for the launch root may choose its ID. Availability does not grant trust or workspace membership;
 only launch is warmed. Workspace reads retain each repository's own trust and snapshot. A foreign follow-up uses its
-owner ID and recorded snapshot, or requires updated registration when absent. Selective retrieval and pagination remain
-future designs in [ADR-0022](../adr/0022-typed-query-replay-and-selective-evidence.md).
+owner ID and recorded snapshot, or requires updated registration when absent. Selective evidence follows
+[ADR-0022](../adr/0022-typed-query-replay-and-selective-evidence.md).
 
 | Tool | Question | Main arguments besides `mode` |
 |---|---|---|
@@ -212,7 +212,7 @@ Strict input schemas reject those former controls, including `full: false`; no c
 Older RFC-0014 and RFC-0018 descriptions of `detail: "full"` predate this migration; the contract in this section
 supersedes those references.
 
-Summary/details structured content is a strict receipt with `mode`, `status`, `snapshot` and `reason` exactly for
+Unselected summary/details structured content is a strict receipt with `mode`, `status`, `snapshot` and `reason` exactly for
 unknown status. A SHA snapshot carries `repo`, `kind`, `sha`; a live snapshot carries `repo`, `kind`, `head`,
 `stateId`. Full carries the fact and `mode`, plus applicable `repositoryRoots`, `freshness`, `resolution`, `live` and `workspaceLive`
 response siblings. Workspace notices also appear in `_meta["ye-ast/workspace-live"]` in every mode, naming the repository and captured snapshot, with stale paths or a typed unavailable cause. A stale notice is also in `_meta["ye-ast/live"]`. Known full facts require a value; partial facts
@@ -233,8 +233,37 @@ checked again; a changed context produces a redacted `result-changed` error at `
 fact. Explicit external member paths may occur in recipes; internal mirror roots do not. Identity excludes machine
 roots and presentation sidecars.
 
-Recovery can instead be unavailable due to `deadline`, `unresolved-context`, or `redacted-context`. Selection,
-pagination and expectations are not implemented.
+Recovery can instead be unavailable due to `deadline`, `unresolved-context`, or `redacted-context`.
+
+Entrypoints accepts `entrypoint-evidence` by finding index and `cut-places` for the fact or entrypoints section.
+Local callers accepts handler origins and fact cuts; local impact also accepts module origins. Workspace callers and
+impact accept section handler origins, fact/section/indexed-read cuts and link reach evidence by ID; only impact accepts
+section module origins. Other tools reject these controls. Handler selection names the exact owner and path/symbol/line;
+module selection names owner, file and base/head side. Indexes are zero-based positions in the public source.
+
+A lookup example merges the returned recovery recipe arguments with:
+
+```json
+{
+  "select": { "kind": "handler-origins", "owner": { "kind": "local" },
+    "handler": { "path": "src/controller.ts", "symbol": "Controller.run", "line": 12 } },
+  "page": { "limit": 1 },
+  "expect": "<recovery.resultIdentity>",
+  "mode": "full"
+}
+```
+
+`select` and `page` are paired and the limit is an explicit positive safe integer; no default size or byte cap is
+imposed. Continue with `page.cursor` from `nextCursor`, the same selection and limit, and the original recipe.
+`expect` may assert an unselected query; with a cursor it must match the cursor's identity. Every page reexecutes the
+query and verifies source identity before delivering selected data. A changed source returns a typed failure. Live
+replay captures current state; neither old live captures nor final answers are retained.
+
+Selected full returns a projection with context and records; summary/details return projection receipts and render the
+page in text. Source analysis and owner-grouped limits remain separate from page availability. An available zero total
+is distinct from an unavailable source or owner, which retains its actual reason and evidence. These controls do not
+change analysis scope or traversal bounds. The existing public redaction boundary applies to evidence and recipes;
+internal source sidecars are not exposed.
 
 A client may expose both text and `structuredContent` to a model; the server does not guarantee channel hiding or
 client-side filtering. Full structured delivery need not be duplicated in text. These are wire contracts, not measured

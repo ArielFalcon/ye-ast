@@ -5,7 +5,7 @@ import type { EntrypointMapFact } from "../core/domain/map/entrypoint-map.ts";
 import type { ImpactValue } from "../core/domain/impact/impact-fact.ts";
 import type { ImportersValue } from "../core/domain/impact/importers-fact.ts";
 import type { Entrypoint } from "../core/domain/entrypoints/entrypoint.ts";
-import { SCHEMA, type Cut, type Fact, type FactBase, type PartialFact } from "../core/domain/shared/fact.ts";
+import { SCHEMA, type Cut, type Fact, type FactBase, type PartialFact, type Finding } from "../core/domain/shared/fact.ts";
 import type { Result } from "../core/domain/shared/result.ts";
 import type { EntrypointQueries, MapRequest } from "../core/ports/entrypoint-queries.port.ts";
 import type { ImpactCallersRequest, ImpactFault, ImpactImportersRequest, ImpactOfChangeRequest, ImpactQueries, OfChangeFault } from "../core/ports/impact-queries.port.ts";
@@ -24,6 +24,7 @@ import type { FactRead, WorkspaceRefresh } from "../core/ports/workspace-queries
 import { createMcpServer, CUT_GUIDANCE, ENTRYPOINTS_OUTPUT, IMPACT_OUTPUT, CALLERS_OUTPUT, IMPORTERS_OUTPUT, OUTLINE_OUTPUT, WORKSPACE_OUTPUT, DECISIONS_OUTPUT } from "./server.ts";
 import { openSession, type Session } from "./test-session.ts";
 import { createHash } from "node:crypto";
+import { encodeCursor, selectionDigest } from "./evidence-cursor.ts";
 
 const SECRET = "hunter2-secret";
 const REPOSITORY = { path: "/work/shop", repoId: "shop" };
@@ -271,6 +272,25 @@ async function setup(answers: Partial<Answers> = {}, refresh?: WorkspaceRefresh,
 }
 
 const textOf = (result: { content: { text: string }[] }): string => result.content.map((block) => block.text).join("\n");
+
+test("entrypoint evidence selection returns the selected finding's evidence through MCP", async () => {
+  const { session, calls } = await setup();
+  try {
+    const result = await session.callTool("ye_ast_entrypoints", {
+      mode: "full",
+      select: { kind: "entrypoint-evidence", findingIndex: 0 },
+      page: { limit: 1 },
+    });
+    assert.equal(result.isError, undefined);
+    const projection = result.structuredContent as { kind: string; items: unknown[]; page: { total: number } };
+    assert.equal(projection.kind, "projection");
+    assert.deepEqual(projection.items, [{ evidenceIndex: 0, evidence: { path: "src/OrderController.java", line: 17 } }]);
+    assert.equal(projection.page.total, 1);
+    assert.equal(calls.map.length, 1);
+  } finally {
+    await session.close();
+  }
+});
 
 test("entrypoints exposes a pinned recovery recipe across response modes", async () => {
   const { session } = await setup();
@@ -1471,7 +1491,7 @@ test("a one-line declaration prints one line and a handler prints its span", asy
   const { session } = await setup({ ofChange: async () => ({ ok: true, value: fact }) });
   const text = textOf(await session.callTool("ye_ast_impact", { base: "main" }));
   assert.match(text, /^ {4}3 A\.seed$/m);
-  assert.match(text, /-> src\/OrderController\.java:17-31 OrderController\.one \(depth 1\)$/m);
+  assert.match(text, /-> src\/OrderController\.java:17-31 OrderController\.one \(depth 1\); lookup example:/m);
   assert.doesNotMatch(text, /3-3/);
   await session.close();
 });
@@ -1566,7 +1586,7 @@ test("reached entrypoints print their confidence only when it is below 1", async
   } as Partial<Fact<ImpactValue>>);
   const { session } = await setup({ ofChange: async () => ({ ok: true, value: entrypoints }) });
   const text = textOf(await session.callTool("ye_ast_impact", { base: "main" }));
-  assert.match(text, /GET \/sure -> src\/OrderController\.java:17 OrderController\.one \(depth 1\)\n/);
+  assert.match(text, /GET \/sure -> src\/OrderController\.java:17 OrderController\.one \(depth 1\); lookup example:/);
   assert.match(text, /GET \/maybe -> src\/OrderController\.java:17 OrderController\.one \(depth 2, confidence 0\.4\)/);
   await session.close();
 });
@@ -1584,7 +1604,7 @@ test("entrypoints closes with the cut list of the map and of its section", async
   const lines = text.split("\n");
   assert.equal(lines[0], "status: partial (cuts: 1 section: entrypoints)");
   assert.match(text, / {2}status: partial \(cuts: 1 no-extractor\)/);
-  assert.match(text, /\ncuts:\n {2}no-extractor \(1\): src\/scripts\/build\.js\n {2}section \(1\): entrypoints\nrecovery: [^\n]+\nrepository root: shop -> \/work\/shop$/);
+  assert.match(text, /\ncuts:\n {2}no-extractor \(1\): src\/scripts\/build\.js\n {2}section \(1\): entrypoints\n(?: {2}lookup example: [^\n]+\n)+recovery: [^\n]+\nrepository root: shop -> \/work\/shop$/);
   await session.close();
 });
 
@@ -1778,7 +1798,7 @@ test("arguments that break the schema are refused before any query runs", async 
   await session.close();
 });
 
-test("cancelling a call aborts the signal the query received", async () => {
+test("cancelling a selected call aborts the signal the query received", async () => {
   let aborted: (signal: AbortSignal) => void = () => {};
   let running: (signal: AbortSignal) => void = () => {};
   const seenAbort = new Promise<AbortSignal>((resolve) => (aborted = resolve));
@@ -1794,7 +1814,7 @@ test("cancelling a call aborts the signal the query received", async () => {
         });
       }),
   });
-  const call = session.startCall("ye_ast_entrypoints", {});
+  const call = session.startCall("ye_ast_entrypoints", { select: { kind: "entrypoint-evidence", findingIndex: 0 }, page: { limit: 1 } });
   assert.equal((await queryRunning).aborted, false);
   await session.cancel(call.id);
   assert.equal((await seenAbort).aborted, true);
@@ -3465,5 +3485,252 @@ test("mixed workspace targets the selected declared foreign repository", async (
     assert.equal(calls.workspaceCallers[0]?.repo.id, "team/foreign");
     assert.equal(calls.workspaceCallers[0]?.repo.path, "/work/foreign");
     assert.equal(calls.workspaceCallers[0]?.repo.live, true);
+  } finally { await session.close(); }
+});
+
+test("selected evidence pages replay the source and reject changed identities before delivery", async () => {
+  let changed = false;
+  const original = mapFact();
+  if (original.status !== "complete" || original.value.entrypoints.status !== "complete") throw new Error("fixture");
+  const finding = original.value.entrypoints.value[0]!;
+  const fact = { ...original, value: { ...original.value, entrypoints: { ...original.value.entrypoints, value: [{ ...finding, evidence: [{path:"a",line:1},{path:"b",line:2},{path:"c",line:3}] }] } } };
+  const {session, calls} = await setup({map: async () => ({ok:true,value: changed ? {...fact, producer:{...fact.producer,version:"changed"}} : fact})});
+  try {
+    const tool = (await session.listTools()).find((t) => t.name === "ye_ast_entrypoints")!;
+    const validate = new AjvJsonSchemaValidator().getValidator(tool.outputSchema!);
+    const select = {kind:"entrypoint-evidence",findingIndex:0};
+    const request = {mode:"full",select,page:{limit:1}};
+    const first = await session.callTool(tool.name, request);
+    assert.equal(first.isError, undefined);
+    assert.equal(validate(first.structuredContent).valid, true);
+    const a = first.structuredContent as {items: unknown[]; page:{nextCursor:string}; recovery:{resultIdentity:string}};
+    const secondArgs = {...request,page:{limit:1,cursor:a.page.nextCursor}};
+    const second = await session.callTool(tool.name, secondArgs);
+    const repeated = await session.callTool(tool.name, secondArgs);
+    assert.deepEqual(second.structuredContent, repeated.structuredContent);
+    const b = second.structuredContent as {items: unknown[]; page:{nextCursor:string}};
+    const third = await session.callTool(tool.name,{...request,page:{limit:1,cursor:b.page.nextCursor}});
+    const c = third.structuredContent as {items: unknown[]; page:{nextCursor?:string}};
+    assert.deepEqual([...a.items,...b.items,...c.items], [
+      {evidenceIndex:0,evidence:{path:"a",line:1}}, {evidenceIndex:1,evidence:{path:"b",line:2}}, {evidenceIndex:2,evidence:{path:"c",line:3}},
+    ]);
+    assert.equal(c.page.nextCursor, undefined);
+    assert.equal(calls.map.length, 4);
+    for (const call of calls.map) {
+      assert.equal("select" in call || "page" in call || "expect" in call, false);
+    }
+    for (const args of [
+      { ...request, page: { limit: 2, cursor: a.page.nextCursor } },
+      { ...secondArgs, expect: `mcp-r1:${"f".repeat(64)}` },
+    ]) {
+      const invalid = await session.callTool(tool.name, args);
+      assert.equal(invalid.isError, true);
+      assert.equal((invalid._meta?.["ye-ast/fault"] as {kind:string}).kind, "invalid-cursor");
+    }
+    assert.equal(calls.map.length, 4);
+    const verified = await session.callTool(tool.name,{expect:a.recovery.resultIdentity});
+    assert.equal(verified.isError, undefined);
+    assert.equal((verified.structuredContent as {mode:string}).mode, "summary");
+    changed = true;
+    for (const args of [secondArgs,{expect:a.recovery.resultIdentity}]) {
+      const result = await session.callTool(tool.name,args);
+      assert.equal(result.isError,true);
+      assert.equal(result.structuredContent,undefined);
+      const fault = result._meta?.["ye-ast/fault"] as {kind:string;stage:string;expected:string;actual:string};
+      assert.equal(fault.kind,"result-changed");
+      assert.equal(fault.stage,"source-identity");
+      assert.equal(fault.expected,a.recovery.resultIdentity);
+      assert.notEqual(fault.actual,fault.expected);
+    }
+    assert.equal(calls.map.length,7);
+  } finally { await session.close(); }
+});
+
+test("selected SDK responses bind all categories and modes to actual public schemas", async () => {
+  const replay = {version:1 as const,declaration:`ws-r1:${"d".repeat(64)}`,snapshots:[{repo:"shop",kind:"sha" as const,sha:"a".repeat(40)}]};
+  const values: ImpactValue = {...IMPACT,modules:{origins:[{file:"old",change:"modified"}],modules:[{file:"old",snapshot:"base",depth:0,origins:[0]}],cost:{expansionsUsed:0}}};
+  const local = impactFact({status:"partial",cuts:[{kind:"depth",at:["root","a","b"]}],value:values,inputs:{...base().inputs,declaredConfig:{targets:["src/A.java:A.f"]}}});
+  const ws = workspaceImpactFact();
+  if (ws.status !== "complete") throw new Error("fixture");
+  const composite: Fact<WorkspaceImpactValue> = {...ws,inputs:{...base().inputs,declaredConfig:{targets:["src/A.java:A.f"]}},value:{...ws.value,sections:{...ws.value.sections,shop:{...ws.value.sections.shop!,status:"complete",value:{impact:values,reads:[],callSites:[],unmatched:[],external:[]}},"shop-web":{...ws.value.sections["shop-web"]!,snapshot:{repo:"shop-web",kind:"sha",sha:"f".repeat(40)}}}}};
+  const {session} = await setup({ofChange:async()=>({ok:true,value:local}),callers:async()=>({ok:true,value:local}),workspaceCallers:async()=>({ok:true,value:{fact:composite,workspaceReplay:replay}}),workspaceOfChange:async()=>({ok:true,value:{fact:composite,workspaceReplay:replay}})});
+  try {
+    const tools = await session.listTools();
+    const h = {path:"src/OrderController.java",symbol:"OrderController.one",line:17};
+    const cases = [
+      {name:"ye_ast_entrypoints",args:{},select:{kind:"entrypoint-evidence",findingIndex:0},item:{evidenceIndex:0,evidence:{path:"src/OrderController.java",line:17}}},
+      {name:"ye_ast_impact",args:{base:"main"},select:{kind:"module-origins",owner:{kind:"local"},module:{file:"old",snapshot:"base"}},item:{originIndex:0,origin:{file:"old",change:"modified"}}},
+      {name:"ye_ast_callers",args:{targets:[{file:"src/A.java",symbol:"A.f"}]},select:{kind:"handler-origins",owner:{kind:"local"},handler:h},item:{seedIndex:0,seed:values.seeds[0]}},
+      {name:"ye_ast_impact",args:{base:"main"},select:{kind:"cut-places",owner:{kind:"fact"},cutIndex:0},item:{atIndex:1,place:"a"}},
+      {name:"ye_ast_impact",args:{base:"main",workspace:{}},select:{kind:"workspace-link-evidence",linkId:"link-1"},item:{position:0,linkId:"link-1",link:ws.value.links[0]!.link}},
+      {name:"ye_ast_callers",args:{targets:[{file:"src/A.java",symbol:"A.f"}],workspace:{}},select:{kind:"handler-origins",owner:{kind:"section",repo:"shop"},handler:h},item:{seedIndex:0,seed:values.seeds[0]}},
+      {name:"ye_ast_impact",args:{base:"main",workspace:{}},select:{kind:"module-origins",owner:{kind:"section",repo:"shop"},module:{file:"old",snapshot:"base"}},item:{originIndex:0,origin:{file:"old",change:"modified"}}},
+      {name:"ye_ast_callers",args:{targets:[{file:"src/A.java",symbol:"A.f"}],workspace:{}},select:{kind:"workspace-link-evidence",linkId:"link-1"},item:{position:0,linkId:"link-1",link:ws.value.links[0]!.link}},
+    ];
+    for (const c of cases) for (const mode of ["full","summary","details"]) {
+      const tool = tools.find((t)=>t.name===c.name)!;
+      const result = await session.callTool(c.name,{...c.args,select:c.select,page:{limit:1},mode});
+      assert.equal(result.isError,undefined,JSON.stringify(result));
+      assert.equal(new AjvJsonSchemaValidator().getValidator(tool.outputSchema!)(result.structuredContent).valid,true,JSON.stringify(result.structuredContent));
+      const response = result.structuredContent as {kind:string;items?:unknown[]};
+      assert.equal(response.kind,mode === "full" ? "projection" : "projection-receipt");
+      if (mode === "full") assert.deepEqual(response.items,[c.item]);
+      else { assert.equal(response.items,undefined); assert.match(textOf(result),/Records:/); }
+    }
+  } finally { await session.close(); }
+});
+
+test("invalid selection controls and cursor bindings fail before querying", async () => {
+  const {session,calls} = await setup();
+  try {
+    const tools = await session.listTools();
+    const valid = {select:{kind:"entrypoint-evidence",findingIndex:0},page:{limit:1}};
+    const cases = [
+      {name:"ye_ast_entrypoints",args:{select:valid.select}},
+      {name:"ye_ast_entrypoints",args:{page:{limit:1}}},
+      {name:"ye_ast_entrypoints",args:{select:{...valid.select,findingIndex:-1},page:{limit:1}}},
+      {name:"ye_ast_entrypoints",args:{select:valid.select,page:{limit:Number.MAX_SAFE_INTEGER+1}}},
+      {name:"ye_ast_callers",args:{targets:[{file:"a",symbol:"f"}],select:{kind:"module-origins",owner:{kind:"local"},module:{file:"a",snapshot:"head"}},page:{limit:1}}},
+      {name:"ye_ast_impact",args:{base:"main",select:{kind:"workspace-link-evidence",linkId:"x"},page:{limit:1}}},
+      {name:"ye_ast_importers",args:{files:["a"],...valid}},
+    ];
+    for (const c of cases) {
+      const schema = tools.find((t)=>t.name===c.name)!.inputSchema;
+      assert.equal(new AjvJsonSchemaValidator().getValidator(schema)(c.args).valid,false);
+      assert.equal((await session.callTool(c.name,c.args)).isError,true);
+    }
+    assert.equal(calls.map.length+calls.callers.length+calls.ofChange.length+calls.importers.length,0);
+    const result = await session.callTool("ye_ast_entrypoints",{...valid,page:{limit:1,cursor:"bad"}});
+    assert.equal(result.isError,true);
+    assert.equal((result._meta?.["ye-ast/fault"] as {kind:string}).kind,"invalid-cursor");
+    assert.equal(calls.map.length,0);
+    assert.equal((await session.callTool("ye_ast_entrypoints",valid)).isError,undefined);
+  } finally { await session.close(); }
+});
+
+test("unknown selection owners retain evidence; deadline and redacted recipes fail without payload", async () => {
+  const original = mapFact();
+  if (original.status !== "complete") throw new Error("fixture");
+  let current: EntrypointMapFact = {...original,value:{...original.value,entrypoints:{...base({evidence:[{path:"hidden",line:4}]}),status:"unknown",reason:"unresolved"}}};
+  const {session} = await setup({map:async()=>({ok:true,value:current})});
+  try {
+    const select = {kind:"entrypoint-evidence",findingIndex:0};
+    const args = {select,page:{limit:1},mode:"full"};
+    const unknown = await session.callTool("ye_ast_entrypoints",args);
+    assert.equal(unknown.isError,undefined);
+    const projection = unknown.structuredContent as {availability:string;reason:string;evidence:unknown[];page?:unknown};
+    assert.equal(projection.availability,"unavailable");
+    assert.equal(projection.reason,"unresolved");
+    assert.deepEqual(projection.evidence,[{path:"hidden",line:4}]);
+    assert.equal(projection.page,undefined);
+    current = {...original,value:{...original.value,entrypoints:{...base(),status:"unknown",reason:"deadline"}}};
+    const deadline = await session.callTool("ye_ast_entrypoints",args);
+    assert.equal(deadline.isError,true);
+    assert.equal((deadline._meta?.["ye-ast/fault"] as {kind:string;reason:string}).reason,"deadline");
+    assert.equal(deadline.structuredContent,undefined);
+    current = original;
+    const secret = await session.callTool("ye_ast_entrypoints",{...args,scope:{include:[`src/${SECRET}/**`]}});
+    assert.equal(secret.isError,true);
+    assert.equal((secret._meta?.["ye-ast/fault"] as {kind:string;reason:string}).reason,"redacted-context");
+    assert.doesNotMatch(JSON.stringify(secret),new RegExp(SECRET));
+    assert.equal(secret.structuredContent,undefined);
+  } finally { await session.close(); }
+});
+
+test("known empty selections stay available and missing subjects return typed faults", async () => {
+  const targets = [{file:"a",symbol:"f"}];
+  const fact = impactFact({value:{...IMPACT,entrypoints:IMPACT.entrypoints.map(e=>({...e,seeds:[]}))},inputs:{...base().inputs,declaredConfig:{targets:["a:f"]}}});
+  const {session} = await setup({callers:async()=>({ok:true,value:fact})});
+  try {
+    const handler = {path:"src/OrderController.java",symbol:"OrderController.one",line:17};
+    const select = {kind:"handler-origins",owner:{kind:"local"},handler};
+    const zero = await session.callTool("ye_ast_callers",{targets,select,page:{limit:5},mode:"full"});
+    assert.equal(zero.isError,undefined);
+    const payload = zero.structuredContent as {items:unknown[];page:{total:number;returned:number;nextCursor?:string}};
+    assert.deepEqual(payload.items,[]);
+    assert.deepEqual(payload.page,{limit:5,offset:0,returned:0,total:0});
+    const missing = await session.callTool("ye_ast_callers",{targets,select:{...select,handler:{...handler,line:18}},page:{limit:1}});
+    assert.equal(missing.isError,true);
+    assert.equal((missing._meta?.["ye-ast/fault"] as {kind:string}).kind,"selection-not-found");
+  } finally { await session.close(); }
+});
+
+test("continuation cannot invent a page for an unavailable evidence owner", async () => {
+  const original = mapFact();
+  const fact: EntrypointMapFact = { ...original, value: { entrypoints: { ...base(), status: "unknown", reason: "unresolved" } } };
+  const { session, calls } = await setup({ map: async () => ({ ok: true, value: fact }) });
+  try {
+    const whole = await session.callTool("ye_ast_entrypoints", { mode: "full" });
+    const recovery = (whole.structuredContent as { recovery: { status: string; resultIdentity: string } }).recovery;
+    assert.equal(recovery.status, "available");
+    const select = { kind: "entrypoint-evidence", findingIndex: 0 };
+    const digest = { of: (value: string) => createHash("sha256").update(value).digest("hex") };
+    const cursor = encodeCursor({ version: 1, resultIdentity: recovery.resultIdentity, selection: selectionDigest(select, digest), limit: 1, next: 1 });
+    assert.ok(cursor.ok);
+    const result = await session.callTool("ye_ast_entrypoints", { select, page: { limit: 1, cursor: cursor.value } });
+    assert.equal(result.isError, true);
+    assert.equal((result._meta?.["ye-ast/fault"] as { kind: string }).kind, "invalid-cursor");
+    assert.equal(result.structuredContent, undefined);
+    const first = await session.callTool("ye_ast_entrypoints", { select, page: { limit: 1 } });
+    assert.equal(first.isError, undefined);
+    assert.equal((first.structuredContent as { availability: string }).availability, "unavailable");
+    assert.equal(calls.map.length, 3);
+  } finally { await session.close(); }
+});
+
+test("selected UI evidence preserves known and unknown components through all public modes", async () => {
+  const findings: Finding<Entrypoint>[] = [
+    { status: "complete", value: { kind: "ui-route", name: "/known", path: "/known", outlet: "side", component: { path: "page.ts", symbol: "Page", line: 4, endLine: 9 }, guards: [] }, evidence: [{ path: "routes.ts", line: 1 }] },
+    { status: "complete", value: { kind: "ui-route", name: "/unknown", path: "/unknown", component: "unknown", guards: [] }, evidence: [{ path: "routes.ts", line: 2 }, { path: "routes.ts", line: 2 }] },
+    { status: "unknown", reason: "no-extractor", evidence: [{ path: "routes.ts", line: 3 }] },
+  ];
+  const fact: EntrypointMapFact = { ...base(), status: "partial", cuts: [{ kind: "section", at: ["entrypoints"] }], value: { entrypoints: { ...base(), status: "partial", cuts: [{ kind: "no-extractor", at: ["routes.ts"] }], value: findings } } };
+  const { session } = await setup({ map: async () => ({ ok: true, value: fact }) });
+  try {
+    const tool = (await session.listTools()).find(({ name }) => name === "ye_ast_entrypoints")!;
+    const validate = new AjvJsonSchemaValidator().getValidator(tool.outputSchema!);
+    for (const [findingIndex, finding] of findings.entries()) {
+      for (const mode of ["summary", "details", "full"] as const) {
+        const result = await session.callTool(tool.name, { mode, select: { kind: "entrypoint-evidence", findingIndex }, page: { limit: 2 } });
+        assert.equal(result.isError, undefined, JSON.stringify(result));
+        assert.equal(validate(result.structuredContent).valid, true);
+        const payload = result.structuredContent as { source: { analysis: { status: string } }; context?: { finding: Record<string, unknown> }; items?: unknown[] };
+        assert.equal(payload.source.analysis.status, "partial");
+        if (mode === "full") {
+          assert.deepEqual(payload.items, finding.evidence.map((evidence, evidenceIndex) => ({ evidenceIndex, evidence })));
+          if (finding.status === "unknown") assert.deepEqual(payload.context?.finding, { status: "unknown", reason: finding.reason });
+          else {
+            assert.equal(payload.context?.finding.status, "complete");
+            const identity = payload.context?.finding.identity as Record<string, unknown>;
+            assert.equal(identity.kind, "ui-route");
+            if (finding.value.kind !== "ui-route") throw new Error("fixture");
+            assert.deepEqual(identity.component, finding.value.component);
+            assert.equal("handler" in identity || "guards" in identity, false);
+          }
+        } else {
+          assert.equal(payload.items, undefined);
+          assert.match(textOf(result), /Records:/);
+        }
+      }
+    }
+  } finally { await session.close(); }
+});
+
+test("selected evidence is redacted before page rendering in every public mode", async () => {
+  const original = mapFact();
+  const section = original.value.entrypoints;
+  if (section.status === "unknown") throw new Error("fixture");
+  const fact: EntrypointMapFact = { ...original, value: { entrypoints: { ...section, value: section.value.map((finding, index) => index === 0 ? { ...finding, evidence: [{ path: `src/${SECRET}.ts`, line: 7 }] } : finding) } } };
+  const { session } = await setup({ map: async () => ({ ok: true, value: fact }) });
+  try {
+    for (const mode of ["summary", "details", "full"] as const) {
+      const result = await session.callTool("ye_ast_entrypoints", { mode, select: { kind: "entrypoint-evidence", findingIndex: 0 }, page: { limit: 1 } });
+      assert.equal(result.isError, undefined);
+      assert.equal(JSON.stringify(result).includes(SECRET), false);
+      const payload = result.structuredContent as { recovery: { status: string }; items?: unknown[] };
+      assert.equal(payload.recovery.status, "available");
+      if (mode === "full") assert.deepEqual(payload.items, [{ evidenceIndex: 0, evidence: { path: `src/${REDACTED}.ts`, line: 7 } }]);
+      else assert.ok(textOf(result).includes(`src/${REDACTED}.ts`));
+    }
   } finally { await session.close(); }
 });

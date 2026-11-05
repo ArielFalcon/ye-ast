@@ -1,6 +1,6 @@
 # Selective evidence through verified query replay
 
-**Status:** Proposed implementation design for Task 4.2, not an implemented API. Observed checkout: `602ffe695f3e4130f8b5a603e20ccbaa85717200`. Integrate after the reviewed common-mode migration. [ADR-0022](../../architecture/adr/0022-typed-query-replay-and-selective-evidence.md) owns the accepted strategy; this document fixes its initial wire details and implementation boundaries.
+**Status:** Implemented through Tasks 3–5 of the [capability implementation plan](../plans/2026-11-04-mcp-capabilities-implementation.md). **Design baseline:** Observed checkout: `602ffe695f3e4130f8b5a603e20ccbaa85717200`. Integrate after the reviewed common-mode migration. [ADR-0022](../../architecture/adr/0022-typed-query-replay-and-selective-evidence.md) owns the accepted strategy; this document fixes its initial wire details and implementation boundaries.
 
 ## Outcome and constraints
 
@@ -218,7 +218,7 @@ type EntrypointEvidenceContext = {
     | { status: "unknown"; reason: UnknownReason };
 };
 type CutPlacesContext = {
-  owner: CutOwner; snapshot: SnapshotRef; cutIndex: number;
+  owner: CutOwner; snapshot: SnapshotRef; analysis: Analysis; cutIndex: number;
   kind: Cut["kind"]; anchor: string; limit?: number;
 };
 type LinkEvidenceContext = {

@@ -1,3 +1,7 @@
+import { recoveryControlShapeFor, validRecoveryControls, recoveryControlConstraintsFor, selectedOutputFor } from "./evidence-schema.ts";
+import { selectEvidence, type EvidenceSelection, type EvidenceSource, type EvidenceSelectionResult } from "./select-evidence.ts";
+import { decodeCursor, validateCursorRequest, validateCursorPosition, assertSourceIdentity, encodeCursor, selectionDigest, type CursorV1 } from "./evidence-cursor.ts";
+import { renderEvidenceSelection, type EvidencePage } from "./render-evidence.ts";
 import { McpServer, type CallToolResult } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { repositoryCatalog, type RepositoryBinding } from "./repository-targeting.ts";
@@ -89,7 +93,8 @@ Coverage and detail:
 - complete means complete within inputs.declaredScope, supported languages/frameworks and any change selection; partial retains known results with cuts; unknown has a reason and never means no impact. Composite sections and reads can have their own limits. Read these before concluding that nothing depends on a change.
 - scope.include/exclude changes coverage, not just presentation; exclude wins. Interpretation files such as manifests remain available under include but can be excluded explicitly. TypeScript test files are not indexed. Component template binding uses are not resolved; inspect relevant tests or templates separately.
 - On impact, changed selects diff paths that seed the walk while callers elsewhere within scope remain eligible. For example, changed: ["src/api/**"] limits the change being investigated; scope would also limit where its consequences can be found. A changed glob matching no changed path is an error.
-- Select mode directly: "summary" (default) identifies findings and limitations; "details" adds recorded explanatory evidence and locations; "full" returns the complete redacted public fact in structuredContent and a brief contextual guide in text. Text modes return a strict receipt with mode, status, snapshot and reason only when unknown. Modes do not change coverage, snapshots or traversal. A client may expose both text and structured content to a model.
+- Select mode directly: "summary" (default) identifies findings and limitations; "details" adds recorded explanatory evidence and locations; unselected "full" returns the complete redacted public fact in structuredContent and a brief contextual guide in text. Unselected text modes return a strict receipt with mode, status, snapshot and reason only when unknown. Modes do not change coverage, snapshots or traversal. A client may expose both text and structured content to a model.
+- Entrypoints, callers and impact also accept typed select coordinates shown in their views, paired with page.limit, an explicit positive safe integer counting recorded items. Selected full returns a projection; summary/details show the page in text and return a projection receipt. page.cursor continues the same selection and limit; each request reruns the semantic query and verifies source identity before delivery. expect can assert a recovery.resultIdentity with or without selection. Changed or unavailable replay fails explicitly; no old answer or live capture is retained. Source analysis limits remain distinct from page availability.
 - budget limits traversal work, not response length. depth counts incoming dependency levels, not hops between services. To reproduce an impact answer for more detail, use its recovery recipe and recorded merge base. Workspace recipes preserve the declaration and snapshot vector; live replay captures again and compares head and stateId. A live answer can change between calls.
 - When useful, impact/callers text includes an investigation guide adapted to the recorded data: full JSON paths are relative to structuredContent, origin indexes join within one walk, and workspace links use IDs rather than display numbers. Follow its snapshot and coverage context when choosing the next query. Fault responses explain an applicable correction or the prerequisite to inspect before retrying.
 
@@ -190,7 +195,9 @@ const scope = z
   .optional()
   .describe("Coverage restriction using repository-relative globs; all paths when omitted, exclude wins. include retains configuration needed to interpret sources; exclude can remove it too. Callers and entrypoints outside scope are unknown. For shorter text use mode: summary; on impact use changed to select seeds without excluding callers.");
 
-const entrypointInput = liveSchema({ repo, revision, live, scope, mode: responseModeSchema }, ["revision"]);
+const entrypointInput = liveSchema({ repo, revision, live, scope, mode: responseModeSchema, ...recoveryControlShapeFor("entrypoints") }, ["revision"])
+  .refine((value) => validRecoveryControls("entrypoints", value))
+  .meta({ allOf: [{ not: { properties: { live: { const: true } }, required: ["live", "revision"] } }, ...recoveryControlConstraintsFor("entrypoints")] });
 // Scope permits line terminators inside a segment; inspect every character and require the absolute end of input.
 const recipeGlob = z.string().refine(isValidGlob).meta({ pattern: "^(?![\\s\\S]*(?:^|/)\\.{0,2}(?:/|(?![\\s\\S])))[^\\\\]+(?![\\s\\S])" });
 const recipeScope = z.strictObject({ include: z.array(recipeGlob).min(1).optional(), exclude: z.array(recipeGlob).min(1).optional() });
@@ -234,21 +241,23 @@ const replaySchema = z.strictObject({
   declaration: z.string().regex(/^ws-r1:[0-9a-f]{64}$/),
   snapshots: z.array(z.discriminatedUnion("kind", [z.strictObject({ repo: z.string().regex(/\S/), kind: z.literal("sha"), sha: pinnedRevision }), z.strictObject({ repo: z.string().regex(/\S/), kind: z.literal("live"), head: pinnedRevision, stateId: z.string().regex(/\S/) })])).meta({ uniqueItems: true }).describe("Echo the actual snapshot vector in repository ID order, with each ID appearing once."),
 }).refine(isWorkspaceReplayContext);
-const callersShape = { repo, revision, live, offline, targets: z.array(target).min(1), scope, budget, mode: responseModeSchema, workspace, replay: replaySchema.optional() };
+const callersShape = { repo, revision, live, offline, targets: z.array(target).min(1), scope, budget, mode: responseModeSchema, workspace, replay: replaySchema.optional(), ...recoveryControlShapeFor("callers") };
 const replayRequiresWorkspace = { if: { required: ["replay"] }, then: { required: ["workspace"] } };
 const callersInput = liveSchema(callersShape, ["revision"])
+  .refine((value) => validRecoveryControls("callers", value))
   .refine((value) => (value.replay === undefined || value.workspace !== undefined) && !(value.workspace !== undefined && (value.live === false || ("revision" in value && typeof value.revision === "string" && !/\S/.test(value.revision)) || ("head" in value && typeof value.head === "string" && !/\S/.test(value.head)))) && !(value.live === true && value.workspace === undefined && value.offline !== undefined))
-  .meta({ allOf: [...["revision"].map((field) => ({ not: { properties: { live: { const: true } }, required: ["live", field] } })), replayRequiresWorkspace, { if: { required: ["workspace"] }, then: { properties: { live: { const: true }, revision: { pattern: "\\S" }, head: { pattern: "\\S" } } } }, { if: { required: ["live", "offline"], properties: { live: { const: true } } }, then: { required: ["workspace"] } }] });
+  .meta({ allOf: [...["revision"].map((field) => ({ not: { properties: { live: { const: true } }, required: ["live", field] } })), replayRequiresWorkspace, { if: { required: ["workspace"] }, then: { properties: { live: { const: true }, revision: { pattern: "\\S" }, head: { pattern: "\\S" } } } }, { if: { required: ["live", "offline"], properties: { live: { const: true } } }, then: { required: ["workspace"] } }, ...recoveryControlConstraintsFor("callers")] });
 const impactInput = liveSchema({
   repo,
   base: z.string().min(1).describe("Required comparison revision, usually the destination branch (for example main). The diff starts at its merge base with head; it is not necessarily a direct base-to-head diff."),
   head: z.string().min(1).optional().describe("Committed revision holding the change; HEAD when omitted. Omit with live: true."),
   live, offline, scope,
   changed: globs.describe("Diff-path globs selecting which changes seed traversal; all changed paths when omitted. Callers outside changed remain eligible within scope. This does not restrict consequence coverage like scope does. A glob matching no changed path is an error."),
-  budget, mode: responseModeSchema, workspace, replay: replaySchema.optional(),
+  budget, mode: responseModeSchema, workspace, replay: replaySchema.optional(), ...recoveryControlShapeFor("impact"),
 }, ["head"])
+  .refine((value) => validRecoveryControls("impact", value))
   .refine((value) => (value.replay === undefined || value.workspace !== undefined) && !(value.workspace !== undefined && (value.live === false || ("revision" in value && typeof value.revision === "string" && !/\S/.test(value.revision)) || ("head" in value && typeof value.head === "string" && !/\S/.test(value.head)))) && !(value.live === true && value.workspace === undefined && value.offline !== undefined))
-  .meta({ allOf: [...["head"].map((field) => ({ not: { properties: { live: { const: true } }, required: ["live", field] } })), replayRequiresWorkspace, { if: { required: ["workspace"] }, then: { properties: { live: { const: true }, revision: { pattern: "\\S" }, head: { pattern: "\\S" } } } }, { if: { required: ["live", "offline"], properties: { live: { const: true } } }, then: { required: ["workspace"] } }] });
+  .meta({ allOf: [...["head"].map((field) => ({ not: { properties: { live: { const: true } }, required: ["live", field] } })), replayRequiresWorkspace, { if: { required: ["workspace"] }, then: { properties: { live: { const: true }, revision: { pattern: "\\S" }, head: { pattern: "\\S" } } } }, { if: { required: ["live", "offline"], properties: { live: { const: true } } }, then: { required: ["workspace"] } }, ...recoveryControlConstraintsFor("impact")] });
 const impactRecipeCommon = { repo: z.string().min(1), base: pinnedRevision, scope: recipeScope.optional(), changed: z.array(recipeGlob).min(1).optional(), budget };
 const impactRecipe = z.union([
   z.strictObject({ ...impactRecipeCommon, head: pinnedRevision }),
@@ -457,9 +466,16 @@ function outputFor(value: z.ZodType, recovery?: z.ZodType) {
   const json = z.toJSONSchema(branches, { target: "draft-7" });
   return z.looseObject({}).refine((result) => branches.safeParse(result).success).meta({ anyOf: json.anyOf });
 }
-export const ENTRYPOINTS_OUTPUT = outputFor(shapes.entrypoints, recoverySchema);
-export const IMPACT_OUTPUT = outputFor(shapes.impact, impactRecoverySchema);
-export const CALLERS_OUTPUT = outputFor(shapes.impact, callersRecoverySchema);
+function withSelections(original: z.ZodType, tool: "entrypoints" | "impact" | "callers", recovery: z.ZodType) {
+  const selected = selectedOutputFor(tool, { recovery, baseFact });
+  const union = z.union([original, selected]);
+  const ordinaryJson = z.toJSONSchema(original, { target: "draft-7" });
+  const selectedJson = z.toJSONSchema(selected, { target: "draft-7" });
+  return z.looseObject({}).refine((value) => union.safeParse(value).success).meta({ anyOf: [ordinaryJson, selectedJson] });
+}
+export const ENTRYPOINTS_OUTPUT = withSelections(outputFor(shapes.entrypoints, recoverySchema), "entrypoints", recoverySchema);
+export const IMPACT_OUTPUT = withSelections(outputFor(shapes.impact, impactRecoverySchema), "impact", impactRecoverySchema);
+export const CALLERS_OUTPUT = withSelections(outputFor(shapes.impact, callersRecoverySchema), "callers", callersRecoverySchema);
 export const IMPORTERS_OUTPUT = outputFor(shapes.importers);
 export const OUTLINE_OUTPUT = outputFor(shapes.outline);
 export const WORKSPACE_OUTPUT = outputFor(shapes.workspace);
@@ -516,8 +532,17 @@ export function createMcpServer(deps: McpDeps): McpServer {
     render: ResponseRenderer<V>,
     recoveryFor?: (fact: Fact<V>, original: Fact<V>, repository: RepositoryBinding, replay: FactRead<V>["workspaceReplay"]) => Recovery,
     mapReplayMismatch = false,
+    controls?: { select?: EvidenceSelection | undefined; page?: {limit: number; cursor?: string | undefined} | undefined; expect?: string | undefined; sourceFor: (fact: Fact<V>) => EvidenceSource },
   ): Promise<CallToolResult> {
     try {
+      let cursor: CursorV1 | undefined;
+      if (controls?.page?.cursor !== undefined && controls.select !== undefined) {
+        const decoded = decodeCursor(controls.page.cursor);
+        if (!decoded.ok) return selectionFailure(decoded.fault);
+        const checked = validateCursorRequest(decoded.value, controls.select, controls.page.limit, controls.expect, deps.digest);
+        if (!checked.ok) return selectionFailure(checked.fault);
+        cursor = checked.value;
+      }
       const target = catalog.resolve(selected);
       if (!target.ok) return failure(target.fault);
       const repository = target.value;
@@ -528,6 +553,11 @@ export function createMcpServer(deps: McpDeps): McpServer {
       if (read.fact.snapshot.repo !== repository.repoId) return failure({ kind: "internal-fault", detail: "Primary snapshot repository does not match selected repository" });
       const fact = redaction.redactValue(read.fact) as Fact<V>;
       const recovery = recoveryFor?.(fact, read.fact, repository, read.workspaceReplay);
+      const expected = cursor?.resultIdentity ?? controls?.expect;
+      if (expected !== undefined && recovery !== undefined) {
+        const verified = assertSourceIdentity(recovery, expected);
+        if (!verified.ok) return selectionFailure(verified.fault);
+      }
       const recoveryText = recovery === undefined ? [] : [`recovery: ${JSON.stringify(recovery)}`];
       const roots = local ? [{ repo: repository.repoId, path: repository.path }] : read.repositoryRoots;
       const repositoryRoots = roots === undefined
@@ -537,6 +567,57 @@ export function createMcpServer(deps: McpDeps): McpServer {
       const stale = moved === undefined ? undefined : (redaction.redactValue(moved) as LiveStaleNotice);
       const workspaceLive = read.workspaceLive === undefined ? undefined : redaction.redactValue([...read.workspaceLive].sort((a, b) => compareText(a.repo, b.repo)).map((item) => item.kind === "staleness-unavailable" ? { ...item, cause: { ...item.cause, detail: /[\\/]/.test(item.cause.detail) ? "[path omitted]" : item.cause.detail } } : item)) as NonNullable<FactRead<V>["workspaceLive"]>;
       const meta = { ...(stale === undefined ? {} : { [LIVE_META]: stale }), ...(workspaceLive === undefined ? {} : { [WORKSPACE_LIVE_META]: workspaceLive }) };
+      if (controls?.select !== undefined && controls.page !== undefined && recovery !== undefined) {
+        if (recovery.status === "unavailable" && recovery.reason === "deadline") return selectionFailure({ code: "replay-unavailable", reason: recovery.reason });
+        const selected = selectEvidence(controls.sourceFor(fact), controls.select);
+        if (!selected.ok) return recovery.status === "unavailable"
+          ? selectionFailure({ code: "replay-unavailable", reason: recovery.reason })
+          : selectionFailure(selected.fault);
+        let records: EvidenceSelectionResult = selected.value;
+        if (cursor !== undefined && records.availability === "unavailable") return selectionFailure({ code: "invalid-cursor" });
+        let page: EvidencePage | undefined;
+        if (records.availability === "available") {
+          if (recovery.status === "unavailable") return selectionFailure({ code: "replay-unavailable", reason: recovery.reason });
+          const total = records.items.length;
+          let offset = 0;
+          if (cursor !== undefined) {
+            const position = validateCursorPosition(cursor, total);
+            if (!position.ok) return selectionFailure(position.fault);
+            offset = position.value;
+          }
+          const end = Math.min(total, offset + controls.page.limit);
+          let nextCursor: string | undefined;
+          if (end < total) {
+            const encoded = encodeCursor({ version: 1, resultIdentity: recovery.resultIdentity, selection: selectionDigest(controls.select, deps.digest), limit: controls.page.limit, next: end });
+            if (!encoded.ok) return selectionFailure(encoded.fault);
+            nextCursor = encoded.value;
+          }
+          switch (records.kind) {
+            case "handler-origins": records = { ...records, items: records.items.slice(offset, end) }; break;
+            case "module-origins": records = { ...records, items: records.items.slice(offset, end) }; break;
+            case "entrypoint-evidence": records = { ...records, items: records.items.slice(offset, end) }; break;
+            case "cut-places": records = { ...records, items: records.items.slice(offset, end) }; break;
+            case "workspace-link-evidence": records = { ...records, items: records.items.slice(offset, end) }; break;
+          }
+          page = { limit: controls.page.limit, offset, returned: end - offset, total, ...(nextCursor === undefined ? {} : { nextCursor }) };
+        }
+        const source = records.source;
+        const shared = { projectionSchema: 1, source, select: controls.select, recovery };
+        const structuredContent = records.availability === "available"
+          ? mode === "full"
+            ? { ...shared, kind: "projection", availability: "available", context: records.context, items: records.items, page }
+            : { ...shared, kind: "projection-receipt", availability: "available", page }
+          : mode === "full"
+            ? { ...shared, kind: "projection", availability: "unavailable", reason: records.reason, evidence: records.evidence }
+            : { ...shared, kind: "projection-receipt", availability: "unavailable", reason: records.reason };
+        const sidecar = [
+          ...(stale === undefined ? [] : [renderStale(stale)]),
+          ...(workspaceLive === undefined ? [] : workspaceLive.map((item) => `workspace live: ${JSON.stringify(item)}`)),
+          ...(refresh === undefined ? [] : renderRefresh(refresh)),
+          ...(repositoryRoots ?? []).map(({ repo, path }) => `repository root: ${repo} -> ${path}`),
+        ];
+        return { content: [{ type: "text", text: [...sidecar, renderEvidenceSelection({ select: controls.select, records, recovery, ...(page === undefined ? {} : { page }) })].join("\n") }], structuredContent, ...(Object.keys(meta).length ? { _meta: meta } : {}) };
+      }
       if (mode === "full") {
         return {
           content: [{ type: "text", text: [
@@ -586,7 +667,12 @@ export function createMcpServer(deps: McpDeps): McpServer {
    * A fault is an `isError` result: the text names its kind on the first line, and `_meta` carries the same shape for a
    * client that branches on it, never `structuredContent`, which is the fact envelope this tool declares as its output.
    */
-  function failure(fault: { kind: string; detail: string; stage?: "workspace-replay" } | ImpactFault | WorkspaceFault): CallToolResult {
+  function selectionFailure(fault: { code: string; [key: string]: unknown }): CallToolResult {
+    const { code, ...rest } = fault;
+    return failure({ kind: code, detail: code, ...rest });
+  }
+
+  function failure(fault: { kind: string; detail: string; stage?: "workspace-replay" | "source-identity"; expected?: string; actual?: string; reason?: string } | ImpactFault | WorkspaceFault): CallToolResult {
     // Capture diagnostics can contain host paths. Repository IDs remain opaque, even when they contain separators.
     const safeCaptureText = (text: string): string => /[\\/]/.test(text) ? "[path omitted]" : text;
     const publicFault = fault.kind === "workspace-capture-unavailable" && "cause" in fault
@@ -608,13 +694,14 @@ export function createMcpServer(deps: McpDeps): McpServer {
       outputSchema: ENTRYPOINTS_OUTPUT,
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    ({ repo: selected, revision: requested, live: isLive, scope: paths, mode }, ctx) =>
+    ({ repo: selected, revision: requested, live: isLive, scope: paths, mode, select, page, expect }, ctx) =>
       answer(
         selected, true,
         (onStale, repository) => deps.entrypoints.map({ repo: repository.path, repoId: repository.repoId, ...atRevision(requested, isLive, onStale), ...scopeOf(paths), signal: ctx.mcpReq.signal }),
         mode,
         renderEntrypointMap,
         (fact, original, repository) => entrypointRecovery(fact, original, repository.repoId, scopeOf(paths).scope, isLive === true, deps.digest, redaction, (args) => entrypointInput.safeParse(args).success && recipeArguments.safeParse(args).success),
+        false, { select, page, expect, sourceFor: (fact) => ({ kind: "entrypoints", fact }) },
       ),
   );
 
@@ -627,7 +714,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
       outputSchema: IMPACT_OUTPUT,
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    ({ repo: selected, base, head, live: isLive, offline: isOffline, scope: paths, changed, budget: requested, mode, workspace: others, replay }, ctx) => {
+    ({ repo: selected, base, head, live: isLive, offline: isOffline, scope: paths, changed, budget: requested, mode, workspace: others, replay, select, page, expect }, ctx) => {
       const crossing = workspaceOf(others);
       if (crossing !== undefined) {
         return answer(
@@ -647,7 +734,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
           mode,
           renderWorkspaceImpact,
           (fact, original, repository, actualReplay) => impactRecovery({ fact, original, selected: repository.repoId, requestedScope: scopeOf(paths).scope, requestedBudget: requested, live: isLive === true, workspace: others, offline: isOffline, replay: actualReplay, digest: deps.digest, redaction, validate: (args) => impactInput.safeParse(args).success && impactRecipe.safeParse(args).success, requestedChanged: changed }),
-          true,
+          true, { select, page, expect, sourceFor: (fact) => ({ kind: "workspace", fact }) },
         );
       }
       return answer(
@@ -659,6 +746,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
         mode,
         renderImpact,
         (fact, original, repository) => impactRecovery({ fact, original, selected: repository.repoId, requestedScope: scopeOf(paths).scope, requestedBudget: requested, live: isLive === true, workspace: undefined, offline: undefined, replay: undefined, digest: deps.digest, redaction, validate: (args) => impactInput.safeParse(args).success && impactRecipe.safeParse(args).success, requestedChanged: changed }),
+        false, { select, page, expect, sourceFor: (fact) => ({ kind: "local", fact }) },
       );
     },
   );
@@ -672,7 +760,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
       outputSchema: CALLERS_OUTPUT,
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    ({ repo: selected, revision: requested, live: isLive, offline: isOffline, targets, scope: paths, budget: bounds, mode, workspace: others, replay }, ctx) => {
+    ({ repo: selected, revision: requested, live: isLive, offline: isOffline, targets, scope: paths, budget: bounds, mode, workspace: others, replay, select, page, expect }, ctx) => {
       const crossing = workspaceOf(others);
       if (crossing !== undefined) {
         return answer(
@@ -691,7 +779,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
           mode,
           renderWorkspaceImpact,
           (fact, original, repository, actualReplay) => callersRecovery({ fact, original, selected: repository.repoId, targets, requestedScope: scopeOf(paths).scope, requestedBudget: bounds, live: isLive === true, workspace: others, offline: isOffline, replay: actualReplay, digest: deps.digest, redaction, validate: (args) => callersInput.safeParse(args).success && callersRecipe.safeParse(args).success }),
-          true,
+          true, { select, page, expect, sourceFor: (fact) => ({ kind: "workspace", fact }) },
         );
       }
       return answer(
@@ -709,6 +797,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
         mode,
         renderImpact,
         (fact, original, repository) => callersRecovery({ fact, original, selected: repository.repoId, targets, requestedScope: scopeOf(paths).scope, requestedBudget: bounds, live: isLive === true, workspace: undefined, offline: undefined, replay: undefined, digest: deps.digest, redaction, validate: (args) => callersInput.safeParse(args).success && callersRecipe.safeParse(args).success }),
+        false, { select, page, expect, sourceFor: (fact) => ({ kind: "local", fact }) },
       );
     },
   );

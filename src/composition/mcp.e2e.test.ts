@@ -30,8 +30,11 @@ import org.springframework.web.bind.annotation.RestController;
 class OrderController {
   @GetMapping("/{id}")
   String one() {
+    String combined = first() + second();
     return "x";
   }
+  String first() { return "a"; }
+  String second() { return "b"; }
 }
 `;
 
@@ -370,4 +373,53 @@ test("stdio workspace live member replays captured mixed snapshots and rejects a
     assert.equal(result._meta?.["ye-ast/fault"]?.kind, "result-changed");
     assert.equal(result._meta?.["ye-ast/fault"]?.stage, "workspace-replay");
   }
+});
+
+test("real callers expose two recorded origins for a reached handler", async () => {
+  const args = { targets: ["first", "second"].map((name) => ({ file: "src/main/java/shop/OrderController.java", symbol: `OrderController.${name}` })), mode: "full" };
+  const result = (await request("tools/call", { name: "ye_ast_callers", arguments: args })).result as { isError?: boolean; structuredContent: { value: { entrypoints: { handler: unknown; seeds: number[] }[] } } };
+  assert.equal(result.isError, undefined, JSON.stringify(result));
+  assert.ok(result.structuredContent.value.entrypoints.some((item) => new Set(item.seeds).size >= 2), JSON.stringify(result.structuredContent.value.entrypoints));
+});
+
+test("selected callers pages replay real pinned origins and reject a changed live source", async () => {
+  const errors: string[] = [];
+  assert.equal(await composeCli({ scratchRoot, trustDirectory: join(workspace, "trust") })(["init", "--trust", "trusted", repo], { out: () => {}, err: (line) => errors.push(line) }), 0, errors.join("\n"));
+  const file = join(repo, "src/main/java/shop/OrderController.java");
+  writeFileSync(file, CONTROLLER);
+  type Wire = { isError?: boolean; structuredContent?: Record<string, any>; _meta?: Record<string, any> };
+  const call = async (args: object): Promise<Wire> => (await request("tools/call", { name: "ye_ast_callers", arguments: args })).result as Wire;
+  const targets = ["first", "second"].map((name) => ({ file: "src/main/java/shop/OrderController.java", symbol: `OrderController.${name}` }));
+  const source = await call({ targets, live: true, mode: "full" });
+  assert.notEqual(source.isError, true, JSON.stringify(source));
+  const { value, recovery } = source.structuredContent!;
+  assert.equal(recovery.status, "available");
+  const reached = value.entrypoints.find((item: any) => new Set(item.seeds).size >= 2);
+  assert.ok(reached, JSON.stringify(value.entrypoints));
+  const indexes = [...new Set<number>(reached.seeds)].sort((a, b) => a - b);
+  const { path, symbol, line } = reached.handler;
+  const select = { kind: "handler-origins", owner: { kind: "local" }, handler: { path, symbol, line } };
+  const args = { ...recovery.query.arguments, mode: "full", select, page: { limit: 1 }, expect: recovery.resultIdentity };
+  const first = await call(args);
+  assert.notEqual(first.isError, true, JSON.stringify(first));
+  assert.equal(first.structuredContent!.kind, "projection");
+  assert.equal(first.structuredContent!.recovery.resultIdentity, recovery.resultIdentity);
+  assert.ok(first.structuredContent!.page.nextCursor);
+  assert.deepEqual((await call(args)).structuredContent, first.structuredContent);
+  const items = [...first.structuredContent!.items];
+  let cursor = first.structuredContent!.page.nextCursor;
+  const firstCursor = cursor;
+  while (cursor) {
+    const next = await call({ ...args, page: { limit: 1, cursor } });
+    assert.notEqual(next.isError, true, JSON.stringify(next));
+    assert.equal(next.structuredContent!.recovery.resultIdentity, recovery.resultIdentity);
+    items.push(...next.structuredContent!.items);
+    cursor = next.structuredContent!.page.nextCursor;
+  }
+  assert.deepEqual(items, indexes.map((seedIndex) => ({ seedIndex, seed: value.seeds[seedIndex] })));
+  writeFileSync(file, CONTROLLER.replace('return "x"', 'return "changed-live"'));
+  const changed = await call({ ...args, page: { limit: 1, cursor: firstCursor } });
+  assert.equal(changed.isError, true);
+  assert.equal(changed.structuredContent, undefined);
+  assert.equal(changed._meta?.["ye-ast/fault"]?.kind, "result-changed");
 });

@@ -1,6 +1,6 @@
 # Batch installation and external trust
 
-Status: proposed implementation design for Task 4.4. Observed HEAD: `602ffe695f3e4130f8b5a603e20ccbaa85717200`; the parent plan and ADR-0022 were also read as present in the working tree. This design does not assume the response-mode migration has landed. [ADR-0022](../../architecture/adr/0022-typed-query-replay-and-selective-evidence.md) closes its six query decisions and requires batch trust; none is reopened here.
+Status: Implemented by Task 2 of the [capability implementation plan](../plans/2026-11-04-mcp-capabilities-implementation.md). Design baseline: Observed HEAD: `602ffe695f3e4130f8b5a603e20ccbaa85717200`; the parent plan and ADR-0022 were also read as present in the working tree. This design does not assume the response-mode migration has landed. [ADR-0022](../../architecture/adr/0022-typed-query-replay-and-selective-evidence.md) closes its six query decisions and requires batch trust; none is reopened here.
 
 ## Intent and boundaries
 

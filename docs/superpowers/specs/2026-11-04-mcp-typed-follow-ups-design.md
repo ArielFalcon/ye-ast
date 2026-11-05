@@ -1,6 +1,6 @@
 # Declared repository targeting and snapshot-qualified follow-ups
 
-**Status:** Proposed implementation design for Task 4.1; no capability code is included. Observed checkout: `602ffe695f3e4130f8b5a603e20ccbaa85717200`. The owner reports the common-mode migration in final review; this checkout still exposes the earlier presentation controls. Implement against the reviewed mode migration, not by restoring those controls.
+**Status:** Implemented by Task 1 of the [capability implementation plan](../plans/2026-11-04-mcp-capabilities-implementation.md). **Design baseline:** Observed checkout: `602ffe695f3e4130f8b5a603e20ccbaa85717200`. The owner reports the common-mode migration in final review; this checkout still exposes the earlier presentation controls. Implement against the reviewed mode migration, not by restoring those controls.
 
 **Decision basis:** [ADR-0022](../../architecture/adr/0022-typed-query-replay-and-selective-evidence.md), [the parent plan](../plans/2026-11-04-common-mcp-response-modes.md), [RFC-0015](../../architecture/rfc/0015-answer-coordinates.md), and [RFC-0017](../../architecture/rfc/0017-answer-size-and-outline.md). The accepted strategy is an optional declared repository identifier on existing tools. Wire details below are this design's proposals.
 

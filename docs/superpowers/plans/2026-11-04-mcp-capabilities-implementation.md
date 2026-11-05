@@ -95,8 +95,8 @@
 
 **Interfaces:** Implement reviewed EvidenceSelection, projection/receipt unions, explicit positive safe-integer page limits, source expect and versioned result-bound cursor. Each primary item/context comes from the recorded source.
 
-- [ ] Test each category through its applicable public tool branch with exact source records, zero/unknown/partial cases, independent indexes, dangling links and UI component-known/unknown identities.
-- [ ] Implement selected summary/details/full and model-visible coordinates/recipe without changing source analysis. Preserve global cut summaries and necessary referenced context.
-- [ ] Add strict stateless cursor decoding and continuation; verify source before emitting items. Test repeated byte-identical pages, exact coverage once, changed live/config/producer/selection/limit, malformed cursors and replay-unavailable deadlines.
-- [ ] Prove every page executes the existing query again; retain no final-result/cursor/recipe store. Verify output schema/runtime parity, secrets and cancellation at SDK/stdio seams.
-- [ ] Update integrated discovery/docs and run `npm run check`, diff checks and final whole-change review. Record limits without claiming client/model exposure, savings or adoption; those remain Task 5 of the parent evaluation plan.
+- [x] Test each category through its applicable public tool branch with exact source records, zero/unknown/partial cases, independent indexes, dangling links and UI component-known/unknown identities.
+- [x] Implement selected summary/details/full and model-visible coordinates/recipe without changing source analysis. Preserve global cut summaries and necessary referenced context.
+- [x] Add strict stateless cursor decoding and continuation; verify source before emitting items. Test repeated byte-identical pages, exact coverage once, changed live/config/producer/selection/limit, malformed cursors and replay-unavailable deadlines.
+- [x] Prove every page executes the existing query again; retain no final-result/cursor/recipe store. Verify output schema/runtime parity, secrets and cancellation at SDK/stdio seams.
+- [x] Update integrated discovery/docs and run `npm run check`, diff checks and final whole-change review. Record limits without claiming client/model exposure, savings or adoption; those remain Task 5 of the parent evaluation plan.

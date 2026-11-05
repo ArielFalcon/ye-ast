@@ -241,10 +241,10 @@ flowchart TD
 
 | Tool | Call it when | Key arguments |
 |---|---|---|
-| `ye_ast_entrypoints` | Find supported HTTP/UI routes, listeners and jobs | `revision`, `live`, `scope`, `mode` |
-| `ye_ast_callers` | Find dependents and reached entrypoints for a declaration or line range | `targets`, `revision`, `live`, `scope`, `budget`, `workspace`, `mode` |
+| `ye_ast_entrypoints` | Find supported HTTP/UI routes, listeners and jobs | `revision`, `live`, `scope`, `mode`, `select`, `page`, `expect` |
+| `ye_ast_callers` | Find dependents and reached entrypoints for a declaration or line range | `targets`, `revision`, `live`, `scope`, `budget`, `workspace`, `mode`, `select`, `page`, `expect` |
 | `ye_ast_importers` | Investigate file moves, renames and export changes | `files`, `revision`, `live`, `scope`, `mode` |
-| `ye_ast_impact` | Investigate consequences of a diff | `base`, `head`, `live`, `changed`, `scope`, `budget`, `workspace`, `mode` |
+| `ye_ast_impact` | Investigate consequences of a diff | `base`, `head`, `live`, `changed`, `scope`, `budget`, `workspace`, `mode`, `select`, `page`, `expect` |
 | `ye_ast_outline` | Find declarations, spans and imports in selected files | `files`, `revision`, `live`, `scope`, `mode` |
 | `ye_ast_workspace` | Discover outward names and candidate local repositories | `repos`, `gateways`, `revision`, `live`, `offline`, `scope`, `mode` |
 | `ye_ast_decisions` | Find workspace configuration gaps and evidence-backed options | `repos`, `gateways`, `revision`, `live`, `offline`, `scope`, `mode` |
@@ -261,6 +261,45 @@ How the arguments behave:
 | `changed` | On `impact`, globs over the changed paths the scope leaves: only the change's paths they select seed the walk. Callers outside that selection remain eligible within the declared scope, subject to recorded cuts; `changed` does not itself narrow consequence coverage. Use it on a large change to answer one area at a time. A glob that selects no changed path is an error, never an empty answer. A file the index could not read stays a cut even when the selection leaves it out: its blindness belongs to the whole walk. |
 | `budget` | `{ depth?, hubFanIn?, expansions? }`, positive integers, no defaults. Limits traversal work, not response length. `depth` counts incoming dependency levels, not hops between services. A bound that stops a walk is reported as a cut, never as a silent truncation. |
 | `mode` | `"summary"` (default) identifies findings and limits; `"details"` adds recorded explanatory evidence and locations; `"full"` returns the full redacted public fact in `structuredContent` with a contextual text guide. Choose any mode directly. None changes coverage, traversal or snapshots. |
+
+### Select recorded evidence
+
+`ye_ast_entrypoints`, `ye_ast_callers` and `ye_ast_impact` accept `select`, `page` and `expect`:
+
+| Tool and scope | Selectable evidence |
+|---|---|
+| `entrypoints` | `entrypoint-evidence` by `findingIndex`; `cut-places` owned by the fact or entrypoints section |
+| `callers`, local | `handler-origins`; fact-owned `cut-places` |
+| `impact`, local | `handler-origins`, `module-origins`; fact-owned `cut-places` |
+| `callers` or `impact`, workspace | Section-owned `handler-origins`, fact/section/read-owned `cut-places`, and `workspace-link-evidence` by link ID; `module-origins` is supported only by `impact` |
+
+Coordinates are from the public result: handler path, symbol and line with a local or repository section owner;
+module file and `base`/`head` side with its owner; a zero-based finding or cut index; or a link ID. Read owners
+also include the zero-based read index. For example, after obtaining an available `recovery` from a callers result,
+use its exact `query.name` and `query.arguments` and add these controls (the handler is a lookup example):
+
+```json
+{
+  "select": { "kind": "handler-origins", "owner": { "kind": "local" },
+    "handler": { "path": "src/controller.ts", "symbol": "Controller.run", "line": 12 } },
+  "page": { "limit": 1 },
+  "expect": "<recovery.resultIdentity>",
+  "mode": "full"
+}
+```
+
+The example's controls are merged with the returned query arguments, including its pinned revision or live selector.
+`select` and `page` must appear together; `limit` is an explicit positive safe integer. There is no default page size
+or byte cap. Pass the returned `nextCursor` in `page.cursor` with the same selection and limit. `expect` can also assert
+an unselected query; when used with a cursor it must match its identity. Each page reexecutes the query and verifies
+source identity before delivering selected data. A changed source fails rather than restarting pagination. Live replay
+reads current state; no old live capture or final answer is retained.
+
+A selected full response is a projection with context and page records; summary/details return projection receipts and
+render those records in text. Source analysis and owner limits remain distinct from page availability: an available
+zero-item page is not an unknown or unavailable source, which carries its actual reason and evidence. Selection does
+not change analysis scope or traversal budgets. The public redaction boundary also applies to evidence and recipes;
+internal source sidecars are not exposed.
 
 `importers` presents three disjoint groups per target: importers, additional users without an import edge, and
 unresolved-only candidates without a resolved link. Its distinct-file count counts each path once. A file with a
@@ -348,7 +387,7 @@ stays out of scope.
 Also:
 
 - Quote the `snapshot` when you report a fact, so the user knows which revision it describes.
-- MCP summary/details return a strict receipt: `{ mode, status, snapshot }`, plus `reason` exactly when status is
+- Unselected MCP summary/details return a strict receipt: `{ mode, status, snapshot }`, plus `reason` exactly when status is
   unknown. They do not include the fact body, cuts or sidecar arrays. Full returns the redacted fact plus `mode` and
   applicable `repositoryRoots`, `freshness`, `resolution`, `live` and `workspaceLive` siblings; `_meta["ye-ast/live"]` also carries a
   stale notice. Full known facts require a value, partial facts require cuts, and unknown facts require a reason and no
@@ -364,7 +403,6 @@ Also:
   `outline` or `callers` query. Base-side modules use the recorded merge-base SHA. Symbol names may match multiple
   declarations. An undeclared owner needs an updated host registration or an instance bound to that clone. A live
   follow-up is a fresh read: compare its head and stateId with the earlier result; a past live state cannot be requested.
-  Selective retrieval and pagination are not yet exposed.
 - A place carries its span when its declaration is longer than one line: `src/a.ts:3-9`. An impacted symbol or a seed
   prints the same span (`3-9 A.seed`), so a read can name exactly the range it needs.
 - A symbol reached through another one prints `via <file>:<symbol> at <lines>`: the lines are **inside the symbol itself**,

@@ -93,6 +93,8 @@ test("workspace cut anchors and distinct limits stay with their owning repositor
       assert.match(a, /depth \(8\); limit 1/);
       assert.match(b, /depth \(8\); limit 5/);
       assert.doesNotMatch(a + b, /::use0/);
+      assert.equal((a.match(/"kind":"cut-places"/g) ?? []).length, 1);
+      assert.equal((b.match(/"kind":"cut-places"/g) ?? []).length, 1);
     }
   }
 });

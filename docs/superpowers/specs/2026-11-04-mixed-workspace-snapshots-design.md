@@ -1,6 +1,6 @@
 # Mixed workspace snapshots
 
-**Status:** Design only, Task 4.3. Observed HEAD: `602ffe695f3e4130f8b5a603e20ccbaa85717200`. The common response modes and the interfaces below are prerequisites or proposals, not claims about merged APIs. [ADR-0022](../../architecture/adr/0022-typed-query-replay-and-selective-evidence.md) decides the strategy; [the plan](../plans/2026-11-04-common-mcp-response-modes.md) defines the work.
+**Status:** Implemented by Task 4 of the [capability implementation plan](../plans/2026-11-04-mcp-capabilities-implementation.md). **Design baseline:** Observed HEAD: `602ffe695f3e4130f8b5a603e20ccbaa85717200`. The common response modes and the interfaces below are prerequisites or proposals, not claims about merged APIs. [ADR-0022](../../architecture/adr/0022-typed-query-replay-and-selective-evidence.md) decides the strategy; [the plan](../plans/2026-11-04-common-mcp-response-modes.md) defines the work.
 
 ## Intent and boundary
 
