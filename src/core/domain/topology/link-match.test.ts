@@ -48,6 +48,19 @@ test("an absolute URL can infer and use a gateway from its path", () => {
   assert.equal(joined(matchCallSite(call, targetOf(call), repos, gateways)), "route-overlap 1 -> orders GET /orders");
 });
 
+test("absolute URL matching rates path equality without asserting host ownership", () => {
+  const call = site("https://external.example/orders");
+  assert.equal(joined(matchCallSite(call, targetOf(call), repositories([route("GET", "/orders")]), [])), "exact 1 -> orders GET /orders");
+});
+
+test("URL authority cannot select one of two repositories with the same exact path", () => {
+  const call = site("//orders.example/orders");
+  const repos = [...repositories([route("GET", "/orders")]), ...repositories([route("GET", "/orders")], "billing")];
+  const result = matchCallSite(call, targetOf(call), repos, []);
+  assert.equal(result.link, undefined);
+  assert.deepEqual(result.ambiguous?.repos, ["billing", "orders"]);
+});
+
 test("a call whose path and verb equal a route's is an exact link at full confidence", () => {
   const call = site("orders");
 
