@@ -16,9 +16,9 @@ test("module importer forms remain distinct without repeating related file paths
   const value: ImportersValue = { files: [{ file: "target.ts", importers: ["static.ts", "shared.ts"], reexporters: ["barrel.ts", "shared.ts"], dynamicImporters: ["dynamic.ts"], typeImporters: ["type.ts"], users: ["static.ts", "shared.ts", "barrel.ts", "dynamic.ts", "type.ts", "other.ts"], unresolvedNamers: ["dynamic.ts", "unknown.ts"] }] };
   const original = structuredClone(value);
   const text = renderImporters({ ...base, status: "complete", value }, "details");
-  assert.match(text, /reexporters \(1\): barrel\.ts/);
-  assert.match(text, /dynamic importers \(1\)/);
-  assert.match(text, /type importers \(1\): type\.ts/);
+  assert.match(text, /barrel\.ts": reexporters\[0\], users\[2\]/);
+  assert.match(text, /dynamic\.ts": dynamic importers\[0\], users\[3\], unresolved name matches\[0\]/);
+  assert.match(text, /type\.ts": type importers\[0\], users\[4\]/);
   for (const file of ["static.ts", "shared.ts", "barrel.ts", "dynamic.ts", "type.ts", "other.ts", "unknown.ts"]) assert.equal(text.split(file).length - 1, 1, text);
   assert.deepEqual(value, original);
 });

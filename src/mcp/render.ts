@@ -767,47 +767,30 @@ function importerPathRecovery(): string {
   return '    File paths omitted; use mode: "details" to list them, or mode: "full" for the original structured fact.';
 }
 
-function importerFiles(entry: ImportedFile, detail: ResponseMode): { lines: string[]; omitted: boolean } {
-  const moduleGroups: readonly (readonly [string, readonly string[] | undefined])[] = [
+function importerFiles(entry: ImportedFile, detail: ResponseMode): { lines: string[]; omitted: boolean; listed: boolean } {
+  const modules: readonly (readonly [string, readonly string[] | undefined])[] = [
     ["importers", entry.importers], ["reexporters", entry.reexporters], ["dynamic importers", entry.dynamicImporters], ["type importers", entry.typeImporters],
   ];
-  const seen = new Set<string>();
-  const distinctModules = moduleGroups.flatMap(([label, files]) => {
-    if (files === undefined) return [];
-    return [[label, files.filter((file) => { if (seen.has(file)) return false; seen.add(file); return true; })] as const];
-  });
-  const linked = new Set([...seen, ...entry.users]);
-  const unresolved = new Set(entry.unresolvedNamers);
-  const groups: readonly (readonly [string, readonly string[]])[] = [
-    ...distinctModules,
-    ["additional users", entry.users.filter((file) => !seen.has(file))],
-    ["unresolved-only candidates", entry.unresolvedNamers.filter((file) => !linked.has(file))],
+  const modulePaths = new Set(modules.flatMap(([, files]) => files ?? []));
+  const memberships = new Map<string, string[]>();
+  const add = (path: string, label: string, index: number): void => {
+    const labels = memberships.get(path) ?? [];
+    labels.push(`${label}[${index}]`);
+    memberships.set(path, labels);
+  };
+  for (const [label, files] of modules) files?.forEach((path, index) => add(path, label, index));
+  entry.users.forEach((path, index) => add(path, modulePaths.has(path) ? "users" : "additional users", index));
+  entry.unresolvedNamers.forEach((path, index) => add(path, "unresolved name matches", index));
+  const heading = `    related files (${memberships.size} distinct)`;
+  const listing = [...memberships].map(([path, labels]) => `    ${JSON.stringify(path)}: ${labels.join(", ")}`);
+  const counts = [
+    ...modules.flatMap(([label, files]) => files === undefined ? [] : [`    ${label} (${files.length})`]),
+    `    users (${entry.users.length}; ${entry.users.filter((path) => !modulePaths.has(path)).length} additional)`,
+    `    unresolved name matches (${entry.unresolvedNamers.length})`,
   ];
-  const overlapping = [...linked].filter((file) => unresolved.has(file)).length;
-  const notes = [
-    ...(overlapping === 0 ? [] : [`    ${overlapping} files with resolved links also have unresolved name matches.`]),
-    ...(unresolved.size === 0 ? [] : ["    Unresolved name matches do not establish additional dependencies."]),
-  ];
-  const count = groups.reduce((total, [, files]) => total + files.length, 0);
-  const heading = `    related files (${count} distinct)`;
-  const listing = groups.flatMap(([label, files]) => {
-    const head = `    ${label} (${files.length})`;
-    if (files.length === 0) return [head];
-    const pending = files.filter((file) => linked.has(file) && unresolved.has(file));
-    if (pending.length === 0) return [`${head}: ${files.join(", ")}`];
-    const remaining = files.filter((file) => !unresolved.has(file));
-    return [
-      `${head}:`,
-      `      with unresolved name matches (${pending.length}): ${pending.join(", ")}`,
-      ...(remaining.length === 0 ? [] : [`      without unresolved name matches (${remaining.length}): ${remaining.join(", ")}`]),
-    ];
-  });
-  const summary = [
-    ...groups.map(([label, files]) => `    ${label} (${files.length})`),
-    ...(count === 0 ? [] : [importerPathRecovery()]),
-  ];
-  const omitted = detail === "summary" && count > 0 && size(summary) <= size(listing);
-  return { lines: [heading, ...(omitted ? summary.slice(0, groups.length) : listing), ...notes], omitted };
+  const notes = entry.unresolvedNamers.length === 0 ? [] : ["    Unresolved name matches do not establish additional dependencies."];
+  const omitted = detail === "summary" && memberships.size > 0 && size([...counts, importerPathRecovery()]) <= size(["    Indices are zero-based positions in each original category; additional users have no module category.", ...listing]);
+  return { lines: [heading, ...(omitted ? counts : listing), ...notes], omitted, listed: !omitted && memberships.size > 0 };
 }
 
 export function renderImporters(fact: Fact<ImportersValue>, detail: ResponseMode = "summary"): string {
@@ -815,8 +798,13 @@ export function renderImporters(fact: Fact<ImportersValue>, detail: ResponseMode
   const lines = headerLines(fact);
   if (fact.status === "unknown") return lines.join("\n");
   let omitted = false;
+  let explained = false;
   for (const entry of fact.value.files) {
     const block = importerFiles(entry, detail);
+    if (block.listed && !explained) {
+      lines.push("  Indices are zero-based positions in each original category; additional users have no module category.");
+      explained = true;
+    }
     lines.push(`  ${entry.file}`, ...block.lines);
     omitted ||= block.omitted;
   }
