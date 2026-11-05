@@ -14,12 +14,18 @@ S7: Corpus stdio acceptance and resource comparison.
 
 | Task | Route | Commit | State |
 |---|---|---|---|
-| Design and baseline | RFC-0021 and external run artifacts | docs: design Java value-flow summaries | in progress |
-| Shared summary propagation | Spring adapter port | fix: propagate Java client summaries through source calls | pending |
-| Object and configuration values | UrlText and adapter fixtures | fix: evaluate source object and keyed configuration values | pending |
-| Standard client vocabulary | HTTP adapter fixture | feat: read standard OkHttp requests | pending |
+| Design and baseline | RFC-0021 and external run artifacts | docs: design Java value-flow summaries | completed |
+| Shared summary propagation | Spring adapter port | fix: propagate Java client summaries through source calls | implemented; subscription helpers pending |
+| Object and configuration values | UrlText and adapter fixtures | fix: evaluate source object and keyed configuration values | implemented |
+| Standard client vocabulary | HTTP adapter fixture | feat: read standard OkHttp requests | implemented |
 | Integration and measurements | npm run check and real stdio MCP | docs: record Java value-flow validation | pending |
 
 ## Log
 
 - Read repository guidance and testing skill from the principal checkout because these ignored files are absent from the worktree. Corpus remains read-only. Engram tools are unavailable.
+
+- Shared source summaries replace both wrapper engines; their former holder/parameter helpers have no remaining consumers and were deleted.
+- Record/configuration interpretation remains adapter-local. Architecture cycles were removed by extracting Java value types and a field-lookup contract; no dependency rule was weakened.
+- Configuration defaults distinguish absent from undecided. Recursive placeholders track active keys instead of a depth threshold.
+- Public fixtures pass for source event returns and template-method subscription overrides. Binary-only facade subject reporting and helper subscription propagation remain acceptance gaps; no vocabulary entry was added for an application library.
+- Twelve type-correct mutations were rejected by their targeted public-seam tests. Full validation and external corpus measurements are recorded in the delivery report.

@@ -13,14 +13,14 @@ import type { UrlText } from "./url-text.ts";
  * from a base type no source declares is not read: the base holds the subject and its source is absent.
  */
 export function natsListenersOf(type: TypeDecl, project: JavaProject, text: UrlText): Finding<Listener>[] {
-  return invocationsOf(type).flatMap((invocation): Finding<Listener>[] => {
+  return project.classChain(type).flatMap(invocationsOf).flatMap((invocation): Finding<Listener>[] => {
     const method = invocation.member;
     if (method?.type !== "method_declaration" || !isSubscription(invocation, project, text)) return [];
-    const span = spanOf(type.file.path, method);
+    const span = spanOf(invocation.type.file.path, method);
     const handler: Handler = { path: span.path, symbol: `${type.qualifiedName}.${method.childForFieldName("name")?.text ?? ""}`, line: span.line };
     const argument = argumentsOf(invocation.node)[0];
-    const destination = argument === undefined ? undefined : text.of(argument, { type, locals: invocation.locals, env: new Map() });
-    if (destination === undefined) return [unknown("unresolved", [span, ...(argument === undefined ? [] : [spanOf(type.file.path, argument)])])];
+    const destination = argument === undefined ? undefined : text.of(argument, { type: invocation.type, receiver: type, configurationFile: type.file, locals: invocation.locals, env: new Map() });
+    if (destination === undefined) return [unknown("unresolved", [span, ...(argument === undefined ? [] : [spanOf(invocation.type.file.path, argument)])])];
     return [{ status: "complete" as const, value: { kind: "listener" as const, name: `nats ${destination}`, protocol: "nats" as const, destination, handler }, evidence: [span] }];
   });
 }

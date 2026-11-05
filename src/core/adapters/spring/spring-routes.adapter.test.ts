@@ -2633,3 +2633,15 @@ test("a contract whose servers disagree on the path makes a route whose base pat
     evidence: finding?.evidence,
   });
 });
+
+test("a source NATS template subscription evaluates the subject override per concrete bean", async () => {
+  const source = nats("Consumers", `abstract class BaseConsumer {
+    Connection connection;
+    abstract String getSubject();
+    void listen() { connection.subscribe(getSubject(), message -> {}); }
+  }
+  @Component class FirstConsumer extends BaseConsumer { String getSubject() { return "catalog.created"; } }
+  @Component class SecondConsumer extends BaseConsumer { String getSubject() { return "catalog.updated"; } }`);
+  const findings = await extractor.extract([source, MAIN]);
+  assert.deepEqual(listeners(findings), ["nats catalog.created@FirstConsumer.listen", "nats catalog.updated@SecondConsumer.listen"]);
+});

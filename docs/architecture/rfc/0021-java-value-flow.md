@@ -31,6 +31,14 @@ Reachability grows monotonically over the finite set of methods and leaves. Subs
 
 Use adapter-port fixtures for each rule, observed failing before implementation, with type-correct mutations as break proof. Run the complete check gate. Read the real corpus without modifying it; keep evaluation artifacts outside the engine and corpus.
 
+## Implementation evidence
+
+Source fixtures cover forwarding chains, implementation disagreement, named bean selection, records from builders and constructors, setters, Map keys across a library boundary, explicit configuration default states, source event subjects and inherited NATS template methods. The standard HTTP leaf follows `OkHttpClient.newCall(Request)` and `Request.Builder.url/method`, including the documented GET default and standard verb setters ([Request source](https://github.com/square/okhttp/blob/parent-3.14.9/okhttp/src/main/java/okhttp3/Request.java), [client source](https://github.com/square/okhttp/blob/parent-3.14.9/okhttp/src/main/java/okhttp3/OkHttpClient.java)).
+
+A measured source URL helper also needs a proven null fallback, a single array element and `HttpUrl.parse(...).newBuilder()`. A runtime override remains unresolved. Named `@Bean` factory returns supply qualifier selection without assuming bean names from implementation names.
+
+Remaining scope: a binary-only facade still yields a library cut without a separately stated subject; helper-based subscriptions are not yet propagated by the shared method-summary reader. Neither absence is a claim of no event impact. These acceptance gaps keep the feature partial.
+
 ## Open questions
 
 | # | Question | Recommendation |
