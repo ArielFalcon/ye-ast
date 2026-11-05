@@ -23,15 +23,32 @@ export interface TemplateMemberCall {
   member: string;
 }
 
+/**
+ * A write a template makes: to a member of the component itself (its own field), to a member of the object one of its
+ * fields holds, or to a member of an object the template does not place; `member` is absent when the key is computed.
+ */
+export interface TemplateWrite {
+  line: number;
+  target: { component: true } | { field: string } | { unplaced: true };
+  member?: string;
+}
+
+/** What one template does through the component's own fields: its member calls, its writes, and the fields it passes on. */
+export interface TemplateEffects {
+  calls: readonly TemplateMemberCall[];
+  writes: readonly TemplateWrite[];
+  /** The fields whose value the template hands to something other than a member access, call or test of it. */
+  passed: readonly string[];
+  /** The template does not parse, so what it does is unknown. */
+  unreadable?: true;
+}
+
 export interface TemplateUsageReader {
   /**
    * The components, directives and pipes of each unit's scope that its template uses. A template that does not parse,
    * an element two components match and a pipe name two pipes in scope share are unknown items, never edges.
    */
   read(units: readonly TemplateUnit[]): readonly Finding<Relation>[];
-  /**
-   * The member calls through the component's own fields in one template, in text order. A template that does not parse
-   * and a field the template assigns give none.
-   */
-  memberCalls(template: Pick<TemplateUnit, "path" | "text" | "firstLine">): readonly TemplateMemberCall[];
+  /** What one template does through the component's own fields; calls in text order. */
+  effects(template: Pick<TemplateUnit, "path" | "text" | "firstLine">): TemplateEffects;
 }

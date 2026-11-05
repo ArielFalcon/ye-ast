@@ -7,7 +7,7 @@ import type { Evidence, Finding, UnknownReason } from "../../domain/shared/fact.
 import type { AngularMetadataReader } from "../../ports/angular-metadata.port.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { RelationExtractor } from "./relation-extractor.ts";
-import type { ScopeMember, TemplateMemberCall, TemplateUnit, TemplateUsageReader } from "../../ports/template-usage.port.ts";
+import type { ScopeMember, TemplateEffects, TemplateUnit, TemplateUsageReader } from "../../ports/template-usage.port.ts";
 
 export interface AngularRelationsDeps {
   metadata: AngularMetadataReader;
@@ -26,11 +26,12 @@ export function createAngularRelationExtractor(deps: AngularRelationsDeps): Rela
 
 async function extractRelations(deps: AngularRelationsDeps, files: readonly SourceFile[], options?: { memberProofs?: MemberProofContext }): Promise<{ relations: readonly Finding<Relation>[]; fields: readonly FieldOrigin[]; locals: readonly LocalOrigin[]; memberUses?: readonly MemberUseOrigin[] }> {
   const contents = new Map(files.map((file) => [file.path, file.content]));
-  const templateCalls = (component: Extract<AngularClass, { kind: "component" }>): readonly TemplateMemberCall[] => {
+  const templateEffects = (component: Extract<AngularClass, { kind: "component" }>): TemplateEffects => {
     const source = component.template === undefined ? undefined : templateOf(component, component.template, contents);
-    return source === undefined || "unknown" in source ? [] : deps.templates.memberCalls(source);
+    if (source === undefined) return { calls: [], writes: [], passed: [] };
+    return "unknown" in source ? { calls: [], writes: [], passed: [], unreadable: true } : deps.templates.effects(source);
   };
-  const { classes, findings, fields, locals, memberUses } = await deps.metadata.read(files, { ...options, templateCalls });
+  const { classes, findings, fields, locals, memberUses } = await deps.metadata.read(files, { ...options, templateEffects });
   const byKey = new Map(classes.map((candidate) => [classKey(candidate.ref), candidate]));
   const declaredIn = new Map<string, Extract<AngularClass, { kind: "module" }>[]>();
   for (const candidate of classes) {

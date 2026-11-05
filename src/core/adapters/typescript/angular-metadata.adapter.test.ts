@@ -686,8 +686,11 @@ test("a write keyed by receiver and member leaves other receivers and other memb
 });
 
 test("a write whose object the reader cannot place reaches every class its file names, and only those", async () => {
-  const unplaced = "export function f(rows: unknown[], key: number) { rows[key] = 1; }";
+  const unplaced = "export function f(rows: unknown[], key: string) { rows[key] = 1; }";
   assert.equal((await memberProofs(OWNER, undefined, { "src/mutate.ts": unplaced })).memberUses?.length, PROVEN);
+  for (const numeric of ["key: number) { rows[key] = 1; }", "key: string) { rows[Math.min(1, 2)] = 1; rows[key.length - 1] = 2; }", "key: string) { for (let index = 0; index < 2; index++) rows[index] = 1; }", "key: string) { const counts = Array.from({ length: 2 }, () => 0); counts[key] = 1; const bytes = new Uint8Array(2); bytes[key] = 1; }"])
+    assert.equal((await memberProofs(OWNER, undefined, { "src/mutate.ts": `import { Store } from './store'; export function f(rows: unknown[], ${numeric}` })).memberUses?.length, PROVEN, numeric);
+  assert.deepEqual((await memberProofs(OWNER, undefined, { "src/mutate.ts": "import { Store } from './store'; export function f(rows: object, key: string) { const proxy = new Proxy(rows, {}); proxy[key] = 1; }" })).memberUses, []);
   for (const header of ["import { Store } from './store';", "import type { Store } from './store';", "import * as ns from './store'; type T = ns.Store;"])
     assert.deepEqual((await memberProofs(OWNER, undefined, { "src/mutate.ts": `${header} ${unplaced}` })).memberUses, [], header);
 });
@@ -775,4 +778,23 @@ test("a class a build-time file replacement may swap proves none of its members,
   assert.deepEqual(await proven({ ...replacing("src/slot.ts"), "src/slot.ts": "export * from './store';" }), ["Other"]);
   assert.deepEqual(await proven({ ...slot, "angular.json": "{" }), []);
   assert.deepEqual(await proven({ ...slot, "angular.json": JSON.stringify({ fileReplacements: [{ with: "src/native.ts" }] }) }), []);
+});
+
+test("an instance passed on proves none of its class's members once members no syntax names are written on an unplaced object", async () => {
+  const mutate = { "src/mutate.ts": "export function mutate(target: object, changes: object) { Object.assign(target, changes); }" };
+  const passing = (body: string) => ({ ...mutate, "src/pass.ts": `${CORE}import { Store } from './store';\nimport { mutate } from './mutate';\n${body}` });
+  for (const body of [
+    "export function pass(changes: object) { mutate(inject(Store), changes); }",
+    "export function pass(changes: object) { const store = inject(Store); mutate(store, changes); }",
+    "export class Other { constructor(store: Store, changes: object) { mutate(store, changes); } }",
+    "export function pass(holder: { store: object }, changes: object) { mutate(holder.store, changes); }",
+    "export class Other { store = inject(Store); pass(changes: object) { return [this.store, changes]; } }",
+  ]) assert.deepEqual((await memberProofs(OWNER, undefined, passing(body))).memberUses, [], body);
+  for (const body of [
+    "export function pass(changes: object) { mutate(new Store(), changes); }",
+    "export function pass(holder: { other: object }, changes: object) { mutate(holder.other, changes); }",
+    "export class Other { store = inject(Store); pass() { this.store.write(); return !this.store; } }",
+    "export class Other { store = inject(Store); pass(changes: object) { return this.store === changes || typeof this.store; } }",
+  ]) assert.ok((await memberProofs(OWNER, undefined, passing(body))).memberUses?.some((use) => use.owner.symbol === "Owner"), body);
+  assert.equal((await memberProofs(OWNER, undefined, { "src/pass.ts": `${CORE}import { Store } from './store';\nexport function pass(changes: object) { return inject(Store); }` })).memberUses?.length, PROVEN);
 });

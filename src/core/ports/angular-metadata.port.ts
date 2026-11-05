@@ -4,7 +4,7 @@ import type { FieldOrigin, LocalOrigin } from "../domain/relations/field-origin.
 import type { Relation } from "../domain/relations/relation.ts";
 import type { Finding } from "../domain/shared/fact.ts";
 import type { SourceFile } from "./entrypoint-extractor.port.ts";
-import type { TemplateMemberCall } from "./template-usage.port.ts";
+import type { TemplateEffects } from "./template-usage.port.ts";
 
 export interface AngularMetadata {
   /** The decorated classes of the sources, sorted by file and line. */
@@ -21,8 +21,11 @@ export interface AngularMetadata {
 
 export interface AngularMetadataReadOptions {
   memberProofs?: MemberProofContext;
-  /** The member calls a component's template makes through its own fields; with `memberProofs`, they are proven like the class's own calls. */
-  templateCalls?: (component: Extract<AngularClass, { kind: "component" }>) => readonly TemplateMemberCall[];
+  /**
+   * What a component's template does through its own fields; with `memberProofs`, its calls are proven like the class's
+   * own calls, and its writes and passed fields are risks like the class's own.
+   */
+  templateEffects?: (component: Extract<AngularClass, { kind: "component" }>) => TemplateEffects;
 }
 
 export interface AngularMetadataReader {

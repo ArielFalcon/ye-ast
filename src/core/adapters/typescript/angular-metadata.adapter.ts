@@ -9,6 +9,7 @@ import { relation, type Relation, type SymbolRef } from "../../domain/relations/
 import { compareText } from "../../domain/shared/code-node.ts";
 import type { Evidence, Finding, UnknownReason } from "../../domain/shared/fact.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
+import type { TemplateEffects } from "../../ports/template-usage.port.ts";
 import type { AngularMetadata, AngularMetadataReader, AngularMetadataReadOptions } from "../../ports/angular-metadata.port.ts";
 import { readAngularMetadataFile, type RawAngularClass, type RawAngularFile, type RawInstanceMethod, type RawInjection, type RawOperand, type RawReference, type RawTemplate, type RawText, type RawWrite } from "./angular-metadata.extractor.ts";
 import { readAngularRouteFile, type RawRouteFile } from "./angular-router.extractor.ts";
@@ -28,7 +29,7 @@ const NO_PROVIDER_IDENTITY: ProviderIdentityEvidence = {
  * and barrels to the class that declares it; an installed package's class is not a relation of the repository.
  */
 export function createAngularMetadataReader(): AngularMetadataReader {
-  return { read: async (files, options) => readMetadata(files, options?.memberProofs, options?.templateCalls) };
+  return { read: async (files, options) => readMetadata(files, options?.memberProofs, options?.templateEffects) };
 }
 
 interface Parsed {
@@ -40,7 +41,7 @@ interface Parsed {
 /** What a name comes down to: a class, an array of operands, a declared value that is not a class (an `InjectionToken`), a member of one, or nothing usable. */
 type Placed = { class: SymbolRef } | { array: { key: string; file: string; operands: readonly RawOperand[] } } | { token: SymbolRef } | { member: true } | { external: true } | { unresolved: true };
 
-async function readMetadata(files: readonly SourceFile[], proof?: MemberProofContext, templateCalls?: AngularMetadataReadOptions["templateCalls"]): Promise<AngularMetadata> {
+async function readMetadata(files: readonly SourceFile[], proof?: MemberProofContext, templateEffects?: AngularMetadataReadOptions["templateEffects"]): Promise<AngularMetadata> {
   const contents = new Map(files.map((file) => [file.path, file]));
   const sourcePaths = [...contents.keys()].filter(isTypeScriptSource).sort();
   const { byProject, orphaned } = pathsByProject(sourcePaths, files, ANGULAR_CORE);
@@ -55,7 +56,7 @@ async function readMetadata(files: readonly SourceFile[], proof?: MemberProofCon
     const scope = proof?.completeSource === true && contents.size === files.length
       ? { sites: new Set(sources.filter((path) => projectOf(path, manifests)?.directory === project.directory)), evidence: sourcePaths, ...(replaced === undefined ? {} : { replaced }) }
       : undefined;
-    const metadata = await readProject(contents, project.dependencies, sources, scope, proof !== undefined, templateCalls);
+    const metadata = await readProject(contents, project.dependencies, sources, scope, proof !== undefined, templateEffects);
     classes.push(...metadata.classes);
     findings.push(...metadata.findings);
     fields.push(...metadata.fields);
@@ -111,7 +112,7 @@ function replacedFiles(files: readonly SourceFile[]): ReadonlySet<string> | unde
   return replaced;
 }
 
-async function readProject(contents: ReadonlyMap<string, SourceFile>, dependencies: ReadonlySet<string>, sources: readonly string[], scope: ProofScope | undefined, collectSites: boolean, templateCalls?: AngularMetadataReadOptions["templateCalls"]): Promise<AngularMetadata> {
+async function readProject(contents: ReadonlyMap<string, SourceFile>, dependencies: ReadonlySet<string>, sources: readonly string[], scope: ProofScope | undefined, collectSites: boolean, templateEffects?: AngularMetadataReadOptions["templateEffects"]): Promise<AngularMetadata> {
   const proveMembers = scope !== undefined;
   const read = async (path: string): Promise<string | undefined> => contents.get(path)?.content;
   const resolver = createModuleResolver(read, dependencies);
@@ -329,6 +330,11 @@ async function readProject(contents: ReadonlyMap<string, SourceFile>, dependenci
    * A mutation API used as a value, a replaced export of an installed package (every token it constructs could become any
    * class) and an unreadable source have no bound, and then nothing is proven.
    */
+  const effectsByComponent = new Map<AngularClass, TemplateEffects | undefined>();
+  const effectsOf = (component: Extract<AngularClass, { kind: "component" }>): TemplateEffects | undefined => {
+    if (!effectsByComponent.has(component)) effectsByComponent.set(component, templateEffects?.(component));
+    return effectsByComponent.get(component);
+  };
   async function risksOf({ evidence, replaced }: ProofScope): Promise<{ reaches: (receiver: SymbolRef, member: string) => boolean; substitutesOf: (receiver: SymbolRef) => readonly MemberSubstitute[] | undefined } | undefined> {
     const parsedEvidence = await Promise.all(evidence.map(async (file) => ({ file, source: await parse(file) })));
     if (replaced === undefined || parsedEvidence.some(({ source }) => source === undefined || source.angular.memberEvidence.escapedMutator)) return undefined;
@@ -352,9 +358,12 @@ async function readProject(contents: ReadonlyMap<string, SourceFile>, dependenci
       }
       return named;
     };
+    /** Set once members no syntax names are written on an object the syntax does not place: it may be any instance passed on. */
+    let opaque = false;
     const unplaced = async (file: string, source: Parsed, member?: string): Promise<void> => {
-      if (member !== undefined) names.add(member);
-      else for (const ref of await namedClasses(file, source)) reach(ref);
+      if (member !== undefined) return void names.add(member);
+      opaque = true;
+      for (const ref of await namedClasses(file, source)) reach(ref);
     };
     const place = async (file: string, source: Parsed, write: RawWrite): Promise<void> => {
       const { target, member } = write;
@@ -451,6 +460,38 @@ async function readProject(contents: ReadonlyMap<string, SourceFile>, dependenci
       return [...exported, ...starred].flat();
     };
     for (const file of evidence.filter((path) => replaced.has(path))) for (const ref of await exportedClasses(file, new Set())) reach(ref);
+    const passedOn = parsedEvidence.flatMap(({ file, source }) => source!.angular.memberEvidence.passed.map((passed) => ({ file, passed })));
+    /** A template's writes and passed fields are its component's own; a template that does not parse may do anything with them. */
+    for (const component of classes) {
+      if (component.kind !== "component") continue;
+      const file = component.ref.path;
+      const source = await parse(file);
+      const done = effectsOf(component);
+      if (source === undefined || done === undefined) continue;
+      const owner = { name: component.ref.symbol, line: component.ref.line };
+      if (done.unreadable === true) {
+        for (const field of proofFields) if (field.owner.path === file && field.owner.line === owner.line && "class" in field.holds) reach(field.holds.class);
+        continue;
+      }
+      for (const write of done.writes) {
+        const target = "component" in write.target ? { self: owner } : "field" in write.target ? { field: { owner, field: write.target.field } } : { unplaced: true as const };
+        await place(file, source, { target, ...(write.member === undefined ? {} : { member: write.member }), line: write.line });
+      }
+      passedOn.push(...done.passed.map((field) => ({ file, passed: { field: { owner, field } } })));
+    }
+    /** An instance its holder passes on can reach such a write wherever it lands, so its class proves none of its members. */
+    if (opaque) {
+      const hidden = new Set(parsedEvidence.flatMap(({ file, source }) => [...source!.angular.memberEvidence.hidden].map((key) => `${file}\0${key}`)));
+      const fieldsNamed = Map.groupBy(proofFields.filter((field) => !hidden.has(`${field.owner.path}\0${field.owner.symbol}\0${field.owner.line}\0${field.field}`)), (field) => field.field);
+      for (const { file, passed } of passedOn) {
+        const held = "field" in passed ? fieldsByOwner.get(`${file}\0${passed.field.owner.line}\0${passed.field.field}`) ?? [] : "fieldNamed" in passed ? fieldsNamed.get(passed.fieldNamed) ?? [] : [];
+        for (const field of held) if ("class" in field.holds) reach(field.holds.class);
+        if ("instance" in passed) {
+          const placed = await resolve(file, passed.instance);
+          if ("class" in placed) reach(placed.class);
+        }
+      }
+    }
     if (unbounded) return undefined;
     return {
       reaches: (receiver, member) => names.has(member) || unsafe.has(`${classKey(receiver)}\0${member}`) || unsafe.has(`${classKey(receiver)}\0*`),
@@ -519,10 +560,10 @@ async function readProject(contents: ReadonlyMap<string, SourceFile>, dependenci
       };
       for (const call of evidence.calls) await proveFieldCall(call, { file, line: call.line, column: call.column, name: `this.${call.field}.${call.member}`, kind: "calls" }, false);
       for (const component of classes) {
-        if (templateCalls === undefined || component.kind !== "component" || component.ref.path !== file) continue;
+        if (component.kind !== "component" || component.ref.path !== file) continue;
         const owner = { name: component.ref.symbol, line: component.ref.line };
         if (evidence.escapedClasses.has(`${owner.name}\0${owner.line}`)) continue;
-        for (const call of templateCalls(component)) await proveFieldCall({ owner, field: call.field, member: call.member }, { file: call.file, line: call.line, column: call.column, name: `${call.field}.${call.member}`, kind: "calls" }, true);
+        for (const call of effectsOf(component)?.calls ?? []) await proveFieldCall({ owner, field: call.field, member: call.member }, { file: call.file, line: call.line, column: call.column, name: `${call.field}.${call.member}`, kind: "calls" }, true);
       }
       for (const injection of source.angular.injections) {
         const { owner, inlineMember, target } = injection;

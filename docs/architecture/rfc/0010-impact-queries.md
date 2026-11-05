@@ -133,9 +133,11 @@ anchors, rather than one proof per homonym/site combination.
 
 A component's template call `field.member(...)` is the same value with `template` set
 ([ADR-0024](../adr/0024-template-member-calls-join-as-component-calls.md)). The template reader names the call only when
-Angular's binder binds `field` to the component, not to a template local (`@let`, `@for`, `#ref`, `let-`), and the
-template never assigns the field; the TypeScript adapter proves it like a class's own `this.field.member()` call, and
-also requires an `inject()` origin. The application joins it without a graph
+Angular's binder binds `field` to the component, not to a template local (`@let`, `@for`, `#ref`, `let-`); the
+TypeScript adapter proves it like a class's own `this.field.member()` call, and also requires an `inject()` origin. The
+template's own writes (`field = x`, `field.member = x`, `field[key] = x`, at any depth) and the fields it hands to
+anything but a member access, call or test of them are risks of its component, placed like the class's own; a template
+that does not parse makes every field of its component unsafe. The application joins it without a graph
 reference: the component is the caller, at the relation confidence, and `via.resource` names the template file when it
 is not the component's own. It settles no reference, because a template holds none.
 
@@ -155,10 +157,14 @@ reach its receiver and member:
 
 - A write, `++`/`--`, `delete`, destructuring target or reflective mutation (`Object.assign`, `Object.defineProperty`,
   `Reflect.set`, …) reaches the members of the object it is made on: `this` names the enclosing class, `this.f` the class
-  the field's fixed origin holds, `X.prototype` the class `X` names. A fresh object or array literal, a platform global
-  (`window`, `document`) and a platform class prototype (`Element.prototype`) reach no class of the repository.
-- An object the syntax does not place (a parameter, a call result, a local that is not a fresh literal) reaches the named
-  member on every class, or, when no member is named, every class its file names by import or declaration.
+  the field's fixed origin holds, `X.prototype` the class `X` names. A fresh object or array literal, a platform
+  collection (`new Uint8Array(n)`, `Array.from(…)`; never a `Proxy`), a platform global (`window`, `document`) and a
+  platform class prototype (`Element.prototype`) reach no class of the repository. A write whose key the syntax shows is
+  a number (a numeric literal, arithmetic, `Math.*()`, or a local typed or initialized so) replaces no method.
+- An object the syntax does not place (a parameter, a call result, a local that is not a fresh value) reaches the named
+  member on every class, or, when no member is named, every class its file names by import or declaration, and every
+  class whose instance some source passes on: a field read, an `inject()` result, a typed constructor parameter, or a
+  readable field read through another object, used as anything but a member access, call or test of it.
 - A provider reaches only the class it provides. A `useClass` or `useExisting` that names a repository class admits the
   proof with `ImpactedSymbol.via.substitutes`, which names the substitute and the provider's site and which excludes no
   other target; any other substitution refuses the provided class. A token the reader cannot tell apart from a class, and
@@ -181,7 +187,7 @@ A constructor with an explicit value-return cannot establish exclusive instance 
 functions do not invalidate the enclosing constructor. Potential local call sites require lexical binding evidence
 independently of project-wide member stability and refuse dynamic binding constructs such as direct eval/with.
 The checks do not simulate runtime DI configuration. Missing evidence remains a cut. `EDGE_POLICY.referenceProofVersion`
-is 14 and participates in the existing producer digest; syntax and proof changes invalidate derived facts without
+is 15 and participates in the existing producer digest; syntax and proof changes invalidate derived facts without
 rebuilding an unchanged graph.
 
 ### Confidence and fan-in

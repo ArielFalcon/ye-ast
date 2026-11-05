@@ -1,10 +1,19 @@
 import {
+  type AST,
   Binary,
   Call,
   ClassPropertyMapping,
   CombinedRecursiveAstVisitor,
   CssSelector,
   ImplicitReceiver,
+  KeyedRead,
+  LiteralPrimitive,
+  NonNullAssert,
+  ParenthesizedExpression,
+  PrefixNot,
+  SafeKeyedRead,
+  SafePropertyRead,
+  TypeofExpression,
   MatchSource,
   ParseErrorLevel,
   parseTemplate,
@@ -21,7 +30,7 @@ import {
 import { relation, type Relation, type RelationKind, type SymbolRef } from "../../domain/relations/relation.ts";
 import { sortFindings } from "../../domain/entrypoints/finding-order.ts";
 import type { Evidence, Finding, UnknownReason } from "../../domain/shared/fact.ts";
-import type { ScopeMember, TemplateMemberCall, TemplateUnit, TemplateUsageReader } from "../../ports/template-usage.port.ts";
+import type { ScopeMember, TemplateEffects, TemplateMemberCall, TemplateUnit, TemplateUsageReader, TemplateWrite } from "../../ports/template-usage.port.ts";
 
 /**
  * Templates parsed with ye-ast's own `@angular/compiler` (never the analysed repository's copy, which would run its
@@ -29,38 +38,99 @@ import type { ScopeMember, TemplateMemberCall, TemplateUnit, TemplateUsageReader
  * desugaring and the control-flow blocks included; nothing is type-checked.
  */
 export function createTemplateUsageReader(): TemplateUsageReader {
-  return { read: (units) => sortFindings(units.flatMap(usagesOf)), memberCalls };
+  return { read: (units) => sortFindings(units.flatMap(usagesOf)), effects };
 }
 
-function memberCalls(template: Pick<TemplateUnit, "path" | "text" | "firstLine">): TemplateMemberCall[] {
+const COMPARISONS: ReadonlySet<string> = new Set(["==", "===", "!=", "!=="]);
+
+function effects(template: Pick<TemplateUnit, "path" | "text" | "firstLine">): TemplateEffects {
   const parsed = parseTemplate(template.text, template.path);
-  if ((parsed.errors ?? []).some((error) => error.level === ParseErrorLevel.ERROR)) return [];
+  if ((parsed.errors ?? []).some((error) => error.level === ParseErrorLevel.ERROR)) return { calls: [], writes: [], passed: [], unreadable: true };
   const bound = new R3TargetBinder(new SelectorMatcher<DirectiveMeta[]>()).bind({ template: parsed.nodes });
-  const ownField = (ast: unknown): ast is PropertyRead =>
-    ast instanceof PropertyRead && (ast.receiver instanceof ImplicitReceiver || ast.receiver instanceof ThisReceiver) && bound.getExpressionTarget(ast) === null;
-  const calls: { field: string; member: string; offset: number }[] = [];
-  const written = new Set<string>();
+  const peel = (ast: AST): AST => (ast instanceof ParenthesizedExpression || ast instanceof NonNullAssert ? peel(ast.expression) : ast);
+  const ownField = (ast: AST): PropertyRead | undefined => {
+    const read = peel(ast);
+    return read instanceof PropertyRead && (read.receiver instanceof ImplicitReceiver || read.receiver instanceof ThisReceiver) && bound.getExpressionTarget(read) === null ? read : undefined;
+  };
+  const lineStarts = [0, ...[...template.text.matchAll(/\n/g)].map((match) => match.index + 1)];
+  const lineOf = (offset: number): number => lineStarts.findLastIndex((start) => start <= offset);
+  const calls: TemplateMemberCall[] = [];
+  const writes: TemplateWrite[] = [];
+  const reads: PropertyRead[] = [];
+  const used = new Set<AST>();
+  const use = (ast: AST): void => {
+    const own = ownField(ast);
+    if (own !== undefined) used.add(own);
+  };
   const visitor = new (class extends CombinedRecursiveAstVisitor {
+    override visitPropertyRead(read: PropertyRead, context?: unknown): void {
+      if (ownField(read) === read) reads.push(read);
+      use(read.receiver);
+      super.visitPropertyRead(read, context);
+    }
+
+    override visitSafePropertyRead(read: SafePropertyRead, context?: unknown): void {
+      use(read.receiver);
+      super.visitSafePropertyRead(read, context);
+    }
+
+    override visitKeyedRead(read: KeyedRead, context?: unknown): void {
+      use(read.receiver);
+      super.visitKeyedRead(read, context);
+    }
+
+    override visitSafeKeyedRead(read: SafeKeyedRead, context?: unknown): void {
+      use(read.receiver);
+      super.visitSafeKeyedRead(read, context);
+    }
+
     override visitCall(call: Call, context?: unknown): void {
-      const callee = call.receiver;
-      if (callee instanceof PropertyRead && ownField(callee.receiver)) calls.push({ field: callee.receiver.name, member: callee.name, offset: call.sourceSpan.start });
+      const callee = peel(call.receiver);
+      const field = callee instanceof PropertyRead ? ownField(callee.receiver) : undefined;
+      if (callee instanceof PropertyRead && field !== undefined) {
+        const index = lineOf(call.sourceSpan.start);
+        calls.push({ file: template.path, line: template.firstLine + index, column: call.sourceSpan.start - lineStarts[index]! + 1, field: field.name, member: callee.name });
+      }
       super.visitCall(call, context);
     }
 
+    override visitPrefixNot(not: PrefixNot, context?: unknown): void {
+      use(not.expression);
+      super.visitPrefixNot(not, context);
+    }
+
+    override visitTypeofExpression(typeOf: TypeofExpression, context?: unknown): void {
+      use(typeOf.expression);
+      super.visitTypeofExpression(typeOf, context);
+    }
+
     override visitBinary(binary: Binary, context?: unknown): void {
-      if (Binary.isAssignmentOperation(binary.operation) && ownField(binary.left)) written.add(binary.left.name);
+      if (COMPARISONS.has(binary.operation)) {
+        use(binary.left);
+        use(binary.right);
+      }
+      if (Binary.isAssignmentOperation(binary.operation)) {
+        const left = peel(binary.left);
+        const line = template.firstLine + lineOf(binary.sourceSpan.start);
+        const own = ownField(left);
+        if (own !== undefined) {
+          used.add(own);
+          writes.push({ line, target: { component: true }, member: own.name });
+        } else if (left instanceof PropertyRead || left instanceof KeyedRead) {
+          const field = ownField(left.receiver);
+          const key = left instanceof PropertyRead ? left.name : peel(left.key) instanceof LiteralPrimitive && typeof (peel(left.key) as LiteralPrimitive).value === "string" ? (peel(left.key) as LiteralPrimitive).value as string : undefined;
+          writes.push({ line, target: field === undefined ? { unplaced: true } : { field: field.name }, ...(key === undefined ? {} : { member: key }) });
+        } else writes.push({ line, target: { unplaced: true } });
+      }
       super.visitBinary(binary, context);
     }
   })();
   for (const node of parsed.nodes) visitor.visit(node);
-  const lineStarts = [0, ...[...template.text.matchAll(/\n/g)].map((match) => match.index + 1)];
-  return calls
-    .filter((call) => !written.has(call.field))
-    .sort((a, b) => a.offset - b.offset)
-    .map(({ field, member, offset }) => {
-      const index = lineStarts.findLastIndex((start) => start <= offset);
-      return { file: template.path, line: template.firstLine + index, column: offset - lineStarts[index]! + 1, field, member };
-    });
+  return {
+    calls: calls.sort((a, b) => a.line - b.line || a.column - b.column),
+    writes,
+    passed: [...new Set(reads.filter((read) => !used.has(read)).map((read) => read.name))].sort(),
+  };
 }
 
 type Member = Exclude<ScopeMember, { kind: "pipe" }>;

@@ -23,8 +23,8 @@ entrypoint and no cut: the answer was `complete` and wrong. The investigation re
 ## Decision
 
 1. The template reader reports `field.member(...)` (and `this.field.member(...)`) when the binder binds `field` to the
-   component and the template never assigns `field`. Template locals, safe calls, callable fields and signal reads
-   are not reported.
+   component. Template locals, safe calls, callable fields and signal reads are not reported. The template's writes and
+   the fields it passes on are reported too, and are risks of the component like its class's own.
 2. The Angular metadata adapter proves each reported call through the same checks as the class's own
    `this.field.member()` calls, scoped risks and the behavior rule of RFC-0010 included, and requires that the field's
    origin is `inject()`. The proof is a `MemberUseOrigin` with `template: true`.
@@ -32,14 +32,15 @@ entrypoint and no cut: the answer was `complete` and wrong. The investigation re
    the receiver, outside test files: the component is the caller, at the relation confidence, with basis `call`. It
    settles no `unresolved-link` place.
 4. `ImpactedSymbol.via.resource` names the template file when it is not the component's own; `via.lines` are lines of
-   that file. Fact schema `0.17.0`; `EDGE_POLICY.referenceProofVersion` 14 invalidates stored impact facts.
+   that file. Fact schema `0.17.0`; `EDGE_POLICY.referenceProofVersion` 15 invalidates stored impact facts.
 
 ## Consequences
 
 - Answers gain the component and its routes for a template-only use, with no new relation kind and no second walk.
 - The rule inherits the scoped member-proof risks. Measured on two real Angular applications once those risks were scoped
-  to the receiver and member they reach, it admits 16 hand-verified template proofs in one and none in the other, and
-  recovers 18 callers and 11 routes over the 10 members they name, with no cut added.
+  to the receiver and member they reach, it admits 16 hand-verified template proofs in one and none in the other. Once
+  instances passed on became risks of writes on objects the syntax does not place, 6 of 13 remain on a later revision
+  of the first application.
 
 ## Not decided here
 
