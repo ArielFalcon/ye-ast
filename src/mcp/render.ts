@@ -277,12 +277,64 @@ function unknownFindingRun(items: readonly Finding<Entrypoint>[], start: number)
 }
 
 /** Repeated extraction evidence can support several findings without repeating the same coordinates. */
-function entrypointItems(items: readonly Finding<Entrypoint>[], detail: ResponseMode): string[] {
+function entrypointItems(items: readonly Finding<Entrypoint>[], detail: ResponseMode, sharedBase?: ReadonlyMap<string, number>, sharedEvidence?: ReadonlyMap<string, number>): string[] {
+  if (sharedBase === undefined || sharedEvidence === undefined) {
+    const evidence = shareExactContext(items.flatMap((item) => item.status === "unknown" && item.evidence.length !== 1 ? item.evidence : []), (place) => place);
+    const evidenceCounts = new Map<number, number>();
+    for (const row of evidence.rows) evidenceCounts.set(row.contextIndex, (evidenceCounts.get(row.contextIndex) ?? 0) + 1);
+    const evidenceIndices = new Map<string, number>();
+    const evidenceDefinitions: string[] = [];
+    evidence.contexts.forEach((place, index) => {
+      if ((evidenceCounts.get(index) ?? 0) > 1) {
+        const reference = evidenceIndices.size;
+        evidenceIndices.set(canonicalJson(place), reference);
+        evidenceDefinitions.push(`  evidence ${reference}: ${JSON.stringify(place)}`);
+      }
+    });
+    if (evidenceDefinitions.length > 0) evidenceDefinitions.unshift("  Evidence references are indices; each row lists evidence in its original order, including repeats.");
+    const routes = detail === "details" ? items.flatMap((item) => item.status === "complete" && item.value.kind === "http-route" ? [item.value] : []) : [];
+    const bases = shareExactContext(routes, (route) => route.basePath);
+    const baseCounts = new Map<number, number>();
+    for (const row of bases.rows) baseCounts.set(row.contextIndex, (baseCounts.get(row.contextIndex) ?? 0) + 1);
+    const baseIndices = new Map<string, number>();
+    const baseDefinitions: string[] = [];
+    bases.contexts.forEach((base, index) => {
+      if ((baseCounts.get(index) ?? 0) > 1) {
+        const reference = baseIndices.size;
+        baseIndices.set(canonicalJson(base), reference);
+        const description = base.status === "unknown" ? `base path unknown (${base.reason})` : "base path";
+        baseDefinitions.push(`  base context ${reference}: ${description} ${JSON.stringify(base)}`);
+      }
+    });
+    const empty = new Map<string, number>();
+    let best = entrypointItems(items, detail, empty, empty);
+    for (const [baseMap, baseLines] of [[empty, []], [baseIndices, baseDefinitions]] as const) {
+      for (const [evidenceMap, evidenceLines] of [[empty, []], [evidenceIndices, evidenceDefinitions]] as const) {
+        const candidate = [...baseLines, ...evidenceLines, ...entrypointItems(items, detail, baseMap, evidenceMap)];
+        if (preferShorterText(best.join("\n"), candidate.join("\n")) === candidate.join("\n")) best = candidate;
+      }
+    }
+    return best;
+  }
+  const contextOf = (entrypoint: Entrypoint): string[] => {
+    if (entrypoint.kind === "http-route") {
+      const index = sharedBase?.get(canonicalJson(entrypoint.basePath));
+      if (index !== undefined) return [`    base context ${index}`];
+    }
+    return entrypointContext(entrypoint);
+  };
   if (detail !== "details") {
     const lines: string[] = [];
     for (let index = 0; index < items.length;) {
       const first = items[index]!;
-      if (first.status === "unknown") { const run = unknownFindingRun(items, index); lines.push(...run.lines); index = run.end; continue; }
+      if (first.status === "unknown") {
+        if (first.evidence.length !== 1 && first.evidence.some((place) => sharedEvidence.has(canonicalJson(place)))) {
+          const references = first.evidence.map((place) => sharedEvidence.get(canonicalJson(place)) ?? place);
+          lines.push(`  - unknown (${first.reason}) [findingIndex ${index}] evidence: ${JSON.stringify(references)}`);
+          index++;
+        } else { const run = unknownFindingRun(items, index); lines.push(...run.lines); index = run.end; }
+        continue;
+      }
       const location = entrypointLocation(first.value);
       let end = index + 1;
       while (end < items.length) {
@@ -301,9 +353,16 @@ function entrypointItems(items: readonly Finding<Entrypoint>[], detail: Response
   const lines: string[] = [];
   for (let index = 0; index < items.length;) {
     const first = items[index]!;
-    if (first.status === "unknown") { const run = unknownFindingRun(items, index); lines.push(...run.lines); index = run.end; continue; }
+    if (first.status === "unknown") {
+      if (first.evidence.length !== 1 && first.evidence.some((place) => sharedEvidence.has(canonicalJson(place)))) {
+        const references = first.evidence.map((place) => sharedEvidence.get(canonicalJson(place)) ?? place);
+        lines.push(`  - unknown (${first.reason}) [findingIndex ${index}] evidence: ${JSON.stringify(references)}`);
+        index++;
+      } else { const run = unknownFindingRun(items, index); lines.push(...run.lines); index = run.end; }
+      continue;
+    }
     if (first.evidence.length === 0) {
-      lines.push(`${itemLine(first)} [findingIndex ${index}]`, ...(first.status === "complete" ? entrypointContext(first.value) : []));
+      lines.push(`${itemLine(first)} [findingIndex ${index}]`, ...(first.status === "complete" ? contextOf(first.value) : []));
       index++;
       continue;
     }
@@ -315,13 +374,13 @@ function entrypointItems(items: readonly Finding<Entrypoint>[], detail: Response
     const separate = findings.flatMap((line) => [line, `    evidence: ${evidence}`]);
     const shared = [`  evidence shared by ${findings.length} findings: ${evidence}`, ...findings];
     lines.push(...(findings.length > 1 && size(shared) < size(separate) ? shared : separate));
-    const contexts = items.slice(index, end).flatMap((item) => item.status === "complete" ? [entrypointContext(item.value)] : []);
+    const contexts = items.slice(index, end).flatMap((item) => item.status === "complete" ? [contextOf(item.value)] : []);
     const contextKeys = new Set(contexts.map((context) => JSON.stringify(context)));
     if (contextKeys.size === 1) {
       if (findings.length > 1 && (contexts[0]?.length ?? 0) > 0) lines.push("  The following context applies to all findings above:");
       lines.push(...(contexts[0] ?? []));
     }
-    else for (const item of items.slice(index, end)) if (item.status === "complete") lines.push(`  ${item.value.kind} ${item.value.name}:`, ...entrypointContext(item.value));
+    else for (const item of items.slice(index, end)) if (item.status === "complete") lines.push(`  ${item.value.kind} ${item.value.name}:`, ...contextOf(item.value));
     index = end;
   }
   return list(lines);
