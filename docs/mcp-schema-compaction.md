@@ -137,7 +137,9 @@ latency savings, or of improved model conclusions.
 
 The instructions are reorganized around agent tasks: a "when to call" line per tool, then reading answers,
 repositories and snapshots, narrowing and paging, and errors. Every rule the budget test checks is kept; the text stays
-within the 3,900-character budget (3,878 characters). Tool descriptions lead with when to use the tool and drop the
+within the 3,900-character budget (3,557 characters). Two rules moved to the answers that already carry them at the
+point of use: how to repeat a composition (S# legend, verification.identity as expect) and which owner each selection
+kind takes; the instructions keep the paired select/page rule and point to the answers for coordinates and owners. Tool descriptions lead with when to use the tool and drop the
 completeness sentence the instructions already state.
 
 `ye_ast_compose` publishes the nested query shapes without their descriptions: each query's arguments are the semantic

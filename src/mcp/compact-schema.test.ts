@@ -44,7 +44,6 @@ test("catalogue advertises useful guides within budget", async () => {
       /merge-base SHA/,
       /changed selects seeds, not consequence coverage/,
       /budget limits traversal, not response length/,
-      /workspace origins use section owners/,
       /isError is a fault, not an empty fact/,
     ]) assert.match(session.instructions!, rule);
 
