@@ -1,5 +1,6 @@
 import type { ContractOperation } from "../contracts/contract-operation.ts";
-import type { HttpMethod } from "../entrypoints/http-route.ts";
+import type { Entrypoint } from "../entrypoints/entrypoint.ts";
+import type { Handler, HttpMethod } from "../entrypoints/http-route.ts";
 import { compareText } from "../shared/code-node.ts";
 import type { Cut, Finding } from "../shared/fact.ts";
 
@@ -15,6 +16,11 @@ export interface ChangedContract {
   line: number;
   /** For an altered operation, the sides of the exchange whose data changed. */
   parts?: readonly ContractPart[];
+  /**
+   * For an altered or removed operation, the handlers of the routes the snapshot that declares it joins to it; absent
+   * when no route of that snapshot is joined to it.
+   */
+  handlers?: readonly Handler[];
 }
 
 export interface ContractChanges {
@@ -59,6 +65,20 @@ export function changedContracts(base: readonly Finding<ContractOperation>[], he
     if (place !== undefined && touched(place.path)) cuts.set(place.path, { kind: "no-extractor", at: [place.path] });
   }
   return { changes: changes.sort(compareChanges), cuts: [...cuts.values()].sort((a, b) => compareText(a.at.join("\0"), b.at.join("\0"))) };
+}
+
+/**
+ * The altered and removed operations with the handlers that serve them: an HTTP route whose evidence holds the place of
+ * the operation, the head's for an altered one and the base's for a removed one, is the route its contract join made.
+ */
+export function servedContracts(changes: readonly ChangedContract[], base: readonly Finding<Entrypoint>[], head: readonly Finding<Entrypoint>[]): ChangedContract[] {
+  return changes.map((change) => {
+    if (change.change === "added") return change;
+    const handlers = (change.change === "removed" ? base : head).flatMap((finding) =>
+      finding.status === "complete" && finding.value.kind === "http-route" && finding.evidence.some(({ path, line }) => path === change.document && line === change.line) ? [finding.value.handler] : [],
+    );
+    return handlers.length === 0 ? change : { ...change, handlers };
+  });
 }
 
 function operationsByIdentity(findings: readonly Finding<ContractOperation>[]): Map<string, ContractOperation> {

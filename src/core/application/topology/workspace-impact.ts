@@ -23,7 +23,8 @@ import {
   type JoinedSite,
   type LinkGraph,
 } from "../../domain/topology/link-graph.ts";
-import type { Reach } from "../../domain/topology/link.ts";
+import type { ImpactedLink, Reach } from "../../domain/topology/link.ts";
+import type { ChangedContract } from "../../domain/impact/changed-contracts.ts";
 import { inferGateways, matchCallSite, matchEventCallSite, prefixOf, type Gateway, type GatewayDeclaration, type JoinResult, type RepositoryEntrypoints } from "../../domain/topology/link-match.ts";
 import { directoryNameOf } from "../../domain/topology/repository-identity.ts";
 import type { CallersTarget, ImpactCallersRequest, ImpactFault, ImpactOfChangeRequest, ImpactQueries } from "../../ports/impact-queries.port.ts";
@@ -159,7 +160,7 @@ function workspaceImpactQueries(deps: WorkspaceImpactDeps, captured?: CapturedWa
       repositorySnapshots: workspace.repositorySnapshots,
       trigger: { repo: trigger, ...(impact?.mergeBase === undefined ? {} : { mergeBase: impact.mergeBase }) },
       sections: Object.fromEntries(Object.entries(sections)),
-      links: mergeLinks(upstream.value.graph, downstream.value.graph),
+      links: withOperations(mergeLinks(upstream.value.graph, downstream.value.graph), trigger, impact?.changedContracts ?? []),
     };
     const config = walked.value.inputs.declaredConfig;
     const declared = { repos: workspace.workspace.repos, gateways: workspace.workspace.gateways.toSorted((a, b) => compareText(a.prefix, b.prefix) || compareText(a.repo, b.repo)), source: workspace.workspace.source, budget: request.budget, ...("targets" in request ? { targets: request.targets } : {}), ...("changed" in request ? { changed: request.changed } : {}) };
@@ -389,7 +390,20 @@ function entrypointsOf(repository: WorkspaceRepository): RepositoryEntrypoints {
 }
 
 function reachedHandlers(impact: ImpactValue): Set<string> {
-  return new Set([...impact.entrypoints.map(({ handler }) => handlerKey(handler)), ...(impact.changedEntrypoints ?? []).map(({ handler }) => handlerKey(handler))]);
+  return new Set([
+    ...impact.entrypoints.map(({ handler }) => handlerKey(handler)),
+    ...(impact.changedEntrypoints ?? []).map(({ handler }) => handlerKey(handler)),
+    ...(impact.changedContracts ?? []).flatMap(({ handlers }) => (handlers ?? []).map(handlerKey)),
+  ]);
+}
+
+/** A link that lands in a handler of the trigger serving an operation the change altered or removed calls that operation. */
+function withOperations(links: readonly ImpactedLink[], trigger: string, contracts: readonly ChangedContract[]): ImpactedLink[] {
+  return links.map((impacted) => {
+    const key = handlerKey(impacted.link.to.handler);
+    const operations = impacted.link.to.repo !== trigger ? [] : contracts.flatMap(({ handlers, ...operation }) => ((handlers ?? []).some((handler) => handlerKey(handler) === key) ? [operation] : []));
+    return operations.length === 0 ? impacted : { ...impacted, operations };
+  });
 }
 
 /** A call site the join did not link: the service's drift, a name no repository given serves, or two repositories that matched it equally. */

@@ -1,5 +1,6 @@
 import type { Entrypoint } from "../entrypoints/entrypoint.ts";
 import type { Handler } from "../entrypoints/http-route.ts";
+import type { ChangedContract } from "../impact/changed-contracts.ts";
 import { compareText } from "../shared/code-node.ts";
 
 /** How a call site was matched to the entrypoint it reaches. */
@@ -26,6 +27,11 @@ export interface ImpactedLink {
   link: Link;
   direction: "upstream" | "downstream";
   reach: Reach;
+  /**
+   * The contract operations the change altered or removed that the handler the link lands in serves: the call site calls
+   * the operation, which does not establish that it reads the data that changed.
+   */
+  operations?: readonly Omit<ChangedContract, "handlers">[];
 }
 
 /** What makes two links one, and what a reach names: every end, the transport and the basis, never the confidence. */

@@ -428,9 +428,13 @@ function changedLine(change: ChangedEntrypoint): string {
 }
 
 function changedContractLine(change: ChangedContract): string {
+  return `  - ${changedContractText(change)}`;
+}
+
+function changedContractText(change: Omit<ChangedContract, "handlers">): string {
   const name = change.operationId === undefined ? "" : ` (${change.operationId})`;
   const parts = change.parts === undefined ? "" : ` ${change.parts.join(" and ")}`;
-  return `  - ${change.change} ${change.method} ${change.path}${name}${parts} at ${change.document}:${change.line}`;
+  return `${change.change} ${change.method} ${change.path}${name}${parts} at ${change.document}:${change.line}`;
 }
 
 function reachedLines(reached: ReachedEntrypoint, seeds: readonly Seed[], detail: ResponseMode, owner: ImpactOwner, sharedLookup = false, sharedOrigin = false, selectable = true): string[] {
@@ -881,11 +885,11 @@ function declarationText(entry: { file: string; candidates: readonly string[] })
   return entry.candidates.length === 0 ? `${entry.file} declares no symbol` : `declared in ${entry.file}: ${entry.candidates.join(", ")}`;
 }
 
-function impactedLinkLine({ link, direction, reach }: ImpactedLink, indexes: ReadonlyMap<string, number>): string {
+function impactedLinkLine({ link, direction, reach, operations }: ImpactedLink, indexes: ReadonlyMap<string, number>): string {
   const confidence = link.confidence < 1 ? `, confidence ${link.confidence}` : "";
   const profiles = link.profiles === undefined ? "" : `, under ${link.profiles.join(", ")}`;
   const chain = reach.length === 0 ? "" : `; reach: ${reach.map((id) => indexes.get(id) ?? id).join(", ")}`;
-  return `  - ${indexes.get(link.id)}. ${link.from.repo}:${placeText(link.from.file, link.from.line)} ${link.from.symbol} -> ${link.to.repo} ${link.to.name} -> ${handlerText(link.to.handler)} (${link.basis}${confidence}${profiles}, ${direction}${chain}) [linkId ${JSON.stringify(link.id)}]`;
+  return `  - ${indexes.get(link.id)}. ${link.from.repo}:${placeText(link.from.file, link.from.line)} ${link.from.symbol} -> ${link.to.repo} ${link.to.name} -> ${handlerText(link.to.handler)} (${link.basis}${confidence}${profiles}, ${direction}${chain})${(operations ?? []).map((operation) => `; calls the operation ${changedContractText(operation)}`).join("")} [linkId ${JSON.stringify(link.id)}]`;
 }
 
 function callSiteLine(site: CallSite): string {

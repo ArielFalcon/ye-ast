@@ -2162,6 +2162,19 @@ test("a workspace answer lists the links across repositories with their basis, t
   await session.close();
 });
 
+test("a workspace link into a handler serving a changed contract operation says the caller calls that operation, not that it reads the field", async () => {
+  const fact = workspaceImpactFact();
+  if (fact.status === "unknown") throw new Error("unknown");
+  const operations = [{ change: "altered" as const, method: "GET" as const, path: "/orders/{id}", operationId: "getOrder", document: "openapi/api.yaml", line: 6, parts: ["response" as const] }];
+  const value = { ...fact.value, links: fact.value.links.map((link) => ({ ...link, operations })) };
+  const { session } = await setup({ workspaceOfChange: async () => ({ ok: true as const, value: { fact: { ...fact, value } } }) });
+
+  const text = textOf(await session.callTool("ye_ast_impact", { base: "main", workspace: WORKSPACE }));
+
+  assert.match(text, /OrderController\.one \(route-overlap, upstream; reach: 1\); calls the operation altered GET \/orders\/\{id\} \(getOrder\) response at openapi\/api\.yaml:6 \[linkId/);
+  await session.close();
+});
+
 test("the workspace parameter names its repositories by a nested path, accepts gateways, and refuses what it does not define", async () => {
   const { session, calls } = await setup();
   const tools = await session.listTools();

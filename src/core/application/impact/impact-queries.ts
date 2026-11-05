@@ -5,7 +5,7 @@ import { selectChange } from "../../domain/change/change-selection.ts";
 import { resourceImpact, resourceOwners } from "../../domain/change/resource-impact.ts";
 import type { FileChange } from "../../domain/change/diff-reader.ts";
 import { isSeedable, selectSeeds, type ComponentRef, type SelectedSeed } from "../../domain/change/seeds.ts";
-import { changedContracts } from "../../domain/impact/changed-contracts.ts";
+import { changedContracts, servedContracts } from "../../domain/impact/changed-contracts.ts";
 import { changedEntrypoints } from "../../domain/impact/changed-entrypoints.ts";
 import { EDGE_POLICY } from "../../domain/impact/edge-policy.ts";
 import { nameTail, referenceKey, uniqueReferenceKeys, removedDeclarationCuts, rootedName, unreadRelationCuts, unresolvedLinkCuts, type UnreadRelation } from "../../domain/impact/impact-cuts.ts";
@@ -342,7 +342,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
     const changedPaths = new Set(radius.files.map((file) => file.path));
     const contracts = changedContracts(deps.contracts.operations(baseTree.sources), deps.contracts.operations(headTree.sources), (path) => changedPaths.has(path) && entrypointSelected(path));
     fixed.push(...contracts.cuts);
-    const value: ImpactValue = { mergeBase: radius.mergeBase, seeds: [], changedEntrypoints: entrypointChanges, ...(contracts.changes.length === 0 ? {} : { changedContracts: contracts.changes }), symbols: [], entrypoints: [], cost: { expansionsUsed: 0 } };
+    const value: ImpactValue = { mergeBase: radius.mergeBase, seeds: [], changedEntrypoints: entrypointChanges, ...(contracts.changes.length === 0 ? {} : { changedContracts: servedContracts(contracts.changes, baseTree.findings, headTree.findings) }), symbols: [], entrypoints: [], cost: { expansionsUsed: 0 } };
 
     let moduleRead: ReturnType<typeof moduleImpact> | undefined;
     const moduleReader = deps.moduleDependencies;

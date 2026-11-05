@@ -375,6 +375,7 @@ const workspaceImpact = z.looseObject({
     }),
     direction: z.string(),
     reach: strings,
+    operations: z.array(z.looseObject({ change: z.string(), method: z.string(), path: z.string(), document: z.string(), line: z.number() })).optional(),
   })),
 });
 const repositoryEvidence = z.looseObject({ repo: z.string(), path: z.string(), line: z.number() });
