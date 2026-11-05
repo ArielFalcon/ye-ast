@@ -22,7 +22,7 @@ const session = await openSession(createMcpServer({
     containsSecret: () => false,
   },
 }));
-const bytes = (value: unknown) => Buffer.byteLength(JSON.stringify(value));
+const bytes = (value: unknown) => value === undefined ? 0 : Buffer.byteLength(JSON.stringify(value));
 try {
   const tools = await session.listTools();
   console.log(JSON.stringify({

@@ -16,7 +16,7 @@ test("renders the supplied page without slicing it again and preserves provenanc
   assert.match(text, /"anchor":"anchor"/);
   assert.match(text, /"status":"partial"/);
   assert.match(text, /"limit":3/);
-  assert.match(text, /structuredContent\.recovery/);
+  assert.match(text, /recovery in the result JSON/);
   assert.doesNotMatch(text, /"resultIdentity":/);
   assert.doesNotMatch(text, /"revision":"sha"/);
 });
@@ -46,7 +46,7 @@ test("a verified empty base-module page retains its owner, snapshot, and zero to
   assert.match(text, /"sha":"base-sha"/);
   assert.match(text, /"total":0/);
   assert.match(text, /Records: \[\]/);
-  assert.match(text, /structuredContent\.recovery/);
+  assert.match(text, /recovery in the result JSON/);
   assert.doesNotMatch(text, /"changed":/);
 });
 
@@ -54,11 +54,11 @@ test("full selection guides the complete structured page without serializing its
   const records = { source, availability: "available", kind: "cut-places", context: { owner: { kind: "fact" }, snapshot: source.snapshot, analysis: { status: "partial" }, cutIndex: 2, kind: "depth", anchor: "anchor" }, items: [{ atIndex: 2, place: "unique-place" }] } as EvidenceSelectionResult;
   const recovery = { version: 1 as const, status: "available" as const, resultIdentity: "identity", query: { name: "ye_ast_callers" as const, arguments: { revision: "sha" } } };
   const text = renderEvidenceSelection({ mode: "full", select: { kind: "cut-places", owner: { kind: "fact" }, cutIndex: 2 }, records, page: { limit: 1, offset: 1, returned: 1, total: 2, nextCursor: "next" }, recovery });
-  assert.match(text, /structuredContent.*source/);
-  assert.match(text, /structuredContent.*context.*items.*page/);
+  assert.match(text, /source in the result JSON/);
+  assert.match(text, /result JSON.*context, items and page/);
   assert.match(text, /"limit":3/);
   assert.match(text, /"nextCursor":"next"/);
-  assert.match(text, /structuredContent\.recovery/);
+  assert.match(text, /recovery in the result JSON/);
   assert.doesNotMatch(text, /"resultIdentity":/);
   assert.doesNotMatch(text, /unique-place/);
 });
@@ -68,7 +68,7 @@ test("full guide does not serialize source reads twice and distinguishes unavail
   const text = renderEvidenceSelection({ mode: "full", select: { kind: "entrypoint-evidence", findingIndex: 0 }, records, recovery: { version: 1, status: "unavailable", reason: "unresolved-context" } });
   assert.doesNotMatch(text, /unique-source-read/);
   assert.doesNotMatch(text, /context, items and page/);
-  assert.match(text, /structuredContent\.evidence/);
+  assert.match(text, /evidence in the result JSON/);
   assert.match(text, /"limit":3/);
   assert.match(text, /unresolved/);
 });
@@ -82,7 +82,7 @@ test("selected text keeps unknown read coverage but leaves producer catalogs in 
     assert.doesNotMatch(text, /unique-heavy-engine-catalog/);
     assert.match(text, /index-unavailable/);
     assert.match(text, /"repo":"other"/);
-    assert.match(text, /structuredContent.source/);
+    assert.match(text, /source in the result JSON/);
   }
   assert.equal(JSON.stringify(records.source), before);
 });

@@ -750,7 +750,7 @@ function baseModuleGuides(value: ImpactValue, repo: string, mergeBase = value.me
 }
 
 function unknownImpactGuide(): string[] {
-  return ["Investigation guide:", "  Analysis is unknown, not a verified absence of impact. Inspect reason and evidence in structuredContent (full mode includes the full fact) to establish the missing prerequisite before retrying; there is no value to search."];
+  return ["Investigation guide:", "  Analysis is unknown, not a verified absence of impact. Inspect reason and evidence in the result JSON (full mode includes the full fact) to establish the missing prerequisite before retrying; there is no value to search."];
 }
 
 function localImpactGuide(fact: Fact<ImpactValue> & { status: "complete" | "partial" }, mode: ResponseMode = "details", context?: RenderContext): string[] {
@@ -758,7 +758,7 @@ function localImpactGuide(fact: Fact<ImpactValue> & { status: "complete" | "part
   if (lookups.length === 0 && fact.status === "complete") return ["There are no recorded consequences or walk origins within the declared scope and change selection."];
   return [
     "Investigation guide:",
-    mode === "full" ? "  JSON navigation: paths below are relative to structuredContent." : "  Full JSON navigation (available in full mode): paths below are relative to structuredContent; query the returned payload directly when already included.",
+    mode === "full" ? "  JSON navigation: paths below are relative to the result JSON." : "  Full JSON navigation (available in full mode): paths below are relative to the result JSON; query the returned payload directly when already included.",
     ...lookups,
     ...(lookups.length === 0 ? ["  There are no recorded consequences or walk origins in this answer. Read inputs.declaredScope and inputs.declaredConfig before interpreting that scoped emptiness."] : []),
     ...impactCutLookup(cutsOf(fact), "cuts", context),
@@ -774,7 +774,7 @@ function workspaceImpactGuide(fact: Fact<WorkspaceImpactValue> & { status: "comp
   const otherImpacts = Object.entries(value.sections).flatMap(([repo, section]) => repo === value.trigger.repo || section.status === "unknown" || section.value.impact === undefined ? [] : [section.value.impact]);
   return [
     "Investigation guide:",
-    mode === "full" ? "  JSON navigation: paths below are relative to structuredContent." : "  Full JSON navigation (available in full mode): paths below are relative to structuredContent; query the returned payload directly when already included.",
+    mode === "full" ? "  JSON navigation: paths below are relative to the result JSON." : "  Full JSON navigation (available in full mode): paths below are relative to the result JSON; query the returned payload directly when already included.",
     ...(Object.keys(value.sections).length === 0 ? [] : ["  Select value.sections by the exact repository key, not a shared relative file path. Check section.status and, when present, section.reason/cuts and section.value.reads[].fact status/reason before using its evidence; an unknown section has no value."]),
     ...(trigger?.status !== "unknown" && trigger?.value.impact !== undefined ? [`  The originating repository's walk is at ${originPath}.`, ...impactLookups(trigger.value.impact, originPath, context)] : []),
     ...(otherImpacts.length === 0 ? [] : ["  Other repository walks are at value.sections[repo].value.impact only when that field exists. In each walk, entrypoints[].seeds indexes that same walk's seeds array; never join origins across repositories."]),

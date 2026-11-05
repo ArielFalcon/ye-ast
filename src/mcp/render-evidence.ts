@@ -20,10 +20,10 @@ export function renderEvidenceSelection(input: {
       ...renderSourceContext(records.source),
       `Availability: ${records.availability}`,
       records.availability === "available"
-        ? "Inspect structuredContent.source for provenance and structuredContent.context, items and page for the complete selected projection."
-        : "Inspect structuredContent.source for provenance.",
+        ? "Inspect source in the result JSON for provenance, and context, items and page for the complete selected projection."
+        : "Inspect source in the result JSON for provenance.",
     ];
-    if (records.availability === "unavailable") lines.push(`Reason: ${records.reason}`, "Inspect structuredContent.evidence for the unavailable result's evidence.");
+    if (records.availability === "unavailable") lines.push(`Reason: ${records.reason}`, "Inspect evidence in the result JSON for the unavailable result's evidence.");
     if (page) lines.push(`Page: ${JSON.stringify(page)}`);
     lines.push(recoveryReference(recovery));
     return lines.join("\n");

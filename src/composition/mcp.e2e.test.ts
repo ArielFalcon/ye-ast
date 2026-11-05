@@ -8,6 +8,22 @@ import { createInterface } from "node:readline";
 import { pathToFileURL } from "node:url";
 import { AjvJsonSchemaValidator } from "@modelcontextprotocol/server/validators/ajv";
 import { composeCli } from "./compose.ts";
+import { RESULT_JSON_LABEL, ENTRYPOINTS_OUTPUT, IMPACT_OUTPUT, CALLERS_OUTPUT } from "../mcp/server.ts";
+
+function resultFields(result: any): any {
+  const text = result.content?.[0]?.text;
+  assert.ok(text);
+  const at = text.lastIndexOf(`\n${RESULT_JSON_LABEL}`);
+  assert.notEqual(at, -1);
+  return { text: text.slice(0, at), ...JSON.parse(text.slice(at + 1 + RESULT_JSON_LABEL.length)) };
+}
+
+/** Content text without its closing result JSON line. */
+function presentation(text: string): string {
+  const at = text.lastIndexOf(`\n${RESULT_JSON_LABEL}`);
+  assert.notEqual(at, -1);
+  return text.slice(0, at);
+}
 
 const GIT_ENV = {
   ...process.env,
@@ -134,18 +150,20 @@ test("a real client over stdio lists the tools and reads the entrypoints fact th
   const printed: string[] = [];
   const code = await composeCli({ scratchRoot })(["map", repo], { out: (line) => printed.push(line), err: () => {} });
   assert.equal(code, 0);
-  const { mode, repositoryRoots, recovery, ...fact } = called.structuredContent;
+  assert.equal(called.structuredContent, undefined);
+  const { mode, repositoryRoots, recovery, text: _text, ...fact } = resultFields(called);
   assert.ok(recovery);
   assert.deepEqual(repositoryRoots, [{ repo: "shop-service", path: realpathSync(repo) }]);
   assert.equal(mode, "full");
   assert.deepEqual(fact, JSON.parse(printed.join("\n")));
-  assert.match(called.content[0]?.text ?? "", /value\.entrypoints\.value/);
-  assert.doesNotMatch(called.content[0]?.text ?? "", /GET \/orders\/\{id\}/);
+  assert.match(presentation(called.content[0]!.text), /value\.entrypoints\.value/);
+  assert.doesNotMatch(presentation(called.content[0]!.text), /GET \/orders\/\{id\}/);
   const summary = (await request("tools/call", { name: "ye_ast_entrypoints", arguments: {} })).result as {
     isError?: boolean; structuredContent: Record<string, unknown>; content: { text: string }[];
   };
   assert.equal(summary.isError, undefined);
-  const { recovery: summaryRecovery, ...summaryReceipt } = summary.structuredContent;
+  assert.equal(summary.structuredContent, undefined);
+  const { recovery: summaryRecovery, text: _summaryText, ...summaryReceipt } = resultFields(summary);
   assert.deepEqual(summaryRecovery, recovery);
   assert.deepEqual(summaryReceipt, { mode: "summary", status: fact["status"], snapshot: fact["snapshot"] });
   assert.match(summary.content[0]?.text ?? "", /GET \/orders\/\{id\}.*OrderController\.java:\d+/);
@@ -163,29 +181,29 @@ test("callers with a workspace joins the call site of another repository to the 
 
   assert.equal(first.isError, undefined);
   assert.deepEqual(
-    first.structuredContent.value.links.map(({ link }) => `${link.from.repo}:${link.from.line} -> ${link.to.repo} ${link.to.name} (${link.basis})`),
+    resultFields(first).value.links.map(({ link }: any) => `${link.from.repo}:${link.from.line} -> ${link.to.repo} ${link.to.name} (${link.basis})`),
     ["shop-web:7 -> shop-service GET /orders/{id} (route-overlap)"],
   );
-  assert.deepEqual(first.structuredContent.value.sections["shop-web"]?.value.unmatched.map((site) => site.line), [10]);
-  assert.ok((first.structuredContent.value.sections["shop-web"]?.value.impact?.symbols ?? []).some((symbol) => symbol.symbol.endsWith("open")));
+  assert.deepEqual(resultFields(first).value.sections["shop-web"]?.value.unmatched.map((site: any) => site.line), [10]);
+  assert.ok((resultFields(first).value.sections["shop-web"]?.value.impact?.symbols ?? []).some((symbol: any) => symbol.symbol.endsWith("open")));
   assert.deepEqual(first, second);
   assert.match(first.content[0]?.text ?? "", /value\.sections/);
   const args = { targets: [{ file: "src/main/java/shop/OrderController.java", symbol: "OrderController.one" }], workspace: { repos: [{ path: frontend }] } };
   for (const mode of ["summary", "details"] as const) {
     const result = (await request("tools/call", { name: "ye_ast_callers", arguments: { ...args, mode } })).result as { isError?: boolean; structuredContent: Record<string, unknown>; content: { text: string }[] };
     assert.equal(result.isError, undefined);
-    assert.deepEqual(result.structuredContent, { mode, status: first.structuredContent.status, snapshot: first.structuredContent.snapshot, recovery: first.structuredContent["recovery"] });
+    assert.deepEqual(resultFields(result), { text: presentation(result.content[0]!.text), mode, status: resultFields(first).status, snapshot: resultFields(first).snapshot, recovery: resultFields(first)["recovery"] });
     assert.match(result.content[0]?.text ?? "", /shop-web:src\/app\/order\.page\.ts:7/);
   }
   const localArgs = { targets: args.targets };
   const localFull = (await request("tools/call", { name: "ye_ast_callers", arguments: { ...localArgs, mode: "full" } })).result as { isError?: boolean; structuredContent: Record<string, unknown>; content: { text: string }[] };
   assert.equal(localFull.isError, undefined);
-  assert.equal(localFull.structuredContent["mode"], "full");
+  assert.equal(resultFields(localFull)["mode"], "full");
   assert.match(localFull.content[0]?.text ?? "", /value\.seeds/);
   for (const mode of ["summary", "details"] as const) {
     const local = (await request("tools/call", { name: "ye_ast_callers", arguments: { ...localArgs, mode } })).result as { isError?: boolean; structuredContent: Record<string, unknown>; content: { text: string }[] };
     assert.equal(local.isError, undefined);
-    assert.deepEqual(local.structuredContent, { mode, status: localFull.structuredContent["status"], snapshot: localFull.structuredContent["snapshot"], recovery: localFull.structuredContent["recovery"] });
+    assert.deepEqual(resultFields(local), { text: presentation(local.content[0]!.text), mode, status: resultFields(localFull)["status"], snapshot: resultFields(localFull)["snapshot"], recovery: resultFields(localFull)["recovery"] });
     assert.match(local.content[0]?.text ?? "", /OrderController\.one/);
   }
 });
@@ -195,16 +213,16 @@ test("declared foreign repository reads its own snapshot without implicit worksp
   const local = (await request("tools/call", { name: "ye_ast_entrypoints", arguments: { mode: "full" } })).result as { structuredContent: Record<string, unknown> };
   const foreign = (await request("tools/call", { name: "ye_ast_entrypoints", arguments: { repo: "foreign", mode: "full" } })).result as { isError?: boolean; structuredContent: Record<string, unknown> };
   assert.equal(foreign.isError, undefined);
-  assert.deepEqual(foreign.structuredContent["repositoryRoots"], [{ repo: "foreign", path: realpathSync(frontend) }]);
-  const foreignSnapshot = foreign.structuredContent["snapshot"] as { repo: string; sha: string };
+  assert.deepEqual(resultFields(foreign)["repositoryRoots"], [{ repo: "foreign", path: realpathSync(frontend) }]);
+  const foreignSnapshot = resultFields(foreign)["snapshot"] as { repo: string; sha: string };
   assert.equal(foreignSnapshot.repo, "foreign");
   assert.equal(foreignSnapshot.sha, execFileSync("git", ["rev-parse", "HEAD"], { cwd: frontend, env: GIT_ENV, encoding: "utf8" }).trim());
-  assert.match(JSON.stringify(foreign.structuredContent["value"]), /\/foreign/);
-  assert.match(JSON.stringify(local.structuredContent["value"]), /\/orders/);
-  assert.doesNotMatch(JSON.stringify(local.structuredContent["value"]), /\/foreign/);
+  assert.match(JSON.stringify(resultFields(foreign)["value"]), /\/foreign/);
+  assert.match(JSON.stringify(resultFields(local)["value"]), /\/orders/);
+  assert.doesNotMatch(JSON.stringify(resultFields(local)["value"]), /\/foreign/);
   const listed = (await request("tools/list")).result as { tools: { name: string; outputSchema: Parameters<AjvJsonSchemaValidator["getValidator"]>[0] }[] };
-  const validate = new AjvJsonSchemaValidator().getValidator(listed.tools.find((tool) => tool.name === "ye_ast_entrypoints")!.outputSchema);
-  const recovery = foreign.structuredContent["recovery"] as { version: number; status: string; resultIdentity: string; query: { name: string; arguments: Record<string, unknown> } };
+  const validate = new AjvJsonSchemaValidator().getValidator(ENTRYPOINTS_OUTPUT['~standard'].jsonSchema.output({ target: 'draft-07' }));
+  const recovery = resultFields(foreign)["recovery"] as { version: number; status: string; resultIdentity: string; query: { name: string; arguments: Record<string, unknown> } };
   assert.deepEqual(recovery.query, { name: "ye_ast_entrypoints", arguments: { repo: "foreign", revision: foreignSnapshot.sha } });
   assert.equal(recovery.version, 1);
   assert.equal(recovery.status, "available");
@@ -212,31 +230,31 @@ test("declared foreign repository reads its own snapshot without implicit worksp
   for (const mode of ["summary", "details", "full"] as const) {
     const result = (await request("tools/call", { name: "ye_ast_entrypoints", arguments: { repo: "foreign", mode } })).result as { isError?: boolean; structuredContent: Record<string, unknown>; content: { text: string }[] };
     assert.equal(result.isError, undefined);
-    assert.equal(validate(result.structuredContent).valid, true);
-    assert.deepEqual(result.structuredContent["recovery"], recovery);
-    assert.match(result.content[0]!.text, /structuredContent\.recovery/);
-    assert.equal(result.content[0]!.text.includes(JSON.stringify(recovery)), false);
-    assert.equal(result.content[0]!.text.includes(JSON.stringify(recovery.query)), false);
+    assert.equal(validate(resultFields(result)).valid, true);
+    assert.deepEqual(resultFields(result)["recovery"], recovery);
+    assert.match(presentation(result.content[0]!.text), /recovery in the result JSON/);
+    assert.equal(presentation(result.content[0]!.text).includes(JSON.stringify(recovery.query)), false);
+    assert.equal(result.content[0]!.text.split(JSON.stringify(recovery)).length - 1, 1);
   }
   const replay = async () => (await request("tools/call", { name: recovery.query.name, arguments: { ...recovery.query.arguments, mode: "full" } })).result as { structuredContent: Record<string, unknown> };
   const sourceFact = (result: Record<string, unknown>) => {
     const { mode, repositoryRoots, recovery: metadata, ...fact } = result;
     return fact;
   };
-  assert.deepEqual(sourceFact((await replay()).structuredContent), sourceFact(foreign.structuredContent));
+  assert.deepEqual(sourceFact(resultFields((await replay()))), sourceFact(resultFields(foreign)));
   writeFileSync(join(frontend, "src/main/java/shop/OrderController.java"), CONTROLLER.replace("/orders", "/changed"));
   execFileSync("git", ["add", "-A"], { cwd: frontend, env: GIT_ENV });
   execFileSync("git", ["commit", "-q", "-m", "change route"], { cwd: frontend, env: GIT_ENV });
   const current = (await request("tools/call", { name: "ye_ast_entrypoints", arguments: { repo: "foreign", mode: "full" } })).result as { structuredContent: Record<string, unknown> };
-  assert.match(JSON.stringify(current.structuredContent["value"]), /\/changed/);
-  assert.notDeepEqual(current.structuredContent["recovery"], recovery);
-  const old = (await replay()).structuredContent;
+  assert.match(JSON.stringify(resultFields(current)["value"]), /\/changed/);
+  assert.notDeepEqual(resultFields(current)["recovery"], recovery);
+  const old = resultFields((await replay()));
   assert.deepEqual(old["recovery"], recovery);
-  assert.deepEqual(sourceFact(old), sourceFact(foreign.structuredContent));
+  assert.deepEqual(sourceFact(old), sourceFact(resultFields(foreign)));
   assert.match(JSON.stringify(old["value"]), /\/foreign/);
   const workspaceResult = (await request("tools/call", { name: "ye_ast_workspace", arguments: { mode: "full" } })).result as { isError?: boolean; structuredContent: { value: { workspace: { repos: string[] } } } };
   assert.equal(workspaceResult.isError, undefined);
-  assert.deepEqual(workspaceResult.structuredContent.value.workspace.repos, ["shop-service"]);
+  assert.deepEqual(resultFields(workspaceResult).value.workspace.repos, ["shop-service"]);
   const live = (await request("tools/call", { name: "ye_ast_entrypoints", arguments: { repo: "foreign", live: true } })).result as { isError?: boolean; _meta?: Record<string, { kind: string }> };
   assert.equal(live.isError, true);
   assert.equal(live._meta?.["ye-ast/fault"]?.kind, "live-requires-trusted");
@@ -258,7 +276,7 @@ test("callers and impact replay real local and persisted workspace facts", async
   type Result = { isError?: boolean; structuredContent: Record<string, any>; content: { text: string }[]; _meta?: Record<string, any> };
   const call = async (name: string, args: Record<string, unknown>): Promise<Result> => (await request("tools/call", { name, arguments: args })).result as Result;
   const listed = (await request("tools/list")).result as { tools: { name: string; outputSchema: Parameters<AjvJsonSchemaValidator["getValidator"]>[0] }[] };
-  const fact = (result: Result) => { const { recovery, mode, repositoryRoots, ...source } = result.structuredContent; return source; };
+  const fact = (result: Result) => { const { recovery, mode, repositoryRoots, ...source } = resultFields(result); return source; };
   const recipes: { name: string; recovery: any; source: Result }[] = [];
   for (const workspaceArgs of [undefined, {}]) {
     for (const [name, args] of [
@@ -268,7 +286,7 @@ test("callers and impact replay real local and persisted workspace facts", async
       const input = { ...args, scope: { include: ["src/**"] }, budget: { depth: 5, expansions: 100 }, ...(workspaceArgs && { workspace: workspaceArgs }) };
       const source = await call(name, { ...input, mode: "full" });
       assert.equal(source.isError, undefined);
-      const recovery = source.structuredContent.recovery;
+      const recovery = resultFields(source).recovery;
       assert.equal(recovery.status, "available");
       assert.equal(recovery.query.name, name);
       assert.equal(recovery.query.arguments.repo, "shop-service");
@@ -278,32 +296,32 @@ test("callers and impact replay real local and persisted workspace facts", async
       assert.equal(recovery.query.arguments[name === "ye_ast_impact" ? "head" : "revision"], head);
       if (name === "ye_ast_impact") {
         assert.equal(recovery.query.arguments.base, base);
-        assert.equal(workspaceArgs ? source.structuredContent.value.trigger.mergeBase : source.structuredContent.value.mergeBase, base);
-        const impact = workspaceArgs ? source.structuredContent.value.sections["shop-service"].value.impact : source.structuredContent.value;
+        assert.equal(workspaceArgs ? resultFields(source).value.trigger.mergeBase : resultFields(source).value.mergeBase, base);
+        const impact = workspaceArgs ? resultFields(source).value.sections["shop-service"].value.impact : resultFields(source).value;
         assert.ok(impact.seeds.length > 0);
       }
       if (workspaceArgs) {
         assert.deepEqual(recovery.query.arguments.workspace, {});
         assert.match(recovery.query.arguments.replay.declaration, /^ws-r1:[0-9a-f]{64}$/);
         assert.deepEqual(recovery.query.arguments.replay.snapshots, [{ repo: "shop-service", kind: "sha", sha: head }, { repo: "shop-web", kind: "sha", sha: member }]);
-        assert.equal(source.structuredContent.value.workspace.source, "persisted");
-        const section = source.structuredContent.value.sections["shop-web"];
+        assert.equal(resultFields(source).value.workspace.source, "persisted");
+        const section = resultFields(source).value.sections["shop-web"];
         assert.equal(section.snapshot.sha, member);
         assert.ok(section.value.reads.some((read: any) => read.fact.snapshot.sha === member));
         assert.ok(section.value.callSites.some((site: any) => site.file === "src/app/order.page.ts"));
-        assert.ok(source.structuredContent.repositoryRoots.some((root: any) => root.repo === "shop-web" && root.path === realpathSync(frontend)));
+        assert.ok(resultFields(source).repositoryRoots.some((root: any) => root.repo === "shop-web" && root.path === realpathSync(frontend)));
       }
-      const validate = new AjvJsonSchemaValidator().getValidator(listed.tools.find((tool) => tool.name === name)!.outputSchema);
+      const validate = new AjvJsonSchemaValidator().getValidator((name === 'ye_ast_callers' ? CALLERS_OUTPUT : IMPACT_OUTPUT)['~standard'].jsonSchema.output({ target: 'draft-07' }));
       for (const mode of ["summary", "details", "full"]) {
         const result = await call(name, { ...input, mode });
-        assert.equal(validate(result.structuredContent).valid, true);
-        assert.deepEqual(result.structuredContent.recovery, recovery);
-        assert.match(result.content[0]!.text, /structuredContent\.recovery/);
-        assert.equal(result.content[0]!.text.includes(JSON.stringify(recovery)), false);
-        assert.equal(result.content[0]!.text.includes(JSON.stringify(recovery.query)), false);
+        assert.equal(validate(resultFields(result)).valid, true);
+        assert.deepEqual(resultFields(result).recovery, recovery);
+        assert.match(presentation(result.content[0]!.text), /recovery in the result JSON/);
+        assert.equal(presentation(result.content[0]!.text).includes(JSON.stringify(recovery.query)), false);
+        assert.equal(result.content[0]!.text.split(JSON.stringify(recovery)).length - 1, 1);
       }
       const replayed = await call(name, { ...recovery.query.arguments, mode: "full" });
-      assert.deepEqual(replayed.structuredContent.recovery, recovery);
+      assert.deepEqual(resultFields(replayed).recovery, recovery);
       assert.deepEqual(fact(replayed), fact(source));
       if (workspaceArgs) recipes.push({ name, recovery, source });
     }
@@ -316,9 +334,9 @@ test("callers and impact replay real local and persisted workspace facts", async
     delete currentArgs.replay;
     const current = await call(name, { ...currentArgs, mode: "full" });
     assert.notDeepEqual(fact(current), fact(source));
-    assert.notDeepEqual(current.structuredContent.value.sections["shop-web"].value.callSites, source.structuredContent.value.sections["shop-web"].value.callSites);
+    assert.notDeepEqual(resultFields(current).value.sections["shop-web"].value.callSites, resultFields(source).value.sections["shop-web"].value.callSites);
     const replayed = await call(name, { ...recovery.query.arguments, mode: "full" });
-    assert.deepEqual(replayed.structuredContent.recovery, recovery);
+    assert.deepEqual(resultFields(replayed).recovery, recovery);
     assert.deepEqual(fact(replayed), fact(source));
   }
   writeFileSync(join(repo, ".ye-ast/workspace.json"), JSON.stringify({ repos: [{ path: "../shop-web", id: "shop-web", revision: "main" }], gateways: [{ prefix: "changed", repo: "shop-service" }] }));
@@ -342,7 +360,7 @@ test("stdio workspace live member replays captured mixed snapshots and rejects a
   const call = async (name: string, args: object): Promise<Wire> => (await request("tools/call", { name, arguments: args })).result as Wire;
   const discovery = await call("ye_ast_workspace", { repos, offline: true, mode: "full" });
   assert.notEqual(discovery.isError, true, JSON.stringify(discovery));
-  assert.ok(discovery.structuredContent?.value.repositorySnapshots.some((item: any) => item.repo === "shop-web" && item.snapshot.kind === "live"));
+  assert.ok(resultFields(discovery)?.value.repositorySnapshots.some((item: any) => item.repo === "shop-web" && item.snapshot.kind === "live"));
   const recipes: { name: string; arguments: Record<string, unknown>; identity: string }[] = [];
   for (const [name, args] of [
     ["ye_ast_callers", { targets: [{ file: "src/main/java/shop/OrderController.java", symbol: "OrderController.one" }] }],
@@ -350,9 +368,9 @@ test("stdio workspace live member replays captured mixed snapshots and rejects a
   ] as const) {
     const result = await call(name, { ...args, workspace: { repos }, offline: true, mode: "full" });
     assert.notEqual(result.isError, true, JSON.stringify(result));
-    const value = result.structuredContent!.value;
+    const value = resultFields(result)!.value;
     assert.ok(value.links.some((item: any) => item.link.from.repo === "shop-web" && item.link.to.name === "GET /orders/{id}"));
-    const recovery = result.structuredContent!.recovery;
+    const recovery = resultFields(result)!.recovery;
     assert.equal(recovery.status, "available", JSON.stringify(recovery));
     const vector = recovery.query.arguments.replay.snapshots;
     assert.equal(vector[0].repo, "shop-service");
@@ -364,7 +382,7 @@ test("stdio workspace live member replays captured mixed snapshots and rejects a
     assert.ok(vector[1].stateId);
     const replayed = await call(name, { ...recovery.query.arguments, mode: "full" });
     assert.notEqual(replayed.isError, true, JSON.stringify(replayed));
-    assert.equal(replayed.structuredContent!.recovery.resultIdentity, recovery.resultIdentity);
+    assert.equal(resultFields(replayed)!.recovery.resultIdentity, recovery.resultIdentity);
     recipes.push({ name, arguments: recovery.query.arguments, identity: recovery.resultIdentity });
   }
   writeFileSync(join(frontend, "src/app/order.page.ts"), COMPONENT.replace("shop-api/orders/7", "changed-api/orders/7"));
@@ -381,7 +399,7 @@ test("real callers expose two recorded origins for a reached handler", async () 
   const args = { targets: ["first", "second"].map((name) => ({ file: "src/main/java/shop/OrderController.java", symbol: `OrderController.${name}` })), mode: "full" };
   const result = (await request("tools/call", { name: "ye_ast_callers", arguments: args })).result as { isError?: boolean; structuredContent: { value: { entrypoints: { handler: unknown; seeds: number[] }[] } } };
   assert.equal(result.isError, undefined, JSON.stringify(result));
-  assert.ok(result.structuredContent.value.entrypoints.some((item) => new Set(item.seeds).size >= 2), JSON.stringify(result.structuredContent.value.entrypoints));
+  assert.ok(resultFields(result).value.entrypoints.some((item: any) => new Set(item.seeds).size >= 2), JSON.stringify(resultFields(result).value.entrypoints));
 });
 
 test("selected callers pages replay real pinned origins and reject a changed live source", async () => {
@@ -395,7 +413,7 @@ test("selected callers pages replay real pinned origins and reject a changed liv
   const targets = ["first", "second"].map((name) => ({ file: "src/main/java/shop/OrderController.java", symbol: `OrderController.${name}` }));
   const source = await call({ targets, live: true, mode: "full" });
   assert.notEqual(source.isError, true, JSON.stringify(source));
-  const { value, recovery } = source.structuredContent!;
+  const { value, recovery } = resultFields(source)!;
   assert.equal(recovery.status, "available");
   const reached = value.entrypoints.find((item: any) => new Set(item.seeds).size >= 2);
   assert.ok(reached, JSON.stringify(value.entrypoints));
@@ -415,22 +433,22 @@ test("selected callers pages replay real pinned origins and reject a changed liv
   const args = { ...recovery.query.arguments, mode: "full", select, page: { limit: 1 }, expect: recovery.resultIdentity };
   const first = await call(args);
   assert.notEqual(first.isError, true, JSON.stringify(first));
-  assert.equal(first.structuredContent!.kind, "projection");
-  assert.equal(first.structuredContent!.recovery.resultIdentity, recovery.resultIdentity);
-  assert.ok(first.structuredContent!.page.nextCursor);
+  assert.equal(resultFields(first)!.kind, "projection");
+  assert.equal(resultFields(first)!.recovery.resultIdentity, recovery.resultIdentity);
+  assert.ok(resultFields(first)!.page.nextCursor);
   const selectedText = first.content?.find((part) => part.type === "text")?.text ?? "";
-  assert.match(selectedText, /structuredContent\.context, items and page/);
-  assert.doesNotMatch(selectedText, /Records:/);
-  assert.deepEqual((await call(args)).structuredContent, first.structuredContent);
-  const items = [...first.structuredContent!.items];
-  let cursor = first.structuredContent!.page.nextCursor;
+  assert.match(presentation(selectedText), /context, items and page/);
+  assert.doesNotMatch(presentation(selectedText), /Records:/);
+  assert.deepEqual(resultFields((await call(args))), resultFields(first));
+  const items = [...resultFields(first)!.items];
+  let cursor = resultFields(first)!.page.nextCursor;
   const firstCursor = cursor;
   while (cursor) {
     const next = await call({ ...args, page: { limit: 1, cursor } });
     assert.notEqual(next.isError, true, JSON.stringify(next));
-    assert.equal(next.structuredContent!.recovery.resultIdentity, recovery.resultIdentity);
-    items.push(...next.structuredContent!.items);
-    cursor = next.structuredContent!.page.nextCursor;
+    assert.equal(resultFields(next)!.recovery.resultIdentity, recovery.resultIdentity);
+    items.push(...resultFields(next)!.items);
+    cursor = resultFields(next)!.page.nextCursor;
   }
   assert.deepEqual(items, indexes.map((seedIndex) => ({ seedIndex, seed: value.seeds[seedIndex] })));
   writeFileSync(file, CONTROLLER.replace('return "x"', 'return "changed-live"'));

@@ -21,8 +21,17 @@ import type { RepoImpact } from "../core/ports/workspace-impact-queries.port.ts"
 import type { DecisionQueries, DecisionsRequest, DecisionValue } from "../core/ports/decision-queries.port.ts";
 import type { OutwardName } from "../core/domain/topology/outward-name.ts";
 import type { FactRead, WorkspaceRefresh } from "../core/ports/workspace-queries.port.ts";
-import { createMcpServer, ENTRYPOINTS_OUTPUT, IMPACT_OUTPUT, CALLERS_OUTPUT, IMPORTERS_OUTPUT, OUTLINE_OUTPUT, WORKSPACE_OUTPUT, DECISIONS_OUTPUT } from "./server.ts";
+import { createMcpServer, FAULT_META, RESULT_JSON_LABEL, ENTRYPOINTS_OUTPUT, IMPACT_OUTPUT, CALLERS_OUTPUT, IMPORTERS_OUTPUT, OUTLINE_OUTPUT, WORKSPACE_OUTPUT, DECISIONS_OUTPUT } from "./server.ts";
+
+function resultFields(result: any): any {
+  const text = result.content?.[0]?.text;
+  assert.ok(text);
+  const at = text.lastIndexOf(`\n${RESULT_JSON_LABEL}`);
+  assert.notEqual(at, -1);
+  return { text: text.slice(0, at), ...JSON.parse(text.slice(at + 1 + RESULT_JSON_LABEL.length)) };
+}
 import { openSession, type Session } from "./test-session.ts";
+import { CONSUMER_ROUTES } from "./test-consumer-routes.ts";
 import { createHash } from "node:crypto";
 import { encodeCursor, selectionDigest } from "./evidence-cursor.ts";
 
@@ -271,7 +280,19 @@ async function setup(answers: Partial<Answers> = {}, refresh?: WorkspaceRefresh,
   return { session: await openSession(server), calls };
 }
 
-const textOf = (result: { content: { text: string }[] }): string => result.content.map((block) => block.text).join("\n");
+/** The presentation text a reader sees: content without its closing result JSON line. */
+const textOf = (result: { content: { text: string }[] }): string => {
+  const whole = result.content.map((block) => block.text).join("\n");
+  const at = whole.lastIndexOf(`\n${RESULT_JSON_LABEL}`);
+  return at === -1 ? whole : whole.slice(0, at);
+};
+
+/** The structured fields beside the presentation text, which carries the same text as content. */
+function fieldsOf(value: unknown): Record<string, unknown> {
+  const { text, ...rest } = value as Record<string, unknown>;
+  assert.equal(typeof text, "string");
+  return rest;
+}
 
 test("entrypoint evidence selection returns the selected finding's evidence through MCP", async () => {
   const { session, calls } = await setup();
@@ -282,7 +303,7 @@ test("entrypoint evidence selection returns the selected finding's evidence thro
       page: { limit: 1 },
     });
     assert.equal(result.isError, undefined);
-    const projection = result.structuredContent as { kind: string; items: unknown[]; page: { total: number } };
+    const projection = resultFields(result) as { kind: string; items: unknown[]; page: { total: number } };
     assert.equal(projection.kind, "projection");
     assert.deepEqual(projection.items, [{ evidenceIndex: 0, evidence: { path: "src/OrderController.java", line: 17 } }]);
     assert.equal(projection.page.total, 1);
@@ -296,7 +317,7 @@ test("entrypoints exposes a pinned recovery recipe across response modes", async
   const { session } = await setup();
   try {
     const results = await Promise.all((["summary", "details", "full"] as const).map((mode) => session.callTool("ye_ast_entrypoints", { mode })));
-    const recovery = results.map((result) => (result.structuredContent as Record<string, unknown>).recovery);
+    const recovery = results.map((result) => (resultFields(result) as Record<string, unknown>).recovery);
     assert.deepEqual(recovery[0], {
       version: 1,
       status: "available",
@@ -308,7 +329,7 @@ test("entrypoints exposes a pinned recovery recipe across response modes", async
     assert.deepEqual(recovery[2], recovery[0]);
     const recipe = (recovery[0] as { query: { name: string; arguments: unknown } }).query;
     const replay = await session.callTool(recipe.name, recipe.arguments);
-    assert.deepEqual((replay.structuredContent as Record<string, unknown>).recovery, recovery[0]);
+    assert.deepEqual((resultFields(replay) as Record<string, unknown>).recovery, recovery[0]);
   } finally {
     await session.close();
   }
@@ -320,7 +341,7 @@ test("entrypoint recovery preserves opaque declared repository IDs", async () =>
   try {
     for (const [index, binding] of bindings.entries()) {
       const result = await session.callTool("ye_ast_entrypoints", { repo: binding.repoId, revision: "release" });
-      const recovery = (result.structuredContent as { recovery: { status: string; query: { arguments: unknown } } }).recovery;
+      const recovery = (resultFields(result) as { recovery: { status: string; query: { arguments: unknown } } }).recovery;
       assert.equal(recovery.status, "available");
       assert.deepEqual(recovery.query.arguments, { repo: binding.repoId, revision: "a".repeat(40) });
       assert.equal(calls.map[index]?.repo, binding.path);
@@ -338,7 +359,7 @@ test("entrypoint recovery identity covers the complete source and recorded input
   const { session } = await setup({ map: async () => ({ ok: true, value: current }) });
   const identity = async () => {
     const result = await session.callTool("ye_ast_entrypoints", {});
-    const recovery = (result.structuredContent as { recovery: { status: string; resultIdentity: string } }).recovery;
+    const recovery = (resultFields(result) as { recovery: { status: string; resultIdentity: string } }).recovery;
     assert.equal(recovery.status, "available");
     return recovery.resultIdentity;
   };
@@ -376,8 +397,8 @@ test("entrypoint recovery ignores reference labels and clone location while pinn
   try {
     const a = await one.session.callTool("ye_ast_entrypoints", { repo: selected, revision: "main", mode: "summary" });
     const b = await two.session.callTool("ye_ast_entrypoints", { repo: selected, revision: "release", mode: "full" });
-    const recovery = (a.structuredContent as { recovery: { query: { arguments: unknown } } }).recovery;
-    assert.deepEqual((b.structuredContent as { recovery: unknown }).recovery, recovery);
+    const recovery = (resultFields(a) as { recovery: { query: { arguments: unknown } } }).recovery;
+    assert.deepEqual((resultFields(b) as { recovery: unknown }).recovery, recovery);
     assert.deepEqual(recovery.query.arguments, { repo: selected, revision: "a".repeat(40) });
     assert.equal(one.calls.map[0]?.repo, "/clones/one");
     assert.equal(two.calls.map[0]?.repo, "/clones/two");
@@ -392,12 +413,12 @@ test("entrypoint recovery uses recorded normalized scope in a replayable recipe"
   const { session, calls } = await setup({ map: async () => ({ ok: true, value: scoped }) });
   try {
     const response = await session.callTool("ye_ast_entrypoints", { scope: { include: ["web/**", "src/**"], exclude: ["src/test/**"] }, mode: "details" });
-    const recovery = (response.structuredContent as { recovery: { query: { name: string; arguments: unknown } } }).recovery;
+    const recovery = (resultFields(response) as { recovery: { query: { name: string; arguments: unknown } } }).recovery;
     assert.deepEqual(recovery.query.arguments, { repo: "shop", revision: "a".repeat(40), scope: { include: ["src/**", "web/**"], exclude: ["src/test/**"] } });
     assert.equal(textOf(response).includes(JSON.stringify(recovery)), false);
-    assert.match(textOf(response), /structuredContent\.recovery/);
+    assert.match(textOf(response), /recovery in the result JSON/);
     const replay = await session.callTool(recovery.query.name, recovery.query.arguments);
-    assert.deepEqual((replay.structuredContent as { recovery: unknown }).recovery, recovery);
+    assert.deepEqual((resultFields(replay) as { recovery: unknown }).recovery, recovery);
     assert.deepEqual(calls.map[1]?.scope, { include: ["src/**", "web/**"], exclude: ["src/test/**"] });
   } finally { await session.close(); }
 });
@@ -416,15 +437,15 @@ test("entrypoint recovery handles nested deadlines, unknown findings and unresol
     for (const fact of [current, cut]) {
       current = fact;
       const response = await session.callTool("ye_ast_entrypoints", {});
-      assert.deepEqual((response.structuredContent as { recovery: unknown }).recovery, { version: 1, status: "unavailable", reason: "deadline" });
+      assert.deepEqual((resultFields(response) as { recovery: unknown }).recovery, { version: 1, status: "unavailable", reason: "deadline" });
     }
     current = nested("unresolved");
     const unknown = await session.callTool("ye_ast_entrypoints", {});
-    assert.equal((unknown.structuredContent as { recovery: { status: string } }).recovery.status, "available");
+    assert.equal((resultFields(unknown) as { recovery: { status: string } }).recovery.status, "available");
     for (const sha of ["main", ""]) {
       current = mapFact({ snapshot: { repo: "shop", kind: "sha", sha } });
       const missingPin = await session.callTool("ye_ast_entrypoints", {});
-      assert.deepEqual((missingPin.structuredContent as { recovery: unknown }).recovery, { version: 1, status: "unavailable", reason: "unresolved-context" });
+      assert.deepEqual((resultFields(missingPin) as { recovery: unknown }).recovery, { version: 1, status: "unavailable", reason: "unresolved-context" });
     }
   } finally { await session.close(); }
 });
@@ -440,7 +461,7 @@ test("entrypoint recovery refuses redacted semantic IDs and scopes without leaki
         await selected.session.callTool("ye_ast_entrypoints", { repo: SECRET, mode }),
       ]) {
         assert.equal(result.isError, undefined);
-        assert.deepEqual((result.structuredContent as { recovery: unknown }).recovery, { version: 1, status: "unavailable", reason: "redacted-context" });
+        assert.deepEqual((resultFields(result) as { recovery: unknown }).recovery, { version: 1, status: "unavailable", reason: "redacted-context" });
         assert.doesNotMatch(JSON.stringify(result), new RegExp(SECRET));
       }
     }
@@ -455,7 +476,7 @@ test("live entrypoint recovery tracks its snapshot but ignores stale notices", a
     return { ok: true, value: mapFact({ snapshot }) };
   } });
   try {
-    const call = async () => (await session.callTool("ye_ast_entrypoints", { live: true })).structuredContent as { recovery: { resultIdentity: string; query: { arguments: unknown } } };
+    const call = async () => resultFields((await session.callTool("ye_ast_entrypoints", { live: true }))) as { recovery: { resultIdentity: string; query: { arguments: unknown } } };
     const initial = await call();
     assert.deepEqual(initial.recovery.query.arguments, { repo: "shop", live: true });
     stale = true;
@@ -470,9 +491,9 @@ test("live entrypoint recovery tracks its snapshot but ignores stale notices", a
 test("entrypoint recovery schema rejects malformed variants in runtime and full JSON Schema", async () => {
   const { session } = await setup();
   try {
-    const advertised = (await session.listTools()).find((tool) => tool.name === "ye_ast_entrypoints")!.outputSchema!;
+    const advertised = ENTRYPOINTS_OUTPUT['~standard'].jsonSchema.output({target:'draft-07'});
     const validate = new AjvJsonSchemaValidator().getValidator(ENTRYPOINTS_OUTPUT['~standard'].jsonSchema.output({target:'draft-07'}));
-    const receipt = (await session.callTool("ye_ast_entrypoints", {})).structuredContent as Record<string, unknown>;
+    const receipt = resultFields((await session.callTool("ye_ast_entrypoints", {}))) as Record<string, unknown>;
     const recovery = receipt.recovery as Record<string, unknown>;
     const query = recovery.query as Record<string, unknown>;
     const args = query.arguments as Record<string, unknown>;
@@ -524,7 +545,7 @@ function envelopeOf(fact: Fact<unknown>, mode: "summary" | "details" = "summary"
 }
 
 function withoutRecovery(value: unknown): Record<string, unknown> {
-  const { recovery, ...rest } = value as Record<string, unknown>;
+  const { recovery, ...rest } = fieldsOf(value);
   assert.ok(recovery);
   return rest;
 }
@@ -546,9 +567,9 @@ test("every tool delivers mode receipts and a full fact", async () => {
       for (const mode of ["summary", "details"] as const) {
         const result = await session.callTool(name, { ...args, mode });
         assert.notEqual(result.isError, true, name);
-        const receipt = result.structuredContent as Record<string, unknown>;
+        const receipt = resultFields(result) as Record<string, unknown>;
         assert.equal(receipt["mode"], mode, name);
-        assert.deepEqual(Object.keys(receipt).toSorted(), ["ye_ast_entrypoints", "ye_ast_callers", "ye_ast_impact"].includes(name) ? ["mode", "recovery", "snapshot", "status"] : ["mode", "snapshot", "status"], name);
+        assert.deepEqual(Object.keys(receipt).toSorted(), ["ye_ast_entrypoints", "ye_ast_callers", "ye_ast_impact"].includes(name) ? ["mode", "recovery", "snapshot", "status", "text"] : ["mode", "snapshot", "status", "text"], name);
         assert.ok(textOf(result).startsWith(`status: ${receipt["status"]}`), name);
         assert.ok(textOf(result).includes("snapshot:"), name);
         if (!["ye_ast_entrypoints", "ye_ast_callers", "ye_ast_impact"].includes(name)) {
@@ -558,10 +579,81 @@ test("every tool delivers mode receipts and a full fact", async () => {
       }
       assert.deepEqual(await session.callTool(name, args), await session.callTool(name, { ...args, mode: "summary" }), name);
       const whole = await session.callTool(name, { ...args, mode: "full" });
-      const full = whole.structuredContent as Record<string, unknown>;
+      const full = resultFields(whole) as Record<string, unknown>;
       assert.equal(full["mode"], "full", name);
       assert.equal("value" in full, true, name);
-      assert.ok(textOf(whole).startsWith(`status: ${full["status"]}\nfull structured result: structuredContent\n`), name);
+      assert.ok(textOf(whole).startsWith(`status: ${full["status"]}\nfull result: the result JSON\n`), name);
+    }
+  } finally {
+    await session.close();
+  }
+});
+
+test("every consumer route receives findings, status, snapshot, provenance, recovery and continuation from one channel", async () => {
+  const original = mapFact();
+  if (original.status !== "complete" || original.value.entrypoints.status !== "complete") throw new Error("fixture");
+  const finding = original.value.entrypoints.value[0]!;
+  const evidence = [{ path: "src/EvidenceA.java", line: 3 }, { path: "src/EvidenceB.java", line: 5 }];
+  const map = { ...original, value: { entrypoints: { ...original.value.entrypoints, value: [{ ...finding, evidence }] } } } as EntrypointMapFact;
+  const live = { repo: "shop-web", kind: "live" as const, head: "c".repeat(40), stateId: "web-state" };
+  const { session } = await setup({
+    map: async () => ({ ok: true, value: map }),
+    callers: async (request) => {
+      if (request.targets.some(target => "symbol" in target && target.symbol === "Gone")) {
+        return { ok: true, value: { ...base(), status: "unknown", reason: "unresolved" } };
+      }
+      return { ok: true, value: request.targets.some(target => "symbol" in target && target.symbol === "Partial")
+        ? impactFact({ status: "partial", cuts: [{ kind: "depth", at: ["src/Partial.java::p"], limit: 1 }] })
+        : impactFact() };
+    },
+    outwardNames: async () => ({ ok: true, value: { fact: workspaceFact(), repositoryRoots: [{ repo: "shop-web", path: "/clones/frontend" }] } }),
+    workspaceCallers: async () => ({ ok: true, value: { fact: workspaceImpactFact(), workspaceLive: [{ kind: "stale", repo: "shop-web", snapshot: live, notice: { stateId: "web-state", changed: ["src/web-change.ts"] } }] } }),
+  });
+  const targets = [{ file: "src/OrderService.java", symbol: "OrderService.find" }];
+  const handlerOrigins = { kind: "handler-origins", owner: { kind: "local" }, handler: { path: "src/OrderController.java", symbol: "OrderController.one", line: 17 } };
+  const cases: [string, Record<string, unknown>, string[]][] = [
+    ["ye_ast_entrypoints", { mode: "summary" }, ["GET /orders/{id}"]],
+    ["ye_ast_callers", { targets, mode: "details" }, ["OrderController.one"]],
+    ["ye_ast_impact", { base: "main", mode: "full" }, ["OrderController.create"]],
+    ["ye_ast_importers", { files: ["src/a.ts"], mode: "summary" }, []],
+    ["ye_ast_callers", { targets: [{ file: "src/a.ts", symbol: "Partial" }], mode: "summary" }, ["partial", "depth"]],
+    ["ye_ast_entrypoints", { mode: "summary", select: { kind: "entrypoint-evidence", findingIndex: 0 }, page: { limit: 1 } }, ["src/EvidenceA.java"]],
+    ["ye_ast_entrypoints", { mode: "full", select: { kind: "entrypoint-evidence", findingIndex: 0 }, page: { limit: 1 } }, ["src/EvidenceA.java"]],
+    ["ye_ast_callers", { targets: [{ file: "src/a.ts", symbol: "Gone" }], mode: "details", select: handlerOrigins, page: { limit: 1 } }, ["unresolved"]],
+    ["ye_ast_workspace", { mode: "summary" }, ["/clones/frontend"]],
+    ["ye_ast_callers", { targets, workspace: {}, mode: "summary" }, ["src/web-change.ts", "shop-web"]],
+  ];
+  try {
+    for (const [name, args, sentinels] of cases) {
+      const result = await session.callTool(name, args);
+      assert.notEqual(result.isError, true, `${name} ${JSON.stringify(args)}: ${JSON.stringify(result.content)}`);
+      assert.equal(result.structuredContent, undefined);
+      const shown = result.content.map((block) => block.text).join("\n");
+      const at = shown.lastIndexOf(`\n${RESULT_JSON_LABEL}`);
+      assert.deepEqual({ text: shown.slice(0, at), ...JSON.parse(shown.slice(at + 1 + RESULT_JSON_LABEL.length)) }, resultFields(result), name);
+      const fields = resultFields(result) as { status?: string; snapshot?: { sha?: string }; recovery?: unknown; page?: { nextCursor?: string }; source?: { analysis: { status: string }; snapshot: { sha: string } } };
+      const status = fields.status ?? fields.source!.analysis.status;
+      assert.equal(typeof status, "string", `${name}: missing analysis status`);
+      const sha = (fields.snapshot ?? fields.source!.snapshot).sha!;
+      for (const route of CONSUMER_ROUTES) {
+        const raw = route.view(result);
+        const view = route.name.includes("codex 0.166 code mode") ? JSON.parse(raw).content[0].text as string : raw;
+        const label = `${route.name}: ${name} ${JSON.stringify(args)}`;
+        for (const sentinel of sentinels) assert.ok(view.includes(sentinel), `${label} lacks ${sentinel}`);
+        assert.match(view, new RegExp(`status\\W+${status}`), label);
+        assert.ok(view.includes(sha), label);
+        if (fields.recovery !== undefined) assert.ok(view.includes(JSON.stringify(fields.recovery)), `${label} lacks recovery`);
+        if (fields.page?.nextCursor !== undefined) assert.ok(view.includes(fields.page.nextCursor), `${label} lacks nextCursor`);
+        if (fields.source !== undefined) assert.ok(view.includes(JSON.stringify(fields.source)), `${label} lacks provenance`);
+      }
+    }
+    const changed = await session.callTool("ye_ast_entrypoints", { select: { kind: "entrypoint-evidence", findingIndex: 0 }, page: { limit: 1 }, expect: `mcp-r1:${"0".repeat(64)}` });
+    assert.equal(changed.isError, true);
+    const fault = changed._meta?.[FAULT_META] as Record<string, string>;
+    assert.equal(fault["kind"], "result-changed");
+    for (const route of CONSUMER_ROUTES) {
+      const view = route.view(changed);
+      for (const value of Object.values(fault)) assert.ok(view.includes(value), `${route.name} lacks fault ${value}`);
     }
   } finally {
     await session.close();
@@ -575,17 +667,17 @@ test("workspace repository roots accompany the answer without entering the fact"
 
   for (const mode of ["summary", "details", "full"] as const) {
     const result = await session.callTool("ye_ast_workspace", { mode });
-    const structured = result.structuredContent as Record<string, unknown>;
+    const structured = resultFields(result) as Record<string, unknown>;
     if (mode === "full") {
       assert.deepEqual(structured["repositoryRoots"], repositoryRoots);
       assert.match(textOf(result), /repositoryRoots\[\]\.repo/);
       if (fact.status === "unknown") throw new Error("expected workspace value");
       const { repositories: _repositories, ...value } = fact.value;
-      const { mode: deliveredMode, repositoryRoots: _roots, ...delivered } = structured;
+      const { mode: deliveredMode, repositoryRoots: _roots, ...delivered } = fieldsOf(structured);
       assert.equal(deliveredMode, "full");
       assert.deepEqual(delivered, { ...fact, value });
     } else {
-      assert.deepEqual(structured, envelopeOf(fact, mode));
+      assert.deepEqual(fieldsOf(structured), envelopeOf(fact, mode));
       assert.equal("repositoryRoots" in structured, false);
       assert.match(textOf(result), /repository root: shop-web -> \/clones\/frontend/);
     }
@@ -596,7 +688,7 @@ test("workspace repository roots accompany the answer without entering the fact"
   const plain = await setup();
   try {
     const result = await plain.session.callTool("ye_ast_workspace", { mode: "full" });
-    assert.equal("repositoryRoots" in (result.structuredContent as Record<string, unknown>), false);
+    assert.equal("repositoryRoots" in (resultFields(result) as Record<string, unknown>), false);
     assert.doesNotMatch(textOf(result), /Repository locations:/);
   } finally { await plain.session.close(); }
 });
@@ -608,11 +700,11 @@ test("full preserves the partial fact and presentation does not enter the query"
   try {
     const whole = await session.callTool("ye_ast_impact", { base: "main", mode: "full" });
     assert.notEqual(whole.isError, true);
-    const { mode, repositoryRoots, recovery: _recovery, ...fact } = whole.structuredContent as Record<string, unknown>;
+    const { mode, repositoryRoots, recovery: _recovery, ...fact } = fieldsOf(resultFields(whole));
     assert.deepEqual(repositoryRoots, [{ repo: "shop", path: REPOSITORY.path }]);
     assert.equal(mode, "full");
     assert.deepEqual(fact, JSON.parse(JSON.stringify(partial)));
-    assert.ok(textOf(whole).startsWith("status: partial\nfull structured result: structuredContent\n"));
+    assert.ok(textOf(whole).startsWith("status: partial\nfull result: the result JSON\n"));
     await session.callTool("ye_ast_impact", { base: "main", mode: "details" });
     assert.deepEqual(calls.ofChange[0], calls.ofChange[1]);
     assert.equal("mode" in (calls.ofChange[0] ?? {}), false);
@@ -674,9 +766,8 @@ test("the server instructions tell the agent when to call every tool", async () 
   const { session } = await setup();
   const tools = await session.listTools();
   for (const tool of tools) assert.ok(session.instructions?.includes(tool.name), tool.name);
-  assert.match(session.instructions ?? "", /Summary\/details:[^\n]*content[^\n]*structuredContent[^\n]*status[^\n]*snapshot/);
-  assert.match(session.instructions ?? "", /Full:[^\n]*structuredContent[^\n]*complete data[^\n]*content[^\n]*navigation/);
-  assert.match(session.instructions ?? "", /Recovery[^\n]*structuredContent\.recovery/);
+  assert.match(session.instructions ?? "", /Content carries presentation text[^\n]*findings[^\n]*navigation[^\n]*result JSON/);
+  assert.match(session.instructions ?? "", /Recovery is the recovery field/);
   await session.close();
 });
 
@@ -791,8 +882,19 @@ test("cut lookup categories share context while every coordinate reconstructs a 
       for (const select of selectors) assert.equal(schema({ ...args, select, page: { limit: 1 }, mode: "full" }).valid, true);
       const selected = await session.callTool(name, { ...args, select: selectors.at(-1), page: { limit: 1 }, mode: "full" });
       assert.notEqual(selected.isError, true);
-      assert.deepEqual((selected.structuredContent as { items: unknown[] }).items, [{ atIndex: 1, place: cuts.at(-1)!.at[1] }]);
+      assert.deepEqual((resultFields(selected) as { items: unknown[] }).items, [{ atIndex: 1, place: cuts.at(-1)!.at[1] }]);
     }
+  } finally { await session.close(); }
+});
+
+test("malformed success is rejected by server runtime validation", async () => {
+  const fact = { ...mapFact(), snapshot: { ...base().snapshot, sha: 42 } } as unknown as EntrypointMapFact;
+  const { session } = await setup({ map: async () => ({ ok: true, value: fact }) });
+  try {
+    const result = await session.callTool("ye_ast_entrypoints", { mode: "full" });
+    assert.equal(result.isError, true);
+    assert.equal(result.structuredContent, undefined);
+    assert.equal((result._meta?.[FAULT_META] as { kind: string }).kind, "internal-fault");
   } finally { await session.close(); }
 });
 
@@ -805,18 +907,15 @@ test("output schemas validate real receipts and family payloads and reject broke
     assert.deepEqual(TOOL_CALLS.map(([name]) => name).toSorted(), tools.map(({ name }) => name).toSorted());
     for (const [index, [name, args]] of TOOL_CALLS.entries()) {
       const advertised = tools.find((tool) => tool.name === name)?.outputSchema;
-      assert.ok(advertised, name);
-      assert.equal(advertised.type, "object", name);
+      assert.equal(advertised, undefined, name);
       const validate = new AjvJsonSchemaValidator().getValidator(schemas[index]!['~standard'].jsonSchema.output({target:'draft-07'}));
       const runtime = schemas[index]!;
       const check = (payload: unknown, valid: boolean) => {
         assert.equal(runtime.safeParse(payload).success, valid, `${name}: runtime`);
-        assert.equal(validate(payload).valid, valid, `${name}: advertised`);
+        assert.equal(validate(payload).valid, valid, `${name}: full JSON schema`);
       };
-      const receipt = (await session.callTool(name, args)).structuredContent as Record<string, unknown>;
-      const full = (await session.callTool(name, { ...args, mode: "full" })).structuredContent as Record<string, unknown>;
-      assert.equal(new AjvJsonSchemaValidator().getValidator(advertised)(receipt).valid, true);
-      assert.equal(new AjvJsonSchemaValidator().getValidator(advertised)(full).valid, true);
+      const receipt = resultFields((await session.callTool(name, args))) as Record<string, unknown>;
+      const full = resultFields((await session.callTool(name, { ...args, mode: "full" }))) as Record<string, unknown>;
       check(receipt, true);
       check(full, true);
       check({ ...receipt, reason: "unexpected" }, false);
@@ -836,14 +935,14 @@ test("runtime and full JSON impact schemas preserve unknown, partial and live id
   for (const fact of [unknown, partial]) {
     const { session } = await setup({ ofChange: async () => ({ ok: true, value: fact }) });
     try {
-      const schema = (await session.listTools()).find((tool) => tool.name === "ye_ast_impact")!.outputSchema!;
+      const schema = IMPACT_OUTPUT['~standard'].jsonSchema.output({target:'draft-07'});
       const validate = new AjvJsonSchemaValidator().getValidator(IMPACT_OUTPUT['~standard'].jsonSchema.output({target:'draft-07'}));
       const check = (value: unknown, expected: boolean) => {
         assert.equal(IMPACT_OUTPUT.safeParse(value).success, expected, "runtime");
-        assert.equal(validate(value).valid, expected, "advertised");
+        assert.equal(validate(value).valid, expected, "full JSON schema");
       };
-      const receipt = (await session.callTool("ye_ast_impact", { base: "main" })).structuredContent as Record<string, unknown>;
-      const full = (await session.callTool("ye_ast_impact", { base: "main", mode: "full" })).structuredContent as Record<string, unknown>;
+      const receipt = resultFields((await session.callTool("ye_ast_impact", { base: "main" }))) as Record<string, unknown>;
+      const full = resultFields((await session.callTool("ye_ast_impact", { base: "main", mode: "full" }))) as Record<string, unknown>;
       check(receipt, true); check(full, true);
       if (fact.status === "unknown") {
         const withoutReason = { ...receipt }; delete withoutReason.reason; check(withoutReason, false);
@@ -872,11 +971,11 @@ test("workspace impact full accepts nested unknowns and rejects incomplete contr
   const fact: Fact<WorkspaceImpactValue> = { ...original, value };
   const { session } = await setup({ workspaceOfChange: async () => ({ ok: true, value: { fact } }) });
   try {
-    const schema = (await session.listTools()).find((tool) => tool.name === "ye_ast_impact")!.outputSchema!;
+    const schema = IMPACT_OUTPUT['~standard'].jsonSchema.output({target:'draft-07'});
     const validate = new AjvJsonSchemaValidator().getValidator(IMPACT_OUTPUT['~standard'].jsonSchema.output({target:'draft-07'}));
     const result = await session.callTool("ye_ast_impact", { base: "main", workspace: WORKSPACE, mode: "full" });
     assert.notEqual(result.isError, true);
-    const content = result.structuredContent as Record<string, unknown>;
+    const content = resultFields(result) as Record<string, unknown>;
     assert.equal(IMPACT_OUTPUT.safeParse(content).success, true);
     assert.equal(validate(content).valid, true);
     const missingLinks = structuredClone(content) as { value: { links?: unknown } };
@@ -898,12 +997,12 @@ test("entrypoint full accepts an unknown nested section and finding", async () =
     const fact = { ...base(), status: "complete" as const, value: { entrypoints } };
     const { session } = await setup({ map: async () => ({ ok: true, value: fact }) });
     try {
-      const schema = (await session.listTools()).find((tool) => tool.name === "ye_ast_entrypoints")!.outputSchema!;
+      const schema = ENTRYPOINTS_OUTPUT['~standard'].jsonSchema.output({target:'draft-07'});
       const validate = new AjvJsonSchemaValidator().getValidator(schema);
       const result = await session.callTool("ye_ast_entrypoints", { mode: "full" });
       assert.notEqual(result.isError, true);
-      assert.equal(ENTRYPOINTS_OUTPUT.safeParse(result.structuredContent).success, true);
-      assert.equal(validate(result.structuredContent).valid, true);
+      assert.equal(ENTRYPOINTS_OUTPUT.safeParse(resultFields(result)).success, true);
+      assert.equal(validate(resultFields(result)).valid, true);
     } finally { await session.close(); }
   }
 });
@@ -912,11 +1011,11 @@ for (const validation of ["runtime", "full JSON"] as const) {
   test(`entrypoint coordinates are required in ${validation} output schema`, async () => {
     const { session } = await setup();
     try {
-      const schema = (await session.listTools()).find((tool) => tool.name === "ye_ast_entrypoints")!.outputSchema!;
+      const schema = ENTRYPOINTS_OUTPUT['~standard'].jsonSchema.output({target:'draft-07'});
       const validate = new AjvJsonSchemaValidator().getValidator(ENTRYPOINTS_OUTPUT['~standard'].jsonSchema.output({target:'draft-07'}));
       const result = await session.callTool("ye_ast_entrypoints", { mode: "full" });
       assert.notEqual(result.isError, true);
-      const content = result.structuredContent as Record<string, unknown>;
+      const content = resultFields(result) as Record<string, unknown>;
       const check = (value: unknown, expected: boolean) => assert.equal(validation === "runtime" ? ENTRYPOINTS_OUTPUT.safeParse(value).success : validate(value).valid, expected);
       check(content, true);
       for (const field of ["handler", "path", "symbol", "line"] as const) {
@@ -932,11 +1031,11 @@ for (const validation of ["runtime", "full JSON"] as const) {
   test(`workspace call sites require interpretable identity and targets in ${validation} output schema`, async () => {
     const { session } = await setup();
     try {
-      const schema = (await session.listTools()).find((tool) => tool.name === "ye_ast_impact")!.outputSchema!;
+      const schema = IMPACT_OUTPUT['~standard'].jsonSchema.output({target:'draft-07'});
       const validate = new AjvJsonSchemaValidator().getValidator(IMPACT_OUTPUT['~standard'].jsonSchema.output({target:'draft-07'}));
       const result = await session.callTool("ye_ast_impact", { base: "main", workspace: WORKSPACE, mode: "full" });
       assert.notEqual(result.isError, true);
-      const content = result.structuredContent as Record<string, unknown>;
+      const content = resultFields(result) as Record<string, unknown>;
       const check = (value: unknown, expected: boolean) => assert.equal(validation === "runtime" ? IMPACT_OUTPUT.safeParse(value).success : validate(value).valid, expected);
       check(content, true);
       for (const field of ["callSites", "unmatched", "external", "unresolved"] as const) {
@@ -986,33 +1085,33 @@ test("full schemas accept UI component and unknown and additive workspace target
   try {
     const cases: [string, Record<string, unknown>, { safeParse(value: unknown): { success: boolean } }][] = [["ye_ast_entrypoints", {}, ENTRYPOINTS_OUTPUT], ["ye_ast_impact", { base: "main", workspace: WORKSPACE }, IMPACT_OUTPUT]];
     for (const [name, args, runtime] of cases) {
-      const schema = (await session.listTools()).find((tool) => tool.name === name)!.outputSchema!;
+      const schema = (name === 'ye_ast_entrypoints' ? ENTRYPOINTS_OUTPUT : IMPACT_OUTPUT)['~standard'].jsonSchema.output({target:'draft-07'});
       const validate = new AjvJsonSchemaValidator().getValidator((name === "ye_ast_entrypoints" ? ENTRYPOINTS_OUTPUT : IMPACT_OUTPUT)['~standard'].jsonSchema.output({target:'draft-07'}));
       const result = await session.callTool(name, { ...args, mode: "full" });
       assert.notEqual(result.isError, true, name);
-      assert.equal(runtime.safeParse(result.structuredContent).success, true, name);
-      assert.equal(validate(result.structuredContent).valid, true, name);
+      assert.equal(runtime.safeParse(resultFields(result)).success, true, name);
+      assert.equal(validate(resultFields(result)).valid, true, name);
       if (name === "ye_ast_entrypoints") {
         for (const coordinate of ["path", "symbol", "line"] as const) {
-          const bad = structuredClone(result.structuredContent) as { value: { entrypoints: { value: { value: { component: Record<string, unknown> } }[] } } };
+          const bad = structuredClone(resultFields(result)) as { value: { entrypoints: { value: { value: { component: Record<string, unknown> } }[] } } };
           delete bad.value.entrypoints.value[0]!.value.component[coordinate];
           assert.equal(runtime.safeParse(bad).success, false, coordinate);
           assert.equal(validate(bad).valid, false, coordinate);
         }
-        const missingComponent = structuredClone(result.structuredContent) as { value: { entrypoints: { value: { value: { component?: unknown } }[] } } };
+        const missingComponent = structuredClone(resultFields(result)) as { value: { entrypoints: { value: { value: { component?: unknown } }[] } } };
         delete missingComponent.value.entrypoints.value[0]!.value.component;
         assert.equal(runtime.safeParse(missingComponent).success, false, "UI component");
         assert.equal(validate(missingComponent).valid, false, "UI component");
       } else {
-        const badEvent = structuredClone(result.structuredContent) as { value: { sections: Record<string, { value: { unmatched: { target: { value: { destination?: string } } }[]; external: { target: { reason?: string } }[] } }> } };
+        const badEvent = structuredClone(resultFields(result)) as { value: { sections: Record<string, { value: { unmatched: { target: { value: { destination?: string } } }[]; external: { target: { reason?: string } }[] } }> } };
         delete badEvent.value.sections["shop-web"]!.value.unmatched[0]!.target.value.destination;
         assert.equal(runtime.safeParse(badEvent).success, false, "event destination");
         assert.equal(validate(badEvent).valid, false, "event destination");
-        const badUnknown = structuredClone(result.structuredContent) as typeof badEvent;
+        const badUnknown = structuredClone(resultFields(result)) as typeof badEvent;
         delete badUnknown.value.sections["shop-web"]!.value.external[0]!.target.reason;
         assert.equal(runtime.safeParse(badUnknown).success, false, "unknown reason");
         assert.equal(validate(badUnknown).valid, false, "unknown reason");
-        const unknownWithValue = structuredClone(result.structuredContent) as { value: { sections: Record<string, { value: { external: { target: Record<string, unknown> }[] } }> } };
+        const unknownWithValue = structuredClone(resultFields(result)) as { value: { sections: Record<string, { value: { external: { target: Record<string, unknown> }[] } }> } };
         unknownWithValue.value.sections["shop-web"]!.value.external[0]!.target.value = { method: "GET", path: "/" };
         assert.equal(runtime.safeParse(unknownWithValue).success, false, "unknown value");
         assert.equal(validate(unknownWithValue).valid, false, "unknown value");
@@ -1051,7 +1150,7 @@ test("entrypoints reads the bound repository at HEAD by default and answers the 
   assert.equal(calls.map[0]?.repo, REPOSITORY.path);
   assert.equal(calls.map[0]?.repoId, REPOSITORY.repoId);
   assert.equal(calls.map[0]?.revision, "HEAD");
-  assert.deepEqual(withoutRecovery(result.structuredContent), envelopeOf(mapFact()));
+  assert.deepEqual(withoutRecovery(resultFields(result)), envelopeOf(mapFact()));
   const text = textOf(result);
   assert.match(text, /status: complete/);
   assert.match(text, /GET \/orders\/\{id\}/);
@@ -1091,7 +1190,7 @@ test("module dependencies have separate provenance and summary never masquerades
     assert.match(summary, /not symbol or entrypoint impact/);
     assert.doesNotMatch(summary, /src\/consumer-9.ts/);
     const result = await session.callTool("ye_ast_impact", { base: "main", mode: "full" });
-    assert.deepEqual(((result.structuredContent as { value: ImpactValue }).value).modules, value.modules);
+    assert.deepEqual(((resultFields(result) as { value: ImpactValue }).value).modules, value.modules);
     assert.match(textOf(result), /value\.modules/);
     assert.doesNotMatch(textOf(result), /src\/consumer-9.ts/);
   } finally { await session.close(); }
@@ -1103,7 +1202,7 @@ test("impact reads a change of the bound repository, head defaulting to HEAD, an
   assert.deepEqual(calls.ofChange.map(({ repo, repoId, base: from, head, budget }) => ({ repo, repoId, from, head, budget })), [
     { repo: REPOSITORY.path, repoId: REPOSITORY.repoId, from: "main", head: "HEAD", budget: undefined },
   ]);
-  assert.deepEqual(withoutRecovery(result.structuredContent), envelopeOf(impactFact(), "details"));
+  assert.deepEqual(withoutRecovery(resultFields(result)), envelopeOf(impactFact(), "details"));
   const text = textOf(result);
   assert.match(text, /status: complete/);
   assert.match(text, /^seeds \(1\):\n {2}src\/OrderService\.java \(lines\)\n {4}31 OrderService\.find$/m);
@@ -1222,10 +1321,10 @@ test("importers full keeps the original overlapping fact and cuts without repeat
   const { session } = await setup({ importers: async () => ({ ok: true, value: fact }) });
   for (const mode of ["full"] as const) {
     const result = await session.callTool("ye_ast_importers", { files: ["src/OrderService.java"], mode });
-    assert.deepEqual(result.structuredContent, { ...fact, mode: "full", repositoryRoots: [{ repo: "shop", path: REPOSITORY.path }] });
+    assert.deepEqual(fieldsOf(resultFields(result)), { ...fact, mode: "full", repositoryRoots: [{ repo: "shop", path: REPOSITORY.path }] });
     const text = textOf(result);
     assert.match(text, /status: partial/);
-    assert.match(text, /structuredContent/);
+    assert.match(text, /result JSON/);
     assert.equal(text.includes("src/Shared.java"), false);
     assert.equal(text.includes("src/Unread.java"), false);
   }
@@ -1249,7 +1348,7 @@ test("importers distinguishes a complete empty result from an unknown result in 
     const { session } = await setup({ importers: async () => ({ ok: true, value: fact }) });
     for (const presentation of [{}, { mode: "details" }, { mode: "full" }]) {
       const result = await session.callTool("ye_ast_importers", { files: ["a.ts"], ...presentation });
-      assert.equal((result.structuredContent as Fact<ImportersValue>).status, fact.status);
+      assert.equal((resultFields(result) as Fact<ImportersValue>).status, fact.status);
       const text = textOf(result);
       if (fact.status === "unknown") {
         if (!("mode" in presentation) || presentation.mode !== "full") assert.match(text, /index-unavailable/);
@@ -1342,7 +1441,7 @@ test("impact detail localizes every cut anchor while full JSON retains every ref
   const { session } = await setup({ ofChange: async () => ({ ok: true, value: deep }) });
   const result = await session.callTool("ye_ast_impact", { base: "main", mode: "full" });
   const text = textOf(await session.callTool("ye_ast_impact", { base: "main", mode: "details" }));
-  assert.deepEqual(withoutRecovery(result.structuredContent), { ...deep, mode: "full", repositoryRoots: [{ repo: "shop", path: REPOSITORY.path }] });
+  assert.deepEqual(withoutRecovery(resultFields(result)), { ...deep, mode: "full", repositoryRoots: [{ repo: "shop", path: REPOSITORY.path }] });
   assert.match(text, /anchor "src\/b\.ts::B\.user":\n\s+cut: \{"cutIndex":0\}; 2 reference places/);
   assert.doesNotMatch(text, /src\/y\.ts/);
   assert.match(text, /depth:\n\s+cut: \{"cutIndex":1\}; src\/c\.ts::C\.top \(limit 5\)/);
@@ -1502,7 +1601,7 @@ test("both impact text levels count unselected change origins while full JSON pr
   assert.match(summary, /^seeds \(12\):\n {2}change origins: 12 declarations across 12 files \(lines 6, top-level 6\); mode: "full" includes every seed$/m);
   assert.doesNotMatch(summary, /src\/feature-/);
   const full = await session.callTool("ye_ast_impact", { base: "main", mode: "full" });
-  assert.deepEqual(withoutRecovery(full.structuredContent), { ...fact, mode: "full", repositoryRoots: [{ repo: "shop", path: REPOSITORY.path }] });
+  assert.deepEqual(withoutRecovery(resultFields(full)), { ...fact, mode: "full", repositoryRoots: [{ repo: "shop", path: REPOSITORY.path }] });
   assert.doesNotMatch(textOf(full), /src\/feature-/);
   assert.match(textOf(await session.callTool("ye_ast_impact", { base: "main", mode: "details" })), /change origins: 12 declarations across 12 files/);
   await session.close();
@@ -1616,7 +1715,7 @@ test("callers summary counts dependency depths and detail identifies the nearest
   const text = textOf(result);
   assert.match(text, /by depth: 1: 1, 2: 7, 3: 1/);
   assert.doesNotMatch(text, /B\.user|C\.top/);
-  const { recovery: _recovery, ...receipt } = result.structuredContent as Record<string, unknown>;
+  const { recovery: _recovery, ...receipt } = fieldsOf(resultFields(result));
   assert.deepEqual(receipt, envelopeOf(deep));
   const full = textOf(await session.callTool("ye_ast_callers", { targets: [{ file: "src/a.ts", symbol: "A.seed" }], mode: "details" }));
   assert.match(full, /4 A\.other/);
@@ -1679,7 +1778,7 @@ test("entrypoints closes with the cut list of the map and of its section", async
   const lines = text.split("\n");
   assert.equal(lines[0], "status: partial (cuts: 1 section: entrypoints)");
   assert.match(text, / {2}status: partial \(cuts: 1 no-extractor\)/);
-  assert.match(text, /\ncuts:\n {2}no-extractor \(1\): src\/scripts\/build\.js\n {2}section \(1\): entrypoints\n(?: {2}lookup example: [^\n]+\n)+Recovery recipe and resultIdentity: structuredContent\.recovery\.\nrepository root: shop -> \/work\/shop$/);
+  assert.match(text, /\ncuts:\n {2}no-extractor \(1\): src\/scripts\/build\.js\n {2}section \(1\): entrypoints\n(?: {2}lookup example: [^\n]+\n)+Recovery recipe and resultIdentity: recovery in the result JSON\.\nrepository root: shop -> \/work\/shop$/);
   await session.close();
 });
 
@@ -1690,15 +1789,15 @@ test("an unknown answer says unknown with its reason and its evidence, never an 
   const text = textOf(result);
   assert.match(text, /status: unknown \(index-unavailable\)/);
   assert.match(text, /src\/Broken\.java:4/);
-  assert.deepEqual(withoutRecovery(result.structuredContent), envelopeOf(unknown));
+  assert.deepEqual(withoutRecovery(resultFields(result)), envelopeOf(unknown));
   assert.doesNotMatch(text, /\(none\)/);
   const details = await session.callTool("ye_ast_impact", { base: "main", mode: "details" });
-  assert.deepEqual(withoutRecovery(details.structuredContent), envelopeOf(unknown, "details"));
+  assert.deepEqual(withoutRecovery(resultFields(details)), envelopeOf(unknown, "details"));
   assert.match(textOf(details), /index-unavailable/);
   assert.match(textOf(details), /src\/Broken\.java:4/);
   const full = await session.callTool("ye_ast_impact", { base: "main", mode: "full" });
-  assert.deepEqual(withoutRecovery(full.structuredContent), { ...unknown, mode: "full", repositoryRoots: [{ repo: "shop", path: REPOSITORY.path }] });
-  assert.equal("value" in (full.structuredContent as Record<string, unknown>), false);
+  assert.deepEqual(withoutRecovery(resultFields(full)), { ...unknown, mode: "full", repositoryRoots: [{ repo: "shop", path: REPOSITORY.path }] });
+  assert.equal("value" in (resultFields(full) as Record<string, unknown>), false);
   await session.close();
 });
 
@@ -1812,12 +1911,12 @@ test("redaction is applied to the structured content and so to the text rendered
   const leaking = impactFact({ value: { ...IMPACT, seeds: [{ file: `src/${SECRET}.java`, symbol: "S.f", line: 1, basis: "requested" }] } } as Partial<Fact<ImpactValue>>);
   const { session } = await setup({ ofChange: async () => ({ ok: true, value: leaking }) });
   const result = await session.callTool("ye_ast_impact", { base: "main", mode: "full" });
-  assert.doesNotMatch(JSON.stringify(result.structuredContent), new RegExp(SECRET));
-  assert.match(JSON.stringify(result.structuredContent), new RegExp(REDACTED.replace(/[[\]]/g, "\\$&")));
+  assert.doesNotMatch(JSON.stringify(resultFields(result)), new RegExp(SECRET));
+  assert.match(JSON.stringify(resultFields(result)), new RegExp(REDACTED.replace(/[[\]]/g, "\\$&")));
   assert.doesNotMatch(textOf(result), new RegExp(SECRET));
   for (const mode of ["summary", "details"] as const) {
     const answer = await session.callTool("ye_ast_impact", { base: "main", mode });
-    assert.deepEqual(withoutRecovery(answer.structuredContent), envelopeOf(leaking, mode));
+    assert.deepEqual(withoutRecovery(resultFields(answer)), envelopeOf(leaking, mode));
     assert.ok(textOf(answer).includes(`src/${REDACTED}.java`));
     assert.doesNotMatch(textOf(answer), new RegExp(SECRET));
   }
@@ -1905,9 +2004,9 @@ test("live on each tool asks for the working tree with no revision, and the fact
   const requests: Record<string, unknown>[] = [calls.map[0], calls.ofChange[0], calls.callers[0], calls.importers[0]].map((request) => ({ ...request }));
   assert.deepEqual(requests.map((request) => [request.live, request.revision, request.head]), [[true, undefined, undefined], [true, undefined, undefined], [true, undefined, undefined], [true, undefined, undefined]]);
   assert.equal(calls.ofChange[0]?.base, "main");
-  assert.deepEqual(withoutRecovery(results[0]?.structuredContent), envelopeOf(liveFact));
+  assert.deepEqual(withoutRecovery(resultFields(results[0])), envelopeOf(liveFact));
   const details = await session.callTool("ye_ast_entrypoints", { live: true, mode: "details" });
-  assert.deepEqual(withoutRecovery(details.structuredContent), envelopeOf(liveFact, "details"));
+  assert.deepEqual(withoutRecovery(resultFields(details)), envelopeOf(liveFact, "details"));
   assert.equal(results.every((result) => result._meta === undefined && !textOf(result).startsWith("stale:")), true);
   await session.close();
 });
@@ -1940,14 +2039,14 @@ test("an answer the working tree moved past opens its text with a stale line and
   const notice = { stateId: "s1", changed: ["src/A.java", `src/${REDACTED}.java`] };
   assert.match(textOf(result), /^stale: .*state s1: src\/A\.java, src\/\[REDACTED\]\.java\nstatus: complete/);
   assert.deepEqual(result._meta, { "ye-ast/live": notice });
-  assert.deepEqual(withoutRecovery(result.structuredContent), envelopeOf(mapFact()));
+  assert.deepEqual(withoutRecovery(resultFields(result)), envelopeOf(mapFact()));
   const details = await session.callTool("ye_ast_entrypoints", { live: true, mode: "details" });
   assert.match(textOf(details), /^stale: .*state s1: src\/A\.java, src\/\[REDACTED\]\.java\nstatus: complete/);
   assert.deepEqual(details._meta, { "ye-ast/live": notice });
-  assert.deepEqual(withoutRecovery(details.structuredContent), envelopeOf(mapFact(), "details"));
+  assert.deepEqual(withoutRecovery(resultFields(details)), envelopeOf(mapFact(), "details"));
   const full = await session.callTool("ye_ast_entrypoints", { live: true, mode: "full" });
   assert.deepEqual(full._meta, { "ye-ast/live": notice });
-  assert.deepEqual(withoutRecovery(full.structuredContent), { ...mapFact(), mode: "full", live: notice, repositoryRoots: [{ repo: "shop", path: REPOSITORY.path }] });
+  assert.deepEqual(withoutRecovery(resultFields(full)), { ...mapFact(), mode: "full", live: notice, repositoryRoots: [{ repo: "shop", path: REPOSITORY.path }] });
   assert.match(textOf(full), /live\.stateId and live\.changed/);
   await session.close();
 });
@@ -2084,9 +2183,9 @@ test("the workspace tool answers the outward names without the repositories it r
   const { session } = await setup({ outwardNames: async () => ({ ok: true, value: { fact: workspaceFact(), repositorySources: [{ repo: "shop", path: internalPath }] } }) });
 
   const result = await session.callTool("ye_ast_workspace", { mode: "full" });
-  assert.equal("repositorySources" in (result.structuredContent as Record<string, unknown>), false);
+  assert.equal("repositorySources" in (resultFields(result) as Record<string, unknown>), false);
   assert.equal(JSON.stringify(result).includes(internalPath), false);
-  const value = (result.structuredContent as { value: Record<string, unknown> }).value;
+  const value = (resultFields(result) as { value: Record<string, unknown> }).value;
   assert.equal("repositories" in value, false);
   assert.deepEqual(Object.keys(value).sort(), ["candidates", "repositorySnapshots", "sections", "unserved", "workspace"]);
   await session.close();
@@ -2119,7 +2218,7 @@ test("the decisions tool asks the decision family with the repositories and gate
   assert.deepEqual(calls.decisions.map(({ repo, repos, gateways, scope }) => ({ repo, repos, gateways, scope })), [
     { repo: { path: REPOSITORY.path, id: REPOSITORY.repoId, revision: "topic" }, repos: [{ path: "/work/shop-web", id: "shop-web" }], gateways: [{ prefix: "edge", repo: "shop" }], scope: { include: ["src/**"] } },
   ]);
-  assert.deepEqual(result.structuredContent, envelopeOf(decisionFact()));
+  assert.deepEqual(fieldsOf(resultFields(result)), envelopeOf(decisionFact()));
   const text = textOf(result);
   assert.match(text, /^status: complete\n/);
   assert.match(text, /repositories \(1\): shop@a{40}/);
@@ -2232,21 +2331,21 @@ test("every workspace-bearing tool carries the freshness and the resolution besi
   ];
 
   for (const [name, args] of tools) {
-    const before = (await plain.session.callTool(name, { ...args, mode: "full" })).structuredContent as Record<string, unknown>;
-    const after = (await refreshed.session.callTool(name, { ...args, mode: "full" })).structuredContent as Record<string, unknown>;
+    const before = resultFields((await plain.session.callTool(name, { ...args, mode: "full" }))) as Record<string, unknown>;
+    const after = resultFields((await refreshed.session.callTool(name, { ...args, mode: "full" }))) as Record<string, unknown>;
     assert.equal("freshness" in before, false, `${name}: a read that refreshed nothing carries no freshness`);
     assert.equal("resolution" in before, false, `${name}: a read that refreshed nothing carries no resolution`);
     assert.deepEqual(after["freshness"], REFRESH.freshness, name);
     assert.deepEqual(after["resolution"], REFRESH.resolution, name);
-    const { mode: afterMode, freshness: _freshness, resolution: _resolution, ...fact } = after;
-    const { mode: beforeMode, ...plainFact } = before;
+    const { mode: afterMode, freshness: _freshness, resolution: _resolution, ...fact } = fieldsOf(after);
+    const { mode: beforeMode, ...plainFact } = fieldsOf(before);
     assert.equal(afterMode, "full", name);
     assert.equal(beforeMode, "full", name);
     assert.deepEqual(fact, plainFact, `${name}: the fact is unchanged by the refresh`);
     for (const mode of ["summary", "details"] as const) {
       const response = await refreshed.session.callTool(name, { ...args, mode });
-      const receipt = response.structuredContent as Record<string, unknown>;
-      const { recovery: _recovery, ...plainReceipt } = receipt;
+      const receipt = resultFields(response) as Record<string, unknown>;
+      const { recovery: _recovery, ...plainReceipt } = fieldsOf(receipt);
       assert.deepEqual(plainReceipt, { mode, status: after["status"], snapshot: after["snapshot"] }, name);
       assert.match(textOf(response), /remote: orders https:\/\/git\.example\.com\/orders\.git verified/, name);
       assert.match(textOf(response), /pinned: orders asked main by explicit/, name);
@@ -2289,13 +2388,13 @@ test("the sidecar is redacted with the composed redaction like every other value
 
   const result = await session.callTool("ye_ast_workspace", { mode: "full" });
 
-  const structured = JSON.stringify(result.structuredContent);
+  const structured = JSON.stringify(resultFields(result));
   assert.doesNotMatch(structured, new RegExp(SECRET));
   assert.match(structured, new RegExp(REDACTED.replace(/[[\]]/g, "\\$&")));
   assert.doesNotMatch(textOf(result), new RegExp(SECRET));
   for (const mode of ["summary", "details"] as const) {
     const answer = await session.callTool("ye_ast_workspace", { mode });
-    assert.deepEqual(answer.structuredContent, envelopeOf(workspaceFact(), mode));
+    assert.deepEqual(fieldsOf(resultFields(answer)), envelopeOf(workspaceFact(), mode));
     assert.ok(textOf(answer).includes(`https://user:${REDACTED}@git.example.com/orders.git`));
     assert.ok(textOf(answer).includes(`fatal: ${REDACTED}`));
     assert.ok(textOf(answer).includes(`/clones/${REDACTED}`));
@@ -2349,7 +2448,7 @@ test("decision text and structured full retain each evidence repository", async 
   const text = textOf(await session.callTool("ye_ast_decisions", { mode: "details" }));
   assert.match(text, /caller:src\/app\.ts:7/);
   assert.match(text, /server:src\/app\.ts:7/);
-  const structured = result.structuredContent as { value: DecisionValue };
+  const structured = resultFields(result) as { value: DecisionValue };
   assert.deepEqual(structured.value.decisions[0]?.evidence, evidence);
   await session.close();
 });
@@ -2446,7 +2545,7 @@ test("impact detail retains a selected origin association while both text modes 
   const summary = await session.callTool("ye_ast_impact", { base: "main" });
   const full = await session.callTool("ye_ast_impact", { base: "main", mode: "details" });
   const structured = await session.callTool("ye_ast_impact", { base: "main", mode: "full" });
-  assert.deepEqual(withoutRecovery(structured.structuredContent), { ...fact, mode: "full", repositoryRoots: [{ repo: "shop", path: REPOSITORY.path }] });
+  assert.deepEqual(withoutRecovery(resultFields(structured)), { ...fact, mode: "full", repositoryRoots: [{ repo: "shop", path: REPOSITORY.path }] });
   assert.doesNotMatch(textOf(summary), /one verified origin/);
   assert.match(textOf(full), /one verified origin: src\/pages\/checkout\.component\.ts:30-45 Checkout \(resource\)/);
   assert.match(textOf(full), /1 other origin/);
@@ -2699,7 +2798,7 @@ test("full impact guides changed-entrypoint-only result without declaring it emp
   try {
     const result = await session.callTool("ye_ast_impact", { base: "main", mode: "full" });
     assert.notEqual(result.isError, true);
-    const value = (result.structuredContent as { value: ImpactValue }).value;
+    const value = (resultFields(result) as { value: ImpactValue }).value;
     assert.equal(value.changedEntrypoints?.length, 1);
     assert.deepEqual([value.seeds, value.symbols, value.entrypoints], [[], [], []]);
     assert.equal(value.modules, undefined);
@@ -2724,7 +2823,7 @@ test("declared selector routes each local and workspace branch and preserves rel
     ] as [string, Record<string, unknown>][]) {
       const result = await session.callTool(name, { ...args, repo: "foreign", mode: "full" });
       assert.notEqual(result.isError, true, name);
-      const content = result.structuredContent as { snapshot: { repo: string }; repositoryRoots?: unknown };
+      const content = resultFields(result) as { snapshot: { repo: string }; repositoryRoots?: unknown };
       assert.equal(content.snapshot.repo, "foreign", name);
       if (["ye_ast_entrypoints", "ye_ast_importers", "ye_ast_outline"].includes(name) || ((name === "ye_ast_impact" || name === "ye_ast_callers") && !("workspace" in args))) {
         assert.deepEqual(content.repositoryRoots, [{ repo: "foreign", path: foreign.path }], name);
@@ -2779,7 +2878,7 @@ test("selected local root is redacted and a mismatching primary snapshot fails",
   const { session } = await setup({}, undefined, [foreign, { path: "/work/other", repoId: "other" }]);
   try {
     const result = await session.callTool("ye_ast_outline", { repo: "foreign", files: ["src/shared.ts"], mode: "full" });
-    assert.deepEqual((result.structuredContent as { repositoryRoots: unknown }).repositoryRoots, [{ repo: "foreign", path: `/work/${REDACTED}` }]);
+    assert.deepEqual((resultFields(result) as { repositoryRoots: unknown }).repositoryRoots, [{ repo: "foreign", path: `/work/${REDACTED}` }]);
     assert.equal(JSON.stringify(result).includes(SECRET), false);
     assert.equal(JSON.stringify(result).includes("/work/other"), false);
   } finally { await session.close(); }
@@ -2880,8 +2979,8 @@ test("base module and fresh live guidance retain their own identities", async ()
     const previous = await second.session.callTool("ye_ast_impact", { base: "main", live: true, mode: "full" });
     stateId = "new-state";
     const fresh = await second.session.callTool("ye_ast_impact", { base: "main", live: true, mode: "full" });
-    assert.equal((previous.structuredContent as { snapshot: { stateId: string } }).snapshot.stateId, "old-state");
-    assert.equal((fresh.structuredContent as { snapshot: { stateId: string } }).snapshot.stateId, "new-state");
+    assert.equal((resultFields(previous) as { snapshot: { stateId: string } }).snapshot.stateId, "old-state");
+    assert.equal((resultFields(fresh) as { snapshot: { stateId: string } }).snapshot.stateId, "new-state");
     const text = textOf(fresh);
     assert.match(text, /fresh[^\n]*live/i);
     assert.match(text, /compare.*head and stateId/i);
@@ -2917,7 +3016,7 @@ test("callers recovery returns a pinned recipe in every response mode", async ()
     const recoveries = [];
     for (const mode of ["summary", "details", "full"]) {
       const answer = await session.callTool("ye_ast_callers", { targets, mode });
-      recoveries.push((answer.structuredContent as Record<string, unknown>).recovery);
+      recoveries.push((resultFields(answer) as Record<string, unknown>).recovery);
     }
     assert.deepEqual(recoveries[0], recoveries[1]);
     assert.deepEqual(recoveries[1], recoveries[2]);
@@ -2925,7 +3024,7 @@ test("callers recovery returns a pinned recipe in every response mode", async ()
     assert.equal(recovery.status, "available");
     assert.deepEqual(recovery.query, { name: "ye_ast_callers", arguments: { repo: "shop", revision: "a".repeat(40), targets } });
     const again = await session.callTool(recovery.query.name, recovery.query.arguments);
-    assert.deepEqual((again.structuredContent as Record<string, unknown>).recovery, recovery);
+    assert.deepEqual((resultFields(again) as Record<string, unknown>).recovery, recovery);
   } finally { await session.close(); }
 });
 
@@ -2941,17 +3040,17 @@ test("workspace callers recovery forwards actual replay and preserves omitted wo
   } });
   try {
     const response = await session.callTool("ye_ast_callers", { targets, workspace: {}, budget: { depth: 2 }, mode: "full" });
-    const recovery = (response.structuredContent as { recovery: { status: string; query: { name: string; arguments: Record<string, unknown> } } }).recovery;
+    const recovery = (resultFields(response) as { recovery: { status: string; query: { name: string; arguments: Record<string, unknown> } } }).recovery;
     assert.equal(recovery.status, "available");
     assert.deepEqual(recovery.query.arguments, { repo: "shop", revision: "a".repeat(40), targets, budget: { depth: 2 }, workspace: {}, replay });
     assert.doesNotMatch(JSON.stringify(recovery), /internal\/mirror/);
-    assert.equal((response.structuredContent as { value: WorkspaceImpactValue }).value.workspace.source, "persisted");
+    assert.equal((resultFields(response) as { value: WorkspaceImpactValue }).value.workspace.source, "persisted");
     const again = await session.callTool(recovery.query.name, recovery.query.arguments);
-    assert.deepEqual((again.structuredContent as Record<string, unknown>).recovery, recovery);
+    assert.deepEqual((resultFields(again) as Record<string, unknown>).recovery, recovery);
     assert.deepEqual(calls.workspaceCallers[1]?.replay, replay);
     assert.equal(calls.workspaceCallers[1]?.repo.revision, "a".repeat(40));
     const explicit = await session.callTool("ye_ast_callers", { targets, workspace: WORKSPACE, offline: true });
-    const explicitArgs = (explicit.structuredContent as { recovery: { query: { arguments: Record<string, unknown> } } }).recovery.query.arguments;
+    const explicitArgs = (resultFields(explicit) as { recovery: { query: { arguments: Record<string, unknown> } } }).recovery.query.arguments;
     assert.deepEqual(explicitArgs.workspace, WORKSPACE);
     assert.equal(explicitArgs.offline, true);
     const mismatch = await session.callTool("ye_ast_callers", { targets, workspace: {}, replay: { ...replay, declaration: `ws-r1:${"e".repeat(64)}` } });
@@ -2974,7 +3073,7 @@ test("callers input and full output schemas enforce replay and recovery shapes",
     assert.equal(input({ targets, workspace: {}, replay: { ...replay, snapshots: [{ repo: "shop", kind: "live", sha: "a".repeat(40) }] } }).valid, false);
     assert.equal((await session.callTool("ye_ast_callers", { targets, replay })).isError, true);
     const result = await session.callTool("ye_ast_callers", { targets });
-    const receipt = result.structuredContent as Record<string, unknown>;
+    const receipt = resultFields(result) as Record<string, unknown>;
     const valid = { ...receipt, recovery: { version: 1, status: "available", resultIdentity: `mcp-r1:${"f".repeat(64)}`, query: { name: "ye_ast_callers", arguments: { repo: "shop", revision: "a".repeat(40), targets } } } };
     for (const item of [valid, { ...valid, recovery: { ...valid.recovery, query: { ...valid.recovery.query, name: "ye_ast_impact" } } }, { ...valid, recovery: { ...valid.recovery, query: { ...valid.recovery.query, arguments: { ...valid.recovery.query.arguments, base: "main" } } } }]) {
       const expected = item === valid;
@@ -2990,9 +3089,9 @@ test("callers recovery uses the live snapshot and recorded walk bounds", async (
   const { session } = await setup({ callers: async () => ({ ok: true, value: fact }) });
   try {
     const response = await session.callTool("ye_ast_callers", { targets, live: true, budget: { depth: 3 } });
-    const recovery = (response.structuredContent as { recovery: { query: { arguments: unknown } } }).recovery;
+    const recovery = (resultFields(response) as { recovery: { query: { arguments: unknown } } }).recovery;
     assert.deepEqual(recovery.query.arguments, { repo: "shop", live: true, targets, budget: { depth: 3 } });
-    assert.equal(CALLERS_OUTPUT.safeParse(response.structuredContent).success, true);
+    assert.equal(CALLERS_OUTPUT.safeParse(resultFields(response)).success, true);
   } finally { await session.close(); }
 });
 
@@ -3005,7 +3104,7 @@ test("impact recovery pins the recorded merge base and head in every mode", asyn
     const results = [];
     for (const mode of ["summary", "details", "full"]) {
       const result = await session.callTool("ye_ast_impact", { base: "main", head: "topic", mode });
-      results.push((result.structuredContent as Record<string, unknown>).recovery);
+      results.push((resultFields(result) as Record<string, unknown>).recovery);
     }
     assert.deepEqual(results[0], results[1]);
     assert.deepEqual(results[1], results[2]);
@@ -3013,7 +3112,7 @@ test("impact recovery pins the recorded merge base and head in every mode", asyn
     assert.equal(recovery.status, "available");
     assert.deepEqual(recovery.query, { name: "ye_ast_impact", arguments: { repo: "shop", base: "b".repeat(40), head: "a".repeat(40) } });
     const replay = await session.callTool(recovery.query.name, recovery.query.arguments);
-    assert.deepEqual((replay.structuredContent as Record<string, unknown>).recovery, recovery);
+    assert.deepEqual((resultFields(replay) as Record<string, unknown>).recovery, recovery);
     assert.equal(calls.ofChange[3]?.base, "b".repeat(40));
     assert.equal(calls.ofChange[3]?.head, "a".repeat(40));
   } finally { await session.close(); }
@@ -3025,14 +3124,14 @@ test("impact recovery requires a recorded merge base and uses recorded live sele
   const { session } = await setup({ ofChange: async () => ({ ok: true, value: current }) });
   try {
     const missing = await session.callTool("ye_ast_impact", { base: "b".repeat(40) });
-    assert.deepEqual((missing.structuredContent as Record<string, unknown>).recovery, { version: 1, status: "unavailable", reason: "unresolved-context" });
+    assert.deepEqual((resultFields(missing) as Record<string, unknown>).recovery, { version: 1, status: "unavailable", reason: "unresolved-context" });
     const { mergeBase: _mergeBase, ...withoutBase } = IMPACT;
     current = impactFact({ value: withoutBase });
     const noBase = await session.callTool("ye_ast_impact", { base: "b".repeat(40) });
-    assert.deepEqual((noBase.structuredContent as Record<string, unknown>).recovery, { version: 1, status: "unavailable", reason: "unresolved-context" });
+    assert.deepEqual((resultFields(noBase) as Record<string, unknown>).recovery, { version: 1, status: "unavailable", reason: "unresolved-context" });
     current = impactFact({ snapshot: { repo: "shop", kind: "live", head: "c".repeat(40), stateId: "live-state" }, inputs: { ...base().inputs, declaredConfig: { changed: ["src/**"], walk: { depth: 2 } } } });
     const result = await session.callTool("ye_ast_impact", { base: "main", live: true, changed: ["src/**"], budget: { depth: 2 } });
-    const recovery = (result.structuredContent as { recovery: { query: { arguments: unknown } } }).recovery;
+    const recovery = (resultFields(result) as { recovery: { query: { arguments: unknown } } }).recovery;
     assert.deepEqual(recovery.query.arguments, { repo: "shop", base: "b".repeat(40), live: true, changed: ["src/**"], budget: { depth: 2 } });
   } finally { await session.close(); }
 });
@@ -3048,16 +3147,16 @@ test("workspace impact recovery forwards actual replay and preserves selectors a
   } });
   try {
     const first = await session.callTool("ye_ast_impact", { base: "main", workspace: {}, changed: ["src/**"], budget: { depth: 2 }, mode: "full" });
-    const recovery = (first.structuredContent as { recovery: { status: string; query: { name: string; arguments: Record<string, unknown> } }; value: WorkspaceImpactValue }).recovery;
+    const recovery = (resultFields(first) as { recovery: { status: string; query: { name: string; arguments: Record<string, unknown> } }; value: WorkspaceImpactValue }).recovery;
     assert.equal(recovery.status, "available");
     assert.deepEqual(recovery.query.arguments, { repo: "shop", base: "b".repeat(40), head: "a".repeat(40), changed: ["src/**"], budget: { depth: 2 }, workspace: {}, replay });
-    assert.equal((first.structuredContent as { value: WorkspaceImpactValue }).value.workspace.source, "persisted");
+    assert.equal((resultFields(first) as { value: WorkspaceImpactValue }).value.workspace.source, "persisted");
     assert.doesNotMatch(JSON.stringify(recovery), /internal\/mirror/);
     const again = await session.callTool(recovery.query.name, recovery.query.arguments);
-    assert.deepEqual((again.structuredContent as Record<string, unknown>).recovery, recovery);
+    assert.deepEqual((resultFields(again) as Record<string, unknown>).recovery, recovery);
     assert.deepEqual(calls.workspaceOfChange[1]?.replay, replay);
     const explicit = await session.callTool("ye_ast_impact", { base: "main", workspace: WORKSPACE, offline: true });
-    const args = (explicit.structuredContent as { recovery: { query: { arguments: Record<string, unknown> } } }).recovery.query.arguments;
+    const args = (resultFields(explicit) as { recovery: { query: { arguments: Record<string, unknown> } } }).recovery.query.arguments;
     assert.deepEqual(args.workspace, WORKSPACE);
     assert.equal(args.offline, true);
     const mismatch = await session.callTool("ye_ast_impact", { base: "main", workspace: {}, replay: { ...replay, declaration: `ws-r1:${"f".repeat(64)}` } });
@@ -3079,7 +3178,7 @@ test("impact replay input and full recovery output enforce strict matching schem
       assert.equal(input(args).valid, "workspace" in args ? false : true);
       assert.equal((await session.callTool("ye_ast_impact", args)).isError, true);
     }
-    const receipt = (await session.callTool("ye_ast_impact", { base: "main" })).structuredContent as Record<string, unknown>;
+    const receipt = resultFields((await session.callTool("ye_ast_impact", { base: "main" }))) as Record<string, unknown>;
     const valid = receipt.recovery as { query: { arguments: Record<string, unknown> } };
     const invalid = [{ ...receipt, recovery: { ...valid, query: { ...valid.query, name: "ye_ast_callers" } } }, { ...receipt, recovery: { ...valid, query: { ...valid.query, arguments: { ...valid.query.arguments, base: "main" } } } }, { ...receipt, recovery: { version: 1, status: "unavailable", reason: "other" } }];
     for (const [value, expected] of [[receipt, true], ...invalid.map((item) => [item, false] as const)] as const) {
@@ -3097,7 +3196,7 @@ test("impact and callers identities include recorded semantics and complete sour
   const identity = async (name: "ye_ast_callers" | "ye_ast_impact") => {
     const request = name === "ye_ast_callers" ? { targets: [{ file: "src/A.java", symbol: "A.f" }] } : { base: "main" };
     const result = await session.callTool(name, request);
-    const recovery = (result.structuredContent as { recovery: { status: string; resultIdentity: string } }).recovery;
+    const recovery = (resultFields(result) as { recovery: { status: string; resultIdentity: string } }).recovery;
     assert.equal(recovery.status, "available");
     return recovery.resultIdentity;
   };
@@ -3146,7 +3245,7 @@ for (const dimension of ["schema", "order", "cuts"] as const) {
         const request = name === "ye_ast_callers" ? { targets } : { base: "main" };
         const identity = async () => {
           const result = await session.callTool(name, request);
-          const recovery = (result.structuredContent as { recovery: { status: string; resultIdentity: string } }).recovery;
+          const recovery = (resultFields(result) as { recovery: { status: string; resultIdentity: string } }).recovery;
           assert.equal(recovery.status, "available");
           return recovery.resultIdentity;
         };
@@ -3172,7 +3271,7 @@ test("workspace recovery identity includes declaration, vector and contributing 
   try {
     for (const name of ["ye_ast_callers", "ye_ast_impact"] as const) {
       const req = name === "ye_ast_callers" ? { workspace: {}, targets: [{ file: "src/A.java", symbol: "A.f" }] } : { workspace: {}, base: "main" };
-      const get = async (mode: string) => (await session.callTool(name, { ...req, mode })).structuredContent as { recovery: { status: string; resultIdentity: string; query: { arguments: Record<string, unknown> } } };
+      const get = async (mode: string) => resultFields((await session.callTool(name, { ...req, mode }))) as { recovery: { status: string; resultIdentity: string; query: { arguments: Record<string, unknown> } } };
       read = { fact, workspaceReplay: replay, repositoryRoots: [{ repo: "shop-web", path: "/clones/one" }], repositorySources: [{ repo: "shop-web", path: "/mirror/one" }] };
       const baseline = await get("summary");
       assert.equal(baseline.recovery.status, "available");
@@ -3202,21 +3301,21 @@ test("recovery handles unknown callers, missing workspace context and nested dea
   const targets = [{ file: "src/A.java", symbol: "A.f" }];
   try {
     const result = await session.callTool("ye_ast_callers", { targets });
-    assert.equal((result.structuredContent as { recovery: { status: string } }).recovery.status, "available");
+    assert.equal((resultFields(result) as { recovery: { status: string } }).recovery.status, "available");
     local = { ...base({ inputs: cfg }), status: "unknown", reason: "deadline" };
     const deadline = await session.callTool("ye_ast_callers", { targets });
-    assert.deepEqual((deadline.structuredContent as Record<string, unknown>).recovery, { version: 1, status: "unavailable", reason: "deadline" });
+    assert.deepEqual((resultFields(deadline) as Record<string, unknown>).recovery, { version: 1, status: "unavailable", reason: "deadline" });
     for (const name of ["ye_ast_callers", "ye_ast_impact"] as const) {
       const args = name === "ye_ast_callers" ? { targets, workspace: {} } : { base: "main", workspace: {} };
       workspaceRead = { fact: workspaceImpactFact() };
       const absent = await session.callTool(name, args);
-      assert.deepEqual((absent.structuredContent as Record<string, unknown>).recovery, { version: 1, status: "unavailable", reason: "unresolved-context" });
+      assert.deepEqual((resultFields(absent) as Record<string, unknown>).recovery, { version: 1, status: "unavailable", reason: "unresolved-context" });
       const fact = workspaceImpactFact();
       if (fact.status === "unknown") throw new Error("expected workspace value");
       const nested: Fact<WorkspaceImpactValue> = { ...fact, value: { ...fact.value, sections: { ...fact.value.sections, "shop-web": { ...base(), status: "unknown", reason: "deadline" } } } };
       workspaceRead = { fact: nested };
       const limited = await session.callTool(name, args);
-      assert.deepEqual((limited.structuredContent as Record<string, unknown>).recovery, { version: 1, status: "unavailable", reason: "deadline" });
+      assert.deepEqual((resultFields(limited) as Record<string, unknown>).recovery, { version: 1, status: "unavailable", reason: "deadline" });
     }
   } finally { await session.close(); }
 });
@@ -3232,7 +3331,7 @@ test("local live recovery tracks head and state while excluding stale notices", 
   try {
     for (const name of ["ye_ast_callers", "ye_ast_impact"] as const) {
       const args = name === "ye_ast_callers" ? { targets: [{ file: "src/A.java", symbol: "A.f" }], live: true } : { base: "main", live: true };
-      const get = async () => (await session.callTool(name, args)).structuredContent as { recovery: { resultIdentity: string } };
+      const get = async () => resultFields((await session.callTool(name, args))) as { recovery: { resultIdentity: string } };
       snapshot = { repo: "shop", kind: "live", head: "a".repeat(40), stateId: "state-1" }; stale = false;
       const initial = await get();
       stale = true;
@@ -3256,7 +3355,7 @@ test("recovery ignores moving aliases and selected root for identical recorded f
       const b = name === "ye_ast_callers" ? { targets: [{ file: "src/A.java", symbol: "A.f" }], revision: "release" } : { base: "release", head: "tag" };
       const x = await first.session.callTool(name, { ...a, mode: "summary" });
       const y = await second.session.callTool(name, { ...b, mode: "full" });
-      assert.deepEqual((x.structuredContent as Record<string, unknown>).recovery, (y.structuredContent as Record<string, unknown>).recovery);
+      assert.deepEqual((resultFields(x) as Record<string, unknown>).recovery, (resultFields(y) as Record<string, unknown>).recovery);
     }
   } finally { await first.session.close(); await second.session.close(); }
 });
@@ -3280,8 +3379,8 @@ test("semantic recipe redaction disables recovery and leaks no secret", async ()
     const tools = await session.listTools();
     for (const [name, args] of cases) for (const mode of ["summary", "details", "full"]) {
       const result = await session.callTool(name, { ...args, mode });
-      assert.equal(new AjvJsonSchemaValidator().getValidator(tools.find(tool => tool.name === name)!.outputSchema!)(result.structuredContent).valid, true);
-      assert.deepEqual((result.structuredContent as Record<string, unknown>).recovery, { version: 1, status: "unavailable", reason: "redacted-context" }, `${name}: ${JSON.stringify(args)}`);
+      assert.equal(new AjvJsonSchemaValidator().getValidator((name === 'ye_ast_entrypoints' ? ENTRYPOINTS_OUTPUT : name === 'ye_ast_callers' ? CALLERS_OUTPUT : IMPACT_OUTPUT)['~standard'].jsonSchema.output({target:'draft-07'}))(resultFields(result)).valid, true);
+      assert.deepEqual((resultFields(result) as Record<string, unknown>).recovery, { version: 1, status: "unavailable", reason: "redacted-context" }, `${name}: ${JSON.stringify(args)}`);
       assert.doesNotMatch(JSON.stringify(result), new RegExp(SECRET));
     }
   } finally { await session.close(); }
@@ -3290,7 +3389,7 @@ test("semantic recipe redaction disables recovery and leaks no secret", async ()
   try {
     for (const [name, args] of [["ye_ast_callers", { repo: SECRET, targets }], ["ye_ast_impact", { repo: SECRET, base: "main" }]] as const) {
       const result = await selected.session.callTool(name, args);
-      assert.deepEqual((result.structuredContent as Record<string, unknown>).recovery, { version: 1, status: "unavailable", reason: "redacted-context" });
+      assert.deepEqual((resultFields(result) as Record<string, unknown>).recovery, { version: 1, status: "unavailable", reason: "redacted-context" });
       assert.doesNotMatch(JSON.stringify(result), new RegExp(SECRET));
     }
   } finally { await selected.session.close(); }
@@ -3300,7 +3399,7 @@ test("semantic recipe redaction disables recovery and leaks no secret", async ()
   const pinned = await setup(handlers, undefined, undefined, REPOSITORY, pinRedaction);
   try {
     const result = await pinned.session.callTool("ye_ast_callers", { targets, workspace: {} });
-    assert.deepEqual((result.structuredContent as Record<string, unknown>).recovery, { version: 1, status: "unavailable", reason: "redacted-context" });
+    assert.deepEqual((resultFields(result) as Record<string, unknown>).recovery, { version: 1, status: "unavailable", reason: "redacted-context" });
     assert.doesNotMatch(JSON.stringify(result), new RegExp(pin));
   } finally { await pinned.session.close(); }
 });
@@ -3338,7 +3437,7 @@ test("impact and callers recovery schemas agree on bounds, globs and hash line e
         assert.equal((await session.callTool(name, bad)).isError, true, JSON.stringify(bad));
       }
       const args = name === "ye_ast_callers" ? { repo: "shop", revision: "a".repeat(40), targets: [{ file: "src/a.ts", symbol: "f" }] } : { repo: "shop", base: "b".repeat(40), head: "a".repeat(40) };
-      const receipt = { mode: "summary", status: "complete", snapshot: base().snapshot, recovery: { version: 1, status: "available", resultIdentity: `mcp-r1:${"f".repeat(64)}`, query: { name, arguments: args } } };
+      const receipt = { text: "status: complete", mode: "summary", status: "complete", snapshot: base().snapshot, recovery: { version: 1, status: "available", resultIdentity: `mcp-r1:${"f".repeat(64)}`, query: { name, arguments: args } } };
       const check = (recovery: unknown, valid: boolean) => {
         const value = { ...receipt, recovery };
         assert.equal(schema.safeParse(value).success, valid, JSON.stringify(value));
@@ -3371,7 +3470,7 @@ test("redaction of an actual selected snapshot pin is reported as redacted conte
   try {
     for (const [name, args] of [["ye_ast_callers", { targets: [{ file: "src/A.java", symbol: "A.f" }] }], ["ye_ast_impact", { base: "main" }]] as const) {
       const result = await session.callTool(name, args);
-      assert.deepEqual((result.structuredContent as Record<string, unknown>).recovery, { version: 1, status: "unavailable", reason: "redacted-context" });
+      assert.deepEqual((resultFields(result) as Record<string, unknown>).recovery, { version: 1, status: "unavailable", reason: "redacted-context" });
       assert.doesNotMatch(JSON.stringify(result), new RegExp(pin));
     }
   } finally { await session.close(); }
@@ -3386,8 +3485,8 @@ test("workspace recipes preserve explicit selectors and effective offline policy
   try {
     for (const name of ["ye_ast_callers", "ye_ast_impact"] as const) {
       const args = name === "ye_ast_callers" ? { targets: [{ file: "src/A.java", symbol: "A.f" }], workspace } : { base: "main", workspace };
-      const online = (await session.callTool(name, args)).structuredContent as { recovery: { resultIdentity: string; query: { arguments: Record<string, unknown> } } };
-      const offline = (await session.callTool(name, { ...args, offline: true })).structuredContent as typeof online;
+      const online = resultFields((await session.callTool(name, args))) as { recovery: { resultIdentity: string; query: { arguments: Record<string, unknown> } } };
+      const offline = resultFields((await session.callTool(name, { ...args, offline: true }))) as typeof online;
       assert.deepEqual(offline.recovery.query.arguments.workspace, workspace);
       assert.equal(offline.recovery.query.arguments.offline, true);
       assert.notEqual(offline.recovery.resultIdentity, online.recovery.resultIdentity);
@@ -3414,7 +3513,7 @@ test("nested deadline in contributing read and finding prevents recovery", async
       fact = { ...source, inputs: { ...source.inputs, declaredConfig: { targets: ["src/A.java:A.f"] } }, value: { ...source.value, sections: { ...source.value.sections, "shop-web": part } } };
       for (const [name, args] of [["ye_ast_callers", { workspace: {}, targets: [{ file: "src/A.java", symbol: "A.f" }] }], ["ye_ast_impact", { workspace: {}, base: "main" }]] as const) {
         const response = await session.callTool(name, args);
-        assert.deepEqual((response.structuredContent as Record<string, unknown>).recovery, { version: 1, status: "unavailable", reason: "deadline" });
+        assert.deepEqual((resultFields(response) as Record<string, unknown>).recovery, { version: 1, status: "unavailable", reason: "deadline" });
       }
     }
   } finally { await session.close(); }
@@ -3431,7 +3530,7 @@ test("invalid returned workspace context cannot produce a recipe", async () => {
       for (const sha of ["HEAD", "b".repeat(40)]) {
         replay = { ...replay, snapshots: [{ repo: "shop", kind: "sha", sha }] };
         const result = await session.callTool(name, args);
-        assert.deepEqual((result.structuredContent as Record<string, unknown>).recovery, { version: 1, status: "unavailable", reason: "unresolved-context" });
+        assert.deepEqual((resultFields(result) as Record<string, unknown>).recovery, { version: 1, status: "unavailable", reason: "unresolved-context" });
       }
     }
   } finally { await session.close(); }
@@ -3444,7 +3543,7 @@ test("redaction of recorded globs or numeric bounds disables both recipes", asyn
   try {
     for (const [name, args] of [["ye_ast_callers", { targets: [{ file: "src/A.java", symbol: "A.f" }] }], ["ye_ast_impact", { base: "main" }]] as const) {
       const response = await scoped.session.callTool(name, args);
-      assert.deepEqual((response.structuredContent as Record<string, unknown>).recovery, { version: 1, status: "unavailable", reason: "redacted-context" });
+      assert.deepEqual((resultFields(response) as Record<string, unknown>).recovery, { version: 1, status: "unavailable", reason: "redacted-context" });
       assert.doesNotMatch(JSON.stringify(response), new RegExp(SECRET));
     }
   } finally { await scoped.session.close(); }
@@ -3454,7 +3553,7 @@ test("redaction of recorded globs or numeric bounds disables both recipes", asyn
   try {
     for (const [name, args] of [["ye_ast_callers", { targets: [{ file: "src/A.java", symbol: "A.f" }], budget: { depth: 2 } }], ["ye_ast_impact", { base: "main", budget: { depth: 2 } }]] as const) {
       const response = await bounded.session.callTool(name, args);
-      assert.deepEqual((response.structuredContent as Record<string, unknown>).recovery, { version: 1, status: "unavailable", reason: "redacted-context" });
+      assert.deepEqual((resultFields(response) as Record<string, unknown>).recovery, { version: 1, status: "unavailable", reason: "redacted-context" });
     }
   } finally { await bounded.session.close(); }
 });
@@ -3509,13 +3608,13 @@ test("mixed recovery preserves live replay and redacts workspace notices in ever
   const { session } = await setup({ workspaceCallers: async (request) => changed && request.replay ? { ok: false, fault: { kind: "workspace-replay-mismatch", detail: "changed" } } : { ok: true, value: { fact, workspaceReplay: replay, workspaceLive: notices } } });
   try {
     const tool = (await session.listTools()).find((item) => item.name === "ye_ast_callers")!;
-    const validate = new AjvJsonSchemaValidator().getValidator(tool.outputSchema!);
+    const validate = new AjvJsonSchemaValidator().getValidator((tool.name === 'ye_ast_entrypoints' ? ENTRYPOINTS_OUTPUT : tool.name === 'ye_ast_callers' ? CALLERS_OUTPUT : IMPACT_OUTPUT)['~standard'].jsonSchema.output({target:'draft-07'}));
     let recipe: { name: string; arguments: Record<string, unknown> } | undefined;
     let identity: string | undefined;
     for (const mode of ["summary", "details", "full"]) {
       const response = await session.callTool("ye_ast_callers", { targets: [{ file: "a", symbol: "f" }], workspace: {}, live: true, mode });
-      assert.equal(validate(response.structuredContent).valid, true);
-      const recovery = (response.structuredContent as { recovery: { status: string; resultIdentity: string; query: typeof recipe } }).recovery;
+      assert.equal(validate(resultFields(response)).valid, true);
+      const recovery = (resultFields(response) as { recovery: { status: string; resultIdentity: string; query: typeof recipe } }).recovery;
       assert.equal(recovery.status, "available");
       identity ??= recovery.resultIdentity;
       assert.equal(recovery.resultIdentity, identity);
@@ -3529,7 +3628,7 @@ test("mixed recovery preserves live replay and redacts workspace notices in ever
       assert.ok(Array.isArray(actualNotices));
       assert.deepEqual(actualNotices.map((item) => item.repo), ["shop", "team/other"]);
       if (mode === "summary" && notices[1]?.kind === "stale") notices[1].notice.changed.push("src/new.ts");
-      assert.equal("workspaceLive" in (response.structuredContent as object), mode === "full");
+      assert.equal("workspaceLive" in (resultFields(response) as object), mode === "full");
     }
     assert.ok(recipe);
     assert.notEqual((await session.callTool(recipe.name, recipe.arguments)).isError, true);
@@ -3575,20 +3674,20 @@ test("selected evidence pages replay the source and reject changed identities be
   const {session, calls} = await setup({map: async () => ({ok:true,value: changed ? {...fact, producer:{...fact.producer,version:"changed"}} : fact})});
   try {
     const tool = (await session.listTools()).find((t) => t.name === "ye_ast_entrypoints")!;
-    const validate = new AjvJsonSchemaValidator().getValidator(tool.outputSchema!);
+    const validate = new AjvJsonSchemaValidator().getValidator((tool.name === 'ye_ast_entrypoints' ? ENTRYPOINTS_OUTPUT : tool.name === 'ye_ast_callers' ? CALLERS_OUTPUT : IMPACT_OUTPUT)['~standard'].jsonSchema.output({target:'draft-07'}));
     const select = {kind:"entrypoint-evidence",findingIndex:0};
     const request = {mode:"full",select,page:{limit:1}};
     const first = await session.callTool(tool.name, request);
     assert.equal(first.isError, undefined);
-    assert.equal(validate(first.structuredContent).valid, true);
-    const a = first.structuredContent as {items: unknown[]; page:{nextCursor:string}; recovery:{resultIdentity:string}};
+    assert.equal(validate(resultFields(first)).valid, true);
+    const a = resultFields(first) as {items: unknown[]; page:{nextCursor:string}; recovery:{resultIdentity:string}};
     const secondArgs = {...request,page:{limit:1,cursor:a.page.nextCursor}};
     const second = await session.callTool(tool.name, secondArgs);
     const repeated = await session.callTool(tool.name, secondArgs);
-    assert.deepEqual(second.structuredContent, repeated.structuredContent);
-    const b = second.structuredContent as {items: unknown[]; page:{nextCursor:string}};
+    assert.deepEqual(resultFields(second), resultFields(repeated));
+    const b = resultFields(second) as {items: unknown[]; page:{nextCursor:string}};
     const third = await session.callTool(tool.name,{...request,page:{limit:1,cursor:b.page.nextCursor}});
-    const c = third.structuredContent as {items: unknown[]; page:{nextCursor?:string}};
+    const c = resultFields(third) as {items: unknown[]; page:{nextCursor?:string}};
     assert.deepEqual([...a.items,...b.items,...c.items], [
       {evidenceIndex:0,evidence:{path:"a",line:1}}, {evidenceIndex:1,evidence:{path:"b",line:2}}, {evidenceIndex:2,evidence:{path:"c",line:3}},
     ]);
@@ -3608,12 +3707,12 @@ test("selected evidence pages replay the source and reject changed identities be
     assert.equal(calls.map.length, 4);
     const verified = await session.callTool(tool.name,{expect:a.recovery.resultIdentity});
     assert.equal(verified.isError, undefined);
-    assert.equal((verified.structuredContent as {mode:string}).mode, "summary");
+    assert.equal((resultFields(verified) as {mode:string}).mode, "summary");
     changed = true;
     for (const args of [secondArgs,{expect:a.recovery.resultIdentity}]) {
       const result = await session.callTool(tool.name,args);
       assert.equal(result.isError,true);
-      assert.equal(result.structuredContent,undefined);
+      assert.equal(result.structuredContent, undefined);
       const fault = result._meta?.["ye-ast/fault"] as {kind:string;stage:string;expected:string;actual:string};
       assert.equal(fault.kind,"result-changed");
       assert.equal(fault.stage,"source-identity");
@@ -3649,8 +3748,8 @@ test("selected SDK responses bind all categories and modes to actual public sche
       const tool = tools.find((t)=>t.name===c.name)!;
       const result = await session.callTool(c.name,{...c.args,select:c.select,page:{limit:1},mode});
       assert.equal(result.isError,undefined,JSON.stringify(result));
-      assert.equal(new AjvJsonSchemaValidator().getValidator(tool.outputSchema!)(result.structuredContent).valid,true,JSON.stringify(result.structuredContent));
-      const response = result.structuredContent as {kind:string;items?:unknown[]};
+      assert.equal(new AjvJsonSchemaValidator().getValidator((tool.name === 'ye_ast_entrypoints' ? ENTRYPOINTS_OUTPUT : tool.name === 'ye_ast_callers' ? CALLERS_OUTPUT : IMPACT_OUTPUT)['~standard'].jsonSchema.output({target:'draft-07'}))(resultFields(result)).valid,true,JSON.stringify(resultFields(result)));
+      const response = resultFields(result) as {kind:string;items?:unknown[]};
       assert.equal(response.kind,mode === "full" ? "projection" : "projection-receipt");
       if (mode === "full") assert.deepEqual(response.items,[c.item]);
       else { assert.equal(response.items,undefined); assert.match(textOf(result),/Records:/); }
@@ -3696,7 +3795,7 @@ test("unknown selection owners retain evidence; deadline and redacted recipes fa
     const args = {select,page:{limit:1},mode:"full"};
     const unknown = await session.callTool("ye_ast_entrypoints",args);
     assert.equal(unknown.isError,undefined);
-    const projection = unknown.structuredContent as {availability:string;reason:string;evidence:unknown[];page?:unknown};
+    const projection = resultFields(unknown) as {availability:string;reason:string;evidence:unknown[];page?:unknown};
     assert.equal(projection.availability,"unavailable");
     assert.equal(projection.reason,"unresolved");
     assert.deepEqual(projection.evidence,[{path:"hidden",line:4}]);
@@ -3705,13 +3804,13 @@ test("unknown selection owners retain evidence; deadline and redacted recipes fa
     const deadline = await session.callTool("ye_ast_entrypoints",args);
     assert.equal(deadline.isError,true);
     assert.equal((deadline._meta?.["ye-ast/fault"] as {kind:string;reason:string}).reason,"deadline");
-    assert.equal(deadline.structuredContent,undefined);
+    assert.equal(deadline.structuredContent, undefined);
     current = original;
     const secret = await session.callTool("ye_ast_entrypoints",{...args,scope:{include:[`src/${SECRET}/**`]}});
     assert.equal(secret.isError,true);
     assert.equal((secret._meta?.["ye-ast/fault"] as {kind:string;reason:string}).reason,"redacted-context");
     assert.doesNotMatch(JSON.stringify(secret),new RegExp(SECRET));
-    assert.equal(secret.structuredContent,undefined);
+    assert.equal(secret.structuredContent, undefined);
   } finally { await session.close(); }
 });
 
@@ -3724,7 +3823,7 @@ test("known empty selections stay available and missing subjects return typed fa
     const select = {kind:"handler-origins",owner:{kind:"local"},handler};
     const zero = await session.callTool("ye_ast_callers",{targets,select,page:{limit:5},mode:"full"});
     assert.equal(zero.isError,undefined);
-    const payload = zero.structuredContent as {items:unknown[];page:{total:number;returned:number;nextCursor?:string}};
+    const payload = resultFields(zero) as {items:unknown[];page:{total:number;returned:number;nextCursor?:string}};
     assert.deepEqual(payload.items,[]);
     assert.deepEqual(payload.page,{limit:5,offset:0,returned:0,total:0});
     const missing = await session.callTool("ye_ast_callers",{targets,select:{...select,handler:{...handler,line:18}},page:{limit:1}});
@@ -3739,7 +3838,7 @@ test("continuation cannot invent a page for an unavailable evidence owner", asyn
   const { session, calls } = await setup({ map: async () => ({ ok: true, value: fact }) });
   try {
     const whole = await session.callTool("ye_ast_entrypoints", { mode: "full" });
-    const recovery = (whole.structuredContent as { recovery: { status: string; resultIdentity: string } }).recovery;
+    const recovery = (resultFields(whole) as { recovery: { status: string; resultIdentity: string } }).recovery;
     assert.equal(recovery.status, "available");
     const select = { kind: "entrypoint-evidence", findingIndex: 0 };
     const digest = { of: (value: string) => createHash("sha256").update(value).digest("hex") };
@@ -3751,9 +3850,9 @@ test("continuation cannot invent a page for an unavailable evidence owner", asyn
     assert.equal(result.structuredContent, undefined);
     const first = await session.callTool("ye_ast_entrypoints", { select, page: { limit: 1 } });
     assert.equal(first.isError, undefined);
-    assert.equal((first.structuredContent as { availability: string }).availability, "unavailable");
+    assert.equal((resultFields(first) as { availability: string }).availability, "unavailable");
     const tool = (await session.listTools()).find(tool => tool.name === "ye_ast_entrypoints")!;
-    assert.equal(new AjvJsonSchemaValidator().getValidator(tool.outputSchema!)(first.structuredContent).valid, true);
+    assert.equal(new AjvJsonSchemaValidator().getValidator((tool.name === 'ye_ast_entrypoints' ? ENTRYPOINTS_OUTPUT : tool.name === 'ye_ast_callers' ? CALLERS_OUTPUT : IMPACT_OUTPUT)['~standard'].jsonSchema.output({target:'draft-07'}))(resultFields(first)).valid, true);
     assert.equal(calls.map.length, 3);
   } finally { await session.close(); }
 });
@@ -3768,13 +3867,13 @@ test("selected UI evidence preserves known and unknown components through all pu
   const { session } = await setup({ map: async () => ({ ok: true, value: fact }) });
   try {
     const tool = (await session.listTools()).find(({ name }) => name === "ye_ast_entrypoints")!;
-    const validate = new AjvJsonSchemaValidator().getValidator(tool.outputSchema!);
+    const validate = new AjvJsonSchemaValidator().getValidator((tool.name === 'ye_ast_entrypoints' ? ENTRYPOINTS_OUTPUT : tool.name === 'ye_ast_callers' ? CALLERS_OUTPUT : IMPACT_OUTPUT)['~standard'].jsonSchema.output({target:'draft-07'}));
     for (const [findingIndex, finding] of findings.entries()) {
       for (const mode of ["summary", "details", "full"] as const) {
         const result = await session.callTool(tool.name, { mode, select: { kind: "entrypoint-evidence", findingIndex }, page: { limit: 2 } });
         assert.equal(result.isError, undefined, JSON.stringify(result));
-        assert.equal(validate(result.structuredContent).valid, true);
-        const payload = result.structuredContent as { source: { analysis: { status: string } }; context?: { finding: Record<string, unknown> }; items?: unknown[] };
+        assert.equal(validate(resultFields(result)).valid, true);
+        const payload = resultFields(result) as { source: { analysis: { status: string } }; context?: { finding: Record<string, unknown> }; items?: unknown[] };
         assert.equal(payload.source.analysis.status, "partial");
         if (mode === "full") {
           assert.deepEqual(payload.items, finding.evidence.map((evidence, evidenceIndex) => ({ evidenceIndex, evidence })));
@@ -3807,7 +3906,7 @@ test("selected evidence is redacted before page rendering in every public mode",
       const result = await session.callTool("ye_ast_entrypoints", { mode, select: { kind: "entrypoint-evidence", findingIndex: 0 }, page: { limit: 1 } });
       assert.equal(result.isError, undefined);
       assert.equal(JSON.stringify(result).includes(SECRET), false);
-      const payload = result.structuredContent as { recovery: { status: string }; items?: unknown[] };
+      const payload = resultFields(result) as { recovery: { status: string }; items?: unknown[] };
       assert.equal(payload.recovery.status, "available");
       if (mode === "full") assert.deepEqual(payload.items, [{ evidenceIndex: 0, evidence: { path: `src/${REDACTED}.ts`, line: 7 } }]);
       else assert.ok(textOf(result).includes(`src/${REDACTED}.ts`));
@@ -3815,7 +3914,7 @@ test("selected evidence is redacted before page rendering in every public mode",
   } finally { await session.close(); }
 });
 
-test("recovery recipes stay structured once across ordinary and selected response modes", async () => {
+test("recovery recipes appear once in content across ordinary and selected response modes", async () => {
   const targets = [{ file: "src/OrderService.java", symbol: "OrderService.find" }];
   const fact = impactFact({ status: "partial", cuts: [{ kind: "depth", at: ["src/OrderService.java::OrderService.find", "src/OrderController.java:17"], limit: 2 }], inputs: { ...base().inputs, declaredConfig: { targets: ["src/OrderService.java:OrderService.find"] } } });
   const { session } = await setup({ callers: async () => ({ ok: true, value: fact }), ofChange: async () => ({ ok: true, value: fact }) });
@@ -3831,7 +3930,7 @@ test("recovery recipes stay structured once across ordinary and selected respons
         for (const controls of [{}, { select, page: { limit: 1 } }]) {
           const result = await session.callTool(name, { ...args, mode, ...controls });
           assert.notEqual(result.isError, true);
-          const recovery = (result.structuredContent as { recovery: { status: string; query: { name: string; arguments: unknown } } }).recovery;
+          const recovery = (resultFields(result) as { recovery: { status: string; query: { name: string; arguments: unknown } } }).recovery;
           assert.equal(recovery.status, "available");
           assert.equal(recovery.query.name, name);
           original ??= recovery;
@@ -3839,7 +3938,9 @@ test("recovery recipes stay structured once across ordinary and selected respons
           const text = textOf(result);
           assert.equal(text.includes(JSON.stringify(recovery)), false, `${name} ${mode}: duplicate recovery`);
           assert.equal(text.includes(JSON.stringify(recovery.query)), false, `${name} ${mode}: duplicate recipe`);
-          assert.equal((text.match(/structuredContent\.recovery/g) ?? []).length, 1, `${name} ${mode}: recovery location`);
+          assert.equal((text.match(/recovery in the result JSON/g) ?? []).length, 1, `${name} ${mode}: recovery location`);
+          const content = result.content.map((block) => block.text).join("\n");
+          assert.equal(content.split(JSON.stringify(recovery)).length - 1, 1, `${name} ${mode}: one recipe in content`);
         }
       }
     }

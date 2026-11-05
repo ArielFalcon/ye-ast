@@ -3,8 +3,8 @@ import { createHash } from "node:crypto";
 import assert from "node:assert/strict";
 import { z } from "zod";
 import { AjvJsonSchemaValidator } from "@modelcontextprotocol/server/validators/ajv";
-import { compactInput, compactOutput } from "./compact-schema.ts";
-import { createMcpServer, OUTLINE_OUTPUT, type McpDeps } from "./server.ts";
+import { compactInput } from "./compact-schema.ts";
+import { createMcpServer, type McpDeps } from "./server.ts";
 import { openSession } from "./test-session.ts";
 
 test("catalogue advertises useful guides within budget", async () => {
@@ -32,14 +32,13 @@ test("catalogue advertises useful guides within budget", async () => {
   try {
     const tools = await session.listTools();
     const bytes = Buffer.byteLength(JSON.stringify({ tools }));
-    const outputs = Buffer.byteLength(JSON.stringify(tools.map(tool => tool.outputSchema)));
+    const outputs = tools.reduce((sum, tool) => sum + (tool.outputSchema === undefined ? 0 : Buffer.byteLength(JSON.stringify(tool.outputSchema))), 0);
     console.log(`discovery bytes: ${bytes}; input schema bytes: ${Buffer.byteLength(JSON.stringify(tools.map(tool => tool.inputSchema)))}; output schema bytes: ${outputs}; instructions chars: ${session.instructions?.length}`);
     assert.ok((session.instructions?.length ?? Infinity) <= 3400);
     assert.match(session.instructions!, /supply select and page together/);
     for (const rule of [
-      /Summary\/details:[^\n]*content[^\n]*structuredContent[^\n]*status[^\n]*snapshot/,
-      /Full:[^\n]*structuredContent[^\n]*complete data[^\n]*content[^\n]*navigation/,
-      /Recovery[^\n]*structuredContent\.recovery/,
+      /Content carries presentation text[^\n]*result JSON/,
+      /Recovery is the recovery field/,
       /unknown never means no impact/,
       /head and stateId/,
       /merge-base SHA/,
@@ -49,8 +48,8 @@ test("catalogue advertises useful guides within budget", async () => {
       /isError is a fault, not an empty fact/,
     ]) assert.match(session.instructions!, rule);
 
-    assert.ok(bytes <= 50_000);
-    assert.ok(outputs <= 19_000);
+    assert.ok(bytes <= 32_000);
+    assert.equal(outputs, 0);
     for (const tool of tools) {
       assert.equal(tool.inputSchema.type, "object");
       assert.ok(Object.keys(tool.inputSchema.properties ?? {}).length > 0);
@@ -59,31 +58,9 @@ test("catalogue advertises useful guides within budget", async () => {
       for (const key of ["allOf", "anyOf", "oneOf", "if", "then", "else", "not"]) {
         assert.equal(key in tool.inputSchema, false, `${tool.name}: ${key}`);
       }
-      const schema = JSON.stringify(tool.outputSchema);
-      const selectable = ["ye_ast_entrypoints", "ye_ast_callers", "ye_ast_impact"].includes(tool.name);
-      assert.equal(schema.includes('"recovery"'), selectable, `${tool.name}: recovery capability`);
-      assert.equal(schema.includes('"projection"'), selectable, `${tool.name}: selection capability`);
-      for (const field of ["snapshot", "status", "evidence"]) {
-        assert.ok(schema.includes(field), `${tool.name}: ${field}`);
-      }
-      new AjvJsonSchemaValidator().getValidator(tool.outputSchema!);
+      assert.equal(tool.outputSchema, undefined);
     }
   } finally { await session.close(); }
-});
-
-test("output guide retains the complete family runtime validator", async () => {
-  const wrapped = compactOutput(OUTLINE_OUTPUT, "outline");
-  const validateGuide = new AjvJsonSchemaValidator().getValidator(wrapped["~standard"].jsonSchema.output({ target: "draft-07" }));
-  const snapshot = { kind: "sha", repo: "r", sha: "a".repeat(40) };
-  const receipt = { mode: "summary", status: "complete", snapshot };
-  assert.equal(validateGuide(receipt).valid, true);
-  assert.equal(OUTLINE_OUTPUT.safeParse(receipt).success, true);
-  assert.deepEqual(await wrapped["~standard"].validate(receipt), await OUTLINE_OUTPUT["~standard"].validate(receipt));
-  const incomplete = { mode: "full", status: "complete", snapshot, value: { files: [], unheld: [] } };
-  assert.equal(validateGuide(incomplete).valid, true);
-  assert.equal(OUTLINE_OUTPUT.safeParse(incomplete).success, false);
-  assert.deepEqual(await wrapped["~standard"].validate(incomplete), await OUTLINE_OUTPUT["~standard"].validate(incomplete));
-  assert.equal(validateGuide({ ...receipt, status: "invented" }).valid, false);
 });
 
 test("input guide preserves root fields and delegates refinements", async () => {
@@ -117,30 +94,3 @@ function canonicalConstraints(value: unknown): unknown {
   return Object.fromEntries(Object.entries(value).filter(([key]) => key !== "description")
     .sort(([a], [b]) => a.localeCompare(b)).map(([key, child]) => [key, canonicalConstraints(child)]));
 }
-
-test("output definitions describe only fields that the family returns", () => {
-  const schema = z.object({});
-  for (const family of ["entrypoints", "impact", "callers", "outline", "importers", "workspace", "decisions"] as const) {
-    const guide = compactOutput(schema, family)["~standard"].jsonSchema.output({ target: "draft-07" });
-    const definitions = guide.definitions as Record<string, unknown>;
-    const reachable = new Set<string>();
-    const inspect = (value: unknown): void => {
-      if (Array.isArray(value)) { value.forEach(inspect); return; }
-      if (value === null || typeof value !== "object") return;
-      for (const [key, child] of Object.entries(value)) {
-        if (key === "$ref" && typeof child === "string") {
-          assert.ok(child.startsWith("#/definitions/"));
-          const name = child.slice("#/definitions/".length);
-          assert.ok(name in definitions, `${family}: ${name}`);
-          if (!reachable.has(name)) { reachable.add(name); inspect(definitions[name]); }
-        } else if (key !== "definitions") inspect(child);
-      }
-    };
-    inspect(guide);
-    assert.deepEqual([...reachable].sort(), Object.keys(definitions).sort(), family);
-    if (["impact", "callers"].includes(family)) {
-      const source = definitions.source as { properties: { analysis: unknown } };
-      assert.deepEqual(source.properties.analysis, { type: "object", properties: { status: { enum: ["complete", "partial", "unknown"] }, reason: { type: "string" } }, required: ["status"] });
-    }
-  }
-});

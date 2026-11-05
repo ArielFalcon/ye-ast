@@ -79,6 +79,6 @@ export function renderSourceContext(source: SourceSummary): string[] {
     }
   }
   if (source.limits.length > 0) lines.push(`Source limits: ${JSON.stringify(source.limits)}`);
-  lines.push("Provenance catalogs: structuredContent.source.");
+  lines.push("Provenance catalogs: source in the result JSON.");
   return lines;
 }

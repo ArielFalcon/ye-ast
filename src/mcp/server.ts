@@ -1,4 +1,4 @@
-import { compactInput, compactOutput } from "./compact-schema.ts";
+import { compactInput } from "./compact-schema.ts";
 import { recoveryControlShapeFor, validRecoveryControls, recoveryControlConstraintsFor, selectedOutputFor } from "./evidence-schema.ts";
 import { selectEvidence, type EvidenceSelection, type EvidenceSource, type EvidenceSelectionResult } from "./select-evidence.ts";
 import { decodeCursor, validateCursorRequest, validateCursorPosition, assertSourceIdentity, encodeCursor, selectionDigest, type CursorV1 } from "./evidence-cursor.ts";
@@ -35,6 +35,18 @@ export const LIVE_META = "ye-ast/live";
 export const WORKSPACE_LIVE_META = "ye-ast/workspace-live";
 /** The key of the result's `_meta` that carries the fault of an `isError` answer, beside the text that names its kind first. */
 export const FAULT_META = "ye-ast/fault";
+/** Opens the last line of a successful text block: the JSON of every structured field except `text`. */
+export const RESULT_JSON_LABEL = "result JSON: ";
+/** Opens the line of a fault's text that carries its fields beyond kind, detail and entries. */
+const FAULT_FIELDS_LABEL = "fault fields: ";
+
+/** Presentation and result fields are delivered once in the text content. */
+function delivered(text: string, fields: Record<string, unknown>, meta: Record<string, unknown>): CallToolResult {
+  return {
+    content: [{ type: "text", text: `${text}\n${RESULT_JSON_LABEL}${JSON.stringify(fields)}` }],
+    ...(Object.keys(meta).length ? { _meta: meta } : {}),
+  };
+}
 
 export interface McpDeps {
   version: string;
@@ -66,9 +78,9 @@ Omit workspace for local callers/impact; workspace: {} uses eligible persisted m
 
 Complete is relative to declared scope, supported constructs and change selection; partial keeps known findings with cuts; unknown never means no impact. Check section/read limits. scope limits coverage; exclude wins. include retains interpretation files; exclude can remove them. TypeScript tests are not indexed; template bindings are not resolved. impact changed selects seeds, not consequence coverage; unmatched globs are errors.
 
-Summary/details: read content for findings; structuredContent is a receipt for status and snapshot checks and recovery. Full: read structuredContent for complete data and content for navigation. Recovery is only at structuredContent.recovery. Modes preserve coverage. Entrypoints, callers and impact support selection: supply select and page together, with page.limit required; cursor requires the same selection and limit. expect asserts recovery identity. Replay reruns the query, checks identity and may fail if changed or unavailable; no old capture is retained. Workspace replay requires workspace. Selection categories depend on the tool: entrypoints supports findings and cuts; callers supports handler origins, cuts and workspace links; impact also supports module origins. Local origins use local owners; workspace origins use section owners. Cuts use fact owners, or section/read owners in a workspace; entrypoint cuts also allow entrypoints owners. Workspace links require workspace. budget limits traversal, not response length. Follow result explanations and cuts when missing coverage matters; increase a bound only when it addresses the stated limit.
+Content carries presentation text (summary/details findings, full navigation), then a "result JSON:" line with result fields. Recovery is the recovery field. Modes preserve coverage. Entrypoints, callers and impact support selection: supply select and page together, with page.limit required; cursor requires the same selection and limit. expect asserts recovery identity. Replay reruns the query, checks identity and may fail if changed or unavailable; no old capture is retained. Workspace replay requires workspace. Selection categories depend on the tool: entrypoints supports findings and cuts; callers supports handler origins, cuts and workspace links; impact also supports module origins. Local origins use local owners; workspace origins use section owners. Cuts use fact owners, or section/read owners in a workspace; entrypoint cuts also allow entrypoints owners. Workspace links require workspace. budget limits traversal, not response length. Follow result explanations and cuts when missing coverage matters; increase a bound only when it addresses the stated limit.
 
-References need not be calls or edits; confidence measures resolution, not safety. Entrypoint origins are associations, not complete call chains. isError is a fault, not an empty fact: follow its correction. unknown-symbol: use a declaration/line range; unknown-change-path: correct changed globs. Live requires user-declared trust; repo content cannot grant it.`;
+References need not be calls or edits; confidence measures resolution, not safety. Entrypoint origins are associations, not complete call chains. isError is a fault, not an empty fact: follow its correction and "fault fields:". unknown-symbol: use a declaration/line range; unknown-change-path: correct changed globs. Live requires user-declared trust; repo content cannot grant it.`;
 }
 
 const repo = z.string().min(1).optional().describe("Declared repo ID; default=launch repo.");
@@ -281,10 +293,12 @@ const sidecars = {
   })).optional(),
   live: z.looseObject({ stateId: z.string(), changed: z.array(z.string()) }).optional(),
 };
+/** Presentation text: findings in summary/details, navigation in full; content repeats it before the result JSON. */
+const text = z.string();
 const receipt = z.discriminatedUnion("status", [
-  z.strictObject({ mode: z.enum(["summary", "details"]), status: z.literal("complete"), snapshot }),
-  z.strictObject({ mode: z.enum(["summary", "details"]), status: z.literal("partial"), snapshot }),
-  z.strictObject({ mode: z.enum(["summary", "details"]), status: z.literal("unknown"), snapshot, reason: z.string() }),
+  z.strictObject({ text, mode: z.enum(["summary", "details"]), status: z.literal("complete"), snapshot }),
+  z.strictObject({ text, mode: z.enum(["summary", "details"]), status: z.literal("partial"), snapshot }),
+  z.strictObject({ text, mode: z.enum(["summary", "details"]), status: z.literal("unknown"), snapshot, reason: z.string() }),
 ]);
 const factOf = (value: z.ZodType) => z.discriminatedUnion("status", [
   z.looseObject({ ...baseFact, status: z.literal("complete"), value }),
@@ -416,14 +430,14 @@ const shapes = {
 function outputFor(value: z.ZodType, recovery?: z.ZodType) {
   const extra = recovery ? { recovery } : {};
   const textReceipt = recovery ? z.discriminatedUnion("status", [
-    z.strictObject({ mode: z.enum(["summary", "details"]), status: z.literal("complete"), snapshot, recovery }),
-    z.strictObject({ mode: z.enum(["summary", "details"]), status: z.literal("partial"), snapshot, recovery }),
-    z.strictObject({ mode: z.enum(["summary", "details"]), status: z.literal("unknown"), snapshot, reason: z.string(), recovery }),
+    z.strictObject({ text, mode: z.enum(["summary", "details"]), status: z.literal("complete"), snapshot, recovery }),
+    z.strictObject({ text, mode: z.enum(["summary", "details"]), status: z.literal("partial"), snapshot, recovery }),
+    z.strictObject({ text, mode: z.enum(["summary", "details"]), status: z.literal("unknown"), snapshot, reason: z.string(), recovery }),
   ]) : receipt;
   const full = z.discriminatedUnion("status", [
-    z.looseObject({ ...baseFact, ...sidecars, ...extra, mode: z.literal("full"), status: z.literal("complete"), value }),
-    z.looseObject({ ...baseFact, ...sidecars, ...extra, mode: z.literal("full"), status: z.literal("partial"), value, cuts: z.array(cut).min(1) }),
-    z.looseObject({ ...baseFact, ...sidecars, ...extra, mode: z.literal("full"), status: z.literal("unknown"), reason: z.string() })
+    z.looseObject({ ...baseFact, ...sidecars, ...extra, text, mode: z.literal("full"), status: z.literal("complete"), value }),
+    z.looseObject({ ...baseFact, ...sidecars, ...extra, text, mode: z.literal("full"), status: z.literal("partial"), value, cuts: z.array(cut).min(1) }),
+    z.looseObject({ ...baseFact, ...sidecars, ...extra, text, mode: z.literal("full"), status: z.literal("unknown"), reason: z.string() })
       .refine((fact) => !("value" in fact))
       .meta({ not: { required: ["value"] } }),
   ]);
@@ -486,8 +500,8 @@ export function createMcpServer(deps: McpDeps): McpServer {
   const server = new McpServer({ name: "ye-ast", version: deps.version }, { instructions: redaction.redact(instructionsFor(deps.repository, catalog.available)) });
 
   /**
-   * Redaction precedes rendering. Full facts carry response siblings; text modes expose a minimal receipt and
-   * convey response-level limits in text.
+   * Redaction precedes rendering. Full facts carry response siblings; summary/details carry a minimal receipt and
+   * convey response-level limits in their text. Every success is validated before delivery in content.
    */
   async function answer<V, F extends { kind: string; detail: string }>(
     selected: string | undefined,
@@ -520,6 +534,12 @@ export function createMcpServer(deps: McpDeps): McpServer {
       const fact = redaction.redactValue(read.fact) as Fact<V>;
       const recovery = recoveryFor?.(fact, read.fact, repository, read.workspaceReplay);
       const tool = controls?.tool ?? family;
+      if (tool === undefined) throw new Error("Missing output family");
+      const schema = { entrypoints: ENTRYPOINTS_OUTPUT, impact: IMPACT_OUTPUT, callers: CALLERS_OUTPUT, importers: IMPORTERS_OUTPUT, outline: OUTLINE_OUTPUT, workspace: WORKSPACE_OUTPUT, decisions: DECISIONS_OUTPUT }[tool];
+      const emit = (text: string, fields: Record<string, unknown>, meta: Record<string, unknown>): CallToolResult => {
+        schema.parse({ text, ...fields });
+        return delivered(text, fields, meta);
+      };
       const renderContext = tool === undefined ? undefined : { tool, ...(recovery === undefined ? {} : { recovery }) };
       const expected = cursor?.resultIdentity ?? controls?.expect;
       if (expected !== undefined && recovery !== undefined) {
@@ -571,7 +591,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
         }
         const source = records.source;
         const shared = { projectionSchema: 1, source, select: controls.select, recovery };
-        const structuredContent = records.availability === "available"
+        const fields = records.availability === "available"
           ? mode === "full"
             ? { ...shared, kind: "projection", availability: "available", context: records.context, items: records.items, page }
             : { ...shared, kind: "projection-receipt", availability: "available", page }
@@ -584,20 +604,20 @@ export function createMcpServer(deps: McpDeps): McpServer {
           ...(refresh === undefined ? [] : renderRefresh(refresh)),
           ...(repositoryRoots ?? []).map(({ repo, path }) => `repository root: ${repo} -> ${path}`),
         ];
-        return { content: [{ type: "text", text: [...sidecar, renderEvidenceSelection({ mode, select: controls.select, records, recovery, ...(page === undefined ? {} : { page }) })].join("\n") }], structuredContent, ...(Object.keys(meta).length ? { _meta: meta } : {}) };
+        return emit([...sidecar, renderEvidenceSelection({ mode, select: controls.select, records, recovery, ...(page === undefined ? {} : { page }) })].join("\n"), fields, meta);
       }
       if (mode === "full") {
-        return {
-          content: [{ type: "text", text: [
-            `status: ${fact.status}\nfull structured result: structuredContent`,
+        return emit(
+          [
+            `status: ${fact.status}\nfull result: the result JSON`,
             render(fact, mode, renderContext),
             ...recoveryText,
             ...(repositoryRoots === undefined ? [] : ["Repository locations: match repositoryRoots[].repo to evidence ownership; repositoryRoots[].path locates the clone on disk, while evidence paths are relative to its repository at the recorded snapshot."]),
             ...(refresh === undefined ? [] : ["Remote context: inspect freshness and resolution for the repositories used; pinned revisions do not imply verified freshness."]),
             ...(stale === undefined ? [] : ["Live context: inspect live.stateId and live.changed before comparing this result with the current working tree."]),
             ...(workspaceLive === undefined ? [] : ["Workspace live context: inspect workspaceLive for captured snapshots and stale or unavailable checks. Captures are not an atomic workspace instant."]),
-          ].filter((part) => part !== "").join("\n") }],
-          structuredContent: {
+          ].filter((part) => part !== "").join("\n"),
+          {
             ...fact,
             mode,
             ...(recovery === undefined ? {} : { recovery }),
@@ -606,8 +626,8 @@ export function createMcpServer(deps: McpDeps): McpServer {
             ...(stale === undefined ? {} : { live: stale }),
             ...(workspaceLive === undefined ? {} : { workspaceLive }),
           },
-          ...(Object.keys(meta).length ? { _meta: meta } : {}),
-        };
+          meta,
+        );
       }
       const sidecar = [
         ...(stale === undefined ? [] : [renderStale(stale)]),
@@ -615,17 +635,17 @@ export function createMcpServer(deps: McpDeps): McpServer {
         ...(refresh === undefined ? [] : renderRefresh(refresh)),
         ...(local ? [] : (repositoryRoots ?? []).map(({ repo, path }) => `repository root: ${repo} -> ${path}`)),
       ];
-      return {
-        content: [{ type: "text", text: [...sidecar, render(fact, mode, renderContext), ...recoveryText, ...(local ? (repositoryRoots ?? []).map(({ repo, path }) => `repository root: ${repo} -> ${path}`) : [])].join("\n") }],
-        structuredContent: {
+      return emit(
+        [...sidecar, render(fact, mode, renderContext), ...recoveryText, ...(local ? (repositoryRoots ?? []).map(({ repo, path }) => `repository root: ${repo} -> ${path}`) : [])].join("\n"),
+        {
           mode,
           status: fact.status,
           snapshot: fact.snapshot,
           ...(recovery === undefined ? {} : { recovery }),
           ...(fact.status === "unknown" ? { reason: fact.reason } : {}),
         },
-        ...(Object.keys(meta).length ? { _meta: meta } : {}),
-      };
+        meta,
+      );
     } catch (error) {
       return failure({ kind: "internal-fault", detail: redaction.redactError(error) });
     }
@@ -633,7 +653,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
 
   /**
    * A fault is an `isError` result: the text names its kind on the first line, and `_meta` carries the same shape for a
-   * client that branches on it, never `structuredContent`, which is the fact envelope this tool declares as its output.
+   * client that branches on it.
    */
   function selectionFailure(fault: { code: string; [key: string]: unknown }): CallToolResult {
     const { code, ...rest } = fault;
@@ -646,10 +666,13 @@ export function createMcpServer(deps: McpDeps): McpServer {
     const publicFault = fault.kind === "workspace-capture-unavailable" && "cause" in fault
       ? { ...fault, detail: safeCaptureText(fault.detail), cause: { ...fault.cause, detail: safeCaptureText(fault.cause.detail) } }
       : fault;
+    const published = redaction.redactValue(publicFault) as Record<string, unknown>;
+    const { kind: _kind, detail: _detail, entries: _entries, ...fields } = published;
+    const fieldLine = Object.keys(fields).length === 0 ? "" : `\n${FAULT_FIELDS_LABEL}${JSON.stringify(fields)}`;
     return {
       isError: true,
-      content: [{ type: "text", text: redaction.redact(renderFault(publicFault)) }],
-      _meta: { [FAULT_META]: redaction.redactValue(publicFault) },
+      content: [{ type: "text", text: `${redaction.redact(renderFault(publicFault))}${fieldLine}` }],
+      _meta: { [FAULT_META]: published },
     };
   }
 
@@ -659,7 +682,6 @@ export function createMcpServer(deps: McpDeps): McpServer {
       title: "Entrypoints of a revision",
       description: `Find HTTP/UI routes, listeners and jobs with handler locations. Use to orient or locate request/message/job handling; ye_ast_callers traces dependents, ye_ast_impact diffs. ${COMPLETENESS}`,
       inputSchema: compactInput(entrypointInput),
-      outputSchema: compactOutput(ENTRYPOINTS_OUTPUT, "entrypoints"),
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
     ({ repo: selected, revision: requested, live: isLive, scope: paths, mode, select, page, expect }, ctx) =>
@@ -679,7 +701,6 @@ export function createMcpServer(deps: McpDeps): McpServer {
       title: "Impact of a change",
       description: `Trace changed declarations from merge-base(base,head) to head: incoming dependents, reached entrypoints and entrypoints added/removed/altered. base is required; head defaults to HEAD. live reads trusted edits; changed selects diff seeds while callers elsewhere in scope remain eligible. workspace adds incoming/outgoing cross-repo links. For existing symbols use ye_ast_callers. ${COMPLETENESS}`,
       inputSchema: compactInput(impactInput),
-      outputSchema: compactOutput(IMPACT_OUTPUT, "impact"),
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
     ({ repo: selected, base, head, live: isLive, offline: isOffline, scope: paths, changed, budget: requested, mode, workspace: others, replay, select, page, expect }, ctx) => {
@@ -725,7 +746,6 @@ export function createMcpServer(deps: McpDeps): McpServer {
       title: "Callers of symbols or line ranges",
       description: `Trace incoming dependents of existing declaration names or inclusive line ranges and the entrypoints reaching them, with dependency locations. Names match the final segment and may select multiple declarations; missing declarations error. workspace adds incoming cross-repo call sites. For diffs/outgoing links use ye_ast_impact. ${COMPLETENESS}`,
       inputSchema: compactInput(callersInput),
-      outputSchema: compactOutput(CALLERS_OUTPUT, "callers"),
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
     ({ repo: selected, revision: requested, live: isLive, offline: isOffline, targets, scope: paths, budget: bounds, mode, workspace: others, replay, select, page, expect }, ctx) => {
@@ -776,7 +796,6 @@ export function createMcpServer(deps: McpDeps): McpServer {
       title: "Importers of files",
       description: `File consumers: static/reexport/dynamic/type imports, users and unresolved names. details deduplicates paths, retaining categories and original positions; users without a module category are additional. Import edges do not prove declaration use; unresolved names prove neither dependencies nor affected files. TypeScript includes alias/barrel edges and exported test consumers; omitted live tests yield partial. Use for moves/renames/deletions/export changes; ye_ast_callers traces declarations/reached entrypoints. ${COMPLETENESS}`,
       inputSchema: compactInput(liveSchema({ repo, revision, live, files: z.array(z.string().min(1)).min(1).describe("Repository-relative paths."), scope, mode: responseModeSchema }, ["revision"])),
-      outputSchema: compactOutput(IMPORTERS_OUTPUT, "importers"),
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
     ({ repo: selected, revision: requested, live: isLive, files, scope: paths, mode }, ctx) =>
@@ -795,7 +814,6 @@ export function createMcpServer(deps: McpDeps): McpServer {
       title: "Shape of files",
       description: `Indexed declaration spans/imports, without source. Use to choose source ranges; read known ranges directly. Unavailable files report cuts, not empty lists. Match revision/live to inspected source. ${COMPLETENESS}`,
       inputSchema: compactInput(liveSchema({ repo, revision, live, files: z.array(z.string().min(1)).min(1).describe("Repository-relative paths."), scope, mode: responseModeSchema }, ["revision"])),
-      outputSchema: compactOutput(OUTLINE_OUTPUT, "outline"),
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
     ({ repo: selected, revision: requested, live: isLive, files, scope: paths, mode }, ctx) =>
@@ -823,7 +841,6 @@ export function createMcpServer(deps: McpDeps): McpServer {
         gateways,
         mode: responseModeSchema,
       }, ["revision"])),
-      outputSchema: compactOutput(WORKSPACE_OUTPUT, "workspace"),
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
     ({ repo: selected, revision: requested, live: isLive, offline: isOffline, scope: paths, repos, gateways: requestedGateways, mode }, ctx) =>
@@ -852,7 +869,6 @@ export function createMcpServer(deps: McpDeps): McpServer {
       title: "Gaps a workspace leaves to the user",
       description: `Workspace config gaps: membership/identity, gateways, trust and remotes; evidence-backed options and rule-based recommendations. Some require free text. Use before ye-ast init --workspace or to build a config form. Suggestions concern configuration, not code quality/change approval. Reads workspace repos; writes nothing. ${COMPLETENESS}`,
       inputSchema: compactInput(liveSchema({ repo, revision: workspaceRevision, live: z.literal(true).optional(), offline, scope, repos: workspaceRepos, gateways, mode: responseModeSchema }, ["revision"])),
-      outputSchema: compactOutput(DECISIONS_OUTPUT, "decisions"),
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
     ({ repo: selected, revision: requested, live: isLive, offline: isOffline, scope: paths, repos, gateways: requestedGateways, mode }, ctx) =>

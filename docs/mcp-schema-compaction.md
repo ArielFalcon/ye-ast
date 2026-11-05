@@ -1,20 +1,19 @@
 # MCP public contract guides
 
-Tool discovery advertises a concise JSON Schema guide to response envelopes,
-snapshots, provenance, recovery, evidence, paging, and the major value fields.
-It deliberately does not enumerate every nested node or enforce every runtime
-constraint. Clients must not treat the advertised schema as exhaustive payload
-validation. The original exported output schemas and Standard Schema runtime
-validator still validate complete responses. Published input guides retain root properties, unconditional required fields, and nested schemas, while omitting root cross-parameter conditions. The server still validates the original input schema and all refinements; clients may accept combinations that the server rejects. Parameter guidance and initialization instructions describe these rules. Published guides do not change the structured payload or replay recipe. Recovery metadata has one copy at `structuredContent.recovery`; response text points to it.
+Tool discovery publishes compact input guides; output schemas are no longer advertised. The original exported output
+schemas validate the complete canonical response on the server. Input guides retain root properties, unconditional
+required fields and nested schemas, while omitting root cross-parameter conditions. The server validates the original
+input schema and refinements; clients may accept combinations the server rejects. Instructions describe these rules.
+Each success delivers its presentation and result fields in one content block, including one recovery field.
 
 Partial results contain useful evidence but have coverage cuts; unknown means
 coverage is unknown, not that no impact exists. Projection availability is
 separate from source analysis status. An available recovery supplies replay
 arguments and an identity, while a page's nextCursor continues the same selection
-and limit. The guide describes these concepts but does not prove a model will use
+and limit. The instructions describe these concepts but do not prove a model will use
 them correctly; client presentation and model behavior affect usefulness.
 
-The `/work/shop`, version `0` discovery fixture measures the compact JSON bytes
+The following sections document earlier experiments. The `/work/shop`, version `0` discovery fixture measures the compact JSON bytes
 of `{tools}` and all output schemas in `compact-schema.test.ts`. The original
 exhaustive catalogue measured 1,177,416 bytes (1,134,623 output schemas); the
 prior lossless compaction measured approximately 190 KB. Before the editorial reduction below, the guide measured 59,816 bytes for the catalogue, 33,289 bytes for the input-schema array, 20,960 bytes for the
@@ -64,3 +63,51 @@ unchanged runtime validation. The 4x reduction target (about 15 KB) is indicativ
 this unit does not reach it and does not remove further guidance merely to do so.
 Serialized sizes do not establish model context, latency or model quality gains.
 Live OpenCode, Claude Code and Codex integrations remain unverified.
+
+
+### Local-reference prototype (2026-11-05)
+
+A prototype shared identical input schema subtrees within each tool using local
+`definitions` references, retaining root properties and the original runtime
+validators. On the same fixture it reduced discovery from 49,530 to 49,015 bytes
+(515 bytes, approximately 1.0%); the input schema array fell from 27,602 to
+27,087 bytes including array punctuation. Output and initialization were
+unchanged. This small saving did not justify adding a serializer and relying on
+client reference presentation, so the prototype was not retained. The 4x
+indicative target remains unmet. No live client or model-quality claim follows
+from this experiment.
+
+
+### Discriminator-union prototype (2026-11-05)
+
+A second temporary prototype grouped object variants that differed only in a
+`kind` constant into a shared shape with an enum. On the same 49,530-byte main
+fixture it found three groups and produced 49,188 bytes, saving 342 bytes (0.7%).
+It visited schema positions rather than instance examples or defaults. This was
+a size experiment, not a completed semantic-equivalence or client-quality proof;
+no production transformation was retained.
+
+Together with the local-reference result, this gives no evidence for a worthwhile
+further lossless serializer at the current boundary. It does not establish a
+universal minimum size. Further changes that replace nested argument formats with
+prose or hide replay/selection structure require separate usability evidence;
+they must not be counted as information-preserving merely because runtime
+validation stays on the server. The catalogue remains 49,530 bytes.
+
+
+### Single content delivery (2026-11-05)
+
+Each success delivers presentation followed by a `result JSON:` line with its sibling fields in one text block. Findings,
+recovery and full data appear once. Faults retain their `fault fields:` line. This framing is server-specific; a whole
+text block is not directly JSON-parsable. No `structuredContent` or `outputSchema` is advertised, so consumers lose
+published output types and client-side validation against an advertised schema. Before sending success, the server
+validates the complete canonical result against the original per-family Zod schema, including selected pages.
+
+The offline consumer routes reproduce Codex 0.166 and OpenCode 2.2.5 normal and code-mode fallbacks to content.
+Claude Code 2.1.318 was also exercised with its installed binary and a local simulated Messages API provider, with no
+external inference: summary, full and result-changed fault reached the next provider request with findings, recovery,
+full value and fault fields as applicable. These checks do not measure model interpretation or adoption.
+
+Discovery measures 31,280 bytes (input schemas 27,363 bytes, output schemas 0, instructions 3,323 characters) using
+`scripts/measure-mcp-catalog.ts`; the catalogue budget is 32,000 bytes. The previous dual-channel catalogue measured
+51,256 bytes. Response delivery also removes the duplicate wire channel; no cross-version token estimate is implied.

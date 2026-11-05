@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { composeQueries } from './compose.ts';
 import { createMcpServer } from '../mcp/server.ts';
 import { createSha256Digest } from '../core/adapters/crypto/sha256-digest.adapter.ts';
-import { openSession } from '../mcp/test-session.ts';
+import { openSession, resultFields } from '../mcp/test-session.ts';
 
 test('local composed queries remain stable across all ordered pairs', async () => {
   const root = mkdtempSync(join(tmpdir(), 'ye-audit-'));
@@ -50,7 +50,7 @@ class OrderController {
     const call = async (name: string) => {
       const result = await session.callTool(`ye_ast_${name}`, { ...requests[name], mode: 'full' });
       assert.notEqual(result.isError, true, JSON.stringify(result));
-      return result.structuredContent as Record<string, any>;
+      return resultFields(result);
     };
     const facts: Record<string, any> = {};
     for (const name of Object.keys(requests)) facts[name] = await call(name);
@@ -80,20 +80,20 @@ class OrderController {
     const seed = facts.impact.value.seeds[0];
     const transferredCallers = await session.callTool('ye_ast_callers', { revision: head, targets: [{ file: seed.file, symbol: seed.symbol }], mode: 'full' });
     assert.notEqual(transferredCallers.isError, true);
-    assert.deepEqual((transferredCallers.structuredContent as any).value.entrypoints, facts.impact.value.entrypoints);
+    assert.deepEqual(resultFields(transferredCallers).value.entrypoints, facts.impact.value.entrypoints);
     const transferredOutline = await session.callTool('ye_ast_outline', { revision: head, files: [handler.path], mode: 'full' });
-    assert.deepEqual((transferredOutline.structuredContent as any).value, facts.outline.value);
+    assert.deepEqual(resultFields(transferredOutline).value, facts.outline.value);
     const importer = facts.importers.value.files[0].importers[0];
     const importerOutline = await session.callTool('ye_ast_outline', { revision: head, files: [importer], mode: 'full' });
     assert.notEqual(importerOutline.isError, true);
-    assert.equal((importerOutline.structuredContent as any).value.files[0].file, 'src/consumer.ts');
-    assert.ok((importerOutline.structuredContent as any).value.files[0].imports.length > 0);
+    assert.equal(resultFields(importerOutline).value.files[0].file, 'src/consumer.ts');
+    assert.ok(resultFields(importerOutline).value.files[0].imports.length > 0);
     for (const name of ['entrypoints', 'callers', 'impact']) {
       for (const mode of ['summary', 'details']) {
         const result = await session.callTool(`ye_ast_${name}`, { ...requests[name], mode });
         assert.notEqual(result.isError, true);
-        assert.deepEqual((result.structuredContent as any).recovery, facts[name].recovery);
-        assert.deepEqual((result.structuredContent as any).snapshot, facts[name].snapshot);
+        assert.deepEqual(resultFields(result).recovery, facts[name].recovery);
+        assert.deepEqual(resultFields(result).snapshot, facts[name].snapshot);
       }
     }
   } finally {

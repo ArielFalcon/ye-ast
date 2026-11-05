@@ -12,8 +12,8 @@ export function categoryRecovery(input: { details?: string; full?: string }): st
 
 export function recoveryReference(recovery: Recovery): string {
   return recovery.status === "available"
-    ? "Recovery recipe and resultIdentity: structuredContent.recovery."
-    : `Recovery unavailable (${recovery.reason}); see structuredContent.recovery.`;
+    ? "Recovery recipe and resultIdentity: recovery in the result JSON."
+    : `Recovery unavailable (${recovery.reason}); see recovery in the result JSON.`;
 }
 
 /** A literal public selector; never abbreviate or infer its owner or coordinates. */
