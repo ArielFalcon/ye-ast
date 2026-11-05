@@ -16,7 +16,7 @@ export interface InboundEdge {
   from: GraphSymbol;
   confidence: number;
   bridge?: "up" | "down";
-  /** Every place inside `from` where the dependence happens, in line order; empty when the store places none. */
+  /** Places inside `from` for the reported basis, in line order; empty when the store places none. */
   lines: readonly number[];
   /** What the dependence is; `call` when a call or an instantiation is among them. */
   basis: DependenceBasis;
@@ -484,7 +484,7 @@ export function createInboundEdges(
 interface Gathered {
   /** The strongest dependence from that symbol. */
   edge: InboundEdge;
-  lines: Set<number>;
+  lines: Map<DependenceBasis, Set<number>>;
   /** Whether a call or an instantiation is among the merged dependences. */
   calls: boolean;
 }
@@ -494,8 +494,10 @@ function strongestPerSymbol(edges: readonly InboundEdge[]): InboundEdge[] {
   for (const edge of edges) {
     const id = edge.from.id;
     const held = gathered.get(id);
-    const lines = held?.lines ?? new Set<number>();
-    for (const line of edge.lines) lines.add(line);
+    const lines = held?.lines ?? new Map<DependenceBasis, Set<number>>();
+    const basisLines = lines.get(edge.basis) ?? new Set<number>();
+    for (const line of edge.lines) basisLines.add(line);
+    lines.set(edge.basis, basisLines);
     gathered.set(id, {
       edge: held === undefined || edge.confidence > held.edge.confidence ? edge : held.edge,
       lines,
@@ -506,7 +508,7 @@ function strongestPerSymbol(edges: readonly InboundEdge[]): InboundEdge[] {
     from: edge.from,
     confidence: edge.confidence,
     ...(edge.bridge === undefined ? {} : { bridge: edge.bridge }),
-    lines: [...lines].sort((a, b) => a - b),
+    lines: [...(lines.get(calls ? "call" : edge.basis) ?? [])].sort((a, b) => a - b),
     basis: calls ? "call" : edge.basis,
   }));
 }

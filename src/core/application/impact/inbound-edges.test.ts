@@ -71,6 +71,21 @@ test("two edges from one caller make one caller with the stronger score", () => 
   assert.deepEqual(s.scored("target"), [["caller", 0.9, undefined]]);
 });
 
+test("each reported basis retains only its own locations without losing callers or confidence", () => {
+  const s = setup(
+    [fakeNode("target", "class", A, 1), fakeNode("mixed", "method", B, 5, 15), fakeNode("reference", "method", B, 20, 25), fakeNode("constructor", "method", B, 30, 35)],
+    [
+      { from: "mixed", to: "target", kind: "references", line: 6, confidence: 0.9 },
+      { from: "mixed", to: "target", kind: "instantiates", line: 8, confidence: 0.5 },
+      { from: "reference", to: "target", kind: "references", line: 21 },
+      { from: "constructor", to: "target", kind: "instantiates", line: 31 },
+    ],
+  );
+  assert.deepEqual(s.inbound.callersOf(s.symbol("target"), false).map(({ from, basis, lines, confidence }) => [from.id, basis, lines, confidence]), [
+    ["mixed", "call", [8], 0.9], ["reference", "reference", [21], 1], ["constructor", "call", [31], 1],
+  ]);
+});
+
 test("callers come in position order", () => {
   const s = setup(
     [fakeNode("target", "method", A, 1), fakeNode("late", "method", B, 30), fakeNode("early", "method", B, 3), fakeNode("other", "method", "src/0.java", 99)],

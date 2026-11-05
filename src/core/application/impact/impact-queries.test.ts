@@ -635,7 +635,7 @@ test("a requested symbol seeds the walk with the basis requested, and the value 
   assert.deepEqual(answer.snapshot, { repo: "repo", kind: "sha", sha: HEAD });
 });
 
-test("a reached symbol names every place inside itself where it depends on the symbol that reached it", async () => {
+test("a call basis names invocation locations, excluding reference-only locations", async () => {
   const nodes = [fakeNode("f", "function", "src/A.java", 1, 3), fakeNode("g", "function", "src/B.java", 10, 40)];
   const edges = [
     { from: "g", to: "f", kind: "calls", confidence: 0.9, line: 14 },
@@ -644,8 +644,16 @@ test("a reached symbol names every place inside itself where it depends on the s
   ];
   const answer = callersFact(await setup({ nodes, edges }).callers({ targets: [{ file: "src/A.java", symbol: "f" }] }));
   const reached = answer.status === "complete" ? answer.value.symbols.find((symbol) => symbol.symbol === "g") : undefined;
-  assert.deepEqual(reached?.via, { file: "src/A.java", symbol: "f", lines: [14, 21, 33], basis: "call" });
+  assert.deepEqual(reached?.via, { file: "src/A.java", symbol: "f", lines: [14, 21], basis: "call" });
   assert.equal(reached?.endLine, 40);
+});
+
+test("change impact reports constructor locations without type reference locations", async () => {
+  const nodes = [fakeNode("f", "class", "src/A.java", 1, 3), fakeNode("g", "method", "src/B.java", 10, 40)];
+  const edges = [{ from: "g", to: "f", kind: "references", line: 11 }, { from: "g", to: "f", kind: "instantiates", line: 13 }];
+  const answer = fact(await setup({ nodes, edges, changes: { ok: true, value: [change("src/A.java")] } }).ask());
+  const reached = answer.status !== "unknown" ? answer.value.symbols.find((symbol) => symbol.symbol === "g") : undefined;
+  assert.deepEqual(reached?.via, { file: "src/A.java", symbol: "f", lines: [13], basis: "call" });
 });
 
 test("a dependence that is a use and not a call says so, so a reference is never read as a signature to change", async () => {
