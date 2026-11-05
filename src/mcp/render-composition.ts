@@ -578,7 +578,7 @@ class CompactView {
       case "candidate-for-name": return `${this.partRef(value.name)} candidate-for-name ${value.repo} basis ${value.basis}`;
       case "shares-evidence": {
         const record = this.evidence.get(value.evidence);
-        return `${this.partRef(value.parts[0])} and ${this.partRef(value.parts[1])} shares-evidence ${record === undefined ? "?" : evidenceText(record.value)}`;
+        return `${value.parts.map((part) => this.partRef(part)).join(", ")} shares-evidence ${record === undefined ? "?" : evidenceText(record.value)}`;
       }
     }
   }

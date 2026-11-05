@@ -79,7 +79,7 @@ const relationValue = z.discriminatedUnion("kind", [
     transport: z.enum(["http", "event"]), basis: linkBasis, profiles: strings.exactOptional(),
   }),
   z.strictObject({ kind: z.literal("candidate-for-name"), name: ids.part, repo: z.string(), basis: candidateBasis }),
-  z.strictObject({ kind: z.literal("shares-evidence"), parts: z.tuple([ids.part, ids.part]), evidence: ids.evidence }),
+  z.strictObject({ kind: z.literal("shares-evidence"), parts: z.array(ids.part).min(2), evidence: ids.evidence }),
 ]);
 const relationRecord = z.strictObject({ id: ids.relation, value: relationValue, attestations: z.array(attestation).min(1) });
 const connection = z.strictObject({

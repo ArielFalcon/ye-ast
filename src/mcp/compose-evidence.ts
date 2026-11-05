@@ -569,14 +569,8 @@ class Materializer {
     }
     for (const [evidence, cited] of citing) {
       const parts = sortedUnique(cited);
-      for (const [index, left] of parts.entries()) {
-        for (const right of parts.slice(index + 1)) {
-          const value: RelationValue = { kind: "shares-evidence", parts: [left, right], evidence };
-          for (const readLeft of this.readsOfPart(left)) {
-            for (const readRight of this.readsOfPart(right)) this.relate(value, { parts: [left, right], reads: [readLeft, readRight] });
-          }
-        }
-      }
+      if (parts.length < 2) continue;
+      this.relate({ kind: "shares-evidence", parts, evidence }, { parts, reads: sortedUnique(parts.flatMap((part) => this.readsOfPart(part))) });
     }
   }
 

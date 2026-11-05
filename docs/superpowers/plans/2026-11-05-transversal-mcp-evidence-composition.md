@@ -425,7 +425,7 @@ Esto no promete que ejecutar consultas con inputs móviles en otro orden obtenga
 | `module-origin` | Módulo alcanzado → origen de su tabla de módulo, conservando comparación/lado | No mezcla índices con symbol seeds ni convierte deleted en declaración head |
 | `workspace-match` | El Link que el dominio ya admitió; vector/contexto de match, basis/profiles, direction y reach por atestación | No vuelve a hacer matching desde los nombres de workspace ni convierte una invocación downstream en consecuencia |
 | `candidate-for-name` | NameCandidate ya registrado y la observación de nombre compatible que identifica exactamente; si no hay correspondencia única se mantiene como parte candidata | No establece membresía, trust ni llamada |
-| `shares-evidence` | Dos partes citan el mismo EvidenceId de origin exacto | No establece causalidad, equivalencia de hallazgos ni independencia estadística de soportes |
+| `shares-evidence` | Todas las partes (dos o más) que citan el mismo EvidenceId de origin exacto, en una sola relación con el conjunto de sus reads | No establece causalidad, equivalencia de hallazgos ni independencia estadística de soportes |
 
 Deduplicar una relación idéntica une sus atestaciones, no duplica el endpoint ni el objeto relación. Cada atestación apunta a sus PartId/ReadId y conserva calificadores/contexto de observación. Basis o perfiles distintos son relaciones diferentes; contextos distintos de un mismo valor quedan como atestaciones distintas y no se transforman en una afirmación más fuerte. Si son incompatibles, se etiquetan como variantes y ninguna conexión combina sus soportes. No se promedian/maximizan confidences; en texto se muestran variantes o rango explícitamente etiquetado como valores registrados, sin probabilidad agregada.
 
@@ -458,7 +458,7 @@ type RelationValue =
       to: {repo:string;kind:Entrypoint["kind"];name:string;handler:EntityId};
       transport:Link["transport"];basis:LinkBasis;profiles?:readonly string[] }
   | { kind: "candidate-for-name"; name:PartId; repo:string; basis:NameCandidate["basis"] }
-  | { kind: "shares-evidence"; parts:readonly [PartId,PartId]; evidence:EvidenceId };
+  | { kind: "shares-evidence"; parts:readonly PartId[]; evidence:EvidenceId }; // dos o más, ordenadas
 type RelationRecord = {
   id: RelationId; value: RelationValue;
   attestations: readonly Attestation[];
@@ -477,7 +477,7 @@ Las tablas adicionales obligatorias son `bindings:readonly {anchor:AnchorId,bind
 - `change-dependent`: seed de impact con comparison + `symbol-dependence` hacia esa misma entidad, en el head compatible. Permite decir «C tiene una dependencia registrada de S, que es semilla del diff». No dice que C se romperá ni que la dependency demuestre por sí sola todo el recorrido de impact.
 - `reached-handler`: un `entrypoint-reach` y un entrypoint conocido compatibles permiten presentar el alcance registrado con el nombre/metadata completos de la ruta. La asociación de seeds sigue siendo la del reached entrypoint concreto.
 - `shared-file-import`: evidencia de importers y outline del mismo file-import se agrupa; ambas atestaciones quedan disponibles y las categorías opcionales no se rellenan.
-- `shared-support`: dos hallazgos comparten evidencia exacta; útil para relacionar workspace/decisions sin interpretar strings de subject/option como identidades de código.
+- `shared-support`: dos o más hallazgos comparten evidencia exacta (una conexión por ubicación); útil para relacionar workspace/decisions sin interpretar strings de subject/option como identidades de código.
 
 No se deriva cierre transitivo de dependencias, ausencia de consumers, breakage, una cadena C→H→S no registrada ni una recomendación nueva. Un consumidor puede razonar sobre varias relaciones explícitas citándolas y sus límites; el servidor no añade esa inferencia como si fuese evidencia observada. `compare` se limita a mostrar particiones/variantes; calcular un diff semántico nuevo entre snapshots queda fuera.
 

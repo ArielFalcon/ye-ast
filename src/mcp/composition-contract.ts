@@ -255,7 +255,7 @@ export type RelationValue =
   | { kind: "module-origin"; module: PartId; origin: PartId }
   | { kind: "workspace-match"; from: CallLocation & { repo: string; symbol: string }; to: { repo: string; kind: Entrypoint["kind"]; name: string; handler: EntityId }; transport: Link["transport"]; basis: LinkBasis; profiles?: readonly string[] }
   | { kind: "candidate-for-name"; name: PartId; repo: string; basis: NameCandidate["basis"] }
-  | { kind: "shares-evidence"; parts: readonly [PartId, PartId]; evidence: EvidenceId };
+  | { kind: "shares-evidence"; /** Every part citing the evidence, two or more, sorted. */ parts: readonly PartId[]; evidence: EvidenceId };
 export type RelationKind = RelationValue["kind"];
 export type RelationRecord = { id: RelationId; value: RelationValue; attestations: readonly Attestation[] };
 

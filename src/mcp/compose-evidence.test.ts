@@ -483,3 +483,16 @@ test("line-only anchors never join by name", () => {
   const { graph, handler, reached } = spellingCase("OrderController.create", "create", null);
   assert.notEqual(entityOf(graph, handler)?.id, entityOf(graph, reached)?.id);
 });
+
+test("every part citing one evidence location shares one relation and one support connection", () => {
+  const workspace = new SetBuilder("workspace-many", WORKSPACE, sha("web"));
+  const decisions = new SetBuilder("decisions-many", DECISIONS, sha("web"));
+  const place = { path: "pom.xml", line: 7 };
+  const stated = workspace.part({ kind: "outward-name", origin: workspace.origin(sha("web")), name: "orders", kindName: "dependency", evidence: [workspace.evidence(place, { snapshot: sha("web") })], disposition: "unserved" });
+  const gaps = ["repository:orders", "remote:orders"].map((decisionId) => decisions.part({ kind: "decision", context: decisions.read, decisionId, kindName: "repository", subject: "orders", allowsFreeText: false, required: true, evidence: [decisions.evidence(place, { snapshot: sha("web") })], options: [] }));
+  const { graph } = compose(workspace.build(), decisions.build());
+  const shares = relations(graph, "shares-evidence");
+  assert.equal(shares.length, 1);
+  assert.deepEqual(shares[0]?.value.kind === "shares-evidence" ? shares[0].value.parts : undefined, [stated, ...gaps].toSorted());
+  assert.equal(connections(graph, "shared-support").length, 1);
+});
