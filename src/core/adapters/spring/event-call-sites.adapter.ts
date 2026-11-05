@@ -47,9 +47,11 @@ export class JavaEventReader {
       }
       const expanded = flow.expand(invocation, scope);
       if (expanded !== undefined) {
-        const alternatives = expanded.map((leaves) => leaves.map(({ leaf, scope }) => this.target(leaf, scope)));
-        const signatures = new Set(alternatives.map((values) => JSON.stringify(values.map((value) => value.status === "unknown" ? value.status : value.value))));
-        const targets = signatures.size === 1 ? alternatives[0] ?? [] : [unknownAtNode(invocation.type.file.path, invocation.node)];
+        const targets = expanded.map((group) => {
+          const alternatives = group.map(({ leaf, scope }) => this.target(leaf, scope));
+          const signatures = new Set(alternatives.map((value) => JSON.stringify(value.status === "unknown" ? value.status : value.value)));
+          return signatures.size === 1 ? alternatives[0]! : unknownAtNode(invocation.type.file.path, invocation.node);
+        });
         for (const target of targets) found.push(this.siteOf(repo, invocation, target));
       } else {
         const library = this.libraryOf(invocation);

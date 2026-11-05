@@ -124,23 +124,61 @@ export class JavaMethodFlow<T extends { invocation: Invocation }> {
   }
 
   expand(call: Invocation, scope: UrlScope): { leaf: T; scope: UrlScope }[][] | undefined {
+    type Group = { leaf: T; scope: UrlScope }[];
+    type Frame = { selection: MethodSelection; scope: UrlScope; active: ReadonlySet<number>; key: string; groups: Group[]; edges: Group[][][]; done: (groups: Group[]) => void };
+    const cache = new Map<string, Group[]>();
+    const scopeIds = new WeakMap<UrlScope, number>();
+    let serial = 0;
+    const closureKey = (node: Node, bound: UrlScope): string => {
+      const seen = new Set<UrlScope>();
+      while (node.type === "identifier" && !seen.has(bound)) {
+        seen.add(bound);
+        const closed = bound.env.get(node.text);
+        if (closed === undefined) break;
+        node = closed.node; bound = closed.scope;
+      }
+      if (!scopeIds.has(bound)) scopeIds.set(bound, ++serial);
+      return `${node.id}:${scopeIds.get(bound)}`;
+    };
+    const merge = (branches: Group[][]): Group[] => {
+      const length = Math.max(0, ...branches.map((branch) => branch.length));
+      return Array.from({ length }, (_, index) => {
+        const present = branches.flatMap((branch) => branch[index] ?? []);
+        return branches.some((branch) => branch[index] === undefined)
+          ? present.map(({ leaf, scope }) => ({ leaf, scope: { ...scope, undecided: true } })) : present;
+      });
+    };
     const selections = methodsOf(call, this.project, this.text, scope.receiver ?? scope.type);
     if (!selections.some(({ method }) => (this.reachable.get(method.node.id)?.size ?? 0) > 0)) return undefined;
-    return selections.flatMap((selection) => this.read(selection, bindMethod(selection, call.node, scope), new Set()));
-  }
-
-  private read(selection: MethodSelection, scope: UrlScope, active: ReadonlySet<number>): { leaf: T; scope: UrlScope }[][] {
-    const method = selection.method.node.id;
-    if (active.has(method)) return [[...(this.reachable.get(method) ?? [])].map((leaf) => ({ leaf, scope: { ...scope, undecided: true } }))];
-    const next = new Set(active).add(method);
-    let alternatives = [(this.leaves.get(method) ?? []).map((leaf) => ({ leaf, scope: { ...scope, locals: leaf.invocation.locals } }))];
-    for (const { call } of this.edges.get(method) ?? []) {
-      const caller = { ...scope, locals: call.locals };
-      const selections = methodsOf(call, this.project, this.text, scope.receiver ?? scope.type);
-      if (!selections.some((target) => (this.reachable.get(target.method.node.id)?.size ?? 0) > 0)) continue;
-      const branches = selections.flatMap((target) => this.read(target, bindMethod(target, call.node, caller), next));
-      alternatives = alternatives.flatMap((before) => branches.map((after) => [...before, ...after]));
-    }
-    return alternatives;
+    const roots: Group[][] = [];
+    const pending: (() => void)[] = [];
+    const schedule = (selection: MethodSelection, bound: UrlScope, active: ReadonlySet<number>, done: Frame["done"]) => {
+      pending.push(() => {
+        const method = selection.method.node.id;
+        if (active.has(method)) {
+          done([...(this.reachable.get(method) ?? [])].map((leaf) => [{ leaf, scope: { ...bound, undecided: true } }]));
+          return;
+        }
+        const key = `${method}:${selection.receiver.node.id}:${bound.configurationFile?.path}:${[...bound.env].map(([name, value]) => `${name}=${closureKey(value.node, value.scope)}`).join(";")}`;
+        const cached = cache.get(key);
+        if (cached !== undefined) { done(cached); return; }
+        const frame: Frame = { selection, scope: bound, active, key, groups: (this.leaves.get(method) ?? []).map((leaf) => [{ leaf, scope: { ...bound, locals: leaf.invocation.locals } }]), edges: [], done };
+        pending.push(() => {
+          const groups = [...frame.groups, ...frame.edges.flatMap(merge)];
+          cache.set(key, groups); done(groups);
+        });
+        const next = new Set(active).add(method);
+        for (const { call } of this.edges.get(method) ?? []) {
+          const targets = methodsOf(call, this.project, this.text, bound.receiver ?? bound.type);
+          if (!targets.some((target) => (this.reachable.get(target.method.node.id)?.size ?? 0) > 0)) continue;
+          const branches: Group[][] = [];
+          frame.edges.push(branches);
+          targets.forEach((target, index) => schedule(target, bindMethod(target, call.node, { ...bound, locals: call.locals }), next, (groups) => { branches[index] = groups; }));
+        }
+      });
+    };
+    selections.forEach((selection, index) => schedule(selection, bindMethod(selection, call.node, scope), new Set(), (groups) => { roots[index] = groups; }));
+    for (let task = pending.pop(); task !== undefined; task = pending.pop()) task();
+    return merge(roots);
   }
 }
