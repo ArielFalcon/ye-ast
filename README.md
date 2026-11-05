@@ -309,11 +309,12 @@ counted, one recovery instruction covers the target-file category; each target r
 
 Selected source text retains root context, read owners and analysis (including unknown reasons), and owner limits. Reads explicitly inherit matching snapshot, trust, declared scope and configuration; overrides are printed. Complete provenance catalogs remain in `structuredContent.source`. Handler and module categories provide literal selector examples; each row keeps its named JSON coordinate, distinct span/depth/confidence and origin facts. Shared origin headings apply only to the stated following rows. Category recovery rules cover recorded counts/examples without adding presentation caps. Structured provenance, recovery and pagination contracts are unchanged.
 
-`importers` presents three disjoint groups per target: importers, additional users without an import edge, and
-unresolved-only candidates without a resolved link. Its distinct-file count counts each path once. A file with a
-resolved link may also have unresolved name matches; detailed text groups those files separately without listing
-them again as candidates. An import does not prove declaration usage, and a name match does not prove a dependency.
-The default summary counts groups when that is shorter than listing them; use `mode: "details"` for paths.
+`importers` lists each related path once per target. Detailed rows retain its static, reexport, dynamic and type
+import memberships, users and unresolved name matches, with zero-based positions in the original categories.
+Users without a module category are additional users. The distinct-file count counts each path once, while category
+counts retain overlapping memberships. An import does not prove declaration usage, and a name match does not prove a
+dependency. The default summary counts categories when that is shorter than listing them; use `mode: "details"`
+for paths and memberships.
 With `mode: "full"`, the original overlapping `importers`, `users` and `unresolvedNamers` arrays and all cuts remain in
 `structuredContent`; text acknowledges the status and guides navigation. These presentation choices preserve coverage,
 snapshots and completeness. For a committed read, pin `revision` to the returned SHA when requesting another

@@ -1160,16 +1160,16 @@ test("callers forwards symbol and line-range targets at a revision", async () =>
   await session.close();
 });
 
-test("importers forwards the files and identifies disjoint file relationships", async () => {
+test("importers forwards the files and identifies related file memberships", async () => {
   const { session, calls } = await setup();
   const result = await session.callTool("ye_ast_importers", { files: ["src/OrderService.java"], revision: "topic", mode: "details" });
   assert.deepEqual(calls.importers[0]?.files, ["src/OrderService.java"]);
   assert.equal(calls.importers[0]?.revision, "topic");
   const text = textOf(result);
   assert.match(text, /src\/OrderService\.java/);
-  assert.match(text, /importers[\s\S]*src\/OrderController\.java/);
-  assert.match(text, /additional users[\s\S]*src\/Billing\.java/);
-  assert.match(text, /unresolved-only candidates.*src\/Legacy\.java/);
+  assert.match(text, /"src\/OrderController\.java": importers\[0\], users\[0\]/);
+  assert.match(text, /"src\/Billing\.java": additional users\[1\]/);
+  assert.match(text, /"src\/Legacy\.java": unresolved name matches\[0\]/);
   await session.close();
 });
 
@@ -1190,24 +1190,22 @@ test("importers detail lists each related file once and preserves pending matche
     assert.equal(text.split(path).length - 1, 1, path);
   }
   assert.match(text, /related files \(5 distinct\)/);
-  assert.match(text, /importers \(2\):\n +with unresolved name matches \(1\): src\/Shared\.java\n +without unresolved name matches \(1\): src\/Imported\.java/);
-  assert.match(text, /additional users \(2\):\n +with unresolved name matches \(1\): src\/UsedPending\.java\n +without unresolved name matches \(1\): src\/Used\.java/);
-  assert.match(text, /unresolved-only candidates \(1\): src\/Candidate\.java/);
-  assert.match(text, /2 files with resolved links also have unresolved name matches/);
+  assert.match(text, /"src\/Shared\.java": importers\[1\], users\[1\], unresolved name matches\[1\]/);
+  assert.match(text, /"src\/UsedPending\.java": additional users\[3\], unresolved name matches\[2\]/);
+  assert.match(text, /"src\/Candidate\.java": unresolved name matches\[0\]/);
   assert.match(text, /not establish additional dependencies/);
   await session.close();
 });
 
-test("importers summary counts omitted file identities without adding overlapping categories", async () => {
+test("importers summary counts every category without double-counting distinct files", async () => {
   const paths = Array.from({ length: 18 }, (_, i) => `src/app/core/auth/consumers/consumer-${String(i).padStart(2, "0")}.ts`);
   const value: ImportersValue = { files: [{ file: "src/auth.service.ts", importers: paths, users: paths, unresolvedNamers: paths.slice(1) }] };
   const { session } = await setup({ importers: async () => ({ ok: true, value: { ...base(), status: "complete", value } }) });
   const text = textOf(await session.callTool("ye_ast_importers", { files: ["src/auth.service.ts"] }));
   assert.match(text, /related files \(18 distinct\)/);
   assert.match(text, /importers \(18\)/);
-  assert.match(text, /additional users \(0\)/);
-  assert.match(text, /unresolved-only candidates \(0\)/);
-  assert.match(text, /17 files with resolved links also have unresolved name matches/);
+  assert.match(text, /users \(18; 0 additional\)/);
+  assert.match(text, /unresolved name matches \(17\)/);
   for (const path of paths) assert.equal(text.includes(path), false, path);
   assert.match(text, /mode: "details"/);
   assert.match(text, /mode: "full"/);
