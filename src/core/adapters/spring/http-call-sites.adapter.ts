@@ -2,7 +2,7 @@ import type { Node } from "web-tree-sitter";
 import type { HttpMethod } from "../../domain/entrypoints/http-route.ts";
 import type { Finding } from "../../domain/shared/fact.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
-import type { CallSite, HttpTarget } from "../../domain/topology/call-site.ts";
+import type { CallSite, HttpTarget, StatedRequest } from "../../domain/topology/call-site.ts";
 import type { Configuration } from "./application-config.ts";
 import { complete, spanOf, unknownAtNode, withEvidence } from "./findings.ts";
 import {
@@ -36,6 +36,12 @@ interface Request {
   method: Node | HttpMethod | undefined;
   url: Node | undefined;
   base: Declared;
+}
+
+/** A request's target and, when the snapshot decides everything about it but its base, the request the code writes. */
+interface ReadTarget {
+  target: Finding<HttpTarget>;
+  stated?: StatedRequest;
 }
 
 interface Wrapper {
@@ -74,13 +80,13 @@ export class JavaHttpReader {
       if (called !== undefined) found.push(this.siteOf(repo, invocation, called));
       else {
         const library = this.libraryOf(invocation);
-        if (library !== undefined) found.push(this.siteOf(repo, invocation, unknownAtNode(invocation.type.file.path, invocation.node, library)));
+        if (library !== undefined) found.push(this.siteOf(repo, invocation, { target: unknownAtNode(invocation.type.file.path, invocation.node, library) }));
       }
     }
     for (const wrappers of this.wrappers.values()) {
       for (const wrapper of wrappers.values()) {
         const { invocation } = wrapper.request;
-        if (!wrapper.called && this.owned.has(invocation.type.file)) found.push(this.siteOf(repo, invocation, unknownAtNode(invocation.type.file.path, invocation.node)));
+        if (!wrapper.called && this.owned.has(invocation.type.file)) found.push(this.siteOf(repo, invocation, { target: unknownAtNode(invocation.type.file.path, invocation.node) }));
       }
     }
     for (const type of this.project.types.filter((candidate) => this.owned.has(candidate.file))) found.push(...this.declarations(repo, type));
@@ -91,9 +97,9 @@ export class JavaHttpReader {
     return { type: invocation.type, locals: invocation.locals, env };
   }
 
-  private siteOf(repo: string, invocation: Invocation, target: Finding<HttpTarget>): CallSite {
+  private siteOf(repo: string, invocation: Invocation, { target, stated }: ReadTarget): CallSite {
     const span = spanOf(invocation.type.file.path, invocation.node);
-    return { repo, file: span.path, line: span.line, ...(span.endLine === span.line ? {} : { endLine: span.endLine }), symbol: symbolOf(invocation), ancestors: ancestorsOf(invocation.node), transport: "http", target: withEvidence(target, span) };
+    return { repo, file: span.path, line: span.line, ...(span.endLine === span.line ? {} : { endLine: span.endLine }), symbol: symbolOf(invocation), ancestors: ancestorsOf(invocation.node), transport: "http", target: withEvidence(target, span), ...(stated === undefined ? {} : { stated }) };
   }
 
   private receiverOf(object: Node, invocation: Invocation) {
@@ -171,14 +177,15 @@ export class JavaHttpReader {
     const scope = this.scopeOf(invocation, new Map());
     const expressions = [request.url, typeof request.method === "object" ? request.method : undefined].filter((node): node is Node => node !== undefined);
     const text = request.url === undefined ? undefined : this.text.of(request.url, scope);
-    const undecided = text === undefined || targetOf(text, request.base) === undefined || (typeof request.method === "object" && this.methodOf(request.method, scope) === undefined);
+    const resolved = text === undefined ? undefined : targetOf(text, request.base);
+    const undecided = resolved === undefined || resolved.base === UNDECIDED || (typeof request.method === "object" && this.methodOf(request.method, scope) === undefined);
     if (!undecided || !expressions.some((node) => referencesParameter(node, invocation))) return undefined;
     const parameters = parametersOf(member);
     return { key: `${member.childForFieldName("name")?.text}/${parameters.length}`, wrapper: { request, parameters, called: false } };
   }
 
   /** The target of a call to a wrapper, read with its parameters bound to the call's arguments. */
-  private callOfWrapper(invocation: Invocation): Finding<HttpTarget> | undefined {
+  private callOfWrapper(invocation: Invocation): ReadTarget | undefined {
     const { node } = invocation;
     const name = node.childForFieldName("name")?.text ?? "";
     const object = node.childForFieldName("object");
@@ -188,9 +195,9 @@ export class JavaHttpReader {
       if (wrapper === undefined) continue;
       wrapper.called = true;
       const env = new Map(wrapper.parameters.flatMap((parameter, index) => (args[index] === undefined ? [] : [[parameter, { node: args[index] as Node, scope: this.scopeOf(invocation, new Map()) }] as const])));
-      const target = this.target(wrapper.request, this.scopeOf(wrapper.request.invocation, env));
+      const read = this.target(wrapper.request, this.scopeOf(wrapper.request.invocation, env));
       const declaring = wrapper.request.invocation.type;
-      return target.status === "unknown" && !this.owned.has(declaring.file) ? unknownAtNode(declaring.file.path, node, declaring.fqn) : target;
+      return read.target.status === "unknown" && !this.owned.has(declaring.file) ? { ...read, target: unknownAtNode(declaring.file.path, node, declaring.fqn) } : read;
     }
     return undefined;
   }
@@ -205,11 +212,15 @@ export class JavaHttpReader {
     return !isPlatformName(resolved.fqn) && HTTP_CLIENT_NAME.test(resolved.fqn) ? resolved.fqn : undefined;
   }
 
-  private target(request: Request, scope: UrlScope): Finding<HttpTarget> {
+  private target(request: Request, scope: UrlScope): ReadTarget {
     const method = typeof request.method === "string" ? request.method : request.method === undefined ? undefined : this.methodOf(request.method, scope);
     const text = request.url === undefined ? undefined : this.text.of(request.url, scope);
-    const target = text === undefined || method === undefined ? undefined : targetOf(text, request.base);
-    return target === undefined || method === undefined ? unknownAtNode(request.invocation.type.file.path, request.invocation.node) : complete({ method, ...target });
+    const resolved = text === undefined || method === undefined ? undefined : targetOf(text, request.base);
+    const unknown = unknownAtNode(request.invocation.type.file.path, request.invocation.node);
+    if (resolved === undefined || method === undefined) return { target: unknown };
+    const { base, path } = resolved;
+    if (base === UNDECIDED) return { target: unknown, stated: { method, path } };
+    return { target: complete({ method, ...(base === undefined ? {} : { base }), path }) };
   }
 
   /** The HTTP method an expression names: `HttpMethod.GET`, `RequestMethod.GET`, `HttpMethod.valueOf("get")` or a string. */
@@ -232,29 +243,31 @@ export class JavaHttpReader {
     const exchange = typeUses.find((use) => isAnnotation(use, HTTP_EXCHANGE));
     return type.methods.flatMap((method) => {
       const uses = annotationUses(method.node, scopeOf(type));
-      const declared = feign === undefined ? this.exchangeOf(uses, scope, exchange) : this.feignOf(uses, scope, feign);
-      return declared.map((target) => {
+      const declared = feign === undefined ? this.exchangeOf(uses, scope, exchange).map((target): ReadTarget => ({ target })) : this.feignOf(uses, scope, feign);
+      return declared.map(({ target, stated }) => {
         const span = spanOf(type.file.path, method.node);
-        return { repo, file: span.path, line: span.line, ...(span.endLine === span.line ? {} : { endLine: span.endLine }), symbol: `${type.qualifiedName}.${method.name}`, ancestors: ancestorsOf(method.node), transport: "http" as const, target: withEvidence(target, span) };
+        return { repo, file: span.path, line: span.line, ...(span.endLine === span.line ? {} : { endLine: span.endLine }), symbol: `${type.qualifiedName}.${method.name}`, ancestors: ancestorsOf(method.node), transport: "http" as const, target: withEvidence(target, span), ...(stated === undefined ? {} : { stated }) };
       });
     });
   }
 
-  private feignOf(uses: Parameters<SpringAnnotations["mappingIn"]>[0], scope: UrlScope, feign: Parameters<typeof isAnnotation>[0]): Finding<HttpTarget>[] {
+  private feignOf(uses: Parameters<SpringAnnotations["mappingIn"]>[0], scope: UrlScope, feign: Parameters<typeof isAnnotation>[0]): ReadTarget[] {
     const lookup = this.annotations.mappingIn(uses);
     if (lookup === undefined) return [];
-    const at = unknownAtNode(scope.type.file.path, feign.node);
+    const at = { target: unknownAtNode(scope.type.file.path, feign.node) };
     if ("gap" in lookup) return [at];
     const verb = lookup.mapping.verb ?? this.firstMethod(lookup.mapping.attributes.get("method"), scope);
     const url = feign.attributes.get("url")?.[0];
     const service = (feign.attributes.get("name") ?? feign.attributes.get("value"))?.[0];
     const head = this.text.attribute((url ?? service)?.node ?? feign.node, scope);
     const prefix = this.attributeText(feign.attributes.get("path")?.[0], scope);
-    if (verb === undefined || (url ?? service) === undefined || head === undefined || prefix === undefined) return [at];
-    const origin = url === undefined ? { origin: head, rest: "" } : splitOrigin(head);
+    if (verb === undefined || (url ?? service) === undefined || prefix === undefined) return [at];
+    const origin = head === undefined ? undefined : url === undefined ? { origin: head, rest: "" } : splitOrigin(head);
     return (pathExpressions(lookup.mapping.attributes) ?? [undefined]).map((expression) => {
       const path = this.attributeText(expression, scope);
-      return path === undefined || origin.origin === undefined ? at : complete({ method: verb, base: origin.origin, path: joinPath(origin.rest, prefix, path) });
+      if (path === undefined) return at;
+      if (origin === undefined) return { ...at, stated: { method: verb, path: joinPath(prefix, path) } };
+      return origin.origin === undefined ? at : { target: complete({ method: verb, base: origin.origin, path: joinPath(origin.rest, prefix, path) }) };
     });
   }
 
@@ -321,13 +334,15 @@ function joinPath(...parts: readonly string[]): string {
   return pathOf(parts.join("/"));
 }
 
-/** The base and path a URL text comes down to; a path that only the code fills at run time is not decided. */
-function targetOf(text: string, client: Declared): { base?: string; path: string } | undefined {
+/**
+ * The base and path a URL text comes down to; a path that only the code fills at run time is not decided. A relative
+ * path under a client base the snapshot does not decide keeps its path, with the base `UNDECIDED`.
+ */
+function targetOf(text: string, client: Declared): { base?: string | typeof UNDECIDED; path: string } | undefined {
   if (text.startsWith(PLACEHOLDER)) return undefined;
   const absolute = splitOrigin(text);
-  if (absolute.origin === undefined && client === UNDECIDED) return undefined;
-  const declared = client === undefined || client === UNDECIDED ? { rest: "" } : splitOrigin(client);
-  const base = absolute.origin ?? declared.origin ?? (typeof client === "string" ? client : undefined);
+  const declared = typeof client === "string" ? splitOrigin(client) : { rest: "" };
+  const base = absolute.origin ?? declared.origin ?? client;
   const path = absolute.origin === undefined ? joinPath(declared.rest, text) : pathOf(absolute.rest);
   const segments = path.split("/").filter((segment) => segment !== "");
   return segments.length > 0 && segments.every((segment) => segment === PLACEHOLDER) ? undefined : { ...(base === undefined ? {} : { base }), path };
