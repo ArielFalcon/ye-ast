@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { HttpRoute } from "../../domain/entrypoints/http-route.ts";
 import type { Entrypoint, Listener } from "../../domain/entrypoints/entrypoint.ts";
-import type { CallSite, EventTarget } from "../../domain/topology/call-site.ts";
+import { unresolvedCallSite, type CallSite, type EventTarget } from "../../domain/topology/call-site.ts";
 import type { ImpactValue, Seed } from "../../domain/impact/impact-fact.ts";
 import { sameIdentity, type CompleteFact, type Cut, type Fact, type SnapshotRef } from "../../domain/shared/fact.ts";
 import type { Result } from "../../domain/shared/result.ts";
@@ -122,7 +122,8 @@ function setup({ repositories, unavailable = [], trigger = impactOf(REACHED), un
   }));
   const section = (repo: string): Fact<WorkspaceSection> => {
     const held = repositories[repo];
-    const complete = fact(repo, held?.trust ?? "untrusted", { names: [], unresolved: [] }, held?.sha ?? SHA) as CompleteFact<WorkspaceSection>;
+    const unresolved = (held?.callSites ?? []).flatMap((site) => (site.target.status === "unknown" ? [unresolvedCallSite(site)] : []));
+    const complete = fact(repo, held?.trust ?? "untrusted", { names: [], unresolved }, held?.sha ?? SHA) as CompleteFact<WorkspaceSection>;
     const [first, ...rest] = held?.cuts ?? [];
     return first === undefined ? complete : { ...complete, status: "partial", cuts: [first, ...rest] };
   };
@@ -442,6 +443,19 @@ test("a call site whose target is undecided joins nothing and stays a cut naming
   assert.deepEqual(section.cuts, [{ kind: "unresolved-link", at: [place, `${place}:21`] }]);
   assert.ok(result.ok && result.value.fact.status === "partial");
   assert.deepEqual(result.value.fact.cuts, [{ kind: "section", at: ["shop-web"] }]);
+});
+
+test("each section carries the unresolved call sites its own repository's discovery read, with the request they state", async () => {
+  const stated = { ...undecidedCallSite("shop-web", 21), stated: { method: "GET" as const, path: "/orders" } };
+  const { queries } = setup({
+    repositories: { orders: ORDERS, "shop-web": { callSites: [stated] }, billing: { callSites: [undecidedCallSite("billing", 9)] } },
+  });
+
+  const value = valueOf(await queries.callers({ ...ASK, repos: [{ path: "/work/shop-web" }, { path: "/work/billing" }] }));
+
+  assert.deepEqual(repoImpact(value, "shop-web").unresolved, [{ path: "src/app/shop-web.api.ts", line: 21, symbol: "shop-web.call21", transport: "http", stated: { method: "GET", path: "/orders" } }]);
+  assert.deepEqual(repoImpact(value, "billing").unresolved, [{ path: "src/app/billing.api.ts", line: 9, symbol: "billing.call9", transport: "http" }]);
+  assert.deepEqual(value.links, []);
 });
 
 test("a call two repositories serve equally is no link: it is a cut naming its place", async () => {

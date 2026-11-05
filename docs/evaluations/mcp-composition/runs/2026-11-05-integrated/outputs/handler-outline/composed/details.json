@@ -1,0 +1,41 @@
+{
+  "text": "Composition details:\nV1 = shop @ ece2918303f97235b271ef133b574de4984a4551\nS1 = entrypoints: complete; V1\nS2 = outline: complete; V1\nContext: trust untrusted; languages java, typescript; frameworks angular, spring\nRoots: shop=<fixture-root>/shop\nN1 = http GET /orders/{id}, handler N2; basePath unknown (unresolved) with evidence src/main/java/shop/OrderController.java:10-14; route evidence same [S1/entrypoints]\nsrc/main/java/shop/OrderController.java [outline S2: 6 declarations, 0 imports]\n  1-1 shop namespace\n  7-17 OrderController class\n  10-10 GET /orders/{id} route\n  N2 = 10-14 one | OrderController.one method\n  15-15 first method\n  16-16 second method\nL1 = N1 served by N2 [S1/entrypoints]\nC1 = handler-declaration: L1, N1, N2 [S1, S2]\nCoverage:\n  reads: 3, all complete",
+  "structured": {
+    "kind": "composition-receipt",
+    "compositionSchema": 1,
+    "mode": "details",
+    "verification": {
+      "status": "available",
+      "identity": "mcp-c1:95946559a07da8ba2bc035b17e2e4907c39fb1686727c1770cf0bc49d8825f93"
+    },
+    "requests": [
+      {
+        "status": "available",
+        "query": {
+          "name": "ye_ast_entrypoints",
+          "arguments": {
+            "repo": "shop",
+            "revision": "ece2918303f97235b271ef133b574de4984a4551"
+          },
+          "expect": "mcp-r1:16f9042f9c2c08d3f830d5cb58b945deda65c685d31a5a80502d8c323d735287"
+        },
+        "strategy": "pinned-replay"
+      },
+      {
+        "status": "available",
+        "query": {
+          "name": "ye_ast_outline",
+          "arguments": {
+            "repo": "shop",
+            "revision": "ece2918303f97235b271ef133b574de4984a4551",
+            "files": [
+              "src/main/java/shop/OrderController.java"
+            ]
+          }
+        },
+        "strategy": "fresh-read"
+      }
+    ]
+  },
+  "isError": false
+}

@@ -26,7 +26,7 @@ test("local and workspace rows expose exact owners and public cut positions", ()
   assert.ok(text.includes('"owner":{"kind":"local"},"handler":{"path":"src/h.ts","symbol":"run","line":7}'));
   assert.ok(text.includes('"owner":{"kind":"local"},"module":{"file":"src/m.ts","snapshot":"base"}'));
   assert.ok(text.includes('"owner":{"kind":"fact"},"cutIndex":0'));
-  const section = { ...base, status: "partial", cuts: [cut], value: { impact, reads: [{ kind: "trigger", fact: { ...base, status: "partial", cuts: [cut] } }], callSites: [], unmatched: [], external: [] } };
+  const section = { ...base, status: "partial", cuts: [cut], value: { impact, reads: [{ kind: "trigger", fact: { ...base, status: "partial", cuts: [cut] } }], callSites: [], unmatched: [], external: [], unresolved: [] } };
   const link = { id: "actual-id", from: { repo: "other", file: "f", line: 1, symbol: "s" }, to: { repo: "shop", kind: "job", name: "job", handler: impact.entrypoints[0]!.handler }, basis: "exact", confidence: 1 };
   const workspace = { ...base, status: "partial", cuts: [cut], value: { workspace: { repos: ["shop"], gateways: [], unmatchedGateways: [], unserved: [], source: "request" }, repositorySnapshots: [], trigger: { repo: "shop" }, sections: { shop: section }, links: [{ link, direction: "upstream", reach: [] }] } } as unknown as Fact<WorkspaceImpactValue>;
   const ws = renderWorkspaceImpact(workspace);
@@ -40,7 +40,7 @@ test("local and workspace rows expose exact owners and public cut positions", ()
 test("shared cut coordinates retain each repository and indexed-read owner", () => {
   const cuts = Array.from({ length: 12 }, (_, index) => ({ kind: "depth", at: [`anchor-${index}`, `place-${index}`], limit: 2 }));
   const read = { kind: "trigger", fact: { ...base, status: "partial", cuts } };
-  const section = { ...base, status: "partial", cuts, value: { reads: [read, read], callSites: [], unmatched: [], external: [] } };
+  const section = { ...base, status: "partial", cuts, value: { reads: [read, read], callSites: [], unmatched: [], external: [], unresolved: [] } };
   const fact = { ...base, status: "partial", cuts, value: { workspace: { repos: ['a"b'], gateways: [], unmatchedGateways: [], unserved: [], source: "request" }, repositorySnapshots: [], trigger: { repo: 'a"b' }, sections: { ['a"b']: section }, links: [] } } as unknown as Fact<WorkspaceImpactValue>;
   const text = renderWorkspaceImpact(fact, "details", { tool: "impact" });
   const templates = [...text.matchAll(/Cut lookup:.*select example: (\{[^\n]+\})/g)].map(match => JSON.parse(match[1]!));

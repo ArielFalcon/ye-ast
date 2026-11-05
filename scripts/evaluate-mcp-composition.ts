@@ -15,7 +15,7 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { canonicalJson } from "../src/core/domain/shared/canonical-json.ts";
-import { createMcpServer, type McpDeps } from "../src/mcp/server.ts";
+import { createMcpServer, RESULT_JSON_LABEL, type McpDeps } from "../src/mcp/server.ts";
 import { openSession, type Session, type ToolResult } from "../src/mcp/test-session.ts";
 import { repositoryCatalog } from "../src/mcp/repository-targeting.ts";
 import { runComposition } from "../src/mcp/compose-request.ts";
@@ -138,11 +138,12 @@ export function selectQueries(selectors: readonly QuerySelector[], fixture: Fixt
 export type ConditionName = "baseline" | "composed";
 export const CONDITIONS: readonly ConditionName[] = ["baseline", "composed"];
 export const REPLICATES = 2;
-/** Prompts carry full responses: citations need the structured ids (composed) or pointers (baseline). */
+/** Prompts carry full responses: citations need the result JSON ids (composed) or pointers (baseline). */
 export const PROMPT_MODE: ResponseMode = "full";
 const MODES: readonly ResponseMode[] = ["summary", "details", "full"];
 
 type Fixture = FixtureView & { deps: McpDeps; root: string; coldDeps(): McpDeps; dispose(): void };
+/** A response as its presentation text and its result fields; a fault has only text. */
 type Channels = { text: string; structured: unknown; isError: boolean };
 type CallMeasure = { requestBytes: number; textBytes: number; structuredBytes: number; totalBytes: number; wallMs: number; heapUsedAfter: number; sequence: number; cache: string };
 type ComposeSurface = "public-tool" | "coordinator-direct";
@@ -150,6 +151,17 @@ type ComposeSurface = "public-tool" | "coordinator-direct";
 const bytes = (value: string) => Buffer.byteLength(value, "utf8");
 const digest = (value: string) => createHash("sha256").update(value).digest("hex");
 const textOf = (result: ToolResult) => result.content.map(part => part.text).join("\n");
+/** The content block as delivered: presentation, then the result JSON line when there are result fields. */
+const wireOf = (channels: Channels) => channels.structured === undefined ? channels.text : `${channels.text}\n${RESULT_JSON_LABEL}${JSON.stringify(channels.structured)}`;
+
+/** Splits a successful content block at the server's result JSON label into presentation and result fields. */
+function channelsOf(result: ToolResult): Channels {
+  const text = textOf(result);
+  if (result.isError === true) return { text, structured: undefined, isError: true };
+  const at = text.lastIndexOf(`\n${RESULT_JSON_LABEL}`);
+  if (at === -1) throw new Error("A successful result carries no result JSON line");
+  return { text: text.slice(0, at), structured: JSON.parse(text.slice(at + 1 + RESULT_JSON_LABEL.length)), isError: false };
+}
 
 /** Replaces private machine paths in stored artifacts; measurements are taken before this. */
 export function redactEnvironment(serialized: string, paths: readonly string[]): string {
@@ -196,29 +208,29 @@ export async function prepare(outDir: string, options: PrepareOptions = {}): Pro
       const t0 = performance.now();
       const channels = await call();
       const wallMs = performance.now() - t0;
-      const structured = channels.structured === undefined ? "" : JSON.stringify(channels.structured);
+      const totalBytes = bytes(wireOf(channels));
       sequence += 1;
       return {
         channels,
         measure: {
-          requestBytes: bytes(JSON.stringify(request)), textBytes: bytes(channels.text), structuredBytes: bytes(structured),
-          totalBytes: bytes(channels.text) + bytes(structured), wallMs: Math.round(wallMs * 10) / 10,
+          requestBytes: bytes(JSON.stringify(request)), textBytes: bytes(channels.text), structuredBytes: totalBytes - bytes(channels.text),
+          totalBytes, wallMs: Math.round(wallMs * 10) / 10,
           heapUsedAfter: process.memoryUsage().heapUsed, sequence, cache,
         },
       };
     };
     const callOriginal = (s: Session, query: ComposeQuery, mode: ResponseMode) => {
       const args = { ...query.arguments, ...(query.expect === undefined ? {} : { expect: query.expect }), mode };
-      return { args, call: async (): Promise<Channels> => { const r = await s.callTool(query.name, args); return { text: textOf(r), structured: r.structuredContent, isError: r.isError === true }; } };
+      return { args, call: async (): Promise<Channels> => channelsOf(await s.callTool(query.name, args)) };
     };
     const callCompose = (s: Session, deps: McpDeps, queries: readonly ComposeQuery[], mode: ResponseMode) => {
       const args = { queries, mode };
       return {
         args,
         call: async (): Promise<Channels> => {
-          if (surface === "public-tool") { const r = await s.callTool("ye_ast_compose", args); return { text: textOf(r), structured: r.structuredContent, isError: r.isError === true }; }
+          if (surface === "public-tool") return channelsOf(await s.callTool("ye_ast_compose", args));
           const run = await runComposition(args, { deps, catalog: repositoryCatalog(deps.repository, deps.repositories) });
-          if (!run.ok) return { text: run.fault.detail, structured: { fault: run.fault }, isError: true };
+          if (!run.ok) return { text: run.fault.detail, structured: undefined, isError: true };
           return { text: renderComposition(run.value, mode), structured: mode === "full" ? composeFull(run.value) : composeReceipt(run.value, mode), isError: false };
         },
       };
@@ -351,8 +363,8 @@ export function countersOf(structured: unknown): Record<Counter, number> {
 
 function promptFor(entry: CorpusCase, condition: ConditionName, order: { name: OrderName }, families: readonly ToolFamily[], responses: { label: string; request: unknown; channels: Channels }[]): string {
   const citation = condition === "baseline"
-    ? "Cite a baseline response as `q<N>:<JSON pointer>`, where N is the number in the response heading and the RFC 6901 pointer (starting with `/`) selects the supporting value inside that response's structured channel. Example: `q0:/value/routes/0`."
-    : "Cite composed evidence by a full wire id that appears in the structured channel's `graph` tables (for example a `p1:…` part, `l1:…` relation, `c1:…` connection, `e1:…` evidence or `r1:…` read).";
+    ? "Cite a baseline response as `q<N>:<JSON pointer>`, where N is the number in the response heading and the RFC 6901 pointer (starting with `/`) selects the supporting value inside that response's result JSON. Example: `q0:/value/routes/0`."
+    : "Cite composed evidence by a full wire id that appears in the result JSON's `graph` tables (for example a `p1:…` part, `l1:…` relation, `c1:…` connection, `e1:…` evidence or `r1:…` read).";
   return [
     `# ye-ast composition evaluation — ${entry.id} / ${condition} / ${order.name}`,
     "",
@@ -379,8 +391,8 @@ function promptFor(entry: CorpusCase, condition: ConditionName, order: { name: O
     "",
     ...responses.flatMap(response => [
       `### ${response.label}`, "", "Request:", "", "```json", JSON.stringify(response.request), "```", "",
-      "Text channel:", "", "```text", response.channels.text, "```", "",
-      "Structured channel:", "", "```json", JSON.stringify(response.channels.structured), "```", "",
+      "Presentation:", "", "```text", response.channels.text, "```", "",
+      "Result JSON:", "", "```json", JSON.stringify(response.channels.structured), "```", "",
     ]),
   ].join("\n");
 }

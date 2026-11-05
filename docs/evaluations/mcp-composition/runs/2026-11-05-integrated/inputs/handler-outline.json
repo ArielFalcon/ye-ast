@@ -1,0 +1,45 @@
+{
+  "queries": [
+    {
+      "index": 0,
+      "family": "entrypoints",
+      "query": {
+        "name": "ye_ast_entrypoints",
+        "arguments": {
+          "repo": "shop",
+          "revision": "ece2918303f97235b271ef133b574de4984a4551"
+        }
+      }
+    },
+    {
+      "index": 1,
+      "family": "outline",
+      "query": {
+        "name": "ye_ast_outline",
+        "arguments": {
+          "repo": "shop",
+          "revision": "ece2918303f97235b271ef133b574de4984a4551",
+          "files": [
+            "src/main/java/shop/OrderController.java"
+          ]
+        }
+      }
+    }
+  ],
+  "orders": [
+    {
+      "name": "original",
+      "indices": [
+        0,
+        1
+      ]
+    },
+    {
+      "name": "reversed",
+      "indices": [
+        1,
+        0
+      ]
+    }
+  ]
+}

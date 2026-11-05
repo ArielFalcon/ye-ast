@@ -1,0 +1,90 @@
+{
+  "text": "Composition summary (S# = requests[#-1]): 2 sources, 5 subjects, 6 relations, 2 connections, 18 observations.\nV1 = web @ ba3965606c100bd15237938a02dab651206d05f1\nV2 = shop @ ece2918303f97235b271ef133b574de4984a4551\nS1 = workspace: complete; V2, V1\nS2 = callers/workspace: partial; V2, V1; targets src/main/java/shop/OrderController.java:OrderController.one; S2/shop, S2/web: no merge base, entrypoint changes: not provided\nContext: trust untrusted; languages java, typescript; frameworks angular, spring\nContext producer by read: ye-ast 0.4.0 (all S1, S2, S2/shop, S2/shop#0 discovery, S2/web, S2/web#0 discovery); ye-ast 0.4.0+edge-policy.e98d5a56243d (S2/shop#1 trigger, S2/web#1 upstream)\nWorkspace of S1: repos shop, web; source request; gateways shop-api→shop; snapshots shop V2, web V1\nWorkspace of S2: repos shop, web; source request; gateways shop-api→shop (gateway-prefix); unmatched gateways none; unserved none; trigger shop; snapshots shop V2, web V1\nsrc/main/java/shop/OrderController.java\n  N5 = 10-14 OrderController.one\n  N2 = 10-14 one\n  N1 = 7-17 OrderController\nsrc/app/order.page.ts\n  N4 = 7-10 open\n  N3 = 5-17 OrderPage\nL1 = N1 → N2 symbol-dependence basis contains [S2/shop confidence 1]; recorded dependence, no breakage claim\nL2 = unserved outward name path-prefix \"shop-api\" and stated outward name path-prefix \"shop-api\" shares-evidence src/app/order.page.ts:12-12 [S1, S1/web]; same location, not causality\nL3 = N3 → N4 symbol-dependence basis contains [S2/web confidence 1]\nL4 = web src/app/order.page.ts:9 OrderPage.open → shop http-route GET /orders/{id} handler N5 workspace-match basis gateway-prefix http [S2 confidence 1]; admitted link; not a consequence\nL5 = unserved outward name path-prefix \"shop-api\" and stated outward name path-prefix \"shop-api\" shares-evidence src/app/order.page.ts:9-9 [S1, S1/web]\nL6 = reach of http-route GET /orders/{id} entrypoint-origin requested target (not a change) N2 [S2/shop]; association, not a call chain\nC1 = shared-support: L2 [S1]; the same evidence location; not causality\nC2 = shared-support: L5 [S1]\nFindings:\n  seed basis lines N4 [S2/web]\n  reached N4 method depth 0 confidence 1 fan-in 0 [S2/web]\n  reached N2 method depth 0 confidence 1 fan-in 0 [S2/shop]\n  matched call site web src/app/order.page.ts:9-9 OrderPage.open http; target GET shop-api/orders/7 with evidence 1 [S2/web]\n  unmatched call site web src/app/order.page.ts:12-12 OrderPage.missing http; target GET shop-api/refunds/7 with evidence 1 [S2/web]\nCoverage:\n  reads: 7 complete, 3 partial, 0 unknown (owners nest)\n  S2: partial; section cut ×1, 1 places\n  S2/web, S2/web#1 upstream: partial; unresolved-link cut ×1, 2 places\n  read evidence 2: S2/web\nOmitted from summary (recorded objects): walk costs: 2; evidence coordinates: 4; details lists them.",
+  "structured": {
+    "kind": "composition-receipt",
+    "compositionSchema": 1,
+    "mode": "summary",
+    "verification": {
+      "status": "available",
+      "identity": "mcp-c1:e1054d2fae4e097ca210ba1a2ab0fefa90ed43ea4d5940f30a55bf604558953e"
+    },
+    "requests": [
+      {
+        "status": "available",
+        "query": {
+          "name": "ye_ast_workspace",
+          "arguments": {
+            "repo": "shop",
+            "revision": "ece2918303f97235b271ef133b574de4984a4551",
+            "offline": true,
+            "repos": [
+              {
+                "path": "<fixture-root>/web",
+                "id": "web",
+                "revision": "ba3965606c100bd15237938a02dab651206d05f1"
+              }
+            ],
+            "gateways": [
+              {
+                "prefix": "shop-api",
+                "repo": "shop"
+              }
+            ]
+          }
+        },
+        "strategy": "fresh-read"
+      },
+      {
+        "status": "available",
+        "query": {
+          "name": "ye_ast_callers",
+          "arguments": {
+            "repo": "shop",
+            "revision": "ece2918303f97235b271ef133b574de4984a4551",
+            "offline": true,
+            "targets": [
+              {
+                "file": "src/main/java/shop/OrderController.java",
+                "symbol": "OrderController.one"
+              }
+            ],
+            "workspace": {
+              "repos": [
+                {
+                  "path": "<fixture-root>/web",
+                  "id": "web",
+                  "revision": "ba3965606c100bd15237938a02dab651206d05f1"
+                }
+              ],
+              "gateways": [
+                {
+                  "prefix": "shop-api",
+                  "repo": "shop"
+                }
+              ]
+            },
+            "replay": {
+              "version": 1,
+              "declaration": "ws-r1:5be194fb518ded7acfc022bbd4e9464100bd60e60fff74d7f83caede89542457",
+              "snapshots": [
+                {
+                  "repo": "shop",
+                  "kind": "sha",
+                  "sha": "ece2918303f97235b271ef133b574de4984a4551"
+                },
+                {
+                  "repo": "web",
+                  "kind": "sha",
+                  "sha": "ba3965606c100bd15237938a02dab651206d05f1"
+                }
+              ]
+            }
+          },
+          "expect": "mcp-r1:e632618a2c7485dfe523d5056036cd4294bbf2ef837468878891faf65d7362fd"
+        },
+        "strategy": "pinned-replay"
+      }
+    ]
+  },
+  "isError": false
+}

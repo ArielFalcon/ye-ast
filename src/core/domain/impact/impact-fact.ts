@@ -2,6 +2,7 @@ import type { Entrypoint } from "../entrypoints/entrypoint.ts";
 import type { Handler } from "../entrypoints/http-route.ts";
 import type { SeedBasis } from "../change/seeds.ts";
 import type { WalkBounds } from "../shared/fact.ts";
+import type { ChangedContract } from "./changed-contracts.ts";
 import type { ChangedEntrypoint } from "./changed-entrypoints.ts";
 import type { ModuleImpactValue } from "./module-dependency.ts";
 
@@ -58,6 +59,8 @@ export interface ImpactValue {
   seeds: readonly Seed[];
   /** Present only when the seeds come from a change. */
   changedEntrypoints?: readonly ChangedEntrypoint[];
+  /** Present only when the change added, removed or altered an operation a contract declares. */
+  changedContracts?: readonly ChangedContract[];
   symbols: readonly ImpactedSymbol[];
   entrypoints: readonly ReachedEntrypoint[];
   modules?: ModuleImpactValue;

@@ -2505,8 +2505,9 @@ function contracting(operations: readonly Finding<ContractOperation>[]): Entrypo
   return createSpringRoutesExtractor(parser, { operations: () => operations });
 }
 
-function operation(operationId: string, method: HttpMethod, path: string, line = 5, basePath: string | null = ""): Finding<ContractOperation> {
-  return { status: "complete", value: { operationId, method, path, basePath: basePath ?? undefined, document: CONTRACT, line }, evidence: [{ path: CONTRACT, line }] };
+function operation(operationId: string | undefined, method: HttpMethod, path: string, line = 5, basePath: string | null = ""): Finding<ContractOperation> {
+  const data = { request: "", response: "", files: [], unresolved: [] };
+  return { status: "complete", value: { operationId, method, path, basePath: basePath ?? undefined, document: CONTRACT, line, data }, evidence: [{ path: CONTRACT, line }] };
 }
 
 test("an @Override method that a contract operationId names is a route with the contract's verb and path", async () => {
@@ -2540,6 +2541,15 @@ test("an override that no contract operation names stays an unknown item at the 
   ]);
 
   assert.deepEqual(routes(findings), ["POST /orders"]);
+  assert.deepEqual(gaps(findings), ["no-extractor@4", "no-extractor@6"]);
+});
+
+test("an operation the contract declares without an operationId is joined to no override", async () => {
+  extractor = contracting([operation(undefined, "POST", "/orders"), operation("createNewOrder", "PUT", "/orders/{id}")]);
+
+  const findings = await extractor.extract([app("OrdersController", `@RestController class OrdersController implements OrdersApi {\n  @Override public void createNewOrder() {}\n  @Override public void undefined() {}\n}`)]);
+
+  assert.deepEqual(routes(findings), ["PUT /orders/{id}"]);
   assert.deepEqual(gaps(findings), ["no-extractor@4", "no-extractor@6"]);
 });
 

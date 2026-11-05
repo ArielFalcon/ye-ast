@@ -39,7 +39,7 @@ Output:
 |---|---|
 | `manifest.json` | Acquisition steps, SHAs, case status, schedule and `expectedResponses`. `synthesis` stays `not_evaluated` |
 | `inputs/<case>.json` | Exact queries and orders |
-| `outputs/<case>/baseline/q<N>.<mode>.json`, `outputs/<case>/composed/<mode>.json` | `{text, structured, isError}` per call |
+| `outputs/<case>/baseline/q<N>.<mode>.json`, `outputs/<case>/composed/<mode>.json` | `{text, structured, isError}` per call: the presentation and the decoded `result JSON:` fields; a fault keeps only its text |
 | `measurements.json` | See below |
 | `prompts/<case>.<condition>.<order>.md` | Consumer prompts |
 | `answer-key.json` | Proposition kinds, categories, admissible citation tables or families, and applicability. **Never shown to the consumer** |
@@ -47,7 +47,7 @@ Output:
 `measurements.json` records:
 
 - catalogue and instruction bytes, including the bytes `ye_ast_compose` adds;
-- request, text and structured bytes per call and in total;
+- request, presentation and result JSON bytes per call, and the bytes of the whole delivered content block;
 - wall time per call, labelled warm (shared session) or cold (new ports and directories);
 - order invariance and the number of source executions;
 - the process peak RSS, labelled as including fixture creation;
@@ -87,7 +87,7 @@ The script never selects a provider, client or credential.
 
 Citations take one of two forms:
 
-- **Baseline:** `q<N>:<RFC 6901 pointer>` into the structured channel of query N. N is the case's query index, not its
+- **Baseline:** `q<N>:<RFC 6901 pointer>` into the result JSON of query N. N is the case's query index, not its
   position in the prompt.
 - **Composed:** a full wire id from the `graph` tables of the full result. The prefixes are s1, v1, r1, f1, a1, e1, p1,
   n1, l1 and c1.
@@ -143,6 +143,6 @@ recorded adjudications.
 
 ## Completed implementation and bounded consumer pilot
 
-See [implementation-report.md](implementation-report.md) for current contracts, observed checks, measured costs and limitations. `runs/2026-11-05-semantic-final` has the current collection-state contract. Earlier runs remain diagnostic evidence, not fixtures of the final schema. Consumer pilots do not cover the complete scheduled corpus.
+See [implementation-report.md](implementation-report.md) for current contracts, observed checks, measured costs and limitations. `runs/2026-11-05-integrated` was prepared after integrating single content delivery and changed contract operations; it has no consumer responses. `runs/2026-11-05-semantic-final` and earlier runs were prepared with the previous text plus `structuredContent` delivery and remain diagnostic evidence, not fixtures of the current schema. Consumer pilots do not cover the complete scheduled corpus.
 
 A proposition must cite at least one permitted foundational evidence kind; additional resolving context is allowed and requires semantic adjudication. Every nonexistent citation still fails. If a consumer repeats an assertion ID, identify its judgments by its exact JSON Pointer (for example `/claims/3` or `/uncertainties/0`) instead of changing the raw reply or overwriting a claim. Missing adjudications remain not_evaluated.

@@ -100,6 +100,63 @@ test("RestClient and WebClient chains give the method of the verb or of method()
   ]);
 });
 
+test("a request whose base the snapshot does not decide still states the method and the path the code writes", async () => {
+  const client = java(
+    "OrdersClient",
+    ["@Service class OrdersClient {", "  private final RestClient rest;", "  OrdersClient(RestClient.Builder builder, String base) { this.rest = builder.baseUrl(base).build(); }", "  String load() { return rest.get().uri(\"/orders/{id}\", 7).retrieve().body(String.class); }", "}"].join("\n"),
+  );
+
+  const [site] = await reader.of([client], "orders-svc");
+
+  assert.equal(site?.target.status, "unknown");
+  assert.deepEqual(site?.stated, { method: "GET", path: "/orders/{id}" });
+});
+
+test("a request whose method or path the snapshot does not decide states no request", async () => {
+  const client = java(
+    "OrdersClient",
+    [
+      "@Service class OrdersClient {",
+      "  private final RestClient rest;",
+      "  private HttpMethod chosen;",
+      "  private String prefix;",
+      "  OrdersClient(RestClient.Builder builder, String base) { this.rest = builder.baseUrl(base).build(); }",
+      "  void send() { rest.method(chosen).uri(\"/orders\").retrieve(); }",
+      "  void load() { rest.get().uri(String.format(\"%s/orders\", prefix)).retrieve(); }",
+      "}",
+    ].join("\n"),
+  );
+
+  const sites = await reader.of([client], "orders-svc");
+
+  assert.deepEqual(sites.map((site) => [site.symbol, site.target.status, site.stated]), [["OrdersClient.send", "unknown", undefined], ["OrdersClient.load", "unknown", undefined]]);
+});
+
+test("a call to a wrapper whose client base the snapshot does not decide states the request its arguments write", async () => {
+  const wrapper = java(
+    "Gateway",
+    ["@Service class Gateway {", "  private final RestClient rest;", "  Gateway(RestClient.Builder builder, String base) { this.rest = builder.baseUrl(base).build(); }", "  String fetch(String path) { return rest.get().uri(path).retrieve().body(String.class); }", "}"].join("\n"),
+  );
+  const caller = java("Reports", ["@Service class Reports {", "  private final Gateway gateway;", "  void load() { gateway.fetch(\"/reports/daily\"); }", "}"].join("\n"));
+
+  const sites = await reader.of([wrapper, caller], "orders-svc");
+
+  assert.deepEqual(sites.map((site) => [site.symbol, site.target.status, site.stated]), [["Reports.load", "unknown", { method: "GET", path: "/reports/daily" }]]);
+});
+
+test("a Feign client whose url the snapshot does not decide states the method and the path of each mapping", async () => {
+  const feign = java(
+    "StockClient",
+    ["@FeignClient(name = \"stock-svc\", url = \"${stock.url}\", path = \"/stock\")", "interface StockClient {", "  @GetMapping(\"/items/{sku}\") String item(String sku);", "}"].join("\n"),
+    ["org.springframework.cloud.openfeign.FeignClient", "org.springframework.web.bind.annotation.*"],
+  );
+
+  const [site] = await reader.of([feign], "orders-svc");
+
+  assert.equal(site?.target.status, "unknown");
+  assert.deepEqual(site?.stated, { method: "GET", path: "/stock/items/{sku}" });
+});
+
 test("a Feign client declares one call per mapped method: its url or service name leads, its path prefixes the mapping", async () => {
   const feign = java(
     "StockClient",

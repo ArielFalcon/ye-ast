@@ -233,7 +233,14 @@ receives its operations through the `ContractRoutes` port, so no adapter reaches
 - An `operationId` two documents of the repository declare picks neither: the handler is `unknown` with `unresolved`, at
   the method and at each document.
 - A document the parser rejects is one `unknown` item with `source-unreadable` at the error; a document that declares no
-  operation, or an operation with no `operationId`, contributes nothing, so a contract nothing implements makes no route.
+  operation contributes nothing. An operation with no `operationId` is still read, placed at its verb, but no override
+  joins it, so a contract nothing implements makes no route.
+- Each operation also carries its data: digests of the request (path-item and operation parameters, request body,
+  `consumes`) and of the response (responses, `produces`), with `description`, `summary`, `example`, `examples` and
+  `externalDocs` left out except as property names. Every `$ref` is followed, into the document or into another source
+  of the snapshot, each place once whatever cycle leads back to it; a reference to a URL, outside the repository or to a
+  place the sources do not hold is listed as unresolved, never read as unchanged. `impact.ofChange` compares them
+  (RFC-0010 `changedContracts`).
 - The contract's `servers` are not applied in this slice: a route's path is the contract's path and its base path is its
   module's configuration, as for row S6. A contract that declares a server prefix and a deployment that adds one are both
   deferred to the link bases of RFC-0011.

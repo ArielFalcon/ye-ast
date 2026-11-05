@@ -1,0 +1,81 @@
+{
+  "text": "Composition summary (S# = requests[#-1]): 2 sources, 5 subjects, 5 relations, 1 connections, 19 observations.\nV1 = web @ ba3965606c100bd15237938a02dab651206d05f1\nV2 = shop @ ece2918303f97235b271ef133b574de4984a4551\nV3 = shop @ b872d7cb070f421874539b268424272d0be336e2\nS1 = impact/local: complete; V2; changed src/main/java/** (seed selection, not consequence coverage); S1: merge base b872d7cb070f421874539b268424272d0be336e2, entrypoint changes: 0\nS2 = callers/workspace: partial; V2, V1; targets src/main/java/shop/OrderController.java:OrderController.one; S2/shop, S2/web: no merge base, entrypoint changes: not provided\nUnmarked locations: shop V2, web V1; others are marked @V#.\nContext: trust untrusted; languages java, typescript; frameworks angular, spring\nContext producer by read: ye-ast 0.4.0+edge-policy.e98d5a56243d (S1, S2/shop#1 trigger, S2/web#1 upstream); ye-ast 0.4.0 (S2, S2/shop, S2/shop#0 discovery, S2/web, S2/web#0 discovery)\nWorkspace of S2: repos shop, web; source request; gateways shop-api→shop (gateway-prefix); unmatched gateways none; unserved none; trigger shop; snapshots shop V2, web V1\nsrc/main/java/shop/OrderController.java\n  N5 = 10-14 OrderController.one\n  N1 = 10-14 one\n  N2 = 7-17 OrderController\nsrc/app/order.page.ts\n  N4 = 7-10 open\n  N3 = 5-17 OrderPage\nL1 = N2 → N1 symbol-dependence basis contains [S2/shop confidence 1; S1 confidence 1]; recorded dependence, no breakage claim\nL2 = reach of http-route GET /orders/{id} entrypoint-origin seed basis lines N1 [S1]; association, not a call chain\nL3 = N3 → N4 symbol-dependence basis contains [S2/web confidence 1]\nL4 = web src/app/order.page.ts:9 OrderPage.open → shop http-route GET /orders/{id} handler N5 workspace-match basis gateway-prefix http [S2 confidence 1]; admitted link; not a consequence\nL5 = reach of http-route GET /orders/{id} entrypoint-origin requested target (not a change) N1 [S2/shop]\nC1 = change-dependent: L1, N1, N2, seed basis lines N1 [S1]; a recorded dependence on a diff seed; not a proof of breakage\nFindings:\n  seed basis lines N4 [S2/web]\n  reached N4 method depth 0 confidence 1 fan-in 0 [S2/web]\n  reached N1 method depth 0 confidence 1 fan-in 0 [S1, S2/shop]\n  matched call site web src/app/order.page.ts:9-9 OrderPage.open http; target GET shop-api/orders/7 with evidence 1 [S2/web]\n  unmatched call site web src/app/order.page.ts:12-12 OrderPage.missing http; target GET shop-api/refunds/7 with evidence 1 [S2/web]\nCoverage:\n  reads: 5 complete, 3 partial, 0 unknown (owners nest)\n  S2: partial; section cut ×1, 1 places\n  S2/web, S2/web#1 upstream: partial; unresolved-link cut ×1, 2 places\n  read evidence 2: S2/web\n  context-mismatch producer different (no connection combines them) [S1, S2]\nOmitted from summary (recorded objects): walk costs: 3; evidence coordinates: 4; details lists them.",
+  "structured": {
+    "kind": "composition-receipt",
+    "compositionSchema": 1,
+    "mode": "summary",
+    "verification": {
+      "status": "available",
+      "identity": "mcp-c1:db1ac47e7574faa15c5e287abfa4eea220d7609cf0a63e49d1993d10bad48455"
+    },
+    "requests": [
+      {
+        "status": "available",
+        "query": {
+          "name": "ye_ast_impact",
+          "arguments": {
+            "repo": "shop",
+            "base": "b872d7cb070f421874539b268424272d0be336e2",
+            "head": "ece2918303f97235b271ef133b574de4984a4551",
+            "changed": [
+              "src/main/java/**"
+            ]
+          },
+          "expect": "mcp-r1:d2460f8b6add4677457ee75b47d9f1c22b4e5383e79089a9fbdd7bdd77970acb"
+        },
+        "strategy": "pinned-replay"
+      },
+      {
+        "status": "available",
+        "query": {
+          "name": "ye_ast_callers",
+          "arguments": {
+            "repo": "shop",
+            "revision": "ece2918303f97235b271ef133b574de4984a4551",
+            "offline": true,
+            "targets": [
+              {
+                "file": "src/main/java/shop/OrderController.java",
+                "symbol": "OrderController.one"
+              }
+            ],
+            "workspace": {
+              "repos": [
+                {
+                  "path": "<fixture-root>/web",
+                  "id": "web",
+                  "revision": "ba3965606c100bd15237938a02dab651206d05f1"
+                }
+              ],
+              "gateways": [
+                {
+                  "prefix": "shop-api",
+                  "repo": "shop"
+                }
+              ]
+            },
+            "replay": {
+              "version": 1,
+              "declaration": "ws-r1:5be194fb518ded7acfc022bbd4e9464100bd60e60fff74d7f83caede89542457",
+              "snapshots": [
+                {
+                  "repo": "shop",
+                  "kind": "sha",
+                  "sha": "ece2918303f97235b271ef133b574de4984a4551"
+                },
+                {
+                  "repo": "web",
+                  "kind": "sha",
+                  "sha": "ba3965606c100bd15237938a02dab651206d05f1"
+                }
+              ]
+            }
+          },
+          "expect": "mcp-r1:e632618a2c7485dfe523d5056036cd4294bbf2ef837468878891faf65d7362fd"
+        },
+        "strategy": "pinned-replay"
+      }
+    ]
+  },
+  "isError": false
+}

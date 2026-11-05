@@ -1,6 +1,6 @@
 import type { ImpactBudget } from "../domain/impact/impact-fact.ts";
 import type { ImpactValue } from "../domain/impact/impact-fact.ts";
-import type { CallSite } from "../domain/topology/call-site.ts";
+import type { CallSite, UnresolvedCallSite } from "../domain/topology/call-site.ts";
 import type { ImpactedLink } from "../domain/topology/link.ts";
 import type { Fact, FactProvenance, SnapshotRef } from "../domain/shared/fact.ts";
 import type { ScopeRequest } from "../domain/shared/scope.ts";
@@ -22,6 +22,8 @@ export interface RepoImpact {
   unmatched: readonly CallSite[];
   /** The call sites that name a service no declared repository serves. */
   external: readonly CallSite[];
+  /** The call sites whose target this repository's snapshot does not decide, as its discovery read them. */
+  unresolved: readonly UnresolvedCallSite[];
 }
 
 export interface WorkspaceImpactValue {

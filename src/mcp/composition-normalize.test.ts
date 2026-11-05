@@ -109,6 +109,7 @@ function rebuildEntry(t: Tables, part: PartOf<"entrypoint">): Entrypoint {
 function rebuildImpact(t: Tables, prefix: string): ImpactValue {
   const seeds = t.list(`${prefix}/seeds`, "seed");
   const changes = t.list(`${prefix}/changedEntrypoints`, "entrypoint-change");
+  const contracts = t.list(`${prefix}/changedContracts`, "contract-change");
   const symbols = t.list(`${prefix}/symbols`, "symbol-reach");
   const reached = t.list(`${prefix}/entrypoints`, "entrypoint-reach");
   const cost = found(t.one(`${prefix}/cost`, "walk-cost"), `${prefix}/cost`);
@@ -119,6 +120,7 @@ function rebuildImpact(t: Tables, prefix: string): ImpactValue {
     ...(context.mergeBase === undefined ? {} : { mergeBase: context.mergeBase }),
     seeds: seeds.map((s) => { const { path: file, ...rest } = t.handler(s.anchor); return { file, ...rest, basis: s.basis }; }),
     ...(context.changedEntrypoints.state === "absent" ? {} : { changedEntrypoints: changes.map((c) => ({ change: c.change, kind: c.kindName, name: c.name, handler: t.handler(c.handler) })) }),
+    ...(context.changedContracts.state === "absent" ? {} : { changedContracts: contracts.map(({ contract: { handlers, ...operation } }) => ({ ...operation, ...(handlers === undefined ? {} : { handlers: handlers.map((anchor) => t.handler(anchor)) }) })) }),
     symbols: symbols.map((s) => {
       const { path: file, ...at } = t.handler(s.anchor);
       return { file, ...at, kind: s.kindName, depth: s.depth, confidence: s.confidence, fanIn: s.fanIn, ...(s.via === undefined ? {} : { via: { file: t.path(s.via.target.file), symbol: s.via.target.symbol, ...(s.via.lines === undefined ? {} : { lines: s.via.lines }), basis: s.via.basis } }) };
@@ -154,7 +156,7 @@ function rebuildWorkspaceImpact(t: Tables): WorkspaceImpactValue {
         .sort((x, y) => x.index - y.index)
         .map(({ kind, fact }) => ({ kind, fact }));
       const sites = (field: string) => t.list(`${prefix}/${field}`, "call-site").map((p) => rebuildSite(t, p));
-      return { reads, ...(t.one(`${prefix}/impact/cost`, "walk-cost") === undefined ? {} : { impact: rebuildImpact(t, `${prefix}/impact`) }), callSites: sites("callSites"), unmatched: sites("unmatched"), external: sites("external") };
+      return { reads, ...(t.one(`${prefix}/impact/cost`, "walk-cost") === undefined ? {} : { impact: rebuildImpact(t, `${prefix}/impact`) }), callSites: sites("callSites"), unmatched: sites("unmatched"), external: sites("external"), unresolved: t.list(`${prefix}/unresolved`, "unresolved-call-site").map((p) => p.site) };
     });
   }
   const links = t.list("/value/links", "workspace-link").map((p) => {
@@ -163,6 +165,7 @@ function rebuildWorkspaceImpact(t: Tables): WorkspaceImpactValue {
       link: { ...link, from: { repo: from.repo, file: t.path(from.file), line: from.line, symbol: from.symbol }, to: { repo: to.repo, kind: to.kind, name: to.name, handler: t.handler(to.handler) } },
       direction: p.direction,
       reach: p.reach.map((r) => (r.status === "missing" ? r.linkId : t.partOf(r.part, "workspace-link").link.id)),
+      ...(p.operations === undefined ? {} : { operations: p.operations }),
     };
   });
   return { workspace: context.workspace, trigger: context.trigger, repositorySnapshots: context.repositorySnapshots.map((e) => ({ repo: e.repo, snapshot: t.snapshot(e.snapshot) })), sections, links };
@@ -545,9 +548,9 @@ test("decision parts keep Decision.id", () => {
   assert.deepEqual(reconstruct(source, t), source.read.fact);
 });
 
-test("an impact without parts tells an absent merge base and changedEntrypoints from recorded empty ones", () => {
+test("an impact without parts tells an absent merge base, changedEntrypoints and changedContracts from recorded empty ones", () => {
   const value: ImpactValue = { seeds: [], symbols: [], entrypoints: [], cost: { expansionsUsed: 0 } };
-  for (const recorded of [value, { ...value, changedEntrypoints: [], mergeBase: MERGE_BASE }]) {
+  for (const recorded of [value, { ...value, changedEntrypoints: [], changedContracts: [], mergeBase: MERGE_BASE }]) {
     const source = sourceFixture("impact-local", { value: recorded });
     assert.deepEqual(reconstruct(source, new Tables(normalizeSource(source, digest))), source.read.fact);
   }

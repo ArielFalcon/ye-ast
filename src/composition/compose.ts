@@ -184,6 +184,7 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
     extractor,
     ...snapshotCache,
     angular: createAngularDeclarationReader(),
+    contracts,
     relations: composeAngularRelations(),
     dynamicLoads: createDynamicLoadReader(),
     graph,

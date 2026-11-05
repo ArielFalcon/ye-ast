@@ -1,3 +1,5 @@
+import assert from "node:assert/strict";
+import { RESULT_JSON_LABEL } from "./server.ts";
 import { InMemoryTransport, type JSONRPCMessage } from "@modelcontextprotocol/server";
 import type { JsonSchemaType, McpServer } from "@modelcontextprotocol/server";
 
@@ -6,6 +8,17 @@ export interface ToolResult {
   structuredContent?: unknown;
   _meta?: Record<string, unknown>;
   isError?: boolean;
+}
+
+/** Decode the single successful content block into its presentation and result fields. */
+export function resultFields(result: ToolResult): Record<string, any> {
+  assert.notEqual(result.isError, true);
+  assert.equal(result.structuredContent, undefined);
+  const text = result.content[0]?.text;
+  assert.ok(text);
+  const at = text.lastIndexOf(`\n${RESULT_JSON_LABEL}`);
+  assert.notEqual(at, -1);
+  return { text: text.slice(0, at), ...JSON.parse(text.slice(at + 1 + RESULT_JSON_LABEL.length)) };
 }
 
 export interface ToolInfo {

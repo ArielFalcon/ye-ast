@@ -3,7 +3,7 @@
  * cite is declared once in a local legend (S sources, V snapshots, N subjects, L relations, C connections), shared
  * context is printed once by exact equality, and every uncertainty stays next to what it limits. Summary counts what it
  * omits and names a navigation the requests really support; details lists every recorded observation compactly; full
- * only navigates `structuredContent`, never a second listing. No joins, no inference and no text interpretation: every
+ * only navigates the result JSON, never a second listing. No joins, no inference and no text interpretation: every
  * statement is a projection of the materialized tables.
  */
 import type { Cut, Evidence } from "../core/domain/shared/fact.ts";
@@ -37,29 +37,34 @@ export function renderComposition(result: CompositionResult, mode: ResponseMode)
 // Full: navigation only.
 
 /**
- * Counts, verification and one pointer per table; what each table means is the published guide's and the server
- * instructions' job, not a manual repeated in every answer.
+ * Counts, verification and one pointer per table; what each table means is the server instructions' job, not a manual
+ * repeated in every answer.
  */
 function renderFull(result: CompositionResult): string {
   const { graph, coverage, counts } = result;
   const tables = (["sources", "snapshots", "reads", "files", "anchors", "evidence", "parts", "entities", "bindings", "relations", "connections"] as const)
-    .map((name) => `structuredContent.graph.${name} (${graph[name].length})`);
+    .map((name) => `graph.${name} (${graph[name].length})`);
   return [
     `Composition full: ${counts.sources} sources, ${counts.reads} recorded reads (${coverage.reads.complete} complete, ${coverage.reads.partial} partial, ${coverage.reads.unknown} unknown), ${counts.unknownFindings} unknown findings, ${counts.unknownComponents} unknown components.`,
     ...(result.verification.status === "available" ? [] : [verificationLine(result)]),
     `Tables: ${tables.join(", ")}.`,
-    `structuredContent.coverage.issues (${coverage.issues.length}), unknowns (${coverage.unknowns.length}), limits (${coverage.limits.length}); structuredContent.requests (${result.requests.length})${result.delivery === undefined ? "" : `; structuredContent.delivery (${result.delivery.length})`}.`,
+    `coverage.issues (${coverage.issues.length}), unknowns (${coverage.unknowns.length}), limits (${coverage.limits.length}); requests (${result.requests.length})${result.delivery === undefined ? "" : `; delivery (${result.delivery.length})`}.`,
   ].join("\n");
+}
+
+function changedOperationsText(operations: NonNullable<PartOf<"workspace-link">["operations"]>): string {
+  const listed = operations.map((operation) => `${operation.change} ${operation.method} ${operation.path}${operation.parts === undefined ? "" : ` (${operation.parts.join(", ")})`}`);
+  return `calls changed operations ${listed.join(", ")} (a call, not proof the changed data is read)`;
 }
 
 function verificationLine(result: CompositionResult): string {
   return result.verification.status === "available"
-    ? "Verification: available at structuredContent.verification.identity; send every available requests[].query with it as expect to verify this set."
+    ? "Verification: available at verification.identity in the result JSON; send every available requests[].query with it as expect to verify this set."
     : `Verification: unavailable (${result.verification.reason}); an expect cannot be checked.`;
 }
 
 const PART_ORDER: readonly PartKind[] = [
-  "entrypoint", "unknown-finding", "entrypoint-change", "seed", "symbol-reach", "entrypoint-reach", "module-origin", "module-reach",
+  "entrypoint", "unknown-finding", "entrypoint-change", "contract-change", "seed", "symbol-reach", "entrypoint-reach", "module-origin", "module-reach",
   "file-dependency", "call-site", "unresolved-call-site", "workspace-link", "outward-name", "name-candidate", "unheld-file",
   "outline-declaration", "outline-file", "file-query",
 ];
@@ -233,14 +238,14 @@ class CompactView {
     const config = root?.inputs.declaredConfig;
     const contexts = this.result.graph.parts.filter((part): part is PartOf<"impact-context"> => part.kind === "impact-context" && this.reads.get(part.owner)?.source === source.id);
     for (const part of contexts) this.covered.add(part.id);
-    const grouped = shareExactContext(contexts, (part) => ({ mergeBase: part.mergeBase, changedEntrypoints: part.changedEntrypoints }));
+    const grouped = shareExactContext(contexts, (part) => ({ mergeBase: part.mergeBase, changedEntrypoints: part.changedEntrypoints, changedContracts: part.changedContracts }));
     const extra = [
       config?.changed === undefined ? undefined : `changed ${config.changed.join(", ")} (seed selection, not consequence coverage)`,
       config?.targets === undefined ? undefined : `targets ${config.targets.join(", ")}`,
       ...this.declaredFiles(source, config?.files),
       config?.walk === undefined ? undefined : `walk ${Object.entries(config.walk).map(([key, value]) => `${key} ${value}`).join(", ")}`,
       config?.exportBudget === undefined ? undefined : `export budget ${config.exportBudget.maxEntries} entries/${config.exportBudget.maxBytes} bytes`,
-      ...grouped.contexts.map((context, index) => `${grouped.rows.filter((row) => row.contextIndex === index).map((row) => this.readLabel(row.value.owner)).join(", ")}: ${context.mergeBase === undefined ? "no merge base" : `merge base ${context.mergeBase}`}, entrypoint changes: ${context.changedEntrypoints.state === "absent" ? "not provided" : context.changedEntrypoints.count}`),
+      ...grouped.contexts.map((context, index) => `${grouped.rows.filter((row) => row.contextIndex === index).map((row) => this.readLabel(row.value.owner)).join(", ")}: ${context.mergeBase === undefined ? "no merge base" : `merge base ${context.mergeBase}`}, entrypoint changes: ${context.changedEntrypoints.state === "absent" ? "not provided" : context.changedEntrypoints.count}${context.changedContracts.state === "absent" ? "" : `, contract changes: ${context.changedContracts.count}`}`),
     ].filter((part) => part !== undefined);
     return `${label} = ${family}${repeat}: ${status}; ${vector}${extra.length === 0 ? "" : `; ${extra.join("; ")}`}`;
   }
@@ -391,6 +396,10 @@ class CompactView {
       case "symbol-reach": return short ? `reached ${this.anchor(part.anchor)}` : `reached ${this.anchor(part.anchor)} ${part.kindName} depth ${part.depth} confidence ${part.confidence} fan-in ${part.fanIn}${part.via === undefined ? "" : `; via ${part.via.target.symbol} in ${this.file(part.via.target.file)} basis ${part.via.basis}${part.via.lines === undefined ? "" : ` lines ${part.via.lines.join(",")}`}`}`;
       case "entrypoint-reach": return short ? `reach of ${part.kindName} ${part.name ?? "(unnamed)"}` : `reached entrypoint ${part.kindName} ${part.name ?? "(unnamed)"} handler ${this.anchor(part.handler)} depth ${part.depth} confidence ${part.confidence}; seed indexes ${this.origins(part.seeds) || "none"}`;
       case "entrypoint-change": return `${part.change} ${part.kindName} ${part.name} handler ${this.anchor(part.handler)}${short ? "" : this.comparison(part.comparison)}`;
+      case "contract-change": {
+        const contract = part.contract;
+        return `contract ${contract.change} ${contract.method} ${contract.path}${contract.operationId === undefined ? "" : ` operation ${contract.operationId}`} at ${contract.document}:${contract.line}${short ? "" : `${contract.parts === undefined ? "" : `; data changed: ${contract.parts.join(", ")}`}${contract.handlers === undefined ? "" : `; handlers ${contract.handlers.map((handler) => this.anchor(handler)).join(", ")}`}${this.comparison(part.comparison)}`}`;
+      }
       case "module-origin": return `diff ${part.change} ${part.file}${short ? "" : this.comparison(part.comparison)}`;
       case "module-reach": return short ? `module ${this.file(part.file)} (${part.side})` : `module ${this.file(part.file)} (${part.side}) depth ${part.depth}; origin indexes ${this.origins(part.origins) || "none"}${part.via === undefined ? "" : `; via ${part.via.file}:${part.via.line} ${part.via.kind} ${quoted(part.via.specifier)}${part.via.typeOnly ? " type-only" : ""}${part.via.form === undefined ? "" : ` ${part.via.form}`}`}`;
       case "file-dependency": return `${this.file(part.from)} → ${this.file(part.to)} ${part.category}`;
@@ -409,7 +418,7 @@ class CompactView {
       case "workspace-link": {
         const link = part.link;
         const reach = part.reach.map((reference) => (reference.status === "present" ? (reference.part === part.id ? "self" : "present") : `missing ${reference.linkId}`));
-        return `link ${link.id} ${part.direction}: ${link.from.repo} ${this.file(link.from.file)}:${link.from.line} ${link.from.symbol} → ${link.to.repo} ${link.to.kind} ${link.to.name} handler ${this.anchor(link.to.handler)} basis ${link.basis} ${link.transport} confidence ${link.confidence}${link.profiles === undefined ? "" : ` profiles ${link.profiles.join(", ")}`}${short ? "" : `; reach ${reach.join(", ") || "none"}`}`;
+        return `link ${link.id} ${part.direction}: ${link.from.repo} ${this.file(link.from.file)}:${link.from.line} ${link.from.symbol} → ${link.to.repo} ${link.to.kind} ${link.to.name} handler ${this.anchor(link.to.handler)} basis ${link.basis} ${link.transport} confidence ${link.confidence}${link.profiles === undefined ? "" : ` profiles ${link.profiles.join(", ")}`}${short ? "" : `; reach ${reach.join(", ") || "none"}${part.operations === undefined ? "" : `; ${changedOperationsText(part.operations)}`}`}`;
       }
       case "workspace-context": return `workspace context ${this.workspaceContext(part)}`;
       case "decision": return `decision ${part.kindName} ${quoted(part.subject)}`;
@@ -538,12 +547,14 @@ class CompactView {
       const reads = unique(attestation.reads.map((read) => this.readLabel(read))).join(", ");
       const outline = attestation.parts.map((id) => this.parts.get(id)).filter((part) => part?.kind === "outline-declaration");
       const categories = attestation.parts.map((id) => this.parts.get(id)).flatMap((part) => (part?.kind === "file-dependency" ? [part.category] : []));
+      const operations = attestation.parts.map((id) => this.parts.get(id)).flatMap((part) => (part?.kind === "workspace-link" ? part.operations ?? [] : []));
       for (const id of attestation.parts) this.covered.add(id);
       return [
         reads,
         categories.length === 0 ? undefined : `category ${unique(categories).join(", ")}`,
         attestation.locations === undefined ? undefined : `sites ${attestation.locations.map((location) => span(location.line, location.endLine)).join(",")}`,
         attestation.confidence === undefined ? undefined : `confidence ${attestation.confidence}`,
+        operations.length === 0 ? undefined : changedOperationsText(operations),
         outline.length === 0 ? undefined : `endpoint located by outline declaration ${unique(outline.map((part) => this.supportLabels(part!))).join(", ")}`,
       ].filter((part) => part !== undefined).join(" ");
     }).join("; ");

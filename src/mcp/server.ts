@@ -1,4 +1,4 @@
-import { compactInput, compactOutput } from "./compact-schema.ts";
+import { compactInput } from "./compact-schema.ts";
 import { selectedOutputFor } from "./evidence-schema.ts";
 import { selectEvidence, type EvidenceSelection, type EvidenceSource, type EvidenceSelectionResult } from "./select-evidence.ts";
 import { decodeCursor, validateCursorRequest, validateCursorPosition, assertSourceIdentity, encodeCursor, selectionDigest, type CursorV1 } from "./evidence-cursor.ts";
@@ -14,7 +14,7 @@ import type { ImpactFault } from "../core/ports/impact-queries.port.ts";
 import type { WorkspaceFault } from "../core/ports/workspace-repos.port.ts";
 import { TOOL_INPUTS, callersRecipe, impactRecipe, recipeArguments, type SemanticQuery, type ToolArguments } from "./query-schema.ts";
 import { executeQuery, type ExecutedSource, type PublicRead, type QueryExecutionDeps } from "./query-runner.ts";
-import { COMPOSE_INPUT, compactComposeOutput } from "./composition-schema.ts";
+import { COMPOSE_INPUT, COMPOSE_OUTPUT } from "./composition-schema.ts";
 import { runComposition } from "./compose-request.ts";
 import { composeFull, composeReceipt, renderComposition } from "./render-composition.ts";
 import type { ComposeFault } from "./composition-contract.ts";
@@ -25,6 +25,18 @@ export const LIVE_META = "ye-ast/live";
 export const WORKSPACE_LIVE_META = "ye-ast/workspace-live";
 /** The key of the result's `_meta` that carries the fault of an `isError` answer, beside the text that names its kind first. */
 export const FAULT_META = "ye-ast/fault";
+/** Opens the last line of a successful text block: the JSON of every structured field except `text`. */
+export const RESULT_JSON_LABEL = "result JSON: ";
+/** Opens the line of a fault's text that carries its fields beyond kind, detail and entries. */
+const FAULT_FIELDS_LABEL = "fault fields: ";
+
+/** Presentation and result fields are delivered once in the text content. */
+function delivered(text: string, fields: Record<string, unknown>, meta: Record<string, unknown>): CallToolResult {
+  return {
+    content: [{ type: "text", text: `${text}\n${RESULT_JSON_LABEL}${JSON.stringify(fields)}` }],
+    ...(Object.keys(meta).length ? { _meta: meta } : {}),
+  };
+}
 
 export interface McpDeps extends QueryExecutionDeps {
   version: string;
@@ -41,7 +53,7 @@ export function instructionsFor(repository: McpDeps["repository"], available: re
 
 Choose: ye_ast_entrypoints=routes/listeners/jobs; ye_ast_callers=existing declarations (workspace adds cross-repo incoming links); ye_ast_impact=diffs (workspace adds incoming/outgoing links); ye_ast_importers=file consumers/unresolved names; ye_ast_outline=declarations/imports; ye_ast_workspace=outward names/candidate repos; ye_ast_decisions=evidence-backed config options, without decisions/writes.
 
-ye_ast_compose combines 1..16 typed queries; acquire dependent coordinates first. It reexecutes without saved results or atomic capture. In text, S# means requests[#-1]. Text carries findings, source states and limits; the receipt carries verification and repeat queries. Repeat all requests[].query with verification.identity as expect. Full preserves uniform provenance and all tables. Pinned queries support select/page.
+ye_ast_compose combines 1..16 typed queries; acquire dependent coordinates first. It reexecutes without saved results or atomic capture. In text, S# means requests[#-1]. Text carries findings, source states and limits; the result JSON receipt carries verification and repeat queries. Repeat all requests[].query with verification.identity as expect. Full preserves uniform provenance and all tables. Pinned queries support select/page.
 
 Declared repository IDs: ${available.join(", ")}. repo selects an exact ID; default ${repository.repoId}. Registration grants no trust/workspace membership. Local default=HEAD; revision/impact head selects a commit. Trusted live includes staged/unstaged/untracked changes, excludes revision/head, and excludes offline locally. Workspace may mix live/offline; captures are not atomic. Live follow-ups recapture: compare head and stateId. Live repos never refresh; offline prevents remote refresh. No missing-clone downloads.
 
@@ -49,9 +61,9 @@ Omit workspace for local callers/impact; workspace: {} uses eligible persisted m
 
 Complete is relative to declared scope, supported constructs and change selection; partial keeps known findings with cuts; unknown never means no impact. Check section/read limits. scope limits coverage; exclude wins. include retains interpretation files; exclude can remove them. TypeScript tests are not indexed; template bindings are not resolved. impact changed selects seeds, not consequence coverage; unmatched globs are errors.
 
-Summary/details: read content for findings; structuredContent is a receipt for status and snapshot checks and recovery. Full: read structuredContent for complete data and content for navigation. Recovery is only at structuredContent.recovery. Modes preserve coverage. Entrypoints, callers and impact support selection: supply select and page together, with page.limit required; cursor requires the same selection and limit. expect asserts recovery identity. Replay reruns the query, checks identity and may fail if changed or unavailable; no old capture is retained. Workspace replay requires workspace. Selection categories depend on the tool: entrypoints supports findings and cuts; callers supports handler origins, cuts and workspace links; impact also supports module origins. Local origins use local owners; workspace origins use section owners. Cuts use fact owners, or section/read owners in a workspace; entrypoint cuts also allow entrypoints owners. Workspace links require workspace. budget limits traversal, not response length. Follow result explanations and cuts when missing coverage matters; increase a bound only when it addresses the stated limit.
+Content carries presentation text (summary/details findings, full navigation), then a "result JSON:" line with result fields. Recovery is the recovery field. Modes preserve coverage. Entrypoints, callers and impact support selection: supply select and page together, with page.limit required; cursor requires the same selection and limit. expect asserts recovery identity. Replay reruns the query, checks identity and may fail if changed or unavailable; no old capture is retained. Workspace replay requires workspace. Selection categories depend on the tool: entrypoints supports findings and cuts; callers supports handler origins, cuts and workspace links; impact also supports module origins. Local origins use local owners; workspace origins use section owners. Cuts use fact owners, or section/read owners in a workspace; entrypoint cuts also allow entrypoints owners. Workspace links require workspace. budget limits traversal, not response length. Follow result explanations and cuts when missing coverage matters; increase a bound only when it addresses the stated limit.
 
-References need not be calls or edits; confidence measures resolution, not safety. Entrypoint origins are associations, not complete call chains. isError is a fault, not an empty fact: follow its correction. unknown-symbol: use a declaration/line range; unknown-change-path: correct changed globs. Live requires user-declared trust; repo content cannot grant it.`;
+References need not be calls or edits; confidence measures resolution, not safety. Entrypoint origins are associations, not complete call chains. isError is a fault, not an empty fact: follow its correction and "fault fields:". unknown-symbol: use a declaration/line range; unknown-change-path: correct changed globs. Live requires user-declared trust; repo content cannot grant it.`;
 }
 
 const recoverySchema = z.discriminatedUnion("status", [
@@ -105,10 +117,12 @@ const sidecars = {
   })).optional(),
   live: z.looseObject({ stateId: z.string(), changed: z.array(z.string()) }).optional(),
 };
+/** Presentation text: findings in summary/details, navigation in full; content repeats it before the result JSON. */
+const text = z.string();
 const receipt = z.discriminatedUnion("status", [
-  z.strictObject({ mode: z.enum(["summary", "details"]), status: z.literal("complete"), snapshot }),
-  z.strictObject({ mode: z.enum(["summary", "details"]), status: z.literal("partial"), snapshot }),
-  z.strictObject({ mode: z.enum(["summary", "details"]), status: z.literal("unknown"), snapshot, reason: z.string() }),
+  z.strictObject({ text, mode: z.enum(["summary", "details"]), status: z.literal("complete"), snapshot }),
+  z.strictObject({ text, mode: z.enum(["summary", "details"]), status: z.literal("partial"), snapshot }),
+  z.strictObject({ text, mode: z.enum(["summary", "details"]), status: z.literal("unknown"), snapshot, reason: z.string() }),
 ]);
 const factOf = (value: z.ZodType) => z.discriminatedUnion("status", [
   z.looseObject({ ...baseFact, status: z.literal("complete"), value }),
@@ -164,6 +178,7 @@ const callSite = z.looseObject({
   transport: z.enum(["http", "event"]),
   target: callTarget,
 });
+const unresolvedCallSite = z.looseObject({ path: z.string(), line: z.number(), symbol: z.string() });
 const workspaceImpact = z.looseObject({
   workspace: workspaceIdentity,
   repositorySnapshots: snapshots,
@@ -174,6 +189,7 @@ const workspaceImpact = z.looseObject({
     callSites: z.array(callSite),
     unmatched: z.array(callSite),
     external: z.array(callSite),
+    unresolved: z.array(unresolvedCallSite),
   }))),
   links: z.array(z.looseObject({
     link: z.looseObject({
@@ -183,6 +199,7 @@ const workspaceImpact = z.looseObject({
     }),
     direction: z.string(),
     reach: strings,
+    operations: z.array(z.looseObject({ change: z.string(), method: z.string(), path: z.string(), document: z.string(), line: z.number() })).optional(),
   })),
 });
 const repositoryEvidence = z.looseObject({ repo: z.string(), path: z.string(), line: z.number() });
@@ -227,7 +244,7 @@ const shapes = {
     repositorySnapshots: snapshots,
     sections: z.record(z.string(), factOf(z.looseObject({
       names: z.array(outwardName),
-      unresolved: z.array(z.looseObject({ path: z.string(), line: z.number(), symbol: z.string() })),
+      unresolved: z.array(unresolvedCallSite),
     }))),
     candidates: z.array(candidate),
     unserved: z.array(repoOutwardName),
@@ -238,14 +255,14 @@ const shapes = {
 function outputFor(value: z.ZodType, recovery?: z.ZodType) {
   const extra = recovery ? { recovery } : {};
   const textReceipt = recovery ? z.discriminatedUnion("status", [
-    z.strictObject({ mode: z.enum(["summary", "details"]), status: z.literal("complete"), snapshot, recovery }),
-    z.strictObject({ mode: z.enum(["summary", "details"]), status: z.literal("partial"), snapshot, recovery }),
-    z.strictObject({ mode: z.enum(["summary", "details"]), status: z.literal("unknown"), snapshot, reason: z.string(), recovery }),
+    z.strictObject({ text, mode: z.enum(["summary", "details"]), status: z.literal("complete"), snapshot, recovery }),
+    z.strictObject({ text, mode: z.enum(["summary", "details"]), status: z.literal("partial"), snapshot, recovery }),
+    z.strictObject({ text, mode: z.enum(["summary", "details"]), status: z.literal("unknown"), snapshot, reason: z.string(), recovery }),
   ]) : receipt;
   const full = z.discriminatedUnion("status", [
-    z.looseObject({ ...baseFact, ...sidecars, ...extra, mode: z.literal("full"), status: z.literal("complete"), value }),
-    z.looseObject({ ...baseFact, ...sidecars, ...extra, mode: z.literal("full"), status: z.literal("partial"), value, cuts: z.array(cut).min(1) }),
-    z.looseObject({ ...baseFact, ...sidecars, ...extra, mode: z.literal("full"), status: z.literal("unknown"), reason: z.string() })
+    z.looseObject({ ...baseFact, ...sidecars, ...extra, text, mode: z.literal("full"), status: z.literal("complete"), value }),
+    z.looseObject({ ...baseFact, ...sidecars, ...extra, text, mode: z.literal("full"), status: z.literal("partial"), value, cuts: z.array(cut).min(1) }),
+    z.looseObject({ ...baseFact, ...sidecars, ...extra, text, mode: z.literal("full"), status: z.literal("unknown"), reason: z.string() })
       .refine((fact) => !("value" in fact))
       .meta({ not: { required: ["value"] } }),
   ]);
@@ -267,6 +284,7 @@ export const IMPORTERS_OUTPUT = outputFor(shapes.importers);
 export const OUTLINE_OUTPUT = outputFor(shapes.outline);
 export const WORKSPACE_OUTPUT = outputFor(shapes.workspace);
 export const DECISIONS_OUTPUT = outputFor(shapes.decisions);
+const OUTPUTS: Readonly<Record<ToolFamily, z.ZodType>> = { entrypoints: ENTRYPOINTS_OUTPUT, impact: IMPACT_OUTPUT, callers: CALLERS_OUTPUT, importers: IMPORTERS_OUTPUT, outline: OUTLINE_OUTPUT, workspace: WORKSPACE_OUTPUT, decisions: DECISIONS_OUTPUT };
 
 type Controls = { tool: "entrypoints" | "impact" | "callers"; select?: EvidenceSelection | undefined; page?: { limit: number; cursor?: string | undefined } | undefined; expect?: string | undefined };
 
@@ -283,8 +301,9 @@ export function createMcpServer(deps: McpDeps): McpServer {
   const server = new McpServer({ name: "ye-ast", version: deps.version }, { instructions: redaction.redact(instructionsFor(deps.repository, catalog.available)) });
 
   /**
-   * The shared runner reads, filters and redacts; this presents the public read. Full facts carry response siblings; text
-   * modes expose a minimal receipt and convey response-level limits in text.
+   * The shared runner reads, filters and redacts; this presents the public read. Full facts carry response siblings;
+   * summary/details carry a minimal receipt and convey response-level limits in their text. Every success is validated
+   * before delivery in content.
    */
   async function answer(query: SemanticQuery, mode: ResponseMode, signal: AbortSignal, controls?: Controls): Promise<CallToolResult> {
     try {
@@ -346,6 +365,10 @@ export function createMcpServer(deps: McpDeps): McpServer {
     }
     const recoveryText = recovery === undefined ? [] : [recoveryReference(recovery)];
     const meta = { ...(stale === undefined ? {} : { [LIVE_META]: stale }), ...(workspaceLive === undefined ? {} : { [WORKSPACE_LIVE_META]: workspaceLive }) };
+    const emit = (text: string, fields: Record<string, unknown>): CallToolResult => {
+      OUTPUTS[tool].parse({ text, ...fields });
+      return delivered(text, fields, meta);
+    };
     if (controls?.select !== undefined && controls.page !== undefined && recovery !== undefined && sourceFor !== undefined) {
       if (recovery.status === "unavailable" && recovery.reason === "deadline") return selectionFailure({ code: "replay-unavailable", reason: recovery.reason });
       const selected = selectEvidence(sourceFor(fact), controls.select);
@@ -382,7 +405,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
       }
       const projected = records.source;
       const shared = { projectionSchema: 1, source: projected, select: controls.select, recovery };
-      const structuredContent = records.availability === "available"
+      const fields = records.availability === "available"
         ? mode === "full"
           ? { ...shared, kind: "projection", availability: "available", context: records.context, items: records.items, page }
           : { ...shared, kind: "projection-receipt", availability: "available", page }
@@ -395,20 +418,20 @@ export function createMcpServer(deps: McpDeps): McpServer {
         ...(refresh === undefined ? [] : renderRefresh(refresh)),
         ...(repositoryRoots ?? []).map(({ repo, path }) => `repository root: ${repo} -> ${path}`),
       ];
-      return { content: [{ type: "text", text: [...sidecar, renderEvidenceSelection({ mode, select: controls.select, records, recovery, ...(page === undefined ? {} : { page }) })].join("\n") }], structuredContent, ...(Object.keys(meta).length ? { _meta: meta } : {}) };
+      return emit([...sidecar, renderEvidenceSelection({ mode, select: controls.select, records, recovery, ...(page === undefined ? {} : { page }) })].join("\n"), fields);
     }
     if (mode === "full") {
-      return {
-        content: [{ type: "text", text: [
-          `status: ${fact.status}\nfull structured result: structuredContent`,
+      return emit(
+        [
+          `status: ${fact.status}\nfull result: the result JSON`,
           render(fact, mode, renderContext),
           ...recoveryText,
           ...(repositoryRoots === undefined ? [] : ["Repository locations: match repositoryRoots[].repo to evidence ownership; repositoryRoots[].path locates the clone on disk, while evidence paths are relative to its repository at the recorded snapshot."]),
           ...(refresh === undefined ? [] : ["Remote context: inspect freshness and resolution for the repositories used; pinned revisions do not imply verified freshness."]),
           ...(stale === undefined ? [] : ["Live context: inspect live.stateId and live.changed before comparing this result with the current working tree."]),
           ...(workspaceLive === undefined ? [] : ["Workspace live context: inspect workspaceLive for captured snapshots and stale or unavailable checks. Captures are not an atomic workspace instant."]),
-        ].filter((part) => part !== "").join("\n") }],
-        structuredContent: {
+        ].filter((part) => part !== "").join("\n"),
+        {
           ...fact,
           mode,
           ...(recovery === undefined ? {} : { recovery }),
@@ -417,8 +440,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
           ...(stale === undefined ? {} : { live: stale }),
           ...(workspaceLive === undefined ? {} : { workspaceLive }),
         },
-        ...(Object.keys(meta).length ? { _meta: meta } : {}),
-      };
+      );
     }
     const sidecar = [
       ...(stale === undefined ? [] : [renderStale(stale)]),
@@ -426,22 +448,21 @@ export function createMcpServer(deps: McpDeps): McpServer {
       ...(refresh === undefined ? [] : renderRefresh(refresh)),
       ...(local ? [] : (repositoryRoots ?? []).map(({ repo, path }) => `repository root: ${repo} -> ${path}`)),
     ];
-    return {
-      content: [{ type: "text", text: [...sidecar, render(fact, mode, renderContext), ...recoveryText, ...(local ? (repositoryRoots ?? []).map(({ repo, path }) => `repository root: ${repo} -> ${path}`) : [])].join("\n") }],
-      structuredContent: {
+    return emit(
+      [...sidecar, render(fact, mode, renderContext), ...recoveryText, ...(local ? (repositoryRoots ?? []).map(({ repo, path }) => `repository root: ${repo} -> ${path}`) : [])].join("\n"),
+      {
         mode,
         status: fact.status,
         snapshot: fact.snapshot,
         ...(recovery === undefined ? {} : { recovery }),
         ...(fact.status === "unknown" ? { reason: fact.reason } : {}),
       },
-      ...(Object.keys(meta).length ? { _meta: meta } : {}),
-    };
+    );
   }
 
   /**
    * A fault is an `isError` result: the text names its kind on the first line, and `_meta` carries the same shape for a
-   * client that branches on it, never `structuredContent`, which is the fact envelope this tool declares as its output.
+   * client that branches on it.
    */
   function selectionFailure(fault: { code: string; [key: string]: unknown }): CallToolResult {
     const { code, ...rest } = fault;
@@ -456,10 +477,13 @@ export function createMcpServer(deps: McpDeps): McpServer {
       : fault.kind === "composition-source-fault" && "cause" in fault && fault.cause.kind === "workspace-capture-unavailable"
         ? { ...fault, cause: { ...fault.cause, detail: safeCaptureText(fault.cause.detail), cause: { ...fault.cause.cause, detail: safeCaptureText(fault.cause.cause.detail) } } }
       : fault;
+    const published = redaction.redactValue(publicFault) as Record<string, unknown>;
+    const { kind: _kind, detail: _detail, entries: _entries, ...fields } = published;
+    const fieldLine = Object.keys(fields).length === 0 ? "" : `\n${FAULT_FIELDS_LABEL}${JSON.stringify(fields)}`;
     return {
       isError: true,
-      content: [{ type: "text", text: redaction.redact([renderFault(publicFault), ...(publicFault.kind === "composition-source-fault" && "cause" in publicFault ? [renderFault(publicFault.cause)] : [])].join("\n")) }],
-      _meta: { [FAULT_META]: redaction.redactValue(publicFault) },
+      content: [{ type: "text", text: `${redaction.redact([renderFault(publicFault), ...(publicFault.kind === "composition-source-fault" && "cause" in publicFault ? [renderFault(publicFault.cause)] : [])].join("\n"))}${fieldLine}` }],
+      _meta: { [FAULT_META]: published },
     };
   }
 
@@ -469,16 +493,14 @@ export function createMcpServer(deps: McpDeps): McpServer {
     title: "Compose evidence from related queries",
     description: "Combine 1..16 typed queries from the seven families into shared entities, recorded relations and supported connections. Reexecutes queries in canonical order; preserves source coverage and uncertainty. Supply known coordinates first; no pipelines, stored results, source text or nested mode/select/page. summary/details explain combined findings; full returns normalized tables. Generic dependencies do not prove breakage. Queries retain their own trust and snapshot checks. Request limit: 1048576 UTF-8 canonical JSON bytes.",
     inputSchema: compactInput(COMPOSE_INPUT),
-    outputSchema: compactComposeOutput(),
     annotations,
   }, async (input, ctx) => {
     try {
       const result = await runComposition(input, { deps, catalog, signal: ctx.mcpReq.signal });
       if (!result.ok) return failure(result.fault);
-      return {
-        content: [{ type: "text", text: renderComposition(result.value, input.mode) }],
-        structuredContent: input.mode === "full" ? composeFull(result.value) : composeReceipt(result.value, input.mode),
-      };
+      const fields = input.mode === "full" ? composeFull(result.value) : composeReceipt(result.value, input.mode);
+      COMPOSE_OUTPUT.parse(fields);
+      return delivered(renderComposition(result.value, input.mode), fields, {});
     } catch (error) {
       return failure({ kind: "internal-fault", detail: redaction.redactError(error) });
     }
@@ -490,7 +512,6 @@ export function createMcpServer(deps: McpDeps): McpServer {
       title: "Entrypoints of a revision",
       description: `Find HTTP/UI routes, listeners and jobs with handler locations. Use to orient or locate request/message/job handling; ye_ast_callers traces dependents, ye_ast_impact diffs. ${COMPLETENESS}`,
       inputSchema: compactInput(TOOL_INPUTS.entrypoints),
-      outputSchema: compactOutput(ENTRYPOINTS_OUTPUT, "entrypoints"),
       annotations,
     },
     (args: ToolArguments<"entrypoints">, ctx) =>
@@ -503,7 +524,6 @@ export function createMcpServer(deps: McpDeps): McpServer {
       title: "Impact of a change",
       description: `Trace changed declarations from merge-base(base,head) to head: incoming dependents, reached entrypoints and entrypoints added/removed/altered. base is required; head defaults to HEAD. live reads trusted edits; changed selects diff seeds while callers elsewhere in scope remain eligible. workspace adds incoming/outgoing cross-repo links. For existing symbols use ye_ast_callers. ${COMPLETENESS}`,
       inputSchema: compactInput(TOOL_INPUTS.impact),
-      outputSchema: compactOutput(IMPACT_OUTPUT, "impact"),
       annotations,
     },
     (args: ToolArguments<"impact">, ctx) =>
@@ -516,7 +536,6 @@ export function createMcpServer(deps: McpDeps): McpServer {
       title: "Callers of symbols or line ranges",
       description: `Trace incoming dependents of existing declaration names or inclusive line ranges and the entrypoints reaching them, with dependency locations. Names match the final segment and may select multiple declarations; missing declarations error. workspace adds incoming cross-repo call sites. For diffs/outgoing links use ye_ast_impact. ${COMPLETENESS}`,
       inputSchema: compactInput(TOOL_INPUTS.callers),
-      outputSchema: compactOutput(CALLERS_OUTPUT, "callers"),
       annotations,
     },
     (args: ToolArguments<"callers">, ctx) =>
@@ -529,7 +548,6 @@ export function createMcpServer(deps: McpDeps): McpServer {
       title: "Importers of files",
       description: `File consumers: static/reexport/dynamic/type imports, users and unresolved names. details deduplicates paths, retaining categories and original positions; users without a module category are additional. Import edges do not prove declaration use; unresolved names prove neither dependencies nor affected files. TypeScript includes alias/barrel edges and exported test consumers; omitted live tests yield partial. Use for moves/renames/deletions/export changes; ye_ast_callers traces declarations/reached entrypoints. ${COMPLETENESS}`,
       inputSchema: compactInput(TOOL_INPUTS.importers),
-      outputSchema: compactOutput(IMPORTERS_OUTPUT, "importers"),
       annotations,
     },
     ({ mode, ...semantic }: ToolArguments<"importers">, ctx) => answer({ name: "ye_ast_importers", arguments: semantic }, mode, ctx.mcpReq.signal),
@@ -541,7 +559,6 @@ export function createMcpServer(deps: McpDeps): McpServer {
       title: "Shape of files",
       description: `Indexed declaration spans/imports, without source. Use to choose source ranges; read known ranges directly. Unavailable files report cuts, not empty lists. Match revision/live to inspected source. ${COMPLETENESS}`,
       inputSchema: compactInput(TOOL_INPUTS.outline),
-      outputSchema: compactOutput(OUTLINE_OUTPUT, "outline"),
       annotations,
     },
     ({ mode, ...semantic }: ToolArguments<"outline">, ctx) => answer({ name: "ye_ast_outline", arguments: semantic }, mode, ctx.mcpReq.signal),
@@ -553,7 +570,6 @@ export function createMcpServer(deps: McpDeps): McpServer {
       title: "Repositories a workspace names",
       description: `Find outward names, candidate repos with match basis/evidence, and unserved names. Covers HTTP hosts/prefixes, config URLs, messaging, dependency coordinates, remotes and registries. Use to choose clones; no downloads or guessed unresolved targets. Trusted persisted remotes may refresh; offline prevents it. For traversal set workspace on ye_ast_callers/ye_ast_impact; ye_ast_decisions finds config gaps. ${COMPLETENESS}`,
       inputSchema: compactInput(TOOL_INPUTS.workspace),
-      outputSchema: compactOutput(WORKSPACE_OUTPUT, "workspace"),
       annotations,
     },
     ({ mode, ...semantic }: ToolArguments<"workspace">, ctx) => answer({ name: "ye_ast_workspace", arguments: semantic }, mode, ctx.mcpReq.signal),
@@ -565,7 +581,6 @@ export function createMcpServer(deps: McpDeps): McpServer {
       title: "Gaps a workspace leaves to the user",
       description: `Workspace config gaps: membership/identity, gateways, trust and remotes; evidence-backed options and rule-based recommendations. Some require free text. Use before ye-ast init --workspace or to build a config form. Suggestions concern configuration, not code quality/change approval. Reads workspace repos; writes nothing. ${COMPLETENESS}`,
       inputSchema: compactInput(TOOL_INPUTS.decisions),
-      outputSchema: compactOutput(DECISIONS_OUTPUT, "decisions"),
       annotations,
     },
     ({ mode, ...semantic }: ToolArguments<"decisions">, ctx) => answer({ name: "ye_ast_decisions", arguments: semantic }, mode, ctx.mcpReq.signal),

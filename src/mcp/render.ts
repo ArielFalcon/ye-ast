@@ -4,6 +4,7 @@ import { renderFactHeader as headerLines, renderFactStatus as statusLines, snaps
 import type { ResponseMode, RenderContext } from "./presentation.ts";
 import type { Entrypoint } from "../core/domain/entrypoints/entrypoint.ts";
 import type { Handler } from "../core/domain/entrypoints/http-route.ts";
+import type { ChangedContract } from "../core/domain/impact/changed-contracts.ts";
 import type { ChangedEntrypoint } from "../core/domain/impact/changed-entrypoints.ts";
 import type { ImpactedSymbol, ImpactValue, ReachedEntrypoint, Seed } from "../core/domain/impact/impact-fact.ts";
 import type { ModuleImpactValue } from "../core/domain/impact/module-dependency.ts";
@@ -426,6 +427,16 @@ function changedLine(change: ChangedEntrypoint): string {
   return `  - ${change.change} ${change.kind} ${change.name} -> ${handlerText(change.handler)}`;
 }
 
+function changedContractLine(change: ChangedContract): string {
+  return `  - ${changedContractText(change)}`;
+}
+
+function changedContractText(change: Omit<ChangedContract, "handlers">): string {
+  const name = change.operationId === undefined ? "" : ` (${change.operationId})`;
+  const parts = change.parts === undefined ? "" : ` ${change.parts.join(" and ")}`;
+  return `${change.change} ${change.method} ${change.path}${name}${parts} at ${change.document}:${change.line}`;
+}
+
 function reachedLines(reached: ReachedEntrypoint, seeds: readonly Seed[], detail: ResponseMode, owner: ImpactOwner, sharedLookup = false, sharedOrigin = false, selectable = true): string[] {
   const name = reached.name === undefined ? reached.kind : `${reached.kind} ${reached.name}`;
   const confidence = reached.confidence < 1 ? `, confidence ${reached.confidence}` : "";
@@ -548,6 +559,7 @@ function impactBody(value: ImpactValue, detail: ResponseMode, owner: ImpactOwner
     ...(context?.recovery?.status === "unavailable" ? [`  Recovery unavailable (${context.recovery.reason}); recorded coordinates do not establish an executable replay.`] : []),
     ...(value.mergeBase === undefined ? [] : [`merge base: ${value.mergeBase}`]),
     ...(value.changedEntrypoints === undefined ? [] : [`changed entrypoints (${value.changedEntrypoints.length}):`, ...value.changedEntrypoints.map(changedLine)]),
+    ...(value.changedContracts === undefined ? [] : [`changed contracts (${value.changedContracts.length}):`, ...value.changedContracts.map(changedContractLine)]),
     `reached entrypoints (${value.entrypoints.length}):`,
     ...(detail === "details" && value.entrypoints.some((entrypoint) => entrypoint.seeds.length > 1) ? [value.entrypoints.length === 1
       ? `  ${categoryRecovery({ full: "has all origins." })}`
@@ -750,7 +762,7 @@ function baseModuleGuides(value: ImpactValue, repo: string, mergeBase = value.me
 }
 
 function unknownImpactGuide(): string[] {
-  return ["Investigation guide:", "  Analysis is unknown, not a verified absence of impact. Inspect reason and evidence in structuredContent (full mode includes the full fact) to establish the missing prerequisite before retrying; there is no value to search."];
+  return ["Investigation guide:", "  Analysis is unknown, not a verified absence of impact. Inspect reason and evidence in the result JSON (full mode includes the full fact) to establish the missing prerequisite before retrying; there is no value to search."];
 }
 
 function localImpactGuide(fact: Fact<ImpactValue> & { status: "complete" | "partial" }, mode: ResponseMode = "details", context?: RenderContext): string[] {
@@ -758,7 +770,7 @@ function localImpactGuide(fact: Fact<ImpactValue> & { status: "complete" | "part
   if (lookups.length === 0 && fact.status === "complete") return ["There are no recorded consequences or walk origins within the declared scope and change selection."];
   return [
     "Investigation guide:",
-    mode === "full" ? "  JSON navigation: paths below are relative to structuredContent." : "  Full JSON navigation (available in full mode): paths below are relative to structuredContent; query the returned payload directly when already included.",
+    mode === "full" ? "  JSON navigation: paths below are relative to the result JSON." : "  Full JSON navigation (available in full mode): paths below are relative to the result JSON; query the returned payload directly when already included.",
     ...lookups,
     ...(lookups.length === 0 ? ["  There are no recorded consequences or walk origins in this answer. Read inputs.declaredScope and inputs.declaredConfig before interpreting that scoped emptiness."] : []),
     ...impactCutLookup(cutsOf(fact), "cuts", context),
@@ -774,7 +786,7 @@ function workspaceImpactGuide(fact: Fact<WorkspaceImpactValue> & { status: "comp
   const otherImpacts = Object.entries(value.sections).flatMap(([repo, section]) => repo === value.trigger.repo || section.status === "unknown" || section.value.impact === undefined ? [] : [section.value.impact]);
   return [
     "Investigation guide:",
-    mode === "full" ? "  JSON navigation: paths below are relative to structuredContent." : "  Full JSON navigation (available in full mode): paths below are relative to structuredContent; query the returned payload directly when already included.",
+    mode === "full" ? "  JSON navigation: paths below are relative to the result JSON." : "  Full JSON navigation (available in full mode): paths below are relative to the result JSON; query the returned payload directly when already included.",
     ...(Object.keys(value.sections).length === 0 ? [] : ["  Select value.sections by the exact repository key, not a shared relative file path. Check section.status and, when present, section.reason/cuts and section.value.reads[].fact status/reason before using its evidence; an unknown section has no value."]),
     ...(trigger?.status !== "unknown" && trigger?.value.impact !== undefined ? [`  The originating repository's walk is at ${originPath}.`, ...impactLookups(trigger.value.impact, originPath, context)] : []),
     ...(otherImpacts.length === 0 ? [] : ["  Other repository walks are at value.sections[repo].value.impact only when that field exists. In each walk, entrypoints[].seeds indexes that same walk's seeds array; never join origins across repositories."]),
@@ -873,11 +885,11 @@ function declarationText(entry: { file: string; candidates: readonly string[] })
   return entry.candidates.length === 0 ? `${entry.file} declares no symbol` : `declared in ${entry.file}: ${entry.candidates.join(", ")}`;
 }
 
-function impactedLinkLine({ link, direction, reach }: ImpactedLink, indexes: ReadonlyMap<string, number>): string {
+function impactedLinkLine({ link, direction, reach, operations }: ImpactedLink, indexes: ReadonlyMap<string, number>): string {
   const confidence = link.confidence < 1 ? `, confidence ${link.confidence}` : "";
   const profiles = link.profiles === undefined ? "" : `, under ${link.profiles.join(", ")}`;
   const chain = reach.length === 0 ? "" : `; reach: ${reach.map((id) => indexes.get(id) ?? id).join(", ")}`;
-  return `  - ${indexes.get(link.id)}. ${link.from.repo}:${placeText(link.from.file, link.from.line)} ${link.from.symbol} -> ${link.to.repo} ${link.to.name} -> ${handlerText(link.to.handler)} (${link.basis}${confidence}${profiles}, ${direction}${chain}) [linkId ${JSON.stringify(link.id)}]`;
+  return `  - ${indexes.get(link.id)}. ${link.from.repo}:${placeText(link.from.file, link.from.line)} ${link.from.symbol} -> ${link.to.repo} ${link.to.name} -> ${handlerText(link.to.handler)} (${link.basis}${confidence}${profiles}, ${direction}${chain})${(operations ?? []).map((operation) => `; calls the operation ${changedContractText(operation)}`).join("")} [linkId ${JSON.stringify(link.id)}]`;
 }
 
 function callSiteLine(site: CallSite): string {
@@ -900,6 +912,7 @@ function repoImpactLines(repo: string, section: Fact<RepoImpact>, detail: Respon
     ...(value.impact === undefined || repo === bound ? [] : impactBody(value.impact, detail, { kind: "section", repo }, context).map((line) => `    ${line}`)),
     ...callSiteBlock("unmatched", value.unmatched),
     ...callSiteBlock("external", value.external),
+    ...(value.unresolved.length === 0 ? [] : [`    unresolved call sites (${value.unresolved.length}):`, ...unresolvedListing(value.unresolved).map((line) => `  ${line}`)]),
   ];
 }
 

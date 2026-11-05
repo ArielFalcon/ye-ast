@@ -1,0 +1,13 @@
+{
+  "text": "repository root: shop -> <fixture-root>/shop\nrepository root: web -> <fixture-root>/web\nstatus: complete\ndeclared scope: languages java, typescript; frameworks angular, spring\nsnapshot: shop @ ece2918303f97235b271ef133b574de4984a4551\nrepositories (2): shop@ece2918303f97235b271ef133b574de4984a4551, web@ba3965606c100bd15237938a02dab651206d05f1\nrepositories declared by: the request\ndecisions (2):\n  trust (2):\n    shop\n      - trusted\n      - untrusted\n    web\n      - trusted\n      - untrusted",
+  "structured": {
+    "mode": "details",
+    "status": "complete",
+    "snapshot": {
+      "repo": "shop",
+      "kind": "sha",
+      "sha": "ece2918303f97235b271ef133b574de4984a4551"
+    }
+  },
+  "isError": false
+}

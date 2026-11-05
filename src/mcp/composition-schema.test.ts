@@ -6,7 +6,7 @@ import { sourceFixture } from "./composition-fixtures.ts";
 import { normalizeSource } from "./composition-normalize.ts";
 import { mergeEvidence, materializeEvidence } from "./compose-evidence.ts";
 import { compositionIdentity } from "./composition-identity.ts";
-import { COMPOSE_INPUT, COMPOSE_OUTPUT, compactComposeOutput, composeOutputGuide } from "./composition-schema.ts";
+import { COMPOSE_OUTPUT } from "./composition-schema.ts";
 import { composeFull, composeReceipt } from "./render-composition.ts";
 import type { CompositionResult, CoverageSummary, PartKind, ReadOwner } from "./composition-contract.ts";
 import type { ExecutedSource } from "./query-runner.ts";
@@ -66,9 +66,9 @@ test("full and receipt of every family and workspace branch pass the runtime sch
   for (const source of ALL) assert.equal(runtime(composeFull(resultOf([source]))), true, source.family);
 });
 
-test("full keeps every table and all 22 part kinds; graph.sources appears once with request indices", () => {
+test("full keeps every table and all 23 part kinds; graph.sources appears once with request indices", () => {
   const kinds: readonly PartKind[] = [
-    "entrypoint", "unknown-finding", "seed", "symbol-reach", "entrypoint-reach", "entrypoint-change", "module-origin", "module-reach",
+    "entrypoint", "unknown-finding", "seed", "symbol-reach", "entrypoint-reach", "entrypoint-change", "contract-change", "module-origin", "module-reach",
     "file-dependency", "file-query", "outline-declaration", "outline-file", "unheld-file", "outward-name", "name-candidate", "call-site",
     "unresolved-call-site", "workspace-link", "workspace-context", "decision", "impact-context", "walk-cost",
   ];
@@ -151,18 +151,6 @@ test("legal missing-reference and unknown variants stay valid", () => {
   const unavailable = { ...receipt, verification: { status: "unavailable", reason: "redacted-context" }, requests: receipt.requests.map(() => ({ status: "unavailable", reason: "redacted-context" })) };
   assert.equal(runtime(unavailable), true);
   assert.equal(ajv(json(unavailable)).valid, true);
-});
-
-test("the compact guide is approximate and accepts real outputs; the published standard schema still validates completely", () => {
-  const guide = new AjvJsonSchemaValidator().getValidator(composeOutputGuide() as Parameters<AjvJsonSchemaValidator["getValidator"]>[0]);
-  for (const value of [full, receipt]) assert.equal(guide(json(value)).valid, true);
-  const published = compactComposeOutput()["~standard"];
-  assert.deepEqual(published.jsonSchema.output({ target: "draft-07" }), composeOutputGuide());
-  assert.ok(JSON.stringify(composeOutputGuide()).length < 4096);
-  const dangling = mutated((copy) => { first(copy, "anchors", () => true).file = `f1:${"0".repeat(64)}`; });
-  assert.equal(guide(json(dangling)).valid, true);
-  assert.equal((published.validate(dangling) as { issues?: unknown }).issues !== undefined, true);
-  assert.equal(typeof COMPOSE_INPUT.safeParse, "function");
 });
 
 test("coverage issues cannot reference sources or parts absent from the full graph", () => {

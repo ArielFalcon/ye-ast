@@ -393,6 +393,70 @@ test("routes the change adds, removes and alters are reported at depth 0 by the 
   ]);
 });
 
+const CONTRACT = (totalType: string, description = "Orders"): string => `openapi: 3.0.3
+info: {title: Shop, version: '1'}
+paths:
+  /orders:
+    get:
+      operationId: getOrders
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Orders'
+  /items:
+    get:
+      operationId: getItems
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Items'
+components:
+  schemas:
+    Orders:
+      description: ${description}
+      type: object
+      properties:
+        total:
+          type: ${totalType}
+    Items:
+      type: array
+      items:
+        type: string
+`;
+
+test("a schema change under an unchanged method and path alters only the operations that reference it, and a description edit alters none", async () => {
+  const document = "src/main/resources/openapi/api.yaml";
+  commit({ ...SHOP, [document]: CONTRACT("number") }, "base");
+  commit({ [document]: CONTRACT("string") });
+  commit({ [document]: CONTRACT("string", "All orders") });
+
+  const typed = await impact("--base", "HEAD~2", "--head", "HEAD~1");
+  const described = await impact("--base", "HEAD~1");
+
+  assert.equal(typed.code, EXIT_CODE.ok, typed.stderr);
+  assert.deepEqual(typed.fact.value.changedContracts, [{ change: "altered", method: "GET", path: "/orders", operationId: "getOrders", document, line: 6, parts: ["response"] }]);
+  assert.equal(described.fact.status, "complete");
+  assert.equal(described.fact.value.changedContracts, undefined);
+});
+
+test("a changed contract whose reference the snapshot cannot follow is a partial answer cut at that reference, never unchanged", async () => {
+  const document = "src/main/resources/openapi/api.yaml";
+  const unresolvable = (totalType: string) => CONTRACT(totalType).replace("$ref: '#/components/schemas/Items'", "$ref: 'https://example.com/items.yaml#/Items'");
+  commit({ ...SHOP, [document]: unresolvable("number") }, "base");
+  commit({ [document]: unresolvable("string") });
+
+  const result = await impact("--base", "HEAD~1");
+
+  assert.equal(result.fact.status, "partial");
+  assert.deepEqual(result.fact.cuts, [{ kind: "unresolved-link", at: [`${document}:16 https://example.com/items.yaml#/Items`] }]);
+});
+
 test("changed seeds only the selected changed paths, while a caller in an unselected changed file is still reached", async () => {
   commit(SHOP, "base");
   commit({

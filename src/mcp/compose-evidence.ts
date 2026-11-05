@@ -276,13 +276,13 @@ class Materializer {
   /** A part whose coordinates are local to a read, or whose comparison has no merge base, is reported, never placed. */
   private provenance(): void {
     for (const part of this.set.parts) {
-      const side = part.kind === "module-reach" ? part.side : part.kind === "entrypoint-change" && part.change === "removed" ? "base" as const : undefined;
+      const side = part.kind === "module-reach" ? part.side : (part.kind === "entrypoint-change" && part.change === "removed") || (part.kind === "contract-change" && part.contract.change === "removed") ? "base" as const : undefined;
       const repos = new Set<string>();
       for (const reference of partReferences(part)) {
         const file = isCompositionId("file", reference.id) ? this.files.get(reference.id) : isCompositionId("anchor", reference.id) ? this.fileOfAnchor(reference.id) : undefined;
         if (file?.origin.kind === "query-context") repos.add(file.repo);
       }
-      const comparison = part.kind === "seed" || part.kind === "entrypoint-change" || part.kind === "module-origin" ? part.comparison : undefined;
+      const comparison = part.kind === "seed" || part.kind === "entrypoint-change" || part.kind === "contract-change" || part.kind === "module-origin" ? part.comparison : undefined;
       if (comparison?.status === "unavailable") {
         const read = this.reads.get(comparison.read);
         const repo = read === undefined ? undefined : this.snapshots.get(read.snapshot)?.value.repo;

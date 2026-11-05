@@ -23,7 +23,8 @@ import {
   type JoinedSite,
   type LinkGraph,
 } from "../../domain/topology/link-graph.ts";
-import type { Reach } from "../../domain/topology/link.ts";
+import type { ImpactedLink, Reach } from "../../domain/topology/link.ts";
+import type { ChangedContract } from "../../domain/impact/changed-contracts.ts";
 import { inferGateways, matchCallSite, matchEventCallSite, prefixOf, type Gateway, type GatewayDeclaration, type JoinResult, type RepositoryEntrypoints } from "../../domain/topology/link-match.ts";
 import { directoryNameOf } from "../../domain/topology/repository-identity.ts";
 import type { CallersTarget, ImpactCallersRequest, ImpactFault, ImpactOfChangeRequest, ImpactQueries } from "../../ports/impact-queries.port.ts";
@@ -139,8 +140,9 @@ function workspaceImpactQueries(deps: WorkspaceImpactDeps, captured?: CapturedWa
         callSites: part.callSites.sort(compareSite),
         unmatched: part.unmatched.sort(compareSite),
         external: part.external.sort(compareSite),
+        unresolved: base.status === "unknown" ? [] : base.value.unresolved,
       };
-      sections[repository.repo] = sectionOf(base, value, part.ambiguous, deps.digest);
+      sections[repository.repo] = sectionOf(base, value, part.ambiguous, repository.repo === trigger ? unservedOperationCuts(impact?.changedContracts ?? []) : [], deps.digest);
     }
 
     const triggerBase = sections[trigger] ?? fact;
@@ -158,7 +160,7 @@ function workspaceImpactQueries(deps: WorkspaceImpactDeps, captured?: CapturedWa
       repositorySnapshots: workspace.repositorySnapshots,
       trigger: { repo: trigger, ...(impact?.mergeBase === undefined ? {} : { mergeBase: impact.mergeBase }) },
       sections: Object.fromEntries(Object.entries(sections)),
-      links: mergeLinks(upstream.value.graph, downstream.value.graph),
+      links: withOperations(mergeLinks(upstream.value.graph, downstream.value.graph), trigger, impact?.changedContracts ?? []),
     };
     const config = walked.value.inputs.declaredConfig;
     const declared = { repos: workspace.workspace.repos, gateways: workspace.workspace.gateways.toSorted((a, b) => compareText(a.prefix, b.prefix) || compareText(a.repo, b.repo)), source: workspace.workspace.source, budget: request.budget, ...("targets" in request ? { targets: request.targets } : {}), ...("changed" in request ? { changed: request.changed } : {}) };
@@ -388,7 +390,25 @@ function entrypointsOf(repository: WorkspaceRepository): RepositoryEntrypoints {
 }
 
 function reachedHandlers(impact: ImpactValue): Set<string> {
-  return new Set([...impact.entrypoints.map(({ handler }) => handlerKey(handler)), ...(impact.changedEntrypoints ?? []).map(({ handler }) => handlerKey(handler))]);
+  return new Set([
+    ...impact.entrypoints.map(({ handler }) => handlerKey(handler)),
+    ...(impact.changedEntrypoints ?? []).map(({ handler }) => handlerKey(handler)),
+    ...(impact.changedContracts ?? []).flatMap(({ handlers }) => (handlers ?? []).map(handlerKey)),
+  ]);
+}
+
+/** An altered or removed operation no route serves cannot name the consumers that call it, so the trigger's section stops there. */
+function unservedOperationCuts(contracts: readonly ChangedContract[]): Cut[] {
+  return contracts.flatMap(({ change, handlers, document, line }): Cut[] => (change === "added" || handlers !== undefined ? [] : [{ kind: "unresolved-link", at: [document, `${document}:${line}`] }]));
+}
+
+/** A link that lands in a handler of the trigger serving an operation the change altered or removed calls that operation. */
+function withOperations(links: readonly ImpactedLink[], trigger: string, contracts: readonly ChangedContract[]): ImpactedLink[] {
+  return links.map((impacted) => {
+    const key = handlerKey(impacted.link.to.handler);
+    const operations = impacted.link.to.repo !== trigger ? [] : contracts.flatMap(({ handlers, ...operation }) => ((handlers ?? []).some((handler) => handlerKey(handler) === key) ? [operation] : []));
+    return operations.length === 0 ? impacted : { ...impacted, operations };
+  });
 }
 
 /** A call site the join did not link: the service's drift, a name no repository given serves, or two repositories that matched it equally. */
@@ -435,11 +455,12 @@ function baseOf(fact: FactBase): FactBase {
  * One repository's section: its own fact base, so its snapshot and trust travel with it; the call sites its snapshot
  * could not decide stay cuts, and so do the call sites two repositories matched equally.
  */
-function sectionOf(section: Fact<{ unresolved: readonly unknown[] }>, value: RepoImpact, ambiguous: readonly CallSite[], digest: Digest): Fact<RepoImpact> {
+function sectionOf(section: Fact<{ unresolved: readonly unknown[] }>, value: RepoImpact, ambiguous: readonly CallSite[], unserved: readonly Cut[], digest: Digest): Fact<RepoImpact> {
   if (section.status === "unknown") return section;
   const cuts: Cut[] = [
     ...value.reads.flatMap(({ kind, fact }, index): readonly Cut[] => fact.status === "partial" ? fact.cuts : fact.status === "unknown" ? [{ kind: "section", at: [kind, String(index)] }] : []),
     ...ambiguous.map((site): Cut => ({ kind: "unresolved-link", at: [site.file, `${site.file}:${site.line}`] })),
+    ...unserved,
   ];
   const triggerWalk = value.reads.find(({ kind }) => kind === "trigger")?.fact;
   const base = compositeBase({ ...baseOf(section), evidence: section.evidence }, value.reads, {}, (text) => digest.of(text), triggerWalk?.inputs.declaredConfig ?? section.inputs.declaredConfig);

@@ -82,6 +82,10 @@ function evidenceFinding<T extends z.ZodType>(value: T) {
 }
 
 const httpMethod = z.enum(["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "TRACE", "ANY"]);
+const changedOperation = {
+  change: z.enum(["added", "removed", "altered"]), method: httpMethod, path: z.string(), operationId: z.string().exactOptional(),
+  document: z.string(), line: int, parts: z.array(z.enum(["request", "response"])).exactOptional(),
+};
 const protocol = z.enum(["kafka", "rabbit", "jms", "event", "nats"]);
 export const entrypointKind = z.enum(["http-route", "ui-route", "listener", "job"]);
 const basePathKeys = z.strictObject({ contextPath: z.string().exactOptional(), servletPath: z.string().exactOptional(), webfluxBasePath: z.string().exactOptional() });
@@ -170,6 +174,7 @@ export const partSchema = z.discriminatedUnion("kind", [
     depth: count, confidence: z.number(), seeds: z.array(originReference),
   }),
   part("entrypoint-change", { change: z.enum(["added", "removed", "altered"]), kindName: entrypointKind, name: z.string(), handler: ids.anchor, comparison: comparisonRef }),
+  part("contract-change", { contract: z.strictObject({ ...changedOperation, handlers: z.array(ids.anchor).exactOptional() }), comparison: comparisonRef }),
   part("module-origin", { comparison: comparisonRef, file: z.string(), change: z.enum(["added", "modified", "deleted"]) }),
   part("module-reach", { file: ids.file, side: z.enum(["base", "head"]), depth: count, origins: z.array(originReference), via: moduleVia.exactOptional() }),
   part("file-dependency", { from: ids.file, to: ids.file, category: fileDependencyCategory }),
@@ -207,6 +212,7 @@ export const partSchema = z.discriminatedUnion("kind", [
       z.strictObject({ status: z.literal("present"), part: ids.part }),
       z.strictObject({ status: z.literal("missing"), linkId: z.string() }),
     ])),
+    operations: z.array(z.strictObject(changedOperation)).exactOptional(),
   }),
   part("workspace-context", { context: workspaceContext }),
   part("decision", {
@@ -214,7 +220,7 @@ export const partSchema = z.discriminatedUnion("kind", [
     subject: z.string(), outwardKinds: z.array(outwardKind).exactOptional(), allowsFreeText: z.boolean(), required: z.boolean(),
     evidence: evidenceList, options: z.array(decisionOption),
   }),
-  part("impact-context", { owner: ids.read, mergeBase: z.string().exactOptional(), changedEntrypoints: recordedCollectionState }),
+  part("impact-context", { owner: ids.read, mergeBase: z.string().exactOptional(), changedEntrypoints: recordedCollectionState, changedContracts: recordedCollectionState }),
   part("walk-cost", { owner: ids.read, walk: z.enum(["symbols", "modules"]), expansionsUsed: count }),
 ]);
 

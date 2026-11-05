@@ -90,6 +90,10 @@ export function impactValue(): ImpactValue {
       { change: "removed", kind: "http-route", name: "DELETE /orders", handler: handler("src/OrderController.java", "OrderController.drop", 30, 33) },
       { change: "added", kind: "listener", name: "kafka orders", handler: handler("src/OrderListener.java", "OrderListener.on", 10, 14) },
     ],
+    changedContracts: [
+      { change: "altered", method: "GET", path: "/orders/{id}", operationId: "getOrder", document: "api/openapi.yaml", line: 12, parts: ["response"], handlers: [handler("src/OrderController.java", "OrderController.one", 6, 9)] },
+      { change: "removed", method: "DELETE", path: "/orders/{id}", document: "api/openapi.yaml", line: 30 },
+    ],
     symbols: [
       { file: "src/OrderController.java", symbol: "OrderController.one", kind: "method", line: 6, endLine: 9, depth: 1, confidence: 0.9, fanIn: 2, via: { file: "src/OrderService.java", symbol: "OrderService.find", lines: [7, 8], basis: "call" } },
       { file: "src/Report.java", symbol: "Report", kind: "class", line: 1, endLine: 40, depth: 2, confidence: 0.5, fanIn: 0, via: { file: "src/Util.java", symbol: "fmt", basis: "reference" } },
@@ -143,7 +147,7 @@ const callSite: CallSite = {
 const bareCallSite: CallSite = { repo: "web", file: "src/orders.service.ts", line: 30, symbol: "OrdersService.save", transport: "http", target: { status: "unknown", reason: "unresolved", evidence: [] } };
 const eventCallSite: CallSite = { repo: "web", file: "src/orders.service.ts", line: 44, symbol: "OrdersService.emit", ancestors: [], transport: "event", target: { status: "complete", value: { protocol: "kafka", destination: "billing", role: "publish" }, evidence: [] } };
 
-function repoImpact(kind: "trigger" | "upstream", repo: string, snapshot: SnapshotRef, impact: ImpactValue | undefined, sites: Pick<RepoImpact, "callSites" | "unmatched" | "external">): Fact<RepoImpact> {
+function repoImpact(kind: "trigger" | "upstream", repo: string, snapshot: SnapshotRef, impact: ImpactValue | undefined, sites: Pick<RepoImpact, "callSites" | "unmatched" | "external" | "unresolved">): Fact<RepoImpact> {
   const reads: RepoImpact["reads"] = [
     { kind: "discovery", fact: { schema: SCHEMA, snapshot, producer: PRODUCER, inputs: inputsOf(), evidence: [], status: "complete" } },
     { kind, fact: { schema: SCHEMA, snapshot, producer: PRODUCER, inputs: inputsOf({ trust: repo === "shop" ? "trusted" : "untrusted" }), evidence: [{ path: "pom.xml", line: 1 }], status: "partial", cuts: [{ kind: "depth", at: ["src/Root.java"], limit: 2 }] } },
@@ -160,16 +164,17 @@ export function workspaceImpactValue(family: "impact" | "callers"): WorkspaceImp
     repositorySnapshots: [{ repo: "web", snapshot: web }, { repo: "shop", snapshot: shop }],
     trigger: { repo: "shop", ...(family === "impact" ? { mergeBase: MERGE_BASE } : {}) },
     sections: {
-      shop: repoImpact("trigger", "shop", shop, inner, { callSites: [], unmatched: [], external: [] }),
+      shop: repoImpact("trigger", "shop", shop, inner, { callSites: [], unmatched: [], external: [], unresolved: [] }),
       web: repoImpact("upstream", "web", web, undefined, {
         callSites: [callSite],
         unmatched: [bareCallSite],
         external: [eventCallSite],
+        unresolved: [{ path: "src/orders.service.ts", line: 52, endLine: 54, symbol: "OrdersService.remote", transport: "http", via: "environment.remote", stated: { method: "GET", path: "/remote" } }],
       }),
       ghost: unknownFactOf("revision-unavailable", { snapshot: shaRef("ghost", SHA_C) }),
     },
     links: [
-      { link: { id: "link-1", from: { repo: "web", file: "src/orders.service.ts", line: 14, symbol: "OrdersService.load" }, to: { repo: "shop", kind: "http-route", name: "GET /orders", handler: handler("src/OrderController.java", "OrderController.one", 6, 9) }, transport: "http", basis: "gateway-prefix", profiles: ["prod"], confidence: 0.8 }, direction: "upstream", reach: ["link-1", "link-missing", "link-2"] },
+      { link: { id: "link-1", from: { repo: "web", file: "src/orders.service.ts", line: 14, symbol: "OrdersService.load" }, to: { repo: "shop", kind: "http-route", name: "GET /orders", handler: handler("src/OrderController.java", "OrderController.one", 6, 9) }, transport: "http", basis: "gateway-prefix", profiles: ["prod"], confidence: 0.8 }, direction: "upstream", reach: ["link-1", "link-missing", "link-2"], operations: [{ change: "altered", method: "GET", path: "/orders/{id}", operationId: "getOrder", document: "api/openapi.yaml", line: 12, parts: ["response"] }] },
       { link: { id: "link-2", from: { repo: "shop", file: "src/Notifier.java", line: 8, symbol: "Notifier.send" }, to: { repo: "billing", kind: "listener", name: "kafka bills", handler: handler("src/Bills.java", "Bills.on", 4, 9) }, transport: "event", basis: "event-destination", confidence: 1 }, direction: "downstream", reach: [] },
     ],
   };

@@ -1,0 +1,88 @@
+{
+  "text": "status: partial\nfull result: the result JSON\nSelect value.files by file; inspect importers and users for recorded links and unresolvedNamers for unconfirmed matches. These are paths only, with no relationship line locations; inspect cuts for partial results.\nRepository locations: match repositoryRoots[].repo to evidence ownership; repositoryRoots[].path locates the clone on disk, while evidence paths are relative to its repository at the recorded snapshot.",
+  "structured": {
+    "schema": "0.15.0",
+    "snapshot": {
+      "repo": "web",
+      "kind": "sha",
+      "sha": "ba3965606c100bd15237938a02dab651206d05f1"
+    },
+    "producer": {
+      "name": "ye-ast",
+      "version": "0.4.0+edge-policy.e98d5a56243d"
+    },
+    "inputs": {
+      "trust": "untrusted",
+      "scope": "fa4648f55a618e0296b4a7ce207508c12bbe7d7e682e4a5ac5a25787a8b96eb8",
+      "declaredScope": {
+        "languages": [
+          "java",
+          "typescript"
+        ],
+        "frameworks": [
+          "angular",
+          "spring"
+        ],
+        "include": [],
+        "exclude": []
+      },
+      "content": "096b6035e1dad00b70d4deca988872f2a5478746fd86c84804f23e52f9540d5d",
+      "config": "f85707db3cf3d33970e06f6e9276630320ef7fba8f766d74eeea5a3ec60098c7",
+      "declaredConfig": {
+        "files": [
+          "src/app/order.service.ts"
+        ]
+      },
+      "origin": {
+        "kind": "full"
+      },
+      "engines": {
+        "@colbymchenry/codegraph": "1.6.2",
+        "tree-sitter-java": "0.23.5",
+        "typescript": "6.0.3",
+        "web-tree-sitter": "0.27.1"
+      }
+    },
+    "evidence": [],
+    "status": "partial",
+    "value": {
+      "files": [
+        {
+          "file": "src/app/order.service.ts",
+          "importers": [
+            "src/app/order.page.ts"
+          ],
+          "reexporters": [],
+          "dynamicImporters": [],
+          "typeImporters": [],
+          "users": [
+            "src/app/order.page.ts"
+          ],
+          "unresolvedNamers": []
+        }
+      ]
+    },
+    "cuts": [
+      {
+        "kind": "unresolved-link",
+        "at": [
+          "src/app/order.page.ts:1 @angular/common/http"
+        ]
+      },
+      {
+        "kind": "unresolved-link",
+        "at": [
+          "src/app/order.page.ts:2 @angular/core"
+        ]
+      }
+    ],
+    "mode": "full",
+    "repositoryRoots": [
+      {
+        "repo": "web",
+        "path": "<fixture-root>/web"
+      }
+    ]
+  },
+  "isError": false
+}

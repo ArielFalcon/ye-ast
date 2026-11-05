@@ -1,0 +1,67 @@
+{
+  "queries": [
+    {
+      "index": 0,
+      "family": "callers",
+      "query": {
+        "name": "ye_ast_callers",
+        "arguments": {
+          "repo": "shop",
+          "revision": "ece2918303f97235b271ef133b574de4984a4551",
+          "targets": [
+            {
+              "file": "src/main/java/shop/OrderController.java",
+              "symbol": "OrderController.one"
+            }
+          ],
+          "workspace": {
+            "repos": [
+              {
+                "path": "<fixture-root>/web",
+                "id": "web",
+                "revision": "ba3965606c100bd15237938a02dab651206d05f1"
+              }
+            ],
+            "gateways": [
+              {
+                "prefix": "shop-api",
+                "repo": "shop"
+              }
+            ]
+          },
+          "offline": true
+        }
+      }
+    },
+    {
+      "index": 1,
+      "family": "outline",
+      "query": {
+        "name": "ye_ast_outline",
+        "arguments": {
+          "repo": "shop",
+          "revision": "b872d7cb070f421874539b268424272d0be336e2",
+          "files": [
+            "src/main/java/shop/OrderController.java"
+          ]
+        }
+      }
+    }
+  ],
+  "orders": [
+    {
+      "name": "original",
+      "indices": [
+        0,
+        1
+      ]
+    },
+    {
+      "name": "reversed",
+      "indices": [
+        1,
+        0
+      ]
+    }
+  ]
+}

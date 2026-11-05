@@ -41,6 +41,8 @@ export function partReferences(part: Part): Reference[] {
       return [ref("anchor", "handler", part.handler), ...part.seeds.flatMap((seed) => (seed.status === "present" ? [ref("part", "seeds.part", seed.part)] : []))];
     case "entrypoint-change":
       return [ref("anchor", "handler", part.handler), ...comparisonReferences(part.comparison)];
+    case "contract-change":
+      return [...many("anchor", "contract.handlers", part.contract.handlers ?? []), ...comparisonReferences(part.comparison)];
     case "module-origin":
       return comparisonReferences(part.comparison);
     case "module-reach":

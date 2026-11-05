@@ -10,6 +10,7 @@ import type { UiRoute } from "../core/domain/entrypoints/ui-route.ts";
 import type { SeedBasis } from "../core/domain/change/seeds.ts";
 import type { DependenceBasis, ImpactedSymbol, ReachedEntrypoint } from "../core/domain/impact/impact-fact.ts";
 import type { ChangedEntrypoint } from "../core/domain/impact/changed-entrypoints.ts";
+import type { ChangedContract } from "../core/domain/impact/changed-contracts.ts";
 import type { ModuleOrigin, ReachedModule } from "../core/domain/impact/module-dependency.ts";
 import type { ImportedFile } from "../core/domain/impact/importers-fact.ts";
 import type { OutlineDeclaration } from "../core/domain/outline/outline-fact.ts";
@@ -161,6 +162,9 @@ export type LinkData = Omit<Link, "from" | "to"> & {
   to: { repo: string; kind: Entrypoint["kind"]; name: string; handler: AnchorId };
 };
 
+/** A changed contract operation; its known handlers become anchors on the side that declares the operation. */
+export type ContractChangeData = Omit<ChangedContract, "handlers"> & { handlers?: readonly AnchorId[] };
+
 export type DecisionOptionData = Omit<DecisionOption, "evidence"> & { evidence: readonly EvidenceId[] };
 
 /** The context a workspace-capable read declares; no member holds the private repositories. */
@@ -176,6 +180,7 @@ export type PartPayload =
   | { kind: "symbol-reach"; anchor: AnchorId; kindName: ImpactedSymbol["kind"]; depth: number; confidence: number; fanIn: number; via?: ViaData }
   | { kind: "entrypoint-reach"; kindName: ReachedEntrypoint["kind"]; name?: string; handler: AnchorId; depth: number; confidence: number; seeds: readonly OriginReference[] }
   | { kind: "entrypoint-change"; change: ChangedEntrypoint["change"]; kindName: ChangedEntrypoint["kind"]; name: string; handler: AnchorId; comparison: ComparisonRef }
+  | { kind: "contract-change"; contract: ContractChangeData; comparison: ComparisonRef }
   | { kind: "module-origin"; comparison: ComparisonRef; file: string; change: ModuleOrigin["change"] }
   | { kind: "module-reach"; file: FileId; side: ReachedModule["snapshot"]; depth: number; origins: readonly OriginReference[]; via?: NonNullable<ReachedModule["via"]> }
   | { kind: "file-dependency"; from: FileId; to: FileId; category: FileDependencyCategory }
@@ -187,10 +192,10 @@ export type PartPayload =
   | { kind: "name-candidate"; context: ReadId; name: string; repo: string; basis: NameCandidate["basis"]; evidence: readonly EvidenceId[] }
   | { kind: "call-site"; site: CallSiteData; disposition: "matched" | "unmatched" | "external" }
   | { kind: "unresolved-call-site"; site: UnresolvedCallSite }
-  | { kind: "workspace-link"; link: LinkData; direction: ImpactedLink["direction"]; reach: readonly LinkReference[] }
+  | { kind: "workspace-link"; link: LinkData; direction: ImpactedLink["direction"]; reach: readonly LinkReference[]; operations?: ImpactedLink["operations"] }
   | { kind: "workspace-context"; context: WorkspaceContextData }
   | { kind: "decision"; context: ReadId; decisionId: Decision["id"]; kindName: DecisionKind; subject: string; outwardKinds?: readonly OutwardKind[]; allowsFreeText: boolean; required: boolean; evidence: readonly EvidenceId[]; options: readonly DecisionOptionData[] }
-  | { kind: "impact-context"; owner: ReadId; mergeBase?: string; changedEntrypoints: RecordedCollectionState }
+  | { kind: "impact-context"; owner: ReadId; mergeBase?: string; changedEntrypoints: RecordedCollectionState; changedContracts: RecordedCollectionState }
   | { kind: "walk-cost"; owner: ReadId; walk: "symbols" | "modules"; expansionsUsed: number };
 
 // Keep domain payload fields separate from record metadata: future variants cannot silently overwrite either.

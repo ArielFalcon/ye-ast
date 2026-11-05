@@ -217,11 +217,14 @@ materialization identifies exact compatible entities and applies closed connecti
 repository and full SHA, or live head and stateId. Ambiguity, redacted coordinates and incompatible snapshots block
 joins. Analysis scope, provenance, cuts, unknowns and query-specific observations remain attached to their reads.
 Importer categories and declaration dependencies retain distinct meanings; neither composition nor reachability proves
-breakage. The same fixed evidence set materializes identically across input order and duplication. Execution over
+breakage. Changed contract operations, unresolved workspace call sites and the changed operations a link calls stay
+attached to their reads; calling a changed operation does not establish that the changed data is read. The same fixed
+evidence set materializes identically across input order and duplication. Execution over
 moving live state or external configuration does not promise atomicity or identical observations.
 
-Summary/details return explained findings plus `kind: "composition-receipt"`; full returns `kind: "composition"`
-with normalized tables under `graph`. Both include `compositionSchema: 1`, `mode`, `verification` and complete safe
+Composition uses the same single content block as the original tools. Summary/details put explained findings in the
+presentation and `kind: "composition-receipt"` in the result JSON line; full puts `kind: "composition"` there, with
+normalized tables under `graph`. Both include `compositionSchema: 1`, `mode`, `verification` and complete safe
 `requests`. The text modes put findings, source states and limits in text only; `S#` indexes `requests[#-1]`. Full
 additionally retains `coverage` and `counts`. Coverage has per-read states and issues, with no aggregate complete status. Original `Fact.schema` is
 unchanged. IDs reference shared records; relations retain contextual attestations. Full validates graph and issue
@@ -230,8 +233,9 @@ references at runtime. Source and batch assertions fail before delivery, and sou
 Recovery-capable sources expose pinned repeat queries with their original `mcp-r1` assertion. The other four families
 expose safe fresh-read queries. Root `expect` asserts the composed `mcp-c1` identity; unavailable identity fails
 explicitly. Composition has no `select`/`page`, and nested presentation controls are invalid; original source tools
-retain their selective APIs. Reexecution can cost more than reading existing answers. Compact discovery remains an
-approximate guide backed by a complete runtime schema, and size/utility claims require measured evidence.
+retain their selective APIs. Reexecution can cost more than reading existing answers. Discovery publishes only the
+input guide; the server validates every composition against its complete runtime output schema before delivery.
+Size and utility claims require measured evidence.
 
 All tools accept optional `repo` and `mode: "summary" | "details" | "full"`. Summary is the default and identifies findings and
 limits; details adds recorded explanatory evidence and locations; full returns the complete redacted public fact
@@ -242,19 +246,28 @@ Strict input schemas reject those former controls, including `full: false`; no c
 Older RFC-0014 and RFC-0018 descriptions of `detail: "full"` predate this migration; the contract in this section
 supersedes those references.
 
-Unselected summary/details structured content is a strict receipt with `mode`, `status`, `snapshot` and `reason` exactly for
+Every successful result uses one text content block: presentation (summary/details findings, full navigation), followed
+by one `result JSON: ` line containing the result fields. This is a server convention, not MCP-defined framing; the
+whole block is not itself JSON. Clients can read the presentation and parse the final line. No `structuredContent` or
+`outputSchema` is published. Consequently clients cannot obtain machine-readable output types from discovery or validate
+responses against a server-advertised schema. The server validates the complete canonical result with its per-family Zod
+schema before delivery, including selected responses. The exported full schemas remain available to local consumers.
+
+Unselected summary/details result fields form a strict receipt with `mode`, `status`, `snapshot` and `reason` exactly for
 unknown status. A SHA snapshot carries `repo`, `kind`, `sha`; a live snapshot carries `repo`, `kind`, `head`,
 `stateId`. Full carries the fact and `mode`, plus applicable `repositoryRoots`, `freshness`, `resolution`, `live` and `workspaceLive`
 response siblings. Workspace notices also appear in `_meta["ye-ast/workspace-live"]` in every mode, naming the repository and captured snapshot, with stale paths or a typed unavailable cause. A stale notice is also in `_meta["ye-ast/live"]`. Known full facts require a value; partial facts
 also require cuts; unknown facts require a reason and no value. Full permits additive public fields. Per-family
-`outputSchema` validation covers the common envelope, identities and principal containers/coordinates: entrypoints,
+Server runtime validation covers the common envelope, identities and principal containers/coordinates: entrypoints,
 local or workspace impact/callers, importers, outline, workspace, and decisions. It does not duplicate every domain
 union. Internal workspace repository reads and `repositorySources` are excluded from public output. Faults are
-`isError` responses with redacted typed metadata under `_meta["ye-ast/fault"]`, not success receipts.
+`isError` responses with redacted typed metadata under `_meta["ye-ast/fault"]`, not success receipts. Their text names
+the kind, detail and correction and ends with one `fault fields: ` JSON line holding the remaining public fault fields
+(such as `reason`, `stage`, `expected`, `actual`, `cause`), because some clients drop `_meta` or deliver only text.
 
 `ye_ast_entrypoints`, `ye_ast_callers`, and `ye_ast_impact` deliver recovery metadata once, in
-`structuredContent.recovery`, for ordinary and selected responses in all modes. Text points to that field rather than
-copying its JSON; unavailable recovery states its reason. Clients must expose structured content to read the recipe.
+the `recovery` result field in the text's result JSON line, for ordinary and selected responses in all modes. The presentation text points to that field rather than copying its JSON; unavailable
+recovery states its reason.
 Available metadata contains a versioned opaque result identity
 and a normal query recipe. Entrypoints and callers pin the actual revision; impact pins the recorded merge base and
 head. Live recipes request fresh live content and do not preserve historical working-tree content.
@@ -299,11 +312,9 @@ is distinct from an unavailable source or owner, which retains its actual reason
 change analysis scope or traversal bounds. The existing public redaction boundary applies to evidence and recipes;
 internal source sidecars are not exposed.
 
-Selected source text retains root context, read owners and analysis (including unknown reasons), and owner limits. Reads explicitly inherit matching snapshot, trust, declared scope and configuration; overrides are printed. Complete provenance catalogs remain in `structuredContent.source`. Handler and module categories provide literal selector examples; each row keeps its named JSON coordinate, distinct span/depth/confidence and origin facts. Shared origin headings apply only to the stated following rows. Category recovery rules cover recorded counts/examples without adding presentation caps. Structured provenance, recovery and pagination contracts are unchanged.
+Selected source text retains root context, read owners and analysis (including unknown reasons), and owner limits. Reads explicitly inherit matching snapshot, trust, declared scope and configuration; overrides are printed. Complete provenance catalogs remain in the `source` result field. Handler and module categories provide literal selector examples; each row keeps its named JSON coordinate, distinct span/depth/confidence and origin facts. Shared origin headings apply only to the stated following rows. Category recovery rules cover recorded counts/examples without adding presentation caps. Structured provenance, recovery and pagination contracts are unchanged.
 
-A client may expose both text and `structuredContent` to a model; the server does not guarantee channel hiding or
-client-side filtering. Full structured delivery need not be duplicated in text. These are wire contracts, not measured
-model exposure or adoption.
+Each success carries the presentation and result fields once. These are wire contracts, not measured model adoption.
 
 `scope` changes analysis coverage; excluded paths are unknown, not counted presentation omissions. `changed` selects
 diff paths that seed impact while in-scope consumers elsewhere remain eligible. `budget` limits traversal work and

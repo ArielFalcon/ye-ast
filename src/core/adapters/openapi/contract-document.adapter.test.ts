@@ -33,11 +33,15 @@ test("an OpenAPI 3 document gives one operation per operationId, with the verb a
   assert.deepEqual(findings.map((finding) => finding.evidence[0]?.line).sort((a, b) => (a ?? 0) - (b ?? 0)), [5, 8]);
 });
 
-test("an operation with no operationId, or with an empty one, declares no route: nothing in the code can be joined to it", () => {
+test("an operation with no operationId, or with an empty one, is read with no name, placed at its verb", () => {
   const document = ["openapi: 3.0.0", "paths:", "  /orders:", "    get:", "      summary: no id here", "    post:", '      operationId: ""'].join("\n");
 
-  assert.deepEqual(routes.operations([{ path: "swagger/petstore.json", content: JSON.stringify({ openapi: "3.0.0", paths: { "/pets": { get: { summary: "x" } } } }) }]), []);
-  assert.deepEqual(routes.operations([{ path: "openapi/api.yaml", content: document }]), []);
+  const findings = routes.operations([{ path: "openapi/api.yaml", content: document }]);
+
+  assert.deepEqual(
+    findings.flatMap((finding) => (finding.status === "complete" ? [[finding.value.operationId, finding.value.method, finding.value.line]] : [])),
+    [[undefined, "GET", 4], [undefined, "POST", 6]],
+  );
 });
 
 test("a Swagger 2.0 JSON document is read the same way", () => {
@@ -104,4 +108,93 @@ test("servers whose path parts differ give no base path: it is undecided", () =>
   const differing = withServers([{ url: "https://a.example.com/v1" }, { url: "https://b.example.com/v2" }]);
 
   assert.deepEqual(basePaths(routes.operations([{ path: "openapi/api.json", content: differing }])), [undefined]);
+});
+
+const DATA_CONTRACT = "openapi/api.yaml";
+
+/** The data of each operation of the contract, by operationId, read from the contract and the other sources given. */
+function dataByOperation(content: unknown, others: Readonly<Record<string, unknown>> = {}): Record<string, ContractOperation["data"]> {
+  const files = [DATA_CONTRACT, ...Object.keys(others)].map((path) => ({ path, content: JSON.stringify(path === DATA_CONTRACT ? content : others[path]) }));
+  return Object.fromEntries(routes.operations(files).flatMap((finding) => (finding.status === "complete" ? [[finding.value.operationId ?? "", finding.value.data]] : [])));
+}
+
+function shop(orders: object, items: object = { type: "array", items: { type: "string" } }, body: object = { type: "object" }): object {
+  const json = (schema: object) => ({ content: { "application/json": { schema } } });
+  return {
+    openapi: "3.0.3",
+    paths: {
+      "/orders": {
+        get: { operationId: "getOrders", responses: { 200: json({ $ref: "#/components/schemas/Orders" }) } },
+        post: { operationId: "createOrder", requestBody: json(body), responses: { 201: json({ $ref: "#/components/schemas/Orders" }) } },
+      },
+      "/items": { get: { operationId: "getItems", responses: { 200: json({ $ref: "#/components/schemas/Items" }) } } },
+    },
+    components: { schemas: { Orders: orders, Items: items } },
+  };
+}
+
+const ORDERS = { type: "object", properties: { total: { type: "number" } } };
+
+test("a schema the response references is part of the data of exactly the operations that reference it", () => {
+  const before = dataByOperation(shop(ORDERS));
+  const after = dataByOperation(shop({ ...ORDERS, properties: { total: { type: "string" } } }));
+
+  assert.notEqual(after.getOrders?.response, before.getOrders?.response);
+  assert.notEqual(after.createOrder?.response, before.createOrder?.response);
+  assert.equal(after.getItems?.response, before.getItems?.response);
+});
+
+test("a request body change alters the request data and leaves the response data as it was", () => {
+  const before = dataByOperation(shop(ORDERS));
+  const after = dataByOperation(shop(ORDERS, undefined, { type: "object", required: ["id"] }));
+
+  assert.notEqual(after.createOrder?.request, before.createOrder?.request);
+  assert.equal(after.createOrder?.response, before.createOrder?.response);
+});
+
+test("documentation is not data, but a property named like documentation is", () => {
+  const before = dataByOperation(shop({ ...ORDERS, description: "Orders", properties: { ...ORDERS.properties, summary: { type: "string" } } }));
+  const described = dataByOperation(shop({ ...ORDERS, description: "All the orders", properties: { ...ORDERS.properties, summary: { type: "string" } } }));
+  const retyped = dataByOperation(shop({ ...ORDERS, description: "Orders", properties: { ...ORDERS.properties, summary: { type: "integer" } } }));
+
+  assert.deepEqual(described.getOrders, before.getOrders);
+  assert.notEqual(retyped.getOrders?.response, before.getOrders?.response);
+});
+
+test("a reference into another source is followed, and one the sources cannot answer is unresolved with the file it names", () => {
+  const contract = (ref: string) => shop({ type: "object", properties: { total: { $ref: ref } } });
+  const other = (type: string) => ({ "openapi/schemas/money.yaml": { Money: { type } } });
+
+  const before = dataByOperation(contract("schemas/money.yaml#/Money"), other("number"));
+  const after = dataByOperation(contract("schemas/money.yaml#/Money"), other("string"));
+  const missing = dataByOperation(contract("schemas/money.yaml#/Cash"), other("number"));
+  const absent = dataByOperation(contract("../shared/money.yaml#/Money"));
+  const remote = dataByOperation(contract("https://example.com/money.yaml#/Money"));
+
+  assert.notEqual(after.getOrders?.response, before.getOrders?.response);
+  assert.deepEqual([before.getOrders?.files, before.getOrders?.unresolved], [["openapi/schemas/money.yaml"], []]);
+  assert.deepEqual(missing.getOrders?.unresolved, [{ ref: "schemas/money.yaml#/Cash", file: "openapi/schemas/money.yaml" }]);
+  assert.deepEqual(absent.getOrders?.unresolved, [{ ref: "../shared/money.yaml#/Money", file: "shared/money.yaml" }]);
+  assert.deepEqual(remote.getOrders?.unresolved, [{ ref: "https://example.com/money.yaml#/Money" }]);
+});
+
+test("a schema that references itself is read once and still decides the data", () => {
+  const tree = (type: string) => ({ type: "object", properties: { label: { type }, children: { type: "array", items: { $ref: "#/components/schemas/Orders" } } } });
+
+  assert.notEqual(dataByOperation(shop(tree("string"))).getOrders?.response, dataByOperation(shop(tree("integer"))).getOrders?.response);
+  assert.deepEqual(dataByOperation(shop(tree("string"))).getOrders?.unresolved, []);
+});
+
+test("a literal value is data, documentation-named keys inside it included", () => {
+  const literal = (key: string, value: unknown) => dataByOperation(shop({ ...ORDERS, [key]: value })).getOrders?.response;
+
+  assert.notEqual(literal("default", { description: "a" }), literal("default", { description: "b" }));
+  assert.notEqual(literal("enum", [{ summary: "a" }]), literal("enum", [{ summary: "b" }]));
+  assert.notEqual(literal("const", { example: "a" }), literal("const", { example: "b" }));
+});
+
+test("a reference by absolute path names no source of the repository: it is unresolved", () => {
+  const read = dataByOperation(shop({ type: "object", properties: { total: { $ref: "/schemas/money.yaml#/Money" } } }), { "openapi/schemas/money.yaml": { Money: { type: "number" } } });
+
+  assert.deepEqual([read.getOrders?.files, read.getOrders?.unresolved], [[], [{ ref: "/schemas/money.yaml#/Money" }]]);
 });

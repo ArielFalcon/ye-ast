@@ -269,13 +269,15 @@ and at most 1,048,576 UTF-8 bytes of canonical JSON arguments. Each query keeps 
 rules. Duplicate queries execute once. A source fault fails the whole composition; a partial or unknown fact retains
 its recorded limits. A batch is not an atomic snapshot of the workspace.
 
-Summary/details explain findings, source states and every material limit in text; their `composition-receipt` in
-`structuredContent` contains only version/mode, verification and complete safe repeat queries. `S1` in text names
-`requests[0]`, and so on. Full returns
+Summary/details explain findings, source states and every material limit in the presentation; their
+`composition-receipt` in the `result JSON:` line contains only version/mode, verification and complete safe repeat
+queries. `S1` in text names `requests[0]`, and so on. Full returns
 `kind: "composition"`, with normalized tables under `graph`, source states and issues under `coverage`, and repeat
 queries under `requests`. Identical entities and evidence are shared; relation attestations preserve their sources and
 categories. File imports do not establish symbol calls, and reachability does not establish breakage. Different
-snapshots stay separate even when names and paths match. Outline supplies structure, not source text.
+snapshots stay separate even when names and paths match. Outline supplies structure, not source text. Changed contract
+operations keep their document, line and changed data sides; a link that calls a changed operation does not prove
+that the changed data is read.
 
 Compose reexecutes queries and retains no final results between calls, so it can cost more analysis time than using
 answers already available. For a recoverable source, its repeat request is `pinned-replay` with the original `mcp-r1`

@@ -5,11 +5,10 @@ import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { pathToFileURL } from "node:url";
-import { AjvJsonSchemaValidator } from "@modelcontextprotocol/server/validators/ajv";
 import { composeCli } from "./compose.ts";
 import { CONTROLLER, CONTROLLER_PATH, GATEWAYS, GIT_ENV, PAGE_PATH, SERVICE_PATH, SHOP, WEB, createCompositionFixture, type CompositionFixture } from "./mcp-evidence-fixture.ts";
 import { createMcpServer, type McpDeps } from "../mcp/server.ts";
-import { openSession, type Session, type ToolResult } from "../mcp/test-session.ts";
+import { openSession, resultFields, type Session, type ToolResult } from "../mcp/test-session.ts";
 import { COMPOSE_OUTPUT } from "../mcp/composition-schema.ts";
 import type { ComposeQuery } from "../mcp/query-schema.ts";
 import type { AnchorId, ComposeFull, ComposeReceipt, CompositionGraph, EntityId, FileId, Part, PartKind, PartOf, RepeatRequest, SnapshotId } from "../mcp/composition-contract.ts";
@@ -24,7 +23,7 @@ type Call = (name: string, args: unknown) => Promise<ToolResult>;
 
 function composed(result: ToolResult): ComposeFull {
   assert.notEqual(result.isError, true, JSON.stringify(result).slice(0, 2000));
-  const value = result.structuredContent as ComposeFull;
+  const { text: _text, ...value } = resultFields(result) as ComposeFull & { text: string };
   assert.equal(value.kind, "composition");
   assert.equal(COMPOSE_OUTPUT.safeParse(value).success, true);
   return value;
@@ -80,7 +79,7 @@ const available = (requests: readonly RepeatRequest[]): ComposeQuery[] =>
 /** A fact as the CLI prints it: the structured content of an original tool without presentation metadata. */
 function originalFact(result: ToolResult): Record<string, any> {
   assert.notEqual(result.isError, true, JSON.stringify(result).slice(0, 2000));
-  const { mode, recovery, repositoryRoots, ...fact } = result.structuredContent as Record<string, any>;
+  const { text: _text, mode, recovery, repositoryRoots, ...fact } = resultFields(result);
   return { ...fact, recovery };
 }
 
@@ -155,13 +154,12 @@ after(async () => {
 });
 
 test("stdio discovers eight operations and composes all seven families with the facts their original tools report", async () => {
-  const listed = (await stdio.request("tools/list")).result.tools as { name: string; outputSchema: Parameters<AjvJsonSchemaValidator["getValidator"]>[0] }[];
+  const listed = (await stdio.request("tools/list")).result.tools as { name: string; outputSchema?: unknown }[];
   assert.deepEqual(listed.map((tool) => tool.name).sort(), OPERATIONS);
-  const validate = new AjvJsonSchemaValidator().getValidator(listed.find((tool) => tool.name === "ye_ast_compose")!.outputSchema);
+  for (const tool of listed) assert.equal(tool.outputSchema, undefined, tool.name);
 
   const result = await stdio.call("ye_ast_compose", { queries: fixture.queries, mode: "full" });
   const full = composed(result);
-  assert.equal(validate(full).valid, true);
   const { graph } = full;
   assert.equal(full.verification.status, "available");
   assert.equal(graph.sources.length, 7);
@@ -253,15 +251,15 @@ test("summary and details receipts preserve verification and repeat queries whil
   for (const mode of [undefined, "summary", "details"] as const) {
     const result = await warm.callTool("ye_ast_compose", { queries: fixture.queries, ...(mode && { mode }) });
     assert.notEqual(result.isError, true);
-    const receipt = result.structuredContent as ComposeReceipt;
+    const { text, ...receipt } = resultFields(result) as ComposeReceipt & { text: string };
     assert.equal(COMPOSE_OUTPUT.safeParse(receipt).success, true);
     assert.deepEqual(receipt, { kind: "composition-receipt", compositionSchema: 1, mode: mode ?? "summary", verification: full.verification, requests: full.requests });
     // The handler coordinate is in the text, so a reader needs no table to locate it.
     const handler = full.graph.anchors.find(anchor => anchor.symbol === "OrderController.one");
     assert.ok(handler);
-    assert.ok(result.content[0]!.text.includes(CONTROLLER_PATH));
-    assert.ok(result.content[0]!.text.includes(handler.symbol));
-    assert.ok(result.content[0]!.text.includes(`${handler.line}-${handler.endLine}`), "the file block and span locate the handler");
+    assert.ok(text.includes(CONTROLLER_PATH));
+    assert.ok(text.includes(handler.symbol));
+    assert.ok(text.includes(`${handler.line}-${handler.endLine}`), "the file block and span locate the handler");
   }
   assert.ok(full.coverage.reads.partial > 0, "partial reads stay partial in the composition");
   assert.equal(full.counts.sources, 7);

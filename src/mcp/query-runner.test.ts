@@ -19,7 +19,7 @@ import { repositoryCatalog, type RepositoryBinding } from "./repository-targetin
 import { executeQuery, type ExecutedSource, type QueryExecutionDeps, type QueryFault } from "./query-runner.ts";
 import type { SemanticQuery } from "./query-schema.ts";
 import { createMcpServer } from "./server.ts";
-import { openSession } from "./test-session.ts";
+import { openSession, resultFields } from "./test-session.ts";
 
 const SECRET = "hunter2-secret";
 const SHA = "a".repeat(40);
@@ -261,7 +261,7 @@ test("runner recovery equals the recovery the original tools publish", async () 
       const executed = ok(await executeQuery(query, { deps, catalog: repositoryCatalog(SHOP) }));
       const published = await session.callTool(query.name, args);
       assert.equal(published.isError, undefined, query.name);
-      assert.deepEqual(executed.recovery, (published.structuredContent as { recovery: unknown }).recovery, query.name);
+      assert.deepEqual(executed.recovery, resultFields(published).recovery, query.name);
       assert.equal(executed.recovery?.status, "available", query.name);
     }
   } finally {

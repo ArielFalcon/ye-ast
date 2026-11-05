@@ -8,6 +8,7 @@ import { compositionIdentity } from "./composition-identity.ts";
 import { readFileSync, readdirSync } from "node:fs";
 import { composeReceipt, renderComposition } from "./render-composition.ts";
 import { COMPOSE_OUTPUT } from "./composition-schema.ts";
+import { RESULT_JSON_LABEL } from "./server.ts";
 import { renderEntrypointMap, renderImpact, renderOutline } from "./render.ts";
 import { blockBytes } from "./presentation-sharing.ts";
 import type { ComposeFull, CompositionResult, CoverageSummary, RepeatRequest, ReadOwner } from "./composition-contract.ts";
@@ -208,14 +209,14 @@ test("deliberate overlap: details is smaller than the concatenated original deta
 });
 
 /**
- * The prepared evaluation run keeps each case's real `full` composition (whose structuredContent is the coordinator's
- * whole result) next to the original tools' own details responses over the same fixture. Re-rendering that result
- * measures the current presentation against what a client receives from the original tools: both channels, UTF-8.
+ * The prepared evaluation run keeps each case's real `full` composition (whose result JSON is the coordinator's whole
+ * result) next to the original tools' own details responses over the same fixture. Re-rendering that result measures
+ * the current presentation against what a client receives from the original tools: the whole content block, UTF-8.
  */
-const RUN = new URL("../../docs/evaluations/mcp-composition/runs/2026-11-05-semantic-final/outputs/", import.meta.url);
+const RUN = new URL("../../docs/evaluations/mcp-composition/runs/2026-11-05-integrated/outputs/", import.meta.url);
 type Channels = { text: string; structured?: unknown };
 const readJson = <T>(path: string): T => JSON.parse(readFileSync(new URL(path, RUN), "utf8")) as T;
-const channelBytes = (channels: Channels) => Buffer.byteLength(channels.text, "utf8") + (channels.structured === undefined ? 0 : Buffer.byteLength(JSON.stringify(channels.structured), "utf8"));
+const channelBytes = (channels: Channels) => Buffer.byteLength(channels.structured === undefined ? channels.text : `${channels.text}\n${RESULT_JSON_LABEL}${JSON.stringify(channels.structured)}`, "utf8");
 function realCase(id: string): { result: CompositionResult; baseline: number } {
   const full = readJson<{ structured: ComposeFull }>(`${id}/composed/full.json`).structured;
   const baseline = readdirSync(new URL(`${id}/baseline/`, RUN)).filter((name) => name.endsWith(".details.json"))
@@ -292,6 +293,17 @@ test("a context field shared by every read is stated once; a differing one names
   assert.doesNotMatch(uniform, /producer/, "a uniform provenance field is left to full");
 });
 
+test("details states changed contract operations, unresolved workspace call sites and the changed operations a link calls", () => {
+  const text = renderComposition(resultOf([sourceFixture("impact-workspace")]), "details");
+  for (const required of [
+    "contract altered GET /orders/{id} operation getOrder at api/openapi.yaml:12; data changed: response",
+    "contract removed DELETE /orders/{id} at api/openapi.yaml:30",
+    "contract changes: 2",
+    "unresolved call site src/orders.service.ts:52-54 OrdersService.remote",
+    "calls changed operations altered GET /orders/{id} (response)",
+  ]) assert.ok(text.includes(required), `${required}\n${text}`);
+});
+
 test("each relation or connection caveat is stated on the first object of its type", () => {
   const { result } = realCase("seven-families");
   const text = renderComposition(result, "details");
@@ -315,9 +327,9 @@ test("an unavailable verification or repeat request is stated in text; an availa
 test("full text navigates the structured tables without a second listing", () => {
   const text = renderComposition(overlapResult, "full");
   for (const table of ["snapshots", "sources", "reads", "files", "anchors", "evidence", "parts", "entities", "bindings", "relations", "connections"]) {
-    assert.match(text, new RegExp(`structuredContent\\.graph\\.${table}`));
+    assert.match(text, new RegExp(`graph\\.${table}`));
   }
-  assert.match(text, /structuredContent\.coverage\.issues/);
+  assert.match(text, /coverage\.issues/);
   assert.doesNotMatch(text, /src\/OrderController\.java|GET \/orders/);
   assert.ok(blockBytes(lines(text)) < blockBytes(lines(renderComposition(overlapResult, "summary"))));
   for (const id of ["handler-outline", "seven-families"]) {

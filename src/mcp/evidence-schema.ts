@@ -80,7 +80,7 @@ export function selectedOutputFor(tool: Tool, deps: SelectedOutputDeps) {
   ];
   const allowed = tool === 'entrypoints' ? categories.slice(2,4) : tool === 'callers' ? [categories[0]!,categories[3]!,categories[4]!] : [categories[0]!,categories[1]!,categories[3]!,categories[4]!];
   const page = z.strictObject({limit:positive,offset:index,returned:index,total:index,nextCursor:z.string().optional()});
-  const common = {projectionSchema:z.literal(1),source,recovery:deps.recovery};
+  const common = {text:z.string(),projectionSchema:z.literal(1),source,recovery:deps.recovery};
   const branches = allowed.flatMap(({select,context,item}) => [
     z.strictObject({...common,kind:z.literal('projection'),select,availability:z.literal('available'),context,items:z.array(item),page}),
     z.strictObject({...common,kind:z.literal('projection'),select,availability:z.literal('unavailable'),reason,evidence}),

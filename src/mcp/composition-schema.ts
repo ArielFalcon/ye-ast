@@ -7,7 +7,6 @@
  */
 import { z } from "zod";
 import { validateCompositionReferences, validateCompositionIssues } from "./compose-evidence.ts";
-import { namespacedDigestPattern } from "./composition-identity.ts";
 import { COMPOSE_QUERY } from "./composition-input.ts";
 import type { ComposeFull, ComposeReceipt, CompositionGraph, CoverageSummary, RelationValue } from "./composition-contract.ts";
 import {
@@ -198,43 +197,8 @@ export function composeOutputFor<Q extends z.ZodType>(query: Q) {
 }
 
 export { COMPOSE_INPUT } from "./composition-input.ts";
-/** The complete runtime output schema; a compact published guide is `composeOutputGuide`. */
+/** The complete runtime output schema; the server validates every composition with it before delivery. */
 export const COMPOSE_OUTPUT = composeOutputFor(COMPOSE_QUERY);
-
-const guideObject = (properties: object, required: string[]) => ({ type: "object", properties, required });
-const anyArray = { type: "array" };
-const anyObject = { type: "object" };
-/**
- * A deliberately approximate discovery guide: discriminants, id prefixes, tables and states. It is looser
- * than `COMPOSE_OUTPUT`, which always governs validation; publish it through `compactComposeOutput`.
- */
-export function composeOutputGuide(): object {
-  const common = {
-    compositionSchema: { const: 1 },
-    verification: guideObject({ status: { enum: ["available", "unavailable"] }, identity: { type: "string", pattern: namespacedDigestPattern("mcp-c1").source }, reason: { type: "string" } }, ["status"]),
-    requests: { type: "array", description: "Index by source.requestIndex. available: query + strategy pinned-replay (keeps mcp-r1 expect) or fresh-read (re-reads current state); unavailable: reason.", items: anyObject },
-  };
-  const receipt = guideObject({
-    kind: { const: "composition-receipt" }, mode: { enum: ["summary", "details"] }, ...common,
-  }, ["kind", "compositionSchema", "mode", "verification", "requests"]);
-  const tables = ["snapshots", "sources", "reads", "files", "anchors", "evidence", "parts", "entities", "bindings", "relations", "connections"];
-  const full = guideObject({
-    kind: { const: "composition" }, mode: { const: "full" }, delivery: anyArray, ...common, counts: anyObject,
-    coverage: guideObject({ reads: anyObject, unknowns: anyArray, limits: anyArray, issues: anyArray }, ["reads", "unknowns", "limits", "issues"]),
-    graph: guideObject(Object.fromEntries(tables.map((table) => [table, anyArray])), tables),
-  }, ["kind", "compositionSchema", "mode", "verification", "requests", "graph", "coverage", "counts"]);
-  return {
-    type: "object",
-    anyOf: [receipt, full],
-    description: "Summary/details: findings, limits and issues in content; structuredContent is the receipt (verification and complete requests); source states and coverage stay in text. Full: every table in structuredContent.graph, navigation in content. Ids: s1 source, r1 read, v1 snapshot, f1 file, a1 anchor, e1 evidence, p1 part, n1 entity, l1 relation, c1 connection. Reads are complete, partial (cuts) or unknown (reason); unknown is never empty. Relations keep one attestation per context. No select/page.",
-  };
-}
-
-/** COMPOSE_OUTPUT with the compact guide as its published JSON Schema; validation stays the complete runtime schema. */
-export function compactComposeOutput(): { "~standard": (typeof COMPOSE_OUTPUT)["~standard"] } {
-  const standard = COMPOSE_OUTPUT["~standard"];
-  return { "~standard": { ...standard, jsonSchema: { ...standard.jsonSchema, output: () => composeOutputGuide() as ReturnType<typeof standard.jsonSchema.output> } } };
-}
 
 export type GraphSchemaMatchesContract = Accepts<CompositionGraph, z.output<typeof graph>>;
 export type CoverageSchemaMatchesContract = Accepts<CoverageSummary, z.output<typeof coverage>>;

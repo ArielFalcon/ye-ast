@@ -347,7 +347,7 @@ test("query-context evidence is missing provenance only when its repository is a
 
 test("an impact context part references its owner read", () => {
   const impact = new SetBuilder("impact", IMPACT, sha("shop"));
-  impact.part({ kind: "impact-context", owner: impact.read, mergeBase: SHA_B, changedEntrypoints: { state: "present", count: 0 } });
+  impact.part({ kind: "impact-context", owner: impact.read, mergeBase: SHA_B, changedEntrypoints: { state: "present", count: 0 }, changedContracts: { state: "absent" } });
   const { graph } = compose(impact.build());
   const missingRead = "r1:" + "0".repeat(64) as ReadId;
   const result = validateCompositionReferences({ ...graph, parts: graph.parts.map((part) => (part.kind === "impact-context" ? { ...part, owner: missingRead } : part)) });

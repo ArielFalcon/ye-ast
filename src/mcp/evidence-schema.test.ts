@@ -29,7 +29,7 @@ test('selected output requires concrete items and unavailable has no page', () =
   const scalar = z.string();
   const schema = selectedOutputFor('entrypoints', { recovery: z.strictObject({ status: z.literal('available') }), baseFact: { schema: scalar, snapshot: z.strictObject({repo: scalar, kind: z.literal('sha'), sha: scalar}), producer: z.strictObject({name: scalar, version: scalar}), inputs: z.strictObject({}), evidence: z.array(z.strictObject({path: scalar, line: z.number()})) } });
   const source = { schema: '1', snapshot: {repo:'r',kind:'sha',sha:'s'}, producer: {name:'n',version:'v'}, inputs: {}, analysis: {status:'complete'}, reads: [], limits: [] };
-  const common = { projectionSchema: 1, source, select: {kind:'entrypoint-evidence', findingIndex:0}, recovery: {status:'available'} };
+  const common = { text: 'Selection', projectionSchema: 1, source, select: {kind:'entrypoint-evidence', findingIndex:0}, recovery: {status:'available'} };
   const available = { ...common, kind:'projection', availability:'available', context: {findingIndex:0, section:{status:'complete'}, finding:{status:'unknown',reason:'unresolved'}}, items:[{evidenceIndex:0,evidence:{path:'a',line:1}}], page:{limit:1,offset:0,returned:1,total:1} };
   assert.equal(schema.safeParse(available).success, true);
   assert.equal(schema.safeParse({...available, items:[{evidenceIndex:0}]}).success, false);
@@ -80,7 +80,7 @@ test('concrete categories and receipts validate in runtime and draft-7 schema', 
     {select:{kind:'workspace-link-evidence',linkId:'id'},context:{link,direction:'upstream',reachCount:1,endpoints:{from:{snapshot:snap,analysis},to:{snapshot:snap,analysis}}},item:{position:0,linkId:'lost',unavailable:true}},
   ];
   for (const c of cases) {
-    const common = {projectionSchema:1,source,recovery:{status:'available'},select:c.select};
+    const common = {text:'Selection',projectionSchema:1,source,recovery:{status:'available'},select:c.select};
     const value = {...common,kind:'projection',availability:'available',context:c.context,items:[c.item],page};
     const receipt = {...common,kind:'projection-receipt',availability:'available',page};
     for (const [candidate, expected] of [[value,true],[receipt,true],[{...value,items:[{}]},false],[{...receipt,items:[]},false],[{...common,kind:'projection-receipt',availability:'unavailable',reason:'unresolved'},true]] as const) {
@@ -96,7 +96,7 @@ test('entrypoint identities retain UI component and unknown finding evidence in 
   const schema = selectedOutputFor('entrypoints',{recovery:z.strictObject({status:z.literal('available')}),baseFact:{schema:s,snapshot,producer:z.strictObject({name:s,version:s}),inputs:z.strictObject({}),evidence:z.array(z.strictObject({path:s,line:z.number()}))}});
   const validate = validator(z.toJSONSchema(schema,{target:'draft-7'}));
   const source = {schema:'1',snapshot:{repo:'r',kind:'sha',sha:'s'},producer:{name:'n',version:'v'},inputs:{},analysis:{status:'partial'},reads:[],limits:[]};
-  const value = {kind:'projection',projectionSchema:1,source,recovery:{status:'available'},select:{kind:'entrypoint-evidence',findingIndex:0},availability:'available',context:{findingIndex:0,section:{status:'complete'},finding:{status:'unknown',reason:'unresolved'}},items:[{evidenceIndex:0,evidence:{path:'a',line:2}}],page:{limit:1,offset:0,returned:1,total:1}};
+  const value = {text:'Selection',kind:'projection',projectionSchema:1,source,recovery:{status:'available'},select:{kind:'entrypoint-evidence',findingIndex:0},availability:'available',context:{findingIndex:0,section:{status:'complete'},finding:{status:'unknown',reason:'unresolved'}},items:[{evidenceIndex:0,evidence:{path:'a',line:2}}],page:{limit:1,offset:0,returned:1,total:1}};
   const identities = [
     {kind:'ui-route',name:'n',path:'/a',outlet:'aux',component:'unknown'},
     {kind:'ui-route',name:'n',path:'/a',component:{path:'a',symbol:'C',line:3,endLine:5}},

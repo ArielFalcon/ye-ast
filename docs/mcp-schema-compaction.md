@@ -1,20 +1,19 @@
 # MCP public contract guides
 
-Tool discovery advertises a concise JSON Schema guide to response envelopes,
-snapshots, provenance, recovery, evidence, paging, and the major value fields.
-It deliberately does not enumerate every nested node or enforce every runtime
-constraint. Clients must not treat the advertised schema as exhaustive payload
-validation. The original exported output schemas and Standard Schema runtime
-validator still validate complete responses. Published input guides retain root properties, unconditional required fields, and nested schemas, while omitting root cross-parameter conditions. The server still validates the original input schema and all refinements; clients may accept combinations that the server rejects. Parameter guidance and initialization instructions describe these rules. Published guides do not change the structured payload or replay recipe. Recovery metadata has one copy at `structuredContent.recovery`; response text points to it.
+Tool discovery publishes compact input guides; output schemas are no longer advertised. The original exported output
+schemas validate the complete canonical response on the server. Input guides retain root properties, unconditional
+required fields and nested schemas, while omitting root cross-parameter conditions. The server validates the original
+input schema and refinements; clients may accept combinations the server rejects. Instructions describe these rules.
+Each success delivers its presentation and result fields in one content block, including one recovery field.
 
 Partial results contain useful evidence but have coverage cuts; unknown means
 coverage is unknown, not that no impact exists. Projection availability is
 separate from source analysis status. An available recovery supplies replay
 arguments and an identity, while a page's nextCursor continues the same selection
-and limit. The guide describes these concepts but does not prove a model will use
+and limit. The instructions describe these concepts but do not prove a model will use
 them correctly; client presentation and model behavior affect usefulness.
 
-The `/work/shop`, version `0` discovery fixture measures the compact JSON bytes
+The following sections document earlier experiments. The `/work/shop`, version `0` discovery fixture measures the compact JSON bytes
 of `{tools}` and all output schemas in `compact-schema.test.ts`. The original
 exhaustive catalogue measured 1,177,416 bytes (1,134,623 output schemas); the
 prior lossless compaction measured approximately 190 KB. Before the editorial reduction below, the guide measured 59,816 bytes for the catalogue, 33,289 bytes for the input-schema array, 20,960 bytes for the
@@ -41,7 +40,7 @@ OpenCode, Claude Code or Codex, and do not establish model interpretation qualit
 
 Run `node --import tsx scripts/measure-mcp-catalog.ts` to reproduce discovery with
 version `0` and repository `/work/shop`. It sends only initialize and tools/list;
-query dependencies throw if invoked. The seven-family catalogue before composition was 49,530 bytes,
+query dependencies throw if invoked. The current catalogue is 49,530 bytes,
 with 27,594 input-schema bytes, 17,907 output-guide bytes and 2,835 bytes of tool
 description text (schema sums exclude array punctuation). Initialization is
 3,388 characters. The original comparison fixture was 59,816 bytes and 3,995
@@ -57,29 +56,78 @@ tests compare their canonical hashes with the pre-reduction fixture, excluding
 only description annotations. Nested selectors, enums, bounds and required fields
 remain available without a separate help call.
 
-`compact-schema.test.ts` preserves budgets of 50 KB for the original seven-family discovery and 19 KB for its
-output-schema array. It checks essential
+`compact-schema.test.ts` enforces budgets of 50 KB for discovery, 19 KB for the
+output-schema array and 3,400 initialization characters. It checks essential
 interpretation rules, reachable output definitions, family capabilities and
 unchanged runtime validation. The 4x reduction target (about 15 KB) is indicative;
 this unit does not reach it and does not remove further guidance merely to do so.
 Serialized sizes do not establish model context, latency or model quality gains.
 Live OpenCode, Claude Code and Codex integrations remain unverified.
 
-### Composition discovery extension (2026-11-05)
 
-The additional `ye_ast_compose` operation advertises its seven typed query alternatives rather than accepting
-unvalidated fact blobs. `compactComposeOutput()` publishes a 2,564-byte guide; its full runtime validator retains all
-22 part variants, provenance, source requests and graph/issue integrity. Runtime refinements remain authoritative;
-published draft-7 schemas do not express cross-record ID checks.
+### Local-reference prototype (2026-11-05)
 
-The same measurement command now records eight operations and 74,198 catalogue bytes, with 48993 input-schema
-bytes, 20471 output-schema bytes and 3,813 initialization characters. The composition entry contributes 24,667 bytes
-(21,399 input, 2,564 output). This is an additional discovery cost, not a reduction. Tests preserve the original-family
-budgets and separately cap composition's input guide at 40 KB, output guide below 4 KB and initialization at 3,900
-characters. The original input constraint hashes remain unchanged.
+A prototype shared identical input schema subtrees within each tool using local
+`definitions` references, retaining root properties and the original runtime
+validators. On the same fixture it reduced discovery from 49,530 to 49,015 bytes
+(515 bytes, approximately 1.0%); the input schema array fell from 27,602 to
+27,087 bytes including array punctuation. Output and initialization were
+unchanged. This small saving did not justify adding a serializer and relying on
+client reference presentation, so the prototype was not retained. The 4x
+indicative target remains unmet. No live client or model-quality claim follows
+from this experiment.
 
-Composition removes duplicate recorded entities/evidence in responses while retaining source supports, and can connect
+
+### Discriminator-union prototype (2026-11-05)
+
+A second temporary prototype grouped object variants that differed only in a
+`kind` constant into a shared shape with an enum. On the same 49,530-byte main
+fixture it found three groups and produced 49,188 bytes, saving 342 bytes (0.7%).
+It visited schema positions rather than instance examples or defaults. This was
+a size experiment, not a completed semantic-equivalence or client-quality proof;
+no production transformation was retained.
+
+Together with the local-reference result, this gives no evidence for a worthwhile
+further lossless serializer at the current boundary. It does not establish a
+universal minimum size. Further changes that replace nested argument formats with
+prose or hide replay/selection structure require separate usability evidence;
+they must not be counted as information-preserving merely because runtime
+validation stays on the server. The catalogue remains 49,530 bytes.
+
+
+### Single content delivery (2026-11-05)
+
+Each success delivers presentation followed by a `result JSON:` line with its sibling fields in one text block. Findings,
+recovery and full data appear once. Faults retain their `fault fields:` line. This framing is server-specific; a whole
+text block is not directly JSON-parsable. No `structuredContent` or `outputSchema` is advertised, so consumers lose
+published output types and client-side validation against an advertised schema. Before sending success, the server
+validates the complete canonical result against the original per-family Zod schema, including selected pages.
+
+The offline consumer routes reproduce Codex 0.166 and OpenCode 2.2.5 normal and code-mode fallbacks to content.
+Claude Code 2.1.318 was also exercised with its installed binary and a local simulated Messages API provider, with no
+external inference: summary, full and result-changed fault reached the next provider request with findings, recovery,
+full value and fault fields as applicable. These checks do not measure model interpretation or adoption.
+
+Discovery measures 31,280 bytes (input schemas 27,363 bytes, output schemas 0, instructions 3,323 characters) using
+`scripts/measure-mcp-catalog.ts`; the catalogue budget is 32,000 bytes. The previous dual-channel catalogue measured
+51,256 bytes. Response delivery also removes the duplicate wire channel; no cross-version token estimate is implied.
+
+
+### Composition operation (2026-11-05)
+
+`ye_ast_compose` publishes its seven typed query alternatives as one input guide instead of accepting unvalidated fact
+blobs, and follows the single content delivery above: no `outputSchema`, and summary/details/full results in the
+`result JSON:` line. Before delivery the server validates every composition against its complete runtime schema, which
+keeps all 23 part variants, provenance, source requests and graph/issue reference integrity.
+
+With the composition entry, `scripts/measure-mcp-catalog.ts` records eight operations and 53,335 catalogue bytes
+(48,729 input-schema bytes, no output schemas, 3,760 instruction characters). The composition entry contributes
+22,054 bytes (21,366 input). This is an additional discovery cost, not a reduction. `compact-schema.test.ts` keeps the
+32,000-byte budget for the seven original families, caps composition's input guide at 40 KB and initialization at
+3,900 characters, and keeps the original input constraint hashes unchanged.
+
+Composition removes duplicate recorded entities and evidence while retaining source supports, and can connect
 compatible observations. Response savings depend on overlap and mode; normalized full tables and repeat recipes add
-overhead, and the server reexecutes the supplied queries. Measure both channels, discovery and the entire acquisition
-path when evaluating usefulness. Smaller details text in one fixture is not evidence of universal token or latency
-savings, or of improved LLM conclusions.
+overhead, and the server reexecutes the supplied queries. Measure the whole content block, discovery and the entire
+acquisition path when evaluating usefulness. Smaller details text in one fixture is not evidence of universal token or
+latency savings, or of improved model conclusions.

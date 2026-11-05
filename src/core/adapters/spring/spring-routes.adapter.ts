@@ -90,8 +90,10 @@ function contractIndex(operations: readonly Finding<ContractOperation>[]): Contr
       faults.push(finding);
       continue;
     }
-    const held = byOperationId.get(finding.value.operationId);
-    if (held === undefined) byOperationId.set(finding.value.operationId, [finding.value]);
+    const { operationId } = finding.value;
+    if (operationId === undefined) continue;
+    const held = byOperationId.get(operationId);
+    if (held === undefined) byOperationId.set(operationId, [finding.value]);
     else held.push(finding.value);
   }
   return { byOperationId, faults, undecided: new WeakSet() };

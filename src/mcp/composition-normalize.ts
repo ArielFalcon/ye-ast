@@ -91,6 +91,11 @@ function readAnalysisOf(fact: FactProvenance): ReadAnalysis {
   return { status: "complete" };
 }
 
+/** Whether the fact serialized an optional collection, and how many observations it recorded. */
+function collectionState(collection: readonly unknown[] | undefined): RecordedCollectionState {
+  return collection === undefined ? { state: "absent" } : { state: "present", count: collection.length };
+}
+
 function unreachable(value: never): never {
   throw new Error(`Unsupported source ${JSON.stringify(value)}`);
 }
@@ -317,7 +322,7 @@ function entryData(b: Builder, read: ReadContext, entry: Entrypoint, pointer: st
 type Diff = { mergeBase: string | undefined; pointer: string } | undefined;
 
 function impact(b: Builder, read: ReadContext, prefix: string, value: ImpactValue, diff: Diff): void {
-  b.part({ kind: "impact-context", owner: read.id, ...(value.mergeBase === undefined ? {} : { mergeBase: value.mergeBase }), changedEntrypoints: value.changedEntrypoints === undefined ? { state: "absent" } : { state: "present", count: value.changedEntrypoints.length } }, read.id, [prefix]);
+  b.part({ kind: "impact-context", owner: read.id, ...(value.mergeBase === undefined ? {} : { mergeBase: value.mergeBase }), changedEntrypoints: collectionState(value.changedEntrypoints), changedContracts: collectionState(value.changedContracts) }, read.id, [prefix]);
   const head = read.here;
   const base: Place = diff?.mergeBase === undefined
     ? { origin: { kind: "query-context", read: read.id }, repo: head.repo }
@@ -336,6 +341,12 @@ function impact(b: Builder, read: ReadContext, prefix: string, value: ImpactValu
   value.changedEntrypoints?.forEach((change, index) => {
     const pointer = `${prefix}/changedEntrypoints/${index}`;
     b.part({ kind: "entrypoint-change", change: change.change, kindName: change.kind, name: change.name, handler: handler(`${pointer}/handler`, change.handler, change.change === "removed" ? base : head), comparison }, read.id, [pointer]);
+  });
+  value.changedContracts?.forEach(({ handlers, ...operation }, index) => {
+    const pointer = `${prefix}/changedContracts/${index}`;
+    const side = operation.change === "removed" ? base : head;
+    const contract = { ...operation, ...(handlers === undefined ? {} : { handlers: handlers.map((item, j) => handler(`${pointer}/handlers/${j}`, item, side)) }) };
+    b.part({ kind: "contract-change", contract, comparison }, read.id, [pointer]);
   });
   value.symbols.forEach((symbol, index) => {
     const pointer = `${prefix}/symbols/${index}`;
@@ -396,6 +407,7 @@ function repoImpact(b: Builder, section: ReadContext, repo: string, prefix: stri
   sites("callSites", "matched");
   sites("unmatched", "unmatched");
   sites("external", "external");
+  value.unresolved.forEach((site, index) => b.part({ kind: "unresolved-call-site", site }, section.id, [`${prefix}/unresolved/${index}`]));
 }
 
 function callSite(b: Builder, section: ReadContext, repo: string, pointer: string, site: CallSite, disposition: "matched" | "unmatched" | "external"): void {
@@ -421,17 +433,18 @@ function links(b: Builder, root: ReadContext, items: WorkspaceImpactValue["links
       from: { file: b.file(fromPlace, from.file, root.id, `${pointer}/link/from/file`), line: from.line, repo: from.repo, symbol: from.symbol },
       to: { repo: to.repo, kind: to.kind, name: to.name, handler: b.anchor(toPlace, to.handler, root.id, `${pointer}/link/to/handler`, `${pointer}/link/to/handler/path`) },
     };
-    const id = partId(b.digest, { kind: "workspace-link", link: data, direction: item.direction, reach: [] }, { source: b.source, read: root.id, pointer });
-    return { pointer, data, id, item };
+    const operations = item.operations === undefined ? {} : { operations: item.operations };
+    const id = partId(b.digest, { kind: "workspace-link", link: data, direction: item.direction, reach: [], ...operations }, { source: b.source, read: root.id, pointer });
+    return { pointer, data, id, item, operations };
   });
   const byLinkId = new Map<string, PartId | null>();
   for (const { item, id } of prepared) byLinkId.set(item.link.id, byLinkId.has(item.link.id) ? null : id);
-  for (const { pointer, data, id, item } of prepared) {
+  for (const { pointer, data, id, item, operations } of prepared) {
     const reach = item.reach.map((linkId): LinkReference => {
       const part = byLinkId.get(linkId);
       return part === undefined || part === null ? { status: "missing", linkId } : { status: "present", part };
     });
-    b.partWithId(id, { kind: "workspace-link", link: data, direction: item.direction, reach }, root.id, [pointer]);
+    b.partWithId(id, { kind: "workspace-link", link: data, direction: item.direction, reach, ...operations }, root.id, [pointer]);
   }
 }
 
@@ -452,7 +465,7 @@ function importers(b: Builder, root: ReadContext, value: ImportersValue): void {
     const categories: { name: FileCategory; collection: RecordedCollectionState }[] = [];
     for (const category of Object.keys(CATEGORIES) as FileCategory[]) {
       const consumers = imported[category];
-      categories.push({ name: category, collection: consumers === undefined ? { state: "absent" } : { state: "present", count: consumers.length } });
+      categories.push({ name: category, collection: collectionState(consumers) });
       if (consumers === undefined) continue;
       consumers.forEach((consumer, j) => {
         const at = `${pointer}/${category}/${j}`;

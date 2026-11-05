@@ -1,3 +1,4 @@
+import { resultFields } from "../mcp/test-session.ts";
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
@@ -133,7 +134,7 @@ test("workspace queries preserve real evidence across execution orders and coord
   const call = async (name: string, args: object): Promise<any> => {
     const result = (await request("tools/call", { name: `ye_ast_${name}`, arguments: { ...args, mode: "full" } })).result as any;
     assert.notEqual(result.isError, true, JSON.stringify(result));
-    return result.structuredContent;
+    return resultFields(result);
   };
   const ws = { revision: head, repos, gateways, offline: true };
   const workspace = () => call("workspace", ws);
