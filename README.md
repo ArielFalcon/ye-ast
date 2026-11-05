@@ -131,6 +131,19 @@ What `init` did:
 - added `.ye-ast/` and `.ye-ast-graph/` to `.git/info/exclude`, so nothing reaches the user's commits;
 - printed the MCP registration for **this** machine. Use that last line in step 3.
 
+To install several explicitly selected roots with one trust choice, name a launch root and each additional binding:
+
+```bash
+npx --yes ye-ast-mcp init --trust untrusted --repo web /path/to/web /path/to/api
+```
+
+The launch root is also selected; include `--repo api /path/to/api` to choose its ID explicitly. The first output line is a
+JSON report for every selected root. When every installation and fixed layer succeeds, the second line is a JSON object
+with `command` and `args` for the MCP host. No registration is emitted on an incomplete batch. A workspace manifest
+applies only to the launch root and never selects additional trust targets. Each trust write is independent; a later
+failure does not undo an earlier one. Review the report before retrying. A `not-attempted` target has not been
+validated; if launch identity resolution stops early, an empty launch ID means its name has not yet been established.
+
 ### 3. Register the MCP server
 
 A server has a launch root (the working directory when omitted) and may declare additional roots with repeatable

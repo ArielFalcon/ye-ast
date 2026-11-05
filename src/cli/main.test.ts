@@ -18,7 +18,7 @@ import type { ImpactValue } from "../core/domain/impact/impact-fact.ts";
 import { REDACTED, type Redaction } from "../core/ports/redaction.port.ts";
 import type { VcsFault } from "../core/ports/vcs.port.ts";
 import type { LiveFault } from "../core/ports/live-queries.port.ts";
-import type { Install, InstallFault, InstallOutcome, InstallRequest } from "../core/ports/install.port.ts";
+import type { Install, InstallFault, InstallOutcome, InstallRequest, BatchInstallRequest, BatchInstallReport } from "../core/ports/install.port.ts";
 import { EXIT_CODE, run, type CliDeps, type CliIo } from "./main.ts";
 
 const VERSION = "1.2.3";
@@ -76,6 +76,7 @@ function setup(answer: Result<EntrypointMapFact, VcsFault | LiveFault> = { ok: t
   };
   const installs: InstallRequest[] = [];
   const install: Install = {
+    runBatch: async () => { throw new Error("not reached"); },
     run: async (request) => {
       installs.push(request);
       return { ok: true, value: INSTALLED };
@@ -97,6 +98,7 @@ function setup(answer: Result<EntrypointMapFact, VcsFault | LiveFault> = { ok: t
       install,
       mcpCommand: ["npx", "--yes", "tsx", MCP_ENTRYPOINT],
       redaction,
+      canonicalRepositoryRoot: async (path: string): Promise<Result<string, VcsFault>> => ({ ok: true, value: path }),
       repositoryName: async (repo: string): Promise<Result<string, VcsFault>> => ({ ok: true, value: basename(repo) }),
       signal,
     },
@@ -109,6 +111,7 @@ const INSTALLED: InstallOutcome = { trust: "untrusted", excluded: [".ye-ast/", "
 function setupInstall(answer: Result<InstallOutcome, InstallFault> = { ok: true, value: INSTALLED }) {
   const base = setup();
   const install: Install = {
+    runBatch: async () => { throw new Error("not reached"); },
     run: async (request) => {
       base.installs.push(request);
       return answer;
@@ -641,8 +644,8 @@ test("init prints the registration command with the paths quoted for a shell", a
 });
 
 test("an init fault is one stderr line with the fault kind and exits with the query-failed code; an aborted one exits interrupted", async () => {
-  const failed = setupInstall({ ok: false, fault: { kind: "unwritable", detail: "read-only", trustRecorded: false } });
-  const aborted = setupInstall({ ok: false, fault: { kind: "aborted", detail: "stop", trustRecorded: true } });
+  const failed = setupInstall({ ok: false, fault: { kind: "unwritable", detail: "read-only", trustRecorded: false, stage: "trust" } });
+  const aborted = setupInstall({ ok: false, fault: { kind: "aborted", detail: "stop", trustRecorded: true, stage: "layer" } });
 
   assert.equal(await run(["init", "--trust", "untrusted", "."], failed.io, failed.deps), EXIT_CODE.queryFailed);
   assert.equal(await run(["init", "--trust", "untrusted", "."], aborted.io, aborted.deps), EXIT_CODE.interrupted);
@@ -653,7 +656,7 @@ test("an init fault is one stderr line with the fault kind and exits with the qu
 });
 
 test("a fault after the trust was recorded says so, with the mode, before naming the fault", async () => {
-  const stopped = setupInstall({ ok: false, fault: { kind: "git-failed", detail: "dubious ownership", trustRecorded: true } });
+  const stopped = setupInstall({ ok: false, fault: { kind: "git-failed", detail: "dubious ownership", trustRecorded: true, stage: "layer" } });
 
   assert.equal(await run(["init", "--trust", "trusted", "."], stopped.io, stopped.deps), EXIT_CODE.queryFailed);
 
@@ -666,7 +669,7 @@ test("init prints its local report literally, so a path it names is not censored
   const local = setupInstall();
   await run(["init", "--trust", "untrusted", `/work/${SECRET}`], local.io, local.deps);
   const crashing = setup();
-  const deps = { ...crashing.deps, install: { run: async (): Promise<never> => { throw new Error("boom"); } } };
+  const deps = { ...crashing.deps, install: { runBatch: async (): Promise<never> => { throw new Error("not reached"); }, run: async (): Promise<never> => { throw new Error("boom"); } } };
 
   assert.equal(await run(["init", "--trust", "untrusted", "."], crashing.io, deps), EXIT_CODE.internalFault);
 
@@ -674,7 +677,7 @@ test("init prints its local report literally, so a path it names is not censored
 });
 
 test("an init fault line is redacted, since it leaves the process toward whoever reads the failure", async () => {
-  const failed = setupInstall({ ok: false, fault: { kind: "unwritable", detail: `cannot write /work/${SECRET}`, trustRecorded: false } });
+  const failed = setupInstall({ ok: false, fault: { kind: "unwritable", detail: `cannot write /work/${SECRET}`, trustRecorded: false, stage: "trust" } });
 
   assert.equal(await run(["init", "--trust", "untrusted", "."], failed.io, failed.deps), EXIT_CODE.queryFailed);
 
@@ -829,4 +832,226 @@ test("without --live no query asks for a stale notice", async () => {
   const { io, deps, requests } = setup();
   await run(["map", "."], io, deps);
   assert.equal("onStale" in requests[0]!, false);
+});
+
+
+function setupBatch(report?: BatchInstallReport) {
+  const base = setup();
+  const requests: BatchInstallRequest[] = [];
+  const deps = {
+    ...base.deps,
+    canonicalRepositoryRoot: async (path: string): Promise<Result<string, VcsFault>> => ({ ok: true, value: path === "/alias launch" ? "/work/launch root" : path }),
+    install: { ...base.deps.install, runBatch: async (request: BatchInstallRequest): Promise<BatchInstallReport> => {
+      requests.push(request);
+      return report ?? { targets: [{ requestedPaths: ["/work/launch root", "/alias launch"], id: "launch-id", canonicalRoot: "/work/launch root", status: "completed", trust: "recorded", outcome: INSTALLED }, { requestedPaths: ["/work/member space"], id: "member-id", canonicalRoot: "/work/member space", status: "completed", trust: "recorded", outcome: INSTALLED }] };
+    } },
+  };
+  return { ...base, deps, batches: requests };
+}
+
+test("batch init forwards every explicit selection and emits structured registration", async () => {
+  const { io, deps, batches } = setupBatch();
+  const code = await run(["init", "--trust", "trusted", "--repo", "launch-id", "/alias launch", "--repo", "member-id", "/work/member space", "/work/launch root"], io, deps);
+  assert.equal(code, EXIT_CODE.ok);
+  assert.deepEqual(batches, [{ launch: { path: "/work/launch root", id: "launch-id" }, repositories: [{ path: "/alias launch", id: "launch-id" }, { path: "/work/member space", id: "member-id" }, { path: "/work/launch root", id: "launch-id" }], trust: "trusted", signal: deps.signal }]);
+  assert.equal(io.stdout.length, 2);
+  assert.deepEqual(JSON.parse(io.stdout[1]!), { command: "npx", args: ["--yes", "tsx", MCP_ENTRYPOINT, "mcp", "/work/launch root", "--repo", "launch-id", "/work/launch root", "--repo", "member-id", "/work/member space"] });
+});
+
+test("batch init requires a launch and rejects malformed pairs before installation", async () => {
+  for (const args of [["--repo", "x", "/work/x"], ["--repo", "x"], ["--repo", "", "/work/x", "/work/a"], ["--repo", "x", "--bad", "/work/a"], ["--repo", "--bad", "/work/x", "/work/a"], ["--repo", "x", "/work/x", "/work/a", "/work/b"], ["--repo", "x", "/work/x", "--bad", "/work/a"], ["--repo", "x", "/work/x", "--measure", "/work/a"]]) {
+    const { io, deps, batches } = setupBatch();
+    assert.equal(await run(["init", "--trust", "trusted", ...args], io, deps), EXIT_CODE.usage, args.join(" "));
+    assert.deepEqual(batches, []);
+  }
+});
+
+test("batch report is redacted and incomplete results never produce registration", async () => {
+  for (const [report, expected] of [
+    [{ targets: [{ requestedPaths: ["/work/s3cr3t"], id: "a", status: "failed", trust: "recorded", stage: "exclude", fault: { kind: "unwritable", detail: "s3cr3t", trustRecorded: true, stage: "exclude" } }] }, 1],
+    [{ targets: [{ requestedPaths: ["/work/a"], id: "a", status: "not-attempted", trust: "not-recorded" }] }, 1],
+    [{ targets: [{ requestedPaths: ["/work/a"], id: "a", canonicalRoot: "/work/a", status: "completed", trust: "recorded", outcome: { ...INSTALLED, layer: { outcome: "not-written", reason: "deadline" } } }] }, 1],
+    [{ targets: [], termination: "aborted" }, 130], [{ targets: [], termination: "unexpected" }, 70],
+  ] as const) {
+    const { io, deps } = setupBatch(report as BatchInstallReport);
+    assert.equal(await run(["init", "--trust", "untrusted", "--repo", "x", "/work/x", "/work/a"], io, deps), expected);
+    assert.equal(io.stdout.length, 1);
+    assert.equal(io.stdout[0]!.includes(SECRET), false);
+    assert.deepEqual(JSON.parse(io.stdout[0]!), deps.redaction.redactValue(report));
+  }
+});
+
+test("batch uses natural launch name when no explicit binding matches", async () => {
+  const { io, deps, batches } = setupBatch({ targets: [{ id: "launch", requestedPaths: ["/work/launch"], canonicalRoot: "/work/launch", status: "completed", trust: "recorded", outcome: INSTALLED }, { id: "other", requestedPaths: ["/work/other"], canonicalRoot: "/work/other", status: "completed", trust: "recorded", outcome: INSTALLED }] });
+  assert.equal(await run(["init", "--trust", "untrusted", "--repo", "other", "/work/other", "/work/launch"], io, deps), EXIT_CODE.ok);
+  assert.deepEqual(batches[0]?.launch, { path: "/work/launch", id: "launch" });
+  assert.deepEqual(JSON.parse(io.stdout[1]!).args.slice(-6), ["--repo", "launch", "/work/launch", "--repo", "other", "/work/other"]);
+});
+
+test("batch forwards workspace only to the single batch request and reports an unreadable file without installation", async () => {
+  const path = await workspaceFile('{"repos":[{"path":"/work/member"}]}');
+  const { io, deps, batches } = setupBatch();
+  await run(["init", "--trust", "trusted", "--repo", "member-id", "/work/member space", "--workspace", path, "/work/launch root"], io, deps);
+  assert.deepEqual(batches[0]?.workspace, { path, text: '{"repos":[{"path":"/work/member"}]}' });
+  const missing = setupBatch();
+  assert.equal(await run(["init", "--trust", "trusted", "--repo", "x", "/work/x", "--workspace", join(scratch, "missing"), "/work/launch"], missing.io, missing.deps), EXIT_CODE.queryFailed);
+  assert.deepEqual(missing.batches, []);
+  const report = JSON.parse(missing.io.stdout[0]!);
+  assert.deepEqual(report.targets.map((t: { status: string }) => t.status), ["not-attempted", "failed"]);
+  assert.equal(report.targets[1].fault.kind, "workspace-invalid");
+});
+
+test("batch reports a recorded trust on one failure and later completion without registration", async () => {
+  const report: BatchInstallReport = { targets: [
+    { requestedPaths: ["/work/a"], id: "a", canonicalRoot: "/work/a", status: "failed", trust: "recorded", stage: "exclude", fault: { kind: "unwritable", detail: "denied", trustRecorded: true, stage: "exclude" } },
+    { requestedPaths: ["/work/b"], id: "b", canonicalRoot: "/work/b", status: "completed", trust: "recorded", outcome: INSTALLED },
+  ] };
+  const { io, deps, batches } = setupBatch(report);
+  assert.equal(await run(["init", "--trust", "untrusted", "--repo", "b", "/work/b", "/work/a"], io, deps), EXIT_CODE.queryFailed);
+  assert.equal(batches.length, 1);
+  assert.deepEqual(io.stdout.map((line) => JSON.parse(line)), [report]);
+});
+
+const BATCH_ARGS = ["init", "--trust", "trusted", "--repo", "alias-id", "/alias launch", "--repo", "other-id", "/work/other", "/work/launch root"];
+
+test("batch preliminary canonical faults stop on the active launch or alias without retry or writes", async () => {
+  for (const target of ["launch", "alias"] as const) {
+    for (const thrown of [false, true]) {
+      const { io, deps, batches } = setupBatch();
+      const calls: string[] = [];
+      let failures = 0;
+      deps.canonicalRepositoryRoot = async (path) => {
+        calls.push(path);
+        if (path === (target === "launch" ? "/work/launch root" : "/alias launch") && failures++ === 0) {
+          if (thrown) throw new Error("s3cr3t exception");
+          return { ok: false, fault: { kind: "unreadable", detail: "s3cr3t failure" } };
+        }
+        return { ok: true, value: "/work/launch root" };
+      };
+      assert.equal(await run(BATCH_ARGS, io, deps), thrown ? 70 : 1, `${target} ${thrown}`);
+      assert.deepEqual(calls, target === "launch" ? ["/work/launch root"] : ["/work/launch root", "/alias launch"]);
+      assert.deepEqual(batches, []);
+      assert.equal(io.stdout.length, 1);
+      assert.equal(io.stdout[0]!.includes(SECRET), false);
+      const report = JSON.parse(io.stdout[0]!);
+      assert.equal(report.targets.length, 3);
+      const active = report.targets[target === "launch" ? 2 : 0];
+      assert.deepEqual([active.status, active.trust, active.stage], ["failed", "not-recorded", "preflight"]);
+      if (!thrown) assert.equal(active.fault.kind, "unreadable");
+      if (thrown) assert.equal(report.termination, "unexpected");
+      assert.ok(report.targets.filter((_: unknown, i: number) => i !== (target === "launch" ? 2 : 0)).every((t: { status: string; trust: string }) => t.status === "not-attempted" && t.trust === "not-recorded"));
+    }
+  }
+});
+
+test("batch preliminary cancellation stops immediately before and after each async boundary", async () => {
+  for (const boundary of ["pre", "launch", "member", "name", "workspace"] as const) {
+    for (const failing of [false, true]) {
+      const { io, deps: base, batches } = setupBatch();
+      const controller = new AbortController();
+      const calls: string[] = [];
+      if (boundary === "pre") controller.abort();
+      const deps = { ...base, signal: controller.signal,
+        canonicalRepositoryRoot: async (path: string): Promise<Result<string, VcsFault>> => {
+          calls.push(`canonical ${path}`);
+          if ((boundary === "launch" && path === "/work/launch root") || (boundary === "member" && path === "/alias launch")) {
+            controller.abort();
+            if (failing) return { ok: false, fault: { kind: "unreadable", detail: "failure" } };
+          }
+          return { ok: true, value: path };
+        },
+        repositoryName: async (): Promise<Result<string, VcsFault>> => {
+          calls.push("name");
+          if (boundary === "name") { controller.abort(); if (failing) return { ok: false, fault: { kind: "git-failed", detail: "failure" } }; }
+          return { ok: true, value: "natural" };
+        },
+        readWorkspaceFile: async (path: string) => {
+          calls.push("workspace");
+          if (boundary === "workspace") controller.abort();
+          return failing ? { ok: false as const, fault: { kind: "workspace-invalid" as const, detail: "failure" } } : { ok: true as const, value: { path, text: "{}" } };
+        },
+      };
+      const args = [...BATCH_ARGS.slice(0, -1), "--workspace", "/work/ws", BATCH_ARGS.at(-1)!];
+      assert.equal(await run(args, io, deps), 130, `${boundary} ${failing}`);
+      assert.deepEqual(batches, []);
+      assert.equal(io.stdout.length, 1);
+      const report = JSON.parse(io.stdout[0]!);
+      assert.equal(report.termination, "aborted");
+      assert.equal(report.targets.length, 3);
+      assert.ok(report.targets.every((t: { status: string; trust: string }) => t.status === "not-attempted" && t.trust === "not-recorded"));
+      const expected = boundary === "pre" ? [] : boundary === "launch" ? ["canonical /work/launch root"] : boundary === "member" ? ["canonical /work/launch root", "canonical /alias launch"] : boundary === "name" ? ["canonical /work/launch root", "canonical /alias launch", "canonical /work/other", "name"] : ["canonical /work/launch root", "canonical /alias launch", "canonical /work/other", "name", "workspace"];
+      assert.deepEqual(calls, expected, boundary);
+    }
+  }
+});
+
+test("batch unexpected naming, workspace and installation rejections preserve selection and certainty", async () => {
+  for (const step of ["name", "workspace", "batch"] as const) {
+    const { io, deps: base } = setupBatch();
+    const deps = { ...base, canonicalRepositoryRoot: async (path: string): Promise<Result<string, VcsFault>> => ({ ok: true, value: path }),
+      repositoryName: async (): Promise<Result<string, VcsFault>> => { if (step === "name") throw new Error("s3cr3t"); return { ok: true, value: "natural" }; },
+      readWorkspaceFile: async (path: string) => { if (step === "workspace") throw new Error("s3cr3t"); return { ok: true as const, value: { path, text: "{}" } }; },
+      install: { ...base.install, runBatch: async (): Promise<BatchInstallReport> => { throw new Error("s3cr3t"); } },
+    };
+    const args = [...BATCH_ARGS.slice(0, -1), "--workspace", "/work/ws", BATCH_ARGS.at(-1)!];
+    assert.equal(await run(args, io, deps), 70, step);
+    assert.equal(io.stdout.length, 1);
+    assert.equal(io.stdout[0]!.includes(SECRET), false);
+    const report = JSON.parse(io.stdout[0]!);
+    assert.equal(report.termination, "unexpected");
+    assert.equal(report.targets.length, 3);
+    if (step === "batch") assert.ok(report.targets.every((t: { status: string; trust: string }) => t.status === "failed" && t.trust === "unknown"));
+    else assert.ok(report.targets.every((t: { trust: string }) => t.trust === "not-recorded"));
+  }
+});
+
+test("missing batch workspace reports observed fault and leaves conflicting bindings unverified", async () => {
+  const { io, deps, batches } = setupBatch();
+  const code = await run(["init", "--trust", "trusted", "--repo", "same", "/work/a", "--repo", "same", "/work/b", "--workspace", join(scratch, "missing"), "/work/launch root"], io, deps);
+  assert.equal(code, 1);
+  assert.deepEqual(batches, []);
+  assert.equal(io.stdout.length, 1);
+  const report = JSON.parse(io.stdout[0]!);
+  assert.deepEqual(report.targets.map((t: { status: string }) => t.status), ["not-attempted", "not-attempted", "failed"]);
+  assert.equal(report.targets[2].fault.kind, "workspace-invalid");
+  assert.ok(report.targets.slice(0, 2).every((t: { fault?: unknown }) => t.fault === undefined));
+});
+
+test("typed aborted identity faults stop batch even when the signal is not aborted", async () => {
+  for (const at of ["launch", "member", "name"] as const) {
+    const { io, deps: base, batches } = setupBatch();
+    const calls: string[] = [];
+    const deps = { ...base,
+      canonicalRepositoryRoot: async (path: string): Promise<Result<string, VcsFault>> => {
+        calls.push(path);
+        if ((at === "launch" && path === "/work/launch root") || (at === "member" && path === "/alias launch")) return { ok: false, fault: { kind: "aborted", detail: "stop" } };
+        return { ok: true, value: path };
+      },
+      repositoryName: async (): Promise<Result<string, VcsFault>> => { calls.push("name"); return at === "name" ? { ok: false, fault: { kind: "aborted", detail: "stop" } } : { ok: true, value: "natural" }; },
+    };
+    assert.equal(await run(BATCH_ARGS, io, deps), 130, at);
+    const report = JSON.parse(io.stdout[0]!);
+    assert.equal(report.termination, "aborted");
+    assert.equal(report.targets[at === "member" ? 0 : 2].fault.kind, "aborted");
+    assert.deepEqual(batches, []);
+    assert.equal(io.stdout.length, 1);
+    assert.equal(calls.at(-1), at === "launch" ? "/work/launch root" : at === "member" ? "/alias launch" : "name");
+  }
+});
+
+test("a thrown preliminary read that aborts returns cancellation and stops progression", async () => {
+  const { io, deps: base, batches } = setupBatch();
+  const controller = new AbortController();
+  const deps = { ...base, signal: controller.signal, canonicalRepositoryRoot: async (): Promise<Result<string, VcsFault>> => { controller.abort(); throw new Error("s3cr3t"); } };
+  assert.equal(await run(BATCH_ARGS, io, deps), 130);
+  assert.deepEqual(batches, []);
+  assert.equal(JSON.parse(io.stdout[0]!).termination, "aborted");
+  assert.equal(io.stdout.length, 1);
+});
+
+test("a non-aborted naming fault keeps the existing basename fallback", async () => {
+  const { io, deps: base, batches } = setupBatch();
+  const deps = { ...base, canonicalRepositoryRoot: async (path: string): Promise<Result<string, VcsFault>> => ({ ok: true, value: path }), repositoryName: async (): Promise<Result<string, VcsFault>> => ({ ok: false, fault: { kind: "git-failed", detail: "unavailable" } }) };
+  await run(BATCH_ARGS, io, deps);
+  assert.equal(batches[0]?.launch.id, "launch root");
 });

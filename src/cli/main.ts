@@ -14,10 +14,10 @@ import type { WorkspaceFault } from "../core/ports/workspace-repos.port.ts";
 import type { DecisionQueries, DecisionsRequest } from "../core/ports/decision-queries.port.ts";
 import { isTrustMode } from "../core/domain/shared/fact.ts";
 import { FIXED_LAYER_DIRECTORY } from "../core/ports/fixed-layer-store.port.ts";
-import type { Install, InstallOutcome, InstallRequest } from "../core/ports/install.port.ts";
+import type { Install, InstallOutcome, InstallRequest, BatchInstallRequest, BatchInstallReport } from "../core/ports/install.port.ts";
 import type { LiveStaleNotice } from "../core/ports/live-queries.port.ts";
 import type { Redaction } from "../core/ports/redaction.port.ts";
-import { DEFAULT_REVISION, type Vcs } from "../core/ports/vcs.port.ts";
+import { DEFAULT_REVISION, type Vcs, type VcsFault } from "../core/ports/vcs.port.ts";
 import { WORKSPACE_MANIFEST_FILE, type WorkspaceManifestFault } from "../core/ports/workspace-defaults.port.ts";
 
 /**
@@ -46,6 +46,8 @@ export interface CliDeps {
   redaction: Redaction;
   /** The name a repository answers to; `--repo-id` overrides it. */
   repositoryName: Vcs["repositoryName"];
+  canonicalRepositoryRoot: Vcs["canonicalRoot"];
+  readWorkspaceFile?: (path: string) => Promise<Result<{ path: string; text: string }, WorkspaceManifestFault>>;
   /** Aborted when the process is asked to stop. */
   signal: AbortSignal;
 }
@@ -62,6 +64,7 @@ const USAGE = [
   "       ye-ast workspace [--revision <rev>] [--repo-id <id>] [--offline] [scope] <repo>",
   "       ye-ast decisions [--revision <rev>] [--repo-id <id>] [--offline] [scope] <repo>",
   "       ye-ast init --trust trusted|untrusted [--workspace <file>] [<repo>]   (declares the trust mode, writes the fixed layer under .ye-ast/, ignores ye-ast's folders locally, prints the MCP registration)",
+  "       ye-ast init --trust trusted|untrusted [--workspace <file>] --repo <id> <path> [--repo <id> <path>]... <launch-repo>",
   "       ye-ast serve   (the query protocol, JSON-RPC 2.0, one message per line on stdin/stdout)",
   "       ye-ast mcp [<launch-root>] [--repo <id> <root>]...   (read-only stdio MCP server)",
   "--repo-id: the name every fact carries; the directory name of the repository's main worktree when omitted, so every worktree of one repository answers the same name",
@@ -99,7 +102,7 @@ export async function run(argv: readonly string[], io: CliIo, deps: CliDeps): Pr
     io.out(USAGE);
     return EXIT_CODE.ok;
   }
-  if (command === "init") return runInit(args, io, deps);
+  if (command === "init") return runInit(named.includes("--repo") ? named : args, io, deps);
   try {
     const moved: StaleWatch = {};
     const query = await queryOf(command, args, deps, io, moved);
@@ -133,6 +136,7 @@ function declarationText(entry: { file: string; candidates: readonly string[] })
 
 async function runInit(args: readonly string[], io: CliIo, deps: CliDeps): Promise<number> {
   try {
+    if (args.includes("--repo")) return await runBatchInit(args, io, deps);
     const parsed = await parseInitRequest(args, deps);
     if (parsed === undefined) {
       io.err(USAGE);
@@ -156,6 +160,103 @@ async function runInit(args: readonly string[], io: CliIo, deps: CliDeps): Promi
     io.err(`ye-ast: internal fault: ${deps.redaction.redact(firstLine(error))}`);
     return EXIT_CODE.internalFault;
   }
+}
+
+async function runBatchInit(args: readonly string[], io: CliIo, deps: CliDeps): Promise<number> {
+  let trust: string | undefined;
+  let workspaceFile: string | undefined;
+  let launchPath: string | undefined;
+  const repositories: { path: string; id: string }[] = [];
+  const operand = (value: string | undefined): value is string => value !== undefined && value.trim() !== "" && !value.startsWith("-");
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i]!;
+    if (arg === "--repo") {
+      const id = args[++i];
+      const path = args[++i];
+      if (!operand(id) || !operand(path)) { io.err(USAGE); return EXIT_CODE.usage; }
+      repositories.push({ id, path: resolve(path) });
+    } else if (arg === "--trust" || arg === "--workspace") {
+      const value = args[++i];
+      if (!operand(value) || (arg === "--trust" ? trust !== undefined : workspaceFile !== undefined)) { io.err(USAGE); return EXIT_CODE.usage; }
+      if (arg === "--trust") trust = value;
+      else workspaceFile = resolve(value);
+    } else if (operand(arg) && launchPath === undefined) {
+      launchPath = resolve(arg);
+    } else {
+      io.err(USAGE);
+      return EXIT_CODE.usage;
+    }
+  }
+  if (!isTrustMode(trust) || !launchPath || repositories.length === 0) {
+    io.err(USAGE);
+    return EXIT_CODE.usage;
+  }
+  type Target = BatchInstallReport["targets"][number];
+  const launch = { path: launchPath, id: "" };
+  const selected = [...repositories, launch];
+  const targets: Target[] = selected.map(({ path, id }) => ({ requestedPaths: [path], id, status: "not-attempted", trust: "not-recorded" }));
+  const launchIndex = targets.length - 1;
+  const emit = (report: BatchInstallReport, code: number): number => {
+    io.out(JSON.stringify(deps.redaction.redactValue(report)));
+    return code;
+  };
+  const aborted = (): number => emit({ targets, termination: "aborted" }, EXIT_CODE.interrupted);
+  const fail = (index: number, fault: VcsFault | WorkspaceManifestFault): number => {
+    targets[index] = { ...targets[index]!, status: "failed", stage: "preflight", fault: { ...fault, stage: "preflight", trustRecorded: false } };
+    return emit({ targets, ...(fault.kind === "aborted" ? { termination: "aborted" as const } : {}) }, fault.kind === "aborted" ? EXIT_CODE.interrupted : EXIT_CODE.queryFailed);
+  };
+  let active = launchIndex;
+  let installing = false;
+  let report: BatchInstallReport;
+  if (deps.signal.aborted) return aborted();
+  try {
+    const canonical = await deps.canonicalRepositoryRoot(launchPath, deps.signal);
+    if (deps.signal.aborted) return aborted();
+    if (!canonical.ok) return fail(launchIndex, canonical.fault);
+    for (const [index, candidate] of repositories.entries()) {
+      active = index;
+      const root = await deps.canonicalRepositoryRoot(candidate.path, deps.signal);
+      if (deps.signal.aborted) return aborted();
+      if (!root.ok) return fail(index, root.fault);
+      if (root.value === canonical.value) {
+        launch.id = candidate.id;
+        break;
+      }
+    }
+    active = launchIndex;
+    if (!launch.id) {
+      const named = await deps.repositoryName(launchPath, deps.signal);
+      if (deps.signal.aborted) return aborted();
+      if (!named.ok && named.fault.kind === "aborted") return fail(launchIndex, named.fault);
+      launch.id = named.ok ? named.value : basename(launchPath);
+    }
+    targets[launchIndex] = { ...targets[launchIndex]!, id: launch.id };
+    const workspace = workspaceFile === undefined ? undefined : await (deps.readWorkspaceFile ?? readWorkspaceFile)(workspaceFile);
+    if (deps.signal.aborted) return aborted();
+    if (workspace && !workspace.ok) return fail(launchIndex, workspace.fault);
+    const request: BatchInstallRequest = { launch, repositories: selected, trust, ...(workspace?.ok ? { workspace: workspace.value } : {}), signal: deps.signal };
+    installing = true;
+    report = await deps.install.runBatch(request);
+  } catch {
+    if (deps.signal.aborted && !installing) return aborted();
+    if (installing) {
+      for (let index = 0; index < targets.length; index++) {
+        targets[index] = { ...targets[index]!, status: "failed", trust: "unknown" };
+      }
+    } else {
+      targets[active] = { ...targets[active]!, status: "failed", stage: "preflight" };
+    }
+    return emit({ targets, termination: "unexpected" }, EXIT_CODE.internalFault);
+  }
+  io.out(JSON.stringify(deps.redaction.redactValue(report)));
+  if (report.termination === "aborted") return EXIT_CODE.interrupted;
+  if (report.termination === "unexpected") return EXIT_CODE.internalFault;
+  if (report.targets.length === 0 || report.targets.some((target) => target.status !== "completed" || !target.canonicalRoot || !target.outcome || target.outcome.layer.outcome === "not-written")) return EXIT_CODE.queryFailed;
+  const launchTarget = report.targets.find((target) => target.id === launch.id && target.requestedPaths.includes(launch.path));
+  if (!launchTarget?.canonicalRoot || !deps.mcpCommand[0]) return EXIT_CODE.internalFault;
+  const registration = { command: deps.mcpCommand[0], args: [...deps.mcpCommand.slice(1), "mcp", launchTarget.canonicalRoot, ...report.targets.flatMap((target) => ["--repo", target.id, target.canonicalRoot!])] };
+  io.out(JSON.stringify(deps.redaction.redactValue(registration)));
+  return EXIT_CODE.ok;
 }
 
 /** The manifest the user named: the CLI reads the file, since the core reads no environment. */

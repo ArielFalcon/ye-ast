@@ -43,6 +43,17 @@ It prints the trust mode, the lines it added to the exclude file, one line per l
 Building the index is not part of it yet ([First index](#first-index)). Only the CLI receives the install use case; the
 MCP server and the query protocol never do.
 
+**Batch installation.** `ye-ast init --trust trusted|untrusted --repo <id> <path> ... <launch-repo>` selects the
+positional launch and each explicit binding. Paths resolve against the invocation directory; the launch is required when
+`--repo` is used. A binding of the canonical launch root chooses its ID, otherwise the normal repository name is used.
+Aliases of the same root and ID coalesce; conflicting roots or IDs fail preflight before writes. A supplied workspace
+manifest is persisted only on launch and does not add trust targets. Each root is installed sequentially and independently;
+failures can leave earlier trust records in place. The first stdout line is a redacted JSON report. Only when every target
+completes with a written or unchanged layer does the second line give `{ "command", "args" }` for a complete MCP
+registration. A `not-attempted` target is unverified; an empty launch ID in a preliminary failure means its identity
+has not yet been established. A rejected batch call leaves all selected writes unknown. Incomplete batches exit `1`,
+malformed syntax `2`, cancellation `130`, and unexpected failures `70`.
+
 **Trust declaration.** The trust mode ([ADR-0010](../adr/0010-trust-modes.md)) is declared outside the
 analysed repository: by a user through `ye-ast init`, which writes a user-level record, or with a command-line flag;
 by a host through the library or the hello of the query protocol. Nothing inside the repository can raise it. Without a

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { EXIT_CODE } from "../cli/main.ts";
 import { RECORDS_DIRECTORY } from "../core/adapters/fs/trust-record.adapter.ts";
 import type { DecisionValue } from "../core/ports/decision-queries.port.ts";
@@ -319,4 +319,78 @@ test("a form-shaped answer set persisted by install closes every gap the next qu
   assert.match(readFileSync(join(repo, ".ye-ast", "workspace.json"), "utf8"), /"remote": "https:\/\/git\.example\.test\/orders-a\.git"/);
 
   assert.deepEqual(await gaps({ repo: { path: repo } }), []);
+});
+
+test("batch init uses isolated records for selected roots and leaves manifest-only trust untouched", async () => {
+  const other = join(workspace, "other repo");
+  const member = join(workspace, "manifest-only");
+  for (const root of [other, member]) {
+    mkdirSync(root);
+    execFileSync("git", ["init", "-q"], { cwd: root, env: GIT_ENV });
+    writeFileSync(join(root, "tracked.txt"), root);
+    execFileSync("git", ["add", "-A"], { cwd: root, env: GIT_ENV });
+    execFileSync("git", ["commit", "-q", "-m", "initial"], { cwd: root, env: GIT_ENV });
+  }
+  const alias = join(workspace, "other alias");
+  symlinkSync(other, alias);
+  const manifest = join(workspace, "batch-workspace.json");
+  writeFileSync(manifest, JSON.stringify({ repos: [{ path: member }] }));
+  assert.equal((await cli("init", "--trust", "trusted", member)).code, 0);
+  assert.equal((await cli("init", "--trust", "trusted", other)).code, 0);
+  assert.equal((await cli("init", "--trust", "untrusted", repo)).code, 0);
+  const recordsDir = join(trustDirectory, RECORDS_DIRECTORY);
+  const recordFor = (root: string) => {
+    const name = readdirSync(recordsDir).find((file) => JSON.parse(readFileSync(join(recordsDir, file), "utf8")).repository === realpathSync(root));
+    assert.ok(name);
+    return join(recordsDir, name);
+  };
+  const memberBefore = readFileSync(recordFor(member), "utf8");
+  const tracked = git("ls-files", "-s");
+  const args = ["--repo", "launch", repo, "--repo", "other", other, "--repo", "other", alias, "--workspace", manifest, repo];
+  for (const mode of ["trusted", "untrusted"] as const) {
+    const result = await cli("init", "--trust", mode, ...args);
+    assert.equal(result.code, 0, result.stderr.join("\n") + result.stdout.join("\n"));
+    const report = JSON.parse(result.stdout[0]!);
+    assert.equal(report.targets.length, 2);
+    assert.equal(report.targets.find((target: { id: string }) => target.id === "other").requestedPaths.length, 2);
+    for (const root of [repo, other]) assert.equal(JSON.parse(readFileSync(recordFor(root), "utf8")).trust, mode);
+    assert.equal(readFileSync(recordFor(member), "utf8"), memberBefore);
+    const registration = JSON.parse(result.stdout[1]!);
+    assert.equal(registration.args.filter((arg: string) => arg === "--repo").length, 2);
+    assert.ok(registration.args.includes(realpathSync(other)));
+  }
+  assert.equal(readdirSync(recordsDir).length, 3);
+  assert.equal(git("ls-files", "-s"), tracked);
+  assert.equal(git("status", "--porcelain"), "");
+  assert.equal(execFileSync("git", ["status", "--porcelain"], { cwd: other, env: GIT_ENV, encoding: "utf8" }).trim(), "");
+  const before = readdirSync(recordsDir).map((file) => [file, readFileSync(join(recordsDir, file), "utf8")]);
+  const conflict = await cli("init", "--trust", "trusted", "--repo", "same", repo, "--repo", "same", other, repo);
+  assert.equal(conflict.code, EXIT_CODE.queryFailed);
+  assert.equal(conflict.stdout.length, 1);
+  assert.deepEqual(readdirSync(recordsDir).map((file) => [file, readFileSync(join(recordsDir, file), "utf8")]), before);
+  const aliasConflict = await cli("init", "--trust", "trusted", "--repo", "launch", repo, "--repo", "one", other, "--repo", "two", alias, repo);
+  assert.equal(aliasConflict.code, EXIT_CODE.queryFailed);
+  assert.ok(JSON.parse(aliasConflict.stdout[0]!).targets.some((target: { fault?: { kind: string } }) => target.fault?.kind === "conflicting-repository-alias"));
+  assert.equal(aliasConflict.stdout.length, 1);
+  const missing = await cli("init", "--trust", "trusted", "--repo", "missing", join(workspace, "missing"), repo);
+  assert.equal(missing.code, EXIT_CODE.queryFailed);
+  assert.ok(JSON.parse(missing.stdout[0]!).targets.some((target: { id: string; status: string }) => target.id === "missing" && target.status === "failed"));
+  assert.equal(missing.stdout.length, 1);
+  assert.deepEqual(readdirSync(recordsDir).map((file) => [file, readFileSync(join(recordsDir, file), "utf8")]), before);
+});
+
+test("batch init records linked worktrees separately while git shares their exclude path", async () => {
+  const linked = join(workspace, "linked worktree");
+  git("worktree", "add", "-q", "-b", "linked-test", linked);
+  const result = await cli("init", "--trust", "untrusted", "--repo", "main", repo, "--repo", "linked", linked, repo);
+  assert.equal(result.code, EXIT_CODE.ok, result.stderr.join("\n") + result.stdout.join("\n"));
+  const recordsDir = join(trustDirectory, RECORDS_DIRECTORY);
+  const records = readdirSync(recordsDir).map((file) => JSON.parse(readFileSync(join(recordsDir, file), "utf8")));
+  assert.deepEqual(records.map((record) => record.repository).sort(), [realpathSync(repo), realpathSync(linked)].sort());
+  const mainExclude = git("rev-parse", "--git-path", "info/exclude");
+  const linkedExclude = execFileSync("git", ["rev-parse", "--git-path", "info/exclude"], { cwd: linked, env: GIT_ENV, encoding: "utf8" }).trim();
+  assert.equal(realpathSync(resolve(repo, mainExclude)), realpathSync(resolve(linked, linkedExclude)));
+  assert.ok(readFileSync(realpathSync(resolve(repo, mainExclude)), "utf8").includes(".ye-ast-graph/"));
+  assert.equal(git("status", "--porcelain"), "");
+  assert.equal(execFileSync("git", ["status", "--porcelain"], { cwd: linked, env: GIT_ENV, encoding: "utf8" }).trim(), "");
 });
