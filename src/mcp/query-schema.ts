@@ -19,11 +19,11 @@ const workspaceRevision = z.string().regex(/\S/).optional().describe("Commit/ref
 const live = z
   .boolean()
   .optional()
-  .describe("Trusted staged/unstaged/untracked read. Excludes revision/head and local offline. Impact still requires base.");
+  .describe("Read trusted staged, unstaged and untracked changes; not with revision/head or local offline. Impact still requires base.");
 export const offline = z
   .boolean()
   .optional()
-  .describe("Workspace: read local clones without refreshing trusted persisted remotes; live allowed. Local-only: no effect, forbidden with live.");
+  .describe("With workspace: skip refreshing trusted persisted remotes (live allowed). Without workspace: no effect; forbidden with live.");
 
 /** Runtime validation and tool discovery share the same working-tree exclusions. */
 function liveSchema<S extends z.ZodRawShape>(shape: S, fields: readonly (keyof S & string)[]) {
@@ -47,7 +47,7 @@ const BUDGET_FIELDS: Readonly<Record<WalkBoundsField, z.ZodOptional<z.ZodNumber>
 export const budget = z
   .strictObject(BUDGET_FIELDS)
   .optional()
-  .describe("Optional traversal bounds, unset by default. Limits work, not result size; stopped branches report cuts. mode controls presentation.");
+  .describe("Optional traversal bounds, unset by default. Limits work, not result size; stopped branches report cuts.");
 
 const workspaceRepo = liveSchema({
   path: z.string().regex(/\S/).describe("Existing local Git clone root; no cloning or new remote authorization."),
@@ -82,7 +82,7 @@ export const workspace = z
     gateways,
   })
   .optional()
-  .describe("Cross-repo traversal: omit=local; {}=eligible persisted repos/gateways, else selected repo only. repos supplies other clones. Incoming links; impact adds outgoing. Per-repo commit or trusted live; captures are not atomic.");
+  .describe("Cross-repo traversal: omit=local; {}=eligible persisted repos and gateways (else the selected repo only); repos supplies other clones. Incoming links; impact adds outgoing. Captures are per repo and not atomic.");
 
 const globs = z
   .array(z.string().refine(isValidGlob, "a glob is relative to the repository root, with / separators and no empty, . or .. segment"))
@@ -94,7 +94,7 @@ export const scope = z
     exclude: globs.describe("Exclude matching paths, even if included."),
   })
   .optional()
-  .describe("Repo-relative coverage globs; omitted=all, exclude wins. include retains interpretation files; exclude may remove them. Outside-scope callers/entrypoints are unknown. mode shortens output; impact changed limits seeds.");
+  .describe("Coverage globs over repo-relative paths; omitted=all, exclude wins (it may remove interpretation files include keeps). Callers and entrypoints outside scope are unknown. Use mode to shorten output.");
 
 const file = z.string().min(1).describe("Repo-relative file path.");
 

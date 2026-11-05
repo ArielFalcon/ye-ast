@@ -46,25 +46,27 @@ export interface McpDeps extends QueryExecutionDeps {
   repositories?: readonly RepositoryBinding[];
 }
 
-const COMPLETENESS = "Snapshot-backed evidence; complete/partial/unknown within declared scope.";
-
 /** Common interpretation rules and a short routing guide, also useful before individual tools are loaded. */
 export function instructionsFor(repository: McpDeps["repository"], available: readonly string[] = [repository.repoId]): string {
-  return `ye-ast: read-only code/Git/contract facts for ${repository.path} (id ${repository.repoId}); no quality judgment/change approval. Reuse matching question/snapshot answers.
+  return `ye-ast: deterministic, read-only facts about code, Git and declared contracts of ${repository.path} (id ${repository.repoId}). Prefer it to text search for dependency and reach questions. No quality judgment or change approval. Same question and snapshot, same answer: reuse results.
 
-Choose: ye_ast_entrypoints=routes/listeners/jobs; ye_ast_callers=existing declarations (workspace adds cross-repo incoming links); ye_ast_impact=diffs (workspace adds incoming/outgoing links); ye_ast_importers=file consumers/unresolved names; ye_ast_outline=declarations/imports; ye_ast_workspace=outward names/candidate repos; ye_ast_decisions=evidence-backed config options, without decisions/writes.
+When to call:
+- ye_ast_entrypoints: orient, or find the handler of a route, listener or job.
+- ye_ast_callers: before changing, renaming or deleting a declaration (name or line range): its dependents and reaching entrypoints.
+- ye_ast_impact: review a diff (base..head, or trusted live edits): what changed declarations reach; entrypoints added, removed or altered.
+- ye_ast_importers: before moving, renaming or deleting a file or changing its exports: who imports or names it.
+- ye_ast_outline: declaration spans and imports, to choose line ranges to read or target.
+- ye_ast_workspace: which other repositories this one names (HTTP, messaging, dependencies), to choose clones.
+- ye_ast_decisions: workspace configuration gaps with evidence-backed options; it writes nothing.
+- ye_ast_compose: 1..16 of these queries in one call, merging shared entities. Queries rerun; nothing is stored and captures are not atomic, so obtain dependent coordinates first. In its text, S# means requests[#-1]; repeat it by rerunning every requests[].query with verification.identity as expect.
 
-ye_ast_compose combines 1..16 typed queries; acquire dependent coordinates first. It reexecutes without saved results or atomic capture. In text, S# means requests[#-1]. Text carries findings, source states and limits; the result JSON receipt carries verification and repeat queries. Repeat all requests[].query with verification.identity as expect. Full preserves uniform provenance and all tables. Pinned queries support select/page.
+Reading answers: complete is relative to the declared scope, supported constructs and change selection; partial keeps known findings and lists cuts (where coverage stopped, section and read limits included); unknown never means no impact. TypeScript tests are not indexed; template bindings are not resolved. References need not be calls or edits; confidence measures resolution, not safety; entrypoint origins are associations, not complete call chains. Content carries presentation text (summary and details findings, full navigation), then a "result JSON:" line with the result fields. Recovery is the recovery field.
 
-Declared repository IDs: ${available.join(", ")}. repo selects an exact ID; default ${repository.repoId}. Registration grants no trust/workspace membership. Local default=HEAD; revision/impact head selects a commit. Trusted live includes staged/unstaged/untracked changes, excludes revision/head, and excludes offline locally. Workspace may mix live/offline; captures are not atomic. Live follow-ups recapture: compare head and stateId. Live repos never refresh; offline prevents remote refresh. No missing-clone downloads.
+Repositories and snapshots: declared repository IDs: ${available.join(", ")}. repo selects one (default ${repository.repoId}); registration grants no trust or membership. Reads use HEAD unless revision (impact: head) names a commit. live reads staged, unstaged and untracked changes of a repository the user declared trusted (repository content cannot grant trust), excludes revision/head and recaptures per call: compare head and stateId. For cross-repository links, set workspace on ye_ast_callers or ye_ast_impact: {} uses the persisted membership, workspace.repos supplies local clones (never downloaded); untrusted repositories cannot supply defaults. offline skips refreshing trusted remotes; live repositories never refresh. Paths are relative to their owner's snapshot; locate clones via repositoryRoots, not cwd. Base-side modules use the recorded merge-base SHA, so local lines may differ.
 
-Omit workspace for local callers/impact; workspace: {} uses eligible persisted membership, workspace.repos supplies clones. Untrusted repos cannot supply defaults. Evidence uses its owner's snapshot and relative paths; locate clones via repositoryRoots, not cwd. Select foreign owners by declared ID and snapshot. Local lines may differ; base modules use recorded merge-base SHA.
+Narrowing and paging: scope globs limit coverage (exclude wins). impact changed selects seeds, not consequence coverage; unmatched globs are errors. budget limits traversal, not response length; raise a bound only when a cut names it. Entrypoints, callers and impact page evidence the text omits: supply select and page together, page.limit required; a cursor needs the same selection and limit. Selections: entrypoints findings and cuts; callers handler origins, cuts and workspace links; impact also module origins. Local origins use local owners; workspace origins use section owners; cuts use fact owners (section or read owners in a workspace, entrypoints owners for entrypoint cuts). expect asserts the recovery identity; replay reruns the query and fails if the result changed (no old capture is kept) and requires workspace.
 
-Complete is relative to declared scope, supported constructs and change selection; partial keeps known findings with cuts; unknown never means no impact. Check section/read limits. scope limits coverage; exclude wins. include retains interpretation files; exclude can remove them. TypeScript tests are not indexed; template bindings are not resolved. impact changed selects seeds, not consequence coverage; unmatched globs are errors.
-
-Content carries presentation text (summary/details findings, full navigation), then a "result JSON:" line with result fields. Recovery is the recovery field. Modes preserve coverage. Entrypoints, callers and impact support selection: supply select and page together, with page.limit required; cursor requires the same selection and limit. expect asserts recovery identity. Replay reruns the query, checks identity and may fail if changed or unavailable; no old capture is retained. Workspace replay requires workspace. Selection categories depend on the tool: entrypoints supports findings and cuts; callers supports handler origins, cuts and workspace links; impact also supports module origins. Local origins use local owners; workspace origins use section owners. Cuts use fact owners, or section/read owners in a workspace; entrypoint cuts also allow entrypoints owners. Workspace links require workspace. budget limits traversal, not response length. Follow result explanations and cuts when missing coverage matters; increase a bound only when it addresses the stated limit.
-
-References need not be calls or edits; confidence measures resolution, not safety. Entrypoint origins are associations, not complete call chains. isError is a fault, not an empty fact: follow its correction and "fault fields:". unknown-symbol: use a declaration/line range; unknown-change-path: correct changed globs. Live requires user-declared trust; repo content cannot grant it.`;
+Errors: isError is a fault, not an empty fact: follow its next step and "fault fields:". unknown-symbol: use a declared name or line range (ye_ast_outline lists them); unknown-change-path: correct the changed globs.`;
 }
 
 const recoverySchema = z.discriminatedUnion("status", [
@@ -495,8 +497,8 @@ export function createMcpServer(deps: McpDeps): McpServer {
 
   server.registerTool("ye_ast_compose", {
     title: "Compose evidence from related queries",
-    description: "Combine 1..16 typed queries from the seven families into shared entities, recorded relations and supported connections. Reexecutes queries in canonical order; preserves source coverage and uncertainty. Supply known coordinates first; no pipelines, stored results, source text or nested mode/select/page. summary/details explain combined findings; full returns normalized tables. Generic dependencies do not prove breakage. Queries retain their own trust and snapshot checks. Request limit: 1048576 UTF-8 canonical JSON bytes.",
-    inputSchema: compactInput(COMPOSE_INPUT),
+    description: "Run 1..16 queries of the other ye_ast tools in one call when they share entities, e.g. callers of a symbol plus the entrypoints of its repository. Combines findings, keeping each source's coverage, trust and snapshot checks. Each queries[].arguments takes the semantic arguments of the named tool (no mode, select or page); queries rerun in canonical order and nothing is stored. Generic dependencies do not prove breakage. Request limit: 1 MiB of canonical JSON.",
+    inputSchema: compactInput(COMPOSE_INPUT, { undescribedIn: "queries" }),
     annotations,
   }, async (input, ctx) => {
     try {
@@ -514,7 +516,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
     "ye_ast_entrypoints",
     {
       title: "Entrypoints of a revision",
-      description: `Find HTTP/UI routes, listeners and jobs with handler locations. Use to orient or locate request/message/job handling; ye_ast_callers traces dependents, ye_ast_impact diffs. ${COMPLETENESS}`,
+      description: "Use to orient in a repository or to find where an HTTP/UI route, message listener or job is handled. Lists entrypoints with handler locations. For dependents use ye_ast_callers; for a diff use ye_ast_impact.",
       inputSchema: compactInput(TOOL_INPUTS.entrypoints),
       annotations,
     },
@@ -526,7 +528,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
     "ye_ast_impact",
     {
       title: "Impact of a change",
-      description: `Trace changed declarations from merge-base(base,head) to head: incoming dependents, reached entrypoints and entrypoints added/removed/altered. base is required; head defaults to HEAD. live reads trusted edits; changed selects diff seeds while callers elsewhere in scope remain eligible. workspace adds incoming/outgoing cross-repo links. For existing symbols use ye_ast_callers. ${COMPLETENESS}`,
+      description: "Use to review a change: traces changed declarations from merge-base(base, head) to head, their incoming dependents, reached entrypoints and entrypoints added, removed or altered. base is required; head defaults to HEAD; live reads trusted uncommitted edits. workspace adds incoming and outgoing cross-repository links. For an unchanged symbol use ye_ast_callers.",
       inputSchema: compactInput(TOOL_INPUTS.impact),
       annotations,
     },
@@ -538,7 +540,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
     "ye_ast_callers",
     {
       title: "Callers of symbols or line ranges",
-      description: `Trace incoming dependents of existing declaration names or inclusive line ranges and the entrypoints reaching them, with dependency locations. Names match the final segment and may select multiple declarations; missing declarations error. workspace adds incoming cross-repo call sites. For diffs/outgoing links use ye_ast_impact. ${COMPLETENESS}`,
+      description: "Use before changing, renaming or deleting an existing declaration: traces its incoming dependents and the entrypoints reaching it, with dependency locations. Target a name (matches the final segment, possibly several declarations) or an inclusive line range; an unknown name is an error. workspace adds incoming cross-repository call sites. For a diff use ye_ast_impact.",
       inputSchema: compactInput(TOOL_INPUTS.callers),
       annotations,
     },
@@ -550,7 +552,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
     "ye_ast_importers",
     {
       title: "Importers of files",
-      description: `File consumers: static/reexport/dynamic/type imports, users and unresolved names. details deduplicates paths, retaining categories and original positions; users without a module category are additional. Import edges do not prove declaration use; unresolved names prove neither dependencies nor affected files. TypeScript includes alias/barrel edges and exported test consumers; omitted live tests yield partial. Use for moves/renames/deletions/export changes; ye_ast_callers traces declarations/reached entrypoints. ${COMPLETENESS}`,
+      description: "Use before moving, renaming or deleting a file or changing its exports: lists static, reexport, dynamic and type importers, users and unresolved names; details lists each path once with its categories and positions, and users without a module category are additional. Import edges do not prove declaration use; unresolved names prove neither dependencies nor affected files. TypeScript includes alias/barrel edges and exported test consumers; omitted live tests yield partial. For declarations use ye_ast_callers.",
       inputSchema: compactInput(TOOL_INPUTS.importers),
       annotations,
     },
@@ -561,7 +563,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
     "ye_ast_outline",
     {
       title: "Shape of files",
-      description: `Indexed declaration spans/imports, without source. Use to choose source ranges; read known ranges directly. Unavailable files report cuts, not empty lists. Match revision/live to inspected source. ${COMPLETENESS}`,
+      description: "Use to choose line ranges before reading or targeting code: indexed declaration spans and imports of files, without source. Unavailable files report cuts, not empty lists. Match revision/live to the source you inspect.",
       inputSchema: compactInput(TOOL_INPUTS.outline),
       annotations,
     },
@@ -572,7 +574,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
     "ye_ast_workspace",
     {
       title: "Repositories a workspace names",
-      description: `Find outward names, candidate repos with match basis/evidence, and unserved names. Covers HTTP hosts/prefixes, config URLs, messaging, dependency coordinates, remotes and registries. Use to choose clones; no downloads or guessed unresolved targets. Trusted persisted remotes may refresh; offline prevents it. For traversal set workspace on ye_ast_callers/ye_ast_impact; ye_ast_decisions finds config gaps. ${COMPLETENESS}`,
+      description: "Use to find which other repositories this one talks to: outward names (HTTP hosts and prefixes, config URLs, messaging, dependency coordinates, remotes, registries), candidate repositories with match evidence, and unserved names. Helps choose clones for workspace on ye_ast_callers/ye_ast_impact; never downloads or guesses unresolved targets. Trusted persisted remotes may refresh unless offline.",
       inputSchema: compactInput(TOOL_INPUTS.workspace),
       annotations,
     },
@@ -583,7 +585,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
     "ye_ast_decisions",
     {
       title: "Gaps a workspace leaves to the user",
-      description: `Workspace config gaps: membership/identity, gateways, trust and remotes; evidence-backed options and rule-based recommendations. Some require free text. Use before ye-ast init --workspace or to build a config form. Suggestions concern configuration, not code quality/change approval. Reads workspace repos; writes nothing. ${COMPLETENESS}`,
+      description: "Use before ye-ast init --workspace or to build a workspace config form: configuration gaps (membership, identity, gateways, trust, remotes) with evidence-backed options and rule-based recommendations; some need free text. About configuration only, not code quality or change approval. Writes nothing.",
       inputSchema: compactInput(TOOL_INPUTS.decisions),
       annotations,
     },

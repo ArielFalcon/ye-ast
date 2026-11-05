@@ -131,3 +131,21 @@ compatible observations. Response savings depend on overlap and mode; normalized
 overhead, and the server reexecutes the supplied queries. Measure the whole content block, discovery and the entire
 acquisition path when evaluating usefulness. Smaller details text in one fixture is not evidence of universal token or
 latency savings, or of improved model conclusions.
+
+
+### Discovery guidance rewrite (2026-11-05)
+
+The instructions are reorganized around agent tasks: a "when to call" line per tool, then reading answers,
+repositories and snapshots, narrowing and paging, and errors. Every rule the budget test checks is kept; the text stays
+within the 3,900-character budget (3,878 characters). Tool descriptions lead with when to use the tool and drop the
+completeness sentence the instructions already state.
+
+`ye_ast_compose` publishes the nested query shapes without their descriptions: each query's arguments are the semantic
+arguments of the named tool, whose own entry in the same catalogue describes them. The `queries` description itself
+stays. Structure, enums, bounds and required fields are unchanged; `compact-schema.test.ts` pins the canonical
+constraint hash of the composition guide beside those of the seven families. A client that loads `ye_ast_compose`
+without the other tools sees every field, but not its explanation.
+
+`scripts/measure-mcp-catalog.ts` records 43,064 catalogue bytes (previously 53,335, about 19% less) and 38,997
+input-schema bytes. Shortening the shared parameter descriptions saved about 190 bytes; the rest comes from the
+composition guide. Model interpretation and adoption are not measured by this change.

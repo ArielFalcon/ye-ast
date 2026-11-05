@@ -57,6 +57,10 @@ test("catalogue advertises useful guides within budget", async () => {
     assert.ok(Buffer.byteLength(JSON.stringify(compose.inputSchema)) < 40_000);
     assert.equal(compose.inputSchema.type, "object");
     assert.ok(compose.inputSchema.properties?.queries);
+    assert.equal(createHash("sha256").update(JSON.stringify(canonicalConstraints(compose.inputSchema))).digest("hex"), COMPOSE_CONSTRAINTS, "ye_ast_compose: argument contract");
+    const { description: queriesGuide, ...queryShapes } = compose.inputSchema.properties.queries as Record<string, unknown>;
+    assert.ok(queriesGuide);
+    assert.doesNotMatch(JSON.stringify(queryShapes), /"description":"/);
     new AjvJsonSchemaValidator().getValidator(compose.inputSchema);
     for (const tool of originals) {
       assert.equal(tool.inputSchema.type, "object");
@@ -96,6 +100,7 @@ const INPUT_CONSTRAINTS: Record<string, string> = {
   ye_ast_workspace: "be2953f74d297b7d286e974b18b488c4137a6f1f9c5c94385701b1fdd2893244",
   ye_ast_decisions: "be2953f74d297b7d286e974b18b488c4137a6f1f9c5c94385701b1fdd2893244",
 };
+const COMPOSE_CONSTRAINTS = "b8aef41da3e104b891ae30334ba772f7d25e3d221ba3f8804670ee7cea0274c9";
 function canonicalConstraints(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(canonicalConstraints);
   if (value === null || typeof value !== "object") return value;
