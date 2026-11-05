@@ -377,7 +377,7 @@ const MUTATORS: Readonly<Record<string, Readonly<Record<string, number | "keys" 
 
 function readMemberEvidence(sf: ts.SourceFile, declarations: Map<string, number>, shape: Pick<RawRouteFile, "imports">): RawMemberEvidence {
   const result: RawMemberEvidence = { methods: [], calls: [], localCalls: [], reads: new Map(), declarations, escapedClasses: new Set(), writes: [], subclassMembers: new Set(), qualified: [], escapedMutator: false, unknownBinding: false, unknownProvider: false };
-  const unsafeFields = new Set<string>();
+  const redeclared = new Set<string>();
   const escapedOwners = result.escapedClasses;
   const lineOf = (node: ts.Node): number => sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1;
   const key = (owner: ts.ClassDeclaration, field: string): string => `${owner.name?.text}\0${owner.name === undefined ? 0 : lineOf(owner.name)}\0${field}`;
@@ -540,7 +540,7 @@ function readMemberEvidence(sf: ts.SourceFile, declarations: Map<string, number>
       const byName = Map.groupBy(node.members.filter((m) => m.name !== undefined && ts.isIdentifier(m.name)), (m) => (m.name as ts.Identifier).text);
       const cannotProveMembers = node.members.some((member) => member.name !== undefined && ts.isComputedPropertyName(member.name)) || (ts.getModifiers(node) ?? []).some((modifier) => modifier.kind === ts.SyntaxKind.AbstractKeyword);
       for (const [name, members] of byName) {
-        if (members.length > 1) unsafeFields.add(key(node, name));
+        if (members.length > 1) redeclared.add(key(node, name));
         if (cannotProveMembers) continue;
         const member = members[0];
         if (members.length !== 1 || member === undefined || !ts.isMethodDeclaration(member) || member.body === undefined || isStatic(member) || (ts.canHaveDecorators(member) && (ts.getDecorators(member)?.length ?? 0) > 0)) continue;
@@ -568,32 +568,43 @@ function readMemberEvidence(sf: ts.SourceFile, declarations: Map<string, number>
     if ((ts.isPrefixUnaryExpression(node) || ts.isPostfixUnaryExpression(node)) && (node.operator === ts.SyntaxKind.PlusPlusToken || node.operator === ts.SyntaxKind.MinusMinusToken)) written(node.operand);
     if (ts.isDeleteExpression(node)) written(node.expression);
     if ((ts.isForInStatement(node) || ts.isForOfStatement(node)) && !ts.isVariableDeclarationList(node.initializer)) written(node.initializer);
-    if (ts.isElementAccessExpression(node) && node.expression.kind === ts.SyntaxKind.ThisKeyword) {
-      const owner = ownerOfThis(node);
-      if (owner !== undefined) unsafeFields.add(`${owner.name?.text}\0${lineOf(owner.name!)}\0*`);
-    }
     if (ts.isPropertyAccessExpression(node) && node.expression.kind === ts.SyntaxKind.ThisKeyword) {
       const owner = ownerOfThis(node);
-      if (owner !== undefined) {
-        const field = node.name.text;
-        const member = node.parent;
-        const call = member.parent;
-        const direct = ts.isPropertyAccessExpression(member) && member.expression === node && !node.questionDotToken && !member.questionDotToken && ts.isCallExpression(call) && call.expression === member && !call.questionDotToken;
-        let methodBody = false;
-        for (let parent: ts.Node | undefined = node.parent; parent !== undefined && parent !== owner; parent = parent.parent) {
-          if ((ts.isMethodDeclaration(parent) || ts.isConstructorDeclaration(parent) || ts.isGetAccessorDeclaration(parent) || ts.isSetAccessorDeclaration(parent)) && parent.parent === owner) methodBody = true;
-        }
-        if (direct && methodBody) {
-          const at = sf.getLineAndCharacterOfPosition(call.getStart(sf));
-          result.calls.push({ owner: owned(owner), field, member: member.name.text, line: at.line + 1, column: at.character + 1 });
-        } else unsafeFields.add(key(owner, field));
+      const member = node.parent;
+      const call = member.parent;
+      const direct = ts.isPropertyAccessExpression(member) && member.expression === node && !node.questionDotToken && !member.questionDotToken && ts.isCallExpression(call) && call.expression === member && !call.questionDotToken;
+      if (owner !== undefined && direct && runsOnInstance(node, owner, node.name.text)) {
+        const at = sf.getLineAndCharacterOfPosition(call.getStart(sf));
+        result.calls.push({ owner: owned(owner), field: node.name.text, member: member.name.text, line: at.line + 1, column: at.character + 1 });
       }
     }
     ts.forEachChild(node, visit);
   };
   visit(sf);
-  result.calls = result.calls.filter((call) => !unsafeFields.has(`${call.owner.name}\0${call.owner.line}\0${call.field}`) && !unsafeFields.has(`${call.owner.name}\0${call.owner.line}\0*`) && !escapedOwners.has(`${call.owner.name}\0${call.owner.line}`));
+  result.calls = result.calls.filter((call) => !redeclared.has(`${call.owner.name}\0${call.owner.line}\0${call.field}`) && !escapedOwners.has(`${call.owner.name}\0${call.owner.line}`));
   return result;
+}
+
+/**
+ * Whether a use of `this.<field>` runs on a constructed instance of `owner` with the field already set: inside an
+ * instance method, constructor or accessor, inside a closure an instance field initializer creates, or directly in an
+ * instance field initializer that follows the field's own declaration. A static member, a static block and a decorator
+ * do not run on the instance.
+ */
+function runsOnInstance(node: ts.Node, owner: ts.ClassDeclaration, field: string): boolean {
+  let deferred = false;
+  for (let at: ts.Node = node.parent; at !== owner; at = at.parent) {
+    if (ts.isDecorator(at) || ts.isClassStaticBlockDeclaration(at)) return false;
+    if (at.parent === owner) {
+      if (ts.isMethodDeclaration(at) || ts.isConstructorDeclaration(at) || ts.isGetAccessorDeclaration(at) || ts.isSetAccessorDeclaration(at)) return true;
+      if (!ts.isPropertyDeclaration(at) || isStatic(at)) return false;
+      if (deferred) return true;
+      const index = owner.members.indexOf(at);
+      return owner.members.slice(0, index).some((member) => ts.isPropertyDeclaration(member) && ts.isIdentifier(member.name) && member.name.text === field);
+    }
+    if (ts.isFunctionLike(at)) deferred = true;
+  }
+  return false;
 }
 
 /** An expression without the parentheses, assertions and non-null marks that do not change the value it stands for. */

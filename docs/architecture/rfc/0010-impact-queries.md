@@ -155,6 +155,11 @@ reach its receiver and member:
   other target; any other substitution refuses the provided class. A token the reader cannot tell apart from a class, and
   a provider object it cannot read, reach every class their file names.
 - A member a subclass declares or assigns makes that member name unsafe on every class.
+- A field is judged by what its uses do: a write, `++`/`--`, `delete` or a redeclaration makes it unsafe; a read, a
+  value passed on or an optional call leaves it as its declaration fixed it. A call `this.f.m()` is a use of the owner in
+  an instance method, constructor or accessor, in a closure an instance field initializer creates (`computed`,
+  `effect`, …), and directly in an instance field initializer that follows the declaration of `f`; a static member, a
+  static block or a decorator does not run on the instance.
 
 Only a mutation API used as a value, or an unreadable source, has no bound; then nothing is proven. Shadowing, escape of
 the receiver's own instance and unsupported syntax still withhold proof per receiver.
@@ -162,7 +167,7 @@ A constructor with an explicit value-return cannot establish exclusive instance 
 functions do not invalidate the enclosing constructor. Potential local call sites require lexical binding evidence
 independently of project-wide member stability and refuse dynamic binding constructs such as direct eval/with.
 The checks do not simulate runtime DI configuration. Missing evidence remains a cut. `EDGE_POLICY.referenceProofVersion`
-is 11 and participates in the existing producer digest; syntax and proof changes invalidate derived facts without
+is 12 and participates in the existing producer digest; syntax and proof changes invalidate derived facts without
 rebuilding an unchanged graph.
 
 ### Confidence and fan-in

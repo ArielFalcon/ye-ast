@@ -333,8 +333,8 @@ test("arrow callbacks preserve lexical this but ordinary functions do not", asyn
   assert.equal(meta.memberUses?.length, 1);
 });
 
-test("receiver mutations or escapes invalidate its member proof", async () => {
-  for (const change of ["this.store = new Store()", "this.store ||= new Store()", "[this.store] = [new Store()]", "this['store'] = new Store()", "this.store.write = () => {}", "this.store['write'] = () => {}", "consume(this.store)", "return this", "this.store.write.bind(this.store)"])
+test("receiver mutations or escapes of the owner invalidate its member proof", async () => {
+  for (const change of ["this.store = new Store()", "this.store ||= new Store()", "[this.store] = [new Store()]", "this['store'] = new Store()", "this.store.write = () => {}", "this.store['write'] = () => {}", "return this"])
     assert.deepEqual((await memberProofs(`export class Owner { store = new Store(); run() { this.store.write(); ${change}; } }`)).memberUses, [], change);
 });
 
@@ -719,4 +719,25 @@ test("a source outside the Angular project contributes its writes instead of dis
 test("a test file is no mutation or substitution evidence", async () => {
   const meta = await memberProofs(OWNER, undefined, { "src/store.spec.ts": "import { Store } from './store'; Store.prototype.write = fn; const providers = [{ provide: Store, useValue: {} }];" });
   assert.equal(meta.memberUses?.length, PROVEN);
+});
+
+test("a call in a field initializer closure or after its field's declaration is a use of the owner", async () => {
+  for (const owner of [
+    "export class Owner { store = new Store(); total = computed(() => this.store.write()); }",
+    "export class Owner { store = new Store(); watcher = effect(() => { const run = () => this.store.write(); run(); }); }",
+    "export class Owner { store = new Store(); result = this.store.write(); }",
+  ]) assert.equal((await memberProofs(owner)).memberUses?.length, PROVEN, owner);
+  for (const owner of [
+    "export class Owner { result = this.store.write(); store = new Store(); }",
+    "export class Owner { store = new Store(); static result = this.store.write(); }",
+    "@Injectable() export class Owner { result = this.store.write(); constructor(private store: Store) {} }",
+  ]) assert.deepEqual((await memberProofs(owner)).memberUses, [], owner);
+});
+
+test("reading, passing or optionally calling a field leaves it safe; only a write, delete or redeclaration makes it unsafe", async () => {
+  const reads = "consume(this.store); const held = this.store; this.store?.write(); const bound = this.store.write.bind(this.store);";
+  assert.equal((await memberProofs(`export class Owner { store = new Store(); run() { this.store.write(); ${reads} } }`)).memberUses?.length, PROVEN);
+  for (const change of ["this.store++", "delete this.store", "const self = this; self.store = other", "Object.assign(this, { store: other })", "Object.assign(this, other)", "this[key] = other"])
+    assert.deepEqual((await memberProofs(`export class Owner { store = new Store(); run() { this.store.write(); ${change}; } }`)).memberUses, [], change);
+  assert.deepEqual((await memberProofs("export class Owner { store = new Store(); store2 = 1; run() { this.store.write(); } get store() { return other; } }")).memberUses, []);
 });
