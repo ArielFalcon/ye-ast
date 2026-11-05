@@ -296,7 +296,9 @@ source identity before delivering selected data. A changed source fails rather t
 reads current state; no old live capture or final answer is retained.
 
 A selected full response is a projection with context and page records; summary/details return projection receipts and
-render those records in text. Source analysis and owner limits remain distinct from page availability: an available
+render those records in text. Full text guides the reader to the structured page while retaining source limits, page
+continuation and the recovery recipe. Repeated presentation context may be shared across explicitly associated rows;
+literal selector examples and each row's coordinates remain available. Source analysis and owner limits remain distinct from page availability: an available
 zero-item page is not an unknown or unavailable source, which carries its actual reason and evidence. Selection does
 not change analysis scope or traversal budgets. The public redaction boundary also applies to evidence and recipes;
 internal source sidecars are not exposed.

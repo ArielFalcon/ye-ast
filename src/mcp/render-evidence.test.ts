@@ -46,3 +46,25 @@ test("a verified empty base-module page retains its owner, snapshot, and zero to
   assert.match(text, /Records: \[\]/);
   assert.match(text, /"changed":\["src\/\*\*"\]/);
 });
+
+test("full selection guides the complete structured page without serializing its records twice", () => {
+  const records = { source, availability: "available", kind: "cut-places", context: { owner: { kind: "fact" }, snapshot: source.snapshot, analysis: { status: "partial" }, cutIndex: 2, kind: "depth", anchor: "anchor" }, items: [{ atIndex: 2, place: "unique-place" }] } as EvidenceSelectionResult;
+  const recovery = { version: 1 as const, status: "available" as const, resultIdentity: "identity", query: { name: "ye_ast_callers" as const, arguments: { revision: "sha" } } };
+  const text = renderEvidenceSelection({ mode: "full", select: { kind: "cut-places", owner: { kind: "fact" }, cutIndex: 2 }, records, page: { limit: 1, offset: 1, returned: 1, total: 2, nextCursor: "next" }, recovery });
+  assert.match(text, /structuredContent.*source/);
+  assert.match(text, /structuredContent.*context.*items.*page/);
+  assert.match(text, /"limit":3/);
+  assert.match(text, /"nextCursor":"next"/);
+  assert.match(text, /"resultIdentity":"identity"/);
+  assert.doesNotMatch(text, /unique-place/);
+});
+
+test("full guide does not serialize source reads twice and distinguishes unavailable pages", () => {
+  const records = { source: { ...source, reads: [{ marker: "unique-source-read" }] }, availability: "unavailable", reason: "unresolved", evidence: [{ path: "a", line: 1 }] } as unknown as EvidenceSelectionResult;
+  const text = renderEvidenceSelection({ mode: "full", select: { kind: "entrypoint-evidence", findingIndex: 0 }, records, recovery: { version: 1, status: "unavailable", reason: "unresolved-context" } });
+  assert.doesNotMatch(text, /unique-source-read/);
+  assert.doesNotMatch(text, /context, items and page/);
+  assert.match(text, /structuredContent\.evidence/);
+  assert.match(text, /"limit":3/);
+  assert.match(text, /unresolved/);
+});

@@ -1,4 +1,4 @@
-import type { ResponseMode } from "./presentation.ts";
+import type { ResponseMode, RenderContext } from "./presentation.ts";
 import type { Entrypoint } from "../core/domain/entrypoints/entrypoint.ts";
 import type { Handler } from "../core/domain/entrypoints/http-route.ts";
 import type { ChangedEntrypoint } from "../core/domain/impact/changed-entrypoints.ts";
@@ -24,6 +24,8 @@ import type { RepoImpact, WorkspaceImpactValue } from "../core/ports/workspace-i
 import type { WorkspaceSource } from "../core/ports/workspace-repos.port.ts";
 import { FIXED_LAYER_DIRECTORY } from "../core/ports/fixed-layer-store.port.ts";
 import { WORKSPACE_MANIFEST_FILE } from "../core/ports/workspace-defaults.port.ts";
+import { canonicalJson } from "../core/domain/shared/canonical-json.ts";
+import { preferShorterText, shareExactContext } from "./presentation-sharing.ts";
 
 const NONE = "  (none)";
 const CUTS = "cuts:";
@@ -239,13 +241,13 @@ function size(lines: readonly string[]): number {
   return lines.reduce((total, line) => total + Buffer.byteLength(line, "utf8") + 1, 0);
 }
 
-function cutCoordinates(cuts: readonly Cut[], owner: object, detail: ResponseMode): string[] {
+function cutCoordinates(cuts: readonly Cut[], owner: object, detail: ResponseMode, context?: RenderContext): string[] {
   const shown = new Set<Cut["kind"]>();
   return cuts.flatMap((cut, cutIndex) => {
     if (detail === "summary" && shown.has(cut.kind)) return [];
     shown.add(cut.kind);
     const anchor = detail === "summary" ? "" : ` (anchor ${JSON.stringify(cut.at[0])})`;
-    return [`  lookup example: ${JSON.stringify({ kind: "cut-places", owner, cutIndex })}${anchor}`];
+    return [`  ${context?.recovery?.status === "unavailable" ? "recorded coordinates" : "lookup example"}: ${JSON.stringify({ kind: "cut-places", owner, cutIndex })}${anchor}`];
   });
 }
 
@@ -300,13 +302,34 @@ function entrypointContext(entrypoint: Entrypoint): string[] {
   return [`    base path defaults: ${JSON.stringify(base.value.default)}${profiles === 0 ? "" : `; ${profiles} profile-specific settings, mode: "full" includes them`}`];
 }
 
+function unknownFindingRun(items: readonly Finding<Entrypoint>[], start: number): { end: number; lines: string[] } {
+  const first = items[start]!;
+  if (first.status !== "unknown" || first.evidence.length !== 1) return { end: start + 1, lines: [`${itemLine(first)} [findingIndex ${start}]`] };
+  const evidence = first.evidence[0]!;
+  const { line: _line, endLine: _endLine, ...sharedEvidence } = evidence;
+  let end = start + 1;
+  while (end < items.length) {
+    const next = items[end]!;
+    if (next.status !== "unknown" || next.reason !== first.reason || next.evidence.length !== 1) break;
+    const { line: _nextLine, endLine: _nextEndLine, ...rest } = next.evidence[0]!;
+    if (JSON.stringify(rest) !== JSON.stringify(sharedEvidence)) break;
+    end++;
+  }
+  const literal = items.slice(start, end).map((item, offset) => `${itemLine(item)} [findingIndex ${start + offset}]`);
+  const shared = [`  - unknown (${first.reason}) ${evidence.path}:`, ...items.slice(start, end).map((item, offset) => {
+    const place = item.evidence[0]!;
+    return `    findingIndex ${start + offset}: ${spanText(place.line, place.endLine)}`;
+  })];
+  return { end, lines: size(shared) < size(literal) ? shared : literal };
+}
+
 /** Repeated extraction evidence can support several findings without repeating the same coordinates. */
 function entrypointItems(items: readonly Finding<Entrypoint>[], detail: ResponseMode): string[] {
   if (detail !== "details") {
     const lines: string[] = [];
     for (let index = 0; index < items.length;) {
       const first = items[index]!;
-      if (first.status === "unknown") { lines.push(`${itemLine(first)} [findingIndex ${index}]`); index++; continue; }
+      if (first.status === "unknown") { const run = unknownFindingRun(items, index); lines.push(...run.lines); index = run.end; continue; }
       const location = entrypointLocation(first.value);
       let end = index + 1;
       while (end < items.length) {
@@ -325,7 +348,8 @@ function entrypointItems(items: readonly Finding<Entrypoint>[], detail: Response
   const lines: string[] = [];
   for (let index = 0; index < items.length;) {
     const first = items[index]!;
-    if (first.status === "unknown" || first.evidence.length === 0) {
+    if (first.status === "unknown") { const run = unknownFindingRun(items, index); lines.push(...run.lines); index = run.end; continue; }
+    if (first.evidence.length === 0) {
       lines.push(`${itemLine(first)} [findingIndex ${index}]`, ...(first.status === "complete" ? entrypointContext(first.value) : []));
       index++;
       continue;
@@ -350,13 +374,13 @@ function entrypointItems(items: readonly Finding<Entrypoint>[], detail: Response
   return list(lines);
 }
 
-export function renderEntrypointMap(fact: Fact<EntrypointMap>, detail: ResponseMode = "summary"): string {
+export function renderEntrypointMap(fact: Fact<EntrypointMap>, detail: ResponseMode = "summary", context?: RenderContext): string {
   if (detail === "full") {
     if (fact.status === "unknown") return "Inspect reason and evidence; the result has no value.";
     const section = fact.value.entrypoints;
     return section.status === "unknown"
       ? "Check value.entrypoints.status, reason and evidence; this section has no value."
-      : `Selection lookup: findingIndex is the zero-based position in value.entrypoints.value. Check value.entrypoints.status and value.entrypoints.value; match each complete finding in value.entrypoints.value[].value by kind/name and handler or component coordinates. Inspect basePath status and evidence for HTTP routes; unknown findings carry reason and evidence, and partial sections carry cuts.${section.value.some((item) => item.status === "complete" && item.value.kind === "ui-route") ? " For UI routes, match kind and name, then inspect value.entrypoints.value[].value.guards; these are each route's own guards, not inherited or runtime restrictions." : ""}`;
+      : `${context?.recovery?.status === "unavailable" ? `Recovery unavailable (${context.recovery.reason}); recorded coordinates` : "Selection lookup"}: findingIndex is the zero-based position in value.entrypoints.value. Check value.entrypoints.status and value.entrypoints.value; match each complete finding in value.entrypoints.value[].value by kind/name and handler or component coordinates. Inspect basePath status and evidence for HTTP routes; unknown findings carry reason and evidence, and partial sections carry cuts.${section.value.some((item) => item.status === "complete" && item.value.kind === "ui-route") ? " For UI routes, match kind and name, then inspect value.entrypoints.value[].value.guards; these are each route's own guards, not inherited or runtime restrictions." : ""}`;
   }
   const lines = headerLines(fact);
   if (fact.status === "unknown") return lines.join("\n");
@@ -375,7 +399,7 @@ export function renderEntrypointMap(fact: Fact<EntrypointMap>, detail: ResponseM
     ];
     lines.push(`  findings: ${known} known, ${unknown} unknown`, ...(unknownBases === 0 ? [] : [`  base path unknown for ${unknownBases} ${unknownBases === 1 ? "route" : "routes"}`]), ...guardNote, ...entrypointItems(section.value, detail));
   }
-  lines.push(...cutsBlock([...cutsOf(fact), ...cutsOf(section)], detail), ...cutCoordinates(cutsOf(fact), { kind: "fact" }, detail), ...cutCoordinates(cutsOf(section), { kind: "entrypoints" }, detail));
+  lines.push(...cutsBlock([...cutsOf(fact), ...cutsOf(section)], detail), ...cutCoordinates(cutsOf(fact), { kind: "fact" }, detail, context), ...cutCoordinates(cutsOf(section), { kind: "entrypoints" }, detail, context));
   return lines.join("\n");
 }
 
@@ -383,16 +407,54 @@ function changedLine(change: ChangedEntrypoint): string {
   return `  - ${change.change} ${change.kind} ${change.name} -> ${handlerText(change.handler)}`;
 }
 
-function reachedLines(reached: ReachedEntrypoint, seeds: readonly Seed[], detail: ResponseMode, owner: object): string[] {
+function reachedLines(reached: ReachedEntrypoint, seeds: readonly Seed[], detail: ResponseMode, owner: object, sharedLookup = false, sharedOrigin = false, selectable = true): string[] {
   const name = reached.name === undefined ? reached.kind : `${reached.kind} ${reached.name}`;
   const confidence = reached.confidence < 1 ? `, confidence ${reached.confidence}` : "";
   const origin = seeds[reached.seeds[0] ?? -1];
   const others = reached.seeds.length - 1;
   return [
-    `  - ${name} -> ${handlerText(reached.handler)} (depth ${reached.depth}${confidence}); lookup example: ${JSON.stringify({ kind: "handler-origins", owner, handler: { path: reached.handler.path, symbol: reached.handler.symbol, line: reached.handler.line } })}`,
+    `  - ${name} -> ${handlerText(reached.handler)} (depth ${reached.depth}${confidence}); ${sharedLookup || !selectable ? `handler: ${JSON.stringify({ path: reached.handler.path, symbol: reached.handler.symbol, line: reached.handler.line })}` : `lookup example: ${JSON.stringify({ kind: "handler-origins", owner, handler: { path: reached.handler.path, symbol: reached.handler.symbol, line: reached.handler.line } })}`}`,
     ...(detail === "summary" && reached.seeds.length > 0 ? [`    origins: ${reached.seeds.length}`] : []),
-    ...(detail === "summary" || origin === undefined ? [] : [`    one verified origin: ${placeText(origin.file, origin.line, origin.endLine)} ${origin.symbol} (${origin.basis})${others > 0 ? `; ${others} other ${others === 1 ? "origin" : "origins"}; mode: "full" includes all` : ""}`]),
+    ...(detail === "summary" || origin === undefined ? [] : [sharedOrigin ? "    origin association above" : `    one verified origin: ${placeText(origin.file, origin.line, origin.endLine)} ${origin.symbol} (${origin.basis})${others > 0 ? `; ${others} other ${others === 1 ? "origin" : "origins"}; mode: "full" includes all` : ""}`]),
   ];
+}
+
+function reachedGroup(value: ImpactValue, detail: ResponseMode, owner: object, selectable = true): string[] {
+  const support = shareExactContext(value.entrypoints, (entrypoint) => ({
+    indices: entrypoint.seeds,
+    support: entrypoint.seeds.map((index) => value.seeds[index]),
+    confidence: entrypoint.confidence,
+  }));
+  const rows = (sharedLookup: boolean): string[] => {
+    const output: string[] = [];
+    for (let index = 0; index < value.entrypoints.length;) {
+      const first = value.entrypoints[index]!;
+      let end = index + 1;
+      while (end < value.entrypoints.length) {
+        if (support.rows[end]!.contextIndex !== support.rows[index]!.contextIndex) break;
+        end++;
+      }
+      const run = value.entrypoints.slice(index, end);
+      const literal = run.flatMap((entrypoint) => reachedLines(entrypoint, value.seeds, detail, owner, sharedLookup, false, selectable));
+      const origin = value.seeds[first.seeds[0] ?? -1];
+      if (detail === "details" && run.length > 1 && origin !== undefined) {
+        const other = first.seeds.length - 1;
+        const shared = [`  one verified origin: ${placeText(origin.file, origin.line, origin.endLine)} ${origin.symbol} (${origin.basis})${other > 0 ? `; ${other} other ${other === 1 ? "origin" : "origins"}; mode: "full" includes all` : ""}`, ...run.flatMap((entrypoint) => reachedLines(entrypoint, value.seeds, detail, owner, sharedLookup, true, selectable))];
+        output.push(...(size(shared) < size(literal) ? shared : literal));
+      } else output.push(...literal);
+      index = end;
+    }
+    return output;
+  };
+  const literal = rows(false);
+  const first = value.entrypoints[0];
+  if (first === undefined || !selectable) return literal;
+  const { path, symbol, line } = first.handler;
+  const shared = [
+    `  Handler lookup: combine each row's handler object with kind and owner from this complete select example: ${JSON.stringify({ kind: "handler-origins", owner, handler: { path, symbol, line } })}`,
+    ...rows(true),
+  ];
+  return preferShorterText(literal.join("\n"), shared.join("\n")) === shared.join("\n") ? shared : literal;
 }
 
 /** A seed is already listed, so a symbol reached at depth 0 that stands for one is not printed twice. */
@@ -459,20 +521,21 @@ function impactedSymbols(value: ImpactValue, detail: ResponseMode): string[] {
 }
 
 /** What an impact answer says about its walk, without its header or its cuts. */
-function impactBody(value: ImpactValue, detail: ResponseMode, owner: object): string[] {
+function impactBody(value: ImpactValue, detail: ResponseMode, owner: object, context?: RenderContext): string[] {
   return [
+    ...(context?.recovery?.status === "unavailable" ? [`  Recovery unavailable (${context.recovery.reason}); recorded coordinates do not establish an executable replay.`] : []),
     ...(value.mergeBase === undefined ? [] : [`merge base: ${value.mergeBase}`]),
     ...(value.changedEntrypoints === undefined ? [] : [`changed entrypoints (${value.changedEntrypoints.length}):`, ...value.changedEntrypoints.map(changedLine)]),
     `reached entrypoints (${value.entrypoints.length}):`,
     ...(detail === "details" && value.entrypoints.some((entrypoint) => entrypoint.seeds.length > 0) ? ["  A recorded origin is an association, not a complete call chain."] : []),
     ...(detail === "summary" && value.entrypoints.some((entrypoint) => entrypoint.seeds.length > 0) ? [`  origin associations (${value.entrypoints.reduce((total, entrypoint) => total + entrypoint.seeds.length, 0)}): counted below; mode "details" shows one per entrypoint; mode: "full" includes all`] : []),
-    ...value.entrypoints.flatMap((entrypoint) => reachedLines(entrypoint, value.seeds, detail, owner)),
+    ...reachedGroup(value, detail, owner, context?.recovery?.status !== "unavailable"),
     ...impactedSymbols(value, detail),
-    ...(value.modules === undefined ? [] : moduleLines(value.modules, detail, owner)),
+    ...(value.modules === undefined ? [] : moduleLines(value.modules, detail, owner, context?.tool !== "callers" && context?.recovery?.status !== "unavailable")),
   ];
 }
 
-function moduleLines(value: ModuleImpactValue, detail: ResponseMode, owner: object): string[] {
+function moduleLines(value: ModuleImpactValue, detail: ResponseMode, owner: object, selectable = true): string[] {
   const originListing = value.origins.map((origin) => `  ${origin.file} (${origin.change})`);
   const counts = [...Map.groupBy(value.origins, (origin) => origin.change)].map(([change, group]) => `${group.length} ${change}`).join(", ");
   const originCount = [`  ${value.origins.length} origins (${counts}); mode: "full" includes every origin`];
@@ -486,9 +549,9 @@ function moduleLines(value: ModuleImpactValue, detail: ResponseMode, owner: obje
     const example = detail === "details" && first !== undefined ? `; origin ${first.file} (${first.change})` : "";
     return `${count} origin ${count === 1 ? "association" : "associations"}${example}${count > (example === "" ? 0 : 1) ? '; mode: "full" includes all' : ""}`;
   };
-  const line = (module: Module, includeContext = true): string =>
-    `  ${module.snapshot} ${module.file} [lookup example: ${JSON.stringify({ kind: "module-origins", owner, module: { file: module.file, snapshot: module.snapshot } })}] (depth ${module.depth}${includeContext ? `, ${context(module)}` : ""})${module.via === undefined ? "" : ` via ${module.via.kind} ${module.via.file} at ${module.file}:${module.via.line}${module.via.typeOnly ? " (type-only)" : ""}`}`;
-  const grouped = (modules: readonly Module[]): string[] => {
+  const line = (module: Module, includeContext = true, sharedLookup = false): string =>
+    `  ${module.snapshot} ${module.file}${!selectable ? "" : ` [${sharedLookup ? `module: ${JSON.stringify({ file: module.file, snapshot: module.snapshot })}` : `lookup example: ${JSON.stringify({ kind: "module-origins", owner, module: { file: module.file, snapshot: module.snapshot } })}`}]`} (depth ${module.depth}${includeContext ? `, ${context(module)}` : ""})${module.via === undefined ? "" : ` via ${module.via.kind} ${module.via.file} at ${module.file}:${module.via.line}${module.via.typeOnly ? " (type-only)" : ""}`}`;
+  const grouped = (modules: readonly Module[], sharedLookup = false): string[] => {
     const lines: string[] = [];
     for (let start = 0; start < modules.length;) {
       const first = modules[start]!;
@@ -496,8 +559,8 @@ function moduleLines(value: ModuleImpactValue, detail: ResponseMode, owner: obje
       let end = start + 1;
       while (end < modules.length && JSON.stringify(modules[end]!.origins) === key) end++;
       const run = modules.slice(start, end);
-      const separate = run.map((module) => line(module));
-      const shared = [`  shared ${context(first)}:`, ...run.map((module) => `  ${line(module, false)}`)];
+      const separate = run.map((module) => line(module, true, sharedLookup));
+      const shared = [`  shared ${context(first)}:`, ...run.map((module) => `  ${line(module, false, sharedLookup)}`)];
       lines.push(...(run.length > 1 && size(shared) < size(separate) ? shared : separate));
       start = end;
     }
@@ -506,10 +569,18 @@ function moduleLines(value: ModuleImpactValue, detail: ResponseMode, owner: obje
   const listing = grouped(value.modules);
   const omitted = value.modules.length - shown.length;
   const compact = [...grouped(shown), ...(omitted === 0 ? [] : [`  ${omitted} deeper module dependencies not listed; mode: "full" includes their recorded evidence.`])];
-  const selected = omitted > 0 && size(compact) < size(listing) ? compact : listing;
+  const useCompact = omitted > 0 && size(compact) < size(listing);
+  const selectedModules = useCompact ? shown : value.modules;
+  const selected = useCompact ? compact : listing;
+  const first = selectedModules[0];
+  const lookupShared = first === undefined || !selectable ? selected : [
+    `  Module lookup: combine each row's module object with kind and owner from this complete select example: ${JSON.stringify({ kind: "module-origins", owner, module: { file: first.file, snapshot: first.snapshot } })}`,
+    ...grouped(selectedModules, true),
+    ...(useCompact && omitted > 0 ? [`  ${omitted} deeper module dependencies not listed; mode: "full" includes their recorded evidence.`] : []),
+  ];
   return [
     `module origins (${value.origins.length}):`, ...origins,
-    `module dependencies (${value.modules.length}, not symbol or entrypoint impact):`, ...selected,
+    `module dependencies (${value.modules.length}, not symbol or entrypoint impact):`, ...(size(lookupShared) < size(selected) ? lookupShared : selected),
     `module expansions: ${value.cost.expansionsUsed}`,
   ];
 }
@@ -581,21 +652,21 @@ function impactCuts(cuts: readonly Cut[], detail: ResponseMode): string[] {
   }), '  reference places counted; mode: "full" includes every place'];
 }
 
-function impactLookups(value: ImpactValue, path: string): string[] {
+function impactLookups(value: ImpactValue, path: string, context?: RenderContext): string[] {
   const lines: string[] = [];
   if (value.entrypoints.length > 0) lines.push(`  To inspect a reached entrypoint, select ${path}.entrypoints by kind/name and handler.path, handler.symbol, handler.line. Its seeds are zero-based indexes into ${path}.seeds; resolve those indexes to recover all associated origins, not a complete call chain.`);
   if (value.symbols.length > 0) lines.push(`  To inspect a dependency omitted from text, filter ${path}.symbols by file, symbol and line. Read via.file/symbol for its recorded dependency; via.lines are locations in that symbol's own file, not in via.file. Preserve via.basis and confidence when interpreting it.`);
   if (value.seeds.length > 0 && value.entrypoints.length === 0) lines.push(`  To identify the walk origins, match ${path}.seeds by file, symbol and line; basis distinguishes requested targets from change-derived origins.`);
   if (value.modules !== undefined && (value.modules.origins.length > 0 || value.modules.modules.length > 0)) lines.push(`  Inspect ${path}.modules.origins and ${path}.modules.modules; each module origin index joins that origins array. Module dependencies are distinct from symbol impact.`);
   if ((value.changedEntrypoints?.length ?? 0) > 0) lines.push(`  To inspect entrypoints added, removed or altered by the diff, filter ${path}.changedEntrypoints by change, kind/name and handler identity; these are distinct from reached entrypoints.`);
-  if (lines.length > 0) lines.unshift(`  Selection lookup: use handler path, symbol and line with owner ${path === "value" ? '{kind:"local"}' : '{kind:"section",repo:<repository key>}'}; module lookup uses file and snapshot (base or head) with the same owner.`);
+  if (lines.length > 0 && context?.recovery?.status !== "unavailable") lines.unshift(`  Selection lookup: use handler path, symbol and line with owner ${path === "value" ? '{kind:"local"}' : '{kind:"section",repo:<repository key>}'}${context?.tool === "callers" || value.modules === undefined ? "." : "; module lookup uses file and snapshot (base or head) with the same owner."}`);
   return lines;
 }
 
-function impactCutLookup(cuts: readonly Cut[], path: string): string[] {
+function impactCutLookup(cuts: readonly Cut[], path: string, context?: RenderContext): string[] {
   if (cuts.length === 0) return [];
   return [
-    `  Selection lookup: cutIndex is the zero-based position in ${path}; owner identifies the fact, entrypoints section, repository section or indexed read.
+    `  ${context?.recovery?.status === "unavailable" ? "Recorded coordinates" : "Selection lookup"}: cutIndex is the zero-based position in ${path}; owner identifies the fact, entrypoints section, repository section or indexed read.
   Before treating this result as exhaustive, inspect ${path}: filter by kind and the relevant anchor in at; a recorded limit explains where coverage stopped. Full JSON does not extend that coverage.`,
     ...(cuts.some((cut) => cut.kind === "unresolved-link") ? [`  For unresolved-link in ${path}, at[0] names the unresolved file/declaration anchor and the remaining at entries locate potential references; they are not verified calls.`] : []),
   ];
@@ -607,31 +678,34 @@ function impactSnapshotGuide(snapshot: SnapshotRef, mergeBase?: string): string 
   return `  Keep repo ${JSON.stringify(snapshot.repo)} and the same snapshot when repeating this query: ${selector}; retain the declared scope and change selection. For a related callers/outline/importers query about head evidence use revision ${JSON.stringify(snapshot.sha)} instead of impact base/head; base-side modules use their recorded merge-base revision. It answers a new question, not a filter over this result.`;
 }
 
-function baseModuleGuides(value: ImpactValue, repo: string, mergeBase = value.mergeBase): string[] {
-  return (value.modules?.modules ?? []).filter((module) => module.snapshot === "base").map((module) =>
-    `  Base module: repo ${JSON.stringify(repo)}, ${mergeBase === undefined ? "revision unavailable" : `revision ${JSON.stringify(mergeBase)}`}, file ${JSON.stringify(module.file)}; use outline only at that recorded merge base.`,
-  );
+function baseModuleGuides(value: ImpactValue, repo: string, mergeBase = value.mergeBase, path = "value"): string[] {
+  const modules = (value.modules?.modules ?? []).filter((module) => module.snapshot === "base");
+  if (modules.length === 0) return [];
+  const coordinate = mergeBase === undefined ? "revision unavailable" : `revision ${JSON.stringify(mergeBase)}`;
+  const literal = modules.map((module) => `  Base module: repo ${JSON.stringify(repo)}, ${coordinate}, file ${JSON.stringify(module.file)}; use outline only at that recorded merge base.`);
+  const shared = [`  Base modules: repo ${JSON.stringify(repo)}, ${coordinate}; inspect ${path}.modules.modules[] for each base module's file; use outline only at that recorded merge base.`];
+  return size(shared) < size(literal) ? shared : literal;
 }
 
 function unknownImpactGuide(): string[] {
   return ["Investigation guide:", "  Analysis is unknown, not a verified absence of impact. Inspect reason and evidence in structuredContent (full mode includes the full fact) to establish the missing prerequisite before retrying; there is no value to search."];
 }
 
-function localImpactGuide(fact: Fact<ImpactValue> & { status: "complete" | "partial" }, mode: ResponseMode = "details"): string[] {
-  const lookups = impactLookups(fact.value, "value");
+function localImpactGuide(fact: Fact<ImpactValue> & { status: "complete" | "partial" }, mode: ResponseMode = "details", context?: RenderContext): string[] {
+  const lookups = impactLookups(fact.value, "value", context);
   if (lookups.length === 0 && fact.status === "complete") return ["There are no recorded consequences or walk origins within the declared scope and change selection."];
   return [
     "Investigation guide:",
     mode === "full" ? "  JSON navigation: paths below are relative to structuredContent." : "  Full JSON navigation (available in full mode): paths below are relative to structuredContent; query the returned payload directly when already included.",
     ...lookups,
     ...(lookups.length === 0 ? ["  There are no recorded consequences or walk origins in this answer. Read inputs.declaredScope and inputs.declaredConfig before interpreting that scoped emptiness."] : []),
-    ...impactCutLookup(cutsOf(fact), "cuts"),
+    ...impactCutLookup(cutsOf(fact), "cuts", context),
     ...baseModuleGuides(fact.value, fact.snapshot.repo),
     impactSnapshotGuide(fact.snapshot, fact.value.mergeBase),
   ];
 }
 
-function workspaceImpactGuide(fact: Fact<WorkspaceImpactValue> & { status: "complete" | "partial" }, mode: ResponseMode = "details"): string[] {
+function workspaceImpactGuide(fact: Fact<WorkspaceImpactValue> & { status: "complete" | "partial" }, mode: ResponseMode = "details", context?: RenderContext): string[] {
   const { value } = fact;
   const trigger = value.sections[value.trigger.repo];
   const originPath = `value.sections[${JSON.stringify(value.trigger.repo)}].value.impact`;
@@ -640,14 +714,14 @@ function workspaceImpactGuide(fact: Fact<WorkspaceImpactValue> & { status: "comp
     "Investigation guide:",
     mode === "full" ? "  JSON navigation: paths below are relative to structuredContent." : "  Full JSON navigation (available in full mode): paths below are relative to structuredContent; query the returned payload directly when already included.",
     ...(Object.keys(value.sections).length === 0 ? [] : ["  Select value.sections by the exact repository key, not a shared relative file path. Check section.status and, when present, section.reason/cuts and section.value.reads[].fact status/reason before using its evidence; an unknown section has no value."]),
-    ...(trigger?.status !== "unknown" && trigger?.value.impact !== undefined ? [`  The originating repository's walk is at ${originPath}.`, ...impactLookups(trigger.value.impact, originPath)] : []),
+    ...(trigger?.status !== "unknown" && trigger?.value.impact !== undefined ? [`  The originating repository's walk is at ${originPath}.`, ...impactLookups(trigger.value.impact, originPath, context)] : []),
     ...(otherImpacts.length === 0 ? [] : ["  Other repository walks are at value.sections[repo].value.impact only when that field exists. In each walk, entrypoints[].seeds indexes that same walk's seeds array; never join origins across repositories."]),
     ...(value.links.length === 0 ? [] : ["  To follow a cross-repository consequence, filter value.links by link.from (repo/file/symbol/line) or link.to (repo/name/handler). Each reach contains link IDs in recorded order: resolve them against value.links[].link.id, not the text's display numbers. Retain direction, basis and confidence; reach does not establish an unrecorded path inside a repository."]),
     ...(value.workspace.unserved.length === 0 ? [] : ["  For missing service coverage, inspect value.workspace.unserved and section.value.external when present. Use ye_ast_workspace to investigate outward-name evidence and candidate local repositories; adding workspace.repos changes the query's coverage rather than filtering this fact."]),
-    ...impactCutLookup(cutsOf(fact), "cuts"),
+    ...impactCutLookup(cutsOf(fact), "cuts", context),
     ...(Object.values(value.sections).some((section) => section.status === "partial") ? ["  Repository-local limits remain in value.sections[repo].cuts; inspect contributing section.value.reads[].fact too. Do not treat a complete independent read as resolving an unknown contributing read."] : []),
     "  For a related callers or outline query about head evidence choose the recorded owner with repo and its own snapshot from value.repositorySnapshots; base-side modules require their owning walk's recorded merge base instead. An undeclared owner requires a host registration update or an instance bound to that clone. A symbol name may match multiple declarations.",
-    ...Object.entries(value.sections).flatMap(([repo, section]) => section.status === "unknown" || section.value.impact === undefined ? [] : baseModuleGuides(section.value.impact, repo, section.value.impact.mergeBase ?? (repo === value.trigger.repo ? value.trigger.mergeBase : undefined))),
+    ...Object.entries(value.sections).flatMap(([repo, section]) => section.status === "unknown" || section.value.impact === undefined ? [] : baseModuleGuides(section.value.impact, repo, section.value.impact.mergeBase ?? (repo === value.trigger.repo ? value.trigger.mergeBase : undefined), `value.sections[${JSON.stringify(repo)}].value.impact`)),
     ...value.links.map(({ link }) => {
       const snapshot = value.repositorySnapshots.find((entry) => entry.repo === link.to.repo)?.snapshot;
       const coordinate = snapshot === undefined ? "snapshot unavailable" : snapshot.kind === "sha" ? `revision ${JSON.stringify(snapshot.sha)}` : `earlier live head ${JSON.stringify(snapshot.head)} stateId ${JSON.stringify(snapshot.stateId)}; a fresh live query must be compared`;
@@ -657,12 +731,12 @@ function workspaceImpactGuide(fact: Fact<WorkspaceImpactValue> & { status: "comp
   ];
 }
 
-export function renderImpact(fact: Fact<ImpactValue>, detail: ResponseMode = "summary"): string {
-  if (detail === "full") return (fact.status === "unknown" ? unknownImpactGuide() : localImpactGuide(fact, "full")).join("\n");
+export function renderImpact(fact: Fact<ImpactValue>, detail: ResponseMode = "summary", context?: RenderContext): string {
+  if (detail === "full") return (fact.status === "unknown" ? unknownImpactGuide() : localImpactGuide(fact, "full", context)).join("\n");
   const lines = headerLines(fact);
   if (fact.status === "unknown") return [...lines, ...unknownImpactGuide()].join("\n");
   const hasOmissions = fact.status === "partial" || fact.value.entrypoints.some((entrypoint) => entrypoint.seeds.length > 1) || consequenceSymbols(fact.value).length > investigationSymbols(fact.value).length || fact.value.modules !== undefined;
-  lines.push(...impactBody(fact.value, detail, { kind: "local" }), ...impactSeeds(fact.value, detail), ...impactCuts(cutsOf(fact), detail), ...cutCoordinates(cutsOf(fact), { kind: "fact" }, detail), ...(hasOmissions ? localImpactGuide(fact) : []));
+  lines.push(...impactBody(fact.value, detail, { kind: "local" }, context), ...impactSeeds(fact.value, detail), ...impactCuts(cutsOf(fact), detail), ...cutCoordinates(cutsOf(fact), { kind: "fact" }, detail, context), ...(hasOmissions ? localImpactGuide(fact, "details", context) : []));
   return lines.join("\n");
 }
 
@@ -754,21 +828,21 @@ function callSiteBlock(label: string, sites: readonly CallSite[]): string[] {
   return sites.length === 0 ? [] : [`    ${label} (${sites.length}):`, ...sites.map(callSiteLine)];
 }
 
-function repoImpactLines(repo: string, section: Fact<RepoImpact>, detail: ResponseMode, bound: string): string[] {
+function repoImpactLines(repo: string, section: Fact<RepoImpact>, detail: ResponseMode, bound: string, context?: RenderContext): string[] {
   if (section.status === "unknown") return [`  ${repo}: unknown (${section.reason})`];
   const { value } = section;
   return [
     `  ${repo}: ${section.status}`,
     ...value.reads.flatMap(({ kind, fact }) => fact.status === "unknown" ? [`    ${kind}: unknown (${fact.reason})`] : []),
     ...callSiteBlock("call sites that land in what the walk reached", value.callSites),
-    ...(value.impact === undefined || repo === bound ? [] : impactBody(value.impact, detail, { kind: "section", repo }).map((line) => `    ${line}`)),
+    ...(value.impact === undefined || repo === bound ? [] : impactBody(value.impact, detail, { kind: "section", repo }, context).map((line) => `    ${line}`)),
     ...callSiteBlock("unmatched", value.unmatched),
     ...callSiteBlock("external", value.external),
   ];
 }
 
-export function renderWorkspaceImpact(fact: Fact<WorkspaceImpactValue>, detail: ResponseMode = "summary"): string {
-  if (detail === "full") return (fact.status === "unknown" ? unknownImpactGuide() : workspaceImpactGuide(fact, "full")).join("\n");
+export function renderWorkspaceImpact(fact: Fact<WorkspaceImpactValue>, detail: ResponseMode = "summary", context?: RenderContext): string {
+  if (detail === "full") return (fact.status === "unknown" ? unknownImpactGuide() : workspaceImpactGuide(fact, "full", context)).join("\n");
   const lines = headerLines(fact);
   if (fact.status === "unknown") return [...lines, ...unknownImpactGuide()].join("\n");
   const { value } = fact;
@@ -779,11 +853,11 @@ export function renderWorkspaceImpact(fact: Fact<WorkspaceImpactValue>, detail: 
   lines.push(`gateway prefixes (${value.workspace.gateways.length}):`, ...value.workspace.gateways.map(({ prefix, repo, basis }) => `  - ${prefix} -> ${repo} (${basis})`));
   const stale = value.workspace.unmatchedGateways;
   if (stale.length > 0) lines.push(`declared gateways that matched nothing (${stale.length}):`, ...stale.map(({ prefix, repo }) => `  - ${prefix} -> ${repo}`));
-  if (trigger !== undefined && trigger.status !== "unknown" && trigger.value.impact !== undefined) lines.push(...impactBody(trigger.value.impact, detail, { kind: "section", repo: value.trigger.repo }));
+  if (trigger !== undefined && trigger.status !== "unknown" && trigger.value.impact !== undefined) lines.push(...impactBody(trigger.value.impact, detail, { kind: "section", repo: value.trigger.repo }, context));
   const linkIndexes = new Map(value.links.map(({ link }, index) => [link.id, index + 1]));
   if (value.links.some(({ direction }) => direction === "downstream")) lines.push("Downstream links identify invoked destinations; a destination is not necessarily affected by the change.");
   lines.push(`links across repositories (${value.links.length}):${value.links.some(({ reach }) => reach.length > 0) ? " reach lists link numbers nearest to the change first" : ""}`, ...value.links.map((link) => impactedLinkLine(link, linkIndexes)));
-  lines.push("per repository:", ...value.workspace.repos.flatMap((repo) => (value.sections[repo] === undefined ? [] : repoImpactLines(repo, value.sections[repo] as Fact<RepoImpact>, detail, value.trigger.repo))));
+  lines.push("per repository:", ...value.workspace.repos.flatMap((repo) => (value.sections[repo] === undefined ? [] : repoImpactLines(repo, value.sections[repo] as Fact<RepoImpact>, detail, value.trigger.repo, context))));
   const unserved = counted("no local repository serves", value.workspace.unserved);
   const unservedSummary = `no local repository serves (${value.workspace.unserved.length}): mode: "full" includes all names`;
   lines.push(value.workspace.unserved.length > 0 && size([unservedSummary]) <= size([unserved]) ? unservedSummary : unserved);
@@ -792,16 +866,16 @@ export function renderWorkspaceImpact(fact: Fact<WorkspaceImpactValue>, detail: 
     if (section === undefined || section.status === "unknown" || section.value.impact === undefined) return [];
     return [`  ${repo}:`, ...impactSeeds(section.value.impact, detail).map((line) => `    ${line}`)];
   }));
-  lines.push(...impactCuts(cutsOf(fact), detail), ...cutCoordinates(cutsOf(fact), { kind: "fact" }, detail));
+  lines.push(...impactCuts(cutsOf(fact), detail), ...cutCoordinates(cutsOf(fact), { kind: "fact" }, detail, context));
   for (const repo of value.workspace.repos) {
     const section = value.sections[repo];
     if (section === undefined || section.status === "unknown") continue;
-    if (section.status === "partial") lines.push(`cuts for repository ${repo}:`, ...impactCuts(section.cuts, detail).slice(1), ...cutCoordinates(section.cuts, { kind: "section", repo }, detail));
+    if (section.status === "partial") lines.push(`cuts for repository ${repo}:`, ...impactCuts(section.cuts, detail).slice(1), ...cutCoordinates(section.cuts, { kind: "section", repo }, detail, context));
     section.value.reads.forEach(({ fact: read }, index) => {
-      if (read.status === "partial") lines.push(`cuts for repository ${repo} read ${index}:`, ...impactCuts(read.cuts, detail).slice(1), ...cutCoordinates(read.cuts, { kind: "read", repo, index }, detail));
+      if (read.status === "partial") lines.push(`cuts for repository ${repo} read ${index}:`, ...impactCuts(read.cuts, detail).slice(1), ...cutCoordinates(read.cuts, { kind: "read", repo, index }, detail, context));
     });
   }
-  lines.push(...workspaceImpactGuide(fact));
+  lines.push(...workspaceImpactGuide(fact, "details", context));
   return lines.join("\n");
 }
 
@@ -962,7 +1036,18 @@ export function renderWorkspace(fact: Fact<WorkspaceValue>, detail: ResponseMode
   lines.push(`outward names (${sections.reduce((total, [, names]) => total + names.length, 0)}):`);
   for (const [repo, names] of sections) lines.push(`  ${repo}:`, ...namesBlock(names, served, detail));
   lines.push(`served by a local repository (${value.candidates.length}):`, ...value.candidates.map(candidateLine));
-  lines.push(...unservedBlock(value.unserved, detail));
+  const literalUnserved = unservedBlock(value.unserved, detail);
+  const repos = value.workspace.repos;
+  const ownersValid = repos.length > 0 && new Set(repos).size === repos.length && repos.every((repo) => {
+    const section = value.sections[repo];
+    const snapshots = value.repositorySnapshots.filter((item) => item.repo === repo);
+    return section !== undefined && section.status !== "unknown" && snapshots.length === 1 && canonicalJson(section.snapshot) === canonicalJson(snapshots[0]!.snapshot);
+  });
+  const qualified = sections.flatMap(([repo, names]) => names.map((name) => ({ ...name, evidence: name.evidence.map((evidence) => ({ ...evidence, repo })) })));
+  const exact = ownersValid && qualified.length > 0 && qualified.every((name) => name.evidence.length > 0) && (detail === "details" || qualified.every((name) => name.kind !== "dependency" || served.has(name.name)))
+    && canonicalJson(qualified.map(canonicalJson).sort(compareText)) === canonicalJson(value.unserved.map(canonicalJson).sort(compareText));
+  const reference = [`no local repository serves (${value.unserved.length}): all recorded outward names are unserved; see ${repos.length === 1 ? repos[0] : "the repository sections"} above.`];
+  lines.push(...(exact && size(reference) < size(literalUnserved) ? reference : literalUnserved));
   lines.push(...unresolvedBlock(value));
   lines.push(...cutsBlock(cutsOf(fact), detail));
   for (const [repo, section] of Object.entries(value.sections)) {
@@ -1001,7 +1086,8 @@ function dependencyGap(decision: Decision): boolean {
 
 /** The gaps under their kind, the ones that block first: a summary counts the dependency coordinates a form cannot answer. */
 function decisionsBlock(decisions: readonly Decision[], detail: ResponseMode): string[] {
-  return groupedByRank(decisions, (decision) => decision.kind, DECISION_ORDER).flatMap(([kind, ofKind]) => {
+  const groups = groupedByRank(decisions, (decision) => decision.kind, DECISION_ORDER);
+  const literal = groups.flatMap(([kind, ofKind]) => {
     const listed = detail === "details" ? ofKind : ofKind.filter((decision) => !dependencyGap(decision));
     const counted = ofKind.length - listed.length;
     const head = counted === 0 ? `  ${kind} (${ofKind.length}):` : `  ${kind} (${ofKind.length}): ${counted} dependency counted (free text only); mode "details" lists them`;
@@ -1009,6 +1095,40 @@ function decisionsBlock(decisions: readonly Decision[], detail: ResponseMode): s
     const summarized = [head, ...listed.flatMap(decisionLines)];
     return counted === 0 || size(summarized) <= size(listing) ? summarized : listing;
   });
+  const visible = groups.flatMap(([, ofKind]) => {
+    const listed = detail === "details" ? ofKind : ofKind.filter((decision) => !dependencyGap(decision));
+    const listing = ofKind.flatMap(decisionLines);
+    const summarized = listed.flatMap(decisionLines);
+    return listed.length === ofKind.length || size(summarized) <= size(listing) ? listed : ofKind;
+  });
+  const counts = new Map<string, number>();
+  for (const decision of visible) if (decision.evidence.length) {
+    const key = canonicalJson(decision.evidence);
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  const shared = new Map<string, number>();
+  const definitions: string[] = [];
+  for (const decision of visible) {
+    const key = canonicalJson(decision.evidence);
+    if ((counts.get(key) ?? 0) > 1 && !shared.has(key)) {
+      shared.set(key, shared.size + 1);
+      definitions.push(`  evidence ${shared.size}: ${decision.evidence.map(repositoryEvidenceText).join(", ")}`);
+    }
+  }
+  const shareFreeText = visible.filter((decision) => decision.allowsFreeText).length > 1;
+  if (definitions.length === 0 && !shareFreeText) return literal;
+  if (shareFreeText) definitions.push("  free text allowed: an answer no fact states is accepted for each marked decision.");
+  const expanded = groups.flatMap(([kind, ofKind]) => {
+    const shown = visible.filter((decision) => ofKind.includes(decision));
+    const counted = ofKind.length - shown.length;
+    const head = counted === 0 ? `  ${kind} (${ofKind.length}):` : `  ${kind} (${ofKind.length}): ${counted} dependency counted (free text only); mode "details" lists them`;
+    return [head, ...shown.flatMap((decision) => {
+      const reference = shared.get(canonicalJson(decision.evidence));
+      return [`    ${decision.subject}`, ...(decision.evidence.length === 0 ? [] : [reference === undefined ? `      evidence: ${decision.evidence.map(repositoryEvidenceText).join(", ")}` : `      evidence ${reference}`]), ...decision.options.map(optionLine), ...(decision.allowsFreeText ? [shareFreeText ? "      free text allowed" : "      free text: an answer no fact states is accepted"] : [])];
+    })];
+  });
+  const compact = [...definitions, ...expanded];
+  return size(compact) < size(literal) ? compact : literal;
 }
 
 export function renderDecisions(fact: Fact<DecisionValue>, detail: ResponseMode = "summary"): string {

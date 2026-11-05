@@ -5,7 +5,7 @@ import { renderEvidenceSelection, type EvidencePage } from "./render-evidence.ts
 import { McpServer, type CallToolResult } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { repositoryCatalog, type RepositoryBinding } from "./repository-targeting.ts";
-import { responseModeSchema, type ResponseMode, type ResponseRenderer } from "./presentation.ts";
+import { responseModeSchema, type ResponseMode, type ResponseRenderer, type ToolFamily } from "./presentation.ts";
 import { entrypointRecovery, callersRecovery, impactRecovery, type Recovery } from "./recovery.ts";
 import type { Digest } from "../core/ports/digest.port.ts";
 import { compareText } from "../core/domain/shared/code-node.ts";
@@ -532,7 +532,8 @@ export function createMcpServer(deps: McpDeps): McpServer {
     render: ResponseRenderer<V>,
     recoveryFor?: (fact: Fact<V>, original: Fact<V>, repository: RepositoryBinding, replay: FactRead<V>["workspaceReplay"]) => Recovery,
     mapReplayMismatch = false,
-    controls?: { select?: EvidenceSelection | undefined; page?: {limit: number; cursor?: string | undefined} | undefined; expect?: string | undefined; sourceFor: (fact: Fact<V>) => EvidenceSource },
+    controls?: { tool: ToolFamily; select?: EvidenceSelection | undefined; page?: {limit: number; cursor?: string | undefined} | undefined; expect?: string | undefined; sourceFor: (fact: Fact<V>) => EvidenceSource },
+    family?: ToolFamily,
   ): Promise<CallToolResult> {
     try {
       let cursor: CursorV1 | undefined;
@@ -553,6 +554,8 @@ export function createMcpServer(deps: McpDeps): McpServer {
       if (read.fact.snapshot.repo !== repository.repoId) return failure({ kind: "internal-fault", detail: "Primary snapshot repository does not match selected repository" });
       const fact = redaction.redactValue(read.fact) as Fact<V>;
       const recovery = recoveryFor?.(fact, read.fact, repository, read.workspaceReplay);
+      const tool = controls?.tool ?? family;
+      const renderContext = tool === undefined ? undefined : { tool, ...(recovery === undefined ? {} : { recovery }) };
       const expected = cursor?.resultIdentity ?? controls?.expect;
       if (expected !== undefined && recovery !== undefined) {
         const verified = assertSourceIdentity(recovery, expected);
@@ -616,13 +619,13 @@ export function createMcpServer(deps: McpDeps): McpServer {
           ...(refresh === undefined ? [] : renderRefresh(refresh)),
           ...(repositoryRoots ?? []).map(({ repo, path }) => `repository root: ${repo} -> ${path}`),
         ];
-        return { content: [{ type: "text", text: [...sidecar, renderEvidenceSelection({ select: controls.select, records, recovery, ...(page === undefined ? {} : { page }) })].join("\n") }], structuredContent, ...(Object.keys(meta).length ? { _meta: meta } : {}) };
+        return { content: [{ type: "text", text: [...sidecar, renderEvidenceSelection({ mode, select: controls.select, records, recovery, ...(page === undefined ? {} : { page }) })].join("\n") }], structuredContent, ...(Object.keys(meta).length ? { _meta: meta } : {}) };
       }
       if (mode === "full") {
         return {
           content: [{ type: "text", text: [
             `status: ${fact.status}\nfull structured result: structuredContent`,
-            render(fact, mode),
+            render(fact, mode, renderContext),
             ...recoveryText,
             ...(repositoryRoots === undefined ? [] : ["Repository locations: match repositoryRoots[].repo to evidence ownership; repositoryRoots[].path locates the clone on disk, while evidence paths are relative to its repository at the recorded snapshot."]),
             ...(refresh === undefined ? [] : ["Remote context: inspect freshness and resolution for the repositories used; pinned revisions do not imply verified freshness."]),
@@ -648,7 +651,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
         ...(local ? [] : (repositoryRoots ?? []).map(({ repo, path }) => `repository root: ${repo} -> ${path}`)),
       ];
       return {
-        content: [{ type: "text", text: [...sidecar, render(fact, mode), ...recoveryText, ...(local ? (repositoryRoots ?? []).map(({ repo, path }) => `repository root: ${repo} -> ${path}`) : [])].join("\n") }],
+        content: [{ type: "text", text: [...sidecar, render(fact, mode, renderContext), ...recoveryText, ...(local ? (repositoryRoots ?? []).map(({ repo, path }) => `repository root: ${repo} -> ${path}`) : [])].join("\n") }],
         structuredContent: {
           mode,
           status: fact.status,
@@ -701,7 +704,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
         mode,
         renderEntrypointMap,
         (fact, original, repository) => entrypointRecovery(fact, original, repository.repoId, scopeOf(paths).scope, isLive === true, deps.digest, redaction, (args) => entrypointInput.safeParse(args).success && recipeArguments.safeParse(args).success),
-        false, { select, page, expect, sourceFor: (fact) => ({ kind: "entrypoints", fact }) },
+        false, { tool: "entrypoints", select, page, expect, sourceFor: (fact) => ({ kind: "entrypoints", fact }) },
       ),
   );
 
@@ -734,7 +737,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
           mode,
           renderWorkspaceImpact,
           (fact, original, repository, actualReplay) => impactRecovery({ fact, original, selected: repository.repoId, requestedScope: scopeOf(paths).scope, requestedBudget: requested, live: isLive === true, workspace: others, offline: isOffline, replay: actualReplay, digest: deps.digest, redaction, validate: (args) => impactInput.safeParse(args).success && impactRecipe.safeParse(args).success, requestedChanged: changed }),
-          true, { select, page, expect, sourceFor: (fact) => ({ kind: "workspace", fact }) },
+          true, { tool: "impact", select, page, expect, sourceFor: (fact) => ({ kind: "workspace", fact }) },
         );
       }
       return answer(
@@ -746,7 +749,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
         mode,
         renderImpact,
         (fact, original, repository) => impactRecovery({ fact, original, selected: repository.repoId, requestedScope: scopeOf(paths).scope, requestedBudget: requested, live: isLive === true, workspace: undefined, offline: undefined, replay: undefined, digest: deps.digest, redaction, validate: (args) => impactInput.safeParse(args).success && impactRecipe.safeParse(args).success, requestedChanged: changed }),
-        false, { select, page, expect, sourceFor: (fact) => ({ kind: "local", fact }) },
+        false, { tool: "impact", select, page, expect, sourceFor: (fact) => ({ kind: "local", fact }) },
       );
     },
   );
@@ -779,7 +782,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
           mode,
           renderWorkspaceImpact,
           (fact, original, repository, actualReplay) => callersRecovery({ fact, original, selected: repository.repoId, targets, requestedScope: scopeOf(paths).scope, requestedBudget: bounds, live: isLive === true, workspace: others, offline: isOffline, replay: actualReplay, digest: deps.digest, redaction, validate: (args) => callersInput.safeParse(args).success && callersRecipe.safeParse(args).success }),
-          true, { select, page, expect, sourceFor: (fact) => ({ kind: "workspace", fact }) },
+          true, { tool: "callers", select, page, expect, sourceFor: (fact) => ({ kind: "workspace", fact }) },
         );
       }
       return answer(
@@ -797,7 +800,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
         mode,
         renderImpact,
         (fact, original, repository) => callersRecovery({ fact, original, selected: repository.repoId, targets, requestedScope: scopeOf(paths).scope, requestedBudget: bounds, live: isLive === true, workspace: undefined, offline: undefined, replay: undefined, digest: deps.digest, redaction, validate: (args) => callersInput.safeParse(args).success && callersRecipe.safeParse(args).success }),
-        false, { select, page, expect, sourceFor: (fact) => ({ kind: "local", fact }) },
+        false, { tool: "callers", select, page, expect, sourceFor: (fact) => ({ kind: "local", fact }) },
       );
     },
   );
@@ -817,6 +820,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
         (onStale, repository) => deps.impact.importers({ repo: repository.path, repoId: repository.repoId, ...atRevision(requested, isLive, onStale), files, ...scopeOf(paths), signal: ctx.mcpReq.signal }),
         mode,
         renderImporters,
+        undefined, false, undefined, "importers",
       ),
   );
 
@@ -835,6 +839,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
         (onStale, repository) => deps.outline.outline({ repo: repository.path, repoId: repository.repoId, ...atRevision(requested, isLive, onStale), files, ...scopeOf(paths), signal: ctx.mcpReq.signal }),
         mode,
         renderOutline,
+        undefined, false, undefined, "outline",
       ),
   );
 
@@ -872,6 +877,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
         },
         mode,
         renderWorkspace,
+        undefined, false, undefined, "workspace",
       ),
   );
 
@@ -898,6 +904,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
           }),
         mode,
         renderDecisions,
+        undefined, false, undefined, "decisions",
       ),
   );
 

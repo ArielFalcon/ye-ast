@@ -260,7 +260,9 @@ query and verifies source identity before delivering selected data. A changed so
 replay captures current state; neither old live captures nor final answers are retained.
 
 Selected full returns a projection with context and records; summary/details return projection receipts and render the
-page in text. Source analysis and owner-grouped limits remain separate from page availability. An available zero total
+page in text. Full text guides navigation to the complete structured page and retains source limits, continuation and
+the recovery recipe. Presentation may share identical context across associated rows, retaining literal selector
+examples and the coordinates needed for each row. Source analysis and owner-grouped limits remain separate from page availability. An available zero total
 is distinct from an unavailable source or owner, which retains its actual reason and evidence. These controls do not
 change analysis scope or traversal bounds. The existing public redaction boundary applies to evidence and recipes;
 internal source sidecars are not exposed.

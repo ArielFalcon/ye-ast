@@ -264,3 +264,79 @@ test("full workspace guidance does not imply another walk when only the trigger 
   assert.match(guide, /value\.sections\["a"\]\.value\.impact/);
   assert.doesNotMatch(guide, /Other repository walks/);
 });
+
+test("full guide shares base module revision while retaining each module in the source", () => {
+  const modules = Array.from({ length: 33 }, (_, i) => ({ file: `src/base-${i}.ts`, snapshot: "base" as const, depth: 0, origins: [] }));
+  const value: ImpactValue = { ...impact, mergeBase: "base-a", modules: { origins: [], modules, cost: { expansionsUsed: 0 } } };
+  const before = structuredClone(value);
+  const output = renderImpact({ ...fact, value }, "full");
+  assert.equal((output.match(/Base modules:/g) ?? []).length, 1);
+  assert.match(output, /repo "a", revision "base-a"/);
+  assert.match(output, /modules\[\].*file/);
+  assert.deepEqual(value, before);
+});
+
+test("workspace base guides retain each owner's own merge base", () => {
+  const section = (mergeBase?: string): Fact<RepoImpact> => ({ ...base, status: "complete", value: { reads: [], callSites: [], unmatched: [], external: [], impact: { ...impact, ...(mergeBase === undefined ? {} : { mergeBase }), modules: { origins: [], modules: Array.from({ length: 4 }, (_, i) => ({ file: `same-${i}.ts`, snapshot: "base" as const, depth: 0, origins: [] })), cost: { expansionsUsed: 0 } } } } });
+  const value: WorkspaceImpactValue = { workspace: { repos: ["a", "b", "c"], gateways: [], unmatchedGateways: [], unserved: [], source: "request" }, repositorySnapshots: [], trigger: { repo: "a", mergeBase: "trigger-base" }, sections: { a: section("base-a"), b: section("base-b"), c: section() }, links: [] };
+  const output = renderWorkspaceImpact({ ...base, status: "complete", value }, "full");
+  assert.match(output, /Base modules: repo "a", revision "base-a"/);
+  assert.match(output, /Base modules: repo "b", revision "base-b"/);
+  assert.match(output, /Base modules: repo "c", revision unavailable/);
+});
+
+test("reached handlers share selector owner while preserving every origin association", () => {
+  const entrypoints = Array.from({ length: 8 }, (_, i) => ({ ...impact.entrypoints[0]!, name: `GET /route-${i}`, handler: { path: `src/route-${i}.ts`, symbol: `handler${i}`, line: i + 1 }, seeds: [0] }));
+  const text = renderImpact({ ...fact, value: { ...impact, entrypoints } }, "details");
+  assert.equal((text.match(/"kind":"handler-origins"/g) ?? []).length, 1);
+  for (let i = 0; i < 8; i++) {
+    assert.match(text, new RegExp(`GET /route-${i}[^\\n]*handler${i}`));
+    assert.match(text, new RegExp(`"path":"src/route-${i}\\.ts","symbol":"handler${i}","line":${i + 1}`));
+  }
+  assert.equal((text.match(/origin association above/g) ?? []).length, 8);
+});
+
+test("module lookups share kind and owner while retaining every literal module coordinate", () => {
+  const modules = Array.from({ length: 12 }, (_, i) => ({ file: `src/module-${i}.ts`, snapshot: "head" as const, depth: 1, origins: [0] }));
+  const value: ImpactValue = { ...impact, entrypoints: [], modules: { origins: [{ file: "src/origin.ts", change: "modified" }], modules, cost: { expansionsUsed: 12 } } };
+  const text = renderImpact({ ...fact, value }, "details");
+  assert.equal((text.match(/"kind":"module-origins"/g) ?? []).length, 1);
+  for (const module of modules) assert.ok(text.includes(JSON.stringify({ file: module.file, snapshot: module.snapshot })));
+});
+
+test("callers guidance does not advertise module selectors even if reused impact data has modules", () => {
+  const value: ImpactValue = { ...impact, modules: { origins: [{ file: "origin.ts", change: "modified" }], modules: [{ file: "consumer.ts", snapshot: "head", depth: 1, origins: [0] }], cost: { expansionsUsed: 1 } } };
+  const text = renderImpact({ ...fact, value }, "full", { tool: "callers" });
+  assert.doesNotMatch(text, /module lookup uses/);
+  assert.match(text, /modules\.origins/);
+});
+
+test("equal caller origin support is defined once with every handler association", () => {
+  const entrypoints = Array.from({ length: 8 }, (_, i) => ({ ...impact.entrypoints[0]!, name: `GET /route-${i}`, handler: { path: `src/route-${i}.ts`, symbol: `handler${i}`, line: i + 1 }, seeds: [0] }));
+  const text = renderImpact({ ...fact, value: { ...impact, entrypoints } }, "details");
+  assert.equal((text.match(/one verified origin: first\.ts:2 first/g) ?? []).length, 1);
+  assert.equal((text.match(/origin association above/g) ?? []).length, 8);
+});
+
+test("different caller confidence does not share origin support", () => {
+  const entrypoints = Array.from({ length: 4 }, (_, i) => ({ ...impact.entrypoints[0]!, confidence: i % 2 ? 0.7 : 1, name: `route-${i}`, handler: { path: `route-${i}.ts`, symbol: `h${i}`, line: i + 1 }, seeds: [0] }));
+  const text = renderImpact({ ...fact, value: { ...impact, entrypoints } }, "details");
+  assert.equal((text.match(/one verified origin: first\.ts:2 first/g) ?? []).length, 4);
+  assert.doesNotMatch(text, /origin association above/);
+});
+
+test("unavailable recovery keeps the reason and does not promise executable lookup", () => {
+  const context = { tool: "callers" as const, recovery: { version: 1 as const, status: "unavailable" as const, reason: "unresolved-context" as const } };
+  const text = renderImpact(fact, "details", context);
+  assert.match(text, /recovery unavailable.*unresolved-context/i);
+  assert.doesNotMatch(text, /lookup example:/);
+  assert.match(text, /route\.ts:9 handler/);
+});
+
+test("unavailable recovery labels cut coordinates without advertising selection", () => {
+  const partial: Fact<ImpactValue> = { ...fact, status: "partial", cuts: [{ kind: "depth", at: ["src/file.ts"], limit: 1 }] };
+  const text = renderImpact(partial, "details", { tool: "callers", recovery: { version: 1, status: "unavailable", reason: "deadline" } });
+  assert.match(text, /cutIndex/);
+  assert.doesNotMatch(text, /lookup example:|Selection lookup:/);
+  assert.match(text, /deadline/);
+});

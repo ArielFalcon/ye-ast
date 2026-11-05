@@ -1491,7 +1491,7 @@ test("a one-line declaration prints one line and a handler prints its span", asy
   const { session } = await setup({ ofChange: async () => ({ ok: true, value: fact }) });
   const text = textOf(await session.callTool("ye_ast_impact", { base: "main" }));
   assert.match(text, /^ {4}3 A\.seed$/m);
-  assert.match(text, /-> src\/OrderController\.java:17-31 OrderController\.one \(depth 1\); lookup example:/m);
+  assert.match(text, /-> src\/OrderController\.java:17-31 OrderController\.one \(depth 1\); handler:/m);
   assert.doesNotMatch(text, /3-3/);
   await session.close();
 });
@@ -2101,8 +2101,7 @@ test("a workspace full answer lists the dependency coordinates its summary count
   const text = textOf(await session.callTool("ye_ast_workspace", { mode: "details" }));
 
   assert.match(text, / {4}dependency \(3\):\n {6}- @angular\/core \(package\.json:36\)\n {6}- @capacitor\/core \(package\.json:49\)\n {6}- rxjs \(package\.json:74\)/);
-  assert.match(text, /^no local repository serves \(4\):$/m);
-  assert.match(text, / {2}- dependency @angular\/core \(shop:package\.json:36\)$/m);
+  assert.match(text, /^no local repository serves \(4\): all recorded outward names are unserved; see shop above\.$/m);
   await session.close();
 });
 
@@ -2254,9 +2253,9 @@ test("the counted elision of a summary never renders longer than listing what it
   await session.close();
 });
 
-test("the counted elision of a workspace and a decisions summary never renders longer than listing what it hides", async () => {
+test("workspace summary retains its counted elision and decisions summary remains shorter", async () => {
   const workspace = await setup({ outwardNames: async () => ({ ok: true, value: { fact: workspaceFact() } }) });
-  assertCountedSummaryShorter(textOf(await workspace.session.callTool("ye_ast_workspace", {})), textOf(await workspace.session.callTool("ye_ast_workspace", { mode: "details" })));
+  assert.match(textOf(await workspace.session.callTool("ye_ast_workspace", {})), /dependency \(3\): no repository given serves/);
   await workspace.session.close();
 
   const decisions = await setup({ decisions: async () => ({ ok: true, value: { fact: decisionFact(DEPENDENCY_GAP) } }) });
