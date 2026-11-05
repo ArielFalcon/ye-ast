@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { callersValue, factOf, importersValue, liveRef, outlineValue, shaRef, SHA_A, SHA_B, sourceFixture } from "./composition-fixtures.ts";
+import { callersValue, entrypointsValue, factOf, importersValue, liveRef, outlineValue, shaRef, SHA_A, SHA_B, sourceFixture } from "./composition-fixtures.ts";
 import { normalizeSource } from "./composition-normalize.ts";
 import { mergeEvidence, materializeEvidence } from "./compose-evidence.ts";
 import { compositionIdentity } from "./composition-identity.ts";
@@ -373,4 +373,15 @@ test("summary lists the cut places of an importers read and counts those of othe
   const text = renderComposition(resultOf([importers, sourceFixture("impact-local")]), "summary");
   assert.match(text, /unresolved-link cut ×1, 1 places: src\/dyn\.ts/);
   assert.match(text, /depth cut ×1, 2 places, limit 2(?!:)/);
+});
+
+test("summary keeps the evidence an unknown entrypoint finding does not share when a relation cites it", () => {
+  const shared = { path: "src/Dynamic.java", line: 4 };
+  const entrypoints = factOf([
+    { status: "complete", value: { kind: "job", name: "scheduled cron=0 * * * *", trigger: { attribute: "cron", value: "0 * * * *" }, handler: { path: "src/Jobs.java", symbol: "Jobs.tick", line: 20, endLine: 22 } }, evidence: [shared] },
+    { status: "unknown", reason: "unresolved", evidence: [shared, { path: "src/Lost.java", line: 9 }] },
+  ]) as ReturnType<typeof entrypointsValue>["entrypoints"];
+  const text = renderComposition(resultOf([sourceFixture("entrypoints", { value: { entrypoints } })]), "summary");
+  assert.match(text, /shares-evidence/);
+  assert.match(text, /src\/Lost\.java:9/);
 });

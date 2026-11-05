@@ -348,16 +348,17 @@ class Materializer {
     return { status: "resolved", entity: this.declaration({ outline: only.part.id }, anchor.file, anchor.id, only.part.id) };
   }
 
-  /** Unblocked anchors by file, exact span and final name segment: the spellings one declaration may carry. */
   private groupSpans(): void {
     for (const anchor of this.set.anchors) {
       if (this.blocked(anchor) !== undefined) continue;
       const key = canonicalJson([anchor.file, anchor.line, anchor.endLine, simpleName(anchor.symbol)]);
-      this.spans.set(key, [...(this.spans.get(key) ?? []), anchor]);
+      const peers = this.spans.get(key);
+      if (peers === undefined) this.spans.set(key, [anchor]);
+      else peers.push(anchor);
     }
   }
 
-  /** The span identity of a declaration two spellings name, unless two distinct qualified names claim the span. */
+  /** Two spellings of one exact span are one declaration unless two distinct qualified names claim it. */
   private spanOf(anchor: AnchorRecord): { span: readonly [FileId, number, number, string] } | undefined {
     if (anchor.endLine === undefined) return undefined;
     const name = simpleName(anchor.symbol);
@@ -564,13 +565,16 @@ class Materializer {
     for (const part of this.set.parts) {
       if (this.cleanReads(part).length === 0) continue;
       for (const evidence of sortedUnique(partReferences(part).flatMap((reference) => (isCompositionId("evidence", reference.id) ? [reference.id] : [])))) {
-        citing.set(evidence, [...(citing.get(evidence) ?? []), part.id]);
+        const cited = citing.get(evidence);
+        if (cited === undefined) citing.set(evidence, [part.id]);
+        else cited.push(part.id);
       }
     }
     for (const [evidence, cited] of citing) {
       const parts = sortedUnique(cited);
       if (parts.length < 2) continue;
-      this.relate({ kind: "shares-evidence", parts, evidence }, { parts, reads: sortedUnique(parts.flatMap((part) => this.readsOfPart(part))) });
+      const byRead = Map.groupBy(parts.flatMap((part) => this.readsOfPart(part).map((read) => ({ read, part }))), (entry) => entry.read);
+      for (const [read, entries] of byRead) this.relate({ kind: "shares-evidence", parts, evidence }, { parts: sortedUnique(entries.map((entry) => entry.part)), reads: [read] });
     }
   }
 
@@ -665,11 +669,21 @@ class Materializer {
   }
 
   /** `shared-support`: two findings citing one exact evidence; no causality or equivalence between them. */
+  /**
+   * One support per pair of compatible reads, and one for a read citing twice that no other read joins: an incompatible
+   * read blocks only its own pairs, and the cost follows the citing reads, not the citing parts.
+   */
   private sharedSupports(): void {
     for (const relation of this.relationsOf("shares-evidence")) {
-      for (const attestation of relation.attestations) {
-        if (this.guarded(attestation.reads, "corroborate")) this.connect("shared-support", relation.value.parts, [relation.id], attestation.reads);
-      }
+      const joined = new Set<Attestation>();
+      const support = (attestations: readonly Attestation[]) => {
+        const reads = sortedUnique(attestations.flatMap((attestation) => attestation.reads));
+        if (!this.guarded(reads, "corroborate")) return;
+        this.connect("shared-support", sortedUnique(attestations.flatMap((attestation) => attestation.parts)), [relation.id], reads);
+        for (const attestation of attestations) joined.add(attestation);
+      };
+      for (const [index, left] of relation.attestations.entries()) for (const right of relation.attestations.slice(index + 1)) support([left, right]);
+      for (const alone of relation.attestations) if (!joined.has(alone) && alone.parts.length > 1) support([alone]);
     }
   }
 }

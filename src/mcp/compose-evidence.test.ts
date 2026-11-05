@@ -496,3 +496,25 @@ test("every part citing one evidence location shares one relation and one suppor
   assert.deepEqual(shares[0]?.value.kind === "shares-evidence" ? shares[0].value.parts : undefined, [stated, ...gaps].toSorted());
   assert.equal(connections(graph, "shared-support").length, 1);
 });
+
+test("an incompatible read citing shared evidence leaves the compatible reads' support connection in place", () => {
+  const place = { path: "pom.xml", line: 7 };
+  const cite = (name: string, family: SourceFamilyRef, version: string) => {
+    const builder = new SetBuilder(name, family, sha("web"), { engines: { typescript: version } });
+    builder.part({ kind: "outward-name", origin: builder.origin(sha("web")), name, kindName: "dependency", evidence: [builder.evidence(place, { snapshot: sha("web") })], disposition: "unserved" });
+    return builder;
+  };
+  const a = cite("a", WORKSPACE, "6.0.3");
+  const b = cite("b", DECISIONS, "6.0.3");
+  const c = cite("c", IMPORTERS, "5.9.3");
+  const { graph } = compose(a.build(), b.build(), c.build());
+  const supports = connections(graph, "shared-support");
+  assert.deepEqual(supports.map((connection) => [...new Set(connection.supports.map((support) => support.read))].toSorted()), [[a.read, b.read].toSorted()]);
+});
+
+test("one read citing a location from two findings keeps its support connection", () => {
+  const workspace = new SetBuilder("workspace-alone", WORKSPACE, sha("web"));
+  const place = { path: "pom.xml", line: 7 };
+  for (const name of ["orders", "billing"]) workspace.part({ kind: "outward-name", origin: workspace.origin(sha("web")), name, kindName: "dependency", evidence: [workspace.evidence(place, { snapshot: sha("web") })], disposition: "unserved" });
+  assert.equal(connections(compose(workspace.build()).graph, "shared-support").length, 1);
+});

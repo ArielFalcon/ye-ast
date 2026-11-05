@@ -101,7 +101,6 @@ function semanticOf(query: ComposeQuery): SemanticQuery {
   return semantic;
 }
 
-/** The query as the caller wrote it: its canonical key, family and every position it held in `queries`. */
 function queryLabel(query: Pick<Planned, "key" | "requestIndices">, family: string): string {
   return `Query ${query.key} (${family}, queries[${query.requestIndices.join(", ")}])`;
 }

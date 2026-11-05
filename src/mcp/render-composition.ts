@@ -13,7 +13,7 @@ import { shareExactContext } from "./presentation-sharing.ts";
 import type {
   AnchorId, Attestation, ComparisonRef, ComposeFull, ComposeReceipt, CompositionIssue, CompositionResult, Connection,
   EntityId, EntityRecord, EntryData, EvidenceFinding, EvidenceId, EvidenceOrigin, FileId, OriginReference, Part, PartId,
-  PartKind, PartOf, ReadId, ReadOwner, ReadRecord, RelationRecord, SnapshotId, SourceDescriptor, SourceId,
+  PartKind, PartOf, ReadId, ReadOwner, ReadRecord, RelationId, RelationRecord, SnapshotId, SourceDescriptor, SourceId,
 } from "./composition-contract.ts";
 import type { CutOwner } from "./select-evidence.ts";
 
@@ -102,6 +102,7 @@ class CompactView {
   private readonly entities: Map<EntityId, EntityRecord>;
   private readonly evidence;
   private readonly reads: Map<ReadId, ReadRecord>;
+  private readonly relationIndex: Map<RelationId, number>;
   private readonly sources: Map<SourceId, SourceDescriptor>;
   private readonly bindings;
   private readonly snapshotLabels: Map<SnapshotId, string>;
@@ -121,6 +122,7 @@ class CompactView {
     this.entities = new Map(graph.entities.map((entity) => [entity.id, entity]));
     this.evidence = new Map(graph.evidence.map((record) => [record.id, record]));
     this.reads = new Map(graph.reads.map((read) => [read.id, read]));
+    this.relationIndex = new Map(graph.relations.map((relation, position) => [relation.id, position]));
     this.sources = new Map(graph.sources.map((source) => [source.id, source]));
     this.bindings = new Map(graph.bindings.map((binding) => [binding.anchor, binding.binding]));
     this.snapshotLabels = new Map(graph.snapshots.map((snapshot, index) => [snapshot.id, `V${index + 1}`]));
@@ -391,7 +393,7 @@ class CompactView {
   private describe(part: Part, short = false): string {
     switch (part.kind) {
       case "entrypoint": return short ? `entrypoint ${part.entry.name}` : `entrypoint ${entryName(part.entry)}${this.entry(part.entry)}; route ${this.routeEvidence(part)}`;
-      case "unknown-finding": return `unknown entrypoint finding (${part.reason})${short ? "" : `, ${this.evidenceList(part.evidence, true)}`}`;
+      case "unknown-finding": return `unknown entrypoint finding (${part.reason}), ${this.evidenceList(part.evidence, true)}`;
       case "seed": return `${part.basis === "requested" ? "requested target (not a change)" : `seed basis ${part.basis}`} ${this.anchor(part.anchor)}${short ? "" : this.comparison(part.comparison)}`;
       case "symbol-reach": return short ? `reached ${this.anchor(part.anchor)}` : `reached ${this.anchor(part.anchor)} ${part.kindName} depth ${part.depth} confidence ${part.confidence} fan-in ${part.fanIn}${part.via === undefined ? "" : `; via ${part.via.target.symbol} in ${this.file(part.via.target.file)} basis ${part.via.basis}${part.via.lines === undefined ? "" : ` lines ${part.via.lines.join(",")}`}`}`;
       case "entrypoint-reach": return short ? `reach of ${part.kindName} ${part.name ?? "(unnamed)"} handler ${this.anchor(part.handler)}` : `reached entrypoint ${part.kindName} ${part.name ?? "(unnamed)"} handler ${this.anchor(part.handler)} depth ${part.depth} confidence ${part.confidence}; seed indexes ${this.origins(part.seeds) || "none"}`;
@@ -587,7 +589,7 @@ class CompactView {
 
   /** Relations by label, entities by label, and a part only when no cited relation or subject already states it. */
   private connection(connection: Connection, index: number): string {
-    const relationIndex = new Map(this.result.graph.relations.map((relation, position) => [relation.id, position]));
+    const relationIndex = this.relationIndex;
     const relations = connection.relations.map((id) => `L${(relationIndex.get(id) ?? -1) + 1}`);
     const relationParts = new Set(connection.relations.flatMap((id) => this.result.graph.relations[relationIndex.get(id) ?? -1]?.attestations.flatMap((attestation) => attestation.parts) ?? []));
     const subjects = unique([...(connection.entities ?? []), ...connection.parts.flatMap((id) => { const entity = relationParts.has(id) ? undefined : this.representedBy(id); return entity === undefined ? [] : [entity]; })]).map((id) => this.entity(id));
