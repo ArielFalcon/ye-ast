@@ -70,6 +70,8 @@ const PART_ORDER: readonly PartKind[] = [
 ];
 /** Kinds summary counts instead of listing: bulk observations already represented by subjects, relations or coverage. */
 const SUMMARY_COUNTED: ReadonlySet<PartKind> = new Set(["outline-declaration", "outline-file", "file-query"]);
+/** Families whose own summary lists cut places, so a composition summary lists them for their reads too. */
+const SUMMARY_LOCATED_CUTS: ReadonlySet<string | undefined> = new Set(["importers"]);
 /** What a connection rule does not establish; a rule that only names its members has no warning. Stated once per rule. */
 const RULE_WARNING: Partial<Record<Connection["rule"], string>> = {
   "change-dependent": "a recorded dependence on a diff seed; not a proof of breakage",
@@ -589,9 +591,8 @@ class CompactView {
 
   /** Relations by label, entities by label, and a part only when no cited relation or subject already states it. */
   private connection(connection: Connection, index: number): string {
-    const relationIndex = this.relationIndex;
-    const relations = connection.relations.map((id) => `L${(relationIndex.get(id) ?? -1) + 1}`);
-    const relationParts = new Set(connection.relations.flatMap((id) => this.result.graph.relations[relationIndex.get(id) ?? -1]?.attestations.flatMap((attestation) => attestation.parts) ?? []));
+    const relations = connection.relations.map((id) => `L${(this.relationIndex.get(id) ?? -1) + 1}`);
+    const relationParts = new Set(connection.relations.flatMap((id) => this.result.graph.relations[this.relationIndex.get(id) ?? -1]?.attestations.flatMap((attestation) => attestation.parts) ?? []));
     const subjects = unique([...(connection.entities ?? []), ...connection.parts.flatMap((id) => { const entity = relationParts.has(id) ? undefined : this.representedBy(id); return entity === undefined ? [] : [entity]; })]).map((id) => this.entity(id));
     const parts = connection.parts.filter((id) => !relationParts.has(id) && this.representedBy(id) === undefined).map((id) => this.partRef(id));
     for (const id of connection.parts) this.covered.add(id);
@@ -639,9 +640,9 @@ class CompactView {
     const reads = this.result.graph.reads.toSorted((a, b) => this.readLabel(a.id).localeCompare(this.readLabel(b.id)));
     const incomplete = shareExactContext(reads.filter((read) => read.analysis.status !== "complete"), (read) => read.analysis);
     incomplete.contexts.forEach((analysis, index) => {
-      const members = this.readGroup(incomplete.rows.filter((row) => row.contextIndex === index).map((row) => row.value));
-      const rows = incomplete.rows.filter((row) => row.contextIndex === index).map((row) => row.value);
-      const located = this.details || rows.some((read) => this.sources.get(read.source)?.family === "importers");
+      const group = incomplete.rows.filter((row) => row.contextIndex === index).map((row) => row.value);
+      const members = this.readGroup(group);
+      const located = this.details || group.some((read) => SUMMARY_LOCATED_CUTS.has(this.sources.get(read.source)?.family));
       lines.push(analysis.status === "unknown" ? `  ${members}: unknown (${analysis.reason})` : `  ${members}: partial; ${analysis.status === "partial" ? this.cuts(analysis.cuts, located) : ""}`);
     });
     const evidence = shareExactContext(reads.filter((read) => read.evidence.length > 0 && (this.details || read.analysis.status !== "complete")), (read) => read.evidence);
@@ -650,7 +651,6 @@ class CompactView {
     return lines;
   }
 
-  /** Places in details; in summary only for the families whose own summary lists them (importers). */
   private cuts(cuts: readonly Cut[], located = this.details): string {
     return [...Map.groupBy(cuts, (cut) => cut.kind)].map(([kind, ofKind]) => {
       const places = ofKind.flatMap((cut) => cut.at);

@@ -70,6 +70,7 @@ type DeclarationEntity = Extract<EntityRecord, { kind: "declaration" }>;
 
 const IMPORT_CATEGORIES = new Set(["importer", "reexporter", "dynamic-importer", "type-importer", "outline-import"]);
 const simpleName = (symbol: string) => symbol.slice(symbol.lastIndexOf(".") + 1);
+type DeclarationSpan = readonly [file: FileId, line: number, endLine: number, name: string];
 const overlaps = (a: string, b: string) => a === b || a.startsWith(`${b}/`) || b.startsWith(`${a}/`);
 const byCanonical = <T>(a: T, b: T) => compareText(canonicalJson(a), canonicalJson(b));
 
@@ -359,7 +360,7 @@ class Materializer {
   }
 
   /** Two spellings of one exact span are one declaration unless two distinct qualified names claim it. */
-  private spanOf(anchor: AnchorRecord): { span: readonly [FileId, number, number, string] } | undefined {
+  private spanOf(anchor: AnchorRecord): { span: DeclarationSpan } | undefined {
     if (anchor.endLine === undefined) return undefined;
     const name = simpleName(anchor.symbol);
     const peers = this.spans.get(canonicalJson([anchor.file, anchor.line, anchor.endLine, name])) ?? [];
@@ -367,7 +368,7 @@ class Materializer {
     return peers.length < 2 || qualified.size > 1 ? undefined : { span: [anchor.file, anchor.line, anchor.endLine, name] };
   }
 
-  private declaration(key: { anchor: AnchorId } | { outline: PartId } | { span: readonly [FileId, number, number, string] }, file: FileId, anchor: AnchorId, outline: PartId | undefined): EntityId {
+  private declaration(key: { anchor: AnchorId } | { outline: PartId } | { span: DeclarationSpan }, file: FileId, anchor: AnchorId, outline: PartId | undefined): EntityId {
     const id = compositionKey(this.digest, "entity", { kind: "declaration", ...key });
     const existing = this.declarations.get(id);
     this.declarations.set(id, {
@@ -671,10 +672,7 @@ class Materializer {
   }
 
   /** `shared-support`: two findings citing one exact evidence; no causality or equivalence between them. */
-  /**
-   * One support per pair of compatible reads, and one for a read citing twice that no other read joins: an incompatible
-   * read blocks only its own pairs, and the cost follows the citing reads, not the citing parts.
-   */
+  /** One support per pair of compatible citing reads, and one for a read citing twice that no other read joins. */
   private sharedSupports(): void {
     for (const relation of this.relationsOf("shares-evidence")) {
       const joined = new Set<Attestation>();
