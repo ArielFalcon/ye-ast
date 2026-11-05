@@ -77,7 +77,7 @@ test("workspace cut anchors and distinct limits stay with their owning repositor
   const section = (depth: number): Fact<RepoImpact> => ({
     ...base, status: "partial",
     cuts: [{ kind: "depth", at: ["same-relative-path.ts::use0"], limit: depth + 1 }, ...symbols.slice(1).map((symbol) => ({ kind: "depth" as const, at: [`${symbol.file}::${symbol.symbol}`], limit: depth + 1 }))],
-    value: { reads: [], callSites: [], unmatched: [], external: [], impact: { ...impact, seeds: [], entrypoints: [], symbols: symbols.map((symbol) => ({ ...symbol, depth })) } },
+    value: { reads: [], callSites: [], unmatched: [], external: [], unresolved: [], impact: { ...impact, seeds: [], entrypoints: [], symbols: symbols.map((symbol) => ({ ...symbol, depth })) } },
   });
   const value: WorkspaceImpactValue = {
     workspace: { repos: ["a", "b"], gateways: [], unmatchedGateways: [], unserved: [], source: "request" },
@@ -190,7 +190,7 @@ test("workspace guidance qualifies repository payloads and joins reach IDs rathe
   const link = { id: "link-a", from: { repo: "a", file: "call.ts", symbol: "send", line: 4 }, to: { repo: "b", kind: "http-route" as const, name: "GET /x", handler: { path: "route.ts", line: 9, symbol: "handler" } }, transport: "http" as const, basis: "route-overlap" as const, confidence: 0.6 };
   const value: WorkspaceImpactValue = {
     workspace: { repos: ["a", "b"], gateways: [], unmatchedGateways: [], unserved: ["missing-api"], source: "request" }, repositorySnapshots: [], trigger: { repo: "a" },
-    sections: { a: { ...base, status: "complete", value: { reads: [], impact, callSites: [], unmatched: [], external: [] } }, b: { ...base, status: "unknown", reason: "index-unavailable" } },
+    sections: { a: { ...base, status: "complete", value: { reads: [], impact, callSites: [], unmatched: [], external: [], unresolved: [] } }, b: { ...base, status: "unknown", reason: "index-unavailable" } },
     links: [{ link, direction: "downstream", reach: ["link-a"] }],
   };
   const guide = renderWorkspaceImpact({ ...base, status: "complete", value }, "details").split("Investigation guide:")[1] ?? "";
@@ -258,7 +258,7 @@ test("full workspace guidance does not imply another walk when only the trigger 
     workspace: { repos: ["a", "b"], gateways: [], unmatchedGateways: [], unserved: [], source: "request" },
     repositorySnapshots: [], trigger: { repo: "a" },
     sections: {
-      a: { ...base, status: "complete", value: { reads: [], impact, callSites: [], unmatched: [], external: [] } },
+      a: { ...base, status: "complete", value: { reads: [], impact, callSites: [], unmatched: [], external: [], unresolved: [] } },
       b: { ...base, status: "unknown", reason: "index-unavailable" },
     }, links: [],
   };
@@ -313,7 +313,7 @@ test("mixed-basis seed listings share consecutive basis context without changing
 });
 
 test("workspace base guides retain each owner's own merge base", () => {
-  const section = (mergeBase?: string): Fact<RepoImpact> => ({ ...base, status: "complete", value: { reads: [], callSites: [], unmatched: [], external: [], impact: { ...impact, ...(mergeBase === undefined ? {} : { mergeBase }), modules: { origins: [], modules: Array.from({ length: 4 }, (_, i) => ({ file: `same-${i}.ts`, snapshot: "base" as const, depth: 0, origins: [] })), cost: { expansionsUsed: 0 } } } } });
+  const section = (mergeBase?: string): Fact<RepoImpact> => ({ ...base, status: "complete", value: { reads: [], callSites: [], unmatched: [], external: [], unresolved: [], impact: { ...impact, ...(mergeBase === undefined ? {} : { mergeBase }), modules: { origins: [], modules: Array.from({ length: 4 }, (_, i) => ({ file: `same-${i}.ts`, snapshot: "base" as const, depth: 0, origins: [] })), cost: { expansionsUsed: 0 } } } } });
   const value: WorkspaceImpactValue = { workspace: { repos: ["a", "b", "c"], gateways: [], unmatchedGateways: [], unserved: [], source: "request" }, repositorySnapshots: [], trigger: { repo: "a", mergeBase: "trigger-base" }, sections: { a: section("base-a"), b: section("base-b"), c: section() }, links: [] };
   const output = renderWorkspaceImpact({ ...base, status: "complete", value }, "full");
   assert.match(output, /Base modules: repo "a", revision "base-a"/);

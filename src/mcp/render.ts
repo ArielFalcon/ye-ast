@@ -900,6 +900,7 @@ function repoImpactLines(repo: string, section: Fact<RepoImpact>, detail: Respon
     ...(value.impact === undefined || repo === bound ? [] : impactBody(value.impact, detail, { kind: "section", repo }, context).map((line) => `    ${line}`)),
     ...callSiteBlock("unmatched", value.unmatched),
     ...callSiteBlock("external", value.external),
+    ...(value.unresolved.length === 0 ? [] : [`    unresolved call sites (${value.unresolved.length}):`, ...unresolvedListing(value.unresolved).map((line) => `  ${line}`)]),
   ];
 }
 

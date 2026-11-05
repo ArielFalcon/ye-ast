@@ -175,6 +175,7 @@ interface RepoImpact {
   callSites: CallSite[];
   unmatched: CallSite[];
   external: CallSite[];
+  unresolved: UnresolvedCallSite[];                         // the section's discovery record; the cut stays, no link
 }
 ```
 

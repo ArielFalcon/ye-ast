@@ -110,7 +110,7 @@ test("finding evidence preserves duplicate records and precise UI identity", () 
 });
 
 const link: Link = { id: "link/1", from: { repo: "constructor", file: "a", line: 1, symbol: "a" }, to: { repo: "__proto__", kind: "job", name: "job", handler }, transport: "http", basis: "exact", confidence: 1 };
-const repoValue: RepoImpact = { reads: [{ kind: "discovery", fact: partial(null) }], impact: fact.value, callSites: [], unmatched: [], external: [] };
+const repoValue: RepoImpact = { reads: [{ kind: "discovery", fact: partial(null) }], impact: fact.value, callSites: [], unmatched: [], external: [], unresolved: [] };
 const workspace: WorkspaceImpactValue = {
   workspace: { repos: ["constructor", "__proto__"], gateways: [], unmatchedGateways: [], unserved: [], source: "request" },
   repositorySnapshots: [], trigger: { repo: "constructor", mergeBase: "a".repeat(40) },

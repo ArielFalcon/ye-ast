@@ -90,8 +90,8 @@ function workspaceImpactFact(): Fact<WorkspaceImpactValue> {
     repositorySnapshots: [],
     trigger: { repo: "shop", mergeBase: "b".repeat(40) },
     sections: {
-      shop: section({ impact: IMPACT, callSites: [], unmatched: [], external: [] }),
-      "shop-web": section({ callSites: [SITE], unmatched: [{ ...SITE, line: 9, target: { status: "complete", value: { method: "GET", path: "orders-api/missing" }, evidence: [] } }], external: [{ ...SITE, line: 11, target: { status: "complete", value: { method: "GET", path: "geo-api/provinces" }, evidence: [] } }] }),
+      shop: section({ impact: IMPACT, callSites: [], unmatched: [], external: [], unresolved: [] }),
+      "shop-web": section({ callSites: [SITE], unmatched: [{ ...SITE, line: 9, target: { status: "complete", value: { method: "GET", path: "orders-api/missing" }, evidence: [] } }], external: [{ ...SITE, line: 11, target: { status: "complete", value: { method: "GET", path: "geo-api/provinces" }, evidence: [] } }], unresolved: [{ path: "src/app/order.api.ts", line: 13, symbol: "OrderApi.load", transport: "http", stated: { method: "GET", path: "/orders" } }] }),
     },
     links: [{ link, direction: "upstream", reach: ["link-1"] }],
   };
@@ -867,7 +867,7 @@ test("workspace impact full accepts nested unknowns and rejects incomplete contr
   const value = { ...original.value, sections: {
     ...original.value.sections,
     missing: { ...base(), status: "unknown" as const, reason: "index-unavailable" as const },
-    shop: { ...base(), status: "complete" as const, value: { reads: [{ kind: "trigger" as const, fact: { ...base(), status: "unknown" as const, reason: "index-unavailable" as const } }], callSites: [], unmatched: [], external: [] } },
+    shop: { ...base(), status: "complete" as const, value: { reads: [{ kind: "trigger" as const, fact: { ...base(), status: "unknown" as const, reason: "index-unavailable" as const } }], callSites: [], unmatched: [], external: [], unresolved: [] } },
   } };
   const fact: Fact<WorkspaceImpactValue> = { ...original, value };
   const { session } = await setup({ workspaceOfChange: async () => ({ ok: true, value: { fact } }) });
@@ -939,7 +939,7 @@ for (const validation of ["runtime", "full JSON"] as const) {
       const content = result.structuredContent as Record<string, unknown>;
       const check = (value: unknown, expected: boolean) => assert.equal(validation === "runtime" ? IMPACT_OUTPUT.safeParse(value).success : validate(value).valid, expected);
       check(content, true);
-      for (const field of ["callSites", "unmatched", "external"] as const) {
+      for (const field of ["callSites", "unmatched", "external", "unresolved"] as const) {
         const broken = structuredClone(content) as { value: { sections: Record<string, { value: Record<string, unknown[]> }> } };
         broken.value.sections["shop-web"]!.value[field]![0] = null;
         check(broken, false);
@@ -1356,7 +1356,7 @@ test("a workspace summary attributes counted cuts to their repository", async ()
   const section: Fact<RepoImpact> = {
     ...base(),
     status: "partial",
-    value: { reads: [], impact: IMPACT, callSites: [], unmatched: [], external: [] },
+    value: { reads: [], impact: IMPACT, callSites: [], unmatched: [], external: [], unresolved: [] },
     cuts: [{ kind: "unresolved-link", at: ["src/OrderController.java::OrderController.one", "src/app/page.ts:9"] }],
   };
   const fact = { ...built, value: { ...value, sections: { ...value.sections, shop: section } } } as Fact<WorkspaceImpactValue>;
@@ -2029,6 +2029,15 @@ test("offline reaches every workspace-bearing request, and live is refused besid
   await session.close();
 });
 
+test("a workspace impact section names each unresolved call site with its declaration, its transport and the request it writes", async () => {
+  const { session } = await setup();
+
+  const text = textOf(await session.callTool("ye_ast_callers", { targets: [{ file: "a", symbol: "f" }], workspace: WORKSPACE }));
+
+  assert.match(text, / {2}shop-web: complete\n[\s\S]* {4}unresolved call sites \(1\):\n {6}src\/app\/order\.api\.ts\n {8}13 OrderApi\.load \(http\) GET \/orders/);
+  await session.close();
+});
+
 test("a workspace answer lists the links across repositories with their basis, the gateways in force, the declared ones that matched nothing, the unmatched and the external call sites", async () => {
   const { session } = await setup();
 
@@ -2366,7 +2375,7 @@ test("workspace impact text presents every repository's consequences before any 
       impact: { ...IMPACT, seeds: [{ file: "src/api.ts", symbol: `${repo}.send`, line: 5, basis: "requested" }] },
       callSites: [{ ...SITE, repo }],
       unmatched: [],
-      external: [],
+      external: [], unresolved: [],
     },
   });
   const fact: Fact<WorkspaceImpactValue> = {
@@ -2408,7 +2417,7 @@ test("workspace impact text names an unknown contributing read beside independen
         { kind: "discovery", fact: { ...base(), status: "partial", cuts: [cuts[0]!] } },
         { kind: "trigger", fact: { ...base(), status: "unknown", reason: "index-unavailable" } },
       ],
-      callSites: [], unmatched: [], external: [],
+      callSites: [], unmatched: [], external: [], unresolved: [],
     },
   };
   const fact: Fact<WorkspaceImpactValue> = { ...built, status: "partial", cuts: [{ kind: "section", at: ["shop"] }], value: { ...built.value, sections: { shop: section } } };
@@ -2548,7 +2557,7 @@ test("workspace details preserve same-path ownership and snapshots without unsup
   if (original.status === "unknown") throw new Error("expected workspace fact");
   const section = (repo: string, sha: string): Fact<RepoImpact> => ({
     ...base({ snapshot: { repo, kind: "sha", sha } }), status: "complete",
-    value: { reads: [], impact: { ...IMPACT, seeds: [{ file: "src/shared.ts", symbol: `${repo}.seed`, line: 3, basis: "requested" }], symbols: [], entrypoints: [] }, callSites: [], unmatched: [], external: [] },
+    value: { reads: [], impact: { ...IMPACT, seeds: [{ file: "src/shared.ts", symbol: `${repo}.seed`, line: 3, basis: "requested" }], symbols: [], entrypoints: [] }, callSites: [], unmatched: [], external: [], unresolved: [] },
   });
   const fact: Fact<WorkspaceImpactValue> = { ...original, value: { ...original.value, repositorySnapshots: [
     { repo: "shop", snapshot: { repo: "shop", kind: "sha", sha: "a".repeat(40) } },
@@ -3621,7 +3630,7 @@ test("selected SDK responses bind all categories and modes to actual public sche
   const local = impactFact({status:"partial",cuts:[{kind:"depth",at:["root","a","b"]}],value:values,inputs:{...base().inputs,declaredConfig:{targets:["src/A.java:A.f"]}}});
   const ws = workspaceImpactFact();
   if (ws.status !== "complete") throw new Error("fixture");
-  const composite: Fact<WorkspaceImpactValue> = {...ws,inputs:{...base().inputs,declaredConfig:{targets:["src/A.java:A.f"]}},value:{...ws.value,sections:{...ws.value.sections,shop:{...ws.value.sections.shop!,status:"complete",value:{impact:values,reads:[],callSites:[],unmatched:[],external:[]}},"shop-web":{...ws.value.sections["shop-web"]!,snapshot:{repo:"shop-web",kind:"sha",sha:"f".repeat(40)}}}}};
+  const composite: Fact<WorkspaceImpactValue> = {...ws,inputs:{...base().inputs,declaredConfig:{targets:["src/A.java:A.f"]}},value:{...ws.value,sections:{...ws.value.sections,shop:{...ws.value.sections.shop!,status:"complete",value:{impact:values,reads:[],callSites:[],unmatched:[],external:[],unresolved:[]}},"shop-web":{...ws.value.sections["shop-web"]!,snapshot:{repo:"shop-web",kind:"sha",sha:"f".repeat(40)}}}}};
   const {session} = await setup({ofChange:async()=>({ok:true,value:local}),callers:async()=>({ok:true,value:local}),workspaceCallers:async()=>({ok:true,value:{fact:composite,workspaceReplay:replay}}),workspaceOfChange:async()=>({ok:true,value:{fact:composite,workspaceReplay:replay}})});
   try {
     const tools = await session.listTools();

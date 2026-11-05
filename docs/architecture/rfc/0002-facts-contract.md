@@ -156,6 +156,8 @@ names are settled in the first slice; the union, the cuts and the inputs are the
    change and invalidates stored facts. `0.2.0` adds `declaredConfig`, `cost` and `origin`; `0.3.0` adds `declaredScope.ignored`;
    `0.5.0` removes `ImpactedSymbol.seeds`, so a consumer of the older shape is told rather than reading a field that is gone.
    `0.10.0` adds optional `CallSite.ancestors`: named AST declaration spans used to select outgoing calls from a changed declaration.
+   `0.13.0` adds `RepoImpact.unresolved`: the unresolved call sites of a workspace impact section, as its repository's
+   discovery read them.
 7. **Redaction at egress.** Values and evidence pass redaction when they leave ye-ast's process toward a host: the
    patterns always, by-value secrets only in the process that already holds them
    ([ADR-0010](../adr/0010-trust-modes.md)). The success report `ye-ast init` writes for the user who ran it is not

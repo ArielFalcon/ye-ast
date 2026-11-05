@@ -340,6 +340,7 @@ const callSite = z.looseObject({
   transport: z.enum(["http", "event"]),
   target: callTarget,
 });
+const unresolvedCallSite = z.looseObject({ path: z.string(), line: z.number(), symbol: z.string() });
 const workspaceImpact = z.looseObject({
   workspace: workspaceIdentity,
   repositorySnapshots: snapshots,
@@ -350,6 +351,7 @@ const workspaceImpact = z.looseObject({
     callSites: z.array(callSite),
     unmatched: z.array(callSite),
     external: z.array(callSite),
+    unresolved: z.array(unresolvedCallSite),
   }))),
   links: z.array(z.looseObject({
     link: z.looseObject({
@@ -403,7 +405,7 @@ const shapes = {
     repositorySnapshots: snapshots,
     sections: z.record(z.string(), factOf(z.looseObject({
       names: z.array(outwardName),
-      unresolved: z.array(z.looseObject({ path: z.string(), line: z.number(), symbol: z.string() })),
+      unresolved: z.array(unresolvedCallSite),
     }))),
     candidates: z.array(candidate),
     unserved: z.array(repoOutwardName),

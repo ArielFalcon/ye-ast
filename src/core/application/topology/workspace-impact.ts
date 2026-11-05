@@ -139,6 +139,7 @@ function workspaceImpactQueries(deps: WorkspaceImpactDeps, captured?: CapturedWa
         callSites: part.callSites.sort(compareSite),
         unmatched: part.unmatched.sort(compareSite),
         external: part.external.sort(compareSite),
+        unresolved: base.status === "unknown" ? [] : base.value.unresolved,
       };
       sections[repository.repo] = sectionOf(base, value, part.ambiguous, deps.digest);
     }
