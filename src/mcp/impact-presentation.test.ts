@@ -435,3 +435,58 @@ test("a dependence a provider substitution qualifies carries one marker and one 
   assert.equal(rows.filter((row) => row.includes("plain [method]") && row.includes("†")).length, 0, text);
   assert.deepEqual(rows.filter((row) => row.includes("may be replaced")).map((row) => row.trim()), ["† may be replaced by other.ts:Other at providers.ts:3"]);
 });
+
+const sym = (file: string, symbol: string, depth: number, via?: { file: string; symbol: string }): ImpactValue["symbols"][number] =>
+  ({ file, symbol, kind: "function", line: 1, depth, confidence: 1, fanIn: 0, ...(via === undefined ? {} : { via: { ...via, basis: "call" as const } }) });
+
+test("a change summary counts impacted symbols per changed area, breaking an area down where its files diverge", () => {
+  const value: ImpactValue = {
+    mergeBase: "def",
+    seeds: [{ file: "src/app/order/order.api.ts", symbol: "checkout", line: 3, basis: "lines" }, { file: "src/app/home/home.page.ts", symbol: "load", line: 5, basis: "lines" }, { file: "src/server.ts", symbol: "serve", line: 1, basis: "lines" }],
+    symbols: [
+      ...["a", "b", "c", "d", "e", "f"].map((name) => sym(`src/app/order/consumers/${name}-consumer-with-a-long-name.ts`, `${name}Consumer`, 1, { file: "src/app/order/order.api.ts", symbol: "checkout" })),
+      sym("src/app/shell/shell-component-with-a-long-name.ts", "shell", 2, { file: "src/app/order/consumers/a-consumer-with-a-long-name.ts", symbol: "aConsumer" }),
+      sym("src/app/home/home-widget-with-a-long-name.ts", "widget", 1, { file: "src/app/home/home.page.ts", symbol: "load" }),
+      sym("src/app/orphan-with-a-long-name.ts", "orphan", 2),
+    ],
+    entrypoints: [{ kind: "http-route", name: "GET /x", handler: { path: "route.ts", line: 9, symbol: "handler" }, depth: 2, confidence: 1, seeds: [0] }],
+    cost: { expansionsUsed: 0 },
+  };
+  const summary = renderImpact({ ...fact, value });
+  assert.match(summary, /\n {2}src\/app\/\*\*: 2 seeds, 7 direct, 1 deeper, 1 entrypoint\n {4}src\/app\/home\/\*\*: 1 seed, 1 direct, 0 deeper, 0 entrypoints\n {4}src\/app\/order\/\*\*: 1 seed, 6 direct, 1 deeper, 1 entrypoint\n {2}src\/server\.ts: 1 seed, 0 direct, 0 deeper, 0 entrypoints\n {2}origin not recorded: 1 symbol\n/);
+  assert.match(summary, /changed \["<area>"\]/);
+  assert.doesNotMatch(summary, /aConsumer/);
+});
+
+test("a change summary keeps naming direct dependents when every seed falls in one changed area", () => {
+  const value: ImpactValue = {
+    mergeBase: "def",
+    seeds: [{ file: "src/app/order/order.api.ts", symbol: "checkout", line: 3, basis: "lines" }],
+    symbols: ["a", "b", "c", "d", "e", "f"].map((name) => sym(`src/app/order/consumers/${name}-consumer-with-a-long-name.ts`, `${name}Consumer`, 1, { file: "src/app/order/order.api.ts", symbol: "checkout" })),
+    entrypoints: [],
+    cost: { expansionsUsed: 0 },
+  };
+  const summary = renderImpact({ ...fact, value });
+  assert.match(summary, /aConsumer/);
+  assert.doesNotMatch(summary, /by changed area/);
+});
+
+test("a change summary counted per changed area counts module dependencies per area instead of listing them", () => {
+  const consumers = ["a", "b", "c", "d", "e", "f"].map((name) => `src/app/order/consumers/${name}-consumer-with-a-long-name.ts`);
+  const value: ImpactValue = {
+    mergeBase: "def",
+    seeds: [{ file: "src/app/order/order.api.ts", symbol: "checkout", line: 3, basis: "lines" }, { file: "src/app/home/home.page.ts", symbol: "load", line: 5, basis: "lines" }],
+    symbols: consumers.map((file, index) => sym(file, `consumer${index}`, 1, { file: "src/app/order/order.api.ts", symbol: "checkout" })),
+    entrypoints: [],
+    modules: {
+      origins: [{ file: "src/app/order/order.api.ts", change: "modified" }, { file: "src/app/home/home.page.ts", change: "modified" }],
+      modules: consumers.map((file) => ({ file, snapshot: "head" as const, depth: 1, origins: [0] })),
+      cost: { expansionsUsed: 6 },
+    },
+    cost: { expansionsUsed: 0 },
+  };
+  const summary = renderImpact({ ...fact, value });
+  assert.match(summary, /src\/app\/order\/\*\*: 1 seed, 6 direct, 0 deeper, 0 entrypoints, 6 modules\n/);
+  assert.match(summary, /module dependencies \(6, not symbol or entrypoint impact\): counted per changed area above;/);
+  assert.doesNotMatch(summary, /a-consumer-with-a-long-name/);
+});

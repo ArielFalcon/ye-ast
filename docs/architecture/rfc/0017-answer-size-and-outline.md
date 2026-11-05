@@ -56,6 +56,14 @@ how long a path happens to be. Measured on the fixture of the existing cut tests
 the plain listing for one cut and less for many, so a byte rule there would change the answer's shape with the size of
 the fixture.
 
+**Changed areas.** A change's summary has a third candidate for its impacted symbols, under the same rule: counts per
+changed area. An area is the path segment right below the directories every seed file shares, written as the
+`changed` glob that walks only its seeds (a seed file directly in the shared directory is its own area). A symbol
+counts under the area its recorded `via` chain starts in; a chain that does not reach a seed is counted as "origin not
+recorded". The candidate exists only when the seeds fall in two or more areas and the request accepts `changed` (the
+local change and the workspace trigger, never another repository's section), and it is chosen only when it is not
+longer than the text it replaces.
+
 **Scope.** Every renderer with a counted block: `impact`, `callers`, `importers`, `entrypoints`, `workspace`,
 `decisions`, and the `cuts:` block each one closes with. A new renderer inherits the rule through the shared test
 helper, not through a review.
