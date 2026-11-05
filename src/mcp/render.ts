@@ -619,15 +619,24 @@ function impactSeeds(value: ImpactValue, detail: ResponseMode): string[] {
   return [`seeds (${value.seeds.length}):`, ...(size(evidence) <= size(literal) ? evidence : literal)];
 }
 
-/** The seeds under the file that holds them, so a path repeated by every seed is printed once. A basis the whole file
- * shares is printed with the file; a file that mixes bases keeps one beside each seed. */
+/** Keep file and consecutive basis context with the seeds it describes. */
 function seedListing(seeds: readonly Seed[]): string[] {
   return [...Map.groupBy(seeds, (seed) => seed.file)].flatMap(([file, inFile]) => {
     const bases = new Set(inFile.map((seed) => seed.basis));
     const [shared] = bases;
-    return bases.size === 1 && shared !== undefined
-      ? [`  ${file} (${shared})`, ...inFile.map((seed) => `    ${spanText(seed.line, seed.endLine)} ${seed.symbol}`)]
-      : [`  ${file}`, ...inFile.map((seed) => `    ${spanText(seed.line, seed.endLine)} ${seed.symbol} (${seed.basis})`)];
+    if (bases.size === 1 && shared !== undefined) return [`  ${file} (${shared})`, ...inFile.map((seed) => `    ${spanText(seed.line, seed.endLine)} ${seed.symbol}`)];
+    const rows: string[] = [`  ${file}`];
+    for (let start = 0; start < inFile.length;) {
+      const first = inFile[start]!;
+      let end = start + 1;
+      while (end < inFile.length && inFile[end]!.basis === first.basis) end++;
+      const run = inFile.slice(start, end);
+      const literal = run.map((seed) => `    ${spanText(seed.line, seed.endLine)} ${seed.symbol} (${seed.basis})`);
+      const grouped = [`    (${first.basis})`, ...run.map((seed) => `      ${spanText(seed.line, seed.endLine)} ${seed.symbol}`)];
+      rows.push(...(size(grouped) < size(literal) ? grouped : literal));
+      start = end;
+    }
+    return rows;
   });
 }
 

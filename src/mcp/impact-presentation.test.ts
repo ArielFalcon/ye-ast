@@ -292,6 +292,26 @@ test("local base module guidance reuses the recorded query base without repeatin
   assert.match(renderImpact({ ...fact, value }, "full", { tool: "callers" }), /revision "long-base-revision"/);
 });
 
+test("mixed-basis seed listings share consecutive basis context without changing seed order", () => {
+  const seeds = Array.from({ length: 8 }, (_, i) => ({ file: "source.ts", symbol: `seed${i}`, line: i + 1, basis: i < 4 ? "top-level" as const : "lines" as const }));
+  const symbols = seeds.map((seed, i) => ({ file: "consumer.ts", symbol: `use${i}`, kind: "function", line: i + 1, depth: 1, confidence: 1, fanIn: 0, via: { file: seed.file, symbol: seed.symbol, lines: [i + 1], basis: "reference" as const } }));
+  const value: ImpactValue = { ...impact, seeds, symbols, entrypoints: [] };
+  const before = structuredClone(value);
+  const section = renderImpact({ ...fact, value }, "details").split("seeds (8):")[1]!.split("Investigation guide:")[0]!;
+  assert.equal((section.match(/top-level/g) ?? []).length, 1);
+  assert.equal((section.match(/lines/g) ?? []).length, 1);
+  assert.match(section, /\(top-level\)\n\s+1 seed0\n\s+2 seed1\n\s+3 seed2\n\s+4 seed3/);
+  assert.match(section, /\(lines\)\n\s+5 seed4\n\s+6 seed5\n\s+7 seed6\n\s+8 seed7/);
+  assert.match(section, /seed0[\s\S]*seed1[\s\S]*seed2[\s\S]*seed3[\s\S]*seed4[\s\S]*seed5[\s\S]*seed6[\s\S]*seed7/);
+  assert.deepEqual(value, before);
+
+  const separated = [...seeds, { file: "source.ts", symbol: "seed8", line: 9, basis: "top-level" as const }, { file: "source.ts", symbol: "seed9", line: 10, basis: "top-level" as const }, { file: "source.ts", symbol: "seed10", line: 11, basis: "top-level" as const }, { file: "source.ts", symbol: "seed11", line: 12, basis: "top-level" as const }];
+  const moreSymbols = separated.slice(8).map((seed, i) => ({ file: "consumer.ts", symbol: `more${i}`, kind: "function", line: i + 9, depth: 1, confidence: 1, fanIn: 0, via: { file: seed.file, symbol: seed.symbol, lines: [i + 9], basis: "reference" as const } }));
+  const splitSection = renderImpact({ ...fact, value: { ...value, seeds: separated, symbols: [...symbols, ...moreSymbols] } }, "details").split("seeds (12):")[1]!.split("Investigation guide:")[0]!;
+  assert.equal((splitSection.match(/top-level/g) ?? []).length, 2);
+  assert.match(splitSection, /seed3[\s\S]*\(lines\)[\s\S]*seed7[\s\S]*\(top-level\)[\s\S]*seed8/);
+});
+
 test("workspace base guides retain each owner's own merge base", () => {
   const section = (mergeBase?: string): Fact<RepoImpact> => ({ ...base, status: "complete", value: { reads: [], callSites: [], unmatched: [], external: [], impact: { ...impact, ...(mergeBase === undefined ? {} : { mergeBase }), modules: { origins: [], modules: Array.from({ length: 4 }, (_, i) => ({ file: `same-${i}.ts`, snapshot: "base" as const, depth: 0, origins: [] })), cost: { expansionsUsed: 0 } } } } });
   const value: WorkspaceImpactValue = { workspace: { repos: ["a", "b", "c"], gateways: [], unmatchedGateways: [], unserved: [], source: "request" }, repositorySnapshots: [], trigger: { repo: "a", mergeBase: "trigger-base" }, sections: { a: section("base-a"), b: section("base-b"), c: section() }, links: [] };
