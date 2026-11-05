@@ -278,6 +278,20 @@ test("full guide shares base module revision while retaining each module in the 
   assert.deepEqual(value, before);
 });
 
+test("local base module guidance reuses the recorded query base without repeating its coordinate", () => {
+  const value: ImpactValue = { ...impact, mergeBase: "long-base-revision", modules: { origins: [], modules: [{ file: "base.ts", snapshot: "base", depth: 0, origins: [] }], cost: { expansionsUsed: 0 } } };
+  const before = structuredClone(value);
+  for (const mode of ["summary", "details", "full"] as const) {
+    const text: string = renderImpact({ ...fact, value }, mode).split("Investigation guide:")[1]!;
+    assert.equal((text.match(/long-base-revision/g) ?? []).length, 1);
+    assert.match(text, /base recorded below/);
+    assert.deepEqual(value, before);
+  }
+  const live = { ...fact, snapshot: { repo: "a", kind: "live" as const, head: "h", stateId: "state" }, value };
+  assert.match(renderImpact(live, "full"), /revision "long-base-revision"/);
+  assert.match(renderImpact({ ...fact, value }, "full", { tool: "callers" }), /revision "long-base-revision"/);
+});
+
 test("workspace base guides retain each owner's own merge base", () => {
   const section = (mergeBase?: string): Fact<RepoImpact> => ({ ...base, status: "complete", value: { reads: [], callSites: [], unmatched: [], external: [], impact: { ...impact, ...(mergeBase === undefined ? {} : { mergeBase }), modules: { origins: [], modules: Array.from({ length: 4 }, (_, i) => ({ file: `same-${i}.ts`, snapshot: "base" as const, depth: 0, origins: [] })), cost: { expansionsUsed: 0 } } } } });
   const value: WorkspaceImpactValue = { workspace: { repos: ["a", "b", "c"], gateways: [], unmatchedGateways: [], unserved: [], source: "request" }, repositorySnapshots: [], trigger: { repo: "a", mergeBase: "trigger-base" }, sections: { a: section("base-a"), b: section("base-b"), c: section() }, links: [] };
