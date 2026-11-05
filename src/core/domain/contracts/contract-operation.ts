@@ -25,7 +25,6 @@ export interface ContractOperation {
 export interface ContractData {
   /** The parameters of the operation and of its path, and the request body. */
   request: string;
-  /** The responses. */
   response: string;
   /** The files other than the document that the data's references reach, repository-relative and sorted. */
   files: readonly string[];

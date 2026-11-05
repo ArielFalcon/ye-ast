@@ -70,8 +70,7 @@ export function changedContracts(base: readonly Finding<ContractOperation>[], he
 /**
  * The altered and removed operations with the handlers that serve them: an HTTP route of the operation's verb whose
  * handler overrides its `operationId` and whose evidence holds its place, the head's for an altered one and the base's for
- * a removed one, is the route its contract join made (RFC-0007 row S5). The place alone does not tell apart operations a
- * document declares on one line.
+ * a removed one, is the route its contract join made (RFC-0007 row S5).
  */
 export function servedContracts(changes: readonly ChangedContract[], base: readonly Finding<Entrypoint>[], head: readonly Finding<Entrypoint>[]): ChangedContract[] {
   return changes.map((change) => {
