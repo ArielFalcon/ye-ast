@@ -69,6 +69,8 @@ Narrowing and paging: scope globs limit coverage (exclude wins). impact changed 
 Errors: isError is a fault, not an empty fact: follow its next step and "fault fields:". unknown-symbol: use a declared name or line range (ye_ast_outline lists them); unknown-change-path: correct the changed globs.`;
 }
 
+const REPLAY_GUIDE = { replay: "Copy verbatim from the recovery recipe of a previous workspace answer; requires workspace." };
+
 const recoverySchema = z.discriminatedUnion("status", [
   z.strictObject({ version: z.literal(1), status: z.literal("available"), resultIdentity: z.string().regex(/^mcp-r1:[0-9a-f]{64}$/), query: z.strictObject({ name: z.literal("ye_ast_entrypoints"), arguments: recipeArguments }) }),
   z.strictObject({ version: z.literal(1), status: z.literal("unavailable"), reason: z.enum(["deadline", "unresolved-context", "redacted-context"]) }),
@@ -494,7 +496,6 @@ export function createMcpServer(deps: McpDeps): McpServer {
   }
 
   const annotations = { readOnlyHint: true, openWorldHint: false };
-  const REPLAY_GUIDE = { replay: "Copy verbatim from the recovery recipe of a previous workspace answer; requires workspace." };
 
   server.registerTool("ye_ast_compose", {
     title: "Compose evidence from related queries",

@@ -1,8 +1,6 @@
 import type { z } from "zod";
 
-type Json = unknown;
-
-function withOpaque(value: Json, opaque: Readonly<Record<string, string>>): Json {
+function withOpaque(value: unknown, opaque: Readonly<Record<string, string>>): unknown {
   if (Array.isArray(value)) return value.map((item) => withOpaque(item, opaque));
   if (value === null || typeof value !== "object") return value;
   return Object.fromEntries(Object.entries(value).map(([key, child]) => [key, key === "properties" && child !== null && typeof child === "object"

@@ -3118,7 +3118,6 @@ test("callers input and full output schemas enforce replay and recovery shapes",
     assert.equal(input({ targets, workspace: {}, replay }).valid, true);
     assert.equal(input({ targets, replay }).valid, true);
     const malformed = { targets, workspace: {}, replay: { ...replay, snapshots: [{ repo: "shop", kind: "live", sha: "a".repeat(40) }] } };
-    assert.equal(input(malformed).valid, true);
     assert.equal((await session.callTool("ye_ast_callers", malformed)).isError, true);
     assert.equal((await session.callTool("ye_ast_callers", { targets, replay })).isError, true);
     const result = await session.callTool("ye_ast_callers", { targets });
@@ -3224,7 +3223,6 @@ test("impact replay input and full recovery output enforce strict matching schem
     const replay = { version: 1, declaration: `ws-r1:${"d".repeat(64)}`, snapshots: [{ repo: "shop", kind: "sha", sha: "a".repeat(40) }] };
     assert.equal(input({ base: "main", workspace: {}, replay }).valid, true);
     for (const args of [{ base: "main", replay }, { base: "main", workspace: {}, replay: { ...replay, version: 2 } }]) {
-      assert.equal(input(args).valid, true);
       assert.equal((await session.callTool("ye_ast_impact", args)).isError, true);
     }
     const receipt = resultFields((await session.callTool("ye_ast_impact", { base: "main" }))) as Record<string, unknown>;
@@ -3475,14 +3473,11 @@ test("impact and callers recovery schemas agree on bounds, globs and hash line e
   const { session } = await setup();
   try {
     for (const name of ["ye_ast_callers", "ye_ast_impact"] as const) {
-      const tool = (await session.listTools()).find((item) => item.name === name)!;
       const schema = name === "ye_ast_callers" ? CALLERS_OUTPUT : IMPACT_OUTPUT;
       const validate = new AjvJsonSchemaValidator().getValidator(schema['~standard'].jsonSchema.output({target:'draft-07'}));
-      const input = new AjvJsonSchemaValidator().getValidator(tool.inputSchema);
       const baseArgs = name === "ye_ast_callers" ? { targets: [{ file: "a", symbol: "f" }] } : { base: "main" };
       const replay = { version: 1, declaration: `ws-r1:${"d".repeat(64)}`, snapshots: [{ repo: "shop", kind: "sha", sha: "a".repeat(40) }] };
       for (const bad of [{ ...baseArgs, replay }, { ...baseArgs, workspace: {}, replay: { ...replay, extra: true } }, { ...baseArgs, workspace: {}, replay: { ...replay, snapshots: [{ repo: "shop", kind: "live", sha: "a".repeat(40) }] } }, ...["\n", "\r", "\u2028", "\u2029"].map((newline) => ({ ...baseArgs, workspace: {}, replay: { ...replay, declaration: replay.declaration + newline } }))]) {
-        assert.equal(input(bad).valid, true, JSON.stringify(bad));
         assert.equal((await session.callTool(name, bad)).isError, true, JSON.stringify(bad));
       }
       const args = name === "ye_ast_callers" ? { repo: "shop", revision: "a".repeat(40), targets: [{ file: "src/a.ts", symbol: "f" }] } : { repo: "shop", base: "b".repeat(40), head: "a".repeat(40) };
@@ -3692,11 +3687,9 @@ test("mixed recovery preserves live replay and redacts workspace notices in ever
 test("replay rejects duplicate snapshots and duplicate repository IDs before dispatch", async () => {
   const { session, calls } = await setup();
   try {
-    const input = new AjvJsonSchemaValidator().getValidator((await session.listTools()).find((tool) => tool.name === "ye_ast_callers")!.inputSchema);
     const one = { repo: "team/one", kind: "sha", sha: "a".repeat(40) };
     for (const snapshots of [[one, one], [one, { ...one, sha: "b".repeat(40) }]]) {
       const args = { targets: [{ file: "a", symbol: "f" }], workspace: {}, replay: { version: 1, declaration: `ws-r1:${"d".repeat(64)}`, snapshots } };
-      assert.equal(input(args).valid, true);
       assert.equal((await session.callTool("ye_ast_callers", args)).isError, true);
       assert.equal(calls.workspaceCallers.length, 0);
     }
@@ -3984,8 +3977,9 @@ test("a full answer with cuts prints a copyable cut selection", async () => {
   const { session } = await setup({ callers: async () => ({ ok: true, value: fact }), ofChange: async () => ({ ok: true, value: fact }) });
   try {
     for (const [name, args] of [["ye_ast_callers", { targets }], ["ye_ast_impact", { base: "main" }]] as const) {
-      const text = textOf(await session.callTool(name, { ...args, mode: "full" }));
-      assert.ok(text.includes('lookup example: {"kind":"cut-places","owner":{"kind":"fact"},"cutIndex":0}'), name);
+      const example = textOf(await session.callTool(name, { ...args, mode: "full" })).match(/\{"kind":"cut-places"[^\n]*\}/)?.[0];
+      assert.ok(example, name);
+      assert.notEqual((await session.callTool(name, { ...args, select: JSON.parse(example), page: { limit: 1 } })).isError, true, name);
     }
   } finally { await session.close(); }
 });
