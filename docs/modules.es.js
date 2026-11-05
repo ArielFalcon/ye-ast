@@ -11,13 +11,14 @@ window.MODULE_DETAILS_ES = {
       ],
     },
     mcp: {
-      role: "Un servidor MCP stdio atado a un repositorio. Expone tools de solo lectura y devuelve el fact junto con la guía de cortes que un agente necesita para actuar.",
+      role: "Un servidor MCP stdio atado a un repositorio. Expone tools de solo lectura y devuelve el fact junto con la guía que un agente necesita para leerlo: qué significan complete, partial y unknown, y qué es un cut.",
       may: "core/ports, core/domain",
       never: "core/adaptadores, cualquier escritura",
       facts: [
-        "McpDeps solo contiene query families de lectura, así que una escritura es imposible por tipo.",
-        "Tools: ye_ast_puntos de entrada, ye_ast_impact, ye_ast_callers, ye_ast_importers, ye_ast_workspace.",
-        "CUT_GUIDANCE es exhaustivo sobre Cut[\"kind\"]; un cut nuevo no compila hasta que se le dice al agente cómo actuar.",
+        "McpDeps extiende QueryExecutionDeps, que solo contiene query families de lectura (entrypoints, impact, outline, workspace, workspace impact, decisions) más redaction y digest, así que una escritura es imposible por tipo.",
+        "Ocho tools: ye_ast_entrypoints, ye_ast_impact, ye_ast_callers, ye_ast_importers, ye_ast_outline, ye_ast_workspace, ye_ast_decisions y ye_ast_compose.",
+        "Las instrucciones del servidor enseñan al agente a leer una respuesta: complete es relativo al scope declarado, partial lista sus cuts y unknown nunca significa que no hay impacto.",
+        "ye_ast_compose combina de 1 a 16 consultas de las siete familias en un solo conjunto de evidencia con una identidad de verificación; existe solo sobre MCP.",
       ],
     },
     protocol: {
@@ -26,7 +27,7 @@ window.MODULE_DETAILS_ES = {
       never: "core/adaptadores, otro entrypoint",
       facts: [
         "stdout solo lleva líneas de protocolo; las medidas y los diagnósticos van a stderr.",
-        "Las cuatro operaciones por repositorio: puntos de entrada.map, impact.ofChange, impact.callers, impact.importers.",
+        "Las siete operaciones por repositorio: entrypoints.map, impact.ofChange, impact.callers, impact.importers, outline.files, workspace.outwardNames, decisions.decisions.",
         "trust.declare es la única llamada administrativa del protocolo; declara el trust mode fuera del repositorio.",
       ],
     },
@@ -99,6 +100,26 @@ window.MODULE_DETAILS_ES = {
         "La fixed layer aplica solo los patrones de redaction; los facts almacenados no se redactan.",
       ],
     },
+    "app-outline": {
+      role: "El caso de uso outline: por cada archivo pedido, las declaraciones con sus spans de líneas y los archivos que importa, leídos del índice del head.",
+      may: "core/domain, core/ports, otros subdominios de application",
+      never: "core/adaptadores",
+      facts: [
+        "Cada declaración lleva su primera y su última línea, así que quien llama lee exactamente ese rango en vez del archivo entero.",
+        "Un archivo pedido del que el índice no tiene ningún nodo se reporta como unheld: lo que declara no se puede saber, y eso no es nada.",
+        "Lee el mismo snapshot exportado e índice que las demás familias, y recorta con cuts los archivos sin extractor o no exportados.",
+      ],
+    },
+    "app-decisions": {
+      role: "El caso de uso decisions: lee un workspace y lista los huecos de configuración que deja al usuario, cada uno con opciones que el workspace puede verificar.",
+      may: "core/domain, core/ports, otros subdominios de application",
+      never: "core/adaptadores",
+      facts: [
+        "No escribe nada: los huecos son membership, repository, library, gateway, revision, remote y trust, solo sobre configuración.",
+        "Su entrada es la lectura del workspace: nombres hacia afuera, candidatos y nombres sin servir.",
+        "Una membership ya respondida no se vuelve a preguntar; una recomendación sale de una regla, nunca de un modelo.",
+      ],
+    },
     "app-snapshot": {
       role: "El lector de snapshots compartido: exporta un commit, lee los archivos exportados, extrae puntos de entrada y construye la fact base de la que parte cada familia.",
       may: "core/domain, core/ports",
@@ -147,6 +168,25 @@ window.MODULE_DETAILS_ES = {
         "El map cubre Java, TypeScript, plantillas Angular, configuración Spring, OpenAPI y archivos de build.",
         "Una parada por budget es un cut caller-budget, nunca un truncamiento silencioso.",
         "Una ruta fuera del scope declarado no se lee; la completitud es relativa a ese scope.",
+      ],
+    },
+    "domain-outline": {
+      role: "El vocabulario de un outline: una declaración (kind, nombre y span de líneas), la forma de un archivo (qué declara e importa) y los archivos que un índice no tiene.",
+      may: "solo core/domain",
+      never: "ports, adapters, built-ins de Node",
+      facts: [
+        "Los imports son archivos relativos al repositorio: un paquete fuera del repositorio no es una arista del grafo.",
+        "Los archivos unheld se nombran, nunca se reportan como vacíos.",
+      ],
+    },
+    "domain-decisions": {
+      role: "Reglas puras que convierten los facts de un workspace en decisiones: qué huecos existen, qué opciones puede verificar cada uno y si una regla recomienda alguna.",
+      may: "solo core/domain",
+      never: "ports, adapters, built-ins de Node",
+      facts: [
+        "Los kinds son una lista cerrada: membership, repository, library, gateway, revision, remote y trust.",
+        "Una opción lleva la base que la hace válida y los lugares que la afirman.",
+        "Una decisión puede admitir texto libre, y ser obligatoria cuando su ausencia debilita una respuesta.",
       ],
     },
     "domain-shared": {

@@ -67,7 +67,7 @@
   const NODE_H = 62;
   const GAP = 20;
   const GRAPH_W = 1090;
-  const GRAPH_H = 1160;
+  const GRAPH_H = 1230;
 
   const MODULES_BY_LAYER = new Map();
   for (const layer of LAYERS) MODULES_BY_LAYER.set(layer.id, MODULES.filter((module) => module.layer === layer.id));

@@ -14,15 +14,16 @@ window.MODULE_DETAILS_EN = {
     },
     mcp: {
       layer: "entrypoints",
-      role: "A stdio MCP server bound to one repository. It exposes read-only tools and returns the fact plus the cut guidance an agent needs to act on it.",
+      role: "A stdio MCP server bound to one repository. It exposes read-only tools and returns the fact plus the guidance an agent needs to read it: what complete, partial and unknown mean, and what a cut is.",
       may: "core/ports, core/domain",
       never: "core/adapters, a write of any kind",
       facts: [
-        "McpDeps holds only read query families, so a write is impossible by type.",
-        "Tools: ye_ast_entrypoints, ye_ast_impact, ye_ast_callers, ye_ast_importers, ye_ast_workspace.",
-        "CUT_GUIDANCE is exhaustive over Cut[\"kind\"], so a new cut fails to compile until the agent is told how to act.",
+        "McpDeps extends QueryExecutionDeps, which holds only read query families (entrypoints, impact, outline, workspace, workspace impact, decisions) plus redaction and digest, so a write is impossible by type.",
+        "Eight tools: ye_ast_entrypoints, ye_ast_impact, ye_ast_callers, ye_ast_importers, ye_ast_outline, ye_ast_workspace, ye_ast_decisions and ye_ast_compose.",
+        "The server instructions tell the agent how to read an answer: complete is relative to the declared scope, partial lists its cuts, and unknown never means no impact.",
+        "ye_ast_compose combines 1 to 16 queries of the seven families into one set of evidence with a verification identity; it exists only over MCP.",
       ],
-      files: ["src/mcp/server.ts", "src/composition/mcp.ts"],
+      files: ["src/mcp/server.ts", "src/mcp/query-runner.ts", "src/mcp/composition-input.ts", "src/mcp/compose-request.ts", "src/mcp/compose-evidence.ts", "src/mcp/composition-schema.ts", "src/mcp/composition-contract.ts", "src/mcp/render-composition.ts", "src/composition/mcp.ts"],
     },
     protocol: {
       layer: "entrypoints",
@@ -31,7 +32,7 @@ window.MODULE_DETAILS_EN = {
       never: "core/adapters, another entrypoint",
       facts: [
         "stdout carries only protocol lines; measurements and diagnostics go to stderr.",
-        "The four per-repository operations: entrypoints.map, impact.ofChange, impact.callers, impact.importers.",
+        "The seven per-repository operations: entrypoints.map, impact.ofChange, impact.callers, impact.importers, outline.files, workspace.outwardNames, decisions.decisions.",
         "trust.declare is the protocol's one administrative call; it declares the trust mode outside the repository.",
       ],
       files: ["src/protocol/query-server.ts", "src/protocol/query-client.ts"],
@@ -119,6 +120,30 @@ window.MODULE_DETAILS_EN = {
       ],
       files: ["src/core/application/install/install.ts", "src/core/application/fixed-layer/fixed-layer-admin.ts"],
     },
+    "app-outline": {
+      layer: "application",
+      role: "The outline use case: for each requested file, the declarations with their line spans and the files it imports, read from the head's index.",
+      may: "core/domain, core/ports, other application subdomains",
+      never: "core/adapters",
+      facts: [
+        "Each declaration carries its first and last line, so a caller reads exactly that range instead of the whole file.",
+        "A requested file the index holds no node of is reported as unheld: what it declares cannot be told, which is not nothing.",
+        "It reads the same exported snapshot and index as the other families, and cuts files with no extractor or not exported.",
+      ],
+      files: ["src/core/application/outline/outline-queries.ts", "src/core/application/outline/outline.ts"],
+    },
+    "app-decisions": {
+      layer: "application",
+      role: "The decisions use case: reads a workspace and lists the configuration gaps it leaves to the user, each with options the workspace can verify.",
+      may: "core/domain, core/ports, other application subdomains",
+      never: "core/adapters",
+      facts: [
+        "It writes nothing: the gaps are membership, repository, library, gateway, revision, remote and trust, about configuration only.",
+        "Its input is the workspace read: outward names, candidates and unserved names.",
+        "An answered membership is not asked again; a recommendation comes from a rule, never from a model.",
+      ],
+      files: ["src/core/application/decisions/decision-queries.ts"],
+    },
     "app-snapshot": {
       layer: "application",
       role: "The shared snapshot reader: export a commit, read the exported files, extract entrypoints, and build the fact base every family starts from.",
@@ -178,6 +203,29 @@ window.MODULE_DETAILS_EN = {
         "Scope selects the content the answer is about; the configuration that interprets it is always read. Completeness is relative to the scope.",
       ],
       files: ["src/core/domain/map/entrypoint-map.ts"],
+    },
+    "domain-outline": {
+      layer: "domain",
+      role: "The vocabulary of an outline: a declaration (kind, name and line span), the shape of a file (what it declares and imports) and the files an index does not hold.",
+      may: "core/domain only",
+      never: "ports, adapters, Node built-ins",
+      facts: [
+        "Imports are repository-relative files: a package outside the repository is not an edge of the graph.",
+        "Unheld files are named, never reported as empty.",
+      ],
+      files: ["src/core/domain/outline/outline-fact.ts"],
+    },
+    "domain-decisions": {
+      layer: "domain",
+      role: "Pure rules that turn the facts of a workspace into decisions: which gaps exist, which options each can verify and whether a rule recommends one.",
+      may: "core/domain only",
+      never: "ports, adapters, Node built-ins",
+      facts: [
+        "The kinds are a closed list: membership, repository, library, gateway, revision, remote and trust.",
+        "An option carries the basis that makes it valid and the places that state it.",
+        "A decision may allow free text, and may be required when its absence weakens an answer.",
+      ],
+      files: ["src/core/domain/decisions/decision-set.ts", "src/core/domain/decisions/decision.ts"],
     },
     "domain-shared": {
       layer: "domain",

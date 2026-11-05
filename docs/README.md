@@ -11,16 +11,16 @@ page. Every `path:line` reference opens the file in the repository on GitHub.
 
 | Piece | Behaviour |
 | --- | --- |
-| Graph | Six layers, 37 modules and 68 edges: entrypoints, composition, application, domain, ports and adapters. |
+| Graph | Six layers, 41 modules and 90 edges: entrypoints, composition, application, domain, ports and adapters. |
 | Levels | `Layers` is an overview: select a band to read its description, its modules and its cross-layer dependency counts, then open the module graph deliberately. `Modules` shows every module; `Files` shows the files of the current step's module while keeping the flow, its steps and the step explanation available. |
 | Zoom | Ctrl/⌘ + wheel zoom (a plain wheel scrolls the page and shows a hint), drag pan, two-pointer pinch, `+`/`−`/`Fit`; URL hash like `#impact/7`. |
-| Flows | `impact`, `map`, `callers`, `importers`, `workspace`, `init` and `live`; 31 steps in total. |
+| Flows | `impact`, `map`, `callers`, `importers`, `workspace`, `init`, `live` and `compose`; 36 steps in total. |
 | Step | Highlights the nodes and edges of the step, dims the rest, anchors a callout to a node with a leader line and opens an explanation with why, relations, nodes, terms and evidence. |
 | Node | Clicking a node pauses the flow and switches the header to `Node inspection`; `Back to flow` restores the exact flow and step. The panel shows role, what it may import, what it never reaches, its facts and its files. |
-| Order | Introduction, fact contract, surfaces, trust, architecture graph, rules, simulator, runs, glossary, sources: general first, mechanics after. |
+| Order | Introduction, fact contract, surfaces (with evidence composition), trust, architecture graph, the walk (rules, simulator, real runs) and reference (glossary, evidence, limits): general first, mechanics after. Reference tables and the glossary are folded. |
 | Section rail | A fixed rail on the left edge, one brick per section: passed bricks are solid, the current one widens and fills with the reading progress of its section, a heat line shows the progress of the whole page. The header names the current section. |
 | Concepts | Fact contract and cuts; edge policy and mechanics; a bounds block that explains depth, `fan-in`, `hub fan-in`, expansions and deadline inline; walk simulator; real executions and fixture; trust; surfaces; glossary; sources. |
-| Glossary | 30 terms with localized labels and definitions, a filter and "show in graph" links. |
+| Glossary | 33 terms with localized labels and definitions, a filter and "show in graph" links. |
 
 The graph is horizontal in reading order, but arrows show the **flow of a request**, not the import direction. The
 dependency rule is the layer order in `AGENTS.md`; the graph is a data-flow view of the same architecture.
@@ -33,7 +33,7 @@ dependency rule is the layer order in `AGENTS.md`; the graph is a data-flow view
 | `styles.css` | Application layout, graph, callout, inputs, desktop and phone breakpoints. |
 | `concepts.css` | The original document styles, scoped to `.docs`; docs shell, glossary and form controls. |
 | `graph.js` | Graph layout, SVG rendering, zoom/pan, levels, flows, callouts, terms and node details. |
-| `data.js` | English data: layers, 37 modules, 68 edges, 7 flows and UI labels. |
+| `data.js` | English data: layers, 41 modules, 90 edges, 8 flows and UI labels. |
 | `content.es.js` | Spanish UI, module subtitles/details and all 31 flow steps. |
 | `modules.en.js`, `modules.es.js` | Module details reused from the original explainer. |
 | `glossary.js` | Terms and definitions used by the glossary and the info panel. |
@@ -65,7 +65,7 @@ tailscale serve --bg --https=8444 http://127.0.0.1:8081
 ## Verification
 
 - `node --check` on every JS file.
-- Both languages, both viewports (1440 × 1000 and 390 × 844): 37 modules, 68 edges, 7 flows, 31 steps, 30 glossary
+- Both languages, both viewports (1440 × 1000 and 390 × 844): 41 modules, 90 edges, 8 flows, 36 steps, 33 glossary
   terms, simulator and fact playground working, 0 console/page errors, no page-level horizontal overflow.
 - `Files` keeps the flow header, the step list and the step explanation, so prev/next, play and every step item work
   without leaving the level; selecting a step moves the hub to that step's callout or focus module, and the step's modules
