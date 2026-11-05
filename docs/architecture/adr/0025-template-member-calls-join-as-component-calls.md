@@ -1,4 +1,4 @@
-# ADR-0024: A template call through an injected field joins as a call of the component
+# ADR-0025: A template call through an injected field joins as a call of the component
 
 - Status: Accepted, 2026-11-05, owner
 - Decision source: the owner, 2026-11-05, on the open decisions of the Angular template expression investigation:

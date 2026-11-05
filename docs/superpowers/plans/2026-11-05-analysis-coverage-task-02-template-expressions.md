@@ -135,7 +135,7 @@ Checks: `npm run check` passed before and after this documentation update. Scrat
 ### Implementation
 
 Owner decision, 2026-11-05: "Aplica las soluciones que recomiendes para las decisiones abiertas". Option 1 landed as
-[ADR-0024](../../architecture/adr/0024-template-member-calls-join-as-component-calls.md), amending the ADR-0017 amendment.
+[ADR-0025](../../architecture/adr/0025-template-member-calls-join-as-component-calls.md), amending the ADR-0017 amendment.
 
 Contract choice: an optional `template: true` on the existing `MemberUseOrigin`, not a new relation kind. The proof
 keeps the existing producer (the Angular metadata adapter's member checks), the existing join (`joinMember` in

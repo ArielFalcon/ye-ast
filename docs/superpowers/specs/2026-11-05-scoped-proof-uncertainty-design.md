@@ -97,7 +97,7 @@ stage that changes admission.
    `spring-routes` already does. Adds 2 items in 9 repositories.
 4. **S4 Hierarchy-scoped subclass members (M4).** A subclass member makes unsafe only the members of its own hierarchy.
    Upper bound measured by dropping the rule: ≤ 665 / ≤ 228; to be measured properly scoped before landing.
-5. **S5 Template member uses.** Rebase the template proof path (branch `t3/2a7cab47`, ADR-0024) on S1–S4 and measure
+5. **S5 Template member uses.** Rebase the template proof path (branch `t3/2a7cab47`, ADR-0025) on S1–S4 and measure
    recovered template proofs. Then, only for uses still refused, an `unresolved-link` cut anchored to the receiver
    member (`Api::archive`). Estimated residual 70–90 / 25–40 sites per application, each visible only in answers that
    walk that member; it lands only if the per-answer volume measured on real queries is low. A file-level anchor, or
@@ -121,7 +121,7 @@ stage that changes admission.
 ## Affected decisions
 
 ADR-0017 and its amendment stay in force; S1–S2 change how the proof gates are scoped, not what a proof is. If the
-amendment's wording restricts proofs to method bodies, S2 adds an ADR that amends that wording. ADR-0024 lives on the
+amendment's wording restricts proofs to method bodies, S2 adds an ADR that amends that wording. ADR-0025 lives on the
 template branch and enters with S5. ADR-0013 governs the evidence for every stage.
 
 ## Measurement artifacts

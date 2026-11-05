@@ -132,7 +132,7 @@ before its occurrence can settle. The per-query index stores one actual target p
 anchors, rather than one proof per homonym/site combination.
 
 A component's template call `field.member(...)` is the same value with `template` set
-([ADR-0024](../adr/0024-template-member-calls-join-as-component-calls.md)). The template reader names the call only when
+([ADR-0025](../adr/0025-template-member-calls-join-as-component-calls.md)). The template reader names the call only when
 Angular's binder binds `field` to the component, not to a template local (`@let`, `@for`, `#ref`, `let-`); the
 TypeScript adapter proves it like a class's own `this.field.member()` call, and also requires an `inject()` origin. The
 template's own writes (`field = x`, `field.member = x`, `field[key] = x`, at any depth) and the fields it hands to
