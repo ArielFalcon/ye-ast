@@ -10,6 +10,7 @@ import { repositoryCatalog, type RepositoryBinding } from "./repository-targetin
 import { responseModeSchema, type ResponseMode, type ResponseRenderer, type ToolFamily } from "./presentation.ts";
 import { entrypointRecovery, callersRecovery, impactRecovery, type Recovery } from "./recovery.ts";
 import type { Digest } from "../core/ports/digest.port.ts";
+import { canonicalJson } from "../core/domain/shared/canonical-json.ts";
 import { compareText } from "../core/domain/shared/code-node.ts";
 import { isWorkspaceReplayContext } from "../core/domain/topology/workspace-replay.ts";
 import { FULL_OBJECT_ID_PATTERN, isFullObjectId } from "../core/domain/shared/revision.ts";
@@ -516,6 +517,9 @@ export function createMcpServer(deps: McpDeps): McpServer {
     family?: ToolFamily,
   ): Promise<CallToolResult> {
     try {
+      if (controls?.select !== undefined && canonicalJson(redaction.redactValue(controls.select)) !== canonicalJson(controls.select)) {
+        return selectionFailure({ code: "replay-unavailable", reason: "redacted-context" });
+      }
       let cursor: CursorV1 | undefined;
       if (controls?.page?.cursor !== undefined && controls.select !== undefined) {
         const decoded = decodeCursor(controls.page.cursor);
