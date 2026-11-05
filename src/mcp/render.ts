@@ -183,6 +183,15 @@ function cutLines(cuts: readonly Cut[], detail: ResponseMode): string[] {
   });
 }
 
+/** One selector template per cut owner; row indices always refer to the original array. */
+function cutContextLine(owner: CutOwner, cutIndex: number, context?: RenderContext): string {
+  const example = { kind: "cut-places", owner, cutIndex } as const;
+  const selectable = context === undefined || canSelect(context, example, owner.kind === "section" || owner.kind === "read");
+  return selectable
+    ? `  Cut lookup: combine each row's cutIndex with kind and owner from this complete select example: ${literalSelection(example)}`
+    : `  Recorded cut context: ${JSON.stringify({ kind: "cut-places", owner })}; each row supplies its cutIndex.`;
+}
+
 function cutCoordinates(cuts: readonly Cut[], owner: CutOwner, detail: ResponseMode, context?: RenderContext): string[] {
   if (cuts.length === 0) return [];
   const shown = new Set<Cut["kind"]>();
@@ -196,9 +205,7 @@ function cutCoordinates(cuts: readonly Cut[], owner: CutOwner, detail: ResponseM
   const selectable = context === undefined || canSelect(context, example, owner.kind === "section" || owner.kind === "read");
   const literal = rows.map(({ cutIndex, anchor }) => `  ${!selectable ? "recorded coordinates" : "lookup example"}: ${literalSelection({ kind: "cut-places", owner, cutIndex })}${anchor}`);
   const shared = [
-    selectable
-      ? `  Cut lookup: combine each row's cutIndex with kind and owner from this complete select example: ${literalSelection(example)}`
-      : `  Recorded cut context: ${JSON.stringify({ kind: "cut-places", owner })}; each row supplies its cutIndex.`,
+    cutContextLine(owner, first.cutIndex, context),
     ...rows.map(({ cutIndex, anchor }) => `  cut: ${JSON.stringify({ cutIndex })}${anchor}`),
   ];
   return size(shared) < size(literal) ? shared : literal;
@@ -682,6 +689,29 @@ function impactCuts(cuts: readonly Cut[], detail: ResponseMode): string[] {
   }), '  reference places counted; mode: "full" includes every place'];
 }
 
+/** Bind narrative and selection coordinates once, retaining original cut order and per-cut metadata. */
+function impactCutBlock(cuts: readonly Cut[], detail: ResponseMode, owner: CutOwner, context?: RenderContext): string[] {
+  const literal = [...impactCuts(cuts, detail), ...cutCoordinates(cuts, owner, detail, context)];
+  if (detail !== "details" || cuts.length === 0) return literal;
+  const shared = [CUTS, cutContextLine(owner, 0, context)];
+  let previous: Cut | undefined;
+  for (const [cutIndex, cut] of cuts.entries()) {
+    if (cut.kind !== previous?.kind) shared.push(`  ${cut.kind}:`);
+    const coordinate = `cut: ${JSON.stringify({ cutIndex })}`;
+    if (cut.kind === "unresolved-link") {
+      if (previous?.kind !== cut.kind || previous.at[0] !== cut.at[0]) shared.push(`    anchor ${JSON.stringify(cut.at[0])}:`);
+      const places = Math.max(0, cut.at.length - 1);
+      const reasons = placeReasons(cut);
+      shared.push(`      ${coordinate}; ${places} reference ${places === 1 ? "place" : "places"}${cut.limit === undefined ? "" : `; limit ${cut.limit}`}${reasons.length === 0 ? "" : `; reasons ${JSON.stringify(reasons)}`}`);
+    } else {
+      shared.push(`    ${coordinate}; ${cutPlaces(cut)}${cut.limit === undefined ? "" : ` (limit ${cut.limit})`}`);
+    }
+    previous = cut;
+  }
+  shared.push('  reference places counted; mode: "full" includes every place');
+  return size(shared) < size(literal) ? shared : literal;
+}
+
 function impactLookups(value: ImpactValue, path: string, context?: RenderContext): string[] {
   const lines: string[] = [];
   if (value.entrypoints.length > 0) lines.push(`  To inspect a reached entrypoint, select ${path}.entrypoints by kind/name and handler.path, handler.symbol, handler.line. Its seeds are zero-based indexes into ${path}.seeds; resolve those indexes to recover all associated origins, not a complete call chain.`);
@@ -768,7 +798,7 @@ export function renderImpact(fact: Fact<ImpactValue>, detail: ResponseMode = "su
   const lines = headerLines(fact);
   if (fact.status === "unknown") return [...lines, ...unknownImpactGuide()].join("\n");
   const hasOmissions = fact.status === "partial" || fact.value.entrypoints.some((entrypoint) => entrypoint.seeds.length > 1) || consequenceSymbols(fact.value).length > investigationSymbols(fact.value).length || fact.value.modules !== undefined;
-  lines.push(...impactBody(fact.value, detail, { kind: "local" }, context), ...impactSeeds(fact.value, detail), ...impactCuts(cutsOf(fact), detail), ...cutCoordinates(cutsOf(fact), { kind: "fact" }, detail, context), ...(hasOmissions ? localImpactGuide(fact, "details", context) : []));
+  lines.push(...impactBody(fact.value, detail, { kind: "local" }, context), ...impactSeeds(fact.value, detail), ...impactCutBlock(cutsOf(fact), detail, { kind: "fact" }, context), ...(hasOmissions ? localImpactGuide(fact, "details", context) : []));
   return lines.join("\n");
 }
 
@@ -898,13 +928,13 @@ export function renderWorkspaceImpact(fact: Fact<WorkspaceImpactValue>, detail: 
     if (section === undefined || section.status === "unknown" || section.value.impact === undefined) return [];
     return [`  ${repo}:`, ...impactSeeds(section.value.impact, detail).map((line) => `    ${line}`)];
   }));
-  lines.push(...impactCuts(cutsOf(fact), detail), ...cutCoordinates(cutsOf(fact), { kind: "fact" }, detail, context));
+  lines.push(...impactCutBlock(cutsOf(fact), detail, { kind: "fact" }, context));
   for (const repo of value.workspace.repos) {
     const section = value.sections[repo];
     if (section === undefined || section.status === "unknown") continue;
-    if (section.status === "partial") lines.push(`cuts for repository ${repo}:`, ...impactCuts(section.cuts, detail).slice(1), ...cutCoordinates(section.cuts, { kind: "section", repo }, detail, context));
+    if (section.status === "partial") lines.push(`cuts for repository ${repo}:`, ...impactCutBlock(section.cuts, detail, { kind: "section", repo }, context).slice(1));
     section.value.reads.forEach(({ fact: read }, index) => {
-      if (read.status === "partial") lines.push(`cuts for repository ${repo} read ${index}:`, ...impactCuts(read.cuts, detail).slice(1), ...cutCoordinates(read.cuts, { kind: "read", repo, index }, detail, context));
+      if (read.status === "partial") lines.push(`cuts for repository ${repo} read ${index}:`, ...impactCutBlock(read.cuts, detail, { kind: "read", repo, index }, context).slice(1));
     });
   }
   lines.push(...workspaceImpactGuide(fact, "details", context));

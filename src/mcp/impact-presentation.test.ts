@@ -89,8 +89,8 @@ test("workspace cut anchors and distinct limits stay with their owning repositor
     const a = output.split("cuts for repository a:")[1]?.split("cuts for repository b:")[0] ?? "";
     const b = output.split("cuts for repository b:")[1] ?? "";
     if (detail === "details") {
-      assert.match(a, /depth \(8\): same-relative-path\.ts::use0[^\n]*limit 1/);
-      assert.match(b, /depth \(8\): same-relative-path\.ts::use0[^\n]*limit 5/);
+      assert.match(a, /depth[\s\S]*same-relative-path\.ts::use0[^\n]*limit 1/);
+      assert.match(b, /depth[\s\S]*same-relative-path\.ts::use0[^\n]*limit 5/);
     } else {
       assert.match(a, /depth \(8\); limit 1/);
       assert.match(b, /depth \(8\); limit 5/);

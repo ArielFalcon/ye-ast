@@ -1340,9 +1340,9 @@ test("impact detail localizes every cut anchor while full JSON retains every ref
   const result = await session.callTool("ye_ast_impact", { base: "main", mode: "full" });
   const text = textOf(await session.callTool("ye_ast_impact", { base: "main", mode: "details" }));
   assert.deepEqual(withoutRecovery(result.structuredContent), { ...deep, mode: "full", repositoryRoots: [{ repo: "shop", path: REPOSITORY.path }] });
-  assert.match(text, /src\/b\.ts[\s\S]*B\.user: 1 cut, 2 reference places/);
+  assert.match(text, /anchor "src\/b\.ts::B\.user":\n\s+cut: \{"cutIndex":0\}; 2 reference places/);
   assert.doesNotMatch(text, /src\/y\.ts/);
-  assert.match(text, /depth \(1\): src\/c\.ts::C\.top \(limit 5\)/);
+  assert.match(text, /depth:\n\s+cut: \{"cutIndex":1\}; src\/c\.ts::C\.top \(limit 5\)/);
   assert.doesNotMatch(text, /summarized/);
   await session.close();
 });
@@ -2869,7 +2869,8 @@ test("base module and fresh live guidance retain their own identities", async ()
   const { session } = await setup({ ofChange: async () => ({ ok: true, value: fact }) });
   try {
     const text = textOf(await session.callTool("ye_ast_impact", { base: "main", mode: "full" }));
-    assert.match(text, /base[^\n]*b{40}[^\n]*src\/old\.ts/i);
+    assert.match(text, /Base module: repo "shop", the base recorded below, file "src\/old\.ts"/);
+    assert.match(text, /head "a{40}" and base "b{40}"/);
   } finally { await session.close(); }
   let stateId = "old-state";
   const second = await setup({ ofChange: async () => ({ ok: true, value: impactFact({ snapshot: { repo: "shop", kind: "live", head: "d".repeat(40), stateId } }) }) });
