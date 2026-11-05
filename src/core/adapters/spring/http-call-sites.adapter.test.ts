@@ -499,3 +499,17 @@ test("instance field writes in other methods invalidate scalar initializers", as
   }`);
   assert.equal((await reader.of([source], "service"))[0]?.target.status, "unknown");
 });
+
+test("dispatch disagreement invalidates only its own output", async () => {
+  const source = java("Probe", `interface G { void send(String p); }
+    class A implements G { RestTemplate rt; public void send(String p) { rt.getForObject("http://one" + p, String.class); } }
+    class B implements G { RestTemplate rt; public void send(String p) { rt.getForObject("http://two" + p, String.class); } }
+    class W { G g; RestTemplate rt;
+      void all(String p) { rt.getForObject("http://stable" + p, String.class); g.send(p); }
+    }
+    class Probe { W w; void load() { w.all("/items"); } }`);
+  const sites = await reader.of([source], "service");
+  assert.equal(sites.length, 2);
+  assert.equal(sites.filter((site) => site.target.status === "unknown").length, 1);
+  assert.deepEqual(sites.find((site) => site.target.status === "complete")?.target.status === "complete", true);
+});

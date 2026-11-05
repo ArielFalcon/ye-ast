@@ -1,3 +1,4 @@
+import { BEAN, NAMED_COMPONENTS, PRIMARY, QUALIFIER } from "./java-value-vocabulary.ts";
 import type { Node } from "web-tree-sitter";
 import { argumentsOf, descendants, localBindings, typeNameOf } from "./java-members.ts";
 import { invocationsOf, parametersOf, receiverOf, type Invocation, type FieldLookup } from "./java-invocations.ts";
@@ -10,6 +11,58 @@ export interface MethodSelection {
   receiver: TypeDecl;
 }
 
+interface DispatchIndex {
+  implementations: Map<TypeDecl, TypeDecl[]>;
+  named: Map<string, Set<TypeDecl>>;
+  primary: Set<TypeDecl>;
+}
+
+const dispatchIndexes = new WeakMap<JavaProject, DispatchIndex>();
+
+function dispatchIndex(project: JavaProject): DispatchIndex {
+  const cached = dispatchIndexes.get(project);
+  if (cached !== undefined) return cached;
+  const index: DispatchIndex = { implementations: new Map(), named: new Map(), primary: new Set() };
+  const register = (name: string, type: TypeDecl) => {
+    const types = index.named.get(name) ?? new Set<TypeDecl>();
+    types.add(type); index.named.set(name, types);
+  };
+  for (const type of project.types) {
+    if (type.kind === "class" && !type.isAbstract) for (const parent of project.hierarchy(type).types) {
+      const types = index.implementations.get(parent) ?? [];
+      types.push(type); index.implementations.set(parent, types);
+    }
+    for (const use of annotationUses(type.node, scopeOf(type))) {
+      if (isAnnotation(use, PRIMARY)) index.primary.add(type);
+      if (!isAnnotation(use, NAMED_COMPONENTS)) continue;
+      for (const value of [...use.attributes.values()].flat()) {
+        const evaluated = project.evaluate(value);
+        if ("value" in evaluated) register(evaluated.value, type);
+      }
+    }
+    for (const method of type.methods) indexBean(method, project, register);
+  }
+  dispatchIndexes.set(project, index);
+  return index;
+}
+
+function indexBean(method: MethodDecl, project: JavaProject, register: (name: string, type: TypeDecl) => void): void {
+  const beans = annotationUses(method.node, scopeOf(method.owner)).filter((use) => isAnnotation(use, BEAN));
+  if (beans.length === 0) return;
+  const returns = descendants(method.node).filter((node) => node.type === "return_statement");
+  const value = returns.length === 1 ? returns[0]?.namedChildren[0] : undefined;
+  if (value?.type !== "object_creation_expression") return;
+  const type = project.lookupType(typeNameOf(value.childForFieldName("type")), scopeOf(method.owner));
+  if (typeof type !== "object") return;
+  for (const bean of beans) {
+    if (bean.attributes.size === 0) register(method.name, type);
+    for (const name of bean.attributes.get("name") ?? bean.attributes.get("value") ?? []) {
+      const evaluated = project.evaluate(name);
+      if ("value" in evaluated) register(evaluated.value, type);
+    }
+  }
+}
+
 export function methodsOf(call: Invocation, project: JavaProject, text: FieldLookup, concrete = call.type): MethodSelection[] {
   const object = call.node.childForFieldName("object");
   const held = object === null || object.type === "this" ? undefined : receiverOf(object, call, project, text);
@@ -19,33 +72,14 @@ export function methodsOf(call: Invocation, project: JavaProject, text: FieldLoo
     if (typeof found === "object") declared = found;
   }
   if (declared === undefined) return [];
-  let candidates = declared.kind === "interface" || declared.isAbstract
-    ? project.types.filter((type) => type.kind === "class" && !type.isAbstract && project.hierarchy(type).types.includes(declared))
-    : [declared];
-  const qualifier = held === undefined ? undefined : annotationUses(held.binding.node, scopeOf(call.type)).find((use) => isAnnotation(use, "org.springframework.beans.factory.annotation.Qualifier"));
+  const index = dispatchIndex(project);
+  let candidates = declared.kind === "interface" || declared.isAbstract ? index.implementations.get(declared) ?? [] : [declared];
+  const qualifier = held === undefined ? undefined : annotationUses(held.binding.node, scopeOf(call.type)).find((use) => isAnnotation(use, QUALIFIER));
   const expression = qualifier?.attributes.get("value")?.[0];
   const selected = expression === undefined ? undefined : project.evaluate(expression);
-  if (selected !== undefined && "value" in selected) {
-    const constructed = project.types.flatMap((owner) => owner.methods.flatMap((method) => {
-      const beans = annotationUses(method.node, scopeOf(owner)).filter((use) => isAnnotation(use, "org.springframework.context.annotation.Bean"));
-      const matches = beans.some((bean) => (bean.attributes.get("name") ?? bean.attributes.get("value") ?? []).some((value) => {
-        const evaluated = project.evaluate(value);
-        return "value" in evaluated && evaluated.value === selected.value;
-      }) || (bean.attributes.size === 0 && method.name === selected.value));
-      if (!matches) return [];
-      const returns = descendants(method.node).filter((node) => node.type === "return_statement");
-      const value = returns.length === 1 ? returns[0]?.namedChildren[0] : undefined;
-      if (value?.type !== "object_creation_expression") return [];
-      const type = project.lookupType(typeNameOf(value.childForFieldName("type")), scopeOf(owner));
-      return typeof type === "object" ? [type] : [];
-    }));
-    candidates = candidates.filter((type) => constructed.includes(type) || annotationUses(type.node, scopeOf(type)).some((use) => isAnnotation(use, new Set(["org.springframework.stereotype.Component", "org.springframework.stereotype.Service", "org.springframework.beans.factory.annotation.Qualifier"])) && [...use.attributes.values()].flat().some((value) => {
-      const evaluated = project.evaluate(value);
-      return "value" in evaluated && evaluated.value === selected.value;
-    })));
-
-  } else {
-    const primary = candidates.filter((type) => annotationUses(type.node, scopeOf(type)).some((use) => isAnnotation(use, "org.springframework.context.annotation.Primary")));
+  if (selected !== undefined && "value" in selected) candidates = candidates.filter((type) => index.named.get(selected.value)?.has(type));
+  else {
+    const primary = candidates.filter((type) => index.primary.has(type));
     if (primary.length === 1) candidates = primary;
   }
   const name = call.node.childForFieldName("name")?.text;
@@ -143,7 +177,7 @@ export class JavaMethodFlow<T extends { invocation: Invocation }> {
     const merge = (branches: Group[][]): Group[] => {
       const length = Math.max(0, ...branches.map((branch) => branch.length));
       return Array.from({ length }, (_, index) => {
-        const present = branches.flatMap((branch) => branch[index] ?? []);
+        const present = [...new Set(branches.flatMap((branch) => branch[index] ?? []))];
         return branches.some((branch) => branch[index] === undefined)
           ? present.map(({ leaf, scope }) => ({ leaf, scope: { ...scope, undecided: true } })) : present;
       });

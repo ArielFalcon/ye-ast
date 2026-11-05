@@ -1,3 +1,4 @@
+import type { UrlScope } from "./java-values.ts";
 import { JavaMethodFlow } from "./java-method-flow.ts";
 import type { Node } from "web-tree-sitter";
 import type { HttpMethod } from "../../domain/entrypoints/http-route.ts";
@@ -23,8 +24,8 @@ import { argumentsOf, assignmentsOf, localBindings, typeNameOf, type Binding } f
 import { ancestorsOf, NO_VARIABLES, receiverOf, symbolOf, type Invocation } from "./java-invocations.ts";
 import { externalNames, scopeOf, type Expr, type JavaFile, type JavaProject, type TypeDecl } from "./java-symbols.ts";
 import { stringLiteralValue } from "./java-literals.ts";
-import { annotationUses, createSpringAnnotations, pathExpressions, type SpringAnnotations } from "./request-mapping.ts";
-import { isAnnotation, PLACEHOLDER, UrlText, type UrlScope } from "./url-text.ts";
+import { isAnnotation, annotationUses, createSpringAnnotations, pathExpressions, type SpringAnnotations } from "./request-mapping.ts";
+import { PLACEHOLDER, JavaValueEvaluator } from "./java-value-evaluator.ts";
 
 const UNDECIDED = Symbol("undecided");
 const ORIGIN = /^([a-zA-Z][a-zA-Z0-9+.-]*:\/\/[^/?#]*)([\s\S]*)$/;
@@ -46,11 +47,10 @@ interface ReadTarget {
 }
 
 
-
 /** The HTTP requests a Java snapshot makes: one call site per request of a client the vocabulary knows. */
 export class JavaHttpReader {
   private readonly annotations: SpringAnnotations;
-  private readonly text: UrlText;
+  private readonly text: JavaValueEvaluator;
 
   constructor(
     private readonly project: JavaProject,
@@ -58,7 +58,7 @@ export class JavaHttpReader {
     private readonly owned: ReadonlySet<JavaFile>,
   ) {
     this.annotations = createSpringAnnotations(project);
-    this.text = new UrlText(project, configuration);
+    this.text = new JavaValueEvaluator(project, configuration);
   }
 
   sites(repo: string): CallSite[] {
@@ -143,7 +143,7 @@ export class JavaHttpReader {
         const name = current.childForFieldName("name")?.text;
         if (name === "url") url ??= argumentsOf(current)[0];
         if (name === "method") method ??= argumentsOf(current)[0];
-        if (name !== undefined && ["get", "head", "post", "put", "patch", "delete"].includes(name)) method ??= FLUENT_VERBS.get(name);
+        if (name !== undefined && FLUENT_VERBS.has(name)) method ??= FLUENT_VERBS.get(name);
         current = current.childForFieldName("object") ?? undefined;
         continue;
       }

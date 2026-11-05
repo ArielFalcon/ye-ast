@@ -1,6 +1,5 @@
+import { LOMBOK_VALUE, LOMBOK_BUILDER, LOMBOK_GETTERS, LOMBOK_CONSTRUCTORS } from "./java-value-vocabulary.ts";
 import type { Closure, ObjectValue, UrlScope } from "./java-values.ts";
-export type { Closure, ObjectValue, UrlScope } from "./java-values.ts";
-export { isAnnotation } from "./request-mapping.ts";
 import { bindMethod, methodsOf } from "./java-method-flow.ts";
 import type { Node } from "web-tree-sitter";
 import type { Configuration } from "./application-config.ts";
@@ -26,56 +25,59 @@ const PLACEHOLDER_IN_TEXT = /\$\{([^${}:]+)(?::([^${}]*))?\}/;
 const FORMAT_SPECIFIER = /%[-#+ 0,(]*\d*(?:\.\d+)?[a-zA-Z]/g;
 const GETTER = /^(?:get|is)(.)(.*)$/;
 
-
 /**
- * The text of a URL expression: literals, constants, fields injected with `@Value` or bound by `@ConfigurationProperties`,
- * and the parameters of the method being read. What the code fills at run time is `{}`; an expression the snapshot does not
- * decide, or one that starts with such a part, is undefined.
+ * Source value evaluation preserves argument bindings, object fields and consuming-module configuration.
+ * Runtime text uses `{}`; values the snapshot cannot decide, including exhausted evaluation stacks, are undefined.
  */
-export class UrlText {
+export class JavaValueEvaluator {
   constructor(
     private readonly project: JavaProject,
     private readonly configurationOf: (file: JavaFile) => Configuration,
   ) {}
 
   of(node: Node, scope: UrlScope, trail: ReadonlySet<number> = new Set()): string | undefined {
-    switch (node.type) {
-      case "string_literal":
-        return stringLiteralValue(node.text);
-      case "decimal_integer_literal":
-        return node.text;
-      case "parenthesized_expression":
-        return this.ofFirst(node, scope, trail);
-      case "array_access": {
-        const array = node.childForFieldName("array");
-        const index = node.childForFieldName("index");
-        const binding = array?.type === "identifier" ? scope.locals.get(array.text) : undefined;
-        const values = binding?.initializer;
-        const value = values?.type === "array_initializer" && index?.type === "decimal_integer_literal" ? values.namedChildren[Number(index.text)] : undefined;
-        return value === undefined ? undefined : this.of(value, scope, trail);
+    try {
+      switch (node.type) {
+        case "string_literal":
+          return stringLiteralValue(node.text);
+        case "decimal_integer_literal":
+          return node.text;
+        case "parenthesized_expression":
+          return this.ofFirst(node, scope, trail);
+        case "array_access": {
+          const array = node.childForFieldName("array");
+          const index = node.childForFieldName("index");
+          const binding = array?.type === "identifier" ? scope.locals.get(array.text) : undefined;
+          const values = binding?.initializer;
+          const value = values?.type === "array_initializer" && index?.type === "decimal_integer_literal" ? values.namedChildren[Number(index.text)] : undefined;
+          return value === undefined ? undefined : this.of(value, scope, trail);
+        }
+        case "ternary_expression": {
+          const condition = node.childForFieldName("condition");
+          const left = condition?.childForFieldName("left");
+          const right = condition?.childForFieldName("right");
+          const operator = condition?.childForFieldName("operator")?.text;
+          const nil = left === null || left === undefined || right?.type !== "null_literal" ? undefined : this.nullness(left, scope, trail);
+          if (nil === undefined || (operator !== "==" && operator !== "!=")) return undefined;
+          const branch = node.childForFieldName((operator === "==" ? nil : !nil) ? "consequence" : "alternative");
+          return branch === null ? undefined : this.of(branch, scope, trail);
+        }
+        case "binary_expression":
+          return this.concatenation(node, scope, trail);
+        case "identifier":
+          return this.name(node.text, node, scope, trail);
+        case "field_access":
+          return this.access(node, scope, trail);
+        case "method_invocation":
+          return this.invocation(node, scope, trail);
+        case "object_creation_expression":
+          return typeNameOf(node.childForFieldName("type")) === "URI" ? this.ofArgument(node, 0, scope, trail) : undefined;
+        default:
+          return undefined;
       }
-      case "ternary_expression": {
-        const condition = node.childForFieldName("condition");
-        const left = condition?.childForFieldName("left");
-        const right = condition?.childForFieldName("right");
-        const operator = condition?.childForFieldName("operator")?.text;
-        const nil = left === null || left === undefined || right?.type !== "null_literal" ? undefined : this.nullness(left, scope, trail);
-        if (nil === undefined || (operator !== "==" && operator !== "!=")) return undefined;
-        const branch = node.childForFieldName((operator === "==" ? nil : !nil) ? "consequence" : "alternative");
-        return branch === null ? undefined : this.of(branch, scope, trail);
-      }
-      case "binary_expression":
-        return this.concatenation(node, scope, trail);
-      case "identifier":
-        return this.name(node.text, node, scope, trail);
-      case "field_access":
-        return this.access(node, scope, trail);
-      case "method_invocation":
-        return this.invocation(node, scope, trail);
-      case "object_creation_expression":
-        return typeNameOf(node.childForFieldName("type")) === "URI" ? this.ofArgument(node, 0, scope, trail) : undefined;
-      default:
-        return undefined;
+    } catch (error) {
+      if (error instanceof RangeError) return undefined;
+      throw error;
     }
   }
 
@@ -248,16 +250,17 @@ export class UrlText {
     if (type.methods.some((method) => method.name === name && method.parameterTypes.length === 0 && method.hasBody)) return false;
     if (type.node.type === "record_declaration") return name === field;
     const binding = fieldBindings(type).get(field);
-    return binding !== undefined && [type.node, binding.node].some((node) => annotationUses(node, scopeOf(type)).some((use) => isAnnotation(use, new Set(["lombok.Data", "lombok.Value", "lombok.Getter"]))));
+    return binding !== undefined && [type.node, binding.node].some((node) => annotationUses(node, scopeOf(type)).some((use) => isAnnotation(use, LOMBOK_GETTERS)));
   }
 
   private immutable(type: TypeDecl): boolean {
     return type.node.type === "record_declaration"
-      || annotationUses(type.node, scopeOf(type)).some((use) => isAnnotation(use, "lombok.Value"))
+      || annotationUses(type.node, scopeOf(type)).some((use) => isAnnotation(use, LOMBOK_VALUE))
       || [...fieldBindings(type).values()].every((field) => field.node.childForFieldName("modifiers")?.text.includes("final") === true || field.node.namedChildren.some((child) => child.type === "modifiers" && /\bfinal\b/.test(child.text)));
   }
 
   private recordIsStable(value: ObjectValue, binding: Binding, read: Node, scope: UrlScope): boolean {
+    if (!scope.locals.has(binding.name) && (assignmentsOf(scope.type).get(binding.name) ?? []).length > 0) return false;
     if (this.immutable(value.type)) return true;
     if (!scope.locals.has(binding.name)) return false;
     let member: Node | null = read;
@@ -309,77 +312,89 @@ export class UrlText {
     if (trail.has(node.id)) return undefined;
     const next = new Set(trail).add(node.id);
     if (node.type === "this") return scope.instance;
-    if (node.type === "identifier" || node.type === "field_access") {
-      const name = node.type === "identifier" ? node.text : node.childForFieldName("object")?.type === "this" ? node.childForFieldName("field")?.text : undefined;
-      if (name === undefined) return undefined;
-      const closed = scope.env.get(name) ?? scope.instance?.fields.get(name);
-      if (closed !== undefined) return this.held(closed.node, closed.scope, next);
-      const binding = scope.locals.get(name) ?? this.fieldOf(scope.type, name)?.binding;
-      if (binding === undefined) return undefined;
-      if (binding.initializer !== undefined) {
-        const value = this.held(binding.initializer, scope, next);
-        if (value?.kind !== "record") return value;
-        if (!this.recordIsStable(value, binding, node, scope)) return undefined;
-        let member: Node | null = node;
-        while (member !== null && member.type !== "method_declaration" && member.type !== "constructor_declaration") member = member.parent;
-        if (member === null) return value;
-        const fields = new Map(value.fields);
-        const calls = descendants(member).filter((child) => child.type === "method_invocation" && child.startIndex < node.startIndex && child.childForFieldName("object")?.text === name).sort((a, b) => a.startIndex - b.startIndex);
-        for (const call of calls) {
-          const setter = call.childForFieldName("name")?.text ?? "";
-          const methods = value.type.methods.filter((method) => method.name === setter && method.parameterTypes.length === 1);
-          const [argument] = argumentsOf(call);
-          if (methods.length !== 1 || argument === undefined) continue;
-          const method = methods[0];
-          if (method === undefined) continue;
-          const writes = descendants(method.node).filter((child) => child.type === "assignment_expression");
-          const [write] = writes;
-          const left = write?.childForFieldName("left");
-          const right = write?.childForFieldName("right");
-          const parameter = method.node.childForFieldName("parameters")?.namedChildren[0]?.childForFieldName("name")?.text;
-          const field = left?.type === "field_access" && left.childForFieldName("object")?.type === "this" ? left.childForFieldName("field")?.text : undefined;
-          if (writes.length !== 1 || field === undefined || right?.text !== parameter) continue;
-          if (call.parent?.parent?.id !== member.childForFieldName("body")?.id || write?.parent?.parent?.id !== method.node.childForFieldName("body")?.id) fields.delete(field);
-          else fields.set(field, { node: argument, scope });
-        }
-        return { ...value, fields };
-      }
-      const type = this.project.lookupType(binding.typeName, scopeOf(scope.type));
-      if (typeof type !== "object") return undefined;
-      const key = this.prefixOf(type);
-      return key === undefined ? { kind: "record", type, fields: new Map() } : { kind: "configuration", key, typeName: type.fqn, owner: type };
-    }
-    if (node.type === "object_creation_expression") {
-      const type = this.project.lookupType(typeNameOf(node.childForFieldName("type")), scopeOf(scope.type));
-      if (typeof type !== "object") return undefined;
-      const fields = new Map<string, Closure>();
-      const args = argumentsOf(node);
-      const constructors = memberNodes(type).filter((member) => member.type === "constructor_declaration" && (member.childForFieldName("parameters")?.namedChildCount ?? 0) === args.length);
-      if (constructors.length === 1) {
-        const constructor = constructors[0] as Node;
-        const params = constructor.childForFieldName("parameters")?.namedChildren ?? [];
-        const env = new Map(params.flatMap((parameter, index) => {
-          const name = parameter.childForFieldName("name")?.text;
-          const argument = args[index];
-          return name === undefined || argument === undefined ? [] : [[name, { node: argument, scope }] as const];
-        }));
-        for (const assignment of descendants(constructor).filter((child) => child.type === "assignment_expression")) {
-          const left = assignment.childForFieldName("left");
-          const right = assignment.childForFieldName("right");
-          const field = left?.type === "field_access" && left.childForFieldName("object")?.type === "this" ? left.childForFieldName("field")?.text : undefined;
-          if (field !== undefined && right !== null) {
-            if (fields.has(field) || assignment.parent?.parent?.id !== constructor.childForFieldName("body")?.id) return undefined;
-            fields.set(field, { node: right, scope: { type, locals: localBindings(constructor), env, configurationFile: scope.configurationFile ?? scope.type.file } });
-          }
-        }
-      } else if (type.node.type === "record_declaration" || annotationUses(type.node, scopeOf(type)).some((use) => isAnnotation(use, new Set(["lombok.AllArgsConstructor", "lombok.Value"])))) {
-        const names = [...fieldBindings(type).keys()];
-        if (names.length !== args.length) return undefined;
-        names.forEach((name, index) => { const argument = args[index]; if (argument !== undefined) fields.set(name, { node: argument, scope }); });
-      } else if (args.length > 0) return undefined;
-      return { kind: "record", constructed: true, type, fields };
-    }
+    if (node.type === "identifier" || node.type === "field_access") return this.heldBinding(node, scope, next);
+    if (node.type === "object_creation_expression") return this.constructed(node, scope);
     if (node.type !== "method_invocation") return undefined;
+    return this.heldInvocation(node, scope, next);
+  }
+
+  private heldBinding(node: Node, scope: UrlScope, next: ReadonlySet<number>): HeldValue | undefined {
+    const name = node.type === "identifier" ? node.text : node.childForFieldName("object")?.type === "this" ? node.childForFieldName("field")?.text : undefined;
+    if (name === undefined) return undefined;
+    const closed = scope.env.get(name) ?? scope.instance?.fields.get(name);
+    if (closed !== undefined) return this.held(closed.node, closed.scope, next);
+    const binding = scope.locals.get(name) ?? this.fieldOf(scope.type, name)?.binding;
+    if (binding === undefined) return undefined;
+    if (binding.initializer !== undefined) {
+      const value = this.held(binding.initializer, scope, next);
+      if (value?.kind !== "record") return value;
+      if (!this.recordIsStable(value, binding, node, scope)) return undefined;
+      return this.withSetters(value, binding.name, node, scope);
+    }
+    const type = this.project.lookupType(binding.typeName, scopeOf(scope.type));
+    if (typeof type !== "object") return undefined;
+    const key = this.prefixOf(type);
+    return key === undefined ? { kind: "record", type, fields: new Map() } : { kind: "configuration", key, typeName: type.fqn, owner: type };
+  }
+
+  private withSetters(value: ObjectValue, name: string, node: Node, scope: UrlScope): ObjectValue {
+    let member: Node | null = node;
+    while (member !== null && member.type !== "method_declaration" && member.type !== "constructor_declaration") member = member.parent;
+    if (member === null) return value;
+    const fields = new Map(value.fields);
+    const calls = descendants(member).filter((child) => child.type === "method_invocation" && child.startIndex < node.startIndex && child.childForFieldName("object")?.text === name).sort((a, b) => a.startIndex - b.startIndex);
+    for (const call of calls) {
+      const setter = call.childForFieldName("name")?.text ?? "";
+      const methods = value.type.methods.filter((method) => method.name === setter && method.parameterTypes.length === 1);
+      const [argument] = argumentsOf(call);
+      if (methods.length !== 1 || argument === undefined) continue;
+      const method = methods[0];
+      if (method === undefined) continue;
+      const writes = descendants(method.node).filter((child) => child.type === "assignment_expression");
+      const [write] = writes;
+      const left = write?.childForFieldName("left");
+      const right = write?.childForFieldName("right");
+      const parameter = method.node.childForFieldName("parameters")?.namedChildren[0]?.childForFieldName("name")?.text;
+      const field = left?.type === "field_access" && left.childForFieldName("object")?.type === "this" ? left.childForFieldName("field")?.text : undefined;
+      if (writes.length !== 1 || field === undefined || right?.text !== parameter) continue;
+      if (call.parent?.parent?.id !== member.childForFieldName("body")?.id || write?.parent?.parent?.id !== method.node.childForFieldName("body")?.id) fields.delete(field);
+      else fields.set(field, { node: argument, scope });
+    }
+    return { ...value, fields };
+  }
+
+  private constructed(node: Node, scope: UrlScope): ObjectValue | undefined {
+    const type = this.project.lookupType(typeNameOf(node.childForFieldName("type")), scopeOf(scope.type));
+    if (typeof type !== "object") return undefined;
+    const fields = new Map<string, Closure>();
+    const args = argumentsOf(node);
+    const constructors = memberNodes(type).filter((member) => member.type === "constructor_declaration" && (member.childForFieldName("parameters")?.namedChildCount ?? 0) === args.length);
+    if (constructors.length === 1) {
+      const constructor = constructors[0] as Node;
+      const params = constructor.childForFieldName("parameters")?.namedChildren ?? [];
+      const env = new Map(params.flatMap((parameter, index) => {
+        const name = parameter.childForFieldName("name")?.text;
+        const argument = args[index];
+        return name === undefined || argument === undefined ? [] : [[name, { node: argument, scope }] as const];
+      }));
+      for (const assignment of descendants(constructor).filter((child) => child.type === "assignment_expression")) {
+        const left = assignment.childForFieldName("left");
+        const right = assignment.childForFieldName("right");
+        const field = left?.type === "field_access" && left.childForFieldName("object")?.type === "this" ? left.childForFieldName("field")?.text : undefined;
+        if (field !== undefined && right !== null) {
+          if (fields.has(field) || assignment.parent?.parent?.id !== constructor.childForFieldName("body")?.id) return undefined;
+          fields.set(field, { node: right, scope: { type, locals: localBindings(constructor), env, configurationFile: scope.configurationFile ?? scope.type.file } });
+        }
+      }
+    } else if (type.node.type === "record_declaration" || annotationUses(type.node, scopeOf(type)).some((use) => isAnnotation(use, LOMBOK_CONSTRUCTORS))) {
+      const names = [...fieldBindings(type).keys()];
+      if (names.length !== args.length) return undefined;
+      names.forEach((name, index) => { const argument = args[index]; if (argument !== undefined) fields.set(name, { node: argument, scope }); });
+    } else if (args.length > 0) return undefined;
+    return { kind: "record", constructed: true, type, fields };
+  }
+
+  private heldInvocation(node: Node, scope: UrlScope, next: ReadonlySet<number>): HeldValue | undefined {
     const object = node.childForFieldName("object");
     const name = node.childForFieldName("name")?.text ?? "";
     if (name === "build" && argumentsOf(node).length === 0) {
@@ -390,7 +405,7 @@ export class UrlText {
         const [argument] = argumentsOf(current);
         if (setter === "builder" && argument === undefined) {
           const type = this.project.lookupType(current.childForFieldName("object")?.text ?? "", scopeOf(scope.type));
-          if (typeof type !== "object" || !annotationUses(type.node, scopeOf(type)).some((use) => isAnnotation(use, "lombok.Builder"))) break;
+          if (typeof type !== "object" || !annotationUses(type.node, scopeOf(type)).some((use) => isAnnotation(use, LOMBOK_BUILDER))) break;
           if ([...fields.keys()].some((field) => !fieldBindings(type).has(field))) return undefined;
           return { kind: "record", constructed: true, type, fields };
         }

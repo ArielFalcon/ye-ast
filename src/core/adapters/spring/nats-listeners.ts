@@ -6,13 +6,13 @@ import { spanOf, unknown } from "./findings.ts";
 import { argumentsOf } from "./java-members.ts";
 import { invocationsOf, receiverOf, type Invocation } from "./java-invocations.ts";
 import type { JavaProject, TypeDecl } from "./java-symbols.ts";
-import type { UrlText } from "./url-text.ts";
+import type { JavaValueEvaluator } from "./java-value-evaluator.ts";
 
 /**
  * The subjects a class consumes with the NATS client's own API, one listener per subscription. A listener a class inherits
  * from a base type no source declares is not read: the base holds the subject and its source is absent.
  */
-export function natsListenersOf(type: TypeDecl, project: JavaProject, text: UrlText): Finding<Listener>[] {
+export function natsListenersOf(type: TypeDecl, project: JavaProject, text: JavaValueEvaluator): Finding<Listener>[] {
   return project.classChain(type).flatMap(invocationsOf).flatMap((invocation): Finding<Listener>[] => {
     const method = invocation.member;
     if (method?.type !== "method_declaration" || !isSubscription(invocation, project, text)) return [];
@@ -25,7 +25,7 @@ export function natsListenersOf(type: TypeDecl, project: JavaProject, text: UrlT
   });
 }
 
-function isSubscription(invocation: Invocation, project: JavaProject, text: UrlText): boolean {
+function isSubscription(invocation: Invocation, project: JavaProject, text: JavaValueEvaluator): boolean {
   if (invocation.node.childForFieldName("name")?.text !== SUBSCRIBE) return false;
   const object = invocation.node.childForFieldName("object");
   const receiver = object === null ? undefined : receiverOf(object, invocation, project, text);

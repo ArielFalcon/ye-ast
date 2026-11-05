@@ -1,3 +1,4 @@
+import type { UrlScope } from "./java-values.ts";
 import { JavaMethodFlow } from "./java-method-flow.ts";
 import type { Node } from "web-tree-sitter";
 import { compareText } from "../../domain/shared/code-node.ts";
@@ -9,7 +10,7 @@ import { complete, spanOf, unknownAtNode, withEvidence } from "./findings.ts";
 import { argumentsOf, typeNameOf } from "./java-members.ts";
 import { ancestorsOf, receiverOf, symbolOf, type Invocation } from "./java-invocations.ts";
 import { qualifiedTypeName, scopeOf, type JavaFile, type JavaProject, type TypeDecl } from "./java-symbols.ts";
-import { PLACEHOLDER, UrlText, type UrlScope } from "./url-text.ts";
+import { PLACEHOLDER, JavaValueEvaluator } from "./java-value-evaluator.ts";
 
 /** One publish call: where it is written, the client that publishes and the argument that names the destination. */
 interface Publish {
@@ -19,19 +20,18 @@ interface Publish {
 }
 
 
-
 const TOKEN_SEPARATOR = ".";
 
 /** The messages a Java snapshot publishes: one call site per publish of a client the vocabulary knows. */
 export class JavaEventReader {
-  private readonly text: UrlText;
+  private readonly text: JavaValueEvaluator;
 
   constructor(
     private readonly project: JavaProject,
     configuration: (file: JavaFile) => Configuration,
     private readonly owned: ReadonlySet<JavaFile>,
   ) {
-    this.text = new UrlText(project, configuration);
+    this.text = new JavaValueEvaluator(project, configuration);
   }
 
   sites(repo: string): CallSite[] {

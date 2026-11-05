@@ -46,3 +46,9 @@ Remaining scope: a binary-only facade still yields a library cut without a separ
 | 1 | Is an adapter-local abstract record justified? | Yes: string coercion loses field identity, and both HTTP and event consumers need records. Keep the type in Spring until a second technology needs it. |
 | 2 | Should new public ambiguity causes be introduced? | Reuse typed unresolved for this slice; do not change MCP summaries. Add a public taxonomy only with a separately reviewed schema commit. |
 | 3 | How should binary-only messaging facades be modeled? | Preserve the library cut and evaluate source values where a supported source leaf consumes them. Do not infer subscription semantics from a method name. |
+
+## Audit corrections
+
+Mutable object mappings require a local reference whose uses before the read are proven simple accessors. Passing to a source helper is allowed only when every parameter use is a proven field getter; aliases, captures, storage and undecidable calls invalidate the mapping. Shared mutable records and scalar fields written outside constructors cannot establish a complete value. Records, final-field values and Lombok Value supply immutability evidence.
+
+Summary expansion retains alternatives per output position instead of enumerating combinations of unrelated calls. The work stack is iterative; binding contexts are memoized and shared alternative entries deduplicated. Each output is resolved only when its dispatch alternatives agree. Framework implementations and named Bean constructors are indexed once per project. Value-expression stack exhaustion becomes an undecidable value, preserving the existing unresolved contract.
