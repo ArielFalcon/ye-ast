@@ -1,8 +1,8 @@
 # Composición transversal MCP: limpieza e integración con main
 
-Estado: **parcial**. Limpieza, commits e integración de `main` en la rama de la feature completados y verificados. El
-avance de `main` local hasta la feature **no se hizo**: el checkout de `main` tiene WIP ajeno en los mismos archivos que
-cambia el merge (ver "Bloqueo").
+Status: **completed**. Cleanup, commits, conflict resolution and the merge into local `main` are complete.
+The initial blocked state below is retained as history; the follow-up records how the pending changes were
+preserved in commits and integrated after the owner authorized it. Nothing was pushed.
 
 ## Alcance
 
@@ -144,3 +144,48 @@ WIP ajeno preservado: el `git diff` del checkout de main tiene el mismo SHA-1 al
 - Los tests muestran que no hay regresiones en lo que cubren; no prueban que no haya ninguna.
 - El piloto de consumidores sigue siendo limitado e histórico; no hay evaluación LLM completa.
 - La composición sigue reejecutando consultas y no garantiza menor latencia ni un instante atómico del workspace.
+
+
+## Follow-up: preserving the inactive main changes
+
+The owner explicitly authorized reviewing the pending main changes, committing them and completing the merge.
+At 21:20 CET all five files still had their last modification at 20:14 CET (about 67 minutes earlier), and their
+patch was unchanged from the cleanup review. The only other active project worker used its own worktree and did not
+own these files in the main checkout.
+
+The original pending diff was saved outside the repository as
+`/tmp/ye-ast-main-wip-before-integration.patch`. It was committed without edits in two behavior units:
+
+- `8858518`: refuse a held live capture if HEAD changed while acquiring it; keep lease cleanup and its regression test.
+- `5d9722b`: reject redacted selection coordinates before dispatch or reflection, in all public modes.
+
+A byte comparison between the saved patch and `git diff --binary a9bd5d5..5d9722b` was identical.
+SHA-256: `6c079654324b5dd178bbfdf8f664d087b291189a6cc35d231b1b9406a4b7baaa`.
+
+The integration into the composition branch conflicted only in the server imports. The shared query runner remains
+the dispatch owner; the selection guard remains in the server before cursor processing and dispatch, with the
+canonical JSON import it requires. No original pending change was discarded or replaced by a parallel mechanism.
+
+The original checkout tests passed 206/206. The integrated focused suite passed 207/207. Both commands used
+Node 24.22.2 and the live-captures, workspace-snapshots and MCP server test files.
+
+
+### Final integration and verification
+
+The integrated source tree was committed as `d333e79`. Local main advanced from `5d9722b` to `d333e79` with
+`git merge --ff-only t3/common-mcp-response-modes-steps-1-3`. No stash, reset, forced branch update or push was used.
+The only subsequent change is this completion report.
+
+Observed verification on that source tree, using Node 24.22.2:
+
+- `npm run check`: 2,400 passed; zero failures, cancellations, skips or todos. Typecheck and architecture passed
+  (417 modules and 2,477 dependencies).
+- `node --import tsx --test scripts/evaluate-mcp-composition.test.ts`: 23 passed, zero failures.
+- `npm run build`: exit 0.
+- `git diff --check` and `git diff --cached --check`: clean.
+
+Logs: `/tmp/ye-ast-main-integration-check.log`, `/tmp/ye-ast-main-integration-evaluator.log`,
+`/tmp/ye-ast-main-integration-build.log` and `/tmp/ye-ast-final-guards-focused.log`.
+
+The previous main WIP blocker is resolved. The bounded LLM evaluation and the full-output size caveats described
+above remain unchanged. Verification establishes the covered behavior, not a guarantee against all regressions.
