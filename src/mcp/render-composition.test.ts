@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { callersValue, factOf, liveRef, outlineValue, shaRef, SHA_A, SHA_B, sourceFixture } from "./composition-fixtures.ts";
+import { callersValue, factOf, importersValue, liveRef, outlineValue, shaRef, SHA_A, SHA_B, sourceFixture } from "./composition-fixtures.ts";
 import { normalizeSource } from "./composition-normalize.ts";
 import { mergeEvidence, materializeEvidence } from "./compose-evidence.ts";
 import { compositionIdentity } from "./composition-identity.ts";
@@ -347,4 +347,30 @@ test("rendering is deterministic and independent of the merge order of the same 
     assert.equal(renderComposition(overlapResult, mode), renderComposition(overlapResult, mode));
     assert.equal(renderComposition(same, mode), renderComposition(overlapResult, mode));
   }
+});
+
+test("summary lists every declaration of an outline file, as the outline summary does", () => {
+  const text = renderComposition(resultOf([uniqueOutline()]), "summary");
+  const [file] = outlineValue().files;
+  assert.ok(file);
+  for (const declaration of file.declarations.filter((_, index) => index !== 2)) assert.ok(text.includes(`${declaration.line}-${declaration.endLine} ${declaration.name}`), `${declaration.name}:\n${text}`);
+  assert.doesNotMatch(text, /uncited declarations/);
+});
+
+test("summary locates an unknown entrypoint finding by its evidence", () => {
+  const text = renderComposition(resultOf([sourceFixture("entrypoints")]), "summary");
+  assert.match(text, /unknown entrypoint finding \(unresolved\), evidence src\/Dynamic\.java:4/);
+});
+
+test("summary names the handler of a reached entrypoint wherever the reach is cited", () => {
+  const text = renderComposition(resultOf([singleTargetCallers()]), "summary");
+  for (const line of lines(text).filter((candidate) => candidate.includes("reach of http-route GET /orders"))) assert.match(line, /reach of http-route GET \/orders handler \S/);
+  assert.ok(lines(text).some((candidate) => candidate.includes("reach of http-route GET /orders")), text);
+});
+
+test("summary lists the cut places of an importers read and counts those of other families", () => {
+  const importers = sourceFixture("importers", { fact: factOf(importersValue(), { cuts: [{ kind: "unresolved-link", at: ["src/dyn.ts"] }] }) });
+  const text = renderComposition(resultOf([importers, sourceFixture("impact-local")]), "summary");
+  assert.match(text, /unresolved-link cut ×1, 1 places: src\/dyn\.ts/);
+  assert.match(text, /depth cut ×1, 2 places, limit 2(?!:)/);
 });

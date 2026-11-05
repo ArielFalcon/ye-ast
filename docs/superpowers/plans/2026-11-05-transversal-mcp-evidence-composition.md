@@ -938,6 +938,7 @@ Esta adenda registra una decisión de presentación tomada tras medir el criteri
    - Las advertencias de cada tipo de relación o regla de conexión se dicen una vez, en el primer objeto de ese tipo; las reglas que solo nombran a sus miembros no llevan texto.
    - Trust y scope declarado se imprimen una vez; producer, schema y typeRoot solo cuando difieren, agrupados por valor exacto. Engines y el origen del índice quedan en full; una incompatibilidad sigue apareciendo como issue.
    - La estrategia de cada request queda en el receipt; el texto solo declara la indisponibilidad.
+   - Summary conserva las coordenadas que el summary original de cada fuente muestra: las declaraciones de un archivo outline, la evidencia de un hallazgo unknown de entrypoints, el handler de un entrypoint alcanzado y los lugares de corte de importers.
    - Un archivo outline y sus declaraciones forman un único bloque de sujeto, reclamado por tipo antes de renderizar.
    - Lecturas con el mismo análisis o la misma lista de evidencia se agrupan por igualdad exacta.
    - Las roots se imprimen una por repositorio cuando todas las fuentes coinciden.

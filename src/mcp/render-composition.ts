@@ -349,9 +349,10 @@ class CompactView {
     return binding === undefined ? text : `${text} (unbound: ${binding.reason})`;
   }
 
-  private evidenceList(ids: readonly EvidenceId[]): string {
+  /** Locations in details; a count in summary unless the evidence is the only coordinate of what it supports. */
+  private evidenceList(ids: readonly EvidenceId[], located = this.details): string {
     if (ids.length === 0) return "no evidence";
-    if (!this.details) return `evidence ${ids.length}`;
+    if (!located) return `evidence ${ids.length}`;
     return `evidence ${ids.map((id) => {
       const record = this.evidence.get(id);
       return record === undefined ? "?" : `${evidenceText(record.value)}${this.context(record.origin)}`;
@@ -390,10 +391,10 @@ class CompactView {
   private describe(part: Part, short = false): string {
     switch (part.kind) {
       case "entrypoint": return short ? `entrypoint ${part.entry.name}` : `entrypoint ${entryName(part.entry)}${this.entry(part.entry)}; route ${this.routeEvidence(part)}`;
-      case "unknown-finding": return `unknown entrypoint finding (${part.reason})${short ? "" : `, ${this.evidenceList(part.evidence)}`}`;
+      case "unknown-finding": return `unknown entrypoint finding (${part.reason})${short ? "" : `, ${this.evidenceList(part.evidence, true)}`}`;
       case "seed": return `${part.basis === "requested" ? "requested target (not a change)" : `seed basis ${part.basis}`} ${this.anchor(part.anchor)}${short ? "" : this.comparison(part.comparison)}`;
       case "symbol-reach": return short ? `reached ${this.anchor(part.anchor)}` : `reached ${this.anchor(part.anchor)} ${part.kindName} depth ${part.depth} confidence ${part.confidence} fan-in ${part.fanIn}${part.via === undefined ? "" : `; via ${part.via.target.symbol} in ${this.file(part.via.target.file)} basis ${part.via.basis}${part.via.lines === undefined ? "" : ` lines ${part.via.lines.join(",")}`}`}`;
-      case "entrypoint-reach": return short ? `reach of ${part.kindName} ${part.name ?? "(unnamed)"}` : `reached entrypoint ${part.kindName} ${part.name ?? "(unnamed)"} handler ${this.anchor(part.handler)} depth ${part.depth} confidence ${part.confidence}; seed indexes ${this.origins(part.seeds) || "none"}`;
+      case "entrypoint-reach": return short ? `reach of ${part.kindName} ${part.name ?? "(unnamed)"} handler ${this.anchor(part.handler)}` : `reached entrypoint ${part.kindName} ${part.name ?? "(unnamed)"} handler ${this.anchor(part.handler)} depth ${part.depth} confidence ${part.confidence}; seed indexes ${this.origins(part.seeds) || "none"}`;
       case "entrypoint-change": return `${part.change} ${part.kindName} ${part.name} handler ${this.anchor(part.handler)}${short ? "" : this.comparison(part.comparison)}`;
       case "contract-change": {
         const contract = part.contract;
@@ -435,7 +436,8 @@ class CompactView {
 
   /**
    * Entrypoint subjects, then declaration subjects grouped under their file. An outline file and its declarations are
-   * that block (heading and rows), never a second listing; summary keeps only the cited declarations and counts the rest.
+   * that block (heading and rows), never a second listing. Summary lists an outline file's declarations, as the outline
+   * summary does, and elsewhere keeps only the cited declarations and counts the rest.
    */
   private subjectLines(): string[] {
     const lines: string[] = [];
@@ -470,7 +472,7 @@ class CompactView {
     for (const entity of this.result.graph.entities) if (entity.kind === "declaration") place(entity.file, entity.id);
     let unlisted = 0;
     for (const [file, { outlines, rows }] of blocks) {
-      const shown = rows.filter((row) => this.details || ("entity" in row ? this.entityLabels.has(row.entity) : true));
+      const shown = rows.filter((row) => this.details || outlines.length > 0 || ("entity" in row ? this.entityLabels.has(row.entity) : true));
       unlisted += rows.length - shown.length;
       if (shown.length === 0 && outlines.length === 0) continue;
       const heading = unique(outlines.map((part) => this.supportLabels(part)));
@@ -636,7 +638,9 @@ class CompactView {
     const incomplete = shareExactContext(reads.filter((read) => read.analysis.status !== "complete"), (read) => read.analysis);
     incomplete.contexts.forEach((analysis, index) => {
       const members = this.readGroup(incomplete.rows.filter((row) => row.contextIndex === index).map((row) => row.value));
-      lines.push(analysis.status === "unknown" ? `  ${members}: unknown (${analysis.reason})` : `  ${members}: partial; ${analysis.status === "partial" ? this.cuts(analysis.cuts) : ""}`);
+      const rows = incomplete.rows.filter((row) => row.contextIndex === index).map((row) => row.value);
+      const located = this.details || rows.some((read) => this.sources.get(read.source)?.family === "importers");
+      lines.push(analysis.status === "unknown" ? `  ${members}: unknown (${analysis.reason})` : `  ${members}: partial; ${analysis.status === "partial" ? this.cuts(analysis.cuts, located) : ""}`);
     });
     const evidence = shareExactContext(reads.filter((read) => read.evidence.length > 0 && (this.details || read.analysis.status !== "complete")), (read) => read.evidence);
     evidence.contexts.forEach((ids, index) => lines.push(`  read ${this.evidenceList(ids)}: ${this.readGroup(evidence.rows.filter((row) => row.contextIndex === index).map((row) => row.value))}`));
@@ -644,11 +648,12 @@ class CompactView {
     return lines;
   }
 
-  private cuts(cuts: readonly Cut[]): string {
+  /** Places in details; in summary only for the families whose own summary lists them (importers). */
+  private cuts(cuts: readonly Cut[], located = this.details): string {
     return [...Map.groupBy(cuts, (cut) => cut.kind)].map(([kind, ofKind]) => {
       const places = ofKind.flatMap((cut) => cut.at);
       const limits = unique(ofKind.flatMap((cut) => (cut.limit === undefined ? [] : [cut.limit])));
-      return `${kind} cut ×${ofKind.length}, ${places.length} places${limits.length === 0 ? "" : `, limit ${limits.join("/")}`}${this.details ? `: ${places.join(", ")}` : ""}`;
+      return `${kind} cut ×${ofKind.length}, ${places.length} places${limits.length === 0 ? "" : `, limit ${limits.join("/")}`}${located ? `: ${places.join(", ")}` : ""}`;
     }).join("; ");
   }
 
