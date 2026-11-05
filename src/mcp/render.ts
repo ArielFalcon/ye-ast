@@ -540,8 +540,10 @@ function impactedSymbols(value: ImpactValue, detail: ResponseMode): string[] {
   if (symbols.length === 0) return [header];
   const literal = [header, ...groupedLines(symbols)];
   if (detail === "summary") {
-    const depths = [...Map.groupBy(symbols, (symbol) => symbol.depth)].toSorted(([a], [b]) => a - b);
-    const counted = [header, `  by depth: ${depths.map(([depth, group]) => `${depth}: ${group.length}`).join(", ")}; mode "details" shows investigation evidence; ${categoryRecovery({ full: "includes every symbol" })}`];
+    const direct = symbols.filter((symbol) => symbol.depth === 1);
+    const deeper = [...Map.groupBy(symbols.filter((symbol) => symbol.depth !== 1), (symbol) => symbol.depth)].toSorted(([a], [b]) => a - b);
+    const counts = deeper.length === 0 ? "" : `by depth: ${deeper.map(([depth, group]) => `${depth}: ${group.length}`).join(", ")}; `;
+    const counted = [header, ...groupedLines(direct), `  ${counts}mode "details" shows investigation evidence; ${categoryRecovery({ full: "includes every symbol" })}`];
     return size(counted) <= size(literal) ? counted : literal;
   }
   const shown = investigationSymbols(value);

@@ -1747,7 +1747,7 @@ test("callers summary counts dependency depths and detail identifies the nearest
   const { session } = await setup({ callers: async () => ({ ok: true, value: deep }) });
   const result = await session.callTool("ye_ast_callers", { targets: [{ file: "src/a.ts", symbol: "A.seed" }] });
   const text = textOf(result);
-  assert.match(text, /by depth: 1: 1, 2: 7, 3: 1/);
+  assert.match(text, /impacted symbols \(9\):\n {2}src\/a\.ts\n {4}4 A\.other \[method\] \(depth 1\)\n {2}by depth: 2: 7, 3: 1;/);
   assert.doesNotMatch(text, /B\.user|C\.top/);
   const { recovery: _recovery, ...receipt } = fieldsOf(resultFields(result));
   assert.deepEqual(receipt, envelopeOf(deep));

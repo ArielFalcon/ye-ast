@@ -139,7 +139,10 @@ test("detailed impact retains the nearest dependency frontier and reached handle
   assert.match(output, /9 handler[^\n]*via consumer\.ts:direct at 11/);
   assert.doesNotMatch(output, /22 deeper/);
   assert.match(output, /3 other symbols[^\n]*mode: "full"/);
-  assert.doesNotMatch(renderImpact({ ...fact, value }), /12-18 direct/);
+  const summary = renderImpact({ ...fact, value });
+  assert.match(summary, /consumer\.ts\n {4}12-18 direct \[function\]/);
+  assert.match(summary, /by depth: 2: 3, 3: 1;/);
+  assert.doesNotMatch(summary, /deeper|handler\b[^\n]*depth 3/i);
 });
 
 test("impact detail localizes cut anchors and limits while counting their reference places", () => {
