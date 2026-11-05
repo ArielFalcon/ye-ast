@@ -101,13 +101,15 @@ function fileOf(value: unknown): string {
 
 function repositoryOf(value: unknown): WorkspaceRepositoryRequest {
   if (!isRecord(value)) throw new InvalidParamsError("a repository must be an object");
-  const fields = only(value, ["path", "id", "revision", "remote"]);
-  return {
-    path: text(fields, "path"),
+  const fields = only(value, ["path", "id", "revision", "remote", "live"]);
+  if ("deadlineMs" in fields || ("live" in fields && (fields.live !== true || "revision" in fields))) throw new InvalidParamsError("invalid repository selector");
+  for (const key of ["path", "id", "revision"] as const) {
+    if (key in fields && (typeof fields[key] !== "string" || fields[key].trim() === "")) throw new InvalidParamsError(`${key} must be a non-empty string`);
+  }
+  const common = { path: text(fields, "path"),
     ...(fields.id === undefined ? {} : { id: text(fields, "id") }),
-    ...(fields.revision === undefined ? {} : { revision: text(fields, "revision") }),
-    ...(fields.remote === undefined ? {} : { remote: text(fields, "remote") }),
-  };
+    ...(fields.remote === undefined ? {} : { remote: text(fields, "remote") }) };
+  return fields.live === true ? { ...common, live: true } : { ...common, ...(fields.revision === undefined ? {} : { revision: text(fields, "revision") }) };
 }
 
 function gatewayOf(value: unknown): { prefix: string; repo: string } {
@@ -169,7 +171,7 @@ export function readWorkspace(params: unknown): Omit<WorkspaceRequest, "signal">
 
 function workspaceFields(p: Params): Omit<WorkspaceRequest, "signal"> {
   const replay = p.replay;
-  if (replay !== undefined && !isWorkspaceReplayContext(replay)) throw new InvalidParamsError("invalid workspace replay");
+  if (replay !== undefined && (!isWorkspaceReplayContext(replay) || replay.snapshots.length === 0)) throw new InvalidParamsError("invalid workspace replay");
   return {
     ...(replay === undefined ? {} : { replay }),
     repo: repositoryOf(p.repo),

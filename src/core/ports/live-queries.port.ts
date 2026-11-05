@@ -1,8 +1,22 @@
+import type { VcsFault } from "./vcs.port.ts";
+import type { SnapshotRef } from "../domain/shared/fact.ts";
+
 /** Why a live query was refused or could not read the working tree. */
 export interface LiveFault {
   kind: "live-requires-trusted" | "unsupported-object-format" | "live-mirror-failed";
   detail: string;
 }
+
+export interface LiveUnavailable {
+  kind: "unavailable";
+  detail: string;
+}
+
+export type LiveFailure = LiveFault | VcsFault | LiveUnavailable;
+
+export type WorkspaceLiveNotice =
+  | { readonly kind: "stale"; readonly repo: string; readonly snapshot: Extract<SnapshotRef, { kind: "live" }>; readonly notice: LiveStaleNotice }
+  | { readonly kind: "staleness-unavailable"; readonly repo: string; readonly snapshot: Extract<SnapshotRef, { kind: "live" }>; readonly cause: LiveFault | VcsFault };
 
 const LIVE_FAULTS: ReadonlySet<string> = new Set<LiveFault["kind"]>(["live-requires-trusted", "unsupported-object-format", "live-mirror-failed"]);
 

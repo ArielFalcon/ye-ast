@@ -1401,3 +1401,14 @@ test("multiple change records for one path are validated together once", async (
   await query.ask();
   assert.equal(calls, 1);
 });
+
+test("a live callers query cancelled during its postlude returns an aborted fault", async () => {
+  const live = fakeLive({ "src/A.java": "1" });
+  const controller = new AbortController();
+  const usage = live.deps.mirror.usage;
+  live.deps.mirror.usage = async (...args) => { const result = await usage(...args); controller.abort(); return result; };
+  const { queries } = setup({ trust: TRUSTED, live, nodes: LIVE_NODES });
+  const result = await queries.callers({ ...LIVE_BASE, targets: [{ file: "src/A.java", symbol: "f" }], live: true, signal: controller.signal });
+  assert.equal(!result.ok && result.fault.kind, "aborted");
+  assert.equal(live.held.locks, live.held.released);
+});

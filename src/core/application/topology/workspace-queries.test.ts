@@ -71,6 +71,7 @@ function setup(
   resolveHead?: () => string,
   testDigest?: Digest,
   reads?: { resolved: { repo: string; revision: string }[]; exports: string[] },
+  hooks?: { extract?: () => void; exported?: (repo: string, sha: string) => void },
 ) {
   let exported: string | undefined;
   const vcs: Vcs = {
@@ -87,6 +88,7 @@ function setup(
     repositoryName: async () => ({ ok: true, value: "library" }),
     exportCommit: async (repo, _sha, _destination, plan) => {
       reads?.exports.push(repo);
+      hooks?.exported?.(repo, _sha);
       exported = repo;
       const files: ExportedFile[] = Object.keys(repositories[repo]?.files ?? {}).map((path) => ({ path, blob: path, written: plan.write(path) }));
       return { ok: true, value: { files, skipped: repositories[repo]?.skipped ?? [], ...(repositories[repo]?.stopped === undefined ? {} : { stopped: repositories[repo].stopped }) } };
@@ -94,7 +96,7 @@ function setup(
   };
   const scratch: ScratchDirectory = { create: async () => "/scratch", remove: async () => undefined };
   const reader: SourceReader = { read: async (_root, paths) => paths.map((path) => ({ path, content: repositories[exported ?? ""]?.files[path] ?? "" })) };
-  const extractor: EntrypointExtractor = { extract: async () => [] };
+  const extractor: EntrypointExtractor = { extract: async () => { hooks?.extract?.(); return []; } };
   const digest: Digest = testDigest ?? { of: (text) => `digest(${text})` };
   const deps: WorkspaceQueriesDeps = {
     vcs,
@@ -122,6 +124,38 @@ const deterministicDigest: Digest = { of: (text) => {
   for (const character of text) hash = (hash * 131n + BigInt(character.codePointAt(0)!)) % (1n << 256n);
   return hash.toString(16).padStart(64, "0");
 } };
+
+test("workspace pins every member before the first extraction", async () => {
+  const old = "b".repeat(40);
+  const next = "c".repeat(40);
+  let head = old;
+  const exports: { repo: string; sha: string }[] = [];
+  const sources: string[] = [];
+  const repos: Repositories = { "/work/app": { files: { "app.ts": "app" } }, "/work/lib": { files: { "lib.ts": old } } };
+  const queries = setup(repos, { of: async (files) => { sources.push(...files.filter((file) => file.path === "lib.ts").map((file) => file.content)); return []; } }, undefined, undefined, undefined, false, () => head, undefined, undefined, {
+    extract: () => { head = next; }, exported: (repo, sha) => { exports.push({ repo, sha }); if (repo === "/work/lib") repos[repo]!.files["lib.ts"] = sha; },
+  });
+  const value = valueOf(await queries.outwardNames({ repo: { path: "/work/app" }, repos: [{ path: "/work/lib" }] }));
+  assert.deepEqual(exports, [{ repo: "/work/app", sha: old }, { repo: "/work/lib", sha: old }]);
+  assert.deepEqual(value.repositorySnapshots.map(({ snapshot }) => snapshot.kind === "sha" ? snapshot.sha : null), [old, old]);
+  assert.deepEqual(sources, [old]);
+});
+
+test("workspace rejects invalid selectors before resolving or exporting", async () => {
+  for (const trust of [undefined, TRUSTED]) {
+    for (const request of [
+      { repo: { path: "/work/app", live: false } },
+      { repo: { path: "/work/app" }, repos: [{ path: "/work/lib", live: true, revision: "HEAD" }] },
+    ]) {
+      const reads = { resolved: [] as { repo: string; revision: string }[], exports: [] as string[] };
+      const queries = setup({ "/work/app": { files: {} }, "/work/lib": { files: {} } }, undefined, trust, undefined, undefined, false, undefined, undefined, reads);
+      const result = await queries.outwardNames(request as unknown as Parameters<typeof queries.outwardNames>[0]);
+      assert.ok(!result.ok);
+      assert.equal(result.fault.kind, "git-failed");
+      assert.deepEqual(reads, { resolved: [], exports: [] });
+    }
+  }
+});
 
 test("persisted workspace replay pins moving branches without changing the fact", async () => {
   const repos: Repositories = { "/work/app": { files: { "app.ts": "app" }, sha: "a".repeat(40) }, "/work/lib": { files: { "lib.ts": "lib" }, sha: "b".repeat(40) } };
@@ -157,6 +191,7 @@ test("replay rejects malformed contexts and changed declarations before source r
   };
   const [a, b] = context.snapshots;
   for (const bad of [null, { ...context, version: 2 }, { ...context, declaration: "ws-r1:bad" }, { ...context, snapshots: [a, a] }, { ...context, snapshots: [b, a] }, { ...context, snapshots: [a] }, { ...context, snapshots: [a, { ...b, repo: "extra" }] }, { ...context, snapshots: [a, { ...b, sha: "HEAD" }] }, { ...context, snapshots: [a, { repo: "lib", kind: "live", head: SHA, stateId: "state" }] }, { ...context, snapshots: [a, { ...b, extra: true }] }]) await mismatch(bad);
+  await mismatch({ ...context, declaration: "ws-r1:bad" }, { offline: false });
   manifest = { ...manifest, repos: [{ ...member, revision: "other" }] }; await mismatch(context);
   manifest = { ...manifest, repos: [{ ...member, id: "other" }] }; await mismatch(context);
   manifest = { ...manifest, repos: [member], gateways: [{ prefix: "other", repo: "lib" }] }; await mismatch(context);
@@ -196,6 +231,8 @@ test("replay reads old remote pins from the authorized mirror and preserves unav
   const absent = readOf(await queries.outwardNames({ ...request, replay: first.workspaceReplay }));
   assert.deepEqual(absent.workspaceReplay, first.workspaceReplay);
   assert.deepEqual(absent.refresh?.resolution, replay.refresh?.resolution);
+  assert.ok(absent.repositoryRoots?.some(({ repo, path }) => repo === "orders-svc" && path === SIBLING));
+  assert.equal(absent.repositorySources?.some(({ repo }) => repo === "orders-svc"), false);
   assert.equal(valueOf({ ok: true, value: absent }).sections["orders-svc"]?.status, "unknown");
   assert.equal(reads.resolved.some(({ repo }) => repo === SIBLING), false);
 });
@@ -899,4 +936,14 @@ test("an absent trust declaration and an explicit untrusted declaration have dis
   assert.ok(unknownTrust.value.fact.value.decisions.some((decision) => decision.kind === "trust"));
   assert.equal(knownTrust.value.fact.value.decisions.some((decision) => decision.kind === "trust"), false);
   assert.equal(sameIdentity(unknownTrust.value.fact, knownTrust.value.fact), false);
+});
+test("workspace cancellation while reading call sites cannot return a completed fact", async () => {
+  const controller = new AbortController();
+  const queries = setup({ "/work/app": { files: { "app.ts": "app" } } }, { of: async () => {
+    controller.abort();
+    return [];
+  } });
+  const result = await queries.outwardNames({ repo: { path: "/work/app" }, signal: controller.signal });
+  assert.ok(!result.ok);
+  assert.equal(result.fault.kind, "aborted");
 });

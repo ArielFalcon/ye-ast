@@ -12,7 +12,7 @@ import type { Vcs, RemoteRef } from "../../ports/vcs.port.ts";
 import type { WorkspaceDefaults } from "../../ports/workspace-defaults.port.ts";
 import type { WorkspaceFault, WorkspaceRepository, WorkspaceSection } from "../../ports/workspace-repos.port.ts";
 import type { FactRead, WorkspaceQueries, WorkspaceRefresh, WorkspaceRequest, WorkspaceValue } from "../../ports/workspace-queries.port.ts";
-import { createDecisionQueries } from "./decision-queries.ts";
+import { createCapturedDecisionQueries, createDecisionQueries } from "./decision-queries.ts";
 
 const SHA = "a".repeat(40);
 const OTHER_SHA = "b".repeat(40);
@@ -371,4 +371,58 @@ test("a clone that states no origin offers no remote decision", async () => {
   const value = valueOf(await setup({ ok: true, value: base(workspaceValue()) }, undefined, undefined, remotesOf({})).queries.decisions(REQUEST));
 
   assert.deepEqual(value.decisions.filter((decision) => decision.kind === "remote"), []);
+});
+
+test("decision origin reads receive the request signal and stop when it aborts", async () => {
+  const controller = new AbortController();
+  let seen: AbortSignal | undefined;
+  const vcs: Pick<Vcs, "remotes"> = { remotes: async (_repo, signal) => {
+    seen = signal;
+    controller.abort();
+    return { ok: true, value: [] };
+  } };
+  const { queries } = setup({ ok: true, value: base(workspaceValue()) }, undefined, undefined, vcs);
+  const result = await queries.decisions({ ...REQUEST, signal: controller.signal });
+  assert.equal(seen, controller.signal);
+  assert.equal(result.ok, false);
+  if (!result.ok) assert.equal(result.fault.kind, "aborted");
+});
+
+
+test("captured decisions read origins before the operation releases and retain final notices", async () => {
+  let held = false;
+  const controller = new AbortController();
+  const notice = { kind: "stale" as const, repo: "shop-web", snapshot: { repo: "shop-web", kind: "live" as const, head: SHA, stateId: "state" }, notice: { stateId: "state", changed: [] } };
+  const operation: import("../topology/workspace-operation.ts").WorkspaceReadOperation = {
+    async withRead(_request, use) {
+      held = true;
+      const value = await use({ fact: base(workspaceValue()) }, { signal: controller.signal } as import("../topology/workspace-snapshots.ts").WorkspaceSnapshotContext);
+      held = false;
+      return value.ok ? { ok: true, value: { value: value.value, workspaceLive: [notice] } } : value;
+    },
+  };
+  const vcs: Pick<Vcs, "remotes"> = { remotes: async (_path, signal) => {
+    assert.equal(held, true);
+    assert.equal(signal, controller.signal);
+    return { ok: true, value: [] };
+  } };
+  const queries = createCapturedDecisionQueries({ operation, vcs, digest: { of: (text) => text } });
+  const result = await queries.decisions({ ...REQUEST, signal: controller.signal });
+  assert.ok(result.ok);
+  assert.deepEqual(result.value.workspaceLive, [notice]);
+  assert.equal(held, false);
+});
+
+
+test("committed decision helper rejects live choices before reading workspace", async () => {
+  const { queries, asks } = setup({ ok: true, value: base(workspaceValue()) });
+  for (const request of [
+    { repo: { path: "/work/orders", live: true as const } },
+    { repo: { path: "/work/orders" }, repos: [{ path: "/work/lib", live: true as const }] },
+  ]) {
+    const result = await queries.decisions(request);
+    assert.ok(!result.ok);
+    assert.equal(result.fault.kind, "git-failed");
+  }
+  assert.deepEqual(asks, []);
 });

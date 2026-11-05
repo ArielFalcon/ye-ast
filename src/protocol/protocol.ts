@@ -37,6 +37,11 @@ export const ERROR_CODE = {
   "duplicate-repository": -32014,
   "unknown-change-path": -32015,
   "workspace-replay-mismatch": -32016,
+  "duplicate-workspace-source": -32017,
+  "workspace-capture-unavailable": -32018,
+  "live-requires-trusted": -32019,
+  "unsupported-object-format": -32020,
+  "live-mirror-failed": -32021,
 } as const;
 
 export type ErrorKind = keyof typeof ERROR_CODE;

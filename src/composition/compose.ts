@@ -1,6 +1,5 @@
 import { createDeclarationEvidenceReader } from "../core/adapters/typescript/declaration-evidence.adapter.ts";
 import { createSnapshotDataCache } from "../core/application/snapshot/snapshot-data-cache.ts";
-import { withSnapshotPreparation } from "../core/application/snapshot/prepared-snapshot.ts";
 import type { ImpactQueriesDeps } from "../core/application/impact/impact-queries.ts";
 import type { WorkspaceQueriesDeps } from "../core/application/topology/workspace-queries.ts";
 import { dirname, extname, join, sep } from "node:path";
@@ -18,9 +17,9 @@ import { createFixedLayerAdmin } from "../core/application/fixed-layer/fixed-lay
 import { createInstall } from "../core/application/install/install.ts";
 import { createImpactQueries } from "../core/application/impact/impact-queries.ts";
 import { createOutlineQueries } from "../core/application/outline/outline-queries.ts";
-import { createWorkspaceQueries } from "../core/application/topology/workspace-queries.ts";
-import { createWorkspaceImpactQueries } from "../core/application/topology/workspace-impact.ts";
-import { createDecisionQueries } from "../core/application/decisions/decision-queries.ts";
+import { createWorkspaceQueries, createWorkspaceReadOperation } from "../core/application/topology/workspace-queries.ts";
+import { createCapturedWorkspaceImpactQueries } from "../core/application/topology/workspace-impact.ts";
+import { createCapturedDecisionQueries } from "../core/application/decisions/decision-queries.ts";
 import { createIndexCache } from "../core/adapters/codegraph/cached-index.adapter.ts";
 import { createCodeGraph, SUPPORTED_STORE } from "../core/adapters/codegraph/codegraph.adapter.ts";
 import { STAGING_RULES_VERSION } from "../core/adapters/codegraph/stage-snapshot.ts";
@@ -242,6 +241,8 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
     digest,
     matcher,
     callSites,
+    graph,
+    live,
     evidence: createWorkspaceEvidence(),
     producer: { name: PRODUCER_NAME, version },
     engines: entrypointEngines,
@@ -250,23 +251,19 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
     ...budget,
     ...trust,
   };
-  const bareWorkspace = createWorkspaceQueries(workspaceDeps);
+  const operation = createWorkspaceReadOperation(workspaceDeps);
+  const bareWorkspace = createWorkspaceQueries(workspaceDeps, operation);
   const workspace = measurement === undefined ? bareWorkspace : measuredWorkspace(bareWorkspace, measurement);
   // The workspace impact is measured through the impact family it walks with; handing it the measured workspace would
   // write a second line for the read it shares with that walk.
-  const inWorkspaceOperation = <T>(use: (queries: WorkspaceImpactQueries) => Promise<T>): Promise<T> => withSnapshotPreparation(scratch, async (preparation) => {
-    const operationImpact = createImpactQueries({ ...impactDeps, preparation });
-    return use(createWorkspaceImpactQueries({
-      workspace: createWorkspaceQueries({ ...workspaceDeps, preparation }),
-      impact: measurement === undefined ? operationImpact : measuredImpact(operationImpact, measurement),
-      digest,
-    }));
-  });
-  const workspaceImpact: WorkspaceImpactQueries = {
-    callers: (request) => inWorkspaceOperation((queries) => queries.callers(request)),
-    ofChange: (request) => inWorkspaceOperation((queries) => queries.ofChange(request)),
-  };
-  const bareDecisions = createDecisionQueries({ workspace: bareWorkspace, defaults, vcs, digest });
+  const workspaceImpact: WorkspaceImpactQueries = createCapturedWorkspaceImpactQueries({ operation, digest, impactAt: (context) => {
+    const operationImpact = createImpactQueries({ ...impactDeps, preparation: context.preparation, heldLive: ({ repo, repoId }) => {
+      const held = context.liveCaptures.get(repoId);
+      return held?.repo === repo && held.repoId === repoId ? held : undefined;
+    } });
+    return measurement === undefined ? operationImpact : measuredImpact(operationImpact, measurement);
+  } });
+  const bareDecisions = createCapturedDecisionQueries({ operation, defaults, vcs, digest });
   const decisions = measurement === undefined ? bareDecisions : measuredDecisions(bareDecisions, measurement);
   return { version, entrypoints, impact, outline, workspace, workspaceImpact, decisions, redaction, repositoryName: (repo, signal) => vcs.repositoryName(repo, signal), canonicalRepositoryRoot: (repo, signal) => vcs.canonicalRoot(repo, signal), warmLive };
 }

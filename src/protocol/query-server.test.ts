@@ -290,6 +290,11 @@ test("invalid workspace replay contexts and replay on decisions never reach a qu
   const invalid = [null, [], { ...replay, extra: true }, { ...replay, version: 2 },
     { ...replay, declaration: "bad" }, { ...replay, snapshots: [{ ...snapshot, extra: true }] },
     { ...replay, snapshots: [{ ...snapshot, sha: "bad" }] },
+    { ...replay, snapshots: [{ repo: "a", kind: "live", head: "bad", stateId: "state" }] },
+    { ...replay, snapshots: [] },
+    { ...replay, snapshots: [{ kind: "live", repo: "a", head: snapshot.sha }] },
+    { ...replay, snapshots: [{ kind: "live", repo: "a", head: snapshot.sha, stateId: "s", extra: true }] },
+    { ...replay, snapshots: [snapshot, { kind: "live", repo: "a", head: snapshot.sha, stateId: "s" }] },
     { ...replay, snapshots: [snapshot, snapshot] },
     { ...replay, snapshots: [{ ...snapshot, repo: "z" }, snapshot] }];
   try {
@@ -392,6 +397,33 @@ test("workspace replay mismatch has its own redacted protocol fault", async () =
     session.end();
     await session.done;
   }
+});
+
+test("duplicate workspace source has its own protocol fault", async () => {
+  const { deps } = fakes();
+  deps.workspace = { outwardNames: async () => ({ ok: false, fault: { kind: "duplicate-workspace-source", detail: `a ${SECRET}` } }) };
+  const session = await untrusted(deps);
+  try {
+    session.send(request(1, METHOD.workspaceOutwardNames, { repo: { path: "/work/shop", id: "shop" } }));
+    const answer = await session.receive();
+    assert.equal(answer.error?.code, -32017);
+    assert.equal(answer.error?.data.kind, "duplicate-workspace-source");
+    assert.equal(answer.error?.message, `a ${REDACTED}`);
+  } finally { session.end(); await session.done; }
+});
+
+test("workspace capture fault preserves and redacts its nested typed cause", async () => {
+  const { deps } = fakes();
+  deps.workspace = { outwardNames: async () => ({ ok: false, fault: { kind: "workspace-capture-unavailable", detail: "/private/message", repo: `../repo-${SECRET}`, cause: { kind: "git-failed", detail: `/private/root ${SECRET}` } } }) };
+  const session = await untrusted(deps);
+  try {
+    session.send(request(1, METHOD.workspaceOutwardNames, { repo: { path: "/work/shop", id: "shop" } }));
+    const answer = await session.receive();
+    assert.equal(answer.error?.code, -32018);
+    assert.equal(answer.error?.message, "[path omitted]");
+    assert.deepEqual(answer.error?.data, { kind: "workspace-capture-unavailable", repo: `../repo-${REDACTED}`, cause: { kind: "git-failed", detail: "[path omitted]" } });
+    assert.doesNotMatch(JSON.stringify(answer), /private\/root|hunter2-secret/);
+  } finally { session.end(); await session.done; }
 });
 
 test("a query family that throws answers `internal-error` with the first line of the message redacted, and the server keeps serving", async () => {
@@ -602,4 +634,121 @@ test("answers that cannot be written do not stop the server from finishing once 
   input.end();
 
   await done;
+});
+
+test("mixed live workspace selectors and replay reach the injected port", async () => {
+  const { deps, calls } = fakes();
+  const session = await untrusted(deps);
+  const replay = { version: 1, declaration: `ws-r1:${"a".repeat(64)}`, snapshots: [
+    { kind: "live", repo: "a", head: "b".repeat(40), stateId: "state" },
+    { kind: "sha", repo: "b", sha: "c".repeat(40) },
+  ] };
+  const params = { repo: { path: "/work/a", id: "a", live: true }, repos: [{ path: "/work/b", id: "b", revision: "HEAD" }], offline: true, replay };
+  try {
+    session.send(request(1, METHOD.workspaceOutwardNames, params));
+    assert.equal((await session.receive()).result?.operation, "outwardNames");
+    assert.deepEqual({ ...calls[0]!.request, signal: undefined }, { ...params, signal: undefined });
+    assert.ok(calls[0]!.request.signal instanceof AbortSignal);
+  } finally { session.end(); await session.done; }
+});
+
+
+test("workspace selectors reject invalid members before either port", async () => {
+  const { deps, calls } = fakes();
+  const session = await untrusted(deps);
+  const invalid = [{ path: " " }, { path: "a", id: " " }, { path: "a", revision: " " },
+    { path: "a", live: false }, { path: "a", live: "true" }, { path: "a", live: true, revision: "HEAD" },
+    { path: "a", deadlineMs: 1 }, { path: "a", extra: true }];
+  try {
+    for (const method of [METHOD.workspaceOutwardNames, METHOD.decisionsDecisions]) {
+      for (const repo of invalid) {
+        for (const params of [{ repo }, { repo: { path: "good" }, repos: [repo] }]) {
+          session.send(request(1, method, params));
+          assert.equal((await session.receive()).error?.code, ERROR_CODE["invalid-params"]);
+        }
+      }
+    }
+    assert.deepEqual(calls, []);
+  } finally { session.end(); await session.done; }
+});
+
+test("live faults retain their protocol kind and omit diagnostic paths", async () => {
+  const { deps, behave } = fakes();
+  behave("outwardNames", async () => ({ ok: false, fault: { kind: "live-mirror-failed", detail: "/private/mirror" } } as never));
+  const session = await untrusted(deps);
+  try {
+    session.send(request(1, METHOD.workspaceOutwardNames, { repo: { path: "a", live: true } }));
+    const answer = await session.receive();
+    assert.equal(answer.error?.code, ERROR_CODE["live-mirror-failed"]);
+    assert.equal(answer.error?.message, "[path omitted]");
+  } finally { session.end(); await session.done; }
+});
+
+test("workspace live unavailable diagnostics omit paths while source metadata survives", async () => {
+  const { deps, behave } = fakes();
+  const snapshot = { kind: "live", repo: "a", head: "b".repeat(40), stateId: "state" };
+  behave("outwardNames", async () => ({ ok: true, value: { workspaceLive: [
+    { kind: "staleness-unavailable", repo: "a", snapshot, cause: { kind: "git-failed", detail: "/private/cache" } },
+    { kind: "stale", repo: "a", snapshot, notice: { stateId: "state", changed: ["src/a.ts"] } },
+  ], repositorySources: [{ repo: "a", path: "/private/mirror" }] } }));
+  const session = await untrusted(deps);
+  try {
+    session.send(request(1, METHOD.workspaceOutwardNames, { repo: { path: "a", live: true } }));
+    const { result } = await session.receive();
+    assert.equal(result.workspaceLive[0].cause.detail, "[path omitted]");
+    assert.deepEqual(result.workspaceLive[1].notice.changed, ["src/a.ts"]);
+    assert.equal(result.repositorySources[0].path, "/private/mirror");
+  } finally { session.end(); await session.done; }
+});
+
+
+test("both workspace families preserve mixed selectors and top-level deadline", async () => {
+  const { deps, calls } = fakes();
+  const session = await untrusted(deps);
+  const live = { path: " /opaque/live ", id: "org/service", live: true, remote: "remote" };
+  const committed = { path: "committed", id: "__proto__", revision: " HEAD " };
+  const other = { path: "other", id: "constructor", revision: "v1" };
+  try {
+    for (const [method, operation] of [[METHOD.workspaceOutwardNames, "outwardNames"], [METHOD.decisionsDecisions, "decisions"]] as const) {
+      for (const [repo, repos] of [[live, [committed, other]], [committed, [live, other]]] as const) {
+        const params = { repo, repos, offline: true, deadlineMs: 10000 };
+        session.send(request(23, method, params));
+        assert.deepEqual(await session.receive(), { jsonrpc: "2.0", id: 23, result: { operation } });
+        const call = calls.at(-1)!;
+        assert.equal(call.operation, operation);
+        const { signal, ...received } = call.request;
+        assert.ok(signal instanceof AbortSignal);
+        assert.deepEqual(received, { repo, repos, offline: true });
+      }
+    }
+  } finally { session.end(); await session.done; }
+});
+
+test("local query methods reject live even with their committed required fields", async () => {
+  const { deps, calls } = fakes();
+  const session = await untrusted(deps);
+  try {
+    for (const { method, params } of OPERATIONS.slice(0, 5)) {
+      session.send(request(1, method, { ...params, live: true }));
+      assert.equal((await session.receive()).error?.code, ERROR_CODE["invalid-params"], method);
+    }
+    assert.deepEqual(calls, []);
+  } finally { session.end(); await session.done; }
+});
+
+test("each live fault is typed and its safe, secret or path diagnostic is handled", async () => {
+  const { deps, behave } = fakes();
+  const session = await untrusted(deps);
+  try {
+    for (const kind of ["live-requires-trusted", "unsupported-object-format", "live-mirror-failed"] as const) {
+      for (const [detail, expected] of [["safe detail", "safe detail"], [`secret ${SECRET}`, `secret ${REDACTED}`], ["C:\\private\\mirror", "[path omitted]"]] as const) {
+        behave("outwardNames", async () => ({ ok: false, fault: { kind, detail } } as never));
+        session.send(request(1, METHOD.workspaceOutwardNames, { repo: { path: "a", live: true } }));
+        const answer = await session.receive();
+        assert.equal(answer.error?.code, ERROR_CODE[kind]);
+        assert.equal(answer.error?.data.kind, kind);
+        assert.equal(answer.error?.message, expected);
+      }
+    }
+  } finally { session.end(); await session.done; }
 });

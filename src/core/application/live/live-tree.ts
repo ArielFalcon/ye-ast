@@ -6,7 +6,7 @@ import { isWritten, liveExport } from "../../domain/snapshot/live-export.ts";
 import { retentionDiscards, type LiveRetentionPolicy, type LiveScopeUsage } from "../../domain/snapshot/live-retention.ts";
 import type { CodeGraph } from "../../ports/code-graph.port.ts";
 import type { Digest } from "../../ports/digest.port.ts";
-import type { LiveFault, LiveStaleNotice } from "../../ports/live-queries.port.ts";
+import type { LiveFault, LiveFailure, LiveUnavailable, LiveStaleNotice } from "../../ports/live-queries.port.ts";
 import type { LiveMirror, MirrorFault, MirrorLocation, MirrorState, MirrorVersions } from "../../ports/live-mirror.port.ts";
 import type { CommitExport, VcsFault } from "../../ports/vcs.port.ts";
 import type { WorkingTree } from "../../ports/working-tree.port.ts";
@@ -24,13 +24,7 @@ export interface LiveDeps {
   now: () => number;
 }
 
-/** The refresh did not finish: the deadline or an interruption cut it, or the engine could not build the index. */
-export interface LiveUnavailable {
-  kind: "unavailable";
-  detail: string;
-}
-
-export type LiveFailure = LiveFault | VcsFault | LiveUnavailable;
+export type { LiveFailure, LiveUnavailable } from "../../ports/live-queries.port.ts";
 
 /** The mirror as one query reads it, valid until `openLive` returns: its lock is held until then. */
 export interface LiveTree {
@@ -57,6 +51,11 @@ export interface OpenLive {
   store: boolean;
   signal?: AbortSignal | undefined;
   onStale?: ((notice: LiveStaleNotice) => void) | undefined;
+  onStalenessUnavailable?: ((notice: { stateId: string } & ({ stage: "listing"; cause: VcsFault } | { stage: "comparison"; cause: MirrorFault })) => void | Promise<void>) | undefined;
+}
+
+function aborted(): Result<never, VcsFault> {
+  return { ok: false, fault: { kind: "aborted", detail: "live query aborted" } };
 }
 
 function unavailable(detail: string): Result<never, LiveUnavailable> {
@@ -92,29 +91,44 @@ export async function openLive<A>(deps: LiveDeps, request: OpenLive, use: (tree:
   const { repo, scope, signal } = request;
   const location: MirrorLocation = { repo, scope: digest.of(JSON.stringify(scope)) };
 
+  if (signal?.aborted) return aborted();
   const lock = await mirror.lock(location, signal);
-  if (!lock.ok) return mirrorFailure(lock.fault);
-  let answered: A;
-  let reflected: { state: Pick<MirrorState, "manifest" | "skipped">; stateId: string };
+  if (!lock.ok) return signal?.aborted ? aborted() : mirrorFailure(lock.fault);
+  let outcome: Result<{ answered: A; reflected: { state: Pick<MirrorState, "manifest" | "skipped">; stateId: string } }, LiveFailure>;
   try {
-    const refreshed = await refresh(deps, request, location);
-    if (!refreshed.ok) return refreshed;
-    const { tree, state } = refreshed.value;
-    await mirror.touch(location);
-    answered = await use(tree);
-    reflected = { state, stateId: tree.stateId };
+    outcome = await (async () => {
+      if (signal?.aborted) return aborted();
+      const refreshed = await refresh(deps, request, location);
+      if (signal?.aborted) return aborted();
+      if (!refreshed.ok) return refreshed;
+      const { tree, state } = refreshed.value;
+      await mirror.touch(location);
+      if (signal?.aborted) return aborted();
+      const answered = await use(tree);
+      return { ok: true, value: { answered, reflected: { state, stateId: tree.stateId } } };
+    })();
   } finally {
     await lock.value.release();
   }
 
-  if (request.onStale !== undefined && signal?.aborted !== true) {
+  if (signal?.aborted) return aborted();
+  if (!outcome.ok) return outcome;
+  const { answered, reflected } = outcome.value;
+  if (request.onStale !== undefined || request.onStalenessUnavailable !== undefined) {
     const listing = await workingTree.list(repo, signal);
-    if (listing.ok) {
+    if (signal?.aborted) return aborted();
+    if (!listing.ok) {
+      await request.onStalenessUnavailable?.({ stateId: reflected.stateId, stage: "listing", cause: listing.fault });
+    } else {
       const moved = await mirror.changedSince(location, listing.value.paths.filter((entry) => request.selected(entry.path)), reflected.state, signal);
-      if (moved.ok && moved.value.length > 0) request.onStale({ stateId: reflected.stateId, changed: moved.value });
+      if (signal?.aborted) return aborted();
+      if (!moved.ok) await request.onStalenessUnavailable?.({ stateId: reflected.stateId, stage: "comparison", cause: moved.fault });
+      else if (moved.value.length > 0) await request.onStale?.({ stateId: reflected.stateId, changed: moved.value });
     }
   }
+  if (signal?.aborted) return aborted();
   await sweep(deps, repo, location.scope);
+  if (signal?.aborted) return aborted();
   return { ok: true, value: answered };
 }
 

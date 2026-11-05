@@ -5,12 +5,14 @@ import type { Evidence, SnapshotRef, Finding, TrustMode } from "../domain/shared
 import type { ScopeRequest } from "../domain/shared/scope.ts";
 import type { Result } from "../domain/shared/result.ts";
 import type { OutwardKind } from "../domain/topology/outward-name.ts";
-import type { LiveFault } from "./live-queries.port.ts";
+import type { LiveFault, LiveFailure } from "./live-queries.port.ts";
 import type { FixedLayerFault } from "./fixed-layer-store.port.ts";
 import type { VcsFault } from "./vcs.port.ts";
 
 /** One repository of a workspace request: where it is read from, and the name its snapshot carries. */
-export type WorkspaceRepositoryRequest = WorkspaceRepositoryDeclaration;
+export type SnapshotChoice = { revision?: string; live?: never } | { revision?: never; live: true };
+export type WorkspaceMember = Omit<WorkspaceRepositoryDeclaration, "revision"> & SnapshotChoice;
+export type WorkspaceRepositoryRequest = WorkspaceMember;
 
 /**
  * Where the repositories an answer worked over came from: the request that asked, the manifest the bound repository
@@ -52,4 +54,4 @@ export interface WorkspaceRepository {
   declaredTrust?: TrustMode;
 }
 
-export type WorkspaceFault = VcsFault | LiveFault | FixedLayerFault | { kind: "duplicate-repository"; detail: string } | { kind: "workspace-replay-mismatch"; detail: string };
+export type WorkspaceFault = VcsFault | LiveFault | FixedLayerFault | { kind: "duplicate-repository"; detail: string } | { kind: "duplicate-workspace-source"; detail: string } | { kind: "workspace-replay-mismatch"; detail: string } | { kind: "workspace-capture-unavailable"; detail: string; repo: string; cause: LiveFailure };

@@ -1,7 +1,7 @@
 import type { ChangedEntrypoint } from "../../domain/impact/changed-entrypoints.ts";
 import type { ImpactValue, Seed } from "../../domain/impact/impact-fact.ts";
 import type { HttpMethod, HttpRoute } from "../../domain/entrypoints/http-route.ts";
-import type { Cut, Fact, FactBase } from "../../domain/shared/fact.ts";
+import type { Cut, Fact, FactBase, SnapshotRef } from "../../domain/shared/fact.ts";
 import { incompleteSectionCuts, provenanceOf, withCuts } from "../../domain/shared/fact.ts";
 import type { Result } from "../../domain/shared/result.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
@@ -26,11 +26,15 @@ import {
 import type { Reach } from "../../domain/topology/link.ts";
 import { inferGateways, matchCallSite, matchEventCallSite, prefixOf, type Gateway, type GatewayDeclaration, type JoinResult, type RepositoryEntrypoints } from "../../domain/topology/link-match.ts";
 import { directoryNameOf } from "../../domain/topology/repository-identity.ts";
-import type { CallersTarget, ImpactFault, ImpactQueries } from "../../ports/impact-queries.port.ts";
+import type { CallersTarget, ImpactCallersRequest, ImpactFault, ImpactOfChangeRequest, ImpactQueries } from "../../ports/impact-queries.port.ts";
 import type { Digest } from "../../ports/digest.port.ts";
 import type { WorkspaceFault, WorkspaceRepository } from "../../ports/workspace-repos.port.ts";
 import type { FactRead, WorkspaceQueries } from "../../ports/workspace-queries.port.ts";
 import type { RepoImpact, WorkspaceCallersRequest, WorkspaceImpactBase, WorkspaceImpactQueries, WorkspaceImpactValue, WorkspaceOfChangeRequest } from "../../ports/workspace-impact-queries.port.ts";
+import type { WorkspacePlanningRequest } from "./workspace-plan.ts";
+import type { WorkspaceReadOperation } from "./workspace-operation.ts";
+import type { WorkspaceSnapshotContext } from "./workspace-snapshots.ts";
+import type { WorkspaceRepositoryDeclaration } from "../../domain/topology/workspace-manifest.ts";
 
 export interface WorkspaceImpactDeps {
   workspace: WorkspaceQueries;
@@ -54,14 +58,32 @@ interface UpstreamWalk {
 
 const HTTP_METHODS: ReadonlySet<string> = new Set(["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS", "TRACE", "ANY"]);
 
-export function createWorkspaceImpactQueries(deps: WorkspaceImpactDeps): WorkspaceImpactQueries {
+type CommittedRequest<T> = Omit<T, "repo" | "repos"> & { repo: WorkspaceRepositoryDeclaration & { live?: never }; repos?: readonly (WorkspaceRepositoryDeclaration & { live?: never })[] };
+
+export function createWorkspaceImpactQueries(deps: WorkspaceImpactDeps): {
+  callers(request: CommittedRequest<WorkspaceCallersRequest>): ReturnType<WorkspaceImpactQueries["callers"]>;
+  ofChange(request: CommittedRequest<WorkspaceOfChangeRequest>): ReturnType<WorkspaceImpactQueries["ofChange"]>;
+} {
+  const queries = workspaceImpactQueries(deps);
+  const valid = (request: CommittedRequest<WorkspaceImpactBase>) => ![request.repo, ...(request.repos ?? [])].some((repo) => "live" in repo);
+  const rejected = { ok: false as const, fault: { kind: "git-failed" as const, detail: "invalid workspace selection" } };
+  return {
+    callers: (request) => valid(request) ? queries.callers(request) : Promise.resolve(rejected),
+    ofChange: (request) => valid(request) ? queries.ofChange(request) : Promise.resolve(rejected),
+  };
+}
+
+type CapturedWalk = (repo: string, snapshot: SnapshotRef | undefined, targets: readonly CallersTarget[], request: WorkspaceImpactBase) => Promise<Result<Fact<ImpactValue>, ImpactFault>>;
+type CapturedWalks = { callers: CapturedWalk; change(repo: string, snapshot: SnapshotRef | undefined, request: WorkspaceOfChangeRequest): Promise<Result<Fact<ImpactValue>, ImpactFault>> };
+
+function workspaceImpactQueries(deps: WorkspaceImpactDeps, captured?: CapturedWalks): WorkspaceImpactQueries {
   /**
    * `readsChange` tells the two directions apart: a change has one of its own, a callers answer asks what depends on the
    * symbols named and nothing about what they send onward.
    */
   async function compose(request: WorkspaceImpactBase, triggerRevision: string, walk: (revision: string) => Promise<Result<Fact<ImpactValue>, ImpactFault>>, readsChange: boolean): Promise<Result<FactRead<WorkspaceImpactValue>, Faults>> {
     const read = await deps.workspace.outwardNames({
-      repo: { ...request.repo, revision: triggerRevision },
+      repo: { path: request.repo.path, ...(request.repo.id === undefined ? {} : { id: request.repo.id }), ...(request.repo.remote === undefined ? {} : { remote: request.repo.remote }), revision: triggerRevision },
       ...(request.repos === undefined ? {} : { repos: request.repos }),
       ...(request.gateways === undefined ? {} : { gateways: request.gateways }),
       ...(request.replay === undefined ? {} : { replay: request.replay }),
@@ -76,7 +98,11 @@ export function createWorkspaceImpactQueries(deps: WorkspaceImpactDeps): Workspa
     const workspace = fact.value;
     const trigger = request.repo.id ?? directoryNameOf(request.repo.path);
     const pinned = workspace.sections[trigger]?.snapshot;
-    const walked = await walk(pinned?.kind === "sha" ? pinned.sha : triggerRevision);
+    const walked = captured === undefined
+      ? await walk(pinned?.kind === "sha" ? pinned.sha : triggerRevision)
+      : readsChange
+        ? await captured.change(trigger, pinned, request as WorkspaceOfChangeRequest)
+        : await captured.callers(trigger, pinned, (request as WorkspaceCallersRequest).targets, request);
     if (!walked.ok) return walked;
     const impact = walked.value.status === "unknown" ? undefined : walked.value.value;
     const repositories = workspace.repositories;
@@ -230,14 +256,19 @@ export function createWorkspaceImpactQueries(deps: WorkspaceImpactDeps): Workspa
   /** What depends on the call sites given, read in the repository that holds them. */
   async function consumerWalk(request: WorkspaceImpactBase, repository: WorkspaceRepository, sources: ReadLocations, sites: readonly CallSite[]): Promise<Fact<ImpactValue> | { fault: ImpactFault } | undefined> {
     if (sites.length === 0) return undefined;
+    const targets: CallersTarget[] = sites.map((site) => ({ file: site.file, start: site.line, end: site.endLine ?? site.line }));
+    if (captured !== undefined) {
+      const answer = await captured.callers(repository.repo, repository.snapshot, targets, request);
+      return answer.ok ? answer.value : { fault: answer.fault };
+    }
     const source = sources.get(repository.repo);
     if (source === undefined) return { fault: { kind: "git-failed", detail: `no read location for ${repository.repo}` } };
-    const targets: CallersTarget[] = sites.map((site) => ({ file: site.file, start: site.line, end: site.endLine ?? site.line }));
+    if (repository.snapshot.kind !== "sha") return { fault: { kind: "git-failed", detail: `unsupported snapshot for ${repository.repo}` } };
     const answered = await deps.impact.callers({
       repo: source.root,
       ...(source.source === source.root ? {} : { source: source.source }),
       repoId: repository.repo,
-      revision: repository.snapshot.kind === "sha" ? repository.snapshot.sha : "HEAD",
+      revision: repository.snapshot.sha,
       targets,
       ...(request.scope === undefined ? {} : { scope: request.scope }),
       ...(request.budget === undefined ? {} : { budget: request.budget }),
@@ -267,7 +298,7 @@ export function createWorkspaceImpactQueries(deps: WorkspaceImpactDeps): Workspa
     ofChange: (request: WorkspaceOfChangeRequest) =>
       compose(
         request,
-        request.repo.revision ?? request.head,
+        request.repo.revision ?? "HEAD",
         (revision) =>
           deps.impact.ofChange({
             repo: request.repo.path,
@@ -281,6 +312,74 @@ export function createWorkspaceImpactQueries(deps: WorkspaceImpactDeps): Workspa
           }),
         true,
       ),
+  };
+}
+
+export type CapturedWorkspaceCallersRequest = WorkspacePlanningRequest & { targets: readonly CallersTarget[]; budget?: NonNullable<WorkspaceImpactBase["budget"]> };
+export type CapturedWorkspaceOfChangeRequest = WorkspacePlanningRequest & { base: string; changed?: readonly string[]; budget?: NonNullable<WorkspaceImpactBase["budget"]> };
+
+type CapturedLocation = { kind: "sha"; repo: string; source: string; sha: string } | { kind: "live"; repo: string };
+
+export function createCapturedWorkspaceImpactQueries(deps: { operation: WorkspaceReadOperation; impactAt(context: WorkspaceSnapshotContext): ImpactQueries; digest: Digest }) {
+  async function execute(request: CapturedWorkspaceCallersRequest | CapturedWorkspaceOfChangeRequest, planning: WorkspacePlanningRequest): Promise<Result<FactRead<WorkspaceImpactValue>, Faults>> {
+    const result = await deps.operation.withRead<FactRead<WorkspaceImpactValue>, Faults>(planning, async (read, context) => {
+      const impact = deps.impactAt(context);
+      const location = (repo: string, observed: SnapshotRef | undefined): Result<CapturedLocation, ImpactFault> => {
+        const selected = context.selectedSnapshots.find((snapshot) => snapshot.repo === repo);
+        const mismatch = selected === undefined || observed === undefined || selected.kind !== observed.kind ||
+          (selected.kind === "sha" && (observed.kind !== "sha" || selected.sha !== observed.sha)) ||
+          (selected.kind === "live" && (observed.kind !== "live" || selected.head !== observed.head || selected.stateId !== observed.stateId));
+        if (mismatch || selected === undefined) return { ok: false, fault: { kind: "git-failed", detail: `no selected snapshot for ${repo}` } };
+        if (selected.kind === "live") {
+          const held = context.liveCaptures.get(repo);
+          const plan = context.livePlans.find((item) => item.repoId === repo);
+          if (held === undefined || plan === undefined || held.repo !== plan.canonical || held.repoId !== repo || held.head !== selected.head || held.tree.stateId !== selected.stateId) return { ok: false, fault: { kind: "git-failed", detail: `no live capture for ${repo}` } };
+          return { ok: true, value: { kind: "live", repo: held.repo } };
+        }
+        if (selected.kind === "sha") {
+          const plan = context.plans.find((item) => item.kind === "read" && item.at.repoId === repo);
+          if (plan === undefined || plan.kind !== "read" || plan.at.revision !== selected.sha) return { ok: false, fault: { kind: "git-failed", detail: `no committed source for ${repo}` } };
+          return { ok: true, value: { kind: "sha", repo: plan.at.declared, source: plan.at.source, sha: selected.sha } };
+        }
+        return { ok: false, fault: { kind: "git-failed", detail: `unsupported snapshot for ${repo}` } };
+      };
+      const common = (repoId: string) => ({ repoId, ...(request.scope === undefined ? {} : { scope: request.scope }), ...(request.budget === undefined ? {} : { budget: request.budget }), ...(context.signal === undefined ? {} : { signal: context.signal }) });
+      const captured: CapturedWalks = {
+        callers: async (repo, observed, targets) => {
+          const at = location(repo, observed);
+          if (!at.ok) return at;
+          const query: ImpactCallersRequest = at.value.kind === "live"
+            ? { ...common(repo), repo: at.value.repo, live: true, targets }
+            : { ...common(repo), repo: at.value.repo, ...(at.value.source === at.value.repo ? {} : { source: at.value.source }), revision: at.value.sha, targets };
+          return impact.callers(query);
+        },
+        change: async (repo, observed, change) => {
+          const at = location(repo, observed);
+          if (!at.ok) return at;
+          if (at.value.kind === "sha" && at.value.source !== at.value.repo) return { ok: false, fault: { kind: "git-failed", detail: `unsupported change source for ${repo}` } };
+          const query: ImpactOfChangeRequest = { ...common(repo), repo: at.value.repo, base: change.base, ...(change.changed === undefined ? {} : { changed: change.changed }), ...(at.value.kind === "live" ? { live: true as const } : { head: at.value.sha }) };
+          return impact.ofChange(query);
+        },
+      };
+      const fixedWorkspace: WorkspaceQueries = { outwardNames: async () => ({ ok: true, value: read }) };
+      const queries = workspaceImpactQueries({ workspace: fixedWorkspace, impact, digest: deps.digest }, captured);
+      return "targets" in request
+        ? queries.callers(request)
+        : queries.ofChange(request);
+    });
+    if (!result.ok) return result;
+    const { workspaceReplay: _replay, workspaceLive: _live, ...value } = result.value.value;
+    return { ok: true, value: { ...value, ...(result.value.workspaceReplay === undefined ? {} : { workspaceReplay: result.value.workspaceReplay }), ...(result.value.workspaceLive === undefined ? {} : { workspaceLive: result.value.workspaceLive }) } };
+  }
+  return {
+    callers(request: CapturedWorkspaceCallersRequest) {
+      const { targets: _targets, budget: _budget, ...planning } = request;
+      return execute(request, planning);
+    },
+    ofChange(request: CapturedWorkspaceOfChangeRequest) {
+      const { base: _base, changed: _changed, budget: _budget, ...planning } = request;
+      return execute(request, planning);
+    },
   };
 }
 

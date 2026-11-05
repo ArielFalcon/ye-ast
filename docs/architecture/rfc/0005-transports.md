@@ -112,13 +112,22 @@ internal workspace choice as a tool argument.
 
 `budget` is `{depth?, hubFanIn?, expansions?}`, positive integers. `scope` is `{include?, exclude?}`, lists of non-empty globs over repository-relative paths ([RFC-0002](0002-facts-contract.md) rule 4); the CLI takes them as the repeatable `--include <glob>` and `--exclude <glob>` of `map`, `impact`, `callers` and `importers`. `changed` is a list of non-empty globs over the changed paths ([RFC-0018](0018-change-selection.md)); the CLI takes it as the repeatable `--changed <glob>` of `impact`. A result is the fact, redacted at egress.
 
-`workspace.outwardNames` accepts optional `replay` and returns optional `workspaceReplay` beside its fact. The committed
-context is `{version: 1, declaration: "ws-r1:<64 lowercase hex>", snapshots}` with unique SHA snapshots sorted by
-repository; it includes a known SHA even for an unavailable member. Preserve omitted membership arguments when
-replaying persisted membership. Pins grant neither membership nor trust: current declarations and authority are checked
-again. A changed declaration or member set returns `workspace-replay-mismatch` (-32016), with a redacted error and no
-result. Malformed contexts are `invalid-params`; decisions do not accept replay. Live replay is not yet supported.
-The query protocol carries internal `repositorySources` when present; public MCP output excludes them.
+`workspace.outwardNames` accepts optional `replay` and returns optional `workspaceReplay` beside its fact. The context
+is `{version: 1, declaration: "ws-r1:<64 lowercase hex>", snapshots}` with unique repository IDs sorted by repository.
+Each snapshot is `{repo, kind: "sha", sha}` or `{repo, kind: "live", head, stateId}`; it includes a known SHA even for
+an unavailable member. Preserve omitted membership arguments when replaying persisted membership. Pins grant neither
+membership nor trust: current declarations and authority are checked again. A changed declaration, member set or live
+capture returns `workspace-replay-mismatch` (-32016), with a redacted error and no result. Malformed contexts are
+`invalid-params`; decisions do not accept replay. Live replay checks a newly captured state rather than retaining old
+working-tree contents. Per-repository stale or unavailable observations travel in `workspaceLive` beside the fact;
+unavailable diagnostic paths are omitted and all result fields pass through the secret redactor.
+
+The query protocol accepts revision or `live: true` per workspace member and mixed workspace replay contexts;
+this is a transport contract, not a trust grant. The default `ye-ast serve` ignores user trust records, accepts only
+an untrusted handshake, and refuses live workspace reads with `live-requires-trusted`. Local query RPCs remain
+revision-based and there is no workspace-impact RPC. The CLI `workspace` and `decisions` commands accept committed
+revisions only; MCP and the library support live workspace members subject to repository trust. Protocol workspace
+results retain `repositorySources` host read-location metadata for existing clients, outside deterministic facts.
 
 ### Errors
 
@@ -146,6 +155,12 @@ An error is `{code, message, data: {kind}}`; `kind` names the code and `data` ad
 | `trust-not-declared` | -32010 | a query came before `trust.declare` |
 | `unreadable` | -32011 | the path does not exist, is not a directory, or the account cannot read it |
 | `unknown-change-path` | -32015 | a `changed` glob selects no path the change touches |
+| `workspace-replay-mismatch` | -32016 | the current workspace declaration, membership or captured state does not match replay |
+| `duplicate-workspace-source` | -32017 | selected repository paths alias the same canonical source |
+| `workspace-capture-unavailable` | -32018 | a selected live workspace capture failed; data identifies its repository and typed cause |
+| `live-requires-trusted` | -32019 | a live read was requested without repository trust |
+| `unsupported-object-format` | -32020 | live capture does not support the repository object format |
+| `live-mirror-failed` | -32021 | a live mirror operation failed |
 
 ## Fixed layer (MVP)
 
@@ -185,8 +200,8 @@ future designs in [ADR-0022](../adr/0022-typed-query-replay-and-selective-eviden
 | `ye_ast_callers` | What depends on a declaration or range? | `targets`, `revision`, `live`, `scope`, `budget`, `workspace`, `offline` |
 | `ye_ast_importers` | Which files import or name a file? | `files`, `revision`, `live`, `scope` |
 | `ye_ast_outline` | Which declarations, spans and imports are in selected files? | `files`, `revision`, `live`, `scope` |
-| `ye_ast_workspace` | Which outward names and candidate repositories are recorded? | `repos`, `gateways`, `revision`, `offline`, `scope` |
-| `ye_ast_decisions` | Which workspace configuration gaps need user input? | `repos`, `gateways`, `revision`, `offline`, `scope` |
+| `ye_ast_workspace` | Which outward names and candidate repositories are recorded? | `repos`, `gateways`, `revision`, `live`, `offline`, `scope` |
+| `ye_ast_decisions` | Which workspace configuration gaps need user input? | `repos`, `gateways`, `revision`, `live`, `offline`, `scope` |
 
 All tools accept optional `repo` and `mode: "summary" | "details" | "full"`. Summary is the default and identifies findings and
 limits; details adds recorded explanatory evidence and locations; full returns the complete redacted public fact
@@ -199,8 +214,8 @@ supersedes those references.
 
 Summary/details structured content is a strict receipt with `mode`, `status`, `snapshot` and `reason` exactly for
 unknown status. A SHA snapshot carries `repo`, `kind`, `sha`; a live snapshot carries `repo`, `kind`, `head`,
-`stateId`. Full carries the fact and `mode`, plus applicable `repositoryRoots`, `freshness`, `resolution` and `live`
-response siblings. A stale notice is also in `_meta["ye-ast/live"]`. Known full facts require a value; partial facts
+`stateId`. Full carries the fact and `mode`, plus applicable `repositoryRoots`, `freshness`, `resolution`, `live` and `workspaceLive`
+response siblings. Workspace notices also appear in `_meta["ye-ast/workspace-live"]` in every mode, naming the repository and captured snapshot, with stale paths or a typed unavailable cause. A stale notice is also in `_meta["ye-ast/live"]`. Known full facts require a value; partial facts
 also require cuts; unknown facts require a reason and no value. Full permits additive public fields. Per-family
 `outputSchema` validation covers the common envelope, identities and principal containers/coordinates: entrypoints,
 local or workspace impact/callers, importers, outline, workspace, and decisions. It does not duplicate every domain
@@ -210,16 +225,16 @@ union. Internal workspace repository reads and `repositorySources` are excluded 
 `ye_ast_entrypoints`, `ye_ast_callers`, and `ye_ast_impact` add `recovery` to successful structured responses and a
 compact `recovery: <JSON>` line to text in all modes. Available metadata contains a versioned opaque result identity
 and a normal query recipe. Entrypoints and callers pin the actual revision; impact pins the recorded merge base and
-head. Local live recipes request fresh live content and do not preserve historical working-tree content.
+head. Live recipes request fresh live content and do not preserve historical working-tree content.
 
 Callers and impact workspace recipes preserve the original workspace selectors and add a versioned declaration and
-sorted actual snapshot vector. Only these two workspace consumers accept replay. Current membership and trust are
+sorted actual snapshot vector. Clients echo that vector unchanged. Draft-7 validates its structure and rejects identical duplicate items; the server validates sorted order and unique repository IDs before invoking core. Only these two workspace consumers accept replay. Current membership and trust are
 checked again; a changed context produces a redacted `result-changed` error at `workspace-replay` without a source
 fact. Explicit external member paths may occur in recipes; internal mirror roots do not. Identity excludes machine
 roots and presentation sidecars.
 
 Recovery can instead be unavailable due to `deadline`, `unresolved-context`, or `redacted-context`. Selection,
-pagination, expectations, and workspace live replay are not implemented.
+pagination and expectations are not implemented.
 
 A client may expose both text and `structuredContent` to a model; the server does not guarantee channel hiding or
 client-side filtering. Full structured delivery need not be duplicated in text. These are wire contracts, not measured
@@ -232,10 +247,7 @@ callers, outline or importers query answers a new question, not a filter over an
 path-only; unresolved names are candidates, not verified dependencies. Workspace links keep their owners, basis,
 confidence and direction; an outgoing destination is not automatically an affected consumer.
 
-`live: true` requires trusted mode and excludes revision/head, workspace and the presence of offline, even false;
-workspace traversal uses committed snapshots. `offline: true` prevents remote refresh; trusted persisted remotes may
-otherwise refresh. To repeat a committed query preserve its recorded head/base and workspace pins; live state may
-change between calls. The CLI and query protocol continue to expose their existing fact formats and are not governed
+`live: true` requires the repository’s current trusted declaration and excludes revision/head for that repository. Workspace and decisions accept a top-level choice and member choices; callers and impact accept the same through `workspace`. Offline may coexist with workspace live selections and prevents committed remote refresh; a live member never refreshes its remote. Local-only live retains the exclusion of offline. Captures are not one atomic instant. A live replay captures again and compares head and stateId; it cannot retrieve an earlier working tree. The CLI and query protocol continue to expose their existing fact formats and are not governed
 by MCP presentation mode.
 
 ## Live freshness

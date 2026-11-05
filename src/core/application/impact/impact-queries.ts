@@ -23,7 +23,7 @@ import { comparePosition, compareText, joinsFact } from "../../domain/shared/cod
 import type { Entrypoint } from "../../domain/entrypoints/entrypoint.ts";
 import { declarationSpan, sortedEngines, type Cut, type DeclaredConfig, type DeclaredScope, type Evidence, type Fact, type FactBase, type Finding, type IndexOrigin, type SnapshotRef, type TrustMode, type UnknownFact } from "../../domain/shared/fact.ts";
 import { exportSelection, pathSelection, sortedGlobs, type PathSelection, type ScopeRequest } from "../../domain/shared/scope.ts";
-import { changedPaths, isWritten, liveScope } from "../../domain/snapshot/live-export.ts";
+import { changedPaths, isWritten } from "../../domain/snapshot/live-export.ts";
 import { contentFingerprint, declaredScope, exportCuts, holdsDeclaredSource, isInMapScope } from "../../domain/map/entrypoint-map.ts";
 import type { Result } from "../../domain/shared/result.ts";
 import type { AngularDeclarationReader } from "../../ports/angular-declarations.port.ts";
@@ -38,9 +38,8 @@ import { isEngineConfiguration } from "../../ports/staging-rules.ts";
 import type { FieldOrigin, LocalOrigin } from "../../domain/relations/field-origin.ts";
 import type { RelationExtractor } from "../relations/relation-extractor.ts";
 import type { CommitExport, Vcs, VcsChanges, VcsFault } from "../../ports/vcs.port.ts";
-import { openLive, type LiveDeps, type LiveTree } from "../live/live-tree.ts";
-import { ABORTED, extractCommit, extractExport, factBaseOf, LIVE_REQUIRES_TRUSTED, trustOf, withScratch, type CommitExtraction } from "../snapshot/read-snapshot.ts";
-import { createHeadReader, type FactSpec, type HeadIndex, type HeadReaderDeps, type HeadReading, type Revisioned } from "../snapshot/head-reading.ts";
+import { ABORTED, extractCommit, factBaseOf, trustOf, withScratch, type CommitExtraction } from "../snapshot/read-snapshot.ts";
+import { createHeadReader, withLiveCapture, type FactSpec, type HeadIndex, type HeadReaderDeps, type HeadReading, type Revisioned } from "../snapshot/head-reading.ts";
 import { readImporters } from "./importers.ts";
 import { createInboundEdges, type SettledReference } from "./inbound-edges.ts";
 import { memoizeTypeResolution } from "./type-resolution-cache.ts";
@@ -80,9 +79,6 @@ export interface ImpactQueriesDeps extends HeadReaderDeps {
   moduleDependencies?: ModuleDependenciesReader;
   declarationEvidence?: DeclarationEvidenceReader;
 }
-
-/** A live query reads the working tree against the commit HEAD names. */
-const LIVE_HEAD = "HEAD";
 
 type Answer = Result<Fact<ImpactValue>, OfChangeFault>;
 
@@ -269,50 +265,49 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
 
   async function ofChangeLive(request: Extract<ImpactOfChangeRequest, { live: true }>): Promise<Answer> {
     const { repo, repoId, signal } = request;
-    const trust = await trustOf(deps, repo);
-    const live = deps.live;
-    if (trust !== "trusted" || live === undefined) return LIVE_REQUIRES_TRUSTED;
-    const scope = liveScope(request.scope);
-    const selected = pathSelection(scope, deps.matcher.matches);
-    const exported = exportSelection(scope, deps.matcher.matches, isExtractorConfiguration);
-    const base = await vcs.resolveCommit(repo, request.base, signal);
-    if (!base.ok) return base;
-    const head = await vcs.resolveCommit(repo, LIVE_HEAD, signal);
-    if (!head.ok) return head;
-    const merge = await vcs.mergeBase(repo, base.value, head.value, signal);
-    if (!merge.ok) return merge;
-    const mergeBase = merge.value;
     const spec: FactSpec = { declaredConfig: changeConfig(request), engines: angularReadingEngines };
-
-    const opened = await openLive(live, { repo, scope, selected: exported, store: true, signal, onStale: request.onStale }, (tree) =>
-      withScratch(deps.scratch, async (directory): Promise<Answer> => {
-        const liveTree = await extractExport(changeDeps, tree.root, tree.export, signal);
+    let baseSha = "";
+    let mergeBase = "";
+    return withLiveCapture(deps, request, { use: async (held) => {
+      const { tree, scope, head } = held;
+      const selected = pathSelection(scope, deps.matcher.matches);
+      const exported = exportSelection(scope, deps.matcher.matches, isExtractorConfiguration);
+      return withScratch(deps.scratch, async (directory): Promise<Answer> => {
+        const liveTree = await held.extract(signal);
         if (!liveTree.ok) return liveTree;
         const baseTree = await extractCommit(changeDeps, repo, mergeBase, await directory(), exported, signal);
         if (!baseTree.ok) return baseTree;
-        const reading = headReader.liveReading(tree, liveTree.value, trust, scope, selected, head.value, repoId, spec);
+        const reading = headReader.liveReading(tree, liveTree.value, "trusted", scope, selected, head, repoId, spec);
 
         const changed = changedPaths(baseTree.value.export.files, tree.export.files).filter((path) => !isEngineConfiguration(path));
         const [before, after] = [await directory(), await directory()];
         const wanted = new Set(changed);
         const exportedBase = await vcs.exportCommit(repo, mergeBase, before, { write: (path) => wanted.has(path) }, signal);
         if (!exportedBase.ok) return exportedBase;
-        const copied = await live.mirror.materialize(tree.location, changed, after, signal);
+        const copied = await held.deps.live!.mirror.materialize(tree.location, changed, after, signal);
         if (!copied.ok) return { ok: false, fault: { kind: "live-mirror-failed", detail: `${copied.fault.kind}: ${copied.fault.detail}` } };
         const diff = await vcs.diffDirectories(before, after, signal);
-        const unreadable = JSON.stringify([mergeBase, head.value]);
+        const unreadable = JSON.stringify([mergeBase, head]);
         if (!diff.ok) return diff.fault.kind === "git-failed" ? unknownFact(reading.base(unreadable), "source-unreadable") : diff;
         if (signal?.aborted) return ABORTED;
         const radius = blastRadius(mergeBase, diff.value.filter((file) => selected(file.path)));
         const sameTree = changed.length === 0 && JSON.stringify(baseTree.value.export.skipped) === JSON.stringify(tree.export.skipped);
         return readChange({ request, radius, head: reading, baseTree: baseTree.value, sameTree, unreadable });
-      }),
-    );
-    if (opened.ok) return opened.value;
-    const { fault } = opened;
-    if (fault.kind !== "unavailable") return { ok: false, fault };
-    const unavailable = headReader.unavailableLive(trust, scope, head.value, repoId, spec);
-    return unknownFact(headReader.factBase(trust, unavailable.snapshot, JSON.stringify([mergeBase, head.value]), spec, scope, undefined), "index-unavailable");
+      });
+    }, unavailable: async ({ head, scope }) => {
+      const unavailable = headReader.unavailableLive("trusted", scope, head, repoId, spec);
+      return unknownFact(headReader.factBase("trusted", unavailable.snapshot, JSON.stringify([mergeBase, head]), spec, scope, undefined), "index-unavailable");
+    }, beforeHead: async () => {
+      const base = await vcs.resolveCommit(repo, request.base, signal);
+      if (!base.ok) return base;
+      baseSha = base.value;
+      return { ok: true, value: undefined };
+    }, beforeOpen: async (head) => {
+      const merge = await vcs.mergeBase(repo, baseSha, head, signal);
+      if (!merge.ok) return merge;
+      mergeBase = merge.value;
+      return { ok: true, value: undefined };
+    } });
   }
 
   /** Everything `ofChange` does once it holds the diff and both trees; a commit and the live tree differ only in how they got here. */

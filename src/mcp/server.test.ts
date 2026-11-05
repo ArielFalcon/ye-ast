@@ -656,8 +656,8 @@ test("tool discovery publishes the same live exclusions that calls enforce", asy
   try {
     const tools = await session.listTools();
     const cases: [string, Record<string, unknown>, string[]][] = [
-      ["ye_ast_impact", { base: "main" }, ["head", "offline", "workspace"]],
-      ["ye_ast_callers", { targets: [{ file: "a", symbol: "f" }] }, ["revision", "offline", "workspace"]],
+      ["ye_ast_impact", { base: "main" }, ["head"]],
+      ["ye_ast_callers", { targets: [{ file: "a", symbol: "f" }] }, ["revision"]],
       ["ye_ast_entrypoints", {}, ["revision"]],
       ["ye_ast_importers", { files: ["a"] }, ["revision"]],
       ["ye_ast_outline", { files: ["a"] }, ["revision"]],
@@ -1643,6 +1643,31 @@ test("a fault is a tool error carrying its kind and a redacted detail, with no f
   await session.close();
 });
 
+test("duplicate workspace source renders typed recovery", async () => {
+  const { session } = await setup({ outwardNames: async () => ({ ok: false, fault: { kind: "duplicate-workspace-source", detail: "a, b" } }) });
+  try {
+    const result = await session.callTool("ye_ast_workspace", {});
+    assert.equal(result.isError, true);
+    assert.deepEqual(result._meta?.["ye-ast/fault"], { kind: "duplicate-workspace-source", detail: "a, b" });
+    assert.match(textOf(result), /Remove the duplicate workspace source/);
+  } finally { await session.close(); }
+});
+
+test("workspace capture failure retains its redacted typed cause without absolute paths", async () => {
+  for (const path of ["/private/live/repository", "C:\\private\\live\\repository", ""]) {
+    const fault = { kind: "workspace-capture-unavailable" as const, detail: `capture failed at ${path}`, repo: "../lib", cause: { kind: "git-failed" as const, detail: `bad ${path} ${SECRET}` } };
+    const { session } = await setup({ outwardNames: async () => ({ ok: false, fault }) });
+    try {
+      const result = await session.callTool("ye_ast_workspace", {});
+      assert.equal(result.isError, true);
+      assert.deepEqual(result._meta?.["ye-ast/fault"], { ...fault, detail: path ? "[path omitted]" : fault.detail, cause: { kind: "git-failed", detail: path ? "[path omitted]" : `bad  ${REDACTED}` } });
+      assert.match(textOf(result), /Inspect the capture cause/);
+      if (path) assert.ok(!JSON.stringify(result).includes(path));
+      assert.ok(!JSON.stringify(result).includes(SECRET));
+    } finally { await session.close(); }
+  }
+});
+
 test("an unknown-symbol fault lists every entry that names no node and what its file declares", async () => {
   const fault: ImpactFault = {
     kind: "unknown-symbol",
@@ -1865,7 +1890,7 @@ test("callers and impact with a workspace ask the workspace family with the repo
     signal: calls.workspaceCallers[0]?.signal,
   });
   assert.equal(calls.workspaceOfChange[0]?.base, "main");
-  assert.equal(calls.workspaceOfChange[0]?.head, "topic");
+  assert.equal(calls.workspaceOfChange[0]?.repo.revision, "topic");
   assert.deepEqual(calls.workspaceOfChange[0]?.repos, WORKSPACE.repos);
   assert.deepEqual(calls.workspaceOfChange[0]?.changed, ["src/**"]);
   await session.close();
@@ -1929,19 +1954,6 @@ test("a workspace answer lists the links across repositories with their basis, t
   assert.match(text, /no local repository serves \(1\): geo-api/);
   assert.match(text, /declared gateways that matched nothing \(1\):\n\s+- legacy -> shop/);
   assert.equal(text.match(/reached entrypoints \(/g)?.length, 1, "the bound repository's walk is printed once");
-  await session.close();
-});
-
-test("live with a workspace is refused by the schema before any query runs", async () => {
-  const { session, calls } = await setup();
-
-  const results = [
-    await session.callTool("ye_ast_impact", { base: "main", live: true, workspace: WORKSPACE }).catch((error: Error) => error),
-    await session.callTool("ye_ast_callers", { live: true, targets: [{ file: "a", symbol: "f" }], workspace: WORKSPACE }).catch((error: Error) => error),
-  ];
-
-  for (const result of results) assert.equal(result instanceof Error || (result as { isError?: boolean }).isError === true, true);
-  assert.deepEqual([calls.workspaceCallers, calls.workspaceOfChange, calls.callers, calls.ofChange], [[], [], [], []]);
   await session.close();
 });
 
@@ -2936,7 +2948,7 @@ test("workspace impact recovery forwards actual replay and preserves selectors a
   if (fact.status === "unknown") throw new Error("expected workspace value");
   const recorded = { ...fact, value: { ...fact.value, workspace: { ...fact.value.workspace, source: "persisted" as const }, sections: { ...fact.value.sections, unknown: { ...base({ snapshot: replay.snapshots[2]! }), status: "unknown" as const, reason: "revision-unavailable" as const } } }, inputs: { ...fact.inputs, declaredConfig: { changed: ["src/**"], walk: { depth: 2 } } } };
   const { session, calls } = await setup({ workspaceOfChange: async (request) => {
-    if (request.replay && (request.replay.declaration !== replay.declaration || request.head !== "a".repeat(40) || request.base !== "b".repeat(40))) return { ok: false, fault: { kind: "workspace-replay-mismatch", detail: "mismatch" } };
+    if (request.replay && (request.replay.declaration !== replay.declaration || request.repo.revision !== "a".repeat(40) || request.base !== "b".repeat(40))) return { ok: false, fault: { kind: "workspace-replay-mismatch", detail: "mismatch" } };
     return { ok: true, value: { fact: recorded, workspaceReplay: replay, repositorySources: [{ repo: "shop-web", path: "/internal/mirror" }] } };
   } });
   try {
@@ -2968,7 +2980,7 @@ test("impact replay input and recovery output advertise strict matching schemas"
     const output = new AjvJsonSchemaValidator().getValidator(tool.outputSchema!);
     const replay = { version: 1, declaration: `ws-r1:${"d".repeat(64)}`, snapshots: [{ repo: "shop", kind: "sha", sha: "a".repeat(40) }] };
     assert.equal(input({ base: "main", workspace: {}, replay }).valid, true);
-    for (const args of [{ base: "main", replay }, { base: "main", workspace: {}, replay: { ...replay, version: 2 } }, { base: "main", workspace: {}, replay, live: true }]) {
+    for (const args of [{ base: "main", replay }, { base: "main", workspace: {}, replay: { ...replay, version: 2 } }]) {
       assert.equal(input(args).valid, false);
       assert.equal((await session.callTool("ye_ast_impact", args)).isError, true);
     }
@@ -3196,7 +3208,7 @@ test("semantic recipe redaction disables recovery and leaks no secret", async ()
   } finally { await pinned.session.close(); }
 });
 
-test("replay structural validation forwards unsorted members to core mismatch", async () => {
+test("replay semantic validation rejects unsorted members before core", async () => {
   const fault = { kind: "workspace-replay-mismatch" as const, detail: "core authority" };
   const { session, calls } = await setup({ workspaceCallers: async () => ({ ok: false, fault }), workspaceOfChange: async () => ({ ok: false, fault }) });
   const replay = { version: 1, declaration: `ws-r1:${"d".repeat(64)}`, snapshots: [{ repo: "z", kind: "sha", sha: "c".repeat(40) }, { repo: "a", kind: "sha", sha: "a".repeat(40) }] };
@@ -3208,10 +3220,9 @@ test("replay structural validation forwards unsorted members to core mismatch", 
       const answer = await session.callTool(name, args);
       assert.equal(answer.isError, true);
       assert.equal(answer.structuredContent, undefined);
-      assert.deepEqual(answer._meta?.["ye-ast/fault"], { kind: "result-changed", detail: "core authority", stage: "workspace-replay" });
     }
-    assert.deepEqual(calls.workspaceCallers[0]?.replay, replay);
-    assert.deepEqual(calls.workspaceOfChange[0]?.replay, replay);
+    assert.equal(calls.workspaceCallers.length, 0);
+    assert.equal(calls.workspaceOfChange.length, 0);
   } finally { await session.close(); }
 });
 
@@ -3225,7 +3236,7 @@ test("impact and callers recovery schemas agree on bounds, globs and hash line e
       const input = new AjvJsonSchemaValidator().getValidator(tool.inputSchema);
       const baseArgs = name === "ye_ast_callers" ? { targets: [{ file: "a", symbol: "f" }] } : { base: "main" };
       const replay = { version: 1, declaration: `ws-r1:${"d".repeat(64)}`, snapshots: [{ repo: "shop", kind: "sha", sha: "a".repeat(40) }] };
-      for (const bad of [{ ...baseArgs, replay }, { ...baseArgs, workspace: {}, replay, live: true }, { ...baseArgs, workspace: {}, replay: { ...replay, extra: true } }, { ...baseArgs, workspace: {}, replay: { ...replay, snapshots: [{ repo: "shop", kind: "live", sha: "a".repeat(40) }] } }, ...["\n", "\r", "\u2028", "\u2029"].map((newline) => ({ ...baseArgs, workspace: {}, replay: { ...replay, declaration: replay.declaration + newline } }))]) {
+      for (const bad of [{ ...baseArgs, replay }, { ...baseArgs, workspace: {}, replay: { ...replay, extra: true } }, { ...baseArgs, workspace: {}, replay: { ...replay, snapshots: [{ repo: "shop", kind: "live", sha: "a".repeat(40) }] } }, ...["\n", "\r", "\u2028", "\u2029"].map((newline) => ({ ...baseArgs, workspace: {}, replay: { ...replay, declaration: replay.declaration + newline } }))]) {
         assert.equal(input(bad).valid, false, JSON.stringify(bad));
         assert.equal((await session.callTool(name, bad)).isError, true, JSON.stringify(bad));
       }
@@ -3349,4 +3360,110 @@ test("redaction of recorded globs or numeric bounds disables both recipes", asyn
       assert.deepEqual((response.structuredContent as Record<string, unknown>).recovery, { version: 1, status: "unavailable", reason: "redacted-context" });
     }
   } finally { await bounded.session.close(); }
+});
+
+test("workspace callers accept mixed live selectors and forward them", async () => {
+  const { session, calls } = await setup();
+  try {
+    const result = await session.callTool("ye_ast_callers", { targets: [{ file: "a", symbol: "f" }], live: true, offline: true, workspace: { repos: [{ path: "/work/other", id: "other", revision: "main" }] } });
+    assert.notEqual(result.isError, true);
+    assert.equal(calls.workspaceCallers[0]?.repo.live, true);
+    assert.equal(calls.workspaceCallers[0]?.repos?.[0]?.revision, "main");
+  } finally { await session.close(); }
+});
+
+test("mixed workspace selector schemas and runtime agree before dispatch", async () => {
+  const { session, calls } = await setup();
+  try {
+    for (const [name, baseArgs, key, memberKey] of [
+      ["ye_ast_workspace", {}, "revision", "repos"], ["ye_ast_decisions", {}, "revision", "repos"],
+      ["ye_ast_callers", { targets: [{ file: "a", symbol: "f" }] }, "revision", "workspace"],
+      ["ye_ast_impact", { base: "main" }, "head", "workspace"],
+    ] as const) {
+      const schema = (await session.listTools()).find((tool) => tool.name === name)!.inputSchema;
+      const validate = new AjvJsonSchemaValidator().getValidator(schema);
+      const member = { path: "/work/other", id: "other", live: true };
+      const container = memberKey === "repos" ? { repos: [member] } : { workspace: { repos: [member] } };
+      const good = { ...baseArgs, ...container, live: true, offline: true };
+      assert.equal(validate(good).valid, true, name);
+      assert.notEqual((await session.callTool(name, good)).isError, true, name);
+      for (const bad of [ { ...baseArgs, ...container, [key]: "  " }, { ...good, [key]: "HEAD" }, { ...good, live: false }, { ...good, extra: 1 }, { ...baseArgs, ...(memberKey === "repos" ? { repos: [{ ...member, revision: "HEAD" }] } : { workspace: { repos: [{ ...member, revision: "HEAD" }] } }) },
+        ...[{ ...member, live: false }, { ...member, path: " " }, { ...member, id: " " }].map((badMember) => ({ ...baseArgs, ...(memberKey === "repos" ? { repos: [badMember] } : { workspace: { repos: [badMember] } }) })),
+      ]) {
+        const before = calls.workspaceReads.length + calls.decisions.length + calls.workspaceCallers.length + calls.workspaceOfChange.length;
+        assert.equal(validate(bad).valid, false, JSON.stringify(bad));
+        assert.equal((await session.callTool(name, bad)).isError, true);
+        assert.equal(calls.workspaceReads.length + calls.decisions.length + calls.workspaceCallers.length + calls.workspaceOfChange.length, before);
+      }
+    }
+    assert.equal(calls.workspaceReads[0]?.repo.live, true);
+    assert.equal(calls.decisions[0]?.repos?.[0]?.live, true);
+    assert.equal(calls.workspaceOfChange[0]?.repo.live, true);
+  } finally { await session.close(); }
+});
+
+test("mixed recovery preserves live replay and redacts workspace notices in every mode", async () => {
+  const snap = { repo: "shop", kind: "live" as const, head: "a".repeat(40), stateId: "state" };
+  const replay = { version: 1 as const, declaration: `ws-r1:${"d".repeat(64)}`, snapshots: [snap, { repo: "team/other", kind: "sha" as const, sha: "b".repeat(40) }] };
+  const fact = { ...workspaceImpactFact(), snapshot: snap, inputs: { ...base().inputs, declaredConfig: { targets: ["a:f"] } } };
+  let changed = false;
+  const notices = [ { kind: "staleness-unavailable" as const, repo: "team/other", snapshot: { ...snap, repo: "team/other" }, cause: { kind: "git-failed" as const, detail: "/host/private" } }, { kind: "stale" as const, repo: "shop", snapshot: snap, notice: { stateId: "state", changed: ["src/a.ts", SECRET] } } ];
+  const { session } = await setup({ workspaceCallers: async (request) => changed && request.replay ? { ok: false, fault: { kind: "workspace-replay-mismatch", detail: "changed" } } : { ok: true, value: { fact, workspaceReplay: replay, workspaceLive: notices } } });
+  try {
+    const tool = (await session.listTools()).find((item) => item.name === "ye_ast_callers")!;
+    const validate = new AjvJsonSchemaValidator().getValidator(tool.outputSchema!);
+    let recipe: { name: string; arguments: Record<string, unknown> } | undefined;
+    let identity: string | undefined;
+    for (const mode of ["summary", "details", "full"]) {
+      const response = await session.callTool("ye_ast_callers", { targets: [{ file: "a", symbol: "f" }], workspace: {}, live: true, mode });
+      assert.equal(validate(response.structuredContent).valid, true);
+      const recovery = (response.structuredContent as { recovery: { status: string; resultIdentity: string; query: typeof recipe } }).recovery;
+      assert.equal(recovery.status, "available");
+      identity ??= recovery.resultIdentity;
+      assert.equal(recovery.resultIdentity, identity);
+      recipe = recovery.query;
+      assert.equal(recipe?.arguments.live, true);
+      const serialized = JSON.stringify(response);
+      assert.doesNotMatch(serialized, /hunter2-secret|\/host\/private/);
+      assert.match(serialized, /team\/other/);
+      assert.match(serialized, /src\/a.ts/);
+      const actualNotices = response._meta?.["ye-ast/workspace-live"] as { repo: string }[];
+      assert.ok(Array.isArray(actualNotices));
+      assert.deepEqual(actualNotices.map((item) => item.repo), ["shop", "team/other"]);
+      if (mode === "summary" && notices[1]?.kind === "stale") notices[1].notice.changed.push("src/new.ts");
+      assert.equal("workspaceLive" in (response.structuredContent as object), mode === "full");
+    }
+    assert.ok(recipe);
+    assert.notEqual((await session.callTool(recipe.name, recipe.arguments)).isError, true);
+    changed = true;
+    const old = await session.callTool(recipe.name, recipe.arguments);
+    assert.equal(old.isError, true);
+    assert.equal(old.structuredContent, undefined);
+    assert.equal((old._meta?.["ye-ast/fault"] as { stage: string }).stage, "workspace-replay");
+  } finally { await session.close(); }
+});
+
+test("replay rejects duplicate snapshots and duplicate repository IDs before dispatch", async () => {
+  const { session, calls } = await setup();
+  try {
+    const input = new AjvJsonSchemaValidator().getValidator((await session.listTools()).find((tool) => tool.name === "ye_ast_callers")!.inputSchema);
+    const one = { repo: "team/one", kind: "sha", sha: "a".repeat(40) };
+    for (const [snapshots, schemaValid] of [[[one, one], false], [[one, { ...one, sha: "b".repeat(40) }], true]] as const) {
+      const args = { targets: [{ file: "a", symbol: "f" }], workspace: {}, replay: { version: 1, declaration: `ws-r1:${"d".repeat(64)}`, snapshots } };
+      assert.equal(input(args).valid, schemaValid);
+      assert.equal((await session.callTool("ye_ast_callers", args)).isError, true);
+      assert.equal(calls.workspaceCallers.length, 0);
+    }
+  } finally { await session.close(); }
+});
+
+test("mixed workspace targets the selected declared foreign repository", async () => {
+  const { session, calls } = await setup({}, undefined, [{ path: "/work/foreign", repoId: "team/foreign" }]);
+  try {
+    const args = { repo: "team/foreign", targets: [{ file: "a", symbol: "f" }], live: true, workspace: {} };
+    assert.notEqual((await session.callTool("ye_ast_callers", args)).isError, true);
+    assert.equal(calls.workspaceCallers[0]?.repo.id, "team/foreign");
+    assert.equal(calls.workspaceCallers[0]?.repo.path, "/work/foreign");
+    assert.equal(calls.workspaceCallers[0]?.repo.live, true);
+  } finally { await session.close(); }
 });

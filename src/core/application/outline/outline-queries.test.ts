@@ -103,7 +103,7 @@ for (const live of [false, true]) {
   });
 }
 
-test("an aborted live outline returns the cancellation fault before reading its index", async () => {
+test("an aborted live outline returns the cancellation fault before acquiring its mirror or reading its index", async () => {
   const mirror = fakeLive({ "src/Order.java": "1" });
   const { queries, log } = setup({ live: mirror });
   const controller = new AbortController();
@@ -114,7 +114,9 @@ test("an aborted live outline returns the cancellation fault before reading its 
   assert.ok(!answer.ok);
   assert.equal(answer.fault.kind, "aborted");
   assert.equal(log.closed, 0);
-  assert.deepEqual(mirror.held, { locks: 1, released: 1 });
+  assert.equal(log.reads, 0);
+  assert.equal(log.extractions, 0);
+  assert.deepEqual(mirror.held, { locks: 0, released: 0 });
 });
 
 test("an export-only outline never restores retained source data", async () => {

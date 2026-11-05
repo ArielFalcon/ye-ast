@@ -298,7 +298,7 @@ export class OrderApi {
   assert.deepEqual(discovery.value.repositoryRoots, roots);
   assert.equal(JSON.stringify(discovery.value.fact).includes(workspace), false);
   assert.deepEqual(discovery.value.fact.value.repositories.find(({ repo: id }) => id === "web")?.callSites.map(({ symbol }) => symbol), ["OrderApi.checkout"]);
-  const result = await queries.workspaceImpact.ofChange({ repo: { path: repo, id: "web" }, repos: [{ path: sibling, id: "orders" }], base: "HEAD~1", head: "HEAD", changed: ["src/app/order.api.ts"], budget: { depth: 1 } });
+  const result = await queries.workspaceImpact.ofChange({ repo: { path: repo, id: "web" }, repos: [{ path: sibling, id: "orders" }], base: "HEAD~1", changed: ["src/app/order.api.ts"], budget: { depth: 1 } });
   assert.ok(result.ok);
   assert.deepEqual(result.value.fact.inputs.declaredConfig, { changed: ["src/app/order.api.ts"], walk: { depth: 1 } });
   assert.deepEqual(result.value.repositoryRoots, roots);

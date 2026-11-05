@@ -4,7 +4,9 @@ import { PassThrough } from "node:stream";
 import type { EntrypointQueries } from "../core/ports/entrypoint-queries.port.ts";
 import type { ImpactQueries } from "../core/ports/impact-queries.port.ts";
 import type { OutlineQueries } from "../core/ports/outline-queries.port.ts";
-import type { WorkspaceQueries } from "../core/ports/workspace-queries.port.ts";
+import type { WorkspaceQueries, WorkspaceRead } from "../core/ports/workspace-queries.port.ts";
+import { SCHEMA } from "../core/domain/shared/fact.ts";
+import { REDACTED } from "../core/ports/redaction.port.ts";
 import type { DecisionQueries } from "../core/ports/decision-queries.port.ts";
 import type { Redaction } from "../core/ports/redaction.port.ts";
 import { ERROR_CODE, METHOD, PROTOCOL } from "./protocol.ts";
@@ -21,10 +23,10 @@ const identity: Redaction = {
 
 const PARAMS = { repo: "/work/shop", repoId: "shop", revision: "HEAD" };
 
-function pair(map: EntrypointQueries["map"], workspace: WorkspaceQueries = {} as WorkspaceQueries): { streams: { input: PassThrough; output: PassThrough }; written: string[]; done: Promise<void> } {
+function pair(map: EntrypointQueries["map"], workspace: WorkspaceQueries = {} as WorkspaceQueries, redaction: Redaction = identity): { streams: { input: PassThrough; output: PassThrough }; written: string[]; done: Promise<void> } {
   const toServer = new PassThrough();
   const toClient = new PassThrough();
-  const deps: QueryServerDeps = { version: "1.2.3", redaction: identity, entrypoints: { map }, impact: {} as ImpactQueries, outline: {} as OutlineQueries, workspace, decisions: {} as DecisionQueries };
+  const deps: QueryServerDeps = { version: "1.2.3", redaction, entrypoints: { map }, impact: {} as ImpactQueries, outline: {} as OutlineQueries, workspace, decisions: {} as DecisionQueries };
   const written: string[] = [];
   toServer.on("data", (chunk: Buffer) => written.push(chunk.toString()));
   return { streams: { input: toClient, output: toServer }, written, done: serveQueries(deps, { input: toServer, output: toClient }) };
@@ -134,4 +136,61 @@ test("workspace replay and optional result metadata survive the client-server ro
   assert.equal(JSON.stringify((result as { fact: unknown }).fact), JSON.stringify(fact));
   const without = await client.request(METHOD.workspaceOutwardNames, { repo: params.repo });
   assert.deepEqual(without, { fact, repositorySources });
+});
+
+test("mixed workspace context and live notices survive the public client transport", async () => {
+  const snapshot = { kind: "live" as const, repo: "org/a", head: "b".repeat(40), stateId: "state" };
+  const replay = { version: 1 as const, declaration: `ws-r1:${"a".repeat(64)}`, snapshots: [
+    { kind: "sha" as const, repo: "b", sha: "c".repeat(40) }, snapshot,
+  ] };
+  const fact: WorkspaceRead["fact"] = {
+    schema: SCHEMA, snapshot, producer: { name: "ye-ast", version: "1" },
+    inputs: { trust: "untrusted", scope: "s", declaredScope: { languages: [], frameworks: [], include: [], exclude: [] }, content: "c", config: "k", declaredConfig: {}, engines: {} },
+    evidence: [], status: "complete", value: { workspace: { repos: ["b", "org/a"], gateways: [], source: "none" }, repositorySnapshots: [], sections: {}, candidates: [], unserved: [], repositories: [] },
+  };
+  const workspaceLive: NonNullable<WorkspaceRead["workspaceLive"]> = [
+    { kind: "stale", repo: "org/a", snapshot, notice: { stateId: "state", changed: ["src/a.ts", "src/secret-token.ts"] } },
+    { kind: "staleness-unavailable", repo: "org/a", snapshot, cause: { kind: "git-failed", detail: "secret-token unavailable" } },
+    { kind: "staleness-unavailable", repo: "org/a", snapshot, cause: { kind: "live-mirror-failed", detail: "C:\\private\\cache" } },
+  ];
+  const repositorySources = [{ repo: "org/a", path: "/private/mirror" }];
+  const repositoryRoots = [{ repo: "org/a", path: "/work/a" }];
+  const refresh: NonNullable<WorkspaceRead["refresh"]> = { resolution: [{ repo: "b", step: "explicit", asked: "HEAD", consulted: [], sha: "c".repeat(40) }], freshness: [] };
+  let received: unknown;
+  const workspace: WorkspaceQueries = { outwardNames: async (request) => {
+    received = request;
+    const value: WorkspaceRead = { fact, workspaceReplay: replay, workspaceLive, repositorySources, repositoryRoots, refresh };
+    return { ok: true, value };
+  } };
+  const redact = (text: string): string => text.replaceAll("secret-token", REDACTED);
+  const redactValue = (value: unknown): unknown => typeof value === "string" ? redact(value) : Array.isArray(value) ? value.map(redactValue) : value !== null && typeof value === "object" ? Object.fromEntries(Object.entries(value).map(([key, item]) => [redact(key), redactValue(item)])) : value;
+  const redaction: Redaction = { ...identity, redact, redactValue };
+  const { streams, done } = pair(async () => ({ ok: true, value: {} as never }), workspace, redaction);
+  const client = await connectQueryClient({ ...streams, trust: "untrusted" });
+  const params = { repo: { path: "/work/a", id: "org/a", live: true }, repos: [{ path: "/work/b", id: "b", revision: "HEAD" }], offline: true, replay };
+  try {
+    const result = await client.request(METHOD.workspaceOutwardNames, params) as WorkspaceRead;
+    const { signal, ...input } = received as Record<string, unknown>;
+    assert.ok(signal instanceof AbortSignal);
+    assert.deepEqual(input, params);
+    assert.deepEqual(result.workspaceReplay, replay);
+    assert.deepEqual(result.repositoryRoots, repositoryRoots);
+    assert.deepEqual(result.repositorySources, repositorySources);
+    assert.deepEqual(result.refresh, refresh);
+    assert.deepEqual(result.workspaceLive, [
+      { kind: "stale", repo: "org/a", snapshot, notice: { stateId: "state", changed: ["src/a.ts", `src/${REDACTED}.ts`] } },
+      { kind: "staleness-unavailable", repo: "org/a", snapshot, cause: { kind: "git-failed", detail: `${REDACTED} unavailable` } },
+      { kind: "staleness-unavailable", repo: "org/a", snapshot, cause: { kind: "live-mirror-failed", detail: "[path omitted]" } },
+    ]);
+    assert.equal(JSON.stringify(result.workspaceReplay).includes("/private/"), false);
+  } finally { streams.output.end(); await done; }
+});
+
+test("a live refusal reaches the client as its typed kind", async () => {
+  const workspace: WorkspaceQueries = { outwardNames: async () => ({ ok: false, fault: { kind: "live-requires-trusted", detail: "untrusted" } }) };
+  const { streams, done } = pair(async () => ({ ok: true, value: {} as never }), workspace);
+  const client = await connectQueryClient({ ...streams, trust: "untrusted" });
+  await assert.rejects(client.request(METHOD.workspaceOutwardNames, { repo: { path: "a", live: true } }), (error: unknown) => error instanceof QueryError && error.kind === "live-requires-trusted");
+  streams.output.end();
+  await done;
 });

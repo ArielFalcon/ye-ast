@@ -369,3 +369,99 @@ test("a store whose sync cannot run is rebuilt in full over the index tree", asy
   assert.deepEqual(fake.built, ["/index"]);
   assert.deepEqual(fake.state.current?.indexed, ["src/a.ts"]);
 });
+
+test("postlude reports listing and comparison faults after release before returning", async () => {
+  for (const stage of ["listing", "comparison"] as const) {
+    const fake = fakeLive({ "src/A.java": "1" });
+    const fault = { kind: "unreadable" as const, detail: stage };
+    const list = fake.deps.workingTree.list;
+    let lists = 0;
+    fake.deps.workingTree.list = async (...args) => ++lists === 2 && stage === "listing" ? { ok: false, fault } : list(...args);
+    if (stage === "comparison") fake.deps.mirror.changedSince = async () => ({ ok: false, fault });
+    const notices: unknown[] = [];
+    let stateId = "";
+    const answer = await openLive(fake.deps, { repo: "/repo", scope: SCOPE, selected, store: false, onStalenessUnavailable: async (notice) => {
+      assert.equal(fake.held.released, 1);
+      await Promise.resolve();
+      notices.push(notice);
+    } }, async (held) => { stateId = held.stateId; return 42; });
+    assert.ok(answer.ok);
+    assert.deepEqual(notices, [{ stage, stateId, cause: fault }]);
+  }
+});
+
+test("actual cancellation at each live lifecycle boundary prevents success and notices", async () => {
+  for (const stage of ["before", "lock", "refresh", "callback", "listing", "comparison", "sweep"] as const) {
+    const fake = fakeLive({ "src/A.java": "1" });
+    const controller = new AbortController();
+    const lock = fake.deps.mirror.lock;
+    fake.deps.mirror.lock = async (...args) => { const result = await lock(...args); if (stage === "lock") controller.abort(); return result; };
+    const list = fake.deps.workingTree.list;
+    let lists = 0;
+    fake.deps.workingTree.list = async (...args) => { const result = await list(...args); lists++; if ((stage === "refresh" && lists === 1) || (stage === "listing" && lists === 2)) controller.abort(); return result; };
+    const compare = fake.deps.mirror.changedSince;
+    fake.deps.mirror.changedSince = async (...args) => { const result = await compare(...args); if (stage === "comparison") controller.abort(); return result; };
+    const usage = fake.deps.mirror.usage;
+    fake.deps.mirror.usage = async (...args) => { const result = await usage(...args); if (stage === "sweep") controller.abort(); return result; };
+    if (stage === "before") controller.abort();
+    const notices: unknown[] = [];
+    const result = await openLive(fake.deps, { repo: "/repo", scope: SCOPE, selected, store: false, signal: controller.signal, onStale: (n) => notices.push(n), onStalenessUnavailable: (n) => { notices.push(n); } }, async () => { if (stage === "callback") controller.abort(); return 42; });
+    assert.equal(!result.ok && result.fault.kind, "aborted", stage);
+    assert.deepEqual(notices, [], stage);
+    assert.equal(fake.held.locks, fake.held.released, stage);
+  }
+});
+
+test("a throwing postlude hook propagates after releasing the lock", async () => {
+  const fake = fakeLive({ "src/A.java": "1" });
+  fake.deps.mirror.changedSince = async () => ({ ok: false, fault: { kind: "unreadable", detail: "failed" } });
+  await assert.rejects(openLive(fake.deps, { repo: "/repo", scope: SCOPE, selected, store: false, onStalenessUnavailable: () => { throw new Error("hook"); } }, async () => 42), /hook/);
+  assert.equal(fake.held.locks, fake.held.released);
+});
+
+test("cancellation overrides returned acquisition and postlude failures without notification", async () => {
+  for (const stage of ["lock", "refresh", "listing", "comparison"] as const) {
+    const fake = fakeLive({ "src/A.java": "1" });
+    const controller = new AbortController();
+    const fault = { kind: "aborted" as const, detail: "cancelled" };
+    if (stage === "lock") fake.deps.mirror.lock = async () => { controller.abort(); return { ok: false, fault }; };
+    const list = fake.deps.workingTree.list;
+    let lists = 0;
+    fake.deps.workingTree.list = async (...args) => {
+      lists++;
+      if ((stage === "refresh" && lists === 1) || (stage === "listing" && lists === 2)) { controller.abort(); return { ok: false, fault }; }
+      return list(...args);
+    };
+    if (stage === "comparison") fake.deps.mirror.changedSince = async () => { controller.abort(); return { ok: false, fault }; };
+    const notices: unknown[] = [];
+    const result = await openLive(fake.deps, { repo: "/repo", scope: SCOPE, selected, store: false, signal: controller.signal, onStale: (n) => notices.push(n), onStalenessUnavailable: (n) => { notices.push(n); } }, async () => 42);
+    assert.equal(!result.ok && result.fault.kind, "aborted", stage);
+    assert.deepEqual(notices, [], stage);
+    assert.equal(fake.held.locks, fake.held.released, stage);
+  }
+});
+
+test("cancellation inside an awaited failure notification prevents success", async () => {
+  const fake = fakeLive({ "src/A.java": "1" });
+  const controller = new AbortController();
+  fake.deps.mirror.changedSince = async () => ({ ok: false, fault: { kind: "unreadable", detail: "failed" } });
+  const result = await openLive(fake.deps, { repo: "/repo", scope: SCOPE, selected, store: false, signal: controller.signal, onStalenessUnavailable: async () => { await Promise.resolve(); controller.abort(); } }, async () => 42);
+  assert.equal(!result.ok && result.fault.kind, "aborted");
+  assert.equal(fake.held.locks, fake.held.released);
+});
+
+test("cancellation during release overrides an earlier refresh failure", async () => {
+  const fake = fakeLive({ "src/A.java": "1" });
+  const controller = new AbortController();
+  fake.objectFormat.value = "sha256";
+  const lock = fake.deps.mirror.lock;
+  fake.deps.mirror.lock = async (...args) => {
+    const result = await lock(...args);
+    if (!result.ok) return result;
+    const release = result.value.release;
+    return { ok: true, value: { release: async () => { await release(); controller.abort(); } } };
+  };
+  const result = await query(fake, { signal: controller.signal });
+  assert.equal(!result.ok && result.fault.kind, "aborted");
+  assert.equal(fake.held.locks, fake.held.released);
+});

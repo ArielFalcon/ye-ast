@@ -803,6 +803,8 @@ function faultRecovery(kind: string): string {
     case "live-mirror-failed": return "Inspect the reported mirror/copy cause. If committed content answers the question, omit live and select that commit; it does not represent uncommitted edits.";
     case "unreadable":
     case "export-write-failed": return "Inspect the reported path and underlying read/write cause, including permissions or available space when indicated. Correct that prerequisite before retrying; this kind alone does not identify which repository or engine-owned resource failed.";
+    case "workspace-capture-unavailable": return "Inspect the capture cause for the named repository and retry when its live snapshot is available.";
+    case "duplicate-workspace-source": return "Remove the duplicate workspace source identified by the repository IDs.";
     case "duplicate-repository": return "Remove the duplicate repository declaration identified by the cause and retain the intended repository identity and revision.";
     case "git-failed": return "Inspect the reported Git/workspace cause and repository path. Correct the stated prerequisite before retrying; changing presentation mode does not repair this failure.";
     case "aborted": return "The caller cancelled the work. Request it again only if still needed and the cancellation no longer applies.";

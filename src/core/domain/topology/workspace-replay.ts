@@ -16,7 +16,12 @@ export function isWorkspaceReplayContext(value: unknown): value is WorkspaceRepl
   for (const item of context.snapshots) {
     if (typeof item !== "object" || item === null || Array.isArray(item)) return false;
     const snapshot = item as Record<string, unknown>;
-    if (Object.keys(snapshot).sort().join(",") !== "kind,repo,sha" || snapshot.kind !== "sha" || typeof snapshot.repo !== "string" || typeof snapshot.sha !== "string" || !isFullObjectId(snapshot.sha)) return false;
+    if (typeof snapshot.repo !== "string" || snapshot.repo.trim() === "") return false;
+    if (snapshot.kind === "sha") {
+      if (Object.keys(snapshot).sort().join(",") !== "kind,repo,sha" || typeof snapshot.sha !== "string" || !isFullObjectId(snapshot.sha)) return false;
+    } else if (snapshot.kind === "live") {
+      if (Object.keys(snapshot).sort().join(",") !== "head,kind,repo,stateId" || typeof snapshot.head !== "string" || !isFullObjectId(snapshot.head) || typeof snapshot.stateId !== "string" || snapshot.stateId.trim() === "") return false;
+    } else return false;
     if (previous !== undefined && compareText(previous, snapshot.repo) >= 0) return false;
     previous = snapshot.repo;
   }

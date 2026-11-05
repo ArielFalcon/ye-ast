@@ -75,6 +75,65 @@ function git(...args: string[]): string {
   return execFileSync("git", args, { cwd: repo, env: GIT_ENV, encoding: "utf8" }).trim();
 }
 
+test("composed workspace reads a trusted live trigger alongside a committed member", async () => {
+  const member = join(workspace, "member");
+  mkdirSync(member);
+  const memberGit = (...args: string[]): string => execFileSync("git", args, { cwd: member, env: GIT_ENV, encoding: "utf8" }).trim();
+  memberGit("init", "-q");
+  writeFileSync(join(member, "index.ts"), "export function member() {}\n");
+  memberGit("add", "-A");
+  memberGit("commit", "-q", "-m", "member");
+  const sha = memberGit("rev-parse", "HEAD");
+  const trustDirectory = join(workspace, "trust");
+  const cacheDirectory = join(workspace, "cache");
+  const quiet = { out: () => undefined, err: () => undefined };
+  assert.equal(await composeCli({ scratchRoot, trustDirectory, cacheDirectory })(["init", "--trust", "trusted", repo], quiet), EXIT_CODE.ok);
+  writeFileSync(join(repo, "src", "OrderController.java"), CONTROLLER.replace('/{id}', '/live/{id}'));
+  const liveRepo = { path: repo, id: "shop-service", live: true as const };
+  const queries = composeQueries({ scratchRoot, trustDirectory, cacheDirectory });
+  const request = { repo: liveRepo, repos: [{ path: member, id: "member", revision: sha }] };
+  const result = await queries.workspace.outwardNames(request);
+  assert.ok(result.ok);
+  assert.notEqual(result.value.fact.status, "unknown");
+  if (result.value.fact.status === "unknown") return;
+  const vector = result.value.fact.value.repositorySnapshots;
+  assert.deepEqual(vector.map(({ repo: id }) => id), ["member", "shop-service"]);
+  assert.deepEqual(vector[0]?.snapshot, { repo: "member", kind: "sha", sha });
+  const liveSnapshot = vector[1]?.snapshot;
+  assert.equal(liveSnapshot?.kind, "live");
+  assert.ok(result.value.fact.value.repositories.find((item) => item.repo === "shop-service")?.entrypoints.some((item) => item.status === "complete" && item.value.kind === "http-route" && item.value.path === "/orders/live/{id}" && item.evidence.some(({ path }) => path === "src/OrderController.java")));
+  const callers = await queries.workspaceImpact.callers({ ...request, targets: [{ file: "src/OrderController.java", symbol: "OrderController.one" }] });
+  const change = await queries.workspaceImpact.ofChange({ ...request, base: "HEAD" });
+  const decisions = await queries.decisions.decisions(request);
+  assert.ok(callers.ok && change.ok && decisions.ok);
+  assert.notEqual(callers.value.fact.status, "unknown");
+  assert.notEqual(change.value.fact.status, "unknown");
+  assert.notEqual(decisions.value.fact.status, "unknown");
+  if (callers.value.fact.status === "unknown" || change.value.fact.status === "unknown" || decisions.value.fact.status === "unknown") return;
+  for (const answer of [callers.value.fact.value, change.value.fact.value]) {
+    assert.deepEqual(answer.repositorySnapshots, vector);
+    const section = answer.sections["shop-service"];
+    assert.ok(section && section.status !== "unknown");
+    assert.deepEqual(section.value.reads.map(({ kind }) => kind), ["discovery", "trigger"]);
+    assert.deepEqual(section.value.reads.map(({ fact }) => fact.snapshot), [liveSnapshot, liveSnapshot]);
+    assert.ok(section.value.impact?.entrypoints.some(({ name }) => name === "GET /orders/live/{id}"));
+  }
+  const changed = change.value.fact.value.sections["shop-service"];
+  assert.ok(changed && changed.status !== "unknown" && changed.value.impact?.changedEntrypoints?.some(({ name }) => name === "GET /orders/live/{id}"));
+  assert.deepEqual(decisions.value.fact.value.repositories, vector);
+});
+
+test("composed workspace rejects invalid live choices and an untrusted live repository", async () => {
+  const queries = composeQueries({ scratchRoot, trustDirectory: join(workspace, "empty-trust"), cacheDirectory: join(workspace, "cache") });
+  const invalid = { path: repo, live: true, revision: undefined };
+  const rejected = await queries.workspace.outwardNames({ repo: invalid as unknown as Parameters<typeof queries.workspace.outwardNames>[0]["repo"] });
+  assert.ok(!rejected.ok);
+  assert.equal(rejected.fault.kind, "git-failed");
+  const untrusted = await queries.workspace.outwardNames({ repo: { path: repo, live: true } });
+  assert.ok(!untrusted.ok);
+  assert.equal(untrusted.fault.kind, "live-requires-trusted");
+});
+
 test("the MCP registration names the published package when it runs from an installed one, and tsx from a source checkout", () => {
   assert.deepEqual(mcpCommandFor("/work/ye-ast/src/composition/main.ts"), ["npx", "--yes", "tsx", "/work/ye-ast/src/composition/main.ts"]);
   assert.deepEqual(mcpCommandFor("/app/node_modules/ye-ast-mcp/dist/composition/main.js"), ["npx", "--yes", "ye-ast-mcp"]);
@@ -509,7 +568,7 @@ test("workspace impact replays persisted moving members from their original cont
   assert.equal(await composeCli({ scratchRoot, trustDirectory })(["init", "--trust", "trusted", "--workspace", manifest, repo], quiet), EXIT_CODE.ok);
   const { workspaceImpact } = composeQueries({ scratchRoot, trustDirectory });
   const callers = { repo: { path: repo, id: "shop-service" }, targets: [{ file: "src/OrderController.java", symbol: "OrderController.one" }] };
-  const change = { repo: callers.repo, base, head: base };
+  const change = { repo: { ...callers.repo, revision: base }, base };
   const first = await workspaceImpact.callers(callers);
   const firstChange = await workspaceImpact.ofChange(change);
   assert.ok(first.ok && first.value.workspaceReplay && first.value.fact.status !== "unknown");

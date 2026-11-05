@@ -9,9 +9,11 @@ import type { IndexCache } from "../../ports/index-cache.port.ts";
 import type { LiveFault, LiveSelector } from "../../ports/live-queries.port.ts";
 import type { PathMatcher } from "../../ports/path-matcher.port.ts";
 import type { CommitExport, Vcs, VcsFault } from "../../ports/vcs.port.ts";
-import { openLive, type LiveDeps, type LiveTree } from "../live/live-tree.ts";
+import { openLive, type LiveDeps, type LiveTree, type LiveFailure, type OpenLive } from "../live/live-tree.ts";
 import { ABORTED, extractExport, readSources, factBaseOf, LIVE_REQUIRES_TRUSTED, trustOf, withScratch, type CommitExtraction, type PreparedCommit, type SnapshotReaderDeps } from "./read-snapshot.ts";
 import { prepareCommit } from "./prepared-snapshot.ts";
+import { canonicalJson } from "../../domain/shared/canonical-json.ts";
+import { extractSources } from "./read-snapshot.ts";
 
 /** What reading the head of a query needs: the snapshot reader plus the index of what it exported. */
 export interface HeadReaderDeps extends SnapshotReaderDeps {
@@ -21,8 +23,152 @@ export interface HeadReaderDeps extends SnapshotReaderDeps {
   matcher: PathMatcher;
   /** What a live query reads; without it a live query is refused as under `untrusted`. */
   live?: LiveDeps;
+  heldLive?: ((request: { repo: string; repoId: string }) => HeldLive | undefined) | undefined;
   /** The type root a fact records as an input when it settles references with a compiler, so the fact invalidates with it. */
   typeRoot?: { identity: string };
+}
+
+/** A capture belongs to the callback holding its live lease. */
+export interface HeldLive {
+  readonly kind: "live";
+  readonly trust: "trusted";
+  readonly repo: string;
+  readonly repoId: string;
+  readonly scope: DeclaredScope;
+  readonly head: string;
+  readonly tree: LiveTree;
+  readonly deps: Pick<HeadReaderDeps, "vcs" | "reader" | "extractor" | "graph" | "matcher" | "live">;
+  sources(signal?: AbortSignal): Promise<Result<Pick<CommitExtraction, "export" | "sources">, VcsFault>>;
+  extract(signal?: AbortSignal): Promise<Result<CommitExtraction, VcsFault>>;
+}
+
+/** Consumers of a capture share one operation signal; independent operations create their own capture. */
+export function createHeldLive(input: { repo: string; repoId: string; scope: DeclaredScope; head: string; tree: LiveTree; trust: "trusted"; deps: HeadReaderDeps }): HeldLive {
+  const { vcs, reader, extractor, graph, matcher, live } = input.deps;
+  const captureDeps = { vcs, reader, extractor, graph, matcher, ...(live === undefined ? {} : { live }) };
+  let loaded: Promise<Result<Pick<CommitExtraction, "export" | "sources">, VcsFault>> | undefined;
+  let extracted: Promise<Result<CommitExtraction, VcsFault>> | undefined;
+  const sources: HeldLive["sources"] = async (signal) => {
+    if (signal?.aborted) return ABORTED;
+    const pending = loaded ??= readSources(captureDeps, input.tree.root, input.tree.export, signal);
+    try {
+      const result = await pending;
+      if (!result.ok && loaded === pending) loaded = undefined;
+      if (signal?.aborted) return ABORTED;
+      return result;
+    } catch (error) {
+      if (loaded === pending) loaded = undefined;
+      throw error;
+    }
+  };
+  return { ...input, deps: captureDeps, kind: "live", sources, async extract(signal) {
+    if (signal?.aborted) return ABORTED;
+    const pending = extracted ??= (async () => {
+      const result = await sources(signal);
+      return result.ok ? extractSources(captureDeps, result.value, signal) : result;
+    })();
+    try {
+      const answer = await pending;
+      if (!answer.ok && extracted === pending) extracted = undefined;
+      if (signal?.aborted) return ABORTED;
+      return answer;
+    } catch (error) {
+      if (extracted === pending) extracted = undefined;
+      throw error;
+    }
+  } };
+}
+
+export interface LiveCaptureSelection {
+  repo: string;
+  repoId: string;
+  head: string;
+  scope: DeclaredScope;
+  trust: "trusted";
+  onStale?: OpenLive["onStale"];
+  onStalenessUnavailable?: OpenLive["onStalenessUnavailable"];
+}
+
+/** Holds every selected tree for the duration of the callback. Roots must already be canonical where required. */
+export async function withLiveCaptures<T>(deps: HeadReaderDeps, selections: readonly LiveCaptureSelection[], signal: AbortSignal | undefined, use: (captures: ReadonlyMap<string, HeldLive>) => Promise<T>): Promise<Result<T, { repoId: string; cause: LiveFailure }>> {
+  if (new Set(selections.map((s) => s.repo)).size !== selections.length || new Set(selections.map((s) => s.repoId)).size !== selections.length) throw new TypeError("duplicate live capture selection");
+  if (selections.length === 0) {
+    if (signal?.aborted) return { ok: false, fault: { repoId: "", cause: { kind: "aborted", detail: "live query aborted" } } };
+    const value = await use(new Map());
+    return signal?.aborted ? { ok: false, fault: { repoId: "", cause: { kind: "aborted", detail: "live query aborted" } } } : { ok: true, value };
+  }
+  if (deps.live === undefined) throw new TypeError("live dependencies required");
+  const live = deps.live;
+  const ordered = [...selections].sort((a, b) => a.repo < b.repo ? -1 : a.repo > b.repo ? 1 : 0);
+  const captures = new Map<string, HeldLive>();
+  let cancellation: { repoId: string; cause: LiveFailure } | undefined;
+  const postludes: { repoId: string; run: () => void | Promise<void> }[] = [];
+  const acquire = async (index: number): Promise<Result<T, { repoId: string; cause: LiveFailure }>> => {
+    if (signal?.aborted) return { ok: false, fault: { repoId: ordered[index]?.repoId ?? "", cause: { kind: "aborted", detail: "live query aborted" } } };
+    if (index === ordered.length) return { ok: true, value: await use(captures) };
+    const selection = ordered[index]!;
+    const selected = exportSelection(selection.scope, deps.matcher.matches, isExtractorConfiguration);
+    const opened = await openLive(live, { repo: selection.repo, scope: selection.scope, selected, store: true, signal,
+      ...(selection.onStale === undefined ? {} : { onStale: (notice) => { postludes.push({ repoId: selection.repoId, run: () => selection.onStale!(notice) }); } }),
+      ...(selection.onStalenessUnavailable === undefined ? {} : { onStalenessUnavailable: (notice) => { postludes.push({ repoId: selection.repoId, run: () => selection.onStalenessUnavailable!(notice) }); } }),
+    }, async (tree) => {
+      captures.set(selection.repoId, createHeldLive({ ...selection, tree, deps }));
+      return acquire(index + 1);
+    });
+    if (opened.ok) return opened.value;
+    const failure = { repoId: selection.repoId, cause: opened.fault };
+    if (signal?.aborted) return { ok: false, fault: cancellation ??= failure };
+    return { ok: false, fault: failure };
+  };
+  const result = await acquire(0);
+  if (signal?.aborted) return { ok: false, fault: cancellation ?? { repoId: result.ok ? ordered[0]!.repoId : result.fault.repoId, cause: { kind: "aborted", detail: "live query aborted" } } };
+  for (const postlude of postludes) {
+    await postlude.run();
+    if (signal?.aborted) return { ok: false, fault: { repoId: postlude.repoId, cause: { kind: "aborted", detail: "live query aborted" } } };
+  }
+  return result;
+}
+
+export async function withLiveCapture<T, E>(deps: HeadReaderDeps, request: Extract<Revisioned, { live: true }>, options: {
+  use(capture: HeldLive): Promise<Result<T, E>>;
+  unavailable(context: { head: string; scope: DeclaredScope }): Promise<Result<T, E>>;
+  beforeHead?(): Promise<Result<void, VcsFault>>;
+  beforeOpen?(head: string): Promise<Result<void, VcsFault>>;
+}): Promise<Result<T, E | VcsFault | LiveFault>> {
+  const { repo, repoId, signal } = request;
+  const scope = liveScope(request.scope);
+  if (signal?.aborted) return ABORTED;
+  if (deps.heldLive !== undefined) {
+    const held = deps.heldLive({ repo, repoId });
+    if (held === undefined || held.kind !== "live" || held.trust !== "trusted" || held.repo !== repo || held.repoId !== repoId || held.tree.location.repo !== repo || canonicalJson(held.scope) !== canonicalJson(scope) || held.deps.vcs !== deps.vcs || held.deps.reader !== deps.reader || held.deps.extractor !== deps.extractor || held.deps.graph !== deps.graph || held.deps.matcher !== deps.matcher || held.deps.live === undefined || held.deps.live !== deps.live || held.tree.location.scope !== held.deps.live.digest.of(JSON.stringify(scope))) {
+      return { ok: false, fault: { kind: "live-mirror-failed", detail: "held live capture does not match the request" } };
+    }
+    const base = await options.beforeHead?.();
+    if (signal?.aborted) return ABORTED;
+    if (base !== undefined && !base.ok) return base;
+    const prepared = await options.beforeOpen?.(held.head);
+    if (signal?.aborted) return ABORTED;
+    if (prepared !== undefined && !prepared.ok) return prepared;
+    const answer = await options.use(held);
+    return signal?.aborted ? ABORTED : answer;
+  }
+  const trust = await trustOf(deps, repo);
+  if (trust !== "trusted" || deps.live === undefined) return LIVE_REQUIRES_TRUSTED;
+  const base = await options.beforeHead?.();
+  if (signal?.aborted) return ABORTED;
+  if (base !== undefined && !base.ok) return base;
+  const head = await deps.vcs.resolveCommit(repo, LIVE_HEAD, signal);
+  if (!head.ok) return head;
+  const prepared = await options.beforeOpen?.(head.value);
+  if (signal?.aborted) return ABORTED;
+  if (prepared !== undefined && !prepared.ok) return prepared;
+  const opened = await withLiveCaptures(deps, [{ repo, repoId, scope, head: head.value, trust: "trusted", onStale: request.onStale }], signal, (captures) => options.use(captures.get(repoId)!));
+  if (opened.ok) return opened.value;
+  if (opened.fault.cause.kind === "unavailable") {
+    const answer = await options.unavailable({ head: head.value, scope });
+    return signal?.aborted ? ABORTED : answer;
+  }
+  return { ok: false, fault: opened.fault.cause };
 }
 
 /** What one operation adds to the fact base of every fact it answers. */
@@ -124,20 +270,13 @@ export function createHeadReader(deps: HeadReaderDeps): HeadReader {
   const atSnapshot = async <V, E>(request: Revisioned, spec: FactSpec, read: (head: HeadReading<Pick<CommitExtraction, "export">>, root: string) => Promise<Result<Fact<V>, E>>): Promise<Result<Fact<V>, E | VcsFault | LiveFault>> => {
     const { repo, repoId, signal } = request;
     if (request.live === true) {
-      const trust = await trustOf(deps, repo);
-      if (trust !== "trusted" || deps.live === undefined) return LIVE_REQUIRES_TRUSTED;
-      const head = await vcs.resolveCommit(repo, LIVE_HEAD, signal);
-      if (!head.ok) return head;
-      const scope = liveScope(request.scope);
-      const selected = pathSelection(scope, deps.matcher.matches);
-      const exported = exportSelection(scope, deps.matcher.matches, isExtractorConfiguration);
-      const opened = await openLive(deps.live, { repo, scope, selected: exported, store: true, signal, onStale: request.onStale }, async (tree) => {
+      return withLiveCapture<Fact<V>, E | VcsFault>(deps, request, { use: async (held) => {
         if (signal?.aborted) return ABORTED;
-        return read(liveReading(tree, { export: tree.export }, trust, scope, selected, head.value, repoId, spec), tree.root);
-      });
-      if (opened.ok) return opened.value;
-      const { fault } = opened;
-      return fault.kind === "unavailable" ? { ok: true, value: unavailableLive(trust, scope, head.value, repoId, spec) } : { ok: false, fault };
+        const { tree, scope, head } = held;
+        const selected = pathSelection(scope, deps.matcher.matches);
+        const prepared: PreparedCommit = { root: tree.root, tree: { export: tree.export }, sources: held.sources, extract: held.extract };
+        return read({ ...liveReading(tree, prepared.tree, "trusted", scope, selected, head, repoId, spec), prepared }, tree.root);
+      }, unavailable: async ({ head, scope }) => ({ ok: true, value: unavailableLive("trusted", scope, head, repoId, spec) }) });
     }
 
     const scope = declaredScope(request.scope);

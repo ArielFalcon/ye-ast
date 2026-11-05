@@ -512,7 +512,7 @@ test("workspace and decisions without a repository, with two, or with a flag the
   for (const command of ["workspace", "decisions"]) {
     const accepted = command === "workspace" ? setupWorkspace() : setupDecisions();
     assert.equal(await run([command, "."], accepted.io, accepted.deps), EXIT_CODE.ok, `${command}: the command itself is accepted`);
-    for (const tail of [[], ["a", "b"], ["--bogus", "."], ["--live", "."], ["--depth", "2", "."]]) {
+    for (const tail of [[], ["a", "b"], ["--bogus", "."], ["--live", "."], ["--repo", "other", "."], ["--depth", "2", "."]]) {
       await refuses([command, ...tail], command === "workspace" ? setupWorkspace : setupDecisions);
     }
   }

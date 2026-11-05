@@ -11,3 +11,8 @@ test("workspace replay is preserved and malformed or unsupported contexts are re
   assert.throws(() => readWorkspace({ ...request, replay: { ...replay, snapshots: [...replay.snapshots, ...replay.snapshots] } }), InvalidParamsError);
   assert.throws(() => readDecisions(request), InvalidParamsError);
 });
+
+
+test("a live member cannot carry a revision even when explicitly undefined", () => {
+  assert.throws(() => readWorkspace({ repo: { path: "a", live: true, revision: undefined } }), InvalidParamsError);
+});

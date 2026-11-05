@@ -325,3 +325,49 @@ test("callers and impact replay real local and persisted workspace facts", async
     assert.equal(changed.structuredContent, undefined);
   }
 });
+
+test("stdio workspace live member replays captured mixed snapshots and rejects a changed live state", async () => {
+  const git = (root: string, ...args: string[]) => execFileSync("git", args, { cwd: root, env: GIT_ENV, encoding: "utf8" }).trim();
+  const errors: string[] = [];
+  assert.equal(await composeCli({ scratchRoot, trustDirectory: join(workspace, "trust") })(["init", "--trust", "trusted", frontend], { out: () => {}, err: (line) => errors.push(line) }), 0, errors.join("\n"));
+  writeFileSync(join(frontend, "src/app/order.page.ts"), COMPONENT);
+  const member = { path: frontend, id: "shop-web", live: true };
+  const repos = [member];
+  type Wire = { isError?: boolean; structuredContent?: Record<string, any>; _meta?: Record<string, any> };
+  const call = async (name: string, args: object): Promise<Wire> => (await request("tools/call", { name, arguments: args })).result as Wire;
+  const discovery = await call("ye_ast_workspace", { repos, offline: true, mode: "full" });
+  assert.notEqual(discovery.isError, true, JSON.stringify(discovery));
+  assert.ok(discovery.structuredContent?.value.repositorySnapshots.some((item: any) => item.repo === "shop-web" && item.snapshot.kind === "live"));
+  const recipes: { name: string; arguments: Record<string, unknown>; identity: string }[] = [];
+  for (const [name, args] of [
+    ["ye_ast_callers", { targets: [{ file: "src/main/java/shop/OrderController.java", symbol: "OrderController.one" }] }],
+    ["ye_ast_impact", { base: "comparison" }],
+  ] as const) {
+    const result = await call(name, { ...args, workspace: { repos }, offline: true, mode: "full" });
+    assert.notEqual(result.isError, true, JSON.stringify(result));
+    const value = result.structuredContent!.value;
+    assert.ok(value.links.some((item: any) => item.link.from.repo === "shop-web" && item.link.to.name === "GET /orders/{id}"));
+    const recovery = result.structuredContent!.recovery;
+    assert.equal(recovery.status, "available", JSON.stringify(recovery));
+    const vector = recovery.query.arguments.replay.snapshots;
+    assert.equal(vector[0].repo, "shop-service");
+    assert.equal(vector[0].kind, "sha");
+    assert.equal(vector[0].sha, git(repo, "rev-parse", "HEAD"));
+    assert.equal(vector[1].repo, "shop-web");
+    assert.equal(vector[1].kind, "live");
+    assert.equal(vector[1].head, git(frontend, "rev-parse", "HEAD"));
+    assert.ok(vector[1].stateId);
+    const replayed = await call(name, { ...recovery.query.arguments, mode: "full" });
+    assert.notEqual(replayed.isError, true, JSON.stringify(replayed));
+    assert.equal(replayed.structuredContent!.recovery.resultIdentity, recovery.resultIdentity);
+    recipes.push({ name, arguments: recovery.query.arguments, identity: recovery.resultIdentity });
+  }
+  writeFileSync(join(frontend, "src/app/order.page.ts"), COMPONENT.replace("shop-api/orders/7", "changed-api/orders/7"));
+  for (const recipe of recipes) {
+    const result = await call(recipe.name, recipe.arguments);
+    assert.equal(result.isError, true);
+    assert.equal(result.structuredContent, undefined);
+    assert.equal(result._meta?.["ye-ast/fault"]?.kind, "result-changed");
+    assert.equal(result._meta?.["ye-ast/fault"]?.stage, "workspace-replay");
+  }
+});

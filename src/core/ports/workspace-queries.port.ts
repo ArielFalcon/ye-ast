@@ -1,3 +1,4 @@
+import type { WorkspaceLiveNotice } from "./live-queries.port.ts";
 import type { Fact, SnapshotRef } from "../domain/shared/fact.ts";
 import type { Result } from "../domain/shared/result.ts";
 import type { NameCandidate, RepositoryOutwardName } from "../domain/topology/outward-name.ts";
@@ -40,6 +41,7 @@ export interface WorkspaceRefresh {
 export interface FactRead<T> {
   fact: Fact<T>;
   workspaceReplay?: WorkspaceReplayContext;
+  workspaceLive?: readonly WorkspaceLiveNotice[];
   /** Original declared clone roots, carried outside deterministic facts. */
   repositoryRoots?: readonly { repo: string; path: string }[];
   /** Internal read locations, which can be mirrors; excluded from deterministic facts. */

@@ -7,12 +7,15 @@ import type { Result } from "../../domain/shared/result.ts";
 import type { OutwardName } from "../../domain/topology/outward-name.ts";
 import { directoryNameOf } from "../../domain/topology/repository-identity.ts";
 import { isRemoteAddress, type WorkspaceRepositoryDeclaration } from "../../domain/topology/workspace-manifest.ts";
-import type { DecisionQueries, DecisionsRequest, DecisionValue } from "../../ports/decision-queries.port.ts";
+import type { DecisionsRequest, DecisionValue } from "../../ports/decision-queries.port.ts";
 import type { Vcs } from "../../ports/vcs.port.ts";
 import type { Digest } from "../../ports/digest.port.ts";
 import type { WorkspaceDefaults } from "../../ports/workspace-defaults.port.ts";
 import type { WorkspaceFault, WorkspaceRepository, WorkspaceSection } from "../../ports/workspace-repos.port.ts";
-import type { FactRead, WorkspaceQueries, WorkspaceValue } from "../../ports/workspace-queries.port.ts";
+import type { FactRead, WorkspaceQueries, WorkspaceRead, WorkspaceValue } from "../../ports/workspace-queries.port.ts";
+import { ABORTED } from "../snapshot/read-snapshot.ts";
+import type { WorkspaceReadOperation } from "../topology/workspace-operation.ts";
+import type { WorkspacePlanningRequest } from "../topology/workspace-plan.ts";
 import { withAuthorizedRemotes, workspaceInForce } from "../topology/workspace-defaults.ts";
 
 export interface DecisionQueriesDeps {
@@ -24,38 +27,61 @@ export interface DecisionQueriesDeps {
   digest: Digest;
 }
 
-export function createDecisionQueries({ workspace, defaults, vcs, digest }: DecisionQueriesDeps): DecisionQueries {
+type CommittedDecisionsRequest = Omit<DecisionsRequest, "repo" | "repos"> & {
+  repo: WorkspaceRepositoryDeclaration & { live?: never };
+  repos?: readonly (WorkspaceRepositoryDeclaration & { live?: never })[];
+};
+
+/** Committed-only helper; composed live decisions use the captured operation below. */
+export function createDecisionQueries({ workspace, defaults, vcs, digest }: DecisionQueriesDeps) {
   return {
-    async decisions(request: DecisionsRequest): Promise<Result<FactRead<DecisionValue>, WorkspaceFault>> {
+    async decisions(request: CommittedDecisionsRequest): Promise<Result<FactRead<DecisionValue>, WorkspaceFault>> {
+      if (request.signal?.aborted) return ABORTED;
+      if ([request.repo, ...(request.repos ?? [])].some((repo) => "live" in repo)) return { ok: false, fault: { kind: "git-failed", detail: "invalid workspace selection" } };
       const read = await workspace.outwardNames(request);
       if (!read.ok) return read;
-      const fact = read.value.fact;
-      if (fact.status === "unknown") return { ok: false, fault: { kind: "git-failed", detail: "the workspace read answered nothing" } };
-
-      const persisted = await workspaceInForce({ repo: request.repo }, defaults, fact.inputs.trust);
-      if (!persisted.ok) return persisted;
-      const value = fact.value;
-      const trigger = request.repo.id ?? directoryNameOf(request.repo.path);
-      const inForce = withAuthorizedRemotes(request.repos ?? persisted.value.repos, persisted.value.repos);
-      const origins = await originsOf(vcs, value.repositories, inForce, trigger);
-      if (!origins.ok) return origins;
-      const input: DecisionInput = {
-        trigger,
-        repositories: value.repositories.map((repository) => decisionRepositoryOf(repository, value)),
-        candidates: value.candidates,
-        unserved: value.unserved,
-        gateways: value.workspace.gateways,
-        confirmed: persisted.value.repos.map((declaration) => declaration.id ?? directoryNameOf(declaration.path)),
-        ...(read.value.refresh === undefined ? {} : { resolutions: read.value.refresh.resolution }),
-        ...(origins.value.length === 0 ? {} : { origins: origins.value }),
-      };
-      const decisions = decisionsOf(input).decisions;
-      const declared = { confirmed: (input.confirmed ?? []).toSorted(compareText), origins: origins.value, resolutions: read.value.refresh?.resolution ?? [] };
-      const base = compositeBase(baseOf(fact), [{ kind: "workspace", fact: provenanceOf(fact) }], declared, (text) => digest.of(text));
-      const answer = decisionFact({ ...fact, ...base }, { decisions, repositories: value.repositorySnapshots, source: value.workspace.source });
-      return { ok: true, value: { fact: answer, ...(read.value.refresh === undefined ? {} : { refresh: read.value.refresh }), ...(read.value.repositoryRoots === undefined ? {} : { repositoryRoots: read.value.repositoryRoots }) } };
+      return buildDecisions(read.value, request, { ...(defaults === undefined ? {} : { defaults }), vcs, digest }, request.signal);
     },
   };
+}
+
+export function createCapturedDecisionQueries({ operation, defaults, vcs, digest }: Omit<DecisionQueriesDeps, "workspace"> & { operation: WorkspaceReadOperation }) {
+  return {
+    async decisions(request: Omit<WorkspacePlanningRequest, "replay">): Promise<Result<FactRead<DecisionValue>, WorkspaceFault>> {
+      const result = await operation.withRead(request, (read, context) => buildDecisions(read, request, { ...(defaults === undefined ? {} : { defaults }), vcs, digest }, context.signal));
+      if (!result.ok) return result;
+      return { ok: true, value: { ...result.value.value, ...(result.value.workspaceReplay === undefined ? {} : { workspaceReplay: result.value.workspaceReplay }), ...(result.value.workspaceLive === undefined ? {} : { workspaceLive: result.value.workspaceLive }) } };
+    },
+  };
+}
+
+async function buildDecisions(read: WorkspaceRead, request: Omit<WorkspacePlanningRequest, "replay">, { defaults, vcs, digest }: Omit<DecisionQueriesDeps, "workspace">, signal: AbortSignal | undefined): Promise<Result<FactRead<DecisionValue>, WorkspaceFault>> {
+  if (signal?.aborted) return ABORTED;
+  const fact = read.fact;
+  if (fact.status === "unknown") return { ok: false, fault: { kind: "git-failed", detail: "the workspace read answered nothing" } };
+
+  const persisted = await workspaceInForce({ repo: request.repo }, defaults, fact.inputs.trust);
+  if (!persisted.ok) return persisted;
+  const value = fact.value;
+  const trigger = request.repo.id ?? directoryNameOf(request.repo.path);
+  const inForce = withAuthorizedRemotes(request.repos ?? persisted.value.repos, persisted.value.repos);
+  const origins = await originsOf(vcs, value.repositories, inForce, trigger, signal);
+  if (!origins.ok) return origins;
+  const input: DecisionInput = {
+    trigger,
+    repositories: value.repositories.map((repository) => decisionRepositoryOf(repository, value)),
+    candidates: value.candidates,
+    unserved: value.unserved,
+    gateways: value.workspace.gateways,
+    confirmed: persisted.value.repos.map((declaration) => declaration.id ?? directoryNameOf(declaration.path)),
+    ...(read.refresh === undefined ? {} : { resolutions: read.refresh.resolution }),
+    ...(origins.value.length === 0 ? {} : { origins: origins.value }),
+  };
+  const decisions = decisionsOf(input).decisions;
+  const declared = { confirmed: (input.confirmed ?? []).toSorted(compareText), origins: origins.value, resolutions: read.refresh?.resolution ?? [] };
+  const base = compositeBase(baseOf(fact), [{ kind: "workspace", fact: provenanceOf(fact) }], declared, (text) => digest.of(text));
+  const answer = decisionFact({ ...fact, ...base }, { decisions, repositories: value.repositorySnapshots, source: value.workspace.source });
+  return { ok: true, value: { fact: answer, ...(read.refresh === undefined ? {} : { refresh: read.refresh }), ...(read.repositoryRoots === undefined ? {} : { repositoryRoots: read.repositoryRoots }) } };
 }
 
 /**
@@ -68,6 +94,7 @@ async function originsOf(
   repositories: readonly WorkspaceRepository[],
   declarations: readonly WorkspaceRepositoryDeclaration[],
   trigger: string,
+  signal: AbortSignal | undefined,
 ): Promise<Result<readonly DecisionOrigin[], WorkspaceFault>> {
   const byRepo = new Map(declarations.map((declaration) => [declaration.id ?? directoryNameOf(declaration.path), declaration]));
   const origins: DecisionOrigin[] = [];
@@ -75,7 +102,9 @@ async function originsOf(
     if (repository.repo === trigger) continue;
     const declaration = byRepo.get(repository.repo);
     if (declaration === undefined || declaration.remote !== undefined) continue;
-    const remotes = await vcs.remotes(declaration.path);
+    if (signal?.aborted) return ABORTED;
+    const remotes = await vcs.remotes(declaration.path, signal);
+    if (signal?.aborted) return ABORTED;
     if (!remotes.ok) return { ok: false, fault: remotes.fault };
     if (remotes.value.length === 0) continue;
     const accepted = remotes.value.filter((remote) => isRemoteAddress(remote.url)).map((remote) => ({ url: remote.url, remote: remote.name }));

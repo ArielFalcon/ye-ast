@@ -14,7 +14,10 @@ import type { WorkspaceDefaults, WorkspaceManifest } from "../../ports/workspace
 import type { WorkspaceRequest } from "../../ports/workspace-queries.port.ts";
 import type { WorkspaceImpactValue, RepoImpact } from "../../ports/workspace-impact-queries.port.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
-import { createWorkspaceImpactQueries } from "./workspace-impact.ts";
+import { createCapturedWorkspaceImpactQueries, createWorkspaceImpactQueries } from "./workspace-impact.ts";
+import { fakeLive } from "../live/fake-live.testing.ts";
+import { withWorkspaceSnapshots, type WorkspaceSnapshotContext } from "./workspace-snapshots.ts";
+import type { WorkspaceReadOperation } from "./workspace-operation.ts";
 import { workspaceInForce } from "./workspace-defaults.ts";
 
 const SHA = "a".repeat(40);
@@ -67,7 +70,7 @@ const REACHED: ImpactValue["entrypoints"] = [{ kind: "http-route", name: "POST /
 
 interface Setup {
   /** Per repository: its own routes and call sites. */
-  repositories: Record<string, { entrypoints?: readonly Entrypoint[]; callSites?: readonly CallSite[]; cuts?: readonly Cut[]; trust?: "trusted" | "untrusted"; sha?: string }>;
+  repositories: Record<string, { entrypoints?: readonly Entrypoint[]; callSites?: readonly CallSite[]; cuts?: readonly Cut[]; trust?: "trusted" | "untrusted"; sha?: string; snapshot?: SnapshotRef }>;
   /** Repositories the read named but could not reach: their section is unknown and they are no repository read. */
   unavailable?: readonly string[];
   trigger?: ImpactValue;
@@ -113,7 +116,7 @@ function setup({ repositories, unavailable = [], trigger = impactOf(REACHED), un
   const all = [...new Set([...names, ...unavailable])].sort();
   const read: WorkspaceRepository[] = names.map((repo) => ({
     repo,
-    snapshot: { repo, kind: "sha", sha: repositories[repo]?.sha ?? SHA },
+    snapshot: repositories[repo]?.snapshot ?? { repo, kind: "sha", sha: repositories[repo]?.sha ?? SHA },
     entrypoints: (repositories[repo]?.entrypoints ?? []).map((value) => ({ status: "complete" as const, value, evidence: [] })),
     callSites: repositories[repo]?.callSites ?? [],
   }));
@@ -186,6 +189,121 @@ function repoImpact(value: WorkspaceImpactValue, repo: string): RepoImpact & { s
 const pathOf = (site: CallSite): string => (site.target.status === "complete" && "path" in site.target.value ? site.target.value.path : "?");
 const ORDERS = { entrypoints: [route("POST", "/orders"), route("GET", "/refunds", "Orders.refunds", 30)] };
 
+test("committed consumer walks reject live snapshots instead of substituting HEAD", async () => {
+  const { queries, walks } = setup({ repositories: {
+    orders: ORDERS,
+    "shop-web": { callSites: [callSite("shop-web", "/orders")], snapshot: { repo: "shop-web", kind: "live", head: SHA, stateId: "live-state" } },
+  } });
+  const result = await queries.callers(ASK);
+  assert.equal(result.ok, false);
+  assert.equal(walks.length, 1);
+});
+
+test("captured callers walk selected live and SHA states while every live lease is held", async () => {
+  const fake = fakeLive({ "src/a.ts": "v1" });
+  const signal = new AbortController().signal;
+  const discovery = setup({ repositories: {
+    orders: ORDERS,
+    "shop-web": { callSites: [callSite("shop-web", "/orders")] },
+    batch: { callSites: [callSite("batch", "/orders")] },
+  } }).read_;
+  const deps: Parameters<typeof withWorkspaceSnapshots>[0] = {
+    vcs: {
+      canonicalRoot: async (path) => ({ ok: true, value: `/real${path}` }),
+      resolveCommit: async () => ({ ok: true, value: SHA }),
+      remotes: async () => ({ ok: true, value: [] }),
+      headBranch: async () => ({ ok: true, value: "main" }),
+      exportCommit: async () => assert.fail("unexpected export"),
+      repositoryName: async () => assert.fail("unexpected repository name"),
+    },
+    trust: { read: async () => ({ ok: true, value: "trusted" }) },
+    digest: { of: () => "b".repeat(64) }, matcher: { matches: () => true },
+    scratch: { create: async () => "/scratch", remove: async () => undefined },
+    reader: { read: async () => assert.fail("unexpected read") },
+    extractor: { extract: async () => assert.fail("unexpected extraction") },
+    producer: { name: "test", version: "0" }, graph: fake.deps.graph, live: fake.deps,
+  };
+  let operations = 0;
+  let contextSeen: WorkspaceSnapshotContext | undefined;
+  const requests: ImpactCallersRequest[] = [];
+  const operation: WorkspaceReadOperation = {
+    withRead: async (request, use) => {
+      operations++;
+      return withWorkspaceSnapshots(deps, request, async (context) => {
+        contextSeen = context;
+        const found = await discovery.outwardNames({ repo: { path: "/work/orders" }, repos: [{ path: "/work/shop-web" }, { path: "/work/batch" }] });
+        assert.ok(found.ok && found.value.fact.status !== "unknown");
+        const snapshots = new Map(context.selectedSnapshots.map((snapshot) => [snapshot.repo, snapshot]));
+        const value = found.value.fact.value;
+        const sections = Object.fromEntries(Object.entries(value.sections).map(([repo, part]) => [repo, { ...part, snapshot: snapshots.get(repo)! }]));
+        const read = { ...found.value, fact: { ...found.value.fact, snapshot: snapshots.get("orders")!, value: { ...value, sections, repositories: value.repositories.map((repo) => ({ ...repo, snapshot: snapshots.get(repo.repo)! })), repositorySnapshots: context.selectedSnapshots.map((snapshot) => ({ repo: snapshot.repo, snapshot })) } } };
+        return use(read, context);
+      });
+    },
+  };
+  const impactAt = (context: WorkspaceSnapshotContext): ImpactQueries => {
+    assert.strictEqual(context, contextSeen);
+    return {
+      callers: async (request) => {
+        assert.equal(fake.held.locks - fake.held.released, 2);
+        assert.strictEqual(request.signal, signal);
+        requests.push(request);
+        const snapshot = context.selectedSnapshots.find((entry) => entry.repo === request.repoId)!;
+        if (request.repoId === "orders") fake.tree.set("src/a.ts", "v2");
+        return { ok: true, value: { ...fact(request.repoId, "trusted", request.repoId === "orders" ? impactOf(REACHED) : impactOf([])), snapshot } };
+      },
+      ofChange: async () => assert.fail("unexpected change walk"),
+      importers: async () => assert.fail("unexpected importers walk"),
+    };
+  };
+  const queries = createCapturedWorkspaceImpactQueries({ operation, impactAt, digest: { of: (text) => text } });
+  const result = await queries.callers({ repo: { path: "/work/orders", live: true }, repos: [{ path: "/work/shop-web", live: true }, { path: "/work/batch" }], targets: ASK.targets, signal });
+  assert.ok(result.ok);
+  assert.equal(operations, 1);
+  assert.equal(fake.held.released, 2);
+  assert.deepEqual(requests.map(({ repoId, repo, revision, live }) => ({ repoId, repo, revision, live })).sort((a, b) => a.repoId.localeCompare(b.repoId)), [
+    { repoId: "batch", repo: "/work/batch", revision: SHA, live: undefined },
+    { repoId: "orders", repo: "/real/work/orders", revision: undefined, live: true },
+    { repoId: "shop-web", repo: "/real/work/shop-web", revision: undefined, live: true },
+  ]);
+  assert.ok(result.value.workspaceLive?.some(({ repo }) => repo === "orders"));
+  assert.deepEqual(result.value.workspaceReplay?.snapshots, contextSeen!.selectedSnapshots);
+  const value = valueOf(result);
+  assert.deepEqual(repoImpact(value, "shop-web").reads.map(({ fact }) => fact.snapshot), [contextSeen!.selectedSnapshots.find(({ repo }) => repo === "shop-web"), contextSeen!.selectedSnapshots.find(({ repo }) => repo === "shop-web")]);
+
+  for (const cancelled of [false, true]) {
+    const controller = new AbortController();
+    const failing = createCapturedWorkspaceImpactQueries({ operation, digest: { of: (text) => text }, impactAt: (context) => ({
+      callers: async (request) => {
+        assert.strictEqual(request.signal, context.signal);
+        assert.equal(fake.held.locks - fake.held.released, 2);
+        if (cancelled) controller.abort();
+        return { ok: false, fault: { kind: "unknown-symbol", detail: "missing", entries: [] } };
+      },
+      ofChange: async () => assert.fail("unexpected change walk"),
+      importers: async () => assert.fail("unexpected importers walk"),
+    }) });
+    const failed = await failing.callers({ repo: { path: "/work/orders", live: true }, repos: [{ path: "/work/shop-web", live: true }, { path: "/work/batch" }], targets: ASK.targets, signal: controller.signal });
+    assert.equal(failed.ok, false);
+    if (!failed.ok) assert.equal(failed.fault.kind, cancelled ? "aborted" : "unknown-symbol");
+    assert.equal(fake.held.locks, fake.held.released);
+  }
+});
+
+test("captured callers reject a missing live handle without walking HEAD", async () => {
+  const s = capturedChangeFixture();
+  const operation: WorkspaceReadOperation = { withRead: (request, use) => s.operation.withRead(request, (read, context) => use(read, { ...context, liveCaptures: new Map() })) };
+  const queries = createCapturedWorkspaceImpactQueries({ operation, digest: { of: (text) => text }, impactAt: () => ({
+    callers: async () => assert.fail("must not recapture or walk HEAD"),
+    ofChange: async () => assert.fail("unexpected change walk"),
+    importers: async () => assert.fail("unexpected importers walk"),
+  }) });
+  const result = await queries.callers({ repo: { path: "/work/webapp", live: true }, repos: [{ path: "/work/orders", live: true }, { path: "/work/payments" }], targets: ASK.targets });
+  assert.equal(result.ok, false);
+  if (!result.ok) assert.equal(result.fault.kind, "git-failed");
+  assert.equal(s.fake.held.locks, s.fake.held.released);
+});
+
 test("prototype-like repository IDs retain sections, uncertainty and contributing read identity", async () => {
   for (const [available, unavailable] of [["__proto__", "constructor"], ["constructor", "__proto__"]] as const) {
     const read = (sha: string) => setup({
@@ -250,7 +368,7 @@ test("the trigger walk uses the snapshot resolved by workspace discovery", async
 
 test("composite identity distinguishes changed selection and walk bounds", async () => {
   const { queries } = setup({ repositories: { orders: ORDERS, "shop-web": {} } });
-  const ask = { repo: { path: "/work/orders" }, base: "main", head: "HEAD", changed: ["src/a.ts"], budget: { depth: 1 } };
+  const ask = { repo: { path: "/work/orders" }, base: "main", changed: ["src/a.ts"], budget: { depth: 1 } };
   const a = await queries.ofChange(ask);
   const b = await queries.ofChange({ ...ask, changed: ["src/b.ts"] });
   const c = await queries.ofChange({ ...ask, budget: { depth: 2 } });
@@ -372,7 +490,7 @@ test("a change answer carries the merge base, and a removed route still links th
   const removed = impactOf([], { changedEntrypoints: [{ change: "removed", kind: "http-route", name: "DELETE /orders/{id}", handler: { ...HANDLER, symbol: "Orders.remove", line: 40 } }] });
   const { queries } = setup({ repositories: { orders: { entrypoints: [route("POST", "/orders")] }, "shop-web": { callSites: [callSite("shop-web", "orders-api/orders", "POST", 7), callSite("shop-web", "orders-api/orders/:id", "DELETE", 9)] } }, trigger: removed });
 
-  const answered = await queries.ofChange({ repo: { path: "/work/orders" }, repos: [{ path: "/work/shop-web" }], base: "main", head: "HEAD" });
+  const answered = await queries.ofChange({ repo: { path: "/work/orders" }, repos: [{ path: "/work/shop-web" }], base: "main" });
 
   const value = valueOf(answered);
   assert.equal(value.trigger.mergeBase, OTHER_SHA);
@@ -472,6 +590,164 @@ function reachedRoute(handler: HttpRoute["handler"], method: HttpRoute["method"]
   return { kind: "http-route", name: `${method} ${path}`, handler, depth: 0, confidence: 1, seeds: [] };
 }
 
+function capturedChangeFixture() {
+  const fake = fakeLive({ "src/a.ts": "v1" });
+  const discovery = setup({ repositories: {
+    webapp: { entrypoints: [route("POST", "/web")], callSites: [callSite("webapp", "orders-api/orders", "POST", 9)] },
+    orders: { entrypoints: [routeOf(ORDER_CONTROLLER, "POST", "/orders")], callSites: [callSite("orders", "payments/charges", "POST", 7), callSite("orders", "webapp/web", "POST", 11)] },
+    payments: { entrypoints: [routeOf(CHARGES, "POST", "/charges")], callSites: [callSite("payments", "external/log", "POST", 8)] },
+  } }).read_;
+  const deps: Parameters<typeof withWorkspaceSnapshots>[0] = {
+    vcs: {
+      canonicalRoot: async (path) => ({ ok: true, value: `/real${path}` }),
+      resolveCommit: async () => ({ ok: true, value: SHA }),
+      remotes: async () => ({ ok: true, value: [] }),
+      headBranch: async () => ({ ok: true, value: "main" }),
+      exportCommit: async () => assert.fail("unexpected export"),
+      repositoryName: async () => assert.fail("unexpected repository name"),
+    },
+    trust: { read: async () => ({ ok: true, value: "trusted" }) },
+    digest: { of: () => "b".repeat(64) }, matcher: { matches: () => true },
+    scratch: { create: async () => "/scratch", remove: async () => undefined },
+    reader: { read: async () => assert.fail("unexpected read") },
+    extractor: { extract: async () => assert.fail("unexpected extraction") },
+    producer: { name: "test", version: "0" }, graph: fake.deps.graph, live: fake.deps,
+  };
+  let operations = 0;
+  let contextSeen: WorkspaceSnapshotContext | undefined;
+  const operation: WorkspaceReadOperation = {
+    withRead: async (request, use) => {
+      operations++;
+      return withWorkspaceSnapshots(deps, request, async (context) => {
+        contextSeen = context;
+        const found = await discovery.outwardNames({ repo: { path: "/work/webapp" }, repos: [{ path: "/work/orders" }, { path: "/work/payments" }] });
+        assert.ok(found.ok && found.value.fact.status !== "unknown");
+        const snapshots = new Map(context.selectedSnapshots.map((snapshot) => [snapshot.repo, snapshot]));
+        const value = found.value.fact.value;
+        const sections = Object.fromEntries(Object.entries(value.sections).map(([repo, part]) => [repo, { ...part, snapshot: snapshots.get(repo)! }]));
+        return use({ ...found.value, fact: { ...found.value.fact, snapshot: snapshots.get("webapp")!, value: { ...value, sections, repositories: value.repositories.map((repo) => ({ ...repo, snapshot: snapshots.get(repo.repo)! })), repositorySnapshots: context.selectedSnapshots.map((snapshot) => ({ repo: snapshot.repo, snapshot })) } } }, context);
+      });
+    },
+  };
+  return { fake, operation, operations: () => operations, context: () => contextSeen };
+}
+
+test("captured change walks its selected live trigger and downstream live and SHA members under both leases", async () => {
+  const s = capturedChangeFixture();
+  const signal = new AbortController().signal;
+  const changes: ImpactOfChangeRequest[] = [];
+  const callers: ImpactCallersRequest[] = [];
+  const impactAt = (context: WorkspaceSnapshotContext): ImpactQueries => {
+    assert.strictEqual(context, s.context());
+    return {
+      ofChange: async (request) => {
+        assert.equal(s.fake.held.locks - s.fake.held.released, 2);
+        assert.strictEqual(request.signal, signal);
+        changes.push(request);
+        const snapshot = context.selectedSnapshots.find(({ repo }) => repo === "webapp")!;
+        return { ok: true, value: { ...fact("webapp", "trusted", impactOf([{ ...REACHED[0]!, name: "POST /web" }], { mergeBase: OTHER_SHA, seeds: [{ file: "src/app/webapp.api.ts", symbol: "call9", line: 9, basis: "lines" }] })), snapshot } };
+      },
+      callers: async (request) => {
+        assert.equal(s.fake.held.locks - s.fake.held.released, 2);
+        assert.strictEqual(request.signal, signal);
+        callers.push(request);
+        const snapshot = context.selectedSnapshots.find(({ repo }) => repo === request.repoId)!;
+        const model = request.repoId === "orders" ? [{ line: 7, declaration: 3, symbol: "orders.call7", entrypoints: [reachedRoute(ORDER_CONTROLLER, "POST", "/orders")] }] : [];
+        if (request.repoId === "payments") s.fake.tree.set("src/a.ts", "v2");
+        const answer = fact(request.repoId, "trusted", walkAnswer(model, request.targets));
+        return { ok: true, value: request.repoId === "payments" && answer.status === "complete"
+          ? { ...answer, snapshot, status: "partial", cuts: [{ kind: "caller-budget", at: ["payments.call8"], limit: 1 }] }
+          : { ...answer, snapshot } };
+      },
+      importers: async () => assert.fail("unexpected importers walk"),
+    };
+  };
+  const queries = createCapturedWorkspaceImpactQueries({ operation: s.operation, impactAt, digest: { of: (text) => text } });
+  const result = await queries.ofChange({ repo: { path: "/work/webapp", live: true }, repos: [{ path: "/work/orders", live: true }, { path: "/work/payments" }], base: "base", changed: ["src/**"], signal });
+  assert.ok(result.ok);
+  assert.equal(s.operations(), 1);
+  assert.deepEqual(changes.map(({ repo, head, live, base, changed }) => ({ repo, head, live, base, changed })), [{ repo: "/real/work/webapp", head: undefined, live: true, base: "base", changed: ["src/**"] }]);
+  assert.deepEqual(callers.map(({ repoId, repo, revision, live }) => ({ repoId, repo, revision, live })), [
+    { repoId: "orders", repo: "/real/work/orders", revision: undefined, live: true },
+    { repoId: "orders", repo: "/real/work/orders", revision: undefined, live: true },
+    { repoId: "payments", repo: "/work/payments", revision: SHA, live: undefined },
+  ]);
+  assert.equal(s.fake.held.locks, s.fake.held.released);
+  assert.ok(result.value.workspaceLive?.length);
+  assert.deepEqual(result.value.workspaceReplay?.snapshots, s.context()!.selectedSnapshots);
+  const value = valueOf(result);
+  assert.equal(value.trigger.mergeBase, OTHER_SHA);
+  assert.deepEqual(value.links.map(({ direction, link }) => `${direction}:${link.from.repo}`), ["downstream:orders", "upstream:orders", "downstream:webapp"]);
+  for (const repo of ["webapp", "orders", "payments"]) {
+    const snapshot = s.context()!.selectedSnapshots.find((item) => item.repo === repo);
+    const kinds = repo === "webapp" ? ["discovery", "trigger"] : repo === "orders" ? ["discovery", "upstream", "downstream"] : ["discovery", "downstream"];
+    assert.deepEqual(repoImpact(value, repo).reads.map(({ kind, fact }) => [kind, fact.snapshot]), kinds.map((kind) => [kind, snapshot]));
+  }
+  const payments = value.sections.payments;
+  assert.ok(payments?.status === "partial" && payments.cuts.some(({ kind }) => kind === "caller-budget"));
+});
+
+test("captured change pins a moving committed trigger and preserves its request", async () => {
+  const s = capturedChangeFixture();
+  const signal = new AbortController().signal;
+  const scope = { include: ["src/**"] };
+  const budget = { expansions: 7 };
+  let received: ImpactOfChangeRequest | undefined;
+  const queries = createCapturedWorkspaceImpactQueries({ operation: s.operation, digest: { of: (text) => text }, impactAt: (context) => ({
+    ofChange: async (request) => {
+      assert.equal(s.fake.held.locks - s.fake.held.released, 2);
+      received = request;
+      return { ok: true, value: { ...fact("webapp", "trusted", impactOf([], { mergeBase: OTHER_SHA })), snapshot: context.selectedSnapshots.find(({ repo }) => repo === "webapp")! } };
+    },
+    callers: async () => assert.fail("unexpected consumer walk"),
+    importers: async () => assert.fail("unexpected importers walk"),
+  }) });
+  const result = await queries.ofChange({ repo: { path: "/work/webapp", revision: "moving-branch" }, repos: [{ path: "/work/orders", live: true }, { path: "/work/payments", live: true }], base: "base-revision", changed: ["src/**"], scope, budget, signal });
+  assert.ok(result.ok);
+  assert.deepEqual(received, { repo: "/work/webapp", repoId: "webapp", head: SHA, base: "base-revision", changed: ["src/**"], scope, budget, signal });
+  assert.equal(valueOf(result).trigger.mergeBase, OTHER_SHA);
+  assert.equal(s.fake.held.locks, s.fake.held.released);
+});
+
+test("captured change propagates faults and cancellation after releasing every live lease", async () => {
+  for (const cancelled of [false, true]) {
+    const s = capturedChangeFixture();
+    const controller = new AbortController();
+    const fault = { kind: "unknown-change-path" as const, detail: "missing", globs: ["missing/**"] };
+    const queries = createCapturedWorkspaceImpactQueries({ operation: s.operation, digest: { of: (text) => text }, impactAt: (context) => ({
+      ofChange: async (request) => {
+        assert.strictEqual(request.signal, context.signal);
+        assert.equal(s.fake.held.locks - s.fake.held.released, 2);
+        if (cancelled) controller.abort();
+        return { ok: false, fault };
+      },
+      callers: async () => assert.fail("unexpected consumer walk"),
+      importers: async () => assert.fail("unexpected importers walk"),
+    }) });
+    const result = await queries.ofChange({ repo: { path: "/work/webapp", live: true }, repos: [{ path: "/work/orders", live: true }, { path: "/work/payments" }], base: "base", signal: controller.signal });
+    assert.equal(result.ok, false);
+    if (!result.ok) {
+      if (cancelled) assert.equal(result.fault.kind, "aborted");
+      else assert.strictEqual(result.fault, fault);
+    }
+    assert.equal(s.fake.held.locks, s.fake.held.released);
+  }
+});
+
+test("captured change rejects a missing live handle before any trigger walk", async () => {
+  const s = capturedChangeFixture();
+  const operation: WorkspaceReadOperation = { withRead: (request, use) => s.operation.withRead(request, (read, context) => use(read, { ...context, liveCaptures: new Map() })) };
+  const queries = createCapturedWorkspaceImpactQueries({ operation, digest: { of: (text) => text }, impactAt: () => ({
+    ofChange: async () => assert.fail("must not fall back to HEAD"),
+    callers: async () => assert.fail("unexpected consumer walk"),
+    importers: async () => assert.fail("unexpected importers walk"),
+  }) });
+  const result = await queries.ofChange({ repo: { path: "/work/webapp", live: true }, repos: [{ path: "/work/orders", live: true }, { path: "/work/payments" }], base: "base" });
+  assert.equal(result.ok, false);
+  if (!result.ok) assert.equal(result.fault.kind, "git-failed");
+  assert.equal(s.fake.held.locks, s.fake.held.released);
+});
+
 const askIn = (trigger: string, others: readonly string[]) => ({ repo: { path: `/work/${trigger}` }, repos: others.map((repo) => ({ path: `/work/${repo}` })), targets: ASK.targets });
 
 test("a chain of three repositories links hop by hop upstream, each link's reach naming the links crossed from the change", async () => {
@@ -507,7 +783,7 @@ test("a change sends links onward downstream, each link's reach naming the links
     reached: { orders: [{ line: 7, declaration: 3, symbol: "orders.call7", entrypoints: [reachedRoute(ORDER_CONTROLLER, "POST", "/orders")] }] },
   });
 
-  const value = valueOf(await queries.ofChange({ repo: { path: "/work/webapp" }, repos: [{ path: "/work/orders" }, { path: "/work/payments" }], base: "main", head: "HEAD" }));
+  const value = valueOf(await queries.ofChange({ repo: { path: "/work/webapp" }, repos: [{ path: "/work/orders" }, { path: "/work/payments" }], base: "main" }));
 
   const onward = value.links.find(({ link }) => link.from.repo === "webapp");
   const next = value.links.find(({ link }) => link.from.repo === "orders");
@@ -529,7 +805,7 @@ test("a downstream consumer's expansion cut remains on its repository section", 
     trigger: impactOf([], { seeds: [{ file: "src/app/webapp.api.ts", symbol: "call9", line: 9, basis: "lines" }] }),
     walkFact: (repo, answer) => repo === "orders" && answer.status === "complete" ? { ...answer, status: "partial", cuts: [{ kind: "caller-budget", at: ["orders.call7"], limit: 1 }] } : answer,
   });
-  const result = await queries.ofChange({ repo: { path: "/work/webapp" }, repos: [{ path: "/work/orders" }, { path: "/work/payments" }], base: "main", head: "HEAD" });
+  const result = await queries.ofChange({ repo: { path: "/work/webapp" }, repos: [{ path: "/work/orders" }, { path: "/work/payments" }], base: "main" });
   const section = valueOf(result).sections.orders;
   assert.equal(section?.status, "partial");
   assert.deepEqual(section?.status === "partial" && section.cuts, [{ kind: "caller-budget", at: ["orders.call7"], limit: 1 }]);
@@ -602,7 +878,7 @@ test("a removed route seeds its consumers, and the route they serve seeds the ne
     reached: { orders: [{ line: 7, declaration: 3, symbol: "orders.call7", entrypoints: [reachedRoute(ORDER_CONTROLLER, "DELETE", "/orders/{id}")] }] },
   });
 
-  const value = valueOf(await queries.ofChange({ repo: { path: "/work/payments" }, repos: [{ path: "/work/orders" }, { path: "/work/webapp" }], base: "main", head: "HEAD" }));
+  const value = valueOf(await queries.ofChange({ repo: { path: "/work/payments" }, repos: [{ path: "/work/orders" }, { path: "/work/webapp" }], base: "main" }));
 
   const [hop, onward] = value.links;
   assert.deepEqual(value.links.map(({ link }) => `${link.from.repo}:${link.from.line} -> ${link.to.repo} ${link.to.name}`), [
@@ -643,7 +919,7 @@ test("a link both directions reach enters the answer once, with the nearest reac
     reached: { webapp: [{ line: 7, declaration: 2, symbol: "webapp.call7", entrypoints: [reachedRoute(ORDER_PAGE, "GET", "/orders")] }] },
   });
 
-  const value = valueOf(await queries.ofChange({ repo: { path: "/work/orders" }, repos: [{ path: "/work/webapp" }], base: "main", head: "HEAD" }));
+  const value = valueOf(await queries.ofChange({ repo: { path: "/work/orders" }, repos: [{ path: "/work/webapp" }], base: "main" }));
 
   const [onward, back] = value.links;
   assert.deepEqual(value.links.map(({ link, direction }) => `${direction} ${link.from.repo}:${link.from.line} -> ${link.to.repo} ${link.to.name}`), [
@@ -748,7 +1024,7 @@ const REFRESH: WorkspaceRefresh = {
 
 test("a callers and a change answer carry the refresh the workspace read consumed beside the fact, and none when it refreshed nothing", async () => {
   const repositories: Setup["repositories"] = { orders: ORDERS, "shop-web": { callSites: [callSite("shop-web", "orders-api/orders")] } };
-  const change = { repo: ASK.repo, repos: ASK.repos, base: OTHER_SHA, head: SHA };
+  const change = { repo: { ...ASK.repo, revision: SHA }, repos: ASK.repos, base: OTHER_SHA };
 
   const plain = setup({ repositories });
   const refreshed = setup({ repositories, refresh: REFRESH });
@@ -789,7 +1065,7 @@ test("callers and change replay discovery pins and reject mismatch before any wa
   };
   const queries = createWorkspaceImpactQueries({ workspace, impact, digest: { of: (text) => `digest(${text})` } });
   const callers = ASK_WITHOUT_REPOS;
-  const change = { repo: callers.repo, base: SHA, head: "main" };
+  const change = { repo: { ...callers.repo, revision: "main" }, base: SHA };
   const first = await queries.callers(callers);
   const firstChange = await queries.ofChange(change);
   assert.ok(first.ok && firstChange.ok);
@@ -815,4 +1091,28 @@ test("callers and change replay discovery pins and reject mismatch before any wa
   const mismatch = await queries.callers({ ...callers, replay: { ...context, declaration: `ws-r1:${"e".repeat(64)}` } });
   assert.ok(!mismatch.ok && mismatch.fault.kind === "workspace-replay-mismatch");
   assert.equal(calls.length, count);
+});
+
+
+test("captured walks reject discovery head and state mismatches before walking", async () => {
+  for (const field of ["head", "stateId"] as const) {
+    const s = capturedChangeFixture();
+    const operation: WorkspaceReadOperation = { withRead: (request, use) => s.operation.withRead(request, (read, context) => {
+      const fact = read.fact;
+      assert.ok(fact.status !== "unknown");
+      const section = fact.value.sections.webapp!;
+      assert.ok(section.snapshot.kind === "live");
+      const snapshot = { ...section.snapshot, [field]: field === "head" ? OTHER_SHA : "another-capture" };
+      return use({ ...read, fact: { ...fact, value: { ...fact.value, sections: { ...fact.value.sections, webapp: { ...section, snapshot } } } } }, context);
+    }) };
+    const queries = createCapturedWorkspaceImpactQueries({ operation, digest: { of: (text) => text }, impactAt: () => ({
+      callers: async () => assert.fail("mismatched discovery must not walk"),
+      ofChange: async () => assert.fail("mismatched discovery must not walk"),
+      importers: async () => assert.fail("unexpected importers walk"),
+    }) });
+    const result = await queries.callers({ repo: { path: "/work/webapp", live: true }, repos: [{ path: "/work/orders", live: true }, { path: "/work/payments" }], targets: ASK.targets });
+    assert.equal(result.ok, false);
+    if (!result.ok) assert.equal(result.fault.kind, "git-failed");
+    assert.equal(s.fake.held.locks, s.fake.held.released);
+  }
 });

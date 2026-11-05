@@ -123,12 +123,22 @@ export async function serveQueries(deps: QueryServerDeps, streams: QueryServerSt
     inFlight.set(id, aborter);
     try {
       const result = await call(AbortSignal.any([aborter.signal, shutdown]));
-      if (result.ok) return succeed(id, redaction.redactValue(result.value));
+      if (result.ok) {
+        const value = result.value;
+        const safe = isRecord(value) && Array.isArray(value.workspaceLive)
+          ? { ...value, workspaceLive: value.workspaceLive.map((notice: unknown) => {
+              if (!isRecord(notice) || notice.kind !== "staleness-unavailable" || !isRecord(notice.cause) || typeof notice.cause.detail !== "string") return notice;
+              return { ...notice, cause: { ...notice.cause, detail: /[\\/]/.test(notice.cause.detail) ? "[path omitted]" : notice.cause.detail } };
+            }) }
+          : value;
+        return succeed(id, redaction.redactValue(safe));
+      }
       const { fault } = result;
       if (fault.kind === "aborted" && timedOut) return fail(id, "deadline", `the deadline of ${deadline} ms elapsed`);
-      if (isLiveFault(fault)) return fail(id, "internal-error", redaction.redact(fault.detail.trim()));
-      const data = fault.kind === "unknown-symbol" ? { entries: redaction.redactValue(fault.entries) } : fault.kind === "unknown-change-path" ? { globs: redaction.redactValue(fault.globs) } : {};
-      fail(id, fault.kind, redaction.redact(fault.detail.trim()), data);
+      if (isLiveFault(fault)) return fail(id, fault.kind, /[\\/]/.test(fault.detail) ? "[path omitted]" : redaction.redact(fault.detail.trim()));
+      const safeCaptureText = (text: string): string => /[\\/]/.test(text) ? "[path omitted]" : redaction.redact(text);
+      const data = fault.kind === "unknown-symbol" ? { entries: redaction.redactValue(fault.entries) } : fault.kind === "unknown-change-path" ? { globs: redaction.redactValue(fault.globs) } : fault.kind === "workspace-capture-unavailable" ? { repo: redaction.redact(fault.repo), cause: { kind: fault.cause.kind, detail: safeCaptureText(fault.cause.detail) } } : {};
+      fail(id, fault.kind, fault.kind === "workspace-capture-unavailable" ? safeCaptureText(fault.detail.trim()) : redaction.redact(fault.detail.trim()), data);
     } catch (error) {
       fail(id, "internal-error", firstLine(redaction.redactError(error)));
     } finally {

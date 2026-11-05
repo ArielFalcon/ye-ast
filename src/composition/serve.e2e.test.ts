@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { PassThrough } from "node:stream";
@@ -9,6 +10,7 @@ import { EXIT_CODE } from "../cli/main.ts";
 import { METHOD } from "../protocol/protocol.ts";
 import { connectQueryClient, QueryError } from "../protocol/query-client.ts";
 import { composeCli } from "./compose.ts";
+import { createTrustRecords } from "../core/adapters/fs/trust-record.adapter.ts";
 
 const GIT_ENV = {
   ...process.env,
@@ -91,4 +93,39 @@ test("`serve` takes no arguments: a usage error on stderr, the usage exit code a
   assert.equal(result.status, EXIT_CODE.usage);
   assert.equal(result.stdout, "");
   assert.notEqual(result.stderr, "");
+});
+
+
+test("default serve refuses live workspace reads even with a trusted user record", { timeout: 15000 }, async (context) => {
+  const config = join(workspace, "config");
+  const records = createTrustRecords(join(config, "ye-ast"));
+  assert.equal((await records.write(repo, "trusted")).ok, true);
+  assert.deepEqual(await records.read(repo), { ok: true, value: "trusted" });
+  const child = spawn(process.execPath, ["--import", TSX, MAIN, "serve"], { env: { ...serveEnv(), XDG_CONFIG_HOME: config, TMPDIR: join(workspace, "scratch") }, stdio: ["pipe", "pipe", "pipe"] });
+  const closed = new Promise<number | null>((resolve) => child.once("close", resolve));
+  const abort = () => { child.kill(); };
+  context.signal.addEventListener("abort", abort, { once: true });
+  if (context.signal.aborted) abort();
+  child.stderr.resume();
+  let exited = false;
+  void closed.then(() => { exited = true; });
+  try {
+    const client = await connectQueryClient({ input: child.stdout, output: child.stdin, trust: "untrusted" });
+    await assert.rejects(client.request(METHOD.declareTrust, { mode: "trusted" }), (error: unknown) => error instanceof QueryError && error.kind === "trust-unsupported");
+    await assert.rejects(client.request(METHOD.workspaceOutwardNames, { repo: { path: repo, id: "shop", live: true } }), (error: unknown) => error instanceof QueryError && error.kind === "live-requires-trusted");
+    child.stdin.end();
+    assert.equal(await closed, EXIT_CODE.ok);
+    assert.equal(existsSync(join(repo, ".ye-ast-graph")), false);
+    assert.deepEqual(await readdir(join(workspace, "cache")), []);
+    const scratch = join(workspace, "scratch");
+    const entries = await readdir(scratch);
+    assert.ok(entries.every((name) => /^tsx-\d+$/.test(name)));
+    const contents = await readdir(scratch, { recursive: true });
+    assert.ok(contents.every((name) => !name.endsWith(".lock")));
+  } finally {
+    context.signal.removeEventListener("abort", abort);
+    child.stdin.end();
+    if (!exited) child.kill();
+    await closed;
+  }
 });

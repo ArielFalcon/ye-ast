@@ -54,7 +54,7 @@ function prepare(options: RecoveryOptions) {
   const snap = fact.snapshot;
   if (canonicalJson(snap) !== canonicalJson(original.snapshot)) return { failure: unavailable("redacted-context") } as const;
   if (live ? snap.kind !== "live" || !isFullObjectId(snap.head) || !snap.stateId : snap.kind !== "sha" || !isFullObjectId(snap.sha)) return { failure: unavailable("unresolved-context") } as const;
-  if (workspace !== undefined && (!isWorkspaceReplayContext(replay) || snap.kind !== "sha" || !replay.snapshots.some((s) => s.repo === selected && s.kind === "sha" && s.sha === snap.sha))) return { failure: unavailable("unresolved-context") } as const;
+  if (workspace !== undefined && (!isWorkspaceReplayContext(replay) || !replay.snapshots.some((s) => s.repo === selected && canonicalJson(s) === canonicalJson(snap)))) return { failure: unavailable("unresolved-context") } as const;
   const declared = fact.inputs?.declaredScope;
   const config = fact.inputs?.declaredConfig;
   if (!declared || !Array.isArray(declared.include) || !Array.isArray(declared.exclude) || !config) return { failure: unavailable("unresolved-context") } as const;

@@ -4,6 +4,8 @@ import { repositoryCatalog, type RepositoryBinding } from "./repository-targetin
 import { responseModeSchema, type ResponseMode, type ResponseRenderer } from "./presentation.ts";
 import { entrypointRecovery, callersRecovery, impactRecovery, type Recovery } from "./recovery.ts";
 import type { Digest } from "../core/ports/digest.port.ts";
+import { compareText } from "../core/domain/shared/code-node.ts";
+import { isWorkspaceReplayContext } from "../core/domain/topology/workspace-replay.ts";
 import { FULL_OBJECT_ID_PATTERN, isFullObjectId } from "../core/domain/shared/revision.ts";
 import type { ImpactBudget } from "../core/domain/impact/impact-fact.ts";
 import { TRUST_MODES, WALK_BOUND_FIELDS, type WalkBoundsField } from "../core/domain/shared/fact.ts";
@@ -16,7 +18,7 @@ import type { CallersTarget, ImpactFault, ImpactQueries } from "../core/ports/im
 import type { OutlineQueries } from "../core/ports/outline-queries.port.ts";
 import type { Redaction } from "../core/ports/redaction.port.ts";
 import { DEFAULT_REVISION } from "../core/ports/vcs.port.ts";
-import type { WorkspaceRepositoryRequest } from "../core/ports/workspace-repos.port.ts";
+import type { WorkspaceFault, WorkspaceRepositoryRequest } from "../core/ports/workspace-repos.port.ts";
 import type { FactRead, WorkspaceQueries, WorkspaceRefresh, WorkspaceValue } from "../core/ports/workspace-queries.port.ts";
 import type { WorkspaceImpactQueries } from "../core/ports/workspace-impact-queries.port.ts";
 import type { DecisionQueries } from "../core/ports/decision-queries.port.ts";
@@ -24,6 +26,7 @@ import { renderDecisions, renderEntrypointMap, renderFault, renderImpact, render
 
 /** The key of the result's `_meta` that carries a stale notice. */
 export const LIVE_META = "ye-ast/live";
+export const WORKSPACE_LIVE_META = "ye-ast/workspace-live";
 /** The key of the result's `_meta` that carries the fault of an `isError` answer, beside the text that names its kind first. */
 export const FAULT_META = "ye-ast/fault";
 
@@ -77,9 +80,9 @@ Choose by question:
 
 Snapshots and repositories:
 - Declared repository IDs: ${available.join(", ")}. Set repo to select one; omission uses ${repository.repoId}. Availability grants neither trust nor workspace membership. IDs are exact and are not paths.
-- Local queries default to HEAD. Use revision, or head on impact, to select a committed snapshot. For trusted working-tree edits use live: true instead; it excludes revision/head, workspace and offline. Impact still requires base.
+- Local queries default to HEAD. Use revision, or head on impact, to select a committed snapshot. For trusted working-tree edits use live: true instead; it excludes revision/head; local-only live also excludes offline. Impact still requires base. Workspace operations may mix live and committed repositories and use offline with live.
 - Without workspace, callers and impact cover the selected repository only. workspace: {} enables the persisted workspace when available; workspace.repos supplies other local clones explicitly. workspace and decisions also accept repos directly. Untrusted repositories cannot supply their own workspace defaults. Repositories not included are not read, and missing clones are not downloaded.
-- Workspace queries use each repository's snapshot and trust declaration. A trusted repository's persisted remote may be refreshed into an engine-owned mirror; request arguments cannot authorize a new remote. offline: true prevents refresh and reads local clones. Inspect remote freshness, revision resolution and section/read limits before relying on a cross-repository result.
+- Workspace queries use each repository's snapshot choice and current trust declaration; their captures are not one atomic instant. Live repositories are never refreshed from their remotes. A trusted repository's persisted remote may be refreshed into an engine-owned mirror; request arguments cannot authorize a new remote. offline: true prevents refresh and reads local clones. Inspect remote freshness, revision resolution and section/read limits before relying on a cross-repository result.
 - Local evidence paths are relative to the selected root; workspace evidence is relative to its owning repository. Use repositoryRoots (printed as repository root lines) to locate declared clones, never the process working directory. For a foreign coordinate choose its declared owner with repo and its recorded snapshot; an undeclared owner requires an updated host registration or an instance bound there. For a SHA use revision and the recorded file or symbol; symbols can match multiple declarations. A live follow-up is a fresh read: compare head and stateId, and never treat the commit alone as the old working tree. Base-side modules use the recorded merge-base SHA. Evidence refers to the recorded snapshot; local files may have different content or line numbers.
 
 Coverage and detail:
@@ -87,7 +90,7 @@ Coverage and detail:
 - scope.include/exclude changes coverage, not just presentation; exclude wins. Interpretation files such as manifests remain available under include but can be excluded explicitly. TypeScript test files are not indexed. Component template binding uses are not resolved; inspect relevant tests or templates separately.
 - On impact, changed selects diff paths that seed the walk while callers elsewhere within scope remain eligible. For example, changed: ["src/api/**"] limits the change being investigated; scope would also limit where its consequences can be found. A changed glob matching no changed path is an error.
 - Select mode directly: "summary" (default) identifies findings and limitations; "details" adds recorded explanatory evidence and locations; "full" returns the complete redacted public fact in structuredContent and a brief contextual guide in text. Text modes return a strict receipt with mode, status, snapshot and reason only when unknown. Modes do not change coverage, snapshots or traversal. A client may expose both text and structured content to a model.
-- budget limits traversal work, not response length. depth counts incoming dependency levels, not hops between services. To reproduce an impact answer for more detail, reuse its recorded head SHA and base; a workspace also needs each repository pinned to its recorded revision. A live answer can change between calls.
+- budget limits traversal work, not response length. depth counts incoming dependency levels, not hops between services. To reproduce an impact answer for more detail, use its recovery recipe and recorded merge base. Workspace recipes preserve the declaration and snapshot vector; live replay captures again and compares head and stateId. A live answer can change between calls.
 - When useful, impact/callers text includes an investigation guide adapted to the recorded data: full JSON paths are relative to structuredContent, origin indexes join within one walk, and workspace links use IDs rather than display numbers. Follow its snapshot and coverage context when choosing the next query. Fault responses explain an applicable correction or the prerequisite to inspect before retrying.
 
 Reading evidence and faults:
@@ -102,14 +105,15 @@ ${cutGuidance}`;
 
 const repo = z.string().min(1).optional().describe("Declared repository ID; omission uses the launch repository.");
 const revision = z.string().min(1).optional().describe("Committed Git revision for the selected repository; HEAD when omitted. Match it to the source you inspect.");
+const workspaceRevision = z.string().regex(/\S/).optional().describe("Committed Git revision for the selected repository; HEAD when omitted.");
 const live = z
   .boolean()
   .optional()
-  .describe("Read staged, unstaged and untracked working-tree changes. Requires user-declared trusted mode. Omit revision/head, workspace and offline when true; impact still needs base.");
+  .describe("Read staged, unstaged and untracked working-tree changes. Requires user-declared trusted mode. Omit revision/head when true; local-only operations also exclude offline. Impact still needs base.");
 const offline = z
   .boolean()
   .optional()
-  .describe("Prevent remote refresh and read local clones for a workspace query, including workspace/decisions. Otherwise trusted repositories may refresh persisted remotes. Has no effect on local-only queries. Omit this field with live: true.");
+  .describe("Prevent remote refresh and read local clones for a workspace query, including workspace/decisions. Otherwise trusted repositories may refresh persisted remotes. Has no effect on local-only queries. Local-only live queries exclude this field; workspace operations may combine them.");
 
 /** Runtime validation and tool discovery share the same working-tree exclusions. */
 function liveSchema<S extends z.ZodRawShape>(shape: S, fields: readonly (keyof S & string)[]) {
@@ -139,15 +143,16 @@ const budget = z
   .optional()
   .describe("Optional walk bounds; these three bounds are unset by default. Set them to limit traversal work, not response bytes or tokens; a stopped branch reports a cut. mode changes presentation instead.");
 
-const workspaceRepo = z.strictObject({
-  path: z.string().min(1).describe("Root path of an existing local Git clone; this does not clone a repository or authorize remote refresh."),
+const workspaceRepo = liveSchema({
+  path: z.string().regex(/\S/).describe("Root path of an existing local Git clone; this does not clone a repository or authorize remote refresh."),
   id: z
     .string()
-    .min(1)
+    .regex(/\S/)
     .optional()
     .describe("Stable repository id, not a path; defaults to the root directory name. Supply the same id for a clone and its worktrees when they represent one repository."),
-  revision: z.string().min(1).optional().describe("Revision requested for this repository. Without one, local reads use HEAD; refreshed reads report the revision-resolution rule and pinned SHA."),
-});
+  revision: z.string().regex(/\S/).optional().describe("Revision requested for this repository. Without one, local reads use HEAD; refreshed reads report the revision-resolution rule and pinned SHA."),
+  live: z.literal(true).optional(),
+}, ["revision"]);
 
 const gateways = z
   .array(z.strictObject({ prefix: z.string().min(1).describe("The gateway prefix a call carries, such as a first path segment."), repo: z.string().min(1).describe("The repository id it routes to.") }))
@@ -171,7 +176,7 @@ const workspace = z
     gateways,
   })
   .optional()
-  .describe("Enable cross-repository traversal. Omit for a local answer; {} uses eligible persisted repositories/gateways, or only the selected repository when none exist. An explicit repos list selects other clones. Includes incoming call-site links; impact also follows outgoing links. Uses committed snapshots and excludes live: true.");
+  .describe("Enable cross-repository traversal. Omit for a local answer; {} uses eligible persisted repositories/gateways, or only the selected repository when none exist. An explicit repos list selects other clones. Includes incoming call-site links; impact also follows outgoing links. Each repository may select a committed revision or a trusted live capture. Captures do not represent one atomic instant.");
 
 const globs = z
   .array(z.string().refine(isValidGlob, "a glob is relative to the repository root, with / separators and no empty, . or .. segment"))
@@ -227,13 +232,13 @@ const target = z.union([
 const replaySchema = z.strictObject({
   version: z.literal(1),
   declaration: z.string().regex(/^ws-r1:[0-9a-f]{64}$/),
-  snapshots: z.array(z.strictObject({ repo: z.string(), kind: z.literal("sha"), sha: pinnedRevision })),
-});
+  snapshots: z.array(z.discriminatedUnion("kind", [z.strictObject({ repo: z.string().regex(/\S/), kind: z.literal("sha"), sha: pinnedRevision }), z.strictObject({ repo: z.string().regex(/\S/), kind: z.literal("live"), head: pinnedRevision, stateId: z.string().regex(/\S/) })])).meta({ uniqueItems: true }).describe("Echo the actual snapshot vector in repository ID order, with each ID appearing once."),
+}).refine(isWorkspaceReplayContext);
 const callersShape = { repo, revision, live, offline, targets: z.array(target).min(1), scope, budget, mode: responseModeSchema, workspace, replay: replaySchema.optional() };
 const replayRequiresWorkspace = { if: { required: ["replay"] }, then: { required: ["workspace"] } };
-const callersInput = liveSchema(callersShape, ["revision", "offline", "workspace", "replay"])
-  .refine((value) => value.replay === undefined || value.workspace !== undefined)
-  .meta({ allOf: [...["revision", "offline", "workspace", "replay"].map((field) => ({ not: { properties: { live: { const: true } }, required: ["live", field] } })), replayRequiresWorkspace] });
+const callersInput = liveSchema(callersShape, ["revision"])
+  .refine((value) => (value.replay === undefined || value.workspace !== undefined) && !(value.workspace !== undefined && (value.live === false || ("revision" in value && typeof value.revision === "string" && !/\S/.test(value.revision)) || ("head" in value && typeof value.head === "string" && !/\S/.test(value.head)))) && !(value.live === true && value.workspace === undefined && value.offline !== undefined))
+  .meta({ allOf: [...["revision"].map((field) => ({ not: { properties: { live: { const: true } }, required: ["live", field] } })), replayRequiresWorkspace, { if: { required: ["workspace"] }, then: { properties: { live: { const: true }, revision: { pattern: "\\S" }, head: { pattern: "\\S" } } } }, { if: { required: ["live", "offline"], properties: { live: { const: true } } }, then: { required: ["workspace"] } }] });
 const impactInput = liveSchema({
   repo,
   base: z.string().min(1).describe("Required comparison revision, usually the destination branch (for example main). The diff starts at its merge base with head; it is not necessarily a direct base-to-head diff."),
@@ -241,14 +246,15 @@ const impactInput = liveSchema({
   live, offline, scope,
   changed: globs.describe("Diff-path globs selecting which changes seed traversal; all changed paths when omitted. Callers outside changed remain eligible within scope. This does not restrict consequence coverage like scope does. A glob matching no changed path is an error."),
   budget, mode: responseModeSchema, workspace, replay: replaySchema.optional(),
-}, ["head", "offline", "workspace", "replay"])
-  .refine((value) => value.replay === undefined || value.workspace !== undefined)
-  .meta({ allOf: [...["head", "offline", "workspace", "replay"].map((field) => ({ not: { properties: { live: { const: true } }, required: ["live", field] } })), replayRequiresWorkspace] });
+}, ["head"])
+  .refine((value) => (value.replay === undefined || value.workspace !== undefined) && !(value.workspace !== undefined && (value.live === false || ("revision" in value && typeof value.revision === "string" && !/\S/.test(value.revision)) || ("head" in value && typeof value.head === "string" && !/\S/.test(value.head)))) && !(value.live === true && value.workspace === undefined && value.offline !== undefined))
+  .meta({ allOf: [...["head"].map((field) => ({ not: { properties: { live: { const: true } }, required: ["live", field] } })), replayRequiresWorkspace, { if: { required: ["workspace"] }, then: { properties: { live: { const: true }, revision: { pattern: "\\S" }, head: { pattern: "\\S" } } } }, { if: { required: ["live", "offline"], properties: { live: { const: true } } }, then: { required: ["workspace"] } }] });
 const impactRecipeCommon = { repo: z.string().min(1), base: pinnedRevision, scope: recipeScope.optional(), changed: z.array(recipeGlob).min(1).optional(), budget };
 const impactRecipe = z.union([
   z.strictObject({ ...impactRecipeCommon, head: pinnedRevision }),
   z.strictObject({ ...impactRecipeCommon, live: z.literal(true) }),
   z.strictObject({ ...impactRecipeCommon, head: pinnedRevision, workspace: workspace.unwrap(), replay: replaySchema, offline }),
+  z.strictObject({ ...impactRecipeCommon, live: z.literal(true), workspace: workspace.unwrap(), replay: replaySchema, offline }),
 ]);
 const impactRecoverySchema = z.discriminatedUnion("status", [
   z.strictObject({ version: z.literal(1), status: z.literal("available"), resultIdentity: z.string().regex(/^mcp-r1:[0-9a-f]{64}$/), query: z.strictObject({ name: z.literal("ye_ast_impact"), arguments: impactRecipe }) }),
@@ -259,6 +265,7 @@ const callersRecipe = z.union([
   z.strictObject({ ...callerRecipeCommon, revision: pinnedRevision }),
   z.strictObject({ ...callerRecipeCommon, live: z.literal(true) }),
   z.strictObject({ ...callerRecipeCommon, revision: pinnedRevision, workspace: workspace.unwrap(), replay: replaySchema, offline }),
+  z.strictObject({ ...callerRecipeCommon, live: z.literal(true), workspace: workspace.unwrap(), replay: replaySchema, offline }),
 ]);
 const callersRecoverySchema = z.discriminatedUnion("status", [
   z.strictObject({ version: z.literal(1), status: z.literal("available"), resultIdentity: z.string().regex(/^mcp-r1:[0-9a-f]{64}$/), query: z.strictObject({ name: z.literal("ye_ast_callers"), arguments: callersRecipe }) }),
@@ -282,7 +289,13 @@ const baseFact = {
   }),
   evidence: z.array(evidence),
 };
+const workspaceLiveSnapshot = z.strictObject({ repo: z.string(), kind: z.literal("live"), head: z.string(), stateId: z.string() });
+const workspaceLiveNotice = z.discriminatedUnion("kind", [
+  z.strictObject({ kind: z.literal("stale"), repo: z.string(), snapshot: workspaceLiveSnapshot, notice: z.strictObject({ stateId: z.string(), changed: z.array(z.string()) }) }),
+  z.strictObject({ kind: z.literal("staleness-unavailable"), repo: z.string(), snapshot: workspaceLiveSnapshot, cause: z.strictObject({ kind: z.enum(["live-requires-trusted", "unsupported-object-format", "live-mirror-failed", "unknown-revision", "git-failed", "not-repository-root", "unreadable", "object-missing", "no-merge-base", "export-write-failed", "aborted"]), detail: z.string() }) }),
+]);
 const sidecars = {
+  workspaceLive: z.array(workspaceLiveNotice).optional(),
   repositoryRoots: z.array(z.looseObject({ repo: z.string(), path: z.string() })).optional(),
   freshness: z.array(z.looseObject({
     repo: z.string(),
@@ -452,11 +465,11 @@ export const OUTLINE_OUTPUT = outputFor(shapes.outline);
 export const WORKSPACE_OUTPUT = outputFor(shapes.workspace);
 export const DECISIONS_OUTPUT = outputFor(shapes.decisions);
 
-function askedRepository(requested: { path: string; id?: string | undefined; revision?: string | undefined }): WorkspaceRepositoryRequest {
+function askedRepository(requested: { path: string; id?: string | undefined; revision?: string | undefined; live?: true | undefined }): WorkspaceRepositoryRequest {
   return {
     path: requested.path,
     ...(requested.id === undefined ? {} : { id: requested.id }),
-    ...(requested.revision === undefined ? {} : { revision: requested.revision }),
+    ...(requested.live ? { live: true as const } : requested.revision === undefined ? {} : { revision: requested.revision }),
   };
 }
 
@@ -522,6 +535,8 @@ export function createMcpServer(deps: McpDeps): McpServer {
         : redaction.redactValue(roots) as FactRead<V>["repositoryRoots"];
       const refresh = read.refresh === undefined ? undefined : (redaction.redactValue(read.refresh) as WorkspaceRefresh);
       const stale = moved === undefined ? undefined : (redaction.redactValue(moved) as LiveStaleNotice);
+      const workspaceLive = read.workspaceLive === undefined ? undefined : redaction.redactValue([...read.workspaceLive].sort((a, b) => compareText(a.repo, b.repo)).map((item) => item.kind === "staleness-unavailable" ? { ...item, cause: { ...item.cause, detail: /[\\/]/.test(item.cause.detail) ? "[path omitted]" : item.cause.detail } } : item)) as NonNullable<FactRead<V>["workspaceLive"]>;
+      const meta = { ...(stale === undefined ? {} : { [LIVE_META]: stale }), ...(workspaceLive === undefined ? {} : { [WORKSPACE_LIVE_META]: workspaceLive }) };
       if (mode === "full") {
         return {
           content: [{ type: "text", text: [
@@ -531,6 +546,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
             ...(repositoryRoots === undefined ? [] : ["Repository locations: match repositoryRoots[].repo to evidence ownership; repositoryRoots[].path locates the clone on disk, while evidence paths are relative to its repository at the recorded snapshot."]),
             ...(refresh === undefined ? [] : ["Remote context: inspect freshness and resolution for the repositories used; pinned revisions do not imply verified freshness."]),
             ...(stale === undefined ? [] : ["Live context: inspect live.stateId and live.changed before comparing this result with the current working tree."]),
+            ...(workspaceLive === undefined ? [] : ["Workspace live context: inspect workspaceLive for captured snapshots and stale or unavailable checks. Captures are not an atomic workspace instant."]),
           ].filter((part) => part !== "").join("\n") }],
           structuredContent: {
             ...fact,
@@ -539,12 +555,14 @@ export function createMcpServer(deps: McpDeps): McpServer {
             ...(repositoryRoots === undefined ? {} : { repositoryRoots }),
             ...(refresh === undefined ? {} : { freshness: refresh.freshness, resolution: refresh.resolution }),
             ...(stale === undefined ? {} : { live: stale }),
+            ...(workspaceLive === undefined ? {} : { workspaceLive }),
           },
-          ...(stale === undefined ? {} : { _meta: { [LIVE_META]: stale } }),
+          ...(Object.keys(meta).length ? { _meta: meta } : {}),
         };
       }
       const sidecar = [
         ...(stale === undefined ? [] : [renderStale(stale)]),
+        ...(workspaceLive === undefined ? [] : workspaceLive.map((item) => `workspace live: ${JSON.stringify(item)}`)),
         ...(refresh === undefined ? [] : renderRefresh(refresh)),
         ...(local ? [] : (repositoryRoots ?? []).map(({ repo, path }) => `repository root: ${repo} -> ${path}`)),
       ];
@@ -557,7 +575,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
           ...(recovery === undefined ? {} : { recovery }),
           ...(fact.status === "unknown" ? { reason: fact.reason } : {}),
         },
-        ...(stale === undefined ? {} : { _meta: { [LIVE_META]: stale } }),
+        ...(Object.keys(meta).length ? { _meta: meta } : {}),
       };
     } catch (error) {
       return failure({ kind: "internal-fault", detail: redaction.redactError(error) });
@@ -568,11 +586,16 @@ export function createMcpServer(deps: McpDeps): McpServer {
    * A fault is an `isError` result: the text names its kind on the first line, and `_meta` carries the same shape for a
    * client that branches on it, never `structuredContent`, which is the fact envelope this tool declares as its output.
    */
-  function failure(fault: { kind: string; detail: string; stage?: "workspace-replay" } | ImpactFault): CallToolResult {
+  function failure(fault: { kind: string; detail: string; stage?: "workspace-replay" } | ImpactFault | WorkspaceFault): CallToolResult {
+    // Capture diagnostics can contain host paths. Repository IDs remain opaque, even when they contain separators.
+    const safeCaptureText = (text: string): string => /[\\/]/.test(text) ? "[path omitted]" : text;
+    const publicFault = fault.kind === "workspace-capture-unavailable" && "cause" in fault
+      ? { ...fault, detail: safeCaptureText(fault.detail), cause: { ...fault.cause, detail: safeCaptureText(fault.cause.detail) } }
+      : fault;
     return {
       isError: true,
-      content: [{ type: "text", text: redaction.redact(renderFault(fault)) }],
-      _meta: { [FAULT_META]: redaction.redactValue(fault) },
+      content: [{ type: "text", text: redaction.redact(renderFault(publicFault)) }],
+      _meta: { [FAULT_META]: redaction.redactValue(publicFault) },
     };
   }
 
@@ -611,11 +634,10 @@ export function createMcpServer(deps: McpDeps): McpServer {
           selected, false,
           (_onStale, repository) =>
             deps.workspaceImpact.ofChange({
-              repo: { path: repository.path, id: repository.repoId },
+              repo: { path: repository.path, id: repository.repoId, ...(isLive ? { live: true as const } : { revision: head ?? DEFAULT_REVISION }) },
               ...crossing,
               ...(replay === undefined ? {} : { replay }),
               base,
-              head: head ?? DEFAULT_REVISION,
               ...(isOffline === undefined ? {} : { offline: isOffline }),
               ...(changed === undefined ? {} : { changed }),
               ...scopeOf(paths),
@@ -624,7 +646,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
             }),
           mode,
           renderWorkspaceImpact,
-          (fact, original, repository, actualReplay) => impactRecovery({ fact, original, selected: repository.repoId, requestedScope: scopeOf(paths).scope, requestedBudget: requested, live: false, workspace: others, offline: isOffline, replay: actualReplay, digest: deps.digest, redaction, validate: (args) => impactInput.safeParse(args).success && impactRecipe.safeParse(args).success, requestedChanged: changed }),
+          (fact, original, repository, actualReplay) => impactRecovery({ fact, original, selected: repository.repoId, requestedScope: scopeOf(paths).scope, requestedBudget: requested, live: isLive === true, workspace: others, offline: isOffline, replay: actualReplay, digest: deps.digest, redaction, validate: (args) => impactInput.safeParse(args).success && impactRecipe.safeParse(args).success, requestedChanged: changed }),
           true,
         );
       }
@@ -657,7 +679,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
           selected, false,
           (_onStale, repository) =>
             deps.workspaceImpact.callers({
-              repo: { path: repository.path, id: repository.repoId, revision: requested ?? DEFAULT_REVISION },
+              repo: { path: repository.path, id: repository.repoId, ...(isLive ? { live: true as const } : { revision: requested ?? DEFAULT_REVISION }) },
               ...crossing,
               ...(replay === undefined ? {} : { replay }),
               targets: targets as CallersTarget[],
@@ -668,7 +690,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
             }),
           mode,
           renderWorkspaceImpact,
-          (fact, original, repository, actualReplay) => callersRecovery({ fact, original, selected: repository.repoId, targets, requestedScope: scopeOf(paths).scope, requestedBudget: bounds, live: false, workspace: others, offline: isOffline, replay: actualReplay, digest: deps.digest, redaction, validate: (args) => callersInput.safeParse(args).success && callersRecipe.safeParse(args).success }),
+          (fact, original, repository, actualReplay) => callersRecovery({ fact, original, selected: repository.repoId, targets, requestedScope: scopeOf(paths).scope, requestedBudget: bounds, live: isLive === true, workspace: others, offline: isOffline, replay: actualReplay, digest: deps.digest, redaction, validate: (args) => callersInput.safeParse(args).success && callersRecipe.safeParse(args).success }),
           true,
         );
       }
@@ -732,24 +754,25 @@ export function createMcpServer(deps: McpDeps): McpServer {
     {
       title: "Repositories a workspace names",
       description: `Lists outward names stated by repositories, candidate repositories that serve them with matching basis and evidence, and names no included repository serves. Names include HTTP hosts/prefixes, configuration URLs, message destinations, dependency coordinates, remotes and registries. Use to discover which clones a cross-repository investigation needs; it does not download missing clones or establish an unresolved target by guesswork. Trusted repositories may refresh persisted remotes; offline prevents refresh. For traversal use workspace on ye_ast_callers or ye_ast_impact; for configuration gaps use ye_ast_decisions. ${COMPLETENESS}`,
-      inputSchema: z.strictObject({
+      inputSchema: liveSchema({
         repo,
-        revision,
+        revision: workspaceRevision,
+        live: z.literal(true).optional(),
         offline,
         scope,
         repos: workspaceRepos,
         gateways,
         mode: responseModeSchema,
-      }),
+      }, ["revision"]),
       outputSchema: WORKSPACE_OUTPUT,
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    ({ repo: selected, revision: requested, offline: isOffline, scope: paths, repos, gateways: requestedGateways, mode }, ctx) =>
+    ({ repo: selected, revision: requested, live: isLive, offline: isOffline, scope: paths, repos, gateways: requestedGateways, mode }, ctx) =>
       answer(
         selected, false,
         async (_onStale, repository) => {
           const read = await deps.workspace.outwardNames({
-            repo: { path: repository.path, id: repository.repoId, ...(requested === undefined ? {} : { revision: requested }) },
+            repo: { path: repository.path, id: repository.repoId, ...(isLive ? { live: true as const } : requested === undefined ? {} : { revision: requested }) },
             ...(repos === undefined ? {} : { repos: repos.map(askedRepository) }),
             ...(requestedGateways === undefined ? {} : { gateways: requestedGateways }),
             ...(isOffline === undefined ? {} : { offline: isOffline }),
@@ -768,16 +791,16 @@ export function createMcpServer(deps: McpDeps): McpServer {
     {
       title: "Gaps a workspace leaves to the user",
       description: `Lists workspace configuration gaps requiring user input, evidence-backed options and rule-based recommendations; some gaps allow only a user-supplied value. Use to prepare workspace/trust configuration or a form before ye-ast init --workspace. Gaps concern repository membership, identity, gateways, trust or remote resolution; recommendations are configuration suggestions, not judgments of code or proposed changes. Reads repositories using the workspace rules and writes no configuration. ${COMPLETENESS}`,
-      inputSchema: z.strictObject({ repo, revision, offline, scope, repos: workspaceRepos, gateways, mode: responseModeSchema }),
+      inputSchema: liveSchema({ repo, revision: workspaceRevision, live: z.literal(true).optional(), offline, scope, repos: workspaceRepos, gateways, mode: responseModeSchema }, ["revision"]),
       outputSchema: DECISIONS_OUTPUT,
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    ({ repo: selected, revision: requested, offline: isOffline, scope: paths, repos, gateways: requestedGateways, mode }, ctx) =>
+    ({ repo: selected, revision: requested, live: isLive, offline: isOffline, scope: paths, repos, gateways: requestedGateways, mode }, ctx) =>
       answer(
         selected, false,
         (_onStale, repository) =>
           deps.decisions.decisions({
-            repo: { path: repository.path, id: repository.repoId, ...(requested === undefined ? {} : { revision: requested }) },
+            repo: { path: repository.path, id: repository.repoId, ...(isLive ? { live: true as const } : requested === undefined ? {} : { revision: requested }) },
             ...(repos === undefined ? {} : { repos: repos.map(askedRepository) }),
             ...(requestedGateways === undefined ? {} : { gateways: requestedGateways }),
             ...(isOffline === undefined ? {} : { offline: isOffline }),
