@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { assertNoSecretLeak, sanitizeText } from "./pattern-redaction.adapter.ts";
+import { assertNoSecretLeak, containsSecrets, sanitizeText } from "./pattern-redaction.adapter.ts";
 
 test("redacts secrets (api key, token)", () => {
   const { text: out } = sanitizeText("const apiKey = sk-abc123XYZ\ntoken: ghs_supersecretvalue");
@@ -210,10 +210,10 @@ test("does NOT redact long Java identifiers or paths with >30-char segments (bot
   assert.doesNotMatch(out, /\[REDACTED\]/);
 });
 
-test("versioned code filenames remain navigable in deep paths", () => {
+test("explicitly versioned code filenames remain navigable in deep paths", () => {
   for (const path of [
     "src/main/java/org/acme/orders/rest/controller/v12/OrdersRestControllerV12.java",
-    "src/main/java/org/acme/orders/rest/controller/v2/OrderHistoryRestController2.java",
+    "src/main/java/org/acme/orders/rest/controller/v2/OrderHistoryRestControllerV2.java",
   ]) {
     const input = JSON.stringify({ file: path, declaredConfig: { files: [path] } });
     const result = sanitizeText(input);
@@ -230,6 +230,14 @@ test("a source extension and numeric suffix do not disguise an encoded secret pa
   assert.equal(result.detection.redacted, true);
   assert.doesNotMatch(result.text, /AbCdEfGhIjKlMnOp/);
   assert.doesNotThrow(() => assertNoSecretLeak(result.text, "issue", "encoded-path"));
+});
+
+test("an undelimited numeric suffix does not exempt an encoded path segment", () => {
+  const input = "src/main/java/OrderHistoryRestControllerVersionTwoAccount42123.java";
+  assert.equal(sanitizeText(input).detection.redacted, true);
+  assert.equal(sanitizeText(input).text.includes("OrderHistoryRestControllerVersionTwoAccount42123"), false);
+  assert.equal(containsSecrets(input), true);
+  assert.throws(() => assertNoSecretLeak(input, "issue", "encoded-path"));
 });
 
 test("does NOT redact an absolute path: the empty leading segment is part of the path", () => {

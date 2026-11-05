@@ -86,7 +86,7 @@ function isVersionedSourceFilename(segment: string): boolean {
   const dot = segment.lastIndexOf(".");
   if (dot === -1 || !/^[a-z]+$/.test(segment.slice(dot + 1))) return false;
   const stem = segment.slice(0, dot);
-  const unversioned = stem.replace(/(?:[Vv])?\d+$/, "");
+  const unversioned = stem.replace(/[Vv](?:ersion)?\d+$/, "");
   return unversioned !== stem && isIdentifierShape(unversioned);
 }
 
