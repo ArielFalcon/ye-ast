@@ -1,5 +1,6 @@
 import { validRecoveryControls } from "./evidence-schema.ts";
 import type { EvidenceSelection } from "./select-evidence.ts";
+import type { Recovery } from "./recovery.ts";
 
 /** Families decide category membership and what each mode can recover. */
 export function categoryRecovery(input: { details?: string; full?: string }): string {
@@ -7,6 +8,12 @@ export function categoryRecovery(input: { details?: string; full?: string }): st
     ...(input.details === undefined ? [] : [`mode "details" ${input.details}`]),
     ...(input.full === undefined ? [] : [`mode: "full" ${input.full}`]),
   ].join("; ");
+}
+
+export function recoveryReference(recovery: Recovery): string {
+  return recovery.status === "available"
+    ? "Recovery recipe and resultIdentity: structuredContent.recovery."
+    : `Recovery unavailable (${recovery.reason}); see structuredContent.recovery.`;
 }
 
 /** A literal public selector; never abbreviate or infer its owner or coordinates. */

@@ -94,7 +94,7 @@ For explicit membership, the returned recipe preserves the original membership a
 
 ## Identity and complete replay recipe
 
-Every eligible participating response adds a `recovery` sibling to structured content, outside its Fact/receipt. The text contains the identity and the complete compact JSON recipe when recovery is advertised, so access does not rely on `_meta` or an undisclosed saved request. Do not add an instruction to perform another call or a catalog of unrelated tools.
+Every eligible participating response adds a `recovery` sibling to structured content, outside its Fact/receipt. This is the single delivery of the identity and complete compact JSON recipe. Text points to `structuredContent.recovery` instead of serializing the metadata again; unavailable recovery states its reason concisely. Clients must expose structured content to use the recipe, in every mode. Access does not rely on `_meta` or an undisclosed saved request. Do not add an instruction to perform another call or a catalog of unrelated tools.
 
 ```ts
 type Recovery =

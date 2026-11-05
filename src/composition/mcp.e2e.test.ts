@@ -214,9 +214,9 @@ test("declared foreign repository reads its own snapshot without implicit worksp
     assert.equal(result.isError, undefined);
     assert.equal(validate(result.structuredContent).valid, true);
     assert.deepEqual(result.structuredContent["recovery"], recovery);
-    const textRecovery = result.content[0]!.text.split("\n").find((line) => line.startsWith("recovery: "));
-    assert.equal(textRecovery, `recovery: ${JSON.stringify(recovery)}`);
-    assert.deepEqual(JSON.parse(textRecovery!.slice("recovery: ".length)), recovery);
+    assert.match(result.content[0]!.text, /structuredContent\.recovery/);
+    assert.equal(result.content[0]!.text.includes(JSON.stringify(recovery)), false);
+    assert.equal(result.content[0]!.text.includes(JSON.stringify(recovery.query)), false);
   }
   const replay = async () => (await request("tools/call", { name: recovery.query.name, arguments: { ...recovery.query.arguments, mode: "full" } })).result as { structuredContent: Record<string, unknown> };
   const sourceFact = (result: Record<string, unknown>) => {
@@ -298,7 +298,9 @@ test("callers and impact replay real local and persisted workspace facts", async
         const result = await call(name, { ...input, mode });
         assert.equal(validate(result.structuredContent).valid, true);
         assert.deepEqual(result.structuredContent.recovery, recovery);
-        assert.ok(result.content[0]!.text.split("\n").includes(`recovery: ${JSON.stringify(recovery)}`));
+        assert.match(result.content[0]!.text, /structuredContent\.recovery/);
+        assert.equal(result.content[0]!.text.includes(JSON.stringify(recovery)), false);
+        assert.equal(result.content[0]!.text.includes(JSON.stringify(recovery.query)), false);
       }
       const replayed = await call(name, { ...recovery.query.arguments, mode: "full" });
       assert.deepEqual(replayed.structuredContent.recovery, recovery);

@@ -16,8 +16,9 @@ test("renders the supplied page without slicing it again and preserves provenanc
   assert.match(text, /"anchor":"anchor"/);
   assert.match(text, /"status":"partial"/);
   assert.match(text, /"limit":3/);
-  assert.match(text, /"resultIdentity":"identity"/);
-  assert.match(text, /"revision":"sha"/);
+  assert.match(text, /structuredContent\.recovery/);
+  assert.doesNotMatch(text, /"resultIdentity":/);
+  assert.doesNotMatch(text, /"revision":"sha"/);
 });
 
 test("renders unavailable evidence without inventing an empty page", () => {
@@ -26,6 +27,7 @@ test("renders unavailable evidence without inventing an empty page", () => {
   assert.match(text, /"source":"actual"/);
   assert.match(text, /unresolved/);
   assert.doesNotMatch(text, /Page:/);
+  assert.match(text, /Recovery unavailable \(deadline\)/);
 });
 
 test("preserves a complete UI finding with unknown component and the selected evidence index", () => {
@@ -44,7 +46,8 @@ test("a verified empty base-module page retains its owner, snapshot, and zero to
   assert.match(text, /"sha":"base-sha"/);
   assert.match(text, /"total":0/);
   assert.match(text, /Records: \[\]/);
-  assert.match(text, /"changed":\["src\/\*\*"\]/);
+  assert.match(text, /structuredContent\.recovery/);
+  assert.doesNotMatch(text, /"changed":/);
 });
 
 test("full selection guides the complete structured page without serializing its records twice", () => {
@@ -55,7 +58,8 @@ test("full selection guides the complete structured page without serializing its
   assert.match(text, /structuredContent.*context.*items.*page/);
   assert.match(text, /"limit":3/);
   assert.match(text, /"nextCursor":"next"/);
-  assert.match(text, /"resultIdentity":"identity"/);
+  assert.match(text, /structuredContent\.recovery/);
+  assert.doesNotMatch(text, /"resultIdentity":/);
   assert.doesNotMatch(text, /unique-place/);
 });
 

@@ -303,6 +303,8 @@ zero-item page is not an unknown or unavailable source, which carries its actual
 not change analysis scope or traversal budgets. The public redaction boundary also applies to evidence and recipes;
 internal source sidecars are not exposed.
 
+Recovery metadata is delivered once at `structuredContent.recovery` in every mode, including selected pages. Text points to that field instead of copying the recipe or result identity; unavailable recovery states its reason. Clients must expose structured content to use recovery.
+
 MCP text responses share status, scope, snapshot and recovery conventions across tools. Selected evidence keeps
 each read's owner and uncertainty, with explicit snapshot/scope/configuration overrides. When importer paths are
 counted, one recovery instruction covers the target-file category; each target retains its own counts.

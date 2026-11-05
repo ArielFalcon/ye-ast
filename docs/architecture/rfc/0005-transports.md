@@ -222,8 +222,10 @@ local or workspace impact/callers, importers, outline, workspace, and decisions.
 union. Internal workspace repository reads and `repositorySources` are excluded from public output. Faults are
 `isError` responses with redacted typed metadata under `_meta["ye-ast/fault"]`, not success receipts.
 
-`ye_ast_entrypoints`, `ye_ast_callers`, and `ye_ast_impact` add `recovery` to successful structured responses and a
-compact `recovery: <JSON>` line to text in all modes. Available metadata contains a versioned opaque result identity
+`ye_ast_entrypoints`, `ye_ast_callers`, and `ye_ast_impact` deliver recovery metadata once, in
+`structuredContent.recovery`, for ordinary and selected responses in all modes. Text points to that field rather than
+copying its JSON; unavailable recovery states its reason. Clients must expose structured content to read the recipe.
+Available metadata contains a versioned opaque result identity
 and a normal query recipe. Entrypoints and callers pin the actual revision; impact pins the recorded merge base and
 head. Live recipes request fresh live content and do not preserve historical working-tree content.
 

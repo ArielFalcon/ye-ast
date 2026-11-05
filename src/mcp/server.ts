@@ -2,6 +2,7 @@ import { recoveryControlShapeFor, validRecoveryControls, recoveryControlConstrai
 import { selectEvidence, type EvidenceSelection, type EvidenceSource, type EvidenceSelectionResult } from "./select-evidence.ts";
 import { decodeCursor, validateCursorRequest, validateCursorPosition, assertSourceIdentity, encodeCursor, selectionDigest, type CursorV1 } from "./evidence-cursor.ts";
 import { renderEvidenceSelection, type EvidencePage } from "./render-evidence.ts";
+import { recoveryReference } from "./presentation-guidance.ts";
 import { McpServer, type CallToolResult } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { repositoryCatalog, type RepositoryBinding } from "./repository-targeting.ts";
@@ -561,7 +562,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
         const verified = assertSourceIdentity(recovery, expected);
         if (!verified.ok) return selectionFailure(verified.fault);
       }
-      const recoveryText = recovery === undefined ? [] : [`recovery: ${JSON.stringify(recovery)}`];
+      const recoveryText = recovery === undefined ? [] : [recoveryReference(recovery)];
       const roots = local ? [{ repo: repository.repoId, path: repository.path }] : read.repositoryRoots;
       const repositoryRoots = roots === undefined
         ? undefined

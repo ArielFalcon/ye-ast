@@ -394,7 +394,8 @@ test("entrypoint recovery uses recorded normalized scope in a replayable recipe"
     const response = await session.callTool("ye_ast_entrypoints", { scope: { include: ["web/**", "src/**"], exclude: ["src/test/**"] }, mode: "details" });
     const recovery = (response.structuredContent as { recovery: { query: { name: string; arguments: unknown } } }).recovery;
     assert.deepEqual(recovery.query.arguments, { repo: "shop", revision: "a".repeat(40), scope: { include: ["src/**", "web/**"], exclude: ["src/test/**"] } });
-    assert.ok(textOf(response).includes(JSON.stringify(recovery)));
+    assert.equal(textOf(response).includes(JSON.stringify(recovery)), false);
+    assert.match(textOf(response), /structuredContent\.recovery/);
     const replay = await session.callTool(recovery.query.name, recovery.query.arguments);
     assert.deepEqual((replay.structuredContent as { recovery: unknown }).recovery, recovery);
     assert.deepEqual(calls.map[1]?.scope, { include: ["src/**", "web/**"], exclude: ["src/test/**"] });
@@ -1676,7 +1677,7 @@ test("entrypoints closes with the cut list of the map and of its section", async
   const lines = text.split("\n");
   assert.equal(lines[0], "status: partial (cuts: 1 section: entrypoints)");
   assert.match(text, / {2}status: partial \(cuts: 1 no-extractor\)/);
-  assert.match(text, /\ncuts:\n {2}no-extractor \(1\): src\/scripts\/build\.js\n {2}section \(1\): entrypoints\n(?: {2}lookup example: [^\n]+\n)+recovery: [^\n]+\nrepository root: shop -> \/work\/shop$/);
+  assert.match(text, /\ncuts:\n {2}no-extractor \(1\): src\/scripts\/build\.js\n {2}section \(1\): entrypoints\n(?: {2}lookup example: [^\n]+\n)+Recovery recipe and resultIdentity: structuredContent\.recovery\.\nrepository root: shop -> \/work\/shop$/);
   await session.close();
 });
 
@@ -3804,6 +3805,37 @@ test("selected evidence is redacted before page rendering in every public mode",
       assert.equal(payload.recovery.status, "available");
       if (mode === "full") assert.deepEqual(payload.items, [{ evidenceIndex: 0, evidence: { path: `src/${REDACTED}.ts`, line: 7 } }]);
       else assert.ok(textOf(result).includes(`src/${REDACTED}.ts`));
+    }
+  } finally { await session.close(); }
+});
+
+test("recovery recipes stay structured once across ordinary and selected response modes", async () => {
+  const targets = [{ file: "src/OrderService.java", symbol: "OrderService.find" }];
+  const fact = impactFact({ status: "partial", cuts: [{ kind: "depth", at: ["src/OrderService.java::OrderService.find", "src/OrderController.java:17"], limit: 2 }], inputs: { ...base().inputs, declaredConfig: { targets: ["src/OrderService.java:OrderService.find"] } } });
+  const { session } = await setup({ callers: async () => ({ ok: true, value: fact }), ofChange: async () => ({ ok: true, value: fact }) });
+  const cases = [
+    { name: "ye_ast_entrypoints", args: {}, select: { kind: "entrypoint-evidence", findingIndex: 0 } },
+    { name: "ye_ast_callers", args: { targets }, select: { kind: "cut-places", owner: { kind: "fact" }, cutIndex: 0 } },
+    { name: "ye_ast_impact", args: { base: "main" }, select: { kind: "cut-places", owner: { kind: "fact" }, cutIndex: 0 } },
+  ];
+  try {
+    for (const { name, args, select } of cases) {
+      let original: unknown;
+      for (const mode of ["summary", "details", "full"]) {
+        for (const controls of [{}, { select, page: { limit: 1 } }]) {
+          const result = await session.callTool(name, { ...args, mode, ...controls });
+          assert.notEqual(result.isError, true);
+          const recovery = (result.structuredContent as { recovery: { status: string; query: { name: string; arguments: unknown } } }).recovery;
+          assert.equal(recovery.status, "available");
+          assert.equal(recovery.query.name, name);
+          original ??= recovery;
+          assert.deepEqual(recovery, original);
+          const text = textOf(result);
+          assert.equal(text.includes(JSON.stringify(recovery)), false, `${name} ${mode}: duplicate recovery`);
+          assert.equal(text.includes(JSON.stringify(recovery.query)), false, `${name} ${mode}: duplicate recipe`);
+          assert.equal((text.match(/structuredContent\.recovery/g) ?? []).length, 1, `${name} ${mode}: recovery location`);
+        }
+      }
     }
   } finally { await session.close(); }
 });

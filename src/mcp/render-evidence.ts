@@ -1,4 +1,5 @@
 import { renderSourceContext } from "./presentation-context.ts";
+import { recoveryReference } from "./presentation-guidance.ts";
 import type { EvidenceSelection, EvidenceSelectionResult } from "./select-evidence.ts";
 import type { Recovery } from "./recovery.ts";
 import type { ResponseMode } from "./presentation.ts";
@@ -24,7 +25,7 @@ export function renderEvidenceSelection(input: {
     ];
     if (records.availability === "unavailable") lines.push(`Reason: ${records.reason}`, "Inspect structuredContent.evidence for the unavailable result's evidence.");
     if (page) lines.push(`Page: ${JSON.stringify(page)}`);
-    lines.push(`Recovery: ${JSON.stringify(recovery)}`);
+    lines.push(recoveryReference(recovery));
     return lines.join("\n");
   }
   const lines = [
@@ -39,6 +40,6 @@ export function renderEvidenceSelection(input: {
     if (page) lines.push(`Page: ${JSON.stringify(page)}`);
     lines.push(`Records: ${JSON.stringify(records.items)}`);
   }
-  lines.push(`Recovery: ${JSON.stringify(recovery)}`);
+  lines.push(recoveryReference(recovery));
   return lines.join("\n");
 }
