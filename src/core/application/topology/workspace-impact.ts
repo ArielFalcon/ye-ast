@@ -142,7 +142,7 @@ function workspaceImpactQueries(deps: WorkspaceImpactDeps, captured?: CapturedWa
         external: part.external.sort(compareSite),
         unresolved: base.status === "unknown" ? [] : base.value.unresolved,
       };
-      sections[repository.repo] = sectionOf(base, value, part.ambiguous, deps.digest);
+      sections[repository.repo] = sectionOf(base, value, part.ambiguous, repository.repo === trigger ? unservedOperationCuts(impact?.changedContracts ?? []) : [], deps.digest);
     }
 
     const triggerBase = sections[trigger] ?? fact;
@@ -397,6 +397,11 @@ function reachedHandlers(impact: ImpactValue): Set<string> {
   ]);
 }
 
+/** An altered or removed operation no route serves cannot name the consumers that call it, so the trigger's section stops there. */
+function unservedOperationCuts(contracts: readonly ChangedContract[]): Cut[] {
+  return contracts.flatMap(({ change, handlers, document, line }): Cut[] => (change === "added" || handlers !== undefined ? [] : [{ kind: "unresolved-link", at: [document, `${document}:${line}`] }]));
+}
+
 /** A link that lands in a handler of the trigger serving an operation the change altered or removed calls that operation. */
 function withOperations(links: readonly ImpactedLink[], trigger: string, contracts: readonly ChangedContract[]): ImpactedLink[] {
   return links.map((impacted) => {
@@ -450,11 +455,12 @@ function baseOf(fact: FactBase): FactBase {
  * One repository's section: its own fact base, so its snapshot and trust travel with it; the call sites its snapshot
  * could not decide stay cuts, and so do the call sites two repositories matched equally.
  */
-function sectionOf(section: Fact<{ unresolved: readonly unknown[] }>, value: RepoImpact, ambiguous: readonly CallSite[], digest: Digest): Fact<RepoImpact> {
+function sectionOf(section: Fact<{ unresolved: readonly unknown[] }>, value: RepoImpact, ambiguous: readonly CallSite[], unserved: readonly Cut[], digest: Digest): Fact<RepoImpact> {
   if (section.status === "unknown") return section;
   const cuts: Cut[] = [
     ...value.reads.flatMap(({ kind, fact }, index): readonly Cut[] => fact.status === "partial" ? fact.cuts : fact.status === "unknown" ? [{ kind: "section", at: [kind, String(index)] }] : []),
     ...ambiguous.map((site): Cut => ({ kind: "unresolved-link", at: [site.file, `${site.file}:${site.line}`] })),
+    ...unserved,
   ];
   const triggerWalk = value.reads.find(({ kind }) => kind === "trigger")?.fact;
   const base = compositeBase({ ...baseOf(section), evidence: section.evidence }, value.reads, {}, (text) => digest.of(text), triggerWalk?.inputs.declaredConfig ?? section.inputs.declaredConfig);

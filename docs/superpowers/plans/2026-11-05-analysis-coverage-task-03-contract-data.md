@@ -156,7 +156,9 @@ Status 2026-11-05: implemented on owner authorization (stage 1 measured, stage 2
 - `ChangedContract.handlers` (altered and removed operations only): the handlers of the routes whose evidence holds the
   operation's place, at head for an altered one and at the merge base for a removed one. This is the place the Spring
   contract join already records, so `basePath`/`servers` follow the existing route identity and no new matching rule is
-  added. An operation no route of its snapshot joins names no caller; an added operation seeds nothing.
+  added. An operation no route of its snapshot joins names no caller and
+  cuts the trigger's section at its place (`unresolved-link`), so the answer is never complete without its consumers;
+  an added operation seeds nothing.
 - `workspace-impact` adds those handlers to the trigger's reached handlers, so the existing upstream join names the
   consumer call sites. A link landing in such a handler carries `operations` ("calls the operation", never "reads the
   field"); confidence, basis and ambiguity are the link matcher's. MCP text appends `; calls the operation <change>

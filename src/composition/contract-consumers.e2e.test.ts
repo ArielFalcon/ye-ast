@@ -235,3 +235,16 @@ test("a changed handler body still names its consumer through the changed route,
   assert.deepEqual(callers(answer.links).map(({ from, to, direction }) => ({ from, to, direction })), [{ from: "web:src/app/order.api.ts:OrderApi.load", to: "orders GET /orders OrdersController.getOrders", direction: "upstream" }]);
   assert.equal(answer.links[0]?.operations, undefined);
 });
+
+test("an altered operation no route of the provider serves leaves its section partial instead of naming no consumer", async () => {
+  const unserved = CONTROLLER().replace(/  @Override public String getOrders.*\n/, "");
+  commit("orders", { "src/main/java/shop/Main.java": BOOT, "src/main/java/shop/OrdersController.java": unserved, [DOCUMENT]: CONTRACT() }, "base");
+  commit("orders", { [DOCUMENT]: CONTRACT({ total: "string" }) });
+  commit("web", WEB, "base");
+
+  const answer = await changeOfOrders();
+
+  assert.deepEqual(answer.links, []);
+  assert.equal(answer.status, "partial");
+  assert.deepEqual(answer.sections.orders?.cuts, [{ kind: "unresolved-link", at: [DOCUMENT, `${DOCUMENT}:6`] }]);
+});
