@@ -382,7 +382,7 @@ test("a trusted sibling whose remote is passed is read at the remote's sha, and 
   assert.equal(read.repositorySources?.find(({ repo: id }) => id === "orders")?.path, join(cacheDirectory, "remotes", digest.of(url)));
 
   const { version, entrypoints, impact, outline, workspace: workspaceQueries, workspaceImpact, decisions, redaction } = composeQueries({ scratchRoot, trustDirectory, refresh });
-  const session = await openSession(createMcpServer({ version, entrypoints, impact, outline, workspace: workspaceQueries, workspaceImpact, decisions, redaction, repository: { path: repo, repoId: "shop-service" } }));
+  const session = await openSession(createMcpServer({ version, entrypoints, impact, outline, workspace: workspaceQueries, workspaceImpact, decisions, digest: createSha256Digest(), redaction, repository: { path: repo, repoId: "shop-service" } }));
   try {
     const answer = await session.callTool("ye_ast_callers", { targets: [{ file: "src/OrderController.java", symbol: "OrderController.one" }], workspace: {}, mode: "full" });
     const structured = answer.structuredContent as Record<string, unknown>;
@@ -490,4 +490,57 @@ test("composed canonical repository root forwards cancellation", async () => {
   const result = await composeQueries().canonicalRepositoryRoot(repo, controller.signal);
 
   assert.equal(!result.ok && result.fault.kind, "aborted");
+});
+
+test("workspace impact replays persisted moving members from their original content", async () => {
+  const member = join(workspace, "shop-web");
+  const trustDirectory = join(workspace, "trust-replay");
+  mkdirSync(join(member, "src"), { recursive: true });
+  const memberGit = (...args: string[]) => execFileSync("git", args, { cwd: member, env: GIT_ENV, encoding: "utf8" }).trim();
+  memberGit("init", "-q", "-b", "main");
+  writeFileSync(join(member, "src", "order.page.ts"), ORDER_PAGE);
+  memberGit("add", "-A");
+  memberGit("commit", "-q", "-m", "old client");
+  const old = memberGit("rev-parse", "HEAD");
+  const base = git("rev-parse", "HEAD");
+  const manifest = join(workspace, "replay-workspace.json");
+  writeFileSync(manifest, JSON.stringify({ repos: [{ path: "../shop-web", id: "web", revision: "main" }], gateways: [{ prefix: "shop-api", repo: "shop-service" }] }));
+  const quiet = { out: () => undefined, err: () => undefined };
+  assert.equal(await composeCli({ scratchRoot, trustDirectory })(["init", "--trust", "trusted", "--workspace", manifest, repo], quiet), EXIT_CODE.ok);
+  const { workspaceImpact } = composeQueries({ scratchRoot, trustDirectory });
+  const callers = { repo: { path: repo, id: "shop-service" }, targets: [{ file: "src/OrderController.java", symbol: "OrderController.one" }] };
+  const change = { repo: callers.repo, base, head: base };
+  const first = await workspaceImpact.callers(callers);
+  const firstChange = await workspaceImpact.ofChange(change);
+  assert.ok(first.ok && first.value.workspaceReplay && first.value.fact.status !== "unknown");
+  assert.ok(firstChange.ok && firstChange.value.workspaceReplay);
+  assert.equal(first.value.fact.value.workspace.source, "persisted");
+  const firstSection = first.value.fact.value.sections.web;
+  assert.ok(firstSection && firstSection.status !== "unknown");
+  assert.equal(firstSection.snapshot.kind === "sha" && firstSection.snapshot.sha, old);
+  assert.ok(firstSection.value.callSites.some((site) => site.file === "src/order.page.ts"));
+  const upstream = firstSection.value.reads.find(({ kind }) => kind === "upstream");
+  assert.deepEqual(upstream?.fact.snapshot, { repo: "web", kind: "sha", sha: old });
+  assert.ok(first.value.repositoryRoots?.some((entry) => entry.repo === "web" && entry.path === member));
+  writeFileSync(join(member, "src", "order.page.ts"), ORDER_PAGE.replace("shop-api/orders/7", "other-api/changed"));
+  memberGit("add", "-A");
+  memberGit("commit", "-q", "-m", "new client");
+  const current = await workspaceImpact.callers(callers);
+  assert.ok(current.ok);
+  assert.notDeepEqual(current.value.fact, first.value.fact);
+  assert.notEqual(current.value.fact.status, "unknown");
+  if (current.value.fact.status === "unknown") throw new Error("missing current fact");
+  const currentSection = current.value.fact.value.sections.web;
+  assert.ok(currentSection && currentSection.status !== "unknown");
+  assert.notDeepEqual(currentSection.value.callSites, firstSection.value.callSites);
+  const replayed = await workspaceImpact.callers({ ...callers, replay: first.value.workspaceReplay });
+  const replayedChange = await workspaceImpact.ofChange({ ...change, replay: firstChange.value.workspaceReplay });
+  assert.ok(replayed.ok && replayedChange.ok);
+  assert.deepEqual(replayed.value.fact, first.value.fact);
+  assert.deepEqual(replayedChange.value.fact, firstChange.value.fact);
+  assert.deepEqual(replayed.value.workspaceReplay, first.value.workspaceReplay);
+  assert.deepEqual(replayed.value.repositoryRoots, first.value.repositoryRoots);
+  writeFileSync(join(repo, ".ye-ast", "workspace.json"), JSON.stringify({ repos: [{ path: "../shop-web", id: "web", revision: "main" }], gateways: [{ prefix: "changed", repo: "shop-service" }] }));
+  const mismatch = await workspaceImpact.callers({ ...callers, replay: first.value.workspaceReplay });
+  assert.ok(!mismatch.ok && mismatch.fault.kind === "workspace-replay-mismatch");
 });

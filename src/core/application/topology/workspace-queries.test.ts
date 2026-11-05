@@ -69,10 +69,13 @@ function setup(
   refresh?: RefreshSetup,
   scoped = false,
   resolveHead?: () => string,
+  testDigest?: Digest,
+  reads?: { resolved: { repo: string; revision: string }[]; exports: string[] },
 ) {
   let exported: string | undefined;
   const vcs: Vcs = {
     resolveCommit: async (repo, revision): Promise<Result<string, VcsFault>> => {
+      reads?.resolved.push({ repo, revision });
       const held = repositories[repo];
       if (held === undefined) return { ok: false, fault: { kind: "not-repository-root", detail: repo } };
       if (/^[0-9a-f]{40}$/.test(revision) && held.holds !== undefined && !held.holds.includes(revision)) return { ok: false, fault: { kind: "unknown-revision", detail: revision } };
@@ -83,6 +86,7 @@ function setup(
     canonicalRoot: async (repo) => ({ ok: true, value: repo }),
     repositoryName: async () => ({ ok: true, value: "library" }),
     exportCommit: async (repo, _sha, _destination, plan) => {
+      reads?.exports.push(repo);
       exported = repo;
       const files: ExportedFile[] = Object.keys(repositories[repo]?.files ?? {}).map((path) => ({ path, blob: path, written: plan.write(path) }));
       return { ok: true, value: { files, skipped: repositories[repo]?.skipped ?? [], ...(repositories[repo]?.stopped === undefined ? {} : { stopped: repositories[repo].stopped }) } };
@@ -91,7 +95,7 @@ function setup(
   const scratch: ScratchDirectory = { create: async () => "/scratch", remove: async () => undefined };
   const reader: SourceReader = { read: async (_root, paths) => paths.map((path) => ({ path, content: repositories[exported ?? ""]?.files[path] ?? "" })) };
   const extractor: EntrypointExtractor = { extract: async () => [] };
-  const digest: Digest = { of: (text) => `digest(${text})` };
+  const digest: Digest = testDigest ?? { of: (text) => `digest(${text})` };
   const deps: WorkspaceQueriesDeps = {
     vcs,
     scratch,
@@ -112,6 +116,162 @@ function setup(
   };
   return createWorkspaceQueries(deps);
 }
+
+const deterministicDigest: Digest = { of: (text) => {
+  let hash = 0n;
+  for (const character of text) hash = (hash * 131n + BigInt(character.codePointAt(0)!)) % (1n << 256n);
+  return hash.toString(16).padStart(64, "0");
+} };
+
+test("persisted workspace replay pins moving branches without changing the fact", async () => {
+  const repos: Repositories = { "/work/app": { files: { "app.ts": "app" }, sha: "a".repeat(40) }, "/work/lib": { files: { "lib.ts": "lib" }, sha: "b".repeat(40) } };
+  const queries = setup(repos, undefined, TRUSTED, persisted({ repos: [{ path: "/work/lib", revision: "release" }] }), undefined, false, undefined, deterministicDigest);
+  const request = { repo: { path: "/work/app", revision: "main" } };
+  const first = readOf(await queries.outwardNames(request));
+  assert.ok(first.workspaceReplay);
+  repos["/work/app"]!.sha = "c".repeat(40);
+  repos["/work/lib"]!.sha = "d".repeat(40);
+  const replayRequest = { ...request, replay: first.workspaceReplay };
+  const replay = readOf(await queries.outwardNames(replayRequest));
+  assert.deepEqual(replay.fact, first.fact);
+  assert.equal(valueOf({ ok: true, value: replay }).workspace.source, "persisted");
+  assert.deepEqual(replay.workspaceReplay, first.workspaceReplay);
+});
+
+test("replay rejects malformed contexts and changed declarations before source reads", async () => {
+  const member = { path: "/work/lib", id: "lib", revision: "release", remote: "https://example.test/a" };
+  let manifest: WorkspaceManifest = { repos: [member], gateways: [{ prefix: "api", repo: "lib" }] };
+  let available = true;
+  let mode: "trusted" | "untrusted" = "trusted";
+  const defaults: WorkspaceDefaults = { of: async () => available ? { ok: true, value: manifest } : { ok: false, fault: { kind: "unreadable", detail: "unavailable" } }, resolve: (_root, resolved) => resolved };
+  const reads = { resolved: [] as { repo: string; revision: string }[], exports: [] as string[] };
+  const asked: RemoteRefreshRequest[] = [];
+  const queries = setup({ "/work/app": { files: {} }, "/work/lib": { files: {} } }, undefined, { read: async () => ({ ok: true, value: mode }) }, defaults, { answers: [], asked }, false, undefined, deterministicDigest, reads);
+  const request = { repo: { path: "/work/app", id: "app" }, offline: true };
+  const context = readOf(await queries.outwardNames(request)).workspaceReplay!;
+  const mismatch = async (replay: unknown, extra: object = {}) => {
+    reads.resolved.length = 0; reads.exports.length = 0; asked.length = 0;
+    const result = await queries.outwardNames({ ...request, ...extra, replay: replay as typeof context });
+    assert.ok(!result.ok && result.fault.kind === "workspace-replay-mismatch");
+    assert.deepEqual(reads.resolved, []); assert.deepEqual(reads.exports, []); assert.deepEqual(asked, []);
+  };
+  const [a, b] = context.snapshots;
+  for (const bad of [null, { ...context, version: 2 }, { ...context, declaration: "ws-r1:bad" }, { ...context, snapshots: [a, a] }, { ...context, snapshots: [b, a] }, { ...context, snapshots: [a] }, { ...context, snapshots: [a, { ...b, repo: "extra" }] }, { ...context, snapshots: [a, { ...b, sha: "HEAD" }] }, { ...context, snapshots: [a, { repo: "lib", kind: "live", head: SHA, stateId: "state" }] }, { ...context, snapshots: [a, { ...b, extra: true }] }]) await mismatch(bad);
+  manifest = { ...manifest, repos: [{ ...member, revision: "other" }] }; await mismatch(context);
+  manifest = { ...manifest, repos: [{ ...member, id: "other" }] }; await mismatch(context);
+  manifest = { ...manifest, repos: [member], gateways: [{ prefix: "other", repo: "lib" }] }; await mismatch(context);
+  manifest = { ...manifest, repos: [{ ...member, remote: "https://example.test/b" }], gateways: [{ prefix: "api", repo: "lib" }] }; await mismatch(context);
+  manifest = { repos: [member], gateways: [{ prefix: "api", repo: "lib" }] }; await mismatch(context, { repos: [member] });
+  mode = "untrusted"; await mismatch(context); mode = "trusted";
+  available = false; await mismatch(context); await mismatch(context, { repos: [member] });
+});
+
+test("replay reads old remote pins from the authorized mirror and preserves unavailable sections", async () => {
+  const oldSha = "b".repeat(40), newSha = "c".repeat(40);
+  const repositories: Repositories = { [TRIGGER]: { files: {} }, [SIBLING]: { files: {}, sha: "d".repeat(40) }, [MIRROR]: { files: {}, holds: [oldSha, newSha] } };
+  const answers: RefreshedRemote[] = [refreshed(REMOTE, { branches: [{ name: "main", sha: oldSha }], defaultBranch: "main" }, { status: "verified" }, MIRROR)];
+  const asked: RemoteRefreshRequest[] = [];
+  const reads = { resolved: [] as { repo: string; revision: string }[], exports: [] as string[] };
+  const queries = setup(repositories, undefined, trusted([TRIGGER, SIBLING]), persisted({ repos: [{ path: SIBLING, remote: REMOTE }] }), { answers, asked }, false, undefined, deterministicDigest, reads);
+  const request = { repo: { path: TRIGGER } };
+  const first = readOf(await queries.outwardNames(request));
+  assert.ok(first.workspaceReplay);
+  answers[0] = refreshed(REMOTE, { branches: [{ name: "main", sha: newSha }], defaultBranch: "main" }, { status: "verified" }, MIRROR);
+  reads.resolved.length = 0;
+  const replay = readOf(await queries.outwardNames({ ...request, replay: first.workspaceReplay }));
+  assert.deepEqual(replay.fact, first.fact);
+  assert.deepEqual(replay.refresh?.resolution, [{ repo: "orders-svc", asked: oldSha, step: "explicit", consulted: [{ branch: "main", sha: newSha }], sha: oldSha }]);
+  assert.deepEqual(replay.refresh?.freshness, [{ repo: "orders-svc", url: REMOTE, freshness: { status: "verified" } }]);
+  assert.ok(reads.resolved.some(({ repo, revision }) => repo === MIRROR && revision === oldSha));
+  assert.equal(reads.resolved.some(({ repo }) => repo === SIBLING), false);
+  repositories[MIRROR]!.holds = [newSha]; reads.resolved.length = 0;
+  const unavailable = readOf(await queries.outwardNames({ ...request, replay: first.workspaceReplay }));
+  const section = valueOf({ ok: true, value: unavailable }).sections["orders-svc"];
+  assert.ok(section?.status === "unknown" && section.reason === "revision-unavailable");
+  assert.deepEqual(unavailable.workspaceReplay, first.workspaceReplay);
+  assert.deepEqual(unavailable.refresh?.resolution, replay.refresh?.resolution);
+  assert.equal(reads.resolved.some(({ repo }) => repo === SIBLING), false);
+  answers[0] = refreshed(REMOTE, { branches: [{ name: "main", sha: newSha }], defaultBranch: "main" }, { status: "verified" });
+  reads.resolved.length = 0;
+  const absent = readOf(await queries.outwardNames({ ...request, replay: first.workspaceReplay }));
+  assert.deepEqual(absent.workspaceReplay, first.workspaceReplay);
+  assert.deepEqual(absent.refresh?.resolution, replay.refresh?.resolution);
+  assert.equal(valueOf({ ok: true, value: absent }).sections["orders-svc"]?.status, "unknown");
+  assert.equal(reads.resolved.some(({ repo }) => repo === SIBLING), false);
+});
+
+test("offline replay reads pins from clones and handles prototype-like repository ids", async () => {
+  const reads = { resolved: [] as { repo: string; revision: string }[], exports: [] as string[] };
+  const asked: RemoteRefreshRequest[] = [];
+  const queries = setup({ "/work/app": { files: {} }, "/work/lib": { files: {}, sha: "b".repeat(40) } }, undefined, TRUSTED, persisted({ repos: [{ path: "/work/lib", id: "__proto__", remote: "https://example.test/a" }] }), { answers: [], asked }, false, undefined, deterministicDigest, reads);
+  const request = { repo: { path: "/work/app", id: "constructor" }, offline: true };
+  const first = readOf(await queries.outwardNames(request));
+  assert.ok(first.workspaceReplay);
+  assert.ok(Object.hasOwn(valueOf({ ok: true, value: first }).sections, "__proto__"));
+  reads.resolved.length = 0;
+  const replay = readOf(await queries.outwardNames({ ...request, replay: first.workspaceReplay }));
+  assert.deepEqual(replay.fact, first.fact);
+  assert.ok(reads.resolved.some(({ repo, revision }) => repo === "/work/lib" && revision === "b".repeat(40)));
+  assert.deepEqual(asked, []);
+});
+
+test("workspace emits deterministic replay context with actual sorted snapshots", async () => {
+  const queries = setup({ "/work/app": { files: {}, sha: "a".repeat(40) }, "/work/lib": { files: {}, sha: "b".repeat(40) } }, undefined, undefined, undefined, undefined, false, undefined, deterministicDigest);
+  const request = { repo: { path: "/work/app", id: "z" }, repos: [{ path: "/work/lib", id: "a" }] };
+  const first = readOf(await queries.outwardNames(request));
+  const context = first.workspaceReplay;
+  assert.ok(context);
+  assert.equal(context.version, 1);
+  assert.match(context.declaration, /^ws-r1:[0-9a-f]{64}$/);
+  assert.deepEqual(context.snapshots, [{ repo: "a", kind: "sha", sha: "b".repeat(40) }, { repo: "z", kind: "sha", sha: "a".repeat(40) }]);
+  assert.deepEqual(readOf(await queries.outwardNames(request)).workspaceReplay, context);
+});
+
+test("workspace replay declaration tracks effective source, revisions, gateways and authorized remotes", async () => {
+  const repos = { "/work/app": { files: {} }, "/work/lib": { files: {} }, "/else/app": { files: {} }, "/else/lib": { files: {} } };
+  const member = { path: "/work/lib", id: "lib" };
+  const base = { repo: { path: "/work/app", id: "app" }, repos: [member] };
+  const queries = setup(repos, undefined, TRUSTED, persisted({ repos: [member] }), undefined, false, undefined, deterministicDigest);
+  const declaration = async (request: Parameters<typeof queries.outwardNames>[0]) => {
+    const context = readOf(await queries.outwardNames(request)).workspaceReplay;
+    assert.ok(context);
+    return context.declaration;
+  };
+  const original = await declaration(base);
+  assert.equal(await declaration({ repo: { path: "/else/app", id: "app", revision: "other" }, repos: [{ path: "/else/lib", id: "lib", revision: "HEAD" }] }), original);
+  assert.notEqual(await declaration({ ...base, repos: [{ ...member, revision: "release" }] }), original);
+  assert.notEqual(await declaration({ ...base, gateways: [{ prefix: "api", repo: "lib" }] }), original);
+  assert.notEqual(await declaration({ repo: base.repo }), original);
+  assert.notEqual(await declaration({ ...base, repos: [{ ...member, id: "different" }] }), original);
+
+  const remote = async (url: string) => {
+    const q = setup(repos, undefined, TRUSTED, persisted({ repos: [{ ...member, remote: url }] }), { answers: [] }, false, undefined, deterministicDigest);
+    return readOf(await q.outwardNames({ repo: base.repo, offline: true })).workspaceReplay?.declaration;
+  };
+  assert.notEqual(await remote("https://example.test/a"), await remote("https://example.test/b"));
+});
+
+test("workspace replay context includes the known snapshot of an unavailable remote", async () => {
+  const queries = setup(
+    { [TRIGGER]: { files: {} }, [SIBLING]: { files: {}, sha: LOCAL_SHA }, [MIRROR]: mirrorWith([], []) },
+    undefined, trusted([TRIGGER, SIBLING]), persisted({ repos: [{ path: SIBLING, remote: REMOTE }] }),
+    { answers: [refreshed(REMOTE, { branches: [{ name: "main", sha: REMOTE_SHA }], defaultBranch: "main" }, { status: "verified" }, MIRROR)] },
+    false, undefined, deterministicDigest,
+  );
+  const read = readOf(await queries.outwardNames({ repo: { path: TRIGGER } }));
+  assert.deepEqual(read.workspaceReplay?.snapshots, [{ repo: "orders-svc", kind: "sha", sha: REMOTE_SHA }, { repo: "shop-web", kind: "sha", sha: SHA }]);
+  assert.match(read.workspaceReplay?.declaration ?? "", /^ws-r1:[0-9a-f]{64}$/);
+  assert.equal(read.fact.status, "partial");
+});
+
+test("an unavailable persisted authority does not break an explicit offline read", async () => {
+  const defaults: WorkspaceDefaults = { of: async () => ({ ok: false, fault: { kind: "unreadable", detail: "unavailable" } }), resolve: (_root, resolved) => resolved };
+  const queries = setup({ "/work/app": { files: {} }, "/work/lib": { files: {} } }, undefined, TRUSTED, defaults, undefined, false, undefined, deterministicDigest);
+  const result = await queries.outwardNames({ repo: { path: "/work/app" }, repos: [{ path: "/work/lib" }], offline: true });
+  assert.ok(result.ok);
+  assert.equal(result.value.fact.status, "complete");
+  assert.equal(result.value.workspaceReplay, undefined);
+});
 
 test("workspace scope selects source findings while keeping extractor configuration unless excluded", async () => {
   let parsed: readonly string[] = [];
@@ -683,7 +843,7 @@ test("an offline request refreshes no remote and reads every repository from its
   assert.equal("refresh" in read, false);
   assert.equal(shaOf(value.repositorySnapshots.find(({ repo }) => repo === "orders-svc")?.snapshot), LOCAL_SHA);
   assert.equal(read.repositorySources?.find(({ repo }) => repo === "orders-svc")?.path, SIBLING);
-  assert.equal(JSON.stringify(read), JSON.stringify(readOf(await setup(repositories, undefined, trusted([TRIGGER, SIBLING])).outwardNames({ ...request, offline: true }))));
+  assert.deepEqual(read.fact, readOf(await setup(repositories, undefined, trusted([TRIGGER, SIBLING])).outwardNames({ ...request, offline: true })).fact);
 });
 
 test("a failed refresh with a recorded listing still pins from it and answers the recorded freshness", async () => {

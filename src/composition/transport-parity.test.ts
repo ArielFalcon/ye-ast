@@ -1,4 +1,5 @@
 import { test } from "node:test";
+import { createSha256Digest } from "../core/adapters/crypto/sha256-digest.adapter.ts";
 import assert from "node:assert/strict";
 import { Readable } from "node:stream";
 import { run } from "../cli/main.ts";
@@ -97,6 +98,7 @@ async function throughProtocol(budget: unknown, budgets: (ImpactBudget | undefin
 /** The MCP tool answers a result or an error, and never closes the session over a bad argument. */
 async function throughMcp(budget: unknown, budgets: (ImpactBudget | undefined)[]): Promise<boolean> {
   const session = await openSession(createMcpServer({
+    digest: createSha256Digest(),
     version: "0.0.0",
     entrypoints,
     impact: { ofChange: async (request: { budget?: ImpactBudget }) => (budgets.push(request.budget), { ok: true, value: FACT } as never) } as unknown as ImpactQueries,

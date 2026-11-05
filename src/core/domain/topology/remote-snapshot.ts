@@ -25,7 +25,7 @@ export type ResolutionStep = "explicit" | "trigger-line" | "default-branch" | "r
 /** How one repository's revision was chosen; a record of the query, never part of a fact. */
 export interface RepositoryResolution {
   repo: string;
-  /** What the declaration asked for, when it asked for a revision. */
+  /** The effective explicit revision request, including a replay's asserted SHA. */
   asked?: string;
   step: ResolutionStep;
   /** The listing entries consulted, in order, each with its sha or its absence. */

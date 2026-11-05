@@ -2,7 +2,7 @@ import type { Fact, SnapshotRef } from "../domain/shared/fact.ts";
 import type { Result } from "../domain/shared/result.ts";
 import type { NameCandidate, RepositoryOutwardName } from "../domain/topology/outward-name.ts";
 import type { RemoteFreshness, RepositoryResolution } from "../domain/topology/remote-snapshot.ts";
-import type { WorkspaceFault, WorkspaceReposRequest, WorkspaceRepositoryRequest, WorkspaceRepository, WorkspaceSection, WorkspaceSource } from "./workspace-repos.port.ts";
+import type { WorkspaceFault, WorkspaceReplayContext, WorkspaceReposRequest, WorkspaceRepositoryRequest, WorkspaceRepository, WorkspaceSection, WorkspaceSource } from "./workspace-repos.port.ts";
 
 export interface WorkspaceValue {
   workspace: {
@@ -39,6 +39,7 @@ export interface WorkspaceRefresh {
 /** An answer that carries, beside its fact, what the read refreshed to decide it. */
 export interface FactRead<T> {
   fact: Fact<T>;
+  workspaceReplay?: WorkspaceReplayContext;
   /** Original declared clone roots, carried outside deterministic facts. */
   repositoryRoots?: readonly { repo: string; path: string }[];
   /** Internal read locations, which can be mirrors; excluded from deterministic facts. */

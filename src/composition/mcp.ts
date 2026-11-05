@@ -3,6 +3,7 @@ import { serveStdio, StdioServerTransport } from "@modelcontextprotocol/server/s
 import { EXIT_CODE } from "../cli/main.ts";
 import { repositoryCatalog, type RepositoryBinding } from "../mcp/repository-targeting.ts";
 import { createMcpServer } from "../mcp/server.ts";
+import { createSha256Digest } from "../core/adapters/crypto/sha256-digest.adapter.ts";
 import type { ProcessHost } from "./process-host.ts";
 
 const USAGE = "usage: ye-ast mcp [<launch-root>] [--repo <id> <root>]...";
@@ -65,7 +66,7 @@ export async function runMcp(args: readonly string[], host: ProcessHost): Promis
       done();
     };
   });
-  const handle = serveStdio(() => createMcpServer({ ...queries, repository, repositories: bindings }), {
+  const handle = serveStdio(() => createMcpServer({ ...queries, digest: createSha256Digest(), repository, repositories: bindings }), {
     transport: wire,
     onerror: (error) => host.err(`ye-ast: ${queries.redaction.redactError(error)}`),
   });

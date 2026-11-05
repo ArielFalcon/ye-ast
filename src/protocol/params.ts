@@ -1,3 +1,4 @@
+import { isWorkspaceReplayContext } from "../core/domain/topology/workspace-replay.ts";
 import { isValidGlob, type ScopeRequest } from "../core/domain/shared/scope.ts";
 import { isPositiveCount } from "../core/domain/shared/count.ts";
 import type { ImpactBudget } from "../core/domain/impact/impact-fact.ts";
@@ -163,8 +164,14 @@ export function readOutline(params: unknown): Omit<Extract<OutlineRequest, { liv
 }
 
 export function readWorkspace(params: unknown): Omit<WorkspaceRequest, "signal"> {
-  const p = only(params, ["repo", "repos", "gateways", "scope", "offline"]);
+  return workspaceFields(only(params, ["repo", "repos", "gateways", "scope", "offline", "replay"]));
+}
+
+function workspaceFields(p: Params): Omit<WorkspaceRequest, "signal"> {
+  const replay = p.replay;
+  if (replay !== undefined && !isWorkspaceReplayContext(replay)) throw new InvalidParamsError("invalid workspace replay");
   return {
+    ...(replay === undefined ? {} : { replay }),
     repo: repositoryOf(p.repo),
     ...(p.repos === undefined ? {} : { repos: list(p, "repos", repositoryOf) }),
     ...(p.gateways === undefined ? {} : { gateways: list(p, "gateways", gatewayOf) }),
@@ -174,7 +181,7 @@ export function readWorkspace(params: unknown): Omit<WorkspaceRequest, "signal">
 }
 
 export function readDecisions(params: unknown): Omit<DecisionsRequest, "signal"> {
-  return readWorkspace(params);
+  return workspaceFields(only(params, ["repo", "repos", "gateways", "scope", "offline"]));
 }
 
 export function readTrustMode(params: unknown): TrustMode {

@@ -282,6 +282,27 @@ test("a workspace request names each repository as an object and takes no field 
   assert.deepEqual(calls, []);
 });
 
+test("invalid workspace replay contexts and replay on decisions never reach a query", async () => {
+  const { deps, calls } = fakes();
+  const session = await untrusted(deps);
+  const snapshot = { kind: "sha", repo: "a", sha: "b".repeat(40) };
+  const replay = { version: 1, declaration: `ws-r1:${"a".repeat(64)}`, snapshots: [snapshot] };
+  const invalid = [null, [], { ...replay, extra: true }, { ...replay, version: 2 },
+    { ...replay, declaration: "bad" }, { ...replay, snapshots: [{ ...snapshot, extra: true }] },
+    { ...replay, snapshots: [{ ...snapshot, sha: "bad" }] },
+    { ...replay, snapshots: [snapshot, snapshot] },
+    { ...replay, snapshots: [{ ...snapshot, repo: "z" }, snapshot] }];
+  try {
+    for (const [id, value] of invalid.entries()) {
+      session.send(request(id + 1, METHOD.workspaceOutwardNames, { repo: { path: "/work/a" }, replay: value }));
+      assert.equal((await session.receive()).error?.code, ERROR_CODE["invalid-params"]);
+    }
+    session.send(request(100, METHOD.decisionsDecisions, { repo: { path: "/work/a" }, replay }));
+    assert.equal((await session.receive()).error?.code, ERROR_CODE["invalid-params"]);
+    assert.deepEqual(calls, []);
+  } finally { session.end(); await session.done; }
+});
+
 test("a line that is not JSON, a message that is not a request, an unknown method and wrong params each answer their code", async () => {
   const { deps, calls } = fakes();
   const session = await untrusted(deps);
@@ -353,6 +374,24 @@ test("an unknown change path answers its code and names every glob, redacted", a
 
   assert.equal(answer.error?.code, ERROR_CODE["unknown-change-path"]);
   assert.deepEqual(answer.error?.data.globs, [`src/${REDACTED}/**`]);
+});
+
+test("workspace replay mismatch has its own redacted protocol fault", async () => {
+  const { deps } = fakes();
+  deps.workspace = { outwardNames: async () => ({ ok: false, fault: { kind: "workspace-replay-mismatch", detail: `changed ${SECRET}` } }) };
+  const session = await untrusted(deps);
+  try {
+    session.send(request(1, METHOD.workspaceOutwardNames, { repo: { path: "/work/shop", id: "shop", revision: "main" }, replay: { version: 1, declaration: `ws-r1:${"a".repeat(64)}`, snapshots: [{ kind: "sha", repo: "shop", sha: "b".repeat(40) }] } }));
+    const answer = await session.receive();
+
+    assert.equal(answer.error?.code, -32016);
+    assert.equal(answer.error?.data.kind, "workspace-replay-mismatch");
+    assert.equal(answer.error?.message, `changed ${REDACTED}`);
+    assert.equal(answer.result, undefined);
+  } finally {
+    session.end();
+    await session.done;
+  }
 });
 
 test("a query family that throws answers `internal-error` with the first line of the message redacted, and the server keeps serving", async () => {

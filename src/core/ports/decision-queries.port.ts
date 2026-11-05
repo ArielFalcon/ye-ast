@@ -5,7 +5,7 @@ import type { WorkspaceFault, WorkspaceSource } from "./workspace-repos.port.ts"
 import type { FactRead, WorkspaceRequest } from "./workspace-queries.port.ts";
 
 /** The workspace the decision set is derived from: the bound repository, the clones passed and the gateways declared. */
-export type DecisionsRequest = WorkspaceRequest;
+export type DecisionsRequest = Omit<WorkspaceRequest, "replay">;
 
 /** The gaps of one workspace read, each with every option it can verify, and the snapshot of every repository read. */
 export interface DecisionValue {

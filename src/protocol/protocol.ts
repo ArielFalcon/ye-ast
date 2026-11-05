@@ -36,6 +36,7 @@ export const ERROR_CODE = {
   "invalid-name": -32013,
   "duplicate-repository": -32014,
   "unknown-change-path": -32015,
+  "workspace-replay-mismatch": -32016,
 } as const;
 
 export type ErrorKind = keyof typeof ERROR_CODE;

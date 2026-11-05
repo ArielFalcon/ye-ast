@@ -112,6 +112,14 @@ internal workspace choice as a tool argument.
 
 `budget` is `{depth?, hubFanIn?, expansions?}`, positive integers. `scope` is `{include?, exclude?}`, lists of non-empty globs over repository-relative paths ([RFC-0002](0002-facts-contract.md) rule 4); the CLI takes them as the repeatable `--include <glob>` and `--exclude <glob>` of `map`, `impact`, `callers` and `importers`. `changed` is a list of non-empty globs over the changed paths ([RFC-0018](0018-change-selection.md)); the CLI takes it as the repeatable `--changed <glob>` of `impact`. A result is the fact, redacted at egress.
 
+`workspace.outwardNames` accepts optional `replay` and returns optional `workspaceReplay` beside its fact. The committed
+context is `{version: 1, declaration: "ws-r1:<64 lowercase hex>", snapshots}` with unique SHA snapshots sorted by
+repository; it includes a known SHA even for an unavailable member. Preserve omitted membership arguments when
+replaying persisted membership. Pins grant neither membership nor trust: current declarations and authority are checked
+again. A changed declaration or member set returns `workspace-replay-mismatch` (-32016), with a redacted error and no
+result. Malformed contexts are `invalid-params`; decisions do not accept replay. Live replay is not yet supported.
+The query protocol carries internal `repositorySources` when present; public MCP output excludes them.
+
 ### Errors
 
 An error is `{code, message, data: {kind}}`; `kind` names the code and `data` adds `entries` for `unknown-symbol`, each
@@ -198,6 +206,20 @@ also require cuts; unknown facts require a reason and no value. Full permits add
 local or workspace impact/callers, importers, outline, workspace, and decisions. It does not duplicate every domain
 union. Internal workspace repository reads and `repositorySources` are excluded from public output. Faults are
 `isError` responses with redacted typed metadata under `_meta["ye-ast/fault"]`, not success receipts.
+
+`ye_ast_entrypoints`, `ye_ast_callers`, and `ye_ast_impact` add `recovery` to successful structured responses and a
+compact `recovery: <JSON>` line to text in all modes. Available metadata contains a versioned opaque result identity
+and a normal query recipe. Entrypoints and callers pin the actual revision; impact pins the recorded merge base and
+head. Local live recipes request fresh live content and do not preserve historical working-tree content.
+
+Callers and impact workspace recipes preserve the original workspace selectors and add a versioned declaration and
+sorted actual snapshot vector. Only these two workspace consumers accept replay. Current membership and trust are
+checked again; a changed context produces a redacted `result-changed` error at `workspace-replay` without a source
+fact. Explicit external member paths may occur in recipes; internal mirror roots do not. Identity excludes machine
+roots and presentation sidecars.
+
+Recovery can instead be unavailable due to `deadline`, `unresolved-context`, or `redacted-context`. Selection,
+pagination, expectations, and workspace live replay are not implemented.
 
 A client may expose both text and `structuredContent` to a model; the server does not guarantee channel hiding or
 client-side filtering. Full structured delivery need not be duplicated in text. These are wire contracts, not measured

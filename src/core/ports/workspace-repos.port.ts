@@ -18,8 +18,12 @@ export type WorkspaceRepositoryRequest = WorkspaceRepositoryDeclaration;
  */
 export type WorkspaceSource = "request" | "persisted" | "none";
 
+import type { WorkspaceReplayContext } from "../domain/topology/workspace-replay.ts";
+export type { WorkspaceReplayContext } from "../domain/topology/workspace-replay.ts";
+
 /** What a workspace request declares beyond the repository it is bound to. */
 export interface WorkspaceReposRequest {
+  replay?: WorkspaceReplayContext;
   /** Other local repositories the caller declares. */
   repos?: readonly WorkspaceRepositoryRequest[];
   scope?: ScopeRequest;
@@ -48,4 +52,4 @@ export interface WorkspaceRepository {
   declaredTrust?: TrustMode;
 }
 
-export type WorkspaceFault = VcsFault | LiveFault | FixedLayerFault | { kind: "duplicate-repository"; detail: string };
+export type WorkspaceFault = VcsFault | LiveFault | FixedLayerFault | { kind: "duplicate-repository"; detail: string } | { kind: "workspace-replay-mismatch"; detail: string };

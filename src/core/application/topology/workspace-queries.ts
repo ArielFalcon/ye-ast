@@ -1,3 +1,5 @@
+import { isWorkspaceReplayContext } from "../../domain/topology/workspace-replay.ts";
+import { canonicalJson } from "../../domain/shared/canonical-json.ts";
 import { contentFingerprint, declaredScope, exportCuts } from "../../domain/map/entrypoint-map.ts";
 import { isExtractorConfiguration } from "../../domain/languages/configuration.ts";
 import { incompleteSectionCuts, provenanceOf, withCuts, type Cut, type DeclaredScope, type Fact, type FactBase, type TrustMode, type UnknownFact } from "../../domain/shared/fact.ts";
@@ -136,7 +138,7 @@ export function createWorkspaceQueries(deps: WorkspaceQueriesDeps): WorkspaceQue
    * sha each one is read at. The trigger is read locally and never refreshed; a repository that declares no remote, or
    * whose record is not `trusted`, never reaches the network.
    */
-  async function refreshRemotes(repositories: readonly WorkspaceRepositoryRequest[], trigger: WorkspaceRepositoryRequest, offline: boolean, signal: AbortSignal | undefined): Promise<Result<Refreshed, WorkspaceFault>> {
+  async function refreshRemotes(repositories: readonly WorkspaceRepositoryRequest[], trigger: WorkspaceRepositoryRequest, offline: boolean, signal: AbortSignal | undefined, replay?: ReadonlyMap<string, string>): Promise<Result<Refreshed, WorkspaceFault>> {
     const local: Refreshed = { pins: new Map() };
     const { refresh } = deps;
     if (refresh === undefined || offline) return { ok: true, value: local };
@@ -162,9 +164,19 @@ export function createWorkspaceQueries(deps: WorkspaceQueriesDeps): WorkspaceQue
     for (const candidate of candidates) {
       const answer = byUrl.get(candidate.url);
       if (answer === undefined) return { ok: false, fault: { kind: "git-failed", detail: "the refresh answered nothing for a declared remote" } };
-      const pinned = resolveRemoteSnapshot(candidate.repoId, candidate.declaration.revision, line.value, answer.listing ?? { branches: [] });
+      const listing = answer.listing ?? { branches: [] };
+      const observed = resolveRemoteSnapshot(candidate.repoId, candidate.declaration.revision, line.value, listing);
+      const replaySha = replay?.get(candidate.repoId);
+      const pinned = replaySha === undefined ? observed : {
+        ...resolveRemoteSnapshot(candidate.repoId, replaySha, line.value, listing),
+        consulted: observed.consulted,
+      };
       resolution.push(pinned);
       freshness.push({ repo: candidate.repoId, url: candidate.url, freshness: answer.freshness });
+      if (replaySha !== undefined) {
+        pins.set(candidate.repoId, answer.mirror === undefined ? { kind: "unavailable", sha: replaySha } : { kind: "read", mirror: answer.mirror, sha: replaySha });
+        continue;
+      }
       if (pinned.sha !== undefined && answer.mirror !== undefined) {
         pins.set(candidate.repoId, { kind: "read", mirror: answer.mirror, sha: pinned.sha });
         continue;
@@ -220,18 +232,31 @@ export function createWorkspaceQueries(deps: WorkspaceQueriesDeps): WorkspaceQue
     async outwardNames(request: WorkspaceRequest) {
       const trust = await trustOf(deps, request.repo.path);
       const inForce = await workspaceInForce(request, deps.defaults, trust);
-      if (!inForce.ok) return inForce;
+      if (!inForce.ok) return request.replay === undefined ? inForce : { ok: false, fault: { kind: "workspace-replay-mismatch", detail: "workspace replay context does not match the current declaration" } };
       const asked = [request.repo, ...inForce.value.repos];
       const ids = asked.map((repository) => repository.id ?? directoryNameOf(repository.path));
       const duplicate = ids.find((id, index) => ids.indexOf(id) !== index);
       if (duplicate !== undefined) return { ok: false, fault: { kind: "duplicate-repository", detail: duplicate } };
 
-      const authority = inForce.value.source === "request" && deps.refresh !== undefined && request.offline !== true
+      const authority = inForce.value.source === "request"
         ? await workspaceInForce({ repo: request.repo }, deps.defaults, trust)
         : inForce;
-      if (!authority.ok) return authority;
-      const refreshable = withAuthorizedRemotes(asked.slice(1), authority.value.repos);
-      const refreshed = await refreshRemotes(refreshable, request.repo, request.offline === true, request.signal);
+      if (!authority.ok && request.replay !== undefined) return { ok: false, fault: { kind: "workspace-replay-mismatch", detail: "workspace replay context does not match the current declaration" } };
+      if (!authority.ok && deps.refresh !== undefined && request.offline !== true) return authority;
+      const refreshable = withAuthorizedRemotes(asked.slice(1), authority.ok ? authority.value.repos : []);
+      const declaration = authority.ok ? `ws-r1:${deps.digest.of(canonicalJson({
+        source: inForce.value.source,
+        trigger: ids[0],
+        members: refreshable.map((repository) => ({
+          repo: repository.id ?? directoryNameOf(repository.path),
+          revision: repository.revision ?? DEFAULT_REVISION,
+          remote: repository.remote ?? null,
+        })).toSorted((a, b) => compareText(a.repo, b.repo)),
+        gateways: [...inForce.value.gateways].toSorted((a, b) => compareText(a.prefix, b.prefix) || compareText(a.repo, b.repo)),
+      }))}` : undefined;
+      const replay = request.replay === undefined ? undefined : replayPins(request.replay, declaration, ids);
+      if (request.replay !== undefined && replay === undefined) return { ok: false, fault: { kind: "workspace-replay-mismatch", detail: "workspace replay context does not match the current declaration" } };
+      const refreshed = await refreshRemotes(refreshable, request.repo, request.offline === true, request.signal, replay);
       if (!refreshed.ok) return refreshed;
 
       const scope = declaredScope(request.scope);
@@ -240,7 +265,8 @@ export function createWorkspaceQueries(deps: WorkspaceQueriesDeps): WorkspaceQue
       const unavailable: { repoId: string; sha: string }[] = [];
       for (const [index, declaration] of asked.entries()) {
         const repoId = ids[index]!;
-        const plan = planOf(declaration, repoId, index === 0 ? undefined : refreshed.value.pins.get(repoId));
+        const selected = replay === undefined ? declaration : { ...declaration, revision: replay.get(repoId)! };
+        const plan = planOf(selected, repoId, index === 0 ? undefined : refreshed.value.pins.get(repoId));
         if (plan.kind === "unavailable") {
           unavailable.push({ repoId, sha: plan.sha });
           continue;
@@ -262,7 +288,7 @@ export function createWorkspaceQueries(deps: WorkspaceQueriesDeps): WorkspaceQue
 
       const identities = read.map((entry) => entry.identity);
       const resolved = await withCallSites(read, identities, pathSelection(scope, matcher.matches));
-      const sections: Record<string, Fact<WorkspaceSection>> = {};
+      const sections: Record<string, Fact<WorkspaceSection>> = Object.create(null);
       const candidates: NameCandidate[] = [];
       const unserved: RepositoryOutwardName[] = [];
       for (const entry of resolved) {
@@ -295,7 +321,12 @@ export function createWorkspaceQueries(deps: WorkspaceQueriesDeps): WorkspaceQue
       const fact = composite(base, value);
       const repositoryRoots = asked.map((repository, index) => ({ repo: ids[index]!, path: repository.path })).toSorted((a, b) => compareText(a.repo, b.repo));
       const repositorySources = resolved.map(({ repository, source }) => ({ repo: repository.repo, path: source })).toSorted((a, b) => compareText(a.repo, b.repo));
-      return { ok: true, value: { fact, repositoryRoots, repositorySources, ...(refreshed.value.refresh === undefined ? {} : { refresh: refreshed.value.refresh }) } };
+      const snapshots = [
+        ...resolved.map(({ repository }) => repository.snapshot),
+        ...unavailable.map(({ repoId, sha }) => ({ repo: repoId, kind: "sha" as const, sha })),
+      ].toSorted((a, b) => compareText(a.repo, b.repo));
+      const workspaceReplay = declaration === undefined ? undefined : { version: 1 as const, declaration, snapshots };
+      return { ok: true, value: { fact, ...(workspaceReplay === undefined ? {} : { workspaceReplay }), repositoryRoots, repositorySources, ...(refreshed.value.refresh === undefined ? {} : { refresh: refreshed.value.refresh }) } };
     },
   };
 }
@@ -327,4 +358,15 @@ function callSiteNames(repo: string, callSites: readonly CallSite[]): OutwardNam
 function composite(base: FactBase, value: WorkspaceValue): Fact<WorkspaceValue> {
   const [first, ...rest] = incompleteSectionCuts(value.sections) as [Cut, ...Cut[]] | [];
   return first === undefined ? { ...base, status: "complete", value } : { ...base, status: "partial", value, cuts: [first, ...rest] };
+}
+
+function replayPins(value: unknown, declaration: string | undefined, ids: readonly string[]): Map<string, string> | undefined {
+  if (!isWorkspaceReplayContext(value) || value.declaration !== declaration || value.snapshots.length !== ids.length) return undefined;
+  const expected = new Set(ids);
+  const pins = new Map<string, string>();
+  for (const snapshot of value.snapshots) {
+    if (snapshot.kind !== "sha" || !expected.has(snapshot.repo)) return undefined;
+    pins.set(snapshot.repo, snapshot.sha);
+  }
+  return pins;
 }

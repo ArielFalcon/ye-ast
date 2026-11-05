@@ -2,6 +2,9 @@ import { McpServer, type CallToolResult } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { repositoryCatalog, type RepositoryBinding } from "./repository-targeting.ts";
 import { responseModeSchema, type ResponseMode, type ResponseRenderer } from "./presentation.ts";
+import { entrypointRecovery, callersRecovery, impactRecovery, type Recovery } from "./recovery.ts";
+import type { Digest } from "../core/ports/digest.port.ts";
+import { FULL_OBJECT_ID_PATTERN, isFullObjectId } from "../core/domain/shared/revision.ts";
 import type { ImpactBudget } from "../core/domain/impact/impact-fact.ts";
 import { TRUST_MODES, WALK_BOUND_FIELDS, type WalkBoundsField } from "../core/domain/shared/fact.ts";
 import type { Cut, Fact } from "../core/domain/shared/fact.ts";
@@ -34,6 +37,7 @@ export interface McpDeps {
   workspaceImpact: WorkspaceImpactQueries;
   decisions: DecisionQueries;
   redaction: Redaction;
+  digest: Digest;
   /** Default repository binding, plus additional host-declared targets. */
   repository: RepositoryBinding;
   repositories?: readonly RepositoryBinding[];
@@ -181,6 +185,20 @@ const scope = z
   .optional()
   .describe("Coverage restriction using repository-relative globs; all paths when omitted, exclude wins. include retains configuration needed to interpret sources; exclude can remove it too. Callers and entrypoints outside scope are unknown. For shorter text use mode: summary; on impact use changed to select seeds without excluding callers.");
 
+const entrypointInput = liveSchema({ repo, revision, live, scope, mode: responseModeSchema }, ["revision"]);
+// Scope permits line terminators inside a segment; inspect every character and require the absolute end of input.
+const recipeGlob = z.string().refine(isValidGlob).meta({ pattern: "^(?![\\s\\S]*(?:^|/)\\.{0,2}(?:/|(?![\\s\\S])))[^\\\\]+(?![\\s\\S])" });
+const recipeScope = z.strictObject({ include: z.array(recipeGlob).min(1).optional(), exclude: z.array(recipeGlob).min(1).optional() });
+const pinnedRevision = z.string().refine(isFullObjectId).meta({ pattern: FULL_OBJECT_ID_PATTERN });
+const recipeArguments = z.union([
+  z.strictObject({ repo: z.string().min(1), revision: pinnedRevision, scope: recipeScope.optional() }),
+  z.strictObject({ repo: z.string().min(1), live: z.literal(true), scope: recipeScope.optional() }),
+]);
+const recoverySchema = z.discriminatedUnion("status", [
+  z.strictObject({ version: z.literal(1), status: z.literal("available"), resultIdentity: z.string().regex(/^mcp-r1:[0-9a-f]{64}$/), query: z.strictObject({ name: z.literal("ye_ast_entrypoints"), arguments: recipeArguments }) }),
+  z.strictObject({ version: z.literal(1), status: z.literal("unavailable"), reason: z.enum(["deadline", "unresolved-context", "redacted-context"]) }),
+]);
+
 /** The scope the caller set, or nothing, so a query receives no scope it was not given. */
 function scopeOf(requested: z.infer<typeof scope>): { scope?: ScopeRequest } {
   if (requested === undefined) return {};
@@ -204,6 +222,47 @@ const target = z.union([
     .strictObject({ file, start: count, end: count })
     .refine(({ start, end }) => end >= start, "end must not precede start")
     .describe("A file's lines, 1-based, inclusive."),
+]);
+
+const replaySchema = z.strictObject({
+  version: z.literal(1),
+  declaration: z.string().regex(/^ws-r1:[0-9a-f]{64}$/),
+  snapshots: z.array(z.strictObject({ repo: z.string(), kind: z.literal("sha"), sha: pinnedRevision })),
+});
+const callersShape = { repo, revision, live, offline, targets: z.array(target).min(1), scope, budget, mode: responseModeSchema, workspace, replay: replaySchema.optional() };
+const replayRequiresWorkspace = { if: { required: ["replay"] }, then: { required: ["workspace"] } };
+const callersInput = liveSchema(callersShape, ["revision", "offline", "workspace", "replay"])
+  .refine((value) => value.replay === undefined || value.workspace !== undefined)
+  .meta({ allOf: [...["revision", "offline", "workspace", "replay"].map((field) => ({ not: { properties: { live: { const: true } }, required: ["live", field] } })), replayRequiresWorkspace] });
+const impactInput = liveSchema({
+  repo,
+  base: z.string().min(1).describe("Required comparison revision, usually the destination branch (for example main). The diff starts at its merge base with head; it is not necessarily a direct base-to-head diff."),
+  head: z.string().min(1).optional().describe("Committed revision holding the change; HEAD when omitted. Omit with live: true."),
+  live, offline, scope,
+  changed: globs.describe("Diff-path globs selecting which changes seed traversal; all changed paths when omitted. Callers outside changed remain eligible within scope. This does not restrict consequence coverage like scope does. A glob matching no changed path is an error."),
+  budget, mode: responseModeSchema, workspace, replay: replaySchema.optional(),
+}, ["head", "offline", "workspace", "replay"])
+  .refine((value) => value.replay === undefined || value.workspace !== undefined)
+  .meta({ allOf: [...["head", "offline", "workspace", "replay"].map((field) => ({ not: { properties: { live: { const: true } }, required: ["live", field] } })), replayRequiresWorkspace] });
+const impactRecipeCommon = { repo: z.string().min(1), base: pinnedRevision, scope: recipeScope.optional(), changed: z.array(recipeGlob).min(1).optional(), budget };
+const impactRecipe = z.union([
+  z.strictObject({ ...impactRecipeCommon, head: pinnedRevision }),
+  z.strictObject({ ...impactRecipeCommon, live: z.literal(true) }),
+  z.strictObject({ ...impactRecipeCommon, head: pinnedRevision, workspace: workspace.unwrap(), replay: replaySchema, offline }),
+]);
+const impactRecoverySchema = z.discriminatedUnion("status", [
+  z.strictObject({ version: z.literal(1), status: z.literal("available"), resultIdentity: z.string().regex(/^mcp-r1:[0-9a-f]{64}$/), query: z.strictObject({ name: z.literal("ye_ast_impact"), arguments: impactRecipe }) }),
+  z.strictObject({ version: z.literal(1), status: z.literal("unavailable"), reason: z.enum(["deadline", "unresolved-context", "redacted-context"]) }),
+]);
+const callerRecipeCommon = { repo: z.string().min(1), targets: z.array(target).min(1), scope: recipeScope.optional(), budget, };
+const callersRecipe = z.union([
+  z.strictObject({ ...callerRecipeCommon, revision: pinnedRevision }),
+  z.strictObject({ ...callerRecipeCommon, live: z.literal(true) }),
+  z.strictObject({ ...callerRecipeCommon, revision: pinnedRevision, workspace: workspace.unwrap(), replay: replaySchema, offline }),
+]);
+const callersRecoverySchema = z.discriminatedUnion("status", [
+  z.strictObject({ version: z.literal(1), status: z.literal("available"), resultIdentity: z.string().regex(/^mcp-r1:[0-9a-f]{64}$/), query: z.strictObject({ name: z.literal("ye_ast_callers"), arguments: callersRecipe }) }),
+  z.strictObject({ version: z.literal(1), status: z.literal("unavailable"), reason: z.enum(["deadline", "unresolved-context", "redacted-context"]) }),
 ]);
 
 const evidence = z.looseObject({ path: z.string(), line: z.int() });
@@ -367,20 +426,27 @@ const shapes = {
   decisions: z.looseObject({ decisions: z.array(decision), repositories: snapshots, source: z.string() }),
 };
 /** Validate the envelope and public containers used by navigation; domain unions remain owned by the core. */
-function outputFor(value: z.ZodType) {
+function outputFor(value: z.ZodType, recovery?: z.ZodType) {
+  const extra = recovery ? { recovery } : {};
+  const textReceipt = recovery ? z.discriminatedUnion("status", [
+    z.strictObject({ mode: z.enum(["summary", "details"]), status: z.literal("complete"), snapshot, recovery }),
+    z.strictObject({ mode: z.enum(["summary", "details"]), status: z.literal("partial"), snapshot, recovery }),
+    z.strictObject({ mode: z.enum(["summary", "details"]), status: z.literal("unknown"), snapshot, reason: z.string(), recovery }),
+  ]) : receipt;
   const full = z.discriminatedUnion("status", [
-    z.looseObject({ ...baseFact, ...sidecars, mode: z.literal("full"), status: z.literal("complete"), value }),
-    z.looseObject({ ...baseFact, ...sidecars, mode: z.literal("full"), status: z.literal("partial"), value, cuts: z.array(cut).min(1) }),
-    z.looseObject({ ...baseFact, ...sidecars, mode: z.literal("full"), status: z.literal("unknown"), reason: z.string() })
+    z.looseObject({ ...baseFact, ...sidecars, ...extra, mode: z.literal("full"), status: z.literal("complete"), value }),
+    z.looseObject({ ...baseFact, ...sidecars, ...extra, mode: z.literal("full"), status: z.literal("partial"), value, cuts: z.array(cut).min(1) }),
+    z.looseObject({ ...baseFact, ...sidecars, ...extra, mode: z.literal("full"), status: z.literal("unknown"), reason: z.string() })
       .refine((fact) => !("value" in fact))
       .meta({ not: { required: ["value"] } }),
   ]);
-  const branches = z.union([receipt, full]);
+  const branches = z.union([textReceipt, full]);
   const json = z.toJSONSchema(branches, { target: "draft-7" });
   return z.looseObject({}).refine((result) => branches.safeParse(result).success).meta({ anyOf: json.anyOf });
 }
-export const ENTRYPOINTS_OUTPUT = outputFor(shapes.entrypoints);
-export const IMPACT_OUTPUT = outputFor(shapes.impact);
+export const ENTRYPOINTS_OUTPUT = outputFor(shapes.entrypoints, recoverySchema);
+export const IMPACT_OUTPUT = outputFor(shapes.impact, impactRecoverySchema);
+export const CALLERS_OUTPUT = outputFor(shapes.impact, callersRecoverySchema);
 export const IMPORTERS_OUTPUT = outputFor(shapes.importers);
 export const OUTLINE_OUTPUT = outputFor(shapes.outline);
 export const WORKSPACE_OUTPUT = outputFor(shapes.workspace);
@@ -435,6 +501,8 @@ export function createMcpServer(deps: McpDeps): McpServer {
     query: (onStale: (notice: LiveStaleNotice) => void, repository: RepositoryBinding) => Promise<Result<Fact<V> | FactRead<V>, F>>,
     mode: ResponseMode,
     render: ResponseRenderer<V>,
+    recoveryFor?: (fact: Fact<V>, original: Fact<V>, repository: RepositoryBinding, replay: FactRead<V>["workspaceReplay"]) => Recovery,
+    mapReplayMismatch = false,
   ): Promise<CallToolResult> {
     try {
       const target = catalog.resolve(selected);
@@ -442,10 +510,12 @@ export function createMcpServer(deps: McpDeps): McpServer {
       const repository = target.value;
       let moved: LiveStaleNotice | undefined;
       const result = await query((notice) => void (moved = notice), repository);
-      if (!result.ok) return failure(result.fault);
+      if (!result.ok) return mapReplayMismatch && result.fault.kind === "workspace-replay-mismatch" ? failure({ kind: "result-changed", detail: result.fault.detail, stage: "workspace-replay" }) : failure(result.fault);
       const read = "fact" in result.value ? result.value : { fact: result.value };
       if (read.fact.snapshot.repo !== repository.repoId) return failure({ kind: "internal-fault", detail: "Primary snapshot repository does not match selected repository" });
       const fact = redaction.redactValue(read.fact) as Fact<V>;
+      const recovery = recoveryFor?.(fact, read.fact, repository, read.workspaceReplay);
+      const recoveryText = recovery === undefined ? [] : [`recovery: ${JSON.stringify(recovery)}`];
       const roots = local ? [{ repo: repository.repoId, path: repository.path }] : read.repositoryRoots;
       const repositoryRoots = roots === undefined
         ? undefined
@@ -457,6 +527,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
           content: [{ type: "text", text: [
             `status: ${fact.status}\nfull structured result: structuredContent`,
             render(fact, mode),
+            ...recoveryText,
             ...(repositoryRoots === undefined ? [] : ["Repository locations: match repositoryRoots[].repo to evidence ownership; repositoryRoots[].path locates the clone on disk, while evidence paths are relative to its repository at the recorded snapshot."]),
             ...(refresh === undefined ? [] : ["Remote context: inspect freshness and resolution for the repositories used; pinned revisions do not imply verified freshness."]),
             ...(stale === undefined ? [] : ["Live context: inspect live.stateId and live.changed before comparing this result with the current working tree."]),
@@ -464,6 +535,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
           structuredContent: {
             ...fact,
             mode,
+            ...(recovery === undefined ? {} : { recovery }),
             ...(repositoryRoots === undefined ? {} : { repositoryRoots }),
             ...(refresh === undefined ? {} : { freshness: refresh.freshness, resolution: refresh.resolution }),
             ...(stale === undefined ? {} : { live: stale }),
@@ -477,11 +549,12 @@ export function createMcpServer(deps: McpDeps): McpServer {
         ...(local ? [] : (repositoryRoots ?? []).map(({ repo, path }) => `repository root: ${repo} -> ${path}`)),
       ];
       return {
-        content: [{ type: "text", text: [...sidecar, render(fact, mode), ...(local ? (repositoryRoots ?? []).map(({ repo, path }) => `repository root: ${repo} -> ${path}`) : [])].join("\n") }],
+        content: [{ type: "text", text: [...sidecar, render(fact, mode), ...recoveryText, ...(local ? (repositoryRoots ?? []).map(({ repo, path }) => `repository root: ${repo} -> ${path}`) : [])].join("\n") }],
         structuredContent: {
           mode,
           status: fact.status,
           snapshot: fact.snapshot,
+          ...(recovery === undefined ? {} : { recovery }),
           ...(fact.status === "unknown" ? { reason: fact.reason } : {}),
         },
         ...(stale === undefined ? {} : { _meta: { [LIVE_META]: stale } }),
@@ -495,7 +568,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
    * A fault is an `isError` result: the text names its kind on the first line, and `_meta` carries the same shape for a
    * client that branches on it, never `structuredContent`, which is the fact envelope this tool declares as its output.
    */
-  function failure(fault: { kind: string; detail: string } | ImpactFault): CallToolResult {
+  function failure(fault: { kind: string; detail: string; stage?: "workspace-replay" } | ImpactFault): CallToolResult {
     return {
       isError: true,
       content: [{ type: "text", text: redaction.redact(renderFault(fault)) }],
@@ -508,7 +581,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
     {
       title: "Entrypoints of a revision",
       description: `Lists supported HTTP routes, UI routes, message listeners and scheduled jobs with handler locations. Use to orient in a repository or locate where a request, message or job is handled. To trace what depends on a known handler use ye_ast_callers; to inspect consequences of a diff use ye_ast_impact. ${COMPLETENESS}`,
-      inputSchema: liveSchema({ repo, revision, live, scope, mode: responseModeSchema }, ["revision"]),
+      inputSchema: entrypointInput,
       outputSchema: ENTRYPOINTS_OUTPUT,
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
@@ -518,6 +591,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
         (onStale, repository) => deps.entrypoints.map({ repo: repository.path, repoId: repository.repoId, ...atRevision(requested, isLive, onStale), ...scopeOf(paths), signal: ctx.mcpReq.signal }),
         mode,
         renderEntrypointMap,
+        (fact, original, repository) => entrypointRecovery(fact, original, repository.repoId, scopeOf(paths).scope, isLive === true, deps.digest, redaction, (args) => entrypointInput.safeParse(args).success && recipeArguments.safeParse(args).success),
       ),
   );
 
@@ -526,22 +600,11 @@ export function createMcpServer(deps: McpDeps): McpServer {
     {
       title: "Impact of a change",
       description: `Traces incoming dependents of changed declarations from the merge base of base and head to head, and reports affected entrypoints plus entrypoints added, removed or altered. Use for a diff; base is required and head defaults to HEAD. Use live for trusted local edits, or changed to select diff paths without excluding callers elsewhere within scope. With workspace, also follows incoming cross-repository call sites and what the change sends onward. Use ye_ast_callers when the question concerns existing symbols without a diff; results inform investigation, not change approval. ${COMPLETENESS}`,
-      inputSchema: liveSchema({
-        repo,
-        base: z.string().min(1).describe("Required comparison revision, usually the destination branch (for example main). The diff starts at its merge base with head; it is not necessarily a direct base-to-head diff."),
-        head: z.string().min(1).optional().describe("Committed revision holding the change; HEAD when omitted. Omit with live: true."),
-        live,
-        offline,
-        scope,
-        changed: globs.describe("Diff-path globs selecting which changes seed traversal; all changed paths when omitted. Callers outside changed remain eligible within scope. This does not restrict consequence coverage like scope does. A glob matching no changed path is an error."),
-        budget,
-        mode: responseModeSchema,
-        workspace,
-      }, ["head", "offline", "workspace"]),
+      inputSchema: impactInput,
       outputSchema: IMPACT_OUTPUT,
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    ({ repo: selected, base, head, live: isLive, offline: isOffline, scope: paths, changed, budget: requested, mode, workspace: others }, ctx) => {
+    ({ repo: selected, base, head, live: isLive, offline: isOffline, scope: paths, changed, budget: requested, mode, workspace: others, replay }, ctx) => {
       const crossing = workspaceOf(others);
       if (crossing !== undefined) {
         return answer(
@@ -550,6 +613,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
             deps.workspaceImpact.ofChange({
               repo: { path: repository.path, id: repository.repoId },
               ...crossing,
+              ...(replay === undefined ? {} : { replay }),
               base,
               head: head ?? DEFAULT_REVISION,
               ...(isOffline === undefined ? {} : { offline: isOffline }),
@@ -560,6 +624,8 @@ export function createMcpServer(deps: McpDeps): McpServer {
             }),
           mode,
           renderWorkspaceImpact,
+          (fact, original, repository, actualReplay) => impactRecovery({ fact, original, selected: repository.repoId, requestedScope: scopeOf(paths).scope, requestedBudget: requested, live: false, workspace: others, offline: isOffline, replay: actualReplay, digest: deps.digest, redaction, validate: (args) => impactInput.safeParse(args).success && impactRecipe.safeParse(args).success, requestedChanged: changed }),
+          true,
         );
       }
       return answer(
@@ -570,6 +636,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
         },
         mode,
         renderImpact,
+        (fact, original, repository) => impactRecovery({ fact, original, selected: repository.repoId, requestedScope: scopeOf(paths).scope, requestedBudget: requested, live: isLive === true, workspace: undefined, offline: undefined, replay: undefined, digest: deps.digest, redaction, validate: (args) => impactInput.safeParse(args).success && impactRecipe.safeParse(args).success, requestedChanged: changed }),
       );
     },
   );
@@ -579,11 +646,11 @@ export function createMcpServer(deps: McpDeps): McpServer {
     {
       title: "Callers of symbols or line ranges",
       description: `Traces incoming dependents of existing declarations or line ranges and reports the entrypoints that reach them, with dependency locations. Use when the starting symbols or ranges are known and no diff is needed. targets accepts names or inclusive line ranges; names match their final segment and may select several declarations in one file. A missing declaration is an error. With workspace, follows incoming cross-repository call-site links; use ye_ast_impact for a diff and its outgoing links. ${COMPLETENESS}`,
-      inputSchema: liveSchema({ repo, revision, live, offline, targets: z.array(target).min(1).describe("The symbols or line ranges to start from."), scope, budget, mode: responseModeSchema, workspace }, ["revision", "offline", "workspace"]),
-      outputSchema: IMPACT_OUTPUT,
+      inputSchema: callersInput,
+      outputSchema: CALLERS_OUTPUT,
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    ({ repo: selected, revision: requested, live: isLive, offline: isOffline, targets, scope: paths, budget: bounds, mode, workspace: others }, ctx) => {
+    ({ repo: selected, revision: requested, live: isLive, offline: isOffline, targets, scope: paths, budget: bounds, mode, workspace: others, replay }, ctx) => {
       const crossing = workspaceOf(others);
       if (crossing !== undefined) {
         return answer(
@@ -592,6 +659,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
             deps.workspaceImpact.callers({
               repo: { path: repository.path, id: repository.repoId, revision: requested ?? DEFAULT_REVISION },
               ...crossing,
+              ...(replay === undefined ? {} : { replay }),
               targets: targets as CallersTarget[],
               ...(isOffline === undefined ? {} : { offline: isOffline }),
               ...scopeOf(paths),
@@ -600,6 +668,8 @@ export function createMcpServer(deps: McpDeps): McpServer {
             }),
           mode,
           renderWorkspaceImpact,
+          (fact, original, repository, actualReplay) => callersRecovery({ fact, original, selected: repository.repoId, targets, requestedScope: scopeOf(paths).scope, requestedBudget: bounds, live: false, workspace: others, offline: isOffline, replay: actualReplay, digest: deps.digest, redaction, validate: (args) => callersInput.safeParse(args).success && callersRecipe.safeParse(args).success }),
+          true,
         );
       }
       return answer(
@@ -616,6 +686,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
           }),
         mode,
         renderImpact,
+        (fact, original, repository) => callersRecovery({ fact, original, selected: repository.repoId, targets, requestedScope: scopeOf(paths).scope, requestedBudget: bounds, live: isLive === true, workspace: undefined, offline: undefined, replay: undefined, digest: deps.digest, redaction, validate: (args) => callersInput.safeParse(args).success && callersRecipe.safeParse(args).success }),
       );
     },
   );

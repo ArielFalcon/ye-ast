@@ -27,23 +27,15 @@ import type { Reach } from "../../domain/topology/link.ts";
 import { inferGateways, matchCallSite, matchEventCallSite, prefixOf, type Gateway, type GatewayDeclaration, type JoinResult, type RepositoryEntrypoints } from "../../domain/topology/link-match.ts";
 import { directoryNameOf } from "../../domain/topology/repository-identity.ts";
 import type { CallersTarget, ImpactFault, ImpactQueries } from "../../ports/impact-queries.port.ts";
-import type { TrustRecordReader } from "../../ports/trust-record.port.ts";
 import type { Digest } from "../../ports/digest.port.ts";
-import type { WorkspaceDefaults } from "../../ports/workspace-defaults.port.ts";
 import type { WorkspaceFault, WorkspaceRepository } from "../../ports/workspace-repos.port.ts";
 import type { FactRead, WorkspaceQueries } from "../../ports/workspace-queries.port.ts";
 import type { RepoImpact, WorkspaceCallersRequest, WorkspaceImpactBase, WorkspaceImpactQueries, WorkspaceImpactValue, WorkspaceOfChangeRequest } from "../../ports/workspace-impact-queries.port.ts";
-import { trustOf } from "../snapshot/read-snapshot.ts";
-import { workspaceInForce } from "./workspace-defaults.ts";
 
 export interface WorkspaceImpactDeps {
   workspace: WorkspaceQueries;
   impact: ImpactQueries;
   digest: Digest;
-  /** The workspace the bound repository persists, which a request naming no repositories joins under `trusted`. */
-  defaults?: WorkspaceDefaults;
-  /** The user's declarations; without one every repository is read `untrusted`, which never honours a persisted workspace. */
-  trust?: TrustRecordReader;
 }
 
 type Faults = WorkspaceFault | ImpactFault;
@@ -68,13 +60,11 @@ export function createWorkspaceImpactQueries(deps: WorkspaceImpactDeps): Workspa
    * symbols named and nothing about what they send onward.
    */
   async function compose(request: WorkspaceImpactBase, triggerRevision: string, walk: (revision: string) => Promise<Result<Fact<ImpactValue>, ImpactFault>>, readsChange: boolean): Promise<Result<FactRead<WorkspaceImpactValue>, Faults>> {
-    const triggerTrust = deps.trust === undefined ? "untrusted" : await trustOf({ trust: deps.trust }, request.repo.path);
-    const inForce = await workspaceInForce(request, deps.defaults, triggerTrust);
-    if (!inForce.ok) return inForce;
     const read = await deps.workspace.outwardNames({
       repo: { ...request.repo, revision: triggerRevision },
-      repos: inForce.value.repos,
-      gateways: inForce.value.gateways,
+      ...(request.repos === undefined ? {} : { repos: request.repos }),
+      ...(request.gateways === undefined ? {} : { gateways: request.gateways }),
+      ...(request.replay === undefined ? {} : { replay: request.replay }),
       ...(request.offline === undefined ? {} : { offline: request.offline }),
       ...(request.scope === undefined ? {} : { scope: request.scope }),
       ...(request.signal === undefined ? {} : { signal: request.signal }),
@@ -97,7 +87,7 @@ export function createWorkspaceImpactQueries(deps: WorkspaceImpactDeps): Workspa
       const own = entrypointsOf(repository);
       return repository.repo === trigger ? { ...own, entrypoints: [...own.entrypoints, ...removed] } : own;
     });
-    const gateways = inferGateways(repositories.flatMap((repository) => repository.callSites), entrypoints, inForce.value.gateways);
+    const gateways = inferGateways(repositories.flatMap((repository) => repository.callSites), entrypoints, workspace.workspace.gateways);
     const settled = settleAll(repositories, entrypoints, gateways);
 
     const upstream = await upstreamFixpoint(request, settled.joined, repositories, sources, linkGraphOf(trigger, impact === undefined ? [] : reachedHandlers(impact)));
@@ -105,7 +95,7 @@ export function createWorkspaceImpactQueries(deps: WorkspaceImpactDeps): Workspa
     const downstream = await downstreamFixpoint(request, settled.joined, repositories, sources, trigger, readsChange && impact !== undefined ? impact.seeds : []);
     if (!downstream.ok) return downstream;
 
-    const sections: Record<string, Fact<RepoImpact>> = {};
+    const sections: Record<string, Fact<RepoImpact>> = Object.create(null);
     for (const repository of repositories) {
       const part = settled.parts.get(repository.repo);
       const base = workspace.sections[repository.repo];
@@ -135,20 +125,20 @@ export function createWorkspaceImpactQueries(deps: WorkspaceImpactDeps): Workspa
       workspace: {
         repos: workspace.workspace.repos,
         gateways,
-        unmatchedGateways: unmatchedGateways(inForce.value.gateways, repositories),
+        unmatchedGateways: unmatchedGateways(workspace.workspace.gateways, repositories),
         unserved: [...new Set(workspace.unserved.map(({ name }) => name))].filter((name) => !gateways.some((gateway) => gateway.prefix === name)).sort(compareText),
-        source: inForce.value.source,
+        source: workspace.workspace.source,
       },
       repositorySnapshots: workspace.repositorySnapshots,
       trigger: { repo: trigger, ...(impact?.mergeBase === undefined ? {} : { mergeBase: impact.mergeBase }) },
-      sections,
+      sections: Object.fromEntries(Object.entries(sections)),
       links: mergeLinks(upstream.value.graph, downstream.value.graph),
     };
     const config = walked.value.inputs.declaredConfig;
-    const declared = { repos: workspace.workspace.repos, gateways: inForce.value.gateways.toSorted((a, b) => compareText(a.prefix, b.prefix) || compareText(a.repo, b.repo)), source: inForce.value.source, budget: request.budget, ...("targets" in request ? { targets: request.targets } : {}), ...("changed" in request ? { changed: request.changed } : {}) };
+    const declared = { repos: workspace.workspace.repos, gateways: workspace.workspace.gateways.toSorted((a, b) => compareText(a.prefix, b.prefix) || compareText(a.repo, b.repo)), source: workspace.workspace.source, budget: request.budget, ...("targets" in request ? { targets: request.targets } : {}), ...("changed" in request ? { changed: request.changed } : {}) };
     const reads = Object.entries(sections).flatMap(([repo, section]) => section.status === "unknown" ? [{ kind: `discovery:${repo}`, fact: provenanceOf(section) }] : section.value.reads.map(({ kind, fact }) => ({ kind: `${kind}:${repo}`, fact })));
     const base = compositeBase(baseOf(triggerBase), reads, declared, (text) => deps.digest.of(text), config);
-    return { ok: true, value: { fact: composite(base, value), ...(read.value.refresh === undefined ? {} : { refresh: read.value.refresh }), ...(read.value.repositoryRoots === undefined ? {} : { repositoryRoots: read.value.repositoryRoots }) } };
+    return { ok: true, value: { fact: composite(base, value), ...(read.value.workspaceReplay === undefined ? {} : { workspaceReplay: read.value.workspaceReplay }), ...(read.value.refresh === undefined ? {} : { refresh: read.value.refresh }), ...(read.value.repositoryRoots === undefined ? {} : { repositoryRoots: read.value.repositoryRoots }) } };
   }
 
   /** Every call site of the workspace joined once against the entrypoints of the other repositories, with the drift its section reports. */

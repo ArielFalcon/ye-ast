@@ -21,10 +21,10 @@ const identity: Redaction = {
 
 const PARAMS = { repo: "/work/shop", repoId: "shop", revision: "HEAD" };
 
-function pair(map: EntrypointQueries["map"]): { streams: { input: PassThrough; output: PassThrough }; written: string[]; done: Promise<void> } {
+function pair(map: EntrypointQueries["map"], workspace: WorkspaceQueries = {} as WorkspaceQueries): { streams: { input: PassThrough; output: PassThrough }; written: string[]; done: Promise<void> } {
   const toServer = new PassThrough();
   const toClient = new PassThrough();
-  const deps: QueryServerDeps = { version: "1.2.3", redaction: identity, entrypoints: { map }, impact: {} as ImpactQueries, outline: {} as OutlineQueries, workspace: {} as WorkspaceQueries, decisions: {} as DecisionQueries };
+  const deps: QueryServerDeps = { version: "1.2.3", redaction: identity, entrypoints: { map }, impact: {} as ImpactQueries, outline: {} as OutlineQueries, workspace, decisions: {} as DecisionQueries };
   const written: string[] = [];
   toServer.on("data", (chunk: Buffer) => written.push(chunk.toString()));
   return { streams: { input: toClient, output: toServer }, written, done: serveQueries(deps, { input: toServer, output: toClient }) };
@@ -108,4 +108,30 @@ test("aborting the signal of a request that already settled sends no cancel", as
   await new Promise((resolve) => setImmediate(resolve));
 
   assert.ok(!written.join("").includes(METHOD.cancel));
+});
+
+
+test("workspace replay and optional result metadata survive the client-server roundtrip", async () => {
+  const replay = { version: 1 as const, declaration: `ws-r1:${"a".repeat(64)}`, snapshots: [
+    { kind: "sha" as const, repo: "orders", sha: "b".repeat(40) },
+    { kind: "sha" as const, repo: "unavailable", sha: "c".repeat(40) },
+  ] };
+  const fact = { status: "partial", value: { sections: { unavailable: { status: "unknown", reason: "revision-unavailable" } } } };
+  const repositorySources = [{ repo: "orders", path: "/mirror/orders" }];
+  const received: object[] = [];
+  const workspace: WorkspaceQueries = { outwardNames: async (request) => {
+    received.push(request);
+    return { ok: true, value: { fact, ...(request.replay && { workspaceReplay: replay }), repositorySources } as never };
+  } };
+  const { streams } = pair(async () => ({ ok: true, value: {} as never }), workspace);
+  const client = await connectQueryClient({ ...streams, trust: "untrusted" });
+  const params = { repo: { path: "/work/orders", id: "orders" }, replay };
+  const result = await client.request(METHOD.workspaceOutwardNames, params);
+  assert.deepEqual(result, { fact, workspaceReplay: replay, repositorySources });
+  const { signal, ...input } = received[0] as Record<string, unknown>;
+  assert.ok(signal instanceof AbortSignal);
+  assert.deepEqual(input, params);
+  assert.equal(JSON.stringify((result as { fact: unknown }).fact), JSON.stringify(fact));
+  const without = await client.request(METHOD.workspaceOutwardNames, { repo: params.repo });
+  assert.deepEqual(without, { fact, repositorySources });
 });

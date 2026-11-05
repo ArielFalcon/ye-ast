@@ -259,7 +259,7 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
     return use(createWorkspaceImpactQueries({
       workspace: createWorkspaceQueries({ ...workspaceDeps, preparation }),
       impact: measurement === undefined ? operationImpact : measuredImpact(operationImpact, measurement),
-      defaults, digest, ...trust,
+      digest,
     }));
   });
   const workspaceImpact: WorkspaceImpactQueries = {

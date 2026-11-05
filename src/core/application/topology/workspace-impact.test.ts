@@ -15,6 +15,7 @@ import type { WorkspaceRequest } from "../../ports/workspace-queries.port.ts";
 import type { WorkspaceImpactValue, RepoImpact } from "../../ports/workspace-impact-queries.port.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
 import { createWorkspaceImpactQueries } from "./workspace-impact.ts";
+import { workspaceInForce } from "./workspace-defaults.ts";
 
 const SHA = "a".repeat(40);
 const OTHER_SHA = "b".repeat(40);
@@ -131,8 +132,12 @@ function setup({ repositories, unavailable = [], trigger = impactOf(REACHED), un
   const read_: WorkspaceQueries = {
     outwardNames: async (request) => {
       asks.push(request);
+      const declaration = trust === undefined ? undefined : await trust.read(request.repo.path);
+      const mode = declaration?.ok ? declaration.value ?? "untrusted" : "untrusted";
+      const effective = await workspaceInForce(request, defaults, mode);
+      if (!effective.ok) return effective;
       const value: WorkspaceValue = {
-        workspace: { repos: all, gateways: request.gateways ?? [], source: "request" },
+        workspace: { repos: all, gateways: effective.value.gateways, source: effective.value.source },
         repositorySnapshots: read.map(({ repo, snapshot }) => ({ repo, snapshot })),
         sections: Object.fromEntries(all.map((repo) => [repo, missing.has(repo) ? unreachable(repo) : section(repo)])),
         candidates: [],
@@ -161,7 +166,7 @@ function setup({ repositories, unavailable = [], trigger = impactOf(REACHED), un
     },
     ofChange: async (request: ImpactOfChangeRequest): Promise<Result<Fact<ImpactValue>, ImpactFault>> => ({ ok: true, value: fact(request.repoId, "trusted", { ...trigger, mergeBase: OTHER_SHA }) }),
   } as unknown as ImpactQueries;
-  return { queries: createWorkspaceImpactQueries({ workspace: read_, impact, digest: { of: (text) => `digest(${text})` }, ...(defaults === undefined ? {} : { defaults }), ...(trust === undefined ? {} : { trust }) }), walks, asks };
+  return { queries: createWorkspaceImpactQueries({ workspace: read_, impact, digest: { of: (text) => `digest(${text})` } }), walks, asks, read_ };
 }
 
 const ASK = { repo: { path: "/work/orders" }, repos: [{ path: "/work/shop-web" }], targets: [{ file: HANDLER.path, symbol: HANDLER.symbol }] };
@@ -180,6 +185,32 @@ function repoImpact(value: WorkspaceImpactValue, repo: string): RepoImpact & { s
 
 const pathOf = (site: CallSite): string => (site.target.status === "complete" && "path" in site.target.value ? site.target.value.path : "?");
 const ORDERS = { entrypoints: [route("POST", "/orders"), route("GET", "/refunds", "Orders.refunds", 30)] };
+
+test("prototype-like repository IDs retain sections, uncertainty and contributing read identity", async () => {
+  for (const [available, unavailable] of [["__proto__", "constructor"], ["constructor", "__proto__"]] as const) {
+    const read = (sha: string) => setup({
+      repositories: { orders: ORDERS, [available]: { sha, cuts: [{ kind: "not-exported", at: ["src/missing.ts"] }] } },
+      unavailable: [unavailable],
+    }).queries.callers({ ...ASK, repos: [available, unavailable].map((id) => ({ id, path: `/work/${id}` })) });
+
+    const first = await read(SHA);
+    assert.ok(first.ok && first.value.fact.status === "partial");
+    const sections = first.value.fact.value.sections;
+    assert.deepEqual(Object.keys(sections).sort(), ["__proto__", "constructor", "orders"]);
+    const known = sections[available];
+    assert.ok(known?.status === "partial");
+    assert.deepEqual(known.value.reads.map(({ kind, fact }) => [kind, fact.snapshot]), [["discovery", { repo: available, kind: "sha", sha: SHA }]]);
+    assert.ok(known.cuts.some(({ kind }) => kind === "not-exported"));
+    assert.equal(sections[unavailable]?.status, "unknown");
+    assert.ok(first.value.fact.cuts.some(({ kind, at }) => kind === "section" && at[0] === available));
+    assert.ok(first.value.fact.cuts.some(({ kind, at }) => kind === "section" && at[0] === unavailable));
+    assert.equal(Object.getPrototypeOf(sections), Object.prototype);
+
+    const changed = await read(OTHER_SHA);
+    assert.ok(changed.ok);
+    assert.notEqual(changed.value.fact.inputs.content, first.value.fact.inputs.content);
+  }
+});
 
 test("an unavailable trigger walk remains named and makes the workspace partial", async () => {
   const { queries } = setup({ repositories: { orders: ORDERS }, walkFact: (_repo, answer) => ({ ...answer, status: "unknown", reason: "index-unavailable" }) });
@@ -649,8 +680,9 @@ test("a request that names no repositories joins the persisted manifest's reposi
   const value = valueOf(await queries.callers(ASK_WITHOUT_REPOS));
 
   assert.deepEqual(asked, ["/work/orders"]);
-  assert.deepEqual(asks[0]?.repos, [{ path: "/work/webapp" }]);
-  assert.deepEqual(asks[0]?.gateways, [{ prefix: "orders-api", repo: "orders" }]);
+  assert.equal(asks[0]?.repos, undefined);
+  assert.equal(asks[0]?.gateways, undefined);
+  assert.equal(value.workspace.source, "persisted");
   assert.deepEqual(value.workspace.gateways.map((gateway) => `${gateway.prefix} ${gateway.repo} ${gateway.basis}`), ["orders-api orders gateway-prefix"]);
   assert.deepEqual(value.links.map(({ link }) => `${link.from.repo} -> ${link.to.repo} ${link.to.name} (${link.basis})`), ["webapp -> orders POST /orders (gateway-prefix)"]);
 });
@@ -665,7 +697,7 @@ test("a request that names repositories ignores the persisted workspace, its gat
   const value = valueOf(await queries.callers({ ...ASK_WITHOUT_REPOS, repos: [{ path: "/work/webapp" }] }));
 
   assert.deepEqual(asked, []);
-  assert.deepEqual(asks[0]?.gateways, []);
+  assert.equal(asks[0]?.gateways, undefined);
   assert.deepEqual(value.workspace.gateways.filter((gateway) => gateway.basis === "gateway-prefix"), []);
 });
 
@@ -731,4 +763,56 @@ test("a callers and a change answer carry the refresh the workspace read consume
   assert.deepEqual(afterCallers.value.fact, beforeCallers.value.fact);
   assert.deepEqual(afterChange.value.fact, beforeChange.value.fact);
   assert.equal("refresh" in afterCallers.value.fact || "refresh" in afterChange.value.fact, false);
+});
+
+test("callers and change replay discovery pins and reject mismatch before any walk", async () => {
+  const fixture = setup({ repositories: { orders: { entrypoints: [route("POST", "/orders")] }, webapp: { callSites: [callSite("webapp", "orders-api/orders")] } }, unavailable: ["missing"], defaults: persisted({ repos: [{ path: "/work/webapp", revision: "main" }], gateways: [{ prefix: "orders-api", repo: "orders" }] }), trust: TRUSTED });
+  const context = { version: 1 as const, declaration: `ws-r1:${"c".repeat(64)}`, snapshots: [{ repo: "missing", kind: "sha" as const, sha: SHA }, { repo: "orders", kind: "sha" as const, sha: SHA }, { repo: "webapp", kind: "sha" as const, sha: OTHER_SHA }] };
+  let current = OTHER_SHA;
+  const seen: WorkspaceRequest[] = [];
+  const calls: { repo: string; revision: string; source?: string }[] = [];
+  const workspace: WorkspaceQueries = { outwardNames: async (request) => {
+    seen.push(request);
+    if (request.replay !== undefined && request.replay.declaration !== context.declaration) return { ok: false, fault: { kind: "workspace-replay-mismatch", detail: "mismatch" } };
+    const answer = await fixture.read_.outwardNames(request);
+    if (!answer.ok || answer.value.fact.status === "unknown") return answer;
+    const sha = request.replay === undefined ? current : OTHER_SHA;
+    const original = answer.value.fact;
+    const section = original.value.sections.webapp!;
+    const snapshot = { repo: "webapp", kind: "sha" as const, sha };
+    return { ok: true, value: { ...answer.value, workspaceReplay: context, repositorySources: [{ repo: "orders", path: "/work/orders" }, { repo: "webapp", path: "/mirror/webapp" }], fact: { ...original, value: { ...original.value, repositories: original.value.repositories.map((item) => item.repo === "webapp" ? { ...item, snapshot } : item), sections: { ...original.value.sections, webapp: { ...section, snapshot } }, repositorySnapshots: original.value.repositorySnapshots.map((item) => item.repo === "webapp" ? { ...item, snapshot } : item) } } } };
+  } };
+  const impact: ImpactQueries = {
+    callers: async (request) => { assert.ok(request.revision); calls.push({ repo: request.repo, revision: request.revision, ...(request.source === undefined ? {} : { source: request.source }) }); return { ok: true, value: fact(request.repoId, "trusted", impactOf(request.repoId === "orders" ? REACHED : []), request.revision) }; },
+    ofChange: async (request) => { assert.ok(request.head); calls.push({ repo: request.repo, revision: request.head }); return { ok: true, value: fact(request.repoId, "trusted", impactOf(REACHED, { mergeBase: SHA }), request.head) }; },
+    importers: async () => { throw new Error("unexpected"); },
+  };
+  const queries = createWorkspaceImpactQueries({ workspace, impact, digest: { of: (text) => `digest(${text})` } });
+  const callers = ASK_WITHOUT_REPOS;
+  const change = { repo: callers.repo, base: SHA, head: "main" };
+  const first = await queries.callers(callers);
+  const firstChange = await queries.ofChange(change);
+  assert.ok(first.ok && firstChange.ok);
+  assert.deepEqual(first.value.workspaceReplay, context);
+  assert.equal(valueOf(first).workspace.source, "persisted");
+  assert.equal(valueOf(first).sections.missing?.status, "unknown");
+  assert.ok(calls.some((call) => call.repo === "/work/webapp" && call.revision === OTHER_SHA && call.source === "/mirror/webapp"));
+  assert.deepEqual(calls.filter((call) => call.repo === "/work/orders").map((call) => call.revision), [SHA, SHA]);
+  assert.equal(first.value.repositorySources, undefined);
+  assert.ok(first.value.repositoryRoots);
+  current = "d".repeat(40);
+  const replayed = await queries.callers({ ...callers, replay: context });
+  const replayedChange = await queries.ofChange({ ...change, replay: context });
+  assert.ok(replayed.ok && replayedChange.ok);
+  assert.deepEqual(replayed.value.fact, first.value.fact);
+  assert.deepEqual(replayedChange.value.fact, firstChange.value.fact);
+  assert.ok(seen.every((request) => request.repos === undefined && request.gateways === undefined));
+  assert.equal(seen[0]?.replay, undefined);
+  assert.equal(seen[1]?.replay, undefined);
+  assert.deepEqual(seen[2]?.replay, context);
+  assert.deepEqual(seen[3]?.replay, context);
+  const count = calls.length;
+  const mismatch = await queries.callers({ ...callers, replay: { ...context, declaration: `ws-r1:${"e".repeat(64)}` } });
+  assert.ok(!mismatch.ok && mismatch.fault.kind === "workspace-replay-mismatch");
+  assert.equal(calls.length, count);
 });

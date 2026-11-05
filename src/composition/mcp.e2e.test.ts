@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { createInterface } from "node:readline";
 import { pathToFileURL } from "node:url";
+import { AjvJsonSchemaValidator } from "@modelcontextprotocol/server/validators/ajv";
 import { composeCli } from "./compose.ts";
 
 const GIT_ENV = {
@@ -130,7 +131,8 @@ test("a real client over stdio lists the tools and reads the entrypoints fact th
   const printed: string[] = [];
   const code = await composeCli({ scratchRoot })(["map", repo], { out: (line) => printed.push(line), err: () => {} });
   assert.equal(code, 0);
-  const { mode, repositoryRoots, ...fact } = called.structuredContent;
+  const { mode, repositoryRoots, recovery, ...fact } = called.structuredContent;
+  assert.ok(recovery);
   assert.deepEqual(repositoryRoots, [{ repo: "shop-service", path: realpathSync(repo) }]);
   assert.equal(mode, "full");
   assert.deepEqual(fact, JSON.parse(printed.join("\n")));
@@ -140,7 +142,9 @@ test("a real client over stdio lists the tools and reads the entrypoints fact th
     isError?: boolean; structuredContent: Record<string, unknown>; content: { text: string }[];
   };
   assert.equal(summary.isError, undefined);
-  assert.deepEqual(summary.structuredContent, { mode: "summary", status: fact["status"], snapshot: fact["snapshot"] });
+  const { recovery: summaryRecovery, ...summaryReceipt } = summary.structuredContent;
+  assert.deepEqual(summaryRecovery, recovery);
+  assert.deepEqual(summaryReceipt, { mode: "summary", status: fact["status"], snapshot: fact["snapshot"] });
   assert.match(summary.content[0]?.text ?? "", /GET \/orders\/\{id\}.*OrderController\.java:\d+/);
 });
 
@@ -151,7 +155,7 @@ test("callers with a workspace joins the call site of another repository to the 
       arguments: { targets: [{ file: "src/main/java/shop/OrderController.java", symbol: "OrderController.one" }], workspace: { repos: [{ path: frontend }] }, mode: "full" },
     });
 
-  const first = (await ask()).result as { isError?: boolean; structuredContent: { mode: string; status: string; snapshot: unknown; value: { links: { link: { basis: string; from: { repo: string; line: number }; to: { repo: string; name: string } } }[]; sections: Record<string, { value: { impact?: { symbols: { symbol: string }[] }; unmatched: { line: number }[] } }> } }; content: { text: string }[] };
+  const first = (await ask()).result as { isError?: boolean; structuredContent: { mode: string; status: string; snapshot: unknown; recovery: unknown; value: { links: { link: { basis: string; from: { repo: string; line: number }; to: { repo: string; name: string } } }[]; sections: Record<string, { value: { impact?: { symbols: { symbol: string }[] }; unmatched: { line: number }[] } }> } }; content: { text: string }[] };
   const second = (await ask()).result as typeof first;
 
   assert.equal(first.isError, undefined);
@@ -167,7 +171,7 @@ test("callers with a workspace joins the call site of another repository to the 
   for (const mode of ["summary", "details"] as const) {
     const result = (await request("tools/call", { name: "ye_ast_callers", arguments: { ...args, mode } })).result as { isError?: boolean; structuredContent: Record<string, unknown>; content: { text: string }[] };
     assert.equal(result.isError, undefined);
-    assert.deepEqual(result.structuredContent, { mode, status: first.structuredContent.status, snapshot: first.structuredContent.snapshot });
+    assert.deepEqual(result.structuredContent, { mode, status: first.structuredContent.status, snapshot: first.structuredContent.snapshot, recovery: first.structuredContent["recovery"] });
     assert.match(result.content[0]?.text ?? "", /shop-web:src\/app\/order\.page\.ts:7/);
   }
   const localArgs = { targets: args.targets };
@@ -178,7 +182,7 @@ test("callers with a workspace joins the call site of another repository to the 
   for (const mode of ["summary", "details"] as const) {
     const local = (await request("tools/call", { name: "ye_ast_callers", arguments: { ...localArgs, mode } })).result as { isError?: boolean; structuredContent: Record<string, unknown>; content: { text: string }[] };
     assert.equal(local.isError, undefined);
-    assert.deepEqual(local.structuredContent, { mode, status: localFull.structuredContent["status"], snapshot: localFull.structuredContent["snapshot"] });
+    assert.deepEqual(local.structuredContent, { mode, status: localFull.structuredContent["status"], snapshot: localFull.structuredContent["snapshot"], recovery: localFull.structuredContent["recovery"] });
     assert.match(local.content[0]?.text ?? "", /OrderController\.one/);
   }
 });
@@ -195,10 +199,129 @@ test("declared foreign repository reads its own snapshot without implicit worksp
   assert.match(JSON.stringify(foreign.structuredContent["value"]), /\/foreign/);
   assert.match(JSON.stringify(local.structuredContent["value"]), /\/orders/);
   assert.doesNotMatch(JSON.stringify(local.structuredContent["value"]), /\/foreign/);
+  const listed = (await request("tools/list")).result as { tools: { name: string; outputSchema: Parameters<AjvJsonSchemaValidator["getValidator"]>[0] }[] };
+  const validate = new AjvJsonSchemaValidator().getValidator(listed.tools.find((tool) => tool.name === "ye_ast_entrypoints")!.outputSchema);
+  const recovery = foreign.structuredContent["recovery"] as { version: number; status: string; resultIdentity: string; query: { name: string; arguments: Record<string, unknown> } };
+  assert.deepEqual(recovery.query, { name: "ye_ast_entrypoints", arguments: { repo: "foreign", revision: foreignSnapshot.sha } });
+  assert.equal(recovery.version, 1);
+  assert.equal(recovery.status, "available");
+  assert.match(recovery.resultIdentity, /^mcp-r1:[0-9a-f]{64}$/);
+  for (const mode of ["summary", "details", "full"] as const) {
+    const result = (await request("tools/call", { name: "ye_ast_entrypoints", arguments: { repo: "foreign", mode } })).result as { isError?: boolean; structuredContent: Record<string, unknown>; content: { text: string }[] };
+    assert.equal(result.isError, undefined);
+    assert.equal(validate(result.structuredContent).valid, true);
+    assert.deepEqual(result.structuredContent["recovery"], recovery);
+    const textRecovery = result.content[0]!.text.split("\n").find((line) => line.startsWith("recovery: "));
+    assert.equal(textRecovery, `recovery: ${JSON.stringify(recovery)}`);
+    assert.deepEqual(JSON.parse(textRecovery!.slice("recovery: ".length)), recovery);
+  }
+  const replay = async () => (await request("tools/call", { name: recovery.query.name, arguments: { ...recovery.query.arguments, mode: "full" } })).result as { structuredContent: Record<string, unknown> };
+  const sourceFact = (result: Record<string, unknown>) => {
+    const { mode, repositoryRoots, recovery: metadata, ...fact } = result;
+    return fact;
+  };
+  assert.deepEqual(sourceFact((await replay()).structuredContent), sourceFact(foreign.structuredContent));
+  writeFileSync(join(frontend, "src/main/java/shop/OrderController.java"), CONTROLLER.replace("/orders", "/changed"));
+  execFileSync("git", ["add", "-A"], { cwd: frontend, env: GIT_ENV });
+  execFileSync("git", ["commit", "-q", "-m", "change route"], { cwd: frontend, env: GIT_ENV });
+  const current = (await request("tools/call", { name: "ye_ast_entrypoints", arguments: { repo: "foreign", mode: "full" } })).result as { structuredContent: Record<string, unknown> };
+  assert.match(JSON.stringify(current.structuredContent["value"]), /\/changed/);
+  assert.notDeepEqual(current.structuredContent["recovery"], recovery);
+  const old = (await replay()).structuredContent;
+  assert.deepEqual(old["recovery"], recovery);
+  assert.deepEqual(sourceFact(old), sourceFact(foreign.structuredContent));
+  assert.match(JSON.stringify(old["value"]), /\/foreign/);
   const workspaceResult = (await request("tools/call", { name: "ye_ast_workspace", arguments: { mode: "full" } })).result as { isError?: boolean; structuredContent: { value: { workspace: { repos: string[] } } } };
   assert.equal(workspaceResult.isError, undefined);
   assert.deepEqual(workspaceResult.structuredContent.value.workspace.repos, ["shop-service"]);
   const live = (await request("tools/call", { name: "ye_ast_entrypoints", arguments: { repo: "foreign", live: true } })).result as { isError?: boolean; _meta?: Record<string, { kind: string }> };
   assert.equal(live.isError, true);
   assert.equal(live._meta?.["ye-ast/fault"]?.kind, "live-requires-trusted");
+});
+
+test("callers and impact replay real local and persisted workspace facts", async () => {
+  const git = (root: string, ...args: string[]) => execFileSync("git", args, { cwd: root, env: GIT_ENV, encoding: "utf8" }).trim();
+  const base = git(repo, "rev-parse", "HEAD");
+  git(repo, "branch", "comparison", base);
+  writeFileSync(join(repo, "src/main/java/shop/OrderController.java"), CONTROLLER.replace('return "x"', 'return "changed"'));
+  git(repo, "add", "-A");
+  git(repo, "commit", "-q", "-m", "change controller");
+  const head = git(repo, "rev-parse", "HEAD");
+  const member = git(frontend, "rev-parse", "HEAD");
+  const manifest = join(workspace, "workspace.json");
+  writeFileSync(manifest, JSON.stringify({ repos: [{ path: "../shop-web", id: "shop-web", revision: "main" }], gateways: [{ prefix: "shop-api", repo: "shop-service" }] }));
+  const errors: string[] = [];
+  assert.equal(await composeCli({ scratchRoot, trustDirectory: join(workspace, "trust") })(["init", "--trust", "trusted", "--workspace", manifest, repo], { out: () => {}, err: (line) => errors.push(line) }), 0, errors.join("\n"));
+  type Result = { isError?: boolean; structuredContent: Record<string, any>; content: { text: string }[]; _meta?: Record<string, any> };
+  const call = async (name: string, args: Record<string, unknown>): Promise<Result> => (await request("tools/call", { name, arguments: args })).result as Result;
+  const listed = (await request("tools/list")).result as { tools: { name: string; outputSchema: Parameters<AjvJsonSchemaValidator["getValidator"]>[0] }[] };
+  const fact = (result: Result) => { const { recovery, mode, repositoryRoots, ...source } = result.structuredContent; return source; };
+  const recipes: { name: string; recovery: any; source: Result }[] = [];
+  for (const workspaceArgs of [undefined, {}]) {
+    for (const [name, args] of [
+      ["ye_ast_callers", { targets: [{ file: "src/main/java/shop/OrderController.java", symbol: "OrderController.one" }] }],
+      ["ye_ast_impact", { base: "comparison", changed: ["src/main/java/**"] }],
+    ] as const) {
+      const input = { ...args, scope: { include: ["src/**"] }, budget: { depth: 5, expansions: 100 }, ...(workspaceArgs && { workspace: workspaceArgs }) };
+      const source = await call(name, { ...input, mode: "full" });
+      assert.equal(source.isError, undefined);
+      const recovery = source.structuredContent.recovery;
+      assert.equal(recovery.status, "available");
+      assert.equal(recovery.query.name, name);
+      assert.equal(recovery.query.arguments.repo, "shop-service");
+      assert.deepEqual(recovery.query.arguments.scope, input.scope);
+      assert.deepEqual(recovery.query.arguments.budget, input.budget);
+      if (name === "ye_ast_impact") assert.deepEqual(recovery.query.arguments.changed, ["src/main/java/**"]);
+      assert.equal(recovery.query.arguments[name === "ye_ast_impact" ? "head" : "revision"], head);
+      if (name === "ye_ast_impact") {
+        assert.equal(recovery.query.arguments.base, base);
+        assert.equal(workspaceArgs ? source.structuredContent.value.trigger.mergeBase : source.structuredContent.value.mergeBase, base);
+        const impact = workspaceArgs ? source.structuredContent.value.sections["shop-service"].value.impact : source.structuredContent.value;
+        assert.ok(impact.seeds.length > 0);
+      }
+      if (workspaceArgs) {
+        assert.deepEqual(recovery.query.arguments.workspace, {});
+        assert.match(recovery.query.arguments.replay.declaration, /^ws-r1:[0-9a-f]{64}$/);
+        assert.deepEqual(recovery.query.arguments.replay.snapshots, [{ repo: "shop-service", kind: "sha", sha: head }, { repo: "shop-web", kind: "sha", sha: member }]);
+        assert.equal(source.structuredContent.value.workspace.source, "persisted");
+        const section = source.structuredContent.value.sections["shop-web"];
+        assert.equal(section.snapshot.sha, member);
+        assert.ok(section.value.reads.some((read: any) => read.fact.snapshot.sha === member));
+        assert.ok(section.value.callSites.some((site: any) => site.file === "src/app/order.page.ts"));
+        assert.ok(source.structuredContent.repositoryRoots.some((root: any) => root.repo === "shop-web" && root.path === realpathSync(frontend)));
+      }
+      const validate = new AjvJsonSchemaValidator().getValidator(listed.tools.find((tool) => tool.name === name)!.outputSchema);
+      for (const mode of ["summary", "details", "full"]) {
+        const result = await call(name, { ...input, mode });
+        assert.equal(validate(result.structuredContent).valid, true);
+        assert.deepEqual(result.structuredContent.recovery, recovery);
+        assert.ok(result.content[0]!.text.split("\n").includes(`recovery: ${JSON.stringify(recovery)}`));
+      }
+      const replayed = await call(name, { ...recovery.query.arguments, mode: "full" });
+      assert.deepEqual(replayed.structuredContent.recovery, recovery);
+      assert.deepEqual(fact(replayed), fact(source));
+      if (workspaceArgs) recipes.push({ name, recovery, source });
+    }
+  }
+  writeFileSync(join(frontend, "src/app/order.page.ts"), COMPONENT.replace("shop-api/orders/7", "other-api/changed"));
+  git(frontend, "add", "-A");
+  git(frontend, "commit", "-q", "-m", "change call site");
+  for (const { name, recovery, source } of recipes) {
+    const currentArgs = { ...recovery.query.arguments };
+    delete currentArgs.replay;
+    const current = await call(name, { ...currentArgs, mode: "full" });
+    assert.notDeepEqual(fact(current), fact(source));
+    assert.notDeepEqual(current.structuredContent.value.sections["shop-web"].value.callSites, source.structuredContent.value.sections["shop-web"].value.callSites);
+    const replayed = await call(name, { ...recovery.query.arguments, mode: "full" });
+    assert.deepEqual(replayed.structuredContent.recovery, recovery);
+    assert.deepEqual(fact(replayed), fact(source));
+  }
+  writeFileSync(join(repo, ".ye-ast/workspace.json"), JSON.stringify({ repos: [{ path: "../shop-web", id: "shop-web", revision: "main" }], gateways: [{ prefix: "changed", repo: "shop-service" }] }));
+  for (const { name, recovery } of recipes) {
+    const changed = await call(name, recovery.query.arguments);
+    assert.equal(changed.isError, true);
+    assert.equal(changed._meta?.["ye-ast/fault"]?.kind, "result-changed");
+    assert.equal(changed._meta?.["ye-ast/fault"]?.stage, "workspace-replay");
+    assert.equal(changed.structuredContent, undefined);
+  }
 });
