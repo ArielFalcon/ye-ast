@@ -171,3 +171,58 @@ test("a read under the type root cannot leave it, however it spells the path", (
   assert.equal(read("../../../etc/passwd"), undefined);
   assert.equal(read("/etc/passwd"), undefined);
 });
+
+test("a typed numeric call resolves its numeric overload rather than the first declaration", () => {
+  const sources = [source("overload.ts", "function pick(x: string): string;\nfunction pick(x: number): number;\nfunction pick(x: string | number) { return x; }\npick(1);\npick('x');")];
+  const resolution = createTypeResolution({ sources, typeRoot: "/nowhere" }, deps());
+  const numeric = only(resolution.resolve([{ file: "overload.ts", line: 4, column: 1, symbol: "pick" }]));
+  assert.deepEqual(targetOf(numeric), { kind: "repository", file: "overload.ts", symbol: "pick", line: 2, endLine: 2 });
+  assert.deepEqual(targetOf(only(resolution.resolve([{ file: "overload.ts", line: 5, column: 1, symbol: "pick" }]))), { kind: "repository", file: "overload.ts", symbol: "pick", line: 1, endLine: 1 });
+});
+
+test("overload recovery and indeterminate arguments retain uncertainty", () => {
+  const sources = [source("overload.ts", "function pick(x: string): string;\nfunction pick(x: number): number;\nfunction pick(x: string | number) { return x; }\ndeclare const a: any;\ndeclare const u: unknown;\ndeclare const union: string | number;\npick(true);\npick(a);\npick(u);\npick(union);")];
+  const resolution = createTypeResolution({ sources, typeRoot: "/nowhere" }, deps());
+  for (const line of [7, 8, 9, 10])
+    assert.equal(only(resolution.resolve([{ file: "overload.ts", line, column: 1, symbol: "pick" }])).status, "unknown");
+});
+
+test("full graph expression metadata anchors a generic receiver without borrowing its nested call", () => {
+  const text = "class Service { run() {} }\nfunction identity<T>(x:T):T { return x; }\nfunction use(s:Service) { identity(s).run(); identity(s).run(); }";
+  const resolution = createTypeResolution({ sources: [source("generic.ts", text)], typeRoot: "/nowhere" }, deps());
+  const column = text.split("\n")[2]!.indexOf("identity(s)") + 1;
+  const site = { file: "generic.ts", line: 3, column, symbol: "run", fullName: "identity().run", kind: "calls" };
+  assert.deepEqual(targetOf(only(resolution.resolve([site]))), { kind: "repository", file: "generic.ts", symbol: "run", line: 1, endLine: 1 });
+  assert.equal(only(resolution.resolve([{ ...site, column: column + 1 }])).status, "unknown");
+  assert.equal(only(resolution.resolve([{ ...site, fullName: "other().run" }])).status, "unknown");
+});
+
+test("a constructor keeps its class target and uses the decorated declaration name anchor", () => {
+  const sources = [source("decorated.ts", "declare function decorate(x: unknown): any;\n@decorate\nclass Service {}\nnew Service();")];
+  const resolution = createTypeResolution({ sources, typeRoot: "/nowhere" }, deps());
+  assert.deepEqual(targetOf(only(resolution.resolve([siteAt(sources, "decorated.ts", "Service")]))), { kind: "repository", file: "decorated.ts", symbol: "Service", line: 3, endLine: 3 });
+});
+
+test("a resolved occurrence in a class decorator attests its declaration-name owner", () => {
+  const text = "class Service { run() { return 1; } }\nconst service = new Service();\nfunction identity<T>(x:T):T { return x; }\nfunction decorate(x:unknown): ClassDecorator { return () => {}; }\n@decorate(identity(service).run())\nexport class Screen {}";
+  const resolver = createTypeResolution({ sources: [source("decorated.ts", text)], typeRoot: "/nowhere" }, deps());
+  const finding = only(resolver.resolve([{ file: "decorated.ts", line: 5, column: 11, symbol: "run", fullName: "identity().run", kind: "calls" }]));
+  assert.equal(finding.status, "complete");
+  assert.deepEqual("sourceOwner" in finding && finding.sourceOwner, { file: "decorated.ts", symbol: "Screen", line: 6, column: 14 });
+});
+
+test("anchored expression proofs preserve UTF-16 columns, nested spellings, and refuse stale or unsupported sites", () => {
+  const text = "class Service { run() {} }\nfunction identity<T>(x:T):T { return x; }\nfunction use(s:Service) { const café='😀'; identity(s).run(); identity(s).run(); }\nfunction nested(s:Service) { identity(identity(s)).run(); }\nfunction zero(s:Service) {\nidentity(s).run();\n}";
+  const resolution = createTypeResolution({ sources: [source("matrix.ts", text)], typeRoot: "/nowhere" }, deps());
+  const first = text.split("\n")[2]!.indexOf("identity(s)") + 1;
+  const nested = text.split("\n")[3]!.indexOf("identity(identity") + 1;
+  for (const site of [{ line: 3, column: first, fullName: "identity().run", symbol: "run" }, { line: 4, column: nested, fullName: "identity().run", symbol: "run" }, { line: 6, column: 1, fullName: "identity().run", symbol: "run" }]) {
+    assert.deepEqual(targetOf(only(resolution.resolve([{ file: "matrix.ts", kind: "calls", ...site }]))), { kind: "repository", file: "matrix.ts", symbol: "run", line: 1, endLine: 1 });
+  }
+  assert.deepEqual(targetOf(only(resolution.resolve([{ file: "matrix.ts", kind: "calls", line: 4, column: nested, fullName: "identity", symbol: "identity" }]))), { kind: "repository", file: "matrix.ts", symbol: "identity", line: 2, endLine: 2 });
+  for (const override of [{ column: first - 1 }, { column: first + 1 }, { column: 1000 }, { column: 0 }, { line: 99 }, { fullName: "other().run" }, { kind: "imports" }]) {
+    assert.equal(only(resolution.resolve([{ file: "matrix.ts", line: 3, column: first, symbol: "run", fullName: "identity().run", kind: "calls", ...override }])).status, "unknown");
+  }
+  const computed = source("computed.ts", "class Service { run() {} }\nfunction use(s:Service) { s['run'](); }");
+  assert.equal(only(createTypeResolution({ sources: [computed], typeRoot: "/nowhere" }, deps()).resolve([{ file: "computed.ts", line: 2, column: 27, symbol: "run", fullName: "s.run", kind: "calls" }])).status, "unknown");
+});

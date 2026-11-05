@@ -56,3 +56,12 @@ test("an answer the inner resolution did not return is unknown, never omitted", 
 
   assert.deepEqual(resolution.resolve([SITE]), [{ status: "unknown", reason: "unresolved", evidence: [{ path: "src/a.ts", line: 3 }] }]);
 });
+
+test("same-point references with distinct spelling or role never share a cached proof", () => {
+  const counter = counting();
+  const resolution = memoizeTypeResolution(counter.port);
+  resolution.resolve([{ ...SITE, fullName: "factory().load", kind: "calls" }]);
+  resolution.resolve([{ ...SITE, fullName: "other().load", kind: "calls" }]);
+  resolution.resolve([{ ...SITE, fullName: "factory().load", kind: "references" }]);
+  assert.equal(counter.asked, 3);
+});

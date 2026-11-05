@@ -21,7 +21,7 @@ export interface ReachedSymbol {
   confidence: number;
   /** The callers that call or instantiate the symbol, which is what the hub bound counts. */
   fanIn: number;
-  /** The symbol that first reached it, in position order, at the level before (or the method it stands for). */
+  /** The predecessor on the admitted path that establishes confidence; shortest depth is independent. */
   via?: Via;
   /** Indexes into the seeds the walk started from. */
   seeds: readonly number[];
@@ -39,7 +39,6 @@ export interface Walk {
 interface Rec {
   symbol: GraphSymbol;
   depth: number;
-  via?: Via;
   /** Whether a changed contract can still flow down to the implementations. */
   contractChanged: boolean;
   /** True when the walk entered it as the type that declares a reached member, which follows only whole-type rows. */
@@ -52,6 +51,7 @@ interface Link {
   from: Rec;
   to: Rec;
   confidence: number;
+  via: Via;
 }
 
 function placeOn(symbol: GraphSymbol, dependence: InboundEdge): Via {
@@ -67,8 +67,8 @@ export function walkImpact(seeds: readonly GraphSymbol[], inbound: InboundEdges,
   const links: Link[] = [];
   let level: Rec[] = [];
 
-  function enter(symbol: GraphSymbol, depth: number, via: Via | undefined, contractChanged: boolean, into: Rec[], throughMember = false): Rec {
-    const rec: Rec = { symbol, depth, ...(via === undefined ? {} : { via }), contractChanged, throughMember, fanIn: 0, callers: [] };
+  function enter(symbol: GraphSymbol, depth: number, contractChanged: boolean, into: Rec[], throughMember = false): Rec {
+    const rec: Rec = { symbol, depth, contractChanged, throughMember, fanIn: 0, callers: [] };
     recs.set(symbol.id, rec);
     into.push(rec);
     return rec;
@@ -76,12 +76,12 @@ export function walkImpact(seeds: readonly GraphSymbol[], inbound: InboundEdges,
 
   function enterOwners(rec: Rec, into: Rec[]): void {
     for (const owner of inbound.ownersOf(rec.symbol)) {
-      const ownerRec = recs.get(owner.id) ?? enter(owner, rec.depth, { symbol: rec.symbol, lines: [], basis: "contains" }, false, into, true);
-      links.push({ from: rec, to: ownerRec, confidence: 1 });
+      const ownerRec = recs.get(owner.id) ?? enter(owner, rec.depth, false, into, true);
+      links.push({ from: rec, to: ownerRec, confidence: 1, via: { symbol: rec.symbol, lines: [], basis: "contains" } });
     }
   }
 
-  const seedRecs = seeds.map((seed) => enter(seed, 0, undefined, true, level));
+  const seedRecs = seeds.map((seed) => enter(seed, 0, true, level));
   for (const rec of seedRecs) enterOwners(rec, level);
 
   const stopped = { depth: [] as Rec[], hub: [] as Rec[], expansions: [] as Rec[] };
@@ -97,7 +97,7 @@ export function walkImpact(seeds: readonly GraphSymbol[], inbound: InboundEdges,
       if (handled.has(rec)) continue;
       handled.add(rec);
       rec.callers = inbound.callersOf(rec.symbol, rec.contractChanged, rec.throughMember);
-      rec.fanIn = rec.callers.filter((caller) => caller.basis === "call").length;
+      rec.fanIn = rec.callers.filter((caller) => caller.hasCall ?? caller.basis === "call").length;
       if (budget.depth !== undefined && depth >= budget.depth) stopped.depth.push(rec);
       else if (budget.hubFanIn !== undefined && rec.fanIn > budget.hubFanIn) stopped.hub.push(rec);
       else if (budget.expansions !== undefined && expansions >= budget.expansions) stopped.expansions.push(rec);
@@ -109,10 +109,10 @@ export function walkImpact(seeds: readonly GraphSymbol[], inbound: InboundEdges,
           const into = free ? queue : next;
           let target = recs.get(caller.from.id);
           if (target === undefined) {
-            target = enter(caller.from, free ? depth : depth + 1, placeOn(rec.symbol, caller), false, into);
+            target = enter(caller.from, free ? depth : depth + 1, false, into);
             enterOwners(target, into);
           }
-          links.push({ from: rec, to: target, confidence: caller.confidence });
+          links.push({ from: rec, to: target, confidence: caller.confidence, via: placeOn(rec.symbol, caller) });
         }
       }
     }
@@ -122,14 +122,17 @@ export function walkImpact(seeds: readonly GraphSymbol[], inbound: InboundEdges,
   const seedsOf = reachingSeeds(seedRecs, links);
   const confidence = widestPaths(seedRecs, links);
   const reached = [...recs.values()]
-    .map((rec): ReachedSymbol => ({
-      symbol: rec.symbol,
-      depth: rec.depth,
-      confidence: confidence.get(rec) ?? 0,
-      fanIn: rec.fanIn,
-      ...(rec.via === undefined ? {} : { via: rec.via }),
-      seeds: [...(seedsOf.get(rec) ?? [])].sort((a, b) => a - b),
-    }))
+    .map((rec): ReachedSymbol => {
+      const witness = confidence.get(rec);
+      return {
+        symbol: rec.symbol,
+        depth: rec.depth,
+        confidence: witness?.confidence ?? 0,
+        fanIn: rec.fanIn,
+        ...(witness?.via === undefined ? {} : { via: witness.via }),
+        seeds: [...(seedsOf.get(rec) ?? [])].sort((a, b) => a - b),
+      };
+    })
     .sort((a, b) => a.depth - b.depth || comparePosition(a.symbol, b.symbol));
 
   const unreached = (rec: Rec): boolean => rec.callers.some((caller) => !recs.has(caller.from.id));
@@ -163,15 +166,15 @@ function reachingSeeds(seedRecs: readonly Rec[], links: readonly Link[]): Map<Re
 }
 
 /** The strongest weakest edge from any seed to each symbol: a path is as sure as its least sure edge. */
-function widestPaths(seedRecs: readonly Rec[], links: readonly Link[]): Map<Rec, number> {
+function widestPaths(seedRecs: readonly Rec[], links: readonly Link[]): Map<Rec, { confidence: number; via?: Via }> {
   const outgoing = Map.groupBy(links, (link) => link.from);
-  const best = new Map<Rec, number>(seedRecs.map((rec) => [rec, 1]));
-  const pending = [...new Set(seedRecs)];
+  const best = new Map<Rec, { confidence: number; via?: Via }>(seedRecs.map((rec) => [rec, { confidence: 1 }]));
+  const pending = [...new Set(seedRecs)].sort((a, b) => comparePosition(a.symbol, b.symbol));
   for (let rec = pending.shift(); rec !== undefined; rec = pending.shift()) {
     for (const link of outgoing.get(rec) ?? []) {
-      const through = Math.min(best.get(rec)!, link.confidence);
-      if (through > (best.get(link.to) ?? -1)) {
-        best.set(link.to, through);
+      const through = Math.min(best.get(rec)!.confidence, link.confidence);
+      if (through > (best.get(link.to)?.confidence ?? -1)) {
+        best.set(link.to, { confidence: through, via: link.via });
         pending.push(link.to);
       }
     }

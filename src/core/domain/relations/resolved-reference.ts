@@ -7,6 +7,8 @@ export interface ReferenceSite {
   line: number;
   column: number;
   symbol?: string;
+  fullName?: string;
+  kind?: string;
 }
 
 /**

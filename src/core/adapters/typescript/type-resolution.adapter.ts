@@ -1,10 +1,11 @@
 import { readFileSync } from "node:fs";
 import { dirname, posix, resolve, sep } from "node:path";
 import ts from "typescript";
+import { findReferenceOccurrence } from "./reference-occurrence.ts";
 import type { ReferenceSite, ResolvedTarget } from "../../domain/relations/resolved-reference.ts";
 import { nameTail } from "../../domain/impact/impact-cuts.ts";
 import type { Evidence, Finding } from "../../domain/shared/fact.ts";
-import type { TypeResolution } from "../../ports/type-resolution.port.ts";
+import type { DecoratorSourceOwner, TypeResolutionFinding, TypeResolution } from "../../ports/type-resolution.port.ts";
 import { declaredOptionsOf } from "./module-resolver.ts";
 
 /** A source the snapshot holds, repository-relative and without a leading slash. */
@@ -123,13 +124,15 @@ function compilerHost(
   };
 }
 
-function resolveSite(checker: ts.TypeChecker, program: ts.Program, site: ReferenceSite): Finding<ResolvedTarget> {
+function resolveSite(checker: ts.TypeChecker, program: ts.Program, site: ReferenceSite): TypeResolutionFinding {
   const evidence: Evidence[] = [{ path: site.file, line: site.line }];
   const source = program.getSourceFile(`${SNAPSHOT}/${site.file}`);
   if (source === undefined) return unknown("source-unreadable", evidence);
   const position = positionOf(source, site);
   if (position === undefined) return unknown("source-unreadable", evidence);
-  const named = nameNodeAt(source, position);
+  const named = site.fullName !== undefined || site.kind !== undefined
+    ? findReferenceOccurrence(source, site)
+    : nameNodeAt(source, position);
   /**
    * The index does not promise that `column` lands on the name of the reference. When it lands elsewhere, answering about
    * that other name would be worse than not answering: it hides a dependence with the confidence of a resolved one.
@@ -137,9 +140,31 @@ function resolveSite(checker: ts.TypeChecker, program: ts.Program, site: Referen
   if (named === undefined || (site.symbol !== undefined && named.getText(source) !== nameTail(site.symbol))) return unknown("unresolved", evidence);
   const symbol = checker.getSymbolAtLocation(named);
   if (symbol === undefined) return unknown("unresolved", evidence);
-  const declaration = declarationOf(checker, symbol);
+  const declaration = callDeclaration(checker, program, named, symbol);
   if (declaration === undefined) return unknown("unresolved", evidence);
-  return { status: "complete", value: targetOf(declaration, symbol), evidence };
+  const sourceOwner = decoratorOwner(named, source);
+  return { status: "complete", value: targetOf(declaration, symbol), evidence, ...(sourceOwner === undefined ? {} : { sourceOwner }) };
+}
+
+/** Only a syntactic class decorator supplies this witness; ordinary enclosing scopes do not. */
+function decoratorOwner(named: ts.Node, source: ts.SourceFile): DecoratorSourceOwner | undefined {
+  let ancestor: ts.Node | undefined = named;
+  while (ancestor !== undefined && !ts.isDecorator(ancestor)) {
+    if (ts.isClassLike(ancestor) || ts.isFunctionLike(ancestor)) return undefined;
+    ancestor = ancestor.parent;
+  }
+  const owner = ancestor?.parent;
+  if (owner === undefined || !ts.isClassDeclaration(owner) || owner.name === undefined) return undefined;
+  const name = owner.name;
+  const position = source.getLineAndCharacterOfPosition(name.getStart(source));
+  // The graph exposes lines but no declaration-name columns: same-line homonyms cannot be joined safely.
+  let count = 0;
+  const visit = (node: ts.Node): void => {
+    if (ts.isClassDeclaration(node) && node.name?.text === name.text && source.getLineAndCharacterOfPosition(node.name.getStart(source)).line === position.line) count++;
+    node.forEachChild(visit);
+  };
+  visit(source);
+  return count === 1 ? { file: source.fileName.slice(SNAPSHOT.length + 1), symbol: name.text, line: position.line + 1, column: position.character + 1 } : undefined;
 }
 
 function positionOf(source: ts.SourceFile, site: ReferenceSite): number | undefined {
@@ -193,6 +218,30 @@ function holds(node: ts.Node, position: number): boolean {
   return node.pos <= position && position < node.end;
 }
 
+/** A checker recovery signature is not proof of an admitted invocation. */
+function callDeclaration(checker: ts.TypeChecker, program: ts.Program, named: ts.Node, symbol: ts.Symbol): ts.Declaration | undefined {
+  let expression = named;
+  if (ts.isPropertyAccessExpression(named.parent) && named.parent.name === named) expression = named.parent;
+  while (ts.isParenthesizedExpression(expression.parent) || ts.isNonNullExpression(expression.parent) || ts.isAsExpression(expression.parent)) expression = expression.parent;
+  const call = expression.parent;
+  if (!ts.isCallExpression(call) || call.expression !== expression) return declarationOf(checker, symbol);
+  const bound = (symbol.flags & ts.SymbolFlags.Alias) !== 0 ? checker.getAliasedSymbol(symbol) : symbol;
+  const declarations = bound.getDeclarations() ?? [];
+  const signature = checker.getResolvedSignature(call);
+  const selected = signature?.getDeclaration();
+  if (selected === undefined || !declarations.includes(selected)) return undefined;
+  const source = call.getSourceFile();
+  const diagnostics = [...program.getSyntacticDiagnostics(source), ...program.getSemanticDiagnostics(source)];
+  if (diagnostics.some(d => d.category === ts.DiagnosticCategory.Error && d.start !== undefined
+    && d.start < call.end && d.start + (d.length ?? 0) > call.getStart(source))) return undefined;
+  const signatures = checker.getTypeAtLocation(expression).getCallSignatures();
+  if (signatures.length > 1 && (call.arguments ?? []).some(arg => {
+    const type = checker.getTypeAtLocation(arg);
+    return (type.flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown | ts.TypeFlags.Union)) !== 0;
+  })) return undefined;
+  return selected;
+}
+
 function declarationOf(checker: ts.TypeChecker, symbol: ts.Symbol): ts.Declaration | undefined {
   let resolved = symbol;
   if ((symbol.flags & ts.SymbolFlags.Alias) !== 0) {
@@ -208,7 +257,7 @@ function declarationOf(checker: ts.TypeChecker, symbol: ts.Symbol): ts.Declarati
 function targetOf(declaration: ts.Declaration, symbol: ts.Symbol): ResolvedTarget {
   const file = declaration.getSourceFile();
   const name = ts.getNameOfDeclaration(declaration)?.getText(file) ?? symbol.getName();
-  const { line } = file.getLineAndCharacterOfPosition(declaration.getStart(file));
+  const { line } = file.getLineAndCharacterOfPosition((ts.getNameOfDeclaration(declaration) ?? declaration).getStart(file));
   const { line: endLine } = file.getLineAndCharacterOfPosition(declaration.getEnd());
   const path = file.fileName;
   if (path.startsWith(`${MODULES}/`)) return { kind: "external", module: moduleOf(path) };

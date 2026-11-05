@@ -1,6 +1,16 @@
 import type { ReferenceSite, ResolvedTarget } from "../domain/relations/resolved-reference.ts";
 import type { Finding } from "../domain/shared/fact.ts";
 
+/** Source-attested class whose decorator contains the exact occurrence, in this resolution's snapshot. */
+export interface DecoratorSourceOwner {
+  file: string;
+  symbol: string;
+  line: number;
+  column: number;
+}
+
+export type TypeResolutionFinding = Finding<ResolvedTarget> & { sourceOwner?: DecoratorSourceOwner };
+
 /**
  * Settles the references a walk could not: which declaration a name refers to, or that it names a module outside the
  * repository. Synchronous because its consumer is (ADR-0018 decision 9): a walk that returns values cannot await, and
@@ -12,5 +22,5 @@ export interface TypeResolution {
    * A site names a declaration: a caller filters out the kinds that name a module specifier instead (`imports`), which
    * module resolution settles.
    */
-  resolve(sites: readonly ReferenceSite[]): readonly Finding<ResolvedTarget>[];
+  resolve(sites: readonly ReferenceSite[]): readonly TypeResolutionFinding[];
 }
