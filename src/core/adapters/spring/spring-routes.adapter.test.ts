@@ -875,6 +875,39 @@ test("interfaces of the platform packages are not gaps", async () => {
   assert.deepEqual(findings, []);
 });
 
+test("a repository under a platform package owns its own packages, not the platform's", async () => {
+  const findings = await extractor.extract([
+    file(
+      "src/main/java/org/springframework/samples/shop/rest/OrderController.java",
+      `package org.springframework.samples.shop.rest;
+${WEB}
+import org.springframework.samples.shop.rest.api.OrdersApi; import org.springframework.beans.factory.InitializingBean;
+@RestController class OrderController implements OrdersApi, InitializingBean {
+  @Override public void list() {}
+  @Override public void afterPropertiesSet() {}
+}`,
+    ),
+  ]);
+
+  assert.deepEqual(gaps(findings), ["no-extractor@4", "no-extractor@5", "no-extractor@6"]);
+});
+
+test("a repository under a platform package does not claim the platform's other packages", async () => {
+  const findings = await extractor.extract([
+    file(
+      "src/main/java/org/springframework/samples/shop/rest/Plain.java",
+      `package org.springframework.samples.shop.rest;
+${WEB}
+import org.springframework.beans.factory.InitializingBean;
+@RestController class Plain implements InitializingBean {
+  @Override public void afterPropertiesSet() {}
+}`,
+    ),
+  ]);
+
+  assert.deepEqual(findings, []);
+});
+
 test("a method returning Spring's RouterFunction is an unknown item, imported or fully qualified", async () => {
   const findings = await extractor.extract([
     app(

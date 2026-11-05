@@ -94,6 +94,11 @@ export interface JavaProject {
   /** The files whose declarations could not be read; none of their types is in the project. */
   unreadable: readonly JavaFile[];
   lookupType(name: string, scope: Scope): TypeLookup;
+  /**
+   * Whether a name no source declares belongs to the platform: it sits under a platform package, and no package the
+   * sources declare claims the segment after that prefix.
+   */
+  isPlatformName(fqn: string): boolean;
   /** The type, then each interface with its own hierarchy, then the superclass with its own: the order Spring searches. */
   hierarchy(type: TypeDecl): Hierarchy;
   /** The type and its superclasses declared in the project. */
@@ -166,10 +171,6 @@ export function describeFile(path: string, root: Node): JavaFile {
   return { path, root, packageName, singleImports, onDemandImports, staticImports, staticOnDemandImports };
 }
 
-export function isPlatformName(fqn: string): boolean {
-  return PLATFORM_PACKAGES.some((prefix) => fqn.startsWith(prefix));
-}
-
 /**
  * The fully qualified names a type that no source declares may have, from the imports of the file that names it.
  * A name no import mentions may also be a type of the file's own package when `samePackage` holds.
@@ -199,6 +200,14 @@ export function qualifiedTypeName(name: string, scope: Scope, project: JavaProje
   return named ? candidate : undefined;
 }
 
+/** The package under a platform prefix that a repository's own package occupies: the prefix and its next segment. */
+function claimedPlatformPackage(packageName: string): string[] {
+  const prefix = PLATFORM_PACKAGES.find((candidate) => `${packageName}.`.startsWith(candidate));
+  if (prefix === undefined) return [];
+  const next = packageName.slice(prefix.length).split(".")[0];
+  return [next === undefined || next === "" ? packageName : `${prefix}${next}`];
+}
+
 export function createJavaProject(files: readonly JavaFile[]): JavaProject {
   const types: TypeDecl[] = [];
   const unreadable: JavaFile[] = [];
@@ -215,6 +224,12 @@ export function createJavaProject(files: readonly JavaFile[]): JavaProject {
       types.push(type);
       namesToTypes.set(type.fqn, [...(namesToTypes.get(type.fqn) ?? []), type]);
     }
+  }
+
+  const claimed = [...new Set(files.flatMap((file) => claimedPlatformPackage(file.packageName)))];
+
+  function isPlatformName(fqn: string): boolean {
+    return PLATFORM_PACKAGES.some((prefix) => fqn.startsWith(prefix)) && claimed.every((owned) => !fqn.startsWith(`${owned}.`));
   }
 
   /** A name that two files declare (modules of one repository may) is not resolved: the sources do not say which is meant. */
@@ -417,6 +432,7 @@ export function createJavaProject(files: readonly JavaFile[]): JavaProject {
     types,
     unreadable,
     lookupType,
+    isPlatformName,
     hierarchy,
     classChain,
     evaluate(expr) {

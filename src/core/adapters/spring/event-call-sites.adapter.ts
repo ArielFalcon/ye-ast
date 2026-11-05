@@ -7,7 +7,7 @@ import { EVENT_CLIENT_NAME, PUBLISH_CLIENTS, PUBLISH_METHOD_NAME, type PublishCl
 import { complete, spanOf, unknownAtNode, withEvidence } from "./findings.ts";
 import { argumentsOf, typeNameOf } from "./java-members.ts";
 import { ancestorsOf, holdersOf, invocationsOf, parametersOf, receiverOf, referencesParameter, symbolOf, type Invocation } from "./java-invocations.ts";
-import { isPlatformName, qualifiedTypeName, scopeOf, type JavaFile, type JavaProject, type TypeDecl } from "./java-symbols.ts";
+import { qualifiedTypeName, scopeOf, type JavaFile, type JavaProject, type TypeDecl } from "./java-symbols.ts";
 import { PLACEHOLDER, UrlText, type UrlScope } from "./url-text.ts";
 
 /** One publish call: where it is written, the client that publishes and the argument that names the destination. */
@@ -130,7 +130,7 @@ export class JavaEventReader {
     if (receiver === undefined) return undefined;
     const { resolved } = receiver;
     if ("decl" in resolved) return !this.owned.has(resolved.decl.file) && EVENT_CLIENT_NAME.test(resolved.decl.name) ? resolved.decl.fqn : undefined;
-    return !isPlatformName(resolved.fqn) && EVENT_CLIENT_NAME.test(simpleNameOf(resolved.fqn)) ? resolved.fqn : undefined;
+    return !this.project.isPlatformName(resolved.fqn) && EVENT_CLIENT_NAME.test(simpleNameOf(resolved.fqn)) ? resolved.fqn : undefined;
   }
 
   private target(publish: Publish, scope: UrlScope): Finding<EventTarget> {

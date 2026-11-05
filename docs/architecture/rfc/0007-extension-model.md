@@ -299,7 +299,9 @@ Row S4 as built (`core/adapters/spring`, over `core/adapters/tree-sitter`):
   `unknown` with reason `unresolved`, with no route; a handler an ambiguous overload affects is too.
 - Detected but not extracted, each `unknown` with reason `no-extractor` at the method:
   - a supertype of a controller, class or interface, that the sources do not give and the platform packages
-    (`org.springframework`, `java`, `javax`, `jakarta`, `lombok`) do not own: generated `*Api` interfaces and library
+    (`org.springframework`, `java`, `javax`, `jakarta`, `lombok`) do not own. A package the sources declare under one
+    of those prefixes claims the prefix and its next segment for the repository (`org.springframework.samples.*` is
+    the repository's, `org.springframework.web.*` stays the platform's), so its absent names are gaps: generated `*Api` interfaces and library
     base classes are usually absent from git, and the routes they carry are row S5. It is one item at its `extends` or
     `implements`; a route whose class mapping Spring's search could take from it (the supertype precedes the first
     class mapping in the search order, or no class mapping is found) is an item instead of a route, never a prefix

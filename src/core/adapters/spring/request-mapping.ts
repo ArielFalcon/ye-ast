@@ -1,6 +1,6 @@
 import type { Node } from "web-tree-sitter";
 import type { HttpMethod } from "../../domain/entrypoints/http-route.ts";
-import { externalNames, isPlatformName, namedChildren, scopeOf, type Expr, type Gap, type GapReason, type JavaProject, type Scope, type TypeDecl } from "./java-symbols.ts";
+import { externalNames, namedChildren, scopeOf, type Expr, type Gap, type GapReason, type JavaProject, type Scope, type TypeDecl } from "./java-symbols.ts";
 
 export type Attributes = ReadonlyMap<string, readonly Expr[]>;
 
@@ -160,7 +160,7 @@ export function createSpringAnnotations(project: JavaProject): SpringAnnotations
     if (found !== undefined) return { kind: "declared", type: found };
     const names = externalNames(name, scope.file, false);
     const key = names.find((candidate) => KNOWN.has(candidate));
-    return { kind: "external", key, library: key === undefined && !names.every(isPlatformName) };
+    return { kind: "external", key, library: key === undefined && !names.every(project.isPlatformName) };
   }
 
   function keyOf(reference: Reference): string | undefined {

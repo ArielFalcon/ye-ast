@@ -20,7 +20,7 @@ import {
 } from "./http-client-vocabulary.ts";
 import { argumentsOf, assignmentsOf, localBindings, type Binding } from "./java-members.ts";
 import { ancestorsOf, holdersOf, invocationsOf, NO_VARIABLES, parametersOf, receiverOf, referencesParameter, symbolOf, type Invocation } from "./java-invocations.ts";
-import { externalNames, isPlatformName, scopeOf, type Expr, type JavaFile, type JavaProject, type TypeDecl } from "./java-symbols.ts";
+import { externalNames, scopeOf, type Expr, type JavaFile, type JavaProject, type TypeDecl } from "./java-symbols.ts";
 import { stringLiteralValue } from "./java-literals.ts";
 import { annotationUses, createSpringAnnotations, pathExpressions, type SpringAnnotations } from "./request-mapping.ts";
 import { isAnnotation, PLACEHOLDER, UrlText, type UrlScope } from "./url-text.ts";
@@ -209,7 +209,7 @@ export class JavaHttpReader {
     if (receiver === undefined) return undefined;
     const { resolved } = receiver;
     if ("decl" in resolved) return !this.owned.has(resolved.decl.file) && HTTP_CLIENT_NAME.test(resolved.decl.name) ? resolved.decl.fqn : undefined;
-    return !isPlatformName(resolved.fqn) && HTTP_CLIENT_NAME.test(resolved.fqn) ? resolved.fqn : undefined;
+    return !this.project.isPlatformName(resolved.fqn) && HTTP_CLIENT_NAME.test(resolved.fqn) ? resolved.fqn : undefined;
   }
 
   private target(request: Request, scope: UrlScope): ReadTarget {
