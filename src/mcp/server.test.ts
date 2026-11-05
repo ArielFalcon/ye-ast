@@ -726,6 +726,75 @@ test("a workspace answer says where its repositories came from, so one repositor
   await session.close();
 });
 
+test("workspace membership advice uses the publishing tool's accepted argument shape", async () => {
+  const recorded = workspaceImpactFact();
+  if (recorded.status === "unknown") throw new Error("expected workspace impact value");
+  const noMembers = { ...recorded, value: { ...recorded.value, workspace: { ...recorded.value.workspace, source: "none" as const } } };
+  const { session } = await setup({
+    decisions: async () => ({ ok: true, value: { fact: decisionFact({ ...DECISIONS, source: "none" }) } }),
+    workspaceOfChange: async () => ({ ok: true, value: { fact: noMembers } }),
+    workspaceCallers: async () => ({ ok: true, value: { fact: noMembers } }),
+  });
+  try {
+    const tools = await session.listTools();
+    const cases = [
+      { name: "ye_ast_workspace", args: {} },
+      { name: "ye_ast_decisions", args: {} },
+      { name: "ye_ast_impact", args: { base: "main", workspace: {} } },
+      { name: "ye_ast_callers", args: { targets: [{ file: "src/OrderService.java", symbol: "OrderService.find" }], workspace: {} } },
+    ];
+    for (const { name, args } of cases) {
+      const validate = new AjvJsonSchemaValidator().getValidator(tools.find(tool => tool.name === name)!.inputSchema);
+      for (const mode of ["summary", "details"] as const) {
+        const response = await session.callTool(name, { ...args, mode });
+        assert.notEqual(response.isError, true, name);
+        const parameter = textOf(response).match(/\(pass ([a-z.]+),/)?.[1];
+        assert.ok(parameter, name);
+        const declared = [{ path: "/work/shop-web", id: "shop-web" }];
+        const fields = parameter.split(".");
+        let suggested: Record<string, unknown> = { [fields.pop()!]: declared };
+        for (const field of fields.toReversed()) suggested = { [field]: suggested };
+        assert.equal(validate({ ...args, ...suggested, mode }).valid, true, `${name}: ${parameter}`);
+      }
+    }
+  } finally { await session.close(); }
+});
+
+test("cut lookup categories share context while every coordinate reconstructs a usable selector", async () => {
+  const cut = (index: number): Cut => ({
+    kind: "unresolved-link",
+    at: [`src/consumer-${index}.ts::load`, `src/consumer-${index}.ts:${index + 3} unresolved`],
+  });
+  const cuts: [Cut, ...Cut[]] = [cut(0), ...Array.from({ length: 11 }, (_, index) => cut(index + 1))];
+  const fact = impactFact({ status: "partial", cuts, inputs: { ...base().inputs, declaredConfig: { targets: ["src/OrderService.java:OrderService.find"] } } });
+  const { session } = await setup({
+    callers: async () => ({ ok: true, value: fact }),
+    ofChange: async () => ({ ok: true, value: fact }),
+  });
+  try {
+    const tools = await session.listTools();
+    for (const { name, args } of [
+      { name: "ye_ast_callers", args: { targets: [{ file: "src/OrderService.java", symbol: "OrderService.find" }] } },
+      { name: "ye_ast_impact", args: { base: "main" } },
+    ]) {
+      const response = await session.callTool(name, { ...args, mode: "details" });
+      assert.notEqual(response.isError, true);
+      const text = textOf(response);
+      assert.equal(text.split('"kind":"cut-places"').length - 1, 1);
+      const example = text.match(/Cut lookup:.*select example: (\{[^\n]+\})/)?.[1];
+      assert.ok(example, name);
+      const context = JSON.parse(example) as Record<string, unknown>;
+      const selectors = [...text.matchAll(/^\s+cut: (\{"cutIndex":\d+\})/gm)].map(match => ({ ...context, ...JSON.parse(match[1]!) }));
+      assert.deepEqual(selectors, cuts.map((_, cutIndex) => ({ kind: "cut-places", owner: { kind: "fact" }, cutIndex })));
+      const schema = new AjvJsonSchemaValidator().getValidator(tools.find(tool => tool.name === name)!.inputSchema);
+      for (const select of selectors) assert.equal(schema({ ...args, select, page: { limit: 1 }, mode: "full" }).valid, true);
+      const selected = await session.callTool(name, { ...args, select: selectors.at(-1), page: { limit: 1 }, mode: "full" });
+      assert.notEqual(selected.isError, true);
+      assert.deepEqual((selected.structuredContent as { items: unknown[] }).items, [{ atIndex: 1, place: cuts.at(-1)!.at[1] }]);
+    }
+  } finally { await session.close(); }
+});
+
 test("output schemas validate real receipts and family payloads and reject broken required fields", async () => {
   const { session } = await setup();
   const schemas = [ENTRYPOINTS_OUTPUT, IMPACT_OUTPUT, CALLERS_OUTPUT, IMPORTERS_OUTPUT, OUTLINE_OUTPUT, WORKSPACE_OUTPUT, DECISIONS_OUTPUT];

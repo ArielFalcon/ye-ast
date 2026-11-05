@@ -37,6 +37,26 @@ test("local and workspace rows expose exact owners and public cut positions", ()
   assert.ok(ws.includes('[linkId "actual-id"]'));
 });
 
+test("shared cut coordinates retain each repository and indexed-read owner", () => {
+  const cuts = Array.from({ length: 12 }, (_, index) => ({ kind: "depth", at: [`anchor-${index}`, `place-${index}`], limit: 2 }));
+  const read = { kind: "trigger", fact: { ...base, status: "partial", cuts } };
+  const section = { ...base, status: "partial", cuts, value: { reads: [read, read], callSites: [], unmatched: [], external: [] } };
+  const fact = { ...base, status: "partial", cuts, value: { workspace: { repos: ['a"b'], gateways: [], unmatchedGateways: [], unserved: [], source: "request" }, repositorySnapshots: [], trigger: { repo: 'a"b' }, sections: { ['a"b']: section }, links: [] } } as unknown as Fact<WorkspaceImpactValue>;
+  const text = renderWorkspaceImpact(fact, "details", { tool: "impact" });
+  const templates = [...text.matchAll(/Cut lookup:.*select example: (\{[^\n]+\})/g)].map(match => JSON.parse(match[1]!));
+  assert.deepEqual(templates.map(template => template.owner), [
+    { kind: "fact" },
+    { kind: "section", repo: 'a"b' },
+    { kind: "read", repo: 'a"b', index: 0 },
+    { kind: "read", repo: 'a"b', index: 1 },
+  ]);
+  const groups = text.split(/Cut lookup:.*select example: \{[^\n]+\}/).slice(1);
+  for (const group of groups) {
+    const indices = [...group.matchAll(/^\s+cut: (\{"cutIndex":\d+\})/gm)].map(match => JSON.parse(match[1]!).cutIndex);
+    assert.deepEqual(indices, cuts.map((_, index) => index));
+  }
+});
+
 test("unknown findings share a file and reason without losing indices and ranges", () => {
   const findings = Array.from({ length: 20 }, (_, i) => ({ status: "unknown" as const, reason: "unresolved", evidence: [{ path: "src/really-long-repeated-path.ts", line: i + 1, endLine: i + 2 }] }));
   const fact = { ...base, status: "complete", value: { entrypoints: { ...base, status: "complete", value: findings } } } as unknown as Fact<EntrypointMap>;

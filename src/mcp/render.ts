@@ -38,12 +38,13 @@ const MODULE_LISTED_DEPTH = 1;
 const SOURCE_TEXT: Readonly<Record<WorkspaceSource, string>> = {
   request: "the request",
   persisted: `${FIXED_LAYER_DIRECTORY}/${WORKSPACE_MANIFEST_FILE}`,
-  none: "nothing: this answer covers the bound repository alone (pass workspace.repos, or persist a declaration with ye-ast init --workspace)",
+  none: "nothing: this answer covers the bound repository alone",
 };
 
 /** The line that says where the repositories the answer worked over came from, so one repository is never read as all of them. */
-function sourceLine(source: WorkspaceSource): string {
-  return `repositories declared by: ${SOURCE_TEXT[source]}`;
+function sourceLine(source: WorkspaceSource, reposArgument: "repos" | "workspace.repos" = "workspace.repos"): string {
+  const recovery = source === "none" ? ` (pass ${reposArgument}, or persist a declaration with ye-ast init --workspace)` : "";
+  return `repositories declared by: ${SOURCE_TEXT[source]}${recovery}`;
 }
 
 /** A place: its line, and the last line when the declaration spans more than one. */
@@ -183,15 +184,24 @@ function cutLines(cuts: readonly Cut[], detail: ResponseMode): string[] {
 }
 
 function cutCoordinates(cuts: readonly Cut[], owner: CutOwner, detail: ResponseMode, context?: RenderContext): string[] {
+  if (cuts.length === 0) return [];
   const shown = new Set<Cut["kind"]>();
-  return cuts.flatMap((cut, cutIndex) => {
+  const rows = cuts.flatMap((cut, cutIndex) => {
     if (detail === "summary" && shown.has(cut.kind)) return [];
     shown.add(cut.kind);
-    const anchor = detail === "summary" ? "" : ` (anchor ${JSON.stringify(cut.at[0])})`;
-    const selection = {kind: "cut-places", owner, cutIndex} as const;
-    const selectable = context === undefined || canSelect(context, selection, owner.kind === "section" || owner.kind === "read");
-    return [`  ${!selectable ? "recorded coordinates" : "lookup example"}: ${literalSelection({ kind: "cut-places", owner, cutIndex })}${anchor}`];
+    return [{ cutIndex, anchor: detail === "summary" ? "" : ` (anchor ${JSON.stringify(cut.at[0])})` }];
   });
+  const first = rows[0]!;
+  const example = { kind: "cut-places", owner, cutIndex: first.cutIndex } as const;
+  const selectable = context === undefined || canSelect(context, example, owner.kind === "section" || owner.kind === "read");
+  const literal = rows.map(({ cutIndex, anchor }) => `  ${!selectable ? "recorded coordinates" : "lookup example"}: ${literalSelection({ kind: "cut-places", owner, cutIndex })}${anchor}`);
+  const shared = [
+    selectable
+      ? `  Cut lookup: combine each row's cutIndex with kind and owner from this complete select example: ${literalSelection(example)}`
+      : `  Recorded cut context: ${JSON.stringify({ kind: "cut-places", owner })}; each row supplies its cutIndex.`,
+    ...rows.map(({ cutIndex, anchor }) => `  cut: ${JSON.stringify({ cutIndex })}${anchor}`),
+  ];
+  return size(shared) < size(literal) ? shared : literal;
 }
 
 function cutsBlock(cuts: readonly Cut[], detail: ResponseMode = "summary"): string[] {
@@ -993,7 +1003,7 @@ export function renderWorkspace(fact: Fact<WorkspaceValue>, detail: ResponseMode
     return section === undefined || section.status === "unknown" ? [] : [[repo, section.value.names] as const];
   });
   lines.push(counted("repositories", value.repositorySnapshots.map(({ repo, snapshot }) => `${repo}@${snapshot.kind === "sha" ? snapshot.sha : snapshot.stateId}`)));
-  lines.push(sourceLine(value.workspace.source));
+  lines.push(sourceLine(value.workspace.source, "repos"));
   for (const repo of value.workspace.repos) {
     const section = value.sections[repo];
     if (section?.status === "unknown") lines.push(`  ${repo}: unknown (${section.reason})`);
@@ -1102,7 +1112,7 @@ export function renderDecisions(fact: Fact<DecisionValue>, detail: ResponseMode 
   if (fact.status === "unknown") return lines.join("\n");
   const { value } = fact;
   lines.push(counted("repositories", value.repositories.map(({ repo, snapshot }) => `${repo}@${snapshot.kind === "sha" ? snapshot.sha : snapshot.stateId}`)));
-  lines.push(sourceLine(value.source));
+  lines.push(sourceLine(value.source, "repos"));
   lines.push(`decisions (${value.decisions.length}):`, ...decisionsBlock(value.decisions, detail));
   lines.push(...cutsBlock(cutsOf(fact), detail));
   return lines.join("\n");
