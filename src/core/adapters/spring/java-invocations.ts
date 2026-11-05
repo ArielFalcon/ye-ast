@@ -1,7 +1,10 @@
 import type { Node } from "web-tree-sitter";
 import { descendants, isMember, localBindings, memberNodes, type Binding } from "./java-members.ts";
 import { externalNames, namedChildren, scopeOf, type JavaProject, type TypeDecl } from "./java-symbols.ts";
-import type { UrlText } from "./url-text.ts";
+export interface FieldLookup {
+  fieldOf(type: TypeDecl, name: string): { binding: Binding; owner: TypeDecl } | undefined;
+}
+
 
 export const NO_VARIABLES: ReadonlyMap<string, Binding> = new Map();
 const DECLARATIONS: ReadonlySet<string> = new Set(["class_declaration", "interface_declaration", "enum_declaration", "record_declaration", "annotation_type_declaration", "method_declaration", "constructor_declaration", "compact_constructor_declaration"]);
@@ -53,16 +56,6 @@ export function parametersOf(member: Node): string[] {
   return (list === null ? [] : namedChildren(list)).map((parameter) => parameter.childForFieldName("name")?.text ?? "");
 }
 
-/** Whether an expression reads a parameter of the method it is written in, directly or through a local variable. */
-export function referencesParameter(expression: Node, invocation: Invocation, trail: ReadonlySet<string> = new Set()): boolean {
-  return [expression, ...descendants(expression)].some((node) => {
-    if (node.type !== "identifier") return false;
-    const binding = invocation.locals.get(node.text);
-    if (binding === undefined || trail.has(node.text)) return false;
-    return binding.node.type.endsWith("parameter") || (binding.initializer !== undefined && referencesParameter(binding.initializer, invocation, new Set(trail).add(node.text)));
-  });
-}
-
 export function resolveType(name: string, from: TypeDecl, project: JavaProject): Resolved | undefined {
   const found = project.lookupType(name, scopeOf(from));
   if (found === "ambiguous") return undefined;
@@ -72,7 +65,7 @@ export function resolveType(name: string, from: TypeDecl, project: JavaProject):
 }
 
 /** The type a receiver expression is an instance of, through the field, parameter or variable that holds it. */
-export function receiverOf(object: Node, invocation: Invocation, project: JavaProject, text: UrlText): Receiver | undefined {
+export function receiverOf(object: Node, invocation: Invocation, project: JavaProject, text: FieldLookup): Receiver | undefined {
   const name = object.type === "identifier" ? object.text : object.type === "field_access" && object.childForFieldName("object")?.type === "this" ? object.childForFieldName("field")?.text : undefined;
   if (name === undefined) return undefined;
   const local = object.type === "identifier" ? invocation.locals.get(name) : undefined;
@@ -81,11 +74,4 @@ export function receiverOf(object: Node, invocation: Invocation, project: JavaPr
   const owner = field?.owner ?? invocation.type;
   const resolved = binding === undefined ? undefined : resolveType(binding.typeName, owner, project);
   return binding === undefined || resolved === undefined ? undefined : { binding, owner: field?.owner, resolved };
-}
-
-/** The types a call's receiver is an instance of, its superclasses included: where a wrapper's declaration may sit. */
-export function holdersOf(object: Node | null, invocation: Invocation, project: JavaProject, text: UrlText): TypeDecl[] {
-  if (object === null || object.type === "this") return [...project.classChain(invocation.type)];
-  const receiver = receiverOf(object, invocation, project, text);
-  return receiver !== undefined && "decl" in receiver.resolved ? [...project.classChain(receiver.resolved.decl)] : [];
 }

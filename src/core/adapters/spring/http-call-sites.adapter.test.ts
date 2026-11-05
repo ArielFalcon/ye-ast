@@ -287,7 +287,7 @@ test("a call through a client type from a library whose source is not given is a
   assert.deepEqual(await read([client]), ["unknown BillingClient.a@BillingClient.java:11 via com.acme.http.AcmeRestClient"]);
 });
 
-test("a library whose source is given is read through its wrappers; a method that forwards no parameter stays a cut", async () => {
+test("library summaries evaluate source return methods as well as direct parameters", async () => {
   const library = [
     file(
       "src/main/java/com/acme/http/AcmeRestClient.java",
@@ -312,7 +312,7 @@ test("a library whose source is given is read through its wrappers; a method tha
   );
   const configuration = file(RESOURCES, "acme.base: http://billing-svc:8080\n");
 
-  assert.deepEqual(await read([client, configuration], library), ["GET /invoices via http://billing-svc:8080 BillingClient.a@BillingClient.java:9", "unknown BillingClient.a@BillingClient.java:9 via com.acme.http.AcmeRestClient"]);
+  assert.deepEqual(await read([client, configuration], library), ["GET /k BillingClient.a@BillingClient.java:9", "GET /invoices via http://billing-svc:8080 BillingClient.a@BillingClient.java:9"]);
 });
 
 test("test sources are not call sites", async () => {
@@ -364,4 +364,103 @@ test("interface dispatch evaluates all source implementations without selecting 
   assert.equal(sites.length, 1);
   assert.equal(sites[0]?.symbol, "Dispatch.load");
   assert.equal(sites[0]?.target.status, "unknown");
+});
+
+test("source constructors and Lombok builders retain distinct object fields for getters", async () => {
+  const source = java("Objects", `@lombok.Builder @lombok.Data class Query { String host; String path; }
+    class Explicit { String value; Explicit(String input) { this.value = input; } String getValue() { return value; } }
+    class Objects { RestTemplate rt; void load() {
+      Query query = Query.builder().host("http://catalog").path("/items").build();
+      Explicit suffix = new Explicit("/details");
+      rt.getForObject(query.getHost() + query.getPath() + suffix.getValue(), String.class);
+    } }`);
+  const sites = await reader.of([source], "service");
+  assert.deepEqual(sites[0]?.target.status === "complete" && sites[0].target.value, { method: "GET", base: "http://catalog", path: "/items/details" });
+});
+
+test("Map configuration keys are evaluated through library arguments in the consuming module", async () => {
+  const library = java("Gateway", `@org.springframework.boot.context.properties.ConfigurationProperties(prefix="clients")
+    class Settings { java.util.Map<String, Endpoint> systems; }
+    @lombok.Data class Endpoint { String url; }
+    class Gateway { Settings config; RestTemplate rt;
+      void send(String key) { Endpoint endpoint = config.getSystems().get(key); rt.getForObject(endpoint.getUrl(), String.class); }
+    }`);
+  const caller = java("Consumer", `class Consumer { Gateway gateway; void load() { gateway.send("catalog"); } }`);
+  const sites = await reader.of([caller, file(RESOURCES, "clients.systems.catalog.url: http://catalog/items\n")], "service", [library]);
+  assert.equal(sites.length, 1);
+  assert.deepEqual(sites[0]?.target.status === "complete" && sites[0].target.value, { method: "GET", base: "http://catalog", path: "/items" });
+});
+
+test("OkHttp newCall reads the standard Request builder URL and explicit or default method", async () => {
+  const source = java("Http", `class Http { OkHttpClient client; void load() {
+    Request request = new Request.Builder().url("http://catalog/items").method("PATCH", null).build();
+    client.newCall(request).execute();
+    client.newCall(new Request.Builder().url("http://catalog/default").build()).execute();
+  } }`, ["okhttp3.OkHttpClient", "okhttp3.Request"]);
+  const sites = await reader.of([source], "service");
+  assert.deepEqual(sites.map((site) => site.target.status === "complete" && site.target.value), [
+    { method: "PATCH", base: "http://catalog", path: "/items" },
+    { method: "GET", base: "http://catalog", path: "/default" },
+  ]);
+});
+
+test("source-proven setters update record fields before a getter reads them", async () => {
+  const source = java("Mutation", `class Query {
+    String path; void setPath(String input) { this.path = input; } String getPath() { return path; }
+  }
+  class Mutation { RestTemplate rt; void load() {
+    Query query = new Query(); query.setPath("http://catalog/items");
+    rt.getForObject(query.getPath(), String.class);
+  } }`);
+  const sites = await reader.of([source], "service");
+  assert.deepEqual(sites[0]?.target.status === "complete" && sites[0].target.value, { method: "GET", base: "http://catalog", path: "/items" });
+});
+
+test("recursive client summaries retain an explicit unknown instead of disappearing", async () => {
+  const source = java("Recursive", `class Recursive { RestTemplate rt;
+    void send(String url) { send(url); rt.getForObject(url, String.class); }
+  }`);
+  const sites = await reader.of([source], "service");
+  assert.ok(sites.length > 0);
+  assert.ok(sites.every((site) => site.target.status === "unknown"));
+});
+
+test("configuration defaults apply only to absent keys and never to conflicting values", async () => {
+  const source = java("Defaults", `class Defaults { RestTemplate rt;
+    @Value("\u0024{remote:http://fallback}") String base;
+    void load() { rt.getForObject(base + "/items", String.class); }
+  }`, [...WEB, "org.springframework.beans.factory.annotation.Value"]);
+  const absent = await reader.of([source], "service");
+  const conflict = await reader.of([source, file(RESOURCES, "remote: http://one\n"), file("src/main/resources/application.properties", "remote=http://two\n")], "service");
+  assert.equal(absent[0]?.target.status, "complete");
+  assert.equal(conflict[0]?.target.status, "unknown");
+});
+
+test("a source URL helper follows a proven null fallback and a single array element into HttpUrl", async () => {
+  const source = java("UrlHelper", `@lombok.Builder @lombok.Data class Query { String staticUrl; }
+    class UrlHelper { OkHttpClient client;
+      HttpUrl compose(Query query, String configured) {
+        String[] rendered = { query.getStaticUrl() != null ? query.getStaticUrl() : configured };
+        HttpUrl.Builder builder = HttpUrl.parse(rendered[0]).newBuilder(); return builder.build();
+      }
+      void load() { Query query = Query.builder().build();
+        HttpUrl url = compose(query, "http://catalog/items");
+        client.newCall(new Request.Builder().url(url).build());
+      }
+    }`, ["okhttp3.OkHttpClient", "okhttp3.Request", "okhttp3.HttpUrl"]);
+  const sites = await reader.of([source], "service");
+  assert.deepEqual(sites[0]?.target.status === "complete" && sites[0].target.value, { method: "GET", base: "http://catalog", path: "/items" });
+});
+
+test("a qualifier selects the implementation constructed by a named source Bean", async () => {
+  const source = java("Selection", `interface Gateway { void send(String path); }
+    class One implements Gateway { RestTemplate rt; public void send(String path) { rt.getForObject("http://one" + path, String.class); } }
+    class Two implements Gateway { RestTemplate rt; public void send(String path) { rt.getForObject("http://two" + path, String.class); } }
+    class Wiring { @org.springframework.context.annotation.Bean(name="chosen") Gateway gateway() { return new Two(); } }
+    class Selection { @org.springframework.beans.factory.annotation.Qualifier("chosen") Gateway gateway;
+      void load() { gateway.send("/items"); }
+    }`);
+  const sites = await reader.of([source], "service");
+  const site = sites.find((site) => site.symbol === "Selection.load");
+  assert.deepEqual(site?.target.status === "complete" && site.target.value, { method: "GET", base: "http://two", path: "/items" });
 });

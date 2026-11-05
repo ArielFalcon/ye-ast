@@ -305,3 +305,8 @@ function valueExpressions(value: Node, scope: Scope): Expr[] {
   const nodes = value.type === "element_value_array_initializer" ? namedChildren(value) : [value];
   return nodes.map((node) => ({ node, scope }));
 }
+
+export function isAnnotation(use: AnnotationUse, names: ReadonlySet<string> | string): boolean {
+  const wanted = typeof names === "string" ? [names] : [...names];
+  return externalNames(use.name, use.scope.file, false).some((candidate) => wanted.includes(candidate));
+}

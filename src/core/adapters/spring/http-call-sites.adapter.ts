@@ -19,7 +19,7 @@ import {
   TEMPLATE_EXPLICIT,
   TEMPLATE_VERBS,
 } from "./http-client-vocabulary.ts";
-import { argumentsOf, assignmentsOf, localBindings, type Binding } from "./java-members.ts";
+import { argumentsOf, assignmentsOf, localBindings, typeNameOf, type Binding } from "./java-members.ts";
 import { ancestorsOf, NO_VARIABLES, receiverOf, symbolOf, type Invocation } from "./java-invocations.ts";
 import { externalNames, scopeOf, type Expr, type JavaFile, type JavaProject, type TypeDecl } from "./java-symbols.ts";
 import { stringLiteralValue } from "./java-literals.ts";
@@ -74,13 +74,15 @@ export class JavaHttpReader {
       }
       const expanded = flow.expand(invocation, scope);
       if (expanded !== undefined) {
-        const values = expanded.map(({ leaf, scope }) => this.target(leaf, scope));
-        const signatures = new Set(values.map((value) => JSON.stringify(value.target.status === "unknown" ? value.target.status : value.target.value)));
-        const target = signatures.size === 1 ? values[0] : { target: unknownAtNode(invocation.type.file.path, invocation.node) };
-        if (target !== undefined) {
-          const declaring = expanded[0]?.leaf.invocation.type;
+        const alternatives = expanded.map((leaves) => leaves.map(({ leaf, scope }) => this.target(leaf, scope)));
+        const signatures = new Set(alternatives.map((values) => JSON.stringify(values.map((value) => value.target.status === "unknown" ? value.target.status : value.target.value))));
+        const targets = signatures.size === 1 ? alternatives[0] ?? [] : [{ target: unknownAtNode(invocation.type.file.path, invocation.node) }];
+        for (const target of targets) {
+          const declaring = expanded[0]?.[0]?.leaf.invocation.type;
           const library = declaring !== undefined && !this.owned.has(declaring.file) ? declaring.fqn : undefined;
-          found.push(this.siteOf(repo, invocation, target.target.status === "unknown" && library !== undefined ? { ...target, target: unknownAtNode(invocation.type.file.path, invocation.node, library) } : target));
+          const site = this.siteOf(repo, invocation, target.target.status === "unknown" && library !== undefined ? { ...target, target: unknownAtNode(invocation.type.file.path, invocation.node, library) } : target);
+          if (site.target.status !== "unknown") site.target = { ...site.target, evidence: [...site.target.evidence, ...expanded.flat().map(({ leaf }) => spanOf(leaf.invocation.type.file.path, leaf.invocation.node))] };
+          found.push(site);
         }
       } else {
         const library = this.libraryOf(invocation);
@@ -117,10 +119,40 @@ export class JavaHttpReader {
       return client === undefined || method === undefined ? undefined : { invocation, method, url: first, base: client.base };
     }
     const receiver = this.receiverOf(object, invocation);
+    if (receiver !== undefined && "fqn" in receiver.resolved && receiver.resolved.fqn === "okhttp3.OkHttpClient" && name === "newCall") return this.okHttpRequest(invocation, first);
     if (receiver === undefined || !("fqn" in receiver.resolved) || !REST_TEMPLATE_TYPES.has(receiver.resolved.fqn)) return undefined;
     const verb = TEMPLATE_VERBS.get(name);
     if (verb === undefined && !TEMPLATE_EXPLICIT.has(name)) return undefined;
     return { invocation, method: verb ?? second, url: first, base: this.declaredBase(receiver.binding, receiver.owner, invocation) };
+  }
+
+  private okHttpRequest(invocation: Invocation, expression: Node | undefined): Request {
+    let current = expression;
+    const seen = new Set<number>();
+    let url: Node | undefined;
+    let method: Node | HttpMethod | undefined;
+    while (current !== undefined && !seen.has(current.id)) {
+      seen.add(current.id);
+      if (current.type === "identifier") {
+        current = invocation.locals.get(current.text)?.initializer ?? this.text.fieldOf(invocation.type, current.text)?.binding.initializer;
+        continue;
+      }
+      if (current.type === "method_invocation") {
+        const name = current.childForFieldName("name")?.text;
+        if (name === "url") url ??= argumentsOf(current)[0];
+        if (name === "method") method ??= argumentsOf(current)[0];
+        if (name !== undefined && ["get", "head", "post", "put", "patch", "delete"].includes(name)) method ??= FLUENT_VERBS.get(name);
+        current = current.childForFieldName("object") ?? undefined;
+        continue;
+      }
+      if (current.type === "object_creation_expression") {
+        const named = typeNameOf(current.childForFieldName("type"));
+        const standard = named === "okhttp3.Request.Builder" || (named === "Request.Builder" && externalNames("Request", invocation.type.file, false).includes("okhttp3.Request"));
+        if (standard) return { invocation, method: method ?? "GET", url, base: undefined };
+      }
+      break;
+    }
+    return { invocation, method: undefined, url: undefined, base: undefined };
   }
 
   /** The Spring fluent client an expression is: a field or variable of that type, or a call chain that builds one. */
@@ -178,6 +210,7 @@ export class JavaHttpReader {
   }
 
   private target(request: Request, scope: UrlScope): ReadTarget {
+    if (scope.undecided === true) return { target: unknownAtNode(request.invocation.type.file.path, request.invocation.node) };
     const method = typeof request.method === "string" ? request.method : request.method === undefined ? undefined : this.methodOf(request.method, scope);
     const text = request.url === undefined ? undefined : this.text.of(request.url, scope);
     const resolved = text === undefined || method === undefined ? undefined : targetOf(text, request.base);
@@ -192,9 +225,9 @@ export class JavaHttpReader {
   private methodOf(node: Node, scope: UrlScope): HttpMethod | undefined {
     if (node.type === "identifier") {
       const closure = scope.env.get(node.text);
-      return closure === undefined ? undefined : this.methodOf(closure.node, closure.scope);
+      if (closure !== undefined) return this.methodOf(closure.node, closure.scope);
     }
-    const named = node.type === "string_literal" ? stringLiteralValue(node.text) : node.type === "field_access" ? methodField(node) : node.type === "method_invocation" ? methodCall(node) : undefined;
+    const named = this.text.of(node, scope) ?? (node.type === "string_literal" ? stringLiteralValue(node.text) : node.type === "field_access" ? methodField(node) : node.type === "method_invocation" ? methodCall(node) : undefined);
     const upper = named?.toUpperCase();
     return upper !== undefined && HTTP_METHODS.has(upper) ? (upper as HttpMethod) : undefined;
   }

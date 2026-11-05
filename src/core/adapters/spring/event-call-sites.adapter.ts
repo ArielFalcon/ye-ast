@@ -47,10 +47,10 @@ export class JavaEventReader {
       }
       const expanded = flow.expand(invocation, scope);
       if (expanded !== undefined) {
-        const values = expanded.map(({ leaf, scope }) => this.target(leaf, scope));
-        const signatures = new Set(values.map((value) => JSON.stringify(value.status === "unknown" ? value.status : value.value)));
-        const target = signatures.size === 1 ? values[0] : unknownAtNode(invocation.type.file.path, invocation.node);
-        if (target !== undefined) found.push(this.siteOf(repo, invocation, target));
+        const alternatives = expanded.map((leaves) => leaves.map(({ leaf, scope }) => this.target(leaf, scope)));
+        const signatures = new Set(alternatives.map((values) => JSON.stringify(values.map((value) => value.status === "unknown" ? value.status : value.value))));
+        const targets = signatures.size === 1 ? alternatives[0] ?? [] : [unknownAtNode(invocation.type.file.path, invocation.node)];
+        for (const target of targets) found.push(this.siteOf(repo, invocation, target));
       } else {
         const library = this.libraryOf(invocation);
         if (library !== undefined) found.push(this.siteOf(repo, invocation, unknownAtNode(invocation.type.file.path, invocation.node, library)));
@@ -95,7 +95,7 @@ export class JavaEventReader {
   }
 
   private target(publish: Publish, scope: UrlScope): Finding<EventTarget> {
-    const destination = this.destination(publish, scope);
+    const destination = scope.undecided === true ? undefined : this.destination(publish, scope);
     return destination === undefined
       ? unknownAtNode(publish.invocation.type.file.path, publish.invocation.node)
       : complete({ protocol: publish.client.protocol, destination, role: "publish" });

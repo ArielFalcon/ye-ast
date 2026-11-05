@@ -157,3 +157,16 @@ test("test sources are not call sites", async () => {
 
   assert.deepEqual(await read([test]), []);
 });
+
+test("NATS method summaries read a source event subject through forwarding calls", async () => {
+  const source = java("Publisher", `class Event { String getSubject() { return "catalog.created"; } }
+    class Publisher { Connection connection;
+      void leaf(Event event) { connection.publish(event.getSubject(), null); }
+      void forward(Event event) { leaf(event); }
+      void send() { forward(new Event()); }
+    }`, ["io.nats.client.Connection"]);
+  const sites = await reader.of([source], "service");
+  assert.equal(sites.length, 1);
+  assert.equal(sites[0]?.symbol, "Publisher.send");
+  assert.deepEqual(sites[0]?.target.status === "complete" && sites[0].target.value, { protocol: "nats", destination: "catalog.created", role: "publish" });
+});
