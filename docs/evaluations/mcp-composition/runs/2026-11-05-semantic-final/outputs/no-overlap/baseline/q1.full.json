@@ -1,0 +1,116 @@
+{
+  "text": "status: complete\nfull structured result: structuredContent\nSelect value.decisions by kind and subject; inspect evidence, options[].basis and options[].recommended. Match evidence repositories to value.repositories snapshots.\nRepository locations: match repositoryRoots[].repo to evidence ownership; repositoryRoots[].path locates the clone on disk, while evidence paths are relative to its repository at the recorded snapshot.",
+  "structured": {
+    "schema": "0.12.0",
+    "snapshot": {
+      "repo": "shop",
+      "kind": "sha",
+      "sha": "62bbcc206956d889687af5c78ffa1e68bc73b3b3"
+    },
+    "producer": {
+      "name": "ye-ast",
+      "version": "0.4.0"
+    },
+    "inputs": {
+      "trust": "untrusted",
+      "scope": "fa4648f55a618e0296b4a7ce207508c12bbe7d7e682e4a5ac5a25787a8b96eb8",
+      "declaredScope": {
+        "languages": [
+          "java",
+          "typescript"
+        ],
+        "frameworks": [
+          "angular",
+          "spring"
+        ],
+        "include": [],
+        "exclude": []
+      },
+      "content": "9939135e997b4577309281cfaff36813280c2ef4e82800fdd8dfc756eba07f2c",
+      "config": "b41cbb85ed8831d64578484788d87825bc6e45ebd920881cd09a68704bd673f8",
+      "declaredConfig": {},
+      "engines": {
+        "tree-sitter-java": "0.23.5",
+        "typescript": "6.0.3",
+        "web-tree-sitter": "0.27.1"
+      }
+    },
+    "evidence": [],
+    "status": "complete",
+    "value": {
+      "decisions": [
+        {
+          "id": "trust:shop",
+          "kind": "trust",
+          "subject": "shop",
+          "evidence": [],
+          "options": [
+            {
+              "value": "trusted",
+              "evidence": [],
+              "recommended": false
+            },
+            {
+              "value": "untrusted",
+              "evidence": [],
+              "recommended": false
+            }
+          ],
+          "allowsFreeText": false,
+          "required": true
+        },
+        {
+          "id": "trust:web",
+          "kind": "trust",
+          "subject": "web",
+          "evidence": [],
+          "options": [
+            {
+              "value": "trusted",
+              "evidence": [],
+              "recommended": false
+            },
+            {
+              "value": "untrusted",
+              "evidence": [],
+              "recommended": false
+            }
+          ],
+          "allowsFreeText": false,
+          "required": true
+        }
+      ],
+      "repositories": [
+        {
+          "repo": "shop",
+          "snapshot": {
+            "repo": "shop",
+            "kind": "sha",
+            "sha": "62bbcc206956d889687af5c78ffa1e68bc73b3b3"
+          }
+        },
+        {
+          "repo": "web",
+          "snapshot": {
+            "repo": "web",
+            "kind": "sha",
+            "sha": "b222c7c8b1e6b6d7b9dba3c9a9cc67b7e1df7c02"
+          }
+        }
+      ],
+      "source": "request"
+    },
+    "mode": "full",
+    "repositoryRoots": [
+      {
+        "repo": "shop",
+        "path": "<fixture-root>/shop"
+      },
+      {
+        "repo": "web",
+        "path": "<fixture-root>/web"
+      }
+    ]
+  },
+  "isError": false
+}

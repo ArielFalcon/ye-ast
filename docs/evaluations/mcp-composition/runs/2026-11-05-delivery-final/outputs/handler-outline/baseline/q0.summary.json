@@ -1,0 +1,25 @@
+{
+  "text": "status: complete\ndeclared scope: languages java, typescript; frameworks angular, spring\nsnapshot: shop @ 59b76e9aa54fe237d02cba8200a7bb93ca11c30c\nentrypoints:\n  status: complete\n  findings: 1 known, 0 unknown\n  base path unknown for 1 route\n  - http-route GET /orders/{id} -> src/main/java/shop/OrderController.java:10-14 OrderController.one [findingIndex 0]\nRecovery recipe and resultIdentity: structuredContent.recovery.\nrepository root: shop -> <fixture-root>/shop",
+  "structured": {
+    "mode": "summary",
+    "status": "complete",
+    "snapshot": {
+      "repo": "shop",
+      "kind": "sha",
+      "sha": "59b76e9aa54fe237d02cba8200a7bb93ca11c30c"
+    },
+    "recovery": {
+      "version": 1,
+      "status": "available",
+      "resultIdentity": "mcp-r1:877c3dfd1aaabb03bd60fca156ff797d7a25c01cf670c804aa46b1a72a3cb67f",
+      "query": {
+        "name": "ye_ast_entrypoints",
+        "arguments": {
+          "repo": "shop",
+          "revision": "59b76e9aa54fe237d02cba8200a7bb93ca11c30c"
+        }
+      }
+    }
+  },
+  "isError": false
+}

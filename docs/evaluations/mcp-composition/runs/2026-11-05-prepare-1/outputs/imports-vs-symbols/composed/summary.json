@@ -1,0 +1,208 @@
+{
+  "text": "Composition (summary): 3 sources, 8 subjects, 6 relations, 0 connections, 25 observations.\nVerification: available at structuredContent.verification.identity; send every available requests[].query with it as expect to verify this set.\nTerms: recorded = stated by a source; associated = a recorded association, not a call chain; candidate = not established; unknown = not determined, never empty; incompatible = not combined.\nV1 = web @ c3ca750c372d4de8e6bb94bd20019a1d18d1e8f3\nV2 = shop @ f89dbb6760c1df3b345c5f15e726ddd1c0509f32\nS1 = outline, requests[0] fresh-read: complete; V2; files src/main/java/shop/OrderController.java\nS2 = callers/workspace, requests[1] pinned-replay: partial; V2, V1; targets src/main/java/shop/OrderController.java:OrderController.one; S2/web: no merge base, changed entrypoints absent; S2/shop: no merge base, changed entrypoints absent\nS3 = importers, requests[2] fresh-read: partial; V1; files src/app/order.service.ts\nUnmarked locations: shop V2, web V1; any other snapshot is marked @V.\nRead context of S1: trust untrusted; producer ye-ast 0.4.0; schema 0.12.0; languages java, typescript; frameworks angular, spring; engines @colbymchenry/codegraph 1.6.2, tree-sitter-java 0.23.5, typescript 6.0.3, web-tree-sitter 0.27.1; index full\nRead context of S2, S2/shop, S2/web: trust untrusted; producer ye-ast 0.4.0; schema 0.12.0; languages java, typescript; frameworks angular, spring; engines @angular/compiler 22.2.4, @colbymchenry/codegraph 1.6.2, tree-sitter-java 0.23.5, typescript 6.0.3, web-tree-sitter 0.27.1\nRead context of S2/shop#0 discovery, S2/web#0 discovery: trust untrusted; producer ye-ast 0.4.0; schema 0.12.0; languages java, typescript; frameworks angular, spring; engines tree-sitter-java 0.23.5, typescript 6.0.3, web-tree-sitter 0.27.1\nRead context of S2/shop#1 trigger, S2/web#1 upstream: trust untrusted; producer ye-ast 0.4.0+edge-policy.e98d5a56243d; schema 0.12.0; languages java, typescript; frameworks angular, spring; engines @angular/compiler 22.2.4, @colbymchenry/codegraph 1.6.2, tree-sitter-java 0.23.5, typescript 6.0.3, web-tree-sitter 0.27.1; index full\nRead context of S3: trust untrusted; producer ye-ast 0.4.0+edge-policy.e98d5a56243d; schema 0.12.0; languages java, typescript; frameworks angular, spring; engines @colbymchenry/codegraph 1.6.2, tree-sitter-java 0.23.5, typescript 6.0.3, web-tree-sitter 0.27.1; index full\nWorkspace of S2: repos shop, web; source request; gateways shop-api→shop (gateway-prefix); unmatched gateways none; unserved none; trigger shop; snapshots shop V2, web V1\nSubjects:\n  N1 = src/app/order.page.ts:5-17 OrderPage\n  N2 = src/app/order.page.ts:7-10 open\n  N3 = src/main/java/shop/OrderController.java:10-14 one | OrderController.one [outline method: S1]\n  N4 = src/main/java/shop/OrderController.java:7-17 OrderController [outline class: S1]\nRelations:\n  L1 = src/app/order.page.ts → src/app/order.service.ts file-use (users category; not an import) [S3 category user]\n  L2 = N1 → N2 symbol-dependence basis contains; recorded dependence, no breakage claim [S2/web confidence 1]\n  L3 = src/app/order.page.ts → src/app/order.service.ts file-import, categories per attestation [S3 category importer]\n  L4 = reach of http-route GET /orders/{id} entrypoint-origin requested target (not a change) N3 (association, not a call chain) [S2/shop]\n  L5 = N4 → N3 symbol-dependence basis contains; recorded dependence, no breakage claim [S2/shop confidence 1]\n  L6 = web src/app/order.page.ts:9 OrderPage.open → shop http-route GET /orders/{id} handler N3 workspace-match basis gateway-prefix http (admitted link; not a consequence) [S2 confidence 1]\n  Note: file-import categories are kept per attestation; a file-import is not static/runtime evidence nor a symbol use.\nFindings:\n  seed basis lines N2 [S2/web]\n  reached N2 method depth 0 confidence 1 fan-in 0 [S2/web]\n  reached N3 method depth 0 confidence 1 fan-in 0 [S2/shop]\n  unmatched call site web src/app/order.page.ts:12-12 OrderPage.missing http; target GET shop-api/refunds/7 with evidence 1 [S2/web]\n  matched call site web src/app/order.page.ts:9-9 OrderPage.open http; target GET shop-api/orders/7 with evidence 1 [S2/web]\nCoverage:\n  recorded reads: 5 complete, 4 partial, 0 unknown (owners nest; not independent analyses)\n  S2: partial; section cut ×1, 1 places\n  S2/web: partial; unresolved-link cut ×1, 2 places; read evidence 2\n  S2/web#1 upstream: partial; unresolved-link cut ×1, 2 places\n  S3: partial; unresolved-link cut ×2, 2 places\nOmitted from summary (recorded objects): outline-declaration observations: 4; outline-file observations: 1; file-query observations: 1; walk costs: 2; evidence coordinates: 4. mode details lists them; mode full returns every table in structuredContent.\nOriginal evidence of S2: call ye_ast_callers with requests[1].query arguments and expect, adding select/page or mode full.",
+  "structured": {
+    "kind": "composition-receipt",
+    "compositionSchema": 1,
+    "mode": "summary",
+    "verification": {
+      "status": "available",
+      "identity": "mcp-c1:70170a770ac6815000aff3aa241762658ec99bb795f0c5f9287542dbdd9b7af1"
+    },
+    "requests": [
+      {
+        "status": "available",
+        "query": {
+          "name": "ye_ast_outline",
+          "arguments": {
+            "repo": "shop",
+            "revision": "f89dbb6760c1df3b345c5f15e726ddd1c0509f32",
+            "files": [
+              "src/main/java/shop/OrderController.java"
+            ]
+          }
+        },
+        "strategy": "fresh-read"
+      },
+      {
+        "status": "available",
+        "query": {
+          "name": "ye_ast_callers",
+          "arguments": {
+            "repo": "shop",
+            "revision": "f89dbb6760c1df3b345c5f15e726ddd1c0509f32",
+            "offline": true,
+            "targets": [
+              {
+                "file": "src/main/java/shop/OrderController.java",
+                "symbol": "OrderController.one"
+              }
+            ],
+            "workspace": {
+              "repos": [
+                {
+                  "path": "<fixture-root>/web",
+                  "id": "web",
+                  "revision": "c3ca750c372d4de8e6bb94bd20019a1d18d1e8f3"
+                }
+              ],
+              "gateways": [
+                {
+                  "prefix": "shop-api",
+                  "repo": "shop"
+                }
+              ]
+            },
+            "replay": {
+              "version": 1,
+              "declaration": "ws-r1:6197171919e157ed238c22d0cc1141ecbdb4a620a9cb963104f22b05c1f44bbe",
+              "snapshots": [
+                {
+                  "repo": "shop",
+                  "kind": "sha",
+                  "sha": "f89dbb6760c1df3b345c5f15e726ddd1c0509f32"
+                },
+                {
+                  "repo": "web",
+                  "kind": "sha",
+                  "sha": "c3ca750c372d4de8e6bb94bd20019a1d18d1e8f3"
+                }
+              ]
+            }
+          },
+          "expect": "mcp-r1:03f1f2aa290701df083aef4aa4274d32fb007f2909645feabce0a002432c1a52"
+        },
+        "strategy": "pinned-replay"
+      },
+      {
+        "status": "available",
+        "query": {
+          "name": "ye_ast_importers",
+          "arguments": {
+            "repo": "web",
+            "revision": "c3ca750c372d4de8e6bb94bd20019a1d18d1e8f3",
+            "files": [
+              "src/app/order.service.ts"
+            ]
+          }
+        },
+        "strategy": "fresh-read"
+      }
+    ],
+    "sources": [
+      {
+        "family": "outline",
+        "id": "s1:2fb25b6e02daf94834ca409bbabca8ae6fe2aabc9e64b6356142a29fbb58a786",
+        "rootRead": "r1:2b438ad1c0cca5d20a43ccf1823863ae10ef4735ab3de830d46186526dd39f98",
+        "snapshotVector": [
+          {
+            "repo": "shop",
+            "snapshot": "v1:493f65f92dd318be211b4884d659a9fabf2c21ba8ec58a219919758793798ee7"
+          }
+        ],
+        "analysis": {
+          "status": "complete"
+        },
+        "requestIndex": 0
+      },
+      {
+        "family": "callers",
+        "branch": "workspace",
+        "id": "s1:cd96a0eefb76b65ef22d43de7ee98475d481b1b2a5163139b23176ffa923b0d4",
+        "rootRead": "r1:167f067539cf50d7573a1ca9d862c384f8bc17513e536b6e734616e3da46923a",
+        "snapshotVector": [
+          {
+            "repo": "shop",
+            "snapshot": "v1:493f65f92dd318be211b4884d659a9fabf2c21ba8ec58a219919758793798ee7"
+          },
+          {
+            "repo": "web",
+            "snapshot": "v1:410924be56d010d7d524f88709774b0edbecd7b79d3963a904de1f97f848bc02"
+          }
+        ],
+        "analysis": {
+          "status": "partial"
+        },
+        "requestIndex": 1
+      },
+      {
+        "family": "importers",
+        "id": "s1:cf21f1e6d5acef63e18059622afabdea5f90f1b3559d72075470a5f55c8e8c3d",
+        "rootRead": "r1:3f6b422c76a7933e2a871ddb30912147f1801209eafc7ddfbf4e64d5f2536157",
+        "snapshotVector": [
+          {
+            "repo": "web",
+            "snapshot": "v1:410924be56d010d7d524f88709774b0edbecd7b79d3963a904de1f97f848bc02"
+          }
+        ],
+        "analysis": {
+          "status": "partial"
+        },
+        "requestIndex": 2
+      }
+    ],
+    "coverage": {
+      "reads": {
+        "complete": 5,
+        "partial": 4,
+        "unknown": 0
+      },
+      "unknowns": [],
+      "limits": [
+        {
+          "source": "s1:cd96a0eefb76b65ef22d43de7ee98475d481b1b2a5163139b23176ffa923b0d4",
+          "owner": {
+            "kind": "fact"
+          },
+          "kind": "section",
+          "cuts": 1,
+          "places": 0
+        },
+        {
+          "source": "s1:cd96a0eefb76b65ef22d43de7ee98475d481b1b2a5163139b23176ffa923b0d4",
+          "owner": {
+            "kind": "read",
+            "repo": "web",
+            "index": 1
+          },
+          "kind": "unresolved-link",
+          "cuts": 1,
+          "places": 1
+        },
+        {
+          "source": "s1:cd96a0eefb76b65ef22d43de7ee98475d481b1b2a5163139b23176ffa923b0d4",
+          "owner": {
+            "kind": "section",
+            "repo": "web"
+          },
+          "kind": "unresolved-link",
+          "cuts": 1,
+          "places": 1
+        },
+        {
+          "source": "s1:cf21f1e6d5acef63e18059622afabdea5f90f1b3559d72075470a5f55c8e8c3d",
+          "owner": {
+            "kind": "fact"
+          },
+          "kind": "unresolved-link",
+          "cuts": 2,
+          "places": 0
+        }
+      ],
+      "issues": []
+    },
+    "counts": {
+      "sources": 3,
+      "reads": 9,
+      "files": 3,
+      "anchors": 9,
+      "entities": 8,
+      "evidence": 4,
+      "parts": 25,
+      "relations": 6,
+      "connections": 0,
+      "unknownFindings": 0,
+      "unknownComponents": 0
+    }
+  },
+  "isError": false
+}

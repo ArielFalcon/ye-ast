@@ -1,0 +1,221 @@
+{
+  "text": "status: complete\nfull structured result: structuredContent\nMatch value.sections by repository and check each section status, reason and cuts; value.repositorySnapshots identifies each revision. Inspect value.candidates by name and repo for basis and evidence, and value.unserved for unmatched names.\nRepository locations: match repositoryRoots[].repo to evidence ownership; repositoryRoots[].path locates the clone on disk, while evidence paths are relative to its repository at the recorded snapshot.",
+  "structured": {
+    "schema": "0.12.0",
+    "snapshot": {
+      "repo": "shop",
+      "kind": "sha",
+      "sha": "62bbcc206956d889687af5c78ffa1e68bc73b3b3"
+    },
+    "producer": {
+      "name": "ye-ast",
+      "version": "0.4.0"
+    },
+    "inputs": {
+      "trust": "untrusted",
+      "scope": "fa4648f55a618e0296b4a7ce207508c12bbe7d7e682e4a5ac5a25787a8b96eb8",
+      "declaredScope": {
+        "languages": [
+          "java",
+          "typescript"
+        ],
+        "frameworks": [
+          "angular",
+          "spring"
+        ],
+        "include": [],
+        "exclude": []
+      },
+      "content": "abe807e57a5d6431b15aefda61ea5f20f43200de24c914f259087c9c7bcdd55e",
+      "config": "07a691115d845343d3368ae4d37db47098aab593c02a3e54ac605994962f6402",
+      "declaredConfig": {},
+      "engines": {
+        "tree-sitter-java": "0.23.5",
+        "typescript": "6.0.3",
+        "web-tree-sitter": "0.27.1"
+      }
+    },
+    "evidence": [],
+    "status": "complete",
+    "value": {
+      "workspace": {
+        "repos": [
+          "shop",
+          "web"
+        ],
+        "gateways": [
+          {
+            "prefix": "shop-api",
+            "repo": "shop"
+          }
+        ],
+        "source": "request"
+      },
+      "repositorySnapshots": [
+        {
+          "repo": "shop",
+          "snapshot": {
+            "repo": "shop",
+            "kind": "sha",
+            "sha": "62bbcc206956d889687af5c78ffa1e68bc73b3b3"
+          }
+        },
+        {
+          "repo": "web",
+          "snapshot": {
+            "repo": "web",
+            "kind": "sha",
+            "sha": "b222c7c8b1e6b6d7b9dba3c9a9cc67b7e1df7c02"
+          }
+        }
+      ],
+      "sections": {
+        "shop": {
+          "schema": "0.12.0",
+          "snapshot": {
+            "repo": "shop",
+            "kind": "sha",
+            "sha": "62bbcc206956d889687af5c78ffa1e68bc73b3b3"
+          },
+          "producer": {
+            "name": "ye-ast",
+            "version": "0.4.0"
+          },
+          "inputs": {
+            "trust": "untrusted",
+            "scope": "fa4648f55a618e0296b4a7ce207508c12bbe7d7e682e4a5ac5a25787a8b96eb8",
+            "declaredScope": {
+              "languages": [
+                "java",
+                "typescript"
+              ],
+              "frameworks": [
+                "angular",
+                "spring"
+              ],
+              "include": [],
+              "exclude": []
+            },
+            "content": "02c60757baced2ace102d1ee768e5357ca81023f6bca930e3dc69fe8d7648e73",
+            "config": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+            "declaredConfig": {},
+            "engines": {
+              "tree-sitter-java": "0.23.5",
+              "typescript": "6.0.3",
+              "web-tree-sitter": "0.27.1"
+            }
+          },
+          "evidence": [],
+          "status": "complete",
+          "value": {
+            "names": [],
+            "unresolved": []
+          }
+        },
+        "web": {
+          "schema": "0.12.0",
+          "snapshot": {
+            "repo": "web",
+            "kind": "sha",
+            "sha": "b222c7c8b1e6b6d7b9dba3c9a9cc67b7e1df7c02"
+          },
+          "producer": {
+            "name": "ye-ast",
+            "version": "0.4.0"
+          },
+          "inputs": {
+            "trust": "untrusted",
+            "scope": "fa4648f55a618e0296b4a7ce207508c12bbe7d7e682e4a5ac5a25787a8b96eb8",
+            "declaredScope": {
+              "languages": [
+                "java",
+                "typescript"
+              ],
+              "frameworks": [
+                "angular",
+                "spring"
+              ],
+              "include": [],
+              "exclude": []
+            },
+            "content": "2a34a243ac5fdcb23e079540e485bf30c2eca68f200f28041e5f1ce044fce3f9",
+            "config": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+            "declaredConfig": {},
+            "engines": {
+              "tree-sitter-java": "0.23.5",
+              "typescript": "6.0.3",
+              "web-tree-sitter": "0.27.1"
+            }
+          },
+          "evidence": [
+            {
+              "path": "src/app/order.page.ts",
+              "line": 9,
+              "endLine": 9
+            },
+            {
+              "path": "src/app/order.page.ts",
+              "line": 12,
+              "endLine": 12
+            }
+          ],
+          "status": "complete",
+          "value": {
+            "names": [
+              {
+                "name": "shop-api",
+                "kind": "path-prefix",
+                "evidence": [
+                  {
+                    "path": "src/app/order.page.ts",
+                    "line": 9,
+                    "endLine": 9
+                  },
+                  {
+                    "path": "src/app/order.page.ts",
+                    "line": 12,
+                    "endLine": 12
+                  }
+                ]
+              }
+            ],
+            "unresolved": []
+          }
+        }
+      },
+      "candidates": [],
+      "unserved": [
+        {
+          "name": "shop-api",
+          "kind": "path-prefix",
+          "evidence": [
+            {
+              "path": "src/app/order.page.ts",
+              "line": 9,
+              "endLine": 9,
+              "repo": "web"
+            },
+            {
+              "path": "src/app/order.page.ts",
+              "line": 12,
+              "endLine": 12,
+              "repo": "web"
+            }
+          ]
+        }
+      ]
+    },
+    "mode": "full",
+    "repositoryRoots": [
+      {
+        "repo": "shop",
+        "path": "<fixture-root>/shop"
+      },
+      {
+        "repo": "web",
+        "path": "<fixture-root>/web"
+      }
+    ]
+  },
+  "isError": false
+}

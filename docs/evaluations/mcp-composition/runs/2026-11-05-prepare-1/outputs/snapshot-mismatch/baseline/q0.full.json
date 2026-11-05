@@ -1,0 +1,677 @@
+{
+  "text": "status: partial\nfull structured result: structuredContent\nInvestigation guide:\n  JSON navigation: paths below are relative to structuredContent.\n  Select value.sections by the exact repository key, not a shared relative file path. Check section.status and, when present, section.reason/cuts and section.value.reads[].fact status/reason before using its evidence; an unknown section has no value.\n  The originating repository's walk is at value.sections[\"shop\"].value.impact.\n  Selection lookup: use handler path, symbol and line with owner {kind:\"section\",repo:<repository key>}.\n  To inspect a reached entrypoint, select value.sections[\"shop\"].value.impact.entrypoints by kind/name and handler.path, handler.symbol, handler.line. Its seeds are zero-based indexes into value.sections[\"shop\"].value.impact.seeds; resolve those indexes to recover all associated origins, not a complete call chain.\n  To inspect a dependency omitted from text, filter value.sections[\"shop\"].value.impact.symbols by file, symbol and line. Read via.file/symbol for its recorded dependency; via.lines are locations in that symbol's own file, not in via.file. Preserve via.basis and confidence when interpreting it.\n  Other repository walks are at value.sections[repo].value.impact only when that field exists. In each walk, entrypoints[].seeds indexes that same walk's seeds array; never join origins across repositories.\n  To follow a cross-repository consequence, filter value.links by link.from (repo/file/symbol/line) or link.to (repo/name/handler). Each reach contains link IDs in recorded order: resolve them against value.links[].link.id, not the text's display numbers. Retain direction, basis and confidence; reach does not establish an unrecorded path inside a repository.\n  Selection lookup: cutIndex is the zero-based position in cuts; owner identifies the fact, entrypoints section, repository section or indexed read.\n  Before treating this result as exhaustive, inspect cuts: filter by kind and the relevant anchor in at; a recorded limit explains where coverage stopped. Full JSON does not extend that coverage.\n  Repository-local limits remain in value.sections[repo].cuts; inspect contributing section.value.reads[].fact too. Do not treat a complete independent read as resolving an unknown contributing read.\n  For a related callers or outline query about head evidence choose the recorded owner with repo and its own snapshot from value.repositorySnapshots; base-side modules require their owning walk's recorded merge base instead. An undeclared owner requires a host registration update or an instance bound to that clone. A symbol name may match multiple declarations.\n  Destination: repo \"shop\", revision \"f89dbb6760c1df3b345c5f15e726ddd1c0509f32\", file \"src/main/java/shop/OrderController.java\", symbol \"OrderController.one\". Use outline or callers on the declared owner.\n  Repeat callers with repo \"shop\" and revision \"f89dbb6760c1df3b345c5f15e726ddd1c0509f32\", retaining declared scope and symbol selection. Related outline/importers queries answer a new question.\nRecovery recipe and resultIdentity: structuredContent.recovery.\nRepository locations: match repositoryRoots[].repo to evidence ownership; repositoryRoots[].path locates the clone on disk, while evidence paths are relative to its repository at the recorded snapshot.",
+  "structured": {
+    "schema": "0.12.0",
+    "snapshot": {
+      "repo": "shop",
+      "kind": "sha",
+      "sha": "f89dbb6760c1df3b345c5f15e726ddd1c0509f32"
+    },
+    "producer": {
+      "name": "ye-ast",
+      "version": "0.4.0"
+    },
+    "inputs": {
+      "trust": "untrusted",
+      "scope": "fa4648f55a618e0296b4a7ce207508c12bbe7d7e682e4a5ac5a25787a8b96eb8",
+      "declaredScope": {
+        "languages": [
+          "java",
+          "typescript"
+        ],
+        "frameworks": [
+          "angular",
+          "spring"
+        ],
+        "include": [],
+        "exclude": []
+      },
+      "content": "01334ca4dc2705a64d3a48ccafd5e0c472b5559cb89e16abb89fdba04d7a32cf",
+      "config": "344802666f51629019817e2f2f2510e97d79cee6aae21017e126b4a1dd1c4405",
+      "declaredConfig": {
+        "targets": [
+          "src/main/java/shop/OrderController.java:OrderController.one"
+        ]
+      },
+      "engines": {
+        "@angular/compiler": "22.2.4",
+        "@colbymchenry/codegraph": "1.6.2",
+        "tree-sitter-java": "0.23.5",
+        "typescript": "6.0.3",
+        "web-tree-sitter": "0.27.1"
+      }
+    },
+    "evidence": [],
+    "status": "partial",
+    "value": {
+      "workspace": {
+        "repos": [
+          "shop",
+          "web"
+        ],
+        "gateways": [
+          {
+            "prefix": "shop-api",
+            "repo": "shop",
+            "basis": "gateway-prefix"
+          }
+        ],
+        "unmatchedGateways": [],
+        "unserved": [],
+        "source": "request"
+      },
+      "repositorySnapshots": [
+        {
+          "repo": "shop",
+          "snapshot": {
+            "repo": "shop",
+            "kind": "sha",
+            "sha": "f89dbb6760c1df3b345c5f15e726ddd1c0509f32"
+          }
+        },
+        {
+          "repo": "web",
+          "snapshot": {
+            "repo": "web",
+            "kind": "sha",
+            "sha": "c3ca750c372d4de8e6bb94bd20019a1d18d1e8f3"
+          }
+        }
+      ],
+      "trigger": {
+        "repo": "shop"
+      },
+      "sections": {
+        "shop": {
+          "schema": "0.12.0",
+          "snapshot": {
+            "repo": "shop",
+            "kind": "sha",
+            "sha": "f89dbb6760c1df3b345c5f15e726ddd1c0509f32"
+          },
+          "producer": {
+            "name": "ye-ast",
+            "version": "0.4.0"
+          },
+          "inputs": {
+            "trust": "untrusted",
+            "scope": "fa4648f55a618e0296b4a7ce207508c12bbe7d7e682e4a5ac5a25787a8b96eb8",
+            "declaredScope": {
+              "languages": [
+                "java",
+                "typescript"
+              ],
+              "frameworks": [
+                "angular",
+                "spring"
+              ],
+              "include": [],
+              "exclude": []
+            },
+            "content": "28282a0d4ec1e8a25b8814b13cc1ce0c5d9fc43a22169da59575c5d8bca98ec8",
+            "config": "3bf0825cba779ede48921b26a32fe817ab9ffb1ada3cdcfe144319ec88bad45d",
+            "declaredConfig": {
+              "targets": [
+                "src/main/java/shop/OrderController.java:OrderController.one"
+              ]
+            },
+            "engines": {
+              "@angular/compiler": "22.2.4",
+              "@colbymchenry/codegraph": "1.6.2",
+              "tree-sitter-java": "0.23.5",
+              "typescript": "6.0.3",
+              "web-tree-sitter": "0.27.1"
+            }
+          },
+          "evidence": [],
+          "status": "complete",
+          "value": {
+            "reads": [
+              {
+                "kind": "discovery",
+                "fact": {
+                  "schema": "0.12.0",
+                  "snapshot": {
+                    "repo": "shop",
+                    "kind": "sha",
+                    "sha": "f89dbb6760c1df3b345c5f15e726ddd1c0509f32"
+                  },
+                  "producer": {
+                    "name": "ye-ast",
+                    "version": "0.4.0"
+                  },
+                  "inputs": {
+                    "trust": "untrusted",
+                    "scope": "fa4648f55a618e0296b4a7ce207508c12bbe7d7e682e4a5ac5a25787a8b96eb8",
+                    "declaredScope": {
+                      "languages": [
+                        "java",
+                        "typescript"
+                      ],
+                      "frameworks": [
+                        "angular",
+                        "spring"
+                      ],
+                      "include": [],
+                      "exclude": []
+                    },
+                    "content": "02c60757baced2ace102d1ee768e5357ca81023f6bca930e3dc69fe8d7648e73",
+                    "config": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+                    "declaredConfig": {},
+                    "engines": {
+                      "tree-sitter-java": "0.23.5",
+                      "typescript": "6.0.3",
+                      "web-tree-sitter": "0.27.1"
+                    }
+                  },
+                  "evidence": [],
+                  "status": "complete"
+                }
+              },
+              {
+                "kind": "trigger",
+                "fact": {
+                  "schema": "0.12.0",
+                  "snapshot": {
+                    "repo": "shop",
+                    "kind": "sha",
+                    "sha": "f89dbb6760c1df3b345c5f15e726ddd1c0509f32"
+                  },
+                  "producer": {
+                    "name": "ye-ast",
+                    "version": "0.4.0+edge-policy.e98d5a56243d"
+                  },
+                  "inputs": {
+                    "trust": "untrusted",
+                    "scope": "fa4648f55a618e0296b4a7ce207508c12bbe7d7e682e4a5ac5a25787a8b96eb8",
+                    "declaredScope": {
+                      "languages": [
+                        "java",
+                        "typescript"
+                      ],
+                      "frameworks": [
+                        "angular",
+                        "spring"
+                      ],
+                      "include": [],
+                      "exclude": []
+                    },
+                    "content": "f742c7bb02d12b5d4b7f4e364a602110be13666837dc788ad388919d56bf1f6d",
+                    "config": "a337eb90d6fea0bef173e3b75298d9dd9c9b6a5b6c791964d594eddc94539e19",
+                    "declaredConfig": {
+                      "targets": [
+                        "src/main/java/shop/OrderController.java:OrderController.one"
+                      ]
+                    },
+                    "origin": {
+                      "kind": "full"
+                    },
+                    "engines": {
+                      "@angular/compiler": "22.2.4",
+                      "@colbymchenry/codegraph": "1.6.2",
+                      "tree-sitter-java": "0.23.5",
+                      "typescript": "6.0.3",
+                      "web-tree-sitter": "0.27.1"
+                    }
+                  },
+                  "evidence": [],
+                  "status": "complete"
+                }
+              }
+            ],
+            "impact": {
+              "cost": {
+                "expansionsUsed": 2
+              },
+              "seeds": [
+                {
+                  "file": "src/main/java/shop/OrderController.java",
+                  "symbol": "one",
+                  "line": 10,
+                  "endLine": 14,
+                  "basis": "requested"
+                }
+              ],
+              "symbols": [
+                {
+                  "file": "src/main/java/shop/OrderController.java",
+                  "symbol": "OrderController",
+                  "kind": "class",
+                  "line": 7,
+                  "endLine": 17,
+                  "depth": 0,
+                  "confidence": 1,
+                  "fanIn": 0,
+                  "via": {
+                    "file": "src/main/java/shop/OrderController.java",
+                    "symbol": "one",
+                    "basis": "contains"
+                  }
+                },
+                {
+                  "file": "src/main/java/shop/OrderController.java",
+                  "symbol": "one",
+                  "kind": "method",
+                  "line": 10,
+                  "endLine": 14,
+                  "depth": 0,
+                  "confidence": 1,
+                  "fanIn": 0
+                }
+              ],
+              "entrypoints": [
+                {
+                  "kind": "http-route",
+                  "name": "GET /orders/{id}",
+                  "handler": {
+                    "path": "src/main/java/shop/OrderController.java",
+                    "symbol": "OrderController.one",
+                    "line": 10,
+                    "endLine": 14
+                  },
+                  "depth": 0,
+                  "confidence": 1,
+                  "seeds": [
+                    0
+                  ]
+                }
+              ]
+            },
+            "callSites": [],
+            "unmatched": [],
+            "external": []
+          }
+        },
+        "web": {
+          "schema": "0.12.0",
+          "snapshot": {
+            "repo": "web",
+            "kind": "sha",
+            "sha": "c3ca750c372d4de8e6bb94bd20019a1d18d1e8f3"
+          },
+          "producer": {
+            "name": "ye-ast",
+            "version": "0.4.0"
+          },
+          "inputs": {
+            "trust": "untrusted",
+            "scope": "fa4648f55a618e0296b4a7ce207508c12bbe7d7e682e4a5ac5a25787a8b96eb8",
+            "declaredScope": {
+              "languages": [
+                "java",
+                "typescript"
+              ],
+              "frameworks": [
+                "angular",
+                "spring"
+              ],
+              "include": [],
+              "exclude": []
+            },
+            "content": "82d97c10c14e6728dee952e78be4fb4f625c74570a0c4a13652c4d8ad37f6ec7",
+            "config": "8db0e34debab9c1c0c635b1d06e489e21dc2ac91617cba92e8d06c37f5be1a3b",
+            "declaredConfig": {},
+            "engines": {
+              "@angular/compiler": "22.2.4",
+              "@colbymchenry/codegraph": "1.6.2",
+              "tree-sitter-java": "0.23.5",
+              "typescript": "6.0.3",
+              "web-tree-sitter": "0.27.1"
+            }
+          },
+          "evidence": [
+            {
+              "path": "src/app/order.page.ts",
+              "line": 9,
+              "endLine": 9
+            },
+            {
+              "path": "src/app/order.page.ts",
+              "line": 12,
+              "endLine": 12
+            }
+          ],
+          "status": "partial",
+          "value": {
+            "reads": [
+              {
+                "kind": "discovery",
+                "fact": {
+                  "schema": "0.12.0",
+                  "snapshot": {
+                    "repo": "web",
+                    "kind": "sha",
+                    "sha": "c3ca750c372d4de8e6bb94bd20019a1d18d1e8f3"
+                  },
+                  "producer": {
+                    "name": "ye-ast",
+                    "version": "0.4.0"
+                  },
+                  "inputs": {
+                    "trust": "untrusted",
+                    "scope": "fa4648f55a618e0296b4a7ce207508c12bbe7d7e682e4a5ac5a25787a8b96eb8",
+                    "declaredScope": {
+                      "languages": [
+                        "java",
+                        "typescript"
+                      ],
+                      "frameworks": [
+                        "angular",
+                        "spring"
+                      ],
+                      "include": [],
+                      "exclude": []
+                    },
+                    "content": "2a34a243ac5fdcb23e079540e485bf30c2eca68f200f28041e5f1ce044fce3f9",
+                    "config": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+                    "declaredConfig": {},
+                    "engines": {
+                      "tree-sitter-java": "0.23.5",
+                      "typescript": "6.0.3",
+                      "web-tree-sitter": "0.27.1"
+                    }
+                  },
+                  "evidence": [
+                    {
+                      "path": "src/app/order.page.ts",
+                      "line": 9,
+                      "endLine": 9
+                    },
+                    {
+                      "path": "src/app/order.page.ts",
+                      "line": 12,
+                      "endLine": 12
+                    }
+                  ],
+                  "status": "complete"
+                }
+              },
+              {
+                "kind": "upstream",
+                "fact": {
+                  "schema": "0.12.0",
+                  "snapshot": {
+                    "repo": "web",
+                    "kind": "sha",
+                    "sha": "c3ca750c372d4de8e6bb94bd20019a1d18d1e8f3"
+                  },
+                  "producer": {
+                    "name": "ye-ast",
+                    "version": "0.4.0+edge-policy.e98d5a56243d"
+                  },
+                  "inputs": {
+                    "trust": "untrusted",
+                    "scope": "fa4648f55a618e0296b4a7ce207508c12bbe7d7e682e4a5ac5a25787a8b96eb8",
+                    "declaredScope": {
+                      "languages": [
+                        "java",
+                        "typescript"
+                      ],
+                      "frameworks": [
+                        "angular",
+                        "spring"
+                      ],
+                      "include": [],
+                      "exclude": []
+                    },
+                    "content": "096b6035e1dad00b70d4deca988872f2a5478746fd86c84804f23e52f9540d5d",
+                    "config": "a531d0c3ae20a155b17b7df958b943e7b81c6238420b3527fe17d225fbfd43c0",
+                    "declaredConfig": {
+                      "targets": [
+                        "src/app/order.page.ts:9-9"
+                      ]
+                    },
+                    "origin": {
+                      "kind": "full"
+                    },
+                    "engines": {
+                      "@angular/compiler": "22.2.4",
+                      "@colbymchenry/codegraph": "1.6.2",
+                      "tree-sitter-java": "0.23.5",
+                      "typescript": "6.0.3",
+                      "web-tree-sitter": "0.27.1"
+                    }
+                  },
+                  "evidence": [],
+                  "status": "partial",
+                  "cuts": [
+                    {
+                      "kind": "unresolved-link",
+                      "at": [
+                        "src/app/order.page.ts",
+                        "src/app/order.page.ts:1 no-project"
+                      ]
+                    }
+                  ]
+                }
+              }
+            ],
+            "impact": {
+              "cost": {
+                "expansionsUsed": 2
+              },
+              "seeds": [
+                {
+                  "file": "src/app/order.page.ts",
+                  "symbol": "open",
+                  "line": 7,
+                  "endLine": 10,
+                  "basis": "lines"
+                }
+              ],
+              "symbols": [
+                {
+                  "file": "src/app/order.page.ts",
+                  "symbol": "OrderPage",
+                  "kind": "class",
+                  "line": 5,
+                  "endLine": 17,
+                  "depth": 0,
+                  "confidence": 1,
+                  "fanIn": 0,
+                  "via": {
+                    "file": "src/app/order.page.ts",
+                    "symbol": "open",
+                    "basis": "contains"
+                  }
+                },
+                {
+                  "file": "src/app/order.page.ts",
+                  "symbol": "open",
+                  "kind": "method",
+                  "line": 7,
+                  "endLine": 10,
+                  "depth": 0,
+                  "confidence": 1,
+                  "fanIn": 0
+                }
+              ],
+              "entrypoints": []
+            },
+            "callSites": [
+              {
+                "repo": "web",
+                "file": "src/app/order.page.ts",
+                "line": 9,
+                "endLine": 9,
+                "symbol": "OrderPage.open",
+                "ancestors": [
+                  {
+                    "symbol": "open",
+                    "line": 7,
+                    "endLine": 10
+                  },
+                  {
+                    "symbol": "OrderPage",
+                    "line": 5,
+                    "endLine": 17
+                  }
+                ],
+                "transport": "http",
+                "target": {
+                  "status": "complete",
+                  "value": {
+                    "method": "GET",
+                    "path": "shop-api/orders/7"
+                  },
+                  "evidence": [
+                    {
+                      "path": "src/app/order.page.ts",
+                      "line": 9
+                    }
+                  ]
+                }
+              }
+            ],
+            "unmatched": [
+              {
+                "repo": "web",
+                "file": "src/app/order.page.ts",
+                "line": 12,
+                "endLine": 12,
+                "symbol": "OrderPage.missing",
+                "ancestors": [
+                  {
+                    "symbol": "missing",
+                    "line": 11,
+                    "endLine": 13
+                  },
+                  {
+                    "symbol": "OrderPage",
+                    "line": 5,
+                    "endLine": 17
+                  }
+                ],
+                "transport": "http",
+                "target": {
+                  "status": "complete",
+                  "value": {
+                    "method": "GET",
+                    "path": "shop-api/refunds/7"
+                  },
+                  "evidence": [
+                    {
+                      "path": "src/app/order.page.ts",
+                      "line": 12
+                    }
+                  ]
+                }
+              }
+            ],
+            "external": []
+          },
+          "cuts": [
+            {
+              "kind": "unresolved-link",
+              "at": [
+                "src/app/order.page.ts",
+                "src/app/order.page.ts:1 no-project"
+              ]
+            }
+          ]
+        }
+      },
+      "links": [
+        {
+          "link": {
+            "from": {
+              "repo": "web",
+              "file": "src/app/order.page.ts",
+              "line": 9,
+              "symbol": "OrderPage.open"
+            },
+            "to": {
+              "repo": "shop",
+              "kind": "http-route",
+              "name": "GET /orders/{id}",
+              "handler": {
+                "path": "src/main/java/shop/OrderController.java",
+                "symbol": "OrderController.one",
+                "line": 10,
+                "endLine": 14
+              }
+            },
+            "transport": "http",
+            "basis": "gateway-prefix",
+            "confidence": 1,
+            "id": "[\"web\",\"src/app/order.page.ts\",9,\"OrderPage.open\",\"shop\",\"http-route\",\"GET /orders/{id}\",\"src/main/java/shop/OrderController.java\",\"OrderController.one\",10,\"http\",\"gateway-prefix\",null]"
+          },
+          "direction": "upstream",
+          "reach": [
+            "[\"web\",\"src/app/order.page.ts\",9,\"OrderPage.open\",\"shop\",\"http-route\",\"GET /orders/{id}\",\"src/main/java/shop/OrderController.java\",\"OrderController.one\",10,\"http\",\"gateway-prefix\",null]"
+          ]
+        }
+      ]
+    },
+    "cuts": [
+      {
+        "kind": "section",
+        "at": [
+          "web"
+        ]
+      }
+    ],
+    "mode": "full",
+    "recovery": {
+      "version": 1,
+      "status": "available",
+      "resultIdentity": "mcp-r1:03f1f2aa290701df083aef4aa4274d32fb007f2909645feabce0a002432c1a52",
+      "query": {
+        "name": "ye_ast_callers",
+        "arguments": {
+          "repo": "shop",
+          "workspace": {
+            "repos": [
+              {
+                "path": "<fixture-root>/web",
+                "id": "web",
+                "revision": "c3ca750c372d4de8e6bb94bd20019a1d18d1e8f3"
+              }
+            ],
+            "gateways": [
+              {
+                "prefix": "shop-api",
+                "repo": "shop"
+              }
+            ]
+          },
+          "replay": {
+            "version": 1,
+            "declaration": "ws-r1:6197171919e157ed238c22d0cc1141ecbdb4a620a9cb963104f22b05c1f44bbe",
+            "snapshots": [
+              {
+                "repo": "shop",
+                "kind": "sha",
+                "sha": "f89dbb6760c1df3b345c5f15e726ddd1c0509f32"
+              },
+              {
+                "repo": "web",
+                "kind": "sha",
+                "sha": "c3ca750c372d4de8e6bb94bd20019a1d18d1e8f3"
+              }
+            ]
+          },
+          "offline": true,
+          "revision": "f89dbb6760c1df3b345c5f15e726ddd1c0509f32",
+          "targets": [
+            {
+              "file": "src/main/java/shop/OrderController.java",
+              "symbol": "OrderController.one"
+            }
+          ]
+        }
+      }
+    },
+    "repositoryRoots": [
+      {
+        "repo": "shop",
+        "path": "<fixture-root>/shop"
+      },
+      {
+        "repo": "web",
+        "path": "<fixture-root>/web"
+      }
+    ]
+  },
+  "isError": false
+}

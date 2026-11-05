@@ -1,0 +1,1775 @@
+{
+  "text": "Composition full: 2 sources, 8 recorded reads (5 complete, 3 partial, 0 unknown), 0 unknown findings, 0 unknown components.\nTables: structuredContent.graph.sources (2), structuredContent.graph.snapshots (3), structuredContent.graph.reads (8), structuredContent.graph.files (3), structuredContent.graph.anchors (11), structuredContent.graph.evidence (4), structuredContent.graph.parts (22), structuredContent.graph.entities (11), structuredContent.graph.bindings (11), structuredContent.graph.relations (4), structuredContent.graph.connections (0).\nstructuredContent.coverage.issues (1), unknowns (0), limits (3); structuredContent.requests (2); structuredContent.delivery (2).",
+  "structured": {
+    "kind": "composition",
+    "compositionSchema": 1,
+    "mode": "full",
+    "verification": {
+      "status": "available",
+      "identity": "mcp-c1:85333d2a0ff99c0773ef1dbe59e6fb4c4991195d7143ab90a88dcf321e6644a3"
+    },
+    "requests": [
+      {
+        "status": "available",
+        "query": {
+          "name": "ye_ast_callers",
+          "arguments": {
+            "repo": "shop",
+            "revision": "59b76e9aa54fe237d02cba8200a7bb93ca11c30c",
+            "offline": true,
+            "targets": [
+              {
+                "file": "src/main/java/shop/OrderController.java",
+                "symbol": "OrderController.one"
+              }
+            ],
+            "workspace": {
+              "repos": [
+                {
+                  "path": "<fixture-root>/web",
+                  "id": "web",
+                  "revision": "3e69e9d3c2285375dd92629e23a8ef4487d2bb9e"
+                }
+              ],
+              "gateways": [
+                {
+                  "prefix": "shop-api",
+                  "repo": "shop"
+                }
+              ]
+            },
+            "replay": {
+              "version": 1,
+              "declaration": "ws-r1:d1107efcdf6127d70e4ebfb6e020d7bcc8ecd5529e2c1181be5d719f884723c7",
+              "snapshots": [
+                {
+                  "repo": "shop",
+                  "kind": "sha",
+                  "sha": "59b76e9aa54fe237d02cba8200a7bb93ca11c30c"
+                },
+                {
+                  "repo": "web",
+                  "kind": "sha",
+                  "sha": "3e69e9d3c2285375dd92629e23a8ef4487d2bb9e"
+                }
+              ]
+            }
+          },
+          "expect": "mcp-r1:cbc615f474e655f3b0918ef10150d69cd95839f71c1999dc3af08dbdbd714faa"
+        },
+        "strategy": "pinned-replay"
+      },
+      {
+        "status": "available",
+        "query": {
+          "name": "ye_ast_outline",
+          "arguments": {
+            "repo": "shop",
+            "revision": "d186f90284ad2f98e081d03d8d1ef60020aaab6f",
+            "files": [
+              "src/main/java/shop/OrderController.java"
+            ]
+          }
+        },
+        "strategy": "fresh-read"
+      }
+    ],
+    "graph": {
+      "snapshots": [
+        {
+          "id": "v1:bf9ef89a0a9c9257ff33427e856b9f06d42718542e71a86829c5d686368bac51",
+          "value": {
+            "repo": "shop",
+            "kind": "sha",
+            "sha": "59b76e9aa54fe237d02cba8200a7bb93ca11c30c"
+          },
+          "identity": "exact"
+        },
+        {
+          "id": "v1:c869d2d7e2fa0949bda4ad9c72bd5fe9ab5b48aa38cbb8594d37ddae2d6eb1d0",
+          "value": {
+            "repo": "web",
+            "kind": "sha",
+            "sha": "3e69e9d3c2285375dd92629e23a8ef4487d2bb9e"
+          },
+          "identity": "exact"
+        },
+        {
+          "id": "v1:d4fa1fc3264e0165b9fbb4410bdcb34750969ab4386cef589b9b41180d7b775a",
+          "value": {
+            "repo": "shop",
+            "kind": "sha",
+            "sha": "d186f90284ad2f98e081d03d8d1ef60020aaab6f"
+          },
+          "identity": "exact"
+        }
+      ],
+      "sources": [
+        {
+          "family": "callers",
+          "branch": "workspace",
+          "id": "s1:0ece7a5532bfa15a50b3fcae27d3099846d40639d1f5587232a35e197ce4c7d1",
+          "rootRead": "r1:d45acf6edac629041cb21563bee594cfe723db0d80d7089da4eda3f4cedf3e50",
+          "snapshotVector": [
+            {
+              "repo": "shop",
+              "snapshot": "v1:bf9ef89a0a9c9257ff33427e856b9f06d42718542e71a86829c5d686368bac51"
+            },
+            {
+              "repo": "web",
+              "snapshot": "v1:c869d2d7e2fa0949bda4ad9c72bd5fe9ab5b48aa38cbb8594d37ddae2d6eb1d0"
+            }
+          ],
+          "analysis": {
+            "status": "partial"
+          },
+          "requestIndex": 0
+        },
+        {
+          "family": "outline",
+          "id": "s1:c5f22905aef96bf58dbf69faf8fabbaeffba746143ba0b72337927e5d18ad3fa",
+          "rootRead": "r1:cd57c322014b18372679adaa3257fada26a40ba3ac8f9cc0e1a6c14f7b5887d6",
+          "snapshotVector": [
+            {
+              "repo": "shop",
+              "snapshot": "v1:d4fa1fc3264e0165b9fbb4410bdcb34750969ab4386cef589b9b41180d7b775a"
+            }
+          ],
+          "analysis": {
+            "status": "complete"
+          },
+          "requestIndex": 1
+        }
+      ],
+      "reads": [
+        {
+          "id": "r1:08ce54c9d1fcb571cd2a7565975431de998a456c38579a96614926dca17b0278",
+          "source": "s1:0ece7a5532bfa15a50b3fcae27d3099846d40639d1f5587232a35e197ce4c7d1",
+          "owner": {
+            "kind": "read",
+            "repo": "web",
+            "index": 0,
+            "readKind": "discovery"
+          },
+          "schema": "0.12.0",
+          "producer": {
+            "name": "ye-ast",
+            "version": "0.4.0"
+          },
+          "inputs": {
+            "trust": "untrusted",
+            "scope": "fa4648f55a618e0296b4a7ce207508c12bbe7d7e682e4a5ac5a25787a8b96eb8",
+            "declaredScope": {
+              "languages": [
+                "java",
+                "typescript"
+              ],
+              "frameworks": [
+                "angular",
+                "spring"
+              ],
+              "include": [],
+              "exclude": []
+            },
+            "content": "2a34a243ac5fdcb23e079540e485bf30c2eca68f200f28041e5f1ce044fce3f9",
+            "config": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+            "declaredConfig": {},
+            "engines": {
+              "tree-sitter-java": "0.23.5",
+              "typescript": "6.0.3",
+              "web-tree-sitter": "0.27.1"
+            }
+          },
+          "snapshot": "v1:c869d2d7e2fa0949bda4ad9c72bd5fe9ab5b48aa38cbb8594d37ddae2d6eb1d0",
+          "evidence": [
+            "e1:f5007cecaa59fc33cee1e8be34f716b4d7a00d6a56d86230d3c05f5bd8321ec4",
+            "e1:81a927070ebc52ee9b0ef7fc1cf32f45a335c6eb877840de33fbcee66b7c5b18"
+          ],
+          "analysis": {
+            "status": "complete"
+          }
+        },
+        {
+          "id": "r1:39f31bdac9dee6c388cd5014128c7ae1e06cdaf2a84b1f5973e560076cee9068",
+          "source": "s1:0ece7a5532bfa15a50b3fcae27d3099846d40639d1f5587232a35e197ce4c7d1",
+          "owner": {
+            "kind": "read",
+            "repo": "web",
+            "index": 1,
+            "readKind": "upstream"
+          },
+          "schema": "0.12.0",
+          "producer": {
+            "name": "ye-ast",
+            "version": "0.4.0+edge-policy.e98d5a56243d"
+          },
+          "inputs": {
+            "trust": "untrusted",
+            "scope": "fa4648f55a618e0296b4a7ce207508c12bbe7d7e682e4a5ac5a25787a8b96eb8",
+            "declaredScope": {
+              "languages": [
+                "java",
+                "typescript"
+              ],
+              "frameworks": [
+                "angular",
+                "spring"
+              ],
+              "include": [],
+              "exclude": []
+            },
+            "content": "096b6035e1dad00b70d4deca988872f2a5478746fd86c84804f23e52f9540d5d",
+            "config": "a531d0c3ae20a155b17b7df958b943e7b81c6238420b3527fe17d225fbfd43c0",
+            "declaredConfig": {
+              "targets": [
+                "src/app/order.page.ts:9-9"
+              ]
+            },
+            "origin": {
+              "kind": "full"
+            },
+            "engines": {
+              "@angular/compiler": "22.2.4",
+              "@colbymchenry/codegraph": "1.6.2",
+              "tree-sitter-java": "0.23.5",
+              "typescript": "6.0.3",
+              "web-tree-sitter": "0.27.1"
+            }
+          },
+          "snapshot": "v1:c869d2d7e2fa0949bda4ad9c72bd5fe9ab5b48aa38cbb8594d37ddae2d6eb1d0",
+          "evidence": [],
+          "analysis": {
+            "status": "partial",
+            "cuts": [
+              {
+                "kind": "unresolved-link",
+                "at": [
+                  "src/app/order.page.ts",
+                  "src/app/order.page.ts:1 no-project"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "r1:4bba4a888bb9247cd0544dd163923a23dc56feb9d4fd94190290095c4c813301",
+          "source": "s1:0ece7a5532bfa15a50b3fcae27d3099846d40639d1f5587232a35e197ce4c7d1",
+          "owner": {
+            "kind": "section",
+            "repo": "shop"
+          },
+          "schema": "0.12.0",
+          "producer": {
+            "name": "ye-ast",
+            "version": "0.4.0"
+          },
+          "inputs": {
+            "trust": "untrusted",
+            "scope": "fa4648f55a618e0296b4a7ce207508c12bbe7d7e682e4a5ac5a25787a8b96eb8",
+            "declaredScope": {
+              "languages": [
+                "java",
+                "typescript"
+              ],
+              "frameworks": [
+                "angular",
+                "spring"
+              ],
+              "include": [],
+              "exclude": []
+            },
+            "content": "d7adb270bb95b04d93af51fd1a9a27fafaf693877aa7dc952c93cbb23f24e636",
+            "config": "148d35378902116aa95bcde63948d74dadeb2a0d1c7b258d3953d2d2cc3fac9d",
+            "declaredConfig": {
+              "targets": [
+                "src/main/java/shop/OrderController.java:OrderController.one"
+              ]
+            },
+            "engines": {
+              "@angular/compiler": "22.2.4",
+              "@colbymchenry/codegraph": "1.6.2",
+              "tree-sitter-java": "0.23.5",
+              "typescript": "6.0.3",
+              "web-tree-sitter": "0.27.1"
+            }
+          },
+          "snapshot": "v1:bf9ef89a0a9c9257ff33427e856b9f06d42718542e71a86829c5d686368bac51",
+          "evidence": [],
+          "analysis": {
+            "status": "complete"
+          }
+        },
+        {
+          "id": "r1:54629b38a4df38f699e3e33d66dc42caf3a9905ad6a5aeb7b6f62129456f91f8",
+          "source": "s1:0ece7a5532bfa15a50b3fcae27d3099846d40639d1f5587232a35e197ce4c7d1",
+          "owner": {
+            "kind": "read",
+            "repo": "shop",
+            "index": 0,
+            "readKind": "discovery"
+          },
+          "schema": "0.12.0",
+          "producer": {
+            "name": "ye-ast",
+            "version": "0.4.0"
+          },
+          "inputs": {
+            "trust": "untrusted",
+            "scope": "fa4648f55a618e0296b4a7ce207508c12bbe7d7e682e4a5ac5a25787a8b96eb8",
+            "declaredScope": {
+              "languages": [
+                "java",
+                "typescript"
+              ],
+              "frameworks": [
+                "angular",
+                "spring"
+              ],
+              "include": [],
+              "exclude": []
+            },
+            "content": "02c60757baced2ace102d1ee768e5357ca81023f6bca930e3dc69fe8d7648e73",
+            "config": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+            "declaredConfig": {},
+            "engines": {
+              "tree-sitter-java": "0.23.5",
+              "typescript": "6.0.3",
+              "web-tree-sitter": "0.27.1"
+            }
+          },
+          "snapshot": "v1:bf9ef89a0a9c9257ff33427e856b9f06d42718542e71a86829c5d686368bac51",
+          "evidence": [],
+          "analysis": {
+            "status": "complete"
+          }
+        },
+        {
+          "id": "r1:a2f548ab9dd4c8c2c5f84fd768bc1c3bb5083c9920ca6319423096902996cef5",
+          "source": "s1:0ece7a5532bfa15a50b3fcae27d3099846d40639d1f5587232a35e197ce4c7d1",
+          "owner": {
+            "kind": "section",
+            "repo": "web"
+          },
+          "schema": "0.12.0",
+          "producer": {
+            "name": "ye-ast",
+            "version": "0.4.0"
+          },
+          "inputs": {
+            "trust": "untrusted",
+            "scope": "fa4648f55a618e0296b4a7ce207508c12bbe7d7e682e4a5ac5a25787a8b96eb8",
+            "declaredScope": {
+              "languages": [
+                "java",
+                "typescript"
+              ],
+              "frameworks": [
+                "angular",
+                "spring"
+              ],
+              "include": [],
+              "exclude": []
+            },
+            "content": "aa99841059a94909b987a53ac021133598880d8f472099a7205d682c3012c627",
+            "config": "0aeaae6845f13ce9e9d4cf4d9f24d840668eaa7421c35f3710740af01f81f831",
+            "declaredConfig": {},
+            "engines": {
+              "@angular/compiler": "22.2.4",
+              "@colbymchenry/codegraph": "1.6.2",
+              "tree-sitter-java": "0.23.5",
+              "typescript": "6.0.3",
+              "web-tree-sitter": "0.27.1"
+            }
+          },
+          "snapshot": "v1:c869d2d7e2fa0949bda4ad9c72bd5fe9ab5b48aa38cbb8594d37ddae2d6eb1d0",
+          "evidence": [
+            "e1:f5007cecaa59fc33cee1e8be34f716b4d7a00d6a56d86230d3c05f5bd8321ec4",
+            "e1:81a927070ebc52ee9b0ef7fc1cf32f45a335c6eb877840de33fbcee66b7c5b18"
+          ],
+          "analysis": {
+            "status": "partial",
+            "cuts": [
+              {
+                "kind": "unresolved-link",
+                "at": [
+                  "src/app/order.page.ts",
+                  "src/app/order.page.ts:1 no-project"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "id": "r1:bfed544ddc76982915ca2a010875b96bc0410644f6a9286d1167f493e010edff",
+          "source": "s1:0ece7a5532bfa15a50b3fcae27d3099846d40639d1f5587232a35e197ce4c7d1",
+          "owner": {
+            "kind": "read",
+            "repo": "shop",
+            "index": 1,
+            "readKind": "trigger"
+          },
+          "schema": "0.12.0",
+          "producer": {
+            "name": "ye-ast",
+            "version": "0.4.0+edge-policy.e98d5a56243d"
+          },
+          "inputs": {
+            "trust": "untrusted",
+            "scope": "fa4648f55a618e0296b4a7ce207508c12bbe7d7e682e4a5ac5a25787a8b96eb8",
+            "declaredScope": {
+              "languages": [
+                "java",
+                "typescript"
+              ],
+              "frameworks": [
+                "angular",
+                "spring"
+              ],
+              "include": [],
+              "exclude": []
+            },
+            "content": "f742c7bb02d12b5d4b7f4e364a602110be13666837dc788ad388919d56bf1f6d",
+            "config": "a337eb90d6fea0bef173e3b75298d9dd9c9b6a5b6c791964d594eddc94539e19",
+            "declaredConfig": {
+              "targets": [
+                "src/main/java/shop/OrderController.java:OrderController.one"
+              ]
+            },
+            "origin": {
+              "kind": "full"
+            },
+            "engines": {
+              "@angular/compiler": "22.2.4",
+              "@colbymchenry/codegraph": "1.6.2",
+              "tree-sitter-java": "0.23.5",
+              "typescript": "6.0.3",
+              "web-tree-sitter": "0.27.1"
+            }
+          },
+          "snapshot": "v1:bf9ef89a0a9c9257ff33427e856b9f06d42718542e71a86829c5d686368bac51",
+          "evidence": [],
+          "analysis": {
+            "status": "complete"
+          }
+        },
+        {
+          "id": "r1:cd57c322014b18372679adaa3257fada26a40ba3ac8f9cc0e1a6c14f7b5887d6",
+          "source": "s1:c5f22905aef96bf58dbf69faf8fabbaeffba746143ba0b72337927e5d18ad3fa",
+          "owner": {
+            "kind": "fact"
+          },
+          "schema": "0.12.0",
+          "producer": {
+            "name": "ye-ast",
+            "version": "0.4.0"
+          },
+          "inputs": {
+            "trust": "untrusted",
+            "scope": "fa4648f55a618e0296b4a7ce207508c12bbe7d7e682e4a5ac5a25787a8b96eb8",
+            "declaredScope": {
+              "languages": [
+                "java",
+                "typescript"
+              ],
+              "frameworks": [
+                "angular",
+                "spring"
+              ],
+              "include": [],
+              "exclude": []
+            },
+            "content": "4ccd087c3c447d6bf756a56feb1f15ef7e4f3e7488d69c158cba9b837973482a",
+            "config": "e5226cebb27da894d267f86abc995526abf862ca35801b6cc4b945893d301ed6",
+            "declaredConfig": {
+              "files": [
+                "src/main/java/shop/OrderController.java"
+              ]
+            },
+            "origin": {
+              "kind": "full"
+            },
+            "engines": {
+              "@colbymchenry/codegraph": "1.6.2",
+              "tree-sitter-java": "0.23.5",
+              "typescript": "6.0.3",
+              "web-tree-sitter": "0.27.1"
+            }
+          },
+          "snapshot": "v1:d4fa1fc3264e0165b9fbb4410bdcb34750969ab4386cef589b9b41180d7b775a",
+          "evidence": [],
+          "analysis": {
+            "status": "complete"
+          }
+        },
+        {
+          "id": "r1:d45acf6edac629041cb21563bee594cfe723db0d80d7089da4eda3f4cedf3e50",
+          "source": "s1:0ece7a5532bfa15a50b3fcae27d3099846d40639d1f5587232a35e197ce4c7d1",
+          "owner": {
+            "kind": "fact"
+          },
+          "schema": "0.12.0",
+          "producer": {
+            "name": "ye-ast",
+            "version": "0.4.0"
+          },
+          "inputs": {
+            "trust": "untrusted",
+            "scope": "fa4648f55a618e0296b4a7ce207508c12bbe7d7e682e4a5ac5a25787a8b96eb8",
+            "declaredScope": {
+              "languages": [
+                "java",
+                "typescript"
+              ],
+              "frameworks": [
+                "angular",
+                "spring"
+              ],
+              "include": [],
+              "exclude": []
+            },
+            "content": "0fe3f6830e95a6f3c8e1831a560fe76c3a426170669e048845353d55249f7284",
+            "config": "8615ff023f90e46eca141e6d22d70b2fb37ad23fe4f68dc5d6c10782164ef52b",
+            "declaredConfig": {
+              "targets": [
+                "src/main/java/shop/OrderController.java:OrderController.one"
+              ]
+            },
+            "engines": {
+              "@angular/compiler": "22.2.4",
+              "@colbymchenry/codegraph": "1.6.2",
+              "tree-sitter-java": "0.23.5",
+              "typescript": "6.0.3",
+              "web-tree-sitter": "0.27.1"
+            }
+          },
+          "snapshot": "v1:bf9ef89a0a9c9257ff33427e856b9f06d42718542e71a86829c5d686368bac51",
+          "evidence": [],
+          "analysis": {
+            "status": "partial",
+            "cuts": [
+              {
+                "kind": "section",
+                "at": [
+                  "web"
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "files": [
+        {
+          "id": "f1:374e52971c7a53104e2ed3d62c201c4dde453d1f21fea8c5cff40d2e3dc7a28d",
+          "origin": {
+            "kind": "snapshot",
+            "snapshot": "v1:bf9ef89a0a9c9257ff33427e856b9f06d42718542e71a86829c5d686368bac51"
+          },
+          "repo": "shop",
+          "path": "src/main/java/shop/OrderController.java",
+          "supports": [
+            {
+              "source": "s1:0ece7a5532bfa15a50b3fcae27d3099846d40639d1f5587232a35e197ce4c7d1",
+              "read": "r1:4bba4a888bb9247cd0544dd163923a23dc56feb9d4fd94190290095c4c813301",
+              "pointer": "/value/sections/shop/value/impact/entrypoints/0/handler/path"
+            },
+            {
+              "source": "s1:0ece7a5532bfa15a50b3fcae27d3099846d40639d1f5587232a35e197ce4c7d1",
+              "read": "r1:4bba4a888bb9247cd0544dd163923a23dc56feb9d4fd94190290095c4c813301",
+              "pointer": "/value/sections/shop/value/impact/seeds/0/file"
+            },
+            {
+              "source": "s1:0ece7a5532bfa15a50b3fcae27d3099846d40639d1f5587232a35e197ce4c7d1",
+              "read": "r1:4bba4a888bb9247cd0544dd163923a23dc56feb9d4fd94190290095c4c813301",
+              "pointer": "/value/sections/shop/value/impact/symbols/0/file"
+            },
+            {
+              "source": "s1:0ece7a5532bfa15a50b3fcae27d3099846d40639d1f5587232a35e197ce4c7d1",
+              "read": "r1:4bba4a888bb9247cd0544dd163923a23dc56feb9d4fd94190290095c4c813301",
+              "pointer": "/value/sections/shop/value/impact/symbols/0/via/file"
+            },
+            {
+              "source": "s1:0ece7a5532bfa15a50b3fcae27d3099846d40639d1f5587232a35e197ce4c7d1",
+              "read": "r1:4bba4a888bb9247cd0544dd163923a23dc56feb9d4fd94190290095c4c813301",
+              "pointer": "/value/sections/shop/value/impact/symbols/1/file"
+            },
+            {
+              "source": "s1:0ece7a5532bfa15a50b3fcae27d3099846d40639d1f5587232a35e197ce4c7d1",
+              "read": "r1:d45acf6edac629041cb21563bee594cfe723db0d80d7089da4eda3f4cedf3e50",
+              "pointer": "/value/links/0/link/to/handler/path"
+            }
+          ]
+        },
+        {
+          "id": "f1:558ffed136a4db1ce64c1f83494a9075678ecc393998b14a0f368e30cd6ff861",
+          "origin": {
+            "kind": "snapshot",
+            "snapshot": "v1:c869d2d7e2fa0949bda4ad9c72bd5fe9ab5b48aa38cbb8594d37ddae2d6eb1d0"
+          },
+          "repo": "web",
+          "path": "src/app/order.page.ts",
+          "supports": [
+            {
+              "source": "s1:0ece7a5532bfa15a50b3fcae27d3099846d40639d1f5587232a35e197ce4c7d1",
+              "read": "r1:a2f548ab9dd4c8c2c5f84fd768bc1c3bb5083c9920ca6319423096902996cef5",
+              "pointer": "/value/sections/web/value/callSites/0/file"
+            },
+            {
+              "source": "s1:0ece7a5532bfa15a50b3fcae27d3099846d40639d1f5587232a35e197ce4c7d1",
+              "read": "r1:a2f548ab9dd4c8c2c5f84fd768bc1c3bb5083c9920ca6319423096902996cef5",
+              "pointer": "/value/sections/web/value/impact/seeds/0/file"
+            },
+            {
+              "source": "s1:0ece7a5532bfa15a50b3fcae27d3099846d40639d1f5587232a35e197ce4c7d1",
+              "read": "r1:a2f548ab9dd4c8c2c5f84fd768bc1c3bb5083c9920ca6319423096902996cef5",
+              "pointer": "/value/sections/web/value/impact/symbols/0/file"
+            },
+            {
+              "source": "s1:0ece7a5532bfa15a50b3fcae27d3099846d40639d1f5587232a35e197ce4c7d1",
+              "read": "r1:a2f548ab9dd4c8c2c5f84fd768bc1c3bb5083c9920ca6319423096902996cef5",
+              "pointer": "/value/sections/web/value/impact/symbols/0/via/file"
+            },
+            {
+              "source": "s1:0ece7a5532bfa15a50b3fcae27d3099846d40639d1f5587232a35e197ce4c7d1",
+              "read": "r1:a2f548ab9dd4c8c2c5f84fd768bc1c3bb5083c9920ca6319423096902996cef5",
+              "pointer": "/value/sections/web/value/impact/symbols/1/file"
+            },
+            {
+              "source": "s1:0ece7a5532bfa15a50b3fcae27d3099846d40639d1f5587232a35e197ce4c7d1",
+              "read": "r1:a2f548ab9dd4c8c2c5f84fd768bc1c3bb5083c9920ca6319423096902996cef5",
+              "pointer": "/value/sections/web/value/unmatched/0/file"
+            },
+            {
+              "source": "s1:0ece7a5532bfa15a50b3fcae27d3099846d40639d1f5587232a35e197ce4c7d1",
+              "read": "r1:d45acf6edac629041cb21563bee594cfe723db0d80d7089da4eda3f4cedf3e50",
+              "pointer": "/value/links/0/link/from/file"
+            }
+          ]
+        },
+        {
+          "id": "f1:57c89a513a5ea3df0ae6fbd3105f8c1b4eab41ee3fd370b7367e5295f5899194",
+          "origin": {
+            "kind": "snapshot",
+            "snapshot": "v1:d4fa1fc3264e0165b9fbb4410bdcb34750969ab4386cef589b9b41180d7b775a"
+          },
+          "repo": "shop",
+          "path": "src/main/java/shop/OrderController.java",
+          "supports": [
+            {
+              "source": "s1:c5f22905aef96bf58dbf69faf8fabbaeffba746143ba0b72337927e5d18ad3fa",
+              "read": "r1:cd57c322014b18372679adaa3257fada26a40ba3ac8f9cc0e1a6c14f7b5887d6",
+              "pointer": "/value/files/0/file"
+            }
+          ]
+        }
+      ],
+      "anchors": [
+        {
+          "id": "a1:187d285313fc577de3b99dbae232476bbbd6714b82b6aeccec482f230eda27ff",
+          "file": "f1:374e52971c7a53104e2ed3d62c201c4dde453d1f21fea8c5cff40d2e3dc7a28d",
+          "symbol": "OrderController",
+          "line": 7,
+          "endLine": 17,
+          "supports": [
+            {
+              "source": "s1:0ece7a5532bfa15a50b3fcae27d3099846d40639d1f5587232a35e197ce4c7d1",
+              "read": "r1:4bba4a888bb9247cd0544dd163923a23dc56feb9d4fd94190290095c4c813301",
+              "pointer": "/value/sections/shop/value/impact/symbols/0"
+            }
+          ]
+        },
+        {
+          "id": "a1:45cb7df18ad720f98395103441b67d5ccb05a1dbea41a3ffe444a92b4baf108a",
+          "file": "f1:558ffed136a4db1ce64c1f83494a9075678ecc393998b14a0f368e30cd6ff861",
+          "symbol": "OrderPage",
+          "line": 5,
+          "endLine": 17,
+          "supports": [
+            {
+              "source": "s1:0ece7a5532bfa15a50b3fcae27d3099846d40639d1f5587232a35e197ce4c7d1",
+              "read": "r1:a2f548ab9dd4c8c2c5f84fd768bc1c3bb5083c9920ca6319423096902996cef5",
+              "pointer": "/value/sections/web/value/impact/symbols/0"
+            }
+          ]
+        },
+        {
+          "id": "a1:478a9cade5932f52692c6e231c2903ada23e2453e5ebea5543faef0af1d06404",
+          "file": "f1:374e52971c7a53104e2ed3d62c201c4dde453d1f21fea8c5cff40d2e3dc7a28d",
+          "symbol": "OrderController.one",
+          "line": 10,
+          "endLine": 14,
+          "supports": [
+            {
+              "source": "s1:0ece7a5532bfa15a50b3fcae27d3099846d40639d1f5587232a35e197ce4c7d1",
+              "read": "r1:4bba4a888bb9247cd0544dd163923a23dc56feb9d4fd94190290095c4c813301",
+              "pointer": "/value/sections/shop/value/impact/entrypoints/0/handler"
+            },
+            {
+              "source": "s1:0ece7a5532bfa15a50b3fcae27d3099846d40639d1f5587232a35e197ce4c7d1",
+              "read": "r1:d45acf6edac629041cb21563bee594cfe723db0d80d7089da4eda3f4cedf3e50",
+              "pointer": "/value/links/0/link/to/handler"
+            }
+          ]
+        },
+        {
+          "id": "a1:5329f9fd286928c4bd4a52011711e49b7370b356370ec706eec1f750799e908d",
+          "file": "f1:57c89a513a5ea3df0ae6fbd3105f8c1b4eab41ee3fd370b7367e5295f5899194",
+          "symbol": "OrderController",
+          "line": 7,
+          "endLine": 17,
+          "supports": [
+            {
+              "source": "s1:c5f22905aef96bf58dbf69faf8fabbaeffba746143ba0b72337927e5d18ad3fa",
+              "read": "r1:cd57c322014b18372679adaa3257fada26a40ba3ac8f9cc0e1a6c14f7b5887d6",
+              "pointer": "/value/files/0/declarations/1"
+            }
+          ]
+        },
+        {
+          "id": "a1:60b1568245fe1c9cc5329d297a9ebef66f6659b7e8d56e8617d9ed038b1f88a6",
+          "file": "f1:57c89a513a5ea3df0ae6fbd3105f8c1b4eab41ee3fd370b7367e5295f5899194",
+          "symbol": "second",
+          "line": 16,
+          "endLine": 16,
+          "supports": [
+            {
+              "source": "s1:c5f22905aef96bf58dbf69faf8fabbaeffba746143ba0b72337927e5d18ad3fa",
+              "read": "r1:cd57c322014b18372679adaa3257fada26a40ba3ac8f9cc0e1a6c14f7b5887d6",
+              "pointer": "/value/files/0/declarations/5"
+            }
+          ]
+        },
+        {
+          "id": "a1:81278ffaed5c574760cd51856714d233f9cd629c3b9853af05b3c2f9bdcd675b",
+          "file": "f1:57c89a513a5ea3df0ae6fbd3105f8c1b4eab41ee3fd370b7367e5295f5899194",
+          "symbol": "shop",
+          "line": 1,
+          "endLine": 1,
+          "supports": [
+            {
+              "source": "s1:c5f22905aef96bf58dbf69faf8fabbaeffba746143ba0b72337927e5d18ad3fa",
+              "read": "r1:cd57c322014b18372679adaa3257fada26a40ba3ac8f9cc0e1a6c14f7b5887d6",
+              "pointer": "/value/files/0/declarations/0"
+            }
+          ]
+        },
+        {
+          "id": "a1:9baf036cffa5967ee8573ff2c2391b12340cf9696b7378c9ae6b6839b2443163",
+          "file": "f1:57c89a513a5ea3df0ae6fbd3105f8c1b4eab41ee3fd370b7367e5295f5899194",
+          "symbol": "one",
+          "line": 10,
+          "endLine": 14,
+          "supports": [
+            {
+              "source": "s1:c5f22905aef96bf58dbf69faf8fabbaeffba746143ba0b72337927e5d18ad3fa",
+              "read": "r1:cd57c322014b18372679adaa3257fada26a40ba3ac8f9cc0e1a6c14f7b5887d6",
+              "pointer": "/value/files/0/declarations/3"
+            }
+          ]
+        },
+        {
+          "id": "a1:9cf9138ee98c09d0b17b85fb57c10dfd55728f12c29bddf9c1d3b19ee9588d1d",
+          "file": "f1:558ffed136a4db1ce64c1f83494a9075678ecc393998b14a0f368e30cd6ff861",
+          "symbol": "open",
+          "line": 7,
+          "endLine": 10,
+          "supports": [
+            {
+              "source": "s1:0ece7a5532bfa15a50b3fcae27d3099846d40639d1f5587232a35e197ce4c7d1",
+              "read": "r1:a2f548ab9dd4c8c2c5f84fd768bc1c3bb5083c9920ca6319423096902996cef5",
+              "pointer": "/value/sections/web/value/impact/seeds/0"
+            },
+            {
+              "source": "s1:0ece7a5532bfa15a50b3fcae27d3099846d40639d1f5587232a35e197ce4c7d1",
+              "read": "r1:a2f548ab9dd4c8c2c5f84fd768bc1c3bb5083c9920ca6319423096902996cef5",
+              "pointer": "/value/sections/web/value/impact/symbols/1"
+            }
+          ]
+        },
+        {
+          "id": "a1:bc0901ab948d9fb12d766ae5b851b25f590a7baecb4dbe4826ee3fd874a7c04b",
+          "file": "f1:57c89a513a5ea3df0ae6fbd3105f8c1b4eab41ee3fd370b7367e5295f5899194",
+          "symbol": "GET /orders/{id}",
+          "line": 10,
+          "endLine": 10,
+          "supports": [
+            {
+              "source": "s1:c5f22905aef96bf58dbf69faf8fabbaeffba746143ba0b72337927e5d18ad3fa",
+              "read": "r1:cd57c322014b18372679adaa3257fada26a40ba3ac8f9cc0e1a6c14f7b5887d6",
+              "pointer": "/value/files/0/declarations/2"
+            }
+          ]
+        },
+        {
+          "id": "a1:c9092bff79f5480c4652e682d65b158323521c0e110fbd9e2799458a746aa235",
+          "file": "f1:57c89a513a5ea3df0ae6fbd3105f8c1b4eab41ee3fd370b7367e5295f5899194",
+          "symbol": "first",
+          "line": 15,
+          "endLine": 15,
+          "supports": [
+            {
+              "source": "s1:c5f22905aef96bf58dbf69faf8fabbaeffba746143ba0b72337927e5d18ad3fa",
+              "read": "r1:cd57c322014b18372679adaa3257fada26a40ba3ac8f9cc0e1a6c14f7b5887d6",
+              "pointer": "/value/files/0/declarations/4"
+            }
+          ]
+        },
+        {
+          "id": "a1:e5e36ed789aecfb39d3e39b0c2e525cda222c42c3f04c6592c601bc004530828",
+          "file": "f1:374e52971c7a53104e2ed3d62c201c4dde453d1f21fea8c5cff40d2e3dc7a28d",
+          "symbol": "one",
+          "line": 10,
+          "endLine": 14,
+          "supports": [
+            {
+              "source": "s1:0ece7a5532bfa15a50b3fcae27d3099846d40639d1f5587232a35e197ce4c7d1",
+              "read": "r1:4bba4a888bb9247cd0544dd163923a23dc56feb9d4fd94190290095c4c813301",
+              "pointer": "/value/sections/shop/value/impact/seeds/0"
+            },
+            {
+              "source": "s1:0ece7a5532bfa15a50b3fcae27d3099846d40639d1f5587232a35e197ce4c7d1",
+              "read": "r1:4bba4a888bb9247cd0544dd163923a23dc56feb9d4fd94190290095c4c813301",
+              "pointer": "/value/sections/shop/value/impact/symbols/1"
+            }
+          ]
+        }
+      ],
+      "evidence": [
+        {
+          "id": "e1:0a5c7b1dc33fd103ac3abc701f2713425c9055f394d3a8c6c266fd3bb8dabc17",
+          "origin": {
+            "kind": "snapshot",
+            "snapshot": "v1:c869d2d7e2fa0949bda4ad9c72bd5fe9ab5b48aa38cbb8594d37ddae2d6eb1d0"
+          },
+          "repo": "web",
+          "value": {
+            "path": "src/app/order.page.ts",
+            "line": 9
+          },
+          "supports": [
+            {
+              "source": "s1:0ece7a5532bfa15a50b3fcae27d3099846d40639d1f5587232a35e197ce4c7d1",
+              "read": "r1:a2f548ab9dd4c8c2c5f84fd768bc1c3bb5083c9920ca6319423096902996cef5",
+              "pointer": "/value/sections/web/value/callSites/0/target/evidence/0"
+            }
+          ]
+        },
+        {
+          "id": "e1:22f04a81156d9a6219fc4dd2e06d8ac0d78e42c1138cf0fd0a42e2f637359a44",
+          "origin": {
+            "kind": "snapshot",
+            "snapshot": "v1:c869d2d7e2fa0949bda4ad9c72bd5fe9ab5b48aa38cbb8594d37ddae2d6eb1d0"
+          },
+          "repo": "web",
+          "value": {
+            "path": "src/app/order.page.ts",
+            "line": 12
+          },
+          "supports": [
+            {
+              "source": "s1:0ece7a5532bfa15a50b3fcae27d3099846d40639d1f5587232a35e197ce4c7d1",
+              "read": "r1:a2f548ab9dd4c8c2c5f84fd768bc1c3bb5083c9920ca6319423096902996cef5",
+              "pointer": "/value/sections/web/value/unmatched/0/target/evidence/0"
+            }
+          ]
+        },
+        {
+          "id": "e1:81a927070ebc52ee9b0ef7fc1cf32f45a335c6eb877840de33fbcee66b7c5b18",
+          "origin": {
+            "kind": "snapshot",
+            "snapshot": "v1:c869d2d7e2fa0949bda4ad9c72bd5fe9ab5b48aa38cbb8594d37ddae2d6eb1d0"
+          },
+          "repo": "web",
+          "value": {
+            "path": "src/app/order.page.ts",
+            "line": 12,
+            "endLine": 12
+          },
+          "supports": [
+            {
+              "source": "s1:0ece7a5532bfa15a50b3fcae27d3099846d40639d1f5587232a35e197ce4c7d1",
+              "read": "r1:08ce54c9d1fcb571cd2a7565975431de998a456c38579a96614926dca17b0278",
+              "pointer": "/value/sections/web/value/reads/0/fact/evidence/1"
+            },
+            {
+              "source": "s1:0ece7a5532bfa15a50b3fcae27d3099846d40639d1f5587232a35e197ce4c7d1",
+              "read": "r1:a2f548ab9dd4c8c2c5f84fd768bc1c3bb5083c9920ca6319423096902996cef5",
+              "pointer": "/value/sections/web/evidence/1"
+            }
+          ]
+        },
+        {
+          "id": "e1:f5007cecaa59fc33cee1e8be34f716b4d7a00d6a56d86230d3c05f5bd8321ec4",
+          "origin": {
+            "kind": "snapshot",
+            "snapshot": "v1:c869d2d7e2fa0949bda4ad9c72bd5fe9ab5b48aa38cbb8594d37ddae2d6eb1d0"
+          },
+          "repo": "web",
+          "value": {
+            "path": "src/app/order.page.ts",
+            "line": 9,
+            "endLine": 9
+          },
+          "supports": [
+            {
+              "source": "s1:0ece7a5532bfa15a50b3fcae27d3099846d40639d1f5587232a35e197ce4c7d1",
+              "read": "r1:08ce54c9d1fcb571cd2a7565975431de998a456c38579a96614926dca17b0278",
+              "pointer": "/value/sections/web/value/reads/0/fact/evidence/0"
+            },
+            {
+              "source": "s1:0ece7a5532bfa15a50b3fcae27d3099846d40639d1f5587232a35e197ce4c7d1",
+              "read": "r1:a2f548ab9dd4c8c2c5f84fd768bc1c3bb5083c9920ca6319423096902996cef5",
+              "pointer": "/value/sections/web/evidence/0"
+            }
+          ]
+        }
+      ],
+      "parts": [
+        {
+          "kind": "workspace-link",
+          "link": {
+            "transport": "http",
+            "basis": "gateway-prefix",
+            "confidence": 1,
+            "id": "[\"web\",\"src/app/order.page.ts\",9,\"OrderPage.open\",\"shop\",\"http-route\",\"GET /orders/{id}\",\"src/main/java/shop/OrderController.java\",\"OrderController.one\",10,\"http\",\"gateway-prefix\",null]",
+            "from": {
+              "file": "f1:558ffed136a4db1ce64c1f83494a9075678ecc393998b14a0f368e30cd6ff861",
+              "line": 9,
+              "repo": "web",
+              "symbol": "OrderPage.open"
+            },
+            "to": {
+              "repo": "shop",
+              "kind": "http-route",
+              "name": "GET /orders/{id}",
+              "handler": "a1:478a9cade5932f52692c6e231c2903ada23e2453e5ebea5543faef0af1d06404"
+            }
+          },
+          "direction": "upstream",
+          "reach": [
+            {
+              "status": "present",
+              "part": "p1:1da97304c69be7d0e74e7d6ce223e71d4f86c5ba384de2d9a355da617ac608b9"
+            }
+          ],
+          "id": "p1:1da97304c69be7d0e74e7d6ce223e71d4f86c5ba384de2d9a355da617ac608b9",
+          "supports": [
+            {
+              "source": "s1:0ece7a5532bfa15a50b3fcae27d3099846d40639d1f5587232a35e197ce4c7d1",
+              "read": "r1:d45acf6edac629041cb21563bee594cfe723db0d80d7089da4eda3f4cedf3e50",
+              "pointer": "/value/links/0"
+            }
+          ]
+        },
+        {
+          "kind": "seed",
+          "anchor": "a1:9cf9138ee98c09d0b17b85fb57c10dfd55728f12c29bddf9c1d3b19ee9588d1d",
+          "basis": "lines",
+          "id": "p1:24e033d081f4b2b0837f806110b729dab10e66e8899c160eeb7114e5a417bad2",
+          "supports": [
+            {
+              "source": "s1:0ece7a5532bfa15a50b3fcae27d3099846d40639d1f5587232a35e197ce4c7d1",
+              "read": "r1:a2f548ab9dd4c8c2c5f84fd768bc1c3bb5083c9920ca6319423096902996cef5",
+              "pointer": "/value/sections/web/value/impact/seeds/0"
+            }
+          ]
+        },
+        {
+          "kind": "symbol-reach",
+          "anchor": "a1:9cf9138ee98c09d0b17b85fb57c10dfd55728f12c29bddf9c1d3b19ee9588d1d",
+          "kindName": "method",
+          "depth": 0,
+          "confidence": 1,
+          "fanIn": 0,
+          "id": "p1:35aa762d664ae15d4884fc7f509ad92a4662d4d175cfdedf1056aa4e44b1e476",
+          "supports": [
+            {
+              "source": "s1:0ece7a5532bfa15a50b3fcae27d3099846d40639d1f5587232a35e197ce4c7d1",
+              "read": "r1:a2f548ab9dd4c8c2c5f84fd768bc1c3bb5083c9920ca6319423096902996cef5",
+              "pointer": "/value/sections/web/value/impact/symbols/1"
+            }
+          ]
+        },
+        {
+          "kind": "workspace-context",
+          "context": {
+            "family": "callers",
+            "workspace": {
+              "repos": [
+                "shop",
+                "web"
+              ],
+              "gateways": [
+                {
+                  "prefix": "shop-api",
+                  "repo": "shop",
+                  "basis": "gateway-prefix"
+                }
+              ],
+              "unmatchedGateways": [],
+              "unserved": [],
+              "source": "request"
+            },
+            "trigger": {
+              "repo": "shop"
+            },
+            "repositorySnapshots": [
+              {
+                "repo": "shop",
+                "snapshot": "v1:bf9ef89a0a9c9257ff33427e856b9f06d42718542e71a86829c5d686368bac51"
+              },
+              {
+                "repo": "web",
+                "snapshot": "v1:c869d2d7e2fa0949bda4ad9c72bd5fe9ab5b48aa38cbb8594d37ddae2d6eb1d0"
+              }
+            ]
+          },
+          "id": "p1:5007665d712a8e26300c22a2d7cb5e8432c7be28408d40d370facf34105fa40e",
+          "supports": [
+            {
+              "source": "s1:0ece7a5532bfa15a50b3fcae27d3099846d40639d1f5587232a35e197ce4c7d1",
+              "read": "r1:d45acf6edac629041cb21563bee594cfe723db0d80d7089da4eda3f4cedf3e50",
+              "pointer": "/value/repositorySnapshots"
+            },
+            {
+              "source": "s1:0ece7a5532bfa15a50b3fcae27d3099846d40639d1f5587232a35e197ce4c7d1",
+              "read": "r1:d45acf6edac629041cb21563bee594cfe723db0d80d7089da4eda3f4cedf3e50",
+              "pointer": "/value/trigger"
+            },
+            {
+              "source": "s1:0ece7a5532bfa15a50b3fcae27d3099846d40639d1f5587232a35e197ce4c7d1",
+              "read": "r1:d45acf6edac629041cb21563bee594cfe723db0d80d7089da4eda3f4cedf3e50",
+              "pointer": "/value/workspace"
+            }
+          ]
+        },
+        {
+          "kind": "impact-context",
+          "owner": "r1:a2f548ab9dd4c8c2c5f84fd768bc1c3bb5083c9920ca6319423096902996cef5",
+          "changedEntrypoints": "absent",
+          "id": "p1:524882a4a1a8aae64c126138eeff1d88ea823d23bea93b566cd757620e70f4ae",
+          "supports": [
+            {
+              "source": "s1:0ece7a5532bfa15a50b3fcae27d3099846d40639d1f5587232a35e197ce4c7d1",
+              "read": "r1:a2f548ab9dd4c8c2c5f84fd768bc1c3bb5083c9920ca6319423096902996cef5",
+              "pointer": "/value/sections/web/value/impact"
+            }
+          ]
+        },
+        {
+          "kind": "symbol-reach",
+          "anchor": "a1:187d285313fc577de3b99dbae232476bbbd6714b82b6aeccec482f230eda27ff",
+          "kindName": "class",
+          "depth": 0,
+          "confidence": 1,
+          "fanIn": 0,
+          "via": {
+            "target": {
+              "file": "f1:374e52971c7a53104e2ed3d62c201c4dde453d1f21fea8c5cff40d2e3dc7a28d",
+              "symbol": "one"
+            },
+            "basis": "contains"
+          },
+          "id": "p1:5819f4c947a44c310f6b7fd0da0d46acd8c16e5334a767ae0624cfa19178af45",
+          "supports": [
+            {
+              "source": "s1:0ece7a5532bfa15a50b3fcae27d3099846d40639d1f5587232a35e197ce4c7d1",
+              "read": "r1:4bba4a888bb9247cd0544dd163923a23dc56feb9d4fd94190290095c4c813301",
+              "pointer": "/value/sections/shop/value/impact/symbols/0"
+            }
+          ]
+        },
+        {
+          "kind": "outline-declaration",
+          "anchor": "a1:5329f9fd286928c4bd4a52011711e49b7370b356370ec706eec1f750799e908d",
+          "kindName": "class",
+          "id": "p1:60790ee1777c8767853e2ddcbd0f3f1d6669a8a3b42b5e1256a1094dd09c96fd",
+          "supports": [
+            {
+              "source": "s1:c5f22905aef96bf58dbf69faf8fabbaeffba746143ba0b72337927e5d18ad3fa",
+              "read": "r1:cd57c322014b18372679adaa3257fada26a40ba3ac8f9cc0e1a6c14f7b5887d6",
+              "pointer": "/value/files/0/declarations/1"
+            }
+          ]
+        },
+        {
+          "kind": "call-site",
+          "site": {
+            "repo": "web",
+            "symbol": "OrderPage.missing",
+            "ancestors": [
+              {
+                "symbol": "missing",
+                "line": 11,
+                "endLine": 13
+              },
+              {
+                "symbol": "OrderPage",
+                "line": 5,
+                "endLine": 17
+              }
+            ],
+            "transport": "http",
+            "location": {
+              "file": "f1:558ffed136a4db1ce64c1f83494a9075678ecc393998b14a0f368e30cd6ff861",
+              "line": 12,
+              "endLine": 12
+            },
+            "target": {
+              "status": "complete",
+              "value": {
+                "method": "GET",
+                "path": "shop-api/refunds/7"
+              },
+              "evidence": [
+                "e1:22f04a81156d9a6219fc4dd2e06d8ac0d78e42c1138cf0fd0a42e2f637359a44"
+              ]
+            }
+          },
+          "disposition": "unmatched",
+          "id": "p1:60f838ae08dbf1a978aff614d7cbe2126a0dd87540102a358b17d2657bf0ad90",
+          "supports": [
+            {
+              "source": "s1:0ece7a5532bfa15a50b3fcae27d3099846d40639d1f5587232a35e197ce4c7d1",
+              "read": "r1:a2f548ab9dd4c8c2c5f84fd768bc1c3bb5083c9920ca6319423096902996cef5",
+              "pointer": "/value/sections/web/value/unmatched/0"
+            }
+          ]
+        },
+        {
+          "kind": "call-site",
+          "site": {
+            "repo": "web",
+            "symbol": "OrderPage.open",
+            "ancestors": [
+              {
+                "symbol": "open",
+                "line": 7,
+                "endLine": 10
+              },
+              {
+                "symbol": "OrderPage",
+                "line": 5,
+                "endLine": 17
+              }
+            ],
+            "transport": "http",
+            "location": {
+              "file": "f1:558ffed136a4db1ce64c1f83494a9075678ecc393998b14a0f368e30cd6ff861",
+              "line": 9,
+              "endLine": 9
+            },
+            "target": {
+              "status": "complete",
+              "value": {
+                "method": "GET",
+                "path": "shop-api/orders/7"
+              },
+              "evidence": [
+                "e1:0a5c7b1dc33fd103ac3abc701f2713425c9055f394d3a8c6c266fd3bb8dabc17"
+              ]
+            }
+          },
+          "disposition": "matched",
+          "id": "p1:70bfea3cabf93d469641b3b7191a5a0a1b81d4901461db84a7cd0561d02914c0",
+          "supports": [
+            {
+              "source": "s1:0ece7a5532bfa15a50b3fcae27d3099846d40639d1f5587232a35e197ce4c7d1",
+              "read": "r1:a2f548ab9dd4c8c2c5f84fd768bc1c3bb5083c9920ca6319423096902996cef5",
+              "pointer": "/value/sections/web/value/callSites/0"
+            }
+          ]
+        },
+        {
+          "kind": "impact-context",
+          "owner": "r1:4bba4a888bb9247cd0544dd163923a23dc56feb9d4fd94190290095c4c813301",
+          "changedEntrypoints": "absent",
+          "id": "p1:73446ecaede50b4eb6bceb0c6e8b538df9a404b939e9626877d74c74ea3b4f4e",
+          "supports": [
+            {
+              "source": "s1:0ece7a5532bfa15a50b3fcae27d3099846d40639d1f5587232a35e197ce4c7d1",
+              "read": "r1:4bba4a888bb9247cd0544dd163923a23dc56feb9d4fd94190290095c4c813301",
+              "pointer": "/value/sections/shop/value/impact"
+            }
+          ]
+        },
+        {
+          "kind": "walk-cost",
+          "owner": "r1:4bba4a888bb9247cd0544dd163923a23dc56feb9d4fd94190290095c4c813301",
+          "walk": "symbols",
+          "expansionsUsed": 2,
+          "id": "p1:8717e7ae6b6dc30dde5d25af537f1c0a8af4f9d20730519744b06a631820bca4",
+          "supports": [
+            {
+              "source": "s1:0ece7a5532bfa15a50b3fcae27d3099846d40639d1f5587232a35e197ce4c7d1",
+              "read": "r1:4bba4a888bb9247cd0544dd163923a23dc56feb9d4fd94190290095c4c813301",
+              "pointer": "/value/sections/shop/value/impact/cost"
+            }
+          ]
+        },
+        {
+          "kind": "outline-declaration",
+          "anchor": "a1:bc0901ab948d9fb12d766ae5b851b25f590a7baecb4dbe4826ee3fd874a7c04b",
+          "kindName": "route",
+          "id": "p1:88b78623300cd6232e2da2dfed4c17de2a6a5d93da3b1ccc8c0b9da7b72f6843",
+          "supports": [
+            {
+              "source": "s1:c5f22905aef96bf58dbf69faf8fabbaeffba746143ba0b72337927e5d18ad3fa",
+              "read": "r1:cd57c322014b18372679adaa3257fada26a40ba3ac8f9cc0e1a6c14f7b5887d6",
+              "pointer": "/value/files/0/declarations/2"
+            }
+          ]
+        },
+        {
+          "kind": "walk-cost",
+          "owner": "r1:a2f548ab9dd4c8c2c5f84fd768bc1c3bb5083c9920ca6319423096902996cef5",
+          "walk": "symbols",
+          "expansionsUsed": 2,
+          "id": "p1:91d5be5e5762194e5c60dd0857e08af66f2f2667fd508b726c1797bf5fa3fb9b",
+          "supports": [
+            {
+              "source": "s1:0ece7a5532bfa15a50b3fcae27d3099846d40639d1f5587232a35e197ce4c7d1",
+              "read": "r1:a2f548ab9dd4c8c2c5f84fd768bc1c3bb5083c9920ca6319423096902996cef5",
+              "pointer": "/value/sections/web/value/impact/cost"
+            }
+          ]
+        },
+        {
+          "kind": "symbol-reach",
+          "anchor": "a1:e5e36ed789aecfb39d3e39b0c2e525cda222c42c3f04c6592c601bc004530828",
+          "kindName": "method",
+          "depth": 0,
+          "confidence": 1,
+          "fanIn": 0,
+          "id": "p1:9e02e6c8b617c66ab2a0e46d512c1e7e2b7900ea9cd199af558bb0106e78e33d",
+          "supports": [
+            {
+              "source": "s1:0ece7a5532bfa15a50b3fcae27d3099846d40639d1f5587232a35e197ce4c7d1",
+              "read": "r1:4bba4a888bb9247cd0544dd163923a23dc56feb9d4fd94190290095c4c813301",
+              "pointer": "/value/sections/shop/value/impact/symbols/1"
+            }
+          ]
+        },
+        {
+          "kind": "outline-declaration",
+          "anchor": "a1:81278ffaed5c574760cd51856714d233f9cd629c3b9853af05b3c2f9bdcd675b",
+          "kindName": "namespace",
+          "id": "p1:b964e7a401e965a4e823735b64e32f1a72af372b261a1c26bade8e3a70b7f46a",
+          "supports": [
+            {
+              "source": "s1:c5f22905aef96bf58dbf69faf8fabbaeffba746143ba0b72337927e5d18ad3fa",
+              "read": "r1:cd57c322014b18372679adaa3257fada26a40ba3ac8f9cc0e1a6c14f7b5887d6",
+              "pointer": "/value/files/0/declarations/0"
+            }
+          ]
+        },
+        {
+          "kind": "outline-declaration",
+          "anchor": "a1:60b1568245fe1c9cc5329d297a9ebef66f6659b7e8d56e8617d9ed038b1f88a6",
+          "kindName": "method",
+          "id": "p1:d2d2660c360790767131893220f53cd8e60c303d01636940da4e5268558d461c",
+          "supports": [
+            {
+              "source": "s1:c5f22905aef96bf58dbf69faf8fabbaeffba746143ba0b72337927e5d18ad3fa",
+              "read": "r1:cd57c322014b18372679adaa3257fada26a40ba3ac8f9cc0e1a6c14f7b5887d6",
+              "pointer": "/value/files/0/declarations/5"
+            }
+          ]
+        },
+        {
+          "kind": "outline-declaration",
+          "anchor": "a1:c9092bff79f5480c4652e682d65b158323521c0e110fbd9e2799458a746aa235",
+          "kindName": "method",
+          "id": "p1:d67423a7af80a8fb60e2f47bdbd162627d71c428c675123dc6a786e4d6d15e44",
+          "supports": [
+            {
+              "source": "s1:c5f22905aef96bf58dbf69faf8fabbaeffba746143ba0b72337927e5d18ad3fa",
+              "read": "r1:cd57c322014b18372679adaa3257fada26a40ba3ac8f9cc0e1a6c14f7b5887d6",
+              "pointer": "/value/files/0/declarations/4"
+            }
+          ]
+        },
+        {
+          "kind": "symbol-reach",
+          "anchor": "a1:45cb7df18ad720f98395103441b67d5ccb05a1dbea41a3ffe444a92b4baf108a",
+          "kindName": "class",
+          "depth": 0,
+          "confidence": 1,
+          "fanIn": 0,
+          "via": {
+            "target": {
+              "file": "f1:558ffed136a4db1ce64c1f83494a9075678ecc393998b14a0f368e30cd6ff861",
+              "symbol": "open"
+            },
+            "basis": "contains"
+          },
+          "id": "p1:da4dbfd3145981ddc223e9a2ae0e88c299394db4ebdd34571fe345d83b7d5f2f",
+          "supports": [
+            {
+              "source": "s1:0ece7a5532bfa15a50b3fcae27d3099846d40639d1f5587232a35e197ce4c7d1",
+              "read": "r1:a2f548ab9dd4c8c2c5f84fd768bc1c3bb5083c9920ca6319423096902996cef5",
+              "pointer": "/value/sections/web/value/impact/symbols/0"
+            }
+          ]
+        },
+        {
+          "kind": "seed",
+          "anchor": "a1:e5e36ed789aecfb39d3e39b0c2e525cda222c42c3f04c6592c601bc004530828",
+          "basis": "requested",
+          "id": "p1:e7918343428d3b28380460e7fc262c96f7cc95ffa494587dda63f50cbeb43859",
+          "supports": [
+            {
+              "source": "s1:0ece7a5532bfa15a50b3fcae27d3099846d40639d1f5587232a35e197ce4c7d1",
+              "read": "r1:4bba4a888bb9247cd0544dd163923a23dc56feb9d4fd94190290095c4c813301",
+              "pointer": "/value/sections/shop/value/impact/seeds/0"
+            }
+          ]
+        },
+        {
+          "kind": "outline-declaration",
+          "anchor": "a1:9baf036cffa5967ee8573ff2c2391b12340cf9696b7378c9ae6b6839b2443163",
+          "kindName": "method",
+          "id": "p1:e913341f1636695eda586817317477bc33c507da9a5ab0d82cc23433709d4ad9",
+          "supports": [
+            {
+              "source": "s1:c5f22905aef96bf58dbf69faf8fabbaeffba746143ba0b72337927e5d18ad3fa",
+              "read": "r1:cd57c322014b18372679adaa3257fada26a40ba3ac8f9cc0e1a6c14f7b5887d6",
+              "pointer": "/value/files/0/declarations/3"
+            }
+          ]
+        },
+        {
+          "kind": "outline-file",
+          "file": "f1:57c89a513a5ea3df0ae6fbd3105f8c1b4eab41ee3fd370b7367e5295f5899194",
+          "declarations": [
+            "p1:b964e7a401e965a4e823735b64e32f1a72af372b261a1c26bade8e3a70b7f46a",
+            "p1:60790ee1777c8767853e2ddcbd0f3f1d6669a8a3b42b5e1256a1094dd09c96fd",
+            "p1:88b78623300cd6232e2da2dfed4c17de2a6a5d93da3b1ccc8c0b9da7b72f6843",
+            "p1:e913341f1636695eda586817317477bc33c507da9a5ab0d82cc23433709d4ad9",
+            "p1:d67423a7af80a8fb60e2f47bdbd162627d71c428c675123dc6a786e4d6d15e44",
+            "p1:d2d2660c360790767131893220f53cd8e60c303d01636940da4e5268558d461c"
+          ],
+          "imports": [],
+          "id": "p1:ed1326866524f713a09cbb897f98908e1b7f934f12eb64bdd0736229e1cc0e9f",
+          "supports": [
+            {
+              "source": "s1:c5f22905aef96bf58dbf69faf8fabbaeffba746143ba0b72337927e5d18ad3fa",
+              "read": "r1:cd57c322014b18372679adaa3257fada26a40ba3ac8f9cc0e1a6c14f7b5887d6",
+              "pointer": "/value/files/0"
+            }
+          ]
+        },
+        {
+          "kind": "entrypoint-reach",
+          "kindName": "http-route",
+          "name": "GET /orders/{id}",
+          "handler": "a1:478a9cade5932f52692c6e231c2903ada23e2453e5ebea5543faef0af1d06404",
+          "depth": 0,
+          "confidence": 1,
+          "seeds": [
+            {
+              "status": "present",
+              "index": 0,
+              "part": "p1:e7918343428d3b28380460e7fc262c96f7cc95ffa494587dda63f50cbeb43859"
+            }
+          ],
+          "id": "p1:f599ce4a15a1b41e49b231ed6e9575c004a3af4d4f5fa4522692d8ed791b9257",
+          "supports": [
+            {
+              "source": "s1:0ece7a5532bfa15a50b3fcae27d3099846d40639d1f5587232a35e197ce4c7d1",
+              "read": "r1:4bba4a888bb9247cd0544dd163923a23dc56feb9d4fd94190290095c4c813301",
+              "pointer": "/value/sections/shop/value/impact/entrypoints/0"
+            }
+          ]
+        }
+      ],
+      "entities": [
+        {
+          "id": "n1:11e042143c2f7502a2c94abab3000cd1261e95e96fc76a6e8717c9169740cd29",
+          "kind": "declaration",
+          "file": "f1:57c89a513a5ea3df0ae6fbd3105f8c1b4eab41ee3fd370b7367e5295f5899194",
+          "anchors": [
+            "a1:9baf036cffa5967ee8573ff2c2391b12340cf9696b7378c9ae6b6839b2443163"
+          ],
+          "declarations": [
+            "p1:e913341f1636695eda586817317477bc33c507da9a5ab0d82cc23433709d4ad9"
+          ]
+        },
+        {
+          "id": "n1:181061faacaf931725452b0f8f41eda0a73c62fe950702b95ddb205e2cef724b",
+          "kind": "declaration",
+          "file": "f1:374e52971c7a53104e2ed3d62c201c4dde453d1f21fea8c5cff40d2e3dc7a28d",
+          "anchors": [
+            "a1:e5e36ed789aecfb39d3e39b0c2e525cda222c42c3f04c6592c601bc004530828"
+          ],
+          "declarations": []
+        },
+        {
+          "id": "n1:2b9598d2adc35db7bb16345eb85162d81dd7af11f1869cf00f7d70d2758991c0",
+          "kind": "declaration",
+          "file": "f1:57c89a513a5ea3df0ae6fbd3105f8c1b4eab41ee3fd370b7367e5295f5899194",
+          "anchors": [
+            "a1:c9092bff79f5480c4652e682d65b158323521c0e110fbd9e2799458a746aa235"
+          ],
+          "declarations": [
+            "p1:d67423a7af80a8fb60e2f47bdbd162627d71c428c675123dc6a786e4d6d15e44"
+          ]
+        },
+        {
+          "id": "n1:327a3cff26a790ca8389bee9b414575e19b3514df71a188a40cbc6b2be197326",
+          "kind": "declaration",
+          "file": "f1:374e52971c7a53104e2ed3d62c201c4dde453d1f21fea8c5cff40d2e3dc7a28d",
+          "anchors": [
+            "a1:187d285313fc577de3b99dbae232476bbbd6714b82b6aeccec482f230eda27ff"
+          ],
+          "declarations": []
+        },
+        {
+          "id": "n1:6e217bdf73c627faa002ce2b4342491c9730fc05f893a0474b3fdec1338465e8",
+          "kind": "declaration",
+          "file": "f1:57c89a513a5ea3df0ae6fbd3105f8c1b4eab41ee3fd370b7367e5295f5899194",
+          "anchors": [
+            "a1:81278ffaed5c574760cd51856714d233f9cd629c3b9853af05b3c2f9bdcd675b"
+          ],
+          "declarations": [
+            "p1:b964e7a401e965a4e823735b64e32f1a72af372b261a1c26bade8e3a70b7f46a"
+          ]
+        },
+        {
+          "id": "n1:82a83e698167ce9718f5861c247c3a73ef12989a654632a646a67cbb99ca0d62",
+          "kind": "declaration",
+          "file": "f1:57c89a513a5ea3df0ae6fbd3105f8c1b4eab41ee3fd370b7367e5295f5899194",
+          "anchors": [
+            "a1:60b1568245fe1c9cc5329d297a9ebef66f6659b7e8d56e8617d9ed038b1f88a6"
+          ],
+          "declarations": [
+            "p1:d2d2660c360790767131893220f53cd8e60c303d01636940da4e5268558d461c"
+          ]
+        },
+        {
+          "id": "n1:b005e9f01ed09b3d3bc4ee29f15fbca7351df187383ed7c189220fbecde571b2",
+          "kind": "declaration",
+          "file": "f1:558ffed136a4db1ce64c1f83494a9075678ecc393998b14a0f368e30cd6ff861",
+          "anchors": [
+            "a1:9cf9138ee98c09d0b17b85fb57c10dfd55728f12c29bddf9c1d3b19ee9588d1d"
+          ],
+          "declarations": []
+        },
+        {
+          "id": "n1:bd3fbe11ca69af335597e51774898ede183498445d7ccb5c00b33639fcbcee36",
+          "kind": "declaration",
+          "file": "f1:374e52971c7a53104e2ed3d62c201c4dde453d1f21fea8c5cff40d2e3dc7a28d",
+          "anchors": [
+            "a1:478a9cade5932f52692c6e231c2903ada23e2453e5ebea5543faef0af1d06404"
+          ],
+          "declarations": []
+        },
+        {
+          "id": "n1:e1210b30cfa56845abc9e3b0d56c38c906d03c31ddddcef21d87c19229090b9d",
+          "kind": "declaration",
+          "file": "f1:57c89a513a5ea3df0ae6fbd3105f8c1b4eab41ee3fd370b7367e5295f5899194",
+          "anchors": [
+            "a1:5329f9fd286928c4bd4a52011711e49b7370b356370ec706eec1f750799e908d"
+          ],
+          "declarations": [
+            "p1:60790ee1777c8767853e2ddcbd0f3f1d6669a8a3b42b5e1256a1094dd09c96fd"
+          ]
+        },
+        {
+          "id": "n1:e12870e7f79227a627c2bc4aa809d3c6455af57e202b8a63f8cf6040e9429663",
+          "kind": "declaration",
+          "file": "f1:57c89a513a5ea3df0ae6fbd3105f8c1b4eab41ee3fd370b7367e5295f5899194",
+          "anchors": [
+            "a1:bc0901ab948d9fb12d766ae5b851b25f590a7baecb4dbe4826ee3fd874a7c04b"
+          ],
+          "declarations": [
+            "p1:88b78623300cd6232e2da2dfed4c17de2a6a5d93da3b1ccc8c0b9da7b72f6843"
+          ]
+        },
+        {
+          "id": "n1:e993f56a251a2017ed825446a7619261c961315503b891e0d4c4bd3a33966221",
+          "kind": "declaration",
+          "file": "f1:558ffed136a4db1ce64c1f83494a9075678ecc393998b14a0f368e30cd6ff861",
+          "anchors": [
+            "a1:45cb7df18ad720f98395103441b67d5ccb05a1dbea41a3ffe444a92b4baf108a"
+          ],
+          "declarations": []
+        }
+      ],
+      "bindings": [
+        {
+          "anchor": "a1:187d285313fc577de3b99dbae232476bbbd6714b82b6aeccec482f230eda27ff",
+          "binding": {
+            "status": "resolved",
+            "entity": "n1:327a3cff26a790ca8389bee9b414575e19b3514df71a188a40cbc6b2be197326"
+          }
+        },
+        {
+          "anchor": "a1:45cb7df18ad720f98395103441b67d5ccb05a1dbea41a3ffe444a92b4baf108a",
+          "binding": {
+            "status": "resolved",
+            "entity": "n1:e993f56a251a2017ed825446a7619261c961315503b891e0d4c4bd3a33966221"
+          }
+        },
+        {
+          "anchor": "a1:478a9cade5932f52692c6e231c2903ada23e2453e5ebea5543faef0af1d06404",
+          "binding": {
+            "status": "resolved",
+            "entity": "n1:bd3fbe11ca69af335597e51774898ede183498445d7ccb5c00b33639fcbcee36"
+          }
+        },
+        {
+          "anchor": "a1:5329f9fd286928c4bd4a52011711e49b7370b356370ec706eec1f750799e908d",
+          "binding": {
+            "status": "resolved",
+            "entity": "n1:e1210b30cfa56845abc9e3b0d56c38c906d03c31ddddcef21d87c19229090b9d"
+          }
+        },
+        {
+          "anchor": "a1:60b1568245fe1c9cc5329d297a9ebef66f6659b7e8d56e8617d9ed038b1f88a6",
+          "binding": {
+            "status": "resolved",
+            "entity": "n1:82a83e698167ce9718f5861c247c3a73ef12989a654632a646a67cbb99ca0d62"
+          }
+        },
+        {
+          "anchor": "a1:81278ffaed5c574760cd51856714d233f9cd629c3b9853af05b3c2f9bdcd675b",
+          "binding": {
+            "status": "resolved",
+            "entity": "n1:6e217bdf73c627faa002ce2b4342491c9730fc05f893a0474b3fdec1338465e8"
+          }
+        },
+        {
+          "anchor": "a1:9baf036cffa5967ee8573ff2c2391b12340cf9696b7378c9ae6b6839b2443163",
+          "binding": {
+            "status": "resolved",
+            "entity": "n1:11e042143c2f7502a2c94abab3000cd1261e95e96fc76a6e8717c9169740cd29"
+          }
+        },
+        {
+          "anchor": "a1:9cf9138ee98c09d0b17b85fb57c10dfd55728f12c29bddf9c1d3b19ee9588d1d",
+          "binding": {
+            "status": "resolved",
+            "entity": "n1:b005e9f01ed09b3d3bc4ee29f15fbca7351df187383ed7c189220fbecde571b2"
+          }
+        },
+        {
+          "anchor": "a1:bc0901ab948d9fb12d766ae5b851b25f590a7baecb4dbe4826ee3fd874a7c04b",
+          "binding": {
+            "status": "resolved",
+            "entity": "n1:e12870e7f79227a627c2bc4aa809d3c6455af57e202b8a63f8cf6040e9429663"
+          }
+        },
+        {
+          "anchor": "a1:c9092bff79f5480c4652e682d65b158323521c0e110fbd9e2799458a746aa235",
+          "binding": {
+            "status": "resolved",
+            "entity": "n1:2b9598d2adc35db7bb16345eb85162d81dd7af11f1869cf00f7d70d2758991c0"
+          }
+        },
+        {
+          "anchor": "a1:e5e36ed789aecfb39d3e39b0c2e525cda222c42c3f04c6592c601bc004530828",
+          "binding": {
+            "status": "resolved",
+            "entity": "n1:181061faacaf931725452b0f8f41eda0a73c62fe950702b95ddb205e2cef724b"
+          }
+        }
+      ],
+      "relations": [
+        {
+          "id": "l1:8a836752290c322e20d8d9edd4d0e8415a1fcc987c9b387f99cb0589a90f00d2",
+          "value": {
+            "kind": "symbol-dependence",
+            "from": "n1:327a3cff26a790ca8389bee9b414575e19b3514df71a188a40cbc6b2be197326",
+            "to": "n1:181061faacaf931725452b0f8f41eda0a73c62fe950702b95ddb205e2cef724b",
+            "basis": "contains"
+          },
+          "attestations": [
+            {
+              "contextKey": "02bebb55558151aa200073f920d355e3938c9e1d5bdedbe7dad464f3d2ff0830",
+              "parts": [
+                "p1:5819f4c947a44c310f6b7fd0da0d46acd8c16e5334a767ae0624cfa19178af45"
+              ],
+              "reads": [
+                "r1:4bba4a888bb9247cd0544dd163923a23dc56feb9d4fd94190290095c4c813301"
+              ],
+              "confidence": 1
+            }
+          ]
+        },
+        {
+          "id": "l1:bc07e916bbdff519924e2a782467c5618346b798b4ecae97fdd718ff5e42adeb",
+          "value": {
+            "kind": "symbol-dependence",
+            "from": "n1:e993f56a251a2017ed825446a7619261c961315503b891e0d4c4bd3a33966221",
+            "to": "n1:b005e9f01ed09b3d3bc4ee29f15fbca7351df187383ed7c189220fbecde571b2",
+            "basis": "contains"
+          },
+          "attestations": [
+            {
+              "contextKey": "7ab3c8595d5173564004fcbd46b274cd06cef34ebd8439a5e66adb94f61ec3aa",
+              "parts": [
+                "p1:da4dbfd3145981ddc223e9a2ae0e88c299394db4ebdd34571fe345d83b7d5f2f"
+              ],
+              "reads": [
+                "r1:a2f548ab9dd4c8c2c5f84fd768bc1c3bb5083c9920ca6319423096902996cef5"
+              ],
+              "confidence": 1
+            }
+          ]
+        },
+        {
+          "id": "l1:cb6269a0179e689054c7782d0abf1922d4483721ecff56cf05c8822f2997827e",
+          "value": {
+            "kind": "workspace-match",
+            "from": {
+              "file": "f1:558ffed136a4db1ce64c1f83494a9075678ecc393998b14a0f368e30cd6ff861",
+              "line": 9,
+              "repo": "web",
+              "symbol": "OrderPage.open"
+            },
+            "to": {
+              "repo": "shop",
+              "kind": "http-route",
+              "name": "GET /orders/{id}",
+              "handler": "n1:bd3fbe11ca69af335597e51774898ede183498445d7ccb5c00b33639fcbcee36"
+            },
+            "transport": "http",
+            "basis": "gateway-prefix"
+          },
+          "attestations": [
+            {
+              "contextKey": "c404478ae6613b26e3fc84fd25a1e34d89d5bdce4926f6facb913376ff93ccca",
+              "parts": [
+                "p1:1da97304c69be7d0e74e7d6ce223e71d4f86c5ba384de2d9a355da617ac608b9"
+              ],
+              "reads": [
+                "r1:d45acf6edac629041cb21563bee594cfe723db0d80d7089da4eda3f4cedf3e50"
+              ],
+              "confidence": 1
+            }
+          ]
+        },
+        {
+          "id": "l1:d6d4e853e5ef6014b6a71d3775bd9496a022d41ecfb00f898c9e5eefbf4d04af",
+          "value": {
+            "kind": "entrypoint-origin",
+            "entrypoint": "p1:f599ce4a15a1b41e49b231ed6e9575c004a3af4d4f5fa4522692d8ed791b9257",
+            "seed": "p1:e7918343428d3b28380460e7fc262c96f7cc95ffa494587dda63f50cbeb43859"
+          },
+          "attestations": [
+            {
+              "contextKey": "02bebb55558151aa200073f920d355e3938c9e1d5bdedbe7dad464f3d2ff0830",
+              "parts": [
+                "p1:e7918343428d3b28380460e7fc262c96f7cc95ffa494587dda63f50cbeb43859",
+                "p1:f599ce4a15a1b41e49b231ed6e9575c004a3af4d4f5fa4522692d8ed791b9257"
+              ],
+              "reads": [
+                "r1:4bba4a888bb9247cd0544dd163923a23dc56feb9d4fd94190290095c4c813301"
+              ]
+            }
+          ]
+        }
+      ],
+      "connections": []
+    },
+    "coverage": {
+      "reads": {
+        "complete": 5,
+        "partial": 3,
+        "unknown": 0
+      },
+      "unknowns": [],
+      "limits": [
+        {
+          "source": "s1:0ece7a5532bfa15a50b3fcae27d3099846d40639d1f5587232a35e197ce4c7d1",
+          "owner": {
+            "kind": "fact"
+          },
+          "kind": "section",
+          "cuts": 1,
+          "places": 0
+        },
+        {
+          "source": "s1:0ece7a5532bfa15a50b3fcae27d3099846d40639d1f5587232a35e197ce4c7d1",
+          "owner": {
+            "kind": "read",
+            "repo": "web",
+            "index": 1
+          },
+          "kind": "unresolved-link",
+          "cuts": 1,
+          "places": 1
+        },
+        {
+          "source": "s1:0ece7a5532bfa15a50b3fcae27d3099846d40639d1f5587232a35e197ce4c7d1",
+          "owner": {
+            "kind": "section",
+            "repo": "web"
+          },
+          "kind": "unresolved-link",
+          "cuts": 1,
+          "places": 1
+        }
+      ],
+      "issues": [
+        {
+          "kind": "snapshot-difference",
+          "repo": "shop",
+          "snapshots": [
+            "v1:bf9ef89a0a9c9257ff33427e856b9f06d42718542e71a86829c5d686368bac51",
+            "v1:d4fa1fc3264e0165b9fbb4410bdcb34750969ab4386cef589b9b41180d7b775a"
+          ],
+          "sources": [
+            "s1:0ece7a5532bfa15a50b3fcae27d3099846d40639d1f5587232a35e197ce4c7d1",
+            "s1:c5f22905aef96bf58dbf69faf8fabbaeffba746143ba0b72337927e5d18ad3fa"
+          ],
+          "reads": [
+            "r1:4bba4a888bb9247cd0544dd163923a23dc56feb9d4fd94190290095c4c813301",
+            "r1:54629b38a4df38f699e3e33d66dc42caf3a9905ad6a5aeb7b6f62129456f91f8",
+            "r1:bfed544ddc76982915ca2a010875b96bc0410644f6a9286d1167f493e010edff",
+            "r1:cd57c322014b18372679adaa3257fada26a40ba3ac8f9cc0e1a6c14f7b5887d6",
+            "r1:d45acf6edac629041cb21563bee594cfe723db0d80d7089da4eda3f4cedf3e50"
+          ]
+        }
+      ]
+    },
+    "counts": {
+      "sources": 2,
+      "reads": 8,
+      "files": 3,
+      "anchors": 11,
+      "entities": 11,
+      "evidence": 4,
+      "parts": 22,
+      "relations": 4,
+      "connections": 0,
+      "unknownFindings": 0,
+      "unknownComponents": 0
+    },
+    "delivery": [
+      {
+        "source": "s1:0ece7a5532bfa15a50b3fcae27d3099846d40639d1f5587232a35e197ce4c7d1",
+        "repositoryRoots": [
+          {
+            "repo": "shop",
+            "path": "<fixture-root>/shop"
+          },
+          {
+            "repo": "web",
+            "path": "<fixture-root>/web"
+          }
+        ]
+      },
+      {
+        "source": "s1:c5f22905aef96bf58dbf69faf8fabbaeffba746143ba0b72337927e5d18ad3fa",
+        "repositoryRoots": [
+          {
+            "repo": "shop",
+            "path": "<fixture-root>/shop"
+          }
+        ]
+      }
+    ]
+  },
+  "isError": false
+}

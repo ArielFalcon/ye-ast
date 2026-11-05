@@ -1,0 +1,96 @@
+{
+  "text": "Composition (details): 2 sources, 7 subjects, 1 relations, 1 connections, 8 observations.\nVerification: available at structuredContent.verification.identity; send every available requests[].query with it as expect to verify this set.\nTerms: recorded = stated by a source; associated = a recorded association, not a call chain; candidate = not established; unknown = not determined, never empty; incompatible = not combined.\nV1 = shop @ f89dbb6760c1df3b345c5f15e726ddd1c0509f32\nS1 = outline, requests[0] fresh-read: complete; V1; files src/main/java/shop/OrderController.java\nS2 = entrypoints, requests[1] pinned-replay: complete; V1\nUnmarked locations: shop V1; any other snapshot is marked @V.\nRead context of S1: trust untrusted; producer ye-ast 0.4.0; schema 0.12.0; languages java, typescript; frameworks angular, spring; engines @colbymchenry/codegraph 1.6.2, tree-sitter-java 0.23.5, typescript 6.0.3, web-tree-sitter 0.27.1; index full\nRead context of S2, S2/entrypoints: trust untrusted; producer ye-ast 0.4.0; schema 0.12.0; languages java, typescript; frameworks angular, spring; engines tree-sitter-java 0.23.5, typescript 6.0.3, web-tree-sitter 0.27.1\nRoots S1: shop=<fixture-root>/shop\nRoots S2: shop=<fixture-root>/shop\nSubjects:\n  N1 = src/main/java/shop/OrderController.java:10-14 one | OrderController.one [outline method: S1]\n  N2 = GET /orders/{id}: http GET /orders/{id}, handler N1; basePath unknown (unresolved) with evidence src/main/java/shop/OrderController.java:10-14; route evidence src/main/java/shop/OrderController.java:10-14 [S2/entrypoints]\n  N3 = src/main/java/shop/OrderController.java:15-15 first [outline method: S1]\n  N4 = src/main/java/shop/OrderController.java:1-1 shop [outline namespace: S1]\n  N5 = src/main/java/shop/OrderController.java:16-16 second [outline method: S1]\n  N6 = src/main/java/shop/OrderController.java:7-17 OrderController [outline class: S1]\n  N7 = src/main/java/shop/OrderController.java:10-10 GET /orders/{id} [outline route: S1]\nConnections:\n  C1 = handler-declaration: L1, N1, N2, outline declaration N1 method — the route, its handler and its unique outline declaration are one subject [S1, S2]\nRelations:\n  L1 = N2 GET /orders/{id} served by N1 [S2/entrypoints]\nFindings:\n  outline declaration N3 method [S1]\n  outline declaration N4 namespace [S1]\n  outline declaration N5 method [S1]\n  outline declaration N6 class [S1]\n  outline declaration N7 route [S1]\n  outline src/main/java/shop/OrderController.java: outline declaration N4 namespace, outline declaration N6 class, outline declaration N7 route, outline declaration N1 method, outline declaration N3 method, outline declaration N5 method; 0 imports [S1]\nCoverage:\n  recorded reads: 3 complete, 0 partial, 0 unknown (owners nest; not independent analyses)\nOmitted: nothing; mode full adds wire ids, pointers and every support in structuredContent.\nOriginal evidence of S2: call ye_ast_entrypoints with requests[1].query arguments and expect, adding select/page or mode full.",
+  "structured": {
+    "kind": "composition-receipt",
+    "compositionSchema": 1,
+    "mode": "details",
+    "verification": {
+      "status": "available",
+      "identity": "mcp-c1:0326a33f217248d1d161084e7980ac5355b97d2defebe043e423f013636e6909"
+    },
+    "requests": [
+      {
+        "status": "available",
+        "query": {
+          "name": "ye_ast_outline",
+          "arguments": {
+            "repo": "shop",
+            "revision": "f89dbb6760c1df3b345c5f15e726ddd1c0509f32",
+            "files": [
+              "src/main/java/shop/OrderController.java"
+            ]
+          }
+        },
+        "strategy": "fresh-read"
+      },
+      {
+        "status": "available",
+        "query": {
+          "name": "ye_ast_entrypoints",
+          "arguments": {
+            "repo": "shop",
+            "revision": "f89dbb6760c1df3b345c5f15e726ddd1c0509f32"
+          },
+          "expect": "mcp-r1:35e9ddade95755d54eb2c64491261e81f4952c1a7169dcc024846638dd302fd6"
+        },
+        "strategy": "pinned-replay"
+      }
+    ],
+    "sources": [
+      {
+        "family": "outline",
+        "id": "s1:2fb25b6e02daf94834ca409bbabca8ae6fe2aabc9e64b6356142a29fbb58a786",
+        "rootRead": "r1:2b438ad1c0cca5d20a43ccf1823863ae10ef4735ab3de830d46186526dd39f98",
+        "snapshotVector": [
+          {
+            "repo": "shop",
+            "snapshot": "v1:493f65f92dd318be211b4884d659a9fabf2c21ba8ec58a219919758793798ee7"
+          }
+        ],
+        "analysis": {
+          "status": "complete"
+        },
+        "requestIndex": 0
+      },
+      {
+        "family": "entrypoints",
+        "id": "s1:7bbddce8154f9f4078c57854785fe063c7f23fbbe1bcc5b192c178839e12f6f3",
+        "rootRead": "r1:c36721cbec1458892cbda42d3ccfd21d1574d93f63aaef6f0f5aae1330ceb2a5",
+        "snapshotVector": [
+          {
+            "repo": "shop",
+            "snapshot": "v1:493f65f92dd318be211b4884d659a9fabf2c21ba8ec58a219919758793798ee7"
+          }
+        ],
+        "analysis": {
+          "status": "complete"
+        },
+        "requestIndex": 1
+      }
+    ],
+    "coverage": {
+      "reads": {
+        "complete": 3,
+        "partial": 0,
+        "unknown": 0
+      },
+      "unknowns": [],
+      "limits": [],
+      "issues": []
+    },
+    "counts": {
+      "sources": 2,
+      "reads": 3,
+      "files": 1,
+      "anchors": 7,
+      "entities": 7,
+      "evidence": 1,
+      "parts": 8,
+      "relations": 1,
+      "connections": 1,
+      "unknownFindings": 1,
+      "unknownComponents": 0
+    }
+  },
+  "isError": false
+}

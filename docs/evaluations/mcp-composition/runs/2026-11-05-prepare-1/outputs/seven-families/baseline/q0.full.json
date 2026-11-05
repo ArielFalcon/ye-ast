@@ -1,0 +1,136 @@
+{
+  "text": "status: complete\nfull structured result: structuredContent\nSelection lookup: findingIndex is the zero-based position in value.entrypoints.value. Check value.entrypoints.status and value.entrypoints.value; match each complete finding in value.entrypoints.value[].value by kind/name and handler or component coordinates. Inspect basePath status and evidence for HTTP routes; unknown findings carry reason and evidence, and partial sections carry cuts.\nRecovery recipe and resultIdentity: structuredContent.recovery.\nRepository locations: match repositoryRoots[].repo to evidence ownership; repositoryRoots[].path locates the clone on disk, while evidence paths are relative to its repository at the recorded snapshot.",
+  "structured": {
+    "schema": "0.12.0",
+    "snapshot": {
+      "repo": "shop",
+      "kind": "sha",
+      "sha": "f89dbb6760c1df3b345c5f15e726ddd1c0509f32"
+    },
+    "producer": {
+      "name": "ye-ast",
+      "version": "0.4.0"
+    },
+    "inputs": {
+      "trust": "untrusted",
+      "scope": "fa4648f55a618e0296b4a7ce207508c12bbe7d7e682e4a5ac5a25787a8b96eb8",
+      "declaredScope": {
+        "languages": [
+          "java",
+          "typescript"
+        ],
+        "frameworks": [
+          "angular",
+          "spring"
+        ],
+        "include": [],
+        "exclude": []
+      },
+      "content": "f742c7bb02d12b5d4b7f4e364a602110be13666837dc788ad388919d56bf1f6d",
+      "config": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+      "declaredConfig": {},
+      "engines": {
+        "tree-sitter-java": "0.23.5",
+        "typescript": "6.0.3",
+        "web-tree-sitter": "0.27.1"
+      }
+    },
+    "evidence": [],
+    "status": "complete",
+    "value": {
+      "entrypoints": {
+        "schema": "0.12.0",
+        "snapshot": {
+          "repo": "shop",
+          "kind": "sha",
+          "sha": "f89dbb6760c1df3b345c5f15e726ddd1c0509f32"
+        },
+        "producer": {
+          "name": "ye-ast",
+          "version": "0.4.0"
+        },
+        "inputs": {
+          "trust": "untrusted",
+          "scope": "fa4648f55a618e0296b4a7ce207508c12bbe7d7e682e4a5ac5a25787a8b96eb8",
+          "declaredScope": {
+            "languages": [
+              "java",
+              "typescript"
+            ],
+            "frameworks": [
+              "angular",
+              "spring"
+            ],
+            "include": [],
+            "exclude": []
+          },
+          "content": "f742c7bb02d12b5d4b7f4e364a602110be13666837dc788ad388919d56bf1f6d",
+          "config": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+          "declaredConfig": {},
+          "engines": {
+            "tree-sitter-java": "0.23.5",
+            "typescript": "6.0.3",
+            "web-tree-sitter": "0.27.1"
+          }
+        },
+        "evidence": [],
+        "status": "complete",
+        "value": [
+          {
+            "status": "complete",
+            "value": {
+              "kind": "http-route",
+              "name": "GET /orders/{id}",
+              "method": "GET",
+              "path": "/orders/{id}",
+              "handler": {
+                "path": "src/main/java/shop/OrderController.java",
+                "symbol": "OrderController.one",
+                "line": 10,
+                "endLine": 14
+              },
+              "basePath": {
+                "status": "unknown",
+                "reason": "unresolved",
+                "evidence": [
+                  {
+                    "path": "src/main/java/shop/OrderController.java",
+                    "line": 10,
+                    "endLine": 14
+                  }
+                ]
+              }
+            },
+            "evidence": [
+              {
+                "path": "src/main/java/shop/OrderController.java",
+                "line": 10,
+                "endLine": 14
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "mode": "full",
+    "recovery": {
+      "version": 1,
+      "status": "available",
+      "resultIdentity": "mcp-r1:35e9ddade95755d54eb2c64491261e81f4952c1a7169dcc024846638dd302fd6",
+      "query": {
+        "name": "ye_ast_entrypoints",
+        "arguments": {
+          "repo": "shop",
+          "revision": "f89dbb6760c1df3b345c5f15e726ddd1c0509f32"
+        }
+      }
+    },
+    "repositoryRoots": [
+      {
+        "repo": "shop",
+        "path": "<fixture-root>/shop"
+      }
+    ]
+  },
+  "isError": false
+}

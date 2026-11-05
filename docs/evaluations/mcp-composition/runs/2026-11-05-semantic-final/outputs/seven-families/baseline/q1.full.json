@@ -1,0 +1,134 @@
+{
+  "text": "status: complete\nfull structured result: structuredContent\nInvestigation guide:\n  JSON navigation: paths below are relative to structuredContent.\n  Selection lookup: use handler path, symbol and line with owner {kind:\"local\"}.\n  To inspect a reached entrypoint, select value.entrypoints by kind/name and handler.path, handler.symbol, handler.line. Its seeds are zero-based indexes into value.seeds; resolve those indexes to recover all associated origins, not a complete call chain.\n  To inspect a dependency omitted from text, filter value.symbols by file, symbol and line. Read via.file/symbol for its recorded dependency; via.lines are locations in that symbol's own file, not in via.file. Preserve via.basis and confidence when interpreting it.\n  Keep repo \"shop\" and the same snapshot when repeating this query: head \"62bbcc206956d889687af5c78ffa1e68bc73b3b3\" and base \"6b9ea72b0431fe963122022594396e3c2546a7b2\"; retain the declared scope and change selection. For a related callers/outline/importers query about head evidence use revision \"62bbcc206956d889687af5c78ffa1e68bc73b3b3\" instead of impact base/head. It answers a new question, not a filter over this result.\nRecovery recipe and resultIdentity: structuredContent.recovery.\nRepository locations: match repositoryRoots[].repo to evidence ownership; repositoryRoots[].path locates the clone on disk, while evidence paths are relative to its repository at the recorded snapshot.",
+  "structured": {
+    "schema": "0.12.0",
+    "snapshot": {
+      "repo": "shop",
+      "kind": "sha",
+      "sha": "62bbcc206956d889687af5c78ffa1e68bc73b3b3"
+    },
+    "producer": {
+      "name": "ye-ast",
+      "version": "0.4.0+edge-policy.e98d5a56243d"
+    },
+    "inputs": {
+      "trust": "untrusted",
+      "scope": "fa4648f55a618e0296b4a7ce207508c12bbe7d7e682e4a5ac5a25787a8b96eb8",
+      "declaredScope": {
+        "languages": [
+          "java",
+          "typescript"
+        ],
+        "frameworks": [
+          "angular",
+          "spring"
+        ],
+        "include": [],
+        "exclude": []
+      },
+      "content": "1fc42211742061989b0e630d4678a56b2b814410b2a58e0719df1240fad268d7",
+      "config": "a62c539ac5894d97778c82921ed43b5414433ec9bc73cb97ae0f052bd4935118",
+      "declaredConfig": {
+        "changed": [
+          "src/main/java/**"
+        ]
+      },
+      "origin": {
+        "kind": "full"
+      },
+      "engines": {
+        "@angular/compiler": "22.2.4",
+        "@colbymchenry/codegraph": "1.6.2",
+        "tree-sitter-java": "0.23.5",
+        "typescript": "6.0.3",
+        "web-tree-sitter": "0.27.1"
+      }
+    },
+    "evidence": [],
+    "status": "complete",
+    "value": {
+      "mergeBase": "6b9ea72b0431fe963122022594396e3c2546a7b2",
+      "seeds": [
+        {
+          "file": "src/main/java/shop/OrderController.java",
+          "symbol": "one",
+          "line": 10,
+          "endLine": 14,
+          "basis": "lines"
+        }
+      ],
+      "changedEntrypoints": [],
+      "symbols": [
+        {
+          "file": "src/main/java/shop/OrderController.java",
+          "symbol": "OrderController",
+          "kind": "class",
+          "line": 7,
+          "endLine": 17,
+          "depth": 0,
+          "confidence": 1,
+          "fanIn": 0,
+          "via": {
+            "file": "src/main/java/shop/OrderController.java",
+            "symbol": "one",
+            "basis": "contains"
+          }
+        },
+        {
+          "file": "src/main/java/shop/OrderController.java",
+          "symbol": "one",
+          "kind": "method",
+          "line": 10,
+          "endLine": 14,
+          "depth": 0,
+          "confidence": 1,
+          "fanIn": 0
+        }
+      ],
+      "entrypoints": [
+        {
+          "kind": "http-route",
+          "name": "GET /orders/{id}",
+          "handler": {
+            "path": "src/main/java/shop/OrderController.java",
+            "symbol": "OrderController.one",
+            "line": 10,
+            "endLine": 14
+          },
+          "depth": 0,
+          "confidence": 1,
+          "seeds": [
+            0
+          ]
+        }
+      ],
+      "cost": {
+        "expansionsUsed": 2
+      }
+    },
+    "mode": "full",
+    "recovery": {
+      "version": 1,
+      "status": "available",
+      "resultIdentity": "mcp-r1:d02123e958d2ab7314ccfd07a04ea68fa386a6fbe88350fb905f6800d5783960",
+      "query": {
+        "name": "ye_ast_impact",
+        "arguments": {
+          "repo": "shop",
+          "base": "6b9ea72b0431fe963122022594396e3c2546a7b2",
+          "head": "62bbcc206956d889687af5c78ffa1e68bc73b3b3",
+          "changed": [
+            "src/main/java/**"
+          ]
+        }
+      }
+    },
+    "repositoryRoots": [
+      {
+        "repo": "shop",
+        "path": "<fixture-root>/shop"
+      }
+    ]
+  },
+  "isError": false
+}

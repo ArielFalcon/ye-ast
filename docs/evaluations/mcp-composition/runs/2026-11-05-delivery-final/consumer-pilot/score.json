@@ -1,0 +1,1301 @@
+{
+  "schema": "ye-ast-composition-score/1",
+  "overall": "fail",
+  "adjudicator": {
+    "kind": "model",
+    "id": "gpt-6.1-sol lead; manual semantic review in this implementation session"
+  },
+  "byCaseCondition": {
+    "handler-outline|baseline": {
+      "pass": 1,
+      "fail": 0,
+      "not_evaluated": 3
+    },
+    "handler-outline|composed": {
+      "pass": 1,
+      "fail": 0,
+      "not_evaluated": 3
+    },
+    "change-duplicate-dependence|baseline": {
+      "pass": 0,
+      "fail": 1,
+      "not_evaluated": 3
+    },
+    "change-duplicate-dependence|composed": {
+      "pass": 1,
+      "fail": 0,
+      "not_evaluated": 3
+    },
+    "imports-vs-symbols|baseline": {
+      "pass": 0,
+      "fail": 0,
+      "not_evaluated": 4
+    },
+    "imports-vs-symbols|composed": {
+      "pass": 0,
+      "fail": 0,
+      "not_evaluated": 4
+    },
+    "workspace-link-cut|baseline": {
+      "pass": 0,
+      "fail": 0,
+      "not_evaluated": 4
+    },
+    "workspace-link-cut|composed": {
+      "pass": 0,
+      "fail": 0,
+      "not_evaluated": 4
+    },
+    "decision-options|baseline": {
+      "pass": 0,
+      "fail": 0,
+      "not_evaluated": 2
+    },
+    "decision-options|composed": {
+      "pass": 0,
+      "fail": 0,
+      "not_evaluated": 2
+    },
+    "snapshot-mismatch|baseline": {
+      "pass": 0,
+      "fail": 0,
+      "not_evaluated": 4
+    },
+    "snapshot-mismatch|composed": {
+      "pass": 0,
+      "fail": 0,
+      "not_evaluated": 4
+    },
+    "no-overlap|baseline": {
+      "pass": 0,
+      "fail": 0,
+      "not_evaluated": 4
+    },
+    "no-overlap|composed": {
+      "pass": 0,
+      "fail": 0,
+      "not_evaluated": 4
+    },
+    "seven-families|baseline": {
+      "pass": 1,
+      "fail": 0,
+      "not_evaluated": 5
+    },
+    "seven-families|composed": {
+      "pass": 1,
+      "fail": 0,
+      "not_evaluated": 5
+    }
+  },
+  "responses": [
+    {
+      "key": "handler-outline|baseline|original|1",
+      "status": "pass",
+      "failures": [],
+      "recall": {
+        "requiredApplicable": [
+          "p1"
+        ],
+        "requiredAsserted": [
+          "p1"
+        ],
+        "uncertaintiesApplicable": [
+          "p4"
+        ],
+        "uncertaintiesAsserted": [
+          "p4"
+        ]
+      },
+      "pending": [],
+      "rejectedJudgments": [],
+      "model": "claude-opus-5-5"
+    },
+    {
+      "key": "handler-outline|composed|original|1",
+      "status": "pass",
+      "failures": [],
+      "recall": {
+        "requiredApplicable": [
+          "p1"
+        ],
+        "requiredAsserted": [
+          "p1"
+        ],
+        "uncertaintiesApplicable": [
+          "p4"
+        ],
+        "uncertaintiesAsserted": [
+          "p4"
+        ]
+      },
+      "pending": [],
+      "rejectedJudgments": [],
+      "model": "claude-opus-5-5"
+    },
+    {
+      "key": "handler-outline|composed|original|2",
+      "status": "not_evaluated",
+      "failures": [],
+      "recall": {
+        "requiredApplicable": [
+          "p1"
+        ],
+        "requiredAsserted": [],
+        "uncertaintiesApplicable": [
+          "p4"
+        ],
+        "uncertaintiesAsserted": []
+      },
+      "pending": [
+        "no response"
+      ],
+      "rejectedJudgments": []
+    },
+    {
+      "key": "handler-outline|baseline|original|2",
+      "status": "not_evaluated",
+      "failures": [],
+      "recall": {
+        "requiredApplicable": [
+          "p1"
+        ],
+        "requiredAsserted": [],
+        "uncertaintiesApplicable": [
+          "p4"
+        ],
+        "uncertaintiesAsserted": []
+      },
+      "pending": [
+        "no response"
+      ],
+      "rejectedJudgments": []
+    },
+    {
+      "key": "handler-outline|baseline|reversed|1",
+      "status": "not_evaluated",
+      "failures": [],
+      "recall": {
+        "requiredApplicable": [
+          "p1"
+        ],
+        "requiredAsserted": [],
+        "uncertaintiesApplicable": [
+          "p4"
+        ],
+        "uncertaintiesAsserted": []
+      },
+      "pending": [
+        "no response"
+      ],
+      "rejectedJudgments": []
+    },
+    {
+      "key": "handler-outline|composed|reversed|1",
+      "status": "not_evaluated",
+      "failures": [],
+      "recall": {
+        "requiredApplicable": [
+          "p1"
+        ],
+        "requiredAsserted": [],
+        "uncertaintiesApplicable": [
+          "p4"
+        ],
+        "uncertaintiesAsserted": []
+      },
+      "pending": [
+        "no response"
+      ],
+      "rejectedJudgments": []
+    },
+    {
+      "key": "handler-outline|composed|reversed|2",
+      "status": "not_evaluated",
+      "failures": [],
+      "recall": {
+        "requiredApplicable": [
+          "p1"
+        ],
+        "requiredAsserted": [],
+        "uncertaintiesApplicable": [
+          "p4"
+        ],
+        "uncertaintiesAsserted": []
+      },
+      "pending": [
+        "no response"
+      ],
+      "rejectedJudgments": []
+    },
+    {
+      "key": "handler-outline|baseline|reversed|2",
+      "status": "not_evaluated",
+      "failures": [],
+      "recall": {
+        "requiredApplicable": [
+          "p1"
+        ],
+        "requiredAsserted": [],
+        "uncertaintiesApplicable": [
+          "p4"
+        ],
+        "uncertaintiesAsserted": []
+      },
+      "pending": [
+        "no response"
+      ],
+      "rejectedJudgments": []
+    },
+    {
+      "key": "change-duplicate-dependence|baseline|original|1",
+      "status": "fail",
+      "failures": [
+        {
+          "code": "unresolved-citation",
+          "claimId": "p4",
+          "citation": "q1:/value/cuts/0"
+        }
+      ],
+      "recall": {
+        "requiredApplicable": [
+          "p1"
+        ],
+        "requiredAsserted": [
+          "p1"
+        ],
+        "uncertaintiesApplicable": [
+          "p4"
+        ],
+        "uncertaintiesAsserted": [
+          "p4"
+        ]
+      },
+      "pending": [],
+      "rejectedJudgments": [],
+      "model": "claude-opus-5-5"
+    },
+    {
+      "key": "change-duplicate-dependence|composed|original|1",
+      "status": "pass",
+      "failures": [],
+      "recall": {
+        "requiredApplicable": [
+          "p1"
+        ],
+        "requiredAsserted": [
+          "p1"
+        ],
+        "uncertaintiesApplicable": [
+          "p4"
+        ],
+        "uncertaintiesAsserted": [
+          "p4"
+        ]
+      },
+      "pending": [],
+      "rejectedJudgments": [],
+      "model": "claude-opus-5-5"
+    },
+    {
+      "key": "change-duplicate-dependence|composed|original|2",
+      "status": "not_evaluated",
+      "failures": [],
+      "recall": {
+        "requiredApplicable": [
+          "p1"
+        ],
+        "requiredAsserted": [],
+        "uncertaintiesApplicable": [
+          "p4"
+        ],
+        "uncertaintiesAsserted": []
+      },
+      "pending": [
+        "no response"
+      ],
+      "rejectedJudgments": []
+    },
+    {
+      "key": "change-duplicate-dependence|baseline|original|2",
+      "status": "not_evaluated",
+      "failures": [],
+      "recall": {
+        "requiredApplicable": [
+          "p1"
+        ],
+        "requiredAsserted": [],
+        "uncertaintiesApplicable": [
+          "p4"
+        ],
+        "uncertaintiesAsserted": []
+      },
+      "pending": [
+        "no response"
+      ],
+      "rejectedJudgments": []
+    },
+    {
+      "key": "change-duplicate-dependence|baseline|reversed|1",
+      "status": "not_evaluated",
+      "failures": [],
+      "recall": {
+        "requiredApplicable": [
+          "p1"
+        ],
+        "requiredAsserted": [],
+        "uncertaintiesApplicable": [
+          "p4"
+        ],
+        "uncertaintiesAsserted": []
+      },
+      "pending": [
+        "no response"
+      ],
+      "rejectedJudgments": []
+    },
+    {
+      "key": "change-duplicate-dependence|composed|reversed|1",
+      "status": "not_evaluated",
+      "failures": [],
+      "recall": {
+        "requiredApplicable": [
+          "p1"
+        ],
+        "requiredAsserted": [],
+        "uncertaintiesApplicable": [
+          "p4"
+        ],
+        "uncertaintiesAsserted": []
+      },
+      "pending": [
+        "no response"
+      ],
+      "rejectedJudgments": []
+    },
+    {
+      "key": "change-duplicate-dependence|composed|reversed|2",
+      "status": "not_evaluated",
+      "failures": [],
+      "recall": {
+        "requiredApplicable": [
+          "p1"
+        ],
+        "requiredAsserted": [],
+        "uncertaintiesApplicable": [
+          "p4"
+        ],
+        "uncertaintiesAsserted": []
+      },
+      "pending": [
+        "no response"
+      ],
+      "rejectedJudgments": []
+    },
+    {
+      "key": "change-duplicate-dependence|baseline|reversed|2",
+      "status": "not_evaluated",
+      "failures": [],
+      "recall": {
+        "requiredApplicable": [
+          "p1"
+        ],
+        "requiredAsserted": [],
+        "uncertaintiesApplicable": [
+          "p4"
+        ],
+        "uncertaintiesAsserted": []
+      },
+      "pending": [
+        "no response"
+      ],
+      "rejectedJudgments": []
+    },
+    {
+      "key": "imports-vs-symbols|baseline|original|1",
+      "status": "not_evaluated",
+      "failures": [],
+      "recall": {
+        "requiredApplicable": [
+          "p1",
+          "p2"
+        ],
+        "requiredAsserted": [],
+        "uncertaintiesApplicable": [],
+        "uncertaintiesAsserted": []
+      },
+      "pending": [
+        "no response"
+      ],
+      "rejectedJudgments": []
+    },
+    {
+      "key": "imports-vs-symbols|composed|original|1",
+      "status": "not_evaluated",
+      "failures": [],
+      "recall": {
+        "requiredApplicable": [
+          "p1",
+          "p2"
+        ],
+        "requiredAsserted": [],
+        "uncertaintiesApplicable": [],
+        "uncertaintiesAsserted": []
+      },
+      "pending": [
+        "no response"
+      ],
+      "rejectedJudgments": []
+    },
+    {
+      "key": "imports-vs-symbols|composed|original|2",
+      "status": "not_evaluated",
+      "failures": [],
+      "recall": {
+        "requiredApplicable": [
+          "p1",
+          "p2"
+        ],
+        "requiredAsserted": [],
+        "uncertaintiesApplicable": [],
+        "uncertaintiesAsserted": []
+      },
+      "pending": [
+        "no response"
+      ],
+      "rejectedJudgments": []
+    },
+    {
+      "key": "imports-vs-symbols|baseline|original|2",
+      "status": "not_evaluated",
+      "failures": [],
+      "recall": {
+        "requiredApplicable": [
+          "p1",
+          "p2"
+        ],
+        "requiredAsserted": [],
+        "uncertaintiesApplicable": [],
+        "uncertaintiesAsserted": []
+      },
+      "pending": [
+        "no response"
+      ],
+      "rejectedJudgments": []
+    },
+    {
+      "key": "imports-vs-symbols|baseline|reversed|1",
+      "status": "not_evaluated",
+      "failures": [],
+      "recall": {
+        "requiredApplicable": [
+          "p1",
+          "p2"
+        ],
+        "requiredAsserted": [],
+        "uncertaintiesApplicable": [],
+        "uncertaintiesAsserted": []
+      },
+      "pending": [
+        "no response"
+      ],
+      "rejectedJudgments": []
+    },
+    {
+      "key": "imports-vs-symbols|composed|reversed|1",
+      "status": "not_evaluated",
+      "failures": [],
+      "recall": {
+        "requiredApplicable": [
+          "p1",
+          "p2"
+        ],
+        "requiredAsserted": [],
+        "uncertaintiesApplicable": [],
+        "uncertaintiesAsserted": []
+      },
+      "pending": [
+        "no response"
+      ],
+      "rejectedJudgments": []
+    },
+    {
+      "key": "imports-vs-symbols|composed|reversed|2",
+      "status": "not_evaluated",
+      "failures": [],
+      "recall": {
+        "requiredApplicable": [
+          "p1",
+          "p2"
+        ],
+        "requiredAsserted": [],
+        "uncertaintiesApplicable": [],
+        "uncertaintiesAsserted": []
+      },
+      "pending": [
+        "no response"
+      ],
+      "rejectedJudgments": []
+    },
+    {
+      "key": "imports-vs-symbols|baseline|reversed|2",
+      "status": "not_evaluated",
+      "failures": [],
+      "recall": {
+        "requiredApplicable": [
+          "p1",
+          "p2"
+        ],
+        "requiredAsserted": [],
+        "uncertaintiesApplicable": [],
+        "uncertaintiesAsserted": []
+      },
+      "pending": [
+        "no response"
+      ],
+      "rejectedJudgments": []
+    },
+    {
+      "key": "workspace-link-cut|baseline|original|1",
+      "status": "not_evaluated",
+      "failures": [],
+      "recall": {
+        "requiredApplicable": [
+          "p1"
+        ],
+        "requiredAsserted": [],
+        "uncertaintiesApplicable": [
+          "p4"
+        ],
+        "uncertaintiesAsserted": []
+      },
+      "pending": [
+        "no response"
+      ],
+      "rejectedJudgments": []
+    },
+    {
+      "key": "workspace-link-cut|composed|original|1",
+      "status": "not_evaluated",
+      "failures": [],
+      "recall": {
+        "requiredApplicable": [
+          "p1"
+        ],
+        "requiredAsserted": [],
+        "uncertaintiesApplicable": [
+          "p4"
+        ],
+        "uncertaintiesAsserted": []
+      },
+      "pending": [
+        "no response"
+      ],
+      "rejectedJudgments": []
+    },
+    {
+      "key": "workspace-link-cut|composed|original|2",
+      "status": "not_evaluated",
+      "failures": [],
+      "recall": {
+        "requiredApplicable": [
+          "p1"
+        ],
+        "requiredAsserted": [],
+        "uncertaintiesApplicable": [
+          "p4"
+        ],
+        "uncertaintiesAsserted": []
+      },
+      "pending": [
+        "no response"
+      ],
+      "rejectedJudgments": []
+    },
+    {
+      "key": "workspace-link-cut|baseline|original|2",
+      "status": "not_evaluated",
+      "failures": [],
+      "recall": {
+        "requiredApplicable": [
+          "p1"
+        ],
+        "requiredAsserted": [],
+        "uncertaintiesApplicable": [
+          "p4"
+        ],
+        "uncertaintiesAsserted": []
+      },
+      "pending": [
+        "no response"
+      ],
+      "rejectedJudgments": []
+    },
+    {
+      "key": "workspace-link-cut|baseline|reversed|1",
+      "status": "not_evaluated",
+      "failures": [],
+      "recall": {
+        "requiredApplicable": [
+          "p1"
+        ],
+        "requiredAsserted": [],
+        "uncertaintiesApplicable": [
+          "p4"
+        ],
+        "uncertaintiesAsserted": []
+      },
+      "pending": [
+        "no response"
+      ],
+      "rejectedJudgments": []
+    },
+    {
+      "key": "workspace-link-cut|composed|reversed|1",
+      "status": "not_evaluated",
+      "failures": [],
+      "recall": {
+        "requiredApplicable": [
+          "p1"
+        ],
+        "requiredAsserted": [],
+        "uncertaintiesApplicable": [
+          "p4"
+        ],
+        "uncertaintiesAsserted": []
+      },
+      "pending": [
+        "no response"
+      ],
+      "rejectedJudgments": []
+    },
+    {
+      "key": "workspace-link-cut|composed|reversed|2",
+      "status": "not_evaluated",
+      "failures": [],
+      "recall": {
+        "requiredApplicable": [
+          "p1"
+        ],
+        "requiredAsserted": [],
+        "uncertaintiesApplicable": [
+          "p4"
+        ],
+        "uncertaintiesAsserted": []
+      },
+      "pending": [
+        "no response"
+      ],
+      "rejectedJudgments": []
+    },
+    {
+      "key": "workspace-link-cut|baseline|reversed|2",
+      "status": "not_evaluated",
+      "failures": [],
+      "recall": {
+        "requiredApplicable": [
+          "p1"
+        ],
+        "requiredAsserted": [],
+        "uncertaintiesApplicable": [
+          "p4"
+        ],
+        "uncertaintiesAsserted": []
+      },
+      "pending": [
+        "no response"
+      ],
+      "rejectedJudgments": []
+    },
+    {
+      "key": "decision-options|baseline|original|1",
+      "status": "not_evaluated",
+      "failures": [],
+      "recall": {
+        "requiredApplicable": [
+          "p1"
+        ],
+        "requiredAsserted": [],
+        "uncertaintiesApplicable": [],
+        "uncertaintiesAsserted": []
+      },
+      "pending": [
+        "no response"
+      ],
+      "rejectedJudgments": []
+    },
+    {
+      "key": "decision-options|composed|original|1",
+      "status": "not_evaluated",
+      "failures": [],
+      "recall": {
+        "requiredApplicable": [
+          "p1"
+        ],
+        "requiredAsserted": [],
+        "uncertaintiesApplicable": [],
+        "uncertaintiesAsserted": []
+      },
+      "pending": [
+        "no response"
+      ],
+      "rejectedJudgments": []
+    },
+    {
+      "key": "decision-options|composed|original|2",
+      "status": "not_evaluated",
+      "failures": [],
+      "recall": {
+        "requiredApplicable": [
+          "p1"
+        ],
+        "requiredAsserted": [],
+        "uncertaintiesApplicable": [],
+        "uncertaintiesAsserted": []
+      },
+      "pending": [
+        "no response"
+      ],
+      "rejectedJudgments": []
+    },
+    {
+      "key": "decision-options|baseline|original|2",
+      "status": "not_evaluated",
+      "failures": [],
+      "recall": {
+        "requiredApplicable": [
+          "p1"
+        ],
+        "requiredAsserted": [],
+        "uncertaintiesApplicable": [],
+        "uncertaintiesAsserted": []
+      },
+      "pending": [
+        "no response"
+      ],
+      "rejectedJudgments": []
+    },
+    {
+      "key": "snapshot-mismatch|baseline|original|1",
+      "status": "not_evaluated",
+      "failures": [],
+      "recall": {
+        "requiredApplicable": [
+          "p1"
+        ],
+        "requiredAsserted": [],
+        "uncertaintiesApplicable": [],
+        "uncertaintiesAsserted": []
+      },
+      "pending": [
+        "no response"
+      ],
+      "rejectedJudgments": []
+    },
+    {
+      "key": "snapshot-mismatch|composed|original|1",
+      "status": "not_evaluated",
+      "failures": [],
+      "recall": {
+        "requiredApplicable": [
+          "p1"
+        ],
+        "requiredAsserted": [],
+        "uncertaintiesApplicable": [],
+        "uncertaintiesAsserted": []
+      },
+      "pending": [
+        "no response"
+      ],
+      "rejectedJudgments": []
+    },
+    {
+      "key": "snapshot-mismatch|composed|original|2",
+      "status": "not_evaluated",
+      "failures": [],
+      "recall": {
+        "requiredApplicable": [
+          "p1"
+        ],
+        "requiredAsserted": [],
+        "uncertaintiesApplicable": [],
+        "uncertaintiesAsserted": []
+      },
+      "pending": [
+        "no response"
+      ],
+      "rejectedJudgments": []
+    },
+    {
+      "key": "snapshot-mismatch|baseline|original|2",
+      "status": "not_evaluated",
+      "failures": [],
+      "recall": {
+        "requiredApplicable": [
+          "p1"
+        ],
+        "requiredAsserted": [],
+        "uncertaintiesApplicable": [],
+        "uncertaintiesAsserted": []
+      },
+      "pending": [
+        "no response"
+      ],
+      "rejectedJudgments": []
+    },
+    {
+      "key": "snapshot-mismatch|baseline|reversed|1",
+      "status": "not_evaluated",
+      "failures": [],
+      "recall": {
+        "requiredApplicable": [
+          "p1"
+        ],
+        "requiredAsserted": [],
+        "uncertaintiesApplicable": [],
+        "uncertaintiesAsserted": []
+      },
+      "pending": [
+        "no response"
+      ],
+      "rejectedJudgments": []
+    },
+    {
+      "key": "snapshot-mismatch|composed|reversed|1",
+      "status": "not_evaluated",
+      "failures": [],
+      "recall": {
+        "requiredApplicable": [
+          "p1"
+        ],
+        "requiredAsserted": [],
+        "uncertaintiesApplicable": [],
+        "uncertaintiesAsserted": []
+      },
+      "pending": [
+        "no response"
+      ],
+      "rejectedJudgments": []
+    },
+    {
+      "key": "snapshot-mismatch|composed|reversed|2",
+      "status": "not_evaluated",
+      "failures": [],
+      "recall": {
+        "requiredApplicable": [
+          "p1"
+        ],
+        "requiredAsserted": [],
+        "uncertaintiesApplicable": [],
+        "uncertaintiesAsserted": []
+      },
+      "pending": [
+        "no response"
+      ],
+      "rejectedJudgments": []
+    },
+    {
+      "key": "snapshot-mismatch|baseline|reversed|2",
+      "status": "not_evaluated",
+      "failures": [],
+      "recall": {
+        "requiredApplicable": [
+          "p1"
+        ],
+        "requiredAsserted": [],
+        "uncertaintiesApplicable": [],
+        "uncertaintiesAsserted": []
+      },
+      "pending": [
+        "no response"
+      ],
+      "rejectedJudgments": []
+    },
+    {
+      "key": "no-overlap|baseline|original|1",
+      "status": "not_evaluated",
+      "failures": [],
+      "recall": {
+        "requiredApplicable": [
+          "p1"
+        ],
+        "requiredAsserted": [],
+        "uncertaintiesApplicable": [],
+        "uncertaintiesAsserted": []
+      },
+      "pending": [
+        "no response"
+      ],
+      "rejectedJudgments": []
+    },
+    {
+      "key": "no-overlap|composed|original|1",
+      "status": "not_evaluated",
+      "failures": [],
+      "recall": {
+        "requiredApplicable": [
+          "p1"
+        ],
+        "requiredAsserted": [],
+        "uncertaintiesApplicable": [],
+        "uncertaintiesAsserted": []
+      },
+      "pending": [
+        "no response"
+      ],
+      "rejectedJudgments": []
+    },
+    {
+      "key": "no-overlap|composed|original|2",
+      "status": "not_evaluated",
+      "failures": [],
+      "recall": {
+        "requiredApplicable": [
+          "p1"
+        ],
+        "requiredAsserted": [],
+        "uncertaintiesApplicable": [],
+        "uncertaintiesAsserted": []
+      },
+      "pending": [
+        "no response"
+      ],
+      "rejectedJudgments": []
+    },
+    {
+      "key": "no-overlap|baseline|original|2",
+      "status": "not_evaluated",
+      "failures": [],
+      "recall": {
+        "requiredApplicable": [
+          "p1"
+        ],
+        "requiredAsserted": [],
+        "uncertaintiesApplicable": [],
+        "uncertaintiesAsserted": []
+      },
+      "pending": [
+        "no response"
+      ],
+      "rejectedJudgments": []
+    },
+    {
+      "key": "no-overlap|baseline|reversed|1",
+      "status": "not_evaluated",
+      "failures": [],
+      "recall": {
+        "requiredApplicable": [
+          "p1"
+        ],
+        "requiredAsserted": [],
+        "uncertaintiesApplicable": [],
+        "uncertaintiesAsserted": []
+      },
+      "pending": [
+        "no response"
+      ],
+      "rejectedJudgments": []
+    },
+    {
+      "key": "no-overlap|composed|reversed|1",
+      "status": "not_evaluated",
+      "failures": [],
+      "recall": {
+        "requiredApplicable": [
+          "p1"
+        ],
+        "requiredAsserted": [],
+        "uncertaintiesApplicable": [],
+        "uncertaintiesAsserted": []
+      },
+      "pending": [
+        "no response"
+      ],
+      "rejectedJudgments": []
+    },
+    {
+      "key": "no-overlap|composed|reversed|2",
+      "status": "not_evaluated",
+      "failures": [],
+      "recall": {
+        "requiredApplicable": [
+          "p1"
+        ],
+        "requiredAsserted": [],
+        "uncertaintiesApplicable": [],
+        "uncertaintiesAsserted": []
+      },
+      "pending": [
+        "no response"
+      ],
+      "rejectedJudgments": []
+    },
+    {
+      "key": "no-overlap|baseline|reversed|2",
+      "status": "not_evaluated",
+      "failures": [],
+      "recall": {
+        "requiredApplicable": [
+          "p1"
+        ],
+        "requiredAsserted": [],
+        "uncertaintiesApplicable": [],
+        "uncertaintiesAsserted": []
+      },
+      "pending": [
+        "no response"
+      ],
+      "rejectedJudgments": []
+    },
+    {
+      "key": "seven-families|baseline|original|1",
+      "status": "pass",
+      "failures": [],
+      "recall": {
+        "requiredApplicable": [
+          "p1",
+          "p2"
+        ],
+        "requiredAsserted": [
+          "p1",
+          "p2"
+        ],
+        "uncertaintiesApplicable": [
+          "p6"
+        ],
+        "uncertaintiesAsserted": [
+          "p6"
+        ]
+      },
+      "pending": [],
+      "rejectedJudgments": [],
+      "model": "claude-opus-5-5"
+    },
+    {
+      "key": "seven-families|composed|original|1",
+      "status": "pass",
+      "failures": [],
+      "recall": {
+        "requiredApplicable": [
+          "p1",
+          "p2"
+        ],
+        "requiredAsserted": [
+          "p1",
+          "p2"
+        ],
+        "uncertaintiesApplicable": [
+          "p6"
+        ],
+        "uncertaintiesAsserted": [
+          "p6"
+        ]
+      },
+      "pending": [],
+      "rejectedJudgments": [],
+      "model": "claude-opus-5-5"
+    },
+    {
+      "key": "seven-families|composed|original|2",
+      "status": "not_evaluated",
+      "failures": [],
+      "recall": {
+        "requiredApplicable": [
+          "p1",
+          "p2"
+        ],
+        "requiredAsserted": [],
+        "uncertaintiesApplicable": [
+          "p6"
+        ],
+        "uncertaintiesAsserted": []
+      },
+      "pending": [
+        "no response"
+      ],
+      "rejectedJudgments": []
+    },
+    {
+      "key": "seven-families|baseline|original|2",
+      "status": "not_evaluated",
+      "failures": [],
+      "recall": {
+        "requiredApplicable": [
+          "p1",
+          "p2"
+        ],
+        "requiredAsserted": [],
+        "uncertaintiesApplicable": [
+          "p6"
+        ],
+        "uncertaintiesAsserted": []
+      },
+      "pending": [
+        "no response"
+      ],
+      "rejectedJudgments": []
+    },
+    {
+      "key": "seven-families|baseline|reversed|1",
+      "status": "not_evaluated",
+      "failures": [],
+      "recall": {
+        "requiredApplicable": [
+          "p1",
+          "p2"
+        ],
+        "requiredAsserted": [],
+        "uncertaintiesApplicable": [
+          "p6"
+        ],
+        "uncertaintiesAsserted": []
+      },
+      "pending": [
+        "no response"
+      ],
+      "rejectedJudgments": []
+    },
+    {
+      "key": "seven-families|composed|reversed|1",
+      "status": "not_evaluated",
+      "failures": [],
+      "recall": {
+        "requiredApplicable": [
+          "p1",
+          "p2"
+        ],
+        "requiredAsserted": [],
+        "uncertaintiesApplicable": [
+          "p6"
+        ],
+        "uncertaintiesAsserted": []
+      },
+      "pending": [
+        "no response"
+      ],
+      "rejectedJudgments": []
+    },
+    {
+      "key": "seven-families|composed|reversed|2",
+      "status": "not_evaluated",
+      "failures": [],
+      "recall": {
+        "requiredApplicable": [
+          "p1",
+          "p2"
+        ],
+        "requiredAsserted": [],
+        "uncertaintiesApplicable": [
+          "p6"
+        ],
+        "uncertaintiesAsserted": []
+      },
+      "pending": [
+        "no response"
+      ],
+      "rejectedJudgments": []
+    },
+    {
+      "key": "seven-families|baseline|reversed|2",
+      "status": "not_evaluated",
+      "failures": [],
+      "recall": {
+        "requiredApplicable": [
+          "p1",
+          "p2"
+        ],
+        "requiredAsserted": [],
+        "uncertaintiesApplicable": [
+          "p6"
+        ],
+        "uncertaintiesAsserted": []
+      },
+      "pending": [
+        "no response"
+      ],
+      "rejectedJudgments": []
+    },
+    {
+      "key": "seven-families|baseline|interleaved|1",
+      "status": "not_evaluated",
+      "failures": [],
+      "recall": {
+        "requiredApplicable": [
+          "p1",
+          "p2"
+        ],
+        "requiredAsserted": [],
+        "uncertaintiesApplicable": [
+          "p6"
+        ],
+        "uncertaintiesAsserted": []
+      },
+      "pending": [
+        "no response"
+      ],
+      "rejectedJudgments": []
+    },
+    {
+      "key": "seven-families|composed|interleaved|1",
+      "status": "not_evaluated",
+      "failures": [],
+      "recall": {
+        "requiredApplicable": [
+          "p1",
+          "p2"
+        ],
+        "requiredAsserted": [],
+        "uncertaintiesApplicable": [
+          "p6"
+        ],
+        "uncertaintiesAsserted": []
+      },
+      "pending": [
+        "no response"
+      ],
+      "rejectedJudgments": []
+    },
+    {
+      "key": "seven-families|composed|interleaved|2",
+      "status": "not_evaluated",
+      "failures": [],
+      "recall": {
+        "requiredApplicable": [
+          "p1",
+          "p2"
+        ],
+        "requiredAsserted": [],
+        "uncertaintiesApplicable": [
+          "p6"
+        ],
+        "uncertaintiesAsserted": []
+      },
+      "pending": [
+        "no response"
+      ],
+      "rejectedJudgments": []
+    },
+    {
+      "key": "seven-families|baseline|interleaved|2",
+      "status": "not_evaluated",
+      "failures": [],
+      "recall": {
+        "requiredApplicable": [
+          "p1",
+          "p2"
+        ],
+        "requiredAsserted": [],
+        "uncertaintiesApplicable": [
+          "p6"
+        ],
+        "uncertaintiesAsserted": []
+      },
+      "pending": [
+        "no response"
+      ],
+      "rejectedJudgments": []
+    }
+  ],
+  "unexpectedResponses": [],
+  "unparsableLines": [],
+  "note": "Per-response results only; no aggregate quality score, no claim about prose identity or general optimality."
+}

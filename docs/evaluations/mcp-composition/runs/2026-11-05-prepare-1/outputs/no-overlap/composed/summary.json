@@ -1,0 +1,123 @@
+{
+  "text": "Composition (summary): 2 sources, 0 subjects, 2 relations, 0 connections, 6 observations.\nVerification: available at structuredContent.verification.identity; send every available requests[].query with it as expect to verify this set.\nTerms: recorded = stated by a source; associated = a recorded association, not a call chain; candidate = not established; unknown = not determined, never empty; incompatible = not combined.\nV1 = web @ c3ca750c372d4de8e6bb94bd20019a1d18d1e8f3\nV2 = shop @ f89dbb6760c1df3b345c5f15e726ddd1c0509f32\nS1 = decisions, requests[0] fresh-read: complete; V2, V1\nS2 = importers, requests[1] fresh-read: partial; V1; files src/app/order.service.ts\nUnmarked locations: shop V2, web V1; any other snapshot is marked @V.\nRead context of S1: trust untrusted; producer ye-ast 0.4.0; schema 0.12.0; languages java, typescript; frameworks angular, spring; engines tree-sitter-java 0.23.5, typescript 6.0.3, web-tree-sitter 0.27.1\nRead context of S2: trust untrusted; producer ye-ast 0.4.0+edge-policy.e98d5a56243d; schema 0.12.0; languages java, typescript; frameworks angular, spring; engines @colbymchenry/codegraph 1.6.2, tree-sitter-java 0.23.5, typescript 6.0.3, web-tree-sitter 0.27.1; index full\nWorkspace of S1: decisions source request; repositories shop V2, web V1\nRelations:\n  L1 = src/app/order.page.ts → src/app/order.service.ts file-use (users category; not an import) [S2 category user]\n  L2 = src/app/order.page.ts → src/app/order.service.ts file-import, categories per attestation [S2 category importer]\n  Note: file-import categories are kept per attestation; a file-import is not static/runtime evidence nor a symbol use.\nDecisions (recommendations are not user decisions, trust grants or approvals):\n  trust \"shop\" (trust:shop) required; context S1; no evidence\n    option \"trusted\"; no evidence\n    option \"untrusted\"; no evidence\n  trust \"web\" (trust:web) required; context S1; no evidence\n    option \"trusted\"; no evidence\n    option \"untrusted\"; no evidence\nCoverage:\n  recorded reads: 1 complete, 1 partial, 0 unknown (owners nest; not independent analyses)\n  S2: partial; unresolved-link cut ×2, 2 places\nOmitted from summary (recorded objects): file-query observations: 1. mode details lists them; mode full returns every table in structuredContent.",
+  "structured": {
+    "kind": "composition-receipt",
+    "compositionSchema": 1,
+    "mode": "summary",
+    "verification": {
+      "status": "available",
+      "identity": "mcp-c1:2778e01188832787ad58eef80b0f6b9b5d51cbe185f63a1af2e61ecb5483a636"
+    },
+    "requests": [
+      {
+        "status": "available",
+        "query": {
+          "name": "ye_ast_decisions",
+          "arguments": {
+            "repo": "shop",
+            "revision": "f89dbb6760c1df3b345c5f15e726ddd1c0509f32",
+            "offline": true,
+            "repos": [
+              {
+                "path": "<fixture-root>/web",
+                "id": "web",
+                "revision": "c3ca750c372d4de8e6bb94bd20019a1d18d1e8f3"
+              }
+            ],
+            "gateways": [
+              {
+                "prefix": "shop-api",
+                "repo": "shop"
+              }
+            ]
+          }
+        },
+        "strategy": "fresh-read"
+      },
+      {
+        "status": "available",
+        "query": {
+          "name": "ye_ast_importers",
+          "arguments": {
+            "repo": "web",
+            "revision": "c3ca750c372d4de8e6bb94bd20019a1d18d1e8f3",
+            "files": [
+              "src/app/order.service.ts"
+            ]
+          }
+        },
+        "strategy": "fresh-read"
+      }
+    ],
+    "sources": [
+      {
+        "family": "decisions",
+        "id": "s1:3e5db6bd548a514d5bcea1b66e555bf10b69b6bfd54421a8b2909d8bea5b44d5",
+        "rootRead": "r1:fdf4dbbfe0a6263d4a9a4ac94c2cd2d19ae520832f8187901990da620c9b53d7",
+        "snapshotVector": [
+          {
+            "repo": "shop",
+            "snapshot": "v1:493f65f92dd318be211b4884d659a9fabf2c21ba8ec58a219919758793798ee7"
+          },
+          {
+            "repo": "web",
+            "snapshot": "v1:410924be56d010d7d524f88709774b0edbecd7b79d3963a904de1f97f848bc02"
+          }
+        ],
+        "analysis": {
+          "status": "complete"
+        },
+        "requestIndex": 0
+      },
+      {
+        "family": "importers",
+        "id": "s1:cf21f1e6d5acef63e18059622afabdea5f90f1b3559d72075470a5f55c8e8c3d",
+        "rootRead": "r1:3f6b422c76a7933e2a871ddb30912147f1801209eafc7ddfbf4e64d5f2536157",
+        "snapshotVector": [
+          {
+            "repo": "web",
+            "snapshot": "v1:410924be56d010d7d524f88709774b0edbecd7b79d3963a904de1f97f848bc02"
+          }
+        ],
+        "analysis": {
+          "status": "partial"
+        },
+        "requestIndex": 1
+      }
+    ],
+    "coverage": {
+      "reads": {
+        "complete": 1,
+        "partial": 1,
+        "unknown": 0
+      },
+      "unknowns": [],
+      "limits": [
+        {
+          "source": "s1:cf21f1e6d5acef63e18059622afabdea5f90f1b3559d72075470a5f55c8e8c3d",
+          "owner": {
+            "kind": "fact"
+          },
+          "kind": "unresolved-link",
+          "cuts": 2,
+          "places": 0
+        }
+      ],
+      "issues": []
+    },
+    "counts": {
+      "sources": 2,
+      "reads": 2,
+      "files": 2,
+      "anchors": 0,
+      "entities": 0,
+      "evidence": 0,
+      "parts": 6,
+      "relations": 2,
+      "connections": 0,
+      "unknownFindings": 0,
+      "unknownComponents": 0
+    }
+  },
+  "isError": false
+}

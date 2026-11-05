@@ -1,0 +1,41 @@
+{
+  "text": "Composition summary (S# = requests[#-1]): 2 sources, 7 subjects, 1 relations, 1 connections, 8 observations.\nV1 = shop @ 59b76e9aa54fe237d02cba8200a7bb93ca11c30c\nS1 = entrypoints: complete; V1\nS2 = outline: complete; V1\nContext: trust untrusted; languages java, typescript; frameworks angular, spring\nN1 = http GET /orders/{id}, handler N2; basePath unknown (unresolved) with evidence 1; route evidence same [S1/entrypoints]\nsrc/main/java/shop/OrderController.java [outline S2: 6 declarations, 0 imports]\n  N2 = 10-14 OrderController.one | one method\nL1 = N1 served by N2 [S1/entrypoints]\nC1 = handler-declaration: L1, N1, N2 [S1, S2]\nCoverage:\n  reads: 3, all complete\nOmitted from summary (recorded objects): uncited declarations: 5; evidence coordinates: 1; details lists them.",
+  "structured": {
+    "kind": "composition-receipt",
+    "compositionSchema": 1,
+    "mode": "summary",
+    "verification": {
+      "status": "available",
+      "identity": "mcp-c1:24b206b782ed706aaaf2989d62c5772eeb9bb49cc4c51e814c3b00331a872a8b"
+    },
+    "requests": [
+      {
+        "status": "available",
+        "query": {
+          "name": "ye_ast_entrypoints",
+          "arguments": {
+            "repo": "shop",
+            "revision": "59b76e9aa54fe237d02cba8200a7bb93ca11c30c"
+          },
+          "expect": "mcp-r1:877c3dfd1aaabb03bd60fca156ff797d7a25c01cf670c804aa46b1a72a3cb67f"
+        },
+        "strategy": "pinned-replay"
+      },
+      {
+        "status": "available",
+        "query": {
+          "name": "ye_ast_outline",
+          "arguments": {
+            "repo": "shop",
+            "revision": "59b76e9aa54fe237d02cba8200a7bb93ca11c30c",
+            "files": [
+              "src/main/java/shop/OrderController.java"
+            ]
+          }
+        },
+        "strategy": "fresh-read"
+      }
+    ]
+  },
+  "isError": false
+}

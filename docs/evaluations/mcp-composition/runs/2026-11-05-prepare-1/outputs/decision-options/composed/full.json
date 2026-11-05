@@ -1,0 +1,263 @@
+{
+  "text": "Composition (full): 1 sources, 1 recorded reads (1 complete, 0 partial, 0 unknown), 0 unknown findings, 0 unknown components.\nVerification: available at structuredContent.verification.identity; send every available requests[].query with it as expect to verify this set.\nAll data is in structuredContent; ids are full wire ids (s1 source, r1 read, v1 snapshot, f1 file, a1 anchor, e1 evidence, p1 part, n1 entity, l1 relation, c1 connection).\nstructuredContent.graph.sources (1): family/branch, root read, snapshot vector, requests[requestIndex]\nstructuredContent.graph.snapshots (2): exact snapshot identities; redacted ones never join\nstructuredContent.graph.reads (1): owner, producer, schema, inputs, snapshot, own evidence and complete/partial(cuts)/unknown(reason)\nstructuredContent.graph.files (0): paths by snapshot origin, or local to one read's context\nstructuredContent.graph.anchors (0): declarative coordinates as producers reported them\nstructuredContent.graph.evidence (0): evidence objects by exact origin, with every support\nstructuredContent.graph.parts (3): typed observations by kind; supports point into each source's public fact\nstructuredContent.graph.entities (0): declarations and entrypoints identified across sources\nstructuredContent.graph.bindings (0): anchor to entity, or why it stayed unresolved\nstructuredContent.graph.relations (0): recorded relations; attestations keep each context, part, read, location and confidence\nstructuredContent.graph.connections (0): the five closed rules; no transitive closure or breakage inference\nstructuredContent.coverage.issues (0): incompatibilities, ambiguities and missing references; coverage.unknowns (0), coverage.limits (0).\nstructuredContent.requests (1): repeat each source; pinned-replay keeps its mcp-r1 expect, fresh-read re-reads the current state.\nstructuredContent.delivery (1): public roots, freshness, resolution and live notices per source; not part of any identity.",
+  "structured": {
+    "kind": "composition",
+    "compositionSchema": 1,
+    "mode": "full",
+    "verification": {
+      "status": "available",
+      "identity": "mcp-c1:26078f5a062749f1a43f2279a18e6b540db3cc7212c9cffa8b77567b8560c6d5"
+    },
+    "requests": [
+      {
+        "status": "available",
+        "query": {
+          "name": "ye_ast_decisions",
+          "arguments": {
+            "repo": "shop",
+            "revision": "f89dbb6760c1df3b345c5f15e726ddd1c0509f32",
+            "offline": true,
+            "repos": [
+              {
+                "path": "<fixture-root>/web",
+                "id": "web",
+                "revision": "c3ca750c372d4de8e6bb94bd20019a1d18d1e8f3"
+              }
+            ],
+            "gateways": [
+              {
+                "prefix": "shop-api",
+                "repo": "shop"
+              }
+            ]
+          }
+        },
+        "strategy": "fresh-read"
+      }
+    ],
+    "graph": {
+      "snapshots": [
+        {
+          "id": "v1:410924be56d010d7d524f88709774b0edbecd7b79d3963a904de1f97f848bc02",
+          "value": {
+            "repo": "web",
+            "kind": "sha",
+            "sha": "c3ca750c372d4de8e6bb94bd20019a1d18d1e8f3"
+          },
+          "identity": "exact"
+        },
+        {
+          "id": "v1:493f65f92dd318be211b4884d659a9fabf2c21ba8ec58a219919758793798ee7",
+          "value": {
+            "repo": "shop",
+            "kind": "sha",
+            "sha": "f89dbb6760c1df3b345c5f15e726ddd1c0509f32"
+          },
+          "identity": "exact"
+        }
+      ],
+      "sources": [
+        {
+          "family": "decisions",
+          "id": "s1:3e5db6bd548a514d5bcea1b66e555bf10b69b6bfd54421a8b2909d8bea5b44d5",
+          "rootRead": "r1:fdf4dbbfe0a6263d4a9a4ac94c2cd2d19ae520832f8187901990da620c9b53d7",
+          "snapshotVector": [
+            {
+              "repo": "shop",
+              "snapshot": "v1:493f65f92dd318be211b4884d659a9fabf2c21ba8ec58a219919758793798ee7"
+            },
+            {
+              "repo": "web",
+              "snapshot": "v1:410924be56d010d7d524f88709774b0edbecd7b79d3963a904de1f97f848bc02"
+            }
+          ],
+          "analysis": {
+            "status": "complete"
+          },
+          "requestIndex": 0
+        }
+      ],
+      "reads": [
+        {
+          "id": "r1:fdf4dbbfe0a6263d4a9a4ac94c2cd2d19ae520832f8187901990da620c9b53d7",
+          "source": "s1:3e5db6bd548a514d5bcea1b66e555bf10b69b6bfd54421a8b2909d8bea5b44d5",
+          "owner": {
+            "kind": "fact"
+          },
+          "schema": "0.12.0",
+          "producer": {
+            "name": "ye-ast",
+            "version": "0.4.0"
+          },
+          "inputs": {
+            "trust": "untrusted",
+            "scope": "fa4648f55a618e0296b4a7ce207508c12bbe7d7e682e4a5ac5a25787a8b96eb8",
+            "declaredScope": {
+              "languages": [
+                "java",
+                "typescript"
+              ],
+              "frameworks": [
+                "angular",
+                "spring"
+              ],
+              "include": [],
+              "exclude": []
+            },
+            "content": "5eb10229836db8730ad7c1315bb21bf708838799828f5de5e20a0be19be59a12",
+            "config": "0690c0e06d5e421e1a74dea0ddca39066f57218334ae52b474faaa2208560071",
+            "declaredConfig": {},
+            "engines": {
+              "tree-sitter-java": "0.23.5",
+              "typescript": "6.0.3",
+              "web-tree-sitter": "0.27.1"
+            }
+          },
+          "snapshot": "v1:493f65f92dd318be211b4884d659a9fabf2c21ba8ec58a219919758793798ee7",
+          "evidence": [],
+          "analysis": {
+            "status": "complete"
+          }
+        }
+      ],
+      "files": [],
+      "anchors": [],
+      "evidence": [],
+      "parts": [
+        {
+          "kind": "workspace-context",
+          "context": {
+            "family": "decisions",
+            "source": "request",
+            "repositories": [
+              {
+                "repo": "shop",
+                "snapshot": "v1:493f65f92dd318be211b4884d659a9fabf2c21ba8ec58a219919758793798ee7"
+              },
+              {
+                "repo": "web",
+                "snapshot": "v1:410924be56d010d7d524f88709774b0edbecd7b79d3963a904de1f97f848bc02"
+              }
+            ]
+          },
+          "id": "p1:401d0934cab0b39b24e87ef789efa9bb7a6543a68f23353011f15f4340a8e74c",
+          "supports": [
+            {
+              "source": "s1:3e5db6bd548a514d5bcea1b66e555bf10b69b6bfd54421a8b2909d8bea5b44d5",
+              "read": "r1:fdf4dbbfe0a6263d4a9a4ac94c2cd2d19ae520832f8187901990da620c9b53d7",
+              "pointer": "/value/repositories"
+            },
+            {
+              "source": "s1:3e5db6bd548a514d5bcea1b66e555bf10b69b6bfd54421a8b2909d8bea5b44d5",
+              "read": "r1:fdf4dbbfe0a6263d4a9a4ac94c2cd2d19ae520832f8187901990da620c9b53d7",
+              "pointer": "/value/source"
+            }
+          ]
+        },
+        {
+          "kind": "decision",
+          "context": "r1:fdf4dbbfe0a6263d4a9a4ac94c2cd2d19ae520832f8187901990da620c9b53d7",
+          "decisionId": "trust:shop",
+          "kindName": "trust",
+          "subject": "shop",
+          "allowsFreeText": false,
+          "required": true,
+          "evidence": [],
+          "options": [
+            {
+              "value": "trusted",
+              "evidence": [],
+              "recommended": false
+            },
+            {
+              "value": "untrusted",
+              "evidence": [],
+              "recommended": false
+            }
+          ],
+          "id": "p1:e1b4dc537d9b64fab707f1da291caaedd2b7a03b64e95dce6f00faa3a1604d7e",
+          "supports": [
+            {
+              "source": "s1:3e5db6bd548a514d5bcea1b66e555bf10b69b6bfd54421a8b2909d8bea5b44d5",
+              "read": "r1:fdf4dbbfe0a6263d4a9a4ac94c2cd2d19ae520832f8187901990da620c9b53d7",
+              "pointer": "/value/decisions/0"
+            }
+          ]
+        },
+        {
+          "kind": "decision",
+          "context": "r1:fdf4dbbfe0a6263d4a9a4ac94c2cd2d19ae520832f8187901990da620c9b53d7",
+          "decisionId": "trust:web",
+          "kindName": "trust",
+          "subject": "web",
+          "allowsFreeText": false,
+          "required": true,
+          "evidence": [],
+          "options": [
+            {
+              "value": "trusted",
+              "evidence": [],
+              "recommended": false
+            },
+            {
+              "value": "untrusted",
+              "evidence": [],
+              "recommended": false
+            }
+          ],
+          "id": "p1:f207774cc97a9d3755f84c4fe91faa580fb550c47b0ed471cc9ba447f269281c",
+          "supports": [
+            {
+              "source": "s1:3e5db6bd548a514d5bcea1b66e555bf10b69b6bfd54421a8b2909d8bea5b44d5",
+              "read": "r1:fdf4dbbfe0a6263d4a9a4ac94c2cd2d19ae520832f8187901990da620c9b53d7",
+              "pointer": "/value/decisions/1"
+            }
+          ]
+        }
+      ],
+      "entities": [],
+      "bindings": [],
+      "relations": [],
+      "connections": []
+    },
+    "coverage": {
+      "reads": {
+        "complete": 1,
+        "partial": 0,
+        "unknown": 0
+      },
+      "unknowns": [],
+      "limits": [],
+      "issues": []
+    },
+    "counts": {
+      "sources": 1,
+      "reads": 1,
+      "files": 0,
+      "anchors": 0,
+      "entities": 0,
+      "evidence": 0,
+      "parts": 3,
+      "relations": 0,
+      "connections": 0,
+      "unknownFindings": 0,
+      "unknownComponents": 0
+    },
+    "delivery": [
+      {
+        "source": "s1:3e5db6bd548a514d5bcea1b66e555bf10b69b6bfd54421a8b2909d8bea5b44d5",
+        "repositoryRoots": [
+          {
+            "repo": "shop",
+            "path": "<fixture-root>/shop"
+          },
+          {
+            "repo": "web",
+            "path": "<fixture-root>/web"
+          }
+        ]
+      }
+    ]
+  },
+  "isError": false
+}

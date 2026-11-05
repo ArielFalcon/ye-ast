@@ -1,0 +1,54 @@
+{
+  "text": "Composition summary (S# = requests[#-1]): 2 sources, 0 subjects, 2 relations, 0 connections, 6 observations.\nV1 = shop @ 62bbcc206956d889687af5c78ffa1e68bc73b3b3\nV2 = web @ b222c7c8b1e6b6d7b9dba3c9a9cc67b7e1df7c02\nS1 = decisions: complete; V1, V2\nS2 = importers: partial; V2\nContext: trust untrusted; languages java, typescript; frameworks angular, spring\nContext producer by read: ye-ast 0.4.0 (S1); ye-ast 0.4.0+edge-policy.e98d5a56243d (S2)\nWorkspace of S1: decisions source request; repositories shop V1, web V2\nL1 = src/app/order.page.ts → src/app/order.service.ts file-import [S2 category importer]; categories per attestation; not static/runtime evidence nor a symbol use\nL2 = src/app/order.page.ts → src/app/order.service.ts file-use [S2 category user]; users category; not an import\nDecisions (recommendations are not user decisions, trust grants or approvals):\n  trust \"shop\" (trust:shop) required; context S1; no evidence\n    option \"trusted\"; no evidence\n    option \"untrusted\"; no evidence\n  trust \"web\" (trust:web) required; context S1; no evidence\n    option \"trusted\"; no evidence\n    option \"untrusted\"; no evidence\nCoverage:\n  reads: 1 complete, 1 partial, 0 unknown (owners nest)\n  S2: partial; unresolved-link cut ×2, 2 places\nOmitted from summary (recorded objects): file-query observations: 1; details lists them.",
+  "structured": {
+    "kind": "composition-receipt",
+    "compositionSchema": 1,
+    "mode": "summary",
+    "verification": {
+      "status": "available",
+      "identity": "mcp-c1:07322dd2ac399b16fab4c2754c017fb1dd7a1a0e5c686fe7d12e6518fec67f61"
+    },
+    "requests": [
+      {
+        "status": "available",
+        "query": {
+          "name": "ye_ast_decisions",
+          "arguments": {
+            "repo": "shop",
+            "revision": "62bbcc206956d889687af5c78ffa1e68bc73b3b3",
+            "offline": true,
+            "repos": [
+              {
+                "path": "<fixture-root>/web",
+                "id": "web",
+                "revision": "b222c7c8b1e6b6d7b9dba3c9a9cc67b7e1df7c02"
+              }
+            ],
+            "gateways": [
+              {
+                "prefix": "shop-api",
+                "repo": "shop"
+              }
+            ]
+          }
+        },
+        "strategy": "fresh-read"
+      },
+      {
+        "status": "available",
+        "query": {
+          "name": "ye_ast_importers",
+          "arguments": {
+            "repo": "web",
+            "revision": "b222c7c8b1e6b6d7b9dba3c9a9cc67b7e1df7c02",
+            "files": [
+              "src/app/order.service.ts"
+            ]
+          }
+        },
+        "strategy": "fresh-read"
+      }
+    ]
+  },
+  "isError": false
+}

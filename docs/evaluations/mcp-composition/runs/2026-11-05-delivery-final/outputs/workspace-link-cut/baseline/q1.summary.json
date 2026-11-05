@@ -1,0 +1,63 @@
+{
+  "text": "repository root: shop -> <fixture-root>/shop\nrepository root: web -> <fixture-root>/web\nstatus: partial (cuts: 1 section: web)\ndeclared scope: languages java, typescript; frameworks angular, spring\nsnapshot: shop @ 59b76e9aa54fe237d02cba8200a7bb93ca11c30c\nrepositories (2): shop@59b76e9aa54fe237d02cba8200a7bb93ca11c30c, web@3e69e9d3c2285375dd92629e23a8ef4487d2bb9e\nrepositories declared by: the request\nbound repository: shop\ngateway prefixes (1):\n  - shop-api -> shop (gateway-prefix)\nreached entrypoints (1):\n  origin associations (1): counted below; mode \"details\" shows one per entrypoint; mode: \"full\" includes all\n  - http-route GET /orders/{id} (depth 0, endLine 14); lookup example: {\"kind\":\"handler-origins\",\"owner\":{\"kind\":\"section\",\"repo\":\"shop\"},\"handler\":{\"path\":\"src/main/java/shop/OrderController.java\",\"symbol\":\"OrderController.one\",\"line\":10}}\n    origins: 1\nimpacted symbols (1):\n  by depth: 0: 1; mode \"details\" shows investigation evidence; mode: \"full\" includes every symbol\nlinks across repositories (1): reach lists link numbers nearest to the change first\n  - 1. web:src/app/order.page.ts:9 OrderPage.open -> shop GET /orders/{id} -> src/main/java/shop/OrderController.java:10-14 OrderController.one (gateway-prefix, upstream; reach: 1) [linkId \"[\\\"web\\\",\\\"src/app/order.page.ts\\\",9,\\\"OrderPage.open\\\",\\\"shop\\\",\\\"http-route\\\",\\\"GET /orders/{id}\\\",\\\"src/main/java/shop/OrderController.java\\\",\\\"OrderController.one\\\",10,\\\"http\\\",\\\"gateway-prefix\\\",null]\"]\nper repository:\n  shop: complete\n  web: partial\n    call sites that land in what the walk reached (1):\n      - src/app/order.page.ts:9 OrderPage.open -> GET shop-api/orders/7\n    reached entrypoints (0):\n    impacted symbols (1):\n      src/app/order.page.ts\n        5-17 OrderPage [class] (depth 0, via open (contains))\n    unmatched (1):\n      - src/app/order.page.ts:12 OrderPage.missing -> GET shop-api/refunds/7\nno local repository serves (0):\nwalk origins:\n  shop:\n    seeds (1):\n      src/main/java/shop/OrderController.java (requested)\n        10-14 one\n  web:\n    seeds (1):\n      src/app/order.page.ts (lines)\n        7-10 open\ncuts:\n  section (1)\n  mode \"details\" locates cut anchors; mode: \"full\" includes every place\n  lookup example: {\"kind\":\"cut-places\",\"owner\":{\"kind\":\"fact\"},\"cutIndex\":0}\ncuts for repository web:\n  unresolved-link (1)\n  mode \"details\" locates cut anchors; mode: \"full\" includes every place\n  lookup example: {\"kind\":\"cut-places\",\"owner\":{\"kind\":\"section\",\"repo\":\"web\"},\"cutIndex\":0}\ncuts for repository web read 1:\n  unresolved-link (1)\n  mode \"details\" locates cut anchors; mode: \"full\" includes every place\n  lookup example: {\"kind\":\"cut-places\",\"owner\":{\"kind\":\"read\",\"repo\":\"web\",\"index\":1},\"cutIndex\":0}\nInvestigation guide:\n  Full JSON navigation (available in full mode): paths below are relative to structuredContent; query the returned payload directly when already included.\n  Select value.sections by the exact repository key, not a shared relative file path. Check section.status and, when present, section.reason/cuts and section.value.reads[].fact status/reason before using its evidence; an unknown section has no value.\n  The originating repository's walk is at value.sections[\"shop\"].value.impact.\n  Selection lookup: use handler path, symbol and line with owner {kind:\"section\",repo:<repository key>}.\n  To inspect a reached entrypoint, select value.sections[\"shop\"].value.impact.entrypoints by kind/name and handler.path, handler.symbol, handler.line. Its seeds are zero-based indexes into value.sections[\"shop\"].value.impact.seeds; resolve those indexes to recover all associated origins, not a complete call chain.\n  To inspect a dependency omitted from text, filter value.sections[\"shop\"].value.impact.symbols by file, symbol and line. Read via.file/symbol for its recorded dependency; via.lines are locations in that symbol's own file, not in via.file. Preserve via.basis and confidence when interpreting it.\n  Other repository walks are at value.sections[repo].value.impact only when that field exists. In each walk, entrypoints[].seeds indexes that same walk's seeds array; never join origins across repositories.\n  To follow a cross-repository consequence, filter value.links by link.from (repo/file/symbol/line) or link.to (repo/name/handler). Each reach contains link IDs in recorded order: resolve them against value.links[].link.id, not the text's display numbers. Retain direction, basis and confidence; reach does not establish an unrecorded path inside a repository.\n  Selection lookup: cutIndex is the zero-based position in cuts; owner identifies the fact, entrypoints section, repository section or indexed read.\n  Before treating this result as exhaustive, inspect cuts: filter by kind and the relevant anchor in at; a recorded limit explains where coverage stopped. Full JSON does not extend that coverage.\n  Repository-local limits remain in value.sections[repo].cuts; inspect contributing section.value.reads[].fact too. Do not treat a complete independent read as resolving an unknown contributing read.\n  For a related callers or outline query about head evidence choose the recorded owner with repo and its own snapshot from value.repositorySnapshots; base-side modules require their owning walk's recorded merge base instead. An undeclared owner requires a host registration update or an instance bound to that clone. A symbol name may match multiple declarations.\n  Destination: repo \"shop\", revision \"59b76e9aa54fe237d02cba8200a7bb93ca11c30c\", file \"src/main/java/shop/OrderController.java\", symbol \"OrderController.one\". Use outline or callers on the declared owner.\n  Repeat callers with repo \"shop\" and revision \"59b76e9aa54fe237d02cba8200a7bb93ca11c30c\", retaining declared scope and symbol selection. Related outline/importers queries answer a new question.\nRecovery recipe and resultIdentity: structuredContent.recovery.",
+  "structured": {
+    "mode": "summary",
+    "status": "partial",
+    "snapshot": {
+      "repo": "shop",
+      "kind": "sha",
+      "sha": "59b76e9aa54fe237d02cba8200a7bb93ca11c30c"
+    },
+    "recovery": {
+      "version": 1,
+      "status": "available",
+      "resultIdentity": "mcp-r1:cbc615f474e655f3b0918ef10150d69cd95839f71c1999dc3af08dbdbd714faa",
+      "query": {
+        "name": "ye_ast_callers",
+        "arguments": {
+          "repo": "shop",
+          "workspace": {
+            "repos": [
+              {
+                "path": "<fixture-root>/web",
+                "id": "web",
+                "revision": "3e69e9d3c2285375dd92629e23a8ef4487d2bb9e"
+              }
+            ],
+            "gateways": [
+              {
+                "prefix": "shop-api",
+                "repo": "shop"
+              }
+            ]
+          },
+          "replay": {
+            "version": 1,
+            "declaration": "ws-r1:d1107efcdf6127d70e4ebfb6e020d7bcc8ecd5529e2c1181be5d719f884723c7",
+            "snapshots": [
+              {
+                "repo": "shop",
+                "kind": "sha",
+                "sha": "59b76e9aa54fe237d02cba8200a7bb93ca11c30c"
+              },
+              {
+                "repo": "web",
+                "kind": "sha",
+                "sha": "3e69e9d3c2285375dd92629e23a8ef4487d2bb9e"
+              }
+            ]
+          },
+          "offline": true,
+          "revision": "59b76e9aa54fe237d02cba8200a7bb93ca11c30c",
+          "targets": [
+            {
+              "file": "src/main/java/shop/OrderController.java",
+              "symbol": "OrderController.one"
+            }
+          ]
+        }
+      }
+    }
+  },
+  "isError": false
+}

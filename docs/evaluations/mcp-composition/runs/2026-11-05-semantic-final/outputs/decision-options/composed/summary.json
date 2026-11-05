@@ -1,0 +1,40 @@
+{
+  "text": "Composition summary (S# = requests[#-1]): 1 sources, 0 subjects, 0 relations, 0 connections, 3 observations.\nV1 = shop @ 62bbcc206956d889687af5c78ffa1e68bc73b3b3\nV2 = web @ b222c7c8b1e6b6d7b9dba3c9a9cc67b7e1df7c02\nS1 = decisions: complete; V1, V2\nContext: trust untrusted; languages java, typescript; frameworks angular, spring\nWorkspace of S1: decisions source request; repositories shop V1, web V2\nDecisions (recommendations are not user decisions, trust grants or approvals):\n  trust \"shop\" (trust:shop) required; context S1; no evidence\n    option \"trusted\"; no evidence\n    option \"untrusted\"; no evidence\n  trust \"web\" (trust:web) required; context S1; no evidence\n    option \"trusted\"; no evidence\n    option \"untrusted\"; no evidence\nCoverage:\n  reads: 1, all complete",
+  "structured": {
+    "kind": "composition-receipt",
+    "compositionSchema": 1,
+    "mode": "summary",
+    "verification": {
+      "status": "available",
+      "identity": "mcp-c1:ea51eaa50b500747916cae31358e273b5ccd0f49a9e70ef05505d4c96c4a1bc5"
+    },
+    "requests": [
+      {
+        "status": "available",
+        "query": {
+          "name": "ye_ast_decisions",
+          "arguments": {
+            "repo": "shop",
+            "revision": "62bbcc206956d889687af5c78ffa1e68bc73b3b3",
+            "offline": true,
+            "repos": [
+              {
+                "path": "<fixture-root>/web",
+                "id": "web",
+                "revision": "b222c7c8b1e6b6d7b9dba3c9a9cc67b7e1df7c02"
+              }
+            ],
+            "gateways": [
+              {
+                "prefix": "shop-api",
+                "repo": "shop"
+              }
+            ]
+          }
+        },
+        "strategy": "fresh-read"
+      }
+    ]
+  },
+  "isError": false
+}

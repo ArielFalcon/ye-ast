@@ -1,0 +1,55 @@
+# ye-ast composition evaluation — decision-options / composed / original
+
+You receive evidence returned by a read-only code-analysis MCP server. Use only the responses below: no outside knowledge, no tools, no assumptions about code that is not shown.
+
+## Question
+
+Which configuration decisions are open, which options are available, and is any option recommended by the evidence?
+
+## Proposition catalogue
+
+Assert a proposition only when the responses support it; omit any proposition you reject or cannot support. You may add your own claims.
+
+- p1: At least one decision lists its options exactly as reported, including whether each is recommended and whether free text is allowed.
+- p2: An option not listed by the decisions response is available or recommended.
+- p3: The decisions response recommends one of the listed options.
+
+## Citations
+
+Cite composed evidence by a full wire id that appears in the structured channel's `graph` tables (for example a `p1:…` part, `l1:…` relation, `c1:…` connection, `e1:…` evidence or `r1:…` read).
+Every claim and every uncertainty needs at least one citation that supports it. A shared location alone does not prove a call, a dependency or a breakage.
+
+## Answer format
+
+Reply with exactly one JSON object and nothing else:
+
+```json
+{"answer":"<your prose answer to the question>","claims":[{"id":"p1","text":"<your wording>","citations":["<citation>"]}],"uncertainties":[{"id":"extra:1","text":"<limitation you assert>","citations":["<citation>"]}]}
+```
+
+- `claims`: catalogue propositions you assert (their catalogue id) and your own factual claims (`extra:<n>`).
+- `uncertainties`: unknown, partial, limited or unresolved points you assert, with a catalogue id or `extra:<n>`.
+
+## Responses (1; families: decisions)
+
+### ye_ast_compose (public-tool)
+
+Request:
+
+```json
+{"queries":[{"name":"ye_ast_decisions","arguments":{"repo":"shop","revision":"62bbcc206956d889687af5c78ffa1e68bc73b3b3","repos":[{"path":"<fixture-root>/web","id":"web","revision":"b222c7c8b1e6b6d7b9dba3c9a9cc67b7e1df7c02"}],"gateways":[{"prefix":"shop-api","repo":"shop"}],"offline":true}}],"mode":"full"}
+```
+
+Text channel:
+
+```text
+Composition full: 1 sources, 1 recorded reads (1 complete, 0 partial, 0 unknown), 0 unknown findings, 0 unknown components.
+Tables: structuredContent.graph.sources (1), structuredContent.graph.snapshots (2), structuredContent.graph.reads (1), structuredContent.graph.files (0), structuredContent.graph.anchors (0), structuredContent.graph.evidence (0), structuredContent.graph.parts (3), structuredContent.graph.entities (0), structuredContent.graph.bindings (0), structuredContent.graph.relations (0), structuredContent.graph.connections (0).
+structuredContent.coverage.issues (0), unknowns (0), limits (0); structuredContent.requests (1); structuredContent.delivery (1).
+```
+
+Structured channel:
+
+```json
+{"kind":"composition","compositionSchema":1,"mode":"full","verification":{"status":"available","identity":"mcp-c1:ea51eaa50b500747916cae31358e273b5ccd0f49a9e70ef05505d4c96c4a1bc5"},"requests":[{"status":"available","query":{"name":"ye_ast_decisions","arguments":{"repo":"shop","revision":"62bbcc206956d889687af5c78ffa1e68bc73b3b3","offline":true,"repos":[{"path":"<fixture-root>/web","id":"web","revision":"b222c7c8b1e6b6d7b9dba3c9a9cc67b7e1df7c02"}],"gateways":[{"prefix":"shop-api","repo":"shop"}]}},"strategy":"fresh-read"}],"graph":{"snapshots":[{"id":"v1:0396299e903511502860d7b997376a61d72afef2d48d88562da338e11ebee051","value":{"repo":"shop","kind":"sha","sha":"62bbcc206956d889687af5c78ffa1e68bc73b3b3"},"identity":"exact"},{"id":"v1:46a5e80d79c00850c20cc416b244565f8e14919e703308952fb37cb57c4b6d45","value":{"repo":"web","kind":"sha","sha":"b222c7c8b1e6b6d7b9dba3c9a9cc67b7e1df7c02"},"identity":"exact"}],"sources":[{"family":"decisions","id":"s1:66f865543170056bfb291e0dfc99b1b082a651a91ad8413adfe52fd768e93ff8","rootRead":"r1:47f142b768ab9af3d4f677e28ea07c69e6cb5f541deb86d23163249d92939572","snapshotVector":[{"repo":"shop","snapshot":"v1:0396299e903511502860d7b997376a61d72afef2d48d88562da338e11ebee051"},{"repo":"web","snapshot":"v1:46a5e80d79c00850c20cc416b244565f8e14919e703308952fb37cb57c4b6d45"}],"analysis":{"status":"complete"},"requestIndex":0}],"reads":[{"id":"r1:47f142b768ab9af3d4f677e28ea07c69e6cb5f541deb86d23163249d92939572","source":"s1:66f865543170056bfb291e0dfc99b1b082a651a91ad8413adfe52fd768e93ff8","owner":{"kind":"fact"},"schema":"0.12.0","producer":{"name":"ye-ast","version":"0.4.0"},"inputs":{"trust":"untrusted","scope":"fa4648f55a618e0296b4a7ce207508c12bbe7d7e682e4a5ac5a25787a8b96eb8","declaredScope":{"languages":["java","typescript"],"frameworks":["angular","spring"],"include":[],"exclude":[]},"content":"9939135e997b4577309281cfaff36813280c2ef4e82800fdd8dfc756eba07f2c","config":"b41cbb85ed8831d64578484788d87825bc6e45ebd920881cd09a68704bd673f8","declaredConfig":{},"engines":{"tree-sitter-java":"0.23.5","typescript":"6.0.3","web-tree-sitter":"0.27.1"}},"snapshot":"v1:0396299e903511502860d7b997376a61d72afef2d48d88562da338e11ebee051","evidence":[],"analysis":{"status":"complete"}}],"files":[],"anchors":[],"evidence":[],"parts":[{"kind":"workspace-context","context":{"family":"decisions","source":"request","repositories":[{"repo":"shop","snapshot":"v1:0396299e903511502860d7b997376a61d72afef2d48d88562da338e11ebee051"},{"repo":"web","snapshot":"v1:46a5e80d79c00850c20cc416b244565f8e14919e703308952fb37cb57c4b6d45"}]},"id":"p1:3cc95038daaaf5a1832834aa2c3e4b283c3b29a4a1433162b0fe8c3c7120f13b","supports":[{"source":"s1:66f865543170056bfb291e0dfc99b1b082a651a91ad8413adfe52fd768e93ff8","read":"r1:47f142b768ab9af3d4f677e28ea07c69e6cb5f541deb86d23163249d92939572","pointer":"/value/repositories"},{"source":"s1:66f865543170056bfb291e0dfc99b1b082a651a91ad8413adfe52fd768e93ff8","read":"r1:47f142b768ab9af3d4f677e28ea07c69e6cb5f541deb86d23163249d92939572","pointer":"/value/source"}]},{"kind":"decision","context":"r1:47f142b768ab9af3d4f677e28ea07c69e6cb5f541deb86d23163249d92939572","decisionId":"trust:shop","kindName":"trust","subject":"shop","allowsFreeText":false,"required":true,"evidence":[],"options":[{"value":"trusted","evidence":[],"recommended":false},{"value":"untrusted","evidence":[],"recommended":false}],"id":"p1:d63b1aebdd5a719e96504d5dd3986e58b1e99192301cb6a456fd32fbda4a983b","supports":[{"source":"s1:66f865543170056bfb291e0dfc99b1b082a651a91ad8413adfe52fd768e93ff8","read":"r1:47f142b768ab9af3d4f677e28ea07c69e6cb5f541deb86d23163249d92939572","pointer":"/value/decisions/0"}]},{"kind":"decision","context":"r1:47f142b768ab9af3d4f677e28ea07c69e6cb5f541deb86d23163249d92939572","decisionId":"trust:web","kindName":"trust","subject":"web","allowsFreeText":false,"required":true,"evidence":[],"options":[{"value":"trusted","evidence":[],"recommended":false},{"value":"untrusted","evidence":[],"recommended":false}],"id":"p1:d9aec0e7ed63ecec6b8ca2b6aaf00f97a7bb322e01effdb7bf8c92679270668d","supports":[{"source":"s1:66f865543170056bfb291e0dfc99b1b082a651a91ad8413adfe52fd768e93ff8","read":"r1:47f142b768ab9af3d4f677e28ea07c69e6cb5f541deb86d23163249d92939572","pointer":"/value/decisions/1"}]}],"entities":[],"bindings":[],"relations":[],"connections":[]},"coverage":{"reads":{"complete":1,"partial":0,"unknown":0},"unknowns":[],"limits":[],"issues":[]},"counts":{"sources":1,"reads":1,"files":0,"anchors":0,"entities":0,"evidence":0,"parts":3,"relations":0,"connections":0,"unknownFindings":0,"unknownComponents":0},"delivery":[{"source":"s1:66f865543170056bfb291e0dfc99b1b082a651a91ad8413adfe52fd768e93ff8","repositoryRoots":[{"repo":"shop","path":"<fixture-root>/shop"},{"repo":"web","path":"<fixture-root>/web"}]}]}
+```

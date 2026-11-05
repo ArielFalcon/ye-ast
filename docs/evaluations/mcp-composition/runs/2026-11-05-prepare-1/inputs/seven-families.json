@@ -1,0 +1,180 @@
+{
+  "queries": [
+    {
+      "index": 0,
+      "family": "entrypoints",
+      "query": {
+        "name": "ye_ast_entrypoints",
+        "arguments": {
+          "repo": "shop",
+          "revision": "f89dbb6760c1df3b345c5f15e726ddd1c0509f32"
+        }
+      }
+    },
+    {
+      "index": 1,
+      "family": "impact",
+      "query": {
+        "name": "ye_ast_impact",
+        "arguments": {
+          "repo": "shop",
+          "base": "60a115ab7448426248e2081d35db131ae78c9592",
+          "head": "f89dbb6760c1df3b345c5f15e726ddd1c0509f32",
+          "changed": [
+            "src/main/java/**"
+          ],
+          "offline": true
+        }
+      }
+    },
+    {
+      "index": 2,
+      "family": "callers",
+      "query": {
+        "name": "ye_ast_callers",
+        "arguments": {
+          "repo": "shop",
+          "revision": "f89dbb6760c1df3b345c5f15e726ddd1c0509f32",
+          "targets": [
+            {
+              "file": "src/main/java/shop/OrderController.java",
+              "symbol": "OrderController.one"
+            }
+          ],
+          "workspace": {
+            "repos": [
+              {
+                "path": "<fixture-root>/web",
+                "id": "web",
+                "revision": "c3ca750c372d4de8e6bb94bd20019a1d18d1e8f3"
+              }
+            ],
+            "gateways": [
+              {
+                "prefix": "shop-api",
+                "repo": "shop"
+              }
+            ]
+          },
+          "offline": true
+        }
+      }
+    },
+    {
+      "index": 3,
+      "family": "importers",
+      "query": {
+        "name": "ye_ast_importers",
+        "arguments": {
+          "repo": "web",
+          "revision": "c3ca750c372d4de8e6bb94bd20019a1d18d1e8f3",
+          "files": [
+            "src/app/order.service.ts"
+          ]
+        }
+      }
+    },
+    {
+      "index": 4,
+      "family": "outline",
+      "query": {
+        "name": "ye_ast_outline",
+        "arguments": {
+          "repo": "shop",
+          "revision": "f89dbb6760c1df3b345c5f15e726ddd1c0509f32",
+          "files": [
+            "src/main/java/shop/OrderController.java"
+          ]
+        }
+      }
+    },
+    {
+      "index": 5,
+      "family": "workspace",
+      "query": {
+        "name": "ye_ast_workspace",
+        "arguments": {
+          "repo": "shop",
+          "revision": "f89dbb6760c1df3b345c5f15e726ddd1c0509f32",
+          "repos": [
+            {
+              "path": "<fixture-root>/web",
+              "id": "web",
+              "revision": "c3ca750c372d4de8e6bb94bd20019a1d18d1e8f3"
+            }
+          ],
+          "gateways": [
+            {
+              "prefix": "shop-api",
+              "repo": "shop"
+            }
+          ],
+          "offline": true
+        }
+      }
+    },
+    {
+      "index": 6,
+      "family": "decisions",
+      "query": {
+        "name": "ye_ast_decisions",
+        "arguments": {
+          "repo": "shop",
+          "revision": "f89dbb6760c1df3b345c5f15e726ddd1c0509f32",
+          "repos": [
+            {
+              "path": "<fixture-root>/web",
+              "id": "web",
+              "revision": "c3ca750c372d4de8e6bb94bd20019a1d18d1e8f3"
+            }
+          ],
+          "gateways": [
+            {
+              "prefix": "shop-api",
+              "repo": "shop"
+            }
+          ],
+          "offline": true
+        }
+      }
+    }
+  ],
+  "orders": [
+    {
+      "name": "original",
+      "indices": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6
+      ]
+    },
+    {
+      "name": "reversed",
+      "indices": [
+        6,
+        5,
+        4,
+        3,
+        2,
+        1,
+        0
+      ]
+    },
+    {
+      "name": "interleaved",
+      "indices": [
+        0,
+        3,
+        1,
+        2,
+        4,
+        5,
+        6
+      ]
+    }
+  ]
+}

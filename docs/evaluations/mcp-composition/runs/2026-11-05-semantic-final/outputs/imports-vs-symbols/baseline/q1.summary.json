@@ -1,0 +1,13 @@
+{
+  "text": "status: complete\ndeclared scope: languages java, typescript; frameworks angular, spring\nsnapshot: shop @ 62bbcc206956d889687af5c78ffa1e68bc73b3b3\n  src/main/java/shop/OrderController.java\n    1-1 shop [namespace]\n    7-17 OrderController [class]\n    10-10 GET /orders/{id} [route]\n    10-14 one [method]\n    15-15 first [method]\n    16-16 second [method]\nrepository root: shop -> <fixture-root>/shop",
+  "structured": {
+    "mode": "summary",
+    "status": "complete",
+    "snapshot": {
+      "repo": "shop",
+      "kind": "sha",
+      "sha": "62bbcc206956d889687af5c78ffa1e68bc73b3b3"
+    }
+  },
+  "isError": false
+}

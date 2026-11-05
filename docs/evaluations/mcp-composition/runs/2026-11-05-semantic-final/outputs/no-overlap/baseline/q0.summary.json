@@ -1,0 +1,13 @@
+{
+  "text": "status: partial (cuts: 2 unresolved-link)\ndeclared scope: languages java, typescript; frameworks angular, spring\nsnapshot: web @ b222c7c8b1e6b6d7b9dba3c9a9cc67b7e1df7c02\n  Indices are zero-based positions in each original category; additional users have no module category.\n  src/app/order.service.ts\n    related files (1 distinct)\n    \"src/app/order.page.ts\": importers[0], users[0]\n  These relationships are paths only; no relationship line locations were recorded.\ncuts:\n  unresolved-link (2 files, 0 references; mode \"details\" lists every place):\n    src/app/order.page.ts:1 @angular/common/http\n      (the file itself)\n    src/app/order.page.ts:2 @angular/core\n      (the file itself)\nrepository root: web -> <fixture-root>/web",
+  "structured": {
+    "mode": "summary",
+    "status": "partial",
+    "snapshot": {
+      "repo": "web",
+      "kind": "sha",
+      "sha": "b222c7c8b1e6b6d7b9dba3c9a9cc67b7e1df7c02"
+    }
+  },
+  "isError": false
+}

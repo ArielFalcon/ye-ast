@@ -1,0 +1,104 @@
+{
+  "text": "status: complete\nfull structured result: structuredContent\nSelect value.files by file; declarations contain name, kind, line and endLine, and imports are paths. Inspect value.unheld for unavailable files and cuts when partial.\nRepository locations: match repositoryRoots[].repo to evidence ownership; repositoryRoots[].path locates the clone on disk, while evidence paths are relative to its repository at the recorded snapshot.",
+  "structured": {
+    "schema": "0.12.0",
+    "snapshot": {
+      "repo": "shop",
+      "kind": "sha",
+      "sha": "f89dbb6760c1df3b345c5f15e726ddd1c0509f32"
+    },
+    "producer": {
+      "name": "ye-ast",
+      "version": "0.4.0"
+    },
+    "inputs": {
+      "trust": "untrusted",
+      "scope": "fa4648f55a618e0296b4a7ce207508c12bbe7d7e682e4a5ac5a25787a8b96eb8",
+      "declaredScope": {
+        "languages": [
+          "java",
+          "typescript"
+        ],
+        "frameworks": [
+          "angular",
+          "spring"
+        ],
+        "include": [],
+        "exclude": []
+      },
+      "content": "f742c7bb02d12b5d4b7f4e364a602110be13666837dc788ad388919d56bf1f6d",
+      "config": "e5226cebb27da894d267f86abc995526abf862ca35801b6cc4b945893d301ed6",
+      "declaredConfig": {
+        "files": [
+          "src/main/java/shop/OrderController.java"
+        ]
+      },
+      "origin": {
+        "kind": "full"
+      },
+      "engines": {
+        "@colbymchenry/codegraph": "1.6.2",
+        "tree-sitter-java": "0.23.5",
+        "typescript": "6.0.3",
+        "web-tree-sitter": "0.27.1"
+      }
+    },
+    "evidence": [],
+    "status": "complete",
+    "value": {
+      "files": [
+        {
+          "file": "src/main/java/shop/OrderController.java",
+          "declarations": [
+            {
+              "kind": "namespace",
+              "name": "shop",
+              "line": 1,
+              "endLine": 1
+            },
+            {
+              "kind": "class",
+              "name": "OrderController",
+              "line": 7,
+              "endLine": 17
+            },
+            {
+              "kind": "route",
+              "name": "GET /orders/{id}",
+              "line": 10,
+              "endLine": 10
+            },
+            {
+              "kind": "method",
+              "name": "one",
+              "line": 10,
+              "endLine": 14
+            },
+            {
+              "kind": "method",
+              "name": "first",
+              "line": 15,
+              "endLine": 15
+            },
+            {
+              "kind": "method",
+              "name": "second",
+              "line": 16,
+              "endLine": 16
+            }
+          ],
+          "imports": []
+        }
+      ],
+      "unheld": []
+    },
+    "mode": "full",
+    "repositoryRoots": [
+      {
+        "repo": "shop",
+        "path": "<fixture-root>/shop"
+      }
+    ]
+  },
+  "isError": false
+}

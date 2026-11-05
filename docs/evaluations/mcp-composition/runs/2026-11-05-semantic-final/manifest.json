@@ -1,0 +1,979 @@
+{
+  "schema": "ye-ast-composition-run/1",
+  "createdAt": "2026-11-05T19:27:24.425Z",
+  "environment": {
+    "node": "v24.22.2",
+    "platform": "darwin",
+    "arch": "arm64"
+  },
+  "acquisition": {
+    "fixture": "src/composition/mcp-evidence-fixture.ts createCompositionFixture(): two temporary Git repositories (shop, web), base/head commits, isolated index/cache/scratch/trust",
+    "base": "6b9ea72b0431fe963122022594396e3c2546a7b2",
+    "head": "62bbcc206956d889687af5c78ffa1e68bc73b3b3",
+    "fixtureSetupMs": 594,
+    "baseline": "original tools over an in-memory MCP session of createMcpServer(fixture.deps)",
+    "composed": "ye_ast_compose over the same MCP session"
+  },
+  "promptMode": "full",
+  "consumerReady": true,
+  "conditions": [
+    "baseline",
+    "composed"
+  ],
+  "replicates": 2,
+  "cases": [
+    {
+      "id": "handler-outline",
+      "status": "prepared",
+      "overlap": "deliberate",
+      "families": [
+        "entrypoints",
+        "outline"
+      ],
+      "orders": [
+        "original",
+        "reversed"
+      ]
+    },
+    {
+      "id": "change-duplicate-dependence",
+      "status": "prepared",
+      "overlap": "deliberate",
+      "families": [
+        "impact",
+        "callers"
+      ],
+      "orders": [
+        "original",
+        "reversed"
+      ]
+    },
+    {
+      "id": "imports-vs-symbols",
+      "status": "prepared",
+      "overlap": "partial",
+      "families": [
+        "importers",
+        "outline",
+        "callers"
+      ],
+      "orders": [
+        "original",
+        "reversed"
+      ]
+    },
+    {
+      "id": "workspace-link-cut",
+      "status": "prepared",
+      "overlap": "partial",
+      "families": [
+        "workspace",
+        "callers"
+      ],
+      "orders": [
+        "original",
+        "reversed"
+      ]
+    },
+    {
+      "id": "decision-options",
+      "status": "prepared",
+      "overlap": "none",
+      "families": [
+        "decisions"
+      ],
+      "orders": [
+        "original"
+      ]
+    },
+    {
+      "id": "snapshot-mismatch",
+      "status": "prepared",
+      "overlap": "mismatch",
+      "families": [
+        "callers",
+        "outline"
+      ],
+      "orders": [
+        "original",
+        "reversed"
+      ]
+    },
+    {
+      "id": "no-overlap",
+      "status": "prepared",
+      "overlap": "none",
+      "families": [
+        "importers",
+        "decisions"
+      ],
+      "orders": [
+        "original",
+        "reversed"
+      ]
+    },
+    {
+      "id": "seven-families",
+      "status": "prepared",
+      "overlap": "deliberate",
+      "families": [
+        "entrypoints",
+        "impact",
+        "callers",
+        "importers",
+        "outline",
+        "workspace",
+        "decisions"
+      ],
+      "orders": [
+        "original",
+        "reversed",
+        "interleaved"
+      ]
+    }
+  ],
+  "schedule": [
+    {
+      "caseId": "handler-outline",
+      "condition": "baseline",
+      "order": "original",
+      "replicate": 1,
+      "prompt": "prompts/handler-outline.baseline.original.md"
+    },
+    {
+      "caseId": "handler-outline",
+      "condition": "composed",
+      "order": "original",
+      "replicate": 1,
+      "prompt": "prompts/handler-outline.composed.original.md"
+    },
+    {
+      "caseId": "handler-outline",
+      "condition": "composed",
+      "order": "original",
+      "replicate": 2,
+      "prompt": "prompts/handler-outline.composed.original.md"
+    },
+    {
+      "caseId": "handler-outline",
+      "condition": "baseline",
+      "order": "original",
+      "replicate": 2,
+      "prompt": "prompts/handler-outline.baseline.original.md"
+    },
+    {
+      "caseId": "handler-outline",
+      "condition": "baseline",
+      "order": "reversed",
+      "replicate": 1,
+      "prompt": "prompts/handler-outline.baseline.reversed.md"
+    },
+    {
+      "caseId": "handler-outline",
+      "condition": "composed",
+      "order": "reversed",
+      "replicate": 1,
+      "prompt": "prompts/handler-outline.composed.reversed.md"
+    },
+    {
+      "caseId": "handler-outline",
+      "condition": "composed",
+      "order": "reversed",
+      "replicate": 2,
+      "prompt": "prompts/handler-outline.composed.reversed.md"
+    },
+    {
+      "caseId": "handler-outline",
+      "condition": "baseline",
+      "order": "reversed",
+      "replicate": 2,
+      "prompt": "prompts/handler-outline.baseline.reversed.md"
+    },
+    {
+      "caseId": "change-duplicate-dependence",
+      "condition": "baseline",
+      "order": "original",
+      "replicate": 1,
+      "prompt": "prompts/change-duplicate-dependence.baseline.original.md"
+    },
+    {
+      "caseId": "change-duplicate-dependence",
+      "condition": "composed",
+      "order": "original",
+      "replicate": 1,
+      "prompt": "prompts/change-duplicate-dependence.composed.original.md"
+    },
+    {
+      "caseId": "change-duplicate-dependence",
+      "condition": "composed",
+      "order": "original",
+      "replicate": 2,
+      "prompt": "prompts/change-duplicate-dependence.composed.original.md"
+    },
+    {
+      "caseId": "change-duplicate-dependence",
+      "condition": "baseline",
+      "order": "original",
+      "replicate": 2,
+      "prompt": "prompts/change-duplicate-dependence.baseline.original.md"
+    },
+    {
+      "caseId": "change-duplicate-dependence",
+      "condition": "baseline",
+      "order": "reversed",
+      "replicate": 1,
+      "prompt": "prompts/change-duplicate-dependence.baseline.reversed.md"
+    },
+    {
+      "caseId": "change-duplicate-dependence",
+      "condition": "composed",
+      "order": "reversed",
+      "replicate": 1,
+      "prompt": "prompts/change-duplicate-dependence.composed.reversed.md"
+    },
+    {
+      "caseId": "change-duplicate-dependence",
+      "condition": "composed",
+      "order": "reversed",
+      "replicate": 2,
+      "prompt": "prompts/change-duplicate-dependence.composed.reversed.md"
+    },
+    {
+      "caseId": "change-duplicate-dependence",
+      "condition": "baseline",
+      "order": "reversed",
+      "replicate": 2,
+      "prompt": "prompts/change-duplicate-dependence.baseline.reversed.md"
+    },
+    {
+      "caseId": "imports-vs-symbols",
+      "condition": "baseline",
+      "order": "original",
+      "replicate": 1,
+      "prompt": "prompts/imports-vs-symbols.baseline.original.md"
+    },
+    {
+      "caseId": "imports-vs-symbols",
+      "condition": "composed",
+      "order": "original",
+      "replicate": 1,
+      "prompt": "prompts/imports-vs-symbols.composed.original.md"
+    },
+    {
+      "caseId": "imports-vs-symbols",
+      "condition": "composed",
+      "order": "original",
+      "replicate": 2,
+      "prompt": "prompts/imports-vs-symbols.composed.original.md"
+    },
+    {
+      "caseId": "imports-vs-symbols",
+      "condition": "baseline",
+      "order": "original",
+      "replicate": 2,
+      "prompt": "prompts/imports-vs-symbols.baseline.original.md"
+    },
+    {
+      "caseId": "imports-vs-symbols",
+      "condition": "baseline",
+      "order": "reversed",
+      "replicate": 1,
+      "prompt": "prompts/imports-vs-symbols.baseline.reversed.md"
+    },
+    {
+      "caseId": "imports-vs-symbols",
+      "condition": "composed",
+      "order": "reversed",
+      "replicate": 1,
+      "prompt": "prompts/imports-vs-symbols.composed.reversed.md"
+    },
+    {
+      "caseId": "imports-vs-symbols",
+      "condition": "composed",
+      "order": "reversed",
+      "replicate": 2,
+      "prompt": "prompts/imports-vs-symbols.composed.reversed.md"
+    },
+    {
+      "caseId": "imports-vs-symbols",
+      "condition": "baseline",
+      "order": "reversed",
+      "replicate": 2,
+      "prompt": "prompts/imports-vs-symbols.baseline.reversed.md"
+    },
+    {
+      "caseId": "workspace-link-cut",
+      "condition": "baseline",
+      "order": "original",
+      "replicate": 1,
+      "prompt": "prompts/workspace-link-cut.baseline.original.md"
+    },
+    {
+      "caseId": "workspace-link-cut",
+      "condition": "composed",
+      "order": "original",
+      "replicate": 1,
+      "prompt": "prompts/workspace-link-cut.composed.original.md"
+    },
+    {
+      "caseId": "workspace-link-cut",
+      "condition": "composed",
+      "order": "original",
+      "replicate": 2,
+      "prompt": "prompts/workspace-link-cut.composed.original.md"
+    },
+    {
+      "caseId": "workspace-link-cut",
+      "condition": "baseline",
+      "order": "original",
+      "replicate": 2,
+      "prompt": "prompts/workspace-link-cut.baseline.original.md"
+    },
+    {
+      "caseId": "workspace-link-cut",
+      "condition": "baseline",
+      "order": "reversed",
+      "replicate": 1,
+      "prompt": "prompts/workspace-link-cut.baseline.reversed.md"
+    },
+    {
+      "caseId": "workspace-link-cut",
+      "condition": "composed",
+      "order": "reversed",
+      "replicate": 1,
+      "prompt": "prompts/workspace-link-cut.composed.reversed.md"
+    },
+    {
+      "caseId": "workspace-link-cut",
+      "condition": "composed",
+      "order": "reversed",
+      "replicate": 2,
+      "prompt": "prompts/workspace-link-cut.composed.reversed.md"
+    },
+    {
+      "caseId": "workspace-link-cut",
+      "condition": "baseline",
+      "order": "reversed",
+      "replicate": 2,
+      "prompt": "prompts/workspace-link-cut.baseline.reversed.md"
+    },
+    {
+      "caseId": "decision-options",
+      "condition": "baseline",
+      "order": "original",
+      "replicate": 1,
+      "prompt": "prompts/decision-options.baseline.original.md"
+    },
+    {
+      "caseId": "decision-options",
+      "condition": "composed",
+      "order": "original",
+      "replicate": 1,
+      "prompt": "prompts/decision-options.composed.original.md"
+    },
+    {
+      "caseId": "decision-options",
+      "condition": "composed",
+      "order": "original",
+      "replicate": 2,
+      "prompt": "prompts/decision-options.composed.original.md"
+    },
+    {
+      "caseId": "decision-options",
+      "condition": "baseline",
+      "order": "original",
+      "replicate": 2,
+      "prompt": "prompts/decision-options.baseline.original.md"
+    },
+    {
+      "caseId": "snapshot-mismatch",
+      "condition": "baseline",
+      "order": "original",
+      "replicate": 1,
+      "prompt": "prompts/snapshot-mismatch.baseline.original.md"
+    },
+    {
+      "caseId": "snapshot-mismatch",
+      "condition": "composed",
+      "order": "original",
+      "replicate": 1,
+      "prompt": "prompts/snapshot-mismatch.composed.original.md"
+    },
+    {
+      "caseId": "snapshot-mismatch",
+      "condition": "composed",
+      "order": "original",
+      "replicate": 2,
+      "prompt": "prompts/snapshot-mismatch.composed.original.md"
+    },
+    {
+      "caseId": "snapshot-mismatch",
+      "condition": "baseline",
+      "order": "original",
+      "replicate": 2,
+      "prompt": "prompts/snapshot-mismatch.baseline.original.md"
+    },
+    {
+      "caseId": "snapshot-mismatch",
+      "condition": "baseline",
+      "order": "reversed",
+      "replicate": 1,
+      "prompt": "prompts/snapshot-mismatch.baseline.reversed.md"
+    },
+    {
+      "caseId": "snapshot-mismatch",
+      "condition": "composed",
+      "order": "reversed",
+      "replicate": 1,
+      "prompt": "prompts/snapshot-mismatch.composed.reversed.md"
+    },
+    {
+      "caseId": "snapshot-mismatch",
+      "condition": "composed",
+      "order": "reversed",
+      "replicate": 2,
+      "prompt": "prompts/snapshot-mismatch.composed.reversed.md"
+    },
+    {
+      "caseId": "snapshot-mismatch",
+      "condition": "baseline",
+      "order": "reversed",
+      "replicate": 2,
+      "prompt": "prompts/snapshot-mismatch.baseline.reversed.md"
+    },
+    {
+      "caseId": "no-overlap",
+      "condition": "baseline",
+      "order": "original",
+      "replicate": 1,
+      "prompt": "prompts/no-overlap.baseline.original.md"
+    },
+    {
+      "caseId": "no-overlap",
+      "condition": "composed",
+      "order": "original",
+      "replicate": 1,
+      "prompt": "prompts/no-overlap.composed.original.md"
+    },
+    {
+      "caseId": "no-overlap",
+      "condition": "composed",
+      "order": "original",
+      "replicate": 2,
+      "prompt": "prompts/no-overlap.composed.original.md"
+    },
+    {
+      "caseId": "no-overlap",
+      "condition": "baseline",
+      "order": "original",
+      "replicate": 2,
+      "prompt": "prompts/no-overlap.baseline.original.md"
+    },
+    {
+      "caseId": "no-overlap",
+      "condition": "baseline",
+      "order": "reversed",
+      "replicate": 1,
+      "prompt": "prompts/no-overlap.baseline.reversed.md"
+    },
+    {
+      "caseId": "no-overlap",
+      "condition": "composed",
+      "order": "reversed",
+      "replicate": 1,
+      "prompt": "prompts/no-overlap.composed.reversed.md"
+    },
+    {
+      "caseId": "no-overlap",
+      "condition": "composed",
+      "order": "reversed",
+      "replicate": 2,
+      "prompt": "prompts/no-overlap.composed.reversed.md"
+    },
+    {
+      "caseId": "no-overlap",
+      "condition": "baseline",
+      "order": "reversed",
+      "replicate": 2,
+      "prompt": "prompts/no-overlap.baseline.reversed.md"
+    },
+    {
+      "caseId": "seven-families",
+      "condition": "baseline",
+      "order": "original",
+      "replicate": 1,
+      "prompt": "prompts/seven-families.baseline.original.md"
+    },
+    {
+      "caseId": "seven-families",
+      "condition": "composed",
+      "order": "original",
+      "replicate": 1,
+      "prompt": "prompts/seven-families.composed.original.md"
+    },
+    {
+      "caseId": "seven-families",
+      "condition": "composed",
+      "order": "original",
+      "replicate": 2,
+      "prompt": "prompts/seven-families.composed.original.md"
+    },
+    {
+      "caseId": "seven-families",
+      "condition": "baseline",
+      "order": "original",
+      "replicate": 2,
+      "prompt": "prompts/seven-families.baseline.original.md"
+    },
+    {
+      "caseId": "seven-families",
+      "condition": "baseline",
+      "order": "reversed",
+      "replicate": 1,
+      "prompt": "prompts/seven-families.baseline.reversed.md"
+    },
+    {
+      "caseId": "seven-families",
+      "condition": "composed",
+      "order": "reversed",
+      "replicate": 1,
+      "prompt": "prompts/seven-families.composed.reversed.md"
+    },
+    {
+      "caseId": "seven-families",
+      "condition": "composed",
+      "order": "reversed",
+      "replicate": 2,
+      "prompt": "prompts/seven-families.composed.reversed.md"
+    },
+    {
+      "caseId": "seven-families",
+      "condition": "baseline",
+      "order": "reversed",
+      "replicate": 2,
+      "prompt": "prompts/seven-families.baseline.reversed.md"
+    },
+    {
+      "caseId": "seven-families",
+      "condition": "baseline",
+      "order": "interleaved",
+      "replicate": 1,
+      "prompt": "prompts/seven-families.baseline.interleaved.md"
+    },
+    {
+      "caseId": "seven-families",
+      "condition": "composed",
+      "order": "interleaved",
+      "replicate": 1,
+      "prompt": "prompts/seven-families.composed.interleaved.md"
+    },
+    {
+      "caseId": "seven-families",
+      "condition": "composed",
+      "order": "interleaved",
+      "replicate": 2,
+      "prompt": "prompts/seven-families.composed.interleaved.md"
+    },
+    {
+      "caseId": "seven-families",
+      "condition": "baseline",
+      "order": "interleaved",
+      "replicate": 2,
+      "prompt": "prompts/seven-families.baseline.interleaved.md"
+    }
+  ],
+  "expectedResponses": [
+    {
+      "caseId": "handler-outline",
+      "condition": "baseline",
+      "order": "original",
+      "replicate": 1
+    },
+    {
+      "caseId": "handler-outline",
+      "condition": "composed",
+      "order": "original",
+      "replicate": 1
+    },
+    {
+      "caseId": "handler-outline",
+      "condition": "composed",
+      "order": "original",
+      "replicate": 2
+    },
+    {
+      "caseId": "handler-outline",
+      "condition": "baseline",
+      "order": "original",
+      "replicate": 2
+    },
+    {
+      "caseId": "handler-outline",
+      "condition": "baseline",
+      "order": "reversed",
+      "replicate": 1
+    },
+    {
+      "caseId": "handler-outline",
+      "condition": "composed",
+      "order": "reversed",
+      "replicate": 1
+    },
+    {
+      "caseId": "handler-outline",
+      "condition": "composed",
+      "order": "reversed",
+      "replicate": 2
+    },
+    {
+      "caseId": "handler-outline",
+      "condition": "baseline",
+      "order": "reversed",
+      "replicate": 2
+    },
+    {
+      "caseId": "change-duplicate-dependence",
+      "condition": "baseline",
+      "order": "original",
+      "replicate": 1
+    },
+    {
+      "caseId": "change-duplicate-dependence",
+      "condition": "composed",
+      "order": "original",
+      "replicate": 1
+    },
+    {
+      "caseId": "change-duplicate-dependence",
+      "condition": "composed",
+      "order": "original",
+      "replicate": 2
+    },
+    {
+      "caseId": "change-duplicate-dependence",
+      "condition": "baseline",
+      "order": "original",
+      "replicate": 2
+    },
+    {
+      "caseId": "change-duplicate-dependence",
+      "condition": "baseline",
+      "order": "reversed",
+      "replicate": 1
+    },
+    {
+      "caseId": "change-duplicate-dependence",
+      "condition": "composed",
+      "order": "reversed",
+      "replicate": 1
+    },
+    {
+      "caseId": "change-duplicate-dependence",
+      "condition": "composed",
+      "order": "reversed",
+      "replicate": 2
+    },
+    {
+      "caseId": "change-duplicate-dependence",
+      "condition": "baseline",
+      "order": "reversed",
+      "replicate": 2
+    },
+    {
+      "caseId": "imports-vs-symbols",
+      "condition": "baseline",
+      "order": "original",
+      "replicate": 1
+    },
+    {
+      "caseId": "imports-vs-symbols",
+      "condition": "composed",
+      "order": "original",
+      "replicate": 1
+    },
+    {
+      "caseId": "imports-vs-symbols",
+      "condition": "composed",
+      "order": "original",
+      "replicate": 2
+    },
+    {
+      "caseId": "imports-vs-symbols",
+      "condition": "baseline",
+      "order": "original",
+      "replicate": 2
+    },
+    {
+      "caseId": "imports-vs-symbols",
+      "condition": "baseline",
+      "order": "reversed",
+      "replicate": 1
+    },
+    {
+      "caseId": "imports-vs-symbols",
+      "condition": "composed",
+      "order": "reversed",
+      "replicate": 1
+    },
+    {
+      "caseId": "imports-vs-symbols",
+      "condition": "composed",
+      "order": "reversed",
+      "replicate": 2
+    },
+    {
+      "caseId": "imports-vs-symbols",
+      "condition": "baseline",
+      "order": "reversed",
+      "replicate": 2
+    },
+    {
+      "caseId": "workspace-link-cut",
+      "condition": "baseline",
+      "order": "original",
+      "replicate": 1
+    },
+    {
+      "caseId": "workspace-link-cut",
+      "condition": "composed",
+      "order": "original",
+      "replicate": 1
+    },
+    {
+      "caseId": "workspace-link-cut",
+      "condition": "composed",
+      "order": "original",
+      "replicate": 2
+    },
+    {
+      "caseId": "workspace-link-cut",
+      "condition": "baseline",
+      "order": "original",
+      "replicate": 2
+    },
+    {
+      "caseId": "workspace-link-cut",
+      "condition": "baseline",
+      "order": "reversed",
+      "replicate": 1
+    },
+    {
+      "caseId": "workspace-link-cut",
+      "condition": "composed",
+      "order": "reversed",
+      "replicate": 1
+    },
+    {
+      "caseId": "workspace-link-cut",
+      "condition": "composed",
+      "order": "reversed",
+      "replicate": 2
+    },
+    {
+      "caseId": "workspace-link-cut",
+      "condition": "baseline",
+      "order": "reversed",
+      "replicate": 2
+    },
+    {
+      "caseId": "decision-options",
+      "condition": "baseline",
+      "order": "original",
+      "replicate": 1
+    },
+    {
+      "caseId": "decision-options",
+      "condition": "composed",
+      "order": "original",
+      "replicate": 1
+    },
+    {
+      "caseId": "decision-options",
+      "condition": "composed",
+      "order": "original",
+      "replicate": 2
+    },
+    {
+      "caseId": "decision-options",
+      "condition": "baseline",
+      "order": "original",
+      "replicate": 2
+    },
+    {
+      "caseId": "snapshot-mismatch",
+      "condition": "baseline",
+      "order": "original",
+      "replicate": 1
+    },
+    {
+      "caseId": "snapshot-mismatch",
+      "condition": "composed",
+      "order": "original",
+      "replicate": 1
+    },
+    {
+      "caseId": "snapshot-mismatch",
+      "condition": "composed",
+      "order": "original",
+      "replicate": 2
+    },
+    {
+      "caseId": "snapshot-mismatch",
+      "condition": "baseline",
+      "order": "original",
+      "replicate": 2
+    },
+    {
+      "caseId": "snapshot-mismatch",
+      "condition": "baseline",
+      "order": "reversed",
+      "replicate": 1
+    },
+    {
+      "caseId": "snapshot-mismatch",
+      "condition": "composed",
+      "order": "reversed",
+      "replicate": 1
+    },
+    {
+      "caseId": "snapshot-mismatch",
+      "condition": "composed",
+      "order": "reversed",
+      "replicate": 2
+    },
+    {
+      "caseId": "snapshot-mismatch",
+      "condition": "baseline",
+      "order": "reversed",
+      "replicate": 2
+    },
+    {
+      "caseId": "no-overlap",
+      "condition": "baseline",
+      "order": "original",
+      "replicate": 1
+    },
+    {
+      "caseId": "no-overlap",
+      "condition": "composed",
+      "order": "original",
+      "replicate": 1
+    },
+    {
+      "caseId": "no-overlap",
+      "condition": "composed",
+      "order": "original",
+      "replicate": 2
+    },
+    {
+      "caseId": "no-overlap",
+      "condition": "baseline",
+      "order": "original",
+      "replicate": 2
+    },
+    {
+      "caseId": "no-overlap",
+      "condition": "baseline",
+      "order": "reversed",
+      "replicate": 1
+    },
+    {
+      "caseId": "no-overlap",
+      "condition": "composed",
+      "order": "reversed",
+      "replicate": 1
+    },
+    {
+      "caseId": "no-overlap",
+      "condition": "composed",
+      "order": "reversed",
+      "replicate": 2
+    },
+    {
+      "caseId": "no-overlap",
+      "condition": "baseline",
+      "order": "reversed",
+      "replicate": 2
+    },
+    {
+      "caseId": "seven-families",
+      "condition": "baseline",
+      "order": "original",
+      "replicate": 1
+    },
+    {
+      "caseId": "seven-families",
+      "condition": "composed",
+      "order": "original",
+      "replicate": 1
+    },
+    {
+      "caseId": "seven-families",
+      "condition": "composed",
+      "order": "original",
+      "replicate": 2
+    },
+    {
+      "caseId": "seven-families",
+      "condition": "baseline",
+      "order": "original",
+      "replicate": 2
+    },
+    {
+      "caseId": "seven-families",
+      "condition": "baseline",
+      "order": "reversed",
+      "replicate": 1
+    },
+    {
+      "caseId": "seven-families",
+      "condition": "composed",
+      "order": "reversed",
+      "replicate": 1
+    },
+    {
+      "caseId": "seven-families",
+      "condition": "composed",
+      "order": "reversed",
+      "replicate": 2
+    },
+    {
+      "caseId": "seven-families",
+      "condition": "baseline",
+      "order": "reversed",
+      "replicate": 2
+    },
+    {
+      "caseId": "seven-families",
+      "condition": "baseline",
+      "order": "interleaved",
+      "replicate": 1
+    },
+    {
+      "caseId": "seven-families",
+      "condition": "composed",
+      "order": "interleaved",
+      "replicate": 1
+    },
+    {
+      "caseId": "seven-families",
+      "condition": "composed",
+      "order": "interleaved",
+      "replicate": 2
+    },
+    {
+      "caseId": "seven-families",
+      "condition": "baseline",
+      "order": "interleaved",
+      "replicate": 2
+    }
+  ],
+  "synthesis": {
+    "status": "not_evaluated",
+    "reason": "no consumer responses yet"
+  },
+  "memory": {
+    "maxRssKiB": 414544,
+    "label": "process peak RSS since start, includes fixture creation and indexing"
+  }
+}

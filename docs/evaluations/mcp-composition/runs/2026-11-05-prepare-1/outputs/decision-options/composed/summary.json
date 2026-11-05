@@ -1,0 +1,84 @@
+{
+  "text": "Composition (summary): 1 sources, 0 subjects, 0 relations, 0 connections, 3 observations.\nVerification: available at structuredContent.verification.identity; send every available requests[].query with it as expect to verify this set.\nTerms: recorded = stated by a source; associated = a recorded association, not a call chain; candidate = not established; unknown = not determined, never empty; incompatible = not combined.\nV1 = web @ c3ca750c372d4de8e6bb94bd20019a1d18d1e8f3\nV2 = shop @ f89dbb6760c1df3b345c5f15e726ddd1c0509f32\nS1 = decisions, requests[0] fresh-read: complete; V2, V1\nUnmarked locations: shop V2, web V1; any other snapshot is marked @V.\nRead context (every read): trust untrusted; producer ye-ast 0.4.0; schema 0.12.0; languages java, typescript; frameworks angular, spring; engines tree-sitter-java 0.23.5, typescript 6.0.3, web-tree-sitter 0.27.1\nWorkspace of S1: decisions source request; repositories shop V2, web V1\nDecisions (recommendations are not user decisions, trust grants or approvals):\n  trust \"shop\" (trust:shop) required; context S1; no evidence\n    option \"trusted\"; no evidence\n    option \"untrusted\"; no evidence\n  trust \"web\" (trust:web) required; context S1; no evidence\n    option \"trusted\"; no evidence\n    option \"untrusted\"; no evidence\nCoverage:\n  recorded reads: 1 complete, 0 partial, 0 unknown (owners nest; not independent analyses)\nOmitted: nothing; details adds no further observation.",
+  "structured": {
+    "kind": "composition-receipt",
+    "compositionSchema": 1,
+    "mode": "summary",
+    "verification": {
+      "status": "available",
+      "identity": "mcp-c1:26078f5a062749f1a43f2279a18e6b540db3cc7212c9cffa8b77567b8560c6d5"
+    },
+    "requests": [
+      {
+        "status": "available",
+        "query": {
+          "name": "ye_ast_decisions",
+          "arguments": {
+            "repo": "shop",
+            "revision": "f89dbb6760c1df3b345c5f15e726ddd1c0509f32",
+            "offline": true,
+            "repos": [
+              {
+                "path": "<fixture-root>/web",
+                "id": "web",
+                "revision": "c3ca750c372d4de8e6bb94bd20019a1d18d1e8f3"
+              }
+            ],
+            "gateways": [
+              {
+                "prefix": "shop-api",
+                "repo": "shop"
+              }
+            ]
+          }
+        },
+        "strategy": "fresh-read"
+      }
+    ],
+    "sources": [
+      {
+        "family": "decisions",
+        "id": "s1:3e5db6bd548a514d5bcea1b66e555bf10b69b6bfd54421a8b2909d8bea5b44d5",
+        "rootRead": "r1:fdf4dbbfe0a6263d4a9a4ac94c2cd2d19ae520832f8187901990da620c9b53d7",
+        "snapshotVector": [
+          {
+            "repo": "shop",
+            "snapshot": "v1:493f65f92dd318be211b4884d659a9fabf2c21ba8ec58a219919758793798ee7"
+          },
+          {
+            "repo": "web",
+            "snapshot": "v1:410924be56d010d7d524f88709774b0edbecd7b79d3963a904de1f97f848bc02"
+          }
+        ],
+        "analysis": {
+          "status": "complete"
+        },
+        "requestIndex": 0
+      }
+    ],
+    "coverage": {
+      "reads": {
+        "complete": 1,
+        "partial": 0,
+        "unknown": 0
+      },
+      "unknowns": [],
+      "limits": [],
+      "issues": []
+    },
+    "counts": {
+      "sources": 1,
+      "reads": 1,
+      "files": 0,
+      "anchors": 0,
+      "entities": 0,
+      "evidence": 0,
+      "parts": 3,
+      "relations": 0,
+      "connections": 0,
+      "unknownFindings": 0,
+      "unknownComponents": 0
+    }
+  },
+  "isError": false
+}

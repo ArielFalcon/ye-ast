@@ -1,0 +1,1894 @@
+{
+  "catalogue": {
+    "tools": 8,
+    "catalogueBytes": 74198,
+    "instructionBytes": 3916,
+    "perTool": [
+      {
+        "name": "ye_ast_compose",
+        "bytes": 24667
+      },
+      {
+        "name": "ye_ast_entrypoints",
+        "bytes": 7539
+      },
+      {
+        "name": "ye_ast_impact",
+        "bytes": 12771
+      },
+      {
+        "name": "ye_ast_callers",
+        "bytes": 12534
+      },
+      {
+        "name": "ye_ast_importers",
+        "bytes": 3799
+      },
+      {
+        "name": "ye_ast_outline",
+        "bytes": 3464
+      },
+      {
+        "name": "ye_ast_workspace",
+        "bytes": 4792
+      },
+      {
+        "name": "ye_ast_decisions",
+        "bytes": 4613
+      }
+    ],
+    "composeToolBytes": 24667
+  },
+  "cases": [
+    {
+      "caseId": "handler-outline",
+      "overlap": "deliberate",
+      "baseline": {
+        "calls": [
+          {
+            "queryIndex": 0,
+            "tool": "ye_ast_entrypoints",
+            "mode": "summary",
+            "isError": false,
+            "requestBytes": 128,
+            "textBytes": 531,
+            "structuredBytes": 384,
+            "totalBytes": 915,
+            "wallMs": 216.6,
+            "heapUsedAfter": 57279224,
+            "sequence": 1,
+            "cache": "warm: shared session after earlier calls"
+          },
+          {
+            "queryIndex": 0,
+            "tool": "ye_ast_entrypoints",
+            "mode": "details",
+            "isError": false,
+            "requestBytes": 128,
+            "textBytes": 673,
+            "structuredBytes": 384,
+            "totalBytes": 1057,
+            "wallMs": 307.2,
+            "heapUsedAfter": 66569432,
+            "sequence": 2,
+            "cache": "warm: shared session after earlier calls"
+          },
+          {
+            "queryIndex": 0,
+            "tool": "ye_ast_entrypoints",
+            "mode": "full",
+            "isError": false,
+            "requestBytes": 125,
+            "textBytes": 715,
+            "structuredBytes": 2229,
+            "totalBytes": 2944,
+            "wallMs": 84.3,
+            "heapUsedAfter": 79060536,
+            "sequence": 3,
+            "cache": "warm: shared session after earlier calls"
+          },
+          {
+            "queryIndex": 1,
+            "tool": "ye_ast_outline",
+            "mode": "summary",
+            "isError": false,
+            "requestBytes": 176,
+            "textBytes": 463,
+            "structuredBytes": 127,
+            "totalBytes": 590,
+            "wallMs": 1552.4,
+            "heapUsedAfter": 76093912,
+            "sequence": 4,
+            "cache": "warm: shared session after earlier calls"
+          },
+          {
+            "queryIndex": 1,
+            "tool": "ye_ast_outline",
+            "mode": "details",
+            "isError": false,
+            "requestBytes": 176,
+            "textBytes": 463,
+            "structuredBytes": 127,
+            "totalBytes": 590,
+            "wallMs": 93.4,
+            "heapUsedAfter": 78128616,
+            "sequence": 5,
+            "cache": "warm: shared session after earlier calls"
+          },
+          {
+            "queryIndex": 1,
+            "tool": "ye_ast_outline",
+            "mode": "full",
+            "isError": false,
+            "requestBytes": 173,
+            "textBytes": 428,
+            "structuredBytes": 1387,
+            "totalBytes": 1815,
+            "wallMs": 167.5,
+            "heapUsedAfter": 79948816,
+            "sequence": 6,
+            "cache": "warm: shared session after earlier calls"
+          }
+        ],
+        "totals": {
+          "summary": {
+            "requests": 2,
+            "requestBytes": 304,
+            "textBytes": 994,
+            "structuredBytes": 511,
+            "totalBytes": 1505
+          },
+          "details": {
+            "requests": 2,
+            "requestBytes": 304,
+            "textBytes": 1136,
+            "structuredBytes": 511,
+            "totalBytes": 1647
+          },
+          "full": {
+            "requests": 2,
+            "requestBytes": 298,
+            "textBytes": 1143,
+            "structuredBytes": 3616,
+            "totalBytes": 4759
+          }
+        }
+      },
+      "composed": {
+        "surface": "public-tool",
+        "calls": [
+          {
+            "mode": "summary",
+            "order": "original",
+            "isError": false,
+            "requestBytes": 340,
+            "textBytes": 780,
+            "structuredBytes": 673,
+            "totalBytes": 1453,
+            "wallMs": 236.9,
+            "heapUsedAfter": 84559736,
+            "sequence": 7,
+            "cache": "warm: shared session after earlier calls"
+          },
+          {
+            "mode": "details",
+            "order": "original",
+            "isError": false,
+            "requestBytes": 340,
+            "textBytes": 845,
+            "structuredBytes": 673,
+            "totalBytes": 1518,
+            "wallMs": 203.5,
+            "heapUsedAfter": 88458744,
+            "sequence": 8,
+            "cache": "warm: shared session after earlier calls"
+          },
+          {
+            "mode": "full",
+            "order": "original",
+            "isError": false,
+            "requestBytes": 337,
+            "textBytes": 672,
+            "structuredBytes": 18692,
+            "totalBytes": 19364,
+            "wallMs": 194.7,
+            "heapUsedAfter": 96027784,
+            "sequence": 9,
+            "cache": "warm: shared session after earlier calls"
+          }
+        ],
+        "cold": {
+          "mode": "details",
+          "isError": false,
+          "requestBytes": 340,
+          "textBytes": 845,
+          "structuredBytes": 673,
+          "totalBytes": 1518,
+          "wallMs": 1429.9,
+          "heapUsedAfter": 111092336,
+          "sequence": 10,
+          "cache": "cold: new ports and directories, new session"
+        },
+        "orderVariants": [
+          {
+            "order": "original",
+            "indices": [
+              0,
+              1
+            ],
+            "structuredDigest": "c4ee4486d55f0124b4a3d9a952df73215616a874e4f197ca309b18a0e7ad8325",
+            "textDigest": "e8d91c32d695530404c655cd1bab817a9fbdf691b07b66c59d71370b05639982",
+            "identicalToOriginal": true
+          },
+          {
+            "order": "reversed",
+            "indices": [
+              1,
+              0
+            ],
+            "structuredDigest": "c4ee4486d55f0124b4a3d9a952df73215616a874e4f197ca309b18a0e7ad8325",
+            "textDigest": "e8d91c32d695530404c655cd1bab817a9fbdf691b07b66c59d71370b05639982",
+            "identicalToOriginal": true
+          }
+        ],
+        "orderInvariant": true,
+        "requests": 1,
+        "sourceExecutions": 2,
+        "counts": {
+          "unknownFindings": 1,
+          "unknownComponents": 0,
+          "uncertain": 1
+        }
+      },
+      "reexecution": "Composition re-runs every unique query; when the consumer already holds the original responses, the investigation cost is the baseline plus the composition, not the composition alone.",
+      "tokens": "not-measured: no tokenizer of the consumer model is available"
+    },
+    {
+      "caseId": "change-duplicate-dependence",
+      "overlap": "deliberate",
+      "baseline": {
+        "calls": [
+          {
+            "queryIndex": 0,
+            "tool": "ye_ast_impact",
+            "mode": "summary",
+            "isError": false,
+            "requestBytes": 215,
+            "textBytes": 1147,
+            "structuredBytes": 456,
+            "totalBytes": 1603,
+            "wallMs": 196.2,
+            "heapUsedAfter": 115444920,
+            "sequence": 11,
+            "cache": "warm: shared session after earlier calls"
+          },
+          {
+            "queryIndex": 0,
+            "tool": "ye_ast_impact",
+            "mode": "details",
+            "isError": false,
+            "requestBytes": 215,
+            "textBytes": 1179,
+            "structuredBytes": 456,
+            "totalBytes": 1635,
+            "wallMs": 235.5,
+            "heapUsedAfter": 118217904,
+            "sequence": 12,
+            "cache": "warm: shared session after earlier calls"
+          },
+          {
+            "queryIndex": 0,
+            "tool": "ye_ast_impact",
+            "mode": "full",
+            "isError": false,
+            "requestBytes": 212,
+            "textBytes": 1440,
+            "structuredBytes": 2124,
+            "totalBytes": 3564,
+            "wallMs": 328.8,
+            "heapUsedAfter": 121444448,
+            "sequence": 13,
+            "cache": "warm: shared session after earlier calls"
+          },
+          {
+            "queryIndex": 1,
+            "tool": "ye_ast_callers",
+            "mode": "summary",
+            "isError": false,
+            "requestBytes": 465,
+            "textBytes": 6014,
+            "structuredBytes": 999,
+            "totalBytes": 7013,
+            "wallMs": 1438.1,
+            "heapUsedAfter": 89418848,
+            "sequence": 14,
+            "cache": "warm: shared session after earlier calls"
+          },
+          {
+            "queryIndex": 1,
+            "tool": "ye_ast_callers",
+            "mode": "details",
+            "isError": false,
+            "requestBytes": 465,
+            "textBytes": 6284,
+            "structuredBytes": 999,
+            "totalBytes": 7283,
+            "wallMs": 369.7,
+            "heapUsedAfter": 98645016,
+            "sequence": 15,
+            "cache": "warm: shared session after earlier calls"
+          },
+          {
+            "queryIndex": 1,
+            "tool": "ye_ast_callers",
+            "mode": "full",
+            "isError": false,
+            "requestBytes": 462,
+            "textBytes": 3334,
+            "structuredBytes": 10402,
+            "totalBytes": 13736,
+            "wallMs": 426,
+            "heapUsedAfter": 109139376,
+            "sequence": 16,
+            "cache": "warm: shared session after earlier calls"
+          }
+        ],
+        "totals": {
+          "summary": {
+            "requests": 2,
+            "requestBytes": 680,
+            "textBytes": 7161,
+            "structuredBytes": 1455,
+            "totalBytes": 8616
+          },
+          "details": {
+            "requests": 2,
+            "requestBytes": 680,
+            "textBytes": 7463,
+            "structuredBytes": 1455,
+            "totalBytes": 8918
+          },
+          "full": {
+            "requests": 2,
+            "requestBytes": 674,
+            "textBytes": 4774,
+            "structuredBytes": 12526,
+            "totalBytes": 17300
+          }
+        }
+      },
+      "composed": {
+        "surface": "public-tool",
+        "calls": [
+          {
+            "mode": "summary",
+            "order": "original",
+            "isError": false,
+            "requestBytes": 716,
+            "textBytes": 2837,
+            "structuredBytes": 1399,
+            "totalBytes": 4236,
+            "wallMs": 568.3,
+            "heapUsedAfter": 123099280,
+            "sequence": 17,
+            "cache": "warm: shared session after earlier calls"
+          },
+          {
+            "mode": "details",
+            "order": "original",
+            "isError": false,
+            "requestBytes": 716,
+            "textBytes": 3068,
+            "structuredBytes": 1399,
+            "totalBytes": 4467,
+            "wallMs": 432.6,
+            "heapUsedAfter": 84724208,
+            "sequence": 18,
+            "cache": "warm: shared session after earlier calls"
+          },
+          {
+            "mode": "full",
+            "order": "original",
+            "isError": false,
+            "requestBytes": 713,
+            "textBytes": 673,
+            "structuredBytes": 40943,
+            "totalBytes": 41616,
+            "wallMs": 729.9,
+            "heapUsedAfter": 100261408,
+            "sequence": 19,
+            "cache": "warm: shared session after earlier calls"
+          }
+        ],
+        "cold": {
+          "mode": "details",
+          "isError": false,
+          "requestBytes": 716,
+          "textBytes": 3068,
+          "structuredBytes": 1399,
+          "totalBytes": 4467,
+          "wallMs": 3005.8,
+          "heapUsedAfter": 87281568,
+          "sequence": 20,
+          "cache": "cold: new ports and directories, new session"
+        },
+        "orderVariants": [
+          {
+            "order": "original",
+            "indices": [
+              0,
+              1
+            ],
+            "structuredDigest": "cd6e725e62e83221f0ea5751b1ea4cfb2ca8966b64f07ed63202dbdeecf712e3",
+            "textDigest": "12a29ad9cc3ff163dcb9870eeda7ab6567f29175476d99059113a415bbf066e4",
+            "identicalToOriginal": true
+          },
+          {
+            "order": "reversed",
+            "indices": [
+              1,
+              0
+            ],
+            "structuredDigest": "cd6e725e62e83221f0ea5751b1ea4cfb2ca8966b64f07ed63202dbdeecf712e3",
+            "textDigest": "12a29ad9cc3ff163dcb9870eeda7ab6567f29175476d99059113a415bbf066e4",
+            "identicalToOriginal": true
+          }
+        ],
+        "orderInvariant": true,
+        "requests": 1,
+        "sourceExecutions": 2,
+        "counts": {
+          "unknownFindings": 0,
+          "unknownComponents": 0,
+          "uncertain": 3
+        }
+      },
+      "reexecution": "Composition re-runs every unique query; when the consumer already holds the original responses, the investigation cost is the baseline plus the composition, not the composition alone.",
+      "tokens": "not-measured: no tokenizer of the consumer model is available"
+    },
+    {
+      "caseId": "imports-vs-symbols",
+      "overlap": "partial",
+      "baseline": {
+        "calls": [
+          {
+            "queryIndex": 0,
+            "tool": "ye_ast_importers",
+            "mode": "summary",
+            "isError": false,
+            "requestBytes": 162,
+            "textBytes": 796,
+            "structuredBytes": 125,
+            "totalBytes": 921,
+            "wallMs": 89.4,
+            "heapUsedAfter": 89881056,
+            "sequence": 21,
+            "cache": "warm: shared session after earlier calls"
+          },
+          {
+            "queryIndex": 0,
+            "tool": "ye_ast_importers",
+            "mode": "details",
+            "isError": false,
+            "requestBytes": 162,
+            "textBytes": 687,
+            "structuredBytes": 125,
+            "totalBytes": 812,
+            "wallMs": 83.7,
+            "heapUsedAfter": 91518368,
+            "sequence": 22,
+            "cache": "warm: shared session after earlier calls"
+          },
+          {
+            "queryIndex": 0,
+            "tool": "ye_ast_importers",
+            "mode": "full",
+            "isError": false,
+            "requestBytes": 159,
+            "textBytes": 473,
+            "structuredBytes": 1299,
+            "totalBytes": 1772,
+            "wallMs": 97.7,
+            "heapUsedAfter": 93411760,
+            "sequence": 23,
+            "cache": "warm: shared session after earlier calls"
+          },
+          {
+            "queryIndex": 1,
+            "tool": "ye_ast_outline",
+            "mode": "summary",
+            "isError": false,
+            "requestBytes": 176,
+            "textBytes": 463,
+            "structuredBytes": 127,
+            "totalBytes": 590,
+            "wallMs": 91.1,
+            "heapUsedAfter": 94733416,
+            "sequence": 24,
+            "cache": "warm: shared session after earlier calls"
+          },
+          {
+            "queryIndex": 1,
+            "tool": "ye_ast_outline",
+            "mode": "details",
+            "isError": false,
+            "requestBytes": 176,
+            "textBytes": 463,
+            "structuredBytes": 127,
+            "totalBytes": 590,
+            "wallMs": 141.9,
+            "heapUsedAfter": 96042120,
+            "sequence": 25,
+            "cache": "warm: shared session after earlier calls"
+          },
+          {
+            "queryIndex": 1,
+            "tool": "ye_ast_outline",
+            "mode": "full",
+            "isError": false,
+            "requestBytes": 173,
+            "textBytes": 428,
+            "structuredBytes": 1387,
+            "totalBytes": 1815,
+            "wallMs": 130.3,
+            "heapUsedAfter": 97368456,
+            "sequence": 26,
+            "cache": "warm: shared session after earlier calls"
+          },
+          {
+            "queryIndex": 2,
+            "tool": "ye_ast_callers",
+            "mode": "summary",
+            "isError": false,
+            "requestBytes": 465,
+            "textBytes": 6014,
+            "structuredBytes": 999,
+            "totalBytes": 7013,
+            "wallMs": 549.8,
+            "heapUsedAfter": 105748408,
+            "sequence": 27,
+            "cache": "warm: shared session after earlier calls"
+          },
+          {
+            "queryIndex": 2,
+            "tool": "ye_ast_callers",
+            "mode": "details",
+            "isError": false,
+            "requestBytes": 465,
+            "textBytes": 6284,
+            "structuredBytes": 999,
+            "totalBytes": 7283,
+            "wallMs": 398.7,
+            "heapUsedAfter": 113572536,
+            "sequence": 28,
+            "cache": "warm: shared session after earlier calls"
+          },
+          {
+            "queryIndex": 2,
+            "tool": "ye_ast_callers",
+            "mode": "full",
+            "isError": false,
+            "requestBytes": 462,
+            "textBytes": 3334,
+            "structuredBytes": 10402,
+            "totalBytes": 13736,
+            "wallMs": 301.6,
+            "heapUsedAfter": 121554408,
+            "sequence": 29,
+            "cache": "warm: shared session after earlier calls"
+          }
+        ],
+        "totals": {
+          "summary": {
+            "requests": 3,
+            "requestBytes": 803,
+            "textBytes": 7273,
+            "structuredBytes": 1251,
+            "totalBytes": 8524
+          },
+          "details": {
+            "requests": 3,
+            "requestBytes": 803,
+            "textBytes": 7434,
+            "structuredBytes": 1251,
+            "totalBytes": 8685
+          },
+          "full": {
+            "requests": 3,
+            "requestBytes": 794,
+            "textBytes": 4235,
+            "structuredBytes": 13088,
+            "totalBytes": 17323
+          }
+        }
+      },
+      "composed": {
+        "surface": "public-tool",
+        "calls": [
+          {
+            "mode": "summary",
+            "order": "original",
+            "isError": false,
+            "requestBytes": 823,
+            "textBytes": 2714,
+            "structuredBytes": 1490,
+            "totalBytes": 4204,
+            "wallMs": 554.6,
+            "heapUsedAfter": 134465144,
+            "sequence": 30,
+            "cache": "warm: shared session after earlier calls"
+          },
+          {
+            "mode": "details",
+            "order": "original",
+            "isError": false,
+            "requestBytes": 823,
+            "textBytes": 3207,
+            "structuredBytes": 1490,
+            "totalBytes": 4697,
+            "wallMs": 567,
+            "heapUsedAfter": 95778976,
+            "sequence": 31,
+            "cache": "warm: shared session after earlier calls"
+          },
+          {
+            "mode": "full",
+            "order": "original",
+            "isError": false,
+            "requestBytes": 820,
+            "textBytes": 673,
+            "structuredBytes": 47359,
+            "totalBytes": 48032,
+            "wallMs": 447.6,
+            "heapUsedAfter": 109082880,
+            "sequence": 32,
+            "cache": "warm: shared session after earlier calls"
+          }
+        ],
+        "cold": {
+          "mode": "details",
+          "isError": false,
+          "requestBytes": 823,
+          "textBytes": 3207,
+          "structuredBytes": 1490,
+          "totalBytes": 4697,
+          "wallMs": 4388.1,
+          "heapUsedAfter": 103033920,
+          "sequence": 33,
+          "cache": "cold: new ports and directories, new session"
+        },
+        "orderVariants": [
+          {
+            "order": "original",
+            "indices": [
+              0,
+              1,
+              2
+            ],
+            "structuredDigest": "4688016f66817824505493e738f0a4173ffc2c7a6a6321db4480f450983f5723",
+            "textDigest": "6bdeb3192fe562869a46bff69181d14928c256daeb6ee0148b5849c152b7f468",
+            "identicalToOriginal": true
+          },
+          {
+            "order": "reversed",
+            "indices": [
+              2,
+              1,
+              0
+            ],
+            "structuredDigest": "4688016f66817824505493e738f0a4173ffc2c7a6a6321db4480f450983f5723",
+            "textDigest": "6bdeb3192fe562869a46bff69181d14928c256daeb6ee0148b5849c152b7f468",
+            "identicalToOriginal": true
+          }
+        ],
+        "orderInvariant": true,
+        "requests": 1,
+        "sourceExecutions": 3,
+        "counts": {
+          "unknownFindings": 0,
+          "unknownComponents": 0,
+          "uncertain": 4
+        }
+      },
+      "reexecution": "Composition re-runs every unique query; when the consumer already holds the original responses, the investigation cost is the baseline plus the composition, not the composition alone.",
+      "tokens": "not-measured: no tokenizer of the consumer model is available"
+    },
+    {
+      "caseId": "workspace-link-cut",
+      "overlap": "partial",
+      "baseline": {
+        "calls": [
+          {
+            "queryIndex": 0,
+            "tool": "ye_ast_workspace",
+            "mode": "summary",
+            "isError": false,
+            "requestBytes": 359,
+            "textBytes": 780,
+            "structuredBytes": 127,
+            "totalBytes": 907,
+            "wallMs": 408.9,
+            "heapUsedAfter": 106953864,
+            "sequence": 34,
+            "cache": "warm: shared session after earlier calls"
+          },
+          {
+            "queryIndex": 0,
+            "tool": "ye_ast_workspace",
+            "mode": "details",
+            "isError": false,
+            "requestBytes": 359,
+            "textBytes": 780,
+            "structuredBytes": 127,
+            "totalBytes": 907,
+            "wallMs": 253.1,
+            "heapUsedAfter": 110031360,
+            "sequence": 35,
+            "cache": "warm: shared session after earlier calls"
+          },
+          {
+            "queryIndex": 0,
+            "tool": "ye_ast_workspace",
+            "mode": "full",
+            "isError": false,
+            "requestBytes": 356,
+            "textBytes": 501,
+            "structuredBytes": 3193,
+            "totalBytes": 3694,
+            "wallMs": 320,
+            "heapUsedAfter": 113140264,
+            "sequence": 36,
+            "cache": "warm: shared session after earlier calls"
+          },
+          {
+            "queryIndex": 1,
+            "tool": "ye_ast_callers",
+            "mode": "summary",
+            "isError": false,
+            "requestBytes": 465,
+            "textBytes": 6014,
+            "structuredBytes": 999,
+            "totalBytes": 7013,
+            "wallMs": 606.6,
+            "heapUsedAfter": 120897888,
+            "sequence": 37,
+            "cache": "warm: shared session after earlier calls"
+          },
+          {
+            "queryIndex": 1,
+            "tool": "ye_ast_callers",
+            "mode": "details",
+            "isError": false,
+            "requestBytes": 465,
+            "textBytes": 6284,
+            "structuredBytes": 999,
+            "totalBytes": 7283,
+            "wallMs": 573.3,
+            "heapUsedAfter": 129090456,
+            "sequence": 38,
+            "cache": "warm: shared session after earlier calls"
+          },
+          {
+            "queryIndex": 1,
+            "tool": "ye_ast_callers",
+            "mode": "full",
+            "isError": false,
+            "requestBytes": 462,
+            "textBytes": 3334,
+            "structuredBytes": 10402,
+            "totalBytes": 13736,
+            "wallMs": 426,
+            "heapUsedAfter": 136787960,
+            "sequence": 39,
+            "cache": "warm: shared session after earlier calls"
+          }
+        ],
+        "totals": {
+          "summary": {
+            "requests": 2,
+            "requestBytes": 824,
+            "textBytes": 6794,
+            "structuredBytes": 1126,
+            "totalBytes": 7920
+          },
+          "details": {
+            "requests": 2,
+            "requestBytes": 824,
+            "textBytes": 7064,
+            "structuredBytes": 1126,
+            "totalBytes": 8190
+          },
+          "full": {
+            "requests": 2,
+            "requestBytes": 818,
+            "textBytes": 3835,
+            "structuredBytes": 13595,
+            "totalBytes": 17430
+          }
+        }
+      },
+      "composed": {
+        "surface": "public-tool",
+        "calls": [
+          {
+            "mode": "summary",
+            "order": "original",
+            "isError": false,
+            "requestBytes": 860,
+            "textBytes": 2807,
+            "structuredBytes": 1472,
+            "totalBytes": 4279,
+            "wallMs": 748.9,
+            "heapUsedAfter": 97948656,
+            "sequence": 40,
+            "cache": "warm: shared session after earlier calls"
+          },
+          {
+            "mode": "details",
+            "order": "original",
+            "isError": false,
+            "requestBytes": 860,
+            "textBytes": 3042,
+            "structuredBytes": 1472,
+            "totalBytes": 4514,
+            "wallMs": 567.4,
+            "heapUsedAfter": 109877472,
+            "sequence": 41,
+            "cache": "warm: shared session after earlier calls"
+          },
+          {
+            "mode": "full",
+            "order": "original",
+            "isError": false,
+            "requestBytes": 857,
+            "textBytes": 675,
+            "structuredBytes": 42857,
+            "totalBytes": 43532,
+            "wallMs": 972.5,
+            "heapUsedAfter": 122279352,
+            "sequence": 42,
+            "cache": "warm: shared session after earlier calls"
+          }
+        ],
+        "cold": {
+          "mode": "details",
+          "isError": false,
+          "requestBytes": 860,
+          "textBytes": 3042,
+          "structuredBytes": 1472,
+          "totalBytes": 4514,
+          "wallMs": 4376.2,
+          "heapUsedAfter": 114234048,
+          "sequence": 43,
+          "cache": "cold: new ports and directories, new session"
+        },
+        "orderVariants": [
+          {
+            "order": "original",
+            "indices": [
+              0,
+              1
+            ],
+            "structuredDigest": "4dbd4c91b7a4e0d998ad78f6742a71808e423948185948f8b86d2de8e913b846",
+            "textDigest": "d4ae21977f9738216bfdad369b62f5f74fef71939c5aab808c6eecdadddb0fd6",
+            "identicalToOriginal": true
+          },
+          {
+            "order": "reversed",
+            "indices": [
+              1,
+              0
+            ],
+            "structuredDigest": "4dbd4c91b7a4e0d998ad78f6742a71808e423948185948f8b86d2de8e913b846",
+            "textDigest": "d4ae21977f9738216bfdad369b62f5f74fef71939c5aab808c6eecdadddb0fd6",
+            "identicalToOriginal": true
+          }
+        ],
+        "orderInvariant": true,
+        "requests": 1,
+        "sourceExecutions": 2,
+        "counts": {
+          "unknownFindings": 0,
+          "unknownComponents": 0,
+          "uncertain": 3
+        }
+      },
+      "reexecution": "Composition re-runs every unique query; when the consumer already holds the original responses, the investigation cost is the baseline plus the composition, not the composition alone.",
+      "tokens": "not-measured: no tokenizer of the consumer model is available"
+    },
+    {
+      "caseId": "decision-options",
+      "overlap": "none",
+      "baseline": {
+        "calls": [
+          {
+            "queryIndex": 0,
+            "tool": "ye_ast_decisions",
+            "mode": "summary",
+            "isError": false,
+            "requestBytes": 359,
+            "textBytes": 622,
+            "structuredBytes": 127,
+            "totalBytes": 749,
+            "wallMs": 319.4,
+            "heapUsedAfter": 118134016,
+            "sequence": 44,
+            "cache": "warm: shared session after earlier calls"
+          },
+          {
+            "queryIndex": 0,
+            "tool": "ye_ast_decisions",
+            "mode": "details",
+            "isError": false,
+            "requestBytes": 359,
+            "textBytes": 622,
+            "structuredBytes": 127,
+            "totalBytes": 749,
+            "wallMs": 365.2,
+            "heapUsedAfter": 120168144,
+            "sequence": 45,
+            "cache": "warm: shared session after earlier calls"
+          },
+          {
+            "queryIndex": 0,
+            "tool": "ye_ast_decisions",
+            "mode": "full",
+            "isError": false,
+            "requestBytes": 356,
+            "textBytes": 426,
+            "structuredBytes": 1638,
+            "totalBytes": 2064,
+            "wallMs": 369.5,
+            "heapUsedAfter": 123446752,
+            "sequence": 46,
+            "cache": "warm: shared session after earlier calls"
+          }
+        ],
+        "totals": {
+          "summary": {
+            "requests": 1,
+            "requestBytes": 359,
+            "textBytes": 622,
+            "structuredBytes": 127,
+            "totalBytes": 749
+          },
+          "details": {
+            "requests": 1,
+            "requestBytes": 359,
+            "textBytes": 622,
+            "structuredBytes": 127,
+            "totalBytes": 749
+          },
+          "full": {
+            "requests": 1,
+            "requestBytes": 356,
+            "textBytes": 426,
+            "structuredBytes": 1638,
+            "totalBytes": 2064
+          }
+        }
+      },
+      "composed": {
+        "surface": "public-tool",
+        "calls": [
+          {
+            "mode": "summary",
+            "order": "original",
+            "isError": false,
+            "requestBytes": 411,
+            "textBytes": 775,
+            "structuredBytes": 603,
+            "totalBytes": 1378,
+            "wallMs": 402.2,
+            "heapUsedAfter": 125809728,
+            "sequence": 47,
+            "cache": "warm: shared session after earlier calls"
+          },
+          {
+            "mode": "details",
+            "order": "original",
+            "isError": false,
+            "requestBytes": 411,
+            "textBytes": 871,
+            "structuredBytes": 603,
+            "totalBytes": 1474,
+            "wallMs": 330,
+            "heapUsedAfter": 128500960,
+            "sequence": 48,
+            "cache": "warm: shared session after earlier calls"
+          },
+          {
+            "mode": "full",
+            "order": "original",
+            "isError": false,
+            "requestBytes": 408,
+            "textBytes": 672,
+            "structuredBytes": 4972,
+            "totalBytes": 5644,
+            "wallMs": 557.6,
+            "heapUsedAfter": 131536232,
+            "sequence": 49,
+            "cache": "warm: shared session after earlier calls"
+          }
+        ],
+        "cold": {
+          "mode": "details",
+          "isError": false,
+          "requestBytes": 411,
+          "textBytes": 871,
+          "structuredBytes": 603,
+          "totalBytes": 1474,
+          "wallMs": 498.5,
+          "heapUsedAfter": 137927128,
+          "sequence": 50,
+          "cache": "cold: new ports and directories, new session"
+        },
+        "orderVariants": [
+          {
+            "order": "original",
+            "indices": [
+              0
+            ],
+            "structuredDigest": "363f21ba26a26b84517c6e68316b784b2893568bb6a4ffe9894bb47ef7fd461b",
+            "textDigest": "6b37a30870383cc4b2f0ec20fb4f64a66f9a0feb19241c79a5b4336a94070d8d",
+            "identicalToOriginal": true
+          }
+        ],
+        "orderInvariant": true,
+        "requests": 1,
+        "sourceExecutions": 1,
+        "counts": {
+          "unknownFindings": 0,
+          "unknownComponents": 0,
+          "uncertain": 0
+        }
+      },
+      "reexecution": "Composition re-runs every unique query; when the consumer already holds the original responses, the investigation cost is the baseline plus the composition, not the composition alone.",
+      "tokens": "not-measured: no tokenizer of the consumer model is available"
+    },
+    {
+      "caseId": "snapshot-mismatch",
+      "overlap": "mismatch",
+      "baseline": {
+        "calls": [
+          {
+            "queryIndex": 0,
+            "tool": "ye_ast_callers",
+            "mode": "summary",
+            "isError": false,
+            "requestBytes": 465,
+            "textBytes": 6014,
+            "structuredBytes": 999,
+            "totalBytes": 7013,
+            "wallMs": 575.1,
+            "heapUsedAfter": 145597344,
+            "sequence": 51,
+            "cache": "warm: shared session after earlier calls"
+          },
+          {
+            "queryIndex": 0,
+            "tool": "ye_ast_callers",
+            "mode": "details",
+            "isError": false,
+            "requestBytes": 465,
+            "textBytes": 6284,
+            "structuredBytes": 999,
+            "totalBytes": 7283,
+            "wallMs": 545.4,
+            "heapUsedAfter": 89745448,
+            "sequence": 52,
+            "cache": "warm: shared session after earlier calls"
+          },
+          {
+            "queryIndex": 0,
+            "tool": "ye_ast_callers",
+            "mode": "full",
+            "isError": false,
+            "requestBytes": 462,
+            "textBytes": 3334,
+            "structuredBytes": 10402,
+            "totalBytes": 13736,
+            "wallMs": 408.9,
+            "heapUsedAfter": 97628688,
+            "sequence": 53,
+            "cache": "warm: shared session after earlier calls"
+          },
+          {
+            "queryIndex": 1,
+            "tool": "ye_ast_outline",
+            "mode": "summary",
+            "isError": false,
+            "requestBytes": 176,
+            "textBytes": 463,
+            "structuredBytes": 127,
+            "totalBytes": 590,
+            "wallMs": 1874.9,
+            "heapUsedAfter": 99429584,
+            "sequence": 54,
+            "cache": "warm: shared session after earlier calls"
+          },
+          {
+            "queryIndex": 1,
+            "tool": "ye_ast_outline",
+            "mode": "details",
+            "isError": false,
+            "requestBytes": 176,
+            "textBytes": 463,
+            "structuredBytes": 127,
+            "totalBytes": 590,
+            "wallMs": 102.9,
+            "heapUsedAfter": 100731800,
+            "sequence": 55,
+            "cache": "warm: shared session after earlier calls"
+          },
+          {
+            "queryIndex": 1,
+            "tool": "ye_ast_outline",
+            "mode": "full",
+            "isError": false,
+            "requestBytes": 173,
+            "textBytes": 428,
+            "structuredBytes": 1387,
+            "totalBytes": 1815,
+            "wallMs": 140.4,
+            "heapUsedAfter": 102051624,
+            "sequence": 56,
+            "cache": "warm: shared session after earlier calls"
+          }
+        ],
+        "totals": {
+          "summary": {
+            "requests": 2,
+            "requestBytes": 641,
+            "textBytes": 6477,
+            "structuredBytes": 1126,
+            "totalBytes": 7603
+          },
+          "details": {
+            "requests": 2,
+            "requestBytes": 641,
+            "textBytes": 6747,
+            "structuredBytes": 1126,
+            "totalBytes": 7873
+          },
+          "full": {
+            "requests": 2,
+            "requestBytes": 635,
+            "textBytes": 3762,
+            "structuredBytes": 11789,
+            "totalBytes": 15551
+          }
+        }
+      },
+      "composed": {
+        "surface": "public-tool",
+        "calls": [
+          {
+            "mode": "summary",
+            "order": "original",
+            "isError": false,
+            "requestBytes": 677,
+            "textBytes": 2569,
+            "structuredBytes": 1289,
+            "totalBytes": 3858,
+            "wallMs": 523.2,
+            "heapUsedAfter": 112620912,
+            "sequence": 57,
+            "cache": "warm: shared session after earlier calls"
+          },
+          {
+            "mode": "details",
+            "order": "original",
+            "isError": false,
+            "requestBytes": 677,
+            "textBytes": 2913,
+            "structuredBytes": 1289,
+            "totalBytes": 4202,
+            "wallMs": 692.1,
+            "heapUsedAfter": 123218512,
+            "sequence": 58,
+            "cache": "warm: shared session after earlier calls"
+          },
+          {
+            "mode": "full",
+            "order": "original",
+            "isError": false,
+            "requestBytes": 674,
+            "textBytes": 676,
+            "structuredBytes": 44731,
+            "totalBytes": 45407,
+            "wallMs": 857.2,
+            "heapUsedAfter": 134263528,
+            "sequence": 59,
+            "cache": "warm: shared session after earlier calls"
+          }
+        ],
+        "cold": {
+          "mode": "details",
+          "isError": false,
+          "requestBytes": 677,
+          "textBytes": 2913,
+          "structuredBytes": 1289,
+          "totalBytes": 4202,
+          "wallMs": 4895.3,
+          "heapUsedAfter": 118009384,
+          "sequence": 60,
+          "cache": "cold: new ports and directories, new session"
+        },
+        "orderVariants": [
+          {
+            "order": "original",
+            "indices": [
+              0,
+              1
+            ],
+            "structuredDigest": "5652706a7b9343757e4f22a4c7a40733386c950351f2b61cc2717682e09e6ca7",
+            "textDigest": "00ff44f8e6f9f2ec42f8242318f0e6d2423782a2e64e48a29b89849ec4f5f738",
+            "identicalToOriginal": true
+          },
+          {
+            "order": "reversed",
+            "indices": [
+              1,
+              0
+            ],
+            "structuredDigest": "5652706a7b9343757e4f22a4c7a40733386c950351f2b61cc2717682e09e6ca7",
+            "textDigest": "00ff44f8e6f9f2ec42f8242318f0e6d2423782a2e64e48a29b89849ec4f5f738",
+            "identicalToOriginal": true
+          }
+        ],
+        "orderInvariant": true,
+        "requests": 1,
+        "sourceExecutions": 2,
+        "counts": {
+          "unknownFindings": 0,
+          "unknownComponents": 0,
+          "uncertain": 3
+        }
+      },
+      "reexecution": "Composition re-runs every unique query; when the consumer already holds the original responses, the investigation cost is the baseline plus the composition, not the composition alone.",
+      "tokens": "not-measured: no tokenizer of the consumer model is available"
+    },
+    {
+      "caseId": "no-overlap",
+      "overlap": "none",
+      "baseline": {
+        "calls": [
+          {
+            "queryIndex": 0,
+            "tool": "ye_ast_importers",
+            "mode": "summary",
+            "isError": false,
+            "requestBytes": 162,
+            "textBytes": 796,
+            "structuredBytes": 125,
+            "totalBytes": 921,
+            "wallMs": 102,
+            "heapUsedAfter": 120266472,
+            "sequence": 61,
+            "cache": "warm: shared session after earlier calls"
+          },
+          {
+            "queryIndex": 0,
+            "tool": "ye_ast_importers",
+            "mode": "details",
+            "isError": false,
+            "requestBytes": 162,
+            "textBytes": 687,
+            "structuredBytes": 125,
+            "totalBytes": 812,
+            "wallMs": 94.3,
+            "heapUsedAfter": 121737920,
+            "sequence": 62,
+            "cache": "warm: shared session after earlier calls"
+          },
+          {
+            "queryIndex": 0,
+            "tool": "ye_ast_importers",
+            "mode": "full",
+            "isError": false,
+            "requestBytes": 159,
+            "textBytes": 473,
+            "structuredBytes": 1299,
+            "totalBytes": 1772,
+            "wallMs": 121.1,
+            "heapUsedAfter": 123235128,
+            "sequence": 63,
+            "cache": "warm: shared session after earlier calls"
+          },
+          {
+            "queryIndex": 1,
+            "tool": "ye_ast_decisions",
+            "mode": "summary",
+            "isError": false,
+            "requestBytes": 359,
+            "textBytes": 622,
+            "structuredBytes": 127,
+            "totalBytes": 749,
+            "wallMs": 218.9,
+            "heapUsedAfter": 125747648,
+            "sequence": 64,
+            "cache": "warm: shared session after earlier calls"
+          },
+          {
+            "queryIndex": 1,
+            "tool": "ye_ast_decisions",
+            "mode": "details",
+            "isError": false,
+            "requestBytes": 359,
+            "textBytes": 622,
+            "structuredBytes": 127,
+            "totalBytes": 749,
+            "wallMs": 372.5,
+            "heapUsedAfter": 128217624,
+            "sequence": 65,
+            "cache": "warm: shared session after earlier calls"
+          },
+          {
+            "queryIndex": 1,
+            "tool": "ye_ast_decisions",
+            "mode": "full",
+            "isError": false,
+            "requestBytes": 356,
+            "textBytes": 426,
+            "structuredBytes": 1638,
+            "totalBytes": 2064,
+            "wallMs": 307,
+            "heapUsedAfter": 130659640,
+            "sequence": 66,
+            "cache": "warm: shared session after earlier calls"
+          }
+        ],
+        "totals": {
+          "summary": {
+            "requests": 2,
+            "requestBytes": 521,
+            "textBytes": 1418,
+            "structuredBytes": 252,
+            "totalBytes": 1670
+          },
+          "details": {
+            "requests": 2,
+            "requestBytes": 521,
+            "textBytes": 1309,
+            "structuredBytes": 252,
+            "totalBytes": 1561
+          },
+          "full": {
+            "requests": 2,
+            "requestBytes": 515,
+            "textBytes": 899,
+            "structuredBytes": 2937,
+            "totalBytes": 3836
+          }
+        }
+      },
+      "composed": {
+        "surface": "public-tool",
+        "calls": [
+          {
+            "mode": "summary",
+            "order": "original",
+            "isError": false,
+            "requestBytes": 557,
+            "textBytes": 1340,
+            "structuredBytes": 804,
+            "totalBytes": 2144,
+            "wallMs": 562.9,
+            "heapUsedAfter": 134988528,
+            "sequence": 67,
+            "cache": "warm: shared session after earlier calls"
+          },
+          {
+            "mode": "details",
+            "order": "original",
+            "isError": false,
+            "requestBytes": 557,
+            "textBytes": 1581,
+            "structuredBytes": 804,
+            "totalBytes": 2385,
+            "wallMs": 437.3,
+            "heapUsedAfter": 139332552,
+            "sequence": 68,
+            "cache": "warm: shared session after earlier calls"
+          },
+          {
+            "mode": "full",
+            "order": "original",
+            "isError": false,
+            "requestBytes": 554,
+            "textBytes": 672,
+            "structuredBytes": 10558,
+            "totalBytes": 11230,
+            "wallMs": 384.8,
+            "heapUsedAfter": 94719432,
+            "sequence": 69,
+            "cache": "warm: shared session after earlier calls"
+          }
+        ],
+        "cold": {
+          "mode": "details",
+          "isError": false,
+          "requestBytes": 557,
+          "textBytes": 1581,
+          "structuredBytes": 804,
+          "totalBytes": 2385,
+          "wallMs": 1962.6,
+          "heapUsedAfter": 109884504,
+          "sequence": 70,
+          "cache": "cold: new ports and directories, new session"
+        },
+        "orderVariants": [
+          {
+            "order": "original",
+            "indices": [
+              0,
+              1
+            ],
+            "structuredDigest": "2a76832d18f6c58370763a759f97664ab89009cca329760f21403c556188c73e",
+            "textDigest": "00ac454a9bc58856520785d79c0bef4f9c9601402a5db860ee13ae06dd354703",
+            "identicalToOriginal": true
+          },
+          {
+            "order": "reversed",
+            "indices": [
+              1,
+              0
+            ],
+            "structuredDigest": "2a76832d18f6c58370763a759f97664ab89009cca329760f21403c556188c73e",
+            "textDigest": "00ac454a9bc58856520785d79c0bef4f9c9601402a5db860ee13ae06dd354703",
+            "identicalToOriginal": true
+          }
+        ],
+        "orderInvariant": true,
+        "requests": 1,
+        "sourceExecutions": 2,
+        "counts": {
+          "unknownFindings": 0,
+          "unknownComponents": 0,
+          "uncertain": 1
+        }
+      },
+      "reexecution": "Composition re-runs every unique query; when the consumer already holds the original responses, the investigation cost is the baseline plus the composition, not the composition alone.",
+      "tokens": "not-measured: no tokenizer of the consumer model is available"
+    },
+    {
+      "caseId": "seven-families",
+      "overlap": "deliberate",
+      "baseline": {
+        "calls": [
+          {
+            "queryIndex": 0,
+            "tool": "ye_ast_entrypoints",
+            "mode": "summary",
+            "isError": false,
+            "requestBytes": 128,
+            "textBytes": 531,
+            "structuredBytes": 384,
+            "totalBytes": 915,
+            "wallMs": 138.4,
+            "heapUsedAfter": 111322864,
+            "sequence": 71,
+            "cache": "warm: shared session after earlier calls"
+          },
+          {
+            "queryIndex": 0,
+            "tool": "ye_ast_entrypoints",
+            "mode": "details",
+            "isError": false,
+            "requestBytes": 128,
+            "textBytes": 673,
+            "structuredBytes": 384,
+            "totalBytes": 1057,
+            "wallMs": 153.2,
+            "heapUsedAfter": 112658584,
+            "sequence": 72,
+            "cache": "warm: shared session after earlier calls"
+          },
+          {
+            "queryIndex": 0,
+            "tool": "ye_ast_entrypoints",
+            "mode": "full",
+            "isError": false,
+            "requestBytes": 125,
+            "textBytes": 715,
+            "structuredBytes": 2229,
+            "totalBytes": 2944,
+            "wallMs": 90.2,
+            "heapUsedAfter": 113675184,
+            "sequence": 73,
+            "cache": "warm: shared session after earlier calls"
+          },
+          {
+            "queryIndex": 1,
+            "tool": "ye_ast_impact",
+            "mode": "summary",
+            "isError": false,
+            "requestBytes": 215,
+            "textBytes": 1147,
+            "structuredBytes": 456,
+            "totalBytes": 1603,
+            "wallMs": 195.8,
+            "heapUsedAfter": 116045040,
+            "sequence": 74,
+            "cache": "warm: shared session after earlier calls"
+          },
+          {
+            "queryIndex": 1,
+            "tool": "ye_ast_impact",
+            "mode": "details",
+            "isError": false,
+            "requestBytes": 215,
+            "textBytes": 1179,
+            "structuredBytes": 456,
+            "totalBytes": 1635,
+            "wallMs": 176.2,
+            "heapUsedAfter": 118384352,
+            "sequence": 75,
+            "cache": "warm: shared session after earlier calls"
+          },
+          {
+            "queryIndex": 1,
+            "tool": "ye_ast_impact",
+            "mode": "full",
+            "isError": false,
+            "requestBytes": 212,
+            "textBytes": 1440,
+            "structuredBytes": 2124,
+            "totalBytes": 3564,
+            "wallMs": 354.9,
+            "heapUsedAfter": 120707376,
+            "sequence": 76,
+            "cache": "warm: shared session after earlier calls"
+          },
+          {
+            "queryIndex": 2,
+            "tool": "ye_ast_callers",
+            "mode": "summary",
+            "isError": false,
+            "requestBytes": 465,
+            "textBytes": 6014,
+            "structuredBytes": 999,
+            "totalBytes": 7013,
+            "wallMs": 253.7,
+            "heapUsedAfter": 128251592,
+            "sequence": 77,
+            "cache": "warm: shared session after earlier calls"
+          },
+          {
+            "queryIndex": 2,
+            "tool": "ye_ast_callers",
+            "mode": "details",
+            "isError": false,
+            "requestBytes": 465,
+            "textBytes": 6284,
+            "structuredBytes": 999,
+            "totalBytes": 7283,
+            "wallMs": 311.9,
+            "heapUsedAfter": 135865672,
+            "sequence": 78,
+            "cache": "warm: shared session after earlier calls"
+          },
+          {
+            "queryIndex": 2,
+            "tool": "ye_ast_callers",
+            "mode": "full",
+            "isError": false,
+            "requestBytes": 462,
+            "textBytes": 3334,
+            "structuredBytes": 10402,
+            "totalBytes": 13736,
+            "wallMs": 268.1,
+            "heapUsedAfter": 143396056,
+            "sequence": 79,
+            "cache": "warm: shared session after earlier calls"
+          },
+          {
+            "queryIndex": 3,
+            "tool": "ye_ast_importers",
+            "mode": "summary",
+            "isError": false,
+            "requestBytes": 162,
+            "textBytes": 796,
+            "structuredBytes": 125,
+            "totalBytes": 921,
+            "wallMs": 106.8,
+            "heapUsedAfter": 95157688,
+            "sequence": 80,
+            "cache": "warm: shared session after earlier calls"
+          },
+          {
+            "queryIndex": 3,
+            "tool": "ye_ast_importers",
+            "mode": "details",
+            "isError": false,
+            "requestBytes": 162,
+            "textBytes": 687,
+            "structuredBytes": 125,
+            "totalBytes": 812,
+            "wallMs": 201.6,
+            "heapUsedAfter": 96626072,
+            "sequence": 81,
+            "cache": "warm: shared session after earlier calls"
+          },
+          {
+            "queryIndex": 3,
+            "tool": "ye_ast_importers",
+            "mode": "full",
+            "isError": false,
+            "requestBytes": 159,
+            "textBytes": 473,
+            "structuredBytes": 1299,
+            "totalBytes": 1772,
+            "wallMs": 86.3,
+            "heapUsedAfter": 98132456,
+            "sequence": 82,
+            "cache": "warm: shared session after earlier calls"
+          },
+          {
+            "queryIndex": 4,
+            "tool": "ye_ast_outline",
+            "mode": "summary",
+            "isError": false,
+            "requestBytes": 176,
+            "textBytes": 463,
+            "structuredBytes": 127,
+            "totalBytes": 590,
+            "wallMs": 132.8,
+            "heapUsedAfter": 99371336,
+            "sequence": 83,
+            "cache": "warm: shared session after earlier calls"
+          },
+          {
+            "queryIndex": 4,
+            "tool": "ye_ast_outline",
+            "mode": "details",
+            "isError": false,
+            "requestBytes": 176,
+            "textBytes": 463,
+            "structuredBytes": 127,
+            "totalBytes": 590,
+            "wallMs": 176.2,
+            "heapUsedAfter": 100607632,
+            "sequence": 84,
+            "cache": "warm: shared session after earlier calls"
+          },
+          {
+            "queryIndex": 4,
+            "tool": "ye_ast_outline",
+            "mode": "full",
+            "isError": false,
+            "requestBytes": 173,
+            "textBytes": 428,
+            "structuredBytes": 1387,
+            "totalBytes": 1815,
+            "wallMs": 205,
+            "heapUsedAfter": 101851960,
+            "sequence": 85,
+            "cache": "warm: shared session after earlier calls"
+          },
+          {
+            "queryIndex": 5,
+            "tool": "ye_ast_workspace",
+            "mode": "summary",
+            "isError": false,
+            "requestBytes": 359,
+            "textBytes": 780,
+            "structuredBytes": 127,
+            "totalBytes": 907,
+            "wallMs": 241.2,
+            "heapUsedAfter": 104587360,
+            "sequence": 86,
+            "cache": "warm: shared session after earlier calls"
+          },
+          {
+            "queryIndex": 5,
+            "tool": "ye_ast_workspace",
+            "mode": "details",
+            "isError": false,
+            "requestBytes": 359,
+            "textBytes": 780,
+            "structuredBytes": 127,
+            "totalBytes": 907,
+            "wallMs": 205.9,
+            "heapUsedAfter": 107349016,
+            "sequence": 87,
+            "cache": "warm: shared session after earlier calls"
+          },
+          {
+            "queryIndex": 5,
+            "tool": "ye_ast_workspace",
+            "mode": "full",
+            "isError": false,
+            "requestBytes": 356,
+            "textBytes": 501,
+            "structuredBytes": 3193,
+            "totalBytes": 3694,
+            "wallMs": 216.4,
+            "heapUsedAfter": 110034304,
+            "sequence": 88,
+            "cache": "warm: shared session after earlier calls"
+          },
+          {
+            "queryIndex": 6,
+            "tool": "ye_ast_decisions",
+            "mode": "summary",
+            "isError": false,
+            "requestBytes": 359,
+            "textBytes": 622,
+            "structuredBytes": 127,
+            "totalBytes": 749,
+            "wallMs": 252.2,
+            "heapUsedAfter": 112878984,
+            "sequence": 89,
+            "cache": "warm: shared session after earlier calls"
+          },
+          {
+            "queryIndex": 6,
+            "tool": "ye_ast_decisions",
+            "mode": "details",
+            "isError": false,
+            "requestBytes": 359,
+            "textBytes": 622,
+            "structuredBytes": 127,
+            "totalBytes": 749,
+            "wallMs": 273.6,
+            "heapUsedAfter": 114968456,
+            "sequence": 90,
+            "cache": "warm: shared session after earlier calls"
+          },
+          {
+            "queryIndex": 6,
+            "tool": "ye_ast_decisions",
+            "mode": "full",
+            "isError": false,
+            "requestBytes": 356,
+            "textBytes": 426,
+            "structuredBytes": 1638,
+            "totalBytes": 2064,
+            "wallMs": 213.1,
+            "heapUsedAfter": 117438144,
+            "sequence": 91,
+            "cache": "warm: shared session after earlier calls"
+          }
+        ],
+        "totals": {
+          "summary": {
+            "requests": 7,
+            "requestBytes": 1864,
+            "textBytes": 10353,
+            "structuredBytes": 2345,
+            "totalBytes": 12698
+          },
+          "details": {
+            "requests": 7,
+            "requestBytes": 1864,
+            "textBytes": 10688,
+            "structuredBytes": 2345,
+            "totalBytes": 13033
+          },
+          "full": {
+            "requests": 7,
+            "requestBytes": 1843,
+            "textBytes": 7317,
+            "structuredBytes": 22272,
+            "totalBytes": 29589
+          }
+        }
+      },
+      "composed": {
+        "surface": "public-tool",
+        "calls": [
+          {
+            "mode": "summary",
+            "order": "original",
+            "isError": false,
+            "requestBytes": 1820,
+            "textBytes": 4804,
+            "structuredBytes": 2864,
+            "totalBytes": 7668,
+            "wallMs": 1246.8,
+            "heapUsedAfter": 138838072,
+            "sequence": 92,
+            "cache": "warm: shared session after earlier calls"
+          },
+          {
+            "mode": "details",
+            "order": "original",
+            "isError": false,
+            "requestBytes": 1820,
+            "textBytes": 5352,
+            "structuredBytes": 2864,
+            "totalBytes": 8216,
+            "wallMs": 1813.2,
+            "heapUsedAfter": 101110744,
+            "sequence": 93,
+            "cache": "warm: shared session after earlier calls"
+          },
+          {
+            "mode": "full",
+            "order": "original",
+            "isError": false,
+            "requestBytes": 1817,
+            "textBytes": 677,
+            "structuredBytes": 77364,
+            "totalBytes": 78041,
+            "wallMs": 1581.9,
+            "heapUsedAfter": 123732408,
+            "sequence": 94,
+            "cache": "warm: shared session after earlier calls"
+          }
+        ],
+        "cold": {
+          "mode": "details",
+          "isError": false,
+          "requestBytes": 1820,
+          "textBytes": 5352,
+          "structuredBytes": 2864,
+          "totalBytes": 8216,
+          "wallMs": 4419.5,
+          "heapUsedAfter": 118966152,
+          "sequence": 95,
+          "cache": "cold: new ports and directories, new session"
+        },
+        "orderVariants": [
+          {
+            "order": "original",
+            "indices": [
+              0,
+              1,
+              2,
+              3,
+              4,
+              5,
+              6
+            ],
+            "structuredDigest": "312a4a440a87af583dca5f330aad7680dc17a43d84730c3c458ccf3a2a3b7112",
+            "textDigest": "0bb21170e124eb84cb183bad3efe409b2c9e21dc36f06266db41c164ceb81885",
+            "identicalToOriginal": true
+          },
+          {
+            "order": "reversed",
+            "indices": [
+              6,
+              5,
+              4,
+              3,
+              2,
+              1,
+              0
+            ],
+            "structuredDigest": "312a4a440a87af583dca5f330aad7680dc17a43d84730c3c458ccf3a2a3b7112",
+            "textDigest": "0bb21170e124eb84cb183bad3efe409b2c9e21dc36f06266db41c164ceb81885",
+            "identicalToOriginal": true
+          },
+          {
+            "order": "interleaved",
+            "indices": [
+              0,
+              3,
+              1,
+              2,
+              4,
+              5,
+              6
+            ],
+            "structuredDigest": "312a4a440a87af583dca5f330aad7680dc17a43d84730c3c458ccf3a2a3b7112",
+            "textDigest": "0bb21170e124eb84cb183bad3efe409b2c9e21dc36f06266db41c164ceb81885",
+            "identicalToOriginal": true
+          }
+        ],
+        "orderInvariant": true,
+        "requests": 1,
+        "sourceExecutions": 7,
+        "counts": {
+          "unknownFindings": 1,
+          "unknownComponents": 0,
+          "uncertain": 5
+        }
+      },
+      "reexecution": "Composition re-runs every unique query; when the consumer already holds the original responses, the investigation cost is the baseline plus the composition, not the composition alone.",
+      "tokens": "not-measured: no tokenizer of the consumer model is available"
+    }
+  ]
+}

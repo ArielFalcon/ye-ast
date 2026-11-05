@@ -1,0 +1,93 @@
+{
+  "text": "Composition details:\nV1 = shop @ 62bbcc206956d889687af5c78ffa1e68bc73b3b3\nV2 = web @ b222c7c8b1e6b6d7b9dba3c9a9cc67b7e1df7c02\nS1 = outline: complete; V1\nS2 = callers/workspace: partial; V1, V2; targets src/main/java/shop/OrderController.java:OrderController.one; S2/shop, S2/web: no merge base, entrypoint changes: not provided\nS3 = importers: partial; V2\nContext: trust untrusted; languages java, typescript; frameworks angular, spring\nContext producer by read: ye-ast 0.4.0 (S1, S2, S2/shop, S2/shop#0 discovery, S2/web, S2/web#0 discovery); ye-ast 0.4.0+edge-policy.e98d5a56243d (S2/shop#1 trigger, S2/web#1 upstream, S3)\nWorkspace of S2: repos shop, web; source request; gateways shop-api→shop (gateway-prefix); unmatched gateways none; unserved none; trigger shop; snapshots shop V1, web V2\nRoots: shop=<fixture-root>/shop, web=<fixture-root>/web\nsrc/main/java/shop/OrderController.java [outline S1: 6 declarations, 0 imports]\n  1-1 shop namespace\n  N4 = 7-17 OrderController class\n  10-10 GET /orders/{id} route\n  N1 = 10-14 one | OrderController.one method\n  15-15 first method\n  16-16 second method\nsrc/app/order.page.ts\n  N2 = 5-17 OrderPage\n  N3 = 7-10 open\nL1 = web src/app/order.page.ts:9 OrderPage.open → shop http-route GET /orders/{id} handler N1 workspace-match basis gateway-prefix http [S2 confidence 1]; admitted link; not a consequence\nL2 = N2 → N3 symbol-dependence basis contains [S2/web confidence 1]; recorded dependence, no breakage claim\nL3 = N4 → N1 symbol-dependence basis contains [S2/shop confidence 1]\nL4 = src/app/order.page.ts → src/app/order.service.ts file-import [S3 category importer]; categories per attestation; not static/runtime evidence nor a symbol use\nL5 = reach of http-route GET /orders/{id} entrypoint-origin requested target (not a change) N1 [S2/shop]; association, not a call chain\nL6 = src/app/order.page.ts → src/app/order.service.ts file-use [S3 category user]; users category; not an import\nFindings:\n  seed basis lines N3 [S2/web]\n  reached N1 method depth 0 confidence 1 fan-in 0 [S2/shop]\n  reached N3 method depth 0 confidence 1 fan-in 0 [S2/web]\n  unmatched call site web src/app/order.page.ts:12-12 OrderPage.missing http; target GET shop-api/refunds/7 with evidence src/app/order.page.ts:12 [S2/web]\n  matched call site web src/app/order.page.ts:9-9 OrderPage.open http; target GET shop-api/orders/7 with evidence src/app/order.page.ts:9 [S2/web]\n  asked src/app/order.service.ts: recorded entries importers: 1, reexporters: 0, dynamicImporters: 0, typeImporters: 0, users: 1, unresolvedNamers: 0 [S3]\n  symbols walk used 2 expansions (S2/web, S2/shop)\nCoverage:\n  reads: 5 complete, 4 partial, 0 unknown (owners nest)\n  S2: partial; section cut ×1, 1 places: web\n  S2/web, S2/web#1 upstream: partial; unresolved-link cut ×1, 2 places: src/app/order.page.ts, src/app/order.page.ts:1 no-project\n  S3: partial; unresolved-link cut ×2, 2 places: src/app/order.page.ts:1 @angular/common/http, src/app/order.page.ts:2 @angular/core\n  read evidence src/app/order.page.ts:9-9, src/app/order.page.ts:12-12: S2/web, S2/web#0 discovery",
+  "structured": {
+    "kind": "composition-receipt",
+    "compositionSchema": 1,
+    "mode": "details",
+    "verification": {
+      "status": "available",
+      "identity": "mcp-c1:8278a14ad8b0358fb27ba0ccc707ad27f7c8a939cd3bebc509dba8f99f4a7b4a"
+    },
+    "requests": [
+      {
+        "status": "available",
+        "query": {
+          "name": "ye_ast_outline",
+          "arguments": {
+            "repo": "shop",
+            "revision": "62bbcc206956d889687af5c78ffa1e68bc73b3b3",
+            "files": [
+              "src/main/java/shop/OrderController.java"
+            ]
+          }
+        },
+        "strategy": "fresh-read"
+      },
+      {
+        "status": "available",
+        "query": {
+          "name": "ye_ast_callers",
+          "arguments": {
+            "repo": "shop",
+            "revision": "62bbcc206956d889687af5c78ffa1e68bc73b3b3",
+            "offline": true,
+            "targets": [
+              {
+                "file": "src/main/java/shop/OrderController.java",
+                "symbol": "OrderController.one"
+              }
+            ],
+            "workspace": {
+              "repos": [
+                {
+                  "path": "<fixture-root>/web",
+                  "id": "web",
+                  "revision": "b222c7c8b1e6b6d7b9dba3c9a9cc67b7e1df7c02"
+                }
+              ],
+              "gateways": [
+                {
+                  "prefix": "shop-api",
+                  "repo": "shop"
+                }
+              ]
+            },
+            "replay": {
+              "version": 1,
+              "declaration": "ws-r1:bba76240c0855ac8e41f2f18ddf30514e9c188fd8f7e2ea320550ee2f3614668",
+              "snapshots": [
+                {
+                  "repo": "shop",
+                  "kind": "sha",
+                  "sha": "62bbcc206956d889687af5c78ffa1e68bc73b3b3"
+                },
+                {
+                  "repo": "web",
+                  "kind": "sha",
+                  "sha": "b222c7c8b1e6b6d7b9dba3c9a9cc67b7e1df7c02"
+                }
+              ]
+            }
+          },
+          "expect": "mcp-r1:69d53ead1c3e976a0e182c94dd87d14e9bc0fb66e335b80e2435acab776d2e38"
+        },
+        "strategy": "pinned-replay"
+      },
+      {
+        "status": "available",
+        "query": {
+          "name": "ye_ast_importers",
+          "arguments": {
+            "repo": "web",
+            "revision": "b222c7c8b1e6b6d7b9dba3c9a9cc67b7e1df7c02",
+            "files": [
+              "src/app/order.service.ts"
+            ]
+          }
+        },
+        "strategy": "fresh-read"
+      }
+    ]
+  },
+  "isError": false
+}

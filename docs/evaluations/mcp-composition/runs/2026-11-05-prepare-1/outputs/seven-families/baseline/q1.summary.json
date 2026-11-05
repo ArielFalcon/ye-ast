@@ -1,0 +1,29 @@
+{
+  "text": "status: complete\ndeclared scope: languages java, typescript; frameworks angular, spring\nchange: only paths matching src/main/java/** (callers outside the selection remain eligible within scope; recorded cuts limit coverage; the rest of the change is not answered about)\nsnapshot: shop @ f89dbb6760c1df3b345c5f15e726ddd1c0509f32\nmerge base: 60a115ab7448426248e2081d35db131ae78c9592\nchanged entrypoints (0):\nreached entrypoints (1):\n  origin associations (1): counted below; mode \"details\" shows one per entrypoint; mode: \"full\" includes all\n  - http-route GET /orders/{id} (depth 0, endLine 14); lookup example: {\"kind\":\"handler-origins\",\"owner\":{\"kind\":\"local\"},\"handler\":{\"path\":\"src/main/java/shop/OrderController.java\",\"symbol\":\"OrderController.one\",\"line\":10}}\n    origins: 1\nimpacted symbols (1):\n  by depth: 0: 1; mode \"details\" shows investigation evidence; mode: \"full\" includes every symbol\nseeds (1):\n  src/main/java/shop/OrderController.java (lines)\n    10-14 one\nRecovery recipe and resultIdentity: structuredContent.recovery.\nrepository root: shop -> <fixture-root>/shop",
+  "structured": {
+    "mode": "summary",
+    "status": "complete",
+    "snapshot": {
+      "repo": "shop",
+      "kind": "sha",
+      "sha": "f89dbb6760c1df3b345c5f15e726ddd1c0509f32"
+    },
+    "recovery": {
+      "version": 1,
+      "status": "available",
+      "resultIdentity": "mcp-r1:7ac8b2d4987bb75accdcba82c3c3ac81dc80b404fb215c6315025e46e21322e3",
+      "query": {
+        "name": "ye_ast_impact",
+        "arguments": {
+          "repo": "shop",
+          "base": "60a115ab7448426248e2081d35db131ae78c9592",
+          "head": "f89dbb6760c1df3b345c5f15e726ddd1c0509f32",
+          "changed": [
+            "src/main/java/**"
+          ]
+        }
+      }
+    }
+  },
+  "isError": false
+}

@@ -1,0 +1,79 @@
+{
+  "text": "Composition summary (S# = requests[#-1]): 2 sources, 11 subjects, 4 relations, 0 connections, 22 observations.\nV1 = shop @ 59b76e9aa54fe237d02cba8200a7bb93ca11c30c\nV2 = web @ 3e69e9d3c2285375dd92629e23a8ef4487d2bb9e\nV3 = shop @ d186f90284ad2f98e081d03d8d1ef60020aaab6f\nS1 = callers/workspace: partial; V1, V2; targets src/main/java/shop/OrderController.java:OrderController.one; S1/web, S1/shop: no merge base, changed entrypoints absent\nS2 = outline: complete; V3\nUnmarked locations: web V2; others are marked @V#.\nContext: trust untrusted; languages java, typescript; frameworks angular, spring\nContext producer by read: ye-ast 0.4.0 (S1, S1/shop, S1/shop#0 discovery, S1/web, S1/web#0 discovery, S2); ye-ast 0.4.0+edge-policy.e98d5a56243d (S1/shop#1 trigger, S1/web#1 upstream)\nWorkspace of S1: repos shop, web; source request; gateways shop-api→shop (gateway-prefix); unmatched gateways none; unserved none; trigger shop; snapshots shop V1, web V2\nsrc/main/java/shop/OrderController.java @V3 [outline S2: 6 declarations, 0 imports]\nsrc/main/java/shop/OrderController.java @V1\n  N2 = 10-14 one\n  N1 = 7-17 OrderController\n  N5 = 10-14 OrderController.one\nsrc/app/order.page.ts\n  N4 = 7-10 open\n  N3 = 5-17 OrderPage\nL1 = N1 → N2 symbol-dependence basis contains [S1/shop confidence 1]; recorded dependence, no breakage claim\nL2 = N3 → N4 symbol-dependence basis contains [S1/web confidence 1]\nL3 = web src/app/order.page.ts:9 OrderPage.open → shop http-route GET /orders/{id} handler N5 workspace-match basis gateway-prefix http [S1 confidence 1]; admitted link; not a consequence\nL4 = reach of http-route GET /orders/{id} entrypoint-origin requested target (not a change) N2 [S1/shop]; association, not a call chain\nFindings:\n  seed basis lines N4 [S1/web]\n  reached N4 method depth 0 confidence 1 fan-in 0 [S1/web]\n  reached N2 method depth 0 confidence 1 fan-in 0 [S1/shop]\n  unmatched call site web src/app/order.page.ts:12-12 OrderPage.missing http; target GET shop-api/refunds/7 with evidence 1 [S1/web]\n  matched call site web src/app/order.page.ts:9-9 OrderPage.open http; target GET shop-api/orders/7 with evidence 1 [S1/web]\nCoverage:\n  reads: 5 complete, 3 partial, 0 unknown (owners nest)\n  S1: partial; section cut ×1, 1 places\n  S1/web, S1/web#1 upstream: partial; unresolved-link cut ×1, 2 places\n  read evidence 2: S1/web\n  snapshot-difference shop: V1, V3 (separate partitions; nothing joins across them) [S1, S2]\nOmitted from summary (recorded objects): walk costs: 2; uncited declarations: 6; evidence coordinates: 4; details lists them.",
+  "structured": {
+    "kind": "composition-receipt",
+    "compositionSchema": 1,
+    "mode": "summary",
+    "verification": {
+      "status": "available",
+      "identity": "mcp-c1:85333d2a0ff99c0773ef1dbe59e6fb4c4991195d7143ab90a88dcf321e6644a3"
+    },
+    "requests": [
+      {
+        "status": "available",
+        "query": {
+          "name": "ye_ast_callers",
+          "arguments": {
+            "repo": "shop",
+            "revision": "59b76e9aa54fe237d02cba8200a7bb93ca11c30c",
+            "offline": true,
+            "targets": [
+              {
+                "file": "src/main/java/shop/OrderController.java",
+                "symbol": "OrderController.one"
+              }
+            ],
+            "workspace": {
+              "repos": [
+                {
+                  "path": "<fixture-root>/web",
+                  "id": "web",
+                  "revision": "3e69e9d3c2285375dd92629e23a8ef4487d2bb9e"
+                }
+              ],
+              "gateways": [
+                {
+                  "prefix": "shop-api",
+                  "repo": "shop"
+                }
+              ]
+            },
+            "replay": {
+              "version": 1,
+              "declaration": "ws-r1:d1107efcdf6127d70e4ebfb6e020d7bcc8ecd5529e2c1181be5d719f884723c7",
+              "snapshots": [
+                {
+                  "repo": "shop",
+                  "kind": "sha",
+                  "sha": "59b76e9aa54fe237d02cba8200a7bb93ca11c30c"
+                },
+                {
+                  "repo": "web",
+                  "kind": "sha",
+                  "sha": "3e69e9d3c2285375dd92629e23a8ef4487d2bb9e"
+                }
+              ]
+            }
+          },
+          "expect": "mcp-r1:cbc615f474e655f3b0918ef10150d69cd95839f71c1999dc3af08dbdbd714faa"
+        },
+        "strategy": "pinned-replay"
+      },
+      {
+        "status": "available",
+        "query": {
+          "name": "ye_ast_outline",
+          "arguments": {
+            "repo": "shop",
+            "revision": "d186f90284ad2f98e081d03d8d1ef60020aaab6f",
+            "files": [
+              "src/main/java/shop/OrderController.java"
+            ]
+          }
+        },
+        "strategy": "fresh-read"
+      }
+    ]
+  },
+  "isError": false
+}

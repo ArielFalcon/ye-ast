@@ -1,0 +1,59 @@
+{
+  "queries": [
+    {
+      "index": 0,
+      "family": "importers",
+      "query": {
+        "name": "ye_ast_importers",
+        "arguments": {
+          "repo": "web",
+          "revision": "3e69e9d3c2285375dd92629e23a8ef4487d2bb9e",
+          "files": [
+            "src/app/order.service.ts"
+          ]
+        }
+      }
+    },
+    {
+      "index": 1,
+      "family": "decisions",
+      "query": {
+        "name": "ye_ast_decisions",
+        "arguments": {
+          "repo": "shop",
+          "revision": "59b76e9aa54fe237d02cba8200a7bb93ca11c30c",
+          "repos": [
+            {
+              "path": "<fixture-root>/web",
+              "id": "web",
+              "revision": "3e69e9d3c2285375dd92629e23a8ef4487d2bb9e"
+            }
+          ],
+          "gateways": [
+            {
+              "prefix": "shop-api",
+              "repo": "shop"
+            }
+          ],
+          "offline": true
+        }
+      }
+    }
+  ],
+  "orders": [
+    {
+      "name": "original",
+      "indices": [
+        0,
+        1
+      ]
+    },
+    {
+      "name": "reversed",
+      "indices": [
+        1,
+        0
+      ]
+    }
+  ]
+}

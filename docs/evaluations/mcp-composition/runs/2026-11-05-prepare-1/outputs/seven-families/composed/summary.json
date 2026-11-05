@@ -1,0 +1,382 @@
+{
+  "text": "Composition (summary): 7 sources, 9 subjects, 10 relations, 5 connections, 36 observations.\nVerification: available at structuredContent.verification.identity; send every available requests[].query with it as expect to verify this set.\nTerms: recorded = stated by a source; associated = a recorded association, not a call chain; candidate = not established; unknown = not determined, never empty; incompatible = not combined.\nV1 = web @ c3ca750c372d4de8e6bb94bd20019a1d18d1e8f3\nV2 = shop @ f89dbb6760c1df3b345c5f15e726ddd1c0509f32\nV3 = shop @ 60a115ab7448426248e2081d35db131ae78c9592\nS1 = outline, requests[0] fresh-read: complete; V2; files src/main/java/shop/OrderController.java\nS2 = decisions, requests[1] fresh-read: complete; V2, V1\nS3 = entrypoints, requests[2] pinned-replay: complete; V2\nS4 = workspace, requests[3] fresh-read: complete; V2, V1\nS5 = callers/workspace, requests[4] pinned-replay: partial; V2, V1; targets src/main/java/shop/OrderController.java:OrderController.one; S5/web: no merge base, changed entrypoints absent; S5/shop: no merge base, changed entrypoints absent\nS6 = importers, requests[5] fresh-read: partial; V1; files src/app/order.service.ts\nS7 = impact/local, requests[6] pinned-replay: complete; V2; changed src/main/java/** (seed selection, not consequence coverage); S7: merge base 60a115ab7448426248e2081d35db131ae78c9592, changed entrypoints present\nUnmarked locations: shop V2, web V1; any other snapshot is marked @V.\nRead context of S1: trust untrusted; producer ye-ast 0.4.0; schema 0.12.0; languages java, typescript; frameworks angular, spring; engines @colbymchenry/codegraph 1.6.2, tree-sitter-java 0.23.5, typescript 6.0.3, web-tree-sitter 0.27.1; index full\nRead context of S2, S3, S3/entrypoints, S4, S4/shop, S4/web, S5/shop#0 discovery, S5/web#0 discovery: trust untrusted; producer ye-ast 0.4.0; schema 0.12.0; languages java, typescript; frameworks angular, spring; engines tree-sitter-java 0.23.5, typescript 6.0.3, web-tree-sitter 0.27.1\nRead context of S5, S5/shop, S5/web: trust untrusted; producer ye-ast 0.4.0; schema 0.12.0; languages java, typescript; frameworks angular, spring; engines @angular/compiler 22.2.4, @colbymchenry/codegraph 1.6.2, tree-sitter-java 0.23.5, typescript 6.0.3, web-tree-sitter 0.27.1\nRead context of S5/shop#1 trigger, S5/web#1 upstream, S7: trust untrusted; producer ye-ast 0.4.0+edge-policy.e98d5a56243d; schema 0.12.0; languages java, typescript; frameworks angular, spring; engines @angular/compiler 22.2.4, @colbymchenry/codegraph 1.6.2, tree-sitter-java 0.23.5, typescript 6.0.3, web-tree-sitter 0.27.1; index full\nRead context of S6: trust untrusted; producer ye-ast 0.4.0+edge-policy.e98d5a56243d; schema 0.12.0; languages java, typescript; frameworks angular, spring; engines @colbymchenry/codegraph 1.6.2, tree-sitter-java 0.23.5, typescript 6.0.3, web-tree-sitter 0.27.1; index full\nWorkspace of S5: repos shop, web; source request; gateways shop-api→shop (gateway-prefix); unmatched gateways none; unserved none; trigger shop; snapshots shop V2, web V1\nWorkspace of S2: decisions source request; repositories shop V2, web V1\nWorkspace of S4: repos shop, web; source request; gateways shop-api→shop; snapshots shop V2, web V1\nSubjects:\n  N1 = src/main/java/shop/OrderController.java:10-14 one | OrderController.one [outline method: S1]\n  N2 = src/main/java/shop/OrderController.java:7-17 OrderController [outline class: S1]\n  N3 = GET /orders/{id}: http GET /orders/{id}, handler N1; basePath unknown (unresolved) with evidence 1; route evidence 1 [S3/entrypoints]\n  N4 = src/app/order.page.ts:5-17 OrderPage\n  N5 = src/app/order.page.ts:7-10 open\nConnections:\n  C1 = shared-support: L4 — the same evidence location; not causality [S4]\n  C2 = shared-support: L3 — the same evidence location; not causality [S4]\n  C3 = change-dependent: L8, N1, N2, seed basis lines N1 — a recorded dependence on a diff seed; not a proof of breakage [S7]\n  C4 = handler-declaration: L5, N1, N3, outline declaration N1 method — the route, its handler and its unique outline declaration are one subject [S1, S3]\n  C5 = reached-handler: L5, N1, N3, reach of http-route GET /orders/{id} — the recorded reach names this known entrypoint; seed associations stay those of the reach [S3, S5]\nRelations:\n  L1 = src/app/order.page.ts → src/app/order.service.ts file-use (users category; not an import) [S6 category user]\n  L2 = N4 → N5 symbol-dependence basis contains; recorded dependence, no breakage claim [S5/web confidence 1]\n  L3 = unserved outward name path-prefix \"shop-api\" and stated outward name path-prefix \"shop-api\" shares-evidence src/app/order.page.ts:9-9 (same location, not causality) [S4/web, S4]\n  L4 = unserved outward name path-prefix \"shop-api\" and stated outward name path-prefix \"shop-api\" shares-evidence src/app/order.page.ts:12-12 (same location, not causality) [S4/web, S4]\n  L5 = N3 GET /orders/{id} served by N1 [S3/entrypoints]\n  L6 = src/app/order.page.ts → src/app/order.service.ts file-import, categories per attestation [S6 category importer]\n  L7 = reach of http-route GET /orders/{id} entrypoint-origin requested target (not a change) N1 (association, not a call chain) [S5/shop]\n  L8 = N2 → N1 symbol-dependence basis contains; recorded dependence, no breakage claim [S7 confidence 1; S5/shop confidence 1]\n  L9 = reach of http-route GET /orders/{id} entrypoint-origin seed basis lines N1 (association, not a call chain) [S7]\n  L10 = web src/app/order.page.ts:9 OrderPage.open → shop http-route GET /orders/{id} handler N1 workspace-match basis gateway-prefix http (admitted link; not a consequence) [S5 confidence 1]\n  Note: file-import categories are kept per attestation; a file-import is not static/runtime evidence nor a symbol use.\nFindings:\n  seed basis lines N5 [S5/web]\n  reached N5 method depth 0 confidence 1 fan-in 0 [S5/web]\n  reached N1 method depth 0 confidence 1 fan-in 0 [S5/shop, S7]\n  unmatched call site web src/app/order.page.ts:12-12 OrderPage.missing http; target GET shop-api/refunds/7 with evidence 1 [S5/web]\n  matched call site web src/app/order.page.ts:9-9 OrderPage.open http; target GET shop-api/orders/7 with evidence 1 [S5/web]\nDecisions (recommendations are not user decisions, trust grants or approvals):\n  trust \"shop\" (trust:shop) required; context S2; no evidence\n    option \"trusted\"; no evidence\n    option \"untrusted\"; no evidence\n  trust \"web\" (trust:web) required; context S2; no evidence\n    option \"trusted\"; no evidence\n    option \"untrusted\"; no evidence\nCoverage:\n  recorded reads: 12 complete, 4 partial, 0 unknown (owners nest; not independent analyses)\n  S5: partial; section cut ×1, 1 places\n  S5/web: partial; unresolved-link cut ×1, 2 places; read evidence 2\n  S5/web#1 upstream: partial; unresolved-link cut ×1, 2 places\n  S6: partial; unresolved-link cut ×2, 2 places\n  context-mismatch producer different (no connection combines them) [S5, S7]\n  context-mismatch producer different (no connection combines them) [S3, S7]\nOmitted from summary (recorded objects): outline-declaration observations: 4; outline-file observations: 1; file-query observations: 1; walk costs: 3; evidence coordinates: 5. mode details lists them; mode full returns every table in structuredContent.\nOriginal evidence of S3: call ye_ast_entrypoints with requests[2].query arguments and expect, adding select/page or mode full.\nOriginal evidence of S5: call ye_ast_callers with requests[4].query arguments and expect, adding select/page or mode full.\nOriginal evidence of S7: call ye_ast_impact with requests[6].query arguments and expect, adding select/page or mode full.",
+  "structured": {
+    "kind": "composition-receipt",
+    "compositionSchema": 1,
+    "mode": "summary",
+    "verification": {
+      "status": "available",
+      "identity": "mcp-c1:f741a41e07ad0274fcf89de758188f683683e2611ea90020bd5d2f4a1633f3ae"
+    },
+    "requests": [
+      {
+        "status": "available",
+        "query": {
+          "name": "ye_ast_outline",
+          "arguments": {
+            "repo": "shop",
+            "revision": "f89dbb6760c1df3b345c5f15e726ddd1c0509f32",
+            "files": [
+              "src/main/java/shop/OrderController.java"
+            ]
+          }
+        },
+        "strategy": "fresh-read"
+      },
+      {
+        "status": "available",
+        "query": {
+          "name": "ye_ast_decisions",
+          "arguments": {
+            "repo": "shop",
+            "revision": "f89dbb6760c1df3b345c5f15e726ddd1c0509f32",
+            "offline": true,
+            "repos": [
+              {
+                "path": "<fixture-root>/web",
+                "id": "web",
+                "revision": "c3ca750c372d4de8e6bb94bd20019a1d18d1e8f3"
+              }
+            ],
+            "gateways": [
+              {
+                "prefix": "shop-api",
+                "repo": "shop"
+              }
+            ]
+          }
+        },
+        "strategy": "fresh-read"
+      },
+      {
+        "status": "available",
+        "query": {
+          "name": "ye_ast_entrypoints",
+          "arguments": {
+            "repo": "shop",
+            "revision": "f89dbb6760c1df3b345c5f15e726ddd1c0509f32"
+          },
+          "expect": "mcp-r1:35e9ddade95755d54eb2c64491261e81f4952c1a7169dcc024846638dd302fd6"
+        },
+        "strategy": "pinned-replay"
+      },
+      {
+        "status": "available",
+        "query": {
+          "name": "ye_ast_workspace",
+          "arguments": {
+            "repo": "shop",
+            "revision": "f89dbb6760c1df3b345c5f15e726ddd1c0509f32",
+            "offline": true,
+            "repos": [
+              {
+                "path": "<fixture-root>/web",
+                "id": "web",
+                "revision": "c3ca750c372d4de8e6bb94bd20019a1d18d1e8f3"
+              }
+            ],
+            "gateways": [
+              {
+                "prefix": "shop-api",
+                "repo": "shop"
+              }
+            ]
+          }
+        },
+        "strategy": "fresh-read"
+      },
+      {
+        "status": "available",
+        "query": {
+          "name": "ye_ast_callers",
+          "arguments": {
+            "repo": "shop",
+            "revision": "f89dbb6760c1df3b345c5f15e726ddd1c0509f32",
+            "offline": true,
+            "targets": [
+              {
+                "file": "src/main/java/shop/OrderController.java",
+                "symbol": "OrderController.one"
+              }
+            ],
+            "workspace": {
+              "repos": [
+                {
+                  "path": "<fixture-root>/web",
+                  "id": "web",
+                  "revision": "c3ca750c372d4de8e6bb94bd20019a1d18d1e8f3"
+                }
+              ],
+              "gateways": [
+                {
+                  "prefix": "shop-api",
+                  "repo": "shop"
+                }
+              ]
+            },
+            "replay": {
+              "version": 1,
+              "declaration": "ws-r1:6197171919e157ed238c22d0cc1141ecbdb4a620a9cb963104f22b05c1f44bbe",
+              "snapshots": [
+                {
+                  "repo": "shop",
+                  "kind": "sha",
+                  "sha": "f89dbb6760c1df3b345c5f15e726ddd1c0509f32"
+                },
+                {
+                  "repo": "web",
+                  "kind": "sha",
+                  "sha": "c3ca750c372d4de8e6bb94bd20019a1d18d1e8f3"
+                }
+              ]
+            }
+          },
+          "expect": "mcp-r1:03f1f2aa290701df083aef4aa4274d32fb007f2909645feabce0a002432c1a52"
+        },
+        "strategy": "pinned-replay"
+      },
+      {
+        "status": "available",
+        "query": {
+          "name": "ye_ast_importers",
+          "arguments": {
+            "repo": "web",
+            "revision": "c3ca750c372d4de8e6bb94bd20019a1d18d1e8f3",
+            "files": [
+              "src/app/order.service.ts"
+            ]
+          }
+        },
+        "strategy": "fresh-read"
+      },
+      {
+        "status": "available",
+        "query": {
+          "name": "ye_ast_impact",
+          "arguments": {
+            "repo": "shop",
+            "base": "60a115ab7448426248e2081d35db131ae78c9592",
+            "head": "f89dbb6760c1df3b345c5f15e726ddd1c0509f32",
+            "changed": [
+              "src/main/java/**"
+            ]
+          },
+          "expect": "mcp-r1:7ac8b2d4987bb75accdcba82c3c3ac81dc80b404fb215c6315025e46e21322e3"
+        },
+        "strategy": "pinned-replay"
+      }
+    ],
+    "sources": [
+      {
+        "family": "outline",
+        "id": "s1:2fb25b6e02daf94834ca409bbabca8ae6fe2aabc9e64b6356142a29fbb58a786",
+        "rootRead": "r1:2b438ad1c0cca5d20a43ccf1823863ae10ef4735ab3de830d46186526dd39f98",
+        "snapshotVector": [
+          {
+            "repo": "shop",
+            "snapshot": "v1:493f65f92dd318be211b4884d659a9fabf2c21ba8ec58a219919758793798ee7"
+          }
+        ],
+        "analysis": {
+          "status": "complete"
+        },
+        "requestIndex": 0
+      },
+      {
+        "family": "decisions",
+        "id": "s1:3e5db6bd548a514d5bcea1b66e555bf10b69b6bfd54421a8b2909d8bea5b44d5",
+        "rootRead": "r1:fdf4dbbfe0a6263d4a9a4ac94c2cd2d19ae520832f8187901990da620c9b53d7",
+        "snapshotVector": [
+          {
+            "repo": "shop",
+            "snapshot": "v1:493f65f92dd318be211b4884d659a9fabf2c21ba8ec58a219919758793798ee7"
+          },
+          {
+            "repo": "web",
+            "snapshot": "v1:410924be56d010d7d524f88709774b0edbecd7b79d3963a904de1f97f848bc02"
+          }
+        ],
+        "analysis": {
+          "status": "complete"
+        },
+        "requestIndex": 1
+      },
+      {
+        "family": "entrypoints",
+        "id": "s1:7bbddce8154f9f4078c57854785fe063c7f23fbbe1bcc5b192c178839e12f6f3",
+        "rootRead": "r1:c36721cbec1458892cbda42d3ccfd21d1574d93f63aaef6f0f5aae1330ceb2a5",
+        "snapshotVector": [
+          {
+            "repo": "shop",
+            "snapshot": "v1:493f65f92dd318be211b4884d659a9fabf2c21ba8ec58a219919758793798ee7"
+          }
+        ],
+        "analysis": {
+          "status": "complete"
+        },
+        "requestIndex": 2
+      },
+      {
+        "family": "workspace",
+        "id": "s1:86baad6463de14f8bafcb410e2a2ba221ad75a2064b6a8179501d6bcb75dc346",
+        "rootRead": "r1:d231ac02c765bba6f731d23713cb31620ae455d4c139bec6047c66bcb9193cc7",
+        "snapshotVector": [
+          {
+            "repo": "shop",
+            "snapshot": "v1:493f65f92dd318be211b4884d659a9fabf2c21ba8ec58a219919758793798ee7"
+          },
+          {
+            "repo": "web",
+            "snapshot": "v1:410924be56d010d7d524f88709774b0edbecd7b79d3963a904de1f97f848bc02"
+          }
+        ],
+        "analysis": {
+          "status": "complete"
+        },
+        "requestIndex": 3
+      },
+      {
+        "family": "callers",
+        "branch": "workspace",
+        "id": "s1:cd96a0eefb76b65ef22d43de7ee98475d481b1b2a5163139b23176ffa923b0d4",
+        "rootRead": "r1:167f067539cf50d7573a1ca9d862c384f8bc17513e536b6e734616e3da46923a",
+        "snapshotVector": [
+          {
+            "repo": "shop",
+            "snapshot": "v1:493f65f92dd318be211b4884d659a9fabf2c21ba8ec58a219919758793798ee7"
+          },
+          {
+            "repo": "web",
+            "snapshot": "v1:410924be56d010d7d524f88709774b0edbecd7b79d3963a904de1f97f848bc02"
+          }
+        ],
+        "analysis": {
+          "status": "partial"
+        },
+        "requestIndex": 4
+      },
+      {
+        "family": "importers",
+        "id": "s1:cf21f1e6d5acef63e18059622afabdea5f90f1b3559d72075470a5f55c8e8c3d",
+        "rootRead": "r1:3f6b422c76a7933e2a871ddb30912147f1801209eafc7ddfbf4e64d5f2536157",
+        "snapshotVector": [
+          {
+            "repo": "web",
+            "snapshot": "v1:410924be56d010d7d524f88709774b0edbecd7b79d3963a904de1f97f848bc02"
+          }
+        ],
+        "analysis": {
+          "status": "partial"
+        },
+        "requestIndex": 5
+      },
+      {
+        "family": "impact",
+        "branch": "local",
+        "id": "s1:fe998a84c222b999fad223f1abc5b36b124ff98f2b13b80a70ad65570ce0e42b",
+        "rootRead": "r1:8957be7ce2660d1207befa30c7fa3e48028bff5a59a0774ad5880d4d0dc0f332",
+        "snapshotVector": [
+          {
+            "repo": "shop",
+            "snapshot": "v1:493f65f92dd318be211b4884d659a9fabf2c21ba8ec58a219919758793798ee7"
+          }
+        ],
+        "analysis": {
+          "status": "complete"
+        },
+        "requestIndex": 6
+      }
+    ],
+    "coverage": {
+      "reads": {
+        "complete": 12,
+        "partial": 4,
+        "unknown": 0
+      },
+      "unknowns": [],
+      "limits": [
+        {
+          "source": "s1:cd96a0eefb76b65ef22d43de7ee98475d481b1b2a5163139b23176ffa923b0d4",
+          "owner": {
+            "kind": "fact"
+          },
+          "kind": "section",
+          "cuts": 1,
+          "places": 0
+        },
+        {
+          "source": "s1:cd96a0eefb76b65ef22d43de7ee98475d481b1b2a5163139b23176ffa923b0d4",
+          "owner": {
+            "kind": "read",
+            "repo": "web",
+            "index": 1
+          },
+          "kind": "unresolved-link",
+          "cuts": 1,
+          "places": 1
+        },
+        {
+          "source": "s1:cd96a0eefb76b65ef22d43de7ee98475d481b1b2a5163139b23176ffa923b0d4",
+          "owner": {
+            "kind": "section",
+            "repo": "web"
+          },
+          "kind": "unresolved-link",
+          "cuts": 1,
+          "places": 1
+        },
+        {
+          "source": "s1:cf21f1e6d5acef63e18059622afabdea5f90f1b3559d72075470a5f55c8e8c3d",
+          "owner": {
+            "kind": "fact"
+          },
+          "kind": "unresolved-link",
+          "cuts": 2,
+          "places": 0
+        }
+      ],
+      "issues": [
+        {
+          "kind": "context-mismatch",
+          "field": "producer",
+          "reason": "different",
+          "sources": [
+            "s1:cd96a0eefb76b65ef22d43de7ee98475d481b1b2a5163139b23176ffa923b0d4",
+            "s1:fe998a84c222b999fad223f1abc5b36b124ff98f2b13b80a70ad65570ce0e42b"
+          ],
+          "reads": [
+            "r1:5583e8b12e67b6c7392ff4486a2e70e50922c9f0fdf0dca2c1328bb530895e7e",
+            "r1:8957be7ce2660d1207befa30c7fa3e48028bff5a59a0774ad5880d4d0dc0f332"
+          ]
+        },
+        {
+          "kind": "context-mismatch",
+          "field": "producer",
+          "reason": "different",
+          "sources": [
+            "s1:7bbddce8154f9f4078c57854785fe063c7f23fbbe1bcc5b192c178839e12f6f3",
+            "s1:fe998a84c222b999fad223f1abc5b36b124ff98f2b13b80a70ad65570ce0e42b"
+          ],
+          "reads": [
+            "r1:82d20b8ac335484c011cad336c702f0e6c3b33e280504cd1f6a6b0fd5e7c7411",
+            "r1:8957be7ce2660d1207befa30c7fa3e48028bff5a59a0774ad5880d4d0dc0f332"
+          ]
+        }
+      ]
+    },
+    "counts": {
+      "sources": 7,
+      "reads": 16,
+      "files": 3,
+      "anchors": 9,
+      "entities": 9,
+      "evidence": 5,
+      "parts": 36,
+      "relations": 10,
+      "connections": 5,
+      "unknownFindings": 1,
+      "unknownComponents": 0
+    }
+  },
+  "isError": false
+}

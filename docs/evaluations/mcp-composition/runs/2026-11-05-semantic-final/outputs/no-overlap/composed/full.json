@@ -1,0 +1,535 @@
+{
+  "text": "Composition full: 2 sources, 2 recorded reads (1 complete, 1 partial, 0 unknown), 0 unknown findings, 0 unknown components.\nTables: structuredContent.graph.sources (2), structuredContent.graph.snapshots (2), structuredContent.graph.reads (2), structuredContent.graph.files (2), structuredContent.graph.anchors (0), structuredContent.graph.evidence (0), structuredContent.graph.parts (6), structuredContent.graph.entities (0), structuredContent.graph.bindings (0), structuredContent.graph.relations (2), structuredContent.graph.connections (0).\nstructuredContent.coverage.issues (0), unknowns (0), limits (1); structuredContent.requests (2); structuredContent.delivery (2).",
+  "structured": {
+    "kind": "composition",
+    "compositionSchema": 1,
+    "mode": "full",
+    "verification": {
+      "status": "available",
+      "identity": "mcp-c1:07322dd2ac399b16fab4c2754c017fb1dd7a1a0e5c686fe7d12e6518fec67f61"
+    },
+    "requests": [
+      {
+        "status": "available",
+        "query": {
+          "name": "ye_ast_decisions",
+          "arguments": {
+            "repo": "shop",
+            "revision": "62bbcc206956d889687af5c78ffa1e68bc73b3b3",
+            "offline": true,
+            "repos": [
+              {
+                "path": "<fixture-root>/web",
+                "id": "web",
+                "revision": "b222c7c8b1e6b6d7b9dba3c9a9cc67b7e1df7c02"
+              }
+            ],
+            "gateways": [
+              {
+                "prefix": "shop-api",
+                "repo": "shop"
+              }
+            ]
+          }
+        },
+        "strategy": "fresh-read"
+      },
+      {
+        "status": "available",
+        "query": {
+          "name": "ye_ast_importers",
+          "arguments": {
+            "repo": "web",
+            "revision": "b222c7c8b1e6b6d7b9dba3c9a9cc67b7e1df7c02",
+            "files": [
+              "src/app/order.service.ts"
+            ]
+          }
+        },
+        "strategy": "fresh-read"
+      }
+    ],
+    "graph": {
+      "snapshots": [
+        {
+          "id": "v1:0396299e903511502860d7b997376a61d72afef2d48d88562da338e11ebee051",
+          "value": {
+            "repo": "shop",
+            "kind": "sha",
+            "sha": "62bbcc206956d889687af5c78ffa1e68bc73b3b3"
+          },
+          "identity": "exact"
+        },
+        {
+          "id": "v1:46a5e80d79c00850c20cc416b244565f8e14919e703308952fb37cb57c4b6d45",
+          "value": {
+            "repo": "web",
+            "kind": "sha",
+            "sha": "b222c7c8b1e6b6d7b9dba3c9a9cc67b7e1df7c02"
+          },
+          "identity": "exact"
+        }
+      ],
+      "sources": [
+        {
+          "family": "decisions",
+          "id": "s1:66f865543170056bfb291e0dfc99b1b082a651a91ad8413adfe52fd768e93ff8",
+          "rootRead": "r1:47f142b768ab9af3d4f677e28ea07c69e6cb5f541deb86d23163249d92939572",
+          "snapshotVector": [
+            {
+              "repo": "shop",
+              "snapshot": "v1:0396299e903511502860d7b997376a61d72afef2d48d88562da338e11ebee051"
+            },
+            {
+              "repo": "web",
+              "snapshot": "v1:46a5e80d79c00850c20cc416b244565f8e14919e703308952fb37cb57c4b6d45"
+            }
+          ],
+          "analysis": {
+            "status": "complete"
+          },
+          "requestIndex": 0
+        },
+        {
+          "family": "importers",
+          "id": "s1:ed7077d597cca09750f158bef3de196ff4e8677e2ec55de3c94ef62c0141fc6c",
+          "rootRead": "r1:dbed3fda9fec1fd028e5574080efeeb5a83397643ca0b5144c2d7d8e3284b69d",
+          "snapshotVector": [
+            {
+              "repo": "web",
+              "snapshot": "v1:46a5e80d79c00850c20cc416b244565f8e14919e703308952fb37cb57c4b6d45"
+            }
+          ],
+          "analysis": {
+            "status": "partial"
+          },
+          "requestIndex": 1
+        }
+      ],
+      "reads": [
+        {
+          "id": "r1:47f142b768ab9af3d4f677e28ea07c69e6cb5f541deb86d23163249d92939572",
+          "source": "s1:66f865543170056bfb291e0dfc99b1b082a651a91ad8413adfe52fd768e93ff8",
+          "owner": {
+            "kind": "fact"
+          },
+          "schema": "0.12.0",
+          "producer": {
+            "name": "ye-ast",
+            "version": "0.4.0"
+          },
+          "inputs": {
+            "trust": "untrusted",
+            "scope": "fa4648f55a618e0296b4a7ce207508c12bbe7d7e682e4a5ac5a25787a8b96eb8",
+            "declaredScope": {
+              "languages": [
+                "java",
+                "typescript"
+              ],
+              "frameworks": [
+                "angular",
+                "spring"
+              ],
+              "include": [],
+              "exclude": []
+            },
+            "content": "9939135e997b4577309281cfaff36813280c2ef4e82800fdd8dfc756eba07f2c",
+            "config": "b41cbb85ed8831d64578484788d87825bc6e45ebd920881cd09a68704bd673f8",
+            "declaredConfig": {},
+            "engines": {
+              "tree-sitter-java": "0.23.5",
+              "typescript": "6.0.3",
+              "web-tree-sitter": "0.27.1"
+            }
+          },
+          "snapshot": "v1:0396299e903511502860d7b997376a61d72afef2d48d88562da338e11ebee051",
+          "evidence": [],
+          "analysis": {
+            "status": "complete"
+          }
+        },
+        {
+          "id": "r1:dbed3fda9fec1fd028e5574080efeeb5a83397643ca0b5144c2d7d8e3284b69d",
+          "source": "s1:ed7077d597cca09750f158bef3de196ff4e8677e2ec55de3c94ef62c0141fc6c",
+          "owner": {
+            "kind": "fact"
+          },
+          "schema": "0.12.0",
+          "producer": {
+            "name": "ye-ast",
+            "version": "0.4.0+edge-policy.e98d5a56243d"
+          },
+          "inputs": {
+            "trust": "untrusted",
+            "scope": "fa4648f55a618e0296b4a7ce207508c12bbe7d7e682e4a5ac5a25787a8b96eb8",
+            "declaredScope": {
+              "languages": [
+                "java",
+                "typescript"
+              ],
+              "frameworks": [
+                "angular",
+                "spring"
+              ],
+              "include": [],
+              "exclude": []
+            },
+            "content": "096b6035e1dad00b70d4deca988872f2a5478746fd86c84804f23e52f9540d5d",
+            "config": "f85707db3cf3d33970e06f6e9276630320ef7fba8f766d74eeea5a3ec60098c7",
+            "declaredConfig": {
+              "files": [
+                "src/app/order.service.ts"
+              ]
+            },
+            "origin": {
+              "kind": "full"
+            },
+            "engines": {
+              "@colbymchenry/codegraph": "1.6.2",
+              "tree-sitter-java": "0.23.5",
+              "typescript": "6.0.3",
+              "web-tree-sitter": "0.27.1"
+            }
+          },
+          "snapshot": "v1:46a5e80d79c00850c20cc416b244565f8e14919e703308952fb37cb57c4b6d45",
+          "evidence": [],
+          "analysis": {
+            "status": "partial",
+            "cuts": [
+              {
+                "kind": "unresolved-link",
+                "at": [
+                  "src/app/order.page.ts:1 @angular/common/http"
+                ]
+              },
+              {
+                "kind": "unresolved-link",
+                "at": [
+                  "src/app/order.page.ts:2 @angular/core"
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "files": [
+        {
+          "id": "f1:11985b41dc77b61bd18bb3b81462cc04f16ddbfc346333d1ca4e62187d5dff1d",
+          "origin": {
+            "kind": "snapshot",
+            "snapshot": "v1:46a5e80d79c00850c20cc416b244565f8e14919e703308952fb37cb57c4b6d45"
+          },
+          "repo": "web",
+          "path": "src/app/order.service.ts",
+          "supports": [
+            {
+              "source": "s1:ed7077d597cca09750f158bef3de196ff4e8677e2ec55de3c94ef62c0141fc6c",
+              "read": "r1:dbed3fda9fec1fd028e5574080efeeb5a83397643ca0b5144c2d7d8e3284b69d",
+              "pointer": "/value/files/0/file"
+            }
+          ]
+        },
+        {
+          "id": "f1:572e87a0e494243a0c69ef2686c363c64f98f67c3b29e6ee017647d400da997d",
+          "origin": {
+            "kind": "snapshot",
+            "snapshot": "v1:46a5e80d79c00850c20cc416b244565f8e14919e703308952fb37cb57c4b6d45"
+          },
+          "repo": "web",
+          "path": "src/app/order.page.ts",
+          "supports": [
+            {
+              "source": "s1:ed7077d597cca09750f158bef3de196ff4e8677e2ec55de3c94ef62c0141fc6c",
+              "read": "r1:dbed3fda9fec1fd028e5574080efeeb5a83397643ca0b5144c2d7d8e3284b69d",
+              "pointer": "/value/files/0/importers/0"
+            },
+            {
+              "source": "s1:ed7077d597cca09750f158bef3de196ff4e8677e2ec55de3c94ef62c0141fc6c",
+              "read": "r1:dbed3fda9fec1fd028e5574080efeeb5a83397643ca0b5144c2d7d8e3284b69d",
+              "pointer": "/value/files/0/users/0"
+            }
+          ]
+        }
+      ],
+      "anchors": [],
+      "evidence": [],
+      "parts": [
+        {
+          "kind": "file-dependency",
+          "from": "f1:572e87a0e494243a0c69ef2686c363c64f98f67c3b29e6ee017647d400da997d",
+          "to": "f1:11985b41dc77b61bd18bb3b81462cc04f16ddbfc346333d1ca4e62187d5dff1d",
+          "category": "importer",
+          "id": "p1:03e0a73d9911b151642a776887cd6739ebacf17320e7a1a5d29004e29e210a4e",
+          "supports": [
+            {
+              "source": "s1:ed7077d597cca09750f158bef3de196ff4e8677e2ec55de3c94ef62c0141fc6c",
+              "read": "r1:dbed3fda9fec1fd028e5574080efeeb5a83397643ca0b5144c2d7d8e3284b69d",
+              "pointer": "/value/files/0/importers/0"
+            }
+          ]
+        },
+        {
+          "kind": "workspace-context",
+          "context": {
+            "family": "decisions",
+            "source": "request",
+            "repositories": [
+              {
+                "repo": "shop",
+                "snapshot": "v1:0396299e903511502860d7b997376a61d72afef2d48d88562da338e11ebee051"
+              },
+              {
+                "repo": "web",
+                "snapshot": "v1:46a5e80d79c00850c20cc416b244565f8e14919e703308952fb37cb57c4b6d45"
+              }
+            ]
+          },
+          "id": "p1:3cc95038daaaf5a1832834aa2c3e4b283c3b29a4a1433162b0fe8c3c7120f13b",
+          "supports": [
+            {
+              "source": "s1:66f865543170056bfb291e0dfc99b1b082a651a91ad8413adfe52fd768e93ff8",
+              "read": "r1:47f142b768ab9af3d4f677e28ea07c69e6cb5f541deb86d23163249d92939572",
+              "pointer": "/value/repositories"
+            },
+            {
+              "source": "s1:66f865543170056bfb291e0dfc99b1b082a651a91ad8413adfe52fd768e93ff8",
+              "read": "r1:47f142b768ab9af3d4f677e28ea07c69e6cb5f541deb86d23163249d92939572",
+              "pointer": "/value/source"
+            }
+          ]
+        },
+        {
+          "kind": "file-dependency",
+          "from": "f1:572e87a0e494243a0c69ef2686c363c64f98f67c3b29e6ee017647d400da997d",
+          "to": "f1:11985b41dc77b61bd18bb3b81462cc04f16ddbfc346333d1ca4e62187d5dff1d",
+          "category": "user",
+          "id": "p1:8472b17f2d6fe32b5d31045198d956f0fd63882740476348bb738624448e163d",
+          "supports": [
+            {
+              "source": "s1:ed7077d597cca09750f158bef3de196ff4e8677e2ec55de3c94ef62c0141fc6c",
+              "read": "r1:dbed3fda9fec1fd028e5574080efeeb5a83397643ca0b5144c2d7d8e3284b69d",
+              "pointer": "/value/files/0/users/0"
+            }
+          ]
+        },
+        {
+          "kind": "file-query",
+          "file": "f1:11985b41dc77b61bd18bb3b81462cc04f16ddbfc346333d1ca4e62187d5dff1d",
+          "categories": [
+            {
+              "name": "importers",
+              "collection": {
+                "state": "present",
+                "count": 1
+              }
+            },
+            {
+              "name": "reexporters",
+              "collection": {
+                "state": "present",
+                "count": 0
+              }
+            },
+            {
+              "name": "dynamicImporters",
+              "collection": {
+                "state": "present",
+                "count": 0
+              }
+            },
+            {
+              "name": "typeImporters",
+              "collection": {
+                "state": "present",
+                "count": 0
+              }
+            },
+            {
+              "name": "users",
+              "collection": {
+                "state": "present",
+                "count": 1
+              }
+            },
+            {
+              "name": "unresolvedNamers",
+              "collection": {
+                "state": "present",
+                "count": 0
+              }
+            }
+          ],
+          "id": "p1:90cfc752ece3b130c47055b1d9b3e1131ce636b796c233e57b3d761588bce10d",
+          "supports": [
+            {
+              "source": "s1:ed7077d597cca09750f158bef3de196ff4e8677e2ec55de3c94ef62c0141fc6c",
+              "read": "r1:dbed3fda9fec1fd028e5574080efeeb5a83397643ca0b5144c2d7d8e3284b69d",
+              "pointer": "/value/files/0"
+            }
+          ]
+        },
+        {
+          "kind": "decision",
+          "context": "r1:47f142b768ab9af3d4f677e28ea07c69e6cb5f541deb86d23163249d92939572",
+          "decisionId": "trust:shop",
+          "kindName": "trust",
+          "subject": "shop",
+          "allowsFreeText": false,
+          "required": true,
+          "evidence": [],
+          "options": [
+            {
+              "value": "trusted",
+              "evidence": [],
+              "recommended": false
+            },
+            {
+              "value": "untrusted",
+              "evidence": [],
+              "recommended": false
+            }
+          ],
+          "id": "p1:d63b1aebdd5a719e96504d5dd3986e58b1e99192301cb6a456fd32fbda4a983b",
+          "supports": [
+            {
+              "source": "s1:66f865543170056bfb291e0dfc99b1b082a651a91ad8413adfe52fd768e93ff8",
+              "read": "r1:47f142b768ab9af3d4f677e28ea07c69e6cb5f541deb86d23163249d92939572",
+              "pointer": "/value/decisions/0"
+            }
+          ]
+        },
+        {
+          "kind": "decision",
+          "context": "r1:47f142b768ab9af3d4f677e28ea07c69e6cb5f541deb86d23163249d92939572",
+          "decisionId": "trust:web",
+          "kindName": "trust",
+          "subject": "web",
+          "allowsFreeText": false,
+          "required": true,
+          "evidence": [],
+          "options": [
+            {
+              "value": "trusted",
+              "evidence": [],
+              "recommended": false
+            },
+            {
+              "value": "untrusted",
+              "evidence": [],
+              "recommended": false
+            }
+          ],
+          "id": "p1:d9aec0e7ed63ecec6b8ca2b6aaf00f97a7bb322e01effdb7bf8c92679270668d",
+          "supports": [
+            {
+              "source": "s1:66f865543170056bfb291e0dfc99b1b082a651a91ad8413adfe52fd768e93ff8",
+              "read": "r1:47f142b768ab9af3d4f677e28ea07c69e6cb5f541deb86d23163249d92939572",
+              "pointer": "/value/decisions/1"
+            }
+          ]
+        }
+      ],
+      "entities": [],
+      "bindings": [],
+      "relations": [
+        {
+          "id": "l1:be53ac9546cce7749218f64dbd8b136e4286d1cd3cd1490b96b8ebcc9a33eaa5",
+          "value": {
+            "kind": "file-import",
+            "from": "f1:572e87a0e494243a0c69ef2686c363c64f98f67c3b29e6ee017647d400da997d",
+            "to": "f1:11985b41dc77b61bd18bb3b81462cc04f16ddbfc346333d1ca4e62187d5dff1d"
+          },
+          "attestations": [
+            {
+              "contextKey": "b82f38d65066339d8c1106015e16aee2152caa0f2974f665dc2b517e4e7e5f91",
+              "parts": [
+                "p1:03e0a73d9911b151642a776887cd6739ebacf17320e7a1a5d29004e29e210a4e"
+              ],
+              "reads": [
+                "r1:dbed3fda9fec1fd028e5574080efeeb5a83397643ca0b5144c2d7d8e3284b69d"
+              ]
+            }
+          ]
+        },
+        {
+          "id": "l1:ec12c546bd67a330083e04e2d2ca0b558354f0ebb75b23a30cf19cdfe4e7e26b",
+          "value": {
+            "kind": "file-use",
+            "from": "f1:572e87a0e494243a0c69ef2686c363c64f98f67c3b29e6ee017647d400da997d",
+            "to": "f1:11985b41dc77b61bd18bb3b81462cc04f16ddbfc346333d1ca4e62187d5dff1d"
+          },
+          "attestations": [
+            {
+              "contextKey": "b82f38d65066339d8c1106015e16aee2152caa0f2974f665dc2b517e4e7e5f91",
+              "parts": [
+                "p1:8472b17f2d6fe32b5d31045198d956f0fd63882740476348bb738624448e163d"
+              ],
+              "reads": [
+                "r1:dbed3fda9fec1fd028e5574080efeeb5a83397643ca0b5144c2d7d8e3284b69d"
+              ]
+            }
+          ]
+        }
+      ],
+      "connections": []
+    },
+    "coverage": {
+      "reads": {
+        "complete": 1,
+        "partial": 1,
+        "unknown": 0
+      },
+      "unknowns": [],
+      "limits": [
+        {
+          "source": "s1:ed7077d597cca09750f158bef3de196ff4e8677e2ec55de3c94ef62c0141fc6c",
+          "owner": {
+            "kind": "fact"
+          },
+          "kind": "unresolved-link",
+          "cuts": 2,
+          "places": 0
+        }
+      ],
+      "issues": []
+    },
+    "counts": {
+      "sources": 2,
+      "reads": 2,
+      "files": 2,
+      "anchors": 0,
+      "entities": 0,
+      "evidence": 0,
+      "parts": 6,
+      "relations": 2,
+      "connections": 0,
+      "unknownFindings": 0,
+      "unknownComponents": 0
+    },
+    "delivery": [
+      {
+        "source": "s1:66f865543170056bfb291e0dfc99b1b082a651a91ad8413adfe52fd768e93ff8",
+        "repositoryRoots": [
+          {
+            "repo": "shop",
+            "path": "<fixture-root>/shop"
+          },
+          {
+            "repo": "web",
+            "path": "<fixture-root>/web"
+          }
+        ]
+      },
+      {
+        "source": "s1:ed7077d597cca09750f158bef3de196ff4e8677e2ec55de3c94ef62c0141fc6c",
+        "repositoryRoots": [
+          {
+            "repo": "web",
+            "path": "<fixture-root>/web"
+          }
+        ]
+      }
+    ]
+  },
+  "isError": false
+}

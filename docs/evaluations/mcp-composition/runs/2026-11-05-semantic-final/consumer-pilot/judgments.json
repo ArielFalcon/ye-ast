@@ -1,0 +1,417 @@
+{
+  "adjudicator": {
+    "kind": "model",
+    "id": "gpt-6.1-sol lead; manual semantic review in this implementation session"
+  },
+  "judgments": [
+    {
+      "caseId": "change-duplicate-dependence",
+      "condition": "composed",
+      "order": "original",
+      "replicate": 1,
+      "claimId": "p1",
+      "verdict": "supported",
+      "reason": "Lead semantic review against the cited route/declaration/relationship, collection metadata, source provenance or read limitation. Claim remains scoped to recorded evidence; no inference of breakage, missing-as-empty or unrecorded chains. Any unresolved raw citation remains an independent scoring failure.",
+      "supports": [
+        "l1:46e957312dee43b55c2a3f8c7aa73afa08ce75172126d25120ba278b701b1424",
+        "c1:45d3faa67bf482f2859cb365f0ee5628f79fbe0f99b9ce0ff9edf46abb07f3ff",
+        "p1:506f0900bffad0c6a9a7c7bbefae630a71d707c9b81587ee94915d708fdee32c"
+      ]
+    },
+    {
+      "caseId": "change-duplicate-dependence",
+      "condition": "composed",
+      "order": "original",
+      "replicate": 1,
+      "claimId": "extra:1",
+      "verdict": "supported",
+      "reason": "Lead semantic review against the cited route/declaration/relationship, collection metadata, source provenance or read limitation. Claim remains scoped to recorded evidence; no inference of breakage, missing-as-empty or unrecorded chains. Any unresolved raw citation remains an independent scoring failure.",
+      "supports": [
+        "p1:627b9fac17a8f9e78e88c4c6d7f37222653c1efa5c29214d980fb6a391139af0",
+        "p1:82861a02f1fcc0c3da461ce1ee2e795034f5ea32aecf04940d1f10f57826bb46"
+      ]
+    },
+    {
+      "caseId": "change-duplicate-dependence",
+      "condition": "composed",
+      "order": "original",
+      "replicate": 1,
+      "claimId": "extra:2",
+      "verdict": "supported",
+      "reason": "Lead semantic review against the cited route/declaration/relationship, collection metadata, source provenance or read limitation. Claim remains scoped to recorded evidence; no inference of breakage, missing-as-empty or unrecorded chains. Any unresolved raw citation remains an independent scoring failure.",
+      "supports": [
+        "p1:f0669da7b11ed0cf6abf44f35fbca201c63bb26f93498774ce6f7a233f3ca736",
+        "l1:ee49d291916d644d3a6ed9b1cb6a413ff724f410b1e33daf58e5c25a5c3c9c38",
+        "p1:c3c5abbc24415d47dffcf6e72ec0fa11680729e78c018e10a6d9152256c91ef4",
+        "l1:da5115fdc72e1e5171245e15740819b96209b3d0cedbe91315e8153db7505f7a"
+      ]
+    },
+    {
+      "caseId": "change-duplicate-dependence",
+      "condition": "composed",
+      "order": "original",
+      "replicate": 1,
+      "claimId": "extra:3",
+      "verdict": "supported",
+      "reason": "Lead semantic review against the cited route/declaration/relationship, collection metadata, source provenance or read limitation. Claim remains scoped to recorded evidence; no inference of breakage, missing-as-empty or unrecorded chains. Any unresolved raw citation remains an independent scoring failure.",
+      "supports": [
+        "p1:4c23ebd2ce2422f068ad6cf0d1d4ebea651731f0553a0b5d1ba84175f059beba"
+      ]
+    },
+    {
+      "caseId": "change-duplicate-dependence",
+      "condition": "composed",
+      "order": "original",
+      "replicate": 1,
+      "claimId": "extra:4",
+      "verdict": "supported",
+      "reason": "Lead semantic review against the cited route/declaration/relationship, collection metadata, source provenance or read limitation. Claim remains scoped to recorded evidence; no inference of breakage, missing-as-empty or unrecorded chains. Any unresolved raw citation remains an independent scoring failure.",
+      "supports": [
+        "l1:509a5e9b53baf9950b01b396b880f4fa9342d10b64aae882cd203eeecb39d966",
+        "p1:efa181d66f17ff68b5a7423ec3c308f85dfbd694eac22fda241b4e9d93707814",
+        "p1:edb7c9529c120a0f47a10585b22e19930f75392e81e325c111586bf9516c5c20"
+      ]
+    },
+    {
+      "caseId": "change-duplicate-dependence",
+      "condition": "composed",
+      "order": "original",
+      "replicate": 1,
+      "claimId": "extra:5",
+      "verdict": "supported",
+      "reason": "Lead semantic review against the cited route/declaration/relationship, collection metadata, source provenance or read limitation. Claim remains scoped to recorded evidence; no inference of breakage, missing-as-empty or unrecorded chains. Any unresolved raw citation remains an independent scoring failure.",
+      "supports": [
+        "p1:2611d75f20e7bfd1087adcd5754e88d70da91e59bd280dc8a39a7cb5b2d22432"
+      ]
+    },
+    {
+      "caseId": "change-duplicate-dependence",
+      "condition": "composed",
+      "order": "original",
+      "replicate": 1,
+      "claimId": "extra:6",
+      "verdict": "supported",
+      "reason": "Lead semantic review against the cited route/declaration/relationship, collection metadata, source provenance or read limitation. Claim remains scoped to recorded evidence; no inference of breakage, missing-as-empty or unrecorded chains. Any unresolved raw citation remains an independent scoring failure.",
+      "supports": [
+        "l1:37aaecdb540de7bf2130722453bf4d90a645568e76334ca22333c092b0328c68",
+        "p1:18a1022f45b7e8b9dce2aa28cc9308b3718cb630eb68f5d7cbf7ae5da3e6ce19"
+      ]
+    },
+    {
+      "caseId": "change-duplicate-dependence",
+      "condition": "composed",
+      "order": "original",
+      "replicate": 1,
+      "claimId": "p4",
+      "verdict": "supported",
+      "reason": "Lead semantic review against the cited route/declaration/relationship, collection metadata, source provenance or read limitation. Claim remains scoped to recorded evidence; no inference of breakage, missing-as-empty or unrecorded chains. Any unresolved raw citation remains an independent scoring failure.",
+      "supports": [
+        "r1:346d9e13163f3d94f6539e3f83ef225527fbdd9c3cb134272e0715397fffe0e8",
+        "r1:955eb7116478ffe3fa528384e938dca45a5e68b8b16da13cbed47d7c2d9be24c",
+        "r1:f71445a72fa1b017be92a4fa11c9ebbbd7f5fea309889f62e668e905af046151"
+      ]
+    },
+    {
+      "caseId": "change-duplicate-dependence",
+      "condition": "composed",
+      "order": "original",
+      "replicate": 1,
+      "claimId": "extra:7",
+      "verdict": "supported",
+      "reason": "Lead semantic review against the cited route/declaration/relationship, collection metadata, source provenance or read limitation. Claim remains scoped to recorded evidence; no inference of breakage, missing-as-empty or unrecorded chains. Any unresolved raw citation remains an independent scoring failure.",
+      "supports": [
+        "p1:f0669da7b11ed0cf6abf44f35fbca201c63bb26f93498774ce6f7a233f3ca736",
+        "l1:509a5e9b53baf9950b01b396b880f4fa9342d10b64aae882cd203eeecb39d966"
+      ]
+    },
+    {
+      "caseId": "change-duplicate-dependence",
+      "condition": "composed",
+      "order": "original",
+      "replicate": 1,
+      "claimId": "extra:8",
+      "verdict": "supported",
+      "reason": "Lead semantic review against the cited route/declaration/relationship, collection metadata, source provenance or read limitation. Claim remains scoped to recorded evidence; no inference of breakage, missing-as-empty or unrecorded chains. Any unresolved raw citation remains an independent scoring failure.",
+      "supports": [
+        "r1:3ad8c151047c91babcdaff56078315346738b5e78fb4420a7ad758b4c76f0b66",
+        "r1:51696027555756e23a628deb2d7e04ec0a07aca7ff819e41de179faef5cf03cd"
+      ]
+    },
+    {
+      "caseId": "change-duplicate-dependence",
+      "condition": "composed",
+      "order": "original",
+      "replicate": 1,
+      "claimId": "answer",
+      "verdict": "consistent",
+      "reason": "Lead read the prose against the prepared evidence: declared method and route, containment basis, recorded cross-repository matching, partial/unknown limitations, and available decision options. Earlier present/absent wording is interpreted strictly as field metadata, and its ambiguity is retained as a diagnostic finding, not as a positive count.",
+      "supports": []
+    },
+    {
+      "caseId": "seven-families",
+      "condition": "composed",
+      "order": "original",
+      "replicate": 1,
+      "claimId": "p1",
+      "verdict": "supported",
+      "reason": "Lead semantic review against the cited route/declaration/relationship, collection metadata, source provenance or read limitation. Claim remains scoped to recorded evidence; no inference of breakage, missing-as-empty or unrecorded chains. Any unresolved raw citation remains an independent scoring failure.",
+      "supports": [
+        "c1:995092c427235cab31fd65f5dfea2148ed61be178d72dce111c6b883f533e02c",
+        "p1:53889cfd905e481499ada8b5a59e079cd7852731a90b7e2af9fa01bc6f3dcafd",
+        "p1:bff98e93ea3807cbb2f2084ab39d53bf3731db20dc74bde36480601c88089a8b",
+        "l1:287356118002028afdcc42f39c538db6de09979840f45645f86f0e508056719a"
+      ]
+    },
+    {
+      "caseId": "seven-families",
+      "condition": "composed",
+      "order": "original",
+      "replicate": 1,
+      "claimId": "p2",
+      "verdict": "supported",
+      "reason": "Lead semantic review against the cited route/declaration/relationship, collection metadata, source provenance or read limitation. Claim remains scoped to recorded evidence; no inference of breakage, missing-as-empty or unrecorded chains. Any unresolved raw citation remains an independent scoring failure.",
+      "supports": [
+        "l1:7bb48eea0f13d15c20f400529792c1f31add5819432e3f1f23922085031d835b",
+        "p1:506f0900bffad0c6a9a7c7bbefae630a71d707c9b81587ee94915d708fdee32c",
+        "c1:e13556dd1fe8912ee28dfd17cf96be1e8fc81da2fdbb398ae405e3ebefa04846"
+      ]
+    },
+    {
+      "caseId": "seven-families",
+      "condition": "composed",
+      "order": "original",
+      "replicate": 1,
+      "claimId": "p6",
+      "verdict": "supported",
+      "reason": "Lead semantic review against the cited route/declaration/relationship, collection metadata, source provenance or read limitation. Claim remains scoped to recorded evidence; no inference of breakage, missing-as-empty or unrecorded chains. Any unresolved raw citation remains an independent scoring failure.",
+      "supports": [
+        "r1:346d9e13163f3d94f6539e3f83ef225527fbdd9c3cb134272e0715397fffe0e8",
+        "r1:955eb7116478ffe3fa528384e938dca45a5e68b8b16da13cbed47d7c2d9be24c",
+        "r1:f71445a72fa1b017be92a4fa11c9ebbbd7f5fea309889f62e668e905af046151",
+        "r1:dbed3fda9fec1fd028e5574080efeeb5a83397643ca0b5144c2d7d8e3284b69d"
+      ]
+    },
+    {
+      "caseId": "seven-families",
+      "condition": "composed",
+      "order": "original",
+      "replicate": 1,
+      "claimId": "/claims/3",
+      "verdict": "supported",
+      "reason": "Lead semantic review against the cited route/declaration/relationship, collection metadata, source provenance or read limitation. Claim remains scoped to recorded evidence; no inference of breakage, missing-as-empty or unrecorded chains. Any unresolved raw citation remains an independent scoring failure.",
+      "supports": [
+        "p1:627b9fac17a8f9e78e88c4c6d7f37222653c1efa5c29214d980fb6a391139af0",
+        "a1:0434b6975dd29c5998669c71fda92752691a2d58e8b76a2cae149b4d963466aa"
+      ]
+    },
+    {
+      "caseId": "seven-families",
+      "condition": "composed",
+      "order": "original",
+      "replicate": 1,
+      "claimId": "/claims/4",
+      "verdict": "supported",
+      "reason": "Lead semantic review against the cited route/declaration/relationship, collection metadata, source provenance or read limitation. Claim remains scoped to recorded evidence; no inference of breakage, missing-as-empty or unrecorded chains. Any unresolved raw citation remains an independent scoring failure.",
+      "supports": [
+        "p1:f0669da7b11ed0cf6abf44f35fbca201c63bb26f93498774ce6f7a233f3ca736",
+        "l1:ee49d291916d644d3a6ed9b1cb6a413ff724f410b1e33daf58e5c25a5c3c9c38",
+        "p1:4c23ebd2ce2422f068ad6cf0d1d4ebea651731f0553a0b5d1ba84175f059beba"
+      ]
+    },
+    {
+      "caseId": "seven-families",
+      "condition": "composed",
+      "order": "original",
+      "replicate": 1,
+      "claimId": "/claims/5",
+      "verdict": "supported",
+      "reason": "Lead semantic review against the cited route/declaration/relationship, collection metadata, source provenance or read limitation. Claim remains scoped to recorded evidence; no inference of breakage, missing-as-empty or unrecorded chains. Any unresolved raw citation remains an independent scoring failure.",
+      "supports": [
+        "p1:c3c5abbc24415d47dffcf6e72ec0fa11680729e78c018e10a6d9152256c91ef4",
+        "l1:da5115fdc72e1e5171245e15740819b96209b3d0cedbe91315e8153db7505f7a",
+        "c1:ff6b3cc02e59fbae36a05e71d2dc63a78b7d8d8e7c8461b35e384c6b0de539e2"
+      ]
+    },
+    {
+      "caseId": "seven-families",
+      "condition": "composed",
+      "order": "original",
+      "replicate": 1,
+      "claimId": "/claims/6",
+      "verdict": "supported",
+      "reason": "Lead semantic review against the cited route/declaration/relationship, collection metadata, source provenance or read limitation. Claim remains scoped to recorded evidence; no inference of breakage, missing-as-empty or unrecorded chains. Any unresolved raw citation remains an independent scoring failure.",
+      "supports": [
+        "p1:edb7c9529c120a0f47a10585b22e19930f75392e81e325c111586bf9516c5c20",
+        "p1:efa181d66f17ff68b5a7423ec3c308f85dfbd694eac22fda241b4e9d93707814",
+        "l1:1ea442c3e08e76da89f6e2da16afb96611d3f8d444ecc6bec60bc5c33b54505e"
+      ]
+    },
+    {
+      "caseId": "seven-families",
+      "condition": "composed",
+      "order": "original",
+      "replicate": 1,
+      "claimId": "/claims/7",
+      "verdict": "supported",
+      "reason": "Lead semantic review against the cited route/declaration/relationship, collection metadata, source provenance or read limitation. Claim remains scoped to recorded evidence; no inference of breakage, missing-as-empty or unrecorded chains. Any unresolved raw citation remains an independent scoring failure.",
+      "supports": [
+        "p1:2611d75f20e7bfd1087adcd5754e88d70da91e59bd280dc8a39a7cb5b2d22432"
+      ]
+    },
+    {
+      "caseId": "seven-families",
+      "condition": "composed",
+      "order": "original",
+      "replicate": 1,
+      "claimId": "/claims/8",
+      "verdict": "supported",
+      "reason": "Lead semantic review against the cited route/declaration/relationship, collection metadata, source provenance or read limitation. Claim remains scoped to recorded evidence; no inference of breakage, missing-as-empty or unrecorded chains. Any unresolved raw citation remains an independent scoring failure.",
+      "supports": [
+        "l1:be53ac9546cce7749218f64dbd8b136e4286d1cd3cd1490b96b8ebcc9a33eaa5",
+        "l1:ec12c546bd67a330083e04e2d2ca0b558354f0ebb75b23a30cf19cdfe4e7e26b",
+        "p1:90cfc752ece3b130c47055b1d9b3e1131ce636b796c233e57b3d761588bce10d"
+      ]
+    },
+    {
+      "caseId": "seven-families",
+      "condition": "composed",
+      "order": "original",
+      "replicate": 1,
+      "claimId": "/claims/9",
+      "verdict": "supported",
+      "reason": "Lead semantic review against the cited route/declaration/relationship, collection metadata, source provenance or read limitation. Claim remains scoped to recorded evidence; no inference of breakage, missing-as-empty or unrecorded chains. Any unresolved raw citation remains an independent scoring failure.",
+      "supports": [
+        "p1:faa888d5a2af1e98e128cb3460aba9f635ea28dfec4bee2d921c95a537d3396a"
+      ]
+    },
+    {
+      "caseId": "seven-families",
+      "condition": "composed",
+      "order": "original",
+      "replicate": 1,
+      "claimId": "extra:8",
+      "verdict": "supported",
+      "reason": "Lead semantic review against the cited route/declaration/relationship, collection metadata, source provenance or read limitation. Claim remains scoped to recorded evidence; no inference of breakage, missing-as-empty or unrecorded chains. Any unresolved raw citation remains an independent scoring failure.",
+      "supports": [
+        "p1:d63b1aebdd5a719e96504d5dd3986e58b1e99192301cb6a456fd32fbda4a983b",
+        "p1:d9aec0e7ed63ecec6b8ca2b6aaf00f97a7bb322e01effdb7bf8c92679270668d"
+      ]
+    },
+    {
+      "caseId": "seven-families",
+      "condition": "composed",
+      "order": "original",
+      "replicate": 1,
+      "claimId": "extra:9",
+      "verdict": "supported",
+      "reason": "Lead semantic review against the cited route/declaration/relationship, collection metadata, source provenance or read limitation. Claim remains scoped to recorded evidence; no inference of breakage, missing-as-empty or unrecorded chains. Any unresolved raw citation remains an independent scoring failure.",
+      "supports": [
+        "p1:3aebd855a0af5cb4d660d0d02d692d27d4e355e730d0f4dc2a7efb3c9a3c4a1f",
+        "p1:68a9dedc03709e484f6bc4b082e8e38e8819dc98d34e2bcd7d422190b9319c31",
+        "c1:a2f2d4401f0f878e3ed33c98079155a6f8aeb128a4dd8ce804afd75eab312755",
+        "c1:d5b0a037c3901d40c049a1c5e3a604630c1ba6809e5879357bbbd2d54757433e"
+      ]
+    },
+    {
+      "caseId": "seven-families",
+      "condition": "composed",
+      "order": "original",
+      "replicate": 1,
+      "claimId": "/uncertainties/0",
+      "verdict": "supported",
+      "reason": "Lead semantic review against the cited route/declaration/relationship, collection metadata, source provenance or read limitation. Claim remains scoped to recorded evidence; no inference of breakage, missing-as-empty or unrecorded chains. Any unresolved raw citation remains an independent scoring failure.",
+      "supports": [
+        "p1:bff98e93ea3807cbb2f2084ab39d53bf3731db20dc74bde36480601c88089a8b",
+        "e1:b669960aa4743c05313a8f9222110c1540c87e38b7b94d5dbdc205155e54e8e8"
+      ]
+    },
+    {
+      "caseId": "seven-families",
+      "condition": "composed",
+      "order": "original",
+      "replicate": 1,
+      "claimId": "/uncertainties/1",
+      "verdict": "supported",
+      "reason": "Lead semantic review against the cited route/declaration/relationship, collection metadata, source provenance or read limitation. Claim remains scoped to recorded evidence; no inference of breakage, missing-as-empty or unrecorded chains. Any unresolved raw citation remains an independent scoring failure.",
+      "supports": [
+        "r1:346d9e13163f3d94f6539e3f83ef225527fbdd9c3cb134272e0715397fffe0e8",
+        "r1:955eb7116478ffe3fa528384e938dca45a5e68b8b16da13cbed47d7c2d9be24c",
+        "r1:f71445a72fa1b017be92a4fa11c9ebbbd7f5fea309889f62e668e905af046151"
+      ]
+    },
+    {
+      "caseId": "seven-families",
+      "condition": "composed",
+      "order": "original",
+      "replicate": 1,
+      "claimId": "/uncertainties/2",
+      "verdict": "supported",
+      "reason": "Lead semantic review against the cited route/declaration/relationship, collection metadata, source provenance or read limitation. Claim remains scoped to recorded evidence; no inference of breakage, missing-as-empty or unrecorded chains. Any unresolved raw citation remains an independent scoring failure.",
+      "supports": [
+        "r1:dbed3fda9fec1fd028e5574080efeeb5a83397643ca0b5144c2d7d8e3284b69d"
+      ]
+    },
+    {
+      "caseId": "seven-families",
+      "condition": "composed",
+      "order": "original",
+      "replicate": 1,
+      "claimId": "/uncertainties/3",
+      "verdict": "supported",
+      "reason": "Lead semantic review against the cited route/declaration/relationship, collection metadata, source provenance or read limitation. Claim remains scoped to recorded evidence; no inference of breakage, missing-as-empty or unrecorded chains. Any unresolved raw citation remains an independent scoring failure.",
+      "supports": [
+        "r1:3ad8c151047c91babcdaff56078315346738b5e78fb4420a7ad758b4c76f0b66",
+        "r1:51696027555756e23a628deb2d7e04ec0a07aca7ff819e41de179faef5cf03cd",
+        "r1:dab915c35330996fb43dde7dcf6ae47866d260230b9d879411b6f0ce2655f59e"
+      ]
+    },
+    {
+      "caseId": "seven-families",
+      "condition": "composed",
+      "order": "original",
+      "replicate": 1,
+      "claimId": "/uncertainties/4",
+      "verdict": "supported",
+      "reason": "Lead semantic review against the cited route/declaration/relationship, collection metadata, source provenance or read limitation. Claim remains scoped to recorded evidence; no inference of breakage, missing-as-empty or unrecorded chains. Any unresolved raw citation remains an independent scoring failure.",
+      "supports": [
+        "p1:2611d75f20e7bfd1087adcd5754e88d70da91e59bd280dc8a39a7cb5b2d22432"
+      ]
+    },
+    {
+      "caseId": "seven-families",
+      "condition": "composed",
+      "order": "original",
+      "replicate": 1,
+      "claimId": "/uncertainties/5",
+      "verdict": "supported",
+      "reason": "Lead semantic review against the cited route/declaration/relationship, collection metadata, source provenance or read limitation. Claim remains scoped to recorded evidence; no inference of breakage, missing-as-empty or unrecorded chains. Any unresolved raw citation remains an independent scoring failure.",
+      "supports": [
+        "p1:d63b1aebdd5a719e96504d5dd3986e58b1e99192301cb6a456fd32fbda4a983b",
+        "p1:d9aec0e7ed63ecec6b8ca2b6aaf00f97a7bb322e01effdb7bf8c92679270668d"
+      ]
+    },
+    {
+      "caseId": "seven-families",
+      "condition": "composed",
+      "order": "original",
+      "replicate": 1,
+      "claimId": "/uncertainties/6",
+      "verdict": "supported",
+      "reason": "Lead semantic review against the cited route/declaration/relationship, collection metadata, source provenance or read limitation. Claim remains scoped to recorded evidence; no inference of breakage, missing-as-empty or unrecorded chains. Any unresolved raw citation remains an independent scoring failure.",
+      "supports": [
+        "p1:68a9dedc03709e484f6bc4b082e8e38e8819dc98d34e2bcd7d422190b9319c31",
+        "p1:efa181d66f17ff68b5a7423ec3c308f85dfbd694eac22fda241b4e9d93707814"
+      ]
+    },
+    {
+      "caseId": "seven-families",
+      "condition": "composed",
+      "order": "original",
+      "replicate": 1,
+      "claimId": "answer",
+      "verdict": "consistent",
+      "reason": "Lead read the prose against the prepared evidence: declared method and route, containment basis, recorded cross-repository matching, partial/unknown limitations, and available decision options. Earlier present/absent wording is interpreted strictly as field metadata, and its ambiguity is retained as a diagnostic finding, not as a positive count.",
+      "supports": []
+    }
+  ]
+}
