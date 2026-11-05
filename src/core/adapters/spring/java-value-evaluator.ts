@@ -4,7 +4,7 @@ import { bindMethod, methodsOf } from "./java-method-flow.ts";
 import type { Node } from "web-tree-sitter";
 import type { Configuration } from "./application-config.ts";
 import { argumentsOf, assignmentsOf, descendants, fieldBindings, localBindings, memberNodes, typeNameOf, type Binding } from "./java-members.ts";
-import { externalNames, scopeOf, type JavaFile, type JavaProject, type TypeDecl } from "./java-symbols.ts";
+import { externalNames, scopeOf, type JavaFile, type JavaProject, type MethodDecl, type TypeDecl } from "./java-symbols.ts";
 import { stringLiteralValue } from "./java-literals.ts";
 import { annotationUses, isAnnotation } from "./request-mapping.ts";
 import { CONFIGURATION_PROPERTIES, TRANSPARENT_URI_METHODS, URI_FACTORIES, VALUE } from "./http-client-vocabulary.ts";
@@ -160,6 +160,9 @@ export class JavaValueEvaluator {
     const expression = value?.attributes.get("value")?.[0];
     if (expression !== undefined) return this.attribute(expression.node, { type: owner, locals: new Map(), env: new Map(), configurationFile: scope.configurationFile ?? scope.type.file });
     if (isField && (assignmentsOf(owner).get(binding.name) ?? []).some(({ member }) => member.type !== "constructor_declaration")) return undefined;
+    if (isField && binding.initializer !== undefined && scope.instance?.constructed !== true
+      && !binding.node.namedChildren.some((child) => child.type === "modifiers" && /\bfinal\b/.test(child.text))
+      && !this.immutable(owner)) return undefined;
     const assigned = isField && binding.initializer === undefined ? (assignmentsOf(owner).get(binding.name) ?? []) : [];
     const sources = binding.initializer === undefined ? assigned.map(({ value: node, member }) => ({ node, scope: { ...scope, locals: localBindings(member) } })) : [{ node: binding.initializer, scope }];
     const [only, ...others] = sources;
@@ -254,9 +257,9 @@ export class JavaValueEvaluator {
   }
 
   private immutable(type: TypeDecl): boolean {
-    return type.node.type === "record_declaration"
-      || annotationUses(type.node, scopeOf(type)).some((use) => isAnnotation(use, LOMBOK_VALUE))
-      || [...fieldBindings(type).values()].every((field) => field.node.childForFieldName("modifiers")?.text.includes("final") === true || field.node.namedChildren.some((child) => child.type === "modifiers" && /\bfinal\b/.test(child.text)));
+    if (type.node.type === "record_declaration") return true;
+    return this.project.classChain(type).every((owner) => annotationUses(owner.node, scopeOf(owner)).some((use) => isAnnotation(use, LOMBOK_VALUE))
+      || [...fieldBindings(owner).values()].every((field) => field.node.namedChildren.some((child) => child.type === "modifiers" && /\bfinal\b/.test(child.text))));
   }
 
   private recordIsStable(value: ObjectValue, binding: Binding, read: Node, scope: UrlScope): boolean {
@@ -273,19 +276,8 @@ export class JavaValueEvaluator {
         const call = parent.parent;
         const index = argumentsOf(call).findIndex((argument) => argument.id === use.id);
         const targets = methodsOf({ node: call, type: scope.type, member: member ?? undefined, locals: scope.locals }, this.project, this);
-        return targets.length === 0 || targets.some(({ method }) => {
-          const parameter = method.node.childForFieldName("parameters")?.namedChildren[index]?.childForFieldName("name")?.text;
-          if (parameter === undefined) return true;
-          return descendants(method.node.childForFieldName("body") ?? method.node).some((reference) => {
-            if (reference.type !== "identifier" || reference.text !== parameter) return false;
-            const access = reference.parent;
-            const name = access?.childForFieldName("name")?.text ?? "";
-            const getter = GETTER.exec(name);
-            const property = getter === null ? name : `${getter[1]?.toLowerCase()}${getter[2]}`;
-            return access?.type !== "method_invocation" || access.childForFieldName("object")?.id !== reference.id || argumentsOf(access).length !== 0
-              || (!this.generatedGetter(value.type, property, name) && !value.type.methods.some((candidate) => candidate.name === name && candidate.parameterTypes.length === 0 && this.simpleAccessor(candidate.node)));
-          });
-        });
+        return targets.length === 0 || !this.readOnlyParameters(targets.map(({ method }) => ({ method, index })), value.type);
+
       }
       if (parent?.type !== "method_invocation" || parent.childForFieldName("object")?.id !== use.id) return true;
       const name = parent.childForFieldName("name")?.text ?? "";
@@ -294,6 +286,36 @@ export class JavaValueEvaluator {
       return !this.generatedGetter(value.type, property, name)
         && !value.type.methods.some((method) => method.name === name && this.simpleAccessor(method.node));
     });
+  }
+
+  private readOnlyParameters(pending: { method: MethodDecl; index: number }[], type: TypeDecl): boolean {
+    const seen = new Set<string>();
+    for (let item = pending.pop(); item !== undefined; item = pending.pop()) {
+      const { method, index } = item;
+      const key = `${method.node.id}:${index}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const parameter = method.node.childForFieldName("parameters")?.namedChildren[index]?.childForFieldName("name")?.text;
+      if (parameter === undefined) return false;
+      for (const reference of descendants(method.node.childForFieldName("body") ?? method.node)) {
+        if (reference.type !== "identifier" || reference.text !== parameter) continue;
+        const access = reference.parent;
+        if (access?.type === "argument_list" && access.parent?.type === "method_invocation") {
+          const call = access.parent;
+          const slot = argumentsOf(call).findIndex((argument) => argument.id === reference.id);
+          const targets = methodsOf({ node: call, type: method.owner, member: method.node, locals: localBindings(method.node) }, this.project, this);
+          if (targets.length === 0) return false;
+          pending.push(...targets.map(({ method }) => ({ method, index: slot })));
+          continue;
+        }
+        const name = access?.childForFieldName("name")?.text ?? "";
+        const getter = GETTER.exec(name);
+        const property = getter === null ? name : `${getter[1]?.toLowerCase()}${getter[2]}`;
+        if (access?.type !== "method_invocation" || access.childForFieldName("object")?.id !== reference.id || argumentsOf(access).length !== 0
+          || (!this.generatedGetter(type, property, name) && !type.methods.some((candidate) => candidate.name === name && candidate.parameterTypes.length === 0 && this.simpleAccessor(candidate.node)))) return false;
+      }
+    }
+    return true;
   }
 
   private simpleAccessor(method: Node): boolean {

@@ -439,7 +439,8 @@ test("configuration defaults apply only to absent keys and never to conflicting 
 test("a source URL helper follows a proven null fallback and a single array element into HttpUrl", async () => {
   const source = java("UrlHelper", `@lombok.Builder @lombok.Data class Query { String staticUrl; }
     class UrlHelper { OkHttpClient client;
-      HttpUrl compose(Query query, String configured) {
+      HttpUrl compose(Query query, String configured) { return render(query, configured); }
+      HttpUrl render(Query query, String configured) {
         String[] rendered = { query.getStaticUrl() != null ? query.getStaticUrl() : configured };
         HttpUrl.Builder builder = HttpUrl.parse(rendered[0]).newBuilder(); return builder.build();
       }
@@ -472,7 +473,8 @@ test("escaped mutable records never retain stale constructor, builder or setter 
       void setPath(String path) { this.path = path; } String getPath() { return path; }
     }
     class Probe { RestTemplate rt;
-      void retarget(Query q) { q.setPath("/admin"); }
+      void retarget(Query q) { mutate(q); }
+      void mutate(Query q) { q.setPath("/admin"); }
       void load() { ${setup} retarget(query); rt.getForObject("http://catalog" + query.getPath(), String.class); }
     }`);
     const sites = await reader.of([source], "service");
@@ -492,10 +494,10 @@ test("aliases and shared mutable fields cannot establish an object value", async
   }
 });
 
-test("instance field writes in other methods invalidate scalar initializers", async () => {
-  const source = java("Probe", `class Probe { RestTemplate rt; String path = "/items";
+test("instance field writes outside constructors never establish scalar values", async () => {
+  const source = java("Probe", `class Probe { RestTemplate rt; String path;
     void retarget() { path = "/admin"; }
-    void load() { retarget(); rt.getForObject("http://catalog" + path, String.class); }
+    void load() { rt.getForObject("http://catalog" + path, String.class); }
   }`);
   assert.equal((await reader.of([source], "service"))[0]?.target.status, "unknown");
 });
@@ -512,4 +514,32 @@ test("dispatch disagreement invalidates only its own output", async () => {
   assert.equal(sites.length, 2);
   assert.equal(sites.filter((site) => site.target.status === "unknown").length, 1);
   assert.deepEqual(sites.find((site) => site.target.status === "complete")?.target.status === "complete", true);
+});
+
+test("deep source return evaluation degrades to unknown on stack exhaustion", async () => {
+  const methods = Array.from({ length: 3000 }, (_, index) => `String value${index}() { return value${index + 1}(); }`).join("\n");
+  const source = java("Deep", `class Deep { RestTemplate rt; ${methods}
+    String value3000() { return "http://catalog/items"; }
+    void load() { rt.getForObject(value0(), String.class); }
+  }`);
+  const sites = await reader.of([source], "service");
+  assert.equal(sites.find((site) => site.symbol === "Deep.load")?.target.status, "unknown");
+});
+
+test("inherited mutable fields prevent an empty subclass from proving immutability", async () => {
+  const source = java("Probe", `class Base { String path; void setPath(String path) { this.path = path; } String getPath() { return path; } }
+    class Query extends Base { Query(String path) { this.path = path; } }
+    class Probe { RestTemplate rt; void mutate(Query q) { q.setPath("/admin"); }
+      void load() { Query query = new Query("/items"); mutate(query); rt.getForObject("http://catalog" + query.getPath(), String.class); }
+    }`);
+  assert.equal((await reader.of([source], "service"))[0]?.target.status, "unknown");
+});
+
+test("shared mutable objects cannot recover field defaults through a source getter", async () => {
+  const source = java("Probe", `class Query { String path = "/items"; String getPath() { return path; } }
+    class Probe { RestTemplate rt; Query query;
+      void retarget() { query.path = "/admin"; }
+      void load() { retarget(); rt.getForObject("http://catalog" + query.getPath(), String.class); }
+    }`);
+  assert.equal((await reader.of([source], "service"))[0]?.target.status, "unknown");
 });
