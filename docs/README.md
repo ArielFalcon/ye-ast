@@ -1,6 +1,6 @@
 # Architecture explorer
 
-The unified site: the graph-first explorer plus the concept sections and the walk simulator from the original
+The unified site: an introduction, the concept sections, the graph explorer and the walk simulator from the original
 narrative explainer. The explainer itself stays on the author's machine as source material; this is the only site
 that is served, by GitHub Pages from `docs/`, at its root.
 
@@ -13,10 +13,12 @@ page. Every `path:line` reference opens the file in the repository on GitHub.
 | --- | --- |
 | Graph | Six layers, 37 modules and 68 edges: entrypoints, composition, application, domain, ports and adapters. |
 | Levels | `Layers` is an overview: select a band to read its description, its modules and its cross-layer dependency counts, then open the module graph deliberately. `Modules` shows every module; `Files` shows the files of the current step's module while keeping the flow, its steps and the step explanation available. |
-| Zoom | Wheel zoom, drag pan, two-pointer pinch, `+`/`−`/`Fit`; URL hash like `#impact/7`. |
+| Zoom | Ctrl/⌘ + wheel zoom (a plain wheel scrolls the page and shows a hint), drag pan, two-pointer pinch, `+`/`−`/`Fit`; URL hash like `#impact/7`. |
 | Flows | `impact`, `map`, `callers`, `importers`, `workspace`, `init` and `live`; 31 steps in total. |
 | Step | Highlights the nodes and edges of the step, dims the rest, anchors a callout to a node with a leader line and opens an explanation with why, relations, nodes, terms and evidence. |
 | Node | Clicking a node pauses the flow and switches the header to `Node inspection`; `Back to flow` restores the exact flow and step. The panel shows role, what it may import, what it never reaches, its facts and its files. |
+| Order | Introduction, fact contract, surfaces, trust, architecture graph, rules, simulator, runs, glossary, sources: general first, mechanics after. |
+| Section rail | A fixed rail on the left edge, one brick per section: passed bricks are solid, the current one widens and fills with the reading progress of its section, a heat line shows the progress of the whole page. The header names the current section. |
 | Concepts | Fact contract and cuts; edge policy and mechanics; a bounds block that explains depth, `fan-in`, `hub fan-in`, expansions and deadline inline; walk simulator; real executions and fixture; trust; surfaces; glossary; sources. |
 | Glossary | 30 terms with localized labels and definitions, a filter and "show in graph" links. |
 
@@ -35,7 +37,7 @@ dependency rule is the layer order in `AGENTS.md`; the graph is a data-flow view
 | `content.es.js` | Spanish UI, module subtitles/details and all 31 flow steps. |
 | `modules.en.js`, `modules.es.js` | Module details reused from the original explainer. |
 | `glossary.js` | Terms and definitions used by the glossary and the info panel. |
-| `concepts.js` | Glossary filter, "show in graph" links and the fact-status playground. |
+| `concepts.js` | Glossary filter, "show in graph" links, the fact-status playground, section motion and the section rail. |
 | `simulator.js` | The walk simulator: seeds, bounds, edge policy, cuts and entrypoints. |
 | `sim-ui.js` | Simulator labels in English and Spanish. |
 | `README.md` | This file. |

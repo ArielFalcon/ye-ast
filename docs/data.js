@@ -159,6 +159,7 @@ window.EXPLORER_DATA = {
     inspectModule: "Inspect module",
     relationNames: { calls: "call", uses: "use", implements: "implements", wires: "wires" },
     toLight: "Switch to light theme",
+    zoomHint: "Hold Ctrl (⌘ on a Mac) and scroll to zoom",
     toDark: "Switch to dark theme",
   },
 

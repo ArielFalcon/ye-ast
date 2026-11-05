@@ -65,6 +65,7 @@ window.EXPLORER_ES = {
     inspectModule: "Inspeccionar módulo",
     relationNames: { calls: "llamada", uses: "uso", implements: "implementa", wires: "cableado" },
     toLight: "Cambiar al tema claro",
+    zoomHint: "Mantén Ctrl (⌘ en Mac) y haz scroll para hacer zoom",
     toDark: "Cambiar al tema oscuro",
   },
 

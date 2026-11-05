@@ -128,7 +128,7 @@ pre code, .command, .code-block { background: none; border: 0; padding: 0; }
 }
 .stat-strip > div { padding: 18px 20px; background: var(--panel); }
 .stat-strip strong { display: block; font-family: var(--serif); font-size: 2.1rem; line-height: 1; color: var(--ink); }
-.stat-strip span { display: block; margin-top: 6px; font-family: var(--mono); font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: var(--cyan); }
+.stat-strip span { display: block; margin-top: 6px; font-family: var(--display); font-stretch: condensed; font-weight: 800; font-size: 15px; letter-spacing: .02em; text-transform: uppercase; color: var(--cyan); }
 .stat-strip small { display: block; margin-top: 4px; font-size: 10.5px; color: var(--faint); }
 
 .flowline-wrap { margin: 52px 0 0; }
@@ -802,20 +802,14 @@ details[open] summary { border-bottom: 1px solid var(--line-soft); }
 }
 
 /* ── concepts shell ─────────────────────────────────────────────────── */
-.docs { background: var(--bg); border-top: var(--stroke) solid var(--line); padding-bottom: 60px; }
+.docs { background: var(--bg); padding-bottom: 60px; overflow-x: clip; }
+.explorer .docs { padding-bottom: 0; }
+.docs .explorer-head { padding-bottom: 32px; }
+.docs kbd {
+  display: inline-block; padding: 0 .35em; border: 1.5px solid var(--line); border-bottom-width: 3px;
+  font-family: var(--display); font-stretch: condensed; font-weight: 800; font-size: .92em; line-height: 1.35; color: var(--ink);
+}
 .docs-inner { max-width: 1180px; margin: 0 auto; padding: 0 28px; }
-.docs-nav {
-  position: sticky; top: 56px; z-index: 18;
-  display: flex; gap: 2px; overflow-x: auto; padding: 8px 16px;
-  border-bottom: var(--stroke) solid var(--line);
-  background: var(--bg);
-}
-.docs-nav a {
-  flex: 0 0 auto; padding: 3px 9px;
-  color: var(--muted); text-decoration: none;
-  font-family: var(--display); font-stretch: condensed; font-weight: 700; font-size: 15px;
-}
-.docs-nav a:hover { color: var(--night); background: var(--bone); }
 .doc-section, #simulator { scroll-margin-top: 42px; }
 #concept-runs { padding-top: 40px; }
 #concept-runs .real-runs { margin-top: 0; }
@@ -888,7 +882,6 @@ details[open] summary { border-bottom: 1px solid var(--line-soft); }
 
 @media (max-width: 980px) {
   .docs-inner { padding: 0 16px; }
-  .docs-nav { top: 52px; }
   .glossary-grid { grid-template-columns: 1fr; }
 }
 
@@ -1036,11 +1029,24 @@ details[open] summary { border-bottom: 1px solid var(--line-soft); }
 @keyframes drift { to { transform: translateX(-480px); } }
 
 .has-motion .docs .section-head > .kicker { clip-path: inset(0 100% 0 0); transition: clip-path .45s var(--ease-draw) .3s; }
-.has-motion .docs .section-head > h2 { clip-path: inset(100% 0 -10% 0); transform: translateY(14px); transition: clip-path .7s var(--ease-draw) .4s, transform .7s var(--ease-draw) .4s; }
-.has-motion .docs .section-head > .section-lede { opacity: 0; transition: opacity .6s ease .75s; }
+.has-motion .docs .section-head > h1, .has-motion .docs .section-head > h2 { clip-path: inset(100% 0 -10% 0); transform: translateY(14px); transition: clip-path .7s var(--ease-draw) .4s, transform .7s var(--ease-draw) .4s; }
+.has-motion .docs .section-head > .section-lede, .has-motion .docs .section-head > .hero-actions, .has-motion .docs .section-head > .hero-foot { opacity: 0; transition: opacity .6s ease .75s; }
+.has-motion .docs .section-head > .hero-actions { transition-delay: .9s; }
+.has-motion .docs .section-head > .hero-foot { transition-delay: 1.05s; }
 .has-motion .docs .doc-section.is-in .section-head > .kicker { clip-path: inset(0 0 0 0); }
-.has-motion .docs .doc-section.is-in .section-head > h2 { clip-path: inset(0 0 -10% 0); transform: none; }
-.has-motion .docs .doc-section.is-in .section-head > .section-lede { opacity: 1; }
+.has-motion .docs .doc-section.is-in .section-head > h1, .has-motion .docs .doc-section.is-in .section-head > h2 { clip-path: inset(0 0 -10% 0); transform: none; }
+.has-motion .docs .doc-section.is-in .section-head > .section-lede,
+.has-motion .docs .doc-section.is-in .section-head > .hero-actions,
+.has-motion .docs .doc-section.is-in .section-head > .hero-foot { opacity: 1; }
+
+/* The introduction carries the one long sequence: the request crosses the bricks as heat and lands on the fact. */
+.docs .hero .fl-node { transform-box: fill-box; transform-origin: 50% 100%; }
+.docs .hero .fl-edge { stroke: var(--faint); }
+.docs .hero .arrow-head { fill: var(--heat); }
+.has-motion .docs .hero .fl-node { opacity: 0; transform: translateY(-14px); transition: opacity .35s ease, transform .55s var(--ease-set); transition-delay: calc(1.1s + var(--i, 0) * 110ms); }
+.has-motion .docs .hero.is-in .fl-node { opacity: 1; transform: none; }
+.docs .hero.is-in .fl-edge { stroke: var(--heat); stroke-width: 2; filter: var(--glow-heat); animation: heat-draw .5s var(--ease-draw) calc(1.6s + var(--i, 0) * 160ms) backwards, heat-flow 1.2s linear calc(2.1s + var(--i, 0) * 160ms) infinite; }
+.docs .hero .fl-edge.dashed { opacity: 1; }
 
 .has-motion .docs .build > * {
   opacity: 0; transform: translateY(-14px);
@@ -1053,15 +1059,6 @@ details[open] summary { border-bottom: 1px solid var(--line-soft); }
 .has-motion .docs .build.is-in > .status-card::after, .has-motion .docs .run-card.is-in::after { clip-path: inset(0 0 0 0); }
 .docs .status-card::after, .docs .run-card::after { transform-origin: 100% 100%; }
 .docs .status-card:hover::after, .docs .run-card:hover::after { transform: scaleY(-1) scale(1.35); }
-
-.docs-nav a.is-current { color: var(--ink); }
-.docs-nav-marker {
-  position: absolute; left: 0; bottom: 0; height: 3px; width: 0; pointer-events: none;
-  background: var(--lime); opacity: 0;
-  transition: transform .5s var(--ease-draw), width .5s var(--ease-draw), opacity .2s;
-}
-[data-theme="light"] .docs-nav-marker { background: var(--heat); }
-.docs-nav-marker.is-visible { opacity: 1; }
 
 .docs .surface-node, .docs .surface-core { border-width: var(--stroke); border-radius: var(--radius); }
 .docs .surface-core { border-color: var(--lime); background: color-mix(in srgb, var(--lime) 8%, var(--panel)); }

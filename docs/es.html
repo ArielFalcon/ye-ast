@@ -9,102 +9,68 @@
 <link rel="stylesheet" href="concepts.css">
 </head>
 <body>
-<a class="skip" href="#graph-canvas">Saltar al grafo</a>
+<a class="skip" href="#main">Saltar al contenido</a>
 
 <header class="bar">
-  <a class="brand" href="es.html" aria-label="Explorador de arquitectura de ye-ast">
+  <a class="brand" href="#intro" aria-label="Documentación de ye-ast">
     <span class="brand-mark" aria-hidden="true">y</span>
-    <span class="brand-text">ye-ast <span>/ arquitectura</span></span>
+    <span class="brand-text">ye-ast <span>/ docs</span></span>
   </a>
+  <p class="bar-section" id="bar-section" aria-hidden="true"></p>
   <div class="bar-tools">
-    <div class="level-switch" role="tablist" aria-label="Nivel del grafo">
-      <button type="button" data-level="layers" role="tab">Capas</button>
-      <button type="button" data-level="modules" role="tab" class="is-active">Módulos</button>
-      <button type="button" data-level="files" role="tab">Archivos</button>
-    </div>
-    <a class="concepts-link" href="#concepts">Conceptos</a>
     <a class="lang-switch" href="index.html" hreflang="en" lang="en" aria-label="View in English">EN</a>
     <button class="icon-button" id="theme-toggle" type="button" aria-pressed="false" aria-label="Cambiar al tema claro">◐</button>
   </div>
 </header>
 
-<main class="workspace">
-  <aside class="panel flows-panel" aria-label="Flujos y pasos">
-    <div class="panel-head"><h2>Flujos</h2><span>7</span></div>
-    <div class="flow-list" id="flow-list"></div>
-    <div class="panel-head"><h2>Pasos</h2></div>
-    <div class="step-list" id="step-list"></div>
-    <div class="legend">
-      <p><i class="swatch active"></i> activo en este paso</p>
-      <p><i class="swatch node"></i> módulo</p>
-      <p><i class="swatch edge"></i> flujo de una petición</p>
-      <p class="legend-title">Aristas</p>
-      <p><i class="swatch edge-calls"></i> llamada</p>
-      <p><i class="swatch edge-uses"></i> uso</p>
-      <p><i class="swatch edge-implements"></i> implementa</p>
-      <p><i class="swatch edge-wires"></i> cableado</p>
-    </div>
-    <p class="panel-note">Las flechas muestran el sentido de una petición. La regla de dependencias es el orden de las capas, no el sentido de la flecha.</p>
-    <a class="panel-link" href="#concepts">Conceptos y glosario ↓</a>
-  </aside>
+<nav class="rail" id="rail" aria-label="Secciones"></nav>
 
-  <section class="panel graph-panel" aria-label="Grafo de arquitectura">
-    <div class="graph-head">
-      <div class="graph-title">
-        <p class="eyebrow" id="flow-kicker">Flujo</p>
-        <h1 id="flow-title">impact</h1>
-        <p id="flow-question"></p>
-      </div>
-      <div class="zoom-tools">
-        <button type="button" id="zoom-out" aria-label="Alejar">−</button>
-        <span id="zoom-label">100%</span>
-        <button type="button" id="zoom-in" aria-label="Acercar">+</button>
-        <button type="button" id="zoom-fit" class="text-button">Ajustar</button>
-      </div>
-    </div>
-
-    <div class="graph-canvas" id="graph-canvas">
-      <svg id="graph-svg" role="img" aria-label="Grafo de arquitectura por capas">
-        <g id="graph-viewport">
-          <g id="graph-bands"></g>
-          <g id="graph-edges"></g>
-          <g id="graph-nodes"></g>
-        </g>
-      </svg>
-      <div class="callout-layer" id="callout-layer">
-        <svg class="callout-svg" aria-hidden="true"><path id="callout-line"></path></svg>
-        <div class="callout-card" id="callout-card" aria-live="polite"></div>
-      </div>
-    </div>
-
-    <div class="graph-foot">
-      <span id="graph-status"></span>
-      <div class="step-controls">
-        <button type="button" id="step-prev" aria-label="Paso anterior">←</button>
-        <span id="step-count">1 / 8</span>
-        <button type="button" id="step-next" aria-label="Paso siguiente">→</button>
-        <button type="button" id="step-play">Reproducir</button>
-      </div>
-    </div>
-  </section>
-
-  <aside class="panel info-panel" id="info-panel" aria-live="polite"></aside>
-</main>
-
-<section class="docs" id="concepts">
-  
-    <nav class="docs-nav" aria-label="Conceptos">
-      <a href="#facts">Contrato de fact</a>
-      <a href="#concept-rules">Reglas</a>
-      <a href="#simulator">Simulador</a>
-      <a href="#concept-runs">Ejecuciones</a>
-      <a href="#trust">Confianza</a>
-      <a href="#surfaces">Superficies</a>
-      <a href="#concept-glossary">Glosario</a>
-      <a href="#sources">Fuentes</a>
-    </nav>
+<main id="main">
+<div class="docs">
   <div class="docs-inner">
-    <section id="facts" class="doc-section">
+    <section id="intro" class="doc-section hero" data-rail="Introducción">
+      <div class="section-head hero-copy">
+        <p class="kicker">Verdad de código determinista</p>
+        <h1>Verdad de código, dibujada.</h1>
+        <p class="section-lede lede">ye-ast responde de qué depende el código, dónde aparece esa dependencia y cuán completa es la respuesta. Cada respuesta se deriva de código, git y contratos declarados, y dice lo que no pudo ver.</p>
+        <div class="hero-actions">
+          <a class="button primary" href="#facts">Leer el contrato de fact</a>
+          <a class="button" href="#explorer">Explorar la arquitectura</a>
+        </div>
+        <p class="hero-foot">Dentro del motor no corre ningún LLM. <strong>“Unknown” es una respuesta explícita</strong>: un resultado vacío nunca significa “sin impacto”.</p>
+      </div>
+      <div class="stat-strip build" aria-label="De un vistazo">
+          <div><strong>7</strong><span>comandos de lectura</span><small>map · impact · callers · importers · outline · workspace · decisions</small></div>
+          <div><strong>2</strong><span>trust modes</span><small>untrusted por defecto; trusted se declara</small></div>
+          <div><strong>9</strong><span>tipos de cut</span><small>cada punto ciego tiene nombre</small></div>
+          <div><strong>0</strong><span>llamadas a un LLM</span><small>el motor decide, el agente lee</small></div>
+      </div>
+        <figure class="flowline-wrap" aria-labelledby="hero-flow-caption">
+          <svg class="flowline" viewBox="0 0 980 190" role="img" aria-labelledby="hero-flow-title hero-flow-caption">
+            <title id="hero-flow-title">Una petición cruza una frontera y produce un fact</title>
+            <defs>
+              <marker id="hero-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <path d="M 0 0 L 10 5 L 0 10 z" class="arrow-head"></path>
+              </marker>
+            </defs>
+            <g class="fl-node" data-tone="entry"><rect x="8" y="58" width="150" height="62" rx="10"></rect><text x="83" y="84" class="fl-kicker">adapter de entrada</text><text x="83" y="104" class="fl-title">CLI · MCP</text></g>
+            <g class="fl-node" data-tone="composition"><rect x="194" y="58" width="150" height="62" rx="10"></rect><text x="269" y="84" class="fl-kicker">composición</text><text x="269" y="104" class="fl-title">cablea ambos lados</text></g>
+            <g class="fl-node" data-tone="application"><rect x="380" y="58" width="150" height="62" rx="10"></rect><text x="455" y="84" class="fl-kicker">caso de uso</text><text x="455" y="104" class="fl-title">ImpactQueries</text></g>
+            <g class="fl-node" data-tone="ports"><rect x="566" y="58" width="150" height="62" rx="10"></rect><text x="641" y="84" class="fl-kicker">puerto</text><text x="641" y="104" class="fl-title">lo que necesita</text></g>
+            <g class="fl-node" data-tone="adapters"><rect x="752" y="58" width="150" height="62" rx="10"></rect><text x="827" y="84" class="fl-kicker">adapter</text><text x="827" y="104" class="fl-title">git · codegraph</text></g>
+            <path d="M158 89 H194" class="fl-edge" marker-end="url(#hero-arrow)"></path>
+            <path d="M344 89 H380" class="fl-edge" marker-end="url(#hero-arrow)"></path>
+            <path d="M530 89 H566" class="fl-edge" marker-end="url(#hero-arrow)"></path>
+            <path d="M716 89 H752" class="fl-edge" marker-end="url(#hero-arrow)"></path>
+            <g class="fl-node" data-tone="fact"><rect x="318" y="150" width="344" height="34" rx="17"></rect><text x="490" y="171" class="fl-title">Fact&lt;ImpactValue&gt; · complete | partial | unknown</text></g>
+            <path d="M827 120 V137 H662 V150" class="fl-edge dashed" marker-end="url(#hero-arrow)"></path>
+            <path d="M455 120 V137 H318 V150" class="fl-edge dashed" marker-end="url(#hero-arrow)"></path>
+          </svg>
+          <figcaption id="hero-flow-caption">El core decide; todo lo que lo rodea transporta. El mismo caso de uso se alcanza desde el CLI, el servidor MCP o el protocolo de query porque composición inyecta las query families.</figcaption>
+        </figure>
+    </section>
+
+    <section data-rail="Contrato de fact" id="facts" class="doc-section">
       <div class="section-head">
         <p class="kicker">El contrato de fact</p>
         <h2>Una respuesta que puede decir “no lo sé”.</h2>
@@ -193,8 +159,191 @@
       </div>
     </section>
 
-    
-    <section class="doc-section" id="concept-rules">
+    <section data-rail="Superficies" id="surfaces" class="doc-section">
+      <div class="section-head">
+        <p class="kicker">Superficies</p>
+        <h2>Tres formas de entrar, un solo conjunto de decisiones.</h2>
+        <p class="section-lede">Un adaptador de entrada convierte una petición externa en una llamada y da forma a la respuesta. Nunca alcanza un adaptador ni un caso de uso directamente; composición inyecta las query families.</p>
+      </div>
+
+      <div class="surface-diagram" aria-hidden="true">
+        <div class="surface-node"><strong>CLI</strong><span>map · impact · llamadores · importers · install</span></div>
+        <div class="surface-node"><strong>MCP</strong><span>ye_ast_entrypoints · impact · ye_ast_callers · ye_ast_importers · workspace</span></div>
+        <div class="surface-node"><strong>protocol</strong><span>JSON-RPC 2.0 · un mensaje por línea</span></div>
+        <div class="surface-merge">⟶</div>
+        <div class="surface-core"><strong>las mismas query families</strong><span>EntrypointQueries · ImpactQueries · WorkspaceQueries</span></div>
+      </div>
+
+      <div class="table-wrap">
+        <table class="data-table">
+          <caption>Puntos de entrada</caption>
+          <thead><tr><th>Superficie</th><th>Qué expone</th><th>Dónde</th></tr></thead>
+          <tbody>
+            <tr><td><code>ye-ast map</code></td><td>Los puntos de entrada de una revisión; <code>--live</code> para un working tree trusted.</td><td><code>src/cli/main.ts:167-170</code></td></tr>
+            <tr><td><code>ye-ast impact</code></td><td>El cambio desde el merge base hasta head; límite; alcance.</td><td><code>src/cli/main.ts:171-174</code></td></tr>
+            <tr><td><code>ye-ast callers</code></td><td>Alcanzabilidad inversa desde símbolos o rangos de líneas.</td><td><code>src/cli/main.ts:175-178</code></td></tr>
+            <tr><td><code>ye-ast importers</code></td><td>Importers, users y namers sin resolver por archivo.</td><td><code>src/cli/main.ts:179-182</code></td></tr>
+            <tr><td><code>ye-ast init</code></td><td>Escribe el confianza record, el exclude local y la fixed layer; imprime el registro MCP.</td><td><code>src/core/application/install/install.ts:23-45</code></td></tr>
+            <tr><td><code>ye-ast mcp</code></td><td>Servidor MCP stdio atado a un repositorio; tools de solo lectura.</td><td><code>src/composition/mcp.ts</code></td></tr>
+            <tr><td><code>ye-ast serve</code></td><td>El protocolo de query sobre stdio; stdout solo lleva líneas de protocolo.</td><td><code>src/protocol/query-server.ts</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="mcp-note">
+        <p><strong>Solo lectura por tipo.</strong> <code>McpDeps</code> solo contiene <code>EntrypointQueries</code>, <code>ImpactQueries</code>, <code>WorkspaceQueries</code> y <code>WorkspaceImpactQueries</code>. No hay ningún método de escritura al que llamar, así que un agente no puede alcanzar uno por error.</p>
+        <p>El servidor MCP también entrega la guía de cortes como instrucciones: el agente aprende qué hacer en cada corte, no solo que existe.</p>
+      </div>
+    </section>
+
+    <section data-rail="Confianza" id="trust" class="doc-section">
+      <div class="section-head">
+        <p class="kicker">Confianza y snapshots</p>
+        <h2>Dos modos, una regla: el repositorio nunca eleva su propio confianza.</h2>
+        <p class="section-lede">El trust describe el contenido del repositorio, nunca la máquina. Se declara fuera del repositorio: un host lo hace a través de la librería o del protocolo, un usuario a través de <code>ye-ast init</code> o de un flag. Sin declaración, el CLI y el servidor MCP corren <code>untrusted</code>.</p>
+      </div>
+
+      <div class="trust-lanes">
+        <article class="lane" data-trust="untrusted">
+          <header><span class="pill">default</span><h3>untrusted</h3></header>
+          <p>Lee solo un snapshot exportado desde git en un sha, nunca el repositorio en sí.</p>
+          <ol class="lane-steps">
+            <li><span>01</span> Resuelve la revisión a un sha completo.</li>
+            <li><span>02</span> <code>ls-tree</code> lista el árbol; solo se seleccionan los archivos dentro del scope.</li>
+            <li><span>03</span> <code>cat-file --batch</code> streamea cada blob a un directorio scratch.</li>
+            <li><span>04</span> Los extractores y codegraph leen el <em>export</em>, no el checkout.</li>
+            <li><span>05</span> El fact registra el sha y el digest de contenido.</li>
+          </ol>
+          <ul class="lane-invariants">
+            <li>No se ejecuta código del repositorio.</li>
+            <li>No se honra ningún manifiesto, <code>.gitignore</code>, config de engine ni índice preconstruido del repositorio.</li>
+            <li>Sin symlinks, sin red.</li>
+          </ul>
+        </article>
+
+        <article class="lane" data-trust="trusted">
+          <header><span class="pill ok">declarado</span><h3>trusted</h3></header>
+          <p>Añade el working tree y el refresh de remotes, siempre hacia el store propio de ye-ast.</p>
+          <ol class="lane-steps">
+            <li><span>01</span> El mismo camino de export en un sha.</li>
+            <li><span>02</span> <code>--live</code> sustituye <code>head</code>/<code>revision</code> por el working tree.</li>
+            <li><span>03</span> git lista rutas con <code>ls-files -z --cached --others --exclude-standard</code>.</li>
+            <li><span>04</span> ye-ast las copia y hashea en su espejo; codegraph lee el espejo.</li>
+            <li><span>05</span> Un lock, un state file y <code>sync({ paths })</code> mantienen el grafo de esos bytes.</li>
+          </ol>
+          <ul class="lane-invariants">
+            <li><code>--live</code> se rechaza bajo <code>untrusted</code> con <code>live-requires-trusted</code>.</li>
+            <li>Las ediciones se copian, nunca se hard-linkean.</li>
+            <li>Una respuesta stale lo dice por stderr; el fact no cambia.</li>
+          </ul>
+        </article>
+      </div>
+
+      <div class="callout">
+        <p><strong>La regla de live:</strong> un fact live describe bytes que ye-ast copió y hasheó, y el grafo que lee es el grafo de esos mismos bytes. El motor nunca camina el repositorio.</p>
+        <p class="ref"><code>docs/architecture/rfc/0010-impact-queries.md</code> “Live head” · <code>src/core/application/snapshot/read-snapshot.ts:32-40</code></p>
+      </div>
+
+      <div class="invariants">
+        <div><p class="mini-kicker">Invariantes</p><h3>Lo que nunca se mueve</h3></div>
+        <ul>
+          <li><strong>Solo lectura hacia los agentes.</strong> El servidor MCP recibe solo query families de lectura, así que una escritura es imposible por tipo (<code>src/mcp/server.ts:21-31</code>).</li>
+          <li><strong>Determinismo.</strong> Salida ordenada, rutas relativas al repositorio, sin ids internos del índice, el snapshot en cada fact.</li>
+          <li><strong>Redaction antes de la salida.</strong> Los patrones siempre; los secretos by-value solo en el proceso que ya los tiene.</li>
+          <li><strong>Fallar fuerte, degradar explícitamente.</strong> Un fallo tipado o un <code>unknown</code>/<code>partial</code> explícito, nunca un resultado vacío.</li>
+          <li><strong>codegraph solo a través de su adaptador.</strong> El SQL crudo vive solo ahí, con versión comprobada; la telemetría siempre está apagada y su shim de CLI nunca se llama.</li>
+        </ul>
+      </div>
+    </section>
+  </div>
+</div>
+
+<div class="explorer" id="explorer" data-rail="Arquitectura">
+  <div class="docs">
+    <div class="docs-inner">
+      <section class="doc-section explorer-head">
+        <div class="section-head">
+          <p class="kicker">Arquitectura</p>
+          <h2>Sigue una petición a través de las capas.</h2>
+          <p class="section-lede">Elige un flujo y recórrelo paso a paso: cada paso ilumina los módulos y las aristas que cruza y explica por qué. Selecciona un módulo para ver qué puede importar y qué nunca alcanza. Mantén <kbd>Ctrl</kbd> (<kbd>⌘</kbd> en Mac) mientras haces scroll para hacer zoom en el grafo.</p>
+        </div>
+      </section>
+    </div>
+  </div>
+<div class="workspace">
+  <aside class="panel flows-panel" aria-label="Flujos y pasos">
+    <div class="panel-head"><h2>Flujos</h2><span>7</span></div>
+    <div class="flow-list" id="flow-list"></div>
+    <div class="panel-head"><h2>Pasos</h2></div>
+    <div class="step-list" id="step-list"></div>
+    <div class="legend">
+      <p><i class="swatch active"></i> activo en este paso</p>
+      <p><i class="swatch node"></i> módulo</p>
+      <p><i class="swatch edge"></i> flujo de una petición</p>
+      <p class="legend-title">Aristas</p>
+      <p><i class="swatch edge-calls"></i> llamada</p>
+      <p><i class="swatch edge-uses"></i> uso</p>
+      <p><i class="swatch edge-implements"></i> implementa</p>
+      <p><i class="swatch edge-wires"></i> cableado</p>
+    </div>
+    <p class="panel-note">Las flechas muestran el sentido de una petición. La regla de dependencias es el orden de las capas, no el sentido de la flecha.</p>
+    <a class="panel-link" href="#concepts">Conceptos y glosario ↓</a>
+  </aside>
+
+  <section class="panel graph-panel" aria-label="Grafo de arquitectura">
+    <div class="graph-head">
+      <div class="graph-title">
+        <p class="eyebrow" id="flow-kicker">Flujo</p>
+        <h2 id="flow-title">impact</h2>
+        <p id="flow-question"></p>
+      </div>
+      <div class="graph-tools">
+        <div class="level-switch" role="tablist" aria-label="Nivel del grafo">
+          <button type="button" data-level="layers" role="tab">Capas</button>
+          <button type="button" data-level="modules" role="tab" class="is-active">Módulos</button>
+          <button type="button" data-level="files" role="tab">Archivos</button>
+        </div>
+        <div class="zoom-tools">
+          <button type="button" id="zoom-out" aria-label="Alejar">−</button>
+          <span id="zoom-label">100%</span>
+          <button type="button" id="zoom-in" aria-label="Acercar">+</button>
+          <button type="button" id="zoom-fit" class="text-button">Ajustar</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="graph-canvas" id="graph-canvas">
+      <svg id="graph-svg" role="img" aria-label="Grafo de arquitectura por capas">
+        <g id="graph-viewport">
+          <g id="graph-bands"></g>
+          <g id="graph-edges"></g>
+          <g id="graph-nodes"></g>
+        </g>
+      </svg>
+      <div class="callout-layer" id="callout-layer">
+        <svg class="callout-svg" aria-hidden="true"><path id="callout-line"></path></svg>
+        <div class="callout-card" id="callout-card" aria-live="polite"></div>
+      </div>
+    </div>
+
+    <div class="graph-foot">
+      <span id="graph-status"></span>
+      <div class="step-controls">
+        <button type="button" id="step-prev" aria-label="Paso anterior">←</button>
+        <span id="step-count">1 / 8</span>
+        <button type="button" id="step-next" aria-label="Paso siguiente">→</button>
+        <button type="button" id="step-play">Reproducir</button>
+      </div>
+    </div>
+  </section>
+
+  <aside class="panel info-panel" id="info-panel" aria-live="polite"></aside>
+</div>
+</div>
+
+<div class="docs" id="concepts">
+  <div class="docs-inner">
+    <section data-rail="Reglas" class="doc-section" id="concept-rules">
       
       <div class="section-head">
         <p class="kicker">Reglas del recorrido</p>
@@ -276,7 +425,8 @@
         </details>
       </div>
     </section>
-    <section class="doc-section" id="concept-sim">
+
+    <section data-rail="Simulador" class="doc-section" id="concept-sim">
       <div class="simulator" id="simulator">
         <div class="sim-head">
           <div>
@@ -372,7 +522,8 @@
 
       
     </section>
-    <section class="doc-section" id="concept-runs">
+
+    <section data-rail="Ejecuciones" class="doc-section" id="concept-runs">
       <div class="real-runs">
         <div class="real-head reveal">
           <p class="mini-kicker">Ejecución de referencia</p>
@@ -501,106 +652,8 @@ export class LoginComponent {
 
       
     </section>
-    <section id="trust" class="doc-section">
-      <div class="section-head">
-        <p class="kicker">Confianza y snapshots</p>
-        <h2>Dos modos, una regla: el repositorio nunca eleva su propio confianza.</h2>
-        <p class="section-lede">El trust describe el contenido del repositorio, nunca la máquina. Se declara fuera del repositorio: un host lo hace a través de la librería o del protocolo, un usuario a través de <code>ye-ast init</code> o de un flag. Sin declaración, el CLI y el servidor MCP corren <code>untrusted</code>.</p>
-      </div>
 
-      <div class="trust-lanes">
-        <article class="lane" data-trust="untrusted">
-          <header><span class="pill">default</span><h3>untrusted</h3></header>
-          <p>Lee solo un snapshot exportado desde git en un sha, nunca el repositorio en sí.</p>
-          <ol class="lane-steps">
-            <li><span>01</span> Resuelve la revisión a un sha completo.</li>
-            <li><span>02</span> <code>ls-tree</code> lista el árbol; solo se seleccionan los archivos dentro del scope.</li>
-            <li><span>03</span> <code>cat-file --batch</code> streamea cada blob a un directorio scratch.</li>
-            <li><span>04</span> Los extractores y codegraph leen el <em>export</em>, no el checkout.</li>
-            <li><span>05</span> El fact registra el sha y el digest de contenido.</li>
-          </ol>
-          <ul class="lane-invariants">
-            <li>No se ejecuta código del repositorio.</li>
-            <li>No se honra ningún manifiesto, <code>.gitignore</code>, config de engine ni índice preconstruido del repositorio.</li>
-            <li>Sin symlinks, sin red.</li>
-          </ul>
-        </article>
-
-        <article class="lane" data-trust="trusted">
-          <header><span class="pill ok">declarado</span><h3>trusted</h3></header>
-          <p>Añade el working tree y el refresh de remotes, siempre hacia el store propio de ye-ast.</p>
-          <ol class="lane-steps">
-            <li><span>01</span> El mismo camino de export en un sha.</li>
-            <li><span>02</span> <code>--live</code> sustituye <code>head</code>/<code>revision</code> por el working tree.</li>
-            <li><span>03</span> git lista rutas con <code>ls-files -z --cached --others --exclude-standard</code>.</li>
-            <li><span>04</span> ye-ast las copia y hashea en su espejo; codegraph lee el espejo.</li>
-            <li><span>05</span> Un lock, un state file y <code>sync({ paths })</code> mantienen el grafo de esos bytes.</li>
-          </ol>
-          <ul class="lane-invariants">
-            <li><code>--live</code> se rechaza bajo <code>untrusted</code> con <code>live-requires-trusted</code>.</li>
-            <li>Las ediciones se copian, nunca se hard-linkean.</li>
-            <li>Una respuesta stale lo dice por stderr; el fact no cambia.</li>
-          </ul>
-        </article>
-      </div>
-
-      <div class="callout">
-        <p><strong>La regla de live:</strong> un fact live describe bytes que ye-ast copió y hasheó, y el grafo que lee es el grafo de esos mismos bytes. El motor nunca camina el repositorio.</p>
-        <p class="ref"><code>docs/architecture/rfc/0010-impact-queries.md</code> “Live head” · <code>src/core/application/snapshot/read-snapshot.ts:32-40</code></p>
-      </div>
-
-      <div class="invariants">
-        <div><p class="mini-kicker">Invariantes</p><h3>Lo que nunca se mueve</h3></div>
-        <ul>
-          <li><strong>Solo lectura hacia los agentes.</strong> El servidor MCP recibe solo query families de lectura, así que una escritura es imposible por tipo (<code>src/mcp/server.ts:21-31</code>).</li>
-          <li><strong>Determinismo.</strong> Salida ordenada, rutas relativas al repositorio, sin ids internos del índice, el snapshot en cada fact.</li>
-          <li><strong>Redaction antes de la salida.</strong> Los patrones siempre; los secretos by-value solo en el proceso que ya los tiene.</li>
-          <li><strong>Fallar fuerte, degradar explícitamente.</strong> Un fallo tipado o un <code>unknown</code>/<code>partial</code> explícito, nunca un resultado vacío.</li>
-          <li><strong>codegraph solo a través de su adaptador.</strong> El SQL crudo vive solo ahí, con versión comprobada; la telemetría siempre está apagada y su shim de CLI nunca se llama.</li>
-        </ul>
-      </div>
-    </section>
-
-    
-    <section id="surfaces" class="doc-section">
-      <div class="section-head">
-        <p class="kicker">Superficies</p>
-        <h2>Tres formas de entrar, un solo conjunto de decisiones.</h2>
-        <p class="section-lede">Un adaptador de entrada convierte una petición externa en una llamada y da forma a la respuesta. Nunca alcanza un adaptador ni un caso de uso directamente; composición inyecta las query families.</p>
-      </div>
-
-      <div class="surface-diagram" aria-hidden="true">
-        <div class="surface-node"><strong>CLI</strong><span>map · impact · llamadores · importers · install</span></div>
-        <div class="surface-node"><strong>MCP</strong><span>ye_ast_entrypoints · impact · ye_ast_callers · ye_ast_importers · workspace</span></div>
-        <div class="surface-node"><strong>protocol</strong><span>JSON-RPC 2.0 · un mensaje por línea</span></div>
-        <div class="surface-merge">⟶</div>
-        <div class="surface-core"><strong>las mismas query families</strong><span>EntrypointQueries · ImpactQueries · WorkspaceQueries</span></div>
-      </div>
-
-      <div class="table-wrap">
-        <table class="data-table">
-          <caption>Puntos de entrada</caption>
-          <thead><tr><th>Superficie</th><th>Qué expone</th><th>Dónde</th></tr></thead>
-          <tbody>
-            <tr><td><code>ye-ast map</code></td><td>Los puntos de entrada de una revisión; <code>--live</code> para un working tree trusted.</td><td><code>src/cli/main.ts:167-170</code></td></tr>
-            <tr><td><code>ye-ast impact</code></td><td>El cambio desde el merge base hasta head; límite; alcance.</td><td><code>src/cli/main.ts:171-174</code></td></tr>
-            <tr><td><code>ye-ast callers</code></td><td>Alcanzabilidad inversa desde símbolos o rangos de líneas.</td><td><code>src/cli/main.ts:175-178</code></td></tr>
-            <tr><td><code>ye-ast importers</code></td><td>Importers, users y namers sin resolver por archivo.</td><td><code>src/cli/main.ts:179-182</code></td></tr>
-            <tr><td><code>ye-ast init</code></td><td>Escribe el confianza record, el exclude local y la fixed layer; imprime el registro MCP.</td><td><code>src/core/application/install/install.ts:23-45</code></td></tr>
-            <tr><td><code>ye-ast mcp</code></td><td>Servidor MCP stdio atado a un repositorio; tools de solo lectura.</td><td><code>src/composition/mcp.ts</code></td></tr>
-            <tr><td><code>ye-ast serve</code></td><td>El protocolo de query sobre stdio; stdout solo lleva líneas de protocolo.</td><td><code>src/protocol/query-server.ts</code></td></tr>
-          </tbody>
-        </table>
-      </div>
-
-      <div class="mcp-note">
-        <p><strong>Solo lectura por tipo.</strong> <code>McpDeps</code> solo contiene <code>EntrypointQueries</code>, <code>ImpactQueries</code>, <code>WorkspaceQueries</code> y <code>WorkspaceImpactQueries</code>. No hay ningún método de escritura al que llamar, así que un agente no puede alcanzar uno por error.</p>
-        <p>El servidor MCP también entrega la guía de cortes como instrucciones: el agente aprende qué hacer en cada corte, no solo que existe.</p>
-      </div>
-    </section>
-
-    
-    <section class="doc-section" id="concept-glossary">
+    <section data-rail="Glosario" class="doc-section" id="concept-glossary">
       
       <div class="section-head">
         <p class="kicker">Glosario</p>
@@ -614,7 +667,8 @@ export class LoginComponent {
       </div>
       <dl class="glossary-grid" id="glossary-grid"></dl>
     </section>
-    <section id="sources" class="doc-section">
+
+    <section data-rail="Fuentes" id="sources" class="doc-section">
       <div class="section-head">
         <p class="kicker">Fuentes y límites</p>
         <h2>Fuentes y límites.</h2>
@@ -678,12 +732,12 @@ npm run check</pre>
 
       <footer class="page-footer">
         <p><strong>ye-ast</strong> · motor determinista de verdad de código · Apache-2.0</p>
-        <p>Página construida desde el código, no desde una descripción del código. <a href="#concepts">Volver arriba ↑</a></p>
+        <p>Página construida desde el código, no desde una descripción del código. <a href="#intro">Volver arriba ↑</a></p>
       </footer>
     </section>
-  
   </div>
-</section>
+</div>
+</main>
 
 <noscript>Este explorador dibuja el grafo con JavaScript. Actívalo para usar el grafo y los flujos.</noscript>
 <script src="modules.en.js"></script>

@@ -850,7 +850,19 @@ function refLink(ref) {
     applyView();
   }
 
+  const hint = document.createElement("p");
+  hint.className = "graph-hint";
+  hint.setAttribute("role", "status");
+  hint.textContent = T.zoomHint;
+  canvas.appendChild(hint);
+  let hintTimer = null;
   svg.addEventListener("wheel", (event) => {
+    if (!event.ctrlKey && !event.metaKey) {
+      hint.classList.add("is-visible");
+      clearTimeout(hintTimer);
+      hintTimer = setTimeout(() => hint.classList.remove("is-visible"), 1400);
+      return;
+    }
     event.preventDefault();
     zoomAt(Math.exp(-event.deltaY * 0.0015), event.clientX, event.clientY);
   }, { passive: false });
@@ -992,9 +1004,16 @@ function refLink(ref) {
   /* ── init ─────────────────────────────────────────────────────────── */
 
   installHalftone();
-  if (!prefersReduced && state.level === "modules") {
-    svg.classList.add("is-building");
-    setTimeout(() => svg.classList.remove("is-building"), 2400);
+  if (!prefersReduced && "IntersectionObserver" in window) {
+    const firstSight = new IntersectionObserver((entries) => {
+      if (!entries.some((entry) => entry.isIntersecting)) return;
+      firstSight.disconnect();
+      if (state.level !== "modules") return;
+      svg.classList.add("is-building");
+      render();
+      setTimeout(() => svg.classList.remove("is-building"), 2400);
+    }, { threshold: 0.35 });
+    firstSight.observe(canvas);
   }
   renderFlowList();
   render();
