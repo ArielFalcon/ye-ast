@@ -3961,6 +3961,33 @@ test("selected evidence is redacted before page rendering in every public mode",
   } finally { await session.close(); }
 });
 
+test("an invalid select names the selection shapes its tool accepts", async () => {
+  const { session } = await setup();
+  try {
+    const result = await session.callTool("ye_ast_callers", {
+      targets: [{ file: "src/OrderService.java", symbol: "OrderService.find" }],
+      select: { kind: "cut", owner: { kind: "local" } },
+      page: { limit: 1 },
+    });
+    assert.equal(result.isError, true);
+    const text = textOf(result);
+    for (const shape of ['"kind":"handler-origins"', '"kind":"cut-places"', '"kind":"workspace-link-evidence"', '{"kind":"fact"}']) assert.ok(text.includes(shape), shape);
+    for (const foreign of ['"kind":"entrypoint-evidence"', '"kind":"module-origins"']) assert.equal(text.includes(foreign), false, foreign);
+  } finally { await session.close(); }
+});
+
+test("a full answer with cuts prints a copyable cut selection", async () => {
+  const targets = [{ file: "src/OrderService.java", symbol: "OrderService.find" }];
+  const fact = impactFact({ status: "partial", cuts: [{ kind: "depth", at: ["src/OrderService.java::OrderService.find", "src/OrderController.java:17"], limit: 2 }], inputs: { ...base().inputs, declaredConfig: { targets: ["src/OrderService.java:OrderService.find"] } } });
+  const { session } = await setup({ callers: async () => ({ ok: true, value: fact }), ofChange: async () => ({ ok: true, value: fact }) });
+  try {
+    for (const [name, args] of [["ye_ast_callers", { targets }], ["ye_ast_impact", { base: "main" }]] as const) {
+      const text = textOf(await session.callTool(name, { ...args, mode: "full" }));
+      assert.ok(text.includes('lookup example: {"kind":"cut-places","owner":{"kind":"fact"},"cutIndex":0}'), name);
+    }
+  } finally { await session.close(); }
+});
+
 test("recovery recipes appear once in content across ordinary and selected response modes", async () => {
   const targets = [{ file: "src/OrderService.java", symbol: "OrderService.find" }];
   const fact = impactFact({ status: "partial", cuts: [{ kind: "depth", at: ["src/OrderService.java::OrderService.find", "src/OrderController.java:17"], limit: 2 }], inputs: { ...base().inputs, declaredConfig: { targets: ["src/OrderService.java:OrderService.find"] } } });

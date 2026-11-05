@@ -852,9 +852,11 @@ function impactLookups(value: ImpactValue, path: string, context?: RenderContext
   return lines;
 }
 
-function impactCutLookup(cuts: readonly Cut[], path: string, context?: RenderContext): string[] {
+function impactCutLookup(cuts: readonly Cut[], path: string, context?: RenderContext, mode: ResponseMode = "details", workspace = false): string[] {
   if (cuts.length === 0) return [];
+  const example = { kind: "cut-places", owner: { kind: "fact" }, cutIndex: 0 } as const;
   return [
+    ...(mode === "full" && context !== undefined && canSelect(context, example, workspace) ? [`  lookup example: ${literalSelection(example)}`] : []),
     `  ${context?.recovery?.status === "unavailable" ? "Recorded coordinates" : "Selection lookup"}: cutIndex is the zero-based position in ${path}; owner identifies the fact, entrypoints section, repository section or indexed read.
   Before treating this result as exhaustive, inspect ${path}: filter by kind and the relevant anchor in at; a recorded limit explains where coverage stopped. Full JSON does not extend that coverage.`,
     ...(cuts.some((cut) => cut.kind === "unresolved-link") ? [`  For unresolved-link in ${path}, at[0] names the unresolved file/declaration anchor and the remaining at entries locate potential references; they are not verified calls.`] : []),
@@ -890,7 +892,7 @@ function localImpactGuide(fact: Fact<ImpactValue> & { status: "complete" | "part
     mode === "full" ? "  JSON navigation: paths below are relative to the result JSON." : "  Full JSON navigation (available in full mode): paths below are relative to the result JSON; query the returned payload directly when already included.",
     ...lookups,
     ...(lookups.length === 0 ? ["  There are no recorded consequences or walk origins in this answer. Read inputs.declaredScope and inputs.declaredConfig before interpreting that scoped emptiness."] : []),
-    ...impactCutLookup(cutsOf(fact), "cuts", context),
+    ...impactCutLookup(cutsOf(fact), "cuts", context, mode),
     ...baseModuleGuides(fact.value, fact.snapshot.repo, fact.value.mergeBase, "value", fact.snapshot.kind === "sha" && fact.value.mergeBase !== undefined && context?.tool !== "callers"),
     impactSnapshotGuide(fact.snapshot, fact.value.mergeBase, context, fact.value.modules?.modules.some((module) => module.snapshot === "base")),
   ];
@@ -909,7 +911,7 @@ function workspaceImpactGuide(fact: Fact<WorkspaceImpactValue> & { status: "comp
     ...(otherImpacts.length === 0 ? [] : ["  Other repository walks are at value.sections[repo].value.impact only when that field exists. In each walk, entrypoints[].seeds indexes that same walk's seeds array; never join origins across repositories."]),
     ...(value.links.length === 0 ? [] : ["  To follow a cross-repository consequence, filter value.links by link.from (repo/file/symbol/line) or link.to (repo/name/handler). Each reach contains link IDs in recorded order: resolve them against value.links[].link.id, not the text's display numbers. Retain direction, basis and confidence; reach does not establish an unrecorded path inside a repository."]),
     ...(value.workspace.unserved.length === 0 ? [] : ["  For missing service coverage, inspect value.workspace.unserved and section.value.external when present. Use ye_ast_workspace to investigate outward-name evidence and candidate local repositories; adding workspace.repos changes the query's coverage rather than filtering this fact."]),
-    ...impactCutLookup(cutsOf(fact), "cuts", context),
+    ...impactCutLookup(cutsOf(fact), "cuts", context, mode, true),
     ...(Object.values(value.sections).some((section) => section.status === "partial") ? ["  Repository-local limits remain in value.sections[repo].cuts; inspect contributing section.value.reads[].fact too. Do not treat a complete independent read as resolving an unknown contributing read."] : []),
     "  For a related callers or outline query about head evidence choose the recorded owner with repo and its own snapshot from value.repositorySnapshots; base-side modules require their owning walk's recorded merge base instead. An undeclared owner requires a host registration update or an instance bound to that clone. A symbol name may match multiple declarations.",
     ...Object.entries(value.sections).flatMap(([repo, section]) => section.status === "unknown" || section.value.impact === undefined ? [] : baseModuleGuides(section.value.impact, repo, section.value.impact.mergeBase ?? (repo === value.trigger.repo ? value.trigger.mergeBase : undefined), `value.sections[${JSON.stringify(repo)}].value.impact`)),

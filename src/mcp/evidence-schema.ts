@@ -23,8 +23,21 @@ const linkSelection = z.strictObject({kind: z.literal('workspace-link-evidence')
 const selection = z.discriminatedUnion('kind', [handlerSelection, moduleSelection, findingSelection, cutSelection, linkSelection]);
 const pageRequest = z.strictObject({limit: positive.describe('Explicit positive safe integer counting primary records; no default page size.'), cursor: z.string().optional().describe('Returned nextCursor for the same selection and limit; source identity is verified again.')});
 
+const ORIGIN_OWNER = '{"kind":"local"} or {"kind":"section","repo":<id>}';
+const HANDLER_SHAPE = `{"kind":"handler-origins","owner":${ORIGIN_OWNER},"handler":{"path","symbol","line"}}`;
+const MODULE_SHAPE = `{"kind":"module-origins","owner":${ORIGIN_OWNER},"module":{"file","snapshot":"base"|"head"}}`;
+const FINDING_SHAPE = '{"kind":"entrypoint-evidence","findingIndex"}';
+const CUT_SHAPE = '{"kind":"cut-places","owner":{"kind":"fact"} or {"kind":"entrypoints"} or {"kind":"section","repo"} or {"kind":"read","repo","index"},"cutIndex"}';
+const LINK_SHAPE = '{"kind":"workspace-link-evidence","linkId"}';
+const shapes = (...accepted: string[]) => ({error: `select must be one of ${accepted.join('; ')}. Copy a lookup example from a previous answer.`});
+const SELECTIONS = {
+  entrypoints: z.union([findingSelection, cutSelection], shapes(FINDING_SHAPE, CUT_SHAPE)),
+  callers: z.union([handlerSelection, cutSelection, linkSelection], shapes(HANDLER_SHAPE, CUT_SHAPE, LINK_SHAPE)),
+  impact: z.union([handlerSelection, moduleSelection, cutSelection, linkSelection], shapes(HANDLER_SHAPE, MODULE_SHAPE, CUT_SHAPE, LINK_SHAPE)),
+};
+
 export function recoveryControlShapeFor(tool: Tool) {
-  const selections = tool === 'entrypoints' ? z.union([findingSelection, cutSelection]) : tool === 'callers' ? z.union([handlerSelection, cutSelection, linkSelection]) : z.union([handlerSelection, moduleSelection, cutSelection, linkSelection]);
+  const selections = SELECTIONS[tool];
   return {select: selections.optional().describe('Recorded evidence selected by its public owner and coordinates; requires page and does not change analysis coverage.'), page: pageRequest.optional(), expect: z.string().regex(RESULT_IDENTITY_PATTERN).optional().describe('Assert the complete public source resultIdentity, with or without selection. Must agree with a supplied cursor.')};
 }
 
