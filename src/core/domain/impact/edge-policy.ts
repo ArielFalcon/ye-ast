@@ -44,12 +44,6 @@ export const EDGE_POLICY = {
    * outside the member's type and its subtypes. Either way the place leaves the member's `unresolved-link` cut.
    */
   fieldMemberUses: ["calls", "references"],
-  /**
-   * The reference kinds a type layer may settle: each one names a declaration. `imports` is absent on purpose — it names
-   * a module specifier, which module resolution settles, and reporting it from here would answer `unknown` for a
-   * question this layer cannot pose (RFC-0016, S0).
-   */
-  typeResolvedKinds: ["calls", "instantiates", "references", "function_ref", "decorates", "implements", "extends"],
   /** A value or class that nothing calls is reached through the top-level code of the files that import it. */
   injectableKinds: ["constant", "variable", "class", "component"],
   /** The code a file runs at its top level, as the importer fallback and the top-level use of an import reach it. */

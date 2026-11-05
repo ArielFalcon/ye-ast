@@ -162,8 +162,6 @@ export interface FactBaseRequest {
   engines: Readonly<Record<string, string>>;
   /** Where the index the fact read came from; absent when it read none. */
   origin?: IndexOrigin;
-  /** The type root a resolution read; absent when none answered. */
-  typeRoot?: { identity: string };
 }
 
 /** The one builder of a fact's inputs, which RFC-0002 rule 5 makes the only invalidation key. */
@@ -181,7 +179,6 @@ export function factBaseOf(deps: Pick<SnapshotReaderDeps, "digest" | "producer">
       config: digest.of(canonicalJson(request.declaredConfig)),
       declaredConfig: request.declaredConfig,
       ...(request.origin === undefined ? {} : { origin: request.origin }),
-      ...(request.typeRoot === undefined ? {} : { typeRoot: request.typeRoot }),
       engines: sortedEngines(request.engines),
     },
     evidence: [],

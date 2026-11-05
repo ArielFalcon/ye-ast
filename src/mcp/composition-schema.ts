@@ -97,7 +97,7 @@ const graph = z.strictObject({
 const issueScope = { sources: z.array(ids.source).min(1), reads: z.array(ids.read) };
 const issue = z.discriminatedUnion("kind", [
   z.strictObject({ ...issueScope, kind: z.literal("snapshot-difference"), repo: z.string(), snapshots: z.array(ids.snapshot).min(2) }),
-  z.strictObject({ ...issueScope, kind: z.literal("context-mismatch"), field: z.enum(["trust", "producer", "schema", "engine", "typeRoot", "workspace"]), reason: z.enum(["different", "unavailable"]) }),
+  z.strictObject({ ...issueScope, kind: z.literal("context-mismatch"), field: z.enum(["trust", "producer", "schema", "engine", "workspace"]), reason: z.enum(["different", "unavailable"]) }),
   z.strictObject({ ...issueScope, kind: z.literal("ambiguous-declaration"), anchor: ids.anchor, candidates: z.array(ids.part).min(1) }),
   z.strictObject({ ...issueScope, kind: z.literal("conflicting-coordinate"), anchors: z.array(ids.anchor).min(1) }),
   z.strictObject({ ...issueScope, kind: z.literal("unresolved-endpoint"), part: ids.part, target: symbolNameRef }),

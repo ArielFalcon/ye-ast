@@ -64,7 +64,6 @@ interface Options {
   sources?: SourceFile[];
   /** Reads the imports of those sources, as composition wires it. */
   importOrigins?: ImportOriginsReader;
-  typeRoot?: ImpactQueriesDeps["typeRoot"];
   moduleDependencies?: ModuleDependenciesReader;
   snapshotSources?: Partial<Record<string, SourceFile[]>>;
 }
@@ -136,7 +135,6 @@ function setup(options: Options = {}) {
     ...(options.live && { live: options.live.deps }),
     ...(options.declarationEvidence && { declarationEvidence: options.declarationEvidence }),
     ...(options.importOrigins && { importOrigins: options.importOrigins }),
-    ...(options.typeRoot && { typeRoot: options.typeRoot }),
     ...(options.moduleDependencies && { moduleDependencies: options.moduleDependencies }),
   };
   const request: AtRevision<ImpactOfChangeRequest> = { repo: "/repo", repoId: "repo", base: "base", head: "head", ...(options.signal && { signal: options.signal }) };

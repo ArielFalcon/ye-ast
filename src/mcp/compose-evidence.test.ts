@@ -407,15 +407,6 @@ test("compatibility is not transitive: A(X=1), B(no X), C(X=2) never connect A w
   assert.ok(bridged.issues.some((issue) => issue.kind === "context-mismatch" && issue.field === "engine"));
 });
 
-test("type-resolved dependences need the same type root on both sides", () => {
-  assert.equal(connections(changeCase({ typeRoot: "r1" }, { typeRoot: "r1" }, {}).graph, "change-dependent").length, 1);
-  const oneSided = changeCase({ typeRoot: "r1" }, {}, {});
-  assert.equal(connections(oneSided.graph, "change-dependent").length, 0, "presence on one side is not equality");
-  assert.ok(oneSided.issues.some((issue) => issue.kind === "context-mismatch" && issue.field === "typeRoot" && issue.reason === "unavailable"));
-  const different = changeCase({ typeRoot: "r1" }, { typeRoot: "r2" }, {});
-  assert.ok(different.issues.some((issue) => issue.kind === "context-mismatch" && issue.field === "typeRoot" && issue.reason === "different"));
-  assert.equal(connections(guardCase({ typeRoot: "r1" }, {}).graph, "handler-declaration").length, 1, "a structural location needs no type root");
-});
 
 test("workspace membership and gateways must agree for a connection", () => {
   assert.equal(connections(changeCase({}, {}, {}, { seed: "/api", reach: "/api" }).graph, "change-dependent").length, 1);

@@ -7,8 +7,7 @@ import type { FileChange } from "../../domain/change/diff-reader.ts";
 import { isSeedable, selectSeeds, type ComponentRef, type SelectedSeed } from "../../domain/change/seeds.ts";
 import { changedContracts, servedContracts } from "../../domain/impact/changed-contracts.ts";
 import { changedEntrypoints } from "../../domain/impact/changed-entrypoints.ts";
-import { EDGE_POLICY } from "../../domain/impact/edge-policy.ts";
-import { nameTail, referenceKey, uniqueReferenceKeys, removedDeclarationCuts, rootedName, unreadRelationCuts, unresolvedLinkCuts, type UnreadRelation } from "../../domain/impact/impact-cuts.ts";
+import { referenceKey, uniqueReferenceKeys, removedDeclarationCuts, rootedName, unreadRelationCuts, unresolvedLinkCuts, type UnreadRelation } from "../../domain/impact/impact-cuts.ts";
 import { sortedUnique, type ImportersValue } from "../../domain/impact/importers-fact.ts";
 import { impactFact, type ImpactBudget, type ImpactedSymbol, type ImpactValue, type Seed } from "../../domain/impact/impact-fact.ts";
 import { reachedEntrypoints } from "../../domain/impact/reached-entrypoints.ts";
@@ -28,7 +27,7 @@ import { changedPaths, isWritten } from "../../domain/snapshot/live-export.ts";
 import { contentFingerprint, declaredScope, exportCuts, holdsDeclaredSource, isInMapScope } from "../../domain/map/entrypoint-map.ts";
 import type { Result } from "../../domain/shared/result.ts";
 import type { AngularDeclarationReader } from "../../ports/angular-declarations.port.ts";
-import type { CodeGraph, CodeGraphReader, GraphSymbol, GraphUnresolvedReference, IndexSummary } from "../../ports/code-graph.port.ts";
+import type { CodeGraph, CodeGraphReader, GraphSymbol, IndexSummary } from "../../ports/code-graph.port.ts";
 import type { DynamicLoad, DynamicLoadReader } from "../../ports/dynamic-loads.port.ts";
 import type { Digest } from "../../ports/digest.port.ts";
 import type { IndexCache } from "../../ports/index-cache.port.ts";
@@ -42,12 +41,9 @@ import type { CommitExport, Vcs, VcsChanges, VcsFault } from "../../ports/vcs.po
 import { ABORTED, extractCommit, factBaseOf, trustOf, withScratch, type CommitExtraction } from "../snapshot/read-snapshot.ts";
 import { createHeadReader, withLiveCapture, type FactSpec, type HeadIndex, type HeadReaderDeps, type HeadReading, type Revisioned } from "../snapshot/head-reading.ts";
 import { readImporters } from "./importers.ts";
-import { createInboundEdges, type SettledReference } from "./inbound-edges.ts";
-import { memoizeTypeResolution } from "./type-resolution-cache.ts";
+import { createInboundEdges } from "./inbound-edges.ts";
 import { walkImpact } from "./walk.ts";
-import type { TypeResolution } from "../../ports/type-resolution.port.ts";
 import type { ImportOriginSite, ImportOriginsReader } from "../../ports/import-origins.port.ts";
-import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { ContractRoutes } from "../../ports/contract-routes.port.ts";
 import { prepareCommit } from "../snapshot/prepared-snapshot.ts";
 
@@ -64,19 +60,8 @@ export interface ImpactQueriesDeps extends HeadReaderDeps {
   /** Version of each engine only the operations that read Angular declarations and templates add. */
   angularEngines: Readonly<Record<string, string>>;
   /**
-   * Settles the references the index could not, when a type root is available (ADR-0018). Without it every answer is
-   * the one ye-ast gives today, byte for byte.
-   */
-  typeRoot?: {
-    /** What the root is recorded by; part of every fact's inputs, so a different root invalidates the stored fact. */
-    identity: string;
-    /** Builds a resolution over one snapshot's sources; the adapter lives outside the core, so composition supplies it. */
-    resolution(sources: readonly SourceFile[]): TypeResolution;
-  };
-  /**
    * Reads the imports of one snapshot's sources, so a reference whose rooted name the file imports from outside the
-   * repository stops being a cut (`RFC-0016` gap A). It proves the same thing as a type layer for that population and
-   * needs no type root. Without it every answer is the one ye-ast gave before.
+   * repository stops being a cut (`RFC-0016` gap A). Without it every answer is the one ye-ast gave before.
    */
   importOrigins?: ImportOriginsReader;
   moduleDependencies?: ModuleDependenciesReader;
@@ -102,27 +87,6 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
   const changeReader = createHeadReader(changeDeps);
   const importerSource = (file: string): boolean => moduleSource(file) || isTypeScriptFile(file);
   const importerReader = createHeadReader({ ...deps, sourceSelection: importerSource });
-
-  /**
-   * The resolution of one snapshot's content, built once: the frontier of the same bytes is the same, and settling it
-   * again on every query would pay for answers already known (RFC-0016, question 4).
-   */
-  const resolutions = new Map<string, TypeResolution>();
-  function resolutionOf(content: string, sources: readonly SourceFile[]): TypeResolution | undefined {
-    const root = deps.typeRoot;
-    if (root === undefined) return undefined;
-    let held = resolutions.get(content);
-    if (held === undefined) {
-      held = memoizeTypeResolution(root.resolution(sources));
-      resolutions.set(content, held);
-    }
-    return held;
-  }
-
-  function typeResolutionOf(content: string, sources: readonly SourceFile[]): { typeResolution?: TypeResolution } {
-    const held = resolutionOf(content, sources);
-    return held === undefined ? {} : { typeResolution: held };
-  }
 
   return {
     async ofChange(request) {
@@ -164,7 +128,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
           if (signal?.aborted) return ABORTED;
           const proofs = await proofsOf(deps, store, headTree, request.signal);
           if (signal?.aborted) return ABORTED;
-          const read = impactOf({ store, changes, requested, componentsByResource, found, fields, locals, memberUses, loads, headTree, summary, budget: request.budget ?? {}, proofs, ...typeResolutionOf(content, headTree.sources) });
+          const read = impactOf({ store, changes, requested, componentsByResource, found, fields, locals, memberUses, loads, headTree, summary, budget: request.budget ?? {}, proofs });
           if (read.missing.length > 0) {
             const names = read.missing.map(({ file, symbol }) => `${file}:${symbol}`).join(", ");
             return { ok: false, fault: { kind: "unknown-symbol", detail: `no symbol at the revision for ${names}`, entries: read.missing } };
@@ -399,7 +363,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
         return retained === undefined ? file : { ...file, removedNames: file.removedNames.filter((name) => retained.has(name)) };
       });
       if (signal?.aborted) return ABORTED;
-      const read = impactOf({ store, changes: validatedChanges, requested: [], componentsByResource, found, fields, locals, memberUses, loads, headTree, summary, budget: request.budget ?? {}, proofs, ...typeResolutionOf(content, headTree.sources) });
+      const read = impactOf({ store, changes: validatedChanges, requested: [], componentsByResource, found, fields, locals, memberUses, loads, headTree, summary, budget: request.budget ?? {}, proofs });
       return { ok: true, value: impactFact(head.base(content, true), { ...value, ...read.value }, [...unaccounted([...fixed, ...read.cuts]), ...moduleCuts]) };
     } finally {
       store.close();
@@ -502,24 +466,6 @@ async function proofsOf(deps: ImpactQueriesDeps, store: CodeGraphReader, headTre
   return { external, bound, localParameters, validOccurrences };
 }
 
-/**
- * The references a type layer settled, as the walk reads them (ADR-0018 decision 8). Only the kinds that name a
- * declaration are asked (`EDGE_POLICY.typeResolvedKinds`), and only a target inside the repository becomes an edge: an
- * external target is a leaf the walk does not follow, and no root means no settlement at all.
- */
-function settledReferences(unresolved: readonly GraphUnresolvedReference[], port: TypeResolution | undefined, validOccurrences: ReadonlySet<string>): SettledReference[] {
-  if (port === undefined) return [];
-  const unique = uniqueReferenceKeys(unresolved);
-  const candidates = unresolved.filter((reference) => { const key = referenceKey(reference); return key !== undefined && unique.has(key) && validOccurrences.has(key) && (EDGE_POLICY.typeResolvedKinds as readonly string[]).includes(reference.kind); });
-  if (candidates.length === 0) return [];
-  const findings = port.resolve(candidates.map((reference) => ({ file: reference.file, line: reference.line, column: reference.column + 1, symbol: nameTail(reference.name), fullName: reference.name, kind: reference.kind })));
-  return candidates.flatMap((reference, index): SettledReference[] => {
-    const finding = findings[index];
-    if (finding?.status !== "complete" || finding.value.kind !== "repository") return [];
-    return [{ from: reference.from, file: reference.file, line: reference.line, column: reference.column, kind: reference.kind, name: reference.name, ...(finding.sourceOwner === undefined ? {} : { sourceOwner: finding.sourceOwner }), target: { file: finding.value.file, symbol: finding.value.symbol, line: finding.value.line } }];
-  });
-}
-
 /** What a file's own imports prove about the references the index could not settle. */
 interface ReferenceProofs {
   /** Places whose root a proof puts outside the repository: an import binding, or an ambient library name. */
@@ -547,8 +493,6 @@ interface WalkInput {
   headTree: CommitExtraction;
   summary: Pick<IndexSummary, "filesNotIndexed">;
   budget: ImpactBudget;
-  /** Settles the references the index could not, when a type root is available. */
-  typeResolution?: TypeResolution;
   /** The two proofs the head's own imports make: what is outside the repository, and what a bare name binds to. */
   proofs?: ReferenceProofs;
 }
@@ -561,7 +505,7 @@ interface ImpactRead {
 }
 
 function impactOf(input: WalkInput): ImpactRead {
-  const { store, changes, requested, componentsByResource, found, fields, locals, memberUses, loads, headTree, summary, typeResolution } = input;
+  const { store, changes, requested, componentsByResource, found, fields, locals, memberUses, loads, headTree, summary } = input;
   const isTest = (path: string): boolean => kindOfChangedFile(path) === "test";
   const sourceChanges = changes.filter((file) => kindOfChangedFile(file.path) === "source" && !file.deleted).map((file) => file.path);
   const componentFiles = changes.flatMap((file) => (componentsByResource.get(file.path) ?? []).map((component) => component.file));
@@ -577,23 +521,13 @@ function impactOf(input: WalkInput): ImpactRead {
   const seeds = chosen.toSorted((a, b) => comparePosition(a.symbol, b.symbol));
   const sourceFiles = sourceFilesOf(headTree);
   const unresolved = store.unresolvedReferences(sourceFiles);
-  const settled = settledReferences(unresolved, typeResolution, input.proofs?.validOccurrences ?? new Set());
-  const inbound = createInboundEdges(store, isTest, found.flatMap((finding) => (finding.status === "complete" ? [finding.value] : [])), fields, settled, locals, input.proofs?.validOccurrences ?? new Set(), memberUses);
+  const inbound = createInboundEdges(store, isTest, found.flatMap((finding) => (finding.status === "complete" ? [finding.value] : [])), fields, locals, input.proofs?.validOccurrences ?? new Set(), memberUses);
   const walk = walkImpact(seeds.map(({ symbol }) => symbol), inbound, input.budget);
 
   const walked = walk.reached.map(({ symbol }) => symbol);
-  /**
-   * The places a type layer settled onto a declaration the walk reached: the dependence is attributed there, and the
-   * name tail the index could not settle is no longer a cut. A settled target the walk never reached keeps its cut,
-   * since nothing was expanded for it.
-   */
   const reachedIds = new Set(walked.map((symbol) => symbol.id));
-  const settledPlaces = new Set(inbound.joinedTypeUses().flatMap(({ reference, target, source }) => {
-    const key = referenceKey(reference);
-    return key !== undefined && walk.expanded.has(target) && reachedIds.has(source) ? [key] : [];
-  }));
   /** Both proofs of a known target: an admitted joined settlement and an import that names something outside. */
-  const knownPlaces = new Set([...settledPlaces, ...(input.proofs?.external ?? [])]);
+  const knownPlaces = new Set(input.proofs?.external ?? []);
   const unread = found.flatMap((finding): UnreadRelation[] => (finding.status === "unknown" ? finding.evidence.slice(0, 1).map(({ path, line }) => ({ path, line, reason: finding.reason })) : []));
 
   const cuts: Cut[] = [

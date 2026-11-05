@@ -271,7 +271,7 @@ export type Connection = {
 
 export type IssueDetail =
   | { kind: "snapshot-difference"; repo: string; snapshots: readonly SnapshotId[] }
-  | { kind: "context-mismatch"; field: "trust" | "producer" | "schema" | "engine" | "typeRoot" | "workspace"; reason: "different" | "unavailable" }
+  | { kind: "context-mismatch"; field: "trust" | "producer" | "schema" | "engine" | "workspace"; reason: "different" | "unavailable" }
   | { kind: "ambiguous-declaration"; anchor: AnchorId; candidates: readonly PartId[] }
   | { kind: "conflicting-coordinate"; anchors: readonly AnchorId[] }
   | { kind: "unresolved-endpoint"; part: PartId; target: SymbolNameRef }

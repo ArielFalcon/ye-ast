@@ -75,7 +75,6 @@ const USAGE = [
   "budget: [--depth <n>] [--hub-fan-in <n>] [--expansions <n>]   (positive integers; none has a default)",
   "workspace: --workspace <file>   (the workspace init persists as .ye-ast/workspace.json: { \"repos\": [{ \"path\", \"id\", \"revision\", \"remote\" }], \"gateways\": [{ \"prefix\", \"repo\" }] }; a relative repository path is stored as written and resolved against the installed repository, and a remote is the source of truth a trusted repository's queries refresh into ye-ast's own mirror)",
   "measure: --measure   (one JSON measurement line per query and per index build, on stderr; never on stdout)",
-  "--type-root <dir>: the directory holding the dependency declarations a type layer reads, laid out like a node_modules tree; without it no type information answers and every fact is the one ye-ast gives today",
 ].join("\n");
 
 type Query = () => Promise<Result<unknown, ImpactFault | WorkspaceFault>>;

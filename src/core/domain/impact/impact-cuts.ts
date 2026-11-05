@@ -146,8 +146,7 @@ export function unresolvedLinkCuts(
     const tail = nameTail(reference.name);
     const place = placeAt(reference.file, reference.line);
     /**
-     * A reference whose own root the file imports from outside, or whose own name a type layer settled onto a walked
-     * declaration, is no cut. The proof is keyed by the complete graph occurrence, before line-based output aggregation.
+     * A reference whose own root the file imports from outside is no cut. The proof is keyed by the complete graph occurrence, before line-based output aggregation.
      */
     if (isKnownReference(reference, known, unique)) continue;
     /** The same place, named by the reference as written: the reader settles a reference it is told, without opening the file. */

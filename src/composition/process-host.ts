@@ -19,7 +19,7 @@ export interface ProcessHost {
 }
 
 /** The host of the real process; `indexCache` is the directory that keeps full indexes between calls, `trustDirectory` the one that holds the trust record. */
-export function processHost(options: { signal: AbortSignal; indexCache?: string; trustDirectory?: string; typeRoot?: string }): ProcessHost {
+export function processHost(options: { signal: AbortSignal; indexCache?: string; trustDirectory?: string}): ProcessHost {
   const err = (line: string): void => {
     process.stderr.write(`${line}\n`);
   };
@@ -34,7 +34,6 @@ export function processHost(options: { signal: AbortSignal; indexCache?: string;
         measure: err,
         ...(options.indexCache !== undefined && { indexCache: options.indexCache }),
         ...(trustRecord && options.trustDirectory !== undefined && { trustDirectory: options.trustDirectory, reportTrustFault: err }),
-        ...(options.typeRoot !== undefined && { typeRoot: options.typeRoot }),
       }),
   };
 }

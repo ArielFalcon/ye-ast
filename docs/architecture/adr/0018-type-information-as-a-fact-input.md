@@ -1,6 +1,6 @@
 # ADR-0018: Type information is an input of the facts it settles
 
-- Status: Proposed
+- Status: Rejected, 2026-11-05 (see "Outcome")
 - Decision source: the owner, 2026-11-03 (translated): "check ast-grep and serena to see whether ye-ast can benefit from
   them, as dependencies or as solutions they have that are better or that cover gaps we have not solved", "run the probe
   you propose on name-webapp", "formalize an implementation plan and the documentation needed". Acceptance is pending;
@@ -165,6 +165,26 @@ spell the reference's name answers `unknown`. The configuration is read from the
 `module-resolver` already performs, so the adapter no longer answers `external` about a repository declaration; the
 earlier claim that an adapter may not reach `module-resolver` was wrong about what that module is — a helper with no
 process boundary, already imported by `import-origins` in shipped code.
+
+## Outcome
+
+Rejected on 2026-11-05. The port, its adapter, its cache, `inputs.typeRoot` and `--type-root` were removed; the record
+above stays as the account of what was tried. The owner decided to delete the feature and keep `ADR-0019` (cuts retired
+on a proven external target through import origins, no type root), consistent with the recommendation above.
+
+A controlled A/B study (`20261105T180812Z-type-root-ab`, Node 24.22.2, every repository `untrusted`, default V8 heap,
+five repetitions) measured the cost and the benefit:
+
+- First-pass `impact` latency rose 2 to 3.4 times (jhipster median 1,69 s to 3,42 s, mean 1,68 s to 5,66 s; realworld-nx
+  0,72 s to 2,13 s; shopizer 1,71 s to 3,20 s). The repeat pass was near parity: the cost is the `Program` build.
+- Peak process-tree RSS rose 2 to 3.6 times (petclinic 0,68 GB to 1,50 GB; jhipster 0,86 GB to 3,09 GB; shopizer 1,03 GB
+  to 3,01 GB).
+- thingsboard died with a reproducible V8 out-of-memory error (2 of 2 runs, about 4,06 GB heap) on the second distinct
+  snapshot.
+- The benefit was a few cuts: petclinic 98 to 86, jhipster 680 to 655, realworld-nx and shopizer none.
+
+Decisions 1 to 9 describe the retired design and no longer bind the code. Decision 6's trust-mode reasoning for a
+host-supplied root has no consumer left.
 
 ## Not decided here
 

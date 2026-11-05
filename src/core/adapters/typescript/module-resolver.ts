@@ -15,41 +15,12 @@ const EXTENSIONS = ["cts", "mts", "ts"] as const;
 const CONFIG_NAMES = ["tsconfig.json", "jsconfig.json"] as const;
 
 /**
- * The options one configuration text declares, with its `extends` chain read through `host`. It is the only place the
- * tree is parsed: a module resolution and a type layer both ask for its answer, so neither owns a second parser for one
- * fact (`RFC-0016` gap B).
+ * The options one configuration text declares, with its `extends` chain read through `host`.
  */
 export function configOptions(text: string, file: string, host: ts.ParseConfigHost): ts.CompilerOptions | undefined {
   const json = ts.parseConfigFileTextToJson(file, text);
   if (json.error !== undefined || json.config === undefined) return undefined;
   return ts.parseJsonConfigFileContent(json.config, host, posix.dirname(file), undefined, file).options;
-}
-
-/**
- * The compiler options the nearest `tsconfig`/`jsconfig` declares for `from`, read from sources already in memory.
- * Synchronous, for the caller that cannot await a read. Every path the parse produces is rebased under `base`, so a
- * program whose files sit under a synthesized root finds them; a source map keyed repository-relative is sliced the
- * same way.
- */
-export function declaredOptionsOf(sources: ReadonlyMap<string, string>, from = ".", base = "/"): ts.CompilerOptions | undefined {
-  const prefix = base.endsWith("/") ? base : `${base}/`;
-  const relative = (path: string): string => (path.startsWith(prefix) ? path.slice(prefix.length) : path.replace(/^\//, ""));
-  const host: ts.ParseConfigHost = {
-    fileExists: (path) => sources.has(relative(path)),
-    readFile: (path) => sources.get(relative(path)),
-    readDirectory: () => [],
-    useCaseSensitiveFileNames: true,
-  };
-  for (let dir = posix.normalize(from); ; dir = posix.dirname(dir)) {
-    for (const name of CONFIG_NAMES) {
-      const path = posix.join(prefix, dir === "." ? "" : dir, name);
-      const text = sources.get(relative(path));
-      if (text === undefined) continue;
-      const options = configOptions(text, path, host);
-      if (options !== undefined) return options;
-    }
-    if (dir === "." || dir === "/") return undefined;
-  }
 }
 
 export function packageOf(specifier: string): string | undefined {

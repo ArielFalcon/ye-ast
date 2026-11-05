@@ -184,11 +184,10 @@ class Materializer {
   }
 
   private contextOf(read: ReadRecord) {
-    const { trust, engines, typeRoot } = read.inputs;
+    const { trust, engines } = read.inputs;
     return {
       snapshot: read.snapshot, trust, producer: read.producer, schema: read.schema,
       engines: Object.fromEntries(Object.entries(engines).sort(([a], [b]) => compareText(a, b))),
-      ...(typeRoot === undefined ? {} : { typeRoot: typeRoot.identity }),
       ...(this.workspaceOf(read.source) === undefined ? {} : { workspace: this.workspaceOf(read.source) }),
     };
   }
@@ -204,11 +203,9 @@ class Materializer {
 
   /**
    * Every pair of the reads a connection needs, jointly. Equal schema, producer and trust; equal versions of the
-   * engines both name; equal type roots between the reads that attribute a type-resolved dependence (`typed`; a read that
-   * only locates an endpoint needs none); equal declared
-   * workspace when both declare one; one exact snapshot per repository. Never transitive: no read bridges a conflict.
+   * engines both name; equal declared workspace when both declare one; one exact snapshot per repository. Never transitive: no read bridges a conflict.
    */
-  private compatible(readIds: readonly ReadId[], typed: readonly ReadId[], purpose: "derive" | "corroborate" = "derive"): Check {
+  private compatible(readIds: readonly ReadId[], purpose: "derive" | "corroborate" = "derive"): Check {
     const reads = sortedUnique(readIds).flatMap((id) => this.reads.get(id) ?? []);
     const mismatches: CompositionIssue[] = [];
     let blocked = false;
@@ -224,12 +221,6 @@ class Materializer {
         if (a.inputs.trust !== b.inputs.trust) mismatch("trust", "different");
         const engines = Object.keys(a.inputs.engines).filter((name) => Object.hasOwn(b.inputs.engines, name));
         if (engines.some((name) => a.inputs.engines[name] !== b.inputs.engines[name])) mismatch("engine", "different");
-        if (typed.includes(a.id) && typed.includes(b.id)) {
-          const left = a.inputs.typeRoot?.identity;
-          const right = b.inputs.typeRoot?.identity;
-          if ((left === undefined) !== (right === undefined)) mismatch("typeRoot", "unavailable");
-          else if (left !== right) mismatch("typeRoot", "different");
-        }
         const workspaceA = this.workspaceOf(a.source);
         const workspaceB = this.workspaceOf(b.source);
         if (workspaceA !== undefined && workspaceB !== undefined && workspaceA !== workspaceB) mismatch("workspace", "different");
@@ -242,8 +233,8 @@ class Materializer {
     return blocked ? { ok: false, mismatches: [] } : { ok: true };
   }
 
-  private guarded(reads: readonly ReadId[], typed: readonly ReadId[] = [], purpose: "derive" | "corroborate" = "derive"): boolean {
-    const check = this.compatible(reads, typed, purpose);
+  private guarded(reads: readonly ReadId[], purpose: "derive" | "corroborate" = "derive"): boolean {
+    const check = this.compatible(reads, purpose);
     if (!check.ok) for (const mismatch of check.mismatches) this.issues.set(canonicalJson(mismatch), mismatch);
     return check.ok;
   }
@@ -637,11 +628,7 @@ class Materializer {
         for (const attestation of dependence.attestations) {
           for (const read of this.cleanReads(seed)) {
             const reads = [read, ...attestation.reads];
-            const typed = reads.filter((candidate) => [seed.id, ...attestation.parts].some((partId) => {
-              const part = this.parts.get(partId);
-              return (part?.kind === "seed" || part?.kind === "symbol-reach") && this.cleanReads(part).includes(candidate);
-            }));
-            if (this.guarded(reads, typed)) this.connect("change-dependent", [seed.id, ...attestation.parts], [dependence.id], reads, [dependence.value.from, target]);
+            if (this.guarded(reads)) this.connect("change-dependent", [seed.id, ...attestation.parts], [dependence.id], reads, [dependence.value.from, target]);
           }
         }
       }
@@ -657,7 +644,7 @@ class Materializer {
       for (const left of importers) {
         for (const right of outline) {
           const reads = [...left.reads, ...right.reads];
-          if (this.guarded(reads, [], "corroborate")) this.connect("shared-file-import", [...left.parts, ...right.parts], [relation.id], reads);
+          if (this.guarded(reads, "corroborate")) this.connect("shared-file-import", [...left.parts, ...right.parts], [relation.id], reads);
         }
       }
     }
@@ -667,7 +654,7 @@ class Materializer {
   private sharedSupports(): void {
     for (const relation of this.relationsOf("shares-evidence")) {
       for (const attestation of relation.attestations) {
-        if (this.guarded(attestation.reads, [], "corroborate")) this.connect("shared-support", relation.value.parts, [relation.id], attestation.reads);
+        if (this.guarded(attestation.reads, "corroborate")) this.connect("shared-support", relation.value.parts, [relation.id], attestation.reads);
       }
     }
   }

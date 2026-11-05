@@ -180,7 +180,7 @@ class CompactView {
   }
 
   /**
-   * Trust and declared scope always; producer, schema and type root only where reads differ, grouped by exact value.
+   * Trust and declared scope always; producer and schema only where reads differ, grouped by exact value.
    * Engines and index origin are provenance that full keeps per read; an incompatibility is listed as an issue.
    */
   private readContextLines(): string[] {
@@ -207,7 +207,6 @@ class CompactView {
     ].filter((part) => part !== undefined).join("; "), true);
     field("producer", (read) => read.producer, (producer) => `${producer.name} ${producer.version}`, false);
     field("schema", (read) => read.schema, (schema) => `${schema}`, false);
-    field("type root", (read) => read.inputs.typeRoot, (typeRoot) => typeRoot?.identity, false);
     return [...(shared.length === 0 ? [] : [`Context: ${shared.join("; ")}`]), ...varying.map((line) => `Context ${line}`)];
   }
 

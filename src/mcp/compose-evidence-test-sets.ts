@@ -21,7 +21,6 @@ export type ReadContext = {
   producer?: Producer;
   schema?: SchemaVersion;
   engines?: Record<string, string>;
-  typeRoot?: string;
   /** Differences that never block a connection by themselves. */
   scopeInclude?: readonly string[];
   walkDepth?: number;
@@ -39,7 +38,6 @@ function inputs(context: ReadContext): FactInputs {
       ...(context.walkDepth === undefined ? {} : { walk: { depth: context.walkDepth } }),
       ...(context.targets === undefined ? {} : { targets: context.targets }),
     },
-    ...(context.typeRoot === undefined ? {} : { typeRoot: { identity: context.typeRoot } }),
     engines: context.engines ?? {},
   };
 }

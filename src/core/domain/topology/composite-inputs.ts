@@ -13,6 +13,6 @@ export function compositeBase(base: FactBase, reads: readonly { kind: string; fa
     versions.set(name, held);
   }
   const engines = sortedEngines(Object.fromEntries([...versions].flatMap(([name, values]) => values.size === 1 ? [[name, [...values][0]!]] : [])));
-  const { origin: _origin, typeRoot: _typeRoot, ...inputs } = base.inputs;
+  const { origin: _origin, ...inputs } = base.inputs;
   return { ...base, inputs: { ...inputs, content: digest(canonicalJson({ contributions, declared })), config: digest(canonicalJson({ contributions, declared, config })), declaredConfig: config, engines } };
 }

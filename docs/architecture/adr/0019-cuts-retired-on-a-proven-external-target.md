@@ -33,8 +33,8 @@ Measured on the same application as `RFC-0016`, with the index already cached, a
 | `HEAD~60` | 374 | **350** (−6,4%) | 6.257 | **6.151** (−1,7%) | 2.495 → 2.495 |
 
 Cost: median peak RSS 457 MB → 585 MB over three runs each, with the same workload; wall clock inside the noise of
-repeated runs (method in `RFC-0016`, "How these costs were measured"). For contrast, the type layer costs +387 MB of
-retained memory and removes one cut.
+repeated runs (method in `RFC-0016`, "How these costs were measured"). For contrast, the type layer, since retired
+(`ADR-0018`), cost +387 MB of retained memory and removed one cut.
 
 **A correction to `RFC-0016`'s estimate.** It said 55% of the cut places were retirable. That was measured over 1.172 of
 the 6.257 `at` entries at `HEAD~60` — the subset whose place carries no reference name. The named places
@@ -58,8 +58,8 @@ population did not.
    the proof never covered. That count is an upper bound: it is the whole index, specs included, and not only what the walk
    reached.
 2. **Only a proven external target retires.** A name imported from a repository file stays a cut: the reference may name
-   the imported declaration, and turning that into an edge needs the declaration, which is the type layer's answer
-   (`RFC-0016` S9).
+   the imported declaration, and turning that into an edge needs the declaration, which a type layer would answer and ye-ast no longer has
+   (`ADR-0018`, rejected).
 3. **The proof is conservative by construction.** A name the file declares in any scope is never retired, because that
    declaration may shadow the import at the place the reference sits. For the ambient proof the snapshot is checked too: a
    `.d.ts` or a global augmentation that declares the name keeps its cut. A hidden dependence is worse than a false cut.
@@ -92,14 +92,10 @@ population did not.
   That is the silent degradation the project asks for, and it never guesses external. The same holds for a snapshot that
   declares a global of its own: the ambient proof steps back and the place keeps its cut.
 - The remaining cut places are receiver-rooted names (`this.svc.get`), names with no import, and imports from the
-  repository. Whether the type layer earns its +387 MB on those is `RFC-0016` S9, and it is now measurable against a
-  smaller list.
+  repository. The type layer that could have settled them was measured and retired (`ADR-0018`, "Outcome").
 - Java is unaffected: the adapter reads TypeScript import clauses, and a Java reference keeps its cut.
 
 ## Not decided here
 
-- Whether the type layer merges (`RFC-0016` S9): measured on 2026-11-03, it removes 0 to 3 cuts for +2,2 to +2,9 s and
-  +300 to +480 MB, so the recommendation is to retire it and keep this record's proof, which needs no root.
-- The budget that stops a `Program` and what a fact does when it is reached (`RFC-0016` question 4).
 - Any Java equivalent of an import-binding proof: the Java extractor reads annotations, not resolution, and no
   measurement of what it loses exists yet.

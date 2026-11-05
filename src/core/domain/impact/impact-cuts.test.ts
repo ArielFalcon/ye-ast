@@ -34,13 +34,6 @@ test("a bare call a binding proves is a cut at the declaration that binding name
   assert.deepEqual(cuts, [{ kind: "unresolved-link", at: ["src/Repo.java::save", "src/Use.java:5"] }]);
 });
 
-test("a place a type layer settled is no cut at all, whatever name tail the index had tried", () => {
-  const reference = use("save", "calls", "src/Repo.java", 9);
-
-  assert.deepEqual(unresolvedLinkCuts([reference], [SAVE], []), [{ kind: "unresolved-link", at: ["src/Repo.java::save", "src/Repo.java:9"] }]);
-  assert.deepEqual(unresolvedLinkCuts([reference], [SAVE], [], new Set(), new Set([referenceKey(reference)!])), []);
-});
-
 test("an external proof retires the reference whose own root it proves", () => {
   const proven = use("inject.save", "calls", "src/Use.java", 3);
 

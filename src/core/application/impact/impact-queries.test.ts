@@ -60,7 +60,6 @@ interface Options {
   sources?: SourceFile[];
   /** Reads the imports of those sources, as composition wires it. */
   importOrigins?: ImportOriginsReader;
-  typeRoot?: ImpactQueriesDeps["typeRoot"];
   moduleDependencies?: ModuleDependenciesReader;
   snapshotSources?: Partial<Record<string, SourceFile[]>>;
 }
@@ -132,7 +131,6 @@ function setup(options: Options = {}) {
     ...(options.live && { live: options.live.deps }),
     ...(options.declarationEvidence && { declarationEvidence: options.declarationEvidence }),
     ...(options.importOrigins && { importOrigins: options.importOrigins }),
-    ...(options.typeRoot && { typeRoot: options.typeRoot }),
     ...(options.moduleDependencies && { moduleDependencies: options.moduleDependencies }),
   };
   const request: AtRevision<ImpactOfChangeRequest> = { repo: "/repo", repoId: "repo", base: "base", head: "head", ...(options.signal && { signal: options.signal }) };
@@ -1221,32 +1219,6 @@ test("JSON changes are staged and contribute to the content fingerprint", async 
   assert.notEqual(first.inputs.content, second.inputs.content);
 });
 
-test("type settlement requires unique joined target expanded and caller reached", async () => {
-  const target = "src/target.ts", source = "src/source.ts";
-  const references = [{ from: "caller", file: source, line: 2, column: 0, name: "hit", kind: "calls" }];
-  const observed: number[] = [];
-  const typeRoot: NonNullable<Options["typeRoot"]> = { identity: "test", resolution: () => ({ resolve: (sites) => sites.map((site) => { observed.push(site.column); return { status: "complete", value: { kind: "repository", file: target, symbol: "hit", line: 2, endLine: 2 }, evidence: [] }; }) }) };
-  const common: Options = {
-    changes: { ok: true, value: [change(target, { added: [{ start: 2, end: 2 }] })] },
-    nodes: [fakeNode("hit", "function", target, 1, 3), fakeNode("caller", "function", source, 1, 3)],
-    unresolved: references, exports: { [HEAD]: { files: [target, source].map((path) => ({ path, blob: path, written: true })), skipped: [] } },
-    importOrigins: origins(() => undefined), typeRoot,
-  };
-  const bounded = fact(await setup(common).ask({ budget: { depth: 0 } }));
-  assert.ok(bounded.status === "partial" && bounded.cuts.some((cut) => cut.kind === "unresolved-link"));
-  const admitted = fact(await setup(common).ask({ budget: { depth: 1 } }));
-  assert.equal(admitted.status, "complete");
-  assert.ok(admitted.value.symbols.some((symbol) => symbol.symbol === "caller"));
-  assert.ok(observed.every((column) => column === 1));
-  const missing = fact(await setup({ ...common, nodes: [fakeNode("hit", "function", target, 1, 3)] }).ask());
-  assert.ok(missing.status === "partial" && missing.cuts.some((cut) => cut.kind === "unresolved-link"));
-  const missingTarget: NonNullable<Options["typeRoot"]> = { identity: "missing", resolution: () => ({ resolve: (sites) => sites.map(() => ({ status: "complete", value: { kind: "repository", file: "src/absent.ts", symbol: "hit", line: 1, endLine: 1 }, evidence: [] })) }) };
-  const unjoined = fact(await setup({ ...common, typeRoot: missingTarget }).ask());
-  assert.ok(unjoined.status === "partial" && unjoined.cuts.some((cut) => cut.kind === "unresolved-link"));
-  const ambiguous = fact(await setup({ ...common, nodes: [...common.nodes!, fakeNode("overload", "function", target, 1, 3, "hit")] }).ask());
-  assert.ok(ambiguous.status === "partial" && ambiguous.cuts.some((cut) => cut.kind === "unresolved-link"));
-});
-
 test("local callback proof excludes only its own removed-declaration occurrence and creates no edge", async () => {
   const source = "src/promise.ts";
   const removed = change("src/address.ts", { deleted: true, added: [], removedNames: ["resolve"] });
@@ -1274,16 +1246,6 @@ test("cancellation during origin batch stops before the walk", async () => {
   assert.ok(!result.ok && result.fault.kind === "aborted");
 });
 
-test("same line type settlements leave an unproved neighbor and preserve the reached caller", async () => {
-  const target = "src/target.ts", source = "src/source.ts";
-  const references = [0, 8].map((column) => ({ from: "caller", file: source, line: 2, column, name: "hit", kind: "calls" }));
-  const typeRoot: NonNullable<Options["typeRoot"]> = { identity: "test", resolution: () => ({ resolve: (sites) => sites.map((site) => site.column === 1 ? { status: "complete", value: { kind: "repository", file: target, symbol: "hit", line: 2, endLine: 2 }, evidence: [] } : { status: "unknown", reason: "unresolved", evidence: [] }) }) };
-  const answer = fact(await setup({ changes: { ok: true, value: [change(target, { added: [{ start: 2, end: 2 }] })] }, nodes: [fakeNode("hit", "function", target, 1, 3), fakeNode("caller", "function", source, 1, 3)], unresolved: references, exports: { [HEAD]: { files: [target, source].map((path) => ({ path, blob: path, written: true })), skipped: [] } }, importOrigins: origins(() => undefined), typeRoot }).ask());
-  assert.ok(answer.status === "partial");
-  assert.ok(answer.value.symbols.some((symbol) => symbol.symbol === "caller"));
-  assert.ok(answer.cuts.some((cut) => cut.at.includes("src/source.ts:2 hit")));
-});
-
 test("field settlement does not hide a same-line unverified use", async () => {
   const target = "src/svc.ts", source = "src/cmp.ts";
   const refs = [0, 12].map((column) => ({ from: "caller", file: source, line: 2, column, name: "this.svc.hit", kind: "calls" }));
@@ -1293,18 +1255,6 @@ test("field settlement does not hide a same-line unverified use", async () => {
   assert.ok(answer.value.symbols.some((symbol) => symbol.symbol === "caller"));
   assert.ok(answer.cuts.some((cut) => cut.at.includes("src/cmp.ts:2 this.svc.hit")));
 });
-
-test("same-line type settlements remain distinct when only one target expands", async () => {
-  const source = "src/use.ts", first = "src/a.ts", second = "src/b.ts";
-  const refs = [{ from: "caller", file: source, line: 1, column: 0, name: "a.hit", kind: "calls" }, { from: "caller", file: source, line: 1, column: 9, name: "b.hit", kind: "calls" }];
-  const typeRoot: NonNullable<Options["typeRoot"]> = { identity: "two", resolution: () => ({ resolve: (sites) => sites.map((site) => ({ status: "complete", value: { kind: "repository", file: site.column === 1 ? first : second, symbol: "hit", line: 1, endLine: 1 }, evidence: [] })) }) };
-  const opts: Options = { changes: { ok: true, value: [change(first), change(second)] }, nodes: [fakeNode("a", "function", first, 1, 1, "hit"), fakeNode("b", "function", second, 1, 1, "hit"), fakeNode("caller", "function", source, 1, 1)], unresolved: refs, exports: { [HEAD]: { files: [first, second, source].map((path) => ({ path, blob: path, written: true })), skipped: [] } }, typeRoot, importOrigins: origins(() => undefined) };
-  const unlimited = fact(await setup(opts).ask());
-  assert.equal(unlimited.status, "complete");
-  const limited = fact(await setup(opts).ask({ budget: { expansions: 1 } }));
-  assert.ok(limited.status === "partial" && limited.cuts.some((cut) => cut.at.includes(`${source}:1 b.hit`)));
-});
-
 
 test("member proof context gates exact contrary-target exclusions without reaching the actual caller", async () => {
   const free = "src/free.ts", store = "src/store.ts", owner = "src/owner.ts";
@@ -1451,119 +1401,4 @@ test("public strongest reference keeps its locations and the observed call still
   const reached = answer.value.symbols.find((symbol) => symbol.symbol === "caller");
   assert.equal(reached?.confidence, 0.9);
   assert.deepEqual(reached?.via, { file: "src/A.java", symbol: "seed", lines: [5], basis: "reference" });
-});
-
-test("a decorator file occurrence reaches only its uniquely source-attested class and settles only after expansion", async () => {
-  const file = "src/decorated.ts";
-  const content = "class Service { run() { return 1; } }\nconst service = new Service();\nfunction identity<T>(x:T):T { return x; }\nfunction decorate(x:unknown): ClassDecorator { return () => {}; }\n@decorate(identity(service).run())\nexport class Screen {}";
-  const nodes = [fakeNode("run", "method", file, 1, 1), fakeNode("Service", "class", file, 1, 1), fakeNode("Screen", "class", file, 6, 6), fakeNode("file", "file", file, 1, 6)];
-  const options: Options = {
-    nodes,
-    edges: [{ from: "Service", to: "run", kind: "contains" }],
-    sources: [{ path: file, content }],
-    exports: { [HEAD]: { files: [{ path: file, blob: "decorator", written: true }], skipped: [] } },
-    unresolved: [{ from: "file", file, line: 5, column: 10, name: "identity().run", kind: "calls" }],
-    importOrigins: origins(() => undefined),
-    typeRoot: {
-      identity: "decorated",
-      resolution: () => ({
-        resolve: (sites) => sites.map(() => ({
-          status: "complete",
-          value: { kind: "repository", file, symbol: "run", line: 1, endLine: 1 },
-          sourceOwner: { file, symbol: "Screen", line: 6, column: 14 },
-          evidence: [],
-        })),
-      }),
-    },
-  };
-  const ask = async (input: Options, budget?: ImpactCallersRequest["budget"]) =>
-    callersFact(await setup(input).callers({ targets: [{ file, start: 1, end: 1 }], ...(budget === undefined ? {} : { budget }) }));
-  const admitted = await ask(options);
-  assert.ok(admitted.status !== "unknown");
-  assert.ok(admitted.value.symbols.some((symbol) => symbol.symbol === "Screen" && symbol.via?.lines?.includes(5)));
-  assert.ok(!("cuts" in admitted && admitted.cuts.some((cut) => cut.kind === "unresolved-link")));
-  const bounded = await ask(options, { expansions: 1 });
-  assert.ok(bounded.status === "partial" && bounded.cuts.some((cut) => cut.kind === "unresolved-link"));
-  const variants = [
-    nodes.filter((node) => node.id !== "Screen"),
-    [...nodes, fakeNode("duplicate", "class", file, 6, 6, "Screen")],
-    nodes.map((node) => node.id === "Screen" ? { ...node, start: 7, end: 7 } : node),
-  ];
-  for (const nodes of variants) {
-    const unknown = await ask({ ...options, nodes });
-    assert.ok(unknown.status === "partial" && unknown.cuts.some((cut) => cut.kind === "unresolved-link"));
-    assert.ok(!unknown.value.symbols.some((symbol) => symbol.symbol === "Screen"));
-  }
-});
-
-test("occurrence consumer keeps same-line homonyms and duplicate tuples separate at raw column zero", async () => {
-  const target = "src/a.ts", other = "src/b.ts", use = "src/use.ts";
-  const sources = [
-    { path: target, content: "export class A { hit() {} }" },
-    { path: other, content: "export class B { hit() {} }" },
-    { path: use, content: "import { A } from './a';\nimport { B } from './b';\nfunction identity<T>(x:T):T { return x; }\nexport function caller(a:A,b:B) {\nidentity(a).hit(); identity(b).hit();\n}" },
-  ];
-  const nodes = [fakeNode("a", "method", target, 1, 1, "hit"), fakeNode("b", "method", other, 1, 1, "hit"), fakeNode("caller", "function", use, 4, 6)];
-  const first = { from: "caller", file: use, line: 5, column: 0, name: "identity().hit", kind: "calls" };
-  const second = { ...first, column: 19 };
-  const common: Options = {
-    nodes,
-    sources,
-    unresolved: [first, second],
-    exports: { [HEAD]: { files: sources.map((source) => ({ path: source.path, blob: source.path, written: true })), skipped: [] } },
-    importOrigins: () => ({
-      origins: async (sites) => sites.map((site) => ({
-        status: "unknown",
-        reason: "unresolved",
-        evidence: [],
-        ...([1, 20].includes(site.column ?? -1) ? { occurrence: true as const } : {}),
-      })),
-    }),
-    typeRoot: {
-      identity: "matrix",
-      resolution: () => ({
-        resolve: (sites) => sites.map((site) => ({
-          status: "complete",
-          value: { kind: "repository", file: site.column === 1 ? target : other, symbol: "hit", line: 1, endLine: 1 },
-          evidence: [],
-        })),
-      }),
-    },
-  };
-  const ask = async (input: Options) => callersFact(await setup(input).callers({ targets: [{ file: target, symbol: "hit" }] }));
-  const answer = await ask(common);
-  assert.ok(answer.status !== "unknown");
-  assert.ok(answer.value.symbols.some((symbol) => symbol.symbol === "caller"));
-  assert.ok(answer.status === "partial" && answer.cuts.some((cut) => cut.at.some((place) => place.includes("identity().hit"))));
-  const duplicate = await ask({ ...common, unresolved: [first, first, second] });
-  assert.ok(duplicate.status === "partial");
-  assert.ok(!duplicate.value.symbols.some((symbol) => symbol.symbol === "caller"));
-  const stale = await ask({ ...common, unresolved: [{ ...first, column: 1 }, second] });
-  assert.ok(stale.status === "partial");
-  assert.ok(!stale.value.symbols.some((symbol) => symbol.symbol === "caller"));
-});
-
-test("an individual type settlement cannot discharge existing importer evidence without reference coverage", async () => {
-  const target = "src/service.ts", routes = "src/routes.ts";
-  const common: Options = {
-    nodes: [fakeNode("Service", "class", target, 1), fakeNode("routes", "constant", routes, 2), fakeNode("file", "file", routes, 1, 8), fakeNode("Module", "class", routes, 8)],
-    edges: [{ from: "file", to: "Service", kind: "imports" }],
-    unresolved: [{ from: "routes", file: routes, line: 2, column: 0, name: "Service", kind: "function_ref" }],
-    exports: { [HEAD]: { files: [target, routes].map((path) => ({ path, blob: path, written: true })), skipped: [] } },
-    importOrigins: origins(() => undefined),
-    typeRoot: {
-      identity: "individual",
-      resolution: () => ({
-        resolve: (sites) => sites.map(() => ({
-          status: "complete",
-          value: { kind: "repository", file: target, symbol: "Service", line: 1, endLine: 1 },
-          evidence: [],
-        })),
-      }),
-    },
-  };
-  const result = callersFact(await setup(common).callers({ targets: [{ file: target, symbol: "Service" }] }));
-  assert.ok(result.status !== "unknown");
-  assert.ok(result.value.symbols.some((symbol) => symbol.symbol === "routes" && symbol.via?.basis === "reference"));
-  assert.ok(result.value.symbols.some((symbol) => symbol.symbol === "Module" && symbol.via?.basis === "import"));
 });

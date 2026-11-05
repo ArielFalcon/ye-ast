@@ -4,7 +4,7 @@ import { declarationAnchor } from "../../domain/impact/impact-cuts.ts";
 import { relation, type RelationKind, type Relation, type SymbolRef } from "../../domain/relations/relation.ts";
 import type { LocalOrigin } from "../../domain/relations/field-origin.ts";
 import type { GraphSymbol } from "../../ports/code-graph.port.ts";
-import { createInboundEdges, type InboundEdges, type SettledReference } from "./inbound-edges.ts";
+import { createInboundEdges, type InboundEdges } from "./inbound-edges.ts";
 import { fakeCodeGraph, fakeNode, type FakeEdge, type FakeNode, type FakeUnresolved } from "./fake-code-graph.testing.ts";
 import { walkImpact } from "./walk.ts";
 
@@ -24,11 +24,10 @@ function setup(
   edges: FakeEdge[],
   relations: readonly Relation[] = [],
   unresolved: readonly FakeUnresolved[] = [],
-  settled: readonly SettledReference[] = [],
   locals: readonly LocalOrigin[] = [],
 ): Setup {
   const graph = fakeCodeGraph(nodes, edges, unresolved);
-  const inbound = createInboundEdges(graph, isTestFile, relations, [], settled, locals);
+  const inbound = createInboundEdges(graph, isTestFile, relations, [], locals);
   const symbol = (id: string): GraphSymbol => {
     const [found] = graph.symbolsByIds([id as GraphSymbol["id"]]);
     assert.ok(found, id);
@@ -374,49 +373,6 @@ test("a type reached through one of its members follows a subtype and a template
   assert.deepEqual(s.callers("Svc"), ["Parent", "Peer", "Sub"]);
 });
 
-const SETTLED_TARGET = "src/C.java";
-
-function settledSetup(kind: string): Setup {
-  return setup(
-    [
-      fakeNode("target", "method", SETTLED_TARGET, 1),
-      fakeNode("first", "method", "src/A.java", 10),
-      fakeNode("second", "method", "src/B.java", 20),
-    ],
-    [{ from: "second", to: "first", kind: "calls", confidence: 1 }],
-    [],
-    [],
-    [{ from: "first" as never, file: "src/A.java", line: 10, column: 0, kind, name: "target", target: { file: SETTLED_TARGET, symbol: "target", line: 1 } }],
-  );
-}
-
-test("a reference a type layer settled is a caller at the place it sits, with the basis of its kind", () => {
-  const s = settledSetup("calls");
-
-  assert.deepEqual(s.callers("target"), ["first"]);
-  assert.deepEqual(s.basis("target"), ["call"]);
-});
-
-test("a kind that names a module specifier is not settled here, however the layer answered it", () => {
-  const s = settledSetup("imports");
-
-  assert.deepEqual(s.callers("target"), []);
-});
-
-test("the walk expands a settled reference, so the caller of the new caller is reached too", () => {
-  const s = settledSetup("calls");
-  const walk = walkImpact([s.symbol("target")], s.inbound);
-
-  assert.deepEqual(
-    walk.reached.map(({ symbol, depth }) => [symbol.id, depth]),
-    [
-      ["target", 0],
-      ["first", 1],
-      ["second", 2],
-    ],
-  );
-});
-
 test("a call on a local a function takes from inject() is a caller of the method it names, at its line", () => {
   const owner: SymbolRef = { path: B, symbol: "guard", line: 5 };
   const s = setup(
@@ -424,7 +380,6 @@ test("a call on a local a function takes from inject() is a caller of the method
     [{ from: "svc", to: "target", kind: "contains" }],
     [],
     [{ from: "guard", name: "orders.list", kind: "calls", file: B, line: 7, column: 0 }],
-    [],
     [{ owner, local: "orders", holds: { class: { path: A, symbol: "Svc", line: 1 } } }],
   );
 
@@ -438,7 +393,6 @@ test("a local name two owners of one file share is not settled: the place keeps 
     [{ from: "svc", to: "target", kind: "contains" }],
     [],
     [{ from: "one", name: "orders.list", kind: "calls", file: B, line: 7 }],
-    [],
     [
       { owner: { path: B, symbol: "one", line: 5 }, local: "orders", holds: { class: { path: A, symbol: "Svc", line: 1 } } },
       { owner: { path: B, symbol: "two", line: 12 }, local: "orders", holds: { class: { path: A, symbol: "Svc", line: 1 } } },
@@ -454,7 +408,7 @@ test("an ambiguous declaration anchor cannot settle another same-name declaratio
   const s = setup(
     [fakeNode("svc", "class", A, 1, 50, "Svc"), fakeNode("target", "method", A, 10, 12, "list"), fakeNode("other", "method", A, 20, 22, "list"), fakeNode("guard", "function", B, 5, 20, "guard")],
     [{ from: "svc", to: "target", kind: "contains" }, { from: "svc", to: "other", kind: "contains" }], [],
-    [{ from: "guard", name: "orders.list", kind: "calls", file: B, line: 7, column: 0 }], [],
+    [{ from: "guard", name: "orders.list", kind: "calls", file: B, line: 7, column: 0 }],
     [{ owner, local: "orders", holds: { class: { path: A, symbol: "Svc", line: 1 } } }],
   );
   s.inbound.callersOf(s.symbol("target"), false);
@@ -463,7 +417,7 @@ test("an ambiguous declaration anchor cannot settle another same-name declaratio
 
 test("missing occurrence coordinates cannot produce a local-origin edge", () => {
   const owner: SymbolRef = { path: B, symbol: "guard", line: 5 };
-  const s = setup([fakeNode("svc", "class", A, 1, 50, "Svc"), fakeNode("target", "method", A, 10, 12, "list"), fakeNode("guard", "function", B, 5, 20, "guard")], [{ from: "svc", to: "target", kind: "contains" }], [], [{ from: "guard", name: "orders.list", kind: "calls", file: B, line: 7 }], [], [{ owner, local: "orders", holds: { class: { path: A, symbol: "Svc", line: 1 } } }]);
+  const s = setup([fakeNode("svc", "class", A, 1, 50, "Svc"), fakeNode("target", "method", A, 10, 12, "list"), fakeNode("guard", "function", B, 5, 20, "guard")], [{ from: "svc", to: "target", kind: "contains" }], [], [{ from: "guard", name: "orders.list", kind: "calls", file: B, line: 7 }], [{ owner, local: "orders", holds: { class: { path: A, symbol: "Svc", line: 1 } } }]);
   assert.deepEqual(s.callers("target"), []);
   assert.equal(s.inbound.settledUses().size, 0);
 });
@@ -478,7 +432,7 @@ for (const origin of ["field", "local"] as const) {
     ]);
     const owner = { path: B, symbol: "Owner", line: 1 };
     const holds = { class: { path: A, symbol: "Svc", line: 1 } };
-    const inbound = createInboundEdges(graph, isTestFile, [], origin === "field" ? [{ owner, field: "orders", holds }] : [], [], origin === "local" ? [{ owner, local: "orders", holds }] : []);
+    const inbound = createInboundEdges(graph, isTestFile, [], origin === "field" ? [{ owner, field: "orders", holds }] : [], origin === "local" ? [{ owner, local: "orders", holds }] : []);
     const [target] = graph.symbolsByIds(["target" as GraphSymbol["id"]]);
     assert.ok(target);
     assert.deepEqual(inbound.callersOf(target, false), []);
@@ -490,7 +444,7 @@ test("a proven own member excludes a reached free-function homonym without inven
   const nodes = [fakeNode("free", "function", A, 1, 3, "write"), fakeNode("Store", "class", SVC, 1, 10), fakeNode("member", "method", SVC, 3, 4, "write"), fakeNode("Owner", "class", CMP, 1, 20), fakeNode("caller", "method", CMP, 5, 9)];
   const graph = fakeCodeGraph(nodes, [{ from: "Store", to: "member", kind: "contains" }, { from: "Owner", to: "caller", kind: "contains" }], [{ from: "caller", name: "this.store.write", kind: "calls", file: CMP, line: 7, column: 4 }]);
   const proof = { owner: ref(CMP, "Owner", 1), receiver: ref(SVC, "Store", 1), member: ref(SVC, "write", 3), reference: { file: CMP, line: 7, column: 5, name: "this.store.write", kind: "calls" as const } };
-  const inbound = createInboundEdges(graph, isTestFile, [], [], [], [], undefined, [proof]);
+  const inbound = createInboundEdges(graph, isTestFile, [], [], [], undefined, [proof]);
   const get = (id: string): GraphSymbol => graph.symbolsByIds([id as GraphSymbol["id"]])[0]!;
   assert.deepEqual(inbound.callersOf(get("free"), false), []);
   assert.equal(inbound.memberProofs(new Set([get("free").id])).targets.size, 1);
@@ -513,7 +467,7 @@ for (const invalid of ["missing-member", "ambiguous-member", "missing-caller", "
     if (invalid === "duplicate-site") uses.push({ ...uses[0]! });
     const graph = fakeCodeGraph(nodes, edges, uses);
     const proof = { owner: ref(CMP, "Owner", 1), receiver: ref(SVC, "Store", 1), member: ref(SVC, "write", 3), reference: { file: CMP, line: 7, column: 5, name: "this.store.write", kind: "calls" as const } };
-    const inbound = createInboundEdges(graph, isTestFile, [], [], [], [], invalid === "uncertified-site" ? new Set() : undefined, [proof]);
+    const inbound = createInboundEdges(graph, isTestFile, [], [], [], invalid === "uncertified-site" ? new Set() : undefined, [proof]);
     const [free] = graph.symbolsByIds(["free" as GraphSymbol["id"]]);
     assert.ok(free);
     assert.deepEqual(inbound.callersOf(free, false), []);
@@ -532,7 +486,7 @@ for (const kind of ["function", "constant", "variable"]) {
       { from: "boot", name: "inject", kind: "calls", file: CMP, line: 7, column: 0 },
     ]);
     const proof = { owner: ref(CMP, "boot", 5), receiver: ref(SVC, "Svc", 1), member: ref(SVC, "hit", 3), reference: { file: CMP, line: 7, column: 1, name: "inject().hit", kind: "calls" as const } };
-    const inbound = createInboundEdges(graph, isTestFile, [], [], [], [], undefined, [proof]);
+    const inbound = createInboundEdges(graph, isTestFile, [], [], [], undefined, [proof]);
     const [hit] = graph.symbolsByIds(["hit" as GraphSymbol["id"]]);
     assert.ok(hit);
     assert.deepEqual(inbound.callersOf(hit, false).map(({ from }) => from.id), ["boot"]);
@@ -544,7 +498,7 @@ for (const kind of ["function", "constant", "variable"]) {
 test("competing member proofs for one occurrence cannot settle it or invent calls", () => {
   const graph = fakeCodeGraph([fakeNode("Svc", "class", SVC, 1, 10), fakeNode("hit", "method", SVC, 3, 4), fakeNode("boot", "function", CMP, 5, 9)], [{ from: "Svc", to: "hit", kind: "contains" }], [{ from: "boot", name: "inject().hit", kind: "calls", file: CMP, line: 7, column: 0 }]);
   const proof = { owner: ref(CMP, "boot", 5), receiver: ref(SVC, "Svc", 1), member: ref(SVC, "hit", 3), reference: { file: CMP, line: 7, column: 1, name: "inject().hit", kind: "calls" as const } };
-  const inbound = createInboundEdges(graph, isTestFile, [], [], [], [], undefined, [proof, proof]);
+  const inbound = createInboundEdges(graph, isTestFile, [], [], [], undefined, [proof, proof]);
   const [hit] = graph.symbolsByIds(["hit" as GraphSymbol["id"]]);
   assert.ok(hit);
   assert.deepEqual(inbound.callersOf(hit, false), []);
@@ -562,8 +516,8 @@ for (const receiver of ["field", "local"] as const) {
     const fields = receiver === "field" ? [{ owner, field: "svc", holds }] : [];
     const locals = receiver === "local" ? [{ owner, local: "svc", holds }] : [];
     const [target] = graph.symbolsByIds(["hit" as GraphSymbol["id"]]);assert.ok(target);
-    assert.equal(createInboundEdges(graph, isTestFile, [], fields, [], locals).callersOf(target, false).length, 1);
-    const exact = createInboundEdges(graph, isTestFile, [], fields, [], locals, undefined, []);
+    assert.equal(createInboundEdges(graph, isTestFile, [], fields, locals).callersOf(target, false).length, 1);
+    const exact = createInboundEdges(graph, isTestFile, [], fields, locals, undefined, []);
     assert.deepEqual(exact.callersOf(target, false).map(({ from }) => from.id), receiver === "field" ? ["caller"] : []);
     assert.equal(exact.settledUses().size, 0);
   });
@@ -577,7 +531,7 @@ test("certified local call adds potential reach but never settles under a native
   for (const [column, from, expected] of [[0, "caller", 1], [1, "caller", 0], [0, "outside", 0]] as const) {
     const graph = fakeCodeGraph(nodes, edges, [{ from, file: CMP, line: 7, column, name: "svc.hit", kind: "calls" }]);
     const [target] = graph.symbolsByIds(["hit" as GraphSymbol["id"]]); assert.ok(target);
-    const inbound = createInboundEdges(graph, isTestFile, [], [], [], [origin], undefined, []);
+    const inbound = createInboundEdges(graph, isTestFile, [], [], [origin], undefined, []);
     assert.equal(inbound.callersOf(target, false).length, expected);
     assert.equal(inbound.settledUses().size, 0);
   }

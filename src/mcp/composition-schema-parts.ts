@@ -50,7 +50,6 @@ export const factInputs = z.strictObject({
     exportBudget: z.strictObject({ maxEntries: z.number(), maxBytes: z.number() }).exactOptional(),
   }),
   origin: z.discriminatedUnion("kind", [z.strictObject({ kind: z.literal("full") }), z.strictObject({ kind: z.literal("sync"), base: z.string() })]).exactOptional(),
-  typeRoot: z.strictObject({ identity: z.string() }).exactOptional(),
   engines: z.record(z.string(), z.string()),
 });
 

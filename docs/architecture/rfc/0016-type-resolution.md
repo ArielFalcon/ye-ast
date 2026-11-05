@@ -1,6 +1,6 @@
 # RFC-0016: Type resolution
 
-- Status: Draft, 2026-11-03. S0, S4, S7, S8, S9, S10, S12 and S13 measured; S8 and S13 are the slices that carry the
+- Status: Draft, 2026-11-03; the type-resolution port retired 2026-11-05 (see "Retired"). S0, S4, S7, S8, S9, S10, S12 and S13 measured; S8 and S13 are the slices that carry the
   value (6% to 13% of the cuts from the import proof, 12% to 40% from the DI reader), both with no type root. S9 shows the
   port buys 0 to 3 cuts for +2,2 to +2,9 s and +300 to +480 MB. Read `S4 measured`, `The three gaps the measurement
   exposed` and `S9 measured` before the design below; the family plan and what each slice measured are in "What would
@@ -15,6 +15,15 @@ the index could not settle. The program is built from the snapshot's own sources
 provides, cached by content, and every fact that used it records it. Nothing runs out of process, and a repository's own
 `tsconfig` keeps the role `RFC-0002` rule 4 already gives it: configuration that interprets content, never configuration
 that raises a limit.
+
+## Retired
+
+A synchronous type-resolution port and `--type-root` were implemented, measured and retired on 2026-11-05 (ADR-0018, "Outcome"): the port
+(`type-resolution.port.ts`), the adapter, its cache, `inputs.typeRoot`, `CompositionOptions.typeRoot` and `--type-root`
+no longer exist. The sections that design or plan them (the port, "The adapter", "Cache", "The join at the new scale",
+"Inputs and invalidation", "Completeness and the cuts", "Trust modes", the slices S1, S2, S5 and S6, and the open
+questions about the root) are historical. What stays in force: the measurements, gap A (the import proof, shipped as
+`ADR-0019`), gap B's single configuration parse, and the guard of gap C where it applies to import origins.
 
 ## The question and the answer the agent needs
 

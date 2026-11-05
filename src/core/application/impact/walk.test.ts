@@ -35,7 +35,6 @@ test("a symbol is expanded once and the walk ends on a cycle", () => {
     ownersOf: inbound.ownersOf,
     settledUses: inbound.settledUses,
     memberProofs: inbound.memberProofs,
-    joinedTypeUses: inbound.joinedTypeUses,
     callersOf: (node, contractChanged, throughMember) => {
       asked.push(node.id);
       return inbound.callersOf(node, contractChanged, throughMember);
