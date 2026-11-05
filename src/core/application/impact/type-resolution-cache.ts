@@ -1,10 +1,10 @@
 import type { ResolvedTarget, ReferenceSite } from "../../domain/relations/resolved-reference.ts";
 import type { Finding } from "../../domain/shared/fact.ts";
-import type { TypeResolution } from "../../ports/type-resolution.port.ts";
+import type { TypeResolutionFinding, TypeResolution } from "../../ports/type-resolution.port.ts";
 
 /** The identity of a site, so the same place asked twice is answered once. */
 function keyOf(site: ReferenceSite): string {
-  return `${site.file}\u0000${site.line}\u0000${site.column}\u0000${site.symbol ?? ""}`;
+  return `${site.file}\u0000${site.line}\u0000${site.column}\u0000${site.symbol ?? ""}\u0000${site.fullName ?? ""}\u0000${site.kind ?? ""}`;
 }
 
 function unanswered(site: ReferenceSite): Finding<ResolvedTarget> {
@@ -18,7 +18,7 @@ function unanswered(site: ReferenceSite): Finding<ResolvedTarget> {
  * instance, so a cached answer can never outlive the bytes it was derived from.
  */
 export function memoizeTypeResolution(inner: TypeResolution): TypeResolution {
-  const cache = new Map<string, Finding<ResolvedTarget>>();
+  const cache = new Map<string, TypeResolutionFinding>();
   return {
     resolve(sites) {
       const asked = new Map<string, ReferenceSite>();

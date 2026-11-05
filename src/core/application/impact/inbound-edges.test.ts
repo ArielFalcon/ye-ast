@@ -567,3 +567,36 @@ test("certified local call adds potential reach but never settles under a native
     assert.equal(inbound.settledUses().size, 0);
   }
 });
+
+test("strongest evidence keeps its own basis and locations while calls count toward the hub bound", () => {
+  const s = setup([fakeNode("target", "method", A, 1), fakeNode("caller", "method", B, 5, 10)], [
+    { from: "caller", to: "target", kind: "calls", confidence: 0.4, line: 6 },
+    { from: "caller", to: "target", kind: "references", confidence: 0.9, line: 8 },
+  ]);
+  const [edge] = s.inbound.callersOf(s.symbol("target"), false);
+  assert.equal(edge?.basis, "reference");
+  assert.deepEqual(edge?.lines, [8]);
+  assert.equal(edge?.confidence, 0.9);
+  assert.equal(walkImpact([s.symbol("target")], s.inbound).reached[0]?.fanIn, 1);
+});
+
+test("an own-field member invocation references the field without calling the field", () => {
+  const nodes = [fakeNode("State", "class", B, 1, 20), fakeNode("signal", "property", B, 2), fakeNode("direct", "method", B, 4, 6), fakeNode("update", "method", B, 8, 10)];
+  const s = setup(nodes, [{ from: "State", to: "signal", kind: "contains" }], [], [
+    { from: "direct", name: "this.signal", kind: "calls", file: B, line: 5 },
+    { from: "update", name: "this.signal.update", kind: "calls", file: B, line: 9 },
+  ]);
+  assert.deepEqual(s.basis("signal"), ["call", "reference"]);
+});
+
+test("equal-confidence evidence selects a stable source occurrence regardless of store order", () => {
+  const nodes = [fakeNode("target", "method", A, 1), fakeNode("caller", "method", B, 3, 10)];
+  const edges = [
+    { from: "caller", to: "target", kind: "references", confidence: 0.9, line: 4 },
+    { from: "caller", to: "target", kind: "calls", confidence: 0.9, line: 8 },
+  ];
+  const first = setup(nodes, edges);
+  const second = setup(nodes, edges.toReversed());
+  assert.deepEqual(first.inbound.callersOf(first.symbol("target"), false), second.inbound.callersOf(second.symbol("target"), false));
+  assert.deepEqual(first.basis("target"), ["reference"]);
+});

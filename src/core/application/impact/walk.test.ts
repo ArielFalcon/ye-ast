@@ -279,3 +279,17 @@ test("expanded IDs include only nodes admitted by walk bounds", () => {
   assert.deepEqual([...walk(nodes, edges, ["a"], { expansions: 0 }).expanded], []);
   assert.deepEqual([...walk(nodes, edges, ["a"], { hubFanIn: 0 }).expanded], []);
 });
+
+test("via follows the path that determines confidence", () => {
+  const nodes = [fn("seed"), fn("mid"), fn("target")];
+  const edges = [call("target", "seed", 0.2), call("mid", "seed", 0.9), call("target", "mid", 0.8)];
+  const result = walk(nodes, [...edges, call("mid", "target", 0.8)], ["seed"]);
+  const target = result.reached.find((rec) => rec.symbol.id === "target");
+  assert.equal(target?.confidence, 0.8);
+  assert.equal(target?.depth, 1);
+  assert.equal(target?.via?.symbol.id, "mid");
+  assert.equal(result.reached.find((rec) => rec.symbol.id === "mid")?.via?.symbol.id, "seed");
+
+  const stopped = walk(nodes, edges, ["seed"], { expansions: 1 });
+  assert.equal(stopped.reached.find((rec) => rec.symbol.id === "target")?.via?.symbol.id, "seed");
+});

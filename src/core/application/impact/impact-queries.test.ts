@@ -634,7 +634,7 @@ test("a requested symbol seeds the walk with the basis requested, and the value 
   assert.deepEqual(answer.snapshot, { repo: "repo", kind: "sha", sha: HEAD });
 });
 
-test("a reached symbol names every place inside itself where it depends on the symbol that reached it", async () => {
+test("a reached symbol names locations of the selected evidence category", async () => {
   const nodes = [fakeNode("f", "function", "src/A.java", 1, 3), fakeNode("g", "function", "src/B.java", 10, 40)];
   const edges = [
     { from: "g", to: "f", kind: "calls", confidence: 0.9, line: 14 },
@@ -643,7 +643,7 @@ test("a reached symbol names every place inside itself where it depends on the s
   ];
   const answer = callersFact(await setup({ nodes, edges }).callers({ targets: [{ file: "src/A.java", symbol: "f" }] }));
   const reached = answer.status === "complete" ? answer.value.symbols.find((symbol) => symbol.symbol === "g") : undefined;
-  assert.deepEqual(reached?.via, { file: "src/A.java", symbol: "f", lines: [14, 21, 33], basis: "call" });
+  assert.deepEqual(reached?.via, { file: "src/A.java", symbol: "f", lines: [14, 21], basis: "call" });
   assert.equal(reached?.endLine, 40);
 });
 
@@ -1399,4 +1399,149 @@ test("multiple change records for one path are validated together once", async (
   });
   await query.ask();
   assert.equal(calls, 1);
+});
+test("public via follows the confidence witness while shortest depth remains independent", async () => {
+  const nodes = [fakeNode("seed", "function", "src/A.java", 1), fakeNode("mid", "function", "src/B.java", 2), fakeNode("target", "function", "src/C.java", 3)];
+  const edges = [
+    { from: "target", to: "seed", kind: "calls", confidence: 0.2, line: 3 },
+    { from: "mid", to: "seed", kind: "calls", confidence: 0.9, line: 2 },
+    { from: "target", to: "mid", kind: "references", confidence: 0.8, line: 3 },
+  ];
+  const answer = callersFact(await setup({ nodes, edges }).callers({ targets: [{ file: "src/A.java", symbol: "seed" }] }));
+  assert.equal(answer.status, "complete");
+  if (answer.status !== "complete") return;
+  const reached = answer.value.symbols.find((symbol) => symbol.symbol === "target");
+  assert.equal(reached?.depth, 1);
+  assert.equal(reached?.confidence, 0.8);
+  assert.deepEqual(reached?.via, { file: "src/B.java", symbol: "mid", lines: [3], basis: "reference" });
+});
+
+test("public strongest reference keeps its locations and the observed call still counts", async () => {
+  const nodes = [fakeNode("seed", "function", "src/A.java", 1), fakeNode("caller", "function", "src/B.java", 2, 8)];
+  const edges = [
+    { from: "caller", to: "seed", kind: "calls", confidence: 0.2, line: 3 },
+    { from: "caller", to: "seed", kind: "references", confidence: 0.9, line: 5 },
+  ];
+  const answer = callersFact(await setup({ nodes, edges }).callers({ targets: [{ file: "src/A.java", symbol: "seed" }] }));
+  assert.equal(answer.status, "complete");
+  if (answer.status !== "complete") return;
+  assert.equal(answer.value.symbols.find((symbol) => symbol.symbol === "seed")?.fanIn, 1);
+  const reached = answer.value.symbols.find((symbol) => symbol.symbol === "caller");
+  assert.equal(reached?.confidence, 0.9);
+  assert.deepEqual(reached?.via, { file: "src/A.java", symbol: "seed", lines: [5], basis: "reference" });
+});
+
+test("a decorator file occurrence reaches only its uniquely source-attested class and settles only after expansion", async () => {
+  const file = "src/decorated.ts";
+  const content = "class Service { run() { return 1; } }\nconst service = new Service();\nfunction identity<T>(x:T):T { return x; }\nfunction decorate(x:unknown): ClassDecorator { return () => {}; }\n@decorate(identity(service).run())\nexport class Screen {}";
+  const nodes = [fakeNode("run", "method", file, 1, 1), fakeNode("Service", "class", file, 1, 1), fakeNode("Screen", "class", file, 6, 6), fakeNode("file", "file", file, 1, 6)];
+  const options: Options = {
+    nodes,
+    edges: [{ from: "Service", to: "run", kind: "contains" }],
+    sources: [{ path: file, content }],
+    exports: { [HEAD]: { files: [{ path: file, blob: "decorator", written: true }], skipped: [] } },
+    unresolved: [{ from: "file", file, line: 5, column: 10, name: "identity().run", kind: "calls" }],
+    importOrigins: origins(() => undefined),
+    typeRoot: {
+      identity: "decorated",
+      resolution: () => ({
+        resolve: (sites) => sites.map(() => ({
+          status: "complete",
+          value: { kind: "repository", file, symbol: "run", line: 1, endLine: 1 },
+          sourceOwner: { file, symbol: "Screen", line: 6, column: 14 },
+          evidence: [],
+        })),
+      }),
+    },
+  };
+  const ask = async (input: Options, budget?: ImpactCallersRequest["budget"]) =>
+    callersFact(await setup(input).callers({ targets: [{ file, start: 1, end: 1 }], ...(budget === undefined ? {} : { budget }) }));
+  const admitted = await ask(options);
+  assert.ok(admitted.status !== "unknown");
+  assert.ok(admitted.value.symbols.some((symbol) => symbol.symbol === "Screen" && symbol.via?.lines?.includes(5)));
+  assert.ok(!("cuts" in admitted && admitted.cuts.some((cut) => cut.kind === "unresolved-link")));
+  const bounded = await ask(options, { expansions: 1 });
+  assert.ok(bounded.status === "partial" && bounded.cuts.some((cut) => cut.kind === "unresolved-link"));
+  const variants = [
+    nodes.filter((node) => node.id !== "Screen"),
+    [...nodes, fakeNode("duplicate", "class", file, 6, 6, "Screen")],
+    nodes.map((node) => node.id === "Screen" ? { ...node, start: 7, end: 7 } : node),
+  ];
+  for (const nodes of variants) {
+    const unknown = await ask({ ...options, nodes });
+    assert.ok(unknown.status === "partial" && unknown.cuts.some((cut) => cut.kind === "unresolved-link"));
+    assert.ok(!unknown.value.symbols.some((symbol) => symbol.symbol === "Screen"));
+  }
+});
+
+test("occurrence consumer keeps same-line homonyms and duplicate tuples separate at raw column zero", async () => {
+  const target = "src/a.ts", other = "src/b.ts", use = "src/use.ts";
+  const sources = [
+    { path: target, content: "export class A { hit() {} }" },
+    { path: other, content: "export class B { hit() {} }" },
+    { path: use, content: "import { A } from './a';\nimport { B } from './b';\nfunction identity<T>(x:T):T { return x; }\nexport function caller(a:A,b:B) {\nidentity(a).hit(); identity(b).hit();\n}" },
+  ];
+  const nodes = [fakeNode("a", "method", target, 1, 1, "hit"), fakeNode("b", "method", other, 1, 1, "hit"), fakeNode("caller", "function", use, 4, 6)];
+  const first = { from: "caller", file: use, line: 5, column: 0, name: "identity().hit", kind: "calls" };
+  const second = { ...first, column: 19 };
+  const common: Options = {
+    nodes,
+    sources,
+    unresolved: [first, second],
+    exports: { [HEAD]: { files: sources.map((source) => ({ path: source.path, blob: source.path, written: true })), skipped: [] } },
+    importOrigins: () => ({
+      origins: async (sites) => sites.map((site) => ({
+        status: "unknown",
+        reason: "unresolved",
+        evidence: [],
+        ...([1, 20].includes(site.column ?? -1) ? { occurrence: true as const } : {}),
+      })),
+    }),
+    typeRoot: {
+      identity: "matrix",
+      resolution: () => ({
+        resolve: (sites) => sites.map((site) => ({
+          status: "complete",
+          value: { kind: "repository", file: site.column === 1 ? target : other, symbol: "hit", line: 1, endLine: 1 },
+          evidence: [],
+        })),
+      }),
+    },
+  };
+  const ask = async (input: Options) => callersFact(await setup(input).callers({ targets: [{ file: target, symbol: "hit" }] }));
+  const answer = await ask(common);
+  assert.ok(answer.status !== "unknown");
+  assert.ok(answer.value.symbols.some((symbol) => symbol.symbol === "caller"));
+  assert.ok(answer.status === "partial" && answer.cuts.some((cut) => cut.at.some((place) => place.includes("identity().hit"))));
+  const duplicate = await ask({ ...common, unresolved: [first, first, second] });
+  assert.ok(duplicate.status === "partial");
+  assert.ok(!duplicate.value.symbols.some((symbol) => symbol.symbol === "caller"));
+  const stale = await ask({ ...common, unresolved: [{ ...first, column: 1 }, second] });
+  assert.ok(stale.status === "partial");
+  assert.ok(!stale.value.symbols.some((symbol) => symbol.symbol === "caller"));
+});
+
+test("an individual type settlement cannot discharge existing importer evidence without reference coverage", async () => {
+  const target = "src/service.ts", routes = "src/routes.ts";
+  const common: Options = {
+    nodes: [fakeNode("Service", "class", target, 1), fakeNode("routes", "constant", routes, 2), fakeNode("file", "file", routes, 1, 8), fakeNode("Module", "class", routes, 8)],
+    edges: [{ from: "file", to: "Service", kind: "imports" }],
+    unresolved: [{ from: "routes", file: routes, line: 2, column: 0, name: "Service", kind: "function_ref" }],
+    exports: { [HEAD]: { files: [target, routes].map((path) => ({ path, blob: path, written: true })), skipped: [] } },
+    importOrigins: origins(() => undefined),
+    typeRoot: {
+      identity: "individual",
+      resolution: () => ({
+        resolve: (sites) => sites.map(() => ({
+          status: "complete",
+          value: { kind: "repository", file: target, symbol: "Service", line: 1, endLine: 1 },
+          evidence: [],
+        })),
+      }),
+    },
+  };
+  const result = callersFact(await setup(common).callers({ targets: [{ file: target, symbol: "Service" }] }));
+  assert.ok(result.status !== "unknown");
+  assert.ok(result.value.symbols.some((symbol) => symbol.symbol === "routes" && symbol.via?.basis === "reference"));
+  assert.ok(result.value.symbols.some((symbol) => symbol.symbol === "Module" && symbol.via?.basis === "import"));
 });

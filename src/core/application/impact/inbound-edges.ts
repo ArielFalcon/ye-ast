@@ -2,6 +2,7 @@ import type { DependenceBasis } from "../../domain/impact/impact-fact.ts";
 import { topLevelOf, isSeedable } from "../../domain/change/seeds.ts";
 import { declarationAnchor, declarationUseKey, referenceKey, uniqueReferenceKeys, type MemberReferenceProofs } from "../../domain/impact/impact-cuts.ts";
 import { CALL_EDGE_KINDS, EDGE_POLICY, edgeConfidence, FOLLOWED_EDGE_KINDS, followsEdge, followsRelation, isIgnoredEdge } from "../../domain/impact/edge-policy.ts";
+import type { DecoratorSourceOwner } from "../../ports/type-resolution.port.ts";
 import type { MemberUseOrigin } from "../../domain/relations/member-use.ts";
 import type { FieldOrigin, LocalOrigin } from "../../domain/relations/field-origin.ts";
 import type { Relation, SymbolRef } from "../../domain/relations/relation.ts";
@@ -14,11 +15,13 @@ import type { CodeGraphReader, GraphEdge, GraphNodeId, GraphSymbol, GraphUnresol
  */
 export interface InboundEdge {
   from: GraphSymbol;
+  /** Observed call existence, independent of the selected confidence witness. */
+  hasCall?: boolean;
   confidence: number;
   bridge?: "up" | "down";
-  /** Every place inside `from` where the dependence happens, in line order; empty when the store places none. */
+  /** Locations of the selected confidence and category, in line order; empty when the store places none. */
   lines: readonly number[];
-  /** What the dependence is; `call` when a call or an instantiation is among them. */
+  /** The category of the selected evidence; observed call existence is kept separately for fan-in. */
   basis: DependenceBasis;
 }
 
@@ -55,6 +58,7 @@ export interface SettledReference {
   /** The full name the reference used, retained as part of its occurrence key. */
   name: string;
   target: { file: string; symbol: string; line: number };
+  sourceOwner?: DecoratorSourceOwner;
 }
 
 function isInside(inner: GraphSymbol, outer: GraphSymbol): boolean {
@@ -250,7 +254,7 @@ export function createInboundEdges(
     load(uses.map((use) => use.from));
     return uses.flatMap((use) => {
       const from = symbolOf(use.from);
-      return from !== undefined && owners.some((owner) => isInside(from, owner)) ? [{ from, confidence: EDGE_POLICY.relations.confidence, basis: use.kind === "calls" ? "call" : "reference", lines: [use.line] }] : [];
+      return from !== undefined && owners.some((owner) => isInside(from, owner)) ? [{ from, confidence: EDGE_POLICY.relations.confidence, basis: use.kind === "calls" && use.name === `this.${node.name}` ? "call" : "reference", lines: [use.line] }] : [];
     });
   }
 
@@ -335,8 +339,18 @@ export function createInboundEdges(
     load(candidates.map((reference) => reference.from));
     const callers: InboundEdge[] = [];
     for (const reference of candidates) {
-      const from = symbolOf(reference.from);
-      if (from === undefined || isTestFile(from.file) || !holdsReference(from, reference) || from.id === node.id) continue;
+      const rawSource = symbolOf(reference.from);
+      let from = rawSource;
+      const owner = reference.sourceOwner;
+      if (owner !== undefined) {
+        const matches = owner.file !== reference.file ? [] : symbolsInFile(owner.file).filter((symbol) =>
+          (symbol.kind === "class" || symbol.kind === "component") && symbol.file === owner.file && symbol.name === owner.symbol && symbol.startLine === owner.line);
+        const matched = matches[0];
+        if (matches.length !== 1 || matched === undefined || rawSource === undefined || rawSource.file !== owner.file ||
+          (rawSource.kind !== "file" && rawSource.id !== matched.id) || reference.line >= owner.line) continue;
+        from = matched;
+      }
+      if (from === undefined || isTestFile(from.file) || (owner === undefined && (from.kind === "file" || !holdsReference(from, reference))) || from.id === node.id) continue;
       joinedTypeUses.push({ reference, target: node.id, source: from.id });
       callers.push({ from, confidence: EDGE_POLICY.relations.confidence, basis: reference.kind === "calls" || reference.kind === "instantiates" ? "call" : "reference", lines: [reference.line] });
     }
@@ -458,9 +472,10 @@ export function createInboundEdges(
         basis: CALL_EDGE_KINDS.includes(edge.kind) ? ("call" as const) : ("reference" as const),
         lines: edge.line === null ? [] : [edge.line],
       }));
-      const bridged = throughMember ? direct : [...direct, ...bridgesOf(node, contractChanged), ...fieldUsesOf(node), ...localUsesOf(node), ...provenMemberUsesOf(node), ...ownUsesOf(node), ...typeResolvedUsesOf(node)];
+      const bridged = throughMember ? direct : [...direct, ...bridgesOf(node, contractChanged), ...fieldUsesOf(node), ...localUsesOf(node), ...provenMemberUsesOf(node), ...ownUsesOf(node)];
       const found = [...bridged, ...relatedTo(node, throughMember ? EDGE_POLICY.ownerThroughMember.relations : undefined)];
-      const whole = throughMember ? found : [...found, ...importersOf(node, found.length === 0)];
+      /** Individual target lookups do not prove incoming-reference coverage. */
+      const whole = throughMember ? found : [...found, ...typeResolvedUsesOf(node), ...importersOf(node, found.length === 0)];
       callers = strongestPerSymbol(whole.filter(({ from }) => from.id !== node.id)).sort((a, b) => comparePosition(a.from, b.from));
       callersCache.set(key, callers);
     }
@@ -481,32 +496,23 @@ export function createInboundEdges(
   };
 }
 
-interface Gathered {
-  /** The strongest dependence from that symbol. */
-  edge: InboundEdge;
-  lines: Set<number>;
-  /** Whether a call or an instantiation is among the merged dependences. */
-  calls: boolean;
-}
-
 function strongestPerSymbol(edges: readonly InboundEdge[]): InboundEdge[] {
-  const gathered = new Map<GraphNodeId, Gathered>();
-  for (const edge of edges) {
-    const id = edge.from.id;
-    const held = gathered.get(id);
-    const lines = held?.lines ?? new Set<number>();
-    for (const line of edge.lines) lines.add(line);
-    gathered.set(id, {
-      edge: held === undefined || edge.confidence > held.edge.confidence ? edge : held.edge,
-      lines,
-      calls: (held?.calls ?? false) || edge.basis === "call",
+  const gathered = new Map<GraphNodeId, { edge: InboundEdge; calls: boolean }>();
+  const ordered = edges.toSorted((a, b) =>
+    (a.lines[0] ?? Infinity) - (b.lines[0] ?? Infinity) ||
+    a.basis.localeCompare(b.basis) ||
+    (a.bridge ?? "").localeCompare(b.bridge ?? ""));
+  for (const edge of ordered) {
+    const held = gathered.get(edge.from.id);
+    let selected = held?.edge;
+    if (selected === undefined || edge.confidence > selected.confidence) selected = edge;
+    else if (edge.confidence === selected.confidence && edge.basis === selected.basis && edge.bridge === selected.bridge) {
+      selected = { ...selected, lines: [...new Set([...selected.lines, ...edge.lines])].sort((a, b) => a - b) };
+    }
+    gathered.set(edge.from.id, {
+      edge: selected,
+      calls: (held?.calls ?? false) || (edge.hasCall ?? edge.basis === "call"),
     });
   }
-  return [...gathered.values()].map(({ edge, lines, calls }) => ({
-    from: edge.from,
-    confidence: edge.confidence,
-    ...(edge.bridge === undefined ? {} : { bridge: edge.bridge }),
-    lines: [...lines].sort((a, b) => a - b),
-    basis: calls ? "call" : edge.basis,
-  }));
+  return [...gathered.values()].map(({ edge, calls }) => ({ ...edge, hasCall: calls }));
 }

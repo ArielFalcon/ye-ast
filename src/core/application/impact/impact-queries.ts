@@ -511,11 +511,11 @@ function settledReferences(unresolved: readonly GraphUnresolvedReference[], port
   const unique = uniqueReferenceKeys(unresolved);
   const candidates = unresolved.filter((reference) => { const key = referenceKey(reference); return key !== undefined && unique.has(key) && validOccurrences.has(key) && (EDGE_POLICY.typeResolvedKinds as readonly string[]).includes(reference.kind); });
   if (candidates.length === 0) return [];
-  const findings = port.resolve(candidates.map((reference) => ({ file: reference.file, line: reference.line, column: reference.column + 1, symbol: nameTail(reference.name) })));
+  const findings = port.resolve(candidates.map((reference) => ({ file: reference.file, line: reference.line, column: reference.column + 1, symbol: nameTail(reference.name), fullName: reference.name, kind: reference.kind })));
   return candidates.flatMap((reference, index): SettledReference[] => {
     const finding = findings[index];
     if (finding?.status !== "complete" || finding.value.kind !== "repository") return [];
-    return [{ from: reference.from, file: reference.file, line: reference.line, column: reference.column, kind: reference.kind, name: reference.name, target: { file: finding.value.file, symbol: finding.value.symbol, line: finding.value.line } }];
+    return [{ from: reference.from, file: reference.file, line: reference.line, column: reference.column, kind: reference.kind, name: reference.name, ...(finding.sourceOwner === undefined ? {} : { sourceOwner: finding.sourceOwner }), target: { file: finding.value.file, symbol: finding.value.symbol, line: finding.value.line } }];
   });
 }
 
