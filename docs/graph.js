@@ -157,11 +157,45 @@
     return node;
   }
 
+  /* ── halftone patterns ────────────────────────────────────────────── */
+
+  function amRows(height, pitch, maxRadius, grow) {
+    const dots = [];
+    for (let y = pitch / 2, row = 0; y < height; y += pitch, row += 1) {
+      const t = grow === "down" ? y / height : 1 - y / height;
+      const r = (maxRadius * Math.pow(t, 1.4)).toFixed(2);
+      if (r < 0.2) continue;
+      const x = row % 2 ? pitch : pitch / 2;
+      dots.push([x, y, r], [x - pitch, y, r], [x + pitch, y, r]);
+    }
+    return dots;
+  }
+
+  function installHalftone() {
+    const defs = el("defs");
+    const ground = el("pattern", { id: "ht-ground", width: 9, height: 9, patternUnits: "userSpaceOnUse" });
+    ground.appendChild(el("circle", { cx: 2.25, cy: 2.25, r: 1.15, class: "ht-dot", opacity: 0.14 }));
+    ground.appendChild(el("circle", { cx: 6.75, cy: 6.75, r: 1.15, class: "ht-dot", opacity: 0.14 }));
+    defs.appendChild(ground);
+    const shade = el("pattern", { id: "ht-shade", width: 6, height: NODE_H, patternUnits: "userSpaceOnUse" });
+    for (const [cx, cy, r] of amRows(NODE_H, 6, 2.6, "down")) shade.appendChild(el("circle", { cx, cy, r, class: "ht-shade-dot", opacity: 0.5 }));
+    defs.appendChild(shade);
+    svg.insertBefore(defs, svg.firstChild);
+  }
+
+  function shadeOf(x, y, w, h) {
+    const group = el("g", { transform: `translate(${x} ${y})`, "aria-hidden": "true" });
+    const top = Math.round(h * 0.66);
+    group.appendChild(el("rect", { x: 2, y: top, width: w - 4, height: h - top - 2, class: "gnode-shade" }));
+    return group;
+  }
+
   /* ── graph rendering ──────────────────────────────────────────────── */
 
   function layerBand(layer, view, interactive) {
-    const group = el("g", { class: "gband" + (interactive ? " is-overview" : ""), "data-layer": layer.id });
-    group.appendChild(el("rect", { x: view.x, y: view.y, width: view.w, height: view.h, rx: 14 }));
+    const group = el("g", { class: "gband" + (interactive ? " is-overview" : ""), "data-layer": layer.id, style: `--o:${LAYERS.indexOf(layer)}` });
+    group.appendChild(el("rect", { x: view.x, y: view.y, width: view.w, height: view.h, rx: 3 }));
+    group.appendChild(el("rect", { x: view.x, y: view.y, width: view.w, height: view.h, class: "gband-dots" }));
     group.appendChild(el("text", { x: view.x + 16, y: view.y + 26, class: "gband-title" }, layer.label));
     const items = MODULES_BY_LAYER.get(layer.id) || [];
     group.appendChild(el("text", { x: view.x + 16, y: view.y + 46, class: "gband-count" }, `${items.length} ${T.modulesCount}`));
@@ -207,9 +241,11 @@
 
     for (const layer of LAYERS) bandsGroup.appendChild(layerBand(layer, { x: 30, y: layer.y, w: GRAPH_W - 60, h: layer.h }, false));
 
-    for (const edge of EDGES) {
+    EDGES.forEach((edge, index) => {
       const path = el("path", {
         d: edgePath(edge),
+        pathLength: 100,
+        style: `--o:${index}`,
         class: `gedge rel-${edge.kind}`,
         "data-edge": edge.id,
         "data-from": edge.from,
@@ -218,11 +254,11 @@
       });
       path.appendChild(el("title", {}, `${edge.from} → ${edge.to} · ${edge.kind}`));
       edgesGroup.appendChild(path);
-    }
+    });
 
-    for (const module of MODULES) {
+    MODULES.forEach((module, index) => {
       const position = POSITIONS.get(module.key);
-      if (!position) continue;
+      if (!position) return;
       const group = el("g", {
         class: "gnode",
         "data-key": module.key,
@@ -230,8 +266,10 @@
         tabindex: "0",
         role: "button",
         "aria-label": `${module.name}, ${module.sub}`,
+        style: `--o:${index}`,
       });
-      group.appendChild(el("rect", { x: position.x, y: position.y, width: position.w, height: position.h, rx: 9 }));
+      group.appendChild(el("rect", { x: position.x, y: position.y, width: position.w, height: position.h, rx: 2 }));
+      group.appendChild(shadeOf(position.x, position.y, position.w, position.h));
       group.appendChild(el("text", { x: position.x + 12, y: position.y + 22, class: "gnode-name" }, module.name));
       group.appendChild(el("text", { x: position.x + 12, y: position.y + 39, class: "gnode-sub" }, module.sub));
       group.appendChild(el("text", { x: position.x + position.w - 12, y: position.y + 54, class: "gnode-tag", "text-anchor": "end" }, module.layer));
@@ -240,7 +278,7 @@
         if (event.key === "Enter" || event.key === " ") { event.preventDefault(); selectNode(module.key); }
       });
       nodesGroup.appendChild(group);
-    }
+    });
   }
 
   function renderLayers() {
@@ -268,7 +306,8 @@
     const compact = compactLayout.matches;
     const center = compact ? { x: 30, y: 20, w: 330, h: 70 } : { x: 420, y: 210, w: 260, h: 86 };
     const hub = el("g", { class: "gnode is-files-hub", "data-key": module.key, "data-layer": module.layer });
-    hub.appendChild(el("rect", { x: center.x, y: center.y, width: center.w, height: center.h, rx: 12 }));
+    hub.appendChild(el("rect", { x: center.x, y: center.y, width: center.w, height: center.h, rx: 2 }));
+    hub.appendChild(shadeOf(center.x, center.y, center.w, Math.min(center.h, NODE_H)));
     hub.appendChild(el("text", { x: center.x + 16, y: center.y + 30, class: "gnode-name" }, module.name));
     hub.appendChild(el("text", { x: center.x + 16, y: center.y + 50, class: "gnode-sub" }, module.sub));
     hub.appendChild(el("text", { x: center.x + 16, y: center.y + 70, class: "gnode-tag" }, fileCountLabel(module.files.length)));
@@ -287,10 +326,10 @@
       const col = index % cols;
       const x = startX + col * gapX;
       const y = startY + row * gapY;
-      const path = el("path", { d: `M ${center.x + center.w / 2} ${center.y + center.h} C ${center.x + center.w / 2} ${center.y + center.h + 30}, ${x + fileW / 2} ${y - 30}, ${x + fileW / 2} ${y}`, class: "gedge is-active" });
+      const path = el("path", { d: `M ${center.x + center.w / 2} ${center.y + center.h} C ${center.x + center.w / 2} ${center.y + center.h + 30}, ${x + fileW / 2} ${y - 30}, ${x + fileW / 2} ${y}`, class: "gedge is-active", pathLength: 100 });
       edgesGroup.appendChild(path);
-      const group = el("g", { class: "gfile", "data-file": file });
-      group.appendChild(el("rect", { x, y, width: fileW, height: fileH, rx: 7 }));
+      const group = el("g", { class: "gfile", "data-file": file, style: `--o:${index}` });
+      group.appendChild(el("rect", { x, y, width: fileW, height: fileH, rx: 2 }));
       group.appendChild(el("text", { x: x + 10, y: y + 20, class: "gfile-name" }, file.split("/").pop()));
       group.appendChild(el("text", { x: x + 10, y: y + 38, class: "gfile-path" }, file));
       nodesGroup.appendChild(group);
@@ -347,6 +386,7 @@
       node.classList.toggle("is-active", Boolean((focus && focus.has(key)) || (selected && key === selected)));
       node.classList.toggle("is-neighbor", Boolean(selected && neighbors.has(key) && key !== selected));
       node.classList.toggle("is-selected", key === selected);
+      if (step && step.focus) node.style.setProperty("--i", String(Math.max(0, step.focus.indexOf(key))));
     }
     for (const path of $$(".gedge", edgesGroup)) {
       const id = path.dataset.edge;
@@ -691,7 +731,13 @@ function refLink(ref) {
       calloutLayer.classList.remove("is-visible");
       return;
     }
-    calloutCard.innerHTML = `<p class="callout-kicker">${esc(T.step)} ${state.stepIndex + 1}</p><strong>${esc(module.name)}</strong><p>${esc(step.calloutText || "")}</p>`;
+    const html = `<p class="callout-kicker">${esc(T.step)} ${state.stepIndex + 1}</p><strong>${esc(module.name)}</strong><p>${esc(step.calloutText || "")}</p>`;
+    if (calloutCard.innerHTML !== html) {
+      calloutCard.innerHTML = html;
+      calloutCard.classList.remove("is-stamped");
+      void calloutCard.offsetWidth;
+      calloutCard.classList.add("is-stamped");
+    }
     calloutLayer.classList.add("is-visible");
     placeCallout(step.callout);
   }
@@ -932,6 +978,11 @@ function refLink(ref) {
 
   /* ── init ─────────────────────────────────────────────────────────── */
 
+  installHalftone();
+  if (!prefersReduced && state.level === "modules") {
+    svg.classList.add("is-building");
+    setTimeout(() => svg.classList.remove("is-building"), 2400);
+  }
   renderFlowList();
   render();
   syncLevelButtons();

@@ -686,8 +686,8 @@ details[open] summary { border-bottom: 1px solid var(--line-soft); }
 
 /* ── reveal ──────────────────────────────────────────────────────────── */
 
-.reveal { opacity: 0; transform: translateY(14px); transition: opacity .5s ease, transform .5s ease; }
-.reveal.is-in { opacity: 1; transform: none; }
+.reveal { clip-path: inset(100% 0 0 0); transition: clip-path .7s var(--ease-draw); }
+.reveal.is-in { clip-path: inset(0 0 0 0); }
 
 /* ── responsive ──────────────────────────────────────────────────────── */
 
@@ -773,7 +773,7 @@ details[open] summary { border-bottom: 1px solid var(--line-soft); }
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior: auto; }
   *, *::before, *::after { transition: none !important; animation: none !important; }
-  .reveal { opacity: 1; transform: none; }
+  .reveal { clip-path: none; }
 }
 
 /* ── bounds and simulator help ──────────────────────────────────────── */
@@ -802,21 +802,20 @@ details[open] summary { border-bottom: 1px solid var(--line-soft); }
 }
 
 /* ── concepts shell ─────────────────────────────────────────────────── */
-.docs { background: var(--bg); border-top: 1px solid var(--line); padding-bottom: 60px; }
+.docs { background: var(--bg); border-top: var(--stroke) solid var(--line); padding-bottom: 60px; }
 .docs-inner { max-width: 1180px; margin: 0 auto; padding: 0 28px; }
 .docs-nav {
   position: sticky; top: 56px; z-index: 18;
-  display: flex; gap: 4px; overflow-x: auto; padding: 8px 16px;
-  border-bottom: 1px solid var(--line-soft);
-  background: color-mix(in srgb, var(--bg) 92%, transparent);
-  backdrop-filter: blur(12px);
+  display: flex; gap: 2px; overflow-x: auto; padding: 8px 16px;
+  border-bottom: var(--stroke) solid var(--line);
+  background: var(--bg);
 }
 .docs-nav a {
-  flex: 0 0 auto; padding: 5px 8px; border-radius: 4px;
+  flex: 0 0 auto; padding: 3px 9px;
   color: var(--muted); text-decoration: none;
-  font-family: var(--mono); font-size: 9px; letter-spacing: .04em;
+  font-family: var(--display); font-stretch: condensed; font-weight: 700; font-size: 15px;
 }
-.docs-nav a:hover { color: var(--ink); background: var(--panel); }
+.docs-nav a:hover { color: var(--night); background: var(--bone); }
 .doc-section, #simulator { scroll-margin-top: 42px; }
 #concept-runs { padding-top: 40px; }
 #concept-runs .real-runs { margin-top: 0; }
@@ -892,3 +891,124 @@ details[open] summary { border-bottom: 1px solid var(--line-soft); }
   .docs-nav { top: 52px; }
   .glossary-grid { grid-template-columns: 1fr; }
 }
+
+/* ── halftone identity for the concepts ─────────────────────────────── */
+
+/* Every section rises from a halftone horizon: dots shrink as the ground recedes. */
+.docs .doc-section { position: relative; isolation: isolate; border-top: 0; }
+.docs .doc-section::before {
+  content: ""; position: absolute; z-index: -1; left: 50%; width: 100vw; top: 0; height: 104px;
+  transform: translateX(-50%); pointer-events: none;
+  background-color: var(--ground-3); opacity: .55;
+  -webkit-mask: var(--ht-am) repeat-x 0 0 / 16px 104px; mask: var(--ht-am) repeat-x 0 0 / 16px 104px;
+}
+[data-theme="light"] .docs .doc-section::before { background-color: var(--night); opacity: .14; }
+.docs .doc-section::after {
+  content: ""; position: absolute; z-index: -1; left: 50%; width: 100vw; top: 0; height: var(--stroke);
+  transform: translateX(-50%); background: var(--line);
+}
+
+.docs h1, .docs h2 {
+  font-family: var(--display); font-stretch: condensed; font-weight: 800;
+  letter-spacing: -.01em; line-height: .98;
+}
+.docs h2 { font-size: clamp(2.4rem, 5vw, 4rem); max-width: 20ch; }
+.docs h3, .docs h4, .docs .step-panel h3, .docs .run-card h4 {
+  font-family: var(--display); font-stretch: condensed; font-weight: 800; letter-spacing: 0; line-height: 1.05;
+}
+.docs h3 { font-size: 1.55rem; }
+.docs h4 { font-size: 1.45rem; }
+.docs h1 code, .docs h2 code, .docs h3 code { color: var(--lime); font-weight: 700; }
+[data-theme="light"] .docs h1 code, [data-theme="light"] .docs h2 code, [data-theme="light"] .docs h3 code { color: var(--cyan); }
+
+.docs .kicker, .docs .eyebrow, .docs .mini-kicker, .docs .status-tag, .docs .run-kind, .docs .ins-kicker,
+.docs .step-stage, .docs .output-head span, .docs .layer-label, .docs .data-table th, .docs .run-table th,
+.docs .readout-stats dt, .docs .field, .docs .glossary-toolbar label, .docs .sim-unreached strong, .docs .ins-block h4,
+.docs .step-why strong, .docs .input-chips em, .docs .checker-controls label {
+  font-family: var(--display); font-stretch: condensed; font-weight: 800;
+  letter-spacing: .02em; text-transform: uppercase;
+}
+.docs .kicker { font-size: 18px; color: var(--heat); margin-bottom: 10px; }
+.docs .eyebrow { font-size: 18px; color: var(--heat); }
+.docs .mini-kicker, .docs .output-head span, .docs .run-kind, .docs .ins-kicker, .docs .step-stage { font-size: 14px; color: var(--muted); }
+.docs .status-tag { font-size: 22px; }
+.docs .data-table th, .docs .run-table th { font-size: 13px; color: var(--ink); }
+.docs .readout-stats dt, .docs .field, .docs .glossary-toolbar label, .docs .checker-controls label { font-size: 12.5px; }
+.docs .readout-stats dd, .docs .stat-strip strong { font-family: var(--display); font-stretch: condensed; font-weight: 800; }
+
+/* Blocks: flat fills, a heavy outline, almost no rounding. */
+.docs .status-card, .docs .identity-card, .docs .table-wrap, .docs .playground, .docs .command-card, .docs .run-card,
+.docs .simulator, .docs .sim-readout, .docs .glossary-item, .docs details, .docs .window, .docs .inspector,
+.docs .checker, .docs .code-block, .docs .step-panel, .docs .stepper, .docs .readout-stats div, .docs .cut-item, .docs .entry-item {
+  border-width: var(--stroke); border-color: var(--line); border-radius: var(--radius); box-shadow: none;
+}
+.docs .status-card, .docs .run-card, .docs .glossary-item, .docs .identity-card { position: relative; overflow: hidden; }
+.docs .status-card::after, .docs .run-card::after {
+  content: ""; position: absolute; right: 0; bottom: 0; width: 45%; height: 52px; pointer-events: none;
+  background-color: var(--ink); opacity: .12; transform: scaleY(-1);
+  -webkit-mask: var(--ht-am) repeat-x 0 0 / 16px 104px; mask: var(--ht-am) repeat-x 0 0 / 16px 104px;
+}
+
+/* Error -> correction: lime holds, heat breaks. */
+.docs .status-card[data-status="complete"] { border-color: var(--lime); border-top-width: var(--stroke); }
+.docs .status-card[data-status="partial"] { border-color: var(--heat); border-style: dashed; border-top-width: var(--stroke); }
+.docs .status-card[data-status="unknown"] { border-color: var(--heat); border-top-width: var(--stroke); background: color-mix(in srgb, var(--heat) 10%, var(--panel)); }
+.docs .status-card[data-status="complete"] .status-tag { color: var(--lime); }
+[data-theme="light"] .docs .status-card[data-status="complete"] .status-tag { color: var(--cyan); }
+[data-theme="light"] .docs .status-card[data-status="complete"] { border-color: var(--cyan); }
+.docs .status-card[data-status="complete"]::after { background-color: var(--lime); opacity: .2; }
+.docs .status-card[data-status="partial"]::after, .docs .status-card[data-status="unknown"]::after { background-color: var(--heat); opacity: .28; }
+
+.docs .button, .docs .chip, .docs .pill, .docs .layer-link, .docs .step-evidence a, .docs .glossary-item .glossary-node,
+.docs .input-chips span, .docs .pipeline span, .docs .step-button {
+  border-radius: 0; border-width: 1.5px;
+}
+.docs .button {
+  border-width: var(--stroke); font-family: var(--display); font-stretch: condensed; font-weight: 800;
+  font-size: 15px; letter-spacing: .01em; transition: background .15s, color .15s;
+}
+.docs .button.small { font-size: 14px; }
+.docs .button:hover { transform: none; background: var(--bone); color: var(--night); border-color: var(--bone); }
+.docs .button.primary { background: var(--lime); border-color: var(--lime); color: var(--night); }
+.docs .button.primary:hover { background: var(--bone); border-color: var(--bone); }
+.docs .chip, .docs .pill { font-family: var(--display); font-stretch: condensed; font-weight: 700; font-size: 13px; letter-spacing: .01em; }
+.docs .chip:hover { border-color: var(--lime); color: var(--ink); }
+.docs .chip.is-active { background: var(--lime); border-color: var(--lime); color: var(--night); }
+.docs .pipeline span.is-active { background: var(--heat); color: var(--night); }
+.docs .pipeline span.is-done { color: var(--heat); background: color-mix(in srgb, var(--heat) 12%, transparent); }
+.docs .step-button.is-active { background: color-mix(in srgb, var(--heat) 16%, var(--panel)); box-shadow: inset 3px 0 0 var(--heat); }
+.docs .step-button.is-active span { color: var(--heat); }
+.docs .step-why, .docs .info-why { border: var(--stroke) solid var(--heat); background: color-mix(in srgb, var(--heat) 9%, transparent); }
+.docs .glossary-item dt { font-family: var(--display); font-stretch: condensed; font-weight: 800; font-size: 18px; color: var(--ink); }
+.docs .glossary-item .glossary-node:hover, .docs .step-evidence a:hover, .docs .layer-link:hover { color: var(--night); background: var(--lime); border-color: var(--lime); }
+.docs input[type="number"], .docs input[type="search"], .docs select { border-radius: 0; border-width: var(--stroke); }
+.docs input:focus, .docs select:focus { border-color: var(--lime); box-shadow: none; }
+.docs .switch input[type="checkbox"] { border-radius: 0; }
+
+/* The walk simulator speaks the graph's language: bone bricks, the seed is the fire, heat spreads. */
+.docs .sim-node rect { fill: var(--block); stroke: var(--outline); stroke-width: 2.2; }
+.docs .sim-node .sim-label { fill: var(--block-ink); }
+.docs .sim-node .sim-sub, .docs .sim-node .sim-kind { fill: color-mix(in srgb, var(--block-ink) 70%, transparent); }
+.docs .sim-node.is-seed rect { fill: var(--heat); stroke: var(--outline); }
+.docs .sim-node.is-seed .sim-label { fill: var(--night); }
+.docs .sim-node.is-reached rect { stroke: var(--heat); stroke-width: 2.6; }
+.docs .sim-node.is-current rect { stroke: var(--heat); stroke-width: 3; filter: var(--glow-heat); }
+.docs .sim-node:not(.is-hidden):hover rect { fill: var(--lime); }
+.docs .sim-node:focus-visible rect { stroke: var(--lime); }
+.docs .sim-edge { stroke: var(--ink); }
+.docs .sim-edge.followed.is-live { stroke: var(--heat); stroke-width: 2.4; filter: var(--glow-heat); }
+.docs .sim-edge.hot { stroke: var(--heat); }
+.docs .sim-route rect { fill: var(--lime); stroke: var(--outline); stroke-width: 2; }
+.docs .sim-route text { fill: var(--night); }
+.docs .sim-route-link { stroke: var(--lime); }
+.docs .dot.seed { background: var(--heat); }
+.docs .dot.reached { background: var(--bone); box-shadow: 0 0 0 2px var(--heat); }
+.docs .dot.entry { background: var(--lime); }
+.docs .line.followed { border-color: var(--heat); }
+.docs .cut-item { border-left: 3px solid var(--heat); }
+.docs .entry-item { border-left: 3px solid var(--lime); }
+.docs .fl-node rect { fill: var(--block); stroke: var(--outline); stroke-width: 2; }
+.docs .fl-node .fl-title { fill: var(--block-ink); }
+.docs .fl-node .fl-kicker { fill: color-mix(in srgb, var(--block-ink) 65%, transparent); }
+.docs .fl-node[data-tone="fact"] rect { fill: var(--lime); }
+.docs .sim-node rect, .docs .sim-route rect { rx: 2px; ry: 2px; }
