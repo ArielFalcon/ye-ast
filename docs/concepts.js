@@ -8,6 +8,19 @@
 
   /* ── glossary ─────────────────────────────────────────────────────── */
 
+  const glossaryFold = $("#concept-glossary");
+  const openGlossary = () => {
+    if (glossaryFold && glossaryFold.tagName === "DETAILS") glossaryFold.open = true;
+  };
+  document.addEventListener("click", (event) => {
+    if (event.target instanceof Element && event.target.closest('a[href="#concept-glossary"]')) openGlossary();
+  });
+  const openGlossaryOnHash = () => {
+    if (window.location.hash === "#concept-glossary") openGlossary();
+  };
+  window.addEventListener("hashchange", openGlossaryOnHash);
+  openGlossaryOnHash();
+
   const grid = $("#glossary-grid");
   if (grid && window.GLOSSARY) {
     const terms = window.GLOSSARY.terms.slice().sort((a, b) => termLabel(a).localeCompare(termLabel(b)));
@@ -35,6 +48,7 @@
     window.explorerShowTerm = (key) => {
       filter.value = key;
       applyFilter();
+      openGlossary();
       $("#concept-glossary").scrollIntoView({ behavior: "smooth", block: "start" });
     };
 
@@ -103,7 +117,7 @@
   /* ── motion: sections rise from their horizon, sequences build piece by piece ── */
 
   const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-  const BUILDS = [".stat-strip", ".status-grid", ".trust-lanes", ".lane-steps", ".surface-diagram", ".fact-list", ".glossary-grid", ".input-chips"];
+  const BUILDS = [".stat-strip", ".status-grid", ".trust-lanes", ".lane-steps", ".surface-diagram", ".compose-flow", ".fact-list", ".glossary-grid", ".input-chips"];
   for (const container of $$(BUILDS.map((selector) => `.docs ${selector}`).join(","))) {
     container.classList.add("build");
     Array.from(container.children).forEach((child, index) => child.style.setProperty("--i", String(Math.min(index, 12))));

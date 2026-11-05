@@ -103,7 +103,7 @@
           <p class="mini-kicker">What makes a fact the same fact</p>
           <h3>schema + inputs + producer</h3>
           <p>The identity is the only invalidation key. Change the scope, the content, the config or an engine version and it is a different fact.</p>
-          <p class="ref"><code>src/core/domain/shared/fact.ts:172-178</code> · RFC-0002 rule 5</p>
+          <p class="ref"><code>src/core/domain/shared/fact.ts:73-90, 193-194</code> · RFC-0002 rule 5</p>
         </div>
         <div class="input-chips" aria-label="Fact inputs">
           <span><em>trust</em> trusted | untrusted</span>
@@ -119,7 +119,7 @@
         <div class="cut-copy">
           <p class="mini-kicker">The cut taxonomy</p>
           <h3>Nine ways to be honest.</h3>
-          <p>These are the same names the MCP server hands to an agent, with the action to take at each one (<code>src/mcp/server.ts:39-50</code>).</p>
+          <p>These are the names every partial fact lists (<code>src/core/domain/shared/fact.ts:114-128</code>). The MCP server's instructions tell an agent that a partial answer keeps its known findings and lists its cuts, and to raise a bound only when a cut names it (<code>src/mcp/server.ts:50-69</code>); the table spells out what each cut asks for.</p>
         </div>
         <div class="table-wrap">
           <table class="data-table stack-mobile">
@@ -167,32 +167,75 @@
       </div>
 
       <div class="surface-diagram" aria-hidden="true">
-        <div class="surface-node"><strong>CLI</strong><span>map · impact · callers · importers · install</span></div>
-        <div class="surface-node"><strong>MCP</strong><span>ye_ast_entrypoints · impact · callers · importers · workspace</span></div>
+        <div class="surface-node"><strong>CLI</strong><span>map · impact · callers · importers · outline · workspace · decisions · init · serve · mcp</span></div>
+        <div class="surface-node"><strong>MCP</strong><span>ye_ast_entrypoints · impact · callers · importers · outline · workspace · decisions · compose</span></div>
         <div class="surface-node"><strong>protocol</strong><span>JSON-RPC 2.0 · one message per line</span></div>
         <div class="surface-merge">⟶</div>
-        <div class="surface-core"><strong>the same query families</strong><span>EntrypointQueries · ImpactQueries · WorkspaceQueries</span></div>
+        <div class="surface-core"><strong>the same query families</strong><span>EntrypointQueries · ImpactQueries · OutlineQueries · WorkspaceQueries · WorkspaceImpactQueries · DecisionQueries</span></div>
       </div>
 
-      <div class="table-wrap">
-        <table class="data-table">
-          <caption>Entry points</caption>
-          <thead><tr><th>Surface</th><th>What it exposes</th><th>Where</th></tr></thead>
-          <tbody>
-            <tr><td><code>ye-ast map</code></td><td>The entrypoints of a revision; <code>--live</code> for a trusted working tree.</td><td><code>src/cli/main.ts:167-170</code></td></tr>
-            <tr><td><code>ye-ast impact</code></td><td>The change from the merge base to head; bounds; scope.</td><td><code>src/cli/main.ts:171-174</code></td></tr>
-            <tr><td><code>ye-ast callers</code></td><td>Inbound reachability from symbols or line ranges.</td><td><code>src/cli/main.ts:175-178</code></td></tr>
-            <tr><td><code>ye-ast importers</code></td><td>Importers, users and unresolved namers per file.</td><td><code>src/cli/main.ts:179-182</code></td></tr>
-            <tr><td><code>ye-ast init</code></td><td>Writes the trust record, the local exclude and the fixed layer; prints the MCP registration.</td><td><code>src/core/application/install/install.ts:23-45</code></td></tr>
-            <tr><td><code>ye-ast mcp</code></td><td>stdio MCP server bound to one repository; read-only tools.</td><td><code>src/composition/mcp.ts</code></td></tr>
-            <tr><td><code>ye-ast serve</code></td><td>The query protocol over stdio; stdout carries only protocol lines.</td><td><code>src/protocol/query-server.ts</code></td></tr>
-          </tbody>
-        </table>
-      </div>
+      <details class="reference-fold">
+        <summary><span>commands</span> Entry points <em>every command and where it lives</em></summary>
+        <div class="details-body">
+          <div class="table-wrap">
+            <table class="data-table">
+              <caption>Entry points</caption>
+              <thead><tr><th>Surface</th><th>What it exposes</th><th>Where</th></tr></thead>
+              <tbody>
+                <tr><td><code>ye-ast map</code></td><td>The entrypoints of a revision; <code>--live</code> for a trusted working tree.</td><td><code>src/cli/main.ts:296-299</code></td></tr>
+                <tr><td><code>ye-ast impact</code></td><td>The change from the merge base to head; bounds; scope.</td><td><code>src/cli/main.ts:300-303</code></td></tr>
+                <tr><td><code>ye-ast callers</code></td><td>Inbound reachability from symbols or line ranges.</td><td><code>src/cli/main.ts:304-307</code></td></tr>
+                <tr><td><code>ye-ast importers</code></td><td>Importers, users and unresolved namers per file.</td><td><code>src/cli/main.ts:308-311</code></td></tr>
+                <tr><td><code>ye-ast outline</code></td><td>Declaration spans and imports of the listed files; files the index holds no node of are listed as unheld.</td><td><code>src/cli/main.ts:312-315</code></td></tr>
+                <tr><td><code>ye-ast workspace</code></td><td>The outward names a repository uses, the candidate repositories for each and the names no repository serves; <code>--offline</code> refreshes no remote.</td><td><code>src/cli/main.ts:316-319</code></td></tr>
+                <tr><td><code>ye-ast decisions</code></td><td>The configuration gaps the code cannot fill, each with evidence-backed options; it writes nothing.</td><td><code>src/cli/main.ts:320-323</code></td></tr>
+                <tr><td><code>ye-ast init</code></td><td>Writes the trust record, the local exclude and the fixed layer; prints the MCP registration.</td><td><code>src/cli/main.ts:104</code> · <code>src/core/application/install/install.ts:26</code></td></tr>
+                <tr><td><code>ye-ast mcp</code></td><td>stdio MCP server with read-only tools; it serves the declared repositories and each call picks one with <code>repo</code>.</td><td><code>src/composition/mcp.ts:9-23</code></td></tr>
+                <tr><td><code>ye-ast serve</code></td><td>The query protocol over stdio; stdout carries only protocol lines.</td><td><code>src/protocol/query-server.ts</code></td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </details>
 
       <div class="mcp-note">
-        <p><strong>Read-only by type.</strong> <code>McpDeps</code> holds only <code>EntrypointQueries</code>, <code>ImpactQueries</code>, <code>WorkspaceQueries</code> and <code>WorkspaceImpactQueries</code>. There is no write method to call, so an agent cannot reach one by mistake.</p>
-        <p>The MCP server also ships the cut guidance as its instructions: the agent learns what to do at each cut, not just that one exists.</p>
+        <p><strong>Read-only by type.</strong> The MCP server receives only read query families: <code>EntrypointQueries</code>, <code>ImpactQueries</code>, <code>OutlineQueries</code>, <code>WorkspaceQueries</code>, <code>WorkspaceImpactQueries</code> and <code>DecisionQueries</code>. There is no write method to call, so an agent cannot reach one by mistake, and all eight tools are annotated read-only.</p>
+        <p>The server also ships instructions: when to call each tool and how to read an answer. Complete is relative to the declared scope, partial keeps its known findings and lists its cuts, unknown never means no impact, and a bound is raised only when a cut names it.</p>
+        <p>One server serves several declared repositories: <code>ye-ast mcp [&lt;launch-root&gt;] [--repo &lt;id&gt; &lt;root&gt;]...</code> declares them, and each call chooses one with <code>repo</code> (the launch repository by default). Registering a repository grants it no trust.</p>
+        <p class="ref"><code>src/mcp/query-runner.ts:27-37</code> · <code>src/mcp/server.ts:50-69</code> · <code>src/composition/mcp.ts:9-23</code></p>
+      </div>
+
+      <div class="surface-more">
+        <p class="mini-kicker">The other tools and controls</p>
+        <ul class="surface-facts">
+          <li><code>ye_ast_outline</code> returns the kind, name and line span of each declaration and the files a file imports, never source text. Requested files the index holds no node of come back as <code>unheld</code>, which is not “nothing”.</li>
+          <li><code>ye_ast_workspace</code> returns the outward names a repository uses (HTTP, messaging, dependencies), the candidate repositories for each and the names no repository serves. Local clones you supply are used as given, never downloaded.</li>
+          <li><code>ye_ast_decisions</code> returns the gaps the code cannot fill (membership, repository, library, gateway, revision, remote, trust), each with evidence-backed options. It writes nothing.</li>
+          <li><code>mode</code> changes presentation only, never coverage: <code>summary</code> gives findings, <code>details</code> evidence and locations, <code>full</code> the complete result JSON with navigation text.</li>
+          <li>Entrypoints, callers and impact page the evidence the text omits: <code>select</code> and <code>page</code> go together and <code>page.limit</code> is required. <code>expect</code> asserts a result identity; <code>replay</code> reruns the query and fails if the result changed, since no old capture is kept.</li>
+        </ul>
+        <p class="ref"><code>src/mcp/server.ts:50-69</code> · <code>src/mcp/query-schema.ts:158-205</code> · <code>src/mcp/presentation.ts:5-8</code> · <code>src/core/domain/outline/outline-fact.ts</code> · <code>src/core/domain/decisions/decision.ts:4</code></p>
+      </div>
+
+      <div class="compose-block">
+        <div class="compose-copy">
+          <p class="mini-kicker">MCP only · <code>ye_ast_compose</code></p>
+          <h3>Combine answers in one call</h3>
+          <p>Send 1 to 16 typed queries of the seven families (entrypoints, impact, callers, importers, outline, workspace, decisions) and get one merged answer. Batch related queries that share entities; when a later query depends on a coordinate, get that coordinate first.</p>
+        </div>
+        <ol class="compose-flow" aria-label="How a composition runs">
+          <li data-tone="queries"><strong>1–16 queries</strong><span>typed; identical queries merge</span></li>
+          <li data-tone="run"><strong>run in order</strong><span>one at a time, one shared deadline</span></li>
+          <li data-tone="merge"><strong>merged tables</strong><span>one entry per file, declaration, evidence or relation; every source kept</span></li>
+          <li data-tone="result"><strong>connections + coverage</strong><span>derived only between matching reads</span></li>
+        </ol>
+        <dl class="compose-notes">
+          <div data-tone="fault"><dt>Not a transaction</dt><dd>The queries run through the same runner as the single tools. The call is not atomic and stores nothing; the first source fault ends it with <code>composition-source-fault</code>.</dd></div>
+          <div><dt>Merged, not blended</dt><dd>Facts are normalized into shared tables. Identical files, declarations, evidence and relations merge and keep every source, so each source keeps its own coverage.</dd></div>
+          <div><dt>Connections need matching reads</dt><dd><code>handler-declaration</code>, <code>reached-handler</code>, <code>change-dependent</code>, <code>shared-file-import</code> and <code>shared-support</code> link findings only between reads with the same schema, producer, trust, engines, workspace and snapshot. Otherwise a <code>context-mismatch</code> or <code>snapshot-difference</code> issue is reported. <code>shares-evidence</code> means the same location, not causality.</dd></div>
+          <div data-tone="contract"><dt>A receipt you can replay</dt><dd>The <code>summary</code> and <code>details</code> modes return text plus a receipt: a verification identity (<code>mcp-c1</code>) and the requests to run again. Send them back with <code>expect</code> and the same set must still give the same result.</dd></div>
+        </dl>
+        <p class="ref"><code>src/mcp/composition-input.ts:13-19</code> · <code>src/mcp/compose-request.ts</code> · <code>src/mcp/compose-evidence.ts:207-237, 600-682</code> · <code>src/mcp/render-composition.ts:93</code></p>
       </div>
     </section>
 
@@ -227,7 +270,7 @@
           <ol class="lane-steps">
             <li><span>01</span> The same export path at a sha.</li>
             <li><span>02</span> <code>--live</code> replaces <code>head</code>/<code>revision</code> with the working tree.</li>
-            <li><span>03</span> git lists paths with <code>ls-files -z --cached --others --exclude-standard</code>.</li>
+            <li><span>03</span> git lists tracked paths with <code>ls-files -z -s --cached</code> and untracked ones with <code>ls-files -z --others --exclude-standard</code>.</li>
             <li><span>04</span> ye-ast copies and hashes them into its mirror; codegraph reads the mirror.</li>
             <li><span>05</span> A lock, a state file and <code>sync({ paths })</code> keep the graph of those bytes.</li>
           </ol>
@@ -241,13 +284,13 @@
 
       <div class="callout">
         <p><strong>The live rule:</strong> a live fact describes bytes ye-ast copied and hashed, and the graph it reads is the graph of those same bytes. The engine never walks the repository.</p>
-        <p class="ref"><code>docs/architecture/rfc/0010-impact-queries.md</code> “Live head” · <code>src/core/application/snapshot/read-snapshot.ts:32-40</code></p>
+        <p class="ref"><code>docs/architecture/rfc/0010-impact-queries.md</code> “Live head” · <code>src/core/application/live/live-tree.ts</code></p>
       </div>
 
       <div class="invariants">
         <div><p class="mini-kicker">Invariants</p><h3>What never moves</h3></div>
         <ul>
-          <li><strong>Read-only toward agents.</strong> The MCP server receives only read query families, so a write is impossible by type (<code>src/mcp/server.ts:21-31</code>).</li>
+          <li><strong>Read-only toward agents.</strong> The MCP server receives only read query families, so a write is impossible by type (<code>src/mcp/query-runner.ts:27-37</code>).</li>
           <li><strong>Determinism.</strong> Sorted output, repo-relative paths, no index-internal ids, the snapshot in every fact.</li>
           <li><strong>Redaction before output.</strong> Patterns always; by-value secrets only in the process that already holds them.</li>
           <li><strong>Fail loud, degrade explicitly.</strong> A typed failure or an explicit <code>unknown</code>/<code>partial</code>, never an empty result.</li>
@@ -343,12 +386,11 @@
 
 <div class="docs" id="concepts">
   <div class="docs-inner">
-    <section data-rail="Rules" class="doc-section" id="concept-rules">
-      
+    <section data-rail="The walk" class="doc-section" id="concept-rules">
       <div class="section-head">
-        <p class="kicker">Rules of the walk</p>
+        <p class="kicker">The walk</p>
         <h2>What is a dependence, and what is a cut.</h2>
-        <p class="section-lede">The graph shows the modules. These are the rules that decide which edges a traversal follows and what the answer can see.</p>
+        <p class="section-lede">The graph shows the modules. These are the rules that decide which edges a traversal follows and what the answer can see; the simulator below applies them to a toy repository, and two real runs show the result.</p>
       </div>
 
       <div class="bounds-help">
@@ -369,29 +411,29 @@
         <details>
           <summary><span>01</span> Owner at the same depth, then stop <em>ADR-0017</em></summary>
           <div class="details-body">
-            <p>A route names a class, not a method. When the walk reaches a method, it also reaches the type that declares it, at the same depth and with confidence 1 (<code>walk.ts:62-67</code>). That type then expands only through whole-type edges: <code>extends</code>, <code>implements</code>, and Angular <code>uses-component</code> / <code>uses-directive</code> / <code>uses-pipe</code>. It does not expand into whoever injects or imports it — otherwise a single reached member would drag in the world.</p>
-            <p class="ref"><code>src/core/domain/impact/edge-policy.ts:33-39</code> · <code>src/core/application/impact/inbound-edges.ts:60-70</code></p>
+            <p>A route names a class, not a method. When the walk reaches a method, it also reaches the type that declares it, at the same depth and with confidence 1 (<code>walk.ts:82-87</code>). That type then expands only through whole-type edges: <code>extends</code>, <code>implements</code>, and Angular <code>uses-component</code> / <code>uses-directive</code> / <code>uses-pipe</code>. It does not expand into whoever injects or imports it — otherwise a single reached member would drag in the world.</p>
+            <p class="ref"><code>src/core/domain/impact/edge-policy.ts:33-39</code> · <code>src/core/application/impact/inbound-edges.ts:92-102</code></p>
           </div>
         </details>
         <details>
           <summary><span>02</span> Interface dispatch, both ways <em>derived by ye-ast</em></summary>
           <div class="details-body">
             <p>codegraph's <code>interface-impl</code> bridges stop silently after 40 per class-supertype pair, so ye-ast derives its own: a method and the same-named method of a type above it, for every reached node; downward only when the reached declaration is the changed contract, because a changed declaration changes what its implementations must meet. A path that went up never comes back down to a sibling.</p>
-            <p class="ref"><code>src/core/application/impact/inbound-edges.ts:126-137</code> · <code>src/core/domain/impact/edge-policy.ts:50-55</code></p>
+            <p class="ref"><code>src/core/application/impact/inbound-edges.ts:123-169</code> · <code>src/core/domain/impact/edge-policy.ts:50-55</code></p>
           </div>
         </details>
         <details>
           <summary><span>03</span> The <code>this.field.member</code> problem <em>field origin</em></summary>
           <div class="details-body">
             <p><code>this.auth.login()</code> is an unresolved reference, not a call edge. If the class declares <code>auth</code> with a fixed origin, ye-ast settles the use: a field holding the member's type makes the code a caller; a field holding an unrelated type settles it as no use; a field holding a subtype leaves it unsettled. That is why the walk can follow real dispatch without turning every same-named method into a caller.</p>
-            <p class="ref"><code>src/core/application/impact/inbound-edges.ts:211-241</code> · <code>src/core/domain/impact/edge-policy.ts:40-45</code></p>
+            <p class="ref"><code>src/core/application/impact/inbound-edges.ts:265-302</code> · <code>src/core/domain/impact/edge-policy.ts:40-45</code></p>
           </div>
         </details>
         <details>
           <summary><span>04</span> Confidence is a widest path, not a count <em>max-min</em></summary>
           <div class="details-body">
             <p>A path is as sure as its least sure edge. The walk computes the strongest weakest edge from any seed over all paths; a heuristic edge without a score counts 0.3. In the real run: <code>1</code> at the seed, <code>0.9</code> at <code>login</code>, <code>0.85</code> at <code>onSubmit</code>. Fan-in is separate: it counts call-like callers, whether or not the walk followed them, so a renderer can rank or collapse hubs without the fact cutting them.</p>
-            <p class="ref"><code>src/core/application/impact/walk.ts:139-153</code> · <code>src/core/domain/impact/edge-policy.ts:77-101</code></p>
+            <p class="ref"><code>src/core/application/impact/walk.ts:172-188</code> · <code>src/core/domain/impact/edge-policy.ts:77-101</code></p>
           </div>
         </details>
 
@@ -424,9 +466,7 @@
           </div>
         </details>
       </div>
-    </section>
 
-    <section data-rail="Simulator" class="doc-section" id="concept-sim">
       <div class="simulator" id="simulator">
         <div class="sim-head">
           <div>
@@ -520,10 +560,7 @@
         <p class="sim-note">The toy graph is illustrative; the rules are not. Only reached symbols are drawn: the strip below lists the rest, and the policy trace names every edge the walk refused and why. The walk expands each symbol once, enters a reached method's declaring type at the same depth, and follows only the rows of the edge policy. A test file is never a caller. Navigation is not dependence. A file import leads nowhere.</p>
       </div>
 
-      
-    </section>
-
-    <section data-rail="Runs" class="doc-section" id="concept-runs">
+      <div id="concept-runs">
       <div class="real-runs">
         <div class="real-head reveal">
           <p class="mini-kicker">Reference run</p>
@@ -649,61 +686,64 @@ export class LoginComponent {
           <p class="fixture-note">This is the Angular fixture behind the partial run; the plain run differs only in the caller, an <code>AuthController</code> instead of the component. The change touches one line of <code>token.ts</code>. The walk climbs three hops, and the join turns the component into <code>/login</code>. The test file that also calls <code>login</code> is in the repository but is never a caller: tests are outside the walk by policy.</p>
         </div>
       </details>
-
-      
+      </div>
     </section>
 
-    <section data-rail="Glossary" class="doc-section" id="concept-glossary">
-      
+    <section data-rail="Reference" id="sources" class="doc-section">
       <div class="section-head">
-        <p class="kicker">Glossary</p>
-        <h2>Terms used by the graph and the fact.</h2>
-        <p class="section-lede">Search for a term; technical labels stay in code form, the definition explains them in plain language.</p>
+        <p class="kicker">Reference</p>
+        <h2>Terms, evidence and limits.</h2>
+        <p class="section-lede">Look up a term, check where a claim is decided, and see what this page does not cover. The glossary and the evidence table stay folded until you open them.</p>
       </div>
-      <div class="glossary-toolbar">
+
+      <details class="reference-fold" id="concept-glossary">
+        <summary><span>glossary</span> Terms used by the graph and the fact <em>search a term</em></summary>
+        <div class="details-body">
+          <p>Search for a term; technical labels stay in code form, the definition explains them in plain language.</p>
+          <div class="glossary-toolbar">
         <label for="glossary-filter">Search</label>
         <input id="glossary-filter" type="search" placeholder="fan-in, cut, seed, snapshot…">
         <span id="glossary-count"></span>
       </div>
       <dl class="glossary-grid" id="glossary-grid"></dl>
-    </section>
+        </div>
+      </details>
 
-    <section data-rail="Sources" id="sources" class="doc-section">
-      <div class="section-head">
-        <p class="kicker">Sources &amp; limits</p>
-        <h2>Sources and limits.</h2>
-        <p class="section-lede">Evidence, reproduction commands and the limits of the answer. Links point to the code and the decision records.</p>
-      </div>
-
-      
-
-      <div class="table-wrap evidence-table">
+      <details class="reference-fold">
+        <summary><span>evidence</span> Evidence for the material claims <em>where each claim is decided</em></summary>
+        <div class="details-body">
+          <div class="table-wrap evidence-table">
         <table class="data-table stack-mobile">
           <caption>Evidence for the material claims</caption>
           <thead><tr><th>Claim</th><th>Where it is decided</th></tr></thead>
           <tbody>
             <tr><td>The dependency rule and the placement table</td><td><code>AGENTS.md</code> · <code>.dependency-cruiser.cjs</code> · <code>docs/architecture/rfc/0001-architecture-and-layers.md</code></td></tr>
-            <tr><td>The change is <code>merge-base(base, head)..head</code></td><td><code>src/core/application/impact/impact-queries.ts:260-267</code> · RFC-0010 “The change”</td></tr>
-            <tr><td>The diff pins every option that changes hunks</td><td><code>src/core/adapters/git/git-vcs.adapter.ts:276-288</code></td></tr>
-            <tr><td>An isolated git run empties user and system config</td><td><code>src/core/adapters/git/git-vcs.adapter.ts:404-412</code></td></tr>
+            <tr><td>The change is <code>merge-base(base, head)..head</code></td><td><code>src/core/application/impact/impact-queries.ts:200-211</code> · RFC-0010 “The change”</td></tr>
+            <tr><td>The diff pins every option that changes hunks</td><td><code>src/core/adapters/git/git-vcs.adapter.ts:328-338</code></td></tr>
+            <tr><td>An isolated git run empties user and system config</td><td><code>src/core/adapters/git/git-vcs.adapter.ts:445-460</code></td></tr>
             <tr><td>Seeds: lines, top-level, resource, requested</td><td><code>src/core/domain/change/seeds.ts:53-87</code> · RFC-0010 “Seeds”</td></tr>
             <tr><td>The edge policy table</td><td><code>src/core/domain/impact/edge-policy.ts:14-58</code></td></tr>
-            <tr><td>Owner expansion and its stop</td><td><code>src/core/application/impact/walk.ts:62-67</code> · ADR-0017</td></tr>
-            <tr><td>Interface bridges, both directions</td><td><code>src/core/application/impact/inbound-edges.ts:126-137</code></td></tr>
-            <tr><td>Field-origin settlement</td><td><code>src/core/application/impact/inbound-edges.ts:211-241</code></td></tr>
-            <tr><td>Confidence is the widest path</td><td><code>src/core/application/impact/walk.ts:139-153</code></td></tr>
+            <tr><td>Owner expansion and its stop</td><td><code>src/core/application/impact/walk.ts:82-87</code> · ADR-0017</td></tr>
+            <tr><td>Interface bridges, both directions</td><td><code>src/core/application/impact/inbound-edges.ts:123-169</code></td></tr>
+            <tr><td>Field-origin settlement</td><td><code>src/core/application/impact/inbound-edges.ts:265-302</code></td></tr>
+            <tr><td>Confidence is the widest path</td><td><code>src/core/application/impact/walk.ts:172-188</code></td></tr>
             <tr><td>The one join: file, span, simple name</td><td><code>src/core/domain/shared/code-node.ts:20-27</code></td></tr>
-            <tr><td>Entrypoint join, guards, unknown handlers</td><td><code>src/core/domain/impact/reached-entrypoints.ts:20-44</code></td></tr>
-            <tr><td>Cuts and the fact status</td><td><code>src/core/domain/impact/impact-cuts.ts</code> · <code>src/core/domain/impact/impact-fact.ts:66-72</code></td></tr>
-            <tr><td>The fact base and its inputs</td><td><code>src/core/application/snapshot/read-snapshot.ts:116-134</code> · <code>src/core/domain/shared/fact.ts:120-142</code></td></tr>
-            <tr><td>Trust is read from outside the repository</td><td><code>src/core/application/snapshot/read-snapshot.ts:32-40</code> · ADR-0010</td></tr>
+            <tr><td>Entrypoint join, guards, unknown handlers</td><td><code>src/core/domain/impact/reached-entrypoints.ts:21-46</code></td></tr>
+            <tr><td>Cuts and the fact status</td><td><code>src/core/domain/impact/impact-cuts.ts</code> · <code>src/core/domain/shared/fact.ts:114-159</code></td></tr>
+            <tr><td>The fact base and its inputs</td><td><code>src/core/application/snapshot/read-snapshot.ts:168-186</code> · <code>src/core/domain/shared/fact.ts:73-90, 130-136</code></td></tr>
+            <tr><td>Trust is read from outside the repository</td><td><code>src/core/application/snapshot/read-snapshot.ts:35-44</code> · ADR-0010</td></tr>
             <tr><td>Live head, mirror, lock, sync</td><td><code>docs/architecture/rfc/0010-impact-queries.md</code> “Live head” · <code>src/core/application/live/live-tree.ts</code></td></tr>
-            <tr><td>The MCP server is read-only by type</td><td><code>src/mcp/server.ts:21-31</code></td></tr>
-            <tr><td>The cut guidance an agent receives</td><td><code>src/mcp/server.ts:39-50</code></td></tr>
+            <tr><td>The MCP server is read-only by type</td><td><code>src/mcp/query-runner.ts:27-37</code></td></tr>
+            <tr><td>The instructions an agent receives: when to call each tool, how to read an answer</td><td><code>src/mcp/server.ts:50-69</code></td></tr>
+            <tr><td>Eight MCP tools, all annotated read-only</td><td><code>src/mcp/server.ts:498-595</code></td></tr>
+            <tr><td>One MCP server, several declared repositories</td><td><code>src/composition/mcp.ts:9-23</code></td></tr>
+            <tr><td><code>ye_ast_compose</code> merges reads and connects them only when they match</td><td><code>src/mcp/compose-request.ts</code> · <code>src/mcp/compose-evidence.ts:207-237, 600-682</code></td></tr>
             <tr><td>The query protocol is JSON-RPC 2.0 over stdio</td><td><code>src/protocol/query-server.ts</code> · ADR-0011</td></tr>
           </tbody>
         </table>
       </div>
+        </div>
+      </details>
 
       <div class="limits">
         <div>
@@ -714,7 +754,7 @@ export class LoginComponent {
           <li>The simulator models the algorithm; it is not the engine. It uses the same policy rows on a smaller graph, but codegraph, the TypeScript compiler and git are not running.</li>
           <li>The real runs are from two local fixture repositories created for this page. They are not part of the test suite and are not committed.</li>
           <li>The page covers the MVP surfaces (library, CLI, MCP, protocol). Hooks and the daemon are later; the atlas marks them “later” on purpose.</li>
-          <li>Line numbers are from this checkout (2026-11-02, version 0.2.0, schema 0.4.0). A refactor moves them.</li>
+          <li>Line numbers are from this checkout (2026-11-06, package 0.4.0, schema 0.17.0). A refactor moves them.</li>
         </ul>
       </div>
 
