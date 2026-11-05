@@ -41,8 +41,8 @@ test("catalogue advertises useful guides within budget", async () => {
       /Recovery is the recovery field/,
       /unknown never means no impact/,
       /head and stateId/,
-      /merge-base SHA/,
-      /changed selects seeds, not consequence coverage/,
+      /merge-base commit/,
+      /changed picks the diff paths that start the walk \(the seeds\); unlike scope, it does not limit where consequences are found/,
       /budget limits traversal, not response length/,
       /isError is a fault, not an empty fact/,
     ]) assert.match(session.instructions!, rule);

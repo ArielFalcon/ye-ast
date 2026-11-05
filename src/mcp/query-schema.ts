@@ -94,7 +94,7 @@ export const scope = z
     exclude: globs.describe("Exclude matching paths, even if included."),
   })
   .optional()
-  .describe("Coverage globs over repo-relative paths; omitted=all, exclude wins (it may remove interpretation files include keeps). Callers and entrypoints outside scope are unknown. Use mode to shorten output.");
+  .describe("Coverage globs over repo-relative paths; omitted=all, exclude wins; include keeps manifests readable, exclude can remove them. Callers and entrypoints outside scope are unknown. Use mode to shorten output.");
 
 const file = z.string().min(1).describe("Repo-relative file path.");
 
@@ -165,7 +165,7 @@ const impactFields = {
   base: z.string().min(1).describe("Comparison ref, e.g. main. Diff starts at merge-base(base, head), not necessarily base itself."),
   head: z.string().min(1).optional().describe("Change commit/ref; default HEAD. Omit with live."),
   live, offline, scope,
-  changed: globs.describe("Diff-path seed globs; omitted=all changes. Callers elsewhere within scope remain eligible. Unlike scope, leaves consequence coverage intact. Unmatched globs are errors."),
+  changed: globs.describe("Globs of the diff paths that start the walk (seeds); omitted=all changes. Callers elsewhere within scope remain eligible. Unlike scope, leaves consequence coverage intact. Unmatched globs are errors."),
   budget,
 };
 const crossingFields = { workspace, replay: replaySchema.optional() };

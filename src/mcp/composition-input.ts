@@ -45,7 +45,7 @@ export const COMPOSE_INPUT = z.strictObject({
     .array(COMPOSE_QUERY)
     .min(COMPOSE_LIMITS.minQueries)
     .max(COMPOSE_LIMITS.maxQueries)
-    .describe("1..16 typed queries of the seven families, before deduplication; executed sequentially in canonical order."),
+    .describe("1..16 typed queries of the seven families, before deduplication; executed sequentially in a fixed order."),
   mode: responseModeSchema,
   expect: compositionExpect.exactOptional(),
   deadlineMs: z.int().min(1).max(COMPOSE_LIMITS.maxDeadlineMs).exactOptional().describe("Batch deadline in milliseconds; no default."),

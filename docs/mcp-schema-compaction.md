@@ -137,7 +137,7 @@ latency savings, or of improved model conclusions.
 
 The instructions are reorganized around agent tasks: a "when to call" line per tool, then reading answers,
 repositories and snapshots, narrowing and paging, and errors. Every rule the budget test checks is kept; the text stays
-within the 3,900-character budget (3,557 characters). Two rules moved to the answers that already carry them at the
+within the 3,900-character budget (3,749 characters). Two rules moved to the answers that already carry them at the
 point of use: how to repeat a composition (S# legend, verification.identity as expect) and which owner each selection
 kind takes; the instructions keep the paired select/page rule and point to the answers for coordinates and owners. Tool descriptions lead with when to use the tool and drop the
 completeness sentence the instructions already state.
@@ -151,3 +151,8 @@ without the other tools sees every field, but not its explanation.
 `scripts/measure-mcp-catalog.ts` records 43,064 catalogue bytes (previously 53,335, about 19% less) and 38,997
 input-schema bytes. Shortening the shared parameter descriptions saved about 190 bytes; the rest comes from the
 composition guide. Model interpretation and adoption are not measured by this change.
+
+Internal shorthand in the published guidance was replaced with plain definitions: seeds (the diff paths that start
+the walk), manifests kept readable under include, per-repository section and file-read limits, base-side line numbers
+from the merge-base commit, and head/stateId as the identity of a captured working tree. The catalogue measures 43,152
+bytes.
