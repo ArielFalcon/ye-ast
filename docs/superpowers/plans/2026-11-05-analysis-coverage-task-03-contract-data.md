@@ -93,3 +93,63 @@ For proposed tests, follow the project testing skill: observable contract-reader
 Measure useful contract changes recovered, correct operation associations and independently proven consumer reach. Report false positives, unknowns, latency and memory. A changed digest or a smaller cut list is not enough. Keep raw corpus data outside the engine repository.
 
 Return a task-specific report and improved plan with verified gaps, what current DTO analysis already covers, oracle results, staged scope, proposed ownership/contracts, approval decisions, exact checks and implement/narrow/defer/reject recommendation. Do not claim field-level precision until demonstrated end to end.
+
+## Outcome
+
+Status 2026-11-05: stage 1 implemented on owner authorization; stages 2 and 3 not started. Inspected base: `98b9cc5`.
+
+### Implemented
+
+- `ContractOperation` (now in `core/domain/contracts/`, re-exported by the port) carries `data`: request and response
+  digests, the extra files its references reach, and the references it could not follow. The contract-document adapter
+  follows local and in-snapshot `$ref`s (cycle-safe, each place once), leaves documentation members out and records URL,
+  outside-repository and missing targets as unresolved. Operations without `operationId` are now read (placed at their
+  verb); the Spring join skips them, so routes are unchanged.
+- `changedContracts` (`core/domain/impact/changed-contracts.ts`) pairs base and head operations by document, verb and
+  path: added, removed, or altered with `parts` (`request`, `response`). Only operations whose document or reached file
+  the change touched (and the `changed` selection keeps) are reported. A touched unresolved reference is an
+  `unresolved-link` cut; a touched unparsable document a `no-extractor` cut.
+- `impact.ofChange` exposes `value.changedContracts` when not empty (commit and live paths share `readChange`); the MCP
+  text lists `changed contracts (n)`. RFC-0010 and RFC-0007 row S5 describe the shape. Fact schema `0.12.0` → `0.13.0`.
+
+### Evidence
+
+Scratch repository with `src/main/resources/openapi.yaml` (`getOrders` → `$ref Orders`, `getItems` without schema);
+base `Orders.total: number`, head `string`. Command: `npm run cli -- impact <repo> --base HEAD~1`.
+
+| Case | Before (`98b9cc5`) | After |
+| --- | --- | --- |
+| Schema type change under unchanged `GET /orders` | `complete`, `changedEntrypoints: []`, no contract information | `complete`, `changedContracts: [altered GET /orders (getOrders) response, line 6]`; `getItems` absent |
+| Negative control: only response `description` edited | `complete`, nothing | `complete`, no `changedContracts` |
+| Changed document with a URL `$ref` | `complete`, nothing | `partial`, cut `unresolved-link` at `<document>:16 <ref>` |
+
+Tests: e2e (`impact.e2e.test.ts`: altered/negative control, unresolved cut), adapter conformance (reference attribution,
+request/response direction, documentation vs property names, external/unresolved references, cycles, missing
+`operationId`), domain pairing and cut rules, Spring "no `operationId` joins no override", MCP rendering. Each was
+observed failing (RED before implementation for the e2e and MCP tests; type-correct break proofs for the adapter and
+domain rules; removing the cycle guard hangs the adapter test). `npm run check`: 2,251 tests pass.
+
+Not measured: real-application inventories, oasdiff comparison, latency and memory on large contracts. Operations are
+now parsed for every `impact.ofChange` on a snapshot holding contract documents.
+
+### Known gaps (explicit, not silent)
+
+- Path items that are themselves a `$ref`, and `discriminator.mapping` targets not also referenced by `$ref`, are not
+  followed (the former is the pre-existing route gap).
+- A renamed component schema with identical content reads as altered (the reference place is part of the digest).
+- An `operationId` change alone is not a data change; Spring route changes still report it.
+
+### Staged plan for the remaining stages
+
+1. **Measure stage 1** on two real applications: count altered operations against a manual diff or a pinned offline
+   oasdiff run; record false associations, unresolved cuts, latency and memory.
+2. **Operation consumers** (stage 2): in `workspace-impact`, treat an altered contract operation like a changed route so
+   existing verified call-site links name the callers, keeping link confidence and ambiguity, labelled "calls the
+   operation", never "reads the field".
+3. **Field-specific consumers** (stage 3): only after response provenance through assignments, aliases and templates is
+   demonstrated (RFC-0007 rows A5 and S9).
+
+### Needs owner decision
+
+- Stage 2 changes the cross-repository answer (RFC-0011) and the public workspace fact; confirm before implementing.
+- Whether to name changed properties (schema location and property) in `changedContracts` rather than only `parts`.
