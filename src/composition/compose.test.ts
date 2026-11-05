@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -475,4 +475,19 @@ test("a trusted remote consumer is walked from its mirror with the declared clon
   assert.ok(section.value.reads.some(({ kind }) => kind === "upstream"));
   assert.ok(section.value.reads.every(({ fact }) => fact.inputs.trust === "trusted"), JSON.stringify(section.value.reads.map(({ kind, fact }) => [kind, fact.inputs.trust])));
   assert.equal(section.value.impact?.seeds[0]?.symbol, "open");
+});
+
+
+test("composed canonical repository root returns the worktree path, not its name", async () => {
+  const result = await composeQueries().canonicalRepositoryRoot(repo);
+  assert.deepEqual(result, { ok: true, value: realpathSync(repo) });
+});
+
+test("composed canonical repository root forwards cancellation", async () => {
+  const controller = new AbortController();
+  controller.abort();
+
+  const result = await composeQueries().canonicalRepositoryRoot(repo, controller.signal);
+
+  assert.equal(!result.ok && result.fault.kind, "aborted");
 });

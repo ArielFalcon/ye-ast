@@ -56,6 +56,7 @@ function setup(overrides: Overrides = {}): Setup {
     resolveCommit: async () => overrides.resolve ?? { ok: true, value: SHA },
     remotes: async () => ({ ok: true, value: [] }),
     headBranch: async () => ({ ok: true, value: undefined }),
+    canonicalRoot: async (repo) => ({ ok: true, value: repo }),
     repositoryName: async () => ({ ok: true, value: "shop" }),
     exportCommit: async (_repo, _sha, _destination, plan) => {
       plans.push(plan);
@@ -431,6 +432,7 @@ test("the caller's signal reaches the version control port, which stops the git 
     resolveCommit: async (_repo, _revision, signal) => (seen.push(signal), { ok: true, value: SHA }),
     remotes: async () => ({ ok: true, value: [] }),
     headBranch: async () => ({ ok: true, value: undefined }),
+    canonicalRoot: async (repo) => ({ ok: true, value: repo }),
     repositoryName: async () => ({ ok: true, value: "shop" }),
     exportCommit: async (_repo, _sha, _destination, _plan, signal) => (seen.push(signal), { ok: true, value: { files: [], skipped: [] } }),
   };

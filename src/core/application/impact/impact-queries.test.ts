@@ -80,6 +80,7 @@ function setup(options: Options = {}) {
     },
     remotes: async () => ({ ok: true, value: [] }),
     headBranch: async () => ({ ok: true, value: undefined }),
+    canonicalRoot: async (repo) => ({ ok: true, value: repo }),
     repositoryName: async () => ({ ok: true, value: "shop" }),
     exportCommit: async (_repo, sha, destination, plan) => {
       log.exported.push(sha);

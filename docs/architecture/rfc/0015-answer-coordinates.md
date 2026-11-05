@@ -98,7 +98,10 @@ Text, current and proposed (the numbers are from a real answer):
 ```
 
 In the current MCP contract, `mode: "full"` carries these fields in the structured fact. Summary/details receipts
-carry only mode, status, snapshot and an unknown reason when applicable.
+carry only mode, status, snapshot and an unknown reason when applicable. Related MCP queries can select a declared
+owner with `repo`. Use the owner's recorded SHA as `revision`; a base-side module uses the recorded merge-base SHA.
+A live follow-up is a fresh read whose head and stateId must be compared with the earlier identity. Symbol names may
+select multiple declarations. An undeclared owner needs an updated registration or an instance bound to that clone.
 
 ## What this refuses to add
 

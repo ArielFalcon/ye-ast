@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import type { Result } from "../../domain/shared/result.ts";
@@ -276,6 +276,7 @@ test("the repository's own attributes do not hide or rewrite a file", async () =
 test("a git failure after the sha resolves is a git-failed fault", async () => {
   const sha = "1".repeat(40);
   const deps: GitDeps = {
+    realpath: defaultGitDeps.realpath,
     runGit: async (_repo, args) => {
       if (args.includes("--show-prefix")) return { code: 0, stdout: Buffer.from("\n"), stderr: "" };
       return { code: 0, stdout: Buffer.from(`${sha}\n`), stderr: "" };
@@ -1012,4 +1013,47 @@ test("headBranch answers git-failed outside a repository", async () => {
   const result = await createGitVcs().headBranch(outside);
 
   assert.equal(!result.ok && result.fault.kind, "git-failed");
+});
+
+
+test("canonicalRoot resolves aliases while keeping linked worktrees distinct", async () => {
+  write("src/a.txt", "a");
+  commitAll();
+  const worktree = join(scratch, "linked");
+  const alias = join(scratch, "alias");
+  git("worktree", "add", "-q", "-b", "linked", worktree);
+  symlinkSync(repo, alias);
+  const vcs = createGitVcs();
+  assert.deepEqual(await vcs.canonicalRoot(alias), { ok: true, value: realpathSync(repo) });
+  assert.deepEqual(await vcs.canonicalRoot(worktree), { ok: true, value: realpathSync(worktree) });
+  const subdirectory = await vcs.canonicalRoot(join(repo, "src"));
+  assert.equal(!subdirectory.ok && subdirectory.fault.kind, "not-repository-root");
+});
+
+test("canonicalRoot preserves root faults and reports realpath failures as unreadable", async () => {
+  const vcs = createGitVcs();
+  const missing = await vcs.canonicalRoot(join(scratch, "missing"));
+  const outside = await vcs.canonicalRoot(destination);
+  assert.equal(!missing.ok && missing.fault.kind, "unreadable");
+  assert.equal(!outside.ok && outside.fault.kind, "git-failed");
+  const failing = createGitVcs({ ...defaultGitDeps, realpath: async () => { throw new Error("denied"); } });
+  const unreadable = await failing.canonicalRoot(repo);
+  assert.equal(!unreadable.ok && unreadable.fault.kind, "unreadable");
+});
+
+test("canonicalRoot respects cancellation after filesystem work succeeds or fails", async () => {
+  for (const fail of [false, true]) {
+    const controller = new AbortController();
+    const vcs = createGitVcs({ ...defaultGitDeps, realpath: async () => {
+      controller.abort();
+      if (fail) throw new Error("denied");
+      return repo;
+    } });
+    const result = await vcs.canonicalRoot(repo, controller.signal);
+    assert.equal(!result.ok && result.fault.kind, "aborted");
+  }
+  const controller = new AbortController();
+  controller.abort();
+  const result = await createGitVcs().canonicalRoot(repo, controller.signal);
+  assert.equal(!result.ok && result.fault.kind, "aborted");
 });

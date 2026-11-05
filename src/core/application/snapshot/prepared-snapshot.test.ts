@@ -18,6 +18,7 @@ function setup() {
         return { ok: true, value: { files: [{ path: "src/app.ts", blob: "blob", written: plan.write("src/app.ts") }], skipped: [] } };
       },
       remotes: async () => ({ ok: true, value: [] }),
+      canonicalRoot: async (repo) => ({ ok: true, value: repo }),
       repositoryName: async () => ({ ok: true, value: "repo" }),
       headBranch: async () => ({ ok: true, value: undefined }),
     },

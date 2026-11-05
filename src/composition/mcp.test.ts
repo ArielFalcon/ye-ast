@@ -25,6 +25,7 @@ function harness(
   overrides: Partial<ProcessHost> = {},
   warmLive: (repo: string) => Promise<string | null> = async () => null,
   repositoryName: ComposedQueries["repositoryName"] = async () => ({ ok: false, fault: { kind: "git-failed", detail: "stub" } }),
+  canonicalRepositoryRoot: ComposedQueries["canonicalRepositoryRoot"] = async (path) => ({ ok: true, value: path }),
 ): Harness {
   const stdin = new PassThrough();
   const stdout = new PassThrough();
@@ -41,7 +42,8 @@ function harness(
       },
     },
     impact: {},
-    redaction: { redactError: () => REDACTED },
+    redaction: { redact: (text: string) => text, redactValue: (value: unknown) => value, detect: () => ({ redacted: false, patterns: [], count: 0 }), containsSecret: () => false, redactError: () => REDACTED },
+    canonicalRepositoryRoot,
     repositoryName,
     warmLive: async (repo: string) => {
       warmed.push(repo);
@@ -128,11 +130,13 @@ test("a worktree is bound to the name of the repository that holds it, not to it
 });
 
 test("a malformed command line is a usage error that composes nothing", async () => {
-  for (const args of [["a", "b"], ["--repo"]]) {
+  for (const args of [["a", "b"], ["--repo"], ["--repo", "id"], ["--repo", "", "root"], ["--repo", "id", ""], ["--unknown"], ["--repo", "--unknown", "."], ["--repo", "id", "--unknown"], ["root", "--unknown", "id", "path"], ["root", "--repo", "id", "path", "extra"], [""]]) {
     const h = harness();
     h.start(args);
+    h.stdin.end();
     assert.equal(await h.finished(), EXIT_CODE.usage);
     assert.equal(h.composed.count, 0);
+    assert.deepEqual(h.warmed, []);
     assert.equal(h.errors.length, 1);
   }
 });
@@ -179,4 +183,71 @@ test("a live index that cannot be built is reported once on stderr and never sto
   assert.equal(h.maps.length, 1);
   h.stdin.end();
   assert.equal(await h.finished(), EXIT_CODE.ok);
+});
+
+
+test("canonical declarations override launch identity and coalesce aliases without warming other roots", async () => {
+  const seen: string[] = [];
+  const h = harness({}, async () => null, async () => ({ ok: true, value: "natural" }), async (path) => {
+    seen.push(path);
+    return { ok: true, value: path.endsWith("alias") ? "/canonical/main" : path.endsWith("main") ? "/canonical/main" : "/canonical/other" };
+  });
+  h.start(["main", "--repo", "chosen", "alias", "--repo", "chosen", "main", "--repo", "foreign", "other"]);
+  h.stdin.end();
+  assert.equal(await h.finished(), EXIT_CODE.ok);
+  assert.deepEqual(seen, ["/work/projects/main", "/work/projects/alias", "/work/projects/main", "/work/projects/other"]);
+  assert.deepEqual(h.warmed, ["/canonical/main"]);
+  assert.equal(h.composed.count, 1);
+});
+
+test("conflicting canonical declarations fail before serving or warming", async () => {
+  const h = harness({}, async () => null, undefined, async (path) => ({ ok: true, value: path.endsWith("alias") ? "/work/projects/main" : path }));
+  h.start(["main", "--repo", "one", "alias", "--repo", "two", "main"]);
+  h.stdin.end();
+  assert.equal(await h.finished(), EXIT_CODE.usage);
+  assert.equal(h.composed.count, 1);
+  assert.deepEqual(h.warmed, []);
+});
+
+test("root failures and aborts do not fall back or warm a repository", async () => {
+  for (const kind of ["unreadable", "aborted"] as const) {
+    const h = harness({}, async () => null, undefined, async () => ({ ok: false, fault: { kind, detail: "denied" } }));
+    h.start([]);
+    h.stdin.end();
+    assert.equal(await h.finished(), kind === "aborted" ? EXIT_CODE.interrupted : EXIT_CODE.queryFailed);
+    assert.deepEqual(h.warmed, []);
+  }
+});
+
+
+test("launch override and distinct worktrees route through the same catalog", async () => {
+  const h = harness({}, async () => null, async () => ({ ok: true, value: "natural" }), async (path) => ({ ok: true, value: path.endsWith("alias") ? "/work/projects/main" : path }));
+  h.start(["main", "--repo", "launch", "alias", "--repo", "other", "linked"]);
+  await open(h);
+  await h.call("tools/call", { name: "ye_ast_entrypoints", arguments: {} });
+  await h.call("tools/call", { name: "ye_ast_entrypoints", arguments: { repo: "other" } });
+  assert.deepEqual(h.maps.map(({ repo, repoId }) => [repo, repoId]), [["/work/projects/main", "launch"], ["/work/projects/linked", "other"]]);
+  assert.deepEqual(h.warmed, ["/work/projects/main"]);
+  h.stdin.end();
+  assert.equal(await h.finished(), EXIT_CODE.ok);
+});
+
+test("one declared ID cannot identify distinct canonical roots", async () => {
+  const h = harness();
+  h.start(["main", "--repo", "same", "one", "--repo", "same", "two"]);
+  h.stdin.end();
+  assert.equal(await h.finished(), EXIT_CODE.usage);
+  assert.deepEqual(h.warmed, []);
+});
+
+test("cancellation during canonicalization stops preflight", async () => {
+  const controller = new AbortController();
+  const h = harness({ signal: controller.signal }, async () => null, undefined, async (_path, signal) => {
+    assert.equal(signal, controller.signal);
+    controller.abort();
+    return { ok: true, value: "/root" };
+  });
+  h.start([]);
+  assert.equal(await h.finished(), EXIT_CODE.interrupted);
+  assert.deepEqual(h.warmed, []);
 });

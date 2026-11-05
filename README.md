@@ -133,9 +133,13 @@ What `init` did:
 
 ### 3. Register the MCP server
 
-One server instance is bound to **one** repository root, and the instructions it answers at `initialize` name that root:
-local evidence paths are relative to it; workspace evidence paths are relative to their owning repository. Always
-pass the path: an MCP client may start the server in any working directory.
+A server has a launch root (the working directory when omitted) and may declare additional roots with repeatable
+`--repo <id> <root>` pairs. For example, `ye-ast mcp /path/to/api --repo web /path/to/web` makes `web` available
+as a tool's `repo` selector. Paths resolve against the launch working directory and must be Git worktree roots;
+canonical duplicates must have the same ID, and different worktrees need distinct IDs. A declaration for the launch
+root can override its default name. The host registration owns this catalog; availability grants neither trust nor
+workspace membership. Only the launch root is warmed. Local evidence paths are relative to the selected root;
+workspace evidence belongs to its recorded owner.
 
 <details open>
 <summary><b>Claude Code</b></summary>
@@ -236,9 +240,10 @@ How the arguments behave:
 
 | Argument | Meaning |
 |---|---|
+| `repo` | Exact declared repository ID on any tool. Omit for the launch root. An unknown ID fails; it is never treated as a path. |
 | `revision` / `head` | Any git revision. Default: `HEAD`. |
 | `live` | Read the working tree instead of a revision. Requires `trusted`; when true, omit `revision`/`head`, `workspace` and `offline` (including `offline: false`). Workspace traversal uses committed snapshots. |
-| `workspace` | `{ repos: [{ path, id?, revision? }], gateways?: [{ prefix, repo }] }` on `callers` and `impact`: other **local** clones whose call sites are joined to the routes and listeners the walk reaches. The answer adds the links (with their basis: `exact`, `gateway-prefix`, `route-overlap`, `base-path`, `suffix`, `event-destination`), each with its direction (`upstream` for what reaches the change, `downstream` for what a change sends onward) and the links crossed from the change (`reach`), followed to a fixpoint across repositories; what depends on those call sites in their own repository, the call sites that reached a declared service and matched none of its entrypoints (`unmatched`), the ones that name a service no clone serves (`external`), and every call site whose target the code does not decide as a cut. A gateway prefix needs no declaration when the routes show it; `gateways` overrides it, and a declared gateway no call site names, or whose repository was not passed, is listed as matching nothing. Without `repos` the repositories and gateways the user persisted with `ye-ast init --workspace <file>` are used, and a repository that persists none answers about itself alone; the manifest holds the same object, its relative paths resolved against the installed repository. A repository the request does not name keeps the directory name of its path in every snapshot, so a linked worktree is passed with `id` set to the name of the clone that holds it when both must answer as one; the repository a command is bound to is always named after its main worktree. Every answer says which of the two declared its repositories (`workspace.source`: `request`, `persisted` or `none`), so an answer about the bound repository alone is never read as a workspace with no impact. Each clone is read at its own snapshot under its own trust declaration; trusted persisted remotes may refresh unless `offline: true`. Exclusive with `live`. Without `workspace` the answer says nothing about other repositories. |
+| `workspace` | `{ repos: [{ path, id?, revision? }], gateways?: [{ prefix, repo }] }` on `callers` and `impact`: other **local** clones whose call sites are joined to the routes and listeners the walk reaches. The answer adds the links (with their basis: `exact`, `gateway-prefix`, `route-overlap`, `base-path`, `suffix`, `event-destination`), each with its direction (`upstream` for what reaches the change, `downstream` for what a change sends onward) and the links crossed from the change (`reach`), followed to a fixpoint across repositories; what depends on those call sites in their own repository, the call sites that reached a declared service and matched none of its entrypoints (`unmatched`), the ones that name a service no clone serves (`external`), and every call site whose target the code does not decide as a cut. A gateway prefix needs no declaration when the routes show it; `gateways` overrides it, and a declared gateway no call site names, or whose repository was not passed, is listed as matching nothing. Without `repos` the repositories and gateways the user persisted with `ye-ast init --workspace <file>` are used, and a repository that persists none answers about itself alone; the manifest holds the same object, its relative paths resolved against the installed repository. A repository the request does not name keeps the directory name of its path in every snapshot, so a linked worktree is passed with `id` set to the name of the clone that holds it when both must answer as one; the selected trigger uses its declared ID (the default launch name comes from its main worktree). Every answer says which of the two declared its repositories (`workspace.source`: `request`, `persisted` or `none`), so an answer about the bound repository alone is never read as a workspace with no impact. Each clone is read at its own snapshot under its own trust declaration; trusted persisted remotes may refresh unless `offline: true`. Exclusive with `live`. Without `workspace` the answer says nothing about other repositories. |
 | `scope` | `{ include?: [globs], exclude?: [globs] }` over repository-relative paths; `exclude` wins. `include` selects the content the answer is about, and the configuration that interprets it (a `package.json`, a `tsconfig`, a build file, a Spring `application` file, an OpenAPI document) remains available under `include`; an explicit `exclude` can remove it. A path outside the scope is **not answered about**, so callers and entrypoints through it are not known; the answer names its scope under its status. Use it to keep one service or package apart, not to shorten an answer. |
 | `changed` | On `impact`, globs over the changed paths the scope leaves: only the change's paths they select seed the walk. Callers outside that selection remain eligible within the declared scope, subject to recorded cuts; `changed` does not itself narrow consequence coverage. Use it on a large change to answer one area at a time. A glob that selects no changed path is an error, never an empty answer. A file the index could not read stays a cut even when the selection leaves it out: its blindness belongs to the whole walk. |
 | `budget` | `{ depth?, hubFanIn?, expansions? }`, positive integers, no defaults. Limits traversal work, not response length. `depth` counts incoming dependency levels, not hops between services. A bound that stops a walk is reported as a cut, never as a silent truncation. |
@@ -342,10 +347,11 @@ Also:
   either channel is hidden. Full text guides the structured result instead of repeating the family listing.
 - Coverage exclusions, traversal cuts and presentation omissions are different: scope excludes analysis, cuts record
   bounded or unresolved analysis, and omissions count recorded items hidden from text and recoverable in full.
-- Tools are bound to the launch repository. Workspace results qualify evidence by owning repository and snapshot;
-  to ask `callers` or `outline` about a foreign coordinate, use a server bound to that clone. No `repo` selector or
-  selective/paged result API is currently exposed. [ADR-0022](docs/architecture/adr/0022-typed-query-replay-and-selective-evidence.md)
-  records follow-up designs, not implemented calls.
+- For foreign evidence, choose its declared owner with `repo` and its recorded SHA with `revision` for a related
+  `outline` or `callers` query. Base-side modules use the recorded merge-base SHA. Symbol names may match multiple
+  declarations. An undeclared owner needs an updated host registration or an instance bound to that clone. A live
+  follow-up is a fresh read: compare its head and stateId with the earlier result; a past live state cannot be requested.
+  Selective retrieval and pagination are not yet exposed.
 - A place carries its span when its declaration is longer than one line: `src/a.ts:3-9`. An impacted symbol or a seed
   prints the same span (`3-9 A.seed`), so a read can name exactly the range it needs.
 - A symbol reached through another one prints `via <file>:<symbol> at <lines>`: the lines are **inside the symbol itself**,
@@ -410,7 +416,7 @@ ye-ast map --live .                             # the working tree (trusted only
 | `ye-ast workspace [--revision <rev>] [--offline] [scope] <repo>` | The outward names the bound repository and the workspace it persists state, the local repository that serves each, and the names nothing serves |
 | `ye-ast decisions [--revision <rev>] [--offline] [scope] <repo>` | The gaps the same workspace leaves to the user, each with every option the workspace can verify |
 | `ye-ast init --trust trusted\|untrusted [--workspace <file>] [<repo>]` | Declares the trust mode, writes the fixed layer (and the workspace manifest given, once every repository it names is a readable repository root), prints the MCP registration |
-| `ye-ast mcp [<repo>]` | The stdio MCP server, read-only, bound to one repository |
+| `ye-ast mcp [<launch-root>] [--repo <id> <root>]...` | Read-only stdio MCP server with a declared repository catalog |
 | `ye-ast serve` | The query protocol over stdio, one JSON-RPC 2.0 message per line |
 
 | Option group | Syntax |

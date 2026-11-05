@@ -590,9 +590,15 @@ function impactCutLookup(cuts: readonly Cut[], path: string): string[] {
 }
 
 function impactSnapshotGuide(snapshot: SnapshotRef, mergeBase?: string): string {
-  if (snapshot.kind === "live") return "  Keep evidence at the same snapshot: a live stateId is an identity, not a request selector. Repeating live can observe different content; HEAD alone does not reproduce that working-tree state.";
+  if (snapshot.kind === "live") return `  A fresh live query on repo ${JSON.stringify(snapshot.repo)} captures current state; compare its head and stateId with the earlier identity before treating evidence as the same. A past live state cannot be requested, and HEAD alone does not reproduce it.`;
   const selector = mergeBase === undefined ? `revision ${JSON.stringify(snapshot.sha)}` : `head ${JSON.stringify(snapshot.sha)} and base ${JSON.stringify(mergeBase)}`;
-  return `  Keep the same snapshot when repeating this query: ${selector}; retain the declared scope and change selection. For a related callers/outline/importers query use revision ${JSON.stringify(snapshot.sha)} instead of impact base/head; it answers a new question, not a filter over this result.`;
+  return `  Keep repo ${JSON.stringify(snapshot.repo)} and the same snapshot when repeating this query: ${selector}; retain the declared scope and change selection. For a related callers/outline/importers query about head evidence use revision ${JSON.stringify(snapshot.sha)} instead of impact base/head; base-side modules use their recorded merge-base revision. It answers a new question, not a filter over this result.`;
+}
+
+function baseModuleGuides(value: ImpactValue, repo: string, mergeBase = value.mergeBase): string[] {
+  return (value.modules?.modules ?? []).filter((module) => module.snapshot === "base").map((module) =>
+    `  Base module: repo ${JSON.stringify(repo)}, ${mergeBase === undefined ? "revision unavailable" : `revision ${JSON.stringify(mergeBase)}`}, file ${JSON.stringify(module.file)}; use outline only at that recorded merge base.`,
+  );
 }
 
 function unknownImpactGuide(): string[] {
@@ -608,6 +614,7 @@ function localImpactGuide(fact: Fact<ImpactValue> & { status: "complete" | "part
     ...lookups,
     ...(lookups.length === 0 ? ["  There are no recorded consequences or walk origins in this answer. Read inputs.declaredScope and inputs.declaredConfig before interpreting that scoped emptiness."] : []),
     ...impactCutLookup(cutsOf(fact), "cuts"),
+    ...baseModuleGuides(fact.value, fact.snapshot.repo),
     impactSnapshotGuide(fact.snapshot, fact.value.mergeBase),
   ];
 }
@@ -627,7 +634,13 @@ function workspaceImpactGuide(fact: Fact<WorkspaceImpactValue> & { status: "comp
     ...(value.workspace.unserved.length === 0 ? [] : ["  For missing service coverage, inspect value.workspace.unserved and section.value.external when present. Use ye_ast_workspace to investigate outward-name evidence and candidate local repositories; adding workspace.repos changes the query's coverage rather than filtering this fact."]),
     ...impactCutLookup(cutsOf(fact), "cuts"),
     ...(Object.values(value.sections).some((section) => section.status === "partial") ? ["  Repository-local limits remain in value.sections[repo].cuts; inspect contributing section.value.reads[].fact too. Do not treat a complete independent read as resolving an unknown contributing read."] : []),
-    "  Preserve each repository's revision from value.repositorySnapshots when repeating a workspace query; evidence paths belong to their owning repository. Related callers or outline queries are bound to their server repository; use an instance bound to the owning clone for foreign coordinates.",
+    "  For a related callers or outline query about head evidence choose the recorded owner with repo and its own snapshot from value.repositorySnapshots; base-side modules require their owning walk's recorded merge base instead. An undeclared owner requires a host registration update or an instance bound to that clone. A symbol name may match multiple declarations.",
+    ...Object.entries(value.sections).flatMap(([repo, section]) => section.status === "unknown" || section.value.impact === undefined ? [] : baseModuleGuides(section.value.impact, repo, section.value.impact.mergeBase ?? (repo === value.trigger.repo ? value.trigger.mergeBase : undefined))),
+    ...value.links.map(({ link }) => {
+      const snapshot = value.repositorySnapshots.find((entry) => entry.repo === link.to.repo)?.snapshot;
+      const coordinate = snapshot === undefined ? "snapshot unavailable" : snapshot.kind === "sha" ? `revision ${JSON.stringify(snapshot.sha)}` : `earlier live head ${JSON.stringify(snapshot.head)} stateId ${JSON.stringify(snapshot.stateId)}; a fresh live query must be compared`;
+      return `  Destination: repo ${JSON.stringify(link.to.repo)}, ${coordinate}, file ${JSON.stringify(link.to.handler.path)}, symbol ${JSON.stringify(link.to.handler.symbol)}. Use outline or callers on the declared owner.`;
+    }),
     impactSnapshotGuide(fact.snapshot, value.trigger.mergeBase),
   ];
 }

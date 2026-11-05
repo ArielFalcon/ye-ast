@@ -1,7 +1,7 @@
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { createInterface } from "node:readline";
@@ -52,7 +52,7 @@ const SERVER = pathToFileURL(join(import.meta.dirname, "mcp.ts")).href;
 const HOST = pathToFileURL(join(import.meta.dirname, "process-host.ts")).href;
 const MAIN = `import { runMcp } from ${JSON.stringify(SERVER)};
 import { processHost } from ${JSON.stringify(HOST)};
-process.exitCode = await runMcp([], processHost({ signal: new AbortController().signal }));
+process.exitCode = await runMcp([".", "--repo", "foreign", process.env.FOREIGN_ROOT!], processHost({ signal: new AbortController().signal, trustDirectory: process.env.TRUST_ROOT!, indexCache: process.env.INDEX_ROOT! }));
 `;
 
 let workspace: string;
@@ -90,13 +90,16 @@ before(async () => {
   writeFileSync(join(frontend, "src/app/order.page.ts"), COMPONENT);
   const gitFrontend = (...args: string[]): string => execFileSync("git", args, { cwd: frontend, env: GIT_ENV, encoding: "utf8" }).trim();
   gitFrontend("init", "-q", "-b", "main");
+  const foreignController = join(frontend, "src/main/java/shop/OrderController.java");
+  mkdirSync(dirname(foreignController), { recursive: true });
+  writeFileSync(foreignController, CONTROLLER.replace("/orders", "/foreign"));
   gitFrontend("add", "-A");
   gitFrontend("commit", "-q", "-m", "init");
   const entry = join(workspace, "main.mts");
   writeFileSync(entry, MAIN);
   child = spawn(process.execPath, ["--import", import.meta.resolve("tsx"), entry], {
     cwd: repo,
-    env: { ...GIT_ENV, XDG_CACHE_HOME: join(workspace, "cache"), TMPDIR: scratchRoot },
+    env: { ...GIT_ENV, XDG_CACHE_HOME: join(workspace, "cache"), TMPDIR: scratchRoot, FOREIGN_ROOT: frontend, TRUST_ROOT: join(workspace, "trust"), INDEX_ROOT: join(workspace, "index") },
   });
   child.stderr.pipe(process.stderr);
   createInterface({ input: child.stdout }).on("line", (line) => {
@@ -127,7 +130,8 @@ test("a real client over stdio lists the tools and reads the entrypoints fact th
   const printed: string[] = [];
   const code = await composeCli({ scratchRoot })(["map", repo], { out: (line) => printed.push(line), err: () => {} });
   assert.equal(code, 0);
-  const { mode, ...fact } = called.structuredContent;
+  const { mode, repositoryRoots, ...fact } = called.structuredContent;
+  assert.deepEqual(repositoryRoots, [{ repo: "shop-service", path: realpathSync(repo) }]);
   assert.equal(mode, "full");
   assert.deepEqual(fact, JSON.parse(printed.join("\n")));
   assert.match(called.content[0]?.text ?? "", /value\.entrypoints\.value/);
@@ -177,4 +181,24 @@ test("callers with a workspace joins the call site of another repository to the 
     assert.deepEqual(local.structuredContent, { mode, status: localFull.structuredContent["status"], snapshot: localFull.structuredContent["snapshot"] });
     assert.match(local.content[0]?.text ?? "", /OrderController\.one/);
   }
+});
+
+
+test("declared foreign repository reads its own snapshot without implicit workspace membership or live trust", async () => {
+  const local = (await request("tools/call", { name: "ye_ast_entrypoints", arguments: { mode: "full" } })).result as { structuredContent: Record<string, unknown> };
+  const foreign = (await request("tools/call", { name: "ye_ast_entrypoints", arguments: { repo: "foreign", mode: "full" } })).result as { isError?: boolean; structuredContent: Record<string, unknown> };
+  assert.equal(foreign.isError, undefined);
+  assert.deepEqual(foreign.structuredContent["repositoryRoots"], [{ repo: "foreign", path: realpathSync(frontend) }]);
+  const foreignSnapshot = foreign.structuredContent["snapshot"] as { repo: string; sha: string };
+  assert.equal(foreignSnapshot.repo, "foreign");
+  assert.equal(foreignSnapshot.sha, execFileSync("git", ["rev-parse", "HEAD"], { cwd: frontend, env: GIT_ENV, encoding: "utf8" }).trim());
+  assert.match(JSON.stringify(foreign.structuredContent["value"]), /\/foreign/);
+  assert.match(JSON.stringify(local.structuredContent["value"]), /\/orders/);
+  assert.doesNotMatch(JSON.stringify(local.structuredContent["value"]), /\/foreign/);
+  const workspaceResult = (await request("tools/call", { name: "ye_ast_workspace", arguments: { mode: "full" } })).result as { isError?: boolean; structuredContent: { value: { workspace: { repos: string[] } } } };
+  assert.equal(workspaceResult.isError, undefined);
+  assert.deepEqual(workspaceResult.structuredContent.value.workspace.repos, ["shop-service"]);
+  const live = (await request("tools/call", { name: "ye_ast_entrypoints", arguments: { repo: "foreign", live: true } })).result as { isError?: boolean; _meta?: Record<string, { kind: string }> };
+  assert.equal(live.isError, true);
+  assert.equal(live._meta?.["ye-ast/fault"]?.kind, "live-requires-trusted");
 });

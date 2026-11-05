@@ -64,6 +64,8 @@ export interface VcsFault {
 }
 
 export interface Vcs {
+  /** The canonical filesystem root of this worktree; rejects repository subdirectories. */
+  canonicalRoot(repo: string, signal?: AbortSignal): Promise<Result<string, VcsFault>>;
   /**
    * The full sha of the commit `revision` names. `repo` must be the root of a repository: a subdirectory answers
    * `not-repository-root`, since it would map the whole repository under the subdirectory's name. An aborted `signal`

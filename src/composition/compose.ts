@@ -120,6 +120,8 @@ export interface ComposedQueries {
   redaction: Redaction;
   /** The name a repository answers to: the directory name of its main worktree, which every linked worktree shares. */
   repositoryName: Vcs["repositoryName"];
+  /** Canonical filesystem root of the selected worktree. */
+  canonicalRepositoryRoot: Vcs["canonicalRoot"];
   /**
    * Builds the live mirror of `repo` for the default scope when it is `trusted` and has none, so the first live query
    * finds it ready. Resolves to a redacted line describing why it could not, or `null`; it never rejects.
@@ -266,7 +268,7 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
   };
   const bareDecisions = createDecisionQueries({ workspace: bareWorkspace, defaults, vcs, digest });
   const decisions = measurement === undefined ? bareDecisions : measuredDecisions(bareDecisions, measurement);
-  return { version, entrypoints, impact, outline, workspace, workspaceImpact, decisions, redaction, repositoryName: (repo, signal) => vcs.repositoryName(repo, signal), warmLive };
+  return { version, entrypoints, impact, outline, workspace, workspaceImpact, decisions, redaction, repositoryName: (repo, signal) => vcs.repositoryName(repo, signal), canonicalRepositoryRoot: (repo, signal) => vcs.canonicalRoot(repo, signal), warmLive };
 }
 
 export function composeCli(options: CompositionOptions = {}): (argv: readonly string[], io: CliIo) => Promise<number> {

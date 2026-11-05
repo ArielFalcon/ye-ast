@@ -151,11 +151,13 @@ An error is `{code, message, data: {kind}}`; `kind` names the code and `data` ad
 
 ## MCP (MVP: in-process stdio)
 
-The read-only MCP server uses the stable v2 TypeScript SDK and binds local queries to its launch repository. It
-exposes no index administration or write tool. A workspace reads declared clones under their own trust and snapshots;
-a foreign coordinate needs an instance bound to its owning clone for a local follow-up. `repo`, selective retrieval
-and pagination are not current selectors; [ADR-0022](../adr/0022-typed-query-replay-and-selective-evidence.md)
-records follow-up designs.
+The read-only MCP server uses the stable v2 TypeScript SDK. `ye-ast mcp [<launch-root>] [--repo <id> <root>]...`
+selects a canonical launch root and an external catalog of existing worktree roots. Each tool accepts an exact `repo`
+ID; omission selects launch. Repeated identical ID/root declarations coalesce, while aliases and collisions fail at
+startup. A declaration for the launch root may choose its ID. Availability does not grant trust or workspace membership;
+only launch is warmed. Workspace reads retain each repository's own trust and snapshot. A foreign follow-up uses its
+owner ID and recorded snapshot, or requires updated registration when absent. Selective retrieval and pagination remain
+future designs in [ADR-0022](../adr/0022-typed-query-replay-and-selective-evidence.md).
 
 | Tool | Question | Main arguments besides `mode` |
 |---|---|---|
@@ -167,7 +169,7 @@ records follow-up designs.
 | `ye_ast_workspace` | Which outward names and candidate repositories are recorded? | `repos`, `gateways`, `revision`, `offline`, `scope` |
 | `ye_ast_decisions` | Which workspace configuration gaps need user input? | `repos`, `gateways`, `revision`, `offline`, `scope` |
 
-All tools accept `mode: "summary" | "details" | "full"`. Summary is the default and identifies findings and
+All tools accept optional `repo` and `mode: "summary" | "details" | "full"`. Summary is the default and identifies findings and
 limits; details adds recorded explanatory evidence and locations; full returns the complete redacted public fact
 with a brief contextual JSON guide rather than repeating the family listing. All modes can be selected directly and
 leave the query, snapshot, analysis coverage and traversal bounds unchanged. Replace the former `detail: "summary"`,

@@ -1,5 +1,6 @@
 import { McpServer, type CallToolResult } from "@modelcontextprotocol/server";
 import { z } from "zod";
+import { repositoryCatalog, type RepositoryBinding } from "./repository-targeting.ts";
 import { responseModeSchema, type ResponseMode, type ResponseRenderer } from "./presentation.ts";
 import type { ImpactBudget } from "../core/domain/impact/impact-fact.ts";
 import { TRUST_MODES, WALK_BOUND_FIELDS, type WalkBoundsField } from "../core/domain/shared/fact.ts";
@@ -33,8 +34,9 @@ export interface McpDeps {
   workspaceImpact: WorkspaceImpactQueries;
   decisions: DecisionQueries;
   redaction: Redaction;
-  /** The one repository every tool reads: its root and the stable name recorded in every snapshot. */
-  repository: { path: string; repoId: string };
+  /** Default repository binding, plus additional host-declared targets. */
+  repository: RepositoryBinding;
+  repositories?: readonly RepositoryBinding[];
 }
 
 const COMPLETENESS = "Returns snapshot-backed evidence and explicit complete, partial or unknown status within the declared scope.";
@@ -57,7 +59,7 @@ const cutGuidance = Object.entries(CUT_GUIDANCE)
   .join("\n");
 
 /** Common interpretation rules and a short routing guide, also useful before individual tools are loaded. */
-export function instructionsFor(repository: McpDeps["repository"]): string {
+export function instructionsFor(repository: McpDeps["repository"], available: readonly string[] = [repository.repoId]): string {
   return `ye-ast provides read-only, deterministic facts about code, git and declared contracts for ${repository.path} (id ${repository.repoId}). Use these facts to investigate structure and consequences; they do not judge code quality or certify a proposed change. Choose a tool for information you still need; reuse an answer that already covers the question and snapshot.
 
 Choose by question:
@@ -70,10 +72,11 @@ Choose by question:
 - ye_ast_decisions: which workspace configuration gaps need user input, and which options have evidence? Use for configuration or before ye-ast init --workspace; recommendations do not settle the user's choices and the tool writes nothing.
 
 Snapshots and repositories:
+- Declared repository IDs: ${available.join(", ")}. Set repo to select one; omission uses ${repository.repoId}. Availability grants neither trust nor workspace membership. IDs are exact and are not paths.
 - Local queries default to HEAD. Use revision, or head on impact, to select a committed snapshot. For trusted working-tree edits use live: true instead; it excludes revision/head, workspace and offline. Impact still requires base.
-- Without workspace, callers and impact cover the bound repository only. workspace: {} enables the persisted workspace when available; workspace.repos supplies other local clones explicitly. workspace and decisions also accept repos directly. Untrusted repositories cannot supply their own workspace defaults. Repositories not included are not read, and missing clones are not downloaded.
+- Without workspace, callers and impact cover the selected repository only. workspace: {} enables the persisted workspace when available; workspace.repos supplies other local clones explicitly. workspace and decisions also accept repos directly. Untrusted repositories cannot supply their own workspace defaults. Repositories not included are not read, and missing clones are not downloaded.
 - Workspace queries use each repository's snapshot and trust declaration. A trusted repository's persisted remote may be refreshed into an engine-owned mirror; request arguments cannot authorize a new remote. offline: true prevents refresh and reads local clones. Inspect remote freshness, revision resolution and section/read limits before relying on a cross-repository result.
-- Local evidence paths are relative to the bound root; workspace evidence is relative to its owning repository. Use repositoryRoots (printed as repository root lines) to locate declared clones, never the process working directory. A foreign callers/outline coordinate needs a server bound to that clone; there is no repo selector. Evidence refers to the recorded snapshot; local files may have different content or line numbers.
+- Local evidence paths are relative to the selected root; workspace evidence is relative to its owning repository. Use repositoryRoots (printed as repository root lines) to locate declared clones, never the process working directory. For a foreign coordinate choose its declared owner with repo and its recorded snapshot; an undeclared owner requires an updated host registration or an instance bound there. For a SHA use revision and the recorded file or symbol; symbols can match multiple declarations. A live follow-up is a fresh read: compare head and stateId, and never treat the commit alone as the old working tree. Base-side modules use the recorded merge-base SHA. Evidence refers to the recorded snapshot; local files may have different content or line numbers.
 
 Coverage and detail:
 - complete means complete within inputs.declaredScope, supported languages/frameworks and any change selection; partial retains known results with cuts; unknown has a reason and never means no impact. Composite sections and reads can have their own limits. Read these before concluding that nothing depends on a change.
@@ -93,7 +96,8 @@ Act on a cut only when its missing information matters:
 ${cutGuidance}`;
 }
 
-const revision = z.string().min(1).optional().describe("Committed Git revision for the bound repository; HEAD when omitted. Match it to the source you inspect.");
+const repo = z.string().min(1).optional().describe("Declared repository ID; omission uses the launch repository.");
+const revision = z.string().min(1).optional().describe("Committed Git revision for the selected repository; HEAD when omitted. Match it to the source you inspect.");
 const live = z
   .boolean()
   .optional()
@@ -163,7 +167,7 @@ const workspace = z
     gateways,
   })
   .optional()
-  .describe("Enable cross-repository traversal. Omit for a local answer; {} uses eligible persisted repositories/gateways, or only the bound repository when none exist. An explicit repos list selects other clones. Includes incoming call-site links; impact also follows outgoing links. Uses committed snapshots and excludes live: true.");
+  .describe("Enable cross-repository traversal. Omit for a local answer; {} uses eligible persisted repositories/gateways, or only the selected repository when none exist. An explicit repos list selects other clones. Includes incoming call-site links; impact also follows outgoing links. Uses committed snapshots and excludes live: true.");
 
 const globs = z
   .array(z.string().refine(isValidGlob, "a glob is relative to the repository root, with / separators and no empty, . or .. segment"))
@@ -416,27 +420,36 @@ function budgetOf(requested: z.infer<typeof budget>): { budget?: ImpactBudget } 
 }
 
 export function createMcpServer(deps: McpDeps): McpServer {
-  const { redaction, repository } = deps;
-  const server = new McpServer({ name: "ye-ast", version: deps.version }, { instructions: instructionsFor(repository) });
+  const { redaction } = deps;
+  const catalog = repositoryCatalog(deps.repository, deps.repositories);
+  if (!catalog.valid) throw new Error("Invalid repository catalog");
+  const server = new McpServer({ name: "ye-ast", version: deps.version }, { instructions: redaction.redact(instructionsFor(deps.repository, catalog.available)) });
 
   /**
    * Redaction precedes rendering. Full facts carry response siblings; text modes expose a minimal receipt and
    * convey response-level limits in text.
    */
   async function answer<V, F extends { kind: string; detail: string }>(
-    query: (onStale: (notice: LiveStaleNotice) => void) => Promise<Result<Fact<V> | FactRead<V>, F>>,
+    selected: string | undefined,
+    local: boolean,
+    query: (onStale: (notice: LiveStaleNotice) => void, repository: RepositoryBinding) => Promise<Result<Fact<V> | FactRead<V>, F>>,
     mode: ResponseMode,
     render: ResponseRenderer<V>,
   ): Promise<CallToolResult> {
     try {
+      const target = catalog.resolve(selected);
+      if (!target.ok) return failure(target.fault);
+      const repository = target.value;
       let moved: LiveStaleNotice | undefined;
-      const result = await query((notice) => void (moved = notice));
+      const result = await query((notice) => void (moved = notice), repository);
       if (!result.ok) return failure(result.fault);
       const read = "fact" in result.value ? result.value : { fact: result.value };
+      if (read.fact.snapshot.repo !== repository.repoId) return failure({ kind: "internal-fault", detail: "Primary snapshot repository does not match selected repository" });
       const fact = redaction.redactValue(read.fact) as Fact<V>;
-      const repositoryRoots = read.repositoryRoots === undefined
+      const roots = local ? [{ repo: repository.repoId, path: repository.path }] : read.repositoryRoots;
+      const repositoryRoots = roots === undefined
         ? undefined
-        : redaction.redactValue(read.repositoryRoots) as FactRead<V>["repositoryRoots"];
+        : redaction.redactValue(roots) as FactRead<V>["repositoryRoots"];
       const refresh = read.refresh === undefined ? undefined : (redaction.redactValue(read.refresh) as WorkspaceRefresh);
       const stale = moved === undefined ? undefined : (redaction.redactValue(moved) as LiveStaleNotice);
       if (mode === "full") {
@@ -461,10 +474,10 @@ export function createMcpServer(deps: McpDeps): McpServer {
       const sidecar = [
         ...(stale === undefined ? [] : [renderStale(stale)]),
         ...(refresh === undefined ? [] : renderRefresh(refresh)),
-        ...(repositoryRoots ?? []).map(({ repo, path }) => `repository root: ${repo} -> ${path}`),
+        ...(local ? [] : (repositoryRoots ?? []).map(({ repo, path }) => `repository root: ${repo} -> ${path}`)),
       ];
       return {
-        content: [{ type: "text", text: [...sidecar, render(fact, mode)].join("\n") }],
+        content: [{ type: "text", text: [...sidecar, render(fact, mode), ...(local ? (repositoryRoots ?? []).map(({ repo, path }) => `repository root: ${repo} -> ${path}`) : [])].join("\n") }],
         structuredContent: {
           mode,
           status: fact.status,
@@ -495,13 +508,14 @@ export function createMcpServer(deps: McpDeps): McpServer {
     {
       title: "Entrypoints of a revision",
       description: `Lists supported HTTP routes, UI routes, message listeners and scheduled jobs with handler locations. Use to orient in a repository or locate where a request, message or job is handled. To trace what depends on a known handler use ye_ast_callers; to inspect consequences of a diff use ye_ast_impact. ${COMPLETENESS}`,
-      inputSchema: liveSchema({ revision, live, scope, mode: responseModeSchema }, ["revision"]),
+      inputSchema: liveSchema({ repo, revision, live, scope, mode: responseModeSchema }, ["revision"]),
       outputSchema: ENTRYPOINTS_OUTPUT,
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    ({ revision: requested, live: isLive, scope: paths, mode }, ctx) =>
+    ({ repo: selected, revision: requested, live: isLive, scope: paths, mode }, ctx) =>
       answer(
-        (onStale) => deps.entrypoints.map({ repo: repository.path, repoId: repository.repoId, ...atRevision(requested, isLive, onStale), ...scopeOf(paths), signal: ctx.mcpReq.signal }),
+        selected, true,
+        (onStale, repository) => deps.entrypoints.map({ repo: repository.path, repoId: repository.repoId, ...atRevision(requested, isLive, onStale), ...scopeOf(paths), signal: ctx.mcpReq.signal }),
         mode,
         renderEntrypointMap,
       ),
@@ -513,6 +527,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
       title: "Impact of a change",
       description: `Traces incoming dependents of changed declarations from the merge base of base and head to head, and reports affected entrypoints plus entrypoints added, removed or altered. Use for a diff; base is required and head defaults to HEAD. Use live for trusted local edits, or changed to select diff paths without excluding callers elsewhere within scope. With workspace, also follows incoming cross-repository call sites and what the change sends onward. Use ye_ast_callers when the question concerns existing symbols without a diff; results inform investigation, not change approval. ${COMPLETENESS}`,
       inputSchema: liveSchema({
+        repo,
         base: z.string().min(1).describe("Required comparison revision, usually the destination branch (for example main). The diff starts at its merge base with head; it is not necessarily a direct base-to-head diff."),
         head: z.string().min(1).optional().describe("Committed revision holding the change; HEAD when omitted. Omit with live: true."),
         live,
@@ -526,11 +541,12 @@ export function createMcpServer(deps: McpDeps): McpServer {
       outputSchema: IMPACT_OUTPUT,
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    ({ base, head, live: isLive, offline: isOffline, scope: paths, changed, budget: requested, mode, workspace: others }, ctx) => {
+    ({ repo: selected, base, head, live: isLive, offline: isOffline, scope: paths, changed, budget: requested, mode, workspace: others }, ctx) => {
       const crossing = workspaceOf(others);
       if (crossing !== undefined) {
         return answer(
-          () =>
+          selected, false,
+          (_onStale, repository) =>
             deps.workspaceImpact.ofChange({
               repo: { path: repository.path, id: repository.repoId },
               ...crossing,
@@ -547,7 +563,8 @@ export function createMcpServer(deps: McpDeps): McpServer {
         );
       }
       return answer(
-        (onStale) => {
+        selected, true,
+        (onStale, repository) => {
           const at = atRevision(head, isLive, onStale);
           return deps.impact.ofChange({ repo: repository.path, repoId: repository.repoId, base, ...(at.live ? at : { head: at.revision }), ...(changed === undefined ? {} : { changed }), ...scopeOf(paths), ...budgetOf(requested), signal: ctx.mcpReq.signal });
         },
@@ -562,15 +579,16 @@ export function createMcpServer(deps: McpDeps): McpServer {
     {
       title: "Callers of symbols or line ranges",
       description: `Traces incoming dependents of existing declarations or line ranges and reports the entrypoints that reach them, with dependency locations. Use when the starting symbols or ranges are known and no diff is needed. targets accepts names or inclusive line ranges; names match their final segment and may select several declarations in one file. A missing declaration is an error. With workspace, follows incoming cross-repository call-site links; use ye_ast_impact for a diff and its outgoing links. ${COMPLETENESS}`,
-      inputSchema: liveSchema({ revision, live, offline, targets: z.array(target).min(1).describe("The symbols or line ranges to start from."), scope, budget, mode: responseModeSchema, workspace }, ["revision", "offline", "workspace"]),
+      inputSchema: liveSchema({ repo, revision, live, offline, targets: z.array(target).min(1).describe("The symbols or line ranges to start from."), scope, budget, mode: responseModeSchema, workspace }, ["revision", "offline", "workspace"]),
       outputSchema: IMPACT_OUTPUT,
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    ({ revision: requested, live: isLive, offline: isOffline, targets, scope: paths, budget: bounds, mode, workspace: others }, ctx) => {
+    ({ repo: selected, revision: requested, live: isLive, offline: isOffline, targets, scope: paths, budget: bounds, mode, workspace: others }, ctx) => {
       const crossing = workspaceOf(others);
       if (crossing !== undefined) {
         return answer(
-          () =>
+          selected, false,
+          (_onStale, repository) =>
             deps.workspaceImpact.callers({
               repo: { path: repository.path, id: repository.repoId, revision: requested ?? DEFAULT_REVISION },
               ...crossing,
@@ -585,7 +603,8 @@ export function createMcpServer(deps: McpDeps): McpServer {
         );
       }
       return answer(
-        (onStale) =>
+        selected, true,
+        (onStale, repository) =>
           deps.impact.callers({
             repo: repository.path,
             repoId: repository.repoId,
@@ -606,13 +625,14 @@ export function createMcpServer(deps: McpDeps): McpServer {
     {
       title: "Importers of files",
       description: `For each target, reports distinct related files as static importers, reexporters, dynamic importers, type importers, additional users without a module edge, and unresolved-only candidates without a resolved link. A file is listed in its first matching group; the structured fact retains overlapping module forms. Files with resolved links may also have unresolved name matches; detailed text annotates that overlap without repeating paths. Use to investigate file moves, renames, deletions or export changes. An import edge does not prove a declaration is used. Static TypeScript resolution includes alias and barrel module edges. Revision queries include exported test consumers; a live mirror that omits them remains partial. Unresolved name matches do not prove dependencies or additional affected files. For declaration-level incoming traversal and reached entrypoints use ye_ast_callers; this tool answers file-level relationships. ${COMPLETENESS}`,
-      inputSchema: liveSchema({ revision, live, files: z.array(z.string().min(1)).min(1).describe("Repository-relative paths."), scope, mode: responseModeSchema }, ["revision"]),
+      inputSchema: liveSchema({ repo, revision, live, files: z.array(z.string().min(1)).min(1).describe("Repository-relative paths."), scope, mode: responseModeSchema }, ["revision"]),
       outputSchema: IMPORTERS_OUTPUT,
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    ({ revision: requested, live: isLive, files, scope: paths, mode }, ctx) =>
+    ({ repo: selected, revision: requested, live: isLive, files, scope: paths, mode }, ctx) =>
       answer(
-        (onStale) => deps.impact.importers({ repo: repository.path, repoId: repository.repoId, ...atRevision(requested, isLive, onStale), files, ...scopeOf(paths), signal: ctx.mcpReq.signal }),
+        selected, true,
+        (onStale, repository) => deps.impact.importers({ repo: repository.path, repoId: repository.repoId, ...atRevision(requested, isLive, onStale), files, ...scopeOf(paths), signal: ctx.mcpReq.signal }),
         mode,
         renderImporters,
       ),
@@ -623,13 +643,14 @@ export function createMcpServer(deps: McpDeps): McpServer {
     {
       title: "Shape of files",
       description: `Returns indexed declarations with line spans and imports for each requested file, without returning source text. Use when that structure helps choose source ranges to read; read a known relevant range directly. A file the index cannot describe is reported as a cut, not an empty list. Match revision or live to the source you will inspect. ${COMPLETENESS}`,
-      inputSchema: liveSchema({ revision, live, files: z.array(z.string().min(1)).min(1).describe("Repository-relative paths."), scope, mode: responseModeSchema }, ["revision"]),
+      inputSchema: liveSchema({ repo, revision, live, files: z.array(z.string().min(1)).min(1).describe("Repository-relative paths."), scope, mode: responseModeSchema }, ["revision"]),
       outputSchema: OUTLINE_OUTPUT,
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    ({ revision: requested, live: isLive, files, scope: paths, mode }, ctx) =>
+    ({ repo: selected, revision: requested, live: isLive, files, scope: paths, mode }, ctx) =>
       answer(
-        (onStale) => deps.outline.outline({ repo: repository.path, repoId: repository.repoId, ...atRevision(requested, isLive, onStale), files, ...scopeOf(paths), signal: ctx.mcpReq.signal }),
+        selected, true,
+        (onStale, repository) => deps.outline.outline({ repo: repository.path, repoId: repository.repoId, ...atRevision(requested, isLive, onStale), files, ...scopeOf(paths), signal: ctx.mcpReq.signal }),
         mode,
         renderOutline,
       ),
@@ -641,6 +662,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
       title: "Repositories a workspace names",
       description: `Lists outward names stated by repositories, candidate repositories that serve them with matching basis and evidence, and names no included repository serves. Names include HTTP hosts/prefixes, configuration URLs, message destinations, dependency coordinates, remotes and registries. Use to discover which clones a cross-repository investigation needs; it does not download missing clones or establish an unresolved target by guesswork. Trusted repositories may refresh persisted remotes; offline prevents refresh. For traversal use workspace on ye_ast_callers or ye_ast_impact; for configuration gaps use ye_ast_decisions. ${COMPLETENESS}`,
       inputSchema: z.strictObject({
+        repo,
         revision,
         offline,
         scope,
@@ -651,9 +673,10 @@ export function createMcpServer(deps: McpDeps): McpServer {
       outputSchema: WORKSPACE_OUTPUT,
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    ({ revision: requested, offline: isOffline, scope: paths, repos, gateways: requestedGateways, mode }, ctx) =>
+    ({ repo: selected, revision: requested, offline: isOffline, scope: paths, repos, gateways: requestedGateways, mode }, ctx) =>
       answer(
-        async () => {
+        selected, false,
+        async (_onStale, repository) => {
           const read = await deps.workspace.outwardNames({
             repo: { path: repository.path, id: repository.repoId, ...(requested === undefined ? {} : { revision: requested }) },
             ...(repos === undefined ? {} : { repos: repos.map(askedRepository) }),
@@ -674,13 +697,14 @@ export function createMcpServer(deps: McpDeps): McpServer {
     {
       title: "Gaps a workspace leaves to the user",
       description: `Lists workspace configuration gaps requiring user input, evidence-backed options and rule-based recommendations; some gaps allow only a user-supplied value. Use to prepare workspace/trust configuration or a form before ye-ast init --workspace. Gaps concern repository membership, identity, gateways, trust or remote resolution; recommendations are configuration suggestions, not judgments of code or proposed changes. Reads repositories using the workspace rules and writes no configuration. ${COMPLETENESS}`,
-      inputSchema: z.strictObject({ revision, offline, scope, repos: workspaceRepos, gateways, mode: responseModeSchema }),
+      inputSchema: z.strictObject({ repo, revision, offline, scope, repos: workspaceRepos, gateways, mode: responseModeSchema }),
       outputSchema: DECISIONS_OUTPUT,
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    ({ revision: requested, offline: isOffline, scope: paths, repos, gateways: requestedGateways, mode }, ctx) =>
+    ({ repo: selected, revision: requested, offline: isOffline, scope: paths, repos, gateways: requestedGateways, mode }, ctx) =>
       answer(
-        () =>
+        selected, false,
+        (_onStale, repository) =>
           deps.decisions.decisions({
             repo: { path: repository.path, id: repository.repoId, ...(requested === undefined ? {} : { revision: requested }) },
             ...(repos === undefined ? {} : { repos: repos.map(askedRepository) }),

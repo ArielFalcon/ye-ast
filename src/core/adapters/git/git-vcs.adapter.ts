@@ -1,5 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { mkdir, mkdtemp, open, rm, stat, symlink, type FileHandle } from "node:fs/promises";
+import { mkdir, mkdtemp, open, realpath, rm, stat, symlink, type FileHandle } from "node:fs/promises";
 import { devNull, tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { createDiffReader, type FileChange } from "../../domain/change/diff-reader.ts";
@@ -27,6 +27,7 @@ export interface BlobSink {
 
 /** Aborting the signal kills the git process. */
 export interface GitDeps {
+  realpath(path: string): Promise<string>;
   /** For commands with a small answer: the whole output is buffered. */
   runGit(repo: string, args: readonly string[], signal?: AbortSignal): Promise<GitRun>;
   /** Like `runGit`, with the user and system git configuration empty. */
@@ -84,6 +85,7 @@ const NUL = 0;
 const STRICT_UTF8 = new TextDecoder("utf-8", { fatal: true });
 
 export const defaultGitDeps: GitDeps = {
+  realpath,
   runGit: (repo, args, signal) => spawnGit(repo, args, readAll, "", false, signal),
   runIsolatedGit: (repo, args, signal) => spawnGit(repo, args, readAll, "", true, signal),
   streamRecords: (repo, args, onRecord, signal) => spawnGit(repo, args, (stdout) => readRecords(stdout, onRecord, NUL), "", false, signal),
@@ -94,6 +96,21 @@ export const defaultGitDeps: GitDeps = {
 };
 
 export function createGitVcs(deps: GitDeps = defaultGitDeps): Vcs & VcsChanges {
+  async function canonicalRoot(repo: string, signal?: AbortSignal): Promise<Result<string, VcsFault>> {
+    if (signal?.aborted) return ABORTED;
+    const root = await ensureRepositoryRoot(deps, repo, signal);
+    if (signal?.aborted) return ABORTED;
+    if (!root.ok) return root;
+    try {
+      const path = await deps.realpath(repo);
+      if (signal?.aborted) return ABORTED;
+      return { ok: true, value: path };
+    } catch {
+      if (signal?.aborted) return ABORTED;
+      return { ok: false, fault: { kind: "unreadable", detail: repo } };
+    }
+  }
+
   async function resolveCommit(repo: string, revision: string, signal?: AbortSignal): Promise<Result<string, VcsFault>> {
     const root = await ensureRepositoryRoot(deps, repo, signal);
     if (!root.ok) return root;
@@ -253,7 +270,7 @@ export function createGitVcs(deps: GitDeps = defaultGitDeps): Vcs & VcsChanges {
     return { ok: true, value: basename(main) };
   }
 
-  return { resolveCommit, exportCommit, mergeBase, diffCommits, diffDirectories, remotes, headBranch, repositoryName };
+  return { canonicalRoot, resolveCommit, exportCommit, mergeBase, diffCommits, diffDirectories, remotes, headBranch, repositoryName };
 }
 
 /**
