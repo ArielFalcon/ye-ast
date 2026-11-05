@@ -988,12 +988,13 @@ details[open] summary { border-bottom: 1px solid var(--line-soft); }
 /* The walk simulator speaks the graph's language: bone bricks, the seed is the fire, heat spreads. */
 .docs .sim-node rect { fill: var(--block); stroke: var(--outline); stroke-width: 2.2; }
 .docs .sim-node .sim-label { fill: var(--block-ink); }
-.docs .sim-node .sim-sub, .docs .sim-node .sim-kind { fill: color-mix(in srgb, var(--block-ink) 70%, transparent); }
+.docs .sim-node .sim-sub, .docs .sim-node .sim-kind { fill: var(--block-sub); }
+.docs .sim-node.is-seed .sim-sub, .docs .sim-node.is-seed .sim-kind { fill: var(--night); }
 .docs .sim-node.is-seed rect { fill: var(--heat); stroke: var(--outline); }
 .docs .sim-node.is-seed .sim-label { fill: var(--night); }
 .docs .sim-node.is-reached rect { stroke: var(--heat); stroke-width: 2.6; }
 .docs .sim-node.is-current rect { stroke: var(--heat); stroke-width: 3; filter: var(--glow-heat); }
-.docs .sim-node:not(.is-hidden):hover rect { fill: var(--lime); }
+.docs .sim-node:not(.is-hidden):hover rect { stroke: var(--hover-ring); stroke-width: 3.2; }
 .docs .sim-node:focus-visible rect { stroke: var(--lime); }
 .docs .sim-edge { stroke: var(--ink); }
 .docs .sim-edge.followed.is-live { stroke: var(--heat); stroke-width: 2.4; filter: var(--glow-heat); }
@@ -1009,6 +1010,6 @@ details[open] summary { border-bottom: 1px solid var(--line-soft); }
 .docs .entry-item { border-left: 3px solid var(--lime); }
 .docs .fl-node rect { fill: var(--block); stroke: var(--outline); stroke-width: 2; }
 .docs .fl-node .fl-title { fill: var(--block-ink); }
-.docs .fl-node .fl-kicker { fill: color-mix(in srgb, var(--block-ink) 65%, transparent); }
+.docs .fl-node .fl-kicker { fill: var(--block-sub); }
 .docs .fl-node[data-tone="fact"] rect { fill: var(--lime); }
 .docs .sim-node rect, .docs .sim-route rect { rx: 2px; ry: 2px; }

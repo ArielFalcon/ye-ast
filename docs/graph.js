@@ -185,7 +185,7 @@
 
   function shadeOf(x, y, w, h) {
     const group = el("g", { transform: `translate(${x} ${y})`, "aria-hidden": "true" });
-    const top = Math.round(h * 0.66);
+    const top = Math.round(h * 0.74);
     group.appendChild(el("rect", { x: 2, y: top, width: w - 4, height: h - top - 2, class: "gnode-shade" }));
     return group;
   }
@@ -271,14 +271,21 @@
       group.appendChild(el("rect", { x: position.x, y: position.y, width: position.w, height: position.h, rx: 2 }));
       group.appendChild(shadeOf(position.x, position.y, position.w, position.h));
       group.appendChild(el("text", { x: position.x + 12, y: position.y + 22, class: "gnode-name" }, module.name));
-      group.appendChild(el("text", { x: position.x + 12, y: position.y + 39, class: "gnode-sub" }, module.sub));
+      group.appendChild(el("text", { x: position.x + 12, y: position.y + 40, class: "gnode-sub" }, module.sub));
       group.appendChild(el("text", { x: position.x + position.w - 12, y: position.y + 54, class: "gnode-tag", "text-anchor": "end" }, module.layer));
       group.addEventListener("click", (event) => { event.stopPropagation(); selectNode(module.key); });
       group.addEventListener("keydown", (event) => {
         if (event.key === "Enter" || event.key === " ") { event.preventDefault(); selectNode(module.key); }
       });
       nodesGroup.appendChild(group);
+      fitText(group.querySelector(".gnode-sub"), position.w - 24);
     });
+  }
+
+  function fitText(text, width) {
+    if (text.getComputedTextLength() <= width) return;
+    text.setAttribute("textLength", width);
+    text.setAttribute("lengthAdjust", "spacingAndGlyphs");
   }
 
   function renderLayers() {
