@@ -34,6 +34,33 @@ function setup(options: { alias?: boolean; untrusted?: string; abort?: AbortCont
 }
 const run = (s: ReturnType<typeof setup>, req = request) => withWorkspaceSnapshots(s.deps, req, async ({ livePlans, plans }) => ({ ok: true, value: { livePlans, plans } }));
 
+test("a HEAD change while acquiring a live lease refuses the capture and releases the lease", async () => {
+  const s = setup();
+  const resolveCommit = s.deps.vcs.resolveCommit;
+  let changed = false;
+  s.deps.vcs.resolveCommit = (repo, revision, signal) => changed && repo === "/real/a" && revision === "HEAD"
+    ? Promise.resolve({ ok: true, value: "c".repeat(40) })
+    : resolveCommit(repo, revision, signal);
+  const lock = s.fake.deps.mirror.lock;
+  s.fake.deps.mirror.lock = async (location, signal) => {
+    if (location.repo === "/real/a") { changed = true; s.fake.tree.set("src/a.ts", "new commit"); }
+    return lock(location, signal);
+  };
+  let used = false;
+  const result = await withWorkspaceSnapshots(s.deps, request, async () => { used = true; return { ok: true, value: null }; });
+  assert.equal(result.ok, false);
+  if (!result.ok) {
+    assert.equal(result.fault.kind, "workspace-capture-unavailable");
+    if (result.fault.kind === "workspace-capture-unavailable") {
+      assert.equal(result.fault.repo, "a");
+      assert.equal(result.fault.cause.kind, "live-mirror-failed");
+    }
+  }
+  assert.equal(used, false);
+  assert.equal(s.fake.held.locks, 1);
+  assert.equal(s.fake.held.released, 1);
+});
+
 test("all live canonical trusts precede authorized refresh and heads", async () => {
   const s = setup({ untrusted: "/real/b" });
   const result = await run(s);

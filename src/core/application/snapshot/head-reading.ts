@@ -111,7 +111,11 @@ export async function withLiveCaptures<T>(deps: HeadReaderDeps, selections: read
     const opened = await openLive(live, { repo: selection.repo, scope: selection.scope, selected, store: true, signal,
       ...(selection.onStale === undefined ? {} : { onStale: (notice) => { postludes.push({ repoId: selection.repoId, run: () => selection.onStale!(notice) }); } }),
       ...(selection.onStalenessUnavailable === undefined ? {} : { onStalenessUnavailable: (notice) => { postludes.push({ repoId: selection.repoId, run: () => selection.onStalenessUnavailable!(notice) }); } }),
-    }, async (tree) => {
+    }, async (tree): Promise<Result<T, { repoId: string; cause: LiveFailure }>> => {
+      const head = await deps.vcs.resolveCommit(selection.repo, LIVE_HEAD, signal);
+      if (signal?.aborted) return { ok: false, fault: { repoId: selection.repoId, cause: { kind: "aborted", detail: "live query aborted" } } };
+      if (!head.ok) return { ok: false, fault: { repoId: selection.repoId, cause: head.fault } };
+      if (head.value !== selection.head) return { ok: false, fault: { repoId: selection.repoId, cause: { kind: "live-mirror-failed", detail: "repository HEAD changed during live capture" } } };
       captures.set(selection.repoId, createHeldLive({ ...selection, tree, deps }));
       return acquire(index + 1);
     });

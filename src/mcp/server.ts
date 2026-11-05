@@ -9,6 +9,7 @@ import { z } from "zod";
 import { repositoryCatalog, type RepositoryBinding } from "./repository-targeting.ts";
 import type { ResponseMode, ResponseRenderer, ToolFamily } from "./presentation.ts";
 import { TRUST_MODES } from "../core/domain/shared/fact.ts";
+import { canonicalJson } from "../core/domain/shared/canonical-json.ts";
 import type { Fact } from "../core/domain/shared/fact.ts";
 import type { ImpactFault } from "../core/ports/impact-queries.port.ts";
 import type { WorkspaceFault } from "../core/ports/workspace-repos.port.ts";
@@ -307,6 +308,9 @@ export function createMcpServer(deps: McpDeps): McpServer {
    */
   async function answer(query: SemanticQuery, mode: ResponseMode, signal: AbortSignal, controls?: Controls): Promise<CallToolResult> {
     try {
+      if (controls?.select !== undefined && canonicalJson(redaction.redactValue(controls.select)) !== canonicalJson(controls.select)) {
+        return selectionFailure({ code: "replay-unavailable", reason: "redacted-context" });
+      }
       let cursor: CursorV1 | undefined;
       if (controls?.page?.cursor !== undefined && controls.select !== undefined) {
         const decoded = decodeCursor(controls.page.cursor);

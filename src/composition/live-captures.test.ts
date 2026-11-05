@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { createFsSourceReader } from "../core/adapters/fs/fs-source-reader.adapter.ts";
 import { createLiveMirror, defaultLiveMirrorDeps } from "../core/adapters/fs/live-mirror.adapter.ts";
 import { createGitWorkingTree } from "../core/adapters/git/git-working-tree.adapter.ts";
+import { createGitVcs } from "../core/adapters/git/git-vcs.adapter.ts";
 import { createSha256Digest } from "../core/adapters/crypto/sha256-digest.adapter.ts";
 import { createPathMatcher } from "../core/adapters/fs/path-matcher.adapter.ts";
 import { isWritten, liveScope } from "../core/domain/snapshot/live-export.ts";
@@ -36,7 +37,7 @@ test("two held mirrors retain captured bytes and report the changed repository a
       return { ok: true, value: { release: async () => { await acquired.value.release(); active--; } } };
     };
     const live = { ...fake.deps, mirror, workingTree: createGitWorkingTree(), digest };
-    const deps = { live, graph: live.graph, digest, matcher: createPathMatcher(), reader: createFsSourceReader(), extractor: { extract: async () => [] }, vcs: {} } as unknown as HeadReaderDeps;
+    const deps = { live, graph: live.graph, digest, matcher: createPathMatcher(), reader: createFsSourceReader(), extractor: { extract: async () => [] }, vcs: createGitVcs() } as unknown as HeadReaderDeps;
     const notices: { repo: string; stateId: string }[] = [];
     const snapshots: { head: string; stateId: string }[] = [];
     let callbackFinished = false;

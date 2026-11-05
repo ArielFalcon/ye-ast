@@ -294,6 +294,28 @@ function fieldsOf(value: unknown): Record<string, unknown> {
   return rest;
 }
 
+test("MCP refuses redacted selection coordinates before querying or reflecting an unavailable source", async () => {
+  const { session, calls } = await setup({ callers: async () => ({ ok: true, value: { ...base(), status: "unknown", reason: "unresolved" } }) });
+  try {
+    for (const mode of ["summary", "details", "full"]) {
+      const result = await session.callTool("ye_ast_callers", {
+        targets: [{ file: "src/OrderService.java", symbol: "OrderService.find" }],
+        mode,
+        select: { kind: "handler-origins", owner: { kind: "local" }, handler: { path: "src/OrderController.java", symbol: SECRET, line: 17 } },
+        page: { limit: 1 },
+      });
+      assert.equal(result.isError, true);
+      const fault = result._meta?.[FAULT_META] as { kind: string; reason: string };
+      assert.equal(fault.kind, "replay-unavailable");
+      assert.equal(fault.reason, "redacted-context");
+      assert.equal(JSON.stringify(result).includes(SECRET), false);
+    }
+    assert.equal(calls.callers.length, 0);
+  } finally {
+    await session.close();
+  }
+});
+
 test("entrypoint evidence selection returns the selected finding's evidence through MCP", async () => {
   const { session, calls } = await setup();
   try {
