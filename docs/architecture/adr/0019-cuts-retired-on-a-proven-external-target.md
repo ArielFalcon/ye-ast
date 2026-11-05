@@ -86,8 +86,8 @@ population did not.
 - The ambient proof adds another **7% to 16% of the cuts** on the same three diffs (`HEAD~5` 76→64, `HEAD~20` 190→176,
   `HEAD~60` 359→334), also with no symbol gained. Its table is generated from the installed `typescript` and a test fails
   while it drifts, so moving the pin (`ADR-0007`) requires regenerating it, not remembering to.
-- A fact's bytes change without a new input field. `EDGE_POLICY.referenceProofVersion` participates in the existing
-  producer digest and invalidates derived facts; no graph or fact schema step is needed.
+- A fact's bytes change without a new input field; no graph or fact schema step is needed. No traversal fact is
+  stored, so nothing needs invalidating ([ADR-0024](0024-one-producer-version-for-every-family.md)).
 - A repository whose configuration ye-ast cannot read retires nothing: the import resolves nowhere, the place stays a cut.
   That is the silent degradation the project asks for, and it never guesses external. The same holds for a snapshot that
   declares a global of its own: the ambient proof steps back and the place keeps its cut.

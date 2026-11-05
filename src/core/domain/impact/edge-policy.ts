@@ -1,4 +1,4 @@
-/** The edges the impact walk follows (RFC-0010 "Edge policy"). The tables are part of the producer version. */
+/** The edges the impact walk follows (RFC-0010 "Edge policy"). */
 
 /** Code that runs or holds code that runs: it calls, instantiates and, where it uses a name, references. */
 const CODE_KINDS = ["function", "method", "class", "component", "constant", "variable"] as const;
@@ -12,7 +12,6 @@ const TYPE_KINDS = ["class", "component", "interface"] as const;
 const ANGULAR_CLASS_KINDS = ["class", "component"] as const;
 
 export const EDGE_POLICY = {
-  referenceProofVersion: 10,
   rules: [
     { edges: ["calls", "instantiates"], from: [...CODE_KINDS, ...FIELD_KINDS], to: "any" },
     { edges: ["references"], from: REFERRER_KINDS, to: REFERENCED_KINDS },

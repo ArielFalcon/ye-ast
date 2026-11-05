@@ -55,7 +55,7 @@ window.MODULE_DETAILS_EN = {
       facts: [
         "One build of the graph, one trust record, one index cache, one redaction module.",
         "The MCP never knows whether it talks to the core in-process or, through the protocol, to the daemon.",
-        "The edge-policy digest is part of the producer version, so a policy change invalidates facts.",
+        "Every query family stamps the same producer version (ADR-0024).",
       ],
       files: ["src/composition/compose.ts", "src/composition/main.ts"],
     },

@@ -445,8 +445,8 @@ test("validateCompositionReferences resolves every reference and names the broke
 });
 
 
-test("exact positive observations corroborate different policy versions without equating producers", () => {
-  const imports = new SetBuilder("policy-importers", IMPORTERS, sha("shop"), { producer: {name:"ye-ast", version:"0.4.0+edge-policy.test"} });
+test("exact positive observations corroborate different producer versions without equating producers", () => {
+  const imports = new SetBuilder("policy-importers", IMPORTERS, sha("shop"), { producer: {name:"ye-ast", version:"0.5.0"} });
   imports.part({kind:"file-dependency",from:imports.file("src/a.ts"),to:imports.file("src/b.ts"),category:"importer"});
   const outline = new SetBuilder("plain-outline", OUTLINE, sha("shop"), {producer:{name:"ye-ast",version:"0.4.0"}});
   outline.part({kind:"file-dependency",from:outline.file("src/a.ts"),to:outline.file("src/b.ts"),category:"outline-import"});
@@ -454,5 +454,5 @@ test("exact positive observations corroborate different policy versions without 
   assert.equal(connections(result.graph,"shared-file-import").length,1);
   assert.equal(new Set(result.graph.reads.map(read=>read.producer.version)).size,2);
   assert.equal(relations(result.graph,"symbol-dependence").length,0);
-  assert.equal(connections(guardCase({producer:{name:"ye-ast",version:"0.4.0+edge-policy.test"}},{producer:{name:"ye-ast",version:"0.4.0"}}).graph,"handler-declaration").length,0,"derivation retains strict producer guard");
+  assert.equal(connections(guardCase({producer:{name:"ye-ast",version:"0.5.0"}},{producer:{name:"ye-ast",version:"0.4.0"}}).graph,"handler-declaration").length,0,"derivation retains strict producer guard");
 });
