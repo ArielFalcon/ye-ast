@@ -1,0 +1,181 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { AjvJsonSchemaValidator } from "@modelcontextprotocol/server/validators/ajv";
+import { createHash } from "node:crypto";
+import { sourceFixture } from "./composition-fixtures.ts";
+import { normalizeSource } from "./composition-normalize.ts";
+import { mergeEvidence, materializeEvidence } from "./compose-evidence.ts";
+import { compositionIdentity } from "./composition-identity.ts";
+import { COMPOSE_INPUT, COMPOSE_OUTPUT, compactComposeOutput, composeOutputGuide } from "./composition-schema.ts";
+import { composeFull, composeReceipt } from "./render-composition.ts";
+import type { CompositionResult, CoverageSummary, PartKind, ReadOwner } from "./composition-contract.ts";
+import type { ExecutedSource } from "./query-runner.ts";
+import type { CutOwner } from "./select-evidence.ts";
+
+const digest = { of: (text: string) => createHash("sha256").update(text).digest("hex") };
+const ALL = [
+  sourceFixture("entrypoints"), sourceFixture("impact-local"), sourceFixture("callers-local"), sourceFixture("importers"),
+  sourceFixture("outline"), sourceFixture("workspace"), sourceFixture("decisions"), sourceFixture("impact-workspace"),
+  sourceFixture("callers-workspace"),
+];
+
+const ownerOf = (owner: ReadOwner): CutOwner => (owner.kind === "read" ? { kind: "read", repo: owner.repo, index: owner.index } : owner);
+
+/** A coordinator-shaped result over actual normalized and materialized fixtures; requests follow input order. */
+function resultOf(sources: readonly ExecutedSource[]): CompositionResult {
+  const sets = sources.map((source) => normalizeSource(source, digest));
+  const order = sets.map((set) => set.sources[0]?.id);
+  const { graph, issues } = materializeEvidence(sets.slice(1).reduce(mergeEvidence, sets[0]!), digest);
+  const coverage: CoverageSummary = {
+    reads: {
+      complete: graph.reads.filter((read) => read.analysis.status === "complete").length,
+      partial: graph.reads.filter((read) => read.analysis.status === "partial").length,
+      unknown: graph.reads.filter((read) => read.analysis.status === "unknown").length,
+    },
+    unknowns: graph.reads.flatMap((read) => (read.analysis.status === "unknown" ? [{ source: read.source, owner: ownerOf(read.owner), reason: read.analysis.reason }] : [])),
+    limits: graph.reads.flatMap((read) => (read.analysis.status === "partial"
+      ? [...Map.groupBy(read.analysis.cuts, (cut) => cut.kind)].map(([kind, cuts]) => ({ source: read.source, owner: ownerOf(read.owner), kind, cuts: cuts.length, places: cuts.reduce((total, cut) => total + cut.at.length, 0) }))
+      : [])),
+    issues,
+  };
+  return {
+    graph: { ...graph, sources: graph.sources.map((source) => ({ ...source, requestIndex: order.indexOf(source.id) })) },
+    coverage,
+    counts: {
+      sources: graph.sources.length, reads: graph.reads.length, files: graph.files.length, anchors: graph.anchors.length,
+      entities: graph.entities.length, evidence: graph.evidence.length, parts: graph.parts.length, relations: graph.relations.length,
+      connections: graph.connections.length, unknownFindings: graph.parts.filter((part) => part.kind === "unknown-finding").length, unknownComponents: 0,
+    },
+    verification: { status: "available", identity: compositionIdentity(digest, graph.sources.map((source) => source.id)) },
+    requests: sources.map((source) => ({ status: "available", query: source.query, strategy: "fresh-read" })),
+  };
+}
+
+const result = resultOf(ALL);
+const full = composeFull(result);
+const receipt = composeReceipt(result, "details");
+const ajv = new AjvJsonSchemaValidator().getValidator(COMPOSE_OUTPUT["~standard"].jsonSchema.output({ target: "draft-07" }));
+const json = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
+const runtime = (value: unknown) => COMPOSE_OUTPUT.safeParse(value).success;
+
+test("full and receipt of every family and workspace branch pass the runtime schema and its draft-7 JSON Schema", () => {
+  for (const value of [full, receipt, composeReceipt(result, "summary")]) {
+    assert.equal(runtime(value), true, JSON.stringify(COMPOSE_OUTPUT.safeParse(value).error?.issues.slice(0, 3)));
+    assert.equal(ajv(json(value)).valid, true);
+  }
+  for (const source of ALL) assert.equal(runtime(composeFull(resultOf([source]))), true, source.family);
+});
+
+test("full keeps every table and all 22 part kinds; graph.sources appears once with request indices", () => {
+  const kinds: readonly PartKind[] = [
+    "entrypoint", "unknown-finding", "seed", "symbol-reach", "entrypoint-reach", "entrypoint-change", "module-origin", "module-reach",
+    "file-dependency", "file-query", "outline-declaration", "outline-file", "unheld-file", "outward-name", "name-candidate", "call-site",
+    "unresolved-call-site", "workspace-link", "workspace-context", "decision", "impact-context", "walk-cost",
+  ];
+  const parsed = COMPOSE_OUTPUT.parse(full);
+  assert.equal(parsed.kind, "composition");
+  if (parsed.kind !== "composition") return;
+  assert.deepEqual(new Set(parsed.graph.parts.map((part) => part.kind)), new Set(kinds));
+  assert.deepEqual(Object.keys(parsed.graph).sort(), ["anchors", "bindings", "connections", "entities", "evidence", "files", "parts", "reads", "relations", "snapshots", "sources"]);
+  assert.equal("sources" in parsed, false);
+  assert.deepEqual(parsed.graph.sources.map((source) => source.requestIndex).sort((a, b) => a - b), ALL.map((_, index) => index));
+  const decision = parsed.graph.parts.find((part) => part.kind === "decision");
+  assert.ok(decision?.kind === "decision" && decision.decisionId.length > 0 && decision.decisionId !== decision.id);
+  assert.ok(parsed.graph.parts.some((part) => part.kind === "impact-context" && part.mergeBase !== undefined && part.changedEntrypoints.state === "present"));
+  assert.ok(parsed.graph.reads.some((read) => read.owner.kind === "read" && read.owner.readKind === "trigger"));
+});
+
+test("a receipt is not a Fact and carries no graph tables", () => {
+  assert.equal(receipt.kind, "composition-receipt");
+  for (const forbidden of [{ graph: full.graph }, { status: "complete" }, { value: {} }, { snapshot: { repo: "shop", kind: "sha", sha: "a" } }]) {
+    const extended = { ...receipt, ...forbidden };
+    assert.equal(runtime(extended), false, Object.keys(forbidden)[0]);
+    assert.equal(ajv(json(extended)).valid, false, Object.keys(forbidden)[0]);
+  }
+});
+
+type Mutable = { graph: Record<string, Record<string, unknown>[]> } & Record<string, unknown>;
+function mutated(change: (copy: Mutable) => void): unknown {
+  const copy = json(full) as unknown as Mutable;
+  change(copy);
+  return copy;
+}
+function first(copy: Mutable, table: string, where: (record: Record<string, unknown>) => boolean): Record<string, unknown> {
+  const found = copy.graph[table]?.find(where);
+  assert.ok(found, `fixture lacks a ${table} record`);
+  return found;
+}
+
+test("malformed variants are rejected by both the runtime schema and the JSON Schema", () => {
+  const cases: [string, unknown][] = [
+    ["unknown read without reason", mutated((copy) => { first(copy, "reads", () => true).analysis = { status: "unknown" }; })],
+    ["partial read without cuts", mutated((copy) => { first(copy, "reads", () => true).analysis = { status: "partial", cuts: [] }; })],
+    ["unknown read with a value", mutated((copy) => { first(copy, "reads", () => true).analysis = { status: "unknown", reason: "deadline", value: [] }; })],
+    ["evidence without origin", mutated((copy) => { delete first(copy, "evidence", () => true).origin; })],
+    ["part without supports", mutated((copy) => { first(copy, "parts", () => true).supports = []; })],
+    ["part of an unknown kind", mutated((copy) => { first(copy, "parts", () => true).kind = "summary"; })],
+    ["part with a free field", mutated((copy) => { first(copy, "parts", () => true).payload = {}; })],
+    ["connection without supports", mutated((copy) => { first(copy, "connections", () => true).supports = []; })],
+    ["relation without attestations", mutated((copy) => { first(copy, "relations", () => true).attestations = []; })],
+    ["decision option without recommended", mutated((copy) => {
+      const decision = first(copy, "parts", (part) => part.kind === "decision" && (part.options as unknown[]).length > 0) as { options: Record<string, unknown>[] };
+      delete decision.options[0]!.recommended;
+    })],
+    ["live snapshot without stateId", mutated((copy) => { first(copy, "snapshots", () => true).value = { repo: "shop", kind: "live", head: "a" }; })],
+    ["read owner read without readKind", mutated((copy) => { first(copy, "reads", (read) => (read.owner as { kind: string }).kind === "read").owner = { kind: "read", repo: "web", index: 0 }; })],
+    ["short identifier", mutated((copy) => { first(copy, "files", () => true).id = "f1:abc"; })],
+    ["impact source without branch", mutated((copy) => { delete first(copy, "sources", (source) => source.family === "impact").branch; })],
+    ["outline source with a branch", mutated((copy) => { first(copy, "sources", (source) => source.family === "outline").branch = "local"; })],
+    ["verification without identity", { ...full, verification: { status: "available" } }],
+    ["fact schema on the composition", { ...full, schema: "0.12.0" }],
+  ];
+  for (const [name, value] of cases) {
+    assert.equal(runtime(value), false, `runtime accepted ${name}`);
+    assert.equal(ajv(json(value)).valid, false, `JSON Schema accepted ${name}`);
+  }
+});
+
+test("cross-id integrity uses the materializer checker: a dangling reference passes JSON Schema but fails runtime", () => {
+  const dangling = mutated((copy) => { first(copy, "anchors", () => true).file = `f1:${"0".repeat(64)}`; });
+  assert.equal(ajv(json(dangling)).valid, true);
+  assert.equal(runtime(dangling), false);
+  const outOfRange = { ...full, requests: full.requests.slice(1) };
+  assert.equal(runtime(outOfRange), false);
+});
+
+test("legal missing-reference and unknown variants stay valid", () => {
+  const parts = full.graph.parts;
+  assert.ok(parts.some((part) => part.kind === "workspace-link" && part.reach.some((reach) => reach.status === "missing")));
+  assert.ok(parts.some((part) => part.kind === "entrypoint-reach" && part.seeds.some((seed) => seed.status === "missing")));
+  assert.ok(parts.some((part) => part.kind === "entrypoint" && part.entry.kind === "ui-route" && part.entry.component === "unknown"));
+  const unavailable = { ...receipt, verification: { status: "unavailable", reason: "redacted-context" }, requests: receipt.requests.map(() => ({ status: "unavailable", reason: "redacted-context" })) };
+  assert.equal(runtime(unavailable), true);
+  assert.equal(ajv(json(unavailable)).valid, true);
+});
+
+test("the compact guide is approximate and accepts real outputs; the published standard schema still validates completely", () => {
+  const guide = new AjvJsonSchemaValidator().getValidator(composeOutputGuide() as Parameters<AjvJsonSchemaValidator["getValidator"]>[0]);
+  for (const value of [full, receipt]) assert.equal(guide(json(value)).valid, true);
+  const published = compactComposeOutput()["~standard"];
+  assert.deepEqual(published.jsonSchema.output({ target: "draft-07" }), composeOutputGuide());
+  assert.ok(JSON.stringify(composeOutputGuide()).length < 4096);
+  const dangling = mutated((copy) => { first(copy, "anchors", () => true).file = `f1:${"0".repeat(64)}`; });
+  assert.equal(guide(json(dangling)).valid, true);
+  assert.equal((published.validate(dangling) as { issues?: unknown }).issues !== undefined, true);
+  assert.equal(typeof COMPOSE_INPUT.safeParse, "function");
+});
+
+test("coverage issues cannot reference sources or parts absent from the full graph", () => {
+  const absentSource = `s1:${"0".repeat(64)}`;
+  const absentPart = `p1:${"0".repeat(64)}`;
+  const source = full.graph.sources[0]!;
+  const issueScope = { sources: [source.id], reads: [source.rootRead] };
+  for (const broken of [
+    { kind: "missing-provenance", sources: [absentSource], reads: [], repo: "shop" },
+    { kind: "missing-provenance", ...issueScope, repo: "shop", part: absentPart },
+    { kind: "missing-link-reference", ...issueScope, part: absentPart, linkId: "external-link", position: 0 },
+  ]) {
+    const invalid = { ...full, coverage: { ...full.coverage, issues: [broken] } };
+    assert.equal(COMPOSE_OUTPUT.safeParse(invalid).success, false);
+  }
+});

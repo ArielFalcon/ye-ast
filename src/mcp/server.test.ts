@@ -645,12 +645,16 @@ test("the outline lists each declaration with its span and the files it imports,
   await session.close();
 });
 
-test("lists seven read tools with an optional repository selector", async () => {
+test("lists seven query families and the composition operation", async () => {
   const { session } = await setup();
   const tools = await session.listTools();
-  assert.deepEqual(tools.map((tool) => tool.name).sort(), ["ye_ast_callers", "ye_ast_decisions", "ye_ast_entrypoints", "ye_ast_impact", "ye_ast_importers", "ye_ast_outline", "ye_ast_workspace"]);
+  assert.deepEqual(tools.map((tool) => tool.name).sort(), ["ye_ast_callers", "ye_ast_compose", "ye_ast_decisions", "ye_ast_entrypoints", "ye_ast_impact", "ye_ast_importers", "ye_ast_outline", "ye_ast_workspace"]);
   for (const tool of tools) {
     assert.ok((tool.description ?? "").length > 0, tool.name);
+    if (tool.name === "ye_ast_compose") {
+      assert.ok(tool.inputSchema.properties?.["queries"]);
+      continue;
+    }
     assert.ok(tool.inputSchema.properties?.["repo"], tool.name);
     for (const forbidden of ["repoId", "path", "repository"]) assert.equal(tool.inputSchema.properties?.[forbidden], undefined, `${tool.name}.${forbidden}`);
   }
@@ -802,7 +806,7 @@ test("output schemas validate real receipts and family payloads and reject broke
   const fields = ["entrypoints", "seeds", "seeds", "files", "files", "sections", "decisions"];
   try {
     const tools = await session.listTools();
-    assert.deepEqual(TOOL_CALLS.map(([name]) => name).toSorted(), tools.map(({ name }) => name).toSorted());
+    assert.deepEqual(TOOL_CALLS.map(([name]) => name).toSorted(), tools.filter(({ name }) => name !== "ye_ast_compose").map(({ name }) => name).toSorted());
     for (const [index, [name, args]] of TOOL_CALLS.entries()) {
       const advertised = tools.find((tool) => tool.name === name)?.outputSchema;
       assert.ok(advertised, name);
@@ -3834,5 +3838,36 @@ test("recovery recipes stay structured once across ordinary and selected respons
         }
       }
     }
+  } finally { await session.close(); }
+});
+
+test("compose combines public queries in every mode and verifies repeated evidence", async () => {
+  const { session, calls } = await setup();
+  try {
+    const queries = [
+      { name: "ye_ast_entrypoints", arguments: {} },
+      { name: "ye_ast_outline", arguments: { files: ["src/a.ts"] } },
+    ];
+    const response = await session.callTool("ye_ast_compose", { queries, mode: "full" });
+    assert.notEqual(response.isError, true, JSON.stringify(response));
+    const data = response.structuredContent as { kind: string; graph: { sources: unknown[] }; verification: { identity: string } };
+    assert.equal(data.kind, "composition");
+    assert.equal(data.graph.sources.length, 2);
+    const reverse = await session.callTool("ye_ast_compose", { queries: queries.toReversed(), mode: "full", expect: data.verification.identity });
+    assert.deepEqual(reverse.structuredContent, response.structuredContent);
+    for (const mode of ["summary", "details"]) {
+      const result = await session.callTool("ye_ast_compose", { queries, mode });
+      assert.notEqual(result.isError, true, JSON.stringify(result));
+      assert.equal((result.structuredContent as {kind:string}).kind, "composition-receipt");
+      assert.ok(textOf(result).length > 0);
+    }
+    const previous = calls.map.length;
+    const invalid = await session.callTool("ye_ast_compose", { queries: [{ name: "ye_ast_entrypoints", arguments: { mode: "full" } }] });
+    assert.equal(invalid.isError, true);
+    assert.equal(calls.map.length, previous);
+    const missing = await session.callTool("ye_ast_compose", { queries: [{ name: "ye_ast_entrypoints", arguments: {repo:"missing"} }] });
+    assert.equal(missing.isError, true);
+    assert.equal(missing.structuredContent, undefined);
+    assert.match(textOf(missing), /unknown-repository/);
   } finally { await session.close(); }
 });

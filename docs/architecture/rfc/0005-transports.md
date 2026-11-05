@@ -186,7 +186,7 @@ An error is `{code, message, data: {kind}}`; `kind` names the code and `data` ad
 ## MCP (MVP: in-process stdio)
 
 The read-only MCP server uses the stable v2 TypeScript SDK. `ye-ast mcp [<launch-root>] [--repo <id> <root>]...`
-selects a canonical launch root and an external catalog of existing worktree roots. Each tool accepts an exact `repo`
+selects a canonical launch root and an external catalog of existing worktree roots. Each query family accepts an exact `repo`
 ID; omission selects launch. Repeated identical ID/root declarations coalesce, while aliases and collisions fail at
 startup. A declaration for the launch root may choose its ID. Availability does not grant trust or workspace membership;
 only launch is warmed. Workspace reads retain each repository's own trust and snapshot. A foreign follow-up uses its
@@ -202,6 +202,36 @@ owner ID and recorded snapshot, or requires updated registration when absent. Se
 | `ye_ast_outline` | Which declarations, spans and imports are in selected files? | `files`, `revision`, `live`, `scope` |
 | `ye_ast_workspace` | Which outward names and candidate repositories are recorded? | `repos`, `gateways`, `revision`, `live`, `offline`, `scope` |
 | `ye_ast_decisions` | Which workspace configuration gaps need user input? | `repos`, `gateways`, `revision`, `live`, `offline`, `scope` |
+| `ye_ast_compose` | Which related observations can share entities and evidence? | `queries`, `expect`, `deadlineMs` |
+
+The composition operation extends the seven original families. It accepts 1–16 typed semantic queries, validates all
+arguments and declared primary repositories before executing, and deduplicates identical queries. Sources execute
+sequentially in canonical order through the same query runner as the individual tools. The request is limited to
+1,048,576 UTF-8 bytes of canonical JSON; a deadline is optional. There is no generic pipeline, recursive compose,
+variable substitution, result handle or final-result retention. Acquiring coordinates for a dependent query remains the
+consumer's responsibility. This is an explicit extension beyond ADR-0022's original selective-recovery scope, while
+preserving its verified-reexecution strategy.
+
+Each family's typed adapter normalizes only public redacted facts. A pure union preserves observations and supports;
+materialization identifies exact compatible entities and applies closed connection rules. Snapshot identity includes
+repository and full SHA, or live head and stateId. Ambiguity, redacted coordinates and incompatible snapshots block
+joins. Analysis scope, provenance, cuts, unknowns and query-specific observations remain attached to their reads.
+Importer categories and declaration dependencies retain distinct meanings; neither composition nor reachability proves
+breakage. The same fixed evidence set materializes identically across input order and duplication. Execution over
+moving live state or external configuration does not promise atomicity or identical observations.
+
+Summary/details return explained findings plus `kind: "composition-receipt"`; full returns `kind: "composition"`
+with normalized tables under `graph`. Both include `compositionSchema: 1`, `mode`, `verification` and complete safe
+`requests`. The text modes put findings, source states and limits in text only; `S#` indexes `requests[#-1]`. Full
+additionally retains `coverage` and `counts`. Coverage has per-read states and issues, with no aggregate complete status. Original `Fact.schema` is
+unchanged. IDs reference shared records; relations retain contextual attestations. Full validates graph and issue
+references at runtime. Source and batch assertions fail before delivery, and source faults fail the entire batch.
+
+Recovery-capable sources expose pinned repeat queries with their original `mcp-r1` assertion. The other four families
+expose safe fresh-read queries. Root `expect` asserts the composed `mcp-c1` identity; unavailable identity fails
+explicitly. Composition has no `select`/`page`, and nested presentation controls are invalid; original source tools
+retain their selective APIs. Reexecution can cost more than reading existing answers. Compact discovery remains an
+approximate guide backed by a complete runtime schema, and size/utility claims require measured evidence.
 
 All tools accept optional `repo` and `mode: "summary" | "details" | "full"`. Summary is the default and identifies findings and
 limits; details adds recorded explanatory evidence and locations; full returns the complete redacted public fact

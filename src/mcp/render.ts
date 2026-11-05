@@ -1068,7 +1068,7 @@ function unresolvedLine(site: UnresolvedCallSite): string {
 }
 
 /** The call sites no repository given decides, so the caller settles each one by reading its declaration, never the file. */
-function unresolvedBlock(value: WorkspaceValue): string[] {
+function unresolvedBlock(value: Omit<WorkspaceValue, "repositories">): string[] {
   const sections = value.workspace.repos.flatMap((repo) => {
     const section = value.sections[repo];
     return section === undefined || section.status === "unknown" || section.value.unresolved.length === 0 ? [] : [[repo, section.value.unresolved] as const];
@@ -1080,7 +1080,7 @@ function unresolvedBlock(value: WorkspaceValue): string[] {
   ];
 }
 
-export function renderWorkspace(fact: Fact<WorkspaceValue>, detail: ResponseMode = "summary"): string {
+export function renderWorkspace(fact: Fact<Omit<WorkspaceValue, "repositories">>, detail: ResponseMode = "summary"): string {
   if (detail === "full") return fact.status === "unknown" ? "Inspect reason and evidence; the result has no value." : "Match value.sections by repository and check each section status, reason and cuts; value.repositorySnapshots identifies each revision. Inspect value.candidates by name and repo for basis and evidence, and value.unserved for unmatched names.";
   const lines = headerLines(fact);
   if (fact.status === "unknown") return lines.join("\n");

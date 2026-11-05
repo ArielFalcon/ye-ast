@@ -1,6 +1,6 @@
 import { canonicalJson } from "../core/domain/shared/canonical-json.ts";
 import { isFullObjectId } from "../core/domain/shared/revision.ts";
-import type { Fact } from "../core/domain/shared/fact.ts";
+import type { DeclaredConfig, DeclaredScope, Fact, SnapshotRef } from "../core/domain/shared/fact.ts";
 import type { ScopeRequest } from "../core/domain/shared/scope.ts";
 import type { Digest } from "../core/ports/digest.port.ts";
 import { isWorkspaceReplayContext, type WorkspaceReplayContext } from "../core/domain/topology/workspace-replay.ts";
@@ -14,6 +14,23 @@ export type Recovery =
   | { version: 1; status: "available"; resultIdentity: string; query: { name: "ye_ast_entrypoints"; arguments: Arguments } }
   | { version: 1; status: "available"; resultIdentity: string; query: { name: "ye_ast_callers" | "ye_ast_impact"; arguments: Record<string, unknown> } }
   | { version: 1; status: "unavailable"; reason: "deadline" | "unresolved-context" | "redacted-context" };
+
+/**
+ * The normalized context an `mcp-r1` identity digests beside the public fact: the selected repository, the fact's
+ * snapshot, declared scope and config, and for a workspace read its replay context and effective offline policy; impact
+ * adds its merge base. Recovery and composition source identity share this one definition.
+ */
+export type RecoveryContext = {
+  repo: string; snapshot: SnapshotRef; declaredScope: DeclaredScope; declaredConfig: DeclaredConfig;
+  replay?: WorkspaceReplayContext | undefined; offline?: boolean; mergeBase?: string;
+};
+export function recoveryContext(fact: Fact<unknown>, selected: string, crossing?: { replay: WorkspaceReplayContext | undefined; offline: boolean | undefined }, mergeBase?: string): RecoveryContext {
+  return {
+    repo: selected, snapshot: fact.snapshot, declaredScope: fact.inputs.declaredScope, declaredConfig: fact.inputs.declaredConfig,
+    ...(crossing === undefined ? {} : { replay: crossing.replay, offline: crossing.offline === true || fact.inputs.trust === "untrusted" }),
+    ...(mergeBase === undefined ? {} : { mergeBase }),
+  };
+}
 
 function hasDeadline(value: unknown): boolean {
   if (Array.isArray(value)) return value.some(hasDeadline);
@@ -35,7 +52,7 @@ export function entrypointRecovery(fact: Fact<unknown>, original: Fact<unknown>,
   const args: Arguments = { repo: selected, ...(snap.kind === "live" ? { live: true as const } : { revision: snap.sha }), ...(Object.keys(effectiveScope).length ? { scope: effectiveScope } : {}) };
   if (canonicalJson(redaction.redactValue({ selected, requestedScope, args })) !== canonicalJson({ selected, requestedScope, args })) return unavailable("redacted-context");
   if (!validate(args)) return unavailable("unresolved-context");
-  const context = { repo: selected, snapshot: snap, declaredScope: declared, declaredConfig: fact.inputs.declaredConfig };
+  const context = recoveryContext(fact, selected);
   return { version: 1, status: "available", resultIdentity: `mcp-r1:${digest.of(canonicalJson(["mcp-recovery-v1", "ye_ast_entrypoints", context, fact]))}`, query: { name: "ye_ast_entrypoints", arguments: args } };
 }
 
@@ -61,7 +78,7 @@ function prepare(options: RecoveryOptions) {
   if (canonicalJson({ scope: original.inputs.declaredScope, config: original.inputs.declaredConfig }) !== canonicalJson({ scope: declared, config })) return { failure: unavailable("redacted-context") } as const;
   const scope = { ...(declared.include.length ? { include: declared.include } : {}), ...(declared.exclude.length ? { exclude: declared.exclude } : {}) };
   const common = { repo: selected, ...(Object.keys(scope).length ? { scope } : {}), ...(config.walk === undefined ? {} : { budget: config.walk }), ...(workspace === undefined ? {} : { workspace, replay, ...(options.offline === undefined ? {} : { offline: options.offline }) }) };
-  const context = { repo: selected, snapshot: snap, declaredScope: declared, declaredConfig: config, ...(workspace === undefined ? {} : { replay, offline: options.offline === true || fact.inputs.trust === "untrusted" }) };
+  const context = recoveryContext(fact, selected, workspace === undefined ? undefined : { replay, offline: options.offline });
   return { snap, config, common, context } as const;
 }
 
@@ -92,5 +109,5 @@ export function impactRecovery(options: RecoveryOptions & { requestedChanged: re
   if (base !== mergeBase(options.original)) return unavailable("redacted-context");
   if (typeof base !== "string" || !isFullObjectId(base)) return unavailable("unresolved-context");
   const args = { ...common, base, ...(snap.kind === "live" ? { live: true as const } : { head: snap.sha }), ...(config.changed === undefined ? {} : { changed: config.changed }) };
-  return complete(options, "ye_ast_impact", args, { ...context, mergeBase: base }, { requestedChanged: options.requestedChanged });
+  return complete(options, "ye_ast_impact", args, recoveryContext(options.fact, options.selected, options.workspace === undefined ? undefined : { replay: options.replay, offline: options.offline }, base), { requestedChanged: options.requestedChanged });
 }

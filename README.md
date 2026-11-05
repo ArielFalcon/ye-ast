@@ -222,7 +222,7 @@ npx --yes ye-ast-mcp map /path/to/repo
 - [ ] stdout is one JSON object with `schema`, `snapshot`, `producer`, `inputs`, `evidence`, `status` and `value`.
 - [ ] `status` is `complete` or `partial`. Both are valid answers.
 - [ ] `value.entrypoints` is an object, not `null`.
-- [ ] If the client lists MCP tools: `ye_ast_entrypoints`, `ye_ast_callers`, `ye_ast_importers`, `ye_ast_impact`, `ye_ast_outline`, `ye_ast_workspace` and `ye_ast_decisions`
+- [ ] If the client lists MCP tools: `ye_ast_entrypoints`, `ye_ast_callers`, `ye_ast_importers`, `ye_ast_impact`, `ye_ast_outline`, `ye_ast_workspace`, `ye_ast_decisions` and `ye_ast_compose`
       appear. The client may need a restart to pick up a new server.
 
 A non-zero exit code is a query problem, not a registration problem: read [step 7](#7-failures-and-what-they-mean).
@@ -248,6 +248,46 @@ flowchart TD
 | `ye_ast_outline` | Find declarations, spans and imports in selected files | `files`, `revision`, `live`, `scope`, `mode` |
 | `ye_ast_workspace` | Discover outward names and candidate local repositories | `repos`, `gateways`, `revision`, `live`, `offline`, `scope`, `mode` |
 | `ye_ast_decisions` | Find workspace configuration gaps and evidence-backed options | `repos`, `gateways`, `revision`, `live`, `offline`, `scope`, `mode` |
+| `ye_ast_compose` | Combine related queries into shared entities, relations and evidence with source provenance | `queries`, `mode`, `expect`, `deadlineMs` |
+
+There are seven query families and one composition operation. Once the relevant files or symbols are known,
+`ye_ast_compose` can execute related queries and return their combined evidence:
+
+```json
+{
+  "queries": [
+    { "name": "ye_ast_entrypoints", "arguments": { "repo": "shop", "revision": "main" } },
+    { "name": "ye_ast_outline", "arguments": { "repo": "shop", "revision": "main", "files": ["src/OrderController.java"] } }
+  ],
+  "mode": "details"
+}
+```
+
+For a stable investigation, replace `main` with the full SHA returned by a preceding query. Dependent queries still
+require their coordinates first; the batch has no variables or implicit follow-up execution. It accepts 1–16 queries
+and at most 1,048,576 UTF-8 bytes of canonical JSON arguments. Each query keeps its own trust, scope, budget and snapshot
+rules. Duplicate queries execute once. A source fault fails the whole composition; a partial or unknown fact retains
+its recorded limits. A batch is not an atomic snapshot of the workspace.
+
+Summary/details explain findings, source states and every material limit in text; their `composition-receipt` in
+`structuredContent` contains only version/mode, verification and complete safe repeat queries. `S1` in text names
+`requests[0]`, and so on. Full returns
+`kind: "composition"`, with normalized tables under `graph`, source states and issues under `coverage`, and repeat
+queries under `requests`. Identical entities and evidence are shared; relation attestations preserve their sources and
+categories. File imports do not establish symbol calls, and reachability does not establish breakage. Different
+snapshots stay separate even when names and paths match. Outline supplies structure, not source text.
+
+Compose reexecutes queries and retains no final results between calls, so it can cost more analysis time than using
+answers already available. For a recoverable source, its repeat request is `pinned-replay` with the original `mcp-r1`
+assertion; importers, outline, workspace and decisions use `fresh-read`. A root `expect` checks the composition's
+`verification.identity` (`mcp-c1`); changed or unavailable context fails explicitly. Nested `mode`, `select`, `page` and
+`expect` inside `arguments` are rejected. The three recoverable query objects may carry a sibling source `expect`.
+Composition has no `select` or pagination; use the original source tool and its supported controls for further evidence.
+Details shares uniform provenance; full retains every producer, engine, read and support. Exact repeated positive
+observations can corroborate across producer policy versions while preserving both versions; derived connections keep
+strict producer compatibility. Neither operation parses version suffixes or treats an import as a call. Optional
+collection metadata separates an absent field from a present array and its recorded count; a present empty array is
+zero observations, not a positive finding.
 
 How the arguments behave:
 

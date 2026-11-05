@@ -41,7 +41,7 @@ OpenCode, Claude Code or Codex, and do not establish model interpretation qualit
 
 Run `node --import tsx scripts/measure-mcp-catalog.ts` to reproduce discovery with
 version `0` and repository `/work/shop`. It sends only initialize and tools/list;
-query dependencies throw if invoked. The current catalogue is 49,530 bytes,
+query dependencies throw if invoked. The seven-family catalogue before composition was 49,530 bytes,
 with 27,594 input-schema bytes, 17,907 output-guide bytes and 2,835 bytes of tool
 description text (schema sums exclude array punctuation). Initialization is
 3,388 characters. The original comparison fixture was 59,816 bytes and 3,995
@@ -57,10 +57,29 @@ tests compare their canonical hashes with the pre-reduction fixture, excluding
 only description annotations. Nested selectors, enums, bounds and required fields
 remain available without a separate help call.
 
-`compact-schema.test.ts` enforces budgets of 50 KB for discovery, 19 KB for the
-output-schema array and 3,400 initialization characters. It checks essential
+`compact-schema.test.ts` preserves budgets of 50 KB for the original seven-family discovery and 19 KB for its
+output-schema array. It checks essential
 interpretation rules, reachable output definitions, family capabilities and
 unchanged runtime validation. The 4x reduction target (about 15 KB) is indicative;
 this unit does not reach it and does not remove further guidance merely to do so.
 Serialized sizes do not establish model context, latency or model quality gains.
 Live OpenCode, Claude Code and Codex integrations remain unverified.
+
+### Composition discovery extension (2026-11-05)
+
+The additional `ye_ast_compose` operation advertises its seven typed query alternatives rather than accepting
+unvalidated fact blobs. `compactComposeOutput()` publishes a 2,564-byte guide; its full runtime validator retains all
+22 part variants, provenance, source requests and graph/issue integrity. Runtime refinements remain authoritative;
+published draft-7 schemas do not express cross-record ID checks.
+
+The same measurement command now records eight operations and 74,198 catalogue bytes, with 48993 input-schema
+bytes, 20471 output-schema bytes and 3,813 initialization characters. The composition entry contributes 24,667 bytes
+(21,399 input, 2,564 output). This is an additional discovery cost, not a reduction. Tests preserve the original-family
+budgets and separately cap composition's input guide at 40 KB, output guide below 4 KB and initialization at 3,900
+characters. The original input constraint hashes remain unchanged.
+
+Composition removes duplicate recorded entities/evidence in responses while retaining source supports, and can connect
+compatible observations. Response savings depend on overlap and mode; normalized full tables and repeat recipes add
+overhead, and the server reexecutes the supplied queries. Measure both channels, discovery and the entire acquisition
+path when evaluating usefulness. Smaller details text in one fixture is not evidence of universal token or latency
+savings, or of improved LLM conclusions.

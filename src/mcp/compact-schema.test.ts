@@ -34,7 +34,7 @@ test("catalogue advertises useful guides within budget", async () => {
     const bytes = Buffer.byteLength(JSON.stringify({ tools }));
     const outputs = Buffer.byteLength(JSON.stringify(tools.map(tool => tool.outputSchema)));
     console.log(`discovery bytes: ${bytes}; input schema bytes: ${Buffer.byteLength(JSON.stringify(tools.map(tool => tool.inputSchema)))}; output schema bytes: ${outputs}; instructions chars: ${session.instructions?.length}`);
-    assert.ok((session.instructions?.length ?? Infinity) <= 3400);
+    assert.ok((session.instructions?.length ?? Infinity) <= 3900);
     assert.match(session.instructions!, /supply select and page together/);
     for (const rule of [
       /Summary\/details:[^\n]*content[^\n]*structuredContent[^\n]*status[^\n]*snapshot/,
@@ -49,9 +49,18 @@ test("catalogue advertises useful guides within budget", async () => {
       /isError is a fault, not an empty fact/,
     ]) assert.match(session.instructions!, rule);
 
-    assert.ok(bytes <= 50_000);
-    assert.ok(outputs <= 19_000);
-    for (const tool of tools) {
+    const originals = tools.filter(tool => tool.name !== "ye_ast_compose");
+    assert.ok(Buffer.byteLength(JSON.stringify({ tools: originals })) <= 50_000);
+    assert.ok(Buffer.byteLength(JSON.stringify(originals.map(tool => tool.outputSchema))) <= 19_000);
+    const compose = tools.find(tool => tool.name === "ye_ast_compose");
+    assert.ok(compose);
+    assert.ok(Buffer.byteLength(JSON.stringify(compose.outputSchema)) < 4_000);
+    assert.ok(Buffer.byteLength(JSON.stringify(compose.inputSchema)) < 40_000);
+    assert.equal(compose.inputSchema.type, "object");
+    assert.ok(compose.inputSchema.properties?.queries);
+    new AjvJsonSchemaValidator().getValidator(compose.outputSchema!);
+    new AjvJsonSchemaValidator().getValidator(compose.inputSchema);
+    for (const tool of originals) {
       assert.equal(tool.inputSchema.type, "object");
       assert.ok(Object.keys(tool.inputSchema.properties ?? {}).length > 0);
       new AjvJsonSchemaValidator().getValidator(tool.inputSchema);
