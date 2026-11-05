@@ -1,3 +1,4 @@
+import { basename } from "node:path";
 import { isJavaSource, isJvmTestFile } from "../../domain/languages/java.ts";
 import { isSpringConfigFile } from "../../domain/languages/spring-config.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
@@ -10,39 +11,50 @@ import { JavaHttpReader } from "./http-call-sites.adapter.ts";
 import { createJavaProject, describeFile, type JavaFile, type JavaProject } from "./java-symbols.ts";
 
 /** A reader of one kind of call site, over a project the snapshot was parsed into once. */
-export type JavaSiteReader = (project: JavaProject, configuration: (file: JavaFile) => Configuration, owned: ReadonlySet<JavaFile>, repo: string) => CallSite[];
+export interface JavaSiteReader {
+  transport: CallSite["transport"];
+  read(project: JavaProject, configuration: (file: JavaFile) => Configuration, owned: ReadonlySet<JavaFile>, repo: string): CallSite[];
+}
 
 const LIBRARY_ROOT = "(library)";
 
-const httpSites: JavaSiteReader = (project, configuration, owned, repo) => new JavaHttpReader(project, configuration, owned).sites(repo);
-const eventSites: JavaSiteReader = (project, configuration, owned, repo) => new JavaEventReader(project, configuration, owned).sites(repo);
+const httpSites: JavaSiteReader = { transport: "http", read: (project, configuration, owned, repo) => new JavaHttpReader(project, configuration, owned).sites(repo) };
+const eventSites: JavaSiteReader = { transport: "event", read: (project, configuration, owned, repo) => new JavaEventReader(project, configuration, owned).sites(repo) };
 
 /**
  * The call sites of one repository's Java sources: each source is parsed once, and every reader walks the one project
- * and the one configuration lookup built from it. Test sources are never call sites.
+ * and the one configuration lookup built from it. Test sources are never call sites. A source of the repository the
+ * parser rejects is one site whose target is `unknown` with `source-unreadable`, at the parser's fault line and under
+ * the first reader's transport: none of its calls can be read.
  */
 export function javaCallSitesOf(parser: JavaParser, files: readonly SourceFile[], libraries: readonly SourceFile[], repo: string, readers: readonly JavaSiteReader[]): CallSite[] {
   const trees: JavaSyntaxTree[] = [];
-  const parse = (sources: readonly SourceFile[]): JavaFile[] =>
+  const unreadable: { path: string; line: number }[] = [];
+  const parse = (sources: readonly SourceFile[], owned: boolean): JavaFile[] =>
     sources
       .filter((source) => isJavaSource(source.path) && !isJvmTestFile(source.path))
       .flatMap((source) => {
         try {
           const result = parser.parse(source.content);
-          if (!result.ok) return [];
-          trees.push(result.value);
-          return [describeFile(source.path, result.value.root)];
+          if (result.ok) {
+            trees.push(result.value);
+            return [describeFile(source.path, result.value.root)];
+          }
+          if (owned) unreadable.push({ path: source.path, line: result.fault.line });
         } catch {
-          return [];
+          if (owned) unreadable.push({ path: source.path, line: 1 });
         }
+        return [];
       });
   try {
-    const owned = parse(files);
-    const foreign = parse(libraries.map((source, index) => ({ ...source, path: `${LIBRARY_ROOT}/${index}/${source.path}` })));
+    const owned = parse(files, true);
+    const foreign = parse(libraries.map((source, index) => ({ ...source, path: `${LIBRARY_ROOT}/${index}/${source.path}` })), false);
     const project = createJavaProject([...owned, ...foreign]);
     const configuration = configurationsOf(files.filter((file) => isSpringConfigFile(file.path)));
     const held = new Set(owned);
-    return readers.flatMap((read) => read(project, configuration, held, repo)).sort(compareSite);
+    const transport = readers[0]?.transport;
+    const unread = transport === undefined ? [] : unreadable.map((at): CallSite => ({ repo, file: at.path, line: at.line, symbol: basename(at.path, ".java"), transport, target: { status: "unknown", reason: "source-unreadable", evidence: [at] } }));
+    return [...readers.flatMap((reader) => reader.read(project, configuration, held, repo)), ...unread].sort(compareSite);
   } finally {
     for (const tree of trees) tree.dispose();
   }

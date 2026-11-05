@@ -1,7 +1,7 @@
 import { before, test } from "node:test";
 import assert from "node:assert/strict";
 import type { CallSite, CallSiteReader } from "../../domain/topology/call-site.ts";
-import { createJavaParser } from "../tree-sitter/java-parser.adapter.ts";
+import { createJavaParser, type JavaParser } from "../tree-sitter/java-parser.adapter.ts";
 import { createJavaHttpCallSites } from "./java-call-sites.adapter.ts";
 
 const WEB = ["org.springframework.web.client.RestTemplate", "org.springframework.web.client.RestClient", "org.springframework.http.HttpMethod", "org.springframework.stereotype.Service"];
@@ -319,4 +319,23 @@ test("test sources are not call sites", async () => {
   const test = file("src/test/java/app/BillingClientTest.java", "package app;\nimport org.springframework.web.client.RestTemplate;\nclass BillingClientTest { RestTemplate rt; void a() { rt.getForObject(\"http://x/y\", String.class); } }");
 
   assert.deepEqual(await read([test]), []);
+});
+
+test("a Java source the parser rejects is one unknown source-unreadable site at its fault line, and the other files are still read", async () => {
+  const broken = java("Broken", ["class Broken {", "  void send( {", "}"].join("\n"));
+  const client = java("BillingClient", ["class BillingClient {", "  RestTemplate rt;", "  void send() {", "    rt.getForObject(\"http://billing/orders\", String.class);", "  }", "}"].join("\n"));
+  const library = java("Library", "class Library { void broken( }");
+  const sites = await reader.of([broken, client], "orders-svc", [library]);
+  assert.deepEqual(sites.filter((site) => site.file === broken.path).map((site) => ({ symbol: site.symbol, transport: site.transport, target: site.target })), [
+    { symbol: "Broken", transport: "http", target: { status: "unknown", reason: "source-unreadable", evidence: [{ path: broken.path, line: 7 }] } },
+  ]);
+  assert.deepEqual(sites.filter((site) => site.file !== broken.path).map((site) => site.file), [client.path]);
+});
+
+test("a Java source whose parsing throws is an unknown source-unreadable site at its first line", async () => {
+  const base = await createJavaParser();
+  const parser: JavaParser = { parse: (source) => { if (source.includes("Explodes")) throw new RangeError("Maximum call stack size exceeded"); return base.parse(source); } };
+  const explodes = java("Explodes", "class Explodes {}");
+  const sites = await createJavaHttpCallSites(parser).of([explodes], "orders-svc");
+  assert.deepEqual(sites.map((site) => site.target), [{ status: "unknown", reason: "source-unreadable", evidence: [{ path: explodes.path, line: 1 }] }]);
 });

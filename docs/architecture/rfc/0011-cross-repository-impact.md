@@ -472,7 +472,10 @@ Accepted by the owner on 2026-11-01: "Confirmo todo".
   read through its code, and a call through a client type whose source does not lead to a request is one
   `unresolved-link` cut naming the library. On the probe workspace the seven service-to-service call sites are those
   cuts: the company's client resolves its URL from a configuration key inside an OkHttp call, outside the declared
-  vocabulary, and the slice accepts the cut naming the library instead of a link. Test sources are never call sites.
+  vocabulary, and the slice accepts the cut naming the library instead of a link. Test sources are never call sites. A
+  source of the repository the grammar rejects is one call site whose `target` is `unknown` with `source-unreadable`, at
+  the parser's error line (line 1 when parsing throws), under the first transport the reader reads; a library source the
+  grammar rejects adds nothing.
 - Slice 5 (events with destinations): a publisher is read from `KafkaTemplate.send`, `RabbitTemplate.convertAndSend`
   (the routing key: the first argument, or the second when an exchange leads), `JmsTemplate.convertAndSend` and `send`,
   `ApplicationEventPublisher.publishEvent` (the destination is the event's qualified type) and the NATS client's
