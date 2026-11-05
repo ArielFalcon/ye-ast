@@ -51,7 +51,9 @@ const PARITY_CONFIDENCE = 0.6;
 
 /** A path as the segments the ladder compares: no query, no trailing slash, every parameter one placeholder. */
 export function pathSegments(path: string): string[] {
-  return (path.split("?")[0] ?? path)
+  const withoutQuery = path.split("?")[0] ?? path;
+  const pathname = withoutQuery.replace(/^(?:[a-z][a-z0-9+.-]*:)?\/\/[^/]+/i, "");
+  return pathname
     .split("/")
     .filter((segment) => segment !== "")
     .map((segment) => (PARAMETER_SEGMENT.test(segment) ? PARAMETER : segment));
@@ -127,6 +129,7 @@ function httpRoutes(repository: RepositoryEntrypoints): HttpRoute[] {
 
 /** The first path segment of a call, which is the prefix a gateway routes. */
 export function prefixOf(target: HttpTarget): string | undefined {
+  if (/^[a-z][a-z0-9+.-]*:/i.test(target.path) && !/^[a-z][a-z0-9+.-]*:\/\/[^/]+/i.test(target.path)) return undefined;
   const [first] = pathSegments(target.path);
   return first === undefined || first === PARAMETER ? undefined : first;
 }

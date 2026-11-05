@@ -186,6 +186,19 @@ test("a verb of HttpClient that a component calls is a call site with its method
   assert.deepEqual(sites(await reader.of([component], "shop-web")), ["GET orders/7@src/app/app.component.ts:6"]);
 });
 
+test("an injected client's receiver is not the URL supplied to its verb", async () => {
+  const caller = source("src/service.ts", [
+    "import { HttpClient } from '@angular/common/http'",
+    "import { inject } from '@angular/core'",
+    "class Service {",
+    "  private http = inject(HttpClient)",
+    "  private entityUrl = 'http://localhost:9966/api/' + 'owners'",
+    "  load() { return this.http.get(this.entityUrl) }",
+    "}",
+  ].join("\n"));
+  assert.deepEqual(sites(await reader.of([caller], "web")), ["GET http://localhost:9966/api/owners@src/service.ts:6"]);
+});
+
 test("a path exported by another file resolves through the import, and a template literal composes it", async () => {
   const api = source("src/app/order/api/order.api.ts", ["export const ORDER_BASE_URL = 'orders-api/'", "export const ORDERS_PATH = `${ORDER_BASE_URL}orders`", "export const ORDERS_CHECKOUT_PATH = `${ORDERS_PATH}/checkout`"].join("\n"));
   const caller = source(

@@ -236,6 +236,12 @@ test("a prefix inferGateways infers is not a gateway decision", () => {
   assert.deepEqual(ids(set), []);
 });
 
+test("an absolute URL proposes its path prefix, not its scheme", () => {
+  const set = decisionsOf(input({ repositories: [repository("webapp", { callSites: [call("webapp", "http://localhost:9966/api/owners")] })] }));
+  assert.ok(byId(set).has("gateway:api"));
+  assert.equal(byId(set).has("gateway:http:"), false);
+});
+
 test("a prefix no route serves is a gateway decision with no option, citing the calls under it", () => {
   const set = decisionsOf(
     input({

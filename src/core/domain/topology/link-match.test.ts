@@ -4,7 +4,7 @@ import type { Listener } from "../../domain/entrypoints/entrypoint.ts";
 import type { HttpRoute } from "../../domain/entrypoints/http-route.ts";
 import type { CallSite, EventTarget, HttpTarget } from "../../domain/topology/call-site.ts";
 import type { RepositoryEntrypoints } from "../../domain/topology/link-match.ts";
-import { inferGateways, matchCallSite, matchEventCallSite } from "../../domain/topology/link-match.ts";
+import { inferGateways, matchCallSite, matchEventCallSite, prefixOf } from "../../domain/topology/link-match.ts";
 
 function route(method: HttpRoute["method"], path: string, handler = { path: "src/main/java/app/Orders.java", symbol: "Orders.orders", line: 10 }, basePath = {}): HttpRoute {
   return { kind: "http-route", name: `${method} ${path}`, method, path, handler, basePath: { status: "complete", value: { default: basePath, profiles: {} }, evidence: [] } };
@@ -30,6 +30,23 @@ function joined(result: ReturnType<typeof matchCallSite>): string {
   const { basis, confidence, profiles } = result.link;
   return `${basis} ${confidence}${profiles === undefined ? "" : ` ${profiles.join(",")}`} -> ${result.link.to.repo} ${result.link.to.name}`;
 }
+
+test("gateway prefixes come from URL paths, never schemes or authorities", () => {
+  assert.equal(prefixOf({ method: "GET", path: "http://localhost:9966/api/orders" }), "api");
+  assert.equal(prefixOf({ method: "GET", path: "//example.test/api/orders" }), "api");
+  assert.equal(prefixOf({ method: "GET", path: "https://example.test" }), undefined);
+  assert.equal(prefixOf({ method: "GET", path: "http:" }), undefined);
+  assert.equal(prefixOf({ method: "GET", path: "/gateway/orders" }), "gateway");
+  assert.equal(prefixOf({ method: "GET", path: "{}/orders" }), undefined);
+});
+
+test("an absolute URL can infer and use a gateway from its path", () => {
+  const call = site("http://localhost:9966/api/orders");
+  const repos = repositories([route("GET", "/orders")]);
+  const gateways = inferGateways([call], repos, []);
+  assert.deepEqual(gateways, [{ prefix: "api", repo: "orders", basis: "route-overlap" }]);
+  assert.equal(joined(matchCallSite(call, targetOf(call), repos, gateways)), "route-overlap 1 -> orders GET /orders");
+});
 
 test("a call whose path and verb equal a route's is an exact link at full confidence", () => {
   const call = site("orders");
