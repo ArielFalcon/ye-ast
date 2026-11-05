@@ -68,14 +68,17 @@ export function changedContracts(base: readonly Finding<ContractOperation>[], he
 }
 
 /**
- * The altered and removed operations with the handlers that serve them: an HTTP route whose evidence holds the place of
- * the operation, the head's for an altered one and the base's for a removed one, is the route its contract join made.
+ * The altered and removed operations with the handlers that serve them: an HTTP route of the operation's verb whose
+ * handler overrides its `operationId` and whose evidence holds its place, the head's for an altered one and the base's for
+ * a removed one, is the route its contract join made (RFC-0007 row S5). The place alone does not tell apart operations a
+ * document declares on one line.
  */
 export function servedContracts(changes: readonly ChangedContract[], base: readonly Finding<Entrypoint>[], head: readonly Finding<Entrypoint>[]): ChangedContract[] {
   return changes.map((change) => {
-    if (change.change === "added") return change;
+    if (change.change === "added" || change.operationId === undefined) return change;
+    const overrides = (symbol: string): boolean => symbol.slice(symbol.lastIndexOf(".") + 1) === change.operationId;
     const handlers = (change.change === "removed" ? base : head).flatMap((finding) =>
-      finding.status === "complete" && finding.value.kind === "http-route" && finding.evidence.some(({ path, line }) => path === change.document && line === change.line) ? [finding.value.handler] : [],
+      finding.status === "complete" && finding.value.kind === "http-route" && finding.value.method === change.method && overrides(finding.value.handler.symbol) && finding.evidence.some(({ path, line }) => path === change.document && line === change.line) ? [finding.value.handler] : [],
     );
     return handlers.length === 0 ? change : { ...change, handlers };
   });

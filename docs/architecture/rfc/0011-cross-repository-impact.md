@@ -127,7 +127,7 @@ repository is walked again only when a fresh link feeds it. No hop count or size
 whose consumers still call it is the cross-repository case of RFC-0010's "a removed route is the change that breaks its
 consumers" (`0010:66`). A contract operation whose request or response data the change altered, or that the change
 removed (RFC-0010 `changedContracts`), seeds the same join through the handlers of the routes its contract join made:
-the routes whose evidence holds the operation's place, at head for an altered operation and at the merge base for a
+the routes of the operation's verb, overriding its `operationId`, whose evidence holds its place, at head for an altered operation and at the merge base for a
 removed one. The trigger's `changedContracts` carry those `handlers`; an operation no route of its snapshot joins
 names no caller and cuts the trigger's section at its place (`unresolved-link`), since its callers cannot be told. A link that lands in such a handler carries the operations as `operations`: its call site calls the
 operation, which does not establish that it reads the data that changed. The link keeps the confidence, basis and

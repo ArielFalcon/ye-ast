@@ -15,6 +15,7 @@ const OPENAPI = /^3\./;
 const SWAGGER = "2.0";
 const DOCUMENTATION: ReadonlySet<string> = new Set(["description", "summary", "example", "examples", "externalDocs"]);
 const NAMED_MEMBERS: ReadonlySet<string> = new Set(["properties", "patternProperties"]);
+const LITERAL_MEMBERS: ReadonlySet<string> = new Set(["default", "enum", "const"]);
 
 export function createContractRoutes(): ContractRoutes {
   return {
@@ -173,6 +174,10 @@ function withoutDocumentation(node: unknown, parentKey: string | undefined, onRe
   for (const [key, member] of Object.entries(node as Record<string, unknown>)) {
     if (!named && key === "$ref" && typeof member === "string") onReference(member);
     if (!named && DOCUMENTATION.has(key)) continue;
+    if (!named && LITERAL_MEMBERS.has(key)) {
+      kept.push([key, member]);
+      continue;
+    }
     kept.push([key, withoutDocumentation(member, named ? undefined : key, onReference)]);
   }
   return Object.fromEntries(kept);
@@ -187,8 +192,8 @@ function targetOf(from: string, ref: string, referenced: ReferencedDocuments): T
   const pointer = hash === -1 ? "" : ref.slice(hash + 1);
   if (/^[a-z][a-z0-9+.-]*:/i.test(location)) return { unresolved: { ref } };
   const decoded = percentDecoded(location);
-  const file = location === "" ? from : decoded === undefined ? undefined : posix.normalize(posix.join(posix.dirname(from), decoded));
-  if (file === undefined || file.startsWith("../") || posix.isAbsolute(file)) return { unresolved: { ref } };
+  const file = location === "" ? from : decoded === undefined || posix.isAbsolute(decoded) ? undefined : posix.normalize(posix.join(posix.dirname(from), decoded));
+  if (file === undefined || file.startsWith("../")) return { unresolved: { ref } };
   const parsed = referenced.get(file);
   if (parsed === undefined) return { unresolved: { ref, file } };
   const node = pointer === "" ? parsed.content : nodeAt(parsed.content, pointer);

@@ -248,3 +248,18 @@ test("an altered operation no route of the provider serves leaves its section pa
   assert.equal(answer.status, "partial");
   assert.deepEqual(answer.sections.orders?.cuts, [{ kind: "unresolved-link", at: [DOCUMENT, `${DOCUMENT}:6`] }]);
 });
+
+test("operations a contract declares on one line are told apart: a consumer of an unchanged one is not named", async () => {
+  const json = "src/main/resources/openapi/api.json";
+  const contract = (itemsType: string) => JSON.stringify({ openapi: "3.0.3", info: { title: "Shop", version: "1" }, paths: {
+    "/orders": { get: { operationId: "getOrders", responses: { 200: { description: "ok", content: { "application/json": { schema: { type: "string" } } } } } } },
+    "/items": { get: { operationId: "getItems", responses: { 200: { description: "ok", content: { "application/json": { schema: { type: itemsType } } } } } } },
+  } });
+  commit("orders", { "src/main/java/shop/Main.java": BOOT, "src/main/java/shop/OrdersController.java": CONTROLLER(), [json]: contract("string") }, "base");
+  commit("orders", { [json]: contract("integer") });
+  commit("web", WEB, "base");
+
+  const answer = await changeOfOrders();
+
+  assert.deepEqual(answer.links, []);
+});

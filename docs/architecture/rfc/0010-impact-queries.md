@@ -210,7 +210,7 @@ the merge base and the head, `parts` naming which; it is reported only when the 
 its references reach. It says the operation's wire contract changed, not which consumer reads the changed data: calling
 an operation never proves reading a field. A touched reference the snapshot cannot follow is an `unresolved-link` cut at
 `<document>:<operation line> <ref>`, and a touched document the parser rejects a `no-extractor` cut at it. An altered
-or removed operation carries `handlers`: the handlers of the routes whose evidence holds its place, at head for an
+or removed operation carries `handlers`: the handlers of the routes of its verb, overriding its `operationId`, whose evidence holds its place, at head for an
 altered one and at the merge base for a removed one (the routes its contract join made); a workspace answer seeds its
 consumers from them (RFC-0011). Schema 0.14.0 adds the field, 0.15.0 `handlers`.
 

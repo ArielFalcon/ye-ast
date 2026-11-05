@@ -110,7 +110,7 @@ Status 2026-11-05: stages 1 and 2 implemented on owner authorization; stage 3 no
   the change touched (and the `changed` selection keeps) are reported. A touched unresolved reference is an
   `unresolved-link` cut; a touched unparsable document a `no-extractor` cut.
 - `impact.ofChange` exposes `value.changedContracts` when not empty (commit and live paths share `readChange`); the MCP
-  text lists `changed contracts (n)`. RFC-0010 and RFC-0007 row S5 describe the shape. Fact schema `0.12.0` → `0.13.0`.
+  text lists `changed contracts (n)`. RFC-0010 and RFC-0007 row S5 describe the shape. Fact schema `0.13.0` → `0.14.0`.
 
 ### Evidence
 
@@ -153,7 +153,7 @@ now parsed for every `impact.ofChange` on a snapshot holding contract documents.
 
 Status 2026-11-05: implemented on owner authorization (stage 1 measured, stage 2 approved; property naming deferred).
 
-- `ChangedContract.handlers` (altered and removed operations only): the handlers of the routes whose evidence holds the
+- `ChangedContract.handlers` (altered and removed operations only): the handlers of the routes of its verb, overriding its `operationId`, whose evidence holds the
   operation's place, at head for an altered one and at the merge base for a removed one. This is the place the Spring
   contract join already records, so `basePath`/`servers` follow the existing route identity and no new matching rule is
   added. An operation no route of its snapshot joins names no caller and

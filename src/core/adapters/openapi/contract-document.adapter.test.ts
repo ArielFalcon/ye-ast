@@ -184,3 +184,17 @@ test("a schema that references itself is read once and still decides the data", 
   assert.notEqual(dataByOperation(shop(tree("string"))).getOrders?.response, dataByOperation(shop(tree("integer"))).getOrders?.response);
   assert.deepEqual(dataByOperation(shop(tree("string"))).getOrders?.unresolved, []);
 });
+
+test("a literal value is data, documentation-named keys inside it included", () => {
+  const literal = (key: string, value: unknown) => dataByOperation(shop({ ...ORDERS, [key]: value })).getOrders?.response;
+
+  assert.notEqual(literal("default", { description: "a" }), literal("default", { description: "b" }));
+  assert.notEqual(literal("enum", [{ summary: "a" }]), literal("enum", [{ summary: "b" }]));
+  assert.notEqual(literal("const", { example: "a" }), literal("const", { example: "b" }));
+});
+
+test("a reference by absolute path names no source of the repository: it is unresolved", () => {
+  const read = dataByOperation(shop({ type: "object", properties: { total: { $ref: "/schemas/money.yaml#/Money" } } }), { "openapi/schemas/money.yaml": { Money: { type: "number" } } });
+
+  assert.deepEqual([read.getOrders?.files, read.getOrders?.unresolved], [[], [{ ref: "/schemas/money.yaml#/Money" }]]);
+});
