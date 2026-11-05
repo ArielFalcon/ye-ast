@@ -89,6 +89,7 @@ class Materializer {
   private readonly issues = new Map<string, CompositionIssue>();
   private readonly derivedFiles = new Map<FileId, FileRecord>();
   private readonly bindings = new Map<AnchorId, BoundAnchor>();
+  private readonly spans = new Map<string, AnchorRecord[]>();
   private readonly declarations = new Map<EntityId, DeclarationEntity>();
   private readonly entrypoints = new Map<EntityId, Extract<EntityRecord, { kind: "entrypoint" }>>();
   private readonly relations = new Map<RelationId, { value: RelationValue; attestations: Map<string, Attestation> }>();
@@ -110,6 +111,7 @@ class Materializer {
     this.snapshotDifferences();
     this.provenance();
     this.evidenceProvenance();
+    this.groupSpans();
     for (const anchor of this.set.anchors) this.bindings.set(anchor.id, this.bind(anchor));
     this.entrypointEntities();
     this.servesEntrypoint();
@@ -332,7 +334,7 @@ class Materializer {
       const annotated = anchor.endLine !== undefined && joinsFact({ file: path, name: simpleName(anchor.symbol), startLine: anchor.line, endLine: anchor.endLine }, { path, line: outline.line, symbol: outline.symbol });
       return direct || annotated;
     });
-    if (joined.length === 0) return { status: "resolved", entity: this.declaration({ anchor: anchor.id }, anchor.file, anchor.id, undefined) };
+    if (joined.length === 0) return { status: "resolved", entity: this.declaration(this.spanOf(anchor) ?? { anchor: anchor.id }, anchor.file, anchor.id, undefined) };
     const exact = joined.filter(({ anchor: outline }) => (outline.endLine ?? outline.line) === end);
     if (exact.length === 0) {
       this.issue({ kind: "conflicting-coordinate", anchors: sortedUnique([anchor.id, ...joined.map((candidate) => candidate.anchor.id)]) }, [...anchor.supports, ...joined.flatMap((candidate) => candidate.part.supports)]);
@@ -346,7 +348,25 @@ class Materializer {
     return { status: "resolved", entity: this.declaration({ outline: only.part.id }, anchor.file, anchor.id, only.part.id) };
   }
 
-  private declaration(key: { anchor: AnchorId } | { outline: PartId }, file: FileId, anchor: AnchorId, outline: PartId | undefined): EntityId {
+  /** Unblocked anchors by file, exact span and final name segment: the spellings one declaration may carry. */
+  private groupSpans(): void {
+    for (const anchor of this.set.anchors) {
+      if (this.blocked(anchor) !== undefined) continue;
+      const key = canonicalJson([anchor.file, anchor.line, anchor.endLine, simpleName(anchor.symbol)]);
+      this.spans.set(key, [...(this.spans.get(key) ?? []), anchor]);
+    }
+  }
+
+  /** The span identity of a declaration two spellings name, unless two distinct qualified names claim the span. */
+  private spanOf(anchor: AnchorRecord): { span: readonly [FileId, number, number, string] } | undefined {
+    if (anchor.endLine === undefined) return undefined;
+    const name = simpleName(anchor.symbol);
+    const peers = this.spans.get(canonicalJson([anchor.file, anchor.line, anchor.endLine, name])) ?? [];
+    const qualified = new Set(peers.map((peer) => peer.symbol).filter((symbol) => symbol !== name));
+    return peers.length < 2 || qualified.size > 1 ? undefined : { span: [anchor.file, anchor.line, anchor.endLine, name] };
+  }
+
+  private declaration(key: { anchor: AnchorId } | { outline: PartId } | { span: readonly [FileId, number, number, string] }, file: FileId, anchor: AnchorId, outline: PartId | undefined): EntityId {
     const id = compositionKey(this.digest, "entity", { kind: "declaration", ...key });
     const existing = this.declarations.get(id);
     this.declarations.set(id, {

@@ -456,3 +456,30 @@ test("exact positive observations corroborate different producer versions withou
   assert.equal(relations(result.graph,"symbol-dependence").length,0);
   assert.equal(connections(guardCase({producer:{name:"ye-ast",version:"0.5.0"}},{producer:{name:"ye-ast",version:"0.4.0"}}).graph,"handler-declaration").length,0,"derivation retains strict producer guard");
 });
+
+function spellingCase(entrypointSymbol: string, reachSymbol: string, endLine: number | null = 20) {
+  const entrypoints = new SetBuilder("spelling-entrypoints", ENTRYPOINTS, sha("shop"));
+  const handler = entrypoints.anchor(entrypoints.file(PATH), entrypointSymbol, 10, endLine ?? undefined);
+  entrypoints.part({ kind: "entrypoint", entry: httpRoute(handler), evidence: [] });
+  const callers = new SetBuilder("spelling-callers", CALLERS, sha("shop"));
+  const reached = callers.anchor(callers.file(PATH), reachSymbol, 10, endLine ?? undefined);
+  callers.part({ kind: "entrypoint-reach", kindName: "http-route", name: "POST /orders", handler: reached, depth: 1, confidence: 1, seeds: [] });
+  const result = compose(entrypoints.build(), callers.build());
+  return { graph: result.graph, handler, reached };
+}
+
+test("a qualified and a simple spelling of one span are one declaration without outline, so the reach joins its entrypoint", () => {
+  const { graph, handler, reached } = spellingCase("OrderController.create", "create");
+  assert.equal(entityOf(graph, handler)?.id, entityOf(graph, reached)?.id);
+  assert.equal(connections(graph, "reached-handler").length, 1);
+});
+
+test("two distinct qualified names of one span stay separate declarations", () => {
+  const { graph, handler, reached } = spellingCase("OrderController.create", "LegacyController.create");
+  assert.notEqual(entityOf(graph, handler)?.id, entityOf(graph, reached)?.id);
+});
+
+test("line-only anchors never join by name", () => {
+  const { graph, handler, reached } = spellingCase("OrderController.create", "create", null);
+  assert.notEqual(entityOf(graph, handler)?.id, entityOf(graph, reached)?.id);
+});
