@@ -39,7 +39,6 @@ export interface TemplateEffects {
   writes: readonly TemplateWrite[];
   /** The fields whose value the template hands to something other than a member access, call or test of it. */
   passed: readonly string[];
-  /** The template does not parse, so what it does is unknown. */
   unreadable?: true;
 }
 

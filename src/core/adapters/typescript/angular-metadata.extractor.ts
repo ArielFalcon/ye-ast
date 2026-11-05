@@ -457,7 +457,6 @@ function readMemberEvidence(sf: ts.SourceFile, declarations: Map<string, number>
   };
   const isPrototypeAccess = (node: ts.Node): node is ts.PropertyAccessExpression | ts.ElementAccessExpression =>
     (ts.isPropertyAccessExpression(node) && PROTOTYPE_KEYS.includes(node.name.text)) || (ts.isElementAccessExpression(node) && ts.isStringLiteral(node.argumentExpression) && PROTOTYPE_KEYS.includes(node.argumentExpression.text));
-  /** The object `object` names as the target of a write. */
   const targetOf = (object: ts.Expression): RawWriteTarget | undefined => {
     const o = unwrapped(object);
     if (o.kind === ts.SyntaxKind.ThisKeyword) {
