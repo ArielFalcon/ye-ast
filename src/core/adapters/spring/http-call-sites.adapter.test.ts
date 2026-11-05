@@ -464,3 +464,38 @@ test("a qualifier selects the implementation constructed by a named source Bean"
   const site = sites.find((site) => site.symbol === "Selection.load");
   assert.deepEqual(site?.target.status === "complete" && site.target.value, { method: "GET", base: "http://two", path: "/items" });
 });
+
+test("escaped mutable records never retain stale constructor, builder or setter fields", async () => {
+  for (const setup of ['Query query = new Query(); query.setPath("/items");', 'Query query = new Query("/items");', 'Query query = Query.builder().path("/items").build();']) {
+    const source = java("Probe", `@lombok.Builder class Query {
+      String path; Query() {} Query(String path) { this.path = path; }
+      void setPath(String path) { this.path = path; } String getPath() { return path; }
+    }
+    class Probe { RestTemplate rt;
+      void retarget(Query q) { q.setPath("/admin"); }
+      void load() { ${setup} retarget(query); rt.getForObject("http://catalog" + query.getPath(), String.class); }
+    }`);
+    const sites = await reader.of([source], "service");
+    assert.equal(sites.find((site) => site.symbol === "Probe.load")?.target.status, "unknown");
+  }
+});
+
+test("aliases and shared mutable fields cannot establish an object value", async () => {
+  for (const setup of ['Query query = new Query("/items"); Query alias = query; alias.setPath("/admin");', 'Query query = saved;']) {
+    const source = java("Probe", `class Query { String path; Query(String path) { this.path = path; }
+      void setPath(String path) { this.path = path; } String getPath() { return path; } }
+      class Probe { RestTemplate rt; Query saved = new Query("/items");
+        void retarget() { saved.setPath("/admin"); }
+        void load() { ${setup} rt.getForObject("http://catalog" + query.getPath(), String.class); }
+      }`);
+    assert.equal((await reader.of([source], "service")).find((site) => site.symbol === "Probe.load")?.target.status, "unknown");
+  }
+});
+
+test("instance field writes in other methods invalidate scalar initializers", async () => {
+  const source = java("Probe", `class Probe { RestTemplate rt; String path = "/items";
+    void retarget() { path = "/admin"; }
+    void load() { retarget(); rt.getForObject("http://catalog" + path, String.class); }
+  }`);
+  assert.equal((await reader.of([source], "service"))[0]?.target.status, "unknown");
+});
