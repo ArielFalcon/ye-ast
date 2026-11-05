@@ -80,6 +80,11 @@ test("a state built by other engines is discarded and the mirror is rebuilt in f
   await tree(fake);
   fake.state.current = { ...fake.state.current!, versions: { ...VERSIONS, codegraph: "0.9.0" } };
   fake.calls.length = 0;
+  const discard = fake.deps.mirror.discard;
+  fake.deps.mirror.discard = async (location) => {
+    assert.equal(fake.held.locks - fake.held.released, 1);
+    return discard(location);
+  };
 
   await tree(fake);
 
@@ -262,6 +267,7 @@ test("the sweep discards the mirrors the policy names, keeps the one being answe
   const again = await tree(fake);
 
   assert.deepEqual(fake.discarded, ["unused"]);
+  assert.equal(fake.calls.filter((call) => call === "discardIfIdle").length, 1);
   assert.deepEqual(fake.debrisRemoved, [["gone.state.json"]]);
   assert.equal(again.stateId, first.stateId);
 });

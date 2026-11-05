@@ -15,9 +15,9 @@ export const STATE_SUFFIX = ".state.json";
 const INDEX_TREE_DIRECTORY = "index-tree";
 const LOCK_SUFFIX = ".lock";
 const TEMPORARY_SUFFIX = ".tmp";
+const STATE_TEMPORARY = /^(.*)\.state\.json\.[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.tmp$/;
 /**
- * How old a leftover temporary file must be before the sweep calls it debris: a sibling between writing one and linking
- * or renaming it is still using it, and removing that one would fail its query.
+ * Scope-bearing state temporaries become eligible only after this age and a nonblocking scope reservation.
  */
 const TEMPORARY_STALE_MS = 60 * 60 * 1000;
 /**
@@ -44,6 +44,7 @@ export interface LiveMirrorDeps {
   isAlive: (pid: number) => boolean;
   sleep: (ms: number, signal?: AbortSignal) => Promise<void>;
   copyFile: (from: string, to: string) => Promise<void>;
+  renameState: (from: string, to: string) => Promise<void>;
   /** The clock the sweep's touch reads. */
   now: () => number;
 }
@@ -66,6 +67,7 @@ export const defaultLiveMirrorDeps: LiveMirrorDeps = {
       signal?.addEventListener("abort", () => { clearTimeout(timer); resolve(); }, { once: true });
     }),
   copyFile: (from, to) => copyFile(from, to, constants.COPYFILE_FICLONE),
+  renameState: rename,
   now: Date.now,
 };
 
@@ -165,6 +167,39 @@ export function createLiveMirror(deps: LiveMirrorDeps = defaultLiveMirrorDeps): 
     return { ok: true, value: found.value === "absent" ? null : live };
   }
 
+  async function discard(location: MirrorLocation): Promise<Result<void, MirrorFault>> {
+    const prepared = await prepare(location, "root", false);
+    if (!prepared.ok) return prepared;
+    if (!prepared.value) return { ok: true, value: undefined };
+    try {
+      await rm(stateOf(location), { force: true });
+      await rm(rootOf(location), { recursive: true, force: true });
+      return { ok: true, value: undefined };
+    } catch (error) {
+      return fault("write-failed", error);
+    }
+  }
+
+  async function whileIdle(location: MirrorLocation, action: () => Promise<Result<void, MirrorFault>>): Promise<Result<void, MirrorFault>> {
+    const prepared = await prepare(location, "live", false);
+    if (!prepared.ok) return prepared;
+    if (!prepared.value) return { ok: true, value: undefined };
+    const file = lockOf(location);
+    const pid = deps.pid();
+    const created = await tryCreateLock(file, pid);
+    if (!created.ok) return created;
+    if (!created.value) return { ok: true, value: undefined };
+    try {
+      try {
+        return await action();
+      } finally {
+        await lockHeld(file, pid).release();
+      }
+    } catch (error) {
+      return fault("write-failed", error);
+    }
+  }
+
   async function capture(repo: string, root: string, path: string, before: BigIntStats, copy: boolean): Promise<Result<MirrorEntry, MirrorFault>> {
     const source = join(repo, path);
     let current = before;
@@ -243,10 +278,10 @@ export function createLiveMirror(deps: LiveMirrorDeps = defaultLiveMirrorDeps): 
       const prepared = await prepare(location, "live", true);
       if (!prepared.ok) return prepared;
       const file = stateOf(location);
-      const temporary = join(dirname(file), `.${randomUUID()}${TEMPORARY_SUFFIX}`);
+      const temporary = `${file}.${randomUUID()}${TEMPORARY_SUFFIX}`;
       try {
         await writeFile(temporary, `${JSON.stringify({ version: STATE_FORMAT_VERSION, ...state }, null, 2)}\n`, { mode: FILE_MODE, flag: "wx" });
-        await rename(temporary, file);
+        await deps.renameState(temporary, file);
         return { ok: true, value: undefined };
       } catch (error) {
         await rm(temporary, { force: true }).catch(() => undefined);
@@ -381,17 +416,10 @@ export function createLiveMirror(deps: LiveMirrorDeps = defaultLiveMirrorDeps): 
       }
     },
 
-    async discard(location) {
-      const prepared = await prepare(location, "root", false);
-      if (!prepared.ok) return prepared;
-      if (!prepared.value) return { ok: true, value: undefined };
-      try {
-        await rm(stateOf(location), { force: true });
-        await rm(rootOf(location), { recursive: true, force: true });
-        return { ok: true, value: undefined };
-      } catch (error) {
-        return fault("write-failed", error);
-      }
+    discard,
+
+    async discardIfIdle(location) {
+      return whileIdle(location, () => discard(location));
     },
 
     async usage(repo) {
@@ -422,7 +450,7 @@ export function createLiveMirror(deps: LiveMirrorDeps = defaultLiveMirrorDeps): 
           if (status !== null) states.set(scope, status.mtimeMs);
           continue;
         }
-        if (entry.name.endsWith(TEMPORARY_SUFFIX)) {
+        if (STATE_TEMPORARY.test(entry.name)) {
           const status = await lstat(join(live, entry.name)).catch(() => null);
           if (status !== null && now - status.mtimeMs > TEMPORARY_STALE_MS) debris.push(entry.name);
         }
@@ -468,17 +496,35 @@ export function createLiveMirror(deps: LiveMirrorDeps = defaultLiveMirrorDeps): 
       if (!found.ok) return found;
       if (found.value === null) return { ok: true, value: undefined };
       const live = found.value;
-      try {
-        for (const entry of entries) {
-          if (entry === "" || entry === "." || entry === ".." || /[/\\\0]/.test(entry)) continue;
-          const status = await lstat(join(live, entry)).catch(() => null);
-          if (status === null || !status.isFile()) continue;
-          await rm(join(live, entry), { force: true });
-        }
-        return { ok: true, value: undefined };
-      } catch (error) {
-        return fault("write-failed", error);
+      for (const entry of entries) {
+        if (entry === "" || entry === "." || entry === ".." || /[/\\\0]/.test(entry)) continue;
+        const temporary = STATE_TEMPORARY.exec(entry);
+        const scope = temporary?.[1] ?? (entry.endsWith(STATE_SUFFIX) ? entry.slice(0, -STATE_SUFFIX.length) : null);
+        if (scope === null || scope === "" || scope === "." || scope === "..") continue;
+        const location = { repo, scope };
+        const removed = await whileIdle(location, async () => {
+          try {
+            const status = await lstat(join(live, entry)).catch((error: unknown) => {
+              if (errorCode(error) === "ENOENT") return null;
+              throw error;
+            });
+            if (status === null || !status.isFile()) return { ok: true, value: undefined };
+            if (temporary !== null) {
+              if (deps.now() - status.mtimeMs <= TEMPORARY_STALE_MS) return { ok: true, value: undefined };
+            } else {
+              const root = await prepare(location, "root", false);
+              if (!root.ok) return root;
+              if (root.value) return { ok: true, value: undefined };
+            }
+            await rm(join(live, entry), { force: true });
+            return { ok: true, value: undefined };
+          } catch (error) {
+            return fault("write-failed", error);
+          }
+        });
+        if (!removed.ok) return removed;
       }
+      return { ok: true, value: undefined };
     },
   };
 }

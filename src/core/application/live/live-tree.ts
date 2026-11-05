@@ -135,7 +135,7 @@ async function sweep(deps: LiveDeps, repo: string, current: string): Promise<voi
       versionsMatch: scope.versions !== null && sameVersions(scope.versions, deps.versions),
     }));
     const discards = retentionDiscards({ scopes, debris: measured.value.debris }, current, deps.retention, deps.now());
-    for (const scope of discards.scopes) await deps.mirror.discard({ repo, scope });
+    for (const scope of discards.scopes) await deps.mirror.discardIfIdle({ repo, scope });
     if (discards.debris.length > 0) await deps.mirror.discardDebris(repo, discards.debris);
   } catch {
     return;

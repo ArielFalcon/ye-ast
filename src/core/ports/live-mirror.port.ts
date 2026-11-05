@@ -66,7 +66,7 @@ export interface MirrorScopeUsage {
 export interface MirrorUsage {
   /** Every scope that has a mirror directory, sorted by scope. */
   scopes: readonly MirrorScopeUsage[];
-  /** Live-directory entries that belong to no scope, sorted: a state file with no directory, a leftover temporary file. */
+  /** Eligible live-directory debris, sorted: an orphan state or a stale scope-bearing state temporary. */
   debris: readonly string[];
 }
 
@@ -95,7 +95,7 @@ export interface LiveMirror {
   lock(location: MirrorLocation, signal?: AbortSignal): Promise<Result<MirrorLock, MirrorFault>>;
   /** The recorded state, or `null` when there is none or it cannot be read as one. */
   readState(location: MirrorLocation): Promise<Result<MirrorState | null, MirrorFault>>;
-  /** Replaces the recorded state atomically. */
+  /** Replaces the recorded state atomically; the caller must hold its scope lock. */
   writeState(location: MirrorLocation, state: MirrorState): Promise<Result<void, MirrorFault>>;
   /**
    * Makes the mirror hold `paths` of the working tree at `location.repo`: a regular file whose size and nanosecond
@@ -119,8 +119,10 @@ export interface LiveMirror {
    * else: a path it does not hold is left alone. It never reaches the engine's store, which lives in its own directory.
    */
   prune(location: MirrorLocation, paths: readonly string[], signal?: AbortSignal): Promise<Result<void, MirrorFault>>;
-  /** Removes the mirror's files, store and state, never its lock. */
+  /** Removes the mirror's files, store and state; the caller must hold its lock. */
   discard(location: MirrorLocation): Promise<Result<void, MirrorFault>>;
+  /** Reserves the same scope lock without waiting and discards under it; an existing lock is a successful no-op. */
+  discardIfIdle(location: MirrorLocation): Promise<Result<void, MirrorFault>>;
   /**
    * What the retention sweep needs, from the live directory alone: `readdir` and `stat`, each state file's own bytes and
    * the store's entries, never a mirrored file's content.
@@ -129,8 +131,8 @@ export interface LiveMirror {
   /** Records that the scope was used now, moving its state file's modification time and leaving its bytes unchanged. */
   touch(location: MirrorLocation): Promise<Result<void, MirrorFault>>;
   /**
-   * Removes live-directory entries that belong to no scope: one state file or one leftover temporary file. An entry
-   * that is not a regular file, or that names another directory, is left in place.
+   * Removes eligible orphan states and stale scope-bearing state temporaries only under a nonblocking scope reservation.
+   * Busy scopes, anonymous temporaries, lock-attempt temporaries, non-regular files and invalid names are left in place.
    */
   discardDebris(repo: string, entries: readonly string[]): Promise<Result<void, MirrorFault>>;
 }

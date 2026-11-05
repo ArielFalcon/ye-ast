@@ -581,7 +581,7 @@ test("usage measures a scope from its state, its index tree and its store, its l
     { scope: "three", versions: null, bytes: 0, lastUsedMs: null, locked: false },
     { scope: "two", versions: state().versions, bytes: 7, lastUsedMs: 2_000_000_000, locked: false },
   ]);
-  assert.deepEqual(usage.debris, [".c0ffee.tmp", "gone.state.json"]);
+  assert.deepEqual(usage.debris, ["gone.state.json"]);
 });
 
 test("discardDebris removes exactly the entries it is told to and never reaches outside the live directory", async () => {
@@ -595,14 +595,18 @@ test("discardDebris removes exactly the entries it is told to and never reaches 
   await writeFile(join(live, ".c0ffee.tmp"), "");
   const outside = join(repo, "outside.txt");
   await writeFile(outside, "outside");
-  await symlink(outside, join(live, "linked.tmp"));
+  await symlink(outside, join(live, "linked.state.json"));
+  await mkdir(join(live, "directory.state.json"));
+  await writeFile(join(live, "kept.lock"), "held");
 
-  ok(await mirror.discardDebris(repo, ["gone.state.json", ".c0ffee.tmp", "linked.tmp", "../outside.txt", "kept"]));
+  ok(await mirror.discardDebris(repo, ["gone.state.json", ".c0ffee.tmp", "linked.state.json", "directory.state.json", "kept.lock", "../outside.txt", "kept"]));
 
   await assert.rejects(lstat(join(live, "gone.state.json")));
-  await assert.rejects(lstat(join(live, ".c0ffee.tmp")));
+  assert.equal((await lstat(join(live, ".c0ffee.tmp"))).isFile(), true);
   assert.equal(await readFile(outside, "utf8"), "outside");
-  assert.equal((await lstat(join(live, "linked.tmp"))).isSymbolicLink(), true);
+  assert.equal((await lstat(join(live, "linked.state.json"))).isSymbolicLink(), true);
+  assert.equal((await lstat(join(live, "directory.state.json"))).isDirectory(), true);
+  assert.equal(await readFile(join(live, "kept.lock"), "utf8"), "held");
   assert.equal((await lstat(join(live, "kept"))).isDirectory(), true);
 });
 
@@ -619,4 +623,163 @@ test("touch moves the state's modification time and leaves its bytes as they are
 
   assert.equal(Math.round((await stat(file)).mtimeMs), 1_700_000_000_000);
   assert.equal(await readFile(file, "utf8"), bytes);
+});
+
+test("debris measured before a scope becomes active cannot remove its state", async () => {
+  const { repo, location } = await fresh();
+  const mirror = createLiveMirror();
+  ok(await mirror.writeState(location, state()));
+  const measured = ok(await mirror.usage(repo));
+  assert.ok(measured.debris.includes("default.state.json"));
+  const held = ok(await mirror.lock(location));
+  try {
+    ok(await mirror.reconcile(location, [], [], []));
+    ok(await mirror.writeState(location, state()));
+    ok(await mirror.discardDebris(repo, measured.debris));
+    assert.deepEqual(ok(await mirror.readState(location)), state());
+  } finally {
+    await held.release();
+  }
+});
+
+test("idle discard reserves the measured candidate without waiting and reclaims it after release", async () => {
+  const { repo, location } = await fresh();
+  const mirror = createLiveMirror({ ...defaultLiveMirrorDeps, sleep: async () => { throw new Error("must not wait"); } });
+  await writeFile(join(repo, "a.ts"), "source");
+  ok(await mirror.reconcile(location, listed("a.ts"), [], []));
+  ok(await mirror.materialize(location, ["a.ts"], mirror.indexRoot(location)));
+  ok(await mirror.writeState(location, state()));
+  const measured = ok(await mirror.usage(repo));
+  assert.equal(measured.scopes[0]?.locked, false);
+  const held = ok(await mirror.lock(location));
+  try {
+    ok(await mirror.discardIfIdle(location));
+    assert.equal(await readFile(join(mirror.root(location), "a.ts"), "utf8"), "source");
+    assert.equal(await readFile(join(mirror.indexRoot(location), "a.ts"), "utf8"), "source");
+    assert.deepEqual(ok(await mirror.readState(location)), state());
+  } finally {
+    await held.release();
+  }
+  ok(await mirror.discardIfIdle(location));
+  await assert.rejects(lstat(mirror.root(location)), { code: "ENOENT" });
+  assert.equal(ok(await mirror.readState(location)), null);
+  const again = ok(await mirror.lock(location));
+  await again.release();
+});
+
+test("idle deletion releases reservations on missing root and write failure", async () => {
+  const { repo, location } = await fresh();
+  const mirror = createLiveMirror();
+  ok(await mirror.discardIfIdle(location));
+  ok(await mirror.writeState(location, state()));
+  ok(await mirror.discardIfIdle(location));
+  let held = ok(await mirror.lock(location));
+  await held.release();
+  ok(await mirror.reconcile(location, [], [], []));
+  const stateFile = join(repo, ".ye-ast-graph", "live", "default.state.json");
+  await rm(stateFile, { force: true });
+  ok(await mirror.discardIfIdle(location));
+  held = ok(await mirror.lock(location));
+  await held.release();
+  ok(await mirror.reconcile(location, [], [], []));
+  await mkdir(stateFile);
+  assert.equal(faultKind(await mirror.discardIfIdle(location)), "write-failed");
+  held = ok(await mirror.lock(location));
+  await held.release();
+});
+
+
+test("cleanup reserves scoped state debris and preserves unattributable temporaries and lock attempts", async () => {
+  const { repo, location } = await fresh();
+  const mirror = createLiveMirror({ ...defaultLiveMirrorDeps, now: () => 10_000_000, sleep: async () => { throw new Error("must not wait"); } });
+  ok(await mirror.writeState(location, state()));
+  const live = join(repo, ".ye-ast-graph", "live");
+  const scoped = "default.state.json.12345678-1234-4123-8123-123456789abc.tmp";
+  const legacy = ".12345678-1234-4123-8123-123456789abc.tmp";
+  const attempt = "default.lock.12345678-1234-4123-8123-123456789abc.tmp";
+  const young = "default.state.json.12345678-1234-4123-8123-123456789abd.tmp";
+  for (const name of [scoped, legacy, attempt]) {
+    await writeFile(join(live, name), name);
+    await utimes(join(live, name), 1, 1);
+  }
+  await writeFile(join(live, young), "young");
+  await utimes(join(live, young), 10_000, 10_000);
+  const measured = ok(await mirror.usage(repo));
+  assert.deepEqual(measured.debris, [scoped, "default.state.json"].sort());
+  const held = ok(await mirror.lock(location));
+  try {
+    ok(await mirror.discardDebris(repo, [...measured.debris, legacy, attempt, young]));
+    assert.equal(await readFile(join(live, scoped), "utf8"), scoped);
+    assert.deepEqual(ok(await mirror.readState(location)), state());
+  } finally { await held.release(); }
+  ok(await mirror.discardDebris(repo, [...measured.debris, legacy, attempt, young]));
+  await assert.rejects(lstat(join(live, scoped)), { code: "ENOENT" });
+  await assert.rejects(lstat(join(live, "default.state.json")), { code: "ENOENT" });
+  assert.equal(await readFile(join(live, legacy), "utf8"), legacy);
+  assert.equal(await readFile(join(live, attempt), "utf8"), attempt);
+  assert.equal(await readFile(join(live, young), "utf8"), "young");
+});
+
+test("idle cleanup leaves stale and unreadable locks in place", async () => {
+  const { repo, location } = await fresh();
+  const mirror = createLiveMirror({ ...defaultLiveMirrorDeps, isAlive: () => false, sleep: async () => { throw new Error("must not wait"); } });
+  ok(await mirror.reconcile(location, [], [], []));
+  ok(await mirror.writeState(location, state()));
+  const lock = join(repo, ".ye-ast-graph", "live", "default.lock");
+  for (const text of ["9999", "invalid"]) {
+    await writeFile(lock, text);
+    ok(await mirror.discardIfIdle(location));
+    assert.equal(await readFile(lock, "utf8"), text);
+    assert.deepEqual(ok(await mirror.readState(location)), state());
+  }
+});
+
+test("state writer exposes a scope-bearing temporary to retention while its owner holds the lease", async () => {
+  const { repo, location } = await fresh();
+  const live = join(repo, ".ye-ast-graph", "live");
+  let temporary = "";
+  const mirror = createLiveMirror({
+    ...defaultLiveMirrorDeps,
+    now: () => 10_000_000_000_000,
+    renameState: async (from, to) => {
+      temporary = from;
+      const measured = ok(await mirror.usage(repo));
+      assert.ok(measured.debris.includes(from.slice(live.length + 1)));
+      ok(await mirror.discardDebris(repo, measured.debris));
+      assert.equal((await lstat(from)).isFile(), true);
+      await defaultLiveMirrorDeps.renameState(from, to);
+    },
+  });
+  const held = ok(await mirror.lock(location));
+  try { ok(await mirror.writeState(location, state())); } finally { await held.release(); }
+  assert.match(temporary.slice(live.length + 1), /^default\.state\.json\.[0-9a-f-]+\.tmp$/);
+  assert.deepEqual(ok(await mirror.readState(location)), state());
+});
+
+test("debris cleanup skips a busy scope but reclaims another and rechecks whether the orphan gained a root", async () => {
+  const { repo, location } = await fresh();
+  const mirror = createLiveMirror({ ...defaultLiveMirrorDeps, sleep: async () => { throw new Error("must not wait"); } });
+  ok(await mirror.writeState(location, state()));
+  ok(await mirror.writeState({ repo, scope: "other" }, state()));
+  const measured = ok(await mirror.usage(repo));
+  const held = ok(await mirror.lock(location));
+  try {
+    ok(await mirror.reconcile(location, [], [], []));
+    ok(await mirror.discardDebris(repo, measured.debris));
+    assert.deepEqual(ok(await mirror.readState(location)), state());
+    assert.equal(ok(await mirror.readState({ repo, scope: "other" })), null);
+  } finally { await held.release(); }
+  ok(await mirror.discardDebris(repo, measured.debris));
+  assert.deepEqual(ok(await mirror.readState(location)), state());
+});
+
+test("a thrown debris cleanup failure releases its scope reservation", async () => {
+  const { repo, location } = await fresh();
+  const mirror = createLiveMirror({ ...defaultLiveMirrorDeps, now: () => { throw new Error("clock failed"); } });
+  ok(await mirror.writeState(location, state()));
+  const entry = "default.state.json.12345678-1234-4123-8123-123456789abc.tmp";
+  await writeFile(join(repo, ".ye-ast-graph", "live", entry), "temporary");
+  assert.equal(faultKind(await mirror.discardDebris(repo, [entry])), "write-failed");
+  const held = ok(await mirror.lock(location));
+  await held.release();
 });

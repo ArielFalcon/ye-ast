@@ -142,6 +142,12 @@ export function fakeLive(initial: Record<string, string> = {}, digest: Digest = 
       fake.state.current = null;
       return { ok: true, value: undefined };
     },
+    discardIfIdle: async (location) => {
+      fake.calls.push("discardIfIdle");
+      fake.discarded.push(location.scope);
+      fake.state.current = null;
+      return { ok: true, value: undefined };
+    },
     usage: async () => {
       fake.calls.push("usage");
       return fake.engine.usage;
