@@ -108,19 +108,25 @@
     container.classList.add("build");
     Array.from(container.children).forEach((child, index) => child.style.setProperty("--i", String(Math.min(index, 12))));
   }
-  const rising = $$(".docs .doc-section, .docs .reveal, .docs .build");
+  /* A clipped element has no visible area to intersect, so a reveal is watched through its parent. */
+  const rising = new Map();
+  for (const element of $$(".docs .doc-section, .docs .build")) rising.set(element, [element]);
+  for (const element of $$(".docs .reveal")) {
+    const watched = element.parentElement;
+    rising.set(watched, [...(rising.get(watched) || []), element]);
+  }
   document.documentElement.classList.add("has-motion");
   if (reduced || !("IntersectionObserver" in window)) {
-    for (const element of rising) element.classList.add("is-in");
+    for (const targets of rising.values()) for (const element of targets) element.classList.add("is-in");
   } else {
     const observer = new IntersectionObserver((entries) => {
       for (const entry of entries) {
         if (!entry.isIntersecting) continue;
-        entry.target.classList.add("is-in");
+        for (const element of rising.get(entry.target)) element.classList.add("is-in");
         observer.unobserve(entry.target);
       }
     }, { rootMargin: "0px 0px -12% 0px", threshold: 0.08 });
-    for (const element of rising) observer.observe(element);
+    for (const watched of rising.keys()) observer.observe(watched);
   }
 
   const hero = $(".docs .hero");
