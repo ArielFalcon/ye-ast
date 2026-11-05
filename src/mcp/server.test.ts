@@ -21,7 +21,7 @@ import type { RepoImpact } from "../core/ports/workspace-impact-queries.port.ts"
 import type { DecisionQueries, DecisionsRequest, DecisionValue } from "../core/ports/decision-queries.port.ts";
 import type { OutwardName } from "../core/domain/topology/outward-name.ts";
 import type { FactRead, WorkspaceRefresh } from "../core/ports/workspace-queries.port.ts";
-import { createMcpServer, CUT_GUIDANCE, ENTRYPOINTS_OUTPUT, IMPACT_OUTPUT, CALLERS_OUTPUT, IMPORTERS_OUTPUT, OUTLINE_OUTPUT, WORKSPACE_OUTPUT, DECISIONS_OUTPUT } from "./server.ts";
+import { createMcpServer, ENTRYPOINTS_OUTPUT, IMPACT_OUTPUT, CALLERS_OUTPUT, IMPORTERS_OUTPUT, OUTLINE_OUTPUT, WORKSPACE_OUTPUT, DECISIONS_OUTPUT } from "./server.ts";
 import { openSession, type Session } from "./test-session.ts";
 import { createHash } from "node:crypto";
 import { encodeCursor, selectionDigest } from "./evidence-cursor.ts";
@@ -1848,13 +1848,6 @@ test("an answer read within a caller's scope says so under its status, and one w
   await session.close();
 });
 
-test("the server instructions say what to do at every kind of cut", async () => {
-  const { session } = await setup();
-  assert.match(session.instructions ?? "", /cuts/);
-  assert.ok((session.instructions?.length ?? 0) <= 4000);
-  await session.close();
-});
-
 test("arguments that break the schema are refused before any query runs", async () => {
   const { session, calls } = await setup();
   const refused = [
@@ -2429,7 +2422,6 @@ test("workspace impact text names an unknown contributing read beside independen
   await session.close();
 });
 
-
 test("impact detail retains a selected origin association while both text modes preserve the full structured fact", async () => {
   const seeds: ImpactValue["seeds"] = [
     { file: "src/unrelated/unrelated.service.ts", symbol: "Unrelated", line: 3, basis: "top-level" },
@@ -2709,7 +2701,6 @@ test("full impact guides changed-entrypoint-only result without declaring it emp
   } finally { await session.close(); }
 });
 
-
 test("declared selector routes each local and workspace branch and preserves relative subjects", async () => {
   const foreign = { path: "/work/foreign", repoId: "foreign" };
   const { session, calls } = await setup({}, undefined, [foreign]);
@@ -2802,7 +2793,6 @@ test("selected live queries retain trust faults", async () => {
   } finally { await session.close(); }
 });
 
-
 test("invalid catalogs fail server creation and exact duplicates coalesce", async () => {
   for (const bindings of [
     [{ path: "/work/other", repoId: "shop" }],
@@ -2845,7 +2835,6 @@ test("cancellation reaches a selected foreign query", async () => {
     await aborted;
   } finally { await session.close(); }
 });
-
 
 test("initialize redacts secrets in catalog IDs and launch paths", async () => {
   const { session } = await setup({}, undefined, [{ path: `/work/extra`, repoId: SECRET }], { path: `/work/${SECRET}`, repoId: "launch" });

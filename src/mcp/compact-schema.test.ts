@@ -1,4 +1,5 @@
 import { test } from "node:test";
+import { createHash } from "node:crypto";
 import assert from "node:assert/strict";
 import { z } from "zod";
 import { AjvJsonSchemaValidator } from "@modelcontextprotocol/server/validators/ajv";
@@ -33,19 +34,36 @@ test("catalogue advertises useful guides within budget", async () => {
     const bytes = Buffer.byteLength(JSON.stringify({ tools }));
     const outputs = Buffer.byteLength(JSON.stringify(tools.map(tool => tool.outputSchema)));
     console.log(`discovery bytes: ${bytes}; input schema bytes: ${Buffer.byteLength(JSON.stringify(tools.map(tool => tool.inputSchema)))}; output schema bytes: ${outputs}; instructions chars: ${session.instructions?.length}`);
-    assert.ok((session.instructions?.length ?? Infinity) <= 4000);
+    assert.ok((session.instructions?.length ?? Infinity) <= 3400);
     assert.match(session.instructions!, /supply select and page together/);
-    assert.ok(bytes <= 65_000);
-    assert.ok(outputs <= 22_000);
+    for (const rule of [
+      /Summary\/details:[^\n]*content[^\n]*structuredContent[^\n]*status[^\n]*snapshot/,
+      /Full:[^\n]*structuredContent[^\n]*complete data[^\n]*content[^\n]*navigation/,
+      /Recovery[^\n]*structuredContent\.recovery/,
+      /unknown never means no impact/,
+      /head and stateId/,
+      /merge-base SHA/,
+      /changed selects seeds, not consequence coverage/,
+      /budget limits traversal, not response length/,
+      /workspace origins use section owners/,
+      /isError is a fault, not an empty fact/,
+    ]) assert.match(session.instructions!, rule);
+
+    assert.ok(bytes <= 50_000);
+    assert.ok(outputs <= 19_000);
     for (const tool of tools) {
       assert.equal(tool.inputSchema.type, "object");
       assert.ok(Object.keys(tool.inputSchema.properties ?? {}).length > 0);
       new AjvJsonSchemaValidator().getValidator(tool.inputSchema);
+      assert.equal(createHash("sha256").update(JSON.stringify(canonicalConstraints(tool.inputSchema))).digest("hex"), INPUT_CONSTRAINTS[tool.name], `${tool.name}: argument contract`);
       for (const key of ["allOf", "anyOf", "oneOf", "if", "then", "else", "not"]) {
         assert.equal(key in tool.inputSchema, false, `${tool.name}: ${key}`);
       }
       const schema = JSON.stringify(tool.outputSchema);
-      for (const field of ["snapshot", "status", "recovery", "evidence"]) {
+      const selectable = ["ye_ast_entrypoints", "ye_ast_callers", "ye_ast_impact"].includes(tool.name);
+      assert.equal(schema.includes('"recovery"'), selectable, `${tool.name}: recovery capability`);
+      assert.equal(schema.includes('"projection"'), selectable, `${tool.name}: selection capability`);
+      for (const field of ["snapshot", "status", "evidence"]) {
         assert.ok(schema.includes(field), `${tool.name}: ${field}`);
       }
       new AjvJsonSchemaValidator().getValidator(tool.outputSchema!);
@@ -53,16 +71,7 @@ test("catalogue advertises useful guides within budget", async () => {
   } finally { await session.close(); }
 });
 
-test("guide deliberately admits some invalid data while runtime validation remains exact", async () => {
-  const schema = z.object({ value: z.string().min(3) });
-  const wrapped = compactOutput(schema, "outline");
-  const malformed = { mode: "full", status: "complete", snapshot: { kind: "sha", repo: "r", sha: "s" }, value: { files: [], unheld: [] } };
-  assert.equal(new AjvJsonSchemaValidator().getValidator(wrapped["~standard"].jsonSchema.output({ target: "draft-07" }))(malformed).valid, true);
-  assert.deepEqual(await wrapped["~standard"].validate(malformed), await schema["~standard"].validate(malformed));
-  assert.ok(!schema.safeParse(malformed).success);
-});
-
-test("real family guide preserves the complete runtime validator behind the SDK boundary", async () => {
+test("output guide retains the complete family runtime validator", async () => {
   const wrapped = compactOutput(OUTLINE_OUTPUT, "outline");
   const validateGuide = new AjvJsonSchemaValidator().getValidator(wrapped["~standard"].jsonSchema.output({ target: "draft-07" }));
   const snapshot = { kind: "sha", repo: "r", sha: "a".repeat(40) };
@@ -91,4 +100,47 @@ test("input guide preserves root fields and delegates refinements", async () => 
   assert.deepEqual(await wrapped["~standard"].validate(bad), await original["~standard"].validate(bad));
   assert.ok("issues" in await original["~standard"].validate(bad));
   assert.equal(validate({ ...bad, b: "invalid" }).valid, false);
+});
+
+const INPUT_CONSTRAINTS: Record<string, string> = {
+  ye_ast_entrypoints: "03757c2aa7f4941dc35cfcaefdae1542276de4b33c2a7d0feea6523de2101bb1",
+  ye_ast_impact: "03a47f4294d6ced7236d78981e41031ece9a0e8b1ee709076b1933f06f73e372",
+  ye_ast_callers: "86de12422509f4746dbb220ac6fe12b4ad95e5a1dcb8ee3e5f322fd725eac66d",
+  ye_ast_importers: "d99d6f4643edcc0cfd0114018fe1faa2a7a2df6e2930e2c767acd9960ae39aca",
+  ye_ast_outline: "d99d6f4643edcc0cfd0114018fe1faa2a7a2df6e2930e2c767acd9960ae39aca",
+  ye_ast_workspace: "be2953f74d297b7d286e974b18b488c4137a6f1f9c5c94385701b1fdd2893244",
+  ye_ast_decisions: "be2953f74d297b7d286e974b18b488c4137a6f1f9c5c94385701b1fdd2893244",
+};
+function canonicalConstraints(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalConstraints);
+  if (value === null || typeof value !== "object") return value;
+  return Object.fromEntries(Object.entries(value).filter(([key]) => key !== "description")
+    .sort(([a], [b]) => a.localeCompare(b)).map(([key, child]) => [key, canonicalConstraints(child)]));
+}
+
+test("output definitions describe only fields that the family returns", () => {
+  const schema = z.object({});
+  for (const family of ["entrypoints", "impact", "callers", "outline", "importers", "workspace", "decisions"] as const) {
+    const guide = compactOutput(schema, family)["~standard"].jsonSchema.output({ target: "draft-07" });
+    const definitions = guide.definitions as Record<string, unknown>;
+    const reachable = new Set<string>();
+    const inspect = (value: unknown): void => {
+      if (Array.isArray(value)) { value.forEach(inspect); return; }
+      if (value === null || typeof value !== "object") return;
+      for (const [key, child] of Object.entries(value)) {
+        if (key === "$ref" && typeof child === "string") {
+          assert.ok(child.startsWith("#/definitions/"));
+          const name = child.slice("#/definitions/".length);
+          assert.ok(name in definitions, `${family}: ${name}`);
+          if (!reachable.has(name)) { reachable.add(name); inspect(definitions[name]); }
+        } else if (key !== "definitions") inspect(child);
+      }
+    };
+    inspect(guide);
+    assert.deepEqual([...reachable].sort(), Object.keys(definitions).sort(), family);
+    if (["impact", "callers"].includes(family)) {
+      const source = definitions.source as { properties: { analysis: unknown } };
+      assert.deepEqual(source.properties.analysis, { type: "object", properties: { status: { enum: ["complete", "partial", "unknown"] }, reason: { type: "string" } }, required: ["status"] });
+    }
+  }
 });

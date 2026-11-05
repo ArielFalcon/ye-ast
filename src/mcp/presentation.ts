@@ -5,7 +5,7 @@ import type { Recovery } from "./recovery.ts";
 export const responseModeSchema = z
   .enum(["summary", "details", "full"])
   .default("summary")
-  .describe("Response presentation only: summary identifies consequences or findings; details adds recorded evidence and locations for investigation; full returns the complete structured result with contextual JSON navigation, without repeating the text projection. Coverage and traversal bounds do not change.");
+  .describe("Presentation only; coverage/traversal unchanged. summary=findings; details=evidence/locations; full=complete structuredContent + content navigation, without duplicate text.");
 
 export type ResponseMode = z.infer<typeof responseModeSchema>;
 export type ToolFamily = "entrypoints" | "callers" | "impact" | "importers" | "outline" | "workspace" | "decisions";

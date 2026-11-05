@@ -15,7 +15,7 @@ import { isWorkspaceReplayContext } from "../core/domain/topology/workspace-repl
 import { FULL_OBJECT_ID_PATTERN, isFullObjectId } from "../core/domain/shared/revision.ts";
 import type { ImpactBudget } from "../core/domain/impact/impact-fact.ts";
 import { TRUST_MODES, WALK_BOUND_FIELDS, type WalkBoundsField } from "../core/domain/shared/fact.ts";
-import type { Cut, Fact } from "../core/domain/shared/fact.ts";
+import type { Fact } from "../core/domain/shared/fact.ts";
 import { isValidGlob, type ScopeRequest } from "../core/domain/shared/scope.ts";
 import type { LiveStaleNotice } from "../core/ports/live-queries.port.ts";
 import type { Result } from "../core/domain/shared/result.ts";
@@ -52,49 +52,36 @@ export interface McpDeps {
   repositories?: readonly RepositoryBinding[];
 }
 
-const COMPLETENESS = "Returns snapshot-backed evidence and explicit complete, partial or unknown status within the declared scope.";
-
-/** Exhaustive over the facts contract: every cut kind needs actionable guidance. */
-export const CUT_GUIDANCE: Readonly<Record<Cut["kind"], string>> = {
-  "unresolved-link": "a possible reference or cross-repository target could not be resolved, or several repositories match. Inspect the listed evidence if relevant; keep the target unknown unless code or a user declaration establishes it. A larger walk budget cannot resolve an ambiguous target or dynamic URL. A removed declaration's remaining names are potential references, not proven breakages.",
-  "no-extractor": "the engine has no applicable extractor for this file or construct. Read the relevant source directly; repeating the same query adds no coverage.",
-  "not-exported": "the snapshot omitted this path. Inspect the stated export limit or exclusion; evidence under that path is unavailable in this answer.",
-  depth: "the symbol or module walk reached budget.depth. Increase that bound if more levels matter, query one boundary symbol with ye_ast_callers, or inspect direct module consumers with ye_ast_importers.",
-  hub: "a symbol or module exceeded budget.hubFanIn and was not expanded. Increase that bound if its callers matter; querying it alone does not remove the bound.",
-  "caller-budget": "inspect the cut's context: a walk may exhaust budget.expansions, counted separately for symbols and modules with the module allowance shared by base and head; snapshot export may exhaust a host-set entry or byte budget. Adjust the applicable bound or narrow the question; walk bounds do not fix export limits.",
-  "node-cap": "the walk reached its node cap. Query fewer targets, or narrow scope only if excluding that code is acceptable.",
-  deadline: "the work exceeded its deadline. A smaller question may complete; retry unchanged only if the condition was transient.",
-  section: "a composite section could not be completed. Inspect its repository, read status and reason; other sections retain their own evidence and limits. Retry only when the cause can change.",
-};
+const COMPLETENESS = "Snapshot-backed evidence; complete/partial/unknown within declared scope.";
 
 /** Common interpretation rules and a short routing guide, also useful before individual tools are loaded. */
 export function instructionsFor(repository: McpDeps["repository"], available: readonly string[] = [repository.repoId]): string {
-  return `ye-ast provides read-only facts about code, git and declared contracts for ${repository.path} (id ${repository.repoId}). Facts do not judge code quality or certify changes. Reuse answers covering the question and snapshot.
+  return `ye-ast: read-only code/Git/contract facts for ${repository.path} (id ${repository.repoId}); no quality judgment/change approval. Reuse matching question/snapshot answers.
 
-Choose by question: ye_ast_entrypoints finds routes, listeners and jobs; ye_ast_callers finds incoming dependencies (add workspace for other repositories); ye_ast_impact traces a diff from base (add workspace for cross-repository links); ye_ast_importers finds file consumers and unresolved names; ye_ast_outline locates declarations and imports; ye_ast_workspace identifies outward names and candidate repositories; ye_ast_decisions identifies configuration gaps and evidence-backed options without making decisions or writing configuration.
+Choose: ye_ast_entrypoints=routes/listeners/jobs; ye_ast_callers=existing declarations (workspace adds cross-repo incoming links); ye_ast_impact=diffs (workspace adds incoming/outgoing links); ye_ast_importers=file consumers/unresolved names; ye_ast_outline=declarations/imports; ye_ast_workspace=outward names/candidate repos; ye_ast_decisions=evidence-backed config options, without decisions/writes.
 
-Declared repository IDs: ${available.join(", ")}. repo selects an exact ID; omission uses ${repository.repoId}. Availability does not grant trust or workspace membership. Local queries default to HEAD; revision or impact head selects a committed snapshot. Trusted live reads staged, unstaged and untracked changes and excludes revision/head. Local-only live excludes offline; workspace may combine them. Impact requires base. Workspace captures are not atomic; live follow-ups recapture and must match head and stateId. Live repositories are never refreshed. offline prevents workspace remote refresh. Missing clones are not downloaded.
+Declared repository IDs: ${available.join(", ")}. repo selects an exact ID; default ${repository.repoId}. Registration grants no trust/workspace membership. Local default=HEAD; revision/impact head selects a commit. Trusted live includes staged/unstaged/untracked changes, excludes revision/head, and excludes offline locally. Workspace may mix live/offline; captures are not atomic. Live follow-ups recapture: compare head and stateId. Live repos never refresh; offline prevents remote refresh. No missing-clone downloads.
 
-Without workspace, callers and impact cover only the selected repository. workspace: {} uses eligible persisted membership; workspace.repos specifies clones. Untrusted repositories cannot supply workspace defaults. Evidence paths belong to their recorded repository and snapshot; use repositoryRoots to locate clones, not the process working directory. For foreign evidence select its declared owner and snapshot. Local files can differ from recorded lines; base-side modules use the recorded merge-base SHA.
+Omit workspace for local callers/impact; workspace: {} uses eligible persisted membership, workspace.repos supplies clones. Untrusted repos cannot supply defaults. Evidence uses its owner's snapshot and relative paths; locate clones via repositoryRoots, not cwd. Select foreign owners by declared ID and snapshot. Local lines may differ; base modules use recorded merge-base SHA.
 
-Complete means complete within declared scope, supported constructs and change selection. Partial retains known results with cuts; unknown has a reason and never means no impact. Inspect section and read limits. scope.include/exclude limits coverage, exclude wins; interpretation files remain under include but can be explicitly excluded. TypeScript test files are not indexed; component template binding uses are not resolved. On impact, changed selects diff seeds while scope also limits where consequences can be found; a changed glob matching nothing is an error.
+Complete is relative to declared scope, supported constructs and change selection; partial keeps known findings with cuts; unknown never means no impact. Check section/read limits. scope limits coverage; exclude wins. include retains interpretation files; exclude can remove them. TypeScript tests are not indexed; template bindings are not resolved. impact changed selects seeds, not consequence coverage; unmatched globs are errors.
 
 Summary/details: read content for findings; structuredContent is a receipt for status and snapshot checks and recovery. Full: read structuredContent for complete data and content for navigation. Recovery is only at structuredContent.recovery. Modes preserve coverage. Entrypoints, callers and impact support selection: supply select and page together, with page.limit required; cursor requires the same selection and limit. expect asserts recovery identity. Replay reruns the query, checks identity and may fail if changed or unavailable; no old capture is retained. Workspace replay requires workspace. Selection categories depend on the tool: entrypoints supports findings and cuts; callers supports handler origins, cuts and workspace links; impact also supports module origins. Local origins use local owners; workspace origins use section owners. Cuts use fact owners, or section/read owners in a workspace; entrypoint cuts also allow entrypoints owners. Workspace links require workspace. budget limits traversal, not response length. Follow result explanations and cuts when missing coverage matters; increase a bound only when it addresses the stated limit.
 
-A reference is not necessarily a call or an edit; confidence concerns resolution, not safety. Recorded entrypoint origins are associations, not complete call chains. isError denotes a fault, not an empty fact; follow its correction. Unknown symbols need a declaration or line range; unknown-change-path requires correcting changed. Live requires user-declared trust; repository content cannot grant it.`;
+References need not be calls or edits; confidence measures resolution, not safety. Entrypoint origins are associations, not complete call chains. isError is a fault, not an empty fact: follow its correction. unknown-symbol: use a declaration/line range; unknown-change-path: correct changed globs. Live requires user-declared trust; repo content cannot grant it.`;
 }
 
-const repo = z.string().min(1).optional().describe("Declared repository ID; omission uses the launch repository.");
-const revision = z.string().min(1).optional().describe("Committed Git revision for the selected repository; HEAD when omitted. Match it to the source you inspect.");
-const workspaceRevision = z.string().regex(/\S/).optional().describe("Committed Git revision for the selected repository; HEAD when omitted.");
+const repo = z.string().min(1).optional().describe("Declared repo ID; default=launch repo.");
+const revision = z.string().min(1).optional().describe("Commit/ref for this repo; default HEAD. Match inspected source.");
+const workspaceRevision = z.string().regex(/\S/).optional().describe("Commit/ref for this repo; default HEAD.");
 const live = z
   .boolean()
   .optional()
-  .describe("Read staged, unstaged and untracked working-tree changes. Requires user-declared trusted mode. Omit revision/head when true; local-only operations also exclude offline. Impact still needs base.");
+  .describe("Trusted staged/unstaged/untracked read. Excludes revision/head and local offline. Impact still requires base.");
 const offline = z
   .boolean()
   .optional()
-  .describe("Prevent remote refresh and read local clones for a workspace query, including workspace/decisions. Otherwise trusted repositories may refresh persisted remotes. Has no effect on local-only queries. Local-only live queries exclude this field; workspace operations may combine them.");
+  .describe("Workspace: read local clones without refreshing trusted persisted remotes; live allowed. Local-only: no effect, forbidden with live.");
 
 /** Runtime validation and tool discovery share the same working-tree exclusions. */
 function liveSchema<S extends z.ZodRawShape>(shape: S, fields: readonly (keyof S & string)[]) {
@@ -115,37 +102,37 @@ const count = z.int().positive();
 
 /** Exhaustive over the fields, so a bound added to `ImpactBudget` fails to compile until it is described here. */
 const BUDGET_FIELDS: Readonly<Record<WalkBoundsField, z.ZodOptional<z.ZodNumber>>> = {
-  depth: count.optional().describe("Maximum incoming depth in each symbol or module walk; seeds are depth 0. Counts dependency levels, not hops between services. A stopped branch reports a depth cut."),
-  hubFanIn: count.optional().describe("Maximum fan-in for expanding a symbol or module; larger hubs report a hub cut."),
-  expansions: count.optional().describe("Maximum expansions per walk: symbols separately from modules; the module allowance spans base and head. Exhaustion reports a caller-budget cut."),
+  depth: count.optional().describe("Max incoming levels per symbol/module walk (seeds=0), not service hops. Stopping yields a depth cut."),
+  hubFanIn: count.optional().describe("Max fan-in for symbol/module expansion; larger hubs yield a hub cut."),
+  expansions: count.optional().describe("Max expansions per symbol/module walk; modules share the base+head allowance. Exhaustion: caller-budget cut."),
 };
 const budget = z
   .strictObject(BUDGET_FIELDS)
   .optional()
-  .describe("Optional walk bounds; these three bounds are unset by default. Set them to limit traversal work, not response bytes or tokens; a stopped branch reports a cut. mode changes presentation instead.");
+  .describe("Optional traversal bounds, unset by default. Limits work, not result size; stopped branches report cuts. mode controls presentation.");
 
 const workspaceRepo = liveSchema({
-  path: z.string().regex(/\S/).describe("Root path of an existing local Git clone; this does not clone a repository or authorize remote refresh."),
+  path: z.string().regex(/\S/).describe("Existing local Git clone root; no cloning or new remote authorization."),
   id: z
     .string()
     .regex(/\S/)
     .optional()
-    .describe("Stable repository id, not a path; defaults to the root directory name. Supply the same id for a clone and its worktrees when they represent one repository."),
-  revision: z.string().regex(/\S/).optional().describe("Revision requested for this repository. Without one, local reads use HEAD; refreshed reads report the revision-resolution rule and pinned SHA."),
+    .describe("Repo ID, not path; default=root basename. Reuse the ID across clone/worktrees of the same repo."),
+  revision: z.string().regex(/\S/).optional().describe("Local default=HEAD; refreshed reads report revision resolution and pinned SHA."),
   live: z.literal(true).optional(),
 }, ["revision"]);
 
 const gateways = z
-  .array(z.strictObject({ prefix: z.string().min(1).describe("The gateway prefix a call carries, such as a first path segment."), repo: z.string().min(1).describe("The repository id it routes to.") }))
+  .array(z.strictObject({ prefix: z.string().min(1).describe("Call's gateway prefix, e.g. first path segment."), repo: z.string().min(1).describe("Destination repo ID.") }))
   .min(1)
   .optional()
-  .describe("Optional user-known gateway mappings. A declared prefix overrides route-overlap inference; do not invent a mapping to resolve ambiguity.");
+  .describe("User-known gateway prefixes override overlap inference. Never invent mappings.");
 
 const workspaceRepos = z
   .array(workspaceRepo)
   .min(1)
   .optional()
-  .describe("Other local clones; an explicit nonempty list replaces persisted workspace membership. Omit to use eligible persisted defaults. The answer states the membership source.");
+  .describe("Other clones; nonempty replaces persisted membership. Omit for eligible defaults; result names the source.");
 
 const workspace = z
   .strictObject({
@@ -153,11 +140,11 @@ const workspace = z
       .array(workspaceRepo)
       .min(1)
       .optional()
-      .describe("Other local clones; an explicit nonempty list replaces persisted workspace membership. Omit to use eligible defaults saved by ye-ast init --workspace."),
+      .describe("Other clones; nonempty replaces persisted membership. Omit for eligible ye-ast init --workspace defaults."),
     gateways,
   })
   .optional()
-  .describe("Enable cross-repository traversal. Omit for a local answer; {} uses eligible persisted repositories/gateways, or only the selected repository when none exist. An explicit repos list selects other clones. Includes incoming call-site links; impact also follows outgoing links. Each repository may select a committed revision or a trusted live capture. Captures do not represent one atomic instant.");
+  .describe("Cross-repo traversal: omit=local; {}=eligible persisted repos/gateways, else selected repo only. repos supplies other clones. Incoming links; impact adds outgoing. Per-repo commit or trusted live; captures are not atomic.");
 
 const globs = z
   .array(z.string().refine(isValidGlob, "a glob is relative to the repository root, with / separators and no empty, . or .. segment"))
@@ -165,11 +152,11 @@ const globs = z
   .optional();
 const scope = z
   .strictObject({
-    include: globs.describe("Only paths matching one of these globs; every path when omitted."),
-    exclude: globs.describe("Paths matching one of these globs are left out, even when included."),
+    include: globs.describe("Include matching paths; omitted=all."),
+    exclude: globs.describe("Exclude matching paths, even if included."),
   })
   .optional()
-  .describe("Coverage restriction using repository-relative globs; all paths when omitted, exclude wins. include retains configuration needed to interpret sources; exclude can remove it too. Callers and entrypoints outside scope are unknown. For shorter text use mode: summary; on impact use changed to select seeds without excluding callers.");
+  .describe("Repo-relative coverage globs; omitted=all, exclude wins. include retains interpretation files; exclude may remove them. Outside-scope callers/entrypoints are unknown. mode shortens output; impact changed limits seeds.");
 
 const entrypointInput = liveSchema({ repo, revision, live, scope, mode: responseModeSchema, ...recoveryControlShapeFor("entrypoints") }, ["revision"])
   .refine((value) => validRecoveryControls("entrypoints", value))
@@ -194,7 +181,7 @@ function scopeOf(requested: z.infer<typeof scope>): { scope?: ScopeRequest } {
   return { scope: { ...(include !== undefined && { include }), ...(exclude !== undefined && { exclude }) } };
 }
 
-const file = z.string().min(1).describe("Repository-relative path of the file.");
+const file = z.string().min(1).describe("Repo-relative file path.");
 
 const target = z.union([
   z
@@ -203,19 +190,19 @@ const target = z.union([
       symbol: z
         .string()
         .min(1)
-        .describe("The declaration's name: a function, class or constant by its name, a member as Class.member. Only the part after the last dot is matched in the file, so every declaration of that name in it, overloads included, is a start."),
+        .describe("Declaration or Class.member; matches every declaration with that final name in the file, including overloads."),
     })
-    .describe("A declaration by name."),
+    .describe("Match by declaration name."),
   z
     .strictObject({ file, start: count, end: count })
     .refine(({ start, end }) => end >= start, "end must not precede start")
-    .describe("A file's lines, 1-based, inclusive."),
+    .describe("File line range, 1-based inclusive; end >= start."),
 ]);
 
 const replaySchema = z.strictObject({
   version: z.literal(1),
   declaration: z.string().regex(/^ws-r1:[0-9a-f]{64}$/),
-  snapshots: z.array(z.discriminatedUnion("kind", [z.strictObject({ repo: z.string().regex(/\S/), kind: z.literal("sha"), sha: pinnedRevision }), z.strictObject({ repo: z.string().regex(/\S/), kind: z.literal("live"), head: pinnedRevision, stateId: z.string().regex(/\S/) })])).meta({ uniqueItems: true }).describe("Echo the actual snapshot vector in repository ID order, with each ID appearing once."),
+  snapshots: z.array(z.discriminatedUnion("kind", [z.strictObject({ repo: z.string().regex(/\S/), kind: z.literal("sha"), sha: pinnedRevision }), z.strictObject({ repo: z.string().regex(/\S/), kind: z.literal("live"), head: pinnedRevision, stateId: z.string().regex(/\S/) })])).meta({ uniqueItems: true }).describe("Echo actual snapshots in repo-ID order, one per ID."),
 }).refine(isWorkspaceReplayContext);
 const callersShape = { repo, revision, live, offline, targets: z.array(target).min(1), scope, budget, mode: responseModeSchema, workspace, replay: replaySchema.optional(), ...recoveryControlShapeFor("callers") };
 const replayRequiresWorkspace = { if: { required: ["replay"] }, then: { required: ["workspace"] } };
@@ -225,10 +212,10 @@ const callersInput = liveSchema(callersShape, ["revision"])
   .meta({ allOf: [...["revision"].map((field) => ({ not: { properties: { live: { const: true } }, required: ["live", field] } })), replayRequiresWorkspace, { if: { required: ["workspace"] }, then: { properties: { live: { const: true }, revision: { pattern: "\\S" }, head: { pattern: "\\S" } } } }, { if: { required: ["live", "offline"], properties: { live: { const: true } } }, then: { required: ["workspace"] } }, ...recoveryControlConstraintsFor("callers")] });
 const impactInput = liveSchema({
   repo,
-  base: z.string().min(1).describe("Required comparison revision, usually the destination branch (for example main). The diff starts at its merge base with head; it is not necessarily a direct base-to-head diff."),
-  head: z.string().min(1).optional().describe("Committed revision holding the change; HEAD when omitted. Omit with live: true."),
+  base: z.string().min(1).describe("Comparison ref, e.g. main. Diff starts at merge-base(base, head), not necessarily base itself."),
+  head: z.string().min(1).optional().describe("Change commit/ref; default HEAD. Omit with live."),
   live, offline, scope,
-  changed: globs.describe("Diff-path globs selecting which changes seed traversal; all changed paths when omitted. Callers outside changed remain eligible within scope. This does not restrict consequence coverage like scope does. A glob matching no changed path is an error."),
+  changed: globs.describe("Diff-path seed globs; omitted=all changes. Callers elsewhere within scope remain eligible. Unlike scope, leaves consequence coverage intact. Unmatched globs are errors."),
   budget, mode: responseModeSchema, workspace, replay: replaySchema.optional(), ...recoveryControlShapeFor("impact"),
 }, ["head"])
   .refine((value) => validRecoveryControls("impact", value))
@@ -668,7 +655,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
     "ye_ast_entrypoints",
     {
       title: "Entrypoints of a revision",
-      description: `Lists supported HTTP routes, UI routes, message listeners and scheduled jobs with handler locations. Use to orient in a repository or locate where a request, message or job is handled. To trace what depends on a known handler use ye_ast_callers; to inspect consequences of a diff use ye_ast_impact. ${COMPLETENESS}`,
+      description: `Find HTTP/UI routes, listeners and jobs with handler locations. Use to orient or locate request/message/job handling; ye_ast_callers traces dependents, ye_ast_impact diffs. ${COMPLETENESS}`,
       inputSchema: compactInput(entrypointInput),
       outputSchema: compactOutput(ENTRYPOINTS_OUTPUT, "entrypoints"),
       annotations: { readOnlyHint: true, openWorldHint: false },
@@ -688,7 +675,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
     "ye_ast_impact",
     {
       title: "Impact of a change",
-      description: `Traces incoming dependents of changed declarations from the merge base of base and head to head, and reports affected entrypoints plus entrypoints added, removed or altered. Use for a diff; base is required and head defaults to HEAD. Use live for trusted local edits, or changed to select diff paths without excluding callers elsewhere within scope. With workspace, also follows incoming cross-repository call sites and what the change sends onward. Use ye_ast_callers when the question concerns existing symbols without a diff; results inform investigation, not change approval. ${COMPLETENESS}`,
+      description: `Trace changed declarations from merge-base(base,head) to head: incoming dependents, reached entrypoints and entrypoints added/removed/altered. base is required; head defaults to HEAD. live reads trusted edits; changed selects diff seeds while callers elsewhere in scope remain eligible. workspace adds incoming/outgoing cross-repo links. For existing symbols use ye_ast_callers. ${COMPLETENESS}`,
       inputSchema: compactInput(impactInput),
       outputSchema: compactOutput(IMPACT_OUTPUT, "impact"),
       annotations: { readOnlyHint: true, openWorldHint: false },
@@ -734,7 +721,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
     "ye_ast_callers",
     {
       title: "Callers of symbols or line ranges",
-      description: `Traces incoming dependents of existing declarations or line ranges and reports the entrypoints that reach them, with dependency locations. Use when the starting symbols or ranges are known and no diff is needed. targets accepts names or inclusive line ranges; names match their final segment and may select several declarations in one file. A missing declaration is an error. With workspace, follows incoming cross-repository call-site links; use ye_ast_impact for a diff and its outgoing links. ${COMPLETENESS}`,
+      description: `Trace incoming dependents of existing declaration names or inclusive line ranges and the entrypoints reaching them, with dependency locations. Names match the final segment and may select multiple declarations; missing declarations error. workspace adds incoming cross-repo call sites. For diffs/outgoing links use ye_ast_impact. ${COMPLETENESS}`,
       inputSchema: compactInput(callersInput),
       outputSchema: compactOutput(CALLERS_OUTPUT, "callers"),
       annotations: { readOnlyHint: true, openWorldHint: false },
@@ -785,7 +772,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
     "ye_ast_importers",
     {
       title: "Importers of files",
-      description: `For each target, reports static imports, reexports, dynamic and type imports, users and unresolved name matches. Details lists each path once with its category memberships and original array positions. Users without a module category are additional users; unresolved matches do not establish dependencies. Use to investigate file moves, renames, deletions or export changes. An import edge does not prove a declaration is used. Static TypeScript resolution includes alias and barrel module edges. Revision queries include exported test consumers; a live mirror that omits them remains partial. Unresolved name matches do not prove dependencies or additional affected files. For declaration-level incoming traversal and reached entrypoints use ye_ast_callers; this tool answers file-level relationships. ${COMPLETENESS}`,
+      description: `File consumers: static/reexport/dynamic/type imports, users and unresolved names. details deduplicates paths, retaining categories and original positions; users without a module category are additional. Import edges do not prove declaration use; unresolved names prove neither dependencies nor affected files. TypeScript includes alias/barrel edges and exported test consumers; omitted live tests yield partial. Use for moves/renames/deletions/export changes; ye_ast_callers traces declarations/reached entrypoints. ${COMPLETENESS}`,
       inputSchema: compactInput(liveSchema({ repo, revision, live, files: z.array(z.string().min(1)).min(1).describe("Repository-relative paths."), scope, mode: responseModeSchema }, ["revision"])),
       outputSchema: compactOutput(IMPORTERS_OUTPUT, "importers"),
       annotations: { readOnlyHint: true, openWorldHint: false },
@@ -804,7 +791,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
     "ye_ast_outline",
     {
       title: "Shape of files",
-      description: `Returns indexed declarations with line spans and imports for each requested file, without returning source text. Use when that structure helps choose source ranges to read; read a known relevant range directly. A file the index cannot describe is reported as a cut, not an empty list. Match revision or live to the source you will inspect. ${COMPLETENESS}`,
+      description: `Indexed declaration spans/imports, without source. Use to choose source ranges; read known ranges directly. Unavailable files report cuts, not empty lists. Match revision/live to inspected source. ${COMPLETENESS}`,
       inputSchema: compactInput(liveSchema({ repo, revision, live, files: z.array(z.string().min(1)).min(1).describe("Repository-relative paths."), scope, mode: responseModeSchema }, ["revision"])),
       outputSchema: compactOutput(OUTLINE_OUTPUT, "outline"),
       annotations: { readOnlyHint: true, openWorldHint: false },
@@ -823,7 +810,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
     "ye_ast_workspace",
     {
       title: "Repositories a workspace names",
-      description: `Lists outward names stated by repositories, candidate repositories that serve them with matching basis and evidence, and names no included repository serves. Names include HTTP hosts/prefixes, configuration URLs, message destinations, dependency coordinates, remotes and registries. Use to discover which clones a cross-repository investigation needs; it does not download missing clones or establish an unresolved target by guesswork. Trusted repositories may refresh persisted remotes; offline prevents refresh. For traversal use workspace on ye_ast_callers or ye_ast_impact; for configuration gaps use ye_ast_decisions. ${COMPLETENESS}`,
+      description: `Find outward names, candidate repos with match basis/evidence, and unserved names. Covers HTTP hosts/prefixes, config URLs, messaging, dependency coordinates, remotes and registries. Use to choose clones; no downloads or guessed unresolved targets. Trusted persisted remotes may refresh; offline prevents it. For traversal set workspace on ye_ast_callers/ye_ast_impact; ye_ast_decisions finds config gaps. ${COMPLETENESS}`,
       inputSchema: compactInput(liveSchema({
         repo,
         revision: workspaceRevision,
@@ -861,7 +848,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
     "ye_ast_decisions",
     {
       title: "Gaps a workspace leaves to the user",
-      description: `Lists workspace configuration gaps requiring user input, evidence-backed options and rule-based recommendations; some gaps allow only a user-supplied value. Use to prepare workspace/trust configuration or a form before ye-ast init --workspace. Gaps concern repository membership, identity, gateways, trust or remote resolution; recommendations are configuration suggestions, not judgments of code or proposed changes. Reads repositories using the workspace rules and writes no configuration. ${COMPLETENESS}`,
+      description: `Workspace config gaps: membership/identity, gateways, trust and remotes; evidence-backed options and rule-based recommendations. Some require free text. Use before ye-ast init --workspace or to build a config form. Suggestions concern configuration, not code quality/change approval. Reads workspace repos; writes nothing. ${COMPLETENESS}`,
       inputSchema: compactInput(liveSchema({ repo, revision: workspaceRevision, live: z.literal(true).optional(), offline, scope, repos: workspaceRepos, gateways, mode: responseModeSchema }, ["revision"])),
       outputSchema: compactOutput(DECISIONS_OUTPUT, "decisions"),
       annotations: { readOnlyHint: true, openWorldHint: false },

@@ -5,7 +5,7 @@ snapshots, provenance, recovery, evidence, paging, and the major value fields.
 It deliberately does not enumerate every nested node or enforce every runtime
 constraint. Clients must not treat the advertised schema as exhaustive payload
 validation. The original exported output schemas and Standard Schema runtime
-validator still validate complete responses. Published input guides retain root properties, unconditional required fields, and nested schemas, while omitting root cross-parameter conditions. The server still validates the original input schema and all refinements; clients may accept combinations that the server rejects. Parameter guidance and initialization instructions describe these rules. Payloads, text modes, and recovery behavior are unchanged.
+validator still validate complete responses. Published input guides retain root properties, unconditional required fields, and nested schemas, while omitting root cross-parameter conditions. The server still validates the original input schema and all refinements; clients may accept combinations that the server rejects. Parameter guidance and initialization instructions describe these rules. Published guides do not change the structured payload or replay recipe. Recovery metadata has one copy at `structuredContent.recovery`; response text points to it.
 
 Partial results contain useful evidence but have coverage cuts; unknown means
 coverage is unknown, not that no impact exists. Projection availability is
@@ -17,7 +17,7 @@ them correctly; client presentation and model behavior affect usefulness.
 The `/work/shop`, version `0` discovery fixture measures the compact JSON bytes
 of `{tools}` and all output schemas in `compact-schema.test.ts`. The original
 exhaustive catalogue measured 1,177,416 bytes (1,134,623 output schemas); the
-prior lossless compaction measured approximately 190 KB. The guide measures 59,816 bytes for the catalogue, 33,289 bytes for the input-schema array, 20,960 bytes for the
+prior lossless compaction measured approximately 190 KB. Before the editorial reduction below, the guide measured 59,816 bytes for the catalogue, 33,289 bytes for the input-schema array, 20,960 bytes for the
 output-schema array, and 3,995 initialization characters (previously 63,611, 37,084, 20,960 and 9,962 respectively), within budgets of 65 KB and 22 KB respectively; actual model context savings depend
 on client handling.
 
@@ -27,7 +27,7 @@ only root composition and conditional keywords are omitted from the published
 guide. Cross-parameter restrictions remain in the original Standard Schema
 validator and are explained in the instructions and parameter guidance.
 
-The initialization fixture has a 4,000-character budget. The guide names routing,
+The initialization fixture has a 3,400-character budget. The guide names routing,
 coverage, repository and snapshot identity, trust, response modes, paired
 selection/page controls and recovery. Detailed cut explanations remain available
 with results rather than being repeated in the initial discovery manual.
@@ -36,3 +36,31 @@ Tests compile the public schemas with the SDK's Ajv validator, check visible roo
 parameters and verify that invalid combinations are rejected before query
 execution. These are portable contract checks, not live integration tests of
 OpenCode, Claude Code or Codex, and do not establish model interpretation quality.
+
+### Reduction measurement (2026-11-05)
+
+Run `node --import tsx scripts/measure-mcp-catalog.ts` to reproduce discovery with
+version `0` and repository `/work/shop`. It sends only initialize and tools/list;
+query dependencies throw if invoked. The current catalogue is 49,530 bytes,
+with 27,594 input-schema bytes, 17,907 output-guide bytes and 2,835 bytes of tool
+description text (schema sums exclude array punctuation). Initialization is
+3,388 characters. The original comparison fixture was 59,816 bytes and 3,995
+initialization characters; the first editorial pass reached 58,581 bytes.
+The historical exhaustive catalogue was 1,177,416 bytes.
+
+This unit shortens parameter and routing prose, limits recovery/projection
+advertising to the three tools that support them, removes unused output
+definitions and avoids describing a source analysis summary as a whole fact.
+The response-channel paragraph explaining receipts, full results and the single
+recovery location is preserved. All published input constraints are unchanged:
+tests compare their canonical hashes with the pre-reduction fixture, excluding
+only description annotations. Nested selectors, enums, bounds and required fields
+remain available without a separate help call.
+
+`compact-schema.test.ts` enforces budgets of 50 KB for discovery, 19 KB for the
+output-schema array and 3,400 initialization characters. It checks essential
+interpretation rules, reachable output definitions, family capabilities and
+unchanged runtime validation. The 4x reduction target (about 15 KB) is indicative;
+this unit does not reach it and does not remove further guidance merely to do so.
+Serialized sizes do not establish model context, latency or model quality gains.
+Live OpenCode, Claude Code and Codex integrations remain unverified.

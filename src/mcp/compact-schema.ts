@@ -36,7 +36,7 @@ const definitions = {
     snapshot: reference("snapshot"),
     producer: objectSchema({ name: stringSchema, version: stringSchema }, ["name", "version"]),
     inputs: objectSchema({ trust: stringSchema, declaredScope: objectType }, ["trust", "declaredScope"]),
-    analysis: reference("fact"),
+    analysis: objectSchema({ status: { enum: ["complete", "partial", "unknown"] }, reason: stringSchema }, ["status"]),
     reads: arrayType,
     limits: arrayType,
   }, ["schema", "snapshot", "producer", "inputs", "analysis", "reads", "limits"]),
@@ -62,6 +62,7 @@ const values: Record<ToolFamily, object> = {
 };
 
 function outputGuide(family: ToolFamily) {
+  const selected = ["entrypoints", "impact", "callers"].includes(family);
   const ordinary = objectSchema({
     mode: { enum: ["full", "summary", "details"] },
     status: { enum: ["complete", "partial", "unknown"] },
@@ -73,7 +74,7 @@ function outputGuide(family: ToolFamily) {
     reason: stringSchema,
     cuts: reference("cuts"),
     evidence: { type: "array", items: reference("evidence") },
-    recovery: reference("recovery"),
+    ...(selected ? { recovery: reference("recovery") } : {}),
   }, ["mode", "status", "snapshot"]);
   const projection = objectSchema({
     kind: { enum: ["projection", "projection-receipt"] },
@@ -88,14 +89,33 @@ function outputGuide(family: ToolFamily) {
     reason: stringSchema,
     evidence: { type: "array", items: reference("evidence") },
   }, ["kind", "projectionSchema", "availability", "source", "recovery", "select"]);
-  const selected = ["entrypoints", "impact", "callers"].includes(family);
-  const { source, page, fact, ...ordinaryDefinitions } = definitions;
-  return {
-    type: "object",
-    description: "Full facts include schema, snapshot, producer, inputs and evidence. Text modes return receipts. Recovery provides replay arguments and identity when available. Selected pages retain source provenance and independent availability.",
-    definitions: selected ? definitions : ordinaryDefinitions,
-    anyOf: selected ? [ordinary, projection] : [ordinary],
+  const description = "Summary/details: findings in content, receipt in structuredContent. Full: data in structuredContent, navigation in content."
+    + (selected ? " Recovery: structuredContent.recovery. Selected pages separate availability from source.analysis.status." : "");
+  const body = selected ? { type: "object", anyOf: [ordinary, projection] } : ordinary;
+  return { ...body, description, definitions: usedDefinitions(body) };
+}
+
+/** Every tool is self-contained, but carries only the definitions it actually references. */
+function usedDefinitions(schema: object): Record<string, object> {
+  const available: Record<string, object> = definitions;
+  const used: Record<string, object> = {};
+  const visit = (value: unknown): void => {
+    if (value === null || typeof value !== "object") return;
+    if (Array.isArray(value)) { value.forEach(visit); return; }
+    for (const [key, child] of Object.entries(value)) {
+      if (key === "$ref" && typeof child === "string") {
+        const name = child.slice("#/definitions/".length);
+        if (!(name in used)) {
+          const definition = available[name];
+          if (!definition) throw new Error(`Unknown output guide definition: ${name}`);
+          used[name] = definition;
+          visit(definition);
+        }
+      } else visit(child);
+    }
   };
+  visit(schema);
+  return used;
 }
 
 /** Publish an intentionally concise guide; validate using the complete original schema. */
