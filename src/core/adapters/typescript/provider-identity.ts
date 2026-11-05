@@ -5,9 +5,7 @@ export interface ProviderIdentityEvidence {
   tokens: ReadonlySet<string>;
   exportedTokens: ReadonlySet<string>;
   imports: ReadonlyMap<string, { module: string; imported: string }>;
-  importNames: ReadonlySet<string>;
   writes: ReadonlySet<string>;
-  memberWrites: ReadonlySet<string>;
 }
 
 /** Syntax evidence only. External module authentication is supplied by the caller. */
@@ -49,17 +47,11 @@ export function providerIdentityEvidence(sf: ts.SourceFile, coreExternal: boolea
     else if (ts.isNamedExports(s.exportClause)) for (const e of s.exportClause.elements) exportedTokens.delete(e.name.text);
   }
   const writes = new Set<string>();
-  const memberWrites = new Set<string>();
   const target = (node: ts.Node): void => {
     if (ts.isNonNullExpression(node)) { target(node.expression); return; }
     if (ts.isParenthesizedExpression(node) || ts.isAsExpression(node) || ts.isSatisfiesExpression(node) || ts.isTypeAssertionExpression(node)) { target(bare(node)); return; }
     if (ts.isIdentifier(node)) { writes.add(node.text); return; }
-    if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) {
-      let root = bare(node.expression);
-      while (ts.isPropertyAccessExpression(root) || ts.isElementAccessExpression(root) || ts.isNonNullExpression(root)) root = bare(root.expression);
-      if (ts.isIdentifier(root)) memberWrites.add(root.text);
-      return;
-    }
+    if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) return;
     if (ts.isPropertyAssignment(node)) { target(node.initializer); return; }
     if (ts.isShorthandPropertyAssignment(node)) { target(node.name); return; }
     if (ts.isBinaryExpression(node)) { target(node.left); return; }
@@ -73,5 +65,5 @@ export function providerIdentityEvidence(sf: ts.SourceFile, coreExternal: boolea
     node.forEachChild(visit);
   };
   visit(sf);
-  return { tokens, exportedTokens, imports, importNames: new Set(importCounts.keys()), writes, memberWrites };
+  return { tokens, exportedTokens, imports, writes };
 }

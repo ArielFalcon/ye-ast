@@ -454,6 +454,19 @@ test("a proven own member excludes a reached free-function homonym without inven
 });
 
 
+test("a proof whose receiver a provider may replace is a qualified caller that excludes no other target", () => {
+  const nodes = [fakeNode("free", "function", A, 1, 3, "write"), fakeNode("Store", "class", SVC, 1, 10), fakeNode("member", "method", SVC, 3, 4, "write"), fakeNode("Owner", "class", CMP, 1, 20), fakeNode("caller", "method", CMP, 5, 9)];
+  const graph = fakeCodeGraph(nodes, [{ from: "Store", to: "member", kind: "contains" }, { from: "Owner", to: "caller", kind: "contains" }], [{ from: "caller", name: "this.store.write", kind: "calls", file: CMP, line: 7, column: 4 }]);
+  const substitutes = [{ class: ref(A, "Other", 8), at: { path: A, line: 12 } }];
+  const proof = { owner: ref(CMP, "Owner", 1), receiver: ref(SVC, "Store", 1), member: ref(SVC, "write", 3), reference: { file: CMP, line: 7, column: 5, name: "this.store.write", kind: "calls" as const }, substitutes };
+  const inbound = createInboundEdges(graph, isTestFile, [], [], [], undefined, [proof]);
+  const [member] = graph.symbolsByIds(["member" as GraphSymbol["id"]]);
+  assert.ok(member);
+  assert.deepEqual(inbound.callersOf(member, false).map((edge) => [edge.from.id, edge.substitutes]), [["caller", substitutes]]);
+  assert.equal(inbound.memberProofs().targets.size, 0);
+  assert.equal(inbound.settledUses().size, 1);
+});
+
 for (const invalid of ["missing-member", "ambiguous-member", "missing-caller", "wrong-source-span", "wrong-receiver-owner", "duplicate-site", "uncertified-site"] as const) {
   test(`member proof refuses ${invalid} without an edge or exclusion`, () => {
     let nodes = [fakeNode("free", "function", A, 1, 3, "write"), fakeNode("Store", "class", SVC, 1, 10), fakeNode("member", "method", SVC, 3, 4, "write"), fakeNode("Owner", "class", CMP, 1, 20), fakeNode("caller", "method", CMP, 5, 9)];

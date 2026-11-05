@@ -3,14 +3,14 @@ import ts from "typescript";
 import { sourceTree } from "./source-tree.ts";
 import { isTypeScriptSource } from "../../domain/languages/typescript.ts";
 import type { AngularClass, Operand, TemplateSource } from "../../domain/relations/angular-class.ts";
-import type { MemberProofContext, MemberUseOrigin } from "../../domain/relations/member-use.ts";
+import type { MemberProofContext, MemberSubstitute, MemberUseOrigin } from "../../domain/relations/member-use.ts";
 import type { FieldOrigin, LocalOrigin } from "../../domain/relations/field-origin.ts";
 import { relation, type Relation, type SymbolRef } from "../../domain/relations/relation.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
 import type { Evidence, Finding, UnknownReason } from "../../domain/shared/fact.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { AngularMetadata, AngularMetadataReader } from "../../ports/angular-metadata.port.ts";
-import { readAngularMetadataFile, type RawAngularClass, type RawAngularFile, type RawInstanceMethod, type RawInjection, type RawOperand, type RawReference, type RawTemplate, type RawText } from "./angular-metadata.extractor.ts";
+import { readAngularMetadataFile, type RawAngularClass, type RawAngularFile, type RawInstanceMethod, type RawInjection, type RawOperand, type RawReference, type RawTemplate, type RawText, type RawWrite } from "./angular-metadata.extractor.ts";
 import { readAngularRouteFile, type RawRouteFile } from "./angular-router.extractor.ts";
 import { createDeclarationLookup } from "./declaration-lookup.ts";
 import { manifestsOf, pathsByProject, projectOf } from "./angular-projects.ts";
@@ -19,7 +19,7 @@ import { providerIdentityEvidence, type ProviderIdentityEvidence } from "./provi
 
 const ANGULAR_CORE = "@angular/core";
 const NO_PROVIDER_IDENTITY: ProviderIdentityEvidence = {
-  tokens: new Set(), exportedTokens: new Set(), imports: new Map(), importNames: new Set(), writes: new Set(), memberWrites: new Set(),
+  tokens: new Set(), exportedTokens: new Set(), imports: new Map(), writes: new Set(),
 };
 
 /**
@@ -51,8 +51,10 @@ async function readMetadata(files: readonly SourceFile[], proof?: MemberProofCon
   const memberUses: MemberUseOrigin[] = [];
   const manifests = manifestsOf(files);
   for (const [project, sources] of byProject) {
-    const complete = proof?.completeSource === true && byProject.size === 1 && contents.size === files.length && orphaned.length === 0 && sources.length === sourcePaths.length && sources.every((path) => projectOf(path, manifests)?.directory === project.directory);
-    const metadata = await readProject(contents, project.dependencies, sources, complete, proof !== undefined);
+    const scope = proof?.completeSource === true && contents.size === files.length
+      ? { sites: new Set(sources.filter((path) => projectOf(path, manifests)?.directory === project.directory)), evidence: sourcePaths }
+      : undefined;
+    const metadata = await readProject(contents, project.dependencies, sources, scope, proof !== undefined);
     classes.push(...metadata.classes);
     findings.push(...metadata.findings);
     fields.push(...metadata.fields);
@@ -68,7 +70,14 @@ async function readMetadata(files: readonly SourceFile[], proof?: MemberProofCon
   };
 }
 
-async function readProject(contents: ReadonlyMap<string, SourceFile>, dependencies: ReadonlySet<string>, sources: readonly string[], proveMembers: boolean, collectSites: boolean): Promise<AngularMetadata> {
+/** Where proofs may sit (the sources of the project's own manifest), and every source whose writes and providers can reach them. */
+interface ProofScope {
+  sites: ReadonlySet<string>;
+  evidence: readonly string[];
+}
+
+async function readProject(contents: ReadonlyMap<string, SourceFile>, dependencies: ReadonlySet<string>, sources: readonly string[], scope: ProofScope | undefined, collectSites: boolean): Promise<AngularMetadata> {
+  const proveMembers = scope !== undefined;
   const read = async (path: string): Promise<string | undefined> => contents.get(path)?.content;
   const resolver = createModuleResolver(read, dependencies);
   const sourceSet = new Set(sources);
@@ -221,44 +230,36 @@ async function readProject(contents: ReadonlyMap<string, SourceFile>, dependenci
     return global ? { external: `global#${reference.name}` } : undefined;
   };
   const substituted = new Set<string>();
-  let unknownSubstitution = false;
-  const allSources = await Promise.all(sources.map(parse));
-  const writtenImport = allSources.some((source) => source !== undefined && (
-    [...source.identity.writes].some((name) => source.identity.importNames.has(name))
-    || [...source.identity.memberWrites].some((name) => source.identity.imports.get(name)?.imported === "*")
-  ));
   const distinctToken = async (file: string, reference: RawReference): Promise<boolean> => {
     const source = await parse(file);
-    if (source === undefined || writtenImport || !stableRoot(source, reference) || source.identity.writes.has(reference.name)) return false;
+    if (source === undefined || !stableRoot(source, reference) || source.identity.writes.has(reference.name)) return false;
     const binding = source.identity.imports.get(reference.name);
     if (binding === undefined) return reference.member === undefined && source.identity.tokens.has(reference.name);
     const name = binding.imported === "*" ? reference.member : reference.member === undefined ? binding.imported : undefined;
     if (name === undefined) return false;
-    const targetFile = await fileOf(file, binding.module);
-    if (targetFile === undefined || !sourceSet.has(targetFile)) return false;
-    const target = await parse(targetFile);
-    return target !== undefined && target.identity.exportedTokens.has(name) && !target.identity.writes.has(name) && target.angular.memberEvidence.declarations.get(name) === 1;
+    const from = await fileOf(file, binding.module);
+    const declaration = from === undefined ? undefined : await proofDeclarationOf(from, name);
+    const target = declaration === undefined ? undefined : await parse(declaration.file);
+    return declaration !== undefined && target !== undefined && target.identity.exportedTokens.has(declaration.name) && !target.identity.writes.has(declaration.name) && target.angular.memberEvidence.declarations.get(declaration.name) === 1;
   };
   for (const file of sources) {
-    const providerSource = await parse(file);
-    for (const reference of providerSource?.angular.substituted ?? []) {
-      const binding = providerSource?.shape.imports.has(reference.name);
-      const count = providerSource?.angular.memberEvidence.declarations.get(reference.name) ?? 0;
-      if (collectSites && (binding ? count !== 0 : count !== 1)) unknownSubstitution = true;
+    for (const { reference } of (await parse(file))?.angular.substituted ?? []) {
       const holds = await originOf(file, reference);
       if (holds !== undefined) substituted.add(holdsKey(holds));
-      else if (!(await distinctToken(file, reference))) unknownSubstitution = true;
     }
   }
   const fields: FieldOrigin[] = [];
+  const proofFields: FieldOrigin[] = [];
   for (const file of sources) {
     const source = await parse(file);
     for (const raw of source?.angular.fields ?? []) {
       if ("opaque" in raw.target) continue;
       if (raw.via === "inject" && !stableRoot(source!, raw.target.reference)) continue;
       const holds = await originOf(file, raw.target.reference);
-      if (holds === undefined || (raw.via === "inject" && substituted.has(holdsKey(holds)))) continue;
-      fields.push({ owner: { path: file, symbol: raw.owner.name, line: raw.owner.line }, field: raw.field, holds });
+      if (holds === undefined) continue;
+      const field = { owner: { path: file, symbol: raw.owner.name, line: raw.owner.line }, field: raw.field, holds };
+      proofFields.push(field);
+      if (raw.via !== "inject" || !substituted.has(holdsKey(holds))) fields.push(field);
     }
   }
   const locals = [...pendingLocals.values()].filter((candidate) => !substituted.has(holdsKey(candidate.holds)));
@@ -285,76 +286,168 @@ async function readProject(contents: ReadonlyMap<string, SourceFile>, dependenci
       }
     }
   }
+  /**
+   * What can change a proof's receiver or member, read from every evidence source and kept with what it reaches: a class
+   * and one member, a class and all of its members, or a member name on any class when the written object is not placed.
+   * A provider replaces only the class it provides, and a known substitute class qualifies the proof instead of refusing it.
+   * An object or a token the reader cannot place reaches every class its file names, and the file that declares the token.
+   * A mutation API used as a value, a replaced export of an installed package (every token it constructs could become any
+   * class) and an unreadable source have no bound, and then nothing is proven.
+   */
+  async function risksOf(evidence: readonly string[]): Promise<{ reaches: (receiver: SymbolRef, member: string) => boolean; substitutesOf: (receiver: SymbolRef) => readonly MemberSubstitute[] | undefined } | undefined> {
+    const parsedEvidence = await Promise.all(evidence.map(async (file) => ({ file, source: await parse(file) })));
+    if (parsedEvidence.some(({ source }) => source === undefined || source.angular.memberEvidence.escapedMutator)) return undefined;
+    let unbounded = false;
+    const classKey = (ref: SymbolRef): string => `${ref.path}\0${ref.symbol}\0${ref.line}`;
+    const unsafe = new Set<string>();
+    const names = new Set<string>();
+    const substitutes = new Map<string, MemberSubstitute[]>();
+    const reach = (ref: SymbolRef, member?: string): void => { unsafe.add(`${classKey(ref)}\0${member ?? "*"}`); };
+    const fieldsByOwner = Map.groupBy(proofFields, (field) => `${field.owner.path}\0${field.owner.line}\0${field.field}`);
+    const namedByFile = new Map<string, Promise<SymbolRef[]>>();
+    const namedClasses = (file: string, source: Parsed): Promise<SymbolRef[]> => {
+      let named = namedByFile.get(file);
+      if (named === undefined) {
+        named = (async () => {
+          const references = [...[...source.shape.imports.keys()].map((name) => ({ name })), ...source.angular.memberEvidence.qualified, ...[...source.shape.classes].map((name) => ({ name }))];
+          const placed = await Promise.all(references.map((reference) => resolve(file, reference)));
+          return placed.flatMap((place) => ("class" in place ? [place.class] : []));
+        })();
+        namedByFile.set(file, named);
+      }
+      return named;
+    };
+    const unplaced = async (file: string, source: Parsed, member?: string): Promise<void> => {
+      if (member !== undefined) names.add(member);
+      else for (const ref of await namedClasses(file, source)) reach(ref);
+    };
+    const place = async (file: string, source: Parsed, write: RawWrite): Promise<void> => {
+      const { target, member } = write;
+      if ("unplaced" in target) return unplaced(file, source, member);
+      if ("self" in target) return reach({ path: file, symbol: target.self.name, line: target.self.line }, member);
+      if ("field" in target) {
+        const held = fieldsByOwner.get(`${file}\0${target.field.owner.line}\0${target.field.field}`) ?? [];
+        const holds = held.length === 1 ? held[0]!.holds : undefined;
+        return holds !== undefined && "class" in holds ? reach(holds.class, member) : unplaced(file, source, member);
+      }
+      if ("prototype" in target) {
+        const placed = await resolve(file, target.prototype);
+        if ("class" in placed) return reach(placed.class, member);
+        return "external" in placed || "token" in placed || "array" in placed ? undefined : unplaced(file, source, member);
+      }
+      const namespace = target.binding.member === undefined && source.shape.imports.get(target.binding.name)?.imported === "*";
+      const placed = await resolve(file, namespace && member !== undefined ? { name: target.binding.name, member } : target.binding);
+      if ("class" in placed) return target.whole === true || namespace ? reach(placed.class) : undefined;
+      if ("external" in placed) {
+        if (target.whole === true || namespace) unbounded = true;
+        return undefined;
+      }
+      if (target.whole === true && !("unresolved" in placed)) return undefined;
+      return unplaced(file, source, namespace ? undefined : member);
+    };
+    for (const { file, source } of parsedEvidence) {
+      const parsedSource = source!;
+      const evidenceOf = parsedSource.angular.memberEvidence;
+      for (const name of evidenceOf.subclassMembers) names.add(name);
+      for (const write of evidenceOf.writes) await place(file, parsedSource, write);
+      if (evidenceOf.unknownProvider) await unplaced(file, parsedSource);
+      for (const substitution of parsedSource.angular.substituted) {
+        const { reference } = substitution;
+        const count = evidenceOf.declarations.get(reference.name) ?? 0;
+        if (collectSites && (parsedSource.shape.imports.has(reference.name) ? count !== 0 : count !== 1)) await unplaced(file, parsedSource);
+        const holds = await originOf(file, reference);
+        if (holds === undefined) {
+          if (await distinctToken(file, reference)) continue;
+          await unplaced(file, parsedSource);
+          const placed = await resolve(file, reference);
+          const declaring = "token" in placed ? placed.token.path : "array" in placed ? placed.array.file : undefined;
+          const declared = declaring === undefined || declaring === file ? undefined : await parse(declaring);
+          if (declared !== undefined) await unplaced(declaring!, declared);
+          continue;
+        }
+        if (!("class" in holds)) continue;
+        const by = substitution.by === undefined ? undefined : await resolve(file, substitution.by);
+        if (by === undefined || !("class" in by)) reach(holds.class);
+        else substitutes.set(classKey(holds.class), [...(substitutes.get(classKey(holds.class)) ?? []), { class: by.class, at: { path: file, line: substitution.line } }]);
+      }
+    }
+    if (unbounded) return undefined;
+    return {
+      reaches: (receiver, member) => names.has(member) || unsafe.has(`${classKey(receiver)}\0${member}`) || unsafe.has(`${classKey(receiver)}\0*`),
+      substitutesOf: (receiver) => substitutes.get(classKey(receiver))?.toSorted((a, b) => compareText(a.at.path, b.at.path) || a.at.line - b.at.line || compareText(a.class.path, b.class.path) || compareText(a.class.symbol, b.class.symbol)),
+    };
+  }
   const memberUses: MemberUseOrigin[] = [];
-  if (proveMembers && !unknownSubstitution) {
-    const parsedSources = await Promise.all(sources.map(parse));
-    if (parsedSources.every((source) => source !== undefined && !source.angular.memberEvidence.unknownProvider)) {
-      const unsafe = new Set(parsedSources.flatMap((source) => [...source!.angular.memberEvidence.unsafeMembers]));
-      const unknownMutation = parsedSources.some((source) => source!.angular.memberEvidence.unknownMutation);
-      const fieldsByOwner = Map.groupBy(fields, (field) => `${field.owner.path}\0${field.owner.line}\0${field.field}`);
-      const resolvedImports = new Map<string, Promise<{ file: string; name: string } | undefined>>();
-      const methodsByFile = new Map<string, ReadonlyMap<string, readonly RawInstanceMethod[]>>();
-      const memberOf = async (file: string, source: Parsed, reference: RawReference, receiver: SymbolRef, name: string): Promise<SymbolRef | undefined> => {
-        const evidence = source.angular.memberEvidence;
-        const root = reference.name;
-        const imported = source.shape.imports.has(root);
-        if (unknownMutation || writtenImport || unsafe.has(name) || source.identity.writes.has(root) || (imported ? evidence.declarations.has(root) : evidence.declarations.get(root) !== 1)) return undefined;
-        if (imported) {
-          const binding = source.shape.imports.get(root)!;
-          const importedName = binding.imported === "*" ? reference.member : binding.imported;
-          if (importedName === undefined) return undefined;
-          const importKey = JSON.stringify([file, binding.module, importedName]);
-          let pending = resolvedImports.get(importKey);
-          if (pending === undefined) {
-            pending = (async () => {
-              const from = await fileOf(file, binding.module);
-              return from === undefined ? undefined : proofDeclarationOf(from, importedName);
-            })();
-            resolvedImports.set(importKey, pending);
-          }
-          const declaration = await pending;
-          if (declaration?.file !== receiver.path || declaration.name !== receiver.symbol) return undefined;
+  const risks = scope === undefined ? undefined : await risksOf(scope.evidence);
+  if (scope !== undefined && risks !== undefined) {
+    const fieldsByOwner = Map.groupBy(proofFields, (field) => `${field.owner.path}\0${field.owner.line}\0${field.field}`);
+    const resolvedImports = new Map<string, Promise<{ file: string; name: string } | undefined>>();
+    const methodsByFile = new Map<string, ReadonlyMap<string, readonly RawInstanceMethod[]>>();
+    const memberOf = async (file: string, source: Parsed, reference: RawReference, receiver: SymbolRef, name: string): Promise<{ member: SymbolRef; substitutes?: readonly MemberSubstitute[] } | undefined> => {
+      const evidence = source.angular.memberEvidence;
+      const root = reference.name;
+      const imported = source.shape.imports.has(root);
+      if (risks.reaches(receiver, name) || source.identity.writes.has(root) || (imported ? evidence.declarations.has(root) : evidence.declarations.get(root) !== 1)) return undefined;
+      if (imported) {
+        const binding = source.shape.imports.get(root)!;
+        const importedName = binding.imported === "*" ? reference.member : binding.imported;
+        if (importedName === undefined) return undefined;
+        const importKey = JSON.stringify([file, binding.module, importedName]);
+        let pending = resolvedImports.get(importKey);
+        if (pending === undefined) {
+          pending = (async () => {
+            const from = await fileOf(file, binding.module);
+            return from === undefined ? undefined : proofDeclarationOf(from, importedName);
+          })();
+          resolvedImports.set(importKey, pending);
         }
-        if (substituted.has(holdsKey({ class: receiver })) || !sourceSet.has(receiver.path)) return undefined;
-        const target = await parse(receiver.path);
-        if (target === undefined || target.identity.writes.has(receiver.symbol) || target.angular.memberEvidence.declarations.get(receiver.symbol) !== 1 || target.angular.memberEvidence.escapedClasses.has(`${receiver.symbol}\0${receiver.line}`)) return undefined;
-        let indexed = methodsByFile.get(receiver.path);
-        if (indexed === undefined) {
-          indexed = Map.groupBy(target.angular.memberEvidence.methods, (method) => `${method.className}\0${method.classLine}\0${method.name}`);
-          methodsByFile.set(receiver.path, indexed);
-        }
-        const methods = indexed.get(`${receiver.symbol}\0${receiver.line}\0${name}`) ?? [];
-        return methods.length === 1 ? { path: receiver.path, symbol: name, line: methods[0]!.line } : undefined;
-      };
-      for (const file of sources) {
-        const source = (await parse(file))!;
-        const evidence = source.angular.memberEvidence;
-        const rawFieldsByOwner = Map.groupBy(source.angular.fields, (field) => `${field.owner.line}\0${field.owner.name}\0${field.field}`);
-        const angularShadow = [...source.shape.imports].some(([name, binding]) => binding.module === ANGULAR_CORE && evidence.declarations.has(name));
-        for (const call of evidence.calls) {
-          if (evidence.declarations.get(call.owner.name) !== 1) continue;
-          const candidates = fieldsByOwner.get(`${file}\0${call.owner.line}\0${call.field}`) ?? [];
-          const rawFields = rawFieldsByOwner.get(`${call.owner.line}\0${call.owner.name}\0${call.field}`) ?? [];
-          if (candidates.length !== 1 || rawFields.length !== 1 || unsafe.has(call.field)) continue;
-          const field = candidates[0]!;
-          const raw = rawFields[0]!;
-          if (!("class" in field.holds) || "opaque" in raw.target || (raw.via === "inject" && angularShadow)) continue;
-          const receiver = field.holds.class;
-          const member = await memberOf(file, source, raw.target.reference, receiver, call.member);
-          if (member !== undefined) memberUses.push({ owner: field.owner, receiver, member, reference: { file, line: call.line, column: call.column, name: `this.${call.field}.${call.member}`, kind: "calls" } });
-        }
-        for (const injection of source.angular.injections) {
-          const { owner, inlineMember, target } = injection;
-          if (owner === undefined || "opaque" in target || evidence.declarations.get(owner.name) !== 1 || source.shape.declared.get(owner.name)?.line !== owner.line) continue;
-          const calls = inlineMember === undefined ? [] : [inlineMember];
-          calls.push(...(localSites.get(injection) ?? []));
-          if (calls.length === 0) continue;
-          const placed = await resolve(file, target.reference);
-          if (!("class" in placed)) continue;
-          for (const call of calls) {
-            const member = await memberOf(file, source, target.reference, placed.class, call.name);
-            if (member !== undefined) memberUses.push({ owner: { path: file, symbol: owner.name, line: owner.line }, receiver: placed.class, member, reference: { file, line: call.line, column: call.column, name: call.referenceName, kind: "calls" } });
-          }
+        const declaration = await pending;
+        if (declaration?.file !== receiver.path || declaration.name !== receiver.symbol) return undefined;
+      }
+      if (!sourceSet.has(receiver.path)) return undefined;
+      const target = await parse(receiver.path);
+      if (target === undefined || target.identity.writes.has(receiver.symbol) || target.angular.memberEvidence.declarations.get(receiver.symbol) !== 1 || target.angular.memberEvidence.escapedClasses.has(`${receiver.symbol}\0${receiver.line}`)) return undefined;
+      let indexed = methodsByFile.get(receiver.path);
+      if (indexed === undefined) {
+        indexed = Map.groupBy(target.angular.memberEvidence.methods, (method) => `${method.className}\0${method.classLine}\0${method.name}`);
+        methodsByFile.set(receiver.path, indexed);
+      }
+      const methods = indexed.get(`${receiver.symbol}\0${receiver.line}\0${name}`) ?? [];
+      if (methods.length !== 1) return undefined;
+      const substitutes = risks.substitutesOf(receiver);
+      return { member: { path: receiver.path, symbol: name, line: methods[0]!.line }, ...(substitutes === undefined ? {} : { substitutes }) };
+    };
+    const proven = (owner: SymbolRef, receiver: SymbolRef, proof: { member: SymbolRef; substitutes?: readonly MemberSubstitute[] }, reference: MemberUseOrigin["reference"]): MemberUseOrigin =>
+      ({ owner, receiver, member: proof.member, reference, ...(proof.substitutes === undefined ? {} : { substitutes: proof.substitutes }) });
+    for (const file of sources) {
+      if (!scope.sites.has(file)) continue;
+      const source = (await parse(file))!;
+      const evidence = source.angular.memberEvidence;
+      const rawFieldsByOwner = Map.groupBy(source.angular.fields, (field) => `${field.owner.line}\0${field.owner.name}\0${field.field}`);
+      const angularShadow = [...source.shape.imports].some(([name, binding]) => binding.module === ANGULAR_CORE && evidence.declarations.has(name));
+      for (const call of evidence.calls) {
+        if (evidence.declarations.get(call.owner.name) !== 1) continue;
+        const candidates = fieldsByOwner.get(`${file}\0${call.owner.line}\0${call.field}`) ?? [];
+        const rawFields = rawFieldsByOwner.get(`${call.owner.line}\0${call.owner.name}\0${call.field}`) ?? [];
+        if (candidates.length !== 1 || rawFields.length !== 1) continue;
+        const field = candidates[0]!;
+        const raw = rawFields[0]!;
+        if (risks.reaches(field.owner, call.field) || !("class" in field.holds) || "opaque" in raw.target || (raw.via === "inject" && angularShadow)) continue;
+        const receiver = field.holds.class;
+        const proof = await memberOf(file, source, raw.target.reference, receiver, call.member);
+        if (proof !== undefined) memberUses.push(proven(field.owner, receiver, proof, { file, line: call.line, column: call.column, name: `this.${call.field}.${call.member}`, kind: "calls" }));
+      }
+      for (const injection of source.angular.injections) {
+        const { owner, inlineMember, target } = injection;
+        if (owner === undefined || "opaque" in target || evidence.declarations.get(owner.name) !== 1 || source.shape.declared.get(owner.name)?.line !== owner.line) continue;
+        const calls = inlineMember === undefined ? [] : [inlineMember];
+        calls.push(...(localSites.get(injection) ?? []));
+        if (calls.length === 0) continue;
+        const placed = await resolve(file, target.reference);
+        if (!("class" in placed)) continue;
+        for (const call of calls) {
+          const proof = await memberOf(file, source, target.reference, placed.class, call.name);
+          if (proof !== undefined) memberUses.push(proven({ path: file, symbol: owner.name, line: owner.line }, placed.class, proof, { file, line: call.line, column: call.column, name: call.referenceName, kind: "calls" }));
         }
       }
     }

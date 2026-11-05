@@ -231,9 +231,18 @@ function handlerText(handler: Handler): string {
 /** The dependence that reached a symbol: where it depends on it, and what that dependence is. */
 function viaText(via: NonNullable<ImpactedSymbol["via"]>, file: string): string {
   const where = via.file === file ? via.symbol : `${via.file}:${via.symbol}`;
-  if (via.lines === undefined || via.lines.length === 0) return `${where} (${via.basis})`;
+  const marker = via.substitutes === undefined ? "" : ` ${SUBSTITUTION_MARKER}`;
+  if (via.lines === undefined || via.lines.length === 0) return `${where} (${via.basis})${marker}`;
   const at = `at ${via.lines.join(", ")}`;
-  return via.basis === "call" ? `${where} ${at}` : `${where} ${at} (${via.basis})`;
+  return `${via.basis === "call" ? `${where} ${at}` : `${where} ${at} (${via.basis})`}${marker}`;
+}
+
+const SUBSTITUTION_MARKER = "†";
+
+/** One legend line per provider substitution the shown dependences carry. */
+function substitutionLegend(symbols: readonly ImpactedSymbol[]): string[] {
+  const lines = symbols.flatMap((symbol) => (symbol.via?.substitutes ?? []).map((substitute) => `  ${SUBSTITUTION_MARKER} may be replaced by ${substitute.file}:${substitute.symbol} at ${substitute.at.file}:${substitute.at.line}`));
+  return [...new Set(lines)].sort(compareText);
 }
 
 function entrypointLocation(entrypoint: Entrypoint): string {
@@ -538,7 +547,7 @@ function impactedSymbols(value: ImpactValue, detail: ResponseMode): string[] {
   const symbols = consequenceSymbols(value);
   const header = `impacted symbols (${symbols.length}):`;
   if (symbols.length === 0) return [header];
-  const literal = [header, ...groupedLines(symbols)];
+  const literal = [header, ...groupedLines(symbols), ...substitutionLegend(symbols)];
   if (detail === "summary") {
     const direct = symbols.filter((symbol) => symbol.depth === 1);
     const deeper = [...Map.groupBy(symbols.filter((symbol) => symbol.depth !== 1), (symbol) => symbol.depth)].toSorted(([a], [b]) => a - b);
@@ -548,7 +557,7 @@ function impactedSymbols(value: ImpactValue, detail: ResponseMode): string[] {
   }
   const shown = investigationSymbols(value);
   const omitted = symbols.length - shown.length;
-  const evidence = [header, `  evidence view: nearest recorded depth ${shown.reduce((depth, symbol) => Math.min(depth, symbol.depth), Infinity)} and reached handlers`, ...groupedLines(shown), ...(omitted === 0 ? [] : [`  ${omitted} other ${omitted === 1 ? "symbol" : "symbols"}; ${categoryRecovery({ full: "includes all" })}`])];
+  const evidence = [header, `  evidence view: nearest recorded depth ${shown.reduce((depth, symbol) => Math.min(depth, symbol.depth), Infinity)} and reached handlers`, ...groupedLines(shown), ...substitutionLegend(shown), ...(omitted === 0 ? [] : [`  ${omitted} other ${omitted === 1 ? "symbol" : "symbols"}; ${categoryRecovery({ full: "includes all" })}`])];
   return omitted > 0 && size(evidence) <= size(literal) ? evidence : literal;
 }
 

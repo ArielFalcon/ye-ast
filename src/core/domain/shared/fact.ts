@@ -4,7 +4,7 @@ import { compareText } from "./code-node.ts";
 export type SchemaVersion = `${number}.${number}.${number}`;
 
 /** The schema version of every fact this build produces. */
-export const SCHEMA: SchemaVersion = "0.15.0";
+export const SCHEMA: SchemaVersion = "0.16.0";
 
 export type SnapshotRef =
   | { repo: string; kind: "sha"; sha: string }

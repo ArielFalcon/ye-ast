@@ -2,7 +2,7 @@ import type { DependenceBasis } from "../../domain/impact/impact-fact.ts";
 import { topLevelOf, isSeedable } from "../../domain/change/seeds.ts";
 import { declarationAnchor, declarationUseKey, referenceKey, uniqueReferenceKeys, type MemberReferenceProofs } from "../../domain/impact/impact-cuts.ts";
 import { CALL_EDGE_KINDS, EDGE_POLICY, edgeConfidence, FOLLOWED_EDGE_KINDS, followsEdge, followsRelation, isIgnoredEdge } from "../../domain/impact/edge-policy.ts";
-import type { MemberUseOrigin } from "../../domain/relations/member-use.ts";
+import type { MemberSubstitute, MemberUseOrigin } from "../../domain/relations/member-use.ts";
 import type { FieldOrigin, LocalOrigin } from "../../domain/relations/field-origin.ts";
 import type { Relation, SymbolRef } from "../../domain/relations/relation.ts";
 import { comparePosition, compareText, joinsFact } from "../../domain/shared/code-node.ts";
@@ -22,6 +22,8 @@ export interface InboundEdge {
   lines: readonly number[];
   /** The category of the selected evidence; observed call existence is kept separately for fan-in. */
   basis: DependenceBasis;
+  /** The classes a provider may inject instead of the receiver a proven member call names. */
+  substitutes?: readonly MemberSubstitute[];
 }
 
 /**
@@ -381,15 +383,16 @@ export function createInboundEdges(
   function indexMemberUses(): void {
     if (membersIndexed) return;
     membersIndexed = true;
-    const joined = (memberUses ?? []).flatMap((proof) => { const use = joinMember(proof); return use === undefined ? [] : [use]; });
+    const joined = (memberUses ?? []).flatMap((proof) => { const use = joinMember(proof); return use === undefined ? [] : [{ ...use, substitutes: proof.substitutes }]; });
     for (const [occurrence, group] of Map.groupBy(joined, (use) => use.occurrence)) {
       if (group.length !== 1) continue;
       const use = group[0]!;
       const anchor = declarationAnchor(use.member.file, use.member.name);
-      memberTargets.set(occurrence, anchor);
+      /** A receiver a provider may replace settles its own member's place, but cannot exclude a substitute's homonym. */
+      if (use.substitutes === undefined) memberTargets.set(occurrence, anchor);
       if (uniqueAnchor(use.member)) settledUses.push({ key: declarationUseKey(anchor, occurrence), target: use.member.id, source: use.from.id });
       const callers = memberCallers.get(use.member.id) ?? [];
-      callers.push({ from: use.from, confidence: EDGE_POLICY.relations.confidence, basis: "call", lines: [use.line] });
+      callers.push({ from: use.from, confidence: EDGE_POLICY.relations.confidence, basis: "call", lines: [use.line], ...(use.substitutes === undefined ? {} : { substitutes: use.substitutes }) });
       memberCallers.set(use.member.id, callers);
     }
   }
@@ -441,12 +444,13 @@ function strongestPerSymbol(edges: readonly InboundEdge[]): InboundEdge[] {
   const ordered = edges.toSorted((a, b) =>
     (a.lines[0] ?? Infinity) - (b.lines[0] ?? Infinity) ||
     compareText(a.basis, b.basis) ||
-    compareText(a.bridge ?? "", b.bridge ?? ""));
+    compareText(a.bridge ?? "", b.bridge ?? "") ||
+    Number(a.substitutes !== undefined) - Number(b.substitutes !== undefined));
   for (const edge of ordered) {
     const held = gathered.get(edge.from.id);
     let selected = held?.edge;
     if (selected === undefined || edge.confidence > selected.confidence) selected = edge;
-    else if (edge.confidence === selected.confidence && edge.basis === selected.basis && edge.bridge === selected.bridge) {
+    else if (edge.confidence === selected.confidence && edge.basis === selected.basis && edge.bridge === selected.bridge && edge.substitutes === selected.substitutes) {
       selected = { ...selected, lines: [...new Set([...selected.lines, ...edge.lines])].sort((a, b) => a - b) };
     }
     gathered.set(edge.from.id, {

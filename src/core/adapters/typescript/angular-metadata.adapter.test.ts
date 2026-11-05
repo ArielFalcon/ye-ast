@@ -295,6 +295,7 @@ async function memberProofs(owner: string, target = "export class Store { write(
 }
 
 const OWNER = "export class Owner { store = new Store(); run() { this.store.write(); } }";
+const PROVEN = 1;
 
 test("member evidence requires complete source without changing existing origins", async () => {
   const files = [{ path: "package.json", content: PACKAGE }, { path: "src/store.ts", content: "export class Store { write() {} }" }, { path: "src/owner.ts", content: `import { Store } from './store'; ${OWNER}` }];
@@ -339,12 +340,11 @@ test("receiver mutations or escapes invalidate its member proof", async () => {
 
 test("member mutation elsewhere in the project prevents proof", async () => {
   for (const change of ["x.write = () => {}", "x.write++", "[x.write] = [fn]", "x[key] = fn"])
-    assert.deepEqual((await memberProofs(OWNER, undefined, { "src/mutate.ts": change })).memberUses, [], change);
+    assert.deepEqual((await memberProofs(OWNER, undefined, { "src/mutate.ts": `import { Store } from './store'; ${change}` })).memberUses, [], change);
 });
 
 test("malformed or unowned source cannot authorize member evidence", async () => {
   assert.deepEqual((await memberProofs(OWNER, "export class Store { write() {} }", { "src/broken.ts": "const x = ;" })).memberUses, []);
-  assert.deepEqual((await memberProofs(OWNER, undefined, { "other/package.json": "{}", "other/file.ts": "export const x = 1;" })).memberUses, []);
   assert.deepEqual((await memberProofs(OWNER, undefined, { "src/store.ts": "" })).memberUses, []);
 });
 
@@ -448,7 +448,7 @@ test("namespace and named expression bindings can shadow a constructor import", 
 
 test("iteration assignments can mutate a member or an unknown computed property", async () => {
   for (const mutation of ["for (x.write of values) {}", "for (x[key] in values) {}"])
-    assert.deepEqual((await memberProofs(OWNER, undefined, { "src/mutate.ts": mutation })).memberUses, [], mutation);
+    assert.deepEqual((await memberProofs(OWNER, undefined, { "src/mutate.ts": `import { Store } from './store'; ${mutation}` })).memberUses, [], mutation);
 });
 
 test("an escaped reflective mutator prevents member proofs", async () => {
@@ -610,9 +610,8 @@ test("an inline token reached through a shadowed barrel is not member proof", as
 test("inline proofs are withheld for unknown providers and derived member replacement", async () => {
   const owner = "export function run() { inject(Store).write(); }";
   for (const extra of [
-    { "src/providers.ts": "const providers = [{ provide: choose(), useValue: {} }];" },
+    { "src/providers.ts": "import { Store } from './store'; const providers = [{ provide: choose(), useValue: {} }];" },
     { "src/derived.ts": "import { Store } from './store'; class Derived extends Store { write = () => {}; }" },
-    { "other/package.json": "{}", "other/file.ts": "const unknown = true;" },
   ]) assert.deepEqual((await memberProofs(owner, undefined, extra)).memberUses, []);
 });
 
@@ -660,7 +659,64 @@ test("unrelated unknown providers do not suppress potential local sites; known s
   const owner = "export function boot() { const svc = inject(Store); svc.write(); }";
   const unknown = await memberProofs(owner, undefined, { "src/providers.ts": "const providers = [{ provide: unknownToken(), useValue: 1 }];" });
   assert.equal(unknown.locals[0]?.calls?.length, 1);
-  assert.deepEqual(unknown.memberUses, []);
+  assert.equal(unknown.memberUses?.length, PROVEN);
   const replaced = await memberProofs(owner, undefined, { "src/providers.ts": "import { Store } from './store'; const providers = [{ provide: Store, useValue: {} }];" });
   assert.deepEqual(replaced.locals, []);
+});
+
+
+test("a write to a local literal, a platform global or a platform class prototype reaches no source class", async () => {
+  for (const change of ["const a: unknown[] = []; a[0] = 1;", "const o: Record<string, unknown> = {}; o.write = 1;", "document.title = 'x'; window['write'] = 1;", "Element.prototype.write = fn;"])
+    assert.equal((await memberProofs(OWNER, undefined, { "src/mutate.ts": `export function f() { ${change} }` })).memberUses?.length, PROVEN, change);
+});
+
+test("a prototype write or escape reaches only the class it names", async () => {
+  const other = "export class Other { write() {} }";
+  assert.equal((await memberProofs(OWNER, undefined, { "src/other.ts": other, "src/mutate.ts": "import { Other } from './other'; Other.prototype.write = fn; share(Other.prototype);" })).memberUses?.length, PROVEN);
+  for (const mutation of ["Store.prototype.write = fn;", "Store.prototype['write'] = fn;", "share(Store.prototype);"])
+    assert.deepEqual((await memberProofs(OWNER, undefined, { "src/mutate.ts": `import { Store } from './store'; ${mutation}` })).memberUses, [], mutation);
+});
+
+test("a write keyed by receiver and member leaves other receivers and other members proven", async () => {
+  const others = { "src/other.ts": "export class Other { write() {} replace() { this.write = fn; } }", "src/editor.ts": "export class Editor { write() {} submit() { this.write(); } }", "src/mutate.ts": "export function f(p: any) { p.read = fn; }" };
+  assert.equal((await memberProofs(OWNER, undefined, others)).memberUses?.length, PROVEN);
+  for (const mutation of ["export class Store { write() {} replace() { this.write = fn; } }", "export class Store { write() {} replace() { delete this.write; } }"])
+    assert.deepEqual((await memberProofs(OWNER, mutation)).memberUses, [], mutation);
+  assert.deepEqual((await memberProofs(OWNER, undefined, { "src/mutate.ts": "export function f(p: any) { p.write = fn; }" })).memberUses, []);
+});
+
+test("a write whose object the reader cannot place reaches every class its file names, and only those", async () => {
+  const unplaced = "export function f(rows: unknown[], key: number) { rows[key] = 1; }";
+  assert.equal((await memberProofs(OWNER, undefined, { "src/mutate.ts": unplaced })).memberUses?.length, PROVEN);
+  for (const header of ["import { Store } from './store';", "import type { Store } from './store';", "import * as ns from './store'; type T = ns.Store;"])
+    assert.deepEqual((await memberProofs(OWNER, undefined, { "src/mutate.ts": `${header} ${unplaced}` })).memberUses, [], header);
+});
+
+test("a substitution reaches only the token it provides; a known substitute class qualifies the proof with its site", async () => {
+  const other = { "src/other.ts": "export class Other { write() {} }" };
+  const unrelated = await memberProofs(OWNER, undefined, { ...other, "src/providers.ts": "import { Other } from './other'; export const providers = [{ provide: Other, useValue: {} }];" });
+  assert.deepEqual(unrelated.memberUses?.map((use) => use.substitutes), [undefined]);
+  const owner = "export class Owner { store = inject(Store); run() { this.store.write(); } }";
+  const replaced = await memberProofs(owner, undefined, { ...other, "src/providers.ts": "import { Store } from './store';\nimport { Other } from './other';\nexport const providers = [{ provide: Store, useClass: Other }];" });
+  assert.deepEqual(replaced.memberUses?.map((use) => use.substitutes), [[{ class: { path: "src/other.ts", symbol: "Other", line: 1 }, at: { path: "src/providers.ts", line: 3 } }]]);
+  assert.deepEqual(replaced.fields, []);
+  for (const provider of ["{ provide: Store, useFactory: () => new Other() }", "{ provide: Store, useClass: Other }, { provide: Store, useValue: {} }"])
+    assert.deepEqual((await memberProofs(owner, undefined, { ...other, "src/providers.ts": `import { Store } from './store'; import { Other } from './other'; export const providers = [${provider}];` })).memberUses, [], provider);
+});
+
+test("a provided InjectionToken re-exported through a barrel is distinct from every class", async () => {
+  const token = { "src/token.ts": `${CORE}export const CONFIG = new InjectionToken<string>('config');`, "src/index.ts": "export { CONFIG } from './token';", "src/providers.ts": "import { CONFIG } from './index'; import { Store } from './store'; export const providers = [Store, { provide: CONFIG, useValue: 'x' }];" };
+  assert.equal((await memberProofs(OWNER, undefined, token)).memberUses?.length, PROVEN);
+  assert.deepEqual((await memberProofs(OWNER, undefined, { ...token, "src/providers.ts": "import { CONFIG } from './index'; import { Store } from './store'; CONFIG = Store; export const providers = [{ provide: CONFIG, useValue: 'x' }];" })).memberUses, []);
+});
+
+test("a source outside the Angular project contributes its writes instead of disabling proofs", async () => {
+  const outside = await memberProofs(OWNER, undefined, { "tools/package.json": "{}", "tools/build.ts": "import { Store } from '../src/store'; export class Tool { store = new Store(); run() { this.store.write(); } }" });
+  assert.deepEqual(outside.memberUses?.map((use) => use.reference.file), ["src/owner.ts"]);
+  assert.deepEqual((await memberProofs(OWNER, undefined, { "tools/package.json": "{}", "tools/build.ts": "import { Store } from '../src/store'; Store.prototype.write = fn;" })).memberUses, []);
+});
+
+test("a test file is no mutation or substitution evidence", async () => {
+  const meta = await memberProofs(OWNER, undefined, { "src/store.spec.ts": "import { Store } from './store'; Store.prototype.write = fn; const providers = [{ provide: Store, useValue: {} }];" });
+  assert.equal(meta.memberUses?.length, PROVEN);
 });

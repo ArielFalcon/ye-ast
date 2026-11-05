@@ -558,6 +558,7 @@ function impactOf(input: WalkInput): ImpactRead {
               symbol: via.symbol.name,
               ...(via.lines.length === 0 ? {} : { lines: via.lines }),
               basis: via.basis,
+              ...(via.substitutes === undefined ? {} : { substitutes: via.substitutes.map(({ class: { path, symbol, line }, at }) => ({ file: path, symbol, line, at: { file: at.path, line: at.line } })) }),
             },
           }),
     })),

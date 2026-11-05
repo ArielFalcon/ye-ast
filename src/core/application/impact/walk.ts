@@ -2,6 +2,7 @@ import type { DependenceBasis, ImpactBudget } from "../../domain/impact/impact-f
 import { declarationAnchor } from "../../domain/impact/impact-cuts.ts";
 import type { Cut } from "../../domain/shared/fact.ts";
 import { comparePosition } from "../../domain/shared/code-node.ts";
+import type { MemberSubstitute } from "../../domain/relations/member-use.ts";
 import type { GraphNodeId, GraphSymbol } from "../../ports/code-graph.port.ts";
 import type { InboundEdge, InboundEdges } from "./inbound-edges.ts";
 
@@ -12,6 +13,8 @@ export interface Via {
   lines: readonly number[];
   /** What the dependence is. */
   basis: DependenceBasis;
+  /** The classes a provider may inject instead of the receiver a proven call names. */
+  substitutes?: readonly MemberSubstitute[];
 }
 
 export interface ReachedSymbol {
@@ -55,7 +58,7 @@ interface Link {
 }
 
 function placeOn(symbol: GraphSymbol, dependence: InboundEdge): Via {
-  return { symbol, lines: dependence.lines, basis: dependence.basis };
+  return { symbol, lines: dependence.lines, basis: dependence.basis, ...(dependence.substitutes === undefined ? {} : { substitutes: dependence.substitutes }) };
 }
 
 /**

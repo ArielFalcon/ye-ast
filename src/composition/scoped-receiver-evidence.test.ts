@@ -38,8 +38,48 @@ for (const variant of ["private record", "class alias provider", "escaped record
       if (result.value.status === "unknown") return;
       const places = result.value.status === "partial" ? result.value.cuts.flatMap((cut) => cut.at) : [];
       const unresolvedInline = places.some((place) => place.includes("inject().start"));
-      assert.equal(unresolvedInline, variant !== "private record", JSON.stringify(result.value));
-      if (variant === "private record") assert.ok(result.value.value.symbols.some((symbol) => symbol.symbol === "initialize"));
+      assert.equal(unresolvedInline, variant === "class alias provider", JSON.stringify(result.value));
+      if (variant !== "class alias provider") assert.ok(result.value.value.symbols.some((symbol) => symbol.symbol === "initialize"));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+}
+
+for (const variant of ["unrelated literal write and own call", "element write on a value of the receiver class"] as const) {
+  test(`callers of an injected service member with an ${variant}`, async () => {
+    const root = await mkdtemp(join(tmpdir(), "ye-ast-scoped-risks-"));
+    const repo = join(root, "repo");
+    const env = { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1", GIT_AUTHOR_NAME: "test", GIT_AUTHOR_EMAIL: "test@example.com", GIT_COMMITTER_NAME: "test", GIT_COMMITTER_EMAIL: "test@example.com" };
+    const git = (...args: string[]) => execFileSync("git", args, { cwd: repo, env, encoding: "utf8" }).trim();
+    const files = {
+      "package.json": JSON.stringify({ dependencies: { "@angular/core": "22.2.4" } }),
+      "src/api.ts": "import { Injectable } from '@angular/core';\n@Injectable({ providedIn: 'root' })\nexport class Api {\n  load(): number { return 1; }\n  save(): void {}\n}\n",
+      "src/page.ts": "import { Component, inject } from '@angular/core';\nimport { Api } from './api';\n@Component({ selector: 'app-page', template: '' })\nexport class Page {\n  api = inject(Api);\n  run(): void { this.api.load(); }\n}\n",
+      "src/editor.ts": "export class Editor { load(): void {} submit(): void { this.load(); } }\n",
+      "src/util.ts": variant === "unrelated literal write and own call"
+        ? "export function fill(): number[] { const a: number[] = []; a[0] = 1; return a; }\n"
+        : "import type { Api } from './api';\nexport function patch(api: Api, key: string): void { (api as any)[key] = 1; }\n",
+    };
+    try {
+      await mkdir(repo);
+      await mkdir(join(root, "scratch"));
+      git("init", "-q", "-b", "main");
+      for (const [path, text] of Object.entries(files)) {
+        await mkdir(dirname(join(repo, path)), { recursive: true });
+        await writeFile(join(repo, path), text);
+      }
+      git("add", ".");
+      git("commit", "-qm", "fixture");
+      const result = await composeQueries({ scratchRoot: join(root, "scratch") }).impact.callers({ repo, repoId: "risks", revision: "HEAD", targets: [{ file: "src/api.ts", symbol: "load" }] });
+      assert.ok(result.ok, JSON.stringify(result));
+      assert.notEqual(result.value.status, "unknown");
+      if (result.value.status === "unknown") return;
+      const proven = variant === "unrelated literal write and own call";
+      assert.equal(result.value.status, proven ? "complete" : "partial", JSON.stringify(result.value));
+      assert.ok(result.value.value.symbols.some((symbol) => symbol.symbol === "run" && symbol.file === "src/page.ts"), JSON.stringify(result.value.value.symbols));
+      const places = result.value.status === "partial" ? result.value.cuts.flatMap((cut) => cut.at) : [];
+      assert.equal(places.some((place) => place.includes("this.api.load")), !proven, JSON.stringify(places));
     } finally {
       await rm(root, { recursive: true, force: true });
     }

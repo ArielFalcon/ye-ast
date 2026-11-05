@@ -1,7 +1,7 @@
 import ts from "typescript";
 import { declarationCounts } from "./syntax-names.ts";
-import { privateRecordWriteTargets } from "./private-record-writes.ts";
 import { bare, type RawRouteFile } from "./angular-router.extractor.ts";
+import { TYPESCRIPT_LIB_GLOBALS } from "./typescript-lib-globals.ts";
 
 const ANGULAR_CORE = "@angular/core";
 
@@ -55,6 +55,19 @@ export interface RawField {
 export interface RawInstanceMethod { className: string; classLine: number; name: string; line: number }
 export interface RawFieldCall { owner: { name: string; line: number }; field: string; member: string; line: number; column: number }
 export interface RawLocalCall { owner: { name: string; line: number }; local: string; member: string; offset: number; line: number; column: number }
+/**
+ * The object a write or a reflective mutation changes: an instance of the class around `this`, what a field of that class
+ * holds, a class or a value the file binds by import or top-level declaration (`prototype`: the class's prototype), or
+ * an object the syntax does not place.
+ */
+export type RawWriteTarget =
+  | { self: { name: string; line: number } }
+  | { field: { owner: { name: string; line: number }; field: string } }
+  | { binding: RawReference; whole?: true }
+  | { prototype: RawReference }
+  | { unplaced: true };
+/** A write to `member` of the target, or to members no syntax names when `member` is absent. */
+export interface RawWrite { target: RawWriteTarget; member?: string; line: number }
 export interface RawMemberEvidence {
   methods: RawInstanceMethod[];
   calls: RawFieldCall[];
@@ -62,19 +75,29 @@ export interface RawMemberEvidence {
   reads: Map<string, number>;
   declarations: Map<string, number>;
   escapedClasses: Set<string>;
-  unsafeMembers: Set<string>;
-  unknownMutation: boolean;
+  writes: RawWrite[];
+  /** The members a subclass declares, by name. */
+  subclassMembers: Set<string>;
+  /** `ns.Name` references through a namespace import: with the imports, what the file can name. */
+  qualified: RawReference[];
+  /** A mutation API (`Object.assign`, `Reflect.set`, …) used as a value: what it changes cannot be bounded. */
+  escapedMutator: boolean;
   unknownBinding: boolean;
   unknownProvider: boolean;
 }
+
+export interface RawSubstitution { reference: RawReference; line: number; by?: RawReference }
 
 export interface RawAngularFile {
   classes: RawAngularClass[];
   memberEvidence: RawMemberEvidence;
   injections: RawInjection[];
   fields: RawField[];
-  /** The tokens a provider of this file replaces: `{ provide: X, useClass | useExisting | useFactory | useValue }`, or the class an `@Injectable` with one of those options decorates. */
-  substituted: RawReference[];
+  /**
+   * The tokens a provider of this file replaces: `{ provide: X, useClass | useExisting | useFactory | useValue }`, or the
+   * class an `@Injectable` with one of those options decorates; `by` is the class a `useClass` or `useExisting` names.
+   */
+  substituted: RawSubstitution[];
   /** The top-level arrays of this file, by name, read as lists of operands. */
   arrays: Map<string, RawOperand[]>;
 }
@@ -87,7 +110,7 @@ const CONSTRUCTED = new Set([...Object.keys(KINDS), "Injectable"]);
 export function readAngularMetadataFile(sf: ts.SourceFile, shape: Pick<RawRouteFile, "imports">, proveMembers = false, coreExternal = true): RawAngularFile {
   const line = (node: ts.Node): number => sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1;
   const declarations = declarationCounts(sf);
-  const result: RawAngularFile = { classes: [], memberEvidence: proveMembers ? readMemberEvidence(sf, declarations) : { methods: [], calls: [], localCalls: [], reads: new Map(), declarations, escapedClasses: new Set(), unsafeMembers: new Set(), unknownMutation: false, unknownBinding: false, unknownProvider: false }, injections: [], fields: [], substituted: [], arrays: new Map() };
+  const result: RawAngularFile = { classes: [], memberEvidence: proveMembers ? readMemberEvidence(sf, declarations, shape) : { methods: [], calls: [], localCalls: [], reads: new Map(), declarations, escapedClasses: new Set(), writes: [], subclassMembers: new Set(), qualified: [], escapedMutator: false, unknownBinding: false, unknownProvider: false }, injections: [], fields: [], substituted: [], arrays: new Map() };
 
   /* The export of `@angular/core` an expression names: `inject`, or `core.inject` through a namespace import. */
   const coreName = (expression: ts.Expression): string | undefined => {
@@ -146,6 +169,12 @@ export function readAngularMetadataFile(sf: ts.SourceFile, shape: Pick<RawRouteF
       const directive = propertyOf(entry, "directive");
       return directive === undefined ? [{ unreadable: true as const, line: line(entry) }] : operandsOf(directive);
     });
+  };
+  const substitutionOf = (reference: RawReference, provider: ts.ObjectLiteralExpression): RawSubstitution => {
+    const options = SUBSTITUTIONS.flatMap((option) => { const value = propertyOf(provider, option); return value === undefined ? [] : [[option, value] as const]; });
+    const [option, value] = options.length === 1 ? options[0]! : [];
+    const by = value !== undefined && (option === "useClass" || option === "useExisting") ? referenceOf(value) : undefined;
+    return { reference, line: line(provider), ...(by === undefined ? {} : { by }) };
   };
   const textOrUnreadable = (expression: ts.Expression): RawText => {
     const text = textOf(expression);
@@ -233,12 +262,12 @@ export function readAngularMetadataFile(sf: ts.SourceFile, shape: Pick<RawRouteF
       if (constructed) parametersOf(node, node.name);
       fieldsOf(node, node.name, constructed);
       const injectable = decorators.get("Injectable")?.arguments[0];
-      if (injectable !== undefined && ts.isObjectLiteralExpression(injectable) && SUBSTITUTIONS.some((option) => propertyOf(injectable, option) !== undefined)) result.substituted.push({ name: node.name.text });
+      if (injectable !== undefined && ts.isObjectLiteralExpression(injectable) && SUBSTITUTIONS.some((option) => propertyOf(injectable, option) !== undefined)) result.substituted.push(substitutionOf({ name: node.name.text }, injectable));
     }
     if (ts.isObjectLiteralExpression(node)) {
       const provided = propertyOf(node, "provide");
       const reference = provided === undefined ? undefined : referenceOf(provided);
-      if (reference !== undefined && SUBSTITUTIONS.some((option) => propertyOf(node, option) !== undefined)) result.substituted.push(reference);
+      if (reference !== undefined && SUBSTITUTIONS.some((option) => propertyOf(node, option) !== undefined)) result.substituted.push(substitutionOf(reference, node));
     }
     if (ts.isCallExpression(node) && coreName(node.expression) === "inject" && node.arguments[0] !== undefined) {
       const owner = ownerOf(node, sf);
@@ -338,12 +367,20 @@ function ownerOf(node: ts.Node, sf: ts.SourceFile): { name: ts.Identifier } | un
   return undefined;
 }
 
-function readMemberEvidence(sf: ts.SourceFile, declarations: Map<string, number>): RawMemberEvidence {
-  const result: RawMemberEvidence = { methods: [], calls: [], localCalls: [], reads: new Map(), declarations, escapedClasses: new Set(), unsafeMembers: new Set(), unknownMutation: false, unknownBinding: false, unknownProvider: false };
+const LIB_GLOBALS: ReadonlySet<string> = new Set(TYPESCRIPT_LIB_GLOBALS);
+const PROTOTYPE_KEYS = ["prototype", "__proto__"];
+/** The reflective calls that change their first argument, and the argument that names the member when it is a literal. */
+const MUTATORS: Readonly<Record<string, Readonly<Record<string, number | "keys" | "none">>>> = {
+  Object: { assign: "keys", defineProperty: 1, defineProperties: "keys", setPrototypeOf: "none", getPrototypeOf: "none" },
+  Reflect: { set: 1, defineProperty: 1, deleteProperty: 1, setPrototypeOf: "none", getPrototypeOf: "none" },
+};
+
+function readMemberEvidence(sf: ts.SourceFile, declarations: Map<string, number>, shape: Pick<RawRouteFile, "imports">): RawMemberEvidence {
+  const result: RawMemberEvidence = { methods: [], calls: [], localCalls: [], reads: new Map(), declarations, escapedClasses: new Set(), writes: [], subclassMembers: new Set(), qualified: [], escapedMutator: false, unknownBinding: false, unknownProvider: false };
   const unsafeFields = new Set<string>();
-  const privateWrites = privateRecordWriteTargets(sf, declarations);
   const escapedOwners = result.escapedClasses;
-  const key = (owner: ts.ClassDeclaration, field: string): string => `${owner.name?.text}\0${owner.name === undefined ? 0 : sf.getLineAndCharacterOfPosition(owner.name.getStart(sf)).line + 1}\0${field}`;
+  const lineOf = (node: ts.Node): number => sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1;
+  const key = (owner: ts.ClassDeclaration, field: string): string => `${owner.name?.text}\0${owner.name === undefined ? 0 : lineOf(owner.name)}\0${field}`;
   const ownerOfThis = (node: ts.Node): ts.ClassDeclaration | undefined => {
     for (let at = node.parent; at !== undefined && at !== sf; at = at.parent) {
       if (ts.isClassDeclaration(at)) return at.parent === sf && at.name !== undefined ? at : undefined;
@@ -353,10 +390,97 @@ function readMemberEvidence(sf: ts.SourceFile, declarations: Map<string, number>
     }
     return undefined;
   };
-  const markWrite = (node: ts.Node): void => {
-    if (ts.isElementAccessExpression(node) && !privateWrites.has(node)) result.unknownMutation = true;
-    if (ts.isPropertyAccessExpression(node) && !privateWrites.has(node)) result.unsafeMembers.add(node.name.text);
-    ts.forEachChild(node, markWrite);
+  const owned = (owner: ts.ClassDeclaration): { name: string; line: number } => ({ name: owner.name!.text, line: lineOf(owner.name!) });
+  const literalLocals = new Set<string>();
+  const topLevelClasses = new Set<string>();
+  const collect = (node: ts.Node): void => {
+    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && ts.isVariableDeclarationList(node.parent) && (node.parent.flags & ts.NodeFlags.Const) !== 0 && node.initializer !== undefined && isFreshLiteral(node.initializer)) literalLocals.add(node.name.text);
+    if (ts.isClassDeclaration(node) && node.name !== undefined && node.parent === sf) topLevelClasses.add(node.name.text);
+    ts.forEachChild(node, collect);
+  };
+  collect(sf);
+  const literalFields = new Map<ts.ClassDeclaration, Set<string>>();
+  const literalField = (owner: ts.ClassDeclaration, field: string): boolean => {
+    let fields = literalFields.get(owner);
+    if (fields === undefined) {
+      const assigned = assignedFields(owner);
+      fields = new Set(owner.members.flatMap((member) => ts.isPropertyDeclaration(member) && ts.isIdentifier(member.name) && !isStatic(member) && member.initializer !== undefined && isFreshLiteral(member.initializer) && !assigned.has(member.name.text) ? [member.name.text] : []));
+      literalFields.set(owner, fields);
+    }
+    return fields.has(field);
+  };
+  /** What a name the file binds stands for as the object of a write: nothing for a fresh literal or a platform global. */
+  const named = (name: string): RawWriteTarget | undefined => {
+    const count = declarations.get(name) ?? 0;
+    if (count === 0) return shape.imports.has(name) ? { binding: { name } } : LIB_GLOBALS.has(name) ? undefined : { unplaced: true };
+    if (count === 1 && literalLocals.has(name)) return undefined;
+    return count === 1 && topLevelClasses.has(name) ? { binding: { name } } : { unplaced: true };
+  };
+  const namespaced = (expression: ts.Expression): RawReference | undefined => {
+    const e = unwrapped(expression);
+    if (ts.isIdentifier(e)) return { name: e.text };
+    return ts.isPropertyAccessExpression(e) && ts.isIdentifier(e.expression) && (declarations.get(e.expression.text) ?? 0) === 0 && shape.imports.get(e.expression.text)?.imported === "*" ? { name: e.expression.text, member: e.name.text } : undefined;
+  };
+  /** The prototype of an unbound name is no class of the repository: a source class is declared or imported. */
+  const prototypeOf = (expression: ts.Expression): RawWriteTarget | undefined => {
+    const reference = namespaced(expression);
+    if (reference === undefined) return { unplaced: true };
+    const count = declarations.get(reference.name) ?? 0;
+    if (reference.member !== undefined || (count === 0 && shape.imports.has(reference.name)) || (count === 1 && topLevelClasses.has(reference.name))) return { prototype: reference };
+    return count === 0 ? undefined : { unplaced: true };
+  };
+  const isPrototypeAccess = (node: ts.Node): node is ts.PropertyAccessExpression | ts.ElementAccessExpression =>
+    (ts.isPropertyAccessExpression(node) && PROTOTYPE_KEYS.includes(node.name.text)) || (ts.isElementAccessExpression(node) && ts.isStringLiteral(node.argumentExpression) && PROTOTYPE_KEYS.includes(node.argumentExpression.text));
+  /** The object `object` names as the target of a write. */
+  const targetOf = (object: ts.Expression): RawWriteTarget | undefined => {
+    const o = unwrapped(object);
+    if (o.kind === ts.SyntaxKind.ThisKeyword) {
+      const owner = ownerOfThis(o);
+      return owner === undefined ? { unplaced: true } : { self: owned(owner) };
+    }
+    if (isPrototypeAccess(o)) return prototypeOf(o.expression);
+    if (ts.isPropertyAccessExpression(o) && o.expression.kind === ts.SyntaxKind.ThisKeyword) {
+      const owner = ownerOfThis(o);
+      if (owner === undefined) return { unplaced: true };
+      return literalField(owner, o.name.text) ? undefined : { field: { owner: owned(owner), field: o.name.text } };
+    }
+    if (ts.isIdentifier(o)) return named(o.text);
+    const reference = namespaced(o);
+    return reference?.member === undefined ? { unplaced: true } : { binding: reference };
+  };
+  const record = (object: ts.Expression, member: string | undefined, at: ts.Node): void => {
+    const target = targetOf(object);
+    if (target === undefined) return;
+    result.writes.push({ target, ...(member === undefined ? {} : { member }), line: lineOf(at) });
+    const owner = "self" in target ? ownerOfThis(unwrapped(object)) : undefined;
+    if (owner?.heritageClauses?.some((clause) => clause.token === ts.SyntaxKind.ExtendsKeyword) !== true) return;
+    if (member !== undefined) result.subclassMembers.add(member);
+    else result.writes.push({ target: { unplaced: true }, line: lineOf(at) });
+  };
+  const literalKey = (expression: ts.Expression | undefined): string | undefined =>
+    expression !== undefined && (ts.isStringLiteral(expression) || ts.isNoSubstitutionTemplateLiteral(expression)) ? expression.text : undefined;
+  const written = (node: ts.Node): void => {
+    const e = ts.isExpression(node) ? unwrapped(node) : node;
+    if (ts.isArrayLiteralExpression(e)) e.elements.forEach(written);
+    else if (ts.isObjectLiteralExpression(e)) {
+      for (const property of e.properties) {
+        if (ts.isPropertyAssignment(property)) written(property.initializer);
+        else if (ts.isSpreadAssignment(property)) written(property.expression);
+      }
+    } else if (ts.isSpreadElement(e)) written(e.expression);
+    else if (ts.isBinaryExpression(e) && e.operatorToken.kind === ts.SyntaxKind.EqualsToken) written(e.left);
+    else if (ts.isPropertyAccessExpression(e)) {
+      if (PROTOTYPE_KEYS.includes(e.name.text)) record(e.expression, undefined, e);
+      else record(e.expression, e.name.text, e);
+    } else if (ts.isElementAccessExpression(e)) {
+      const member = literalKey(e.argumentExpression);
+      if (member !== undefined && PROTOTYPE_KEYS.includes(member)) record(e.expression, undefined, e);
+      else record(e.expression, member, e);
+    } else if (ts.isIdentifier(e) && (declarations.get(e.text) ?? 0) === 0 && shape.imports.has(e.text)) result.writes.push({ target: { binding: { name: e.text }, whole: true }, line: lineOf(e) });
+  };
+  const mutatorOf = (expression: ts.Expression): Readonly<Record<string, number | "keys" | "none">> | undefined => {
+    const e = bare(expression);
+    return ts.isIdentifier(e) && (e.text === "Object" || e.text === "Reflect") && !declarations.has(e.text) && !shape.imports.has(e.text) ? MUTATORS[e.text] : undefined;
   };
   const visit = (node: ts.Node): void => {
     if (ts.isIdentifier(node)) {
@@ -365,7 +489,7 @@ function readMemberEvidence(sf: ts.SourceFile, declarations: Map<string, number>
       if (!name) result.reads.set(node.text, (result.reads.get(node.text) ?? 0) + 1);
     }
     if (ts.isWithStatement(node) || (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === "eval")) {
-      result.unknownMutation = true;
+      result.writes.push({ target: { unplaced: true }, line: lineOf(node) });
       result.unknownBinding = true;
     }
     if (ts.isReturnStatement(node) && node.expression !== undefined) {
@@ -373,7 +497,7 @@ function readMemberEvidence(sf: ts.SourceFile, declarations: Map<string, number>
         if (!ts.isFunctionLike(scope)) continue;
         if (ts.isConstructorDeclaration(scope) && ts.isClassDeclaration(scope.parent) && scope.parent.name !== undefined) {
           const owner = scope.parent;
-          escapedOwners.add(`${owner.name!.text}\0${sf.getLineAndCharacterOfPosition(owner.name!.getStart(sf)).line + 1}`);
+          escapedOwners.add(`${owner.name!.text}\0${lineOf(owner.name!)}`);
         }
         break;
       }
@@ -382,26 +506,28 @@ function readMemberEvidence(sf: ts.SourceFile, declarations: Map<string, number>
       const owner = ownerOf(node, sf);
       if (owner !== undefined) {
         const at = sf.getLineAndCharacterOfPosition(node.getStart(sf));
-        result.localCalls.push({ owner: { name: owner.name.text, line: sf.getLineAndCharacterOfPosition(owner.name.getStart(sf)).line + 1 }, local: node.expression.expression.text, member: node.expression.name.text, offset: node.getStart(sf), line: at.line + 1, column: at.character + 1 });
+        result.localCalls.push({ owner: { name: owner.name.text, line: lineOf(owner.name) }, local: node.expression.expression.text, member: node.expression.name.text, offset: node.getStart(sf), line: at.line + 1, column: at.character + 1 });
       }
     }
+    if (ts.isPropertyAccessExpression(node) && ts.isIdentifier(node.expression) && (declarations.get(node.expression.text) ?? 0) === 0 && shape.imports.get(node.expression.text)?.imported === "*") result.qualified.push({ name: node.expression.text, member: node.name.text });
+    if (ts.isQualifiedName(node) && ts.isIdentifier(node.left) && shape.imports.get(node.left.text)?.imported === "*") result.qualified.push({ name: node.left.text, member: node.right.text });
     if (ts.isClassLike(node) && node.heritageClauses?.some((clause) => clause.token === ts.SyntaxKind.ExtendsKeyword)) {
       for (const member of node.members) {
         if (isStatic(member)) continue;
         if (member.name !== undefined) {
-          if (ts.isIdentifier(member.name) || ts.isStringLiteral(member.name)) result.unsafeMembers.add(member.name.text);
-          else result.unknownMutation = true;
+          if (ts.isIdentifier(member.name) || ts.isStringLiteral(member.name)) result.subclassMembers.add(member.name.text);
+          else result.writes.push({ target: { unplaced: true }, line: lineOf(member) });
         }
         if (ts.isConstructorDeclaration(member)) {
           for (const parameter of member.parameters) {
-            if (ts.isParameterPropertyDeclaration(parameter, member) && ts.isIdentifier(parameter.name)) result.unsafeMembers.add(parameter.name.text);
+            if (ts.isParameterPropertyDeclaration(parameter, member) && ts.isIdentifier(parameter.name)) result.subclassMembers.add(parameter.name.text);
           }
         }
       }
     }
     if (node.kind === ts.SyntaxKind.ThisKeyword && !ts.isPropertyAccessExpression(node.parent) && !ts.isElementAccessExpression(node.parent)) {
       const owner = ownerOfThis(node);
-      if (owner?.name !== undefined) escapedOwners.add(`${owner.name.text}\0${sf.getLineAndCharacterOfPosition(owner.name.getStart(sf)).line + 1}`);
+      if (owner?.name !== undefined) escapedOwners.add(`${owner.name.text}\0${lineOf(owner.name)}`);
     }
     if (ts.isObjectLiteralExpression(node) && propertyOf(node, "provide") !== undefined && node.properties.some((property) => ts.isSpreadAssignment(property) || (property.name !== undefined && ts.isComputedPropertyName(property.name)))) result.unknownProvider = true;
     if (ts.isObjectLiteralExpression(node) && SUBSTITUTIONS.some((name) => propertyOf(node, name) !== undefined)) {
@@ -410,7 +536,7 @@ function readMemberEvidence(sf: ts.SourceFile, declarations: Map<string, number>
     }
     if (ts.isClassDeclaration(node) && node.name !== undefined && node.parent === sf) {
       const owner = node.name.text;
-      const classLine = sf.getLineAndCharacterOfPosition(node.name.getStart(sf)).line + 1;
+      const classLine = lineOf(node.name);
       const byName = Map.groupBy(node.members.filter((m) => m.name !== undefined && ts.isIdentifier(m.name)), (m) => (m.name as ts.Identifier).text);
       const cannotProveMembers = node.members.some((member) => member.name !== undefined && ts.isComputedPropertyName(member.name)) || (ts.getModifiers(node) ?? []).some((modifier) => modifier.kind === ts.SyntaxKind.AbstractKeyword);
       for (const [name, members] of byName) {
@@ -418,24 +544,33 @@ function readMemberEvidence(sf: ts.SourceFile, declarations: Map<string, number>
         if (cannotProveMembers) continue;
         const member = members[0];
         if (members.length !== 1 || member === undefined || !ts.isMethodDeclaration(member) || member.body === undefined || isStatic(member) || (ts.canHaveDecorators(member) && (ts.getDecorators(member)?.length ?? 0) > 0)) continue;
-        result.methods.push({ className: owner, classLine, name, line: sf.getLineAndCharacterOfPosition(member.name.getStart(sf)).line + 1 });
+        result.methods.push({ className: owner, classLine, name, line: lineOf(member.name) });
       }
     }
-    if (ts.isPropertyAccessExpression(node) && (node.name.text === "prototype" || node.name.text === "__proto__")) result.unknownMutation = true;
-    if (ts.isElementAccessExpression(node) && node.argumentExpression !== undefined && ts.isStringLiteral(node.argumentExpression) && ["prototype", "__proto__"].includes(node.argumentExpression.text)) result.unknownMutation = true;
-    if (ts.isPropertyAccessExpression(node) && ts.isIdentifier(node.expression)) {
-      const root = node.expression.text;
-      const method = node.name.text;
-      if ((root === "Object" && ["assign", "defineProperty", "defineProperties", "setPrototypeOf", "getPrototypeOf"].includes(method)) || (root === "Reflect" && ["set", "defineProperty", "setPrototypeOf", "getPrototypeOf", "deleteProperty"].includes(method))) result.unknownMutation = true;
+    if (isPrototypeAccess(node) && !((ts.isPropertyAccessExpression(node.parent) || ts.isElementAccessExpression(node.parent)) && node.parent.expression === node)) {
+      const target = prototypeOf(node.expression);
+      if (target !== undefined) result.writes.push({ target, line: lineOf(node) });
     }
-    if (ts.isIdentifier(node) && (node.text === "Object" || node.text === "Reflect") && !(ts.isPropertyAccessExpression(node.parent) && node.parent.expression === node)) result.unknownMutation = true;
-    if (ts.isBinaryExpression(node) && node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment && node.operatorToken.kind <= ts.SyntaxKind.LastAssignment) markWrite(node.left);
-    if ((ts.isPrefixUnaryExpression(node) || ts.isPostfixUnaryExpression(node)) && (node.operator === ts.SyntaxKind.PlusPlusToken || node.operator === ts.SyntaxKind.MinusMinusToken)) markWrite(node.operand);
-    if (ts.isDeleteExpression(node)) markWrite(node.expression);
-    if ((ts.isForInStatement(node) || ts.isForOfStatement(node)) && !ts.isVariableDeclarationList(node.initializer)) markWrite(node.initializer);
+    if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)) {
+      const form = mutatorOf(node.expression.expression)?.[node.expression.name.text];
+      const [object, ...rest] = node.arguments;
+      if (form !== undefined && object !== undefined) {
+        for (const member of form === "keys" ? keysOf(rest) : [form === "none" ? undefined : literalKey(node.arguments[form])]) record(object, member !== undefined && PROTOTYPE_KEYS.includes(member) ? undefined : member, node);
+      }
+    }
+    if (ts.isIdentifier(node) && mutatorOf(node) !== undefined && !ts.isTypeReferenceNode(node.parent)) {
+      const access = node.parent;
+      const method = ts.isPropertyAccessExpression(access) && access.expression === node ? access.name.text : undefined;
+      const called = method !== undefined && ts.isCallExpression(access.parent) && access.parent.expression === access;
+      if (method === undefined || (!called && method in mutatorOf(node)!)) result.escapedMutator = true;
+    }
+    if (ts.isBinaryExpression(node) && node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment && node.operatorToken.kind <= ts.SyntaxKind.LastAssignment) written(node.left);
+    if ((ts.isPrefixUnaryExpression(node) || ts.isPostfixUnaryExpression(node)) && (node.operator === ts.SyntaxKind.PlusPlusToken || node.operator === ts.SyntaxKind.MinusMinusToken)) written(node.operand);
+    if (ts.isDeleteExpression(node)) written(node.expression);
+    if ((ts.isForInStatement(node) || ts.isForOfStatement(node)) && !ts.isVariableDeclarationList(node.initializer)) written(node.initializer);
     if (ts.isElementAccessExpression(node) && node.expression.kind === ts.SyntaxKind.ThisKeyword) {
       const owner = ownerOfThis(node);
-      if (owner !== undefined) unsafeFields.add(`${owner.name?.text}\0${sf.getLineAndCharacterOfPosition(owner.name!.getStart(sf)).line + 1}\0*`);
+      if (owner !== undefined) unsafeFields.add(`${owner.name?.text}\0${lineOf(owner.name!)}\0*`);
     }
     if (ts.isPropertyAccessExpression(node) && node.expression.kind === ts.SyntaxKind.ThisKeyword) {
       const owner = ownerOfThis(node);
@@ -450,11 +585,8 @@ function readMemberEvidence(sf: ts.SourceFile, declarations: Map<string, number>
         }
         if (direct && methodBody) {
           const at = sf.getLineAndCharacterOfPosition(call.getStart(sf));
-          result.calls.push({ owner: { name: owner.name!.text, line: sf.getLineAndCharacterOfPosition(owner.name!.getStart(sf)).line + 1 }, field, member: member.name.text, line: at.line + 1, column: at.character + 1 });
-        } else {
-          unsafeFields.add(key(owner, field));
-          result.unsafeMembers.add(field);
-        }
+          result.calls.push({ owner: owned(owner), field, member: member.name.text, line: at.line + 1, column: at.character + 1 });
+        } else unsafeFields.add(key(owner, field));
       }
     }
     ts.forEachChild(node, visit);
@@ -462,4 +594,25 @@ function readMemberEvidence(sf: ts.SourceFile, declarations: Map<string, number>
   visit(sf);
   result.calls = result.calls.filter((call) => !unsafeFields.has(`${call.owner.name}\0${call.owner.line}\0${call.field}`) && !unsafeFields.has(`${call.owner.name}\0${call.owner.line}\0*`) && !escapedOwners.has(`${call.owner.name}\0${call.owner.line}`));
   return result;
+}
+
+/** An expression without the parentheses, assertions and non-null marks that do not change the value it stands for. */
+function unwrapped(expression: ts.Expression): ts.Expression {
+  let e = bare(expression);
+  while (ts.isNonNullExpression(e)) e = bare(e.expression);
+  return e;
+}
+
+/** The members object literals name, or one unnamed member when a source is not a literal or a key is computed. */
+function keysOf(sources: readonly ts.Expression[]): (string | undefined)[] {
+  const literals = sources.map((source) => bare(source));
+  if (!literals.every(ts.isObjectLiteralExpression)) return [undefined];
+  return literals.flatMap((literal) => literal.properties.map((property) => (property.name !== undefined && (ts.isIdentifier(property.name) || ts.isStringLiteral(property.name)) ? property.name.text : undefined)));
+}
+
+/** A value made fresh where it is written, which holds no class of the repository: an object or array literal. */
+function isFreshLiteral(expression: ts.Expression): boolean {
+  const e = bare(expression);
+  const ownPrototype = (property: ts.ObjectLiteralElementLike): boolean => ts.isPropertyAssignment(property) && !ts.isComputedPropertyName(property.name) && PROTOTYPE_KEYS.includes(property.name.getText()) && bare(property.initializer).kind !== ts.SyntaxKind.NullKeyword;
+  return (ts.isObjectLiteralExpression(e) && !e.properties.some(ownPrototype)) || ts.isArrayLiteralExpression(e);
 }

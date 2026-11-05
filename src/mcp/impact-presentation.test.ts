@@ -422,3 +422,16 @@ test("singleton categories keep recovery help shorter than the old repeated layo
   assert.ok(Buffer.byteLength(moduleRows) <= Buffer.byteLength(oldModules), moduleRows);
   assert.match(moduleRows, /full.*all origin/);
 });
+
+test("a dependence a provider substitution qualifies carries one marker and one legend naming the substitute and its site", () => {
+  const substitutes = [{ file: "other.ts", symbol: "Other", line: 1, at: { file: "providers.ts", line: 3 } }];
+  const value: ImpactValue = { ...impact, symbols: [
+    { file: "caller.ts", symbol: "use", kind: "method", line: 12, depth: 1, confidence: 1, fanIn: 0, via: { file: "store.ts", symbol: "write", lines: [15], basis: "call", substitutes } },
+    { file: "caller.ts", symbol: "plain", kind: "method", line: 30, depth: 1, confidence: 1, fanIn: 0, via: { file: "store.ts", symbol: "read", lines: [31], basis: "call" } },
+  ] };
+  const text = renderImpact({ ...fact, value }, "details");
+  const rows = text.split("\n");
+  assert.equal(rows.filter((row) => row.includes("use [method]") && row.includes("†")).length, 1, text);
+  assert.equal(rows.filter((row) => row.includes("plain [method]") && row.includes("†")).length, 0, text);
+  assert.deepEqual(rows.filter((row) => row.includes("may be replaced")).map((row) => row.trim()), ["† may be replaced by other.ts:Other at providers.ts:3"]);
+});

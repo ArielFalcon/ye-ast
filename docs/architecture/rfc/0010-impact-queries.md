@@ -138,14 +138,32 @@ and block. These sites add potential callers without settling references or excl
 member proof is unavailable. Older injected readers that omit the channel retain the legacy behavior. These optional
 metadata values do not change the public fact or graph schema.
 
-New proofs require a fully staged, unfiltered source selection, successful parsing and an unambiguous Angular project.
-Provider substitutions, shadowing, observable receiver/member mutation, escape and unsupported syntax withhold proof.
+New proofs require a fully staged, unfiltered source selection and successful parsing. Proofs sit only in sources of
+the Angular project's own manifest; every other TypeScript source (another project, a nested non-Angular package, a
+file no manifest holds) contributes its writes and providers as evidence. Test files are no evidence, by the same
+predicate that keeps them out of the walk. Each risk keeps what it can reach, and a proof consults only the risks that
+reach its receiver and member:
+
+- A write, `++`/`--`, `delete`, destructuring target or reflective mutation (`Object.assign`, `Object.defineProperty`,
+  `Reflect.set`, …) reaches the members of the object it is made on: `this` names the enclosing class, `this.f` the class
+  the field's fixed origin holds, `X.prototype` the class `X` names. A fresh object or array literal, a platform global
+  (`window`, `document`) and a platform class prototype (`Element.prototype`) reach no class of the repository.
+- An object the syntax does not place (a parameter, a call result, a local that is not a fresh literal) reaches the named
+  member on every class, or, when no member is named, every class its file names by import or declaration.
+- A provider reaches only the class it provides. A `useClass` or `useExisting` that names a repository class admits the
+  proof with `ImpactedSymbol.via.substitutes`, which names the substitute and the provider's site and which excludes no
+  other target; any other substitution refuses the provided class. A token the reader cannot tell apart from a class, and
+  a provider object it cannot read, reach every class their file names.
+- A member a subclass declares or assigns makes that member name unsafe on every class.
+
+Only a mutation API used as a value, or an unreadable source, has no bound; then nothing is proven. Shadowing, escape of
+the receiver's own instance and unsupported syntax still withhold proof per receiver.
 A constructor with an explicit value-return cannot establish exclusive instance identity; returns in nested
 functions do not invalidate the enclosing constructor. Potential local call sites require lexical binding evidence
 independently of project-wide member stability and refuse dynamic binding constructs such as direct eval/with.
-The current checks conservatively refuse some valid uses across a whole file or project; they do not simulate runtime
-DI configuration. Missing evidence remains a cut. `EDGE_POLICY.referenceProofVersion` is 4 and participates in the
-existing producer digest; syntax and proof changes invalidate derived facts without rebuilding an unchanged graph.
+The checks do not simulate runtime DI configuration. Missing evidence remains a cut. `EDGE_POLICY.referenceProofVersion`
+is 11 and participates in the existing producer digest; syntax and proof changes invalidate derived facts without
+rebuilding an unchanged graph.
 
 ### Confidence and fan-in
 

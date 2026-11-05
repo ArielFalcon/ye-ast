@@ -160,7 +160,8 @@ names are settled in the first slice; the union, the cuts and the inputs are the
    discovery read them. `0.14.0` adds optional `ImpactValue.changedContracts`: the contract operations whose request or
    response data a change added, removed or altered. `0.15.0` adds optional `ChangedContract.handlers`, the handlers of
    the routes joined to an altered or removed operation, and optional `ImpactedLink.operations`, the altered or removed
-   operations the handler a workspace link lands in serves.
+   operations the handler a workspace link lands in serves. `0.16.0` adds optional `ImpactedSymbol.via.substitutes`: the
+   classes a provider may inject instead of the receiver a proven member call names, each with the provider's site.
 7. **Redaction at egress.** Values and evidence pass redaction when they leave ye-ast's process toward a host: the
    patterns always, by-value secrets only in the process that already holds them
    ([ADR-0010](../adr/0010-trust-modes.md)). The success report `ye-ast init` writes for the user who ran it is not

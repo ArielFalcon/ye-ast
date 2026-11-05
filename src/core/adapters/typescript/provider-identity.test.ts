@@ -24,20 +24,11 @@ test("direct token imports preserve identity, including namespace and same descr
   }
 });
 
-test("unsupported or unstable provider identities retain global refusal", async () => {
+test("a provider identity that can reach the receiver still refuses its proof", async () => {
   const token = "import { InjectionToken } from '@angular/core'; export const TOKEN = new InjectionToken('x');";
   const cases: Record<string, string>[] = [
     { "src/providers.ts": "import { Store } from './store'; const TOKEN = Store; const p = [{ provide: TOKEN, useValue: 1 }];" },
-    { "src/providers.ts": "import { InjectionToken } from '@angular/core'; let TOKEN = new InjectionToken('x'); const p = [{ provide: TOKEN, useValue: 1 }];" },
     { "src/providers.ts": "import { Store } from './store'; function Unknown() { return Store; } const TOKEN = new Unknown('x'); const p = [{ provide: TOKEN, useValue: 1 }];" },
-    { "src/providers.ts": "import type { InjectionToken } from '@angular/core'; const TOKEN = new InjectionToken('x'); const p = [{ provide: TOKEN, useValue: 1 }];" },
-    { "src/providers.ts": "import { InjectionToken } from '@angular/core'; function f(InjectionToken: unknown) {} const TOKEN = new InjectionToken('x'); const p = [{ provide: TOKEN, useValue: 1 }];" },
-    { "src/tokens.ts": token, "src/providers.ts": "import type { TOKEN } from './tokens'; const p = [{ provide: TOKEN, useValue: 1 }];" },
-    { "src/tokens.ts": token, "src/providers.ts": "import { TOKEN } from './missing'; import { TOKEN } from './tokens'; const p = [{ provide: TOKEN, useValue: 1 }];" },
-    { "src/tokens.ts": token, "src/providers.ts": "import { TOKEN } from './tokens'; function f(TOKEN: unknown) {} const p = [{ provide: TOKEN, useValue: 1 }];" },
-    { "src/providers.ts": "import { TOKEN } from './missing'; const p = [{ provide: TOKEN, useValue: 1 }];" },
-    { "src/tokens.ts": token, "src/barrel.ts": "export { TOKEN } from './tokens';", "src/providers.ts": "import { TOKEN } from './barrel'; const p = [{ provide: TOKEN, useValue: 1 }];" },
-    { "src/tokens.ts": token, "src/barrel.ts": "export * from './tokens'; export * from './missing';", "src/providers.ts": "import { TOKEN } from './barrel'; const p = [{ provide: TOKEN, useValue: 1 }];" },
     { "src/providers.ts": "import { Store } from './store'; const p = [{ provide: Store, useValue: 1 }];" },
     { "src/providers.ts": token + " const p = [{ provide: TOKEN, useValue: 1 }];", "src/store.ts": "export class Store { start() {} } Store = TOKEN;" },
     { "src/providers.ts": token + " const p = [{ provide: TOKEN, useValue: 1 }];", "src/store.ts": "export class Store { start() {} } [Store] = values;" },
@@ -48,6 +39,22 @@ test("unsupported or unstable provider identities retain global refusal", async 
   ];
   for (const files of cases) assert.deepEqual((await read(files)).memberUses, [], JSON.stringify(files));
   assert.deepEqual((await read({ "src/providers.ts": token + " const p = [{ provide: TOKEN, useValue: 1 }];" }, false)).memberUses, []);
+});
+
+test("a provider token the reader cannot prove distinct reaches only the classes its provider and declaring files name", async () => {
+  const token = "import { InjectionToken } from '@angular/core'; export const TOKEN = new InjectionToken('x');";
+  const cases: Record<string, string>[] = [
+    { "src/providers.ts": "import { InjectionToken } from '@angular/core'; let TOKEN = new InjectionToken('x'); const p = [{ provide: TOKEN, useValue: 1 }];" },
+    { "src/providers.ts": "import type { InjectionToken } from '@angular/core'; const TOKEN = new InjectionToken('x'); const p = [{ provide: TOKEN, useValue: 1 }];" },
+    { "src/providers.ts": "import { InjectionToken } from '@angular/core'; function f(InjectionToken: unknown) {} const TOKEN = new InjectionToken('x'); const p = [{ provide: TOKEN, useValue: 1 }];" },
+    { "src/tokens.ts": token, "src/providers.ts": "import type { TOKEN } from './tokens'; const p = [{ provide: TOKEN, useValue: 1 }];" },
+    { "src/tokens.ts": token, "src/providers.ts": "import { TOKEN } from './missing'; import { TOKEN } from './tokens'; const p = [{ provide: TOKEN, useValue: 1 }];" },
+    { "src/tokens.ts": token, "src/providers.ts": "import { TOKEN } from './tokens'; function f(TOKEN: unknown) {} const p = [{ provide: TOKEN, useValue: 1 }];" },
+    { "src/providers.ts": "import { TOKEN } from './missing'; const p = [{ provide: TOKEN, useValue: 1 }];" },
+    { "src/tokens.ts": token, "src/barrel.ts": "export { TOKEN } from './tokens';", "src/providers.ts": "import { TOKEN } from './barrel'; const p = [{ provide: TOKEN, useValue: 1 }];" },
+    { "src/tokens.ts": token, "src/barrel.ts": "export * from './tokens'; export * from './missing';", "src/providers.ts": "import { TOKEN } from './barrel'; const p = [{ provide: TOKEN, useValue: 1 }];" },
+  ];
+  for (const files of cases) assert.equal((await read(files)).memberUses?.length, 1, JSON.stringify(files));
 });
 
 test("token relations and potential local reach retain their existing authority", async () => {

@@ -38,9 +38,17 @@ export interface ImpactedSymbol {
   fanIn: number;
   /**
    * The dependence that first reached the symbol: `lines` are the places inside this symbol's own file where it depends
-   * on `via`, in line order, and `basis` says what that dependence is.
+   * on `via`, in line order, and `basis` says what that dependence is. `substitutes` are the classes a provider may
+   * inject instead of the receiver the call was proven on, each with the provider's site.
    */
-  via?: { file: string; symbol: string; lines?: readonly number[]; basis: DependenceBasis };
+  via?: { file: string; symbol: string; lines?: readonly number[]; basis: DependenceBasis; substitutes?: readonly ReceiverSubstitute[] };
+}
+
+export interface ReceiverSubstitute {
+  file: string;
+  symbol: string;
+  line: number;
+  at: { file: string; line: number };
 }
 
 export interface ReachedEntrypoint {

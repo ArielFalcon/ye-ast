@@ -30,7 +30,7 @@ test("an unrelated write sharing the class spelling does not imply class binding
   ]) assert.equal((await proofs(source)).memberUses?.length, 1, source);
 });
 
-test("record escapes, captures, shadows, reads and unknown keys retain mutation uncertainty", async () => {
+test("a record write reaches no class, and a write it carries to another object still reaches that object's member", async () => {
   for (const body of [
     "const record = {}; record['entry'] = 1;",
     "const record = { __proto__: null }; record[key] = 1;",
@@ -44,10 +44,9 @@ test("record escapes, captures, shadows, reads and unknown keys retain mutation 
     "const record = { __proto__: null, ...external }; record['entry'] = 1;",
     "const record = { __proto__: null }; record['__proto__'] = external;",
     "const record = { __proto__: null }; record['entry'] += external;",
+  ]) assert.equal((await proofs(`export function scratch(key: unknown, external: any) { ${body} }`)).memberUses?.length, 1, body);
+  for (const body of [
     "const record = { __proto__: null }; record['entry'] = (external['start'] = replacement);",
     "const record = { __proto__: null }; record['entry'] = 1; Reflect.set(external, 'start', replacement);",
-  ]) {
-    const result = await proofs(`export function scratch(key: unknown, external: any) { ${body} }`);
-    assert.deepEqual(result.memberUses, [], body);
-  }
+  ]) assert.deepEqual((await proofs(`export function scratch(key: unknown, external: any) { ${body} }`)).memberUses, [], body);
 });
