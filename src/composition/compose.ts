@@ -46,7 +46,6 @@ import { createAngularDeclarationReader } from "../core/adapters/typescript/angu
 import { createAngularRoutesExtractor } from "../core/adapters/typescript/angular-routes.adapter.ts";
 import { createDynamicLoadReader } from "../core/adapters/typescript/dynamic-loads.adapter.ts";
 import { composeAngularRelations } from "./angular-relations.ts";
-import { EDGE_POLICY } from "../core/domain/impact/edge-policy.ts";
 import { sortFindings } from "../core/domain/entrypoints/finding-order.ts";
 import { compareText } from "../core/domain/shared/code-node.ts";
 import type { CallSiteReader } from "../core/domain/topology/call-site.ts";
@@ -70,7 +69,6 @@ const PRODUCER_NAME = "ye-ast";
 const ENTRYPOINT_ENGINES = ["web-tree-sitter", "tree-sitter-java", "typescript"] as const;
 const TEMPLATE_ENGINE = "@angular/compiler";
 const CODEGRAPH_PACKAGE = "@colbymchenry/codegraph";
-const POLICY_DIGEST_LENGTH = 12;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const SNAPSHOT_CACHE_BYTES = 32 * 1024 * 1024;
 
@@ -178,7 +176,7 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
     ...(indexes && { indexes }),
     digest,
     matcher,
-    producer: { name: PRODUCER_NAME, version: `${version}+edge-policy.${digest.of(JSON.stringify(EDGE_POLICY)).slice(0, POLICY_DIGEST_LENGTH)}` },
+    producer: { name: PRODUCER_NAME, version },
     engines: { ...entrypointEngines, [CODEGRAPH_PACKAGE]: codegraph },
     angularEngines: { [TEMPLATE_ENGINE]: installedVersion(TEMPLATE_ENGINE) },
     live,

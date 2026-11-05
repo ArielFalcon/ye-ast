@@ -101,8 +101,9 @@ Inbound over `head`'s index; a node is expanded once, so the walk ends on any gr
 
 ### Edge policy
 
-The walk follows an edge only when a row allows it. The table is part of the producer version (RFC-0002 rule 5), so a
-change to it invalidates facts.
+The walk follows an edge only when a row allows it. The table is not part of the producer version: every family of one
+build stamps the same producer ([ADR-0024](../adr/0024-one-producer-version-for-every-family.md)), and a future store
+of traversal facts records the policy in its own validity key.
 
 | Edge into a reached node | Followed | Why |
 |---|---|---|
@@ -186,9 +187,7 @@ the receiver's own instance and unsupported syntax still withhold proof per rece
 A constructor with an explicit value-return cannot establish exclusive instance identity; returns in nested
 functions do not invalidate the enclosing constructor. Potential local call sites require lexical binding evidence
 independently of project-wide member stability and refuse dynamic binding constructs such as direct eval/with.
-The checks do not simulate runtime DI configuration. Missing evidence remains a cut. `EDGE_POLICY.referenceProofVersion`
-is 15 and participates in the existing producer digest; syntax and proof changes invalidate derived facts without
-rebuilding an unchanged graph.
+The checks do not simulate runtime DI configuration. Missing evidence remains a cut.
 
 ### Confidence and fan-in
 

@@ -32,7 +32,7 @@ entrypoint and no cut: the answer was `complete` and wrong. The investigation re
    the receiver, outside test files: the component is the caller, at the relation confidence, with basis `call`. It
    settles no `unresolved-link` place.
 4. `ImpactedSymbol.via.resource` names the template file when it is not the component's own; `via.lines` are lines of
-   that file. Fact schema `0.17.0`; `EDGE_POLICY.referenceProofVersion` 15 invalidates stored impact facts.
+   that file. Fact schema `0.17.0`.
 
 ## Consequences
 

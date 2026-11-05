@@ -1,6 +1,6 @@
 # ADR-0017: A type reached through one of its members expands only through whole-type edges
 
-- Status: Accepted, 2026-11-01, owner
+- Status: Accepted, 2026-11-01, owner; decision 3 superseded by [ADR-0024](0024-one-producer-version-for-every-family.md), 2026-11-05
 - Decision source: the owner, 2026-11-01, ordering the plan this record belongs to (translated): "genera un plan
   detallado de implementacion de las soluciones de estos problemas de forma que se corrija de raiz en la arquitectura
   respectando la estructura actual. luego lanza con herdr un agente deepseek 4.1-flash para que aplique el plan". The

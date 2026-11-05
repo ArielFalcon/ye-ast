@@ -46,7 +46,7 @@ window.MODULE_DETAILS_ES = {
       facts: [
         "Una construcción del grafo, un trust record, una caché de índices, un módulo de redaction.",
         "El MCP nunca sabe si habla con el core in-process o, a través del protocolo, con el daemon.",
-        "El digest de la política de aristas es parte de la versión del producer, así que un cambio de política invalida facts.",
+        "Todas las familias de consulta usan la misma versión del producer (ADR-0024).",
       ],
     },
     "app-impact": {

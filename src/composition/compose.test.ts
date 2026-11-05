@@ -10,7 +10,6 @@ import { REDACTED } from "../core/ports/redaction.port.ts";
 import { createSha256Digest } from "../core/adapters/crypto/sha256-digest.adapter.ts";
 import { createRemoteRefresh, defaultRemoteRefreshDeps } from "../core/adapters/git/remote-refresh.adapter.ts";
 import { canonicalJson } from "../core/domain/shared/canonical-json.ts";
-import { EDGE_POLICY } from "../core/domain/impact/edge-policy.ts";
 import type { DecisionValue } from "../core/ports/decision-queries.port.ts";
 import type { WorkspaceValue } from "../core/ports/workspace-queries.port.ts";
 import { composeCli, composeQueries, mcpCommandFor } from "./compose.ts";
@@ -491,19 +490,11 @@ test("a composed decisions answer offers the origin URL of a clone the request d
 });
 
 
-test("reference proof version changes the existing deterministic impact producer digest", async () => {
+test("the traversal families stamp the producer every other family stamps, so compositions can derive across them", async () => {
   const { impact, version } = composeQueries({ scratchRoot });
-  const request = { repo, repoId: "shop-service", revision: "HEAD", files: ["README.md"] };
-  const first = await impact.importers(request);
-  const second = await impact.importers(request);
-  assert.ok(first.ok && second.ok);
-  const digest = createSha256Digest();
-  const { referenceProofVersion, ...baseline } = EDGE_POLICY;
-  const current = digest.of(JSON.stringify(EDGE_POLICY)).slice(0, 12);
-  const before = digest.of(JSON.stringify(baseline)).slice(0, 12);
-  assert.notEqual(current, before);
-  assert.equal(first.value.producer.version, `${version}+edge-policy.${current}`);
-  assert.equal(second.value.producer.version, first.value.producer.version);
+  const answer = await impact.importers({ repo, repoId: "shop-service", revision: "HEAD", files: ["README.md"] });
+  assert.ok(answer.ok);
+  assert.deepEqual(answer.value.producer, { name: "ye-ast", version });
 });
 
 test("a trusted remote consumer is walked from its mirror with the declared clone's trust", async () => {
