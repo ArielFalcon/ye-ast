@@ -303,6 +303,8 @@ zero-item page is not an unknown or unavailable source, which carries its actual
 not change analysis scope or traversal budgets. The public redaction boundary also applies to evidence and recipes;
 internal source sidecars are not exposed.
 
+Selected source text retains root context, read owners and analysis (including unknown reasons), and owner limits. Reads explicitly inherit matching snapshot, trust, declared scope and configuration; overrides are printed. Complete provenance catalogs remain in `structuredContent.source`. Handler and module categories provide literal selector examples; each row keeps its named JSON coordinate, distinct span/depth/confidence and origin facts. Shared origin headings apply only to the stated following rows. Category recovery rules cover recorded counts/examples without adding presentation caps. Structured provenance, recovery and pagination contracts are unchanged.
+
 `importers` presents three disjoint groups per target: importers, additional users without an import edge, and
 unresolved-only candidates without a resolved link. Its distinct-file count counts each path once. A file with a
 resolved link may also have unresolved name matches; detailed text groups those files separately without listing

@@ -413,9 +413,9 @@ function reachedLines(reached: ReachedEntrypoint, seeds: readonly Seed[], detail
   const origin = seeds[reached.seeds[0] ?? -1];
   const others = reached.seeds.length - 1;
   return [
-    `  - ${name} -> ${handlerText(reached.handler)} (depth ${reached.depth}${confidence}); ${sharedLookup || !selectable ? `handler: ${JSON.stringify({ path: reached.handler.path, symbol: reached.handler.symbol, line: reached.handler.line })}` : `lookup example: ${JSON.stringify({ kind: "handler-origins", owner, handler: { path: reached.handler.path, symbol: reached.handler.symbol, line: reached.handler.line } })}`}`,
+    `  - ${name} (depth ${reached.depth}${confidence}${reached.handler.endLine === undefined ? "" : `, endLine ${reached.handler.endLine}`}); ${sharedLookup || !selectable ? `handler: ${JSON.stringify({ path: reached.handler.path, symbol: reached.handler.symbol, line: reached.handler.line })}` : `lookup example: ${JSON.stringify({ kind: "handler-origins", owner, handler: { path: reached.handler.path, symbol: reached.handler.symbol, line: reached.handler.line } })}`}`,
     ...(detail === "summary" && reached.seeds.length > 0 ? [`    origins: ${reached.seeds.length}`] : []),
-    ...(detail === "summary" || origin === undefined ? [] : [sharedOrigin ? "    origin association above" : `    one verified origin: ${placeText(origin.file, origin.line, origin.endLine)} ${origin.symbol} (${origin.basis})${others > 0 ? `; ${others} other ${others === 1 ? "origin" : "origins"}; mode: "full" includes all` : ""}`]),
+    ...(detail === "summary" || origin === undefined || sharedOrigin ? [] : [`    one verified origin: ${placeText(origin.file, origin.line, origin.endLine)} ${origin.symbol} (${origin.basis})${others > 0 ? `; ${others} other ${others === 1 ? "origin" : "origins"}` : ""}`]),
   ];
 }
 
@@ -439,7 +439,7 @@ function reachedGroup(value: ImpactValue, detail: ResponseMode, owner: object, s
       const origin = value.seeds[first.seeds[0] ?? -1];
       if (detail === "details" && run.length > 1 && origin !== undefined) {
         const other = first.seeds.length - 1;
-        const shared = [`  one verified origin: ${placeText(origin.file, origin.line, origin.endLine)} ${origin.symbol} (${origin.basis})${other > 0 ? `; ${other} other ${other === 1 ? "origin" : "origins"}; mode: "full" includes all` : ""}`, ...run.flatMap((entrypoint) => reachedLines(entrypoint, value.seeds, detail, owner, sharedLookup, true, selectable))];
+        const shared = [`  For the next ${run.length} handler rows, one verified origin: ${placeText(origin.file, origin.line, origin.endLine)} ${origin.symbol} (${origin.basis})${other > 0 ? `; ${other} other ${other === 1 ? "origin" : "origins"}` : ""}`, ...run.flatMap((entrypoint) => reachedLines(entrypoint, value.seeds, detail, owner, sharedLookup, true, selectable))];
         output.push(...(size(shared) < size(literal) ? shared : literal));
       } else output.push(...literal);
       index = end;
@@ -527,6 +527,9 @@ function impactBody(value: ImpactValue, detail: ResponseMode, owner: object, con
     ...(value.mergeBase === undefined ? [] : [`merge base: ${value.mergeBase}`]),
     ...(value.changedEntrypoints === undefined ? [] : [`changed entrypoints (${value.changedEntrypoints.length}):`, ...value.changedEntrypoints.map(changedLine)]),
     `reached entrypoints (${value.entrypoints.length}):`,
+    ...(detail === "details" && value.entrypoints.some((entrypoint) => entrypoint.seeds.length > 1) ? [value.entrypoints.length === 1
+      ? '  mode: "full" has all origins.'
+      : '  Origin counts and examples below: mode: "full" includes all recorded associations for this owner.'] : []),
     ...(detail === "details" && value.entrypoints.some((entrypoint) => entrypoint.seeds.length > 0) ? ["  A recorded origin is an association, not a complete call chain."] : []),
     ...(detail === "summary" && value.entrypoints.some((entrypoint) => entrypoint.seeds.length > 0) ? [`  origin associations (${value.entrypoints.reduce((total, entrypoint) => total + entrypoint.seeds.length, 0)}): counted below; mode "details" shows one per entrypoint; mode: "full" includes all`] : []),
     ...reachedGroup(value, detail, owner, context?.recovery?.status !== "unavailable"),
@@ -547,10 +550,10 @@ function moduleLines(value: ModuleImpactValue, detail: ResponseMode, owner: obje
     const count = module.origins.length;
     const first = value.origins[module.origins[0] ?? -1];
     const example = detail === "details" && first !== undefined ? `; origin ${first.file} (${first.change})` : "";
-    return `${count} origin ${count === 1 ? "association" : "associations"}${example}${count > (example === "" ? 0 : 1) ? '; mode: "full" includes all' : ""}`;
+    return `${count} origin ${count === 1 ? "association" : "associations"}${example}`;
   };
   const line = (module: Module, includeContext = true, sharedLookup = false): string =>
-    `  ${module.snapshot} ${module.file}${!selectable ? "" : ` [${sharedLookup ? `module: ${JSON.stringify({ file: module.file, snapshot: module.snapshot })}` : `lookup example: ${JSON.stringify({ kind: "module-origins", owner, module: { file: module.file, snapshot: module.snapshot } })}`}]`} (depth ${module.depth}${includeContext ? `, ${context(module)}` : ""})${module.via === undefined ? "" : ` via ${module.via.kind} ${module.via.file} at ${module.file}:${module.via.line}${module.via.typeOnly ? " (type-only)" : ""}`}`;
+    `  ${!selectable ? `${module.snapshot} ${module.file}` : ""}${!selectable ? "" : ` [${sharedLookup ? `module: ${JSON.stringify({ file: module.file, snapshot: module.snapshot })}` : `lookup example: ${JSON.stringify({ kind: "module-origins", owner, module: { file: module.file, snapshot: module.snapshot } })}`}]`} (depth ${module.depth}${includeContext ? `, ${context(module)}` : ""})${module.via === undefined ? "" : ` via ${module.via.kind} ${module.via.file} at line ${module.via.line} in this module${module.via.typeOnly ? " (type-only)" : ""}`}`;
   const grouped = (modules: readonly Module[], sharedLookup = false): string[] => {
     const lines: string[] = [];
     for (let start = 0; start < modules.length;) {
@@ -580,7 +583,10 @@ function moduleLines(value: ModuleImpactValue, detail: ResponseMode, owner: obje
   ];
   return [
     `module origins (${value.origins.length}):`, ...origins,
-    `module dependencies (${value.modules.length}, not symbol or entrypoint impact):`, ...(size(lookupShared) < size(selected) ? lookupShared : selected),
+    `module dependencies (${value.modules.length}, not symbol or entrypoint impact):`,
+    ...(value.modules.some((module) => module.origins.length > (detail === "details" ? 1 : 0)) ? [selectedModules.length === 1
+      ? '  mode: "full" has all origins.'
+      : '  Origin counts/examples below belong to each module; mode: "full" includes all recorded associations for this owner.'] : []), ...(size(lookupShared) < size(selected) ? lookupShared : selected),
     `module expansions: ${value.cost.expansionsUsed}`,
   ];
 }
@@ -672,10 +678,11 @@ function impactCutLookup(cuts: readonly Cut[], path: string, context?: RenderCon
   ];
 }
 
-function impactSnapshotGuide(snapshot: SnapshotRef, mergeBase?: string): string {
+function impactSnapshotGuide(snapshot: SnapshotRef, mergeBase?: string, context?: RenderContext, hasBaseModules = false): string {
+  if (context?.tool === "callers" && snapshot.kind === "sha") return `  Repeat callers with repo ${JSON.stringify(snapshot.repo)} and revision ${JSON.stringify(snapshot.sha)}, retaining declared scope and symbol selection. Related outline/importers queries answer a new question.`;
   if (snapshot.kind === "live") return `  A fresh live query on repo ${JSON.stringify(snapshot.repo)} captures current state; compare its head and stateId with the earlier identity before treating evidence as the same. A past live state cannot be requested, and HEAD alone does not reproduce it.`;
   const selector = mergeBase === undefined ? `revision ${JSON.stringify(snapshot.sha)}` : `head ${JSON.stringify(snapshot.sha)} and base ${JSON.stringify(mergeBase)}`;
-  return `  Keep repo ${JSON.stringify(snapshot.repo)} and the same snapshot when repeating this query: ${selector}; retain the declared scope and change selection. For a related callers/outline/importers query about head evidence use revision ${JSON.stringify(snapshot.sha)} instead of impact base/head; base-side modules use their recorded merge-base revision. It answers a new question, not a filter over this result.`;
+  return `  Keep repo ${JSON.stringify(snapshot.repo)} and the same snapshot when repeating this query: ${selector}; retain the declared scope and change selection. For a related callers/outline/importers query about head evidence use revision ${JSON.stringify(snapshot.sha)} instead of impact base/head${hasBaseModules ? "; base-side modules use their recorded merge-base revision" : ""}. It answers a new question, not a filter over this result.`;
 }
 
 function baseModuleGuides(value: ImpactValue, repo: string, mergeBase = value.mergeBase, path = "value"): string[] {
@@ -701,7 +708,7 @@ function localImpactGuide(fact: Fact<ImpactValue> & { status: "complete" | "part
     ...(lookups.length === 0 ? ["  There are no recorded consequences or walk origins in this answer. Read inputs.declaredScope and inputs.declaredConfig before interpreting that scoped emptiness."] : []),
     ...impactCutLookup(cutsOf(fact), "cuts", context),
     ...baseModuleGuides(fact.value, fact.snapshot.repo),
-    impactSnapshotGuide(fact.snapshot, fact.value.mergeBase),
+    impactSnapshotGuide(fact.snapshot, fact.value.mergeBase, context, fact.value.modules?.modules.some((module) => module.snapshot === "base")),
   ];
 }
 
@@ -727,7 +734,7 @@ function workspaceImpactGuide(fact: Fact<WorkspaceImpactValue> & { status: "comp
       const coordinate = snapshot === undefined ? "snapshot unavailable" : snapshot.kind === "sha" ? `revision ${JSON.stringify(snapshot.sha)}` : `earlier live head ${JSON.stringify(snapshot.head)} stateId ${JSON.stringify(snapshot.stateId)}; a fresh live query must be compared`;
       return `  Destination: repo ${JSON.stringify(link.to.repo)}, ${coordinate}, file ${JSON.stringify(link.to.handler.path)}, symbol ${JSON.stringify(link.to.handler.symbol)}. Use outline or callers on the declared owner.`;
     }),
-    impactSnapshotGuide(fact.snapshot, value.trigger.mergeBase),
+    impactSnapshotGuide(fact.snapshot, value.trigger.mergeBase, context, Object.values(value.sections).some((section) => section.status !== "unknown" && section.value.impact?.modules?.modules.some((module) => module.snapshot === "base"))),
   ];
 }
 

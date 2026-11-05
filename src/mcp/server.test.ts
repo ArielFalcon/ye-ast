@@ -1032,7 +1032,7 @@ test("impact reads a change of the bound repository, head defaulting to HEAD, an
   assert.match(text, /^seeds \(1\):\n {2}src\/OrderService\.java \(lines\)\n {4}31 OrderService\.find$/m);
   assert.match(text, /src\/OrderController\.java\n {4}17 OrderController\.one \[method\] \(depth 2, confidence 0\.75, fan-in 3, via src\/OrderService\.java:OrderService\.find at 44\)/);
   assert.match(text, /added http-route POST \/orders.*src\/OrderController\.java:40/);
-  assert.match(text, /GET \/orders\/\{id\}.*src\/OrderController\.java:17.*depth 2/);
+  assert.match(text, /GET \/orders\/\{id\}.*depth 2.*"path":"src\/OrderController\.java","symbol":"OrderController\.one","line":17/);
   await session.close();
 });
 
@@ -1491,7 +1491,7 @@ test("a one-line declaration prints one line and a handler prints its span", asy
   const { session } = await setup({ ofChange: async () => ({ ok: true, value: fact }) });
   const text = textOf(await session.callTool("ye_ast_impact", { base: "main" }));
   assert.match(text, /^ {4}3 A\.seed$/m);
-  assert.match(text, /-> src\/OrderController\.java:17-31 OrderController\.one \(depth 1\); handler:/m);
+  assert.match(text, /\(depth 1, endLine 31\); handler: \{"path":"src\/OrderController\.java","symbol":"OrderController\.one","line":17\}/m);
   assert.doesNotMatch(text, /3-3/);
   await session.close();
 });
@@ -1586,8 +1586,8 @@ test("reached entrypoints print their confidence only when it is below 1", async
   } as Partial<Fact<ImpactValue>>);
   const { session } = await setup({ ofChange: async () => ({ ok: true, value: entrypoints }) });
   const text = textOf(await session.callTool("ye_ast_impact", { base: "main" }));
-  assert.match(text, /GET \/sure -> src\/OrderController\.java:17 OrderController\.one \(depth 1\); lookup example:/);
-  assert.match(text, /GET \/maybe -> src\/OrderController\.java:17 OrderController\.one \(depth 2, confidence 0\.4\)/);
+  assert.match(text, /GET \/sure \(depth 1\); lookup example:.*"path":"src\/OrderController\.java","symbol":"OrderController\.one","line":17/);
+  assert.match(text, /GET \/maybe \(depth 2, confidence 0\.4\).*"path":"src\/OrderController\.java","symbol":"OrderController\.one","line":17/);
   await session.close();
 });
 
@@ -2372,7 +2372,8 @@ test("impact detail retains a selected origin association while both text modes 
   assert.deepEqual(withoutRecovery(structured.structuredContent), { ...fact, mode: "full", repositoryRoots: [{ repo: "shop", path: REPOSITORY.path }] });
   assert.doesNotMatch(textOf(summary), /one verified origin/);
   assert.match(textOf(full), /one verified origin: src\/pages\/checkout\.component\.ts:30-45 Checkout \(resource\)/);
-  assert.match(textOf(full), /1 other origin; mode: "full" includes all/);
+  assert.match(textOf(full), /1 other origin/);
+  assert.match(textOf(full), /mode: "full" (?:includes|has) all.*origin/);
   assert.doesNotMatch(textOf(summary), /src\/unrelated\/unrelated\.service\.ts/);
   assert.doesNotMatch(textOf(full), /src\/unrelated\/unrelated\.service\.ts/);
   await session.close();

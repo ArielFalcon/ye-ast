@@ -267,6 +267,8 @@ is distinct from an unavailable source or owner, which retains its actual reason
 change analysis scope or traversal bounds. The existing public redaction boundary applies to evidence and recipes;
 internal source sidecars are not exposed.
 
+Selected source text retains root context, read owners and analysis (including unknown reasons), and owner limits. Reads explicitly inherit matching snapshot, trust, declared scope and configuration; overrides are printed. Complete provenance catalogs remain in `structuredContent.source`. Handler and module categories provide literal selector examples; each row keeps its named JSON coordinate, distinct span/depth/confidence and origin facts. Shared origin headings apply only to the stated following rows. Category recovery rules cover recorded counts/examples without adding presentation caps. Structured provenance, recovery and pagination contracts are unchanged.
+
 A client may expose both text and `structuredContent` to a model; the server does not guarantee channel hiding or
 client-side filtering. Full structured delivery need not be duplicated in text. These are wire contracts, not measured
 model exposure or adoption.

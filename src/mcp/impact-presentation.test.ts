@@ -1,4 +1,6 @@
 import { test } from "node:test";
+import { z } from "zod";
+import { recoveryControlShapeFor, validRecoveryControls } from "./evidence-schema.ts";
 import assert from "node:assert/strict";
 import { SCHEMA, type Fact, type FactBase } from "../core/domain/shared/fact.ts";
 import type { ImpactValue } from "../core/domain/impact/impact-fact.ts";
@@ -26,7 +28,7 @@ test("detailed impact shows one recorded origin association and counts the remai
   const detail = renderImpact(fact, "details").split("impacted symbols")[0]!;
   assert.doesNotMatch(summary, /one verified origin/);
   assert.match(detail, /one verified origin: first\.ts:2 first/);
-  assert.match(detail, /1 other origin; mode: "full"/);
+  assert.match(detail, /1 other origin/);
   assert.doesNotMatch(detail, /second-origin-with-a-long-navigable-path-for-the-summary-comparison/);
 });
 
@@ -223,7 +225,7 @@ test("module-only details compact repeated origin associations and keep the near
   const value: ImpactValue = { seeds: [], symbols: [], entrypoints: [], modules: { origins, modules, cost: { expansionsUsed: 2 } }, cost: { expansionsUsed: 0 } };
   const output = renderImpact({ ...fact, value }, "details");
   assert.match(output, /module dependencies \(2/);
-  assert.match(output, /src\/consumer\.ts:7/);
+  assert.match(output, /at line 7 in this module/);
   assert.match(output, /16.*origin/);
   assert.match(output, /mode: "full"/);
   assert.doesNotMatch(output, /origins 0, 1, 2, 3, 4, 5/);
@@ -238,7 +240,7 @@ test("module details identify a recorded origin without requiring an index join"
   } };
   const text = renderImpact({ ...fact, value }, "details");
   assert.match(text, /src\/consumer\.ts[^\n]*origin[^\n]*src\/origin\.ts/);
-  assert.match(text, /src\/consumer\.ts:7/);
+  assert.match(text, /at line 7 in this module/);
 });
 
 test("module details share repeated origin context without losing consumers", () => {
@@ -293,7 +295,8 @@ test("reached handlers share selector owner while preserving every origin associ
     assert.match(text, new RegExp(`GET /route-${i}[^\\n]*handler${i}`));
     assert.match(text, new RegExp(`"path":"src/route-${i}\\.ts","symbol":"handler${i}","line":${i + 1}`));
   }
-  assert.equal((text.match(/origin association above/g) ?? []).length, 8);
+  assert.match(text, /next 8 handler rows/);
+  assert.doesNotMatch(text, /origin association above/);
 });
 
 test("module lookups share kind and owner while retaining every literal module coordinate", () => {
@@ -302,6 +305,14 @@ test("module lookups share kind and owner while retaining every literal module c
   const text = renderImpact({ ...fact, value }, "details");
   assert.equal((text.match(/"kind":"module-origins"/g) ?? []).length, 1);
   for (const module of modules) assert.ok(text.includes(JSON.stringify({ file: module.file, snapshot: module.snapshot })));
+  const example = JSON.parse(text.match(/Module lookup:.*complete select example: (\{[^\n]+\})/)![1]!);
+  const controls = z.strictObject(recoveryControlShapeFor("impact"));
+  for (const row of text.split("\n").filter((line) => line.includes("module: {"))) {
+    const module = JSON.parse(row.match(/module: (\{[^}]+\})/)![1]!);
+    const request = { select: { kind: example.kind, owner: example.owner, module }, page: { limit: 1 } };
+    assert.ok(controls.safeParse(request).success);
+    assert.ok(validRecoveryControls("impact", request));
+  }
 });
 
 test("callers guidance does not advertise module selectors even if reused impact data has modules", () => {
@@ -315,7 +326,8 @@ test("equal caller origin support is defined once with every handler association
   const entrypoints = Array.from({ length: 8 }, (_, i) => ({ ...impact.entrypoints[0]!, name: `GET /route-${i}`, handler: { path: `src/route-${i}.ts`, symbol: `handler${i}`, line: i + 1 }, seeds: [0] }));
   const text = renderImpact({ ...fact, value: { ...impact, entrypoints } }, "details");
   assert.equal((text.match(/one verified origin: first\.ts:2 first/g) ?? []).length, 1);
-  assert.equal((text.match(/origin association above/g) ?? []).length, 8);
+  assert.match(text, /next 8 handler rows/);
+  assert.doesNotMatch(text, /origin association above/);
 });
 
 test("different caller confidence does not share origin support", () => {
@@ -330,7 +342,7 @@ test("unavailable recovery keeps the reason and does not promise executable look
   const text = renderImpact(fact, "details", context);
   assert.match(text, /recovery unavailable.*unresolved-context/i);
   assert.doesNotMatch(text, /lookup example:/);
-  assert.match(text, /route\.ts:9 handler/);
+  assert.match(text, /"path":"route\.ts","symbol":"handler","line":9/);
 });
 
 test("unavailable recovery labels cut coordinates without advertising selection", () => {
@@ -339,4 +351,37 @@ test("unavailable recovery labels cut coordinates without advertising selection"
   assert.match(text, /cutIndex/);
   assert.doesNotMatch(text, /lookup example:|Selection lookup:/);
   assert.match(text, /deadline/);
+});
+
+test("callers guidance uses revision without unrelated impact base advice", () => {
+  const text = renderImpact(fact, "details", { tool: "callers" });
+  assert.doesNotMatch(text, /instead of impact base\/head|base-side modules/);
+  assert.match(text, /revision "abc"/);
+});
+
+test("handler rows retain literal coordinates once and scope origin recovery to the category", () => {
+  const value = { ...impact, entrypoints: Array.from({ length: 8 }, (_, index) => ({ ...impact.entrypoints[0]!, name: `GET /${index}`, handler: { path: `route ${index}:file.ts`, symbol: "handler", line: 9, endLine: 14 } })) };
+  const text = renderImpact({ ...base, status: "complete", value }, "details");
+  assert.doesNotMatch(text, /origin association above|; mode: "full" includes all/);
+  assert.match(text, /next 8/);
+  for (let index = 0; index < 8; index++) {
+    assert.match(text, new RegExp(`"path":"route ${index}:file.ts"`));
+    assert.doesNotMatch(text, new RegExp(`route ${index}:file.ts:9`));
+  }
+  assert.match(text, /endLine.*14/);
+});
+
+
+test("singleton categories keep recovery help shorter than the old repeated layout", () => {
+  const singleton: ImpactValue = { seeds: [{ file: "a.ts", symbol: "a", line: 1, basis: "lines" }, { file: "b.ts", symbol: "b", line: 1, basis: "lines" }], symbols: [], entrypoints: [{ kind: "http-route", name: "GET /x", handler: { path: "r.ts", symbol: "h", line: 1 }, depth: 1, confidence: 1, seeds: [0, 1] }], cost: { expansionsUsed: 0 } };
+  const reached = renderImpact({ ...base, status: "complete", value: singleton }, "details").split("reached entrypoints (1):\n")[1]!.split("impacted symbols")[0]!;
+  const oldReached = '  A recorded origin is an association, not a complete call chain.\n  - http-route GET /x -> r.ts:1 h (depth 1); lookup example: {"kind":"handler-origins","owner":{"kind":"local"},"handler":{"path":"r.ts","symbol":"h","line":1}}\n    one verified origin: a.ts:1 a (lines); 1 other origin; mode: "full" includes all\n';
+  assert.ok(Buffer.byteLength(reached) <= Buffer.byteLength(oldReached), reached);
+  assert.match(reached, /full.*all origin/);
+
+  const modules: ImpactValue = { seeds: [], symbols: [], entrypoints: [], modules: { origins: [{ file: "o.ts", change: "modified" }], modules: [{ file: "c.ts", snapshot: "head", depth: 1, origins: [0] }], cost: { expansionsUsed: 1 } }, cost: { expansionsUsed: 0 } };
+  const moduleRows = renderImpact({ ...base, status: "complete", value: modules }, "summary").split("module dependencies (1, not symbol or entrypoint impact):\n")[1]!.split("module expansions")[0]!;
+  const oldModules = '  head c.ts [lookup example: {"kind":"module-origins","owner":{"kind":"local"},"module":{"file":"c.ts","snapshot":"head"}}] (depth 1, 1 origin association; mode: "full" includes all)\n';
+  assert.ok(Buffer.byteLength(moduleRows) <= Buffer.byteLength(oldModules), moduleRows);
+  assert.match(moduleRows, /full.*all origin/);
 });
