@@ -580,12 +580,14 @@ class Materializer {
 
   // The five closed connections. No transitive closure, no breakage, no unrecorded chain.
 
+  /** One connection per rule and members; each compatible read combination that proves it adds its supports. */
   private connect(rule: ConnectionRule, parts: readonly PartId[], relations: readonly RelationId[], reads: readonly ReadId[], entities?: readonly EntityId[]): void {
-    const key = { rule, parts: sortedUnique(parts), relations: sortedUnique(relations), reads: sortedUnique(reads), ...(entities === undefined ? {} : { entities: sortedUnique(entities) }) };
+    const key = { rule, parts: sortedUnique(parts), relations: sortedUnique(relations), ...(entities === undefined ? {} : { entities: sortedUnique(entities) }) };
     const id = compositionKey(this.digest, "connection", key);
+    const proving = sortedUnique(reads);
     const supports = key.parts.flatMap((partId) => {
       const part = this.parts.get(partId);
-      return part === undefined ? [] : this.supportsOf(part, key.reads);
+      return part === undefined ? [] : this.supportsOf(part, proving);
     });
     const existing = this.connections.get(id);
     this.connections.set(id, {

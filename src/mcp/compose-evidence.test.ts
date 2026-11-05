@@ -518,3 +518,18 @@ test("one read citing a location from two findings keeps its support connection"
   for (const name of ["orders", "billing"]) workspace.part({ kind: "outward-name", origin: workspace.origin(sha("web")), name, kindName: "dependency", evidence: [workspace.evidence(place, { snapshot: sha("web") })], disposition: "unserved" });
   assert.equal(connections(compose(workspace.build()).graph, "shared-support").length, 1);
 });
+
+test("a connection proven by several compatible read combinations is one connection carrying every proving read", () => {
+  const route = (name: string) => {
+    const builder = new SetBuilder(name, ENTRYPOINTS, sha("shop"));
+    builder.part({ kind: "entrypoint", entry: httpRoute(builder.anchor(builder.file(PATH), HANDLER, 10, 20)), evidence: [] });
+    return builder;
+  };
+  const wide = route("entrypoints-wide");
+  const scoped = route("entrypoints-scoped");
+  const outline = new SetBuilder("outline-one", OUTLINE, sha("shop"));
+  outline.part({ kind: "outline-declaration", anchor: outline.anchor(outline.file(PATH), "create", 10, 20), kindName: "method" });
+  const declarations = connections(compose(wide.build(), scoped.build(), outline.build()).graph, "handler-declaration");
+  assert.equal(declarations.length, 1);
+  assert.deepEqual(new Set(declarations[0]?.supports.map((support) => support.read)), new Set([wide.read, scoped.read, outline.read]));
+});
