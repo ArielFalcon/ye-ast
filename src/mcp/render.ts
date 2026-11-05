@@ -1131,7 +1131,7 @@ export function renderWorkspace(fact: Fact<WorkspaceValue>, detail: ResponseMode
   ];
   let best = refs.some((ref) => ref !== undefined) && size(mixed) < size(normal) ? mixed : normal;
   // Location-only rows can be referenced without repeating evidence metadata only when no metadata is present.
-  if (refs.length > 0 && refs.every((ref) => ref !== undefined) && qualified.every(({ name }) => name.evidence.every((evidence) => evidence.via === undefined && evidence.confidence === undefined))) {
+  if (detail === "details" && refs.length > 0 && refs.every((ref) => ref !== undefined) && qualified.every(({ name }) => name.evidence.every((evidence) => evidence.via === undefined && evidence.confidence === undefined))) {
     const order: { repo: string; indexes: number[] }[] = [];
     for (const ref of refs) {
       const previous = order.at(-1);
