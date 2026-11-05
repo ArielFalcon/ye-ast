@@ -16,7 +16,7 @@ S7: Corpus stdio acceptance and resource comparison.
 |---|---|---|---|
 | Design and baseline | RFC-0021 and external run artifacts | docs: design Java value-flow summaries | completed |
 | Shared summary propagation | Spring adapter port | fix: propagate Java client summaries through source calls | implemented; subscription helpers pending |
-| Object and configuration values | UrlText and adapter fixtures | fix: evaluate source object and keyed configuration values | implemented |
+| Object and configuration values | JavaValueEvaluator and adapter fixtures | fix: evaluate source object and keyed configuration values | implemented |
 | Standard client vocabulary | HTTP adapter fixture | feat: read standard OkHttp requests | implemented |
 | Integration and measurements | npm run check and real stdio MCP | docs: record Java value-flow validation | measured; NATS acceptance incomplete |
 
@@ -56,3 +56,5 @@ S7: Corpus stdio acceptance and resource comparison.
 | Binary facade subjects and helper subscriptions | open; prior acceptance gaps |
 
 - Stronger complexity audit is now confirmed open, not merely unproven: nested two-implementation forwarding with different appended path segments yields 64/256/1,024 leaf contexts at 6/8/10 levels. External distinct-contexts.txt reproduces it. Blocker 2 is only partially fixed; do not close the audit or claim global polynomial complexity.
+
+- Final gate: npm run check passed typecheck, architecture and all 2,451 tests; git diff --check passed. Final delivery-* corpus outputs are byte-identical and preserve the exact 14 audit linkIds and 15 unresolved markers. Dedicated final warm runs (RPC seconds / harness seconds / peak RSS bytes): 8.115 / 11.88 / 1106690048; 8.044 / 11.82 / 1107361792; 8.074 / 11.84 / 1105838080. Earlier final-* runs overlapped verification and are excluded from acceptance timing. Seven type-correct mutants were killed. Worktree clean before this evidence-only log update; no push. Engram tools unavailable.
