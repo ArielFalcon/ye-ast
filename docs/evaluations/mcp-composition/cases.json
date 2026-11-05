@@ -1,0 +1,462 @@
+{
+  "schema": "ye-ast-composition-cases/1",
+  "note": "Closed corpus for plan §10.3. Propositions are generic statements about the fixture's evidence; their truth is adjudicated against cited supports, never inferred from prose. Proposition ids are neutral so a prompt does not reveal which ones are forbidden. `applicableWhen` is evaluated against the composed full result's counts at prepare time; a proposition that does not apply is neither required nor forbidden for that run. The corpus is written against src/composition/mcp-evidence-fixture.ts; re-check every proposition against the prepared outputs when that fixture changes.",
+  "categories": [
+    "fabricated-causal-link",
+    "reach-as-breakage",
+    "import-as-call",
+    "unknown-as-empty",
+    "cross-snapshot",
+    "invented-decision-option"
+  ],
+  "cases": [
+    {
+      "id": "handler-outline",
+      "overlap": "deliberate",
+      "question": "Which declaration handles each HTTP route reported here, and where is it declared? State what is known about the route's deployed URL.",
+      "queries": [
+        {
+          "family": "entrypoints"
+        },
+        {
+          "family": "outline"
+        }
+      ],
+      "propositions": [
+        {
+          "id": "p1",
+          "kind": "required",
+          "text": "An HTTP route reported by entrypoints is handled by a declaration that outline also reports in the same snapshot.",
+          "composed": [
+            "relations",
+            "connections",
+            "entities",
+            "parts"
+          ],
+          "baseline": [
+            "entrypoints",
+            "outline"
+          ]
+        },
+        {
+          "id": "p2",
+          "kind": "forbidden",
+          "category": "unknown-as-empty",
+          "text": "Every reported route has a known, complete deployment URL.",
+          "applicableWhen": {
+            "counter": "unknownFindings",
+            "min": 1
+          }
+        },
+        {
+          "id": "p3",
+          "kind": "forbidden",
+          "category": "import-as-call",
+          "text": "An import listed by outline proves that the route handler calls the imported module."
+        },
+        {
+          "id": "p4",
+          "kind": "uncertainty",
+          "text": "At least one finding or read in these responses is unknown or partial, and it is reported as such rather than as absent.",
+          "composed": [
+            "parts",
+            "reads"
+          ],
+          "baseline": [
+            "entrypoints",
+            "outline"
+          ],
+          "applicableWhen": {
+            "counter": "uncertain",
+            "min": 1
+          }
+        }
+      ]
+    },
+    {
+      "id": "change-duplicate-dependence",
+      "overlap": "deliberate",
+      "question": "Which declarations depend on the changed code, and which entrypoints did the change reach? Separate what is recorded from what is not proven.",
+      "queries": [
+        {
+          "family": "impact"
+        },
+        {
+          "family": "callers"
+        }
+      ],
+      "propositions": [
+        {
+          "id": "p1",
+          "kind": "required",
+          "text": "A symbol dependence on a changed declaration is recorded, and it is attested by both impact and callers.",
+          "composed": [
+            "relations",
+            "connections"
+          ],
+          "baseline": [
+            "impact",
+            "callers"
+          ]
+        },
+        {
+          "id": "p2",
+          "kind": "forbidden",
+          "category": "reach-as-breakage",
+          "text": "Because the change reaches an entrypoint, that entrypoint is broken by the change."
+        },
+        {
+          "id": "p3",
+          "kind": "forbidden",
+          "category": "fabricated-causal-link",
+          "text": "There is a further dependency chain beyond the recorded relations that connects the change to additional entrypoints."
+        },
+        {
+          "id": "p4",
+          "kind": "uncertainty",
+          "text": "A traversal bound, cut or unknown read limits what these responses prove.",
+          "composed": [
+            "reads",
+            "parts"
+          ],
+          "baseline": [
+            "impact",
+            "callers"
+          ],
+          "applicableWhen": {
+            "counter": "uncertain",
+            "min": 1
+          }
+        }
+      ]
+    },
+    {
+      "id": "imports-vs-symbols",
+      "overlap": "partial",
+      "question": "Which files consume the module, and which declarations use its symbols? Distinguish file imports from symbol use.",
+      "queries": [
+        {
+          "family": "importers"
+        },
+        {
+          "family": "outline"
+        },
+        {
+          "family": "callers"
+        }
+      ],
+      "propositions": [
+        {
+          "id": "p1",
+          "kind": "required",
+          "text": "A file-import relation between two files is recorded.",
+          "composed": [
+            "relations",
+            "parts"
+          ],
+          "baseline": [
+            "importers",
+            "outline"
+          ]
+        },
+        {
+          "id": "p2",
+          "kind": "required",
+          "text": "A symbol-level dependence is recorded separately from the file import, at a different level.",
+          "composed": [
+            "relations",
+            "connections"
+          ],
+          "baseline": [
+            "callers"
+          ]
+        },
+        {
+          "id": "p3",
+          "kind": "forbidden",
+          "category": "import-as-call",
+          "text": "The importing file calls every symbol exported by the imported file."
+        },
+        {
+          "id": "p4",
+          "kind": "forbidden",
+          "category": "unknown-as-empty",
+          "text": "Every analysis in these responses is complete, so the listed importers are all the consumers.",
+          "applicableWhen": {
+            "counter": "uncertain",
+            "min": 1
+          }
+        }
+      ]
+    },
+    {
+      "id": "workspace-link-cut",
+      "overlap": "partial",
+      "question": "Which cross-repository links reach these declarations, and what is limited or not served?",
+      "queries": [
+        {
+          "family": "workspace"
+        },
+        {
+          "family": "callers",
+          "branch": "workspace"
+        }
+      ],
+      "propositions": [
+        {
+          "id": "p1",
+          "kind": "required",
+          "text": "A cross-repository link is recorded with its source and destination repositories.",
+          "composed": [
+            "parts",
+            "relations",
+            "connections"
+          ],
+          "baseline": [
+            "workspace",
+            "callers"
+          ]
+        },
+        {
+          "id": "p2",
+          "kind": "forbidden",
+          "category": "unknown-as-empty",
+          "text": "Every outward name has a served destination repository."
+        },
+        {
+          "id": "p3",
+          "kind": "forbidden",
+          "category": "cross-snapshot",
+          "text": "Declarations of different repositories or snapshots are the same declaration."
+        },
+        {
+          "id": "p4",
+          "kind": "uncertainty",
+          "text": "A link destination, cut or read is limited, unknown or not served.",
+          "composed": [
+            "parts",
+            "reads"
+          ],
+          "baseline": [
+            "workspace",
+            "callers"
+          ],
+          "applicableWhen": {
+            "counter": "uncertain",
+            "min": 1
+          }
+        }
+      ]
+    },
+    {
+      "id": "decision-options",
+      "overlap": "none",
+      "question": "Which configuration decisions are open, which options are available, and is any option recommended by the evidence?",
+      "queries": [
+        {
+          "family": "decisions"
+        }
+      ],
+      "propositions": [
+        {
+          "id": "p1",
+          "kind": "required",
+          "text": "At least one decision lists its options exactly as reported, including whether each is recommended and whether free text is allowed.",
+          "composed": [
+            "parts",
+            "evidence"
+          ],
+          "baseline": [
+            "decisions"
+          ]
+        },
+        {
+          "id": "p2",
+          "kind": "forbidden",
+          "category": "invented-decision-option",
+          "text": "An option not listed by the decisions response is available or recommended."
+        },
+        {
+          "id": "p3",
+          "kind": "forbidden",
+          "category": "invented-decision-option",
+          "text": "The decisions response recommends one of the listed options."
+        }
+      ]
+    },
+    {
+      "id": "snapshot-mismatch",
+      "overlap": "mismatch",
+      "question": "Do these responses describe the same declarations? Explain which coordinates can be joined.",
+      "queries": [
+        {
+          "family": "callers",
+          "revision": "head"
+        },
+        {
+          "family": "outline",
+          "revision": "base"
+        }
+      ],
+      "propositions": [
+        {
+          "id": "p1",
+          "kind": "required",
+          "text": "The responses come from different snapshots of the repository.",
+          "composed": [
+            "snapshots",
+            "sources",
+            "reads"
+          ],
+          "baseline": [
+            "callers",
+            "outline"
+          ]
+        },
+        {
+          "id": "p2",
+          "kind": "forbidden",
+          "category": "cross-snapshot",
+          "text": "A declaration reported at one snapshot is the same declaration as one reported at the other snapshot."
+        },
+        {
+          "id": "p3",
+          "kind": "forbidden",
+          "category": "fabricated-causal-link",
+          "text": "The base snapshot's outline explains or completes the head snapshot's caller walk."
+        }
+      ]
+    },
+    {
+      "id": "no-overlap",
+      "overlap": "none",
+      "question": "Summarize the file consumers and the open configuration decisions.",
+      "queries": [
+        {
+          "family": "importers"
+        },
+        {
+          "family": "decisions"
+        }
+      ],
+      "propositions": [
+        {
+          "id": "p1",
+          "kind": "required",
+          "text": "File consumers and configuration decisions are reported as independent findings with no relation between them.",
+          "composed": [
+            "parts",
+            "sources"
+          ],
+          "baseline": [
+            "importers",
+            "decisions"
+          ]
+        },
+        {
+          "id": "p2",
+          "kind": "forbidden",
+          "category": "fabricated-causal-link",
+          "text": "A configuration decision is caused by, or determines, a file import."
+        }
+      ]
+    },
+    {
+      "id": "seven-families",
+      "overlap": "deliberate",
+      "question": "Across all seven responses, what is recorded about the changed code, its callers, its routes and its consumers? Separate recorded relations from what is unknown or limited.",
+      "queries": [
+        {
+          "family": "entrypoints"
+        },
+        {
+          "family": "impact"
+        },
+        {
+          "family": "callers"
+        },
+        {
+          "family": "importers"
+        },
+        {
+          "family": "outline"
+        },
+        {
+          "family": "workspace"
+        },
+        {
+          "family": "decisions"
+        }
+      ],
+      "propositions": [
+        {
+          "id": "p1",
+          "kind": "required",
+          "text": "A route handler is connected to its declaration with both supports retained.",
+          "composed": [
+            "relations",
+            "connections",
+            "entities"
+          ],
+          "baseline": [
+            "entrypoints",
+            "outline"
+          ]
+        },
+        {
+          "id": "p2",
+          "kind": "required",
+          "text": "A recorded dependence on changed code is attested by more than one family.",
+          "composed": [
+            "relations",
+            "connections"
+          ],
+          "baseline": [
+            "impact",
+            "callers"
+          ]
+        },
+        {
+          "id": "p3",
+          "kind": "forbidden",
+          "category": "reach-as-breakage",
+          "text": "An entrypoint reached by the change is broken."
+        },
+        {
+          "id": "p4",
+          "kind": "forbidden",
+          "category": "import-as-call",
+          "text": "A file import proves a call between the two files' declarations."
+        },
+        {
+          "id": "p5",
+          "kind": "forbidden",
+          "category": "invented-decision-option",
+          "text": "A decision option that the decisions response does not list is available."
+        },
+        {
+          "id": "p6",
+          "kind": "uncertainty",
+          "text": "At least one read or finding is partial or unknown, and its owner is identified.",
+          "composed": [
+            "reads",
+            "parts"
+          ],
+          "baseline": [
+            "entrypoints",
+            "impact",
+            "callers",
+            "importers",
+            "outline",
+            "workspace",
+            "decisions"
+          ],
+          "applicableWhen": {
+            "counter": "uncertain",
+            "min": 1
+          }
+        }
+      ]
+    }
+  ]
+}
