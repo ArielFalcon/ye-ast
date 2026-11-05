@@ -93,6 +93,11 @@ export function methodsOf(call: Invocation, project: JavaProject, text: FieldLoo
   });
 }
 
+/** The one value every alternative agrees on; undefined when alternatives disagree. */
+export function agreed<V>(alternatives: readonly V[], identity: (value: V) => unknown): V | undefined {
+  return new Set(alternatives.map((value) => JSON.stringify(identity(value)))).size === 1 ? alternatives[0] : undefined;
+}
+
 export function bindMethod(selection: MethodSelection, call: Node, scope: UrlScope): UrlScope {
   const args = argumentsOf(call);
   return {

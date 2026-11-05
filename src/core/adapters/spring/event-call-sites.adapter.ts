@@ -1,5 +1,5 @@
 import type { UrlScope } from "./java-values.ts";
-import { JavaMethodFlow } from "./java-method-flow.ts";
+import { agreed, JavaMethodFlow } from "./java-method-flow.ts";
 import type { Node } from "web-tree-sitter";
 import { compareText } from "../../domain/shared/code-node.ts";
 import type { Finding } from "../../domain/shared/fact.ts";
@@ -49,8 +49,7 @@ export class JavaEventReader {
       if (expanded !== undefined) {
         const targets = expanded.map((group) => {
           const alternatives = group.map(({ leaf, scope }) => this.target(leaf, scope));
-          const signatures = new Set(alternatives.map((value) => JSON.stringify(value.status === "unknown" ? value.status : value.value)));
-          return signatures.size === 1 ? alternatives[0]! : unknownAtNode(invocation.type.file.path, invocation.node);
+          return agreed(alternatives, (value) => (value.status === "unknown" ? value.status : value.value)) ?? unknownAtNode(invocation.type.file.path, invocation.node);
         });
         for (const target of targets) found.push(this.siteOf(repo, invocation, target));
       } else {

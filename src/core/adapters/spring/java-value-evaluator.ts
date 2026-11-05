@@ -25,6 +25,22 @@ const PLACEHOLDER_IN_TEXT = /\$\{([^${}:]+)(?::([^${}]*))?\}/;
 const FORMAT_SPECIFIER = /%[-#+ 0,(]*\d*(?:\.\d+)?[a-zA-Z]/g;
 const GETTER = /^(?:get|is)(.)(.*)$/;
 
+/** The property a getter name reads; a name that is not a getter stands for itself. */
+function propertyOf(name: string): string {
+  const getter = GETTER.exec(name);
+  return getter === null ? name : `${getter[1]?.toLowerCase()}${getter[2]}`;
+}
+
+function enclosingMember(node: Node): Node | undefined {
+  let member: Node | null = node;
+  while (member !== null && member.type !== "method_declaration" && member.type !== "constructor_declaration") member = member.parent;
+  return member ?? undefined;
+}
+
+function isFinal(binding: Binding): boolean {
+  return binding.node.namedChildren.some((child) => child.type === "modifiers" && /\bfinal\b/.test(child.text));
+}
+
 /**
  * Source value evaluation preserves argument bindings, object fields and consuming-module configuration.
  * Runtime text uses `{}`; values the snapshot cannot decide, including exhausted evaluation stacks, are undefined.
@@ -161,7 +177,7 @@ export class JavaValueEvaluator {
     if (expression !== undefined) return this.attribute(expression.node, { type: owner, locals: new Map(), env: new Map(), configurationFile: scope.configurationFile ?? scope.type.file });
     if (isField && (assignmentsOf(owner).get(binding.name) ?? []).some(({ member }) => member.type !== "constructor_declaration")) return undefined;
     if (isField && binding.initializer !== undefined && scope.instance?.constructed !== true
-      && !binding.node.namedChildren.some((child) => child.type === "modifiers" && /\bfinal\b/.test(child.text))
+      && !isFinal(binding)
       && !this.immutable(owner)) return undefined;
     const assigned = isField && binding.initializer === undefined ? (assignmentsOf(owner).get(binding.name) ?? []) : [];
     const sources = binding.initializer === undefined ? assigned.map(({ value: node, member }) => ({ node, scope: { ...scope, locals: localBindings(member) } })) : [{ node: binding.initializer, scope }];
@@ -200,8 +216,7 @@ export class JavaValueEvaluator {
     if (trail.has(call.id)) return undefined;
     const next = new Set(trail).add(call.id);
     const receiver = object === null || object.type === "this" ? scope.instance : this.held(object, scope, next);
-    const getter = GETTER.exec(name);
-    const property = getter === null ? name : `${getter[1]?.toLowerCase()}${getter[2]}`;
+    const property = propertyOf(name);
     if (receiver?.kind === "record" && argumentsOf(call).length === 0) {
       const methods = this.project.classChain(receiver.type).flatMap((type) => type.methods.filter((method) => method.name === name && method.parameterTypes.length === 0));
       if (methods.length === 0 && this.generatedGetter(receiver.type, property, name)) {
@@ -211,9 +226,10 @@ export class JavaValueEvaluator {
     }
     const invocation = { node: call, type: scope.type, member: undefined, locals: scope.locals };
     const selections = methodsOf(invocation, this.project, this, receiver?.kind === "record" ? receiver.type : scope.receiver ?? scope.type);
-    const sourceOwner = receiver?.kind === "record" ? this.project.classChain(receiver.type).find((type) => type.methods.some((method) => method.name === name && method.parameterTypes.length === argumentsOf(call).length && method.hasBody)) : undefined;
-    const ownSelections = sourceOwner === undefined || receiver?.kind !== "record" ? selections
-      : sourceOwner.methods.filter((method) => method.name === name && method.parameterTypes.length === argumentsOf(call).length && method.hasBody).map((method) => ({ method, receiver: receiver.type }));
+    const arity = argumentsOf(call).length;
+    const declared = (type: TypeDecl) => type.methods.filter((method) => method.name === name && method.parameterTypes.length === arity && method.hasBody);
+    const sourceOwner = receiver?.kind === "record" ? this.project.classChain(receiver.type).find((type) => declared(type).length > 0) : undefined;
+    const ownSelections = sourceOwner === undefined || receiver?.kind !== "record" ? selections : declared(sourceOwner).map((method) => ({ method, receiver: receiver.type }));
     const values = ownSelections.map((selection) => {
       if (next.has(selection.method.node.id)) return undefined;
       const returns = descendants(selection.method.node).filter((node) => node.type === "return_statement");
@@ -239,8 +255,7 @@ export class JavaValueEvaluator {
     if (node.type !== "method_invocation" || argumentsOf(node).length !== 0) return undefined;
     const object = node.childForFieldName("object");
     const name = node.childForFieldName("name")?.text ?? "";
-    const getter = GETTER.exec(name);
-    const property = getter === null ? name : `${getter[1]?.toLowerCase()}${getter[2]}`;
+    const property = propertyOf(name);
     const value = object === null ? scope.instance : this.held(object, scope, next);
     if (value?.kind !== "record" || !this.generatedGetter(value.type, property, name)) return undefined;
     const field = value.fields.get(property);
@@ -259,31 +274,27 @@ export class JavaValueEvaluator {
   private immutable(type: TypeDecl): boolean {
     if (type.node.type === "record_declaration") return true;
     return this.project.classChain(type).every((owner) => annotationUses(owner.node, scopeOf(owner)).some((use) => isAnnotation(use, LOMBOK_VALUE))
-      || [...fieldBindings(owner).values()].every((field) => field.node.namedChildren.some((child) => child.type === "modifiers" && /\bfinal\b/.test(child.text))));
+      || [...fieldBindings(owner).values()].every(isFinal));
   }
 
   private recordIsStable(value: ObjectValue, binding: Binding, read: Node, scope: UrlScope): boolean {
     if (!scope.locals.has(binding.name) && (assignmentsOf(scope.type).get(binding.name) ?? []).length > 0) return false;
     if (this.immutable(value.type)) return true;
     if (!scope.locals.has(binding.name)) return false;
-    let member: Node | null = read;
-    while (member !== null && member.type !== "method_declaration" && member.type !== "constructor_declaration") member = member.parent;
-    if (member === null) return false;
+    const member = enclosingMember(read);
+    if (member === undefined) return false;
     return !descendants(member).some((use) => {
       if (use.type !== "identifier" || use.text !== binding.name || use.startIndex < (binding.initializer?.endIndex ?? 0) || use.startIndex > read.startIndex) return false;
       const parent = use.parent;
       if (parent?.type === "argument_list" && parent.parent?.type === "method_invocation") {
         const call = parent.parent;
         const index = argumentsOf(call).findIndex((argument) => argument.id === use.id);
-        const targets = methodsOf({ node: call, type: scope.type, member: member ?? undefined, locals: scope.locals }, this.project, this);
+        const targets = methodsOf({ node: call, type: scope.type, member, locals: scope.locals }, this.project, this);
         return targets.length === 0 || !this.readOnlyParameters(targets.map(({ method }) => ({ method, index })), value.type);
-
       }
       if (parent?.type !== "method_invocation" || parent.childForFieldName("object")?.id !== use.id) return true;
       const name = parent.childForFieldName("name")?.text ?? "";
-      const getter = GETTER.exec(name);
-      const property = getter === null ? name : `${getter[1]?.toLowerCase()}${getter[2]}`;
-      return !this.generatedGetter(value.type, property, name)
+      return !this.generatedGetter(value.type, propertyOf(name), name)
         && !value.type.methods.some((method) => method.name === name && this.simpleAccessor(method.node));
     });
   }
@@ -309,8 +320,7 @@ export class JavaValueEvaluator {
           continue;
         }
         const name = access?.childForFieldName("name")?.text ?? "";
-        const getter = GETTER.exec(name);
-        const property = getter === null ? name : `${getter[1]?.toLowerCase()}${getter[2]}`;
+        const property = propertyOf(name);
         if (access?.type !== "method_invocation" || access.childForFieldName("object")?.id !== reference.id || argumentsOf(access).length !== 0
           || (!this.generatedGetter(type, property, name) && !type.methods.some((candidate) => candidate.name === name && candidate.parameterTypes.length === 0 && this.simpleAccessor(candidate.node)))) return false;
       }
@@ -360,18 +370,16 @@ export class JavaValueEvaluator {
   }
 
   private withSetters(value: ObjectValue, name: string, node: Node, scope: UrlScope): ObjectValue {
-    let member: Node | null = node;
-    while (member !== null && member.type !== "method_declaration" && member.type !== "constructor_declaration") member = member.parent;
-    if (member === null) return value;
+    const member = enclosingMember(node);
+    if (member === undefined) return value;
     const fields = new Map(value.fields);
     const calls = descendants(member).filter((child) => child.type === "method_invocation" && child.startIndex < node.startIndex && child.childForFieldName("object")?.text === name).sort((a, b) => a.startIndex - b.startIndex);
     for (const call of calls) {
       const setter = call.childForFieldName("name")?.text ?? "";
       const methods = value.type.methods.filter((method) => method.name === setter && method.parameterTypes.length === 1);
       const [argument] = argumentsOf(call);
-      if (methods.length !== 1 || argument === undefined) continue;
-      const method = methods[0];
-      if (method === undefined) continue;
+      const [method] = methods;
+      if (methods.length !== 1 || method === undefined || argument === undefined) continue;
       const writes = descendants(method.node).filter((child) => child.type === "assignment_expression");
       const [write] = writes;
       const left = write?.childForFieldName("left");
@@ -449,9 +457,8 @@ export class JavaValueEvaluator {
       return { ...base, key: `${base.key}.${key}`, typeName: valueType };
     }
     if (argumentsOf(node).length !== 0) return undefined;
-    const getter = GETTER.exec(name);
-    if (getter === null) return undefined;
-    const property = `${getter[1]?.toLowerCase()}${getter[2]}`;
+    if (!GETTER.test(name)) return undefined;
+    const property = propertyOf(name);
     const type = this.project.lookupType(base.typeName, scopeOf(base.owner));
     if (typeof type !== "object") return undefined;
     const field = fieldBindings(type).get(property);

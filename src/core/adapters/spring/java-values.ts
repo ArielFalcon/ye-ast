@@ -2,7 +2,7 @@ import type { Node } from "web-tree-sitter";
 import type { Binding } from "./java-members.ts";
 import type { JavaFile, TypeDecl } from "./java-symbols.ts";
 
-/** A call argument and the scope it is written in, which a wrapper's parameter stands for. */
+/** A call argument and the scope it is written in, which the called method's parameter stands for. */
 export interface Closure {
   node: Node;
   scope: UrlScope;
