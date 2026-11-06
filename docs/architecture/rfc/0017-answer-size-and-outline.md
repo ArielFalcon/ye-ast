@@ -167,6 +167,63 @@ what follows:
 - The historical envelope stayed under 900 bytes on every call. A client may expose both channels; these wire sizes
   do not establish what a model saw.
 
+## 4. Row coordinates under one shared selector
+
+**The symptom.** On the summary of a real 185-file Angular change, `reached entrypoints (41)` was the largest block
+(8.3 KB of 20.8 KB): a `Handler lookup` line printed one complete select example, and every row still repeated a JSON
+handler object, plus a second line for its origin count.
+
+**The cause, confirmed.** Three blocks offer a selector per row, and each decided its coordinate on its own between the
+same two candidates, both of which print a JSON object on every row:
+
+| Block | Literal candidate | Shared candidate before this change |
+|---|---|---|
+| reached entrypoints (`reachedLines`, `reachedGroup`) | `lookup example: {complete selector}` | example line + `handler: {"path","symbol","line"}` |
+| module dependencies (`moduleLines`) | `[lookup example: {complete selector}]` | example line + `[module: {"file","snapshot"}]` |
+| cuts (`cutCoordinates`, `impactCutBlock`) | `lookup example: {complete selector}` | example line + `cut: {"cutIndex"}` |
+
+Once one example defines `kind`, `owner` and the shape, the per-row object only restates field names; what a row must
+carry is its own values. The text already had a compact form for each: `handlerText` (`path:line[-endLine] symbol`,
+used by entrypoint, changed-entrypoint and link rows) and `<snapshot> <file>` (used by module rows that cannot be
+selected). The other per-row JSON in the renderers is not this pattern: `[linkId "…"]` and `[findingIndex n]` are
+single values, `evidence: […]` rows are evidence, not selectors, and the compose view prints entity anchors, never a
+selector.
+
+**The rule.** A shared selector block prints one complete select example and a lookup line saying which fields each row
+fills (`sharedLookup`); every row prints only its own coordinate in the block's compact text form:
+
+| Block | Row coordinate | Fills |
+|---|---|---|
+| reached entrypoints | `-> <path>:<line>[-<endLine>] <symbol>` | `handler.path`, `handler.line`, `handler.symbol`; `endLine` is not a selector field |
+| module dependencies | `<snapshot> <file>` | `module.snapshot`, `module.file` |
+| cuts | `cutIndex <n>` | `cutIndex` |
+
+The section 1 rule still chooses between the literal and the shared block: the shorter text wins and a tie keeps the
+literal one, so a single row keeps its complete selector. A row that cannot be selected (`canSelect` false) prints the
+same compact coordinate with no selector. `details` and `full` follow the same rule because the cause is the same:
+`details` lists more rows of the same blocks, and `full` text uses the same renderers.
+
+**Exactness.** A compact handler coordinate decodes exactly when the symbol is its last word and the line is the number
+after the last `:` before it, which holds for any path, including one with spaces or colons. A symbol with whitespace
+would break that, so a block whose handlers hold one keeps the literal selector on every row. The snapshot is always
+`base` or `head`, so a module coordinate decodes for any file. The schema still accepts only what the example shows
+(`subjectHandler` is strict), and the lookup line says so.
+
+**Measured** on that change (trusted, same snapshots, two runs identical in bytes):
+
+| Call | before | after |
+|---|---|---|
+| `ye_ast_impact` summary, whole text | 20,822 | 18,859 |
+| — reached entrypoints | 8,326 | 6,363 |
+| `ye_ast_impact` details, whole text | 185,078 | 164,048 |
+| — reached entrypoints | 12,480 | 10,681 |
+| — module dependencies | 107,036 | 90,279 |
+| — cuts | 54,612 | 52,138 |
+| `ye_ast_callers` on one page component, whole text | 1,278 | 1,273 |
+
+Selections rebuilt only from a compact handler row and a compact module row returned results byte-identical to the
+ones the literal selectors return.
+
 ## Open questions
 
 | # | Question | Recommendation |
@@ -178,3 +235,5 @@ what follows:
 | 5 | Should one release also answer an outline for a line range? | No. Two request shapes over the same fact before one measurement exists is the complexity this RFC refuses |
 | 6 | Is a counted block ever allowed to exceed the full answer when the count is large? | Never: the rule has no exception. If the full body is shorter, the full body is the correct answer |
 | 7 | Does a counted answer also name `ye_ast_outline` for the files it leaves an agent to read? | Not now. It costs about 120 bytes on every answer that lists files — 0.7 % of the 15.2 KB answer and 11 % of the 998-byte one — and nothing measures that an agent would act on it; the guidance lives in the tool description and in `INSTRUCTIONS`, where `159f46f` already put the `ye_ast_callers` pointer that had a measured saving behind it. Reopen with evidence from sessions: files named by an answer read whole, or an outline never called after it ships |
+| 8 | Should the shared block with compact rows replace the literal candidate everywhere, so a block always has one form? | No. A single row is shorter with its complete selector, and the section 1 rule already decides by bytes; one extra candidate per block is the smaller rule. A row whose coordinate does not decode exactly keeps the literal selector |
+| 9 | `docs/superpowers/plans/2026-11-05-mcp-category-guidance-and-single-coordinates.md` kept each row's handler or module as a JSON object so that no agent parses a rendered path. Section 4 asks the agent to read `path:line symbol` and `snapshot file` from the row. Is that acceptable? | Yes. Both forms decode exactly by a stated rule (the symbol is the last word, the line follows the last `:`; the snapshot is the first word), the one case that breaks the rule keeps the literal selector, and a single row keeps its complete selector by bytes. The JSON object per row restated field names the example already defines, which is what made the block the largest of the answer |

@@ -1,4 +1,4 @@
-import { canSelect, categoryRecovery, literalSelection } from "./presentation-guidance.ts";
+import { canSelect, categoryRecovery, literalSelection, sharedLookup } from "./presentation-guidance.ts";
 import type { CutOwner, ImpactOwner, EvidenceSelection } from "./select-evidence.ts";
 import { renderFactHeader as headerLines, renderFactStatus as statusLines, snapshotLine, evidenceText, cutsByKind } from "./presentation-context.ts";
 import type { ResponseMode, RenderContext } from "./presentation.ts";
@@ -189,7 +189,7 @@ function cutContextLine(owner: CutOwner, cutIndex: number, context?: RenderConte
   const example = { kind: "cut-places", owner, cutIndex } as const;
   const selectable = context === undefined || canSelect(context, example, owner.kind === "section" || owner.kind === "read");
   return selectable
-    ? `  Cut lookup: combine each row's cutIndex with kind and owner from this complete select example: ${literalSelection(example)}`
+    ? sharedLookup("Cut", "cutIndex <n>", "cutIndex", example)
     : `  Recorded cut context: ${JSON.stringify({ kind: "cut-places", owner })}; each row supplies its cutIndex.`;
 }
 
@@ -207,7 +207,7 @@ function cutCoordinates(cuts: readonly Cut[], owner: CutOwner, detail: ResponseM
   const literal = rows.map(({ cutIndex, anchor }) => `  ${!selectable ? "recorded coordinates" : "lookup example"}: ${literalSelection({ kind: "cut-places", owner, cutIndex })}${anchor}`);
   const shared = [
     cutContextLine(owner, first.cutIndex, context),
-    ...rows.map(({ cutIndex, anchor }) => `  cut: ${JSON.stringify({ cutIndex })}${anchor}`),
+    ...rows.map(({ cutIndex, anchor }) => `  cutIndex ${cutIndex}${anchor}`),
   ];
   return size(shared) < size(literal) ? shared : literal;
 }
@@ -446,17 +446,24 @@ function changedContractText(change: Omit<ChangedContract, "handlers">): string 
   return `${change.change} ${change.method} ${change.path}${name}${parts} at ${change.document}:${change.line}`;
 }
 
-function reachedLines(reached: ReachedEntrypoint, seeds: readonly Seed[], detail: ResponseMode, owner: ImpactOwner, sharedLookup = false, sharedOrigin = false, selectable = true): string[] {
+/** A compact row names its handler as `path:line[-endLine] symbol`; a literal row carries its complete selector. */
+function reachedLines(reached: ReachedEntrypoint, seeds: readonly Seed[], detail: ResponseMode, owner: ImpactOwner, compact: boolean, sharedOrigin = false): string[] {
   const name = reached.name === undefined ? reached.kind : `${reached.kind} ${reached.name}`;
-  const confidence = reached.confidence < 1 ? `, confidence ${reached.confidence}` : "";
+  const facts = [`depth ${reached.depth}`];
+  if (reached.confidence < 1) facts.push(`confidence ${reached.confidence}`);
+  if (!compact && reached.handler.endLine !== undefined) facts.push(`endLine ${reached.handler.endLine}`);
+  if (detail === "summary" && reached.seeds.length > 0) facts.push(plural(reached.seeds.length, "origin"));
   const origin = seeds[reached.seeds[0] ?? -1];
   const others = reached.seeds.length - 1;
+  const { path, symbol, line } = reached.handler;
   return [
-    `  - ${name} (depth ${reached.depth}${confidence}${reached.handler.endLine === undefined ? "" : `, endLine ${reached.handler.endLine}`}); ${sharedLookup || !selectable ? `handler: ${JSON.stringify({ path: reached.handler.path, symbol: reached.handler.symbol, line: reached.handler.line })}` : `lookup example: ${literalSelection({ kind: "handler-origins", owner, handler: { path: reached.handler.path, symbol: reached.handler.symbol, line: reached.handler.line } })}`}`,
-    ...(detail === "summary" && reached.seeds.length > 0 ? [`    origins: ${reached.seeds.length}`] : []),
+    compact ? `  - ${name} -> ${handlerText(reached.handler)} (${facts.join(", ")})` : `  - ${name} (${facts.join(", ")}); lookup example: ${literalSelection({ kind: "handler-origins", owner, handler: { path, symbol, line } })}`,
     ...(detail === "summary" || origin === undefined || sharedOrigin ? [] : [`    one verified origin: ${placeText(origin.file, origin.line, origin.endLine)} ${origin.symbol} (${origin.basis})${others > 0 ? `; ${others} other ${others === 1 ? "origin" : "origins"}` : ""}`]),
   ];
 }
+
+/** The symbol is the last word of a compact handler coordinate, so a symbol with whitespace keeps literal selectors. */
+const HANDLER_ROW = "-> <path>:<line>[-<endLine>] <symbol>";
 
 function reachedGroup(value: ImpactValue, detail: ResponseMode, owner: ImpactOwner, selectable = true): string[] {
   const support = shareExactContext(value.entrypoints, (entrypoint) => ({
@@ -464,7 +471,7 @@ function reachedGroup(value: ImpactValue, detail: ResponseMode, owner: ImpactOwn
     support: entrypoint.seeds.map((index) => value.seeds[index]),
     confidence: entrypoint.confidence,
   }));
-  const rows = (sharedLookup: boolean): string[] => {
+  const rows = (compact: boolean): string[] => {
     const output: string[] = [];
     for (let index = 0; index < value.entrypoints.length;) {
       const first = value.entrypoints[index]!;
@@ -474,23 +481,24 @@ function reachedGroup(value: ImpactValue, detail: ResponseMode, owner: ImpactOwn
         end++;
       }
       const run = value.entrypoints.slice(index, end);
-      const literal = run.flatMap((entrypoint) => reachedLines(entrypoint, value.seeds, detail, owner, sharedLookup, false, selectable));
+      const literal = run.flatMap((entrypoint) => reachedLines(entrypoint, value.seeds, detail, owner, compact));
       const origin = value.seeds[first.seeds[0] ?? -1];
       if (detail === "details" && run.length > 1 && origin !== undefined) {
         const other = first.seeds.length - 1;
-        const shared = [`  For the next ${run.length} handler rows, one verified origin: ${placeText(origin.file, origin.line, origin.endLine)} ${origin.symbol} (${origin.basis})${other > 0 ? `; ${other} other ${other === 1 ? "origin" : "origins"}` : ""}`, ...run.flatMap((entrypoint) => reachedLines(entrypoint, value.seeds, detail, owner, sharedLookup, true, selectable))];
+        const shared = [`  For the next ${run.length} handler rows, one verified origin: ${placeText(origin.file, origin.line, origin.endLine)} ${origin.symbol} (${origin.basis})${other > 0 ? `; ${other} other ${other === 1 ? "origin" : "origins"}` : ""}`, ...run.flatMap((entrypoint) => reachedLines(entrypoint, value.seeds, detail, owner, compact, true))];
         output.push(...(size(shared) < size(literal) ? shared : literal));
       } else output.push(...literal);
       index = end;
     }
     return output;
   };
+  if (!selectable) return rows(true);
   const literal = rows(false);
   const first = value.entrypoints[0];
-  if (first === undefined || !selectable) return literal;
+  if (first === undefined || value.entrypoints.some((entrypoint) => /\s/.test(entrypoint.handler.symbol))) return literal;
   const { path, symbol, line } = first.handler;
   const shared = [
-    `  Handler lookup: combine each row's handler object with kind and owner from this complete select example: ${literalSelection({ kind: "handler-origins", owner, handler: { path, symbol, line } })}`,
+    sharedLookup("Handler", HANDLER_ROW, "handler path, line and symbol (not endLine)", { kind: "handler-origins", owner, handler: { path, symbol, line } }),
     ...rows(true),
   ];
   return preferShorterText(literal.join("\n"), shared.join("\n")) === shared.join("\n") ? shared : literal;
@@ -700,9 +708,9 @@ function moduleLines(value: ModuleImpactValue, detail: ResponseMode, owner: Impa
     const example = detail === "details" && first !== undefined ? `; origin ${first.file} (${first.change})` : "";
     return `${count} origin ${count === 1 ? "association" : "associations"}${example}`;
   };
-  const line = (module: Module, includeContext = true, sharedLookup = false): string =>
-    `  ${!selectable ? `${module.snapshot} ${module.file}` : ""}${!selectable ? "" : ` [${sharedLookup ? `module: ${JSON.stringify({ file: module.file, snapshot: module.snapshot })}` : `lookup example: ${literalSelection({ kind: "module-origins", owner, module: { file: module.file, snapshot: module.snapshot } })}`}]`} (depth ${module.depth}${includeContext ? `, ${context(module)}` : ""})${module.via === undefined ? "" : ` via ${module.via.kind} ${module.via.file} at line ${module.via.line} in this module${module.via.typeOnly ? " (type-only)" : ""}`}`;
-  const grouped = (modules: readonly Module[], sharedLookup = false): string[] => {
+  const line = (module: Module, includeContext: boolean, compact: boolean): string =>
+    `  ${compact ? `${module.snapshot} ${module.file}` : `[lookup example: ${literalSelection({ kind: "module-origins", owner, module: { file: module.file, snapshot: module.snapshot } })}]`} (depth ${module.depth}${includeContext ? `, ${context(module)}` : ""})${module.via === undefined ? "" : ` via ${module.via.kind} ${module.via.file} at line ${module.via.line} in this module${module.via.typeOnly ? " (type-only)" : ""}`}`;
+  const grouped = (modules: readonly Module[], compact = !selectable): string[] => {
     const lines: string[] = [];
     for (let start = 0; start < modules.length;) {
       const first = modules[start]!;
@@ -710,8 +718,8 @@ function moduleLines(value: ModuleImpactValue, detail: ResponseMode, owner: Impa
       let end = start + 1;
       while (end < modules.length && JSON.stringify(modules[end]!.origins) === key) end++;
       const run = modules.slice(start, end);
-      const separate = run.map((module) => line(module, true, sharedLookup));
-      const shared = [`  shared ${context(first)}:`, ...run.map((module) => `  ${line(module, false, sharedLookup)}`)];
+      const separate = run.map((module) => line(module, true, compact));
+      const shared = [`  shared ${context(first)}:`, ...run.map((module) => `  ${line(module, false, compact)}`)];
       lines.push(...(run.length > 1 && size(shared) < size(separate) ? shared : separate));
       start = end;
     }
@@ -719,15 +727,15 @@ function moduleLines(value: ModuleImpactValue, detail: ResponseMode, owner: Impa
   };
   const listing = grouped(value.modules);
   const omitted = value.modules.length - shown.length;
-  const compact = [...grouped(shown), ...(omitted === 0 ? [] : [`  ${omitted} deeper module dependencies not listed; mode: "full" includes their recorded evidence.`])];
-  const useCompact = omitted > 0 && size(compact) < size(listing);
-  const selectedModules = useCompact ? shown : value.modules;
-  const selected = useCompact ? compact : listing;
+  const nearestListing = [...grouped(shown), ...(omitted === 0 ? [] : [`  ${omitted} deeper module dependencies not listed; mode: "full" includes their recorded evidence.`])];
+  const useNearest = omitted > 0 && size(nearestListing) < size(listing);
+  const selectedModules = useNearest ? shown : value.modules;
+  const selected = useNearest ? nearestListing : listing;
   const first = selectedModules[0];
   const lookupShared = first === undefined || !selectable ? selected : [
-    `  Module lookup: combine each row's module object with kind and owner from this complete select example: ${literalSelection({ kind: "module-origins", owner, module: { file: first.file, snapshot: first.snapshot } })}`,
+    sharedLookup("Module", "<snapshot> <file>", "module snapshot and file", { kind: "module-origins", owner, module: { file: first.file, snapshot: first.snapshot } }),
     ...grouped(selectedModules, true),
-    ...(useCompact && omitted > 0 ? [`  ${omitted} deeper module dependencies not listed; mode: "full" includes their recorded evidence.`] : []),
+    ...(useNearest && omitted > 0 ? [`  ${omitted} deeper module dependencies not listed; mode: "full" includes their recorded evidence.`] : []),
   ];
   if (countedByArea) {
     return [
@@ -830,7 +838,7 @@ function impactCutBlock(cuts: readonly Cut[], detail: ResponseMode, owner: CutOw
   let previous: Cut | undefined;
   for (const [cutIndex, cut] of cuts.entries()) {
     if (cut.kind !== previous?.kind) shared.push(`  ${cut.kind}:`);
-    const coordinate = `cut: ${JSON.stringify({ cutIndex })}`;
+    const coordinate = `cutIndex ${cutIndex}`;
     if (cut.kind === "unresolved-link") {
       if (previous?.kind !== cut.kind || previous.at[0] !== cut.at[0]) shared.push(`    anchor ${JSON.stringify(cut.at[0])}:`);
       const places = Math.max(0, cut.at.length - 1);

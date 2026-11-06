@@ -170,8 +170,8 @@ test("summary counts omitted origin associations per entrypoint rather than coun
   };
   const summary = renderImpact({ ...fact, value }).split("impacted symbols")[0]!;
   assert.match(summary, /origin associations \(3\)/);
-  assert.match(summary, /GET \/x[^\n]*\n\s+origins: 2/);
-  assert.match(summary, /GET \/y[^\n]*\n\s+origins: 1/);
+  assert.match(summary, /GET \/x[^\n]*\b2 origins\)/);
+  assert.match(summary, /GET \/y[^\n]*\b1 origin\)/);
   assert.match(summary, /mode "details"[^\n]*mode: "full"/);
 });
 
@@ -330,22 +330,22 @@ test("reached handlers share selector owner while preserving every origin associ
   assert.equal((text.match(/"kind":"handler-origins"/g) ?? []).length, 1);
   for (let i = 0; i < 8; i++) {
     assert.match(text, new RegExp(`GET /route-${i}[^\\n]*handler${i}`));
-    assert.match(text, new RegExp(`"path":"src/route-${i}\\.ts","symbol":"handler${i}","line":${i + 1}`));
+    assert.match(text, new RegExp(`-> src/route-${i}\\.ts:${i + 1} handler${i} \\(depth`));
   }
   assert.match(text, /next 8 handler rows/);
   assert.doesNotMatch(text, /origin association above/);
 });
 
-test("module lookups share kind and owner while retaining every literal module coordinate", () => {
+test("module lookups share kind and owner while every row keeps its compact module coordinate", () => {
   const modules = Array.from({ length: 12 }, (_, i) => ({ file: `src/module-${i}.ts`, snapshot: "head" as const, depth: 1, origins: [0] }));
   const value: ImpactValue = { ...impact, entrypoints: [], modules: { origins: [{ file: "src/origin.ts", change: "modified" }], modules, cost: { expansionsUsed: 12 } } };
   const text = renderImpact({ ...fact, value }, "details");
   assert.equal((text.match(/"kind":"module-origins"/g) ?? []).length, 1);
-  for (const module of modules) assert.ok(text.includes(JSON.stringify({ file: module.file, snapshot: module.snapshot })));
   const example = JSON.parse(text.match(/Module lookup:.*complete select example: (\{[^\n]+\})/)![1]!);
   const controls = z.strictObject(recoveryControlShapeFor("impact"));
-  for (const row of text.split("\n").filter((line) => line.includes("module: {"))) {
-    const module = JSON.parse(row.match(/module: (\{[^}]+\})/)![1]!);
+  const rows = [...text.matchAll(/^\s+(base|head) (.+) \(depth/gm)].map(([, snapshot, file]) => ({ file, snapshot }));
+  assert.deepEqual(rows, modules.map(({ file, snapshot }) => ({ file, snapshot })));
+  for (const module of rows) {
     const request = { select: { kind: example.kind, owner: example.owner, module }, page: { limit: 1 } };
     assert.ok(controls.safeParse(request).success);
     assert.ok(validRecoveryControls("impact", request));
@@ -379,7 +379,7 @@ test("unavailable recovery keeps the reason and does not promise executable look
   const text = renderImpact(fact, "details", context);
   assert.match(text, /recovery unavailable.*unresolved-context/i);
   assert.doesNotMatch(text, /lookup example:/);
-  assert.match(text, /"path":"route\.ts","symbol":"handler","line":9/);
+  assert.match(text, /-> route\.ts:9 handler \(depth/);
 });
 
 test("unavailable recovery labels cut coordinates without advertising selection", () => {
@@ -396,16 +396,21 @@ test("callers guidance uses revision without unrelated impact base advice", () =
   assert.match(text, /revision "abc"/);
 });
 
-test("handler rows retain literal coordinates once and scope origin recovery to the category", () => {
+test("compact handler rows carry path, span and symbol once and scope origin recovery to the category", () => {
   const value = { ...impact, entrypoints: Array.from({ length: 8 }, (_, index) => ({ ...impact.entrypoints[0]!, name: `GET /${index}`, handler: { path: `route ${index}:file.ts`, symbol: "handler", line: 9, endLine: 14 } })) };
   const text = renderImpact({ ...base, status: "complete", value }, "details");
   assert.doesNotMatch(text, /origin association above|; mode: "full" includes all/);
   assert.match(text, /next 8/);
   for (let index = 0; index < 8; index++) {
-    assert.match(text, new RegExp(`"path":"route ${index}:file.ts"`));
-    assert.doesNotMatch(text, new RegExp(`route ${index}:file.ts:9`));
+    assert.match(text, new RegExp(`^  - http-route GET /${index} -> route ${index}:file\\.ts:9-14 handler \\(depth`, "m"));
   }
-  assert.match(text, /endLine.*14/);
+});
+
+test("a handler symbol with whitespace keeps a complete literal selector on every row", () => {
+  const value = { ...impact, entrypoints: Array.from({ length: 8 }, (_, index) => ({ ...impact.entrypoints[0]!, name: `GET /${index}`, handler: { path: `route-${index}.ts`, symbol: index === 7 ? "default export" : "handler", line: 9 } })) };
+  const text = renderImpact({ ...base, status: "complete", value }, "details");
+  assert.doesNotMatch(text, /Handler lookup:/);
+  assert.equal((text.match(/lookup example: \{"kind":"handler-origins"/g) ?? []).length, 8);
 });
 
 

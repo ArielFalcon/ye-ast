@@ -902,13 +902,42 @@ test("cut lookup categories share context while every coordinate reconstructs a 
       const example = text.match(/Cut lookup:.*select example: (\{[^\n]+\})/)?.[1];
       assert.ok(example, name);
       const context = JSON.parse(example) as Record<string, unknown>;
-      const selectors = [...text.matchAll(/^\s+cut: (\{"cutIndex":\d+\})/gm)].map(match => ({ ...context, ...JSON.parse(match[1]!) }));
+      const selectors = [...text.matchAll(/^\s+cutIndex (\d+)/gm)].map(match => ({ ...context, cutIndex: Number(match[1]) }));
       assert.deepEqual(selectors, cuts.map((_, cutIndex) => ({ kind: "cut-places", owner: { kind: "fact" }, cutIndex })));
       const schema = new AjvJsonSchemaValidator().getValidator(tools.find(tool => tool.name === name)!.inputSchema);
       for (const select of selectors) assert.equal(schema({ ...args, select, page: { limit: 1 }, mode: "full" }).valid, true);
       const selected = await session.callTool(name, { ...args, select: selectors.at(-1), page: { limit: 1 }, mode: "full" });
       assert.notEqual(selected.isError, true);
       assert.deepEqual((resultFields(selected) as { items: unknown[] }).items, [{ atIndex: 1, place: cuts.at(-1)!.at[1] }]);
+    }
+  } finally { await session.close(); }
+});
+
+test("handler and module rows print one compact coordinate each that rebuilds a usable selector", async () => {
+  const entrypoints = Array.from({ length: 8 }, (_, index) => ({ kind: "http-route" as const, name: `GET /orders/${index}`, handler: { path: `src/route ${index}:Controller.java`, symbol: `Controller.r${index}`, line: index + 3, endLine: index + 9 }, depth: 1, confidence: 1, seeds: [0] }));
+  const modules = Array.from({ length: 8 }, (_, index) => ({ file: `src/module ${index}.ts`, snapshot: index % 2 === 0 ? "base" as const : "head" as const, depth: 1, origins: [0] }));
+  const origin = { file: "src/OrderService.java", change: "modified" as const };
+  const fact = impactFact({ value: { ...IMPACT, symbols: [], entrypoints, modules: { origins: [origin], modules, cost: { expansionsUsed: 8 } } } });
+  const { session } = await setup({ ofChange: async () => ({ ok: true, value: fact }) });
+  try {
+    const tools = await session.listTools();
+    const schema = new AjvJsonSchemaValidator().getValidator(tools.find(tool => tool.name === "ye_ast_impact")!.inputSchema);
+    for (const mode of ["summary", "details"] as const) {
+      const text = textOf(await session.callTool("ye_ast_impact", { base: "main", mode }));
+      assert.equal(text.split('"path":').length - 1, 1, mode);
+      assert.equal(text.split('"file":').length - 1, 1, mode);
+      const handlerExample = JSON.parse(text.match(/Handler lookup:.*select example: (\{[^\n]+\})/)![1]!);
+      const moduleExample = JSON.parse(text.match(/Module lookup:.*select example: (\{[^\n]+\})/)![1]!);
+      const handlers = [...text.matchAll(/^\s+- .* -> (.+):(\d+)(?:-\d+)? (\S+) \(depth/gm)].map(([, path, line, symbol]) => ({ path, symbol, line: Number(line) }));
+      const listed = [...text.matchAll(/^\s+(base|head) (.+) \(depth/gm)].map(([, snapshot, file]) => ({ file, snapshot }));
+      assert.deepEqual(handlers, entrypoints.map(({ handler: { path, symbol, line } }) => ({ path, symbol, line })), mode);
+      assert.deepEqual(listed, modules.map(({ file, snapshot }) => ({ file, snapshot })), mode);
+      for (const handler of handlers) assert.equal(schema({ base: "main", select: { ...handlerExample, handler }, page: { limit: 1 } }).valid, true, mode);
+      for (const module of listed) assert.equal(schema({ base: "main", select: { ...moduleExample, module }, page: { limit: 1 } }).valid, true, mode);
+      const byHandler = await session.callTool("ye_ast_impact", { base: "main", select: { ...handlerExample, handler: handlers.at(-1) }, page: { limit: 5 }, mode: "full" });
+      assert.deepEqual((resultFields(byHandler) as { items: unknown[] }).items, [{ seedIndex: 0, seed: IMPACT.seeds[0] }], mode);
+      const byModule = await session.callTool("ye_ast_impact", { base: "main", select: { ...moduleExample, module: listed.at(-1) }, page: { limit: 5 }, mode: "full" });
+      assert.deepEqual((resultFields(byModule) as { items: unknown[] }).items, [{ originIndex: 0, origin }], mode);
     }
   } finally { await session.close(); }
 });
@@ -1468,9 +1497,9 @@ test("impact detail localizes every cut anchor while full JSON retains every ref
   const result = await session.callTool("ye_ast_impact", { base: "main", mode: "full" });
   const text = textOf(await session.callTool("ye_ast_impact", { base: "main", mode: "details" }));
   assert.deepEqual(withoutRecovery(resultFields(result)), { ...deep, mode: "full", repositoryRoots: [{ repo: "shop", path: REPOSITORY.path }] });
-  assert.match(text, /anchor "src\/b\.ts::B\.user":\n\s+cut: \{"cutIndex":0\}; 2 reference places/);
+  assert.match(text, /anchor "src\/b\.ts::B\.user":\n\s+cutIndex 0; 2 reference places/);
   assert.doesNotMatch(text, /src\/y\.ts/);
-  assert.match(text, /depth:\n\s+cut: \{"cutIndex":1\}; src\/c\.ts::C\.top \(limit 5\)/);
+  assert.match(text, /depth:\n\s+cutIndex 1; src\/c\.ts::C\.top \(limit 5\)/);
   assert.doesNotMatch(text, /summarized/);
   await session.close();
 });
@@ -1699,7 +1728,7 @@ test("a one-line declaration prints one line and a handler prints its span", asy
   const { session } = await setup({ ofChange: async () => ({ ok: true, value: fact }) });
   const text = textOf(await session.callTool("ye_ast_impact", { base: "main" }));
   assert.match(text, /^ {4}3 A\.seed$/m);
-  assert.match(text, /\(depth 1, endLine 31\); handler: \{"path":"src\/OrderController\.java","symbol":"OrderController\.one","line":17\}/m);
+  assert.match(text, /-> src\/OrderController\.java:17-31 OrderController\.one \(depth 1/m);
   assert.doesNotMatch(text, /3-3/);
   await session.close();
 });
@@ -1794,8 +1823,8 @@ test("reached entrypoints print their confidence only when it is below 1", async
   } as Partial<Fact<ImpactValue>>);
   const { session } = await setup({ ofChange: async () => ({ ok: true, value: entrypoints }) });
   const text = textOf(await session.callTool("ye_ast_impact", { base: "main" }));
-  assert.match(text, /GET \/sure \(depth 1\); lookup example:.*"path":"src\/OrderController\.java","symbol":"OrderController\.one","line":17/);
-  assert.match(text, /GET \/maybe \(depth 2, confidence 0\.4\).*"path":"src\/OrderController\.java","symbol":"OrderController\.one","line":17/);
+  assert.match(text, /GET \/sure \(depth 1, 1 origin\); lookup example:.*"path":"src\/OrderController\.java","symbol":"OrderController\.one","line":17/);
+  assert.match(text, /GET \/maybe \(depth 2, confidence 0\.4, 1 origin\).*"path":"src\/OrderController\.java","symbol":"OrderController\.one","line":17/);
   await session.close();
 });
 

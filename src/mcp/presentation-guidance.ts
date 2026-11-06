@@ -21,6 +21,14 @@ export function literalSelection(selection: EvidenceSelection): string {
   return JSON.stringify(selection);
 }
 
+/**
+ * One complete selector stands for every row of a block: each row prints only its own coordinate in `rowForm`, and
+ * `fields` names where that coordinate goes in the example.
+ */
+export function sharedLookup(label: string, rowForm: string, fields: string, example: EvidenceSelection): string {
+  return `  ${label} lookup: each row gives ${rowForm}; set ${fields} in this complete select example: ${literalSelection(example)}`;
+}
+
 /** Consult the schema authority with the actual response context, never a parallel capability map. */
 export function canSelect(context: import("./presentation.ts").RenderContext, selection: EvidenceSelection, workspace: boolean): boolean {
   if (context.recovery?.status === "unavailable") return false;

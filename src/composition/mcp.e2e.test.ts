@@ -425,10 +425,10 @@ test("selected callers pages replay real pinned origins and reject a changed liv
   const exampleText = detailText.match(/complete select example: (\{[^\n]+\})/)?.[1];
   assert.ok(exampleText, detailText);
   const example = JSON.parse(exampleText);
-  const rowText = detailText.split("\n").find((row) => row.includes(`handler: ${JSON.stringify({ path, symbol, line })}`));
-  assert.ok(rowText);
-  const handler = JSON.parse(rowText.match(/handler: (\{[^\n]+\})/)![1]!) as { path: string; symbol: string; line: number };
-  assert.ok(detailText.includes(`handler: ${JSON.stringify(handler)}`));
+  const rowText = detailText.split("\n").find((row) => row.includes(` -> ${path}:${line}`) && row.includes(` ${symbol} (depth`));
+  assert.ok(rowText, detailText);
+  const [, rowPath, rowLine, rowSymbol] = rowText.match(/ -> (.+):(\d+)(?:-\d+)? (\S+) \(depth/)!;
+  const handler = { path: rowPath!, symbol: rowSymbol!, line: Number(rowLine) };
   const select = { kind: example.kind, owner: example.owner, handler };
   const args = { ...recovery.query.arguments, mode: "full", select, page: { limit: 1 }, expect: recovery.resultIdentity };
   const first = await call(args);

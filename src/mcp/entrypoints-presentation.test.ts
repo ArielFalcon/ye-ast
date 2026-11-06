@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { renderEntrypointMap } from "./render.ts";
+import { validRecoveryControls } from "./evidence-schema.ts";
 
 const base = { schema: "0.12.0", snapshot: { repo: "shop", kind: "sha", sha: "a".repeat(40) }, producer: { name: "ye-ast", version: "1" }, inputs: { trust: "untrusted", scope: "s", declaredScope: { languages: [], frameworks: [], include: [], exclude: [] }, content: "c", config: "k", declaredConfig: {}, engines: {} }, evidence: [] };
 const render = (items: unknown[], mode: "summary" | "details") => renderEntrypointMap({ ...base, status: "complete", value: { entrypoints: { ...base, status: "complete", value: items } } } as never, mode);
@@ -47,4 +48,15 @@ test("details share exact base-path context independently of row evidence and ro
   }
   assert.match(text, /own guards \(1\):\n\s+- guard \(src\/guard.ts\)/);
   assert.match(text, /base path unknown \(unresolved\)/); assert.match(text, /base path unknown \(no-extractor\)/);
+});
+
+test("shared cut rows print only their cutIndex, and each completes the one select example", () => {
+  const cuts = Array.from({ length: 12 }, (_, index) => ({ kind: "depth", at: [`src/anchor-${index}.ts`], limit: 2 }));
+  const section = { ...base, status: "partial", cuts, value: [] };
+  const text = renderEntrypointMap({ ...base, status: "partial", cuts: [], value: { entrypoints: section } } as never, "details", { tool: "entrypoints" });
+  const example = JSON.parse(text.match(/Cut lookup:.*select example: (\{[^\n]+\})/)![1]!);
+  const rows = [...text.matchAll(/^ {2}cutIndex (\d+) \(anchor (".*")\)$/gm)].map(([, cutIndex, anchor]) => ({ cutIndex: Number(cutIndex), anchor: JSON.parse(anchor!) }));
+  assert.deepEqual(rows, cuts.map((cut, cutIndex) => ({ cutIndex, anchor: cut.at[0] })));
+  assert.equal(text.split('"kind":"cut-places"').length - 1, 1);
+  assert.ok(rows.every(({ cutIndex }) => validRecoveryControls("entrypoints", { select: { ...example, cutIndex }, page: { limit: 1 } })));
 });

@@ -52,7 +52,7 @@ test("shared cut coordinates retain each repository and indexed-read owner", () 
   ]);
   const groups = text.split(/Cut lookup:.*select example: \{[^\n]+\}/).slice(1);
   for (const group of groups) {
-    const indices = [...group.matchAll(/^\s+cut: (\{"cutIndex":\d+\})/gm)].map(match => JSON.parse(match[1]!).cutIndex);
+    const indices = [...group.matchAll(/^\s+cutIndex (\d+)/gm)].map(match => Number(match[1]));
     assert.deepEqual(indices, cuts.map((_, index) => index));
   }
 });
@@ -146,7 +146,7 @@ test("handler and module examples obey the same registered-tool capability polic
   for (const mode of ["summary", "details"] as const) {
     const unsupported = renderImpact(fact, mode, { tool: "entrypoints" });
     assert.doesNotMatch(unsupported, /"kind":"handler-origins"|"kind":"module-origins"/);
-    assert.match(unsupported, /"path":"src\/h.ts","symbol":"run","line":7/);
+    assert.match(unsupported, /-> src\/h\.ts:7-12 run \(depth/);
     assert.match(unsupported, /base src\/m.ts/);
     const callers = renderImpact(fact, mode, { tool: "callers" });
     assert.match(callers, /"kind":"handler-origins"/);

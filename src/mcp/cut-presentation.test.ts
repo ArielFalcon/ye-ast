@@ -22,8 +22,8 @@ test("detailed cut rows bind original indices, anchors, limits and reasons witho
   for (const line of rows) {
     const head = line.match(/^\s+anchor (".*"):/);
     if (head) anchor = JSON.parse(head[1]!);
-    const row = line.match(/^\s+cut: (\{"cutIndex":\d+\}); (.*)$/);
-    if (row && JSON.parse(row[1]!).cutIndex < 12) associations.push({ cutIndex: JSON.parse(row[1]!).cutIndex, anchor: anchor!, metadata: row[2]! });
+    const row = line.match(/^\s+cutIndex (\d+); (.*)$/);
+    if (row && Number(row[1]) < 12) associations.push({ cutIndex: Number(row[1]), anchor: anchor!, metadata: row[2]! });
   }
   assert.deepEqual(associations.map(({ cutIndex, anchor }) => ({ cutIndex, anchor })), cuts.slice(0, 12).map((cut, cutIndex) => ({ cutIndex, anchor: cut.at[0] })));
   assert.match(associations[0]!.metadata, /limit 0/);
@@ -31,8 +31,8 @@ test("detailed cut rows bind original indices, anchors, limits and reasons witho
   assert.match(associations[2]!.metadata, /limit 17/);
   assert.match(associations[2]!.metadata, /different-reason/);
   assert.doesNotMatch(associations[2]!.metadata, /reason-0/);
-  assert.match(text, /cut: \{"cutIndex":12\}.*base:same\.ts::f.*limit 2/);
-  assert.match(text, /cut: \{"cutIndex":13\}.*head:same\.ts::f.*limit 300/);
+  assert.match(text, /cutIndex 12;.*base:same\.ts::f.*limit 2/);
+  assert.match(text, /cutIndex 13;.*head:same\.ts::f.*limit 300/);
   assert.deepEqual(fact, before);
 });
 
@@ -43,7 +43,7 @@ test("unavailable recovery retains indexed cut context without promising a selec
   assert.match(text, /Recorded cut context: \{"kind":"cut-places","owner":\{"kind":"fact"\}\}/);
   assert.doesNotMatch(text, /Cut lookup:/);
   assert.equal(text.split(longAnchor(0)).length - 1, 1);
-  assert.equal([...text.matchAll(/cut: \{"cutIndex":\d+\}/g)].length, 12);
+  assert.equal([...text.matchAll(/^\s+cutIndex \d+/gm)].length, 12);
 });
 
 
