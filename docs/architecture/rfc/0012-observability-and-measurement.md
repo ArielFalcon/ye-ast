@@ -182,6 +182,8 @@ A **query line**, one per completed request, measured around the call:
 | `reason` | the reason of an `unknown` fact; present only then, so the field answers "why not" |
 | `bytes` | the compact serialization of the answer; the CLI writes it indented, so this is a size, not the wire's exact length |
 | `snapshot` | kind and value: the join key a host needs to correlate a reported bad answer |
+| `cpu_ms` | the process CPU, user plus system, spent between the call and its answer; concurrent requests and indexer children are not separated out |
+| `rss_bytes`, `heap_used_bytes` | the process memory when the answer settled, so a session's growth and its idle release can be read off the lines |
 
 `cut_kinds` and `reason` are the two fields that make the line worth reading: `partial` without them says nothing about
 which bound stopped the walk, and `unknown` without its reason is the least useful answer the engine can give.
@@ -195,6 +197,20 @@ An **index line**, one per build, measured around `graph.index` (`src/core/ports
 A reused index writes no line. Reuse is the cheap case and its absence beside a query line is what says so; telling
 the two apart would need a request-scoped context threaded through the whole call to survive concurrent requests, and
 the event worth recording is the one that costs seconds. `store_bytes` is read once per build, never per request.
+
+A live mirror writes the same line: `built` for its first or a recovering full build, `synced` for the incremental
+sync of the paths that changed, so a session of edits never reads as a series of full builds.
+
+A **stage line**, one per call of a reader a request runs over the whole snapshot (the export, opening the store,
+entrypoint extraction, Angular declarations, relations, dynamic loads, module dependencies, Java imports, call sites):
+
+```json
+{"ye_ast":{"event":"stage","stage":"relations","outcome":"ok","duration_ms":812}}
+```
+
+`outcome` is `ok`, `threw`, or the fault a result answered. A stage line carries no request id: in the sequential use
+of one agent it precedes its query line in order; under concurrent requests lines interleave and a host correlates them
+by time only.
 
 **What the line cannot tell.** A host that cancels and a deadline that elapses both reach the query family as one
 aborted signal, so both read `outcome: "aborted"`; the elapsed `duration_ms` beside the deadline the host itself set is

@@ -600,3 +600,11 @@ test("workspace impact replays persisted moving members from their original cont
   const mismatch = await workspaceImpact.callers({ ...callers, replay: first.value.workspaceReplay });
   assert.ok(!mismatch.ok && mismatch.fault.kind === "workspace-replay-mismatch");
 });
+
+test("a measured map writes its export and entrypoint stages before its query line", async () => {
+  const lines: string[] = [];
+  await mapOf({ measure: (line) => lines.push(line) });
+
+  const records = lines.map((line) => JSON.parse(line).ye_ast as { event: string; stage?: string });
+  assert.deepEqual(records.map((record) => record.stage ?? record.event), ["export", "entrypoints", "query"]);
+});

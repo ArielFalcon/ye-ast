@@ -65,7 +65,7 @@ import type { Redaction } from "../core/ports/redaction.port.ts";
 import type { TrustRecordReader } from "../core/ports/trust-record.port.ts";
 import type { ExportBudget, Vcs } from "../core/ports/vcs.port.ts";
 import { installedVersion, ownVersion } from "./installed-versions.ts";
-import { measuredDecisions, measuredEntrypoints, measuredGraph, measuredImpact, measuredOutline, measuredWorkspace, type MeasurementSink } from "./measurement.ts";
+import { measuredDecisions, measuredStages, measuredEntrypoints, measuredGraph, measuredImpact, measuredOutline, measuredWorkspace, type MeasurementSink } from "./measurement.ts";
 
 const PRODUCER_NAME = "ye-ast";
 const ENTRYPOINT_ENGINES = ["web-tree-sitter", "tree-sitter-java", "typescript"] as const;
@@ -124,22 +124,25 @@ export interface ComposedQueries {
 
 export function composeQueries(options: Omit<CompositionOptions, "signal"> = {}): ComposedQueries {
   const version = ownVersion();
+  const redaction = createPatternRedaction();
+  const measurement = options.measure === undefined ? undefined : { sink: options.measure, redaction };
+  const staged = <T extends object>(port: T, stages: { readonly [K in keyof T]?: string }): T => (measurement === undefined ? port : measuredStages(port, stages, measurement));
   const angular = createAngularRoutesExtractor();
   const contracts = createContractRoutes();
-  const extractor: EntrypointExtractor = {
+  const extractor = staged<EntrypointExtractor>({
     extract: async (files, libraries) => {
       const spring = await createSpringRoutesExtractor(await createJavaParser(), contracts).extract(files, libraries);
       return sortFindings([...spring, ...(await angular.extract(files))]);
     },
-  };
+  }, { extract: "entrypoints" });
   const typescriptCallSites = createHttpCallSites();
-  const callSites: CallSiteReader = {
+  const callSites = staged<CallSiteReader>({
     of: async (files, repo, libraries) => {
       const java = await createJavaCallSites(await createJavaParser()).of(files, repo, libraries);
       return [...(await typescriptCallSites.of(files, repo)), ...java].sort((a, b) => compareText(a.file, b.file) || a.line - b.line || compareText(a.symbol, b.symbol));
     },
-  };
-  const vcs = createGitVcs();
+  }, { of: "call-sites" });
+  const vcs = staged(createGitVcs(), { exportCommit: "export" });
   const scratch = createTempScratchDirectory(options.scratchRoot);
   const reader = createFsSourceReader();
   const digest = createSha256Digest();
@@ -147,8 +150,6 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
   const snapshotCache = { snapshotCache: createSnapshotDataCache(options.snapshotCacheBytes ?? SNAPSHOT_CACHE_BYTES) };
   const entrypointEngines = Object.fromEntries(ENTRYPOINT_ENGINES.map((name) => [name, installedVersion(name)]));
   const budget = options.exportBudget && { budget: options.exportBudget };
-  const redaction = createPatternRedaction();
-  const measurement = options.measure === undefined ? undefined : { sink: options.measure, redaction };
   const trust = options.trustDirectory === undefined ? undefined : { trust: reportingFaultOnce(createTrustRecords(options.trustDirectory), redaction, options.reportTrustFault) };
   const graph = measurement === undefined ? createCodeGraph() : measuredGraph(createCodeGraph(), measurement);
   const codegraph = installedVersion(CODEGRAPH_PACKAGE);
@@ -164,17 +165,17 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
   const bareEntrypoints = createEntrypointQueries({ vcs, scratch, reader, extractor, digest, matcher, producer: { name: PRODUCER_NAME, version }, engines: entrypointEngines, live, ...snapshotCache, ...budget, ...trust });
   const entrypoints = measurement === undefined ? bareEntrypoints : measuredEntrypoints(bareEntrypoints, measurement);
   const indexes = options.indexCache === undefined ? undefined : createIndexCache({ directory: options.indexCache, graph, digest, codegraph });
-  const moduleDependencies = createModuleDependenciesReader();
+  const moduleDependencies = staged(createModuleDependenciesReader(), { extract: "module-dependencies" });
   const impactDeps: ImpactQueriesDeps = {
     vcs,
     scratch,
     reader,
     extractor,
     ...snapshotCache,
-    angular: createAngularDeclarationReader(),
+    angular: staged(createAngularDeclarationReader(), { read: "angular-declarations" }),
     contracts,
-    relations: composeAngularRelations(),
-    dynamicLoads: createDynamicLoadReader(),
+    relations: staged(composeAngularRelations(), { extract: "relations" }),
+    dynamicLoads: staged(createDynamicLoadReader(), { extract: "dynamic-loads" }),
     graph,
     ...(indexes && { indexes }),
     digest,
@@ -201,7 +202,7 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
     }
   };
   const impact = measurement === undefined ? bareImpact : measuredImpact(bareImpact, measurement);
-  const javaImports: ModuleDependenciesReader = { extract: async (sources) => createJavaImportsReader(await createJavaParser()).extract(sources) };
+  const javaImports = staged<ModuleDependenciesReader>({ extract: async (sources) => createJavaImportsReader(await createJavaParser()).extract(sources) }, { extract: "java-imports" });
   const bareOutline = createOutlineQueries({
     ...snapshotCache,
     vcs,
