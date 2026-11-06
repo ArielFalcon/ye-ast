@@ -49,6 +49,8 @@ import type { ImportOriginSite, ImportOriginsReader } from "../../ports/import-o
 import type { ContractRoutes } from "../../ports/contract-routes.port.ts";
 import { containmentTree } from "../outline/outline.ts";
 import { prepareCommit } from "../snapshot/prepared-snapshot.ts";
+import type { UnmodelledConstructsReader } from "../../ports/unmodelled-constructs.port.ts";
+import { unmodelledNote } from "../../domain/shared/unmodelled.ts";
 
 export interface ImpactQueriesDeps extends HeadReaderDeps {
   /** The walk reads the change between two revisions, which no other family asks for. */
@@ -69,6 +71,8 @@ export interface ImpactQueriesDeps extends HeadReaderDeps {
   importOrigins?: ImportOriginsReader;
   moduleDependencies?: ModuleDependenciesReader;
   declarationEvidence?: DeclarationEvidenceReader;
+  /** The changed or targeted files whose declarations the graph cannot place; without it no such file is cut. */
+  unmodelled?: UnmodelledConstructsReader;
 }
 
 type Answer = Result<Fact<ImpactValue>, OfChangeFault>;
@@ -131,10 +135,12 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
           if (signal?.aborted) return ABORTED;
           const proofs = await proofsOf(deps, store, headTree, request.signal);
           if (signal?.aborted) return ABORTED;
-          const read = impactOf({ store, changes, requested, componentsByResource, found, fields, locals, memberUses, loads, headTree, summary, budget: request.budget ?? {}, proofs });
+          const unmodelled = await unmodelledIn(deps, headTree, [...changes.map(({ path }) => path), ...requested.map(({ file }) => file)]);
+          if (signal?.aborted) return ABORTED;
+          const read = impactOf({ store, changes, requested, componentsByResource, found, fields, locals, memberUses, loads, headTree, summary, budget: request.budget ?? {}, proofs, unmodelled });
           if (read.missing.length > 0) {
             const names = read.missing.map(({ file, symbol }) => `${file}:${symbol}`).join(", ");
-            return { ok: false, fault: { kind: "unknown-symbol", detail: `no symbol at the revision for ${names}`, entries: read.missing } };
+            return { ok: false, fault: { kind: "unknown-symbol", detail: `no symbol at the revision for ${names}${unmodelledNote(read.missing, unmodelled)}`, entries: read.missing } };
           }
           return { ok: true, value: impactFact(head.base(content, true), read.value, [...fixed, ...read.cuts]) };
         } finally {
@@ -365,8 +371,9 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
         const retained = validated.get(file.path);
         return retained === undefined ? file : { ...file, removedNames: file.removedNames.filter((name) => retained.has(name)) };
       });
+      const unmodelled = await unmodelledIn(deps, headTree, validatedChanges.filter((file) => !file.deleted).map(({ path }) => path));
       if (signal?.aborted) return ABORTED;
-      const read = impactOf({ store, changes: validatedChanges, requested: [], componentsByResource, found, fields, locals, memberUses, loads, headTree, summary, budget: request.budget ?? {}, proofs });
+      const read = impactOf({ store, changes: validatedChanges, requested: [], componentsByResource, found, fields, locals, memberUses, loads, headTree, summary, budget: request.budget ?? {}, proofs, unmodelled });
       return { ok: true, value: impactFact(head.base(content, true), { ...value, ...read.value }, [...unaccounted([...fixed, ...read.cuts]), ...moduleCuts]) };
     } finally {
       store.close();
@@ -423,6 +430,13 @@ function candidatesOf(tree: readonly DeclarationBranch<GraphSymbol>[]): string[]
 }
 
 /** The head's sources the walk reads: written, in scope, and of a kind an extractor covers. */
+/** Which of `files` the graph cannot place, read from the head's own sources of those files only. */
+async function unmodelledIn(deps: ImpactQueriesDeps, headTree: CommitExtraction, files: readonly string[]): Promise<readonly string[]> {
+  if (deps.unmodelled === undefined) return [];
+  const asked = new Set(files);
+  return deps.unmodelled.extract(headTree.sources.filter(({ path }) => asked.has(path)));
+}
+
 function sourceFilesOf(headTree: CommitExtraction): string[] {
   return headTree.export.files.filter((file) => file.written && kindOfChangedFile(file.path) === "source").map((file) => file.path);
 }
@@ -496,6 +510,8 @@ interface WalkInput {
   headTree: CommitExtraction;
   summary: Pick<IndexSummary, "filesNotIndexed">;
   budget: ImpactBudget;
+  /** The changed or targeted files whose declarations the graph cannot place. */
+  unmodelled: readonly string[];
   /** The two proofs the head's own imports make: what is outside the repository, and what a bare name binds to. */
   proofs?: ReferenceProofs;
 }
@@ -541,6 +557,7 @@ function impactOf(input: WalkInput): ImpactRead {
     ...unreadRelationCuts(unread, new Set(walked.map((symbol) => symbol.file)), templateOwners(componentsByResource)),
     ...summary.filesNotIndexed.map((file): Cut => ({ kind: "no-extractor", at: [file] })),
     ...selection.withoutSymbols.map((file): Cut => ({ kind: "no-extractor", at: [file] })),
+    ...input.unmodelled.map((file): Cut => ({ kind: "no-extractor", at: [file] })),
   ];
   const value = {
     cost: walk.cost,
