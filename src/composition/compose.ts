@@ -52,6 +52,8 @@ import type { CallSiteReader } from "../core/domain/topology/call-site.ts";
 import type { EntrypointExtractor, SourceFile } from "../core/ports/entrypoint-extractor.port.ts";
 import { createImportOrigins } from "../core/adapters/typescript/import-origins.adapter.ts";
 import { createModuleDependenciesReader } from "../core/adapters/typescript/module-dependencies.adapter.ts";
+import { createJavaImportsReader } from "../core/adapters/spring/java-imports.adapter.ts";
+import type { ModuleDependenciesReader } from "../core/ports/module-dependencies.port.ts";
 import type { EntrypointQueries } from "../core/ports/entrypoint-queries.port.ts";
 import type { ImpactQueries } from "../core/ports/impact-queries.port.ts";
 import type { OutlineQueries } from "../core/ports/outline-queries.port.ts";
@@ -162,6 +164,7 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
   const bareEntrypoints = createEntrypointQueries({ vcs, scratch, reader, extractor, digest, matcher, producer: { name: PRODUCER_NAME, version }, engines: entrypointEngines, live, ...snapshotCache, ...budget, ...trust });
   const entrypoints = measurement === undefined ? bareEntrypoints : measuredEntrypoints(bareEntrypoints, measurement);
   const indexes = options.indexCache === undefined ? undefined : createIndexCache({ directory: options.indexCache, graph, digest, codegraph });
+  const moduleDependencies = createModuleDependenciesReader();
   const impactDeps: ImpactQueriesDeps = {
     vcs,
     scratch,
@@ -183,7 +186,7 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
     ...budget,
     ...trust,
     importOrigins: (sources: readonly SourceFile[]) => createImportOrigins(sources),
-    moduleDependencies: createModuleDependenciesReader(),
+    moduleDependencies,
     declarationEvidence: createDeclarationEvidenceReader(),
   };
   const bareImpact = createImpactQueries(impactDeps);
@@ -198,6 +201,7 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
     }
   };
   const impact = measurement === undefined ? bareImpact : measuredImpact(bareImpact, measurement);
+  const javaImports: ModuleDependenciesReader = { extract: async (sources) => createJavaImportsReader(await createJavaParser()).extract(sources) };
   const bareOutline = createOutlineQueries({
     ...snapshotCache,
     vcs,
@@ -210,6 +214,7 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
     matcher,
     producer: { name: PRODUCER_NAME, version },
     engines: { ...entrypointEngines, [CODEGRAPH_PACKAGE]: codegraph },
+    moduleReaders: [moduleDependencies, javaImports],
     live,
     ...budget,
     ...trust,

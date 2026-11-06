@@ -8,12 +8,18 @@ import type { Result } from "../../domain/shared/result.ts";
 import type { OutlineValue } from "../../domain/outline/outline-fact.ts";
 import type { OutlineFault, OutlineQueries, OutlineSelector } from "../../ports/outline-queries.port.ts";
 import { ABORTED } from "../snapshot/read-snapshot.ts";
-import { createHeadReader, type FactSpec, type HeadReaderDeps } from "../snapshot/head-reading.ts";
+import { createHeadReader, type FactSpec, type HeadReaderDeps, type HeadReading } from "../snapshot/head-reading.ts";
+import type { ModuleDependencies } from "../../domain/impact/module-dependency.ts";
+import type { CommitExtraction } from "../snapshot/read-snapshot.ts";
+import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
+import type { ModuleDependenciesReader } from "../../ports/module-dependencies.port.ts";
 import { readFocus, readOutline } from "./outline.ts";
 
 export interface OutlineQueriesDeps extends HeadReaderDeps {
   /** Version of each engine every operation runs on, by package name. */
   engines: Readonly<Record<string, string>>;
+  /** The readers of module statements, one per language; each reads only the files of its language. */
+  moduleReaders: readonly ModuleDependenciesReader[];
 }
 
 export function createOutlineQueries(deps: OutlineQueriesDeps): OutlineQueries {
@@ -26,7 +32,7 @@ export function createOutlineQueries(deps: OutlineQueriesDeps): OutlineQueries {
       const files = sortedUnique(focus === undefined ? request.files ?? [] : focus.map(({ file }) => file));
       const spec: FactSpec = { declaredConfig: focus === undefined ? { files } : { focus: focus.map(selectorKey) }, engines };
 
-      return headReader.atExport(request, spec, async (head): Promise<Result<Fact<OutlineValue>, OutlineFault>> => {
+      const answer = async (head: HeadReading<Pick<CommitExtraction, "export">>, sources?: readonly SourceFile[]): Promise<Result<Fact<OutlineValue>, OutlineFault>> => {
         const headTree = head.tree;
         const content = contentFingerprint(headTree.export);
         const outside = files.filter((file) => !head.selected(file));
@@ -44,9 +50,12 @@ export function createOutlineQueries(deps: OutlineQueriesDeps): OutlineQueries {
           const focused = focus === undefined ? undefined : readFocus(store, focus.filter(({ file }) => isReadableFile(file)));
           if (focused !== undefined && focused.unknown.length > 0) return { ok: false, fault: { kind: "unknown-symbol", detail: `no declaration at the revision for ${focused.unknown.map(({ file, symbol }) => `${file}:${symbol}`).join(", ")}`, entries: focused.unknown } };
           if (focused !== undefined && focused.topLevel.length > 0) return { ok: false, fault: { kind: "top-level-line", detail: `no declaration holds ${focused.topLevel.map(({ file, line }) => `${file}:${line}`).join(", ")}; the line is at the top level of its file`, entries: focused.topLevel } };
-          const read = focused?.value ?? readOutline(store, covered);
+          const listed = focused === undefined ? readOutline(store, covered, await readModules(deps.moduleReaders, sources ?? [])) : undefined;
+          if (request.signal?.aborted) return ABORTED;
+          const read = focused?.value ?? listed!.value;
           const cuts = [
             ...fixed,
+            ...(listed?.cuts ?? []),
             ...summary.filesNotIndexed.map((file): Cut => ({ kind: "no-extractor", at: [file] })),
             ...read.unheld.map((file): Cut => ({ kind: held.has(file) ? "no-extractor" : "not-exported", at: [file] })),
           ];
@@ -54,8 +63,20 @@ export function createOutlineQueries(deps: OutlineQueriesDeps): OutlineQueries {
         } finally {
           store.close();
         }
-      });
+      };
+      return focus === undefined ? headReader.atSources(request, spec, (head) => answer(head, head.tree.sources)) : headReader.atExport(request, spec, (head) => answer(head));
     },
+  };
+}
+
+/** The module statements of every reader, as one read. */
+async function readModules(readers: readonly ModuleDependenciesReader[], sources: readonly SourceFile[]): Promise<ModuleDependencies> {
+  const reads = await Promise.all(readers.map((reader) => reader.extract(sources)));
+  return {
+    files: reads.flatMap((read) => read.files),
+    dependencies: reads.flatMap((read) => read.dependencies),
+    unread: reads.flatMap((read) => read.unread),
+    untraversed: reads.flatMap((read) => read.untraversed ?? []),
   };
 }
 

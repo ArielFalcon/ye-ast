@@ -25,7 +25,7 @@ import type { ExecutedSource, PublicWorkspaceValue } from "./query-runner.ts";
 import { recoveryContext, type RecoveryContext } from "./recovery.ts";
 import type {
   AnchorId, AnchorRecord, ComparisonRef, EntryData, EvidenceFinding, EvidenceId, EvidenceOrigin, EvidenceRecord,
-  EvidenceSet, FileCategory, FileDependencyCategory, FileId, FileRecord, LinkData, LinkReference, OriginReference, Part, PartId,
+  EvidenceSet, FileCategory, FileDependencyCategory, FileId, FileRecord, LinkData, LinkReference, OriginReference, OutlineImportRecord, Part, PartId,
   PartPayload, ReadAnalysis, ReadId, ReadOwner, ReadRecord, RedactionRecord, RecordedCollectionState, SnapshotId, SnapshotRecord,
   SnapshotVectorEntry, SourceFamilyRef, SourceId, Support,
 } from "./composition-contract.ts";
@@ -518,9 +518,23 @@ function outline(b: Builder, root: ReadContext, value: OutlineValue): void {
     const pointer = `/value/files/${index}`;
     const file = b.file(root.here, held.file, root.id, `${pointer}/file`);
     const declarations = held.declarations.map((declaration, j) => declared(held.file, `${pointer}/file`, declaration, `${pointer}/declarations/${j}`));
-    const imports = held.imports.map((imported, j) => {
+    const imports = held.imports.map(({ target, bindings, specifier, form, ...statement }, j): OutlineImportRecord => {
       const at = `${pointer}/imports/${j}`;
-      return b.part({ kind: "file-dependency", from: file, to: b.file(root.here, imported, root.id, at), category: "outline-import" }, root.id, [at]);
+      const dependency = target.kind === "repository"
+        ? { kind: "repository" as const, dependency: b.part({ kind: "file-dependency", from: file, to: b.file(root.here, target.file, root.id, `${at}/target/file`), category: "outline-import" }, root.id, [`${at}/target`]) }
+        : target;
+      return {
+        ...statement,
+        ...(specifier === undefined ? {} : { specifier }),
+        ...(form === undefined ? {} : { form }),
+        target: dependency,
+        bindings: bindings.map(({ declaration, ...binding }, k) => {
+          if (declaration === undefined) return binding;
+          const place = `${at}/bindings/${k}/declaration`;
+          const anchor = b.anchor(root.here, { path: declaration.file, symbol: declaration.name, line: declaration.line, endLine: declaration.endLine }, root.id, place, `${place}/file`);
+          return { ...binding, declaration: { anchor, kindName: declaration.kind } };
+        }),
+      };
     });
     b.part({ kind: "outline-file", file, declarations, imports }, root.id, [pointer]);
   });

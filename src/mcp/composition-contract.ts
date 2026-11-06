@@ -13,7 +13,7 @@ import type { ChangedEntrypoint } from "../core/domain/impact/changed-entrypoint
 import type { ChangedContract } from "../core/domain/impact/changed-contracts.ts";
 import type { ModuleOrigin, ReachedModule } from "../core/domain/impact/module-dependency.ts";
 import type { ImportedFile } from "../core/domain/impact/importers-fact.ts";
-import type { OutlineDeclaration } from "../core/domain/outline/outline-fact.ts";
+import type { OutlineDeclaration, OutlineImport } from "../core/domain/outline/outline-fact.ts";
 import type { CallSite, EventTarget, HttpTarget, UnresolvedCallSite } from "../core/domain/topology/call-site.ts";
 import type { ImpactedLink, Link, LinkBasis, UnlinkedCallSite } from "../core/domain/topology/link.ts";
 import type { NameCandidate, OutwardKind } from "../core/domain/topology/outward-name.ts";
@@ -189,7 +189,7 @@ export type PartPayload =
   | { kind: "file-dependency"; from: FileId; to: FileId; category: FileDependencyCategory }
   | { kind: "file-query"; file: FileId; categories: readonly { name: FileCategory; collection: RecordedCollectionState }[] }
   | { kind: "outline-declaration"; anchor: AnchorId; kindName: OutlineDeclaration["kind"]; children?: readonly PartId[] }
-  | { kind: "outline-file"; file: FileId; declarations: readonly PartId[]; imports: readonly PartId[] }
+  | { kind: "outline-file"; file: FileId; declarations: readonly PartId[]; imports: readonly OutlineImportRecord[] }
   | { kind: "unheld-file"; file: FileId }
   | { kind: "outward-name"; origin: EvidenceOrigin; name: string; kindName: OutwardKind; evidence: readonly EvidenceId[]; disposition: "stated" | "unserved" }
   | { kind: "name-candidate"; context: ReadId; name: string; repo: string; basis: NameCandidate["basis"]; evidence: readonly EvidenceId[] }
@@ -207,6 +207,21 @@ type UnionKeys<T> = T extends T ? keyof T : never;
 type NoReservedKeys<T extends never> = T;
 export type PartPayloadMetadataBoundary = NoReservedKeys<Extract<UnionKeys<PartPayload>, "id" | "supports">>;
 export type PartKind = PartPayload["kind"];
+/**
+ * One outline import inside its file part: a repository target is the file dependency it creates, and a proven binding
+ * holds the anchor of the declaration it reaches, so compose joins it with the other answers about that declaration.
+ */
+export interface OutlineImportRecord {
+  line: number;
+  endLine: number;
+  specifier?: string;
+  kind: OutlineImport["kind"];
+  form?: NonNullable<OutlineImport["form"]>;
+  typeOnly: boolean;
+  target: { kind: "repository"; dependency: PartId } | { kind: "external"; module: string } | { kind: "unresolved"; reason: string };
+  bindings: readonly { local?: string; imported: string; typeOnly?: true; declaration?: { anchor: AnchorId; kindName: string } }[];
+}
+
 export type Part = PartPayload & { id: PartId; supports: readonly Support[] };
 export type PartOf<K extends PartKind> = Extract<Part, { kind: K }>;
 

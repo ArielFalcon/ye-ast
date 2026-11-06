@@ -11,7 +11,7 @@ import type { ImpactedSymbol, ImpactValue, ReachedEntrypoint, Seed } from "../co
 import type { ModuleImpactValue } from "../core/domain/impact/module-dependency.ts";
 import { declarationAnchor } from "../core/domain/impact/impact-cuts.ts";
 import type { ImportedFile, ImportersValue } from "../core/domain/impact/importers-fact.ts";
-import type { OutlineDeclaration, OutlineValue } from "../core/domain/outline/outline-fact.ts";
+import type { OutlineBinding, OutlineDeclaration, OutlineImport, OutlineValue } from "../core/domain/outline/outline-fact.ts";
 import type { EntrypointMap } from "../core/domain/map/entrypoint-map.ts";
 import type { Decision, DecisionKind, DecisionOption } from "../core/domain/decisions/decision.ts";
 import { compareText } from "../core/domain/shared/code-node.ts";
@@ -1084,8 +1084,35 @@ function outlineLines(declarations: readonly OutlineDeclaration[], indent: strin
   return declarations.flatMap((declaration) => [`${indent}${spanText(declaration.line, declaration.endLine)} ${declaration.name} [${declaration.kind}]`, ...outlineLines(declaration.children ?? [], `${indent}  `)]);
 }
 
+/**
+ * One line per target and statement form, its bindings after a colon: `name:line` when the declaration is in the target
+ * file, `name:file:line` when a re-export leads elsewhere, the bare name when no declaration is proven.
+ */
+function importLines(imports: readonly OutlineImport[]): string[] {
+  const groups = new Map<string, Set<string>>();
+  for (const item of imports) {
+    const key = `${importTarget(item)}${item.kind === "reexport" ? " re-export" : ""}${item.form === undefined ? "" : ` ${item.form}`}`;
+    const names = groups.get(key) ?? new Set<string>();
+    for (const binding of item.bindings) names.add(bindingText(binding, item.target.kind === "repository" ? item.target.file : undefined));
+    groups.set(key, names);
+  }
+  return [...groups].toSorted(([a], [b]) => compareText(a, b)).map(([key, names]) => `      ${key}${names.size === 0 ? "" : `: ${[...names].toSorted(compareText).join(", ")}`}`);
+}
+
+function importTarget({ target, specifier }: OutlineImport): string {
+  if (target.kind === "repository") return target.file;
+  if (target.kind === "external") return `${target.module} (package)`;
+  return `${specifier ?? "computed module"} (unresolved: ${target.reason})`;
+}
+
+function bindingText({ local, imported, typeOnly, declaration }: OutlineBinding, targetFile: string | undefined): string {
+  const name = local === undefined ? imported : local === imported ? local : `${imported} as ${local}`;
+  const place = declaration === undefined ? "" : declaration.file === targetFile ? `:${declaration.line}` : `:${declaration.file}:${declaration.line}`;
+  return `${typeOnly ? "type " : ""}${name}${place}`;
+}
+
 export function renderOutline(fact: Fact<OutlineValue>, detail: ResponseMode = "summary"): string {
-  if (detail === "full") return fact.status === "unknown" ? "Inspect reason and evidence; the result has no value." : fact.value.focus !== undefined ? "Select value.focus: one entry per matched declaration with file, selector, path (a dotted path ye_ast_callers accepts verbatim), ancestors outermost first (kind, name, line, endLine), declaration (kind, name, line, endLine and children of the same shape) and omitted, how many of the file's declarations were left out; imports are not listed. Inspect value.unheld for unavailable files and cuts when partial." : "Select value.files by file; declarations are the top-level ones and contain name, kind, line, endLine and, when a contains edge places declarations inside one, children of the same shape; imports are paths. Inspect value.unheld for unavailable files and cuts when partial.";
+  if (detail === "full") return fact.status === "unknown" ? "Inspect reason and evidence; the result has no value." : fact.value.focus !== undefined ? "Select value.focus: one entry per matched declaration with file, selector, path (a dotted path ye_ast_callers accepts verbatim), ancestors outermost first (kind, name, line, endLine), declaration (kind, name, line, endLine and children of the same shape) and omitted, how many of the file's declarations were left out; imports are not listed. Inspect value.unheld for unavailable files and cuts when partial." : "Select value.files by file; declarations are the top-level ones and contain name, kind, line, endLine and, when a contains edge places declarations inside one, children of the same shape; imports list each module statement or runtime reference with line, endLine, specifier, kind, form, typeOnly, target (repository file, external module, or unresolved with reason) and bindings (local, imported, typeOnly, and the declaration reached with file, name, kind, line, endLine when proven). Inspect value.unheld for unavailable files and cuts when partial: an unresolved-link cut names a binding whose declaration is not proven.";
   const lines = headerLines(fact);
   if (fact.status === "unknown") return lines.join("\n");
   for (const match of fact.value.focus ?? []) {
@@ -1096,7 +1123,7 @@ export function renderOutline(fact: Fact<OutlineValue>, detail: ResponseMode = "
   for (const entry of fact.value.files ?? []) {
     lines.push(`  ${entry.file}`);
     lines.push(...(entry.declarations.length === 0 ? ["    declares nothing"] : outlineLines(entry.declarations, "    ")));
-    if (entry.imports.length > 0) lines.push(`    imports: ${entry.imports.join(", ")}`);
+    if (entry.imports.length > 0) lines.push("    imports:", ...importLines(entry.imports));
   }
   if (fact.value.unheld.length > 0) lines.push(`unheld files (${fact.value.unheld.length}): ${fact.value.unheld.join(", ")}; their declarations are unknown.`);
   lines.push(...cutsBlock(cutsOf(fact), detail));

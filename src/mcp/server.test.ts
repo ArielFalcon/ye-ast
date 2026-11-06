@@ -181,7 +181,11 @@ const OUTLINE: OutlineValue = {
       declarations: [
         { kind: "class", name: "Order", line: 3, endLine: 40, children: [{ kind: "method", name: "total", line: 20, endLine: 24 }] },
       ],
-      imports: ["src/Money.java"],
+      imports: [
+        { line: 1, endLine: 1, specifier: "app.Money", kind: "import", typeOnly: false, target: { kind: "repository", file: "src/Money.java" }, bindings: [{ local: "Money", imported: "Money", declaration: { file: "src/Money.java", name: "Money", kind: "class", line: 2, endLine: 30 } }] },
+        { line: 2, endLine: 2, specifier: "java.util.List", kind: "import", typeOnly: false, target: { kind: "external", module: "java.util" }, bindings: [{ local: "List", imported: "List" }] },
+        { line: 3, endLine: 3, specifier: "./barrel", kind: "reexport", typeOnly: true, target: { kind: "repository", file: "src/barrel.ts" }, bindings: [{ local: "Fee", imported: "Charge", typeOnly: true, declaration: { file: "src/Fee.ts", name: "Charge", kind: "interface", line: 4, endLine: 9 } }] },
+      ],
     },
     { file: "src/Empty.java", declarations: [], imports: [] },
   ],
@@ -758,10 +762,21 @@ test("the outline lists each declaration with its span and the files it imports,
   assert.match(text, /^ {2}src\/Order\.java$/m);
   assert.match(text, /^ {4}3-40 Order \[class\]$/m);
   assert.match(text, /^ {6}20-24 total \[method\]$/m);
-  assert.match(text, /^ {4}imports: src\/Money\.java$/m);
+  assert.match(text, /^ {4}imports:\n {6}java\.util \(package\): List\n {6}src\/Money\.java: Money:2\n {6}src\/barrel\.ts re-export: type Charge as Fee:src\/Fee\.ts:4$/m);
   assert.match(text, /^ {2}src\/Empty\.java\n {4}declares nothing$/m);
   assert.match(text, /not-exported \(1\): src\/Gone\.swift/);
   await session.close();
+});
+
+test("the outline output schema takes imports as bound module statements and rejects bare paths", async () => {
+  const { session } = await setup();
+  try {
+    const full = resultFields(await session.callTool("ye_ast_outline", { files: ["src/Order.java"], mode: "full" })) as { value: { files: { imports: unknown[] }[] } };
+    assert.equal(OUTLINE_OUTPUT.safeParse(full).success, true);
+    const paths = structuredClone(full);
+    paths.value.files[0]!.imports = ["src/Money.java"];
+    assert.equal(OUTLINE_OUTPUT.safeParse(paths).success, false);
+  } finally { await session.close(); }
 });
 
 test("the outline focus forwards its selectors and answers each match under its containers, with the count omitted", async () => {

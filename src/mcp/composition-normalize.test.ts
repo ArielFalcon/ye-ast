@@ -209,7 +209,15 @@ function reconstruct(source: ExecutedSource, t: Tables): Fact<unknown> {
           files: t.list("/value/files", "outline-file").map((f) => ({
             file: t.path(f.file),
             declarations: f.declarations.map((id) => rebuildDeclaration(t, id)),
-            imports: f.imports.map((id) => t.path(t.partOf(id, "file-dependency").to)),
+            imports: f.imports.map(({ target, bindings, ...item }) => ({
+              ...item,
+              target: target.kind === "repository" ? { kind: "repository", file: t.path(t.partOf(target.dependency, "file-dependency").to) } : target,
+              bindings: bindings.map(({ declaration, ...binding }) => {
+                if (declaration === undefined) return binding;
+                const a = t.anchor(declaration.anchor);
+                return { ...binding, declaration: { file: t.path(a.file), name: a.symbol, kind: declaration.kindName, line: a.line, endLine: found(a.endLine, "endLine") } };
+              }),
+            })),
           })),
           unheld: t.list("/value/unheld", "unheld-file").map((u) => t.path(u.file)),
         };
@@ -405,11 +413,23 @@ test("outline keeps duplicate declarations by reference, empty files and unheld 
   assert.equal(controller?.declarations.length, 4);
   assert.equal(controller?.declarations[1], controller?.declarations[2], "two indistinguishable declarations share one object and keep both references");
   assert.equal(t.partOf(controller!.declarations[1]!, "outline-declaration").supports.length, 2);
-  assert.deepEqual(controller?.imports.map((id) => t.path(t.partOf(id, "file-dependency").to)), ["src/OrderService.java", "src/Util.java", "src/OrderService.java"]);
+  const dependencies = controller!.imports.flatMap(({ target }) => target.kind === "repository" ? [target.dependency] : []);
+  assert.deepEqual(dependencies.map((id) => t.path(t.partOf(id, "file-dependency").to)), ["src/OrderService.java", "src/OrderService.java"]);
+  assert.equal(dependencies[0], dependencies[1], "two statements of one repository target share one file dependency");
+  assert.equal(t.set.files.some((f) => f.path === "java.util"), false, "an external target creates no file");
   assert.deepEqual([empty?.declarations, empty?.imports], [[], []]);
   assert.deepEqual(t.list("/value/unheld", "unheld-file").map((u) => t.path(u.file)), ["src/Missing.java", "src/generated/Out.java"]);
   assert.equal(t.at("/value/unheld/0").some((p) => p.kind === "outline-file"), false, "unheld is not an empty outline file");
   assert.equal(t.set.parts.some((p) => p.kind === "symbol-reach"), false, "no inferred dependency");
+});
+
+test("a proven outline binding anchors the declaration it reaches, so compose can join it with other answers", () => {
+  const t = new Tables(normalizeSource(sourceFixture("outline"), digest));
+  const [controller] = t.list("/value/files", "outline-file");
+  const declaration = controller?.imports[0]?.bindings[0]?.declaration;
+  assert.ok(declaration);
+  const anchor = t.anchor(declaration.anchor);
+  assert.deepEqual({ file: t.path(anchor.file), symbol: anchor.symbol, line: anchor.line, endLine: anchor.endLine, kindName: declaration.kindName }, { file: "src/OrderService.java", symbol: "OrderService", line: 3, endLine: 50, kindName: "class" });
 });
 
 test("an outline focus keeps each matched declaration with its subtree, and no outline file a cut of the file would misstate", () => {

@@ -3,6 +3,8 @@ import test from "node:test";
 import { fakeCodeGraph, fakeNode } from "../impact/fake-code-graph.testing.ts";
 import { readOutline } from "./outline.ts";
 
+const NO_MODULES = { files: [], dependencies: [], unread: [] };
+
 test("a file answers its declarations in line order with their spans, and a file the index does not hold is unheld", () => {
   const store = fakeCodeGraph(
     [
@@ -14,7 +16,7 @@ test("a file answers its declarations in line order with their spans, and a file
     ],
     [],
   );
-  const read = readOutline(store, ["src/Order.java", "src/Gone.java"]);
+  const read = readOutline(store, ["src/Order.java", "src/Gone.java"], NO_MODULES).value;
   assert.deepEqual(read.unheld, ["src/Gone.java"]);
   assert.deepEqual(read.files, [
     {
@@ -27,36 +29,6 @@ test("a file answers its declarations in line order with their spans, and a file
       imports: [],
     },
   ]);
-});
-
-test("imports name the files the edges reach once each, never the file itself", () => {  const store = fakeCodeGraph(
-    [
-      fakeNode("a", "file", "src/a.ts", 1, 9),
-      fakeNode("a.own", "function", "src/a.ts", 3, 7, "own"),
-      fakeNode("b", "file", "src/b.ts", 1, 9),
-      fakeNode("b.one", "function", "src/b.ts", 2, 4, "one"),
-      fakeNode("c", "file", "src/c.ts", 1, 9),
-    ],
-    [
-      { from: "a", to: "b", kind: "imports", line: 1 },
-      { from: "a", to: "c", kind: "imports", line: 2 },
-      { from: "a", to: "b", kind: "imports", line: 3 },
-      { from: "a", to: "a.own", kind: "contains" },
-    ],
-  );
-  const read = readOutline(store, ["src/a.ts"]);
-  assert.deepEqual(read.files.map((file) => file.imports), [["src/b.ts", "src/c.ts"]]);
-  assert.deepEqual(read.unheld, []);
-});
-
-test("an imports edge whose target the store does not know names no file", () => {
-  const store = fakeCodeGraph(
-    [fakeNode("a", "file", "src/a.ts", 1, 9), fakeNode("a.own", "function", "src/a.ts", 3, 7, "own")],
-    [{ from: "a", to: "gone", kind: "imports", line: 1 }],
-  );
-  const read = readOutline(store, ["src/a.ts"]);
-  assert.deepEqual(read.files.map((file) => file.imports), [[]]);
-  assert.deepEqual(read.unheld, []);
 });
 
 test("a declaration a contains edge places inside another declaration of the file is listed under it, at any depth", () => {
@@ -75,7 +47,7 @@ test("a declaration a contains edge places inside another declaration of the fil
       { from: "Auth.login", to: "Auth.login.check", kind: "contains" },
     ],
   );
-  assert.deepEqual(readOutline(store, ["src/auth.ts"]).files[0]?.declarations, [
+  assert.deepEqual(readOutline(store, ["src/auth.ts"], NO_MODULES).value.files[0]?.declarations, [
     {
       kind: "class",
       name: "AuthService",
@@ -101,7 +73,7 @@ test("the children of a declaration come in line order, then name order, whateve
       { from: "Auth", to: "Auth.id", kind: "contains" },
     ],
   );
-  const [only] = readOutline(store, ["src/auth.ts"]).files[0]?.declarations ?? [];
+  const [only] = readOutline(store, ["src/auth.ts"], NO_MODULES).value.files[0]?.declarations ?? [];
   assert.deepEqual(only?.children?.map((child) => child.name), ["login", "id", "token"]);
 });
 
@@ -115,5 +87,5 @@ test("a declaration no contains edge places inside a declaration of its file sta
     ],
     [{ from: "other", to: "Auth.login", kind: "contains" }],
   );
-  assert.deepEqual(readOutline(store, ["src/auth.ts"]).files[0]?.declarations.map((declaration) => declaration.name), ["AuthService", "GET /login", "login"]);
+  assert.deepEqual(readOutline(store, ["src/auth.ts"], NO_MODULES).value.files[0]?.declarations.map((declaration) => declaration.name), ["AuthService", "GET /login", "login"]);
 });

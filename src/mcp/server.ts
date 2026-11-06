@@ -232,6 +232,20 @@ const finding = z.discriminatedUnion("status", [
     .meta({ not: { required: ["value"] } }),
 ]);
 const outlineDeclaration = z.looseObject({ kind: z.string(), name: z.string(), line: z.number(), endLine: z.number() });
+const moduleTarget = z.union([
+  z.looseObject({ kind: z.literal("repository"), file: z.string() }),
+  z.looseObject({ kind: z.literal("external"), module: z.string() }),
+  z.looseObject({ kind: z.literal("unresolved"), reason: z.string() }),
+]);
+const outlineImport = z.looseObject({
+  line: z.number(),
+  endLine: z.number(),
+  specifier: z.string().optional(),
+  kind: z.enum(["import", "reexport"]),
+  typeOnly: z.boolean(),
+  target: moduleTarget,
+  bindings: z.array(z.looseObject({ imported: z.string(), declaration: outlineDeclaration.extend({ file: z.string() }).optional() })),
+});
 const shapes = {
   entrypoints: z.looseObject({ entrypoints: factOf(z.array(finding)) }),
   impact: z.union([impact, workspaceImpact]),
@@ -243,7 +257,7 @@ const shapes = {
       files: z.array(z.looseObject({
         file: z.string(),
         declarations: z.array(outlineDeclaration),
-        imports: strings,
+        imports: z.array(outlineImport),
       })),
       unheld: strings,
     }),
@@ -582,7 +596,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
     "ye_ast_outline",
     {
       title: "Shape of files",
-      description: "Use to choose line ranges before reading or targeting code: indexed declaration spans and imports of files, without source. Members are listed under the declaration the graph's contains edges place them in; one no edge places stays at the top level. Instead of files, focus on declarations: {file, symbol} takes a dotted path (Class.member, a bare name at any depth), {file, line} the innermost declaration holding the line; each match comes with its containers, its subtree and how many of the file's declarations were omitted, without imports, and its path is accepted verbatim by ye_ast_callers. Unavailable files report cuts, not empty lists. Match revision/live to the source you inspect.",
+      description: "Use to choose line ranges before reading or targeting code: indexed declaration spans and imports of files, without source. Each import lists where it leads (a repository file, a package, or unresolved with its reason) and the names it binds, each with the declaration and line it reaches when that is proven. Members are listed under the declaration the graph's contains edges place them in; one no edge places stays at the top level. Instead of files, focus on declarations: {file, symbol} takes a dotted path (Class.member, a bare name at any depth), {file, line} the innermost declaration holding the line; each match comes with its containers, its subtree and how many of the file's declarations were omitted, without imports, and its path is accepted verbatim by ye_ast_callers. Unavailable files report cuts, not empty lists. Match revision/live to the source you inspect.",
       inputSchema: compactInput(TOOL_INPUTS.outline),
       annotations,
     },

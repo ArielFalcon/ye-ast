@@ -11,6 +11,8 @@ const imported = "src/main/java/example/AnotherServiceVersion2.java";
 const secret = "Authorization: Bearer abcdefghijklmnopqrstuvwxyz123456";
 const token = "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij123456";
 
+const importOf = (path: string) => ({ line: 1, endLine: 1, specifier: "example.AnotherServiceVersion2", kind: "import", typeOnly: false, target: { kind: "repository", file: path }, bindings: [] });
+
 test("outline preserves versioned source identities and redacts secrets through the MCP boundary", async () => {
   const deps = {
     version: "0.0.0",
@@ -22,7 +24,7 @@ test("outline preserves versioned source identities and redacts secrets through 
       producer: { name: "ye-ast", version: "0.0.0" },
       inputs: { trust: "untrusted" as const, scope: "s", declaredScope: { languages: ["java"], frameworks: [], include: [], exclude: [] }, content: "c", config: "k", declaredConfig: {}, engines: {} },
       evidence: [], status: "complete" as const,
-      value: { files: [{ file, declarations: [{ name: secret, kind: "class", line: 2, endLine: 8 }, { name: token, kind: "method", line: 4, endLine: 5 }], imports: [imported] }], unheld: [] },
+      value: { files: [{ file, declarations: [{ name: secret, kind: "class", line: 2, endLine: 8 }, { name: token, kind: "method", line: 4, endLine: 5 }], imports: [importOf(imported)] }], unheld: [] },
     } }) },
     entrypoints: {}, impact: {}, workspace: {}, workspaceImpact: {}, decisions: {},
   } as unknown as McpDeps;
@@ -38,8 +40,8 @@ test("outline preserves versioned source identities and redacts secrets through 
       assert.ok(!all.includes(token), mode);
       assert.ok(all.includes("[REDACTED]"), mode);
       if (mode === "full") {
-        const value = (resultFields(result) as { value: { files: { file: string; declarations: { line: number; endLine: number }[]; imports: string[] }[] } }).value;
-        assert.deepEqual(value.files[0]?.imports, [imported]);
+        const value = (resultFields(result) as { value: { files: { file: string; declarations: { line: number; endLine: number }[]; imports: unknown[] }[] } }).value;
+        assert.deepEqual(value.files[0]?.imports, [importOf(imported)]);
         assert.deepEqual([value.files[0]?.declarations[0]?.line, value.files[0]?.declarations[0]?.endLine], [2, 8]);
       }
     }

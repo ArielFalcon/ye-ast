@@ -364,7 +364,8 @@ test("summary lists every declaration of an outline file, children included, as 
   const listed = file.declarations.filter((_, index) => index !== 2).flatMap((declaration) => [declaration, ...(declaration.children ?? [])]);
   for (const declaration of listed) assert.ok(text.includes(`${declaration.line}-${declaration.endLine} ${declaration.name}`), `${declaration.name}:\n${text}`);
   assert.match(text, new RegExp(`: ${listed.length} declarations,`));
-  assert.doesNotMatch(text, /uncited declarations/);
+  const reached = file.imports.flatMap(({ bindings }) => bindings.filter(({ declaration }) => declaration !== undefined)).length;
+  assert.match(text, new RegExp(`uncited declarations: ${reached};`), "only the declarations imports reach in other files are uncited");
 });
 
 test("summary locates an unknown entrypoint finding by its evidence", () => {

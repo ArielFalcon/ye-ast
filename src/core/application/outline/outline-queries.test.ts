@@ -37,6 +37,7 @@ function setup(options: Options = {}) {
     matcher: { matches: options.matches ?? (() => true) },
     graph: { index: async () => ({ ok: true, value: SUMMARY }), open: () => ({ ok: true, value: store }) },
     engines: {},
+    moduleReaders: [],
     ...(options.snapshotCache && { snapshotCache: options.snapshotCache }),
     ...(options.live && { live: options.live.deps, trust: { read: async () => ({ ok: true, value: "trusted" }) } }),
   } as unknown as OutlineQueriesDeps;
@@ -85,7 +86,7 @@ test("a file the index holds answers its declarations and closes the store", asy
 });
 
 for (const live of [false, true]) {
-  test(`a ${live ? "live" : "revisioned"} outline reads the index without loading sources or extracting entrypoints`, async () => {
+  test(`a ${live ? "live" : "revisioned"} outline reads the index and its sources without extracting entrypoints`, async () => {
     const mirror = live ? fakeLive({ "src/Order.java": "1" }) : undefined;
     const { queries, log } = setup({
       written: ["src/Order.java"],
@@ -98,7 +99,6 @@ for (const live of [false, true]) {
     assert.ok(answer.ok);
     assert.equal(answer.value.status, "complete");
     assert.deepEqual(answer.value.value, { files: [{ file: "src/Order.java", declarations: [{ kind: "method", name: "total", line: 20, endLine: 24 }], imports: [] }], unheld: [] });
-    assert.equal(log.reads, 0);
     assert.equal(log.extractions, 0);
     assert.equal(log.closed, 1);
     if (mirror) assert.deepEqual(mirror.held, { locks: 1, released: 1 });
@@ -121,10 +121,10 @@ test("an aborted live outline returns the cancellation fault before acquiring it
   assert.deepEqual(mirror.held, { locks: 0, released: 0 });
 });
 
-test("an export-only outline never restores retained source data", async () => {
+test("a focused outline never reads nor restores source data", async () => {
   let restored = 0;
   const { queries, log } = setup({ written: ["src/Order.java"], nodes: [fakeNode("Order.total", "method", "src/Order.java", 20, 24, "total")], snapshotCache: { get: () => { restored++; return { sources: [] }; }, put: () => undefined } });
-  const answer = await queries.outline({ repo: "/work/shop", repoId: "shop", revision: "HEAD", files: ["src/Order.java"] });
+  const answer = await queries.outline({ repo: "/work/shop", repoId: "shop", revision: "HEAD", focus: [{ file: "src/Order.java", symbol: "total" }] });
   assert.ok(answer.ok && answer.value.status === "complete");
   assert.equal(restored, 0);
   assert.equal(log.reads, 0);

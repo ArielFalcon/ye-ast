@@ -55,7 +55,12 @@ export function partReferences(part: Part): Reference[] {
     case "outline-declaration":
       return [ref("anchor", "anchor", part.anchor), ...many("part", "children", part.children ?? [])];
     case "outline-file":
-      return [ref("file", "file", part.file), ...many("part", "declarations", part.declarations), ...many("part", "imports", part.imports)];
+      return [
+        ref("file", "file", part.file),
+        ...many("part", "declarations", part.declarations),
+        ...part.imports.flatMap((item) => item.target.kind === "repository" ? [ref("part", "imports.target.dependency", item.target.dependency)] : []),
+        ...part.imports.flatMap((item) => item.bindings.flatMap((binding) => binding.declaration === undefined ? [] : [ref("anchor", "imports.bindings.declaration.anchor", binding.declaration.anchor)])),
+      ];
     case "outward-name":
       return [...originReferences(part.origin, "origin"), ...many("evidence", "evidence", part.evidence)];
     case "name-candidate":
