@@ -341,14 +341,22 @@ As built (phase 3):
   use's place, whichever of its names the index placed the use at, and binds its first name: a value name through the
   binder (ADR-0029, the same resolver `rootOrigins` uses), a type name through the type scopes around it (type
   parameters, `infer`, mapped-type keys, type declarations of enclosing blocks), then the file's imports, its top-level
-  declarations and the language globals; `super` through its class's `extends` expression. A declared binding carries
-  its lines and whether it is at the file's top level.
+  declarations and the language globals; `super` through its class's `extends` expression. Each site names the
+  declaration whose body writes it (its name and lines); a binding whose declarations lie inside that declaration's
+  syntax is `local`, and any other declared binding carries the lines its names are written on and whether every
+  declaration is a value (a parameter, a variable or a catch binding) of a function, which the binder's visibility
+  places around the use (`captured`).
 - B2: the acquisition shared with trace is `application/navigation/declaration-uses.ts` (`followed`, `referencesFrom`,
   `ownMembers`, `unsettledBy`); trace reads it, and its answers are byte-identical before and after (differential on
   four targets). `usesOf` settles every edge through `EdgeTargets.verdictsOf` (D5) and every reference no edge records at
-  its place through `rootBindings`; the grouping and the cuts are `domain/outline/outline-uses.ts`. A value an enclosing
-  function declares, with no node in the index, is a captured local and not a use (a parameter of the encloser, `deps`
-  in `createXQueries(deps)`, was the largest residue before this rule).
+  its place through `rootBindings`; the grouping and the cuts are `domain/outline/outline-uses.ts`. A declared binding
+  settles in order: the single node of its name whose lines hold a line its name is written on is a use (the index
+  stores no name column, and every node's lines hold its own name, whatever decorators, modifiers or line breaks precede
+  it); with no such node, a captured value is a local root and not a use (D4; a parameter of the encloser, `deps` in
+  `createXQueries(deps)`, was the largest residue before this rule); anything else (a function, class or type
+  declaration the index misses, a value of the file's top level, an ambiguous match) is a cut. Nesting in the focused
+  body is the graph's `contains` tree, never line spans. Java answers `local` for the locals and type variables inside
+  the focused declaration; its local lookup stops at the type body, so it never answers a captured value.
 - Reading the sources: settling needs the snapshot's sources, not only the focused file (the resolver checks which files
   exist and reads `tsconfig` and manifests; the `ambient` proof needs every source that may declare a global), so a
   focus reads the head's sources as a listing does; the Java-record scan still reads only the focused files.

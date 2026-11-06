@@ -12,6 +12,7 @@ const FILES: Record<string, string> = {
   "captured.ts": "export function outer() {\n  const\n  external = () => 1;\n  function together() { return external.call(null); }\n  return together;\n}\n",
   "decorated.ts": "function decorate(value: any, context: any) {}\n@decorate\nexport class External {}\nexport function together() { return External.bind(null); }\n",
   "multiline.ts": "export\nfunction\nexternal() { return 1; }\nexport function together() { return external.call(null); }\n",
+  "factory.ts": "export function make(deps: { graph: { open(): number } }) {\n  return function together() { return deps.graph.open(); };\n}\n",
 };
 
 let root: string;
@@ -52,4 +53,8 @@ test("a decorated class used by the focused body is a use of the class", async (
 
 test("a function whose signature spans several lines, used by the focused body, is a use of the function", async () => {
   assert.deepEqual(await usesOf("multiline.ts"), [{ declaration: { file: "multiline.ts", name: "external", kind: "function", line: 2, endLine: 3 }, relations: ["calls"], at: [{ line: 4, column: 37 }] }]);
+});
+
+test("a parameter of a factory around the focused function is a local root: no use and no cut", async () => {
+  assert.deepEqual(await usesOf("factory.ts"), []);
 });

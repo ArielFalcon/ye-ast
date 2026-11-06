@@ -85,7 +85,8 @@ export interface UseSite {
  */
 export type RootBinding =
   | { kind: "import"; root: string; member?: string; origin: Extract<ImportOrigin, { kind: "repository" | "external" }> }
-  | { kind: "declared"; root: string; lines: readonly number[] }
+  /** `captured`: every declaration is a value (a parameter, a variable or a catch binding) of a function around the use. */
+  | { kind: "declared"; root: string; lines: readonly number[]; captured: boolean }
   | { kind: "local"; root: string }
   | { kind: "located"; root: string; file: string; path: string }
   | { kind: "ambient"; root: string }

@@ -71,7 +71,8 @@ function bindingAt(site: UseSite, file: JavaFile, project: JavaProject): RootBin
 function declaredBinding(root: Node, declaration: Node, owner: UseSite["owner"]): RootBinding {
   const around = ownerAround(root, owner);
   if (around !== undefined && declaration.id !== around.id && around.startIndex <= declaration.startIndex && declaration.endIndex <= around.endIndex) return { kind: "local", root: root.text };
-  return { kind: "declared", root: root.text, lines: [(nameOf(declaration) ?? declaration).startPosition.row + 1] };
+  /** `localBinding` stops at the type body, so a local it finds outside the owner is never one a function around the owner captures. */
+  return { kind: "declared", root: root.text, lines: [(nameOf(declaration) ?? declaration).startPosition.row + 1], captured: false };
 }
 
 /** The innermost declaration around `node` that is `owner`: its name is the owner's, written on a line the owner spans. */

@@ -90,7 +90,8 @@ export interface UsesInput {
  * root is bound (`EdgeTargets.verdictsOf`), and every unresolved reference no edge records at its place, settled by
  * what binds its root there (`ImportOrigins.rootBindings`). A local value, a parameter included, and a declaration inside
  * the body are not uses; a declaration outside it is the node of its name whose lines hold the line its name is written
- * on, and a use nothing proves is unproved, never dropped.
+ * on, or, with no such node, a local root when it is a value a function around the body declares; a use nothing proves
+ * is unproved, never dropped.
  */
 export async function usesOf(node: GraphSymbol, input: UsesInput): Promise<{ found: FoundUse[]; unproved: UnprovedUse[] }> {
   const { store, navigation, uses, targets, origins, signal } = input;
@@ -135,7 +136,9 @@ export async function usesOf(node: GraphSymbol, input: UsesInput): Promise<{ fou
     }
     if (binding.kind === "local") return "local";
     if (binding.kind === "declared") {
-      return single(navigation.symbolsInFile(reference.file).filter((symbol) => symbol.name === binding.root && binding.lines.some((line) => symbol.startLine <= line && line <= symbol.endLine)));
+      const declaration = single(navigation.symbolsInFile(reference.file).filter((symbol) => symbol.name === binding.root && binding.lines.some((line) => symbol.startLine <= line && line <= symbol.endLine)));
+      /** A value a function around the body declares and the index holds no node of is a local root (plan D4). */
+      return declaration ?? (binding.captured ? "local" : undefined);
     }
     if (binding.kind === "located") return single(branchesOf(containmentTree(store, navigation.symbolsInFile(binding.file))).filter((branch) => declarationPath(branch) === binding.path).map((branch) => branch.declaration));
     if (binding.kind !== "import") return undefined;

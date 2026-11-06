@@ -58,7 +58,7 @@ test("a local the owner's syntax declares is local, and a field is a member of t
 });
 
 test("a type variable of a type around the owner is declared at the line of its name", async () => {
-  assert.deepEqual(await bindings([at(11, "T")]), [{ kind: "declared", root: "T", lines: [6] }]);
+  assert.deepEqual(await bindings([at(11, "T")]), [{ kind: "declared", root: "T", lines: [6], captured: false }]);
 });
 
 test("a capitalised name no source declares and only a wildcard import could supply is unknown, since java.lang may supply it too", async () => {

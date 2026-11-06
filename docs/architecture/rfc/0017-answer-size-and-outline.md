@@ -113,7 +113,9 @@ question an agent asks after `impact` names twelve files, and it is the one no q
   `uses`, what the declaration's own body uses outside itself (plan `2026-11-06-outline-references.md` Part B): each
   use is a repository declaration (file and span), a package or a language global, with its relations and the places of
   the uses; a use no binding proves is an `unresolved-link` cut at the declaration, and a member used on a local value is
-  not a use. Settling a use reads what binds its name at its place, so a focus reads the snapshot's sources as a listing
+  not a use. A local value is one the declaration's own syntax declares, or a parameter or variable of a function
+  around it that the index holds no node of; a function, class or type declaration outside the body is the node of its
+  name, never a local, and a cut when no single node matches. Settling a use reads what binds its name at its place, so a focus reads the snapshot's sources as a listing
   does; who calls the declaration is `callers`, and `compose` asks both at once. No imports. Several matches are all answered, in line order, never one picked. A symbol that matches nothing is
   `unknown-symbol` with the file's dotted paths as candidates, a line no declaration holds is `top-level-line` with the
   same candidates, and a file the index does not hold is `unheld`. The path is the one `callers` resolves, through the

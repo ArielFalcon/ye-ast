@@ -543,7 +543,20 @@ test("a member call on an instantiation placed at its new keyword is rooted at t
 test("a value name the file's scoping binds inside the owner's syntax is local, and outside it is declared at the line of its name", async () => {
   const bindings = await createImportOrigins(USE_SOURCES).rootBindings([useAt(6, "seen.size", "seen"), useAt(11, "Holder", "Holder")]);
 
-  assert.deepEqual(bindings, [{ kind: "local", root: "seen" }, { kind: "declared", root: "Holder", lines: [10] }]);
+  assert.deepEqual(bindings, [{ kind: "local", root: "seen" }, { kind: "declared", root: "Holder", lines: [10], captured: false }]);
+});
+
+test("a value a function around the use declares is captured, while a function it declares or a value of the file is not", async () => {
+  const factory: SourceFile = { path: "src/factory.ts", content: "const limit = 1;\nexport function make(deps: { open(): void }) {\n  function helper() {}\n  return function f() { deps.open(); helper.call(limit); };\n}\n" };
+  const owner = { name: "f", line: 4, endLine: 4 };
+  const at = (column: number, spelled: string) => ({ file: factory.path, line: 4, column, spelled, owner });
+  const bindings = await createImportOrigins([...USE_SOURCES, factory]).rootBindings([at(25, "deps"), at(38, "helper"), at(50, "limit")]);
+
+  assert.deepEqual(bindings, [
+    { kind: "declared", root: "deps", lines: [2], captured: true },
+    { kind: "declared", root: "helper", lines: [3], captured: false },
+    { kind: "declared", root: "limit", lines: [1], captured: false },
+  ]);
 });
 
 test("a type parameter the owner's syntax declares is local, at its own name and where it binds a type name", async () => {

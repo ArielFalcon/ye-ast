@@ -287,7 +287,19 @@ function declaredBinding(source: ts.SourceFile, root: ts.Identifier, declaration
   const around = ownerAround(source, root, owner);
   if (around !== undefined && declarations.every((declaration) => isInside(declaration, around))) return { kind: "local", root: root.text };
   const lines = declarations.map((declaration) => lineOf(source, nameOf(declaration) ?? declaration));
-  return { kind: "declared", root: root.text, lines: [...new Set(lines)].sort((a, b) => a - b) };
+  /** The binding is visible at the use, so a function that declares it holds the use too. */
+  const captured = declarations.length > 0 && declarations.every((declaration) => isValueBinding(declaration) && inFunction(declaration));
+  return { kind: "declared", root: root.text, lines: [...new Set(lines)].sort((a, b) => a - b), captured };
+}
+
+/** A parameter, a variable or a catch binding, destructured or not: a value, never a function, class or type declaration. */
+function isValueBinding(declaration: ts.Node): boolean {
+  return ts.isParameter(declaration) || ts.isVariableDeclaration(declaration) || ts.isBindingElement(declaration);
+}
+
+function inFunction(node: ts.Node): boolean {
+  for (let around = node.parent; around !== undefined && !ts.isSourceFile(around); around = around.parent) if (ts.isFunctionLike(around)) return true;
+  return false;
 }
 
 /** The innermost declaration around `node` that is `owner`: its name is the owner's, written on a line the owner spans. */
