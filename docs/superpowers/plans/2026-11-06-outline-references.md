@@ -6,7 +6,7 @@
   toScrollPage → este archivo:47`, treated as an optional extension that shares the engine of the outbound walk.
 - Coordinated with: [trace plan](2026-11-06-trace-outbound-walk.md) (slice 1 on branch
   `t3/extract-shared-graph-navigation`, commits `b6595d7..7b4dc72`, not on `main`); `RFC-0016` gap A (import origins).
-- Status: phase 2 (binding table and Part A) implemented, see the task table; phase 3 not started. Phases are
+- Status: phase 2 (binding table and Part A) and phase 3 (Part B, focus uses) implemented, see the task tables. Phases are
   owner-approved in this order: (1) this design, (2) the binding table exposed in `outline` as Part A, (3) Part B in
   focus mode once trace slice 1 is on `main`.
 
@@ -334,6 +334,36 @@ Review fixes (phase 2):
 
 Accepted by: per-rule tests; on this repository the share of focused declarations with a `complete` answer recorded
 beside 2.3 (target: the measured 96%, not a gate); sizes of 2.5 re-measured with use sites.
+
+As built (phase 3):
+
+- B1: `ImportOrigins.rootBindings` (`adapters/typescript/import-origins.adapter.ts`) reads the whole chain written at a
+  use's place, whichever of its names the index placed the use at, and binds its first name: a value name through the
+  binder (ADR-0029, the same resolver `rootOrigins` uses), a type name through the type scopes around it (type
+  parameters, `infer`, mapped-type keys, type declarations of enclosing blocks), then the file's imports, its top-level
+  declarations and the language globals; `super` through its class's `extends` expression. A declared binding carries
+  its lines and whether it is at the file's top level.
+- B2: the acquisition shared with trace is `application/navigation/declaration-uses.ts` (`followed`, `referencesFrom`,
+  `ownMembers`, `unsettledBy`); trace reads it, and its answers are byte-identical before and after (differential on
+  four targets). `usesOf` settles every edge through `EdgeTargets.verdictsOf` (D5) and every reference no edge records at
+  its place through `rootBindings`; the grouping and the cuts are `domain/outline/outline-uses.ts`. A value an enclosing
+  function declares, with no node in the index, is a captured local and not a use (a parameter of the encloser, `deps`
+  in `createXQueries(deps)`, was the largest residue before this rule).
+- Reading the sources: settling needs the snapshot's sources, not only the focused file (the resolver checks which files
+  exist and reads `tsconfig` and manifests; the `ambient` proof needs every source that may declare a global), so a
+  focus reads the head's sources as a listing does; the Java-record scan still reads only the focused files.
+- B3: `adapters/spring/java-root-bindings.ts`, joined to the TypeScript reader in composition by file. A name only a
+  wildcard import could supply stays unknown, since `java.lang` may supply it too.
+- B4: `OutlineFocus.uses`; the text prints one line per use, `name → file:line (relations; at lines)`, a package or a
+  global otherwise, and "uses nothing outside its body" when evaluated empty; compose anchors each repository use on
+  the focused declaration's part. The tool description points to `ye_ast_compose` for callers.
+- B5: `one-query-family-never-imports-another` covers `outline`; a planted `outline → trace` import fails
+  `npm run arch:check` (break proof, not committed).
+- Measured on this repository at `bcc73fa`, every non-test function, method and constructor focused by its start line
+  (2,616 declarations): 95.8% complete (109 with a cut, 157 unproved places). The residue: Node globals the TypeScript
+  library does not declare (`Buffer` 40, `process` 10, `NodeJS.ProcessEnv` 7, kept unknown per Q3) and `this` members
+  the index holds no node of (constructor parameter properties, inherited members; 30). Uses per declaration p50 3, p90
+  10, max 86.
 
 ## 6. Risks
 
