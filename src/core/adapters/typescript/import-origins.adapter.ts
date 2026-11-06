@@ -3,7 +3,7 @@ import { matchesReferenceKind, syntaxName } from "./reference-occurrence.ts";
 import { declarationCounts, declaredNames, isStatic, scriptGlobalNames } from "./syntax-names.ts";
 import { moduleStatement } from "./import-bindings.ts";
 import { sourceTree } from "./source-tree.ts";
-import { bindFile, type BoundFile } from "./lexical-bindings.ts";
+import { bindFile, type LexicalBinding } from "./lexical-bindings.ts";
 import { isPackageManifest, isTypeScriptSource } from "../../domain/languages/typescript.ts";
 import type { ImportOrigin } from "../../domain/relations/resolved-reference.ts";
 import type { Evidence, Finding } from "../../domain/shared/fact.ts";
@@ -46,6 +46,16 @@ export function createImportOrigins(sources: readonly SourceFile[], parse: Parse
   const files = new Map(sources.map((file) => [file.path, file]));
   const modules = createModuleResolver(async (file) => texts.get(file), manifestPackages(sources.filter((file) => isPackageManifest(file.path)).map((file) => file.content)));
   const shapes = new Map<string, FileShape>();
+  const parameterStarts = new Map<string, ReadonlySet<number>>();
+  /** A file is bound once for the life of the reader, and only the places of its parameter uses are kept (ADR-0026). */
+  const isParameterUse: ParameterUse = (source, text, identifier) => {
+    let starts = parameterStarts.get(source.fileName);
+    if (starts === undefined) {
+      starts = parameterUses(source.fileName, text);
+      parameterStarts.set(source.fileName, starts);
+    }
+    return starts.has(identifier.getStart(source));
+  };
   const indexes = new Map<string, FileIndex | undefined>();
   /** A file is parsed once for the life of the reader; one that does not parse has no index. */
   const indexOf = (file: string): FileIndex | undefined => {
@@ -114,7 +124,7 @@ export function createImportOrigins(sources: readonly SourceFile[], parse: Parse
       if (signal?.aborted) break;
       const text = texts.get(file);
       const index = text === undefined || !isTypeScriptSource(file) ? undefined : indexOf(file);
-      const checked = index === undefined ? undefined : checkSites(index, text!, group);
+      const checked = index === undefined ? undefined : checkSites(index, text!, group, isParameterUse);
       if (checked !== undefined) shapes.set(file, checked.shape);
       const checks = checked?.matches ?? new Map<number, SiteSyntax>();
       for (const { site, index } of group) {
@@ -130,7 +140,7 @@ export function createImportOrigins(sources: readonly SourceFile[], parse: Parse
       if (signal?.aborted) break;
       const text = texts.get(file);
       const tree = text === undefined || !isTypeScriptSource(file) ? undefined : indexOf(file);
-      const read = tree === undefined ? undefined : rootsAt(tree, text!, group);
+      const read = tree === undefined ? undefined : rootsAt(tree, text!, group, isParameterUse);
       if (read === undefined) continue;
       shapes.set(file, read.shape);
       for (const [index, { root, bare, local }] of read.roots) {
@@ -144,8 +154,11 @@ export function createImportOrigins(sources: readonly SourceFile[], parse: Parse
 
 type SiteSyntax = "valid" | "local" | "this-member";
 
+/** Whether a name of `source` binds a parameter whose value is only what the caller passes (`bindsParameter`). */
+type ParameterUse = (source: ts.SourceFile, text: string, identifier: ts.Identifier) => boolean;
+
 /** The root of the plain chain of names each site spells and ends in its name, read in the file's tree. */
-function rootsAt({ source, shape, starting }: FileIndex, text: string, group: readonly { site: ResolvedNameSite; index: number }[]): { roots: Map<number, { root: string; bare: boolean; local: boolean }>; shape: FileShape } {
+function rootsAt({ source, shape, starting }: FileIndex, text: string, group: readonly { site: ResolvedNameSite; index: number }[], isParameterUse: ParameterUse): { roots: Map<number, { root: string; bare: boolean; local: boolean }>; shape: FileShape } {
   const starts = source.getLineStarts();
   const wanted = new Map<number, { site: ResolvedNameSite; index: number }[]>();
   for (const item of group) {
@@ -157,14 +170,12 @@ function rootsAt({ source, shape, starting }: FileIndex, text: string, group: re
   }
   /** Chains that start at one point share their root, so the first that ends in the name settles it. */
   const roots = new Map<number, { root: string; bare: boolean; local: boolean }>();
-  let held: BoundFile | undefined;
-  const bound = () => (held ??= bindFile(source.fileName, text));
   for (const [point, sites] of wanted) for (const node of starting.get(point) ?? []) for (const { site, index } of sites) {
     const spelled = spelledAt(node, site.kind);
     const names = spelled === undefined ? undefined : plainChain(spelled);
     if (names === undefined || names.at(-1) !== site.name || roots.has(index)) continue;
     const bare = names.length === 1;
-    roots.set(index, { root: names[0]!, bare, local: bare && ts.isIdentifier(spelled!) && !ts.isTypeNode(spelled.parent) && bindsParameter(bound, source, spelled) });
+    roots.set(index, { root: names[0]!, bare, local: bare && ts.isIdentifier(spelled!) && !ts.isTypeNode(spelled.parent) && isParameterUse(source, text, spelled) });
   }
   return { roots, shape };
 }
@@ -203,7 +214,7 @@ function indexed(source: ts.SourceFile): FileIndex | undefined {
 }
 
 /** Check each graph spelling at its exact 1-based UTF-16 position in the file's tree. */
-function checkSites({ source, shape, starting }: FileIndex, text: string, group: readonly { site: ImportOriginSite; index: number }[]): { matches: Map<number, SiteSyntax>; shape: FileShape } {
+function checkSites({ source, shape, starting }: FileIndex, text: string, group: readonly { site: ImportOriginSite; index: number }[], isParameterUse: ParameterUse): { matches: Map<number, SiteSyntax>; shape: FileShape } {
   const result = new Map<number, SiteSyntax>();
   const starts = source.getLineStarts();
   const wanted = new Map<number, { site: ImportOriginSite; index: number }[]>();
@@ -229,14 +240,12 @@ function checkSites({ source, shape, starting }: FileIndex, text: string, group:
       ownCalls.set(index, (ownCalls.get(index) ?? 0) + 1);
     }
   }
-  let held: BoundFile | undefined;
-  const bound = () => (held ??= bindFile(source.fileName, text));
   for (const { site, index } of group) {
     const found = matches.get(index);
     if (found === undefined && ownCalls.get(index) === 1) result.set(index, "this-member");
     if (found?.length !== 1) continue;
     const node = found[0]!;
-    result.set(index, site.kind === "calls" && ts.isIdentifier(node) && node.text === site.name && bindsParameter(bound, source, node) ? "local" : "valid");
+    result.set(index, site.kind === "calls" && ts.isIdentifier(node) && node.text === site.name && isParameterUse(source, text, node) ? "local" : "valid");
   }
   return { matches: result, shape };
 }
@@ -262,15 +271,39 @@ function isNested(declaration: ts.ClassLikeDeclaration): boolean {
  * caller passes: no default, no rest, no destructuring, declared once. The compiler keeps the parameter when the
  * function's body declares its name again at its top level; a function declared there replaces it when the code runs.
  */
-function bindsParameter(bound: () => BoundFile, source: ts.SourceFile, identifier: ts.Identifier): boolean {
-  const same = bound().identifierAt(identifier.getStart(source), identifier.text);
-  const binding = same === undefined ? undefined : bound().bindingOf(same);
-  if (binding?.kind !== "declared" || binding.declarations.length !== 1) return false;
+function bindsParameter(binding: LexicalBinding, name: string): boolean {
+  if (binding.kind !== "declared" || binding.declarations.length !== 1) return false;
   const declaration = binding.declarations[0]!;
   if (!ts.isParameter(declaration) || declaration.initializer !== undefined || declaration.dotDotDotToken !== undefined) return false;
   const owner = declaration.parent;
   const body = "body" in owner ? owner.body : undefined;
-  return body === undefined || !ts.isBlock(body) || !body.statements.some((statement) => topLevelNames(statement).includes(identifier.text));
+  return body === undefined || !ts.isBlock(body) || !body.statements.some((statement) => topLevelNames(statement).includes(name));
+}
+
+/**
+ * The start of every name of the file that `bindsParameter` proves. Only names spelled like a parameter are asked, and
+ * never the member name of an access, whose symbol needs a type.
+ */
+function parameterUses(path: string, text: string): ReadonlySet<number> {
+  const { tree, bindingOf } = bindFile(path, text);
+  const names = new Set<string>();
+  const collect = (node: ts.Node): void => {
+    if (ts.isParameter(node) && ts.isIdentifier(node.name)) names.add(node.name.text);
+    node.forEachChild(collect);
+  };
+  collect(tree);
+  const starts = new Set<number>();
+  const visit = (node: ts.Node): void => {
+    if (ts.isIdentifier(node) && names.has(node.text) && !isMemberName(node) && bindsParameter(bindingOf(node), node.text)) starts.add(node.getStart(tree));
+    node.forEachChild(visit);
+  };
+  if (names.size > 0) visit(tree);
+  return starts;
+}
+
+function isMemberName(identifier: ts.Identifier): boolean {
+  const parent = identifier.parent;
+  return (ts.isPropertyAccessExpression(parent) && parent.name === identifier) || (ts.isQualifiedName(parent) && parent.right === identifier);
 }
 
 function topLevelNames(statement: ts.Statement): string[] {
