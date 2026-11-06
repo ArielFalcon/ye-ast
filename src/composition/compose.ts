@@ -202,7 +202,7 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
     }
   };
   const impact = measurement === undefined ? bareImpact : measuredImpact(bareImpact, measurement);
-  const javaImports = staged<ModuleDependenciesReader>({ extract: async (sources) => createJavaImportsReader(await createJavaParser()).extract(sources) }, { extract: "java-imports" });
+  const javaImports = staged<ModuleDependenciesReader>({ extract: async (sources, options) => createJavaImportsReader(await createJavaParser()).extract(sources, options) }, { extract: "java-imports" });
   const bareOutline = createOutlineQueries({
     ...snapshotCache,
     vcs,
