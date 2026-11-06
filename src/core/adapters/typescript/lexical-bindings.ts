@@ -103,12 +103,18 @@ function isLexicalReference(identifier: ts.Identifier): boolean {
   return !(("name" in parent && parent.name === identifier) || ("propertyName" in parent && parent.propertyName === identifier) || ("label" in parent && parent.label === identifier));
 }
 
-/** A call of `eval` itself, parentheses included; `(0, eval)(...)` and `eval?.(...)` are indirect and see only the global scope. */
+/** A call of `eval` itself, through parentheses or erased type syntax; `(0, eval)(...)` and `eval?.(...)` are indirect and see only the global scope. */
 function isDirectEval(call: ts.CallExpression): boolean {
   if (call.questionDotToken !== undefined) return false;
-  let callee: ts.Expression = call.expression;
-  while (ts.isParenthesizedExpression(callee)) callee = callee.expression;
+  const callee = unwrapped(call.expression);
   return ts.isIdentifier(callee) && callee.text === "eval";
+}
+
+/** The expression inside parentheses, type assertions and non-null, which leave its value unchanged. */
+export function unwrapped(expression: ts.Expression): ts.Expression {
+  let inner = expression;
+  while (ts.isParenthesizedExpression(inner) || ts.isAsExpression(inner) || ts.isSatisfiesExpression(inner) || ts.isTypeAssertionExpression(inner) || ts.isNonNullExpression(inner)) inner = inner.expression;
+  return inner;
 }
 
 function declaresStrict(statements: readonly ts.Statement[]): boolean {

@@ -1,6 +1,6 @@
 import ts from "typescript";
 import type { FunctionValueCall } from "../../ports/declared-member-names.port.ts";
-import { bindFile, type BoundFile } from "./lexical-bindings.ts";
+import { bindFile, type BoundFile, unwrapped } from "./lexical-bindings.ts";
 
 const LOGICAL_OPERATORS: readonly ts.SyntaxKind[] = [ts.SyntaxKind.AmpersandAmpersandToken, ts.SyntaxKind.BarBarToken, ts.SyntaxKind.QuestionQuestionToken];
 /** Operators that store their right operand, or may: `a ??= f` leaves `a` holding `f` when it held nothing. */
@@ -59,13 +59,6 @@ export function functionValueCalls(tree: ts.SourceFile): FunctionValueCall[] {
     const holds = binding?.kind === "declared" && (binding.declarations.some(declaresFunction) || assignedSymbols().has(binding.symbol));
     return holds ? [{ line, receiver: receiver.text, member: access.name.text }] : [];
   });
-}
-
-/** The expression inside parentheses, type assertions and non-null, which leave its value unchanged. */
-function unwrapped(expression: ts.Expression): ts.Expression {
-  let inner = expression;
-  while (ts.isParenthesizedExpression(inner) || ts.isAsExpression(inner) || ts.isSatisfiesExpression(inner) || ts.isTypeAssertionExpression(inner) || ts.isNonNullExpression(inner)) inner = inner.expression;
-  return inner;
 }
 
 /**
