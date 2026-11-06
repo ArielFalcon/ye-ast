@@ -57,7 +57,10 @@ export function traceSteps(roots: readonly WalkedStep[]): { steps: TraceStep[]; 
     /** A root seen at a declaration folded below an earlier root stands alone: that declaration has no step. */
     const seen = step.seen === undefined ? undefined : ids.get(step.seen);
     const folded = step.children.filter(folds);
-    const leaves = [...new Map(folded.map(({ declaration }): [string, TraceLeaf] => [declaration.key, { symbol: declaration.symbol, file: declaration.file, start: declaration.start, end: declaration.end }])).values()];
+    const leaves = [...new Map(folded.map(({ declaration, deferred }): [string, TraceLeaf] => [
+      JSON.stringify([declaration.key, deferred === true]),
+      { symbol: declaration.symbol, file: declaration.file, start: declaration.start, end: declaration.end, ...(deferred === undefined ? {} : { deferred }) },
+    ])).values()];
     steps.push({
       id,
       ...(parent === undefined ? {} : { parent }),

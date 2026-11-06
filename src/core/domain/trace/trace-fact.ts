@@ -1,12 +1,14 @@
 /** How a step was reached from its parent's body: a resolved call or instantiation, `this.<member>`, or a function passed as a value. */
 export type TraceVia = "call" | "own-member" | "reference";
 
-/** A proven terminal declaration folded under the step that calls it: expanded, with no call, external call or cut. */
+/** A proven terminal declaration folded under the step that calls or passes it: expanded, with no call, external call or cut. */
 export interface TraceLeaf {
   symbol: string;
   file: string;
   start: number;
   end: number;
+  /** The caller passes it as a value: it runs later, if at all. */
+  deferred?: true;
 }
 
 /**

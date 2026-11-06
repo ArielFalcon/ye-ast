@@ -93,3 +93,12 @@ test("a root seen at a declaration folded below an earlier root stands as its ow
   const { steps } = traceSteps([walked("root", { children: [leaf] }), walked("leaf", { expanded: false, seen: leaf })]);
   assert.deepEqual(steps[1], { id: 1, depth: 0, file: "src/leaf.ts", symbol: "leaf", kind: "function", line: 10, endLine: 14 });
 });
+
+test("a leaf folded from a deferred occurrence stays deferred, apart from a direct call to the same declaration", () => {
+  const leaf = walked("leaf");
+  const { steps } = traceSteps([walked("root", { children: [leaf, walked("leaf", { expanded: false, seen: leaf, deferred: true })] })]);
+  assert.deepEqual(steps[0]?.leaves, [
+    { symbol: "leaf", file: "src/leaf.ts", start: 10, end: 14 },
+    { symbol: "leaf", file: "src/leaf.ts", start: 10, end: 14, deferred: true },
+  ]);
+});
