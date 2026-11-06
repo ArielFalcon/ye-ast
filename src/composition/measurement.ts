@@ -9,6 +9,7 @@ import type { OutlineQueries } from "../core/ports/outline-queries.port.ts";
 import type { WorkspaceQueries } from "../core/ports/workspace-queries.port.ts";
 import type { EntrypointQueries } from "../core/ports/entrypoint-queries.port.ts";
 import type { ImpactQueries } from "../core/ports/impact-queries.port.ts";
+import type { IndexDiscard } from "../core/ports/index-cache.port.ts";
 import type { LiveMirror } from "../core/ports/live-mirror.port.ts";
 import type { Redaction } from "../core/ports/redaction.port.ts";
 
@@ -90,6 +91,13 @@ export function measuredLiveMirror(mirror: LiveMirror, deps: MeasurementDeps): L
 export function measuredSnapshotCache(deps: MeasurementDeps): (event: SnapshotCacheEvent) => void {
   return ({ outcome, entryBytes, retainedBytes }) => {
     report({ event: "cache", outcome, ...(entryBytes === undefined ? {} : { entry_bytes: entryBytes }), retained_bytes: retainedBytes, start_ms: Math.round(performance.now()) }, deps);
+  };
+}
+
+/** The discards of the kept-index cache's retention, one `index-cache` line each; the key never leaves the cache. */
+export function measuredIndexDiscard(deps: MeasurementDeps): (discard: IndexDiscard) => void {
+  return ({ entryBytes, retainedBytes }) => {
+    report({ event: "index-cache", outcome: "discarded", entry_bytes: entryBytes, retained_bytes: retainedBytes, start_ms: Math.round(performance.now()) }, deps);
   };
 }
 

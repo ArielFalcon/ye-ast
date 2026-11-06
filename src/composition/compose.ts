@@ -13,6 +13,7 @@ import { declaredScope } from "../core/domain/map/entrypoint-map.ts";
 import { exportSelection, pathSelection } from "../core/domain/shared/scope.ts";
 import { isWritten, liveScope } from "../core/domain/snapshot/live-export.ts";
 import { isExtractorConfiguration } from "../core/domain/languages/configuration.ts";
+import type { IndexRetentionPolicy } from "../core/ports/index-cache.port.ts";
 import type { LiveRetentionPolicy } from "../core/domain/snapshot/live-retention.ts";
 import { createFixedLayerAdmin } from "../core/application/fixed-layer/fixed-layer-admin.ts";
 import { createInstall } from "../core/application/install/install.ts";
@@ -70,7 +71,7 @@ import type { Redaction } from "../core/ports/redaction.port.ts";
 import type { TrustRecordReader } from "../core/ports/trust-record.port.ts";
 import type { ExportBudget, Vcs } from "../core/ports/vcs.port.ts";
 import { installedVersion, ownVersion } from "./installed-versions.ts";
-import { measuredDecisions, measuredStages, measuredEntrypoints, measuredGraph, measuredImpact, measuredLiveMirror, measuredOutline, measuredSnapshotCache, measuredWorkspace, type MeasurementSink } from "./measurement.ts";
+import { measuredDecisions, measuredStages, measuredEntrypoints, measuredGraph, measuredImpact, measuredIndexDiscard, measuredLiveMirror, measuredOutline, measuredSnapshotCache, measuredWorkspace, type MeasurementSink } from "./measurement.ts";
 
 const PRODUCER_NAME = "ye-ast";
 const ENTRYPOINT_ENGINES = ["web-tree-sitter", "tree-sitter-java", "typescript"] as const;
@@ -81,6 +82,9 @@ const SNAPSHOT_CACHE_BYTES = 32 * 1024 * 1024;
 
 /** What a host keeps of the live tree unless it overrides it (RFC-0010 "Retention"): three scopes, 14 days, 512 MiB. */
 const LIVE_RETENTION: LiveRetentionPolicy = { keepScopes: 3, unusedForMs: 14 * DAY_MS, maxBytes: 512 * 1024 * 1024 };
+
+/** What a host keeps of the full-index cache unless it overrides it (ADR-0027): the live tree's bound of unused time and of logical bytes. */
+const INDEX_RETENTION: IndexRetentionPolicy = { unusedForMs: LIVE_RETENTION.unusedForMs, maxBytes: LIVE_RETENTION.maxBytes };
 
 export interface CompositionOptions {
   /** Directory that holds the temporary exports; the system temporary directory by default. */
@@ -103,6 +107,8 @@ export interface CompositionOptions {
   reportTrustFault?: (line: string) => void;
   /** Receives one measurement line per query and per index build; without it nothing is measured. */
   measure?: MeasurementSink;
+  /** How long a kept full index may go unused and how many logical bytes the index cache may occupy; the live tree's bounds unless a host overrides them. */
+  indexRetention?: IndexRetentionPolicy;
   /** How many live mirrors stay and for how long; the defaults of RFC-0010 "Retention" unless a host overrides them. */
   liveRetention?: LiveRetentionPolicy;
 }
@@ -173,7 +179,7 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
   };
   const bareEntrypoints = createEntrypointQueries({ vcs, scratch, reader, extractor, digest, matcher, producer: { name: PRODUCER_NAME, version }, engines: entrypointEngines, live, ...snapshotCache, ...budget, ...trust });
   const entrypoints = measurement === undefined ? bareEntrypoints : measuredEntrypoints(bareEntrypoints, measurement);
-  const indexes = options.indexCache === undefined ? undefined : createIndexCache({ directory: options.indexCache, graph, digest, codegraph });
+  const indexes = options.indexCache === undefined ? undefined : createIndexCache({ directory: options.indexCache, graph, digest, codegraph, retention: options.indexRetention ?? INDEX_RETENTION, ...(measurement && { onDiscard: measuredIndexDiscard(measurement) }) });
   const moduleDependencies = staged(createModuleDependenciesReader(), { extract: "module-dependencies" });
   const unmodelled = staged<UnmodelledConstructsReader>({ extract: async (sources) => createJavaRecordsReader(await createJavaParser()).extract(sources) }, { extract: "java-records" });
   const impactDeps: ImpactQueriesDeps = {

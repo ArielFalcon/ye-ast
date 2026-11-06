@@ -32,6 +32,7 @@ marked **Proposed** awaits the owner's acceptance.
 | [0024](adr/0024-one-producer-version-for-every-family.md) | Every query family stamps one producer version; the edge-policy suffix is removed. Supersedes 0017 decision 3 | Accepted |
 | [0025](adr/0025-template-member-calls-join-as-component-calls.md) | A template call through a component's injected field joins as a call of the component, with the template as evidence; amends the ADR-0017 amendment | Accepted |
 | [0026](adr/0026-snapshot-data-may-retain-reader-outputs.md) | The snapshot data cache may also retain serialized relations and whole-universe module-dependency outputs, keyed by every input they read; amends ADR-0020 decision 2 | Accepted |
+| [0027](adr/0027-retention-of-immutable-index-entries.md) | Kept full indexes are retained by last use: 14 days unused and 512 MiB of logical bytes, never an entry an open reader holds; amends ADR-0015 | Accepted |
 
 ## Designs (RFC)
 

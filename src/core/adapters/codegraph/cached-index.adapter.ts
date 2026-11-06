@@ -1,11 +1,13 @@
 import { randomUUID } from "node:crypto";
-import { lstat, mkdir, mkdtemp, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { rmSync } from "node:fs";
+import { lstat, mkdir, mkdtemp, readdir, readFile, rename, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { privateToOwner } from "../../domain/shared/private-to-owner.ts";
 import type { Result } from "../../domain/shared/result.ts";
+import { retentionDiscards } from "../../domain/snapshot/live-retention.ts";
 import type { CodeGraph, CodeGraphFault, IndexSummary } from "../../ports/code-graph.port.ts";
 import type { Digest } from "../../ports/digest.port.ts";
-import type { IndexCache, IndexedSnapshot } from "../../ports/index-cache.port.ts";
+import type { IndexCache, IndexDiscard, IndexedSnapshot, IndexRetentionPolicy } from "../../ports/index-cache.port.ts";
 import { STAGING_RULES_VERSION } from "./stage-snapshot.ts";
 import { SUPPORTED_STORE } from "./store-version.ts";
 
@@ -18,12 +20,23 @@ export interface IndexCacheDeps {
   codegraph: string;
   /** Version of the staging rules; the current ones by default. */
   stagingRules?: string;
+  /** Without it nothing is removed. */
+  retention?: IndexRetentionPolicy;
+  /** Receives one event per index retention removes. */
+  onDiscard?: (discard: IndexDiscard) => void;
+  /** The clock the last use of an index is written from and read against. */
+  now?: () => number;
+  pid?: () => number;
+  isAlive?: (pid: number) => boolean;
 }
 
 const INDEXES = "indexes";
 const SUMMARY_FILE = "summary.json";
 const BUILD_PREFIX = ".build-";
+const LEASE_PREFIX = ".lease-";
+const LEASING_PREFIX = ".leasing-";
 const PRIVATE = 0o700;
+const OWNER_ONLY_FILE = 0o600;
 
 type Summary = Omit<IndexSummary, "versions">;
 type Entry = { state: "absent" } | { state: "unusable" } | { state: "usable"; indexed: IndexedSnapshot };
@@ -56,13 +69,7 @@ export function createIndexCache(deps: IndexCacheDeps): IndexCache {
     );
   }
 
-  async function obtain({ content, snapshot, signal }: Parameters<IndexCache["obtain"]>[0]): Promise<Result<IndexedSnapshot, CodeGraphFault>> {
-    const entry = join(indexes, keyOf(content));
-    try {
-      await mkdir(indexes, { recursive: true, mode: PRIVATE });
-    } catch (error) {
-      return unavailable(error);
-    }
+  async function produce(entry: string, { snapshot, signal }: Parameters<IndexCache["obtain"]>[0]): Promise<Result<IndexedSnapshot, CodeGraphFault>> {
     for (const directory of [deps.directory, indexes]) {
       const reachable = await reachableByOthers(directory);
       if (reachable !== null) return unavailable(reachable);
@@ -97,6 +104,110 @@ export function createIndexCache(deps: IndexCacheDeps): IndexCache {
     }
   }
 
+  const now = deps.now ?? Date.now;
+  const pid = deps.pid ?? ((): number => process.pid);
+  const isAlive = deps.isAlive ?? processIsAlive;
+
+  async function takeLease(key: string): Promise<{ release: () => void } | null> {
+    const leasing = join(indexes, `${LEASING_PREFIX}${randomUUID()}`);
+    const lease = join(indexes, `${LEASE_PREFIX}${key}-${pid()}-${randomUUID()}`);
+    try {
+      await writeFile(leasing, String(pid()), { mode: OWNER_ONLY_FILE, flag: "wx" });
+      await rename(leasing, lease);
+    } catch {
+      await rm(leasing, { force: true });
+      return null;
+    }
+    return { release: () => rmSync(lease, { force: true }) };
+  }
+
+  /** The keys an open reader of a live process holds; a lease of a dead process is removed. */
+  async function leasedKeys(): Promise<Set<string>> {
+    const leased = new Set<string>();
+    for (const name of await readdir(indexes)) {
+      if (!name.startsWith(LEASE_PREFIX)) continue;
+      const holder = Number((await readFile(join(indexes, name), "utf8").catch(() => "")).trim());
+      if (Number.isInteger(holder) && holder > 0 && isAlive(holder)) leased.add(name.slice(LEASE_PREFIX.length).split("-")[0]!);
+      else if (holder > 0) await rm(join(indexes, name), { force: true });
+    }
+    return leased;
+  }
+
+  async function measureEntry(key: string): Promise<{ bytes: number; lastUsedMs: number | null }> {
+    const entry = join(indexes, key);
+    const used = await stat(join(entry, SUMMARY_FILE)).then((status) => status.mtimeMs, () => null);
+    let bytes = 0;
+    for (const file of await readdir(entry, { recursive: true, withFileTypes: true }).catch(() => [])) {
+      if (file.isFile()) bytes += (await lstat(join(file.parentPath, file.name)).catch(() => null))?.size ?? 0;
+    }
+    return { bytes, lastUsedMs: used };
+  }
+
+  /** Renames the entry away first so a reader that leased it meanwhile finds it back, and removes it only while no live lease names it. */
+  async function discard(key: string): Promise<boolean> {
+    const entry = join(indexes, key);
+    const removed = join(indexes, `${BUILD_PREFIX}stale-${randomUUID()}`);
+    try {
+      await rename(entry, removed);
+    } catch {
+      return false;
+    }
+    if ((await leasedKeys()).has(key)) {
+      await rename(removed, entry).catch(() => undefined);
+      return false;
+    }
+    await rm(removed, { recursive: true, force: true });
+    return true;
+  }
+
+  /** Removes the indexes the policy names, once per obtain; it never fails the obtain it follows. */
+  async function sweep(current: string): Promise<void> {
+    if (deps.retention === undefined) return;
+    try {
+      const leased = await leasedKeys();
+      const usage = new Map<string, { bytes: number; lastUsedMs: number | null }>();
+      for (const item of await readdir(indexes, { withFileTypes: true })) {
+        if (item.isDirectory() && !item.name.startsWith(".")) usage.set(item.name, await measureEntry(item.name));
+      }
+      const scopes = [...usage].map(([scope, { bytes, lastUsedMs }]) => ({ scope, bytes, lastUsedMs, locked: leased.has(scope), versionsMatch: true }));
+      const discards = retentionDiscards({ scopes, debris: [] }, current, { keepScopes: Number.POSITIVE_INFINITY, ...deps.retention }, now());
+      let retained = scopes.reduce((sum, scope) => sum + scope.bytes, 0);
+      for (const key of discards.scopes) {
+        if (!(await discard(key))) continue;
+        const entryBytes = usage.get(key)!.bytes;
+        retained -= entryBytes;
+        deps.onDiscard?.({ entryBytes, retainedBytes: retained });
+      }
+    } catch {
+      return;
+    }
+  }
+
+  async function touch(entry: string): Promise<void> {
+    const at = new Date(now());
+    await utimes(join(entry, SUMMARY_FILE), at, at).catch(() => undefined);
+  }
+
+  async function obtain(request: Parameters<IndexCache["obtain"]>[0]): Promise<Result<IndexedSnapshot, CodeGraphFault>> {
+    const key = keyOf(request.content);
+    const entry = join(indexes, key);
+    try {
+      await mkdir(indexes, { recursive: true, mode: PRIVATE });
+    } catch (error) {
+      return unavailable(error);
+    }
+    const lease = await takeLease(key);
+    const result = await produce(entry, request);
+    if (!result.ok) {
+      lease?.release();
+      return result;
+    }
+    await touch(entry);
+    await sweep(key);
+    const { store } = result.value;
+    return { ok: true, value: { ...result.value, store: Object.assign(Object.create(store) as typeof store, { close: () => { store.close(); lease?.release(); } }) } };
+  }
+
   return { obtain };
 }
 
@@ -121,4 +232,13 @@ async function readSummary(entry: string): Promise<Summary | null> {
 
 function unavailable(error: unknown): Result<never, CodeGraphFault> {
   return { ok: false, fault: { kind: "cache-unavailable", detail: error instanceof Error ? error.message : String(error) } };
+}
+
+function processIsAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== "ESRCH";
+  }
 }

@@ -239,6 +239,17 @@ The entries of the cache are the sources and findings of a snapshot and, since
 whole-universe module-dependencies readers, each its own entry. A served output has no line of its own: its lookup is a
 `hit` and the reader's stage (`relations`, `module-dependencies`) is absent from that request.
 
+An **index-cache line**, one per kept index the cache's retention removes
+([ADR-0027](../adr/0027-retention-of-immutable-index-entries.md)), when measurement is configured:
+
+```json
+{"ye_ast":{"event":"index-cache","outcome":"discarded","entry_bytes":94371840,"retained_bytes":402653184,"start_ms":5231}}
+```
+
+`entry_bytes` is the logical bytes the removed index occupied and `retained_bytes` what the cache holds after the
+removal. The key never appears. Retention controls disk growth only; a later query that needs the removed index builds
+it again, and that build shows as an `index` line.
+
 **Child CPU is not measured.** `process.cpuUsage()` covers only the ye-ast process, so `cpu_ms` excludes the git and
 indexer children, and Node exposes neither `RUSAGE_CHILDREN` nor the resource usage of a `spawn`ed child. The cost of a
 child shows in the wall-clock of the stage or index line around it (`export`, `built`, `synced`), which is the figure a

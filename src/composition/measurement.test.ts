@@ -9,7 +9,7 @@ import type { EntrypointQueries } from "../core/ports/entrypoint-queries.port.ts
 import type { ImpactQueries } from "../core/ports/impact-queries.port.ts";
 import { REDACTED, type Redaction } from "../core/ports/redaction.port.ts";
 import type { LiveMirror } from "../core/ports/live-mirror.port.ts";
-import { measuredEntrypoints, measuredGraph, measuredImpact, measuredLiveMirror, measuredOutline, measuredSnapshotCache, measuredStages } from "./measurement.ts";
+import { measuredEntrypoints, measuredGraph, measuredImpact, measuredIndexDiscard, measuredLiveMirror, measuredOutline, measuredSnapshotCache, measuredStages } from "./measurement.ts";
 
 const SECRET = "s3cr3t";
 const SHA = "a".repeat(40);
@@ -336,4 +336,14 @@ test("a snapshot cache decision is a cache line with its bytes and no key", () =
   assert.deepEqual({ ...evicted, start_ms: undefined }, { event: "cache", outcome: "evicted", entry_bytes: 120, retained_bytes: 480, start_ms: undefined });
   assert.ok(Number.isInteger(evicted?.start_ms));
   assert.deepEqual({ ...miss, start_ms: undefined }, { event: "cache", outcome: "miss", retained_bytes: 480, start_ms: undefined });
+});
+
+test("an index discard is an index-cache line with the bytes freed and kept and no key", () => {
+  const { lines, sink } = collecting();
+
+  measuredIndexDiscard({ sink, redaction })({ entryBytes: 90, retainedBytes: 300 });
+
+  const [discarded] = lines.map(recordOf);
+  assert.deepEqual({ ...discarded, start_ms: undefined }, { event: "index-cache", outcome: "discarded", entry_bytes: 90, retained_bytes: 300, start_ms: undefined });
+  assert.ok(Number.isInteger(discarded?.start_ms));
 });
