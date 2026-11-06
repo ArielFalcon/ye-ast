@@ -41,6 +41,19 @@ test("a name only a type, an interface, a type literal or an ambient declaration
   ]), []);
 });
 
+test("a module's exported value names are names: renamed, re-exported, a namespace re-export and default; a type-only export is none", async () => {
+  assert.deepEqual(await names([
+    "export { local as renamed };",
+    "export { other as reexported } from './other';",
+    "export * as space from './space';",
+    "export default run;",
+    "export type { Shape as typeAlias } from './shape';",
+    "export { type Box as boxAlias } from './box';",
+  ]), ["default", "reexported", "renamed", "space"]);
+  assert.deepEqual(await names(["export default function main() {}"]), ["default"]);
+  assert.deepEqual(await names(["export = run;"]), []);
+});
+
 test("a computed key or index adds no name; a literal one adds its name", async () => {
   assert.deepEqual(await names(["const table = { [key]: run, ['literal']: run };", "target[name] = run;", "target['indexed'] = run;"]), ["indexed", "literal"]);
 });

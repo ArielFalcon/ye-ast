@@ -10,7 +10,8 @@ const NONE: DeclaredMemberNames = { names: [], callables: [] };
  * The member names a TypeScript source declares where a value can live: object-literal keys, properties assigned through
  * a dot or a literal index, class members and constructor parameter properties, and enum members. A type, an interface
  * or a type literal holds none of these, and an ambient (`declare`) declaration is skipped whole, as the type-only rule
- * skips types in the index. Its callables are its functions, ambient ones and overload signatures included, the methods
+ * skips types in the index. A module's exported value names count too: a renamed or re-exported specifier, a namespace
+ * re-export and `default`, never a type-only export. Its callables are its functions, ambient ones and overload signatures included, the methods
  * of its classes, and the method signatures of its interfaces.
  */
 export function createTypeScriptMemberNames(): DeclaredMemberNamesReader {
@@ -40,6 +41,8 @@ export function createTypeScriptMemberNames(): DeclaredMemberNamesReader {
         if (ts.isClassLike(node)) for (const member of node.members) if (!isDeclareOnly(member)) add(member.name);
         if (ts.isConstructorDeclaration(node)) for (const parameter of node.parameters) if (ts.isParameterPropertyDeclaration(parameter, node)) add(parameter.name);
         if (ts.isEnumDeclaration(node)) for (const member of node.members) add(member.name);
+        if (ts.isExportDeclaration(node) && !node.isTypeOnly) for (const name of exportedValueNames(node)) names.add(name);
+        if ((ts.isExportAssignment(node) && !node.isExportEquals) || isDefaultExport(node)) names.add("default");
         if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
           if (ts.isPropertyAccessExpression(node.left)) names.add(node.left.name.text);
           else if (ts.isElementAccessExpression(node.left)) {
@@ -53,6 +56,18 @@ export function createTypeScriptMemberNames(): DeclaredMemberNamesReader {
       return { names: [...names].sort(compareText), callables };
     },
   };
+}
+
+/** The names a module re-exports or exports under another name, without the ones marked type-only. */
+function exportedValueNames(declaration: ts.ExportDeclaration): string[] {
+  const clause = declaration.exportClause;
+  if (clause === undefined) return [];
+  if (ts.isNamespaceExport(clause)) return [clause.name.text];
+  return clause.elements.filter((specifier) => !specifier.isTypeOnly).map((specifier) => specifier.name.text);
+}
+
+function isDefaultExport(node: ts.Node): boolean {
+  return (ts.isFunctionDeclaration(node) || ts.isClassDeclaration(node)) && (ts.getModifiers(node) ?? []).some((modifier) => modifier.kind === ts.SyntaxKind.DefaultKeyword);
 }
 
 function isOverridable(method: ts.MethodDeclaration): boolean {

@@ -959,6 +959,39 @@ test("a trace over a real index lists an implementation below a parameterized su
   assert.deepEqual(answer.value.cuts.map((cut) => [cut.kind, ...cut.at]), [["unresolved-link", "src/Generic.java:1 send", "src/Generic.java::GImpl.send"]]);
 });
 
+test("a trace over a real index keeps a member call a cut when a module exports a value under that name, renamed or re-exported", async () => {
+  writeFileSync(join(repo, "src", "other.ts"), ["export function other(): void {}", ""].join("\n"));
+  writeFileSync(join(repo, "src", "ns.ts"), [
+    "function local(): void {}",
+    "export { local as exportedAlias };",
+    "export { other as reexportedAlias } from \"./other\";",
+    "export type { Shape as typeOnlyAlias } from \"./shape\";",
+    "",
+  ].join("\n"));
+  writeFileSync(join(repo, "src", "shape.ts"), ["export interface Shape { area(): number }", ""].join("\n"));
+  writeFileSync(join(repo, "src", "run.ts"), [
+    "import * as ns from \"./ns\";",
+    "export function run(x: typeof ns, y: { typeOnlyAlias(): void }): void {",
+    "  x.exportedAlias();",
+    "  x.reexportedAlias();",
+    "  y.typeOnlyAlias();",
+    "}",
+    "",
+  ].join("\n"));
+  git("add", "-A");
+  git("commit", "-q", "-m", "aliases");
+  const { trace } = composeQueries({ scratchRoot });
+
+  const answer = await trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: "src/run.ts", symbol: "run" }] });
+
+  assert.ok(answer.ok && answer.value.status === "partial");
+  assert.deepEqual(answer.value.cuts.map((cut) => [cut.kind, ...cut.at]), [
+    ["unresolved-link", "src/run.ts:3 x.exportedAlias", "src/ns.ts::exportedAlias"],
+    ["unresolved-link", "src/run.ts:4 x.reexportedAlias", "src/ns.ts::reexportedAlias"],
+  ]);
+  assert.deepEqual(answer.value.value.steps[0]?.external, [{ kind: "unnamed", names: ["y.typeOnlyAlias"] }]);
+});
+
 test("callers over a range inside a property initializer still seeds the class that holds it", async () => {
   commitPage();
   const { impact } = composeQueries({ scratchRoot });
