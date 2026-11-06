@@ -22,20 +22,20 @@ export function javaFunctionValueCalls(root: Node): FunctionValueCall[] {
   };
   visit(root);
 
+  const assignedFields = new Set<string>();
+  const assignedLocals = new Set<number>();
+  for (const assignment of assignments) {
+    const left = assignment.childForFieldName("left");
+    if (left === null) continue;
+    const local = left.type === "identifier" ? localBinding(left) : undefined;
+    if (local !== undefined) assignedLocals.add(local.startIndex);
+    const field = thisField(left) ?? (left.type === "identifier" && local === undefined ? left.text : undefined);
+    const body = enclosingBody(left);
+    if (field !== undefined && body !== undefined) assignedFields.add(fieldKey(body, field));
+  }
   const fieldHolds = (body: Node | undefined, name: string): boolean =>
-    body !== undefined &&
-    (fieldsOf(body).some((declarator) => nameOf(declarator) === name && isFunctionValue(declarator.childForFieldName("value"))) ||
-      assignments.some((assignment) => {
-        const left = assignment.childForFieldName("left");
-        const field = left === null ? undefined : thisField(left) ?? (left.type === "identifier" && localBinding(left) === undefined ? left.text : undefined);
-        return field === name && left !== null && enclosingBody(left)?.startIndex === body.startIndex;
-      }));
-  const localHolds = (binding: Node, name: string): boolean =>
-    isFunctionValue(binding.childForFieldName("value")) ||
-    assignments.some((assignment) => {
-      const left = assignment.childForFieldName("left");
-      return left?.type === "identifier" && left.text === name && localBinding(left)?.startIndex === binding.startIndex;
-    });
+    body !== undefined && (assignedFields.has(fieldKey(body, name)) || fieldsOf(body).some((declarator) => nameOf(declarator) === name && isFunctionValue(declarator.childForFieldName("value"))));
+  const localHolds = (binding: Node): boolean => isFunctionValue(binding.childForFieldName("value")) || assignedLocals.has(binding.startIndex);
 
   return invocations.flatMap((invocation): FunctionValueCall[] => {
     const object = invocation.childForFieldName("object")!;
@@ -50,7 +50,7 @@ export function javaFunctionValueCalls(root: Node): FunctionValueCall[] {
     } else if (object.type === "identifier") {
       receiver = object.text;
       const local = localBinding(object);
-      holds = local === undefined ? fieldHolds(enclosingBody(object), receiver) : localHolds(local, receiver);
+      holds = local === undefined ? fieldHolds(enclosingBody(object), receiver) : localHolds(local);
     }
     return receiver !== undefined && holds ? [{ line: invocation.startPosition.row + 1, receiver, member }] : [];
   });
@@ -63,6 +63,10 @@ function isFunctionValue(node: Node | null): boolean {
   if (node.type === "cast_expression") return isFunctionValue(node.childForFieldName("value"));
   if (node.type === "ternary_expression") return isFunctionValue(node.childForFieldName("consequence")) || isFunctionValue(node.childForFieldName("alternative"));
   return FUNCTION_VALUES.includes(node.type);
+}
+
+function fieldKey(body: Node, name: string): string {
+  return `${body.startIndex}:${name}`;
 }
 
 function nameOf(node: Node): string | undefined {

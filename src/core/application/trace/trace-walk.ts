@@ -7,7 +7,7 @@ import type { Cut } from "../../domain/shared/fact.ts";
 import { calleeOf, compareOccurrence, ownMemberOf, receiverOf, sameOccurrence, type EdgeOccurrence, type OrderedPlace } from "../../domain/trace/call-place.ts";
 import type { TraceVia } from "../../domain/trace/trace-fact.ts";
 import type { ExternalCall, TraceDeclaration, WalkedStep } from "../../domain/trace/trace-tree.ts";
-import type { DeclaredMemberNames } from "../../ports/declared-member-names.port.ts";
+import type { DeclaredCallable, DeclaredMemberNames, FunctionValueCall } from "../../ports/declared-member-names.port.ts";
 import type { CodeGraphReader, GraphEdge, GraphNodeId, GraphSymbol, GraphUnresolvedReference } from "../../ports/code-graph.port.ts";
 import type { ImportOriginSite, ImportOrigins } from "../../ports/import-origins.port.ts";
 import type { TraceBudget } from "../../ports/trace-queries.port.ts";
@@ -132,6 +132,13 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
    * `:<digits>` followed by a space ends the path, whatever spaces the path or the spelling hold; only a path that
    * itself holds `:<digits> ` reads differently.
    */
+  /** A source's callables by name and its function-value calls by place, built once per file for the walk. */
+  const syntaxIndexOf = memoizedBy((file: string) => file, async (file): Promise<SyntaxIndex> => {
+    const { callables, functionValueCalls } = await syntaxOf(file);
+    const byName = new Map<string, DeclaredCallable[]>();
+    for (const callable of callables) byName.set(callable.name, [...(byName.get(callable.name) ?? []), callable]);
+    return { callables: byName, functionValueCalls: new Set(functionValueCalls.map(functionValueKey)) };
+  });
   const unresolvedAt = (reference: GraphUnresolvedReference, declarations: readonly GraphSymbol[]): Cut => ({
     kind: "unresolved-link",
     at: [placeAt(reference.file, reference.line, reference.name), ...sortedUnique([...reference.candidates, ...declarations.map(candidateOf)])],
@@ -140,7 +147,7 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
    * The types a type extends or implements: the index's edges, and a parameterized supertype (`Port<T>`) the index left
    * unresolved, which names every type declaration of its raw name.
    */
-  const supertypesOf = (type: GraphSymbol): readonly GraphSymbol[] => {
+  const supertypesOf = memoizedBy((type: GraphSymbol) => type.id, (type): readonly GraphSymbol[] => {
     const edges = store.outgoingEdges([type.id], SUPERTYPE_EDGES);
     navigation.load(edges.map((edge) => edge.target));
     const parameterized = store
@@ -148,16 +155,19 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
       .filter((reference) => reference.from === type.id && SUPERTYPE_EDGES.includes(reference.kind) && reference.name.includes("<"))
       .flatMap((reference) => store.declarationsNamed([rawTypeName(reference.name)]).filter((declared) => TYPE_KINDS.includes(declared.kind)));
     return [...edges.flatMap((edge) => navigation.symbolOf(edge.target) ?? []), ...parameterized];
-  };
-  const isBelow = (type: GraphSymbol, owners: ReadonlySet<GraphNodeId>): boolean => {
-    const visited = new Set<GraphNodeId>([type.id]);
+  });
+  /** Every type above `type`, through any number of supertypes. */
+  const ancestorsOf = memoizedBy((type: GraphSymbol) => type.id, (type): ReadonlySet<GraphNodeId> => {
+    const above = new Set<GraphNodeId>();
     for (let frontier = [type]; frontier.length > 0; ) {
-      const next = frontier.flatMap(supertypesOf).filter((above) => !visited.has(above.id));
-      if (next.some((above) => owners.has(above.id))) return true;
-      for (const above of next) visited.add(above.id);
-      frontier = next;
+      frontier = frontier.flatMap(supertypesOf).filter((next) => next.id !== type.id && !above.has(next.id));
+      for (const next of frontier) above.add(next.id);
     }
-    return false;
+    return above;
+  });
+  const isBelow = (type: GraphSymbol, owners: ReadonlySet<GraphNodeId>): boolean => {
+    const above = ancestorsOf(type);
+    return [...owners].some((owner) => above.has(owner));
   };
   /** The methods of the same name that any type below `owners` declares: a re-declaration in an interface counts, since a body or a type below it may still replace the call. */
   const implementationsBelow = (symbol: GraphSymbol, owners: readonly GraphSymbol[]): GraphSymbol[] => {
@@ -179,7 +189,7 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
    */
   const unboundDispatch = async (symbol: GraphSymbol): Promise<Cut | undefined> => {
     if (!CALLABLE_KINDS.includes(symbol.kind)) return undefined;
-    const declared = (await syntaxOf(symbol.file)).callables.find(({ name, start, nameLine }) => name === symbol.name && start <= symbol.startLine && symbol.startLine <= nameLine);
+    const declared = (await syntaxIndexOf(symbol.file)).callables.get(symbol.name)?.find(({ start, nameLine }) => start <= symbol.startLine && symbol.startLine <= nameLine);
     const owners = navigation.ownersOf(symbol);
     if (declared === undefined) {
       const interfaces = owners.filter((owner) => owner.kind === "interface");
@@ -192,7 +202,7 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
   };
   /** Whether the call's own source binds its receiver to a function value, which a library member such as `call` runs. */
   const holdsFunctionValue = async (reference: GraphUnresolvedReference, receiver: string, member: string): Promise<boolean> =>
-    (await syntaxOf(reference.file)).functionValueCalls.some((call) => call.line === reference.line && call.receiver === receiver && call.member === member);
+    (await syntaxIndexOf(reference.file)).functionValueCalls.has(functionValueKey({ line: reference.line, receiver, member }));
   const childAt = (symbol: GraphSymbol, line: number | null, column: number | null, spelling: string, via: TraceVia, deferred?: true): Child => ({
     symbol,
     place: { line, column, spelling, target: symbol.id },
@@ -335,6 +345,25 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
 }
 
 /** `Port` for `Port<T>` and for `pkg.Port<T>`. */
+interface SyntaxIndex {
+  callables: ReadonlyMap<string, readonly DeclaredCallable[]>;
+  functionValueCalls: ReadonlySet<string>;
+}
+
+function functionValueKey({ line, receiver, member }: FunctionValueCall): string {
+  return `${line}:${receiver}.${member}`;
+}
+
+/** `derive`, computed once per key for the life of one walk. */
+function memoizedBy<A, K, V>(keyOf: (argument: A) => K, derive: (argument: A) => V): (argument: A) => V {
+  const known = new Map<K, V>();
+  return (argument) => {
+    const key = keyOf(argument);
+    if (!known.has(key)) known.set(key, derive(argument));
+    return known.get(key)!;
+  };
+}
+
 function rawTypeName(name: string): string {
   return name.slice(0, name.indexOf("<")).split(".").at(-1)!;
 }
