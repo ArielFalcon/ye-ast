@@ -303,7 +303,7 @@ test("member evidence requires complete source without changing existing origins
   const old = await reader.read(files);
   const no = await reader.read(files, { memberProofs: { completeSource: false } });
   const yes = await reader.read(files, { memberProofs: { completeSource: true } });
-  assert.deepEqual(no, { ...old, memberUses: [] });
+  assert.deepEqual(no, { ...old, memberUses: [], externalUses: [] });
   assert.deepEqual(yes.fields, old.fields);
   assert.equal(yes.memberUses?.length, 1);
 });
@@ -346,6 +346,27 @@ test("member mutation elsewhere in the project prevents proof", async () => {
 test("malformed or unowned source cannot authorize member evidence", async () => {
   assert.deepEqual((await memberProofs(OWNER, "export class Store { write() {} }", { "src/broken.ts": "const x = ;" })).memberUses, []);
   assert.deepEqual((await memberProofs(OWNER, undefined, { "src/store.ts": "" })).memberUses, []);
+});
+
+const COMMON = { "package.json": JSON.stringify({ dependencies: { "@angular/core": "22.0.0", "@angular/common": "22.0.0" } }) };
+const EXTERNAL_OWNER = "import { HttpClient } from '@angular/common/http';\nexport class Owner { http = inject(HttpClient); cache = new Map(); run() { this.http.get(); this.cache.get(); } }";
+
+test("a fixed field call on a package or global type is an external use, proven like a member call", async () => {
+  const meta = await memberProofs(EXTERNAL_OWNER, undefined, COMMON);
+  const owner = { path: "src/owner.ts", symbol: "Owner", line: 4 };
+  assert.deepEqual(meta.externalUses, [
+    { owner, field: "http", holds: "@angular/common/http#HttpClient", reference: { file: "src/owner.ts", line: 4, column: 76, name: "this.http.get", kind: "calls" } },
+    { owner, field: "cache", holds: "global#Map", reference: { file: "src/owner.ts", line: 4, column: 93, name: "this.cache.get", kind: "calls" } },
+  ]);
+});
+
+test("a written field, a provider that replaces the token or incomplete source proves no external use", async () => {
+  const written = await memberProofs(EXTERNAL_OWNER, undefined, { ...COMMON, "src/mutate.ts": "import { Owner } from './owner'; new Owner().cache = other;" });
+  const replaced = await memberProofs(EXTERNAL_OWNER, undefined, { ...COMMON, "src/providers.ts": "import { HttpClient } from '@angular/common/http'; const providers = [{ provide: HttpClient, useClass: Other }];" });
+  const incomplete = await memberProofs(EXTERNAL_OWNER, undefined, COMMON, false);
+  assert.deepEqual(written.externalUses?.map((use) => use.field), ["http"]);
+  assert.deepEqual(replaced.externalUses?.map((use) => use.field), ["cache"]);
+  assert.deepEqual(incomplete.externalUses, []);
 });
 
 test("provider substitution and unknown provider token prevent proof", async () => {

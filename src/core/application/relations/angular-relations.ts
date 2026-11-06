@@ -6,7 +6,7 @@ import { relation, type Relation, type SymbolRef } from "../../domain/relations/
 import type { Evidence, Finding, UnknownReason } from "../../domain/shared/fact.ts";
 import type { AngularMetadataReader } from "../../ports/angular-metadata.port.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
-import type { RelationExtractor } from "./relation-extractor.ts";
+import type { RelationExtraction, RelationExtractor } from "./relation-extractor.ts";
 import type { ScopeMember, TemplateEffects, TemplateUnit, TemplateUsageReader } from "../../ports/template-usage.port.ts";
 
 export interface AngularRelationsDeps {
@@ -24,16 +24,16 @@ export function createAngularRelationExtractor(deps: AngularRelationsDeps): Rela
   return { extract: (files, options) => extractRelations(deps, files, options) };
 }
 
-async function extractRelations(deps: AngularRelationsDeps, files: readonly SourceFile[], options?: { memberProofs?: MemberProofContext }): Promise<{ relations: readonly Finding<Relation>[]; fields: readonly FieldOrigin[]; locals: readonly LocalOrigin[]; memberUses?: readonly MemberUseOrigin[] }> {
+async function extractRelations(deps: AngularRelationsDeps, files: readonly SourceFile[], options?: { memberProofs?: MemberProofContext }): Promise<RelationExtraction> {
   const contents = new Map(files.map((file) => [file.path, file.content]));
   const templateEffects = (component: Extract<AngularClass, { kind: "component" }>): TemplateEffects => {
     const source = component.template === undefined ? undefined : templateOf(component, component.template, contents);
     if (source === undefined) return { calls: [], writes: [], passed: [] };
     return "unknown" in source ? { calls: [], writes: [], passed: [], unreadable: true } : deps.templates.effects(source);
   };
-  const { classes, findings, fields, locals, memberUses } = await deps.metadata.read(files, { ...options, templateEffects });
+  const { classes, findings, fields, locals, memberUses, externalUses } = await deps.metadata.read(files, { ...options, templateEffects });
   const { units, findings: unitFindings } = templateUnitsOf(classes, contents);
-  return { relations: sortFindings([...findings, ...unitFindings, ...deps.templates.read(units)]), fields, locals, ...(memberUses === undefined ? {} : { memberUses }) };
+  return { relations: sortFindings([...findings, ...unitFindings, ...deps.templates.read(units)]), fields, locals, ...(memberUses === undefined ? {} : { memberUses }), ...(externalUses === undefined ? {} : { externalUses }) };
 }
 
 /**

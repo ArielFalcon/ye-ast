@@ -3,16 +3,19 @@ import { CALL_EDGE_KINDS, FIELD_KINDS, isIgnoredEdge } from "../../domain/impact
 import { declarationAnchor, placeAt, referenceKey } from "../../domain/impact/impact-cuts.ts";
 import { NOT_DECLARED_KINDS, sortedUnique } from "../../domain/impact/importers-fact.ts";
 import { branchesOf, declarationPath } from "../../domain/shared/declaration-tree.ts";
+import { joinsFact } from "../../domain/shared/code-node.ts";
 import type { Cut } from "../../domain/shared/fact.ts";
 import { calleeOf, compareOccurrence, ownMemberOf, receiverOf, sameOccurrence, type EdgeOccurrence, type OrderedPlace } from "../../domain/trace/call-place.ts";
 import type { TraceVia } from "../../domain/trace/trace-fact.ts";
 import type { ExternalCall, TraceDeclaration, WalkedStep } from "../../domain/trace/trace-tree.ts";
+import type { SymbolRef } from "../../domain/relations/relation.ts";
 import type { DeclaredCallable, DeclaredMemberNames, FunctionValueCall } from "../../ports/declared-member-names.port.ts";
 import type { CodeGraphReader, GraphEdge, GraphNodeId, GraphSymbol, GraphUnresolvedReference } from "../../ports/code-graph.port.ts";
 import type { ImportOriginSite, ImportOrigins } from "../../ports/import-origins.port.ts";
 import type { TraceBudget } from "../../ports/trace-queries.port.ts";
 import { createGraphNavigation, SUPERTYPE_EDGES } from "../navigation/graph-navigation.ts";
 import { containmentTree } from "../navigation/containment-tree.ts";
+import type { RelationExtraction } from "../relations/relation-extractor.ts";
 import type { EdgeTargets, FollowedEdge } from "../navigation/edge-targets.ts";
 
 /** What a body passes as a value runs later, if at all; only code can. */
@@ -69,6 +72,8 @@ export interface TraceWalkInput {
    * calls whose receiver it binds to a function value, for a member call R6 reaches.
    */
   syntaxOf: (file: string) => Promise<DeclaredMemberNames>;
+  /** The relations impact reads, for the member calls they prove; read when a member call first needs them. */
+  memberProofs: () => Promise<Pick<RelationExtraction, "memberUses" | "externalUses">>;
   budget: TraceBudget;
   signal?: AbortSignal;
 }
@@ -78,6 +83,17 @@ export interface TraceWalk {
   roots: readonly WalkedStep[];
   cuts: readonly Cut[];
   expanded: number;
+}
+
+/** What the relations prove a member call runs. */
+type ProvenCall = { kind: "member"; receiver: SymbolRef; member: SymbolRef } | { kind: "external"; holds: string } | { kind: "replaceable" };
+
+const provenKey = (file: string, line: number, column: number, name: string): string => JSON.stringify([file, line, column, name]);
+
+/** A call on a type from outside the repository, `<module>#<name>`, is a leaf under its module; `global#<name>` is a global. */
+function externalOf(holds: string, name: string): ExternalCall {
+  const module = holds.slice(0, holds.lastIndexOf("#"));
+  return module === "global" ? { kind: "global", name } : { kind: "import", module, name };
 }
 
 interface Child {
@@ -99,7 +115,7 @@ interface Body {
  * cut that leaves it free to expand at a later, shallower one. Every read is cached for this walk only.
  */
 export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkInput): Promise<TraceWalk | "aborted"> {
-  const { store, unresolvedIn, origins, targets, inScope, memberDeclarations, syntaxOf, budget, signal } = input;
+  const { store, unresolvedIn, origins, targets, inScope, memberDeclarations, syntaxOf, memberProofs, budget, signal } = input;
   const navigation = createGraphNavigation(store, () => false);
 
   const referencesByFile = new Map<string, ReadonlyMap<GraphNodeId, readonly GraphUnresolvedReference[]>>();
@@ -150,6 +166,31 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
     for (const callable of callables) byName.set(callable.name, [...(byName.get(callable.name) ?? []), callable]);
     return { callables: byName, functionValueCalls: new Set(functionValueCalls.map(functionValueKey)) };
   });
+  /**
+   * What the relations prove a member call runs, by its place: a repository method of the class a field or local holds
+   * (RFC-0013 R3), or a type from outside the repository a field holds. A place two proofs name, a template's call and a
+   * receiver a provider may replace prove nothing here.
+   */
+  let provenByPlace: Promise<ReadonlyMap<string, ProvenCall>> | undefined;
+  const provenAt = async (reference: GraphUnresolvedReference): Promise<ProvenCall | undefined> => {
+    provenByPlace ??= memberProofs().then(({ memberUses, externalUses }) => {
+      const byPlace = new Map<string, ProvenCall[]>();
+      const add = (site: { file: string; line: number; column: number; name: string }, call: ProvenCall): void => {
+        const key = provenKey(site.file, site.line, site.column, site.name);
+        byPlace.set(key, [...(byPlace.get(key) ?? []), call]);
+      };
+      for (const use of memberUses ?? []) if (use.template !== true) add(use.reference, use.substitutes === undefined ? { kind: "member", receiver: use.receiver, member: use.member } : { kind: "replaceable" });
+      for (const use of externalUses ?? []) add(use.reference, { kind: "external", holds: use.holds });
+      return new Map([...byPlace].flatMap(([key, calls]) => (calls.length === 1 ? [[key, calls[0]!]] : [])));
+    });
+    return (await provenByPlace).get(provenKey(reference.file, reference.line, reference.column + 1, reference.name));
+  };
+  /** The one method a member proof names, declared by the one class it names; none when the index does not place it so. */
+  const provenMember = (call: Extract<ProvenCall, { kind: "member" }>): GraphSymbol | undefined => {
+    const members = store.symbolsInFiles([call.member.path]).filter((symbol) => symbol.kind === "method" && joinsFact(symbol, call.member));
+    const owners = members.length === 1 ? navigation.ownersOf(members[0]!) : [];
+    return owners.length === 1 && owners[0]!.kind === "class" && joinsFact(owners[0]!, call.receiver) ? members[0] : undefined;
+  };
   const unresolvedAt = (reference: GraphUnresolvedReference, declarations: readonly GraphSymbol[]): Cut => ({
     kind: "unresolved-link",
     at: [placeAt(reference.file, reference.line, reference.name), ...sortedUnique([...reference.candidates, ...declarations.map(candidateOf)])],
@@ -268,8 +309,12 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
         if (callee.form === "computed") cuts.push(unresolvedAt(reference, []));
         else if (callee.form === "bare") bare.push({ reference, name: callee.name });
         else {
+          const proven = await provenAt(reference);
+          const member = proven?.kind === "member" ? provenMember(proven) : undefined;
           const named = membersNamed(callee.name);
-          if (named.length > 0) cuts.push(unresolvedAt(reference, named));
+          if (member !== undefined) children.push(childAt(member, reference.line, reference.column, reference.name, "call"));
+          else if (proven?.kind === "external") external.push(externalOf(proven.holds, reference.name));
+          else if (named.length > 0) cuts.push(unresolvedAt(reference, named));
           else {
             const receiver = receiverOf(reference.name);
             const declared = [

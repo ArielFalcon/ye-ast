@@ -276,7 +276,7 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
     digest,
     matcher,
     producer: { name: PRODUCER_NAME, version },
-    engines: { ...entrypointEngines, [CODEGRAPH_PACKAGE]: codegraph },
+    engines: { ...entrypointEngines, [CODEGRAPH_PACKAGE]: codegraph, ...impactDeps.angularEngines },
     live,
     ...budget,
     ...trust,
@@ -284,6 +284,7 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
     moduleDependencies,
     sourceTrivia,
     memberNames,
+    relations: impactDeps.relations,
   });
   const trace = measurement === undefined ? bareTrace : measuredTrace(bareTrace, measurement);
   const defaults = createWorkspaceDefaults(createFixedLayerStore());

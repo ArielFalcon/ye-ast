@@ -19,6 +19,8 @@ import type { TraceFault, TraceQueries } from "../../ports/trace-queries.port.ts
 import { distinctTargets, evidenceOfTarget, rangeChanges, requestedRanges, selectRoots, targetKey, triviaOncePerFile, type RootSelection } from "../navigation/root-selection.ts";
 import { ABORTED } from "../snapshot/read-snapshot.ts";
 import { createEdgeTargets } from "../navigation/edge-targets.ts";
+import { retainedRelations } from "../relations/retained-relations.ts";
+import type { RelationExtractor } from "../relations/relation-extractor.ts";
 import { createHeadReader, type FactSpec, type HeadReaderDeps } from "../snapshot/head-reading.ts";
 import { isTraceRoot, unresolvedOncePerFile, walkTrace } from "./trace-walk.ts";
 
@@ -29,6 +31,8 @@ export interface TraceQueriesDeps extends HeadReaderDeps {
   moduleDependencies?: ModuleDependenciesReader;
   /** Reads the member names each source declares in value positions, so a member call R6 cannot place in the index is still a cut when the code declares its name. */
   memberNames: DeclaredMemberNamesReader;
+  /** Reads the relations impact reads, under the same retained key, for the member calls they prove (RFC-0013 R3). */
+  relations: RelationExtractor;
   /** Tells the trivia lines of a requested range apart, so they select nothing. */
   sourceTrivia: SourceTrivia;
   /** Version of each engine every operation runs on, by package name. */
@@ -86,7 +90,9 @@ export function createTraceQueries(deps: TraceQueriesDeps): TraceQueries {
           };
           const origins = deps.importOrigins(head.tree.sources);
           const edgeTargets = createEdgeTargets({ origins, store, modules: deps.moduleDependencies === undefined ? undefined : { reader: deps.moduleDependencies, sources: head.tree.sources } });
-          const walk = await walkTrace(roots, { store, unresolvedIn, origins, targets: edgeTargets, inScope: head.selected, memberDeclarations, syntaxOf, budget, ...(signal === undefined ? {} : { signal }) });
+          let proven: ReturnType<typeof retainedRelations> | undefined;
+          const memberProofs = () => (proven ??= retainedRelations(deps.relations, head.prepared, head.tree, request));
+          const walk = await walkTrace(roots, { store, unresolvedIn, origins, targets: edgeTargets, inScope: head.selected, memberDeclarations, syntaxOf, memberProofs, budget, ...(signal === undefined ? {} : { signal }) });
           if (walk === "aborted") return ABORTED;
 
           const { steps, ids } = traceSteps(walk.roots);

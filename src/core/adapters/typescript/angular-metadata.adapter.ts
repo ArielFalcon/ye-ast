@@ -3,7 +3,7 @@ import ts from "typescript";
 import { sourceTree } from "./source-tree.ts";
 import { isAngularWorkspace, isTypeScriptSource } from "../../domain/languages/typescript.ts";
 import type { AngularClass, Operand, TemplateSource } from "../../domain/relations/angular-class.ts";
-import type { MemberProofContext, MemberSubstitute, MemberUseOrigin } from "../../domain/relations/member-use.ts";
+import type { ExternalMemberUseOrigin, MemberProofContext, MemberSubstitute, MemberUseOrigin } from "../../domain/relations/member-use.ts";
 import type { FieldOrigin, LocalOrigin } from "../../domain/relations/field-origin.ts";
 import { relation, type Relation, type SymbolRef } from "../../domain/relations/relation.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
@@ -50,6 +50,7 @@ async function readMetadata(files: readonly SourceFile[], proof?: MemberProofCon
   const fields: FieldOrigin[] = [];
   const locals: LocalOrigin[] = [];
   const memberUses: MemberUseOrigin[] = [];
+  const externalUses: ExternalMemberUseOrigin[] = [];
   const manifests = manifestsOf(files);
   const replaced = replacedFiles(files);
   for (const [project, sources] of byProject) {
@@ -62,13 +63,14 @@ async function readMetadata(files: readonly SourceFile[], proof?: MemberProofCon
     fields.push(...metadata.fields);
     locals.push(...metadata.locals);
     memberUses.push(...(metadata.memberUses ?? []));
+    externalUses.push(...(metadata.externalUses ?? []));
   }
   return {
     classes: classes.sort((a, b) => (a.ref.path < b.ref.path ? -1 : a.ref.path > b.ref.path ? 1 : a.ref.line - b.ref.line)),
     findings,
     fields: fields.sort((a, b) => compareText(a.owner.path, b.owner.path) || a.owner.line - b.owner.line || compareText(a.field, b.field)),
     locals: locals.sort((a, b) => compareText(a.owner.path, b.owner.path) || a.owner.line - b.owner.line || compareText(a.local, b.local)),
-    ...(proof === undefined ? {} : { memberUses }),
+    ...(proof === undefined ? {} : { memberUses, externalUses }),
   };
 }
 
@@ -499,6 +501,7 @@ async function readProject(contents: ReadonlyMap<string, SourceFile>, packages: 
     };
   }
   const memberUses: MemberUseOrigin[] = [];
+  const externalUses: ExternalMemberUseOrigin[] = [];
   const risks = scope === undefined ? undefined : await risksOf(scope);
   if (scope !== undefined && risks !== undefined) {
     const fieldsByOwner = Map.groupBy(proofFields, (field) => `${field.owner.path}\0${field.owner.line}\0${field.field}`);
@@ -553,7 +556,11 @@ async function readProject(contents: ReadonlyMap<string, SourceFile>, packages: 
         if (candidates.length !== 1 || rawFields.length !== 1) return;
         const field = candidates[0]!;
         const raw = rawFields[0]!;
-        if (risks.reaches(field.owner, call.field) || !("class" in field.holds) || "opaque" in raw.target || (raw.via === "inject" && angularShadow) || (template && raw.via !== "inject")) return;
+        if (risks.reaches(field.owner, call.field) || "opaque" in raw.target || (raw.via === "inject" && angularShadow) || (template && raw.via !== "inject")) return;
+        if ("external" in field.holds) {
+          if (!template && !(raw.via === "inject" && substituted.has(holdsKey(field.holds)))) externalUses.push({ owner: field.owner, field: call.field, holds: field.holds.external, reference });
+          return;
+        }
         const receiver = field.holds.class;
         const proof = await memberOf(file, source, raw.target.reference, receiver, call.member);
         if (proof !== undefined) memberUses.push({ ...proven(field.owner, receiver, proof, reference), ...(template ? { template: true as const } : {}) });
@@ -580,7 +587,7 @@ async function readProject(contents: ReadonlyMap<string, SourceFile>, packages: 
       }
     }
   }
-  return { classes, findings: [...findings, ...injects.values()], fields, locals, ...(proveMembers ? { memberUses } : {}) };
+  return { classes, findings: [...findings, ...injects.values()], fields, locals, ...(proveMembers ? { memberUses, externalUses } : {}) };
 }
 
 function holdsKey(holds: FieldOrigin["holds"]): string {

@@ -8,6 +8,7 @@ import type { CallersTarget } from "../../ports/impact-queries.port.ts";
 import type { TraceBudget, TraceRequest } from "../../ports/trace-queries.port.ts";
 import { fakeLive, type FakeLive } from "../live/fake-live.testing.ts";
 import { fakeCodeGraph, fakeNode, type FakeEdge, type FakeNode, type FakeUnresolved } from "../navigation/fake-code-graph.testing.ts";
+import type { RelationExtraction } from "../relations/relation-extractor.ts";
 import { createTraceQueries, type TraceQueriesDeps } from "./trace-queries.ts";
 
 const SHA = "a".repeat(40);
@@ -44,6 +45,8 @@ interface Options {
   memberNames?: Readonly<Record<string, readonly string[]>>;
   /** Runs each time the walk reads a source's member names. */
   onMemberNames?: (path: string) => void;
+  /** The member calls the relations prove. */
+  proofs?: Pick<RelationExtraction, "memberUses" | "externalUses">;
 }
 
 function setup(options: Options) {
@@ -80,6 +83,7 @@ function setup(options: Options) {
         return root === undefined ? { status: "unknown", reason: "unresolved", evidence: [] } : { status: "complete", value: root, evidence: [] };
       }),
     }),
+    relations: { extract: async () => ({ relations: [], fields: [], locals: [], ...options.proofs }) },
     engines: {},
     ...(options.live && { live: options.live.deps, trust: { read: async () => ({ ok: true, value: "trusted" }) } }),
   } as unknown as TraceQueriesDeps;
@@ -514,4 +518,48 @@ test("a store that fails while the walk reads it closes and fails with its own e
 
   await assert.rejects(queries.walk({ repo: "/work/shop", repoId: "shop", revision: "HEAD", targets: [{ file: A, symbol: "run" }] }), (error) => error === failure);
   assert.equal(log.closed, 1);
+});
+
+/** A class `Repo` in `src/b.ts` whose method `save` a call `this.repo.save` at line 9 of `run` may reach. */
+const REPO = fakeNode("Repo", "class", B, 1, 10);
+const REPO_SAVE = fakeNode("Repo.save", "method", B, 3, 5, "save");
+const FIELD_CALL: FakeUnresolved = { from: "run", name: "this.repo.save", kind: "calls", file: A, line: 9, column: 4 };
+const SAVE_PROOF = {
+  owner: { path: A, symbol: "Svc", line: 1 },
+  receiver: { path: B, symbol: "Repo", line: 1 },
+  member: { path: B, symbol: "save", line: 3 },
+  reference: { file: A, line: 9, column: 5, name: "this.repo.save", kind: "calls" as const },
+};
+const fieldCallOptions = (proofs: NonNullable<Options["proofs"]>): Options => ({
+  nodes: [SVC, RUN, REPO, REPO_SAVE],
+  edges: [...CONTAINS, { from: "Repo", to: "Repo.save", kind: "contains" }],
+  unresolved: [FIELD_CALL, OUTWARD_CALL("Repo.save", B, 4)],
+  proofs,
+});
+
+test("a member call the relations prove runs a repository method is a step at that method, not a cut at its name", async () => {
+  const fact = await factOf(fieldCallOptions({ memberUses: [SAVE_PROOF], externalUses: [] }));
+
+  assert.equal(fact.status, "complete");
+  const step = valueOf(fact).steps[1]!;
+  assert.deepEqual([step.symbol, step.parent, step.at, step.via], ["save", 0, { line: 9, column: 5 }, "call"]);
+});
+
+test("a member proof whose receiver a provider may replace, that names its place twice, or whose class the index does not place as the method's owner leaves the call a cut", async () => {
+  const substitutes = [{ class: { path: B, symbol: "Other", line: 20 }, at: { path: A, line: 2 } }];
+  const replaced = await factOf(fieldCallOptions({ memberUses: [{ ...SAVE_PROOF, substitutes }], externalUses: [] }));
+  const twice = await factOf(fieldCallOptions({ memberUses: [SAVE_PROOF], externalUses: [{ owner: SAVE_PROOF.owner, field: "repo", holds: "pkg#Repo", reference: SAVE_PROOF.reference }] }));
+  const misplaced = await factOf(fieldCallOptions({ memberUses: [{ ...SAVE_PROOF, receiver: { path: B, symbol: "Other", line: 20 } }], externalUses: [] }));
+
+  for (const fact of [replaced, twice, misplaced]) assert.deepEqual(cutsOf(fact), [["unresolved-link", ["src/a.ts:9 this.repo.save", "src/b.ts::Repo.save"]]]);
+});
+
+test("a call the relations prove runs on a field holding a package type is a leaf under that package, and a global type a global", async () => {
+  const proved = (holds: string) => fieldCallOptions({ memberUses: [], externalUses: [{ owner: SAVE_PROOF.owner, field: "repo", holds, reference: SAVE_PROOF.reference }] });
+
+  const [packaged, global] = await Promise.all([factOf(proved("@angular/common/http#HttpClient")), factOf(proved("global#Map"))]);
+
+  assert.equal(packaged.status, "complete");
+  assert.deepEqual(valueOf(packaged).steps[0]?.external, [{ kind: "import", module: "@angular/common/http", names: ["this.repo.save"] }]);
+  assert.deepEqual(valueOf(global).steps[0]?.external, [{ kind: "global", names: ["this.repo.save"] }]);
 });

@@ -702,6 +702,22 @@ test("a trace over a real index follows a call to an object literal's function, 
   assert.deepEqual(answer.value.status === "partial" && answer.value.cuts.map((cut) => cut.at), [["src/table.ts:6 price.toFixed().format", "src/table.ts::format"]]);
 });
 
+test("callers and a trace at one snapshot read the relations once, under the one retained key", async () => {
+  writeFileSync(join(repo, "src", "shared.ts"), ["export function shared(items: number[]): void {", "  items.forEach(String);", "}", ""].join("\n"));
+  git("add", "-A");
+  git("commit", "-q", "-m", "shared");
+  const lines: string[] = [];
+  const { impact, trace } = composeQueries({ scratchRoot, measure: (line) => lines.push(line) });
+  const relationReads = (): number => lines.filter((line) => { const record = JSON.parse(line).ye_ast as { event: string; stage?: string }; return record.event === "stage" && record.stage === "relations"; }).length;
+  const target = { file: "src/shared.ts", symbol: "shared" };
+
+  assert.ok((await impact.callers({ repo, repoId: "shop-service", revision: "HEAD", targets: [target] })).ok);
+  assert.equal(relationReads(), 1);
+  assert.ok((await trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [target] })).ok);
+
+  assert.equal(relationReads(), 1);
+});
+
 test("a trace over a real index keeps a member call to a namespace's function a cut, never a false external", async () => {
   writeFileSync(join(repo, "src", "space.ts"), [
     "export namespace N { export function nsMethod() {} }",
