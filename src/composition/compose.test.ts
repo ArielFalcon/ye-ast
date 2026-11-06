@@ -637,7 +637,7 @@ test("a trace over a real index charges an anonymous callback to its encloser, d
   }]);
 });
 
-test("a trace over a real index follows a call to an object literal's function, and lets a member call named after a top-level function leave the repository", async () => {
+test("a trace over a real index follows a call to an object literal's function, and keeps a member call named after a top-level function a cut", async () => {
   writeFileSync(join(repo, "src", "table.ts"), [
     "export const table = { pick: (value: number): number => value };",
     "export function format(value: number): string {",
@@ -656,10 +656,47 @@ test("a trace over a real index follows a call to an object literal's function, 
   const answer = await trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: "src/table.ts", symbol: "run" }] });
 
   assert.ok(answer.ok);
+  assert.equal(answer.value.status, "partial");
+  assert.deepEqual(answer.value.status === "partial" && answer.value.value.steps[0]?.leaves, [{ symbol: "pick", file: "src/table.ts", start: 1, end: 1 }]);
+  assert.deepEqual(answer.value.status === "partial" && answer.value.value.steps[0]?.external, [{ kind: "unnamed", names: ["price.toFixed"] }]);
+  assert.deepEqual(answer.value.status === "partial" && answer.value.cuts.map((cut) => cut.at), [["src/table.ts:6 price.toFixed().format", "src/table.ts::format"]]);
+});
+
+test("a trace over a real index keeps a member call to a namespace's function a cut, never a false external", async () => {
+  writeFileSync(join(repo, "src", "space.ts"), [
+    "export namespace N { export function nsMethod() {} }",
+    "export function runNamespace(x: any) { x.nsMethod(); }",
+    "export function entry() { runNamespace(N); }",
+    "",
+  ].join("\n"));
+  git("add", "-A");
+  git("commit", "-q", "-m", "namespace");
+  const { trace } = composeQueries({ scratchRoot });
+
+  const answer = await trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: "src/space.ts", symbol: "entry" }] });
+
+  assert.ok(answer.ok);
+  assert.equal(answer.value.status, "partial");
+  assert.deepEqual(answer.value.status === "partial" && answer.value.cuts.map((cut) => [cut.kind, cut.at[0]]), [["unresolved-link", "src/space.ts:2 x.nsMethod"]]);
+});
+
+test("a trace over a real index reports a function a nested, returned or field literal defines as external, the limitation RFC-0013 declares", async () => {
+  writeFileSync(join(repo, "src", "literals.ts"), [
+    "export const outer = { inner: { nestedMethod() {} } };",
+    "export function factory() { return { returnedMethod() {} }; }",
+    "export class Holder { readonly table = { fieldMethod() {} }; }",
+    "export function run(holder: Holder) {",
+    "  outer.inner.nestedMethod();",
+    "  factory().returnedMethod();",
+    "  holder.table.fieldMethod();",
+    "}",
+    "",
+  ].join("\n"));
+  git("add", "-A");
+  git("commit", "-q", "-m", "literals");
+  const { trace } = composeQueries({ scratchRoot });
+  const answer = await trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: "src/literals.ts", symbol: "run" }] });
+  assert.ok(answer.ok);
   assert.equal(answer.value.status, "complete");
-  assert.deepEqual(answer.value.status === "complete" && answer.value.value.steps, [{
-    id: 0, depth: 0, file: "src/table.ts", symbol: "run", kind: "function", line: 5, endLine: 8,
-    leaves: [{ symbol: "pick", file: "src/table.ts", start: 1, end: 1 }],
-    external: [{ kind: "unnamed", names: ["price.toFixed", "price.toFixed().format"] }],
-  }]);
+  assert.deepEqual(answer.value.status === "complete" && answer.value.value.steps[0]?.external, [{ kind: "unnamed", names: ["factory().returnedMethod", "holder.table.fieldMethod", "outer.inner.nestedMethod"] }]);
 });

@@ -13,9 +13,6 @@ import { createGraphNavigation } from "../navigation/graph-navigation.ts";
 /** What a body passes as a value runs later, if at all; only code can. */
 const DEFERRED_KINDS: readonly string[] = ["function", "method"];
 
-/** What holds an object literal, whose functions the index records as functions of the file. */
-const VALUE_KINDS: readonly string[] = ["constant", "variable"];
-
 export interface TraceWalkInput {
   store: CodeGraphReader;
   origins: ImportOrigins;
@@ -75,18 +72,12 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
     return named;
   };
 
-  const valuesByFile = new Map<string, readonly GraphSymbol[]>();
-  const heldByValue = (symbol: GraphSymbol): boolean => {
-    let values = valuesByFile.get(symbol.file);
-    if (values === undefined) {
-      values = store.symbolsInFiles([symbol.file]).filter((candidate) => VALUE_KINDS.includes(candidate.kind));
-      valuesByFile.set(symbol.file, values);
-    }
-    return values.some((value) => value.startLine <= symbol.startLine && symbol.endLine <= value.endLine);
-  };
-  /** What `x.<name>` can run: a member, or a function an object literal holds; never a top-level function or constant. */
+  /**
+   * What `x.<name>` can run: a member or any function. The index records no namespace, so it cannot prove a function
+   * an ordinary top-level one; only top-level constants and the other non-member kinds are left out.
+   */
   const membersNamed = (name: string): readonly GraphSymbol[] =>
-    declarationsNamed(name).filter((symbol) => (EDGE_POLICY.memberKinds as readonly string[]).includes(symbol.kind) || (symbol.kind === "function" && heldByValue(symbol)));
+    declarationsNamed(name).filter((symbol) => (EDGE_POLICY.memberKinds as readonly string[]).includes(symbol.kind) || symbol.kind === "function");
 
   const anchorOf = (symbol: GraphSymbol): string => declarationAnchor(symbol.file, symbol.name);
   /**
