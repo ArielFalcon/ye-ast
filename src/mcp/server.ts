@@ -13,15 +13,13 @@ import type { ResponseMode, ResponseRenderer, ToolFamily } from "./presentation.
 import { TRUST_MODES } from "../core/domain/shared/fact.ts";
 import { canonicalJson } from "../core/domain/shared/canonical-json.ts";
 import type { Fact } from "../core/domain/shared/fact.ts";
-import type { ImpactFault } from "../core/ports/impact-queries.port.ts";
-import type { WorkspaceFault } from "../core/ports/workspace-repos.port.ts";
-import { TOOL_INPUTS, callersRecipe, impactRecipe, recipeArguments, type SemanticQuery, type ToolArguments } from "./query-schema.ts";
+import { TOOL_INPUTS, callersRecipe, impactRecipe, recipeArguments, type ComposeQuery, type SemanticQuery, type ToolArguments } from "./query-schema.ts";
 import { executeQuery, type ExecutedSource, type PublicRead, type QueryExecutionDeps } from "./query-runner.ts";
 import { COMPOSE_INPUT, COMPOSE_OUTPUT } from "./composition-schema.ts";
 import { runComposition } from "./compose-request.ts";
 import { composeFull, composeReceipt, renderComposition } from "./render-composition.ts";
-import type { ComposeFault } from "./composition-contract.ts";
-import { renderDecisions, renderEntrypointMap, renderFault, renderImpact, renderImporters, renderOutline, renderRefresh, renderStale, renderWorkspace, renderWorkspaceImpact } from "./render.ts";
+import { controlFault, faultContext, renderFault, type FaultQueryContext, type PublicFault } from "./fault-presentation.ts";
+import { renderDecisions, renderEntrypointMap, renderImpact, renderImporters, renderOutline, renderRefresh, renderStale, renderWorkspace, renderWorkspaceImpact } from "./render.ts";
 
 /** The key of the result's `_meta` that carries a stale notice. */
 export const LIVE_META = "ye-ast/live";
@@ -68,7 +66,7 @@ Repositories and snapshots: declared repository IDs: ${available.join(", ")}. re
 
 Narrowing and paging: scope globs limit coverage (exclude wins). impact changed picks the diff paths that start the walk (the seeds); unlike scope, it does not limit where consequences are found. Unmatched globs are errors. budget limits traversal, not response length; raise a bound only when a cut names it. Entrypoints, callers and impact page evidence the text omits: supply select and page together, page.limit required; a cursor needs the same selection and limit. Answers give the coordinates and owner each selection needs; select lists the kinds per tool. expect asserts the recovery identity; replay reruns the query and fails if the result changed (no old capture is kept) and requires workspace.
 
-Errors: isError is a fault, not an empty fact: follow its next step and "fault fields:". unknown-symbol: use a listed candidate path or a line range (ye_ast_outline lists them); top-level-line: focus on a line inside a declaration; unknown-change-path: correct the changed globs.`;
+Errors: isError is a fault, not an empty fact: follow its next step when one is given, and "fault fields:". unknown-symbol: use a listed candidate path or a line range (ye_ast_outline lists them); top-level-line: focus on a line inside a declaration; unknown-change-path: correct the changed globs.`;
 }
 
 const REPLAY_GUIDE = { replay: "Copy verbatim from the recovery recipe of a previous workspace answer; requires workspace." };
@@ -321,6 +319,8 @@ export function createMcpServer(deps: McpDeps): McpServer {
    * before delivery in content.
    */
   async function answer(query: SemanticQuery, mode: ResponseMode, signal: AbortSignal, controls?: Controls): Promise<CallToolResult> {
+    const context = faultContext(query, controls);
+    const selectionFailure = (fault: Parameters<typeof controlFault>[0]): CallToolResult => failure(controlFault(fault), context);
     try {
       if (controls?.select !== undefined && canonicalJson(redaction.redactValue(controls.select)) !== canonicalJson(controls.select)) {
         return selectionFailure({ code: "replay-unavailable", reason: "redacted-context" });
@@ -334,31 +334,31 @@ export function createMcpServer(deps: McpDeps): McpServer {
         cursor = checked.value;
       }
       const executed = await executeQuery(query, { deps, catalog, signal });
-      if (!executed.ok) return failure(executed.fault);
-      return present(executed.value, mode, controls, cursor);
+      if (!executed.ok) return failure(executed.fault, context);
+      return present(executed.value, mode, controls, cursor, context);
     } catch (error) {
-      return failure({ kind: "internal-fault", detail: redaction.redactError(error) });
+      return failure({ kind: "internal-fault", detail: redaction.redactError(error) }, context);
     }
   }
 
   /** The renderer and selection source of each public payload; the dispatch itself lives in the runner. */
-  function present(source: ExecutedSource, mode: ResponseMode, controls: Controls | undefined, cursor: CursorV1 | undefined): CallToolResult {
+  function present(source: ExecutedSource, mode: ResponseMode, controls: Controls | undefined, cursor: CursorV1 | undefined, context: FaultQueryContext): CallToolResult {
     switch (source.family) {
       case "entrypoints":
-        return respond(source, source.read, true, renderEntrypointMap, mode, controls, cursor, (fact) => ({ kind: "entrypoints", fact }));
+        return respond(source, source.read, true, renderEntrypointMap, mode, controls, cursor, context, (fact) => ({ kind: "entrypoints", fact }));
       case "impact":
       case "callers":
         return source.branch === "local"
-          ? respond(source, source.read, true, renderImpact, mode, controls, cursor, (fact) => ({ kind: "local", fact }))
-          : respond(source, source.read, false, renderWorkspaceImpact, mode, controls, cursor, (fact) => ({ kind: "workspace", fact }));
+          ? respond(source, source.read, true, renderImpact, mode, controls, cursor, context, (fact) => ({ kind: "local", fact }))
+          : respond(source, source.read, false, renderWorkspaceImpact, mode, controls, cursor, context, (fact) => ({ kind: "workspace", fact }));
       case "importers":
-        return respond(source, source.read, true, renderImporters, mode, controls, cursor);
+        return respond(source, source.read, true, renderImporters, mode, controls, cursor, context);
       case "outline":
-        return respond(source, source.read, true, renderOutline, mode, controls, cursor);
+        return respond(source, source.read, true, renderOutline, mode, controls, cursor, context);
       case "workspace":
-        return respond(source, source.read, false, renderWorkspace, mode, controls, cursor);
+        return respond(source, source.read, false, renderWorkspace, mode, controls, cursor, context);
       case "decisions":
-        return respond(source, source.read, false, renderDecisions, mode, controls, cursor);
+        return respond(source, source.read, false, renderDecisions, mode, controls, cursor, context);
     }
   }
 
@@ -370,8 +370,10 @@ export function createMcpServer(deps: McpDeps): McpServer {
     mode: ResponseMode,
     controls: Controls | undefined,
     cursor: CursorV1 | undefined,
+    context: FaultQueryContext,
     sourceFor?: (fact: Fact<V>) => EvidenceSource,
   ): CallToolResult {
+    const selectionFailure = (fault: Parameters<typeof controlFault>[0]): CallToolResult => failure(controlFault(fault), context);
     const { fact, repositoryRoots, refresh, workspaceLive } = read;
     const { recovery, live: stale } = source;
     const tool: ToolFamily = source.family;
@@ -480,14 +482,10 @@ export function createMcpServer(deps: McpDeps): McpServer {
 
   /**
    * A fault is an `isError` result: the text names its kind on the first line, and `_meta` carries the same shape for a
-   * client that branches on it.
+   * client that branches on it. `context` names the faulted query's arguments, for a composition source the query it
+   * failed in.
    */
-  function selectionFailure(fault: { code: string; [key: string]: unknown }): CallToolResult {
-    const { code, ...rest } = fault;
-    return failure({ kind: code, detail: code, ...rest });
-  }
-
-  function failure(fault: { kind: string; detail: string; stage?: "workspace-replay" | "source-identity"; expected?: string; actual?: string; reason?: string } | ImpactFault | WorkspaceFault | ComposeFault): CallToolResult {
+  function failure(fault: PublicFault, context?: FaultQueryContext): CallToolResult {
     // Capture diagnostics can contain host paths. Repository IDs remain opaque, even when they contain separators.
     const safeCaptureText = (text: string): string => /[\\/]/.test(text) ? "[path omitted]" : text;
     const publicFault = fault.kind === "workspace-capture-unavailable" && "cause" in fault
@@ -500,9 +498,18 @@ export function createMcpServer(deps: McpDeps): McpServer {
     const fieldLine = Object.keys(fields).length === 0 ? "" : `\n${FAULT_FIELDS_LABEL}${JSON.stringify(fields)}`;
     return {
       isError: true,
-      content: [{ type: "text", text: `${redaction.redact([renderFault(publicFault), ...(publicFault.kind === "composition-source-fault" && "cause" in publicFault ? [renderFault(publicFault.cause)] : [])].join("\n"))}${fieldLine}` }],
+      content: [{ type: "text", text: `${redaction.redact(renderFault(publicFault, context))}${fieldLine}` }],
       _meta: { [FAULT_META]: published },
     };
+  }
+
+  /** The context of the query a composition source fault names; every index of one query key holds the same query. */
+  function sourceContext(queries: readonly ComposeQuery[], fault: PublicFault): FaultQueryContext | undefined {
+    if (fault.kind !== "composition-source-fault") return undefined;
+    const query = queries[fault.requestIndices[0] ?? -1];
+    if (query === undefined) return undefined;
+    const { expect, ...semantic } = query;
+    return faultContext(semantic, { expect });
   }
 
   const annotations = { readOnlyHint: true, openWorldHint: false };
@@ -515,7 +522,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
   }, async (input, ctx) => {
     try {
       const result = await runComposition(input, { deps, catalog, signal: ctx.mcpReq.signal });
-      if (!result.ok) return failure(result.fault);
+      if (!result.ok) return failure(result.fault, sourceContext(input.queries, result.fault));
       const fields = input.mode === "full" ? composeFull(result.value) : composeReceipt(result.value, input.mode);
       COMPOSE_OUTPUT.parse(fields);
       return delivered(renderComposition(result.value, input.mode), fields, {});

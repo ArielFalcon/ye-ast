@@ -12,12 +12,10 @@ import type { ModuleImpactValue } from "../core/domain/impact/module-dependency.
 import { declarationAnchor } from "../core/domain/impact/impact-cuts.ts";
 import type { ImportedFile, ImportersValue } from "../core/domain/impact/importers-fact.ts";
 import type { OutlineDeclaration, OutlineValue } from "../core/domain/outline/outline-fact.ts";
-import type { OutlineFault } from "../core/ports/outline-queries.port.ts";
 import type { EntrypointMap } from "../core/domain/map/entrypoint-map.ts";
 import type { Decision, DecisionKind, DecisionOption } from "../core/domain/decisions/decision.ts";
 import { compareText } from "../core/domain/shared/code-node.ts";
 import type { Cut, Evidence, Fact, Finding, SnapshotRef } from "../core/domain/shared/fact.ts";
-import type { ImpactFault } from "../core/ports/impact-queries.port.ts";
 import type { LiveStaleNotice } from "../core/ports/live-queries.port.ts";
 import type { NameCandidate, OutwardKind, OutwardName, RepositoryOutwardName } from "../core/domain/topology/outward-name.ts";
 import type { RepositoryEvidence } from "../core/domain/shared/repository-evidence.ts";
@@ -1060,11 +1058,6 @@ export function renderOutline(fact: Fact<OutlineValue>, detail: ResponseMode = "
   return lines.join("\n");
 }
 
-/** What a fault entry can be told to the caller: the declarations of the file that could have been asked instead. */
-function declarationText(entry: { file: string; candidates: readonly string[] }): string {
-  return entry.candidates.length === 0 ? `${entry.file} declares no symbol` : `declared in ${entry.file}: ${entry.candidates.join(", ")}`;
-}
-
 /** One link as every answer lists it: its number, both ends, the basis and what the answer adds about how it was reached. */
 function linkLine(link: Link, number: number | undefined, reached = ""): string {
   const confidence = link.confidence < 1 ? `, confidence ${link.confidence}` : "";
@@ -1154,35 +1147,6 @@ export function renderWorkspaceImpact(fact: Fact<WorkspaceImpactValue>, detail: 
   }
   lines.push(...textModeGuide([WORKSPACE_OWNER_GUIDE, ...workspaceBaseModuleGuides(value), workspaceSnapshotGuide(fact, context)]));
   return lines.join("\n");
-}
-
-function faultRecovery(kind: string): string {
-  switch (kind) {
-    case "unknown-change-path": return "Correct the nonmatching changed globs. Remove changed to investigate all changes within the declared scope; changing mode or a larger walk budget cannot fix a path-selection mismatch.";
-    case "top-level-line": return "The line lies outside every declaration of its file. Focus on a listed dotted path or on a line inside a declaration; ye_ast_outline with files lists the file whole.";
-    case "unknown-symbol": return "Use a listed declaration or an inclusive line range in targets, or a listed dotted path or a line in focus. If needed, call ye_ast_outline for these files at the same revision to locate declaration spans; candidate names are alternatives, not an automatic substitution.";
-    case "unknown-revision": return "Select a revision that resolves to a local commit. For impact check base/head, for other queries check revision, and for workspace check the identified repository's revision; inspect the reported cause before retrying.";
-    case "no-merge-base": return "Choose base/head commits with a common ancestor. This query uses a merge-base diff; unrelated histories cannot be replaced silently with a direct diff.";
-    case "not-repository-root": return "Use the repository root for the bound server or the indicated workspace repository path, rather than a subdirectory.";
-    case "object-missing": return "Use a local clone containing the required Git objects for this revision. A partial clone may lack them; this error does not authorize an automatic download.";
-    case "live-requires-trusted": return "Omit live and select a committed head (impact) or revision (other queries). Declaring trust is a user decision; repository content cannot grant it.";
-    case "unsupported-object-format": return "For a live-read object-format limitation, omit live and try a committed head/revision appropriate to the tool; inspect any remaining limitation rather than assuming coverage is restored.";
-    case "live-mirror-failed": return "Inspect the reported mirror/copy cause. If committed content answers the question, omit live and select that commit; it does not represent uncommitted edits.";
-    case "unreadable":
-    case "export-write-failed": return "Inspect the reported path and underlying read/write cause, including permissions or available space when indicated. Correct that prerequisite before retrying; this kind alone does not identify which repository or engine-owned resource failed.";
-    case "workspace-capture-unavailable": return "Inspect the capture cause for the named repository and retry when its live snapshot is available.";
-    case "duplicate-workspace-source": return "Remove the duplicate workspace source identified by the repository IDs.";
-    case "duplicate-repository": return "Remove the duplicate repository declaration identified by the cause and retain the intended repository identity and revision.";
-    case "git-failed": return "Inspect the reported Git/workspace cause and repository path. Correct the stated prerequisite before retrying; changing presentation mode does not repair this failure.";
-    case "aborted": return "The caller cancelled the work. Request it again only if still needed and the cancellation no longer applies.";
-    case "internal-fault": return "Inspect the redacted cause. If reproducible, report the fault kind, query and snapshot context without secrets; no parameter change is guaranteed to repair an internal failure.";
-    default: return "Inspect the redacted cause and typed fault metadata to identify the missing prerequisite; retry only after that condition can change. A fault provides no fact to inspect with full.";
-  }
-}
-
-export function renderFault(fault: { kind: string; detail: string } | ImpactFault | OutlineFault): string {
-  const entries = "entries" in fault ? fault.entries.map((entry) => `\n  - ${entry.file}:${"line" in entry ? entry.line : entry.symbol}: ${declarationText(entry)}`).join("") : "";
-  return `fault: ${fault.kind}\n${fault.detail.trim()}${entries}\nNext step: ${faultRecovery(fault.kind)}`;
 }
 
 /** The line that opens the text of a live answer the working tree has moved past. */
