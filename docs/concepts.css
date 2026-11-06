@@ -1159,6 +1159,13 @@ details[open] summary { border-bottom: 1px solid var(--line-soft); }
 .docs .compose-answer { grid-area: answer; display: flex; flex-direction: column; }
 .docs .compose-sim .code-block { min-height: 0; white-space: pre-wrap; overflow-wrap: anywhere; overflow-x: hidden; }
 .docs .compose-sim #compose-text { flex: 1 1 0; min-height: 600px; }
+.docs .compose-sim .code-block::-webkit-scrollbar { width: 12px; }
+.docs .compose-sim .code-block::-webkit-scrollbar-track { background: color-mix(in srgb, var(--ink) 6%, transparent); border-left: var(--stroke) solid var(--outline); }
+.docs .compose-sim .code-block::-webkit-scrollbar-thumb { background: var(--muted); border: 3px solid transparent; background-clip: content-box; }
+.docs .compose-sim .code-block::-webkit-scrollbar-thumb:hover { background: var(--lime); background-clip: content-box; }
+@supports not selector(::-webkit-scrollbar) {
+  .docs .compose-sim .code-block { scrollbar-width: thin; scrollbar-color: var(--muted) transparent; }
+}
 .docs .compose-answer .c-head { color: var(--ink); font-weight: 700; }
 .docs .compose-answer .c-def { color: var(--cyan); font-weight: 700; }
 .docs .compose-answer .c-ref { color: var(--cyan); }
