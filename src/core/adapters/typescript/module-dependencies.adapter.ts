@@ -5,8 +5,11 @@ import type { ModuleDependencies, ModuleDependency, ModuleSource, ModuleTarget, 
 import type { ModuleDependenciesReader } from "../../ports/module-dependencies.port.ts";
 import { defaultDeclarationName, moduleStatement } from "./import-bindings.ts";
 import { createModuleResolver, manifestDependencies, packageOf } from "./module-resolver.ts";
+import { declaredNames } from "./syntax-names.ts";
 
 type PendingDependency = Omit<ModuleDependency, "target">;
+
+export const LOCAL_REQUIRE = "the file binds its own require, so the call is not proven to load a module";
 
 export function createModuleDependenciesReader(): ModuleDependenciesReader {
   return {
@@ -75,6 +78,7 @@ export function createModuleDependenciesReader(): ModuleDependenciesReader {
           moduleOnly = false;
           unsupported = true;
         }
+        const ownRequire = imported.has("require") || declaredNames(tree).has("require");
         const visit = (node: ts.Node): void => {
           const call = ts.isCallExpression(node) ? node : undefined;
           const dynamic = call?.expression.kind === ts.SyntaxKind.ImportKeyword;
@@ -90,7 +94,7 @@ export function createModuleDependenciesReader(): ModuleDependenciesReader {
               pending.push({ file, line, endLine, offset, specifier, kind: "import", typeOnly: form === "type-query", form, bindings: [] });
               statements.push(JSON.stringify({ reference: form, specifier }));
             } else {
-              untraversed.push({ file, line, offset, form, ...(specifier === undefined ? {} : { endLine, specifier }) });
+              untraversed.push({ file, line, offset, form, ...(specifier === undefined ? {} : { endLine, specifier }), ...(requireCall && ownRequire ? { target: { kind: "unresolved", reason: LOCAL_REQUIRE } } : {}) });
             }
           }
           ts.forEachChild(node, visit);
@@ -128,7 +132,7 @@ export function createModuleDependenciesReader(): ModuleDependenciesReader {
         const exportedAs = defaultOf(target.file);
         return { ...dependency, target, bindings: dependency.bindings.map((binding) => binding.imported === "default" && exportedAs !== undefined ? { ...binding, exportedAs } : binding) };
       }));
-      const traced = await Promise.all(untraversed.map(async (reference) => reference.specifier === undefined ? reference : { ...reference, target: await resolve(reference.file, reference.specifier) }));
+      const traced = await Promise.all(untraversed.map(async (reference) => reference.specifier === undefined || reference.target !== undefined ? reference : { ...reference, target: await resolve(reference.file, reference.specifier) }));
       const resources = new Set(dependencies.flatMap(({ target }) => target.kind === "repository" && target.file.endsWith(".json") ? [target.file] : []));
       for (const file of [...resources].sort(compareText)) files.push({ file, statements: [texts.get(file)!], moduleOnly: true, resource: true });
       files.sort((left, right) => compareText(left.file, right.file));

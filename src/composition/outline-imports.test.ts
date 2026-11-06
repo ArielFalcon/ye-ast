@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createJavaImportsReader } from "../core/adapters/spring/java-imports.adapter.ts";
 import { createJavaParser } from "../core/adapters/tree-sitter/java-parser.adapter.ts";
-import { createModuleDependenciesReader } from "../core/adapters/typescript/module-dependencies.adapter.ts";
+import { createModuleDependenciesReader, LOCAL_REQUIRE } from "../core/adapters/typescript/module-dependencies.adapter.ts";
 import { fakeCodeGraph, fakeNode, type FakeEdge, type FakeNode } from "../core/application/impact/fake-code-graph.testing.ts";
 import { createOutlineQueries, type OutlineQueriesDeps } from "../core/application/outline/outline-queries.ts";
 import type { OutlineFile } from "../core/domain/outline/outline-fact.ts";
@@ -79,6 +79,14 @@ test("runtime module references are listed with the file they name, or as unreso
     { line: 3, form: "require", specifier: "./defs", target: { kind: "repository", file: DEFS.path } },
     { line: 4, form: "dynamic-import", specifier: undefined, target: { kind: "unresolved", reason: "a computed expression names the module" } },
   ]);
+});
+
+test("a require call leads nowhere proven when the file binds its own require, in any scope or by an import", async () => {
+  for (const content of ["function load(require: (s: string) => unknown) { return require('./defs'); }", "import { require } from './defs';\nrequire('./defs');"]) {
+    const { file } = await outlineOf(content);
+    const call = file?.imports.find(({ form }) => form === "require");
+    assert.deepEqual(call && { specifier: call.specifier, target: call.target }, { specifier: "./defs", target: { kind: "unresolved", reason: LOCAL_REQUIRE } }, content);
+  }
 });
 
 test("a requested source the module reader cannot parse is a no-extractor cut, so its empty imports never read as none", async () => {

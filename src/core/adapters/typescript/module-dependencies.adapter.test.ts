@@ -98,7 +98,7 @@ test("nested literal loads and type queries retain distinct dependency evidence 
 });
 
 test("literal and computed references on the same line retain exact unsupported reference coverage", async () => {
-  const content = "import('./lib/item'); import(name); function run(require: Function) { require('pkg'); }";
+  const content = "import('./lib/item'); import(name); function run() { require('pkg'); }";
   const result = await createModuleDependenciesReader().extract([{ path: "src/use.ts", content }, item, manifest]);
   assert.equal(result.dependencies.length, 1);
   assert.deepEqual(result.untraversed, [

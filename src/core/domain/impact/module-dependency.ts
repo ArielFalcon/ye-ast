@@ -58,7 +58,10 @@ export interface ModuleDependencies {
   untraversed?: readonly UntraversedReference[];
 }
 
-/** A module reference module traversal does not follow; a `require` of a string literal carries where it leads. */
+/**
+ * A module reference module traversal does not follow; a `require` of a string literal carries where it leads, or why
+ * it is unresolved when the file binds a `require` of its own.
+ */
 export interface UntraversedReference {
   file: string;
   line: number;
