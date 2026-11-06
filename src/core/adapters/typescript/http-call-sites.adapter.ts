@@ -563,6 +563,7 @@ class Reader {
     if (ts.isTemplateExpression(expression)) {
       let text = expression.head.text;
       for (const span of expression.templateSpans) {
+        if (endsPath(text)) return stated(text);
         const part = await this.evaluate(shape, span.expression, scope, trail);
         if (part === undefined) return undefined;
         text += written(part) + span.literal.text;
@@ -571,6 +572,7 @@ class Reader {
     }
     if (ts.isBinaryExpression(expression) && expression.operatorToken.kind === ts.SyntaxKind.PlusToken) {
       const left = await this.evaluate(shape, expression.left, scope, trail);
+      if (left?.kind === "text" && endsPath(left.text)) return left;
       const right = await this.evaluate(shape, expression.right, scope, trail);
       return left === undefined || right === undefined ? undefined : stated(written(left) + written(right));
     }
@@ -718,7 +720,7 @@ class Reader {
       if (argument === undefined) return undefined;
       const value = await this.evaluate(shape, argument, scope, trail);
       if (value?.kind === "value") return ts.isIdentifier(argument) && scope.scalars.has(argument.text) ? value : undefined;
-      if (value === undefined || value.text.includes(PLACEHOLDER)) return undefined;
+      if (value === undefined || value.text.includes(PLACEHOLDER) || endsPath(value.text)) return undefined;
       try {
         return stated(encodeURIComponent(value.text));
       } catch {
@@ -880,9 +882,18 @@ function verbOf(name: string): HttpTarget["method"] {
   return (["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "TRACE"] as const).find((verb) => verb === upper) ?? "GET";
 }
 
-/** `:name` stands for a value the code fills, like `${expr}`; the query string is not part of the path a route serves. */
+/**
+ * Whether a text reaches the query or the fragment of a URL, after which nothing more decides the path. An evaluation stops
+ * there, so its text is complete only up to that point.
+ */
+function endsPath(text: string): boolean {
+  return text.includes("?") || text.includes("#");
+}
+
+/** `:name` stands for a value the code fills, like `${expr}`; the query string and the fragment are not part of the path a route serves. */
 function normalizePath(path: string): string {
-  const withoutQuery = path.split("?")[0] ?? path;
+  const end = path.search(/[?#]/);
+  const withoutQuery = end === -1 ? path : path.slice(0, end);
   return withoutQuery
     .split("/")
     .map((segment) => (/^:[A-Za-z_][A-Za-z0-9_]*$/.test(segment) ? PLACEHOLDER : segment))

@@ -73,6 +73,9 @@ explicitly typed `string`, `number`, `boolean` or `bigint` may remain a paramete
 escaping global object in the provided snapshot keep the evaluation unknown. No repository function is executed. A whole
 run-time URL such as `fetch(url)` remains unknown when `url` names a run-time parameter.
 
+The text after the first `?` or `#` of a URL is its query or fragment, which no route serves: evaluation stops there, so
+a value the query names never leaves the path undecided. An argument of `encodeURIComponent` cut there is undecided.
+
 A function a path calls, and the function an `httpResource` takes its request from, is read at every `return` of its own
 body; the functions it declares return their own. A bare `return`, and an end the body reaches without returning, return
 `undefined`. Every return must write the same path, otherwise the path is undecided, and a function that calls itself is

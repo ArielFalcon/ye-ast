@@ -442,6 +442,16 @@ test("a path function is read at its own returns, never at a return of a functio
   assert.deepEqual(sites(await reader.of([pathFunction(" const pick = () => { return '/wrong' }", " return '/orders'")], "shop-web")), ["GET /orders@paths.ts:7"]);
 });
 
+test("what follows the query or the fragment of a path never leaves it undecided", async () => {
+  const found = await reader.of([component("    this.http.get(`/orders?page=${this.page()}`)", "    this.http.get('/orders#' + this.anchor())")], "shop-web");
+
+  assert.deepEqual(sites(found), ["GET /orders@src/app/app.component.ts:6", "GET /orders@src/app/app.component.ts:7"]);
+});
+
+test("an encoded text whose query was cut is never encoded as if it were the whole value", async () => {
+  assert.deepEqual(sites(await reader.of([component("    this.http.get(`/api/${encodeURIComponent(`a?${this.page()}`)}`)")], "shop-web")), ["unknown unresolved@src/app/app.component.ts:6"]);
+});
+
 test("a path function that calls itself is undecided, never a hang", async () => {
   assert.deepEqual(sites(await reader.of([pathFunction(" return orderPath(!open)")], "shop-web")), ["unknown unresolved@paths.ts:6"]);
 });
