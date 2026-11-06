@@ -73,17 +73,20 @@ export interface UseSite {
   column: number;
   /** The identifier, `this` or `super` the index's spelling of the use starts with, written at the site. */
   spelled: string;
+  /** The declaration whose body writes the use, as the index places it: its name and the 1-based lines it spans. */
+  owner: { name: string; line: number; endLine: number };
 }
 
 /**
  * What binds a use's root, the first name of the chain written at the site: an import (with the name after the root, for
- * a namespace), a declaration of the file (by the 1-based lines its declarations start at, and whether every one is at
- * the file's top level), a declaration of a repository file by its dotted containment path, the language, or `this` (with the member
- * after it).
+ * a namespace), a declaration of the file outside the owner's syntax (by the 1-based lines its names are written on),
+ * a declaration the owner's own syntax holds (`local`), a declaration of a repository file by its dotted containment
+ * path, the language, or `this` (with the member after it).
  */
 export type RootBinding =
   | { kind: "import"; root: string; member?: string; origin: Extract<ImportOrigin, { kind: "repository" | "external" }> }
-  | { kind: "declared"; root: string; lines: readonly number[]; topLevel: boolean }
+  | { kind: "declared"; root: string; lines: readonly number[] }
+  | { kind: "local"; root: string }
   | { kind: "located"; root: string; file: string; path: string }
   | { kind: "ambient"; root: string }
   | { kind: "this"; member?: string }

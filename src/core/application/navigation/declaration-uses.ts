@@ -89,7 +89,8 @@ export interface UsesInput {
  * What `node`'s own body uses that is bound outside the body (plan Part B): every resolved edge, corrected by where its
  * root is bound (`EdgeTargets.verdictsOf`), and every unresolved reference no edge records at its place, settled by
  * what binds its root there (`ImportOrigins.rootBindings`). A local value, a parameter included, and a declaration inside
- * the body are not uses; a use nothing proves is unproved, never dropped.
+ * the body are not uses; a declaration outside it is the node of its name whose lines hold the line its name is written
+ * on, and a use nothing proves is unproved, never dropped.
  */
 export async function usesOf(node: GraphSymbol, input: UsesInput): Promise<{ found: FoundUse[]; unproved: UnprovedUse[] }> {
   const { store, navigation, uses, targets, origins, signal } = input;
@@ -112,7 +113,7 @@ export async function usesOf(node: GraphSymbol, input: UsesInput): Promise<{ fou
 
   const references = unsettledBy(uses.referencesFrom(node, USE_EDGE_KINDS), edges);
   const spelled = references.map((reference) => ({ reference, spelled: SPELLED.exec(reference.name)?.[0] }));
-  const sites = spelled.flatMap(({ reference, spelled: name }): UseSite[] => (name === undefined ? [] : [{ file: reference.file, line: reference.line, column: reference.column + 1, spelled: name }]));
+  const sites = spelled.flatMap(({ reference, spelled: name }): UseSite[] => (name === undefined ? [] : [{ file: reference.file, line: reference.line, column: reference.column + 1, spelled: name, owner: { name: node.name, line: node.startLine, endLine: node.endLine } }]));
   const bindings = await origins.rootBindings(sites, signal);
   let next = 0;
   for (const { reference, spelled: name } of spelled) {
@@ -132,11 +133,9 @@ export async function usesOf(node: GraphSymbol, input: UsesInput): Promise<{ fou
       const members = binding.member === undefined ? [] : uses.ownMembers(node, binding.member, EDGE_POLICY.memberKinds);
       return members.length === 1 ? members[0] : undefined;
     }
+    if (binding.kind === "local") return "local";
     if (binding.kind === "declared") {
-      const declaration = single(navigation.symbolsInFile(reference.file).filter((symbol) => symbol.name === binding.root && binding.lines.includes(symbol.startLine)));
-      if (declaration !== undefined) return declaration;
-      /** A declaration below the top level the index holds no node of is a local value: the body's own, or one it captures. */
-      return binding.topLevel ? undefined : "local";
+      return single(navigation.symbolsInFile(reference.file).filter((symbol) => symbol.name === binding.root && binding.lines.some((line) => symbol.startLine <= line && line <= symbol.endLine)));
     }
     if (binding.kind === "located") return single(branchesOf(containmentTree(store, navigation.symbolsInFile(binding.file))).filter((branch) => declarationPath(branch) === binding.path).map((branch) => branch.declaration));
     if (binding.kind !== "import") return undefined;

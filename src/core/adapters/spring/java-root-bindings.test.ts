@@ -26,12 +26,15 @@ const RESOURCE = {
   ].join("\n"),
 };
 
-/** The 1-based site of the `nth` spelling on a line of the resource. */
+/** The method `find` of the resource, as the index places it. */
+const FIND = { name: "find", line: 8, endLine: 15 };
+
+/** The 1-based site of the `nth` spelling on a line of the resource, written by `find`'s body. */
 function at(line: number, spelled: string, nth = 0) {
   const text = RESOURCE.content.split("\n")[line - 1]!;
   let column = -1;
   for (let found = 0; found <= nth; found++) column = text.indexOf(spelled, column + 1);
-  return { file: RESOURCE.path, line, column: column + 1, spelled };
+  return { file: RESOURCE.path, line, column: column + 1, spelled, owner: FIND };
 }
 
 const bindings = (sites: Parameters<ReturnType<typeof createJavaRootBindings>>[0]) => createJavaRootBindings(createJavaParser(), [OWNER, RESOURCE])(sites);
@@ -47,15 +50,15 @@ test("a type a single import names under a platform package is external, named a
   assert.deepEqual(await bindings([at(8, "Optional")]), [{ kind: "import", root: "Optional", origin: { kind: "external", module: "java.util" } }]);
 });
 
-test("a local is declared in the file, below its top level, and a field is a member of this", async () => {
+test("a local the owner's syntax declares is local, and a field is a member of this", async () => {
   assert.deepEqual(await bindings([at(12, "local"), at(10, "repository")]), [
-    { kind: "declared", root: "local", lines: [9], topLevel: false },
+    { kind: "local", root: "local" },
     { kind: "this", member: "repository" },
   ]);
 });
 
-test("a type variable is declared at the type that declares it", async () => {
-  assert.deepEqual(await bindings([at(11, "T")]), [{ kind: "declared", root: "T", lines: [6], topLevel: false }]);
+test("a type variable of a type around the owner is declared at the line of its name", async () => {
+  assert.deepEqual(await bindings([at(11, "T")]), [{ kind: "declared", root: "T", lines: [6] }]);
 });
 
 test("a capitalised name no source declares and only a wildcard import could supply is unknown, since java.lang may supply it too", async () => {

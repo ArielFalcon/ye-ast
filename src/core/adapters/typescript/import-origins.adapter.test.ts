@@ -513,9 +513,12 @@ const USES: SourceFile = {
 };
 const USE_SOURCES = [CONFIG, { path: "package.json", content: JSON.stringify({ dependencies: { typescript: "6.0.3" } }) }, LOCAL, USES];
 
-/** The 1-based place of the first `spelling` on a line of the uses fixture. */
+/** The declaration `run` of the uses fixture, as the index places it. */
+const RUN = { name: "run", line: 3, endLine: 9 };
+
+/** The 1-based place of the first `spelling` on a line of the uses fixture, written by `run`'s body. */
 function useAt(line: number, spelling: string, spelled: string) {
-  return { file: USES.path, line, column: USES.content.split("\n")[line - 1]!.indexOf(spelling) + 1, spelled };
+  return { file: USES.path, line, column: USES.content.split("\n")[line - 1]!.indexOf(spelling) + 1, spelled, owner: RUN };
 }
 
 test("a qualified type name placed at either name is rooted at its first name, which an import binds to a package", async () => {
@@ -537,22 +540,23 @@ test("a member call on an instantiation placed at its new keyword is rooted at t
   assert.deepEqual(bindings, [{ kind: "ambient", root: "Set" }, { kind: "ambient", root: "Set" }]);
 });
 
-test("a value name the file's scoping binds is declared at the line of its declaration, at the top level or not", async () => {
+test("a value name the file's scoping binds inside the owner's syntax is local, and outside it is declared at the line of its name", async () => {
   const bindings = await createImportOrigins(USE_SOURCES).rootBindings([useAt(6, "seen.size", "seen"), useAt(11, "Holder", "Holder")]);
 
-  assert.deepEqual(bindings, [{ kind: "declared", root: "seen", lines: [4], topLevel: false }, { kind: "declared", root: "Holder", lines: [10], topLevel: true }]);
+  assert.deepEqual(bindings, [{ kind: "local", root: "seen" }, { kind: "declared", root: "Holder", lines: [10] }]);
 });
 
-test("a type parameter's own name, and a type name it binds, are declared at the type parameter", async () => {
+test("a type parameter the owner's syntax declares is local, at its own name and where it binds a type name", async () => {
   const mapped: SourceFile = { path: "src/mapped.ts", content: "export type Flags<T> = { [K in keyof T]?: K };\n" };
-  const bindings = await createImportOrigins([...USE_SOURCES, mapped]).rootBindings([{ file: mapped.path, line: 1, column: 27, spelled: "K" }, { file: mapped.path, line: 1, column: 43, spelled: "K" }]);
-  assert.deepEqual(bindings, [{ kind: "declared", root: "K", lines: [1], topLevel: false }, { kind: "declared", root: "K", lines: [1], topLevel: false }]);
+  const owner = { name: "Flags", line: 1, endLine: 1 };
+  const bindings = await createImportOrigins([...USE_SOURCES, mapped]).rootBindings([{ file: mapped.path, line: 1, column: 27, spelled: "K", owner }, { file: mapped.path, line: 1, column: 43, spelled: "K", owner }]);
+  assert.deepEqual(bindings, [{ kind: "local", root: "K" }, { kind: "local", root: "K" }]);
 });
 
-test("a type name a type parameter binds is declared at the type parameter", async () => {
+test("a type name a type parameter of the owner binds is local", async () => {
   const [binding] = await createImportOrigins(USE_SOURCES).rootBindings([useAt(3, "T {", "T")]);
 
-  assert.deepEqual(binding, { kind: "declared", root: "T", lines: [3], topLevel: false });
+  assert.deepEqual(binding, { kind: "local", root: "T" });
 });
 
 test("a use written on this, placed at this or at a later name, is bound to this with the member after it", async () => {
@@ -582,7 +586,7 @@ test("a place that spells another root than the site's is unknown", async () => 
 
 test("super is rooted at its class's extends expression, bound as that name is", async () => {
   const derived: SourceFile = { path: "src/derived.ts", content: "export class Failure extends Error {\n  constructor() { super('x'); }\n}\n" };
-  const [binding] = await createImportOrigins([...USE_SOURCES, derived]).rootBindings([{ file: derived.path, line: 2, column: 19, spelled: "super" }]);
+  const [binding] = await createImportOrigins([...USE_SOURCES, derived]).rootBindings([{ file: derived.path, line: 2, column: 19, spelled: "super", owner: { name: "constructor", line: 2, endLine: 2 } }]);
 
   assert.deepEqual(binding, { kind: "ambient", root: "Error" });
 });

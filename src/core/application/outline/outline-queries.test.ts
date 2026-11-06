@@ -332,15 +332,15 @@ const USES_INDEX: Options = {
   roots: { "17:11": { status: "complete", value: { kind: "external", module: "typescript" }, evidence: [] } },
   bindings: {
     "12:5 z": { kind: "import", root: "z", member: "object", origin: { kind: "external", module: "zod" } },
-    "13:5 seen": { kind: "declared", root: "seen", lines: [12], topLevel: false },
-    "14:5 top": { kind: "declared", root: "top", lines: [2], topLevel: true },
-    "14:21 inner": { kind: "declared", root: "inner", lines: [12], topLevel: false },
+    "13:5 seen": { kind: "local", root: "seen" },
+    "14:5 top": { kind: "declared", root: "top", lines: [2] },
+    "14:21 inner": { kind: "local", root: "inner" },
     "15:11 Map": { kind: "ambient", root: "Map" },
     "19:3 helperAlias": { kind: "import", root: "helperAlias", origin: { kind: "repository", file: LIB } },
     "32:5 this": { kind: "this", member: "load" },
     "32:21 this": { kind: "this", member: "cache" },
-    "33:5 deps": { kind: "declared", root: "deps", lines: [30], topLevel: false },
-    "33:21 orphan": { kind: "declared", root: "orphan", lines: [3], topLevel: true },
+    "33:5 deps": { kind: "declared", root: "deps", lines: [30] },
+    "33:21 orphan": { kind: "declared", root: "orphan", lines: [3] },
     "2:14 Other": { kind: "located", root: "Other", file: LIB, path: "Other" },
     "35:5 lib": { kind: "import", root: "lib", member: "Other", origin: { kind: "repository", file: LIB } },
   },
@@ -384,9 +384,9 @@ test("a declaration inside the body and a local value are not uses, and leave no
   assert.ok(!cuts.some((cut) => cut.at.some((place) => place.includes("seen"))));
 });
 
-test("a value a function around the body declares is a captured local, while a top-level one the index holds no node of is a cut", async () => {
+test("a declaration outside the body the index holds no node of is a cut, whether a function around the body or the file declares it", async () => {
   const { cuts } = await usesAnswer("Svc.go");
-  assert.deepEqual(cuts.map((cut) => cut.at), [[`${USE}::Svc.go`, `${USE}:33 orphan`]]);
+  assert.deepEqual(cuts.map((cut) => cut.at), [[`${USE}::Svc.go`, `${USE}:33 deps.read`], [`${USE}::Svc.go`, `${USE}:33 orphan`]]);
 });
 
 test("a member written on this is a use of the member its class declares, a method or a field", async () => {
@@ -422,7 +422,7 @@ test("a declaration beside the focused one on the same line is not nested in it,
       { from: "together", to: "external", kind: "calls", line: 1, column: 80 },
     ],
     unresolved: [{ from: "together", name: "limit", kind: "references", file: SAME, line: 1, column: 100 }],
-    bindings: { "1:101 limit": { kind: "declared", root: "limit", lines: [1], topLevel: true } },
+    bindings: { "1:101 limit": { kind: "declared", root: "limit", lines: [1] } },
   });
 
   const answer = await queries.outline({ repo: "/work/shop", repoId: "shop", revision: "HEAD", focus: [{ file: SAME, symbol: "together" }] });

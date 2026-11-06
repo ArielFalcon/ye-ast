@@ -160,11 +160,11 @@ export function createImportOrigins(sources: readonly SourceFile[], parse: Parse
       const { index: tree, text } = parsed;
       const chains = group.flatMap(({ site, index }) => {
         const chain = chainAt(tree, text, site);
-        return chain === undefined ? [] : [{ chain, index }];
+        return chain === undefined ? [] : [{ chain, index, owner: site.owner }];
       });
       /** The file is bound only when a value name asks, and its program is dropped once they are answered (ADR-0029). */
       const bound = chains.some(({ chain }) => ts.isIdentifier(chain.root) && !isTypeName(chain.root)) ? bindFile(file, text) : undefined;
-      for (const { chain, index } of chains) results[index] = await bindingOf(file, tree, chain, bound);
+      for (const { chain, index, owner } of chains) results[index] = await bindingOf(file, tree, chain, bound, owner);
     }
     return results;
   } };
@@ -182,13 +182,13 @@ export function createImportOrigins(sources: readonly SourceFile[], parse: Parse
     return LIB_GLOBALS.has(name) && !repositoryGlobals().has(name) ? { kind: "ambient", root: name } : UNKNOWN_BINDING;
   }
 
-  async function bindingOf(file: string, { source, shape }: FileIndex, { root, member }: Chain, bound: BoundFile | undefined): Promise<RootBinding> {
+  async function bindingOf(file: string, { source, shape }: FileIndex, { root, member }: Chain, bound: BoundFile | undefined, owner: UseSite["owner"]): Promise<RootBinding> {
     if (!ts.isIdentifier(root)) return { kind: "this", ...(member === undefined ? {} : { member }) };
     const name = root.text;
     const specifier = shape.bindings.get(name);
     if (isTypeName(root)) {
-      const scope = typeScopeOf(source, root);
-      if (scope !== undefined) return { kind: "declared", root: name, ...scope };
+      const scope = typeScopeOf(root);
+      if (scope !== undefined) return declaredBinding(source, root, scope, owner);
       return specifier === undefined ? unbound(name) : importBinding(file, specifier, name, member);
     }
     const binding = bound!.bindingOf(bound!.identifierAt(root.getStart(source), name)!);
@@ -196,7 +196,7 @@ export function createImportOrigins(sources: readonly SourceFile[], parse: Parse
     if (binding.kind === "none") return unbound(name);
     if (binding.declarations.every(isImportDeclaration)) return specifier === undefined ? UNKNOWN_BINDING : importBinding(file, specifier, name, member);
     if (binding.declarations.some(isImportDeclaration)) return UNKNOWN_BINDING;
-    return { kind: "declared", root: name, lines: declarationLines(source, binding.declarations), topLevel: binding.declarations.every(isTopLevel) };
+    return declaredBinding(source, root, binding.declarations, owner);
   }
 }
 
@@ -279,16 +279,41 @@ function isImportDeclaration(declaration: ts.Declaration): boolean {
   return ts.isImportSpecifier(declaration) || ts.isImportClause(declaration) || ts.isNamespaceImport(declaration) || ts.isImportEqualsDeclaration(declaration);
 }
 
-/** The 1-based line each declaration starts at: its statement's, for a variable, where the index starts its node. */
-function declarationLines(source: ts.SourceFile, declarations: readonly ts.Node[]): number[] {
-  const lines = declarations.map((declaration) => source.getLineAndCharacterOfPosition(declarationStart(declaration).getStart(source)).line + 1);
-  return [...new Set(lines)].sort((a, b) => a - b);
+/**
+ * A root `declarations` bind: `local` when every one lies inside the syntax of the declaration whose body writes the use,
+ * otherwise declared, by the 1-based lines their names are written on.
+ */
+function declaredBinding(source: ts.SourceFile, root: ts.Identifier, declarations: readonly ts.Node[], owner: UseSite["owner"]): RootBinding {
+  const around = ownerAround(source, root, owner);
+  if (around !== undefined && declarations.every((declaration) => isInside(declaration, around))) return { kind: "local", root: root.text };
+  const lines = declarations.map((declaration) => lineOf(source, nameOf(declaration) ?? declaration));
+  return { kind: "declared", root: root.text, lines: [...new Set(lines)].sort((a, b) => a - b) };
 }
 
-function declarationStart(declaration: ts.Node): ts.Node {
-  let node = declaration;
-  while (ts.isVariableDeclaration(node) || ts.isVariableDeclarationList(node) || ts.isBindingElement(node) || ts.isObjectBindingPattern(node) || ts.isArrayBindingPattern(node)) node = node.parent;
-  return node;
+/** The innermost declaration around `node` that is `owner`: its name is the owner's, written on a line the owner spans. */
+function ownerAround(source: ts.SourceFile, node: ts.Node, owner: UseSite["owner"]): ts.Node | undefined {
+  for (let around = node.parent; around !== undefined && !ts.isSourceFile(around); around = around.parent) {
+    const name = nameOf(around);
+    if (name === undefined || name.getText(source) !== owner.name) continue;
+    const line = lineOf(source, name);
+    if (owner.line <= line && line <= owner.endLine) return around;
+  }
+  return undefined;
+}
+
+function nameOf(declaration: ts.Node): ts.Node | undefined {
+  if (ts.isConstructorDeclaration(declaration)) return declaration.getChildren().find((child) => child.kind === ts.SyntaxKind.ConstructorKeyword);
+  return ts.getNameOfDeclaration(declaration as ts.Declaration);
+}
+
+/** By offsets in the file's text, since the binder reads its own tree of the same text: inside, and not `around` itself. */
+function isInside(node: ts.Node, around: ts.Node): boolean {
+  const [start, aroundStart] = [node.getStart(), around.getStart()];
+  return aroundStart <= start && node.end <= around.end && (start !== aroundStart || node.end !== around.end);
+}
+
+function lineOf(source: ts.SourceFile, node: ts.Node): number {
+  return source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1;
 }
 
 /**
@@ -296,7 +321,7 @@ function declarationStart(declaration: ts.Node): ts.Node {
  * conditional whose true branch holds the name, a mapped type's key, or a declaration among the statements of an
  * enclosing block, namespace or the file. None when no scope declares it, so the file's imports and the globals answer.
  */
-function typeScopeOf(source: ts.SourceFile, name: ts.Identifier): { lines: number[]; topLevel: boolean } | undefined {
+function typeScopeOf(name: ts.Identifier): ts.Node[] | undefined {
   let inner: ts.Node = name;
   for (let scope = name.parent; scope !== undefined; inner = scope, scope = scope.parent) {
     const declared: ts.Node[] = [];
@@ -304,16 +329,9 @@ function typeScopeOf(source: ts.SourceFile, name: ts.Identifier): { lines: numbe
     if (ts.isMappedTypeNode(scope) && scope.typeParameter.name.text === name.text) declared.push(scope.typeParameter);
     if (ts.isConditionalTypeNode(scope) && inner === scope.trueType) declared.push(...inferredIn(scope.extendsType, name.text));
     if (ts.isBlock(scope) || ts.isModuleBlock(scope) || ts.isSourceFile(scope)) declared.push(...scope.statements.filter((statement) => declaredName(statement) === name.text));
-    if (declared.length > 0) return { lines: declarationLines(source, declared), topLevel: ts.isSourceFile(scope) };
+    if (declared.length > 0) return declared;
   }
   return undefined;
-}
-
-/** A declaration the file's own scope holds, through the statement and destructuring around it. */
-function isTopLevel(declaration: ts.Declaration): boolean {
-  let node = declaration.parent;
-  while (ts.isVariableDeclarationList(node) || ts.isVariableStatement(node) || ts.isVariableDeclaration(node) || ts.isBindingElement(node) || ts.isObjectBindingPattern(node) || ts.isArrayBindingPattern(node)) node = node.parent;
-  return ts.isSourceFile(node);
 }
 
 function inferredIn(node: ts.Node, name: string): ts.TypeParameterDeclaration[] {

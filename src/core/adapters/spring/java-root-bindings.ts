@@ -55,22 +55,44 @@ function bindingAt(site: UseSite, file: JavaFile, project: JavaProject): RootBin
   if (head.type === "this") return { kind: "this", ...(member === undefined ? {} : { member }) };
   if (head.type === "super") {
     const base = enclosingType(head, file, project)?.node.childForFieldName("superclass")?.namedChildren[0];
-    return base === undefined || base === null ? UNKNOWN : typeBinding(headOf(base), file, project);
+    return base === undefined || base === null ? UNKNOWN : typeBinding(headOf(base), file, project, site.owner);
   }
   if (head.parent?.type === "method_invocation" && head.parent.childForFieldName("object") === null) return staticImport(head.text, file, project) ?? { kind: "this", member: head.text };
   if (head.type === "identifier" && /^[a-z_$]/.test(head.text)) {
     const local = localBinding(head);
-    if (local !== undefined) return { kind: "declared", root: head.text, lines: [local.startPosition.row + 1], topLevel: false };
+    if (local !== undefined) return declaredBinding(head, local, site.owner);
     const field = fieldIn(head);
     return field ? { kind: "this", member: head.text } : UNKNOWN;
   }
-  return typeBinding(head, file, project);
+  return typeBinding(head, file, project, site.owner);
+}
+
+/** `local` when the declaration lies inside the syntax of the declaration whose body writes the use, otherwise declared by the line its name is written on. */
+function declaredBinding(root: Node, declaration: Node, owner: UseSite["owner"]): RootBinding {
+  const around = ownerAround(root, owner);
+  if (around !== undefined && declaration.id !== around.id && around.startIndex <= declaration.startIndex && declaration.endIndex <= around.endIndex) return { kind: "local", root: root.text };
+  return { kind: "declared", root: root.text, lines: [(nameOf(declaration) ?? declaration).startPosition.row + 1] };
+}
+
+/** The innermost declaration around `node` that is `owner`: its name is the owner's, written on a line the owner spans. */
+function ownerAround(node: Node, owner: UseSite["owner"]): Node | undefined {
+  for (let around = node.parent; around !== null; around = around.parent) {
+    const name = nameOf(around);
+    if (name !== undefined && name.text === owner.name && owner.line <= name.startPosition.row + 1 && name.startPosition.row + 1 <= owner.endLine) return around;
+  }
+  return undefined;
+}
+
+function nameOf(declaration: Node): Node | undefined {
+  if (declaration.type === "type_parameter") return declaration.namedChildren[0] ?? undefined;
+  return declaration.childForFieldName("name") ?? undefined;
 }
 
 /** A capitalised name: a type variable around it, a type the sources declare, or a platform type a single import or `java.lang` names. */
-function typeBinding(name: Node, file: JavaFile, project: JavaProject): RootBinding {
+function typeBinding(name: Node, file: JavaFile, project: JavaProject, owner: UseSite["owner"]): RootBinding {
   const type = enclosingType(name, file, project);
-  if (typeVariableAround(name)) return { kind: "declared", root: name.text, lines: [typeVariableAround(name)!.startPosition.row + 1], topLevel: false };
+  const variable = typeVariableAround(name);
+  if (variable !== undefined) return declaredBinding(name, variable, owner);
   const declared = project.lookupType(name.text, { file, type });
   if (declared === "ambiguous") return UNKNOWN;
   if (declared !== undefined) return { kind: "located", root: name.text, file: declared.file.path, path: declared.fqn };
