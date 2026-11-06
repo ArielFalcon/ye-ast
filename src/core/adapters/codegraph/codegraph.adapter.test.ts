@@ -672,6 +672,38 @@ test("an edge an interface bridge added is heuristic, named and has no score", a
   assert.deepEqual([bridge.provenance, bridge.synthesizedBy, bridge.confidence], ["heuristic", "interface-impl", null]);
 });
 
+test("an edge a framework resolved from a call of another kind keeps the call it was, and an edge of its reference's own kind keeps none", async () => {
+  const snapshot = snapshotOf({
+    "package.json": JSON.stringify({ dependencies: { "@angular/core": "20.0.0", "@angular/router": "20.0.0" } }),
+    "src/app.routes.ts": `import { Routes } from "@angular/router";
+export const routes: Routes = [{ path: "article/:slug", loadComponent: () => import("./list.component") }];
+`,
+    "src/list.component.ts": `import { Component, inject } from "@angular/core";
+import { Router } from "@angular/router";
+@Component({ selector: "app-list", template: "" })
+export default class ListComponent {
+  private readonly router = inject(Router);
+  open(slug: string) {
+    this.router.navigate(["/article", slug]);
+    this.close();
+  }
+  close() {}
+}
+`,
+  });
+  const store = join(scratch(), "store");
+  const graph = createCodeGraph();
+  unwrap(await graph.index(snapshot, store));
+  const reader = unwrap(graph.open(store));
+  try {
+    const open = symbol(reader, "src/list.component.ts", "open");
+    const edges = reader.outgoingEdges([open.id], ["navigates", "calls"]).map((edge) => [edge.kind, edge.line, edge.resolvedFrom]);
+    assert.deepEqual(edges, [["calls", 8, null], ["navigates", 7, { name: "this.router.navigate", kind: "calls" }]]);
+  } finally {
+    reader.close();
+  }
+});
+
 test("unresolved references name the call that left the index, whatever order the files are asked in", async () => {
   const s = await shared();
   const unknown = symbol(s.reader, "src/orders.ts", "unknownCall");

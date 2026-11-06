@@ -71,6 +71,8 @@ export interface GraphEdge {
   provenance: "tree-sitter" | "scip" | "heuristic" | null;
   /** The synthesizer that added the edge, for example `interface-impl`; `null` for an edge extraction found. */
   synthesizedBy: string | null;
+  /** The reference a resolver turned into an edge of another kind, a `calls` reference into `navigates`; `null` when the edge keeps its reference's kind. */
+  resolvedFrom: { name: string; kind: string } | null;
 }
 
 export interface GraphUnresolvedReference {

@@ -170,6 +170,21 @@ test("a call codegraph synthesized from a source ye-ast ignores is not a step", 
   assert.deepEqual(valueOf(fact).steps.map((step) => [step.symbol, step.leaves]), [["run", undefined]]);
 });
 
+test("a call the index resolved into an edge of another kind is settled as the call it was, never dropped", async () => {
+  const navigates: FakeEdge = { from: "run", to: "route", kind: "navigates", line: 8, column: 4, resolvedFrom: { name: "this.router.navigate", kind: "calls" } };
+  const fact = await factOf({ nodes: [SVC, RUN, fakeNode("route", "route", B, 1), callee("navigate", B, 5)], edges: [...CONTAINS, navigates] });
+
+  assert.deepEqual(cutsOf(fact), [["unresolved-link", ["src/a.ts:8 this.router.navigate", "src/b.ts::navigate"]]]);
+});
+
+test("a property whose initializer's only call the index resolved into an edge of another kind is a root", async () => {
+  const property = fakeNode("toArticle", "property", A, 3);
+  const navigates: FakeEdge = { from: "toArticle", to: "route", kind: "navigates", line: 3, column: 14, resolvedFrom: { name: "this.router.navigate", kind: "calls" } };
+  const fact = await factOf({ nodes: [SVC, property, fakeNode("route", "route", B, 1)], edges: [{ from: "Svc", to: "toArticle", kind: "contains" }, navigates] }, [{ file: A, symbol: "Svc.toArticle" }]);
+
+  assert.deepEqual(valueOf(fact).steps.map((step) => step.symbol), ["toArticle"]);
+});
+
 test("this.<member> inside the class that declares it is a step at the member", async () => {
   const save = fakeNode("save", "method", A, 25, 28);
   const fact = await factOf({
