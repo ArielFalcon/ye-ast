@@ -563,3 +563,24 @@ test("a call the relations prove runs on a field holding a package type is a lea
   assert.deepEqual(valueOf(packaged).steps[0]?.external, [{ kind: "import", module: "@angular/common/http", names: ["this.repo.save"] }]);
   assert.deepEqual(valueOf(global).steps[0]?.external, [{ kind: "global", names: ["this.repo.save"] }]);
 });
+
+test("a member call whose plain receiver root the language's libraries bind is a global leaf, even when a repository declaration has its name", async () => {
+  const fact = await factOf({ nodes: [SVC, RUN, callee("max", B, 3)], edges: CONTAINS, unresolved: [{ from: "run", name: "Math.max", kind: "calls", file: A, line: 9, column: 4 }], roots: { max: { kind: "ambient", name: "Math" } } });
+
+  assert.equal(fact.status, "complete");
+  assert.deepEqual(valueOf(fact).steps[0]?.external, [{ kind: "global", names: ["Math.max"] }]);
+});
+
+test("a member call whose receiver root a package binds is a leaf under that package", async () => {
+  const fact = await factOf({ nodes: [SVC, RUN, callee("map", B, 3)], edges: CONTAINS, unresolved: [{ from: "run", name: "_.fp.map", kind: "calls", file: A, line: 9, column: 4 }], roots: { map: { kind: "external", module: "lodash" } } });
+
+  assert.equal(fact.status, "complete");
+  assert.deepEqual(valueOf(fact).steps[0]?.external, [{ kind: "import", module: "lodash", names: ["_.fp.map"] }]);
+});
+
+test("a member call on a call result or on this keeps its cut whatever its root is bound to", async () => {
+  const unresolved: FakeUnresolved[] = [{ from: "run", name: "Math.random().max", kind: "calls", file: A, line: 9, column: 4 }, { from: "run", name: "this.cache.max", kind: "calls", file: A, line: 10, column: 4 }];
+  const fact = await factOf({ nodes: [SVC, RUN, callee("max", B, 3)], edges: CONTAINS, unresolved, roots: { max: { kind: "ambient", name: "Math" } } });
+
+  assert.deepEqual(cutsOf(fact).map(([, at]) => (at as string[])[0]), ["src/a.ts:10 this.cache.max", "src/a.ts:9 Math.random().max"]);
+});

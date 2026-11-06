@@ -718,6 +718,25 @@ test("callers and a trace at one snapshot read the relations once, under the one
   assert.equal(relationReads(), 1);
 });
 
+test("a trace over a real index leaves a library global's member call as a global leaf, and keeps it a cut where a local shadows the global", async () => {
+  writeFileSync(join(repo, "src", "clamp.ts"), ["export function clamp(value: number): number {", "  return Math.max(value, 0);", "}", "export function max(value: number): number {", "  return value;", "}", ""].join("\n"));
+  writeFileSync(join(repo, "src", "shadow.ts"), ["import { max } from './clamp';", "export function shadowed(value: number): number {", "  const Math = { max };", "  return Math.max(value);", "}", ""].join("\n"));
+  git("add", "-A");
+  git("commit", "-q", "-m", "roots");
+  const { trace } = composeQueries({ scratchRoot });
+
+  const [plain, shadowed] = await Promise.all([
+    trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: "src/clamp.ts", symbol: "clamp" }] }),
+    trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: "src/shadow.ts", symbol: "shadowed" }] }),
+  ]);
+
+  assert.ok(plain.ok && shadowed.ok);
+  assert.equal(plain.value.status, "complete");
+  assert.deepEqual(plain.value.status === "complete" && plain.value.value.steps[0]?.external, [{ kind: "global", names: ["Math.max"] }]);
+  assert.equal(shadowed.value.status, "partial");
+  assert.deepEqual(shadowed.value.status === "partial" && shadowed.value.cuts.map((cut) => cut.at[0]), ["src/shadow.ts:4 Math.max"]);
+});
+
 test("a trace over a real index keeps a member call to a namespace's function a cut, never a false external", async () => {
   writeFileSync(join(repo, "src", "space.ts"), [
     "export namespace N { export function nsMethod() {} }",
@@ -860,7 +879,7 @@ test("a trace over a real index roots at a property whose initializer makes call
   assert.ok(submit.ok && submit.value.status === "complete");
   assert.deepEqual(submit.value.value.steps.map(({ symbol, kind, leaves }) => ({ symbol, kind, leaves: leaves?.map((leaf) => leaf.symbol) })), [{ symbol: "submitForm", kind: "property", leaves: ["form", "save"] }]);
   assert.ok(stamp.ok && stamp.value.status === "complete");
-  assert.deepEqual(stamp.value.value.steps.map(({ symbol, external }) => ({ symbol, external })), [{ symbol: "stamp", external: [{ kind: "unnamed", names: ["Date.now"] }] }]);
+  assert.deepEqual(stamp.value.value.steps.map(({ symbol, external }) => ({ symbol, external })), [{ symbol: "stamp", external: [{ kind: "global", names: ["Date.now"] }] }]);
   assert.ok(range.ok && range.value.status === "complete");
   assert.deepEqual(range.value.value.steps.map(({ symbol }) => symbol), ["submitForm"]);
   assert.ok(!label.ok && label.fault.kind === "unknown-symbol");

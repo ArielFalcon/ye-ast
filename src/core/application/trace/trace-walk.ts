@@ -11,7 +11,7 @@ import type { ExternalCall, TraceDeclaration, WalkedStep } from "../../domain/tr
 import type { SymbolRef } from "../../domain/relations/relation.ts";
 import type { DeclaredCallable, DeclaredMemberNames, FunctionValueCall } from "../../ports/declared-member-names.port.ts";
 import type { CodeGraphReader, GraphEdge, GraphNodeId, GraphSymbol, GraphUnresolvedReference } from "../../ports/code-graph.port.ts";
-import type { ImportOriginSite, ImportOrigins } from "../../ports/import-origins.port.ts";
+import type { ImportOriginSite, ImportOrigins, ResolvedNameSite } from "../../ports/import-origins.port.ts";
 import type { TraceBudget } from "../../ports/trace-queries.port.ts";
 import { createGraphNavigation, SUPERTYPE_EDGES } from "../navigation/graph-navigation.ts";
 import { containmentTree } from "../navigation/containment-tree.ts";
@@ -84,6 +84,9 @@ export interface TraceWalk {
   cuts: readonly Cut[];
   expanded: number;
 }
+
+/** A spelling that is a chain of plain names, `a.b.m`: no call, index or computed link the value could come from. */
+const PLAIN_CHAIN = /^[A-Za-z_$][\w$]*(\.[A-Za-z_$][\w$]*)+$/;
 
 /** What the relations prove a member call runs. */
 type ProvenCall = { kind: "member"; receiver: SymbolRef; member: SymbolRef } | { kind: "external"; holds: string } | { kind: "replaceable" };
@@ -296,9 +299,24 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
         cuts.push({ kind: "unresolved-link", at: [placeAt(node.file, edge.line ?? node.startLine, target.name), ...sortedUnique(declarationsNamed(target.name).map(candidateOf))] });
       } else external.push(verdict.root.kind === "external" ? { kind: "import", module: verdict.root.module, name: target.name } : { kind: "global", name: target.name });
     }
+    /**
+     * A member call nothing settled by its receiver: a cut listing the declarations of its name, or, when no declaration and
+     * no source names it, an external call (R6).
+     */
+    const settleByName = async (reference: GraphUnresolvedReference, name: string, named: readonly GraphSymbol[]): Promise<void> => {
+      if (named.length > 0) return void cuts.push(unresolvedAt(reference, named));
+      const receiver = receiverOf(reference.name);
+      const declared = [
+        ...((await memberDeclarations()).get(name) ?? []).map((file) => declarationAnchor(file, name)),
+        ...(receiver !== undefined && (await holdsFunctionValue(reference, receiver, name)) ? [declarationAnchor(reference.file, receiver)] : []),
+      ];
+      if (declared.length === 0) external.push({ kind: "unnamed", name: reference.name });
+      else cuts.push({ kind: "unresolved-link", at: [placeAt(reference.file, reference.line, reference.name), ...sortedUnique([...reference.candidates, ...declared])] });
+    };
     const resolved: EdgeOccurrence[] = called.map(({ edge, target }) => ({ source: edge.source, line: edge.line, column: edge.column, targetName: target.name }));
 
     const bare: { reference: GraphUnresolvedReference; name: string }[] = [];
+    const rooted: { reference: GraphUnresolvedReference; name: string; named: readonly GraphSymbol[] }[] = [];
     for (const reference of callsFrom(node).filter((candidate) => !resolved.some((edge) => sameOccurrence(edge, candidate)))) {
       const own = ownMemberOf(reference.name);
       const members = own === undefined ? [] : [...new Map(navigation.ownersOf(node).flatMap((owner) => navigation.methodsOf(owner)).filter((method) => method.name === own).map((method) => [method.id, method])).values()];
@@ -314,17 +332,20 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
           const named = membersNamed(callee.name);
           if (member !== undefined) children.push(childAt(member, reference.line, reference.column, reference.name, "call"));
           else if (proven?.kind === "external") external.push(externalOf(proven.holds, reference.name));
-          else if (named.length > 0) cuts.push(unresolvedAt(reference, named));
-          else {
-            const receiver = receiverOf(reference.name);
-            const declared = [
-              ...((await memberDeclarations()).get(callee.name) ?? []).map((file) => declarationAnchor(file, callee.name)),
-              ...(receiver !== undefined && (await holdsFunctionValue(reference, receiver, callee.name)) ? [declarationAnchor(reference.file, receiver)] : []),
-            ];
-            if (declared.length === 0) external.push({ kind: "unnamed", name: reference.name });
-            else cuts.push({ kind: "unresolved-link", at: [placeAt(reference.file, reference.line, reference.name), ...sortedUnique([...reference.candidates, ...declared])] });
-          }
+          else if (PLAIN_CHAIN.test(reference.name) && !reference.name.startsWith("this.")) rooted.push({ reference, name: callee.name, named });
+          else await settleByName(reference, callee.name, named);
         }
+      }
+    }
+    if (rooted.length > 0) {
+      const sites = rooted.map(({ reference, name }): ResolvedNameSite => ({ file: reference.file, line: reference.line, column: reference.column + 1, kind: reference.kind, name }));
+      const roots = await origins.rootOrigins(sites, signal);
+      for (const [index, { reference, name, named }] of rooted.entries()) {
+        const root = roots[index];
+        const origin = root?.status === "complete" ? root.value : undefined;
+        if (origin?.kind === "external") external.push({ kind: "import", module: origin.module, name: reference.name });
+        else if (origin?.kind === "ambient") external.push({ kind: "global", name: reference.name });
+        else await settleByName(reference, name, named);
       }
     }
     if (bare.length > 0) {
