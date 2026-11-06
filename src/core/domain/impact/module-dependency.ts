@@ -18,7 +18,10 @@ export interface ModuleBinding {
   /** 1-based column of the local name (of the property name in `export { a as b } from`), where the graph writes it. */
   column: number;
   typeOnly: boolean;
-  /** For a `default` binding of a repository file: the name of the declaration that file exports as default. */
+  /**
+   * The name the repository file it leads to declares the bound value under, when syntax proves it: the declaration a
+   * TypeScript file exports as default, or the type or member a Java import names.
+   */
   exportedAs?: string;
 }
 

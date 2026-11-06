@@ -21,14 +21,14 @@ export function importBindings(store: CodeGraphReader, file: string, dependencie
   const reached = new Map<ModuleBinding, GraphSymbol>();
   for (const dependency of dependencies) {
     for (const binding of dependency.bindings) {
-      const declaration = bindingDeclaration(binding, placed, isDeclaration, exportedDefault(store, dependency, binding));
+      const declaration = bindingDeclaration(binding, placed, isDeclaration, namedDeclaration(store, dependency, binding));
       if (declaration !== undefined) reached.set(binding, declaration);
     }
   }
   return reached;
 }
 
-function exportedDefault(store: CodeGraphReader, dependency: ModuleDependency, binding: ModuleBinding): GraphSymbol | undefined {
+function namedDeclaration(store: CodeGraphReader, dependency: ModuleDependency, binding: ModuleBinding): GraphSymbol | undefined {
   if (binding.exportedAs === undefined || dependency.target.kind !== "repository") return undefined;
   const named = store.symbolsInFiles([dependency.target.file]).filter((symbol) => symbol.name === binding.exportedAs && isDeclaration(symbol));
   return named.length === 1 ? named[0] : undefined;
