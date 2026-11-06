@@ -19,7 +19,7 @@ export function containmentTree(store: CodeGraphReader, nodes: readonly GraphSym
 
 export interface ListingRead {
   value: OutlineListing;
-  /** A repository binding the join did not prove, and a requested file whose module statements could not be read. */
+  /** A repository binding the join did not prove, and a requested file whose module statements no reader read. */
   cuts: Cut[];
 }
 
@@ -31,13 +31,14 @@ export function readOutline(store: CodeGraphReader, requested: readonly string[]
   const statements = Map.groupBy(modules.dependencies, (dependency) => dependency.file);
   const references = Map.groupBy(modules.untraversed ?? [], (reference) => reference.file);
   const unreadable = new Set(modules.unread.filter(({ reason }) => reason === "source-unreadable").map(({ file }) => file));
+  const read = new Set(modules.files.map(({ file }) => file));
   for (const file of sortedUnique(requested)) {
     const nodes = store.symbolsInFiles([file]);
     if (nodes.length === 0) {
       unheld.push(file);
       continue;
     }
-    if (unreadable.has(file)) cuts.push({ kind: "no-extractor", at: [file] });
+    if (unreadable.has(file) || !read.has(file)) cuts.push({ kind: "no-extractor", at: [file] });
     const dependencies = statements.get(file) ?? [];
     const reached = importBindings(store, file, dependencies);
     const imports = [...dependencies.map((dependency) => imported(dependency, reached, cuts)), ...(references.get(file) ?? []).map(referenced)];

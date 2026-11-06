@@ -37,7 +37,7 @@ function setup(options: Options = {}) {
     matcher: { matches: options.matches ?? (() => true) },
     graph: { index: async () => ({ ok: true, value: SUMMARY }), open: () => ({ ok: true, value: store }) },
     engines: {},
-    moduleReaders: [],
+    moduleReaders: [{ extract: async () => ({ files: written.map((file) => ({ file, statements: [], moduleOnly: true })), dependencies: [], unread: [] }) }],
     ...(options.snapshotCache && { snapshotCache: options.snapshotCache }),
     ...(options.live && { live: options.live.deps, trust: { read: async () => ({ ok: true, value: "trusted" }) } }),
   } as unknown as OutlineQueriesDeps;

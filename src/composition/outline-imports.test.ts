@@ -88,6 +88,13 @@ test("a requested source the module reader cannot parse is a no-extractor cut, s
   assert.deepEqual(cuts, [{ kind: "no-extractor", at: [USE] }]);
 });
 
+test("a requested file no module reader reads is a no-extractor cut, so its empty imports never read as none", async () => {
+  const { status, file, cuts } = await outlineOf("import { one } from './defs';", { readers: [createJavaImportsReader(await createJavaParser())] });
+  assert.equal(status, "partial");
+  assert.deepEqual(file?.imports, []);
+  assert.deepEqual(cuts, [{ kind: "no-extractor", at: [USE] }]);
+});
+
 test("a Java import of a type the sources declare reaches that type's declaration, without any graph edge", async () => {
   const owner: SourceFile = { path: "src/app/owner/Owner.java", content: "package app.owner;\npublic class Owner {}\n" };
   const nodes = [fakeNode("client", "file", "src/app/api/Client.java", 1, 3), fakeNode("Client", "class", "src/app/api/Client.java", 3, 3, "Client"), fakeNode("Owner", "class", owner.path, 2, 2, "Owner")];

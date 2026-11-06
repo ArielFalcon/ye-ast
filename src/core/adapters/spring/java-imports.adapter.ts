@@ -30,7 +30,7 @@ export function createJavaImportsReader(parser: JavaParser): ModuleDependenciesR
         const unreadable = new Set(project.unreadable);
         for (const file of project.unreadable) unread.push({ file: file.path, reason: "source-unreadable" });
         const dependencies = files.filter((file) => !unreadable.has(file)).flatMap((file) => importsOf(file, project));
-        return { files: [], dependencies, unread };
+        return { files: files.filter((file) => !unreadable.has(file)).map((file) => ({ file: file.path, statements: [], moduleOnly: false })), dependencies, unread };
       } finally {
         for (const tree of trees) tree.dispose();
       }
