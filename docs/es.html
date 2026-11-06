@@ -211,24 +211,28 @@
           <li data-tone="result"><strong>conexiones + cobertura</strong><span>derivadas solo entre lecturas que coinciden</span></li>
         </ol>
         <div class="playground compose-sim" id="compose-sim">
-          <div class="compose-pick">
+          <div class="compose-side">
             <p class="mini-kicker">Prueba una combinación</p>
             <h3>Elige las consultas, lee la respuesta fusionada.</h3>
             <fieldset class="compose-field">
               <legend>Consultas combinadas</legend>
               <div class="chip-row" id="compose-cases"></div>
             </fieldset>
+            <fieldset class="compose-field">
+              <legend>Modo de respuesta</legend>
+              <div class="chip-row" id="compose-modes">
+                <label class="chip compose-chip is-active"><input type="radio" name="compose-mode" value="summary" checked><span>summary</span></label>
+                <label class="chip compose-chip"><input type="radio" name="compose-mode" value="details"><span>details</span></label>
+                <label class="chip compose-chip"><input type="radio" name="compose-mode" value="full"><span>full</span></label>
+              </div>
+            </fieldset>
             <p class="compose-about" id="compose-about"></p>
-          </div>
-          <div class="compose-side">
-            <div class="output-head"><span>petición · ye_ast_compose</span></div>
-            <pre id="compose-request" class="code-block" tabindex="0"></pre>
             <div class="output-head compose-compare-head"><span>tamaño de la respuesta</span></div>
             <div class="compose-compare" id="compose-compare"></div>
-            <p class="playground-note">Respuestas reales capturadas sobre un fixture de dos repositorios (shop y web). Compose paga su envoltorio: una consulta sola, o consultas que no comparten nada, pueden costar más que las llamadas separadas; lo que añade es una respuesta fusionada con sus conexiones y su cobertura.</p>
+            <p class="playground-note">Respuestas reales capturadas sobre un fixture de dos repositorios (shop y web). Compose paga su envoltorio: una consulta sola, consultas que no comparten nada o el modo full pueden costar más que las llamadas separadas; lo que añade es una respuesta fusionada con sus conexiones y su cobertura.</p>
           </div>
           <div class="compose-answer">
-            <div class="output-head"><span>respuesta · summary</span><strong id="compose-status" class="pill">complete</strong></div>
+            <div class="output-head"><span>respuesta</span><strong id="compose-status" class="pill">complete</strong></div>
             <div class="compose-stamps" id="compose-stamps"></div>
             <p class="compose-live" id="compose-live" aria-live="polite"></p>
             <pre id="compose-text" class="code-block" tabindex="0"></pre>

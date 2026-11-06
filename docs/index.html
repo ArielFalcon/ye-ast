@@ -211,24 +211,28 @@
           <li data-tone="result"><strong>connections + coverage</strong><span>derived only between matching reads</span></li>
         </ol>
         <div class="playground compose-sim" id="compose-sim">
-          <div class="compose-pick">
+          <div class="compose-side">
             <p class="mini-kicker">Try a combination</p>
             <h3>Pick the queries, read the merged answer.</h3>
             <fieldset class="compose-field">
               <legend>Queries combined</legend>
               <div class="chip-row" id="compose-cases"></div>
             </fieldset>
+            <fieldset class="compose-field">
+              <legend>Response mode</legend>
+              <div class="chip-row" id="compose-modes">
+                <label class="chip compose-chip is-active"><input type="radio" name="compose-mode" value="summary" checked><span>summary</span></label>
+                <label class="chip compose-chip"><input type="radio" name="compose-mode" value="details"><span>details</span></label>
+                <label class="chip compose-chip"><input type="radio" name="compose-mode" value="full"><span>full</span></label>
+              </div>
+            </fieldset>
             <p class="compose-about" id="compose-about"></p>
-          </div>
-          <div class="compose-side">
-            <div class="output-head"><span>request · ye_ast_compose</span></div>
-            <pre id="compose-request" class="code-block" tabindex="0"></pre>
             <div class="output-head compose-compare-head"><span>response size</span></div>
             <div class="compose-compare" id="compose-compare"></div>
-            <p class="playground-note">Real answers captured on a two-repository fixture (shop and web). Compose pays for its envelope: a lone query, or queries that share nothing, can cost more than the separate calls; what it adds is one merged answer with its connections and coverage.</p>
+            <p class="playground-note">Real answers captured on a two-repository fixture (shop and web). Compose pays for its envelope: a lone query, queries that share nothing, or the full mode can cost more than the separate calls; what it adds is one merged answer with its connections and coverage.</p>
           </div>
           <div class="compose-answer">
-            <div class="output-head"><span>answer · summary</span><strong id="compose-status" class="pill">complete</strong></div>
+            <div class="output-head"><span>answer</span><strong id="compose-status" class="pill">complete</strong></div>
             <div class="compose-stamps" id="compose-stamps"></div>
             <p class="compose-live" id="compose-live" aria-live="polite"></p>
             <pre id="compose-text" class="code-block" tabindex="0"></pre>
