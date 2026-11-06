@@ -39,6 +39,12 @@ export interface TraceWalkInput {
   origins: ImportOrigins;
   /** Whether a path is inside the declared scope: a declaration outside it cannot make a call repository code. */
   inScope: (path: string) => boolean;
+  /**
+   * The in-scope sources that declare each member name in a value position, by name, sorted; read when R6 first needs it.
+   * The index holds no node for some of those declarations (an object-literal key outside a top-level initializer, a
+   * record component), so a name only they declare still runs repository code.
+   */
+  memberDeclarations: () => Promise<ReadonlyMap<string, readonly string[]>>;
   budget: TraceBudget;
   signal?: AbortSignal;
 }
@@ -69,7 +75,7 @@ interface Body {
  * cut that leaves it free to expand at a later, shallower one. Every read is cached for this walk only.
  */
 export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkInput): Promise<TraceWalk | "aborted"> {
-  const { store, origins, inScope, budget, signal } = input;
+  const { store, origins, inScope, memberDeclarations, budget, signal } = input;
   const navigation = createGraphNavigation(store, () => false);
 
   const referencesByFile = new Map<string, ReadonlyMap<GraphNodeId, readonly GraphUnresolvedReference[]>>();
@@ -180,8 +186,12 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
         else if (callee.form === "bare") bare.push({ reference, name: callee.name });
         else {
           const named = membersNamed(callee.name);
-          if (named.length === 0) external.push({ kind: "unnamed", name: reference.name });
-          else cuts.push(unresolvedAt(reference, named));
+          if (named.length > 0) cuts.push(unresolvedAt(reference, named));
+          else {
+            const declaring = (await memberDeclarations()).get(callee.name) ?? [];
+            if (declaring.length === 0) external.push({ kind: "unnamed", name: reference.name });
+            else cuts.push({ kind: "unresolved-link", at: [placeAt(reference.file, reference.line, reference.name), ...sortedUnique([...reference.candidates, ...declaring.map((file) => declarationAnchor(file, callee.name))])] });
+          }
         }
       }
     }

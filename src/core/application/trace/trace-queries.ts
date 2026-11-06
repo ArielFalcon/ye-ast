@@ -4,7 +4,7 @@ import type { FileChange } from "../../domain/change/diff-reader.ts";
 import type { SourceTrivia } from "../../ports/source-trivia.port.ts";
 import type { ComponentRef } from "../../domain/change/seeds.ts";
 import { contentFingerprint, exportCuts } from "../../domain/map/entrypoint-map.ts";
-import { comparePosition } from "../../domain/shared/code-node.ts";
+import { comparePosition, compareText } from "../../domain/shared/code-node.ts";
 import { sortedEngines, withCuts, type Cut, type Fact } from "../../domain/shared/fact.ts";
 import type { Result } from "../../domain/shared/result.ts";
 import { readingPlan } from "../../domain/trace/reading-plan.ts";
@@ -12,6 +12,7 @@ import type { TraceValue } from "../../domain/trace/trace-fact.ts";
 import { traceSteps } from "../../domain/trace/trace-tree.ts";
 import type { CodeGraphReader, GraphNodeId, GraphSymbol } from "../../ports/code-graph.port.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
+import type { DeclaredMemberNamesReader } from "../../ports/declared-member-names.port.ts";
 import type { ImportOriginsReader } from "../../ports/import-origins.port.ts";
 import type { TraceFault, TraceQueries } from "../../ports/trace-queries.port.ts";
 import { distinctTargets, evidenceOfTarget, rangeChanges, requestedRanges, selectRoots, targetKey, triviaOncePerFile, type RootSelection } from "../navigation/root-selection.ts";
@@ -22,6 +23,8 @@ import { isTraceRoot, walkTrace } from "./trace-walk.ts";
 export interface TraceQueriesDeps extends HeadReaderDeps {
   /** Reads where the bare names a file calls come from, so a call to a package or a language global is external. */
   importOrigins: ImportOriginsReader;
+  /** Reads the member names each source declares in value positions, so a member call R6 cannot place in the index is still a cut when the code declares its name. */
+  memberNames: DeclaredMemberNamesReader;
   /** Tells the trivia lines of a requested range apart, so they select nothing. */
   sourceTrivia: SourceTrivia;
   /** Version of each engine every operation runs on, by package name. */
@@ -67,7 +70,9 @@ export function createTraceQueries(deps: TraceQueriesDeps): TraceQueries {
           if (missing.length > 0) return { ok: false, fault: { kind: "unknown-symbol", detail: `no symbol at the revision for ${missing.map(unknownTargetKey).join(", ")}`, entries: missing } };
 
           const roots = [...new Map(selections.flatMap(({ selection }) => selection.seeds.map(({ symbol }): [GraphNodeId, GraphSymbol] => [symbol.id, symbol]))).values()].sort(comparePosition);
-          const walk = await walkTrace(roots, { store, origins: deps.importOrigins(head.tree.sources), inScope: head.selected, budget, ...(signal === undefined ? {} : { signal }) });
+          let declared: Promise<ReadonlyMap<string, readonly string[]>> | undefined;
+          const memberDeclarations = () => (declared ??= declaringFiles(head.tree.sources.filter((file) => head.selected(file.path)), deps.memberNames));
+          const walk = await walkTrace(roots, { store, origins: deps.importOrigins(head.tree.sources), inScope: head.selected, memberDeclarations, budget, ...(signal === undefined ? {} : { signal }) });
           if (walk === "aborted") return ABORTED;
 
           const { steps, ids } = traceSteps(walk.roots);
@@ -91,6 +96,19 @@ export function createTraceQueries(deps: TraceQueriesDeps): TraceQueries {
       });
     },
   };
+}
+
+/** Each member name with the sources that declare it, sorted. */
+async function declaringFiles(sources: readonly SourceFile[], reader: DeclaredMemberNamesReader): Promise<ReadonlyMap<string, readonly string[]>> {
+  const byName = new Map<string, string[]>();
+  for (const file of sources) {
+    for (const name of (await reader.memberNames(file)).names) {
+      const files = byName.get(name);
+      if (files === undefined) byName.set(name, [file.path]);
+      else files.push(file.path);
+    }
+  }
+  return new Map([...byName].map(([name, files]) => [name, files.sort(compareText)]));
 }
 
 async function rangeRoots(store: CodeGraphReader, changes: readonly FileChange[], sources: readonly SourceFile[], trivia: SourceTrivia, isRoot: (symbol: GraphSymbol) => boolean): Promise<RootSelection> {

@@ -65,19 +65,22 @@ R6 applies only where the name at the call is the name of the callee:
 
 | Spelling | External leaf when | Otherwise |
 |---|---|---|
-| member call `x.m(...)` | no declaration within the declared scope is named `m` except declarations that name only a type (`interface`, `type_alias`); any other kind (function, method, property, field, constant, variable, class, enum, or one ye-ast does not know) may hold what the call runs, so it keeps the call a cut | R6b cut listing those declarations |
+| member call `x.m(...)` | no declaration within the declared scope is named `m` except declarations that name only a type (`interface`, `type_alias`), and no in-scope source declares `m` in a value position: an object-literal key at any depth and in any context, a property assigned as `<expr>.m = ...` or `<expr>['m'] = ...`, a member of a class, record, enum, or local or anonymous class, a constructor parameter property; a type, an interface, a type literal or an ambient (`declare`) declaration declares none. Any other kind in the index (function, method, property, field, constant, variable, class, enum, or one ye-ast does not know) may hold what the call runs, and so may a value-position name the index holds no node for, so either keeps the call a cut | R6b cut listing those declarations; when only the sources declare `m`, the files that do, each `file::m`, sorted |
 | bare call `f(...)` | the import origins say the file imports `f` from a package (`import`, with the module) or the language's own libraries declare it (`global`) | cut: a local parameter, an alias or a computed callee may be a repository function passed under another name |
 | computed call `x[k](...)`, `(expr)(...)` | never | cut |
 
-Limitations, verified on a real index (inherited, not introduced by the narrowing):
+The value-position names are read from every in-scope source by the language's own parser (the TypeScript compiler
+API, ADR-0008; tree-sitter for Java), once per query and only when a member call first reaches this rule. Building the
+set took 18 to 75 ms on the probe repositories and 238 ms on this one, against 1.1 to 1.9 s per query, so it is not
+cached across queries.
 
-- A key that aliases a declaration (`{ handle }`, `{ m: handle }`) is no declaration of its own, so a call through an
-  object-literal key whose name no other declaration has is reported external `unnamed`, even when the key holds a
-  repository function.
-- A function the literal defines (`{ m() {} }`, `{ m: () => ... }`) is a declaration only when the literal initializes
-  a top-level constant or variable. A literal nested in another literal, returned from a function or assigned to a
-  class field has no function node, so `outer.inner.nestedMethod()`, `factory().returnedMethod()` and
-  `holder.table.fieldMethod()` are reported external `unnamed`.
+Limitation: a member defined under a computed name (`{ [key]: fn }`, `target[name] = fn`) has no name to read. The
+reader flags the file, and a call through such a member is still reported external `unnamed` when no other source
+declares its name.
+
+The rule matches names, not receivers, so a library call whose name the code also declares in a value position is a
+cut: on this repository's `composeQueries` trace, 269 calls moved from external to cut (191 `Map.set`, 52
+`RegExp.test`, 15 `Math.max` and `Math.min`), 2,033 cuts became 2,326. Receiver bindings (R4) settle them.
 
 R4 and R5 read the syntax tree of the file (the TypeScript compiler API in `core/adapters/typescript`, ADR-0008; the
 tree-sitter syntax tree for Java), never a type checker, and are computed once per file content.
@@ -233,7 +236,10 @@ Findings:
    type-only rule holds vacuously, and `formErrorsStore.setErrors` becomes an `unnamed` external of FB-4. Reproduction:
    `const store = make({ setErrors(e: string) { … } })` and `function run(s: typeof store) { s.setErrors("x"); }` gives
    `complete` with `s.setErrors` external. Repository code shown as external contradicts R6. The same gap makes
-   `this.authStore.login` (FB-2) list only `AuthService.login`.
+   `this.authStore.login` (FB-2) list only `AuthService.login`. Fixed (R6): the sources' value-position names keep the
+   call a cut, so FB-4's four `formErrorsStore.setErrors` calls are cuts listing the store's file; over the 15 traces
+   settled outcomes went from 188 to 185 and cuts from 71 to 77, the other change being `resource.value` in FA-2 and
+   FA-3, which a `value` key elsewhere now keeps a cut.
 3. **A callback held by a property's initializer call is unreachable.** A signal-form submission
    (`readonly ownerForm = form(model, schema, { submission: { action: async () => … } })`) is a property, which no
    request can seed. A range over the action seeds the class, and a class root answers `complete` with no calls,

@@ -43,8 +43,11 @@ import { createPatternRedaction } from "../core/adapters/redaction/pattern-redac
 import { createJavaCallSites } from "../core/adapters/spring/java-call-sites.adapter.ts";
 import { createSpringRoutesExtractor } from "../core/adapters/spring/spring-routes.adapter.ts";
 import { createJavaParser } from "../core/adapters/tree-sitter/java-parser.adapter.ts";
+import { createJavaMemberNames } from "../core/adapters/tree-sitter/java-member-names.adapter.ts";
 import { createJavaTrivia } from "../core/adapters/tree-sitter/java-trivia.adapter.ts";
+import { createTypeScriptMemberNames } from "../core/adapters/typescript/declared-member-names.adapter.ts";
 import { createTypeScriptTrivia } from "../core/adapters/typescript/source-trivia.adapter.ts";
+import type { DeclaredMemberNamesReader } from "../core/ports/declared-member-names.port.ts";
 import type { SourceTrivia } from "../core/ports/source-trivia.port.ts";
 import { createAngularDeclarationReader } from "../core/adapters/typescript/angular-declarations.adapter.ts";
 import { createAngularRoutesExtractor } from "../core/adapters/typescript/angular-routes.adapter.ts";
@@ -146,6 +149,14 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
   const javaTrivia = createJavaTrivia(createJavaParser);
   const sourceTrivia: SourceTrivia = {
     triviaLines: async (file) => new Set([...(await typescriptTrivia.triviaLines(file)), ...(await javaTrivia.triviaLines(file))]),
+  };
+  const typescriptMemberNames = createTypeScriptMemberNames();
+  const javaMemberNames = createJavaMemberNames(createJavaParser);
+  const memberNames: DeclaredMemberNamesReader = {
+    memberNames: async (file) => {
+      const [typescript, java] = [await typescriptMemberNames.memberNames(file), await javaMemberNames.memberNames(file)];
+      return { names: [...new Set([...typescript.names, ...java.names])].sort(compareText), computed: typescript.computed || java.computed };
+    },
   };
   const callSites = staged<CallSiteReader>({
     of: async (files, repo, libraries) => {
@@ -250,6 +261,7 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
     ...trust,
     importOrigins: (sources: readonly SourceFile[]) => createImportOrigins(sources),
     sourceTrivia,
+    memberNames,
   });
   const trace = measurement === undefined ? bareTrace : measuredTrace(bareTrace, measurement);
   const defaults = createWorkspaceDefaults(createFixedLayerStore());

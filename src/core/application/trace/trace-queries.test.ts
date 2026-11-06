@@ -36,6 +36,10 @@ interface Options {
   trivia?: Readonly<Record<string, readonly number[]>>;
   /** Runs each time the walk asks for a file's trivia lines. */
   onTrivia?: (path: string) => void;
+  /** The member names each source declares in value positions, by path. */
+  memberNames?: Readonly<Record<string, readonly string[]>>;
+  /** Runs each time the walk reads a source's member names. */
+  onMemberNames?: (path: string) => void;
 }
 
 function setup(options: Options) {
@@ -63,6 +67,7 @@ function setup(options: Options) {
       open: () => ({ ok: true, value: store }),
     },
     sourceTrivia: { triviaLines: async (file: { path: string }) => (options.onTrivia?.(file.path), new Set(options.trivia?.[file.path] ?? [])) },
+    memberNames: { memberNames: async (file: { path: string }) => (options.onMemberNames?.(file.path), { names: options.memberNames?.[file.path] ?? [], computed: false }) },
     importOrigins: () => ({ origins: async (sites: readonly ImportOriginSite[]) => { options.onOrigins?.(); return sites.map(answer); } }),
     engines: {},
     ...(options.live && { live: options.live.deps, trust: { read: async () => ({ ok: true, value: "trusted" }) } }),
@@ -165,6 +170,43 @@ test("a member call named after a function an object literal holds is a cut list
     unresolved: [{ from: "run", name: "table.handle", kind: "calls", file: A, line: 9, column: 4 }],
   });
   assert.deepEqual(cutsOf(fact), [["unresolved-link", ["src/a.ts:9 table.handle", "src/b.ts::handle"]]]);
+});
+
+const SOURCES = [{ path: A, content: "" }, { path: B, content: "" }];
+const MEMBER_CALLS: FakeUnresolved[] = [
+  { from: "run", name: "items.map", kind: "calls", file: A, line: 9, column: 4 },
+  { from: "run", name: "store.setErrors", kind: "calls", file: A, line: 10, column: 4 },
+];
+
+test("the member names are read once per query from each source, however many member calls the syntax rule settles", async () => {
+  const read: string[] = [];
+
+  const fact = await factOf({ nodes: [SVC, RUN], edges: CONTAINS, unresolved: MEMBER_CALLS, sources: SOURCES, memberNames: { [B]: ["setErrors"] }, onMemberNames: (path) => read.push(path) });
+
+  assert.deepEqual(read, [A, B]);
+  assert.deepEqual(cutsOf(fact), [["unresolved-link", ["src/a.ts:10 store.setErrors", "src/b.ts::setErrors"]]]);
+  assert.deepEqual(valueOf(fact).steps[0]?.external, [{ kind: "unnamed", names: ["items.map"] }]);
+});
+
+test("the member names are never read when no member call reaches the syntax rule", async () => {
+  const read: string[] = [];
+
+  await factOf({ nodes: [SVC, RUN, fakeNode("Repo.setErrors", "method", B, 3, 5, "setErrors")], edges: CONTAINS, unresolved: [MEMBER_CALLS[1]!], sources: SOURCES, onMemberNames: (path) => read.push(path) });
+
+  assert.deepEqual(read, []);
+});
+
+test("a source outside the declared scope is not read for member names and keeps no member call in the repository", async () => {
+  const read: string[] = [];
+
+  const fact = await factOf(
+    { nodes: [SVC, RUN], edges: CONTAINS, unresolved: [MEMBER_CALLS[1]!], sources: SOURCES, memberNames: { [B]: ["setErrors"] }, onMemberNames: (path) => read.push(path), matches: (path) => path === B },
+    [{ file: A, symbol: "run" }],
+    { scope: { exclude: ["src/b.ts"] } },
+  );
+
+  assert.deepEqual(read, [A]);
+  assert.deepEqual(valueOf(fact).steps[0]?.external, [{ kind: "unnamed", names: ["store.setErrors"] }]);
 });
 
 test("a declaration outside the declared scope does not keep a member call in the repository", async () => {
