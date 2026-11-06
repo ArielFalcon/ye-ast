@@ -1,5 +1,5 @@
 import { strict as assert } from "node:assert";
-import { test } from "node:test";
+import { mock, test } from "node:test";
 import { createSnapshotDataCache, type SnapshotCacheEvent } from "./snapshot-data-cache.ts";
 import type { SnapshotData } from "./read-snapshot.ts";
 
@@ -84,6 +84,27 @@ test("an observer sees each lookup and each admission, eviction and skip with th
     { outcome: "admitted", entryBytes: one, retainedBytes: one * 2 },
     { outcome: "evicted", entryBytes: one, retainedBytes: one },
     { outcome: "admitted", entryBytes: one, retainedBytes: one * 2 },
-    { outcome: "oversize-skipped", entryBytes: bytes("huge", { sources: [{ path: "p", content: "x".repeat(one * 3) }] }), retainedBytes: one * 2 },
+    { outcome: "oversize-skipped", entryBytes: Buffer.byteLength("huge") + one * 3, retainedBytes: one * 2 },
   ]);
+});
+
+test("an entry whose source bytes alone exceed the budget is skipped without being serialized, and a borderline one is decided by its exact size", () => {
+  const events: SnapshotCacheEvent[] = [];
+  const content = "🌍".repeat(10);
+  const huge = { sources: [{ path: "p", content }] };
+  const lowerBound = Buffer.byteLength("huge") + Buffer.byteLength(content);
+  const cache = createSnapshotDataCache(lowerBound - 1, (event) => events.push(event));
+  const stringify = mock.method(JSON, "stringify");
+  try {
+    cache.put("huge", huge);
+    assert.equal(stringify.mock.callCount(), 0);
+  } finally {
+    stringify.mock.restore();
+  }
+  assert.deepEqual(events, [{ outcome: "oversize-skipped", entryBytes: lowerBound, retainedBytes: 0 }]);
+
+  const borderline = createSnapshotDataCache(lowerBound, (event) => events.push(event));
+  borderline.put("huge", huge);
+  assert.equal(borderline.get("huge"), undefined);
+  assert.deepEqual(events[1], { outcome: "oversize-skipped", entryBytes: bytes("huge", huge), retainedBytes: 0 });
 });

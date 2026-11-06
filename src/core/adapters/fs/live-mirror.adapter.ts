@@ -7,6 +7,7 @@ import { privateToOwner } from "../../domain/shared/private-to-owner.ts";
 import type { Result } from "../../domain/shared/result.ts";
 import { INDEX_STORE_DIRECTORY } from "../../ports/code-graph.port.ts";
 import { isEngineConfiguration, isEngineEntry } from "../../ports/staging-rules.ts";
+import { DEBRIS_STALE_MS } from "../../ports/live-mirror.port.ts";
 import type { LiveMirror, MirrorEntry, MirrorFault, MirrorLocation, MirrorLock, MirrorReconciliation, MirrorScopeUsage, MirrorState, MirrorUsage } from "../../ports/live-mirror.port.ts";
 import type { SkippedEntry } from "../../ports/vcs.port.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
@@ -17,12 +18,8 @@ const INDEX_TREE_DIRECTORY = "index-tree";
 const LOCK_SUFFIX = ".lock";
 const TEMPORARY_SUFFIX = ".tmp";
 const STATE_TEMPORARY = /^(.*)\.state\.json\.[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.tmp$/;
-/**
- * Scope-bearing state temporaries become eligible only after this age and a nonblocking scope reservation.
- */
-const TEMPORARY_STALE_MS = 60 * 60 * 1000;
 /** A state of another format version is discarded, which rebuilds its scope once. */
-const STATE_FORMAT_VERSION = 3;
+const STATE_FORMAT_VERSION = 4;
 const DIRECTORY_MODE = 0o700;
 const FILE_MODE = 0o600;
 const LOCK_POLL_MS = 50;
@@ -218,7 +215,7 @@ export function createLiveMirror(deps: LiveMirrorDeps = defaultLiveMirrorDeps): 
         if (!after.isFile()) return { ok: false, fault: { kind: "unreadable", detail: `${path} is no longer a regular file` } };
         if (held.bytes === Number(current.size) && sameFile(current, after)) {
           if (copy) await rename(temporary, destination);
-          return { ok: true, value: { path, size: held.bytes, mtimeNs: current.mtimeNs.toString(), blob: held.blob } };
+          return { ok: true, value: { path, size: held.bytes, mtimeNs: current.mtimeNs.toString(), ctimeNs: current.ctimeNs.toString(), ino: current.ino.toString(), blob: held.blob } };
         }
         current = after;
       } catch (error) {
@@ -288,12 +285,11 @@ export function createLiveMirror(deps: LiveMirrorDeps = defaultLiveMirrorDeps): 
       }
     },
 
-    async reconcile(location, paths, manifest, force, signal) {
+    async reconcile(location, paths, manifest, signal) {
       const prepared = await prepare(location, "root", true);
       if (!prepared.ok) return prepared;
       const root = rootOf(location);
       const old = new Map(manifest.map((entry) => [entry.path, entry]));
-      const forced = new Set(force);
       const skipped: SkippedEntry[] = [];
       const kept: MirrorEntry[] = [];
       const pending: { path: string; stat: BigIntStats }[] = [];
@@ -321,7 +317,7 @@ export function createLiveMirror(deps: LiveMirrorDeps = defaultLiveMirrorDeps): 
         if (status.isSymbolicLink()) { skipped.push({ path, reason: "symlink" }); continue; }
         if (!status.isFile()) { skipped.push({ path, reason: "unsafe-path" }); continue; }
         const previous = old.get(path);
-        if (previous !== undefined && !forced.has(path) && previous.size === Number(status.size) && previous.mtimeNs === status.mtimeNs.toString()) kept.push(previous);
+        if (previous !== undefined && matches(previous, status)) kept.push(previous);
         else pending.push({ path, stat: status });
       }
 
@@ -372,7 +368,7 @@ export function createLiveMirror(deps: LiveMirrorDeps = defaultLiveMirrorDeps): 
         const status = statuses[index]!;
         const previous = known.get(path);
         if (previous !== undefined) {
-          if (status === null || !status.isFile() || previous.size !== Number(status.size) || previous.mtimeNs !== status.mtimeNs.toString()) changed.add(path);
+          if (status === null || !status.isFile() || !matches(previous, status)) changed.add(path);
         } else if (skippedLinks.has(path)) {
           if (status?.isFile()) changed.add(path);
         } else if (status !== null) {
@@ -458,7 +454,7 @@ export function createLiveMirror(deps: LiveMirrorDeps = defaultLiveMirrorDeps): 
         }
         if (STATE_TEMPORARY.test(entry.name)) {
           const status = await lstat(join(live, entry.name)).catch(() => null);
-          if (status !== null && now - status.mtimeMs > TEMPORARY_STALE_MS) debris.push(entry.name);
+          if (status !== null && now - status.mtimeMs > DEBRIS_STALE_MS) debris.push(entry.name);
         }
       }
       for (const scope of [...states.keys()]) {
@@ -516,7 +512,7 @@ export function createLiveMirror(deps: LiveMirrorDeps = defaultLiveMirrorDeps): 
             });
             if (status === null || !status.isFile()) return { ok: true, value: undefined };
             if (temporary !== null) {
-              if (deps.now() - status.mtimeMs <= TEMPORARY_STALE_MS) return { ok: true, value: undefined };
+              if (deps.now() - status.mtimeMs <= DEBRIS_STALE_MS) return { ok: true, value: undefined };
             } else {
               const root = await prepare(location, "root", false);
               if (!root.ok) return root;
@@ -621,8 +617,13 @@ async function hashFile(file: string): Promise<{ blob: string; bytes: number }> 
   }
 }
 
+/** A user tool can set a modification time back but not the status-change time, and a replaced file has another inode. */
+function matches(entry: MirrorEntry, status: BigIntStats): boolean {
+  return entry.size === Number(status.size) && entry.mtimeNs === status.mtimeNs.toString() && entry.ctimeNs === status.ctimeNs.toString() && entry.ino === status.ino.toString();
+}
+
 function sameFile(a: BigIntStats, b: BigIntStats): boolean {
-  return a.size === b.size && a.mtimeNs === b.mtimeNs && a.ino === b.ino;
+  return a.size === b.size && a.mtimeNs === b.mtimeNs && a.ctimeNs === b.ctimeNs && a.ino === b.ino;
 }
 
 function unsafe(path: string): boolean {
@@ -649,7 +650,7 @@ function isStrings(value: unknown): value is string[] {
 }
 
 function isEntry(value: unknown): value is MirrorEntry {
-  return isRecord(value) && typeof value.path === "string" && Number.isSafeInteger(value.size) && typeof value.mtimeNs === "string" && /^\d+$/.test(value.mtimeNs) && typeof value.blob === "string";
+  return isRecord(value) && typeof value.path === "string" && Number.isSafeInteger(value.size) && typeof value.mtimeNs === "string" && /^\d+$/.test(value.mtimeNs) && typeof value.ctimeNs === "string" && /^\d+$/.test(value.ctimeNs) && typeof value.ino === "string" && /^\d+$/.test(value.ino) && typeof value.blob === "string";
 }
 
 function isSkipped(value: unknown): value is SkippedEntry {

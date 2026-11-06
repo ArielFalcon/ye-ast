@@ -41,7 +41,7 @@ import { isEngineConfiguration } from "../../ports/staging-rules.ts";
 import type { FieldOrigin, LocalOrigin } from "../../domain/relations/field-origin.ts";
 import type { RelationExtractor } from "../relations/relation-extractor.ts";
 import type { CommitExport, Vcs, VcsChanges, VcsFault } from "../../ports/vcs.port.ts";
-import { ABORTED, extractCommit, factBaseOf, trustOf, withScratch, type CommitExtraction, type PreparedCommit } from "../snapshot/read-snapshot.ts";
+import { ABORTED, factBaseOf, trustOf, withScratch, type CommitExtraction, type PreparedCommit } from "../snapshot/read-snapshot.ts";
 import { createHeadReader, preparedLive, withLiveCapture, type FactSpec, type HeadIndex, type HeadReaderDeps, type HeadReading, type Revisioned } from "../snapshot/head-reading.ts";
 import { readImporters } from "./importers.ts";
 import { inboundEdgesOf } from "./inbound-origins.ts";
@@ -279,7 +279,9 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
       return withScratch(deps.scratch, async (directory): Promise<Answer> => {
         const liveTree = await held.extract(signal);
         if (!liveTree.ok) return liveTree;
-        const baseTree = await extractCommit(changeDeps, repo, mergeBase, await directory(), exported, signal);
+        const preparedBase = await prepareCommit(changeDeps, repo, mergeBase, directory, exported, { scope: declaredScope(request.scope), trust: "trusted" }, signal);
+        if (!preparedBase.ok) return preparedBase;
+        const baseTree = await preparedBase.value.extract(signal);
         if (!baseTree.ok) return baseTree;
         const reading = { ...headReader.liveReading(tree, liveTree.value, "trusted", scope, selected, head, repoId, spec), prepared: preparedLive(held) };
 
@@ -296,7 +298,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
         if (signal?.aborted) return ABORTED;
         const radius = blastRadius(mergeBase, diff.value.filter((file) => selected(file.path)));
         const sameTree = changed.length === 0 && JSON.stringify(baseTree.value.export.skipped) === JSON.stringify(tree.export.skipped);
-        return readChange({ request, radius, head: reading, baseTree: baseTree.value, sameTree, unreadable });
+        return readChange({ request, radius, head: reading, baseTree: baseTree.value, basePrepared: preparedBase.value, sameTree, unreadable });
       });
     }, unavailable: async ({ head, scope }) => {
       const unavailable = headReader.unavailableLive("trusted", scope, head, repoId, spec);

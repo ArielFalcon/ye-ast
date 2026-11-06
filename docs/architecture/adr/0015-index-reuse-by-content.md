@@ -91,5 +91,5 @@ record that origin in their inputs; `sha` facts keep reading full builds until t
   query then builds a per-call index. Where indexes live under `untrusted`
   without a host is [RFC-0006](../rfc/0006-configuration.md) open question 4.
 - Garbage collection of kept indexes is decided by [ADR-0027](0027-retention-of-immutable-index-entries.md): last use,
-  14 days unused and 512 MiB, never an entry an open reader holds. Still not decided: a build that is killed leaves its
-  temporary `.build-*` directory in the cache.
+  14 days unused and 512 MiB, never an entry an open reader holds. A `.build-*` directory a killed build leaves is
+  removed by the same sweep once unwritten for an hour (ADR-0027 decision 8).

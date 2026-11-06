@@ -321,7 +321,7 @@ test("a live mirror writes a stage per lifecycle step, the lock release included
   await lock.value.release();
   await measured.readState({ repo: "/r", scope: "s" });
   await measured.discard({ repo: "/r", scope: "s" });
-  await measured.reconcile({ repo: "/r", scope: "s" }, [], [], []);
+  await measured.reconcile({ repo: "/r", scope: "s" }, [], []);
   await measured.touch({ repo: "/r", scope: "s" });
   await measured.changedSince({ repo: "/r", scope: "s" }, [], { manifest: [], skipped: [] });
   await measured.usage("/r");

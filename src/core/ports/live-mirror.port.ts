@@ -7,12 +7,18 @@ export interface MirrorFault {
   detail: string;
 }
 
+/** A leftover temporary file or build directory becomes debris after it has gone unwritten this long. */
+export const DEBRIS_STALE_MS = 60 * 60 * 1000;
+
 /** One mirrored file: what ye-ast copied and the git blob id of the copied bytes. */
 export interface MirrorEntry {
   path: string;
   size: number;
   /** Nanosecond modification time of the working-tree file when it was copied, as a decimal string. */
   mtimeNs: string;
+  /** Nanosecond status-change time, which a user tool cannot set back, as a decimal string. */
+  ctimeNs: string;
+  ino: string;
   blob: string;
 }
 
@@ -99,16 +105,15 @@ export interface LiveMirror {
   writeState(location: MirrorLocation, state: MirrorState): Promise<Result<void, MirrorFault>>;
   /**
    * Makes the mirror hold `paths` of the working tree at `location.repo`: a regular file whose size and nanosecond
-   * modification time match its `manifest` entry keeps it, any other is copied and hashed from the copy; a symbolic
+   * modification time, status-change time and inode match its `manifest` entry keeps it, any other is copied and hashed from the copy; a symbolic
    * link, a submodule, a special file or an unsafe path is skipped with the export's reason; a manifest path no
    * longer listed or present is deleted. The copy drops what `CodeGraph.index` never reads (engine entries, every
-   * `.gitignore`, the root `codegraph.json`), which the manifest still records. `force` names paths copied again
-   * whatever their stat says.
+   * `.gitignore`, the root `codegraph.json`), which the manifest still records.
    */
-  reconcile(location: MirrorLocation, paths: readonly WorkingTreePath[], manifest: readonly MirrorEntry[], force: readonly string[], signal?: AbortSignal): Promise<Result<MirrorReconciliation, MirrorFault>>;
+  reconcile(location: MirrorLocation, paths: readonly WorkingTreePath[], manifest: readonly MirrorEntry[], signal?: AbortSignal): Promise<Result<MirrorReconciliation, MirrorFault>>;
   /**
    * The paths whose stat says the mirror is behind `paths`, without reading or writing any file: a listed path whose
-   * size or nanosecond modification time differs from its `manifest` entry, one the manifest does not hold, a manifest
+   * size, nanosecond modification time, status-change time or inode differs from its `manifest` entry, one the manifest does not hold, a manifest
    * path no longer listed or present, and a path `skipped` as a symbolic link that became a regular file. Sorted.
    */
   changedSince(location: MirrorLocation, paths: readonly WorkingTreePath[], state: Pick<MirrorState, "manifest" | "skipped">, signal?: AbortSignal): Promise<Result<readonly string[], MirrorFault>>;

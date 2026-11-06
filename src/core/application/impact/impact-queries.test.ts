@@ -1739,7 +1739,7 @@ test("a live query answered from retained data still reports the paths that chan
   assert.deepEqual([counter.calls, next.log.reads], [2, 1]);
 });
 
-test("a live change query over an unchanged capture reads the head relations and module dependencies once", async () => {
+test("a live change query over an unchanged capture reads the head relations and module dependencies once, and the merge base's module dependencies once across head edits", async () => {
   const path = "src/index.ts";
   const live = fakeLive({ [path]: "2", "src/A.java": "2" });
   const snapshotCache = createSnapshotDataCache(RETAINED_BYTES);
@@ -1760,12 +1760,53 @@ test("a live change query over an unchanged capture reads the head relations and
   const hit = fact(await ask());
   assert.equal(canonicalJson(hit), canonicalJson(miss));
   assert.equal(counter.calls - missed.relations, 0);
-  assert.ok(modules.calls - missed.modules < missed.modules);
+  assert.equal(modules.calls - missed.modules, 0);
 
   live.tree.set(path, "9");
   const before = { relations: counter.calls, modules: modules.calls };
   assert.ok((await ask()).ok);
-  assert.deepEqual([counter.calls - before.relations, modules.calls - before.modules], [missed.relations, missed.modules]);
+  assert.deepEqual([counter.calls - before.relations, modules.calls - before.modules], [missed.relations, missed.modules - 1]);
+});
+
+test("a live change query reads and extracts the merge base once, misses on another merge base or scope, keeps hitting it when the live head changes, and answers the same as uncached", async () => {
+  const live = fakeLive({ "src/A.java": "1" });
+  const snapshotCache = createSnapshotDataCache(RETAINED_BYTES);
+  const run = (options: Partial<Parameters<typeof setup>[0]> = {}) => liveRun(live, snapshotCache, options);
+  const ask = async (options: Partial<Parameters<typeof setup>[0]> = {}, overrides: { scope?: { exclude: string[] } } = {}) => {
+    const current = run(options);
+    const answer = fact(await current.queries.ofChange({ ...LIVE_BASE, base: "base", live: true, ...overrides }));
+    return { answer, reads: current.log.reads, extractions: current.log.extractions };
+  };
+
+  const miss = await ask();
+  assert.deepEqual([miss.reads, miss.extractions], [2, 2]);
+  const hit = await ask();
+  assert.deepEqual([hit.reads, hit.extractions], [0, 0]);
+  assert.equal(canonicalJson(hit.answer), canonicalJson(miss.answer));
+  const uncached = fact(await setup({ trust: TRUSTED, live, nodes: LIVE_NODES, edges: SOURCE_EDGES }).queries.ofChange({ ...LIVE_BASE, base: "base", live: true }));
+  assert.equal(canonicalJson(hit.answer), canonicalJson(uncached));
+
+  const otherFork = "d".repeat(40);
+  const moved = await ask({ mergeBase: otherFork });
+  assert.deepEqual([moved.reads, moved.extractions], [1, 1]);
+  const scoped = await ask({}, { scope: { exclude: ["docs/**"] } });
+  assert.deepEqual([scoped.reads, scoped.extractions], [2, 2]);
+
+  live.tree.set("src/A.java", "2");
+  const edited = await ask();
+  assert.deepEqual([edited.reads, edited.extractions], [1, 1]);
+});
+
+test("a merge base a live change query kept answers a change query between commits, and the other way round", async () => {
+  const live = fakeLive({ "src/A.java": "1" });
+  const snapshotCache = createSnapshotDataCache(RETAINED_BYTES);
+  const liveAsk = liveRun(live, snapshotCache);
+  assert.ok((await liveAsk.queries.ofChange({ ...LIVE_BASE, base: "base", live: true })).ok);
+  const sha = liveRun(live, snapshotCache);
+  const between = fact(await sha.ask());
+  assert.deepEqual([sha.log.reads, sha.log.extractions], [1, 1]);
+  const fresh = fact(await setup({ trust: TRUSTED, nodes: LIVE_NODES, edges: SOURCE_EDGES }).ask());
+  assert.equal(canonicalJson(between), canonicalJson(fresh));
 });
 
 test("a live importers query, which reads sources only, reuses them for an unchanged capture", async () => {

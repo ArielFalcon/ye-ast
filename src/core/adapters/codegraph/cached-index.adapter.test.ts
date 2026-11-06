@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { CodeGraph, CodeGraphReader, IndexSummary } from "../../ports/code-graph.port.ts";
 import type { IndexCache, IndexDiscard, IndexRetentionPolicy } from "../../ports/index-cache.port.ts";
+import { DEBRIS_STALE_MS } from "../../ports/live-mirror.port.ts";
 import { createIndexCache } from "./cached-index.adapter.ts";
 import { INDEX_STORE_DIRECTORY } from "../../ports/code-graph.port.ts";
 
@@ -391,4 +392,28 @@ test("a discard whose index another process leases and republishes meanwhile lea
   assert.equal(armed, false);
   assert.deepEqual(readdirSync(join(directory, "indexes")).filter((name) => name.startsWith(".build-")), []);
   assert.ok(existsSync(entry()));
+});
+
+test("a build directory untouched for longer than the debris bound is removed by the sweep, and a recent or still-written one stays", async () => {
+  const { graph } = fakeGraph();
+  const cache = cacheOf(graph, { retention: RETENTION });
+  await keyOfContent(cache, "content-first");
+  const indexes = join(directory, "indexes");
+  const touchAt = (path: string, ageMs: number): void => utimesSync(path, new Date(NOW - ageMs), new Date(NOW - ageMs));
+  const leftover = (name: string, ageMs: number, fileAgeMs: number): void => {
+    mkdirSync(join(indexes, name));
+    writeFileSync(join(indexes, name, "store.db"), "partial");
+    touchAt(join(indexes, name, "store.db"), fileAgeMs);
+    touchAt(join(indexes, name), ageMs);
+  };
+  leftover(".build-killed", DEBRIS_STALE_MS + 1, DEBRIS_STALE_MS + 1);
+  leftover(".build-fresh", DEBRIS_STALE_MS - 1000, DEBRIS_STALE_MS - 1000);
+  leftover(".build-writing", DEBRIS_STALE_MS + 1, 1000);
+
+  await keyOfContent(cache, "content-second");
+
+  const names = readdirSync(indexes);
+  assert.ok(!names.includes(".build-killed"));
+  assert.ok(names.includes(".build-fresh"));
+  assert.ok(names.includes(".build-writing"));
 });
