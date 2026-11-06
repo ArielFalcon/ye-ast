@@ -200,12 +200,11 @@ export function qualifiedTypeName(name: string, scope: Scope, project: JavaProje
   return named ? candidate : undefined;
 }
 
-/** The package under a platform prefix that a repository's own package occupies: the prefix and its next segment. */
-function claimedPlatformPackage(packageName: string): string[] {
-  const prefix = PLATFORM_PACKAGES.find((candidate) => `${packageName}.`.startsWith(candidate));
-  if (prefix === undefined) return [];
-  const next = packageName.slice(prefix.length).split(".")[0];
-  return [next === undefined || next === "" ? packageName : `${prefix}${next}`];
+/** The platform prefix and its next segment, when a package the sources declare sits under a platform prefix. */
+function claimedPlatformPackage(packageName: string): string | undefined {
+  const prefix = PLATFORM_PACKAGES.find((candidate) => packageName.startsWith(candidate));
+  const next = prefix === undefined ? undefined : packageName.slice(prefix.length).split(".")[0];
+  return next ? `${prefix}${next}.` : undefined;
 }
 
 export function createJavaProject(files: readonly JavaFile[]): JavaProject {
@@ -226,10 +225,10 @@ export function createJavaProject(files: readonly JavaFile[]): JavaProject {
     }
   }
 
-  const claimed = [...new Set(files.flatMap((file) => claimedPlatformPackage(file.packageName)))];
+  const claimed = [...new Set(files.map((file) => claimedPlatformPackage(file.packageName)).filter((owned) => owned !== undefined))];
 
   function isPlatformName(fqn: string): boolean {
-    return PLATFORM_PACKAGES.some((prefix) => fqn.startsWith(prefix)) && claimed.every((owned) => !fqn.startsWith(`${owned}.`));
+    return PLATFORM_PACKAGES.some((prefix) => fqn.startsWith(prefix)) && claimed.every((owned) => !fqn.startsWith(owned));
   }
 
   /** A name that two files declare (modules of one repository may) is not resolved: the sources do not say which is meant. */
