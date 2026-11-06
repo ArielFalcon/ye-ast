@@ -1,6 +1,6 @@
 import ts from "typescript";
 
-/** What a name binds at one place: the symbol and its declarations, nothing the file declares (the binder answers so inside `with` too), or a scope a sloppy direct `eval` can extend at run time. */
+/** What a name binds at one place: the symbol and its declarations, nothing the file declares, or a scope decided at run time (a `with` body, or one a sloppy direct `eval` can extend). */
 export type LexicalBinding = { kind: "declared"; symbol: ts.Symbol; declarations: readonly ts.Declaration[] } | { kind: "none" } | { kind: "dynamic" };
 
 export interface BoundFile {
@@ -39,7 +39,7 @@ export function bindFile(path: string, content: string): BoundFile {
   };
   const program = ts.createProgram({ rootNames: [fileName], options: OPTIONS, host });
   const checker = program.getTypeChecker();
-  const dynamicScopes = evalScopes(tree);
+  const dynamicScopes = dynamicScopesOf(tree);
   let starting: Map<number, ts.Identifier[]> | undefined;
 
   const isDynamic = (identifier: ts.Identifier): boolean => {
@@ -76,11 +76,16 @@ export function bindFile(path: string, content: string): BoundFile {
   };
 }
 
-/** The function bodies and the file whose own code, outside strict mode, calls `eval` directly: a `var` it evaluates joins that scope at run time. */
-function evalScopes(tree: ts.SourceFile): ReadonlySet<ts.Node> {
+/**
+ * The scopes whose names are decided at run time: the function bodies and the file whose own code, outside strict mode,
+ * calls `eval` directly, since a `var` it evaluates joins that scope; and the body of a `with`, whose object may hold any
+ * name it reads or writes.
+ */
+function dynamicScopesOf(tree: ts.SourceFile): ReadonlySet<ts.Node> {
   const scopes = new Set<ts.Node>();
   const visit = (node: ts.Node, scope: ts.Node, strict: boolean): void => {
     if (ts.isCallExpression(node) && isDirectEval(node) && !strict) scopes.add(scope);
+    if (ts.isWithStatement(node)) scopes.add(node.statement);
     if (ts.isClassLike(node)) return node.forEachChild((child) => visit(child, scope, true));
     if (ts.isFunctionLike(node) && "body" in node && node.body !== undefined) {
       const inner = strict || (ts.isBlock(node.body) && declaresStrict(node.body.statements));

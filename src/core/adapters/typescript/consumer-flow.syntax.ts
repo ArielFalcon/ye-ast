@@ -156,9 +156,15 @@ export function assignedBinding(name: ts.Identifier): Binding | undefined {
   return { kind: "name", name: name.text, scope: declaringScope(name), ...(answer === undefined ? {} : { binds: answer.key }) };
 }
 
-function bindsTo(identifier: ts.Identifier, binding: Extract<Binding, { kind: "name" }>): boolean {
+/** Whether a name of the binding's spelling binds it; `dynamic` where the resolver claims no binding, so it may. */
+function bindsTo(identifier: ts.Identifier, binding: Extract<Binding, { kind: "name" }>): boolean | "dynamic" {
   const answer = answerOf(identifier);
-  return answer !== "dynamic" && answer?.key === binding.binds;
+  return answer === "dynamic" ? answer : answer?.key === binding.binds;
+}
+
+/** A name whose binding is decided at run time, so no declaration can be claimed for it. */
+export function isDynamicName(identifier: ts.Identifier): boolean {
+  return answerOf(identifier) === "dynamic";
 }
 
 const SCOPES = (node: ts.Node): boolean =>
@@ -223,31 +229,35 @@ function shadows(node: ts.Node, binding: Binding): boolean {
   return binding.kind === "member" && (ts.isClassLike(node) || ts.isFunctionExpression(node) || ts.isFunctionDeclaration(node));
 }
 
-function isReference(node: ts.Node, binding: Binding): boolean {
+function isReference(node: ts.Node, binding: Binding): boolean | "dynamic" {
   if (binding.kind === "name") return ts.isIdentifier(node) && node.text === binding.name && isValueIdentifier(node) && bindsTo(node, binding);
   return ts.isPropertyAccessExpression(node) && node.expression.kind === ts.SyntaxKind.ThisKeyword && node.name.text === binding.name && !isWriteTarget(node);
 }
 
-/** The expressions that read a binding, in source order. */
-export function referencesOf(binding: Binding): ts.Expression[] {
-  const found: ts.Expression[] = [];
+/** The expressions that read a binding, in source order, and apart the reads of its name a dynamic scope may bind to it. */
+export function referencesOf(binding: Binding): { reads: ts.Expression[]; dynamic: ts.Expression[] } {
+  const reads: ts.Expression[] = [];
+  const dynamic: ts.Expression[] = [];
   const visit = (node: ts.Node): void => {
     if (ts.isTypeNode(node)) return;
-    if (isReference(node, binding)) {
-      found.push(node as ts.Expression);
+    const reference = isReference(node, binding);
+    if (reference !== false) {
+      (reference === "dynamic" ? dynamic : reads).push(node as ts.Expression);
       return;
     }
     if (shadows(node, binding)) return;
     node.forEachChild(visit);
   };
   searchRoot(binding).forEachChild(visit);
-  return found;
+  return { reads, dynamic };
 }
 
 /** A write to a binding or to a path below it: the assigned or deleted expression, as a path from the binding. */
 export interface Write {
   node: ts.Node;
   path: AccessPath;
+  /** The write's target is a name a dynamic scope decides, so it may not write the binding. */
+  dynamic?: true;
 }
 
 /** The writes to `binding` inside `root` that end after `from` and before `to`, in source order. */
@@ -256,8 +266,8 @@ export function writesWithin(root: ts.Node, binding: Binding, from: number, to: 
   const visit = (node: ts.Node): void => {
     if (node.end <= from || node.pos >= to || ts.isTypeNode(node) || shadows(node, binding)) return;
     const target = ts.isBinaryExpression(node) && ASSIGNMENTS.has(node.operatorToken.kind) ? node.left : ts.isDeleteExpression(node) ? node.expression : undefined;
-    const path = target === undefined ? undefined : chainPath(target, binding);
-    if (path !== undefined && node.pos >= from && node.end <= to) found.push({ node, path });
+    const written = target === undefined ? undefined : pathFrom(target, binding);
+    if (written !== undefined && node.pos >= from && node.end <= to) found.push({ node, path: written.path, ...(written.dynamic ? { dynamic: true as const } : {}) });
     node.forEachChild(visit);
   };
   root.forEachChild(visit);
@@ -296,12 +306,21 @@ export function enclosingLoop(node: ts.Node, scope: ts.Node): ts.IterationStatem
 
 /** The path a tested expression reads from the binding, when it reads from it at all. */
 export function chainPath(expression: ts.Expression, binding: Binding): AccessPath | undefined {
+  const read = pathFrom(expression, binding);
+  return read === undefined || read.dynamic ? undefined : read.path;
+}
+
+/** The path an expression reaches from the binding, and whether a dynamic scope decides the name it starts at. */
+function pathFrom(expression: ts.Expression, binding: Binding): { path: AccessPath; dynamic: boolean } | undefined {
   const segments: string[] = [];
   let current = unwrap(expression);
   for (;;) {
-    if (binding.kind === "name" && ts.isIdentifier(current)) return current.text === binding.name && bindsTo(current, binding) ? segments : undefined;
+    if (binding.kind === "name" && ts.isIdentifier(current)) {
+      const binds = current.text === binding.name && bindsTo(current, binding);
+      return binds === false ? undefined : { path: segments, dynamic: binds === "dynamic" };
+    }
     if (ts.isPropertyAccessExpression(current)) {
-      if (binding.kind === "member" && current.expression.kind === ts.SyntaxKind.ThisKeyword) return current.name.text === binding.name ? segments : undefined;
+      if (binding.kind === "member" && current.expression.kind === ts.SyntaxKind.ThisKeyword) return current.name.text === binding.name ? { path: segments, dynamic: false } : undefined;
       segments.unshift(current.name.text);
       current = unwrap(current.expression);
     } else if (ts.isElementAccessExpression(current)) {

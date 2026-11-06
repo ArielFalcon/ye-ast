@@ -614,6 +614,45 @@ test("a function declared in one case clause is the callee of a call in another,
   assert.deepEqual(next(result), ["parameter render#0@4 owner"]);
 });
 
+const dynamicScopes = (body: string) => ({
+  eval: { path: "p.ts", content: `function use(o: Order) {\n  eval(code)\n  ${body}\n}` },
+  with: { path: "p.ts", content: `function use(o: Order) {\n  with (scope) {\n    ${body}\n  }\n}` },
+});
+const dynamicUse = { kind: "parameter" as const, repo: "repo", file: "p.ts", symbol: "use", line: 1, index: 0 };
+const raw = (result: FlowResult) => ({ uses: result.uses.map((use) => use.site.line), next: result.next.length, frontiers: result.frontiers.map((frontier) => `${frontier.at.line} ${frontier.cause}:${frontier.detail}`) });
+
+test("a read whose binding a dynamic scope leaves uncertain is a frontier at the read, never a use or a silent drop", async () => {
+  const { eval: evaluated, with: within } = dynamicScopes("show(o.owner.id)");
+
+  assert.deepEqual(raw(await follow([evaluated], dynamicUse, "owner")), { uses: [], next: 0, frontiers: ["3 unmodelled-flow:dynamic scope"] });
+  assert.deepEqual(raw(await follow([within], dynamicUse, "owner")), { uses: [], next: 0, frontiers: ["3 unmodelled-flow:dynamic scope"] });
+});
+
+test("a call passing a read a dynamic scope leaves uncertain is a frontier, never a callee claimed by name", async () => {
+  const render = "function render(y: Order) { return y.owner.id }\n";
+  const { eval: evaluated, with: within } = dynamicScopes("render(o)");
+
+  for (const file of [evaluated, within]) {
+    const result = await follow([{ ...file, content: render + file.content }], { ...dynamicUse, line: 2 }, "owner");
+    assert.equal(result.next.length, 0);
+    assert.ok(result.frontiers.some((frontier) => frontier.detail === "dynamic scope"));
+  }
+});
+
+test("a callee a dynamic scope names is no function of the repository, even when the value passed to it is certain", async () => {
+  const file = { path: "p.ts", content: "function render(y: Order) { return y.owner.id }\nclass Page {\n  held: Order\n  show() { with (scope) { render(this.held) } }\n}" };
+  const result = await follow([file], { kind: "member", repo: "repo", file: "p.ts", owner: "Page", member: "held" }, "owner");
+
+  assert.deepEqual(result.next, []);
+  assert.notDeepEqual(result.frontiers, []);
+});
+
+test("a write a dynamic scope may send elsewhere is a frontier, and the reads after it still hold the value", async () => {
+  const file = { path: "p.ts", content: "function use(o: Order) {\n  let x = o\n  with (scope) { x = other }\n  show(x.owner.id)\n}" };
+
+  assert.deepEqual(raw(await follow([file], dynamicUse, "owner")), { uses: [4], next: 0, frontiers: ["3 unmodelled-flow:dynamic scope"] });
+});
+
 test("a followed value read as a destructuring default or by an export specifier stays a frontier there", async () => {
   const defaulted = await follow([plain(["const { a = o } = {} as any", "show(a.owner.id)"])], paramO, "owner");
   const exported = await follow([source("p.ts", ["let held: any", "function use(o: Order) { held = o }", "export { held }"])], { ...paramO, line: at(2) }, "owner");

@@ -27,6 +27,7 @@ test("asking every name of a file what it binds creates no type, whatever positi
     "  return [value, first, other, element, props.callback, new.target, import.meta] as unknown as Alias;",
     "}",
     "export { run as start };",
+    "function sloppy(scope: object) { with (scope) { run; } }",
   ].join("\n"));
   const before = bound.typeCount();
   const visit = (node: ts.Node): void => {
@@ -60,4 +61,17 @@ test("a destructuring default reads the binding it names, while the key and the 
 
 test("an export specifier reads its local binding", () => {
   assert.equal(declarationLine("src/exports.ts", ["const held = 1;", "export { held as shared };"], "held", 1), 1);
+});
+
+test("a name read in the body of a with statement is dynamic, while its object expression keeps its binding", () => {
+  const bound = bindFile("src/scope.js", ["var obj = {};", "var held = 1;", "with (obj) { held; }"].join("\n"));
+  const names = new Map<string, ts.Identifier[]>();
+  const visit = (node: ts.Node): void => {
+    if (ts.isIdentifier(node)) names.set(node.text, [...(names.get(node.text) ?? []), node]);
+    node.forEachChild(visit);
+  };
+  visit(bound.tree);
+
+  assert.equal(bound.bindingOf(names.get("held")![1]!).kind, "dynamic");
+  assert.equal(bound.bindingOf(names.get("obj")![1]!).kind, "declared");
 });

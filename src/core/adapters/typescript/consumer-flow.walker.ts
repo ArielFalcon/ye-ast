@@ -12,6 +12,7 @@ import {
   declaredScope,
   discardsValue,
   declaringScope,
+  isDynamicName,
   enclosingClass,
   enclosingFunction,
   enclosingLoop,
@@ -550,15 +551,19 @@ export class Walker {
   /** Follows the reads of `binding`; with `from`, only those the declaration or assignment at `from` can reach. */
   private track(binding: Binding, t: Trail, from?: ts.Node): void {
     const trail: Trail = { origin: t.origin, hops: t.hops, guards: t.guards, binding };
-    const references = referencesOf(binding);
-    for (const reference of from === undefined ? references : this.reachedFrom(binding, from, references, t)) this.read(reference, trail);
+    const { reads, dynamic } = referencesOf(binding);
+    for (const reference of from === undefined ? reads : this.reachedFrom(binding, from, reads, t)) this.read(reference, trail);
+    for (const reference of dynamic) if (from === undefined || reference.pos >= from.end) this.once(reference, "dynamic scope", trail);
   }
 
   private reachedFrom(binding: Binding, assignment: ts.Node, references: readonly ts.Expression[], t: Trail): ts.Expression[] {
     const loop = enclosingLoop(assignment, binding.scope);
     if (loop !== undefined && references.some((reference) => reference.pos < assignment.pos && reference.pos >= loop.pos)) this.once(assignment, "assignment in a loop", t);
     const reachable = references.filter((reference) => reference.pos >= assignment.end);
-    const rewrite = writesWithin(searchRoot(binding), binding, assignment.end, Infinity).find((write) => write.path.length === 0);
+    const rewrites = writesWithin(searchRoot(binding), binding, assignment.end, Infinity).filter((write) => write.path.length === 0);
+    const definite = rewrites.findIndex((write) => write.dynamic === undefined);
+    for (const write of definite === -1 ? rewrites : rewrites.slice(0, definite)) this.once(write.node, "dynamic scope", t);
+    const rewrite = rewrites[definite];
     if (rewrite === undefined) return reachable;
     if (mayNotFollow(assignment, rewrite.node)) {
       this.once(rewrite.node, "conditional reassignment", t);
@@ -724,6 +729,7 @@ export class Walker {
   }
 
   private functionNamed(identifier: ts.Identifier): Resolved | undefined {
+    if (isDynamicName(identifier)) return undefined;
     const name = identifier.text;
     const scope = declaringScope(identifier);
     if (scope !== this.unit.tree) return this.localFunction(scope, name);
