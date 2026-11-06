@@ -48,17 +48,32 @@ function isFinal(binding: Binding): boolean {
  * Runtime text uses `{}`; values the snapshot cannot decide, including exhausted evaluation stacks, are undefined.
  */
 export class JavaValueEvaluator {
-  private diagnostics: { cause?: "recursive" | "dispatch-disagreement"; evidence: Evidence[] } | undefined;
+  private diagnostics: { cause?: "recursive" | "dispatch-disagreement"; evidence: Evidence[]; alternatives: Set<string> } | undefined;
 
-  trace<T>(evaluate: () => T): { value: T; cause?: "recursive" | "dispatch-disagreement"; evidence: Evidence[] } {
+  trace<T>(evaluate: () => T): { value: T; cause?: "recursive" | "dispatch-disagreement"; evidence: Evidence[]; alternatives: string[] } {
     const previous = this.diagnostics;
-    const trace: NonNullable<JavaValueEvaluator["diagnostics"]> = { evidence: [] };
+    const trace: NonNullable<JavaValueEvaluator["diagnostics"]> = { evidence: [], alternatives: new Set() };
     this.diagnostics = trace;
     try {
-      return { value: evaluate(), ...trace };
+      const value = evaluate();
+      return { value, ...(trace.cause === undefined ? {} : { cause: trace.cause }), evidence: trace.evidence, alternatives: [...trace.alternatives].sort() };
     } finally {
       this.diagnostics = previous;
     }
+  }
+
+  /** A null check the snapshot cannot decide: undecided, recording what its decided branches hold. */
+  private runTimeChoice(node: Node, scope: UrlScope, trail: ReadonlySet<number>): undefined {
+    const decided = (["consequence", "alternative"] as const).flatMap((field) => {
+      const branch = node.childForFieldName(field);
+      const value = branch === null ? undefined : this.of(branch, scope, trail);
+      return value === undefined ? [] : [value];
+    });
+    if (this.diagnostics !== undefined && decided.length > 0) {
+      for (const value of decided) this.diagnostics.alternatives.add(value);
+      this.diagnostics.evidence.push(spanOf(scope.type.file.path, node));
+    }
+    return undefined;
   }
 
   private record(cause: "recursive" | "dispatch-disagreement", file: JavaFile, node: Node): void {
@@ -95,7 +110,8 @@ export class JavaValueEvaluator {
           const right = condition?.childForFieldName("right");
           const operator = condition?.childForFieldName("operator")?.text;
           const nil = left === null || left === undefined || right?.type !== "null_literal" ? undefined : this.nullness(left, scope, trail);
-          if (nil === undefined || (operator !== "==" && operator !== "!=")) return undefined;
+          if (operator !== "==" && operator !== "!=") return undefined;
+          if (nil === undefined) return this.runTimeChoice(node, scope, trail);
           const branch = node.childForFieldName((operator === "==" ? nil : !nil) ? "consequence" : "alternative");
           return branch === null ? undefined : this.of(branch, scope, trail);
         }

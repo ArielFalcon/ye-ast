@@ -106,7 +106,7 @@ export class JavaEventReader {
     return evaluated.value === undefined
       ? {
           target: unknown("unresolved", [spanOf(publish.invocation.type.file.path, publish.invocation.node), ...evaluated.evidence]),
-          diagnostic: { cause: scope.undecidedCause ?? evaluated.cause ?? "destination-undecidable" },
+          diagnostic: { cause: scope.undecidedCause ?? evaluated.cause ?? "destination-undecidable", ...(evaluated.alternatives.length === 0 ? {} : { alternatives: evaluated.alternatives }) },
         }
       : { target: complete({ protocol: publish.client.protocol, destination: evaluated.value, role: "publish" }) };
   }

@@ -27,6 +27,8 @@ export interface CallSiteDiagnostic {
   source?: "not-read" | "read";
   /** Library files rejected by the parser; none is asserted to declare the intermediary. */
   unreadableSources?: readonly Evidence[];
+  /** The values a run-time choice in the destination takes on the branches the snapshot decides; never the destination itself. */
+  alternatives?: readonly string[];
 }
 
 /** The request an HTTP call writes when the snapshot cannot decide its base: the method and the path. */

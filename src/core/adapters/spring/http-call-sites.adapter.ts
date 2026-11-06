@@ -87,7 +87,7 @@ export class JavaHttpReader {
           return {
             ...target,
             target: unknown(target.target.reason, [library === undefined ? span : { ...span, via: library }, ...target.target.evidence, ...group.map(({ leaf }) => spanOf(leaf.invocation.type.file.path, leaf.invocation.node))]),
-            diagnostic: { cause, ...(library === undefined ? {} : { source: "read" }) },
+            diagnostic: { cause, ...(library === undefined ? {} : { source: "read" }), ...(target.diagnostic?.alternatives === undefined ? {} : { alternatives: target.diagnostic.alternatives }) },
           };
         });
         for (const target of targets) {
@@ -222,9 +222,10 @@ export class JavaHttpReader {
 
   private target(request: Request, scope: UrlScope): ReadTarget {
     const evaluated = this.text.trace(() => this.readTarget(request, scope));
-    const { value } = evaluated;
-    if (value.target.status !== "unknown" || evaluated.cause === undefined) return value;
-    return { ...value, target: unknown(value.target.reason, [...value.target.evidence, ...evaluated.evidence]), diagnostic: { cause: evaluated.cause } };
+    const { value, alternatives } = evaluated;
+    if (value.target.status !== "unknown" || (evaluated.cause === undefined && alternatives.length === 0)) return value;
+    const cause = evaluated.cause ?? value.diagnostic?.cause ?? "destination-undecidable";
+    return { ...value, target: unknown(value.target.reason, [...value.target.evidence, ...evaluated.evidence]), diagnostic: { cause, ...(alternatives.length === 0 ? {} : { alternatives }) } };
   }
 
   private readTarget(request: Request, scope: UrlScope): ReadTarget {

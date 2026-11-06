@@ -456,6 +456,22 @@ test("a source URL helper follows a proven null fallback and a single array elem
   assert.deepEqual(sites[0]?.target.status === "complete" && sites[0].target.value, { method: "GET", base: "http://catalog", path: "/items" });
 });
 
+test("a run-time null check in the destination stays unknown and names the value its decided branch declares", async () => {
+  const source = java("UrlHelper", `@lombok.Builder @lombok.Data class Query { String staticUrl; }
+    interface Photos { String uri(); }
+    class UrlHelper { OkHttpClient client; Photos photos;
+      void load(String configured) {
+        Query query = Query.builder().staticUrl(photos.uri()).build();
+        String rendered = query.getStaticUrl() != null ? query.getStaticUrl() : "http://catalog/items";
+        client.newCall(new Request.Builder().url(rendered).build());
+      }
+    }`, ["okhttp3.OkHttpClient", "okhttp3.Request"]);
+  const [site] = await reader.of([source], "service");
+  assert.equal(site?.target.status, "unknown");
+  assert.deepEqual(site?.diagnostic, { cause: "destination-undecidable", alternatives: ["http://catalog/items"] });
+  assert.ok(site?.target.evidence.some(({ line }) => line === 9));
+});
+
 test("a qualifier selects the implementation constructed by a named source Bean", async () => {
   const source = java("Selection", `interface Gateway { void send(String path); }
     class One implements Gateway { RestTemplate rt; public void send(String path) { rt.getForObject("http://one" + path, String.class); } }
