@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { ELEMENT, formatAccessPath, type AccessPath } from "../../domain/contracts/access-path.ts";
-import { operationClass, type Predicate } from "../../domain/contracts/use-operation.ts";
+import type { Predicate } from "../../domain/contracts/use-operation.ts";
 import type { Guard } from "../../domain/contracts/verdict.ts";
 import type { FlowResult } from "../../domain/contracts/consumer-flow.ts";
 import type { MemberCarrier } from "../../ports/consumer-template.port.ts";
@@ -19,11 +19,11 @@ function follow(text: string, path: AccessPath, options: { member?: string; scop
   return createTemplateFlowReader().follow(unit, carrier);
 }
 
-/** `<read path> | <changed> <operation> [<guard kind covers>...]@<line>` for each use. */
+/** `<read path> | <changed> [<guard kind covers>...]@<line>` for each use. */
 function uses(result: FlowResult): string[] {
   return result.uses.map((use) => {
     const guards = use.guards.map((guard) => `${guard.kind} ${formatAccessPath(guard.covers) || "."}`).join(", ");
-    return `${formatAccessPath(use.path) || "."} | ${formatAccessPath(use.changed) || "."} ${operationClass(use.operation)} [${guards}]@${use.site.line}`;
+    return `${formatAccessPath(use.path) || "."} | ${formatAccessPath(use.changed) || "."} [${guards}]@${use.site.line}`;
   });
 }
 
@@ -68,30 +68,14 @@ test("a read of the member through a signal call, a property or a resource value
   const result = follow("{{ order().owner.name }}\n{{ order.owner.name }}\n{{ order.value().owner.name }}", ["owner"]);
   const resource = follow("{{ order.value().owner.name }}", ["value", "owner"], { member: "order" });
 
-  assert.deepEqual(uses(result), ["owner.name | owner dereference []@1", "owner.name | owner dereference []@2"]);
-  assert.deepEqual(uses(resource), ["value.owner.name | value.owner dereference []@1"]);
-});
-
-test("the operation is a dereference beyond the changed value, a consume when the exact value is shown, piped, compared or bound to a native property, unmodelled when it is handed on", () => {
-  const result = follow(
-    '{{ order().owner.name }}\n{{ order().owner }}\n{{ order().owner | json }}\n@if (order().owner === other) { <p></p> }\n<img [title]="order().owner">\n<p (click)="select(order().owner)"></p>',
-    ["owner"],
-  );
-
-  assert.deepEqual(uses(result), [
-    "owner.name | owner dereference []@1",
-    "owner | owner consume []@2",
-    "owner | owner consume []@3",
-    "owner | owner consume []@4",
-    "owner | owner consume []@5",
-    "owner | owner unmodelled []@6",
-  ]);
+  assert.deepEqual(uses(result), ["owner.name | owner []@1", "owner.name | owner []@2"]);
+  assert.deepEqual(uses(resource), ["value.owner.name | value.owner []@1"]);
 });
 
 test("a test of the changed value is no use, and a test of a longer path is the dereference it performs", () => {
   const result = follow("@if (order().owner) { <p></p> }\n@if (order().owner.name) { <p></p> }", ["owner"]);
 
-  assert.deepEqual(uses(result), ["owner.name | owner dereference []@2"]);
+  assert.deepEqual(uses(result), ["owner.name | owner []@2"]);
 });
 
 test("a read that never touches the changed value is no use", () => {
@@ -101,26 +85,26 @@ test("a read that never touches the changed value is no use", () => {
 test("?. guards the prefix before it: a chain that skips the changed segment is not covered", () => {
   const result = follow("{{ order().owner?.name }}\n{{ order()?.owner.name }}", ["owner"]);
 
-  assert.deepEqual(uses(result), ["owner.name | owner dereference [optional-chain owner]@1", "owner.name | owner dereference [optional-chain .]@2"]);
+  assert.deepEqual(uses(result), ["owner.name | owner [optional-chain owner]@1", "owner.name | owner [optional-chain .]@2"]);
 });
 
 test("! is recorded as a non-null assertion that covers the asserted value", () => {
-  assert.deepEqual(uses(follow("{{ order().owner!.name }}", ["owner"])), ["owner.name | owner dereference [non-null-assertion owner]@1"]);
+  assert.deepEqual(uses(follow("{{ order().owner!.name }}", ["owner"])), ["owner.name | owner [non-null-assertion owner]@1"]);
 });
 
 test("an @if test guards the reads inside its block, its @else branch carries the test rejected, and the code after it carries no guard", () => {
   const result = follow("@if (order().owner) {\n{{ order().owner.name }}\n} @else {\n{{ order().owner.name }}\n}\n{{ order().owner.name }}", ["owner"]);
 
-  assert.deepEqual(uses(result), ["owner.name | owner dereference [condition owner]@2", "owner.name | owner dereference [condition owner]@4", "owner.name | owner dereference []@6"]);
+  assert.deepEqual(uses(result), ["owner.name | owner [condition owner]@2", "owner.name | owner [condition owner]@4", "owner.name | owner []@6"]);
 });
 
 test("*ngIf guards the element it sits on, and a test of a longer path guards the changed value too", () => {
   const result = follow('<p *ngIf="order().owner.name">{{ order().owner.name }}</p>\n<p *ngIf="order().owner">{{ order().owner.name }}</p>', ["owner"]);
 
   assert.deepEqual(uses(result), [
-    "owner.name | owner dereference []@1",
-    "owner.name | owner dereference [condition owner.name]@1",
-    "owner.name | owner dereference [condition owner]@2",
+    "owner.name | owner []@1",
+    "owner.name | owner [condition owner.name]@1",
+    "owner.name | owner [condition owner]@2",
   ]);
 });
 
@@ -213,7 +197,7 @@ test("?. on a member, a keyed read or a call tests that the value is not null, a
 test("?? and || on the changed value are fallback guards on a consumed value, and the result is no longer followed", () => {
   const result = follow("{{ order().owner ?? fallback }}\n{{ (order().owner || fallback).name }}", ["owner"]);
 
-  assert.deepEqual(uses(result), ["owner | owner consume [fallback owner]@1", "owner | owner consume [fallback owner]@2"]);
+  assert.deepEqual(uses(result), ["owner | owner [fallback owner]@1", "owner | owner [fallback owner]@2"]);
   assert.deepEqual(result.frontiers, []);
 });
 
@@ -270,7 +254,7 @@ test("an alias of the member carries the value and its guard: @if (x; as y), *ng
     ["owner"],
   );
 
-  assert.deepEqual(uses(result), ["owner.name | owner dereference [condition .]@1", "owner.name | owner dereference [condition .]@2", "name | . dereference []@4"]);
+  assert.deepEqual(uses(result), ["owner.name | owner [condition .]@1", "owner.name | owner [condition .]@2", "name | . []@4"]);
 });
 
 test("a read through an alias is reported in the alias coordinates with the rewrite on its hop", () => {
@@ -286,7 +270,7 @@ test("a read through an alias is reported in the alias coordinates with the rewr
 test("@for and *ngFor items drop the leading [] of the changed path, and the iterate hop records it", () => {
   const result = follow('@for (item of orders(); track item) {\n{{ item.owner.name }}\n}\n<p *ngFor="let row of orders()">{{ row.owner.name }}</p>', [ELEMENT, "owner"], { member: "orders" });
 
-  assert.deepEqual(uses(result), ["owner.name | owner dereference []@2", "owner.name | owner dereference []@4"]);
+  assert.deepEqual(uses(result), ["owner.name | owner []@2", "owner.name | owner []@4"]);
   assert.deepEqual(result.uses[0]?.hops.map((hop) => ({ step: hop.step, rewrite: hop.rewrite })), [
     { step: "iterate", rewrite: [{ from: [ELEMENT], to: [] }] },
     { step: "template-read", rewrite: undefined },
@@ -305,7 +289,7 @@ test("an index key reads the element and a computed key loses the container", ()
   const indexed = follow("{{ orders()[0].owner.name }}", [ELEMENT, "owner"], { member: "orders" });
   const computed = follow("{{ orders()[i].owner.name }}", [ELEMENT, "owner"], { member: "orders" });
 
-  assert.deepEqual(uses(indexed), ["[].owner.name | [].owner dereference []@1"]);
+  assert.deepEqual(uses(indexed), ["[].owner.name | [].owner []@1"]);
   assert.deepEqual(frontiers(computed), ["dynamic-access:computed-key@1"]);
 });
 
@@ -319,7 +303,7 @@ test("a name the template redeclares is not the member", () => {
 test("an async pipe hands the value on, any other pipe consumes it, and a tracked pipe argument is a frontier", () => {
   const result = follow("{{ (order | async)?.owner.name }}\n{{ order().owner | json }}\n{{ amount | money: order() }}", ["owner"]);
 
-  assert.deepEqual(uses(result), ["owner.name | owner dereference [optional-chain .]@1", "owner | owner consume []@2"]);
+  assert.deepEqual(uses(result), ["owner.name | owner [optional-chain .]@1", "owner | owner []@2"]);
   assert.deepEqual(frontiers(result), ["unmodelled-flow:pipe-argument:money@3"]);
 });
 
@@ -340,7 +324,7 @@ test("the whole member bound to a child input keeps the changed path, and a prop
   assert.deepEqual(whole.next[0]?.carrier.path, ["owner"]);
   assert.deepEqual(whole.next[0]?.hops[0]?.rewrite, undefined);
   assert.deepEqual(inside.next, []);
-  assert.deepEqual(uses(inside), ["owner.name | owner dereference []@1"]);
+  assert.deepEqual(uses(inside), ["owner.name | owner []@1"]);
 });
 
 test("a value bound to a child input under a guard that reaches the changed value is a frontier, because the child cannot be told it is present", () => {
@@ -364,14 +348,14 @@ test("the value that contains the changed property handed to a method, $any or a
   const exact = follow('<p (click)="select(order().owner)"></p>', ["owner"]);
 
   assert.deepEqual(frontiers(result), ["unmodelled-flow:template-call:select@1", "unmodelled-flow:$any@2", "unmodelled-flow:template-call:format@3", "unmodelled-flow:call:show@4"]);
-  assert.deepEqual(uses(exact), ["owner | owner unmodelled []@1"]);
+  assert.deepEqual(uses(exact), ["owner | owner []@1"]);
 });
 
 test("a method called on the changed value dereferences it, and one called on its container is a frontier", () => {
   const result = follow("{{ order().owner.label(1) }}\n{{ order().tags.join(',') }}", ["owner"]);
   const container = follow("{{ order().tags.join(',') }}", ["tags", ELEMENT, "text"]);
 
-  assert.deepEqual(uses(result), ["owner | owner dereference []@1"]);
+  assert.deepEqual(uses(result), ["owner | owner []@1"]);
   assert.deepEqual(frontiers(container), ["unmodelled-flow:call:join@1"]);
 });
 
@@ -380,7 +364,7 @@ test("uses, next carriers and frontiers come in source order with lines relative
   const scope = [card("OwnerCard", "app-owner-card")];
   const first = follow(text, ["owner"], { scope, firstLine: 20 });
 
-  assert.deepEqual(uses(first), ["owner.name | owner dereference []@20", "owner | owner unmodelled []@22", "owner | owner consume []@23", "owner.id | owner dereference []@24"]);
+  assert.deepEqual(uses(first), ["owner.name | owner []@20", "owner | owner []@22", "owner | owner []@23", "owner.id | owner []@24"]);
   assert.deepEqual(frontiers(first), ["unmodelled-flow:template-call:select@20"]);
   assert.deepEqual(first.next.map((next) => next.carrier.site.kind === "input" && next.carrier.site.name), ["owner", "other"]);
   assert.deepEqual(follow(text, ["owner"], { scope, firstLine: 20 }), first);
@@ -389,14 +373,14 @@ test("uses, next carriers and frontiers come in source order with lines relative
 test("a guard established outside an alias is converted to the alias coordinates and one that stops short of it is dropped", () => {
   const result = follow("@if (order().owner) {\n@let v = order().owner;\n{{ v.name }}\n}\n@if (order()) {\n@let w = order().owner;\n{{ w.name }}\n}", ["owner"]);
 
-  assert.deepEqual(uses(result), ["name | . dereference [condition .]@3", "name | . dereference []@7"]);
+  assert.deepEqual(uses(result), ["name | . [condition .]@3", "name | . []@7"]);
 });
 
 test("a condition is read once: testing a call that loses the container reports one frontier", () => {
   const result = follow("@if (order().tags.join(',')) { <p></p> }", ["tags", ELEMENT, "text"]);
 
   assert.deepEqual(frontiers(result), ["unmodelled-flow:call:join@1"]);
-  assert.deepEqual(uses(follow("@if (order().owner.label(1)) { <p></p> }", ["owner"])), ["owner | owner dereference []@1"]);
+  assert.deepEqual(uses(follow("@if (order().owner.label(1)) { <p></p> }", ["owner"])), ["owner | owner []@1"]);
 });
 
 test("a guard on one array element protects only reads of the same literal index, never another element or the items of a loop", () => {
@@ -406,9 +390,9 @@ test("a guard on one array element protects only reads of the same literal index
   );
 
   assert.deepEqual(uses(result), [
-    "items[].owner.name | items[].owner dereference []@2",
-    "items[].owner.name | items[].owner dereference [condition items[].owner]@3",
-    "owner.name | owner dereference []@5",
+    "items[].owner.name | items[].owner []@2",
+    "items[].owner.name | items[].owner [condition items[].owner]@3",
+    "owner.name | owner []@5",
   ]);
 });
 
@@ -418,7 +402,7 @@ test("a guard on a loop item protects reads of that item and not those of anothe
     ["items", ELEMENT, "owner"],
   );
 
-  assert.deepEqual(uses(result), ["owner.name | owner dereference [condition owner]@3", "owner.name | owner dereference []@5"]);
+  assert.deepEqual(uses(result), ["owner.name | owner [condition owner]@3", "owner.name | owner []@5"]);
 });
 
 test("the value bound to a child input is carried by its public name for the reader to resolve, and a binding to a directive stays a frontier", () => {
@@ -433,8 +417,8 @@ test("a fallback or a let that carries a container of the changed value goes on 
   const nested = follow("{{ (order || other).owner.name }}", ["owner"]);
   const bound = follow('<app-owner-card [data]="order ?? other"></app-owner-card>', ["owner"], { scope: [card("OwnerCard", "app-owner-card")] });
 
-  assert.deepEqual(uses(aliased), ["owner.name | owner dereference []@2"]);
-  assert.deepEqual(uses(nested), ["owner.name | owner dereference []@1"]);
+  assert.deepEqual(uses(aliased), ["owner.name | owner []@2"]);
+  assert.deepEqual(uses(nested), ["owner.name | owner []@1"]);
   assert.deepEqual(bound.next.map((next) => next.carrier.path), [["owner"]]);
 });
 
@@ -452,8 +436,8 @@ test("a call without arguments reads a signal only on the member, an alias or th
 
   assert.deepEqual(uses(container), []);
   assert.deepEqual(frontiers(container), ["unmodelled-flow:method:slice@1"]);
-  assert.deepEqual(uses(own), ["owner | owner dereference []@1", "owner | owner dereference []@2"]);
-  assert.deepEqual(uses(alias), ["owner.name | owner dereference []@2"]);
+  assert.deepEqual(uses(own), ["owner | owner []@1", "owner | owner []@2"]);
+  assert.deepEqual(uses(alias), ["owner.name | owner []@2"]);
 });
 
 test("a call that only reports a resource's state is no loss of its value; a call that may read the value still is", () => {
@@ -466,8 +450,8 @@ test("a loop over the exact changed collection is a consume of it, and the items
   const exact = follow("@for (item of order().items; track item) {\n<p></p>\n}\n<p *ngFor=\"let row of order().items\"></p>", ["items"]);
   const below = follow("@for (item of order().items; track item) {\n{{ item.name.length }}\n}", ["items", ELEMENT, "name"]);
 
-  assert.deepEqual(uses(exact), ["items | items consume []@1", "items | items consume []@4"]);
-  assert.deepEqual(uses(below), ["name.length | name dereference []@2"]);
+  assert.deepEqual(uses(exact), ["items | items []@1", "items | items []@4"]);
+  assert.deepEqual(uses(below), ["name.length | name []@2"]);
 });
 
 test("each construct states what it does with the changed value: the accesses past it and how the template ends with it", () => {

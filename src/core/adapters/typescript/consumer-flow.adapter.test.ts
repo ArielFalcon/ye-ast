@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { formatAccessPath, parseAccessPath } from "../../domain/contracts/access-path.ts";
 import type { Carrier, CarrierSite, FlowResult } from "../../domain/contracts/consumer-flow.ts";
-import { operationClass, type Predicate } from "../../domain/contracts/use-operation.ts";
+import type { Predicate } from "../../domain/contracts/use-operation.ts";
 import type { Guard } from "../../domain/contracts/verdict.ts";
 import { createConsumerFlowReader } from "./consumer-flow.adapter.ts";
 
@@ -25,7 +25,7 @@ async function follow(files: readonly { path: string; content: string }[], site:
 const callSite = (file: string, line: number, symbol: string): CarrierSite => ({ kind: "call-site", repo: "repo", file, line: at(line), symbol });
 
 const dotted = (path: readonly string[]) => formatAccessPath(path) || "[]";
-const uses = (result: FlowResult) => result.uses.map((use) => `${use.site.line - HEADER_LINES} ${dotted(use.path)}|${dotted(use.changed)} ${operationClass(use.operation)} [${use.guards.map((guard) => guard.kind).join(",")}]`);
+const uses = (result: FlowResult) => result.uses.map((use) => `${use.site.line - HEADER_LINES} ${dotted(use.path)}|${dotted(use.changed)} [${use.guards.map((guard) => guard.kind).join(",")}]`);
 const predicateText = (test: Predicate) =>
   test.kind === "truthy" ? "truthy" : test.kind === "absence" ? `${test.operator} ${test.absence}` : test.kind === "literal" ? `${test.operator} ${JSON.stringify(test.literal)}` : test.kind === "typeof" ? `typeof ${test.operator} ${test.type}` : test.kind === "one-of" ? `one-of ${[...test.literals.map((literal) => JSON.stringify(literal)), ...test.absences].join("|")}` : "array";
 const guardText = (guard: Guard) =>
@@ -59,7 +59,7 @@ test("a subscribe callback reading below the changed property is a dereference w
     "}",
   ]);
   const result = await follow([file], callSite("a.ts", 4, "Page.load"), "owner");
-  assert.deepEqual(uses(result), ["5 owner.name|owner dereference []"]);
+  assert.deepEqual(uses(result), ["5 owner.name|owner []"]);
   assert.deepEqual(frontiers(result), []);
 });
 
@@ -75,7 +75,7 @@ test("observe response puts the body under body, with a response-body hop", asyn
     "}",
   ]);
   const result = await follow([file], callSite("a.ts", 4, "Page.load"), "owner");
-  assert.deepEqual(uses(result), ["5 body.owner.name|body.owner dereference []"]);
+  assert.deepEqual(uses(result), ["5 body.owner.name|body.owner []"]);
   assert.deepEqual(result.uses[0]!.hops.map((hop) => hop.step), ["response-body", "subscribe"]);
   assert.deepEqual(result.uses[0]!.hops[0]!.rewrite, [{ from: [], to: ["body"] }]);
 });
@@ -97,7 +97,7 @@ test("pass-through operators keep the path and map renames it property-wise", as
     "}",
   ]);
   const result = await follow([file], callSite("a.ts", 4, "Page.load"), "owner");
-  assert.deepEqual(uses(result), ["9 who.name|who dereference []"]);
+  assert.deepEqual(uses(result), ["9 who.name|who []"]);
 });
 
 test("a block-bodied map follows each return", async () => {
@@ -115,7 +115,7 @@ test("a block-bodied map follows each return", async () => {
     "}",
   ]);
   const result = await follow([file], callSite("a.ts", 4, "Page.load"), "owner");
-  assert.deepEqual(uses(result), ["9 name|[] dereference []"]);
+  assert.deepEqual(uses(result), ["9 name|[] []"]);
 });
 
 test("await firstValueFrom and destructuring bind the changed property to a local", async () => {
@@ -129,7 +129,7 @@ test("await firstValueFrom and destructuring bind the changed property to a loca
     "}",
   ]);
   const result = await follow([file], callSite("a.ts", 4, "Page.load"), "owner");
-  assert.deepEqual(uses(result), ["5 name|[] dereference []"]);
+  assert.deepEqual(uses(result), ["5 name|[] []"]);
   assert.deepEqual(result.uses[0]!.hops.map((hop) => hop.step), ["await", "assign"]);
 });
 
@@ -192,7 +192,7 @@ test("a parameter carrier follows the parameter inside its function", async () =
     "}",
   ]);
   const result = await follow([file], { kind: "parameter", repo: "repo", file: "a.ts", symbol: "render", line: at(2), index: 0 }, "owner");
-  assert.deepEqual(uses(result), ["3 owner.name|owner dereference []"]);
+  assert.deepEqual(uses(result), ["3 owner.name|owner []"]);
 });
 
 test("a call-result carrier follows the value of the call at its line and column", async () => {
@@ -205,7 +205,7 @@ test("a call-result carrier follows the value of the call at its line and column
     "}",
   ]);
   const second = await follow([file], { kind: "call-result", repo: "repo", file: "a.ts", line: at(3), column: 40, callee: "find" }, "owner");
-  assert.deepEqual(uses(second), ["4 owner.name|owner dereference []"]);
+  assert.deepEqual(uses(second), ["4 owner.name|owner []"]);
   const first = await follow([file], { kind: "call-result", repo: "repo", file: "a.ts", line: at(3), column: 14, callee: "find" }, "owner");
   assert.deepEqual(uses(first), []);
 });
@@ -224,17 +224,17 @@ test("a member carrier reads the signal, the resource value and the plain field"
     "}",
   ]);
   const signalRead = await follow([file], { kind: "member", repo: "repo", file: "a.ts", owner: "Page", member: "order", line: at(2) }, "owner");
-  assert.deepEqual(uses(signalRead), ["6 owner.name|owner dereference []"]);
+  assert.deepEqual(uses(signalRead), ["6 owner.name|owner []"]);
   const resourceRead = await follow([file], { kind: "member", repo: "repo", file: "a.ts", owner: "Page", member: "loaded" }, "value.owner");
-  assert.deepEqual(uses(resourceRead), ["7 value.owner.name|value.owner dereference []"]);
+  assert.deepEqual(uses(resourceRead), ["7 value.owner.name|value.owner []"]);
   const plainRead = await follow([file], { kind: "member", repo: "repo", file: "a.ts", owner: "Page", member: "plain" }, "owner");
-  assert.deepEqual(uses(plainRead), ["8 owner.name|owner dereference []"]);
+  assert.deepEqual(uses(plainRead), ["8 owner.name|owner []"]);
 });
 
 test("a write to a member is not a read of it", async () => {
   const file = source("a.ts", ["class Page {", "  order: Order", "  reset() { this.order = null; this.order.owner.name }", "}"]);
   const result = await follow([file], { kind: "member", repo: "repo", file: "a.ts", owner: "Page", member: "order" }, "owner");
-  assert.deepEqual(uses(result), ["3 owner.name|owner dereference []"]);
+  assert.deepEqual(uses(result), ["3 owner.name|owner []"]);
 });
 
 function guarded(lines: readonly string[]) {
@@ -256,14 +256,14 @@ test("each guard form protects the reads it dominates and no others", async () =
   ]);
   const result = await follow([file], parameterOrder, "owner");
   assert.deepEqual(uses(result), [
-    "3 owner.name|owner dereference [optional-chain]",
-    "4 owner.name|owner dereference [condition]",
-    "5 owner.name|owner dereference [condition]",
-    "6 owner.name|owner dereference [condition]",
-    "7 owner.name|owner dereference [condition]",
-    "8 owner.name|owner dereference [condition]",
-    "9 owner.name|owner dereference [non-null-assertion]",
-    "10 owner.name|owner dereference []",
+    "3 owner.name|owner [optional-chain]",
+    "4 owner.name|owner [condition]",
+    "5 owner.name|owner [condition]",
+    "6 owner.name|owner [condition]",
+    "7 owner.name|owner [condition]",
+    "8 owner.name|owner [condition]",
+    "9 owner.name|owner [non-null-assertion]",
+    "10 owner.name|owner []",
   ]);
   assert.deepEqual(guardsOf(result).slice(0, 3), [["optional-chain != null true"], ["condition truthy true"], ["condition != null true"]]);
 });
@@ -271,7 +271,7 @@ test("each guard form protects the reads it dominates and no others", async () =
 test("an early return or throw on the negation guards the rest of the block", async () => {
   const file = guarded(["if (!order.owner) return", "show(order.owner.name)"]);
   const result = await follow([file], parameterOrder, "owner");
-  assert.deepEqual(uses(result), ["4 owner.name|owner dereference [early-exit]"]);
+  assert.deepEqual(uses(result), ["4 owner.name|owner [early-exit]"]);
   assert.deepEqual(guardsOf(result), [["early-exit truthy true"]]);
 });
 
@@ -322,7 +322,7 @@ test("Array.isArray is an array test only when Array is the global", async () =>
 test("a guard that tests a different path or sits in the other branch does not protect", async () => {
   const file = guarded(["if (order.id) { show(order.owner.name) }", "if (order.owner) {} else { show(order.owner.name) }"]);
   const result = await follow([file], parameterOrder, "owner");
-  assert.deepEqual(uses(result), ["3 owner.name|owner dereference []", "4 owner.name|owner dereference [condition]"]);
+  assert.deepEqual(uses(result), ["3 owner.name|owner []", "4 owner.name|owner [condition]"]);
   assert.deepEqual(guardsOf(result)[1], ["condition truthy false"]);
 });
 
@@ -337,25 +337,13 @@ test("user type guards and instanceof leave the read opaque", async () => {
     "}",
   ]);
   const result = await follow([file], { kind: "parameter", repo: "repo", file: "g.ts", symbol: "use", line: at(3), index: 0 }, "owner");
-  assert.deepEqual(uses(result), ["4 owner.name|owner dereference [type-guard]", "5 owner.name|owner dereference [instanceof]"]);
+  assert.deepEqual(uses(result), ["4 owner.name|owner [type-guard]", "5 owner.name|owner [instanceof]"]);
 });
 
 test("a fallback on the changed value guards what it flows to; a destructuring default covers undefined only", async () => {
   const file = guarded(["const owner = order.owner ?? {}", "show(owner.name)", "const { owner: second = {} } = order", "show(second.name)"]);
   const result = await follow([file], parameterOrder, "owner");
   assert.deepEqual(guardsOf(result), [["fallback != null true -> {}"], ["fallback !== undefined true -> {}"]]);
-});
-
-test("operations on the exact changed value: dereference, consume and unmodelled", async () => {
-  const file = guarded(["for (const x of order.tags) {}", "show(`${order.tags}`)", "const same = order.tags === other", "audit(order.tags)", "if (order.tags === null) {}", "[...order.tags]"]);
-  const result = await follow([file], parameterOrder, "tags");
-  assert.deepEqual(uses(result), [
-    "3 []|[] dereference []",
-    "4 []|[] consume []",
-    "5 []|[] consume []",
-    "6 []|[] consume []",
-    "8 []|[] dereference []",
-  ]);
 });
 
 const operations = async (lines: readonly string[], path: string) => (await follow([guarded(lines)], parameterOrder, path)).uses.map((use) => use.operation);
@@ -455,7 +443,7 @@ test("a read below the changed value ends in what the code does with the value i
 test("elements of an array are followed through for-of with the element path", async () => {
   const file = guarded(["for (const item of order.items) { show(item.owner.name) }"]);
   const result = await follow([file], parameterOrder, "items[].owner");
-  assert.deepEqual(uses(result), ["3 owner.name|owner dereference []"]);
+  assert.deepEqual(uses(result), ["3 owner.name|owner []"]);
 });
 
 test("iterating a value whose changed path does not continue through its elements is a frontier", async () => {
@@ -523,7 +511,7 @@ test("a route resolver continues to the component input when input binding is en
   const result = await follow(files, resolverReturn, "owner");
   assert.deepEqual(next(result), ["input order@- owner"]);
   assert.deepEqual(steps(result), ["resolver-input"]);
-  assert.deepEqual(uses(result), ["4 owner.name|owner dereference []"]);
+  assert.deepEqual(uses(result), ["4 owner.name|owner []"]);
   assert.deepEqual(result.uses[0]!.hops.map((hop) => hop.step), ["resolver-input", "route-data", "subscribe", "assign"]);
 });
 
@@ -531,7 +519,7 @@ test("without input binding the component input is a frontier with its reason, r
   const result = await follow(ROUTES(""), resolverReturn, "owner");
   assert.deepEqual(next(result), []);
   assert.equal(result.frontiers[0]!.cause, "unsupported-binding");
-  assert.deepEqual(uses(result), ["4 owner.name|owner dereference []"]);
+  assert.deepEqual(uses(result), ["4 owner.name|owner []"]);
 });
 
 test("a function that no route registers adds nothing at its return", async () => {
@@ -544,7 +532,7 @@ test("results are in source order and identical across runs", async () => {
   const first = await follow([file], parameterOrder, "owner");
   const second = await follow([file], parameterOrder, "owner");
   assert.deepEqual(first, second);
-  assert.deepEqual(uses(first), ["3 owner.name|owner dereference []", "4 owner.id|owner dereference []", "5 owner.name|owner dereference []"]);
+  assert.deepEqual(uses(first), ["3 owner.name|owner []", "4 owner.id|owner []", "5 owner.name|owner []"]);
 });
 
 test("a guard on the value does not cross a boundary: the flow is lost there, not reported unguarded", async () => {
@@ -557,20 +545,20 @@ test("a guard on the value does not cross a boundary: the flow is lost there, no
 test("set and next on a member write it, they do not read it", async () => {
   const file = source("a.ts", ["class Page {", "  state = signal<Order>(null)", "  reset() { this.state.set(null); show(this.state().owner.name) }", "}"]);
   const result = await follow([file], { kind: "member", repo: "repo", file: "a.ts", owner: "Page", member: "state" }, "owner");
-  assert.deepEqual(uses(result), ["3 owner.name|owner dereference []"]);
+  assert.deepEqual(uses(result), ["3 owner.name|owner []"]);
   assert.deepEqual(frontiers(result), []);
 });
 
 test("a lambda parameter that shadows the followed name is not the followed value", async () => {
   const file = guarded(["items.map((order) => order.owner.name)", "show(order.owner.id)"]);
   const result = await follow([file], parameterOrder, "owner");
-  assert.deepEqual(uses(result), ["4 owner.id|owner dereference []"]);
+  assert.deepEqual(uses(result), ["4 owner.id|owner []"]);
 });
 
 test("reassignment cycles terminate and report each use once", async () => {
   const file = guarded(["let a = order", "let b = a", "a = b", "show(a.owner.name)"]);
   const result = await follow([file], parameterOrder, "owner");
-  assert.deepEqual(uses(result), ["6 owner.name|owner dereference []"]);
+  assert.deepEqual(uses(result), ["6 owner.name|owner []"]);
 });
 
 test("a computed key into the path to the changed property is a dynamic-access frontier", async () => {
@@ -582,7 +570,7 @@ test("a computed key into the path to the changed property is a dynamic-access f
 test("fetch with then handlers reaches the parsed body", async () => {
   const file = source("a.ts", ["class Page {", "  load() {", "    fetch('/orders/1').then((r) => r.json()).then((o) => show(o.owner.name))", "  }", "}"]);
   const result = await follow([file], callSite("a.ts", 3, "Page.load"), "owner");
-  assert.deepEqual(uses(result), ["3 owner.name|owner dereference []"]);
+  assert.deepEqual(uses(result), ["3 owner.name|owner []"]);
 });
 
 test("a subscribe observer object and a destructured parameter bind the changed property", async () => {
@@ -595,7 +583,7 @@ test("a subscribe observer object and a destructured parameter bind the changed 
     "}",
   ]);
   const result = await follow([file], callSite("a.ts", 4, "Page.load"), "owner");
-  assert.deepEqual(uses(result), ["4 name|[] dereference []"]);
+  assert.deepEqual(uses(result), ["4 name|[] []"]);
 });
 
 test("assignment and set on a field hand back the member carrier", async () => {
@@ -629,13 +617,13 @@ test("a method called on a container of the changed property is a frontier, what
 test("calling the changed value is a dereference, optional call included", async () => {
   const file = plain(["o.owner()", "o.owner?.()"]);
   const result = await follow([file], paramO, "owner");
-  assert.deepEqual(uses(result), ["2 owner|owner dereference []", "3 owner|owner dereference [optional-chain]"]);
+  assert.deepEqual(uses(result), ["2 owner|owner []", "3 owner|owner [optional-chain]"]);
 });
 
 test("an optional chain guards a method call with arguments on the changed value", async () => {
   const file = plain(["show(o.owner?.name(1))", "show(o.owner.name(1))"]);
   const result = await follow([file], paramO, "owner");
-  assert.deepEqual(uses(result), ["2 []|[] dereference [optional-chain]", "3 []|[] dereference []"]);
+  assert.deepEqual(uses(result), ["2 []|[] [optional-chain]", "3 []|[] []"]);
 });
 
 test("a read after a write to the guarded path reads the written value: no use, and the write is reported", async () => {
@@ -648,7 +636,7 @@ test("a read after a write to the guarded path reads the written value: no use, 
 test("a guard outside a closure is not proven where the closure runs: the read is reported, neither guarded nor unguarded", async () => {
   const file = plain(["if (o.owner) {", "  const f = () => o.owner.name", "  o.owner = null", "  f()", "}", "list.map(() => o.owner.id)"]);
   const result = await follow([file], paramO, "owner");
-  assert.deepEqual(uses(result), ["7 owner.id|owner dereference []"]);
+  assert.deepEqual(uses(result), ["7 owner.id|owner []"]);
   assert.deepEqual(frontiers(result), ["3 unmodelled-flow:guard across closure"]);
 });
 
@@ -661,21 +649,21 @@ test("a call that only reports a resource's state is no loss of its value; a cal
 test("a guard inside a closure decides its reads even when another guard sits outside it", async () => {
   const file = plain(["if (o.owner) {", "  const f = () => { if (o.owner) show(o.owner.name) }", "  f()", "}"]);
   const result = await follow([file], paramO, "owner");
-  assert.deepEqual(uses(result), ["3 owner.name|owner dereference [condition]"]);
+  assert.deepEqual(uses(result), ["3 owner.name|owner [condition]"]);
   assert.deepEqual(frontiers(result), []);
 });
 
 test("reads of a name before it is assigned the followed value are not the followed value", async () => {
   const file = plain(["let x = other", "show(x.owner.name)", "x = o", "show(x.owner.id)", "x = another", "show(x.owner.size)"]);
   const result = await follow([file], paramO, "owner");
-  assert.deepEqual(uses(result), ["5 owner.id|owner dereference []"]);
+  assert.deepEqual(uses(result), ["5 owner.id|owner []"]);
   assert.deepEqual(frontiers(result), []);
 });
 
 test("an assignment that may or may not run keeps the later reads and reports the conditional write", async () => {
   const file = plain(["let x = o", "if (flag) { x = other }", "show(x.owner.name)"]);
   const result = await follow([file], paramO, "owner");
-  assert.deepEqual(uses(result), ["4 owner.name|owner dereference []"]);
+  assert.deepEqual(uses(result), ["4 owner.name|owner []"]);
   assert.deepEqual(frontiers(result), ["3 unmodelled-flow:conditional reassignment"]);
 });
 
@@ -689,18 +677,18 @@ test("a parameter that shadows a top-level function is not that function", async
 test("a var declared in a block is the whole function's binding, so its reads there are not the followed value", async () => {
   const file = plain(["const run = () => {", "  if (o) { var o = other }", "  show(o.owner.name)", "}", "show(o.owner.id)"]);
   const result = await follow([file], paramO, "owner");
-  assert.deepEqual(uses(result), ["6 owner.id|owner dereference []"]);
+  assert.deepEqual(uses(result), ["6 owner.id|owner []"]);
 });
 
 test("an assignment binds the declaration its case block shares, never an outer one of the same name", async () => {
   const file = plain(["let x = o", "switch (k) {", "  case 1: let x = 0; break", "  case 2: x = o.owner", "}", "show(x.owner.id)"]);
   const result = await follow([file], paramO, "owner");
-  assert.deepEqual(uses(result), ["7 owner.id|owner dereference []"]);
+  assert.deepEqual(uses(result), ["7 owner.id|owner []"]);
 });
 
 test("a var declared in a block holds the followed value past the block", async () => {
   const result = await follow([plain(["if (c) { var x = o }", "show(x.owner.id)"])], paramO, "owner");
-  assert.deepEqual(uses(result), ["3 owner.id|owner dereference []"]);
+  assert.deepEqual(uses(result), ["3 owner.id|owner []"]);
 });
 
 test("a function declared in one case clause is the callee of a call in another, over a top-level one of the same name", async () => {
@@ -827,7 +815,7 @@ test("an async or generator projection does not emit the response", async () => 
 test("destructuring the changed value is a dereference even with an empty pattern", async () => {
   const file = plain(["const {} = o.owner", "const [] = o.owner"]);
   const result = await follow([file], paramO, "owner");
-  assert.deepEqual(uses(result), ["2 []|[] dereference []", "3 []|[] dereference []"]);
+  assert.deepEqual(uses(result), ["2 []|[] []", "3 []|[] []"]);
 });
 
 const INPUTS = [

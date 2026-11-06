@@ -36,8 +36,6 @@ export interface UntestedGuard extends PlacedGuard {
 /** The guards of one use, in the order the value passes them. */
 export type Guard = TestedGuard | FallbackGuard | UntestedGuard;
 
-export type GuardKind = Guard["kind"];
-
 /** One place the code operates on a carried value, with the paths in the coordinates of that value. */
 export interface UseSite {
   /** What the code reads from the carried value. */

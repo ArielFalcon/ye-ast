@@ -51,24 +51,3 @@ export interface UseOperation {
   steps: readonly AccessStep[];
   end: UseEnd;
 }
-
-/** The F0 reading of an operation: whether it dereferences the changed value, shows or hands it on, or neither. */
-export type OperationClass = "dereference" | "consume" | "unmodelled";
-
-export function operationClass(operation: UseOperation): OperationClass {
-  if (operation.steps.length > 0) return "dereference";
-  const { end } = operation;
-  switch (end.kind) {
-    case "iterate":
-      return end.tolerates.includes("null") && end.tolerates.includes("undefined") ? "consume" : "dereference";
-    case "destructure":
-    case "none":
-      return "dereference";
-    case "compare":
-    case "coerce":
-    case "consume":
-      return "consume";
-    case "unmodelled":
-      return "unmodelled";
-  }
-}
