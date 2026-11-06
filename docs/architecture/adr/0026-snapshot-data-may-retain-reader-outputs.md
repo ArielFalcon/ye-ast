@@ -3,6 +3,8 @@
 - Status: Accepted, 2026-11-06, owner
 - Decision source: the owner, 2026-11-06: "luego haz la implementacion completa del plan que propones", approving the
   efficiency plan whose step 4 amends ADR-0020 decision 2.
+- Amended by: [ADR-0029](0029-live-captures-use-the-snapshot-data-cache.md) (decision 8: a reconciled live capture
+  offers retention to its consumers)
 - Related: [ADR-0020](0020-host-budgeted-snapshot-memory-cache.md) (amended),
   [ADR-0021](0021-enable-snapshot-memory-cache-by-default.md), [RFC-0010](../rfc/0010-impact-queries.md),
   [RFC-0012](../rfc/0012-observability-and-measurement.md)
@@ -47,7 +49,7 @@ neither output could be kept.
    replaces the earlier one with an equal output.
 7. A cache hit and a miss answer the same bytes: when a cache is configured the output a miss returns is the value
    after one serialization round trip, which is what a hit returns, whether or not the entry was admitted.
-8. `live` bypasses the cache (ADR-0020 decision 6): a live or held-live snapshot offers no retention to its consumers.
+8. ADR-0029 supersedes the bypass this decision restated from ADR-0020 decision 6: a reconciled live or held-live capture offers retention to its consumers, keyed by the content hashes of its listing.
    Retained outputs are SHA snapshots only.
 
 ## Consequences

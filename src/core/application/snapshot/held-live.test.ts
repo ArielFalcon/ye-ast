@@ -22,6 +22,8 @@ import type { ImportOriginsReader, ImportOriginSite } from "../../ports/import-o
 import type { ImportOrigin } from "../../domain/relations/resolved-reference.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { ModuleDependenciesReader } from "../../ports/module-dependencies.port.ts";
+import type { SnapshotDataCache } from "./read-snapshot.ts";
+import { createSnapshotDataCache } from "./snapshot-data-cache.ts";
 import { createHeadReader, createHeldLive, withLiveCaptures } from "./head-reading.ts";
 import { openLive } from "../live/live-tree.ts";
 import { liveScope } from "../../domain/snapshot/live-export.ts";
@@ -66,6 +68,7 @@ interface Options {
   importOrigins?: ImportOriginsReader;
   moduleDependencies?: ModuleDependenciesReader;
   snapshotSources?: Partial<Record<string, SourceFile[]>>;
+  snapshotCache?: SnapshotDataCache;
 }
 
 function setup(options: Options = {}) {
@@ -136,6 +139,7 @@ function setup(options: Options = {}) {
     ...(options.declarationEvidence && { declarationEvidence: options.declarationEvidence }),
     ...(options.importOrigins && { importOrigins: options.importOrigins }),
     ...(options.moduleDependencies && { moduleDependencies: options.moduleDependencies }),
+    ...(options.snapshotCache && { snapshotCache: options.snapshotCache }),
   };
   const request: AtRevision<ImpactOfChangeRequest> = { repo: "/repo", repoId: "repo", base: "base", head: "head", ...(options.signal && { signal: options.signal }) };
   const queries = createImpactQueries(deps);
@@ -227,6 +231,33 @@ test("held capture rejects root, identity, scope and reader dependency mismatche
   });
   assert.ok(result.ok);
   assert.deepEqual(live.held, { locks: 1, released: 1 });
+});
+
+test("a held capture over the content of an earlier one reads nothing, and a capture held across an edit keeps the content it captured", async () => {
+  const live = fakeLive({ "src/A.java": "1" });
+  const snapshotCache = createSnapshotDataCache(1 << 20);
+  const { deps, queries, log } = setup({ trust: TRUSTED, live, nodes: LIVE_NODES, snapshotCache });
+  const scope = liveScope();
+  const capture = (use: (held: ReturnType<typeof createHeldLive>) => Promise<void>) => openLive(live.deps, { repo: "/repo", scope, selected: pathSelection(scope, () => false), store: true }, async (tree) => {
+    const held = createHeldLive({ repo: "/repo", repoId: "repo", head: HEAD, scope, tree, trust: "trusted", deps });
+    deps.heldLive = () => held;
+    await use(held);
+  });
+  const ask = () => queries.callers({ ...LIVE_BASE, targets: [{ file: "src/A.java", symbol: "f" }], live: true });
+
+  assert.ok((await capture(async () => { assert.ok((await ask()).ok); })).ok);
+  assert.deepEqual([log.reads, log.extractions], [1, 1]);
+  assert.ok((await capture(async () => { assert.ok((await ask()).ok); assert.ok((await ask()).ok); })).ok);
+  assert.deepEqual([log.reads, log.extractions], [1, 1]);
+  assert.ok((await capture(async (held) => {
+    live.tree.set("src/A.java", "2");
+    const extracted = await held.extract();
+    assert.ok(extracted.ok);
+    assert.ok((await ask()).ok);
+  })).ok);
+  assert.deepEqual([log.reads, log.extractions], [1, 1]);
+  assert.ok((await capture(async () => { assert.ok((await ask()).ok); })).ok);
+  assert.deepEqual([log.reads, log.extractions], [2, 2]);
 });
 
 for (const stage of ["sources", "extraction"] as const) {

@@ -42,7 +42,7 @@ import type { FieldOrigin, LocalOrigin } from "../../domain/relations/field-orig
 import type { RelationExtractor } from "../relations/relation-extractor.ts";
 import type { CommitExport, Vcs, VcsChanges, VcsFault } from "../../ports/vcs.port.ts";
 import { ABORTED, extractCommit, factBaseOf, trustOf, withScratch, type CommitExtraction, type PreparedCommit } from "../snapshot/read-snapshot.ts";
-import { createHeadReader, withLiveCapture, type FactSpec, type HeadIndex, type HeadReaderDeps, type HeadReading, type Revisioned } from "../snapshot/head-reading.ts";
+import { createHeadReader, preparedLive, withLiveCapture, type FactSpec, type HeadIndex, type HeadReaderDeps, type HeadReading, type Revisioned } from "../snapshot/head-reading.ts";
 import { readImporters } from "./importers.ts";
 import { inboundEdgesOf } from "./inbound-origins.ts";
 import { edgeKey, type EdgeCorrections, type FollowedEdge, type InboundEdges } from "./inbound-edges.ts";
@@ -274,7 +274,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
         if (!liveTree.ok) return liveTree;
         const baseTree = await extractCommit(changeDeps, repo, mergeBase, await directory(), exported, signal);
         if (!baseTree.ok) return baseTree;
-        const reading = headReader.liveReading(tree, liveTree.value, "trusted", scope, selected, head, repoId, spec);
+        const reading = { ...headReader.liveReading(tree, liveTree.value, "trusted", scope, selected, head, repoId, spec), prepared: preparedLive(held) };
 
         const changed = changedPaths(baseTree.value.export.files, tree.export.files).filter((path) => !isEngineConfiguration(path));
         const [before, after] = [await directory(), await directory()];

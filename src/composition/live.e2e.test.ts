@@ -7,7 +7,8 @@ import { dirname, join } from "node:path";
 import { EXIT_CODE } from "../cli/main.ts";
 import { createCodeGraph } from "../core/adapters/codegraph/codegraph.adapter.ts";
 import { isInMapScope } from "../core/domain/map/entrypoint-map.ts";
-import { composeCli } from "./compose.ts";
+import { canonicalJson } from "../core/domain/shared/canonical-json.ts";
+import { composeCli, composeQueries } from "./compose.ts";
 
 const GIT_ENV = {
   ...process.env,
@@ -315,4 +316,36 @@ test("two live queries over the same tree answer byte for byte, and the index tr
   assert.equal(first.code, EXIT_CODE.ok, first.stderr);
   assert.equal(first.stdout, second.stdout);
   assert.equal(first.fact.snapshot.stateId, (await ye("map", [])).fact.inputs.content);
+});
+
+test("one composition answers a repeated live query from its retained data, an edit misses, and every answer is what a fresh composition answers", async () => {
+  await trust("trusted");
+  const lines: string[] = [];
+  const kept = composeQueries({ scratchRoot, trustDirectory, measure: (line) => lines.push(line) });
+  const hits = (): number => lines.filter((line) => JSON.parse(line).ye_ast.event === "cache" && JSON.parse(line).ye_ast.outcome === "hit").length;
+  const util = `${DIR}Util.java`;
+  const request = { repo, repoId: "shop", live: true } as const;
+  const asks = {
+    map: (queries: ReturnType<typeof composeQueries>) => queries.entrypoints.map(request),
+    change: (queries: ReturnType<typeof composeQueries>) => queries.impact.ofChange({ ...request, base: "HEAD" }),
+    callers: (queries: ReturnType<typeof composeQueries>) => queries.impact.callers({ ...request, targets: [{ file: util, symbol: "fmt" }] }),
+    importers: (queries: ReturnType<typeof composeQueries>) => queries.impact.importers({ ...request, files: [util] }),
+  };
+
+  for (const [name, ask] of Object.entries(asks)) {
+    const miss = await ask(kept);
+    const before = hits();
+    const hit = await ask(kept);
+    assert.ok(miss.ok && hit.ok, name);
+    assert.ok(hits() > before, `${name} reuses retained data`);
+    assert.equal(canonicalJson(hit), canonicalJson(miss), name);
+    assert.equal(canonicalJson(hit), canonicalJson(await ask(composeQueries({ scratchRoot, trustDirectory }))), name);
+  }
+
+  write({ [util]: UTIL('s + "!"') });
+  for (const [name, ask] of Object.entries(asks)) {
+    const edited = await ask(kept);
+    assert.ok(edited.ok, name);
+    assert.equal(canonicalJson(edited), canonicalJson(await ask(composeQueries({ scratchRoot, trustDirectory }))), name);
+  }
 });

@@ -5,7 +5,11 @@ import type { PathSelection } from "../../domain/shared/scope.ts";
 import type { ScratchDirectory } from "../../ports/scratch-directory.port.ts";
 import { isInMapScope } from "../../domain/map/entrypoint-map.ts";
 import type { VcsFault } from "../../ports/vcs.port.ts";
-import { ABORTED, extractSources, listExport, readSources, withScratch, type CommitExtraction, type SnapshotReaderDeps, type PreparedCommit, type SnapshotPreparation } from "./read-snapshot.ts";
+import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
+import type { Finding } from "../../domain/shared/fact.ts";
+import type { Entrypoint } from "../../domain/entrypoints/entrypoint.ts";
+import type { CommitExport } from "../../ports/vcs.port.ts";
+import { ABORTED, extractSources, listExport, readSources, withScratch, type CommitExtraction, type SnapshotData, type SnapshotReaderDeps, type PreparedCommit, type SnapshotPreparation } from "./read-snapshot.ts";
 
 type Sources = Pick<CommitExtraction, "export" | "sources">;
 
@@ -23,6 +27,47 @@ export function withSnapshotPreparation<T>(scratch: ScratchDirectory, use: (prep
       },
     });
   });
+}
+
+/**
+ * The snapshot data cache over one listing. `identity` names everything but the listing that the retained data
+ * depends on; the key adds the whole listing, so a changed blob, written flag, skipped entry or cut misses. The first
+ * `lookup` fixes the key; `output` retains nothing before it.
+ */
+export interface SnapshotRetention {
+  lookup(): SnapshotData | undefined;
+  keepSources(sources: readonly SourceFile[]): void;
+  keepFindings(sources: readonly SourceFile[], findings: readonly Finding<Entrypoint>[]): void;
+  output<T>(slot: string, produce: () => Promise<T>, signal?: AbortSignal): Promise<T>;
+}
+
+export function snapshotRetention(deps: Pick<SnapshotReaderDeps, "snapshotCache" | "digest">, identity: string, exported: CommitExport): SnapshotRetention | undefined {
+  const cache = deps.snapshotCache;
+  if (cache === undefined) return undefined;
+  let entry: string | undefined;
+  return {
+    lookup() {
+      entry ??= deps.digest.of(canonicalJson({ key: identity, export: exported }));
+      return cache.get(entry);
+    },
+    keepSources(sources) {
+      if (entry !== undefined && cache.get(entry)?.findings === undefined) cache.put(entry, { sources });
+    },
+    keepFindings(sources, findings) {
+      if (entry !== undefined && !findings.some((finding) => finding.status === "unknown" && finding.reason === "deadline")) cache.put(entry, { sources, findings });
+    },
+    async output<T>(slot: string, produce: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+      if (entry === undefined) return produce();
+      const outputKey = deps.digest.of(canonicalJson({ entry, output: slot }));
+      const kept = cache.get(outputKey);
+      if (kept?.output !== undefined) return kept.output as T;
+      const output = await produce();
+      if (signal?.aborted) return output;
+      const serialized = JSON.parse(JSON.stringify(output)) as T;
+      cache.put(outputKey, { sources: [], output: serialized });
+      return serialized;
+    },
+  };
 }
 
 export async function prepareCommit(
@@ -46,15 +91,13 @@ export async function prepareCommit(
       const answer = await (written ??= listed.value.materialize(signal));
       return signal?.aborted ? ABORTED : answer;
     };
-    const cache = deps.snapshotCache;
-    let cacheKey: string | undefined;
+    const retention = snapshotRetention(deps, key, exported.value);
     let loaded: Sources | undefined;
     let extracted: CommitExtraction | undefined;
     const sources = async (signal?: AbortSignal): Promise<Result<Sources, VcsFault>> => {
       if (signal?.aborted) return ABORTED;
       if (loaded !== undefined) return { ok: true, value: loaded };
-      if (cache !== undefined && cacheKey === undefined) cacheKey = deps.digest.of(canonicalJson({ key, export: exported.value }));
-      const retained = cacheKey === undefined ? undefined : cache?.get(cacheKey);
+      const retained = retention?.lookup();
       if (retained !== undefined) {
         loaded = { export: exported.value, sources: retained.sources };
         if (retained.findings !== undefined) extracted = { ...loaded, findings: retained.findings };
@@ -65,7 +108,7 @@ export async function prepareCommit(
       const answer = await readSources(deps, root, exported.value, signal);
       if (answer.ok) {
         loaded = answer.value;
-        if (cacheKey !== undefined && cache?.get(cacheKey)?.findings === undefined) cache?.put(cacheKey, { sources: loaded.sources });
+        retention?.keepSources(loaded.sources);
       }
       return answer;
     };
@@ -86,21 +129,11 @@ export async function prepareCommit(
           const answer = await extractSources(deps, read.value, signal);
           if (answer.ok) {
             extracted = answer.value;
-            if (cacheKey !== undefined && !extracted.findings.some((finding) => finding.status === "unknown" && finding.reason === "deadline")) cache?.put(cacheKey, { sources: extracted.sources, findings: extracted.findings });
+            retention?.keepFindings(extracted.sources, extracted.findings);
           }
           return answer;
         },
-        async retained<T>(slot: string, produce: () => Promise<T>, signal?: AbortSignal): Promise<T> {
-          if (cache === undefined || cacheKey === undefined) return produce();
-          const outputKey = deps.digest.of(canonicalJson({ entry: cacheKey, output: slot }));
-          const kept = cache.get(outputKey);
-          if (kept?.output !== undefined) return kept.output as T;
-          const output = await produce();
-          if (signal?.aborted) return output;
-          const serialized = JSON.parse(JSON.stringify(output)) as T;
-          cache.put(outputKey, { sources: [], output: serialized });
-          return serialized;
-        },
+        ...(retention === undefined ? {} : { retained: retention.output }),
       },
     };
   };

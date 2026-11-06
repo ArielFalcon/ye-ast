@@ -335,7 +335,7 @@ collide with an unresolved reference outside test files, so `unresolved-link` cu
 | the index | the staged content digest plus engine versions ([ADR-0015](../adr/0015-index-reuse-by-content.md)) | always; immutable |
 | per-index tables: entrypoint join, unresolved references by name tail, fan-in, derived bridges | the index key plus the map's inputs | always; immutable |
 | a fact at a sha | its `inputs` | yes, unless a deadline cut it; never an `unknown(index-unavailable)` |
-| a fact on a live tree | `stateId` | never in this slice; the mirror is refreshed on every query ([Live head](#live-head-slice-3)); its inputs record the index origin |
+| a fact on a live tree | `stateId` | never; the mirror is refreshed on every query ([Live head](#live-head-slice-3)); its inputs record the index origin. What it reads from the capture is retained by the capture's listing ([ADR-0029](../adr/0029-live-captures-use-the-snapshot-data-cache.md)) |
 | a moved `base` | resolved to a sha on every call | the `head` index is reused; only the seeds are recomputed |
 
 No closure or reverse adjacency is precomputed: codegraph indexes edges by target and kind, and a walk is cheap
@@ -402,6 +402,8 @@ ids below are computed in process.
     content and the `stateId`.
   - An edit that keeps a file's size and nanosecond mtime goes unseen, by ye-ast and by codegraph's `sync`
     (codegraph 1.6.2 `extraction/index.js:3183-3200`). The fact never claims more freshness than the index holds.
+    The retained snapshot data of a live capture ([ADR-0029](../adr/0029-live-captures-use-the-snapshot-data-cache.md))
+    rests on the same assumption and adds no other: its key is the manifest's blob ids.
 
 **The change.** The change is `merge-base(base, HEAD)` against the live listing: staged, unstaged and untracked
 files all count. A moved HEAD is just a new merge base.
@@ -501,8 +503,15 @@ as a response-level sibling of the fact — under `live` beside it on the CLI's 
 `structuredContent` and `_meta` (RFC-0002 rule 8; RFC-0005 "Live freshness"). The state the tree is in now is not
 named, since only hashing the changed files would tell. The fact itself is unchanged.
 
-**No live fact cache.** This slice keeps none: a walk costs about 10 ms and the refresh dominates. RFC-0002 allows an
-in-memory cache keyed by `stateId` but does not require one.
+**No live fact cache; retained snapshot data.** A live fact is built afresh on every call. What a live query reads from
+the reconciled capture (sources, findings, relations, module dependencies) comes from the snapshot data cache
+([ADR-0029](../adr/0029-live-captures-use-the-snapshot-data-cache.md), amending ADR-0020 decision 6). The lock, the
+fresh listing, the reconcile, the staleness re-list and the retention sweep still run on every call; the cache is
+consulted after the reconcile and keyed by the repository, scope, trust and the capture's whole listing (blob ids,
+`written` flags, skipped entries), never by HEAD. A file whose stat moved but whose bytes did not keeps its blob id and so
+its key; an edit changes a blob and misses. The assumption stays the mirror's own, stated in "The mirror" above: an edit
+that keeps a file's size and nanosecond mtime goes unseen, so it is also answered from the retained data of the earlier
+content.
 
 **The `sync` parity test** (ADR-0015 decision 4).
 

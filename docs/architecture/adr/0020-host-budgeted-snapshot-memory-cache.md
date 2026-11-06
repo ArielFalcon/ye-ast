@@ -7,6 +7,8 @@
   output of the relations and whole-universe module-dependencies readers)
 - Amended by: [ADR-0028](0028-lazy-export-materialization.md) (decisions 4 and 5: the listing is fresh on every
   request, the files are written only when a reader needs them)
+- Amended by: [ADR-0029](0029-live-captures-use-the-snapshot-data-cache.md) (decision 6: a reconciled live capture
+  uses this cache, keyed by the content hashes of its listing)
 - Related: [ADR-0006](0006-qayaba-graph-state-per-run.md), [ADR-0010](0010-trust-modes.md),
   [ADR-0021](0021-enable-snapshot-memory-cache-by-default.md), [RFC-0006](../rfc/0006-configuration.md)
 
@@ -36,7 +38,7 @@ would also keep the syntax trees weakly associated with them.
    reused after a later extraction was cancelled; the cancelled extraction is repeated. Findings cut by a deadline
    are not retained. Concurrent requests share no in-flight work or cancellation signal. An export fault always wins
    over any retained data. Returned data is deserialized afresh so consumers cannot mutate a stored entry.
-6. `live` keeps its existing mirror and lock lifecycle and bypasses this cache. Export-only consumers do not restore
+6. `live` keeps its existing mirror and lock lifecycle; ADR-0029 lets a reconciled live capture use this cache. Export-only consumers do not restore
    retained sources. Git exports remain temporary and are removed by their operation's existing cleanup.
 
 ## Consequences
@@ -52,4 +54,4 @@ would also keep the syntax trees weakly associated with them.
 ## Not decided here
 
 - Retaining exports on disk, sharing cached data across compositions or processes, or automatic budget sizing (the fixed default is decided by ADR-0021).
-- Reusing live analysis or compiler-owned trees between requests.
+- Reusing compiler-owned trees between requests.
