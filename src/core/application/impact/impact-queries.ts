@@ -51,6 +51,7 @@ import { referenceProofsOf, unresolvedOf, type ReferenceProofs } from "./referen
 import { walkImpact, type Walk } from "./walk.ts";
 import type { ImportOrigins, ImportOriginsReader } from "../../ports/import-origins.port.ts";
 import { createEdgeTargets, edgeKey, type EdgeTargets, type EdgeTargetsDeps, type FollowedEdge } from "../navigation/edge-targets.ts";
+import { combinedModuleReader } from "../navigation/module-readers.ts";
 import type { ContractRoutes } from "../../ports/contract-routes.port.ts";
 import { distinctTargets, evidenceOfTarget, missingTargets, rangeChanges, requestedRanges, selectRoots, targetKey } from "../navigation/root-selection.ts";
 import { prepareCommit } from "../snapshot/prepared-snapshot.ts";
@@ -77,6 +78,11 @@ export interface ImpactQueriesDeps extends HeadReaderDeps {
   /** Tells the trivia lines of a requested range apart; without it every line of a range is code. */
   sourceTrivia?: SourceTrivia;
   moduleDependencies?: ModuleDependenciesReader;
+  /**
+   * The readers of module statements, one per language, whose bindings prove the declaration a graph edge's root reaches
+   * (`edge-targets.ts`); without them `moduleDependencies` alone proves it.
+   */
+  moduleReaders?: readonly ModuleDependenciesReader[];
   declarationEvidence?: DeclarationEvidenceReader;
   /** The changed or targeted files whose declarations the graph cannot place; without it no such file is cut. */
   unmodelled?: UnmodelledConstructsReader;
@@ -103,6 +109,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
   const moduleDependenciesOf = (reader: ModuleDependenciesReader, prepared: PreparedCommit | undefined, tree: Pick<CommitExtraction, "sources">, signal: AbortSignal | undefined) =>
     retainedOf(prepared, canonicalJson({ output: "module-dependencies" }), () => reader.extract(tree.sources), signal);
   const headReader = createHeadReader(deps);
+  const bindingModules = deps.moduleReaders === undefined ? deps.moduleDependencies : combinedModuleReader(deps.moduleReaders);
   const moduleSource = deps.moduleDependencies === undefined ? isInMapScope : isWritten;
   const changeDeps = { ...deps, sourceSelection: moduleSource };
   const changeReader = createHeadReader(changeDeps);
@@ -163,7 +170,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
           if (signal?.aborted) return ABORTED;
           const unmodelled = await unmodelledIn(deps, headTree, [...changes.map(({ path }) => path), ...requested.map(({ file }) => file)]);
           if (signal?.aborted) return ABORTED;
-          const read = await impactOf({ store, changes: ranges.changes, requested, componentsByResource, found, fields, locals, memberUses, loads, headTree, summary, unresolved, budget: request.budget ?? {}, proofs, unmodelled, origins, modules: deps.moduleDependencies === undefined ? undefined : { reader: deps.moduleDependencies, sources: headTree.sources }, signal });
+          const read = await impactOf({ store, changes: ranges.changes, requested, componentsByResource, found, fields, locals, memberUses, loads, headTree, summary, unresolved, budget: request.budget ?? {}, proofs, unmodelled, origins, modules: bindingModules === undefined ? undefined : { reader: bindingModules, sources: headTree.sources }, signal });
           if (signal?.aborted) return ABORTED;
           return { ok: true, value: impactFact(head.base(content, true), read.value, [...fixed, ...read.cuts]) };
         } finally {
@@ -404,7 +411,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
       });
       const unmodelled = await unmodelledIn(deps, headTree, validatedChanges.filter((file) => !file.deleted).map(({ path }) => path));
       if (signal?.aborted) return ABORTED;
-      const read = await impactOf({ store, changes: validatedChanges, requested: [], componentsByResource, found, fields, locals, memberUses, loads, headTree, summary, unresolved, budget: request.budget ?? {}, proofs, unmodelled, origins, modules: deps.moduleDependencies === undefined ? undefined : { reader: deps.moduleDependencies, sources: headTree.sources }, signal });
+      const read = await impactOf({ store, changes: validatedChanges, requested: [], componentsByResource, found, fields, locals, memberUses, loads, headTree, summary, unresolved, budget: request.budget ?? {}, proofs, unmodelled, origins, modules: bindingModules === undefined ? undefined : { reader: bindingModules, sources: headTree.sources }, signal });
       if (signal?.aborted) return ABORTED;
       return { ok: true, value: impactFact(head.base(content, true), { ...value, ...read.value }, [...unaccounted([...fixed, ...read.cuts]), ...moduleCuts]) };
     } finally {

@@ -95,9 +95,13 @@ population did not.
   declares a global of its own: the ambient proof steps back and the place keeps its cut.
 - The remaining cut places are receiver-rooted names (`this.svc.get`), names with no import, and imports from the
   repository. The type layer that could have settled them was measured and retired (`ADR-0018`, "Outcome").
-- Java is unaffected: the adapter reads TypeScript import clauses, and a Java reference keeps its cut.
+- A Java reference keeps its cut: the adapter reads TypeScript import clauses. A Java graph edge is judged by the same
+  verdict, from the root its name has by Java's scoping (`java-name-bindings.adapter.ts`): an edge whose name is a
+  qualified platform type, or a simple name a single import binds to one, is no dependence, which is the one case the
+  measured repositories show (codegraph resolves `org.springframework...User` through the file's import of a homonym).
 
 ## Not decided here
 
-- Any Java equivalent of an import-binding proof: the Java extractor reads annotations, not resolution, and no
-  measurement of what it loses exists yet.
+- A Java cut retired by an import-binding proof, a call on a type name (`T.m()`) whose type declares no such member, a
+  use of a name of the file's package or of a nested type moved to the declaration it binds, and a call on a typed
+  receiver: each needs a proof the verdict does not take yet.
