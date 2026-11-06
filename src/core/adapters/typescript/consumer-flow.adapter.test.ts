@@ -27,7 +27,7 @@ const callSite = (file: string, line: number, symbol: string): CarrierSite => ({
 const dotted = (path: readonly string[]) => formatAccessPath(path) || "[]";
 const uses = (result: FlowResult) => result.uses.map((use) => `${use.site.line - HEADER_LINES} ${dotted(use.path)}|${dotted(use.changed)} ${operationClass(use.operation)} [${use.guards.map((guard) => guard.kind).join(",")}]`);
 const predicateText = (test: Predicate) =>
-  test.kind === "truthy" ? "truthy" : test.kind === "absence" ? `${test.operator} ${test.absence}` : test.kind === "literal" ? `${test.operator} ${JSON.stringify(test.literal)}` : test.kind === "typeof" ? `typeof ${test.operator} ${test.type}` : "array";
+  test.kind === "truthy" ? "truthy" : test.kind === "absence" ? `${test.operator} ${test.absence}` : test.kind === "literal" ? `${test.operator} ${JSON.stringify(test.literal)}` : test.kind === "typeof" ? `typeof ${test.operator} ${test.type}` : test.kind === "one-of" ? `one-of ${[...test.literals.map((literal) => JSON.stringify(literal)), ...test.absences].join("|")}` : "array";
 const guardText = (guard: Guard) =>
   "test" in guard ? `${guard.kind} ${predicateText(guard.test)} ${guard.holds}${guard.kind === "fallback" ? ` -> ${guard.replacement.kind === "opaque" ? "opaque" : JSON.stringify(guard.replacement.value)}` : ""}` : guard.kind;
 const guardsOf = (result: FlowResult) => result.uses.filter((use) => use.path.length > 0).map((use) => use.guards.map(guardText));
@@ -405,6 +405,18 @@ test("a numeric unary operator on the changed value coerces it; a test of it use
     await operations(lines.map((line) => `${line};`), "tags"),
     operators.map((operator) => ({ steps: [], end: { kind: "coerce", operator } })),
   );
+});
+
+test("a switch compares the value it switches on strictly, as its labels do", async () => {
+  assert.deepEqual(await operations(["switch (order.tags) { case 'A': break }"], "tags"), [{ steps: [], end: { kind: "compare", operator: "===" } }]);
+});
+
+test("`in` and `instanceof` with the changed value as the right operand are unmodelled ends, and on the left it stays as it was", async () => {
+  assert.deepEqual(await operations(["'k' in order.tags", "other instanceof order.tags", "order.tags in other", "order.tags instanceof Other"], "tags"), [
+    { steps: [], end: { kind: "unmodelled", detail: "in" } },
+    { steps: [], end: { kind: "unmodelled", detail: "instanceof" } },
+    { steps: [], end: { kind: "coerce", operator: "in" } },
+  ]);
 });
 
 test("elements of an array are followed through for-of with the element path", async () => {
@@ -851,4 +863,70 @@ test("an assignment inside a loop reports that earlier reads of the name may fol
   const file = plain(["let x = other", "while (flag) {", "  show(x.owner.name)", "  x = o", "}"]);
   const result = await follow([file], paramO, "owner");
   assert.deepEqual(frontiers(result), ["5 unmodelled-flow:assignment in a loop"]);
+});
+
+/** The guards of the uses below the switched value, one entry per `show(order.owner.<name>)`, keyed by that name. */
+async function switchGuards(lines: readonly string[]) {
+  const result = await follow([guarded(lines)], parameterOrder, "owner");
+  return Object.fromEntries(result.uses.filter((use) => use.path.length > 1).map((use) => [use.path.at(-1), use.guards.map(guardText)]));
+}
+
+test("a use in a switch clause runs only where the switched value equals the clause's label, and a switch on another path guards nothing", async () => {
+  assert.deepEqual(await switchGuards(["switch (order.owner) {", "  case 'A': show(order.owner.a); break", "  case -1: show(order.owner.neg); break", "}"]), { a: ['condition one-of "A" true'], neg: ["condition one-of -1 true"] });
+  assert.deepEqual(await switchGuards(["switch (order.id) {", "  case 'A': show(order.owner.a); break", "}"]), { a: [] });
+});
+
+test("clauses with no statements fall through: the use runs where the value equals any of the labels that lead to it, null and undefined included", async () => {
+  const guards = await switchGuards(["switch (order.owner) {", "  case 'A': case 'B': show(order.owner.ab); break", "  case null: case undefined: show(order.owner.nil)", "}"]);
+  assert.deepEqual(guards, { ab: ['condition one-of "A"|"B" true'], nil: ["condition one-of null|undefined true"] });
+});
+
+test("a clause that does not exit falls through into the next, and one that breaks, returns, throws or continues starts a new group", async () => {
+  const guards = await switchGuards([
+    "for (const i of items) {",
+    "  switch (order.owner) {",
+    "    case 'A': show(order.owner.a)",
+    "    case 'B': show(order.owner.ab); break",
+    "    case 'C': show(order.owner.c); return",
+    "    case 'D': show(order.owner.d); throw new Error()",
+    "    case 'E': show(order.owner.e); continue",
+    "    case 'F': if (flag) break; show(order.owner.f)",
+    "    case 'G': show(order.owner.fg)",
+    "  }",
+    "}",
+  ]);
+  assert.deepEqual(guards, {
+    a: ['condition one-of "A" true'],
+    ab: ['condition one-of "A"|"B" true'],
+    c: ['condition one-of "C" true'],
+    d: ['condition one-of "D" true'],
+    e: ['condition one-of "E" true'],
+    f: ['condition one-of "F" true'],
+    fg: ['condition one-of "F"|"G" true'],
+  });
+});
+
+test("a default clause alone runs where the value equals none of the labels, and one in a fallthrough group where it equals none outside the group", async () => {
+  assert.deepEqual(await switchGuards(["switch (order.owner) {", "  case 'A': show(order.owner.a); break", "  case 'B': show(order.owner.b); break", "  default: show(order.owner.d)", "}"]), {
+    a: ['condition one-of "A" true'],
+    b: ['condition one-of "B" true'],
+    d: ['condition one-of "A"|"B" false'],
+  });
+  assert.deepEqual(await switchGuards(["switch (order.owner) {", "  default: show(order.owner.d)", "}"]), { d: [] });
+  const grouped = await switchGuards(["switch (order.owner) {", "  case 'A': show(order.owner.a); break", "  default: show(order.owner.d)", "  case 'B': show(order.owner.b); break", "  case 'C': show(order.owner.c)", "}"]);
+  assert.deepEqual(grouped, {
+    a: ['condition one-of "A" true'],
+    d: ['condition one-of "A"|"B"|"C" false'],
+    b: ['condition one-of "A"|"C" false'],
+    c: ['condition one-of "C" true'],
+  });
+});
+
+test("a label that is not a literal makes the group's guard an untested case, whichever side of default it sits", async () => {
+  const guards = await switchGuards(["switch (order.owner) {", "  case other: show(order.owner.x); break", "  case 'A': case this.kind: show(order.owner.y); break", "  case 'B': show(order.owner.z); break", "  default: show(order.owner.d)", "}"]);
+  assert.deepEqual(guards, { x: ["case"], y: ["case"], z: ['condition one-of "B" true'], d: ["case"] });
+});
+
+test("statements after the switch get nothing from it", async () => {
+  assert.deepEqual(await switchGuards(["switch (order.owner) {", "  case 'A': show(order.owner.a); break", "}", "show(order.owner.after)"]), { a: ['condition one-of "A" true'], after: [] });
 });

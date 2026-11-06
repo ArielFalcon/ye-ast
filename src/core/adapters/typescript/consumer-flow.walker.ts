@@ -1,7 +1,7 @@
 import ts from "typescript";
 import { ELEMENT, relatePaths, rewritePath, startsWith, type AccessPath, type PathMapping } from "../../domain/contracts/access-path.ts";
 import { RESOURCE_STATE_MEMBERS, type CarrierSite, type FlowFrontier, type FlowNext, type FlowStep, type FlowUse, type FrontierCause, type Hop } from "../../domain/contracts/consumer-flow.ts";
-import type { AccessStep, EqualityOperator, Predicate, UseOperation } from "../../domain/contracts/use-operation.ts";
+import type { Absence, AccessStep, EqualityOperator, Literal, Predicate, UseOperation } from "../../domain/contracts/use-operation.ts";
 import type { FallbackGuard, Guard, TestedGuard, UntestedGuard } from "../../domain/contracts/verdict.ts";
 import type { Evidence, UnknownReason } from "../../domain/shared/fact.ts";
 import type { Origin, Program, Unit } from "./consumer-flow.index.ts";
@@ -113,6 +113,7 @@ export class Walker {
   readonly frontiers: Held<FlowFrontier>[] = [];
   private readonly visited = new Set<string>();
   private readonly reported = new Set<string>();
+  private readonly clauseTests = new WeakMap<ts.CaseOrDefaultClause, ClauseTest>();
 
   constructor(
     private readonly repo: string,
@@ -367,6 +368,7 @@ export class Walker {
     if (ts.isPropertyDeclaration(parent) && parent.initializer === top && ts.isIdentifier(parent.name)) return this.assignedToMember(parent.name.text, enclosingClass(parent), parent, this.hopped(t, "assign", parent));
     if (exact && isNumericUnary(parent)) return this.use(parent, t, [], { steps: [], end: { kind: "coerce", operator: ts.tokenToString(parent.operator)! } }, t.guards);
     if (ts.isTemplateSpan(parent)) return exact ? this.use(parent, t, [], { steps: [], end: { kind: "coerce", operator: "${}" } }, t.guards) : undefined;
+    if (exact && ts.isSwitchStatement(parent)) return this.use(parent, t, [], { steps: [], end: { kind: "compare", operator: "===" } }, t.guards);
     if (exact) return this.use(parent, t, [], { steps: [], end: { kind: "unmodelled", detail: ts.SyntaxKind[parent.kind] } }, t.guards);
     this.frontier(parent, "unmodelled-flow", ts.SyntaxKind[parent.kind], t);
   }
@@ -386,6 +388,7 @@ export class Walker {
     if (equality && isNullishLiteral(parent.left === top ? parent.right : parent.left)) return;
     const other = parent.left === top ? parent.right : parent.left;
     const text = parent.operatorToken.getText(this.unit.tree);
+    if (parent.right === top && MEMBERSHIP_OPERATORS.has(operator)) return this.use(parent, t, [], { steps: [], end: { kind: "unmodelled", detail: text } }, t.guards);
     if (!COMPARISONS.has(operator)) return this.use(parent, t, [], { steps: [], end: { kind: "coerce", operator: text } }, t.guards);
     const literal = literalOf(other);
     this.use(parent, t, [], { steps: [], end: { kind: "compare", operator: text, ...(literal === undefined ? {} : { literal }) } }, t.guards);
@@ -650,6 +653,8 @@ export class Walker {
       } else if (ts.isBinaryExpression(parent) && parent.right === child) {
         if (parent.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken) add(this.conditionGuards(parent.left, true, binding), parent.left.end);
         else if (parent.operatorToken.kind === ts.SyntaxKind.BarBarToken) add(this.conditionGuards(parent.left, false, binding), parent.left.end);
+      } else if (ts.isCaseBlock(parent)) {
+        add(this.clauseGuards(parent, child as ts.CaseOrDefaultClause, binding), parent.parent.expression.end);
       } else if (ts.isBlock(parent) || ts.isCaseClause(parent) || ts.isDefaultClause(parent)) {
         const before = parent.statements.indexOf(child as ts.Statement);
         for (const statement of parent.statements.slice(0, Math.max(before, 0))) add(this.earlyExit(statement, binding), statement.end);
@@ -670,6 +675,27 @@ export class Walker {
     if (write === undefined) return false;
     this.once(write.node, "write after guard", t);
     return true;
+  }
+
+  /** What reaching `clause` says about the switched value. */
+  private clauseGuards(block: ts.CaseBlock, clause: ts.CaseOrDefaultClause, binding: Binding): Guard[] {
+    const covers = chainPath(block.parent.expression, binding);
+    if (covers === undefined) return [];
+    const reached = this.clauseTest(block, clause);
+    if (reached === "none") return [];
+    return reached === "opaque" ? [this.untested("case", covers, clause)] : [this.tested("condition", covers, reached.test, reached.holds, clause)];
+  }
+
+  /** What reaching each clause of the switch says about the value, computed for all of its clauses on the first ask. */
+  private clauseTest({ clauses }: ts.CaseBlock, clause: ts.CaseOrDefaultClause): ClauseTest {
+    if (!this.clauseTests.has(clause)) {
+      let start = 0;
+      clauses.forEach((candidate, at) => {
+        this.clauseTests.set(candidate, reachedBy(clauses, clauses.slice(start, at + 1)));
+        if (candidate.statements.length > 0 && exits(candidate.statements.at(-1)!)) start = at + 1;
+      });
+    }
+    return this.clauseTests.get(clause)!;
   }
 
   private earlyExit(statement: ts.Statement, binding: Binding): Guard[] {
@@ -915,6 +941,31 @@ const COMPARISONS: ReadonlySet<ts.SyntaxKind> = new Set([
   ts.SyntaxKind.GreaterThanToken,
   ts.SyntaxKind.GreaterThanEqualsToken,
 ]);
+
+/** What reaching a switch clause says about the switched value: a test that must hold, nothing, or labels that are not literals. */
+type ClauseTest = { test: Predicate; holds: boolean } | "none" | "opaque";
+
+/**
+ * The clauses that fall through into the last of `group` are those after the last one that exits: without `default` among
+ * them the value equals one of their labels, with it the value equals none of the labels outside them. A label that is no
+ * literal leaves the test opaque.
+ */
+function reachedBy(clauses: readonly ts.CaseOrDefaultClause[], group: readonly ts.CaseOrDefaultClause[]): ClauseTest {
+  const withDefault = group.some(ts.isDefaultClause);
+  const labelled = (withDefault ? clauses.filter((candidate) => !group.includes(candidate)) : group).filter(ts.isCaseClause).map((label) => unwrap(label.expression));
+  const literals: Literal[] = [];
+  const absences: Absence[] = [];
+  for (const label of labelled) {
+    const literal = literalOf(label);
+    if (literal !== undefined) literals.push(literal);
+    else if (isNullishLiteral(label)) absences.push(label.kind === ts.SyntaxKind.NullKeyword ? "null" : "undefined");
+    else return "opaque";
+  }
+  return literals.length + absences.length === 0 ? "none" : { test: { kind: "one-of", literals, absences }, holds: !withDefault };
+}
+
+/** `in` and `instanceof` throw on a right operand that is no object or no function; what they do with the value there is not modelled. */
+const MEMBERSHIP_OPERATORS: ReadonlySet<ts.SyntaxKind> = new Set([ts.SyntaxKind.InKeyword, ts.SyntaxKind.InstanceOfKeyword]);
 
 const reachesChange = (q: AccessPath, t: Trail): boolean => ["exact", "beyond"].includes(relatePaths(q, t.origin));
 

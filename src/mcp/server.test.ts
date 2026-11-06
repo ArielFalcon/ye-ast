@@ -813,6 +813,27 @@ test("the outline focus forwards its selectors and answers each match under its 
   await session.close();
 });
 
+test("an outline focus lists each use under its declaration, a declaration by file and line, and says when the body uses nothing", async () => {
+  const match = { file: "src/Api.ts", path: "get", ancestors: [], declaration: { kind: "function", name: "get", line: 10, endLine: 20 }, omitted: 0 };
+  const value: OutlineValue = {
+    focus: [
+      { ...match, selector: "get", uses: [
+        { declaration: { file: "src/lib.ts", name: "helper", kind: "function", line: 1, endLine: 3 }, relations: ["calls", "references"], at: [{ line: 11, column: 3 }, { line: 15, column: 5 }] },
+        { module: "zod", relations: ["calls"], at: [{ line: 12, column: 5 }] },
+        { global: "Map", relations: ["instantiates"], at: [] },
+      ] },
+      { ...match, selector: "10", uses: [] },
+    ],
+    unheld: [],
+  };
+  const { session } = await setup({ outline: async () => ({ ok: true, value: { ...base(), status: "complete", value } as Fact<OutlineValue> }) });
+  const text = textOf(await session.callTool("ye_ast_outline", { focus: [{ file: "src/Api.ts", symbol: "get" }] }));
+
+  assert.match(text, /\n {4}uses:\n {6}helper → src\/lib\.ts:1 \(calls, references; at 11, 15\)\n {6}zod \(package\) \(calls; at 12\)\n {6}Map \(global\) \(instantiates\)\n/);
+  assert.match(text, /\n {4}uses nothing outside its body\n/);
+  await session.close();
+});
+
 test("an outline call with both files and focus, or with neither, is refused before any query", async () => {
   const { session, calls } = await setup();
   for (const args of [{ files: ["src/Api.ts"], focus: [{ file: "src/Api.ts", line: 3 }] }, {}]) assert.equal((await session.callTool("ye_ast_outline", args)).isError, true, JSON.stringify(args));

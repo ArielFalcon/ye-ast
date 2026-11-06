@@ -466,6 +466,18 @@ test("a proven outline binding anchors the declaration it reaches, so compose ca
   assert.deepEqual({ file: t.path(anchor.file), symbol: anchor.symbol, line: anchor.line, endLine: anchor.endLine, kindName: declaration.kindName }, { file: "src/OrderService.java", symbol: "OrderService", line: 3, endLine: 50, kindName: "class" });
 });
 
+test("a repository use of a focused declaration anchors the declaration it reaches, so compose can join it with other answers", () => {
+  const focus = { file: "src/OrderController.java", selector: "create", path: "create", ancestors: [], declaration: { kind: "method", name: "create", line: 10, endLine: 20 }, omitted: 0 };
+  const uses = [{ declaration: { file: "src/OrderService.java", name: "OrderService", kind: "class", line: 3, endLine: 50 }, relations: ["calls"], at: [{ line: 12, column: 5 }] }, { module: "java.util", relations: ["references"], at: [] }];
+  const t = new Tables(normalizeSource(sourceFixture("outline", { value: { focus: [{ ...focus, uses }], unheld: [] } }), digest));
+  const [part] = t.at("/value/focus/0/declaration").filter((candidate) => candidate.kind === "outline-declaration");
+  const [repository, external] = part?.kind === "outline-declaration" ? part.uses ?? [] : [];
+  assert.ok(repository !== undefined && "declaration" in repository);
+  const anchor = t.anchor(repository.declaration.anchor);
+  assert.deepEqual({ file: t.path(anchor.file), symbol: anchor.symbol, line: anchor.line, endLine: anchor.endLine, relations: repository.relations, at: repository.at }, { file: "src/OrderService.java", symbol: "OrderService", line: 3, endLine: 50, relations: ["calls"], at: [{ line: 12, column: 5 }] });
+  assert.deepEqual(external, { module: "java.util", relations: ["references"], at: [] });
+});
+
 test("a trace anchors each step and each leaf at its declaration, on the anchor an outline of the same declaration uses", () => {
   const t = new Tables(normalizeSource(sourceFixture("trace"), digest));
   const steps = t.list("/value/steps", "trace-step");

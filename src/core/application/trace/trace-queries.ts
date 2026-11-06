@@ -20,7 +20,8 @@ import { distinctTargets, evidenceOfTarget, rangeChanges, requestedRanges, selec
 import { ABORTED } from "../snapshot/read-snapshot.ts";
 import { createEdgeTargets } from "../navigation/edge-targets.ts";
 import { createHeadReader, type FactSpec, type HeadReaderDeps } from "../snapshot/head-reading.ts";
-import { isTraceRoot, unresolvedOncePerFile, walkTrace } from "./trace-walk.ts";
+import { isTraceRoot, walkTrace } from "./trace-walk.ts";
+import { unresolvedOncePerFile } from "../navigation/declaration-uses.ts";
 
 export interface TraceQueriesDeps extends HeadReaderDeps {
   /** Reads where the bare names a file calls come from, so a call to a package or a language global is external. */

@@ -16,6 +16,8 @@ export interface GraphNavigation {
   /** The non-test types above (`up`) or below (`down`) a type, each with the weakest confidence on its way. */
   typesAround(type: GraphSymbol, direction: "up" | "down"): { type: GraphSymbol; confidence: number }[];
   methodsOf(type: GraphSymbol): GraphSymbol[];
+  /** The declarations a contains edge places directly inside `type`, in the store's order. */
+  membersOf(type: GraphSymbol): readonly GraphSymbol[];
   symbolsInFile(path: string): readonly GraphSymbol[];
   /** The declaration of `kinds` a reference names in its file. */
   declarationAt(ref: SymbolRef, kinds?: readonly string[]): GraphSymbol | undefined;
@@ -70,17 +72,18 @@ export function createGraphNavigation(reader: CodeGraphReader, isTestFile: (path
     return [...found.values()];
   }
 
-  const membersCache = new Map<GraphNodeId, GraphSymbol[]>();
-  function methodsOf(type: GraphSymbol): GraphSymbol[] {
-    let methods = membersCache.get(type.id);
-    if (methods === undefined) {
+  const membersCache = new Map<GraphNodeId, readonly GraphSymbol[]>();
+  function membersOf(type: GraphSymbol): readonly GraphSymbol[] {
+    let members = membersCache.get(type.id);
+    if (members === undefined) {
       const edges = reader.outgoingEdges([type.id], ["contains"]);
       load(edges.map((edge) => edge.target));
-      methods = edges.map((edge) => symbolOf(edge.target)).filter((symbol): symbol is GraphSymbol => symbol?.kind === "method");
-      membersCache.set(type.id, methods);
+      members = edges.flatMap((edge) => symbolOf(edge.target) ?? []);
+      membersCache.set(type.id, members);
     }
-    return methods;
+    return members;
   }
+  const methodsOf = (type: GraphSymbol): GraphSymbol[] => membersOf(type).filter((symbol) => symbol.kind === "method");
 
   const symbolsCache = new Map<string, readonly GraphSymbol[]>();
   function symbolsInFile(path: string): readonly GraphSymbol[] {
@@ -107,5 +110,5 @@ export function createGraphNavigation(reader: CodeGraphReader, isTestFile: (path
     return byReceiver.get(receiver) ?? [];
   }
 
-  return { load, symbolOf, ownersOf, typesAround, methodsOf, symbolsInFile, declarationAt, referencesThrough };
+  return { load, symbolOf, ownersOf, typesAround, methodsOf, membersOf, symbolsInFile, declarationAt, referencesThrough };
 }

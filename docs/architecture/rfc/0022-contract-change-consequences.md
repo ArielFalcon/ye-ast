@@ -77,7 +77,7 @@ Recognized when they test the path up to and including the changed segment, or i
 a condition on the value (truthiness, an equality with an absence or a literal, `typeof`, `Array.isArray`) in `@if`,
 `*ngIf`, `if`, `&&`, `?:`; an early `return` or `throw` on the negation in the same block; `??` or `||` directly on the
 changed value with any right side, which replaces the values its test rejects; a destructuring default (`{ x = [] }`),
-which replaces `undefined` only. Each guard states the test it applies and where the use runs; what a guard rejects is
+which replaces `undefined` only; a `switch` clause on the covered path (see "Change algebra", Guards). Each guard states the test it applies and where the use runs; what a guard rejects is
 derived by evaluating the test, never listed. A guard on one element (`items[0]`) protects only reads of that same index. A read after
 a write to the guarded path or a prefix of it reads the written value, and one that only a guard outside its closure
 would protect is not decided where the closure runs: both are frontiers. A caller edge the code graph only guesses is
@@ -93,13 +93,17 @@ each value the change lets in. A new change is a constructor of value sets, neve
 
 **Values.** The changed value is the JSON value the response carries; flow steps keep its identity, and a step that
 transforms it ends the chain, as in F0. Its classes are `undefined`, `null`, `boolean`, `number`, `string`,
-`array`, `object` and literals, each literal inside its kind. Each class is represented by a few concrete values that
-every recognized guard and step treats alike within the class, chosen per use: `undefined`; `null`; `false` and `true`;
-`0`, a fresh number and the numbers the use names; `""`, a fresh string and the strings it names; `[]`; `{}`. A fresh
-value is nonzero or nonempty and differs, loosely and so strictly, from every literal the use names (a guard operand, a
-compared literal), so a guard that names finitely many literals cannot exclude it while letting another member of its
-class through. A JSON value holds no function and no symbol, and an array or a
-primitive has no named member besides those of its prototype.
+`array`, `object` and literals, each literal inside its kind. Each class is represented by a few subjects, chosen per
+use, and each subject states what it stands for. An **exact** subject is one value whose own keys and elements are all
+known: `undefined`, `null`, `false`, `true`, `0`, `""`, a literal the use names or the change adds, a fallback's
+replacement and what is read from one. A **sample** stands for every value of its class but the literals other
+subjects stand for: a fresh number (every number other than `0` and the numbers the use names, which differs, loosely
+and so strictly, from every literal the use names), a fresh string (every nonempty string other than the strings it
+names), `[]` (every array) and `{}` (every object). What a sample's `length` gives, or what any other member of a
+sample reads, is any value of a type or unknown, never the concrete value of the member that happens to stand for it.
+No retired literal is a subject: the fixed ones (`0`, `""`, `false`, `true`) are dropped when the change retires them,
+as the named ones are. A JSON value holds no function and no symbol, and an array or a primitive has no named member
+besides those of its prototype.
 
 **Changes.** A change gives the values the new contract permits that the old one did not (`introduced`) and those it no
 longer produces (`retired`). The old guarantee stays assumed and stated: present, non-null, of whatever kind the code
@@ -133,21 +137,32 @@ semantics; for JavaScript, one module serves both adapters. A step on `null` or 
 there ends the chain at `undefined`, which the end then applies to. A member, or a keyed read with a literal key, on a
 primitive or an array is what a frozen table of the built-in prototypes holds under that name (inherited members
 included; the table follows ECMAScript 2025 with the Annex B members engines ship, is built once and is never read from
-the running engine), else `undefined`; an index key on an array or a string is `unknown`, since its elements are not
-known. On an object a member is `unknown` unless `Object.prototype` holds it, and since a JSON value holds no function
-such an unknown member is never callable. A value built from a fallback's literal is fully known: its own keys and
-elements are exact. A keyed read with any other key is `unknown` past `null` and `undefined`. A call throws when its
-target is not a function, and the call of a function is `unknown`: what the callee does is not modelled. The end then
-applies to the value reached: `iterate` and array destructuring throw unless it is iterable (strings and arrays are),
-object destructuring throws only on `null` and `undefined`, `compare`, `coerce` and `consume` run, `unmodelled` is
-`unknown`. Each value ends `throws`, `handled` (a guard kept it from the use, or a fallback replaced it and the use runs
+the running engine), else `undefined`; an index key on a sample array or string is `unknown`, since its elements are
+not known, while an exact one has exact elements and an exact `length`; a sample's `length` is any number. On an open
+object (a sample) a member is `unknown` when `Object.prototype` holds it, since an own JSON value may hide the
+inherited one, and otherwise some JSON value or absent, which is never callable; an exact object keeps the exact
+lookup. A value built from a fallback's literal is exact. A keyed read with any other key is `unknown` past `null` and
+`undefined`. A call throws when its target is not a function, and the call of a function is `unknown`: what the callee
+does is not modelled. The end then applies to the value reached: `iterate` and array destructuring throw unless it is
+iterable (strings and arrays are), object destructuring throws only on `null` and `undefined`, a strict `compare` and
+`consume` run, `unmodelled` is `unknown`. Converting to a primitive (`coerce`, and a `compare` that is not strict)
+runs on a primitive and on an exact object or array no own key of which shadows `valueOf` or `toString` (an own key
+holds a JSON value, which is no function, and the conversion may then have no result); it is `unknown` on a sample
+array or object, whose keys are open, and on a value the module cannot tell. Each value ends `throws`, `handled` (a guard kept it from the use, or a fallback replaced it and the use runs
 on the replacement), `runs` (it reached the use and the use ran, its result possibly changed) or `unknown`; `unknown` is
 never promoted. No repository code runs.
 
 **Guards** are predicates on the values, evaluated with the language's own operators, by exact operator, operand and
 branch polarity: `x === null`, `x !== undefined`, `x != null`, truthiness, `typeof x === 'k'` (true for `null` under
-`'object'`), `Array.isArray(x)`, `x === <literal>`. They are listed in the order the value passes them and each is
-applied to the value as it stands. A condition, an early exit or a `?.` lets the use run where its test gives its stated
+`'object'`), `Array.isArray(x)`, `x === <literal>`, and a strict equality with any of several literals and absences (`one-of`), which is
+how a `switch` clause states its labels. They are listed in the order the value passes them and each is
+applied to the value as it stands. On an exact subject the predicate is applied. On a sample, or any value of a type, it is
+decided only when it gives one result for every value the subject stands for, and otherwise it is undecided, which can only
+turn a failing use into `review`, never admit a value: `typeof`, `Array.isArray` and an equality with an absence are
+decided for any class; truthiness is decided for a fresh number or string (neither is the falsy value), an array and an
+object; an equality with a literal of the same type is decided for a fresh sample, which stands apart from every literal
+the use names; a strict equality with a literal of another type is decided; a loose equality across types, and any test
+of an unconstrained number such as a `length`, is undecided. A condition, an early exit or a `?.` lets the use run where its test gives its stated
 result on the value at the path it covers; a value on which it does not is `handled`. A guard on a path deeper than the
 changed value reads that path first with the same semantics: a read that throws leaves the value `handled` (the test is
 its own use, reported on its own), and a test the module cannot decide acts like a guard outside the vocabulary, which
@@ -158,6 +173,19 @@ continues on the replacement: a use that throws on it is `incompatible` and name
 fallback, and an opaque replacement goes on as an unknown value, so an end that runs on every value still runs and
 anything else is `unknown` (`opaque-replacement`). A fallback on a deeper path is followed only as far as its read. A
 guard keeps F0's path scope and reach.
+
+A use inside a clause of `switch (<covered path>)` is guarded by the clause's fallthrough group: the clauses from the
+last one whose statements end in an exit (`break`, `return`, `throw`, `continue`) up to the clause holding the use,
+since a clause with no statements, or one that does not exit, runs on into the next. Without `default` in the group, the
+use runs where the value equals one of the group's labels (`one-of` of them, branch taken); with `default` in it, where
+the value equals none of the labels outside the group (`one-of` of those, other branch). A guard is a conjunction, so a
+clause reached from several labels needs the disjunction in one predicate. A label that is no literal (string, number,
+boolean) and not `null` or `undefined` makes the guard an untested `case` guard, which handles nothing and only turns a
+throwing use into `review`. A statement after the `switch` gets nothing from it. The labels a `one-of` names are among
+the literals the use names, so no fresh value equals one, and a `one-of` that must hold and names a retired literal is
+read like a strict equality with it. The switched value itself is a use whose end is a strict `compare`, as the
+discriminant of `@switch` is. `in` and `instanceof` with the changed value as the right operand end `unmodelled` (the
+operator is the detail); on the left of `in` the value is coerced to a key.
 
 **Verdict,** per use: a value throws → `incompatible`, with that value as the witness, the step or end that fails on it,
 the capability it lacks (`a function at toFixed`, `an iterable`) and the replacement it came from, if any; a value runs →
@@ -196,7 +224,9 @@ independent oracle for each new change, and latency, peak memory and answer size
 3. Representative values of every class, the prototype table and step evaluation; guards as predicates by exact
    operator, operand and polarity, `typeof` and `Array.isArray` included; `type`, `wrapped`, fallback replacements and
    the replacement in the answer.
-4. `values` and `meaning`, retired literals in strict comparisons, the silent-and-counted rule. `switch` afterwards, on its own.
+4. `values` and `meaning`, retired literals in strict comparisons, the silent-and-counted rule.
+5. `switch` clauses (TypeScript) and `@switch` cases (templates) as guards: the `one-of` predicate, fallthrough groups, the
+   untested `case` guard.
 
 ## Output
 

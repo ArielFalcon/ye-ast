@@ -39,6 +39,8 @@ function predicateText(test: Predicate): string {
       return `typeof ${test.operator} ${test.type}`;
     case "array":
       return "array";
+    case "one-of":
+      return `one-of ${JSON.stringify([...test.literals, ...test.absences])}`;
   }
 }
 
@@ -490,6 +492,10 @@ test("each construct states what it does with the changed value: the accesses pa
     ["@if (order().address < other) {}", { steps: [], end: { kind: "compare", operator: "<" } }],
     ["{{ order().address + 1 }}", { steps: [], end: { kind: "coerce", operator: "+" } }],
     ["{{ -order().address }}", { steps: [], end: { kind: "coerce", operator: "-" } }],
+    ["{{ 'k' in order().address }}", { steps: [], end: { kind: "unmodelled", detail: "in" } }],
+    ["{{ other instanceof order().address }}", { steps: [], end: { kind: "unmodelled", detail: "instanceof" } }],
+    ["{{ order().address in other }}", { steps: [], end: { kind: "coerce", operator: "in" } }],
+    ["{{ order().address instanceof other }}", { steps: [], end: { kind: "coerce", operator: "instanceof" } }],
     ['<img [title]="order().address">', { steps: [], end: { kind: "consume", as: "handed-on" } }],
     ["@switch (order().address) { @case ('A') { } }", { steps: [], end: { kind: "compare", operator: "===" } }],
   ];
@@ -503,4 +509,30 @@ test("an assignment target on the changed value replaces it without reading it, 
 
   assert.deepEqual(uses(exact), []);
   assert.deepEqual(beyond.uses.map((use) => use.operation), [{ steps: [{ kind: "member", name: "city", optional: false }], end: { kind: "none" } }]);
+});
+
+test("a use inside a @case is guarded by the equality of the switched value with the labels of its case, and inside @default by every label rejecting it", () => {
+  const result = follow(
+    "@switch (order().kind) {\n@case ('A') { {{ order().kind }} }\n@case (-1) @case (null) { {{ order().kind }} }\n@default { {{ order().kind }} }\n}",
+    ["kind"],
+  );
+
+  assert.deepEqual(guardsByUse(result), [
+    "kind: ",
+    'kind: condition(one-of [\"A\"] true)',
+    'kind: condition(one-of [-1,\"null\"] true)',
+    'kind: condition(one-of [\"A\",-1,\"null\"] false)',
+  ]);
+});
+
+test("a @case label that is not a literal states an untested case guard, in a case and in the default", () => {
+  const result = follow("@switch (order().kind) {\n@case ('A') { {{ order().kind }} }\n@case (other) { {{ order().kind }} }\n@default { {{ order().kind }} }\n}", ["kind"]);
+
+  assert.deepEqual(guardsByUse(result), ["kind: ", 'kind: condition(one-of [\"A\"] true)', "kind: case", "kind: case"]);
+});
+
+test("a use after the @switch block is not guarded by its cases", () => {
+  const result = follow("@switch (order().kind) { @case ('A') { } }\n{{ order().kind }}", ["kind"]);
+
+  assert.deepEqual(guardsByUse(result).at(-1), "kind: ");
 });
