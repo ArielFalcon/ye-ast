@@ -333,16 +333,17 @@ test("a workspace link already admitted becomes one match per snapshot, basis an
   assert.deepEqual(issues(result, "missing-link-reference").map((issue) => issue.kind === "missing-link-reference" && [issue.linkId, issue.position]), [["L9", 0]]);
 });
 
-function linkedEntrypointCase(entries: readonly { name?: string; version?: string }[], catalogSnapshot: SnapshotRef = sha("shop")) {
+function linkedEntrypointCase(entries: readonly { name?: string; version?: string }[], catalogSnapshot: SnapshotRef = sha("shop"), catalogContext: ReadContext = {}) {
   const workspace = new SetBuilder("linked-workspace", WORKSPACE_IMPACT, sha("web"));
   const link = workspaceLink(workspace, { handlerSnapshot: sha("shop") });
-  const entrypoints = new SetBuilder("linked-entrypoints", ENTRYPOINTS, catalogSnapshot);
+  const entrypoints = new SetBuilder("linked-entrypoints", ENTRYPOINTS, catalogSnapshot, catalogContext);
   const handler = entrypoints.anchor(entrypoints.file(PATH), HANDLER, 10, 20);
   const catalog = entries.map((entry, index) => entrypoints.part({
     kind: "entrypoint", evidence: [],
     entry: { ...httpRoute(handler), ...(entry.name === undefined ? {} : { name: entry.name }), ...(entry.version === undefined ? {} : { version: entry.version }) },
   }, { pointer: `/value/entrypoints/${index}` }));
-  return { graph: compose(workspace.build(), entrypoints.build()).graph, link, catalog };
+  const result = compose(workspace.build(), entrypoints.build());
+  return { graph: result.graph, issues: result.issues, link, catalog };
 }
 
 test("a cross-repository link is joined with the one catalog entrypoint of its kind, handler and name", () => {
@@ -526,21 +527,34 @@ test("exact positive observations corroborate different producer versions withou
   assert.equal(connections(guardCase({producer:{name:"ye-ast",version:"0.5.0"}},{producer:{name:"ye-ast",version:"0.4.0"}}).graph,"handler-declaration").length,0,"derivation retains strict producer guard");
 });
 
-function spellingCase(entrypointSymbol: string, reachSymbol: string, endLine: number | null = 20) {
-  const entrypoints = new SetBuilder("spelling-entrypoints", ENTRYPOINTS, sha("shop"));
+function spellingCase(entrypointSymbol: string, reachSymbol: string, endLine: number | null = 20, entrypointsContext: ReadContext = {}) {
+  const entrypoints = new SetBuilder("spelling-entrypoints", ENTRYPOINTS, sha("shop"), entrypointsContext);
   const handler = entrypoints.anchor(entrypoints.file(PATH), entrypointSymbol, 10, endLine ?? undefined);
   entrypoints.part({ kind: "entrypoint", entry: httpRoute(handler), evidence: [] });
   const callers = new SetBuilder("spelling-callers", CALLERS, sha("shop"));
   const reached = callers.anchor(callers.file(PATH), reachSymbol, 10, endLine ?? undefined);
   callers.part({ kind: "entrypoint-reach", kindName: "http-route", name: "POST /orders", handler: reached, depth: 1, confidence: 1, seeds: [] });
   const result = compose(entrypoints.build(), callers.build());
-  return { graph: result.graph, handler, reached };
+  return { graph: result.graph, issues: result.issues, handler, reached };
 }
 
 test("a qualified and a simple spelling of one span are one declaration without outline, so the reach joins its entrypoint", () => {
   const { graph, handler, reached } = spellingCase("OrderController.create", "create");
   assert.equal(entityOf(graph, handler)?.id, entityOf(graph, reached)?.id);
   assert.equal(connections(graph, "reached-handler").length, 1);
+});
+
+test("an entrypoint join needs compatible reads: the observing read and the catalog read keep the strict guard", () => {
+  const otherProducer: ReadContext = { producer: { name: "ye-ast", version: "2.0.0" } };
+  const producerMismatch = (found: readonly CompositionIssue[]) => found.some((issue) => issue.kind === "context-mismatch" && issue.field === "producer");
+
+  const reached = spellingCase("OrderController.create", "create", 20, otherProducer);
+  assert.equal(connections(reached.graph, "reached-handler").length, 0, "a reach never joins a catalog of another producer version");
+  assert.ok(producerMismatch(reached.issues), "reached-handler: mismatch reported");
+
+  const linked = linkedEntrypointCase([{}], sha("shop"), otherProducer);
+  assert.equal(connections(linked.graph, "linked-entrypoint").length, 0, "a link never joins a catalog of another producer version");
+  assert.ok(producerMismatch(linked.issues), "linked-entrypoint: mismatch reported");
 });
 
 test("two distinct qualified names of one span stay separate declarations", () => {
