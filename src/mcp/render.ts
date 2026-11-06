@@ -1146,9 +1146,17 @@ function traceRootLines(value: TraceValue): string[] {
   ];
 }
 
-function readingPlanLines(value: TraceValue): string[] {
+/** The ranges to open: one per line in details; in summary one line per file, files in their first appearance. */
+function readingPlanLines(value: TraceValue, detail: ResponseMode): string[] {
   const { ranges, lines } = value.readingPlan;
-  return [`reading plan (${ranges.length} ${ranges.length === 1 ? "range" : "ranges"}, ${lines} lines):`, ...ranges.map(({ file, start, end }) => `  ${placeText(file, start, end === start ? undefined : end)}`)];
+  const span = (start: number, end: number): string => (end === start ? `${start}` : `${start}-${end}`);
+  const listed = detail === "details"
+    ? ranges.map(({ file, start, end }) => `  ${placeText(file, start, end === start ? undefined : end)}`)
+    : [...Map.groupBy(ranges, ({ file }) => file)].map(([file, inFile]) => {
+        const count = inFile.reduce((sum, { start, end }) => sum + end - start + 1, 0);
+        return `  ${file}: ${inFile.map(({ start, end }) => span(start, end)).join(", ")} (${count} ${count === 1 ? "line" : "lines"})`;
+      });
+  return [`reading plan (${ranges.length} ${ranges.length === 1 ? "range" : "ranges"}, ${lines} lines):`, ...listed];
 }
 
 function externalText(group: ExternalCalls): string {
@@ -1182,21 +1190,39 @@ function tracePlaceOf(cut: Cut): { file: string; line: string; spelling: string;
   return { file, line, spelling, candidates };
 }
 
-/** Candidates listed, or counted when the count is the shorter text. */
-function candidatesText(candidates: readonly string[], detail: ResponseMode): string {
-  if (candidates.length === 0) return "";
-  const literal = ` (${candidates.join(", ")})`;
-  return detail === "details" ? literal : preferShorterText(literal, ` (${candidates.length} ${candidates.length === 1 ? "candidate" : "candidates"})`);
+type TracePlace = ReturnType<typeof tracePlaceOf>;
+
+const TRACE_PLACES_OMITTED = '    Call places omitted; use mode: "details" to list each call with its file, line and candidates, or mode: "full" for the original structured fact.';
+
+/** The name a call ends with, so calls of one member through different receivers share a line. */
+function trailingName(spelling: string): string {
+  return /[\w$]+$/.exec(spelling.trimEnd())?.[0] ?? spelling.trim();
 }
 
-/** The calls no rule settled, grouped under their file in summary, one per line with every candidate in details. */
+/** Each unresolved call with every candidate. */
+function tracePlaceLine(place: TracePlace): string {
+  return `    ${place.file}:${place.line} ${place.spelling}${place.candidates.length === 0 ? "" : ` (${place.candidates.join(", ")})`}`;
+}
+
+/** One line per trailing name and candidate set, most calls first, then by name: its calls, its files and its candidates, counted when shorter. */
+function traceCallGroupLines(places: readonly TracePlace[]): string[] {
+  const groups = [...Map.groupBy(places, (place) => JSON.stringify([trailingName(place.spelling), place.candidates.toSorted(compareText)]))]
+    .map(([key, inGroup]) => ({ key, name: trailingName(inGroup[0]!.spelling), candidates: inGroup[0]!.candidates.toSorted(compareText), calls: inGroup.length, files: new Set(inGroup.map(({ file }) => file)).size }))
+    .sort((a, b) => b.calls - a.calls || compareText(a.name, b.name) || compareText(a.key, b.key));
+  return groups.map(({ name, candidates, calls, files }) => {
+    const listed = candidates.join(", ");
+    const counted = `${candidates.length} ${candidates.length === 1 ? "candidate" : "candidates"}`;
+    const could = candidates.length === 0 ? "" : preferShorterText(listed, counted) === listed ? ` → could be: ${listed}` : ` → ${counted}`;
+    return `    ${name} ×${calls} in ${files} ${files === 1 ? "file" : "files"}${could}`;
+  });
+}
+
+/** The calls no rule settled: grouped by call in summary, then the modes that list each place; one per line with every candidate in details. */
 function traceCutLines(cuts: readonly Cut[], detail: ResponseMode): string[] {
   const unresolved = cuts.filter((cut) => cut.kind === "unresolved-link").map(tracePlaceOf);
   const lines = cutLines(cuts.filter((cut) => cut.kind !== "unresolved-link"), detail);
   if (unresolved.length === 0) return lines.length === 0 ? [] : [CUTS, ...lines];
-  const places = detail === "details"
-    ? unresolved.map((place) => `    ${place.file}:${place.line} ${place.spelling}${candidatesText(place.candidates, detail)}`)
-    : [...Map.groupBy(unresolved, (place) => place.file)].map(([file, inFile]) => `    ${file}: ${inFile.map((place) => `${place.line} ${place.spelling}${candidatesText(place.candidates, detail)}`).join(", ")}`);
+  const places = detail === "details" ? unresolved.map(tracePlaceLine) : [...traceCallGroupLines(unresolved), TRACE_PLACES_OMITTED];
   return [CUTS, ...lines, `  unresolved-link (${unresolved.length} ${unresolved.length === 1 ? "call" : "calls"}):`, ...places];
 }
 
@@ -1204,7 +1230,7 @@ export function renderTrace(fact: Fact<TraceValue>, detail: ResponseMode = "summ
   if (detail === "full") return fact.status === "unknown" ? "Inspect reason and evidence; the result has no value." : TRACE_FULL_GUIDE;
   const lines = headerLines(fact);
   if (fact.status === "unknown") return lines.join("\n");
-  lines.push(...traceRootLines(fact.value), TRACE_BRANCHES, ...readingPlanLines(fact.value));
+  lines.push(...traceRootLines(fact.value), TRACE_BRANCHES, ...readingPlanLines(fact.value, detail));
   if (detail === "details") lines.push("steps:", ...traceTreeLines(fact.value.steps));
   lines.push(...traceCutLines(cutsOf(fact), detail));
   return lines.join("\n");

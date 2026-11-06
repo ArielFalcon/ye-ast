@@ -173,17 +173,24 @@ function traceFact(cuts: readonly unknown[] = []): Fact<TraceValue> {
       { id: 2, parent: 1, depth: 2, file: "src/tax.ts", symbol: "tax", kind: "function", line: 4, endLine: 9, at: { line: 14 }, deferred: true },
       { id: 3, parent: 0, depth: 1, file: "src/order.ts", symbol: "total", kind: "method", line: 12, endLine: 20, at: { line: 7 }, seen: 1 },
     ],
-    readingPlan: { ranges: [{ file: "src/order.ts", start: 1, end: 30, steps: [0, 1, 3] }, { file: "src/tax.ts", start: 4, end: 9, steps: [2] }], lines: 36 },
+    readingPlan: { ranges: [{ file: "src/order.ts", start: 1, end: 30, steps: [0, 1, 3] }, { file: "src/tax.ts", start: 4, end: 9, steps: [2] }, { file: "src/order.ts", start: 40, end: 40, steps: [1] }], lines: 37 },
     cost: { expanded: 3 },
   };
   return { ...base, status: cuts.length === 0 ? "complete" : "partial", cuts, value } as unknown as Fact<TraceValue>;
 }
 
-test("a trace summary shows a selected class root as a class and the reading plan in plan order with its total", () => {
+test("a trace summary shows a selected class root as a class and the reading plan as one line per file, in first appearance, with its lines and the total", () => {
   const text = renderTrace(traceFact());
   assert.ok(text.includes("  src/order.ts:1-30 matches 1: #0 Order [class] src/order.ts:1-30"), text);
-  assert.ok(text.includes("reading plan (2 ranges, 36 lines):\n  src/order.ts:1-30\n  src/tax.ts:4-9"), text);
+  assert.ok(text.includes("reading plan (3 ranges, 37 lines):\n  src/order.ts: 1-30, 40 (31 lines)\n  src/tax.ts: 4-9 (6 lines)"), text);
   assert.ok(text.includes("branches are not evaluated"), text);
+});
+
+test("a trace in details keeps one reading range per line in plan order and one unresolved call per line, without the omission line", () => {
+  const text = renderTrace(traceFact([{ kind: "unresolved-link", at: ["src/order.ts:15 this.handler.handle", "src/a.ts:handle"] }]), "details");
+  assert.ok(text.includes("reading plan (3 ranges, 37 lines):\n  src/order.ts:1-30\n  src/tax.ts:4-9\n  src/order.ts:40\n"), text);
+  assert.ok(text.includes("  unresolved-link (1 call):\n    src/order.ts:15 this.handler.handle (src/a.ts:handle)"), text);
+  assert.ok(!text.includes("places omitted"), text);
 });
 
 test("a trace tree line carries the call line, a foreign span, the seen and deferred notes, leaves and external calls", () => {
@@ -197,11 +204,27 @@ test("an unresolved trace call names its place and spelling with its candidates,
   const candidates = ["src/a.ts:handle", "src/b.ts:handle", "src/c.ts:handle"];
   const fact = traceFact([{ kind: "unresolved-link", at: ["src/order.ts:15 this.handler.handle", ...candidates] }]);
   assert.ok(renderTrace(fact, "details").includes(`src/order.ts:15 this.handler.handle (${candidates.join(", ")})`), renderTrace(fact, "details"));
-  assert.ok(renderTrace(fact).includes("src/order.ts: 15 this.handler.handle (3 candidates)"), renderTrace(fact));
+  assert.ok(renderTrace(fact).includes("    handle ×1 in 1 file → 3 candidates"), renderTrace(fact));
+});
+
+test("a trace summary groups unresolved calls by trailing name and sorted candidate set, most calls first, then by name", () => {
+  const fact = traceFact([
+    { kind: "unresolved-link", at: ["src/a.ts:9 other.get", "C"] },
+    { kind: "unresolved-link", at: ["src/a.ts:11 this.run"] },
+    { kind: "unresolved-link", at: ["src/a.ts:3 this.store.get", "B", "A"] },
+    { kind: "unresolved-link", at: ["src/b.ts:7 cache.get", "A", "B"] },
+  ]);
+  const text = renderTrace(fact);
+  assert.ok(text.includes("  unresolved-link (4 calls):\n    get ×2 in 2 files → could be: A, B\n    get ×1 in 1 file → could be: C\n    run ×1 in 1 file\n"), text);
+});
+
+test("a trace summary that groups unresolved calls ends the cut block by naming the modes that list each place", () => {
+  const text = renderTrace(traceFact([{ kind: "unresolved-link", at: ["src/order.ts:15 this.handler.handle"] }]));
+  assert.ok(text.endsWith('\n    Call places omitted; use mode: "details" to list each call with its file, line and candidates, or mode: "full" for the original structured fact.'), text);
 });
 
 test("an unresolved trace call keeps its whole place when the path and the spelling hold spaces", () => {
   const fact = traceFact([{ kind: "unresolved-link", at: ["src/my dir/a.ts:15 (async (x) => x)().run", "src/b.ts:run"] }]);
   assert.ok(renderTrace(fact, "details").includes("    src/my dir/a.ts:15 (async (x) => x)().run (src/b.ts:run)"), renderTrace(fact, "details"));
-  assert.ok(renderTrace(fact).includes("    src/my dir/a.ts: 15 (async (x) => x)().run"), renderTrace(fact));
+  assert.ok(renderTrace(fact).includes("    run ×1 in 1 file → 1 candidate"), renderTrace(fact));
 });

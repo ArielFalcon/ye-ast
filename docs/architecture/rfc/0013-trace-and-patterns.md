@@ -123,6 +123,10 @@ interface TraceStep {
 trace POST /orders/checkout -> OrdersController.orderCheckout (src/.../OrdersController.java:35)
 status: partial (cuts: 1 unresolved-link)
 effects (3): http GET /restaurants/{id} at RestaurantsRepositoryAdapter.java:36, http POST .../reward-points/quote at RewardPointsRepositoryAdapter.java:34, data OrderRepository.save at ...
+reading plan (6 ranges, 74 lines):
+  src/.../OrdersController.java: 35-52 (18 lines)
+  src/.../OrdersApplicationServiceImpl.java: 95-118, 120-131 (36 lines)
+  ...
 steps:
   35 orderCheckout
     41 checkoutOrderUseCase  dispatch: OrdersApplicationServiceImpl (1 of 1)
@@ -133,10 +137,15 @@ steps:
       leaves: getCustomerId, getRestaurantId, getItems (+4)
       external: slf4j: info; lombok builder: discountRequest, customerId, checkout, build
 cuts:
-  unresolved-link at ...
+  unresolved-link (1 call):
+    apply ×1 in 1 file → 2 candidates
+    Call places omitted; use mode: "details" to list each call with its file, line and candidates, or mode: "full" for the original structured fact.
 ```
 
 The effects come first, since they decide the plan; steps follow the MCP depth summary and `expand` of the latency plan.
+In `summary` the reading plan takes one line per file, files in their first appearance, and the unresolved calls one
+line per trailing name and candidate set, most calls first, with the candidates listed or counted, whichever is
+shorter (RFC-0017); `details` lists each range and each call with its file, line and candidates.
 
 ### Acceptance
 

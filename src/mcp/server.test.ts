@@ -829,7 +829,7 @@ test("a trace forwards its targets, revision, scope and walk bounds, and answers
   assert.deepEqual(calls.trace[0]?.scope, { include: ["src/**"] });
   assert.deepEqual(calls.trace[0]?.budget, { depth: 2, expansions: 7 });
   assert.match(text, /^ {2}src\/Order\.java:total matches 1: #0 total \[method\] src\/Order\.java:20-24$/m);
-  assert.match(text, /^reading plan \(1 range, 5 lines\):\n {2}src\/Order\.java:20-24$/m);
+  assert.match(text, /^reading plan \(1 range, 5 lines\):\n {2}src\/Order\.java: 20-24 \(5 lines\)$/m);
   await session.close();
 });
 
