@@ -49,7 +49,6 @@ function liveSchema<S extends z.ZodRawShape>(shape: S, fields: readonly (keyof S
   return schema.meta(crossField(...fields.map(liveExclusion)));
 }
 function liveExclusion(field: string): CrossField {
-  // live is boolean, so with the field present it may only be false or absent.
   return { dependentSchemas: { [field]: { properties: { live: { const: false } } } } };
 }
 const count = z.int().positive();
@@ -214,6 +213,7 @@ const outlineFields = {
   scope,
 };
 const exactlyOneSubject = (value: { files?: unknown; focus?: unknown }): boolean => (value.files === undefined) !== (value.focus === undefined);
+const ONE_SUBJECT = { message: "give exactly one of files and focus", path: ["files"], params: { constraint: "one-subject" } };
 const subjectConstraint: CrossField = { dependentSchemas: { files: { not: { required: ["focus"] } } }, if: { not: { required: ["files"] } }, then: { required: ["focus"] } };
 const workspaceFields = { repo, revision: workspaceRevision, live: z.literal(true).optional(), offline, scope, repos: workspaceRepos, gateways };
 
@@ -227,7 +227,7 @@ export const SEMANTIC_INPUTS = {
     .superRefine(reportIssues(traversalIssues))
     .meta(crossField(liveExclusion("head"), traversalConstraints("head"))),
   importers: liveSchema(fileFields, ["revision"]),
-  outline: liveSchema(outlineFields, ["revision"]).refine(exactlyOneSubject, { message: "give exactly one of files and focus", path: ["files"], params: { constraint: "one-subject" } }).meta(crossField(liveExclusion("revision"), subjectConstraint)),
+  outline: liveSchema(outlineFields, ["revision"]).refine(exactlyOneSubject, ONE_SUBJECT).meta(crossField(liveExclusion("revision"), subjectConstraint)),
   workspace: liveSchema(workspaceFields, ["revision"]),
   decisions: liveSchema(workspaceFields, ["revision"]),
 } satisfies Record<ToolFamily, z.ZodType>;
@@ -246,7 +246,7 @@ export const TOOL_INPUTS = {
     .superRefine(reportIssues(traversalIssues))
     .meta(crossField(liveExclusion("head"), traversalConstraints("head"), recoveryControlConstraintsFor("impact"))),
   importers: liveSchema({ ...fileFields, mode }, ["revision"]),
-  outline: liveSchema({ ...outlineFields, mode }, ["revision"]).refine(exactlyOneSubject, { message: "give exactly one of files and focus", path: ["files"], params: { constraint: "one-subject" } }).meta(crossField(liveExclusion("revision"), subjectConstraint)),
+  outline: liveSchema({ ...outlineFields, mode }, ["revision"]).refine(exactlyOneSubject, ONE_SUBJECT).meta(crossField(liveExclusion("revision"), subjectConstraint)),
   workspace: liveSchema({ ...workspaceFields, mode }, ["revision"]),
   decisions: liveSchema({ ...workspaceFields, mode }, ["revision"]),
 } satisfies Record<ToolFamily, z.ZodType>;
