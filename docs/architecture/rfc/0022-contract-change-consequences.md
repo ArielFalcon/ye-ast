@@ -48,7 +48,7 @@ A value is followed only through these steps; anything else it flows into is a f
 | Step | Path effect |
 |---|---|
 | HTTP call site on a qualified link; `observe: 'response'` | the body; with `observe: 'response'` the body sits under `body` |
-| `return` of the value; each resolved caller expression continues | none |
+| `return` of the value; each proven call occurrence continues, and a function entered through an argument returns only to the call that passed it | none |
 | `pipe(...)`: pass-through operators listed as data (`catchError`, `tap`, `filter`, `take`, `first`, `finalize`, `shareReplay`, `takeUntil`, ...) | none |
 | `map(p => e)` where `e` is an access path on `p` or an object literal of access paths | projection or property-wise rename |
 | `map(p => { ... return e })`: each `return` of a block body | as for an expression body |
@@ -56,25 +56,38 @@ A value is followed only through these steps; anything else it flows into is a f
 | `httpResource(...)`; the value a `resource`/`rxResource` `loader`/`stream` returns | the resource's `value()` signal |
 | assignment to a field, a local, or `signal.set(...)`; `e ?? f`, `e \|\| f` with the value on the left | bound to the holder |
 | argument of a call to a function or method declared in the repository | the parameter at that position |
-| route resolver registered under `resolve: { key }` for a component with input `key`, when the application enables component input binding | the component input |
+| route resolver registered under `resolve: { key }`, when `withComponentInputBinding()` is an argument of the `provideRouter(...)` that registers the routes (or `bindToComponentInputs: true`) | the component input whose public name is `key` |
+| a component input by its public name: `@Input()`, `@Input('alias')`, `input()`, `input.required()`, `model()` with `alias` | the member that declares it; no such input is a frontier |
 | the same resolver, read in that route's component through `ActivatedRoute` `data` (`data.subscribe(({ key }) => ...)`, `snapshot.data[key]`) | bound to the destructured or read value |
-| template property binding `[name]="path"` on a child component with input `name` | the child input |
-| a read of a component field, input or signal in its template (`x()`, `@if (x(); as y)`, `*ngIf="x as y"`, `@for (i of x)`) | bound to the alias or item |
+| template property binding `[name]="path"` on a child component | the child input whose public name is `name` |
+| a read of a component field, input or signal in its template (`x()`, `@if (x(); as y)`, `*ngIf="x as y"`, `@for (i of x)`) | bound to the alias or item; `@for` over the changed collection itself is a `review` use |
+
+A zero-argument call is a signal read only when the callee is the carried value itself or a resource's `value`; calling
+the changed value is a dereference; any other method call on a container of the changed property, a pipe other than
+`async`, an `async` projection and a function passed by reference are frontiers.
 
 ## F0 guards
 
 Recognized when they test the path up to and including the changed segment, or its alias: `?.` on the changed segment;
 truthiness or `!= null` / `!== null` (with `!== undefined` for absence) in `@if`, `*ngIf`, `if`, `&&`, `?:`; an early
-`return` or `throw` on the negation in the same block; `??` or `||` directly on the changed value; a destructuring
-default (`{ x = [] }`), which covers `undefined` only. User type guards, assertion functions and `instanceof` are not
-recognized: a use behind them is `review`. A dereference is any operation that fails on null or undefined: a member
-read, a call, a keyed read, an array spread, iteration, destructuring.
+`return` or `throw` on the negation in the same block; `??` or `||` directly on the changed value with a fallback
+proven to exclude the absence (a literal object, array, string or number); a destructuring default (`{ x = [] }`),
+which covers `undefined` only. A guard on one element (`items[0]`) protects only reads of that same index. A read after
+a write to the guarded path or a prefix of it reads the written value, and one that only a guard outside its closure
+would protect is not decided where the closure runs: both are frontiers. A caller edge the code graph only guesses is
+never proof, and a reference to a function is not a call. User type guards, assertion functions and `instanceof` are not recognized: a use behind them is
+`review`. A dereference is any operation that fails on null or undefined: a member read, a call, a keyed read, an array
+spread, iteration, destructuring (an empty pattern included).
 
 ## Output
 
 The RFC-0002 envelope. Uses are complete findings with their verdict, chain, requirement, counterexample or guard
-evidence; frontiers are `unknown` findings with a reason and evidence. Output is sorted and reproducible; the hypothesis
-is echoed with its assumed old guarantee. F0 has no MCP, CLI or protocol surface.
+evidence, the repository they are in and the link they came through (its id, basis, call site and handler); frontiers
+are `unknown` findings with a reason and evidence, every place with its repository. Each HTTP call site is matched once
+over every repository of the workspace, its own included: a call two repositories serve is an ambiguous frontier. When
+no call site links to the operation, the answer lists the call sites whose target no read could evaluate. Output is
+sorted and reproducible; the hypothesis is echoed with its assumed old guarantee. F0 has no MCP, CLI or protocol
+surface.
 
 ## Ownership
 

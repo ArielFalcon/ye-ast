@@ -68,9 +68,16 @@ bindings do not escape nested functions or classes. Immutable AST scopes are mem
 collected once per source instead of rescanned for every request.
 
 An unshadowed global `encodeURIComponent` is a supported static transformation: literal text is encoded, and an identifier
-explicitly typed `string` may remain a parameter placeholder within a known path. Unsupported arguments, shadowed
-encoders, visible writes or an escaping global object in the provided snapshot keep the evaluation unknown. No repository
-function is executed. A whole run-time URL such as `fetch(url)` remains unknown when `url` names a run-time parameter.
+explicitly typed `string`, `number`, `boolean` or `bigint` may remain a parameter placeholder within a known path; so may
+`String(x)` and `x.toString()` of such an identifier. Unsupported arguments, shadowed encoders, visible writes or an
+escaping global object in the provided snapshot keep the evaluation unknown. No repository function is executed. A whole
+run-time URL such as `fetch(url)` remains unknown when `url` names a run-time parameter.
+
+A name that is neither a binding nor an import of its file, such as an ambient `declare const`, takes the value an
+Angular workspace's `build` target states for it in `define` (application builders), read from `angular.json` as source
+text: only when every configuration, the default build included, states the same string literal. A configuration's own
+`define` replaces the options' one, as the Angular CLI merges configurations. A source takes the define of the deepest
+project root above it. A build plugin that rewrites defines is not read.
 
 | Transport | Call-site side | Entrypoint side | Matched by | Confidence |
 |---|---|---|---|---|
