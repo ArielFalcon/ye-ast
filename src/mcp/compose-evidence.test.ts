@@ -333,6 +333,33 @@ test("a workspace link already admitted becomes one match per snapshot, basis an
   assert.deepEqual(issues(result, "missing-link-reference").map((issue) => issue.kind === "missing-link-reference" && [issue.linkId, issue.position]), [["L9", 0]]);
 });
 
+function linkedEntrypointCase(entries: readonly { name?: string; version?: string }[], catalogSnapshot: SnapshotRef = sha("shop")) {
+  const workspace = new SetBuilder("linked-workspace", WORKSPACE_IMPACT, sha("web"));
+  const link = workspaceLink(workspace, { handlerSnapshot: sha("shop") });
+  const entrypoints = new SetBuilder("linked-entrypoints", ENTRYPOINTS, catalogSnapshot);
+  const handler = entrypoints.anchor(entrypoints.file(PATH), HANDLER, 10, 20);
+  const catalog = entries.map((entry, index) => entrypoints.part({
+    kind: "entrypoint", evidence: [],
+    entry: { ...httpRoute(handler), ...(entry.name === undefined ? {} : { name: entry.name }), ...(entry.version === undefined ? {} : { version: entry.version }) },
+  }, { pointer: `/value/entrypoints/${index}` }));
+  return { graph: compose(workspace.build(), entrypoints.build()).graph, link, catalog };
+}
+
+test("a cross-repository link is joined with the one catalog entrypoint of its kind, handler and name", () => {
+  const { graph, link, catalog: [entry] } = linkedEntrypointCase([{}]);
+  const [linked, ...more] = connections(graph, "linked-entrypoint");
+  assert.equal(more.length, 0);
+  const [match] = relations(graph, "workspace-match");
+  assert.ok(match && linked?.relations.includes(match.id), "the join cites the admitted link");
+  assert.deepEqual(new Set(linked?.parts), new Set([link, entry]));
+  const entity = graph.entities.find((candidate) => candidate.kind === "entrypoint");
+  assert.deepEqual(new Set(linked?.entities), new Set([entity?.id, match?.value.kind === "workspace-match" ? match.value.to.handler : undefined]));
+
+  assert.equal(connections(linkedEntrypointCase([{ name: "POST /orders v2" }]).graph, "linked-entrypoint").length, 0, "another name of the same handler never joins");
+  assert.equal(connections(linkedEntrypointCase([{}, { version: "2" }]).graph, "linked-entrypoint").length, 0, "two catalog entrypoints of one kind, handler and name are never picked from");
+  assert.equal(connections(linkedEntrypointCase([{}], sha("shop", SHA_B)).graph, "linked-entrypoint").length, 0, "a catalog of another snapshot never joins");
+});
+
 test("a name candidate is related to its exact name observation and never becomes a link", () => {
   const workspace = new SetBuilder("workspace", WORKSPACE, sha("web"));
   const evidence = workspace.evidence({ path: "src/client.ts", line: 4 }, { snapshot: sha("web"), repo: "web" });

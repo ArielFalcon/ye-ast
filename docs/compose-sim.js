@@ -57,7 +57,7 @@
     ["c-ref", /\b[SVNLC]\d+(?:\/[\w-]+)?(?:#\d+)?\b/],
     ["c-path", /(?:<fixture-root>\/)?\b[\w.-]+(?:\/[\w.*{}-]+)+(?::\d+(?:-\d+)?(?::[\w.]+)?)?/],
     ["c-hash", /\b(?=[0-9a-f]*\d)[0-9a-f]{7,40}\b(?:\+[\w.-]+)?/],
-    ["c-rule", /\b(?:change-dependent|entrypoint-origin|handler-declaration|reached-handler|shared-file-import|used-import|shared-support|shares-evidence|symbol-dependence|workspace-match|gateway-prefix|path-prefix|file-import|file-use|file-query|http-route)\b/],
+    ["c-rule", /\b(?:change-dependent|entrypoint-origin|handler-declaration|linked-entrypoint|reached-handler|shared-file-import|used-import|shared-support|shares-evidence|symbol-dependence|workspace-match|gateway-prefix|path-prefix|file-import|file-use|file-query|http-route)\b/],
     ["c-arrow", /→/],
   ];
   const ANSWER_PATTERN = new RegExp(ANSWER_TOKENS.map(([, re]) => `(${re.source})`).join("|"), "g");

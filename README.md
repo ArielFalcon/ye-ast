@@ -405,10 +405,11 @@ What the result contains:
 - **Entities, relations and evidence are merged.** Identical entities and evidence are shared; every relation keeps the
   sources and categories that attest it. Different snapshots stay separate even when names and paths match.
 - **Connections only where the reads agree.** A derived connection (`handler-declaration`, `change-dependent`,
-  `reached-handler`, `shared-file-import`, `used-import`, `shared-support`) joins reads only when their schema,
-  producer, trust, engines, workspace and snapshot match. Otherwise the result carries a `coverage` issue
+  `reached-handler`, `linked-entrypoint`, `shared-file-import`, `used-import`, `shared-support`) joins reads only when
+  their schema, producer, trust, engines, workspace and snapshot match. Otherwise the result carries a `coverage` issue
   (`context-mismatch`, `snapshot-difference`, `ambiguous-declaration`, `unresolved-endpoint`, `missing-provenance`, and
-  similar) instead of a join.
+  similar) instead of a join. `linked-entrypoint` joins an admitted cross-repository link only with the one catalog
+  entrypoint of its kind, handler and name.
 - **`shares-evidence` is the same location, not causality.** A file import is not a symbol call (`used-import` joins an
   import only with a recorded dependence between declarations of its two files, never states an unused import, and does
   not prove the dependence goes through that import at runtime), reachability is not breakage, an outline supplies

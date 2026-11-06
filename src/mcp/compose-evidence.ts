@@ -67,6 +67,7 @@ function unionRedactions(left: readonly RedactionRecord[], right: readonly Redac
 type Attesting = { parts: readonly PartId[]; reads: readonly ReadId[]; locations?: readonly CallLocation[]; confidence?: number; extraSnapshots?: readonly SnapshotId[] };
 type Check = { ok: true } | { ok: false; mismatches: readonly CompositionIssue[] };
 type DeclarationEntity = Extract<EntityRecord, { kind: "declaration" }>;
+type EntrypointEntity = Extract<EntityRecord, { kind: "entrypoint" }>;
 
 const IMPORT_CATEGORIES = new Set(["importer", "reexporter", "dynamic-importer", "type-importer", "outline-import"]);
 const simpleName = (symbol: string) => symbol.slice(symbol.lastIndexOf(".") + 1);
@@ -92,7 +93,7 @@ class Materializer {
   private readonly bindings = new Map<AnchorId, BoundAnchor>();
   private readonly spans = new Map<string, AnchorRecord[]>();
   private readonly declarations = new Map<EntityId, DeclarationEntity>();
-  private readonly entrypoints = new Map<EntityId, Extract<EntityRecord, { kind: "entrypoint" }>>();
+  private readonly entrypoints = new Map<EntityId, EntrypointEntity>();
   private readonly relations = new Map<RelationId, { value: RelationValue; attestations: Map<string, Attestation> }>();
   private readonly connections = new Map<string, Connection>();
   private readonly membership = new Map<SourceId, string | undefined>();
@@ -125,6 +126,7 @@ class Materializer {
     this.sharedEvidence();
     this.handlerDeclarations();
     this.reachedHandlers();
+    this.linkedEntrypoints();
     this.changeDependents();
     this.sharedFileImports();
     this.usedImports();
@@ -619,22 +621,42 @@ class Materializer {
     for (const reach of this.part("entrypoint-reach")) {
       const handler = this.entityOf(reach.handler);
       if (reach.kindName === "unknown" || handler === undefined) continue;
-      const matches = [...this.entrypoints.values()].filter((entity) => {
-        const identity = entity.identity;
-        const entityHandler = identity.kind === "ui-route" ? identity.component : identity.handler;
-        return identity.kind === reach.kindName && entityHandler === handler
-          && (reach.name === undefined || entity.parts.some((partId) => { const part = this.parts.get(partId); return part?.kind === "entrypoint" && part.entry.name === reach.name; }));
-      });
-      const [entity] = matches;
-      if (entity === undefined || matches.length > 1) continue;
-      const serves = this.relationsOf("serves-entrypoint").filter((relation) => relation.value.entrypoint === entity.id).map((relation) => relation.id);
-      for (const read of this.cleanReads(reach)) {
-        for (const partId of entity.parts) {
-          const part = this.parts.get(partId);
-          for (const entityRead of part === undefined ? [] : this.cleanReads(part)) {
-            if (this.guarded([read, entityRead])) this.connect("reached-handler", [reach.id, partId], serves, [read, entityRead], [entity.id, handler]);
-          }
-        }
+      const entity = this.catalogEntrypoint(reach.kindName, handler, reach.name);
+      if (entity === undefined) continue;
+      for (const read of this.cleanReads(reach)) this.connectEntrypoint("reached-handler", [reach.id], [read], [], entity, handler);
+    }
+  }
+
+  /** `linked-entrypoint`: an admitted cross-repository link and the one known entrypoint of its kind, handler and name. */
+  private linkedEntrypoints(): void {
+    for (const match of this.relationsOf("workspace-match")) {
+      const { kind, handler, name } = match.value.to;
+      const entity = this.catalogEntrypoint(kind, handler, name);
+      if (entity === undefined) continue;
+      for (const attestation of match.attestations) this.connectEntrypoint("linked-entrypoint", attestation.parts, attestation.reads, [match.id], entity, handler);
+    }
+  }
+
+  /** The one known entrypoint of a kind and handler, named `name` when one is given; none when zero or several match. */
+  private catalogEntrypoint(kind: EntryIdentity["kind"], handler: EntityId, name: string | undefined): EntrypointEntity | undefined {
+    const matches = [...this.entrypoints.values()].filter((entity) => {
+      const identity = entity.identity;
+      const entityHandler = identity.kind === "ui-route" ? identity.component : identity.handler;
+      return identity.kind === kind && entityHandler === handler
+        && (name === undefined || entity.parts.some((partId) => { const part = this.parts.get(partId); return part?.kind === "entrypoint" && part.entry.name === name; }));
+    });
+    const [entity] = matches;
+    return matches.length === 1 ? entity : undefined;
+  }
+
+  /** Joins observed parts and reads with each compatible read of a known entrypoint, citing the relations that serve it. */
+  private connectEntrypoint(rule: ConnectionRule, parts: readonly PartId[], reads: readonly ReadId[], relations: readonly RelationId[], entity: EntrypointEntity, handler: EntityId): void {
+    const serves = this.relationsOf("serves-entrypoint").filter((relation) => relation.value.entrypoint === entity.id).map((relation) => relation.id);
+    for (const partId of entity.parts) {
+      const part = this.parts.get(partId);
+      for (const entityRead of part === undefined ? [] : this.cleanReads(part)) {
+        const joined = [...reads, entityRead];
+        if (this.guarded(joined)) this.connect(rule, [...parts, partId], [...relations, ...serves], joined, [entity.id, handler]);
       }
     }
   }
