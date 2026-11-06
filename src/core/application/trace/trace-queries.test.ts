@@ -140,10 +140,15 @@ test("a member call some declaration is named after is a cut at the place listin
   assert.equal(valueOf(fact).steps[0]?.external, undefined);
 });
 
-test("a member call whose name only a top-level constant has leaves the repository, unnamed, and cuts nothing", async () => {
-  const fact = await factOf({ nodes: [SVC, RUN, fakeNode("map", "constant", B, 3, 3)], edges: CONTAINS, unresolved: [{ from: "run", name: "items.map", kind: "calls", file: A, line: 9, column: 4 }] });
+test("a member call whose name only types have leaves the repository, unnamed, and cuts nothing", async () => {
+  const fact = await factOf({ nodes: [SVC, RUN, fakeNode("map", "interface", B, 3, 5), fakeNode("Map", "type_alias", B, 7, 7, "map")], edges: CONTAINS, unresolved: [{ from: "run", name: "items.map", kind: "calls", file: A, line: 9, column: 4 }] });
   assert.equal(fact.status, "complete");
   assert.deepEqual(valueOf(fact).steps[0]?.external, [{ kind: "unnamed", names: ["items.map"] }]);
+});
+
+test("a member call whose name a top-level constant has is a cut listing it, since a constant may hold a callable", async () => {
+  const fact = await factOf({ nodes: [SVC, RUN, fakeNode("map", "constant", B, 3, 3)], edges: CONTAINS, unresolved: [{ from: "run", name: "items.map", kind: "calls", file: A, line: 9, column: 4 }] });
+  assert.deepEqual(cutsOf(fact), [["unresolved-link", ["src/a.ts:9 items.map", "src/b.ts::map"]]]);
 });
 
 test("a member call whose name only a function of no container has is a cut listing it, since the index records no namespace", async () => {

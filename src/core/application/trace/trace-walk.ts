@@ -1,4 +1,4 @@
-import { CALL_EDGE_KINDS, EDGE_POLICY, isIgnoredEdge } from "../../domain/impact/edge-policy.ts";
+import { CALL_EDGE_KINDS, isIgnoredEdge } from "../../domain/impact/edge-policy.ts";
 import { declarationAnchor, placeAt, referenceKey } from "../../domain/impact/impact-cuts.ts";
 import { NOT_DECLARED_KINDS, sortedUnique } from "../../domain/impact/importers-fact.ts";
 import type { Cut } from "../../domain/shared/fact.ts";
@@ -12,6 +12,9 @@ import { createGraphNavigation } from "../navigation/graph-navigation.ts";
 
 /** What a body passes as a value runs later, if at all; only code can. */
 const DEFERRED_KINDS: readonly string[] = ["function", "method"];
+
+/** Kinds that name a type and never a value, so a call through a member of that name cannot reach them. */
+const TYPE_ONLY_KINDS: readonly string[] = ["interface", "type_alias"];
 
 export interface TraceWalkInput {
   store: CodeGraphReader;
@@ -72,12 +75,8 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
     return named;
   };
 
-  /**
-   * What `x.<name>` can run: a member or any function. The index records no namespace, so it cannot prove a function
-   * an ordinary top-level one; only top-level constants and the other non-member kinds are left out.
-   */
-  const membersNamed = (name: string): readonly GraphSymbol[] =>
-    declarationsNamed(name).filter((symbol) => (EDGE_POLICY.memberKinds as readonly string[]).includes(symbol.kind) || symbol.kind === "function");
+  /** What `x.<name>` can run: any declaration of that name a value can be, so only type-only kinds leave it out. */
+  const membersNamed = (name: string): readonly GraphSymbol[] => declarationsNamed(name).filter((symbol) => !TYPE_ONLY_KINDS.includes(symbol.kind));
 
   const anchorOf = (symbol: GraphSymbol): string => declarationAnchor(symbol.file, symbol.name);
   /**

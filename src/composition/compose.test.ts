@@ -714,3 +714,32 @@ test("a requested range over a top-level statement after a template literal that
   assert.deepEqual(callers.value.status !== "unknown" && callers.value.value.seeds.map((seed) => [seed.symbol, seed.basis]), [["marker", "top-level"], ["template", "top-level"], ["f", "top-level"]]);
   assert.deepEqual(traced.value.status !== "unknown" && traced.value.value.steps.map((step) => step.symbol), ["marker", "template", "f"]);
 });
+
+test("a trace over a real index keeps a member call to a wrapped callable constant or variable a cut, never a false external", async () => {
+  writeFileSync(join(repo, "src", "wrapped.ts"), [
+    "type Handler = () => void;",
+    "export namespace N {",
+    "  export const wrapped = (() => {});",
+    "  export let wrappedVar = (function() {});",
+    "  export const asserted = (() => {}) as Handler;",
+    "  export const checked = (() => {}) satisfies Handler;",
+    "}",
+    "export function invoke(x: typeof N) {",
+    "  x.wrapped();",
+    "  x.wrappedVar();",
+    "  x.asserted();",
+    "  x.checked();",
+    "}",
+    "export function entry() { invoke(N); }",
+    "",
+  ].join("\n"));
+  git("add", "-A");
+  git("commit", "-q", "-m", "wrapped");
+  const { trace } = composeQueries({ scratchRoot });
+
+  const answer = await trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: "src/wrapped.ts", symbol: "entry" }] });
+
+  assert.ok(answer.ok);
+  assert.equal(answer.value.status, "partial");
+  assert.deepEqual(answer.value.status === "partial" && answer.value.cuts.map((cut) => cut.at[0]), ["src/wrapped.ts:10 x.wrappedVar", "src/wrapped.ts:11 x.asserted", "src/wrapped.ts:12 x.checked", "src/wrapped.ts:9 x.wrapped"]);
+});

@@ -65,14 +65,14 @@ R6 applies only where the name at the call is the name of the callee:
 
 | Spelling | External leaf when | Otherwise |
 |---|---|---|
-| member call `x.m(...)` | no member or function within the declared scope is named `m` (`unnamed`): a method (getters, setters and interface methods included), a property or field, or any function. A top-level function counts too, because the index records no namespace and cannot tell a namespace's function from a top-level one; a top-level constant named `m` does not count | R6b cut listing those declarations |
+| member call `x.m(...)` | no declaration within the declared scope is named `m` except declarations that name only a type (`interface`, `type_alias`); any other kind (function, method, property, field, constant, variable, class, enum, or one ye-ast does not know) may hold what the call runs, so it keeps the call a cut | R6b cut listing those declarations |
 | bare call `f(...)` | the import origins say the file imports `f` from a package (`import`, with the module) or the language's own libraries declare it (`global`) | cut: a local parameter, an alias or a computed callee may be a repository function passed under another name |
 | computed call `x[k](...)`, `(expr)(...)` | never | cut |
 
 Limitations, verified on a real index (inherited, not introduced by the narrowing):
 
 - A key that aliases a declaration (`{ handle }`, `{ m: handle }`) is no declaration of its own, so a call through an
-  object-literal key whose name no member or function has is reported external `unnamed`, even when the key holds a
+  object-literal key whose name no other declaration has is reported external `unnamed`, even when the key holds a
   repository function.
 - A function the literal defines (`{ m() {} }`, `{ m: () => ... }`) is a declaration only when the literal initializes
   a top-level constant or variable. A literal nested in another literal, returned from a function or assigned to a
