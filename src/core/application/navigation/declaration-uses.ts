@@ -2,7 +2,7 @@ import { EDGE_POLICY, isIgnoredEdge } from "../../domain/impact/edge-policy.ts";
 import { referenceKey } from "../../domain/impact/impact-cuts.ts";
 import type { OutlinePlace, OutlineUseTarget } from "../../domain/outline/outline-fact.ts";
 import type { FoundUse, UnprovedUse } from "../../domain/outline/outline-uses.ts";
-import { ownMemberOf, sameOccurrence, type EdgeOccurrence } from "../../domain/trace/call-place.ts";
+import { sameOccurrence, type EdgeOccurrence } from "../../domain/trace/call-place.ts";
 import type { CodeGraphReader, GraphEdge, GraphNodeId, GraphSymbol, GraphUnresolvedReference } from "../../ports/code-graph.port.ts";
 import type { ImportOrigins, RootBinding, UseSite } from "../../ports/import-origins.port.ts";
 import { containmentTree } from "./containment-tree.ts";
@@ -72,7 +72,8 @@ export function unsettledBy(references: readonly GraphUnresolvedReference[], edg
 /** The edges a use is: what a body runs, builds or names, and the types a type extends or implements. */
 export const USE_EDGE_KINDS: readonly string[] = ["calls", "instantiates", "references", "extends", "implements"];
 
-const ROOT = /^(?:[A-Za-z_$][\w$]*)/;
+/** The identifier, `this` or `super` the index's spelling of a use starts with. */
+const SPELLED = /^[A-Za-z_$][\w$]*/;
 
 export interface UsesInput {
   store: CodeGraphReader;
@@ -109,37 +110,38 @@ export async function usesOf(node: GraphSymbol, input: UsesInput): Promise<{ fou
   }
 
   const references = unsettledBy(uses.referencesFrom(node, USE_EDGE_KINDS), edges);
-  const rooted = references.map((reference) => ({ reference, root: ROOT.exec(reference.name)?.[0] }));
-  const sites = rooted.flatMap(({ reference, root }): UseSite[] => (root === undefined ? [] : [{ file: reference.file, line: reference.line, column: reference.column + 1, root }]));
+  const spelled = references.map((reference) => ({ reference, spelled: SPELLED.exec(reference.name)?.[0] }));
+  const sites = spelled.flatMap(({ reference, spelled: name }): UseSite[] => (name === undefined ? [] : [{ file: reference.file, line: reference.line, column: reference.column + 1, spelled: name }]));
   const bindings = await origins.rootBindings(sites, signal);
   let next = 0;
-  for (const { reference, root } of rooted) {
-    const binding: RootBinding = root === undefined ? { kind: "unknown" } : bindings[next++] ?? { kind: "unknown" };
+  for (const { reference, spelled: name } of spelled) {
+    const binding: RootBinding = name === undefined ? { kind: "unknown" } : bindings[next++] ?? { kind: "unknown" };
     const place = { line: reference.line, column: reference.column + 1 };
-    const settled = await settle(reference, root ?? reference.name, binding);
+    const settled = await settle(reference, binding);
     if (settled === "local") continue;
-    if (settled === undefined) unproved.push({ root: root ?? reference.name, line: reference.line, spelling: reference.name });
+    if (settled === undefined) unproved.push({ root: "root" in binding ? binding.root : name ?? reference.name, line: reference.line, spelling: reference.name });
     else if ("id" in settled) declared(settled, reference.kind, place);
     else found.push({ target: settled, relation: reference.kind, place });
   }
   return { found, unproved };
 
-  async function settle(reference: GraphUnresolvedReference, root: string, binding: RootBinding): Promise<GraphSymbol | OutlineUseTarget | "local" | undefined> {
-    if (binding.kind === "ambient") return { global: root };
+  async function settle(reference: GraphUnresolvedReference, binding: RootBinding): Promise<GraphSymbol | OutlineUseTarget | "local" | undefined> {
+    if (binding.kind === "ambient") return { global: binding.root };
     if (binding.kind === "this") {
-      const member = ownMemberOf(reference.name);
-      const members = member === undefined ? [] : uses.ownMembers(node, member, EDGE_POLICY.memberKinds);
+      const members = binding.member === undefined ? [] : uses.ownMembers(node, binding.member, EDGE_POLICY.memberKinds);
       return members.length === 1 ? members[0] : undefined;
     }
     if (binding.kind === "declared") {
       if (binding.lines.every((line) => node.startLine <= line && line <= node.endLine)) return "local";
-      return single(navigation.symbolsInFile(reference.file).filter((symbol) => symbol.name === root && binding.lines.some((line) => symbol.startLine <= line && line <= symbol.endLine)));
+      const declaration = single(navigation.symbolsInFile(reference.file).filter((symbol) => symbol.name === binding.root && binding.lines.some((line) => symbol.startLine <= line && line <= symbol.endLine)));
+      /** A value a function around the body declares, and the index holds no node of, is a local value captured by the body. */
+      return declaration ?? (binding.topLevel ? undefined : "local");
     }
     if (binding.kind !== "import") return undefined;
     if (binding.origin.kind === "external") return { module: binding.origin.module };
-    const imported = (await targets.importedDeclarations(reference.file)).get(root);
+    const imported = (await targets.importedDeclarations(reference.file)).get(binding.root);
     if (imported !== undefined) return imported;
-    const member = reference.name.slice(root.length).match(/^\.([A-Za-z_$][\w$]*)/)?.[1];
+    const member = binding.member;
     return member === undefined ? undefined : single(containmentTree(store, navigation.symbolsInFile(binding.origin.file)).map((branch) => branch.declaration).filter((symbol) => symbol.name === member));
   }
 }

@@ -57,9 +57,10 @@ export interface ImportOrigins {
   rootOrigins(sites: readonly ResolvedNameSite[], signal?: AbortSignal): Promise<readonly RootOrigin[]>;
   /**
    * One entry per site, in the order received: what binds, at the site's own place, the name the expression written
-   * there is rooted at (`ts` for `ts.Expression`, `f` for `f(x).g`, `Set` for `new Set(a).add(k)`). A value name is bound
-   * by the file's own scoping (ADR-0029); a type name by the type scopes around it, then the file's imports and top-level
-   * declarations. `unknown` when the place spells another root, the name is dynamic, or nothing proves a binding.
+   * there is rooted at (`ts` for `ts.Expression` placed at either name, `f` for `f(x).g`, `Set` for `new Set(a).add(k)`).
+   * A value name is bound by the file's own scoping (ADR-0029); a type name by the type scopes around it, then the file's
+   * imports and top-level declarations; `super` by the root of its class's `extends` expression. `unknown` when the place
+   * spells another name, the name is dynamic, or nothing proves a binding.
    */
   rootBindings(sites: readonly UseSite[], signal?: AbortSignal): Promise<readonly RootBinding[]>;
 }
@@ -70,16 +71,20 @@ export interface UseSite {
   line: number;
   /** 1-based UTF-16 column. */
   column: number;
-  /** The identifier the use's spelling starts with, or `this`/`super`. */
-  root: string;
+  /** The identifier, `this` or `super` the index's spelling of the use starts with, written at the site. */
+  spelled: string;
 }
 
-/** What binds a use's root: an import, a declaration of the file (by the 1-based lines of its names), the language, or `this`. */
+/**
+ * What binds a use's root, the first name of the chain written at the site: an import (with the name after the root, for
+ * a namespace), a declaration of the file (by the 1-based lines of its names, and whether every one is at the file's top
+ * level), the language, or `this` (with the member after it).
+ */
 export type RootBinding =
-  | { kind: "import"; origin: Extract<ImportOrigin, { kind: "repository" | "external" }> }
-  | { kind: "declared"; lines: readonly number[] }
-  | { kind: "ambient" }
-  | { kind: "this" }
+  | { kind: "import"; root: string; member?: string; origin: Extract<ImportOrigin, { kind: "repository" | "external" }> }
+  | { kind: "declared"; root: string; lines: readonly number[]; topLevel: boolean }
+  | { kind: "ambient"; root: string }
+  | { kind: "this"; member?: string }
   | { kind: "unknown" };
 
 /** Reads the import bindings of one snapshot; composition supplies it, so no use case imports a parser. */

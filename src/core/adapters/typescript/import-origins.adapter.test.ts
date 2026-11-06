@@ -507,50 +507,58 @@ const USES: SourceFile = {
     "  return value;",
     "}",
     "export class Holder { read(): void { this.run(); } run(): void {} }",
+    "new Holder();",
     "",
   ].join("\n"),
 };
 const USE_SOURCES = [CONFIG, { path: "package.json", content: JSON.stringify({ dependencies: { typescript: "6.0.3" } }) }, LOCAL, USES];
 
 /** The 1-based place of the first `spelling` on a line of the uses fixture. */
-function useAt(line: number, spelling: string, root: string) {
-  return { file: USES.path, line, column: USES.content.split("\n")[line - 1]!.indexOf(spelling) + 1, root };
+function useAt(line: number, spelling: string, spelled: string) {
+  return { file: USES.path, line, column: USES.content.split("\n")[line - 1]!.indexOf(spelling) + 1, spelled };
 }
 
-test("a qualified type name is rooted at its first name, which an import binds to a package", async () => {
-  const [binding] = await createImportOrigins(USE_SOURCES).rootBindings([useAt(3, "ts.Expression", "ts")]);
+test("a qualified type name placed at either name is rooted at its first name, which an import binds to a package", async () => {
+  const bindings = await createImportOrigins(USE_SOURCES).rootBindings([useAt(3, "ts.Expression", "ts"), useAt(3, "Expression", "Expression")]);
 
-  assert.deepEqual(binding, { kind: "import", origin: { kind: "external", module: "typescript" } });
+  const expected = { kind: "import", root: "ts", member: "Expression", origin: { kind: "external", module: "typescript" } };
+  assert.deepEqual(bindings, [expected, expected]);
 });
 
 test("a member of a call's result is rooted at the callee, which an import binds to a repository file", async () => {
   const [binding] = await createImportOrigins(USE_SOURCES).rootBindings([useAt(5, "helper(input).length", "helper")]);
 
-  assert.deepEqual(binding, { kind: "import", origin: { kind: "repository", file: "src/local.ts" } });
+  assert.deepEqual(binding, { kind: "import", root: "helper", origin: { kind: "repository", file: "src/local.ts" } });
 });
 
 test("a member call on an instantiation placed at its new keyword is rooted at the class, which the language declares", async () => {
-  const [binding] = await createImportOrigins(USE_SOURCES).rootBindings([useAt(4, "new Set", "Set")]);
+  const bindings = await createImportOrigins(USE_SOURCES).rootBindings([useAt(4, "new Set", "Set"), useAt(4, "new Set", "add")]);
 
-  assert.deepEqual(binding, { kind: "ambient" });
+  assert.deepEqual(bindings, [{ kind: "ambient", root: "Set" }, { kind: "ambient", root: "Set" }]);
 });
 
-test("a value name the file's scoping binds is declared at the line of its declaration", async () => {
-  const [binding] = await createImportOrigins(USE_SOURCES).rootBindings([useAt(6, "seen.size", "seen")]);
+test("a value name the file's scoping binds is declared at the line of its declaration, at the top level or not", async () => {
+  const bindings = await createImportOrigins(USE_SOURCES).rootBindings([useAt(6, "seen.size", "seen"), useAt(11, "Holder", "Holder")]);
 
-  assert.deepEqual(binding, { kind: "declared", lines: [4] });
+  assert.deepEqual(bindings, [{ kind: "declared", root: "seen", lines: [4], topLevel: false }, { kind: "declared", root: "Holder", lines: [10], topLevel: true }]);
+});
+
+test("a type parameter's own name, and a type name it binds, are declared at the type parameter", async () => {
+  const mapped: SourceFile = { path: "src/mapped.ts", content: "export type Flags<T> = { [K in keyof T]?: K };\n" };
+  const bindings = await createImportOrigins([...USE_SOURCES, mapped]).rootBindings([{ file: mapped.path, line: 1, column: 27, spelled: "K" }, { file: mapped.path, line: 1, column: 43, spelled: "K" }]);
+  assert.deepEqual(bindings, [{ kind: "declared", root: "K", lines: [1], topLevel: false }, { kind: "declared", root: "K", lines: [1], topLevel: false }]);
 });
 
 test("a type name a type parameter binds is declared at the type parameter", async () => {
   const [binding] = await createImportOrigins(USE_SOURCES).rootBindings([useAt(3, "T {", "T")]);
 
-  assert.deepEqual(binding, { kind: "declared", lines: [3] });
+  assert.deepEqual(binding, { kind: "declared", root: "T", lines: [3], topLevel: false });
 });
 
-test("a use written on this is bound to this", async () => {
-  const [binding] = await createImportOrigins(USE_SOURCES).rootBindings([useAt(10, "this.run", "this")]);
+test("a use written on this, placed at this or at a later name, is bound to this with the member after it", async () => {
+  const bindings = await createImportOrigins(USE_SOURCES).rootBindings([useAt(10, "this.run", "this"), useAt(10, "run()", "run")]);
 
-  assert.deepEqual(binding, { kind: "this" });
+  assert.deepEqual(bindings, [{ kind: "this", member: "run" }, { kind: "this", member: "run" }]);
 });
 
 test("a name nothing binds that the pinned libraries do not declare is unknown", async () => {
@@ -570,4 +578,11 @@ test("a place that spells another root than the site's is unknown", async () => 
   const [binding] = await createImportOrigins(USE_SOURCES).rootBindings([useAt(6, "seen.size", "size")]);
 
   assert.deepEqual(binding, { kind: "unknown" });
+});
+
+test("super is rooted at its class's extends expression, bound as that name is", async () => {
+  const derived: SourceFile = { path: "src/derived.ts", content: "export class Failure extends Error {\n  constructor() { super('x'); }\n}\n" };
+  const [binding] = await createImportOrigins([...USE_SOURCES, derived]).rootBindings([{ file: derived.path, line: 2, column: 19, spelled: "super" }]);
+
+  assert.deepEqual(binding, { kind: "ambient", root: "Error" });
 });

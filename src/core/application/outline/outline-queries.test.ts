@@ -62,7 +62,7 @@ function setup(options: Options = {}) {
     importOrigins: () => ({
       origins: async () => [],
       rootOrigins: async (sites: readonly ResolvedNameSite[]) => sites.map((site): RootOrigin => options.roots?.[`${site.line}:${site.column}`] ?? { status: "unknown", reason: "unresolved", evidence: [] }),
-      rootBindings: async (sites: readonly UseSite[]) => sites.map((site): RootBinding => options.bindings?.[`${site.line}:${site.column} ${site.root}`] ?? { kind: "unknown" }),
+      rootBindings: async (sites: readonly UseSite[]) => sites.map((site): RootBinding => options.bindings?.[`${site.line}:${site.column} ${site.spelled}`] ?? { kind: "unknown" }),
     }),
     ...(options.snapshotCache && { snapshotCache: options.snapshotCache }),
     ...(options.unmodelled && { unmodelled: { extract: async (sources: readonly { path: string }[]) => (log.scanned.push(sources.map(({ path }) => path)), sources).map(({ path }) => path).filter((path) => options.unmodelled!.includes(path)) } }),
@@ -324,17 +324,21 @@ const USES_INDEX: Options = {
     { from: "Svc.go", name: "this.load", kind: "calls", file: USE, line: 32, column: 4 },
     { from: "Svc.go", name: "this.cache.get", kind: "calls", file: USE, line: 32, column: 20 },
     { from: "Svc.load", name: "lib.Other", kind: "instantiates", file: USE, line: 35, column: 4 },
+    { from: "Svc.go", name: "deps.read", kind: "calls", file: USE, line: 33, column: 4 },
+    { from: "Svc.go", name: "orphan", kind: "calls", file: USE, line: 33, column: 20 },
   ],
   roots: { "17:11": { status: "complete", value: { kind: "external", module: "typescript" }, evidence: [] } },
   bindings: {
-    "12:5 z": { kind: "import", origin: { kind: "external", module: "zod" } },
-    "13:5 seen": { kind: "declared", lines: [12] },
-    "14:5 top": { kind: "declared", lines: [2] },
-    "15:11 Map": { kind: "ambient" },
-    "19:3 helperAlias": { kind: "import", origin: { kind: "repository", file: LIB } },
-    "32:5 this": { kind: "this" },
-    "32:21 this": { kind: "this" },
-    "35:5 lib": { kind: "import", origin: { kind: "repository", file: LIB } },
+    "12:5 z": { kind: "import", root: "z", member: "object", origin: { kind: "external", module: "zod" } },
+    "13:5 seen": { kind: "declared", root: "seen", lines: [12], topLevel: false },
+    "14:5 top": { kind: "declared", root: "top", lines: [2], topLevel: true },
+    "15:11 Map": { kind: "ambient", root: "Map" },
+    "19:3 helperAlias": { kind: "import", root: "helperAlias", origin: { kind: "repository", file: LIB } },
+    "32:5 this": { kind: "this", member: "load" },
+    "32:21 this": { kind: "this", member: "cache" },
+    "33:5 deps": { kind: "declared", root: "deps", lines: [30], topLevel: false },
+    "33:21 orphan": { kind: "declared", root: "orphan", lines: [3], topLevel: true },
+    "35:5 lib": { kind: "import", root: "lib", member: "Other", origin: { kind: "repository", file: LIB } },
   },
   dependencies: [{ file: USE, line: 1, endLine: 1, specifier: "./lib", kind: "import", typeOnly: false, target: { kind: "repository", file: LIB }, bindings: [{ local: "helperAlias", imported: "helper", line: 1, column: 10, typeOnly: false }] }],
 };
@@ -374,6 +378,11 @@ test("a declaration inside the body and a local value are not uses, and leave no
   const { uses, cuts } = await usesAnswer("run");
   assert.ok(!named(uses).includes("inner"));
   assert.ok(!cuts.some((cut) => cut.at.some((place) => place.includes("seen"))));
+});
+
+test("a value a function around the body declares is a captured local, while a top-level one the index holds no node of is a cut", async () => {
+  const { cuts } = await usesAnswer("Svc.go");
+  assert.deepEqual(cuts.map((cut) => cut.at), [[`${USE}::Svc.go`, `${USE}:33 orphan`]]);
 });
 
 test("a member written on this is a use of the member its class declares, a method or a field", async () => {

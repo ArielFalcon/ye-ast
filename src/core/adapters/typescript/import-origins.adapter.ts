@@ -158,63 +158,102 @@ export function createImportOrigins(sources: readonly SourceFile[], parse: Parse
       const parsed = indexOf(file);
       if (parsed === undefined) continue;
       const { index: tree, text } = parsed;
-      const roots = group.flatMap(({ site, index }) => {
-        const root = rootAt(tree, text, site);
-        return root === undefined ? [] : [{ root, index }];
+      const chains = group.flatMap(({ site, index }) => {
+        const chain = chainAt(tree, text, site);
+        return chain === undefined ? [] : [{ chain, index }];
       });
       /** The file is bound only when a value name asks, and its program is dropped once they are answered (ADR-0029). */
-      const bound = roots.some(({ root }) => ts.isIdentifier(root) && !isTypeName(root)) ? bindFile(file, text) : undefined;
-      for (const { root, index } of roots) results[index] = await bindingOf(file, tree, root, bound);
+      const bound = chains.some(({ chain }) => ts.isIdentifier(chain.root) && !isTypeName(chain.root)) ? bindFile(file, text) : undefined;
+      for (const { chain, index } of chains) results[index] = await bindingOf(file, tree, chain, bound);
     }
     return results;
   } };
 
-  async function importBinding(file: string, specifier: string): Promise<RootBinding> {
+  async function importBinding(file: string, specifier: string, root: string, member: string | undefined): Promise<RootBinding> {
     const resolved = await modules.resolve(file, specifier);
-    if ("file" in resolved) return { kind: "import", origin: { kind: "repository", file: resolved.file } };
+    const named = { root, ...(member === undefined ? {} : { member }) };
+    if ("file" in resolved) return { kind: "import", ...named, origin: { kind: "repository", file: resolved.file } };
     const module = packageOf(specifier);
-    return "external" in resolved && module !== undefined ? { kind: "import", origin: { kind: "external", module } } : UNKNOWN_BINDING;
+    return "external" in resolved && module !== undefined ? { kind: "import", ...named, origin: { kind: "external", module } } : UNKNOWN_BINDING;
   }
 
   /** Nothing in the file binds the name: the language's own libraries may, unless the snapshot declares it globally. */
   function unbound(name: string): RootBinding {
-    return LIB_GLOBALS.has(name) && !repositoryGlobals().has(name) ? { kind: "ambient" } : UNKNOWN_BINDING;
+    return LIB_GLOBALS.has(name) && !repositoryGlobals().has(name) ? { kind: "ambient", root: name } : UNKNOWN_BINDING;
   }
 
-  async function bindingOf(file: string, { source, shape }: FileIndex, root: ts.Node, bound: BoundFile | undefined): Promise<RootBinding> {
-    if (!ts.isIdentifier(root)) return { kind: "this" };
-    const specifier = shape.bindings.get(root.text);
+  async function bindingOf(file: string, { source, shape }: FileIndex, { root, member }: Chain, bound: BoundFile | undefined): Promise<RootBinding> {
+    if (!ts.isIdentifier(root)) return { kind: "this", ...(member === undefined ? {} : { member }) };
+    const name = root.text;
+    const specifier = shape.bindings.get(name);
     if (isTypeName(root)) {
-      const lines = typeScopeLines(source, root);
-      if (lines !== undefined) return { kind: "declared", lines };
-      return specifier === undefined ? unbound(root.text) : importBinding(file, specifier);
+      const scope = typeScopeOf(source, root);
+      if (scope !== undefined) return { kind: "declared", root: name, ...scope };
+      return specifier === undefined ? unbound(name) : importBinding(file, specifier, name, member);
     }
-    const binding = bound!.bindingOf(bound!.identifierAt(root.getStart(source), root.text)!);
+    const binding = bound!.bindingOf(bound!.identifierAt(root.getStart(source), name)!);
     if (binding.kind === "dynamic") return UNKNOWN_BINDING;
-    if (binding.kind === "none") return unbound(root.text);
-    if (binding.declarations.every(isImportDeclaration)) return specifier === undefined ? UNKNOWN_BINDING : importBinding(file, specifier);
+    if (binding.kind === "none") return unbound(name);
+    if (binding.declarations.every(isImportDeclaration)) return specifier === undefined ? UNKNOWN_BINDING : importBinding(file, specifier, name, member);
     if (binding.declarations.some(isImportDeclaration)) return UNKNOWN_BINDING;
-    return { kind: "declared", lines: declarationLines(source, binding.declarations) };
+    return { kind: "declared", root: name, lines: declarationLines(source, binding.declarations), topLevel: binding.declarations.every(isTopLevel) };
   }
 }
 
 const UNKNOWN_BINDING: RootBinding = { kind: "unknown" };
 
+/** The first name of a chain written at a site (`this` stands for itself), and the name after it when the chain has one. */
+interface Chain {
+  root: ts.Node;
+  member?: string;
+}
+
 /**
- * The name, `this` or `super` the expression written at the site starts with, when it is the site's root: the head of a
- * chain of calls, member accesses and qualified names, and for an instantiation placed at its `new` keyword, the head of
- * its class expression.
+ * The chain of calls, member accesses and qualified names written around the name, `this` or `super` the site spells,
+ * up to its whole, or around an instantiation placed at its `new` keyword when the chain names the site's spelling.
+ * `super` stands for the head of its class's `extends` expression.
  */
-function rootAt({ source, starting }: FileIndex, text: string, site: UseSite): ts.Node | undefined {
+function chainAt({ source, starting }: FileIndex, text: string, site: UseSite): Chain | undefined {
   const starts = source.getLineStarts();
   if (!Number.isInteger(site.line) || !Number.isInteger(site.column) || site.line < 1 || site.column < 1 || site.line > starts.length) return undefined;
   const point = starts[site.line - 1]! + site.column - 1;
   if (point >= (site.line < starts.length ? starts[site.line]! : text.length)) return undefined;
   for (const node of starting.get(point) ?? []) {
-    const head = headOf(node);
-    if (ts.isIdentifier(head) ? head.text === site.root : (head.kind === ts.SyntaxKind.ThisKeyword || head.kind === ts.SyntaxKind.SuperKeyword) && head.getText(source) === site.root) return head;
+    const spelled = ts.isIdentifier(node) ? node.text : node.kind === ts.SyntaxKind.ThisKeyword || node.kind === ts.SyntaxKind.SuperKeyword ? node.getText(source) : undefined;
+    const whole = ts.isNewExpression(node) || spelled === site.spelled ? wholeChain(node) : undefined;
+    if (whole === undefined) continue;
+    const head = headOf(whole);
+    const names = chainNames(whole);
+    if (ts.isNewExpression(node) && !names.includes(site.spelled)) continue;
+    if (head.kind !== ts.SyntaxKind.SuperKeyword) return { root: head, ...(names[1] === undefined ? {} : { member: names[1] }) };
+    const base = superclassOf(head);
+    return base === undefined ? undefined : { root: headOf(base), ...(chainNames(base)[1] === undefined ? {} : { member: chainNames(base)[1]! }) };
   }
   return undefined;
+}
+
+function wholeChain(node: ts.Node): ts.Node {
+  let whole = node;
+  while (ts.isQualifiedName(whole.parent) || (ts.isPropertyAccessExpression(whole.parent) && (whole.parent.expression === whole || whole.parent.name === whole))) whole = whole.parent;
+  return whole;
+}
+
+/** The names of a chain from its root: `a.b.c` and `a.b(x).c` are `a`, `b`, `c`; the chain stops at anything else. */
+function chainNames(node: ts.Node): string[] {
+  if (ts.isIdentifier(node)) return [node.text];
+  if (node.kind === ts.SyntaxKind.ThisKeyword || node.kind === ts.SyntaxKind.SuperKeyword) return [node.kind === ts.SyntaxKind.ThisKeyword ? "this" : "super"];
+  if (ts.isQualifiedName(node)) return [...chainNames(node.left), node.right.text];
+  if (ts.isPropertyAccessExpression(node)) return [...chainNames(node.expression), node.name.text];
+  if (ts.isCallExpression(node) || ts.isNewExpression(node) || ts.isNonNullExpression(node) || ts.isElementAccessExpression(node)) return chainNames(node.expression);
+  return [];
+}
+
+/** The `extends` expression of the class whose code holds `keyword`. */
+function superclassOf(keyword: ts.Node): ts.Expression | undefined {
+  let node: ts.Node = keyword;
+  while (!ts.isSourceFile(node) && !ts.isClassLike(node)) node = node.parent;
+  if (!ts.isClassLike(node)) return undefined;
+  return node.heritageClauses?.find((clause) => clause.token === ts.SyntaxKind.ExtendsKeyword)?.types[0]?.expression;
 }
 
 function headOf(node: ts.Node): ts.Node {
@@ -233,7 +272,7 @@ function headOf(node: ts.Node): ts.Node {
 function isTypeName(name: ts.Identifier): boolean {
   let whole: ts.Node = name;
   while (ts.isQualifiedName(whole.parent) && whole.parent.left === whole) whole = whole.parent;
-  return ts.isPartOfTypeNode(whole);
+  return ts.isPartOfTypeNode(whole) || ts.isTypeParameterDeclaration(whole.parent);
 }
 
 function isImportDeclaration(declaration: ts.Declaration): boolean {
@@ -250,7 +289,7 @@ function declarationLines(source: ts.SourceFile, declarations: readonly ts.Node[
  * conditional whose true branch holds the name, a mapped type's key, or a declaration among the statements of an
  * enclosing block, namespace or the file. None when no scope declares it, so the file's imports and the globals answer.
  */
-function typeScopeLines(source: ts.SourceFile, name: ts.Identifier): number[] | undefined {
+function typeScopeOf(source: ts.SourceFile, name: ts.Identifier): { lines: number[]; topLevel: boolean } | undefined {
   let inner: ts.Node = name;
   for (let scope = name.parent; scope !== undefined; inner = scope, scope = scope.parent) {
     const declared: ts.Node[] = [];
@@ -258,9 +297,16 @@ function typeScopeLines(source: ts.SourceFile, name: ts.Identifier): number[] | 
     if (ts.isMappedTypeNode(scope) && scope.typeParameter.name.text === name.text) declared.push(scope.typeParameter);
     if (ts.isConditionalTypeNode(scope) && inner === scope.trueType) declared.push(...inferredIn(scope.extendsType, name.text));
     if (ts.isBlock(scope) || ts.isModuleBlock(scope) || ts.isSourceFile(scope)) declared.push(...scope.statements.filter((statement) => declaredName(statement) === name.text));
-    if (declared.length > 0) return declarationLines(source, declared);
+    if (declared.length > 0) return { lines: declarationLines(source, declared), topLevel: ts.isSourceFile(scope) };
   }
   return undefined;
+}
+
+/** A declaration the file's own scope holds, through the statement and destructuring around it. */
+function isTopLevel(declaration: ts.Declaration): boolean {
+  let node = declaration.parent;
+  while (ts.isVariableDeclarationList(node) || ts.isVariableStatement(node) || ts.isVariableDeclaration(node) || ts.isBindingElement(node) || ts.isObjectBindingPattern(node) || ts.isArrayBindingPattern(node)) node = node.parent;
+  return ts.isSourceFile(node);
 }
 
 function inferredIn(node: ts.Node, name: string): ts.TypeParameterDeclaration[] {
