@@ -124,10 +124,32 @@ test("a static import, which may import a member type of the name, proves nothin
 });
 
 test("a name inside a class whose declaration the reader does not place, anonymous or local, proves nothing", async () => {
-  const use = java("src/main/java/app/api/Meter.java", ["package app.api;", "", "import app.other.Limits;", "", "class Meter {", "  Object a() {", "    return new Object() {", "      Limits limits;", "    };", "  }", "}"]);
-  const site = at(use, "Limits limits", "references", "Limits");
+  const anonymous = java("src/main/java/app/api/Meter.java", ["package app.api;", "", "import app.other.Limits;", "", "class Meter {", "  Object a() {", "    return new Object() {", "      Limits limits;", "    };", "  }", "}"]);
+  const local = java("src/main/java/app/api/Gauge.java", ["package app.api;", "", "import app.other.Limits;", "", "class Gauge {", "  void a() {", "    class Reading {", "      Limits limits;", "    }", "  }", "}"]);
+  const anonymousSite = at(anonymous, "Limits limits", "references", "Limits");
+  const localSite = at(local, "Limits limits", "references", "Limits");
 
-  assert.deepEqual(await rootOf([LIMITS, use], site), unknownAt(site));
+  assert.deepEqual(await rootOf([LIMITS, anonymous], anonymousSite), unknownAt(anonymousSite));
+  assert.deepEqual(await rootOf([LIMITS, local], localSite), unknownAt(localSite));
+});
+
+test("a member type of a superclass is in scope only where Java inherits it: never private, package-private only within its package", async () => {
+  const base = java("src/main/java/app/base/Base.java", ["package app.base;", "", "public class Base {", "  private static class Hidden {}", "  static class Packaged {}", "  protected static class Shared {}", "}"]);
+  const tops = ["Hidden", "Packaged", "Shared"].map((name) => java(`src/main/java/app/web/${name}.java`, ["package app.web;", "", `public class ${name} {}`]));
+  const sibling = java("src/main/java/app/base/Hidden.java", ["package app.base;", "", "public class Hidden {}"]);
+  const near = java("src/main/java/app/base/Near.java", ["package app.base;", "", "class Near extends Base {", "  Hidden hidden;", "  Packaged packaged;", "}"]);
+  const far = java("src/main/java/app/web/Far.java", ["package app.web;", "", "import app.base.Base;", "", "class Far extends Base {", "  Hidden hidden;", "  Packaged packaged;", "  Shared shared;", "}"]);
+  const sources = [base, ...tops, sibling, near, far];
+  const declared = async (source: SourceFile, name: string): Promise<string | undefined> => {
+    const root = await rootOf(sources, at(source, `${name} `, "references", name));
+    return root.status === "complete" && root.value.kind === "repository" ? root.value.declared : undefined;
+  };
+
+  assert.equal(await declared(far, "Hidden"), "app.web.Hidden");
+  assert.equal(await declared(far, "Packaged"), "app.web.Packaged");
+  assert.equal(await declared(far, "Shared"), "app.base.Base.Shared");
+  assert.equal(await declared(near, "Hidden"), "app.base.Hidden");
+  assert.equal(await declared(near, "Packaged"), "app.base.Base.Packaged");
 });
 
 test("a site that spells another name, a bare call, or a file the parser rejects proves nothing", async () => {

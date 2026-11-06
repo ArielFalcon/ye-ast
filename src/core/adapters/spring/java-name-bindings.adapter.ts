@@ -82,9 +82,10 @@ function rootOf(site: ResolvedNameSite, file: JavaFile, project: JavaProject): {
   const bare = segments.length === 1;
   /** A qualified name whose first segment is lowercase names a package, unless a source declares a type of that name. */
   if (!bare && PACKAGE_SEGMENT.test(head) && project.lookupType(head, { file, type: enclosing[0] }) === undefined) return packageQualified(segments, spelled.typePosition, file, project);
-  const bound = typeBinding(head, file, enclosing, project);
-  if (bound === "unknown" || bound === undefined) return undefined;
-  return bound.kind === "repository" ? { origin: declaredBy(bound.type), bare } : { origin: { kind: "external", module: packageOf(bound.fqn) }, bare };
+  const bound = project.bindName(head, { file, type: enclosing[0] });
+  if (typeof bound === "object") return { origin: declaredBy(bound), bare };
+  const imported = bound === undefined ? file.singleImports.get(head) : undefined;
+  return imported !== undefined && project.isPlatformName(imported) ? { origin: { kind: "external", module: packageOf(imported) }, bare } : undefined;
 }
 
 /**
@@ -154,57 +155,6 @@ function declaresVariable(root: Node, name: string): boolean {
   return false;
 }
 
-type TypeBinding = { kind: "repository"; type: TypeDecl } | { kind: "external"; fqn: string } | "unknown" | undefined;
-
-/**
- * The type a simple name denotes in a file, in Java's order: a type around the use or a member type of one of them or of
- * their supertypes, a single-type import, a type of the file's package, then a type exactly one on-demand import offers.
- * A static import may import a member type, so one of the name, or any static on-demand import, settles nothing.
- * `undefined` when no source and no import gives the name.
- */
-function typeBinding(name: string, file: JavaFile, enclosing: readonly TypeDecl[], project: JavaProject): TypeBinding {
-  for (const type of enclosing) {
-    const { types, gaps } = project.hierarchy(type);
-    if (gaps.length > 0 || types.some((member) => hasForeignSupertype(member, project))) return "unknown";
-    for (const member of types) {
-      if (member.name === name && member === type) return { kind: "repository", type };
-      const nested = member.members.get(name);
-      if (nested !== undefined) return file.singleImports.has(name) ? "unknown" : { kind: "repository", type: nested };
-    }
-  }
-  if (file.staticImports.some(({ member }) => member === name)) return "unknown";
-  const imported = file.singleImports.get(name);
-  if (imported !== undefined) {
-    const declared = project.lookupType(imported, { file, type: undefined });
-    if (declared === "ambiguous") return "unknown";
-    if (declared !== undefined) return { kind: "repository", type: declared };
-    return project.isPlatformName(imported) ? { kind: "external", fqn: imported } : "unknown";
-  }
-  const own = project.lookupType(file.packageName === "" ? name : `${file.packageName}.${name}`, { file, type: undefined });
-  if (own === "ambiguous") return "unknown";
-  if (own !== undefined) return { kind: "repository", type: own };
-  if (file.staticOnDemandImports.length > 0) return "unknown";
-  if (file.onDemandImports.length === 0) return undefined;
-  const offered = file.onDemandImports.map((container) => project.lookupType(`${container}.${name}`, { file, type: undefined }));
-  const declaredHere = (container: string): boolean => project.types.some((type) => type.file.packageName === container);
-  if (offered.some((found) => found === "ambiguous")) return "unknown";
-  const found = offered.filter((type): type is TypeDecl => type !== undefined);
-  if (found.length === 1 && file.onDemandImports.every((container, index) => offered[index] !== undefined || declaredHere(container))) return { kind: "repository", type: found[0]! };
-  return "unknown";
-}
-
-/** Whether a type extends or implements a type the snapshot does not declare, which may declare member types of its own. */
-function hasForeignSupertype(type: TypeDecl, project: JavaProject): boolean {
-  const superclass = type.node.childForFieldName("superclass")?.namedChildren[0];
-  const clause = type.kind === "interface" ? type.node.namedChildren.find((child) => child?.type === "extends_interfaces") : type.node.childForFieldName("interfaces");
-  const interfaces = clause?.namedChildren.find((child) => child?.type === "type_list")?.namedChildren ?? [];
-  return [superclass, ...interfaces].some((node) => {
-    if (node === null || node === undefined) return false;
-    const name = (node.type === "generic_type" ? node.namedChildren[0] : node)?.text ?? "";
-    return typeof project.lookupType(name, { file: type.file, type }) !== "object";
-  });
-}
-
 /** A name whose first segment is a package: rooted at the type of the repository its longest type prefix names, or outside. */
 function packageQualified(segments: readonly string[], typePosition: boolean, file: JavaFile, project: JavaProject): { origin: ImportOrigin; bare: boolean } | undefined {
   const typeName = typePosition ? segments.join(".") : segments.slice(0, -1).join(".");
@@ -216,7 +166,6 @@ function packageQualified(segments: readonly string[], typePosition: boolean, fi
   return project.isPlatformName(typeName) ? { origin: { kind: "external", module: packageOf(typeName) }, bare: false } : undefined;
 }
 
-/** The origin of a name bound to a type of the repository: its file, and its path in the file's containment, its package first. */
 function declaredBy(type: TypeDecl): ImportOrigin {
   return { kind: "repository", file: type.file.path, declared: type.fqn };
 }

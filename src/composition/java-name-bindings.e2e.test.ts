@@ -15,7 +15,15 @@ import type { Fact } from "../core/domain/shared/fact.ts";
  */
 const USER = "src/main/java/app/domain/User.java";
 const VISITS = "src/main/java/app/dto/Visits.java";
+const STATE = "src/main/java/app/inherit/State.java";
+const REMOTE_USER = "src/main/java/app/remote/User.java";
 const FILES: Record<string, string> = {
+  "src/main/java/app/inherit/Base.java": "package app.inherit;\n\npublic class Base {\n  private record State(int n) {}\n}\n",
+  [STATE]: "package app.inherit;\n\npublic class State {}\n",
+  "src/main/java/app/inherit/Derived.java": ["package app.inherit;", "", "public class Derived extends Base {", "  public State read() {", "    return new State();", "  }", "}", ""].join("\n"),
+  "src/main/java/app/local/Base.java": "package app.local;\n\npublic class Base {\n  private static class User {}\n}\n",
+  [REMOTE_USER]: "package app.remote;\n\npublic class User {}\n",
+  "src/main/java/app/remote/Derived.java": ["package app.remote;", "", "public class Derived extends app.local.Base {", "  public User load() {", "    return null;", "  }", "}", ""].join("\n"),
   [USER]: "package app.domain;\n\npublic class User {}\n",
   [VISITS]: ["package app.dto;", "", "public record Visits(int count) {", "  public Visits() {", "    this(0);", "  }", "}", ""].join("\n"),
   "src/main/java/app/web/VisitResource.java": [
@@ -88,4 +96,17 @@ test("a Java name a nested record binds is no use of the homonym record of anoth
   assert.ok(answer.status !== "unknown", JSON.stringify(answer));
 
   assert.deepEqual(answer.value.symbols.filter(({ depth }) => depth > 0), []);
+});
+
+test("a Java type name a superclass's private member type spells is a use of the type the file's own scope binds", async () => {
+  const queries = composeQueries({ scratchRoot });
+  const reached = async (file: string, symbol: string): Promise<string[]> => {
+    const result = await queries.impact.callers({ repo, repoId: "java-name-bindings", revision: "HEAD", targets: [{ file, symbol }] });
+    assert.ok(result.ok, JSON.stringify(result));
+    assert.ok(result.value.status !== "unknown", JSON.stringify(result.value));
+    return result.value.value.symbols.filter(({ depth }) => depth > 0).map(({ file: at, symbol: name }) => `${at}:${name}`);
+  };
+
+  assert.ok((await reached(STATE, "State")).includes("src/main/java/app/inherit/Derived.java:read"));
+  assert.ok((await reached(REMOTE_USER, "User")).includes("src/main/java/app/remote/Derived.java:load"));
 });
