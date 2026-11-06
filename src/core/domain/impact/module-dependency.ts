@@ -1,9 +1,5 @@
 import type { UnknownReason } from "../shared/fact.ts";
-
-export type ModuleTarget =
-  | { kind: "repository"; file: string }
-  | { kind: "external"; module: string }
-  | { kind: "unresolved"; reason: string };
+import type { ModuleTarget } from "../shared/module-target.ts";
 
 /** A module reference that is not a top-level statement: conditional evidence of a dependency. */
 export type ModuleReferenceForm = "dynamic-import" | "type-query";

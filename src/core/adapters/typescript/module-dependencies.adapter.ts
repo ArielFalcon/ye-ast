@@ -1,7 +1,8 @@
 import ts from "typescript";
 import { isPackageManifest, isTypeScriptFile } from "../../domain/languages/typescript.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
-import type { ModuleDependencies, ModuleDependency, ModuleSource, ModuleTarget, UntraversedReference } from "../../domain/impact/module-dependency.ts";
+import type { ModuleDependencies, ModuleDependency, ModuleSource, UntraversedReference } from "../../domain/impact/module-dependency.ts";
+import type { ModuleTarget } from "../../domain/shared/module-target.ts";
 import type { ModuleDependenciesReader } from "../../ports/module-dependencies.port.ts";
 import { defaultDeclarationName, moduleStatement } from "./import-bindings.ts";
 import { createModuleResolver, manifestDependencies, packageOf } from "./module-resolver.ts";

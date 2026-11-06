@@ -1,4 +1,4 @@
-import type { ModuleTarget } from "../impact/module-dependency.ts";
+import type { ModuleTarget } from "../shared/module-target.ts";
 
 /** A declaration the outline names: its kind, its name, and the span a reader opens instead of the whole file. */
 export interface OutlineDeclaration {
