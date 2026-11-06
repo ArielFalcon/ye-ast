@@ -163,7 +163,10 @@ names are settled in the first slice; the union, the cuts and the inputs are the
    operations the handler a workspace link lands in serves. `0.16.0` adds optional `ImpactedSymbol.via.substitutes`: the
    classes a provider may inject instead of the receiver a proven member call names, each with the provider's site.
    `0.17.0` adds optional `ImpactedSymbol.via.resource`: the file `via.lines` are in when it is not the symbol's own, the
-   template of a component whose template calls `via` through an injected field.
+   template of a component whose template calls `via` through an injected field. `0.18.0` adds `WorkspaceValue.links`, the
+   links the join admits between the repositories a workspace read holds, and `WorkspaceValue.unlinked`, the call sites it
+   reached without one; `WorkspaceValue.workspace.gateways` carries the inferred gateways beside the declared ones, each
+   with its `basis`; a published destination is an outward name, and `NameCandidate.basis` adds `event-destination`.
 7. **Redaction at egress.** Values and evidence pass redaction when they leave ye-ast's process toward a host: the
    patterns always, by-value secrets only in the process that already holds them
    ([ADR-0010](../adr/0010-trust-modes.md)). The success report `ye-ast init` writes for the user who ran it is not

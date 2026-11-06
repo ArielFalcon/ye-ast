@@ -534,7 +534,7 @@ class Materializer {
   private workspaceMatches(): void {
     for (const part of this.part("workspace-link")) {
       const { link } = part;
-      part.reach.forEach((reach, position) => {
+      (part.reach ?? []).forEach((reach, position) => {
         if (reach.status === "missing") this.issue({ kind: "missing-link-reference", part: part.id, linkId: reach.linkId, position }, part.supports);
       });
       const fromFile = this.files.get(link.from.file);

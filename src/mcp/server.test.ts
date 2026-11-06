@@ -165,6 +165,8 @@ function workspaceFact(): Fact<WorkspaceValue> {
       workspace: { repos: ["shop"], gateways: [], source: "request" },
       repositorySnapshots: [{ repo: "shop", snapshot: { repo: "shop", kind: "sha", sha: "a".repeat(40) } }],
       sections: { shop: section },
+      links: [],
+      unlinked: [],
       candidates: [],
       unserved: names.map((name) => ({ ...name, evidence: name.evidence.map((place) => ({ ...place, repo: "shop" })) })),
       repositories: [],
@@ -2263,7 +2265,7 @@ test("the workspace tool answers the outward names without the repositories it r
   assert.equal(JSON.stringify(result).includes(internalPath), false);
   const value = (resultFields(result) as { value: Record<string, unknown> }).value;
   assert.equal("repositories" in value, false);
-  assert.deepEqual(Object.keys(value).sort(), ["candidates", "repositorySnapshots", "sections", "unserved", "workspace"]);
+  assert.deepEqual(Object.keys(value).sort(), ["candidates", "links", "repositorySnapshots", "sections", "unlinked", "unserved", "workspace"]);
   await session.close();
 });
 

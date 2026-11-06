@@ -19,6 +19,17 @@ export interface Link {
   confidence: number;
 }
 
+/** A call site the join reached and did not link: no route of the service it names takes it, or several entrypoints take it equally. */
+export interface UnlinkedCallSite {
+  from: Link["from"];
+  transport: Link["transport"];
+  outcome: "unmatched" | "ambiguous";
+  /** The path no route took when `unmatched`; the prefix or destination that matched when `ambiguous`. */
+  name: string;
+  /** The repositories that matched equally, sorted; only when `ambiguous`. */
+  repos?: readonly string[];
+}
+
 /** The ids of the links crossed from the change, nearest first. */
 export type Reach = readonly string[];
 

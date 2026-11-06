@@ -33,11 +33,11 @@ interface Recognition {
 /**
  * The local repositories that serve a name, strongest basis first. A name equal to a repository's id is `exact-name`; one
  * equal to a coordinate or to the tail of a remote is `artifact` or `remote`. Nothing weaker is reported: a candidate the
- * agent confirms is still a fact about a name.
+ * agent confirms is still a fact about a name. A destination is never compared with an identity: the join decides who listens.
  */
 export function nameCandidates(name: OutwardName, identities: readonly RepositoryIdentity[], sourceRepo: string): NameCandidate[] {
   const label = serviceLabel(name);
-  if (label === "") return [];
+  if (label === "" || name.kind === "destination") return [];
   return identities
     .flatMap((identity): NameCandidate[] => {
       for (const basis of BASES) {

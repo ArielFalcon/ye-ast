@@ -26,7 +26,7 @@ import {
 import type { ImpactedLink, Reach } from "../../domain/topology/link.ts";
 import type { ChangedContract } from "../../domain/impact/changed-contracts.ts";
 import { prefixOf, type GatewayDeclaration, type JoinResult } from "../../domain/topology/link-match.ts";
-import { entrypointsOf, joinWorkspace } from "./workspace-join.ts";
+import { declaredGateways, entrypointsOf, joinWorkspace } from "./workspace-join.ts";
 import { directoryNameOf } from "../../domain/topology/repository-identity.ts";
 import type { CallersTarget, ImpactCallersRequest, ImpactFault, ImpactOfChangeRequest, ImpactQueries } from "../../ports/impact-queries.port.ts";
 import type { Digest } from "../../ports/digest.port.ts";
@@ -115,7 +115,8 @@ function workspaceImpactQueries(deps: WorkspaceImpactDeps, captured?: CapturedWa
       const own = entrypointsOf(repository);
       return repository.repo === trigger ? { ...own, entrypoints: [...own.entrypoints, ...removed] } : own;
     });
-    const { gateways, joined } = joinWorkspace(repositories, entrypoints, workspace.workspace.gateways);
+    const declared = declaredGateways(workspace.workspace.gateways);
+    const { gateways, joined } = joinWorkspace(repositories, entrypoints, declared);
     const parts = driftOf(repositories, joined);
 
     const upstream = await upstreamFixpoint(request, joined, repositories, sources, linkGraphOf(trigger, impact === undefined ? [] : reachedHandlers(impact)));
@@ -154,7 +155,7 @@ function workspaceImpactQueries(deps: WorkspaceImpactDeps, captured?: CapturedWa
       workspace: {
         repos: workspace.workspace.repos,
         gateways,
-        unmatchedGateways: unmatchedGateways(workspace.workspace.gateways, repositories),
+        unmatchedGateways: unmatchedGateways(declared, repositories),
         unserved: [...new Set(workspace.unserved.map(({ name }) => name))].filter((name) => !gateways.some((gateway) => gateway.prefix === name)).sort(compareText),
         source: workspace.workspace.source,
       },
@@ -164,9 +165,9 @@ function workspaceImpactQueries(deps: WorkspaceImpactDeps, captured?: CapturedWa
       links: withOperations(mergeLinks(upstream.value.graph, downstream.value.graph), trigger, impact?.changedContracts ?? []),
     };
     const config = walked.value.inputs.declaredConfig;
-    const declared = { repos: workspace.workspace.repos, gateways: workspace.workspace.gateways.toSorted((a, b) => compareText(a.prefix, b.prefix) || compareText(a.repo, b.repo)), source: workspace.workspace.source, budget: request.budget, ...("targets" in request ? { targets: request.targets } : {}), ...("changed" in request ? { changed: request.changed } : {}) };
+    const inputs = { repos: workspace.workspace.repos, gateways: declared.toSorted((a, b) => compareText(a.prefix, b.prefix) || compareText(a.repo, b.repo)), source: workspace.workspace.source, budget: request.budget, ...("targets" in request ? { targets: request.targets } : {}), ...("changed" in request ? { changed: request.changed } : {}) };
     const reads = Object.entries(sections).flatMap(([repo, section]) => section.status === "unknown" ? [{ kind: `discovery:${repo}`, fact: provenanceOf(section) }] : section.value.reads.map(({ kind, fact }) => ({ kind: `${kind}:${repo}`, fact })));
-    const base = compositeBase(baseOf(triggerBase), reads, declared, (text) => deps.digest.of(text), config);
+    const base = compositeBase(baseOf(triggerBase), reads, inputs, (text) => deps.digest.of(text), config);
     return { ok: true, value: { fact: composite(base, value), ...(read.value.workspaceReplay === undefined ? {} : { workspaceReplay: read.value.workspaceReplay }), ...(read.value.refresh === undefined ? {} : { refresh: read.value.refresh }), ...(read.value.repositoryRoots === undefined ? {} : { repositoryRoots: read.value.repositoryRoots }) } };
   }
 

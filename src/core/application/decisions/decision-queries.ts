@@ -1,4 +1,5 @@
 import { decisionsOf, type DecisionInput, type DecisionOrigin, type DecisionRepository } from "../../domain/decisions/decision-set.ts";
+import { declaredGateways } from "../topology/workspace-join.ts";
 import type { Entrypoint } from "../../domain/entrypoints/entrypoint.ts";
 import { provenanceOf, type CompleteFact, type Fact, type FactBase, type PartialFact } from "../../domain/shared/fact.ts";
 import { compositeBase } from "../../domain/topology/composite-inputs.ts";
@@ -72,7 +73,7 @@ async function buildDecisions(read: WorkspaceRead, request: Omit<WorkspacePlanni
     repositories: value.repositories.map((repository) => decisionRepositoryOf(repository, value)),
     candidates: value.candidates,
     unserved: value.unserved,
-    gateways: value.workspace.gateways,
+    gateways: declaredGateways(value.workspace.gateways),
     confirmed: persisted.value.repos.map((declaration) => declaration.id ?? directoryNameOf(declaration.path)),
     ...(read.refresh === undefined ? {} : { resolutions: read.refresh.resolution }),
     ...(origins.value.length === 0 ? {} : { origins: origins.value }),

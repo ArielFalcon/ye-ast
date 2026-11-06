@@ -124,20 +124,21 @@ export const linkEndpoints = {
   to: <H extends z.ZodType>(handler: H) => z.strictObject({ repo: z.string(), kind: entrypointKind, name: z.string(), handler }),
 };
 const outwardKind = z.enum(["http-host", "path-prefix", "configuration-url", "destination", "dependency", "remote", "registry"]);
-export const candidateBasis = z.enum(["exact-name", "artifact", "remote", "route-overlap"]);
+export const candidateBasis = z.enum(["exact-name", "artifact", "remote", "route-overlap", "event-destination"]);
 const workspaceSource = z.enum(["request", "persisted", "none"]);
+const gateway = z.strictObject({ prefix: z.string(), repo: z.string(), basis: z.enum(["gateway-prefix", "route-overlap"]) });
 const vector = z.array(snapshotVectorEntry);
 const workspaceContext = z.union([
   z.strictObject({
     family: z.literal("workspace"),
-    workspace: z.strictObject({ repos: strings, gateways: z.array(z.strictObject({ prefix: z.string(), repo: z.string() })), source: workspaceSource }),
+    workspace: z.strictObject({ repos: strings, gateways: z.array(gateway), source: workspaceSource }),
     repositorySnapshots: vector,
   }),
   z.strictObject({
     family: z.enum(["impact", "callers"]),
     workspace: z.strictObject({
       repos: strings,
-      gateways: z.array(z.strictObject({ prefix: z.string(), repo: z.string(), basis: z.enum(["gateway-prefix", "route-overlap"]) })),
+      gateways: z.array(gateway),
       unmatchedGateways: z.array(z.strictObject({ prefix: z.string(), repo: z.string() })),
       unserved: strings,
       source: workspaceSource,
@@ -149,7 +150,7 @@ const workspaceContext = z.union([
 ]);
 const decisionOption = z.strictObject({
   value: z.string(),
-  basis: z.enum(["exact-name", "artifact", "remote", "route-overlap", "default-branch", "origin"]).exactOptional(),
+  basis: z.enum(["exact-name", "artifact", "remote", "route-overlap", "event-destination", "default-branch", "origin"]).exactOptional(),
   evidence: evidenceList,
   recommended: z.boolean(),
 });
@@ -159,7 +160,7 @@ const fileDependencyCategory = z.enum(["importer", "reexporter", "dynamic-import
 const part = <K extends string, S extends z.ZodRawShape>(kind: K, shape: S) =>
   z.strictObject({ kind: z.literal(kind), id: ids.part, supports, ...shape });
 
-/** Every one of the 22 `Part` variants, discriminated by `kind`. */
+/** Every one of the 24 `Part` variants, discriminated by `kind`. */
 export const partSchema = z.discriminatedUnion("kind", [
   part("entrypoint", { entry: entryData, evidence: evidenceList }),
   part("unknown-finding", { reason: unknownReason, evidence: evidenceList }),
@@ -201,16 +202,19 @@ export const partSchema = z.discriminatedUnion("kind", [
       via: z.string().exactOptional(), stated: stated.exactOptional(),
     }),
   }),
+  part("unlinked-call-site", {
+    site: z.strictObject({ from: linkEndpoints.from, transport, outcome: z.enum(["unmatched", "ambiguous"]), name: z.string(), repos: strings.exactOptional() }),
+  }),
   part("workspace-link", {
     link: z.strictObject({
       id: z.string(), from: linkEndpoints.from, to: linkEndpoints.to(ids.anchor), transport, basis: linkBasis,
       profiles: strings.exactOptional(), confidence: z.number(),
     }),
-    direction: z.enum(["upstream", "downstream"]),
+    direction: z.enum(["upstream", "downstream"]).exactOptional(),
     reach: z.array(z.discriminatedUnion("status", [
       z.strictObject({ status: z.literal("present"), part: ids.part }),
       z.strictObject({ status: z.literal("missing"), linkId: z.string() }),
-    ])),
+    ])).exactOptional(),
     operations: z.array(z.strictObject(changedOperation)).exactOptional(),
   }),
   part("workspace-context", { context: workspaceContext }),

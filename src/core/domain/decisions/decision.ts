@@ -5,7 +5,7 @@ import type { OutwardKind } from "../topology/outward-name.ts";
 export type DecisionKind = "membership" | "repository" | "library" | "gateway" | "revision" | "remote" | "trust";
 
 /** The fact that makes an option valid; a kind's rule ranks only the bases it reads. */
-export type DecisionBasis = "exact-name" | "artifact" | "remote" | "route-overlap" | "default-branch" | "origin";
+export type DecisionBasis = "exact-name" | "artifact" | "remote" | "route-overlap" | "event-destination" | "default-branch" | "origin";
 
 /** One value the workspace can verify for a decision, with the places that make it valid. */
 export interface DecisionOption {

@@ -1,5 +1,7 @@
 import type { CallSite, EventTarget, HttpTarget } from "../../domain/topology/call-site.ts";
 import type { JoinedSite } from "../../domain/topology/link-graph.ts";
+import type { Link, UnlinkedCallSite } from "../../domain/topology/link.ts";
+import { compareText } from "../../domain/shared/code-node.ts";
 import { inferGateways, matchCallSite, matchEventCallSite, type Gateway, type GatewayDeclaration, type RepositoryEntrypoints } from "../../domain/topology/link-match.ts";
 import type { WorkspaceRepository } from "../../ports/workspace-repos.port.ts";
 
@@ -44,4 +46,25 @@ function httpTargetOf(site: CallSite): HttpTarget | undefined {
 
 function eventTargetOf(site: CallSite): EventTarget | undefined {
   return site.transport === "event" && site.target.status === "complete" && "protocol" in site.target.value ? site.target.value : undefined;
+}
+
+/** The gateways a caller declared, out of those in force. */
+export function declaredGateways(gateways: readonly Gateway[]): GatewayDeclaration[] {
+  return gateways.flatMap(({ prefix, repo, basis }) => (basis === "gateway-prefix" ? [{ prefix, repo }] : []));
+}
+
+/** What a join admitted, once per `Link.id` and sorted by id, and the call sites it reached without a link, sorted by place. */
+export function linkMapOf(joined: readonly JoinedSite[]): { links: Link[]; unlinked: UnlinkedCallSite[] } {
+  const links = new Map<string, Link>();
+  const unlinked: UnlinkedCallSite[] = [];
+  for (const { site, joined: answer } of joined) {
+    const from = { repo: site.repo, file: site.file, line: site.line, symbol: site.symbol };
+    if (answer.link !== undefined) links.set(answer.link.id, answer.link);
+    else if (answer.ambiguous !== undefined) unlinked.push({ from, transport: site.transport, outcome: "ambiguous", name: answer.ambiguous.key, repos: answer.ambiguous.repos });
+    else if (answer.unmatched !== undefined) unlinked.push({ from, transport: site.transport, outcome: "unmatched", name: answer.unmatched });
+  }
+  return {
+    links: [...links.values()].sort((a, b) => compareText(a.id, b.id)),
+    unlinked: unlinked.sort((a, b) => compareText(a.from.repo, b.from.repo) || compareText(a.from.file, b.from.file) || a.from.line - b.from.line || compareText(a.from.symbol, b.from.symbol) || compareText(a.name, b.name)),
+  };
 }

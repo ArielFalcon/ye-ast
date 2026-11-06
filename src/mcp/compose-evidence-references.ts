@@ -64,10 +64,12 @@ export function partReferences(part: Part): Reference[] {
       return [ref("file", "site.location.file", part.site.location.file), ...many("evidence", "site.target.evidence", part.site.target.evidence)];
     case "unresolved-call-site":
       return [];
+    case "unlinked-call-site":
+      return [ref("file", "site.from.file", part.site.from.file)];
     case "workspace-link":
       return [
         ref("file", "link.from.file", part.link.from.file), ref("anchor", "link.to.handler", part.link.to.handler),
-        ...part.reach.flatMap((reach) => (reach.status === "present" ? [ref("part", "reach.part", reach.part)] : [])),
+        ...(part.reach ?? []).flatMap((reach) => (reach.status === "present" ? [ref("part", "reach.part", reach.part)] : [])),
       ];
     case "workspace-context": {
       const context = part.context;

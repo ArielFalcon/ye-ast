@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { callersValue, entrypointsValue, factOf, importersValue, liveRef, outlineValue, shaRef, SHA_A, SHA_B, sourceFixture } from "./composition-fixtures.ts";
+import { callersValue, entrypointsValue, factOf, importersValue, liveRef, outlineValue, shaRef, SHA_A, SHA_B, sourceFixture, workspaceImpactValue, workspaceValue } from "./composition-fixtures.ts";
 import { normalizeSource } from "./composition-normalize.ts";
 import { mergeEvidence, materializeEvidence } from "./compose-evidence.ts";
 import { compositionIdentity } from "./composition-identity.ts";
@@ -384,4 +384,19 @@ test("summary keeps the evidence an unknown entrypoint finding does not share wh
   const text = renderComposition(resultOf([sourceFixture("entrypoints", { value: { entrypoints } })]), "summary");
   assert.match(text, /shares-evidence/);
   assert.match(text, /src\/Lost\.java:9/);
+});
+
+test("a link the workspace map and a workspace callers answer both admit is one workspace-match relation with two attestations, and no link line repeats it", () => {
+  const callers = workspaceImpactValue("callers");
+  const shared = callers.links[0]!.link;
+  const map = sourceFixture("workspace", { value: { ...workspaceValue(), repositorySnapshots: callers.repositorySnapshots, sections: {}, candidates: [], unserved: [], links: [shared], unlinked: [] } });
+  const result = resultOf([map, sourceFixture("callers-workspace")]);
+
+  const matches = result.graph.relations.filter((relation) => relation.value.kind === "workspace-match" && relation.value.from.symbol === shared.from.symbol);
+  assert.equal(matches.length, 1);
+  assert.equal(matches[0]?.attestations.length, 2);
+  const text = renderComposition(result, "details");
+  const naming = text.split("\n").filter((line) => line.includes(`${shared.from.symbol} →`));
+  assert.equal(naming.filter((line) => /^L\d+ = /.test(line)).length, 1);
+  assert.deepEqual(naming.filter((line) => line.startsWith("  link ")), []);
 });

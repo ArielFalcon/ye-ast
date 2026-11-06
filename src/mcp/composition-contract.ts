@@ -15,7 +15,7 @@ import type { ModuleOrigin, ReachedModule } from "../core/domain/impact/module-d
 import type { ImportedFile } from "../core/domain/impact/importers-fact.ts";
 import type { OutlineDeclaration } from "../core/domain/outline/outline-fact.ts";
 import type { CallSite, EventTarget, HttpTarget, UnresolvedCallSite } from "../core/domain/topology/call-site.ts";
-import type { ImpactedLink, Link, LinkBasis } from "../core/domain/topology/link.ts";
+import type { ImpactedLink, Link, LinkBasis, UnlinkedCallSite } from "../core/domain/topology/link.ts";
 import type { NameCandidate, OutwardKind } from "../core/domain/topology/outward-name.ts";
 import type { Decision, DecisionKind, DecisionOption } from "../core/domain/decisions/decision.ts";
 import type { Cut, Evidence, FactInputs, Producer, SchemaVersion, SnapshotRef, UnknownReason } from "../core/domain/shared/fact.ts";
@@ -162,6 +162,9 @@ export type LinkData = Omit<Link, "from" | "to"> & {
   to: { repo: string; kind: Entrypoint["kind"]; name: string; handler: AnchorId };
 };
 
+/** A call site the join reached without a link; its file is the caller's. */
+export type UnlinkedCallSiteData = Omit<UnlinkedCallSite, "from"> & { from: CallLocation & { repo: string; symbol: string } };
+
 /** A changed contract operation; its known handlers become anchors on the side that declares the operation. */
 export type ContractChangeData = Omit<ChangedContract, "handlers"> & { handlers?: readonly AnchorId[] };
 
@@ -192,7 +195,8 @@ export type PartPayload =
   | { kind: "name-candidate"; context: ReadId; name: string; repo: string; basis: NameCandidate["basis"]; evidence: readonly EvidenceId[] }
   | { kind: "call-site"; site: CallSiteData; disposition: "matched" | "unmatched" | "external" }
   | { kind: "unresolved-call-site"; site: UnresolvedCallSite }
-  | { kind: "workspace-link"; link: LinkData; direction: ImpactedLink["direction"]; reach: readonly LinkReference[]; operations?: ImpactedLink["operations"] }
+  | { kind: "workspace-link"; link: LinkData; direction?: ImpactedLink["direction"]; reach?: readonly LinkReference[]; operations?: ImpactedLink["operations"] }
+  | { kind: "unlinked-call-site"; site: UnlinkedCallSiteData }
   | { kind: "workspace-context"; context: WorkspaceContextData }
   | { kind: "decision"; context: ReadId; decisionId: Decision["id"]; kindName: DecisionKind; subject: string; outwardKinds?: readonly OutwardKind[]; allowsFreeText: boolean; required: boolean; evidence: readonly EvidenceId[]; options: readonly DecisionOptionData[] }
   | { kind: "impact-context"; owner: ReadId; mergeBase?: string; changedEntrypoints: RecordedCollectionState; changedContracts: RecordedCollectionState }

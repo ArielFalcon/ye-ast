@@ -65,7 +65,9 @@ function workspaceValue(gateways: readonly { prefix: string; repo: string }[] = 
     { name: "shared-api", repo: "orders-core", basis: "artifact", evidence: [{ repo: "shop-web", path: "src/app/shared.api.ts", line: 3 }] },
   ];
   return {
-    workspace: { repos: read.map(({ repo }) => repo), gateways, source: "request" },
+    workspace: { repos: read.map(({ repo }) => repo), gateways: gateways.map((gateway) => ({ ...gateway, basis: "gateway-prefix" as const })), source: "request" },
+    links: [],
+    unlinked: [],
     repositorySnapshots: read.map(({ repo, snapshot }) => ({ repo, snapshot })),
     sections: { billing: section("billing", []), orders: section("orders", []), "orders-core": section("orders-core", []), "shop-web": section("shop-web", [outward("shared-api")]) },
     candidates,

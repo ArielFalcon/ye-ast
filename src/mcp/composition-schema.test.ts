@@ -66,11 +66,11 @@ test("full and receipt of every family and workspace branch pass the runtime sch
   for (const source of ALL) assert.equal(runtime(composeFull(resultOf([source]))), true, source.family);
 });
 
-test("full keeps every table and all 23 part kinds; graph.sources appears once with request indices", () => {
+test("full keeps every table and all 24 part kinds; graph.sources appears once with request indices", () => {
   const kinds: readonly PartKind[] = [
     "entrypoint", "unknown-finding", "seed", "symbol-reach", "entrypoint-reach", "entrypoint-change", "contract-change", "module-origin", "module-reach",
     "file-dependency", "file-query", "outline-declaration", "outline-file", "unheld-file", "outward-name", "name-candidate", "call-site",
-    "unresolved-call-site", "workspace-link", "workspace-context", "decision", "impact-context", "walk-cost",
+    "unresolved-call-site", "unlinked-call-site", "workspace-link", "workspace-context", "decision", "impact-context", "walk-cost",
   ];
   const parsed = COMPOSE_OUTPUT.parse(full);
   assert.equal(parsed.kind, "composition");
@@ -145,7 +145,7 @@ test("cross-id integrity uses the materializer checker: a dangling reference pas
 
 test("legal missing-reference and unknown variants stay valid", () => {
   const parts = full.graph.parts;
-  assert.ok(parts.some((part) => part.kind === "workspace-link" && part.reach.some((reach) => reach.status === "missing")));
+  assert.ok(parts.some((part) => part.kind === "workspace-link" && (part.reach ?? []).some((reach) => reach.status === "missing")));
   assert.ok(parts.some((part) => part.kind === "entrypoint-reach" && part.seeds.some((seed) => seed.status === "missing")));
   assert.ok(parts.some((part) => part.kind === "entrypoint" && part.entry.kind === "ui-route" && part.entry.component === "unknown"));
   const unavailable = { ...receipt, verification: { status: "unavailable", reason: "redacted-context" }, requests: receipt.requests.map(() => ({ status: "unavailable", reason: "redacted-context" })) };

@@ -65,7 +65,7 @@ function verificationLine(result: CompositionResult): string {
 
 const PART_ORDER: readonly PartKind[] = [
   "entrypoint", "unknown-finding", "entrypoint-change", "contract-change", "seed", "symbol-reach", "entrypoint-reach", "module-origin", "module-reach",
-  "file-dependency", "call-site", "unresolved-call-site", "workspace-link", "outward-name", "name-candidate", "unheld-file",
+  "file-dependency", "call-site", "unresolved-call-site", "unlinked-call-site", "workspace-link", "outward-name", "name-candidate", "unheld-file",
   "outline-declaration", "outline-file", "file-query",
 ];
 /** Kinds summary counts instead of listing: bulk observations already represented by subjects, relations or coverage. */
@@ -421,9 +421,10 @@ class CompactView {
       case "unresolved-call-site": return `unresolved call site ${part.site.path}:${span(part.site.line, part.site.endLine)} ${part.site.symbol} ${part.site.transport}${part.site.via === undefined ? "" : ` via ${part.site.via}`}${part.site.stated === undefined ? "" : ` stated ${part.site.stated.method} ${part.site.stated.path}`}`;
       case "workspace-link": {
         const link = part.link;
-        const reach = part.reach.map((reference) => (reference.status === "present" ? (reference.part === part.id ? "self" : "present") : `missing ${reference.linkId}`));
-        return `link ${link.id} ${part.direction}: ${link.from.repo} ${this.file(link.from.file)}:${link.from.line} ${link.from.symbol} → ${link.to.repo} ${link.to.kind} ${link.to.name} handler ${this.anchor(link.to.handler)} basis ${link.basis} ${link.transport} confidence ${link.confidence}${link.profiles === undefined ? "" : ` profiles ${link.profiles.join(", ")}`}${short ? "" : `; reach ${reach.join(", ") || "none"}${part.operations === undefined ? "" : `; ${changedOperationsText(part.operations)}`}`}`;
+        const reach = part.reach?.map((reference) => (reference.status === "present" ? (reference.part === part.id ? "self" : "present") : `missing ${reference.linkId}`));
+        return `link ${link.id}${part.direction === undefined ? "" : ` ${part.direction}`}: ${link.from.repo} ${this.file(link.from.file)}:${link.from.line} ${link.from.symbol} → ${link.to.repo} ${link.to.kind} ${link.to.name} handler ${this.anchor(link.to.handler)} basis ${link.basis} ${link.transport} confidence ${link.confidence}${link.profiles === undefined ? "" : ` profiles ${link.profiles.join(", ")}`}${short || reach === undefined ? "" : `; reach ${reach.join(", ") || "none"}`}${short ? "" : `${part.operations === undefined ? "" : `; ${changedOperationsText(part.operations)}`}`}`;
       }
+      case "unlinked-call-site": return `${part.site.outcome} call site ${part.site.from.repo} ${this.file(part.site.from.file)}:${part.site.from.line} ${part.site.from.symbol} ${part.site.transport} ${quoted(part.site.name)}${part.site.repos === undefined ? "" : ` (${part.site.repos.join(", ")})`}`;
       case "workspace-context": return `workspace context ${this.workspaceContext(part)}`;
       case "decision": return `decision ${part.kindName} ${quoted(part.subject)}`;
       case "impact-context": return `impact context ${this.readLabel(part.owner)}`;

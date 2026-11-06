@@ -13,6 +13,7 @@ import type { ImpactValue } from "../core/domain/impact/impact-fact.ts";
 import type { ImportedFile, ImportersValue } from "../core/domain/impact/importers-fact.ts";
 import type { OutlineValue } from "../core/domain/outline/outline-fact.ts";
 import type { CallSite } from "../core/domain/topology/call-site.ts";
+import type { Link } from "../core/domain/topology/link.ts";
 import type { Decision } from "../core/domain/decisions/decision.ts";
 import type { EntrypointMap } from "../core/domain/map/entrypoint-map.ts";
 import type { Digest } from "../core/ports/digest.port.ts";
@@ -23,7 +24,7 @@ import type { ExecutedSource, PublicWorkspaceValue } from "./query-runner.ts";
 import { recoveryContext, type RecoveryContext } from "./recovery.ts";
 import type {
   AnchorId, AnchorRecord, ComparisonRef, EntryData, EvidenceFinding, EvidenceId, EvidenceOrigin, EvidenceRecord,
-  EvidenceSet, FileCategory, FileDependencyCategory, FileId, FileRecord, LinkReference, OriginReference, Part, PartId,
+  EvidenceSet, FileCategory, FileDependencyCategory, FileId, FileRecord, LinkData, LinkReference, OriginReference, Part, PartId,
   PartPayload, ReadAnalysis, ReadId, ReadOwner, ReadRecord, RedactionRecord, RecordedCollectionState, SnapshotId, SnapshotRecord,
   SnapshotVectorEntry, SourceFamilyRef, SourceId, Support,
 } from "./composition-contract.ts";
@@ -418,6 +419,18 @@ function callSite(b: Builder, section: ReadContext, repo: string, pointer: strin
 }
 
 /**
+ * A link's ends as every family records them: the caller's file and the handler's anchor in the repositories they name,
+ * so one link read by two families is one `workspace-match` relation. `pointer` addresses the `Link` itself.
+ */
+function linkData(b: Builder, root: ReadContext, { from, to, ...link }: Link, pointer: string): LinkData {
+  return {
+    ...link,
+    from: { file: b.file(b.placeOf(from.repo, root.id), from.file, root.id, `${pointer}/from/file`), line: from.line, repo: from.repo, symbol: from.symbol },
+    to: { repo: to.repo, kind: to.kind, name: to.name, handler: b.anchor(b.placeOf(to.repo, root.id), to.handler, root.id, `${pointer}/to/handler`, `${pointer}/to/handler/path`) },
+  };
+}
+
+/**
  * Admitted links. A link's id is local to its source position so self and cyclic reach resolve through the
  * source's own `Link.id` index without hashing part ids recursively; a reach id no link of the source carries, or one two
  * links share, stays `missing`.
@@ -425,14 +438,7 @@ function callSite(b: Builder, section: ReadContext, repo: string, pointer: strin
 function links(b: Builder, root: ReadContext, items: WorkspaceImpactValue["links"]): void {
   const prepared = items.map((item, index) => {
     const pointer = `/value/links/${index}`;
-    const { from, to, ...link } = item.link;
-    const fromPlace = b.placeOf(from.repo, root.id);
-    const toPlace = b.placeOf(to.repo, root.id);
-    const data = {
-      ...link,
-      from: { file: b.file(fromPlace, from.file, root.id, `${pointer}/link/from/file`), line: from.line, repo: from.repo, symbol: from.symbol },
-      to: { repo: to.repo, kind: to.kind, name: to.name, handler: b.anchor(toPlace, to.handler, root.id, `${pointer}/link/to/handler`, `${pointer}/link/to/handler/path`) },
-    };
+    const data = linkData(b, root, item.link, `${pointer}/link`);
     const operations = item.operations === undefined ? {} : { operations: item.operations };
     const id = partId(b.digest, { kind: "workspace-link", link: data, direction: item.direction, reach: [], ...operations }, { source: b.source, read: root.id, pointer });
     return { pointer, data, id, item, operations };
@@ -524,6 +530,11 @@ function workspace(b: Builder, root: ReadContext, fact: Fact<PublicWorkspaceValu
     const repos = [...new Set(name.evidence.map((item) => item.repo))];
     const origin: EvidenceOrigin = repos.length === 1 ? b.placeOf(repos[0]!, root.id).origin : { kind: "query-context", read: root.id };
     b.part({ kind: "outward-name", origin, name: name.name, kindName: name.kind, evidence, disposition: "unserved" }, root.id, [at]);
+  });
+  value.links.forEach((link, index) => b.part({ kind: "workspace-link", link: linkData(b, root, link, `/value/links/${index}`) }, root.id, [`/value/links/${index}`]));
+  value.unlinked.forEach(({ from, ...site }, index) => {
+    const at = `/value/unlinked/${index}`;
+    b.part({ kind: "unlinked-call-site", site: { ...site, from: { file: b.file(b.placeOf(from.repo, root.id), from.file, root.id, `${at}/from/file`), line: from.line, repo: from.repo, symbol: from.symbol } } }, root.id, [at]);
   });
   return sorted;
 }

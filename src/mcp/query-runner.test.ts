@@ -56,7 +56,7 @@ function workspaceImpactRead(repo: string): FactRead<WorkspaceImpactValue> {
   return { fact: { ...base(repo, { inputs }), status: "complete", value }, workspaceReplay: { version: 1, declaration: `ws-r1:${"c".repeat(64)}`, snapshots: [{ repo, kind: "sha", sha: SHA }] }, repositoryRoots: [{ repo, path: `/work/${repo}` }], repositorySources: [{ repo, path: "/private/source" }] };
 }
 function workspaceRead(repo: string): FactRead<WorkspaceValue> {
-  const value: WorkspaceValue = { workspace: { repos: [repo], gateways: [], source: "request" }, repositorySnapshots: [{ repo, snapshot: base(repo).snapshot }], sections: {}, candidates: [], unserved: [], repositories: [{ repo, snapshot: base(repo).snapshot, entrypoints: [], callSites: [] }] };
+  const value: WorkspaceValue = { workspace: { repos: [repo], gateways: [], source: "request" }, repositorySnapshots: [{ repo, snapshot: base(repo).snapshot }], sections: {}, candidates: [], unserved: [], links: [], unlinked: [], repositories: [{ repo, snapshot: base(repo).snapshot, entrypoints: [], callSites: [] }] };
   return { fact: { ...base(repo), status: "complete", value }, repositoryRoots: [{ repo, path: `/work/${repo}` }], repositorySources: [{ repo, path: "/private/source" }] };
 }
 const decisionRead = (repo: string): FactRead<DecisionValue> => ({ fact: { ...base(repo), status: "complete", value: { decisions: [], repositories: [{ repo, snapshot: base(repo).snapshot }], source: "request" } }, repositorySources: [{ repo, path: "/private/source" }] });

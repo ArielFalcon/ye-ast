@@ -1,6 +1,8 @@
 import type { WorkspaceLiveNotice } from "./live-queries.port.ts";
 import type { Fact, SnapshotRef } from "../domain/shared/fact.ts";
 import type { Result } from "../domain/shared/result.ts";
+import type { Link, UnlinkedCallSite } from "../domain/topology/link.ts";
+import type { Gateway } from "../domain/topology/link-match.ts";
 import type { NameCandidate, RepositoryOutwardName } from "../domain/topology/outward-name.ts";
 import type { RemoteFreshness, RepositoryResolution } from "../domain/topology/remote-snapshot.ts";
 import type { WorkspaceFault, WorkspaceReplayContext, WorkspaceReposRequest, WorkspaceRepositoryRequest, WorkspaceRepository, WorkspaceSection, WorkspaceSource } from "./workspace-repos.port.ts";
@@ -9,8 +11,8 @@ export interface WorkspaceValue {
   workspace: {
     /** The ids of every repository the request named, sorted. */
     repos: readonly string[];
-    /** The gateway prefixes the caller declared, sorted by prefix. */
-    gateways: readonly { prefix: string; repo: string }[];
+    /** The gateway prefixes in force, sorted by prefix: those the caller declared, and those the join inferred. */
+    gateways: readonly Gateway[];
     /** Where the repositories above came from; `none` says the answer covers the bound repository alone. */
     source: WorkspaceSource;
   };
@@ -22,6 +24,10 @@ export interface WorkspaceValue {
   candidates: readonly NameCandidate[];
   /** The names no repository given serves: the agent's next step. */
   unserved: readonly RepositoryOutwardName[];
+  /** Every link the join admitted between the repositories read, once per `Link.id`, sorted by id. */
+  links: readonly Link[];
+  /** The call sites the join reached and did not link, sorted by place; an ambiguous one is also a cut of its section. */
+  unlinked: readonly UnlinkedCallSite[];
   /** The repositories read, for the query families that join over them. */
   repositories: readonly WorkspaceRepository[];
 }
@@ -62,7 +68,7 @@ export interface WorkspaceRequest extends WorkspaceReposRequest {
 
 /**
  * What a set of repositories states about each other: the names each one writes outward, the local repository that
- * serves each name with its basis, and the names nothing given serves. Each repository is read under its own trust
+ * serves each name with its basis, the names nothing given serves, and the links the join admits between them. Each repository is read under its own trust
  * declaration; under `trusted`, a declared remote is refreshed into ye-ast's mirror and the repository is read there at
  * the pinned sha.
  */

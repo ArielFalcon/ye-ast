@@ -146,7 +146,7 @@ test("mixed workspace context and live notices survive the public client transpo
   const fact: WorkspaceRead["fact"] = {
     schema: SCHEMA, snapshot, producer: { name: "ye-ast", version: "1" },
     inputs: { trust: "untrusted", scope: "s", declaredScope: { languages: [], frameworks: [], include: [], exclude: [] }, content: "c", config: "k", declaredConfig: {}, engines: {} },
-    evidence: [], status: "complete", value: { workspace: { repos: ["b", "org/a"], gateways: [], source: "none" }, repositorySnapshots: [], sections: {}, candidates: [], unserved: [], repositories: [] },
+    evidence: [], status: "complete", value: { workspace: { repos: ["b", "org/a"], gateways: [], source: "none" }, repositorySnapshots: [], sections: {}, candidates: [], unserved: [], links: [], unlinked: [], repositories: [] },
   };
   const workspaceLive: NonNullable<WorkspaceRead["workspaceLive"]> = [
     { kind: "stale", repo: "org/a", snapshot, notice: { stateId: "state", changed: ["src/a.ts", "src/secret-token.ts"] } },

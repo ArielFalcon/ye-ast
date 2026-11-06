@@ -25,11 +25,14 @@ export interface OutwardName<E extends Evidence = Evidence> {
 
 export type RepositoryOutwardName = OutwardName<RepositoryEvidence>;
 
-/** One local repository that serves a name, and the basis that says why. */
+/**
+ * One local repository that serves a name, and the basis that says why. `event-destination` is a repository with a
+ * listener the join matched to the destination a call site publishes; the other bases compare the name with an identity.
+ */
 export interface NameCandidate {
   name: string;
   repo: string;
-  basis: "exact-name" | "artifact" | "remote" | "route-overlap";
+  basis: "exact-name" | "artifact" | "remote" | "route-overlap" | "event-destination";
   evidence: readonly RepositoryEvidence[];
 }
 
@@ -37,8 +40,8 @@ const FIRST_LABEL = /^[^.:/]+/;
 
 /**
  * The token of a name that can equal a repository's identity. An HTTP name is its first host label or first path segment;
- * a coordinate is its last segment, without the version; a destination stands for itself, since no repository serves a
- * message subject.
+ * a coordinate is its last segment, without the version; a destination stands for itself, since a repository serves a
+ * message subject by listening to it, which only the join decides.
  */
 export function serviceLabel({ name, kind }: Pick<OutwardName, "name" | "kind">): string {
   const withoutScheme = name.replace(/^[a-z][a-z0-9+.-]*:\/\//i, "");

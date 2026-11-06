@@ -13,7 +13,9 @@ import type { RefreshedRemote, RemoteRefreshRequest } from "../../ports/remote-r
 import type { RemoteFreshness, RemoteListing } from "../../domain/topology/remote-snapshot.ts";
 import type { WorkspaceRepositoryRequest } from "../../ports/workspace-repos.port.ts";
 import type { OutwardName } from "../../domain/topology/outward-name.ts";
-import type { CallSiteReader } from "../../domain/topology/call-site.ts";
+import type { CallSite, CallSiteReader } from "../../domain/topology/call-site.ts";
+import type { Entrypoint } from "../../domain/entrypoints/entrypoint.ts";
+import type { Finding } from "../../domain/shared/fact.ts";
 import type { TrustRecordReader } from "../../ports/trust-record.port.ts";
 import type { PathMatcher } from "../../ports/path-matcher.port.ts";
 import type { WorkspaceDefaults, WorkspaceManifest } from "../../ports/workspace-defaults.port.ts";
@@ -50,6 +52,7 @@ type Repositories = Record<
     branch?: string;
     stopped?: CommitExport["stopped"];
     skipped?: CommitExport["skipped"];
+    entrypoints?: readonly Finding<Entrypoint>[];
   }
 >;
 
@@ -96,7 +99,7 @@ function setup(
   };
   const scratch: ScratchDirectory = { create: async () => "/scratch", remove: async () => undefined };
   const reader: SourceReader = { read: async (_root, paths) => paths.map((path) => ({ path, content: repositories[exported ?? ""]?.files[path] ?? "" })) };
-  const extractor: EntrypointExtractor = { extract: async () => { hooks?.extract?.(); return []; } };
+  const extractor: EntrypointExtractor = { extract: async () => { hooks?.extract?.(); return repositories[exported ?? ""]?.entrypoints ?? []; } };
   const digest: Digest = testDigest ?? { of: (text) => `digest(${text})` };
   const deps: WorkspaceQueriesDeps = {
     vcs,
@@ -620,7 +623,7 @@ test("a request that names no repositories works over the persisted manifest's r
   const result = await queries.outwardNames({ repo: { path: "/work/shop-web" } });
 
   assert.deepEqual(asked, ["/work/shop-web"]);
-  assert.deepEqual(valueOf(result).workspace, { repos: ["orders-svc", "shop-web"], gateways: [{ prefix: "orders-api", repo: "orders-svc" }], source: "persisted" });
+  assert.deepEqual(valueOf(result).workspace, { repos: ["orders-svc", "shop-web"], gateways: [{ prefix: "orders-api", repo: "orders-svc", basis: "gateway-prefix" }], source: "persisted" });
   assert.deepEqual(Object.keys(valueOf(result).sections), ["orders-svc", "shop-web"]);
 });
 
@@ -653,7 +656,7 @@ test("a gateway the request declares itself wins over the one the manifest persi
 
   const result = await queries.outwardNames({ repo: { path: "/work/shop-web" }, gateways: [{ prefix: "legacy", repo: "orders-svc" }] });
 
-  assert.deepEqual(valueOf(result).workspace.gateways, [{ prefix: "legacy", repo: "orders-svc" }]);
+  assert.deepEqual(valueOf(result).workspace.gateways, [{ prefix: "legacy", repo: "orders-svc", basis: "gateway-prefix" }]);
 });
 
 test("a manifest that cannot be read is the answer's fault, never an empty workspace", async () => {
@@ -946,4 +949,106 @@ test("workspace cancellation while reading call sites cannot return a completed 
   const result = await queries.outwardNames({ repo: { path: "/work/app" }, signal: controller.signal });
   assert.ok(!result.ok);
   assert.equal(result.fault.kind, "aborted");
+});
+
+const ORDERS_HANDLER = { path: "src/main/java/app/Orders.java", symbol: "Orders.create", line: 10 };
+const LISTENER_HANDLER = { path: "src/main/java/app/OrdersListener.java", symbol: "OrdersListener.on", line: 8 };
+
+function served(entrypoint: Entrypoint): Finding<Entrypoint> {
+  return { status: "complete", value: entrypoint, evidence: [] };
+}
+
+function postRoute(path: string, handler = ORDERS_HANDLER): Finding<Entrypoint> {
+  return served({ kind: "http-route", name: `POST ${path}`, method: "POST", path, handler, basePath: { status: "complete", value: { default: {}, profiles: {} }, evidence: [] } });
+}
+
+function natsListener(destination: string, handler = LISTENER_HANDLER): Finding<Entrypoint> {
+  return served({ kind: "listener", name: `nats ${destination}`, protocol: "nats", destination, handler });
+}
+
+function postSite(repo: string, path: string, line = 7): CallSite {
+  return { repo, file: `src/app/${repo}.api.ts`, line, symbol: `${repo}.call${line}`, transport: "http", target: { status: "complete", value: { method: "POST", path }, evidence: [] } };
+}
+
+function publishSite(repo: string, destination: string, line = 7): CallSite {
+  return { repo, file: `src/main/java/app/${repo}/Publisher.java`, line, symbol: `${repo}.publish${line}`, transport: "event", target: { status: "complete", value: { protocol: "nats", destination, role: "publish" }, evidence: [] } };
+}
+
+/** Call sites by repository id, as the reader answers them. */
+function sitesOf(byRepo: Record<string, readonly CallSite[]>): CallSiteReader {
+  return { of: async (_files, repo) => byRepo[repo] ?? [] };
+}
+
+const LINKED = { repo: { path: "/work/shop-web" }, repos: [{ path: "/work/orders" }] };
+
+test("workspace answers each link between the repositories it read, the same Link the workspace impact admits for those snapshots", async () => {
+  const repositories: Repositories = { "/work/shop-web": { files: {} }, "/work/orders": { files: {}, entrypoints: [postRoute("/orders")] } };
+  const discovery = setup(repositories, sitesOf({ "shop-web": [postSite("shop-web", "/orders")] }));
+  const value = valueOf(await discovery.outwardNames(LINKED));
+
+  const impact = { callers: async () => {
+    const found = readOf(await discovery.outwardNames({ repo: { path: "/work/orders" } })).fact;
+    return { ok: true as const, value: { ...found, status: "complete" as const, value: { seeds: [], symbols: [], entrypoints: [{ kind: "http-route", name: "POST /orders", handler: ORDERS_HANDLER, depth: 0, confidence: 1, seeds: [] }], cost: { expansionsUsed: 0 } } } };
+  } } as unknown as ImpactQueries;
+  const impacted = await createWorkspaceImpactQueries({ workspace: discovery, impact, digest: { of: (text) => text } }).callers({ repo: { path: "/work/orders" }, repos: [{ path: "/work/shop-web" }], targets: [{ file: ORDERS_HANDLER.path, symbol: ORDERS_HANDLER.symbol }] });
+  assert.ok(impacted.ok && impacted.value.fact.status !== "unknown");
+
+  assert.deepEqual(value.links.map(({ from, to, basis, confidence }) => `${from.repo}:${from.line} -> ${to.repo} ${to.name} (${basis} ${confidence})`), ["shop-web:7 -> orders POST /orders (exact 1)"]);
+  assert.deepEqual(value.links, impacted.value.fact.value.links.map(({ link }) => link));
+  assert.deepEqual(value.unlinked, []);
+});
+
+test("workspace exposes the gateways the join inferred beside those declared, each with its basis", async () => {
+  const repositories: Repositories = { "/work/shop-web": { files: {} }, "/work/orders": { files: {}, entrypoints: [postRoute("/orders")] } };
+  const queries = setup(repositories, sitesOf({ "shop-web": [postSite("shop-web", "/orders-api/orders"), postSite("shop-web", "/edge/orders", 9)] }));
+
+  const value = valueOf(await queries.outwardNames({ ...LINKED, gateways: [{ prefix: "edge", repo: "orders" }] }));
+
+  assert.deepEqual(value.workspace.gateways, [{ prefix: "edge", repo: "orders", basis: "gateway-prefix" }, { prefix: "orders-api", repo: "orders", basis: "route-overlap" }]);
+  assert.deepEqual(value.links.map(({ from, basis }) => `${from.line} ${basis}`), ["7 route-overlap", "9 gateway-prefix"]);
+});
+
+test("a call the join reaches without a link is an explicit outcome: unmatched under a declared service, ambiguous between two, the latter a cut of its section", async () => {
+  const repositories: Repositories = {
+    "/work/shop-web": { files: {} },
+    "/work/orders": { files: {}, entrypoints: [postRoute("/orders"), postRoute("/shared", { ...ORDERS_HANDLER, symbol: "Orders.shared" })] },
+    "/work/billing": { files: {}, entrypoints: [postRoute("/shared", { ...ORDERS_HANDLER, symbol: "Billing.shared" })] },
+  };
+  const queries = setup(repositories, sitesOf({ "shop-web": [postSite("shop-web", "/shared", 3), postSite("shop-web", "/orders/missing", 5)] }));
+
+  const read = readOf(await queries.outwardNames({ ...LINKED, repos: [{ path: "/work/orders" }, { path: "/work/billing" }] }));
+  const value = valueOf({ ok: true, value: read });
+
+  assert.deepEqual(value.links, []);
+  assert.deepEqual(value.unlinked, [
+    { from: { repo: "shop-web", file: "src/app/shop-web.api.ts", line: 3, symbol: "shop-web.call3" }, transport: "http", outcome: "ambiguous", name: "shared", repos: ["billing", "orders"] },
+    { from: { repo: "shop-web", file: "src/app/shop-web.api.ts", line: 5, symbol: "shop-web.call5" }, transport: "http", outcome: "unmatched", name: "/orders/missing" },
+  ]);
+  const section = value.sections["shop-web"];
+  assert.equal(section?.status, "partial");
+  assert.deepEqual(section?.status === "partial" ? section.cuts : [], [{ kind: "unresolved-link", at: ["src/app/shop-web.api.ts", "src/app/shop-web.api.ts:3"] }]);
+});
+
+test("a published destination is an outward name the repository whose listener the join linked serves, with basis event-destination; one nothing consumes is unserved", async () => {
+  const repositories: Repositories = { "/work/shop-web": { files: {} }, "/work/orders": { files: {}, entrypoints: [natsListener("orders.*")] } };
+  const queries = setup(repositories, sitesOf({ "shop-web": [publishSite("shop-web", "orders.{}"), publishSite("shop-web", "audit.logged", 9)] }));
+
+  const value = valueOf(await queries.outwardNames(LINKED));
+
+  assert.deepEqual(value.sections["shop-web"]?.status === "unknown" ? [] : value.sections["shop-web"]?.value.names.map(({ name, kind }) => `${kind} ${name}`), ["destination audit.logged", "destination orders.{}"]);
+  assert.deepEqual(value.candidates, [{
+    name: "orders.{}", repo: "orders", basis: "event-destination",
+    evidence: [{ path: "src/main/java/app/OrdersListener.java", line: 8, repo: "orders" }, { path: "src/main/java/app/shop-web/Publisher.java", line: 7, repo: "shop-web" }],
+  }]);
+  assert.deepEqual(value.unserved.map(({ name }) => name), ["audit.logged"]);
+});
+
+test("a destination is never served by a repository whose name equals it: only a listener the join linked serves it", async () => {
+  const repositories: Repositories = { "/work/shop-web": { files: {} }, "/work/audit": { files: {} } };
+  const queries = setup(repositories, sitesOf({ "shop-web": [publishSite("shop-web", "audit")] }));
+
+  const value = valueOf(await queries.outwardNames({ ...LINKED, repos: [{ path: "/work/audit" }] }));
+
+  assert.deepEqual(value.candidates, []);
+  assert.deepEqual(value.unserved.map(({ name, kind }) => `${kind} ${name}`), ["destination audit"]);
 });

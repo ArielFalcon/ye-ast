@@ -211,7 +211,7 @@ export function outlineValue(): OutlineValue {
 export function workspaceValue(): PublicWorkspaceValue {
   const repoEvidence = (repo: string, path: string, line: number): RepositoryEvidence => ({ path, line, repo });
   return {
-    workspace: { repos: ["shop", "web"], gateways: [{ prefix: "api", repo: "shop" }], source: "persisted" },
+    workspace: { repos: ["shop", "web"], gateways: [{ prefix: "api", repo: "shop", basis: "gateway-prefix" }], source: "persisted" },
     repositorySnapshots: [{ repo: "shop", snapshot: shaRef("shop") }, { repo: "web", snapshot: liveRef("web", "state-1") }],
     sections: {
       web: factOf(
@@ -233,6 +233,11 @@ export function workspaceValue(): PublicWorkspaceValue {
     unserved: [
       { name: "billing.example", kind: "http-host", evidence: [repoEvidence("web", "src/env.ts", 2)] },
       { name: "ghost.example", kind: "configuration-url", evidence: [repoEvidence("ghost", "app.yml", 1)] },
+    ],
+    links: [{ id: "link-ws", from: { repo: "web", file: "src/orders.service.ts", line: 15, symbol: "OrdersService.create" }, to: { repo: "shop", kind: "http-route", name: "POST /orders", handler: handler("src/OrderController.java", "OrderController.create", 12, 15) }, transport: "http", basis: "exact", confidence: 1 }],
+    unlinked: [
+      { from: { repo: "web", file: "src/orders.service.ts", line: 20, symbol: "OrdersService.shared" }, transport: "http", outcome: "ambiguous", name: "shared", repos: ["billing", "shop"] },
+      { from: { repo: "web", file: "src/orders.service.ts", line: 24, symbol: "OrdersService.gone" }, transport: "http", outcome: "unmatched", name: "/orders/gone" },
     ],
   };
 }

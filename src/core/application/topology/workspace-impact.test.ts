@@ -141,7 +141,9 @@ function setup({ repositories, unavailable = [], trigger = impactOf(REACHED), un
       const effective = await workspaceInForce(request, defaults, mode);
       if (!effective.ok) return effective;
       const value: WorkspaceValue = {
-        workspace: { repos: all, gateways: effective.value.gateways, source: effective.value.source },
+        workspace: { repos: all, gateways: effective.value.gateways.map((gateway) => ({ ...gateway, basis: "gateway-prefix" as const })), source: effective.value.source },
+        links: [],
+        unlinked: [],
         repositorySnapshots: read.map(({ repo, snapshot }) => ({ repo, snapshot })),
         sections: Object.fromEntries(all.map((repo) => [repo, missing.has(repo) ? unreachable(repo) : section(repo)])),
         candidates: [],

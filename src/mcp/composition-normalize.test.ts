@@ -160,15 +160,19 @@ function rebuildWorkspaceImpact(t: Tables): WorkspaceImpactValue {
     });
   }
   const links = t.list("/value/links", "workspace-link").map((p) => {
-    const { from, to, ...link } = p.link;
+    assert.ok(p.direction !== undefined && p.reach !== undefined);
     return {
-      link: { ...link, from: { repo: from.repo, file: t.path(from.file), line: from.line, symbol: from.symbol }, to: { repo: to.repo, kind: to.kind, name: to.name, handler: t.handler(to.handler) } },
+      link: rebuildLink(t, p.link),
       direction: p.direction,
       reach: p.reach.map((r) => (r.status === "missing" ? r.linkId : t.partOf(r.part, "workspace-link").link.id)),
       ...(p.operations === undefined ? {} : { operations: p.operations }),
     };
   });
   return { workspace: context.workspace, trigger: context.trigger, repositorySnapshots: context.repositorySnapshots.map((e) => ({ repo: e.repo, snapshot: t.snapshot(e.snapshot) })), sections, links };
+}
+
+function rebuildLink(t: Tables, { from, to, ...link }: PartOf<"workspace-link">["link"]) {
+  return { ...link, from: { repo: from.repo, file: t.path(from.file), line: from.line, symbol: from.symbol }, to: { repo: to.repo, kind: to.kind, name: to.name, handler: t.handler(to.handler) } };
 }
 
 const CATEGORIES: readonly FileCategory[] = ["importers", "reexporters", "dynamicImporters", "typeImporters", "users", "unresolvedNamers"];
@@ -221,6 +225,8 @@ function reconstruct(source: ExecutedSource, t: Tables): Fact<unknown> {
           sections,
           candidates: t.list("/value/candidates", "name-candidate").map((c) => ({ name: c.name, repo: c.repo, basis: c.basis, evidence: t.repoEvidence(c.evidence) })),
           unserved: t.list("/value/unserved", "outward-name").map((n) => ({ name: n.name, kind: n.kindName, evidence: t.repoEvidence(n.evidence) })),
+          links: t.list("/value/links", "workspace-link").map((p) => rebuildLink(t, p.link)),
+          unlinked: t.list("/value/unlinked", "unlinked-call-site").map(({ site: { from, ...site } }) => ({ from: { repo: from.repo, file: t.path(from.file), line: from.line, symbol: from.symbol }, ...site })),
         };
       }
       case "decisions": {
@@ -448,7 +454,7 @@ test("workspace names keep stated and unserved dispositions and resolve reposito
   assert.deepEqual(ghost?.evidence.map(snap), [{ kind: "query-context", read: set.sources[0]!.rootRead }], "a repo outside the vector keeps a context-local origin");
   assert.equal(t.evidenceRecord(ghost!.evidence[0]!).repo, "ghost");
   assert.equal(t.list("/value/sections/shop/value/names", "outward-name").length, 0, "an unknown section has no parts");
-  assert.equal(set.parts.some((p) => p.kind === "workspace-link"), false, "a candidate is not a link");
+  assert.deepEqual(set.parts.filter((p) => p.kind === "workspace-link"), t.list("/value/links", "workspace-link"), "a candidate is not a link");
 });
 
 test("decision preserves all option semantics and context evidence", () => {

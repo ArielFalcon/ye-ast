@@ -6,6 +6,8 @@ import type { Result } from "../../domain/shared/result.ts";
 import { pathSelection, type PathSelection } from "../../domain/shared/scope.ts";
 import { gatherCandidates, gatherNames, sortEvidence, type NameCandidate, type OutwardName, type RepositoryOutwardName } from "../../domain/topology/outward-name.ts";
 import { directoryNameOf } from "../../domain/topology/repository-identity.ts";
+import type { JoinedSite } from "../../domain/topology/link-graph.ts";
+import { entrypointsOf, joinWorkspace, linkMapOf } from "./workspace-join.ts";
 import type { HeadReaderDeps, HeldLive } from "../snapshot/head-reading.ts";
 import type { WorkspaceReadOperation } from "./workspace-operation.ts";
 import { callSiteEvidence, unresolvedCallSite, type CallSite, type CallSiteReader } from "../../domain/topology/call-site.ts";
@@ -170,17 +172,25 @@ export function createWorkspaceReadOperation(deps: WorkspaceQueriesDeps): Worksp
 
         const identities = read.map((entry) => entry.identity);
         const resolved = await withCallSites(read, identities, pathSelection(scope, matcher.matches));
+        const repositories = resolved.map((entry) => ({ ...entry.repository, callSites: entry.callSites })).sort((a, b) => compareText(a.repo, b.repo));
+        const join = joinWorkspace(repositories, repositories.map(entrypointsOf), membership.gateways);
+        const listened = destinationCandidates(join.joined);
         const sections: Record<string, Fact<WorkspaceSection>> = Object.create(null);
         const candidates: NameCandidate[] = [];
         const unserved: RepositoryOutwardName[] = [];
         for (const entry of resolved) {
           const names = gatherNames(entry.names);
           const unresolved = entry.callSites.flatMap((site) => (site.target.status === "unknown" ? [unresolvedCallSite(site)] : []));
+          const ambiguous = join.joined.filter(({ site, joined }) => site.repo === entry.repository.repo && joined.ambiguous !== undefined).map(({ site }) => site);
           const section: FactBase & { evidence: readonly { path: string; line: number }[] } = { ...(entry.base as FactBase), evidence: sortEvidence(names.flatMap((name) => name.evidence)) };
-          const cuts = [...entry.cuts, ...unresolved.map((place) => ({ kind: "unresolved-link" as const, at: [place.path, `${place.path}:${place.line}`, ...(place.via === undefined ? [] : [`library ${place.via}`])] }))];
+          const cuts = [
+            ...entry.cuts,
+            ...unresolved.map((place) => ({ kind: "unresolved-link" as const, at: [place.path, `${place.path}:${place.line}`, ...(place.via === undefined ? [] : [`library ${place.via}`])] })),
+            ...ambiguous.map((site) => ({ kind: "unresolved-link" as const, at: [site.file, `${site.file}:${site.line}`] })),
+          ];
           sections[entry.repository.repo] = withCuts(section, { names, unresolved }, cuts);
           for (const name of names) {
-            const served = nameCandidates(name, identities, entry.repository.repo);
+            const served = [...nameCandidates(name, identities, entry.repository.repo), ...(name.kind === "destination" ? listened.get(`${entry.repository.repo}\0${name.name}`) ?? [] : [])];
             if (served.length === 0) unserved.push({ ...name, evidence: name.evidence.map((place) => ({ ...place, repo: entry.repository.repo })) });
             candidates.push(...served);
           }
@@ -190,16 +200,18 @@ export function createWorkspaceReadOperation(deps: WorkspaceQueriesDeps): Worksp
         const value: WorkspaceValue = {
           workspace: {
             repos: [...resolved.map((entry) => entry.repository.repo), ...unavailable.map((entry) => entry.repoId)].sort(compareText),
-            gateways: [...membership.gateways].sort((a, b) => compareText(a.prefix, b.prefix)),
+            gateways: join.gateways,
             source: membership.source,
           },
           repositorySnapshots: resolved.map((entry) => ({ repo: entry.repository.repo, snapshot: entry.repository.snapshot })).sort((a, b) => compareText(a.repo, b.repo)),
           sections: Object.fromEntries(Object.entries(sections).sort(([a], [b]) => compareText(a, b))),
           candidates: gatherCandidates(candidates),
           unserved: gatherNames(unserved),
-          repositories: resolved.map((entry) => ({ ...entry.repository, callSites: entry.callSites })).sort((a, b) => compareText(a.repo, b.repo)),
+          ...linkMapOf(join.joined),
+          repositories,
         };
-        const base = compositeBase({ ...trigger.base, evidence: [] }, Object.entries(value.sections).map(([repo, section]) => ({ kind: `discovery:${repo}`, fact: provenanceOf(section) })), { repos: value.workspace.repos, gateways: value.workspace.gateways, source: value.workspace.source }, (text) => deps.digest.of(text));
+        const declared = { repos: value.workspace.repos, gateways: [...membership.gateways].sort((a, b) => compareText(a.prefix, b.prefix)), source: value.workspace.source };
+        const base = compositeBase({ ...trigger.base, evidence: [] }, Object.entries(value.sections).map(([repo, section]) => ({ kind: `discovery:${repo}`, fact: provenanceOf(section) })), declared, (text) => deps.digest.of(text));
         const fact = composite(base, value);
         const repositoryRoots = asked.map((repository, index) => ({ repo: ids[index]!, path: repository.path })).toSorted((a, b) => compareText(a.repo, b.repo));
         const repositorySources = resolved.map(({ repository, source }) => ({ repo: repository.repo, path: source })).toSorted((a, b) => compareText(a.repo, b.repo));
@@ -233,17 +245,38 @@ function unavailableSection(deps: WorkspaceQueriesDeps, repoId: string, sha: str
 }
 
 /**
- * The names a repository's call sites state about the world outside it: the base URL a call declares, and the first path
- * segment it targets, which is the prefix a gateway routes. A parameter or the bare root states nothing.
+ * The names a repository's call sites state about the world outside it: the base URL a call declares, the first path
+ * segment it targets, which is the prefix a gateway routes, and the destination a message is published to. A parameter
+ * or the bare root states nothing.
  */
 function callSiteNames(repo: string, callSites: readonly CallSite[]): OutwardName[] {
   return callSites.flatMap((site): OutwardName[] => {
-    if (site.target.status !== "complete" || !("path" in site.target.value)) return [];
+    if (site.target.status !== "complete") return [];
+    if ("destination" in site.target.value) return [{ name: site.target.value.destination, kind: "destination", evidence: [callSiteEvidence(site)] }];
     const { base, path } = site.target.value;
     const evidence = [callSiteEvidence(site)];
     const prefix = path.split("/").find((segment) => segment !== "");
     return [...(base === undefined ? [] : [{ name: base, kind: "http-host" as const, evidence }]), ...(prefix === undefined || prefix === "{}" ? [] : [{ name: prefix, kind: "path-prefix" as const, evidence }])];
   });
+}
+
+/**
+ * Per publishing repository and destination, the repositories that listen to it as the join decided: the one a link
+ * lands in, with the call site and the handler as evidence, or each one an ambiguous destination names, with the call site.
+ */
+function destinationCandidates(joined: readonly JoinedSite[]): Map<string, NameCandidate[]> {
+  const listened = new Map<string, NameCandidate[]>();
+  for (const { site, joined: answer } of joined) {
+    if (site.target.status !== "complete" || !("destination" in site.target.value)) continue;
+    const name = site.target.value.destination;
+    const published = { ...callSiteEvidence(site), repo: site.repo };
+    const served = answer.link !== undefined
+      ? [{ name, repo: answer.link.to.repo, basis: "event-destination" as const, evidence: sortEvidence([published, { path: answer.link.to.handler.path, line: answer.link.to.handler.line, repo: answer.link.to.repo }]) }]
+      : (answer.ambiguous?.repos ?? []).map((repo) => ({ name, repo, basis: "event-destination" as const, evidence: [published] }));
+    const key = `${site.repo}\0${name}`;
+    listened.set(key, gatherCandidates([...(listened.get(key) ?? []), ...served]));
+  }
+  return listened;
 }
 
 /** The composite of the sections, with the whole value beside them: complete only when every section is. */

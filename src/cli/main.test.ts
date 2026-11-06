@@ -172,6 +172,8 @@ const WORKSPACE_VALUE: WorkspaceValue = {
   workspace: { repos: ["shop"], gateways: [], source: "none" },
   repositorySnapshots: [],
   sections: {},
+  links: [],
+  unlinked: [],
   candidates: [],
   unserved: [],
   repositories: [],

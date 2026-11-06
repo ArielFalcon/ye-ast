@@ -576,7 +576,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
     "ye_ast_workspace",
     {
       title: "Repositories a workspace names",
-      description: "Use to find which other repositories this one talks to: outward names (HTTP hosts and prefixes, config URLs, messaging, dependency coordinates, remotes, registries), candidate repositories with match evidence, and unserved names. Helps choose clones for workspace on ye_ast_callers/ye_ast_impact; never downloads or guesses unresolved targets. Trusted persisted remotes may refresh unless offline.",
+      description: "Use to find which other repositories this one talks to: outward names (HTTP hosts and prefixes, config URLs, message destinations, dependency coordinates, remotes, registries), candidate repositories with match evidence, unserved names, and the links between the repositories read (HTTP calls and published messages joined to the routes and listeners they reach), with the calls that matched no or several entrypoints. Helps choose clones for workspace on ye_ast_callers/ye_ast_impact; never downloads or guesses unresolved targets. Trusted persisted remotes may refresh unless offline.",
       inputSchema: compactInput(TOOL_INPUTS.workspace),
       annotations,
     },

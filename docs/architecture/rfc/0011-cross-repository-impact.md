@@ -444,6 +444,16 @@ Accepted by the owner on 2026-11-01: "Confirmo todo".
   configuration URL of `http://<service>.<domain>:<port>/…` names `<service>`. A name written twice is one name with both
   places. Two repositories asked under one id is a fault, never one answer for both. Each section carries the call sites
   the snapshot could not resolve as `unresolved-link` cuts, so a section is `partial` while any remains.
+- The link map (`ye_ast_workspace`, fact schema `0.18.0`): the workspace answer runs the same join as the workspace
+  impact, from one module (`workspace-join.ts`), over every call site of every repository read, and answers each `Link`
+  it admits once, sorted by id, with no walk: no `direction`, no `reach`. The call sites it reaches without a link are
+  `unlinked`, `unmatched` (a declared service none of whose routes takes the call) or `ambiguous` (several entrypoints at
+  one rung, with the repositories), and an ambiguous one is also an `unresolved-link` cut of its section, as in the
+  impact. `workspace.gateways` is the gateways in force, declared (`gateway-prefix`) and inferred (`route-overlap`).
+  A published destination is an outward name of kind `destination`; the repositories that serve it are those the join
+  linked or found ambiguous for it, with basis `event-destination`, never a name compared with an identity. Composed
+  with `ye_ast_callers` or `ye_ast_impact` over the same snapshots, a link both admit is one `workspace-match` relation
+  with one attestation per answer.
 - Slice 2 (frontend call sites): RFC-0007 row A3 "as built" holds the shapes; the reader is the same one the join uses.
 - Slice 3 (the join): `workspace` on `ye_ast_callers` and `ye_ast_impact` is `{ repos: [{ path, id?, revision? }], gateways?: [{ prefix, repo }] }`;
   `live` is refused with it, because a workspace reads committed snapshots only. The bound repository is the trigger: its
