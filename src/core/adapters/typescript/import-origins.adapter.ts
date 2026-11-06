@@ -279,9 +279,16 @@ function isImportDeclaration(declaration: ts.Declaration): boolean {
   return ts.isImportSpecifier(declaration) || ts.isImportClause(declaration) || ts.isNamespaceImport(declaration) || ts.isImportEqualsDeclaration(declaration);
 }
 
+/** The 1-based line each declaration starts at: its statement's, for a variable, where the index starts its node. */
 function declarationLines(source: ts.SourceFile, declarations: readonly ts.Node[]): number[] {
-  const lines = declarations.map((declaration) => source.getLineAndCharacterOfPosition((ts.getNameOfDeclaration(declaration as ts.Declaration) ?? declaration).getStart(source)).line + 1);
+  const lines = declarations.map((declaration) => source.getLineAndCharacterOfPosition(declarationStart(declaration).getStart(source)).line + 1);
   return [...new Set(lines)].sort((a, b) => a - b);
+}
+
+function declarationStart(declaration: ts.Node): ts.Node {
+  let node = declaration;
+  while (ts.isVariableDeclaration(node) || ts.isVariableDeclarationList(node) || ts.isBindingElement(node) || ts.isObjectBindingPattern(node) || ts.isArrayBindingPattern(node)) node = node.parent;
+  return node;
 }
 
 /**

@@ -317,6 +317,7 @@ const USES_INDEX: Options = {
     { from: "run", name: "z.object", kind: "calls", file: USE, line: 12, column: 4 },
     { from: "run", name: "seen.size", kind: "references", file: USE, line: 13, column: 4 },
     { from: "run", name: "top", kind: "references", file: USE, line: 14, column: 4 },
+    { from: "run", name: "inner", kind: "calls", file: USE, line: 14, column: 20 },
     { from: "run", name: "Map.groupBy", kind: "calls", file: USE, line: 15, column: 10 },
     { from: "run", name: "process.exit", kind: "calls", file: USE, line: 16, column: 30 },
     { from: "run", name: "process.cwd", kind: "calls", file: USE, line: 20, column: 2 },
@@ -333,6 +334,7 @@ const USES_INDEX: Options = {
     "12:5 z": { kind: "import", root: "z", member: "object", origin: { kind: "external", module: "zod" } },
     "13:5 seen": { kind: "declared", root: "seen", lines: [12], topLevel: false },
     "14:5 top": { kind: "declared", root: "top", lines: [2], topLevel: true },
+    "14:21 inner": { kind: "declared", root: "inner", lines: [12], topLevel: false },
     "15:11 Map": { kind: "ambient", root: "Map" },
     "19:3 helperAlias": { kind: "import", root: "helperAlias", origin: { kind: "repository", file: LIB } },
     "32:5 this": { kind: "this", member: "load" },
@@ -406,4 +408,32 @@ test("a member of a namespace a repository import binds is a use of the declarat
 test("a name bound to a declaration of another file by its containment path is a use of that declaration", async () => {
   const { uses } = await usesAnswer("top");
   assert.deepEqual(named(uses), ["Other"]);
+});
+
+test("a declaration beside the focused one on the same line is not nested in it, so the focused body's use of it is listed", async () => {
+  const SAME = "src/same-line.ts";
+  const { queries } = setup({
+    written: [SAME],
+    nodes: [fakeNode("sameFile", "file", SAME, 1, 1), fakeNode("external", "function", SAME, 1, 1, "external"), fakeNode("limit", "constant", SAME, 1, 1, "limit"), fakeNode("together", "function", SAME, 1, 1, "together")],
+    edges: [
+      { from: "sameFile", to: "external", kind: "contains" },
+      { from: "sameFile", to: "limit", kind: "contains" },
+      { from: "sameFile", to: "together", kind: "contains" },
+      { from: "together", to: "external", kind: "calls", line: 1, column: 80 },
+    ],
+    unresolved: [{ from: "together", name: "limit", kind: "references", file: SAME, line: 1, column: 100 }],
+    bindings: { "1:101 limit": { kind: "declared", root: "limit", lines: [1], topLevel: true } },
+  });
+
+  const answer = await queries.outline({ repo: "/work/shop", repoId: "shop", revision: "HEAD", focus: [{ file: SAME, symbol: "together" }] });
+
+  assert.ok(answer.ok && answer.value.status === "complete", JSON.stringify(answer));
+  assert.deepEqual(named(answer.value.value.focus?.[0]?.uses ?? []), ["external", "limit"]);
+});
+
+test("a focus reads the head's sources without extracting entrypoints", async () => {
+  const { queries, log } = setup(USES_INDEX);
+  const answer = await queries.outline({ repo: "/work/shop", repoId: "shop", revision: "HEAD", focus: [{ file: USE, symbol: "run" }] });
+  assert.ok(answer.ok);
+  assert.equal(log.extractions, 0);
 });

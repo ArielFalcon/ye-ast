@@ -77,8 +77,8 @@ export interface UseSite {
 
 /**
  * What binds a use's root, the first name of the chain written at the site: an import (with the name after the root, for
- * a namespace), a declaration of the file (by the 1-based lines of its names, and whether every one is at the file's top
- * level), a declaration of a repository file by its dotted containment path, the language, or `this` (with the member
+ * a namespace), a declaration of the file (by the 1-based lines its declarations start at, and whether every one is at
+ * the file's top level), a declaration of a repository file by its dotted containment path, the language, or `this` (with the member
  * after it).
  */
 export type RootBinding =

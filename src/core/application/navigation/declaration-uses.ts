@@ -93,11 +93,11 @@ export interface UsesInput {
  */
 export async function usesOf(node: GraphSymbol, input: UsesInput): Promise<{ found: FoundUse[]; unproved: UnprovedUse[] }> {
   const { store, navigation, uses, targets, origins, signal } = input;
-  const inside = (symbol: GraphSymbol): boolean => symbol.id !== node.id && symbol.file === node.file && node.startLine <= symbol.startLine && symbol.endLine <= node.endLine;
+  const nested = containedIn(navigation, node);
   const found: FoundUse[] = [];
   const unproved: UnprovedUse[] = [];
   const declared = (symbol: GraphSymbol, relation: string, place: OutlinePlace | undefined): void => {
-    if (!inside(symbol)) found.push({ target: { declaration: { file: symbol.file, name: symbol.name, kind: symbol.kind, line: symbol.startLine, endLine: symbol.endLine } }, relation, ...(place === undefined ? {} : { place }) });
+    if (!nested.has(symbol.id)) found.push({ target: { declaration: { file: symbol.file, name: symbol.name, kind: symbol.kind, line: symbol.startLine, endLine: symbol.endLine } }, relation, ...(place === undefined ? {} : { place }) });
   };
 
   const edges = uses.followed(node, store.outgoingEdges([node.id], USE_EDGE_KINDS).filter((edge) => !isIgnoredEdge(edge)));
@@ -133,10 +133,10 @@ export async function usesOf(node: GraphSymbol, input: UsesInput): Promise<{ fou
       return members.length === 1 ? members[0] : undefined;
     }
     if (binding.kind === "declared") {
-      if (binding.lines.every((line) => node.startLine <= line && line <= node.endLine)) return "local";
-      const declaration = single(navigation.symbolsInFile(reference.file).filter((symbol) => symbol.name === binding.root && binding.lines.some((line) => symbol.startLine <= line && line <= symbol.endLine)));
-      /** A value a function around the body declares, and the index holds no node of, is a local value captured by the body. */
-      return declaration ?? (binding.topLevel ? undefined : "local");
+      const declaration = single(navigation.symbolsInFile(reference.file).filter((symbol) => symbol.name === binding.root && binding.lines.includes(symbol.startLine)));
+      if (declaration !== undefined) return declaration;
+      /** A declaration below the top level the index holds no node of is a local value: the body's own, or one it captures. */
+      return binding.topLevel ? undefined : "local";
     }
     if (binding.kind === "located") return single(branchesOf(containmentTree(store, navigation.symbolsInFile(binding.file))).filter((branch) => declarationPath(branch) === binding.path).map((branch) => branch.declaration));
     if (binding.kind !== "import") return undefined;
@@ -146,6 +146,16 @@ export async function usesOf(node: GraphSymbol, input: UsesInput): Promise<{ fou
     const member = binding.member;
     return member === undefined ? undefined : single(containmentTree(store, navigation.symbolsInFile(binding.origin.file)).map((branch) => branch.declaration).filter((symbol) => symbol.name === member));
   }
+}
+
+/** The declarations the graph's `contains` edges place under `node`, at any depth. */
+function containedIn(navigation: GraphNavigation, node: GraphSymbol): ReadonlySet<GraphNodeId> {
+  const found = new Set<GraphNodeId>();
+  for (let frontier: readonly GraphSymbol[] = [node]; frontier.length > 0; ) {
+    frontier = frontier.flatMap((parent) => navigation.membersOf(parent)).filter((child) => !found.has(child.id) && child.id !== node.id);
+    for (const child of frontier) found.add(child.id);
+  }
+  return found;
 }
 
 function single(symbols: readonly GraphSymbol[]): GraphSymbol | undefined {
