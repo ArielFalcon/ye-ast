@@ -469,22 +469,14 @@ async function globalRootOf(defining: SourceFile, expression: string, kind: stri
 
 const script = (content: string): SourceFile => ({ path: "src/script.ts", content });
 
-test("a library name a script's top-level class declares is the repository's own global, so it is unknown", async () => {
-  assert.equal((await globalRootOf(script("class URL {\n  constructor(path: string) {}\n}\n"), 'new URL("/orders")', "instantiates", "URL")).status, "unknown");
-});
-
-test("a library name a script's top-level function declares is the repository's own global, so it is unknown", async () => {
-  assert.equal((await globalRootOf(script("function fetch(): void {}\n"), "fetch()", "calls", "fetch")).status, "unknown");
-});
-
 test("a library name a script's top-level variable statement binds, by var, let, const or destructuring, is the repository's own global", async () => {
   for (const [declaration, name] of [["var Intl = 1;", "Intl"], ["let Reflect = 1;", "Reflect"], ["const { Proxy } = { Proxy: 1 };", "Proxy"]] as const) {
     assert.equal((await globalRootOf(script(`${declaration}\n`), name, "references", name)).status, "unknown", declaration);
   }
 });
 
-test("a library name a script's top-level enum, interface, type or namespace declares is the repository's own global", async () => {
-  for (const [declaration, name] of [["enum Date { A }", "Date"], ["interface Map { own: true }", "Map"], ["type WeakRef = string;", "WeakRef"], ["namespace Atomics { export const own = 1; }", "Atomics"]] as const) {
+test("a library name a script's top-level class, function, enum, interface, type, namespace or import alias declares is the repository's own global", async () => {
+  for (const [declaration, name] of [["class URL {}", "URL"], ["function fetch(): void {}", "fetch"], ["enum Date { A }", "Date"], ["interface Map { own: true }", "Map"], ["type WeakRef = string;", "WeakRef"], ["namespace Atomics { export const own = 1; }", "Atomics"], ["namespace N { export const y = 1; }\nimport Symbol = N.y;", "Symbol"]] as const) {
     assert.equal((await globalRootOf(script(`${declaration}\n`), name, "references", name)).status, "unknown", declaration);
   }
 });

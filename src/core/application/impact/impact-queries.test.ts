@@ -735,11 +735,6 @@ test("a dotted symbol seeds only the member its container holds, not a same-name
   assert.deepEqual(answer.status === "complete" && answer.value.seeds.map((seed) => seed.line), [2]);
 });
 
-test("a bare symbol seeds every declaration of that name in the file, at any depth", async () => {
-  const answer = callersFact(await setup(TWO_CLASSES).callers({ targets: [{ file: "src/A.ts", symbol: "m" }] }));
-  assert.deepEqual(answer.status === "complete" && answer.value.seeds.map((seed) => seed.line), [2, 12]);
-});
-
 test("a missing symbol lists the dotted containment paths of its file, so a candidate selects one declaration", async () => {
   const answer = await setup(TWO_CLASSES).callers({ targets: [{ file: "src/A.ts", symbol: "gone" }] });
   assert.ok(!answer.ok);

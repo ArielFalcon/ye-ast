@@ -552,15 +552,13 @@ function outline(b: Builder, root: ReadContext, value: OutlineValue): void {
     const pointer = `/value/files/${index}`;
     const file = b.file(root.here, held.file, root.id, `${pointer}/file`);
     const declarations = held.declarations.map((declaration, j) => declared(held.file, `${pointer}/file`, declaration, `${pointer}/declarations/${j}`));
-    const imports = held.imports.map(({ target, bindings, specifier, form, ...statement }, j): OutlineImportRecord => {
+    const imports = held.imports.map(({ target, bindings, ...statement }, j): OutlineImportRecord => {
       const at = `${pointer}/imports/${j}`;
       const dependency = target.kind === "repository"
         ? { kind: "repository" as const, dependency: b.part({ kind: "file-dependency", from: file, to: b.file(root.here, target.file, root.id, `${at}/target/file`), category: "outline-import" }, root.id, [`${at}/target`]) }
         : target;
       return {
         ...statement,
-        ...(specifier === undefined ? {} : { specifier }),
-        ...(form === undefined ? {} : { form }),
         target: dependency,
         bindings: bindings.map(({ declaration, ...binding }, k) => {
           if (declaration === undefined) return binding;

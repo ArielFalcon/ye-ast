@@ -47,9 +47,9 @@ export function scriptGlobalNames(tree: ts.SourceFile): ReadonlySet<string> {
   };
   for (const statement of tree.statements) {
     if (ts.isVariableStatement(statement)) for (const declaration of statement.declarationList.declarations) bind(declaration.name);
-    else if (ts.isClassDeclaration(statement) || ts.isFunctionDeclaration(statement) || ts.isEnumDeclaration(statement) || ts.isInterfaceDeclaration(statement) || ts.isTypeAliasDeclaration(statement) || ts.isModuleDeclaration(statement)) {
-      const name = statement.name;
-      if (name !== undefined && ts.isIdentifier(name)) names.add(name.text);
+    else {
+      const name = declaredName(statement);
+      if (name !== undefined) names.add(name);
     }
   }
   return names;
