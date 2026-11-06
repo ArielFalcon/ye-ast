@@ -20,6 +20,17 @@ interface FileShape {
   declared: ReadonlySet<string>;
 }
 
+/** One parsed file: its shape, and every node by the offset it starts at, so a site is found without walking the tree. */
+interface FileIndex {
+  source: ts.SourceFile;
+  shape: FileShape;
+  starting: ReadonlyMap<number, readonly ts.Node[]>;
+}
+
+export type ParseSource = (file: SourceFile) => ts.SourceFile;
+
+const parseWithParents: ParseSource = (file) => sourceTree(file, ts.ScriptTarget.Latest, true);
+
 /**
  * Reads, per file, the name each import binds to the specifier it came from, and resolves that specifier through the
  * snapshot's own module configuration (`module-resolver.ts`): a relative or aliased specifier names a file of the
@@ -29,12 +40,18 @@ interface FileShape {
  * files the snapshot already holds. A file that declares a name it also imports is `unknown` for that name, because the
  * declaration may shadow the import at the place the reference sits.
  */
-export function createImportOrigins(sources: readonly SourceFile[]): ImportOrigins {
+export function createImportOrigins(sources: readonly SourceFile[], parse: ParseSource = parseWithParents): ImportOrigins {
   const texts = new Map(sources.map((file) => [file.path, file.content]));
   const files = new Map(sources.map((file) => [file.path, file]));
   const dependencies = new Set(sources.filter((file) => isPackageManifest(file.path)).flatMap((file) => [...manifestDependencies(file.content)]));
   const modules = createModuleResolver(async (file) => texts.get(file), dependencies);
   const shapes = new Map<string, FileShape>();
+  const indexes = new Map<string, FileIndex | undefined>();
+  /** A file is parsed once for the life of the reader; one that does not parse has no index. */
+  const indexOf = (file: string): FileIndex | undefined => {
+    if (!indexes.has(file)) indexes.set(file, indexed(parse(files.get(file)!)));
+    return indexes.get(file);
+  };
 
   /**
    * A file is read when a site asks about it; its imports and declarations are held as a shape.
@@ -91,7 +108,8 @@ export function createImportOrigins(sources: readonly SourceFile[]): ImportOrigi
     for (const [file, group] of grouped) {
       if (signal?.aborted) break;
       const text = texts.get(file);
-      const checked = text === undefined || !isTypeScriptSource(file) ? undefined : checkSites(file, text, group);
+      const index = text === undefined || !isTypeScriptSource(file) ? undefined : indexOf(file);
+      const checked = index === undefined ? undefined : checkSites(index, text!, group);
       if (checked !== undefined) shapes.set(file, checked.shape);
       const checks = checked?.matches ?? new Map<number, "valid" | "local">();
       for (const { site, index } of group) {
@@ -104,13 +122,24 @@ export function createImportOrigins(sources: readonly SourceFile[]): ImportOrigi
   } };
 }
 
-/** Check each graph spelling at its exact 1-based UTF-16 position in one temporary tree. */
-function checkSites(file: string, text: string, group: readonly { site: ImportOriginSite; index: number }[]): { matches: Map<number, "valid" | "local">; shape: FileShape } {
-  const result = new Map<number, "valid" | "local">();
-  const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
+function indexed(source: ts.SourceFile): FileIndex | undefined {
   const diagnostics = (source as ts.SourceFile & { parseDiagnostics: readonly ts.Diagnostic[] }).parseDiagnostics;
-  if (diagnostics.some((diagnostic) => diagnostic.category === ts.DiagnosticCategory.Error)) return { matches: result, shape: { bindings: new Map(), declared: new Set() } };
-  const shape = describeTree(source);
+  if (diagnostics.some((diagnostic) => diagnostic.category === ts.DiagnosticCategory.Error)) return undefined;
+  const starting = new Map<number, ts.Node[]>();
+  const visit = (node: ts.Node): void => {
+    const start = node.getStart(source);
+    const list = starting.get(start);
+    if (list === undefined) starting.set(start, [node]);
+    else list.push(node);
+    node.forEachChild(visit);
+  };
+  visit(source);
+  return { source, shape: describeTree(source), starting };
+}
+
+/** Check each graph spelling at its exact 1-based UTF-16 position in the file's tree. */
+function checkSites({ source, shape, starting }: FileIndex, text: string, group: readonly { site: ImportOriginSite; index: number }[]): { matches: Map<number, "valid" | "local">; shape: FileShape } {
+  const result = new Map<number, "valid" | "local">();
   const starts = source.getLineStarts();
   const wanted = new Map<number, { site: ImportOriginSite; index: number }[]>();
   for (const item of group) {
@@ -124,19 +153,14 @@ function checkSites(file: string, text: string, group: readonly { site: ImportOr
     list.push(item); wanted.set(point, list);
   }
   const matches = new Map<number, ts.Node[]>();
-  const visit = (node: ts.Node): void => {
-    const candidates = wanted.get(node.getStart(source));
-    if (candidates !== undefined) for (const { site, index } of candidates) {
-      const expr = site.kind === "calls" && ts.isCallExpression(node) ? node.expression : site.kind === "instantiates" && ts.isNewExpression(node) ? node.expression : undefined;
-      if (expr !== undefined && syntaxName(expr, source) === site.fullName) {
-        const found = matches.get(index) ?? []; found.push(expr); matches.set(index, found);
-      } else if (matchesReferenceKind(node, site.kind) && syntaxName(node, source) === site.fullName) {
-        const found = matches.get(index) ?? []; found.push(node); matches.set(index, found);
-      }
+  for (const [point, candidates] of wanted) for (const node of starting.get(point) ?? []) for (const { site, index } of candidates) {
+    const expr = site.kind === "calls" && ts.isCallExpression(node) ? node.expression : site.kind === "instantiates" && ts.isNewExpression(node) ? node.expression : undefined;
+    if (expr !== undefined && syntaxName(expr, source) === site.fullName) {
+      const found = matches.get(index) ?? []; found.push(expr); matches.set(index, found);
+    } else if (matchesReferenceKind(node, site.kind) && syntaxName(node, source) === site.fullName) {
+      const found = matches.get(index) ?? []; found.push(node); matches.set(index, found);
     }
-    node.forEachChild(visit);
-  };
-  visit(source);
+  }
   const scopes = new WeakMap<ts.Node, { unsafe: boolean; names: ReadonlySet<string> }>();
   for (const { site, index } of group) {
     const found = matches.get(index);

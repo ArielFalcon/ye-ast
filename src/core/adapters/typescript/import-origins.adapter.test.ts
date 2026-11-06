@@ -1,6 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createImportOrigins } from "./import-origins.adapter.ts";
+import { sourceTree } from "./source-tree.ts";
+import ts from "typescript";
 import type { ImportOrigin } from "../../domain/relations/resolved-reference.ts";
 import type { Finding } from "../../domain/shared/fact.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
@@ -224,4 +226,16 @@ test("an import-equals require binds its name to the module it names, unless the
     { status: "complete", value: { kind: "external", module: "rxjs" }, occurrence: true, evidence: [{ path: "src/legacy.ts", line: 2 }] },
     { status: "unknown", reason: "unresolved", occurrence: true, evidence: [{ path: "src/shadow.ts", line: 2 }] },
   ]);
+});
+
+test("a reader parses a file once however many times its sites are asked, and answers each ask the same", async () => {
+  const parsed: string[] = [];
+  const reader = createImportOrigins(SOURCES, (file) => (parsed.push(file.path), sourceTree({ ...file }, ts.ScriptTarget.Latest, true)));
+  const ask = (line: number, name: string) => reader.origins([{ file: PAGE.path, line, column: 1, name, fullName: name, kind: "calls" }]);
+
+  const answers = [await ask(11, "Store"), await ask(12, "helper"), await ask(11, "Store")];
+
+  assert.deepEqual(parsed, [PAGE.path]);
+  assert.deepEqual(answers[0], answers[2]);
+  assert.deepEqual(only(answers[1]!), { status: "complete", value: { kind: "repository", file: "src/local.ts" }, occurrence: true, evidence: [{ path: "src/page.ts", line: 12 }] });
 });
