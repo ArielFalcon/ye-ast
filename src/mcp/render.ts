@@ -866,11 +866,11 @@ function impactLookups(value: ImpactValue, path: string, context?: RenderContext
   return lines;
 }
 
-function impactCutLookup(cuts: readonly Cut[], path: string, context?: RenderContext, mode: ResponseMode = "details"): string[] {
+function impactCutLookup(cuts: readonly Cut[], path: string, context?: RenderContext): string[] {
   if (cuts.length === 0) return [];
   const example = { kind: "cut-places", owner: { kind: "fact" }, cutIndex: 0 } as const;
   return [
-    ...(mode === "full" && context !== undefined && canSelect(context, example, false) ? [`  lookup example: ${literalSelection(example)}`] : []),
+    ...(context !== undefined && canSelect(context, example, false) ? [`  lookup example: ${literalSelection(example)}`] : []),
     `  ${context?.recovery?.status === "unavailable" ? "Recorded coordinates" : "Selection lookup"}: cutIndex is the zero-based position in ${path}; owner identifies the fact, entrypoints section, repository section or indexed read.
   Before treating this result as exhaustive, inspect ${path}: filter by kind and the relevant anchor in at; a recorded limit explains where coverage stopped. Full JSON does not extend that coverage.`,
     ...(cuts.some((cut) => cut.kind === "unresolved-link") ? [`  For unresolved-link in ${path}, at[0] names the unresolved file/declaration anchor and the remaining at entries locate potential references; they are not verified calls.`] : []),
@@ -898,52 +898,77 @@ function unknownImpactGuide(): string[] {
   return ["Investigation guide:", "  Analysis is unknown, not a verified absence of impact. Inspect reason and evidence in the result JSON (full mode includes the full fact) to establish the missing prerequisite before retrying; there is no value to search."];
 }
 
-function localImpactGuide(fact: Fact<ImpactValue> & { status: "complete" | "partial" }, mode: ResponseMode = "details", context?: RenderContext): string[] {
+function localImpactGuide(fact: Fact<ImpactValue> & { status: "complete" | "partial" }, context?: RenderContext): string[] {
   const lookups = impactLookups(fact.value, "value", context);
   if (lookups.length === 0 && fact.status === "complete") return ["There are no recorded consequences or walk origins within the declared scope and change selection."];
   return [
     "Investigation guide:",
-    mode === "full" ? "  JSON navigation: paths below are relative to the result JSON." : "  Full JSON navigation (available in full mode): paths below are relative to the result JSON; query the returned payload directly when already included.",
+    "  JSON navigation: paths below are relative to the result JSON.",
     ...lookups,
     ...(lookups.length === 0 ? ["  There are no recorded consequences or walk origins in this answer. Read inputs.declaredScope and inputs.declaredConfig before interpreting that scoped emptiness."] : []),
-    ...impactCutLookup(cutsOf(fact), "cuts", context, mode),
+    ...impactCutLookup(cutsOf(fact), "cuts", context),
+    ...localQueryCoordinates(fact, context),
+  ];
+}
+
+function localQueryCoordinates(fact: Fact<ImpactValue> & { status: "complete" | "partial" }, context?: RenderContext): string[] {
+  return [
     ...baseModuleGuides(fact.value, fact.snapshot.repo, fact.value.mergeBase, "value", fact.snapshot.kind === "sha" && fact.value.mergeBase !== undefined && context?.tool !== "callers"),
     impactSnapshotGuide(fact.snapshot, fact.value.mergeBase, context, fact.value.modules?.modules.some((module) => module.snapshot === "base")),
   ];
 }
 
-function workspaceImpactGuide(fact: Fact<WorkspaceImpactValue> & { status: "complete" | "partial" }, mode: ResponseMode = "details", context?: RenderContext): string[] {
+function workspaceImpactGuide(fact: Fact<WorkspaceImpactValue> & { status: "complete" | "partial" }, context?: RenderContext): string[] {
   const { value } = fact;
   const trigger = value.sections[value.trigger.repo];
   const originPath = `value.sections[${JSON.stringify(value.trigger.repo)}].value.impact`;
   const otherImpacts = Object.entries(value.sections).flatMap(([repo, section]) => repo === value.trigger.repo || section.status === "unknown" || section.value.impact === undefined ? [] : [section.value.impact]);
   return [
     "Investigation guide:",
-    mode === "full" ? "  JSON navigation: paths below are relative to the result JSON." : "  Full JSON navigation (available in full mode): paths below are relative to the result JSON; query the returned payload directly when already included.",
+    "  JSON navigation: paths below are relative to the result JSON.",
     ...(Object.keys(value.sections).length === 0 ? [] : ["  Select value.sections by the exact repository key, not a shared relative file path. Check section.status and, when present, section.reason/cuts and section.value.reads[].fact status/reason before using its evidence; an unknown section has no value."]),
     ...(trigger?.status !== "unknown" && trigger?.value.impact !== undefined ? [`  The originating repository's walk is at ${originPath}.`, ...impactLookups(trigger.value.impact, originPath, context)] : []),
     ...(otherImpacts.length === 0 ? [] : ["  Other repository walks are at value.sections[repo].value.impact only when that field exists. In each walk, entrypoints[].seeds indexes that same walk's seeds array; never join origins across repositories."]),
     ...(value.links.length === 0 ? [] : ["  To follow a cross-repository consequence, filter value.links by link.from (repo/file/symbol/line) or link.to (repo/name/handler). Each reach contains link IDs in recorded order: resolve them against value.links[].link.id, not the text's display numbers. Retain direction, basis and confidence; reach does not establish an unrecorded path inside a repository."]),
     ...(value.workspace.unserved.length === 0 ? [] : ["  For missing service coverage, inspect value.workspace.unserved and section.value.external when present. Use ye_ast_workspace to investigate outward-name evidence and candidate local repositories; adding workspace.repos changes the query's coverage rather than filtering this fact."]),
-    ...impactCutLookup(cutsOf(fact), "cuts", context, mode),
+    ...impactCutLookup(cutsOf(fact), "cuts", context),
     ...(Object.values(value.sections).some((section) => section.status === "partial") ? ["  Repository-local limits remain in value.sections[repo].cuts; inspect contributing section.value.reads[].fact too. Do not treat a complete independent read as resolving an unknown contributing read."] : []),
-    "  For a related callers or outline query about head evidence choose the recorded owner with repo and its own snapshot from value.repositorySnapshots; base-side modules require their owning walk's recorded merge base instead. An undeclared owner requires a host registration update or an instance bound to that clone. A symbol name may match multiple declarations.",
-    ...Object.entries(value.sections).flatMap(([repo, section]) => section.status === "unknown" || section.value.impact === undefined ? [] : baseModuleGuides(section.value.impact, repo, section.value.impact.mergeBase ?? (repo === value.trigger.repo ? value.trigger.mergeBase : undefined), `value.sections[${JSON.stringify(repo)}].value.impact`)),
+    WORKSPACE_OWNER_GUIDE,
+    ...workspaceBaseModuleGuides(value),
     ...value.links.map(({ link }) => {
       const snapshot = value.repositorySnapshots.find((entry) => entry.repo === link.to.repo)?.snapshot;
       const coordinate = snapshot === undefined ? "snapshot unavailable" : snapshot.kind === "sha" ? `revision ${JSON.stringify(snapshot.sha)}` : `earlier live head ${JSON.stringify(snapshot.head)} stateId ${JSON.stringify(snapshot.stateId)}; a fresh live query must be compared`;
       return `  Destination: repo ${JSON.stringify(link.to.repo)}, ${coordinate}, file ${JSON.stringify(link.to.handler.path)}, symbol ${JSON.stringify(link.to.handler.symbol)}. Use outline or callers on the declared owner.`;
     }),
-    impactSnapshotGuide(fact.snapshot, value.trigger.mergeBase, context, Object.values(value.sections).some((section) => section.status !== "unknown" && section.value.impact?.modules?.modules.some((module) => module.snapshot === "base"))),
+    workspaceSnapshotGuide(fact, context),
   ];
 }
 
+const WORKSPACE_OWNER_GUIDE = "  For a related callers or outline query about head evidence choose the recorded owner with repo and its own snapshot from the repositories line (value.repositorySnapshots); base-side modules require their owning walk's recorded merge base instead. An undeclared owner requires a host registration update or an instance bound to that clone. A symbol name may match multiple declarations.";
+
+function workspaceBaseModuleGuides(value: WorkspaceImpactValue): string[] {
+  return Object.entries(value.sections).flatMap(([repo, section]) => section.status === "unknown" || section.value.impact === undefined ? [] : baseModuleGuides(section.value.impact, repo, section.value.impact.mergeBase ?? (repo === value.trigger.repo ? value.trigger.mergeBase : undefined), `value.sections[${JSON.stringify(repo)}].value.impact`));
+}
+
+function workspaceSnapshotGuide(fact: Fact<WorkspaceImpactValue> & { status: "complete" | "partial" }, context?: RenderContext): string {
+  const { value } = fact;
+  return impactSnapshotGuide(fact.snapshot, value.trigger.mergeBase, context, Object.values(value.sections).some((section) => section.status !== "unknown" && section.value.impact?.modules?.modules.some((module) => module.snapshot === "base")));
+}
+
+/**
+ * Summary and details carry no fact JSON, so JSON paths belong to full mode; the text keeps only the coordinates a
+ * follow-up query needs.
+ */
+function textModeGuide(coordinates: readonly string[]): string[] {
+  return ["Investigation guide:", '  mode: "full" returns the result JSON with the paths to every omitted item.', ...coordinates];
+}
+
 export function renderImpact(fact: Fact<ImpactValue>, detail: ResponseMode = "summary", context?: RenderContext): string {
-  if (detail === "full") return (fact.status === "unknown" ? unknownImpactGuide() : localImpactGuide(fact, "full", context)).join("\n");
+  if (detail === "full") return (fact.status === "unknown" ? unknownImpactGuide() : localImpactGuide(fact, context)).join("\n");
   const lines = headerLines(fact);
   if (fact.status === "unknown") return [...lines, ...unknownImpactGuide()].join("\n");
   const hasOmissions = fact.status === "partial" || fact.value.entrypoints.some((entrypoint) => entrypoint.seeds.length > 1) || consequenceSymbols(fact.value).length > investigationSymbols(fact.value).length || fact.value.modules !== undefined;
-  lines.push(...impactBody(fact.value, detail, { kind: "local" }, context), ...impactSeeds(fact.value, detail), ...impactCutBlock(cutsOf(fact), detail, { kind: "fact" }, context), ...(hasOmissions ? localImpactGuide(fact, "details", context) : []));
+  lines.push(...impactBody(fact.value, detail, { kind: "local" }, context), ...impactSeeds(fact.value, detail), ...impactCutBlock(cutsOf(fact), detail, { kind: "fact" }, context), ...(hasOmissions ? textModeGuide(localQueryCoordinates(fact, context)) : []));
   return lines.join("\n");
 }
 
@@ -1071,7 +1096,7 @@ function repoImpactLines(repo: string, section: Fact<RepoImpact>, detail: Respon
 }
 
 export function renderWorkspaceImpact(fact: Fact<WorkspaceImpactValue>, detail: ResponseMode = "summary", context?: RenderContext): string {
-  if (detail === "full") return (fact.status === "unknown" ? unknownImpactGuide() : workspaceImpactGuide(fact, "full", context)).join("\n");
+  if (detail === "full") return (fact.status === "unknown" ? unknownImpactGuide() : workspaceImpactGuide(fact, context)).join("\n");
   const lines = headerLines(fact);
   if (fact.status === "unknown") return [...lines, ...unknownImpactGuide()].join("\n");
   const { value } = fact;
@@ -1105,7 +1130,7 @@ export function renderWorkspaceImpact(fact: Fact<WorkspaceImpactValue>, detail: 
       if (read.status === "partial") lines.push(`cuts for repository ${repo} read ${index}:`, ...impactCutBlock(read.cuts, detail, { kind: "read", repo, index }, context).slice(1));
     });
   }
-  lines.push(...workspaceImpactGuide(fact, "details", context));
+  lines.push(...textModeGuide([WORKSPACE_OWNER_GUIDE, ...workspaceBaseModuleGuides(value), workspaceSnapshotGuide(fact, context)]));
   return lines.join("\n");
 }
 

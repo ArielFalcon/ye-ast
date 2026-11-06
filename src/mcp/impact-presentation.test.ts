@@ -179,11 +179,15 @@ test("impact guidance explains contextual full lookups and the origin-index join
   const value: ImpactValue = { ...impact, symbols: [{ file: "caller.ts", symbol: "use", kind: "function", line: 12, depth: 1, confidence: 1, fanIn: 0, via: { file: "first.ts", symbol: "first", lines: [15], basis: "reference" } }] };
   for (const detail of ["summary", "details"] as const) {
     const guide = renderImpact({ ...fact, value }, detail).split("Investigation guide:")[1] ?? "";
+    assert.match(guide, /mode: "full"/);
+    assert.doesNotMatch(guide, /value\.entrypoints|value\.symbols|value\.seeds/);
+  }
+  {
+    const guide = renderImpact({ ...fact, value }, "full").split("Investigation guide:")[1] ?? "";
     assert.ok(guide.includes("value.entrypoints"));
     assert.ok(guide.includes("handler.path") && guide.includes("handler.symbol") && guide.includes("handler.line"));
     assert.ok(guide.includes("zero-based") && guide.includes("value.seeds"));
     assert.ok(guide.includes("value.symbols") && guide.includes("via.lines") && guide.includes("symbol's own file"));
-    assert.ok(guide.includes("full mode"));
     assert.ok(guide.includes("same snapshot"));
     assert.doesNotMatch(guide, /value\.links|value\.sections/);
   }
@@ -196,7 +200,9 @@ test("workspace guidance qualifies repository payloads and joins reach IDs rathe
     sections: { a: { ...base, status: "complete", value: { reads: [], impact, callSites: [], unmatched: [], external: [], unresolved: [] } }, b: { ...base, status: "unknown", reason: "index-unavailable" } },
     links: [{ link, direction: "downstream", reach: ["link-a"] }],
   };
-  const guide = renderWorkspaceImpact({ ...base, status: "complete", value }, "details").split("Investigation guide:")[1] ?? "";
+  const text = renderWorkspaceImpact({ ...base, status: "complete", value }, "details").split("Investigation guide:")[1] ?? "";
+  assert.doesNotMatch(text, /value\.sections|value\.links|Destination:/);
+  const guide = renderWorkspaceImpact({ ...base, status: "complete", value }, "full").split("Investigation guide:")[1] ?? "";
   assert.ok(guide.includes('value.sections["a"].value.impact'));
   assert.ok(guide.includes("section.status") && guide.includes("value.reads"));
   assert.ok(guide.includes("value.links") && guide.includes("reach") && guide.includes("link.id"));
