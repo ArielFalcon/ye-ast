@@ -102,3 +102,17 @@ test("a leaf folded from a deferred occurrence stays deferred, apart from a dire
     { symbol: "leaf", file: "src/leaf.ts", start: 10, end: 14, deferred: true },
   ]);
 });
+
+test("a chain far deeper than the call stack numbers and emits every step in pre-order", () => {
+  const length = 20_000;
+  const root = walked("s0", { external: CALLS });
+  let tail = root;
+  for (let index = 1; index < length; index += 1) {
+    const next = walked(`s${index}`, { external: CALLS });
+    tail.children.push(next);
+    tail = next;
+  }
+  const { steps } = traceSteps([root]);
+  assert.equal(steps.length, length);
+  assert.deepEqual(steps.at(-1), { id: length - 1, parent: length - 2, depth: length - 1, file: `src/s${length - 1}.ts`, symbol: `s${length - 1}`, kind: "function", line: 10, endLine: 14, external: [{ kind: "unnamed", names: ["x.get"] }] });
+});

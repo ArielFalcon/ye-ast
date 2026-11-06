@@ -44,43 +44,43 @@ function folds(step: WalkedStep): boolean {
  */
 export function traceSteps(roots: readonly WalkedStep[]): { steps: TraceStep[]; ids: ReadonlyMap<WalkedStep, number> } {
   const ids = new Map<WalkedStep, number>();
-  const number = (step: WalkedStep): void => {
-    ids.set(step, ids.size);
-    for (const child of step.children) if (!folds(child)) number(child);
-  };
-  for (const root of roots) number(root);
-
   const steps: TraceStep[] = [];
-  const emit = (step: WalkedStep, depth: number, parent?: number): void => {
-    const id = ids.get(step)!;
-    const { file, symbol, kind, start, end } = step.declaration;
-    /** A root seen at a declaration folded below an earlier root stands alone: that declaration has no step. */
-    const seen = step.seen === undefined ? undefined : ids.get(step.seen);
-    const folded = step.children.filter(folds);
-    const leaves = [...new Map(folded.map(({ declaration, deferred }): [string, TraceLeaf] => [
-      JSON.stringify([declaration.key, deferred === true]),
-      { symbol: declaration.symbol, file: declaration.file, start: declaration.start, end: declaration.end, ...(deferred === undefined ? {} : { deferred }) },
-    ])).values()];
-    steps.push({
-      id,
-      ...(parent === undefined ? {} : { parent }),
-      depth,
-      file,
-      symbol,
-      kind,
-      line: start,
-      ...(end === start ? {} : { endLine: end }),
-      ...(step.at === undefined ? {} : { at: step.at }),
-      ...(step.via === undefined ? {} : { via: step.via }),
-      ...(step.deferred === undefined ? {} : { deferred: step.deferred }),
-      ...(seen === undefined ? {} : { seen }),
-      ...(leaves.length === 0 ? {} : { leaves }),
-      ...(step.external.length === 0 ? {} : { external: groupedByModule(step.external) }),
-    });
-    for (const child of step.children) if (!folds(child)) emit(child, depth + 1, id);
-  };
-  for (const root of roots) emit(root, 0);
+  const pending: { step: WalkedStep; depth: number; parent?: number }[] = roots.map((step) => ({ step, depth: 0 })).reverse();
+  for (let next = pending.pop(); next !== undefined; next = pending.pop()) {
+    const { step, depth, parent } = next;
+    const id = ids.size;
+    ids.set(step, id);
+    steps.push(stepOf(step, id, depth, parent, ids));
+    const expanded = step.children.filter((child) => !folds(child));
+    for (let index = expanded.length - 1; index >= 0; index -= 1) pending.push({ step: expanded[index]!, depth: depth + 1, parent: id });
+  }
   return { steps, ids };
+}
+
+function stepOf(step: WalkedStep, id: number, depth: number, parent: number | undefined, ids: ReadonlyMap<WalkedStep, number>): TraceStep {
+  const { file, symbol, kind, start, end } = step.declaration;
+  /** A root seen at a declaration folded below an earlier root stands alone: that declaration has no step. */
+  const seen = step.seen === undefined ? undefined : ids.get(step.seen);
+  const leaves = [...new Map(step.children.filter(folds).map(({ declaration, deferred }): [string, TraceLeaf] => [
+    JSON.stringify([declaration.key, deferred === true]),
+    { symbol: declaration.symbol, file: declaration.file, start: declaration.start, end: declaration.end, ...(deferred === undefined ? {} : { deferred }) },
+  ])).values()];
+  return {
+    id,
+    ...(parent === undefined ? {} : { parent }),
+    depth,
+    file,
+    symbol,
+    kind,
+    line: start,
+    ...(end === start ? {} : { endLine: end }),
+    ...(step.at === undefined ? {} : { at: step.at }),
+    ...(step.via === undefined ? {} : { via: step.via }),
+    ...(step.deferred === undefined ? {} : { deferred: step.deferred }),
+    ...(seen === undefined ? {} : { seen }),
+    ...(leaves.length === 0 ? {} : { leaves }),
+    ...(step.external.length === 0 ? {} : { external: groupedByModule(step.external) }),
+  };
 }
 
 const KIND_ORDER: readonly ExternalCall["kind"][] = ["import", "global", "unnamed"];

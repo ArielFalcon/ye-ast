@@ -608,3 +608,31 @@ test("a measured map writes its export and entrypoint stages before its query li
   const records = lines.map((line) => JSON.parse(line).ye_ast as { event: string; stage?: string });
   assert.deepEqual(records.map((record) => record.stage ?? record.event), ["export", "entrypoints", "query"]);
 });
+
+test("a trace over a real index charges an anonymous callback to its encloser, defers a named one passed as a value, and never reaches an unused nested function", async () => {
+  writeFileSync(join(repo, "src", "flow.ts"), [
+    "export function run(items: number[]): number[] {",
+    "  function unused(): void {}",
+    "  const named = (value: number): number => value + 1;",
+    "  items.forEach((item) => helper(item));",
+    "  return items.map(named);",
+    "}",
+    "export function helper(value: number): number {",
+    "  return value * 2;",
+    "}",
+    "",
+  ].join("\n"));
+  git("add", "-A");
+  git("commit", "-q", "-m", "flow");
+  const { trace } = composeQueries({ scratchRoot });
+
+  const answer = await trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: "src/flow.ts", symbol: "run" }] });
+
+  assert.ok(answer.ok);
+  assert.equal(answer.value.status, "complete");
+  assert.deepEqual(answer.value.status === "complete" && answer.value.value.steps, [{
+    id: 0, depth: 0, file: "src/flow.ts", symbol: "run", kind: "function", line: 1, endLine: 6,
+    leaves: [{ symbol: "helper", file: "src/flow.ts", start: 7, end: 9 }, { symbol: "named", file: "src/flow.ts", start: 3, end: 3, deferred: true }],
+    external: [{ kind: "unnamed", names: ["items.forEach", "items.map"] }],
+  }]);
+});

@@ -6,6 +6,7 @@ import type { TraceStep, TraceValue } from "../../domain/trace/trace-fact.ts";
 import type { ImportOriginSite } from "../../ports/import-origins.port.ts";
 import type { CallersTarget } from "../../ports/impact-queries.port.ts";
 import type { TraceBudget, TraceRequest } from "../../ports/trace-queries.port.ts";
+import { fakeLive, type FakeLive } from "../live/fake-live.testing.ts";
 import { fakeCodeGraph, fakeNode, type FakeEdge, type FakeNode, type FakeUnresolved } from "../impact/fake-code-graph.testing.ts";
 import { createTraceQueries, type TraceQueriesDeps } from "./trace-queries.ts";
 
@@ -26,11 +27,16 @@ interface Options {
   onOrigins?: () => void;
   matches?: (path: string, glob: string) => boolean;
   indexFails?: boolean;
+  live?: FakeLive;
+  /** What every read of the store's edges throws. */
+  storeFails?: Error;
 }
 
 function setup(options: Options) {
   const log = { closed: 0 };
-  const store = { ...fakeCodeGraph(options.nodes, options.edges ?? [], options.unresolved ?? []), close: () => void (log.closed += 1) };
+  const graph = fakeCodeGraph(options.nodes, options.edges ?? [], options.unresolved ?? []);
+  const failing = options.storeFails;
+  const store = { ...graph, ...(failing && { outgoingEdges: () => { throw failing; } }), close: () => void (log.closed += 1) };
   const answer = (site: ImportOriginSite): Origin => {
     const origin = site.fullName === undefined ? undefined : options.origins?.[site.fullName];
     return origin === undefined ? { status: "unknown", reason: "unresolved", evidence: [] } : { status: "complete", value: origin, evidence: [], occurrence: true };
@@ -52,6 +58,7 @@ function setup(options: Options) {
     },
     importOrigins: () => ({ origins: async (sites: readonly ImportOriginSite[]) => { options.onOrigins?.(); return sites.map(answer); } }),
     engines: {},
+    ...(options.live && { live: options.live.deps, trust: { read: async () => ({ ok: true, value: "trusted" }) } }),
   } as unknown as TraceQueriesDeps;
   return { queries: createTraceQueries(deps), log };
 }
@@ -257,6 +264,11 @@ test("a proven terminal callee folds into its caller's leaves with its location"
   assert.deepEqual(valueOf(fact).steps.map((step) => [step.symbol, step.leaves]), [["run", [{ symbol: "getId", file: B, start: 3, end: 5 }]]]);
 });
 
+test("a terminal callee passed as a value folds deferred, and a direct call to it beside folds as a separate plain leaf", async () => {
+  const fact = await factOf({ nodes: [SVC, RUN, callee("onDone", B, 3)], edges: [...CONTAINS, call("run", "onDone", 8, 4), { from: "run", to: "onDone", kind: "references", line: 9, column: 15 }] });
+  assert.deepEqual(valueOf(fact).steps.map((step) => [step.symbol, step.leaves]), [["run", [{ symbol: "onDone", file: B, start: 3, end: 5 }, { symbol: "onDone", file: B, start: 3, end: 5, deferred: true }]]]);
+});
+
 test("a callee whose only call is unsettled stays a step", async () => {
   const fact = await factOf({ nodes: [SVC, RUN, callee("open")], edges: [...CONTAINS, call("run", "open", 8, 4)], unresolved: [{ from: "open", name: "(x)[k]", kind: "calls", file: A, line: 31, column: 2 }] });
   assert.deepEqual(valueOf(fact).steps.map((step) => step.symbol), ["run", "open"]);
@@ -329,5 +341,25 @@ test("aborting during the walk answers the cancellation fault and closes the sto
   );
   assert.ok(!answer.ok);
   assert.equal(answer.fault.kind, "aborted");
+  assert.equal(log.closed, 1);
+});
+
+test("a live trace reads the held mirror of a trusted repository, answers at a live snapshot and releases the mirror and the store", async () => {
+  const mirror = fakeLive({ [A]: "1" });
+  const { queries, log } = setup({ nodes: [SVC, RUN, callee("getId")], edges: [...CONTAINS, call("run", "getId", 8, 4)], live: mirror });
+
+  const answer = await queries.walk({ repo: "/work/shop", repoId: "shop", targets: [{ file: A, symbol: "run" }], live: true });
+
+  assert.ok(answer.ok);
+  assert.equal(answer.value.snapshot.kind, "live");
+  assert.deepEqual(valueOf(answer.value).steps.map((step) => [step.symbol, step.leaves?.map(({ symbol }) => symbol)]), [["run", ["getId"]]]);
+  assert.deepEqual([log.closed, mirror.held], [1, { locks: 1, released: 1 }]);
+});
+
+test("a store that fails while the walk reads it closes and fails with its own error, never an empty trace", async () => {
+  const failure = new RangeError("store read failed");
+  const { queries, log } = setup({ nodes: [SVC, RUN], edges: CONTAINS, storeFails: failure });
+
+  await assert.rejects(queries.walk({ repo: "/work/shop", repoId: "shop", revision: "HEAD", targets: [{ file: A, symbol: "run" }] }), (error) => error === failure);
   assert.equal(log.closed, 1);
 });
