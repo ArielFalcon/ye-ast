@@ -43,6 +43,7 @@ const NONE: LiveDiscards = { scopes: [], debris: [] };
 function lastUsed(scope: LiveScopeUsage): number {
   return scope.lastUsedMs ?? 0;
 }
+
 function leastRecentFirst(a: LiveScopeUsage, b: LiveScopeUsage): number {
   return lastUsed(a) - lastUsed(b) || compareText(a.scope, b.scope);
 }

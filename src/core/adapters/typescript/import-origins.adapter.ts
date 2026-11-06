@@ -12,6 +12,8 @@ import type { RootOrigin } from "../../domain/impact/edge-policy.ts";
 import type { ImportOriginSite, ImportOrigins, ResolvedNameSite, RootBinding, UseSite } from "../../ports/import-origins.port.ts";
 import { createModuleResolver, manifestPackages, packageOf } from "./module-resolver.ts";
 import { TYPESCRIPT_LIB_GLOBALS } from "./typescript-lib-globals.ts";
+import { parseAngularRouteFile } from "./angular-router.extractor.ts";
+import { createDeclarationLookup, type ModuleShape } from "./declaration-lookup.ts";
 
 /** The names the pinned `typescript` declares, held once for the process rather than rebuilt per query. */
 const LIB_GLOBALS = new Set(TYPESCRIPT_LIB_GLOBALS);
@@ -46,6 +48,16 @@ export function createImportOrigins(sources: readonly SourceFile[], parse: Parse
   const texts = new Map(sources.map((file) => [file.path, file.content]));
   const files = new Map(sources.map((file) => [file.path, file]));
   const modules = createModuleResolver(async (file) => texts.get(file), manifestPackages(sources));
+  /** What each file exports, read once and only when a namespace member asks. */
+  const moduleShapes = new Map<string, ModuleShape | undefined>();
+  function moduleShapeOf(file: string): ModuleShape | undefined {
+    if (!moduleShapes.has(file)) moduleShapes.set(file, texts.has(file) && isTypeScriptSource(file) ? parseAngularRouteFile(file, texts.get(file)!) : undefined);
+    return moduleShapes.get(file);
+  }
+  const exportedDeclaration = createDeclarationLookup(async (file) => moduleShapeOf(file), async (from, specifier) => {
+    const resolved = await modules.resolve(from, specifier);
+    return "file" in resolved ? resolved.file : undefined;
+  });
   const shapes = new Map<string, FileShape>();
   const parameterStarts = new Map<string, ReadonlySet<number>>();
   /** A file is bound once for the life of the reader, and only the places of its parameter uses are kept (ADR-0029). */
@@ -171,6 +183,11 @@ export function createImportOrigins(sources: readonly SourceFile[], parse: Parse
 
   async function importBinding(file: string, specifier: string, root: string, member: string | undefined): Promise<RootBinding> {
     const resolved = await modules.resolve(file, specifier);
+    /** A member of a namespace import is the declaration the module exports under its name, followed through re-exports. */
+    if ("file" in resolved && moduleShapeOf(file)?.imports.get(root)?.imported === "*") {
+      const declaration = member === undefined ? undefined : await exportedDeclaration(resolved.file, member);
+      return declaration === undefined ? UNKNOWN_BINDING : { kind: "located", root, file: declaration.file, path: declaration.name };
+    }
     const named = { root, ...(member === undefined ? {} : { member }) };
     if ("file" in resolved) return { kind: "import", ...named, origin: { kind: "repository", file: resolved.file } };
     const module = packageOf(specifier);
@@ -220,16 +237,23 @@ function chainAt({ source, starting }: FileIndex, text: string, site: UseSite): 
   if (point >= (site.line < starts.length ? starts[site.line]! : text.length)) return undefined;
   for (const node of starting.get(point) ?? []) {
     const spelled = ts.isIdentifier(node) ? node.text : node.kind === ts.SyntaxKind.ThisKeyword || node.kind === ts.SyntaxKind.SuperKeyword ? node.getText(source) : undefined;
-    const whole = ts.isNewExpression(node) || spelled === site.spelled ? wholeChain(node) : undefined;
+    const whole = ts.isNewExpression(node) || spelled !== undefined ? wholeChain(node) : undefined;
     if (whole === undefined) continue;
     const head = headOf(whole);
     const names = chainNames(whole);
-    if (ts.isNewExpression(node) && !names.includes(site.spelled)) continue;
+    if (spelled !== site.spelled && !chainNames(throughCalls(whole)).includes(site.spelled)) continue;
     if (head.kind !== ts.SyntaxKind.SuperKeyword) return { root: head, ...(names[1] === undefined ? {} : { member: names[1] }) };
     const base = superclassOf(head);
     return base === undefined ? undefined : { root: headOf(base), ...(chainNames(base)[1] === undefined ? {} : { member: chainNames(base)[1]! }) };
   }
   return undefined;
+}
+
+/** The chain `whole` begins, through the calls and assertions written on it: `a.b(x).c` from `a.b`. */
+function throughCalls(whole: ts.Node): ts.Node {
+  let chain = whole;
+  while ((ts.isCallExpression(chain.parent) || ts.isNonNullExpression(chain.parent) || ts.isPropertyAccessExpression(chain.parent)) && chain.parent.expression === chain) chain = chain.parent;
+  return chain;
 }
 
 function wholeChain(node: ts.Node): ts.Node {

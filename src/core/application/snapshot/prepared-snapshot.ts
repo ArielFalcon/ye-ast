@@ -1,14 +1,12 @@
 import { canonicalJson } from "../../domain/shared/canonical-json.ts";
-import type { DeclaredScope, TrustMode } from "../../domain/shared/fact.ts";
+import type { DeclaredScope, Finding, TrustMode } from "../../domain/shared/fact.ts";
 import type { Result } from "../../domain/shared/result.ts";
 import type { PathSelection } from "../../domain/shared/scope.ts";
 import type { ScratchDirectory } from "../../ports/scratch-directory.port.ts";
 import { isInMapScope } from "../../domain/map/entrypoint-map.ts";
-import type { VcsFault } from "../../ports/vcs.port.ts";
+import type { CommitExport, VcsFault } from "../../ports/vcs.port.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
-import type { Finding } from "../../domain/shared/fact.ts";
 import type { Entrypoint } from "../../domain/entrypoints/entrypoint.ts";
-import type { CommitExport } from "../../ports/vcs.port.ts";
 import { ABORTED, extractSources, listExport, readSources, withScratch, type CommitExtraction, type SnapshotData, type SnapshotReaderDeps, type PreparedCommit, type SnapshotPreparation } from "./read-snapshot.ts";
 
 type Sources = Pick<CommitExtraction, "export" | "sources">;

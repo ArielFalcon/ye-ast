@@ -5,7 +5,7 @@ import { fakeLive, type FakeLive } from "../live/fake-live.testing.ts";
 import type { OutlineSelector } from "../../ports/outline-queries.port.ts";
 import type { VcsFault } from "../../ports/vcs.port.ts";
 import type { ResolvedNameSite, RootBinding, UseSite } from "../../ports/import-origins.port.ts";
-import type { RootOrigin } from "../../domain/impact/edge-policy.ts";
+import { EDGE_POLICY, type RootOrigin } from "../../domain/impact/edge-policy.ts";
 import type { ModuleDependency } from "../../domain/impact/module-dependency.ts";
 import type { OutlineUse } from "../../domain/outline/outline-fact.ts";
 import { createSnapshotDataCache } from "../snapshot/snapshot-data-cache.ts";
@@ -306,7 +306,7 @@ const USES_INDEX: Options = {
     { from: "useFile", to: "helper", kind: "imports", line: 1, column: 9 },
     { from: "run", to: "helper", kind: "calls", line: 11, column: 2 },
     { from: "run", to: "helper", kind: "references", line: 15, column: 4 },
-    { from: "run", to: "Other", kind: "calls", line: 16, column: 2, synthesizedBy: "interface-impl" },
+    { from: "run", to: "Other", kind: "calls", line: 16, column: 2, synthesizedBy: EDGE_POLICY.ignoredSynthesizers[0] },
     { from: "run", to: "Node", kind: "references", line: 17, column: 10 },
     { from: "run", to: "inner", kind: "calls", line: 18, column: 2 },
     { from: "run", to: "Other", kind: "references" },
@@ -400,9 +400,10 @@ test("a name nothing proves is one unresolved-link cut at the declaration listin
   assert.deepEqual(cuts.map((cut) => [cut.kind, cut.at]), [["unresolved-link", [`${USE}::run`, `${USE}:16 process.exit`, `${USE}:20 process.cwd`]]]);
 });
 
-test("a member of a namespace a repository import binds is a use of the declaration of that name at the top of the imported file", async () => {
-  const { uses } = await usesAnswer("Svc.load");
-  assert.deepEqual(uses, [{ declaration: { file: LIB, name: "Other", kind: "class", line: 5, endLine: 9 }, relations: ["instantiates"], at: [{ line: 35, column: 5 }] }]);
+test("a repository import the join reaches no declaration of is a cut, never a top-level homonym of the name after it", async () => {
+  const { uses, cuts } = await usesAnswer("Svc.load");
+  assert.deepEqual(uses, []);
+  assert.deepEqual(cuts.map((cut) => cut.at), [[`${USE}::Svc.load`, `${USE}:35 lib.Other`]]);
 });
 
 test("a name bound to a declaration of another file by its containment path is a use of that declaration", async () => {
