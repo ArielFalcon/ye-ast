@@ -1,13 +1,13 @@
 const SOURCE = /\.[cm]?ts$/;
 const DECLARATION = /\.d\.[cm]?ts$/;
-const TEST_FILE = /\.(test|spec)\.[cm]?ts$/;
+const TEST_FILE = /\.(test|spec|e2e-spec|cy)\.[cm]?ts$/;
 const TEST_DIRECTORY = /(^|\/)__tests__\//;
 const INSTALLED_PACKAGES = /(^|\/)node_modules\//;
 const TEMPLATE = /\.html?$/;
 const MODULE_CONFIG = /(^|\/)[tj]sconfig(\.[^/]+)?\.json$/;
 const ANGULAR_WORKSPACE = /(^|\/)angular\.json$/;
 
-/** A TypeScript test: a `.test` or `.spec` module, or one under `__tests__`. */
+/** A TypeScript test: a `.test`, `.spec`, `.e2e-spec` or Cypress `.cy` module, or one under `__tests__`. */
 export function isTypeScriptTestFile(path: string): boolean {
   return TEST_FILE.test(path) || TEST_DIRECTORY.test(path);
 }

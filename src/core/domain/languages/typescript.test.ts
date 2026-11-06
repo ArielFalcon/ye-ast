@@ -16,6 +16,10 @@ test("a spec or test file, and anything under a test directory, is not a TypeScr
   assert.equal(isTypeScriptSource("src/app/app.routes.spec.ts"), false);
   assert.equal(isTypeScriptSource("src/app/app.routes.test.ts"), false);
   assert.equal(isTypeScriptSource("src/app/__tests__/routes.ts"), false);
+  assert.equal(isTypeScriptSource("e2e/src/app.e2e-spec.ts"), false);
+  assert.equal(isTypeScriptSource("cypress/e2e/orders.cy.ts"), false);
+  assert.equal(isTypeScriptSource("src/app/openapi-spec.ts"), true);
+  assert.equal(isTypeScriptSource("src/app/policy.ts"), true);
   assert.equal(isTypeScriptSource("src/app/specs.ts"), true);
   assert.equal(isTypeScriptSource("src/app/latest.ts"), true);
 });

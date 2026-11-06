@@ -15,6 +15,7 @@ import type { Relation } from "../../domain/relations/relation.ts";
 import type { MemberProofContext, MemberUseOrigin } from "../../domain/relations/member-use.ts";
 import { isExtractorConfiguration } from "../../domain/languages/configuration.ts";
 import { isAngularTemplate, isJsonModuleResource, isTypeScriptFile, isTypeScriptSource } from "../../domain/languages/typescript.ts";
+import { isJavaSource } from "../../domain/languages/java.ts";
 import { moduleImpact, moduleResources } from "../../domain/impact/module-impact.ts";
 import type { ModuleDependencies } from "../../domain/impact/module-dependency.ts";
 import type { ModuleDependenciesReader } from "../../ports/module-dependencies.port.ts";
@@ -87,7 +88,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
   const moduleSource = deps.moduleDependencies === undefined ? isInMapScope : isWritten;
   const changeDeps = { ...deps, sourceSelection: moduleSource };
   const changeReader = createHeadReader(changeDeps);
-  const importerSource = (file: string): boolean => moduleSource(file) || isTypeScriptFile(file);
+  const importerSource = (file: string): boolean => moduleSource(file) || isTypeScriptFile(file) || isJavaSource(file);
   const importerReader = createHeadReader({ ...deps, sourceSelection: importerSource });
 
   return {
