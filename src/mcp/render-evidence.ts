@@ -19,12 +19,10 @@ export function renderEvidenceSelection(input: {
       `Selection: ${JSON.stringify(select)}`,
       ...renderSourceContext(records.source),
       `Availability: ${records.availability}`,
-      records.availability === "available"
-        ? "Inspect source in the result JSON for provenance, and context, items and page for the complete selected projection."
-        : "Inspect source in the result JSON for provenance.",
     ];
     if (records.availability === "unavailable") lines.push(`Reason: ${records.reason}`, "Inspect evidence in the result JSON for the unavailable result's evidence.");
-    if (page) lines.push(`Page: ${JSON.stringify(page)}`);
+    else lines.push("Inspect context, items and page in the result JSON for the selected projection.");
+    if (page) lines.push(...pageLines(page));
     lines.push(recoveryReference(recovery));
     return lines.join("\n");
   }
@@ -37,9 +35,20 @@ export function renderEvidenceSelection(input: {
     lines.push(`Reason: ${records.reason}`, `Evidence: ${JSON.stringify(records.evidence)}`);
   } else {
     lines.push(`Context: ${JSON.stringify(records.context)}`);
-    if (page) lines.push(`Page: ${JSON.stringify(page)}`);
+    if (page) lines.push(...pageLines(page));
     lines.push(`Records: ${JSON.stringify(records.items)}`);
   }
   lines.push(recoveryReference(recovery));
   return lines.join("\n");
+}
+
+/**
+ * A page and, only when more records remain, how to fetch the next one: the original recipe, the same select and limit,
+ * the cursor and the identity. A page without a cursor is the last of this selection, not of the analysis.
+ */
+function pageLines(page: EvidencePage): string[] {
+  return [
+    `Page: ${JSON.stringify(page)}`,
+    ...(page.nextCursor === undefined ? [] : ["Next page: recovery.query with the same select and page.limit, page.cursor set to nextCursor, and expect set to recovery.resultIdentity."]),
+  ];
 }

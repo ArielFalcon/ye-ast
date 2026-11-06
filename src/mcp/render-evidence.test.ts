@@ -54,8 +54,8 @@ test("full selection guides the complete structured page without serializing its
   const records = { source, availability: "available", kind: "cut-places", context: { owner: { kind: "fact" }, snapshot: source.snapshot, analysis: { status: "partial" }, cutIndex: 2, kind: "depth", anchor: "anchor" }, items: [{ atIndex: 2, place: "unique-place" }] } as EvidenceSelectionResult;
   const recovery = { version: 1 as const, status: "available" as const, resultIdentity: "identity", query: { name: "ye_ast_callers" as const, arguments: { revision: "sha" } } };
   const text = renderEvidenceSelection({ mode: "full", select: { kind: "cut-places", owner: { kind: "fact" }, cutIndex: 2 }, records, page: { limit: 1, offset: 1, returned: 1, total: 2, nextCursor: "next" }, recovery });
-  assert.match(text, /source in the result JSON/);
-  assert.match(text, /result JSON.*context, items and page/);
+  assert.equal(text.split("source in the result JSON").length - 1, 1);
+  assert.match(text, /context, items and page in the result JSON/);
   assert.match(text, /"limit":3/);
   assert.match(text, /"nextCursor":"next"/);
   assert.match(text, /recovery in the result JSON/);
@@ -110,4 +110,17 @@ test("selected read context inherits exactly and preserves ordered owner-specifi
     assert.deepEqual(JSON.parse(limits.slice("Source limits: ".length)), [{ owner: { kind: "section", repo: "other" }, kind: "depth", cuts: 2, places: 3, limit: 1 }]);
   }
   assert.deepEqual(records, before);
+});
+
+test("a page offers continuation only while records remain, in every mode", () => {
+  const records = { source, availability: "available", kind: "cut-places", context: { owner: { kind: "fact" }, snapshot: source.snapshot, analysis: { status: "partial" }, cutIndex: 0, kind: "depth", anchor: "anchor" }, items: [{ atIndex: 1, place: "p" }] } as EvidenceSelectionResult;
+  const recovery = { version: 1 as const, status: "available" as const, resultIdentity: "identity", query: { name: "ye_ast_impact" as const, arguments: { base: "b" } } };
+  const select = { kind: "cut-places", owner: { kind: "fact" }, cutIndex: 0 } as const;
+  for (const mode of ["summary", "details", "full"] as const) {
+    const more = renderEvidenceSelection({ mode, select, records, recovery, page: { limit: 1, offset: 0, returned: 1, total: 2, nextCursor: "cursor-1" } }).split("\n");
+    const at = more.findIndex((line) => line.startsWith("Page: "));
+    assert.match(more[at + 1]!, /^Next page: .*page\.cursor.*nextCursor.*expect.*recovery\.resultIdentity/, mode);
+    const last = renderEvidenceSelection({ mode, select, records, recovery, page: { limit: 1, offset: 1, returned: 1, total: 2 } });
+    assert.doesNotMatch(last, /Next page|cursor/, mode);
+  }
 });

@@ -4218,3 +4218,71 @@ test("compose combines public queries in every mode and verifies repeated eviden
     assert.match(textOf(missing), /unknown-repository/);
   } finally { await session.close(); }
 });
+
+/** Every complete selector a text answer prints after "lookup example:" or "select example:", parsed as JSON. */
+function printedSelectors(text: string): Record<string, unknown>[] {
+  const selectors: Record<string, unknown>[] = [];
+  for (const match of text.matchAll(/(?:lookup|select) example: \{/g)) {
+    const start = match.index + match[0].length - 1;
+    for (let end = text.indexOf("}", start); end !== -1; end = text.indexOf("}", end + 1)) {
+      try {
+        selectors.push(JSON.parse(text.slice(start, end + 1)) as Record<string, unknown>);
+        break;
+      } catch { /* not yet balanced */ }
+    }
+  }
+  return selectors;
+}
+
+test("every printed selector example executes through its recovery recipe, and pages continue only while records remain", async () => {
+  const replay = { version: 1 as const, declaration: `ws-r1:${"d".repeat(64)}`, snapshots: [{ repo: "shop", kind: "sha" as const, sha: "a".repeat(40) }] };
+  const value: ImpactValue = { ...IMPACT, modules: { origins: [{ file: "old", change: "modified" }], modules: [{ file: "old", snapshot: "base", depth: 1, origins: [0] }], cost: { expansionsUsed: 1 } } };
+  const cuts: [Cut, ...Cut[]] = [{ kind: "depth", at: ["src/OrderService.java::OrderService.find", "src/a.ts:3", "src/b.ts:4"], limit: 2 }];
+  const inputs = { ...base().inputs, declaredConfig: { targets: ["src/A.java:A.f"], walk: { depth: 2 } } };
+  const local = impactFact({ status: "partial", cuts, value, inputs });
+  const map = mapFact({ status: "partial", cuts: [{ kind: "no-extractor", at: ["src/a.js", "src/b.js"] }] } as Partial<EntrypointMapFact>);
+  const ws = workspaceImpactFact();
+  if (ws.status !== "complete") throw new Error("fixture");
+  const section: Fact<RepoImpact> = { ...base({ inputs }), status: "partial", cuts, value: { impact: value, reads: [], callSites: [], unmatched: [], external: [], unresolved: [] } };
+  const composite: Fact<WorkspaceImpactValue> = { ...ws, status: "partial", cuts: [{ kind: "section", at: ["shop"] }], inputs, value: { ...ws.value, sections: { ...ws.value.sections, shop: section } } };
+  const { session } = await setup({
+    map: async () => ({ ok: true, value: map }),
+    callers: async () => ({ ok: true, value: local }),
+    ofChange: async () => ({ ok: true, value: local }),
+    workspaceCallers: async () => ({ ok: true, value: { fact: composite, workspaceReplay: replay } }),
+    workspaceOfChange: async () => ({ ok: true, value: { fact: composite, workspaceReplay: replay } }),
+  });
+  const targets = [{ file: "src/A.java", symbol: "A.f" }];
+  const cases: { name: string; args: Record<string, unknown>; kinds: string[] }[] = [
+    { name: "ye_ast_entrypoints", args: {}, kinds: ["cut-places"] },
+    { name: "ye_ast_callers", args: { targets }, kinds: ["handler-origins", "cut-places"] },
+    { name: "ye_ast_impact", args: { base: "main" }, kinds: ["handler-origins", "module-origins", "cut-places"] },
+    { name: "ye_ast_callers", args: { targets, workspace: {} }, kinds: ["handler-origins", "cut-places"] },
+    { name: "ye_ast_impact", args: { base: "main", workspace: {} }, kinds: ["handler-origins", "module-origins", "cut-places"] },
+  ];
+  let continued = 0;
+  try {
+    for (const { name, args, kinds } of cases) for (const mode of ["summary", "details"] as const) {
+      const label = `${name} ${JSON.stringify(args)} ${mode}`;
+      const ordinary = resultFields(await session.callTool(name, { ...args, mode })) as { text: string; recovery: { status: string; resultIdentity: string; query: { name: string; arguments: Record<string, unknown> } } };
+      assert.equal(ordinary.recovery.status, "available", label);
+      const selectors = printedSelectors(ordinary.text);
+      assert.deepEqual([...new Set(selectors.map((select) => select.kind as string))].toSorted(), kinds.toSorted(), label);
+      for (const select of selectors) {
+        const request = { ...ordinary.recovery.query.arguments, select, page: { limit: 1 }, expect: ordinary.recovery.resultIdentity };
+        const first = await session.callTool(ordinary.recovery.query.name, request);
+        assert.notEqual(first.isError, true, `${label} ${JSON.stringify(select)}: ${textOf(first)}`);
+        const page = resultFields(first) as { kind: string; availability: string; page: { total: number; nextCursor?: string } };
+        assert.equal(page.kind, "projection-receipt", label);
+        assert.equal(page.availability, "available", `${label} ${JSON.stringify(select)}`);
+        assert.equal(/^Next page: /m.test(textOf(first)), page.page.nextCursor !== undefined, `${label} ${JSON.stringify(select)}`);
+        if (page.page.nextCursor === undefined) continue;
+        const next = await session.callTool(ordinary.recovery.query.name, { ...request, page: { limit: 1, cursor: page.page.nextCursor } });
+        assert.notEqual(next.isError, true, textOf(next));
+        assert.equal(/^Next page: /m.test(textOf(next)), (resultFields(next) as { page: { nextCursor?: string } }).page.nextCursor !== undefined, label);
+        continued++;
+      }
+    }
+    assert.ok(continued > 0);
+  } finally { await session.close(); }
+});
