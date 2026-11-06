@@ -82,6 +82,13 @@ nothing the code fills at run time. `String(x)` and `x.toString()` write what a 
 visible writes or an escaping global object in the provided snapshot keep the evaluation unknown. No repository function
 is executed. A whole run-time URL such as `fetch(url)` remains unknown when `url` names a run-time parameter.
 
+A wrapper is a verb-named method of a class another class injects that forwards one of its parameters unchanged as the
+tail of its request's path (`this.http.get(path)`, `` `${this.url}${path}` ``, `base + '/' + path`, or through a method
+of the class that returns its parameter that way); its callers make the requests, with the verb of the request the
+wrapper makes, and the caller's path argument joins through the base-path and suffix rungs. A method that writes its
+parameter inside a segment (`` `/items/${encodeURIComponent(id)}` ``, `` `/items/${id}/details` ``) is no wrapper: its own
+request is the call site.
+
 A receiver `this.x` is the field the class of the call declares (a constructor parameter only when it declares a
 property) or inherits from its base class, here or through an import; a bare name is the binding the code around it
 declares, then a constant of the file. The file that writes the receiver's type name decides through its imports which

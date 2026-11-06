@@ -614,11 +614,25 @@ test("a class another class injects that makes its requests with paths it states
 test("a wrapper's path may be computed from its parameter; a method whose name is no verb keeps its own call site, since a call to it is not read as a request", async () => {
   const client = source(
     API,
-    ["import { HttpClient } from '@angular/common/http'", "import { inject, Injectable } from '@angular/core'", "@Injectable({ providedIn: 'root' })", "export class RestClientService {", "  private readonly http = inject(HttpClient)", "  get(path: string): void {", "    const url = this.resolve(path)", "    this.http.get(url)", "  }", "  item(id: string): void {", "    this.http.get(`/items/${id}`)", "  }", "  private resolve(path: string): string {", "    return path", "  }", "}"].join("\n"),
+    ["import { HttpClient } from '@angular/common/http'", "import { inject, Injectable } from '@angular/core'", "@Injectable({ providedIn: 'root' })", "export class RestClientService {", "  private readonly http = inject(HttpClient)", "  get(path: string): void {", "    const url = this.resolve(path)", "    this.http.get(url)", "  }", "  item(id: string): void {", "    this.http.get(`/items/${id}`)", "  }", "  private resolve(path: string): string {", "    return this.base + '/' + path", "  }", "  private readonly base = 'api'", "}"].join("\n"),
   );
   const page = source("src/app/items/items.page.ts", ["import { inject } from '@angular/core'", "import { RestClientService } from '../core/rest/services/client/rest-client.service'", "export class ItemsPage {", "  private readonly rest = inject(RestClientService)", "  load(): void {", "    this.rest.get('/items')", "    this.rest.item('7')", "  }", "}"].join("\n"));
 
   assert.deepEqual(sites(await reader.of([client, page], "shop-web")), [`GET /items/{}@${API}:11`, "GET /items@src/app/items/items.page.ts:6"]);
+});
+
+test("a method that puts its parameter inside a path segment is no wrapper, so its own request is the call site and a call to it is none", async () => {
+  const service = source("src/app/items.service.ts", ["import { HttpClient } from '@angular/common/http'", "import { inject } from '@angular/core'", "export class ItemsService {", "  private readonly http = inject(HttpClient)", "  delete(name: string) { return this.http.delete(`/items/${encodeURIComponent(name)}`) }", "  put(id: string) { return this.http.put(`/items/${id}/details`, {}) }", "  get(id: string) { return this.http.get(this.itemUrl(id)) }", "  itemUrl(id: string) { return `/items/${encodeURIComponent(id)}` }", "}"].join("\n"));
+  const dialog = source("src/app/items.dialog.ts", ["import { inject } from '@angular/core'", "import { ItemsService } from './items.service'", "export class ItemsDialog {", "  private readonly items = inject(ItemsService)", "  confirm(name: string) { this.items.delete(name); this.items.put(name); this.items.get(name) }", "}"].join("\n"));
+
+  assert.deepEqual(sites(await reader.of([service, dialog], "shop-web")), ["DELETE /items/{}@src/app/items.service.ts:5", "PUT /items/{}/details@src/app/items.service.ts:6", "unknown unresolved@src/app/items.service.ts:7"]);
+});
+
+test("a call through a wrapper takes the method of the request the wrapper makes, not the wrapper's name", async () => {
+  const client = source(API, ["import { HttpClient } from '@angular/common/http'", "import { inject, Injectable } from '@angular/core'", "@Injectable({ providedIn: 'root' })", "export class RestClientService {", "  private readonly http = inject(HttpClient)", "  get(path: string) { return this.http.post(path, {}) }", "}"].join("\n"));
+  const page = source("src/app/items/items.page.ts", ["import { inject } from '@angular/core'", "import { RestClientService } from '../core/rest/services/client/rest-client.service'", "export class ItemsPage {", "  private readonly rest = inject(RestClientService)", "  load(): void { this.rest.get('/items') }", "}"].join("\n"));
+
+  assert.deepEqual(sites(await reader.of([client, page], "shop-web")), ["POST /items@src/app/items/items.page.ts:5"]);
 });
 
 const CONSTANTS = "src/app/app.constants.ts";

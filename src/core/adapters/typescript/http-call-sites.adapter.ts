@@ -145,19 +145,19 @@ function calls(source: ts.SourceFile): ts.CallExpression[] {
   return found;
 }
 
-/** The methods of each repository class that reach an `HttpClient` verb, directly or through another method of the class. */
 /**
- * The methods of each class another class injects that reach an `HttpClient` verb: a class the repository injects is a
- * wrapper, and a call to one of its methods is where a repository makes a request.
+ * The methods of each class another class injects that forward a parameter as the path of an `HttpClient` request, with
+ * the verb that request uses: a class the repository injects is a wrapper, and a call to one of its methods is where a
+ * repository makes a request.
  */
-function wrapperMethods(shapes: ReadonlyMap<string, FileShape>): ReadonlyMap<string, ReadonlySet<string>> {
+function wrapperMethods(shapes: ReadonlyMap<string, FileShape>): ReadonlyMap<string, ReadonlyMap<string, string>> {
   const injected = injectedClasses(shapes);
-  const held = new Map<string, ReadonlySet<string>>();
+  const held = new Map<string, ReadonlyMap<string, string>>();
   for (const shape of shapes.values()) {
     for (const [name, classDeclaration] of shape.classes) {
       if (!injected.has(name)) continue;
       const reaching = reachingMethods(shape, classDeclaration);
-      if (reaching.length > 0) held.set(name, new Set(reaching));
+      if (reaching.size > 0) held.set(name, reaching);
     }
   }
   return held;
@@ -183,32 +183,33 @@ function injectedClasses(shapes: ReadonlyMap<string, FileShape>): ReadonlySet<st
   return held;
 }
 
-/** The methods of one class whose body reaches an HTTP verb of a receiver the class holds as its HTTP client. */
-function reachingMethods(shape: FileShape, classDeclaration: ts.ClassDeclaration): string[] {
+/** The methods of one class that forward a parameter as the path of a request of the class's HTTP client, with the request's verb. */
+function reachingMethods(shape: FileShape, classDeclaration: ts.ClassDeclaration): ReadonlyMap<string, string> {
   const httpFields = httpClientFields(shape, classDeclaration);
-  if (httpFields.size === 0) return [];
+  if (httpFields.size === 0) return new Map();
   const methods = new Map<string, ts.Node>();
   for (const member of classDeclaration.members) {
     if ((ts.isMethodDeclaration(member) || ts.isPropertyDeclaration(member)) && member.name !== undefined && ts.isIdentifier(member.name)) methods.set(member.name.text, member);
   }
-  const reaching = new Set<string>();
+  const reaching = new Map<string, string>();
   let changed = true;
   while (changed) {
     changed = false;
     for (const [name, member] of methods) {
       if (reaching.has(name)) continue;
-      if (reachesVerb(member, httpFields, reaching)) {
-        reaching.add(name);
+      const verb = forwardedVerb(member, httpFields, reaching, methods);
+      if (verb !== undefined) {
+        reaching.set(name, verb);
         changed = true;
       }
     }
   }
-  const kept = new Set([...reaching].filter((name) => VERBS.has(name)));
-  for (const name of kept) {
+  const kept = new Map([...reaching].filter(([name]) => VERBS.has(name)));
+  for (const name of [...kept.keys()]) {
     const member = methods.get(name);
-    if (member !== undefined) for (const helper of thisCalls(member)) if (reaching.has(helper)) kept.add(helper);
+    if (member !== undefined) for (const helper of thisCalls(member)) if (reaching.has(helper)) kept.set(helper, reaching.get(helper) ?? helper);
   }
-  return [...kept];
+  return kept;
 }
 
 /** The methods of its own class a member calls through `this`. */
@@ -278,34 +279,29 @@ export function typeName(node: ts.TypeNode): string | undefined {
   return undefined;
 }
 
-/** Whether a member forwards one of its own parameters as the path of an HTTP verb, directly or through another wrapper method of its class. */
-function reachesVerb(member: ts.Node, httpFields: ReadonlySet<string>, reaching: ReadonlySet<string>): boolean {
+/**
+ * The verb of the request through which a member forwards one of its own parameters as the path, directly or through
+ * another wrapper method of its class; undefined when it forwards none.
+ */
+function forwardedVerb(member: ts.Node, httpFields: ReadonlySet<string>, reaching: ReadonlyMap<string, string>, methods: ReadonlyMap<string, ts.Node>): string | undefined {
   const parameters = parametersOf(member);
-  const locals = localInitializers(member);
-  const derived = (expression: ts.Node, trail: ReadonlySet<string>): boolean => {
-    if (ts.isIdentifier(expression)) {
-      if (parameters.has(expression.text)) return true;
-      const initializer = locals.get(expression.text);
-      return initializer !== undefined && !trail.has(expression.text) && derived(initializer, new Set(trail).add(expression.text));
-    }
-    return ts.forEachChild(expression, (child) => derived(child, trail) || undefined) === true;
-  };
-  const forwardsParameter = (call: ts.CallExpression, name: string): boolean => {
+  const forwards = (call: ts.CallExpression, name: string): boolean => {
     const path = call.arguments[name === "request" ? 1 : 0];
-    return path !== undefined && derived(path, new Set());
+    return path !== undefined && forwardsAsTail(path, member, parameters, methods, new Set());
   };
-  let found = false;
+  let found: string | undefined;
   const visit = (node: ts.Node): void => {
-    if (found) return;
+    if (found !== undefined) return;
     if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)) {
       const name = node.expression.name.text;
       const receiver = node.expression.expression;
-      if (VERBS.has(name) && ts.isPropertyAccessExpression(receiver) && receiver.expression.kind === ts.SyntaxKind.ThisKeyword && httpFields.has(receiver.name.text) && forwardsParameter(node, name)) {
-        found = true;
+      if (VERBS.has(name) && ts.isPropertyAccessExpression(receiver) && receiver.expression.kind === ts.SyntaxKind.ThisKeyword && httpFields.has(receiver.name.text) && forwards(node, name)) {
+        found = name;
         return;
       }
-      if (receiver.kind === ts.SyntaxKind.ThisKeyword && reaching.has(name) && forwardsParameter(node, name)) {
-        found = true;
+      const chained = reaching.get(name);
+      if (receiver.kind === ts.SyntaxKind.ThisKeyword && chained !== undefined && forwards(node, name)) {
+        found = chained;
         return;
       }
     }
@@ -313,6 +309,43 @@ function reachesVerb(member: ts.Node, httpFields: ReadonlySet<string>, reaching:
   };
   visit(member);
   return found;
+}
+
+/**
+ * Whether an expression ends with one of the parameters unchanged, so a URL it builds is the parameter's path after a
+ * prefix: the parameter, a variable holding such an expression, a template or a sum that ends with one, or a method of
+ * the class that returns its own parameter that way. A parameter written inside a segment (`/items/${encode(id)}`) is not.
+ */
+function forwardsAsTail(node: ts.Node, member: ts.Node, parameters: ReadonlySet<string>, methods: ReadonlyMap<string, ts.Node>, trail: ReadonlySet<string>): boolean {
+  if (ts.isParenthesizedExpression(node) || ts.isAsExpression(node) || ts.isNonNullExpression(node) || ts.isSatisfiesExpression(node)) return forwardsAsTail(node.expression, member, parameters, methods, trail);
+  if (ts.isIdentifier(node)) {
+    if (parameters.has(node.text)) return true;
+    const initializer = localInitializers(member).get(node.text);
+    return initializer !== undefined && !trail.has(node.text) && forwardsAsTail(initializer, member, parameters, methods, new Set(trail).add(node.text));
+  }
+  if (ts.isTemplateExpression(node)) {
+    const last = node.templateSpans.at(-1);
+    return last !== undefined && last.literal.text === "" && forwardsAsTail(last.expression, member, parameters, methods, trail);
+  }
+  if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.PlusToken) return forwardsAsTail(node.right, member, parameters, methods, trail);
+  if (!ts.isCallExpression(node) || !ts.isPropertyAccessExpression(node.expression) || node.expression.expression.kind !== ts.SyntaxKind.ThisKeyword) return false;
+  const name = `this.${node.expression.name.text}`;
+  const helper = methods.get(node.expression.name.text);
+  const declared = helper === undefined ? undefined : functionOf(helper);
+  if (helper === undefined || declared === undefined || trail.has(name)) return false;
+  return node.arguments.some((argument, index) => {
+    const parameter = declared.parameters[index];
+    if (parameter === undefined || !ts.isIdentifier(parameter.name) || !forwardsAsTail(argument, member, parameters, methods, trail)) return false;
+    const own = new Set([parameter.name.text]);
+    return returnsOf(declared).every((returned) => returned !== undefined && forwardsAsTail(returned, helper, own, methods, new Set(trail).add(name)));
+  });
+}
+
+/** The function a class member is: a method, or a property initialized with an arrow or a function expression. */
+function functionOf(member: ts.Node): ts.MethodDeclaration | ts.ArrowFunction | ts.FunctionExpression | undefined {
+  if (ts.isMethodDeclaration(member)) return member;
+  const initializer = ts.isPropertyDeclaration(member) ? member.initializer : undefined;
+  return initializer !== undefined && (ts.isArrowFunction(initializer) || ts.isFunctionExpression(initializer)) ? initializer : undefined;
 }
 
 /** The variables a member declares in its body, by name, with what they are initialized to. */
@@ -419,7 +452,7 @@ class Reader {
   constructor(
     private readonly shapes: ReadonlyMap<string, FileShape>,
     private readonly modules: ModuleResolver,
-    private readonly wrappers: ReadonlyMap<string, ReadonlySet<string>>,
+    private readonly wrappers: ReadonlyMap<string, ReadonlyMap<string, string>>,
     private readonly defines: BuildDefines,
   ) {
     this.unsafeEncoder = [...shapes.values()].some((shape) => shape.unsafeEncoder);
@@ -462,10 +495,11 @@ class Reader {
     const owner = await this.ownerClass(shape, callee.expression);
     if (owner === undefined) return undefined;
     const isHttpClient = isAngularHttpClientName(owner.shape, owner.name);
-    const isWrapper = await this.wrapperOf(shape, owner.name, name === "fetch" ? "request" : name);
-    if (!isHttpClient && !isWrapper) return undefined;
-    if (name !== "request") return this.request(shape, call, call.arguments[0], name === "fetch" ? "GET" : verbOf(name));
-    return this.explicitRequest(shape, call);
+    const wrapped = isHttpClient ? undefined : this.wrappers.get(owner.name)?.get(name === "fetch" ? "request" : name);
+    if (!isHttpClient && wrapped === undefined) return undefined;
+    if (name === "request") return this.explicitRequest(shape, call);
+    const verb = wrapped === undefined || wrapped === "request" ? name : wrapped;
+    return this.request(shape, call, call.arguments[0], verb === "fetch" ? "GET" : verbOf(verb));
   }
 
   /** `fetch(url, init)`: the method is the one the init object states, GET without an init. */
@@ -581,11 +615,6 @@ class Reader {
     if (!ts.isCallExpression(expression) || expression.expression.getText(shape.source) !== "inject") return undefined;
     const [first] = expression.arguments;
     return first !== undefined && ts.isIdentifier(first) ? first.text : undefined;
-  }
-
-  /** Whether the class is a class another repository class injects whose method named `name` reaches an HTTP verb. */
-  private async wrapperOf(_shape: FileShape, className: string, name: string): Promise<boolean> {
-    return this.wrappers.get(className)?.has(name) === true;
   }
 
   /**
@@ -1044,7 +1073,7 @@ function functionNamed(shape: FileShape, name: string): ts.FunctionDeclaration |
  * What a function returns from its own body, the functions it declares aside: its expression body, or the expression of
  * every `return`, with undefined for a bare `return` and for an end the body reaches without returning.
  */
-function returnsOf(node: ts.FunctionDeclaration | ts.ArrowFunction | ts.FunctionExpression): (ts.Expression | undefined)[] {
+function returnsOf(node: ts.FunctionDeclaration | ts.MethodDeclaration | ts.ArrowFunction | ts.FunctionExpression): (ts.Expression | undefined)[] {
   if (node.body === undefined) return [undefined];
   if (!ts.isBlock(node.body)) return [node.body];
   const returned: (ts.Expression | undefined)[] = [];
