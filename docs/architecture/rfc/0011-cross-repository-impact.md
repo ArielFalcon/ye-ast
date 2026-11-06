@@ -92,8 +92,9 @@ request is the call site.
 
 A receiver `this.x` is the field the class of the call declares (a constructor parameter only when it declares a
 property) or inherits from its base class, here or through an import; a bare name is the binding the code around it
-declares, then a constant of the file. The file that writes the receiver's type name decides through its imports which
-class it names.
+declares, then a constant of the file; a parameter's declared type names its value only while the function neither
+assigns the parameter nor declares it again with a value, and a local's initializer only while nothing assigns the local.
+The file that writes the receiver's type name decides through its imports which class it names.
 
 `fetch(url, init)` takes its method from the init object it states, GET without one; an init that is not an object
 literal, or a spread or computed member that may state `method` after it, leaves the method undecided. An

@@ -611,6 +611,19 @@ test("a method the class or a subclass assigns through this is not read from its
   assert.deepEqual(sites(await reader.of([file], "shop-web")), ["unknown unresolved@paths.ts:6", "unknown unresolved@paths.ts:6", "unknown unresolved@paths.ts:6", "GET /kept@paths.ts:6"]);
 });
 
+test("a parameter or a local the function assigns or declares again no longer types its receiver", async () => {
+  const file = source("rebound.ts", [
+    "import { HttpClient } from '@angular/common/http'",
+    "import { inject } from '@angular/core'",
+    "export function load(http: HttpClient) { var http = new Map<string, string>() as any; http.get('/cached') }",
+    "export function save(http: HttpClient) { http = other(); http.post('/saved', {}) }",
+    "export function swap() { let http = inject(HttpClient); http = other(); http.get('/swapped') }",
+    "export function keep(http: HttpClient) { const client = inject(HttpClient); http.get('/kept'); client.get('/client') }",
+  ].join("\n"));
+
+  assert.deepEqual(sites(await reader.of([file], "shop-web")), ["GET /kept@rebound.ts:6", "GET /client@rebound.ts:6"]);
+});
+
 test("a receiver a loop or a catch clause binds is not typed by an outer parameter of the same name", async () => {
   const file = source("cache.ts", [
     "import { HttpClient } from '@angular/common/http'",

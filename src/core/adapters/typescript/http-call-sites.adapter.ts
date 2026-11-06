@@ -45,6 +45,7 @@ const NO_SCOPE: Scope = { names: new Set(), locals: new Map() };
 const LEXICAL_SCOPES = new WeakMap<ts.Node, Scope>();
 const OWN_BINDINGS = new WeakMap<ts.Node, ReadonlyMap<string, Binding>>();
 const LOCAL_INITIALIZERS = new WeakMap<ts.Node, ReadonlyMap<string, ts.Expression>>();
+const REBOUND_NAMES = new WeakMap<ts.Node, ReadonlySet<string>>();
 
 /** The names the code being evaluated binds at run time: a path part that names one is `{}`, never undecided. */
 type RunTime = ReadonlySet<string>;
@@ -652,7 +653,7 @@ class Reader {
     const scope = lexicalScope(receiver);
     if (scope.names.has(receiver.text)) {
       const local = scope.locals.get(receiver.text);
-      const named = local === undefined ? parameterType(receiver) : this.injectedType(shape, local);
+      const named = local === undefined ? parameterType(receiver) : appendsTo(local)?.length === 0 ? this.injectedType(shape, local) : undefined;
       return named === undefined ? undefined : { name: named, shape };
     }
     const constant = shape.consts.get(receiver.text);
@@ -1096,15 +1097,33 @@ function mayOverrideEncoder(source: ts.SourceFile): boolean {
   return visit(source);
 }
 
-/** The type name a name's nearest binding declares, when that binding is a function parameter. */
+/**
+ * The type name a name's nearest binding declares, when that binding is a function parameter the function never assigns
+ * nor declares again with a value: then it holds only its argument.
+ */
 function parameterType(name: ts.Identifier): string | undefined {
   for (let current: ts.Node | undefined = name.parent; current !== undefined; current = current.parent) {
     const binding = ownBindings(current).get(name.text);
     if (binding === undefined) continue;
     const declaration = binding.declaration;
-    return ts.isParameter(declaration) && ts.isIdentifier(declaration.name) && declaration.type !== undefined ? typeName(declaration.type) : undefined;
+    if (!ts.isParameter(declaration) || !ts.isIdentifier(declaration.name) || declaration.type === undefined) return undefined;
+    return reboundIn(current).has(name.text) ? undefined : typeName(declaration.type);
   }
   return undefined;
+}
+
+/** The names a function assigns, or declares with a value, anywhere in its body. */
+function reboundIn(declaration: ts.Node): ReadonlySet<string> {
+  const cached = REBOUND_NAMES.get(declaration);
+  if (cached !== undefined) return cached;
+  const names = new Set(writesIn(declaration).keys());
+  const visit = (node: ts.Node): void => {
+    if (ts.isVariableDeclaration(node) && node.initializer !== undefined) for (const text of bindingNames(node.name)) names.add(text);
+    ts.forEachChild(node, visit);
+  };
+  visit(declaration);
+  REBOUND_NAMES.set(declaration, names);
+  return names;
 }
 
 /** What the code appends with `+=` to the variable an initializer declares; null when it writes the variable any other way. */
