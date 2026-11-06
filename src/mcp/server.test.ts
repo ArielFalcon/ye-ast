@@ -830,7 +830,7 @@ test("the server instructions tell the agent when to call every tool", async () 
   await session.close();
 });
 
-test("input guides leave live combination exclusions to runtime validation", async () => {
+test("input guides publish live combination exclusions alongside runtime validation", async () => {
   const { session, calls } = await setup();
   try {
     const tools = await session.listTools();
@@ -847,7 +847,7 @@ test("input guides leave live combination exclusions to runtime validation", asy
       const validate = new AjvJsonSchemaValidator().getValidator(schema);
       for (const field of fields) {
         const value = field === "offline" ? false : field === "workspace" ? {} : "main";
-        assert.equal(validate({ ...args, live: true, [field]: value }).valid, true, name);
+        assert.equal(validate({ ...args, live: true, [field]: value }).valid, false, name);
         assert.equal(validate({ ...args, live: false, [field]: value }).valid, true, name);
         const result = await session.callTool(name, { ...args, live: true, [field]: value });
         assert.equal(result.isError, true, `${name}: live excludes the presence of ${field}`);
@@ -3285,7 +3285,7 @@ test("callers input and full output schemas enforce replay and recovery shapes",
     const targets = [{ file: "a", symbol: "f" }];
     const replay = { version: 1, declaration: `ws-r1:${"d".repeat(64)}`, snapshots: [{ repo: "shop", kind: "sha", sha: "a".repeat(40) }] };
     assert.equal(input({ targets, workspace: {}, replay }).valid, true);
-    assert.equal(input({ targets, replay }).valid, true);
+    assert.equal(input({ targets, replay }).valid, false);
     const malformed = { targets, workspace: {}, replay: { ...replay, snapshots: [{ repo: "shop", kind: "live", sha: "a".repeat(40) }] } };
     assert.equal((await session.callTool("ye_ast_callers", malformed)).isError, true);
     assert.equal((await session.callTool("ye_ast_callers", { targets, replay })).isError, true);
@@ -3800,8 +3800,7 @@ test("mixed workspace selector schemas and runtime agree before dispatch", async
         ...[{ ...member, live: false }, { ...member, path: " " }, { ...member, id: " " }].map((badMember) => ({ ...baseArgs, ...(memberKey === "repos" ? { repos: [badMember] } : { workspace: { repos: [badMember] } }) })),
       ]) {
         const before = calls.workspaceReads.length + calls.decisions.length + calls.workspaceCallers.length + calls.workspaceOfChange.length;
-        const fields: Record<string, unknown> = bad;
-        assert.equal(validate(bad).valid, (fields.live === true && fields[key] === "HEAD") || (memberKey === "workspace" && (fields[key] === "  " || fields.live === false)), JSON.stringify(bad));
+        assert.equal(validate(bad).valid, false, JSON.stringify(bad));
         assert.equal((await session.callTool(name, bad)).isError, true);
         assert.equal(calls.workspaceReads.length + calls.decisions.length + calls.workspaceCallers.length + calls.workspaceOfChange.length, before);
       }
@@ -3985,7 +3984,7 @@ test("invalid selection controls and cursor bindings fail before querying", asyn
     ];
     for (const c of cases) {
       const schema = tools.find((t)=>t.name===c.name)!.inputSchema;
-      assert.equal(new AjvJsonSchemaValidator().getValidator(schema)(c.args).valid, ("select" in c.args && !("page" in c.args)) || ("page" in c.args && !("select" in c.args)) || (c.name === "ye_ast_impact"));
+      assert.equal(new AjvJsonSchemaValidator().getValidator(schema)(c.args).valid, false);
       assert.equal((await session.callTool(c.name,c.args)).isError,true);
     }
     assert.equal(calls.map.length+calls.callers.length+calls.ofChange.length+calls.importers.length,0);

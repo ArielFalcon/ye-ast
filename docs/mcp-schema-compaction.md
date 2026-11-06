@@ -2,8 +2,9 @@
 
 Tool discovery publishes compact input guides; output schemas are no longer advertised. The original exported output
 schemas validate the complete canonical response on the server. Input guides retain root properties, unconditional
-required fields and nested schemas, while omitting root cross-parameter conditions. The server validates the original
-input schema and refinements; clients may accept combinations the server rejects. Instructions describe these rules.
+required fields, nested schemas and declared cross-parameter conditions. The server validates the original input schema
+and refinements; discovery exposes selection/page, owner/workspace and live/revision restrictions as well. Opaque replay
+and composition argument objects still require the original server validators for their internal structure.
 Each success delivers its presentation and result fields in one content block, including one recovery field.
 
 Partial results contain useful evidence but have coverage cuts; unknown means
@@ -21,10 +22,11 @@ output-schema array, and 3,995 initialization characters (previously 63,611, 37,
 on client handling.
 
 Input publication uses ordinary JSON Schema root object properties rather than
-consumer-specific metadata or settings. Nested parameter schemas remain intact;
-only root composition and conditional keywords are omitted from the published
-guide. Cross-parameter restrictions remain in the original Standard Schema
-validator and are explained in the instructions and parameter guidance.
+consumer-specific metadata or settings. Nested parameter schemas remain intact except for the explicitly opaque replay
+and composition arguments described below. Declared cross-parameter restrictions are published with the SDK's JSON Schema
+2020-12 dependencies and conditions, and remain enforced by the original Standard Schema validator. Clients that ignore
+these keywords still receive contextual server validation errors. Compatibility with each live client is not established
+by the offline schema tests.
 
 The initialization fixture has a 3,400-character budget. The guide names routing,
 coverage, repository and snapshot identity, trust, response modes, paired

@@ -277,6 +277,12 @@ share a kind. Parameter-specific advice requires evidence of the relevant limit'
 replay refusal does not retrieve the historical result; accepting a changed identity is an explicit caller choice.
 Guidance is deterministic and does not suppress itself based on previous requests or session history.
 
+Input discovery retains a root object with named properties and publishes the declared cross-field dependencies and
+conditions using the installed SDK's JSON Schema 2020-12 dialect. Selection/page pairing, supported owner branches and
+live/revision exclusions are checked against actual listed schemas as well as runtime validation. Explicitly opaque
+replay and composition argument objects still rely on the original server validators for their internal structure.
+These offline schema checks do not establish how every live client presents or interprets the constraints.
+
 `ye_ast_entrypoints`, `ye_ast_callers`, and `ye_ast_impact` deliver recovery metadata once, in
 the `recovery` result field in the text's result JSON line, for ordinary and selected responses in all modes. The presentation text points to that field rather than copying its JSON; unavailable
 recovery states its reason.
