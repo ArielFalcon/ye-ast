@@ -49,6 +49,10 @@ test('advertised control constraints match runtime for each branch', () => {
     {select:{kind:'cut-places',owner:{kind:'read',repo:'r',index:1},cutIndex:0},page:{limit:1},workspace:{}},
     {select:{kind:'entrypoint-evidence',findingIndex:0},page:{limit:1}},
     {select:{kind:'workspace-link-evidence',linkId:'id'},page:{limit:1},workspace:{}},
+    {select:{kind:'workspace-link-evidence',linkId:'id'},page:{limit:1}},
+    {select:{kind:'cut-places',owner:{kind:'entrypoints'},cutIndex:0},page:{limit:1}},
+    {select:{kind:'cut-places',owner:section,cutIndex:0},page:{limit:1}}, {select:{kind:'cut-places',owner:section,cutIndex:0},page:{limit:1},workspace:{}},
+    {select:{kind:'module-origins',owner:section,module:{file:'a',snapshot:'base'}},page:{limit:1},workspace:{}},
     {select:handler(local),page:{limit:0}}, {select:handler(local),page:{limit:1,cursor:'x',extra:1}},
     {select:handler(local),page:{limit:9007199254740992}},
   ];
