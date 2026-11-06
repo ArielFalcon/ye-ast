@@ -653,6 +653,14 @@ test("a write a dynamic scope may send elsewhere is a frontier, and the reads af
   assert.deepEqual(raw(await follow([file], dynamicUse, "owner")), { uses: [4], next: 0, frontiers: ["3 unmodelled-flow:dynamic scope"] });
 });
 
+test("a write a dynamic scope may make to the guarded path voids the guard: no use after it, and the write is reported", async () => {
+  const file = { path: "p.ts", content: "function use(o: Order) {\n  if (o.owner) {\n    with (scope) { o.owner = other }\n    show(o.owner.id)\n  }\n}" };
+  const result = raw(await follow([file], dynamicUse, "owner"));
+
+  assert.deepEqual(result.uses, []);
+  assert.ok(result.frontiers.includes("3 unmodelled-flow:write after guard"), result.frontiers.join(", "));
+});
+
 test("a followed value read as a destructuring default or by an export specifier stays a frontier there", async () => {
   const defaulted = await follow([plain(["const { a = o } = {} as any", "show(a.owner.id)"])], paramO, "owner");
   const exported = await follow([source("p.ts", ["let held: any", "function use(o: Order) { held = o }", "export { held }"])], { ...paramO, line: at(2) }, "owner");
