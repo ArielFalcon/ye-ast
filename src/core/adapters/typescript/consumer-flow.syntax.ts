@@ -62,6 +62,19 @@ export function isAsyncOrGenerator(fn: FunctionNode): "async" | "generator" | un
   return "asteriskToken" in fn && fn.asteriskToken !== undefined ? "generator" : undefined;
 }
 
+/** A place that only tests or drops the value it holds, so no guard there decides anything. */
+export function discardsValue(top: ts.Expression): boolean {
+  const parent = top.parent;
+  if (ts.isConditionalExpression(parent)) return parent.condition === top;
+  if (ts.isPrefixUnaryExpression(parent) || ts.isTypeOfExpression(parent) || ts.isVoidExpression(parent) || ts.isExpressionStatement(parent)) return true;
+  if (ts.isIfStatement(parent) || ts.isWhileStatement(parent) || ts.isDoStatement(parent)) return parent.expression === top;
+  if (ts.isForStatement(parent)) return parent.condition === top;
+  if (!ts.isBinaryExpression(parent)) return false;
+  const operator = parent.operatorToken.kind;
+  if (operator === ts.SyntaxKind.AmpersandAmpersandToken || operator === ts.SyntaxKind.EqualsToken) return parent.left === top;
+  return operator === ts.SyntaxKind.InstanceOfKeyword;
+}
+
 export function isNullishLiteral(expression: ts.Expression): boolean {
   const bare = unwrap(expression);
   return bare.kind === ts.SyntaxKind.NullKeyword || (ts.isIdentifier(bare) && bare.text === "undefined");

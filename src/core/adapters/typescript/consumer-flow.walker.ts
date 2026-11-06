@@ -7,6 +7,7 @@ import type { Origin, Program, Unit } from "./consumer-flow.index.ts";
 import {
   chainPath,
   declaredScope,
+  discardsValue,
   declaringScope,
   enclosingClass,
   enclosingFunction,
@@ -259,6 +260,7 @@ export class Walker {
       this.dereference(site, t, q, chain);
       return;
     }
+    if (discardsValue(top)) return;
     const attached = this.atTop(t, top, q, chain);
     if (attached !== undefined) this.sink(top, attached);
   }
@@ -325,10 +327,7 @@ export class Walker {
     const exact = t.origin.length === 0;
     if (ts.isVariableDeclaration(parent) && parent.initializer === top) return this.bind(parent.name, declaredScope(parent), ts.isIdentifier(parent.name) ? this.hopped(t, "assign", parent) : t, parent);
     if (ts.isBinaryExpression(parent)) return this.sinkBinary(top, parent, t);
-    if (ts.isConditionalExpression(parent)) return parent.condition === top ? undefined : this.read(parent, t);
-    if (ts.isPrefixUnaryExpression(parent) || ts.isTypeOfExpression(parent) || ts.isVoidExpression(parent) || ts.isExpressionStatement(parent)) return;
-    if ((ts.isIfStatement(parent) || ts.isWhileStatement(parent) || ts.isDoStatement(parent)) && parent.expression === top) return;
-    if (ts.isForStatement(parent) && parent.condition === top) return;
+    if (ts.isConditionalExpression(parent)) return this.read(parent, t);
     if (ts.isAwaitExpression(parent)) return this.read(parent, this.hopped(t, "await", parent));
     if (ts.isReturnStatement(parent)) return this.returned(parent, enclosingFunction(parent), t);
     if (ts.isArrowFunction(parent) && parent.body === top) return this.returned(top, parent, t);
@@ -348,14 +347,13 @@ export class Walker {
   private sinkBinary(top: ts.Expression, parent: ts.BinaryExpression, t: Trail): void {
     const operator = parent.operatorToken.kind;
     const exact = t.origin.length === 0;
-    if (operator === ts.SyntaxKind.EqualsToken) return parent.right === top ? this.assignTo(parent, t) : undefined;
+    if (operator === ts.SyntaxKind.EqualsToken) return this.assignTo(parent, t);
     if (operator === ts.SyntaxKind.QuestionQuestionToken || operator === ts.SyntaxKind.BarBarToken) {
       if (parent.right === top) return this.read(parent, t);
       const guards = exact && excludesAbsence(parent.right) ? [...t.guards, this.guard("fallback", [], BOTH, parent)] : t.guards;
       return this.read(parent, this.hopped({ ...t, guards }, "fallback", parent));
     }
-    if (operator === ts.SyntaxKind.AmpersandAmpersandToken) return parent.right === top ? this.read(parent, t) : undefined;
-    if (operator === ts.SyntaxKind.InstanceOfKeyword) return;
+    if (operator === ts.SyntaxKind.AmpersandAmpersandToken) return this.read(parent, t);
     if (!exact) return;
     const equality = [ts.SyntaxKind.EqualsEqualsToken, ts.SyntaxKind.EqualsEqualsEqualsToken, ts.SyntaxKind.ExclamationEqualsToken, ts.SyntaxKind.ExclamationEqualsEqualsToken].includes(operator);
     if (equality && isNullishLiteral(parent.left === top ? parent.right : parent.left)) return;
@@ -620,13 +618,13 @@ export class Walker {
       }
     }
     const protecting = (guard: Guard) => guard.kind !== "non-null-assertion" && startsWith(guard.covers, t.origin);
-    if (found.some(({ guard, captured }) => captured && protecting(guard))) {
-      this.once(node, "guard across closure", t);
-      return undefined;
-    }
     const own = found.filter(({ captured }) => !captured);
     const kept = own.filter(({ guard, from }) => !this.overwritten(guard, closure ?? binding.scope, binding, from, node, t));
     if (own.some(({ guard }) => protecting(guard) && !kept.some((held) => held.guard === guard))) return undefined;
+    if (!kept.some(({ guard }) => protecting(guard)) && found.some(({ guard, captured }) => captured && protecting(guard))) {
+      this.once(node, "guard across closure", t);
+      return undefined;
+    }
     return kept.map(({ guard }) => guard);
   }
 
