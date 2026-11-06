@@ -48,9 +48,9 @@ import { edgeKey, type InboundEdges } from "./inbound-edges.ts";
 import { memberProofContextOf, referenceProofsOf, sourceFilesOf, type ReferenceProofs } from "./reference-origins.ts";
 import { walkImpact, type Walk } from "./walk.ts";
 import type { ImportOrigins, ImportOriginsReader } from "../../ports/import-origins.port.ts";
-import { isBoundOutside } from "../../domain/impact/edge-policy.ts";
 import type { ContractRoutes } from "../../ports/contract-routes.port.ts";
 import { distinctTargets, evidenceOfTarget, missingTargets, rangeChanges, requestedRanges, selectRoots, targetKey } from "../navigation/root-selection.ts";
+import { edgesRootedOutside } from "../navigation/rooted-edges.ts";
 import { prepareCommit } from "../snapshot/prepared-snapshot.ts";
 import type { UnmodelledConstructsReader } from "../../ports/unmodelled-constructs.port.ts";
 import { unmodelledNote } from "../../domain/shared/unmodelled.ts";
@@ -522,10 +522,9 @@ async function walkInside(seeds: readonly GraphSymbol[], build: (outside: Readon
     const fresh = inbound.followed().filter(({ edge }) => edge.line !== null && edge.column !== null && !checked.has(edgeKey(edge)));
     if (origins === undefined || fresh.length === 0 || signal?.aborted) return { inbound, walk };
     for (const { edge } of fresh) checked.add(edgeKey(edge));
-    const roots = await origins.rootOrigins(fresh.map(({ edge, source, target }) => ({ file: source.file, line: edge.line!, column: edge.column! + 1, kind: edge.kind, name: target.name })), signal);
-    const dropped = fresh.filter((_, index) => roots[index] !== undefined && isBoundOutside(roots[index]!));
+    const dropped = await edgesRootedOutside(origins, fresh, signal);
     if (dropped.length === 0) return { inbound, walk };
-    for (const { edge } of dropped) outside.add(edgeKey(edge));
+    for (const { edge } of dropped) outside.add(edgeKey(edge.edge));
   }
 }
 

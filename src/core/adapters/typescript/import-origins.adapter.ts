@@ -128,7 +128,8 @@ export function createImportOrigins(sources: readonly SourceFile[], parse: Parse
     for (const [file, group] of Map.groupBy(sites.map((site, index) => ({ site, index })), ({ site }) => site.file)) {
       if (signal?.aborted) break;
       const text = texts.get(file);
-      const read = text === undefined || !isTypeScriptSource(file) ? undefined : rootsAt(file, text, group);
+      const tree = text === undefined || !isTypeScriptSource(file) ? undefined : indexOf(file);
+      const read = tree === undefined ? undefined : rootsAt(tree, text!, group);
       if (read === undefined) continue;
       shapes.set(file, read.shape);
       for (const [index, root] of read.roots) results[index] = await originOf({ ...sites[index]!, name: root }, "valid");
@@ -139,11 +140,8 @@ export function createImportOrigins(sources: readonly SourceFile[], parse: Parse
 
 type SiteSyntax = "valid" | "local" | "this-member";
 
-/** The root of the plain chain of names each site spells and ends in its name, read in one temporary tree. */
-function rootsAt(file: string, text: string, group: readonly { site: ResolvedNameSite; index: number }[]): { roots: Map<number, string>; shape: FileShape } | undefined {
-  const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
-  const diagnostics = (source as ts.SourceFile & { parseDiagnostics: readonly ts.Diagnostic[] }).parseDiagnostics;
-  if (diagnostics.some((diagnostic) => diagnostic.category === ts.DiagnosticCategory.Error)) return undefined;
+/** The root of the plain chain of names each site spells and ends in its name, read in the file's tree. */
+function rootsAt({ source, shape, starting }: FileIndex, text: string, group: readonly { site: ResolvedNameSite; index: number }[]): { roots: Map<number, string>; shape: FileShape } {
   const starts = source.getLineStarts();
   const wanted = new Map<number, { site: ResolvedNameSite; index: number }[]>();
   for (const item of group) {
@@ -155,16 +153,12 @@ function rootsAt(file: string, text: string, group: readonly { site: ResolvedNam
   }
   /** Chains that start at one point share their root, so the first that ends in the name settles it. */
   const roots = new Map<number, string>();
-  const visit = (node: ts.Node): void => {
-    for (const { site, index } of wanted.get(node.getStart(source)) ?? []) {
-      const spelled = spelledAt(node, site.kind);
-      const names = spelled === undefined ? undefined : plainChain(spelled);
-      if (names !== undefined && names.at(-1) === site.name && !roots.has(index)) roots.set(index, names[0]!);
-    }
-    node.forEachChild(visit);
-  };
-  visit(source);
-  return { roots, shape: describeTree(source) };
+  for (const [point, sites] of wanted) for (const node of starting.get(point) ?? []) for (const { site, index } of sites) {
+    const spelled = spelledAt(node, site.kind);
+    const names = spelled === undefined ? undefined : plainChain(spelled);
+    if (names !== undefined && names.at(-1) === site.name && !roots.has(index)) roots.set(index, names[0]!);
+  }
+  return { roots, shape };
 }
 
 /** What a node starting at an edge's column spells for the edge's kind: a call's callee, an instantiation's class, or a name up to the whole qualified name it ends. */

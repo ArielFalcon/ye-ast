@@ -3,7 +3,7 @@ import test from "node:test";
 import type { ImportOrigin } from "../../domain/relations/resolved-reference.ts";
 import type { Fact, Finding } from "../../domain/shared/fact.ts";
 import type { TraceStep, TraceValue } from "../../domain/trace/trace-fact.ts";
-import type { ImportOriginSite } from "../../ports/import-origins.port.ts";
+import type { ImportOriginSite, ResolvedNameSite } from "../../ports/import-origins.port.ts";
 import type { CallersTarget } from "../../ports/impact-queries.port.ts";
 import type { TraceBudget, TraceRequest } from "../../ports/trace-queries.port.ts";
 import { fakeLive, type FakeLive } from "../live/fake-live.testing.ts";
@@ -25,6 +25,8 @@ interface Options {
   origins?: Readonly<Record<string, ImportOrigin>>;
   /** Runs when the walk asks for origins. */
   onOrigins?: () => void;
+  /** Where the root of an edge's spelled name is bound, by the name the edge reaches; unknown otherwise. */
+  roots?: Readonly<Record<string, ImportOrigin>>;
   matches?: (path: string, glob: string) => boolean;
   indexFails?: boolean;
   live?: FakeLive;
@@ -68,7 +70,13 @@ function setup(options: Options) {
     },
     sourceTrivia: { triviaLines: async (file: { path: string }) => (options.onTrivia?.(file.path), new Set(options.trivia?.[file.path] ?? [])) },
     memberNames: { memberNames: async (file: { path: string }) => (options.onMemberNames?.(file.path), { names: options.memberNames?.[file.path] ?? [], functionValueCalls: [], callables: [] }) },
-    importOrigins: () => ({ origins: async (sites: readonly ImportOriginSite[]) => { options.onOrigins?.(); return sites.map(answer); } }),
+    importOrigins: () => ({
+      origins: async (sites: readonly ImportOriginSite[]) => { options.onOrigins?.(); return sites.map(answer); },
+      rootOrigins: async (sites: readonly ResolvedNameSite[]) => sites.map((site): Finding<ImportOrigin> => {
+        const root = options.roots?.[site.name];
+        return root === undefined ? { status: "unknown", reason: "unresolved", evidence: [] } : { status: "complete", value: root, evidence: [] };
+      }),
+    }),
     engines: {},
     ...(options.live && { live: options.live.deps, trust: { read: async () => ({ ok: true, value: "trusted" }) } }),
   } as unknown as TraceQueriesDeps;
@@ -132,6 +140,12 @@ test("a supertype the index left unresolved names a type only when type argument
 
   assert.deepEqual(cutsOf(plain), [["unresolved-link", ["src/b.ts:2 send"]]]);
   assert.deepEqual(cutsOf(parameterized), [["unresolved-link", ["src/b.ts:2 send", "src/b.ts::Impl.send"]]]);
+});
+
+test("an edge whose root the language's libraries bind is a global call, not a step at the repository homonym", async () => {
+  const fact = await factOf({ nodes: [SVC, RUN, callee("fetch")], edges: [...CONTAINS, call("run", "fetch", 8, 4)], roots: { fetch: { kind: "ambient", name: "fetch" } } });
+
+  assert.deepEqual(valueOf(fact).steps.map(({ symbol, leaves, external }) => [symbol, leaves, external]), [["run", undefined, [{ kind: "global", names: ["fetch"] }]]]);
 });
 
 test("a call codegraph synthesized from a source ye-ast ignores is not a step", async () => {

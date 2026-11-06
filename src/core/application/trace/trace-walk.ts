@@ -8,11 +8,12 @@ import { calleeOf, compareOccurrence, ownMemberOf, receiverOf, sameOccurrence, t
 import type { TraceVia } from "../../domain/trace/trace-fact.ts";
 import type { ExternalCall, TraceDeclaration, WalkedStep } from "../../domain/trace/trace-tree.ts";
 import type { DeclaredMemberNames } from "../../ports/declared-member-names.port.ts";
-import type { CodeGraphReader, GraphNodeId, GraphSymbol, GraphUnresolvedReference } from "../../ports/code-graph.port.ts";
+import type { CodeGraphReader, GraphEdge, GraphNodeId, GraphSymbol, GraphUnresolvedReference } from "../../ports/code-graph.port.ts";
 import type { ImportOriginSite, ImportOrigins } from "../../ports/import-origins.port.ts";
 import type { TraceBudget } from "../../ports/trace-queries.port.ts";
 import { createGraphNavigation, SUPERTYPE_EDGES } from "../navigation/graph-navigation.ts";
 import { containmentTree } from "../navigation/containment-tree.ts";
+import { edgesRootedOutside, type EdgeWithEnds } from "../navigation/rooted-edges.ts";
 
 /** What a body passes as a value runs later, if at all; only code can. */
 const DEFERRED_KINDS: readonly string[] = ["function", "method"];
@@ -213,20 +214,20 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
     const calls = callEdgesOf(store, node);
     const values = store.outgoingEdges([node.id], ["references"]);
     navigation.load([...calls, ...values].map((edge) => edge.target));
+    const withEnds = (edges: readonly GraphEdge[]): EdgeWithEnds[] => edges.flatMap((edge) => {
+      const target = navigation.symbolOf(edge.target);
+      return target === undefined ? [] : [{ edge, source: node, target }];
+    });
+    const called = withEnds(calls);
+    const passed = withEnds(values).filter(({ target }) => DEFERRED_KINDS.includes(target.kind));
+    const outside = await edgesRootedOutside(origins, [...called, ...passed], signal);
+    const followed = (edge: EdgeWithEnds): boolean => !outside.some((dropped) => dropped.edge === edge);
+    const external: ExternalCall[] = outside.map(({ edge, origin }) => (origin.kind === "external" ? { kind: "import", module: origin.module, name: edge.target.name } : { kind: "global", name: edge.target.name }));
     const children: Child[] = root ? membersOf(node) : [];
-    const resolved: EdgeOccurrence[] = [];
-    for (const edge of calls) {
-      const target = navigation.symbolOf(edge.target);
-      if (target === undefined) continue;
-      resolved.push({ source: edge.source, line: edge.line, column: edge.column, targetName: target.name });
-      children.push(childAt(target, edge.line, edge.column, target.name, "call"));
-    }
-    for (const edge of values) {
-      const target = navigation.symbolOf(edge.target);
-      if (target !== undefined && DEFERRED_KINDS.includes(target.kind)) children.push(childAt(target, edge.line, edge.column, target.name, "reference", true));
-    }
+    const resolved: EdgeOccurrence[] = called.map(({ edge, target }) => ({ source: edge.source, line: edge.line, column: edge.column, targetName: target.name }));
+    for (const { edge, target } of called.filter(followed)) children.push(childAt(target, edge.line, edge.column, target.name, "call"));
+    for (const { edge, target } of passed.filter(followed)) children.push(childAt(target, edge.line, edge.column, target.name, "reference", true));
 
-    const external: ExternalCall[] = [];
     const cuts: Cut[] = [];
     const bare: { reference: GraphUnresolvedReference; name: string }[] = [];
     for (const reference of callsFrom(node).filter((candidate) => !resolved.some((edge) => sameOccurrence(edge, candidate)))) {

@@ -1049,6 +1049,37 @@ test("a trace over a real index binds a receiver in its own file, so a function 
   assert.deepEqual(answer.value.value.steps[0]?.external, [{ kind: "unnamed", names: ["value.describe"] }]);
 });
 
+test("a trace over a real index never follows an edge whose name a package binds to a repository homonym: the call leaves under the package, and a repository import still expands", async () => {
+  writeFileSync(join(repo, "package.json"), JSON.stringify({ name: "fixture", dependencies: { pkg: "1.0.0" } }));
+  writeFileSync(join(repo, "src", "model.ts"), ["export class Base {}", "export function evaluate(value: number): number {", "  return value;", "}", ""].join("\n"));
+  writeFileSync(join(repo, "src", "uses-package.ts"), [
+    "import * as pkg from \"pkg\";",
+    "import { evaluate } from \"pkg\";",
+    "export function make(): unknown {",
+    "  return new pkg.Base();",
+    "}",
+    "export function pass(): unknown {",
+    "  return [1].map(evaluate);",
+    "}",
+    "",
+  ].join("\n"));
+  writeFileSync(join(repo, "src", "uses-repo.ts"), ["import { Base, evaluate } from \"./model\";", "export function real(): unknown {", "  return [new Base(), evaluate(1)];", "}", ""].join("\n"));
+  git("add", "-A");
+  git("commit", "-q", "-m", "homonyms");
+  const { trace } = composeQueries({ scratchRoot });
+  const walk = (symbol: string, file: string) => trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file, symbol }] });
+
+  const [make, pass, real] = await Promise.all([walk("make", "src/uses-package.ts"), walk("pass", "src/uses-package.ts"), walk("real", "src/uses-repo.ts")]);
+
+  const shape = (answer: typeof make) => {
+    assert.ok(answer.ok && answer.value.status === "complete", JSON.stringify(answer));
+    return answer.value.value.steps.map(({ symbol, leaves, external }) => ({ symbol, leaves: leaves?.map((leaf) => leaf.file), external }));
+  };
+  assert.deepEqual(shape(make), [{ symbol: "make", leaves: undefined, external: [{ kind: "import", module: "pkg", names: ["Base"] }] }]);
+  assert.deepEqual(shape(pass), [{ symbol: "pass", leaves: undefined, external: [{ kind: "import", module: "pkg", names: ["evaluate"] }] }]);
+  assert.deepEqual(shape(real), [{ symbol: "real", leaves: ["src/model.ts", "src/model.ts"], external: undefined }]);
+});
+
 test("callers over a range inside a property initializer still seeds the class that holds it", async () => {
   commitPage();
   const { impact } = composeQueries({ scratchRoot });

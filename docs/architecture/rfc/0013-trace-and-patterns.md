@@ -53,7 +53,7 @@ A call is `callee(args)` or `receiver.member(args)`; each rule settles it to one
 
 | # | Rule | Settles |
 |---|---|---|
-| R1 | A call edge the index resolved, unless its synthesizer is ignored by `EDGE_POLICY` | a step |
+| R1 | A call edge the index resolved, unless its synthesizer is ignored by `EDGE_POLICY` or its spelled root is bound by a package or the language's libraries at its place (`new pkg.Base()`, a `pkg` import named like a repository declaration): the index matched a homonym, so the edge is not followed, by the same function impact's walk uses (RFC-0010) | a step; a dropped edge is an external call under the package, or a global, by the name it reaches |
 | R2 | `this.<member>` and `this.<member>.<rest>` inside the class that declares the member (the inbound rule of RFC-0010, applied forward) | a step at the member |
 | R3 | `this.<field>.<member>`: the field's `FieldOrigin` holds a repository class (a step at its member, with dispatch R7 when it is an interface), an external type (a leaf), or nothing known (R6). Slice 2: it needs the call-binding port | a step or a leaf |
 | R4 | A bare name or a receiver identifier bound in the file: a local or a parameter whose declaration fixes its origin (`inject(T)`, `new T()`, `const x = this.f`, a type annotation `: T`), an import (a repository file: its export; a package: external with the package name), or no binding at all (a global: `global#Math`) | a step, a leaf |
