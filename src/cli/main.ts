@@ -9,6 +9,7 @@ import { isPositiveCount } from "../core/domain/shared/count.ts";
 import { WALK_BOUND_FIELDS, type WalkBoundsField } from "../core/domain/shared/fact.ts";
 import type { CallersTarget, ImpactCallersRequest, ImpactFault, ImpactImportersRequest, ImpactOfChangeRequest, ImpactQueries } from "../core/ports/impact-queries.port.ts";
 import type { OutlineFault, OutlineQueries, OutlineRequest, OutlineSelector } from "../core/ports/outline-queries.port.ts";
+import type { TraceQueries } from "../core/ports/trace-queries.port.ts";
 import type { WorkspaceQueries, WorkspaceRequest } from "../core/ports/workspace-queries.port.ts";
 import type { WorkspaceFault } from "../core/ports/workspace-repos.port.ts";
 import type { DecisionQueries, DecisionsRequest } from "../core/ports/decision-queries.port.ts";
@@ -37,6 +38,7 @@ export interface CliDeps {
   entrypoints: EntrypointQueries;
   impact: ImpactQueries;
   outline: OutlineQueries;
+  trace: TraceQueries;
   workspace: WorkspaceQueries;
   decisions: DecisionQueries;
   install: Install;
@@ -62,6 +64,7 @@ const USAGE = [
   "       ye-ast importers [--revision <rev> | --live] [--repo-id <id>] [scope] <repo> <file> ...",
   "       ye-ast outline [--revision <rev> | --live] [--repo-id <id>] [scope] <repo> <file> ...",
   "       ye-ast outline [--revision <rev> | --live] [--repo-id <id>] [scope] --focus <file>:<symbol> | --focus <file>:<line> ... <repo>",
+  "       ye-ast trace [--revision <rev> | --live] [--repo-id <id>] [scope] [--depth <n>] [--expansions <n>] <repo> <file>:<symbol> | <file>:<start>-<end> ...   (what the declarations execute, in source order, with a reading plan)",
   "       ye-ast workspace [--revision <rev>] [--repo-id <id>] [--offline] [scope] <repo>",
   "       ye-ast decisions [--revision <rev>] [--repo-id <id>] [--offline] [scope] <repo>",
   "       ye-ast init --trust trusted|untrusted [--workspace <file>] [<repo>]   (declares the trust mode, writes the fixed layer under .ye-ast/, ignores ye-ast's folders locally, prints the MCP registration)",
@@ -72,9 +75,9 @@ const USAGE = [
   "--live: reads the working tree of a repository declared trusted (ye-ast init --trust trusted) instead of a revision; the first run builds ye-ast's mirror of it, and a stale answer is reported on stderr and as a live sibling of the fact in the JSON",
   "--focus: outline only, repeatable, instead of files: <file>:<symbol> selects the declarations whose dotted containment path ends with it at whole names (Class.member, or a bare name at any depth); <file>:<line> the innermost declaration holding that line. Each match comes with its containers and how many of the file's declarations were left out, without imports",
   "--offline: reads every repository from its own clone and refreshes no declared remote, as under untrusted; only workspace and decisions take it",
-  "scope: [--include <glob>]... [--exclude <glob>]...   (globs over repository-relative paths, on map, impact, callers, importers, outline, workspace and decisions; without --include every path is included; --exclude wins)",
+  "scope: [--include <glob>]... [--exclude <glob>]...   (globs over repository-relative paths, on map, impact, callers, importers, outline, trace, workspace and decisions; without --include every path is included; --exclude wins)",
   "changed: [--changed <glob>]...   (impact only: globs over the changed paths; only the change's paths they select seed the walk, while the repository is read whole, so callers outside them are known; a glob that selects no changed path is an error)",
-  "budget: [--depth <n>] [--hub-fan-in <n>] [--expansions <n>]   (positive integers; none has a default)",
+  "budget: [--depth <n>] [--hub-fan-in <n>] [--expansions <n>]   (positive integers; none has a default; trace takes no --hub-fan-in, which counts callers)",
   "workspace: --workspace <file>   (the workspace init persists as .ye-ast/workspace.json: { \"repos\": [{ \"path\", \"id\", \"revision\", \"remote\" }], \"gateways\": [{ \"prefix\", \"repo\" }] }; a relative repository path is stored as written and resolved against the installed repository, and a remote is the source of truth a trusted repository's queries refresh into ye-ast's own mirror)",
   "measure: --measure   (one JSON measurement line per query and per index build, on stderr; never on stdout)",
 ].join("\n");
@@ -318,6 +321,10 @@ async function queryOf(command: string | undefined, args: readonly string[], dep
       const request = await parseOutlineRequest(args, deps);
       return request && (() => deps.outline.outline({ ...request, signal, ...(request.live && { onStale }) }));
     }
+    case "trace": {
+      const request = await parseCallersRequest(args, deps, TRACE_BUDGET_OPTIONS);
+      return request && (() => deps.trace.walk({ ...request, signal, ...(request.live && { onStale }) }));
+    }
     case "workspace": {
       const request = await parseWorkspaceRequest(args, deps);
       return request && (() => deps.workspace.outwardNames({ ...request, signal }));
@@ -419,6 +426,9 @@ function parseScope(values: ScopeValues): { scope?: ScopeRequest } | undefined {
 
 const BUDGET_OPTIONS = { depth: { type: "string" }, "hub-fan-in": { type: "string" }, expansions: { type: "string" } } as const;
 
+/** A trace walks outbound, where a caller count bounds nothing. */
+const TRACE_BUDGET_OPTIONS = { depth: BUDGET_OPTIONS.depth, expansions: BUDGET_OPTIONS.expansions } as const;
+
 type BudgetValues = { [Name in keyof typeof BUDGET_OPTIONS]?: string | undefined };
 
 /** The budget the flags name, `undefined` for a value that is not a positive integer, `{}` when no flag is given. */
@@ -458,13 +468,13 @@ async function parseImpactRequest(args: readonly string[], deps: RepositoryNamin
   }
 }
 
-async function parseCallersRequest(args: readonly string[], deps: RepositoryNaming): Promise<ImpactCallersRequest | undefined> {
+async function parseCallersRequest(args: readonly string[], deps: RepositoryNaming, budgetOptions: Partial<typeof BUDGET_OPTIONS> = BUDGET_OPTIONS): Promise<ImpactCallersRequest | undefined> {
   try {
     const { values, positionals } = parseArgs({
       args: [...args],
-      options: { revision: { type: "string" }, live: { type: "boolean" }, "repo-id": { type: "string" }, ...SCOPE_OPTIONS, ...BUDGET_OPTIONS },
+      options: { revision: { type: "string" }, live: { type: "boolean" }, "repo-id": { type: "string" }, ...SCOPE_OPTIONS, ...budgetOptions },
       allowPositionals: true,
-    });
+    }) as { values: { revision?: string; live?: boolean; "repo-id"?: string } & ScopeValues & BudgetValues; positionals: string[] };
     const [path, ...specs] = positionals;
     const budget = parseBudget(values);
     const targets = specs.map(parseTarget);

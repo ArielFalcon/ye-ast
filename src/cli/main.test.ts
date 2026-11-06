@@ -9,6 +9,8 @@ import type { Result } from "../core/domain/shared/result.ts";
 import type { EntrypointQueries, MapRequest } from "../core/ports/entrypoint-queries.port.ts";
 import type { ImpactCallersRequest, ImpactFault, ImpactImportersRequest, ImpactOfChangeRequest, ImpactQueries } from "../core/ports/impact-queries.port.ts";
 import type { OutlineFault, OutlineQueries, OutlineRequest } from "../core/ports/outline-queries.port.ts";
+import type { TraceFault, TraceQueries, TraceRequest } from "../core/ports/trace-queries.port.ts";
+import type { TraceValue } from "../core/domain/trace/trace-fact.ts";
 import type { FactRead, WorkspaceQueries, WorkspaceRequest, WorkspaceValue } from "../core/ports/workspace-queries.port.ts";
 import type { WorkspaceFault } from "../core/ports/workspace-repos.port.ts";
 import type { DecisionQueries, DecisionsRequest, DecisionValue } from "../core/ports/decision-queries.port.ts";
@@ -93,6 +95,7 @@ function setup(answer: Result<EntrypointMapFact, VcsFault | LiveFault> = { ok: t
       entrypoints,
       impact,
       outline: { outline: async () => unanswered } as OutlineQueries,
+      trace: { walk: async () => unanswered } as TraceQueries,
       workspace: { outwardNames: async () => unanswered } as WorkspaceQueries,
       decisions: { decisions: async () => unanswered } as DecisionQueries,
       install,
@@ -166,6 +169,20 @@ function setupOutline(answer?: Result<Fact<OutlineValue>, OutlineFault>) {
     },
   };
   return { ...base, requests, deps: { ...base.deps, outline } };
+}
+
+const TRACE_VALUE: TraceValue = { roots: [{ target: "src/A.java:run", steps: [0] }], steps: [{ id: 0, depth: 0, file: "src/A.java", symbol: "run", kind: "method", line: 3, endLine: 9 }], readingPlan: { ranges: [{ file: "src/A.java", start: 3, end: 9, steps: [0] }], lines: 7 }, cost: { expanded: 1 } };
+
+function setupTrace(answer?: Result<Fact<TraceValue>, TraceFault>) {
+  const base = setup();
+  const requests: TraceRequest[] = [];
+  const trace: TraceQueries = {
+    walk: async (request) => {
+      requests.push(request);
+      return answer ?? ({ ok: true, value: { ...IMPACT, status: "complete", value: TRACE_VALUE } as Fact<TraceValue> } as const);
+    },
+  };
+  return { ...base, requests, deps: { ...base.deps, trace } };
 }
 
 const WORKSPACE_VALUE: WorkspaceValue = {
@@ -456,6 +473,36 @@ test("callers answers an unknown symbol with the query code, one line per entry 
   ]);
 });
 
+test("trace asks for symbols and line ranges with the depth and expansions bounds and prints the fact", async () => {
+  const { io, deps, requests, signal } = setupTrace();
+  assert.equal(await run(["trace", "--revision", "v1", "--depth", "2", "--expansions", "9", "some/checkout", "src/A.java:run", "src/B.java:4-8"], io, deps), EXIT_CODE.ok);
+  assert.deepEqual(JSON.parse(io.stdout.join("\n")).value, TRACE_VALUE);
+  assert.deepEqual(requests, [
+    { repo: resolve("some/checkout"), repoId: "checkout", revision: "v1", targets: [{ file: "src/A.java", symbol: "run" }, { file: "src/B.java", start: 4, end: 8 }], budget: { depth: 2, expansions: 9 }, signal },
+  ]);
+});
+
+test("trace with a caller-count bound, with --live and --revision together, or without a target is a usage error that asks nothing", async () => {
+  for (const argv of [["trace", "--hub-fan-in", "2", ".", "A.java:run"], ["trace", "--live", "--revision", "v1", ".", "A.java:run"], ["trace", "."]]) {
+    const { io, deps, requests } = setupTrace();
+    assert.equal(await run(argv, io, deps), EXIT_CODE.usage, argv.join(" "));
+    assert.deepEqual(requests, []);
+  }
+});
+
+test("trace --live asks for the working tree instead of a revision", async () => {
+  const { io, deps, requests } = setupTrace();
+  await run(["trace", "--live", ".", "A.java:run"], io, deps);
+  assert.deepEqual([requests[0]?.live, requests[0]?.revision], [true, undefined]);
+});
+
+test("trace answers an unknown symbol with the query code and nothing on stdout", async () => {
+  const { io, deps } = setupTrace({ ok: false, fault: { kind: "unknown-symbol", detail: "no symbol at the revision for A.java:gone", entries: [{ file: "A.java", symbol: "gone", candidates: ["run"] }] } });
+  assert.equal(await run(["trace", ".", "A.java:gone"], io, deps), EXIT_CODE.queryFailed);
+  assert.deepEqual(io.stdout, []);
+  assert.equal(io.stderr[1], "  - A.java:gone: declared in A.java: run");
+});
+
 test("importers asks for the files at the revision and prints the fact", async () => {
   const defaults = setupImporters();
   assert.equal(await run(["importers", "some/checkout", "src/A.java", "src/B.java"], defaults.io, defaults.deps), EXIT_CODE.ok);
@@ -548,7 +595,7 @@ test("the usage names the workspace and decisions commands, and the scope help n
   const help = io.stdout.join("\n");
   assert.match(help, /ye-ast workspace \[--revision <rev>\] \[--repo-id <id>\] \[--offline\] \[scope\] <repo>/);
   assert.match(help, /ye-ast decisions \[--revision <rev>\] \[--repo-id <id>\] \[--offline\] \[scope\] <repo>/);
-  assert.match(help, /importers, outline, workspace and decisions/);
+  assert.match(help, /importers, outline, trace, workspace and decisions/);
   assert.match(help, /--offline:/);
   assert.match(help, /--changed <glob>/);
 });

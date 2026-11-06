@@ -9,6 +9,7 @@ import { SCHEMA, type FactBase } from "../core/domain/shared/fact.ts";
 import type { EntrypointQueries } from "../core/ports/entrypoint-queries.port.ts";
 import type { ImpactQueries } from "../core/ports/impact-queries.port.ts";
 import type { OutlineQueries } from "../core/ports/outline-queries.port.ts";
+import type { TraceQueries } from "../core/ports/trace-queries.port.ts";
 import type { WorkspaceQueries } from "../core/ports/workspace-queries.port.ts";
 import type { WorkspaceImpactQueries } from "../core/ports/workspace-impact-queries.port.ts";
 import type { DecisionQueries } from "../core/ports/decision-queries.port.ts";
@@ -65,7 +66,7 @@ async function throughCli(args: readonly string[], budgets: (ImpactBudget | unde
     version: "0.0.0",
     entrypoints,
     impact: { ofChange: async (request: { budget?: ImpactBudget }) => (budgets.push(request.budget), { ok: true, value: FACT } as never) } as unknown as ImpactQueries,
-    outline: {} as OutlineQueries,
+    outline: {} as OutlineQueries, trace: {} as TraceQueries,
     workspace: {} as WorkspaceQueries,
     decisions: {} as DecisionQueries,
     install,
@@ -86,7 +87,7 @@ async function throughProtocol(budget: unknown, budgets: (ImpactBudget | undefin
     JSON.stringify({ jsonrpc: "2.0", id: 2, method: "impact.ofChange", params: { repo: REPO, repoId: "shop", base: "HEAD", head: "HEAD", budget } }),
   ];
   await serveQueries(
-    { version: "0.0.0", entrypoints, impact: { ofChange: async (request: { budget?: ImpactBudget }) => (budgets.push(request.budget), { ok: true, value: FACT } as never) } as unknown as ImpactQueries, outline: {} as OutlineQueries, workspace: {} as WorkspaceQueries, decisions: {} as DecisionQueries, redaction },
+    { version: "0.0.0", entrypoints, impact: { ofChange: async (request: { budget?: ImpactBudget }) => (budgets.push(request.budget), { ok: true, value: FACT } as never) } as unknown as ImpactQueries, outline: {} as OutlineQueries, trace: {} as TraceQueries, workspace: {} as WorkspaceQueries, decisions: {} as DecisionQueries, redaction },
     { input: Readable.from(lines.map((line) => `${line}\n`)), output: { write: (chunk: string) => void (written += chunk) } },
   );
   const answers = written.split("\n").filter(Boolean).map((line) => JSON.parse(line) as { id?: number; result?: unknown; error?: unknown });
@@ -158,7 +159,7 @@ test("every surface that names a trust mode refuses one the domain does not know
     version: "0.0.0",
     entrypoints,
     impact: family().impact,
-    outline: {} as OutlineQueries,
+    outline: {} as OutlineQueries, trace: {} as TraceQueries,
     workspace: {} as WorkspaceQueries,
     decisions: {} as DecisionQueries,
     install,
@@ -171,7 +172,7 @@ test("every surface that names a trust mode refuses one the domain does not know
 
   let written = "";
   await serveQueries(
-    { version: "0.0.0", entrypoints, impact: family().impact, outline: {} as OutlineQueries, workspace: {} as WorkspaceQueries, decisions: {} as DecisionQueries, redaction },
+    { version: "0.0.0", entrypoints, impact: family().impact, outline: {} as OutlineQueries, trace: {} as TraceQueries, workspace: {} as WorkspaceQueries, decisions: {} as DecisionQueries, redaction },
     {
       input: Readable.from([`${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "trust.declare", params: { mode: "sometimes" } })}\n`]),
       output: { write: (chunk: string) => void (written += chunk) },

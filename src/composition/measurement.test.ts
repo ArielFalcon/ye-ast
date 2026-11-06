@@ -8,7 +8,7 @@ import type { CodeGraph } from "../core/ports/code-graph.port.ts";
 import type { EntrypointQueries } from "../core/ports/entrypoint-queries.port.ts";
 import type { ImpactQueries } from "../core/ports/impact-queries.port.ts";
 import { REDACTED, type Redaction } from "../core/ports/redaction.port.ts";
-import { measuredEntrypoints, measuredGraph, measuredImpact, measuredOutline, measuredStages } from "./measurement.ts";
+import { measuredEntrypoints, measuredGraph, measuredImpact, measuredOutline, measuredStages, measuredTrace } from "./measurement.ts";
 
 const SECRET = "s3cr3t";
 const SHA = "a".repeat(40);
@@ -263,4 +263,13 @@ test("a query line carries the process CPU the call spent and the memory it left
   assert.equal(typeof record.cpu_ms, "number");
   assert.ok((record.rss_bytes as number) > 0);
   assert.ok((record.heap_used_bytes as number) > 0);
+});
+
+test("a trace query emits its own query line", async () => {
+  const { lines, sink } = collecting();
+  const queries = { walk: async () => ({ ok: true, value: fact("complete") }) as never };
+
+  await measuredTrace(queries, { sink, redaction }).walk({ repo: "/work/shop", repoId: "shop", targets: [] } as never);
+
+  assert.equal(recordOf(lines[0]).method, "trace.walk");
 });

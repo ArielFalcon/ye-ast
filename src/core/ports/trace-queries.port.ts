@@ -6,8 +6,11 @@ import type { CallersTarget, UnknownSymbolFault } from "./impact-queries.port.ts
 import type { LiveFault, LiveSelector } from "./live-queries.port.ts";
 import type { VcsFault } from "./vcs.port.ts";
 
-/** Bounds on the walk; the hub bound counts callers and has no outbound meaning. Without one the walk runs to its end. */
-export type TraceBudget = Pick<WalkBounds, "depth" | "expansions">;
+/** The walk bounds a trace takes: the hub bound counts callers and has no outbound meaning. */
+export const TRACE_BOUND_FIELDS = ["depth", "expansions"] as const;
+
+/** Bounds on the walk; without one the walk runs to its end. */
+export type TraceBudget = Pick<WalkBounds, (typeof TRACE_BOUND_FIELDS)[number]>;
 
 interface TraceBase {
   /** Path of the root of a git repository to read. */

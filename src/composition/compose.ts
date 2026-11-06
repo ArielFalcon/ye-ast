@@ -17,6 +17,7 @@ import { createFixedLayerAdmin } from "../core/application/fixed-layer/fixed-lay
 import { createInstall } from "../core/application/install/install.ts";
 import { createImpactQueries } from "../core/application/impact/impact-queries.ts";
 import { createOutlineQueries } from "../core/application/outline/outline-queries.ts";
+import { createTraceQueries } from "../core/application/trace/trace-queries.ts";
 import { createWorkspaceQueries, createWorkspaceReadOperation } from "../core/application/topology/workspace-queries.ts";
 import { createCapturedWorkspaceImpactQueries } from "../core/application/topology/workspace-impact.ts";
 import { createCapturedDecisionQueries } from "../core/application/decisions/decision-queries.ts";
@@ -57,6 +58,7 @@ import type { ModuleDependenciesReader } from "../core/ports/module-dependencies
 import type { EntrypointQueries } from "../core/ports/entrypoint-queries.port.ts";
 import type { ImpactQueries } from "../core/ports/impact-queries.port.ts";
 import type { OutlineQueries } from "../core/ports/outline-queries.port.ts";
+import type { TraceQueries } from "../core/ports/trace-queries.port.ts";
 import type { WorkspaceQueries } from "../core/ports/workspace-queries.port.ts";
 import type { WorkspaceImpactQueries } from "../core/ports/workspace-impact-queries.port.ts";
 import type { DecisionQueries } from "../core/ports/decision-queries.port.ts";
@@ -65,7 +67,7 @@ import type { Redaction } from "../core/ports/redaction.port.ts";
 import type { TrustRecordReader } from "../core/ports/trust-record.port.ts";
 import type { ExportBudget, Vcs } from "../core/ports/vcs.port.ts";
 import { installedVersion, ownVersion } from "./installed-versions.ts";
-import { measuredDecisions, measuredStages, measuredEntrypoints, measuredGraph, measuredImpact, measuredOutline, measuredWorkspace, type MeasurementSink } from "./measurement.ts";
+import { measuredDecisions, measuredStages, measuredEntrypoints, measuredGraph, measuredImpact, measuredOutline, measuredTrace, measuredWorkspace, type MeasurementSink } from "./measurement.ts";
 
 const PRODUCER_NAME = "ye-ast";
 const ENTRYPOINT_ENGINES = ["web-tree-sitter", "tree-sitter-java", "typescript"] as const;
@@ -107,6 +109,7 @@ export interface ComposedQueries {
   entrypoints: EntrypointQueries;
   impact: ImpactQueries;
   outline: OutlineQueries;
+  trace: TraceQueries;
   workspace: WorkspaceQueries;
   workspaceImpact: WorkspaceImpactQueries;
   decisions: DecisionQueries;
@@ -221,6 +224,24 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
     ...trust,
   });
   const outline = measurement === undefined ? bareOutline : measuredOutline(bareOutline, measurement);
+  const bareTrace = createTraceQueries({
+    ...snapshotCache,
+    vcs,
+    scratch,
+    reader,
+    extractor,
+    graph,
+    ...(indexes && { indexes }),
+    digest,
+    matcher,
+    producer: { name: PRODUCER_NAME, version },
+    engines: { ...entrypointEngines, [CODEGRAPH_PACKAGE]: codegraph },
+    live,
+    ...budget,
+    ...trust,
+    importOrigins: (sources: readonly SourceFile[]) => createImportOrigins(sources),
+  });
+  const trace = measurement === undefined ? bareTrace : measuredTrace(bareTrace, measurement);
   const defaults = createWorkspaceDefaults(createFixedLayerStore());
   const refresh = options.refresh ?? (options.cacheDirectory === undefined ? undefined : createRemoteRefresh({ ...defaultRemoteRefreshDeps, cacheDirectory: options.cacheDirectory, digest }));
   const workspaceDeps: WorkspaceQueriesDeps = {
@@ -256,7 +277,7 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
   } });
   const bareDecisions = createCapturedDecisionQueries({ operation, defaults, vcs, digest });
   const decisions = measurement === undefined ? bareDecisions : measuredDecisions(bareDecisions, measurement);
-  return { version, entrypoints, impact, outline, workspace, workspaceImpact, decisions, redaction, repositoryName: (repo, signal) => vcs.repositoryName(repo, signal), canonicalRepositoryRoot: (repo, signal) => vcs.canonicalRoot(repo, signal), warmLive };
+  return { version, entrypoints, impact, outline, trace, workspace, workspaceImpact, decisions, redaction, repositoryName: (repo, signal) => vcs.repositoryName(repo, signal), canonicalRepositoryRoot: (repo, signal) => vcs.canonicalRoot(repo, signal), warmLive };
 }
 
 export function composeCli(options: CompositionOptions = {}): (argv: readonly string[], io: CliIo) => Promise<number> {
