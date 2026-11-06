@@ -94,32 +94,33 @@ function describe(file: string, tree: ts.SourceFile, imports: ReadonlyMap<string
   return { file, tree, imports, classes, functions };
 }
 
-interface Registration {
+interface RouterCall {
   unit: Unit;
-  routes: ts.Expression;
+  call: ts.CallExpression;
+  kind: "provide" | "for-root";
 }
 
 type FileOf = (from: string, specifier: string) => Promise<string | undefined>;
 
 async function routeIndex(index: FlowIndex, fileOf: FileOf, declarationOf: DeclarationLookup): Promise<RouteIndex> {
   const resolvers = new Map<string, ResolverRegistration[]>();
-  const binders: Registration[] = [];
+  const routers: RouterCall[] = [];
   const found: { unit: Unit; route: ts.ObjectLiteralExpression }[] = [];
   for (const unit of index.units.values()) {
     const visit = (node: ts.Node): void => {
-      const routes = ts.isCallExpression(node) ? bindingRoutes(unit, node) : undefined;
-      if (routes !== undefined) binders.push({ unit, routes });
+      const router = ts.isCallExpression(node) ? routerCall(unit, node) : undefined;
+      if (router !== undefined) routers.push(router);
       if (ts.isObjectLiteralExpression(node) && propertyInitializer(node, "resolve") !== undefined) found.push({ unit, route: node });
       node.forEachChild(visit);
     };
     visit(unit.tree);
   }
+  let inputBinding = routers.length > 0;
+  for (const router of routers) inputBinding &&= await bindsInputs(index, fileOf, router);
   for (const { unit, route } of found) {
     const table = propertyInitializer(route, "resolve");
     if (table === undefined || !ts.isObjectLiteralExpression(table)) continue;
     const component = await componentOf(index, unit, route, fileOf, declarationOf);
-    let inputBinding = false;
-    for (const binder of binders) inputBinding ||= await registers(index, fileOf, binder.unit, binder.routes, unit, route, new Set());
     for (const property of table.properties) {
       const key = ts.isPropertyAssignment(property) || ts.isShorthandPropertyAssignment(property) ? property.name.getText(unit.tree).replace(/^['"]|['"]$/g, "") : undefined;
       const reference = ts.isPropertyAssignment(property) ? property.initializer : ts.isShorthandPropertyAssignment(property) ? property.name : undefined;
@@ -134,35 +135,31 @@ async function routeIndex(index: FlowIndex, fileOf: FileOf, declarationOf: Decla
   return { resolvers };
 }
 
-/** The routes a router call registers when the call itself turns component input binding on. */
-function bindingRoutes(unit: Unit, call: ts.CallExpression): ts.Expression | undefined {
+/** A root router of the application: `provideRouter(...)` or `RouterModule.forRoot(...)`; component input binding is a setting of the whole router. */
+function routerCall(unit: Unit, call: ts.CallExpression): RouterCall | undefined {
   const callee = call.expression;
-  const [routes, options] = call.arguments;
-  if (routes === undefined) return undefined;
-  if (ts.isIdentifier(callee) && unit.imports.get(callee.text)?.imported === "provideRouter") {
-    return call.arguments.some((argument) => ts.isCallExpression(argument) && ts.isIdentifier(argument.expression) && unit.imports.get(argument.expression.text)?.imported === "withComponentInputBinding") ? routes : undefined;
-  }
-  if (!ts.isPropertyAccessExpression(callee) || callee.name.text !== "forRoot" || !ts.isIdentifier(callee.expression) || unit.imports.get(callee.expression.text)?.imported !== "RouterModule") return undefined;
-  const bound = options !== undefined && ts.isObjectLiteralExpression(options) ? propertyInitializer(options, "bindToComponentInputs") : undefined;
-  return bound?.kind === ts.SyntaxKind.TrueKeyword ? routes : undefined;
+  if (ts.isIdentifier(callee) && unit.imports.get(callee.text)?.imported === "provideRouter") return { unit, call, kind: "provide" };
+  const forRoot = ts.isPropertyAccessExpression(callee) && callee.name.text === "forRoot" && ts.isIdentifier(callee.expression) && unit.imports.get(callee.expression.text)?.imported === "RouterModule";
+  return forRoot ? { unit, call, kind: "for-root" } : undefined;
 }
 
-/** Whether `route` sits in the routes `expression` names or holds, through the arrays it refers to here or in other files. */
-async function registers(index: FlowIndex, fileOf: FileOf, unit: Unit, expression: ts.Expression, owner: Unit, route: ts.Node, seen: Set<ts.Node>): Promise<boolean> {
-  if (seen.has(expression)) return false;
-  seen.add(expression);
-  if (unit === owner && route.pos >= expression.pos && route.end <= expression.end) return true;
-  const names: ts.Identifier[] = [];
-  const collect = (node: ts.Node): void => {
-    if (ts.isIdentifier(node)) names.push(node);
-    else if (!ts.isPropertyAccessExpression(node)) node.forEachChild(collect);
-  };
-  collect(expression);
-  for (const name of names) {
-    const declared = await initializerOf(index, fileOf, unit, name.text);
-    if (declared !== undefined && (await registers(index, fileOf, declared.unit, declared.initializer, owner, route, seen))) return true;
+/** Whether a root router turns component input binding on: a feature argument, an array of features spread into it, or forRoot's option. */
+async function bindsInputs(index: FlowIndex, fileOf: FileOf, { unit, call, kind }: RouterCall): Promise<boolean> {
+  if (kind === "for-root") {
+    const options = call.arguments[1];
+    return options !== undefined && ts.isObjectLiteralExpression(options) && propertyInitializer(options, "bindToComponentInputs")?.kind === ts.SyntaxKind.TrueKeyword;
+  }
+  for (const argument of call.arguments.slice(1)) {
+    if (isInputBindingFeature(unit, argument)) return true;
+    if (!ts.isSpreadElement(argument) || !ts.isIdentifier(argument.expression)) continue;
+    const declared = await initializerOf(index, fileOf, unit, argument.expression.text);
+    if (declared !== undefined && ts.isArrayLiteralExpression(declared.initializer) && declared.initializer.elements.some((element) => isInputBindingFeature(declared.unit, element))) return true;
   }
   return false;
+}
+
+function isInputBindingFeature(unit: Unit, node: ts.Node): boolean {
+  return ts.isCallExpression(node) && ts.isIdentifier(node.expression) && unit.imports.get(node.expression.text)?.imported === "withComponentInputBinding";
 }
 
 async function initializerOf(index: FlowIndex, fileOf: FileOf, unit: Unit, name: string): Promise<{ unit: Unit; initializer: ts.Expression } | undefined> {

@@ -606,15 +606,17 @@ test("a name that no input declares is a frontier at the class, the original nam
   }
 });
 
-test("input binding is proven only by withComponentInputBinding() inside the provideRouter call that registers the routes", async () => {
+test("input binding is router-wide: proven when every root router turns it on, through a feature argument, a spread of features or forRoot's option", async () => {
   const unused = ROUTES("import { provideRouter, withComponentInputBinding } from '@angular/router'\nconst unused = withComponentInputBinding()\nexport const config = [provideRouter(routes)]");
   const refused = await follow(unused, resolverReturn, "owner");
   assert.deepEqual(next(refused), []);
   assert.equal(refused.frontiers[0]!.cause, "unsupported-binding");
-  const other = ROUTES("import { provideRouter, withComponentInputBinding } from '@angular/router'\nexport const config = [provideRouter(elsewhere, withComponentInputBinding())]");
-  assert.deepEqual(next(await follow(other, resolverReturn, "owner")), []);
-  const module = ROUTES("import { RouterModule } from '@angular/router'\nexport const config = [RouterModule.forRoot(routes, { bindToComponentInputs: true })]");
+  const spread = ROUTES("import { provideRouter, withComponentInputBinding } from '@angular/router'\nconst features = [withComponentInputBinding()]\nexport const config = [provideRouter(lazyRoot, ...features)]");
+  assert.deepEqual(next(await follow(spread, resolverReturn, "owner")), ["input order@- owner"]);
+  const module = ROUTES("import { RouterModule } from '@angular/router'\nexport const config = [RouterModule.forRoot(lazyRoot, { bindToComponentInputs: true })]");
   assert.deepEqual(next(await follow(module, resolverReturn, "owner")), ["input order@- owner"]);
+  const mixed = ROUTES("import { provideRouter, withComponentInputBinding } from '@angular/router'\nexport const config = [provideRouter(routes, withComponentInputBinding())]\nexport const other = [provideRouter(lazyRoot)]");
+  assert.deepEqual(next(await follow(mixed, resolverReturn, "owner")), []);
 });
 
 test("a resolver key reaches the input carrier by its public name, not a member", async () => {
