@@ -105,7 +105,7 @@ export const target = z.union([
       symbol: z
         .string()
         .min(1)
-        .describe("Declaration or Class.member; matches every declaration with that final name in the file, including overloads."),
+        .describe("Declaration or dotted Class.member path, as ye_ast_outline nests it; matches every declaration whose path ends with it, including overloads. A bare name matches at any depth."),
     })
     .describe("Match by declaration name."),
   z

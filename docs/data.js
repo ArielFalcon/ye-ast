@@ -410,7 +410,7 @@ window.EXPLORER_DATA = {
         },
         {
           title: "Walk from the requested target",
-          body: "<p>The requested symbol seeds every seedable node with that simple name; a requested range seeds as the added lines of an unchanged file. The walk then climbs inbound.</p>",
+          body: "<p>The requested symbol seeds every seedable node whose dotted containment path ends with it (a bare name at any depth, <code>A.m</code> only a member of <code>A</code>); a requested range seeds as the added lines of an unchanged file. The walk then climbs inbound.</p>",
           focus: ["app-impact", "domain-impact", "ports-code-graph", "adapter-codegraph"],
           edges: [["app-impact", "domain-impact"], ["app-impact", "ports-code-graph"], ["ports-code-graph", "adapter-codegraph"]],
           callout: "domain-impact",

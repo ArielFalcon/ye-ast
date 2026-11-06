@@ -19,7 +19,8 @@ import { moduleImpact, moduleResources } from "../../domain/impact/module-impact
 import type { ModuleDependencies } from "../../domain/impact/module-dependency.ts";
 import type { ModuleDependenciesReader } from "../../ports/module-dependencies.port.ts";
 import { cutsCompleteness } from "../../domain/languages/uncovered.ts";
-import { comparePosition, compareText, joinsFact } from "../../domain/shared/code-node.ts";
+import { comparePosition, compareText } from "../../domain/shared/code-node.ts";
+import { selectedBySymbol } from "../../domain/shared/declaration-tree.ts";
 import type { Entrypoint } from "../../domain/entrypoints/entrypoint.ts";
 import { declarationSpan, sortedEngines, type Cut, type DeclaredConfig, type DeclaredScope, type Evidence, type Fact, type FactBase, type Finding, type IndexOrigin, type SnapshotRef, type TrustMode, type UnknownFact } from "../../domain/shared/fact.ts";
 import { exportSelection, pathSelection, sortedGlobs, type PathSelection, type ScopeRequest } from "../../domain/shared/scope.ts";
@@ -45,6 +46,7 @@ import { createInboundEdges } from "./inbound-edges.ts";
 import { walkImpact } from "./walk.ts";
 import type { ImportOriginSite, ImportOriginsReader } from "../../ports/import-origins.port.ts";
 import type { ContractRoutes } from "../../ports/contract-routes.port.ts";
+import { containmentTree } from "../outline/outline.ts";
 import { prepareCommit } from "../snapshot/prepared-snapshot.ts";
 
 export interface ImpactQueriesDeps extends HeadReaderDeps {
@@ -511,7 +513,8 @@ function impactOf(input: WalkInput): ImpactRead {
   const componentFiles = changes.flatMap((file) => (componentsByResource.get(file.path) ?? []).map((component) => component.file));
   const symbols = store.symbolsInFiles([...new Set([...sourceChanges, ...componentFiles, ...requested.map(({ file }) => file)])]);
   const symbolsByFile = Map.groupBy(symbols, (symbol) => symbol.file);
-  const asked = requested.map((target) => ({ target, found: (symbolsByFile.get(target.file) ?? []).filter((symbol) => isSeedable(symbol) && joinsFact(symbol, { path: target.file, line: symbol.startLine, symbol: target.symbol })) }));
+  const trees = new Map([...new Set(requested.map(({ file }) => file))].map((file) => [file, containmentTree(store, symbolsByFile.get(file) ?? [])]));
+  const asked = requested.map((target) => ({ target, found: selectedBySymbol(trees.get(target.file) ?? [], target.symbol).map(({ declaration }) => declaration).filter(isSeedable) }));
   const missing = asked.filter(({ found: nodes }) => nodes.length === 0).map(({ target }) => ({ ...target, candidates: candidatesOf(symbolsByFile.get(target.file) ?? []) }));
   if (missing.length > 0) return { value: { seeds: [], symbols: [], entrypoints: [], cost: { expansionsUsed: 0 } }, cuts: [], missing };
 

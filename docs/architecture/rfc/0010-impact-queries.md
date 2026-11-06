@@ -70,7 +70,8 @@ replaces `head` or `revision` under `trusted` only ([Live head](#live-head-slice
 
 `Seed.basis` is `lines`, `top-level` or `resource`, or `requested` for a symbol `impact.callers` was asked for by name.
 A requested line range seeds through the rows above, as the added lines of a file; a requested symbol seeds every
-seedable node of its file with that simple name (the join below), so overloads all seed; a symbol that is both requested
+seedable node of its file whose dotted path in the file's `contains` tree ends with it at whole names (a bare name at
+any depth, `A.m` only an `m` that `A` contains directly), so overloads all seed; a symbol that is both requested
 and inside a requested range is one seed, `requested`.
 
 A deleted component resource is also read through the merge base's decorator metadata. An owner that survives at the

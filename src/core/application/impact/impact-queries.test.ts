@@ -671,6 +671,21 @@ test("a dependence the walk never places names its reason instead of leaving the
   assert.deepEqual(owner?.via, { file: "src/A.java", symbol: "m", basis: "contains" });
 });
 
+const TWO_CLASSES = {
+  nodes: [fakeNode("A", "class", "src/A.ts", 1, 9), fakeNode("A.m", "method", "src/A.ts", 2, 4, "m"), fakeNode("B", "class", "src/A.ts", 11, 19), fakeNode("B.m", "method", "src/A.ts", 12, 14, "m")],
+  edges: [{ from: "A", to: "A.m", kind: "contains" }, { from: "B", to: "B.m", kind: "contains" }],
+};
+
+test("a dotted symbol seeds only the member its container holds, not a same-named member of another container", async () => {
+  const answer = callersFact(await setup(TWO_CLASSES).callers({ targets: [{ file: "src/A.ts", symbol: "A.m" }] }));
+  assert.deepEqual(answer.status === "complete" && answer.value.seeds.map((seed) => seed.line), [2]);
+});
+
+test("a bare symbol seeds every declaration of that name in the file, at any depth", async () => {
+  const answer = callersFact(await setup(TWO_CLASSES).callers({ targets: [{ file: "src/A.ts", symbol: "m" }] }));
+  assert.deepEqual(answer.status === "complete" && answer.value.seeds.map((seed) => seed.line), [2, 12]);
+});
+
 test("a declaration carries its last line only when it spans more than one line", async () => {
   const nodes = [fakeNode("f", "function", "src/A.java", 1, 3), fakeNode("one", "function", "src/B.java", 7, 7)];
   const answer = callersFact(await setup({ nodes }).callers({ targets: [{ file: "src/A.java", symbol: "f" }, { file: "src/B.java", symbol: "one" }] }));

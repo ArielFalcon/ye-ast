@@ -308,7 +308,7 @@ window.EXPLORER_ES = {
         },
         {
           title: "Recorrer desde el objetivo pedido",
-          body: "<p>El símbolo pedido siembra cada nodo sembrable con ese nombre simple; un rango pedido siembra como las líneas añadidas de un archivo sin cambios. Después el recorrido sube inverso.</p>",
+          body: "<p>El símbolo pedido siembra cada nodo sembrable cuya ruta de contención con puntos termina en él (un nombre suelto a cualquier profundidad, <code>A.m</code> solo un miembro de <code>A</code>); un rango pedido siembra como las líneas añadidas de un archivo sin cambios. Después el recorrido sube inverso.</p>",
           calloutText: "Un símbolo pedido es una semilla con base requested.",
         },
         {
