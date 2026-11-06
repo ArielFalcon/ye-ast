@@ -432,6 +432,14 @@ files all count. A moved HEAD is just a new merge base.
   ([ADR-0030](../adr/0030-live-captures-use-the-snapshot-data-cache.md) decision 6); the changed paths and the
   diff are computed on every call.
 
+**The universe.** The files an index holds are `isWritten` (the map scope plus JSON module resources) for every
+family at a sha and on the live tree, so a snapshot yields one kept index whichever family asked first. Importers also
+stage test sources and keep their own index when the repository holds any. A family that must not report facts about a
+JSON resource filters at query time. The mirror records the universe's version (`WRITTEN_UNIVERSE_VERSION`) beside
+`STAGING_RULES_VERSION` in its state file. Under a host-set `ExportBudget.maxBytes`, JSON module resources count toward
+the bytes written, so a `caller-budget` cut on callers, outline or trace can stop at an earlier file than it did when
+those families exported the map scope alone.
+
 **The mirror.**
 
 - **What it is.** A persistent copy of the in-scope live listing plus its codegraph store, at
@@ -527,8 +535,9 @@ consulted after the reconcile and keyed by the repository, scope, trust and the 
 `written` flags, skipped entries), never by HEAD. A file whose stat moved but whose bytes did not keeps its blob id and so
 its key; an edit changes a blob and misses. The assumption stays the mirror's own, stated in "The mirror" above: the
 coarse clock of the file system, which can leave two same-size writes inside one ctime tick as one stat.
-The merge base of a live change query is a commit and takes the key of a commit at that scope and trust, so its entry is
-shared with a change query at that sha and survives an edit of the working tree.
+The merge base of a live change query is a commit and takes the key of a commit at that scope and trust (the written
+files' paths and blobs, [ADR-0031](../adr/0031-snapshot-data-is-keyed-by-the-written-files.md)), so its entry is shared
+with a change query at any commit whose written files are equal and survives an edit of the working tree.
 
 **The `sync` parity test** (ADR-0015 decision 4).
 

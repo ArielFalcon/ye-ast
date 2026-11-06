@@ -232,6 +232,10 @@ measurement is configured:
 {"ye_ast":{"event":"cache","outcome":"evicted","entry_bytes":182340,"retained_bytes":8412770,"start_ms":5231}}
 ```
 
+A SHA entry is keyed by the scope, trust, export budget and the written files' paths and blobs, not by the commit
+([ADR-0031](../adr/0031-snapshot-data-is-keyed-by-the-written-files.md)), so a `hit` can follow a lookup at another
+commit with equal written files.
+
 `outcome` is `hit` or `miss` for a lookup, and for a store `admitted`, `evicted` (one line per entry the admission
 displaced) or `oversize-skipped` (the entry alone exceeds the budget and is not kept). `entry_bytes` is the charge of
 the entry concerned (key plus serialized payload) and is absent on a `miss`; for an `oversize-skipped` entry whose
