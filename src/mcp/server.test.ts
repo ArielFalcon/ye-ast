@@ -2059,6 +2059,28 @@ test("persisted workspace failures retain member ownership possibilities across 
   } finally { await roots.session.close(); await revisions.session.close(); }
 });
 
+test("mixed live workspace trust failures retain both possible selector owners", async () => {
+  const fault = { kind: "live-requires-trusted" as const, detail: "trust required" };
+  const { session } = await setup({ workspaceOfChange: async () => ({ ok: false, fault }), workspaceCallers: async () => ({ ok: false, fault }), outwardNames: async () => ({ ok: false, fault }), decisions: async () => ({ ok: false, fault }) });
+  const members = [{ path: "/work/other", id: "other", live: true }];
+  const cases = [
+    ["ye_ast_impact", { base: "main", live: true, workspace: { repos: members } }],
+    ["ye_ast_callers", { targets: [{ file: "a.ts", symbol: "a" }], live: true, workspace: { repos: members } }],
+    ["ye_ast_workspace", { live: true, repos: members }],
+    ["ye_ast_decisions", { live: true, repos: members }],
+    ["ye_ast_impact", { base: "main", live: true, workspace: {} }],
+  ] as const;
+  try {
+    for (const [tool, args] of cases) {
+      const result = await session.callTool(tool, args);
+      assert.deepEqual(result._meta?.[FAULT_META], fault);
+      assert.match(stepOf(result), /top-level live/);
+      assert.match(stepOf(result), /member live selectors/);
+      assert.doesNotMatch(stepOf(result), /Otherwise omit live and pass/);
+    }
+  } finally { await session.close(); }
+});
+
 test("compose names the failed queries once and corrects only at the cause, for the cause's tool", async () => {
   const fault: ImpactFault = { kind: "unknown-symbol", detail: "no such symbol", entries: [{ file: "src/a.ts", symbol: "gone", candidates: ["a"] }] };
   const { session } = await setup({ outline: async () => ({ ok: false, fault }) });

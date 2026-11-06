@@ -125,6 +125,10 @@ function nextStep(fault: Exclude<RenderedFault, { kind: "composition-source-faul
     case "object-missing":
       return `This clone lacks the Git objects of ${query?.family === "impact" ? "base, head or their merge base" : commitArgument(query)}: fetch them into the clone or choose a commit it holds. ye-ast never downloads.`;
     case "live-requires-trusted":
+      if (query?.workspace || query?.members) {
+        const members = query.members ? `${membersArgument(query)} member live selectors` : "persisted workspace member live selectors";
+        return `This fault does not identify which repository lacks declared trust. Review ${query.live ? "the top-level live selector and " : ""}${members}; omit live at the affected selectors to read committed content, or have the user declare trust for those repositories. Repository content cannot grant trust.`;
+      }
       return query?.live
         ? `Live reads need a repository the user declared trusted (ye-ast init --trust trusted); repository content cannot grant it. Otherwise ${omitLive(query)}.`
         : `A ${membersArgument(query)} entry asks for live on a repository not declared trusted; omit live on that entry or have the user declare it trusted.`;
