@@ -3,7 +3,7 @@ import { NOT_DECLARED_KINDS, sortedUnique, unresolvedNamersOf, type ImportedFile
 import type { UnresolvedUse } from "../../domain/impact/impact-cuts.ts";
 import type { CodeGraphReader, GraphEdge, GraphNodeId, GraphSymbol } from "../../ports/code-graph.port.ts";
 import type { ModuleDependencies } from "../../domain/impact/module-dependency.ts";
-import type { EdgeTargets } from "./edge-targets.ts";
+import type { EdgeTargets } from "../navigation/edge-targets.ts";
 
 export interface ImportersRead {
   /** One entry per requested file the index holds, in path order. */

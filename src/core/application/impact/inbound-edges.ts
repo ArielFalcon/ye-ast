@@ -8,6 +8,7 @@ import type { Relation, SymbolRef } from "../../domain/relations/relation.ts";
 import { comparePosition, compareText, joinsFact } from "../../domain/shared/code-node.ts";
 import type { CodeGraphReader, GraphEdge, GraphNodeId, GraphSymbol, GraphUnresolvedReference } from "../../ports/code-graph.port.ts";
 import { createGraphNavigation, SUPERTYPE_EDGES } from "../navigation/graph-navigation.ts";
+import { edgeKey, type FollowedEdge } from "../navigation/edge-targets.ts";
 
 /**
  * A symbol that depends on another, and how sure the store is of the dependence: 0 to 1. `bridge` says the dependence
@@ -72,12 +73,6 @@ export interface InboundEdges {
   followed(): readonly FollowedEdge[];
 }
 
-export interface FollowedEdge {
-  edge: GraphEdge;
-  source: GraphSymbol;
-  target: GraphSymbol;
-}
-
 /** What `EdgeTargets` judged of the edges read: those that reach no declaration they name, and those it moved to another. */
 export interface EdgeCorrections {
   /** By `edgeKey`: none of them is a dependence of its graph target. */
@@ -87,11 +82,6 @@ export interface EdgeCorrections {
 }
 
 export const NO_CORRECTIONS: EdgeCorrections = { dropped: new Set(), into: new Map() };
-
-/** One edge of the store, for naming it in a set; a handle inside one store, never output. */
-export function edgeKey({ source, target, kind, line, column }: GraphEdge): string {
-  return JSON.stringify([source, target, kind, line, column]);
-}
 
 function isInside(inner: GraphSymbol, outer: GraphSymbol): boolean {
   return inner.file === outer.file && outer.startLine <= inner.startLine && inner.endLine <= outer.endLine;

@@ -44,11 +44,11 @@ import { ABORTED, extractCommit, factBaseOf, trustOf, withScratch, type CommitEx
 import { createHeadReader, withLiveCapture, type FactSpec, type HeadIndex, type HeadReaderDeps, type HeadReading, type Revisioned } from "../snapshot/head-reading.ts";
 import { readImporters } from "./importers.ts";
 import { inboundEdgesOf } from "./inbound-origins.ts";
-import { edgeKey, type EdgeCorrections, type FollowedEdge, type InboundEdges } from "./inbound-edges.ts";
+import type { EdgeCorrections, InboundEdges } from "./inbound-edges.ts";
 import { memberProofContextOf, referenceProofsOf, sourceFilesOf, type ReferenceProofs } from "./reference-origins.ts";
 import { walkImpact, type Walk } from "./walk.ts";
 import type { ImportOrigins, ImportOriginsReader } from "../../ports/import-origins.port.ts";
-import { createEdgeTargets, type EdgeTargets, type EdgeTargetsDeps } from "./edge-targets.ts";
+import { createEdgeTargets, edgeKey, type EdgeTargets, type EdgeTargetsDeps, type FollowedEdge } from "../navigation/edge-targets.ts";
 import type { ContractRoutes } from "../../ports/contract-routes.port.ts";
 import { distinctTargets, evidenceOfTarget, missingTargets, rangeChanges, requestedRanges, selectRoots, targetKey } from "../navigation/root-selection.ts";
 import { prepareCommit } from "../snapshot/prepared-snapshot.ts";

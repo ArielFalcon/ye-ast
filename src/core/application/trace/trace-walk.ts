@@ -13,7 +13,7 @@ import type { ImportOriginSite, ImportOrigins } from "../../ports/import-origins
 import type { TraceBudget } from "../../ports/trace-queries.port.ts";
 import { createGraphNavigation, SUPERTYPE_EDGES } from "../navigation/graph-navigation.ts";
 import { containmentTree } from "../navigation/containment-tree.ts";
-import { edgesRootedOutside, type EdgeWithEnds } from "../navigation/rooted-edges.ts";
+import type { EdgeTargets, FollowedEdge } from "../navigation/edge-targets.ts";
 
 /** What a body passes as a value runs later, if at all; only code can. */
 const DEFERRED_KINDS: readonly string[] = ["function", "method"];
@@ -45,6 +45,8 @@ function callEdgesOf(store: CodeGraphReader, symbol: GraphSymbol) {
 export interface TraceWalkInput {
   store: CodeGraphReader;
   origins: ImportOrigins;
+  /** Where each resolved edge really points, judged by the one owner of that decision. */
+  targets: EdgeTargets;
   /** Whether a path is inside the declared scope: a declaration outside it cannot make a call repository code. */
   inScope: (path: string) => boolean;
   /**
@@ -88,7 +90,7 @@ interface Body {
  * cut that leaves it free to expand at a later, shallower one. Every read is cached for this walk only.
  */
 export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkInput): Promise<TraceWalk | "aborted"> {
-  const { store, origins, inScope, memberDeclarations, syntaxOf, budget, signal } = input;
+  const { store, origins, targets, inScope, memberDeclarations, syntaxOf, budget, signal } = input;
   const navigation = createGraphNavigation(store, () => false);
 
   const referencesByFile = new Map<string, ReadonlyMap<GraphNodeId, readonly GraphUnresolvedReference[]>>();
@@ -225,14 +227,19 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
     const calls = callEdgesOf(store, node);
     const values = store.outgoingEdges([node.id], ["references"]);
     navigation.load([...calls, ...values].map((edge) => edge.target));
-    const withEnds = (edges: readonly GraphEdge[]): EdgeWithEnds[] => edges.flatMap((edge) => {
+    const withEnds = (edges: readonly GraphEdge[]): FollowedEdge[] => edges.flatMap((edge) => {
       const target = navigation.symbolOf(edge.target);
       return target === undefined ? [] : [{ edge, source: node, target }];
     });
     const called = withEnds(calls);
     const passed = withEnds(values).filter(({ target }) => DEFERRED_KINDS.includes(target.kind));
-    const outside = await edgesRootedOutside(origins, [...called, ...passed], signal);
-    const followed = (edge: EdgeWithEnds): boolean => !outside.some((dropped) => dropped.edge === edge);
+    const read = [...called, ...passed];
+    const verdicts = await targets.verdictsOf(read, signal);
+    const outside = read.flatMap((edge, index) => {
+      const verdict = verdicts[index]!;
+      return verdict.kind === "drop" && verdict.root.kind !== "local-parameter" ? [{ edge, origin: verdict.root }] : [];
+    });
+    const followed = (edge: FollowedEdge): boolean => !outside.some((dropped) => dropped.edge === edge);
     const external: ExternalCall[] = outside.map(({ edge, origin }) => (origin.kind === "external" ? { kind: "import", module: origin.module, name: edge.target.name } : { kind: "global", name: edge.target.name }));
     const children: Child[] = root ? membersOf(node) : [];
     const resolved: EdgeOccurrence[] = called.map(({ edge, target }) => ({ source: edge.source, line: edge.line, column: edge.column, targetName: target.name }));

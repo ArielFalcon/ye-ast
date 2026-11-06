@@ -17,6 +17,7 @@ import type { ImportOriginsReader } from "../../ports/import-origins.port.ts";
 import type { TraceFault, TraceQueries } from "../../ports/trace-queries.port.ts";
 import { distinctTargets, evidenceOfTarget, rangeChanges, requestedRanges, selectRoots, targetKey, triviaOncePerFile, type RootSelection } from "../navigation/root-selection.ts";
 import { ABORTED } from "../snapshot/read-snapshot.ts";
+import { createEdgeTargets } from "../navigation/edge-targets.ts";
 import { createHeadReader, type FactSpec, type HeadReaderDeps } from "../snapshot/head-reading.ts";
 import { isTraceRoot, walkTrace } from "./trace-walk.ts";
 
@@ -78,7 +79,9 @@ export function createTraceQueries(deps: TraceQueriesDeps): TraceQueries {
             const file = sources.get(path);
             return file === undefined ? NOTHING_DECLARED : declaredIn(file);
           };
-          const walk = await walkTrace(roots, { store, origins: deps.importOrigins(head.tree.sources), inScope: head.selected, memberDeclarations, syntaxOf, budget, ...(signal === undefined ? {} : { signal }) });
+          const origins = deps.importOrigins(head.tree.sources);
+          const edgeTargets = createEdgeTargets({ origins, store });
+          const walk = await walkTrace(roots, { store, origins, targets: edgeTargets, inScope: head.selected, memberDeclarations, syntaxOf, budget, ...(signal === undefined ? {} : { signal }) });
           if (walk === "aborted") return ABORTED;
 
           const { steps, ids } = traceSteps(walk.roots);
