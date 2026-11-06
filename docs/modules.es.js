@@ -15,8 +15,8 @@ window.MODULE_DETAILS_ES = {
       may: "core/ports, core/domain",
       never: "core/adaptadores, cualquier escritura",
       facts: [
-        "McpDeps extiende QueryExecutionDeps, que solo contiene query families de lectura (entrypoints, impact, outline, workspace, workspace impact, decisions) más redaction y digest, así que una escritura es imposible por tipo.",
-        "Ocho tools: ye_ast_entrypoints, ye_ast_impact, ye_ast_callers, ye_ast_importers, ye_ast_outline, ye_ast_workspace, ye_ast_decisions y ye_ast_compose.",
+        "McpDeps extiende QueryExecutionDeps, que solo contiene query families de lectura (entrypoints, impact, outline, trace, workspace, workspace impact, decisions) más redaction y digest, así que una escritura es imposible por tipo.",
+        "Nueve tools: ye_ast_entrypoints, ye_ast_impact, ye_ast_callers, ye_ast_importers, ye_ast_outline, ye_ast_trace, ye_ast_workspace, ye_ast_decisions y ye_ast_compose.",
         "Las instrucciones del servidor enseñan al agente a leer una respuesta: complete es relativo al scope declarado, partial lista sus cuts y unknown nunca significa que no hay impacto.",
         "ye_ast_compose combina de 1 a 16 consultas de las ocho familias en un solo conjunto de evidencia con una identidad de verificación; existe solo sobre MCP.",
       ],
@@ -27,7 +27,7 @@ window.MODULE_DETAILS_ES = {
       never: "core/adaptadores, otro entrypoint",
       facts: [
         "stdout solo lleva líneas de protocolo; las medidas y los diagnósticos van a stderr.",
-        "Las siete operaciones por repositorio: entrypoints.map, impact.ofChange, impact.callers, impact.importers, outline.files, workspace.outwardNames, decisions.decisions.",
+        "Las ocho operaciones por repositorio: entrypoints.map, impact.ofChange, impact.callers, impact.importers, outline.files, trace.walk, workspace.outwardNames, decisions.decisions.",
         "trust.declare es la única llamada administrativa del protocolo; declara el trust mode fuera del repositorio.",
       ],
     },
