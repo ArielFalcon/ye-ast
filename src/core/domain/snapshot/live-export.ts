@@ -25,6 +25,9 @@ export function isWritten(path: string): boolean {
   return isInMapScope(path) || isJsonModuleResource(path);
 }
 
+/** Changes with any change to `isWritten`, so a mirror built under another universe is never reused. */
+export const WRITTEN_UNIVERSE_VERSION = "json-resources-v1";
+
 /** The paths whose blob differs between two listings, or that only one of them holds, sorted. */
 export function changedPaths(base: readonly Blob[], live: readonly Blob[]): string[] {
   const before = new Map(base.map((file) => [file.path, file.blob]));

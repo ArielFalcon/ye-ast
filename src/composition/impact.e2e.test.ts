@@ -854,6 +854,25 @@ test("a kept index gives the bytes of a fresh build, cold or warm, for impact, c
   assert.deepEqual(readdirSync(scratchRoot), []);
 });
 
+test("callers, outline, trace, importers and impact over a snapshot with a JSON resource share one index", async () => {
+  commit({
+    "src/data.json": '{"value":1}\n',
+    "src/consumer.ts": "import data from './data.json'; export function read() { return data.value; }\n",
+  }, "base");
+  commit({ "src/data.json": '{"value":2}\n' });
+  for (const [command, args, tail] of [
+    ["callers", [], ["src/consumer.ts:read"]],
+    ["outline", [], ["src/consumer.ts"]],
+    ["trace", [], ["src/consumer.ts:read"]],
+    ["importers", [], ["src/data.json"]],
+    ["impact", ["--base", "HEAD~1"], []],
+  ] as const) {
+    const answer = await ye(command, [...args], [...tail], { indexCache: cacheRoot });
+    assert.equal(answer.code, EXIT_CODE.ok, answer.stderr);
+  }
+  assert.equal(kept().length, 1);
+});
+
 test("a commit that changes the staged content is indexed anew, and one that changes nothing in scope reuses the index", async () => {
   commit(SHOP, "base");
   await ye("importers", [], ["src/main/java/shop/Util.java"], { indexCache: cacheRoot });
