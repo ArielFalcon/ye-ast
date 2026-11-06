@@ -94,9 +94,9 @@ function typeBinding(name: Node, file: JavaFile, project: JavaProject, owner: Us
   const variable = typeVariableAround(name);
   if (variable !== undefined) return declaredBinding(name, variable, owner);
   const declared = project.lookupType(name.text, { file, type });
-  if (declared === "ambiguous") return UNKNOWN;
+  if (declared === "ambiguous") return { kind: "ambiguous", root: name.text };
   /** A type only a wildcard import supplies may also be one `java.lang` supplies, so the sources do not prove it. */
-  if (declared !== undefined && project.lookupType(name.text, { file: { ...file, onDemandImports: [] }, type }) === undefined) return UNKNOWN;
+  if (declared !== undefined && project.lookupType(name.text, { file: { ...file, onDemandImports: [] }, type }) === undefined) return { kind: "ambiguous", root: name.text };
   if (declared !== undefined) return { kind: "located", root: name.text, file: declared.file.path, path: declared.fqn };
   const named = qualifiedTypeName(name.text, { file, type }, project);
   return named !== undefined && project.isPlatformName(named) ? { kind: "import", root: name.text, origin: { kind: "external", module: named.slice(0, named.lastIndexOf(".")) } } : UNKNOWN;

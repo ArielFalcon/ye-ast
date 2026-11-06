@@ -108,9 +108,15 @@ export async function usesOf(branch: DeclarationBranch<GraphSymbol>, input: Uses
   const verdicts = await targets.verdictsOf(edges, signal);
   const edgeSites = edges.flatMap(({ edge, target }, index): (UseSite & { index: number })[] => (edge.line === null || edge.column === null ? [] : [{ index, file: node.file, line: edge.line, column: edge.column + 1, spelled: target.name, owner }]));
   const edgeBindings = await origins.rootBindings(edgeSites, signal);
-  const localRooted = new Set(edgeSites.filter((_, k) => isLocalRoot(node.file, edgeBindings[k] ?? { kind: "unknown" })).map(({ index }) => index));
+  const edgeBinding = new Map(edgeSites.map(({ index }, k) => [index, edgeBindings[k] ?? ({ kind: "unknown" } as const)]));
   for (const [index, { edge, target }] of edges.entries()) {
-    if (localRooted.has(index)) continue;
+    const binding = edgeBinding.get(index);
+    if (binding !== undefined && isLocalRoot(node.file, binding)) continue;
+    /** The sources could bind the root to another declaration than the one the graph matched, so the edge proves no use. */
+    if (binding?.kind === "ambiguous") {
+      unproved.push({ root: binding.root, line: edge.line!, spelling: target.name });
+      continue;
+    }
     const verdict = verdicts[index]!;
     const place = edge.line === null ? undefined : { line: edge.line, ...(edge.column === null ? {} : { column: edge.column + 1 }) };
     if (verdict.kind !== "drop") declared(verdict.kind === "redirect" ? verdict.to : target, edge.kind, place);

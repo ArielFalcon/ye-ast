@@ -93,6 +93,8 @@ export type RootBinding =
   | { kind: "local"; root: string }
   | { kind: "located"; root: string; file: string; path: string }
   | { kind: "ambient"; root: string }
+  /** The sources name more than one declaration the root could be, or only a wildcard import could supply it. */
+  | { kind: "ambiguous"; root: string }
   | { kind: "this"; member?: string }
   | { kind: "unknown" };
 

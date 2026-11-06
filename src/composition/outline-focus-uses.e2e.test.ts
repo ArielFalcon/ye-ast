@@ -18,6 +18,12 @@ const FILES: Record<string, string> = {
   "service.ts": "export class Service { load() { return 1; } }\nexport function together(svc: Service) { return svc.load(); }\n",
   "src/main/java/app/Peer.java": "package app;\npublic class Peer {\n  public void touch() {}\n}\n",
   "src/main/java/app/Local.java": "package app;\npublic class Local {\n  void together(Peer peer) {\n    peer.touch();\n  }\n}\n",
+  "one.ts": "export function same() { return 1; }\n",
+  "two.ts": "export function same() { return 2; }\n",
+  "star.ts": "export * from './one';\nexport * from './two';\n",
+  "ns-star.ts": "import * as N from './star';\nexport function together() { return N.same(); }\n",
+  "src/main/java/q/Helper.java": "package q;\npublic class Helper {}\n",
+  "src/main/java/p/Service.java": "package p;\nimport q.*;\nclass Service {\n  void together() { new Helper(); }\n}\n",
   "factory.ts": "export function make(deps: { graph: { open(): number } }) {\n  return function together() { return deps.graph.open(); };\n}\n",
   "ambiguous.ts": "export function handler() {\n  const handler = () => 1;\n  function together() { return handler.call(null); }\n  return together;\n}\n",
 };
@@ -46,11 +52,16 @@ after(async () => {
   await rm(root, { recursive: true, force: true });
 });
 
-async function usesOf(file: string): Promise<unknown> {
+async function focusOf(file: string) {
   const answer = await composeQueries({ scratchRoot }).outline.outline({ repo, repoId: "outline-focus-uses", revision: "HEAD", focus: [{ file, symbol: "together" }] });
-  assert.ok(answer.ok, JSON.stringify(answer));
-  assert.ok(answer.value.status === "complete", JSON.stringify(answer.value));
-  return answer.value.value.focus?.[0]?.uses;
+  assert.ok(answer.ok && answer.value.status !== "unknown", JSON.stringify(answer));
+  return answer.value;
+}
+
+async function usesOf(file: string): Promise<unknown> {
+  const fact = await focusOf(file);
+  assert.ok(fact.status === "complete", JSON.stringify(fact));
+  return fact.value.focus?.[0]?.uses;
 }
 
 test("a value an enclosing function declares over two lines is a use of its declaration, not a local of the focused body", async () => {
@@ -87,4 +98,16 @@ test("a member reached through a parameter of the body is no use even when the g
 test("a Java method reached through a parameter of the body is no use; the parameter's type is", async () => {
   const uses = (await usesOf("src/main/java/app/Local.java")) as { declaration?: { name: string } }[];
   assert.deepEqual(uses.map((use) => use.declaration?.name), ["Peer"]);
+});
+
+test("a namespace member two star exports could supply is a cut, never one of them", async () => {
+  const fact = await focusOf("ns-star.ts");
+  assert.deepEqual(fact.value.focus?.[0]?.uses, []);
+  assert.deepEqual(fact.status === "partial" ? fact.cuts.map((cut) => cut.at) : [], [["ns-star.ts::together", "ns-star.ts:2 same"]]);
+});
+
+test("a Java type only a wildcard import supplies is a cut, never the type the graph matched", async () => {
+  const fact = await focusOf("src/main/java/p/Service.java");
+  assert.deepEqual(fact.value.focus?.[0]?.uses, []);
+  assert.deepEqual(fact.status === "partial" ? fact.cuts.map((cut) => cut.at) : [], [["src/main/java/p/Service.java::p.Service.together", "src/main/java/p/Service.java:4 Helper"]]);
 });

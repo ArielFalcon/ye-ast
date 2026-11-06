@@ -13,7 +13,7 @@ import type { ImportOriginSite, ImportOrigins, ResolvedNameSite, RootBinding, Us
 import { createModuleResolver, manifestPackages, packageOf } from "./module-resolver.ts";
 import { TYPESCRIPT_LIB_GLOBALS } from "./typescript-lib-globals.ts";
 import { parseAngularRouteFile } from "./angular-router.extractor.ts";
-import { createDeclarationLookup, type ModuleShape } from "./declaration-lookup.ts";
+import { createExportLookup, type ModuleShape } from "./declaration-lookup.ts";
 
 /** The names the pinned `typescript` declares, held once for the process rather than rebuilt per query. */
 const LIB_GLOBALS = new Set(TYPESCRIPT_LIB_GLOBALS);
@@ -54,7 +54,7 @@ export function createImportOrigins(sources: readonly SourceFile[], parse: Parse
     if (!moduleShapes.has(file)) moduleShapes.set(file, texts.has(file) && isTypeScriptSource(file) ? parseAngularRouteFile(file, texts.get(file)!) : undefined);
     return moduleShapes.get(file);
   }
-  const exportedDeclaration = createDeclarationLookup(async (file) => moduleShapeOf(file), async (from, specifier) => {
+  const exportedDeclaration = createExportLookup(async (file) => moduleShapeOf(file), async (from, specifier) => {
     const resolved = await modules.resolve(from, specifier);
     return "file" in resolved ? resolved.file : undefined;
   });
@@ -186,6 +186,7 @@ export function createImportOrigins(sources: readonly SourceFile[], parse: Parse
     /** A member of a namespace import is the declaration the module exports under its name, followed through re-exports. */
     if ("file" in resolved && moduleShapeOf(file)?.imports.get(root)?.imported === "*") {
       const declaration = member === undefined ? undefined : await exportedDeclaration(resolved.file, member);
+      if (declaration === "ambiguous") return { kind: "ambiguous", root };
       return declaration === undefined ? UNKNOWN_BINDING : { kind: "located", root, file: declaration.file, path: declaration.name };
     }
     const named = { root, ...(member === undefined ? {} : { member }) };
