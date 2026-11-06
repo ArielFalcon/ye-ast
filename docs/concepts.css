@@ -1119,8 +1119,8 @@ details[open] summary { border-bottom: 1px solid var(--line-soft); }
 .docs .compose-flow li { position: relative; padding: 12px 14px; border: var(--stroke) solid var(--outline); border-radius: var(--radius); background: var(--block); color: var(--block-ink); }
 .docs .compose-flow strong { display: block; font-family: var(--display); font-stretch: condensed; font-weight: 800; font-size: 1.2rem; line-height: 1.05; }
 .docs .compose-flow span { display: block; margin-top: 5px; font-size: 12.5px; line-height: 1.45; color: var(--block-sub); }
-.docs .compose-flow li[data-tone="queries"] { background: var(--heat); color: var(--night); }
-.docs .compose-flow li[data-tone="queries"] span { color: var(--night); }
+.docs .compose-flow li[data-tone="queries"] { background: var(--panel); border-color: var(--heat); color: var(--heat); box-shadow: 0 0 10px rgb(242 78 37 / .35); }
+.docs .compose-flow li[data-tone="queries"] span { color: var(--ink); }
 .docs .compose-flow li[data-tone="result"] { background: var(--lime); color: var(--night); }
 .docs .compose-flow li[data-tone="result"] span { color: var(--night); }
 .docs .compose-flow li + li::before {
