@@ -22,7 +22,8 @@ export type FaultQueryContext = {
   live: boolean;
   /** Outline's subject form. */
   subject?: "files" | "focus";
-  /** callers/impact crossing into a workspace, or workspace/decisions given explicit repos. */
+  workspace: boolean;
+  /** Explicit member paths supplied by the request. */
   members: boolean;
   replay: boolean;
   select: boolean;
@@ -39,7 +40,8 @@ export function faultContext(query: SemanticQuery, controls: FaultControls = {})
     family,
     live: args.live === true,
     ...(family === "outline" ? { subject: args.focus === undefined ? "files" as const : "focus" as const } : {}),
-    members: args.workspace !== undefined || args.repos !== undefined,
+    workspace: args.workspace !== undefined,
+    members: args.workspace?.repos !== undefined || args.repos !== undefined,
     replay: args.replay !== undefined,
     select: controls.select !== undefined,
     cursor: controls.page?.cursor !== undefined,
@@ -50,23 +52,35 @@ export function faultContext(query: SemanticQuery, controls: FaultControls = {})
 /** The published form of a refusal the selection or cursor layer reports by code. */
 export function controlFault(fault: CodedFault): ControlFault {
   switch (fault.code) {
-    case "invalid-cursor": return { kind: fault.code, detail: "The cursor does not belong to this query, selection, page limit and identity" };
-    case "selection-not-found": return { kind: fault.code, detail: "The selection names no record of this result" };
-    case "ambiguous-selection": return { kind: fault.code, detail: "The selection matches more than one record of this result" };
-    case "replay-unavailable": return { kind: fault.code, detail: `This result has no verifiable identity (${fault.reason})`, reason: fault.reason };
-    case "result-changed": return { kind: fault.code, detail: "The result differs from the asserted identity", expected: fault.expected, actual: fault.actual, stage: fault.stage };
+    case "invalid-cursor":
+    case "selection-not-found":
+    case "ambiguous-selection": return { kind: fault.code, detail: fault.code };
+    case "replay-unavailable": return { kind: fault.code, detail: fault.code, reason: fault.reason };
+    case "result-changed": return { kind: fault.code, detail: fault.code, expected: fault.expected, actual: fault.actual, stage: fault.stage };
   }
 }
 
 /** The text of a fault: its kind first, its detail and entries, and a next step only where an argument can correct it. */
 export function renderFault(fault: RenderedFault, query?: FaultQueryContext): string {
   const entries = "entries" in fault ? fault.entries.map((entry) => `\n  - ${entry.file}:${"line" in entry ? entry.line : entry.symbol}: ${declarationText(entry)}`).join("") : "";
-  const head = `fault: ${fault.kind}\n${fault.detail.trim()}${entries}`;
+  const head = `fault: ${fault.kind}\n${displayDetail(fault).trim()}${entries}`;
   if (fault.kind === "composition-source-fault") {
     return `${head}\nThe composition returned nothing: queries[${fault.requestIndices.join(", ")}] (${fault.family}) failed. Correct them as below and resend the whole composition.\n${renderFault(fault.cause, query)}`;
   }
   const step = nextStep(fault, query);
   return step === undefined ? head : `${head}\nNext step: ${step}`;
+}
+
+function displayDetail(fault: RenderedFault): string {
+  if (fault.detail !== fault.kind) return fault.detail;
+  switch (fault.kind) {
+    case "invalid-cursor": return "The cursor cannot be used with this query, selection, page limit and identity";
+    case "selection-not-found": return "The selection names no record of this result";
+    case "ambiguous-selection": return "The selection matches more than one record of this result";
+    case "replay-unavailable": return `This result has no verifiable identity (${fault.reason})`;
+    case "result-changed": return "The result differs from the asserted identity";
+    default: return fault.detail;
+  }
 }
 
 function declarationText(entry: { file: string; candidates: readonly string[] }): string {
@@ -89,15 +103,17 @@ function omitLive(query: FaultQueryContext | undefined): string {
 function nextStep(fault: Exclude<RenderedFault, { kind: "composition-source-fault" }>, query: FaultQueryContext | undefined): string | undefined {
   switch (fault.kind) {
     case "unknown-revision":
-      return `${query?.family === "impact" ? "base or head" : commitArgument(query)} must resolve to a local commit: pass a branch, tag or sha this clone holds${query?.family === "impact" ? "" : ", or omit it to read HEAD"}${query?.members ? `; a ${membersArgument(query)}[].revision may be the one that does not resolve` : ""}.`;
+      return `${query?.family === "impact" ? (query.live ? "base" : "base or head") : commitArgument(query)} must resolve to a local commit: pass a branch, tag or sha this clone holds${query?.family === "impact" ? "" : ", or omit it to read HEAD"}${query?.members ? `; a ${membersArgument(query)}[].revision may be the one that does not resolve` : ""}.`;
     case "no-merge-base":
       return query?.family === "impact"
         ? "base and head share no ancestor: choose commits of one history. The diff runs from merge-base(base, head); a direct diff is not substituted."
         : "The commits share no ancestor: choose commits of one history.";
     case "not-repository-root":
       return query?.members
-        ? `Every ${membersArgument(query)}[].path must be the top-level directory of its clone, not a subdirectory.`
-        : "The server's bound repository path is not a repository root; it is host configuration, not a query argument.";
+        ? `Check the selected repository registration and ${membersArgument(query)}[].path: every repository path must be its clone root. This fault does not identify which one failed.`
+        : query?.workspace
+          ? "Check the selected repository registration and persisted workspace member roots. This fault does not identify which one failed; correct the corresponding host configuration."
+          : "The selected repository registration must point to its clone root; correct its host configuration.";
     case "object-missing":
       return `This clone lacks the Git objects of ${query?.family === "impact" ? "base, head or their merge base" : commitArgument(query)}: fetch them into the clone or choose a commit it holds. ye-ast never downloads.`;
     case "live-requires-trusted":
@@ -190,7 +206,7 @@ function unverifiable(reason: UnavailableReason, query: FaultQueryContext | unde
   const cause = unavailableCause(reason);
   if (query?.select) {
     return reason === "deadline"
-      ? `select and page need a complete analysis. ${cause}`
+      ? `select and page cannot recover a source cut by a deadline. ${cause}`
       : `select and page need a verifiable identity. ${cause} A new query without select and page${query.expect ? ", and without the expect it cannot verify," : ""} in mode full returns the data this analysis records; it cannot restore analysis or history that was never captured.`;
   }
   return `expect cannot be checked. ${cause} Omitting expect accepts an unverified result; that is the caller's decision.`;

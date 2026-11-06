@@ -311,6 +311,7 @@ test("MCP refuses redacted selection coordinates before querying or reflecting a
       assert.equal(result.isError, true);
       const fault = result._meta?.[FAULT_META] as { kind: string; reason: string };
       assert.equal(fault.kind, "replay-unavailable");
+      assert.equal((fault as { detail?: string }).detail, "replay-unavailable");
       assert.equal(fault.reason, "redacted-context");
       assert.equal(JSON.stringify(result).includes(SECRET), false);
     }
@@ -2015,6 +2016,27 @@ test("a fault no argument can correct prints no next step", async () => {
     const result = await session.callTool("ye_ast_entrypoints", {});
     assert.equal((result._meta?.[FAULT_META] as { kind: string }).kind, "internal-fault");
     assert.doesNotMatch(textOf(result), /^Next step:/m);
+  } finally { await session.close(); }
+});
+
+test("a live impact revision correction never proposes the excluded head argument", async () => {
+  const { session } = await setup({ ofChange: async () => ({ ok: false, fault: { kind: "unknown-revision", detail: "missing base" } }) });
+  try {
+    const result = await session.callTool("ye_ast_impact", { live: true, base: "missing" });
+    assert.equal((result._meta?.[FAULT_META] as { kind: string }).kind, "unknown-revision");
+    assert.doesNotMatch(stepOf(result), /\bhead\b/);
+  } finally { await session.close(); }
+});
+
+test("root failures do not attribute an unknown owner to request workspace members", async () => {
+  const fault = { kind: "not-repository-root" as const, detail: "not a root" };
+  const { session } = await setup({ workspaceCallers: async () => ({ ok: false, fault }), callers: async () => ({ ok: false, fault }) });
+  try {
+    for (const args of [{ workspace: {} }, {}]) {
+      const result = await session.callTool("ye_ast_callers", { targets: [{ file: "src/a.ts", symbol: "a" }], ...args });
+      assert.equal((result._meta?.[FAULT_META] as { kind: string }).kind, "not-repository-root");
+      assert.doesNotMatch(stepOf(result), /workspace\.repos/);
+    }
   } finally { await session.close(); }
 });
 
@@ -3872,7 +3894,7 @@ test("selected evidence pages replay the source and reject changed identities be
     ]) {
       const invalid = await session.callTool(tool.name, args);
       assert.equal(invalid.isError, true);
-      assert.equal((invalid._meta?.["ye-ast/fault"] as {kind:string}).kind, "invalid-cursor");
+      assert.deepEqual(invalid._meta?.["ye-ast/fault"], {kind: "invalid-cursor", detail: "invalid-cursor"});
     }
     assert.equal(calls.map.length, 4);
     const verified = await session.callTool(tool.name,{expect:a.recovery.resultIdentity});
@@ -3885,6 +3907,7 @@ test("selected evidence pages replay the source and reject changed identities be
       assert.equal(result.structuredContent, undefined);
       const fault = result._meta?.["ye-ast/fault"] as {kind:string;stage:string;expected:string;actual:string};
       assert.equal(fault.kind,"result-changed");
+      assert.equal((fault as { detail?: string }).detail, "result-changed");
       assert.equal(fault.stage,"source-identity");
       assert.equal(fault.expected,a.recovery.resultIdentity);
       assert.notEqual(fault.actual,fault.expected);
@@ -3998,7 +4021,7 @@ test("known empty selections stay available and missing subjects return typed fa
     assert.deepEqual(payload.page,{limit:5,offset:0,returned:0,total:0});
     const missing = await session.callTool("ye_ast_callers",{targets,select:{...select,handler:{...handler,line:18}},page:{limit:1}});
     assert.equal(missing.isError,true);
-    assert.equal((missing._meta?.["ye-ast/fault"] as {kind:string}).kind,"selection-not-found");
+    assert.deepEqual(missing._meta?.["ye-ast/fault"], {kind: "selection-not-found", detail: "selection-not-found"});
   } finally { await session.close(); }
 });
 
