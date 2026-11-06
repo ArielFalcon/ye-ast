@@ -7,7 +7,7 @@ import type { Finding } from "../../domain/shared/fact.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import { manifestDependencies, createModuleResolver, type ModuleResolver } from "./module-resolver.ts";
 
-const VERBS: ReadonlySet<string> = new Set(["get", "head", "post", "put", "patch", "delete", "options", "request"]);
+export const VERBS: ReadonlySet<string> = new Set(["get", "head", "post", "put", "patch", "delete", "options", "request"]);
 const HTTP_CLIENT_PACKAGE = "@angular/common/http";
 const PLACEHOLDER = "{}";
 const UNDECIDED = Symbol("undecided");
@@ -244,7 +244,7 @@ function isHttpPackageName(shape: FileShape, expression: ts.Expression, name: st
   return imported?.module === HTTP_CLIENT_PACKAGE && imported.imported === name;
 }
 
-function propertyOf(object: ts.ObjectLiteralExpression, name: string): ts.Expression | undefined {
+export function propertyOf(object: ts.ObjectLiteralExpression, name: string): ts.Expression | undefined {
   const property = object.properties.find((candidate): candidate is ts.PropertyAssignment => ts.isPropertyAssignment(candidate) && candidate.name.getText() === name);
   return property?.initializer;
 }
@@ -257,11 +257,11 @@ function isAngularHttpClientName(shape: FileShape, name: string | undefined): bo
 }
 
 /** The parameter properties of a class's constructor: the fields a class declares by writing them in its signature. */
-function constructorParameters(classDeclaration: ts.ClassDeclaration): readonly ts.ParameterDeclaration[] {
+export function constructorParameters(classDeclaration: ts.ClassDeclaration): readonly ts.ParameterDeclaration[] {
   return classDeclaration.members.flatMap((member) => (ts.isConstructorDeclaration(member) ? member.parameters : []));
 }
 
-function typeName(node: ts.TypeNode): string | undefined {
+export function typeName(node: ts.TypeNode): string | undefined {
   if (ts.isTypeReferenceNode(node) && ts.isIdentifier(node.typeName)) return node.typeName.text;
   return undefined;
 }
@@ -883,7 +883,7 @@ function ancestorsOf(node: ts.Node, source: ts.SourceFile): { symbol: string; li
   return ancestors;
 }
 
-function symbolOf(node: ts.Node): string | undefined {
+export function symbolOf(node: ts.Node): string | undefined {
   let className: string | undefined;
   let member: string | undefined;
   for (let current: ts.Node | undefined = node; current !== undefined; current = current.parent) {
@@ -901,6 +901,6 @@ function symbolOf(node: ts.Node): string | undefined {
   return member === undefined ? className : `${className}.${member}`;
 }
 
-function lineOf(source: ts.SourceFile, node: ts.Node): number {
+export function lineOf(source: ts.SourceFile, node: ts.Node): number {
   return source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1;
 }
