@@ -153,6 +153,88 @@ fixtures per rule in the repository:
 Measured on each: the share of call places settled by R1-R6, the cuts R6b leaves (each with candidates), and the text
 size before and after folding.
 
+### Slice 1 measured (2026-11-06)
+
+Fifteen traces over four probe repositories, at the head of each clone, `untrusted`, through `ye-ast trace`; each ran
+twice and answered the same bytes. Frontend A is Angular with standalone components and signals, frontend B an Nx
+workspace with NgRx signal stores; backend A is Spring REST with service interfaces and MapStruct mappers, backend B
+Spring Boot with repository interfaces and MyBatis read services. Roots: an HTTP handler (BA-1, BA-3, BB-1, BB-3,
+BB-4), the application method it calls (BA-2, BB-2, BB-5), a frontend API method that posts or gets (FA-1, FB-1), a
+component method bound to a user action (FA-2, FA-3, FB-2, FB-3) and a whole signal store (FB-4).
+
+*Settled* counts the call places that became a step (seen and deferred included), the folded leaves and the external
+names; *cut* counts the `unresolved-link` cuts, one per place. Leaves and external names are listed once per parent,
+so settled is a lower bound of the settled places. Text bytes come from the MCP renderer; wall time is the second
+run, with a warm index cache and process start included.
+
+| Trace | Status | Steps / expanded / seen / leaves | Settled / cut (share) | Top cut tails | External groups | Plan ranges / lines | Summary / details bytes | Wall s |
+|---|---|---|---|---|---|---|---|---|
+| FA-1 | complete | 1 / 2 / 0 / 1 | 4 / 0 (1) | — | 2 | 1 / 5 | 453 / 630 | 4.06 |
+| FA-2 | partial | 3 / 3 / 0 / 0 | 9 / 1 (0.9) | `deleteVet` | 3 | 3 / 10 | 736 / 1184 | 1.12 |
+| FA-3 | partial | 3 / 3 / 0 / 0 | 9 / 1 (0.9) | `deletePetType` | 3 | 3 / 10 | 815 / 1256 | 2.65 |
+| FB-1 | partial | 1 / 1 / 0 / 0 | 0 / 1 (0) | `post` | 0 | 1 / 5 | 694 / 834 | 2.55 |
+| FB-2 | partial | 1 / 1 / 0 / 0 | 2 / 1 (0.67) | `login` | 1 | 1 / 4 | 661 / 861 | 2.66 |
+| FB-3 | partial | 1 / 1 / 0 / 0 | 0 / 1 (0) | `addComment` | 0 | 1 / 3 | 679 / 831 | 1.40 |
+| FB-4 | partial | 7 / 10 / 0 / 3 | 32 / 8 (0.8) | `post`×3, `callState`×3, `get`, `put` | 7 | 7 / 116 | 1290 / 3133 | 1.09 |
+| BA-1 | partial | 1 / 9 / 0 / 8 | 12 / 5 (0.71) | `ResponseEntity`×2, `HttpHeaders`, `setName`, `path` | 1 | 1 / 18 | 991 / 2031 | 1.29 |
+| BA-2 | partial | 3 / 7 / 0 / 4 | 7 / 1 (0.88) | `getId` | 1 | 3 / 19 | 982 / 1329 | 1.19 |
+| BA-3 | partial | 1 / 4 / 0 / 3 | 4 / 2 (0.67) | `ResponseEntity`×2 | 1 | 1 / 14 | 861 / 1209 | 1.27 |
+| BB-1 | partial | 2 / 9 / 0 / 7 | 9 / 1 (0.9) | `HashMap` | 1 | 2 / 22 | 693 / 1009 | 1.20 |
+| BB-2 | complete | 1 / 8 / 0 / 7 | 7 / 0 (1) | — | 0 | 1 / 11 | 581 / 778 | 1.14 |
+| BB-3 | partial | 3 / 13 / 0 / 11 | 18 / 4 (0.82) | `body`, `HashMap`, `setFollowing`, `getId` | 2 | 3 / 32 | 964 / 2629 | 1.15 |
+| BB-4 | partial | 11 / 26 / 2 / 18 | 36 / 8 (0.82) | `DateTime`×3, `isEmpty`, `HashMap`, `setFollowing` | 3 | 9 / 79 | 1556 / 4507 | 1.05 |
+| BB-5 | partial | 5 / 19 / 0 / 16 | 39 / 11 (0.78) | `getId`×3, `toList`×3, `setFollowing`, `HashMap` | 4 | 5 / 71 | 1328 / 5312 | 1.12 |
+
+In total 198 outcomes settled against 45 cuts (0.81). Not all of them are sound: 26 leaves are abstract methods and one
+external is a repository method (findings 1 and 2 below), which leaves 171 sound outcomes (0.70).
+
+What would settle each cut: all 32 cuts of the four cut-heavy traces (FB-4, BB-4, BB-5, BA-1), and all 45:
+
+| Settled by | Cut-heavy (32) | All (45) | Example |
+|---|---|---|---|
+| R3 field origin | 5 | 10 | `this.apiService.post`; 8 of the 10 fields hold a repository class, 2 hold a signal store (finding 2) |
+| R4 import binding in Java: an imported class constructed or called | 13 | 18 | `new ResponseEntity<>(…)`, `new HashMap<>()`, `toList()`, `UriComponentsBuilder.newInstance().path` |
+| R4 local or parameter binding | 7 | 7 | `value.isEmpty()` on a `String` parameter, a lambda parameter `item.getCount()`, a destructured `callState()` |
+| R5 chain through a declared return type | 7 | 10 | `articleData.getProfileData().setFollowing` |
+| R7 dispatch | 0 | 0 | none is a cut: dispatch hides behind leaves (finding 1) |
+| Genuinely ambiguous | 0 | 0 | — |
+
+Every cut has a slice 2 rule that settles it, but the rules do not yield equally. R3 is where the frontend flow stops:
+five of the six frontend roots below the store end at their first repository hop, a `this.<field>.<member>` cut, so
+the reading plan stops at the component. R4 and R5 mostly turn cuts into external leaves or terminal getters, which
+removes noise without opening flow. On the backends the hidden flow sits in dispatch: each of the 26 abstract-method
+leaves stands for an implementation the trace never opens.
+
+Findings:
+
+1. **An abstract method folds as a proven terminal leaf.** In Java, a call to an interface method (a service, a
+   repository port, a mapper, a MyBatis read service) settles on the abstract declaration. The walk reads no call from
+   it and folds it into its caller's `leaves`, so BB-2 answers `complete` while its repository write is never reached.
+   Reproduction: `Service.create(s) { repo.save(s); }` with `interface Repo { void save(String s); }` and
+   `RepoImpl implements Repo` gives `complete` with one leaf at `Repo.save`. An abstract method has no body to
+   expand: it is unbound dispatch (R7, R13), a step with a cut until slice 3, never a leaf (R10).
+2. **A call to an object-literal method is shown as external.** The index holds no node for a method written in an
+   object literal (`withMethods((store) => ({ setErrors(…) {…} }))`), so no in-scope declaration has the name, the
+   type-only rule holds vacuously, and `formErrorsStore.setErrors` becomes an `unnamed` external of FB-4. Reproduction:
+   `const store = make({ setErrors(e: string) { … } })` and `function run(s: typeof store) { s.setErrors("x"); }` gives
+   `complete` with `s.setErrors` external. Repository code shown as external contradicts R6. The same gap makes
+   `this.authStore.login` (FB-2) list only `AuthService.login`.
+3. **A callback held by a property's initializer call is unreachable.** A signal-form submission
+   (`readonly ownerForm = form(model, schema, { submission: { action: async () => … } })`) is a property, which no
+   request can seed. A range over the action seeds the class, and a class root answers `complete` with no calls,
+   although the index records the property's `calls` edges. An arrow function assigned to a property directly is indexed
+   as a method and traces correctly.
+
+Usefulness. A trace pays off where it crosses several declarations: BA-2, BB-3, BB-4, BB-5 and FB-4 hand over 3 to 9
+ranges (19 to 116 lines) in reading order, with folded leaves and grouped externals, for 1.0 to 1.6 KB of summary
+text, which is less than opening the files one by one. A trace that stops at its first hop (FA-2, FA-3, FB-1, FB-2,
+FB-3) adds little beyond `ye_ast_outline` plus the cut's candidates. A handler trace on backend A (BA-1, BA-3) shows
+the service calls as terminal leaves, which is misleading (finding 1).
+
+Reading for the next slice: findings 1 and 2 are unsound answers, so they come first. Of slice 2, R3 and the Java
+import binding settle 28 of the 45 cuts and R3 opens the stopped frontend flows; on the backends, R7 (slice 3) opens
+more flow than R4-R5.
+
 ## Patterns (deferred)
 
 Deferred by the owner on 2026-11-01 (translated): "the architecture part does not convince me yet; I do not see what
