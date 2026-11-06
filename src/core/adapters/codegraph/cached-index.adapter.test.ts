@@ -343,3 +343,37 @@ test("a discard reports the bytes it freed and the bytes the cache keeps", async
   assert.deepEqual(discards, [{ entryBytes: discards[0]!.entryBytes, retainedBytes: size(kept) }]);
   assert.ok(discards[0]!.entryBytes > 0);
 });
+
+test("a discard whose index another process leases and republishes meanwhile leaves no renamed-away copy behind", async () => {
+  const { graph } = fakeGraph();
+  let armed = false;
+  let clockReads = 0;
+  let key = "";
+  const entry = (): string => join(directory, "indexes", key);
+  const cache = createIndexCache({
+    directory, graph, digest, codegraph: "1.6.2", retention: { unusedForMs: 1, maxBytes: Number.MAX_SAFE_INTEGER },
+    now: () => {
+      if (armed && ++clockReads === 2) writeFileSync(join(directory, "indexes", `.lease-${key}-${process.pid}-race`), String(process.pid));
+      return armed ? NOW + DAY_MS : NOW;
+    },
+    isAlive: () => {
+      if (armed && clockReads >= 2 && !existsSync(entry())) {
+        armed = false;
+        mkdirSync(entry());
+        writeFileSync(join(entry(), "summary.json"), "{}");
+      }
+      return true;
+    },
+  });
+  const first = await cache.obtain(request("content-raced"));
+  assert.ok(first.ok);
+  first.value.store.close();
+  key = entryNames()[0]!;
+  armed = true;
+
+  assert.ok((await cache.obtain(request("content-other"))).ok);
+
+  assert.equal(armed, false);
+  assert.deepEqual(readdirSync(join(directory, "indexes")).filter((name) => name.startsWith(".build-")), []);
+  assert.ok(existsSync(entry()));
+});

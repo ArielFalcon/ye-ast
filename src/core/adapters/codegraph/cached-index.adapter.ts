@@ -153,7 +153,8 @@ export function createIndexCache(deps: IndexCacheDeps): IndexCache {
       return false;
     }
     if ((await leasedKeys()).has(key)) {
-      await rename(removed, entry).catch(() => undefined);
+      const restored = await rename(removed, entry).then(() => true, () => false);
+      if (!restored) await rm(removed, { recursive: true, force: true }).catch(() => undefined);
       return false;
     }
     await rm(removed, { recursive: true, force: true });
