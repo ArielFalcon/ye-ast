@@ -3,6 +3,7 @@ import { compareText } from "../../domain/shared/code-node.ts";
 import { isTypeScriptSource } from "../../domain/languages/typescript.ts";
 import type { DeclaredCallable, DeclaredMemberNames, DeclaredMemberNamesReader } from "../../ports/declared-member-names.port.ts";
 import { functionValueCalls } from "./function-value-calls.ts";
+import { isStatic } from "./syntax-names.ts";
 import { sourceTree } from "./source-tree.ts";
 
 const NONE: DeclaredMemberNames = { names: [], functionValueCalls: [], callables: [] };
@@ -72,8 +73,8 @@ function isDefaultExport(node: ts.Node): boolean {
 }
 
 function isOverridable(method: ts.MethodDeclaration): boolean {
-  const modifiers = ts.getModifiers(method) ?? [];
-  return !ts.isPrivateIdentifier(method.name) && !modifiers.some((modifier) => modifier.kind === ts.SyntaxKind.StaticKeyword || modifier.kind === ts.SyntaxKind.PrivateKeyword);
+  const isPrivate = (ts.getModifiers(method) ?? []).some((modifier) => modifier.kind === ts.SyntaxKind.PrivateKeyword);
+  return !ts.isPrivateIdentifier(method.name) && !isPrivate && !isStatic(method);
 }
 
 function isDeclareOnly(node: ts.Node): boolean {
