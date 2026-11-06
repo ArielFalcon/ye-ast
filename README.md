@@ -36,7 +36,7 @@ repository gives the same bytes. It runs nothing from your repository, needs no 
 npx ye-ast-mcp init --trust untrusted .   # one command; paste the line it prints into your agent
 ```
 
-TypeScript and Java today, with Angular routes and Spring endpoints; anything else is reported as not covered. It answers
+TypeScript and Java today (Angular routes, Spring endpoints, OpenAPI contracts); anything else is reported as not covered, never as empty. It answers
 structure, not intent: "what reaches this?", never "is this code good?". Version 0.x: solid answers, a surface that may (will) change.
 
 **Markdown descriptions are boring.** [Walk the graph yourself](https://arielfalcon.github.io/ye-ast/).
@@ -65,7 +65,7 @@ flowchart TD
     U --> S3["3 · Register the MCP server"]
     T --> S3
     S3 --> S4["4 · Verify with ye-ast map"]
-    S4 --> S5["5 · Use the four tools"]
+    S4 --> S5["5 · Use the tools"]
 ```
 
 ### Contents
@@ -201,12 +201,21 @@ Merge into `opencode.json` (project) or the global config:
 <details>
 <summary><b>More than one repository</b></summary>
 
-Register one entry per repository, each with its own name and path:
+One server can declare several repositories; every tool then takes `repo` to pick one:
+
+```bash
+claude mcp add ye-ast -s user -- npx --yes ye-ast-mcp mcp /path/to/api --repo web /path/to/web
+```
+
+Or register one server per repository, each with its own name and path:
 
 ```bash
 claude mcp add ye-ast-api -s user -- npx --yes ye-ast-mcp mcp /path/to/api
 claude mcp add ye-ast-web -s user -- npx --yes ye-ast-mcp mcp /path/to/web
 ```
+
+Each declared repository still needs its own `ye-ast init --trust …` (or the batch form in step 2); declaring it in the
+MCP registration grants no trust.
 
 </details>
 
@@ -222,8 +231,10 @@ npx --yes ye-ast-mcp map /path/to/repo
 - [ ] stdout is one JSON object with `schema`, `snapshot`, `producer`, `inputs`, `evidence`, `status` and `value`.
 - [ ] `status` is `complete` or `partial`. Both are valid answers.
 - [ ] `value.entrypoints` is an object, not `null`.
-- [ ] If the client lists MCP tools: `ye_ast_entrypoints`, `ye_ast_callers`, `ye_ast_importers`, `ye_ast_impact`, `ye_ast_outline`, `ye_ast_workspace`, `ye_ast_decisions` and `ye_ast_compose`
-      appear. The client may need a restart to pick up a new server.
+- [ ] If the client lists MCP tools, the eight read-only tools appear: `ye_ast_entrypoints`, `ye_ast_callers`,
+      `ye_ast_importers`, `ye_ast_impact`, `ye_ast_outline`, `ye_ast_workspace`, `ye_ast_decisions` and
+      `ye_ast_compose`. The client may need a restart to pick up a new server. The server also sends the client short
+      instructions: when to call each tool and how to read an answer.
 
 A non-zero exit code is a query problem, not a registration problem: read [step 7](#7-failures-and-what-they-mean).
 
@@ -250,46 +261,8 @@ flowchart TD
 | `ye_ast_decisions` | Find workspace configuration gaps and evidence-backed options | `repos`, `gateways`, `revision`, `live`, `offline`, `scope`, `mode` |
 | `ye_ast_compose` | Combine related queries into shared entities, relations and evidence with source provenance | `queries`, `mode`, `expect`, `deadlineMs` |
 
-There are seven query families and one composition operation. Once the relevant files or symbols are known,
-`ye_ast_compose` can execute related queries and return their combined evidence:
-
-```json
-{
-  "queries": [
-    { "name": "ye_ast_entrypoints", "arguments": { "repo": "shop", "revision": "main" } },
-    { "name": "ye_ast_outline", "arguments": { "repo": "shop", "revision": "main", "files": ["src/OrderController.java"] } }
-  ],
-  "mode": "details"
-}
-```
-
-For a stable investigation, replace `main` with the full SHA returned by a preceding query. Dependent queries still
-require their coordinates first; the batch has no variables or implicit follow-up execution. It accepts 1–16 queries
-and at most 1,048,576 UTF-8 bytes of canonical JSON arguments. Each query keeps its own trust, scope, budget and snapshot
-rules. Duplicate queries execute once. A source fault fails the whole composition; a partial or unknown fact retains
-its recorded limits. A batch is not an atomic snapshot of the workspace.
-
-Summary/details explain findings, source states and every material limit in the presentation; their
-`composition-receipt` in the `result JSON:` line contains only version/mode, verification and complete safe repeat
-queries. `S1` in text names `requests[0]`, and so on. Full returns
-`kind: "composition"`, with normalized tables under `graph`, source states and issues under `coverage`, and repeat
-queries under `requests`. Identical entities and evidence are shared; relation attestations preserve their sources and
-categories. File imports do not establish symbol calls, and reachability does not establish breakage. Different
-snapshots stay separate even when names and paths match. Outline supplies structure, not source text. Changed contract
-operations keep their document, line and changed data sides; a link that calls a changed operation does not prove
-that the changed data is read.
-
-Compose reexecutes queries and retains no final results between calls, so it can cost more analysis time than using
-answers already available. For a recoverable source, its repeat request is `pinned-replay` with the original `mcp-r1`
-assertion; importers, outline, workspace and decisions use `fresh-read`. A root `expect` checks the composition's
-`verification.identity` (`mcp-c1`); changed or unavailable context fails explicitly. Nested `mode`, `select`, `page` and
-`expect` inside `arguments` are rejected. The three recoverable query objects may carry a sibling source `expect`.
-Composition has no `select` or pagination; use the original source tool and its supported controls for further evidence.
-Details shares uniform provenance; full retains every producer, engine, read and support. Exact repeated positive
-observations can corroborate across producer policy versions while preserving both versions; derived connections keep
-strict producer compatibility. Neither operation parses version suffixes or treats an import as a call. Optional
-collection metadata separates an absent field from a present array and its recorded count; a present empty array is
-zero observations, not a positive finding.
+Seven query families answer one question each; `ye_ast_compose` runs several of them in one call and merges what they
+share (see [Compose related queries](#compose-related-queries)).
 
 How the arguments behave:
 
@@ -404,12 +377,69 @@ Working rules:
   outside that selection remain eligible within `scope`, subject to recorded cuts; `changed` does not itself narrow
   consequence coverage.
 
+### Compose related queries
+
+`ye_ast_compose` takes `queries` (1 to 16, each `{ name, arguments }` of one of the seven families above), `mode`,
+and optionally `expect` and `deadlineMs`:
+
+```json
+{
+  "queries": [
+    { "name": "ye_ast_entrypoints", "arguments": { "repo": "shop", "revision": "main" } },
+    { "name": "ye_ast_outline", "arguments": { "repo": "shop", "revision": "main", "files": ["src/OrderController.java"] } }
+  ],
+  "mode": "details"
+}
+```
+
+| Rule | Behavior |
+|---|---|
+| Arguments | Each `arguments` is exactly that tool's analysis arguments. `mode`, `select`, `page` and `expect` inside `arguments` are rejected. `entrypoints`, `callers` and `impact` queries may carry a sibling source `expect` (an `mcp-r1` identity). |
+| Execution | Identical queries run once. Unique queries run one at a time in a fixed order (not the request order) under one deadline (`deadlineMs`, no default). Nothing is stored between calls. |
+| Limits | At most 1,048,576 UTF-8 bytes of canonical JSON in the request. Beyond the limit: `composition-request-too-large`. |
+| Not atomic | Each query captures its own snapshot; a batch is not one instant of the workspace. Dependent queries still need their coordinates first (no variables, no follow-up execution). For a stable investigation pin `revision`/`head` to a full SHA returned by an earlier query. |
+| Faults | A fault in any source fails the whole composition (`composition-source-fault`, with the query's key, family and cause). Other kinds: `composition-conflicting-expectations`, `result-changed`, `replay-unavailable`, `deadline`, `aborted`, `internal-fault`. A `partial` or `unknown` fact is not a fault: its limits are kept. |
+
+What the result contains:
+
+- **Entities, relations and evidence are merged.** Identical entities and evidence are shared; every relation keeps the
+  sources and categories that attest it. Different snapshots stay separate even when names and paths match.
+- **Connections only where the reads agree.** A derived connection (`handler-declaration`, `change-dependent`,
+  `reached-handler`, `shared-file-import`, `shared-support`) joins reads only when their schema, producer, trust, engines,
+  workspace and snapshot match. Otherwise the result carries a `coverage` issue (`context-mismatch`,
+  `snapshot-difference`, `ambiguous-declaration`, `unresolved-endpoint`, `missing-provenance`, and similar) instead of a join.
+- **`shares-evidence` is the same location, not causality.** A file import is not a symbol call, reachability is not
+  breakage, an outline supplies structure and no source text, and a link that calls a changed operation does not prove
+  the changed data is read.
+- **Absent is not empty.** Optional collection metadata separates an absent field from a present array with its recorded
+  count; a present empty array is zero observations, not a positive finding.
+
+How to read it by mode:
+
+| `mode` | Returns |
+|---|---|
+| `summary`, `details` | Presentation text explaining findings, source states and every material limit, then a `result JSON:` line with a `composition-receipt`: version, mode, verification and the complete safe repeat queries. `S1` in the text names `requests[0]`, and so on. |
+| `full` | `kind: "composition"` with normalized tables under `graph`, source states and issues under `coverage`, and repeat queries under `requests`. Every producer, engine, read and support is retained. |
+
+There is no `select` or pagination on compose: for more evidence about one source, run the original tool with its
+`select`/`page`. For a recoverable source (`entrypoints`, `callers`, `impact`) the repeat request is `pinned-replay`
+carrying the original `mcp-r1` assertion; `importers`, `outline`, `workspace` and `decisions` repeat as `fresh-read`.
+A root `expect` checks `verification.identity` (`mcp-c1`) of the whole composition; a changed or unavailable context
+fails explicitly instead of returning a different answer. Exact repeated positive observations can corroborate across
+producer policy versions while preserving both versions; derived connections keep strict producer compatibility.
+
+**Use compose when** two or more independent queries about the same repository or change are needed together and you
+already know their coordinates (for example `callers` of a symbol plus the `entrypoints` of its repository). **Do not
+use it** when a later query needs a coordinate an earlier one returns (call the first, then the next), when you need a
+consistent instant across repositories (captures are not atomic), or when one query already answers the question: it
+reruns every query and keeps no final results, so it can cost more analysis time than reading answers you already have.
+
 ### 6. Read the answer correctly
 
 A CLI or query-protocol fact has this envelope; MCP text modes return a smaller receipt as described below:
 
 ```text
-schema     contract version of the envelope
+schema     contract version of the envelope (currently "0.17.0")
 snapshot   what was read: { repo, kind: "sha", sha } or { repo, kind: "live", head, stateId }
 producer   ye-ast name and version
 inputs     trust mode, declared scope, change selection, budget
@@ -426,6 +456,24 @@ value      the fact itself (in MCP structured content when mode is "full" and st
 
 > [!WARNING]
 > A complete empty list means no recorded result within its declared scope. `unknown` or a cut is not proof of absence; report the limitation.
+
+A `partial` answer lists `cuts`, each `{ kind, at, limit? }`. `at[0]` is the anchor (a repo-relative path, `path::symbol`,
+or the section name) and the following entries are places (`path:line`). The nine kinds:
+
+| `kind` | Where the answer stopped | What to do |
+|---|---|---|
+| `depth` | The `budget.depth` bound ended the walk | Raise `depth` only if this cut matters to the task |
+| `hub` | A file with more importers than `budget.hubFanIn` was not expanded | Raise `hubFanIn`, or query that file with `ye_ast_importers` |
+| `caller-budget` | The `budget.expansions` bound, or a budget a host set on the export, stopped the read (`limit` says which value) | Raise it, or accept the limit |
+| `node-cap` | A node cap ended the walk (declared in the contract) | Treat like any bound: report it |
+| `unresolved-link` | A reference or call target the code does not decide (dynamic URL, ambiguous target) | Needs source evidence or a declaration, not a larger budget |
+| `deadline` | A wall-clock deadline cut the read; such a fact is never stored | Retry narrower (`scope`, `changed`) |
+| `section` | One section of a composite answer is itself incomplete | Read that section's own cuts |
+| `not-exported` | An in-scope path was left out of the git export (symlink, unsafe path, case collision, submodule) | Not recoverable by ye-ast; report it |
+| `no-extractor` | A source file whose language has no extractor yet (for example Kotlin or JavaScript) | Not covered; read it yourself |
+
+An `unknown` answer (or an item inside a complete one) carries a `reason`: `no-extractor`, `no-project`, `out-of-scope`,
+`index-unavailable`, `source-unreadable`, `unresolved`, `revision-unavailable` or `deadline`.
 
 An item can also be `unknown` inside a `complete` answer: an entrypoint whose target the sources do not resolve, or a
 source no `package.json` above it places in a project (`no-project`). The collection is complete because nothing bounded
@@ -470,15 +518,26 @@ Also:
 
 ### 7. Failures and what they mean
 
-| Symptom | Cause | Action |
+A CLI fault prints `ye-ast: <kind>: <detail>` on stderr; an MCP fault is an `isError` result whose first text line
+names the kind and whose `_meta["ye-ast/fault"]` holds `{ kind, detail, entries? }`. A fault is never an empty fact.
+
+| Fault `kind` | Cause | Action |
 |---|---|---|
-| `ye-ast: unreadable: …` | The path does not exist, is not a directory, or the account cannot read it | Fix the path; do not retry blindly |
-| `ye-ast: live-requires-trusted` | `live` used without a `trusted` declaration | Ask the user, or answer from a revision |
-| `ye-ast: unknown-symbol: …` | Nothing declares that symbol at that revision | Check the file and the name; the error lists what it found |
-| `ye-ast: deadline` | The walk ran out of its bound | Narrow `scope`, or raise `budget` |
-| `ye-ast: caller-budget` | A host-set export budget stopped the read | Raise the budget set by the host |
-| `ye-ast: unsupported-store: …` | An index store outside the supported schema | Let ye-ast rebuild its index |
+| `unreadable`, `not-repository-root` | The path does not exist, is not readable, or is a subdirectory of a repository | Fix the path; pass the repository root |
+| `unknown-revision`, `no-merge-base`, `object-missing` | The revision does not resolve, has no merge base with `base`, or the object is absent from the local clone (partial clone) | Check the revision; nothing is fetched under `untrusted` |
+| `git-failed`, `export-write-failed` | git or the snapshot export failed | Report the detail; do not retry in a loop |
+| `live-requires-trusted` | `live` used without a `trusted` declaration | Ask the user, or answer from a revision |
+| `unsupported-object-format`, `live-mirror-failed` | The live mirror could not be built or read | Answer from a revision; report the detail |
+| `unknown-symbol` | Nothing declares that symbol at that revision | The error lists the symbols each file declares; use one, or a line range |
+| `unknown-change-path` | A `changed` glob selected no changed path | Correct the globs (`globs` lists the ones that matched nothing) |
+| `unknown-repository`, `ambiguous-repository` | `repo` is not a declared ID (or is declared twice); `available` lists the IDs | Use a declared ID, or update the host registration |
+| `duplicate-repository`, `duplicate-workspace-source`, `workspace-capture-unavailable`, `workspace-replay-mismatch`, `result-changed` | A workspace request names a repository twice, a capture failed, or a replay or `expect` no longer matches the source | Fix the request, or run the query again without `expect` and report the new identity |
+| `composition-*`, `replay-unavailable` | A `ye_ast_compose` request failed validation, its size limit, an assertion or one of its sources | See [Compose related queries](#compose-related-queries) |
+| `deadline`, `aborted`, `internal-fault` | `deadlineMs` expired, the call was cancelled, or ye-ast failed unexpectedly | Retry narrower, or report the message |
 | Tools missing in the client | Server not registered, or client not restarted | Re-run step 3, restart the client, re-check step 4 |
+
+A deadline or a budget that stops an ordinary query is not a fault: the answer is `partial` with a `deadline`,
+`depth`, `hub` or `caller-budget` cut ([step 6](#6-read-the-answer-correctly)).
 
 | Exit code | Meaning |
 |---|---|
@@ -498,8 +557,8 @@ Also:
 
 ### 9. CLI reference
 
-The CLI answers the same questions as the MCP tools, as one JSON object on stdout. Use it in scripts, CI, or to verify
-an MCP answer.
+The CLI answers the same questions as the MCP tools, as one JSON object on stdout (the stale-live notice, when there is one, is added as a `live` sibling and also printed on stderr). Use it in scripts, CI, or to verify
+an MCP answer. `ye-ast --help` prints the exact usage; `ye-ast --version` prints the version.
 
 ```bash
 ye-ast map .                                    # entrypoints at HEAD
@@ -507,6 +566,7 @@ ye-ast impact --base main .                     # what the current branch affect
 ye-ast callers . src/checkout.ts:placeOrder     # who depends on a symbol
 ye-ast callers . src/checkout.ts:40-72          # who depends on a line range
 ye-ast importers . src/checkout.ts              # who imports or uses a file
+ye-ast outline . src/checkout.ts                # declarations with spans, and imports
 ye-ast map --live .                             # the working tree (trusted only)
 ```
 
@@ -519,21 +579,49 @@ ye-ast map --live .                             # the working tree (trusted only
 | `ye-ast outline [--revision <rev> \| --live] [scope] <repo> <file> …` | Per file: its declarations with their spans, and what it imports |
 | `ye-ast workspace [--revision <rev>] [--offline] [scope] <repo>` | The outward names the bound repository and the workspace it persists state, the local repository that serves each, and the names nothing serves |
 | `ye-ast decisions [--revision <rev>] [--offline] [scope] <repo>` | The gaps the same workspace leaves to the user, each with every option the workspace can verify |
-| `ye-ast init --trust trusted\|untrusted [--workspace <file>] [<repo>]` | Declares the trust mode, writes the fixed layer (and the workspace manifest given, once every repository it names is a readable repository root), prints the MCP registration |
-| `ye-ast mcp [<launch-root>] [--repo <id> <root>]...` | Read-only stdio MCP server with a declared repository catalog |
+| `ye-ast init --trust trusted\|untrusted [--workspace <file>] [<repo>]` | Declares the trust mode (the repository defaults to `.`), writes the fixed layer (and the workspace manifest given, once every repository it names is a readable repository root), prints the MCP registration |
+| `ye-ast init --trust trusted\|untrusted [--workspace <file>] --repo <id> <path> [--repo <id> <path>]… <launch-repo>` | The batch form of step 2: one trust choice for several roots; prints a JSON report, then the MCP registration |
+| `ye-ast mcp [<launch-root>] [--repo <id> <root>]…` | Read-only stdio MCP server with a declared repository catalog |
 | `ye-ast serve` | The query protocol over stdio, one JSON-RPC 2.0 message per line |
-
-The query protocol carries mixed live and committed workspace selectors, but default `ye-ast serve` runs untrusted,
-ignores user trust records and refuses live workspace reads. MCP and library live reads require repository trust.
-The `workspace` and `decisions` CLI commands and local query RPCs use committed revisions. Protocol workspace results
-retain host read-location metadata in `repositorySources` for compatibility.
 
 | Option group | Syntax |
 |---|---|
-| `scope` | `[--include <glob>]… [--exclude <glob>]…` over repository-relative paths; `--exclude` wins |
-| `budget` | `[--depth <n>] [--hub-fan-in <n>] [--expansions <n>]`; positive integers, no defaults |
-| identity | `--repo-id <id>` names the repository in every snapshot; without it the name is the directory of the repository's main worktree, so every linked worktree of one repository answers the same name |
-| measurement | `--measure` writes one JSON measurement line per query and per index build to stderr, never stdout |
+| `scope` | `[--include <glob>]… [--exclude <glob>]…` over repository-relative paths, on every query command; without `--include` every path is included; `--exclude` wins |
+| `changed` | `[--changed <glob>]…` on `impact` only: globs over the changed paths that seed the walk; a glob that selects no changed path is an error (`unknown-change-path`) |
+| `budget` | `[--depth <n>] [--hub-fan-in <n>] [--expansions <n>]` on `impact` and `callers`; positive integers, no defaults |
+| `--live` | Reads the working tree of a repository declared `trusted` from ye-ast's own mirror, instead of a revision. Replaces `--revision` (`map`, `callers`, `importers`, `outline`) or `--head` (`impact`; `--base` stays). Using both is a usage error (exit `2`); `workspace` and `decisions` take no `--live`. A stale answer adds one stderr line |
+| `--offline` | `workspace` and `decisions` only: read every repository from its own clone and refresh no declared remote, as under `untrusted` |
+| `--repo-id` | Names the repository in every snapshot; without it the name is the directory of the repository's main worktree, so every linked worktree of one repository answers the same name |
+| `--measure` | Writes one JSON measurement line per query and per index build to stderr, never stdout |
+
+`--workspace <file>` on `init` persists the manifest as `.ye-ast/workspace.json`:
+`{ "repos": [{ "path", "id", "revision", "remote" }], "gateways": [{ "prefix", "repo" }] }`. A relative repository path is
+stored as written and resolved against the installed repository; a `remote` is the source of truth a trusted
+repository's queries refresh into ye-ast's own mirror. Use `ye_ast_decisions` to see which entries the workspace leaves
+to the user.
+
+#### Query protocol
+
+`ye-ast serve` speaks `ye-ast-query` version 1 (JSON-RPC 2.0, one message per line; stdout carries only protocol
+lines). The server first sends a `hello` notification with the protocol name, version and producer. A client must send
+`trust.declare` with `{ "mode": "untrusted" }` before any query; `trusted` is refused (`trust-unsupported`).
+
+| Method | Meaning |
+|---|---|
+| `trust.declare` | Declares the trust mode of the session (`untrusted` only) |
+| `entrypoints.map` | `map` |
+| `impact.ofChange`, `impact.callers`, `impact.importers` | `impact`, `callers`, `importers` |
+| `outline.files` | `outline` |
+| `workspace.outwardNames`, `decisions.decisions` | `workspace`, `decisions` |
+| `cancel` (notification) | Aborts the in-flight request named by `params.id` |
+
+A request can carry `deadlineMs` in its params; an expired one answers with a `deadline` error. Errors carry a stable
+code and `data.kind` (the fault kinds of step 7, plus `parse-error`, `invalid-request`, `method-not-found`,
+`invalid-params`, `internal-error`, `trust-not-declared`, `trust-unsupported`). The query protocol carries mixed live and
+committed workspace selectors, but default `ye-ast serve` runs untrusted, ignores user trust records and refuses live
+workspace reads. MCP and library live reads require repository trust. The `workspace` and `decisions` CLI commands and
+local query RPCs use committed revisions. Protocol workspace results retain host read-location metadata in
+`repositorySources` for compatibility.
 
 <details>
 <summary><b>Embedding the engine as a library</b></summary>
@@ -552,7 +640,7 @@ const result = await impact.callers({
 });
 ```
 
-`composeQueries` returns the read query families and `warmLive`; nothing it exposes can write.
+`composeQueries` returns the read query families (`entrypoints`, `impact`, `outline`, `workspace`, `workspaceImpact`, `decisions`) and `warmLive`, plus the redaction and repository-naming helpers; nothing it exposes can write.
 
 </details>
 
