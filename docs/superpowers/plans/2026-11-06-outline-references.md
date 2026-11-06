@@ -348,14 +348,16 @@ As built (phase 3):
   places around the use (`captured`). A site may be placed at any name of its chain, past its calls (a resolved edge
   sits at the callee's start and names the member it reaches). A member of a namespace import is the declaration the
   module exports under that name, followed through renames, `export … from`, `export *` and re-exported imports by the
-  adapter's declaration lookup (`located`); a module that exports no such name, or two, leaves it `unknown`, never a
-  private homonym the module declares.
+  adapter's declaration lookup (`located`); a module that exports no such name leaves it `unknown`, and one whose star
+  exports reach two declarations of it makes it `ambiguous`, never a private homonym the module declares.
 - B2: the acquisition shared with trace is `application/navigation/declaration-uses.ts` (`followed`, `referencesFrom`,
   `ownMembers`, `unsettledBy`); trace reads it, and its answers are byte-identical before and after (differential on
   four targets). `usesOf` settles every edge through `EdgeTargets.verdictsOf` (D5) and every reference no edge records at
   its place through `rootBindings`; an edge whose root `rootBindings` answers as a local value (the body's own, or a
   captured local root) is no use either (D4 holds for resolved edges as for unresolved references), and a repository
-  import the join reaches no declaration of is a cut; the grouping and the cuts are `domain/outline/outline-uses.ts`. A declared binding
+  import the join reaches no declaration of is a cut; an edge whose root is `ambiguous` (the sources name two
+  declarations it could be, or only a wildcard import could supply it) is a cut, never the target the graph matched,
+  while an `unknown` root keeps the edge; the grouping and the cuts are `domain/outline/outline-uses.ts`. A declared binding
   settles in order: the single node of its name whose lines hold a line its name is written on is a use (the index
   stores no name column, and every node's lines hold its own name, whatever decorators, modifiers or line breaks precede
   it); with no such node, a captured value is a local root and not a use (D4; a parameter of the encloser, `deps` in
@@ -367,8 +369,10 @@ As built (phase 3):
   exist and reads `tsconfig` and manifests; the `ambient` proof needs every source that may declare a global), so a
   focus reads the head's sources as a listing does; the Java-record scan still reads only the focused files.
 - B3: `adapters/spring/java-root-bindings.ts`, joined to the TypeScript reader in composition by file. A name only a
-  wildcard import could supply stays unknown, since `java.lang` may supply it too, even when a source declares it in the
-  wildcard's package.
+  wildcard import could supply is `ambiguous`, since `java.lang` may supply it too, even when a source declares it in
+  the wildcard's package, and so is a type two sources declare under one qualified name. Measured on
+  spring-petclinic-microservices (`305a1f1`, 167 focused declarations): 6 uses the graph matched through
+  `…customers.model.*` became 7 cut places, all in `PetResource.java`; this repository is unchanged.
 - B4: `OutlineFocus.uses`; the text prints one line per use, `name → file:line (relations; at lines)`, a package or a
   global otherwise, and "uses nothing outside its body" when evaluated empty and no use of it is unproved (an
   `unresolved-link` cut anchored at it; `hasUnprovedUses`, shared by the outline text and compose's part); compose

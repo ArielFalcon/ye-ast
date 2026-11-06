@@ -11,6 +11,22 @@ export type ModuleShape = Pick<RawRouteFile, "exports" | "declared" | "imports" 
 
 export type DeclarationLookup = (file: string, name: string, trail?: ReadonlySet<string>) => Promise<Declaration | undefined>;
 
+/** `ambiguous`: two `export *` the chain passes could supply the name, so the sources do not say which declaration it is. */
+export type ExportLookup = (file: string, name: string) => Promise<Declaration | "ambiguous" | undefined>;
+
+/** `createDeclarationLookup`, telling a chain that two star exports could supply apart from one that ends nowhere. */
+export function createExportLookup(
+  parse: (file: string) => Promise<ModuleShape | undefined>,
+  fileOf: (from: string, specifier: string) => Promise<string | undefined>,
+): ExportLookup {
+  /** As a module resolves an export: a star export that is ambiguous anywhere along the chain makes the name ambiguous. */
+  return async (file, name) => {
+    let ambiguous = false;
+    const found = await createDeclarationLookup(parse, fileOf, () => (ambiguous = true))(file, name);
+    return ambiguous ? "ambiguous" : found;
+  };
+}
+
 /**
  * The one declaration `name` exported by `file` comes down to, following renames, `export { x } from`, `export *` and
  * re-exported imports; undefined when the chain ends nowhere, loops, or reaches two declarations.
@@ -18,6 +34,7 @@ export type DeclarationLookup = (file: string, name: string, trail?: ReadonlySet
 export function createDeclarationLookup(
   parse: (file: string) => Promise<ModuleShape | undefined>,
   fileOf: (from: string, specifier: string) => Promise<string | undefined>,
+  onAmbiguous?: () => void,
 ): DeclarationLookup {
   const declarationOf: DeclarationLookup = async (file, name, trail = new Set()) => {
     const key = `${file}\0${name}`;
@@ -46,6 +63,7 @@ export function createDeclarationLookup(
       const declaration = await declarationOf(target, name, next);
       if (declaration !== undefined) found.set(`${declaration.file}\0${declaration.name}`, declaration);
     }
+    if (found.size > 1) onAmbiguous?.();
     return found.size === 1 ? [...found.values()][0] : undefined;
   };
   return declarationOf;

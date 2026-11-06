@@ -65,10 +65,19 @@ test("a capitalised name no source declares and only a wildcard import could sup
   assert.deepEqual(await bindings([at(13, "Missing"), at(11, "ArrayList")]), [{ kind: "unknown" }, { kind: "unknown" }]);
 });
 
-test("a type the sources declare that only a wildcard import supplies is unknown, since java.lang may supply it too", async () => {
+test("a type the sources declare that only a wildcard import supplies is ambiguous, since java.lang may supply it too", async () => {
   const helper = { path: "src/main/java/q/Helper.java", content: "package q;\npublic class Helper {}\n" };
   const service = { path: "src/main/java/p/Service.java", content: "package p;\nimport q.*;\nclass Service {\n  void wildcard() { new Helper(); }\n}\n" };
   const site = { file: service.path, line: 4, column: 21, spelled: "Helper", owner: { name: "wildcard", line: 4, endLine: 4 } };
 
-  assert.deepEqual(await createJavaRootBindings(createJavaParser(), [helper, service])([site]), [{ kind: "unknown" }]);
+  assert.deepEqual(await createJavaRootBindings(createJavaParser(), [helper, service])([site]), [{ kind: "ambiguous", root: "Helper" }]);
+});
+
+test("a type two sources declare under the same qualified name is ambiguous", async () => {
+  const first = { path: "a/src/main/java/q/Helper.java", content: "package q;\npublic class Helper {}\n" };
+  const second = { path: "b/src/main/java/q/Helper.java", content: "package q;\npublic class Helper {}\n" };
+  const service = { path: "src/main/java/p/Service.java", content: "package p;\nimport q.Helper;\nclass Service {\n  void single() { new Helper(); }\n}\n" };
+  const site = { file: service.path, line: 4, column: 19, spelled: "Helper", owner: { name: "single", line: 4, endLine: 4 } };
+
+  assert.deepEqual(await createJavaRootBindings(createJavaParser(), [first, second, service])([site]), [{ kind: "ambiguous", root: "Helper" }]);
 });
