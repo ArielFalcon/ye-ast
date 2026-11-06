@@ -63,10 +63,18 @@ function cutsOf(fact: Fact<unknown>): readonly Cut[] {
   return fact.status === "partial" ? fact.cuts : [];
 }
 
+/** The first `:<line>` followed by a space or the end closes the path, as `placeAt` builds the place; the rest is its reason. */
+const PLACE = /^(.*?):(\d+)(?: (.*))?$/s;
+
+/** A `Cut.at` place read back into its parts; an entry that is no place is a file with no line and no reason. */
+function placeOf(place: string): { file: string; line: string; reason: string } {
+  const [, file = place, line = "", reason = ""] = PLACE.exec(place) ?? [];
+  return { file, line, reason };
+}
+
 /** A place after its file: the line, and the reason it could not be read when it carries one. */
-function placeRest(place: string, prefix: string): string {
-  const [line, ...reason] = place.slice(prefix.length).split(" ");
-  return reason.length === 0 ? (line ?? "") : `${line} (${reason.join(" ")})`;
+function placeRest({ line, reason }: ReturnType<typeof placeOf>): string {
+  return reason === "" ? line : `${line} (${reason})`;
 }
 
 /** The places of an `unresolved-link` cut: the ones in the anchor's own file as line numbers, the rest as path:line. */
@@ -74,9 +82,8 @@ function cutPlaces(cut: Cut): string {
   const [anchor, ...places] = cut.at;
   if (cut.kind !== "unresolved-link" || anchor === undefined || places.length === 0) return cut.at.join(", ");
   const file = anchor.includes("::") ? anchor.slice(0, anchor.indexOf("::")) : anchor;
-  const prefix = `${file}:`;
-  const here = places.filter((place) => place.startsWith(prefix)).map((place) => placeRest(place, prefix));
-  const elsewhere = places.filter((place) => !place.startsWith(prefix));
+  const here = places.map(placeOf).filter((place) => place.file === file && place.line !== "").map(placeRest);
+  const elsewhere = places.filter((place) => { const parsed = placeOf(place); return parsed.file !== file || parsed.line === ""; });
   const lines = here.length === 0 ? [] : [`${here.length === 1 ? "line" : "lines"} ${here.join(", ")}`];
   return `${anchor}: ${[...lines, ...groupedPlaces(elsewhere)].join(", ")}`;
 }
@@ -85,11 +92,8 @@ function cutPlaces(cut: Cut): string {
 function groupedPlaces(places: readonly string[]): string[] {
   const byFile = new Map<string, string[]>();
   for (const place of places) {
-    const [pathLine = "", ...reason] = place.split(" ");
-    const colon = pathLine.lastIndexOf(":");
-    const file = colon === -1 ? pathLine : pathLine.slice(0, colon);
-    const line = colon === -1 ? "" : pathLine.slice(colon + 1);
-    const key = reason.length === 0 ? file : `${file} (${reason.join(" ")})`;
+    const { file, line, reason } = placeOf(place);
+    const key = reason === "" ? file : `${file} (${reason})`;
     byFile.set(key, [...(byFile.get(key) ?? []), line].filter((part) => part !== ""));
   }
   return [...byFile].map(([head, lines]) => (lines.length === 0 ? head : lines.length === 1 ? `${head}:${lines[0]}` : `${head}: ${lines.join(", ")}`));
@@ -114,11 +118,7 @@ function singlePathLine(kind: Cut["kind"], cuts: readonly Cut[]): string {
 /** The files the places of a cut sit in, without their lines: a place is `path:line`, a reason following a space. */
 function placeFiles(cut: Cut): string {
   const files = new Set<string>();
-  for (const place of cut.at.slice(1)) {
-    const [pathLine = ""] = place.split(" ");
-    const colon = pathLine.lastIndexOf(":");
-    files.add(colon === -1 ? pathLine : pathLine.slice(0, colon));
-  }
+  for (const place of cut.at.slice(1)) files.add(placeOf(place).file);
   return [...files].sort(compareText).join(", ");
 }
 
@@ -127,8 +127,8 @@ function placeFiles(cut: Cut): string {
 function placeReasons(cut: Cut): string[] {
   const reasons = new Set<string>();
   for (const place of cut.at.slice(1)) {
-    const [, ...reason] = place.split(" ");
-    if (reason.length > 0) reasons.add(reason.join(" "));
+    const { reason } = placeOf(place);
+    if (reason !== "") reasons.add(reason);
   }
   return [...reasons].sort(compareText);
 }
@@ -1182,14 +1182,11 @@ function traceTreeLines(steps: readonly TraceStep[]): string[] {
   });
 }
 
-/** The first `:<line>` followed by a space or the end closes the path, as the walk builds the place. */
-const TRACE_PLACE = /^(.*?):(\d+)(?: (.*))?$/s;
-
 /** An unresolved call of a trace: the place and spelling leading the cut, then its candidates. */
 function tracePlaceOf(cut: Cut): { file: string; line: string; spelling: string; candidates: readonly string[] } {
   const [place = "", ...candidates] = cut.at;
-  const [, file = place, line = "", spelling = ""] = TRACE_PLACE.exec(place) ?? [];
-  return { file, line, spelling, candidates };
+  const { file, line, reason } = placeOf(place);
+  return { file, line, spelling: reason, candidates };
 }
 
 type TracePlace = ReturnType<typeof tracePlaceOf>;

@@ -30,12 +30,19 @@ const CALLABLE_KINDS: readonly string[] = ["method", "function"];
 /** Types whose methods have bodies, so a root of one of them runs what its members run. */
 const CLASS_KINDS: readonly string[] = ["class", "component"];
 
+/** A file's unresolved references, read on demand and once per file for the life of one query. */
+export type UnresolvedIn = (file: string) => readonly GraphUnresolvedReference[];
+
+export function unresolvedOncePerFile(store: CodeGraphReader): UnresolvedIn {
+  return memoizedBy((file: string) => file, (file) => store.unresolvedReferences([file]));
+}
+
 /** What a trace can start from: what an impact walk seeds, or a property or field whose initializer makes calls. */
-export function isTraceRoot(store: CodeGraphReader): (symbol: GraphSymbol) => boolean {
+export function isTraceRoot(store: CodeGraphReader, unresolvedIn: UnresolvedIn): (symbol: GraphSymbol) => boolean {
   return (symbol) =>
     isSeedable(symbol) ||
     ((FIELD_KINDS as readonly string[]).includes(symbol.kind) &&
-      (callEdgesOf(store, symbol).length > 0 || store.unresolvedReferences([symbol.file]).some((reference) => reference.from === symbol.id && CALL_EDGE_KINDS.includes(reference.kind))));
+      (callEdgesOf(store, symbol).length > 0 || unresolvedIn(symbol.file).some((reference) => reference.from === symbol.id && CALL_EDGE_KINDS.includes(reference.kind))));
 }
 
 function callEdgesOf(store: CodeGraphReader, symbol: GraphSymbol) {
@@ -44,6 +51,8 @@ function callEdgesOf(store: CodeGraphReader, symbol: GraphSymbol) {
 
 export interface TraceWalkInput {
   store: CodeGraphReader;
+  /** The query's one read of each file's unresolved references, shared with root selection. */
+  unresolvedIn: UnresolvedIn;
   origins: ImportOrigins;
   /** Where each resolved edge really points, judged by the one owner of that decision. */
   targets: EdgeTargets;
@@ -90,14 +99,14 @@ interface Body {
  * cut that leaves it free to expand at a later, shallower one. Every read is cached for this walk only.
  */
 export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkInput): Promise<TraceWalk | "aborted"> {
-  const { store, origins, targets, inScope, memberDeclarations, syntaxOf, budget, signal } = input;
+  const { store, unresolvedIn, origins, targets, inScope, memberDeclarations, syntaxOf, budget, signal } = input;
   const navigation = createGraphNavigation(store, () => false);
 
   const referencesByFile = new Map<string, ReadonlyMap<GraphNodeId, readonly GraphUnresolvedReference[]>>();
   const callsFrom = (node: GraphSymbol): readonly GraphUnresolvedReference[] => {
     let byNode = referencesByFile.get(node.file);
     if (byNode === undefined) {
-      byNode = Map.groupBy(store.unresolvedReferences([node.file]).filter((reference) => CALL_EDGE_KINDS.includes(reference.kind)), (reference) => reference.from);
+      byNode = Map.groupBy(unresolvedIn(node.file).filter((reference) => CALL_EDGE_KINDS.includes(reference.kind)), (reference) => reference.from);
       referencesByFile.set(node.file, byNode);
     }
     const found = byNode.get(node.id) ?? [];
@@ -152,8 +161,7 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
   const supertypesOf = memoizedBy((type: GraphSymbol) => type.id, (type): readonly GraphSymbol[] => {
     const edges = store.outgoingEdges([type.id], SUPERTYPE_EDGES);
     navigation.load(edges.map((edge) => edge.target));
-    const parameterized = store
-      .unresolvedReferences([type.file])
+    const parameterized = unresolvedIn(type.file)
       .filter((reference) => reference.from === type.id && SUPERTYPE_EDGES.includes(reference.kind) && reference.name.includes("<"))
       .flatMap((reference) => store.declarationsNamed([rawTypeName(reference.name)]).filter((declared) => TYPE_KINDS.includes(declared.kind)));
     return [...edges.flatMap((edge) => navigation.symbolOf(edge.target) ?? []), ...parameterized];

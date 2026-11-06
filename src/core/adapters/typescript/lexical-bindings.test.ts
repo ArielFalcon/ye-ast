@@ -20,11 +20,14 @@ test("asking every name of a file what it binds creates no type, whatever positi
     "export function run(callback: () => void, props: { callback: number }) {",
     "  const { callback: value } = { callback: () => 1 };",
     "  const { props: [first] } = { props: [props] };",
+    "  const { other = callback } = {} as { other?: () => void };",
     "  const element = <div callback={callback} />;",
     "  type Alias = typeof props.callback;",
     "  label: for (const key in props) { if (key) break label; }",
-    "  return [value, first, element, props.callback, new.target, import.meta] as unknown as Alias;",
+    "  return [value, first, other, element, props.callback, new.target, import.meta] as unknown as Alias;",
     "}",
+    "export { run as start };",
+    "function sloppy(scope: object) { with (scope) { run; } }",
   ].join("\n"));
   const before = bound.typeCount();
   const visit = (node: ts.Node): void => {
@@ -35,4 +38,40 @@ test("asking every name of a file what it binds creates no type, whatever positi
   visit(bound.tree);
 
   assert.equal(bound.typeCount(), before);
+});
+
+function declarationLine(path: string, lines: readonly string[], name: string, nth: number): number | undefined {
+  const bound = bindFile(path, lines.join("\n"));
+  const named: ts.Identifier[] = [];
+  const visit = (node: ts.Node): void => {
+    if (ts.isIdentifier(node) && node.text === name) named.push(node);
+    node.forEachChild(visit);
+  };
+  visit(bound.tree);
+  const binding = bound.bindingOf(named[nth]!);
+  return binding.kind === "declared" ? bound.tree.getLineAndCharacterOfPosition(binding.declarations[0]!.getStart(bound.tree)).line + 1 : undefined;
+}
+
+test("a destructuring default reads the binding it names, while the key and the bound name are no read", () => {
+  const lines = ["const fallback = 1;", "function run(fallback: number) {", "  const { fallback: kept = fallback } = {} as { fallback?: number };", "  return kept;", "}"];
+
+  assert.equal(declarationLine("src/defaults.ts", lines, "fallback", 3), 2);
+  assert.equal(declarationLine("src/defaults.ts", lines, "fallback", 2), undefined);
+});
+
+test("an export specifier reads its local binding", () => {
+  assert.equal(declarationLine("src/exports.ts", ["const held = 1;", "export { held as shared };"], "held", 1), 1);
+});
+
+test("a name read in the body of a with statement is dynamic, while its object expression keeps its binding", () => {
+  const bound = bindFile("src/scope.js", ["var obj = {};", "var held = 1;", "with (obj) { held; }"].join("\n"));
+  const names = new Map<string, ts.Identifier[]>();
+  const visit = (node: ts.Node): void => {
+    if (ts.isIdentifier(node)) names.set(node.text, [...(names.get(node.text) ?? []), node]);
+    node.forEachChild(visit);
+  };
+  visit(bound.tree);
+
+  assert.equal(bound.bindingOf(names.get("held")![1]!).kind, "dynamic");
+  assert.equal(bound.bindingOf(names.get("obj")![1]!).kind, "declared");
 });

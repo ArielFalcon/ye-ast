@@ -21,24 +21,24 @@ value reaches each one.
 
 - **Hypothesis.** An operation (HTTP method and path as its handler declares them), the response, a property path
   (`a.b`, `[]` for an array element: `[].owner.name`) and a change: `nullable`, `optional`, `removed`,
-  `{ "renamed": "<name>" }`, or a non-empty list of them on the same property. The old guarantee is "present and
+  `{ "renamed": "<name>" }`, `{ "type": "<kind>" }`, `{ "wrapped": "<property>" }`, or a non-empty list of them on the
+  same property. The old guarantee is "present and
   non-null" and the answer states that assumption. Changes are data: a change is the set of values it introduces,
   normalized once per hypothesis (see "Change algebra"), never a code path per case.
 - **Chain.** Operation → qualified link → call site → flow steps → use. Each step carries its evidence and its path
   rewrite. The chain is the provenance. A declared type is never provenance: `http.get<T>` is an unchecked assertion,
   and two declarations that share a type are not connected by it.
 - **Use.** An operation applied to the value at the property path, described as its steps past the changed segment and
-  how it ends. Each value the change introduces (`null`, `undefined`) is decided on its own: a guard that rejects it
-  keeps it from the use; otherwise the first step (a member read, a keyed read, a call) throws on it and, without steps,
-  the end decides: an iteration throws unless it tolerates the value, a destructuring and a bare dereference throw, a
-  display, comparison, coercion or hand-on runs, and a sink outside the vocabulary is undecided.
+  how it ends. Each concrete value standing for a class the change introduces is decided on its own: the guards it
+  passes in order handle it or replace it, then the steps (a member read, a keyed read, a call) and the end are
+  evaluated on what is left with the consumer language's own semantics (see "Change algebra").
 - **Verdicts,** per use and scoped to its chain:
 
   | Verdict | When |
   |---|---|
-  | `incompatible` | An introduced value reaches, unguarded, a step or end that throws on it. Carries the witness (`null` or `undefined`, `null` first when both throw), the failing step or end of the descriptor, and the capability the value lacks there (`readable`, as a member read or an object destructuring needs, `function`, `iterable`). |
+  | `incompatible` | An introduced value reaches, unguarded, a step or end that throws on it. Carries the witness (the value written as a JavaScript literal: `null`, `undefined`, `""`, `0`, `"a"`, `[]`, `{}`; `null` first when several throw), the failing step or end of the descriptor with its index `at` (the number of steps when the end fails), the capability the value lacks there (`readable`, as a member read or an object destructuring needs, `function`, `iterable`) and, when a fallback put it in place of the witness, the replacement. |
   | `admits` | Proven guards keep every introduced value from the use; carries those guards. |
-  | `review` | No introduced value is shown to throw, but the slice cannot admit: a value reaches a use that runs on it (`consumed`), a removed or renamed property behind a guard, a guard outside the vocabulary before a failing step, a sink outside the vocabulary. |
+  | `review` | No introduced value is shown to throw, but the slice cannot admit: a value reaches a use that runs on it (`consumed`), a removed or renamed property behind a guard, a guard outside the vocabulary or a test the module cannot decide before a failing step (`opaque-guard`), a value the module cannot follow (`unknown-value`), an opaque fallback replacement the use needs known (`opaque-replacement`), a sink outside the vocabulary. |
   | frontier (`unknown` item) | The flow cannot be followed past this place; location and reason. |
 
 - **Asymmetry.** `admits` needs a sufficient guard for every introduced value; `incompatible` needs an unguarded step or
@@ -74,10 +74,11 @@ frontiers.
 ## F0 guards
 
 Recognized when they test the path up to and including the changed segment, or its alias: `?.` on the changed segment;
-truthiness or `!= null` / `!== null` (with `!== undefined` for absence) in `@if`, `*ngIf`, `if`, `&&`, `?:`; an early
-`return` or `throw` on the negation in the same block; `??` or `||` directly on the changed value with a fallback
-proven to exclude the absence (a literal object, array, string or number); a destructuring default (`{ x = [] }`),
-which covers `undefined` only. A guard on one element (`items[0]`) protects only reads of that same index. A read after
+a condition on the value (truthiness, an equality with an absence or a literal, `typeof`, `Array.isArray`) in `@if`,
+`*ngIf`, `if`, `&&`, `?:`; an early `return` or `throw` on the negation in the same block; `??` or `||` directly on the
+changed value with any right side, which replaces the values its test rejects; a destructuring default (`{ x = [] }`),
+which replaces `undefined` only. Each guard states the test it applies and where the use runs; what a guard rejects is
+derived by evaluating the test, never listed. A guard on one element (`items[0]`) protects only reads of that same index. A read after
 a write to the guarded path or a prefix of it reads the written value, and one that only a guard outside its closure
 would protect is not decided where the closure runs: both are frontiers. A caller edge the code graph only guesses is
 never proof, and a reference to a function is not a call. User type guards, assertion functions and `instanceof` are not recognized: a use behind them is
@@ -91,12 +92,13 @@ a change is a set of values, a use is the code's own steps over the value, and t
 each value the change lets in. A new change is a constructor of value sets, never a code path.
 
 **Values.** The changed value is the JSON value the response carries; flow steps keep its identity, and a step that
-transforms it ends the chain, as in F0. Its classes are `absent`, `null`, `boolean`, `number`, `string`, `array`,
-`object` and literals, each literal inside its kind. Each class is represented by a few concrete values that every
-recognized guard and step treats alike within the class: `undefined`; `null`; `false` and `true`; `0` and a fresh
-number; `""` and a fresh string; `[]`; `{}`; and every literal the change states. A fresh value is nonzero or nonempty
-and differs from every literal the change and the use name, so a guard that names finitely many literals cannot exclude
-it while letting another member of its class through. A JSON value holds no function and no symbol, and an array or a
+transforms it ends the chain, as in F0. Its classes are `undefined`, `null`, `boolean`, `number`, `string`,
+`array`, `object` and literals, each literal inside its kind. Each class is represented by a few concrete values that
+every recognized guard and step treats alike within the class, chosen per use: `undefined`; `null`; `false` and `true`;
+`0`, a fresh number and the numbers the use names; `""`, a fresh string and the strings it names; `[]`; `{}`. A fresh
+value is nonzero or nonempty and differs, loosely and so strictly, from every literal the use names (a guard operand, a
+compared literal), so a guard that names finitely many literals cannot exclude it while letting another member of its
+class through. A JSON value holds no function and no symbol, and an array or a
 primitive has no named member besides those of its prototype.
 
 **Changes.** A change gives the values the new contract permits that the old one did not (`introduced`) and those it no
@@ -110,8 +112,8 @@ relies on.
 | `removed` | `removed` | `undefined`, only | every present value | |
 | `renamed` | `{ renamed: "<name>" }` | `undefined`, only | every present value | the new path |
 | `type` | `{ type: "<kind>" }` | the kind | the other kinds | |
-| `values` | `{ values: { added: [...], removed: [...] } }` | the added literals | the removed literals | |
-| `wrapped` | `{ wrapped: "<property>" }` | `object` | `array` | the elements' new path, `<path>.<property>.[]` |
+| `values` | `{ values: { added: [...], removed: [...] } }` (string, number or boolean literals, one list may be omitted, at least one literal) | the added literals | the removed literals | `silent`: the count of uses left without a finding |
+| `wrapped` | `{ wrapped: "<property>" }` | `object` | `array` | `elementsAt`: the elements' new path, `<path>.<property>[]` |
 | `meaning` | `{ meaning: "<note>" }` | | | the note |
 
 A combined change is a list of constraints on one property, normalized once per hypothesis: the introduced values
@@ -126,36 +128,55 @@ tolerates: `@for` accepts `null` and `undefined`), `destructure` (`object` or `a
 operator and the literal when one is written directly), `coerce` (its operator: arithmetic, unary, text), `consume`
 (shown or handed on), `unmodelled`, or nothing beyond the steps. The descriptor reaches the answer unchanged.
 
-**Evaluation.** For each introduced value, `core/domain/languages` walks the steps with the consumer language's own
-semantics; for JavaScript, one module serves both adapters. A step on `null` or `undefined` throws, unless it is optional
-on the changed value itself, which then never reaches the use. A member, or a keyed read with a literal key, on a
+**Evaluation.** For each concrete value, `core/domain/languages` walks the steps with the consumer language's own
+semantics; for JavaScript, one module serves both adapters. A step on `null` or `undefined` throws; an optional step
+there ends the chain at `undefined`, which the end then applies to. A member, or a keyed read with a literal key, on a
 primitive or an array is what a frozen table of the built-in prototypes holds under that name (inherited members
-included, up to a stated ECMAScript edition), else `undefined`; on an object it is `unknown` unless `Object.prototype`
-holds it, since its own keys are open. A keyed read with any other key is `unknown` past `null` and `undefined`. A call
-throws when its target is not a function, and its result is `unknown`. The end then applies to the value reached:
-`iterate` and array destructuring throw unless it is iterable (strings and arrays are), object destructuring throws only
-on `null` and `undefined`, `compare`, `coerce` and `consume` run. Each value ends `throws`, `handled` (a guard kept it
-from the use), `runs` (it reached the use and the use ran, its result possibly changed, an optional step past the
-changed value included) or `unknown`; `unknown` is never promoted. No repository code runs.
+included; the table follows ECMAScript 2025 with the Annex B members engines ship, is built once and is never read from
+the running engine), else `undefined`; an index key on an array or a string is `unknown`, since its elements are not
+known. On an object a member is `unknown` unless `Object.prototype` holds it, and since a JSON value holds no function
+such an unknown member is never callable. A value built from a fallback's literal is fully known: its own keys and
+elements are exact. A keyed read with any other key is `unknown` past `null` and `undefined`. A call throws when its
+target is not a function, and the call of a function is `unknown`: what the callee does is not modelled. The end then
+applies to the value reached: `iterate` and array destructuring throw unless it is iterable (strings and arrays are),
+object destructuring throws only on `null` and `undefined`, `compare`, `coerce` and `consume` run, `unmodelled` is
+`unknown`. Each value ends `throws`, `handled` (a guard kept it from the use, or a fallback replaced it and the use runs
+on the replacement), `runs` (it reached the use and the use ran, its result possibly changed) or `unknown`; `unknown` is
+never promoted. No repository code runs.
 
 **Guards** are predicates on the values, evaluated with the language's own operators, by exact operator, operand and
 branch polarity: `x === null`, `x !== undefined`, `x != null`, truthiness, `typeof x === 'k'` (true for `null` under
-`'object'`), `Array.isArray(x)`, `x === <literal>`. A value a guard rejects on the use's branch is `handled`. A fallback
-(`??` for `null` and `undefined`, `||` for falsy values, a destructuring default for `undefined`) replaces the values its
-own test catches with its right side, when that side is a literal the module can build as a JSON value (`''`, `0`, `[]`,
-`{}`, an object or array literal of such); evaluation continues on the replacement, which the answer names. Any other
-replacement makes the value `unknown`. A guard keeps F0's path scope and reach.
+`'object'`), `Array.isArray(x)`, `x === <literal>`. They are listed in the order the value passes them and each is
+applied to the value as it stands. A condition, an early exit or a `?.` lets the use run where its test gives its stated
+result on the value at the path it covers; a value on which it does not is `handled`. A guard on a path deeper than the
+changed value reads that path first with the same semantics: a read that throws leaves the value `handled` (the test is
+its own use, reported on its own), and a test the module cannot decide acts like a guard outside the vocabulary, which
+only turns a failing use into `review`. A fallback (`??` for `null` and `undefined`, `||` for falsy values, a
+destructuring default for `undefined`) replaces the values its own test rejects with its right side: the JSON value a
+literal right side writes (`''`, `0`, `[]`, `{}`, an object or array literal of such), or `opaque` for any other. Evaluation
+continues on the replacement: a use that throws on it is `incompatible` and names it, one that runs is `handled` by the
+fallback, and an opaque replacement goes on as an unknown value, so an end that runs on every value still runs and
+anything else is `unknown` (`opaque-replacement`). A fallback on a deeper path is followed only as far as its read. A
+guard keeps F0's path scope and reach.
 
 **Verdict,** per use: a value throws → `incompatible`, with that value as the witness, the step or end that fails on it,
-the capability it lacks (`a function at toFixed`, `an iterable`) and the replacement it came from, if any; a value runs or
-is `unknown` → `review`, with the descriptor; every introduced value `handled` → `admits`, with the guards that handled
-them (`review` for an always-absent change, as in F0). A `meaning` change makes every use it reaches `review`. A strict
-`compare` with a retired literal written directly marks its branch unreachable: `review`. A combined change is evaluated
-once, normalized, never merged from separate verdicts.
+the capability it lacks (`a function at toFixed`, `an iterable`) and the replacement it came from, if any; a value runs →
+`review` (`consumed`); otherwise a value is `unknown` → `review`, with the descriptor; every introduced value `handled` →
+`admits`, with the guards that handled them (`review` for an always-absent change, as in F0). A value that throws
+decides first, whatever else the change says. Next, a `meaning` change makes every use it reaches `review` with the
+reason `meaning`, since the note says the values may now be read differently and no code is evaluated against it. Then a
+use that compares the value strictly (`===`, `!==`) with a retired literal written directly, or that runs only where a
+strict equality with a retired literal holds (`===` with its branch taken, `!==` with its other branch), is `review` with
+the reason `retired-literal`: its branch is unreachable under the new contract. Retired values are not walked, and no
+fresh value equals a literal the change names. An added literal is walked as itself, with its own characters known, besides the
+classes the change introduces. A combined change is evaluated once, normalized, never merged from separate verdicts.
 
-**Silent and counted.** Under a `values` change, a use that only shows the value or compares it strictly with another
-literal gives no finding of its own: every display of an enum would otherwise bury the findings that matter. The answer
-counts the uses it left silent, so silence never reads as proven compatibility.
+**Silent and counted.** Under a `values` change, a use that only shows the value or compares it strictly with a literal
+the change does not name gives no finding of its own when the only values that run on it are added literals: every
+display of an enum would otherwise bury the findings that matter. A use where `null` or `undefined` also run (a combined
+change), where a value throws or where a value is undecided keeps its finding. The domain decides which uses are silent
+(`decideUse` returns `silent`); the answer counts them in `silent`, a number present whenever the change has a `values`
+entry and `0` when none was left silent, so silence never reads as proven compatibility.
 
 **Cost.** One descriptor per use, built where the syntax already is; a few representative values per introduced class,
 each walked once over the use's steps; one normalization per hypothesis; no new walk of the code.
@@ -175,7 +196,7 @@ independent oracle for each new change, and latency, peak memory and answer size
 3. Representative values of every class, the prototype table and step evaluation; guards as predicates by exact
    operator, operand and polarity, `typeof` and `Array.isArray` included; `type`, `wrapped`, fallback replacements and
    the replacement in the answer.
-4. `values`, strict comparisons, the silent-and-counted rule. `switch` afterwards, on its own.
+4. `values` and `meaning`, retired literals in strict comparisons, the silent-and-counted rule. `switch` afterwards, on its own.
 
 ## Output
 
@@ -187,7 +208,8 @@ over every repository of the workspace, its own included: a call two repositorie
 call sites whose target no read could evaluate are always listed as one `unknown` item, since any of them may call the
 operation; when no call site links, that item also names the handler. Output is
 sorted and reproducible; the hypothesis is echoed as normalized (a single change as written, a combined one as its
-list), with its assumed old guarantee and, for a rename, the property's new path, once. F0 has no MCP, CLI or protocol
+list), with its assumed old guarantee and, for a rename, the property's new path, for a wrapped array, the path of its
+elements, once. F0 has no MCP, CLI or protocol
 surface.
 
 ## Ownership

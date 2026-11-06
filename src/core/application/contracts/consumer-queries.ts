@@ -57,6 +57,7 @@ function consequencesOf(session: ConsumerSession, hypothesis: Hypothesis): Resul
   const cuts: Cut[] = [...session.cuts];
   const queue: Pending[] = [];
   const sites: RepositoryEvidence[] = [];
+  let silent = 0;
 
   const links = session.links
     .filter((link) => isCallOf(link, operation))
@@ -103,6 +104,10 @@ function consequencesOf(session: ConsumerSession, hypothesis: Hypothesis): Resul
     for (const use of result.uses) {
       const verdict = decideUse(use, hypothesis.change);
       if (verdict === undefined) continue;
+      if (verdict.kind === "silent") {
+        silent++;
+        continue;
+      }
       const evidence = [use.site, ...(verdict.kind === "admits" ? verdict.guards.map((guard) => guard.evidence) : [])].map((place) => located(place, repo));
       const value: UseConsequence = {
         repo,
@@ -136,8 +141,10 @@ function consequencesOf(session: ConsumerSession, hypothesis: Hypothesis): Resul
       property: formatAccessPath(hypothesis.property),
       change: writtenChange(hypothesis.change),
       ...(hypothesis.change.renamedTo === undefined ? {} : { renamedTo: formatAccessPath(hypothesis.change.renamedTo) }),
+      ...(hypothesis.change.elementsAt === undefined ? {} : { elementsAt: formatAccessPath(hypothesis.change.elementsAt) }),
     },
     assumedOldGuarantee: OLD_GUARANTEE,
+    ...(hypothesis.change.values === undefined ? {} : { silent }),
     findings: findings.sort(compareFindings),
   };
   return { ok: true, value: withCuts({ ...session.base, evidence: sites.sort(compareEvidence) }, value, cuts) };

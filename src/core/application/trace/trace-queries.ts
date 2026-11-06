@@ -20,7 +20,7 @@ import { distinctTargets, evidenceOfTarget, rangeChanges, requestedRanges, selec
 import { ABORTED } from "../snapshot/read-snapshot.ts";
 import { createEdgeTargets } from "../navigation/edge-targets.ts";
 import { createHeadReader, type FactSpec, type HeadReaderDeps } from "../snapshot/head-reading.ts";
-import { isTraceRoot, walkTrace } from "./trace-walk.ts";
+import { isTraceRoot, unresolvedOncePerFile, walkTrace } from "./trace-walk.ts";
 
 export interface TraceQueriesDeps extends HeadReaderDeps {
   /** Reads where the bare names a file calls come from, so a call to a package or a language global is external. */
@@ -64,7 +64,8 @@ export function createTraceQueries(deps: TraceQueriesDeps): TraceQueries {
         const { store, summary } = index;
         try {
           const trivia = triviaOncePerFile(deps.sourceTrivia);
-          const isRoot = isTraceRoot(store);
+          const unresolvedIn = unresolvedOncePerFile(store);
+          const isRoot = isTraceRoot(store, unresolvedIn);
           const selections = await Promise.all(targets.map(async (target) => ({
             target,
             selection: "start" in target
@@ -85,7 +86,7 @@ export function createTraceQueries(deps: TraceQueriesDeps): TraceQueries {
           };
           const origins = deps.importOrigins(head.tree.sources);
           const edgeTargets = createEdgeTargets({ origins, store, modules: deps.moduleDependencies === undefined ? undefined : { reader: deps.moduleDependencies, sources: head.tree.sources } });
-          const walk = await walkTrace(roots, { store, origins, targets: edgeTargets, inScope: head.selected, memberDeclarations, syntaxOf, budget, ...(signal === undefined ? {} : { signal }) });
+          const walk = await walkTrace(roots, { store, unresolvedIn, origins, targets: edgeTargets, inScope: head.selected, memberDeclarations, syntaxOf, budget, ...(signal === undefined ? {} : { signal }) });
           if (walk === "aborted") return ABORTED;
 
           const { steps, ids } = traceSteps(walk.roots);

@@ -22,7 +22,7 @@ test("input the slice does not support or that contradicts itself is refused wit
   assert.equal(refusal({ path: "api/owners" }), "invalid-path");
   assert.equal(refusal({ target: "request" }), "unsupported-target");
   assert.equal(refusal({ change: "renamed" }), "unsupported-change");
-  assert.equal(refusal({ change: { type: "string" } }), "unsupported-change");
+  assert.equal(refusal({ change: { type: "date" } }), "unsupported-change");
   assert.equal(refusal({ change: { renamed: "owner.name" } }), "unsupported-change");
   assert.equal(refusal({ change: { renamed: "fullName", type: "string" } }), "unsupported-change");
   assert.equal(refusal({ change: [] }), "unsupported-change");

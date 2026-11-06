@@ -3,7 +3,8 @@ import test from "node:test";
 import { parseAccessPath } from "../../domain/contracts/access-path.ts";
 import { carrierKey, NO_FLOW, type Carrier, type FlowResult, type FlowUse } from "../../domain/contracts/consumer-flow.ts";
 import type { HypothesisInput } from "../../domain/contracts/hypothesis.ts";
-import type { Guard, UseOperation } from "../../domain/contracts/verdict.ts";
+import type { Predicate } from "../../domain/contracts/use-operation.ts";
+import type { TestedGuard, UseOperation } from "../../domain/contracts/verdict.ts";
 import type { FactBase } from "../../domain/shared/fact.ts";
 import type { Link } from "../../domain/topology/link.ts";
 import type { ConsequencesRequest, ConsumerQueries } from "../../ports/consumer-queries.port.ts";
@@ -30,8 +31,11 @@ function link(overrides: { file?: string; line?: number; basis?: Link["basis"]; 
 const siteOf = (file = "src/owner.service.ts", line = 10) => ({ kind: "call-site" as const, repo: "web", file, line, symbol: "find" });
 const returnOf = (symbol = "find", line = 8, file = "src/owner.service.ts") => ({ kind: "return" as const, repo: "web", file, symbol, line });
 
-function guard(overrides: Partial<Guard> = {}): Guard {
-  return { kind: "optional-chain", covers: path("address"), excludes: ["null", "undefined"], evidence: { path: "src/page.ts", line: 31 }, ...overrides };
+const NOT_NULL: Predicate = { kind: "absence", operator: "!==", absence: "null" };
+const NOT_UNDEFINED: Predicate = { kind: "absence", operator: "!==", absence: "undefined" };
+
+function guard(overrides: Partial<TestedGuard> = {}): TestedGuard {
+  return { kind: "optional-chain", covers: path("address"), test: { kind: "absence", operator: "!=", absence: "null" }, holds: true, evidence: { path: "src/page.ts", line: 31 }, ...overrides };
 }
 
 const READ: UseOperation = { steps: [{ kind: "member", name: "city", optional: false }], end: { kind: "none" } };
@@ -111,15 +115,15 @@ test("the answer echoes the normalized hypothesis and the old guarantee it assum
 });
 
 test("an optional property is admitted behind a test that excludes undefined, not behind one that excludes only null, with undefined as the witness", async () => {
-  const undefinedTest = guard({ kind: "comparison", excludes: ["undefined"] });
-  const nullTest = guard({ kind: "comparison", excludes: ["null"], evidence: { path: "src/page.ts", line: 39 } });
+  const undefinedTest = guard({ kind: "condition", test: NOT_UNDEFINED });
+  const nullTest = guard({ kind: "condition", test: NOT_NULL, evidence: { path: "src/page.ts", line: 39 } });
   const flow = { [carrierKey(siteOf())]: { uses: [use(30, { operation: READ, guards: [undefinedTest] }), use(40, { operation: READ, guards: [nullTest] })], next: [], frontiers: [] } };
 
   const fact = await setup({ flow, change: "optional" }).ask();
 
   assert.deepEqual(fact.value.findings.map((finding) => finding.status === "complete" && finding.value.verdict), [
     { kind: "admits", guards: [undefinedTest] },
-    { kind: "incompatible", witness: "undefined", failing: READ.steps[0], capability: "readable" },
+    { kind: "incompatible", witness: "undefined", at: 0, failing: READ.steps[0], capability: "readable" },
   ]);
 });
 
@@ -133,9 +137,39 @@ test("a renamed property is decided as one that is always absent, and the answer
   assert.equal(JSON.stringify(fact.value).split("owner.location").length - 1, 1);
 });
 
+test("under a values change the uses left silent are counted, and any other change states no count", async () => {
+  const compared: UseOperation = { steps: [], end: { kind: "compare", operator: "===", literal: "B" } };
+  const flow = { [carrierKey(siteOf())]: { uses: [use(30, { path: path("address") }), use(40, { path: path("address"), operation: compared }), use(50, { operation: READ })], next: [], frontiers: [] } };
+
+  const fact = await setup({ flow, change: { values: { added: ["A"] } } }).ask();
+
+  assert.equal(fact.value.silent, 2);
+  assert.deepEqual(verdictsOf(fact), ["review"]);
+  assert.deepEqual(fact.value.hypothesis.change, { values: { added: ["A"], removed: [] } });
+  assert.equal((await setup({ flow, change: { values: { removed: ["A"] } } }).ask()).value.silent, 2);
+  assert.equal((await setup({ change: { values: { added: ["A"] } } }).ask()).value.silent, 0);
+  assert.equal("silent" in (await setup({ flow }).ask()).value, false);
+});
+
+test("a meaning note reaches the answer as written and makes every use a review", async () => {
+  const flow = { [carrierKey(siteOf())]: { uses: [use(30, { path: path("address") })], next: [], frontiers: [] } };
+
+  const fact = await setup({ flow, change: [{ meaning: "euros become cents" }] }).ask();
+
+  assert.deepEqual(fact.value.hypothesis.change, { meaning: "euros become cents" });
+  assert.deepEqual(fact.value.findings.map((finding) => finding.status === "complete" && finding.value.verdict), [{ kind: "review", reason: "meaning" }]);
+  assert.equal("silent" in fact.value, false);
+});
+
+test("a wrapped array is echoed with the path its elements move to, once", async () => {
+  const fact = await setup({ property: "owner.items", change: { wrapped: "content" } }).ask();
+
+  assert.deepEqual(fact.value.hypothesis, { method: "GET", path: "/owners/{id}", target: "response", property: "owner.items", change: { wrapped: "content" }, elementsAt: "owner.items.content[]" });
+});
+
 test("an admitted use names in its evidence every guard that kept an introduced value from it", async () => {
-  const nullTest = guard({ kind: "comparison", excludes: ["null"], evidence: { path: "src/page.ts", line: 28 } });
-  const undefinedTest = guard({ kind: "comparison", excludes: ["undefined"], evidence: { path: "src/page.ts", line: 29 } });
+  const nullTest = guard({ kind: "condition", test: NOT_NULL, evidence: { path: "src/page.ts", line: 28 } });
+  const undefinedTest = guard({ kind: "condition", test: NOT_UNDEFINED, evidence: { path: "src/page.ts", line: 29 } });
   const flow = { [carrierKey(siteOf())]: { uses: [use(30, { operation: READ, guards: [undefinedTest, nullTest] })], next: [], frontiers: [] } };
 
   const fact = await setup({ flow, change: ["nullable", "optional"] }).ask();

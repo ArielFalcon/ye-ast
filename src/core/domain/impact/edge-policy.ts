@@ -103,6 +103,8 @@ export function edgeConfidence({ confidence, provenance }: EdgeScore): number {
   return provenance === "heuristic" ? EDGE_POLICY.unscoredHeuristicConfidence : 1;
 }
 
+export type RootOrigin = Finding<ImportOrigin> & { bare?: true };
+
 /** What an edge the graph resolved really reaches: its own target, nothing, or another declaration the source proves. */
 export type EdgeVerdict<D> = { kind: "keep" } | { kind: "drop" } | { kind: "redirect"; to: D };
 
@@ -114,7 +116,7 @@ export type EdgeVerdict<D> = { kind: "keep" } | { kind: "drop" } | { kind: "redi
  * of the repository other than the edge's `target`, names `proven`. A root that is unknown, bound inside without a proven
  * declaration, or reached through a longer chain (`a.b`, whose member the binding does not name) proves nothing against it.
  */
-export function edgeVerdict<D>(root: Finding<ImportOrigin> & { bare?: true }, proven?: D, target?: D): EdgeVerdict<D> {
+export function edgeVerdict<D>(root: RootOrigin, proven?: D, target?: D): EdgeVerdict<D> {
   if (root.status !== "complete") return { kind: "keep" };
   if (root.value.kind === "external" || root.value.kind === "ambient" || (root.value.kind === "local-parameter" && root.bare === true)) return { kind: "drop" };
   if (root.value.kind === "repository" && root.bare === true && proven !== undefined && proven !== target) return { kind: "redirect", to: proven };

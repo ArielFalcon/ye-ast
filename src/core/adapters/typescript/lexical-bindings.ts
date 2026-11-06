@@ -1,6 +1,6 @@
 import ts from "typescript";
 
-/** What a name binds at one place: the symbol and its declarations, nothing the file declares (the binder answers so inside `with` too), or a scope a sloppy direct `eval` can extend at run time. */
+/** What a name binds at one place: the symbol and its declarations, nothing the file declares, or a scope decided at run time (a `with` body, or one a sloppy direct `eval` can extend). */
 export type LexicalBinding = { kind: "declared"; symbol: ts.Symbol; declarations: readonly ts.Declaration[] } | { kind: "none" } | { kind: "dynamic" };
 
 export interface BoundFile {
@@ -39,7 +39,7 @@ export function bindFile(path: string, content: string): BoundFile {
   };
   const program = ts.createProgram({ rootNames: [fileName], options: OPTIONS, host });
   const checker = program.getTypeChecker();
-  const dynamicScopes = evalScopes(tree);
+  const dynamicScopes = dynamicScopesOf(tree);
   let starting: Map<number, ts.Identifier[]> | undefined;
 
   const isDynamic = (identifier: ts.Identifier): boolean => {
@@ -53,7 +53,10 @@ export function bindFile(path: string, content: string): BoundFile {
       if (!isLexicalReference(identifier)) return NONE;
       if (isDynamic(identifier)) return DYNAMIC;
       const parent = identifier.parent;
-      const symbol = ts.isShorthandPropertyAssignment(parent) && parent.name === identifier ? checker.getShorthandAssignmentValueSymbol(parent) : checker.getSymbolAtLocation(identifier);
+      const symbol =
+        ts.isShorthandPropertyAssignment(parent) && parent.name === identifier ? checker.getShorthandAssignmentValueSymbol(parent)
+        : ts.isExportSpecifier(parent) ? checker.getExportSpecifierLocalTargetSymbol(parent)
+        : checker.getSymbolAtLocation(identifier);
       const declarations = symbol?.declarations ?? [];
       return symbol === undefined || declarations.length === 0 ? NONE : { kind: "declared", symbol, declarations };
     },
@@ -73,11 +76,16 @@ export function bindFile(path: string, content: string): BoundFile {
   };
 }
 
-/** The function bodies and the file whose own code, outside strict mode, calls `eval` directly: a `var` it evaluates joins that scope at run time. */
-function evalScopes(tree: ts.SourceFile): ReadonlySet<ts.Node> {
+/**
+ * The scopes whose names are decided at run time: the function bodies and the file whose own code, outside strict mode,
+ * calls `eval` directly, since a `var` it evaluates joins that scope; and the body of a `with`, whose object may hold any
+ * name it reads or writes.
+ */
+function dynamicScopesOf(tree: ts.SourceFile): ReadonlySet<ts.Node> {
   const scopes = new Set<ts.Node>();
   const visit = (node: ts.Node, scope: ts.Node, strict: boolean): void => {
     if (ts.isCallExpression(node) && isDirectEval(node) && !strict) scopes.add(scope);
+    if (ts.isWithStatement(node)) scopes.add(node.statement);
     if (ts.isClassLike(node)) return node.forEachChild((child) => visit(child, scope, true));
     if (ts.isFunctionLike(node) && "body" in node && node.body !== undefined) {
       const inner = strict || (ts.isBlock(node.body) && declaresStrict(node.body.statements));
@@ -92,14 +100,17 @@ function evalScopes(tree: ts.SourceFile): ReadonlySet<ts.Node> {
 
 /**
  * A name read where the binder alone answers what it binds. Elsewhere `getSymbolAtLocation` reaches the checker's types:
- * a destructuring key, a member or property name, a qualified or type name, a JSX tag or attribute.
+ * a destructuring key, a member or property name, a qualified or type name, a JSX tag or attribute. A destructuring
+ * default is a read; so is an export specifier's local name.
  */
 function isLexicalReference(identifier: ts.Identifier): boolean {
   if (ts.isPartOfTypeNode(identifier)) return false;
   const parent = identifier.parent;
   if (ts.isShorthandPropertyAssignment(parent)) return parent.name === identifier;
   if (ts.isPropertyAccessExpression(parent)) return parent.expression === identifier;
-  if (ts.isBindingElement(parent) || ts.isQualifiedName(parent) || ts.isJsxAttribute(parent) || ts.isJsxOpeningLikeElement(parent) || ts.isJsxClosingElement(parent) || ts.isJsxNamespacedName(parent) || ts.isMetaProperty(parent)) return false;
+  if (ts.isBindingElement(parent)) return parent.initializer === identifier;
+  if (ts.isExportSpecifier(parent)) return (parent.propertyName ?? parent.name) === identifier;
+  if (ts.isQualifiedName(parent) || ts.isJsxAttribute(parent) || ts.isJsxOpeningLikeElement(parent) || ts.isJsxClosingElement(parent) || ts.isJsxNamespacedName(parent) || ts.isMetaProperty(parent)) return false;
   return !(("name" in parent && parent.name === identifier) || ("propertyName" in parent && parent.propertyName === identifier) || ("label" in parent && parent.label === identifier));
 }
 

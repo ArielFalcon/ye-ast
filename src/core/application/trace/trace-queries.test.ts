@@ -30,6 +30,8 @@ interface Options {
   matches?: (path: string, glob: string) => boolean;
   indexFails?: boolean;
   live?: FakeLive;
+  /** Runs each time the walk reads the store's unresolved references, with the files it asks for. */
+  onUnresolved?: (files: readonly string[]) => void;
   /** What every read of the store's edges throws. */
   storeFails?: Error;
   /** The head's sources, as the export reader hands them over. */
@@ -48,7 +50,8 @@ function setup(options: Options) {
   const log = { closed: 0 };
   const graph = fakeCodeGraph(options.nodes, options.edges ?? [], options.unresolved ?? []);
   const failing = options.storeFails;
-  const store = { ...graph, ...(failing && { outgoingEdges: () => { throw failing; } }), close: () => void (log.closed += 1) };
+  const unresolvedReferences = (files: readonly string[]) => (options.onUnresolved?.(files), graph.unresolvedReferences(files));
+  const store = { ...graph, unresolvedReferences, ...(failing && { outgoingEdges: () => { throw failing; } }), close: () => void (log.closed += 1) };
   const answer = (site: ImportOriginSite): Origin => {
     const origin = site.fullName === undefined ? undefined : options.origins?.[site.fullName];
     return origin === undefined ? { status: "unknown", reason: "unresolved", evidence: [] } : { status: "complete", value: origin, evidence: [], occurrence: true };
@@ -204,6 +207,21 @@ test("a member call named after a function an object literal holds is a cut list
     unresolved: [{ from: "run", name: "table.handle", kind: "calls", file: A, line: 9, column: 4 }],
   });
   assert.deepEqual(cutsOf(fact), [["unresolved-link", ["src/a.ts:9 table.handle", "src/b.ts::handle"]]]);
+});
+
+test("each file's unresolved references are read once per query, shared by root selection, traversal and supertype lookup", async () => {
+  const nodes = [
+    SVC, RUN, fakeNode("first", "property", A, 22, 22), fakeNode("second", "property", A, 23, 23),
+    fakeNode("Port", "interface", B, 1, 3), fakeNode("Port.send", "method", B, 2, 2, "send"), fakeNode("Impl", "class", B, 5, 7), fakeNode("Impl.send", "method", B, 6, 6, "send"),
+  ];
+  const edges: FakeEdge[] = [...CONTAINS, { from: "Port", to: "Port.send", kind: "contains" }, { from: "Impl", to: "Impl.send", kind: "contains" }, call("run", "Port.send", 8, 4)];
+  const unresolved: FakeUnresolved[] = [OUTWARD_CALL("first", A, 22), OUTWARD_CALL("second", A, 23), OUTWARD_CALL("run", A, 9), { from: "Impl", name: "Port<String>", kind: "implements", file: B, line: 5, column: 20 }];
+  const reads: string[] = [];
+
+  const fact = await factOf({ nodes, edges, unresolved, onUnresolved: (files) => reads.push(...files) }, [{ file: A, symbol: "first" }, { file: A, symbol: "second" }, { file: A, symbol: "run" }]);
+
+  assert.deepEqual(reads.sort(), [A, B]);
+  assert.deepEqual(cutsOf(fact), [["unresolved-link", ["src/b.ts:2 send", "src/b.ts::Impl.send"]]]);
 });
 
 const SOURCES = [{ path: A, content: "" }, { path: B, content: "" }];
