@@ -459,7 +459,7 @@ function reachedLines(reached: ReachedEntrypoint, seeds: readonly Seed[], detail
   const { path, symbol, line } = reached.handler;
   return [
     compact ? `  - ${name} -> ${handlerText(reached.handler)} (${facts.join(", ")})` : `  - ${name} (${facts.join(", ")}); lookup example: ${literalSelection({ kind: "handler-origins", owner, handler: { path, symbol, line } })}`,
-    ...(detail === "summary" || origin === undefined || sharedOrigin ? [] : [`    one verified origin: ${placeText(origin.file, origin.line, origin.endLine)} ${origin.symbol} (${origin.basis})${others > 0 ? `; ${others} other ${others === 1 ? "origin" : "origins"}` : ""}`]),
+    ...(detail === "summary" || origin === undefined || sharedOrigin ? [] : [`    one verified origin: ${placeText(origin.file, origin.line, origin.endLine)} ${origin.symbol} (${origin.basis})${others > 0 ? `; ${plural(others, "other origin")}` : ""}`]),
   ];
 }
 
@@ -486,7 +486,7 @@ function reachedGroup(value: ImpactValue, detail: ResponseMode, owner: ImpactOwn
       const origin = value.seeds[first.seeds[0] ?? -1];
       if (detail === "details" && run.length > 1 && origin !== undefined) {
         const other = first.seeds.length - 1;
-        const shared = [`  For the next ${run.length} handler rows, one verified origin: ${placeText(origin.file, origin.line, origin.endLine)} ${origin.symbol} (${origin.basis})${other > 0 ? `; ${other} other ${other === 1 ? "origin" : "origins"}` : ""}`, ...run.flatMap((entrypoint) => reachedLines(entrypoint, value.seeds, detail, owner, compact, true))];
+        const shared = [`  For the next ${run.length} handler rows, one verified origin: ${placeText(origin.file, origin.line, origin.endLine)} ${origin.symbol} (${origin.basis})${other > 0 ? `; ${plural(other, "other origin")}` : ""}`, ...run.flatMap((entrypoint) => reachedLines(entrypoint, value.seeds, detail, owner, compact, true))];
         output.push(...(size(shared) < size(literal) ? shared : literal));
       } else output.push(...literal);
       index = end;
@@ -728,7 +728,8 @@ function moduleLines(value: ModuleImpactValue, detail: ResponseMode, owner: Impa
   };
   const listing = grouped(value.modules);
   const omitted = value.modules.length - shown.length;
-  const nearestListing = [...grouped(shown), ...(omitted === 0 ? [] : [`  ${omitted} deeper module dependencies not listed; mode: "full" includes their recorded evidence.`])];
+  const omittedNote = omitted === 0 ? [] : [`  ${omitted} deeper module dependencies not listed; mode: "full" includes their recorded evidence.`];
+  const nearestListing = [...grouped(shown), ...omittedNote];
   const useNearest = omitted > 0 && size(nearestListing) < size(listing);
   const selectedModules = useNearest ? shown : value.modules;
   const selected = useNearest ? nearestListing : listing;
@@ -736,7 +737,7 @@ function moduleLines(value: ModuleImpactValue, detail: ResponseMode, owner: Impa
   const lookupShared = first === undefined || !selectable ? selected : [
     sharedLookup("Module", "<snapshot> <file>", "module snapshot and file", { kind: "module-origins", owner, module: { file: first.file, snapshot: first.snapshot } }),
     ...grouped(selectedModules, true),
-    ...(useNearest && omitted > 0 ? [`  ${omitted} deeper module dependencies not listed; mode: "full" includes their recorded evidence.`] : []),
+    ...(useNearest ? omittedNote : []),
   ];
   if (countedByArea) {
     return [
