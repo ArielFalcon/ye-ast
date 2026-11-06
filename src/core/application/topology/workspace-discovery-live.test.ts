@@ -117,7 +117,7 @@ test("two held repositories join captured sources and retain separate findings a
   });
   assert.ok(result.ok);
   assert.deepEqual(result.value.value.map((item) => item.snapshot.repo), ["app", "lib"]);
-  assert.deepEqual(s.counts, { "src/app.ts": 1, "src/lib.ts": 1 });
+  assert.deepEqual(s.counts, { "src/app.ts": 2, "src/lib.ts": 1 });
   assert.equal(s.held(), 0);
 });
 

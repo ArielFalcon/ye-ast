@@ -125,8 +125,8 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
   const angular = createAngularRoutesExtractor();
   const contracts = createContractRoutes();
   const extractor: EntrypointExtractor = {
-    extract: async (files) => {
-      const spring = await createSpringRoutesExtractor(await createJavaParser(), contracts).extract(files);
+    extract: async (files, libraries) => {
+      const spring = await createSpringRoutesExtractor(await createJavaParser(), contracts).extract(files, libraries);
       return sortFindings([...spring, ...(await angular.extract(files))]);
     },
   };

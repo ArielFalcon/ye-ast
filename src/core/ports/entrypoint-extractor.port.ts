@@ -11,6 +11,8 @@ export interface EntrypointExtractor {
    * Reads the entrypoints the in-scope sources declare: HTTP routes, UI routes, listeners and jobs. An entrypoint is a `complete`
    * finding; a construct the sources name but cannot resolve is an `unknown` finding with its location. Findings are
    * sorted by evidence location, then by kind and name, so the same sources give the same output.
+   * `libraries` are the sources of repositories the files depend on: a listener the files inherit from a class they
+   * declare is read, and no entrypoint is reported from the libraries themselves.
    */
-  extract(files: readonly SourceFile[]): Promise<readonly Finding<Entrypoint>[]>;
+  extract(files: readonly SourceFile[], libraries?: readonly SourceFile[]): Promise<readonly Finding<Entrypoint>[]>;
 }

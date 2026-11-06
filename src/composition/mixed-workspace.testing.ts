@@ -40,9 +40,9 @@ export function realWorkspaceFixture(scratchRoot: string, roots: readonly string
   const contracts = createContractRoutes();
   const extracted: string[][] = [];
   const extractor: EntrypointExtractor = {
-    extract: async (files) => {
+    extract: async (files, libraries) => {
       extracted.push(files.map(({ path }) => path));
-      const spring = await createSpringRoutesExtractor(await createJavaParser(), contracts).extract(files);
+      const spring = await createSpringRoutesExtractor(await createJavaParser(), contracts).extract(files, libraries);
       return sortFindings([...spring, ...await angular.extract(files)]);
     },
   };

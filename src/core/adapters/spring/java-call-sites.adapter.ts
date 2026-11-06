@@ -8,15 +8,13 @@ import type { JavaParser, JavaSyntaxTree } from "../tree-sitter/java-parser.adap
 import { configurationsOf, type Configuration } from "./application-config.ts";
 import { JavaEventReader } from "./event-call-sites.adapter.ts";
 import { JavaHttpReader } from "./http-call-sites.adapter.ts";
-import { createJavaProject, describeFile, type JavaFile, type JavaProject } from "./java-symbols.ts";
+import { createJavaProject, describeFile, asLibrarySources, type JavaFile, type JavaProject } from "./java-symbols.ts";
 
 /** A reader of one kind of call site, over a project the snapshot was parsed into once. */
 export interface JavaSiteReader {
   transport: CallSite["transport"];
   read(project: JavaProject, configuration: (file: JavaFile) => Configuration, owned: ReadonlySet<JavaFile>, repo: string): CallSite[];
 }
-
-const LIBRARY_ROOT = "(library)";
 
 const httpSites: JavaSiteReader = { transport: "http", read: (project, configuration, owned, repo) => new JavaHttpReader(project, configuration, owned).sites(repo) };
 const eventSites: JavaSiteReader = { transport: "event", read: (project, configuration, owned, repo) => new JavaEventReader(project, configuration, owned).sites(repo) };
@@ -48,7 +46,7 @@ export function javaCallSitesOf(parser: JavaParser, files: readonly SourceFile[]
       });
   try {
     const owned = parse(files, true);
-    const foreign = parse(libraries.map((source, index) => ({ ...source, path: `${LIBRARY_ROOT}/${index}/${source.path}` })), false);
+    const foreign = parse(asLibrarySources(libraries), false);
     const project = createJavaProject([...owned, ...foreign]);
     const configuration = configurationsOf(files.filter((file) => isSpringConfigFile(file.path)));
     const held = new Set(owned);

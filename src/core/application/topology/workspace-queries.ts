@@ -122,17 +122,20 @@ export function createWorkspaceReadOperation(deps: WorkspaceQueriesDeps): Worksp
   }
 
   /**
-   * The call sites of each repository. A repository that depends on another one given, by the artifact or name the
-   * dependency states, reads the calls it makes through that repository's classes with its sources.
+   * The call sites and the entrypoints of each repository. A repository that depends on another one given, by the
+   * artifact or name the dependency states, reads the calls it makes through that repository's classes, and the
+   * listeners it inherits from them, with its sources.
    */
-  async function withCallSites(read: readonly ReadRepository[], identities: readonly RepositoryIdentity[], selected: PathSelection): Promise<Resolved[]> {
+  async function withDependencies(read: readonly ReadRepository[], identities: readonly RepositoryIdentity[], selected: PathSelection): Promise<Resolved[]> {
     const resolved: Resolved[] = [];
     for (const entry of read) {
       const libraries = read.filter(
         (other) => other !== entry && entry.stated.some((name) => name.kind === "dependency" && nameCandidates(name, identities, entry.repository.repo).some((candidate) => candidate.repo === other.identity.id)),
       );
-      const callSites = (await deps.callSites.of(entry.sources, entry.repository.repo, libraries.flatMap((library) => library.sources))).filter((site) => selected(site.file));
-      resolved.push({ ...entry, callSites, names: [...entry.stated, ...callSiteNames(entry.repository.repo, callSites)] });
+      const librarySources = libraries.flatMap((library) => library.sources);
+      const callSites = (await deps.callSites.of(entry.sources, entry.repository.repo, librarySources)).filter((site) => selected(site.file));
+      const entrypoints = librarySources.length === 0 ? entry.repository.entrypoints : (await deps.extractor.extract(entry.sources, librarySources)).filter((finding) => finding.evidence.length === 0 || finding.evidence.some(({ path }) => selected(path)));
+      resolved.push({ ...entry, repository: { ...entry.repository, entrypoints }, callSites, names: [...entry.stated, ...callSiteNames(entry.repository.repo, callSites)] });
     }
     return resolved;
   }
@@ -171,7 +174,7 @@ export function createWorkspaceReadOperation(deps: WorkspaceQueriesDeps): Worksp
         if (trigger === undefined) return { ok: false, fault: { kind: "git-failed", detail: "a workspace request names no repository" } };
 
         const identities = read.map((entry) => entry.identity);
-        const resolved = await withCallSites(read, identities, pathSelection(scope, matcher.matches));
+        const resolved = await withDependencies(read, identities, pathSelection(scope, matcher.matches));
         const repositories = resolved.map((entry) => ({ ...entry.repository, callSites: entry.callSites })).sort((a, b) => compareText(a.repo, b.repo));
         const join = joinWorkspace(repositories, repositories.map(entrypointsOf), membership.gateways);
         const listened = destinationCandidates(join.joined);

@@ -2670,3 +2670,43 @@ test("a NATS Dispatcher subscription is a listener, from a constructor a base cl
   const findings = await extractor.extract([source, MAIN]);
   assert.deepEqual(listeners(findings), ["nats orders.created@CreatedListener", "nats orders.paid@PaidListener.listen"]);
 });
+
+const MESSENGER_BASE = file("src/main/java/lib/NatsListener.java", `package lib;
+import io.nats.client.Connection; import io.nats.client.Dispatcher; import io.nats.client.Message;
+public abstract class NatsListener {
+  protected NatsListener(Connection connection) {
+    Dispatcher dispatcher = connection.createDispatcher();
+    dispatcher.subscribe(subject(), this::handle);
+  }
+  public abstract void handle(Message message);
+  public abstract String subject();
+}`);
+
+const INHERITING = nats("CreatedListener", `@Component class CreatedListener extends NatsListener {
+  CreatedListener(Connection connection) { super(connection); }
+  public void handle(Message message) {}
+  public String subject() { return "orders.created"; }
+}`, "import lib.NatsListener;");
+
+test("a NATS subscription a base class from the libraries holds is a listener of the concrete class, placed in the repository's own source", async () => {
+  const findings = await extractor.extract([INHERITING, MAIN], [MESSENGER_BASE]);
+
+  assert.deepEqual(listeners(findings), ["nats orders.created@CreatedListener"]);
+  const [listener] = findings;
+  assert.ok(listener?.status === "complete" && listener.value.kind === "listener");
+  assert.deepEqual([listener.value.handler.path, listener.value.handler.line, listener.evidence.map(({ path }) => path)], [INHERITING.path, 4, [INHERITING.path]]);
+});
+
+test("a NATS subscription a base class holds is not read when no library source is given", async () => {
+  assert.deepEqual(listeners(await extractor.extract([INHERITING, MAIN])), []);
+});
+
+test("a library class is never reported as an entrypoint, and the routes the repository's sources declare stay as they were", async () => {
+  const controller = app("Orders", `@RestController class Orders {\n  @GetMapping("/orders") String list() { return ""; }\n}`, "import org.springframework.web.bind.annotation.RestController;");
+  const concrete = file("src/main/java/lib/Own.java", `package lib;\nimport io.nats.client.Connection;\npublic class Own extends NatsListener {\n  Own(Connection connection) { super(connection); }\n  public void handle(io.nats.client.Message message) {}\n  public String subject() { return "lib.own"; }\n}`);
+  const bare = await extractor.extract([controller, INHERITING, MAIN]);
+  const withLibrary = await extractor.extract([controller, INHERITING, MAIN], [MESSENGER_BASE, concrete]);
+
+  assert.deepEqual(withLibrary.filter((finding) => finding.evidence.every(({ path }) => path !== INHERITING.path)), bare.filter((finding) => finding.evidence.every(({ path }) => path !== INHERITING.path)));
+  assert.ok(withLibrary.every((finding) => finding.evidence.every(({ path }) => !path.startsWith("(library)"))));
+});

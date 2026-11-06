@@ -480,7 +480,10 @@ Accepted by the owner on 2026-11-01: "Confirmo todo".
   different values is undecided, never one of them. The call sites of a repository that depends on another one given, by
   the artifact or name its build states, are read with that repository's sources: a call through a class they declare is
   read through its code, and a call through a client type whose source does not lead to a request is one
-  `unresolved-link` cut naming the library. On the probe workspace the seven service-to-service call sites are those
+  `unresolved-link` cut naming the library. The same sources reach the listeners of that repository: a NATS listener
+  whose subscription lives in a base class of the repository it depends on is found, named after the concrete class
+  and placed at that class's declaration in the repository's own source; a read of one repository alone never sees
+  them. On the probe workspace the seven service-to-service call sites are those
   cuts: the company's client resolves its URL from a configuration key inside an OkHttp call, outside the declared
   vocabulary, and the slice accepts the cut naming the library instead of a link. Test sources are never call sites. A
   source of the repository the grammar rejects is one call site whose `target` is `unknown` with `source-unreadable`, at

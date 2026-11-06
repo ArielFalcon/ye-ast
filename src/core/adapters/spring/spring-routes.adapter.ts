@@ -17,8 +17,10 @@ import { natsListenersOf } from "./nats-listeners.ts";
 import { basePathConfigurations, pathPrefixConfigurations } from "./path-prefix.ts";
 import {
   counterpart,
+  asLibrarySources,
   createJavaProject,
   describeFile,
+  isLibraryPath,
   externalNames,
   scopeOf,
   type Expr,
@@ -100,12 +102,12 @@ function contractIndex(operations: readonly Finding<ContractOperation>[]): Contr
 }
 
 export function createSpringRoutesExtractor(parser: JavaParser, contracts: ContractRoutes = NO_CONTRACTS): EntrypointExtractor {
-  return { extract: async (files) => extractRoutes(parser, files, contracts) };
+  return { extract: async (files, libraries = []) => extractRoutes(parser, files, libraries, contracts) };
 }
 
 type Parsed = { file: JavaFile } | { fault: Finding<never> };
 
-function extractRoutes(parser: JavaParser, files: readonly SourceFile[], contracts: ContractRoutes): readonly Finding<Entrypoint>[] {
+function extractRoutes(parser: JavaParser, files: readonly SourceFile[], libraries: readonly SourceFile[], contracts: ContractRoutes): readonly Finding<Entrypoint>[] {
   const findings: Finding<MappedEntrypoint>[] = [];
   const trees: JavaSyntaxTree[] = [];
   const parsed: JavaFile[] = [];
@@ -125,12 +127,34 @@ function extractRoutes(parser: JavaParser, files: readonly SourceFile[], contrac
     for (const type of project.types) {
       findings.push(...guarded(() => findingsOfType(type, project, annotations, text, generator, index), () => unknown("unresolved", [spanOf(type.file.path, type.node)])));
     }
+    findings.push(...natsListeners(project, text, parsed, libraries, files, parser, trees));
     const readable = parsed.filter((file) => !project.unreadable.includes(file));
     const entrypoints = sortFindings(withPathPrefixes(findings, pathPrefixConfigurations(project, readable)));
     return withBasePaths(entrypoints, files, applicationModules(project, annotations), basePathConfigurations(project, readable, annotations), index.undecided);
   } finally {
     for (const tree of trees) tree.dispose();
   }
+}
+
+/**
+ * The NATS listeners of the repository's own classes. With libraries, the classes are read over a project that also
+ * holds the library sources, so a subscription a base class declares there is found; without, over the repository's own.
+ */
+function natsListeners(project: JavaProject, text: JavaValueEvaluator, parsed: readonly JavaFile[], libraries: readonly SourceFile[], files: readonly SourceFile[], parser: JavaParser, trees: JavaSyntaxTree[]): Finding<MappedEntrypoint>[] {
+  const javaLibraries = libraries.filter((source) => isJavaSource(source.path) && !isJvmTestFile(source.path));
+  const view = javaLibraries.length === 0 ? { project, text } : withLibraries(parsed, javaLibraries, files, parser, trees);
+  return view.project.types
+    .filter((type) => type.kind === "class" && !type.isAbstract && !isLibraryPath(type.file.path))
+    .flatMap((type) => guarded(() => natsListenersOf(type, view.project, view.text), () => unknown("unresolved", [spanOf(type.file.path, type.node)])));
+}
+
+function withLibraries(parsed: readonly JavaFile[], libraries: readonly SourceFile[], files: readonly SourceFile[], parser: JavaParser, trees: JavaSyntaxTree[]): { project: JavaProject; text: JavaValueEvaluator } {
+  const foreign = asLibrarySources(libraries).flatMap((source) => {
+    const result = parseSource(parser, source, trees);
+    return "file" in result ? [result.file] : [];
+  });
+  const project = createJavaProject([...parsed, ...foreign]);
+  return { project, text: new JavaValueEvaluator(project, configurationsOf(files.filter((file) => isSpringConfigFile(file.path)))) };
 }
 
 function parseSource(parser: JavaParser, source: SourceFile, trees: JavaSyntaxTree[]): Parsed {
@@ -164,7 +188,6 @@ function findingsOfType(type: TypeDecl, project: JavaProject, annotations: Sprin
   if (controller !== undefined) found.push(...routesOf(controller));
   found.push(...delegateMethodsOf(type, project, annotations, generator));
   found.push(...listenersOf(type, project, annotations, isScannedBean(type, annotations)));
-  found.push(...natsListenersOf(type, project, text));
   return found;
 }
 

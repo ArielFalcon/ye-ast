@@ -53,6 +53,8 @@ type Repositories = Record<
     stopped?: CommitExport["stopped"];
     skipped?: CommitExport["skipped"];
     entrypoints?: readonly Finding<Entrypoint>[];
+    /** What the extraction answers when it is given library sources, in place of `entrypoints`. */
+    inherited?: readonly Finding<Entrypoint>[];
   }
 >;
 
@@ -99,7 +101,7 @@ function setup(
   };
   const scratch: ScratchDirectory = { create: async () => "/scratch", remove: async () => undefined };
   const reader: SourceReader = { read: async (_root, paths) => paths.map((path) => ({ path, content: repositories[exported ?? ""]?.files[path] ?? "" })) };
-  const extractor: EntrypointExtractor = { extract: async () => { hooks?.extract?.(); return repositories[exported ?? ""]?.entrypoints ?? []; } };
+  const extractor: EntrypointExtractor = { extract: async (files, libraries) => { hooks?.extract?.(); const held = libraries?.length ? Object.values(repositories).find((repository) => files.every(({ path }) => path in repository.files)) : repositories[exported ?? ""]; return (libraries?.length ? held?.inherited : undefined) ?? held?.entrypoints ?? []; } };
   const digest: Digest = testDigest ?? { of: (text) => `digest(${text})` };
   const deps: WorkspaceQueriesDeps = {
     vcs,
@@ -1051,4 +1053,36 @@ test("a destination is never served by a repository whose name equals it: only a
 
   assert.deepEqual(value.candidates, []);
   assert.deepEqual(value.unserved.map(({ name, kind }) => `${kind} ${name}`), ["destination audit"]);
+});
+
+test("a listener a repository inherits from a repository it depends on is linked from the publisher", async () => {
+  const extractions: string[] = [];
+  const repositories: Repositories = {
+    "/work/shop-web": { files: {} },
+    "/work/orders": {
+      files: { "pom.xml": "<project/>", "src/main/java/orders/Created.java": "class Created {}" },
+      names: [dependencyName("com.shop:messenger", "pom.xml", 20)],
+      inherited: [natsListener("orders.created")],
+    },
+    "/work/messenger": { files: { "src/main/java/lib/Base.java": "class Base {}" }, artifacts: ["com.shop:messenger"] },
+  };
+  const queries = setup(repositories, sitesOf({ "shop-web": [publishSite("shop-web", "orders.created")] }), undefined, undefined, undefined, false, undefined, undefined, undefined, { extract: () => extractions.push("read") });
+
+  const value = valueOf(await queries.outwardNames({ repo: { path: "/work/shop-web" }, repos: [{ path: "/work/orders" }, { path: "/work/messenger" }] }));
+
+  assert.deepEqual(value.links.map(({ from, to }) => `${from.repo} -> ${to.repo} ${to.name}`), ["shop-web -> orders nats orders.created"]);
+  assert.equal(extractions.length, 4);
+});
+
+test("without a dependency on a repository given, a listener that repository's sources would complete stays unread", async () => {
+  const repositories: Repositories = {
+    "/work/shop-web": { files: {} },
+    "/work/orders": { files: { "pom.xml": "<project/>" }, inherited: [natsListener("orders.created")] },
+    "/work/messenger": { files: {}, artifacts: ["com.shop:messenger"] },
+  };
+  const queries = setup(repositories, sitesOf({ "shop-web": [publishSite("shop-web", "orders.created")] }));
+
+  const value = valueOf(await queries.outwardNames({ repo: { path: "/work/shop-web" }, repos: [{ path: "/work/orders" }, { path: "/work/messenger" }] }));
+
+  assert.deepEqual(value.links, []);
 });
