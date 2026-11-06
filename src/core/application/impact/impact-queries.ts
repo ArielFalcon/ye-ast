@@ -179,7 +179,9 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
           const references = store.unresolvedReferences(written);
           const modules = await deps.moduleDependencies?.extract(headTree.sources);
           if (request.signal?.aborted) return ABORTED;
-          const read = readImporters(store, covered, references, modules);
+          const origins = deps.importOrigins?.(headTree.sources);
+          const read = await readImporters(store, covered, references, modules, origins === undefined ? undefined : createEdgeTargets(origins), request.signal);
+          if (request.signal?.aborted) return ABORTED;
           const moduleOnly = new Set(modules?.files.filter((file) => file.moduleOnly).map((file) => file.file));
           const loadPlaces = await deps.dynamicLoads.extract(headTree.sources);
           if (request.signal?.aborted) return ABORTED;

@@ -280,7 +280,9 @@ interface ImportedFile {
 }
 ```
 
-`importers` and `users` are reported information, not walk edges, so tests count and the policy table does not apply;
+`importers` and `users` are reported information, not walk edges, so tests count and the policy table does not apply,
+except for the one judgement of what an edge reaches (`EdgeTargets`): an edge whose name is rooted outside the repository
+makes no user, as it is no walk edge;
 `users` is broader than the followed edges so that it contains qayaba's `importersOf`
 (qayaba@cfc69e3b `codegraph-store-reader.mjs:144`, which reads `imports`, any-kind and unresolved-name matches the same
 way). A name matches when the reference's name or its tail is a declared name, or the reference's name holds the file's
