@@ -16,7 +16,7 @@ export function declarationCounts(tree: ts.SourceFile): Map<string, number> {
   return names;
 }
 
-export function declaredName(node: ts.Node): string | undefined {
+function declaredName(node: ts.Node): string | undefined {
   if (
     !ts.isVariableDeclaration(node) &&
     !ts.isParameter(node) &&

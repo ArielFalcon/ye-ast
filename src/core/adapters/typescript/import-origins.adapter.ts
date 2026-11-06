@@ -1,8 +1,9 @@
 import ts from "typescript";
 import { matchesReferenceKind, syntaxName } from "./reference-occurrence.ts";
-import { declarationCounts, declaredName, declaredNames, isStatic, scriptGlobalNames } from "./syntax-names.ts";
+import { declarationCounts, declaredNames, isStatic, scriptGlobalNames } from "./syntax-names.ts";
 import { moduleStatement } from "./import-bindings.ts";
 import { sourceTree } from "./source-tree.ts";
+import { bindFile, type BoundFile } from "./lexical-bindings.ts";
 import { isPackageManifest, isTypeScriptSource } from "../../domain/languages/typescript.ts";
 import type { ImportOrigin } from "../../domain/relations/resolved-reference.ts";
 import type { Evidence, Finding } from "../../domain/shared/fact.ts";
@@ -156,13 +157,14 @@ function rootsAt({ source, shape, starting }: FileIndex, text: string, group: re
   }
   /** Chains that start at one point share their root, so the first that ends in the name settles it. */
   const roots = new Map<number, { root: string; bare: boolean; local: boolean }>();
-  const scopes = new WeakMap<ts.Node, { unsafe: boolean; names: ReadonlySet<string> }>();
+  let held: BoundFile | undefined;
+  const bound = () => (held ??= bindFile(source.fileName, text));
   for (const [point, sites] of wanted) for (const node of starting.get(point) ?? []) for (const { site, index } of sites) {
     const spelled = spelledAt(node, site.kind);
     const names = spelled === undefined ? undefined : plainChain(spelled);
     if (names === undefined || names.at(-1) !== site.name || roots.has(index)) continue;
     const bare = names.length === 1;
-    roots.set(index, { root: names[0]!, bare, local: bare && ts.isIdentifier(spelled!) && !ts.isTypeNode(spelled.parent) && localParameter(spelled, site.name, scopes) });
+    roots.set(index, { root: names[0]!, bare, local: bare && ts.isIdentifier(spelled!) && !ts.isTypeNode(spelled.parent) && bindsParameter(bound, source, spelled) });
   }
   return { roots, shape };
 }
@@ -227,13 +229,14 @@ function checkSites({ source, shape, starting }: FileIndex, text: string, group:
       ownCalls.set(index, (ownCalls.get(index) ?? 0) + 1);
     }
   }
-  const scopes = new WeakMap<ts.Node, { unsafe: boolean; names: ReadonlySet<string> }>();
+  let held: BoundFile | undefined;
+  const bound = () => (held ??= bindFile(source.fileName, text));
   for (const { site, index } of group) {
     const found = matches.get(index);
     if (found === undefined && ownCalls.get(index) === 1) result.set(index, "this-member");
     if (found?.length !== 1) continue;
     const node = found[0]!;
-    result.set(index, site.kind === "calls" && ts.isIdentifier(node) && node.text === site.name && localParameter(node, site.name, scopes) ? "local" : "valid");
+    result.set(index, site.kind === "calls" && ts.isIdentifier(node) && node.text === site.name && bindsParameter(bound, source, node) ? "local" : "valid");
   }
   return { matches: result, shape };
 }
@@ -255,44 +258,25 @@ function isNested(declaration: ts.ClassLikeDeclaration): boolean {
 }
 
 /**
- * A node that opens a scope the parameter proof does not read through: a function, a class (its static blocks and property
- * initializers included) or a namespace. The walk up from a use and the scan for a rebinding both stop at one.
+ * Whether `identifier` binds, by the file's own scoping, a parameter of a function around it whose value is only what the
+ * caller passes: no default, no rest, no destructuring, declared once. The compiler keeps the parameter when the
+ * function's body declares its name again at its top level; a function declared there replaces it when the code runs.
  */
-function opensScope(node: ts.Node): boolean {
-  return ts.isFunctionLike(node) || ts.isClassLike(node) || ts.isModuleDeclaration(node);
+function bindsParameter(bound: () => BoundFile, source: ts.SourceFile, identifier: ts.Identifier): boolean {
+  const same = bound().identifierAt(identifier.getStart(source), identifier.text);
+  const binding = same === undefined ? undefined : bound().bindingOf(same);
+  if (binding?.kind !== "declared" || binding.declarations.length !== 1) return false;
+  const declaration = binding.declarations[0]!;
+  if (!ts.isParameter(declaration) || declaration.initializer !== undefined || declaration.dotDotDotToken !== undefined) return false;
+  const owner = declaration.parent;
+  const body = "body" in owner ? owner.body : undefined;
+  return body === undefined || !ts.isBlock(body) || !body.statements.some((statement) => topLevelNames(statement).includes(identifier.text));
 }
 
-/** Prove only a parameter of the function, method or constructor whose body holds the use with no other scope between them; all uncertain scopes are refused. */
-function localParameter(callee: ts.Identifier, name: string, scopes: WeakMap<ts.Node, { unsafe: boolean; names: ReadonlySet<string> }>): boolean {
-  let node: ts.Node | undefined = callee.parent;
-  let owner: ts.ArrowFunction | ts.FunctionExpression | ts.FunctionDeclaration | ts.MethodDeclaration | ts.ConstructorDeclaration | undefined;
-  while (node !== undefined) {
-    if (ts.isWithStatement(node)) return false;
-    if (opensScope(node)) {
-      if (!ts.isArrowFunction(node) && !ts.isFunctionExpression(node) && !ts.isFunctionDeclaration(node) && !ts.isMethodDeclaration(node) && !ts.isConstructorDeclaration(node)) return false;
-      owner = node; break;
-    }
-    node = node.parent;
-  }
-  if (owner === undefined || owner.body === undefined || callee.pos < owner.body.pos) return false;
-  if (owner.parameters.some((parameter) => !ts.isIdentifier(parameter.name) || parameter.dotDotDotToken !== undefined || parameter.initializer !== undefined)) return false;
-  if (owner.parameters.filter((parameter) => ts.isIdentifier(parameter.name) && parameter.name.text === name).length !== 1) return false;
-  let summary = scopes.get(owner);
-  if (summary === undefined) {
-    let unsafe = false;
-    const names = new Set<string>();
-    const visit = (current: ts.Node): void => {
-      if (ts.isWithStatement(current) || (ts.isCallExpression(current) && ts.isIdentifier(current.expression) && current.expression.text === "eval")) unsafe = true;
-      const declared = declaredName(current);
-      if (declared !== undefined) names.add(declared);
-      if (opensScope(current)) return;
-      current.forEachChild(visit);
-    };
-    visit(owner.body);
-    summary = { unsafe, names };
-    scopes.set(owner, summary);
-  }
-  return !summary.unsafe && !summary.names.has(name);
+function topLevelNames(statement: ts.Statement): string[] {
+  if (ts.isVariableStatement(statement)) return statement.declarationList.declarations.flatMap((declaration) => (ts.isIdentifier(declaration.name) ? [declaration.name.text] : []));
+  if ((ts.isFunctionDeclaration(statement) || ts.isClassDeclaration(statement)) && statement.name !== undefined) return [statement.name.text];
+  return [];
 }
 
 /** What one file imports and what it binds. */

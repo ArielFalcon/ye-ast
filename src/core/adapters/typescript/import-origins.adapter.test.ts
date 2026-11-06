@@ -366,19 +366,66 @@ async function parameterRootOf(body: string): Promise<RootOrigin> {
   return only(await createImportOrigins([{ path: file, content: text }]).rootOrigins([{ file, line, column: lines[line - 1]!.lastIndexOf("redact(") + 1, kind: "calls", name: "redact" }]));
 }
 
-test("a call inside a class, its static block or a property initializer is not proven to use a parameter of the function around the class", async () => {
-  const plain = await parameterRootOf("  return redact('x');");
-  assert.equal(plain.status === "complete" && plain.value.kind, "local-parameter");
+test("a call reaches the parameter of the function around it through a closure or a class, unless a declaration in between rebinds its name", async () => {
   for (const body of [
-    "  class Holder {\n    static {\n      const redact = (s: string) => s;\n      redact('x');\n    }\n  }",
+    "  return redact('x');",
+    "  return () => redact('x');",
+    "  return [1].map(() => () => redact('x'));",
     "  class Holder {\n    static {\n      redact('x');\n    }\n  }",
     "  class Holder {\n    value = redact('x');\n  }",
+  ]) {
+    const root = await parameterRootOf(body);
+    assert.equal(root.status === "complete" && root.value.kind, "local-parameter", body);
+  }
+  for (const body of [
+    "  class Holder {\n    static {\n      const redact = (s: string) => s;\n      redact('x');\n    }\n  }",
     "  const inner = () => {\n    const redact = (s: string) => s;\n    redact('x');\n  };",
     "  const named = function redact() {\n    redact('x');\n  };",
+    "  function redact(s: string) {\n    return s;\n  }\n  redact('x');",
+    "  var redact = (s: string) => s;\n  redact('x');",
+    "  if (Date.now() > 0) {\n    var redact = (s: string) => s;\n  }\n  redact('x');",
+    "  class redact {}\n  redact('x');",
   ]) {
     const root = await parameterRootOf(body);
     assert.notEqual(root.status === "complete" && root.value.kind, "local-parameter", body);
   }
+});
+
+test("a call inside with, or in a script that calls eval directly around it, is never proven a parameter; strict code that calls eval is", async () => {
+  const cases = [
+    { file: "src/with.ts", text: "function run(redact: () => void) { with (other) { redact(); } }\n", local: false },
+    { file: "src/sloppy.ts", text: "function run(redact: () => void) { eval('var redact = 1'); redact(); }\n", local: false },
+    { file: "src/sloppy-outer.ts", text: "function run(redact: () => void) { eval('x'); return () => redact(); }\n", local: false },
+    { file: "src/directive.ts", text: "function run(redact: () => void) { 'use strict'; eval('x'); redact(); }\n", local: true },
+    { file: "src/module.ts", text: "export function run(redact: () => void) { eval('x'); redact(); }\n", local: true },
+    { file: "src/class.ts", text: "class Runner { run(redact: () => void) { eval('x'); redact(); } }\n", local: true },
+  ];
+  for (const { file, text, local } of cases) {
+    const [root] = await createImportOrigins([{ path: file, content: text }]).rootOrigins([{ file, line: 1, column: text.lastIndexOf("redact()") + 1, kind: "calls", name: "redact" }]);
+    assert.equal(root!.status === "complete" && root!.value.kind === "local-parameter", local, file);
+  }
+});
+
+test("a shorthand property that passes a parameter on is a use of the parameter", async () => {
+  const file = "src/shorthand.ts";
+  const text = "export function wrap(redact: () => void) { return { redact }; }\n";
+  const [root] = await createImportOrigins([{ path: file, content: text }]).rootOrigins([{ file, line: 1, column: text.lastIndexOf("redact") + 1, kind: "references", name: "redact" }]);
+
+  assert.equal(root!.status === "complete" && root!.value.kind, "local-parameter");
+});
+
+test("a parameter is proven beside one with a default, a rest or a destructuring, never when it has one itself", async () => {
+  const file = "src/siblings.ts";
+  const lines = [
+    "export function defaultRun(redact: () => number, other = 0) { return redact(); }",
+    "export function restRun(redact: () => number, ...others: number[]) { return redact(); }",
+    "export function shapedRun(redact: () => number, { size }: { size: number }) { return redact(); }",
+    "export function ownDefault(redact = () => 1) { return redact(); }",
+  ];
+  const text = `${lines.join("\n")}\n`;
+  const roots = await createImportOrigins([{ path: file, content: text }]).rootOrigins(lines.map((line, index) => ({ file, line: index + 1, column: line.lastIndexOf("redact(") + 1, kind: "calls", name: "redact" })));
+
+  assert.deepEqual(roots.map((root) => root.status === "complete" && root.value.kind), ["local-parameter", "local-parameter", "local-parameter", false]);
 });
 
 test("a call inside a block, a catch clause or a loop that rebinds the parameter's name is not proven to use the parameter", async () => {

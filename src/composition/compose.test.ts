@@ -1193,6 +1193,65 @@ test("a trace over a real index keeps the call site as the place of a redirected
   ]);
 });
 
+const PARAMETER_FILES: Record<string, string[]> = {
+  "callback.ts": ["export function callback(): number {", "  return 1;", "}", ""],
+  "runners.ts": [
+    "export function defaultRun(callback: () => number, other = 0): number {",
+    "  return callback() + other;",
+    "}",
+    "export function capture(callback: () => number): () => number {",
+    "  return () => callback();",
+    "}",
+    "export function nested(callback: () => number): unknown {",
+    "  return [1].map(() => () => callback());",
+    "}",
+    "",
+  ],
+};
+
+function writeParameterFiles(): void {
+  for (const [name, lines] of Object.entries(PARAMETER_FILES)) writeFileSync(join(repo, "src", name), lines.join("\n"));
+}
+
+test("a trace over a real index cuts a call through a parameter of a function around it, beside a defaulted parameter or from a closure", async () => {
+  writeParameterFiles();
+  git("add", "-A");
+  git("commit", "-q", "-m", "parameters");
+  const { trace } = composeQueries({ scratchRoot });
+  const walk = (symbol: string) => trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: "src/runners.ts", symbol }] });
+
+  const answers = await Promise.all(["defaultRun", "capture", "nested"].map(walk));
+
+  for (const [index, line] of [2, 5, 8].entries()) {
+    const answer = answers[index]!;
+    assert.ok(answer.ok && answer.value.status === "partial", JSON.stringify(answer));
+    assert.deepEqual(answer.value.value.steps.flatMap(({ leaves }) => leaves ?? []), []);
+    assert.deepEqual(answer.value.cuts.map((cut) => [cut.kind, ...cut.at]), [["unresolved-link", `src/runners.ts:${line} callback`, "src/callback.ts::callback"]]);
+  }
+});
+
+test("callers and impact over a real index never count a call through a parameter of a function around it as a use of a repository homonym", async () => {
+  writeParameterFiles();
+  git("add", "-A");
+  git("commit", "-q", "-m", "parameters");
+  writeFileSync(join(repo, "src", "callback.ts"), ["export function callback(): number {", "  return 2;", "}", ""].join("\n"));
+  git("add", "-A");
+  git("commit", "-q", "-m", "change callback");
+  const { impact } = composeQueries({ scratchRoot });
+  const symbols = (answer: Awaited<ReturnType<typeof impact.callers>>) => {
+    assert.ok(answer.ok && answer.value.status !== "unknown", JSON.stringify(answer));
+    return answer.value.value.symbols.map(({ symbol }) => symbol);
+  };
+
+  const [callers, change] = await Promise.all([
+    impact.callers({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: "src/callback.ts", symbol: "callback" }] }),
+    impact.ofChange({ repo, repoId: "shop-service", base: "HEAD~1", head: "HEAD" }),
+  ]);
+
+  assert.deepEqual(symbols(callers), ["callback"]);
+  assert.deepEqual(symbols(change), ["callback"]);
+});
+
 test("callers over a range inside a property initializer still seeds the class that holds it", async () => {
   commitPage();
   const { impact } = composeQueries({ scratchRoot });
