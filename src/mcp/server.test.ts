@@ -9,7 +9,7 @@ import { SCHEMA, type Cut, type Fact, type FactBase, type PartialFact, type Find
 import type { Result } from "../core/domain/shared/result.ts";
 import type { EntrypointQueries, MapRequest } from "../core/ports/entrypoint-queries.port.ts";
 import type { ImpactCallersRequest, ImpactFault, ImpactImportersRequest, ImpactOfChangeRequest, ImpactQueries, OfChangeFault } from "../core/ports/impact-queries.port.ts";
-import type { OutlineQueries, OutlineRequest } from "../core/ports/outline-queries.port.ts";
+import type { OutlineFault, OutlineQueries, OutlineRequest } from "../core/ports/outline-queries.port.ts";
 import type { OutlineValue } from "../core/domain/outline/outline-fact.ts";
 import { REDACTED, type Redaction } from "../core/ports/redaction.port.ts";
 import type { VcsFault } from "../core/ports/vcs.port.ts";
@@ -217,7 +217,7 @@ interface Answers {
   ofChange: (request: ImpactOfChangeRequest) => Promise<Result<Fact<ImpactValue>, OfChangeFault>>;
   callers: (request: ImpactCallersRequest) => Promise<Result<Fact<ImpactValue>, ImpactFault>>;
   importers: (request: ImpactImportersRequest) => Promise<Result<Fact<ImportersValue>, VcsFault | LiveFault>>;
-  outline: (request: OutlineRequest) => Promise<Result<Fact<OutlineValue>, VcsFault | LiveFault>>;
+  outline: (request: OutlineRequest) => Promise<Result<Fact<OutlineValue>, OutlineFault>>;
   outwardNames: (request: WorkspaceRequest) => Promise<Result<FactRead<WorkspaceValue>, WorkspaceFault>>;
   decisions: (request: DecisionsRequest) => Promise<Result<FactRead<DecisionValue>, WorkspaceFault>>;
   workspaceCallers: (request: WorkspaceCallersRequest) => Promise<Result<FactRead<WorkspaceImpactValue>, WorkspaceFault>>;
@@ -288,6 +288,9 @@ const textOf = (result: { content: { text: string }[] }): string => {
   return at === -1 ? whole : whole.slice(0, at);
 };
 
+/** The next step a fault's text gives, or the empty string. */
+const stepOf = (result: { content: { text: string }[] }): string => /^Next step: .*$/m.exec(textOf(result))?.[0] ?? "";
+
 /** The structured fields beside the presentation text, which carries the same text as content. */
 function fieldsOf(value: unknown): Record<string, unknown> {
   const { text, ...rest } = value as Record<string, unknown>;
@@ -308,6 +311,7 @@ test("MCP refuses redacted selection coordinates before querying or reflecting a
       assert.equal(result.isError, true);
       const fault = result._meta?.[FAULT_META] as { kind: string; reason: string };
       assert.equal(fault.kind, "replay-unavailable");
+      assert.equal((fault as { detail?: string }).detail, "replay-unavailable");
       assert.equal(fault.reason, "redacted-context");
       assert.equal(JSON.stringify(result).includes(SECRET), false);
     }
@@ -1986,6 +1990,102 @@ test("an unknown-change-path fault names the globs that selected no changed path
   await session.close();
 });
 
+test("fault guidance names only the arguments of the tool that faulted", async () => {
+  const unknownSymbol: ImpactFault = { kind: "unknown-symbol", detail: "no such symbol", entries: [{ file: "src/A.java", symbol: "gone", candidates: ["A.used"] }] };
+  const unknownRevision = { kind: "unknown-revision" as const, detail: "does not resolve" };
+  const { session } = await setup({ outline: async () => ({ ok: false, fault: unknownSymbol }), callers: async () => ({ ok: false, fault: unknownSymbol }) });
+  const revisions = await setup({ outline: async () => ({ ok: false, fault: unknownRevision }), ofChange: async () => ({ ok: false, fault: unknownRevision }) });
+  try {
+    const outline = textOf(await session.callTool("ye_ast_outline", { focus: [{ file: "src/A.java", symbol: "gone" }] }));
+    assert.doesNotMatch(outline, /\btargets\b/);
+    assert.match(outline, /\bfocus\b/);
+    const callers = textOf(await session.callTool("ye_ast_callers", { targets: [{ file: "src/A.java", symbol: "gone" }] }));
+    assert.doesNotMatch(callers, /\bfocus\b/);
+    assert.match(callers, /\btargets\b/);
+    assert.doesNotMatch(stepOf(await revisions.session.callTool("ye_ast_outline", { files: ["src/A.java"], revision: "nope" })), /\b(base|head)\b/);
+    assert.doesNotMatch(stepOf(await revisions.session.callTool("ye_ast_impact", { base: "nope" })), /\brevision\b/);
+  } finally {
+    await session.close();
+    await revisions.session.close();
+  }
+});
+
+test("a fault no argument can correct prints no next step", async () => {
+  const { session } = await setup({ map: async () => { throw new Error("boom"); } });
+  try {
+    const result = await session.callTool("ye_ast_entrypoints", {});
+    assert.equal((result._meta?.[FAULT_META] as { kind: string }).kind, "internal-fault");
+    assert.doesNotMatch(textOf(result), /^Next step:/m);
+  } finally { await session.close(); }
+});
+
+test("a live impact revision correction never proposes the excluded head argument", async () => {
+  const { session } = await setup({ ofChange: async () => ({ ok: false, fault: { kind: "unknown-revision", detail: "missing base" } }) });
+  try {
+    const result = await session.callTool("ye_ast_impact", { live: true, base: "missing" });
+    assert.equal((result._meta?.[FAULT_META] as { kind: string }).kind, "unknown-revision");
+    assert.doesNotMatch(stepOf(result), /\bhead\b/);
+  } finally { await session.close(); }
+});
+
+test("root failures do not attribute an unknown owner to request workspace members", async () => {
+  const fault = { kind: "not-repository-root" as const, detail: "not a root" };
+  const { session } = await setup({ workspaceCallers: async () => ({ ok: false, fault }), callers: async () => ({ ok: false, fault }) });
+  try {
+    for (const args of [{ workspace: {} }, {}]) {
+      const result = await session.callTool("ye_ast_callers", { targets: [{ file: "src/a.ts", symbol: "a" }], ...args });
+      assert.equal((result._meta?.[FAULT_META] as { kind: string }).kind, "not-repository-root");
+      assert.doesNotMatch(stepOf(result), /workspace\.repos/);
+    }
+  } finally { await session.close(); }
+});
+
+test("persisted workspace failures retain member ownership possibilities across families", async () => {
+  const root = { kind: "not-repository-root" as const, detail: "not a root" };
+  const revision = { kind: "unknown-revision" as const, detail: "missing commit" };
+  const roots = await setup({ outwardNames: async () => ({ ok: false, fault: root }), decisions: async () => ({ ok: false, fault: root }) });
+  const revisions = await setup({ workspaceOfChange: async () => ({ ok: false, fault: revision }) });
+  try {
+    for (const tool of ["ye_ast_workspace", "ye_ast_decisions"]) {
+      const result = await roots.session.callTool(tool, {});
+      assert.equal((result._meta?.[FAULT_META] as { kind: string }).kind, root.kind);
+      assert.match(stepOf(result), /persisted workspace member/);
+      assert.doesNotMatch(stepOf(result), /repos\[\]/);
+    }
+    const result = await revisions.session.callTool("ye_ast_impact", { base: "missing", live: true, workspace: {} });
+    assert.equal((result._meta?.[FAULT_META] as { kind: string }).kind, revision.kind);
+    assert.match(stepOf(result), /persisted workspace member/);
+    assert.doesNotMatch(stepOf(result), /\bhead\b|workspace\.repos/);
+  } finally { await roots.session.close(); await revisions.session.close(); }
+});
+
+test("compose names the failed queries once and corrects only at the cause, for the cause's tool", async () => {
+  const fault: ImpactFault = { kind: "unknown-symbol", detail: "no such symbol", entries: [{ file: "src/a.ts", symbol: "gone", candidates: ["a"] }] };
+  const { session } = await setup({ outline: async () => ({ ok: false, fault }) });
+  try {
+    const outline = { name: "ye_ast_outline", arguments: { focus: [{ file: "src/a.ts", symbol: "gone" }] } };
+    const result = await session.callTool("ye_ast_compose", { queries: [{ name: "ye_ast_entrypoints", arguments: {} }, outline, outline] });
+    assert.equal(result.isError, true);
+    const published = result._meta?.[FAULT_META] as { kind: string; family: string; requestIndices: number[]; cause: { kind: string } };
+    assert.deepEqual([published.kind, published.family, published.requestIndices, published.cause.kind], ["composition-source-fault", "outline", [1, 2], "unknown-symbol"]);
+    const text = textOf(result);
+    assert.equal(text.match(/^Next step:/gm)?.length, 1);
+    assert.ok(text.indexOf("Next step:") > text.indexOf("fault: unknown-symbol"));
+    assert.doesNotMatch(text, /\btargets\b/);
+  } finally { await session.close(); }
+});
+
+test("workspace fault guidance never prints a clone path the request supplied", async () => {
+  const clone = "/clones/private-lib";
+  const { session } = await setup({ workspaceCallers: async () => ({ ok: false, fault: { kind: "not-repository-root", detail: "not a root" } }) });
+  try {
+    const result = await session.callTool("ye_ast_callers", { targets: [{ file: "src/A.java", symbol: "A.used" }], workspace: { repos: [{ path: clone, id: "lib" }] } });
+    assert.equal(result.isError, true);
+    assert.match(textOf(result), /^Next step:/m);
+    assert.ok(!JSON.stringify(result).includes(clone));
+  } finally { await session.close(); }
+});
+
 test("a query that throws is a tool error with a redacted message", async () => {
   const { session } = await setup({
     map: async () => {
@@ -2676,7 +2776,8 @@ test("impact revision errors explain which selectors to correct without inventin
   try {
     const result = await session.callTool("ye_ast_impact", { base: "missing" });
     assert.equal(result.isError, true);
-    assert.ok(textOf(result).includes("base/head") && textOf(result).includes("workspace") && textOf(result).includes("local commit"));
+    assert.ok(stepOf(result).includes("base or head") && stepOf(result).includes("local commit"));
+    assert.ok(!stepOf(result).includes("workspace"));
     assert.deepEqual(result._meta?.["ye-ast/fault"], fault);
     assert.equal(result.structuredContent, undefined);
   } finally { await session.close(); }
@@ -2688,7 +2789,7 @@ test("impact live trust errors offer a committed alternative and leave trust to 
   try {
     const result = await session.callTool("ye_ast_impact", { base: "main", live: true });
     assert.equal(result.isError, true);
-    assert.ok(textOf(result).includes("Omit live") && textOf(result).includes("committed") && textOf(result).includes("user"));
+    assert.ok(/omit live/i.test(stepOf(result)) && stepOf(result).includes("committed head") && stepOf(result).includes("user"));
     assert.deepEqual(result._meta?.["ye-ast/fault"], fault);
   } finally { await session.close(); }
 });
@@ -3812,7 +3913,7 @@ test("selected evidence pages replay the source and reject changed identities be
     ]) {
       const invalid = await session.callTool(tool.name, args);
       assert.equal(invalid.isError, true);
-      assert.equal((invalid._meta?.["ye-ast/fault"] as {kind:string}).kind, "invalid-cursor");
+      assert.deepEqual(invalid._meta?.["ye-ast/fault"], {kind: "invalid-cursor", detail: "invalid-cursor"});
     }
     assert.equal(calls.map.length, 4);
     const verified = await session.callTool(tool.name,{expect:a.recovery.resultIdentity});
@@ -3825,6 +3926,7 @@ test("selected evidence pages replay the source and reject changed identities be
       assert.equal(result.structuredContent, undefined);
       const fault = result._meta?.["ye-ast/fault"] as {kind:string;stage:string;expected:string;actual:string};
       assert.equal(fault.kind,"result-changed");
+      assert.equal((fault as { detail?: string }).detail, "result-changed");
       assert.equal(fault.stage,"source-identity");
       assert.equal(fault.expected,a.recovery.resultIdentity);
       assert.notEqual(fault.actual,fault.expected);
@@ -3938,7 +4040,7 @@ test("known empty selections stay available and missing subjects return typed fa
     assert.deepEqual(payload.page,{limit:5,offset:0,returned:0,total:0});
     const missing = await session.callTool("ye_ast_callers",{targets,select:{...select,handler:{...handler,line:18}},page:{limit:1}});
     assert.equal(missing.isError,true);
-    assert.equal((missing._meta?.["ye-ast/fault"] as {kind:string}).kind,"selection-not-found");
+    assert.deepEqual(missing._meta?.["ye-ast/fault"], {kind: "selection-not-found", detail: "selection-not-found"});
   } finally { await session.close(); }
 });
 
