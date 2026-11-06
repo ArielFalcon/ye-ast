@@ -85,6 +85,32 @@ test("a member call is a function-value call when its own file binds the receive
   ]);
 });
 
+test("a value is a function value through parentheses and casts at any depth, and a conditional is one when either branch is", async () => {
+  assert.deepEqual((await read([
+    "public class W {",
+    "  Supplier<Integer> field = ((Supplier<Integer>) (() -> 1));",
+    "  Runnable later;",
+    "  void go(boolean flag, Runnable other, Runnable plain) {",
+    "    Runnable paren = (this::go2);",
+    "    Runnable chosen = flag ? other : (flag ? () -> {} : other);",
+    "    Runnable neither = flag ? other : plain;",
+    "    later = (Runnable) (flag ? this::go2 : other);",
+    "    field.get();",
+    "    paren.run();",
+    "    chosen.run();",
+    "    neither.run();",
+    "    later.run();",
+    "  }",
+    "  void go2() {}",
+    "}",
+  ])).functionValueCalls, [
+    { line: 9, receiver: "field", member: "get" },
+    { line: 10, receiver: "paren", member: "run" },
+    { line: 11, receiver: "chosen", member: "run" },
+    { line: 13, receiver: "later", member: "run" },
+  ]);
+});
+
 test("a receiver bound to a non-function value, or shadowed by a parameter or a local, is no function-value call", async () => {
   assert.deepEqual((await read([
     "public class B {",

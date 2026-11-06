@@ -56,8 +56,13 @@ export function javaFunctionValueCalls(root: Node): FunctionValueCall[] {
   });
 }
 
+/** A lambda or a method reference, through parentheses and casts; a conditional is one when either branch may be. */
 function isFunctionValue(node: Node | null): boolean {
-  return node !== null && FUNCTION_VALUES.includes(node.type);
+  if (node === null) return false;
+  if (node.type === "parenthesized_expression") return isFunctionValue(node.namedChildren[0] ?? null);
+  if (node.type === "cast_expression") return isFunctionValue(node.childForFieldName("value"));
+  if (node.type === "ternary_expression") return isFunctionValue(node.childForFieldName("consequence")) || isFunctionValue(node.childForFieldName("alternative"));
+  return FUNCTION_VALUES.includes(node.type);
 }
 
 function nameOf(node: Node): string | undefined {

@@ -76,6 +76,49 @@ test("a member call is a function-value call when its own file binds the receive
   ]);
 });
 
+test("a value is a function value through every wrapper at any depth, either branch of a conditional or a logical operator, and the last of a comma or an assignment", async () => {
+  assert.deepEqual((await read([
+    "type F = () => number;",
+    "export function run(flag: boolean, other: unknown, plain: number): void {",
+    "  const wrapped = ((<F>(() => 1)) as F satisfies F)!;",
+    "  const chosen = flag ? other : (flag ? function () { return 1; } : other);",
+    "  const fallback = other ?? (() => 1);",
+    "  const either = (() => 1) || other;",
+    "  const both = flag && (() => 1);",
+    "  const last = (plain, () => 1);",
+    "  let assigned; const chained = (assigned = () => 1);",
+    "  const neither = flag ? other : plain;",
+    "  const dropped = (() => 1, plain);",
+    "  let compound: unknown; compound ??= () => 1;",
+    "  let ored: unknown; ored ||= () => 1;",
+    "  let anded: unknown = other; anded &&= () => 1;",
+    "  wrapped.call(undefined);",
+    "  chosen.call(undefined);",
+    "  fallback.call(undefined);",
+    "  either.call(undefined);",
+    "  both.call(undefined);",
+    "  last.call(undefined);",
+    "  chained.call(undefined);",
+    "  neither.call(undefined);",
+    "  dropped.call(undefined);",
+    "  compound.call(undefined);",
+    "  ored.call(undefined);",
+    "  anded.call(undefined);",
+    "}",
+  ])).functionValueCalls, [
+    { line: 15, receiver: "wrapped", member: "call" },
+    { line: 16, receiver: "chosen", member: "call" },
+    { line: 17, receiver: "fallback", member: "call" },
+    { line: 18, receiver: "either", member: "call" },
+    { line: 19, receiver: "both", member: "call" },
+    { line: 20, receiver: "last", member: "call" },
+    { line: 21, receiver: "chained", member: "call" },
+    { line: 24, receiver: "compound", member: "call" },
+    { line: 25, receiver: "ored", member: "call" },
+    { line: 26, receiver: "anded", member: "call" },
+  ]);
+});
+
 test("a receiver bound to a non-function value, shadowed by a parameter, imported, or written nowhere in the file is no function-value call", async () => {
   assert.deepEqual((await read([
     "import { imported } from './elsewhere';",

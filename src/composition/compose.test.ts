@@ -1048,6 +1048,42 @@ test("a trace over a real index binds a var receiver at its function scope, wher
   assert.deepEqual(answer.value.cuts.map((cut) => [cut.kind, ...cut.at]), [["unresolved-link", "src/hoisted.ts:3 cb.call", "src/hoisted.ts::cb"]]);
 });
 
+test("a trace over a real index sees a function value through every wrapper expression and either branch of a choice", async () => {
+  writeFileSync(join(repo, "src", "Wrapped.java"), [
+    "import java.util.function.Supplier;",
+    "public class Wrapped {",
+    "  String go(boolean flag, Supplier<String> other) {",
+    "    Supplier<String> paren = (() -> \"x\");",
+    "    Supplier<String> cast = (Supplier<String>) () -> \"x\";",
+    "    Supplier<String> chosen = flag ? other : () -> \"x\";",
+    "    return paren.get() + cast.get() + chosen.get();",
+    "  }",
+    "}",
+  ].join("\n"));
+  writeFileSync(join(repo, "src", "wrapped-values.ts"), [
+    "export function go(flag: boolean, other: unknown): void {",
+    "  const chosen = flag ? other : () => 1;",
+    "  const fallback = other ?? (() => 1);",
+    "  const either = other || (() => 1);",
+    "  chosen.call(null);",
+    "  fallback.call(null);",
+    "  either.call(null);",
+    "}",
+    "",
+  ].join("\n"));
+  git("add", "-A");
+  git("commit", "-q", "-m", "wrapped values");
+  const { trace } = composeQueries({ scratchRoot });
+  const walk = (file: string, symbol: string) => trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file, symbol }] });
+
+  const [java, typescript] = await Promise.all([walk("src/Wrapped.java", "Wrapped.go"), walk("src/wrapped-values.ts", "go")]);
+
+  assert.ok(java.ok && java.value.status === "partial", JSON.stringify(java));
+  assert.deepEqual(java.value.cuts.map((cut) => cut.at[0]), ["src/Wrapped.java:7 cast.get", "src/Wrapped.java:7 chosen.get", "src/Wrapped.java:7 paren.get"]);
+  assert.ok(typescript.ok && typescript.value.status === "partial", JSON.stringify(typescript));
+  assert.deepEqual(typescript.value.cuts.map((cut) => cut.at[0]), ["src/wrapped-values.ts:5 chosen.call", "src/wrapped-values.ts:6 fallback.call", "src/wrapped-values.ts:7 either.call"]);
+});
+
 test("a trace over a real index binds a receiver in its own file, so a function value of that name in another file leaves an unrelated call as R6 decides", async () => {
   writeFileSync(join(repo, "src", "holder.ts"), ["export const value = () => 1;", ""].join("\n"));
   writeFileSync(join(repo, "src", "use.ts"), ["export function use(value: { describe(): void }): void {", "  value.describe();", "}", ""].join("\n"));

@@ -1,6 +1,10 @@
 import ts from "typescript";
 import type { FunctionValueCall } from "../../ports/declared-member-names.port.ts";
 
+const LOGICAL_OPERATORS: readonly ts.SyntaxKind[] = [ts.SyntaxKind.AmpersandAmpersandToken, ts.SyntaxKind.BarBarToken, ts.SyntaxKind.QuestionQuestionToken];
+/** Operators that store their right operand, or may: `a ??= f` leaves `a` holding `f` when it held nothing. */
+const ASSIGNMENTS: readonly ts.SyntaxKind[] = [ts.SyntaxKind.EqualsToken, ts.SyntaxKind.BarBarEqualsToken, ts.SyntaxKind.AmpersandAmpersandEqualsToken, ts.SyntaxKind.QuestionQuestionEqualsToken];
+
 /** The member calls of a TypeScript tree whose receiver the file binds to a function value (see `FunctionValueCall`). */
 export function functionValueCalls(tree: ts.SourceFile): FunctionValueCall[] {
   const accesses: ts.PropertyAccessExpression[] = [];
@@ -8,7 +12,7 @@ export function functionValueCalls(tree: ts.SourceFile): FunctionValueCall[] {
   const assignedFields = new Map<ts.ClassLikeDeclaration, Set<string>>();
   const visit = (node: ts.Node): void => {
     if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)) accesses.push(node.expression);
-    if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.EqualsToken && isFunctionValue(node.right)) {
+    if (ts.isBinaryExpression(node) && ASSIGNMENTS.includes(node.operatorToken.kind) && isFunctionValue(node.right)) {
       const binding = ts.isIdentifier(node.left) ? bindingOf(node.left) : undefined;
       if (binding !== undefined) assignedBindings.add(binding);
       const owner = isThisMember(node.left) ? thisClassOf(node.left) : undefined;
@@ -33,11 +37,19 @@ export function functionValueCalls(tree: ts.SourceFile): FunctionValueCall[] {
   });
 }
 
-/** An arrow or function expression, through parentheses and type assertions. */
+/**
+ * An arrow or function expression, through parentheses, type assertions and non-null; a conditional or a logical
+ * operator is one when either operand may be, a comma or an assignment when its last operand is.
+ */
 function isFunctionValue(value: ts.Expression): boolean {
-  let inner = value;
-  while (ts.isParenthesizedExpression(inner) || ts.isAsExpression(inner) || ts.isSatisfiesExpression(inner) || ts.isTypeAssertionExpression(inner) || ts.isNonNullExpression(inner)) inner = inner.expression;
-  return ts.isArrowFunction(inner) || ts.isFunctionExpression(inner);
+  if (ts.isParenthesizedExpression(value) || ts.isAsExpression(value) || ts.isSatisfiesExpression(value) || ts.isTypeAssertionExpression(value) || ts.isNonNullExpression(value)) return isFunctionValue(value.expression);
+  if (ts.isConditionalExpression(value)) return isFunctionValue(value.whenTrue) || isFunctionValue(value.whenFalse);
+  if (ts.isBinaryExpression(value)) {
+    const operator = value.operatorToken.kind;
+    if (LOGICAL_OPERATORS.includes(operator)) return isFunctionValue(value.left) || isFunctionValue(value.right);
+    if (operator === ts.SyntaxKind.CommaToken || ASSIGNMENTS.includes(operator)) return isFunctionValue(value.right);
+  }
+  return ts.isArrowFunction(value) || ts.isFunctionExpression(value);
 }
 
 function isFunctionType(type: ts.TypeNode | undefined): boolean {
