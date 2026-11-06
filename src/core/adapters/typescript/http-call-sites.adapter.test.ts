@@ -190,6 +190,25 @@ test("a verb of HttpClient that a component calls is a call site with its method
   assert.deepEqual(sites(await reader.of([component], "shop-web")), ["GET orders/7@src/app/app.component.ts:6"]);
 });
 
+test("a receiver is read in the class whose code calls it: another class's HttpClient field of the same name does not make it one", async () => {
+  const file = source("two.ts", ["import { HttpClient } from '@angular/common/http'", "import { inject } from '@angular/core'", "import { Cache } from './cache'", "class A { private readonly http = inject(HttpClient) }", "class B { private readonly http = inject(Cache)", "  load() { this.http.get('/items') } }"].join("\n"));
+
+  assert.deepEqual(sites(await reader.of([file], "shop-web")), []);
+});
+
+test("an HttpClient field a class inherits from an imported base is its receiver", async () => {
+  const base = source("src/app/base.service.ts", ["import { HttpClient } from '@angular/common/http'", "import { inject } from '@angular/core'", "export class BaseService { protected readonly http = inject(HttpClient) }"].join("\n"));
+  const child = source("src/app/items.service.ts", ["import { BaseService } from './base.service'", "export class ItemsService extends BaseService {", "  load() { this.http.get('/items') } }"].join("\n"));
+
+  assert.deepEqual(sites(await reader.of([base, child], "shop-web")), ["GET /items@src/app/items.service.ts:3"]);
+});
+
+test("a constructor parameter is a field only when it declares one, and the parameter itself is a receiver where it is in scope", async () => {
+  const file = source("ctor.ts", ["import { HttpClient } from '@angular/common/http'", "class Client {", "  constructor(http: HttpClient) { http.get('/boot') }", "  load() { this.http.get('/items') } }"].join("\n"));
+
+  assert.deepEqual(sites(await reader.of([file], "shop-web")), ["GET /boot@ctor.ts:3"]);
+});
+
 test("an injected client's receiver is not the URL supplied to its verb", async () => {
   const caller = source("src/service.ts", [
     "import { HttpClient } from '@angular/common/http'",

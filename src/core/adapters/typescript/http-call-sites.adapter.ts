@@ -50,6 +50,12 @@ type RunTime = ReadonlySet<string>;
  */
 type Evaluation = { readonly kind: "text"; readonly text: string; readonly cut?: true } | { readonly kind: "value" };
 
+/** A type name as a file writes it: the file's imports decide which class it names. */
+interface TypeNamed {
+  name: string;
+  shape: FileShape;
+}
+
 /** A value a name states, the file that declares it, and the names already visited to reach it. */
 interface Located<E extends ts.Expression = ts.Expression> {
   shape: FileShape;
@@ -448,8 +454,8 @@ class Reader {
     if (!VERBS.has(name) && name !== "fetch") return undefined;
     const owner = await this.ownerClass(shape, callee.expression);
     if (owner === undefined) return undefined;
-    const isHttpClient = isAngularHttpClientName(shape, owner);
-    const isWrapper = await this.wrapperOf(shape, owner, name === "fetch" ? "request" : name);
+    const isHttpClient = isAngularHttpClientName(owner.shape, owner.name);
+    const isWrapper = await this.wrapperOf(shape, owner.name, name === "fetch" ? "request" : name);
     if (!isHttpClient && !isWrapper) return undefined;
     if (name !== "request") return this.request(shape, call, call.arguments[0], name === "fetch" ? "GET" : verbOf(name));
     return this.explicitRequest(shape, call);
@@ -528,35 +534,40 @@ class Reader {
     return undefined;
   }
 
-  /** The name of the class a receiver is an instance of, through the field or parameter that holds it. */
-  private async ownerClass(shape: FileShape, receiver: ts.Expression): Promise<string | undefined> {
+  /**
+   * The name of the class a receiver is an instance of, with the file that names it: `this.x` through the field the class of
+   * the call declares or inherits, a bare name through the binding the code around it declares, or a constant of the file.
+   */
+  private async ownerClass(shape: FileShape, receiver: ts.Expression): Promise<TypeNamed | undefined> {
     if (ts.isPropertyAccessExpression(receiver) && receiver.expression.kind === ts.SyntaxKind.ThisKeyword) {
-      return this.fieldType(shape, receiver.name.text);
+      const enclosing = enclosingClassOf(receiver);
+      return enclosing === undefined ? undefined : this.memberType(shape, enclosing, receiver.name.text, new Set());
     }
-    if (ts.isIdentifier(receiver)) {
-      const local = shape.consts.get(receiver.text);
-      if (local !== undefined) return this.injectedType(shape, local);
-      return this.fieldType(shape, receiver.text);
+    if (!ts.isIdentifier(receiver)) return undefined;
+    const scope = lexicalScope(receiver);
+    if (scope.names.has(receiver.text)) {
+      const local = scope.locals.get(receiver.text);
+      const named = local === undefined ? parameterType(receiver) : this.injectedType(shape, local);
+      return named === undefined ? undefined : { name: named, shape };
     }
-    return undefined;
+    const constant = shape.consts.get(receiver.text);
+    const named = constant === undefined ? undefined : this.injectedType(shape, constant);
+    return named === undefined ? undefined : { name: named, shape };
   }
 
-  private async fieldType(shape: FileShape, name: string): Promise<string | undefined> {
-    for (const declaration of shape.classes.values()) {
-      for (const member of declaration.members) {
-        if (member.name === undefined || !ts.isIdentifier(member.name) || member.name.text !== name) continue;
-        if (ts.isPropertyDeclaration(member) && member.initializer !== undefined) {
-          const injected = this.injectedType(shape, member.initializer);
-          if (injected !== undefined) return injected;
-        }
-        if (ts.isPropertyDeclaration(member) && member.type !== undefined) return typeName(member.type);
-        if (ts.isParameter(member) && member.type !== undefined) return typeName(member.type);
-      }
-      for (const parameter of constructorParameters(declaration)) {
-        if (ts.isIdentifier(parameter.name) && parameter.name.text === name && parameter.type !== undefined) return typeName(parameter.type);
-      }
+  /** The type of the field a class declares under a name, a parameter property included, or the one its base class declares. */
+  private async memberType(shape: FileShape, declaration: ts.ClassDeclaration, name: string, visited: ReadonlySet<ts.ClassDeclaration>): Promise<TypeNamed | undefined> {
+    if (visited.has(declaration)) return undefined;
+    const field = declaration.members.find((member): member is ts.PropertyDeclaration => ts.isPropertyDeclaration(member) && ts.isIdentifier(member.name) && member.name.text === name);
+    const parameter = constructorParameters(declaration).find((candidate) => ts.isIdentifier(candidate.name) && candidate.name.text === name && ts.isParameterPropertyDeclaration(candidate, candidate.parent));
+    const declared = field ?? parameter;
+    if (declared !== undefined) {
+      const named = (field?.initializer === undefined ? undefined : this.injectedType(shape, field.initializer)) ?? (declared.type === undefined ? undefined : typeName(declared.type));
+      return named === undefined ? undefined : { name: named, shape };
     }
-    return undefined;
+    const base = baseClassName(declaration);
+    const found = base === undefined ? undefined : await this.classOf(shape, base);
+    return found === undefined ? undefined : this.memberType(found.shape, found.declaration, name, new Set(visited).add(declaration));
   }
 
   private injectedType(shape: FileShape, expression: ts.Expression): string | undefined {
@@ -855,6 +866,16 @@ function mayOverrideEncoder(source: ts.SourceFile): boolean {
     return ts.forEachChild(node, (child) => visit(child) || undefined) === true;
   };
   return visit(source);
+}
+
+/** The type name the innermost function parameter of that name declares around a node. */
+function parameterType(name: ts.Identifier): string | undefined {
+  for (let current: ts.Node | undefined = name.parent; current !== undefined; current = current.parent) {
+    if (!ts.isFunctionLike(current)) continue;
+    const parameter = current.parameters.find((candidate) => ts.isIdentifier(candidate.name) && candidate.name.text === name.text);
+    if (parameter !== undefined) return parameter.type === undefined ? undefined : typeName(parameter.type);
+  }
+  return undefined;
 }
 
 /** Whether a name is the global of that name where the code reads it: nothing the file or the code around declares or imports it. */
