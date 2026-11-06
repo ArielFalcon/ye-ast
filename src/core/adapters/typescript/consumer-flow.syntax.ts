@@ -272,7 +272,3 @@ export function exits(statement: ts.Statement): boolean {
   const last = statement.statements.at(-1);
   return last !== undefined && exits(last);
 }
-
-export function startsWith(path: AccessPath, prefix: AccessPath): boolean {
-  return prefix.length <= path.length && prefix.every((segment, index) => path[index] === segment);
-}

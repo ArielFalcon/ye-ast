@@ -239,14 +239,14 @@ const parameterOrder = { kind: "parameter" as const, repo: "repo", file: "g.ts",
 
 test("each guard form protects the reads it dominates and no others", async () => {
   const file = guarded([
-    "show(order.owner?.name)", // 3 optional chain
-    "if (order.owner) { show(order.owner.name) }", // 4 truthiness
-    "if (order.owner != null) { show(order.owner.name) }", // 5 comparison
-    "if (order.owner !== undefined) { show(order.owner.name) }", // 6 comparison (undefined only)
-    "const ok = order.owner && order.owner.name", // 7 truthiness via &&
-    "show(order.owner ? order.owner.name : '')", // 8 ternary
-    "show(order.owner!.name)", // 9 non-null assertion
-    "show(order.owner.name)", // 10 unguarded
+    "show(order.owner?.name)",
+    "if (order.owner) { show(order.owner.name) }",
+    "if (order.owner != null) { show(order.owner.name) }",
+    "if (order.owner !== undefined) { show(order.owner.name) }",
+    "const ok = order.owner && order.owner.name",
+    "show(order.owner ? order.owner.name : '')",
+    "show(order.owner!.name)",
+    "show(order.owner.name)",
   ]);
   const result = await follow([file], parameterOrder, "owner");
   assert.deepEqual(uses(result), [

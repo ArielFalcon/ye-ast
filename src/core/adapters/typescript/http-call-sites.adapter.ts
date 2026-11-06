@@ -58,7 +58,6 @@ type RunTime = ReadonlySet<string>;
  */
 type Evaluation = { readonly kind: "text"; readonly text: string; readonly cut?: true } | { readonly kind: "value" };
 
-/** A class, with the file that declares it. */
 interface HeldClass {
   shape: FileShape;
   declaration: ts.ClassDeclaration;
@@ -85,7 +84,6 @@ const CALLABLES: DeclarationKind<ts.Expression | ts.FunctionDeclaration> = {
   defaulted: (node) => (ts.isFunctionDeclaration(node) || ts.isExpression(node) ? node : undefined),
 };
 
-/** A method a class declares, with the file that declares it. */
 interface HeldMethod {
   shape: FileShape;
   method: ts.MethodDeclaration | ts.ArrowFunction | ts.FunctionExpression;
@@ -430,9 +428,7 @@ function localInitializers(member: ts.Node): ReadonlyMap<string, ts.Expression> 
 }
 
 function parametersOf(member: ts.Node): RunTime {
-  const initializer = ts.isPropertyDeclaration(member) ? member.initializer : undefined;
-  const declared = ts.isMethodDeclaration(member) ? member.parameters : initializer !== undefined && (ts.isArrowFunction(initializer) || ts.isFunctionExpression(initializer)) ? initializer.parameters : [];
-  return parameterNames(declared);
+  return parameterNames(functionOf(member)?.parameters ?? []);
 }
 
 function parameterNames(parameters: readonly ts.ParameterDeclaration[]): RunTime {
@@ -899,7 +895,7 @@ class Reader {
   private async fieldOf(shape: FileShape, declaration: ts.ClassDeclaration, name: string, trail: ReadonlySet<string>, read: HeldClass): Promise<Located | typeof ASSIGNED_AT_RUN_TIME | undefined> {
     const visited = `${shape.source.fileName}\0${declaration.name?.text ?? "(anonymous)"}.${name}`;
     if (trail.has(visited)) return undefined;
-    const member = declaration.members.find((candidate) => candidate.name !== undefined && ts.isIdentifier(candidate.name) && candidate.name.text === name);
+    const member = memberNamed(declaration, name);
     if (member === undefined) {
       if (constructorParameters(declaration).some((parameter) => ts.isIdentifier(parameter.name) && parameter.name.text === name && ts.isParameterPropertyDeclaration(parameter, parameter.parent))) return ASSIGNED_AT_RUN_TIME;
       const base = baseClassName(declaration);
@@ -997,7 +993,6 @@ class Reader {
     return found === undefined ? undefined : { target: found.shape, declaration: found.declaration };
   }
 
-  /** What a call writes: what every return of the function it names writes, undefined when one is undecided or two disagree. */
   /**
    * What a method call writes: what the method of the receiver's class, or the one it inherits, returns, and every
    * override a subclass declares must write the same; `super` calls only the inherited one. A method that reads its own
@@ -1072,6 +1067,7 @@ class Reader {
     return found;
   }
 
+  /** What a call writes: what every return of the function it names writes, undefined when one is undecided or two disagree. */
   private async evaluateReturned(target: FileShape, declaration: ts.Expression | ts.FunctionDeclaration | ts.MethodDeclaration, trail: ReadonlySet<string>): Promise<Evaluation | undefined> {
     if (!ts.isFunctionDeclaration(declaration) && !ts.isMethodDeclaration(declaration) && !ts.isArrowFunction(declaration) && !ts.isFunctionExpression(declaration)) return this.evaluate(target, declaration, NO_SCOPE, trail);
     let agreed: Evaluation | undefined;
@@ -1089,12 +1085,12 @@ class Reader {
   }
 }
 
-/** The names the file binds at run time; an ambient `declare` binds none. */
 function baseClassName(declaration: ts.ClassDeclaration): string | undefined {
   const base = declaration.heritageClauses?.find((clause) => clause.token === ts.SyntaxKind.ExtendsKeyword)?.types[0]?.expression;
   return base !== undefined && ts.isIdentifier(base) ? base.text : undefined;
 }
 
+/** The names the file binds at run time; an ambient `declare` binds none. */
 function sourceBindings(source: ts.SourceFile): ReadonlySet<string> {
   const names = new Set<string>();
   for (const statement of source.statements) {

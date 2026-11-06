@@ -1,4 +1,4 @@
-import { NO_FLOW, type FlowResult } from "../../domain/contracts/consumer-flow.ts";
+import { NO_FLOW, templateUnreadable } from "../../domain/contracts/consumer-flow.ts";
 import type { AngularMetadataReader } from "../../ports/angular-metadata.port.ts";
 import type { ConsumerTemplateReader } from "../../ports/consumer-template.port.ts";
 import type { TemplateFlowReader } from "../../ports/consumer-template-flow.port.ts";
@@ -24,11 +24,7 @@ export async function createConsumerTemplateReader(deps: ConsumerTemplatesDeps, 
       const unit = units.find(({ component }) => component.path === site.file && component.symbol === site.owner);
       if (unit !== undefined) return deps.flow.follow(unit, carrier);
       const component = classes.find((candidate) => candidate.kind === "component" && candidate.ref.path === site.file && candidate.ref.symbol === site.owner);
-      return component === undefined ? NO_FLOW : unreadable(component.ref.path, component.ref.line);
+      return component === undefined ? NO_FLOW : templateUnreadable({ path: component.ref.path, line: component.ref.line });
     },
   };
-}
-
-function unreadable(path: string, line: number): FlowResult {
-  return { uses: [], next: [], frontiers: [{ at: { path, line }, cause: "template-unreadable", reason: "source-unreadable", hops: [] }] };
 }

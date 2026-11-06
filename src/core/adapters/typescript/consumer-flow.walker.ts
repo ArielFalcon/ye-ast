@@ -1,5 +1,5 @@
 import ts from "typescript";
-import { ELEMENT, relatePaths, rewritePath, type AccessPath, type PathMapping } from "../../domain/contracts/access-path.ts";
+import { ELEMENT, relatePaths, rewritePath, startsWith, type AccessPath, type PathMapping } from "../../domain/contracts/access-path.ts";
 import { RESOURCE_STATE_MEMBERS, type CarrierSite, type FlowFrontier, type FlowNext, type FlowStep, type FlowUse, type FrontierCause, type Hop } from "../../domain/contracts/consumer-flow.ts";
 import type { AccessStep } from "../../domain/contracts/use-operation.ts";
 import type { Absence, Guard, GuardKind, UseOperation } from "../../domain/contracts/verdict.ts";
@@ -24,7 +24,6 @@ import {
   mayNotFollow,
   namedFunction,
   referencesOf,
-  startsWith,
   unwrap,
   writesWithin,
   type Binding,
@@ -92,11 +91,8 @@ function translate(guards: readonly Guard[], mappings: readonly PathMapping[]): 
   });
 }
 
-function reaching(guards: readonly Guard[], path: AccessPath): boolean {
-  return guards.some((guard) => {
-    const relation = relatePaths(guard.covers, path);
-    return guard.kind !== "non-null-assertion" && (relation === "exact" || relation === "beyond");
-  });
+function protects(guard: Guard, path: AccessPath): boolean {
+  return guard.kind !== "non-null-assertion" && startsWith(guard.covers, path);
 }
 
 export class Walker {
@@ -149,7 +145,7 @@ export class Walker {
     const setter = cls.members.find((member): member is ts.SetAccessorDeclaration => ts.isSetAccessorDeclaration(member) && member.name.getText(this.unit.tree) === site.member);
     const parameter = setter?.parameters[0];
     if (setter !== undefined && parameter !== undefined) this.bind(parameter.name, setter, start);
-    else if (!hasMember(cls, site.member)) return this.lostAt(site.line ?? 1, "member not found in its owner");
+    else if (memberDeclaration(cls, site.member) === undefined) return this.lostAt(site.line ?? 1, "member not found in its owner");
     this.track({ kind: "member", name: site.member, scope: cls }, start);
   }
 
@@ -184,7 +180,7 @@ export class Walker {
   }
 
   private use(node: ts.Node, t: Trail, path: AccessPath, operation: UseOperation, guards: readonly Guard[]): void {
-    const reachingGuards = guards.filter((guard) => ["exact", "beyond"].includes(relatePaths(guard.covers, t.origin)));
+    const reachingGuards = guards.filter((guard) => startsWith(guard.covers, t.origin));
     this.uses.push({ file: this.unit.file, pos: node.getStart(this.unit.tree), value: { site: this.at(node), path, changed: t.origin, operation, guards: reachingGuards, hops: t.hops } });
   }
 
@@ -390,7 +386,7 @@ export class Walker {
   }
 
   private leave(at: ts.Node, site: CarrierSite, t: Trail): void {
-    if (reaching(t.guards, t.origin)) return this.frontier(at, "unmodelled-flow", "guard does not cross a boundary", t);
+    if (t.guards.some((guard) => protects(guard, t.origin))) return this.frontier(at, "unmodelled-flow", "guard does not cross a boundary", t);
     this.next.push({ file: this.unit.file, pos: at.getStart(this.unit.tree), value: { carrier: { site, path: t.origin }, hops: t.hops } });
   }
 
@@ -634,11 +630,10 @@ export class Walker {
         for (const statement of parent.statements.slice(0, Math.max(before, 0))) add(this.earlyExit(statement, binding), statement.end);
       }
     }
-    const protecting = (guard: Guard) => guard.kind !== "non-null-assertion" && startsWith(guard.covers, t.origin);
     const own = found.filter(({ captured }) => !captured);
     const kept = own.filter(({ guard, from }) => !this.overwritten(guard, closure ?? binding.scope, binding, from, node, t));
-    if (own.some(({ guard }) => protecting(guard) && !kept.some((held) => held.guard === guard))) return undefined;
-    if (!kept.some(({ guard }) => protecting(guard)) && found.some(({ guard, captured }) => captured && protecting(guard))) {
+    if (own.some(({ guard }) => protects(guard, t.origin) && !kept.some((held) => held.guard === guard))) return undefined;
+    if (!kept.some(({ guard }) => protects(guard, t.origin)) && found.some(({ guard, captured }) => captured && protects(guard, t.origin))) {
       this.once(node, "guard across closure", t);
       return undefined;
     }
@@ -938,16 +933,14 @@ function aliasIn(args: readonly ts.Expression[], own: string, stringAlias: boole
   return own;
 }
 
-export function hasMember(cls: ts.ClassLikeDeclaration, name: string): boolean {
+function memberDeclaration(cls: ts.ClassLikeDeclaration, name: string): ts.ClassElement | ts.ParameterDeclaration | undefined {
   return (
-    cls.members.some((member) => member.name !== undefined && ts.isIdentifier(member.name) && member.name.text === name) ||
-    (ts.isClassDeclaration(cls) && constructorParameters(cls).some((parameter) => ts.isIdentifier(parameter.name) && parameter.name.text === name))
+    cls.members.find((member) => member.name !== undefined && ts.isIdentifier(member.name) && member.name.text === name) ??
+    (ts.isClassDeclaration(cls) ? constructorParameters(cls).find((parameter) => ts.isIdentifier(parameter.name) && parameter.name.text === name) : undefined)
   );
 }
 
 export function memberSite(repo: string, unit: Unit, cls: ts.ClassLikeDeclaration, owner: string, member: string): CarrierSite {
-  const declaration =
-    cls.members.find((candidate) => candidate.name !== undefined && ts.isIdentifier(candidate.name) && candidate.name.text === member) ??
-    (ts.isClassDeclaration(cls) ? constructorParameters(cls).find((parameter) => ts.isIdentifier(parameter.name) && parameter.name.text === member) : undefined);
+  const declaration = memberDeclaration(cls, member);
   return { kind: "member", repo, file: unit.file, owner, member, ...(declaration === undefined ? {} : { line: lineOf(unit.tree, declaration) }) };
 }
