@@ -2330,6 +2330,16 @@ const DEPENDENCY_GAP: DecisionValue = {
   ],
 };
 
+test("an answer with names no local repository serves points to ye_ast_decisions", async () => {
+  const { session } = await setup({ outwardNames: async () => ({ ok: true, value: { fact: workspaceFact() } }) });
+
+  const workspace = textOf(await session.callTool("ye_ast_workspace", {}));
+  const impact = textOf(await session.callTool("ye_ast_callers", { targets: [{ file: "a", symbol: "f" }], workspace: WORKSPACE }));
+
+  for (const text of [workspace, impact]) assert.match(text, /^ye_ast_decisions lists the declarations that would resolve these gaps/m);
+  await session.close();
+});
+
 test("a workspace summary groups the outward names by kind and counts the dependency coordinates no repository serves", async () => {
   const { session } = await setup({ outwardNames: async () => ({ ok: true, value: { fact: workspaceFact() } }) });
 

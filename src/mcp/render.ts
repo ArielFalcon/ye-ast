@@ -32,6 +32,7 @@ import { canonicalJson } from "../core/domain/shared/canonical-json.ts";
 import { blockBytes as size, preferShorterText, shareExactContext } from "./presentation-sharing.ts";
 
 const NONE = "  (none)";
+const DECISIONS_HINT = "ye_ast_decisions lists the declarations that would resolve these gaps, with evidence-backed options.";
 const CUTS = "cuts:";
 const MODULE_LISTED_DEPTH = 1;
 
@@ -1067,6 +1068,7 @@ export function renderWorkspaceImpact(fact: Fact<WorkspaceImpactValue>, detail: 
   const unserved = counted("no local repository serves", value.workspace.unserved);
   const unservedSummary = `no local repository serves (${value.workspace.unserved.length}): ${categoryRecovery({ full: "includes all" })} names`;
   lines.push(value.workspace.unserved.length > 0 && size([unservedSummary]) <= size([unserved]) ? unservedSummary : unserved);
+  if (value.workspace.unserved.length > 0 || stale.length > 0) lines.push(DECISIONS_HINT);
   lines.push("walk origins:", ...value.workspace.repos.flatMap((repo) => {
     const section = value.sections[repo];
     if (section === undefined || section.status === "unknown" || section.value.impact === undefined) return [];
@@ -1290,6 +1292,7 @@ export function renderWorkspace(fact: Fact<Omit<WorkspaceValue, "repositories">>
     if (size(permutation) < size(best)) best = permutation;
   }
   lines.push(...best);
+  if (value.unserved.length > 0) lines.push(DECISIONS_HINT);
   lines.push(...unresolvedBlock(value));
   lines.push(...cutsBlock(cutsOf(fact), detail));
   for (const [repo, section] of Object.entries(value.sections)) {
