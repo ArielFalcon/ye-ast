@@ -329,8 +329,8 @@ p { margin: 0 0 8px; }
 .step-controls { display: flex; align-items: center; gap: 6px; }
 .step-controls button:disabled { opacity: .35; cursor: default; }
 #step-count { min-width: 40px; text-align: center; }
-#step-play { min-width: 52px; background: var(--heat); border-color: var(--heat); color: var(--night); }
-#step-play:hover { background: var(--bone); border-color: var(--bone); }
+#step-play { min-width: 52px; background: transparent; border-color: var(--heat); color: var(--amber); box-shadow: 0 0 8px rgb(242 78 37 / .35); }
+#step-play:hover { background: var(--heat); border-color: var(--heat); color: var(--night); }
 
 /* ── svg ─────────────────────────────────────────────────────────────── */
 [data-layer="entry"] { --layer-color: var(--entry); }

@@ -968,7 +968,7 @@ details[open] summary { border-bottom: 1px solid var(--line-soft); }
 .docs .chip, .docs .pill { font-family: var(--display); font-stretch: condensed; font-weight: 700; font-size: 13px; letter-spacing: .01em; }
 .docs .chip:hover { border-color: var(--lime); color: var(--ink); }
 .docs .chip.is-active { background: var(--lime); border-color: var(--lime); color: var(--night); }
-.docs .pipeline span.is-active { background: var(--heat); color: var(--night); }
+.docs .pipeline span.is-active { background: transparent; border-color: var(--heat); color: var(--amber); box-shadow: 0 0 8px rgb(242 78 37 / .35); }
 .docs .pipeline span.is-done { color: var(--heat); background: color-mix(in srgb, var(--heat) 12%, transparent); }
 .docs .step-button.is-active { background: color-mix(in srgb, var(--heat) 16%, var(--panel)); box-shadow: inset 3px 0 0 var(--heat); }
 .docs .step-button.is-active span { color: var(--heat); }
@@ -983,9 +983,9 @@ details[open] summary { border-bottom: 1px solid var(--line-soft); }
 .docs .sim-node rect { fill: var(--block); stroke: var(--outline); stroke-width: 2.2; }
 .docs .sim-node .sim-label { fill: var(--block-ink); }
 .docs .sim-node .sim-sub, .docs .sim-node .sim-kind { fill: var(--block-sub); }
-.docs .sim-node.is-seed .sim-sub, .docs .sim-node.is-seed .sim-kind { fill: var(--night); }
-.docs .sim-node.is-seed rect { fill: var(--heat); stroke: var(--outline); }
-.docs .sim-node.is-seed .sim-label { fill: var(--night); }
+.docs .sim-node.is-seed .sim-sub, .docs .sim-node.is-seed .sim-kind { fill: var(--muted); }
+.docs .sim-node.is-seed rect { fill: var(--panel); stroke: var(--heat); stroke-width: 3; filter: var(--glow-heat); }
+.docs .sim-node.is-seed .sim-label { fill: var(--amber); }
 .docs .sim-node.is-reached rect { stroke: var(--heat); stroke-width: 2.6; }
 .docs .sim-node.is-current rect { stroke: var(--heat); stroke-width: 3; filter: var(--glow-heat); }
 .docs .sim-node:not(.is-hidden):hover rect { stroke: var(--hover-ring); stroke-width: 3.2; }
