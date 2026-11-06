@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { callersValue, entrypointsValue, factOf, importersValue, liveRef, outlineValue, shaRef, SHA_A, SHA_B, sourceFixture, workspaceImpactValue, workspaceValue } from "./composition-fixtures.ts";
+import { callersValue, entrypointsValue, factOf, importersValue, inputsOf, liveRef, outlineValue, shaRef, SHA_A, SHA_B, sourceFixture, workspaceImpactValue, workspaceValue } from "./composition-fixtures.ts";
 import { normalizeSource } from "./composition-normalize.ts";
 import { mergeEvidence, materializeEvidence } from "./compose-evidence.ts";
 import { compositionIdentity } from "./composition-identity.ts";
@@ -54,7 +54,7 @@ function uniqueOutline(snapshot = shaRef("shop")): ExecutedSource {
   const [controller, ...rest] = value.files;
   assert.ok(controller);
   const files = [{ ...controller, declarations: controller.declarations.filter((_, index) => index !== 2) }, ...rest];
-  return sourceFixture("outline", { fact: factOf({ ...value, files }, { snapshot }) });
+  return sourceFixture("outline", { fact: factOf({ ...value, files }, { snapshot, inputs: inputsOf({ declaredConfig: { files: ["src/OrderController.java"] } }) }) });
 }
 
 /** Callers of the one `OrderService.find` declaration the diff seeds, so its `via` resolves exactly as impact's does. */
@@ -86,13 +86,13 @@ for (const mode of ["summary", "details"] as const) {
 
 test("handler and outline declaration are one subject with aliases, its routes and recorded basePath limits", () => {
   const text = renderComposition(overlapResult, "details");
-  const subject = labelOf(text, ["6-9 ", "OrderController.one", "one"]);
+  const subject = labelOf(text, ["= 6-9 ", "OrderController.one", "one"]);
   const all = lines(text);
   const row = all.findIndex((line) => line.trimStart().startsWith(`${subject} = `));
   const heading = all.slice(0, row).findLast((line) => !line.startsWith(" "));
   assert.ok(heading?.startsWith("src/OrderController.java"), `the subject row belongs to its file block:\n${text}`);
   const route = labelOf(text, ["http GET /orders,"]);
-  const served = all.find((line) => line.includes(`${route} served by`));
+  const served = all.find((line) => line.startsWith(`L`) && line.includes(` = ${route} `) && line.includes(" served by "));
   assert.ok(served?.includes(subject), served);
   assert.match(text, /basePath unknown \(unresolved\)/);
   assert.match(text, /POST \/orders v2[^\n]*basePath default contextPath=\/api; prod servletPath=\/v/);
@@ -122,8 +122,8 @@ test("imports, uses and unresolved names stay distinct from symbol dependences a
   assert.ok(imports.some((line) => line.includes("type-importer")));
   assert.ok(lines(text).some((line) => line.includes("unresolved-file-name") && line.includes("not a dependency")));
   assert.ok(lines(text).some((line) => line.includes("file-use") && line.includes("not an import")));
-  assert.match(text, /reached N\d+ class[^\n]*via fmt in src\/Util\.java[^\n]* basis reference/);
-  assert.match(text, /unresolved-endpoint reached N\d+ → fmt in src\/Util\.java[^\n]*\(no edge fabricated\)/);
+  assert.match(text, /reached N\d+(?: \S+)? class[^\n]*via fmt in src\/Util\.java[^\n]* basis reference/);
+  assert.match(text, /unresolved-endpoint reached N\d+(?: \S+)? → fmt in src\/Util\.java[^\n]*\(no edge fabricated\)/);
   assert.match(text, /not static\/runtime evidence nor a symbol use/);
 });
 
@@ -307,9 +307,9 @@ test("details states changed contract operations, unresolved workspace call site
 test("each relation or connection caveat is stated on the first object of its type", () => {
   const { result } = realCase("seven-families");
   const text = renderComposition(result, "details");
-  for (const [needle, kind] of [["no breakage claim", "symbol-dependence"], ["not causality", "shares-evidence"], ["not a call chain", "entrypoint-origin"], ["not a proof of breakage", "change-dependent"]] as const) {
+  for (const [needle, kind] of [["no breakage claim", "symbol-dependence"], ["same location, not causality", "shares-evidence"], ["not a call chain", "entrypoint-origin"], ["not a proof of breakage", "change-dependent"]] as const) {
     const carrying = lines(text).filter((line) => line.includes(needle));
-    const first = lines(text).find((line) => line.includes(` ${kind}`) || line.includes(`${kind}:`));
+    const first = lines(text).find((line) => !line.startsWith("Joined: ") && (line.includes(` ${kind}`) || line.includes(`${kind}:`)));
     assert.equal(carrying.length >= 1 && carrying[0] === first, true, `${kind} caveat on its first line:\n${text}`);
   }
 });
@@ -401,4 +401,61 @@ test("a link the workspace map and a workspace callers answer both admit is one 
   const naming = text.split("\n").filter((line) => line.includes(`${shared.from.symbol} →`));
   assert.equal(naming.filter((line) => /^L\d+ = /.test(line)).length, 1);
   assert.deepEqual(naming.filter((line) => line.startsWith("  link ")), []);
+});
+
+const catalogAndCallers = () => resultOf([sourceFixture("entrypoints"), singleTargetCallers()]);
+
+test("beside a read that declares a subject, summary counts what only enumerating reads hold and keeps what a connection joins", () => {
+  const result = catalogAndCallers();
+  const text = renderComposition(result, "summary");
+  assert.match(text, /^C\d+ = reached-handler: /m);
+  assert.ok(definition(text, labelOf(text, ["http GET /orders,"])).length === 1, text);
+  for (const unjoined of ["kafka orders", "Jobs.tick", "shared-support"]) assert.ok(!text.includes(unjoined), `${unjoined}:\n${text}`);
+  assert.match(text, /unknown entrypoint finding \(unresolved\)/);
+  assert.match(text, /\/orders \(aux\): ui \/orders outlet aux, component unknown/);
+  assert.match(text, /Enumeration context not joined \(held only by S1; /);
+  const details = renderComposition(result, "details");
+  for (const listed of ["kafka orders", "Jobs.tick", "/orders (aux)", "shared-support"]) assert.ok(details.includes(listed), `${listed}:\n${details}`);
+});
+
+test("with no read that declares a subject, summary lists every enumerated observation", () => {
+  const text = renderComposition(resultOf([sourceFixture("entrypoints")]), "summary");
+  for (const listed of ["kafka orders", "Jobs.tick", "/orders (aux)"]) assert.ok(text.includes(listed), `${listed}:\n${text}`);
+  assert.doesNotMatch(text, /Enumeration context/);
+});
+
+test("summary opens with what was joined: connections per rule, then each source's holdings, then the connections themselves", () => {
+  const text = renderComposition(resultOf([sourceFixture("importers"), sourceFixture("entrypoints"), singleTargetCallers()]), "summary");
+  const all = lines(text);
+  assert.match(all[1] ?? "", /^Joined: reached-handler 1; S1 in no connection\.$/);
+  assert.match(text, /^S3 = callers\/local[^\n]*; holds [^\n]*1 entrypoint-reach$/m);
+  const firstConnection = all.findIndex((line) => /^C\d+ = /.test(line));
+  const firstOther = all.findIndex((line) => /^(N|L)\d+ = |^Context: /.test(line));
+  assert.ok(firstConnection > 0 && firstConnection < firstOther, text);
+  const alone = renderComposition(resultOf([sourceFixture("importers"), uniqueOutline()]), "summary");
+  assert.match(lines(alone)[1] ?? "", /^Joined: no connection; each source answers alone below\.$/);
+  const counted = renderComposition(resultOf([sourceFixture("importers"), sourceFixture("entrypoints")]), "summary");
+  assert.match(lines(counted)[1] ?? "", /^Joined: no connection with a read that declares a subject; each source answers alone below\.$/);
+});
+
+test("the first reference to a subject names it; later references use its label", () => {
+  const text = renderComposition(overlapResult, "details");
+  const route = labelOf(text, ["http GET /orders,"]);
+  const citing = lines(text).filter((line) => !line.trimStart().startsWith(`${route} = `) && new RegExp(`\\b${route}\\b`).test(line));
+  assert.ok(citing.length > 1, text);
+  assert.ok(citing[0]?.includes(`${route} GET /orders`), citing[0]);
+  for (const line of citing.slice(1)) assert.ok(!line.includes(`${route} GET /orders`), line);
+});
+
+test("a source the lead names in no connection supports no connection, listed or counted", () => {
+  for (const id of ["seven-families", "workspace-link-cut", "imports-vs-symbols"]) {
+    const { result } = realCase(id);
+    const lead = lines(renderComposition(result, "summary"))[1] ?? "";
+    const alone = /; (S[\d, S]+) in no connection\.$/.exec(lead)?.[1]?.split(", ") ?? [];
+    for (const label of alone) {
+      const source = result.graph.sources.find((candidate) => `S${candidate.requestIndex + 1}` === label);
+      assert.ok(source, label);
+      assert.equal(result.graph.connections.some((connection) => connection.supports.some((support) => support.source === source.id)), false, `${id}: ${label} in ${lead}`);
+    }
+  }
 });

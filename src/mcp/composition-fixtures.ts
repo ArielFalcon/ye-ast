@@ -333,7 +333,7 @@ export function sourceFixture(kind: FixtureKind, overrides?: AnyOverrides): Exec
     }
     case "outline": {
       const o = overrides as FixtureOverrides<OutlineValue, "outline"> | undefined;
-      return { family: "outline", query: query("outline", o?.arguments ?? { repo: "shop", revision: SHA_A, files: ["src/OrderController.java"] }), ...build(outlineValue, o) };
+      return { family: "outline", query: query("outline", o?.arguments ?? { repo: "shop", revision: SHA_A, files: ["src/OrderController.java"] }), ...build(outlineValue, o, { inputs: inputsOf({ declaredConfig: { files: ["src/OrderController.java"] } }) }) };
     }
     case "workspace": {
       const o = overrides as FixtureOverrides<PublicWorkspaceValue, "workspace"> | undefined;

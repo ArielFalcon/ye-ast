@@ -1,10 +1,12 @@
 /**
  * Deterministic text of a composition. Summary and details are self-sufficient: every subject they
- * cite is declared once in a local legend (S sources, V snapshots, N subjects, L relations, C connections), shared
- * context is printed once by exact equality, and every uncertainty stays next to what it limits. Summary counts what it
- * omits and names a navigation the requests really support; details lists every recorded observation compactly; full
- * only navigates the result JSON, never a second listing. No joins, no inference and no text interpretation: every
- * statement is a projection of the materialized tables.
+ * cite is declared once in a local legend (S sources, V snapshots, N subjects, L relations, C connections), the first
+ * reference to a subject carries its name beside its label, shared context is printed once by exact equality, and every
+ * uncertainty stays next to what it limits. Connections follow the source legend; summary opens with what was joined and
+ * states what each source holds. Summary counts what it omits, including the enumeration context: beside a read that
+ * declares a subject, what only reads declaring none hold and no listed connection cites. Details lists every recorded observation
+ * compactly; full only navigates the result JSON, never a second listing. No joins, no inference and no text
+ * interpretation: every statement is a projection of the materialized tables.
  */
 import type { Cut, Evidence } from "../core/domain/shared/fact.ts";
 import type { BasePath, BasePathKeys } from "../core/domain/entrypoints/http-route.ts";
@@ -72,6 +74,8 @@ const PART_ORDER: readonly PartKind[] = [
 const SUMMARY_COUNTED: ReadonlySet<PartKind> = new Set(["outline-declaration", "outline-file", "file-query"]);
 /** Families whose own summary lists cut places, so a composition summary lists them for their reads too. */
 const SUMMARY_LOCATED_CUTS: ReadonlySet<string | undefined> = new Set(["importers"]);
+/** Kinds a source line counts as its holdings; context, cost and bookkeeping parts are stated elsewhere. */
+const HELD_KINDS: readonly PartKind[] = [...PART_ORDER, "decision"];
 /** What a connection rule does not establish; a rule that only names its members has no warning. Stated once per rule. */
 const RULE_WARNING: Partial<Record<Connection["rule"], string>> = {
   "change-dependent": "a recorded dependence on a diff seed; not a proof of breakage",
@@ -115,6 +119,16 @@ class CompactView {
   private readonly omitted = new Map<string, number>();
   /** Caveats already stated: each relation kind and connection rule explains itself once. */
   private readonly noted = new Set<string>();
+  /** Subjects already named: each name is stated once, at the first reference. */
+  private readonly named = new Set<EntityId>();
+  /** Sources with a read that declares what it asks about: targets, files or a change selection. */
+  private readonly asking: ReadonlySet<SourceId>;
+  /** Summary beside an asking source: what only enumerating reads hold is context, counted unless a listed connection cites it. */
+  private readonly countsContext: boolean;
+  /** Connections the text lists, with their position in the connection table. */
+  private readonly listedConnections: readonly { connection: Connection; index: number }[];
+  private readonly joinedRelations: ReadonlySet<RelationId>;
+  private readonly unjoined = { sources: new Set<SourceId>(), connections: 0, relations: 0, observations: 0 };
 
   constructor(private readonly result: CompositionResult, private readonly details: boolean) {
     const graph = result.graph;
@@ -132,12 +146,20 @@ class CompactView {
       const snapshots = unique(entries.map((entry) => entry.snapshot));
       if (snapshots.length === 1 && snapshots[0] !== undefined) this.primary.set(repo, snapshots[0]);
     }
+    this.asking = new Set(graph.reads.filter((read) => declaresSubject(read)).map((read) => read.source));
+    this.countsContext = !details && this.asking.size > 0;
+    this.listedConnections = graph.connections.flatMap((connection, index) => {
+      if (this.asks(connection.supports)) return [{ connection, index }];
+      this.countContext(connection.supports, "connections");
+      return [];
+    });
+    this.joinedRelations = new Set(this.listedConnections.flatMap(({ connection }) => connection.relations));
   }
 
   render(): string[] {
     const { graph, counts } = this.result;
     this.claimSubjectParts();
-    const connections = graph.connections.map((connection, index) => this.connection(connection, index));
+    const connections = this.listedConnections.map(({ connection, index }) => this.connection(connection, index));
     const relations = this.relationLines();
     const findings = this.findingLines();
     const decisions = this.decisionLines();
@@ -146,11 +168,13 @@ class CompactView {
     const navigation = this.navigationLines();
     return [
       this.details ? "Composition details:" : `Composition summary (S# = requests[#-1]): ${counts.sources} sources, ${counts.entities} subjects, ${counts.relations} relations, ${counts.connections} connections, ${counts.parts} observations.`,
+      ...(this.details ? [] : [this.joinedLine()]),
       ...(this.result.verification.status === "available" ? [] : [verificationLine(this.result)]),
+      ...this.identityLines(),
+      ...connections,
       ...this.contextLines(),
       ...subjects,
       ...relations,
-      ...connections,
       ...section("Findings", findings),
       ...section("Decisions (recommendations are not user decisions, trust grants or approvals)", decisions),
       ...section("Coverage", coverage),
@@ -165,7 +189,18 @@ class CompactView {
     return source === undefined ? "S?" : `S${source.requestIndex + 1}`;
   }
 
-  private contextLines(): string[] {
+  /** Listed connections per rule in table order and the sources in no connection at all, or that nothing was joined. */
+  private joinedLine(): string {
+    if (this.listedConnections.length === 0) {
+      return `Joined: no connection${this.result.graph.connections.length === 0 ? "" : " with a read that declares a subject"}; each source answers alone below.`;
+    }
+    const rules = [...Map.groupBy(this.listedConnections, ({ connection }) => connection.rule)].map(([rule, members]) => `${rule} ${members.length}`);
+    const alone = this.result.graph.sources.toSorted((a, b) => a.requestIndex - b.requestIndex).filter((source) => !this.result.graph.connections.some((connection) => connection.supports.some((support) => support.source === source.id)));
+    return `Joined: ${rules.join(", ")}${alone.length === 0 ? "" : `; ${alone.map((source) => this.sourceLabel(source.id)).join(", ")} in no connection`}.`;
+  }
+
+  /** The snapshot and source legend every later line cites. */
+  private identityLines(): string[] {
     const { graph } = this.result;
     const lines = graph.snapshots.map((snapshot) => {
       const value = snapshot.value;
@@ -177,7 +212,12 @@ class CompactView {
     if (graph.snapshots.some((snapshot) => this.primary.get(snapshot.value.repo) !== snapshot.id)) {
       lines.push(`Unmarked locations: ${[...this.primary].toSorted(([a], [b]) => a.localeCompare(b)).map(([repo, snapshot]) => `${repo} ${this.snapshotLabels.get(snapshot)}`).join(", ") || "none"}; others are marked @V#.`);
     }
-    lines.push(...this.readContextLines());
+    return lines;
+  }
+
+  private contextLines(): string[] {
+    const { graph } = this.result;
+    const lines = this.readContextLines();
     for (const part of graph.parts) if (part.kind === "workspace-context") lines.push(`Workspace of ${this.supportLabels(part)}: ${this.workspaceContext(part)}`);
     lines.push(...this.deliveryLines());
     return lines;
@@ -249,8 +289,16 @@ class CompactView {
       config?.walk === undefined ? undefined : `walk ${Object.entries(config.walk).map(([key, value]) => `${key} ${value}`).join(", ")}`,
       config?.exportBudget === undefined ? undefined : `export budget ${config.exportBudget.maxEntries} entries/${config.exportBudget.maxBytes} bytes`,
       ...grouped.contexts.map((context, index) => `${grouped.rows.filter((row) => row.contextIndex === index).map((row) => this.readLabel(row.value.owner)).join(", ")}: ${context.mergeBase === undefined ? "no merge base" : `merge base ${context.mergeBase}`}, entrypoint changes: ${context.changedEntrypoints.state === "absent" ? "not provided" : context.changedEntrypoints.count}${context.changedContracts.state === "absent" ? "" : `, contract changes: ${context.changedContracts.count}`}`),
+      this.details ? undefined : this.holdings(source.id),
     ].filter((part) => part !== undefined);
     return `${label} = ${family}${repeat}: ${status}; ${vector}${extra.length === 0 ? "" : `; ${extra.join("; ")}`}`;
+  }
+
+  /** What the source holds, by observation kind, listed or counted. */
+  private holdings(source: SourceId): string {
+    const held = Map.groupBy(this.result.graph.parts.filter((part) => part.supports.some((support) => support.source === source)), (part) => part.kind);
+    const kinds = HELD_KINDS.flatMap((kind) => { const count = held.get(kind)?.length ?? 0; return count === 0 ? [] : [`${count} ${kind}`]; });
+    return `holds ${kinds.join(", ") || "no observation"}`;
   }
 
   /**
@@ -330,7 +378,23 @@ class CompactView {
     return file === undefined ? "?" : `${file.path}${this.context(file.origin)}`;
   }
 
+  /**
+   * A subject reference: its label, declared in the legend, and at its first reference its most qualified name, so the
+   * first line citing it reads without the legend. The legend states every alias.
+   */
   private entity(id: EntityId): string {
+    const label = this.label(id);
+    if (this.named.has(id)) return label;
+    this.named.add(id);
+    const entity = this.entities.get(id);
+    const names = entity === undefined ? [] : entity.kind === "entrypoint"
+      ? entity.parts.flatMap((part) => { const record = this.parts.get(part); return record?.kind === "entrypoint" ? [record.entry.name] : []; })
+      : entity.anchors.flatMap((anchor) => { const record = this.anchors.get(anchor); return record === undefined ? [] : [record.symbol]; });
+    const [name] = names.toSorted((a, b) => b.length - a.length || a.localeCompare(b));
+    return name === undefined ? label : `${label} ${name}`;
+  }
+
+  private label(id: EntityId): string {
     let label = this.entityLabels.get(id);
     if (label === undefined) {
       label = `N${this.entityLabels.size + 1}`;
@@ -338,8 +402,8 @@ class CompactView {
       const entity = this.entities.get(id);
       if (entity?.kind === "entrypoint") for (const part of entity.parts) this.covered.add(part);
       if (entity?.kind === "declaration") for (const part of entity.declarations) this.covered.add(part);
-      if (entity?.kind === "entrypoint" && entity.identity.kind !== "ui-route") this.entity(entity.identity.handler);
-      if (entity?.kind === "entrypoint" && entity.identity.kind === "ui-route" && entity.identity.component !== "unknown") this.entity(entity.identity.component);
+      if (entity?.kind === "entrypoint" && entity.identity.kind !== "ui-route") this.label(entity.identity.handler);
+      if (entity?.kind === "entrypoint" && entity.identity.kind === "ui-route" && entity.identity.component !== "unknown") this.label(entity.identity.component);
     }
     return label;
   }
@@ -573,7 +637,16 @@ class CompactView {
   }
 
   private relationLines(): string[] {
-    return this.result.graph.relations.map((relation, index) => `L${index + 1} = ${this.relationText(relation)} [${this.attestations(relation.attestations)}]${this.note(relation.value.kind, RELATION_NOTE[relation.value.kind])}`);
+    return this.result.graph.relations.flatMap((relation, index) => {
+      const supports = relation.attestations.flatMap((attestation) => attestation.reads.flatMap((id) => { const read = this.reads.get(id); return read === undefined ? [] : [{ source: read.source }]; }));
+      if (this.joinedRelations.has(relation.id) || this.asks(supports)) return [this.relationLine(relation, index)];
+      this.countContext(supports, "relations");
+      return [];
+    });
+  }
+
+  private relationLine(relation: RelationRecord, index: number): string {
+    return `L${index + 1} = ${this.relationText(relation)} [${this.attestations(relation.attestations)}]${this.note(relation.value.kind, RELATION_NOTE[relation.value.kind])}`;
   }
 
   private relationText(relation: RelationRecord): string {
@@ -618,7 +691,10 @@ class CompactView {
         this.omitted.set(`${kind} observations`, parts.length);
         continue;
       }
-      for (const part of parts) lines.push(`  ${this.describe(part)} [${this.supportLabels(part)}]`);
+      for (const part of parts) {
+        if (lacksSubject(part) || this.asks(part.supports)) lines.push(`  ${this.describe(part)} [${this.supportLabels(part)}]`);
+        else this.countContext(part.supports, "observations");
+      }
     }
     const costs = this.result.graph.parts.filter((part): part is PartOf<"walk-cost"> => part.kind === "walk-cost");
     if (this.details) {
@@ -687,9 +763,36 @@ class CompactView {
       this.omitted.set("evidence coordinates", graph.evidence.length);
       const counted = [...this.omitted].filter(([, count]) => count > 0).map(([name, count]) => `${name}: ${count}`);
       if (counted.length > 0) lines.push(`Omitted from summary (recorded objects): ${counted.join("; ")}; details lists them.`);
+      const { sources, ...unjoined } = this.unjoined;
+      const tallied = Object.entries(unjoined).filter(([, count]) => count > 0).map(([name, count]) => `${name} ${count}`);
+      if (tallied.length > 0) {
+        const held = this.result.graph.sources.filter((source) => sources.has(source.id)).toSorted((a, b) => a.requestIndex - b.requestIndex).map((source) => this.sourceLabel(source.id));
+        lines.push(`Enumeration context not joined (held only by ${held.join(", ")}; no target, file or change declared): ${tallied.join(", ")}; details lists them.`);
+      }
     }
     return lines;
   }
+
+  /** Whether a record is listed: always outside the context count, otherwise when a source that asks supports it. */
+  private asks(supports: readonly { source: SourceId }[]): boolean {
+    return !this.countsContext || supports.some((support) => this.asking.has(support.source));
+  }
+
+  private countContext(supports: readonly { source: SourceId }[], kind: "connections" | "relations" | "observations"): void {
+    for (const support of supports) this.unjoined.sources.add(support.source);
+    this.unjoined[kind] += 1;
+  }
+}
+
+/** An observation no connection rule can join for lack of a subject: an unknown finding, a UI route with no known component. */
+function lacksSubject(part: Part): boolean {
+  return part.kind === "unknown-finding" || (part.kind === "entrypoint" && part.entry.kind === "ui-route" && part.entry.component === "unknown");
+}
+
+/** A read asks about a subject when it declares targets, files or a change selection; a read declaring none enumerates. */
+function declaresSubject(read: ReadRecord): boolean {
+  const config = read.inputs.declaredConfig;
+  return config.targets !== undefined || config.files !== undefined || config.changed !== undefined;
 }
 
 function section(title: string, lines: readonly string[]): string[] {

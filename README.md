@@ -418,7 +418,7 @@ How to read it by mode:
 
 | `mode` | Returns |
 |---|---|
-| `summary`, `details` | Presentation text explaining findings, source states and every material limit, then a `result JSON:` line with a `composition-receipt`: version, mode, verification and the complete safe repeat queries. `S1` in the text names `requests[0]`, and so on. |
+| `summary`, `details` | Presentation text explaining findings, source states and every material limit, then a `result JSON:` line with a `composition-receipt`: version, mode, verification and the complete safe repeat queries. `S1` in the text names `requests[0]`, and so on. Connections come right after the sources, and a subject reference carries its name beside its label. `summary` opens with a `Joined:` line (connections per rule, the sources in no connection) and what each source holds. When a query declares a subject (`targets`, `files` or `changed`), `summary` counts, instead of listing, what only queries without one (`entrypoints`, `workspace` map) hold and no listed connection cites; unknown findings stay listed and `details` lists everything. |
 | `full` | `kind: "composition"` with normalized tables under `graph`, source states and issues under `coverage`, and repeat queries under `requests`. Every producer, engine, read and support is retained. |
 
 There is no `select` or pagination on compose: for more evidence about one source, run the original tool with its
