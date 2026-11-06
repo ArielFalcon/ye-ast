@@ -48,7 +48,7 @@ import { edgeKey, type InboundEdges } from "./inbound-edges.ts";
 import { memberProofContextOf, referenceProofsOf, sourceFilesOf, type ReferenceProofs } from "./reference-origins.ts";
 import { walkImpact, type Walk } from "./walk.ts";
 import type { ImportOrigins, ImportOriginsReader } from "../../ports/import-origins.port.ts";
-import { isBoundOutside } from "../../domain/impact/edge-policy.ts";
+import { createEdgeTargets, type EdgeTargets } from "./edge-targets.ts";
 import type { ContractRoutes } from "../../ports/contract-routes.port.ts";
 import { containmentTree } from "../navigation/containment-tree.ts";
 import { prepareCommit } from "../snapshot/prepared-snapshot.ts";
@@ -498,8 +498,8 @@ async function impactOf(input: WalkInput): Promise<ImpactRead> {
   const seeds = chosen.toSorted((a, b) => comparePosition(a.symbol, b.symbol));
   const sourceFiles = sourceFilesOf(headTree);
   const unresolved = store.unresolvedReferences(sourceFiles);
-  const build = (outside: ReadonlySet<string>): InboundEdges => inboundEdgesOf(store, { relations: found, fields, locals, memberUses }, input.proofs, outside);
-  const { inbound, walk } = await walkInside(seeds.map(({ symbol }) => symbol), build, input.budget, input.origins, input.signal);
+  const build = (dropped: ReadonlySet<string>): InboundEdges => inboundEdgesOf(store, { relations: found, fields, locals, memberUses }, input.proofs, dropped);
+  const { inbound, walk } = await walkInside(seeds.map(({ symbol }) => symbol), build, input.budget, input.origins === undefined ? undefined : createEdgeTargets(input.origins), input.signal);
 
   const walked = walk.reached.map(({ symbol }) => symbol);
   const reachedIds = new Set(walked.map((symbol) => symbol.id));
@@ -550,22 +550,24 @@ async function impactOf(input: WalkInput): Promise<ImpactRead> {
 }
 
 /**
- * Walks from the seeds without the edges whose name is rooted outside the repository. Only the edges a walk read are
- * checked; when one is dropped the walk runs again, because a bound it frees can read edges no earlier walk read.
+ * Walks from the seeds with the edges as `EdgeTargets` judges them. Only the edges a walk read are judged; when one is
+ * dropped the walk runs again, because a bound it frees can read edges no earlier walk read.
  */
-async function walkInside(seeds: readonly GraphSymbol[], build: (outside: ReadonlySet<string>) => InboundEdges, budget: ImpactBudget, origins?: ImportOrigins, signal?: AbortSignal): Promise<{ inbound: InboundEdges; walk: Walk }> {
-  const outside = new Set<string>();
+async function walkInside(seeds: readonly GraphSymbol[], build: (dropped: ReadonlySet<string>) => InboundEdges, budget: ImpactBudget, targets?: EdgeTargets, signal?: AbortSignal): Promise<{ inbound: InboundEdges; walk: Walk }> {
+  const dropped = new Set<string>();
   const checked = new Set<string>();
   for (;;) {
-    const inbound = build(outside);
+    const inbound = build(dropped);
     const walk = walkImpact(seeds, inbound, budget);
-    const fresh = inbound.followed().filter(({ edge }) => edge.line !== null && edge.column !== null && !checked.has(edgeKey(edge)));
-    if (origins === undefined || fresh.length === 0 || signal?.aborted) return { inbound, walk };
+    const fresh = inbound.followed().filter(({ edge }) => !checked.has(edgeKey(edge)));
+    if (targets === undefined || fresh.length === 0 || signal?.aborted) return { inbound, walk };
     for (const { edge } of fresh) checked.add(edgeKey(edge));
-    const roots = await origins.rootOrigins(fresh.map(({ edge, source, target }) => ({ file: source.file, line: edge.line!, column: edge.column! + 1, kind: edge.kind, name: target.name })), signal);
-    const dropped = fresh.filter((_, index) => roots[index] !== undefined && isBoundOutside(roots[index]!));
-    if (dropped.length === 0) return { inbound, walk };
-    for (const { edge } of dropped) outside.add(edgeKey(edge));
+    const verdicts = await targets.verdictsOf(fresh, signal);
+    const before = dropped.size;
+    fresh.forEach(({ edge }, index) => {
+      if (verdicts[index]!.kind === "drop") dropped.add(edgeKey(edge));
+    });
+    if (dropped.size === before) return { inbound, walk };
   }
 }
 

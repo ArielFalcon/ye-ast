@@ -18,9 +18,9 @@ export interface RelationOrigins {
 /**
  * What depends on a symbol of the snapshot: the code graph's edges with the injection and template relations and the
  * calls made through fields and locals the extractor placed. Test files never depend on anything, and neither does an edge
- * of `outside` (`edgeKey`), whose name is rooted outside the repository.
+ * of `dropped` (`edgeKey`), which `EdgeTargets` judged to reach no declaration it names.
  */
-export function inboundEdgesOf(store: CodeGraphReader, origins: RelationOrigins, proofs?: Pick<ReferenceProofs, "validOccurrences" | "thisMemberCalls">, outside?: ReadonlySet<string>): InboundEdges & InboundOccurrences {
+export function inboundEdgesOf(store: CodeGraphReader, origins: RelationOrigins, proofs?: Pick<ReferenceProofs, "validOccurrences" | "thisMemberCalls">, dropped?: ReadonlySet<string>): InboundEdges & InboundOccurrences {
   const isTest = (path: string): boolean => kindOfChangedFile(path) === "test";
-  return createInboundEdges(store, isTest, origins.relations.flatMap((finding) => (finding.status === "complete" ? [finding.value] : [])), origins.fields, origins.locals, proofs?.validOccurrences ?? new Set(), origins.memberUses, proofs?.thisMemberCalls, outside);
+  return createInboundEdges(store, isTest, origins.relations.flatMap((finding) => (finding.status === "complete" ? [finding.value] : [])), origins.fields, origins.locals, proofs?.validOccurrences ?? new Set(), origins.memberUses, proofs?.thisMemberCalls, dropped);
 }

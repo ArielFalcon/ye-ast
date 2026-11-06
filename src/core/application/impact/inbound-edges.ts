@@ -67,7 +67,7 @@ export interface InboundEdges {
   /** Candidate-specific settlements, restricted to admitted expansions and reached sources when sets are supplied. */
   settledUses(expanded?: ReadonlySet<GraphNodeId>, reached?: ReadonlySet<GraphNodeId>): ReadonlySet<string>;
   memberProofs(expanded?: ReadonlySet<GraphNodeId>): MemberReferenceProofs;
-  /** Every edge read so far into a symbol, with both ends, before `outside` is applied to it. */
+  /** Every edge read so far into a symbol, with both ends, before `dropped` is applied to it. */
   followed(): readonly FollowedEdge[];
 }
 
@@ -105,8 +105,8 @@ export function createInboundEdges(
   validOccurrences?: ReadonlySet<string>,
   memberUses?: readonly MemberUseOrigin[],
   thisMemberCalls: ReadonlySet<string> = new Set(),
-  /** The edges, by `edgeKey`, whose name is rooted outside the repository: none of them is a dependence. */
-  outside: ReadonlySet<string> = new Set(),
+  /** The edges, by `edgeKey`, that `EdgeTargets` judged to reach no declaration they name: none of them is a dependence. */
+  dropped: ReadonlySet<string> = new Set(),
 ): InboundEdges & InboundOccurrences {
   const relationsByTargetFile = Map.groupBy(relations, (candidate) => candidate.to.path);
   /** The local names more than one owner of one file declares: an ambiguous name settles nothing. */
@@ -154,7 +154,7 @@ export function createInboundEdges(
         return source === undefined || source.id === target.id ? [] : [{ edge, source }];
       });
       for (const { edge, source } of placed) followed.push({ edge, source, target });
-      into = placed.filter(({ edge }) => !outside.has(edgeKey(edge)));
+      into = placed.filter(({ edge }) => !dropped.has(edgeKey(edge)));
       intoCache.set(target.id, into);
     }
     return into;
