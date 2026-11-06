@@ -86,6 +86,7 @@ export interface FlowNext {
 
 export const FRONTIER_CAUSES = [
   "link-basis",
+  "no-call-site",
   "no-caller",
   "unresolved-caller",
   "ambiguous-caller",

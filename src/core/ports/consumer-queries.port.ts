@@ -9,7 +9,11 @@ export interface ConsequencesRequest extends WorkspaceRequest {
   hypothesis: HypothesisInput;
 }
 
-export type ConsequencesFault = WorkspaceFault | { kind: "invalid-hypothesis"; detail: string; refusal: HypothesisRefusal };
+export type ConsequencesFault =
+  | WorkspaceFault
+  | { kind: "invalid-hypothesis"; detail: string; refusal: HypothesisRefusal }
+  /** No repository of the workspace serves the operation, so there is no contract to change. */
+  | { kind: "unknown-operation"; detail: string; operation: string };
 
 export interface ConsumerQueries {
   /**

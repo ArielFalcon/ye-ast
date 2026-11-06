@@ -8,7 +8,9 @@ import { compareText } from "../../domain/shared/code-node.ts";
 import { withCuts, type Cut, type Evidence, type Fact, type Finding } from "../../domain/shared/fact.ts";
 import type { LinkBasis } from "../../domain/topology/link.ts";
 import type { ConsumerQueries } from "../../ports/consumer-queries.port.ts";
+import type { ConsequencesFault } from "../../ports/consumer-queries.port.ts";
 import type { ConsumerSession, ConsumerSources } from "../../ports/consumer-sources.port.ts";
+import type { Result } from "../../domain/shared/result.ts";
 import type { ConsequencesValue } from "../../domain/contracts/consequence-fact.ts";
 
 /** The bases that say the call reaches this operation; the others say it may, and are reported where they stop. */
@@ -29,13 +31,15 @@ export function createConsumerQueries({ sources }: ConsumerQueriesDeps): Consume
       const parsed = parseHypothesis(request.hypothesis);
       if (!parsed.ok) return { ok: false, fault: { kind: "invalid-hypothesis", detail: parsed.fault.detail, refusal: parsed.fault } };
       const hypothesis = parsed.value;
-      return sources.withSession({ ...request, hypothesis }, async (session) => consequencesOf(session, hypothesis));
+      const answered = await sources.withSession({ ...request, hypothesis }, async (session) => consequencesOf(session, hypothesis));
+      return answered.ok ? answered.value : answered;
     },
   };
 }
 
-function consequencesOf(session: ConsumerSession, hypothesis: Hypothesis): Fact<ConsequencesValue> {
+function consequencesOf(session: ConsumerSession, hypothesis: Hypothesis): Result<Fact<ConsequencesValue>, ConsequencesFault> {
   const operation = `${hypothesis.method} ${hypothesis.path}`;
+  if (session.serving.length === 0) return { ok: false, fault: { kind: "unknown-operation", detail: `no repository of the workspace serves ${operation}`, operation } };
   const findings: Finding<UseConsequence>[] = [];
   const cuts: Cut[] = [...session.cuts];
   const queue: Pending[] = [];
@@ -52,6 +56,10 @@ function consequencesOf(session: ConsumerSession, hypothesis: Hypothesis): Fact<
     } else {
       findings.push(frontierItem({ at, cause: "link-basis", reason: "unresolved", detail: basis, hops: [] }, []));
     }
+  }
+
+  if (links.length === 0) {
+    for (const { handler } of session.serving) findings.push(frontierItem({ at: { path: handler.path, line: handler.line }, cause: "no-call-site", reason: "unresolved", hops: [] }, []));
   }
 
   const seen = new Map<string, AccessPath>();
@@ -86,7 +94,7 @@ function consequencesOf(session: ConsumerSession, hypothesis: Hypothesis): Fact<
     assumedOldGuarantee: OLD_GUARANTEE,
     findings: findings.sort(compareFindings),
   };
-  return withCuts({ ...session.base, evidence: sites.sort(compareEvidence) }, value, cuts);
+  return { ok: true, value: withCuts({ ...session.base, evidence: sites.sort(compareEvidence) }, value, cuts) };
 }
 
 function read(session: ConsumerSession, carrier: Carrier): FlowResult {
@@ -103,30 +111,25 @@ function callersOf(session: ConsumerSession, carrier: Carrier, chain: readonly H
   if (site.kind !== "return") return { next: [], frontiers: [] };
   const declaration = { path: site.file, line: site.line };
   const stop = (frontier: FlowFrontier) => ({ next: [], frontiers: [frontierItem(frontier, chain)] });
-  const graph = session.graph(site.repo);
-  if (graph === undefined) return stop({ at: declaration, cause: "graph-unavailable", reason: "index-unavailable", hops: [] });
-  const symbol = graph
-    .symbolsInFiles([site.file])
-    .filter((candidate) => candidate.name === site.symbol && candidate.startLine <= site.line && site.line <= candidate.endLine)
-    .sort((a, b) => a.endLine - a.startLine - (b.endLine - b.startLine))[0];
-  if (symbol === undefined) return stop({ at: declaration, cause: "unresolved-caller", reason: "unresolved", hops: [] });
+  const found = session.callers(site);
+  if (found.kind === "unavailable") return stop({ at: declaration, cause: "graph-unavailable", reason: "index-unavailable", hops: [] });
+  if (found.kind === "unresolved") return stop({ at: declaration, cause: "unresolved-caller", reason: "unresolved", hops: [] });
+  if (found.callers.length === 0) return continuesElsewhere ? { next: [], frontiers: [] } : stop({ at: declaration, cause: "no-caller", reason: "unresolved", hops: [] });
 
-  const edges = graph.incomingEdges([symbol.id], ["calls"]);
-  if (edges.length === 0) return continuesElsewhere ? { next: [], frontiers: [] } : stop({ at: declaration, cause: "no-caller", reason: "unresolved", hops: [] });
-
-  const callers = new Map(graph.symbolsByIds(edges.map((edge) => edge.source)).map((caller) => [caller.id, caller]));
   const next: Pending[] = [];
   const frontiers: Finding<UseConsequence>[] = [];
-  for (const edge of edges) {
-    const caller = callers.get(edge.source);
-    const at = { path: caller?.file ?? site.file, line: edge.line ?? caller?.startLine ?? site.line };
-    if (caller === undefined || edge.line === null) {
-      frontiers.push(frontierItem({ at, cause: "unresolved-caller", reason: "unresolved", hops: [] }, chain));
-    } else if (edge.provenance === "heuristic") {
-      frontiers.push(frontierItem({ at, cause: "ambiguous-caller", reason: "unresolved", hops: [] }, chain));
-    } else {
-      const call = { kind: "call-result" as const, repo: site.repo, file: caller.file, line: edge.line, callee: site.symbol, ...(edge.column === null ? {} : { column: edge.column }) };
-      next.push({ carrier: { site: call, path: carrier.path }, chain: [...chain, { step: "caller", evidence: at }] });
+  for (const caller of found.callers) {
+    const line = caller.lines[0];
+    const at = { path: caller.resource ?? caller.file, line: line ?? caller.line };
+    const frontier = (cause: FlowFrontier["cause"], detail?: string) => frontiers.push(frontierItem({ at, cause, reason: "unresolved", ...(detail === undefined ? {} : { detail }), hops: [] }, chain));
+    if (caller.resource !== undefined) frontier("unmodelled-flow", "template-caller");
+    else if (!caller.proven) frontier("ambiguous-caller");
+    else if (line === undefined) frontier("unresolved-caller");
+    else {
+      for (const callLine of caller.lines) {
+        const call = { kind: "call-result" as const, repo: site.repo, file: caller.file, line: callLine, callee: site.symbol };
+        next.push({ carrier: { site: call, path: carrier.path }, chain: [...chain, { step: "caller", evidence: { path: caller.file, line: callLine } }] });
+      }
     }
   }
   return { next, frontiers };

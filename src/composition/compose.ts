@@ -254,7 +254,7 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
     } });
     return measurement === undefined ? operationImpact : measuredImpact(operationImpact, measurement);
   } });
-  const consumers = composeConsumerQueries({ operation, heads: headDeps, digest });
+  const consumers = composeConsumerQueries({ operation, heads: headDeps, digest, importOrigins: (sources: readonly SourceFile[]) => createImportOrigins(sources) });
   const bareDecisions = createCapturedDecisionQueries({ operation, defaults, vcs, digest });
   const decisions = measurement === undefined ? bareDecisions : measuredDecisions(bareDecisions, measurement);
   return { version, entrypoints, impact, outline, workspace, workspaceImpact, consumers, decisions, redaction, repositoryName: (repo, signal) => vcs.repositoryName(repo, signal), canonicalRepositoryRoot: (repo, signal) => vcs.canonicalRoot(repo, signal), warmLive };

@@ -1,10 +1,9 @@
-import type { FlowResult } from "../../domain/contracts/consumer-flow.ts";
+import { NO_FLOW, type FlowResult } from "../../domain/contracts/consumer-flow.ts";
 import type { AngularMetadataReader } from "../../ports/angular-metadata.port.ts";
 import type { ConsumerTemplateReader } from "../../ports/consumer-template.port.ts";
 import type { TemplateFlowReader } from "../../ports/consumer-template-flow.port.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
-import type { TemplateUnit, TemplateUsageReader } from "../../ports/template-usage.port.ts";
-import { createAngularRelationExtractor } from "../relations/angular-relations.ts";
+import { templateUnitsOf } from "../relations/angular-relations.ts";
 
 export interface ConsumerTemplatesDeps {
   metadata: AngularMetadataReader;
@@ -13,24 +12,19 @@ export interface ConsumerTemplatesDeps {
 
 /**
  * Follows a component member into the template of its owner. The templates and their scopes are the units the Angular
- * relation extractor builds for the same sources; a component whose template is missing or unreadable has no unit and
- * is a frontier.
+ * relation extractor builds for the same sources. A class that is not a component has no template to follow; a component
+ * whose template is missing or unreadable is a frontier at the component.
  */
 export async function createConsumerTemplateReader(deps: ConsumerTemplatesDeps, files: readonly SourceFile[]): Promise<ConsumerTemplateReader> {
-  let units: readonly TemplateUnit[] = [];
-  const recorder: TemplateUsageReader = {
-    read: (found) => {
-      units = found;
-      return [];
-    },
-    effects: () => ({ calls: [], writes: [], passed: [] }),
-  };
-  await createAngularRelationExtractor({ metadata: deps.metadata, templates: recorder }).extract(files);
+  const { classes } = await deps.metadata.read(files);
+  const { units } = templateUnitsOf(classes, new Map(files.map((file) => [file.path, file.content])));
   return {
     follow(carrier) {
       const { site } = carrier;
       const unit = units.find(({ component }) => component.path === site.file && component.symbol === site.owner);
-      return unit === undefined ? unreadable(site.file, site.line ?? 1) : deps.flow.follow(unit, carrier);
+      if (unit !== undefined) return deps.flow.follow(unit, carrier);
+      const component = classes.find((candidate) => candidate.kind === "component" && candidate.ref.path === site.file && candidate.ref.symbol === site.owner);
+      return component === undefined ? NO_FLOW : unreadable(component.ref.path, component.ref.line);
     },
   };
 }

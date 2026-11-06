@@ -1,13 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { fakeCodeGraph, fakeNode, type FakeEdge, type FakeNode } from "../impact/fake-code-graph.testing.ts";
 import { parseAccessPath } from "../../domain/contracts/access-path.ts";
 import { carrierKey, NO_FLOW, type Carrier, type FlowResult, type FlowUse } from "../../domain/contracts/consumer-flow.ts";
 import type { Guard } from "../../domain/contracts/verdict.ts";
 import type { FactBase } from "../../domain/shared/fact.ts";
 import type { Link } from "../../domain/topology/link.ts";
 import type { ConsequencesRequest, ConsumerQueries } from "../../ports/consumer-queries.port.ts";
-import type { ConsumerSession } from "../../ports/consumer-sources.port.ts";
+import type { ConsumerCaller, ConsumerCallers, ConsumerSession } from "../../ports/consumer-sources.port.ts";
 import { createConsumerQueries } from "./consumer-queries.ts";
 
 const path = (text: string) => parseAccessPath(text)!;
@@ -42,9 +41,8 @@ interface Setup {
   links?: readonly Link[];
   flow?: Record<string, FlowResult>;
   templates?: Record<string, FlowResult>;
-  nodes?: FakeNode[];
-  edges?: FakeEdge[];
-  withGraph?: boolean;
+  callers?: Record<string, ConsumerCallers>;
+  serving?: ConsumerSession["serving"];
   property?: string;
   change?: string;
 }
@@ -53,12 +51,12 @@ function setup(options: Setup = {}) {
   const followed: Carrier[] = [];
   const templated: Carrier[] = [];
   const opened: string[] = [];
-  const graph = fakeCodeGraph(options.nodes ?? [], options.edges ?? []);
   const session: ConsumerSession = {
     base: BASE,
     links: options.links ?? [link()],
+    serving: options.serving ?? [{ repo: "api", handler: { path: "Owners.java", symbol: "get", line: 5 } }],
     cuts: [],
-    graph: () => (options.withGraph === false ? undefined : graph),
+    callers: (declaration) => options.callers?.[declaration.symbol] ?? { kind: "found", callers: [] },
     flow: { follow: (carrier) => (followed.push(carrier), options.flow?.[carrierKey(carrier.site)] ?? NO_FLOW) },
     templates: { follow: (carrier) => (templated.push(carrier), options.templates?.[carrierKey(carrier.site)] ?? NO_FLOW) },
   };
@@ -140,45 +138,57 @@ test("every qualified basis is followed", async () => {
   assert.equal(followed.length, 3);
 });
 
-test("a function return continues at each resolved caller, and the caller is a hop of the chain", async () => {
-  const nodes = [fakeNode("find", "method", "src/owner.service.ts", 8, 14, "find"), fakeNode("load", "method", "src/page.ts", 20, 30, "load")];
-  const edges = [{ from: "load", to: "find", kind: "calls", line: 25 }];
-  const caller = { kind: "call-result" as const, repo: "web", file: "src/page.ts", line: 25, callee: "find" };
-  const flow = {
-    [carrierKey(siteOf())]: { uses: [], next: [{ carrier: { site: returnOf(), path: path("address") }, hops: [{ step: "return" as const, evidence: { path: "src/owner.service.ts", line: 12 } }] }], frontiers: [] },
-    [carrierKey(caller)]: { uses: [use(26, { operation: "dereference" })], next: [], frontiers: [] },
-  };
-  const fact = await setup({ flow, nodes, edges }).ask();
+const returning = (symbol = "find") => ({ [carrierKey(siteOf())]: { uses: [], next: [{ carrier: { site: returnOf(symbol), path: path("address") }, hops: [{ step: "return" as const, evidence: { path: "src/owner.service.ts", line: 12 } }] }], frontiers: [] } });
+const caller = (overrides: Partial<ConsumerCaller> = {}): ConsumerCaller => ({ file: "src/page.ts", line: 20, lines: [25], proven: true, ...overrides });
 
-  const found = fact.value.findings[0];
-  assert.ok(found?.status === "complete");
-  assert.deepEqual(found.value.chain.map((hop) => hop.step), ["http-call", "return", "caller", "subscribe"]);
+test("a function return continues at each line of each resolved caller, and the caller is a hop of the chain", async () => {
+  const flow = {
+    ...returning(),
+    [carrierKey({ kind: "call-result", repo: "web", file: "src/page.ts", line: 25, callee: "find" })]: { uses: [use(26, { operation: "dereference" })], next: [], frontiers: [] },
+    [carrierKey({ kind: "call-result", repo: "web", file: "src/page.ts", line: 27, callee: "find" })]: { uses: [use(28, { operation: "dereference" })], next: [], frontiers: [] },
+  };
+  const callers = { find: { kind: "found" as const, callers: [caller({ lines: [25, 27] })] } };
+
+  const fact = await setup({ flow, callers }).ask();
+
+  assert.deepEqual(fact.value.findings.map((finding) => finding.status === "complete" && finding.value.chain.map((hop) => [hop.step, hop.evidence.line])), [
+    [["http-call", 10], ["return", 12], ["caller", 25], ["subscribe", 26]],
+    [["http-call", 10], ["return", 12], ["caller", 27], ["subscribe", 28]],
+  ]);
 });
 
-test("a caller the graph resolves only by heuristic or without a position is a frontier, not a continuation", async () => {
-  const nodes = [fakeNode("find", "method", "src/owner.service.ts", 8, 14, "find"), fakeNode("a", "method", "src/a.ts", 1, 9), fakeNode("b", "method", "src/b.ts", 1, 9)];
-  const edges = [{ from: "a", to: "find", kind: "calls", line: 4, provenance: "heuristic" as const }, { from: "b", to: "find", kind: "calls" }];
-  const flow = { [carrierKey(siteOf())]: { uses: [], next: [{ carrier: { site: returnOf(), path: path("address") }, hops: [] }], frontiers: [] } };
-  const { ask, followed } = setup({ flow, nodes, edges });
+test("a caller that is not a proven call, has no position, or sits in a template is a frontier, not a continuation", async () => {
+  const callers = { find: { kind: "found" as const, callers: [caller({ file: "src/a.ts", line: 1, lines: [4], proven: false }), caller({ file: "src/b.ts", line: 1, lines: [] }), caller({ file: "src/c.ts", line: 1, lines: [6], resource: "src/c.html" })] } };
+  const { ask, followed } = setup({ flow: returning(), callers });
 
   const fact = await ask();
 
-  assert.deepEqual(verdictsOf(fact), ["ambiguous-caller", "unresolved-caller"]);
+  assert.deepEqual(verdictsOf(fact), ["ambiguous-caller", "unresolved-caller", "unmodelled-flow:template-caller"]);
+  assert.deepEqual(fact.value.findings.map((finding) => finding.evidence.at(-1)?.path), ["src/a.ts", "src/b.ts", "src/c.html"]);
   assert.deepEqual(followed.map((carrier) => carrier.site.kind), ["call-site", "return"]);
 });
 
 test("a function nothing calls, or one in a repository without a graph, is a frontier: an empty answer is never safe", async () => {
-  const flow = { [carrierKey(siteOf())]: { uses: [], next: [{ carrier: { site: returnOf(), path: path("address") }, hops: [] }], frontiers: [] } };
-  const nodes = [fakeNode("find", "method", "src/owner.service.ts", 8, 14, "find")];
-
-  assert.deepEqual(verdictsOf(await setup({ flow, nodes }).ask()), ["no-caller"]);
-  assert.deepEqual(verdictsOf(await setup({ flow, nodes, withGraph: false }).ask()), ["graph-unavailable"]);
+  assert.deepEqual(verdictsOf(await setup({ flow: returning() }).ask()), ["no-caller"]);
+  assert.deepEqual(verdictsOf(await setup({ flow: returning(), callers: { find: { kind: "unavailable" } } }).ask()), ["graph-unavailable"]);
 });
 
 test("a return whose function the graph does not know is an unresolved caller", async () => {
-  const flow = { [carrierKey(siteOf())]: { uses: [], next: [{ carrier: { site: returnOf("ghost"), path: path("address") }, hops: [] }], frontiers: [] } };
+  assert.deepEqual(verdictsOf(await setup({ flow: returning("ghost"), callers: { ghost: { kind: "unresolved" } } }).ask()), ["unresolved-caller"]);
+});
 
-  assert.deepEqual(verdictsOf(await setup({ flow }).ask()), ["unresolved-caller"]);
+test("an operation served but with no call site linked is one unknown item at its handler, never an empty answer", async () => {
+  const fact = await setup({ links: [] }).ask();
+
+  assert.deepEqual(verdictsOf(fact), ["no-call-site"]);
+  assert.deepEqual(fact.value.findings[0]?.evidence.map(({ path, line }) => [path, line]), [["Owners.java", 5]]);
+});
+
+test("an operation no repository serves is a typed fault", async () => {
+  const answer = await setup({ serving: [] }).queries.consequences(setup().request);
+
+  assert.ok(!answer.ok);
+  assert.equal(answer.fault.kind, "unknown-operation");
 });
 
 test("a flow that loops back to a boundary already followed terminates, following it once", async () => {

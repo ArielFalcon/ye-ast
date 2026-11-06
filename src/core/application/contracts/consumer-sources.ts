@@ -1,20 +1,31 @@
 import type { CarrierSite, FlowResult } from "../../domain/contracts/consumer-flow.ts";
 import { formatHypothesis } from "../../domain/contracts/hypothesis.ts";
 import { provenanceOf } from "../../domain/shared/fact.ts";
+import { compareText } from "../../domain/shared/code-node.ts";
+import type { CallSite, HttpTarget } from "../../domain/topology/call-site.ts";
 import { compositeBase } from "../../domain/topology/composite-inputs.ts";
 import type { Link } from "../../domain/topology/link.ts";
+import { matchCallSite } from "../../domain/topology/link-match.ts";
 import type { AngularMetadataReader } from "../../ports/angular-metadata.port.ts";
 import type { CodeGraphReader } from "../../ports/code-graph.port.ts";
+import type { InboundEdges } from "../impact/inbound-edges.ts";
 import type { ConsumerFlowReader } from "../../ports/consumer-flow.port.ts";
 import type { ConsumerSession, ConsumerSources } from "../../ports/consumer-sources.port.ts";
 import type { ConsumerTemplateReader } from "../../ports/consumer-template.port.ts";
 import type { TemplateFlowReader } from "../../ports/consumer-template-flow.port.ts";
+import type { WorkspaceRepository } from "../../ports/workspace-repos.port.ts";
 import type { Digest } from "../../ports/digest.port.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
+import type { RelationExtractor } from "../relations/relation-extractor.ts";
+import { inboundEdgesOf } from "../impact/inbound-origins.ts";
+import { memberProofContextOf, referenceProofsOf } from "../impact/reference-origins.ts";
+import type { ImportOriginsReader } from "../../ports/import-origins.port.ts";
 import { createHeadReader, type HeadReaderDeps } from "../snapshot/head-reading.ts";
 import { prepareCommit } from "../snapshot/prepared-snapshot.ts";
 import { ABORTED, declaredTrustOf, withScratch } from "../snapshot/read-snapshot.ts";
 import type { WorkspaceReadOperation } from "../topology/workspace-operation.ts";
+import { entrypointsOf } from "../topology/workspace-join.ts";
+import { callersOfFunction } from "./consumer-callers.ts";
 import { createConsumerTemplateReader } from "./consumer-templates.ts";
 
 export interface ConsumerSourcesDeps {
@@ -25,12 +36,17 @@ export interface ConsumerSourcesDeps {
   flow(files: readonly SourceFile[], repo: string): Promise<ConsumerFlowReader>;
   metadata: AngularMetadataReader;
   templateFlow: TemplateFlowReader;
+  /** The injection and template relations, fields and locals that let the callers of a function see calls made through `inject()`. */
+  relations: RelationExtractor;
+  /** Proves which unresolved references of the code graph are real occurrences; without it no call through an injected field or local is settled. */
+  importOrigins?: ImportOriginsReader;
 }
 
 interface Reading {
   flow: ConsumerFlowReader;
   templates: ConsumerTemplateReader;
   graph: CodeGraphReader | undefined;
+  inbound: InboundEdges | undefined;
 }
 
 /**
@@ -47,7 +63,10 @@ export function createConsumerSources(deps: ConsumerSourcesDeps): ConsumerSource
       const answered = await deps.operation.withRead(planning, async (read, context) => {
         const { fact } = read;
         if (fact.status === "unknown") return { ok: false as const, fault: { kind: "git-failed" as const, detail: "the workspace read answered nothing" } };
-        const { links } = fact.value;
+        const links = [...fact.value.links, ...ownLinks(fact.value.repositories)];
+        const serving = fact.value.repositories
+          .flatMap((repository) => entrypointsOf(repository).entrypoints.flatMap((entrypoint) => (entrypoint.kind === "http-route" && entrypoint.name === operation ? [{ repo: repository.repo, handler: entrypoint.handler }] : [])))
+          .sort((a, b) => compareText(a.repo, b.repo) || compareText(a.handler.path, b.handler.path) || a.handler.line - b.handler.line);
         const callers = new Set(links.filter((link) => isCallOf(link, operation)).map((link) => link.from.repo));
 
         return withScratch(deps.heads.scratch, async (directory) => {
@@ -65,10 +84,13 @@ export function createConsumerSources(deps: ConsumerSourcesDeps): ConsumerSource
               const indexed = await heads.indexHead(prepared.value.tree, prepared.value.root, directory, context.signal);
               if (indexed === "aborted") return ABORTED;
               if (indexed !== "unavailable") stores.push(indexed.store);
+              const origins = indexed === "unavailable" ? undefined : await deps.relations.extract(sources, { memberProofs: memberProofContextOf(loaded.value, context.scope) });
+              const proofs = indexed === "unavailable" ? undefined : await referenceProofsOf(deps.importOrigins, indexed.store, loaded.value, context.signal);
               readings.set(plan.at.repoId, {
                 flow: await deps.flow(sources, plan.at.repoId),
                 templates: await createConsumerTemplateReader({ metadata: deps.metadata, flow: deps.templateFlow }, sources),
                 graph: indexed === "unavailable" ? undefined : indexed.store,
+                inbound: indexed === "unavailable" || origins === undefined ? undefined : inboundEdgesOf(indexed.store, origins, proofs?.validOccurrences),
               });
             }
 
@@ -83,8 +105,12 @@ export function createConsumerSources(deps: ConsumerSourcesDeps): ConsumerSource
             const session: ConsumerSession = {
               base,
               links,
+              serving,
               cuts: fact.status === "partial" ? fact.cuts : [],
-              graph: (repo) => readings.get(repo)?.graph,
+              callers: ({ repo, ...declaration }) => {
+                const reading = readings.get(repo);
+                return callersOfFunction(reading?.graph, reading?.inbound, declaration);
+              },
               flow: { follow: (carrier) => readings.get(carrier.site.repo)?.flow.follow(carrier) ?? unread(carrier.site) },
               templates: { follow: (carrier) => readings.get(carrier.site.repo)?.templates.follow(carrier) ?? unread(carrier.site) },
             };
@@ -97,6 +123,21 @@ export function createConsumerSources(deps: ConsumerSourcesDeps): ConsumerSource
       return answered.ok ? { ok: true, value: answered.value.value } : answered;
     },
   };
+}
+
+/** The links the HTTP calls of a repository make to its own routes, which the workspace join leaves out. */
+function ownLinks(repositories: readonly WorkspaceRepository[]): Link[] {
+  return repositories.flatMap((repository) => {
+    const own = [entrypointsOf(repository)];
+    return repository.callSites.flatMap((site) => {
+      const target = httpTargetOf(site);
+      return target === undefined ? [] : (matchCallSite(site, target, own, []).links ?? []);
+    });
+  });
+}
+
+function httpTargetOf(site: CallSite): HttpTarget | undefined {
+  return site.transport === "http" && site.target.status === "complete" && "path" in site.target.value ? site.target.value : undefined;
 }
 
 function isCallOf(link: Link, operation: string): boolean {

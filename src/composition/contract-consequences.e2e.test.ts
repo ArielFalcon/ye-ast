@@ -125,12 +125,16 @@ function workspace(): void {
   commit("web", WEB);
 }
 
-async function consequences(change: string, repos: readonly string[] = ["web"], path = "/api/orders/{id}") {
-  const result = await composeQueries({ scratchRoot }).consumers.consequences({
-    repo: { path: join(root, "api"), id: "api" },
+function ask(change: string, repos: readonly string[] = ["web"], path = "/api/orders/{id}", bound = "api") {
+  return composeQueries({ scratchRoot }).consumers.consequences({
+    repo: { path: join(root, bound), id: bound },
     repos: repos.map((id) => ({ path: join(root, id), id })),
     hypothesis: { method: "GET", path, target: "response", property: "customer", change },
   });
+}
+
+async function consequences(change: string, repos: readonly string[] = ["web"], path = "/api/orders/{id}", bound = "api") {
+  const result = await ask(change, repos, path, bound);
   assert.ok(result.ok, JSON.stringify(result));
   assert.notEqual(result.value.status, "unknown");
   if (result.value.status === "unknown") throw new Error("unknown");  return result.value;
@@ -185,10 +189,53 @@ test("the answer declares the hypothesis in its config and leaves no scratch beh
   assert.deepEqual(readdirSync(scratchRoot), []);
 });
 
-test("an operation no call site reaches is an answer without findings, never a failure", async () => {
+const INJECTED_COMPONENT = COMPONENT.replace("  constructor(private service: OrderService) {}\n", "  private service = inject(OrderService);\n").replace('import { Component } from', 'import { Component, inject } from');
+
+test("a service the component reaches through inject() is a caller: the chain continues to the template", async () => {
+  commit("api", { "src/main/java/shop/Main.java": BOOT, "src/main/java/shop/OrdersController.java": CONTROLLER });
+  commit("web", { ...WEB, "src/app/order.component.ts": INJECTED_COMPONENT });
+
+  const fact = await consequences("nullable");
+
+  assert.equal(used(fact.value, lineOf(TEMPLATE, "order.customer.name"))?.verdict.kind, "incompatible");
+  assert.deepEqual(fact.value.findings.filter((finding) => finding.status === "unknown" && finding.evidence.at(-1)?.via === "no-caller"), []);
+});
+
+test("a frontend and its backend in one repository are linked: the repository's own calls reach its own routes", async () => {
+  const webapp = Object.fromEntries(Object.entries(WEB).map(([path, content]) => [`src/main/webapp/${path}`, content]));
+  commit("app", { "src/main/java/shop/Main.java": BOOT, "src/main/java/shop/OrdersController.java": CONTROLLER, ...webapp });
+
+  const fact = await consequences("nullable", [], "/api/orders/{id}", "app");
+
+  assert.equal(used(fact.value, lineOf(TEMPLATE, "order.customer.name"))?.verdict.kind, "incompatible");
+});
+
+test("an operation served but with no call site linked to it is one unknown item, never an empty answer", async () => {
+  commit("api", { "src/main/java/shop/Main.java": BOOT, "src/main/java/shop/OrdersController.java": CONTROLLER });
+
+  const fact = await consequences("nullable", []);
+
+  assert.equal(fact.value.findings.length, 1);
+  const [item] = fact.value.findings;
+  assert.ok(item?.status === "unknown");
+  assert.deepEqual(item.evidence.map(({ path, line, via }) => [path, line, via]), [["src/main/java/shop/OrdersController.java", lineOf(CONTROLLER, "@GetMapping("), "no-call-site"]]);
+});
+
+test("an operation no repository of the workspace serves is a typed fault, not an empty fact", async () => {
   workspace();
 
-  const fact = await consequences("nullable", ["web"], "/api/customers/{id}");
+  const result = await ask("nullable", ["web"], "/api/customers/{id}");
 
-  assert.deepEqual(fact.value.findings, []);
+  assert.ok(!result.ok);
+  assert.equal(result.fault.kind, "unknown-operation");
+});
+
+test("a value kept in a service field is not followed into a template: a class that is not a component has none", async () => {
+  const keeping = SERVICE.replace("  find(", "  last?: Order;\n\n  load(id: number): void {\n    this.http.get<Order>(`/api/orders/${id}`).subscribe((order) => {\n      this.last = order;\n    });\n  }\n\n  find(");
+  commit("api", { "src/main/java/shop/Main.java": BOOT, "src/main/java/shop/OrdersController.java": CONTROLLER });
+  commit("web", { ...WEB, [SERVICE_FILE]: keeping });
+
+  const fact = await consequences("nullable");
+
+  assert.deepEqual(fact.value.findings.filter((finding) => finding.status === "unknown" && finding.evidence.at(-1)?.via === "template-unreadable"), []);
 });
