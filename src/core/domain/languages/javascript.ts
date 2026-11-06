@@ -122,7 +122,7 @@ function equality(operator: EqualityOperator, left: unknown, right: unknown): bo
  */
 function holdsOn(test: Predicate, subject: Subject): boolean | undefined {
   if (subject.kind === "json" || subject.kind === "unknown") return undefined;
-  if (subject.kind === "value" && subject.exact) return applied(test, subject.value);
+  if (subject.kind === "value" && subject.exact) return comparesByConversion(test, subject.value) && converts(subject).kind !== "runs" ? undefined : applied(test, subject.value);
   const [value, without] = subject.kind === "function" ? [A_FUNCTION, NONE] : [subject.value, subject.without];
   /** True when no value the subject stands for equals `literal`, strictly or loosely when both are of one type. */
   const differs = (literal: Literal): boolean => typeof literal !== typeof value || without.includes(literal);
@@ -136,6 +136,11 @@ function holdsOn(test: Predicate, subject: Subject): boolean | undefined {
     default:
       return applied(test, value);
   }
+}
+
+/** A loose equality with a literal converts an object or array to a primitive first; with `null` or `undefined` it converts nothing. */
+function comparesByConversion(test: Predicate, value: unknown): boolean {
+  return test.kind === "literal" && !STRICT_OPERATORS.has(test.operator) && typeof value === "object" && value !== null;
 }
 
 function applied(test: Predicate, value: unknown): boolean {

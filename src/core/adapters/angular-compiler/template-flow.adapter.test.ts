@@ -503,6 +503,26 @@ test("each construct states what it does with the changed value: the accesses pa
   for (const [template, expected] of table) assert.deepEqual(follow(template, ["address"]).uses.map((use) => use.operation), [expected], template);
 });
 
+test("a read below the changed value ends in what the template does with the value it reaches, as the changed value itself would", () => {
+  const read = (...names: string[]) => names.map((name) => ({ kind: "member", name, optional: false }));
+  const none = { kind: "none" };
+  const table: [string, unknown][] = [
+    ["{{ 'k' in order().address.tags }}", { steps: read("tags"), end: { kind: "unmodelled", detail: "in" } }],
+    ["{{ other instanceof order().address.tags }}", { steps: read("tags"), end: { kind: "unmodelled", detail: "instanceof" } }],
+    ["{{ -order().address.zip.n }}", { steps: read("zip", "n"), end: { kind: "coerce", operator: "-" } }],
+    ["{{ order().address.n + 1 }}", { steps: read("n"), end: { kind: "coerce", operator: "+" } }],
+    ["@if (order().address.n == 1) {}", { steps: read("n"), end: { kind: "compare", operator: "==", literal: 1 } }],
+    ["@for (a of order().address.tags; track a) {}", { steps: read("tags"), end: { kind: "iterate", tolerates: ["null", "undefined"] } }],
+    ["{{ order().address.n }}", { steps: read("n"), end: none }],
+    ["{{ order().address.n | json }}", { steps: read("n"), end: none }],
+    ["{{ (order().address.n ?? 0) + 1 }}", { steps: read("n"), end: none }],
+    ["{{ helper.show(order().address.n) }}", { steps: read("n"), end: none }],
+    ["@if (order().address.n === null) {}", { steps: read("n"), end: none }],
+  ];
+
+  for (const [template, expected] of table) assert.deepEqual(follow(template, ["address"]).uses.map((use) => use.operation), [expected], template);
+});
+
 test("an assignment target on the changed value replaces it without reading it, and one beyond it is still a dereference", () => {
   const exact = follow('<p (click)="order.address = value"></p>', ["address"]);
   const beyond = follow('<p (click)="order.address.city = value"></p>', ["address"]);

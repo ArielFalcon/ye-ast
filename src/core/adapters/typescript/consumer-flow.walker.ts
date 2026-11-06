@@ -1,7 +1,7 @@
 import ts from "typescript";
 import { ELEMENT, relatePaths, rewritePath, startsWith, type AccessPath, type PathMapping } from "../../domain/contracts/access-path.ts";
 import { RESOURCE_STATE_MEMBERS, type CarrierSite, type FlowFrontier, type FlowNext, type FlowStep, type FlowUse, type FrontierCause, type Hop } from "../../domain/contracts/consumer-flow.ts";
-import type { Absence, AccessStep, EqualityOperator, Literal, Predicate, UseOperation } from "../../domain/contracts/use-operation.ts";
+import type { Absence, AccessStep, EqualityOperator, Literal, Predicate, UseEnd, UseOperation } from "../../domain/contracts/use-operation.ts";
 import type { FallbackGuard, Guard, TestedGuard, UntestedGuard } from "../../domain/contracts/verdict.ts";
 import type { Evidence, UnknownReason } from "../../domain/shared/fact.ts";
 import type { Origin, Program, Unit } from "./consumer-flow.index.ts";
@@ -282,7 +282,7 @@ export class Walker {
     if (relation === "disjoint") return;
     if (relation === "beyond") {
       const site = beyondAt ?? top;
-      this.dereference(site, t, q, chain, { steps, end: { kind: "none" } });
+      this.dereference(site, t, q, chain, { steps, end: this.operatorEnd(top) ?? { kind: "none" } });
       return;
     }
     if (discardsValue(top) && !(relation === "exact" && isNumericUnary(top.parent))) return;
@@ -366,9 +366,9 @@ export class Walker {
     if (ts.isSpreadAssignment(parent)) return this.frontier(parent, "unmodelled-flow", "object spread", t);
     if (ts.isForOfStatement(parent) && parent.expression === top) return this.iterate(parent, t);
     if (ts.isPropertyDeclaration(parent) && parent.initializer === top && ts.isIdentifier(parent.name)) return this.assignedToMember(parent.name.text, enclosingClass(parent), parent, this.hopped(t, "assign", parent));
-    if (exact && isNumericUnary(parent)) return this.use(parent, t, [], { steps: [], end: { kind: "coerce", operator: ts.tokenToString(parent.operator)! } }, t.guards);
-    if (ts.isTemplateSpan(parent)) return exact ? this.use(parent, t, [], { steps: [], end: { kind: "coerce", operator: "${}" } }, t.guards) : undefined;
-    if (exact && ts.isSwitchStatement(parent)) return this.use(parent, t, [], { steps: [], end: { kind: "compare", operator: "===" } }, t.guards);
+    const end = exact ? this.operatorEnd(top) : undefined;
+    if (end !== undefined) return this.use(parent, t, [], { steps: [], end }, t.guards);
+    if (ts.isTemplateSpan(parent)) return;
     if (exact) return this.use(parent, t, [], { steps: [], end: { kind: "unmodelled", detail: ts.SyntaxKind[parent.kind] } }, t.guards);
     this.frontier(parent, "unmodelled-flow", ts.SyntaxKind[parent.kind], t);
   }
@@ -383,15 +383,32 @@ export class Walker {
       return this.read(parent, this.hopped({ ...t, guards }, "fallback", parent));
     }
     if (operator === ts.SyntaxKind.AmpersandAmpersandToken) return this.read(parent, t);
-    if (!exact) return;
+    const end = exact ? this.operatorEnd(top) : undefined;
+    if (end !== undefined) this.use(parent, t, [], { steps: [], end }, t.guards);
+  }
+
+  /**
+   * What an operator does with the value `top` evaluates to, whether that value is the changed one or one read from it;
+   * `undefined` where the value flows on, is only tested, or is compared with an absence.
+   */
+  private operatorEnd(top: ts.Expression): UseEnd | undefined {
+    const parent = top.parent;
+    if (isNumericUnary(parent)) return { kind: "coerce", operator: ts.tokenToString(parent.operator)! };
+    if (discardsValue(top)) return undefined;
+    if (ts.isTemplateSpan(parent)) return { kind: "coerce", operator: "${}" };
+    if (ts.isSwitchStatement(parent)) return { kind: "compare", operator: "===" };
+    if ((ts.isForOfStatement(parent) && parent.expression === top) || ts.isSpreadElement(parent)) return ITERATE;
+    if (!ts.isBinaryExpression(parent)) return undefined;
+    const operator = parent.operatorToken.kind;
+    if (FLOWING_OPERATORS.has(operator)) return undefined;
     const equality = [ts.SyntaxKind.EqualsEqualsToken, ts.SyntaxKind.EqualsEqualsEqualsToken, ts.SyntaxKind.ExclamationEqualsToken, ts.SyntaxKind.ExclamationEqualsEqualsToken].includes(operator);
-    if (equality && isNullishLiteral(parent.left === top ? parent.right : parent.left)) return;
     const other = parent.left === top ? parent.right : parent.left;
+    if (equality && isNullishLiteral(other)) return undefined;
     const text = parent.operatorToken.getText(this.unit.tree);
-    if (parent.right === top && MEMBERSHIP_OPERATORS.has(operator)) return this.use(parent, t, [], { steps: [], end: { kind: "unmodelled", detail: text } }, t.guards);
-    if (!COMPARISONS.has(operator)) return this.use(parent, t, [], { steps: [], end: { kind: "coerce", operator: text } }, t.guards);
+    if (parent.right === top && MEMBERSHIP_OPERATORS.has(operator)) return { kind: "unmodelled", detail: text };
+    if (!COMPARISONS.has(operator)) return { kind: "coerce", operator: text };
     const literal = literalOf(other);
-    this.use(parent, t, [], { steps: [], end: { kind: "compare", operator: text, ...(literal === undefined ? {} : { literal }) } }, t.guards);
+    return { kind: "compare", operator: text, ...(literal === undefined ? {} : { literal }) };
   }
 
   private assignTo(assignment: ts.BinaryExpression, t: Trail): void {
@@ -422,13 +439,13 @@ export class Walker {
 
   private spread(spread: ts.SpreadElement, t: Trail): void {
     const holder = spread.parent;
-    if (t.origin.length === 0) return this.use(spread, t, [], { steps: [], end: { kind: "iterate", tolerates: [] } }, t.guards);
+    if (t.origin.length === 0) return this.use(spread, t, [], { steps: [], end: ITERATE }, t.guards);
     if (ts.isArrayLiteralExpression(holder) && t.origin[0] === ELEMENT) return this.read(holder, t);
     this.frontier(spread, "unmodelled-flow", "spread", t);
   }
 
   private iterate(loop: ts.ForOfStatement, t: Trail): void {
-    if (t.origin.length === 0) return this.use(loop.expression, t, [], { steps: [], end: { kind: "iterate", tolerates: [] } }, t.guards);
+    if (t.origin.length === 0) return this.use(loop.expression, t, [], { steps: [], end: ITERATE }, t.guards);
     const initializer = loop.initializer;
     if (t.origin[0] !== ELEMENT || !ts.isVariableDeclarationList(initializer) || initializer.declarations.length !== 1) return this.frontier(loop, "unmodelled-flow", "iteration", t);
     const element: Trail = { origin: t.origin.slice(1), hops: t.hops, guards: translate(t.guards, [{ from: [ELEMENT], to: [] }]) };
@@ -965,6 +982,10 @@ function reachedBy(clauses: readonly ts.CaseOrDefaultClause[], group: readonly t
 }
 
 /** `in` and `instanceof` throw on a right operand that is no object or no function; what they do with the value there is not modelled. */
+const ITERATE: UseEnd = { kind: "iterate", tolerates: [] };
+
+const FLOWING_OPERATORS: ReadonlySet<ts.SyntaxKind> = new Set([ts.SyntaxKind.EqualsToken, ts.SyntaxKind.QuestionQuestionToken, ts.SyntaxKind.BarBarToken, ts.SyntaxKind.AmpersandAmpersandToken]);
+
 const MEMBERSHIP_OPERATORS: ReadonlySet<ts.SyntaxKind> = new Set([ts.SyntaxKind.InKeyword, ts.SyntaxKind.InstanceOfKeyword]);
 
 const reachesChange = (q: AccessPath, t: Trail): boolean => ["exact", "beyond"].includes(relatePaths(q, t.origin));

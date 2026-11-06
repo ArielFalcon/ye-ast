@@ -344,6 +344,27 @@ test("a fallback to an object whose own keys may shadow the conversion members d
   assert.equal(onChanged(coerce, NULLABLE, to(0))?.kind, "admits");
 });
 
+test("a loose comparison of an exact object or array goes through the conversion rule: when it may not succeed the test is undecided, never an exception", () => {
+  const missing: UseOperation = { steps: [member("missing"), CALL], end: { kind: "none" } };
+  const loose = (operator: "==" | "!=", literal: Literal) => guard({ kind: "literal", operator, literal });
+  const to = (value: JsonValue) => fallback(NOT_ABSENT, { kind: "literal", value });
+  const shadowed = { valueOf: null, toString: null };
+  assert.deepEqual(onChanged(missing, NULLABLE, [to(shadowed), loose("==", 1)]), { kind: "review", reason: "opaque-guard" });
+  assert.deepEqual(onChanged(missing, NULLABLE, [to([{ toString: null }]), loose("!=", 0)]), { kind: "review", reason: "opaque-guard" });
+  assert.equal(onChanged(missing, NULLABLE, [to({}), loose("==", 1)])?.kind, "admits");
+  assert.equal(onChanged(missing, NULLABLE, [to([1]), loose("==", 1)])?.kind, "incompatible");
+});
+
+test("the end of a use that reads below the changed value is applied to the value its steps reach, so a fallback is handed that operator too", () => {
+  const through = (end: UseEnd): UseOperation => ({ steps: [member("a")], end });
+  const to = (value: JsonValue) => [fallback(NOT_ABSENT, { kind: "literal", value })];
+  const plus: UseEnd = { kind: "coerce", operator: "+" };
+  assert.deepEqual(onChanged(through(plus), NULLABLE, to({ a: { valueOf: null, toString: null } })), { kind: "review", reason: "unknown-value" });
+  assert.equal(onChanged(through(plus), NULLABLE, to({ a: 0 }))?.kind, "admits");
+  assert.deepEqual(onChanged(through({ kind: "unmodelled", detail: "in" }), NULLABLE, to({ a: 0 })), { kind: "review", reason: "unmodelled-sink" });
+  assert.equal(onChanged(through({ kind: "iterate", tolerates: [] }), NULLABLE, to({ a: 0 }))?.kind, "incompatible");
+});
+
 /** Source text of the values a class holds, to run on the engine: more than the module's representatives, and none of them chosen by it. */
 const BATTERY: Readonly<Record<ValueClass, readonly string[]>> = {
   null: ["null"],
@@ -442,7 +463,12 @@ test("against the running engine, every witness a verdict names throws in the us
     }
   }
   for (const test of [{ kind: "truthy" }, NOT_ABSENT] satisfies Predicate[]) {
-    for (const value of [0, "", [], "x", {}, { valueOf: null, toString: null }] satisfies JsonValue[]) guardSets.push([fallback(test, { kind: "literal", value })]);
+    for (const value of [0, "", [], "x", {}, { valueOf: null, toString: null }, { a: 0 }, { a: [{ toString: null }] }, { a: { valueOf: null, toString: null } }] satisfies JsonValue[]) guardSets.push([fallback(test, { kind: "literal", value })]);
+  }
+  for (const value of [{}, { valueOf: null, toString: null }, [{ toString: null }], [1], "1"] satisfies JsonValue[]) {
+    for (const { test } of tested.filter((candidate) => candidate.test.kind === "literal")) {
+      for (const holds of [true, false]) guardSets.push([fallback(NOT_ABSENT, { kind: "literal", value }), guard(test, { holds })]);
+    }
   }
   const operations: UseOperation[] = [
     calling("toFixed"),
@@ -457,6 +483,9 @@ test("against the running engine, every witness a verdict names throws in the us
     { steps: [], end: { kind: "compare", operator: "==", literal: 1 } },
     { steps: [], end: { kind: "compare", operator: "<", literal: 1 } },
     { steps: [], end: { kind: "compare", operator: "===", literal: 1 } },
+    { steps: [member("a")], end: { kind: "coerce", operator: "+" } },
+    { steps: [member("a")], end: { kind: "compare", operator: "==", literal: 1 } },
+    { steps: [member("a")], end: { kind: "iterate", tolerates: [] } },
   ];
   const claims = { incompatible: 0, admits: 0 };
   for (const change of changes) {

@@ -419,6 +419,39 @@ test("`in` and `instanceof` with the changed value as the right operand are unmo
   ]);
 });
 
+const lines = (...texts: readonly string[]) => texts.map((text) => `${text};`);
+
+test("a read below the changed value ends in what the code does with the value it reaches, as the changed value itself would", async () => {
+  const read = (name: string) => ({ kind: "member", name, optional: false });
+  const ends = await operations(
+    lines("'k' in order.owner.tags", "other instanceof order.owner.tags", "+order.owner.age", "order.owner.age == 1", "order.owner.age < 3", "order.owner.age + 1", "show(`${order.owner.age}`)", "for (const x of order.owner.tags) {}", "[...order.owner.tags]", "switch (order.owner.age) { case 1: break }", "order.owner.age === null", "order.owner.age ?? 0"),
+    "owner",
+  );
+  assert.deepEqual(
+    ends.map((operation) => operation.end),
+    [
+      { kind: "unmodelled", detail: "in" },
+      { kind: "unmodelled", detail: "instanceof" },
+      { kind: "coerce", operator: "+" },
+      { kind: "compare", operator: "==", literal: 1 },
+      { kind: "compare", operator: "<", literal: 3 },
+      { kind: "coerce", operator: "+" },
+      { kind: "coerce", operator: "${}" },
+      { kind: "iterate", tolerates: [] },
+      { kind: "iterate", tolerates: [] },
+      { kind: "compare", operator: "===" },
+      NONE,
+      NONE,
+    ],
+  );
+  assert.deepEqual(ends[0]!.steps, [read("tags")]);
+  const nested = await operations(lines("+order.owner.address.zip", "1 instanceof order.owner.address.zip"), "owner");
+  assert.deepEqual(nested, [
+    { steps: [read("address"), read("zip")], end: { kind: "coerce", operator: "+" } },
+    { steps: [read("address"), read("zip")], end: { kind: "unmodelled", detail: "instanceof" } },
+  ]);
+});
+
 test("elements of an array are followed through for-of with the element path", async () => {
   const file = guarded(["for (const item of order.items) { show(item.owner.name) }"]);
   const result = await follow([file], parameterOrder, "items[].owner");

@@ -87,6 +87,15 @@ type Sink =
   | { kind: "opaque"; end: UseEnd | "frontier"; cause: FrontierCause; detail: string }
   | { kind: "bind"; name: string; ref: SymbolRef };
 
+const ITERATE: UseEnd = { kind: "iterate", tolerates: BOTH };
+
+/** What the operator at a sink does with a value read from the changed one: the ends of an operator, else the accesses alone decide. */
+function reachedBy(sink: Sink): UseEnd {
+  const end = sink.kind === "consume" || sink.kind === "opaque" ? sink.end : NONE;
+  if (end === "frontier") return NONE;
+  return end.kind === "coerce" || end.kind === "compare" || end.kind === "iterate" || (end.kind === "unmodelled" && MEMBERSHIP_OPERATORS.has(end.detail)) ? end : NONE;
+}
+
 const consuming = (end: UseEnd): Sink => ({ kind: "consume", end });
 const TEST: Sink = { kind: "test" };
 
@@ -507,7 +516,8 @@ class TemplateFlow extends CombinedRecursiveAstVisitor {
     if (!this.tracks(node.left)) return this.expr(node.left, sink);
     const tracked = this.chain(node.left);
     if (tracked === undefined) return;
-    if (relatePaths(tracked.offset, this.changed) !== "exact") return this.end(tracked, sink, node.left);
+    const relation = relatePaths(tracked.offset, this.changed);
+    if (relation !== "exact") return this.end(tracked, relation === "beyond" ? TEST : sink, node.left);
     const replacement = jsonOf(node.right);
     const test = node.operation === "??" ? PRESENT : TRUTHY;
     this.use(tracked, HANDED_ON, node.left, [this.guard(tracked, node, { kind: "fallback", test, holds: true, replacement: replacement === undefined ? OPAQUE : { kind: "literal", value: replacement } })]);
@@ -555,7 +565,7 @@ class TemplateFlow extends CombinedRecursiveAstVisitor {
   private end(tracked: Tracked, sink: Sink, node: AST): void {
     const relation = relatePaths(tracked.offset, this.changed);
     if (relation === "disjoint") return;
-    if (relation === "beyond") return this.use(tracked, NONE, node);
+    if (relation === "beyond") return this.use(tracked, reachedBy(sink), node);
     switch (sink.kind) {
       case "test":
         return;
@@ -621,14 +631,16 @@ class TemplateFlow extends CombinedRecursiveAstVisitor {
   /** `@for` and `*ngFor`: the item is the element of the iterated value, so it drops a leading `[]`. */
   private iterate(iterable: AST, item: TmplAstVariable | undefined, offset: number): void {
     const tracked = this.peek(iterable);
+    let sink = TEST;
     if (tracked !== undefined) {
       const element = [...tracked.offset, ELEMENT];
       const relation = relatePaths(tracked.offset, this.changed);
       if (item !== undefined && startsWith(this.changed, element)) this.alias(item, element, tracked, "iterate", offset, [...tracked.slots, `loop:${offset}`]);
       else if (relation === "contains") this.frontier(tracked, "unmodelled-flow", "iterate", offset);
-      else if (relation === "exact") this.use(tracked, { kind: "iterate", tolerates: BOTH }, iterable);
+      else if (relation === "exact") this.use(tracked, ITERATE, iterable);
+      else if (relation === "beyond") sink = consuming(ITERATE);
     }
-    this.expr(iterable, TEST);
+    this.expr(iterable, sink);
   }
 
   private binding(attribute: TmplAstBoundAttribute, matched: readonly DirectiveMeta[], native: Sink): void {

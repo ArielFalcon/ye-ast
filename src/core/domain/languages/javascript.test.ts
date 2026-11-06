@@ -120,6 +120,16 @@ test("a call throws when its target is not a function, and a call of a function 
   assert.equal(outcome("null", [call(true), member("a")]), "runs");
 });
 
+test("a loose equality converts an exact object or array like a coercing end: undecided when the conversion may fail, decided otherwise, and null or undefined convert nothing", () => {
+  const loose = (operator: "==" | "!=", literal: number): Predicate => ({ kind: "literal", operator, literal });
+  const decide = (value: JsonValue, test: Predicate) => testSubject(test, true, subjectOf({ kind: "literal", value }), []);
+  assert.equal(decide({ valueOf: null, toString: null }, loose("==", 1)), "undecided");
+  assert.equal(decide([{ toString: null }], loose("!=", 0)), "undecided");
+  assert.equal(decide([1], loose("==", 1)), "passes");
+  assert.equal(decide({}, loose("==", 1)), "rejects");
+  assert.equal(decide({ valueOf: null, toString: null }, { kind: "absence", operator: "==", absence: "null" }), "rejects");
+});
+
 test("a replacement built from a literal is fully known: its own keys and elements are exact", () => {
   const replacement = subjectOf({ kind: "literal", value: { a: null, list: [1], text: "xy" } });
   const on = (steps: readonly AccessStep[]) => evaluate({ steps, end: NONE }, replacement);

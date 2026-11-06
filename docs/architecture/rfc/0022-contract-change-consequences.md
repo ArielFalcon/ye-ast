@@ -130,7 +130,12 @@ descriptor: its ordered steps, each a `member` (its name), a `keyed` read (its k
 a `call`, each marked when optional (`?.`); then how the chain ends: `iterate` (with the absences the construct
 tolerates: `@for` accepts `null` and `undefined`), `destructure` (`object` or `array`, the pattern that destructures the value), `compare` (its exact
 operator and the literal when one is written directly), `coerce` (its operator: arithmetic, unary, text), `consume`
-(shown or handed on), `unmodelled`, or nothing beyond the steps. The descriptor reaches the answer unchanged.
+(shown or handed on), `unmodelled`, or nothing beyond the steps. The descriptor reaches the answer unchanged. The end is
+what the code does with the value its steps reach, for a read below the changed value as for the changed value itself: an
+operator that meets that value (`+x.a`, `x.a == 1`, `x.a < 3`, a text template, `for`/spread of `x.a`, `in`/`instanceof`
+with it as the right operand) states its `coerce`, `compare`, `iterate` or `unmodelled` end, by the same classification an
+exact value gets; a value that only flows on (a declaration, an assignment, a return, an argument, a `??`), is tested or is
+compared with an absence ends with nothing beyond the steps.
 
 **Evaluation.** For each concrete value, `core/domain/languages` walks the steps with the consumer language's own
 semantics; for JavaScript, one module serves both adapters. A step on `null` or `undefined` throws; an optional step
@@ -162,7 +167,9 @@ turn a failing use into `review`, never admit a value: `typeof`, `Array.isArray`
 decided for any class; truthiness is decided for a fresh number or string (neither is the falsy value), an array and an
 object; an equality with a literal of the same type is decided for a fresh sample, which stands apart from every literal
 the use names; a strict equality with a literal of another type is decided; a loose equality across types, and any test
-of an unconstrained number such as a `length`, is undecided. A condition, an early exit or a `?.` lets the use run where its test gives its stated
+of an unconstrained number such as a `length`, is undecided. A loose equality with a literal converts an exact object or
+array like a `coerce` end does: when the conversion is not known to succeed the test is undecided, so the module never
+throws on any descriptor and value. A condition, an early exit or a `?.` lets the use run where its test gives its stated
 result on the value at the path it covers; a value on which it does not is `handled`. A guard on a path deeper than the
 changed value reads that path first with the same semantics: a read that throws leaves the value `handled` (the test is
 its own use, reported on its own), and a test the module cannot decide acts like a guard outside the vocabulary, which
