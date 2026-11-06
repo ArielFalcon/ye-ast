@@ -101,15 +101,14 @@ in its place and below: `Array.prototype[k] = f` and a polyfill loop write `Arra
 writes `*`, every global. A write through `__proto__`, `constructor` or `getPrototypeOf` writes `*.prototype` and its
 member. A global the snapshot declares is written whole. A leaf stays the cut it would otherwise be when a written path
 covers the path it calls (`Array.prototype.push` for a call on an array literal, `Map.prototype.get` for `new Map()`,
-`Math.max` for a rooted call, the global itself for a bare call), when its package is written through, when a receiver
-it names inherits a member written on `Object.prototype`, or, for an `unnamed` call whose receiver nothing names, when
-its member is written on any prototype. A call found replaced never falls back to an `unnamed` external.
+`Math.max` for a rooted call, the global itself for a bare call), when its package is written through, or when its
+member is written on any prototype: no syntax proves a receiver's whole prototype chain (`Element.prototype.appendChild`
+replaces `document.body.appendChild`). A call found replaced never falls back to an `unnamed` external.
 
 External leaves are relative to the fact's declared scope (RFC-0002 rule 4, `scope.languages`): the snapshot holds the
 `.ts`, `.mts` and `.cts` sources the map scope exports, so a write in a `.js`, `.jsx` or `.tsx` file is outside the
-promise and is not read. Two writes stay outside the paths: one through a parameter with no default
-(`function patch(p) { p.push = f }`) or a call's result, and one on a prototype a named receiver inherits without
-naming it (`Element.prototype.appendChild = f` against `document.body.appendChild`). A name a `with` body
+promise and is not read. A write through a parameter with no default (`function patch(p) { p.push = f }`) or through
+a call's result stays outside the paths. A name a `with` body
 or a direct `eval` may rebind has no origin, and a local in the scope of a direct `eval`, strict or not, is not bound. An
 R3 field leaf under a global needs a library global the binder confirms at the field's `new`, never the unresolved-name
 fallback of a field origin.

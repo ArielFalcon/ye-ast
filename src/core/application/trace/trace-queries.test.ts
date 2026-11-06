@@ -657,6 +657,9 @@ test("an external leaf at or below a path the repository writes, under a package
     ["through the global object", { nodes: [SVC, RUN], edges: CONTAINS, unresolved: memberCall("window.fetch"), roots: { fetch: { kind: "ambient", name: "window" } }, replaced: written(["fetch"]) }],
     ["unnamed, named on a prototype", { nodes: [SVC, RUN], edges: CONTAINS, unresolved: memberCall("list.push"), replaced: written(["Array", "prototype", "push"]) }],
     ["unnamed, polyfill", { nodes: [SVC, RUN], edges: CONTAINS, unresolved: memberCall("list.push"), replaced: written(["Array", "prototype", "*"]) }],
+    ["rooted, on a prototype its receiver inherits", { nodes: [SVC, RUN], edges: CONTAINS, unresolved: memberCall("document.body.appendChild"), roots: { appendChild: { kind: "ambient", name: "document" } }, replaced: written(["Element", "prototype", "appendChild"]) }],
+    ["bare, on a prototype the global object inherits", { nodes: [SVC, RUN, callee("addEventListener")], edges: [...CONTAINS, call("run", "addEventListener", 8, 4)], roots: { addEventListener: { kind: "ambient", name: "addEventListener" } }, replaced: written(["EventTarget", "prototype", "addEventListener"]) }],
+    ["constructed, on a prototype its class inherits", { ...boundCall({ kind: "constructed", name: "Map", line: 8, column: 17 }), roots: { Map: { kind: "ambient", name: "Map", bare: true } }, replaced: written(["Base", "prototype", "save"]) }],
   ];
 
   for (const [name, options] of cases) {
