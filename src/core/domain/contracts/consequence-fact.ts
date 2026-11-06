@@ -23,8 +23,8 @@ export interface UseConsequence {
 export const OLD_GUARANTEE = "present-and-non-null";
 
 export interface ConsequencesValue {
-  /** The hypothesis as normalized; `renamedTo` is the property's path under the new contract when it is renamed. */
-  hypothesis: { method: string; path: string; target: string; property: string; change: ChangeEntry | readonly ChangeEntry[]; renamedTo?: string };
+  /** The hypothesis as normalized; `renamedTo` is the property's path under the new contract when it is renamed, `elementsAt` the path of the elements of a wrapped array. */
+  hypothesis: { method: string; path: string; target: string; property: string; change: ChangeEntry | readonly ChangeEntry[]; renamedTo?: string; elementsAt?: string };
   assumedOldGuarantee: typeof OLD_GUARANTEE;
   /** A complete finding is a use with its verdict; an `unknown` one is a place the flow could not be followed. */
   findings: readonly Finding<UseConsequence>[];

@@ -136,6 +136,7 @@ function consequencesOf(session: ConsumerSession, hypothesis: Hypothesis): Resul
       property: formatAccessPath(hypothesis.property),
       change: writtenChange(hypothesis.change),
       ...(hypothesis.change.renamedTo === undefined ? {} : { renamedTo: formatAccessPath(hypothesis.change.renamedTo) }),
+      ...(hypothesis.change.elementsAt === undefined ? {} : { elementsAt: formatAccessPath(hypothesis.change.elementsAt) }),
     },
     assumedOldGuarantee: OLD_GUARANTEE,
     findings: findings.sort(compareFindings),

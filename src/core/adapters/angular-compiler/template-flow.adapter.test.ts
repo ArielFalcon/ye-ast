@@ -1,7 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { ELEMENT, formatAccessPath, type AccessPath } from "../../domain/contracts/access-path.ts";
-import { operationClass } from "../../domain/contracts/use-operation.ts";
+import { operationClass, type Predicate } from "../../domain/contracts/use-operation.ts";
+import type { Guard } from "../../domain/contracts/verdict.ts";
 import type { FlowResult } from "../../domain/contracts/consumer-flow.ts";
 import type { MemberCarrier } from "../../ports/consumer-template.port.ts";
 import type { ScopeMember, TemplateUnit } from "../../ports/template-usage.port.ts";
@@ -25,6 +26,31 @@ function uses(result: FlowResult): string[] {
     return `${formatAccessPath(use.path) || "."} | ${formatAccessPath(use.changed) || "."} ${operationClass(use.operation)} [${guards}]@${use.site.line}`;
   });
 }
+
+function predicateText(test: Predicate): string {
+  switch (test.kind) {
+    case "truthy":
+      return "truthy";
+    case "absence":
+      return `${test.operator} ${test.absence}`;
+    case "literal":
+      return `${test.operator} ${JSON.stringify(test.literal)}`;
+    case "typeof":
+      return `typeof ${test.operator} ${test.type}`;
+    case "array":
+      return "array";
+  }
+}
+
+/** `kind(<test> <holds> [-> <replacement>])`: a guard as the domain reads it, without its position. */
+function guardText(guard: Guard): string {
+  if (!("test" in guard)) return guard.kind;
+  const replacement = guard.kind === "fallback" ? ` -> ${JSON.stringify(guard.replacement)}` : "";
+  return `${guard.kind}(${predicateText(guard.test)} ${guard.holds}${replacement})`;
+}
+
+/** `<read path>: <guard>, ...` for each use. */
+const guardsByUse = (result: FlowResult): string[] => result.uses.map((use) => `${use.path.join(".")}: ${use.guards.map(guardText).join(", ")}`);
 
 const frontiers = (result: FlowResult): string[] => result.frontiers.map((frontier) => `${frontier.cause}:${frontier.detail ?? ""}@${frontier.at.line}`);
 
@@ -80,10 +106,10 @@ test("! is recorded as a non-null assertion that covers the asserted value", () 
   assert.deepEqual(uses(follow("{{ order().owner!.name }}", ["owner"])), ["owner.name | owner dereference [non-null-assertion owner]@1"]);
 });
 
-test("an @if test guards only the reads inside its block: the @else branch and the code after it carry no guard", () => {
+test("an @if test guards the reads inside its block, its @else branch carries the test rejected, and the code after it carries no guard", () => {
   const result = follow("@if (order().owner) {\n{{ order().owner.name }}\n} @else {\n{{ order().owner.name }}\n}\n{{ order().owner.name }}", ["owner"]);
 
-  assert.deepEqual(uses(result), ["owner.name | owner dereference [truthiness owner]@2", "owner.name | owner dereference []@4", "owner.name | owner dereference []@6"]);
+  assert.deepEqual(uses(result), ["owner.name | owner dereference [condition owner]@2", "owner.name | owner dereference [condition owner]@4", "owner.name | owner dereference []@6"]);
 });
 
 test("*ngIf guards the element it sits on, and a test of a longer path guards the changed value too", () => {
@@ -91,25 +117,95 @@ test("*ngIf guards the element it sits on, and a test of a longer path guards th
 
   assert.deepEqual(uses(result), [
     "owner.name | owner dereference []@1",
-    "owner.name | owner dereference [truthiness owner.name]@1",
-    "owner.name | owner dereference [truthiness owner]@2",
+    "owner.name | owner dereference [condition owner.name]@1",
+    "owner.name | owner dereference [condition owner]@2",
   ]);
 });
 
-test("a comparison with null or undefined guards by the absences it rules out; && and ?: scope the guard to their right side and true branch", () => {
+test("a condition states the truthiness of a tracked path, with the polarity of the branch: ! and the @else and ?: false sides flip it", () => {
   const result = follow(
-    "@if (order().owner !== null) { {{ order().owner.a }} }\n@if (order().owner !== undefined) { {{ order().owner.b }} }\n@if (null != order().owner) { {{ order().owner.c }} }\n{{ order().owner && order().owner.d }}\n{{ order().owner ? order().owner.e : order().owner.f }}\n@if (flag && order().owner) { {{ order().owner.g }} }",
+    "@if (order().owner) { {{ order().owner.a }} } @else { {{ order().owner.b }} }\n@if (!order().owner) { {{ order().owner.c }} }\n@if (!!order().owner) { {{ order().owner.d }} }\n{{ order().owner ? order().owner.e : order().owner.f }}\n{{ order().owner && order().owner.g }}\n@if (flag && order().owner) { {{ order().owner.h }} }",
     ["owner"],
   );
 
-  assert.deepEqual(
-    result.uses.map((use) => `${use.path.join(".")}:${use.guards.map((guard) => `${guard.kind}=${guard.excludes.join("+")}`).join(",")}`),
-    ["owner.a:comparison=null", "owner.b:comparison=undefined", "owner.c:comparison=null+undefined", "owner.d:truthiness=null+undefined", "owner.e:truthiness=null+undefined", "owner.f:", "owner.g:truthiness=null+undefined"],
-  );
+  assert.deepEqual(guardsByUse(result), [
+    "owner.a: condition(truthy true)",
+    "owner.b: condition(truthy false)",
+    "owner.c: condition(truthy false)",
+    "owner.d: condition(truthy true)",
+    "owner.e: condition(truthy true)",
+    "owner.f: condition(truthy false)",
+    "owner.g: condition(truthy true)",
+    "owner.h: condition(truthy true)",
+  ]);
 });
 
-test("a === test is not a guard", () => {
-  assert.deepEqual(uses(follow("@if (order().owner === null) { {{ order().owner.name }} }", ["owner"])), ["owner.name | owner dereference []@1"]);
+test("an equality with null or undefined states the exact operator and absence, in either order and either polarity", () => {
+  const result = follow(
+    "@if (order().owner !== null) { {{ order().owner.a }} }\n@if (order().owner !== undefined) { {{ order().owner.b }} }\n@if (null != order().owner) { {{ order().owner.c }} }\n@if (order().owner === null) { } @else { {{ order().owner.d }} }\n@if (order().owner == undefined) { {{ order().owner.e }} }\n@if (!(order().owner === null)) { {{ order().owner.f }} }",
+    ["owner"],
+  );
+
+  assert.deepEqual(guardsByUse(result), [
+    "owner.a: condition(!== null true)",
+    "owner.b: condition(!== undefined true)",
+    "owner.c: condition(!= null true)",
+    "owner.d: condition(=== null false)",
+    "owner.e: condition(== undefined true)",
+    "owner.f: condition(=== null false)",
+  ]);
+});
+
+test("an equality with a literal the template writes states the operator and the literal, in either order and either polarity", () => {
+  const result = follow(
+    "@if (order().owner === 'a') { {{ order().owner.a }} }\n@if (3 != order().owner) { {{ order().owner.b }} }\n@if (order().owner === -1) { } @else { {{ order().owner.c }} }\n@if (order().owner == true) { {{ order().owner.d }} }\n@if (order().owner === other) { {{ order().owner.e }} }",
+    ["owner"],
+  );
+
+  assert.deepEqual(guardsByUse({ ...result, uses: result.uses.filter((use) => use.path.length > 1) }), [
+    'owner.a: condition(=== "a" true)',
+    "owner.b: condition(!= 3 true)",
+    "owner.c: condition(=== -1 false)",
+    "owner.d: condition(== true true)",
+    "owner.e: ",
+  ]);
+});
+
+test("typeof of a tracked path compared with a name states the operator and the name, in either order", () => {
+  const result = follow(
+    "@if (typeof order().owner === 'string') { {{ order().owner.a }} }\n@if ('object' !== typeof order().owner) { {{ order().owner.b }} }\n@if (typeof order().owner === other) { {{ order().owner.c }} }",
+    ["owner"],
+  );
+
+  assert.deepEqual(guardsByUse(result), ["owner.a: condition(typeof === string true)", "owner.b: condition(typeof !== object true)", "owner.c: "]);
+});
+
+test("@else if carries every test rejected before it, and a test that only one side of && or || decides rejects nothing", () => {
+  const result = follow(
+    "@if (order().owner === null) { } @else if (flag) { {{ order().owner.a }} } @else { {{ order().owner.b }} }\n@if (order().owner && flag) { } @else { {{ order().owner.c }} }\n@if (!order().owner || flag) { {{ order().owner.d }} } @else { {{ order().owner.e }} }",
+    ["owner"],
+  );
+
+  assert.deepEqual(guardsByUse(result), [
+    "owner.a: condition(=== null false)",
+    "owner.b: condition(=== null false)",
+    "owner.c: ",
+    "owner.d: ",
+    "owner.e: condition(truthy true)",
+  ]);
+});
+
+test("?. on a member, a keyed read or a call tests that the value is not null, and the value passes the guards in the order the code writes them", () => {
+  const result = follow("{{ order()?.owner?.name }}\n{{ order().owner?.['name'] }}\n{{ order().owner?.() }}\n@if (order().owner) { {{ order().owner.a }} }", ["owner"]);
+  const nested = follow("@if (order().owner) { {{ order()?.owner?.name }} }", ["owner"]);
+
+  assert.deepEqual(guardsByUse(result), [
+    "owner.name: optional-chain(!= null true), optional-chain(!= null true)",
+    "owner.name: optional-chain(!= null true)",
+    "owner: optional-chain(!= null true)",
+    "owner.a: condition(truthy true)",
+  ]);
+  assert.deepEqual(guardsByUse(nested), ["owner.name: condition(truthy true), optional-chain(!= null true), optional-chain(!= null true)"]);
 });
 
 test("?? and || on the changed value are fallback guards on a consumed value, and the result is no longer followed", () => {
@@ -119,13 +215,60 @@ test("?? and || on the changed value are fallback guards on a consumed value, an
   assert.deepEqual(result.frontiers, []);
 });
 
+test("a fallback states what it tests (?? absence, || truthiness) and the JSON value its right side writes, anything else opaque", () => {
+  const result = follow(
+    [
+      '<p [title]="order().owner ?? null"></p>',
+      "<p [title]=\"order().owner || 'none'\"></p>",
+      '<p [title]="order().owner ?? -1.5"></p>',
+      '<p [title]="order().owner ?? false"></p>',
+      "<p [title]=\"order().owner ?? [1, 'a', [null]]\"></p>",
+      "<p [title]=\"order().owner ?? {a: 1, 'b': {c: [true]}}\"></p>",
+      '<p [title]="order().owner ?? fallback"></p>',
+      '<p [title]="order().owner ?? [fallback]"></p>',
+      '<p [title]="order().owner ?? {a: fallback}"></p>',
+      '<p [title]="order().owner ?? {...fallback}"></p>',
+      '<p [title]="order().owner ?? {...{a: 1}}"></p>',
+      '<p [title]="order().owner ?? undefined"></p>',
+      '<p [title]="order().owner ?? helper()"></p>',
+    ].join("\n"),
+    ["owner"],
+  );
+  const opaque = 'fallback(!= null true -> {"kind":"opaque"})';
+
+  assert.deepEqual(
+    result.uses.map((use) => use.guards.map(guardText)),
+    [
+      ['fallback(!= null true -> {"kind":"literal","value":null})'],
+      ['fallback(truthy true -> {"kind":"literal","value":"none"})'],
+      ['fallback(!= null true -> {"kind":"literal","value":-1.5})'],
+      ['fallback(!= null true -> {"kind":"literal","value":false})'],
+      ['fallback(!= null true -> {"kind":"literal","value":[1,"a",[null]]})'],
+      ['fallback(!= null true -> {"kind":"literal","value":{"a":1,"b":{"c":[true]}}})'],
+      [opaque],
+      [opaque],
+      [opaque],
+      [opaque],
+      [opaque],
+      [opaque],
+      [opaque],
+    ],
+  );
+});
+
+test("a fallback comes after the conditions around it and the chain guards before it", () => {
+  const result = follow("@if (order().owner) { {{ order()?.owner ?? 0 }} }", ["owner"]);
+
+  assert.deepEqual(guardsByUse(result), ['owner: condition(truthy true), optional-chain(!= null true), fallback(!= null true -> {"kind":"literal","value":0})']);
+});
+
 test("an alias of the member carries the value and its guard: @if (x; as y), *ngIf=\"x as y\" and @let", () => {
   const result = follow(
     "@if (order(); as o) { {{ o.owner.name }} }\n<p *ngIf=\"order() as p\">{{ p.owner.name }}</p>\n@let v = order().owner;\n{{ v.name }}",
     ["owner"],
   );
 
-  assert.deepEqual(uses(result), ["owner.name | owner dereference [truthiness .]@1", "owner.name | owner dereference [truthiness .]@2", "name | . dereference []@4"]);
+  assert.deepEqual(uses(result), ["owner.name | owner dereference [condition .]@1", "owner.name | owner dereference [condition .]@2", "name | . dereference []@4"]);
 });
 
 test("a read through an alias is reported in the alias coordinates with the rewrite on its hop", () => {
@@ -244,7 +387,7 @@ test("uses, next carriers and frontiers come in source order with lines relative
 test("a guard established outside an alias is converted to the alias coordinates and one that stops short of it is dropped", () => {
   const result = follow("@if (order().owner) {\n@let v = order().owner;\n{{ v.name }}\n}\n@if (order()) {\n@let w = order().owner;\n{{ w.name }}\n}", ["owner"]);
 
-  assert.deepEqual(uses(result), ["name | . dereference [truthiness .]@3", "name | . dereference []@7"]);
+  assert.deepEqual(uses(result), ["name | . dereference [condition .]@3", "name | . dereference []@7"]);
 });
 
 test("a condition is read once: testing a call that loses the container reports one frontier", () => {
@@ -262,7 +405,7 @@ test("a guard on one array element protects only reads of the same literal index
 
   assert.deepEqual(uses(result), [
     "items[].owner.name | items[].owner dereference []@2",
-    "items[].owner.name | items[].owner dereference [truthiness items[].owner]@3",
+    "items[].owner.name | items[].owner dereference [condition items[].owner]@3",
     "owner.name | owner dereference []@5",
   ]);
 });
@@ -273,7 +416,7 @@ test("a guard on a loop item protects reads of that item and not those of anothe
     ["items", ELEMENT, "owner"],
   );
 
-  assert.deepEqual(uses(result), ["owner.name | owner dereference [truthiness owner]@3", "owner.name | owner dereference []@5"]);
+  assert.deepEqual(uses(result), ["owner.name | owner dereference [condition owner]@3", "owner.name | owner dereference []@5"]);
 });
 
 test("the value bound to a child input is carried by its public name for the reader to resolve, and a binding to a directive stays a frontier", () => {

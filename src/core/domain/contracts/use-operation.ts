@@ -3,6 +3,25 @@ export type Absence = "null" | "undefined";
 /** A literal the code writes next to the value it compares. */
 export type Literal = string | number | boolean;
 
+/** A value a JSON document holds, as the code writes it literally. */
+export type JsonValue = null | boolean | number | string | readonly JsonValue[] | { readonly [key: string]: JsonValue };
+
+export type EqualityOperator = "===" | "!==" | "==" | "!=";
+
+/**
+ * What a guard tests about the value it covers, applied with the consumer language's own operators: its truthiness, an
+ * equality with an absence or with a literal the code writes, the name `typeof` gives it, or whether it is an array.
+ */
+export type Predicate =
+  | { kind: "truthy" }
+  | { kind: "absence"; operator: EqualityOperator; absence: Absence }
+  | { kind: "literal"; operator: EqualityOperator; literal: Literal }
+  | { kind: "typeof"; operator: EqualityOperator; type: string }
+  | { kind: "array" };
+
+/** What a fallback puts in place of the values its test rejects: the JSON value its right side writes, or `opaque` for any other right side. */
+export type Replacement = { kind: "literal"; value: JsonValue } | { kind: "opaque" };
+
 /** One access the code writes past the changed segment, in order; `optional` when it is written with `?.`. */
 export type AccessStep =
   | { kind: "member"; name: string; optional: boolean }

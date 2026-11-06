@@ -1,6 +1,6 @@
 import ts from "typescript";
 import { ELEMENT, type AccessPath } from "../../domain/contracts/access-path.ts";
-import type { Literal } from "../../domain/contracts/use-operation.ts";
+import type { JsonValue, Literal, Replacement } from "../../domain/contracts/use-operation.ts";
 
 export type FunctionNode = ts.ArrowFunction | ts.FunctionExpression | ts.FunctionDeclaration | ts.MethodDeclaration | ts.ConstructorDeclaration | ts.GetAccessorDeclaration | ts.SetAccessorDeclaration;
 
@@ -53,9 +53,30 @@ export function isTransparent(node: ts.Node): boolean {
   return ts.isParenthesizedExpression(node) || ts.isAsExpression(node) || ts.isSatisfiesExpression(node) || ts.isTypeAssertionExpression(node);
 }
 
-export function excludesAbsence(expression: ts.Expression): boolean {
+function jsonOf(expression: ts.Expression): JsonValue | undefined {
   const bare = unwrap(expression);
-  return ts.isObjectLiteralExpression(bare) || ts.isArrayLiteralExpression(bare) || ts.isStringLiteralLike(bare) || ts.isTemplateExpression(bare) || ts.isNumericLiteral(bare);
+  if (bare.kind === ts.SyntaxKind.NullKeyword) return null;
+  const literal = literalOf(bare);
+  if (literal !== undefined) return literal;
+  if (ts.isArrayLiteralExpression(bare)) {
+    const items = bare.elements.map(jsonOf);
+    return items.every((item) => item !== undefined) ? items : undefined;
+  }
+  if (!ts.isObjectLiteralExpression(bare)) return undefined;
+  const entries = bare.properties.map((property): [string, JsonValue] | undefined => {
+    if (!ts.isPropertyAssignment(property)) return undefined;
+    const name = property.name;
+    const key = ts.isIdentifier(name) || ts.isStringLiteralLike(name) ? name.text : ts.isNumericLiteral(name) ? String(Number(name.text)) : undefined;
+    const value = jsonOf(property.initializer);
+    return key === undefined || value === undefined ? undefined : [key, value];
+  });
+  return entries.every((entry) => entry !== undefined) ? Object.fromEntries(entries) : undefined;
+}
+
+/** What a fallback's right side puts in place of the value: the JSON it writes literally, else opaque. */
+export function replacementOf(expression: ts.Expression): Replacement {
+  const value = jsonOf(expression);
+  return value === undefined ? { kind: "opaque" } : { kind: "literal", value };
 }
 
 export function isAsyncOrGenerator(fn: FunctionNode): "async" | "generator" | undefined {
@@ -104,7 +125,7 @@ function bindingNames(name: ts.BindingName): string[] {
   return name.elements.flatMap((element) => (ts.isBindingElement(element) ? bindingNames(element.name) : []));
 }
 
-function declaresName(node: ts.Node, name: string): boolean {
+export function declaresName(node: ts.Node, name: string): boolean {
   if (isFunctionNode(node)) return node.parameters.some((parameter) => bindingNames(parameter.name).includes(name)) || ((ts.isFunctionExpression(node) || ts.isFunctionDeclaration(node)) && node.name?.text === name);
   if (ts.isBlock(node) || ts.isSourceFile(node) || ts.isModuleBlock(node)) return statementsDeclare(node.statements, name);
   if (ts.isCaseClause(node) || ts.isDefaultClause(node)) return statementsDeclare(node.statements, name);

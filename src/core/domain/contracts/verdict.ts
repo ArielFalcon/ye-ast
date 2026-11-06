@@ -1,33 +1,42 @@
+import { evaluate, representatives, subjectOf, testSubject, type Capability, type Representative, type Subject } from "../languages/javascript.ts";
 import type { Evidence } from "../shared/fact.ts";
 import { relatePaths, type AccessPath } from "./access-path.ts";
 import type { Change } from "./change.ts";
-import type { Absence, AccessStep, UseEnd, UseOperation } from "./use-operation.ts";
+import type { AccessStep, JsonValue, Literal, Predicate, Replacement, UseEnd, UseOperation } from "./use-operation.ts";
 
 export type { Absence, UseOperation } from "./use-operation.ts";
+export type { Capability } from "../languages/javascript.ts";
 
-export type GuardKind = "optional-chain" | "truthiness" | "comparison" | "early-exit" | "fallback" | "non-null-assertion" | "type-guard" | "assertion" | "instanceof";
-
-/** `protects` guards are decided by their path and exclusions, `opaque` ones leave a use that would fail undecided, `none` never guard. */
-const GUARD_EFFECT: Readonly<Record<GuardKind, "protects" | "opaque" | "none">> = {
-  "optional-chain": "protects",
-  truthiness: "protects",
-  comparison: "protects",
-  "early-exit": "protects",
-  fallback: "protects",
-  "non-null-assertion": "none",
-  "type-guard": "opaque",
-  assertion: "opaque",
-  instanceof: "opaque",
-};
-
-export interface Guard {
-  kind: GuardKind;
+interface PlacedGuard {
   /** The path whose value the guard establishes: up to and including the changed segment, or deeper. */
   covers: AccessPath;
-  /** The absences the guard rules out where it holds. */
-  excludes: readonly Absence[];
   evidence: Evidence;
 }
+
+/** A condition, an early exit or a `?.`: the use runs where `test`, applied to the value at `covers`, gives `holds`. */
+export interface TestedGuard extends PlacedGuard {
+  kind: "condition" | "early-exit" | "optional-chain";
+  test: Predicate;
+  holds: boolean;
+}
+
+/** `??`, `||` or a destructuring default: a value on which `test` does not give `holds` goes on as the replacement. */
+export interface FallbackGuard extends PlacedGuard {
+  kind: "fallback";
+  test: Predicate;
+  holds: boolean;
+  replacement: Replacement;
+}
+
+/** A construct whose test the language module does not evaluate. */
+export interface UntestedGuard extends PlacedGuard {
+  kind: "non-null-assertion" | "type-guard" | "assertion" | "instanceof";
+}
+
+/** The guards of one use, in the order the value passes them. */
+export type Guard = TestedGuard | FallbackGuard | UntestedGuard;
+
+export type GuardKind = Guard["kind"];
 
 /** One place the code operates on a carried value, with the paths in the coordinates of that value. */
 export interface UseSite {
@@ -39,24 +48,22 @@ export interface UseSite {
   guards: readonly Guard[];
 }
 
-export type ReviewReason = "consumed" | "unmodelled-sink" | "removed-behind-guard" | "opaque-guard";
-
-/** What the failing step or end needs the value to be: one to read a member from (as object destructuring does), a function, an iterable. */
-export type Capability = "readable" | "function" | "iterable";
+export type ReviewReason = "consumed" | "unmodelled-sink" | "removed-behind-guard" | "opaque-guard" | "unknown-value" | "opaque-replacement";
 
 export type Verdict =
-  | { kind: "incompatible"; witness: Absence; failing: AccessStep | UseEnd; capability: Capability }
+  | { kind: "incompatible"; witness: string; at: number; failing: AccessStep | UseEnd; capability: Capability; replacement?: JsonValue }
   | { kind: "admits"; guards: readonly Guard[] }
   | { kind: "review"; reason: ReviewReason };
 
 /** What one introduced value does at the use. */
 type Outcome =
   | { kind: "handled"; guard: Guard }
-  | { kind: "throws"; witness: Absence; failing: AccessStep | UseEnd; capability: Capability }
+  | { kind: "throws"; witness: string; at: number; failing: AccessStep | UseEnd; capability: Capability; replacement?: JsonValue }
   | { kind: "runs" }
-  | { kind: "unknown"; reason: "opaque-guard" | "unmodelled-sink" };
+  | { kind: "unknown"; reason: "opaque-guard" | "unmodelled-sink" | "unknown-value" | "opaque-replacement" };
 
 const RUNS: Outcome = { kind: "runs" };
+const NONE: readonly Literal[] = [];
 
 /** A test of a deeper path dereferences the changed value itself and is reported as its own use; a `?.` there guards nothing before it. */
 function establishes({ kind, covers }: Guard, changed: AccessPath): boolean {
@@ -72,8 +79,9 @@ function establishes({ kind, covers }: Guard, changed: AccessPath): boolean {
 export function decideUse(use: UseSite, change: Change): Verdict | undefined {
   const relation = relatePaths(use.path, use.changed);
   if (relation === "contains" || relation === "disjoint") return undefined;
-  const reaching = use.guards.filter((guard) => GUARD_EFFECT[guard.kind] !== "none" && establishes(guard, use.changed));
-  const outcomes = change.introduced.map((value) => outcomeOf(value, use.operation, reaching));
+  const reaching = use.guards.filter((guard) => guard.kind !== "non-null-assertion" && establishes(guard, use.changed));
+  const needsNames = change.introduced.some((valueClass) => valueClass === "number" || valueClass === "string");
+  const outcomes = change.introduced.length === 0 ? [] : representatives(change.introduced, needsNames ? literalsNamed(use) : NONE).map((value) => outcomeOf(value, use, reaching));
   const thrown = outcomes.find((outcome) => outcome.kind === "throws");
   if (thrown !== undefined) return { ...thrown, kind: "incompatible" };
   if (outcomes.some((outcome) => outcome.kind === "runs")) return { kind: "review", reason: "consumed" };
@@ -83,30 +91,48 @@ export function decideUse(use: UseSite, change: Change): Verdict | undefined {
   return { kind: "admits", guards: [...new Set(outcomes.flatMap((outcome) => (outcome.kind === "handled" ? [outcome.guard] : [])))] };
 }
 
-/** A guard the use's branch rejects the value on keeps it away; one outside the vocabulary leaves a failing use undecided. */
-function outcomeOf(value: Absence, operation: UseOperation, reaching: readonly Guard[]): Outcome {
-  const guard = reaching.find((candidate) => GUARD_EFFECT[candidate.kind] === "protects" && candidate.excludes.includes(value));
-  if (guard !== undefined) return { kind: "handled", guard };
-  const walked = walk(operation, value);
-  return walked.kind === "throws" && reaching.some((candidate) => GUARD_EFFECT[candidate.kind] === "opaque") ? { kind: "unknown", reason: "opaque-guard" } : walked;
+/** The literals the use compares against: a fresh value must differ from each. */
+function literalsNamed({ guards, operation: { end } }: UseSite): Literal[] {
+  const named = guards.flatMap((guard) => ("test" in guard && guard.test.kind === "literal" ? [guard.test.literal] : []));
+  return end.kind === "compare" && end.literal !== undefined ? [...named, end.literal] : named;
 }
 
-/** `null` and `undefined` fail the first step applied to them; without steps, the end decides. */
-function walk({ steps, end }: UseOperation, witness: Absence): Outcome {
-  const [first] = steps;
-  if (first !== undefined) return { kind: "throws", witness, failing: first, capability: first.kind === "call" ? "function" : "readable" };
-  switch (end.kind) {
-    case "iterate":
-      return end.tolerates.includes(witness) ? RUNS : { kind: "throws", witness, failing: end, capability: "iterable" };
-    case "destructure":
-      return { kind: "throws", witness, failing: end, capability: end.shape === "object" ? "readable" : "iterable" };
-    case "none":
-      return { kind: "throws", witness, failing: end, capability: "readable" };
-    case "compare":
-    case "coerce":
-    case "consume":
-      return RUNS;
-    case "unmodelled":
-      return { kind: "unknown", reason: "unmodelled-sink" };
+/**
+ * The value passes the guards in order: a tested guard whose test does not give `holds` handles it, a fallback whose test
+ * does not replaces it, and a guard the module cannot evaluate leaves a throwing use undecided. Then the use runs on
+ * what is left.
+ */
+function outcomeOf({ literal, subject }: Representative, { operation, changed }: UseSite, reaching: readonly Guard[]): Outcome {
+  let current: Subject = subject;
+  let replaced: FallbackGuard | undefined;
+  let undecided = false;
+  for (const guard of reaching) {
+    if (!("test" in guard)) {
+      undecided = true;
+      continue;
+    }
+    const tested = testSubject(guard.test, guard.holds, current, guard.covers.slice(changed.length));
+    if (tested === "passes") continue;
+    if (tested === "undecided") undecided = true;
+    else if (guard.kind !== "fallback" || tested === "reads-throw") return { kind: "handled", guard };
+    else if (guard.covers.length > changed.length) undecided = true;
+    else {
+      current = subjectOf(guard.replacement);
+      replaced = guard;
+    }
+  }
+  const walked = evaluate(operation, current);
+  switch (walked.kind) {
+    case "throws": {
+      if (undecided) return { kind: "unknown", reason: "opaque-guard" };
+      const replacement = replaced?.replacement;
+      const failing = operation.steps[walked.at] ?? operation.end;
+      return { kind: "throws", witness: literal, at: walked.at, failing, capability: walked.capability, ...(replacement?.kind === "literal" ? { replacement: replacement.value } : {}) };
+    }
+    case "runs":
+      return replaced === undefined ? RUNS : { kind: "handled", guard: replaced };
+    case "unknown":
+      if (walked.cause === "sink") return { kind: "unknown", reason: "unmodelled-sink" };
+      return { kind: "unknown", reason: replaced?.replacement.kind === "opaque" ? "opaque-replacement" : "unknown-value" };
   }
 }
