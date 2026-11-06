@@ -89,6 +89,11 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
     declarationsNamed(name).filter((symbol) => (EDGE_POLICY.memberKinds as readonly string[]).includes(symbol.kind) || (symbol.kind === "function" && heldByValue(symbol)));
 
   const anchorOf = (symbol: GraphSymbol): string => declarationAnchor(symbol.file, symbol.name);
+  /**
+   * The place reads `<path>:<line> <spelling>`: the path is repository-relative and the line digits, so the first
+   * `:<digits>` followed by a space ends the path, whatever spaces the path or the spelling hold; only a path that
+   * itself holds `:<digits> ` reads differently.
+   */
   const unresolvedAt = (reference: GraphUnresolvedReference, declarations: readonly GraphSymbol[]): Cut => ({
     kind: "unresolved-link",
     at: [placeAt(reference.file, reference.line, reference.name), ...sortedUnique([...reference.candidates, ...declarations.map(anchorOf)])],

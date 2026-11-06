@@ -199,3 +199,9 @@ test("an unresolved trace call names its place and spelling with its candidates,
   assert.ok(renderTrace(fact, "details").includes(`src/order.ts:15 this.handler.handle (${candidates.join(", ")})`), renderTrace(fact, "details"));
   assert.ok(renderTrace(fact).includes("src/order.ts: 15 this.handler.handle (3 candidates)"), renderTrace(fact));
 });
+
+test("an unresolved trace call keeps its whole place when the path and the spelling hold spaces", () => {
+  const fact = traceFact([{ kind: "unresolved-link", at: ["src/my dir/a.ts:15 (async (x) => x)().run", "src/b.ts:run"] }]);
+  assert.ok(renderTrace(fact, "details").includes("    src/my dir/a.ts:15 (async (x) => x)().run (src/b.ts:run)"), renderTrace(fact, "details"));
+  assert.ok(renderTrace(fact).includes("    src/my dir/a.ts: 15 (async (x) => x)().run"), renderTrace(fact));
+});

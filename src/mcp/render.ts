@@ -1172,13 +1172,14 @@ function traceTreeLines(steps: readonly TraceStep[]): string[] {
   });
 }
 
+/** The first `:<line>` followed by a space or the end closes the path, as the walk builds the place. */
+const TRACE_PLACE = /^(.*?):(\d+)(?: (.*))?$/s;
+
 /** An unresolved call of a trace: the place and spelling leading the cut, then its candidates. */
 function tracePlaceOf(cut: Cut): { file: string; line: string; spelling: string; candidates: readonly string[] } {
   const [place = "", ...candidates] = cut.at;
-  const space = place.indexOf(" ");
-  const pathLine = space === -1 ? place : place.slice(0, space);
-  const colon = pathLine.lastIndexOf(":");
-  return { file: pathLine.slice(0, colon), line: pathLine.slice(colon + 1), spelling: space === -1 ? "" : place.slice(space + 1), candidates };
+  const [, file = place, line = "", spelling = ""] = TRACE_PLACE.exec(place) ?? [];
+  return { file, line, spelling, candidates };
 }
 
 /** Candidates listed, or counted when the count is the shorter text. */
