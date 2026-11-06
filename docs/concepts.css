@@ -889,8 +889,10 @@ details[open] summary { border-bottom: 1px solid var(--line-soft); }
   letter-spacing: -.01em; line-height: .98;
 }
 .docs h2 { font-size: clamp(2.4rem, 5vw, 4rem); max-width: 20ch; }
-.docs .section-head h2 { display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: .3em; max-width: 24ch; }
-.docs .section-head h2::before { content: ""; width: var(--title-mark, 1em); height: var(--title-mark, 1em); background: var(--logo) center / contain no-repeat; }
+.docs .section-head h2 { max-width: 24ch; }
+.docs .section-head h2 + .section-lede { margin-top: 18px; }
+.docs .hero-copy h1 { display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: .3em; }
+.docs .hero-copy h1::before { content: ""; width: var(--title-mark, 1em); height: var(--title-mark, 1em); background: var(--logo) center / contain no-repeat; }
 .docs h3, .docs h4, .docs .step-panel h3, .docs .run-card h4 {
   font-family: var(--display); font-stretch: condensed; font-weight: 800; letter-spacing: 0; line-height: 1.05;
 }
@@ -1187,7 +1189,7 @@ details[open] summary { border-bottom: 1px solid var(--line-soft); }
 
 /* ── glossary terms: highlighted in the text, opened in place or in the explorer ── */
 
-.docs .term-ref { padding: 0; border: 0; background: none; font: inherit; font-weight: 700; color: var(--cyan); cursor: pointer; text-decoration: underline dotted color-mix(in srgb, var(--cyan) 55%, transparent); text-underline-offset: 3px; }
+.docs .term-ref { padding: 0; border: 0; background: none; font: inherit; font-weight: 700; text-transform: inherit; letter-spacing: inherit; color: var(--cyan); cursor: pointer; text-decoration: underline dotted color-mix(in srgb, var(--cyan) 55%, transparent); text-underline-offset: 3px; }
 .docs .term-ref:hover, .docs .term-ref.is-open { color: var(--night); background: var(--lime); text-decoration: none; }
 .term-pop { position: absolute; z-index: 60; width: min(340px, calc(100vw - 16px)); padding: 12px 14px; border: var(--stroke) solid var(--lime); border-radius: var(--radius); background: var(--panel); color: var(--ink); box-shadow: 4px 4px 0 var(--outline); animation: stamp-in .3s var(--ease-draw) both; }
 .term-pop strong { font-family: var(--display); font-stretch: condensed; font-weight: 800; font-size: 18px; }

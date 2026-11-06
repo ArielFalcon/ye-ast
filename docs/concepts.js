@@ -212,12 +212,12 @@
     update();
   }
 
-  /* ── title marks ──────────────────────────────────────────────────── */
+  /* ── title mark ──────────────────────────────────────────────────── */
 
-  /** The mark beside a section title is as tall as the title's lines, between one and MAX_MARK_LINES. A taller mark
+  /** The mark beside the hero title is as tall as the title's lines, between one and MAX_MARK_LINES. A taller mark
    * narrows the text and can only add lines, so growing it from zero until the line count stops changing reaches the
    * fixed point. */
-  const titles = $$(".section-head h2");
+  const titles = $$(".hero-copy h1");
   const MAX_MARK_LINES = 2;
   const lineCount = (title) => {
     const range = document.createRange();
