@@ -41,6 +41,8 @@ import { createHttpCallSites } from "../core/adapters/typescript/http-call-sites
 import { createPatternRedaction } from "../core/adapters/redaction/pattern-redaction.adapter.ts";
 import { createJavaCallSites } from "../core/adapters/spring/java-call-sites.adapter.ts";
 import { createSpringRoutesExtractor } from "../core/adapters/spring/spring-routes.adapter.ts";
+import { createJavaRecordsReader } from "../core/adapters/tree-sitter/java-records.adapter.ts";
+import type { UnmodelledConstructsReader } from "../core/ports/unmodelled-constructs.port.ts";
 import { createJavaParser } from "../core/adapters/tree-sitter/java-parser.adapter.ts";
 import { createAngularDeclarationReader } from "../core/adapters/typescript/angular-declarations.adapter.ts";
 import { createAngularRoutesExtractor } from "../core/adapters/typescript/angular-routes.adapter.ts";
@@ -166,6 +168,7 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
   const entrypoints = measurement === undefined ? bareEntrypoints : measuredEntrypoints(bareEntrypoints, measurement);
   const indexes = options.indexCache === undefined ? undefined : createIndexCache({ directory: options.indexCache, graph, digest, codegraph });
   const moduleDependencies = staged(createModuleDependenciesReader(), { extract: "module-dependencies" });
+  const unmodelled = staged<UnmodelledConstructsReader>({ extract: async (sources) => createJavaRecordsReader(await createJavaParser()).extract(sources) }, { extract: "java-records" });
   const impactDeps: ImpactQueriesDeps = {
     vcs,
     scratch,
@@ -189,6 +192,7 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
     importOrigins: (sources: readonly SourceFile[]) => createImportOrigins(sources),
     moduleDependencies,
     declarationEvidence: createDeclarationEvidenceReader(),
+    unmodelled,
   };
   const bareImpact = createImpactQueries(impactDeps);
   const warmLive = async (repo: string, signal?: AbortSignal): Promise<string | null> => {
@@ -216,6 +220,7 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
     producer: { name: PRODUCER_NAME, version },
     engines: { ...entrypointEngines, [CODEGRAPH_PACKAGE]: codegraph },
     moduleReaders: [moduleDependencies, javaImports],
+    unmodelled,
     live,
     ...budget,
     ...trust,

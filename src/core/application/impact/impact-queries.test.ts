@@ -62,6 +62,8 @@ interface Options {
   importOrigins?: ImportOriginsReader;
   moduleDependencies?: ModuleDependenciesReader;
   snapshotSources?: Partial<Record<string, SourceFile[]>>;
+  /** The files the unmodelled-constructs reader marks among the sources it receives. */
+  unmodelled?: readonly string[];
 }
 
 function setup(options: Options = {}) {
@@ -132,6 +134,7 @@ function setup(options: Options = {}) {
     ...(options.declarationEvidence && { declarationEvidence: options.declarationEvidence }),
     ...(options.importOrigins && { importOrigins: options.importOrigins }),
     ...(options.moduleDependencies && { moduleDependencies: options.moduleDependencies }),
+    ...(options.unmodelled && { unmodelled: { extract: async (sources) => sources.map(({ path }) => path).filter((path) => options.unmodelled!.includes(path)) } }),
   };
   const request: AtRevision<ImpactOfChangeRequest> = { repo: "/repo", repoId: "repo", base: "base", head: "head", ...(options.signal && { signal: options.signal }) };
   const queries = createImpactQueries(deps);
@@ -1422,4 +1425,23 @@ test("public strongest reference keeps its locations and the observed call still
   const reached = answer.value.symbols.find((symbol) => symbol.symbol === "caller");
   assert.equal(reached?.confidence, 0.9);
   assert.deepEqual(reached?.via, { file: "src/A.java", symbol: "seed", lines: [5], basis: "reference" });
+});
+
+const RECORDS = {
+  nodes: [fakeNode("origin", "function", "src/Point.java", 4, 6, "origin"), fakeNode("width", "function", "src/Size.java", 2, 2, "width")],
+  sources: [{ path: "src/Point.java", content: "" }, { path: "src/Size.java", content: "" }],
+  unmodelled: ["src/Point.java", "src/Size.java"],
+};
+
+test("a changed file whose declarations the graph cannot place keeps its seeds and cuts the answer there, and an unchanged one is not cut", async () => {
+  const answer = fact(await setup({ ...RECORDS, changes: { ok: true, value: [change("src/Point.java", { added: [{ start: 5, end: 5 }] })] } }).ask());
+
+  assert.deepEqual(answer.status === "partial" && answer.value.seeds.map((seed) => seed.symbol), ["origin"]);
+  assert.deepEqual(answer.status === "partial" && answer.cuts, [{ kind: "no-extractor", at: ["src/Point.java"] }]);
+});
+
+test("callers of a symbol in a file the graph cannot place cut the answer at that file", async () => {
+  const answer = callersFact(await setup(RECORDS).callers({ targets: [{ file: "src/Point.java", symbol: "origin" }] }));
+
+  assert.deepEqual(answer.status === "partial" && answer.cuts, [{ kind: "no-extractor", at: ["src/Point.java"] }]);
 });
