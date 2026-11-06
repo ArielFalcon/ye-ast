@@ -112,7 +112,7 @@ relies on.
 | `removed` | `removed` | `undefined`, only | every present value | |
 | `renamed` | `{ renamed: "<name>" }` | `undefined`, only | every present value | the new path |
 | `type` | `{ type: "<kind>" }` | the kind | the other kinds | |
-| `values` | `{ values: { added: [...], removed: [...] } }` | the added literals | the removed literals | |
+| `values` | `{ values: { added: [...], removed: [...] } }` (string, number or boolean literals, one list may be omitted, at least one literal) | the added literals | the removed literals | `silent`: the count of uses left without a finding |
 | `wrapped` | `{ wrapped: "<property>" }` | `object` | `array` | `elementsAt`: the elements' new path, `<path>.<property>[]` |
 | `meaning` | `{ meaning: "<note>" }` | | | the note |
 
@@ -162,13 +162,21 @@ guard keeps F0's path scope and reach.
 **Verdict,** per use: a value throws → `incompatible`, with that value as the witness, the step or end that fails on it,
 the capability it lacks (`a function at toFixed`, `an iterable`) and the replacement it came from, if any; a value runs →
 `review` (`consumed`); otherwise a value is `unknown` → `review`, with the descriptor; every introduced value `handled` →
-`admits`, with the guards that handled them (`review` for an always-absent change, as in F0). A `meaning` change makes every use it reaches `review`. A strict
-`compare` with a retired literal written directly marks its branch unreachable: `review`. A combined change is evaluated
-once, normalized, never merged from separate verdicts.
+`admits`, with the guards that handled them (`review` for an always-absent change, as in F0). A value that throws
+decides first, whatever else the change says. Next, a `meaning` change makes every use it reaches `review` with the
+reason `meaning`, since the note says the values may now be read differently and no code is evaluated against it. Then a
+use that compares the value strictly (`===`, `!==`) with a retired literal written directly, or that runs only where a
+strict equality with a retired literal holds (`===` with its branch taken, `!==` with its other branch), is `review` with
+the reason `retired-literal`: its branch is unreachable under the new contract. Retired values are not walked, and no
+fresh value equals a literal the change names. An added literal is walked as itself, with its own characters known, besides the
+classes the change introduces. A combined change is evaluated once, normalized, never merged from separate verdicts.
 
-**Silent and counted.** Under a `values` change, a use that only shows the value or compares it strictly with another
-literal gives no finding of its own: every display of an enum would otherwise bury the findings that matter. The answer
-counts the uses it left silent, so silence never reads as proven compatibility.
+**Silent and counted.** Under a `values` change, a use that only shows the value or compares it strictly with a literal
+the change does not name gives no finding of its own when the only values that run on it are added literals: every
+display of an enum would otherwise bury the findings that matter. A use where `null` or `undefined` also run (a combined
+change), where a value throws or where a value is undecided keeps its finding. The domain decides which uses are silent
+(`decideUse` returns `silent`); the answer counts them in `silent`, a number present whenever the change has a `values`
+entry and `0` when none was left silent, so silence never reads as proven compatibility.
 
 **Cost.** One descriptor per use, built where the syntax already is; a few representative values per introduced class,
 each walked once over the use's steps; one normalization per hypothesis; no new walk of the code.
@@ -188,7 +196,7 @@ independent oracle for each new change, and latency, peak memory and answer size
 3. Representative values of every class, the prototype table and step evaluation; guards as predicates by exact
    operator, operand and polarity, `typeof` and `Array.isArray` included; `type`, `wrapped`, fallback replacements and
    the replacement in the answer.
-4. `values`, strict comparisons, the silent-and-counted rule. `switch` afterwards, on its own.
+4. `values` and `meaning`, retired literals in strict comparisons, the silent-and-counted rule. `switch` afterwards, on its own.
 
 ## Output
 

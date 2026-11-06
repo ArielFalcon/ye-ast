@@ -42,13 +42,21 @@ export interface Representative {
 /**
  * The concrete values that stand for each class: `undefined`; `null`; `false` and `true`; `0`, a fresh number and the
  * numbers the use names; `""`, a fresh string and the strings it names; `[]`; `{}`. A fresh value differs, loosely and so
- * strictly, from every literal the use names, so a guard naming finitely many literals cannot reject it and pass another member.
+ * strictly, from every literal the use names and every one in `avoid`, so a guard naming finitely many literals cannot reject it
+ * and pass another member.
  */
-export function representatives(classes: readonly ValueClass[], named: readonly Literal[]): Representative[] {
-  return classes.flatMap((valueClass) => valuesOf(valueClass, named).map((value) => ({ literal: value === undefined ? "undefined" : JSON.stringify(value), subject: sample(value) })));
+export function representatives(classes: readonly ValueClass[], named: readonly Literal[], avoid: readonly Literal[] = named): Representative[] {
+  return classes.flatMap((valueClass) => valuesOf(valueClass, named, avoid).map((value) => ({ literal: literalOf(value), subject: sample(value) })));
 }
 
-function valuesOf(valueClass: ValueClass, named: readonly Literal[]): readonly Value[] {
+/** Each literal as itself: a value whose own keys and elements are all known. */
+export function literalRepresentatives(literals: readonly Literal[]): Representative[] {
+  return literals.map((value) => ({ literal: literalOf(value), subject: exact(value) }));
+}
+
+const literalOf = (value: Value): string => (value === undefined ? "undefined" : JSON.stringify(value));
+
+function valuesOf(valueClass: ValueClass, named: readonly Literal[], avoid: readonly Literal[]): readonly Value[] {
   switch (valueClass) {
     case "null":
       return [null];
@@ -57,9 +65,9 @@ function valuesOf(valueClass: ValueClass, named: readonly Literal[]): readonly V
     case "boolean":
       return [false, true];
     case "number":
-      return distinct([0, fresh<number>(1, (candidate) => candidate + 1, named), ...named.filter((literal) => typeof literal === "number")]);
+      return distinct([0, fresh<number>(1, (candidate) => candidate + 1, avoid), ...named.filter((literal) => typeof literal === "number")]);
     case "string":
-      return distinct(["", fresh<string>("a", (candidate) => `${candidate}a`, named), ...named.filter((literal) => typeof literal === "string")]);
+      return distinct(["", fresh<string>("a", (candidate) => `${candidate}a`, avoid), ...named.filter((literal) => typeof literal === "string")]);
     case "array":
       return [EMPTY_ARRAY];
     case "object":

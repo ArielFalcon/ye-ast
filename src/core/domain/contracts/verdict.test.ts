@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { parseAccessPath } from "./access-path.ts";
-import type { Change } from "./change.ts";
+import { parseChange, type Change, type ChangeInput } from "./change.ts";
 import type { Predicate, Replacement } from "./use-operation.ts";
 import { decideUse, type FallbackGuard, type Guard, type TestedGuard, type UntestedGuard, type UseOperation, type UseSite } from "./verdict.ts";
 
@@ -208,4 +208,77 @@ test("a fallback and a test are decided the same way on a path deeper than the c
   const site = (change: Change) => decideUse(use({ path: path("address.city.name"), operation: names, guards: [deeper] }), change);
   assert.deepEqual(site(NULLABLE), { kind: "admits", guards: [deeper] });
   assert.deepEqual(site(AS_STRING), { kind: "review", reason: "opaque-guard" });
+});
+
+function changeOf(input: ChangeInput): Change {
+  const parsed = parseChange(input, path("address"));
+  assert.ok(parsed.ok);
+  return parsed.value;
+}
+
+const ADD_A = changeOf({ values: { added: ["A"] } });
+const RETIRE_OLD = changeOf({ values: { removed: ["OLD"] } });
+const compareWith = (operator: string, literal: string): UseOperation => ({ steps: [], end: { kind: "compare", operator, literal } });
+const onChanged = (operation: UseOperation, change: Change, guards: readonly Guard[] = []) => decideUse(use({ path: path("address"), operation, guards }), change);
+
+test("an added literal is walked as itself, exactly: its own characters are known, which a representative of its class does not give", () => {
+  const pastItsEnd: UseOperation = { steps: [{ kind: "keyed", key: 5, optional: false }, { kind: "member", name: "length", optional: false }], end: { kind: "none" } };
+  assert.deepEqual(onChanged(pastItsEnd, ADD_A), { kind: "incompatible", witness: '"A"', at: 1, failing: pastItsEnd.steps[1], capability: "readable" });
+  assert.deepEqual(onChanged(pastItsEnd, AS_STRING), { kind: "review", reason: "unknown-value" });
+});
+
+test("a value the change retires is never walked, and no fresh value equals a literal the change names", () => {
+  const readable = guard({ kind: "truthy" }, { holds: true });
+  const missing: UseOperation = { steps: [{ kind: "member", name: "missing", optional: false }, { kind: "member", name: "city", optional: false }], end: { kind: "none" } };
+  const witness = (change: Change) => (onChanged(missing, change, [readable]) as { witness?: string }).witness;
+  assert.equal(witness(AS_STRING), '"a"');
+  assert.equal(witness(changeOf([{ type: "string" }, { values: { removed: ["a"] } }])), '"aa"');
+  const onlyOld = guard({ kind: "literal", operator: "===", literal: "OLD" });
+  const retiredString = changeOf([{ type: "string" }, { values: { removed: ["OLD"] } }]);
+  assert.deepEqual(onChanged(missing, retiredString, [onlyOld]), { kind: "review", reason: "retired-literal" });
+});
+
+test("a use that compares the value strictly with a retired literal written directly is to be reviewed", () => {
+  assert.deepEqual(onChanged(compareWith("===", "OLD"), RETIRE_OLD), { kind: "review", reason: "retired-literal" });
+  assert.deepEqual(onChanged(compareWith("!==", "OLD"), RETIRE_OLD), { kind: "review", reason: "retired-literal" });
+  assert.notDeepEqual(onChanged(compareWith("==", "OLD"), RETIRE_OLD), { kind: "review", reason: "retired-literal" });
+  assert.notDeepEqual(onChanged(compareWith("===", "OTHER"), RETIRE_OLD), { kind: "review", reason: "retired-literal" });
+});
+
+test("a use behind a strict equality with a retired literal that must hold for it to run is to be reviewed", () => {
+  const equals = (operator: "===" | "!==", holds: boolean, literal = "OLD") => guard({ kind: "literal", operator, literal }, { holds });
+  assert.deepEqual(onChanged(SHOWN, RETIRE_OLD, [equals("===", true)]), { kind: "review", reason: "retired-literal" });
+  assert.deepEqual(onChanged(SHOWN, RETIRE_OLD, [equals("!==", false)]), { kind: "review", reason: "retired-literal" });
+  assert.deepEqual(onChanged(SHOWN, RETIRE_OLD, [equals("===", false)]), { kind: "silent" });
+  assert.deepEqual(onChanged(SHOWN, RETIRE_OLD, [equals("===", true, "OTHER")]), { kind: "silent" });
+  assert.deepEqual(onChanged(SHOWN, RETIRE_OLD, [guard({ kind: "literal", operator: "==", literal: "OLD" })]), { kind: "silent" });
+  const deeper = guard({ kind: "literal", operator: "===", literal: "OLD" }, { covers: path("address.city") });
+  assert.deepEqual(decideUse(use({ path: path("address.city"), operation: SHOWN, guards: [deeper] }), RETIRE_OLD), { kind: "silent" });
+});
+
+test("a meaning change makes every use it reaches a review, after a value that throws and before any other reason", () => {
+  const meaning = changeOf({ meaning: "euros become cents" });
+  assert.deepEqual(onChanged(SHOWN, meaning), { kind: "review", reason: "meaning" });
+  assert.deepEqual(onChanged(compareWith("===", "OLD"), meaning), { kind: "review", reason: "meaning" });
+  assert.deepEqual(onChanged(SHOWN, changeOf(["optional", { meaning: "x" }]), [guard({ kind: "truthy" })]), { kind: "review", reason: "meaning" });
+  assert.equal(decideUse(use({ path: path("address.city") }), changeOf(["nullable", { meaning: "x" }]))?.kind, "incompatible");
+  assert.equal(decideUse(use({ path: path("address.city"), changed: path("address.city.name") }), meaning), undefined);
+});
+
+test("under a values change a use that only shows the value, or compares it strictly with a literal the change does not name, is silent", () => {
+  assert.deepEqual(onChanged(SHOWN, ADD_A), { kind: "silent" });
+  assert.deepEqual(onChanged(compareWith("===", "B"), ADD_A), { kind: "silent" });
+  assert.deepEqual(onChanged(compareWith("!==", "B"), ADD_A), { kind: "silent" });
+  assert.deepEqual(onChanged(compareWith("===", "A"), ADD_A), { kind: "review", reason: "consumed" });
+  assert.deepEqual(onChanged(compareWith("==", "B"), ADD_A), { kind: "review", reason: "consumed" });
+  assert.deepEqual(onChanged({ steps: [], end: { kind: "coerce", operator: "+" } }, ADD_A), { kind: "review", reason: "consumed" });
+  assert.deepEqual(onChanged(SHOWN, changeOf({ type: "string" })), { kind: "review", reason: "consumed" });
+});
+
+test("a use under a values change keeps its finding when null or undefined also run, when a value throws or when a value cannot be told", () => {
+  assert.deepEqual(onChanged(SHOWN, changeOf(["nullable", { values: { added: ["A"] } }])), { kind: "review", reason: "consumed" });
+  assert.deepEqual(onChanged(SHOWN, changeOf(["optional", { values: { added: ["A"] } }])), { kind: "review", reason: "consumed" });
+  assert.equal(decideUse(use(), changeOf(["nullable", { values: { added: ["A"] } }]))?.kind, "incompatible");
+  const unmodelled: UseOperation = { steps: [], end: { kind: "unmodelled", detail: "x" } };
+  assert.deepEqual(onChanged(unmodelled, ADD_A), { kind: "review", reason: "unmodelled-sink" });
 });
