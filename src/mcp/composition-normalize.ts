@@ -26,7 +26,7 @@ import type { ExecutedSource, PublicWorkspaceValue } from "./query-runner.ts";
 import { recoveryContext, type RecoveryContext } from "./recovery.ts";
 import type {
   AnchorId, AnchorRecord, ComparisonRef, EntryData, EvidenceFinding, EvidenceId, EvidenceOrigin, EvidenceRecord,
-  EvidenceSet, FileCategory, FileDependencyCategory, FileId, FileRecord, LinkData, LinkReference, OriginReference, OutlineImportRecord, Part, PartId,
+  EvidenceSet, FileCategory, FileDependencyCategory, FileId, FileRecord, LinkData, LinkReference, OriginReference, OutlineImportRecord, OutlineUseRecord, Part, PartId,
   PartPayload, ReadAnalysis, ReadId, ReadOwner, ReadRecord, RedactionRecord, RecordedCollectionState, SnapshotId, SnapshotRecord,
   SnapshotVectorEntry, SourceFamilyRef, SourceId, Support,
 } from "./composition-contract.ts";
@@ -535,14 +535,21 @@ function trace(b: Builder, root: ReadContext, value: TraceValue): void {
 }
 
 function outline(b: Builder, root: ReadContext, value: OutlineValue): void {
-  const declared = (path: string, fileAt: string, declaration: OutlineDeclaration, at: string): PartId => {
+  const declared = (path: string, fileAt: string, declaration: OutlineDeclaration, at: string, uses?: readonly OutlineUseRecord[]): PartId => {
     const anchor = b.anchor(root.here, { path, symbol: declaration.name, line: declaration.line, endLine: declaration.endLine }, root.id, at, fileAt);
     const children = declaration.children?.map((child, k) => declared(path, fileAt, child, `${at}/children/${k}`));
-    return b.part({ kind: "outline-declaration", anchor, kindName: declaration.kind, ...(children !== undefined && { children }) }, root.id, [at]);
+    return b.part({ kind: "outline-declaration", anchor, kindName: declaration.kind, ...(children !== undefined && { children }), ...(uses !== undefined && { uses }) }, root.id, [at]);
   };
   value.focus?.forEach((match, index) => {
     const pointer = `/value/focus/${index}`;
-    declared(match.file, `${pointer}/file`, match.declaration, `${pointer}/declaration`);
+    const uses = match.uses?.map((use, j): OutlineUseRecord => {
+      if (!("declaration" in use)) return use;
+      const { declaration, ...rest } = use;
+      const place = `${pointer}/uses/${j}/declaration`;
+      const anchor = b.anchor(root.here, { path: declaration.file, symbol: declaration.name, line: declaration.line, endLine: declaration.endLine }, root.id, place, `${place}/file`);
+      return { ...rest, declaration: { anchor, kindName: declaration.kind } };
+    });
+    declared(match.file, `${pointer}/file`, match.declaration, `${pointer}/declaration`, uses);
   });
   value.files?.forEach((held, index) => {
     const pointer = `/value/files/${index}`;

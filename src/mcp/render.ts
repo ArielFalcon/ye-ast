@@ -11,7 +11,7 @@ import type { ImpactedSymbol, ImpactValue, ReachedEntrypoint, Seed } from "../co
 import type { ModuleImpactValue } from "../core/domain/impact/module-dependency.ts";
 import { declarationAnchor } from "../core/domain/impact/impact-cuts.ts";
 import type { ImportedFile, ImportersValue } from "../core/domain/impact/importers-fact.ts";
-import type { OutlineBinding, OutlineDeclaration, OutlineImport, OutlineValue } from "../core/domain/outline/outline-fact.ts";
+import type { OutlineBinding, OutlineDeclaration, OutlineImport, OutlineUse, OutlineValue } from "../core/domain/outline/outline-fact.ts";
 import type { ExternalCalls, TraceStep, TraceValue } from "../core/domain/trace/trace-fact.ts";
 import type { EntrypointMap } from "../core/domain/map/entrypoint-map.ts";
 import type { Decision, DecisionKind, DecisionOption } from "../core/domain/decisions/decision.ts";
@@ -1102,6 +1102,16 @@ function importLines(imports: readonly OutlineImport[]): string[] {
   return [...groups].toSorted(([a], [b]) => compareText(a, b)).map(([key, names]) => `      ${key}${names.size === 0 ? "" : `: ${[...names].toSorted(compareText).join(", ")}`}`);
 }
 
+/** One line per use: `name → file:line` for a declaration, the package or the global otherwise, then relations and use lines. */
+function useLines(uses: readonly OutlineUse[]): string[] {
+  if (uses.length === 0) return ["    uses nothing outside its body"];
+  return ["    uses:", ...uses.map((use) => {
+    const target = "declaration" in use ? `${use.declaration.name} → ${use.declaration.file}:${use.declaration.line}` : "module" in use ? `${use.module} (package)` : `${use.global} (global)`;
+    const at = use.at.length === 0 ? "" : `; at ${use.at.map(({ line }) => line).filter((line, index, all) => all.indexOf(line) === index).join(", ")}`;
+    return `      ${target} (${use.relations.join(", ")}${at})`;
+  })];
+}
+
 function importTarget({ target, specifier }: OutlineImport): string {
   if (target.kind === "repository") return target.file;
   if (target.kind === "external") return `${target.module} (package)`;
@@ -1115,13 +1125,14 @@ function bindingText({ local, imported, typeOnly, declaration }: OutlineBinding,
 }
 
 export function renderOutline(fact: Fact<OutlineValue>, detail: ResponseMode = "summary"): string {
-  if (detail === "full") return fact.status === "unknown" ? "Inspect reason and evidence; the result has no value." : fact.value.focus !== undefined ? "Select value.focus: one entry per matched declaration with file, selector, path (a dotted path ye_ast_callers accepts verbatim), ancestors outermost first (kind, name, line, endLine), declaration (kind, name, line, endLine and children of the same shape) and omitted, how many of the file's declarations were left out; imports are not listed. Inspect value.unheld for unavailable files and cuts when partial." : "Select value.files by file; declarations are the top-level ones and contain name, kind, line, endLine and, when a contains edge places declarations inside one, children of the same shape; imports list each module statement or runtime reference with line, endLine, specifier, kind, form, typeOnly, target (repository file, external module, or unresolved with reason) and bindings (local, imported, typeOnly, and the declaration reached with file, name, kind, line, endLine when proven). Inspect value.unheld for unavailable files and cuts when partial: an unresolved-link cut names a binding whose declaration is not proven.";
+  if (detail === "full") return fact.status === "unknown" ? "Inspect reason and evidence; the result has no value." : fact.value.focus !== undefined ? "Select value.focus: one entry per matched declaration with file, selector, path (a dotted path ye_ast_callers accepts verbatim), ancestors outermost first (kind, name, line, endLine), declaration (kind, name, line, endLine and children of the same shape), omitted, how many of the file's declarations were left out, and uses, what the declaration's own body uses outside itself in order of first use: a declaration (file, name, kind, line, endLine), a module (package) or a global, each with relations (edge kinds) and at (use lines and columns); a member on a local value is not a use. Imports are not listed. Inspect value.unheld for unavailable files and cuts when partial: an unresolved-link cut at[0] \"file::path\" names the focused declaration, then each place \"file:line spelling\" of a use no binding proves." : "Select value.files by file; declarations are the top-level ones and contain name, kind, line, endLine and, when a contains edge places declarations inside one, children of the same shape; imports list each module statement or runtime reference with line, endLine, specifier, kind, form, typeOnly, target (repository file, external module, or unresolved with reason) and bindings (local, imported, typeOnly, and the declaration reached with file, name, kind, line, endLine when proven). Inspect value.unheld for unavailable files and cuts when partial: an unresolved-link cut names a binding whose declaration is not proven.";
   const lines = headerLines(fact);
   if (fact.status === "unknown") return lines.join("\n");
   for (const match of fact.value.focus ?? []) {
     lines.push(`  ${match.file}:${match.selector} matches ${match.path} (${match.omitted} other declarations of the file omitted)`);
     match.ancestors.forEach((ancestor, depth) => lines.push(...outlineLines([ancestor], `    ${"  ".repeat(depth)}`)));
     lines.push(...outlineLines([match.declaration], `    ${"  ".repeat(match.ancestors.length)}`));
+    if (match.uses !== undefined) lines.push(...useLines(match.uses));
   }
   for (const entry of fact.value.files ?? []) {
     lines.push(`  ${entry.file}`);

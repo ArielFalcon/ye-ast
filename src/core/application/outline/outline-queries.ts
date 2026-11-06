@@ -12,12 +12,11 @@ import { ABORTED } from "../snapshot/read-snapshot.ts";
 import { createHeadReader, type FactSpec, type HeadReaderDeps, type HeadReading } from "../snapshot/head-reading.ts";
 import type { ModuleDependencies } from "../../domain/impact/module-dependency.ts";
 import type { CommitExtraction } from "../snapshot/read-snapshot.ts";
-import type { VcsFault } from "../../ports/vcs.port.ts";
-import { isJavaSource } from "../../domain/languages/java.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { ModuleDependenciesReader } from "../../ports/module-dependencies.port.ts";
 import type { UnmodelledConstructsReader } from "../../ports/unmodelled-constructs.port.ts";
-import { readFocus, readOutline } from "./outline.ts";
+import { focusWithUses, readFocus, readOutline } from "./outline.ts";
+import type { ImportOriginsReader } from "../../ports/import-origins.port.ts";
 import { unmodelledNote } from "../../domain/shared/unmodelled.ts";
 
 export interface OutlineQueriesDeps extends HeadReaderDeps {
@@ -27,6 +26,8 @@ export interface OutlineQueriesDeps extends HeadReaderDeps {
   moduleReaders: readonly ModuleDependenciesReader[];
   /** The requested files whose declarations the graph cannot place; without it no such file is cut. */
   unmodelled?: UnmodelledConstructsReader;
+  /** Reads what binds the names a focused declaration uses, from the head's sources. */
+  importOrigins: ImportOriginsReader;
 }
 
 export function createOutlineQueries(deps: OutlineQueriesDeps): OutlineQueries {
@@ -61,12 +62,15 @@ export function createOutlineQueries(deps: OutlineQueriesDeps): OutlineQueries {
           const focused = focus === undefined ? undefined : readFocus(store, focus.filter(({ file }) => isReadableFile(file)));
           if (focused !== undefined && focused.unknown.length > 0) return { ok: false, fault: { kind: "unknown-symbol", detail: `no declaration at the revision for ${focused.unknown.map(unknownTargetKey).join(", ")}${unmodelledNote(focused.unknown, unmodelled)}`, entries: focused.unknown } };
           if (focused !== undefined && focused.topLevel.length > 0) return { ok: false, fault: { kind: "top-level-line", detail: `no declaration holds ${focused.topLevel.map(({ file, line }) => `${file}:${line}`).join(", ")}; the line is at the top level of its file`, entries: focused.topLevel } };
-          const listed = focused === undefined ? readOutline(store, covered, await readModules(deps.moduleReaders, sources, covered)) : undefined;
+          const modules = await readModules(deps.moduleReaders, sources, covered);
           if (request.signal?.aborted) return ABORTED;
-          const read = focused?.value ?? listed!.value;
+          const listed = focused === undefined ? readOutline(store, covered, modules) : undefined;
+          const used = focused === undefined ? undefined : await focusWithUses(store, focused, deps.importOrigins(sources), modules, request.signal);
+          if (used === "aborted" || request.signal?.aborted) return ABORTED;
+          const read = focused === undefined ? listed!.value : { ...focused.value, focus: used!.focus };
           const cuts = [
             ...fixed,
-            ...(listed?.cuts ?? []),
+            ...(listed?.cuts ?? used!.cuts),
             ...summary.filesNotIndexed.map((file): Cut => ({ kind: "no-extractor", at: [file] })),
             ...read.unheld.map((file): Cut => ({ kind: held.has(file) ? "no-extractor" : "not-exported", at: [file] })),
             ...unmodelled.map((file): Cut => ({ kind: "no-extractor", at: [file] })),
@@ -76,25 +80,9 @@ export function createOutlineQueries(deps: OutlineQueriesDeps): OutlineQueries {
           store.close();
         }
       };
-      return focus === undefined
-        ? headReader.atSources(request, spec, (head) => answer(head, head.tree.sources))
-        : headReader.atExport(request, spec, async (head, root) => {
-          const focused = await focusedSources(deps, root, head, files, request.signal);
-          return focused.ok ? answer(head, focused.value) : focused;
-        });
+      return headReader.atSources(request, spec, (head) => answer(head, head.tree.sources));
     },
   };
-}
-
-/** The written Java sources among the focused files, read alone: a focus never loads the whole snapshot. */
-async function focusedSources(deps: OutlineQueriesDeps, root: string, head: HeadReading<Pick<CommitExtraction, "export">>, files: readonly string[], signal: AbortSignal | undefined): Promise<Result<readonly SourceFile[], VcsFault>> {
-  if (deps.unmodelled === undefined) return { ok: true, value: [] };
-  const asked = new Set(files.filter(isJavaSource));
-  const written = head.tree.export.files.filter((file) => file.written && asked.has(file.path)).map((file) => file.path);
-  if (written.length === 0) return { ok: true, value: [] };
-  const ready = await head.prepared?.materialize(signal);
-  if (ready !== undefined && !ready.ok) return ready;
-  return { ok: true, value: await deps.reader.read(root, written) };
 }
 
 /** The module statements of the requested files from every reader, each resolved against every source, as one read. */

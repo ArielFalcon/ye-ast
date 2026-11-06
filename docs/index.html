@@ -192,7 +192,7 @@
       <div class="surface-more">
         <p class="mini-kicker">The other tools and controls</p>
         <ul class="surface-facts">
-          <li><code>ye_ast_outline</code> returns the kind, name and line span of each declaration and every import with where it leads and the names it binds, each with the declaration and line it reaches when proven, never source text. Requested files the index holds no node of come back as <code>unheld</code>, which is not “nothing”.</li>
+          <li><code>ye_ast_outline</code> returns the kind, name and line span of each declaration and every import with where it leads and the names it binds, each with the declaration and line it reaches when proven, never source text. A focus on one declaration adds what its own body uses outside itself: a declaration with its file and line, a package or a global, an unproved use being a cut. Requested files the index holds no node of come back as <code>unheld</code>, which is not “nothing”.</li>
           <li><code>ye_ast_trace</code> returns what a declaration executes, in source order, each declaration expanded once, with a reading plan of the line spans to open. Branches are not evaluated, and a call no rule settles is an <code>unresolved-link</code> cut with its candidates, never a guess.</li>
           <li><code>ye_ast_workspace</code> returns the outward names a repository uses (HTTP, messaging, dependencies), the candidate repositories for each and the names no repository serves. Local clones you supply are used as given, never downloaded.</li>
           <li><code>ye_ast_decisions</code> returns the gaps the code cannot fill (membership, repository, library, gateway, revision, remote, trust), each with evidence-backed options. It writes nothing.</li>

@@ -63,6 +63,9 @@ import { compareText } from "../core/domain/shared/code-node.ts";
 import type { CallSiteReader } from "../core/domain/topology/call-site.ts";
 import type { EntrypointExtractor, SourceFile } from "../core/ports/entrypoint-extractor.port.ts";
 import { createImportOrigins } from "../core/adapters/typescript/import-origins.adapter.ts";
+import { createJavaRootBindings } from "../core/adapters/spring/java-root-bindings.ts";
+import type { ImportOrigins } from "../core/ports/import-origins.port.ts";
+import { isJavaSource } from "../core/domain/languages/java.ts";
 import { createModuleDependenciesReader } from "../core/adapters/typescript/module-dependencies.adapter.ts";
 import { createJavaImportsReader } from "../core/adapters/spring/java-imports.adapter.ts";
 import type { ModuleDependenciesReader } from "../core/ports/module-dependencies.port.ts";
@@ -263,7 +266,7 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
     ...trust,
   };
   const javaImports = staged<ModuleDependenciesReader>({ extract: async (sources, options) => createJavaImportsReader(await createJavaParser()).extract(sources, options) }, { extract: "java-imports" });
-  const bareOutline = createOutlineQueries({ ...headDeps, moduleReaders: [moduleDependencies, javaImports], unmodelled });
+  const bareOutline = createOutlineQueries({ ...headDeps, moduleReaders: [moduleDependencies, javaImports], unmodelled, importOrigins: (sources: readonly SourceFile[]) => withJavaRootBindings(createImportOrigins(sources), sources) });
   const outline = measurement === undefined ? bareOutline : measuredOutline(bareOutline, measurement);
   const bareTrace = createTraceQueries({
     ...snapshotCache,
@@ -342,6 +345,18 @@ export function composeCli(options: CompositionOptions = {}): (argv: readonly st
 const MCP_PACKAGE = "ye-ast-mcp";
 
 /** The entrypoint beside the running module: `main.ts` from a source checkout, `main.js` from the published build. */
+/** The TypeScript origins, with the root of a use in a Java source bound by the Java reader. */
+function withJavaRootBindings(origins: ImportOrigins, sources: readonly SourceFile[]): ImportOrigins {
+  const java = createJavaRootBindings(createJavaParser(), sources);
+  return {
+    ...origins,
+    async rootBindings(sites, signal) {
+      const [typescript, fromJava] = [await origins.rootBindings(sites, signal), await java(sites, signal)];
+      return sites.map((site, index) => (isJavaSource(site.file) ? fromJava[index]! : typescript[index]!));
+    },
+  };
+}
+
 function ownEntrypoint(): string {
   const own = fileURLToPath(import.meta.url);
   return join(dirname(own), `main${extname(own)}`);
