@@ -345,6 +345,23 @@ test("a static member of an imported class resolves through the import", async (
   assert.deepEqual(sites(await reader.of([api, service], "shop-web")), ["GET shop-api/orders@src/app/order/order.service.ts:7"]);
 });
 
+test("a member of an enum the snapshot holds is the text its initializer states, and only a stated text", async () => {
+  const settings = source("src/app/settings.models.ts", ["export const GENERAL = 'outer'", "export enum Settings { GENERAL = 'general', 'QUICK_LINKS' = 'quick-links', COUNT = 1, NEXT, ALIAS = GENERAL }"].join("\n"));
+  const service = source(
+    "src/app/settings.service.ts",
+    ["import { HttpClient } from '@angular/common/http'", "import { inject } from '@angular/core'", "import { Settings } from './settings.models'", "enum Local { DOCS = 'docs' }", "export class SettingsService {", "  private readonly http = inject(HttpClient)", "  load(): void {",
+      "    this.http.get(`/api/settings/${Settings.GENERAL}`)", "    this.http.get(`/api/settings/${Settings.QUICK_LINKS}`)", "    this.http.get(`/api/settings/${Local.DOCS}`)", "    this.http.get(`/api/settings/${Settings.NEXT}`)", "    this.http.get(`/api/settings/${Settings.ALIAS}`)", "  }", "}"].join("\n"),
+  );
+
+  assert.deepEqual(sites(await reader.of([settings, service], "shop-web")), [
+    "GET /api/settings/general@src/app/settings.service.ts:8",
+    "GET /api/settings/quick-links@src/app/settings.service.ts:9",
+    "GET /api/settings/docs@src/app/settings.service.ts:10",
+    "unknown unresolved@src/app/settings.service.ts:11",
+    "unknown unresolved@src/app/settings.service.ts:12",
+  ]);
+});
+
 test("a name a barrel re-exports with `export *` resolves through it", async () => {
   const orders = source("src/app/api/orders.ts", "export const ORDERS = 'orders-api/orders'");
   const barrel = source("src/app/api/index.ts", "export * from './orders'");

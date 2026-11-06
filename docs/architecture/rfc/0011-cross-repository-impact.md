@@ -121,7 +121,9 @@ class up to the declaring one write (`=`, compound assignments, `++`, `delete`),
 declares again or writes, and any field of a class that writes fields it does not name (`this[key] =`,
 `Object.assign(this, …)`) hold a value the code fills at run time. Writes from outside the class hierarchy are not read.
 A property of a run-time value (`category.id`, `event.data.id`) is a run-time value; a root the code binds is read
-through that binding before any class, import or constant of the same name.
+through that binding before any class, import or constant of the same name. A member of an enum the file declares or
+imports (`UserSettingsType.DOC_LINKS`) is the text its initializer states; a member without one, or initialized by any
+other expression, which may name another member of the enum, is undecided.
 
 A name that is neither a binding nor an import of its file, such as an ambient `declare const`, takes the value an
 Angular workspace's `build` target states for it in `define` (application builders), read from `angular.json` as source

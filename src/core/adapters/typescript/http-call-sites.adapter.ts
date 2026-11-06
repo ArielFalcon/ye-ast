@@ -18,7 +18,7 @@ const ASSIGNED_AT_RUN_TIME = Symbol("assigned at run time");
 const WRITTEN_FIELDS = new WeakMap<ts.ClassDeclaration, ReadonlySet<string>>();
 const VARIABLE_WRITES = new WeakMap<ts.Node, ReadonlyMap<string, readonly ts.Expression[] | null>>();
 
-/** What one file declares at its top level, and the classes it holds, as the reader needs them. */
+/** What one file declares at its top level, and the classes and enums it holds, as the reader needs them. */
 interface FileShape {
   source: ts.SourceFile;
   bindings: ReadonlySet<string>;
@@ -32,6 +32,7 @@ interface FileShape {
   /** The expression `export default` names, when the file states one. */
   defaultExport?: ts.Expression;
   classes: Map<string, ts.ClassDeclaration>;
+  enums: Map<string, ts.EnumDeclaration>;
 }
 
 /** The names the code being evaluated binds at run time, and what the variables its body declares are initialized to. */
@@ -95,7 +96,7 @@ function compareText(a: string, b: string): number {
 
 function describe(file: SourceFile): FileShape {
   const source = sourceTree(file, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
-  const shape: FileShape = { source, bindings: sourceBindings(source), unsafeEncoder: mayOverrideEncoder(source), consts: new Map(), imports: new Map(), reexports: new Map(), stars: [], classes: new Map() };
+  const shape: FileShape = { source, bindings: sourceBindings(source), unsafeEncoder: mayOverrideEncoder(source), consts: new Map(), imports: new Map(), reexports: new Map(), stars: [], classes: new Map(), enums: new Map() };
   for (const statement of source.statements) {
     if (ts.isImportDeclaration(statement) && ts.isStringLiteral(statement.moduleSpecifier)) {
       const module = statement.moduleSpecifier.text;
@@ -117,6 +118,7 @@ function describe(file: SourceFile): FileShape {
       continue;
     }
     if (ts.isClassDeclaration(statement) && statement.name !== undefined) shape.classes.set(statement.name.text, statement);
+    if (ts.isEnumDeclaration(statement)) shape.enums.set(statement.name.text, statement);
   }
   return shape;
 }
@@ -779,6 +781,8 @@ class Reader {
     const found = await this.classOf(shape, owner.text);
     const field = found === undefined ? undefined : await this.fieldOf(found.shape, found.declaration, name, trail, [found.declaration]);
     if (field !== undefined) return field;
+    const enumeration = await this.declarationOf(shape, owner.text, (held, enumName) => held.enums.get(enumName));
+    if (enumeration !== undefined) return enumMember(enumeration.shape, enumeration.declaration, name, trail);
     const literal = await this.objectLiteral(shape, owner.text, trail);
     if (literal === undefined) return undefined;
     const property = literal.expression.properties.find((candidate): candidate is ts.PropertyAssignment => ts.isPropertyAssignment(candidate) && candidate.name.getText(literal.expression.getSourceFile()) === name);
@@ -817,13 +821,18 @@ class Reader {
   }
 
   /** The class a name states in this file, or the one an import names. */
-  private async classOf(shape: FileShape, name: string): Promise<{ shape: FileShape; declaration: ts.ClassDeclaration } | undefined> {
-    const local = shape.classes.get(name);
+  private classOf(shape: FileShape, name: string): Promise<{ shape: FileShape; declaration: ts.ClassDeclaration } | undefined> {
+    return this.declarationOf(shape, name, (held, className) => held.classes.get(className));
+  }
+
+  /** The declaration a name states in this file, or the one an import names, as `pick` finds it in a file. */
+  private async declarationOf<T>(shape: FileShape, name: string, pick: (held: FileShape, name: string) => T | undefined): Promise<{ shape: FileShape; declaration: T } | undefined> {
+    const local = pick(shape, name);
     if (local !== undefined) return { shape, declaration: local };
     const imported = shape.imports.get(name);
     if (imported === undefined || imported.imported === "*" || imported.imported === "default") return undefined;
     const target = await this.moduleShape(shape, imported.module);
-    const declaration = target?.classes.get(imported.imported);
+    const declaration = target === undefined ? undefined : pick(target, imported.imported);
     return target === undefined || declaration === undefined ? undefined : { shape: target, declaration };
   }
 
@@ -1178,6 +1187,16 @@ function requestsSomething(returned: ts.Expression | undefined): returned is ts.
 
 function unresolvedAt(shape: FileShape, call: ts.CallExpression): ReadTarget {
   return { target: { status: "unknown", reason: "unresolved", evidence: [{ path: shape.source.fileName, line: lineOf(shape.source, call) }] } };
+}
+
+/**
+ * An enum member whose initializer states a text. Any other initializer is undecided: it may name another member, which
+ * a file constant of the same name would answer wrongly.
+ */
+function enumMember(shape: FileShape, declaration: ts.EnumDeclaration, name: string, trail: ReadonlySet<string>): Located | undefined {
+  const member = declaration.members.find((candidate) => (ts.isIdentifier(candidate.name) || ts.isStringLiteral(candidate.name)) && candidate.name.text === name);
+  const initializer = member?.initializer;
+  return initializer !== undefined && ts.isStringLiteralLike(initializer) ? { shape, expression: initializer, trail } : undefined;
 }
 
 /** The object literal an initializer is, through the wrappers TypeScript lets an author write around it. */
