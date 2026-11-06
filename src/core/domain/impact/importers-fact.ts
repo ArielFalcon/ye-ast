@@ -1,4 +1,5 @@
 import { isBareName, type UnresolvedUse } from "./impact-cuts.ts";
+import { compareText } from "../shared/code-node.ts";
 
 /** Who depends on one file, as repo-relative paths sorted by code unit; the file itself is never listed. */
 export interface ImportedFile {
@@ -50,6 +51,7 @@ function namesIt(reference: UnresolvedUse, declared: ReadonlySet<string>, qualif
   return (reference.candidates ?? []).some((candidate) => qualified.has(candidate));
 }
 
-export function sortedUnique(values: readonly string[]): string[] {
-  return [...new Set(values)].sort();
+/** A set of strings: unique, in code-unit order. */
+export function sortedUnique<T extends string>(values: readonly T[]): T[] {
+  return [...new Set(values)].sort(compareText);
 }

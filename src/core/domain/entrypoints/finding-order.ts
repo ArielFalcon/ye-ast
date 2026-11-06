@@ -1,4 +1,5 @@
 import type { Evidence, Finding } from "../shared/fact.ts";
+import { compareText } from "../shared/code-node.ts";
 
 /**
  * The order the extractor port promises: by evidence location, then by kind and name, an unknown item after the
@@ -19,8 +20,4 @@ function where(finding: Finding<unknown>): Evidence {
 function tieBreak(finding: Finding<{ kind: string; name: string }>): string {
   if (finding.status === "complete") return `0 ${finding.value.kind} ${finding.value.name}`;
   return `1 ${finding.reason} ${finding.evidence.map((evidence) => `${evidence.path}:${evidence.line}`).join(" ")}`;
-}
-
-function compareText(a: string, b: string): number {
-  return a < b ? -1 : a > b ? 1 : 0;
 }

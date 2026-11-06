@@ -1,5 +1,5 @@
 import { createMcpServer, type McpDeps } from "../src/mcp/server.ts";
-import { openSession } from "../src/mcp/test-session.ts";
+import { openSession } from "../src/mcp/test-session.testing.ts";
 
 const unused = <T extends object>(): T => new Proxy({} as T, {
   get() { throw new Error("Catalogue measurement must not execute queries"); },

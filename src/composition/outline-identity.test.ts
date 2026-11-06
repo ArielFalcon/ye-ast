@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { SCHEMA } from "../core/domain/shared/fact.ts";
 import { createPatternRedaction } from "../core/adapters/redaction/pattern-redaction.adapter.ts";
 import { createMcpServer, type McpDeps } from "../mcp/server.ts";
-import { openSession, resultFields } from "../mcp/test-session.ts";
+import { openSession, resultFields } from "../mcp/test-session.testing.ts";
 
 const file = "src/main/java/example/OwnerRestControllerV1.java";
 const imported = "src/main/java/example/AnotherServiceVersion2.java";

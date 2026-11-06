@@ -1,4 +1,4 @@
-import type { CallSite, EventTarget, HttpTarget } from "../../domain/topology/call-site.ts";
+import { httpTargetOf, type CallSite, type EventTarget } from "../../domain/topology/call-site.ts";
 import type { JoinedSite } from "../../domain/topology/link-graph.ts";
 import type { Link, UnlinkedCallSite } from "../../domain/topology/link.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
@@ -38,10 +38,6 @@ export function joinWorkspace(repositories: readonly WorkspaceRepository[], entr
     }
   }
   return { gateways, joined };
-}
-
-function httpTargetOf(site: CallSite): HttpTarget | undefined {
-  return site.transport === "http" && site.target.status === "complete" && "path" in site.target.value ? site.target.value : undefined;
 }
 
 function eventTargetOf(site: CallSite): EventTarget | undefined {

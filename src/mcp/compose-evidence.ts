@@ -15,8 +15,9 @@ import type {
 } from "./composition-contract.ts";
 import type { CutOwner } from "./select-evidence.ts";
 import {
-  COMPOSITION_KEY_VERSION, compareSupport, compositionKey, fileId, isCompositionId, sameCanonical, sortById, sortedUnique, unionSupports,
+  COMPOSITION_KEY_VERSION, compareSupport, compositionKey, fileId, isCompositionId, sameCanonical, sortById, unionSupports,
 } from "./composition-identity.ts";
+import { sortedUnique } from "../core/domain/impact/importers-fact.ts";
 import { partReferences } from "./compose-evidence-references.ts";
 
 export { validateCompositionReferences, validateCompositionIssues } from "./compose-evidence-references.ts";

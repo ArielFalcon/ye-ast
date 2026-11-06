@@ -56,7 +56,7 @@ export function parametersOf(member: Node): string[] {
   return (list === null ? [] : namedChildren(list)).map((parameter) => parameter.childForFieldName("name")?.text ?? "");
 }
 
-export function resolveType(name: string, from: TypeDecl, project: JavaProject): Resolved | undefined {
+function resolveType(name: string, from: TypeDecl, project: JavaProject): Resolved | undefined {
   const found = project.lookupType(name, scopeOf(from));
   if (found === "ambiguous") return undefined;
   if (found !== undefined) return { decl: found };

@@ -3,8 +3,8 @@ import type { HttpRoute } from "../entrypoints/http-route.ts";
 import { compareText } from "../shared/code-node.ts";
 import { TRUST_MODES, type TrustMode } from "../shared/fact.ts";
 import type { RepositoryEvidence } from "../shared/repository-evidence.ts";
-import type { CallSite, HttpTarget } from "../topology/call-site.ts";
-import { callSiteEvidence, unresolvedCallSite } from "../topology/call-site.ts";
+import type { CallSite } from "../topology/call-site.ts";
+import { callSiteEvidence, httpTargetOf, unresolvedCallSite } from "../topology/call-site.ts";
 import { inferGateways, matchBehindGateway, prefixOf, type GatewayDeclaration, type RepositoryEntrypoints } from "../topology/link-match.ts";
 import { sortEvidence, type NameCandidate, type OutwardKind, type OutwardName, type RepositoryOutwardName } from "../topology/outward-name.ts";
 import type { RepositoryResolution } from "../topology/remote-snapshot.ts";
@@ -272,8 +272,4 @@ function groupsOf<T>(items: readonly T[], keyOf: (item: T) => string): [string, 
 
 function routesOf(repository: DecisionRepository): HttpRoute[] {
   return repository.entrypoints.filter((entrypoint): entrypoint is HttpRoute => entrypoint.kind === "http-route");
-}
-
-function httpTargetOf(site: CallSite): HttpTarget | undefined {
-  return site.transport === "http" && site.target.status === "complete" && "path" in site.target.value ? site.target.value : undefined;
 }

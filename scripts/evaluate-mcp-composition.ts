@@ -16,7 +16,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { canonicalJson } from "../src/core/domain/shared/canonical-json.ts";
 import { createMcpServer, RESULT_JSON_LABEL, type McpDeps } from "../src/mcp/server.ts";
-import { openSession, type Session, type ToolResult } from "../src/mcp/test-session.ts";
+import { openSession, type Session, type ToolResult } from "../src/mcp/test-session.testing.ts";
 import { repositoryCatalog } from "../src/mcp/repository-targeting.ts";
 import { runComposition } from "../src/mcp/compose-request.ts";
 import { composeFull, composeReceipt, renderComposition } from "../src/mcp/render-composition.ts";
@@ -177,7 +177,7 @@ type PrepareOptions = { casesPath?: string; loadFixture?: () => Promise<Fixture>
 const defaultCasesPath = () => join(dirname(fileURLToPath(import.meta.url)), "..", "docs", "evaluations", "mcp-composition", "cases.json");
 
 async function defaultFixture(): Promise<Fixture> {
-  const { createCompositionFixture } = await import("../src/composition/mcp-evidence-fixture.ts");
+  const { createCompositionFixture } = await import("../src/composition/mcp-evidence-fixture.testing.ts");
   return createCompositionFixture();
 }
 
@@ -329,7 +329,7 @@ export async function prepare(outDir: string, options: PrepareOptions = {}): Pro
       createdAt: new Date().toISOString(),
       environment: { node: process.version, platform: process.platform, arch: process.arch },
       acquisition: {
-        fixture: "src/composition/mcp-evidence-fixture.ts createCompositionFixture(): two temporary Git repositories (shop, web), base/head commits, isolated index/cache/scratch/trust",
+        fixture: "src/composition/mcp-evidence-fixture.testing.ts createCompositionFixture(): two temporary Git repositories (shop, web), base/head commits, isolated index/cache/scratch/trust",
         base: fixture.base, head: fixture.head, fixtureSetupMs: Math.round(fixtureMs),
         baseline: "original tools over an in-memory MCP session of createMcpServer(fixture.deps)",
         composed: surface === "public-tool" ? "ye_ast_compose over the same MCP session" : "runComposition + composeReceipt/composeFull + renderComposition over the same deps (ye_ast_compose was not registered: not the MCP transport)",

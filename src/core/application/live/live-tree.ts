@@ -10,6 +10,7 @@ import type { LiveFault, LiveFailure, LiveUnavailable, LiveStaleNotice } from ".
 import type { LiveMirror, MirrorFault, MirrorLocation, MirrorState, MirrorVersions } from "../../ports/live-mirror.port.ts";
 import type { CommitExport, VcsFault } from "../../ports/vcs.port.ts";
 import type { WorkingTree } from "../../ports/working-tree.port.ts";
+import { compareText } from "../../domain/shared/code-node.ts";
 
 export interface LiveDeps {
   workingTree: WorkingTree;
@@ -78,7 +79,7 @@ function sameVersions(a: MirrorVersions, b: MirrorVersions): boolean {
   return a.codegraph === b.codegraph && a.store === b.store && a.staging === b.staging;
 }
 
-const sorted = (paths: Iterable<string>): string[] => [...new Set(paths)].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+const sorted = (paths: Iterable<string>): string[] => [...new Set(paths)].sort(compareText);
 
 /**
  * One live query (RFC-0010 "Live head"): takes the mirror's lock, brings the mirror up to date with the working tree,

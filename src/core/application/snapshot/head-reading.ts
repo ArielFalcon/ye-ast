@@ -15,6 +15,7 @@ import { prepareCommit } from "./prepared-snapshot.ts";
 import { liveSnapshotReaders } from "./live-snapshot.ts";
 import { canonicalJson } from "../../domain/shared/canonical-json.ts";
 import { extractSources } from "./read-snapshot.ts";
+import { compareText } from "../../domain/shared/code-node.ts";
 
 /** What reading the head of a query needs: the snapshot reader plus the index of what it exported. */
 export interface HeadReaderDeps extends SnapshotReaderDeps {
@@ -76,7 +77,7 @@ export async function withLiveCaptures<T>(deps: HeadReaderDeps, selections: read
   }
   if (deps.live === undefined) throw new TypeError("live dependencies required");
   const live = deps.live;
-  const ordered = [...selections].sort((a, b) => a.repo < b.repo ? -1 : a.repo > b.repo ? 1 : 0);
+  const ordered = [...selections].sort((a, b) => compareText(a.repo, b.repo));
   const captures = new Map<string, HeldLive>();
   let cancellation: { repoId: string; cause: LiveFailure } | undefined;
   const postludes: { repoId: string; run: () => void | Promise<void> }[] = [];
@@ -191,7 +192,7 @@ const LIVE_HEAD = "HEAD";
  * The files of the index's universe the store did not hold, limited to what the head export staged: the engine reads
  * the whole mirror and a commit's whole listing, so a path the export never wrote could not be read by this answer.
  */
-export function notHeldInExport(notHeld: readonly string[], exported: CommitExport): Pick<IndexSummary, "filesNotIndexed"> {
+function notHeldInExport(notHeld: readonly string[], exported: CommitExport): Pick<IndexSummary, "filesNotIndexed"> {
   const staged = new Set(exported.files.filter((file) => file.written).map((file) => file.path));
   return { filesNotIndexed: notHeld.filter((path) => staged.has(path)) };
 }

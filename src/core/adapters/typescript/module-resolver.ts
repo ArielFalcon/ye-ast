@@ -18,7 +18,7 @@ const CONFIG_NAMES = ["tsconfig.json", "jsconfig.json"] as const;
 /**
  * The options one configuration text declares, with its `extends` chain read through `host`.
  */
-export function configOptions(text: string, file: string, host: ts.ParseConfigHost): ts.CompilerOptions | undefined {
+function configOptions(text: string, file: string, host: ts.ParseConfigHost): ts.CompilerOptions | undefined {
   const json = ts.parseConfigFileTextToJson(file, text);
   if (json.error !== undefined || json.config === undefined) return undefined;
   return ts.parseJsonConfigFileContent(json.config, host, posix.dirname(file), undefined, file).options;
@@ -86,7 +86,7 @@ export function createModuleResolver(read: SourceReader, packages: ManifestPacka
     return held;
   };
   const relative = async (from: string, specifier: string): Promise<ModuleResolution> => {
-    const base = posix.normalize(posix.join(posix.dirname(from), specifier));
+    const base = posix.join(posix.dirname(from), specifier);
     if (base.startsWith("..")) return { unresolved: `${specifier} leaves the repository` };
     if (options?.jsonModules && specifier.endsWith(".json")) {
       return await present(base) ? { file: base } : { unresolved: `${specifier} names no file` };
