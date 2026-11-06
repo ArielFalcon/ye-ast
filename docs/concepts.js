@@ -212,6 +212,15 @@
     update();
   }
 
+  /* ── header mark ──────────────────────────────────────────────────── */
+
+  /** The header shows the logo only while the hero title, which carries the large logo, is out of view. */
+  const brand = $(".brand");
+  const heroTitle = $(".hero-copy h1");
+  if (brand && heroTitle) {
+    new IntersectionObserver(([entry]) => brand.classList.toggle("has-mark", !entry.isIntersecting)).observe(heroTitle);
+  }
+
   /* ── title marks ──────────────────────────────────────────────────── */
 
   /** The logo beside the hero title and the ornament beside each section title are as tall as the title's lines,

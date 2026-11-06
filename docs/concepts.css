@@ -904,6 +904,7 @@ details[open] summary { border-bottom: 1px solid var(--line-soft); }
 [data-theme="light"] .docs #concept-rules { --ornament: url("assets/orn-walk-light.png"); }
 [data-theme="light"] .docs #sources { --ornament: url("assets/orn-limits-light.png"); }
 .docs .section-head h2 + .section-lede { margin-top: 18px; }
+.docs .hero-accent { color: var(--amber); }
 .docs .hero-copy h1 { display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: .3em; }
 .docs .hero-copy h1::before { content: ""; width: var(--title-mark, 1em); height: var(--title-mark, 1em); background: var(--logo) center / contain no-repeat; }
 .docs h3, .docs h4, .docs .step-panel h3, .docs .run-card h4 {

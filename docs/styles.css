@@ -201,6 +201,13 @@ p { margin: 0 0 8px; }
 .rail-item.is-current .rail-label { color: var(--heat); border-color: var(--heat); }
 .rail-item:hover .rail-label, .rail-item:focus-visible .rail-label { clip-path: inset(0 0 0 0); }
 .brand { display: flex; align-items: center; gap: 10px; color: var(--ink); text-decoration: none; flex: 0 0 auto; }
+.brand-mark {
+  flex: none; width: 0; height: 28px; margin-right: -10px; opacity: 0; transform: translateY(-6px) scale(.6);
+  background: var(--logo) center / contain no-repeat;
+  transition: width .45s var(--ease-draw), margin-right .45s var(--ease-draw), opacity .3s var(--ease-draw), transform .45s var(--ease-set);
+}
+.brand.has-mark .brand-mark { width: 28px; margin-right: 0; opacity: 1; transform: none; }
+@media (prefers-reduced-motion: reduce) { .brand-mark { transition: none; } }
 .brand-text { font-family: var(--display); font-stretch: condensed; font-weight: 800; font-size: 19px; letter-spacing: .01em; white-space: nowrap; }
 .brand-text span { color: var(--faint); font-weight: 600; }
 .bar-tools { margin-left: auto; display: flex; align-items: center; gap: 8px; min-width: 0; }
