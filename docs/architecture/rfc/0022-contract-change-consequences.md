@@ -81,6 +81,96 @@ never proof, and a reference to a function is not a call. User type guards, asse
 `review`. A dereference is any operation that fails on null or undefined: a member read, a call, a keyed read, an array
 spread, iteration, destructuring (an empty pattern included).
 
+## Change algebra (P2, proposed)
+
+F0 knows one delta (the value may now be absent) and one requirement (a dereference needs a value). P2 makes both data:
+a change is a set of values, a use is the code's own steps over the value, and the verdict is what those steps do with
+each value the change lets in. A new change is a constructor of value sets, never a code path.
+
+**Values.** The changed value is the JSON value the response carries; flow steps keep its identity, and a step that
+transforms it ends the chain, as in F0. Its classes are `absent`, `null`, `boolean`, `number`, `string`, `array`,
+`object` and literals, each literal inside its kind. Each class is represented by a few concrete values that every
+recognized guard and step treats alike within the class: `undefined`; `null`; `false` and `true`; `0` and a fresh
+number; `""` and a fresh string; `[]`; `{}`; and every literal the change states. A fresh value is nonzero or nonempty
+and differs from every literal the change and the use name, so a guard that names finitely many literals cannot exclude
+it while letting another member of its class through. A JSON value holds no function and no symbol, and an array or a
+primitive has no named member besides those of its prototype.
+
+**Changes.** A change gives the values the new contract permits that the old one did not (`introduced`) and those it no
+longer produces (`retired`). The old guarantee stays assumed and stated: present, non-null, of whatever kind the code
+relies on.
+
+| Change | Input | Introduced | Retired | The answer adds |
+|---|---|---|---|---|
+| `nullable` | `nullable` | `null` | | |
+| `optional` | `optional` | `undefined` | | |
+| `removed` | `removed` | `undefined`, only | every present value | |
+| `renamed` | `{ renamed: "<name>" }` | `undefined`, only | every present value | the new path |
+| `type` | `{ type: "<kind>" }` | the kind | the other kinds | |
+| `values` | `{ values: { added: [...], removed: [...] } }` | the added literals | the removed literals | |
+| `wrapped` | `{ wrapped: "<property>" }` | `object` | `array` | the elements' new path, `<path>.<property>.[]` |
+| `meaning` | `{ meaning: "<note>" }` | | | the note |
+
+A combined change is a list of constraints on one property, normalized once per hypothesis: the introduced values
+unite, a retired literal is never introduced (its kind's fresh value differs from it), and an always-absent change with
+any other, two `type` entries, a literal both added and removed, and a literal outside the kind a `type` entry states are
+contradictions and refused.
+
+**Operations.** An adapter describes, where the syntax is at hand, what the code does past the changed segment, as one
+descriptor: its ordered steps, each a `member` (its name), a `keyed` read (its key when the code writes a literal one) or
+a `call`, each marked when optional (`?.`); then how the chain ends: `iterate` (with the absences the construct
+tolerates: `@for` accepts `null` and `undefined`), `destructure` (`object` or `array`, the pattern that destructures the value), `compare` (its exact
+operator and the literal when one is written directly), `coerce` (its operator: arithmetic, unary, text), `consume`
+(shown or handed on), `unmodelled`, or nothing beyond the steps. The descriptor reaches the answer unchanged.
+
+**Evaluation.** For each introduced value, `core/domain/languages` walks the steps with the consumer language's own
+semantics; for JavaScript, one module serves both adapters. A step on `null` or `undefined` throws, unless it is optional
+on the changed value itself, which then never reaches the use. A member, or a keyed read with a literal key, on a
+primitive or an array is what a frozen table of the built-in prototypes holds under that name (inherited members
+included, up to a stated ECMAScript edition), else `undefined`; on an object it is `unknown` unless `Object.prototype`
+holds it, since its own keys are open. A keyed read with any other key is `unknown` past `null` and `undefined`. A call
+throws when its target is not a function, and its result is `unknown`. The end then applies to the value reached:
+`iterate` and array destructuring throw unless it is iterable (strings and arrays are), object destructuring throws only
+on `null` and `undefined`, `compare`, `coerce` and `consume` run. Each value ends `throws`, `handled` (a guard kept it
+from the use), `runs` (it reached the use and the use ran, its result possibly changed, an optional step past the
+changed value included) or `unknown`; `unknown` is never promoted. No repository code runs.
+
+**Guards** are predicates on the values, evaluated with the language's own operators, by exact operator, operand and
+branch polarity: `x === null`, `x !== undefined`, `x != null`, truthiness, `typeof x === 'k'` (true for `null` under
+`'object'`), `Array.isArray(x)`, `x === <literal>`. A value a guard rejects on the use's branch is `handled`. A fallback
+(`??` for `null` and `undefined`, `||` for falsy values, a destructuring default for `undefined`) replaces the values its
+own test catches with its right side, when that side is a literal the module can build as a JSON value (`''`, `0`, `[]`,
+`{}`, an object or array literal of such); evaluation continues on the replacement, which the answer names. Any other
+replacement makes the value `unknown`. A guard keeps F0's path scope and reach.
+
+**Verdict,** per use: a value throws → `incompatible`, with that value as the witness, the step or end that fails on it,
+the capability it lacks (`a function at toFixed`, `an iterable`) and the replacement it came from, if any; a value runs or
+is `unknown` → `review`, with the descriptor; every introduced value `handled` → `admits`, with the guards that handled
+them (`review` for an always-absent change, as in F0). A `meaning` change makes every use it reaches `review`. A strict
+`compare` with a retired literal written directly marks its branch unreachable: `review`. A combined change is evaluated
+once, normalized, never merged from separate verdicts.
+
+**Silent and counted.** Under a `values` change, a use that only shows the value or compares it strictly with another
+literal gives no finding of its own: every display of an enum would otherwise bury the findings that matter. The answer
+counts the uses it left silent, so silence never reads as proven compatibility.
+
+**Cost.** One descriptor per use, built where the syntax already is; a few representative values per introduced class,
+each walked once over the use's steps; one normalization per hypothesis; no new walk of the code.
+
+**Delivery,** each step gated by `npm run check`, the F0 measurement unchanged except corrections shown one by one, an
+independent oracle for each new change, and latency, peak memory and answer size on the same corpus queries:
+
+1. The descriptor through both adapters, `FlowUse` and the answer, with no verdict change. Each construct says what it
+   does: a numeric unary operator (`-`, `+`, `~`, `++`, `--`) on the value coerces it, while `!`, `typeof` and `void`
+   only test it; an assignment target is no use of the value it replaces; a loop states the absences it tolerates, so
+   `for...of` and `@for` agree through their descriptors. Template method and pipe names reach the descriptor; a guard
+   re-run of a chain emits nothing.
+2. Representative values, normalization and contradictions, guards as predicates; `optional`, `renamed`, combined
+   changes; the answer carries witness, failing step, capability and replacement.
+3. The prototype table and step evaluation, `type`, `wrapped`, `typeof` and `Array.isArray` guards, fallback
+   replacements.
+4. `values`, strict comparisons, the silent-and-counted rule. `switch` afterwards, on its own.
+
 ## Output
 
 The RFC-0002 envelope. Uses are complete findings with their verdict, chain, requirement, counterexample or guard
@@ -96,7 +186,8 @@ surface.
 
 | Layer | Owns |
 |---|---|
-| `core/domain/contracts` | hypothesis, access path, path rewrites, guard and verdict rules |
+| `core/domain/contracts` | hypothesis, access path, path rewrites, value sets, change normalization, guard and verdict rules |
+| `core/domain/languages` | the step semantics and prototype table of a consumer language (JavaScript for both adapters, from P2) |
 | `core/ports` | the driven port for flow steps and uses, the driving query family |
 | `core/application/contracts` | the worklist over chains, frontier accounting, the fact |
 | `core/adapters/typescript` | flow steps in classes and functions, router resolvers and component inputs |
@@ -118,3 +209,5 @@ and consumers, validators, stores (NgRx, signal stores: frontier only), attribut
 
 1. Links matched by `suffix`, `route-overlap` or `gateway-prefix`. Recommended: a frontier with the basis, not followed.
 2. Attribution when the old contract is not declared. Recommended for F0: the assumed old guarantee, stated.
+3. A flow step that converts the value (`new Date(x)`, `Number(x)`) ends the chain today, so the JSON classes always
+   describe the value at the use. Recommended for P3: such a step carries the class it produces, not a frontier.

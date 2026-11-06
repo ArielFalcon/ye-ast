@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { formatAccessPath, parseAccessPath } from "../../domain/contracts/access-path.ts";
 import type { Carrier, CarrierSite, FlowResult } from "../../domain/contracts/consumer-flow.ts";
+import { operationClass } from "../../domain/contracts/use-operation.ts";
 import { createConsumerFlowReader } from "./consumer-flow.adapter.ts";
 
 const COMMON = "import { HttpClient } from '@angular/common/http'\nimport { map, tap, switchMap, catchError } from 'rxjs'\nimport { firstValueFrom, of } from 'rxjs'\nimport { toSignal } from '@angular/core/rxjs-interop'\nimport { httpResource } from '@angular/common/http'\nimport { resource, signal, computed, input } from '@angular/core'\n";
@@ -23,7 +24,7 @@ async function follow(files: readonly { path: string; content: string }[], site:
 const callSite = (file: string, line: number, symbol: string): CarrierSite => ({ kind: "call-site", repo: "repo", file, line: at(line), symbol });
 
 const dotted = (path: readonly string[]) => formatAccessPath(path) || "[]";
-const uses = (result: FlowResult) => result.uses.map((use) => `${use.site.line - HEADER_LINES} ${dotted(use.path)}|${dotted(use.changed)} ${use.operation} [${use.guards.map((guard) => guard.kind).join(",")}]`);
+const uses = (result: FlowResult) => result.uses.map((use) => `${use.site.line - HEADER_LINES} ${dotted(use.path)}|${dotted(use.changed)} ${operationClass(use.operation)} [${use.guards.map((guard) => guard.kind).join(",")}]`);
 const frontiers = (result: FlowResult) => result.frontiers.map((frontier) => `${frontier.at.line - HEADER_LINES} ${frontier.cause}${frontier.detail === undefined ? "" : `:${frontier.detail}`}`);
 const next = (result: FlowResult) =>
   result.next.map(({ carrier }) => {
@@ -305,6 +306,55 @@ test("operations on the exact changed value: dereference, consume and unmodelled
     "6 []|[] consume []",
     "8 []|[] dereference []",
   ]);
+});
+
+const operations = async (lines: readonly string[], path: string) => (await follow([guarded(lines)], parameterOrder, path)).uses.map((use) => use.operation);
+const NONE = { kind: "none" } as const;
+
+test("each construct states what it does with the changed value", async () => {
+  assert.deepEqual(
+    await operations(["order.owner?.name.first", "order.owner['key']", "order.owner[0]", "order.owner[other]", "order.owner.fmt?.(1)", "order.owner?.[0]"], "owner"),
+    [
+      { steps: [{ kind: "member", name: "name", optional: true }, { kind: "member", name: "first", optional: false }], end: NONE },
+      { steps: [{ kind: "keyed", key: "key", optional: false }], end: NONE },
+      { steps: [{ kind: "keyed", key: 0, optional: false }], end: NONE },
+      { steps: [{ kind: "keyed", optional: false }], end: NONE },
+      { steps: [{ kind: "member", name: "fmt", optional: false }, { kind: "call", optional: true }], end: NONE },
+      { steps: [{ kind: "keyed", key: 0, optional: true }], end: NONE },
+    ],
+  );
+  assert.deepEqual(await operations(["const { owner: { name } } = order", "const { owner: [first] } = order", "const { owner: {} } = order"], "owner"), [
+    { steps: [], end: { kind: "destructure", shape: "object" } },
+    { steps: [], end: { kind: "destructure", shape: "array" } },
+    { steps: [], end: { kind: "destructure", shape: "object" } },
+  ]);
+  assert.deepEqual(
+    await operations(
+      ["for (const x of order.tags) {}", "[...order.tags]", "order.tags === 'A'", "order.tags === -1", "order.tags < 3", "order.tags === other", "order.tags + 1", "show(`${order.tags}`)", "audit(order.tags)", "new Box(order.tags)"],
+      "tags",
+    ),
+    [
+      { steps: [], end: { kind: "iterate", tolerates: [] } },
+      { steps: [], end: { kind: "iterate", tolerates: [] } },
+      { steps: [], end: { kind: "compare", operator: "===", literal: "A" } },
+      { steps: [], end: { kind: "compare", operator: "===", literal: -1 } },
+      { steps: [], end: { kind: "compare", operator: "<", literal: 3 } },
+      { steps: [], end: { kind: "compare", operator: "===" } },
+      { steps: [], end: { kind: "coerce", operator: "+" } },
+      { steps: [], end: { kind: "coerce", operator: "${}" } },
+      { steps: [], end: { kind: "consume", as: "handed-on", detail: "audit" } },
+      { steps: [], end: { kind: "unmodelled", detail: "NewExpression" } },
+    ],
+  );
+});
+
+test("a numeric unary operator on the changed value coerces it; a test of it uses nothing", async () => {
+  const lines = ["-order.tags", "+order.tags", "~order.tags", "++order.tags", "--order.tags", "order.tags++", "order.tags--", "!order.tags", "typeof order.tags", "void order.tags"];
+  const operators = ["-", "+", "~", "++", "--", "++", "--"];
+  assert.deepEqual(
+    await operations(lines.map((line) => `${line};`), "tags"),
+    operators.map((operator) => ({ steps: [], end: { kind: "coerce", operator } })),
+  );
 });
 
 test("elements of an array are followed through for-of with the element path", async () => {

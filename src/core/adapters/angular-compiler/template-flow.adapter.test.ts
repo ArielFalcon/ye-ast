@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { ELEMENT, formatAccessPath, type AccessPath } from "../../domain/contracts/access-path.ts";
+import { operationClass } from "../../domain/contracts/use-operation.ts";
 import type { FlowResult } from "../../domain/contracts/consumer-flow.ts";
 import type { MemberCarrier } from "../../ports/consumer-template.port.ts";
 import type { ScopeMember, TemplateUnit } from "../../ports/template-usage.port.ts";
@@ -21,7 +22,7 @@ function follow(text: string, path: AccessPath, options: { member?: string; scop
 function uses(result: FlowResult): string[] {
   return result.uses.map((use) => {
     const guards = use.guards.map((guard) => `${guard.kind} ${formatAccessPath(guard.covers) || "."}`).join(", ");
-    return `${formatAccessPath(use.path) || "."} | ${formatAccessPath(use.changed) || "."} ${use.operation} [${guards}]@${use.site.line}`;
+    return `${formatAccessPath(use.path) || "."} | ${formatAccessPath(use.changed) || "."} ${operationClass(use.operation)} [${guards}]@${use.site.line}`;
   });
 }
 
@@ -322,4 +323,41 @@ test("a loop over the exact changed collection is a consume of it, and the items
 
   assert.deepEqual(uses(exact), ["items | items consume []@1", "items | items consume []@4"]);
   assert.deepEqual(uses(below), ["name.length | name dereference []@2"]);
+});
+
+test("each construct states what it does with the changed value: the accesses past it and how the template ends with it", () => {
+  const member = (name: string, optional = false) => ({ kind: "member", name, optional });
+  const none = { kind: "none" };
+  const shown = { kind: "consume", as: "shown" };
+  const iterate = { kind: "iterate", tolerates: ["null", "undefined"] };
+  const table: [string, unknown][] = [
+    ["{{ order().address?.city.toUpperCase() }}", { steps: [member("city", true), member("toUpperCase"), { kind: "call", optional: false }], end: none }],
+    ["{{ order().address['city'] }}", { steps: [{ kind: "keyed", key: "city", optional: false }], end: none }],
+    ["{{ order().address?.[0] }}", { steps: [{ kind: "keyed", key: 0, optional: true }], end: none }],
+    ["{{ order().address[key] }}", { steps: [{ kind: "keyed", optional: false }], end: none }],
+    ["@for (a of order().address; track a) {}", { steps: [], end: iterate }],
+    ['<p *ngFor="let a of order().address"></p>', { steps: [], end: iterate }],
+    ["{{ order().address }}", { steps: [], end: shown }],
+    ['<p title="a {{ order().address }}"></p>', { steps: [], end: shown }],
+    ["{{ order().address | json }}", { steps: [], end: { kind: "consume", as: "handed-on", detail: "pipe:json" } }],
+    ["{{ helper.show(order().address) }}", { steps: [], end: { kind: "unmodelled", detail: "call:show" } }],
+    ["@if (order().address === 'A') {}", { steps: [], end: { kind: "compare", operator: "===", literal: "A" } }],
+    ["@if (order().address === -1) {}", { steps: [], end: { kind: "compare", operator: "===", literal: -1 } }],
+    ["@if (3 > order().address) {}", { steps: [], end: { kind: "compare", operator: ">", literal: 3 } }],
+    ["@if (order().address < other) {}", { steps: [], end: { kind: "compare", operator: "<" } }],
+    ["{{ order().address + 1 }}", { steps: [], end: { kind: "coerce", operator: "+" } }],
+    ["{{ -order().address }}", { steps: [], end: { kind: "coerce", operator: "-" } }],
+    ['<img [title]="order().address">', { steps: [], end: { kind: "consume", as: "handed-on" } }],
+    ["@switch (order().address) { @case ('A') { } }", { steps: [], end: { kind: "compare", operator: "===" } }],
+  ];
+
+  for (const [template, expected] of table) assert.deepEqual(follow(template, ["address"]).uses.map((use) => use.operation), [expected], template);
+});
+
+test("an assignment target on the changed value replaces it without reading it, and one beyond it is still a dereference", () => {
+  const exact = follow('<p (click)="order.address = value"></p>', ["address"]);
+  const beyond = follow('<p (click)="order.address.city = value"></p>', ["address"]);
+
+  assert.deepEqual(uses(exact), []);
+  assert.deepEqual(beyond.uses.map((use) => use.operation), [{ steps: [{ kind: "member", name: "city", optional: false }], end: { kind: "none" } }]);
 });
