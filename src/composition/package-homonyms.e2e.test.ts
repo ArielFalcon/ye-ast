@@ -73,3 +73,10 @@ test("a change to the repository declarations reaches only the code that imports
   assert.ok(reached.includes("real"), reached.join(", "));
   assert.deepEqual(reached.filter((name) => OUTSIDE.includes(name)), []);
 });
+
+test("a file whose names are rooted at a package import is no user of the repository file they are spelled like", async () => {
+  const result = await composeQueries({ scratchRoot }).impact.importers({ repo, repoId: "package-homonyms", revision: "HEAD", files: ["src/model.ts"] });
+  assert.ok(result.ok && result.value.status !== "unknown", JSON.stringify(result));
+
+  assert.deepEqual(result.value.value.files.map(({ users }) => users), [["src/uses-repo.ts"]]);
+});

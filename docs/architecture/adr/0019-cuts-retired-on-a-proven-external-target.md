@@ -72,9 +72,11 @@ population did not.
 5. **It claims no completeness of its own.** The cut kind, the status rule and the unknown reasons are unchanged. A fact
    becomes `complete` only when the retired cut was its only one; on the measured application the list shrank and every
    answer stayed `partial`, which is what the numbers above show.
-6. **A callback parameter is a different lexical declaration**, only for an exact bare call to a supported simple
-   parameter. It excludes attribution to a removed homonym in another file; it neither identifies the callback value
-   nor creates an edge. Unsupported scope syntax or a parse error leaves the candidate in place.
+6. **A parameter is a different lexical declaration**, only for an exact bare use in value position of a supported
+   simple parameter of the enclosing arrow function, function expression, function declaration, method or
+   constructor. It excludes attribution to a removed homonym in another file, and a graph edge that links that bare
+   use to a homonym declaration is not a dependence; it neither identifies the parameter's value nor creates an edge.
+   A type position, unsupported scope syntax or a parse error leaves the candidate and the edge in place.
 7. **The port is declared by the consumer and wired by composition.** `core/ports/import-origins.port.ts`; the adapter
    checks one file at a time and drops the tree. Its public isolated transpilation API creates a single-file compiler
    program internally for syntax diagnostics; it does not load or type-check the project. No use case imports a parser and no adapter reads another adapter.

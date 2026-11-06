@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { edgeConfidence, followsEdge, followsRelation, isBoundOutside, isIgnoredEdge, type EdgeScore } from "./edge-policy.ts";
+import { edgeConfidence, followsEdge, followsRelation, edgeVerdict, isIgnoredEdge, type EdgeScore } from "./edge-policy.ts";
 import type { ImportOrigin } from "../relations/resolved-reference.ts";
 
 const follows = (kind: string, sourceKind: string, targetKind: string): boolean => followsEdge({ kind, sourceKind, targetKind });
@@ -76,11 +76,35 @@ test("an injection or template use between two classes or components is followed
 
 test("only a root a package or the language's libraries bind is outside the repository", () => {
   const evidence = [{ path: "src/a.ts", line: 1 }];
-  const root = (value: ImportOrigin) => isBoundOutside({ status: "complete", value, evidence });
+  const root = (value: ImportOrigin) => edgeVerdict({ status: "complete", value, evidence }).kind === "drop";
 
   assert.equal(root({ kind: "external", module: "typescript" }), true);
   assert.equal(root({ kind: "ambient", name: "Promise" }), true);
   assert.equal(root({ kind: "repository", file: "src/b.ts" }), false);
   assert.equal(root({ kind: "local-parameter", name: "x" }), false);
-  assert.equal(isBoundOutside({ status: "unknown", reason: "unresolved", evidence }), false);
+  assert.equal(edgeVerdict({ status: "unknown", reason: "unresolved", evidence }).kind, "keep");
+});
+
+test("a root spelled alone that an import binds to another proven declaration redirects the edge to it", () => {
+  const evidence = [{ path: "src/a.ts", line: 1 }];
+  const repository: ImportOrigin = { kind: "repository", file: "src/parts.ts" };
+
+  assert.deepEqual(edgeVerdict({ status: "complete", value: repository, evidence, bare: true }, "constant", "function"), { kind: "redirect", to: "constant" });
+  assert.deepEqual(edgeVerdict({ status: "complete", value: repository, evidence, bare: true }, "constant", "constant"), { kind: "keep" });
+});
+
+test("an unproven binding or a root a longer chain reaches keeps the edge on the graph's target", () => {
+  const evidence = [{ path: "src/a.ts", line: 1 }];
+  const repository: ImportOrigin = { kind: "repository", file: "src/parts.ts" };
+
+  assert.deepEqual(edgeVerdict({ status: "complete", value: repository, evidence, bare: true }, undefined, "function"), { kind: "keep" });
+  assert.deepEqual(edgeVerdict({ status: "complete", value: repository, evidence }, "Logger", "error"), { kind: "keep" });
+});
+
+test("a root spelled alone that a parameter binds drops the edge, whatever the graph matched it to", () => {
+  const evidence = [{ path: "src/a.ts", line: 1 }];
+  const parameter: ImportOrigin = { kind: "local-parameter", name: "redact" };
+
+  assert.deepEqual(edgeVerdict({ status: "complete", value: parameter, evidence, bare: true }), { kind: "drop" });
+  assert.deepEqual(edgeVerdict({ status: "complete", value: parameter, evidence }), { kind: "keep" });
 });
