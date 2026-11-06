@@ -65,16 +65,62 @@ is the refresh of declared remotes under `trusted` ([ADR-0016](../adr/0016-remot
 The TypeScript HTTP evaluator reads lexical bindings, including destructuring, enclosing functions, blocks, catches and
 loops; an inner binding wins and a local initializer is evaluated in its declaration's scope. Function-scoped `var`
 bindings do not escape nested functions or classes. Immutable AST scopes are memoized by node, and file bindings are
-collected once per source instead of rescanned for every request.
+collected once per source instead of rescanned for every request. A `let` or `var` the code assigns again (destructuring
+included) is not its initializer and leaves the path undecided, unless every such assignment appends a query or a
+fragment (`url += '?q=' + q`), so the path stays the initializer's.
 
-An unshadowed global `encodeURIComponent` is a supported static transformation: literal text is encoded, and an identifier
-explicitly typed `string`, `number`, `boolean` or `bigint` may remain a parameter placeholder within a known path; so may
-`String(x)` and `x.toString()` of such an identifier. Unsupported arguments, shadowed encoders, visible writes or an
-escaping global object in the provided snapshot keep the evaluation unknown. No repository function is executed. A whole
-run-time URL such as `fetch(url)` remains unknown when `url` names a run-time parameter.
+A value the code fills at run time, written `{}`, is a parameter or a variable whose initializer reads one (`this`
+included); a variable whose initializer the snapshot does not decide and reads none of them is undecided. A run-time
+value stands for one path segment, an approximation: nothing proves it nonempty, free of `/` or other than a dot segment.
+It stands for a segment only where it starts one; a run-time value that starts the URL or follows text of its segment
+(`${base}/orders`, `/api/v1${path}`) may hold an origin, a base path or several segments, so the path is undecided.
+
+An unshadowed global `encodeURIComponent` is a supported static transformation. It escapes `/`, `?` and `#`, so what it
+encodes stays in one segment: a text the snapshot states whole is encoded, and anything else is a run-time value, a text
+holding a run-time value or cut at its query included, unless the snapshot cannot read the argument and the argument reads
+nothing the code fills at run time. `String(x)` and `x.toString()` write what a template writes for `x`. Shadowed encoders,
+visible writes or an escaping global object in the provided snapshot keep the evaluation unknown. No repository function
+is executed. A whole run-time URL such as `fetch(url)` remains unknown when `url` names a run-time parameter.
+
+A wrapper is a verb-named method of a class another class injects that forwards one of its parameters unchanged as the
+tail of its request's path (`this.http.get(path)`, `` `${this.url}${path}` ``, `base + '/' + path`, or through a method
+of the class that returns its parameter that way); its callers make the requests, with the verb of the request the
+wrapper makes, and the caller's path argument joins through the base-path and suffix rungs. A method that writes its
+parameter inside a segment (`` `/items/${encodeURIComponent(id)}` ``, `` `/items/${id}/details` ``) is no wrapper: its own
+request is the call site.
+
+A receiver `this.x` is the field the class of the call declares (a constructor parameter only when it declares a
+property) or inherits from its base class, here or through an import; a bare name is the binding the code around it
+declares, then a constant of the file. The file that writes the receiver's type name decides through its imports which
+class it names.
+
+`fetch(url, init)` takes its method from the init object it states, GET without one; an init that is not an object
+literal, or a spread or computed member that may state `method` after it, leaves the method undecided. An
+`httpResource` request object's `url` and `method` are read the same way, shorthand included. A `fetch` the file or the
+code around declares or imports is not the global one, and its call is no request.
+
+The text after the first `?` or `#` of a URL is its query or fragment, which no route serves: evaluation stops there, so
+a value the query names never leaves the path undecided. An argument of `encodeURIComponent` cut there is undecided.
+
+A method a path calls (`pageLink.toQuery()`, `this.area()`) is read when its receiver's class is in the snapshot: `this`,
+`super`, a field or a parameter whose declared type names the class. The receiver may be any subclass, so the method the
+class declares or inherits and every override a subclass declares must write the same (`super` reads only the inherited
+one). A method that reads its own parameters is not read, since its arguments are not substituted.
+
+A function a path calls, and the function an `httpResource` takes its request from, is read at every `return` of its own
+body; the functions it declares return their own. A bare `return`, and an end the body reaches without returning, return
+`undefined`. Every return must write the same path, otherwise the path is undecided, and a function that calls itself is
+undecided. An `httpResource` function that returns `undefined` requests nothing then, so its request is the one its other
+returns state. Variables the function declares are values it fills at run time.
 
 A class member the class does not declare (`this.resourceUrl`) is read from the class it extends, in the same file or
-through an import; a member the class declares itself wins.
+through an import; a member the class declares itself wins. A field's initializer is its value only while nothing else
+assigns it: a field declared without an initializer or as a constructor parameter, one the classes from the reading
+class up to the declaring one write (`=`, compound assignments, `++`, `delete`), one a subclass of the reading class
+declares again or writes, and any field of a class that writes fields it does not name (`this[key] =`,
+`Object.assign(this, …)`) hold a value the code fills at run time. Writes from outside the class hierarchy are not read.
+A property of a run-time value (`category.id`, `event.data.id`) is a run-time value; a root the code binds is read
+through that binding before any class, import or constant of the same name.
 
 A name that is neither a binding nor an import of its file, such as an ambient `declare const`, takes the value an
 Angular workspace's `build` target states for it in `define` (application builders), read from `angular.json` as source

@@ -15,7 +15,7 @@ import { readAngularMetadataFile, type RawAngularClass, type RawAngularFile, typ
 import { readAngularRouteFile, type RawRouteFile } from "./angular-router.extractor.ts";
 import { createDeclarationLookup } from "./declaration-lookup.ts";
 import { manifestsOf, pathsByProject, projectOf } from "./angular-projects.ts";
-import { createModuleResolver } from "./module-resolver.ts";
+import { createModuleResolver, type ManifestPackages } from "./module-resolver.ts";
 import { providerIdentityEvidence, type ProviderIdentityEvidence } from "./provider-identity.ts";
 
 const ANGULAR_CORE = "@angular/core";
@@ -56,7 +56,7 @@ async function readMetadata(files: readonly SourceFile[], proof?: MemberProofCon
     const scope = proof?.completeSource === true && contents.size === files.length
       ? { sites: new Set(sources.filter((path) => projectOf(path, manifests)?.directory === project.directory)), evidence: sourcePaths, ...(replaced === undefined ? {} : { replaced }) }
       : undefined;
-    const metadata = await readProject(contents, project.dependencies, sources, scope, proof !== undefined, templateEffects);
+    const metadata = await readProject(contents, project.packages, sources, scope, proof !== undefined, templateEffects);
     classes.push(...metadata.classes);
     findings.push(...metadata.findings);
     fields.push(...metadata.fields);
@@ -112,10 +112,10 @@ function replacedFiles(files: readonly SourceFile[]): ReadonlySet<string> | unde
   return replaced;
 }
 
-async function readProject(contents: ReadonlyMap<string, SourceFile>, dependencies: ReadonlySet<string>, sources: readonly string[], scope: ProofScope | undefined, collectSites: boolean, templateEffects?: AngularMetadataReadOptions["templateEffects"]): Promise<AngularMetadata> {
+async function readProject(contents: ReadonlyMap<string, SourceFile>, packages: ManifestPackages, sources: readonly string[], scope: ProofScope | undefined, collectSites: boolean, templateEffects?: AngularMetadataReadOptions["templateEffects"]): Promise<AngularMetadata> {
   const proveMembers = scope !== undefined;
   const read = async (path: string): Promise<string | undefined> => contents.get(path)?.content;
-  const resolver = createModuleResolver(read, dependencies);
+  const resolver = createModuleResolver(read, packages);
   const sourceSet = new Set(sources);
   const parsed = new Map<string, Promise<Parsed | undefined>>();
   const parse = (file: string): Promise<Parsed | undefined> => {
