@@ -1,6 +1,7 @@
 import ts from "typescript";
 import { ELEMENT, type AccessPath } from "../../domain/contracts/access-path.ts";
 import type { Literal } from "../../domain/contracts/use-operation.ts";
+import { bindFile } from "./lexical-bindings.ts";
 
 export type FunctionNode = ts.ArrowFunction | ts.FunctionExpression | ts.FunctionDeclaration | ts.MethodDeclaration | ts.ConstructorDeclaration | ts.GetAccessorDeclaration | ts.SetAccessorDeclaration;
 
@@ -97,40 +98,89 @@ export function isNullishLiteral(expression: ts.Expression): boolean {
   return bare.kind === ts.SyntaxKind.NullKeyword || (ts.isIdentifier(bare) && bare.text === "undefined");
 }
 
-export type Binding = { kind: "name"; name: string; scope: ts.Node } | { kind: "member"; name: string; scope: ts.ClassLikeDeclaration };
-
-function bindingNames(name: ts.BindingName): string[] {
-  if (ts.isIdentifier(name)) return [name.text];
-  return name.elements.flatMap((element) => (ts.isBindingElement(element) ? bindingNames(element.name) : []));
+/** What a name binds: its declaration, by the start of the first declaration's name, and the spans of every declaration. */
+interface Declared {
+  key: number;
+  spans: readonly { pos: number; end: number }[];
 }
 
-function declaresName(node: ts.Node, name: string): boolean {
-  if (isFunctionNode(node)) return node.parameters.some((parameter) => bindingNames(parameter.name).includes(name)) || ((ts.isFunctionExpression(node) || ts.isFunctionDeclaration(node)) && node.name?.text === name);
-  if (ts.isBlock(node) || ts.isSourceFile(node) || ts.isModuleBlock(node)) return statementsDeclare(node.statements, name);
-  if (ts.isCaseClause(node) || ts.isDefaultClause(node)) return statementsDeclare(node.statements, name);
-  if (ts.isForStatement(node) || ts.isForOfStatement(node) || ts.isForInStatement(node)) {
-    const initializer = node.initializer;
-    return initializer !== undefined && ts.isVariableDeclarationList(initializer) && initializer.declarations.some((declaration) => bindingNames(declaration.name).includes(name));
-  }
-  if (ts.isCatchClause(node)) return node.variableDeclaration !== undefined && bindingNames(node.variableDeclaration.name).includes(name);
-  return false;
+/** A name's binding as the binder answers it, `dynamic` where no binding is claimed (ADR-0029); absent: none. */
+type Answer = Declared | "dynamic";
+
+const answered = new WeakMap<ts.SourceFile, ReadonlyMap<number, Answer>>();
+
+/**
+ * Every name of a file with its binding, by the name's start: the binder answers them all at once and its program is
+ * dropped (ADR-0029). A declaration's own name answers with its declaration whenever any read of it does.
+ */
+function answersOf(tree: ts.SourceFile): ReadonlyMap<number, Answer> {
+  let answers = answered.get(tree);
+  if (answers !== undefined) return answers;
+  const bound = bindFile(tree.fileName, tree.text);
+  const found = new Map<number, Answer>();
+  const visit = (node: ts.Node): void => {
+    if (ts.isIdentifier(node)) {
+      const binding = bound.bindingOf(node);
+      if (binding.kind === "dynamic") found.set(node.getStart(bound.tree), "dynamic");
+      const names = binding.kind === "declared" ? binding.declarations.flatMap((declaration) => ts.getNameOfDeclaration(declaration) ?? []) : [];
+      if (binding.kind === "declared" && names.length > 0) {
+        const declared: Declared = { key: Math.min(...names.map((name) => name.getStart(bound.tree))), spans: binding.declarations.map(({ pos, end }) => ({ pos, end })) };
+        for (const name of [node, ...names]) found.set(name.getStart(bound.tree), declared);
+      }
+    }
+    node.forEachChild(visit);
+  };
+  visit(bound.tree);
+  answers = found;
+  answered.set(tree, answers);
+  return answers;
 }
 
-function statementsDeclare(statements: readonly ts.Statement[], name: string): boolean {
-  return statements.some(
-    (statement) =>
-      (ts.isVariableStatement(statement) && statement.declarationList.declarations.some((declaration) => bindingNames(declaration.name).includes(name))) ||
-      ((ts.isFunctionDeclaration(statement) || ts.isClassDeclaration(statement)) && statement.name?.text === name),
-  );
+function answerOf(identifier: ts.Identifier): Answer | undefined {
+  return answersOf(identifier.getSourceFile()).get(identifier.getStart());
 }
 
-/** The nearest scope above `node` that declares `name`, the file when none does. */
+/** `binds` is the declaration the name binds, by its key; absent for a name the file does not declare. */
+export type Binding = { kind: "name"; name: string; scope: ts.Node; binds?: number } | { kind: "member"; name: string; scope: ts.ClassLikeDeclaration };
+
+/** The binding a declaration's name introduces in `scope`. */
+export function declaredBinding(name: ts.Identifier, scope: ts.Node): Binding {
+  const answer = answerOf(name);
+  return { kind: "name", name: name.text, scope, binds: answer === undefined || answer === "dynamic" ? name.getStart() : answer.key };
+}
+
+/** The binding an assigned name writes, with the scope that declares it; undefined where the name is dynamic. */
+export function assignedBinding(name: ts.Identifier): Binding | undefined {
+  const answer = answerOf(name);
+  if (answer === "dynamic") return undefined;
+  return { kind: "name", name: name.text, scope: declaringScope(name), ...(answer === undefined ? {} : { binds: answer.key }) };
+}
+
+function bindsTo(identifier: ts.Identifier, binding: Extract<Binding, { kind: "name" }>): boolean {
+  const answer = answerOf(identifier);
+  return answer !== "dynamic" && answer?.key === binding.binds;
+}
+
+const SCOPES = (node: ts.Node): boolean =>
+  isFunctionNode(node) || ts.isBlock(node) || ts.isSourceFile(node) || ts.isModuleBlock(node) || ts.isCaseBlock(node) || ts.isForStatement(node) || ts.isForOfStatement(node) || ts.isForInStatement(node) || ts.isCatchClause(node);
+
+/** The nearest scope above `node` that holds a declaration of what it binds, as the binder answers; the file when none does. */
 export function declaringScope(node: ts.Identifier): ts.Node {
+  const answer = answerOf(node);
+  const spans = answer === undefined || answer === "dynamic" ? [] : answer.spans;
   let current: ts.Node = node;
   while (current.parent !== undefined) {
     current = current.parent;
-    if (declaresName(current, node.text)) return current;
+    if (SCOPES(current) && spans.some(({ pos, end }) => current.pos <= pos && end <= current.end)) return current;
   }
+  return current;
+}
+
+/** Where every read of a name binding sits: the function or file around its scope, since a `var` reaches past its block. */
+export function searchRoot(binding: Binding): ts.Node {
+  if (binding.kind === "member") return binding.scope;
+  let current = binding.scope;
+  while (!isFunctionNode(current) && !ts.isSourceFile(current) && current.parent !== undefined) current = current.parent;
   return current;
 }
 
@@ -168,17 +218,17 @@ function isValueIdentifier(node: ts.Identifier): boolean {
   return !isWriteTarget(node);
 }
 
+/** A member binding is read through `this`, which a nested class or function rebinds. */
 function shadows(node: ts.Node, binding: Binding): boolean {
-  if (binding.kind === "name") return declaresName(node, binding.name);
-  return ts.isClassLike(node) || ts.isFunctionExpression(node) || ts.isFunctionDeclaration(node);
+  return binding.kind === "member" && (ts.isClassLike(node) || ts.isFunctionExpression(node) || ts.isFunctionDeclaration(node));
 }
 
 function isReference(node: ts.Node, binding: Binding): boolean {
-  if (binding.kind === "name") return ts.isIdentifier(node) && node.text === binding.name && isValueIdentifier(node);
+  if (binding.kind === "name") return ts.isIdentifier(node) && node.text === binding.name && isValueIdentifier(node) && bindsTo(node, binding);
   return ts.isPropertyAccessExpression(node) && node.expression.kind === ts.SyntaxKind.ThisKeyword && node.name.text === binding.name && !isWriteTarget(node);
 }
 
-/** The expressions that read a binding, in source order, without the scopes that declare the name again. */
+/** The expressions that read a binding, in source order. */
 export function referencesOf(binding: Binding): ts.Expression[] {
   const found: ts.Expression[] = [];
   const visit = (node: ts.Node): void => {
@@ -190,7 +240,7 @@ export function referencesOf(binding: Binding): ts.Expression[] {
     if (shadows(node, binding)) return;
     node.forEachChild(visit);
   };
-  binding.scope.forEachChild(visit);
+  searchRoot(binding).forEachChild(visit);
   return found;
 }
 
@@ -249,7 +299,7 @@ export function chainPath(expression: ts.Expression, binding: Binding): AccessPa
   const segments: string[] = [];
   let current = unwrap(expression);
   for (;;) {
-    if (binding.kind === "name" && ts.isIdentifier(current)) return current.text === binding.name ? segments : undefined;
+    if (binding.kind === "name" && ts.isIdentifier(current)) return current.text === binding.name && bindsTo(current, binding) ? segments : undefined;
     if (ts.isPropertyAccessExpression(current)) {
       if (binding.kind === "member" && current.expression.kind === ts.SyntaxKind.ThisKeyword) return current.name.text === binding.name ? segments : undefined;
       segments.unshift(current.name.text);

@@ -53,7 +53,10 @@ export function bindFile(path: string, content: string): BoundFile {
       if (!isLexicalReference(identifier)) return NONE;
       if (isDynamic(identifier)) return DYNAMIC;
       const parent = identifier.parent;
-      const symbol = ts.isShorthandPropertyAssignment(parent) && parent.name === identifier ? checker.getShorthandAssignmentValueSymbol(parent) : checker.getSymbolAtLocation(identifier);
+      const symbol =
+        ts.isShorthandPropertyAssignment(parent) && parent.name === identifier ? checker.getShorthandAssignmentValueSymbol(parent)
+        : ts.isExportSpecifier(parent) ? checker.getExportSpecifierLocalTargetSymbol(parent)
+        : checker.getSymbolAtLocation(identifier);
       const declarations = symbol?.declarations ?? [];
       return symbol === undefined || declarations.length === 0 ? NONE : { kind: "declared", symbol, declarations };
     },
@@ -92,14 +95,17 @@ function evalScopes(tree: ts.SourceFile): ReadonlySet<ts.Node> {
 
 /**
  * A name read where the binder alone answers what it binds. Elsewhere `getSymbolAtLocation` reaches the checker's types:
- * a destructuring key, a member or property name, a qualified or type name, a JSX tag or attribute.
+ * a destructuring key, a member or property name, a qualified or type name, a JSX tag or attribute. A destructuring
+ * default is a read; so is an export specifier's local name.
  */
 function isLexicalReference(identifier: ts.Identifier): boolean {
   if (ts.isPartOfTypeNode(identifier)) return false;
   const parent = identifier.parent;
   if (ts.isShorthandPropertyAssignment(parent)) return parent.name === identifier;
   if (ts.isPropertyAccessExpression(parent)) return parent.expression === identifier;
-  if (ts.isBindingElement(parent) || ts.isQualifiedName(parent) || ts.isJsxAttribute(parent) || ts.isJsxOpeningLikeElement(parent) || ts.isJsxClosingElement(parent) || ts.isJsxNamespacedName(parent) || ts.isMetaProperty(parent)) return false;
+  if (ts.isBindingElement(parent)) return parent.initializer === identifier;
+  if (ts.isExportSpecifier(parent)) return (parent.propertyName ?? parent.name) === identifier;
+  if (ts.isQualifiedName(parent) || ts.isJsxAttribute(parent) || ts.isJsxOpeningLikeElement(parent) || ts.isJsxClosingElement(parent) || ts.isJsxNamespacedName(parent) || ts.isMetaProperty(parent)) return false;
   return !(("name" in parent && parent.name === identifier) || ("propertyName" in parent && parent.propertyName === identifier) || ("label" in parent && parent.label === identifier));
 }
 

@@ -591,6 +591,37 @@ test("a parameter that shadows a top-level function is not that function", async
   assert.deepEqual(frontiers(result), ["2 unmodelled-sink:render"]);
 });
 
+test("a var declared in a block is the whole function's binding, so its reads there are not the followed value", async () => {
+  const file = plain(["const run = () => {", "  if (o) { var o = other }", "  show(o.owner.name)", "}", "show(o.owner.id)"]);
+  const result = await follow([file], paramO, "owner");
+  assert.deepEqual(uses(result), ["6 owner.id|owner dereference []"]);
+});
+
+test("an assignment binds the declaration its case block shares, never an outer one of the same name", async () => {
+  const file = plain(["let x = o", "switch (k) {", "  case 1: let x = 0; break", "  case 2: x = o.owner", "}", "show(x.owner.id)"]);
+  const result = await follow([file], paramO, "owner");
+  assert.deepEqual(uses(result), ["7 owner.id|owner dereference []"]);
+});
+
+test("a var declared in a block holds the followed value past the block", async () => {
+  const result = await follow([plain(["if (c) { var x = o }", "show(x.owner.id)"])], paramO, "owner");
+  assert.deepEqual(uses(result), ["3 owner.id|owner dereference []"]);
+});
+
+test("a function declared in one case clause is the callee of a call in another, over a top-level one of the same name", async () => {
+  const file = source("p.ts", ["function render(x: Order) {}", "function use(o: Order) {", "  switch (k) {", "    case 1: function render(y: Order) {} break", "    case 2: render(o)", "  }", "}"]);
+  const result = await follow([file], { ...paramO, line: at(2) }, "owner");
+  assert.deepEqual(next(result), ["parameter render#0@4 owner"]);
+});
+
+test("a followed value read as a destructuring default or by an export specifier stays a frontier there", async () => {
+  const defaulted = await follow([plain(["const { a = o } = {} as any", "show(a.owner.id)"])], paramO, "owner");
+  const exported = await follow([source("p.ts", ["let held: any", "function use(o: Order) { held = o }", "export { held }"])], { ...paramO, line: at(2) }, "owner");
+
+  assert.deepEqual(frontiers(defaulted), ["2 unmodelled-flow:BindingElement"]);
+  assert.deepEqual(frontiers(exported), ["3 unmodelled-flow:ExportSpecifier"]);
+});
+
 test("a local function declaration is the callee over a top-level one of the same name", async () => {
   const file = source("p.ts", ["function render(x: Order) {}", "function use(o: Order) {", "  function render(y: Order) {}", "  render(o)", "}"]);
   const result = await follow([file], { ...paramO, line: at(2) }, "owner");
