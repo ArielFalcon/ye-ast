@@ -44,6 +44,7 @@ interface Scope {
 const NO_SCOPE: Scope = { names: new Set(), locals: new Map() };
 const LEXICAL_SCOPES = new WeakMap<ts.Node, Scope>();
 const OWN_BINDINGS = new WeakMap<ts.Node, ReadonlyMap<string, Binding>>();
+const LOCAL_INITIALIZERS = new WeakMap<ts.Node, ReadonlyMap<string, ts.Expression>>();
 
 /** The names the code being evaluated binds at run time: a path part that names one is `{}`, never undecided. */
 type RunTime = ReadonlySet<string>;
@@ -380,12 +381,15 @@ function functionOf(member: ts.Node): ts.MethodDeclaration | ts.ArrowFunction | 
 
 /** The variables a member declares in its body, by name, with what they are initialized to. */
 function localInitializers(member: ts.Node): ReadonlyMap<string, ts.Expression> {
+  const cached = LOCAL_INITIALIZERS.get(member);
+  if (cached !== undefined) return cached;
   const held = new Map<string, ts.Expression>();
   const visit = (node: ts.Node): void => {
     if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer !== undefined) held.set(node.name.text, node.initializer);
     ts.forEachChild(node, visit);
   };
   visit(member);
+  LOCAL_INITIALIZERS.set(member, held);
   return held;
 }
 
