@@ -1,4 +1,4 @@
-import { CALL_EDGE_KINDS, isIgnoredEdge } from "../../domain/impact/edge-policy.ts";
+import { CALL_EDGE_KINDS, EDGE_POLICY, isIgnoredEdge } from "../../domain/impact/edge-policy.ts";
 import { declarationAnchor, placeAt, referenceKey } from "../../domain/impact/impact-cuts.ts";
 import { NOT_DECLARED_KINDS, sortedUnique } from "../../domain/impact/importers-fact.ts";
 import type { Cut } from "../../domain/shared/fact.ts";
@@ -12,6 +12,9 @@ import { createGraphNavigation } from "../navigation/graph-navigation.ts";
 
 /** What a body passes as a value runs later, if at all; only code can. */
 const DEFERRED_KINDS: readonly string[] = ["function", "method"];
+
+/** What holds an object literal, whose functions the index records as functions of the file. */
+const VALUE_KINDS: readonly string[] = ["constant", "variable"];
 
 export interface TraceWalkInput {
   store: CodeGraphReader;
@@ -72,6 +75,19 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
     return named;
   };
 
+  const valuesByFile = new Map<string, readonly GraphSymbol[]>();
+  const heldByValue = (symbol: GraphSymbol): boolean => {
+    let values = valuesByFile.get(symbol.file);
+    if (values === undefined) {
+      values = store.symbolsInFiles([symbol.file]).filter((candidate) => VALUE_KINDS.includes(candidate.kind));
+      valuesByFile.set(symbol.file, values);
+    }
+    return values.some((value) => value.startLine <= symbol.startLine && symbol.endLine <= value.endLine);
+  };
+  /** What `x.<name>` can run: a member, or a function an object literal holds; never a top-level function or constant. */
+  const membersNamed = (name: string): readonly GraphSymbol[] =>
+    declarationsNamed(name).filter((symbol) => (EDGE_POLICY.memberKinds as readonly string[]).includes(symbol.kind) || (symbol.kind === "function" && heldByValue(symbol)));
+
   const anchorOf = (symbol: GraphSymbol): string => declarationAnchor(symbol.file, symbol.name);
   const unresolvedAt = (reference: GraphUnresolvedReference, declarations: readonly GraphSymbol[]): Cut => ({
     kind: "unresolved-link",
@@ -114,7 +130,7 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
         if (callee.form === "computed") cuts.push(unresolvedAt(reference, []));
         else if (callee.form === "bare") bare.push({ reference, name: callee.name });
         else {
-          const named = declarationsNamed(callee.name);
+          const named = membersNamed(callee.name);
           if (named.length === 0) external.push({ kind: "unnamed", name: reference.name });
           else cuts.push(unresolvedAt(reference, named));
         }

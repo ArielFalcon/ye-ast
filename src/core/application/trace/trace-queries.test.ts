@@ -135,6 +135,21 @@ test("a member call some declaration is named after is a cut at the place listin
   assert.equal(valueOf(fact).steps[0]?.external, undefined);
 });
 
+test("a member call whose name only a top-level function has leaves the repository, unnamed, and cuts nothing", async () => {
+  const fact = await factOf({ nodes: [SVC, RUN, fakeNode("map", "function", B, 3, 5)], edges: CONTAINS, unresolved: [{ from: "run", name: "items.map", kind: "calls", file: A, line: 9, column: 4 }] });
+  assert.equal(fact.status, "complete");
+  assert.deepEqual(valueOf(fact).steps[0]?.external, [{ kind: "unnamed", names: ["items.map"] }]);
+});
+
+test("a member call named after a function an object literal holds is a cut listing that function", async () => {
+  const fact = await factOf({
+    nodes: [SVC, RUN, fakeNode("table", "constant", B, 2, 6), fakeNode("handle", "function", B, 3, 4)],
+    edges: CONTAINS,
+    unresolved: [{ from: "run", name: "table.handle", kind: "calls", file: A, line: 9, column: 4 }],
+  });
+  assert.deepEqual(cutsOf(fact), [["unresolved-link", ["src/a.ts:9 table.handle", "src/b.ts::handle"]]]);
+});
+
 test("a declaration outside the declared scope does not keep a member call in the repository", async () => {
   const fact = await factOf(
     { nodes: [SVC, RUN, fakeNode("Repo.save", "method", B, 3, 5, "save")], edges: CONTAINS, unresolved: [{ from: "run", name: "repo.save", kind: "calls", file: A, line: 9, column: 4 }], matches: (path) => path === B },

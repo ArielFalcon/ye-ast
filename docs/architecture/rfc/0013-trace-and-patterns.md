@@ -65,13 +65,14 @@ R6 applies only where the name at the call is the name of the callee:
 
 | Spelling | External leaf when | Otherwise |
 |---|---|---|
-| member call `x.m(...)` | no declaration within the declared scope is named `m` (`unnamed`) | R6b cut |
+| member call `x.m(...)` | no member within the declared scope is named `m` (`unnamed`): a method (getters, setters and interface methods included), a property or field, or a function an object literal holds. A top-level function or constant named `m` does not count | R6b cut listing those members |
 | bare call `f(...)` | the import origins say the file imports `f` from a package (`import`, with the module) or the language's own libraries declare it (`global`) | cut: a local parameter, an alias or a computed callee may be a repository function passed under another name |
 | computed call `x[k](...)`, `(expr)(...)` | never | cut |
 
-Limitation, verified on a real index: an object literal's property keys are not declarations, so a call through an
-object-literal key whose name no declaration has is reported external `unnamed`, even when the key holds a repository
-function.
+Limitation, verified on a real index: a key that aliases a declaration (`{ handle }`, `{ m: handle }`) is no
+declaration of its own, so a call through an object-literal key whose name no member has is reported external
+`unnamed`, even when the key holds a repository function. A function the literal defines (`{ m() {} }`,
+`{ m: () => ... }`) is a declaration and counts.
 
 R4 and R5 read the syntax tree of the file (the TypeScript compiler API in `core/adapters/typescript`, ADR-0008; the
 tree-sitter syntax tree for Java), never a type checker, and are computed once per file content.

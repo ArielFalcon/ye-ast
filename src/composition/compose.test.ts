@@ -636,3 +636,30 @@ test("a trace over a real index charges an anonymous callback to its encloser, d
     external: [{ kind: "unnamed", names: ["items.forEach", "items.map"] }],
   }]);
 });
+
+test("a trace over a real index follows a call to an object literal's function, and lets a member call named after a top-level function leave the repository", async () => {
+  writeFileSync(join(repo, "src", "table.ts"), [
+    "export const table = { pick: (value: number): number => value };",
+    "export function format(value: number): string {",
+    "  return String(value);",
+    "}",
+    "export function run(price: number): number {",
+    "  price.toFixed(2).format();",
+    "  return table.pick(price);",
+    "}",
+    "",
+  ].join("\n"));
+  git("add", "-A");
+  git("commit", "-q", "-m", "table");
+  const { trace } = composeQueries({ scratchRoot });
+
+  const answer = await trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: "src/table.ts", symbol: "run" }] });
+
+  assert.ok(answer.ok);
+  assert.equal(answer.value.status, "complete");
+  assert.deepEqual(answer.value.status === "complete" && answer.value.value.steps, [{
+    id: 0, depth: 0, file: "src/table.ts", symbol: "run", kind: "function", line: 5, endLine: 8,
+    leaves: [{ symbol: "pick", file: "src/table.ts", start: 1, end: 1 }],
+    external: [{ kind: "unnamed", names: ["price.toFixed", "price.toFixed().format"] }],
+  }]);
+});
