@@ -32,6 +32,15 @@ async function extractRelations(deps: AngularRelationsDeps, files: readonly Sour
     return "unknown" in source ? { calls: [], writes: [], passed: [], unreadable: true } : deps.templates.effects(source);
   };
   const { classes, findings, fields, locals, memberUses } = await deps.metadata.read(files, { ...options, templateEffects });
+  const { units, findings: unitFindings } = templateUnitsOf(classes, contents);
+  return { relations: sortFindings([...findings, ...unitFindings, ...deps.templates.read(units)]), fields, locals, ...(memberUses === undefined ? {} : { memberUses }) };
+}
+
+/**
+ * The template of each component with its scope, and the host-directive and unreadable-template findings met on the way.
+ * A component whose template is missing or unreadable has no unit.
+ */
+export function templateUnitsOf(classes: readonly AngularClass[], contents: ReadonlyMap<string, string>): { units: TemplateUnit[]; findings: Finding<Relation>[] } {
   const byKey = new Map(classes.map((candidate) => [classKey(candidate.ref), candidate]));
   const declaredIn = new Map<string, Extract<AngularClass, { kind: "module" }>[]>();
   for (const candidate of classes) {
@@ -41,7 +50,7 @@ async function extractRelations(deps: AngularRelationsDeps, files: readonly Sour
     }
   }
 
-  const found: Finding<Relation>[] = [...findings];
+  const found: Finding<Relation>[] = [];
   const units: TemplateUnit[] = [];
   for (const candidate of classes) {
     if (candidate.kind === "component" || candidate.kind === "directive") {
@@ -60,7 +69,7 @@ async function extractRelations(deps: AngularRelationsDeps, files: readonly Sour
     for (const problem of scope.problems) found.push(unknown("unresolved", problem));
     units.push({ component: candidate.ref, ...source, scope: scope.members });
   }
-  return { relations: sortFindings([...found, ...deps.templates.read(units)]), fields, locals, ...(memberUses === undefined ? {} : { memberUses }) };
+  return { units, findings: found };
 }
 
 function templateOf(component: Extract<AngularClass, { kind: "component" }>, template: NonNullable<Extract<AngularClass, { kind: "component" }>["template"]>, contents: ReadonlyMap<string, string>): { path: string; text: string; firstLine: number } | { unknown: Finding<never> } {

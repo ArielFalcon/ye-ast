@@ -37,13 +37,13 @@ history, so the same repository always gives the same answer. It runs nothing fr
 makes no network request. It speaks MCP, so Claude Code, OpenCode, Codex and any other client can use it.
 
 ```bash
-npx ye-ast-mcp init --trust untrusted .   # one command; paste the line it prints into your agent
+npx ye-ast-mcp init --trust untrusted .   # paste the line it prints into your agent
 ```
 
 TypeScript and Java today (Angular routes, Spring endpoints, OpenAPI contracts); anything else is reported as not covered, never as empty. It answers
 structure, not intent: "what reaches this?", never "is this code good?". Version 0.x: solid answers, a surface that may (will) change.
 
-**Markdown descriptions are boring.** [Walk the graph yourself](https://arielfalcon.github.io/ye-ast/).
+**Markdown descriptions are boring.** [This is what you want to see](https://arielfalcon.github.io/ye-ast/).
 
 ---
 

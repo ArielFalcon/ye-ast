@@ -3,6 +3,7 @@ import type { Entrypoint } from "../entrypoints/entrypoint.ts";
 import type { Handler, HttpMethod } from "../entrypoints/http-route.ts";
 import { compareText } from "../shared/code-node.ts";
 import type { Cut, Finding } from "../shared/fact.ts";
+import { unresolvedPlaceCuts } from "./impact-cuts.ts";
 
 export type ContractPart = "request" | "response";
 
@@ -88,11 +89,11 @@ function operationsByIdentity(findings: readonly Finding<ContractOperation>[]): 
 }
 
 function unresolvedCuts(operations: readonly ContractOperation[], touched: (path: string) => boolean): Cut[] {
-  return operations.flatMap((operation) =>
+  return unresolvedPlaceCuts(operations.flatMap((operation) =>
     operation.data.unresolved
       .filter((reference) => touched(operation.document) || (reference.file !== undefined && touched(reference.file)))
-      .map((reference): Cut => ({ kind: "unresolved-link", at: [`${operation.document}:${operation.line} ${reference.ref}`] })),
-  );
+      .map((reference) => ({ file: operation.document, line: operation.line, reason: reference.ref })),
+  ));
 }
 
 function changedOf(change: ChangedContract["change"], operation: ContractOperation): ChangedContract {

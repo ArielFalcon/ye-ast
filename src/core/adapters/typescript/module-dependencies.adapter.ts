@@ -1,16 +1,21 @@
 import ts from "typescript";
 import { isPackageManifest, isTypeScriptFile } from "../../domain/languages/typescript.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
-import type { ModuleDependencies, ModuleDependency, ModuleSource, ModuleTarget, UntraversedReference } from "../../domain/impact/module-dependency.ts";
+import type { ModuleDependencies, ModuleDependency, ModuleSource, UntraversedReference } from "../../domain/impact/module-dependency.ts";
+import type { ModuleTarget } from "../../domain/shared/module-target.ts";
 import type { ModuleDependenciesReader } from "../../ports/module-dependencies.port.ts";
 import { defaultDeclarationName, moduleStatement } from "./import-bindings.ts";
 import { createModuleResolver, manifestDependencies, packageOf } from "./module-resolver.ts";
+import { declaredNames } from "./syntax-names.ts";
 
 type PendingDependency = Omit<ModuleDependency, "target">;
 
+export const LOCAL_REQUIRE = "the file binds its own require, so the call is not proven to load a module";
+
 export function createModuleDependenciesReader(): ModuleDependenciesReader {
   return {
-    async extract(sources): Promise<ModuleDependencies> {
+    async extract(sources, options): Promise<ModuleDependencies> {
+      const selected = options?.files === undefined ? undefined : new Set(options.files);
       const texts = new Map(sources.map(({ path, content }) => [path, content]));
       const packages = new Set(sources.filter(({ path }) => isPackageManifest(path)).flatMap(({ content }) => [...manifestDependencies(content)]));
       const resolver = createModuleResolver(async (file) => texts.get(file), packages, { jsonModules: true });
@@ -20,7 +25,7 @@ export function createModuleDependenciesReader(): ModuleDependenciesReader {
       const untraversed: UntraversedReference[] = [];
 
       for (const [file, text] of [...texts].sort(([left], [right]) => compareText(left, right))) {
-        if (!isTypeScriptFile(file)) continue;
+        if (!isTypeScriptFile(file) || (selected !== undefined && !selected.has(file))) continue;
         const tree = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, false, ts.ScriptKind.TS);
         if ((tree as ts.SourceFile & { parseDiagnostics: readonly ts.Diagnostic[] }).parseDiagnostics.length > 0) {
           unread.push({ file, reason: "source-unreadable" });
@@ -69,12 +74,14 @@ export function createModuleDependenciesReader(): ModuleDependenciesReader {
             moduleOnly = false;
             continue;
           }
-          pending.push({ file, line: tree.getLineAndCharacterOfPosition(statement.getStart(tree)).line + 1, endLine: tree.getLineAndCharacterOfPosition(statement.end - 1).line + 1, specifier: read.specifier, kind: read.kind, typeOnly: read.typeOnly, ...(read.form === undefined ? {} : { form: read.form }), bindings: read.bindings });
+          const offset = statement.getStart(tree);
+          pending.push({ file, line: tree.getLineAndCharacterOfPosition(offset).line + 1, offset, endLine: tree.getLineAndCharacterOfPosition(statement.end - 1).line + 1, specifier: read.specifier, kind: read.kind, typeOnly: read.typeOnly, ...(read.form === undefined ? {} : { form: read.form }), bindings: read.bindings });
         }
         if (moduleOnly && exported.some((name) => !imported.has(name))) {
           moduleOnly = false;
           unsupported = true;
         }
+        const ownRequire = imported.has("require") || declaredNames(tree).has("require");
         const visit = (node: ts.Node): void => {
           const call = ts.isCallExpression(node) ? node : undefined;
           const dynamic = call?.expression.kind === ts.SyntaxKind.ImportKeyword;
@@ -90,7 +97,7 @@ export function createModuleDependenciesReader(): ModuleDependenciesReader {
               pending.push({ file, line, endLine, offset, specifier, kind: "import", typeOnly: form === "type-query", form, bindings: [] });
               statements.push(JSON.stringify({ reference: form, specifier }));
             } else {
-              untraversed.push({ file, line, offset, form, ...(specifier === undefined ? {} : { endLine, specifier }) });
+              untraversed.push({ file, line, offset, form, ...(specifier === undefined ? {} : { endLine, specifier }), ...(requireCall && ownRequire ? { target: { kind: "unresolved", reason: LOCAL_REQUIRE } } : {}) });
             }
           }
           ts.forEachChild(node, visit);
@@ -128,7 +135,7 @@ export function createModuleDependenciesReader(): ModuleDependenciesReader {
         const exportedAs = defaultOf(target.file);
         return { ...dependency, target, bindings: dependency.bindings.map((binding) => binding.imported === "default" && exportedAs !== undefined ? { ...binding, exportedAs } : binding) };
       }));
-      const traced = await Promise.all(untraversed.map(async (reference) => reference.specifier === undefined ? reference : { ...reference, target: await resolve(reference.file, reference.specifier) }));
+      const traced = await Promise.all(untraversed.map(async (reference) => reference.specifier === undefined || reference.target !== undefined ? reference : { ...reference, target: await resolve(reference.file, reference.specifier) }));
       const resources = new Set(dependencies.flatMap(({ target }) => target.kind === "repository" && target.file.endsWith(".json") ? [target.file] : []));
       for (const file of [...resources].sort(compareText)) files.push({ file, statements: [texts.get(file)!], moduleOnly: true, resource: true });
       files.sort((left, right) => compareText(left.file, right.file));

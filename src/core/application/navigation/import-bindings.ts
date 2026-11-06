@@ -1,7 +1,9 @@
 import { NOT_DECLARED_KINDS } from "../../domain/impact/importers-fact.ts";
 import type { ModuleBinding, ModuleDependency } from "../../domain/impact/module-dependency.ts";
+import { branchesOf, declarationPath } from "../../domain/shared/declaration-tree.ts";
 import { bindingDeclaration, type PlacedImport } from "../../domain/relations/import-binding.ts";
 import type { CodeGraphReader, GraphSymbol } from "../../ports/code-graph.port.ts";
+import { containmentTree } from "./containment-tree.ts";
 
 const IMPORT = "imports";
 const isDeclaration = (symbol: GraphSymbol): boolean => !NOT_DECLARED_KINDS.includes(symbol.kind);
@@ -30,6 +32,6 @@ export function importBindings(store: CodeGraphReader, file: string, dependencie
 
 function namedDeclaration(store: CodeGraphReader, dependency: ModuleDependency, binding: ModuleBinding): GraphSymbol | undefined {
   if (binding.exportedAs === undefined || dependency.target.kind !== "repository") return undefined;
-  const named = store.symbolsInFiles([dependency.target.file]).filter((symbol) => symbol.name === binding.exportedAs && isDeclaration(symbol));
-  return named.length === 1 ? named[0] : undefined;
+  const named = branchesOf(containmentTree(store, store.symbolsInFiles([dependency.target.file]))).filter((branch) => declarationPath(branch) === binding.exportedAs);
+  return named.length === 1 ? named[0]!.declaration : undefined;
 }

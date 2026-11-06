@@ -1,9 +1,5 @@
 import type { UnknownReason } from "../shared/fact.ts";
-
-export type ModuleTarget =
-  | { kind: "repository"; file: string }
-  | { kind: "external"; module: string }
-  | { kind: "unresolved"; reason: string };
+import type { ModuleTarget } from "../shared/module-target.ts";
 
 /** A module reference that is not a top-level statement: conditional evidence of a dependency. */
 export type ModuleReferenceForm = "dynamic-import" | "type-query";
@@ -19,8 +15,9 @@ export interface ModuleBinding {
   column: number;
   typeOnly: boolean;
   /**
-   * The name the repository file it leads to declares the bound value under, when syntax proves it: the declaration a
-   * TypeScript file exports as default, or the type or member a Java import names.
+   * The dotted containment path, from the top level of the repository file it leads to, of the declaration the bound
+   * value is, when syntax proves it: the declaration a TypeScript file exports as default, or the qualified name of the
+   * type or member a Java import names (its package is the namespace that contains the file's types).
    */
   exportedAs?: string;
 }
@@ -34,7 +31,7 @@ export interface ModuleDependency {
   typeOnly: boolean;
   /** Absent for static statements; runtime imports remain conditional module evidence; `import-equals` is static. */
   form?: ModuleReferenceForm | "import-equals";
-  /** Source offset distinguishes references sharing a line. */
+  /** Where the statement or reference starts in its source, so those sharing a line keep their order. */
   offset?: number;
   target: ModuleTarget;
   /** What the statement binds, in source order; empty for a side-effect import or a runtime reference. */
@@ -57,7 +54,10 @@ export interface ModuleDependencies {
   untraversed?: readonly UntraversedReference[];
 }
 
-/** A module reference module traversal does not follow; a `require` of a string literal carries where it leads. */
+/**
+ * A module reference module traversal does not follow; a `require` of a string literal carries where it leads, or why
+ * it is unresolved when the file binds a `require` of its own.
+ */
 export interface UntraversedReference {
   file: string;
   line: number;

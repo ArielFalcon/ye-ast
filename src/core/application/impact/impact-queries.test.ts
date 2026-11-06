@@ -22,6 +22,7 @@ import type { ImportOriginsReader, ImportOriginSite } from "../../ports/import-o
 import type { ImportOrigin } from "../../domain/relations/resolved-reference.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { ModuleDependenciesReader } from "../../ports/module-dependencies.port.ts";
+import type { ModuleDependency } from "../../domain/impact/module-dependency.ts";
 
 const HEAD = "a".repeat(40);
 const BASE = "b".repeat(40);
@@ -64,6 +65,8 @@ interface Options {
   importOrigins?: ImportOriginsReader;
   moduleDependencies?: ModuleDependenciesReader;
   snapshotSources?: Partial<Record<string, SourceFile[]>>;
+  /** The files the unmodelled-constructs reader marks among the sources it receives. */
+  unmodelled?: readonly string[];
 }
 
 function setup(options: Options = {}) {
@@ -135,6 +138,7 @@ function setup(options: Options = {}) {
     ...(options.importOrigins && { importOrigins: options.importOrigins }),
     ...(options.trivia && { sourceTrivia: { triviaLines: async (file: SourceFile) => new Set(options.trivia?.[file.path] ?? []) } }),
     ...(options.moduleDependencies && { moduleDependencies: options.moduleDependencies }),
+    ...(options.unmodelled && { unmodelled: { extract: async (sources) => sources.map(({ path }) => path).filter((path) => options.unmodelled!.includes(path)) } }),
   };
   const request: AtRevision<ImpactOfChangeRequest> = { repo: "/repo", repoId: "repo", base: "base", head: "head", ...(options.signal && { signal: options.signal }) };
   const queries = createImpactQueries(deps);
@@ -1294,6 +1298,24 @@ test("local callback proof excludes only its own removed-declaration occurrence 
   assert.deepEqual(onlyLocal.value.symbols, []);
 });
 
+test("a bare call the import reader places on this, inside the class that declares the member, is its caller and no cut", async () => {
+  const file = "src/svc.ts";
+  const unresolved = [{ from: "load", file, line: 3, column: 22, name: "fetch", kind: "calls" }];
+  const common: Options = {
+    nodes: [fakeNode("Svc", "class", file, 1, 9), fakeNode("fetch", "method", file, 2, 2), fakeNode("load", "method", file, 3, 3)],
+    edges: [{ from: "Svc", to: "fetch", kind: "contains" }, { from: "Svc", to: "load", kind: "contains" }],
+    unresolved,
+    exports: { [HEAD]: { files: [{ path: file, blob: "1", written: true }], skipped: [] } },
+  };
+  const ask = async (reader: ImportOriginsReader) => callersFact(await setup({ ...common, importOrigins: reader }).callers({ targets: [{ file, symbol: "fetch" }] }));
+  const proven = await ask(origins((site) => (site.column === 23 ? { kind: "this-member", name: "fetch" } : undefined)));
+  assert.equal(proven.status, "complete");
+  assert.deepEqual(proven.status === "complete" && proven.value.symbols.find((symbol) => symbol.symbol === "load")?.via, { file, symbol: "fetch", lines: [3], basis: "call" });
+  const unproven = await ask(origins(() => undefined));
+  assert.equal(unproven.status, "partial");
+  assert.equal(unproven.status === "partial" && unproven.value.symbols.some((symbol) => symbol.symbol === "load"), false);
+});
+
 test("cancellation during origin batch stops before the walk", async () => {
   const controller = new AbortController();
   const source = "src/use.ts";
@@ -1457,4 +1479,48 @@ test("public strongest reference keeps its locations and the observed call still
   const reached = answer.value.symbols.find((symbol) => symbol.symbol === "caller");
   assert.equal(reached?.confidence, 0.9);
   assert.deepEqual(reached?.via, { file: "src/A.java", symbol: "seed", lines: [5], basis: "reference" });
+});
+
+const RECORDS = {
+  nodes: [fakeNode("origin", "function", "src/Point.java", 4, 6, "origin"), fakeNode("width", "function", "src/Size.java", 2, 2, "width")],
+  sources: [{ path: "src/Point.java", content: "" }, { path: "src/Size.java", content: "" }],
+  unmodelled: ["src/Point.java", "src/Size.java"],
+};
+
+test("a changed file whose declarations the graph cannot place keeps its seeds and cuts the answer there, and an unchanged one is not cut", async () => {
+  const answer = fact(await setup({ ...RECORDS, changes: { ok: true, value: [change("src/Point.java", { added: [{ start: 5, end: 5 }] })] } }).ask());
+
+  assert.deepEqual(answer.status === "partial" && answer.value.seeds.map((seed) => seed.symbol), ["origin"]);
+  assert.deepEqual(answer.status === "partial" && answer.cuts, [{ kind: "no-extractor", at: ["src/Point.java"] }]);
+});
+
+test("callers of a symbol in a file the graph cannot place cut the answer at that file", async () => {
+  const answer = callersFact(await setup(RECORDS).callers({ targets: [{ file: "src/Point.java", symbol: "origin" }] }));
+
+  assert.deepEqual(answer.status === "partial" && answer.cuts, [{ kind: "no-extractor", at: ["src/Point.java"] }]);
+});
+
+test("importers cut each file's unresolved module statements once, anchored at the file with its places after it", async () => {
+  const unresolved = (file: string, line: number, specifier: string): ModuleDependency => ({ file, line, endLine: line, specifier, kind: "import", typeOnly: false, target: { kind: "unresolved", reason: "not found" }, bindings: [] });
+  const moduleDependencies: ModuleDependenciesReader = {
+    extract: async () => ({ files: [], dependencies: [unresolved("src/b.ts", 9, "geojson"), unresolved("src/a.ts", 4, "@/env"), unresolved("src/b.ts", 2, "@/env")], unread: [] }),
+  };
+  const { importers } = setup({ nodes: SHOP_NODES, exports: { [HEAD]: SHOP_EXPORT }, moduleDependencies });
+
+  const answer = importersFact(await importers({ files: ["src/Order.java"] }));
+
+  assert.deepEqual(answer.status === "partial" && answer.cuts.filter((cut) => cut.kind === "unresolved-link"), [
+    { kind: "unresolved-link", at: ["src/a.ts", "src/a.ts:4 @/env"] },
+    { kind: "unresolved-link", at: ["src/b.ts", "src/b.ts:2 @/env", "src/b.ts:9 geojson"] },
+  ]);
+});
+
+test("a callers target that names no declaration faults before the relations reader reads the snapshot", async () => {
+  let reads = 0;
+  const relationReader: ImpactQueriesDeps["relations"] = { extract: async () => { reads++; return { relations: [], fields: [], locals: [] }; } };
+
+  const answer = await setup({ ...TWO_CLASSES, relationReader }).callers({ targets: [{ file: "src/A.ts", symbol: "gone" }] });
+
+  assert.equal(!answer.ok && answer.fault.kind, "unknown-symbol");
+  assert.equal(reads, 0);
 });

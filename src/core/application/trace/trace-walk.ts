@@ -11,7 +11,7 @@ import type { CodeGraphReader, GraphNodeId, GraphSymbol, GraphUnresolvedReferenc
 import type { ImportOriginSite, ImportOrigins } from "../../ports/import-origins.port.ts";
 import type { TraceBudget } from "../../ports/trace-queries.port.ts";
 import { createGraphNavigation } from "../navigation/graph-navigation.ts";
-import { containmentTree } from "../outline/outline.ts";
+import { containmentTree } from "../navigation/containment-tree.ts";
 
 /** What a body passes as a value runs later, if at all; only code can. */
 const DEFERRED_KINDS: readonly string[] = ["function", "method"];

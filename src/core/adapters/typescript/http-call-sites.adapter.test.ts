@@ -87,6 +87,10 @@ test("a class static block's var does not shadow its enclosing function's route"
 test("global object inspection and unrelated property names do not count as escaping the global object", async () => {
   const file = source("read.ts", "typeof window; 'ontouchstart' in globalThis; const position = { global: true }; position.global; (globalThis as any).location; fetch(`/api/${encodeURIComponent('x')}`)");
   assert.deepEqual(sites(await reader.of([file], "repo")), ["GET /api/x@read.ts:1"]);
+  const copied = source("copy.ts", "const copy = { ...window }; const other = { ...(globalThis as any) };");
+  assert.deepEqual(sites(await reader.of([copied, file], "repo")), ["GET /api/x@read.ts:1"]);
+  const augmented = source("support.ts", "declare global { interface Window { app: string } }\nexport {};");
+  assert.deepEqual(sites(await reader.of([augmented, file], "repo")), ["GET /api/x@read.ts:1"]);
 });
 
 test("function-scoped var bindings shadow outer constants outside their block", async () => {
@@ -454,4 +458,142 @@ test("a wrapper's path may be computed from its parameter; a method whose name i
   const page = source("src/app/items/items.page.ts", ["import { inject } from '@angular/core'", "import { RestClientService } from '../core/rest/services/client/rest-client.service'", "export class ItemsPage {", "  private readonly rest = inject(RestClientService)", "  load(): void {", "    this.rest.get('/items')", "    this.rest.item('7')", "  }", "}"].join("\n"));
 
   assert.deepEqual(sites(await reader.of([client, page], "shop-web")), [`GET /items/{}@${API}:11`, "GET /items@src/app/items/items.page.ts:6"]);
+});
+
+const CONSTANTS = "src/app/app.constants.ts";
+const SERVICE = "src/app/order/order.service.ts";
+
+function workspace(define: unknown, configurations?: Record<string, unknown>, builder = "@angular/build:application"): { path: string; content: string } {
+  const options = define === undefined ? {} : { define };
+  const build = { builder, options, ...(configurations === undefined ? {} : { configurations }) };
+  return source("angular.json", JSON.stringify({ projects: { web: { root: "", architect: { build } } } }));
+}
+
+function orderService(...methods: string[]): { path: string; content: string } {
+  return source(
+    SERVICE,
+    [
+      "import { HttpClient } from '@angular/common/http'",
+      "import { inject } from '@angular/core'",
+      "import { serverApiUrl } from '../app.constants'",
+      "export class OrderService {",
+      "  protected readonly resourceUrl = `${serverApiUrl}api/orders`",
+      "  private readonly http = inject(HttpClient)",
+      ...methods.map((body, index) => `  m${index}(id: number): void { ${body} }`),
+      "}",
+    ].join("\n"),
+  );
+}
+
+const constants = source(CONSTANTS, ["declare const SERVER_API_URL: string;", "export const serverApiUrl = SERVER_API_URL;"].join("\n"));
+
+test("an ambient constant that the build target's define states as a string literal is that string", async () => {
+  const service = orderService("this.http.get(this.resourceUrl)");
+  assert.deepEqual(sites(await reader.of([workspace({ SERVER_API_URL: "''" }), constants, service], "shop-web")), [`GET api/orders@${SERVICE}:7`]);
+  assert.deepEqual(sites(await reader.of([workspace({ SERVER_API_URL: "'/gateway/'" }), constants, service], "shop-web")), [`GET /gateway/api/orders@${SERVICE}:7`]);
+});
+
+test("an ambient constant stays unknown when no define states it, the define is not a string literal, or the configurations disagree", async () => {
+  const service = orderService("this.http.get(this.resourceUrl)");
+  const unknown = [`unknown unresolved@${SERVICE}:7`];
+  assert.deepEqual(sites(await reader.of([constants, service], "shop-web")), unknown);
+  assert.deepEqual(sites(await reader.of([workspace({ OTHER: "''" }), constants, service], "shop-web")), unknown);
+  assert.deepEqual(sites(await reader.of([workspace({ SERVER_API_URL: "process.env.URL" }), constants, service], "shop-web")), unknown);
+  assert.deepEqual(sites(await reader.of([workspace({ SERVER_API_URL: "''" }, { production: { define: { SERVER_API_URL: "'/prod/'" } } }), constants, service], "shop-web")), unknown);
+  assert.deepEqual(sites(await reader.of([workspace(undefined, { production: { define: { SERVER_API_URL: "''" } } }), constants, service], "shop-web")), unknown);
+  assert.deepEqual(sites(await reader.of([workspace({ SERVER_API_URL: "''" }, undefined, "@angular-devkit/build-angular:browser"), constants, service], "shop-web")), unknown);
+});
+
+test("a field a class does not declare is its base class's, here or through an import; a field the class declares wins", async () => {
+  const base = source("src/app/order/order-base.ts", ["import { serverApiUrl } from '../app.constants'", "export class OrdersBase {", "  protected readonly resourceUrl = `${serverApiUrl}api/orders`", "}"].join("\n"));
+  const service = source(
+    SERVICE,
+    [
+      "import { HttpClient } from '@angular/common/http'",
+      "import { inject } from '@angular/core'",
+      "import { OrdersBase } from './order-base'",
+      "export class OrderService extends OrdersBase {",
+      "  private readonly http = inject(HttpClient)",
+      "  find(id: number): void { this.http.get(`${this.resourceUrl}/${encodeURIComponent(id)}`) }",
+      "}",
+      "export class LegacyOrderService extends OrdersBase {",
+      "  protected readonly resourceUrl = 'legacy/orders'",
+      "  private readonly http = inject(HttpClient)",
+      "  all(): void { this.http.get(this.resourceUrl) }",
+      "}",
+    ].join("\n"),
+  );
+  assert.deepEqual(sites(await reader.of([workspace({ SERVER_API_URL: "''" }), constants, base, service], "shop-web")), [`GET api/orders/{}@${SERVICE}:6`, `GET legacy/orders@${SERVICE}:11`]);
+});
+
+test("a variable the file declares is its own value, never a define of the same name", async () => {
+  const service = orderService("this.http.get(this.resourceUrl)");
+  for (const declaration of ["let SERVER_API_URL: string;", "var SERVER_API_URL: string;"]) {
+    const bound = source(CONSTANTS, [declaration, "SERVER_API_URL = '/runtime/';", "export const serverApiUrl = SERVER_API_URL;"].join("\n"));
+    assert.deepEqual(sites(await reader.of([workspace({ SERVER_API_URL: "'/build/'" }), bound, service], "shop-web")), [`unknown unresolved@${SERVICE}:7`]);
+  }
+});
+
+test("a configuration's own define replaces the whole define of the options, as the Angular CLI merges them", async () => {
+  const service = orderService("this.http.get(this.resourceUrl)");
+  const replaced = workspace({ SERVER_API_URL: "''" }, { production: { define: { OTHER: "''" } } });
+  assert.deepEqual(sites(await reader.of([replaced, constants, service], "shop-web")), [`unknown unresolved@${SERVICE}:7`]);
+});
+
+test("configurations that state the same define value, or inherit it, keep it", async () => {
+  const service = orderService("this.http.get(this.resourceUrl)");
+  const configured = workspace({ SERVER_API_URL: "''" }, { production: { define: { SERVER_API_URL: "''" } }, development: {} });
+  assert.deepEqual(sites(await reader.of([configured, constants, service], "shop-web")), [`GET api/orders@${SERVICE}:7`]);
+});
+
+test("a define reaches only the sources of the project that declares it", async () => {
+  const nested = source("angular.json", JSON.stringify({ projects: { web: { root: "", architect: { build: { builder: "@angular/build:application", options: { define: { SERVER_API_URL: "''" } } } } }, lib: { root: "projects/lib", architect: { build: { builder: "@angular/build:ng-packagr" } } } } }));
+  const inLib = { path: `projects/lib/${CONSTANTS}`, content: constants.content };
+  const libService = { path: `projects/lib/${SERVICE}`, content: orderService("this.http.get(this.resourceUrl)").content };
+  assert.deepEqual(sites(await reader.of([nested, inLib, libService], "shop-web")), [`unknown unresolved@projects/lib/${SERVICE}:7`]);
+  const reversed = source("angular.json", JSON.stringify({ projects: { web: { root: "", architect: { build: { builder: "@angular/build:application" } } }, lib: { root: "projects/lib", architect: { build: { builder: "@angular/build:application", options: { define: { SERVER_API_URL: "''" } } } } } } }));
+  assert.deepEqual(sites(await reader.of([reversed, inLib, libService], "shop-web")), [`GET api/orders@projects/lib/${SERVICE}:7`]);
+});
+
+test("a path parameter written as encodeURIComponent, String or toString of a scalar is a placeholder", async () => {
+  const service = orderService(
+    "this.http.get(`${this.resourceUrl}/${encodeURIComponent(id)}`)",
+    "this.http.get(`${this.resourceUrl}/${String(id)}`)",
+    "this.http.get(`${this.resourceUrl}/${id.toString()}`)",
+    "this.http.get(this.resourceUrl, { observe: 'response' })",
+  );
+  const local = { ...service, content: service.content.replace("import { serverApiUrl } from '../app.constants'", "const serverApiUrl = ''") };
+  assert.deepEqual(sites(await reader.of([local], "shop-web")), [
+    `GET api/orders/{}@${SERVICE}:7`,
+    `GET api/orders/{}@${SERVICE}:8`,
+    `GET api/orders/{}@${SERVICE}:9`,
+    `GET api/orders@${SERVICE}:10`,
+  ]);
+});
+
+test("String and toString of a value whose type is unknown stay undecided", async () => {
+  const file = source("unk.ts", ["import { HttpClient } from '@angular/common/http'", "class C { constructor(private http: HttpClient) {}", " a(id: unknown) { this.http.get(`/api/${String(id)}`) }", " b(id: unknown) { this.http.get(`/api/${id.toString()}`) } }"].join("\n"));
+  assert.deepEqual(sites(await reader.of([file], "repo")), ["unknown unresolved@unk.ts:3", "unknown unresolved@unk.ts:4"]);
+});
+
+test("an httpResource whose url is a field resolves, as an object's url or as the returned string", async () => {
+  const service = source(
+    SERVICE,
+    [
+      "import { httpResource } from '@angular/common/http'",
+      "import { serverApiUrl } from '../app.constants'",
+      "export class OrderService {",
+      "  protected readonly resourceUrl = `${serverApiUrl}api/orders`",
+      "  all = httpResource<string[]>(() => ({ url: this.resourceUrl, params: {} }))",
+      "  one = httpResource(() => this.resourceUrl)",
+      "}",
+    ].join("\n"),
+  );
+  const local = { ...service, content: service.content.replace("import { serverApiUrl } from '../app.constants'", "const serverApiUrl = ''") };
+  assert.deepEqual(sites(await reader.of([local], "shop-web")), [`GET api/orders@${SERVICE}:5`, `GET api/orders@${SERVICE}:6`]);
+});
+
+test("a name imported from a module the snapshot does not hold is not replaced by a define of the same name", async () => {
+  const imported = source(CONSTANTS, ["import { SERVER_API_URL } from './missing'", "export const serverApiUrl = SERVER_API_URL;"].join("\n"));
+  assert.deepEqual(sites(await reader.of([workspace({ SERVER_API_URL: "''" }), imported, orderService("this.http.get(this.resourceUrl)")], "shop-web")), [`unknown unresolved@${SERVICE}:7`]);
 });

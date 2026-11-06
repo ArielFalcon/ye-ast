@@ -1,25 +1,19 @@
-import { NOT_DECLARED_KINDS, sortedUnique } from "../../domain/impact/importers-fact.ts";
+import { sortedUnique } from "../../domain/impact/importers-fact.ts";
 import type { ModuleBinding, ModuleDependencies, ModuleDependency, UntraversedReference } from "../../domain/impact/module-dependency.ts";
 import type { OutlineBinding, OutlineDeclaration, OutlineFile, OutlineFocus, OutlineFocusValue, OutlineImport, OutlineListing } from "../../domain/outline/outline-fact.ts";
 import type { Cut } from "../../domain/shared/fact.ts";
+import { unresolvedPlaceCuts } from "../../domain/impact/impact-cuts.ts";
+import { containmentTree } from "../navigation/containment-tree.ts";
 import { importBindings } from "../navigation/import-bindings.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
-import { branchesOf, declarationPath, declarationTree, innermostAt, selectedBySymbol, type DeclarationBranch } from "../../domain/shared/declaration-tree.ts";
+import { branchesOf, declarationPath, innermostAt, selectedBySymbol, type DeclarationBranch } from "../../domain/shared/declaration-tree.ts";
 import type { CodeGraphReader, GraphSymbol } from "../../ports/code-graph.port.ts";
 import type { UnknownSymbolFault } from "../../ports/impact-queries.port.ts";
 import type { OutlineSelector, TopLevelLineFault } from "../../ports/outline-queries.port.ts";
 
-const CONTAINMENT = "contains";
-
-/** The containment tree of one file's declarations, from the graph's `contains` edges between them. */
-export function containmentTree(store: CodeGraphReader, nodes: readonly GraphSymbol[]): DeclarationBranch<GraphSymbol>[] {
-  const declared = nodes.filter((node) => !NOT_DECLARED_KINDS.includes(node.kind));
-  return declarationTree(declared, store.outgoingEdges(declared.map((node) => node.id), [CONTAINMENT]));
-}
-
 export interface ListingRead {
   value: OutlineListing;
-  /** A repository binding the join did not prove, and a requested file whose module statements no reader read. */
+  /** A repository binding the join did not prove, and a requested file whose module statements no reader read whole. */
   cuts: Cut[];
 }
 
@@ -28,9 +22,10 @@ export function readOutline(store: CodeGraphReader, requested: readonly string[]
   const files: OutlineFile[] = [];
   const unheld: string[] = [];
   const cuts: Cut[] = [];
+  const unproved: UnresolvedPlace[] = [];
   const statements = Map.groupBy(modules.dependencies, (dependency) => dependency.file);
   const references = Map.groupBy(modules.untraversed ?? [], (reference) => reference.file);
-  const unreadable = new Set(modules.unread.filter(({ reason }) => reason === "source-unreadable").map(({ file }) => file));
+  const unread = new Set(modules.unread.map(({ file }) => file));
   const read = new Set(modules.files.map(({ file }) => file));
   for (const file of sortedUnique(requested)) {
     const nodes = store.symbolsInFiles([file]);
@@ -38,23 +33,25 @@ export function readOutline(store: CodeGraphReader, requested: readonly string[]
       unheld.push(file);
       continue;
     }
-    if (unreadable.has(file) || !read.has(file)) cuts.push({ kind: "no-extractor", at: [file] });
+    if (unread.has(file) || !read.has(file)) cuts.push({ kind: "no-extractor", at: [file] });
     const dependencies = statements.get(file) ?? [];
     const reached = importBindings(store, file, dependencies);
-    const imports = [...dependencies.map((dependency) => imported(dependency, reached, cuts)), ...(references.get(file) ?? []).map(referenced)];
+    const placed = [...dependencies.map((dependency) => ({ ...dependency, entry: imported(dependency, reached, unproved) })), ...(references.get(file) ?? []).map((reference) => ({ ...reference, entry: referenced(reference) }))];
     files.push({
       file,
       declarations: containmentTree(store, nodes).map(outlined),
-      imports: imports.toSorted((left, right) => left.line - right.line),
+      imports: placed.toSorted((left, right) => left.line - right.line || (left.offset ?? 0) - (right.offset ?? 0)).map(({ entry }) => entry),
     });
   }
-  return { value: { files, unheld }, cuts };
+  return { value: { files, unheld }, cuts: [...cuts, ...unresolvedPlaceCuts(unproved, "unresolved")] };
 }
 
-function imported(dependency: ModuleDependency, reached: ReadonlyMap<ModuleBinding, GraphSymbol>, cuts: Cut[]): OutlineImport {
+type UnresolvedPlace = Parameters<typeof unresolvedPlaceCuts>[0][number];
+
+function imported(dependency: ModuleDependency, reached: ReadonlyMap<ModuleBinding, GraphSymbol>, unproved: UnresolvedPlace[]): OutlineImport {
   const bindings = dependency.bindings.map((binding): OutlineBinding => {
     const declaration = reached.get(binding);
-    if (declaration === undefined && dependency.target.kind === "repository" && binding.imported !== "*") cuts.push({ kind: "unresolved-link", at: [`${dependency.file}:${binding.line} ${binding.local ?? binding.imported}`], reason: "unresolved" });
+    if (declaration === undefined && dependency.target.kind === "repository" && binding.imported !== "*") unproved.push({ file: dependency.file, line: binding.line, reason: binding.local ?? binding.imported });
     return {
       ...(binding.local === undefined ? {} : { local: binding.local }),
       imported: binding.imported,

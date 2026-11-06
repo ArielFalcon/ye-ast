@@ -1,6 +1,6 @@
 import type { RemovedDeclaration } from "../change/seeds.ts";
 import { compareText } from "../shared/code-node.ts";
-import type { Cut } from "../shared/fact.ts";
+import type { Cut, UnknownReason } from "../shared/fact.ts";
 
 /** A reference the index could not resolve to a declaration. */
 export interface UnresolvedUse {
@@ -89,6 +89,13 @@ function isKnownReference(reference: UnresolvedUse, known: ReadonlySet<string>, 
 
 function unresolvedLinkAt(anchor: string, places: Iterable<string>): Cut {
   return { kind: "unresolved-link", at: [anchor, ...[...places].sort()] };
+}
+
+/** One unresolved-link cut per file, anchored at the file, its places after it, as `Cut.at` reads everywhere. */
+export function unresolvedPlaceCuts(places: readonly { file: string; line: number; reason: string }[], reason?: UnknownReason): Cut[] {
+  return [...Map.groupBy(places, (place) => place.file)]
+    .sort(([left], [right]) => compareText(left, right))
+    .map(([file, here]) => ({ ...unresolvedLinkAt(file, new Set(here.map((place) => placeAt(place.file, place.line, place.reason)))), ...(reason === undefined ? {} : { reason }) }));
 }
 
 export function nameTail(name: string): string {

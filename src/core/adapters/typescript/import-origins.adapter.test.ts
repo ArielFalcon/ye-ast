@@ -239,3 +239,41 @@ test("a reader parses a file once however many times its sites are asked, and an
   assert.deepEqual(answers[0], answers[2]);
   assert.deepEqual(only(answers[1]!), { status: "complete", value: { kind: "repository", file: "src/local.ts" }, occurrence: true, evidence: [{ path: "src/page.ts", line: 12 }] });
 });
+
+/** A class whose method shares a library global's name, called as the graph spells it: the bare name, at the call. */
+const OWN_CALLS = [
+  "export class Svc {",
+  "  fetch(): void {}",
+  "  direct(): void { this.fetch(); }",
+  "  arrow = () => this.fetch();",
+  "  inherited(): void { super.fetch(); }",
+  "  rebound(): void { [1].map(function () { this.fetch(); }); }",
+  "  literal(): void { const o = { m() { this.fetch(); } }; }",
+  "  static run(): void { this.fetch(); }",
+  "  static field = this.fetch();",
+  "  nest(): void { class Inner { fetch(): void {} go(): void { this.fetch(); } } }",
+  "}",
+];
+
+async function ownCallKinds(lines: readonly number[]): Promise<string[]> {
+  const file = "src/svc.ts";
+  const sites = lines.map((line): ImportOriginSite => {
+    const text = OWN_CALLS[line - 1]!;
+    const column = Math.max(text.indexOf("this.fetch"), text.indexOf("super.fetch")) + 1;
+    return { file, line, column, name: "fetch", fullName: "fetch", kind: "calls" };
+  });
+  const found = await createImportOrigins([{ path: file, content: OWN_CALLS.join("\n") }]).origins(sites);
+  return found.map((finding) => (finding.status === "complete" ? finding.value.kind : "unknown"));
+}
+
+test("a bare graph call written on this inside a class member names a member of that class, not a library global", async () => {
+  assert.deepEqual(await ownCallKinds([3, 4]), ["this-member", "this-member"]);
+});
+
+test("a bare graph call on super, or on a this a function or an object method rebinds, proves nothing", async () => {
+  assert.deepEqual(await ownCallKinds([5, 6, 7]), ["unknown", "unknown", "unknown"]);
+});
+
+test("a bare graph call on the this of a static member, or of a class declared inside a function, proves nothing", async () => {
+  assert.deepEqual(await ownCallKinds([8, 9, 10]), ["unknown", "unknown", "unknown"]);
+});

@@ -82,10 +82,11 @@ export function createImportOrigins(sources: readonly SourceFile[], parse: Parse
     return names;
   };
 
-  const originOf = async (site: ImportOriginSite, syntax: "valid" | "local" | "unknown"): Promise<Finding<ImportOrigin>> => {
+  const originOf = async (site: ImportOriginSite, syntax: SiteSyntax | "unknown"): Promise<Finding<ImportOrigin>> => {
     const evidence: Evidence[] = [{ path: site.file, line: site.line }];
     if (syntax === "unknown") return { status: "unknown", reason: "unresolved", evidence };
     if (syntax === "local") return { status: "complete", value: { kind: "local-parameter", name: site.name }, evidence };
+    if (syntax === "this-member") return { status: "complete", value: { kind: "this-member", name: site.name }, evidence };
     const { bindings, declared: names } = shapeOf(site.file);
     /** A declaration of the file may shadow an import or a global at the place the reference sits, so it wins. */
     if (names.has(site.name)) return { status: "unknown", reason: "unresolved", evidence };
@@ -111,7 +112,7 @@ export function createImportOrigins(sources: readonly SourceFile[], parse: Parse
       const index = text === undefined || !isTypeScriptSource(file) ? undefined : indexOf(file);
       const checked = index === undefined ? undefined : checkSites(index, text!, group);
       if (checked !== undefined) shapes.set(file, checked.shape);
-      const checks = checked?.matches ?? new Map<number, "valid" | "local">();
+      const checks = checked?.matches ?? new Map<number, SiteSyntax>();
       for (const { site, index } of group) {
         const syntax = checks.get(index) ?? "unknown";
         const finding = await originOf(site, syntax);
@@ -121,6 +122,8 @@ export function createImportOrigins(sources: readonly SourceFile[], parse: Parse
     return results;
   } };
 }
+
+type SiteSyntax = "valid" | "local" | "this-member";
 
 function indexed(source: ts.SourceFile): FileIndex | undefined {
   const diagnostics = (source as ts.SourceFile & { parseDiagnostics: readonly ts.Diagnostic[] }).parseDiagnostics;
@@ -138,8 +141,8 @@ function indexed(source: ts.SourceFile): FileIndex | undefined {
 }
 
 /** Check each graph spelling at its exact 1-based UTF-16 position in the file's tree. */
-function checkSites({ source, shape, starting }: FileIndex, text: string, group: readonly { site: ImportOriginSite; index: number }[]): { matches: Map<number, "valid" | "local">; shape: FileShape } {
-  const result = new Map<number, "valid" | "local">();
+function checkSites({ source, shape, starting }: FileIndex, text: string, group: readonly { site: ImportOriginSite; index: number }[]): { matches: Map<number, SiteSyntax>; shape: FileShape } {
+  const result = new Map<number, SiteSyntax>();
   const starts = source.getLineStarts();
   const wanted = new Map<number, { site: ImportOriginSite; index: number }[]>();
   for (const item of group) {
@@ -153,22 +156,49 @@ function checkSites({ source, shape, starting }: FileIndex, text: string, group:
     list.push(item); wanted.set(point, list);
   }
   const matches = new Map<number, ts.Node[]>();
+  const ownCalls = new Map<number, number>();
   for (const [point, candidates] of wanted) for (const node of starting.get(point) ?? []) for (const { site, index } of candidates) {
     const expr = site.kind === "calls" && ts.isCallExpression(node) ? node.expression : site.kind === "instantiates" && ts.isNewExpression(node) ? node.expression : undefined;
     if (expr !== undefined && syntaxName(expr, source) === site.fullName) {
       const found = matches.get(index) ?? []; found.push(expr); matches.set(index, found);
     } else if (matchesReferenceKind(node, site.kind) && syntaxName(node, source) === site.fullName) {
       const found = matches.get(index) ?? []; found.push(node); matches.set(index, found);
+    } else if (site.kind === "calls" && ts.isCallExpression(node) && callsOwnMember(node.expression, site.fullName!)) {
+      ownCalls.set(index, (ownCalls.get(index) ?? 0) + 1);
     }
   }
   const scopes = new WeakMap<ts.Node, { unsafe: boolean; names: ReadonlySet<string> }>();
   for (const { site, index } of group) {
     const found = matches.get(index);
+    if (found === undefined && ownCalls.get(index) === 1) result.set(index, "this-member");
     if (found?.length !== 1) continue;
     const node = found[0]!;
     result.set(index, site.kind === "calls" && ts.isIdentifier(node) && node.text === site.name && localParameter(node, site.name, scopes) ? "local" : "valid");
   }
   return { matches: result, shape };
+}
+
+/**
+ * `this.name` whose `this` is an instance of the class holding the instance member around it: only an arrow function
+ * keeps it. A class declared inside a function or another class is refused, since the graph places its code by lines.
+ */
+function callsOwnMember(callee: ts.Expression, name: string): boolean {
+  if (!ts.isPropertyAccessExpression(callee) || callee.expression.kind !== ts.SyntaxKind.ThisKeyword || callee.name.text !== name) return false;
+  for (let node: ts.Node = callee.parent; !ts.isSourceFile(node); node = node.parent) {
+    if (ts.isArrowFunction(node)) continue;
+    if (ts.isClassStaticBlockDeclaration(node)) return false;
+    if (ts.isFunctionLike(node) || ts.isPropertyDeclaration(node)) return ts.isClassLike(node.parent) && !isStatic(node) && !isNested(node.parent);
+  }
+  return false;
+}
+
+function isStatic(member: ts.Node): boolean {
+  return ts.canHaveModifiers(member) && (ts.getModifiers(member)?.some((modifier) => modifier.kind === ts.SyntaxKind.StaticKeyword) ?? false);
+}
+
+function isNested(declaration: ts.ClassLikeDeclaration): boolean {
+  for (let node = declaration.parent; !ts.isSourceFile(node); node = node.parent) if (ts.isFunctionLike(node) || ts.isClassLike(node)) return true;
+  return false;
 }
 
 /** Prove only the nearest supported function-expression parameter; all uncertain scopes are refused. */

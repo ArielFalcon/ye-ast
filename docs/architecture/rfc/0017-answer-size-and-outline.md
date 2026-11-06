@@ -98,7 +98,9 @@ question an agent asks after `impact` names twelve files, and it is the one no q
   such edge places (a route or a configuration binding a framework reader adds) stays at the top level even when its span
   lies inside another declaration's. A Java member sits under its class and the class under the file's package
   declaration, because that is what the graph records; a construct the extractor does not emit, such as a Java `record`,
-  leaves its members under the nearest container it does emit.
+  leaves its members under the nearest container it does emit. ye-ast's own Java grammar finds such a file, listed or
+  focused, and the answer carries a `no-extractor` cut at it, so a misplaced listing never reads as complete; a focus
+  reads only its focused files to find it.
 - **It carries no file length and no silent elision.** A file's length needs a source read the projection does not do,
   and the caller gets it from the read it makes anyway. The listing names every declaration, so it has nothing to omit
   and no budget; a large file answers a large outline, which is still a fraction of the file, and the rule of section 1

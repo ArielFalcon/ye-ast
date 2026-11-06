@@ -222,7 +222,7 @@ test("a changed contract whose reference the snapshot cannot follow keeps the pr
   const answer = await changeOfOrders();
 
   assert.equal(answer.status, "partial");
-  assert.deepEqual(answer.sections.orders?.cuts, [{ kind: "unresolved-link", at: [`${DOCUMENT}:6 https://example.com/orders.yaml#/Orders`] }]);
+  assert.deepEqual(answer.sections.orders?.cuts, [{ kind: "unresolved-link", at: [DOCUMENT, `${DOCUMENT}:6 https://example.com/orders.yaml#/Orders`] }]);
 });
 
 test("a changed handler body still names its consumer through the changed route, with no other altered operation attached", async () => {

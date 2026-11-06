@@ -8,7 +8,7 @@ import type { CodeGraphReader, GraphSymbol } from "../../ports/code-graph.port.t
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { SourceTrivia } from "../../ports/source-trivia.port.ts";
 import type { CallersTarget, UnknownSymbolFault } from "../../ports/impact-queries.port.ts";
-import { containmentTree } from "../outline/outline.ts";
+import { containmentTree } from "./containment-tree.ts";
 
 export interface RootSelection extends SeedSelection<GraphSymbol> {
   /** In position order. */
@@ -114,15 +114,27 @@ export function selectRoots(
   const componentFiles = changes.flatMap((file) => (componentsByResource.get(file.path) ?? []).map((component) => component.file));
   const symbols = store.symbolsInFiles([...new Set([...sourceChanges, ...componentFiles, ...requested.map(({ file }) => file)])]);
   const symbolsByFile = Map.groupBy(symbols, (symbol) => symbol.file);
-  const trees = new Map([...new Set(requested.map(({ file }) => file))].map((file) => [file, containmentTree(store, symbolsByFile.get(file) ?? [])]));
-  const asked = requested.map((target) => ({ target, found: selectedBySymbol(trees.get(target.file) ?? [], target.symbol).map(({ declaration }) => declaration).filter(isRoot) }));
-  const missing = [...asked.filter(({ found: nodes }) => nodes.length === 0).map(({ target }) => ({ ...target, candidates: candidatesOf(trees.get(target.file) ?? [], isRoot) })), ...uncovered];
+  const missing = [...missingTargets(store, requested, isRoot), ...uncovered];
   if (missing.length > 0) return { seeds: [], withoutSymbols: [], removed: [], missing };
 
+  const trees = new Map([...new Set(requested.map(({ file }) => file))].map((file) => [file, containmentTree(store, symbolsByFile.get(file) ?? [])]));
   const selection = selectSeeds({ files: changes }, symbolsByFile, componentsByResource, isRoot);
-  const requestedSymbols = new Set(asked.flatMap(({ found: nodes }) => nodes));
+  const requestedSymbols = new Set(requested.flatMap((target) => selectedBySymbol(trees.get(target.file) ?? [], target.symbol).map(({ declaration }) => declaration).filter(isRoot)));
   const chosen = [...[...requestedSymbols].map((symbol): SelectedSeed<GraphSymbol> => ({ symbol, basis: "requested" })), ...selection.seeds.filter(({ symbol }) => !requestedSymbols.has(symbol))];
   return { ...selection, seeds: chosen.toSorted((a, b) => comparePosition(a.symbol, b.symbol)), missing: [] };
+}
+
+/**
+ * The requested symbols that name no root of their file, each with the file's dotted paths as candidates; read from
+ * the store alone, so a wrong name fails before any reader runs over the snapshot.
+ */
+export function missingTargets(store: CodeGraphReader, requested: readonly { file: string; symbol: string }[], isRoot: (symbol: GraphSymbol) => boolean = isSeedable): UnknownSymbolFault["entries"] {
+  const files = [...new Set(requested.map(({ file }) => file))];
+  const byFile = Map.groupBy(store.symbolsInFiles(files), (symbol) => symbol.file);
+  const trees = new Map(files.map((file) => [file, containmentTree(store, byFile.get(file) ?? [])]));
+  return requested
+    .filter((target) => selectedBySymbol(trees.get(target.file) ?? [], target.symbol).every(({ declaration }) => !isRoot(declaration)))
+    .map((target) => ({ ...target, candidates: candidatesOf(trees.get(target.file) ?? [], isRoot) }));
 }
 
 /** The dotted paths of what a file declares that a request can seed, so a symbol that names no node tells the caller what does. */

@@ -2,9 +2,7 @@ import {
   type AST,
   Binary,
   Call,
-  ClassPropertyMapping,
   CombinedRecursiveAstVisitor,
-  CssSelector,
   ImplicitReceiver,
   KeyedRead,
   LiteralPrimitive,
@@ -14,7 +12,6 @@ import {
   SafeKeyedRead,
   SafePropertyRead,
   TypeofExpression,
-  MatchSource,
   ParseErrorLevel,
   parseTemplate,
   PropertyRead,
@@ -31,6 +28,7 @@ import { relation, type Relation, type RelationKind, type SymbolRef } from "../.
 import { sortFindings } from "../../domain/entrypoints/finding-order.ts";
 import type { Evidence, Finding, UnknownReason } from "../../domain/shared/fact.ts";
 import type { ScopeMember, TemplateEffects, TemplateMemberCall, TemplateUnit, TemplateUsageReader, TemplateWrite } from "../../ports/template-usage.port.ts";
+import { bindTemplate } from "./template-binding.ts";
 
 /**
  * Templates parsed with ye-ast's own `@angular/compiler` (never the analysed repository's copy, which would run its
@@ -133,39 +131,23 @@ function effects(template: Pick<TemplateUnit, "path" | "text" | "firstLine">): T
   };
 }
 
-type Member = Exclude<ScopeMember, { kind: "pipe" }>;
-
 function usagesOf(unit: TemplateUnit): Finding<Relation>[] {
   const at = (line: number): Evidence => ({ path: unit.path, line: unit.firstLine + line });
-  const parsed = parseTemplate(unit.text, unit.path);
-  const errors = (parsed.errors ?? []).filter((error) => error.level === ParseErrorLevel.ERROR);
-  const [first] = errors;
-  if (first !== undefined) return [unknown("source-unreadable", at(first.span.start.line))];
+  const template = bindTemplate(unit);
+  if ("errorLine" in template) return [unknown("source-unreadable", at(template.errorLine))];
 
-  const findings: Finding<Relation>[] = [];
-  const matcher = new SelectorMatcher<DirectiveMeta[]>();
-  const members = new Map<string, Member>();
-  for (const member of unit.scope) {
-    if (member.kind === "pipe") continue;
-    try {
-      const meta = directiveMeta(member);
-      matcher.addSelectables(CssSelector.parse(member.selector), [meta]);
-      members.set(meta.ref.key, member);
-    } catch {
-      findings.push(unknown("no-extractor", { path: member.ref.path, line: member.ref.line }));
-    }
-  }
+  const findings: Finding<Relation>[] = template.unreadable.map((ref) => unknown("no-extractor", { path: ref.path, line: ref.line }));
+  const { members } = template;
   const pipes = new Map<string, SymbolRef[]>();
   for (const member of unit.scope) if (member.kind === "pipe") pipes.set(member.name, [...(pipes.get(member.name) ?? []), member.ref]);
 
-  const bound = new R3TargetBinder(matcher).bind({ template: parsed.nodes });
   const found = new Map<string, Finding<Relation>>();
   const use = (kind: RelationKind, to: SymbolRef, line: number): void => {
     const key = `${kind}\0${to.path}\0${to.symbol}`;
     const existing = found.get(key);
     if (existing === undefined || (existing.evidence[0]?.line ?? 0) > unit.firstLine + line) found.set(key, { status: "complete", value: relation(kind, unit.component, to), evidence: [at(line)] });
   };
-  const visitor = new UsageVisitor(bound, {
+  const visitor = new UsageVisitor(template.bound, {
     directive: (meta, line) => {
       const member = members.get(meta.ref.key);
       if (member !== undefined) use(meta.isComponent ? "uses-component" : "uses-directive", member.ref, line);
@@ -178,25 +160,8 @@ function usagesOf(unit: TemplateUnit): Finding<Relation>[] {
       else if (only !== undefined) use("uses-pipe", only, line);
     },
   });
-  for (const node of parsed.nodes) visitor.visit(node);
+  for (const node of template.nodes) visitor.visit(node);
   return [...findings, ...found.values()];
-}
-
-function directiveMeta(member: Member): DirectiveMeta {
-  return {
-    name: member.ref.symbol,
-    ref: { key: `${member.ref.path}\0${member.ref.symbol}` },
-    selector: member.selector,
-    isComponent: member.kind === "component",
-    inputs: ClassPropertyMapping.empty(),
-    outputs: ClassPropertyMapping.empty(),
-    exportAs: null,
-    isStructural: false,
-    ngContentSelectors: null,
-    preserveWhitespaces: false,
-    animationTriggerNames: null,
-    matchSource: MatchSource.Selector,
-  };
 }
 
 interface UsageSink {

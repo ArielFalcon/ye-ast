@@ -211,8 +211,8 @@ export function notHeldInExport(notHeld: readonly string[], exported: CommitExpo
 }
 
 export interface HeadReader {
-  /** Reads a head export and its index without loading sources or extracting entrypoints. */
-  atExport<V, E>(request: Revisioned, spec: FactSpec, read: (head: HeadReading<Pick<CommitExtraction, "export">>) => Promise<Result<Fact<V>, E>>): Promise<Result<Fact<V>, E | VcsFault | LiveFault>>;
+  /** Reads a head export and its index without loading sources or extracting entrypoints; `root` holds the exported files. */
+  atExport<V, E>(request: Revisioned, spec: FactSpec, read: (head: HeadReading<Pick<CommitExtraction, "export">>, root: string) => Promise<Result<Fact<V>, E>>): Promise<Result<Fact<V>, E | VcsFault | LiveFault>>;
   atSources<V, E>(request: Revisioned, spec: FactSpec, read: (head: HeadReading<Pick<CommitExtraction, "export" | "sources">>) => Promise<Result<Fact<V>, E>>): Promise<Result<Fact<V>, E | VcsFault | LiveFault>>;
   /** The one place a revisioned operation reads its head, at a commit or on the live tree, so its body is written once. */
   atHead<V, E>(request: Revisioned, spec: FactSpec, read: (head: HeadReading) => Promise<Result<Fact<V>, E>>): Promise<Result<Fact<V>, E | VcsFault | LiveFault>>;

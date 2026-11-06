@@ -6,11 +6,13 @@ import type { CallSiteReader } from "../../domain/topology/call-site.ts";
 import type { Finding } from "../../domain/shared/fact.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import { manifestDependencies, createModuleResolver, type ModuleResolver } from "./module-resolver.ts";
+import { buildDefines, type BuildDefines } from "./url-define.ts";
 
-const VERBS: ReadonlySet<string> = new Set(["get", "head", "post", "put", "patch", "delete", "options", "request"]);
+export const VERBS: ReadonlySet<string> = new Set(["get", "head", "post", "put", "patch", "delete", "options", "request"]);
 const HTTP_CLIENT_PACKAGE = "@angular/common/http";
 const PLACEHOLDER = "{}";
 const UNDECIDED = Symbol("undecided");
+const SCALAR_TYPES: ReadonlySet<ts.SyntaxKind> = new Set([ts.SyntaxKind.StringKeyword, ts.SyntaxKind.NumberKeyword, ts.SyntaxKind.BooleanKeyword, ts.SyntaxKind.BigIntKeyword]);
 const RUN_TIME_VALUE: Evaluation = { kind: "value" };
 
 /** What one file declares at its top level, and the classes it holds, as the reader needs them. */
@@ -33,10 +35,10 @@ interface FileShape {
 interface Scope {
   names: ReadonlySet<string>;
   locals: ReadonlyMap<string, ts.Expression>;
-  strings: ReadonlySet<string>;
+  scalars: ReadonlySet<string>;
 }
 
-const NO_SCOPE: Scope = { names: new Set(), locals: new Map(), strings: new Set() };
+const NO_SCOPE: Scope = { names: new Set(), locals: new Map(), scalars: new Set() };
 const LEXICAL_SCOPES = new WeakMap<ts.Node, Scope>();
 
 /** The names the code being evaluated binds at run time: a path part that names one is `{}`, never undecided. */
@@ -63,7 +65,7 @@ async function read(files: readonly SourceFile[], repo: string): Promise<readonl
   const dependencies = new Set(files.filter((file) => isPackageManifest(file.path)).flatMap((file) => [...manifestDependencies(file.content)]));
   const modules = createModuleResolver(async (file) => texts.get(file), dependencies);
   const wrappers = wrapperMethods(shapes);
-  const read = new Reader(shapes, modules, wrappers);
+  const read = new Reader(shapes, modules, wrappers, buildDefines(files));
   const found: CallSite[] = [];
   for (const shape of shapes.values()) {
     for (const call of calls(shape.source)) found.push(...(await read.callSite(shape, call, repo)));
@@ -244,7 +246,7 @@ function isHttpPackageName(shape: FileShape, expression: ts.Expression, name: st
   return imported?.module === HTTP_CLIENT_PACKAGE && imported.imported === name;
 }
 
-function propertyOf(object: ts.ObjectLiteralExpression, name: string): ts.Expression | undefined {
+export function propertyOf(object: ts.ObjectLiteralExpression, name: string): ts.Expression | undefined {
   const property = object.properties.find((candidate): candidate is ts.PropertyAssignment => ts.isPropertyAssignment(candidate) && candidate.name.getText() === name);
   return property?.initializer;
 }
@@ -257,11 +259,11 @@ function isAngularHttpClientName(shape: FileShape, name: string | undefined): bo
 }
 
 /** The parameter properties of a class's constructor: the fields a class declares by writing them in its signature. */
-function constructorParameters(classDeclaration: ts.ClassDeclaration): readonly ts.ParameterDeclaration[] {
+export function constructorParameters(classDeclaration: ts.ClassDeclaration): readonly ts.ParameterDeclaration[] {
   return classDeclaration.members.flatMap((member) => (ts.isConstructorDeclaration(member) ? member.parameters : []));
 }
 
-function typeName(node: ts.TypeNode): string | undefined {
+export function typeName(node: ts.TypeNode): string | undefined {
   if (ts.isTypeReferenceNode(node) && ts.isIdentifier(node.typeName)) return node.typeName.text;
   return undefined;
 }
@@ -349,13 +351,13 @@ function lexicalScope(point: ts.Node, includePoint = false): Scope {
   const outer = lexicalScope(node);
   const names = new Set<string>();
   const locals = new Map<string, ts.Expression>();
-  const strings = new Set<string>();
+  const scalars = new Set<string>();
   const bind = (name: ts.BindingName, initializer?: ts.Expression, type?: ts.TypeNode): void => {
     for (const text of bindingNames(name)) {
       if (names.has(text)) continue;
       names.add(text);
       if (ts.isIdentifier(name) && initializer !== undefined) locals.set(text, initializer);
-      if (ts.isIdentifier(name) && type?.kind === ts.SyntaxKind.StringKeyword) strings.add(text);
+      if (ts.isIdentifier(name) && type !== undefined && SCALAR_TYPES.has(type.kind)) scalars.add(text);
     }
   };
   if (ts.isBlock(node) || ts.isCaseBlock(node)) {
@@ -388,9 +390,9 @@ function lexicalScope(point: ts.Node, includePoint = false): Scope {
     names.add(name);
     const initializer = outer.locals.get(name);
     if (initializer !== undefined) locals.set(name, initializer);
-    if (outer.strings.has(name)) strings.add(name);
+    if (outer.scalars.has(name)) scalars.add(name);
   }
-  const scope = { names, locals, strings };
+  const scope = { names, locals, scalars };
   LEXICAL_SCOPES.set(node, scope);
   return scope;
 }
@@ -409,6 +411,7 @@ class Reader {
     private readonly shapes: ReadonlyMap<string, FileShape>,
     private readonly modules: ModuleResolver,
     private readonly wrappers: ReadonlyMap<string, ReadonlySet<string>>,
+    private readonly defines: BuildDefines,
   ) {
     this.unsafeEncoder = [...shapes.values()].some((shape) => shape.unsafeEncoder);
   }
@@ -580,7 +583,10 @@ class Reader {
     }
     if (scope.names.has(name)) return RUN_TIME_VALUE;
     const constant = await this.constantAt(shape, name, trail);
-    return constant === undefined ? undefined : this.evaluate(constant.shape, constant.expression, NO_SCOPE, constant.trail);
+    if (constant !== undefined) return this.evaluate(constant.shape, constant.expression, NO_SCOPE, constant.trail);
+    if (shape.imports.has(name) || shape.bindings.has(name)) return undefined;
+    const defined = this.defines.valueOf(shape.source.fileName, name);
+    return defined === undefined ? undefined : stated(defined);
   }
 
   /** Where a name's constant lives and the trail that visited it: a declaration of this file, or one an import names. */
@@ -631,7 +637,7 @@ class Reader {
     const name = expression.name.text;
     if (owner.kind === ts.SyntaxKind.ThisKeyword) {
       const enclosing = enclosingClassOf(owner);
-      return enclosing === undefined ? undefined : this.fieldOf(shape, enclosing, name, trail);
+      return enclosing === undefined ? undefined : await this.fieldOf(shape, enclosing, name, trail);
     }
     if (!ts.isIdentifier(owner)) return undefined;
     const namespace = shape.imports.get(owner.text);
@@ -640,7 +646,7 @@ class Reader {
       return target === undefined ? undefined : this.exported(target, name, trail);
     }
     const found = await this.classOf(shape, owner.text);
-    const field = found === undefined ? undefined : this.fieldOf(found.shape, found.declaration, name, trail);
+    const field = found === undefined ? undefined : await this.fieldOf(found.shape, found.declaration, name, trail);
     if (field !== undefined) return field;
     const literal = await this.objectLiteral(shape, owner.text, trail);
     if (literal === undefined) return undefined;
@@ -648,12 +654,17 @@ class Reader {
     return property === undefined ? undefined : { shape: literal.shape, expression: property.initializer, trail: literal.trail };
   }
 
-  /** The initializer of a class member, once, whatever names the class states. */
-  private fieldOf(shape: FileShape, declaration: ts.ClassDeclaration, name: string, trail: ReadonlySet<string>): Located | undefined {
+  /** The initializer of a class member, once, whatever names the class states; a member the class does not declare is its base class's. */
+  private async fieldOf(shape: FileShape, declaration: ts.ClassDeclaration, name: string, trail: ReadonlySet<string>): Promise<Located | undefined> {
     const visited = `${shape.source.fileName}\0${declaration.name?.text ?? "(anonymous)"}.${name}`;
     if (trail.has(visited)) return undefined;
-    const member = declaration.members.find((candidate): candidate is ts.PropertyDeclaration => ts.isPropertyDeclaration(candidate) && ts.isIdentifier(candidate.name) && candidate.name.text === name);
-    if (member?.initializer === undefined) return undefined;
+    const member = declaration.members.find((candidate) => candidate.name !== undefined && ts.isIdentifier(candidate.name) && candidate.name.text === name);
+    if (member === undefined) {
+      const base = baseClassName(declaration);
+      const found = base === undefined ? undefined : await this.classOf(shape, base);
+      return found === undefined ? undefined : this.fieldOf(found.shape, found.declaration, name, new Set(trail).add(visited));
+    }
+    if (!ts.isPropertyDeclaration(member) || member.initializer === undefined) return undefined;
     return { shape, expression: member.initializer, trail: new Set(trail).add(visited) };
   }
 
@@ -683,14 +694,16 @@ class Reader {
 
   /** A function the call names, evaluated at its one returned expression: its own parameters are the run-time values. */
   private async evaluateCall(shape: FileShape, call: ts.CallExpression, scope: Scope, trail: ReadonlySet<string>): Promise<Evaluation | undefined> {
+    if (ts.isPropertyAccessExpression(call.expression) && call.expression.name.text === "toString") return this.scalarText(shape, call.arguments.length === 0 ? [call.expression.expression] : [], scope, trail);
     if (!ts.isIdentifier(call.expression)) return undefined;
     if (scope.names.has(call.expression.text)) return undefined;
+    if (call.expression.text === "String" && !shape.imports.has("String") && !shape.bindings.has("String")) return this.scalarText(shape, call.arguments, scope, trail);
     if (call.expression.text === "encodeURIComponent" && !this.unsafeEncoder && !shape.imports.has(call.expression.text) && !shape.bindings.has(call.expression.text)) {
       if (call.arguments.length !== 1) return undefined;
       const argument = call.arguments[0];
       if (argument === undefined) return undefined;
       const value = await this.evaluate(shape, argument, scope, trail);
-      if (value?.kind === "value") return ts.isIdentifier(argument) && scope.strings.has(argument.text) ? value : undefined;
+      if (value?.kind === "value") return ts.isIdentifier(argument) && scope.scalars.has(argument.text) ? value : undefined;
       if (value === undefined || value.text.includes(PLACEHOLDER)) return undefined;
       try {
         return stated(encodeURIComponent(value.text));
@@ -700,6 +713,15 @@ class Reader {
     }
     const found = await this.callTargetOf(shape, call.expression.text);
     return found === undefined ? undefined : this.evaluateReturned(found.target, found.declaration, found.scope, trail);
+  }
+
+  /** `String(x)` and `x.toString()` write what `x` is: a run-time value only when `x` is declared a scalar. */
+  private async scalarText(shape: FileShape, operands: readonly ts.Expression[], scope: Scope, trail: ReadonlySet<string>): Promise<Evaluation | undefined> {
+    const [operand, ...rest] = operands;
+    if (operand === undefined || rest.length > 0) return undefined;
+    const value = await this.evaluate(shape, operand, scope, trail);
+    if (value?.kind === "value") return ts.isIdentifier(operand) && scope.scalars.has(operand.text) ? value : undefined;
+    return value;
   }
 
   private async callTargetOf(shape: FileShape, name: string): Promise<{ target: FileShape; declaration: ts.Expression; scope: Scope } | undefined> {
@@ -728,19 +750,30 @@ class Reader {
   }
 }
 
+/** The names the file binds at run time; an ambient `declare` binds none. */
+function baseClassName(declaration: ts.ClassDeclaration): string | undefined {
+  const base = declaration.heritageClauses?.find((clause) => clause.token === ts.SyntaxKind.ExtendsKeyword)?.types[0]?.expression;
+  return base !== undefined && ts.isIdentifier(base) ? base.text : undefined;
+}
+
 function sourceBindings(source: ts.SourceFile): ReadonlySet<string> {
   const names = new Set<string>();
   for (const statement of source.statements) {
+    if (isAmbient(statement)) continue;
     if (ts.isVariableStatement(statement)) for (const declaration of statement.declarationList.declarations) for (const name of bindingNames(declaration.name)) names.add(name);
     if ((ts.isFunctionDeclaration(statement) || ts.isClassDeclaration(statement) || ts.isEnumDeclaration(statement) || ts.isModuleDeclaration(statement)) && statement.name !== undefined) names.add(statement.name.text);
   }
   const visit = (node: ts.Node): void => {
-    if (ts.isFunctionLike(node) || ts.isClassLike(node) || ts.isModuleDeclaration(node)) return;
+    if (ts.isFunctionLike(node) || ts.isClassLike(node) || ts.isModuleDeclaration(node) || isAmbient(node)) return;
     if (ts.isVariableDeclarationList(node) && (node.flags & ts.NodeFlags.BlockScoped) === 0) for (const declaration of node.declarations) for (const name of bindingNames(declaration.name)) names.add(name);
     ts.forEachChild(node, visit);
   };
   visit(source);
   return names;
+}
+
+function isAmbient(node: ts.Node): boolean {
+  return ts.canHaveModifiers(node) && (ts.getModifiers(node)?.some((modifier) => modifier.kind === ts.SyntaxKind.DeclareKeyword) ?? false);
 }
 
 function mayOverrideEncoder(source: ts.SourceFile): boolean {
@@ -763,7 +796,7 @@ function mayOverrideEncoder(source: ts.SourceFile): boolean {
   const visit = (node: ts.Node): boolean => {
     if (globalObject(node)) {
       const directParent = node.parent;
-      if ((ts.isPropertyAccessExpression(directParent) || ts.isPropertyAssignment(directParent) || ts.isVariableDeclaration(directParent)) && directParent.name === node) return false;
+      if ((ts.isPropertyAccessExpression(directParent) || ts.isPropertyAssignment(directParent) || ts.isVariableDeclaration(directParent) || ts.isModuleDeclaration(directParent)) && directParent.name === node) return false;
       let reference: ts.Expression = node;
       while (true) {
         const parent = reference.parent;
@@ -772,7 +805,7 @@ function mayOverrideEncoder(source: ts.SourceFile): boolean {
         else break;
       }
       const parent = reference.parent;
-      const inspected = ts.isTypeOfExpression(parent) || (ts.isBinaryExpression(parent) && parent.operatorToken.kind === ts.SyntaxKind.InKeyword && parent.right === reference);
+      const inspected = ts.isTypeOfExpression(parent) || ts.isSpreadAssignment(parent) || (ts.isBinaryExpression(parent) && parent.operatorToken.kind === ts.SyntaxKind.InKeyword && parent.right === reference);
       const receiver = (ts.isPropertyAccessExpression(parent) || ts.isElementAccessExpression(parent)) && parent.expression === reference;
       if (!inspected && !receiver) return true;
     }
@@ -883,7 +916,7 @@ function ancestorsOf(node: ts.Node, source: ts.SourceFile): { symbol: string; li
   return ancestors;
 }
 
-function symbolOf(node: ts.Node): string | undefined {
+export function symbolOf(node: ts.Node): string | undefined {
   let className: string | undefined;
   let member: string | undefined;
   for (let current: ts.Node | undefined = node; current !== undefined; current = current.parent) {
@@ -901,6 +934,6 @@ function symbolOf(node: ts.Node): string | undefined {
   return member === undefined ? className : `${className}.${member}`;
 }
 
-function lineOf(source: ts.SourceFile, node: ts.Node): number {
+export function lineOf(source: ts.SourceFile, node: ts.Node): number {
   return source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1;
 }

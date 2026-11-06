@@ -98,7 +98,7 @@ test("nested literal loads and type queries retain distinct dependency evidence 
 });
 
 test("literal and computed references on the same line retain exact unsupported reference coverage", async () => {
-  const content = "import('./lib/item'); import(name); function run(require: Function) { require('pkg'); }";
+  const content = "import('./lib/item'); import(name); function run() { require('pkg'); }";
   const result = await createModuleDependenciesReader().extract([{ path: "src/use.ts", content }, item, manifest]);
   assert.equal(result.dependencies.length, 1);
   assert.deepEqual(result.untraversed, [
@@ -175,4 +175,11 @@ test("a require of a string literal stays outside module traversal and carries t
   assert.deepEqual(result.untraversed, [
     { file: "src/use.ts", line: 1, offset: 12, form: "require", endLine: 1, specifier: "./lib/item", target: { kind: "repository", file: "src/lib/item.ts" } },
   ]);
+});
+
+test("a selection reads the statements of the selected files only, while every source still resolves them", async () => {
+  const unselected: SourceFile = { path: "src/other.ts", content: "import { item } from './lib/item';" };
+  const result = await createModuleDependenciesReader().extract([{ path: "src/use.ts", content: "import { item } from './lib/item';" }, item, unselected], { files: ["src/use.ts"] });
+  assert.deepEqual(result.files.map(({ file }) => file), ["src/use.ts"]);
+  assert.deepEqual(result.dependencies.map(({ file, target }) => ({ file, target })), [{ file: "src/use.ts", target: { kind: "repository", file: item.path } }]);
 });
