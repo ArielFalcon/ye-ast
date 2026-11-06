@@ -14,6 +14,8 @@ export type CarrierSite =
   | { kind: "call-result"; repo: string; file: string; line: number; column?: number }
   /** The value a function or method returns. */
   | { kind: "return"; repo: string; file: string; symbol: string; line: number }
+  /** The value a resolved function or method receives as its parameter at `index`, 0-based. */
+  | { kind: "parameter"; repo: string; file: string; symbol: string; line: number; index: number }
   /** The value a class member holds: a field, an `input()`, a signal, an `@Input()`. */
   | { kind: "member"; repo: string; file: string; owner: string; member: string; line: number };
 
@@ -39,8 +41,12 @@ export const FLOW_STEPS = [
   "await",
   "to-signal",
   "assign",
+  "fallback",
+  "argument",
+  "resource",
   "iterate",
   "resolver-input",
+  "route-data",
   "template-binding",
   "template-read",
 ] as const;

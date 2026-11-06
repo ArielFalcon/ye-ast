@@ -21,7 +21,10 @@ export const CHANGE_RULES: Readonly<Record<ChangeKind, ChangeRule>> = {
   removed: { violates: "undefined", counterexample: "absent", guarded: "review" },
 };
 
-/** What the code does with the value at a path: a member read, call or keyed read; hands it on or shows it; anything else. */
+/**
+ * What the code does with the value at a path: an operation that fails on null or undefined (member read, call, keyed
+ * read, array spread, iteration, destructuring); hands it on or shows it; anything else.
+ */
 export type UseOperation = "dereference" | "consume" | "unmodelled";
 
 export type GuardKind = "optional-chain" | "truthiness" | "comparison" | "early-exit" | "fallback" | "non-null-assertion" | "type-guard" | "assertion" | "instanceof";

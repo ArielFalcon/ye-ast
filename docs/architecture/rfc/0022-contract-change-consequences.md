@@ -51,9 +51,13 @@ A value is followed only through these steps; anything else it flows into is a f
 | `return` of the value; each resolved caller expression continues | none |
 | `pipe(...)`: pass-through operators listed as data (`catchError`, `tap`, `filter`, `take`, `first`, `finalize`, `shareReplay`, `takeUntil`, ...) | none |
 | `map(p => e)` where `e` is an access path on `p` or an object literal of access paths | projection or property-wise rename |
+| `map(p => { ... return e })`: each `return` of a block body | as for an expression body |
 | `subscribe(p => ...)`, `subscribe({ next: p => ... })`, `await firstValueFrom/lastValueFrom(...)`, `toSignal(...)` | bound to the parameter, variable or signal |
-| assignment to a field, a local, or `signal.set(...)` | bound to the holder |
+| `httpResource(...)`; the value a `resource`/`rxResource` `loader`/`stream` returns | the resource's `value()` signal |
+| assignment to a field, a local, or `signal.set(...)`; `e ?? f`, `e \|\| f` with the value on the left | bound to the holder |
+| argument of a call to a function or method declared in the repository | the parameter at that position |
 | route resolver registered under `resolve: { key }` for a component with input `key`, when the application enables component input binding | the component input |
+| the same resolver, read in that route's component through `ActivatedRoute` `data` (`data.subscribe(({ key }) => ...)`, `snapshot.data[key]`) | bound to the destructured or read value |
 | template property binding `[name]="path"` on a child component with input `name` | the child input |
 | a read of a component field, input or signal in its template (`x()`, `@if (x(); as y)`, `*ngIf="x as y"`, `@for (i of x)`) | bound to the alias or item |
 
@@ -61,8 +65,10 @@ A value is followed only through these steps; anything else it flows into is a f
 
 Recognized when they test the path up to and including the changed segment, or its alias: `?.` on the changed segment;
 truthiness or `!= null` / `!== null` (with `!== undefined` for absence) in `@if`, `*ngIf`, `if`, `&&`, `?:`; an early
-`return` or `throw` on the negation in the same block; `??` or `||` directly on the changed value. User type guards,
-assertion functions and `instanceof` are not recognized: a use behind them is `review`.
+`return` or `throw` on the negation in the same block; `??` or `||` directly on the changed value; a destructuring
+default (`{ x = [] }`), which covers `undefined` only. User type guards, assertion functions and `instanceof` are not
+recognized: a use behind them is `review`. A dereference is any operation that fails on null or undefined: a member
+read, a call, a keyed read, an array spread, iteration, destructuring.
 
 ## Output
 
