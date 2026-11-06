@@ -907,6 +907,8 @@ details[open] summary { border-bottom: 1px solid var(--line-soft); }
   letter-spacing: -.01em; line-height: .98;
 }
 .docs h2 { font-size: clamp(2.4rem, 5vw, 4rem); max-width: 20ch; }
+.docs .section-head h2 { display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: .3em; max-width: 24ch; }
+.docs .section-head h2::before { content: ""; width: var(--title-mark, 1em); height: var(--title-mark, 1em); background: var(--logo) center / contain no-repeat; }
 .docs h3, .docs h4, .docs .step-panel h3, .docs .run-card h4 {
   font-family: var(--display); font-stretch: condensed; font-weight: 800; letter-spacing: 0; line-height: 1.05;
 }

@@ -976,7 +976,7 @@ function refLink(ref) {
 
   /* ── language hash and theme ──────────────────────────────────────── */
 
-  for (const link of $$(".lang-switch")) {
+  for (const link of $$(".lang-switch a")) {
     link.addEventListener("click", (event) => {
       event.preventDefault();
       window.location.href = link.getAttribute("href") + window.location.hash;

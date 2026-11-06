@@ -158,4 +158,33 @@
     window.addEventListener("resize", schedule);
     update();
   }
+
+  /* ── title marks ──────────────────────────────────────────────────── */
+
+  /** The mark beside a section title is as tall as the title's lines. A taller mark narrows the text and can only add
+   * lines, so growing it from zero until the line count stops changing reaches the fixed point. */
+  const titles = $$(".section-head h2");
+  const lineCount = (title) => {
+    const range = document.createRange();
+    range.selectNodeContents(title);
+    return new Set(Array.from(range.getClientRects(), (rect) => Math.round(rect.top))).size;
+  };
+  const fitTitleMark = (title) => {
+    const lineHeight = parseFloat(getComputedStyle(title).lineHeight);
+    let lines = 0;
+    for (let pass = 0; pass < 6; pass += 1) {
+      title.style.setProperty("--title-mark", `${lines * lineHeight}px`);
+      const next = lineCount(title);
+      if (next === lines) return;
+      lines = next;
+    }
+    title.style.setProperty("--title-mark", `${lines * lineHeight}px`);
+  };
+  let fitFrame = 0;
+  const fitTitleMarks = () => {
+    fitFrame = 0;
+    titles.forEach(fitTitleMark);
+  };
+  fitTitleMarks();
+  window.addEventListener("resize", () => { if (!fitFrame) fitFrame = requestAnimationFrame(fitTitleMarks); });
 })();
