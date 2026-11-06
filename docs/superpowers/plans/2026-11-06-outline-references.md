@@ -304,6 +304,24 @@ As built (phase 2):
 - Open: codegraph holds no node for a Java `record`, so an import of a repository record keeps no declaration and
   makes the outline `partial` with its `unresolved-link` cut (`spring-petclinic-microservices`: `OwnerDetails`).
 
+Review fixes (phase 2):
+
+- `exportedAs` is a dotted containment path from the target file's top level, matched whole against the graph's
+  containment tree: the default export's name (TypeScript), or the Java type's fully qualified name, then the member
+  for a static import (codegraph holds a Java package as the namespace that contains the file's types). A member the
+  named type only inherits, or one of a nested type ending the same, reaches no declaration and stays an
+  `unresolved-link` cut.
+- A `require` call in a file that binds a `require` of its own (any scope, or an import) keeps its specifier and gets
+  an `unresolved` target; the check reuses `declaredNames`, file-wide, so it never resolves a shadowed call.
+- Any reader `unread` entry of a requested file (`no-extractor` too, e.g. `import A = N.Member`) is a `no-extractor`
+  cut.
+- The imports of one line come in source order: static statements now carry `offset` like runtime references.
+- `ModuleDependenciesReader.extract` takes an optional `files` selection: the outline reads the statements of the
+  requested files only, resolved against every source; the Java reader parses the project only when a selected file is
+  Java. `impact` and `importers` pass none. Outline of `src/mcp/render.ts` on this repository, warm: 1.19–1.21 s before,
+  1.05–1.10 s after, of which about 0.7 s is CLI startup.
+- `ModuleTarget` lives in `domain/shared/module-target.ts`.
+
 ### Phase 3: Part B in focus (after trace slice 1 is on `main`)
 
 | Task | Content | Placement | Tests |
