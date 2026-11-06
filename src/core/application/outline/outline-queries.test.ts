@@ -325,6 +325,7 @@ const USES_INDEX: Options = {
     { from: "Svc.go", name: "this.cache.get", kind: "calls", file: USE, line: 32, column: 20 },
     { from: "Svc.load", name: "lib.Other", kind: "instantiates", file: USE, line: 35, column: 4 },
     { from: "Svc.go", name: "deps.read", kind: "calls", file: USE, line: 33, column: 4 },
+    { from: "top", name: "Other", kind: "references", file: USE, line: 2, column: 13 },
     { from: "Svc.go", name: "orphan", kind: "calls", file: USE, line: 33, column: 20 },
   ],
   roots: { "17:11": { status: "complete", value: { kind: "external", module: "typescript" }, evidence: [] } },
@@ -338,6 +339,7 @@ const USES_INDEX: Options = {
     "32:21 this": { kind: "this", member: "cache" },
     "33:5 deps": { kind: "declared", root: "deps", lines: [30], topLevel: false },
     "33:21 orphan": { kind: "declared", root: "orphan", lines: [3], topLevel: true },
+    "2:14 Other": { kind: "located", root: "Other", file: LIB, path: "Other" },
     "35:5 lib": { kind: "import", root: "lib", member: "Other", origin: { kind: "repository", file: LIB } },
   },
   dependencies: [{ file: USE, line: 1, endLine: 1, specifier: "./lib", kind: "import", typeOnly: false, target: { kind: "repository", file: LIB }, bindings: [{ local: "helperAlias", imported: "helper", line: 1, column: 10, typeOnly: false }] }],
@@ -399,4 +401,9 @@ test("a name nothing proves is one unresolved-link cut at the declaration listin
 test("a member of a namespace a repository import binds is a use of the declaration of that name at the top of the imported file", async () => {
   const { uses } = await usesAnswer("Svc.load");
   assert.deepEqual(uses, [{ declaration: { file: LIB, name: "Other", kind: "class", line: 5, endLine: 9 }, relations: ["instantiates"], at: [{ line: 35, column: 5 }] }]);
+});
+
+test("a name bound to a declaration of another file by its containment path is a use of that declaration", async () => {
+  const { uses } = await usesAnswer("top");
+  assert.deepEqual(named(uses), ["Other"]);
 });

@@ -78,19 +78,19 @@ function thisField(node: Node): string | undefined {
   return node.type === "field_access" && node.childForFieldName("object")?.type === "this" ? node.childForFieldName("field")?.text : undefined;
 }
 
-function enclosingBody(node: Node): Node | undefined {
+export function enclosingBody(node: Node): Node | undefined {
   for (let scope = node.parent; scope !== null; scope = scope.parent) if (TYPE_BODIES.includes(scope.type)) return scope;
   return undefined;
 }
 
 /** The field declarators of a type body, an enum's included. */
-function fieldsOf(body: Node): Node[] {
+export function fieldsOf(body: Node): Node[] {
   const members = body.namedChildren.flatMap((child) => (child?.type === "enum_body_declarations" ? child.namedChildren : [child]));
   return members.filter((member) => member?.type === "field_declaration" || member?.type === "constant_declaration").flatMap((field) => field!.namedChildren.filter((child): child is Node => child?.type === "variable_declarator"));
 }
 
 /** The innermost local or parameter that declares the identifier's name, up to its type body. */
-function localBinding(identifier: Node): Node | undefined {
+export function localBinding(identifier: Node): Node | undefined {
   const name = identifier.text;
   for (let scope = identifier.parent; scope !== null && !TYPE_BODIES.includes(scope.type); scope = scope.parent) {
     for (const declared of declaredIn(scope)) if (nameOf(declared) === name || (declared.type === "identifier" && declared.text === name)) return declared;

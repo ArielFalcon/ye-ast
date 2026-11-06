@@ -78,11 +78,13 @@ export interface UseSite {
 /**
  * What binds a use's root, the first name of the chain written at the site: an import (with the name after the root, for
  * a namespace), a declaration of the file (by the 1-based lines of its names, and whether every one is at the file's top
- * level), the language, or `this` (with the member after it).
+ * level), a declaration of a repository file by its dotted containment path, the language, or `this` (with the member
+ * after it).
  */
 export type RootBinding =
   | { kind: "import"; root: string; member?: string; origin: Extract<ImportOrigin, { kind: "repository" | "external" }> }
   | { kind: "declared"; root: string; lines: readonly number[]; topLevel: boolean }
+  | { kind: "located"; root: string; file: string; path: string }
   | { kind: "ambient"; root: string }
   | { kind: "this"; member?: string }
   | { kind: "unknown" };

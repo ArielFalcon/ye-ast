@@ -6,6 +6,7 @@ import { sameOccurrence, type EdgeOccurrence } from "../../domain/trace/call-pla
 import type { CodeGraphReader, GraphEdge, GraphNodeId, GraphSymbol, GraphUnresolvedReference } from "../../ports/code-graph.port.ts";
 import type { ImportOrigins, RootBinding, UseSite } from "../../ports/import-origins.port.ts";
 import { containmentTree } from "./containment-tree.ts";
+import { branchesOf, declarationPath } from "../../domain/shared/declaration-tree.ts";
 import type { EdgeTargets, FollowedEdge } from "./edge-targets.ts";
 import type { GraphNavigation } from "./graph-navigation.ts";
 
@@ -137,6 +138,7 @@ export async function usesOf(node: GraphSymbol, input: UsesInput): Promise<{ fou
       /** A value a function around the body declares, and the index holds no node of, is a local value captured by the body. */
       return declaration ?? (binding.topLevel ? undefined : "local");
     }
+    if (binding.kind === "located") return single(branchesOf(containmentTree(store, navigation.symbolsInFile(binding.file))).filter((branch) => declarationPath(branch) === binding.path).map((branch) => branch.declaration));
     if (binding.kind !== "import") return undefined;
     if (binding.origin.kind === "external") return { module: binding.origin.module };
     const imported = (await targets.importedDeclarations(reference.file)).get(binding.root);
