@@ -1,6 +1,7 @@
 import { createDeclarationEvidenceReader } from "../core/adapters/typescript/declaration-evidence.adapter.ts";
 import { createSnapshotDataCache } from "../core/application/snapshot/snapshot-data-cache.ts";
 import type { ImpactQueriesDeps } from "../core/application/impact/impact-queries.ts";
+import type { HeadReaderDeps } from "../core/application/snapshot/head-reading.ts";
 import type { WorkspaceQueriesDeps } from "../core/application/topology/workspace-queries.ts";
 import { dirname, extname, join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -48,6 +49,7 @@ import { createAngularDeclarationReader } from "../core/adapters/typescript/angu
 import { createAngularRoutesExtractor } from "../core/adapters/typescript/angular-routes.adapter.ts";
 import { createDynamicLoadReader } from "../core/adapters/typescript/dynamic-loads.adapter.ts";
 import { composeAngularRelations } from "./angular-relations.ts";
+import { composeConsumerQueries } from "./consumer-queries.ts";
 import { sortFindings } from "../core/domain/entrypoints/finding-order.ts";
 import { compareText } from "../core/domain/shared/code-node.ts";
 import type { CallSiteReader } from "../core/domain/topology/call-site.ts";
@@ -61,6 +63,7 @@ import type { ImpactQueries } from "../core/ports/impact-queries.port.ts";
 import type { OutlineQueries } from "../core/ports/outline-queries.port.ts";
 import type { WorkspaceQueries } from "../core/ports/workspace-queries.port.ts";
 import type { WorkspaceImpactQueries } from "../core/ports/workspace-impact-queries.port.ts";
+import type { ConsumerQueries } from "../core/ports/consumer-queries.port.ts";
 import type { DecisionQueries } from "../core/ports/decision-queries.port.ts";
 import type { RemoteRefresh } from "../core/ports/remote-refresh.port.ts";
 import type { Redaction } from "../core/ports/redaction.port.ts";
@@ -111,6 +114,8 @@ export interface ComposedQueries {
   outline: OutlineQueries;
   workspace: WorkspaceQueries;
   workspaceImpact: WorkspaceImpactQueries;
+  /** What changing one property of an operation's response does to the code that consumes it (RFC-0022); a library surface only. */
+  consumers: ConsumerQueries;
   decisions: DecisionQueries;
   redaction: Redaction;
   /** The name a repository answers to: the directory name of its main worktree, which every linked worktree shares. */
@@ -206,8 +211,7 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
     }
   };
   const impact = measurement === undefined ? bareImpact : measuredImpact(bareImpact, measurement);
-  const javaImports = staged<ModuleDependenciesReader>({ extract: async (sources, options) => createJavaImportsReader(await createJavaParser()).extract(sources, options) }, { extract: "java-imports" });
-  const bareOutline = createOutlineQueries({
+  const headDeps: HeadReaderDeps & Pick<ImpactQueriesDeps, "engines"> = {
     ...snapshotCache,
     vcs,
     scratch,
@@ -219,12 +223,12 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
     matcher,
     producer: { name: PRODUCER_NAME, version },
     engines: { ...entrypointEngines, [CODEGRAPH_PACKAGE]: codegraph },
-    moduleReaders: [moduleDependencies, javaImports],
-    unmodelled,
     live,
     ...budget,
     ...trust,
-  });
+  };
+  const javaImports = staged<ModuleDependenciesReader>({ extract: async (sources, options) => createJavaImportsReader(await createJavaParser()).extract(sources, options) }, { extract: "java-imports" });
+  const bareOutline = createOutlineQueries({ ...headDeps, moduleReaders: [moduleDependencies, javaImports], unmodelled });
   const outline = measurement === undefined ? bareOutline : measuredOutline(bareOutline, measurement);
   const defaults = createWorkspaceDefaults(createFixedLayerStore());
   const refresh = options.refresh ?? (options.cacheDirectory === undefined ? undefined : createRemoteRefresh({ ...defaultRemoteRefreshDeps, cacheDirectory: options.cacheDirectory, digest }));
@@ -259,9 +263,10 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
     } });
     return measurement === undefined ? operationImpact : measuredImpact(operationImpact, measurement);
   } });
+  const consumers = composeConsumerQueries({ operation, heads: headDeps, digest, engines: { ...headDeps.engines, [TEMPLATE_ENGINE]: installedVersion(TEMPLATE_ENGINE) }, importOrigins: (sources: readonly SourceFile[]) => createImportOrigins(sources) });
   const bareDecisions = createCapturedDecisionQueries({ operation, defaults, vcs, digest });
   const decisions = measurement === undefined ? bareDecisions : measuredDecisions(bareDecisions, measurement);
-  return { version, entrypoints, impact, outline, workspace, workspaceImpact, decisions, redaction, repositoryName: (repo, signal) => vcs.repositoryName(repo, signal), canonicalRepositoryRoot: (repo, signal) => vcs.canonicalRoot(repo, signal), warmLive };
+  return { version, entrypoints, impact, outline, workspace, workspaceImpact, consumers, decisions, redaction, repositoryName: (repo, signal) => vcs.repositoryName(repo, signal), canonicalRepositoryRoot: (repo, signal) => vcs.canonicalRoot(repo, signal), warmLive };
 }
 
 export function composeCli(options: CompositionOptions = {}): (argv: readonly string[], io: CliIo) => Promise<number> {

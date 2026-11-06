@@ -42,8 +42,8 @@ test("a reference the reader could not follow cuts the answer only when the chan
   const unresolved = { unresolved: [{ ref: "schemas/money.yaml#/Money", file: "openapi/schemas/money.yaml" }] };
   const unchanged = [operation("GET /orders", unresolved)];
 
-  assert.deepEqual(changedContracts(unchanged, unchanged, touched(DOCUMENT)).cuts, [{ kind: "unresolved-link", at: [`${DOCUMENT}:5 schemas/money.yaml#/Money`] }]);
-  assert.deepEqual(changedContracts(unchanged, unchanged, touched("openapi/schemas/money.yaml")).cuts, [{ kind: "unresolved-link", at: [`${DOCUMENT}:5 schemas/money.yaml#/Money`] }]);
+  assert.deepEqual(changedContracts(unchanged, unchanged, touched(DOCUMENT)).cuts, [{ kind: "unresolved-link", at: [DOCUMENT, `${DOCUMENT}:5 schemas/money.yaml#/Money`] }]);
+  assert.deepEqual(changedContracts(unchanged, unchanged, touched("openapi/schemas/money.yaml")).cuts, [{ kind: "unresolved-link", at: [DOCUMENT, `${DOCUMENT}:5 schemas/money.yaml#/Money`] }]);
   assert.deepEqual(changedContracts(unchanged, unchanged, touched("src/Other.java")).cuts, []);
 });
 

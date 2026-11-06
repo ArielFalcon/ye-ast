@@ -1,3 +1,6 @@
+import type { ImportOrigin } from "../relations/resolved-reference.ts";
+import type { Finding } from "../shared/fact.ts";
+
 /** The edges the impact walk follows (RFC-0010 "Edge policy"). */
 
 /** Code that runs or holds code that runs: it calls, instantiates and, where it uses a name, references. */
@@ -98,4 +101,13 @@ export function isIgnoredEdge({ synthesizedBy }: EdgeScore): boolean {
 export function edgeConfidence({ confidence, provenance }: EdgeScore): number {
   if (confidence !== null) return confidence;
   return provenance === "heuristic" ? EDGE_POLICY.unscoredHeuristicConfidence : 1;
+}
+
+/**
+ * Whether the root of the name an edge spells is bound outside the repository: imported from a package, or declared by
+ * the language's own libraries. Such a name cannot be a declaration of the repository, whatever the graph matched it
+ * to, so the edge is not a dependence. A root that is unknown or bound inside proves nothing against the edge.
+ */
+export function isBoundOutside(root: Finding<ImportOrigin>): boolean {
+  return root.status === "complete" && (root.value.kind === "external" || root.value.kind === "ambient");
 }

@@ -68,9 +68,33 @@ bindings do not escape nested functions or classes. Immutable AST scopes are mem
 collected once per source instead of rescanned for every request.
 
 An unshadowed global `encodeURIComponent` is a supported static transformation: literal text is encoded, and an identifier
-explicitly typed `string` may remain a parameter placeholder within a known path. Unsupported arguments, shadowed
-encoders, visible writes or an escaping global object in the provided snapshot keep the evaluation unknown. No repository
-function is executed. A whole run-time URL such as `fetch(url)` remains unknown when `url` names a run-time parameter.
+explicitly typed `string`, `number`, `boolean` or `bigint` may remain a parameter placeholder within a known path; so may
+`String(x)` and `x.toString()` of such an identifier. Unsupported arguments, shadowed encoders, visible writes or an
+escaping global object in the provided snapshot keep the evaluation unknown. No repository function is executed. A whole
+run-time URL such as `fetch(url)` remains unknown when `url` names a run-time parameter.
+
+`fetch(url, init)` takes its method from the init object it states, GET without one; an init that is not an object
+literal, or a spread or computed member that may state `method` after it, leaves the method undecided. An
+`httpResource` request object's `url` and `method` are read the same way, shorthand included. A `fetch` the file or the
+code around declares or imports is not the global one, and its call is no request.
+
+The text after the first `?` or `#` of a URL is its query or fragment, which no route serves: evaluation stops there, so
+a value the query names never leaves the path undecided. An argument of `encodeURIComponent` cut there is undecided.
+
+A function a path calls, and the function an `httpResource` takes its request from, is read at every `return` of its own
+body; the functions it declares return their own. A bare `return`, and an end the body reaches without returning, return
+`undefined`. Every return must write the same path, otherwise the path is undecided, and a function that calls itself is
+undecided. An `httpResource` function that returns `undefined` requests nothing then, so its request is the one its other
+returns state. Variables the function declares are values it fills at run time.
+
+A class member the class does not declare (`this.resourceUrl`) is read from the class it extends, in the same file or
+through an import; a member the class declares itself wins.
+
+A name that is neither a binding nor an import of its file, such as an ambient `declare const`, takes the value an
+Angular workspace's `build` target states for it in `define` (application builders), read from `angular.json` as source
+text: only when every configuration, the default build included, states the same string literal. A configuration's own
+`define` replaces the options' one, as the Angular CLI merges configurations. A source takes the define of the deepest
+project root above it. A build plugin that rewrites defines is not read.
 
 | Transport | Call-site side | Entrypoint side | Matched by | Confidence |
 |---|---|---|---|---|

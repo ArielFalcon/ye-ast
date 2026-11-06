@@ -225,3 +225,138 @@ test("an import-equals require binds its name to the module it names, unless the
     { status: "unknown", reason: "unresolved", occurrence: true, evidence: [{ path: "src/shadow.ts", line: 2 }] },
   ]);
 });
+
+/** A class whose method shares a library global's name, called as the graph spells it: the bare name, at the call. */
+const OWN_CALLS = [
+  "export class Svc {",
+  "  fetch(): void {}",
+  "  direct(): void { this.fetch(); }",
+  "  arrow = () => this.fetch();",
+  "  inherited(): void { super.fetch(); }",
+  "  rebound(): void { [1].map(function () { this.fetch(); }); }",
+  "  literal(): void { const o = { m() { this.fetch(); } }; }",
+  "  static run(): void { this.fetch(); }",
+  "  static field = this.fetch();",
+  "  nest(): void { class Inner { fetch(): void {} go(): void { this.fetch(); } } }",
+  "}",
+];
+
+async function ownCallKinds(lines: readonly number[]): Promise<string[]> {
+  const file = "src/svc.ts";
+  const sites = lines.map((line): ImportOriginSite => {
+    const text = OWN_CALLS[line - 1]!;
+    const column = Math.max(text.indexOf("this.fetch"), text.indexOf("super.fetch")) + 1;
+    return { file, line, column, name: "fetch", fullName: "fetch", kind: "calls" };
+  });
+  const found = await createImportOrigins([{ path: file, content: OWN_CALLS.join("\n") }]).origins(sites);
+  return found.map((finding) => (finding.status === "complete" ? finding.value.kind : "unknown"));
+}
+
+test("a bare graph call written on this inside a class member names a member of that class, not a library global", async () => {
+  assert.deepEqual(await ownCallKinds([3, 4]), ["this-member", "this-member"]);
+});
+
+test("a bare graph call on super, or on a this a function or an object method rebinds, proves nothing", async () => {
+  assert.deepEqual(await ownCallKinds([5, 6, 7]), ["unknown", "unknown", "unknown"]);
+});
+
+test("a bare graph call on the this of a static member, or of a class declared inside a function, proves nothing", async () => {
+  assert.deepEqual(await ownCallKinds([8, 9, 10]), ["unknown", "unknown", "unknown"]);
+});
+
+const RESOLVED_LINES = [
+  "import * as rx from 'rxjs';",
+  "import { filter } from 'rxjs';",
+  "import { Store } from '@app/store';",
+  "",
+  "export function use(node: rx.Observable): unknown {",
+  "  filter(node);",
+  "  const made = new rx.Subject();",
+  "  Store.create().run();",
+  "  return made;",
+  "}",
+  "",
+];
+const RESOLVED: SourceFile = { path: "src/resolved.ts", content: RESOLVED_LINES.join("\n") };
+
+/** The site the graph writes for `kind` at the first `spelled` of a 1-based line, naming `name`. */
+function resolvedSite(line: number, spelled: string, kind: string, name: string) {
+  return { file: RESOLVED.path, line, column: RESOLVED_LINES[line - 1]!.indexOf(spelled) + 1, kind, name };
+}
+
+async function rootOf(site: ReturnType<typeof resolvedSite>): Promise<Finding<ImportOrigin>> {
+  return only(await createImportOrigins([...SOURCES, RESOLVED]).rootOrigins([site]));
+}
+
+const RXJS: ImportOrigin = { kind: "external", module: "rxjs" };
+
+test("a qualified type the graph resolved by its last name is rooted at the namespace import before it", async () => {
+  const finding = await rootOf(resolvedSite(5, "Observable", "references", "Observable"));
+
+  assert.deepEqual(finding, { status: "complete", value: RXJS, evidence: [{ path: RESOLVED.path, line: 5 }] });
+});
+
+test("a call is rooted at the start of its callee, where the graph writes the edge", async () => {
+  const finding = await rootOf(resolvedSite(6, "filter", "calls", "filter"));
+
+  assert.deepEqual(finding.status === "complete" && finding.value, RXJS);
+});
+
+test("an instantiation is rooted at the class after the new keyword, where the graph writes the edge", async () => {
+  const finding = await rootOf(resolvedSite(7, "new", "instantiates", "Subject"));
+
+  assert.deepEqual(finding.status === "complete" && finding.value, RXJS);
+});
+
+test("a chain whose root is a repository import is rooted there, whatever member it ends in", async () => {
+  const finding = await rootOf(resolvedSite(8, "Store", "calls", "create"));
+
+  assert.deepEqual(finding.status === "complete" && finding.value, { kind: "repository", file: "src/store.ts" });
+});
+
+test("a chain through a call, or one that ends in another name than the edge's, is unknown", async () => {
+  for (const site of [resolvedSite(8, "Store", "calls", "run"), resolvedSite(5, "Observable", "references", "Subject")]) {
+    assert.equal((await rootOf(site)).status, "unknown", `${site.line}:${site.name}`);
+  }
+});
+
+/** The root `expression` is spelled at, in a module that uses it, beside `defining`: a file of the snapshot that may declare it globally. */
+async function globalRootOf(defining: SourceFile, expression: string, kind: string, name: string): Promise<Finding<ImportOrigin>> {
+  const use: SourceFile = { path: "src/use.ts", content: `export function use(): unknown {\n  return ${expression};\n}\n` };
+  const site = { file: use.path, line: 2, column: "  return ".length + 1, kind, name };
+  return only(await createImportOrigins([CONFIG, MANIFEST, defining, use]).rootOrigins([site]));
+}
+
+const script = (content: string): SourceFile => ({ path: "src/script.ts", content });
+
+test("a library name a script's top-level class declares is the repository's own global, so it is unknown", async () => {
+  assert.equal((await globalRootOf(script("class URL {\n  constructor(path: string) {}\n}\n"), 'new URL("/orders")', "instantiates", "URL")).status, "unknown");
+});
+
+test("a library name a script's top-level function declares is the repository's own global, so it is unknown", async () => {
+  assert.equal((await globalRootOf(script("function fetch(): void {}\n"), "fetch()", "calls", "fetch")).status, "unknown");
+});
+
+test("a library name a script's top-level variable statement binds, by var, let, const or destructuring, is the repository's own global", async () => {
+  for (const [declaration, name] of [["var Intl = 1;", "Intl"], ["let Reflect = 1;", "Reflect"], ["const { Proxy } = { Proxy: 1 };", "Proxy"]] as const) {
+    assert.equal((await globalRootOf(script(`${declaration}\n`), name, "references", name)).status, "unknown", declaration);
+  }
+});
+
+test("a library name a script's top-level enum, interface, type or namespace declares is the repository's own global", async () => {
+  for (const [declaration, name] of [["enum Date { A }", "Date"], ["interface Map { own: true }", "Map"], ["type WeakRef = string;", "WeakRef"], ["namespace Atomics { export const own = 1; }", "Atomics"]] as const) {
+    assert.equal((await globalRootOf(script(`${declaration}\n`), name, "references", name)).status, "unknown", declaration);
+  }
+});
+
+test("a library name a module declares in a declare global block is the repository's own global", async () => {
+  const augmenting: SourceFile = { path: "src/augment.ts", content: "declare global {\n  var Iterator: unknown;\n}\nexport {};\n" };
+
+  assert.equal((await globalRootOf(augmenting, "Iterator", "references", "Iterator")).status, "unknown");
+});
+
+test("a library name a module declares at its top level is not global, so its use elsewhere stays ambient", async () => {
+  const module: SourceFile = { path: "src/headers.ts", content: "export class Headers {}\n" };
+
+  assert.deepEqual(await globalRootOf(module, "new Headers()", "instantiates", "Headers"), { status: "complete", value: { kind: "ambient", name: "Headers" }, evidence: [{ path: "src/use.ts", line: 2 }] });
+});

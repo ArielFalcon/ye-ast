@@ -122,6 +122,7 @@ of traversal facts records the policy in its own validity key.
 | `navigates` | no | a router link is navigation, not dependence |
 | codegraph's heuristic `angular-template` and `angular-event` edges | no | ADR-0014 decision 1; rows A4 and A2 bring ye-ast's own |
 | any edge from a test file | no | tests are not callers; the declared scope says so |
+| an edge whose name, read at its position as a plain chain (`X`, `ts.X`, `pkg.a.X`) ending in the target's name, is rooted at a package import or a name only the language's libraries declare | no | codegraph matches `ts.X`, `new pkg.X()`, a call of a name imported from `node:fs` and a value imported from a package to a repository declaration of the same last name; the file's own import proves the name is not that declaration. A root that is unbound, shadowed, bound to the repository, or a chain through a call keeps the edge, with no cut: nothing contradicts it. Only the edges a walk reads are checked, and the walk runs again when one is dropped |
 | containment | no | structure, not dependence |
 
 Edges ye-ast derives (interface bridges, and the Angular injection and template relations of rows A2 and A4) enter through one port of

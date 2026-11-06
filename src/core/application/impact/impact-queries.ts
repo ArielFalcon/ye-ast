@@ -7,12 +7,12 @@ import type { FileChange } from "../../domain/change/diff-reader.ts";
 import { isSeedable, selectSeeds, type ComponentRef, type SelectedSeed } from "../../domain/change/seeds.ts";
 import { changedContracts, servedContracts } from "../../domain/impact/changed-contracts.ts";
 import { changedEntrypoints } from "../../domain/impact/changed-entrypoints.ts";
-import { referenceKey, uniqueReferenceKeys, removedDeclarationCuts, rootedName, unreadRelationCuts, unresolvedLinkCuts, type UnreadRelation } from "../../domain/impact/impact-cuts.ts";
+import { unresolvedPlaceCuts, removedDeclarationCuts, unreadRelationCuts, unresolvedLinkCuts, type UnreadRelation } from "../../domain/impact/impact-cuts.ts";
 import { sortedUnique, type ImportersValue } from "../../domain/impact/importers-fact.ts";
 import { impactFact, type ImpactBudget, type ImpactedSymbol, type ImpactValue, type Seed } from "../../domain/impact/impact-fact.ts";
 import { reachedEntrypoints } from "../../domain/impact/reached-entrypoints.ts";
 import type { Relation } from "../../domain/relations/relation.ts";
-import type { MemberProofContext, MemberUseOrigin } from "../../domain/relations/member-use.ts";
+import type { MemberUseOrigin } from "../../domain/relations/member-use.ts";
 import { isExtractorConfiguration } from "../../domain/languages/configuration.ts";
 import { isAngularTemplate, isJsonModuleResource, isTypeScriptFile, isTypeScriptSource } from "../../domain/languages/typescript.ts";
 import { isJavaSource } from "../../domain/languages/java.ts";
@@ -23,7 +23,7 @@ import { cutsCompleteness } from "../../domain/languages/uncovered.ts";
 import { comparePosition, compareText } from "../../domain/shared/code-node.ts";
 import { branchesOf, declarationPath, selectedBySymbol, type DeclarationBranch } from "../../domain/shared/declaration-tree.ts";
 import type { Entrypoint } from "../../domain/entrypoints/entrypoint.ts";
-import { declarationSpan, sortedEngines, type Cut, type DeclaredConfig, type DeclaredScope, type Evidence, type Fact, type FactBase, type Finding, type IndexOrigin, type SnapshotRef, type TrustMode, type UnknownFact } from "../../domain/shared/fact.ts";
+import { declarationSpan, sortedEngines, type Cut, type DeclaredConfig, type Evidence, type Fact, type FactBase, type Finding, type IndexOrigin, type SnapshotRef, type TrustMode, type UnknownFact } from "../../domain/shared/fact.ts";
 import { exportSelection, pathSelection, sortedGlobs, type PathSelection, type ScopeRequest } from "../../domain/shared/scope.ts";
 import { changedPaths, isWritten } from "../../domain/snapshot/live-export.ts";
 import { contentFingerprint, declaredScope, exportCuts, holdsDeclaredSource, isInMapScope } from "../../domain/map/entrypoint-map.ts";
@@ -43,9 +43,12 @@ import type { CommitExport, Vcs, VcsChanges, VcsFault } from "../../ports/vcs.po
 import { ABORTED, extractCommit, factBaseOf, trustOf, withScratch, type CommitExtraction } from "../snapshot/read-snapshot.ts";
 import { createHeadReader, withLiveCapture, type FactSpec, type HeadIndex, type HeadReaderDeps, type HeadReading, type Revisioned } from "../snapshot/head-reading.ts";
 import { readImporters } from "./importers.ts";
-import { createInboundEdges } from "./inbound-edges.ts";
-import { walkImpact } from "./walk.ts";
-import type { ImportOriginSite, ImportOriginsReader } from "../../ports/import-origins.port.ts";
+import { inboundEdgesOf } from "./inbound-origins.ts";
+import { edgeKey, type InboundEdges } from "./inbound-edges.ts";
+import { memberProofContextOf, referenceProofsOf, sourceFilesOf, type ReferenceProofs } from "./reference-origins.ts";
+import { walkImpact, type Walk } from "./walk.ts";
+import type { ImportOrigins, ImportOriginsReader } from "../../ports/import-origins.port.ts";
+import { isBoundOutside } from "../../domain/impact/edge-policy.ts";
 import type { ContractRoutes } from "../../ports/contract-routes.port.ts";
 import { containmentTree } from "../navigation/containment-tree.ts";
 import { prepareCommit } from "../snapshot/prepared-snapshot.ts";
@@ -129,19 +132,23 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
         if (index === "unavailable") return { ok: true, value: { ...head.base(content), status: "unknown", reason: "index-unavailable" } };
         const { store, summary } = index;
         try {
-          const { relations: found, fields, locals, memberUses } = await deps.relations.extract(headTree.sources, { memberProofs: memberProofContext(headTree, declaredScope(request.scope)) });
+          const missing = missingTargets(store, requested);
+          if (missing.length > 0) {
+            const names = missing.map(({ file, symbol }) => `${file}:${symbol}`).join(", ");
+            const unmodelled = await unmodelledIn(deps, headTree, missing.map(({ file }) => file));
+            return { ok: false, fault: { kind: "unknown-symbol", detail: `no symbol at the revision for ${names}${unmodelledNote(missing, unmodelled)}`, entries: missing } };
+          }
+          const { relations: found, fields, locals, memberUses } = await deps.relations.extract(headTree.sources, { memberProofs: memberProofContextOf(headTree, declaredScope(request.scope)) });
           if (signal?.aborted) return ABORTED;
           const loads = await deps.dynamicLoads.extract(headTree.sources);
           if (signal?.aborted) return ABORTED;
-          const proofs = await proofsOf(deps, store, headTree, request.signal);
+          const origins = deps.importOrigins?.(headTree.sources);
+          const proofs = await referenceProofsOf(origins, store, headTree, request.signal);
           if (signal?.aborted) return ABORTED;
           const unmodelled = await unmodelledIn(deps, headTree, [...changes.map(({ path }) => path), ...requested.map(({ file }) => file)]);
           if (signal?.aborted) return ABORTED;
-          const read = impactOf({ store, changes, requested, componentsByResource, found, fields, locals, memberUses, loads, headTree, summary, budget: request.budget ?? {}, proofs, unmodelled });
-          if (read.missing.length > 0) {
-            const names = read.missing.map(({ file, symbol }) => `${file}:${symbol}`).join(", ");
-            return { ok: false, fault: { kind: "unknown-symbol", detail: `no symbol at the revision for ${names}${unmodelledNote(read.missing, unmodelled)}`, entries: read.missing } };
-          }
+          const read = await impactOf({ store, changes, requested, componentsByResource, found, fields, locals, memberUses, loads, headTree, summary, budget: request.budget ?? {}, proofs, unmodelled, origins, signal });
+          if (signal?.aborted) return ABORTED;
           return { ok: true, value: impactFact(head.base(content, true), read.value, [...fixed, ...read.cuts]) };
         } finally {
           store.close();
@@ -186,7 +193,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
             ...summary.filesNotIndexed.filter((file) => !moduleOnly.has(file)).map((file): Cut => ({ kind: "no-extractor", at: [file] })),
             ...read.unheld.map((file): Cut => ({ kind: held.has(file) ? "no-extractor" : "not-exported", at: [file] })),
             ...(modules?.unread.map(({ file }): Cut => ({ kind: "no-extractor", at: [file] })) ?? []),
-            ...(modules?.dependencies.filter((edge) => edge.target.kind === "unresolved").map((edge): Cut => ({ kind: "unresolved-link", at: [`${edge.file}:${edge.line} ${edge.specifier}`] })) ?? []),
+            ...unresolvedPlaceCuts(modules?.dependencies.filter((edge) => edge.target.kind === "unresolved").map((edge) => ({ file: edge.file, line: edge.line, reason: edge.specifier })) ?? []),
           ];
           return { ok: true, value: impactFact(head.base(content, true), { files: read.files }, cuts) };
         } finally {
@@ -352,11 +359,12 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
     if (index === "unavailable") return unknownFact(head.base(content), "index-unavailable");
     const { store, summary } = index;
     try {
-      const { relations: found, fields, locals, memberUses } = await deps.relations.extract(headTree.sources, { memberProofs: memberProofContext(headTree, declaredScope(request.scope)) });
+      const { relations: found, fields, locals, memberUses } = await deps.relations.extract(headTree.sources, { memberProofs: memberProofContextOf(headTree, declaredScope(request.scope)) });
       if (signal?.aborted) return ABORTED;
       const loads = await deps.dynamicLoads.extract(headTree.sources);
       if (signal?.aborted) return ABORTED;
-      const proofs = await proofsOf(deps, store, headTree, request.signal);
+      const origins = deps.importOrigins?.(headTree.sources);
+      const proofs = await referenceProofsOf(origins, store, headTree, request.signal);
       if (request.signal?.aborted) return ABORTED;
       const baseSources = new Map(baseTree.sources.map((source) => [source.path, source.content]));
       const headSources = new Map(headTree.sources.map((source) => [source.path, source.content]));
@@ -373,18 +381,13 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
       });
       const unmodelled = await unmodelledIn(deps, headTree, validatedChanges.filter((file) => !file.deleted).map(({ path }) => path));
       if (signal?.aborted) return ABORTED;
-      const read = impactOf({ store, changes: validatedChanges, requested: [], componentsByResource, found, fields, locals, memberUses, loads, headTree, summary, budget: request.budget ?? {}, proofs, unmodelled });
+      const read = await impactOf({ store, changes: validatedChanges, requested: [], componentsByResource, found, fields, locals, memberUses, loads, headTree, summary, budget: request.budget ?? {}, proofs, unmodelled, origins, signal });
+      if (signal?.aborted) return ABORTED;
       return { ok: true, value: impactFact(head.base(content, true), { ...value, ...read.value }, [...unaccounted([...fixed, ...read.cuts]), ...moduleCuts]) };
     } finally {
       store.close();
     }
   }
-}
-
-function memberProofContext(tree: Pick<CommitExtraction, "export" | "sources">, scope: DeclaredScope): MemberProofContext {
-  if (scope.include.length > 0 || scope.exclude.length > 0 || tree.export.stopped !== undefined || tree.export.skipped.length > 0) return { completeSource: false };
-  const sources = new Set(tree.sources.map(({ path }) => path));
-  return { completeSource: tree.export.files.every(({ path, written }) => !isTypeScriptSource(path) || (written && sources.has(path))) };
 }
 
 function moduleCoverage(read: ModuleDependencies, tree: CommitExtraction, changes: readonly FileChange[]): ModuleDependencies {
@@ -429,68 +432,11 @@ function candidatesOf(tree: readonly DeclarationBranch<GraphSymbol>[]): string[]
   return [...new Set(branchesOf(tree).filter(({ declaration }) => isSeedable(declaration)).map(declarationPath))].sort(compareText);
 }
 
-/** The head's sources the walk reads: written, in scope, and of a kind an extractor covers. */
 /** Which of `files` the graph cannot place, read from the head's own sources of those files only. */
 async function unmodelledIn(deps: ImpactQueriesDeps, headTree: CommitExtraction, files: readonly string[]): Promise<readonly string[]> {
   if (deps.unmodelled === undefined) return [];
   const asked = new Set(files);
   return deps.unmodelled.extract(headTree.sources.filter(({ path }) => asked.has(path)));
-}
-
-function sourceFilesOf(headTree: CommitExtraction): string[] {
-  return headTree.export.files.filter((file) => file.written && kindOfChangedFile(file.path) === "source").map((file) => file.path);
-}
-
-/**
- * The places whose rooted name the file imports from outside the repository. Such a reference cannot name a declaration
- * of the repository, so the cut the index attributes to it is false and stops being emitted (`RFC-0016` gap A).
- *
- * The proof is the file's own imports plus the snapshot's module configuration, so it needs no type root, no dependency
- * and no project-wide type-checking `Program`. A rooted name the file declares itself is never retired: a declaration may shadow the import, and a
- * hidden dependence is worse than a false cut.
- */
-/**
- * The two proofs a file's own imports make about the references the index could not settle: the places whose root the
- * proof places outside the repository, and the file a bare name imported from the repository resolves to. The first
- * retires a cut (`ADR-0019`); the second is what lets a bare reference be attributed to the declaration it actually
- * names instead of to a homonym (`RFC-0016` S12). A file the reader does not know proves nothing.
- */
-async function proofsOf(deps: ImpactQueriesDeps, store: CodeGraphReader, headTree: CommitExtraction, signal?: AbortSignal): Promise<ReferenceProofs> {
-  const reader = deps.importOrigins;
-  const external = new Set<string>();
-  const bound = new Map<string, string>();
-  const localParameters = new Set<string>();
-  const validOccurrences = new Set<string>();
-  if (reader === undefined) return { external, bound, localParameters, validOccurrences };
-  const references = store.unresolvedReferences(sourceFilesOf(headTree));
-  const unique = uniqueReferenceKeys(references);
-  const asked = references.flatMap((reference) => {
-    const key = referenceKey(reference);
-    const name = rootedName(reference.name);
-    if (key === undefined || !unique.has(key) || reference.kind === "imports" || !name) return [];
-    const site: ImportOriginSite = { file: reference.file, line: reference.line, column: reference.column + 1, name, fullName: reference.name, kind: reference.kind };
-    return [{ key, reference, site }];
-  });
-  const findings = await reader(headTree.sources).origins(asked.map(({ site }) => site), signal);
-  for (const [index, { key, reference }] of asked.entries()) {
-    const finding = findings[index];
-    if (finding?.occurrence === true) validOccurrences.add(key);
-    if (finding?.status !== "complete" || finding.occurrence !== true) continue;
-    if (finding.value.kind === "external" || finding.value.kind === "ambient") external.add(key);
-    if (finding.value.kind === "repository") bound.set(key, finding.value.file);
-    if (finding.value.kind === "local-parameter" && reference.name === finding.value.name && reference.kind === "calls") localParameters.add(key);
-  }
-  return { external, bound, localParameters, validOccurrences };
-}
-
-/** What a file's own imports prove about the references the index could not settle. */
-interface ReferenceProofs {
-  /** Places whose root a proof puts outside the repository: an import binding, or an ambient library name. */
-  external: ReadonlySet<string>;
-  /** The file a bare name imported from the repository resolves to, keyed by the complete occurrence. */
-  bound: ReadonlyMap<string, string>;
-  localParameters: ReadonlySet<string>;
-  validOccurrences: ReadonlySet<string>;
 }
 
 interface WalkInput {
@@ -514,26 +460,37 @@ interface WalkInput {
   unmodelled: readonly string[];
   /** The two proofs the head's own imports make: what is outside the repository, and what a bare name binds to. */
   proofs?: ReferenceProofs;
+  /** Where the names of the head's sources are rooted; without it every edge the graph resolved is followed. */
+  origins?: ImportOrigins | undefined;
+  signal?: AbortSignal | undefined;
 }
 
 interface ImpactRead {
   value: Pick<ImpactValue, "seeds" | "symbols" | "entrypoints" | "cost">;
   cuts: Cut[];
-  /** The requested symbols that name no node, with what their file declares; the walk does not run when there is one. */
-  missing: UnknownSymbolFault["entries"];
 }
 
-function impactOf(input: WalkInput): ImpactRead {
+/**
+ * The requested symbols that name no seedable declaration of their file, each with the file's dotted paths as
+ * candidates; read from the store alone, so a wrong name fails before any reader runs over the snapshot.
+ */
+function missingTargets(store: CodeGraphReader, requested: readonly { file: string; symbol: string }[]): UnknownSymbolFault["entries"] {
+  const files = [...new Set(requested.map(({ file }) => file))];
+  const byFile = Map.groupBy(store.symbolsInFiles(files), (symbol) => symbol.file);
+  const trees = new Map(files.map((file) => [file, containmentTree(store, byFile.get(file) ?? [])]));
+  return requested
+    .filter((target) => selectedBySymbol(trees.get(target.file) ?? [], target.symbol).every(({ declaration }) => !isSeedable(declaration)))
+    .map((target) => ({ ...target, candidates: candidatesOf(trees.get(target.file) ?? []) }));
+}
+
+async function impactOf(input: WalkInput): Promise<ImpactRead> {
   const { store, changes, requested, componentsByResource, found, fields, locals, memberUses, loads, headTree, summary } = input;
-  const isTest = (path: string): boolean => kindOfChangedFile(path) === "test";
   const sourceChanges = changes.filter((file) => kindOfChangedFile(file.path) === "source" && !file.deleted).map((file) => file.path);
   const componentFiles = changes.flatMap((file) => (componentsByResource.get(file.path) ?? []).map((component) => component.file));
   const symbols = store.symbolsInFiles([...new Set([...sourceChanges, ...componentFiles, ...requested.map(({ file }) => file)])]);
   const symbolsByFile = Map.groupBy(symbols, (symbol) => symbol.file);
   const trees = new Map([...new Set(requested.map(({ file }) => file))].map((file) => [file, containmentTree(store, symbolsByFile.get(file) ?? [])]));
   const asked = requested.map((target) => ({ target, found: selectedBySymbol(trees.get(target.file) ?? [], target.symbol).map(({ declaration }) => declaration).filter(isSeedable) }));
-  const missing = asked.filter(({ found: nodes }) => nodes.length === 0).map(({ target }) => ({ ...target, candidates: candidatesOf(trees.get(target.file) ?? []) }));
-  if (missing.length > 0) return { value: { seeds: [], symbols: [], entrypoints: [], cost: { expansionsUsed: 0 } }, cuts: [], missing };
 
   const selection = selectSeeds({ files: changes }, symbolsByFile, componentsByResource);
   const requestedSymbols = new Set(asked.flatMap(({ found: nodes }) => nodes));
@@ -541,8 +498,8 @@ function impactOf(input: WalkInput): ImpactRead {
   const seeds = chosen.toSorted((a, b) => comparePosition(a.symbol, b.symbol));
   const sourceFiles = sourceFilesOf(headTree);
   const unresolved = store.unresolvedReferences(sourceFiles);
-  const inbound = createInboundEdges(store, isTest, found.flatMap((finding) => (finding.status === "complete" ? [finding.value] : [])), fields, locals, input.proofs?.validOccurrences ?? new Set(), memberUses);
-  const walk = walkImpact(seeds.map(({ symbol }) => symbol), inbound, input.budget);
+  const build = (outside: ReadonlySet<string>): InboundEdges => inboundEdgesOf(store, { relations: found, fields, locals, memberUses }, input.proofs, outside);
+  const { inbound, walk } = await walkInside(seeds.map(({ symbol }) => symbol), build, input.budget, input.origins, input.signal);
 
   const walked = walk.reached.map(({ symbol }) => symbol);
   const reachedIds = new Set(walked.map((symbol) => symbol.id));
@@ -589,7 +546,27 @@ function impactOf(input: WalkInput): ImpactRead {
       walk.reached.map(({ symbol, depth, confidence, seeds: reaching }) => ({ file: symbol.file, name: symbol.name, startLine: symbol.startLine, endLine: symbol.endLine, depth, confidence, seeds: reaching })),
     ),
   };
-  return { value, cuts, missing: [] };
+  return { value, cuts };
+}
+
+/**
+ * Walks from the seeds without the edges whose name is rooted outside the repository. Only the edges a walk read are
+ * checked; when one is dropped the walk runs again, because a bound it frees can read edges no earlier walk read.
+ */
+async function walkInside(seeds: readonly GraphSymbol[], build: (outside: ReadonlySet<string>) => InboundEdges, budget: ImpactBudget, origins?: ImportOrigins, signal?: AbortSignal): Promise<{ inbound: InboundEdges; walk: Walk }> {
+  const outside = new Set<string>();
+  const checked = new Set<string>();
+  for (;;) {
+    const inbound = build(outside);
+    const walk = walkImpact(seeds, inbound, budget);
+    const fresh = inbound.followed().filter(({ edge }) => edge.line !== null && edge.column !== null && !checked.has(edgeKey(edge)));
+    if (origins === undefined || fresh.length === 0 || signal?.aborted) return { inbound, walk };
+    for (const { edge } of fresh) checked.add(edgeKey(edge));
+    const roots = await origins.rootOrigins(fresh.map(({ edge, source, target }) => ({ file: source.file, line: edge.line!, column: edge.column! + 1, kind: edge.kind, name: target.name })), signal);
+    const dropped = fresh.filter((_, index) => roots[index] !== undefined && isBoundOutside(roots[index]!));
+    if (dropped.length === 0) return { inbound, walk };
+    for (const { edge } of dropped) outside.add(edgeKey(edge));
+  }
 }
 
 function templateOwners(componentsByResource: ReadonlyMap<string, readonly ComponentRef[]>): Map<string, string[]> {

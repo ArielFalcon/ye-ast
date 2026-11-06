@@ -18,10 +18,11 @@ import type { TrustRecordReader } from "../../ports/trust-record.port.ts";
 import { fakeLive, type FakeLive } from "../live/fake-live.testing.ts";
 import type { LiveStaleNotice } from "../../ports/live-queries.port.ts";
 import { createImpactQueries, type ImpactQueriesDeps } from "./impact-queries.ts";
-import type { ImportOriginsReader, ImportOriginSite } from "../../ports/import-origins.port.ts";
+import type { ImportOrigins, ImportOriginsReader, ImportOriginSite, ResolvedNameSite } from "../../ports/import-origins.port.ts";
 import type { ImportOrigin } from "../../domain/relations/resolved-reference.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { ModuleDependenciesReader } from "../../ports/module-dependencies.port.ts";
+import type { ModuleDependency } from "../../domain/impact/module-dependency.ts";
 
 const HEAD = "a".repeat(40);
 const BASE = "b".repeat(40);
@@ -195,7 +196,7 @@ function ambientImports(names: readonly string[]): ImportOriginsReader {
   return origins((site) => (names.includes(site.name) ? { kind: "ambient", name: site.name } : undefined));
 }
 
-function origins(answer: (site: ImportOriginSite) => ImportOrigin | undefined): ImportOriginsReader {
+function origins(answer: (site: ImportOriginSite) => ImportOrigin | undefined, root: (site: ResolvedNameSite) => ImportOrigin | undefined = () => undefined): ImportOriginsReader {
   return () => ({
     origins: async (sites) =>
       sites.map((site): Finding<ImportOrigin> & { occurrence: true } => {
@@ -204,8 +205,16 @@ function origins(answer: (site: ImportOriginSite) => ImportOrigin | undefined): 
           ? { status: "unknown", reason: "unresolved", evidence: [{ path: site.file, line: site.line }], occurrence: true }
           : { status: "complete", value, evidence: [{ path: site.file, line: site.line }], occurrence: true };
       }),
+    rootOrigins: async (sites) => sites.map((site) => originFinding(site, root(site))),
   });
 }
+
+function originFinding(site: { file: string; line: number }, value: ImportOrigin | undefined): Finding<ImportOrigin> {
+  const evidence = [{ path: site.file, line: site.line }];
+  return value === undefined ? { status: "unknown", reason: "unresolved", evidence } : { status: "complete", value, evidence };
+}
+
+const NO_ROOTS: ImportOrigins["rootOrigins"] = async (sites) => sites.map((site) => originFinding(site, undefined));
 
 const SOURCE_NODES = [fakeNode("f", "function", "src/A.java", 1, 3), fakeNode("g", "function", "src/B.java", 1, 3)];
 const SOURCE_EDGES: FakeEdge[] = [{ from: "g", to: "f", kind: "calls", confidence: 0.9 }];
@@ -1262,10 +1271,28 @@ test("local callback proof excludes only its own removed-declaration occurrence 
   assert.deepEqual(onlyLocal.value.symbols, []);
 });
 
+test("a bare call the import reader places on this, inside the class that declares the member, is its caller and no cut", async () => {
+  const file = "src/svc.ts";
+  const unresolved = [{ from: "load", file, line: 3, column: 22, name: "fetch", kind: "calls" }];
+  const common: Options = {
+    nodes: [fakeNode("Svc", "class", file, 1, 9), fakeNode("fetch", "method", file, 2, 2), fakeNode("load", "method", file, 3, 3)],
+    edges: [{ from: "Svc", to: "fetch", kind: "contains" }, { from: "Svc", to: "load", kind: "contains" }],
+    unresolved,
+    exports: { [HEAD]: { files: [{ path: file, blob: "1", written: true }], skipped: [] } },
+  };
+  const ask = async (reader: ImportOriginsReader) => callersFact(await setup({ ...common, importOrigins: reader }).callers({ targets: [{ file, symbol: "fetch" }] }));
+  const proven = await ask(origins((site) => (site.column === 23 ? { kind: "this-member", name: "fetch" } : undefined)));
+  assert.equal(proven.status, "complete");
+  assert.deepEqual(proven.status === "complete" && proven.value.symbols.find((symbol) => symbol.symbol === "load")?.via, { file, symbol: "fetch", lines: [3], basis: "call" });
+  const unproven = await ask(origins(() => undefined));
+  assert.equal(unproven.status, "partial");
+  assert.equal(unproven.status === "partial" && unproven.value.symbols.some((symbol) => symbol.symbol === "load"), false);
+});
+
 test("cancellation during origin batch stops before the walk", async () => {
   const controller = new AbortController();
   const source = "src/use.ts";
-  const reader: ImportOriginsReader = () => ({ origins: async () => { controller.abort(); return []; } });
+  const reader: ImportOriginsReader = () => ({ origins: async () => { controller.abort(); return []; }, rootOrigins: NO_ROOTS });
   const result = await setup({ signal: controller.signal, changes: { ok: true, value: [change("src/target.ts")] }, nodes: [fakeNode("target", "function", "src/target.ts", 1)], unresolved: [{ from: "use", file: source, line: 1, column: 0, name: "target", kind: "calls" }], exports: { [HEAD]: { files: [source, "src/target.ts"].map((path) => ({ path, blob: path, written: true })), skipped: [] } }, importOrigins: reader }).ask();
   assert.ok(!result.ok && result.fault.kind === "aborted");
 });
@@ -1273,7 +1300,7 @@ test("cancellation during origin batch stops before the walk", async () => {
 test("field settlement does not hide a same-line unverified use", async () => {
   const target = "src/svc.ts", source = "src/cmp.ts";
   const refs = [0, 12].map((column) => ({ from: "caller", file: source, line: 2, column, name: "this.svc.hit", kind: "calls" }));
-  const validateFirst: ImportOriginsReader = () => ({ origins: async (sites) => sites.map((site) => ({ status: "unknown" as const, reason: "unresolved" as const, evidence: [], ...(site.column === 1 ? { occurrence: true as const } : {}) })) });
+  const validateFirst: ImportOriginsReader = () => ({ origins: async (sites) => sites.map((site) => ({ status: "unknown" as const, reason: "unresolved" as const, evidence: [], ...(site.column === 1 ? { occurrence: true as const } : {}) })), rootOrigins: NO_ROOTS });
   const answer = fact(await setup({ changes: { ok: true, value: [change(target, { added: [{ start: 3, end: 3 }] })] }, nodes: [fakeNode("Svc", "class", target, 1, 5), fakeNode("hit", "method", target, 3, 3), fakeNode("Cmp", "class", source, 1, 5), fakeNode("caller", "method", source, 2, 2)], edges: [{ from: "Svc", to: "hit", kind: "contains" }, { from: "Cmp", to: "caller", kind: "contains" }], unresolved: refs, fields: [{ owner: { path: source, symbol: "Cmp", line: 1 }, field: "svc", holds: { class: { path: target, symbol: "Svc", line: 1 } } }], exports: { [HEAD]: { files: [target, source].map((path) => ({ path, blob: path, written: true })), skipped: [] } }, importOrigins: validateFirst }).ask());
   assert.ok(answer.status === "partial");
   assert.ok(answer.value.symbols.some((symbol) => symbol.symbol === "caller"));
@@ -1444,4 +1471,79 @@ test("callers of a symbol in a file the graph cannot place cut the answer at tha
   const answer = callersFact(await setup(RECORDS).callers({ targets: [{ file: "src/Point.java", symbol: "origin" }] }));
 
   assert.deepEqual(answer.status === "partial" && answer.cuts, [{ kind: "no-extractor", at: ["src/Point.java"] }]);
+});
+
+test("importers cut each file's unresolved module statements once, anchored at the file with its places after it", async () => {
+  const unresolved = (file: string, line: number, specifier: string): ModuleDependency => ({ file, line, endLine: line, specifier, kind: "import", typeOnly: false, target: { kind: "unresolved", reason: "not found" }, bindings: [] });
+  const moduleDependencies: ModuleDependenciesReader = {
+    extract: async () => ({ files: [], dependencies: [unresolved("src/b.ts", 9, "geojson"), unresolved("src/a.ts", 4, "@/env"), unresolved("src/b.ts", 2, "@/env")], unread: [] }),
+  };
+  const { importers } = setup({ nodes: SHOP_NODES, exports: { [HEAD]: SHOP_EXPORT }, moduleDependencies });
+
+  const answer = importersFact(await importers({ files: ["src/Order.java"] }));
+
+  assert.deepEqual(answer.status === "partial" && answer.cuts.filter((cut) => cut.kind === "unresolved-link"), [
+    { kind: "unresolved-link", at: ["src/a.ts", "src/a.ts:4 @/env"] },
+    { kind: "unresolved-link", at: ["src/b.ts", "src/b.ts:2 @/env", "src/b.ts:9 geojson"] },
+  ]);
+});
+
+test("a callers target that names no declaration faults before the relations reader reads the snapshot", async () => {
+  let reads = 0;
+  const relationReader: ImpactQueriesDeps["relations"] = { extract: async () => { reads++; return { relations: [], fields: [], locals: [] }; } };
+
+  const answer = await setup({ ...TWO_CLASSES, relationReader }).callers({ targets: [{ file: "src/A.ts", symbol: "gone" }] });
+
+  assert.equal(!answer.ok && answer.fault.kind, "unknown-symbol");
+  assert.equal(reads, 0);
+});
+
+/** A reader whose roots are external at the edge lines in `outside`, repository at those in `inside`, and unknown elsewhere. */
+function rootsAtLines(outside: readonly number[], inside: readonly number[] = []): ImportOriginsReader {
+  return origins(() => undefined, (site) => (outside.includes(site.line) ? { kind: "external", module: "typescript" } : inside.includes(site.line) ? { kind: "repository", file: "src/model.ts" } : undefined));
+}
+
+const MODEL = [fakeNode("Expression", "interface", "src/model.ts", 1, 3), fakeNode("show", "function", "src/show.ts", 10, 12), fakeNode("top", "function", "src/top.ts", 20, 22), fakeNode("real", "function", "src/real.ts", 30, 32)];
+const MODEL_EDGES: FakeEdge[] = [
+  { from: "show", to: "Expression", kind: "references", line: 10, column: 30, confidence: 0.9 },
+  { from: "top", to: "show", kind: "calls", line: 21, column: 2, confidence: 0.9 },
+  { from: "real", to: "Expression", kind: "references", line: 30, column: 20, confidence: 0.9 },
+];
+const reachedNames = (answer: Fact<ImpactValue>): string[] => (answer.status === "unknown" ? [] : answer.value.symbols.map((symbol) => symbol.symbol));
+
+test("a name the graph resolved whose root is bound outside the repository is no caller, nor are the callers it alone reaches", async () => {
+  const answer = callersFact(await setup({ nodes: MODEL, edges: MODEL_EDGES, importOrigins: rootsAtLines([10], [30]) }).callers({ targets: [{ file: "src/model.ts", symbol: "Expression" }] }));
+
+  assert.equal(answer.status, "complete");
+  assert.deepEqual(reachedNames(answer), ["Expression", "real"]);
+});
+
+test("a change answers without the dependents a name rooted outside the repository would add", async () => {
+  const answer = fact(await setup({ nodes: MODEL, edges: MODEL_EDGES, changes: { ok: true, value: [change("src/model.ts")] }, importOrigins: rootsAtLines([10], [30]) }).ask());
+
+  assert.deepEqual(reachedNames(answer), ["Expression", "real"]);
+});
+
+test("a file whose own top-level use of a declaration is rooted outside the repository does not reach its top-level code", async () => {
+  const nodes = [MODEL[0]!, fakeNode("use.ts", "file", "src/use.ts", 1, 9), fakeNode("main", "function", "src/use.ts", 2, 4)];
+  const edges: FakeEdge[] = [{ from: "use.ts", to: "Expression", kind: "references", line: 6, column: 4, confidence: 0.8 }];
+
+  const kept = callersFact(await setup({ nodes, edges, importOrigins: rootsAtLines([]) }).callers({ targets: [{ file: "src/model.ts", symbol: "Expression" }] }));
+  const dropped = callersFact(await setup({ nodes, edges, importOrigins: rootsAtLines([6]) }).callers({ targets: [{ file: "src/model.ts", symbol: "Expression" }] }));
+
+  assert.deepEqual(reachedNames(kept), ["Expression", "main"]);
+  assert.deepEqual(reachedNames(dropped), ["Expression"]);
+});
+
+test("an edge the walk reads only once a dropped one frees a bound is checked as well", async () => {
+  const nodes = [fakeNode("T", "function", "src/t.ts", 1, 2), fakeNode("X", "function", "src/x.ts", 10, 11), fakeNode("O", "function", "src/o.ts", 20, 21), fakeNode("P", "function", "src/p.ts", 30, 31), fakeNode("Q", "function", "src/q.ts", 40, 41)];
+  const edges: FakeEdge[] = [
+    { from: "X", to: "T", kind: "calls", line: 10, column: 2 },
+    { from: "O", to: "X", kind: "calls", line: 20, column: 2 },
+    { from: "P", to: "X", kind: "calls", line: 30, column: 2 },
+    { from: "Q", to: "P", kind: "calls", line: 40, column: 2 },
+  ];
+  const answer = callersFact(await setup({ nodes, edges, importOrigins: rootsAtLines([20, 40]) }).callers({ targets: [{ file: "src/t.ts", symbol: "T" }], budget: { hubFanIn: 1 } }));
+
+  assert.deepEqual(reachedNames(answer), ["T", "X", "P"]);
 });

@@ -87,14 +87,13 @@ const selectionGuide = (tool: Tool) => `select must be one of ${kindsOf(tool).ma
 
 function selectionFor(tool: Tool, kind: SelectionKind) {
   const owners = ownersOf(tool, kind);
-  // A subset of the kind's public owner union, so the parsed value keeps that union's type.
-  const owner = <T extends z.ZodType>(_full: T) => z.union(owners.map((name) => OWNERS[name]), {error: `owner for ${kind} must be ${list(owners.map((name) => OWNER_SHAPE[name]))}${ownerRule(tool, kind)}`}) as unknown as T;
+  const ownerSubsetOf = <T extends z.ZodType>(_publicOwner: T) => z.union(owners.map((name) => OWNERS[name]), {error: `owner for ${kind} must be ${list(owners.map((name) => OWNER_SHAPE[name]))}${ownerRule(tool, kind)}`}) as unknown as T;
   switch (kind) {
     case 'entrypoint-evidence': return findingSelection;
     case 'workspace-link-evidence': return linkSelection;
-    case 'handler-origins': return handlerSelection.extend({owner: owner(impactOwner)});
-    case 'module-origins': return moduleSelection.extend({owner: owner(impactOwner)});
-    case 'cut-places': return cutSelection.extend({owner: owner(cutOwner)});
+    case 'handler-origins': return handlerSelection.extend({owner: ownerSubsetOf(impactOwner)});
+    case 'module-origins': return moduleSelection.extend({owner: ownerSubsetOf(impactOwner)});
+    case 'cut-places': return cutSelection.extend({owner: ownerSubsetOf(cutOwner)});
   }
 }
 
@@ -142,7 +141,6 @@ export function recoveryControlConstraintsFor(tool: Tool): CrossField {
   const pairing = {dependentRequired: {select: ['page'], page: ['select']}};
   const {local: localBranch, workspace: workspaceBranch} = ELIGIBILITY[tool];
   if (workspaceBranch === undefined) return pairing;
-  // Publish the excluded kinds and owners: the complement within the tool is shorter and equivalent.
   const restrict = (branch: Branch) => {
     const kinds = KIND_ORDER.filter((kind) => branch[kind] !== undefined);
     const owners = [...new Set(kinds.flatMap((kind) => branch[kind]!))];

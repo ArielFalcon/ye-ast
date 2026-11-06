@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ye-ast — architecture explorer</title>
-<meta name="description" content="Documentation for ye-ast, a deterministic engine that derives verifiable facts about code. Explore its layers, modules, ports, adapters and the flows between them.">
+<title>ye-AST — architecture explorer</title>
+<meta name="description" content="Documentation for ye-AST, a deterministic engine that derives verifiable facts about code. Explore its layers, modules, ports, adapters and the flows between them.">
 <link rel="icon" type="image/png" sizes="64x64" href="assets/favicon-light.png">
 <link rel="icon" type="image/png" sizes="64x64" href="assets/favicon-dark.png" media="(prefers-color-scheme: dark)">
 <link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
@@ -15,9 +15,9 @@
 <a class="skip" href="#main">Skip to content</a>
 
 <header class="bar">
-  <a class="brand" href="#intro" aria-label="ye-ast documentation">
+  <a class="brand" href="#intro" aria-label="ye-AST documentation">
     <span class="brand-mark" aria-hidden="true"></span>
-    <span class="brand-text">ye-ast <span>/ docs</span></span>
+    <span class="brand-text">ye-AST <span>/ docs</span></span>
   </a>
   <p class="bar-section" id="bar-section" aria-hidden="true"></p>
   <div class="bar-tools">
@@ -34,8 +34,8 @@
     <section id="intro" class="doc-section hero" data-rail="Introduction">
       <div class="section-head hero-copy">
         <p class="kicker">Deterministic code truth</p>
-        <h1>Your agent's <span class="hero-accent">IDE</span>.</h1>
-        <p class="section-lede lede">ye-ast gives your agent what an IDE gives you: who calls a symbol, what depends on a change, where that dependence surfaces, and how complete the answer is. It derives every answer from code, git and declared contracts, and states what it could not see.</p>
+        <h1><span>Your agent's <span class="hero-accent">IDE</span>.</span></h1>
+        <p class="section-lede lede">ye-AST gives your agent what an IDE gives you: who calls a symbol, what depends on a change, where that dependence surfaces, and how complete the answer is. It derives every answer from code, git and declared contracts, and states what it could not see.</p>
         <div class="hero-actions">
           <a class="button primary" href="#facts">Read the fact contract</a>
           <a class="button" href="#explorer">Explore the architecture</a>
@@ -132,7 +132,7 @@
               <tr><td><code>hub</code></td><td>A reached symbol has more call-like callers than the <code>hubFanIn</code> budget, so the walk did not expand it. The symbol is still in the answer; what stops is the climb through it.</td><td>Raise <code>hubFanIn</code>, or ask <code>callers</code> about that symbol alone.</td></tr>
               <tr><td><code>caller-budget</code></td><td><code>expansions</code> ran out, or an export budget stopped the snapshot.</td><td>Raise the bound, or narrow the request with scope.</td></tr>
               <tr><td><code>unresolved-link</code></td><td>A name the index could not resolve may point at a walked symbol.</td><td>Open each place and decide; after a deletion, each place still naming it breaks.</td></tr>
-              <tr><td><code>no-extractor</code></td><td>A file ye-ast cannot read: a template, a style sheet, an uncovered language.</td><td>Read it yourself when it bears on the task.</td></tr>
+              <tr><td><code>no-extractor</code></td><td>A file ye-AST cannot read: a template, a style sheet, an uncovered language.</td><td>Read it yourself when it bears on the task.</td></tr>
               <tr><td><code>not-exported</code></td><td>A path the snapshot left out (symlink, submodule, unsafe path).</td><td>Read it yourself; nothing under it was read.</td></tr>
               <tr><td><code>deadline</code></td><td>Time ran out before the answer was whole.</td><td>Ask again; narrow the scope if it repeats.</td></tr>
               <tr><td><code>section</code></td><td>One section of a composite answer could not be produced.</td><td>The rest stands; asking again may complete it.</td></tr>
@@ -196,7 +196,7 @@
           <li><code>ye_ast_workspace</code> returns the outward names a repository uses (HTTP, messaging, dependencies), the candidate repositories for each and the names no repository serves. Local clones you supply are used as given, never downloaded.</li>
           <li><code>ye_ast_decisions</code> returns the gaps the code cannot fill (membership, repository, library, gateway, revision, remote, trust), each with evidence-backed options. It writes nothing.</li>
           <li><code>mode</code> changes presentation only, never coverage: <code>summary</code> gives findings, <code>details</code> evidence and locations, <code>full</code> the complete result JSON with navigation text.</li>
-          <li>Entrypoints, callers and impact page the evidence the text omits: <code>select</code> and <code>page</code> go together, and <code>page.limit</code> is required. <code>expect</code> asserts a result identity; <code>replay</code> reruns the query and fails if the result changed, because ye-ast keeps no earlier capture.</li>
+          <li>Entrypoints, callers and impact page the evidence the text omits: <code>select</code> and <code>page</code> go together, and <code>page.limit</code> is required. <code>expect</code> asserts a result identity; <code>replay</code> reruns the query and fails if the result changed, because ye-AST keeps no earlier capture.</li>
         </ul>
         <p class="ref"><code>src/mcp/server.ts:50-69</code> · <code>src/mcp/query-schema.ts:158-205</code> · <code>src/mcp/presentation.ts:5-8</code> · <code>src/core/domain/outline/outline-fact.ts</code> · <code>src/core/domain/decisions/decision.ts:4</code></p>
       </div>
@@ -278,12 +278,12 @@
 
         <article class="lane" data-trust="trusted">
           <header><span class="pill ok">declared</span><h3>trusted</h3></header>
-          <p>Adds the working tree and the remote refresh, always into ye-ast's own store.</p>
+          <p>Adds the working tree and the remote refresh, always into ye-AST's own store.</p>
           <ol class="lane-steps">
             <li><span>01</span> The same export path at a sha.</li>
             <li><span>02</span> <code>--live</code> replaces <code>head</code>/<code>revision</code> with the working tree.</li>
             <li><span>03</span> git lists tracked paths with <code>ls-files -z -s --cached</code> and untracked ones with <code>ls-files -z --others --exclude-standard</code>.</li>
-            <li><span>04</span> ye-ast copies and hashes them into its mirror; codegraph reads the mirror.</li>
+            <li><span>04</span> ye-AST copies and hashes them into its mirror; codegraph reads the mirror.</li>
             <li><span>05</span> A lock, a state file and <code>sync({ paths })</code> keep the graph of those bytes.</li>
           </ol>
           <ul class="lane-invariants">
@@ -295,7 +295,7 @@
       </div>
 
       <div class="callout">
-        <p><strong>The live rule:</strong> a live fact describes bytes ye-ast copied and hashed, and the graph it reads is the graph of those same bytes. The engine never walks the repository.</p>
+        <p><strong>The live rule:</strong> a live fact describes bytes ye-AST copied and hashed, and the graph it reads is the graph of those same bytes. The engine never walks the repository.</p>
         <p class="ref"><code>docs/architecture/rfc/0010-impact-queries.md</code> “Live head” · <code>src/core/application/live/live-tree.ts</code></p>
       </div>
 
@@ -428,16 +428,16 @@
           </div>
         </details>
         <details>
-          <summary><span>02</span> Interface dispatch, both ways <em>derived by ye-ast</em></summary>
+          <summary><span>02</span> Interface dispatch, both ways <em>derived by ye-AST</em></summary>
           <div class="details-body">
-            <p>codegraph's <code>interface-impl</code> bridges stop silently after 40 per class-supertype pair, so ye-ast derives its own: a method and the same-named method of a type above it, for every reached node; downward only when the reached declaration is the changed contract, because a changed declaration changes what its implementations must meet. A path that went up never comes back down to a sibling.</p>
+            <p>codegraph's <code>interface-impl</code> bridges stop silently after 40 per class-supertype pair, so ye-AST derives its own: a method and the same-named method of a type above it, for every reached node; downward only when the reached declaration is the changed contract, because a changed declaration changes what its implementations must meet. A path that went up never comes back down to a sibling.</p>
             <p class="ref"><code>src/core/application/impact/inbound-edges.ts:123-169</code> · <code>src/core/domain/impact/edge-policy.ts:50-55</code></p>
           </div>
         </details>
         <details>
           <summary><span>03</span> The <code>this.field.member</code> problem <em>field origin</em></summary>
           <div class="details-body">
-            <p><code>this.auth.login()</code> is an unresolved reference, not a call edge. If the class declares <code>auth</code> with a fixed origin, ye-ast settles the use: a field holding the member's type makes the code a caller; a field holding an unrelated type settles it as no use; a field holding a subtype leaves it unsettled. That is why the walk can follow real dispatch without turning every same-named method into a caller.</p>
+            <p><code>this.auth.login()</code> is an unresolved reference, not a call edge. If the class declares <code>auth</code> with a fixed origin, ye-AST settles the use: a field holding the member's type makes the code a caller; a field holding an unrelated type settles it as no use; a field holding a subtype leaves it unsettled. That is why the walk can follow real dispatch without turning every same-named method into a caller.</p>
             <p class="ref"><code>src/core/application/impact/inbound-edges.ts:265-302</code> · <code>src/core/domain/impact/edge-policy.ts:40-45</code></p>
           </div>
         </details>
@@ -461,14 +461,14 @@
                   <tr><td><code>references</code> into a function, method, value or class</td><td>yes</td><td>The source uses it.</td></tr>
                   <tr><td><code>references</code> into an interface or type alias (a DTO)</td><td>yes</td><td>A type change breaks its users; qayaba does not follow these.</td></tr>
                   <tr><td><code>extends</code>, <code>implements</code> into a class or interface</td><td>yes</td><td>A subtype depends on its supertype.</td></tr>
-                  <tr><td>Interface method → implementation method of the same name, derived by ye-ast</td><td>yes, both ways</td><td>Dispatch at run time; codegraph's <code>interface-impl</code> bridges stop silently after 40 per pair.</td></tr>
+                  <tr><td>Interface method → implementation method of the same name, derived by ye-AST</td><td>yes, both ways</td><td>Dispatch at run time; codegraph's <code>interface-impl</code> bridges stop silently after 40 per pair.</td></tr>
                   <tr><td>A reached method → its type, at the same depth; from that type only <code>extends</code>/<code>implements</code> and <code>uses-*</code></td><td>yes</td><td>Routes and components name the class, not the method; ADR-0017 keeps the class and stops it expanding into injectors.</td></tr>
                   <tr><td><code>imports</code> into a file node</td><td>no</td><td>A file node leads nowhere.</td></tr>
                   <tr><td><code>imports</code> into a symbol</td><td>yes when used</td><td>Only when the importing file's top-level code uses it.</td></tr>
                   <tr><td>An injectable class with no caller → its importers' top-level code</td><td>yes</td><td>Injection without a static call.</td></tr>
                   <tr><td><code>injects</code>, <code>uses-component</code>, <code>uses-directive</code>, <code>uses-pipe</code></td><td>yes, confidence 1</td><td>Read from the Angular sources, not guessed.</td></tr>
                   <tr><td><code>navigates</code></td><td>no</td><td>A router link is navigation, not dependence.</td></tr>
-                  <tr><td>codegraph's <code>angular-template</code> and <code>angular-event</code> edges</td><td>no</td><td>ADR-0014; ye-ast's own A2/A4 relations bring their own.</td></tr>
+                  <tr><td>codegraph's <code>angular-template</code> and <code>angular-event</code> edges</td><td>no</td><td>ADR-0014; ye-AST's own A2/A4 relations bring their own.</td></tr>
                   <tr><td>Any edge from a test file</td><td>no</td><td>Tests are not callers; the declared scope says so.</td></tr>
                   <tr><td>Containment</td><td>no</td><td>Structure, not dependence.</td></tr>
                 </tbody>
@@ -735,7 +735,7 @@ npm run check</pre>
       </div>
 
       <footer class="page-footer">
-        <p><strong>ye-ast</strong> · deterministic code truth engine · Apache-2.0</p>
+        <p><strong>ye-AST</strong> · deterministic code truth engine · Apache-2.0</p>
         <p>Page built from the code, not from a description of it. <a href="#intro">Back to the top ↑</a></p>
       </footer>
     </section>

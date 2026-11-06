@@ -28,6 +28,27 @@ export interface InboundEdge {
   substitutes?: readonly MemberSubstitute[];
 }
 
+/** One place a symbol depends on another: what the code does there, not the strongest witness per symbol. */
+export interface InboundOccurrence {
+  from: GraphSymbol;
+  /** The line of the dependence; absent when the store places none. */
+  line?: number;
+  /** The file `line` is in when it is not `from`'s own: the template of a component. */
+  resource?: string;
+  basis: DependenceBasis;
+  confidence: number;
+  /** What the store recorded for the edge; `null` for a dependence ye-ast derived itself and for an edge the store did not mark. */
+  provenance: GraphEdge["provenance"];
+  bridge?: "up" | "down";
+  substitutes?: readonly MemberSubstitute[];
+}
+
+/** The dependences on a symbol one by one, which `InboundEdges.callersOf` summarizes per symbol. */
+export interface InboundOccurrences {
+  /** Every dependence on `node`, one per place and basis, in position order. */
+  occurrencesOf(node: GraphSymbol): readonly InboundOccurrence[];
+}
+
 /**
  * What depends on a symbol under the edge policy: the edges codegraph holds that a row allows, the interface bridges
  * and the Angular relations ye-ast derives, and the importers' top-level code. Every list is in position order and names a symbol once.
@@ -46,6 +67,19 @@ export interface InboundEdges {
   /** Candidate-specific settlements, restricted to admitted expansions and reached sources when sets are supplied. */
   settledUses(expanded?: ReadonlySet<GraphNodeId>, reached?: ReadonlySet<GraphNodeId>): ReadonlySet<string>;
   memberProofs(expanded?: ReadonlySet<GraphNodeId>): MemberReferenceProofs;
+  /** Every edge read so far into a symbol, with both ends, before `outside` is applied to it. */
+  followed(): readonly FollowedEdge[];
+}
+
+export interface FollowedEdge {
+  edge: GraphEdge;
+  source: GraphSymbol;
+  target: GraphSymbol;
+}
+
+/** One edge of the store, for naming it in a set; a handle inside one store, never output. */
+export function edgeKey({ source, target, kind, line, column }: GraphEdge): string {
+  return JSON.stringify([source, target, kind, line, column]);
 }
 
 const SUPERTYPE_EDGES = ["extends", "implements"];
@@ -70,7 +104,10 @@ export function createInboundEdges(
   locals: readonly LocalOrigin[] = [],
   validOccurrences?: ReadonlySet<string>,
   memberUses?: readonly MemberUseOrigin[],
-): InboundEdges {
+  thisMemberCalls: ReadonlySet<string> = new Set(),
+  /** The edges, by `edgeKey`, whose name is rooted outside the repository: none of them is a dependence. */
+  outside: ReadonlySet<string> = new Set(),
+): InboundEdges & InboundOccurrences {
   const relationsByTargetFile = Map.groupBy(relations, (candidate) => candidate.to.path);
   /** The local names more than one owner of one file declares: an ambiguous name settles nothing. */
   const sharedLocalNames = new Map<string, number>();
@@ -106,15 +143,18 @@ export function createInboundEdges(
     source: GraphSymbol;
   }
   const intoCache = new Map<GraphNodeId, Into[]>();
+  const followed: FollowedEdge[] = [];
   function followedEdgesInto(target: GraphSymbol): Into[] {
     let into = intoCache.get(target.id);
     if (into === undefined) {
       const edges = reader.incomingEdges([target.id], FOLLOWED_EDGE_KINDS).filter((edge) => !isIgnoredEdge(edge));
       load(edges.map((edge) => edge.source));
-      into = edges.flatMap((edge) => {
+      const placed = edges.flatMap((edge) => {
         const source = symbolOf(edge.source);
         return source === undefined || source.id === target.id ? [] : [{ edge, source }];
       });
+      for (const { edge, source } of placed) followed.push({ edge, source, target });
+      into = placed.filter(({ edge }) => !outside.has(edgeKey(edge)));
       intoCache.set(target.id, into);
     }
     return into;
@@ -231,16 +271,27 @@ export function createInboundEdges(
     return byReceiver.get(receiver) ?? [];
   }
 
-  /** The uses of `node` by name through `this`, made by code inside a type that declares it. */
+  /** The uses of `node` through `this`, by its `this.` name or a bare call proven on `this`, made inside a type that declares it. */
   function ownUsesOf(node: GraphSymbol): InboundEdge[] {
     const owners = ownersOf(node);
-    const uses = owners.length === 0 ? [] : referencesThrough(node.file, `this.${node.name}`);
+    if (owners.length === 0) return [];
+    const throughThis = `this.${node.name}`;
+    const provenBare = (use: GraphUnresolvedReference): boolean => {
+      const key = referenceKey(use);
+      return use.kind === "calls" && use.name === node.name && key !== undefined && thisMemberCalls.has(key);
+    };
+    const uses = [...referencesThrough(node.file, throughThis), ...referencesThrough(node.file, node.name).filter(provenBare)];
     load(uses.map((use) => use.from));
     return uses.flatMap((use) => {
       const from = symbolOf(use.from);
-      return from !== undefined && owners.some((owner) => isInside(from, owner)) ? [{ from, confidence: EDGE_POLICY.relations.confidence, basis: use.kind === "calls" && use.name === `this.${node.name}` ? "call" : "reference", lines: [use.line] }] : [];
+      if (from === undefined || !owners.some((owner) => isInside(from, owner))) return [];
+      const bare = use.name === node.name;
+      const occurrence = bare ? uniqueUse(use) : undefined;
+      if (occurrence !== undefined && uniqueAnchor(node)) settledUses.push({ key: declarationUseKey(declarationAnchor(node.file, node.name), occurrence), target: node.id, source: from.id });
+      return [{ from, confidence: EDGE_POLICY.relations.confidence, basis: use.kind === "calls" && (bare || use.name === throughThis) ? "call" : "reference", lines: [use.line] }];
     });
   }
+
 
   const settledUses: { key: string; target: GraphNodeId; source?: GraphNodeId }[] = [];
   const uniqueAnchors = new Map<string, ReadonlySet<string>>();
@@ -416,31 +467,60 @@ export function createInboundEdges(
     return memberCallers.get(node.id) ?? [];
   }
 
+  type Gathered = InboundEdge & { provenance?: GraphEdge["provenance"] };
+  function gather(node: GraphSymbol, contractChanged: boolean, throughMember: boolean): Gathered[] {
+    const followed = followedEdgesInto(node).filter(({ edge, source }) => !isTestFile(source.file) && followsEdge({ kind: edge.kind, sourceKind: source.kind, targetKind: node.kind }));
+    const into = throughMember ? followed.filter(({ edge }) => (EDGE_POLICY.ownerThroughMember.edges as readonly string[]).includes(edge.kind)) : followed;
+    const direct: Gathered[] = into.map(({ edge, source }) => ({
+      from: source,
+      confidence: edgeConfidence(edge),
+      basis: CALL_EDGE_KINDS.includes(edge.kind) ? ("call" as const) : ("reference" as const),
+      lines: edge.line === null ? [] : [edge.line],
+      provenance: edge.provenance,
+    }));
+    const bridged = throughMember ? direct : [...direct, ...bridgesOf(node, contractChanged), ...fieldUsesOf(node), ...localUsesOf(node), ...provenMemberUsesOf(node), ...ownUsesOf(node)];
+    const found = [...bridged, ...relatedTo(node, throughMember ? EDGE_POLICY.ownerThroughMember.relations : undefined)];
+    /** Individual target lookups do not prove incoming-reference coverage. */
+    const whole = throughMember ? found : [...found, ...importersOf(node, found.length === 0)];
+    return whole.filter(({ from }) => from.id !== node.id);
+  }
+
   const callersCache = new Map<string, InboundEdge[]>();
   function callersOf(node: GraphSymbol, contractChanged: boolean, throughMember = false): InboundEdge[] {
     const key = `${node.id}:${contractChanged}:${throughMember}`;
     let callers = callersCache.get(key);
     if (callers === undefined) {
-      const followed = followedEdgesInto(node).filter(({ edge, source }) => !isTestFile(source.file) && followsEdge({ kind: edge.kind, sourceKind: source.kind, targetKind: node.kind }));
-      const into = throughMember ? followed.filter(({ edge }) => (EDGE_POLICY.ownerThroughMember.edges as readonly string[]).includes(edge.kind)) : followed;
-      const direct = into.map(({ edge, source }) => ({
-        from: source,
-        confidence: edgeConfidence(edge),
-        basis: CALL_EDGE_KINDS.includes(edge.kind) ? ("call" as const) : ("reference" as const),
-        lines: edge.line === null ? [] : [edge.line],
-      }));
-      const bridged = throughMember ? direct : [...direct, ...bridgesOf(node, contractChanged), ...fieldUsesOf(node), ...localUsesOf(node), ...provenMemberUsesOf(node), ...ownUsesOf(node)];
-      const found = [...bridged, ...relatedTo(node, throughMember ? EDGE_POLICY.ownerThroughMember.relations : undefined)];
-      /** Individual target lookups do not prove incoming-reference coverage. */
-      const whole = throughMember ? found : [...found, ...importersOf(node, found.length === 0)];
-      callers = strongestPerSymbol(whole.filter(({ from }) => from.id !== node.id)).sort((a, b) => comparePosition(a.from, b.from));
+      callers = strongestPerSymbol(gather(node, contractChanged, throughMember).map(({ provenance: _, ...edge }) => edge)).sort((a, b) => comparePosition(a.from, b.from));
       callersCache.set(key, callers);
     }
     return callers;
   }
 
+  function occurrencesOf(node: GraphSymbol): InboundOccurrence[] {
+    const kept = new Map<string, InboundOccurrence>();
+    for (const edge of gather(node, false, false)) {
+      for (const line of edge.lines.length === 0 ? [undefined] : edge.lines) {
+        const occurrence: InboundOccurrence = {
+          from: edge.from,
+          ...(line === undefined ? {} : { line }),
+          ...(edge.resource === undefined ? {} : { resource: edge.resource }),
+          basis: edge.basis,
+          confidence: edge.confidence,
+          provenance: edge.provenance ?? null,
+          ...(edge.bridge === undefined ? {} : { bridge: edge.bridge }),
+          ...(edge.substitutes === undefined ? {} : { substitutes: edge.substitutes }),
+        };
+        const key = JSON.stringify([edge.from.id, line ?? null, edge.resource ?? null, edge.basis, edge.bridge ?? null, edge.substitutes !== undefined]);
+        const held = kept.get(key);
+        if (held === undefined || (held.provenance === "heuristic" && occurrence.provenance !== "heuristic") || (held.provenance === occurrence.provenance && occurrence.confidence > held.confidence)) kept.set(key, occurrence);
+      }
+    }
+    return [...kept.values()].sort((a, b) => comparePosition(a.from, b.from) || (a.line ?? Infinity) - (b.line ?? Infinity) || compareText(a.basis, b.basis));
+  }
+
   return {
     callersOf,
+    occurrencesOf,
     ownersOf,
     settledUses: (expanded, reached) => new Set(settledUses
       .filter((use) => (expanded === undefined || expanded.has(use.target)) && (use.source === undefined || reached === undefined || reached.has(use.source)))
@@ -449,6 +529,7 @@ export function createInboundEdges(
       targets: memberTargets,
       expanded: new Set([...memberExpanded].filter(([, id]) => expanded === undefined || expanded.has(id)).map(([anchor]) => anchor)),
     }),
+    followed: () => followed,
   };
 }
 

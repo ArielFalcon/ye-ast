@@ -27,7 +27,7 @@ window.MODULE_DETAILS_EN = {
     },
     protocol: {
       layer: "entrypoints",
-      role: "The query protocol: JSON-RPC 2.0, one message per line over stdio. A host can run ye-ast as a process and keep the query families behind it.",
+      role: "The query protocol: JSON-RPC 2.0, one message per line over stdio. A host can run ye-AST as a process and keep the query families behind it.",
       may: "core/ports, core/domain",
       never: "core/adapters, another entrypoint",
       facts: [
@@ -110,7 +110,7 @@ window.MODULE_DETAILS_EN = {
     },
     "app-install": {
       layer: "application",
-      role: "Declares trust, adds ye-ast's folders to the local exclude, persists the workspace manifest, and writes the fixed layer.",
+      role: "Declares trust, adds ye-AST's folders to the local exclude, persists the workspace manifest, and writes the fixed layer.",
       may: "core/domain, core/ports",
       never: "core/adapters",
       facts: [

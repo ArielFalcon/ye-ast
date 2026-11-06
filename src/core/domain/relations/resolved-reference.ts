@@ -19,6 +19,7 @@ export interface ReferenceSite {
 /**
  * What a reference names, as far as its own file proves: a declaration of the repository, a package outside it, or a name
  * the language's own libraries declare. `external` and `ambient` both mean no repository declaration can be named, so
- * both retire the cut a name tail attributed (`RFC-0016` S10).
+ * both retire the cut a name tail attributed (`RFC-0016` S10). `this-member` is a bare graph call the syntax writes as
+ * `this.name()` in a member of a class: it names that class's member, never the library global the bare name spells.
  */
-export type ImportOrigin = { kind: "repository"; file: string } | { kind: "external"; module: string } | { kind: "ambient"; name: string } | { kind: "local-parameter"; name: string };
+export type ImportOrigin = { kind: "repository"; file: string } | { kind: "external"; module: string } | { kind: "ambient"; name: string } | { kind: "local-parameter"; name: string } | { kind: "this-member"; name: string };

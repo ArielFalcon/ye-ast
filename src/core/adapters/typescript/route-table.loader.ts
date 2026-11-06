@@ -4,7 +4,7 @@ import { declarationSpan } from "../../domain/shared/fact.ts";
 import type { UnknownReason } from "../../domain/shared/fact.ts";
 import { parseAngularRouteFile, type RawChildRef, type RawComponent, type RawEntry, type RawGuard, type RawRouteFile, type RawTable, type RawValue } from "./angular-router.extractor.ts";
 import { createDeclarationLookup, type Declaration } from "./declaration-lookup.ts";
-import { createModuleResolver, type SourceReader } from "./module-resolver.ts";
+import { createModuleResolver, type ManifestPackages, type SourceReader } from "./module-resolver.ts";
 
 /** A route entry with everything that can be followed across files followed; what cannot is marked, never guessed. */
 export interface RouteEntry {
@@ -80,8 +80,8 @@ type ChildTable = { file: string; raw: RawRouteFile; table: RawTable };
  * down to exactly one declaration is unresolved. Each table is built once and shared by the entries that load it.
  * Returns the root tables, the candidates that do not parse and the unresolved child references.
  */
-export async function loadRouteTables(candidates: readonly string[], read: SourceReader, dependencies: ReadonlySet<string>, parseSource?: (file: string) => RawRouteFile | undefined): Promise<LoadedRouteTables> {
-  const resolver = createModuleResolver(read, dependencies);
+export async function loadRouteTables(candidates: readonly string[], read: SourceReader, packages: ManifestPackages, parseSource?: (file: string) => RawRouteFile | undefined): Promise<LoadedRouteTables> {
+  const resolver = createModuleResolver(read, packages);
   const parsed = new Map<string, Promise<RawRouteFile | undefined>>();
   const parse = (file: string): Promise<RawRouteFile | undefined> => {
     let held = parsed.get(file);

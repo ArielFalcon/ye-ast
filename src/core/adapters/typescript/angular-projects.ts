@@ -1,6 +1,6 @@
 import { isPackageManifest } from "../../domain/languages/typescript.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
-import { manifestDependencies } from "./module-resolver.ts";
+import { manifestDependencies, manifestPackages, type ManifestPackages } from "./module-resolver.ts";
 
 const FRAMEWORK_PACKAGES = ["@angular/core", "@angular/router"];
 
@@ -8,14 +8,18 @@ const FRAMEWORK_PACKAGES = ["@angular/core", "@angular/router"];
 export interface AngularProject {
   directory: string;
   dependencies: ReadonlySet<string>;
+  /** What its sources resolve packages against: its own dependencies, and every package the snapshot declares. */
+  packages: ManifestPackages;
 }
 
 /** Every directory that holds a `package.json` outside `node_modules`, with its dependencies. */
 export function manifestsOf(files: readonly SourceFile[]): AngularProject[] {
-  return files.filter((file) => isPackageManifest(file.path)).map((file) => ({
-    directory: file.path.slice(0, Math.max(0, file.path.length - "package.json".length - 1)),
-    dependencies: manifestDependencies(file.content),
-  }));
+  const manifests = files.filter((file) => isPackageManifest(file.path));
+  const { declared } = manifestPackages(manifests.map((file) => file.content));
+  return manifests.map((file) => {
+    const dependencies = manifestDependencies(file.content);
+    return { directory: file.path.slice(0, Math.max(0, file.path.length - "package.json".length - 1)), dependencies, packages: { dependencies, declared } };
+  });
 }
 
 /** The manifests that name the Angular framework, which bound the sources they hold. */

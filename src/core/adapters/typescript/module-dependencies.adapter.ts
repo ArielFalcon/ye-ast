@@ -5,7 +5,7 @@ import type { ModuleDependencies, ModuleDependency, ModuleSource, UntraversedRef
 import type { ModuleTarget } from "../../domain/shared/module-target.ts";
 import type { ModuleDependenciesReader } from "../../ports/module-dependencies.port.ts";
 import { defaultDeclarationName, moduleStatement } from "./import-bindings.ts";
-import { createModuleResolver, manifestDependencies, packageOf } from "./module-resolver.ts";
+import { createModuleResolver, manifestPackages, packageOf } from "./module-resolver.ts";
 import { declaredNames } from "./syntax-names.ts";
 
 type PendingDependency = Omit<ModuleDependency, "target">;
@@ -17,7 +17,7 @@ export function createModuleDependenciesReader(): ModuleDependenciesReader {
     async extract(sources, options): Promise<ModuleDependencies> {
       const selected = options?.files === undefined ? undefined : new Set(options.files);
       const texts = new Map(sources.map(({ path, content }) => [path, content]));
-      const packages = new Set(sources.filter(({ path }) => isPackageManifest(path)).flatMap(({ content }) => [...manifestDependencies(content)]));
+      const packages = manifestPackages(sources.filter(({ path }) => isPackageManifest(path)).map(({ content }) => content));
       const resolver = createModuleResolver(async (file) => texts.get(file), packages, { jsonModules: true });
       const files: ModuleSource[] = [];
       const pending: PendingDependency[] = [];

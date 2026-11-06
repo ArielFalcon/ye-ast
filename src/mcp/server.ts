@@ -18,7 +18,7 @@ import { executeQuery, type ExecutedSource, type PublicRead, type QueryExecution
 import { COMPOSE_INPUT, COMPOSE_OUTPUT } from "./composition-schema.ts";
 import { runComposition } from "./compose-request.ts";
 import { composeFull, composeReceipt, renderComposition } from "./render-composition.ts";
-import { controlFault, faultContext, renderFault, type FaultQueryContext, type PublicFault } from "./fault-presentation.ts";
+import { controlFault, faultContext, renderFault, type CodedFault, type FaultQueryContext, type PublicFault } from "./fault-presentation.ts";
 import { renderDecisions, renderEntrypointMap, renderImpact, renderImporters, renderOutline, renderRefresh, renderStale, renderWorkspace, renderWorkspaceImpact } from "./render.ts";
 
 /** The key of the result's `_meta` that carries a stale notice. */
@@ -313,6 +313,7 @@ export const WORKSPACE_OUTPUT = outputFor(shapes.workspace);
 export const DECISIONS_OUTPUT = outputFor(shapes.decisions);
 const OUTPUTS: Readonly<Record<ToolFamily, z.ZodType>> = { entrypoints: ENTRYPOINTS_OUTPUT, impact: IMPACT_OUTPUT, callers: CALLERS_OUTPUT, importers: IMPORTERS_OUTPUT, outline: OUTLINE_OUTPUT, workspace: WORKSPACE_OUTPUT, decisions: DECISIONS_OUTPUT };
 
+type Refusal = (fault: CodedFault) => CallToolResult;
 type Controls = { tool: "entrypoints" | "impact" | "callers"; select?: EvidenceSelection | undefined; page?: { limit: number; cursor?: string | undefined } | undefined; expect?: string | undefined };
 
 /** The semantic query an original tool's arguments ask for: its own fields without presentation or recovery controls. */
@@ -334,7 +335,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
    */
   async function answer(query: SemanticQuery, mode: ResponseMode, signal: AbortSignal, controls?: Controls): Promise<CallToolResult> {
     const context = faultContext(query, controls);
-    const selectionFailure = (fault: Parameters<typeof controlFault>[0]): CallToolResult => failure(controlFault(fault), context);
+    const selectionFailure = (fault: CodedFault): CallToolResult => failure(controlFault(fault), context);
     try {
       if (controls?.select !== undefined && canonicalJson(redaction.redactValue(controls.select)) !== canonicalJson(controls.select)) {
         return selectionFailure({ code: "replay-unavailable", reason: "redacted-context" });
@@ -349,30 +350,30 @@ export function createMcpServer(deps: McpDeps): McpServer {
       }
       const executed = await executeQuery(query, { deps, catalog, signal });
       if (!executed.ok) return failure(executed.fault, context);
-      return present(executed.value, mode, controls, cursor, context);
+      return present(executed.value, mode, controls, cursor, selectionFailure);
     } catch (error) {
       return failure({ kind: "internal-fault", detail: redaction.redactError(error) }, context);
     }
   }
 
   /** The renderer and selection source of each public payload; the dispatch itself lives in the runner. */
-  function present(source: ExecutedSource, mode: ResponseMode, controls: Controls | undefined, cursor: CursorV1 | undefined, context: FaultQueryContext): CallToolResult {
+  function present(source: ExecutedSource, mode: ResponseMode, controls: Controls | undefined, cursor: CursorV1 | undefined, selectionFailure: Refusal): CallToolResult {
     switch (source.family) {
       case "entrypoints":
-        return respond(source, source.read, true, renderEntrypointMap, mode, controls, cursor, context, (fact) => ({ kind: "entrypoints", fact }));
+        return respond(source, source.read, true, renderEntrypointMap, mode, controls, cursor, selectionFailure, (fact) => ({ kind: "entrypoints", fact }));
       case "impact":
       case "callers":
         return source.branch === "local"
-          ? respond(source, source.read, true, renderImpact, mode, controls, cursor, context, (fact) => ({ kind: "local", fact }))
-          : respond(source, source.read, false, renderWorkspaceImpact, mode, controls, cursor, context, (fact) => ({ kind: "workspace", fact }));
+          ? respond(source, source.read, true, renderImpact, mode, controls, cursor, selectionFailure, (fact) => ({ kind: "local", fact }))
+          : respond(source, source.read, false, renderWorkspaceImpact, mode, controls, cursor, selectionFailure, (fact) => ({ kind: "workspace", fact }));
       case "importers":
-        return respond(source, source.read, true, renderImporters, mode, controls, cursor, context);
+        return respond(source, source.read, true, renderImporters, mode, controls, cursor, selectionFailure);
       case "outline":
-        return respond(source, source.read, true, renderOutline, mode, controls, cursor, context);
+        return respond(source, source.read, true, renderOutline, mode, controls, cursor, selectionFailure);
       case "workspace":
-        return respond(source, source.read, false, renderWorkspace, mode, controls, cursor, context);
+        return respond(source, source.read, false, renderWorkspace, mode, controls, cursor, selectionFailure);
       case "decisions":
-        return respond(source, source.read, false, renderDecisions, mode, controls, cursor, context);
+        return respond(source, source.read, false, renderDecisions, mode, controls, cursor, selectionFailure);
     }
   }
 
@@ -384,10 +385,9 @@ export function createMcpServer(deps: McpDeps): McpServer {
     mode: ResponseMode,
     controls: Controls | undefined,
     cursor: CursorV1 | undefined,
-    context: FaultQueryContext,
+    selectionFailure: Refusal,
     sourceFor?: (fact: Fact<V>) => EvidenceSource,
   ): CallToolResult {
-    const selectionFailure = (fault: Parameters<typeof controlFault>[0]): CallToolResult => failure(controlFault(fault), context);
     const { fact, repositoryRoots, refresh, workspaceLive } = read;
     const { recovery, live: stale } = source;
     const tool: ToolFamily = source.family;

@@ -1,5 +1,5 @@
 import ts from "typescript";
-import { declarationCounts } from "./syntax-names.ts";
+import { declarationCounts, isStatic } from "./syntax-names.ts";
 import { bare, type RawRouteFile } from "./angular-router.extractor.ts";
 import { TYPESCRIPT_LIB_GLOBALS } from "./typescript-lib-globals.ts";
 
@@ -322,10 +322,6 @@ export function readAngularMetadataFile(sf: ts.SourceFile, shape: Pick<RawRouteF
 
 /** The provider options that give a token something other than its own class. */
 const SUBSTITUTIONS = ["useClass", "useExisting", "useFactory", "useValue"];
-
-function isStatic(member: ts.ClassElement): boolean {
-  return ts.canHaveModifiers(member) && (ts.getModifiers(member) ?? []).some((modifier) => modifier.kind === ts.SyntaxKind.StaticKeyword);
-}
 
 /** The fields a class assigns anywhere in its body, `this.x = …` or a compound assignment, besides their declaration. */
 function assignedFields(node: ts.ClassDeclaration): Set<string> {

@@ -5,7 +5,7 @@ import type { ComposeFault, SourceIdentityCause, UnavailableReason } from "./com
 import type { SelectionFault } from "./select-evidence.ts";
 import type { SourceVerificationFault } from "./evidence-cursor.ts";
 
-type CodedFault = SelectionFault | SourceVerificationFault;
+export type CodedFault = SelectionFault | SourceVerificationFault;
 type Published<F> = F extends { code: infer C extends string } ? (C extends string ? Omit<F, "code"> & { kind: C; detail: string } : never) : never;
 /** A selection, cursor or identity refusal of an original tool, published with `kind` like every other fault. */
 export type ControlFault = Published<CodedFault>;
