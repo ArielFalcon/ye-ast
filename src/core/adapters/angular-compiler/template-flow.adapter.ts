@@ -39,7 +39,7 @@ import {
   type DirectiveMeta,
 } from "@angular/compiler";
 import { ELEMENT, relatePaths, type AccessPath } from "../../domain/contracts/access-path.ts";
-import type { FlowFrontier, FlowNext, FlowResult, FlowStep, FlowUse, FrontierCause, Hop } from "../../domain/contracts/consumer-flow.ts";
+import { RESOURCE_STATE_MEMBERS, type FlowFrontier, type FlowNext, type FlowResult, type FlowStep, type FlowUse, type FrontierCause, type Hop } from "../../domain/contracts/consumer-flow.ts";
 import type { Absence, Guard, GuardKind, UseOperation } from "../../domain/contracts/verdict.ts";
 import type { Evidence } from "../../domain/shared/fact.ts";
 import type { SymbolRef } from "../../domain/relations/relation.ts";
@@ -342,7 +342,8 @@ class TemplateFlow extends CombinedRecursiveAstVisitor {
     const method = callee instanceof PropertyRead || callee instanceof SafePropertyRead ? callee : undefined;
     const prefix = node.args.length === 0 ? "method" : "call";
     const holder = this.chain(method === undefined ? callee : method.receiver);
-    if (holder !== undefined) {
+    const reportsState = method !== undefined && holder !== undefined && this.changed[holder.offset.length] === "value" && RESOURCE_STATE_MEMBERS.has(method.name);
+    if (holder !== undefined && !reportsState) {
       const guarded = node instanceof SafeCall || method instanceof SafePropertyRead ? [...holder.guards, this.guard("optional-chain", holder, BOTH, node)] : holder.guards;
       const called = method !== undefined && relatePaths([...holder.offset, method.name], this.changed) === "exact" ? { ...holder, offset: [...holder.offset, method.name] } : holder;
       this.end({ ...called, guards: guarded }, opaque(`${prefix}:${method?.name ?? "expression"}`, "dereference"), node);

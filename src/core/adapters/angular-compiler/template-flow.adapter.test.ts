@@ -310,6 +310,12 @@ test("a call without arguments reads a signal only on the member, an alias or th
   assert.deepEqual(uses(alias), ["owner.name | owner dereference []@2"]);
 });
 
+test("a call that only reports a resource's state is no loss of its value; a call that may read the value still is", () => {
+  const result = follow("@if (order.isLoading()) {}\n{{ order.error() }}\n@if (order.hasValue()) {}\n{{ order.update(fn) }}", ["value", "owner"]);
+
+  assert.deepEqual(frontiers(result), ["unmodelled-flow:call:update@4"]);
+});
+
 test("a loop over the exact changed collection is a consume of it, and the items stay followed for a change below the element", () => {
   const exact = follow("@for (item of order().items; track item) {\n<p></p>\n}\n<p *ngFor=\"let row of order().items\"></p>", ["items"]);
   const below = follow("@for (item of order().items; track item) {\n{{ item.name.length }}\n}", ["items", ELEMENT, "name"]);

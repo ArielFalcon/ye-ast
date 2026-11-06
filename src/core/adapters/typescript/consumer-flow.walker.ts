@@ -1,6 +1,6 @@
 import ts from "typescript";
 import { ELEMENT, relatePaths, rewritePath, type AccessPath, type PathMapping } from "../../domain/contracts/access-path.ts";
-import type { CarrierSite, FlowFrontier, FlowNext, FlowStep, FlowUse, FrontierCause, Hop } from "../../domain/contracts/consumer-flow.ts";
+import { RESOURCE_STATE_MEMBERS, type CarrierSite, type FlowFrontier, type FlowNext, type FlowStep, type FlowUse, type FrontierCause, type Hop } from "../../domain/contracts/consumer-flow.ts";
 import type { Absence, Guard, GuardKind, UseOperation } from "../../domain/contracts/verdict.ts";
 import type { Evidence, UnknownReason } from "../../domain/shared/fact.ts";
 import type { Origin, Program, Unit } from "./consumer-flow.index.ts";
@@ -75,7 +75,7 @@ const KEEPING_OPERATORS: ReadonlySet<string> = new Set([
   "subscribeOn",
 ]);
 const CALLBACK_OPERATORS: ReadonlySet<string> = new Set(["tap", "filter"]);
-const STREAM_WRITES: ReadonlySet<string> = new Set(["set", "update", "mutate", "next"]);
+const STREAM_WRITES: ReadonlySet<string> = new Set(["set", "next"]);
 const ACCESSORS: ReadonlySet<string> = new Set(["value", "json"]);
 const ROUTE_HOLDER = "ActivatedRoute";
 
@@ -309,6 +309,7 @@ export class Walker {
     if (q.length === 0 && STREAM_WRITES.has(name)) return;
     const attached = this.atTop(t, receiver, q, chain);
     if (attached === undefined) return;
+    if (attached.origin[0] === "value" && RESOURCE_STATE_MEMBERS.has(name)) return;
     if (name === "pipe") return this.applyPipe(call, 0, this.hopped(attached, "pipe", call));
     if (name === "subscribe") return this.subscribeTo(call, attached);
     if (name === "then") {

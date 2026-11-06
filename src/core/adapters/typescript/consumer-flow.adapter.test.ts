@@ -507,6 +507,12 @@ test("a guard outside a closure is not proven where the closure runs: the read i
   assert.deepEqual(frontiers(result), ["3 unmodelled-flow:guard across closure"]);
 });
 
+test("a call that only reports a resource's state is no loss of its value; a call that may read the value still is", async () => {
+  const file = plain(["o.isLoading()", "o.error()", "o.hasValue()", "o.reload()", "o.update((v) => v)"]);
+  const result = await follow([file], paramO, "value.owner");
+  assert.deepEqual(frontiers(result), ["6 unmodelled-flow:method:update"]);
+});
+
 test("a guard inside a closure decides its reads even when another guard sits outside it", async () => {
   const file = plain(["if (o.owner) {", "  const f = () => { if (o.owner) show(o.owner.name) }", "  f()", "}"]);
   const result = await follow([file], paramO, "owner");

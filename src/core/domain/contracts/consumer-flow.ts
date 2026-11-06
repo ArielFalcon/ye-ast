@@ -64,6 +64,12 @@ export const FLOW_STEPS = [
 
 export type FlowStep = (typeof FLOW_STEPS)[number];
 
+/**
+ * The members of a resource (Angular `Resource`, `HttpResourceRef`) that report or replace its state and never hand out
+ * its value: a call of one on a value followed through `value` is not a loss. `update` is absent: its callback reads the value.
+ */
+export const RESOURCE_STATE_MEMBERS: ReadonlySet<string> = new Set(["status", "error", "isLoading", "hasValue", "reload", "set", "destroy", "headers", "statusCode", "progress"]);
+
 /** One step of a chain: what the code does with the value at `evidence`, and where the changed path moves because of it. */
 export interface Hop {
   step: FlowStep;
