@@ -77,12 +77,14 @@ function consequencesOf(session: ConsumerSession, hypothesis: Hypothesis): Resul
     findings.push(frontierItem({ at, cause: "link-basis", reason: "unresolved", detail: `ambiguous:${repos.join("|")}`, hops: [] }, [], from.repo));
   }
 
+  const unresolved = session.unresolvedCalls.map((call) => located({ path: call.file, line: call.line, via: "unresolved-call-site" }, call.repo)).sort(compareEvidence);
   if (links.length === 0 && session.ambiguousCalls.length === 0) {
-    const unresolved = session.unresolvedCalls.map((call) => located({ path: call.file, line: call.line, via: "unresolved-call-site" }, call.repo)).sort(compareEvidence);
     for (const { repo, handler } of session.serving) {
       const evidence = [...unresolved, located({ path: handler.path, line: handler.line, via: "no-call-site" }, repo)];
       findings.push({ status: "unknown", reason: "unresolved", evidence });
     }
+  } else if (unresolved.length > 0) {
+    findings.push({ status: "unknown", reason: "unresolved", evidence: unresolved });
   }
 
   const seen = new Map<string, AccessPath>();

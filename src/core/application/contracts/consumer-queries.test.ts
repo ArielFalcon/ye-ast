@@ -409,6 +409,15 @@ test("no call site linked lists the call sites of the workspace whose target cou
   ]);
 });
 
+test("call sites whose target could not be evaluated are listed even when others link, since any of them may call the operation", async () => {
+  const unresolvedCalls = [{ repo: "web", file: "src/x.service.ts", line: 4, symbol: "load" }];
+
+  const fact = await setup({ unresolvedCalls }).ask();
+
+  const listed = fact.value.findings.filter((finding) => finding.status === "unknown" && finding.evidence.some((place) => place.via === "unresolved-call-site"));
+  assert.deepEqual(listed.map((finding) => finding.evidence.map((place) => [place.path, place.line, place.via])), [[["src/x.service.ts", 4, "unresolved-call-site"]]]);
+});
+
 test("a call site that may reach the operation in more than one repository is a frontier, never a link", async () => {
   const ambiguousCalls = [{ from: { repo: "web", file: "src/owner.service.ts", line: 10, symbol: "find" }, repos: ["api", "web"] }];
 
