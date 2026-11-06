@@ -8,7 +8,7 @@ import type { ImportOrigin } from "../../domain/relations/resolved-reference.ts"
 import type { Evidence, Finding } from "../../domain/shared/fact.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { ImportOriginSite, ImportOrigins } from "../../ports/import-origins.port.ts";
-import { createModuleResolver, manifestDependencies, packageOf } from "./module-resolver.ts";
+import { createModuleResolver, manifestPackages, packageOf } from "./module-resolver.ts";
 import { TYPESCRIPT_LIB_GLOBALS } from "./typescript-lib-globals.ts";
 
 /** The names the pinned `typescript` declares, held once for the process rather than rebuilt per query. */
@@ -32,8 +32,7 @@ interface FileShape {
 export function createImportOrigins(sources: readonly SourceFile[]): ImportOrigins {
   const texts = new Map(sources.map((file) => [file.path, file.content]));
   const files = new Map(sources.map((file) => [file.path, file]));
-  const dependencies = new Set(sources.filter((file) => isPackageManifest(file.path)).flatMap((file) => [...manifestDependencies(file.content)]));
-  const modules = createModuleResolver(async (file) => texts.get(file), dependencies);
+  const modules = createModuleResolver(async (file) => texts.get(file), manifestPackages(sources.filter((file) => isPackageManifest(file.path)).map((file) => file.content)));
   const shapes = new Map<string, FileShape>();
 
   /**

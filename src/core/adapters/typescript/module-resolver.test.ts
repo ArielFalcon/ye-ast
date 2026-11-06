@@ -1,9 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createModuleResolver, manifestDependencies } from "./module-resolver.ts";
+import { createModuleResolver, manifestDependencies, manifestPackages } from "./module-resolver.ts";
+
+const NO_PACKAGES = { dependencies: new Set<string>(), declared: new Set<string>() };
 
 function resolverOver(files: Record<string, string>, dependencies: string[] = []) {
-  return createModuleResolver(async (file) => files[file], new Set(dependencies));
+  return createModuleResolver(async (file) => files[file], { dependencies: new Set(dependencies), declared: new Set() });
 }
 
 test("a relative specifier names a TypeScript file as written, with an extension, or its index file; anything else is unresolved", async () => {
@@ -48,6 +50,18 @@ test("a non-relative specifier with no governing configuration is external only 
   assert.ok("unresolved" in (await resolver.resolve("src/app.ts", "@angular/core")));
 });
 
+test("a package a manifest of the snapshot names is never external, whether a configuration governs the importer or not", async () => {
+  const packages = manifestPackages([JSON.stringify({ name: "@r/shared" }), JSON.stringify({ name: "app", dependencies: { "@r/shared": "workspace:*", rxjs: "1" } }), "{ nope"]);
+  const files: Record<string, string> = { "app/tsconfig.json": "{}" };
+  const resolver = createModuleResolver(async (file) => files[file], packages);
+
+  for (const from of ["app/src/use.ts", "lib/use.ts"]) {
+    assert.ok("unresolved" in (await resolver.resolve(from, "@r/shared")), from);
+    assert.ok("unresolved" in (await resolver.resolve(from, "@r/shared/sub")), from);
+    assert.deepEqual(await resolver.resolve(from, "rxjs"), { external: true }, from);
+  }
+});
+
 test("the dependencies of a manifest are the names in dependencies, devDependencies and peerDependencies; a manifest that is missing or not JSON names none", () => {
   const manifest = JSON.stringify({ dependencies: { a: "1" }, devDependencies: { b: "1" }, peerDependencies: { c: "1" }, optionalDependencies: { d: "1" } });
 
@@ -58,7 +72,7 @@ test("the dependencies of a manifest are the names in dependencies, devDependenc
 
 test("only validated node-prefixed builtins are external without reading sources", async () => {
   let reads = 0;
-  const resolver = createModuleResolver(async () => { reads++; return undefined; }, new Set());
+  const resolver = createModuleResolver(async () => { reads++; return undefined; }, NO_PACKAGES);
   assert.deepEqual(await resolver.resolve("src/app.ts", "node:fs/promises"), { external: true });
   assert.deepEqual(await resolver.resolve("src/app.ts", "node:fs/promises"), { external: true });
   assert.equal(reads, 0);
@@ -74,7 +88,7 @@ test("explicit JSON resources resolve only when opted in and present", async () 
   };
   const reads = new Map<string, number>();
   const read = async (file: string) => { reads.set(file, (reads.get(file) ?? 0) + 1); return files[file]; };
-  const resolver = createModuleResolver(read, new Set(), { jsonModules: true });
+  const resolver = createModuleResolver(read, NO_PACKAGES, { jsonModules: true });
   assert.deepEqual(await resolver.resolve("src/app.ts", "../data/config.json"), { file: "data/config.json" });
   assert.deepEqual(await resolver.resolve("src/app.ts", "../data/config.json"), { file: "data/config.json" });
   assert.equal(reads.get("data/config.json"), 1);
@@ -83,7 +97,7 @@ test("explicit JSON resources resolve only when opted in and present", async () 
   for (const specifier of ["../data/missing.json", "@data/missing.json", "@data/only.json", "../data/config", "../data", "../../data/config.json"]) {
     assert.ok("unresolved" in await resolver.resolve("src/app.ts", specifier), specifier);
   }
-  const defaultResolver = createModuleResolver(read, new Set());
+  const defaultResolver = createModuleResolver(read, NO_PACKAGES);
   assert.ok("unresolved" in await defaultResolver.resolve("src/app.ts", "../data/config.json"));
   assert.ok("unresolved" in await defaultResolver.resolve("src/app.ts", "@data/config.json"));
 });
