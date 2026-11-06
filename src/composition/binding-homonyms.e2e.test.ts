@@ -11,6 +11,7 @@ import type { Fact } from "../core/domain/shared/fact.ts";
 /**
  * `schema.ts` imports the constant `cutOwner`; the graph matches its uses to the function of the same name in `other.ts`.
  * `use.ts` calls its parameter `redact`; the graph matches the call to the function of the same name in `redact.ts`.
+ * `holder.ts` calls, inside a class static block, a local `redact` that shadows the enclosing function's parameter.
  */
 const FILES: Record<string, string> = {
   "package.json": JSON.stringify({ name: "fixture" }),
@@ -18,6 +19,7 @@ const FILES: Record<string, string> = {
   "src/other.ts": "function cutOwner(): number {\n  return 2;\n}\n\nexport const x = cutOwner();\n",
   "src/redact.ts": "export function redact(text: string): string {\n  return text;\n}\n",
   "src/use.ts": "export function clean(text: string, redact: (value: string) => string): string {\n  return redact(text);\n}\n",
+  "src/holder.ts": 'export function outer(redact: (s: string) => string) {\n  class Holder {\n    static {\n      const redact = (s: string) => s.trim();\n      redact("x");\n    }\n  }\n  return Holder;\n}\n',
   "src/schema.ts": 'import { cutOwner } from "./parts.ts";\n\nexport function shape(): unknown {\n  return { owner: cutOwner };\n}\n\nexport function pass(): unknown {\n  return String(cutOwner);\n}\n',
 };
 
@@ -45,8 +47,9 @@ after(async () => {
   await rm(root, { recursive: true, force: true });
 });
 
-async function callersOf(file: string, symbol: string): Promise<{ symbol: string; lines?: readonly number[] }[]> {
-  const result = await composeQueries({ scratchRoot }).impact.callers({ repo, repoId: "binding-homonyms", revision: "HEAD", targets: [{ file, symbol }] });
+async function callersOf(file: string, symbol: string | { start: number; end: number }): Promise<{ symbol: string; lines?: readonly number[] }[]> {
+  const target = typeof symbol === "string" ? { file, symbol } : { file, ...symbol };
+  const result = await composeQueries({ scratchRoot }).impact.callers({ repo, repoId: "binding-homonyms", revision: "HEAD", targets: [target] });
   assert.ok(result.ok, JSON.stringify(result));
   const answer: Fact<ImpactValue> = result.value;
   assert.notEqual(answer.status, "unknown", JSON.stringify(answer));
@@ -67,4 +70,8 @@ test("a file whose uses the graph matched to a homonym of what it imports is no 
 
 test("a call of a parameter is no use of a declaration the graph matched by the parameter's name", async () => {
   assert.deepEqual(await callersOf("src/redact.ts", "redact"), [{ symbol: "redact" }]);
+});
+
+test("a call of a local declared inside a class static block is a use of that local, not of a parameter of the function around the class", async () => {
+  assert.deepEqual(await callersOf("src/holder.ts", { start: 4, end: 4 }), [{ symbol: "redact" }, { symbol: "Holder", lines: [5] }]);
 });

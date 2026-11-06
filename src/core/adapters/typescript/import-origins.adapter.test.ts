@@ -343,6 +343,41 @@ test("a root spelled alone that a parameter binds is local, one a local variable
   assert.equal(variable!.status, "unknown");
 });
 
+/** The root of the last bare `redact(` call in `body`, written inside a function whose parameter is `redact`. */
+async function parameterRootOf(body: string): Promise<RootOrigin> {
+  const file = "src/scoped.ts";
+  const text = `export function outer(redact: (s: string) => string) {\n${body}\n}\n`;
+  const lines = text.split("\n");
+  const line = lines.findLastIndex((candidate) => candidate.includes("redact(")) + 1;
+  return only(await createImportOrigins([{ path: file, content: text }]).rootOrigins([{ file, line, column: lines[line - 1]!.lastIndexOf("redact(") + 1, kind: "calls", name: "redact" }]));
+}
+
+test("a call inside a class, its static block or a property initializer is not proven to use a parameter of the function around the class", async () => {
+  const plain = await parameterRootOf("  return redact('x');");
+  assert.equal(plain.status === "complete" && plain.value.kind, "local-parameter");
+  for (const body of [
+    "  class Holder {\n    static {\n      const redact = (s: string) => s;\n      redact('x');\n    }\n  }",
+    "  class Holder {\n    static {\n      redact('x');\n    }\n  }",
+    "  class Holder {\n    value = redact('x');\n  }",
+    "  const inner = () => {\n    const redact = (s: string) => s;\n    redact('x');\n  };",
+    "  const named = function redact() {\n    redact('x');\n  };",
+  ]) {
+    const root = await parameterRootOf(body);
+    assert.notEqual(root.status === "complete" && root.value.kind, "local-parameter", body);
+  }
+});
+
+test("a call inside a block, a catch clause or a loop that rebinds the parameter's name is not proven to use the parameter", async () => {
+  for (const body of [
+    "  try {\n  } catch (redact) {\n    redact('x');\n  }",
+    "  for (const redact of [(s: string) => s]) {\n    redact('x');\n  }",
+    "  {\n    let redact = (s: string) => s;\n    redact('x');\n  }",
+  ]) {
+    const root = await parameterRootOf(body);
+    assert.notEqual(root.status === "complete" && root.value.kind, "local-parameter", body);
+  }
+});
+
 test("a type spelled like a parameter is not the parameter", async () => {
   const file = "src/typed.ts";
   const text = "export function make(Order: number) { const made: Order | undefined = undefined; return made; }\n";

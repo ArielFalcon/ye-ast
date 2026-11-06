@@ -236,13 +236,21 @@ function isNested(declaration: ts.ClassLikeDeclaration): boolean {
   return false;
 }
 
-/** Prove only a parameter of the nearest function, method or constructor that holds the name; all uncertain scopes are refused. */
+/**
+ * A node that opens a scope the parameter proof does not read through: a function, a class (its static blocks and property
+ * initializers included) or a namespace. The walk up from a use and the scan for a rebinding both stop at one.
+ */
+function opensScope(node: ts.Node): boolean {
+  return ts.isFunctionLike(node) || ts.isClassLike(node) || ts.isModuleDeclaration(node);
+}
+
+/** Prove only a parameter of the function, method or constructor whose body holds the use with no other scope between them; all uncertain scopes are refused. */
 function localParameter(callee: ts.Identifier, name: string, scopes: WeakMap<ts.Node, { unsafe: boolean; names: ReadonlySet<string> }>): boolean {
   let node: ts.Node | undefined = callee.parent;
   let owner: ts.ArrowFunction | ts.FunctionExpression | ts.FunctionDeclaration | ts.MethodDeclaration | ts.ConstructorDeclaration | undefined;
   while (node !== undefined) {
     if (ts.isWithStatement(node)) return false;
-    if (ts.isFunctionLike(node)) {
+    if (opensScope(node)) {
       if (!ts.isArrowFunction(node) && !ts.isFunctionExpression(node) && !ts.isFunctionDeclaration(node) && !ts.isMethodDeclaration(node) && !ts.isConstructorDeclaration(node)) return false;
       owner = node; break;
     }
@@ -259,7 +267,7 @@ function localParameter(callee: ts.Identifier, name: string, scopes: WeakMap<ts.
       if (ts.isWithStatement(current) || (ts.isCallExpression(current) && ts.isIdentifier(current.expression) && current.expression.text === "eval")) unsafe = true;
       const declared = declaredName(current);
       if (declared !== undefined) names.add(declared);
-      if (ts.isFunctionLike(current) || ts.isClassLike(current) || ts.isModuleDeclaration(current)) return;
+      if (opensScope(current)) return;
       current.forEachChild(visit);
     };
     visit(owner.body);
