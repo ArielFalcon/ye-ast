@@ -234,7 +234,9 @@ measurement is configured:
 
 `outcome` is `hit` or `miss` for a lookup, and for a store `admitted`, `evicted` (one line per entry the admission
 displaced) or `oversize-skipped` (the entry alone exceeds the budget and is not kept). `entry_bytes` is the charge of
-the entry concerned (key plus serialized payload) and is absent on a `miss`; `retained_bytes` is what the cache holds
+the entry concerned (key plus serialized payload) and is absent on a `miss`; for an `oversize-skipped` entry whose
+key plus the UTF-8 bytes of its sources' contents already exceed the budget it is that lower bound, since the entry is
+then not serialized (ADR-0030 decision 10); `retained_bytes` is what the cache holds
 after the decision. The key never appears: it names a repository state.
 
 The entries of the cache are the sources and findings of a snapshot and, since
