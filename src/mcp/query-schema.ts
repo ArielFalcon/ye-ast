@@ -150,7 +150,7 @@ const recipeGlob = z.string().refine(isValidGlob).meta({ pattern: "^(?![\\s\\S]*
 const recipeScope = z.strictObject({ include: z.array(recipeGlob).min(1).optional(), exclude: z.array(recipeGlob).min(1).optional() });
 const pinnedRevision = z.string().refine(isFullObjectId, "a full commit object ID").meta({ pattern: FULL_OBJECT_ID_PATTERN });
 
-export const replaySchema = z.strictObject({
+const replaySchema = z.strictObject({
   version: z.literal(1),
   declaration: z.string().regex(/^ws-r1:[0-9a-f]{64}$/),
   snapshots: z.array(z.discriminatedUnion("kind", [z.strictObject({ repo: z.string().regex(/\S/), kind: z.literal("sha"), sha: pinnedRevision }), z.strictObject({ repo: z.string().regex(/\S/), kind: z.literal("live"), head: pinnedRevision, stateId: z.string().regex(/\S/) })])).meta({ uniqueItems: true }).describe("Echo actual snapshots in repo-ID order, one per ID."),

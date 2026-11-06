@@ -5,8 +5,9 @@ import { SCHEMA, type Fact } from "../core/domain/shared/fact.ts";
 import type { PartPayload, SourceId, Support } from "./composition-contract.ts";
 import {
   anchorId, compositionIdentity, compositionKey, evidenceId, fileId, isCompositionId, jsonPointer, partId, readId,
-  snapshotId, sortById, sortedUnique, sourceId, unionSupports, type SourceIdentityInput,
+  snapshotId, sortById, sourceId, unionSupports, type SourceIdentityInput,
 } from "./composition-identity.ts";
+import { sortedUnique } from "../core/domain/impact/importers-fact.ts";
 
 const digest = { of: (text: string) => createHash("sha256").update(text).digest("hex") };
 const SHA = "a".repeat(40);

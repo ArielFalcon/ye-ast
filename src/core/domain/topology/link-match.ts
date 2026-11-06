@@ -51,7 +51,7 @@ const SUFFIX_CONFIDENCE = 0.5;
 const PARITY_CONFIDENCE = 0.6;
 
 /** A path as the segments the ladder compares: no query, no trailing slash, every parameter one placeholder. */
-export function pathSegments(path: string): string[] {
+function pathSegments(path: string): string[] {
   const withoutQuery = path.split("?")[0] ?? path;
   const pathname = withoutQuery.replace(/^(?:[a-z][a-z0-9+.-]*:)?\/\/[^/]+/i, "");
   return pathname

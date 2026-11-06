@@ -192,7 +192,7 @@ function targetOf(from: string, ref: string, referenced: ReferencedDocuments): T
   const pointer = hash === -1 ? "" : ref.slice(hash + 1);
   if (/^[a-z][a-z0-9+.-]*:/i.test(location)) return { unresolved: { ref } };
   const decoded = percentDecoded(location);
-  const file = location === "" ? from : decoded === undefined || posix.isAbsolute(decoded) ? undefined : posix.normalize(posix.join(posix.dirname(from), decoded));
+  const file = location === "" ? from : decoded === undefined || posix.isAbsolute(decoded) ? undefined : posix.join(posix.dirname(from), decoded);
   if (file === undefined || file.startsWith("../")) return { unresolved: { ref } };
   const parsed = referenced.get(file);
   if (parsed === undefined) return { unresolved: { ref, file } };

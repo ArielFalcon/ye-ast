@@ -8,7 +8,8 @@ import { isTypeScriptSource } from "../../domain/languages/typescript.ts";
 import type { ImportOrigin } from "../../domain/relations/resolved-reference.ts";
 import type { Evidence, Finding } from "../../domain/shared/fact.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
-import type { ImportOriginSite, ImportOrigins, ResolvedNameSite, RootOrigin } from "../../ports/import-origins.port.ts";
+import type { RootOrigin } from "../../domain/impact/edge-policy.ts";
+import type { ImportOriginSite, ImportOrigins, ResolvedNameSite } from "../../ports/import-origins.port.ts";
 import { createModuleResolver, manifestPackages, packageOf } from "./module-resolver.ts";
 import { TYPESCRIPT_LIB_GLOBALS } from "./typescript-lib-globals.ts";
 
@@ -58,9 +59,12 @@ export function createImportOrigins(sources: readonly SourceFile[], parse: Parse
   };
   const indexes = new Map<string, FileIndex | undefined>();
   /** A file is parsed once for the life of the reader; one that does not parse has no index. */
-  const indexOf = (file: string): FileIndex | undefined => {
+  const indexOf = (file: string): { index: FileIndex; text: string } | undefined => {
+    const text = texts.get(file);
+    if (text === undefined || !isTypeScriptSource(file)) return undefined;
     if (!indexes.has(file)) indexes.set(file, indexed(parse(files.get(file)!)));
-    return indexes.get(file);
+    const index = indexes.get(file);
+    return index === undefined ? undefined : { index, text };
   };
 
   /**
@@ -122,9 +126,8 @@ export function createImportOrigins(sources: readonly SourceFile[], parse: Parse
     const grouped = Map.groupBy(sites.map((site, index) => ({ site, index })), ({ site }) => site.file);
     for (const [file, group] of grouped) {
       if (signal?.aborted) break;
-      const text = texts.get(file);
-      const index = text === undefined || !isTypeScriptSource(file) ? undefined : indexOf(file);
-      const checked = index === undefined ? undefined : checkSites(index, text!, group, isParameterUse);
+      const parsed = indexOf(file);
+      const checked = parsed === undefined ? undefined : checkSites(parsed.index, parsed.text, group, isParameterUse);
       if (checked !== undefined) shapes.set(file, checked.shape);
       const checks = checked?.matches ?? new Map<number, SiteSyntax>();
       for (const { site, index } of group) {
@@ -138,9 +141,8 @@ export function createImportOrigins(sources: readonly SourceFile[], parse: Parse
     const results: RootOrigin[] = sites.map((site) => ({ status: "unknown", reason: "unresolved", evidence: [{ path: site.file, line: site.line }] }));
     for (const [file, group] of Map.groupBy(sites.map((site, index) => ({ site, index })), ({ site }) => site.file)) {
       if (signal?.aborted) break;
-      const text = texts.get(file);
-      const tree = text === undefined || !isTypeScriptSource(file) ? undefined : indexOf(file);
-      const read = tree === undefined ? undefined : rootsAt(tree, text!, group, isParameterUse);
+      const parsed = indexOf(file);
+      const read = parsed === undefined ? undefined : rootsAt(parsed.index, parsed.text, group, isParameterUse);
       if (read === undefined) continue;
       shapes.set(file, read.shape);
       for (const [index, { root, bare, local }] of read.roots) {

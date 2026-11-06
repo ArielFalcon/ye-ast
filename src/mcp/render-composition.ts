@@ -13,6 +13,7 @@ import type { Cut, Evidence } from "../core/domain/shared/fact.ts";
 import type { BasePath, BasePathKeys } from "../core/domain/entrypoints/http-route.ts";
 import type { ResponseMode } from "./presentation.ts";
 import { shareExactContext } from "./presentation-sharing.ts";
+import { compareText } from "../core/domain/shared/code-node.ts";
 import type {
   AnchorId, Attestation, ComparisonRef, ComposeFull, ComposeReceipt, CompositionIssue, CompositionResult, Connection,
   EntityId, EntityRecord, EntryData, EvidenceFinding, EvidenceId, EvidenceOrigin, FileId, OriginReference, Part, PartId,
@@ -214,7 +215,7 @@ class CompactView {
     });
     for (const source of this.orderedSources) lines.push(this.sourceLine(source));
     if (graph.snapshots.some((snapshot) => this.primary.get(snapshot.value.repo) !== snapshot.id)) {
-      lines.push(`Unmarked locations: ${[...this.primary].toSorted(([a], [b]) => a.localeCompare(b)).map(([repo, snapshot]) => `${repo} ${this.snapshotLabels.get(snapshot)}`).join(", ") || "none"}; others are marked @V#.`);
+      lines.push(`Unmarked locations: ${[...this.primary].toSorted(([a], [b]) => compareText(a, b)).map(([repo, snapshot]) => `${repo} ${this.snapshotLabels.get(snapshot)}`).join(", ") || "none"}; others are marked @V#.`);
     }
     return lines;
   }
@@ -232,7 +233,7 @@ class CompactView {
    * Engines and index origin are provenance that full keeps per read; an incompatibility is listed as an issue.
    */
   private readContextLines(): string[] {
-    const reads = this.result.graph.reads.toSorted((a, b) => this.readLabel(a.id).localeCompare(this.readLabel(b.id)));
+    const reads = this.result.graph.reads.toSorted((a, b) => compareText(this.readLabel(a.id), this.readLabel(b.id)));
     const shared: string[] = [];
     const varying: string[] = [];
     const field = <C>(name: string, valueOf: (read: ReadRecord) => C, text: (value: C) => string | undefined, always: boolean) => {
@@ -351,7 +352,7 @@ class CompactView {
     }
     if (this.details && roots.length > 0) {
       /** One root per repository when every source agrees; otherwise each path names the sources that reported it. */
-      const text = [...Map.groupBy(roots, (root) => root.repo)].toSorted(([a], [b]) => a.localeCompare(b)).map(([repo, entries]) => {
+      const text = [...Map.groupBy(roots, (root) => root.repo)].toSorted(([a], [b]) => compareText(a, b)).map(([repo, entries]) => {
         const paths = [...Map.groupBy(entries, (entry) => entry.path)];
         return paths.length === 1 ? `${repo}=${paths[0]![0]}` : paths.map(([path, of]) => `${repo}=${path} (${of.map((entry) => entry.source).join(", ")})`).join(", ");
       });
@@ -394,7 +395,7 @@ class CompactView {
     const names = entity === undefined ? [] : entity.kind === "entrypoint"
       ? entity.parts.flatMap((part) => { const record = this.parts.get(part); return record?.kind === "entrypoint" ? [record.entry.name] : []; })
       : entity.anchors.flatMap((anchor) => { const record = this.anchors.get(anchor); return record === undefined ? [] : [record.symbol]; });
-    const [name] = names.toSorted((a, b) => b.length - a.length || a.localeCompare(b));
+    const [name] = names.toSorted((a, b) => b.length - a.length || compareText(a, b));
     return name === undefined ? label : `${label} ${name}`;
   }
 
@@ -737,7 +738,7 @@ class CompactView {
   private coverageLines(): string[] {
     const { coverage } = this.result;
     const lines = [coverage.reads.partial + coverage.reads.unknown === 0 ? `  reads: ${coverage.reads.complete}, all complete` : `  reads: ${coverage.reads.complete} complete, ${coverage.reads.partial} partial, ${coverage.reads.unknown} unknown (owners nest)`];
-    const reads = this.result.graph.reads.toSorted((a, b) => this.readLabel(a.id).localeCompare(this.readLabel(b.id)));
+    const reads = this.result.graph.reads.toSorted((a, b) => compareText(this.readLabel(a.id), this.readLabel(b.id)));
     const incomplete = shareExactContext(reads.filter((read) => read.analysis.status !== "complete"), (read) => read.analysis);
     incomplete.contexts.forEach((analysis, index) => {
       const group = incomplete.rows.filter((row) => row.contextIndex === index).map((row) => row.value);
@@ -838,5 +839,5 @@ function evidenceText(evidence: Evidence): string {
 
 function basePathText(value: BasePath): string {
   const keys = (record: BasePathKeys) => Object.entries(record).filter(([, text]) => text !== undefined).map(([key, text]) => `${key}=${text}`).join(", ") || "none";
-  return [`default ${keys(value.default)}`, ...Object.entries(value.profiles).toSorted(([a], [b]) => a.localeCompare(b)).map(([profile, record]) => `${profile} ${keys(record)}`)].join("; ");
+  return [`default ${keys(value.default)}`, ...Object.entries(value.profiles).toSorted(([a], [b]) => compareText(a, b)).map(([profile, record]) => `${profile} ${keys(record)}`)].join("; ");
 }

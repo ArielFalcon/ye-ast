@@ -7,6 +7,7 @@ import type { Finding } from "../../domain/shared/fact.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import { manifestPackages, createModuleResolver, type ModuleResolver } from "./module-resolver.ts";
 import { buildDefines, type BuildDefines } from "./url-define.ts";
+import { compareText } from "../../domain/shared/code-node.ts";
 
 export const VERBS: ReadonlySet<string> = new Set(["get", "head", "post", "put", "patch", "delete", "options", "request"]);
 const HTTP_CLIENT_PACKAGE = "@angular/common/http";
@@ -119,11 +120,6 @@ async function read(files: readonly SourceFile[], repo: string): Promise<readonl
   }
   return found.sort((a, b) => compareText(a.file, b.file) || a.line - b.line || compareText(a.symbol, b.symbol));
 }
-
-function compareText(a: string, b: string): number {
-  return a < b ? -1 : a > b ? 1 : 0;
-}
-
 function describe(file: SourceFile): FileShape {
   const source = sourceTree(file, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
   const shape: FileShape = { source, bindings: sourceBindings(source), unsafeEncoder: mayOverrideEncoder(source), consts: new Map(), imports: new Map(), reexports: new Map(), stars: [], localExports: new Map(), classes: new Map(), enums: new Map() };

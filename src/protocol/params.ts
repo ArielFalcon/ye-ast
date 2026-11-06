@@ -24,7 +24,7 @@ export class InvalidParamsError extends Error {
 
 type Params = Readonly<Record<string, unknown>>;
 
-export const DEADLINE_PARAM = "deadlineMs";
+const DEADLINE_PARAM = "deadlineMs";
 
 /** The largest delay `setTimeout` honours; above it the timer fires at once. */
 export const MAX_DEADLINE_MS = 2 ** 31 - 1;

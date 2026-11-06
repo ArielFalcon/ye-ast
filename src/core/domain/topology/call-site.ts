@@ -49,6 +49,10 @@ export interface HttpTarget {
   operationId?: string;
 }
 
+export function httpTargetOf(site: CallSite): HttpTarget | undefined {
+  return site.transport === "http" && site.target.status === "complete" && "path" in site.target.value ? site.target.value : undefined;
+}
+
 /** A message the code publishes. */
 export interface EventTarget {
   protocol: "kafka" | "rabbit" | "jms" | "event" | "nats";

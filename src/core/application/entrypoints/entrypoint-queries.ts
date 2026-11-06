@@ -11,6 +11,7 @@ import type { VcsFault } from "../../ports/vcs.port.ts";
 import { asFault, openLive, type LiveDeps } from "../live/live-tree.ts";
 import { extractExport, factBaseOf, LIVE_REQUIRES_TRUSTED, trustOf, withScratch, type SnapshotReaderDeps } from "../snapshot/read-snapshot.ts";
 import { prepareCommit } from "../snapshot/prepared-snapshot.ts";
+import { liveSnapshotReaders } from "../snapshot/live-snapshot.ts";
 
 export interface EntrypointQueriesDeps extends SnapshotReaderDeps {
   matcher: PathMatcher;
@@ -31,7 +32,7 @@ export function createEntrypointQueries(deps: EntrypointQueriesDeps): Entrypoint
     const scope = liveScope(requested);
     const exported = exportSelection(scope, deps.matcher.matches, isExtractorConfiguration);
     const opened = await openLive(deps.live, { repo, scope, selected: exported, store: false, signal, onStale }, async (tree) => {
-      const extracted = await extractExport(deps, tree.root, tree.export, signal);
+      const extracted = await liveSnapshotReaders(deps, { repo, scope, trust, root: tree.root, export: tree.export }).extract(signal);
       if (!extracted.ok) return extracted;
       const base = {
         ...factBaseOf(deps, { repoId, sha: head.value, trust, scope, content: contentFingerprint(extracted.value.export), declaredConfig: {}, engines: deps.engines }),

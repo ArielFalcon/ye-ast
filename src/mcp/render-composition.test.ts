@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { callersValue, entrypointsValue, factOf, importersValue, inputsOf, liveRef, outlineValue, shaRef, SHA_A, SHA_B, sourceFixture, workspaceImpactValue, workspaceValue } from "./composition-fixtures.ts";
+import { callersValue, entrypointsValue, factOf, importersValue, inputsOf, liveRef, outlineValue, shaRef, SHA_A, SHA_B, sourceFixture, workspaceImpactValue, workspaceValue } from "./composition-fixtures.testing.ts";
 import { normalizeSource } from "./composition-normalize.ts";
 import { mergeEvidence, materializeEvidence } from "./compose-evidence.ts";
 import { compositionIdentity } from "./composition-identity.ts";

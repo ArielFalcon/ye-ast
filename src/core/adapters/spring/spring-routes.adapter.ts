@@ -46,6 +46,7 @@ import {
   type SpringAnnotations,
 } from "./request-mapping.ts";
 import { JavaValueEvaluator } from "./java-value-evaluator.ts";
+import { compareText } from "../../domain/shared/code-node.ts";
 
 const REQUEST_METHODS: ReadonlySet<string> = new Set(["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "TRACE"]);
 const ROUTER_FUNCTIONS: readonly string[] = [
@@ -511,8 +512,4 @@ function partition<T>(exprs: readonly Expr[], resolve: (expr: Expr) => Outcome<T
 function joinPath(prefix: string, path: string): string {
   const joined = prefix === "" || path === "" ? prefix + path : `${prefix.replace(/\/+$/, "")}/${path.replace(/^\/+/, "")}`;
   return joined.startsWith("/") ? joined : `/${joined}`;
-}
-
-function compareText(a: string, b: string): number {
-  return a < b ? -1 : a > b ? 1 : 0;
 }

@@ -2,6 +2,7 @@ import { isJsonModuleResource } from "../languages/typescript.ts";
 import type { DeclaredScope } from "../shared/fact.ts";
 import { declaredScope, isInMapScope } from "../map/entrypoint-map.ts";
 import type { ScopeRequest } from "../shared/scope.ts";
+import { compareText } from "../shared/code-node.ts";
 
 interface Blob {
   path: string;
@@ -31,7 +32,7 @@ export function changedPaths(base: readonly Blob[], live: readonly Blob[]): stri
   const changed = new Set<string>();
   for (const [path, blob] of after) if (before.get(path) !== blob) changed.add(path);
   for (const path of before.keys()) if (!after.has(path)) changed.add(path);
-  return [...changed].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  return [...changed].sort(compareText);
 }
 
 /** The declared scope of a fact over a working tree: git's ignore rules decide what is listed. */

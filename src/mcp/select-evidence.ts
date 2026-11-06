@@ -42,7 +42,7 @@ type Available = { availability: "available" } & (
 export type EvidenceSelectionResult = { source: SourceSummary } & (Available | { availability: "unavailable"; reason: UnknownReason; evidence: readonly Evidence[] });
 export type SelectionFault = { code: "selection-not-found" | "ambiguous-selection" };
 
-function analysis(fact: FactProvenance): Analysis {
+export function analysis(fact: FactProvenance): Analysis {
   return fact.status === "unknown" ? { status: "unknown", reason: fact.reason } : { status: fact.status };
 }
 function own<T>(record: Readonly<Record<string, T>>, key: string): T | undefined {

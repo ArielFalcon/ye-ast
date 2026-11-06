@@ -6,7 +6,8 @@ import ts from "typescript";
 import type { ImportOrigin } from "../../domain/relations/resolved-reference.ts";
 import type { Finding } from "../../domain/shared/fact.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
-import type { ImportOriginSite, RootOrigin } from "../../ports/import-origins.port.ts";
+import type { RootOrigin } from "../../domain/impact/edge-policy.ts";
+import type { ImportOriginSite } from "../../ports/import-origins.port.ts";
 
 const CONFIG: SourceFile = {
   path: "tsconfig.json",

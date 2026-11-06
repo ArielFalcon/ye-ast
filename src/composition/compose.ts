@@ -310,8 +310,7 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
   const operation = createWorkspaceReadOperation(workspaceDeps);
   const bareWorkspace = createWorkspaceQueries(workspaceDeps, operation);
   const workspace = measurement === undefined ? bareWorkspace : measuredWorkspace(bareWorkspace, measurement);
-  // The workspace impact is measured through the impact family it walks with; handing it the measured workspace would
-  // write a second line for the read it shares with that walk.
+  // One measurement line per read: the workspace impact reports through the impact family it walks with.
   const workspaceImpact: WorkspaceImpactQueries = createCapturedWorkspaceImpactQueries({ operation, digest, impactAt: (context) => {
     const operationImpact = createImpactQueries({ ...impactDeps, preparation: context.preparation, heldLive: ({ repo, repoId }) => {
       const held = context.liveCaptures.get(repoId);

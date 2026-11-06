@@ -19,7 +19,7 @@ import { repositoryCatalog, type RepositoryBinding } from "./repository-targetin
 import { executeQuery, type ExecutedSource, type QueryExecutionDeps, type QueryFault } from "./query-runner.ts";
 import type { SemanticQuery } from "./query-schema.ts";
 import { createMcpServer } from "./server.ts";
-import { openSession, resultFields } from "./test-session.ts";
+import { openSession, resultFields } from "./test-session.testing.ts";
 
 const SECRET = "hunter2-secret";
 const SHA = "a".repeat(40);

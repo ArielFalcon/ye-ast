@@ -2,7 +2,7 @@ import { sourceUnreadable } from "../../domain/contracts/consumer-flow.ts";
 import { formatHypothesis } from "../../domain/contracts/hypothesis.ts";
 import { provenanceOf, sortedEngines } from "../../domain/shared/fact.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
-import type { CallSite, HttpTarget } from "../../domain/topology/call-site.ts";
+import { httpTargetOf, type CallSite } from "../../domain/topology/call-site.ts";
 import { compositeBase } from "../../domain/topology/composite-inputs.ts";
 import type { Link } from "../../domain/topology/link.ts";
 import { matchCallSite, type Gateway } from "../../domain/topology/link-match.ts";
@@ -159,10 +159,6 @@ function httpCallsOf(repositories: readonly WorkspaceRepository[], gateways: rea
     ambiguousCalls: ambiguousCalls.sort((a, b) => byPlace(a.from, b.from)),
     unresolvedCalls: unresolvedCalls.sort(byPlace),
   };
-}
-
-function httpTargetOf(site: CallSite): HttpTarget | undefined {
-  return site.transport === "http" && site.target.status === "complete" && "path" in site.target.value ? site.target.value : undefined;
 }
 
 export function isCallOf(link: Link, operation: string): boolean {

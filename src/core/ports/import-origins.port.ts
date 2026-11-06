@@ -1,3 +1,4 @@
+import type { RootOrigin } from "../domain/impact/edge-policy.ts";
 import type { ImportOrigin } from "../domain/relations/resolved-reference.ts";
 import type { Finding } from "../domain/shared/fact.ts";
 import type { SourceFile } from "./entrypoint-extractor.port.ts";
@@ -55,8 +56,6 @@ export interface ImportOrigins {
    */
   rootOrigins(sites: readonly ResolvedNameSite[], signal?: AbortSignal): Promise<readonly RootOrigin[]>;
 }
-
-export type RootOrigin = Finding<ImportOrigin> & { bare?: true };
 
 /** Reads the import bindings of one snapshot; composition supplies it, so no use case imports a parser. */
 export type ImportOriginsReader = (sources: readonly SourceFile[]) => ImportOrigins;
