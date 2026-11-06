@@ -2,6 +2,7 @@ import { sortedUnique } from "../../domain/impact/importers-fact.ts";
 import type { ModuleBinding, ModuleDependencies, ModuleDependency, UntraversedReference } from "../../domain/impact/module-dependency.ts";
 import type { OutlineBinding, OutlineDeclaration, OutlineFile, OutlineFocus, OutlineFocusValue, OutlineImport, OutlineListing } from "../../domain/outline/outline-fact.ts";
 import type { Cut } from "../../domain/shared/fact.ts";
+import { unresolvedPlaceCuts } from "../../domain/impact/impact-cuts.ts";
 import { containmentTree } from "../navigation/containment-tree.ts";
 import { importBindings } from "../navigation/import-bindings.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
@@ -21,6 +22,7 @@ export function readOutline(store: CodeGraphReader, requested: readonly string[]
   const files: OutlineFile[] = [];
   const unheld: string[] = [];
   const cuts: Cut[] = [];
+  const unproved: UnresolvedPlace[] = [];
   const statements = Map.groupBy(modules.dependencies, (dependency) => dependency.file);
   const references = Map.groupBy(modules.untraversed ?? [], (reference) => reference.file);
   const unread = new Set(modules.unread.map(({ file }) => file));
@@ -34,20 +36,22 @@ export function readOutline(store: CodeGraphReader, requested: readonly string[]
     if (unread.has(file) || !read.has(file)) cuts.push({ kind: "no-extractor", at: [file] });
     const dependencies = statements.get(file) ?? [];
     const reached = importBindings(store, file, dependencies);
-    const placed = [...dependencies.map((dependency) => ({ ...dependency, entry: imported(dependency, reached, cuts) })), ...(references.get(file) ?? []).map((reference) => ({ ...reference, entry: referenced(reference) }))];
+    const placed = [...dependencies.map((dependency) => ({ ...dependency, entry: imported(dependency, reached, unproved) })), ...(references.get(file) ?? []).map((reference) => ({ ...reference, entry: referenced(reference) }))];
     files.push({
       file,
       declarations: containmentTree(store, nodes).map(outlined),
       imports: placed.toSorted((left, right) => left.line - right.line || (left.offset ?? 0) - (right.offset ?? 0)).map(({ entry }) => entry),
     });
   }
-  return { value: { files, unheld }, cuts };
+  return { value: { files, unheld }, cuts: [...cuts, ...unresolvedPlaceCuts(unproved, "unresolved")] };
 }
 
-function imported(dependency: ModuleDependency, reached: ReadonlyMap<ModuleBinding, GraphSymbol>, cuts: Cut[]): OutlineImport {
+type UnresolvedPlace = Parameters<typeof unresolvedPlaceCuts>[0][number];
+
+function imported(dependency: ModuleDependency, reached: ReadonlyMap<ModuleBinding, GraphSymbol>, unproved: UnresolvedPlace[]): OutlineImport {
   const bindings = dependency.bindings.map((binding): OutlineBinding => {
     const declaration = reached.get(binding);
-    if (declaration === undefined && dependency.target.kind === "repository" && binding.imported !== "*") cuts.push({ kind: "unresolved-link", at: [`${dependency.file}:${binding.line} ${binding.local ?? binding.imported}`], reason: "unresolved" });
+    if (declaration === undefined && dependency.target.kind === "repository" && binding.imported !== "*") unproved.push({ file: dependency.file, line: binding.line, reason: binding.local ?? binding.imported });
     return {
       ...(binding.local === undefined ? {} : { local: binding.local }),
       imported: binding.imported,

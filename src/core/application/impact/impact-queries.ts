@@ -7,7 +7,7 @@ import type { FileChange } from "../../domain/change/diff-reader.ts";
 import { isSeedable, selectSeeds, type ComponentRef, type SelectedSeed } from "../../domain/change/seeds.ts";
 import { changedContracts, servedContracts } from "../../domain/impact/changed-contracts.ts";
 import { changedEntrypoints } from "../../domain/impact/changed-entrypoints.ts";
-import { referenceKey, uniqueReferenceKeys, removedDeclarationCuts, rootedName, unreadRelationCuts, unresolvedLinkCuts, type UnreadRelation } from "../../domain/impact/impact-cuts.ts";
+import { unresolvedPlaceCuts, referenceKey, uniqueReferenceKeys, removedDeclarationCuts, rootedName, unreadRelationCuts, unresolvedLinkCuts, type UnreadRelation } from "../../domain/impact/impact-cuts.ts";
 import { sortedUnique, type ImportersValue } from "../../domain/impact/importers-fact.ts";
 import { impactFact, type ImpactBudget, type ImpactedSymbol, type ImpactValue, type Seed } from "../../domain/impact/impact-fact.ts";
 import { reachedEntrypoints } from "../../domain/impact/reached-entrypoints.ts";
@@ -188,7 +188,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
             ...summary.filesNotIndexed.filter((file) => !moduleOnly.has(file)).map((file): Cut => ({ kind: "no-extractor", at: [file] })),
             ...read.unheld.map((file): Cut => ({ kind: held.has(file) ? "no-extractor" : "not-exported", at: [file] })),
             ...(modules?.unread.map(({ file }): Cut => ({ kind: "no-extractor", at: [file] })) ?? []),
-            ...(modules?.dependencies.filter((edge) => edge.target.kind === "unresolved").map((edge): Cut => ({ kind: "unresolved-link", at: [`${edge.file}:${edge.line} ${edge.specifier}`] })) ?? []),
+            ...unresolvedPlaceCuts(modules?.dependencies.filter((edge) => edge.target.kind === "unresolved").map((edge) => ({ file: edge.file, line: edge.line, reason: edge.specifier })) ?? []),
           ];
           return { ok: true, value: impactFact(head.base(content, true), { files: read.files }, cuts) };
         } finally {
