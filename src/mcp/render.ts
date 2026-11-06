@@ -22,7 +22,7 @@ import type { RepositoryEvidence } from "../core/domain/shared/repository-eviden
 import type { WorkspaceRefresh, WorkspaceValue } from "../core/ports/workspace-queries.port.ts";
 import type { DecisionValue } from "../core/ports/decision-queries.port.ts";
 import type { CallSite, UnresolvedCallSite } from "../core/domain/topology/call-site.ts";
-import type { ImpactedLink } from "../core/domain/topology/link.ts";
+import type { ImpactedLink, Link, UnlinkedCallSite } from "../core/domain/topology/link.ts";
 import type { RepositoryResolution } from "../core/domain/topology/remote-snapshot.ts";
 import type { RepoImpact, WorkspaceImpactValue } from "../core/ports/workspace-impact-queries.port.ts";
 import type { WorkspaceSource } from "../core/ports/workspace-repos.port.ts";
@@ -1018,11 +1018,32 @@ function declarationText(entry: { file: string; candidates: readonly string[] })
   return entry.candidates.length === 0 ? `${entry.file} declares no symbol` : `declared in ${entry.file}: ${entry.candidates.join(", ")}`;
 }
 
-function impactedLinkLine({ link, direction, reach, operations }: ImpactedLink, indexes: ReadonlyMap<string, number>): string {
+/** One link as every answer lists it: its number, both ends, the basis and what the answer adds about how it was reached. */
+function linkLine(link: Link, number: number | undefined, reached = ""): string {
   const confidence = link.confidence < 1 ? `, confidence ${link.confidence}` : "";
   const profiles = link.profiles === undefined ? "" : `, under ${link.profiles.join(", ")}`;
+  return `  - ${number}. ${link.from.repo}:${placeText(link.from.file, link.from.line)} ${link.from.symbol} -> ${link.to.repo} ${link.to.name} -> ${handlerText(link.to.handler)} (${link.basis}${confidence}${profiles}${reached})`;
+}
+
+function impactedLinkLine({ link, direction, reach, operations }: ImpactedLink, indexes: ReadonlyMap<string, number>): string {
   const chain = reach.length === 0 ? "" : `; reach: ${reach.map((id) => indexes.get(id) ?? id).join(", ")}`;
-  return `  - ${indexes.get(link.id)}. ${link.from.repo}:${placeText(link.from.file, link.from.line)} ${link.from.symbol} -> ${link.to.repo} ${link.to.name} -> ${handlerText(link.to.handler)} (${link.basis}${confidence}${profiles}, ${direction}${chain})${(operations ?? []).map((operation) => `; calls the operation ${changedContractText(operation)}`).join("")} [linkId ${JSON.stringify(link.id)}]`;
+  return `${linkLine(link, indexes.get(link.id), `, ${direction}${chain}`)}${(operations ?? []).map((operation) => `; calls the operation ${changedContractText(operation)}`).join("")} [linkId ${JSON.stringify(link.id)}]`;
+}
+
+/**
+ * The links of a workspace map: each one in details; in summary the count per caller, callee and transport when that is
+ * no longer than the list (RFC-0017), with the call sites the join reached without a link always listed.
+ */
+function linkMapLines(links: readonly Link[], unlinked: readonly UnlinkedCallSite[], detail: ResponseMode): string[] {
+  const literal = links.map((link, index) => linkLine(link, index + 1));
+  const pairs = new Map<string, number>();
+  for (const { from, to, transport } of links) pairs.set(`${from.repo} -> ${to.repo} ${transport}`, (pairs.get(`${from.repo} -> ${to.repo} ${transport}`) ?? 0) + 1);
+  const counted = [...[...pairs].map(([pair, count]) => `  - ${pair}: ${count}`), `  ${categoryRecovery({ details: "lists each link" })}`];
+  const listed = detail === "details" || links.length === 0 || size(literal) < size(counted) ? literal : counted;
+  return [
+    `links between the repositories read (${links.length}):`, ...listed,
+    ...(unlinked.length === 0 ? [] : [`call sites the join reached without a link (${unlinked.length}):`, ...unlinked.map(({ from, transport, outcome, name, repos }) => `  - ${from.repo}:${placeText(from.file, from.line)} ${from.symbol} ${transport} ${name}: ${outcome}${repos === undefined ? "" : ` (${repos.join(", ")})`}`)]),
+  ];
 }
 
 function callSiteLine(site: CallSite): string {
@@ -1228,7 +1249,7 @@ function unresolvedBlock(value: Omit<WorkspaceValue, "repositories">): string[] 
 }
 
 export function renderWorkspace(fact: Fact<Omit<WorkspaceValue, "repositories">>, detail: ResponseMode = "summary"): string {
-  if (detail === "full") return fact.status === "unknown" ? "Inspect reason and evidence; the result has no value." : "Match value.sections by repository and check each section status, reason and cuts; value.repositorySnapshots identifies each revision. Inspect value.candidates by name and repo for basis and evidence, and value.unserved for unmatched names.";
+  if (detail === "full") return fact.status === "unknown" ? "Inspect reason and evidence; the result has no value." : "Match value.sections by repository and check each section status, reason and cuts; value.repositorySnapshots identifies each revision. Inspect value.candidates by name and repo for basis and evidence, value.unserved for unmatched names, value.links for the links between repositories and value.unlinked for the call sites without one.";
   const lines = headerLines(fact);
   if (fact.status === "unknown") return lines.join("\n");
   const { value } = fact;
@@ -1294,6 +1315,7 @@ export function renderWorkspace(fact: Fact<Omit<WorkspaceValue, "repositories">>
   }
   lines.push(...best);
   if (value.unserved.length > 0) lines.push(DECISIONS_HINT);
+  lines.push(...linkMapLines(value.links, value.unlinked, detail));
   lines.push(...unresolvedBlock(value));
   lines.push(...cutsBlock(cutsOf(fact), detail));
   for (const [repo, section] of Object.entries(value.sections)) {

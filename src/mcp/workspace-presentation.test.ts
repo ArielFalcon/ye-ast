@@ -11,7 +11,7 @@ test("mixed unserved references reconstruct original order, multiplicity and qua
   const section = (repo: string, status: string) => ({ ...base, snapshot: snapshot(repo), status, ...(status === "partial" ? { cuts: [] } : {}), value: { names, unresolved: [{ path: "src/shared.ts", line: 4, symbol: "call", transport: "http", via: "client", stated: { method: "GET", path: "/route" } }] } });
   const qualified = (repo: string, i: number) => ({ ...names[i]!, evidence: names[i]!.evidence.map(e => ({ ...e, repo })) });
   const unserved = [qualified("b", 1), qualified("a", 0), qualified("b", 1), ...names.slice(2).map((_, i) => qualified("a", i + 2)), { ...qualified("a", 1), evidence: [{ path: "different.ts", line: 88, repo: "a" }] }, { ...name(0), evidence: [] }];
-  const value = { workspace: { repos: ["a", "b", "unknown"], source: "request" }, repositorySnapshots: ["a", "b", "unknown"].map(repo => ({ repo, snapshot: snapshot(repo) })), sections: { a: section("a", "partial"), b: section("b", "complete"), unknown: { ...base, snapshot: snapshot("unknown"), status: "unknown", reason: "unavailable" } }, candidates: [], unserved };
+  const value = { workspace: { repos: ["a", "b", "unknown"], source: "request" }, repositorySnapshots: ["a", "b", "unknown"].map(repo => ({ repo, snapshot: snapshot(repo) })), sections: { a: section("a", "partial"), b: section("b", "complete"), unknown: { ...base, snapshot: snapshot("unknown"), status: "unknown", reason: "unavailable" } }, candidates: [], links: [], unlinked: [], unserved };
   const fact = { ...base, status: "complete", value } as never;
   const before = JSON.stringify(fact);
   const text = renderWorkspace(fact, "details");
@@ -38,7 +38,7 @@ test("mixed unserved references reconstruct original order, multiplicity and qua
 test("whole-category reference requires the same order as the displayed names", () => {
   const names = Array.from({ length: 12 }, (_, i) => ({ kind: "http-host", name: `long-service-${i}.example`, evidence: [{ path: "src/a-very-long-shared-evidence-file.ts", line: i + 1 }] }));
   const unserved = names.map(name => ({ ...name, evidence: name.evidence.map(e => ({ ...e, repo: "a" })) }));
-  const value = { workspace: { repos: ["a"], source: "request" }, repositorySnapshots: [{ repo: "a", snapshot: base.snapshot }], sections: { a: { ...base, status: "complete", value: { names, unresolved: [] } } }, candidates: [], unserved: [...unserved].reverse() };
+  const value = { workspace: { repos: ["a"], source: "request" }, repositorySnapshots: [{ repo: "a", snapshot: base.snapshot }], sections: { a: { ...base, status: "complete", value: { names, unresolved: [] } } }, candidates: [], links: [], unlinked: [], unserved: [...unserved].reverse() };
   const text = renderWorkspace({ ...base, status: "complete", value } as never, "details");
   assert.doesNotMatch(text, /all recorded outward names are unserved/);
   const runs = [...text.matchAll(/^  outward ("[^"]+") indexes (\[[^\n]+\])$/gm)];
@@ -60,7 +60,7 @@ test("whole-category reference requires the same order as the displayed names", 
 test("invalid snapshot ownership and tiny results retain literal rows", () => {
   const name = { kind: "http-host", name: "host", evidence: [{ path: "a.ts", line: 1 }] };
   const snapshot = { ...base.snapshot, sha: "b".repeat(40) };
-  const value = { workspace: { repos: ["a"], source: "request" }, repositorySnapshots: [{ repo: "a", snapshot }], sections: { a: { ...base, status: "complete", value: { names: [name], unresolved: [] } } }, candidates: [], unserved: [{ ...name, evidence: [{ ...name.evidence[0]!, repo: "a" }] }] };
+  const value = { workspace: { repos: ["a"], source: "request" }, repositorySnapshots: [{ repo: "a", snapshot }], sections: { a: { ...base, status: "complete", value: { names: [name], unresolved: [] } } }, candidates: [], links: [], unlinked: [], unserved: [{ ...name, evidence: [{ ...name.evidence[0]!, repo: "a" }] }] };
   for (const v of [value, { ...value, repositorySnapshots: [{ repo: "a", snapshot: base.snapshot }] }]) {
     const text = renderWorkspace({ ...base, status: "complete", value: v } as never, "details");
     assert.match(text, /  - http-host host \(a:a\.ts:1\)/);
@@ -73,7 +73,37 @@ test("invalid snapshot ownership and tiny results retain literal rows", () => {
 test("index permutations cannot hide evidence relationship metadata", () => {
   const names = Array.from({ length: 20 }, (_, i) => ({ kind: "http-host", name: `service-with-a-long-name-${i}.example`, evidence: [{ path: "src/long-evidence-path.ts", line: i + 1, via: "fetch", confidence: 0.6 }] }));
   const unserved = names.map(name => ({ ...name, evidence: name.evidence.map(evidence => ({ ...evidence, repo: "a" })) })).reverse();
-  const value = { workspace: { repos: ["a"], source: "request" }, repositorySnapshots: [{ repo: "a", snapshot: base.snapshot }], sections: { a: { ...base, status: "complete", value: { names, unresolved: [] } } }, candidates: [], unserved };
+  const value = { workspace: { repos: ["a"], source: "request" }, repositorySnapshots: [{ repo: "a", snapshot: base.snapshot }], sections: { a: { ...base, status: "complete", value: { names, unresolved: [] } } }, candidates: [], links: [], unlinked: [], unserved };
   const text = renderWorkspace({ ...base, status: "complete", value } as never, "details");
   assert.match(text, /"via":"fetch","confidence":0\.6/);
+});
+
+function linkOf(line: number, to = "orders", transport: "http" | "event" = "http") {
+  return { id: `link-${line}`, from: { repo: "shop-web", file: "src/app/orders-client.service.ts", line, symbol: `OrdersClient.call${line}` }, to: { repo: to, kind: "http-route", name: "POST /orders/{}/confirmations", handler: { path: "src/main/java/app/OrdersController.java", symbol: "OrdersController.confirm", line: 40 } }, transport, basis: "exact", confidence: 1 };
+}
+
+function mapValue(links: readonly ReturnType<typeof linkOf>[], unlinked: readonly unknown[] = []) {
+  return { workspace: { repos: ["shop-web"], gateways: [], source: "request" }, repositorySnapshots: [{ repo: "shop-web", snapshot: base.snapshot }], sections: {}, candidates: [], unserved: [], links, unlinked };
+}
+
+test("a workspace summary counts its links per caller, callee and transport when that is shorter, and details lists each one in the impact's link line", () => {
+  const value = mapValue([linkOf(7), linkOf(9), linkOf(11), linkOf(13, "billing", "event")]);
+
+  const summary = renderWorkspace({ ...base, status: "complete", value } as never, "summary");
+  const details = renderWorkspace({ ...base, status: "complete", value } as never, "details");
+
+  assert.match(summary, /links between the repositories read \(4\):\n  - shop-web -> orders http: 3\n  - shop-web -> billing event: 1\n  mode "details" lists each link/);
+  assert.doesNotMatch(summary, /OrdersClient\.call7/);
+  assert.match(details, /\n  - 1\. shop-web:src\/app\/orders-client\.service\.ts:7 OrdersClient\.call7 -> orders POST \/orders\/\{\}\/confirmations -> src\/main\/java\/app\/OrdersController\.java:40 OrdersController\.confirm \(exact\)\n/);
+  assert.equal(details.split("\n").filter((line) => line.includes("OrdersClient.call")).length, 4);
+});
+
+test("a workspace summary keeps the link list when it is shorter than the counts, and lists the call sites the join reached without a link", () => {
+  const short = { ...linkOf(7), from: { repo: "a", file: "x.ts", line: 7, symbol: "f" }, to: { repo: "b", kind: "http-route", name: "GET /", handler: { path: "y.java", symbol: "g", line: 1 } } };
+  const value = mapValue([short], [{ from: { repo: "a", file: "x.ts", line: 9, symbol: "h" }, transport: "http", outcome: "ambiguous", name: "shared", repos: ["b", "c"] }]);
+
+  const summary = renderWorkspace({ ...base, status: "complete", value } as never, "summary");
+
+  assert.match(summary, /links between the repositories read \(1\):\n  - 1\. a:x\.ts:7 f -> b GET \/ -> y\.java:1 g \(exact\)\n/);
+  assert.match(summary, /call sites the join reached without a link \(1\):\n  - a:x\.ts:9 h http shared: ambiguous \(b, c\)/);
 });

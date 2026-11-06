@@ -253,7 +253,7 @@ async function setup(answers: Partial<Answers> = {}, refresh?: WorkspaceRefresh,
   const workspace = {
     outwardNames: async (request: WorkspaceRequest) => {
       calls.workspaceReads.push(request);
-      return (answers.outwardNames ?? (async () => ({ ok: true, value: read({ ...base({ snapshot: { ...base().snapshot, repo: request.repo.id! } }), status: "complete", value: { workspace: { repos: [], gateways: [], source: "none" }, repositorySnapshots: [], sections: {}, candidates: [], unserved: [], repositories: [{ repo: "shop", snapshot: base().snapshot, entrypoints: [], callSites: [] }] } }) })))(request);
+      return (answers.outwardNames ?? (async () => ({ ok: true, value: read({ ...base({ snapshot: { ...base().snapshot, repo: request.repo.id! } }), status: "complete", value: { workspace: { repos: [], gateways: [], source: "none" }, repositorySnapshots: [], sections: {}, candidates: [], unserved: [], links: [], unlinked: [], repositories: [{ repo: "shop", snapshot: base().snapshot, entrypoints: [], callSites: [] }] } }) })))(request);
     },
   } as unknown as WorkspaceQueries;
   const workspaceImpact: WorkspaceImpactQueries = {

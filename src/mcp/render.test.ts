@@ -73,7 +73,7 @@ test("workspace references outward names only when qualified records match exact
   const names = Array.from({ length: 8 }, (_, i) => ({ kind: "http-host", name: `service-${i}.example`, evidence: [{ path: "src/long-service-file.ts", line: i + 1 }] }));
   const unserved = names.map(name => ({ ...name, evidence: name.evidence.map(evidence => ({ ...evidence, repo: "a" })) }));
   const snapshot = { ...base.snapshot, repo: "a" };
-  const value = { workspace: { repos: ["a"], source: "request" }, repositorySnapshots: [{ repo: "a", snapshot }], candidates: [], sections: { a: { ...base, snapshot, status: "complete", value: { names, unresolved: [] } } }, unserved };
+  const value = { workspace: { repos: ["a"], source: "request" }, repositorySnapshots: [{ repo: "a", snapshot }], candidates: [], links: [], unlinked: [], sections: { a: { ...base, snapshot, status: "complete", value: { names, unresolved: [] } } }, unserved };
   const render = (v: typeof value) => renderWorkspace({ ...base, status: "complete", value: v } as never, "details");
   assert.match(render(value), /all recorded outward names are unserved/);
   assert.doesNotMatch(render({ ...value, unserved: unserved.slice(1) }), /all recorded outward names are unserved/);
@@ -108,7 +108,7 @@ test("workspace exact matching preserves multiple owners in the shared listing",
   const { renderWorkspace } = await import("./render.ts");
   const snapshot = (repo: string) => ({ ...base.snapshot, repo });
   const name = (repo: string) => ({ name: `service-${repo}`, kind: "http-host" as const, evidence: [{ path: "src/shared.ts", line: 1 }] });
-  const value = { workspace: { repos: ["a", "b"], source: "request" }, repositorySnapshots: ["a", "b"].map(repo => ({ repo, snapshot: snapshot(repo) })), sections: Object.fromEntries(["a", "b"].map(repo => [repo, { ...base, snapshot: snapshot(repo), status: "complete", value: { names: [name(repo)], unresolved: [] } }])), candidates: [], unserved: ["a", "b"].map(repo => ({ ...name(repo), evidence: [{ ...name(repo).evidence[0]!, repo }] })) };
+  const value = { workspace: { repos: ["a", "b"], source: "request" }, repositorySnapshots: ["a", "b"].map(repo => ({ repo, snapshot: snapshot(repo) })), sections: Object.fromEntries(["a", "b"].map(repo => [repo, { ...base, snapshot: snapshot(repo), status: "complete", value: { names: [name(repo)], unresolved: [] } }])), candidates: [], links: [], unlinked: [], unserved: ["a", "b"].map(repo => ({ ...name(repo), evidence: [{ ...name(repo).evidence[0]!, repo }] })) };
   const text = renderWorkspace({ ...base, status: "complete", value } as never, "details");
   assert.match(text, /all recorded outward names are unserved/);
   assert.match(text, /\n  a:[\s\S]*service-a[\s\S]*\n  b:[\s\S]*service-b/);
@@ -118,7 +118,7 @@ test("workspace does not infer the owner of evidence-free names", async () => {
   const { renderWorkspace } = await import("./render.ts");
   const snapshot = (repo: string) => ({ ...base.snapshot, repo });
   const name = { name: "same-service-with-an-extremely-long-name-to-demonstrate-unqualified-ownership.example", kind: "http-host" as const, evidence: [] };
-  const value = { workspace: { repos: ["a", "b"], source: "request" }, repositorySnapshots: ["a", "b"].map(repo => ({ repo, snapshot: snapshot(repo) })), sections: Object.fromEntries(["a", "b"].map(repo => [repo, { ...base, snapshot: snapshot(repo), status: "complete", value: { names: [name], unresolved: [] } }])), candidates: [], unserved: [name, name] };
+  const value = { workspace: { repos: ["a", "b"], source: "request" }, repositorySnapshots: ["a", "b"].map(repo => ({ repo, snapshot: snapshot(repo) })), sections: Object.fromEntries(["a", "b"].map(repo => [repo, { ...base, snapshot: snapshot(repo), status: "complete", value: { names: [name], unresolved: [] } }])), candidates: [], links: [], unlinked: [], unserved: [name, name] };
   const text = renderWorkspace({ ...base, status: "complete", value } as never, "details");
   assert.doesNotMatch(text, /all recorded outward names are unserved/);
 });
