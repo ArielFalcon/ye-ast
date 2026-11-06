@@ -60,7 +60,9 @@ export interface ImportOrigins {
    * declares, every global a source writes through (`Math.max = f`, `Array.prototype.push = f`,
    * `globalThis.fetch = f`, `Object.defineProperty(Map.prototype, …)`), or `all` when a write reaches the global object
    * by a computed key or a prototype no name states; and every package a source writes through an import of
-   * (`_.map = f`). An external call under one of them proves nothing.
+   * (`_.map = f`). An external call under one of them proves nothing. `members` names the members those writes
+   * state (`push` in `Object.defineProperty(Array.prototype, "push", …)`), so a member call no declaration names is no
+   * external call when the repository writes a member of that name.
    */
   replacedRoots(signal?: AbortSignal): Promise<ReplacedRoots>;
 }
@@ -69,6 +71,7 @@ export interface ReplacedRoots {
   globals: ReadonlySet<string> | "all";
   /** Package names, as an import specifier's first one or two segments name them (`lodash`, `@angular/core`). */
   packages: ReadonlySet<string>;
+  members: ReadonlySet<string>;
 }
 
 /** Reads the import bindings of one snapshot; composition supplies it, so no use case imports a parser. */

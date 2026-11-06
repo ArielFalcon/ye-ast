@@ -82,7 +82,7 @@ function setup(options: Options) {
     sourceTrivia: { triviaLines: async (file: { path: string }) => (options.onTrivia?.(file.path), new Set(options.trivia?.[file.path] ?? [])) },
     memberNames: { memberNames: async (file: { path: string }) => (options.onMemberNames?.(file.path), { names: options.memberNames?.[file.path] ?? [], functionValueCalls: [], callables: [], receiverBindings: options.receiverBindings?.[file.path] ?? [] }) },
     importOrigins: () => ({
-      replacedRoots: async () => options.replaced ?? { globals: new Set(), packages: new Set() },
+      replacedRoots: async () => options.replaced ?? { globals: new Set(), packages: new Set(), members: new Set() },
       origins: async (sites: readonly ImportOriginSite[]) => { options.onOrigins?.(); return sites.map(answer); },
       rootOrigins: async (sites: readonly ResolvedNameSite[]) => sites.map((site): Finding<ImportOrigin> => {
         const root = options.roots?.[site.name];
@@ -632,9 +632,10 @@ test("a receiver binding for another member, a class the repository file does no
   for (const fact of [otherMember, elsewhere, unproven]) assert.deepEqual(cutsOf(fact), cut);
 });
 
-test("an external leaf under a global or a package the repository replaces stays a cut, wherever the walk settles it", async () => {
-  const globals = (...names: string[]): ReplacedRoots => ({ globals: new Set(names), packages: new Set() });
-  const packages = (...names: string[]): ReplacedRoots => ({ globals: new Set(), packages: new Set(names) });
+test("an external leaf under a global or a package the repository replaces, or a call no root names to a member it writes, stays a cut, wherever the walk settles it", async () => {
+  const globals = (...names: string[]): ReplacedRoots => ({ globals: new Set(names), packages: new Set(), members: new Set() });
+  const packages = (...names: string[]): ReplacedRoots => ({ globals: new Set(), packages: new Set(names), members: new Set() });
+  const members = (...names: string[]): ReplacedRoots => ({ globals: new Set(), packages: new Set(), members: new Set(names) });
   const memberCall = (name: string): FakeUnresolved[] => [{ from: "run", name, kind: "calls", file: A, line: 9, column: 4 }];
   const homonym = callee("max", B, 3);
   const external = (holds: string) => ({ ...fieldCallOptions({ memberUses: [], externalUses: [{ owner: SAVE_PROOF.owner, field: "repo", holds, reference: SAVE_PROOF.reference }] }) });
@@ -648,7 +649,8 @@ test("an external leaf under a global or a package the repository replaces stays
     ["constructed", { ...boundCall({ kind: "constructed", name: "Map", line: 8, column: 17 }), roots: { Map: { kind: "ambient", name: "Map", bare: true } }, replaced: globals("Map") }],
     ["field global", { ...external("global#Map"), replaced: globals("Map") }],
     ["field package", { ...external("@angular/common/http#HttpClient"), replaced: packages("@angular/common") }],
-    ["every global", { ...boundCall({ kind: "literal", type: "Array" }), replaced: { globals: "all", packages: new Set() } }],
+    ["every global", { ...boundCall({ kind: "literal", type: "Array" }), replaced: { globals: "all", packages: new Set(), members: new Set() } }],
+    ["unnamed", { nodes: [SVC, RUN], edges: CONTAINS, unresolved: memberCall("list.push"), replaced: members("push") }],
   ];
 
   for (const [name, options] of cases) {

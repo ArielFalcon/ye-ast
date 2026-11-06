@@ -114,12 +114,12 @@ export function createImportOrigins(sources: readonly SourceFile[], parse: Parse
   /** The globals the snapshot declares or writes through, and the packages it writes through; read when first asked. */
   const replacedRoots = (): ReplacedRoots => {
     if (replaced !== undefined) return replaced;
-    const written: WrittenRoots = { globals: new Set(), everyGlobal: false, packages: new Set() };
+    const written: WrittenRoots = { globals: new Set(), everyGlobal: false, packages: new Set(), members: new Set() };
     for (const [path, text] of texts) {
       if (!isTypeScriptSource(path)) continue;
       addWrittenRoots(path, text, ts.createSourceFile(path, text, ts.ScriptTarget.Latest, false), written, (name) => LIB_GLOBALS.has(name));
     }
-    replaced = { globals: written.everyGlobal ? "all" : new Set([...repositoryGlobals(), ...written.globals]), packages: written.packages };
+    replaced = { globals: written.everyGlobal ? "all" : new Set([...repositoryGlobals(), ...written.globals]), packages: written.packages, members: written.members };
     return replaced;
   };
 

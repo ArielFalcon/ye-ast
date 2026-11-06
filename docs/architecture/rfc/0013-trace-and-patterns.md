@@ -87,14 +87,20 @@ cut: on this repository's `composeQueries` trace, 269 calls moved from external 
 R4 and R5 read the syntax tree of the file (the TypeScript compiler API in `core/adapters/typescript`, ADR-0008; the
 tree-sitter syntax tree for Java), never a type checker, and are computed once per file content.
 
-An external leaf of R1, R3, R4 or the bare-call row of R6 names what the repository must not replace. The import origins
-read once per query, from every in-scope source, the roots it writes through: an assignment, compound assignment, update,
-`delete`, destructuring or iteration target whose member chain starts at a global (directly or through `globalThis`,
-`window`, `self` or `global`) or at an import of a package, and the first argument of `Object.defineProperty`,
-`Object.assign`, `Object.setPrototypeOf`, `Reflect.set` and their kin, with roots resolved by the binder (ADR-0029). A
-global the snapshot declares counts too. A leaf whose global root (for a literal, its type: `Array`, `String`, `RegExp`;
+Every external leaf, of R1, R3, R4 or R6 (the `unnamed` one included), names what the repository must not replace. The
+import origins read once per query, from every source the snapshot holds, the roots it writes through: an assignment,
+compound assignment, update, `delete`, destructuring or iteration target whose member path starts at a global (directly
+or through `globalThis`, `window`, `self` or `global`) or at an import of a package, and the first argument of
+`Object.defineProperty`, `Object.assign`, `Object.setPrototypeOf`, `Reflect.set` and their kin, with roots resolved by
+the binder (ADR-0029). A local declared from a path stands for that path: a variable's initializer, a parameter's
+default, a destructured element by its key, rename or index, at any nesting (`const { prototype } = Array;
+prototype.push = f` writes through `Array`); a computed key or a rest element over a global, a literal holding one, and
+an alias chain past its bound keep every global leaf a cut. A global the snapshot declares counts too. A leaf whose global root (for a literal, its type: `Array`, `String`, `RegExp`;
 for `new Map()`, `Map`) or whose package is among them stays the cut it would otherwise be; a computed write on the global
-object, or one through `__proto__`, `constructor` or `getPrototypeOf`, keeps every global leaf a cut. A name a `with` body
+object, or one through `__proto__`, `constructor` or `getPrototypeOf`, keeps every global leaf a cut. The same writes
+state the members they set (the last link, a writing call's key or literal keys), and an `unnamed` leaf whose member is
+among them stays a cut; a member they compute falls under the computed-name limitation above. The snapshot holds the `.ts`, `.mts` and `.cts` sources the map
+scope exports; a write in a `.js`, `.jsx` or `.tsx` file is not read. A name a `with` body
 or a direct `eval` may rebind has no origin, and a local in the scope of a direct `eval`, strict or not, is not bound. An
 R3 field leaf under a global needs a library global the binder confirms at the field's `new`, never the unresolved-name
 fallback of a field origin.

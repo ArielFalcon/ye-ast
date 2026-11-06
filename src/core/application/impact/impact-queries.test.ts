@@ -26,7 +26,7 @@ import type { ModuleDependency } from "../../domain/impact/module-dependency.ts"
 import { createSnapshotDataCache } from "../snapshot/snapshot-data-cache.ts";
 import type { SnapshotDataCache } from "../snapshot/read-snapshot.ts";
 
-const NOTHING_REPLACED = { globals: new Set<string>(), packages: new Set<string>() };
+const NOTHING_REPLACED = { globals: new Set<string>(), packages: new Set<string>(), members: new Set<string>() };
 
 const HEAD = "a".repeat(40);
 const BASE = "b".repeat(40);

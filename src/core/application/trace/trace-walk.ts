@@ -95,8 +95,8 @@ const provenKey = (file: string, line: number, column: number, name: string): st
 
 const placeKey = (line: number, column: number): string => `${line}:${column}`;
 
-/** What an external leaf names: a global by its root name, or a module. */
-type LeafRoot = { global: string } | { module: string };
+/** What an external leaf names: a global by its root name, a module, or, for a call nothing roots, the member it calls. */
+type LeafRoot = { global: string } | { module: string } | { member: string };
 
 /** The root a field's external type names: the global after `global#`, or the module before `#`. */
 function rootOfHolds(holds: string): LeafRoot {
@@ -209,8 +209,9 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
   let replacedRoots: Promise<ReplacedRoots> | undefined;
   /** Whether the repository declares or writes over the global an external leaf is rooted at, or writes through its package. */
   const isReplaced = async (root: LeafRoot): Promise<boolean> => {
-    const { globals, packages } = await (replacedRoots ??= origins.replacedRoots(signal));
+    const { globals, packages, members } = await (replacedRoots ??= origins.replacedRoots(signal));
     if ("global" in root) return globals === "all" || globals.has(root.global);
+    if ("member" in root) return members.has(root.member);
     return [...packages].some((name) => root.module === name || root.module.startsWith(`${name}/`));
   };
   /** The receiver binding the call's own source proves at the place the call starts, for the member and receiver it spells. */
@@ -349,8 +350,9 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
         ...((await memberDeclarations()).get(name) ?? []).map((file) => declarationAnchor(file, name)),
         ...(receiver !== undefined && (await holdsFunctionValue(reference, receiver, name)) ? [declarationAnchor(reference.file, receiver)] : []),
       ];
-      if (declared.length === 0) external.push({ kind: "unnamed", name: reference.name });
-      else cuts.push({ kind: "unresolved-link", at: [placeAt(reference.file, reference.line, reference.name), ...sortedUnique([...reference.candidates, ...declared])] });
+      const cut = () => cuts.push({ kind: "unresolved-link", at: [placeAt(reference.file, reference.line, reference.name), ...sortedUnique([...reference.candidates, ...declared])] });
+      if (declared.length === 0) await leafUnlessReplaced({ kind: "unnamed", name: reference.name }, { member: name }, cut);
+      else cut();
     };
     const resolved: EdgeOccurrence[] = called.map(({ edge, target }) => ({ source: edge.source, line: edge.line, column: edge.column, targetName: target.name }));
 
