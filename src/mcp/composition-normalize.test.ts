@@ -456,6 +456,39 @@ test("workspace impact keeps reads with their kinds, call-site ancestors and sta
   assert.deepEqual(context?.family === "impact" && context.repositorySnapshots.map((e) => e.repo), ["web", "shop"], "the context keeps its original order");
 });
 
+function removedRouteLink(mergeBase: string | undefined): Tables {
+  const workspace = workspaceImpactValue("impact");
+  const removed = impactValue().changedEntrypoints![0]!;
+  assert.equal(removed.change, "removed");
+  const link = { id: "link-removed", from: { repo: "web", file: "src/orders.service.ts", line: 30, symbol: "OrdersService.drop" }, to: { repo: "shop", kind: removed.kind, name: removed.name, handler: removed.handler }, transport: "http" as const, basis: "route-overlap" as const, confidence: 0.5 };
+  const shop = workspace.sections.shop!;
+  assert.ok(shop.status !== "unknown" && shop.value.impact !== undefined);
+  const { mergeBase: _recorded, ...unrecorded } = shop.value.impact;
+  const impact: ImpactValue = mergeBase === undefined ? unrecorded : { ...unrecorded, mergeBase };
+  const value: WorkspaceImpactValue = {
+    ...workspace,
+    trigger: mergeBase === undefined ? { repo: "shop" } : { repo: "shop", mergeBase },
+    sections: { ...workspace.sections, shop: { ...shop, value: { ...shop.value, impact } } },
+    links: [{ link, direction: "upstream", reach: [] }],
+  };
+  return new Tables(normalizeSource(sourceFixture("impact-workspace", { value }), digest));
+}
+
+test("a link to a route the change removed lands in the handler the merge base holds, not in the trigger's head", () => {
+  const t = removedRouteLink(MERGE_BASE);
+  const change = t.list("/value/sections/shop/value/impact/changedEntrypoints", "entrypoint-change")[0]!;
+  const handler = t.list("/value/links", "workspace-link")[0]!.link.to.handler;
+  const origin = t.file(t.anchor(handler).file).origin;
+  assert.deepEqual(origin.kind === "snapshot" && t.snapshot(origin.snapshot), shaRef("shop", MERGE_BASE));
+  assert.equal(handler, change.handler, "one removed handler is one anchor");
+});
+
+test("a link to a removed route without a recorded merge base keeps a coordinate local to the read", () => {
+  const t = removedRouteLink(undefined);
+  const handler = t.list("/value/links", "workspace-link")[0]!.link.to.handler;
+  assert.deepEqual(t.file(t.anchor(handler).file).origin, { kind: "query-context", read: t.set.sources[0]!.rootRead });
+});
+
 test("workspace names keep stated and unserved dispositions and resolve repository evidence by its own repo", () => {
   const set = normalizeSource(sourceFixture("workspace"), digest);
   const t = new Tables(set);

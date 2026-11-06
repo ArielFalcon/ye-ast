@@ -5,6 +5,7 @@
  * multiplicity are recovered by position. No relation is inferred, no text is parsed and no coordinate is invented: a
  * repository outside the source vector, a missing merge base or external configuration keep a `query-context` origin.
  */
+import { canonicalJson } from "../core/domain/shared/canonical-json.ts";
 import { compareText } from "../core/domain/shared/code-node.ts";
 import type { Evidence, Fact, FactProvenance, Finding, SnapshotRef } from "../core/domain/shared/fact.ts";
 import type { RepositoryEvidence } from "../core/domain/shared/repository-evidence.ts";
@@ -392,12 +393,33 @@ function workspaceImpact(b: Builder, root: ReadContext, family: "impact" | "call
     const pointer = jsonPointer(["value", "sections", repo]);
     const read = b.read({ kind: "section", repo }, pointer, section);
     if (section.status === "unknown") continue;
-    repoImpact(b, read, repo, `${pointer}/value`, section.value, family === "impact" && (section.value.impact?.mergeBase !== undefined || repo === value.trigger.repo)
-      ? { mergeBase: section.value.impact?.mergeBase ?? value.trigger.mergeBase, pointer: section.value.impact?.mergeBase === undefined ? "/value/trigger/mergeBase" : `${pointer}/value/impact/mergeBase` }
-      : undefined);
+    repoImpact(b, read, repo, `${pointer}/value`, section.value, family === "impact" ? diffOf(value, repo, section.value) : undefined);
   }
-  links(b, root, value.links);
+  links(b, root, value.links, family === "impact" ? removedPlaceOf(b, root, value) : () => undefined);
   return sorted;
+}
+
+function diffOf(value: WorkspaceImpactValue, repo: string, section: RepoImpact): Diff {
+  if (section.impact?.mergeBase !== undefined) return { mergeBase: section.impact.mergeBase, pointer: `${jsonPointer(["value", "sections", repo])}/value/impact/mergeBase` };
+  return repo === value.trigger.repo ? { mergeBase: value.trigger.mergeBase, pointer: "/value/trigger/mergeBase" } : undefined;
+}
+
+/**
+ * Where a link lands when it reaches an entrypoint the change removed from the trigger: the merge base that held its
+ * handler, or a coordinate local to the read when no merge base is recorded; undefined for any other link.
+ */
+function removedPlaceOf(b: Builder, root: ReadContext, value: WorkspaceImpactValue): (to: Link["to"]) => Place | undefined {
+  const repo = value.trigger.repo;
+  const section = value.sections[repo];
+  if (section === undefined || section.status === "unknown") return () => undefined;
+  const removed = new Set((section.value.impact?.changedEntrypoints ?? []).filter(({ change }) => change === "removed").map(({ kind, name, handler }) => canonicalJson([kind, name, handler])));
+  const diff = diffOf(value, repo, section.value);
+  return (to) => {
+    if (to.repo !== repo || !removed.has(canonicalJson([to.kind, to.name, to.handler]))) return undefined;
+    return diff?.mergeBase === undefined
+      ? { origin: { kind: "query-context", read: root.id }, repo }
+      : { origin: { kind: "snapshot", snapshot: b.snapshot({ repo, kind: "sha", sha: diff.mergeBase }, root.id, diff.pointer) }, repo };
+  };
 }
 
 function repoImpact(b: Builder, section: ReadContext, repo: string, prefix: string, value: RepoImpact, diff: Diff): void {
@@ -422,11 +444,11 @@ function callSite(b: Builder, section: ReadContext, repo: string, pointer: strin
  * A link's ends as every family records them: the caller's file and the handler's anchor in the repositories they name,
  * so one link read by two families is one `workspace-match` relation. `pointer` addresses the `Link` itself.
  */
-function linkData(b: Builder, root: ReadContext, { from, to, ...link }: Link, pointer: string): LinkData {
+function linkData(b: Builder, root: ReadContext, { from, to, ...link }: Link, pointer: string, toPlace: Place = b.placeOf(to.repo, root.id)): LinkData {
   return {
     ...link,
     from: { file: b.file(b.placeOf(from.repo, root.id), from.file, root.id, `${pointer}/from/file`), line: from.line, repo: from.repo, symbol: from.symbol },
-    to: { repo: to.repo, kind: to.kind, name: to.name, handler: b.anchor(b.placeOf(to.repo, root.id), to.handler, root.id, `${pointer}/to/handler`, `${pointer}/to/handler/path`) },
+    to: { repo: to.repo, kind: to.kind, name: to.name, handler: b.anchor(toPlace, to.handler, root.id, `${pointer}/to/handler`, `${pointer}/to/handler/path`) },
   };
 }
 
@@ -435,10 +457,10 @@ function linkData(b: Builder, root: ReadContext, { from, to, ...link }: Link, po
  * source's own `Link.id` index without hashing part ids recursively; a reach id no link of the source carries, or one two
  * links share, stays `missing`.
  */
-function links(b: Builder, root: ReadContext, items: WorkspaceImpactValue["links"]): void {
+function links(b: Builder, root: ReadContext, items: WorkspaceImpactValue["links"], removedPlace: (to: Link["to"]) => Place | undefined): void {
   const prepared = items.map((item, index) => {
     const pointer = `/value/links/${index}`;
-    const data = linkData(b, root, item.link, `${pointer}/link`);
+    const data = linkData(b, root, item.link, `${pointer}/link`, removedPlace(item.link.to));
     const operations = item.operations === undefined ? {} : { operations: item.operations };
     const id = partId(b.digest, { kind: "workspace-link", link: data, direction: item.direction, reach: [], ...operations }, { source: b.source, read: root.id, pointer });
     return { pointer, data, id, item, operations };
