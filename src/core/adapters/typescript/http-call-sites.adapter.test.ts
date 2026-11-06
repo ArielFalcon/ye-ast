@@ -79,6 +79,13 @@ test("a written global encoder is not evaluated as the built-in, even from anoth
   assert.deepEqual(sites(await reader.of([alias], "repo")), ["unknown unresolved@alias.ts:1"]);
 });
 
+test("whatever function encodeURIComponent names at run time, what it encodes from a run-time value is a run-time value", async () => {
+  const listener = source("resize.ts", "import { fromEvent } from 'rxjs'; fromEvent(window, 'resize').subscribe(() => {});");
+  const encoded = source("encoded.ts", "export function load(id: string) { return fetch(`/api/items/${encodeURIComponent(id)}`) }");
+  const literal = source("literal.ts", "fetch(`/api/${encodeURIComponent('x')}`)");
+  assert.deepEqual(sites(await reader.of([listener, encoded, literal], "repo")), ["GET /api/items/{}@encoded.ts:1", "unknown unresolved@literal.ts:1"]);
+});
+
 test("a class static block's var does not shadow its enclosing function's route", async () => {
   const file = source("static.ts", "const route = 'outer'; function load() { class Nested { static { var route = 'inner' } } fetch(`/api/${route}`) }");
   assert.deepEqual(sites(await reader.of([file], "repo")), ["GET /api/outer@static.ts:1"]);

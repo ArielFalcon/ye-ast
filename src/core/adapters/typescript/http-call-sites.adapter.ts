@@ -847,7 +847,7 @@ class Reader {
     if (!ts.isIdentifier(call.expression)) return undefined;
     if (scope.names.has(call.expression.text)) return undefined;
     if (call.expression.text === "String" && isGlobalName(shape, scope, "String")) return this.scalarText(shape, call.arguments, scope, trail);
-    if (call.expression.text === "encodeURIComponent" && !this.unsafeEncoder && isGlobalName(shape, scope, "encodeURIComponent")) {
+    if (call.expression.text === "encodeURIComponent" && isGlobalName(shape, scope, "encodeURIComponent")) {
       const [argument, ...rest] = call.arguments;
       return argument === undefined || rest.length > 0 || ts.isSpreadElement(argument) ? undefined : this.encoded(shape, argument, scope, trail);
     }
@@ -866,12 +866,13 @@ class Reader {
   /**
    * `encodeURIComponent(x)` escapes `/`, `?` and `#`, so whatever it encodes stays in one segment: a text it states whole
    * is encoded, anything else is a run-time value, unless the snapshot cannot read it and it reads nothing the code fills
-   * at run time.
+   * at run time. A snapshot that may replace the global encoder leaves a text undecided: only its run-time values stay.
    */
   private async encoded(shape: FileShape, argument: ts.Expression, scope: Scope, trail: ReadonlySet<string>): Promise<Evaluation | undefined> {
     const value = await this.evaluate(shape, argument, scope, trail);
     if (value === undefined) return readsRunTime(argument, scope) ? RUN_TIME_VALUE : undefined;
     if (value.kind === "value" || value.cut || value.text.includes(PLACEHOLDER)) return RUN_TIME_VALUE;
+    if (this.unsafeEncoder) return undefined;
     try {
       return stated(encodeURIComponent(value.text));
     } catch {

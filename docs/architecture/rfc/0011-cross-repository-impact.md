@@ -78,9 +78,10 @@ It stands for a segment only where it starts one; a run-time value that starts t
 An unshadowed global `encodeURIComponent` is a supported static transformation. It escapes `/`, `?` and `#`, so what it
 encodes stays in one segment: a text the snapshot states whole is encoded, and anything else is a run-time value, a text
 holding a run-time value or cut at its query included, unless the snapshot cannot read the argument and the argument reads
-nothing the code fills at run time. `String(x)` and `x.toString()` write what a template writes for `x`. Shadowed encoders,
-visible writes or an escaping global object in the provided snapshot keep the evaluation unknown. No repository function
-is executed. A whole run-time URL such as `fetch(url)` remains unknown when `url` names a run-time parameter.
+nothing the code fills at run time. `String(x)` and `x.toString()` write what a template writes for `x`. A shadowed
+encoder keeps the evaluation unknown. A visible write or an escaping global object in the provided snapshot
+(`fromEvent(window, 'resize')`) leaves an encoded text undecided, while what the call encodes from a run-time value stays a
+run-time value: whatever function runs, its result is filled at run time. No repository function is executed. A whole run-time URL such as `fetch(url)` remains unknown when `url` names a run-time parameter.
 
 A wrapper is a verb-named method of a class another class injects that forwards one of its parameters unchanged as the
 tail of its request's path (`this.http.get(path)`, `` `${this.url}${path}` ``, `base + '/' + path`, or through a method
