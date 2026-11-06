@@ -104,19 +104,20 @@ test("function-scoped var bindings shadow outer constants outside their block", 
   assert.deepEqual(sites(await reader.of([file], "repo")), ["GET /api/{}@var.ts:5"]);
 });
 
-test("a top-level block var shadows the global encoder and unknown typed arguments stay undecided", async () => {
+test("a top-level block var shadows the global encoder", async () => {
   const shadow = source("shadow.ts", [
     "import { HttpClient } from '@angular/common/http'",
     "if (true) { var encodeURIComponent = custom }",
     "class Client { constructor(private http: HttpClient) {}",
     " load(id: string) { this.http.get(`/api/${encodeURIComponent(id)}`) } }",
   ].join("\n"));
-  const typed = source("typed.ts", [
-    "import { HttpClient } from '@angular/common/http'",
-    "class Client { constructor(private http: HttpClient) {}",
-    " load(id: unknown) { this.http.get(`/api/${encodeURIComponent(id)}`) } }",
-  ].join("\n"));
-  assert.deepEqual(sites(await reader.of([shadow, typed], "repo")), ["unknown unresolved@shadow.ts:4", "unknown unresolved@typed.ts:3"]);
+  assert.deepEqual(sites(await reader.of([shadow], "repo")), ["unknown unresolved@shadow.ts:4"]);
+});
+
+test("an encoded value is one segment whatever it is, unless it reads nothing the code fills at run time and the snapshot cannot read it", async () => {
+  const found = await reader.of([component("    this.http.get(`/api/${encodeURIComponent(this.identifierOf(method))}`)", "    this.http.get(`/api/${encodeURIComponent(`${method}/${method}`)}`)", "    this.http.get(`/api/${encodeURIComponent(lookup())}`)", "    this.http.get(`/api/${encodeURIComponent('\\uD800')}`)")], "shop-web");
+
+  assert.deepEqual(sites(found), ["GET /api/{}@src/app/app.component.ts:6", "GET /api/{}@src/app/app.component.ts:7", "unknown unresolved@src/app/app.component.ts:8", "unknown unresolved@src/app/app.component.ts:9"]);
 });
 
 function source(path: string, content: string): { path: string; content: string } {
@@ -496,13 +497,13 @@ test("what follows the query or the fragment of a path never leaves it undecided
 });
 
 test("an encoded text whose query was cut is never encoded as if it were the whole value", async () => {
-  assert.deepEqual(sites(await reader.of([component("    this.http.get(`/api/${encodeURIComponent(`a?${this.page()}`)}`)")], "shop-web")), ["unknown unresolved@src/app/app.component.ts:6"]);
+  assert.deepEqual(sites(await reader.of([component("    this.http.get(`/api/${encodeURIComponent(`a?${this.page()}`)}`)")], "shop-web")), ["GET /api/{}@src/app/app.component.ts:6"]);
 });
 
 test("a text that holds a cut text is cut too, so it is never encoded whole", async () => {
   const found = await reader.of([component("    const query = `a?${this.page()}`", "    this.http.get(`/api/${encodeURIComponent(`${query}`)}`)", "    this.http.get(`/api/${encodeURIComponent('' + query)}`)")], "shop-web");
 
-  assert.deepEqual(sites(found), ["unknown unresolved@src/app/app.component.ts:7", "unknown unresolved@src/app/app.component.ts:8"]);
+  assert.deepEqual(sites(found), ["GET /api/{}@src/app/app.component.ts:7", "GET /api/{}@src/app/app.component.ts:8"]);
 });
 
 test("an encoded text that states a question mark itself is encoded whole", async () => {
@@ -656,7 +657,7 @@ test("a define reaches only the sources of the project that declares it", async 
   assert.deepEqual(sites(await reader.of([reversed, inLib, libService], "shop-web")), [`GET api/orders@projects/lib/${SERVICE}:7`]);
 });
 
-test("a path parameter written as encodeURIComponent, String or toString of a scalar is a placeholder", async () => {
+test("a path parameter written as encodeURIComponent, String or toString of a run-time value is a placeholder", async () => {
   const service = orderService(
     "this.http.get(`${this.resourceUrl}/${encodeURIComponent(id)}`)",
     "this.http.get(`${this.resourceUrl}/${String(id)}`)",
@@ -672,9 +673,9 @@ test("a path parameter written as encodeURIComponent, String or toString of a sc
   ]);
 });
 
-test("String and toString of a value whose type is unknown stay undecided", async () => {
+test("String and toString write what a template writes, whatever the value's type", async () => {
   const file = source("unk.ts", ["import { HttpClient } from '@angular/common/http'", "class C { constructor(private http: HttpClient) {}", " a(id: unknown) { this.http.get(`/api/${String(id)}`) }", " b(id: unknown) { this.http.get(`/api/${id.toString()}`) } }"].join("\n"));
-  assert.deepEqual(sites(await reader.of([file], "repo")), ["unknown unresolved@unk.ts:3", "unknown unresolved@unk.ts:4"]);
+  assert.deepEqual(sites(await reader.of([file], "repo")), ["GET /api/{}@unk.ts:3", "GET /api/{}@unk.ts:4"]);
 });
 
 test("an httpResource whose url is a field resolves, as an object's url or as the returned string", async () => {

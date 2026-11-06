@@ -73,11 +73,12 @@ value stands for one path segment, an approximation: nothing proves it nonempty,
 It stands for a segment only where it starts one; a run-time value that starts the URL or follows text of its segment
 (`${base}/orders`, `/api/v1${path}`) may hold an origin, a base path or several segments, so the path is undecided.
 
-An unshadowed global `encodeURIComponent` is a supported static transformation: literal text is encoded, and an identifier
-explicitly typed `string`, `number`, `boolean` or `bigint` may remain a parameter placeholder within a known path; so may
-`String(x)` and `x.toString()` of such an identifier. Unsupported arguments, shadowed encoders, visible writes or an
-escaping global object in the provided snapshot keep the evaluation unknown. No repository function is executed. A whole
-run-time URL such as `fetch(url)` remains unknown when `url` names a run-time parameter.
+An unshadowed global `encodeURIComponent` is a supported static transformation. It escapes `/`, `?` and `#`, so what it
+encodes stays in one segment: a text the snapshot states whole is encoded, and anything else is a run-time value, a text
+holding a run-time value or cut at its query included, unless the snapshot cannot read the argument and the argument reads
+nothing the code fills at run time. `String(x)` and `x.toString()` write what a template writes for `x`. Shadowed encoders,
+visible writes or an escaping global object in the provided snapshot keep the evaluation unknown. No repository function
+is executed. A whole run-time URL such as `fetch(url)` remains unknown when `url` names a run-time parameter.
 
 A receiver `this.x` is the field the class of the call declares (a constructor parameter only when it declares a
 property) or inherits from its base class, here or through an import; a bare name is the binding the code around it

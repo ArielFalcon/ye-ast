@@ -12,7 +12,6 @@ export const VERBS: ReadonlySet<string> = new Set(["get", "head", "post", "put",
 const HTTP_CLIENT_PACKAGE = "@angular/common/http";
 const PLACEHOLDER = "{}";
 const UNDECIDED = Symbol("undecided");
-const SCALAR_TYPES: ReadonlySet<ts.SyntaxKind> = new Set([ts.SyntaxKind.StringKeyword, ts.SyntaxKind.NumberKeyword, ts.SyntaxKind.BooleanKeyword, ts.SyntaxKind.BigIntKeyword]);
 const RUN_TIME_VALUE: Evaluation = { kind: "value" };
 
 /** What one file declares at its top level, and the classes it holds, as the reader needs them. */
@@ -35,10 +34,9 @@ interface FileShape {
 interface Scope {
   names: ReadonlySet<string>;
   locals: ReadonlyMap<string, ts.Expression>;
-  scalars: ReadonlySet<string>;
 }
 
-const NO_SCOPE: Scope = { names: new Set(), locals: new Map(), scalars: new Set() };
+const NO_SCOPE: Scope = { names: new Set(), locals: new Map() };
 const LEXICAL_SCOPES = new WeakMap<ts.Node, Scope>();
 
 /** The names the code being evaluated binds at run time: a path part that names one is `{}`, never undecided. */
@@ -359,25 +357,23 @@ function lexicalScope(point: ts.Node, includePoint = false): Scope {
   const outer = lexicalScope(node);
   const names = new Set<string>();
   const locals = new Map<string, ts.Expression>();
-  const scalars = new Set<string>();
-  const bind = (name: ts.BindingName, initializer?: ts.Expression, type?: ts.TypeNode): void => {
+  const bind = (name: ts.BindingName, initializer?: ts.Expression): void => {
     for (const text of bindingNames(name)) {
       if (names.has(text)) continue;
       names.add(text);
       if (ts.isIdentifier(name) && initializer !== undefined) locals.set(text, initializer);
-      if (ts.isIdentifier(name) && type !== undefined && SCALAR_TYPES.has(type.kind)) scalars.add(text);
     }
   };
   if (ts.isBlock(node) || ts.isCaseBlock(node)) {
     const statements = ts.isBlock(node) ? node.statements : node.clauses.flatMap((clause) => [...clause.statements]);
     for (const statement of statements) {
-      if (ts.isVariableStatement(statement) && (statement.declarationList.flags & ts.NodeFlags.BlockScoped) !== 0) for (const declaration of statement.declarationList.declarations) bind(declaration.name, declaration.initializer, declaration.type);
+      if (ts.isVariableStatement(statement) && (statement.declarationList.flags & ts.NodeFlags.BlockScoped) !== 0) for (const declaration of statement.declarationList.declarations) bind(declaration.name, declaration.initializer);
       if ((ts.isFunctionDeclaration(statement) || ts.isClassDeclaration(statement)) && statement.name !== undefined) bind(statement.name);
     }
   }
   if ((ts.isFunctionExpression(node) || ts.isClassExpression(node)) && node.name !== undefined) bind(node.name);
   if ((ts.isFunctionLike(node) && "parameters" in node) || ts.isClassStaticBlockDeclaration(node)) {
-    if ("parameters" in node) for (const parameter of node.parameters) bind(parameter.name, undefined, parameter.type);
+    if ("parameters" in node) for (const parameter of node.parameters) bind(parameter.name);
     const visitVar = (child: ts.Node): void => {
       if (ts.isFunctionLike(child) || ts.isClassLike(child) || ts.isModuleDeclaration(child)) return;
       if (ts.isVariableDeclarationList(child) && (child.flags & ts.NodeFlags.BlockScoped) === 0) for (const declaration of child.declarations) bind(declaration.name);
@@ -387,7 +383,7 @@ function lexicalScope(point: ts.Node, includePoint = false): Scope {
   }
   if (ts.isCatchClause(node) && node.variableDeclaration !== undefined) bind(node.variableDeclaration.name);
   if ((ts.isForStatement(node) || ts.isForInStatement(node) || ts.isForOfStatement(node)) && node.initializer !== undefined && ts.isVariableDeclarationList(node.initializer)) {
-    for (const declaration of node.initializer.declarations) bind(declaration.name, declaration.initializer, declaration.type);
+    for (const declaration of node.initializer.declarations) bind(declaration.name, declaration.initializer);
   }
   if (names.size === 0) {
     LEXICAL_SCOPES.set(node, outer);
@@ -398,9 +394,8 @@ function lexicalScope(point: ts.Node, includePoint = false): Scope {
     names.add(name);
     const initializer = outer.locals.get(name);
     if (initializer !== undefined) locals.set(name, initializer);
-    if (outer.scalars.has(name)) scalars.add(name);
   }
-  const scope = { names, locals, scalars };
+  const scope = { names, locals };
   LEXICAL_SCOPES.set(node, scope);
   return scope;
 }
@@ -747,17 +742,8 @@ class Reader {
     if (scope.names.has(call.expression.text)) return undefined;
     if (call.expression.text === "String" && isGlobalName(shape, scope, "String")) return this.scalarText(shape, call.arguments, scope, trail);
     if (call.expression.text === "encodeURIComponent" && !this.unsafeEncoder && isGlobalName(shape, scope, "encodeURIComponent")) {
-      if (call.arguments.length !== 1) return undefined;
-      const argument = call.arguments[0];
-      if (argument === undefined) return undefined;
-      const value = await this.evaluate(shape, argument, scope, trail);
-      if (value?.kind === "value") return ts.isIdentifier(argument) && scope.scalars.has(argument.text) ? value : undefined;
-      if (value === undefined || value.cut || value.text.includes(PLACEHOLDER)) return undefined;
-      try {
-        return stated(encodeURIComponent(value.text));
-      } catch {
-        return undefined;
-      }
+      const [argument, ...rest] = call.arguments;
+      return argument === undefined || rest.length > 0 || ts.isSpreadElement(argument) ? undefined : this.encoded(shape, argument, scope, trail);
     }
     const visited = `${shape.source.fileName}\0call ${call.expression.text}`;
     if (trail.has(visited)) return undefined;
@@ -765,13 +751,26 @@ class Reader {
     return found === undefined ? undefined : this.evaluateReturned(found.target, found.declaration, new Set(trail).add(visited));
   }
 
-  /** `String(x)` and `x.toString()` write what `x` is: a run-time value only when `x` is declared a scalar. */
+  /** `String(x)` and `x.toString()` write what a template writes for `x`. */
   private async scalarText(shape: FileShape, operands: readonly ts.Expression[], scope: Scope, trail: ReadonlySet<string>): Promise<Evaluation | undefined> {
     const [operand, ...rest] = operands;
-    if (operand === undefined || rest.length > 0) return undefined;
-    const value = await this.evaluate(shape, operand, scope, trail);
-    if (value?.kind === "value") return ts.isIdentifier(operand) && scope.scalars.has(operand.text) ? value : undefined;
-    return value;
+    return operand === undefined || rest.length > 0 ? undefined : this.evaluate(shape, operand, scope, trail);
+  }
+
+  /**
+   * `encodeURIComponent(x)` escapes `/`, `?` and `#`, so whatever it encodes stays in one segment: a text it states whole
+   * is encoded, anything else is a run-time value, unless the snapshot cannot read it and it reads nothing the code fills
+   * at run time.
+   */
+  private async encoded(shape: FileShape, argument: ts.Expression, scope: Scope, trail: ReadonlySet<string>): Promise<Evaluation | undefined> {
+    const value = await this.evaluate(shape, argument, scope, trail);
+    if (value === undefined) return readsRunTime(argument, scope) ? RUN_TIME_VALUE : undefined;
+    if (value.kind === "value" || value.cut || value.text.includes(PLACEHOLDER)) return RUN_TIME_VALUE;
+    try {
+      return stated(encodeURIComponent(value.text));
+    } catch {
+      return undefined;
+    }
   }
 
   private async callTargetOf(shape: FileShape, name: string): Promise<{ target: FileShape; declaration: ts.Expression | ts.FunctionDeclaration } | undefined> {
