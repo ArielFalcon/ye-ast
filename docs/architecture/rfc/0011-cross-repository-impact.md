@@ -73,6 +73,9 @@ explicitly typed `string`, `number`, `boolean` or `bigint` may remain a paramete
 escaping global object in the provided snapshot keep the evaluation unknown. No repository function is executed. A whole
 run-time URL such as `fetch(url)` remains unknown when `url` names a run-time parameter.
 
+A class member the class does not declare (`this.resourceUrl`) is read from the class it extends, in the same file or
+through an import; a member the class declares itself wins.
+
 A name that is neither a binding nor an import of its file, such as an ambient `declare const`, takes the value an
 Angular workspace's `build` target states for it in `define` (application builders), read from `angular.json` as source
 text: only when every configuration, the default build included, states the same string literal. A configuration's own

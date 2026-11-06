@@ -56,15 +56,17 @@ A value is followed only through these steps; anything else it flows into is a f
 | `httpResource(...)`; the value a `resource`/`rxResource` `loader`/`stream` returns | the resource's `value()` signal |
 | assignment to a field, a local, or `signal.set(...)`; `e ?? f`, `e \|\| f` with the value on the left | bound to the holder |
 | argument of a call to a function or method declared in the repository | the parameter at that position |
-| route resolver registered under `resolve: { key }`, when `withComponentInputBinding()` is an argument of the `provideRouter(...)` that registers the routes (or `bindToComponentInputs: true`) | the component input whose public name is `key` |
+| route resolver registered under `resolve: { key }`, when every root router of the repository binds component inputs (`withComponentInputBinding()` passed to `provideRouter(...)` directly or in a spread array of features, or `RouterModule.forRoot(..., { bindToComponentInputs: true })`; routes under `forChild` or lazy loading inherit it) | the component input whose public name is `key` |
 | a component input by its public name: `@Input()`, `@Input('alias')`, `input()`, `input.required()`, `model()` with `alias` | the member that declares it; no such input is a frontier |
 | the same resolver, read in that route's component through `ActivatedRoute` `data` (`data.subscribe(({ key }) => ...)`, `snapshot.data[key]`) | bound to the destructured or read value |
 | template property binding `[name]="path"` on a child component | the child input whose public name is `name` |
 | a read of a component field, input or signal in its template (`x()`, `@if (x(); as y)`, `*ngIf="x as y"`, `@for (i of x)`) | bound to the alias or item; `@for` over the changed collection itself is a `review` use |
 
 A zero-argument call is a signal read only when the callee is the carried value itself or a resource's `value`; calling
-the changed value is a dereference; any other method call on a container of the changed property, a pipe other than
-`async`, an `async` projection and a function passed by reference are frontiers.
+the changed value is a dereference; a resource member that only reports or replaces its state (`isLoading`, `error`,
+`hasValue`, `status`, `reload`, `set`, ...) is no loss; any other method call on a container of the changed property
+(`update(fn)` included), a pipe other than `async`, an `async` projection and a function passed by reference are
+frontiers.
 
 ## F0 guards
 
@@ -84,8 +86,9 @@ spread, iteration, destructuring (an empty pattern included).
 The RFC-0002 envelope. Uses are complete findings with their verdict, chain, requirement, counterexample or guard
 evidence, the repository they are in and the link they came through (its id, basis, call site and handler); frontiers
 are `unknown` findings with a reason and evidence, every place with its repository. Each HTTP call site is matched once
-over every repository of the workspace, its own included: a call two repositories serve is an ambiguous frontier. When
-no call site links to the operation, the answer lists the call sites whose target no read could evaluate. Output is
+over every repository of the workspace, its own included: a call two repositories serve is an ambiguous frontier. The
+call sites whose target no read could evaluate are always listed as one `unknown` item, since any of them may call the
+operation; when no call site links, that item also names the handler. Output is
 sorted and reproducible; the hypothesis is echoed with its assumed old guarantee. F0 has no MCP, CLI or protocol
 surface.
 
