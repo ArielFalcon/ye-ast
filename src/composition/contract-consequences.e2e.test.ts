@@ -1,0 +1,194 @@
+import { afterEach, beforeEach, test } from "node:test";
+import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import type { ConsequencesValue } from "../core/domain/contracts/consequence-fact.ts";
+import type { Finding } from "../core/domain/shared/fact.ts";
+import { composeQueries } from "./compose.ts";
+
+const GIT_ENV = {
+  ...process.env,
+  GIT_CONFIG_GLOBAL: "/dev/null",
+  GIT_CONFIG_NOSYSTEM: "1",
+  GIT_AUTHOR_NAME: "test",
+  GIT_AUTHOR_EMAIL: "test@example.com",
+  GIT_COMMITTER_NAME: "test",
+  GIT_COMMITTER_EMAIL: "test@example.com",
+};
+
+const BOOT = `package shop;
+
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+
+@SpringBootApplication
+class Main {}
+`;
+
+const CONTROLLER = `package shop;
+
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+@RestController
+@RequestMapping("/api/orders")
+class OrdersController {
+  @GetMapping("/{id}")
+  public String find(@PathVariable long id) { return ""; }
+}
+`;
+
+const SERVICE = `import { HttpClient } from "@angular/common/http";
+import { Injectable, inject } from "@angular/core";
+import { Observable } from "rxjs";
+
+export interface Order {
+  id: number;
+  customer: { name: string };
+}
+
+@Injectable({ providedIn: "root" })
+export class OrderService {
+  private http = inject(HttpClient);
+
+  find(id: number): Observable<Order> {
+    return this.http.get<Order>(\`/api/orders/\${id}\`);
+  }
+}
+`;
+
+const COMPONENT = `import { Component } from "@angular/core";
+import { Order, OrderService } from "./order.service";
+
+@Component({ selector: "app-order", standalone: true, templateUrl: "./order.component.html" })
+export class OrderComponent {
+  order?: Order;
+
+  constructor(private service: OrderService) {}
+
+  load(id: number): void {
+    this.service.find(id).subscribe((order) => {
+      this.order = order;
+    });
+  }
+
+  describe(value: unknown): string {
+    return String(value);
+  }
+}
+`;
+
+const TEMPLATE = `<p>{{ order.customer.name }}</p>
+<p>{{ order.customer?.name }}</p>
+<p>{{ describe(order) }}</p>
+`;
+
+const WEB = {
+  "package.json": JSON.stringify({ dependencies: { "@angular/core": "^21.0.0", "@angular/common": "^21.0.0" } }),
+  "src/app/order.service.ts": SERVICE,
+  "src/app/order.component.ts": COMPONENT,
+  "src/app/order.component.html": TEMPLATE,
+};
+
+const SERVICE_FILE = "src/app/order.service.ts";
+const TEMPLATE_FILE = "src/app/order.component.html";
+
+let root: string;
+let scratchRoot: string;
+
+beforeEach(() => {
+  root = mkdtempSync(join(tmpdir(), "ye-ast-"));
+  scratchRoot = join(root, "scratch");
+  mkdirSync(scratchRoot);
+});
+
+afterEach(() => rmSync(root, { recursive: true, force: true }));
+
+function commit(repo: string, files: Readonly<Record<string, string>>): void {
+  for (const [path, content] of Object.entries(files)) {
+    mkdirSync(dirname(join(root, repo, path)), { recursive: true });
+    writeFileSync(join(root, repo, path), content);
+  }
+  const git = (...args: string[]) => execFileSync("git", args, { cwd: join(root, repo), env: GIT_ENV });
+  git("init", "-q", "-b", "main");
+  git("add", "-A");
+  git("commit", "-q", "-m", "base");
+}
+
+const lineOf = (text: string, needle: string): number => text.split("\n").findIndex((line) => line.includes(needle)) + 1;
+
+function workspace(): void {
+  commit("api", { "src/main/java/shop/Main.java": BOOT, "src/main/java/shop/OrdersController.java": CONTROLLER });
+  commit("web", WEB);
+}
+
+async function consequences(change: string, repos: readonly string[] = ["web"], path = "/api/orders/{id}") {
+  const result = await composeQueries({ scratchRoot }).consumers.consequences({
+    repo: { path: join(root, "api"), id: "api" },
+    repos: repos.map((id) => ({ path: join(root, id), id })),
+    hypothesis: { method: "GET", path, target: "response", property: "customer", change },
+  });
+  assert.ok(result.ok, JSON.stringify(result));
+  assert.notEqual(result.value.status, "unknown");
+  if (result.value.status === "unknown") throw new Error("unknown");  return result.value;
+}
+
+const used = (value: ConsequencesValue, line: number) => {
+  const found = value.findings.find((finding) => finding.status === "complete" && finding.evidence[0]?.line === line);
+  return found?.status === "complete" ? found.value : undefined;
+};
+
+test("a response property that becomes nullable is incompatible where a template reads through it unguarded, admitted where it is guarded, and a frontier where the response is handed on", async () => {
+  workspace();
+
+  const fact = await consequences("nullable");
+
+  assert.deepEqual(fact.value.hypothesis, { method: "GET", path: "/api/orders/{id}", target: "response", property: "customer", change: "nullable" });
+  const unguarded = used(fact.value, lineOf(TEMPLATE, "order.customer.name"));
+  assert.equal(unguarded?.verdict.kind, "incompatible");
+  assert.deepEqual(unguarded?.chain.map(({ step, evidence }) => [step, evidence.path, evidence.line]), [
+    ["http-call", SERVICE_FILE, lineOf(SERVICE, "this.http.get")],
+    ["return", SERVICE_FILE, lineOf(SERVICE, "return this.http.get")],
+    ["caller", "src/app/order.component.ts", lineOf(COMPONENT, "this.service.find")],
+    ["subscribe", "src/app/order.component.ts", lineOf(COMPONENT, "subscribe(")],
+    ["assign", "src/app/order.component.ts", lineOf(COMPONENT, "this.order = order")],
+    ["template-read", TEMPLATE_FILE, lineOf(TEMPLATE, "order.customer.name")],
+  ]);
+
+  const guarded = used(fact.value, lineOf(TEMPLATE, "order.customer?.name"));
+  assert.equal(guarded?.verdict.kind, "admits");
+
+  const handedOn = fact.value.findings.filter((finding) => finding.status === "unknown" && finding.evidence.some(({ path, line }) => path === TEMPLATE_FILE && line === lineOf(TEMPLATE, "describe(order)")));
+  assert.equal(handedOn.length, 1);
+});
+
+test("the same flow under a removed property sends the guarded read to review, because a guard no longer proves absence away", async () => {
+  workspace();
+
+  const fact = await consequences("removed");
+
+  assert.deepEqual(used(fact.value, lineOf(TEMPLATE, "order.customer?.name"))?.verdict, { kind: "review", reason: "removed-behind-guard" });
+  assert.equal(used(fact.value, lineOf(TEMPLATE, "order.customer.name"))?.verdict.kind, "incompatible");
+});
+
+test("the answer declares the hypothesis in its config and leaves no scratch behind", async () => {
+  workspace();
+
+  const nullable = await consequences("nullable");
+  const removed = await consequences("removed");
+
+  assert.equal(nullable.inputs.declaredConfig.hypothesis, "GET /api/orders/{id} response customer nullable");
+  assert.notEqual(nullable.inputs.config, removed.inputs.config);
+  assert.deepEqual(readdirSync(scratchRoot), []);
+});
+
+test("an operation no call site reaches is an answer without findings, never a failure", async () => {
+  workspace();
+
+  const fact = await consequences("nullable", ["web"], "/api/customers/{id}");
+
+  assert.deepEqual(fact.value.findings, []);
+});
