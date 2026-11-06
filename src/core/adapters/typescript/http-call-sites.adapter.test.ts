@@ -590,6 +590,14 @@ test("a method that reads its own parameters is not read, so a path it builds fr
   assert.deepEqual(sites(await reader.of([file], "shop-web")), ["unknown unresolved@helper.ts:4"]);
 });
 
+test("an override must agree whatever name the subclass's file gives the class it extends", async () => {
+  const base = source("src/app/base.ts", "export class Base { path(): string { return '/old' } }");
+  const child = source("src/app/child.ts", "import { Base as Parent } from './base'\nexport class Child extends Parent { override path(): string { return '/new' } }");
+  const use = source("src/app/use.ts", "import { Base } from './base'\nexport function load(p: Base) { return fetch(p.path()) }");
+
+  assert.deepEqual(sites(await reader.of([base, child, use], "shop-web")), ["unknown unresolved@src/app/use.ts:2"]);
+});
+
 test("a receiver a loop or a catch clause binds is not typed by an outer parameter of the same name", async () => {
   const file = source("cache.ts", [
     "import { HttpClient } from '@angular/common/http'",

@@ -105,7 +105,8 @@ a value the query names never leaves the path undecided. An argument of `encodeU
 
 A method a path calls (`pageLink.toQuery()`, `this.area()`) is read when its receiver's class is in the snapshot: `this`,
 `super`, a field or a parameter whose declared type names the class. The receiver may be any subclass, so the method the
-class declares or inherits and every override a subclass declares must write the same (`super` reads only the inherited
+class declares or inherits and every override a subclass declares must write the same, a subclass being any class whose
+`extends` resolves to that class through its own file's imports, under whatever name (`super` reads only the inherited
 one). A method that reads its own parameters is not read, since its arguments are not substituted.
 
 A function a path calls, and the function an `httpResource` takes its request from, is read at every `return` of its own

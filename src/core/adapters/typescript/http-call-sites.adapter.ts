@@ -54,6 +54,12 @@ type RunTime = ReadonlySet<string>;
  */
 type Evaluation = { readonly kind: "text"; readonly text: string; readonly cut?: true } | { readonly kind: "value" };
 
+/** A class, with the file that declares it. */
+interface HeldClass {
+  shape: FileShape;
+  declaration: ts.ClassDeclaration;
+}
+
 /** A method a class declares, with the file that declares it. */
 interface HeldMethod {
   shape: FileShape;
@@ -489,8 +495,8 @@ interface ReadTarget {
 /** Reads one file's call sites, resolving the module specifiers it meets through the snapshot. */
 class Reader {
   private readonly unsafeEncoder: boolean;
-  /** The classes of the snapshot that extend a class, by the name they extend. */
-  private readonly subclasses = new Map<string, { shape: FileShape; declaration: ts.ClassDeclaration }[]>();
+  /** The classes of the snapshot that extend a class, by the declaration their `extends` resolves to; built once, when first read. */
+  private subclassIndex: Promise<ReadonlyMap<ts.ClassDeclaration, readonly HeldClass[]>> | undefined;
 
   constructor(
     private readonly shapes: ReadonlyMap<string, FileShape>,
@@ -499,12 +505,23 @@ class Reader {
     private readonly defines: BuildDefines,
   ) {
     this.unsafeEncoder = [...shapes.values()].some((shape) => shape.unsafeEncoder);
-    for (const shape of shapes.values()) {
+  }
+
+  private async subclassesOf(declaration: ts.ClassDeclaration): Promise<readonly HeldClass[]> {
+    this.subclassIndex ??= this.indexSubclasses();
+    return (await this.subclassIndex).get(declaration) ?? [];
+  }
+
+  private async indexSubclasses(): Promise<ReadonlyMap<ts.ClassDeclaration, readonly HeldClass[]>> {
+    const index = new Map<ts.ClassDeclaration, HeldClass[]>();
+    for (const shape of this.shapes.values()) {
       for (const declaration of shape.classes.values()) {
         const base = baseClassName(declaration);
-        if (base !== undefined) this.subclasses.set(base, [...(this.subclasses.get(base) ?? []), { shape, declaration }]);
+        const extended = base === undefined ? undefined : await this.classOf(shape, base);
+        if (extended !== undefined) index.set(extended.declaration, [...(index.get(extended.declaration) ?? []), { shape, declaration }]);
       }
     }
+    return index;
   }
 
   async callSite(shape: FileShape, call: ts.CallExpression, repo: string): Promise<CallSite[]> {
@@ -827,21 +844,23 @@ class Reader {
     }
     if (!ts.isPropertyDeclaration(member)) return undefined;
     const [read] = chain;
-    const assigned = chain.some((held) => writes(held, name)) || (read !== undefined && this.assignedBelow(read, name, new Set()));
+    const assigned = chain.some((held) => writes(held, name)) || (read !== undefined && (await this.assignedBelow(read, name, new Set())));
     if (member.initializer === undefined || assigned) return ASSIGNED_AT_RUN_TIME;
     return { shape, expression: member.initializer, trail: new Set(trail).add(visited) };
   }
 
   /** Whether a subclass of the class, the instance the code may run on, declares the field again or writes it. */
-  private assignedBelow(declaration: ts.ClassDeclaration, name: string, visited: Set<ts.ClassDeclaration>): boolean {
+  private async assignedBelow(declaration: ts.ClassDeclaration, name: string, visited: Set<ts.ClassDeclaration>): Promise<boolean> {
     if (visited.has(declaration)) return false;
     visited.add(declaration);
-    const subclasses = declaration.name === undefined ? [] : (this.subclasses.get(declaration.name.text) ?? []);
-    return subclasses.some(({ declaration: subclass }) => memberNamed(subclass, name) !== undefined || writes(subclass, name) || this.assignedBelow(subclass, name, visited));
+    for (const { declaration: subclass } of await this.subclassesOf(declaration)) {
+      if (memberNamed(subclass, name) !== undefined || writes(subclass, name) || (await this.assignedBelow(subclass, name, visited))) return true;
+    }
+    return false;
   }
 
   /** The class a name states in this file, or the one an import names. */
-  private classOf(shape: FileShape, name: string): Promise<{ shape: FileShape; declaration: ts.ClassDeclaration } | undefined> {
+  private classOf(shape: FileShape, name: string): Promise<HeldClass | undefined> {
     return this.declarationOf(shape, name, (held, className) => held.classes.get(className));
   }
 
@@ -930,7 +949,7 @@ class Reader {
     if (receiver === undefined) return undefined;
     const inherited = await this.inheritedMethod(receiver.shape, receiver.declaration, callee.name.text, new Set());
     if (inherited === undefined) return undefined;
-    const overrides = receiver.virtual ? this.overrides(receiver.declaration, callee.name.text, new Set()) : [];
+    const overrides = receiver.virtual ? await this.overrides(receiver.declaration, callee.name.text, new Set()) : [];
     let agreed: Evaluation | undefined;
     for (const { shape: held, method } of [inherited, ...overrides]) {
       const visited = `${held.source.fileName}\0method ${method.pos}`;
@@ -970,14 +989,17 @@ class Reader {
   }
 
   /** The methods of that name the subclasses of a class declare, at any depth. */
-  private overrides(declaration: ts.ClassDeclaration, name: string, visited: Set<ts.ClassDeclaration>): HeldMethod[] {
-    if (visited.has(declaration) || declaration.name === undefined) return [];
+  private async overrides(declaration: ts.ClassDeclaration, name: string, visited: Set<ts.ClassDeclaration>): Promise<HeldMethod[]> {
+    if (visited.has(declaration)) return [];
     visited.add(declaration);
-    return (this.subclasses.get(declaration.name.text) ?? []).flatMap(({ shape, declaration: subclass }) => {
+    const found: HeldMethod[] = [];
+    for (const { shape, declaration: subclass } of await this.subclassesOf(declaration)) {
       const member = memberNamed(subclass, name);
       const method = member === undefined ? undefined : functionOf(member);
-      return [...(method === undefined ? [] : [{ shape, method }]), ...this.overrides(subclass, name, visited)];
-    });
+      if (method !== undefined) found.push({ shape, method });
+      found.push(...(await this.overrides(subclass, name, visited)));
+    }
+    return found;
   }
 
   private async evaluateReturned(target: FileShape, declaration: ts.Expression | ts.FunctionDeclaration | ts.MethodDeclaration, trail: ReadonlySet<string>): Promise<Evaluation | undefined> {
