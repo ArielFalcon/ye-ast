@@ -30,7 +30,7 @@ export interface FallbackGuard extends PlacedGuard {
 
 /** A construct whose test the language module does not evaluate. */
 export interface UntestedGuard extends PlacedGuard {
-  kind: "non-null-assertion" | "type-guard" | "assertion" | "instanceof";
+  kind: "non-null-assertion" | "type-guard" | "assertion" | "instanceof" | "case";
 }
 
 /** The guards of one use, in the order the value passes them. */
@@ -107,9 +107,13 @@ export function decideUse(use: UseSite, change: Change): Decision | undefined {
 function comparesRetired({ operation: { steps, end }, changed }: UseSite, retired: readonly Literal[], reaching: readonly Guard[]): boolean {
   if (retired.length === 0) return false;
   if (steps.length === 0 && end.kind === "compare" && end.literal !== undefined && STRICT.has(end.operator) && retired.includes(end.literal)) return true;
-  return reaching.some(
-    (guard) => "test" in guard && guard.kind !== "fallback" && guard.test.kind === "literal" && STRICT.has(guard.test.operator) && retired.includes(guard.test.literal) && guard.holds === (guard.test.operator === "===") && relatePaths(guard.covers, changed) === "exact",
-  );
+  return reaching.some((guard) => "test" in guard && guard.kind !== "fallback" && relatePaths(guard.covers, changed) === "exact" && requiresRetired(guard.test, guard.holds, retired));
+}
+
+/** The test must give `holds` for the use to run, and holding means a strict equality with a retired literal. */
+function requiresRetired(test: Predicate, holds: boolean, retired: readonly Literal[]): boolean {
+  if (test.kind === "one-of") return holds && test.literals.some((literal) => retired.includes(literal));
+  return test.kind === "literal" && STRICT.has(test.operator) && retired.includes(test.literal) && holds === (test.operator === "===");
 }
 
 /** The end shows the value or compares it strictly with a literal the change does not name, and no class of value runs on it or is undecided. */
@@ -121,7 +125,7 @@ function isSilent({ operation: { end } }: UseSite, { added, removed }: ValueLite
 
 /** The literals the use compares against: a fresh value must differ from each. */
 function literalsNamed({ guards, operation: { end } }: UseSite): Literal[] {
-  const named = guards.flatMap((guard) => ("test" in guard && guard.test.kind === "literal" ? [guard.test.literal] : []));
+  const named = guards.flatMap((guard) => ("test" in guard ? (guard.test.kind === "literal" ? [guard.test.literal] : guard.test.kind === "one-of" ? guard.test.literals : []) : []));
   return end.kind === "compare" && end.literal !== undefined ? [...named, end.literal] : named;
 }
 

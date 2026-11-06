@@ -10,14 +10,16 @@ export type EqualityOperator = "===" | "!==" | "==" | "!=";
 
 /**
  * What a guard tests about the value it covers, applied with the consumer language's own operators: its truthiness, an
- * equality with an absence or with a literal the code writes, the name `typeof` gives it, or whether it is an array.
+ * equality with an absence or with a literal the code writes, the name `typeof` gives it, whether it is an array, or a
+ * strict equality with any of several literals and absences, as the labels that reach one `switch` clause test it.
  */
 export type Predicate =
   | { kind: "truthy" }
   | { kind: "absence"; operator: EqualityOperator; absence: Absence }
   | { kind: "literal"; operator: EqualityOperator; literal: Literal }
   | { kind: "typeof"; operator: EqualityOperator; type: string }
-  | { kind: "array" };
+  | { kind: "array" }
+  | { kind: "one-of"; literals: readonly Literal[]; absences: readonly Absence[] };
 
 /** What a fallback puts in place of the values its test rejects: the JSON value its right side writes, or `opaque` for any other right side. */
 export type Replacement = { kind: "literal"; value: JsonValue } | { kind: "opaque" };

@@ -33,6 +33,7 @@ import {
   type TmplAstIfBlock,
   type TmplAstLetDeclaration,
   type TmplAstSwitchBlock,
+  type TmplAstSwitchBlockCase,
   type TmplAstTemplate,
   type TmplAstVariable,
   TypeofExpression,
@@ -259,10 +260,27 @@ class TemplateFlow extends CombinedRecursiveAstVisitor {
   override visitSwitchBlock(block: TmplAstSwitchBlock): void {
     const compared = consuming({ kind: "compare", operator: "===" });
     this.expr(block.expression, compared);
+    const on = this.peek(block.expression);
+    const labelsOf = (cases: readonly TmplAstSwitchBlockCase[]): AST[] => cases.flatMap((option) => (option.expression === null ? [] : [option.expression]));
     for (const group of block.groups) {
-      for (const option of group.cases) if (option.expression !== null) this.expr(option.expression, compared);
-      this.nodes(group.children);
+      for (const label of labelsOf(group.cases)) this.expr(label, compared);
+      const isDefault = group.cases.some((option) => option.expression === null);
+      const labels = isDefault ? labelsOf(block.groups.filter((other) => other !== group).flatMap((other) => other.cases)) :labelsOf(group.cases);
+      const established = on === undefined || labels.length === 0 ? [] : [this.caseGuard(on, block.expression, labels, !isDefault)];
+      this.within(established, () => this.nodes(group.children));
     }
+  }
+
+  /** The switched value strictly equals one of the labels; a label that is no literal leaves the test unmodelled. */
+  private caseGuard(on: Tracked, node: AST, labels: readonly AST[], holds: boolean): Guard {
+    const literals = labels.map(literalOf);
+    const absences = labels.map(absenceOf);
+    if (labels.some((_, index) => literals[index] === undefined && absences[index] === undefined)) return this.guard(on, node, { kind: "case" });
+    return this.guard(on, node, {
+      kind: "condition",
+      test: { kind: "one-of", literals: literals.filter((literal) => literal !== undefined), absences: absences.filter((absence) => absence !== undefined) },
+      holds,
+    });
   }
 
   override visitLetDeclaration(declaration: TmplAstLetDeclaration): void {

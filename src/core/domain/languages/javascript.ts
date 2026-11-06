@@ -116,6 +116,8 @@ function holdsOn(test: Predicate, subject: Subject): boolean | undefined {
       return equality(test.operator, typeof value, test.type);
     case "array":
       return Array.isArray(value);
+    case "one-of":
+      return test.literals.some((literal) => value === literal) || test.absences.some((absence) => value === (absence === "null" ? null : undefined));
   }
 }
 

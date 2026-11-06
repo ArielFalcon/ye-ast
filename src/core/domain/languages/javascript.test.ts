@@ -57,6 +57,15 @@ test("a predicate is applied to a representative with the language's own operato
   assert.equal(testSubject({ kind: "truthy" }, false, subjectOfLiteral("{}"), []), "rejects");
 });
 
+test("a one-of predicate is a strict equality with any of its literals and absences: no coercion, and an absence only matches itself", () => {
+  const oneOf: Predicate = { kind: "one-of", literals: [0, "a"], absences: ["null"] };
+  const holds = (literal: string) => testSubject(oneOf, true, subjectOfLiteral(literal), []);
+  assert.deepEqual(["0", '"a"', "null"].map(holds), ["passes", "passes", "passes"]);
+  assert.deepEqual(["undefined", "false", '""', "1", "[]"].map(holds), ["rejects", "rejects", "rejects", "rejects", "rejects"]);
+  assert.equal(testSubject(oneOf, false, subjectOfLiteral("0"), []), "rejects");
+  assert.equal(testSubject({ kind: "one-of", literals: [], absences: ["undefined"] }, true, subjectOfLiteral("undefined"), []), "passes");
+});
+
 test("a test of a path deeper than the value reads it first: a read that throws is its own failure, one the module cannot decide is undecided", () => {
   const truthy: Predicate = { kind: "truthy" };
   assert.equal(testSubject(truthy, true, subjectOfLiteral("null"), ["city"]), "reads-throw");

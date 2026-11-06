@@ -77,7 +77,7 @@ Recognized when they test the path up to and including the changed segment, or i
 a condition on the value (truthiness, an equality with an absence or a literal, `typeof`, `Array.isArray`) in `@if`,
 `*ngIf`, `if`, `&&`, `?:`; an early `return` or `throw` on the negation in the same block; `??` or `||` directly on the
 changed value with any right side, which replaces the values its test rejects; a destructuring default (`{ x = [] }`),
-which replaces `undefined` only. Each guard states the test it applies and where the use runs; what a guard rejects is
+which replaces `undefined` only; a `switch` clause on the covered path (see "Change algebra", Guards). Each guard states the test it applies and where the use runs; what a guard rejects is
 derived by evaluating the test, never listed. A guard on one element (`items[0]`) protects only reads of that same index. A read after
 a write to the guarded path or a prefix of it reads the written value, and one that only a guard outside its closure
 would protect is not decided where the closure runs: both are frontiers. A caller edge the code graph only guesses is
@@ -146,7 +146,8 @@ never promoted. No repository code runs.
 
 **Guards** are predicates on the values, evaluated with the language's own operators, by exact operator, operand and
 branch polarity: `x === null`, `x !== undefined`, `x != null`, truthiness, `typeof x === 'k'` (true for `null` under
-`'object'`), `Array.isArray(x)`, `x === <literal>`. They are listed in the order the value passes them and each is
+`'object'`), `Array.isArray(x)`, `x === <literal>`, and a strict equality with any of several literals and absences (`one-of`), which is
+how a `switch` clause states its labels. They are listed in the order the value passes them and each is
 applied to the value as it stands. A condition, an early exit or a `?.` lets the use run where its test gives its stated
 result on the value at the path it covers; a value on which it does not is `handled`. A guard on a path deeper than the
 changed value reads that path first with the same semantics: a read that throws leaves the value `handled` (the test is
@@ -158,6 +159,17 @@ continues on the replacement: a use that throws on it is `incompatible` and name
 fallback, and an opaque replacement goes on as an unknown value, so an end that runs on every value still runs and
 anything else is `unknown` (`opaque-replacement`). A fallback on a deeper path is followed only as far as its read. A
 guard keeps F0's path scope and reach.
+
+A use inside a clause of `switch (<covered path>)` is guarded by the clause's fallthrough group: the clauses from the
+last one whose statements end in an exit (`break`, `return`, `throw`, `continue`) up to the clause holding the use,
+since a clause with no statements, or one that does not exit, runs on into the next. Without `default` in the group, the
+use runs where the value equals one of the group's labels (`one-of` of them, branch taken); with `default` in it, where
+the value equals none of the labels outside the group (`one-of` of those, other branch). A guard is a conjunction, so a
+clause reached from several labels needs the disjunction in one predicate. A label that is no literal (string, number,
+boolean) and not `null` or `undefined` makes the guard an untested `case` guard, which handles nothing and only turns a
+throwing use into `review`. A statement after the `switch` gets nothing from it. The labels a `one-of` names are among
+the literals the use names, so no fresh value equals one, and a `one-of` that must hold and names a retired literal is
+read like a strict equality with it. The switched value itself is a use whose end is unmodelled.
 
 **Verdict,** per use: a value throws → `incompatible`, with that value as the witness, the step or end that fails on it,
 the capability it lacks (`a function at toFixed`, `an iterable`) and the replacement it came from, if any; a value runs →
@@ -196,7 +208,9 @@ independent oracle for each new change, and latency, peak memory and answer size
 3. Representative values of every class, the prototype table and step evaluation; guards as predicates by exact
    operator, operand and polarity, `typeof` and `Array.isArray` included; `type`, `wrapped`, fallback replacements and
    the replacement in the answer.
-4. `values` and `meaning`, retired literals in strict comparisons, the silent-and-counted rule. `switch` afterwards, on its own.
+4. `values` and `meaning`, retired literals in strict comparisons, the silent-and-counted rule.
+5. `switch` clauses (TypeScript) and `@switch` cases (templates) as guards: the `one-of` predicate, fallthrough groups, the
+   untested `case` guard.
 
 ## Output
 

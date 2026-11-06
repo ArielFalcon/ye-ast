@@ -282,3 +282,21 @@ test("a use under a values change keeps its finding when null or undefined also 
   const unmodelled: UseOperation = { steps: [], end: { kind: "unmodelled", detail: "x" } };
   assert.deepEqual(onChanged(unmodelled, ADD_A), { kind: "review", reason: "unmodelled-sink" });
 });
+
+test("a switch case whose labels are not literals is an opaque guard: it handles nothing and only turns a throwing use into a review", () => {
+  assert.deepEqual(decideUse(use({ guards: [untested("case")] }), NULLABLE), { kind: "review", reason: "opaque-guard" });
+});
+
+test("the literals a one-of guard names are named by the use: no fresh value equals one", () => {
+  const missing: UseOperation = { steps: [{ kind: "member", name: "missing", optional: false }, { kind: "member", name: "city", optional: false }], end: { kind: "none" } };
+  const readable = guard({ kind: "truthy" });
+  const notA = guard({ kind: "one-of", literals: ["a"], absences: [] }, { holds: false });
+  assert.equal((onChanged(missing, AS_STRING, [readable, notA]) as { witness?: string }).witness, '"aa"');
+});
+
+test("a use that runs only where a one-of naming a retired literal holds is to be reviewed, and a one-of not required to hold or naming no retired literal is not", () => {
+  const oneOf = (literals: readonly string[], holds: boolean) => guard({ kind: "one-of", literals, absences: [] }, { holds });
+  assert.deepEqual(onChanged(SHOWN, RETIRE_OLD, [oneOf(["NEW", "OLD"], true)]), { kind: "review", reason: "retired-literal" });
+  assert.deepEqual(onChanged(SHOWN, RETIRE_OLD, [oneOf(["NEW", "OLD"], false)]), { kind: "silent" });
+  assert.deepEqual(onChanged(SHOWN, RETIRE_OLD, [oneOf(["NEW"], true)]), { kind: "silent" });
+});
