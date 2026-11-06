@@ -58,19 +58,26 @@ interface ImpactImportersBase {
   signal?: AbortSignal;
 }
 
-/** A requested symbol that names no node at the revision; `entries` lists every one that does not. */
+/**
+ * A requested symbol that names no node at the revision, or a requested line range that selects no declaration (past
+ * the end of its file, or only blank and comment lines outside every declaration); `entries` lists every such target.
+ */
 export interface UnknownSymbolFault {
   kind: "unknown-symbol";
   detail: string;
-  entries: readonly {
+  entries: readonly (({ symbol: string } | { start: number; end: number }) & {
     file: string;
-    symbol: string;
     /**
      * What the file declares that could be asked instead, sorted and once each, as dotted containment paths: of the
      * seedable declarations for `callers`, of every declaration for an outline focus; empty when it declares none or is not indexed.
      */
     candidates: readonly string[];
-  }[];
+  })[];
+}
+
+/** How a fault entry names its target: `file:symbol`, or `file:start-end` for a line range. */
+export function unknownTargetKey(entry: UnknownSymbolFault["entries"][number]): string {
+  return "symbol" in entry ? `${entry.file}:${entry.symbol}` : `${entry.file}:${entry.start}-${entry.end}`;
 }
 
 /** A `changed` glob that selected none of the paths the change touches; `globs` lists every one that did not. */

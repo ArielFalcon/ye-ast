@@ -11,7 +11,7 @@ const digest = { of: (text: string) => createHash("sha256").update(text).digest(
 const sources = [
   sourceFixture("entrypoints"), sourceFixture("impact-local"), sourceFixture("callers-local"),
   sourceFixture("importers"), sourceFixture("outline"), sourceFixture("workspace"), sourceFixture("decisions"),
-  sourceFixture("impact-workspace"), sourceFixture("callers-workspace"),
+  sourceFixture("impact-workspace"), sourceFixture("callers-workspace"), sourceFixture("trace"),
 ];
 
 function compose(sets: readonly EvidenceSet[]) {
@@ -30,7 +30,7 @@ test("normalizer and materializer agree on every public family and workspace bra
     for (const decision of decisions) assert.ok(decision.decisionId);
   }
   const result = compose(sources.map((source) => normalizeSource(source, digest)));
-  assert.equal(result.graph.sources.length, 9);
+  assert.equal(result.graph.sources.length, 10);
   assert.ok(result.graph.relations.length > 0);
   assert.ok(result.graph.connections.length > 0);
 });

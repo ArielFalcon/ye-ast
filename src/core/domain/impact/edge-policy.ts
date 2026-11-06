@@ -10,7 +10,7 @@ const REFERRER_KINDS = [...CODE_KINDS, "interface", "type_alias", "route"] as co
 /** What a reference can point at and break: code, and the types that shape data (a DTO). */
 const REFERENCED_KINDS = ["function", "method", "constant", "variable", "class", "component", "interface", "type_alias", "enum"] as const;
 /** Class fields: their initializer is code that runs, so it calls and instantiates; what a field references is its type. */
-const FIELD_KINDS = ["property", "field"] as const;
+export const FIELD_KINDS = ["property", "field"] as const;
 const TYPE_KINDS = ["class", "component", "interface"] as const;
 const ANGULAR_CLASS_KINDS = ["class", "component"] as const;
 

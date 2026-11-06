@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { GraphNodeId, GraphSymbol } from "../../ports/code-graph.port.ts";
 import { createInboundEdges, type InboundEdges } from "./inbound-edges.ts";
-import { fakeCodeGraph, fakeNode, type FakeEdge, type FakeNode } from "./fake-code-graph.testing.ts";
+import { fakeCodeGraph, fakeNode, type FakeEdge, type FakeNode } from "../navigation/fake-code-graph.testing.ts";
 import type { ImpactBudget } from "../../domain/impact/impact-fact.ts";
 import { walkImpact } from "./walk.ts";
 

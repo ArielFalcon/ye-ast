@@ -93,6 +93,8 @@ export interface CodeGraphReader {
   symbolsInFiles(files: readonly string[]): readonly GraphSymbol[];
   /** The symbols `ids` name, in the same order as `symbolsInFiles`; an id the store does not know is absent. */
   symbolsByIds(ids: readonly GraphNodeId[]): readonly GraphSymbol[];
+  /** Every symbol whose name is exactly one of `names` (overloads, members and top level), in the order of `symbolsInFiles`. */
+  declarationsNamed(names: readonly string[]): readonly GraphSymbol[];
   /** Edges pointing at `targets`, optionally only of `kinds`, by target, kind, line, column and source. */
   incomingEdges(targets: readonly GraphNodeId[], kinds?: readonly string[]): readonly GraphEdge[];
   /** Edges leaving `sources`, optionally only of `kinds`, by source, kind, line, column and target. */

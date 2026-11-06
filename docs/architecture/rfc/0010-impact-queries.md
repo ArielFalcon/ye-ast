@@ -70,7 +70,10 @@ replaces `head` or `revision` under `trusted` only ([Live head](#live-head-slice
 | removed with its symbol | none at `head`: its former callers changed too in a consistent commit and are seeds themselves; a caller left behind shows as an unresolved reference naming it. The same holds for a declaration removed from a symbol that survives (a method of a class): the holder seeds, and every name the removed lines declared, in any hunk, that no added line of the file declares again (a rename loses its name, an edited signature keeps it) also leads an `unresolved-link` cut at the references that still name it |
 
 `Seed.basis` is `lines`, `top-level` or `resource`, or `requested` for a symbol `impact.callers` was asked for by name.
-A requested line range seeds through the rows above, as the added lines of a file; a requested symbol seeds every
+A requested line range seeds through the rows above, as the added lines of a file, except that a line of the range no
+symbol holds and no code is on (blank, a comment) selects nothing: a range across the gap between two declarations
+seeds those two, not the file's top-level symbols. A range left with no line at all (wholly past the end of its file,
+or only such lines) selects no declaration and is the `unknown-symbol` fault below, never an empty answer. A requested symbol seeds every
 seedable node of its file whose dotted path in the file's `contains` tree ends with it at whole names (a bare name at
 any depth, `A.m` only an `m` that `A` contains directly), so overloads all seed; a symbol that is both requested
 and inside a requested range is one seed, `requested`.
@@ -313,8 +316,9 @@ per cause:
 
 `unknown` when no answer is possible: the index cannot be built or opened (`index-unavailable`) or the diff cannot be
 read (`source-unreadable`); an unresolvable revision is a typed fault, as for `map`. A symbol `impact.callers` was asked
-for that names no node at the revision is the typed fault `unknown-symbol`, listing every such entry with the dotted
-containment paths of the seedable declarations of its file (sorted, once each, empty when the file declares none or is not indexed), so the caller sees
+for that names no node at the revision, or a line range that selects no declaration, is the typed fault
+`unknown-symbol`, listing every such entry (`{file, symbol}` or `{file, start, end}`) with the dotted containment
+paths of the seedable declarations of its file (sorted, once each, empty when the file declares none or is not indexed), so the caller sees
 what it could have asked for; the CLI exits as
 for an unresolvable revision. A requested line range in a file that is not a covered source (a test, an uncovered
 language, a template no component names) is a `no-extractor` cut at that file, never an empty answer.
@@ -335,7 +339,7 @@ collide with an unresolved reference outside test files, so `unresolved-link` cu
 | the index | the staged content digest plus engine versions ([ADR-0015](../adr/0015-index-reuse-by-content.md)) | always; immutable |
 | per-index tables: entrypoint join, unresolved references by name tail, fan-in, derived bridges | the index key plus the map's inputs | always; immutable |
 | a fact at a sha | its `inputs` | yes, unless a deadline cut it; never an `unknown(index-unavailable)` |
-| a fact on a live tree | `stateId` | never; the mirror is refreshed on every query ([Live head](#live-head-slice-3)); its inputs record the index origin. What it reads from the capture is retained by the capture's listing ([ADR-0029](../adr/0029-live-captures-use-the-snapshot-data-cache.md)) |
+| a fact on a live tree | `stateId` | never; the mirror is refreshed on every query ([Live head](#live-head-slice-3)); its inputs record the index origin. What it reads from the capture is retained by the capture's listing ([ADR-0030](../adr/0030-live-captures-use-the-snapshot-data-cache.md)) |
 | a moved `base` | resolved to a sha on every call | the `head` index is reused; only the seeds are recomputed |
 
 No closure or reverse adjacency is precomputed: codegraph indexes edges by target and kind, and a walk is cheap
@@ -402,7 +406,7 @@ ids below are computed in process.
     content and the `stateId`.
   - An edit that keeps a file's size and nanosecond mtime goes unseen, by ye-ast and by codegraph's `sync`
     (codegraph 1.6.2 `extraction/index.js:3183-3200`). The fact never claims more freshness than the index holds.
-    The retained snapshot data of a live capture ([ADR-0029](../adr/0029-live-captures-use-the-snapshot-data-cache.md))
+    The retained snapshot data of a live capture ([ADR-0030](../adr/0030-live-captures-use-the-snapshot-data-cache.md))
     rests on the same assumption and adds no other: its key is the manifest's blob ids.
 
 **The change.** The change is `merge-base(base, HEAD)` against the live listing: staged, unstaged and untracked
@@ -505,7 +509,7 @@ named, since only hashing the changed files would tell. The fact itself is uncha
 
 **No live fact cache; retained snapshot data.** A live fact is built afresh on every call. What a live query reads from
 the reconciled capture (sources, findings, relations, module dependencies) comes from the snapshot data cache
-([ADR-0029](../adr/0029-live-captures-use-the-snapshot-data-cache.md), amending ADR-0020 decision 6). The lock, the
+([ADR-0030](../adr/0030-live-captures-use-the-snapshot-data-cache.md), amending ADR-0020 decision 6). The lock, the
 fresh listing, the reconcile, the staleness re-list and the retention sweep still run on every call; the cache is
 consulted after the reconcile and keyed by the repository, scope, trust and the capture's whole listing (blob ids,
 `written` flags, skipped entries), never by HEAD. A file whose stat moved but whose bytes did not keeps its blob id and so

@@ -13,6 +13,7 @@ import type { Entrypoint } from "../core/domain/entrypoints/entrypoint.ts";
 import type { ImpactValue } from "../core/domain/impact/impact-fact.ts";
 import type { ImportedFile, ImportersValue } from "../core/domain/impact/importers-fact.ts";
 import type { OutlineDeclaration, OutlineValue } from "../core/domain/outline/outline-fact.ts";
+import type { TraceValue } from "../core/domain/trace/trace-fact.ts";
 import type { CallSite } from "../core/domain/topology/call-site.ts";
 import type { Link } from "../core/domain/topology/link.ts";
 import type { Decision } from "../core/domain/decisions/decision.ts";
@@ -74,6 +75,7 @@ function contextOf(source: ExecutedSource): SourceContext {
     }
     case "importers":
     case "outline":
+    case "trace":
       return fresh(recoveryContext(fact, selected));
     case "workspace":
     case "decisions":
@@ -257,6 +259,8 @@ function adapt(source: ExecutedSource, b: Builder, root: ReadContext): readonly 
       return local(b, root, source.read.fact, (value) => importers(b, root, value));
     case "outline":
       return local(b, root, source.read.fact, (value) => outline(b, root, value));
+    case "trace":
+      return local(b, root, source.read.fact, (value) => trace(b, root, value));
     case "workspace":
       return workspace(b, root, source.read.fact);
     case "decisions":
@@ -504,6 +508,36 @@ function importers(b: Builder, root: ReadContext, value: ImportersValue): void {
   });
 }
 
+/** Every step anchored at its declaration, so a trace joins the other answers about the same declarations. */
+function trace(b: Builder, root: ReadContext, value: TraceValue): void {
+  value.roots.forEach(({ target, steps }, index) => b.part({ kind: "trace-root", target, steps }, root.id, [`/value/roots/${index}`]));
+  value.steps.forEach((step, index) => {
+    const pointer = `/value/steps/${index}`;
+    const anchor = b.anchor(root.here, { path: step.file, symbol: step.symbol, line: step.line, ...(step.endLine === undefined ? {} : { endLine: step.endLine }) }, root.id, pointer, `${pointer}/file`);
+    /** A leaf spans `start`-`end` and anchors as a step of one line would, so both join the same declaration. */
+    const leaves = step.leaves?.map((leaf, k) => {
+      const at = `${pointer}/leaves/${k}`;
+      const leafAnchor = b.anchor(root.here, { path: leaf.file, symbol: leaf.symbol, line: leaf.start, ...(leaf.end === leaf.start ? {} : { endLine: leaf.end }) }, root.id, at, `${at}/file`);
+      return { anchor: leafAnchor, ...(leaf.deferred === undefined ? {} : { deferred: leaf.deferred }) };
+    });
+    b.part({
+      kind: "trace-step", anchor, kindName: step.kind, step: step.id, depth: step.depth,
+      ...(step.parent === undefined ? {} : { parent: step.parent }),
+      ...(step.seen === undefined ? {} : { seen: step.seen }),
+      ...(step.at === undefined ? {} : { at: step.at }),
+      ...(step.via === undefined ? {} : { via: step.via }),
+      ...(step.deferred === undefined ? {} : { deferred: step.deferred }),
+      ...(leaves === undefined ? {} : { leaves }),
+      ...(step.external === undefined ? {} : { external: step.external }),
+    }, root.id, [pointer]);
+  });
+  value.readingPlan.ranges.forEach(({ file, start, end, steps }, index) => {
+    const pointer = `/value/readingPlan/ranges/${index}`;
+    b.part({ kind: "reading-range", file: b.file(root.here, file, root.id, `${pointer}/file`), start, end, steps }, root.id, [pointer]);
+  });
+  b.part({ kind: "trace-totals", owner: root.id, lines: value.readingPlan.lines, expanded: value.cost.expanded }, root.id, ["/value/readingPlan/lines", "/value/cost"]);
+}
+
 function outline(b: Builder, root: ReadContext, value: OutlineValue): void {
   const declared = (path: string, fileAt: string, declaration: OutlineDeclaration, at: string): PartId => {
     const anchor = b.anchor(root.here, { path, symbol: declaration.name, line: declaration.line, endLine: declaration.endLine }, root.id, at, fileAt);
@@ -518,15 +552,13 @@ function outline(b: Builder, root: ReadContext, value: OutlineValue): void {
     const pointer = `/value/files/${index}`;
     const file = b.file(root.here, held.file, root.id, `${pointer}/file`);
     const declarations = held.declarations.map((declaration, j) => declared(held.file, `${pointer}/file`, declaration, `${pointer}/declarations/${j}`));
-    const imports = held.imports.map(({ target, bindings, specifier, form, ...statement }, j): OutlineImportRecord => {
+    const imports = held.imports.map(({ target, bindings, ...statement }, j): OutlineImportRecord => {
       const at = `${pointer}/imports/${j}`;
       const dependency = target.kind === "repository"
         ? { kind: "repository" as const, dependency: b.part({ kind: "file-dependency", from: file, to: b.file(root.here, target.file, root.id, `${at}/target/file`), category: "outline-import" }, root.id, [`${at}/target`]) }
         : target;
       return {
         ...statement,
-        ...(specifier === undefined ? {} : { specifier }),
-        ...(form === undefined ? {} : { form }),
         target: dependency,
         bindings: bindings.map(({ declaration, ...binding }, k) => {
           if (declaration === undefined) return binding;

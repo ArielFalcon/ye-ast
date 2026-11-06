@@ -1,6 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createImportOrigins } from "./import-origins.adapter.ts";
+import { sourceTree } from "./source-tree.ts";
+import ts from "typescript";
 import type { ImportOrigin } from "../../domain/relations/resolved-reference.ts";
 import type { Finding } from "../../domain/shared/fact.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
@@ -236,6 +238,18 @@ test("an import-equals require binds its name to the module it names, unless the
   ]);
 });
 
+test("a reader parses a file once however many times its sites are asked, and answers each ask the same", async () => {
+  const parsed: string[] = [];
+  const reader = createImportOrigins(SOURCES, (file) => (parsed.push(file.path), sourceTree({ ...file }, ts.ScriptTarget.Latest, true)));
+  const ask = (line: number, name: string) => reader.origins([{ file: PAGE.path, line, column: 1, name, fullName: name, kind: "calls" }]);
+
+  const answers = [await ask(11, "Store"), await ask(12, "helper"), await ask(11, "Store")];
+
+  assert.deepEqual(parsed, [PAGE.path]);
+  assert.deepEqual(answers[0], answers[2]);
+  assert.deepEqual(only(answers[1]!), { status: "complete", value: { kind: "repository", file: "src/local.ts" }, occurrence: true, evidence: [{ path: "src/page.ts", line: 12 }] });
+});
+
 /** A class whose method shares a library global's name, called as the graph spells it: the bare name, at the call. */
 const OWN_CALLS = [
   "export class Svc {",
@@ -352,19 +366,73 @@ async function parameterRootOf(body: string): Promise<RootOrigin> {
   return only(await createImportOrigins([{ path: file, content: text }]).rootOrigins([{ file, line, column: lines[line - 1]!.lastIndexOf("redact(") + 1, kind: "calls", name: "redact" }]));
 }
 
-test("a call inside a class, its static block or a property initializer is not proven to use a parameter of the function around the class", async () => {
-  const plain = await parameterRootOf("  return redact('x');");
-  assert.equal(plain.status === "complete" && plain.value.kind, "local-parameter");
+test("a call reaches the parameter of the function around it through a closure or a class, unless a declaration in between rebinds its name", async () => {
   for (const body of [
-    "  class Holder {\n    static {\n      const redact = (s: string) => s;\n      redact('x');\n    }\n  }",
+    "  return redact('x');",
+    "  return () => redact('x');",
+    "  return [1].map(() => () => redact('x'));",
     "  class Holder {\n    static {\n      redact('x');\n    }\n  }",
     "  class Holder {\n    value = redact('x');\n  }",
+  ]) {
+    const root = await parameterRootOf(body);
+    assert.equal(root.status === "complete" && root.value.kind, "local-parameter", body);
+  }
+  for (const body of [
+    "  class Holder {\n    static {\n      const redact = (s: string) => s;\n      redact('x');\n    }\n  }",
     "  const inner = () => {\n    const redact = (s: string) => s;\n    redact('x');\n  };",
     "  const named = function redact() {\n    redact('x');\n  };",
+    "  function redact(s: string) {\n    return s;\n  }\n  redact('x');",
+    "  var redact = (s: string) => s;\n  redact('x');",
+    "  if (Date.now() > 0) {\n    var redact = (s: string) => s;\n  }\n  redact('x');",
+    "  class redact {}\n  redact('x');",
   ]) {
     const root = await parameterRootOf(body);
     assert.notEqual(root.status === "complete" && root.value.kind, "local-parameter", body);
   }
+});
+
+test("a call inside with, or in a script that calls eval directly around it, is never proven a parameter; strict code or an indirect eval is", async () => {
+  const cases = [
+    { file: "src/with.ts", text: "function run(redact: () => void) { with (other) { redact(); } }\n", local: false },
+    { file: "src/sloppy.ts", text: "function run(redact: () => void) { eval('var redact = 1'); redact(); }\n", local: false },
+    { file: "src/sloppy-outer.ts", text: "function run(redact: () => void) { eval('x'); return () => redact(); }\n", local: false },
+    { file: "src/parenthesized.ts", text: "function run(redact: () => void) { (eval)('var redact = 1'); return () => redact(); }\n", local: false },
+    { file: "src/asserted.ts", text: "function run(redact: () => void) { (eval as any)('var redact = 1'); return redact(); }\n", local: false },
+    { file: "src/non-null.ts", text: "function run(redact: () => void) { eval!('var redact = 1'); return redact(); }\n", local: false },
+    { file: "src/satisfies.ts", text: "function run(redact: () => void) { (eval satisfies unknown)('var redact = 1'); return redact(); }\n", local: false },
+    { file: "src/angle.ts", text: "function run(redact: () => void) { (<any>eval)('var redact = 1'); return redact(); }\n", local: false },
+    { file: "src/comma.ts", text: "function run(redact: () => void) { (0, eval)('x'); redact(); }\n", local: true },
+    { file: "src/optional.ts", text: "function run(redact: () => void) { eval?.('x'); redact(); }\n", local: true },
+    { file: "src/directive.ts", text: "function run(redact: () => void) { 'use strict'; eval('x'); redact(); }\n", local: true },
+    { file: "src/module.ts", text: "export function run(redact: () => void) { eval('x'); redact(); }\n", local: true },
+    { file: "src/class.ts", text: "class Runner { run(redact: () => void) { eval('x'); redact(); } }\n", local: true },
+  ];
+  for (const { file, text, local } of cases) {
+    const [root] = await createImportOrigins([{ path: file, content: text }]).rootOrigins([{ file, line: 1, column: text.lastIndexOf("redact()") + 1, kind: "calls", name: "redact" }]);
+    assert.equal(root!.status === "complete" && root!.value.kind === "local-parameter", local, file);
+  }
+});
+
+test("a shorthand property that passes a parameter on is a use of the parameter", async () => {
+  const file = "src/shorthand.ts";
+  const text = "export function wrap(redact: () => void) { return { redact }; }\n";
+  const [root] = await createImportOrigins([{ path: file, content: text }]).rootOrigins([{ file, line: 1, column: text.lastIndexOf("redact") + 1, kind: "references", name: "redact" }]);
+
+  assert.equal(root!.status === "complete" && root!.value.kind, "local-parameter");
+});
+
+test("a parameter is proven beside one with a default, a rest or a destructuring, never when it has one itself", async () => {
+  const file = "src/siblings.ts";
+  const lines = [
+    "export function defaultRun(redact: () => number, other = 0) { return redact(); }",
+    "export function restRun(redact: () => number, ...others: number[]) { return redact(); }",
+    "export function shapedRun(redact: () => number, { size }: { size: number }) { return redact(); }",
+    "export function ownDefault(redact = () => 1) { return redact(); }",
+  ];
+  const text = `${lines.join("\n")}\n`;
+  const roots = await createImportOrigins([{ path: file, content: text }]).rootOrigins(lines.map((line, index) => ({ file, line: index + 1, column: line.lastIndexOf("redact(") + 1, kind: "calls", name: "redact" })));
+
+  assert.deepEqual(roots.map((root) => root.status === "complete" && root.value.kind), ["local-parameter", "local-parameter", "local-parameter", false]);
 });
 
 test("a call inside a block, a catch clause or a loop that rebinds the parameter's name is not proven to use the parameter", async () => {
@@ -401,22 +469,14 @@ async function globalRootOf(defining: SourceFile, expression: string, kind: stri
 
 const script = (content: string): SourceFile => ({ path: "src/script.ts", content });
 
-test("a library name a script's top-level class declares is the repository's own global, so it is unknown", async () => {
-  assert.equal((await globalRootOf(script("class URL {\n  constructor(path: string) {}\n}\n"), 'new URL("/orders")', "instantiates", "URL")).status, "unknown");
-});
-
-test("a library name a script's top-level function declares is the repository's own global, so it is unknown", async () => {
-  assert.equal((await globalRootOf(script("function fetch(): void {}\n"), "fetch()", "calls", "fetch")).status, "unknown");
-});
-
 test("a library name a script's top-level variable statement binds, by var, let, const or destructuring, is the repository's own global", async () => {
   for (const [declaration, name] of [["var Intl = 1;", "Intl"], ["let Reflect = 1;", "Reflect"], ["const { Proxy } = { Proxy: 1 };", "Proxy"]] as const) {
     assert.equal((await globalRootOf(script(`${declaration}\n`), name, "references", name)).status, "unknown", declaration);
   }
 });
 
-test("a library name a script's top-level enum, interface, type or namespace declares is the repository's own global", async () => {
-  for (const [declaration, name] of [["enum Date { A }", "Date"], ["interface Map { own: true }", "Map"], ["type WeakRef = string;", "WeakRef"], ["namespace Atomics { export const own = 1; }", "Atomics"]] as const) {
+test("a library name a script's top-level class, function, enum, interface, type, namespace or import alias declares is the repository's own global", async () => {
+  for (const [declaration, name] of [["class URL {}", "URL"], ["function fetch(): void {}", "fetch"], ["enum Date { A }", "Date"], ["interface Map { own: true }", "Map"], ["type WeakRef = string;", "WeakRef"], ["namespace Atomics { export const own = 1; }", "Atomics"], ["namespace N { export const y = 1; }\nimport Symbol = N.y;", "Symbol"]] as const) {
     assert.equal((await globalRootOf(script(`${declaration}\n`), name, "references", name)).status, "unknown", declaration);
   }
 });

@@ -22,7 +22,7 @@ export function readOutline(store: CodeGraphReader, requested: readonly string[]
   const files: OutlineFile[] = [];
   const unheld: string[] = [];
   const cuts: Cut[] = [];
-  const unproved: UnresolvedPlace[] = [];
+  const unproved: ReturnType<typeof unprovedBindings> = [];
   const statements = Map.groupBy(modules.dependencies, (dependency) => dependency.file);
   const references = Map.groupBy(modules.untraversed ?? [], (reference) => reference.file);
   const unread = new Set(modules.unread.map(({ file }) => file));
@@ -36,7 +36,8 @@ export function readOutline(store: CodeGraphReader, requested: readonly string[]
     if (unread.has(file) || !read.has(file)) cuts.push({ kind: "no-extractor", at: [file] });
     const dependencies = statements.get(file) ?? [];
     const reached = importBindings(store, file, dependencies);
-    const placed = [...dependencies.map((dependency) => ({ ...dependency, entry: imported(dependency, reached, unproved) })), ...(references.get(file) ?? []).map((reference) => ({ ...reference, entry: referenced(reference) }))];
+    unproved.push(...unprovedBindings(dependencies, reached));
+    const placed = [...dependencies.map((dependency) => ({ ...dependency, entry: imported(dependency, reached) })), ...(references.get(file) ?? []).map((reference) => ({ ...reference, entry: referenced(reference) }))];
     files.push({
       file,
       declarations: containmentTree(store, nodes).map(outlined),
@@ -46,12 +47,17 @@ export function readOutline(store: CodeGraphReader, requested: readonly string[]
   return { value: { files, unheld }, cuts: [...cuts, ...unresolvedPlaceCuts(unproved, "unresolved")] };
 }
 
-type UnresolvedPlace = Parameters<typeof unresolvedPlaceCuts>[0][number];
+function unprovedBindings(dependencies: readonly ModuleDependency[], reached: ReadonlyMap<ModuleBinding, GraphSymbol>) {
+  return dependencies.flatMap((dependency) =>
+    dependency.target.kind === "repository"
+      ? dependency.bindings.filter((binding) => !reached.has(binding) && binding.imported !== "*").map((binding) => ({ file: dependency.file, line: binding.line, reason: binding.local ?? binding.imported }))
+      : [],
+  );
+}
 
-function imported(dependency: ModuleDependency, reached: ReadonlyMap<ModuleBinding, GraphSymbol>, unproved: UnresolvedPlace[]): OutlineImport {
+function imported(dependency: ModuleDependency, reached: ReadonlyMap<ModuleBinding, GraphSymbol>): OutlineImport {
   const bindings = dependency.bindings.map((binding): OutlineBinding => {
     const declaration = reached.get(binding);
-    if (declaration === undefined && dependency.target.kind === "repository" && binding.imported !== "*") unproved.push({ file: dependency.file, line: binding.line, reason: binding.local ?? binding.imported });
     return {
       ...(binding.local === undefined ? {} : { local: binding.local }),
       imported: binding.imported,

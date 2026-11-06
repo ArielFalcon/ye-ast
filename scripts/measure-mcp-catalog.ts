@@ -10,6 +10,7 @@ const session = await openSession(createMcpServer({
   entrypoints: unused<McpDeps["entrypoints"]>(),
   impact: unused<McpDeps["impact"]>(),
   outline: unused<McpDeps["outline"]>(),
+  trace: unused<McpDeps["trace"]>(),
   workspace: unused<McpDeps["workspace"]>(),
   workspaceImpact: unused<McpDeps["workspaceImpact"]>(),
   decisions: unused<McpDeps["decisions"]>(),

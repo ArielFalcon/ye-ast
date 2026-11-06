@@ -79,6 +79,7 @@ function spies(overrides: Overrides = {}): { deps: QueryExecutionDeps; calls: Ca
       importers: async (r: ImpactImportersRequest) => (calls.importers.push(r), { ok: true, value: { ...base(r.repoId), status: "complete", value: { files: [] } } }),
     },
     outline: { outline: async (r: OutlineRequest) => (calls.outline.push(r), { ok: true, value: { ...base(r.repoId), status: "complete", value: { files: [], unheld: [] } } }) },
+    trace: { walk: async () => assert.fail("trace not expected") },
     workspace: { outwardNames: async (r) => (calls.outwardNames.push(r), overrides.outwardNames ? overrides.outwardNames(r) : { ok: true, value: workspaceRead(r.repo.id!) }) },
     workspaceImpact: {
       callers: async (r) => (calls.workspaceCallers.push(r), overrides.workspaceCallers ? overrides.workspaceCallers(r) : { ok: true, value: workspaceImpactRead(r.repo.id!) }),

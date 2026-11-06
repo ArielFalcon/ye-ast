@@ -1,10 +1,12 @@
+import { unknownTargetKey } from "../../ports/impact-queries.port.ts";
+import type { SourceTrivia } from "../../ports/source-trivia.port.ts";
 import type { DeclarationEvidenceReader } from "../../ports/declaration-evidence.port.ts";
 import { blastRadius, type BlastRadius } from "../../domain/change/blast-radius.ts";
 import { isReadableFile, kindOfChangedFile } from "../../domain/change/changed-file.ts";
 import { selectChange } from "../../domain/change/change-selection.ts";
 import { resourceImpact, resourceOwners } from "../../domain/change/resource-impact.ts";
 import type { FileChange } from "../../domain/change/diff-reader.ts";
-import { isSeedable, selectSeeds, type ComponentRef, type SelectedSeed } from "../../domain/change/seeds.ts";
+import type { ComponentRef } from "../../domain/change/seeds.ts";
 import { changedContracts, servedContracts } from "../../domain/impact/changed-contracts.ts";
 import { changedEntrypoints } from "../../domain/impact/changed-entrypoints.ts";
 import { unresolvedPlaceCuts, removedDeclarationCuts, unreadRelationCuts, unresolvedLinkCuts, type UnreadRelation } from "../../domain/impact/impact-cuts.ts";
@@ -20,8 +22,6 @@ import { moduleImpact, moduleResources } from "../../domain/impact/module-impact
 import type { ModuleDependencies } from "../../domain/impact/module-dependency.ts";
 import type { ModuleDependenciesReader } from "../../ports/module-dependencies.port.ts";
 import { cutsCompleteness } from "../../domain/languages/uncovered.ts";
-import { comparePosition, compareText } from "../../domain/shared/code-node.ts";
-import { branchesOf, declarationPath, selectedBySymbol, type DeclarationBranch } from "../../domain/shared/declaration-tree.ts";
 import type { Entrypoint } from "../../domain/entrypoints/entrypoint.ts";
 import { declarationSpan, sortedEngines, type Cut, type DeclaredConfig, type Evidence, type Fact, type FactBase, type Finding, type IndexOrigin, type SnapshotRef, type TrustMode, type UnknownFact } from "../../domain/shared/fact.ts";
 import { canonicalJson } from "../../domain/shared/canonical-json.ts";
@@ -34,7 +34,7 @@ import type { CodeGraph, CodeGraphReader, GraphNodeId, GraphSymbol, GraphUnresol
 import type { DynamicLoad, DynamicLoadReader } from "../../ports/dynamic-loads.port.ts";
 import type { Digest } from "../../ports/digest.port.ts";
 import type { IndexCache } from "../../ports/index-cache.port.ts";
-import type { CallersTarget, ImpactFault, ImpactOfChangeRequest, ImpactQueries, OfChangeFault, UnknownSymbolFault } from "../../ports/impact-queries.port.ts";
+import type { ImpactFault, ImpactOfChangeRequest, ImpactQueries, OfChangeFault, UnknownSymbolFault } from "../../ports/impact-queries.port.ts";
 import type { AtRevision, LiveSelector } from "../../ports/live-queries.port.ts";
 import type { PathMatcher } from "../../ports/path-matcher.port.ts";
 import { isEngineConfiguration } from "../../ports/staging-rules.ts";
@@ -45,13 +45,13 @@ import { ABORTED, extractCommit, factBaseOf, trustOf, withScratch, type CommitEx
 import { createHeadReader, preparedLive, withLiveCapture, type FactSpec, type HeadIndex, type HeadReaderDeps, type HeadReading, type Revisioned } from "../snapshot/head-reading.ts";
 import { readImporters } from "./importers.ts";
 import { inboundEdgesOf } from "./inbound-origins.ts";
-import { edgeKey, type EdgeCorrections, type FollowedEdge, type InboundEdges } from "./inbound-edges.ts";
+import type { EdgeCorrections, InboundEdges } from "./inbound-edges.ts";
 import { memberProofContextOf, referenceProofsOf, unresolvedOf, type ReferenceProofs } from "./reference-origins.ts";
 import { walkImpact, type Walk } from "./walk.ts";
 import type { ImportOrigins, ImportOriginsReader } from "../../ports/import-origins.port.ts";
-import { createEdgeTargets, type EdgeTargets, type EdgeTargetsDeps } from "./edge-targets.ts";
+import { createEdgeTargets, edgeKey, type EdgeTargets, type EdgeTargetsDeps, type FollowedEdge } from "../navigation/edge-targets.ts";
 import type { ContractRoutes } from "../../ports/contract-routes.port.ts";
-import { containmentTree } from "../navigation/containment-tree.ts";
+import { distinctTargets, evidenceOfTarget, missingTargets, rangeChanges, requestedRanges, selectRoots, targetKey } from "../navigation/root-selection.ts";
 import { prepareCommit } from "../snapshot/prepared-snapshot.ts";
 import type { UnmodelledConstructsReader } from "../../ports/unmodelled-constructs.port.ts";
 import { unmodelledNote } from "../../domain/shared/unmodelled.ts";
@@ -73,6 +73,8 @@ export interface ImpactQueriesDeps extends HeadReaderDeps {
    * repository stops being a cut (`RFC-0016` gap A). Without it every answer is the one ye-ast gave before.
    */
   importOrigins?: ImportOriginsReader;
+  /** Tells the trivia lines of a requested range apart; without it every line of a range is code. */
+  sourceTrivia?: SourceTrivia;
   moduleDependencies?: ModuleDependenciesReader;
   declarationEvidence?: DeclarationEvidenceReader;
   /** The changed or targeted files whose declarations the graph cannot place; without it no such file is cut. */
@@ -80,6 +82,8 @@ export interface ImpactQueriesDeps extends HeadReaderDeps {
 }
 
 type Answer = Result<Fact<ImpactValue>, OfChangeFault>;
+
+const NO_TRIVIA: SourceTrivia = { triviaLines: async () => new Set() };
 
 
 export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
@@ -142,11 +146,14 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
         if ("fault" in index) return { ok: false, fault: index.fault };
         const { store, summary } = index;
         try {
-          const missing = missingTargets(store, requested);
+          const unknown = missingTargets(store, requested);
+          const ranges = await requestedRanges(store, changes, headTree.sources, deps.sourceTrivia ?? NO_TRIVIA);
+          if (signal?.aborted) return ABORTED;
+          const missing = [...unknown, ...ranges.uncovered];
           if (missing.length > 0) {
-            const names = missing.map(({ file, symbol }) => `${file}:${symbol}`).join(", ");
-            const unmodelled = await unmodelledIn(deps, headTree, missing.map(({ file }) => file));
-            return { ok: false, fault: { kind: "unknown-symbol", detail: `no symbol at the revision for ${names}${unmodelledNote(missing, unmodelled)}`, entries: missing } };
+            const names = missing.map(unknownTargetKey).join(", ");
+            const unmodelled = await unmodelledIn(deps, headTree, unknown.map(({ file }) => file));
+            return { ok: false, fault: { kind: "unknown-symbol", detail: `no symbol at the revision for ${names}${unmodelledNote(unknown, unmodelled)}`, entries: missing } };
           }
           const { relations: found, fields, locals, memberUses } = await relationsOf(head.prepared, headTree, request);
           if (signal?.aborted) return ABORTED;
@@ -158,7 +165,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
           if (signal?.aborted) return ABORTED;
           const unmodelled = await unmodelledIn(deps, headTree, [...changes.map(({ path }) => path), ...requested.map(({ file }) => file)]);
           if (signal?.aborted) return ABORTED;
-          const read = await impactOf({ store, changes, requested, componentsByResource, found, fields, locals, memberUses, loads, headTree, summary, unresolved, budget: request.budget ?? {}, proofs, unmodelled, origins, modules: deps.moduleDependencies === undefined ? undefined : { reader: deps.moduleDependencies, sources: headTree.sources }, signal });
+          const read = await impactOf({ store, changes: ranges.changes, requested, componentsByResource, found, fields, locals, memberUses, loads, headTree, summary, unresolved, budget: request.budget ?? {}, proofs, unmodelled, origins, modules: deps.moduleDependencies === undefined ? undefined : { reader: deps.moduleDependencies, sources: headTree.sources }, signal });
           if (signal?.aborted) return ABORTED;
           return { ok: true, value: impactFact(head.base(content, true), read.value, [...fixed, ...read.cuts]) };
         } finally {
@@ -421,33 +428,6 @@ function unknownFact(base: FactBase, reason: "index-unavailable" | "source-unrea
 }
 
 
-/** The targets once each, in a fixed order, so the same request in any order is the same fact. */
-function distinctTargets(targets: readonly CallersTarget[]): CallersTarget[] {
-  const byKey = new Map(targets.map((target) => [JSON.stringify(target), target]));
-  return [...byKey].sort(([a], [b]) => compareText(a, b)).map(([, target]) => target);
-}
-
-function targetKey(target: CallersTarget): string {
-  return "start" in target ? `${target.file}:${target.start}-${target.end}` : `${target.file}:${target.symbol}`;
-}
-
-function evidenceOfTarget(target: CallersTarget): Evidence {
-  return "start" in target ? { path: target.file, line: target.start, endLine: target.end } : { path: target.file, line: 1 };
-}
-
-/** The requested line ranges as the added lines of unchanged files, so they seed as changed lines do. */
-function rangeChanges(targets: readonly CallersTarget[]): FileChange[] {
-  const ranges = targets.flatMap((target) => ("start" in target ? [target] : []));
-  return [...Map.groupBy(ranges, ({ file }) => file)]
-    .map(([path, inFile]): FileChange => ({ path, deleted: false, binary: false, added: inFile.map(({ start, end }) => ({ start, end })), removals: [], removedNames: [] }))
-    .sort((a, b) => compareText(a.path, b.path));
-}
-
-/** The dotted paths of what a file declares that a request can seed, so a symbol that names no node tells the caller what does. */
-function candidatesOf(tree: readonly DeclarationBranch<GraphSymbol>[]): string[] {
-  return sortedUnique(branchesOf(tree).filter(({ declaration }) => isSeedable(declaration)).map(declarationPath));
-}
-
 /** Which of `files` the graph cannot place, read from the head's own sources of those files only. */
 async function unmodelledIn(deps: ImpactQueriesDeps, headTree: CommitExtraction, files: readonly string[]): Promise<readonly string[]> {
   if (deps.unmodelled === undefined) return [];
@@ -490,32 +470,12 @@ interface ImpactRead {
   cuts: Cut[];
 }
 
-/**
- * The requested symbols that name no seedable declaration of their file, each with the file's dotted paths as
- * candidates; read from the store alone, so a wrong name fails before any reader runs over the snapshot.
- */
-function missingTargets(store: CodeGraphReader, requested: readonly { file: string; symbol: string }[]): UnknownSymbolFault["entries"] {
-  const files = [...new Set(requested.map(({ file }) => file))];
-  const byFile = Map.groupBy(store.symbolsInFiles(files), (symbol) => symbol.file);
-  const trees = new Map(files.map((file) => [file, containmentTree(store, byFile.get(file) ?? [])]));
-  return requested
-    .filter((target) => selectedBySymbol(trees.get(target.file) ?? [], target.symbol).every(({ declaration }) => !isSeedable(declaration)))
-    .map((target) => ({ ...target, candidates: candidatesOf(trees.get(target.file) ?? []) }));
-}
 
 async function impactOf(input: WalkInput): Promise<ImpactRead> {
   const { store, changes, requested, componentsByResource, found, fields, locals, memberUses, loads, headTree, summary, unresolved } = input;
-  const sourceChanges = changes.filter((file) => kindOfChangedFile(file.path) === "source" && !file.deleted).map((file) => file.path);
-  const componentFiles = changes.flatMap((file) => (componentsByResource.get(file.path) ?? []).map((component) => component.file));
-  const symbols = store.symbolsInFiles([...new Set([...sourceChanges, ...componentFiles, ...requested.map(({ file }) => file)])]);
-  const symbolsByFile = Map.groupBy(symbols, (symbol) => symbol.file);
-  const trees = new Map([...new Set(requested.map(({ file }) => file))].map((file) => [file, containmentTree(store, symbolsByFile.get(file) ?? [])]));
-  const asked = requested.map((target) => ({ target, found: selectedBySymbol(trees.get(target.file) ?? [], target.symbol).map(({ declaration }) => declaration).filter(isSeedable) }));
+  const selection = selectRoots(store, changes, requested, componentsByResource);
 
-  const selection = selectSeeds({ files: changes }, symbolsByFile, componentsByResource);
-  const requestedSymbols = new Set(asked.flatMap(({ found: nodes }) => nodes));
-  const chosen = [...[...requestedSymbols].map((symbol): SelectedSeed<GraphSymbol> => ({ symbol, basis: "requested" })), ...selection.seeds.filter(({ symbol }) => !requestedSymbols.has(symbol))];
-  const seeds = chosen.toSorted((a, b) => comparePosition(a.symbol, b.symbol));
+  const { seeds } = selection;
   const build = (corrections: EdgeCorrections): InboundEdges => inboundEdgesOf(store, { relations: found, fields, locals, memberUses }, input.proofs, corrections);
   const { inbound, walk } = await walkInside(seeds.map(({ symbol }) => symbol), build, input.budget, input.origins === undefined ? undefined : createEdgeTargets({ origins: input.origins, store, modules: input.modules }), input.signal);
 

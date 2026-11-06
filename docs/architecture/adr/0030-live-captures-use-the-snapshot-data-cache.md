@@ -1,4 +1,4 @@
-# ADR-0029: A live capture uses the snapshot data cache, keyed by the content of its listing
+# ADR-0030: A live capture uses the snapshot data cache, keyed by the content of its listing
 
 - Status: Accepted, 2026-11-06, owner
 - Decision source: the owner, 2026-11-06: "Usa otro para implementar la propuesta que comentas de live con el hash",

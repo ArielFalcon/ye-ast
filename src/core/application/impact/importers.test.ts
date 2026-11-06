@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readImporters } from "./importers.ts";
-import { fakeCodeGraph, fakeNode } from "./fake-code-graph.testing.ts";
+import { fakeCodeGraph, fakeNode } from "../navigation/fake-code-graph.testing.ts";
 
 test("module forms report dynamic and type consumers separately from static imports", async () => {
   const store = fakeCodeGraph([fakeNode("t", "file", "src/target.ts", 1, 1)], [], []);

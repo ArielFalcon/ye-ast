@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { fakeCodeGraph, fakeNode } from "../impact/fake-code-graph.testing.ts";
+import { fakeCodeGraph, fakeNode } from "../navigation/fake-code-graph.testing.ts";
 import { readOutline } from "./outline.ts";
 
 const NO_MODULES = { files: [], dependencies: [], unread: [] };

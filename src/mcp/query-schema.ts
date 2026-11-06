@@ -6,9 +6,10 @@ import { isWorkspaceReplayContext } from "../core/domain/topology/workspace-repl
 import { FULL_OBJECT_ID_PATTERN, isFullObjectId } from "../core/domain/shared/revision.ts";
 import type { WalkBoundsField } from "../core/domain/shared/fact.ts";
 import { isValidGlob } from "../core/domain/shared/scope.ts";
+import type { TRACE_BOUND_FIELDS } from "../core/ports/trace-queries.port.ts";
 
 /**
- * The input contracts of the seven query families. Each family has a semantic schema, which carries only the fields that
+ * The input contracts of the eight query families. Each family has a semantic schema, which carries only the fields that
  * decide what is analysed, and the full schema its tool publishes, built from the same fields plus the presentation and
  * recovery controls. Both share the same refinements, so a semantic query is valid exactly when the original tool would
  * accept it without controls.
@@ -63,6 +64,16 @@ export const budget = z
   .strictObject(BUDGET_FIELDS)
   .optional()
   .describe("Optional traversal bounds, unset by default. Limits work, not result size; stopped branches report cuts.");
+
+/** Exhaustive over the trace's own bounds; a caller-count bound has no outbound meaning, so the strict object refuses it. */
+const TRACE_BUDGET_FIELDS: Readonly<Record<(typeof TRACE_BOUND_FIELDS)[number], z.ZodOptional<z.ZodNumber>>> = {
+  depth: count.optional().describe("Deepest call level whose body is read (roots=0); a step stopped there yields a depth cut."),
+  expansions: count.optional().describe("Max bodies read across the whole trace; once spent, every later step yields a caller-budget cut."),
+};
+const traceBudget = z
+  .strictObject(TRACE_BUDGET_FIELDS)
+  .optional()
+  .describe("Optional bounds on how far the trace follows calls, unset by default. Limits work, not result size; stopped steps report cuts.");
 
 const workspaceRepo = liveSchema({
   path: z.string().regex(/\S/).describe("Existing local Git clone root; no cloning or new remote authorization."),
@@ -215,6 +226,7 @@ const outlineFields = {
 const exactlyOneSubject = (value: { files?: unknown; focus?: unknown }): boolean => (value.files === undefined) !== (value.focus === undefined);
 const ONE_SUBJECT = { message: "give exactly one of files and focus", path: ["files"], params: { constraint: "one-subject" } };
 const subjectConstraint: CrossField = { dependentSchemas: { files: { not: { required: ["focus"] } } }, if: { not: { required: ["files"] } }, then: { required: ["focus"] } };
+const traceFields = { repo, revision, live, targets: z.array(target).min(1).describe("Declarations to start from; every declaration a target selects is a root."), scope, budget: traceBudget };
 const workspaceFields = { repo, revision: workspaceRevision, live: z.literal(true).optional(), offline, scope, repos: workspaceRepos, gateways };
 
 /** The semantic inputs: what the analysis reads, without `mode`, `select`, `page` or `expect`. */
@@ -228,6 +240,7 @@ export const SEMANTIC_INPUTS = {
     .meta(crossField(liveExclusion("head"), traversalConstraints("head"))),
   importers: liveSchema(fileFields, ["revision"]),
   outline: liveSchema(outlineFields, ["revision"]).refine(exactlyOneSubject, ONE_SUBJECT).meta(crossField(liveExclusion("revision"), subjectConstraint)),
+  trace: liveSchema(traceFields, ["revision"]),
   workspace: liveSchema(workspaceFields, ["revision"]),
   decisions: liveSchema(workspaceFields, ["revision"]),
 } satisfies Record<ToolFamily, z.ZodType>;
@@ -247,6 +260,7 @@ export const TOOL_INPUTS = {
     .meta(crossField(liveExclusion("head"), traversalConstraints("head"), recoveryControlConstraintsFor("impact"))),
   importers: liveSchema({ ...fileFields, mode }, ["revision"]),
   outline: liveSchema({ ...outlineFields, mode }, ["revision"]).refine(exactlyOneSubject, ONE_SUBJECT).meta(crossField(liveExclusion("revision"), subjectConstraint)),
+  trace: liveSchema({ ...traceFields, mode }, ["revision"]),
   workspace: liveSchema({ ...workspaceFields, mode }, ["revision"]),
   decisions: liveSchema({ ...workspaceFields, mode }, ["revision"]),
 } satisfies Record<ToolFamily, z.ZodType>;

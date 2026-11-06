@@ -34,7 +34,8 @@ marked **Proposed** awaits the owner's acceptance.
 | [0026](adr/0026-snapshot-data-may-retain-reader-outputs.md) | The snapshot data cache may also retain serialized relations and whole-universe module-dependency outputs, keyed by every input they read; amends ADR-0020 decision 2 | Accepted |
 | [0027](adr/0027-retention-of-immutable-index-entries.md) | Kept full indexes are retained by last use: 14 days unused and 512 MiB of logical bytes, never an entry an open reader holds; amends ADR-0015 | Accepted |
 | [0028](adr/0028-lazy-export-materialization.md) | A SHA request lists the export afresh every time and writes its files only when a reader needs them (source read miss, index build, focused Java read); amends ADR-0020 decisions 4 and 5 | Accepted |
-| [0029](adr/0029-live-captures-use-the-snapshot-data-cache.md) | A live capture uses the snapshot data cache, keyed by the content hashes of its reconciled listing and never by HEAD; amends ADR-0020 decision 6 | Accepted |
+| [0029](adr/0029-lexical-bindings-from-the-typescript-binder.md) | The TypeScript compiler's binder, through a one-file program with no library and no resolution, is the one source of lexical bindings, for import origins and function-value calls alike | Accepted |
+| [0030](adr/0030-live-captures-use-the-snapshot-data-cache.md) | A live capture uses the snapshot data cache, keyed by the content hashes of its reconciled listing and never by HEAD; amends ADR-0020 decision 6 | Accepted |
 
 ## Designs (RFC)
 

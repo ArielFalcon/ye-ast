@@ -54,6 +54,12 @@ export function partReferences(part: Part): Reference[] {
       return [ref("file", "file", part.file)];
     case "outline-declaration":
       return [ref("anchor", "anchor", part.anchor), ...many("part", "children", part.children ?? [])];
+    case "trace-step":
+      return [ref("anchor", "anchor", part.anchor), ...many("anchor", "leaves.anchor", (part.leaves ?? []).map((leaf) => leaf.anchor))];
+    case "reading-range":
+      return [ref("file", "file", part.file)];
+    case "trace-root":
+      return [];
     case "outline-file":
       return [
         ref("file", "file", part.file),
@@ -84,6 +90,7 @@ export function partReferences(part: Part): Reference[] {
     case "decision":
       return [ref("read", "context", part.context), ...many("evidence", "evidence", part.evidence), ...part.options.flatMap((option) => many("evidence", "options.evidence", option.evidence))];
     case "walk-cost":
+    case "trace-totals":
     case "impact-context":
       return [ref("read", "owner", part.owner)];
     default:

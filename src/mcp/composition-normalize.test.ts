@@ -9,6 +9,7 @@ import type { Handler } from "../core/domain/entrypoints/http-route.ts";
 import type { ImpactValue } from "../core/domain/impact/impact-fact.ts";
 import type { ImportedFile } from "../core/domain/impact/importers-fact.ts";
 import type { OutlineDeclaration } from "../core/domain/outline/outline-fact.ts";
+import type { TraceValue } from "../core/domain/trace/trace-fact.ts";
 import type { CallSite } from "../core/domain/topology/call-site.ts";
 import type { RepoImpact, WorkspaceImpactValue } from "../core/ports/workspace-impact-queries.port.ts";
 import type {
@@ -24,7 +25,7 @@ import { normalizeSource } from "./composition-normalize.ts";
 import type { ExecutedSource } from "./query-runner.ts";
 
 const digest = { of: (text: string) => createHash("sha256").update(text).digest("hex") };
-const KINDS: readonly FixtureKind[] = ["entrypoints", "impact-local", "impact-workspace", "callers-local", "callers-workspace", "importers", "outline", "workspace", "decisions"];
+const KINDS: readonly FixtureKind[] = ["entrypoints", "impact-local", "impact-workspace", "callers-local", "callers-workspace", "importers", "outline", "trace", "workspace", "decisions"];
 const fixture = (kind: FixtureKind): ExecutedSource => sourceFixture(kind as "entrypoints");
 
 // An independent index over the tables: it resolves references and finds parts by the public position they support.
@@ -184,6 +185,37 @@ function rebuildDeclaration(t: Tables, id: PartId): OutlineDeclaration {
   return { kind: d.kindName, name: a.symbol, line: a.line, endLine: found(a.endLine, "endLine"), ...(d.children !== undefined && { children: d.children.map((child) => rebuildDeclaration(t, child)) }) };
 }
 
+function rebuildTrace(t: Tables): TraceValue {
+  const totals = found(t.one("/value/cost", "trace-totals"), "trace totals");
+  const declaration = (id: AnchorId) => {
+    const anchor = t.anchor(id);
+    return { file: t.path(anchor.file), symbol: anchor.symbol, line: anchor.line, ...(anchor.endLine === undefined ? {} : { endLine: anchor.endLine }) };
+  };
+  return {
+    roots: t.list("/value/roots", "trace-root").map(({ target, steps }) => ({ target, steps })),
+    steps: t.list("/value/steps", "trace-step").map((step) => ({
+      id: step.step,
+      ...(step.parent === undefined ? {} : { parent: step.parent }),
+      depth: step.depth,
+      ...declaration(step.anchor),
+      kind: step.kindName,
+      ...(step.at === undefined ? {} : { at: step.at }),
+      ...(step.via === undefined ? {} : { via: step.via }),
+      ...(step.deferred === undefined ? {} : { deferred: step.deferred }),
+      ...(step.seen === undefined ? {} : { seen: step.seen }),
+      ...(step.leaves === undefined ? {} : {
+        leaves: step.leaves.map((leaf) => {
+          const { file, symbol, line, endLine } = declaration(leaf.anchor);
+          return { symbol, file, start: line, end: endLine ?? line, ...(leaf.deferred === undefined ? {} : { deferred: leaf.deferred }) };
+        }),
+      }),
+      ...(step.external === undefined ? {} : { external: step.external }),
+    })),
+    readingPlan: { ranges: t.list("/value/readingPlan/ranges", "reading-range").map((range) => ({ file: t.path(range.file), start: range.start, end: range.end, steps: range.steps })), lines: totals.lines },
+    cost: { expanded: totals.expanded },
+  };
+}
+
 /** Rebuilds the public fact of a fixture source from its evidence set; absent and empty are told apart only by tables. */
 function reconstruct(source: ExecutedSource, t: Tables): Fact<unknown> {
   const root = found(t.read({ kind: "fact" }), "root read");
@@ -221,6 +253,8 @@ function reconstruct(source: ExecutedSource, t: Tables): Fact<unknown> {
           })),
           unheld: t.list("/value/unheld", "unheld-file").map((u) => t.path(u.file)),
         };
+      case "trace":
+        return rebuildTrace(t);
       case "workspace": {
         const context = found(t.one("/value/workspace", "workspace-context"), "context").context;
         assert.equal(context.family, "workspace");
@@ -430,6 +464,16 @@ test("a proven outline binding anchors the declaration it reaches, so compose ca
   assert.ok(declaration);
   const anchor = t.anchor(declaration.anchor);
   assert.deepEqual({ file: t.path(anchor.file), symbol: anchor.symbol, line: anchor.line, endLine: anchor.endLine, kindName: declaration.kindName }, { file: "src/OrderService.java", symbol: "OrderService", line: 3, endLine: 50, kindName: "class" });
+});
+
+test("a trace anchors each step and each leaf at its declaration, on the anchor an outline of the same declaration uses", () => {
+  const t = new Tables(normalizeSource(sourceFixture("trace"), digest));
+  const steps = t.list("/value/steps", "trace-step");
+  assert.deepEqual(steps.map((s) => [s.step, s.parent, t.handler(s.anchor).symbol]), [[0, undefined, "one"], [1, 0, "find"], [2, 0, "audit"], [3, 0, "find"], [4, undefined, "drop"], [5, 4, "one"]]);
+  assert.equal(steps[3]!.anchor, steps[1]!.anchor, "a seen step anchors where its first occurrence does");
+  assert.deepEqual(steps[1]!.leaves?.map((leaf) => [leaf.anchor === steps[1]!.leaves![0]!.anchor, leaf.deferred]), [[true, undefined], [true, true], [false, undefined]]);
+  const outline = new Tables(normalizeSource(sourceFixture("outline"), digest));
+  assert.equal(outline.partOf(outline.list("/value/files", "outline-file")[0]!.declarations[1]!, "outline-declaration").anchor, steps[0]!.anchor);
 });
 
 test("an outline focus keeps each matched declaration with its subtree, and no outline file a cut of the file would misstate", () => {

@@ -5,6 +5,7 @@ import { PassThrough } from "node:stream";
 import type { EntrypointQueries } from "../core/ports/entrypoint-queries.port.ts";
 import type { ImpactFault, ImpactQueries } from "../core/ports/impact-queries.port.ts";
 import type { OutlineFault, OutlineQueries } from "../core/ports/outline-queries.port.ts";
+import type { TraceQueries } from "../core/ports/trace-queries.port.ts";
 import type { WorkspaceQueries } from "../core/ports/workspace-queries.port.ts";
 import type { DecisionQueries } from "../core/ports/decision-queries.port.ts";
 import { REDACTED, type Redaction } from "../core/ports/redaction.port.ts";
@@ -54,6 +55,7 @@ function fakes(): Fakes {
     entrypoints: { map: answer("map") } as EntrypointQueries,
     impact: { ofChange: answer("ofChange"), callers: answer("callers"), importers: answer("importers") } as ImpactQueries,
     outline: { outline: answer("outline") } as OutlineQueries,
+    trace: { walk: answer("walk") } as TraceQueries,
     workspace: { outwardNames: answer("outwardNames") } as WorkspaceQueries,
     decisions: { decisions: answer("decisions") } as DecisionQueries,
   };
@@ -185,6 +187,7 @@ const OPERATIONS = [
   },
   { method: METHOD.impactImporters, operation: "importers", params: { repo: "/work/shop", repoId: "shop", revision: "v2", files: ["a.ts", "b.ts"] } },
   { method: METHOD.outlineFiles, operation: "outline", params: { repo: "/work/shop", repoId: "shop", revision: "v2", files: ["a.ts", "b.ts"] } },
+  { method: METHOD.traceWalk, operation: "walk", params: { repo: "/work/shop", repoId: "shop", revision: "v3", targets: [{ file: "a.ts", symbol: "run" }, { file: "b.ts", start: 2, end: 9 }], budget: { depth: 3, expansions: 5 } } },
   {
     method: METHOD.workspaceOutwardNames,
     operation: "outwardNames",
@@ -229,6 +232,17 @@ for (const { method, operation, params } of OPERATIONS) {
     assert.deepEqual(calls[0]?.request.scope, SCOPE);
   });
 }
+
+test("trace.walk refuses the caller-count bound as an invalid param and starts no walk", async () => {
+  const { deps, calls } = fakes();
+  const session = await untrusted(deps);
+
+  session.send(request(1, METHOD.traceWalk, { repo: "/work/shop", repoId: "shop", revision: "v3", targets: [{ file: "a.ts", symbol: "run" }], budget: { hubFanIn: 4 } }));
+  const answer = await session.receive();
+
+  assert.equal(answer.error?.data.kind, "invalid-params");
+  assert.deepEqual(calls, []);
+});
 
 test("impact.ofChange passes changed to ofChange as a typed value", async () => {
   const { deps, calls } = fakes();

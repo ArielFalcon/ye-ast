@@ -1,8 +1,9 @@
 import ts from "typescript";
 import { matchesReferenceKind, syntaxName } from "./reference-occurrence.ts";
-import { declarationCounts, declaredName, declaredNames, isStatic, scriptGlobalNames } from "./syntax-names.ts";
+import { declarationCounts, declaredNames, isStatic, scriptGlobalNames } from "./syntax-names.ts";
 import { moduleStatement } from "./import-bindings.ts";
 import { sourceTree } from "./source-tree.ts";
+import { bindFile, type LexicalBinding } from "./lexical-bindings.ts";
 import { isTypeScriptSource } from "../../domain/languages/typescript.ts";
 import type { ImportOrigin } from "../../domain/relations/resolved-reference.ts";
 import type { Evidence, Finding } from "../../domain/shared/fact.ts";
@@ -20,6 +21,17 @@ interface FileShape {
   declared: ReadonlySet<string>;
 }
 
+/** One parsed file: its shape, and every node by the offset it starts at, so a site is found without walking the tree. */
+interface FileIndex {
+  source: ts.SourceFile;
+  shape: FileShape;
+  starting: ReadonlyMap<number, readonly ts.Node[]>;
+}
+
+export type ParseSource = (file: SourceFile) => ts.SourceFile;
+
+const parseWithParents: ParseSource = (file) => sourceTree(file, ts.ScriptTarget.Latest, true);
+
 /**
  * Reads, per file, the name each import binds to the specifier it came from, and resolves that specifier through the
  * snapshot's own module configuration (`module-resolver.ts`): a relative or aliased specifier names a file of the
@@ -29,11 +41,27 @@ interface FileShape {
  * files the snapshot already holds. A file that declares a name it also imports is `unknown` for that name, because the
  * declaration may shadow the import at the place the reference sits.
  */
-export function createImportOrigins(sources: readonly SourceFile[]): ImportOrigins {
+export function createImportOrigins(sources: readonly SourceFile[], parse: ParseSource = parseWithParents): ImportOrigins {
   const texts = new Map(sources.map((file) => [file.path, file.content]));
   const files = new Map(sources.map((file) => [file.path, file]));
   const modules = createModuleResolver(async (file) => texts.get(file), manifestPackages(sources));
   const shapes = new Map<string, FileShape>();
+  const parameterStarts = new Map<string, ReadonlySet<number>>();
+  /** A file is bound once for the life of the reader, and only the places of its parameter uses are kept (ADR-0029). */
+  const isParameterUse: ParameterUse = (source, text, identifier) => {
+    let starts = parameterStarts.get(source.fileName);
+    if (starts === undefined) {
+      starts = parameterUses(source.fileName, text);
+      parameterStarts.set(source.fileName, starts);
+    }
+    return starts.has(identifier.getStart(source));
+  };
+  const indexes = new Map<string, FileIndex | undefined>();
+  /** A file is parsed once for the life of the reader; one that does not parse has no index. */
+  const indexOf = (file: string): FileIndex | undefined => {
+    if (!indexes.has(file)) indexes.set(file, indexed(parse(files.get(file)!)));
+    return indexes.get(file);
+  };
 
   /**
    * A file is read when a site asks about it; its imports and declarations are held as a shape.
@@ -95,7 +123,8 @@ export function createImportOrigins(sources: readonly SourceFile[]): ImportOrigi
     for (const [file, group] of grouped) {
       if (signal?.aborted) break;
       const text = texts.get(file);
-      const checked = text === undefined || !isTypeScriptSource(file) ? undefined : checkSites(file, text, group);
+      const index = text === undefined || !isTypeScriptSource(file) ? undefined : indexOf(file);
+      const checked = index === undefined ? undefined : checkSites(index, text!, group, isParameterUse);
       if (checked !== undefined) shapes.set(file, checked.shape);
       const checks = checked?.matches ?? new Map<number, SiteSyntax>();
       for (const { site, index } of group) {
@@ -110,7 +139,8 @@ export function createImportOrigins(sources: readonly SourceFile[]): ImportOrigi
     for (const [file, group] of Map.groupBy(sites.map((site, index) => ({ site, index })), ({ site }) => site.file)) {
       if (signal?.aborted) break;
       const text = texts.get(file);
-      const read = text === undefined || !isTypeScriptSource(file) ? undefined : rootsAt(file, text, group);
+      const tree = text === undefined || !isTypeScriptSource(file) ? undefined : indexOf(file);
+      const read = tree === undefined ? undefined : rootsAt(tree, text!, group, isParameterUse);
       if (read === undefined) continue;
       shapes.set(file, read.shape);
       for (const [index, { root, bare, local }] of read.roots) {
@@ -124,11 +154,11 @@ export function createImportOrigins(sources: readonly SourceFile[]): ImportOrigi
 
 type SiteSyntax = "valid" | "local" | "this-member";
 
-/** The root of the plain chain of names each site spells and ends in its name, read in one temporary tree. */
-function rootsAt(file: string, text: string, group: readonly { site: ResolvedNameSite; index: number }[]): { roots: Map<number, { root: string; bare: boolean; local: boolean }>; shape: FileShape } | undefined {
-  const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
-  const diagnostics = (source as ts.SourceFile & { parseDiagnostics: readonly ts.Diagnostic[] }).parseDiagnostics;
-  if (diagnostics.some((diagnostic) => diagnostic.category === ts.DiagnosticCategory.Error)) return undefined;
+/** Whether a name of `source` binds a parameter whose value is only what the caller passes (`bindsParameter`). */
+type ParameterUse = (source: ts.SourceFile, text: string, identifier: ts.Identifier) => boolean;
+
+/** The root of the plain chain of names each site spells and ends in its name, read in the file's tree. */
+function rootsAt({ source, shape, starting }: FileIndex, text: string, group: readonly { site: ResolvedNameSite; index: number }[], isParameterUse: ParameterUse): { roots: Map<number, { root: string; bare: boolean; local: boolean }>; shape: FileShape } {
   const starts = source.getLineStarts();
   const wanted = new Map<number, { site: ResolvedNameSite; index: number }[]>();
   for (const item of group) {
@@ -140,19 +170,14 @@ function rootsAt(file: string, text: string, group: readonly { site: ResolvedNam
   }
   /** Chains that start at one point share their root, so the first that ends in the name settles it. */
   const roots = new Map<number, { root: string; bare: boolean; local: boolean }>();
-  const scopes = new WeakMap<ts.Node, { unsafe: boolean; names: ReadonlySet<string> }>();
-  const visit = (node: ts.Node): void => {
-    for (const { site, index } of wanted.get(node.getStart(source)) ?? []) {
-      const spelled = spelledAt(node, site.kind);
-      const names = spelled === undefined ? undefined : plainChain(spelled);
-      if (names === undefined || names.at(-1) !== site.name || roots.has(index)) continue;
-      const bare = names.length === 1;
-      roots.set(index, { root: names[0]!, bare, local: bare && ts.isIdentifier(spelled!) && !ts.isTypeNode(spelled.parent) && localParameter(spelled, site.name, scopes) });
-    }
-    node.forEachChild(visit);
-  };
-  visit(source);
-  return { roots, shape: describeTree(source) };
+  for (const [point, sites] of wanted) for (const node of starting.get(point) ?? []) for (const { site, index } of sites) {
+    const spelled = spelledAt(node, site.kind);
+    const names = spelled === undefined ? undefined : plainChain(spelled);
+    if (names === undefined || names.at(-1) !== site.name || roots.has(index)) continue;
+    const bare = names.length === 1;
+    roots.set(index, { root: names[0]!, bare, local: bare && ts.isIdentifier(spelled!) && !ts.isTypeNode(spelled.parent) && isParameterUse(source, text, spelled) });
+  }
+  return { roots, shape };
 }
 
 /** What a node starting at an edge's column spells for the edge's kind: a call's callee, an instantiation's class, or a name up to the whole qualified name it ends. */
@@ -173,13 +198,24 @@ function plainChain(node: ts.Node): string[] | undefined {
   return undefined;
 }
 
-/** Check each graph spelling at its exact 1-based UTF-16 position in one temporary tree. */
-function checkSites(file: string, text: string, group: readonly { site: ImportOriginSite; index: number }[]): { matches: Map<number, SiteSyntax>; shape: FileShape } {
-  const result = new Map<number, SiteSyntax>();
-  const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
+function indexed(source: ts.SourceFile): FileIndex | undefined {
   const diagnostics = (source as ts.SourceFile & { parseDiagnostics: readonly ts.Diagnostic[] }).parseDiagnostics;
-  if (diagnostics.some((diagnostic) => diagnostic.category === ts.DiagnosticCategory.Error)) return { matches: result, shape: { bindings: new Map(), declared: new Set() } };
-  const shape = describeTree(source);
+  if (diagnostics.some((diagnostic) => diagnostic.category === ts.DiagnosticCategory.Error)) return undefined;
+  const starting = new Map<number, ts.Node[]>();
+  const visit = (node: ts.Node): void => {
+    const start = node.getStart(source);
+    const list = starting.get(start);
+    if (list === undefined) starting.set(start, [node]);
+    else list.push(node);
+    node.forEachChild(visit);
+  };
+  visit(source);
+  return { source, shape: describeTree(source), starting };
+}
+
+/** Check each graph spelling at its exact 1-based UTF-16 position in the file's tree. */
+function checkSites({ source, shape, starting }: FileIndex, text: string, group: readonly { site: ImportOriginSite; index: number }[], isParameterUse: ParameterUse): { matches: Map<number, SiteSyntax>; shape: FileShape } {
+  const result = new Map<number, SiteSyntax>();
   const starts = source.getLineStarts();
   const wanted = new Map<number, { site: ImportOriginSite; index: number }[]>();
   for (const item of group) {
@@ -194,28 +230,22 @@ function checkSites(file: string, text: string, group: readonly { site: ImportOr
   }
   const matches = new Map<number, ts.Node[]>();
   const ownCalls = new Map<number, number>();
-  const visit = (node: ts.Node): void => {
-    const candidates = wanted.get(node.getStart(source));
-    if (candidates !== undefined) for (const { site, index } of candidates) {
-      const expr = site.kind === "calls" && ts.isCallExpression(node) ? node.expression : site.kind === "instantiates" && ts.isNewExpression(node) ? node.expression : undefined;
-      if (expr !== undefined && syntaxName(expr, source) === site.fullName) {
-        const found = matches.get(index) ?? []; found.push(expr); matches.set(index, found);
-      } else if (matchesReferenceKind(node, site.kind) && syntaxName(node, source) === site.fullName) {
-        const found = matches.get(index) ?? []; found.push(node); matches.set(index, found);
-      } else if (site.kind === "calls" && ts.isCallExpression(node) && callsOwnMember(node.expression, site.fullName!)) {
-        ownCalls.set(index, (ownCalls.get(index) ?? 0) + 1);
-      }
+  for (const [point, candidates] of wanted) for (const node of starting.get(point) ?? []) for (const { site, index } of candidates) {
+    const expr = site.kind === "calls" && ts.isCallExpression(node) ? node.expression : site.kind === "instantiates" && ts.isNewExpression(node) ? node.expression : undefined;
+    if (expr !== undefined && syntaxName(expr, source) === site.fullName) {
+      const found = matches.get(index) ?? []; found.push(expr); matches.set(index, found);
+    } else if (matchesReferenceKind(node, site.kind) && syntaxName(node, source) === site.fullName) {
+      const found = matches.get(index) ?? []; found.push(node); matches.set(index, found);
+    } else if (site.kind === "calls" && ts.isCallExpression(node) && callsOwnMember(node.expression, site.fullName!)) {
+      ownCalls.set(index, (ownCalls.get(index) ?? 0) + 1);
     }
-    node.forEachChild(visit);
-  };
-  visit(source);
-  const scopes = new WeakMap<ts.Node, { unsafe: boolean; names: ReadonlySet<string> }>();
+  }
   for (const { site, index } of group) {
     const found = matches.get(index);
     if (found === undefined && ownCalls.get(index) === 1) result.set(index, "this-member");
     if (found?.length !== 1) continue;
     const node = found[0]!;
-    result.set(index, site.kind === "calls" && ts.isIdentifier(node) && node.text === site.name && localParameter(node, site.name, scopes) ? "local" : "valid");
+    result.set(index, site.kind === "calls" && ts.isIdentifier(node) && node.text === site.name && isParameterUse(source, text, node) ? "local" : "valid");
   }
   return { matches: result, shape };
 }
@@ -237,44 +267,43 @@ function isNested(declaration: ts.ClassLikeDeclaration): boolean {
 }
 
 /**
- * A node that opens a scope the parameter proof does not read through: a function, a class (its static blocks and property
- * initializers included) or a namespace. The walk up from a use and the scan for a rebinding both stop at one.
+ * Whether `identifier` binds, by the file's own scoping, a parameter of a function around it whose value is only what the
+ * caller passes: no default, no rest, no destructuring, declared once. The compiler keeps the parameter when the
+ * function's body declares its name again at its top level; a function declared there replaces it when the code runs.
  */
-function opensScope(node: ts.Node): boolean {
-  return ts.isFunctionLike(node) || ts.isClassLike(node) || ts.isModuleDeclaration(node);
+function bindsParameter(binding: LexicalBinding, name: string): boolean {
+  if (binding.kind !== "declared" || binding.declarations.length !== 1) return false;
+  const declaration = binding.declarations[0]!;
+  if (!ts.isParameter(declaration) || declaration.initializer !== undefined || declaration.dotDotDotToken !== undefined) return false;
+  const owner = declaration.parent;
+  const body = "body" in owner ? owner.body : undefined;
+  return body === undefined || !ts.isBlock(body) || !body.statements.some((statement) => topLevelNames(statement).includes(name));
 }
 
-/** Prove only a parameter of the function, method or constructor whose body holds the use with no other scope between them; all uncertain scopes are refused. */
-function localParameter(callee: ts.Identifier, name: string, scopes: WeakMap<ts.Node, { unsafe: boolean; names: ReadonlySet<string> }>): boolean {
-  let node: ts.Node | undefined = callee.parent;
-  let owner: ts.ArrowFunction | ts.FunctionExpression | ts.FunctionDeclaration | ts.MethodDeclaration | ts.ConstructorDeclaration | undefined;
-  while (node !== undefined) {
-    if (ts.isWithStatement(node)) return false;
-    if (opensScope(node)) {
-      if (!ts.isArrowFunction(node) && !ts.isFunctionExpression(node) && !ts.isFunctionDeclaration(node) && !ts.isMethodDeclaration(node) && !ts.isConstructorDeclaration(node)) return false;
-      owner = node; break;
-    }
-    node = node.parent;
-  }
-  if (owner === undefined || owner.body === undefined || callee.pos < owner.body.pos) return false;
-  if (owner.parameters.some((parameter) => !ts.isIdentifier(parameter.name) || parameter.dotDotDotToken !== undefined || parameter.initializer !== undefined)) return false;
-  if (owner.parameters.filter((parameter) => ts.isIdentifier(parameter.name) && parameter.name.text === name).length !== 1) return false;
-  let summary = scopes.get(owner);
-  if (summary === undefined) {
-    let unsafe = false;
-    const names = new Set<string>();
-    const visit = (current: ts.Node): void => {
-      if (ts.isWithStatement(current) || (ts.isCallExpression(current) && ts.isIdentifier(current.expression) && current.expression.text === "eval")) unsafe = true;
-      const declared = declaredName(current);
-      if (declared !== undefined) names.add(declared);
-      if (opensScope(current)) return;
-      current.forEachChild(visit);
-    };
-    visit(owner.body);
-    summary = { unsafe, names };
-    scopes.set(owner, summary);
-  }
-  return !summary.unsafe && !summary.names.has(name);
+/**
+ * The start of every name of the file that `bindsParameter` proves. Only names spelled like a parameter are asked.
+ */
+function parameterUses(path: string, text: string): ReadonlySet<number> {
+  const { tree, bindingOf } = bindFile(path, text);
+  const names = new Set<string>();
+  const collect = (node: ts.Node): void => {
+    if (ts.isParameter(node) && ts.isIdentifier(node.name)) names.add(node.name.text);
+    node.forEachChild(collect);
+  };
+  collect(tree);
+  const starts = new Set<number>();
+  const visit = (node: ts.Node): void => {
+    if (ts.isIdentifier(node) && names.has(node.text) && bindsParameter(bindingOf(node), node.text)) starts.add(node.getStart(tree));
+    node.forEachChild(visit);
+  };
+  if (names.size > 0) visit(tree);
+  return starts;
+}
+
+function topLevelNames(statement: ts.Statement): string[] {
+  if (ts.isVariableStatement(statement)) return statement.declarationList.declarations.flatMap((declaration) => (ts.isIdentifier(declaration.name) ? [declaration.name.text] : []));
+  if ((ts.isFunctionDeclaration(statement) || ts.isClassDeclaration(statement)) && statement.name !== undefined) return [statement.name.text];
+  return [];
 }
 
 /** What one file imports and what it binds. */

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { fakeCodeGraph, fakeNode, type FakeEdge, type FakeNode } from "../impact/fake-code-graph.testing.ts";
+import { fakeCodeGraph, fakeNode, type FakeEdge, type FakeNode } from "../navigation/fake-code-graph.testing.ts";
 import { createInboundEdges } from "../impact/inbound-edges.ts";
 import { callersOfFunction } from "./consumer-callers.ts";
 

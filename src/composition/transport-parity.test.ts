@@ -9,6 +9,7 @@ import { SCHEMA, type FactBase } from "../core/domain/shared/fact.ts";
 import type { EntrypointQueries } from "../core/ports/entrypoint-queries.port.ts";
 import type { ImpactQueries } from "../core/ports/impact-queries.port.ts";
 import type { OutlineQueries } from "../core/ports/outline-queries.port.ts";
+import type { TraceBudget, TraceQueries } from "../core/ports/trace-queries.port.ts";
 import type { WorkspaceQueries } from "../core/ports/workspace-queries.port.ts";
 import type { WorkspaceImpactQueries } from "../core/ports/workspace-impact-queries.port.ts";
 import type { DecisionQueries } from "../core/ports/decision-queries.port.ts";
@@ -65,7 +66,7 @@ async function throughCli(args: readonly string[], budgets: (ImpactBudget | unde
     version: "0.0.0",
     entrypoints,
     impact: { ofChange: async (request: { budget?: ImpactBudget }) => (budgets.push(request.budget), { ok: true, value: FACT } as never) } as unknown as ImpactQueries,
-    outline: {} as OutlineQueries,
+    outline: {} as OutlineQueries, trace: {} as TraceQueries,
     workspace: {} as WorkspaceQueries,
     decisions: {} as DecisionQueries,
     install,
@@ -86,7 +87,7 @@ async function throughProtocol(budget: unknown, budgets: (ImpactBudget | undefin
     JSON.stringify({ jsonrpc: "2.0", id: 2, method: "impact.ofChange", params: { repo: REPO, repoId: "shop", base: "HEAD", head: "HEAD", budget } }),
   ];
   await serveQueries(
-    { version: "0.0.0", entrypoints, impact: { ofChange: async (request: { budget?: ImpactBudget }) => (budgets.push(request.budget), { ok: true, value: FACT } as never) } as unknown as ImpactQueries, outline: {} as OutlineQueries, workspace: {} as WorkspaceQueries, decisions: {} as DecisionQueries, redaction },
+    { version: "0.0.0", entrypoints, impact: { ofChange: async (request: { budget?: ImpactBudget }) => (budgets.push(request.budget), { ok: true, value: FACT } as never) } as unknown as ImpactQueries, outline: {} as OutlineQueries, trace: {} as TraceQueries, workspace: {} as WorkspaceQueries, decisions: {} as DecisionQueries, redaction },
     { input: Readable.from(lines.map((line) => `${line}\n`)), output: { write: (chunk: string) => void (written += chunk) } },
   );
   const answers = written.split("\n").filter(Boolean).map((line) => JSON.parse(line) as { id?: number; result?: unknown; error?: unknown });
@@ -102,7 +103,7 @@ async function throughMcp(budget: unknown, budgets: (ImpactBudget | undefined)[]
     version: "0.0.0",
     entrypoints,
     impact: { ofChange: async (request: { budget?: ImpactBudget }) => (budgets.push(request.budget), { ok: true, value: FACT } as never) } as unknown as ImpactQueries,
-    outline: {} as OutlineQueries,
+    outline: {} as OutlineQueries, trace: {} as TraceQueries,
     workspace: { outwardNames: async () => ({ ok: true, value: { fact: FACT } } as never) } as unknown as WorkspaceQueries,
     workspaceImpact: {} as unknown as WorkspaceImpactQueries,
     decisions: {} as unknown as DecisionQueries,
@@ -158,7 +159,7 @@ test("every surface that names a trust mode refuses one the domain does not know
     version: "0.0.0",
     entrypoints,
     impact: family().impact,
-    outline: {} as OutlineQueries,
+    outline: {} as OutlineQueries, trace: {} as TraceQueries,
     workspace: {} as WorkspaceQueries,
     decisions: {} as DecisionQueries,
     install,
@@ -171,7 +172,7 @@ test("every surface that names a trust mode refuses one the domain does not know
 
   let written = "";
   await serveQueries(
-    { version: "0.0.0", entrypoints, impact: family().impact, outline: {} as OutlineQueries, workspace: {} as WorkspaceQueries, decisions: {} as DecisionQueries, redaction },
+    { version: "0.0.0", entrypoints, impact: family().impact, outline: {} as OutlineQueries, trace: {} as TraceQueries, workspace: {} as WorkspaceQueries, decisions: {} as DecisionQueries, redaction },
     {
       input: Readable.from([`${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "trust.declare", params: { mode: "sometimes" } })}\n`]),
       output: { write: (chunk: string) => void (written += chunk) },
@@ -181,4 +182,51 @@ test("every surface that names a trust mode refuses one the domain does not know
 
   assert.equal(cli, 2);
   assert.equal(answer.error?.data?.kind, "invalid-params");
+});
+
+const TRACE_FACT = { ...BASE, status: "complete", value: { roots: [], steps: [], readingPlan: { ranges: [], lines: 0 }, cost: { expanded: 0 } } };
+
+function traceFamily(budgets: (TraceBudget | undefined)[]): TraceQueries {
+  return { walk: async (request: { budget?: TraceBudget }) => (budgets.push(request.budget), { ok: true, value: TRACE_FACT } as never) } as unknown as TraceQueries;
+}
+
+test("the three transports accept the trace's own bounds and refuse the caller-count bound alike", async () => {
+  const cases: readonly { flags: readonly string[]; budget: unknown; accepted: TraceBudget | undefined }[] = [
+    { flags: ["--depth", "2", "--expansions", "4"], budget: { depth: 2, expansions: 4 }, accepted: { depth: 2, expansions: 4 } },
+    { flags: ["--hub-fan-in", "3"], budget: { hubFanIn: 3 }, accepted: undefined },
+  ];
+  for (const { flags, budget, accepted } of cases) {
+    const cli: (TraceBudget | undefined)[] = [];
+    const protocol: (TraceBudget | undefined)[] = [];
+    const mcp: (TraceBudget | undefined)[] = [];
+
+    const cliCode = await run(["trace", ...flags, REPO, "src/a.ts:run"], { out: () => undefined, err: () => undefined }, {
+      version: "0.0.0", entrypoints, impact: {} as ImpactQueries, outline: {} as OutlineQueries, trace: traceFamily(cli), workspace: {} as WorkspaceQueries, decisions: {} as DecisionQueries,
+      install, mcpCommand: ["/bin/ye-ast"], redaction,
+      canonicalRepositoryRoot: async (path: string) => ({ ok: true, value: path }), repositoryName: async () => ({ ok: true, value: "repo" }), signal: new AbortController().signal,
+    });
+
+    let written = "";
+    await serveQueries(
+      { version: "0.0.0", entrypoints, impact: {} as ImpactQueries, outline: {} as OutlineQueries, trace: traceFamily(protocol), workspace: {} as WorkspaceQueries, decisions: {} as DecisionQueries, redaction },
+      {
+        input: Readable.from([
+          `${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "trust.declare", params: { mode: "untrusted" } })}\n`,
+          `${JSON.stringify({ jsonrpc: "2.0", id: 2, method: "trace.walk", params: { repo: REPO, repoId: "shop", revision: "HEAD", targets: [{ file: "src/a.ts", symbol: "run" }], budget } })}\n`,
+        ]),
+        output: { write: (chunk: string) => void (written += chunk) },
+      },
+    );
+    const answer = written.split("\n").filter(Boolean).map((line) => JSON.parse(line) as { id?: number; error?: unknown }).find((message) => message.id === 2);
+
+    const session = await openSession(createMcpServer({
+      digest: createSha256Digest(), version: "0.0.0", entrypoints, impact: {} as ImpactQueries, outline: {} as OutlineQueries, trace: traceFamily(mcp),
+      workspace: {} as WorkspaceQueries, workspaceImpact: {} as WorkspaceImpactQueries, decisions: {} as DecisionQueries, redaction, repository: { path: REPO, repoId: "shop" },
+    }));
+    const result = await session.callTool("ye_ast_trace", { targets: [{ file: "src/a.ts", symbol: "run" }], budget }).finally(() => session.close());
+
+    const expected = accepted !== undefined;
+    assert.deepEqual([cliCode === 0, answer?.error === undefined, (result as ToolResult).isError !== true], [expected, expected, expected], JSON.stringify(budget));
+    assert.deepEqual([cli, protocol, mcp], expected ? [[accepted], [accepted], [accepted]] : [[], [], []], JSON.stringify(budget));
+  }
 });
