@@ -1,6 +1,7 @@
 import { dependencyDiagnostic } from "./dependency-schema.ts";
 import { z } from 'zod';
 import { RESULT_IDENTITY_PATTERN } from './evidence-cursor.ts';
+import type { CrossField } from './compact-schema.ts';
 
 type Tool = 'entrypoints' | 'callers' | 'impact';
 const index = z.int().nonnegative();
@@ -106,7 +107,7 @@ const SELECTIONS = {entrypoints: selectionsFor('entrypoints'), callers: selectio
 
 export function recoveryControlShapeFor(tool: Tool) {
   const selections = SELECTIONS[tool];
-  return {select: selections.optional().describe(`Recorded evidence selected by its public owner and coordinates; requires page and does not change analysis coverage.${branchRule(tool)}`), page: pageRequest.optional(), expect: z.string().regex(RESULT_IDENTITY_PATTERN).optional().describe('Assert the complete public source resultIdentity, with or without selection. Must agree with a supplied cursor.')};
+  return {select: selections.optional().describe('Recorded evidence selected by its public owner and coordinates; requires page and does not change analysis coverage.'), page: pageRequest.optional(), expect: z.string().regex(RESULT_IDENTITY_PATTERN).optional().describe('Assert the complete public source resultIdentity, with or without selection. Must agree with a supplied cursor.')};
 }
 
 /** The violated control constraint, typed by `constraint` and anchored at the control a caller must change. */
@@ -133,17 +134,29 @@ export function validRecoveryControls(tool: Tool, args: {select?: unknown; page?
   return recoveryControlIssues(tool, args).length === 0;
 }
 
-export function recoveryControlConstraintsFor(tool: Tool): object[] {
-  const owner = (kinds: readonly string[]) => ({ properties: { owner: { properties: {kind: {enum: kinds}}, required: ['kind'] } }, required: ['owner'] });
-  const kind = (name: string, owners: readonly string[]) => ({ properties: { kind: {const: name}, ...(owners.length ? owner(owners).properties : {}) }, required: owners.length ? ['kind','owner'] : ['kind'] });
-  const choices = (branch: Branch) => KIND_ORDER.filter((name) => branch[name] !== undefined).map((name) => kind(name, branch[name]!));
-  const restrict = (branch: Branch) => ({properties: {select: {anyOf: choices(branch)}}});
+/**
+ * The published form of the same policy. The `select` property already admits only the tool's kind and owner pairs, so
+ * each workspace branch restricts only its kinds and owners; a policy whose branch is not that product fails here.
+ */
+export function recoveryControlConstraintsFor(tool: Tool): CrossField {
+  const pairing = {dependentRequired: {select: ['page'], page: ['select']}};
   const {local: localBranch, workspace: workspaceBranch} = ELIGIBILITY[tool];
-  return [
-    {if: {required: ['select']}, then: {required: ['page']}},
-    {if: {required: ['page']}, then: {required: ['select']}},
-    workspaceBranch === undefined ? restrict(localBranch) : {if: {required: ['workspace']}, then: restrict(workspaceBranch), else: restrict(localBranch)},
-  ];
+  if (workspaceBranch === undefined) return pairing;
+  // Publish the excluded kinds and owners: the complement within the tool is shorter and equivalent.
+  const restrict = (branch: Branch) => {
+    const kinds = KIND_ORDER.filter((kind) => branch[kind] !== undefined);
+    const owners = [...new Set(kinds.flatMap((kind) => branch[kind]!))];
+    for (const kind of kindsOf(tool)) for (const owner of ownersOf(tool, kind)) {
+      if (kinds.includes(kind) && owners.includes(owner) && !branch[kind]!.includes(owner)) throw new Error(`${tool}: ${kind} ${owner} needs a pair constraint`);
+    }
+    const excludedKinds = kindsOf(tool).filter((kind) => !kinds.includes(kind));
+    const excludedOwners = [...new Set(kindsOf(tool).flatMap((kind) => ownersOf(tool, kind)))].filter((owner) => !owners.includes(owner));
+    return {properties: {select: {properties: {
+      ...(excludedKinds.length ? {kind: {not: {enum: excludedKinds}}} : {}),
+      ...(excludedOwners.length ? {owner: {properties: {kind: {not: {enum: excludedOwners}}}}} : {}),
+    }}}};
+  };
+  return {...pairing, dependentSchemas: {workspace: restrict(workspaceBranch), select: {anyOf: [{required: ['workspace']}, restrict(localBranch)]}}};
 }
 
 /** Existing fact primitives are supplied by the adapter so projection provenance uses its established schema. */

@@ -3,15 +3,17 @@ import { createHash } from "node:crypto";
 import assert from "node:assert/strict";
 import { z } from "zod";
 import { AjvJsonSchemaValidator } from "@modelcontextprotocol/server/validators/ajv";
-import { compactInput } from "./compact-schema.ts";
+import { compactInput, crossField } from "./compact-schema.ts";
 import { createMcpServer, type McpDeps } from "./server.ts";
 import { openSession } from "./test-session.ts";
+import { TOOL_INPUTS } from "./query-schema.ts";
+import type { ToolFamily } from "./presentation.ts";
 
-test("catalogue advertises useful guides within budget", async () => {
+function discoveryServer() {
   const unused = <T extends object>(): T => new Proxy({} as T, {
     get() { throw new Error("unexpected query during discovery"); },
   });
-  const session = await openSession(createMcpServer({
+  return createMcpServer({
     entrypoints: unused<McpDeps["entrypoints"]>(),
     impact: unused<McpDeps["impact"]>(),
     outline: unused<McpDeps["outline"]>(),
@@ -28,7 +30,11 @@ test("catalogue advertises useful guides within budget", async () => {
       detect: () => ({ redacted: false, patterns: [], count: 0 }),
       containsSecret: () => false,
     },
-  }));
+  });
+}
+
+test("catalogue advertises useful guides within budget", async () => {
+  const session = await openSession(discoveryServer());
   try {
     const tools = await session.listTools();
     const bytes = Buffer.byteLength(JSON.stringify({ tools }));
@@ -69,7 +75,7 @@ test("catalogue advertises useful guides within budget", async () => {
       assert.ok(Object.keys(tool.inputSchema.properties ?? {}).length > 0);
       new AjvJsonSchemaValidator().getValidator(tool.inputSchema);
       assert.equal(createHash("sha256").update(JSON.stringify(canonicalConstraints(tool.inputSchema))).digest("hex"), INPUT_CONSTRAINTS[tool.name], `${tool.name}: argument contract`);
-      for (const key of ["allOf", "anyOf", "oneOf", "if", "then", "else", "not"]) {
+      for (const key of ["allOf", "anyOf", "oneOf"]) {
         assert.equal(key in tool.inputSchema, false, `${tool.name}: ${key}`);
       }
       assert.equal(tool.outputSchema, undefined);
@@ -77,30 +83,77 @@ test("catalogue advertises useful guides within budget", async () => {
   } finally { await session.close(); }
 });
 
-test("input guide preserves root fields and delegates refinements", async () => {
+test("listed input schemas reject exactly the cross-field combinations the runtime rejects", async () => {
+  const session = await openSession(discoveryServer());
+  try {
+    const tools = new Map((await session.listTools()).map((tool) => [tool.name, tool.inputSchema]));
+    const replay = { version: 1, declaration: `ws-r1:${"c".repeat(64)}`, snapshots: [{ repo: "shop", kind: "sha", sha: "a".repeat(40) }] };
+    const targets = [{ file: "src/S.java", symbol: "S.find" }];
+    const cut = (owner: object) => ({ kind: "cut-places", owner, cutIndex: 0 });
+    const handler = (owner: object) => ({ kind: "handler-origins", owner, handler: { path: "a", symbol: "h", line: 1 } });
+    const page = { limit: 1 };
+    const cases: [ToolFamily, Record<string, unknown>, boolean][] = [
+      ["callers", { targets, select: cut({ kind: "fact" }), page }, true],
+      ["callers", { targets, select: cut({ kind: "fact" }) }, false],
+      ["callers", { targets, page }, false],
+      ["callers", { targets, select: cut({ kind: "section", repo: "r" }), page }, false],
+      ["callers", { targets, workspace: {}, select: cut({ kind: "section", repo: "r" }), page }, true],
+      ["callers", { targets, select: { kind: "workspace-link-evidence", linkId: "l" }, page }, false],
+      ["callers", { targets, workspace: {}, select: { kind: "workspace-link-evidence", linkId: "l" }, page }, true],
+      ["impact", { base: "main", select: handler({ kind: "local" }), page }, true],
+      ["impact", { base: "main", workspace: {}, select: handler({ kind: "local" }), page }, false],
+      ["impact", { base: "main", workspace: {}, select: handler({ kind: "section", repo: "r" }), page }, true],
+      ["entrypoints", { select: cut({ kind: "entrypoints" }), page }, true],
+      ["entrypoints", { live: true, revision: "main" }, false],
+      ["entrypoints", { live: true }, true],
+      ["entrypoints", { revision: "main" }, true],
+      ["impact", { base: "main", live: true, head: "x" }, false],
+      ["callers", { targets, replay }, false],
+      ["callers", { targets, replay, workspace: {} }, true],
+      ["impact", { base: "main", workspace: {}, live: false }, false],
+      ["impact", { base: "main", live: true, offline: true }, false],
+      ["impact", { base: "main", live: true, offline: true, workspace: {} }, true],
+      ["impact", { base: "main", offline: true }, true],
+      ["outline", {}, false],
+      ["outline", { files: ["a.ts"], focus: [{ file: "a.ts", line: 1 }] }, false],
+      ["outline", { focus: [{ file: "a.ts", line: 1 }] }, true],
+      ["workspace", { live: true, revision: "main" }, false],
+      ["workspace", { repos: [{ path: "/w/a", live: true, revision: "main" }] }, false],
+      ["workspace", { repos: [{ path: "/w/a", live: true }] }, true],
+    ];
+    for (const [family, args, expected] of cases) {
+      const listed = new AjvJsonSchemaValidator().getValidator(tools.get(`ye_ast_${family}`)!)(args).valid;
+      const runtime = TOOL_INPUTS[family].safeParse(args).success;
+      assert.deepEqual([listed, runtime], [expected, expected], `${family} ${JSON.stringify(args)}`);
+    }
+  } finally { await session.close(); }
+});
+
+test("input guide publishes declared cross-field constraints on a plain root and refuses root combinators", async () => {
   const original = z.strictObject({ a: z.string(), b: z.number().optional(), nested: z.object({ value: z.boolean() }) })
     .refine(value => !(value.a === "x" && value.b !== undefined))
-    .meta({ allOf: [{ not: { required: ["a", "b"], properties: { a: { const: "x" } } } }] });
+    .meta(crossField({ dependentSchemas: { b: { properties: { a: { not: { const: "x" } } } } } }));
   const wrapped = compactInput(original);
-  const raw = original["~standard"].jsonSchema.input({ target: "draft-07" });
-  const guide = wrapped["~standard"].jsonSchema.input({ target: "draft-07" });
+  const raw = original["~standard"].jsonSchema.input({ target: "draft-2020-12" });
+  const guide = wrapped["~standard"].jsonSchema.input({ target: "draft-2020-12" });
   for (const key of ["type", "properties", "required", "additionalProperties"]) assert.deepEqual(guide[key], raw[key]);
   const validate = new AjvJsonSchemaValidator().getValidator(guide);
   const bad = { a: "x", b: 1, nested: { value: true } };
-  assert.equal(validate(bad).valid, true);
-  assert.deepEqual(await wrapped["~standard"].validate(bad), await original["~standard"].validate(bad));
-  assert.ok("issues" in await original["~standard"].validate(bad));
-  assert.equal(validate({ ...bad, b: "invalid" }).valid, false);
+  assert.equal(validate(bad).valid, false);
+  assert.ok("issues" in await wrapped["~standard"].validate(bad));
+  assert.equal(validate({ ...bad, a: "y" }).valid, true);
+  const combined = compactInput(z.strictObject({ a: z.string() }).meta({ allOf: [{ required: ["a"] }] }));
+  assert.throws(() => combined["~standard"].jsonSchema.input({ target: "draft-2020-12" }));
 });
 
 const INPUT_CONSTRAINTS: Record<string, string> = {
-  ye_ast_entrypoints: "03757c2aa7f4941dc35cfcaefdae1542276de4b33c2a7d0feea6523de2101bb1",
-  ye_ast_impact: "f62a8a60a9877663f22d720fc0d41694adb6db660bb5003a7e7b21145e253d20",
-  ye_ast_callers: "894a7aa967a3fb5502c54c57884941655d33886c7dab3831bb54c3316d6f60cd",
-  ye_ast_importers: "d99d6f4643edcc0cfd0114018fe1faa2a7a2df6e2930e2c767acd9960ae39aca",
-  ye_ast_outline: "5c00d30f7ede25fe714036ce42580878a8e98297394ed0af1675dbcd0fe31280",
-  ye_ast_workspace: "be2953f74d297b7d286e974b18b488c4137a6f1f9c5c94385701b1fdd2893244",
-  ye_ast_decisions: "be2953f74d297b7d286e974b18b488c4137a6f1f9c5c94385701b1fdd2893244",
+  ye_ast_entrypoints: "8f421b1b0957fe152f97695f9271762b4987b909127280814f624915062bc9c3",
+  ye_ast_impact: "e8762e053413754ce955349bcd9b47ba18bdda46a269ac2b6508d605983c994b",
+  ye_ast_callers: "7ee67eedc7880c1bf1e5b7beb1d3f65de5d1ef7440de26963cc554ac217f8259",
+  ye_ast_importers: "5c8a30a8565d803f111f7c0878aab0c64f902e7b58f1bb9731a7ae2c75781022",
+  ye_ast_outline: "2f1a5187e37a9f464453fcc2adb15c02b469b798a37de7c5c32f6cf81a612109",
+  ye_ast_workspace: "a3eb1c0ee1dbf6c86080e0215b48283bcd1d26de492fbd78d558ba49b2ee7cda",
+  ye_ast_decisions: "a3eb1c0ee1dbf6c86080e0215b48283bcd1d26de492fbd78d558ba49b2ee7cda",
 };
 const COMPOSE_CONSTRAINTS = "a92ed5067d8ac46ebc38e979293f06784a52a221126b791d450b8293ecc3bb71";
 function canonicalConstraints(value: unknown): unknown {

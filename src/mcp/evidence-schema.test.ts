@@ -17,7 +17,6 @@ test('control schemas enforce pairing, branches, safe integers and closed subjec
     assert.equal(valid({ select: { kind: 'cut-places', owner: { kind: 'fact' }, cutIndex: -1 }, page: { limit: 1 } }), false);
     assert.equal(valid({ select: { kind: 'cut-places', owner: { kind: 'fact', extra: 1 }, cutIndex: 0 }, page: { limit: 1 } }), false);
     assert.equal(valid({ select: { kind: 'cut-places', owner: { kind: 'fact' }, cutIndex: 0 }, page: { limit: Number.MAX_SAFE_INTEGER + 1 } }), false);
-    assert.ok(recoveryControlConstraintsFor(tool).length);
   }
   const module = { kind: 'module-origins', owner: { kind: 'local' }, module: { file: 'a', snapshot: 'base' } };
   assert.equal(validRecoveryControls('callers', { select: module, page: { limit: 1 } }), false);
@@ -58,8 +57,8 @@ test('advertised control constraints match runtime for each branch', () => {
   ];
   for (const tool of ['entrypoints','callers','impact'] as const) {
     const base = z.strictObject({...recoveryControlShapeFor(tool),workspace:z.strictObject({}).optional()});
-    const json = z.toJSONSchema(base,{target:'draft-7'});
-    const validate = validator({...json,allOf:recoveryControlConstraintsFor(tool)});
+    const json = z.toJSONSchema(base,{target:'draft-2020-12'});
+    const validate = validator({...json,...recoveryControlConstraintsFor(tool)});
     for (const value of options) {
       const result = base.safeParse(value);
       assert.equal(validate(value).valid, result.success && validRecoveryControls(tool,result.data), `${tool}: ${JSON.stringify(value)}`);
