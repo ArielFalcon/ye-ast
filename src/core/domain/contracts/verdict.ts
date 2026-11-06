@@ -68,7 +68,11 @@ export type Verdict =
   | { kind: "admits"; guard: Guard }
   | { kind: "review"; reason: ReviewReason };
 
-const sameOrDeeper = (covers: AccessPath, changed: AccessPath) => relatePaths(covers, changed) === "exact" || relatePaths(covers, changed) === "beyond";
+/** A test of a deeper path dereferences the changed value itself and is reported as its own use; a `?.` there guards nothing before it. */
+function establishes({ kind, covers }: Guard, changed: AccessPath): boolean {
+  const relation = relatePaths(covers, changed);
+  return relation === "exact" || (relation === "beyond" && kind !== "optional-chain");
+}
 
 /**
  * Proof is asymmetric: `admits` needs a guard that establishes the changed value, `incompatible` an unguarded
@@ -80,7 +84,7 @@ export function decideUse(use: UseSite, change: ChangeKind): Verdict | undefined
   if (relation === "contains" || relation === "disjoint") return undefined;
   if (relation === "exact" && use.operation !== "dereference") return { kind: "review", reason: use.operation === "consume" ? "consumed" : "unmodelled-sink" };
   const rule = CHANGE_RULES[change];
-  const reaching = use.guards.filter((guard) => GUARD_EFFECT[guard.kind] !== "none" && sameOrDeeper(guard.covers, use.changed));
+  const reaching = use.guards.filter((guard) => GUARD_EFFECT[guard.kind] !== "none" && establishes(guard, use.changed));
   const sufficient = reaching.find((guard) => GUARD_EFFECT[guard.kind] === "protects" && guard.excludes.includes(rule.violates));
   if (sufficient !== undefined) return rule.guarded === "admits" ? { kind: "admits", guard: sufficient } : { kind: "review", reason: "removed-behind-guard" };
   if (reaching.some((guard) => GUARD_EFFECT[guard.kind] === "opaque")) return { kind: "review", reason: "opaque-guard" };

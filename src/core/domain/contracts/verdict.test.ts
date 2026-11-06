@@ -38,6 +38,18 @@ test("a guard covers only the segments it tests: a parent guard does not protect
   assert.equal(decideUse(use({ guards: [deeper] }), "nullable")?.kind, "admits");
 });
 
+test("an optional chain protects only the segment it sits at: one deeper in the path leaves the earlier dereference unguarded", () => {
+  const deeperChain = guard({ kind: "optional-chain", covers: path("address.city") });
+  assert.equal(decideUse(use({ path: path("address.city.name"), guards: [deeperChain] }), "nullable")?.kind, "incompatible");
+  const atChanged = guard({ kind: "optional-chain", covers: path("address") });
+  assert.equal(decideUse(use({ path: path("address.city.name"), guards: [atChanged] }), "nullable")?.kind, "admits");
+});
+
+test("a test of a deeper path still establishes the prefix it dereferences", () => {
+  const deeperTest = guard({ kind: "truthiness", covers: path("address.city") });
+  assert.equal(decideUse(use({ path: path("address.city.name"), guards: [deeperTest] }), "nullable")?.kind, "admits");
+});
+
 test("a guard that excludes only what the change does not introduce does not protect", () => {
   assert.equal(decideUse(use({ guards: [guard({ excludes: ["undefined"] })] }), "nullable")?.kind, "incompatible");
   assert.equal(decideUse(use({ guards: [guard({ excludes: ["null"] })] }), "removed")?.kind, "incompatible");
