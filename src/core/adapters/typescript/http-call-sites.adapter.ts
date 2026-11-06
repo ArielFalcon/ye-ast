@@ -44,8 +44,11 @@ const LEXICAL_SCOPES = new WeakMap<ts.Node, Scope>();
 /** The names the code being evaluated binds at run time: a path part that names one is `{}`, never undecided. */
 type RunTime = ReadonlySet<string>;
 
-/** What a path part came down to: the text it states, or a value the code being evaluated fills at run time. */
-type Evaluation = { readonly kind: "text"; readonly text: string } | { readonly kind: "value" };
+/**
+ * What a path part came down to: the text it states, or a value the code being evaluated fills at run time. A `cut` text
+ * stopped at the query or the fragment, so it states the URL only up to there.
+ */
+type Evaluation = { readonly kind: "text"; readonly text: string; readonly cut?: true } | { readonly kind: "value" };
 
 /** A value a name states, the file that declares it, and the names already visited to reach it. */
 interface Located<E extends ts.Expression = ts.Expression> {
@@ -563,18 +566,20 @@ class Reader {
     if (ts.isTemplateExpression(expression)) {
       let text = expression.head.text;
       for (const span of expression.templateSpans) {
-        if (endsPath(text)) return stated(text);
+        if (endsPath(text)) return cutAt(text);
         const part = await this.evaluate(shape, span.expression, scope, trail);
         if (part === undefined) return undefined;
+        if (part.kind === "text" && part.cut) return cutAt(text + part.text);
         text += written(part) + span.literal.text;
       }
       return stated(text);
     }
     if (ts.isBinaryExpression(expression) && expression.operatorToken.kind === ts.SyntaxKind.PlusToken) {
       const left = await this.evaluate(shape, expression.left, scope, trail);
-      if (left?.kind === "text" && endsPath(left.text)) return left;
+      if (left?.kind === "text" && endsPath(left.text)) return cutAt(left.text);
       const right = await this.evaluate(shape, expression.right, scope, trail);
-      return left === undefined || right === undefined ? undefined : stated(written(left) + written(right));
+      if (left === undefined || right === undefined) return undefined;
+      return right.kind === "text" && right.cut ? cutAt(written(left) + right.text) : stated(written(left) + written(right));
     }
     if (ts.isParenthesizedExpression(expression) || ts.isAsExpression(expression) || ts.isSatisfiesExpression(expression) || ts.isTypeAssertionExpression(expression)) {
       return this.evaluate(shape, expression.expression, scope, trail);
@@ -720,7 +725,7 @@ class Reader {
       if (argument === undefined) return undefined;
       const value = await this.evaluate(shape, argument, scope, trail);
       if (value?.kind === "value") return ts.isIdentifier(argument) && scope.scalars.has(argument.text) ? value : undefined;
-      if (value === undefined || value.text.includes(PLACEHOLDER) || endsPath(value.text)) return undefined;
+      if (value === undefined || value.cut || value.text.includes(PLACEHOLDER)) return undefined;
       try {
         return stated(encodeURIComponent(value.text));
       } catch {
@@ -920,6 +925,10 @@ function enclosingClassOf(node: ts.Node): ts.ClassDeclaration | undefined {
 /** The text a path part states. */
 function stated(text: string): Evaluation {
   return { kind: "text", text };
+}
+
+function cutAt(text: string): Evaluation {
+  return { kind: "text", text, cut: true };
 }
 
 /** What an evaluation writes inside a path: the text it states, or the placeholder a run-time value leaves. */

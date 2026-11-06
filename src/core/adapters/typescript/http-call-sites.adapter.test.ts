@@ -452,6 +452,16 @@ test("an encoded text whose query was cut is never encoded as if it were the who
   assert.deepEqual(sites(await reader.of([component("    this.http.get(`/api/${encodeURIComponent(`a?${this.page()}`)}`)")], "shop-web")), ["unknown unresolved@src/app/app.component.ts:6"]);
 });
 
+test("a text that holds a cut text is cut too, so it is never encoded whole", async () => {
+  const found = await reader.of([component("    const query = `a?${this.page()}`", "    this.http.get(`/api/${encodeURIComponent(`${query}`)}`)", "    this.http.get(`/api/${encodeURIComponent('' + query)}`)")], "shop-web");
+
+  assert.deepEqual(sites(found), ["unknown unresolved@src/app/app.component.ts:7", "unknown unresolved@src/app/app.component.ts:8"]);
+});
+
+test("an encoded text that states a question mark itself is encoded whole", async () => {
+  assert.deepEqual(sites(await reader.of([component("    this.http.get(`/api/${encodeURIComponent('a?b')}`)")], "shop-web")), ["GET /api/a%3Fb@src/app/app.component.ts:6"]);
+});
+
 test("a path function that calls itself is undecided, never a hang", async () => {
   assert.deepEqual(sites(await reader.of([pathFunction(" return orderPath(!open)")], "shop-web")), ["unknown unresolved@paths.ts:6"]);
 });
