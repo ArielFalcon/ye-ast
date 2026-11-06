@@ -1,3 +1,4 @@
+import type { SourceTrivia } from "../../ports/source-trivia.port.ts";
 import type { DeclarationEvidenceReader } from "../../ports/declaration-evidence.port.ts";
 import { blastRadius, type BlastRadius } from "../../domain/change/blast-radius.ts";
 import { isReadableFile, kindOfChangedFile } from "../../domain/change/changed-file.ts";
@@ -65,11 +66,15 @@ export interface ImpactQueriesDeps extends HeadReaderDeps {
    * repository stops being a cut (`RFC-0016` gap A). Without it every answer is the one ye-ast gave before.
    */
   importOrigins?: ImportOriginsReader;
+  /** Tells the trivia lines of a requested range apart; without it every line of a range is code. */
+  sourceTrivia?: SourceTrivia;
   moduleDependencies?: ModuleDependenciesReader;
   declarationEvidence?: DeclarationEvidenceReader;
 }
 
 type Answer = Result<Fact<ImpactValue>, OfChangeFault>;
+
+const NO_TRIVIA: SourceTrivia = { triviaLines: async () => new Set() };
 
 
 export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
@@ -129,7 +134,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
           if (signal?.aborted) return ABORTED;
           const proofs = await proofsOf(deps, store, headTree, request.signal);
           if (signal?.aborted) return ABORTED;
-          const read = impactOf({ store, changes: requestedRanges(store, changes, headTree.sources), requested, componentsByResource, found, fields, locals, memberUses, loads, headTree, summary, budget: request.budget ?? {}, proofs });
+          const read = impactOf({ store, changes: await requestedRanges(store, changes, headTree.sources, deps.sourceTrivia ?? NO_TRIVIA), requested, componentsByResource, found, fields, locals, memberUses, loads, headTree, summary, budget: request.budget ?? {}, proofs });
           if (read.missing.length > 0) {
             const names = read.missing.map(({ file, symbol }) => `${file}:${symbol}`).join(", ");
             return { ok: false, fault: { kind: "unknown-symbol", detail: `no symbol at the revision for ${names}`, entries: read.missing } };

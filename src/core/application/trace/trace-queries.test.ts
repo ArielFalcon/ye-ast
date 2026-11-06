@@ -32,6 +32,8 @@ interface Options {
   storeFails?: Error;
   /** The head's sources, as the export reader hands them over. */
   sources?: readonly { path: string; content: string }[];
+  /** The trivia lines a tokenizer reads in each source, by path. */
+  trivia?: Readonly<Record<string, readonly number[]>>;
 }
 
 function setup(options: Options) {
@@ -58,6 +60,7 @@ function setup(options: Options) {
       index: async () => (options.indexFails ? { ok: false, fault: { kind: "index-failed", detail: "broken" } } : { ok: true, value: SUMMARY }),
       open: () => ({ ok: true, value: store }),
     },
+    sourceTrivia: { triviaLines: async (file: { path: string }) => new Set(options.trivia?.[file.path] ?? []) },
     importOrigins: () => ({ origins: async (sites: readonly ImportOriginSite[]) => { options.onOrigins?.(); return sites.map(answer); } }),
     engines: {},
     ...(options.live && { live: options.live.deps, trust: { read: async () => ({ ok: true, value: "trusted" }) } }),
@@ -322,7 +325,7 @@ test("a line range selecting two declarations gives two roots", async () => {
 test("a line range selects the declarations it intersects, never the file's other declarations through a blank line between them", async () => {
   const content = ["function f() {", "  return 1;", "}", "", "function g() {", "  return 2;", "}", "", "function h() {}", ""].join("\n");
   const nodes = [fakeNode("f", "function", B, 1, 3), fakeNode("g", "function", B, 5, 7), fakeNode("h", "function", B, 9, 9)];
-  const fact = await factOf({ nodes, sources: [{ path: B, content }] }, [{ file: B, start: 3, end: 5 }]);
+  const fact = await factOf({ nodes, sources: [{ path: B, content }], trivia: { [B]: [4, 8, 10] } }, [{ file: B, start: 3, end: 5 }]);
   assert.deepEqual(valueOf(fact).roots, [{ target: "src/b.ts:3-5", steps: [0, 1] }]);
   assert.deepEqual(valueOf(fact).steps.map((step) => step.symbol), ["f", "g"]);
 });

@@ -1,4 +1,5 @@
 import { kindOfChangedFile } from "../../domain/change/changed-file.ts";
+import type { SourceTrivia } from "../../ports/source-trivia.port.ts";
 import type { ComponentRef } from "../../domain/change/seeds.ts";
 import { contentFingerprint, exportCuts } from "../../domain/map/entrypoint-map.ts";
 import { comparePosition } from "../../domain/shared/code-node.ts";
@@ -18,6 +19,8 @@ import { walkTrace } from "./trace-walk.ts";
 export interface TraceQueriesDeps extends HeadReaderDeps {
   /** Reads where the bare names a file calls come from, so a call to a package or a language global is external. */
   importOrigins: ImportOriginsReader;
+  /** Tells the trivia lines of a requested range apart, so they select nothing. */
+  sourceTrivia: SourceTrivia;
   /** Version of each engine every operation runs on, by package name. */
   engines: Readonly<Record<string, string>>;
 }
@@ -49,7 +52,12 @@ export function createTraceQueries(deps: TraceQueriesDeps): TraceQueries {
         if (index === "unavailable") return { ok: true, value: { ...head.base(content), status: "unknown", reason: "index-unavailable" } };
         const { store, summary } = index;
         try {
-          const selections = targets.map((target) => ({ target, selection: "start" in target ? selectRoots(store, requestedRanges(store, rangeChanges([target]), head.tree.sources), [], NO_COMPONENTS) : selectRoots(store, [], [target], NO_COMPONENTS) }));
+          const selections = await Promise.all(targets.map(async (target) => ({
+            target,
+            selection: "start" in target
+              ? selectRoots(store, await requestedRanges(store, rangeChanges([target]), head.tree.sources, deps.sourceTrivia), [], NO_COMPONENTS)
+              : selectRoots(store, [], [target], NO_COMPONENTS),
+          })));
           const missing = selections.flatMap(({ selection }) => selection.missing);
           if (missing.length > 0) return { ok: false, fault: { kind: "unknown-symbol", detail: `no symbol at the revision for ${missing.map(({ file, symbol }) => `${file}:${symbol}`).join(", ")}`, entries: missing } };
 

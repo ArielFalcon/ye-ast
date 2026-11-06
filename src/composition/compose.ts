@@ -43,6 +43,9 @@ import { createPatternRedaction } from "../core/adapters/redaction/pattern-redac
 import { createJavaCallSites } from "../core/adapters/spring/java-call-sites.adapter.ts";
 import { createSpringRoutesExtractor } from "../core/adapters/spring/spring-routes.adapter.ts";
 import { createJavaParser } from "../core/adapters/tree-sitter/java-parser.adapter.ts";
+import { createJavaTrivia } from "../core/adapters/tree-sitter/java-trivia.adapter.ts";
+import { createTypeScriptTrivia } from "../core/adapters/typescript/source-trivia.adapter.ts";
+import type { SourceTrivia } from "../core/ports/source-trivia.port.ts";
 import { createAngularDeclarationReader } from "../core/adapters/typescript/angular-declarations.adapter.ts";
 import { createAngularRoutesExtractor } from "../core/adapters/typescript/angular-routes.adapter.ts";
 import { createDynamicLoadReader } from "../core/adapters/typescript/dynamic-loads.adapter.ts";
@@ -139,6 +142,10 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
     },
   }, { extract: "entrypoints" });
   const typescriptCallSites = createHttpCallSites();
+  const typescriptTrivia = createTypeScriptTrivia();
+  const sourceTrivia: SourceTrivia = {
+    triviaLines: async (file) => new Set([...(await typescriptTrivia.triviaLines(file)), ...(await createJavaTrivia(await createJavaParser()).triviaLines(file))]),
+  };
   const callSites = staged<CallSiteReader>({
     of: async (files, repo, libraries) => {
       const java = await createJavaCallSites(await createJavaParser()).of(files, repo, libraries);
@@ -190,6 +197,7 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
     ...budget,
     ...trust,
     importOrigins: (sources: readonly SourceFile[]) => createImportOrigins(sources),
+    sourceTrivia,
     moduleDependencies,
     declarationEvidence: createDeclarationEvidenceReader(),
   };
@@ -240,6 +248,7 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
     ...budget,
     ...trust,
     importOrigins: (sources: readonly SourceFile[]) => createImportOrigins(sources),
+    sourceTrivia,
   });
   const trace = measurement === undefined ? bareTrace : measuredTrace(bareTrace, measurement);
   const defaults = createWorkspaceDefaults(createFixedLayerStore());

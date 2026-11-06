@@ -58,6 +58,8 @@ interface Options {
   onDiffDirectories?: () => void;
   /** The head's sources, as the export reader hands them over. */
   sources?: SourceFile[];
+  /** The trivia lines a tokenizer reads in each source, by path. */
+  trivia?: Readonly<Record<string, readonly number[]>>;
   /** Reads the imports of those sources, as composition wires it. */
   importOrigins?: ImportOriginsReader;
   moduleDependencies?: ModuleDependenciesReader;
@@ -131,6 +133,7 @@ function setup(options: Options = {}) {
     ...(options.live && { live: options.live.deps }),
     ...(options.declarationEvidence && { declarationEvidence: options.declarationEvidence }),
     ...(options.importOrigins && { importOrigins: options.importOrigins }),
+    ...(options.trivia && { sourceTrivia: { triviaLines: async (file: SourceFile) => new Set(options.trivia?.[file.path] ?? []) } }),
     ...(options.moduleDependencies && { moduleDependencies: options.moduleDependencies }),
   };
   const request: AtRevision<ImpactOfChangeRequest> = { repo: "/repo", repoId: "repo", base: "base", head: "head", ...(options.signal && { signal: options.signal }) };
@@ -716,7 +719,7 @@ function rangeFile(between: readonly string[]): SourceFile {
 const RANGE_NODES = [fakeNode("f", "function", "src/A.ts", 1, 3), fakeNode("h", "function", "src/A.ts", 10, 14), fakeNode("g", "function", "src/A.ts", 20, 20)];
 
 test("a requested range selects the declarations it intersects, and its blank and comment lines between them select nothing", async () => {
-  const { callers } = setup({ nodes: RANGE_NODES, sources: [rangeFile(["", "// note", "/* block", "   still */", "", ""])] });
+  const { callers } = setup({ nodes: RANGE_NODES, sources: [rangeFile(["", "// note", "/* block", "   still */", "", ""])], trivia: { "src/A.ts": [4, 5, 6, 7, 8, 9, 12, 13, 15, 16, 17, 18, 19, 21] } });
   const seeds = async (start: number, end: number) => {
     const answer = callersFact(await callers({ targets: [{ file: "src/A.ts", start, end }] }));
     return answer.status === "unknown" ? [] : answer.value.seeds.map((seed) => [seed.symbol, seed.basis]);
@@ -727,7 +730,7 @@ test("a requested range selects the declarations it intersects, and its blank an
 });
 
 test("a requested range over a top-level statement still selects every top-level declaration of its file", async () => {
-  const { callers } = setup({ nodes: RANGE_NODES, sources: [rangeFile(["", "register(f);", "", "", "", ""])] });
+  const { callers } = setup({ nodes: RANGE_NODES, sources: [rangeFile(["", "register(f);", "", "", "", ""])], trivia: { "src/A.ts": [4, 6, 7, 8, 9] } });
   const answer = callersFact(await callers({ targets: [{ file: "src/A.ts", start: 4, end: 5 }] }));
   assert.deepEqual(answer.status !== "unknown" && answer.value.seeds.map((seed) => [seed.symbol, seed.basis]), [["f", "top-level"], ["h", "top-level"], ["g", "top-level"]]);
 });

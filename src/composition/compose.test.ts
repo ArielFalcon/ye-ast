@@ -700,3 +700,17 @@ test("a trace over a real index reports a function a nested, returned or field l
   assert.equal(answer.value.status, "complete");
   assert.deepEqual(answer.value.status === "complete" && answer.value.value.steps[0]?.external, [{ kind: "unnamed", names: ["factory().returnedMethod", "holder.table.fieldMethod", "outer.inner.nestedMethod"] }]);
 });
+
+test("a requested range over a top-level statement after a template literal that opens a comment selects every top-level declaration, never nothing", async () => {
+  writeFileSync(join(repo, "src", "marker.ts"), ["const marker = \"`\";", "const template = `", "/*", "`;", "register();", "export function f() {}", ""].join("\n"));
+  git("add", "-A");
+  git("commit", "-q", "-m", "marker");
+  const { impact, trace } = composeQueries({ scratchRoot });
+
+  const callers = await impact.callers({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: "src/marker.ts", start: 5, end: 5 }] });
+  const traced = await trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: "src/marker.ts", start: 5, end: 5 }] });
+
+  assert.ok(callers.ok && traced.ok);
+  assert.deepEqual(callers.value.status !== "unknown" && callers.value.value.seeds.map((seed) => [seed.symbol, seed.basis]), [["marker", "top-level"], ["template", "top-level"], ["f", "top-level"]]);
+  assert.deepEqual(traced.value.status !== "unknown" && traced.value.value.steps.map((step) => step.symbol), ["marker", "template", "f"]);
+});
