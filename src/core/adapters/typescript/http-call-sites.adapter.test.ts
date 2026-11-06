@@ -87,6 +87,8 @@ test("a class static block's var does not shadow its enclosing function's route"
 test("global object inspection and unrelated property names do not count as escaping the global object", async () => {
   const file = source("read.ts", "typeof window; 'ontouchstart' in globalThis; const position = { global: true }; position.global; (globalThis as any).location; fetch(`/api/${encodeURIComponent('x')}`)");
   assert.deepEqual(sites(await reader.of([file], "repo")), ["GET /api/x@read.ts:1"]);
+  const copied = source("copy.ts", "const copy = { ...window }; const other = { ...(globalThis as any) };");
+  assert.deepEqual(sites(await reader.of([copied, file], "repo")), ["GET /api/x@read.ts:1"]);
 });
 
 test("function-scoped var bindings shadow outer constants outside their block", async () => {
