@@ -179,6 +179,7 @@ test("event diagnostics distinguish unread wrapper sources from expanded destina
   const [read] = await reader.of([caller], "app", [library]);
   assert.deepEqual(missing?.diagnostic, { cause: "source-not-read", source: "not-read" });
   assert.deepEqual(read?.diagnostic, { cause: "destination-undecidable", source: "read" });
+  assert.equal(read?.target.evidence[0]?.via, "com.acme.AcmeMessenger");
   assert.ok(read?.target.evidence.some(e => e.path.includes("(library)")));
 });
 

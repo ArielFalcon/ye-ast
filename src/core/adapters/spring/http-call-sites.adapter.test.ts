@@ -568,6 +568,21 @@ test("shared mutable objects cannot recover field defaults through a source gett
   assert.equal((await reader.of([source], "service"))[0]?.target.status, "unknown");
 });
 
+test("each request a wrapper call reaches names the library of its own request, not of another one", async () => {
+  const caller = java("Caller", `class Caller { Helper helper; void load() { helper.send(); } }
+    class Helper { RestTemplate rt; String url; AcmeRestClient client; void send() { rt.getForObject(url, String.class); client.get(); } }`, [...WEB, "com.acme.AcmeRestClient"]);
+  const library = inLibrary(file("src/main/java/com/acme/AcmeRestClient.java", 'package com.acme; import org.springframework.web.client.RestTemplate; public class AcmeRestClient { RestTemplate rt; String url; public void get() { rt.getForObject(url, String.class); } }'));
+  const sites = (await reader.of([caller], "app", [library])).filter((site) => site.symbol === "Caller.load");
+  const throughLibrary = sites.filter((site) => site.target.evidence.some((place) => place.path.startsWith("(library)/")));
+  const owned = sites.filter((site) => !throughLibrary.includes(site));
+  assert.equal(throughLibrary.length, 1);
+  assert.equal(owned.length, 1);
+  assert.equal(throughLibrary[0]?.diagnostic?.source, "read");
+  assert.equal(throughLibrary[0]?.target.evidence[0]?.via, "com.acme.AcmeRestClient");
+  assert.equal(owned[0]?.diagnostic?.source, undefined);
+  assert.equal(owned[0]?.target.evidence[0]?.via, undefined);
+});
+
 test("HTTP diagnostics distinguish a missing wrapper from a read wrapper with an undecidable destination", async () => {
   const caller = java("Caller", 'class Caller { AcmeRestClient client; void load() { client.get(); } }', [...WEB, "com.acme.AcmeRestClient"]);
   const library = inLibrary(file("src/main/java/com/acme/AcmeRestClient.java", 'package com.acme; import org.springframework.web.client.RestTemplate; public class AcmeRestClient { RestTemplate rt; String url; public void get() { rt.getForObject(url, String.class); } }'));
