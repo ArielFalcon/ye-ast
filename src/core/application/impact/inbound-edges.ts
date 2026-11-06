@@ -271,10 +271,7 @@ export function createInboundEdges(
     return byReceiver.get(receiver) ?? [];
   }
 
-  /**
-   * The uses of `node` by name through `this`, made by code inside a type that declares it. The graph spells a call on
-   * `this` of a member named like a library global by the bare name; the syntax proof makes it a call that settles its cut.
-   */
+  /** The uses of `node` through `this`, by its `this.` name or a bare call proven on `this`, made inside a type that declares it. */
   function ownUsesOf(node: GraphSymbol): InboundEdge[] {
     const owners = ownersOf(node);
     if (owners.length === 0) return [];

@@ -1,6 +1,6 @@
 import ts from "typescript";
 import { matchesReferenceKind, syntaxName } from "./reference-occurrence.ts";
-import { declarationCounts, declaredName, declaredNames, scriptGlobalNames } from "./syntax-names.ts";
+import { declarationCounts, declaredName, declaredNames, isStatic, scriptGlobalNames } from "./syntax-names.ts";
 import { moduleStatement } from "./import-bindings.ts";
 import { sourceTree } from "./source-tree.ts";
 import { isPackageManifest, isTypeScriptSource } from "../../domain/languages/typescript.ts";
@@ -214,10 +214,7 @@ function checkSites(file: string, text: string, group: readonly { site: ImportOr
   return { matches: result, shape };
 }
 
-/**
- * `this.name` whose `this` is an instance of the class holding the instance member around it: only an arrow function
- * keeps it. A class declared inside a function or another class is refused, since the graph places its code by lines.
- */
+/** `this.name` whose `this` is an instance of a class declared outside any function or class, inside one of its instance members. */
 function callsOwnMember(callee: ts.Expression, name: string): boolean {
   if (!ts.isPropertyAccessExpression(callee) || callee.expression.kind !== ts.SyntaxKind.ThisKeyword || callee.name.text !== name) return false;
   for (let node: ts.Node = callee.parent; !ts.isSourceFile(node); node = node.parent) {
@@ -226,10 +223,6 @@ function callsOwnMember(callee: ts.Expression, name: string): boolean {
     if (ts.isFunctionLike(node) || ts.isPropertyDeclaration(node)) return ts.isClassLike(node.parent) && !isStatic(node) && !isNested(node.parent);
   }
   return false;
-}
-
-function isStatic(member: ts.Node): boolean {
-  return ts.canHaveModifiers(member) && (ts.getModifiers(member)?.some((modifier) => modifier.kind === ts.SyntaxKind.StaticKeyword) ?? false);
 }
 
 function isNested(declaration: ts.ClassLikeDeclaration): boolean {
