@@ -69,7 +69,9 @@ replaces `head` or `revision` under `trusted` only ([Live head](#live-head-slice
 | removed with its symbol | none at `head`: its former callers changed too in a consistent commit and are seeds themselves; a caller left behind shows as an unresolved reference naming it. The same holds for a declaration removed from a symbol that survives (a method of a class): the holder seeds, and every name the removed lines declared, in any hunk, that no added line of the file declares again (a rename loses its name, an edited signature keeps it) also leads an `unresolved-link` cut at the references that still name it |
 
 `Seed.basis` is `lines`, `top-level` or `resource`, or `requested` for a symbol `impact.callers` was asked for by name.
-A requested line range seeds through the rows above, as the added lines of a file; a requested symbol seeds every
+A requested line range seeds through the rows above, as the added lines of a file, except that a line of the range no
+symbol holds and no code is on (blank, a comment) selects nothing: a range across the gap between two declarations
+seeds those two, not the file's top-level symbols. A requested symbol seeds every
 seedable node of its file whose dotted path in the file's `contains` tree ends with it at whole names (a bare name at
 any depth, `A.m` only an `m` that `A` contains directly), so overloads all seed; a symbol that is both requested
 and inside a requested range is one seed, `requested`.

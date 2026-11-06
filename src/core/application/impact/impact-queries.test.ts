@@ -709,6 +709,29 @@ test("a requested line range seeds like changed lines do: the innermost symbol i
   assert.deepEqual(answer.status === "complete" && answer.value.seeds.map((seed) => [seed.symbol, seed.basis]), [["h", "lines"]]);
 });
 
+/** `f` at 1-3 and `h` at 10-14, with blank and comment lines between them; `g` at 20 lies outside every range below. */
+function rangeFile(between: readonly string[]): SourceFile {
+  return { path: "src/A.ts", content: ["export function f() {", "  return 1;", "}", ...between, "export function h() {", "  return 2;", "", "", "}", "", "", "", "", "", "export function g() {}", ""].join("\n") };
+}
+const RANGE_NODES = [fakeNode("f", "function", "src/A.ts", 1, 3), fakeNode("h", "function", "src/A.ts", 10, 14), fakeNode("g", "function", "src/A.ts", 20, 20)];
+
+test("a requested range selects the declarations it intersects, and its blank and comment lines between them select nothing", async () => {
+  const { callers } = setup({ nodes: RANGE_NODES, sources: [rangeFile(["", "// note", "/* block", "   still */", "", ""])] });
+  const seeds = async (start: number, end: number) => {
+    const answer = callersFact(await callers({ targets: [{ file: "src/A.ts", start, end }] }));
+    return answer.status === "unknown" ? [] : answer.value.seeds.map((seed) => [seed.symbol, seed.basis]);
+  };
+  assert.deepEqual(await seeds(2, 11), [["f", "lines"], ["h", "lines"]]);
+  assert.deepEqual(await seeds(5, 7), []);
+  assert.deepEqual(await seeds(12, 13), [["h", "lines"]]);
+});
+
+test("a requested range over a top-level statement still selects every top-level declaration of its file", async () => {
+  const { callers } = setup({ nodes: RANGE_NODES, sources: [rangeFile(["", "register(f);", "", "", "", ""])] });
+  const answer = callersFact(await callers({ targets: [{ file: "src/A.ts", start: 4, end: 5 }] }));
+  assert.deepEqual(answer.status !== "unknown" && answer.value.seeds.map((seed) => [seed.symbol, seed.basis]), [["f", "top-level"], ["h", "top-level"], ["g", "top-level"]]);
+});
+
 test("a symbol that is both requested and inside a requested range seeds once, as requested", async () => {
   const { callers } = setup({ nodes: SOURCE_NODES, edges: SOURCE_EDGES });
   const answer = callersFact(await callers({ targets: [{ file: "src/A.java", start: 1, end: 2 }, { file: "src/A.java", symbol: "f" }] }));

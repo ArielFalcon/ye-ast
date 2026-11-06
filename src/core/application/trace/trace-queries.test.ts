@@ -30,6 +30,8 @@ interface Options {
   live?: FakeLive;
   /** What every read of the store's edges throws. */
   storeFails?: Error;
+  /** The head's sources, as the export reader hands them over. */
+  sources?: readonly { path: string; content: string }[];
 }
 
 function setup(options: Options) {
@@ -47,7 +49,7 @@ function setup(options: Options) {
       exportCommit: async () => ({ ok: true, value: { files: [A, B].map((path) => ({ path, blob: "1", written: true })), skipped: [] } }),
     },
     scratch: { create: async () => "/scratch/head", remove: async () => undefined },
-    reader: { read: async () => [] },
+    reader: { read: async () => options.sources ?? [] },
     extractor: { extract: () => [] },
     digest: { of: (value: string) => `digest:${value}` },
     producer: { name: "ye-ast", version: "0.0.0" },
@@ -310,6 +312,14 @@ test("a line range selecting two declarations gives two roots", async () => {
   const fact = await factOf({ nodes: [fakeNode("open", "function", A, 3, 5), fakeNode("close", "function", A, 6, 9)] }, [{ file: A, start: 4, end: 7 }]);
   assert.deepEqual(valueOf(fact).steps.map((step) => [step.id, step.symbol]), [[0, "open"], [1, "close"]]);
   assert.deepEqual(valueOf(fact).roots, [{ target: "src/a.ts:4-7", steps: [0, 1] }]);
+});
+
+test("a line range selects the declarations it intersects, never the file's other declarations through a blank line between them", async () => {
+  const content = ["function f() {", "  return 1;", "}", "", "function g() {", "  return 2;", "}", "", "function h() {}", ""].join("\n");
+  const nodes = [fakeNode("f", "function", B, 1, 3), fakeNode("g", "function", B, 5, 7), fakeNode("h", "function", B, 9, 9)];
+  const fact = await factOf({ nodes, sources: [{ path: B, content }] }, [{ file: B, start: 3, end: 5 }]);
+  assert.deepEqual(valueOf(fact).roots, [{ target: "src/b.ts:3-5", steps: [0, 1] }]);
+  assert.deepEqual(valueOf(fact).steps.map((step) => step.symbol), ["f", "g"]);
 });
 
 test("a root an earlier root already expanded is seen at that step", async () => {

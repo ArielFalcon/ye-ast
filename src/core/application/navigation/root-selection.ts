@@ -1,10 +1,12 @@
 import { kindOfChangedFile } from "../../domain/change/changed-file.ts";
 import type { FileChange } from "../../domain/change/diff-reader.ts";
-import { isSeedable, selectSeeds, type ComponentRef, type SeedSelection, type SelectedSeed } from "../../domain/change/seeds.ts";
+import { isSeedable, selectSeeds, topLevelOf, type ComponentRef, type SeedSelection, type SelectedSeed } from "../../domain/change/seeds.ts";
+import { linesWithoutCode } from "../../domain/languages/source-lines.ts";
 import { comparePosition, compareText } from "../../domain/shared/code-node.ts";
 import { branchesOf, declarationPath, selectedBySymbol, type DeclarationBranch } from "../../domain/shared/declaration-tree.ts";
 import type { Evidence } from "../../domain/shared/fact.ts";
 import type { CodeGraphReader, GraphSymbol } from "../../ports/code-graph.port.ts";
+import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { CallersTarget, UnknownSymbolFault } from "../../ports/impact-queries.port.ts";
 import { containmentTree } from "../outline/outline.ts";
 
@@ -35,6 +37,36 @@ export function rangeChanges(targets: readonly CallersTarget[]): FileChange[] {
   return [...Map.groupBy(ranges, ({ file }) => file)]
     .map(([path, inFile]): FileChange => ({ path, deleted: false, binary: false, added: inFile.map(({ start, end }) => ({ start, end })), removals: [], removedNames: [] }))
     .sort((a, b) => compareText(a.path, b.path));
+}
+
+/**
+ * The requested ranges without their lines that no top-level declaration holds and no code is on: such a line selects
+ * nothing, where a changed one would select every top-level declaration of its file. A file the sources do not hold, or
+ * that declares nothing, keeps its ranges.
+ */
+export function requestedRanges(store: CodeGraphReader, changes: readonly FileChange[], sources: readonly SourceFile[]): FileChange[] {
+  const contents = new Map(sources.map((file) => [file.path, file.content]));
+  const symbolsByFile = Map.groupBy(store.symbolsInFiles(changes.map(({ path }) => path)).filter(isSeedable), (symbol) => symbol.file);
+  return changes.map((change) => {
+    const content = contents.get(change.path);
+    const top = topLevelOf(symbolsByFile.get(change.path) ?? []);
+    if (content === undefined || top.length === 0 || kindOfChangedFile(change.path) !== "source") return change;
+    const quiet = linesWithoutCode(change.path, content);
+    const lastLine = content.split("\n").length;
+    const selects = (line: number): boolean => !quiet.has(line) || top.some((symbol) => symbol.startLine <= line && line <= symbol.endLine);
+    return { ...change, added: change.added.flatMap(({ start, end }) => runsOf(start, Math.min(end, lastLine), selects)) };
+  });
+}
+
+function runsOf(start: number, end: number, selects: (line: number) => boolean): { start: number; end: number }[] {
+  const runs: { start: number; end: number }[] = [];
+  for (let line = start; line <= end; line += 1) {
+    if (!selects(line)) continue;
+    const last = runs.at(-1);
+    if (last !== undefined && last.end === line - 1) last.end = line;
+    else runs.push({ start: line, end: line });
+  }
+  return runs;
 }
 
 /**
