@@ -216,6 +216,11 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
 
   async function visit(step: WalkedStep, symbol: GraphSymbol, depth: number): Promise<void> {
     if (signal?.aborted) return;
+    if (runsValue(step, symbol)) {
+      step.unsettled = true;
+      cuts.push({ kind: "unresolved-link", at: [placeAt(symbol.file, symbol.startLine, symbol.name)] });
+      return;
+    }
     const first = expandedAt.get(symbol.id);
     if (first !== undefined) {
       step.seen = first;
@@ -263,6 +268,11 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
     cuts: [...cuts, ...boundCuts("depth", stopped.depth, budget.depth), ...boundCuts("caller-budget", stopped.expansions, budget.expansions)],
     expanded: expansions,
   };
+}
+
+/** A call that reaches a property or field runs the value it holds, which its initializer built at construction. */
+function runsValue(step: WalkedStep, symbol: GraphSymbol): boolean {
+  return (step.via === "call" || step.via === "own-member") && (FIELD_KINDS as readonly string[]).includes(symbol.kind);
 }
 
 function declarationOf(symbol: GraphSymbol): TraceDeclaration {

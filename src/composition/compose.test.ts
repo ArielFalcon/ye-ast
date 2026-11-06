@@ -825,6 +825,40 @@ test("a trace over a real index expands a class root into its members that have 
   ]);
 });
 
+test("a trace over a real index never expands the initializer of a property a call reaches: the call runs its value, a cut at the property; an arrow-valued property still expands", async () => {
+  writeFileSync(join(repo, "src", "owner.ts"), [
+    "export function emptyOwnerForm(): () => string { return () => \"x\"; }",
+    "export function render(): void {}",
+    "export class OwnerPage {",
+    "  readonly owner = emptyOwnerForm();",
+    "  readonly refresh = () => { render(); };",
+    "  ownerForm(): void {",
+    "    this.owner();",
+    "    this.refresh();",
+    "  }",
+    "}",
+    "",
+  ].join("\n"));
+  git("add", "-A");
+  git("commit", "-q", "-m", "owner");
+  const { trace } = composeQueries({ scratchRoot });
+
+  const [call, root] = await Promise.all([
+    trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: "src/owner.ts", symbol: "OwnerPage.ownerForm" }] }),
+    trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: "src/owner.ts", symbol: "OwnerPage.owner" }] }),
+  ]);
+
+  assert.ok(call.ok && call.value.status === "partial");
+  assert.deepEqual(call.value.value.steps.map(({ symbol, kind, parent, leaves }) => ({ symbol, kind, parent, leaves: leaves?.map((leaf) => leaf.symbol) })), [
+    { symbol: "ownerForm", kind: "method", parent: undefined, leaves: undefined },
+    { symbol: "owner", kind: "property", parent: 0, leaves: undefined },
+    { symbol: "refresh", kind: "method", parent: 0, leaves: ["render"] },
+  ]);
+  assert.deepEqual(call.value.cuts.map((cut) => [cut.kind, ...cut.at]), [["unresolved-link", "src/owner.ts:4 owner"]]);
+  assert.ok(root.ok && root.value.status === "complete");
+  assert.deepEqual(root.value.value.steps.map(({ symbol, leaves }) => ({ symbol, leaves: leaves?.map((leaf) => leaf.symbol) })), [{ symbol: "owner", leaves: ["emptyOwnerForm"] }]);
+});
+
 test("callers over a range inside a property initializer still seeds the class that holds it", async () => {
   commitPage();
   const { impact } = composeQueries({ scratchRoot });
