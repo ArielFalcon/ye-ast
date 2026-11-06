@@ -15,7 +15,7 @@ import type { ImportOriginSite, ImportOrigins, ReplacedRoots, ResolvedNameSite, 
 import { createModuleResolver, manifestPackages, packageOf } from "./module-resolver.ts";
 import { TYPESCRIPT_LIB_GLOBALS } from "./typescript-lib-globals.ts";
 import { parseAngularRouteFile } from "./angular-router.extractor.ts";
-import { createDeclarationLookup, type ModuleShape } from "./declaration-lookup.ts";
+import { createExportLookup, type ModuleShape } from "./declaration-lookup.ts";
 
 /** The names the pinned `typescript` declares, held once for the process rather than rebuilt per query. */
 const LIB_GLOBALS = new Set(TYPESCRIPT_LIB_GLOBALS);
@@ -56,7 +56,7 @@ export function createImportOrigins(sources: readonly SourceFile[], parse: Parse
     if (!moduleShapes.has(file)) moduleShapes.set(file, texts.has(file) && isTypeScriptSource(file) ? parseAngularRouteFile(file, texts.get(file)!) : undefined);
     return moduleShapes.get(file);
   }
-  const exportedDeclaration = createDeclarationLookup(async (file) => moduleShapeOf(file), async (from, specifier) => {
+  const exportedDeclaration = createExportLookup(async (file) => moduleShapeOf(file), async (from, specifier) => {
     const resolved = await modules.resolve(from, specifier);
     return "file" in resolved ? resolved.file : undefined;
   });
@@ -211,6 +211,7 @@ export function createImportOrigins(sources: readonly SourceFile[], parse: Parse
     /** A member of a namespace import is the declaration the module exports under its name, followed through re-exports. */
     if ("file" in resolved && moduleShapeOf(file)?.imports.get(root)?.imported === "*") {
       const declaration = member === undefined ? undefined : await exportedDeclaration(resolved.file, member);
+      if (declaration === "ambiguous") return { kind: "ambiguous", root };
       return declaration === undefined ? UNKNOWN_BINDING : { kind: "located", root, file: declaration.file, path: declaration.name };
     }
     const named = { root, ...(member === undefined ? {} : { member }) };
@@ -264,14 +265,18 @@ function chainAt({ source, starting }: FileIndex, text: string, site: UseSite): 
     const spelled = ts.isIdentifier(node) ? node.text : node.kind === ts.SyntaxKind.ThisKeyword || node.kind === ts.SyntaxKind.SuperKeyword ? node.getText(source) : undefined;
     const whole = ts.isNewExpression(node) || spelled !== undefined ? wholeChain(node) : undefined;
     if (whole === undefined) continue;
-    const head = headOf(whole);
-    const names = chainNames(whole);
     if (spelled !== site.spelled && !chainNames(throughCalls(whole)).includes(site.spelled)) continue;
-    if (head.kind !== ts.SyntaxKind.SuperKeyword) return { root: head, ...(names[1] === undefined ? {} : { member: names[1] }) };
+    const head = headOf(whole);
+    if (head.kind !== ts.SyntaxKind.SuperKeyword) return chainOf(whole);
     const base = superclassOf(head);
-    return base === undefined ? undefined : { root: headOf(base), ...(chainNames(base)[1] === undefined ? {} : { member: chainNames(base)[1]! }) };
+    return base === undefined ? undefined : chainOf(base);
   }
   return undefined;
+}
+
+function chainOf(whole: ts.Node): Chain {
+  const member = chainNames(whole)[1];
+  return { root: headOf(whole), ...(member === undefined ? {} : { member }) };
 }
 
 /** The chain `whole` begins, through the calls and assertions written on it: `a.b(x).c` from `a.b`. */
@@ -336,7 +341,6 @@ function declaredBinding(source: ts.SourceFile, root: ts.Identifier, declaration
   const around = ownerAround(source, root, owner);
   if (around !== undefined && declarations.every((declaration) => isInside(declaration, around))) return { kind: "local", root: root.text };
   const lines = declarations.map((declaration) => lineOf(source, nameOf(declaration) ?? declaration));
-  /** The binding is visible at the use, so a function that declares it holds the use too. */
   const captured = declarations.length > 0 && declarations.every((declaration) => isValueBinding(declaration) && inFunction(declaration));
   return { kind: "declared", root: root.text, lines: [...new Set(lines)].sort((a, b) => a - b), captured };
 }

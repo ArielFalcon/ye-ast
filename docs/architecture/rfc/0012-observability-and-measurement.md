@@ -184,6 +184,7 @@ A **query line**, one per completed request, measured around the call:
 | `snapshot` | kind and value: the join key a host needs to correlate a reported bad answer |
 | `cpu_ms` | the process CPU, user plus system, spent between the call and its answer; concurrent requests and indexer children are not separated out |
 | `rss_bytes`, `heap_used_bytes` | the process memory when the answer settled, so a session's growth and its idle release can be read off the lines |
+| `heap_total_bytes`, `external_bytes`, `array_buffers_bytes` | the heap V8 reserved, the memory of native objects bound to JS (buffers, native addons) and the part of it held by ArrayBuffers; what `rss_bytes` holds beyond these is native memory no JS object accounts for (parsers, the store, allocator retention) |
 
 `cut_kinds` and `reason` are the two fields that make the line worth reading: `partial` without them says nothing about
 which bound stopped the walk, and `unknown` without its reason is the least useful answer the engine can give.

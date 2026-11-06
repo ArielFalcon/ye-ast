@@ -100,22 +100,30 @@ export async function usesOf(branch: DeclarationBranch<GraphSymbol>, input: Uses
   const owner = { name: node.name, line: node.startLine, endLine: node.endLine };
   const found: FoundUse[] = [];
   const unproved: UnprovedUse[] = [];
+  const use = (target: OutlineUseTarget, relation: string, place: OutlinePlace | undefined): void => {
+    found.push({ target, relation, ...(place === undefined ? {} : { place }) });
+  };
   const declared = (symbol: GraphSymbol, relation: string, place: OutlinePlace | undefined): void => {
-    if (!nested.has(symbol.id)) found.push({ target: { declaration: { file: symbol.file, name: symbol.name, kind: symbol.kind, line: symbol.startLine, endLine: symbol.endLine } }, relation, ...(place === undefined ? {} : { place }) });
+    if (!nested.has(symbol.id)) use({ declaration: { file: symbol.file, name: symbol.name, kind: symbol.kind, line: symbol.startLine, endLine: symbol.endLine } }, relation, place);
   };
 
   const edges = uses.followed(node, store.outgoingEdges([node.id], USE_EDGE_KINDS).filter((edge) => !isIgnoredEdge(edge)));
   const verdicts = await targets.verdictsOf(edges, signal);
   const edgeSites = edges.flatMap(({ edge, target }, index): (UseSite & { index: number })[] => (edge.line === null || edge.column === null ? [] : [{ index, file: node.file, line: edge.line, column: edge.column + 1, spelled: target.name, owner }]));
   const edgeBindings = await origins.rootBindings(edgeSites, signal);
-  const localRooted = new Set(edgeSites.filter((_, k) => isLocalRoot(node.file, edgeBindings[k] ?? { kind: "unknown" })).map(({ index }) => index));
+  const edgeBinding = new Map(edgeSites.map(({ index }, k) => [index, edgeBindings[k] ?? ({ kind: "unknown" } as const)]));
   for (const [index, { edge, target }] of edges.entries()) {
-    if (localRooted.has(index)) continue;
+    const binding = edgeBinding.get(index);
+    if (binding !== undefined && isLocalRoot(node.file, binding)) continue;
+    if (binding?.kind === "ambiguous") {
+      unproved.push({ root: binding.root, line: edge.line!, spelling: target.name });
+      continue;
+    }
     const verdict = verdicts[index]!;
     const place = edge.line === null ? undefined : { line: edge.line, ...(edge.column === null ? {} : { column: edge.column + 1 }) };
     if (verdict.kind !== "drop") declared(verdict.kind === "redirect" ? verdict.to : target, edge.kind, place);
-    else if (verdict.root.kind === "external") found.push({ target: { module: verdict.root.module }, relation: edge.kind, ...(place === undefined ? {} : { place }) });
-    else if (verdict.root.kind === "ambient") found.push({ target: { global: verdict.root.name }, relation: edge.kind, ...(place === undefined ? {} : { place }) });
+    else if (verdict.root.kind === "external") use({ module: verdict.root.module }, edge.kind, place);
+    else if (verdict.root.kind === "ambient") use({ global: verdict.root.name }, edge.kind, place);
   }
 
   const references = unsettledBy(uses.referencesFrom(node, USE_EDGE_KINDS), edges);
@@ -130,7 +138,7 @@ export async function usesOf(branch: DeclarationBranch<GraphSymbol>, input: Uses
     if (settled === "local") continue;
     if (settled === undefined) unproved.push({ root: "root" in binding ? binding.root : name ?? reference.name, line: reference.line, spelling: reference.name });
     else if ("id" in settled) declared(settled, reference.kind, place);
-    else found.push({ target: settled, relation: reference.kind, place });
+    else use(settled, reference.kind, place);
   }
   return { found, unproved };
 

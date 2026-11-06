@@ -1112,7 +1112,7 @@ function useLines(uses: readonly OutlineUse[], unproved: boolean): string[] {
   if (uses.length === 0) return [unproved ? `    ${NO_PROVEN_USE}` : "    uses nothing outside its body"];
   return ["    uses:", ...uses.map((use) => {
     const target = "declaration" in use ? `${use.declaration.name} → ${use.declaration.file}:${use.declaration.line}` : "module" in use ? `${use.module} (package)` : `${use.global} (global)`;
-    const at = use.at.length === 0 ? "" : `; at ${use.at.map(({ line }) => line).filter((line, index, all) => all.indexOf(line) === index).join(", ")}`;
+    const at = use.at.length === 0 ? "" : `; at ${[...new Set(use.at.map(({ line }) => line))].join(", ")}`;
     return `      ${target} (${use.relations.join(", ")}${at})`;
   })];
 }

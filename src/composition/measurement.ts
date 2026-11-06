@@ -185,6 +185,9 @@ function queryRecord({ method, durationMs, outcome, answer, cpu }: Measured): Re
     cpu_ms: Math.round((cpu.user + cpu.system) / 1000),
     rss_bytes: memory.rss,
     heap_used_bytes: memory.heapUsed,
+    heap_total_bytes: memory.heapTotal,
+    external_bytes: memory.external,
+    array_buffers_bytes: memory.arrayBuffers,
   };
   const fact = factOf(answer);
   if (fact === undefined) return record;
