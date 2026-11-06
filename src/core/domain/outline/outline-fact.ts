@@ -6,11 +6,17 @@ export interface OutlineDeclaration {
   line: number;
   /** 1-based last line of the declaration, so a caller reads exactly it. */
   endLine: number;
+  /** The declarations a contains edge of the graph places directly inside this one, in line then name order; absent when none. */
+  children?: readonly OutlineDeclaration[];
 }
 
 /** The shape of one file: what it declares and which files it imports. */
 export interface OutlineFile {
   file: string;
+  /**
+   * The top-level declarations, in line then name order, each holding its children: those the file contains, and those
+   * no contains edge places inside a declaration of the file. Nesting comes from contains edges only, never from spans.
+   */
   declarations: readonly OutlineDeclaration[];
   /** Repo-relative files this one imports, sorted: a package outside the repository is not an edge of the graph. */
   imports: readonly string[];

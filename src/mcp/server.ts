@@ -565,7 +565,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
     "ye_ast_outline",
     {
       title: "Shape of files",
-      description: "Use to choose line ranges before reading or targeting code: indexed declaration spans and imports of files, without source. Unavailable files report cuts, not empty lists. Match revision/live to the source you inspect.",
+      description: "Use to choose line ranges before reading or targeting code: indexed declaration spans and imports of files, without source. Members are listed under the declaration the graph's contains edges place them in; one no edge places stays at the top level. Unavailable files report cuts, not empty lists. Match revision/live to the source you inspect.",
       inputSchema: compactInput(TOOL_INPUTS.outline),
       annotations,
     },

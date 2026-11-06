@@ -53,7 +53,7 @@ export function partReferences(part: Part): Reference[] {
     case "unheld-file":
       return [ref("file", "file", part.file)];
     case "outline-declaration":
-      return [ref("anchor", "anchor", part.anchor)];
+      return [ref("anchor", "anchor", part.anchor), ...many("part", "children", part.children ?? [])];
     case "outline-file":
       return [ref("file", "file", part.file), ...many("part", "declarations", part.declarations), ...many("part", "imports", part.imports)];
     case "outward-name":

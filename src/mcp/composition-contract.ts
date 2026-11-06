@@ -188,7 +188,7 @@ export type PartPayload =
   | { kind: "module-reach"; file: FileId; side: ReachedModule["snapshot"]; depth: number; origins: readonly OriginReference[]; via?: NonNullable<ReachedModule["via"]> }
   | { kind: "file-dependency"; from: FileId; to: FileId; category: FileDependencyCategory }
   | { kind: "file-query"; file: FileId; categories: readonly { name: FileCategory; collection: RecordedCollectionState }[] }
-  | { kind: "outline-declaration"; anchor: AnchorId; kindName: OutlineDeclaration["kind"] }
+  | { kind: "outline-declaration"; anchor: AnchorId; kindName: OutlineDeclaration["kind"]; children?: readonly PartId[] }
   | { kind: "outline-file"; file: FileId; declarations: readonly PartId[]; imports: readonly PartId[] }
   | { kind: "unheld-file"; file: FileId }
   | { kind: "outward-name"; origin: EvidenceOrigin; name: string; kindName: OutwardKind; evidence: readonly EvidenceId[]; disposition: "stated" | "unserved" }

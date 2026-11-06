@@ -13,6 +13,8 @@ import { COMPOSE_OUTPUT } from "../mcp/composition-schema.ts";
 import type { ComposeQuery } from "../mcp/query-schema.ts";
 import type { AnchorId, ComposeFull, ComposeReceipt, CompositionGraph, EntityId, FileId, Part, PartKind, PartOf, RepeatRequest, SnapshotId } from "../mcp/composition-contract.ts";
 
+const everyDeclaration = (declarations: readonly any[]): any[] => declarations.flatMap((item) => [item, ...everyDeclaration(item.children ?? [])]);
+
 const OPERATIONS = ["ye_ast_callers", "ye_ast_compose", "ye_ast_decisions", "ye_ast_entrypoints", "ye_ast_importers", "ye_ast_impact", "ye_ast_outline", "ye_ast_workspace"].sort();
 const FAULT = "ye-ast/fault";
 
@@ -185,7 +187,7 @@ test("stdio discovers eight operations and composes all seven families with the 
   const originalRoute = originals.get("ye_ast_entrypoints")!.value.entrypoints.value.find((finding: any) => finding.value?.name === "GET /orders/{id}").value;
   const handler = located(graph, (route.entry as { handler: AnchorId }).handler);
   assert.deepEqual(handler, { repo: SHOP, sha: fixture.shop.head, path: originalRoute.handler.path, symbol: originalRoute.handler.symbol, line: originalRoute.handler.line, endLine: originalRoute.handler.endLine });
-  const declared = originals.get("ye_ast_outline")!.value.files[0].declarations.find((item: any) => item.name === "one");
+  const declared = everyDeclaration(originals.get("ye_ast_outline")!.value.files[0].declarations).find((item: any) => item.name === "one");
   const declaration = one(parts(graph, "outline-declaration").filter((part) => anchor(graph, part.anchor).symbol === "one"), "declaration");
   assert.deepEqual(located(graph, declaration.anchor), { repo: SHOP, sha: fixture.shop.head, path: CONTROLLER_PATH, symbol: "one", line: declared.line, endLine: declared.endLine });
   const served = one(relations(graph, "serves-entrypoint"), "serves-entrypoint");

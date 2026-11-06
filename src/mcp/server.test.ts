@@ -179,8 +179,7 @@ const OUTLINE: OutlineValue = {
     {
       file: "src/Order.java",
       declarations: [
-        { kind: "class", name: "Order", line: 3, endLine: 40 },
-        { kind: "method", name: "total", line: 20, endLine: 24 },
+        { kind: "class", name: "Order", line: 3, endLine: 40, children: [{ kind: "method", name: "total", line: 20, endLine: 24 }] },
       ],
       imports: ["src/Money.java"],
     },
@@ -754,7 +753,7 @@ test("the outline lists each declaration with its span and the files it imports,
 
   assert.match(text, /^ {2}src\/Order\.java$/m);
   assert.match(text, /^ {4}3-40 Order \[class\]$/m);
-  assert.match(text, /^ {4}20-24 total \[method\]$/m);
+  assert.match(text, /^ {6}20-24 total \[method\]$/m);
   assert.match(text, /^ {4}imports: src\/Money\.java$/m);
   assert.match(text, /^ {2}src\/Empty\.java\n {4}declares nothing$/m);
   assert.match(text, /not-exported \(1\): src\/Gone\.swift/);

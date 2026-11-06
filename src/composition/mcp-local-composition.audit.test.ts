@@ -9,6 +9,8 @@ import { createMcpServer } from '../mcp/server.ts';
 import { createSha256Digest } from '../core/adapters/crypto/sha256-digest.adapter.ts';
 import { openSession, resultFields } from '../mcp/test-session.ts';
 
+const everyDeclaration = (declarations: readonly any[]): any[] => declarations.flatMap((item) => [item, ...everyDeclaration(item.children ?? [])]);
+
 test('local composed queries remain stable across all ordered pairs', async () => {
   const root = mkdtempSync(join(tmpdir(), 'ye-audit-'));
   const repo = join(root, 'shop');
@@ -72,7 +74,7 @@ class OrderController {
     const route = facts.entrypoints.value.entrypoints.value.find((x: any) => x.value?.name === 'GET /orders').value;
     const handler = route.handler;
     const outline = facts.outline.value.files[0];
-    const method = outline.declarations.find((x: any) => x.name === 'one');
+    const method = everyDeclaration(outline.declarations).find((x: any) => x.name === 'one');
     assert.equal(handler.path, outline.file);
     assert.ok(handler.line <= method.endLine && method.line <= handler.endLine);
     assert.deepEqual(facts.impact.value.entrypoints, facts.callers.value.entrypoints);

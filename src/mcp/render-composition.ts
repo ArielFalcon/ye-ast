@@ -409,7 +409,7 @@ class CompactView {
       case "file-dependency": return `${this.file(part.from)} → ${this.file(part.to)} ${part.category}`;
       case "file-query": return `asked ${this.file(part.file)}: recorded entries ${part.categories.map(({ name, collection }) => `${name}: ${collection.state === "absent" ? "not provided" : collection.count}`).join(", ")}`;
       case "outline-declaration": return `outline declaration ${this.anchor(part.anchor)} ${part.kindName}`;
-      case "outline-file": return `outline ${this.file(part.file)}: ${part.declarations.length === 0 ? "no declarations" : part.declarations.map((id) => { const declaration = this.parts.get(id); return declaration === undefined ? "?" : this.describe(declaration, true); }).join(", ")}; ${part.imports.length} imports`;
+      case "outline-file": return `outline ${this.file(part.file)}: ${part.declarations.length === 0 ? "no declarations" : this.outlined(part.declarations).map((declaration) => this.describe(declaration, true)).join(", ")}; ${part.imports.length} imports`;
       case "unheld-file": return `unheld ${this.file(part.file)} (not read; not an empty file)`;
       case "outward-name": return `${part.disposition} outward name ${part.kindName} ${quoted(part.name)}${this.context(part.origin)}${short ? "" : `, ${this.evidenceList(part.evidence)}`}`;
       case "name-candidate": return `candidate ${quoted(part.name)} served by ${part.repo} basis ${part.basis} (candidate only: no membership, trust or call)${short ? "" : `, ${this.evidenceList(part.evidence)}`}`;
@@ -464,9 +464,7 @@ class CompactView {
       if (part.kind !== "outline-file") continue;
       this.covered.add(part.id);
       block(part.file).outlines.push(part);
-      for (const id of part.declarations) {
-        const declaration = this.parts.get(id);
-        if (declaration?.kind !== "outline-declaration") continue;
+      for (const declaration of this.outlined(part.declarations)) {
         this.covered.add(declaration.id);
         const binding = this.bindings.get(declaration.anchor);
         const entity = binding?.status === "resolved" ? this.entities.get(binding.entity) : undefined;
@@ -481,7 +479,7 @@ class CompactView {
       unlisted += rows.length - shown.length;
       if (shown.length === 0 && outlines.length === 0) continue;
       const heading = unique(outlines.map((part) => this.supportLabels(part)));
-      const outline = outlines.length === 0 ? "" : ` [${outlines.map((part) => `outline ${this.supportLabels(part)}: ${part.declarations.length} declarations, ${part.imports.length} imports`).join("; ")}]`;
+      const outline = outlines.length === 0 ? "" : ` [${outlines.map((part) => `outline ${this.supportLabels(part)}: ${this.outlined(part.declarations).length} declarations, ${part.imports.length} imports`).join("; ")}]`;
       lines.push(`${this.file(file)}${outline}`);
       for (const row of shown) lines.push(`  ${"entity" in row ? this.declarationRow(row.entity, heading) : `${this.anchor(row.unbound.anchor)} ${row.unbound.kindName}`}`);
     }
@@ -497,8 +495,16 @@ class CompactView {
     for (const part of this.result.graph.parts) {
       if (part.kind !== "outline-file") continue;
       this.covered.add(part.id);
-      for (const id of part.declarations) this.covered.add(id);
+      for (const declaration of this.outlined(part.declarations)) this.covered.add(declaration.id);
     }
+  }
+
+  /** The outline declarations of `ids` and every child under them, each parent before its children. */
+  private outlined(ids: readonly PartId[]): PartOf<"outline-declaration">[] {
+    return ids.flatMap((id) => {
+      const declaration = this.parts.get(id);
+      return declaration?.kind === "outline-declaration" ? [declaration, ...this.outlined(declaration.children ?? [])] : [];
+    });
   }
 
   /** A declaration row: label when cited, every recorded span and alias, outline kinds, and supports unlike its file's. */

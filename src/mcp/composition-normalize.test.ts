@@ -8,6 +8,7 @@ import type { Entrypoint } from "../core/domain/entrypoints/entrypoint.ts";
 import type { Handler } from "../core/domain/entrypoints/http-route.ts";
 import type { ImpactValue } from "../core/domain/impact/impact-fact.ts";
 import type { ImportedFile } from "../core/domain/impact/importers-fact.ts";
+import type { OutlineDeclaration } from "../core/domain/outline/outline-fact.ts";
 import type { CallSite } from "../core/domain/topology/call-site.ts";
 import type { RepoImpact, WorkspaceImpactValue } from "../core/ports/workspace-impact-queries.port.ts";
 import type {
@@ -177,6 +178,12 @@ function rebuildLink(t: Tables, { from, to, ...link }: PartOf<"workspace-link">[
 
 const CATEGORIES: readonly FileCategory[] = ["importers", "reexporters", "dynamicImporters", "typeImporters", "users", "unresolvedNamers"];
 
+function rebuildDeclaration(t: Tables, id: PartId): OutlineDeclaration {
+  const d = t.partOf(id, "outline-declaration");
+  const a = t.anchor(d.anchor);
+  return { kind: d.kindName, name: a.symbol, line: a.line, endLine: found(a.endLine, "endLine"), ...(d.children !== undefined && { children: d.children.map((child) => rebuildDeclaration(t, child)) }) };
+}
+
 /** Rebuilds the public fact of a fixture source from its evidence set; absent and empty are told apart only by tables. */
 function reconstruct(source: ExecutedSource, t: Tables): Fact<unknown> {
   const root = found(t.read({ kind: "fact" }), "root read");
@@ -201,7 +208,7 @@ function reconstruct(source: ExecutedSource, t: Tables): Fact<unknown> {
         return {
           files: t.list("/value/files", "outline-file").map((f) => ({
             file: t.path(f.file),
-            declarations: f.declarations.map((id) => { const d = t.partOf(id, "outline-declaration"); const a = t.anchor(d.anchor); return { kind: d.kindName, name: a.symbol, line: a.line, endLine: found(a.endLine, "endLine") }; }),
+            declarations: f.declarations.map((id) => rebuildDeclaration(t, id)),
             imports: f.imports.map((id) => t.path(t.partOf(id, "file-dependency").to)),
           })),
           unheld: t.list("/value/unheld", "unheld-file").map((u) => t.path(u.file)),

@@ -354,6 +354,17 @@ test("an impact context part references its owner read", () => {
   assert.deepEqual(result.ok ? undefined : [result.fault.table, result.fault.field], ["parts", "owner"]);
 });
 
+test("an outline declaration references its children", () => {
+  const outline = new SetBuilder("outline", OUTLINE, sha("shop"));
+  const file = outline.file(PATH);
+  const child = outline.part({ kind: "outline-declaration", anchor: outline.anchor(file, "check", 12, 14), kindName: "function" });
+  outline.part({ kind: "outline-declaration", anchor: outline.anchor(file, "create", 10, 20), kindName: "method", children: [child] });
+  const { graph } = compose(outline.build());
+  const missingPart = "p1:" + "0".repeat(64) as PartId;
+  const result = validateCompositionReferences({ ...graph, parts: graph.parts.map((part) => (part.kind === "outline-declaration" && part.children !== undefined ? { ...part, children: [missingPart] } : part)) });
+  assert.deepEqual(result.ok ? undefined : [result.fault.table, result.fault.field], ["parts", "children"]);
+});
+
 function guardCase(entrypointsContext: ReadContext, outlineContext: ReadContext, outlineFamily: SourceFamilyRef = OUTLINE) {
   const entrypoints = new SetBuilder("entrypoints", ENTRYPOINTS, sha("shop"), entrypointsContext);
   const handler = entrypoints.anchor(entrypoints.file(PATH), HANDLER, 10, 20);

@@ -85,7 +85,7 @@ question an agent asks after `impact` names twelve files, and it is the one no q
 | Field | Shape | Why |
 |---|---|---|
 | `file` | repo-relative | every fact in this repository (RFC-0002) |
-| `declarations[]` | `{ kind, name, line, endLine }` | `kind` uses the vocabulary the other facts already use (`function`, `method`, `class`, `type`, …); the span is the retrieval pointer |
+| `declarations[]` | `{ kind, name, line, endLine, children? }` | `kind` uses the vocabulary the other facts already use (`function`, `method`, `class`, `type`, …); the span is the retrieval pointer; the top level holds the declarations the file contains, and `children` (same shape, line then name order, absent when none) the ones a `contains` edge places directly inside a declaration |
 | `imports[]` | repo-relative file | the strongest single signal for "does this file belong to my change" |
 | `unheld[]` | repo-relative file, at the value level | a requested file the index holds no node of: what it declares cannot be told, which is not "nothing" |
 
@@ -93,6 +93,12 @@ question an agent asks after `impact` names twelve files, and it is the one no q
   (`src/core/ports/code-graph.port.ts:93`) already answers with `kind`, `name`, `qualifiedName`, `file`, `startLine` and
   `endLine` (`GraphSymbol`, lines 49-58), and `outgoingEdges` (line 99) carries the `imports` edges. The outline is a
   projection over a port four queries already use, so no reader, no parser and no dependency is added.
+- **Nesting is the graph's, never a span's.** A declaration is a child only when a `contains` edge from another
+  declaration of the same file reaches it; the file node's own `contains` edges place the top level. A declaration no
+  such edge places (a route or a configuration binding a framework reader adds) stays at the top level even when its span
+  lies inside another declaration's. A Java member sits under its class and the class under the file's package
+  declaration, because that is what the graph records; a construct the extractor does not emit, such as a Java `record`,
+  leaves its members under the nearest container it does emit.
 - **It carries no file length and no elision.** Both were in the first draft and both are gone: a file's length needs a
   source read the projection does not do, and the caller gets it from the read it makes anyway; and with every
   declaration listed there is nothing to omit, so there is no budget and no `omitted` field to keep honest. A large file

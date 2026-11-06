@@ -349,11 +349,13 @@ test("rendering is deterministic and independent of the merge order of the same 
   }
 });
 
-test("summary lists every declaration of an outline file, as the outline summary does", () => {
+test("summary lists every declaration of an outline file, children included, as the outline summary does", () => {
   const text = renderComposition(resultOf([uniqueOutline()]), "summary");
   const [file] = outlineValue().files;
   assert.ok(file);
-  for (const declaration of file.declarations.filter((_, index) => index !== 2)) assert.ok(text.includes(`${declaration.line}-${declaration.endLine} ${declaration.name}`), `${declaration.name}:\n${text}`);
+  const listed = file.declarations.filter((_, index) => index !== 2).flatMap((declaration) => [declaration, ...(declaration.children ?? [])]);
+  for (const declaration of listed) assert.ok(text.includes(`${declaration.line}-${declaration.endLine} ${declaration.name}`), `${declaration.name}:\n${text}`);
+  assert.match(text, new RegExp(`: ${listed.length} declarations,`));
   assert.doesNotMatch(text, /uncited declarations/);
 });
 

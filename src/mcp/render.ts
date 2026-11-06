@@ -10,7 +10,7 @@ import type { ImpactedSymbol, ImpactValue, ReachedEntrypoint, Seed } from "../co
 import type { ModuleImpactValue } from "../core/domain/impact/module-dependency.ts";
 import { declarationAnchor } from "../core/domain/impact/impact-cuts.ts";
 import type { ImportedFile, ImportersValue } from "../core/domain/impact/importers-fact.ts";
-import type { OutlineValue } from "../core/domain/outline/outline-fact.ts";
+import type { OutlineDeclaration, OutlineValue } from "../core/domain/outline/outline-fact.ts";
 import type { EntrypointMap } from "../core/domain/map/entrypoint-map.ts";
 import type { Decision, DecisionKind, DecisionOption } from "../core/domain/decisions/decision.ts";
 import { compareText } from "../core/domain/shared/code-node.ts";
@@ -1024,13 +1024,18 @@ export function renderImporters(fact: Fact<ImportersValue>, detail: ResponseMode
   return lines.join("\n");
 }
 
+/** Each declaration on its own line, its children under it one level deeper. */
+function outlineLines(declarations: readonly OutlineDeclaration[], indent: string): string[] {
+  return declarations.flatMap((declaration) => [`${indent}${spanText(declaration.line, declaration.endLine)} ${declaration.name} [${declaration.kind}]`, ...outlineLines(declaration.children ?? [], `${indent}  `)]);
+}
+
 export function renderOutline(fact: Fact<OutlineValue>, detail: ResponseMode = "summary"): string {
-  if (detail === "full") return fact.status === "unknown" ? "Inspect reason and evidence; the result has no value." : "Select value.files by file; declarations contain name, kind, line and endLine, and imports are paths. Inspect value.unheld for unavailable files and cuts when partial.";
+  if (detail === "full") return fact.status === "unknown" ? "Inspect reason and evidence; the result has no value." : "Select value.files by file; declarations are the top-level ones and contain name, kind, line, endLine and, when a contains edge places declarations inside one, children of the same shape; imports are paths. Inspect value.unheld for unavailable files and cuts when partial.";
   const lines = headerLines(fact);
   if (fact.status === "unknown") return lines.join("\n");
   for (const entry of fact.value.files) {
     lines.push(`  ${entry.file}`);
-    lines.push(...(entry.declarations.length === 0 ? ["    declares nothing"] : entry.declarations.map((declaration) => `    ${spanText(declaration.line, declaration.endLine)} ${declaration.name} [${declaration.kind}]`)));
+    lines.push(...(entry.declarations.length === 0 ? ["    declares nothing"] : outlineLines(entry.declarations, "    ")));
     if (entry.imports.length > 0) lines.push(`    imports: ${entry.imports.join(", ")}`);
   }
   if (fact.value.unheld.length > 0) lines.push(`unheld files (${fact.value.unheld.length}): ${fact.value.unheld.join(", ")}; their declarations are unknown.`);

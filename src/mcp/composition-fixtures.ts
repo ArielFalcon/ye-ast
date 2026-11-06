@@ -198,7 +198,7 @@ export function outlineValue(): OutlineValue {
           { kind: "class", name: "OrderController", line: 1, endLine: 40 },
           { kind: "method", name: "one", line: 6, endLine: 9 },
           { kind: "method", name: "one", line: 6, endLine: 9 },
-          { kind: "method", name: "drop", line: 30, endLine: 33 },
+          { kind: "method", name: "drop", line: 30, endLine: 33, children: [{ kind: "function", name: "check", line: 31, endLine: 32 }] },
         ],
         imports: ["src/OrderService.java", "src/Util.java", "src/OrderService.java"],
       },

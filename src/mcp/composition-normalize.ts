@@ -11,7 +11,7 @@ import type { RepositoryEvidence } from "../core/domain/shared/repository-eviden
 import type { Entrypoint } from "../core/domain/entrypoints/entrypoint.ts";
 import type { ImpactValue } from "../core/domain/impact/impact-fact.ts";
 import type { ImportedFile, ImportersValue } from "../core/domain/impact/importers-fact.ts";
-import type { OutlineValue } from "../core/domain/outline/outline-fact.ts";
+import type { OutlineDeclaration, OutlineValue } from "../core/domain/outline/outline-fact.ts";
 import type { CallSite } from "../core/domain/topology/call-site.ts";
 import type { Link } from "../core/domain/topology/link.ts";
 import type { Decision } from "../core/domain/decisions/decision.ts";
@@ -486,11 +486,12 @@ function outline(b: Builder, root: ReadContext, value: OutlineValue): void {
   value.files.forEach((held, index) => {
     const pointer = `/value/files/${index}`;
     const file = b.file(root.here, held.file, root.id, `${pointer}/file`);
-    const declarations = held.declarations.map((declaration, j) => {
-      const at = `${pointer}/declarations/${j}`;
+    const declared = (declaration: OutlineDeclaration, at: string): PartId => {
       const anchor = b.anchor(root.here, { path: held.file, symbol: declaration.name, line: declaration.line, endLine: declaration.endLine }, root.id, at, `${pointer}/file`);
-      return b.part({ kind: "outline-declaration", anchor, kindName: declaration.kind }, root.id, [at]);
-    });
+      const children = declaration.children?.map((child, k) => declared(child, `${at}/children/${k}`));
+      return b.part({ kind: "outline-declaration", anchor, kindName: declaration.kind, ...(children !== undefined && { children }) }, root.id, [at]);
+    };
+    const declarations = held.declarations.map((declaration, j) => declared(declaration, `${pointer}/declarations/${j}`));
     const imports = held.imports.map((imported, j) => {
       const at = `${pointer}/imports/${j}`;
       return b.part({ kind: "file-dependency", from: file, to: b.file(root.here, imported, root.id, at), category: "outline-import" }, root.id, [at]);

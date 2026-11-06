@@ -58,3 +58,62 @@ test("an imports edge whose target the store does not know names no file", () =>
   assert.deepEqual(read.files.map((file) => file.imports), [[]]);
   assert.deepEqual(read.unheld, []);
 });
+
+test("a declaration a contains edge places inside another declaration of the file is listed under it, at any depth", () => {
+  const store = fakeCodeGraph(
+    [
+      fakeNode("file", "file", "src/auth.ts", 1, 60),
+      fakeNode("Auth", "class", "src/auth.ts", 3, 40, "AuthService"),
+      fakeNode("Auth.login", "method", "src/auth.ts", 10, 30, "login"),
+      fakeNode("Auth.login.check", "function", "src/auth.ts", 12, 14, "check"),
+      fakeNode("helper", "function", "src/auth.ts", 45, 50, "helper"),
+    ],
+    [
+      { from: "file", to: "Auth", kind: "contains" },
+      { from: "file", to: "helper", kind: "contains" },
+      { from: "Auth", to: "Auth.login", kind: "contains" },
+      { from: "Auth.login", to: "Auth.login.check", kind: "contains" },
+    ],
+  );
+  assert.deepEqual(readOutline(store, ["src/auth.ts"]).files[0]?.declarations, [
+    {
+      kind: "class",
+      name: "AuthService",
+      line: 3,
+      endLine: 40,
+      children: [{ kind: "method", name: "login", line: 10, endLine: 30, children: [{ kind: "function", name: "check", line: 12, endLine: 14 }] }],
+    },
+    { kind: "function", name: "helper", line: 45, endLine: 50 },
+  ]);
+});
+
+test("the children of a declaration come in line order, then name order, whatever order the edges come in", () => {
+  const store = fakeCodeGraph(
+    [
+      fakeNode("Auth", "class", "src/auth.ts", 3, 40, "AuthService"),
+      fakeNode("Auth.token", "property", "src/auth.ts", 5, 5, "token"),
+      fakeNode("Auth.id", "property", "src/auth.ts", 5, 5, "id"),
+      fakeNode("Auth.login", "method", "src/auth.ts", 4, 4, "login"),
+    ],
+    [
+      { from: "Auth", to: "Auth.token", kind: "contains" },
+      { from: "Auth", to: "Auth.login", kind: "contains" },
+      { from: "Auth", to: "Auth.id", kind: "contains" },
+    ],
+  );
+  const [only] = readOutline(store, ["src/auth.ts"]).files[0]?.declarations ?? [];
+  assert.deepEqual(only?.children?.map((child) => child.name), ["login", "id", "token"]);
+});
+
+test("a declaration no contains edge places inside a declaration of its file stays at the top level, even inside another's span", () => {
+  const store = fakeCodeGraph(
+    [
+      fakeNode("Auth", "class", "src/auth.ts", 3, 40, "AuthService"),
+      fakeNode("Auth.route", "route", "src/auth.ts", 10, 10, "GET /login"),
+      fakeNode("Auth.login", "method", "src/auth.ts", 10, 20, "login"),
+      fakeNode("other", "class", "src/other.ts", 1, 90, "Other"),
+    ],
+    [{ from: "other", to: "Auth.login", kind: "contains" }],
+  );
+  assert.deepEqual(readOutline(store, ["src/auth.ts"]).files[0]?.declarations.map((declaration) => declaration.name), ["AuthService", "GET /login", "login"]);
+});
