@@ -260,28 +260,23 @@ export function createInboundEdges(
   function ownUsesOf(node: GraphSymbol): InboundEdge[] {
     const owners = ownersOf(node);
     if (owners.length === 0) return [];
-    const throughThis = referencesThrough(node.file, `this.${node.name}`);
-    const bare = referencesThrough(node.file, node.name).filter((use) => use.kind === "calls" && use.name === node.name && thisMemberCalls.has(referenceKey(use) ?? ""));
-    load([...throughThis, ...bare].map((use) => use.from));
-    const inOwner = (use: GraphUnresolvedReference): GraphSymbol | undefined => {
-      const from = symbolOf(use.from);
-      return from !== undefined && owners.some((owner) => isInside(from, owner)) ? from : undefined;
+    const throughThis = `this.${node.name}`;
+    const provenBare = (use: GraphUnresolvedReference): boolean => {
+      const key = referenceKey(use);
+      return use.kind === "calls" && use.name === node.name && key !== undefined && thisMemberCalls.has(key);
     };
-    const anchor = declarationAnchor(node.file, node.name);
-    return [
-      ...throughThis.flatMap((use) => {
-        const from = inOwner(use);
-        return from === undefined ? [] : [{ from, confidence: EDGE_POLICY.relations.confidence, basis: use.kind === "calls" && use.name === `this.${node.name}` ? "call" as const : "reference" as const, lines: [use.line] }];
-      }),
-      ...bare.flatMap((use) => {
-        const from = inOwner(use);
-        if (from === undefined) return [];
-        const occurrence = uniqueUse(use);
-        if (occurrence !== undefined && uniqueAnchor(node)) settledUses.push({ key: declarationUseKey(anchor, occurrence), target: node.id, source: from.id });
-        return [{ from, confidence: EDGE_POLICY.relations.confidence, basis: "call" as const, lines: [use.line] }];
-      }),
-    ];
+    const uses = [...referencesThrough(node.file, throughThis), ...referencesThrough(node.file, node.name).filter(provenBare)];
+    load(uses.map((use) => use.from));
+    return uses.flatMap((use) => {
+      const from = symbolOf(use.from);
+      if (from === undefined || !owners.some((owner) => isInside(from, owner))) return [];
+      const bare = use.name === node.name;
+      const occurrence = bare ? uniqueUse(use) : undefined;
+      if (occurrence !== undefined && uniqueAnchor(node)) settledUses.push({ key: declarationUseKey(declarationAnchor(node.file, node.name), occurrence), target: node.id, source: from.id });
+      return [{ from, confidence: EDGE_POLICY.relations.confidence, basis: use.kind === "calls" && (bare || use.name === throughThis) ? "call" : "reference", lines: [use.line] }];
+    });
   }
+
 
   const settledUses: { key: string; target: GraphNodeId; source?: GraphNodeId }[] = [];
   const uniqueAnchors = new Map<string, ReadonlySet<string>>();

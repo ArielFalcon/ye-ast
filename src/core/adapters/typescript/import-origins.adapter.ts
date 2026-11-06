@@ -154,14 +154,26 @@ function checkSites(file: string, text: string, group: readonly { site: ImportOr
   return { matches: result, shape };
 }
 
-/** `this.name` whose `this` is the instance of the class holding the member around it: only an arrow function keeps it. */
+/**
+ * `this.name` whose `this` is an instance of the class holding the instance member around it: only an arrow function
+ * keeps it. A class declared inside a function or another class is refused, since the graph places its code by lines.
+ */
 function callsOwnMember(callee: ts.Expression, name: string): boolean {
   if (!ts.isPropertyAccessExpression(callee) || callee.expression.kind !== ts.SyntaxKind.ThisKeyword || callee.name.text !== name) return false;
   for (let node: ts.Node = callee.parent; !ts.isSourceFile(node); node = node.parent) {
     if (ts.isArrowFunction(node)) continue;
     if (ts.isClassStaticBlockDeclaration(node)) return false;
-    if (ts.isFunctionLike(node) || ts.isPropertyDeclaration(node)) return ts.isClassLike(node.parent);
+    if (ts.isFunctionLike(node) || ts.isPropertyDeclaration(node)) return ts.isClassLike(node.parent) && !isStatic(node) && !isNested(node.parent);
   }
+  return false;
+}
+
+function isStatic(member: ts.Node): boolean {
+  return ts.canHaveModifiers(member) && (ts.getModifiers(member)?.some((modifier) => modifier.kind === ts.SyntaxKind.StaticKeyword) ?? false);
+}
+
+function isNested(declaration: ts.ClassLikeDeclaration): boolean {
+  for (let node = declaration.parent; !ts.isSourceFile(node); node = node.parent) if (ts.isFunctionLike(node) || ts.isClassLike(node)) return true;
   return false;
 }
 
