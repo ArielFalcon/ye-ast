@@ -129,6 +129,12 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
         if (index === "unavailable") return { ok: true, value: { ...head.base(content), status: "unknown", reason: "index-unavailable" } };
         const { store, summary } = index;
         try {
+          const missing = missingTargets(store, requested);
+          if (missing.length > 0) {
+            const names = missing.map(({ file, symbol }) => `${file}:${symbol}`).join(", ");
+            const unmodelled = await unmodelledIn(deps, headTree, missing.map(({ file }) => file));
+            return { ok: false, fault: { kind: "unknown-symbol", detail: `no symbol at the revision for ${names}${unmodelledNote(missing, unmodelled)}`, entries: missing } };
+          }
           const { relations: found, fields, locals, memberUses } = await deps.relations.extract(headTree.sources, { memberProofs: memberProofContext(headTree, declaredScope(request.scope)) });
           if (signal?.aborted) return ABORTED;
           const loads = await deps.dynamicLoads.extract(headTree.sources);
@@ -138,10 +144,6 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
           const unmodelled = await unmodelledIn(deps, headTree, [...changes.map(({ path }) => path), ...requested.map(({ file }) => file)]);
           if (signal?.aborted) return ABORTED;
           const read = impactOf({ store, changes, requested, componentsByResource, found, fields, locals, memberUses, loads, headTree, summary, budget: request.budget ?? {}, proofs, unmodelled });
-          if (read.missing.length > 0) {
-            const names = read.missing.map(({ file, symbol }) => `${file}:${symbol}`).join(", ");
-            return { ok: false, fault: { kind: "unknown-symbol", detail: `no symbol at the revision for ${names}${unmodelledNote(read.missing, unmodelled)}`, entries: read.missing } };
-          }
           return { ok: true, value: impactFact(head.base(content, true), read.value, [...fixed, ...read.cuts]) };
         } finally {
           store.close();
@@ -523,8 +525,19 @@ interface WalkInput {
 interface ImpactRead {
   value: Pick<ImpactValue, "seeds" | "symbols" | "entrypoints" | "cost">;
   cuts: Cut[];
-  /** The requested symbols that name no node, with what their file declares; the walk does not run when there is one. */
-  missing: UnknownSymbolFault["entries"];
+}
+
+/**
+ * The requested symbols that name no seedable declaration of their file, each with the file's dotted paths as
+ * candidates; read from the store alone, so a wrong name fails before any reader runs over the snapshot.
+ */
+function missingTargets(store: CodeGraphReader, requested: readonly { file: string; symbol: string }[]): UnknownSymbolFault["entries"] {
+  const files = [...new Set(requested.map(({ file }) => file))];
+  const byFile = Map.groupBy(store.symbolsInFiles(files), (symbol) => symbol.file);
+  const trees = new Map(files.map((file) => [file, containmentTree(store, byFile.get(file) ?? [])]));
+  return requested
+    .filter((target) => selectedBySymbol(trees.get(target.file) ?? [], target.symbol).every(({ declaration }) => !isSeedable(declaration)))
+    .map((target) => ({ ...target, candidates: candidatesOf(trees.get(target.file) ?? []) }));
 }
 
 function impactOf(input: WalkInput): ImpactRead {
@@ -536,8 +549,6 @@ function impactOf(input: WalkInput): ImpactRead {
   const symbolsByFile = Map.groupBy(symbols, (symbol) => symbol.file);
   const trees = new Map([...new Set(requested.map(({ file }) => file))].map((file) => [file, containmentTree(store, symbolsByFile.get(file) ?? [])]));
   const asked = requested.map((target) => ({ target, found: selectedBySymbol(trees.get(target.file) ?? [], target.symbol).map(({ declaration }) => declaration).filter(isSeedable) }));
-  const missing = asked.filter(({ found: nodes }) => nodes.length === 0).map(({ target }) => ({ ...target, candidates: candidatesOf(trees.get(target.file) ?? []) }));
-  if (missing.length > 0) return { value: { seeds: [], symbols: [], entrypoints: [], cost: { expansionsUsed: 0 } }, cuts: [], missing };
 
   const selection = selectSeeds({ files: changes }, symbolsByFile, componentsByResource);
   const requestedSymbols = new Set(asked.flatMap(({ found: nodes }) => nodes));
@@ -593,7 +604,7 @@ function impactOf(input: WalkInput): ImpactRead {
       walk.reached.map(({ symbol, depth, confidence, seeds: reaching }) => ({ file: symbol.file, name: symbol.name, startLine: symbol.startLine, endLine: symbol.endLine, depth, confidence, seeds: reaching })),
     ),
   };
-  return { value, cuts, missing: [] };
+  return { value, cuts };
 }
 
 function templateOwners(componentsByResource: ReadonlyMap<string, readonly ComponentRef[]>): Map<string, string[]> {

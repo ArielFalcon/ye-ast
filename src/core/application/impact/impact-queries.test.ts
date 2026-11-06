@@ -1463,3 +1463,13 @@ test("callers of a symbol in a file the graph cannot place cut the answer at tha
 
   assert.deepEqual(answer.status === "partial" && answer.cuts, [{ kind: "no-extractor", at: ["src/Point.java"] }]);
 });
+
+test("a callers target that names no declaration faults before the relations reader reads the snapshot", async () => {
+  let reads = 0;
+  const relationReader: ImpactQueriesDeps["relations"] = { extract: async () => { reads++; return { relations: [], fields: [], locals: [] }; } };
+
+  const answer = await setup({ ...TWO_CLASSES, relationReader }).callers({ targets: [{ file: "src/A.ts", symbol: "gone" }] });
+
+  assert.equal(!answer.ok && answer.fault.kind, "unknown-symbol");
+  assert.equal(reads, 0);
+});
