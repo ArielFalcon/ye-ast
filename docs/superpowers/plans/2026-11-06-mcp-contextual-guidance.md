@@ -26,7 +26,7 @@
 - [x] P1 (parallel after F1): contextual success/unknown/cut guidance and reduced repetition. Own success portions of `render.ts`, `render-evidence.ts`, `presentation-context.ts`, `presentation-guidance.ts` and corresponding tests. Preserve literal selector recovery, make workspace guides conditional, remove duplicated source navigation, locate continuation beside page. No input-schema or fault-foundation changes. Verify executable selector round trips through the MCP seam.
 - [x] I1: review and integrate V1/P1 into parent, resolve seams, update RFC-0005 to the final behavior, and inspect a global guidance search.
 - [x] I2: run `npm run check`, complete independent whole-change review and fix actionable findings. Do not claim adoption/performance benefits without measurement.
-- [ ] I3: integrate validated parent branch into the original checkout, preserving concurrent changes, and report actual checks and remaining limits. No push.
+- [x] I3: integrate validated parent branch into the original checkout, preserving concurrent changes, and report actual checks and remaining limits. No push.
 
 ## Acceptance
 
@@ -55,3 +55,5 @@
 - V1 complete: `d9e2308` plus `fa3b22d`, fix review approved with two executed discovery checks. Installed SDK target/validator confirmed as 2020-12. Integrated into parent; four former permissive-guide assertions and compaction documentation updated. Live-client handling of dependency keywords remains unverified.
 - Final whole-change review: one medium finding in mixed workspace live trust failures; preflight reports no owner, so removing only top-level live may leave a member live request active. Lead correction names both possible selector owners without attribution and guards impact/callers/workspace/decisions plus persisted membership through MCP.
 - Final gate: `npm run check` passed on `9b92862`: typecheck, architecture (422 modules, 2,541 dependencies) and 2,562 tests, zero failures. Final scoped trust-fix review approved with no open findings. Global guidance search inspected; no product changes after this gate.
+- Original integration: fast-forwarded original `main` from `1bce956` to `093529f` after confirming no overlap with unstaged edits. SHA-256 checks preserved all five unrelated modified core files byte-for-byte; nothing staged, stashed, reverted or pushed on their behalf. Native T3 worktrees remain available for inspection.
+- Post-merge smoke: original checkout `compact-schema.test.ts` and `render-evidence.test.ts` passed 12/12 with its unrelated local changes present. Only this completion ledger changed after the tested product commit.
