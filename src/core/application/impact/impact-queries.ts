@@ -24,12 +24,13 @@ import { comparePosition, compareText } from "../../domain/shared/code-node.ts";
 import { branchesOf, declarationPath, selectedBySymbol, type DeclarationBranch } from "../../domain/shared/declaration-tree.ts";
 import type { Entrypoint } from "../../domain/entrypoints/entrypoint.ts";
 import { declarationSpan, sortedEngines, type Cut, type DeclaredConfig, type Evidence, type Fact, type FactBase, type Finding, type IndexOrigin, type SnapshotRef, type TrustMode, type UnknownFact } from "../../domain/shared/fact.ts";
+import { canonicalJson } from "../../domain/shared/canonical-json.ts";
 import { exportSelection, pathSelection, sortedGlobs, type PathSelection, type ScopeRequest } from "../../domain/shared/scope.ts";
 import { changedPaths, isWritten } from "../../domain/snapshot/live-export.ts";
 import { contentFingerprint, declaredScope, exportCuts, holdsDeclaredSource, isInMapScope } from "../../domain/map/entrypoint-map.ts";
 import type { Result } from "../../domain/shared/result.ts";
 import type { AngularDeclarationReader } from "../../ports/angular-declarations.port.ts";
-import type { CodeGraph, CodeGraphReader, GraphNodeId, GraphSymbol, IndexSummary } from "../../ports/code-graph.port.ts";
+import type { CodeGraph, CodeGraphReader, GraphNodeId, GraphSymbol, GraphUnresolvedReference, IndexSummary } from "../../ports/code-graph.port.ts";
 import type { DynamicLoad, DynamicLoadReader } from "../../ports/dynamic-loads.port.ts";
 import type { Digest } from "../../ports/digest.port.ts";
 import type { IndexCache } from "../../ports/index-cache.port.ts";
@@ -40,12 +41,12 @@ import { isEngineConfiguration } from "../../ports/staging-rules.ts";
 import type { FieldOrigin, LocalOrigin } from "../../domain/relations/field-origin.ts";
 import type { RelationExtractor } from "../relations/relation-extractor.ts";
 import type { CommitExport, Vcs, VcsChanges, VcsFault } from "../../ports/vcs.port.ts";
-import { ABORTED, extractCommit, factBaseOf, trustOf, withScratch, type CommitExtraction } from "../snapshot/read-snapshot.ts";
+import { ABORTED, extractCommit, factBaseOf, trustOf, withScratch, type CommitExtraction, type PreparedCommit } from "../snapshot/read-snapshot.ts";
 import { createHeadReader, withLiveCapture, type FactSpec, type HeadIndex, type HeadReaderDeps, type HeadReading, type Revisioned } from "../snapshot/head-reading.ts";
 import { readImporters } from "./importers.ts";
 import { inboundEdgesOf } from "./inbound-origins.ts";
 import { edgeKey, type EdgeCorrections, type FollowedEdge, type InboundEdges } from "./inbound-edges.ts";
-import { memberProofContextOf, referenceProofsOf, sourceFilesOf, type ReferenceProofs } from "./reference-origins.ts";
+import { memberProofContextOf, referenceProofsOf, unresolvedOf, type ReferenceProofs } from "./reference-origins.ts";
 import { walkImpact, type Walk } from "./walk.ts";
 import type { ImportOrigins, ImportOriginsReader } from "../../ports/import-origins.port.ts";
 import { createEdgeTargets, type EdgeTargets, type EdgeTargetsDeps } from "./edge-targets.ts";
@@ -91,6 +92,14 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
     const changed = request.changed === undefined || request.changed.length === 0 ? undefined : sortedGlobs(request.changed);
     return { ...walkBounds(request.budget), ...(changed === undefined ? {} : { changed }) };
   };
+  const retainedOf = <T>(prepared: PreparedCommit | undefined, slot: string, produce: () => Promise<T>, signal: AbortSignal | undefined): Promise<T> =>
+    prepared?.retained === undefined ? produce() : prepared.retained(slot, produce, signal);
+  const relationsOf = (prepared: PreparedCommit | undefined, tree: CommitExtraction, request: { scope?: ScopeRequest; signal?: AbortSignal }) => {
+    const memberProofs = memberProofContextOf(tree, declaredScope(request.scope));
+    return retainedOf(prepared, canonicalJson({ output: "relations", memberProofs }), () => deps.relations.extract(tree.sources, { memberProofs }), request.signal);
+  };
+  const moduleDependenciesOf = (reader: ModuleDependenciesReader, prepared: PreparedCommit | undefined, tree: Pick<CommitExtraction, "sources">, signal: AbortSignal | undefined) =>
+    retainedOf(prepared, canonicalJson({ output: "module-dependencies" }), () => reader.extract(tree.sources), signal);
   const headReader = createHeadReader(deps);
   const moduleSource = deps.moduleDependencies === undefined ? isInMapScope : isWritten;
   const changeDeps = { ...deps, sourceSelection: moduleSource };
@@ -130,6 +139,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
         const index = await head.open();
         if (index === "aborted") return ABORTED;
         if (index === "unavailable") return { ok: true, value: { ...head.base(content), status: "unknown", reason: "index-unavailable" } };
+        if ("fault" in index) return { ok: false, fault: index.fault };
         const { store, summary } = index;
         try {
           const missing = missingTargets(store, requested);
@@ -138,16 +148,17 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
             const unmodelled = await unmodelledIn(deps, headTree, missing.map(({ file }) => file));
             return { ok: false, fault: { kind: "unknown-symbol", detail: `no symbol at the revision for ${names}${unmodelledNote(missing, unmodelled)}`, entries: missing } };
           }
-          const { relations: found, fields, locals, memberUses } = await deps.relations.extract(headTree.sources, { memberProofs: memberProofContextOf(headTree, declaredScope(request.scope)) });
+          const { relations: found, fields, locals, memberUses } = await relationsOf(head.prepared, headTree, request);
           if (signal?.aborted) return ABORTED;
           const loads = await deps.dynamicLoads.extract(headTree.sources);
           if (signal?.aborted) return ABORTED;
           const origins = deps.importOrigins?.(headTree.sources);
-          const proofs = await referenceProofsOf(origins, store, headTree, request.signal);
+          const unresolved = unresolvedOf(store, headTree);
+          const proofs = await referenceProofsOf(origins, store, headTree, request.signal, unresolved);
           if (signal?.aborted) return ABORTED;
           const unmodelled = await unmodelledIn(deps, headTree, [...changes.map(({ path }) => path), ...requested.map(({ file }) => file)]);
           if (signal?.aborted) return ABORTED;
-          const read = await impactOf({ store, changes, requested, componentsByResource, found, fields, locals, memberUses, loads, headTree, summary, budget: request.budget ?? {}, proofs, unmodelled, origins, modules: deps.moduleDependencies === undefined ? undefined : { reader: deps.moduleDependencies, sources: headTree.sources }, signal });
+          const read = await impactOf({ store, changes, requested, componentsByResource, found, fields, locals, memberUses, loads, headTree, summary, unresolved, budget: request.budget ?? {}, proofs, unmodelled, origins, modules: deps.moduleDependencies === undefined ? undefined : { reader: deps.moduleDependencies, sources: headTree.sources }, signal });
           if (signal?.aborted) return ABORTED;
           return { ok: true, value: impactFact(head.base(content, true), read.value, [...fixed, ...read.cuts]) };
         } finally {
@@ -172,12 +183,13 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
         const index = await head.open();
         if (index === "aborted") return ABORTED;
         if (index === "unavailable") return { ok: true, value: { ...head.base(content), status: "unknown", reason: "index-unavailable" } };
+        if ("fault" in index) return { ok: false, fault: index.fault };
         const { store, summary } = index;
         try {
           const written = headTree.export.files.filter((file) => file.written && isReadableFile(file.path)).map((file) => file.path);
           const held = new Set(headTree.export.files.map((file) => file.path));
           const references = store.unresolvedReferences(written);
-          const modules = await deps.moduleDependencies?.extract(headTree.sources);
+          const modules = deps.moduleDependencies === undefined ? undefined : await moduleDependenciesOf(deps.moduleDependencies, head.prepared, headTree, request.signal);
           if (request.signal?.aborted) return ABORTED;
           const origins = deps.importOrigins?.(headTree.sources);
           const read = await readImporters(store, covered, references, modules, origins === undefined ? undefined : createEdgeTargets({ origins, store, modules }), request.signal);
@@ -231,7 +243,6 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
     return withScratch(deps.scratch, async (directory): Promise<Answer> => {
       const preparedHead = await prepareCommit(changeDeps, repo, head.value, directory, exported, { scope, trust }, signal);
       if (!preparedHead.ok) return preparedHead;
-      const headDirectory = preparedHead.value.root;
       const headTree = await preparedHead.value.extract(signal);
       if (!headTree.ok) return headTree;
       const preparedBase = mergeBase === head.value ? preparedHead : await prepareCommit(changeDeps, repo, mergeBase, directory, exported, { scope, trust }, signal);
@@ -240,11 +251,12 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
       if (!baseTree.ok) return baseTree;
       const reading: HeadReading = {
         tree: headTree.value,
+        prepared: preparedHead.value,
         selected,
         base: (content, store = false) => (store ? changeReader.factBase(trust, snapshot, content, spec, scope, { kind: "full" }) : baseOfHead(content)),
-        open: () => changeReader.indexHead(headTree.value, headDirectory, directory, signal),
+        open: () => changeReader.indexHead(preparedHead.value, directory, signal),
       };
-      return readChange({ request, radius, head: reading, baseTree: baseTree.value, sameTree: baseTree === headTree, unreadable: JSON.stringify([mergeBase, head.value]) });
+      return readChange({ request, radius, head: reading, baseTree: baseTree.value, basePrepared: preparedBase.value, sameTree: baseTree === headTree, unreadable: JSON.stringify([mergeBase, head.value]) });
     });
   }
 
@@ -296,7 +308,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
   }
 
   /** Everything `ofChange` does once it holds the diff and both trees; a commit and the live tree differ only in how they got here. */
-  async function readChange(input: { request: ImpactOfChangeRequest; radius: BlastRadius; head: HeadReading; baseTree: CommitExtraction; sameTree: boolean; unreadable: string }): Promise<Answer> {
+  async function readChange(input: { request: ImpactOfChangeRequest; radius: BlastRadius; head: HeadReading; baseTree: CommitExtraction; basePrepared?: PreparedCommit; sameTree: boolean; unreadable: string }): Promise<Answer> {
     const { request, radius, head, baseTree, sameTree } = input;
     const { signal } = request;
     const selection = selectChange(radius.files, request.changed, deps.matcher.matches);
@@ -329,17 +341,17 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
     let moduleRead: ReturnType<typeof moduleImpact> | undefined;
     const moduleReader = deps.moduleDependencies;
     if (moduleReader !== undefined && changes.some((file) => isTypeScriptSource(file.path) || isJsonModuleResource(file.path))) {
-      const readSnapshot = async (tree: CommitExtraction, selectedChanges: readonly FileChange[]): Promise<ModuleDependencies | undefined> => {
-        const read = moduleCoverage(await moduleReader.extract(tree.sources), tree, selectedChanges);
+      const readSnapshot = async (tree: CommitExtraction, prepared: PreparedCommit | undefined, selectedChanges: readonly FileChange[]): Promise<ModuleDependencies | undefined> => {
+        const read = moduleCoverage(await moduleDependenciesOf(moduleReader, prepared, tree, signal), tree, selectedChanges);
         if (signal?.aborted) return undefined;
         if (read.untraversed !== undefined) return read;
         const loads = await deps.dynamicLoads.extract(tree.sources);
         if (signal?.aborted) return undefined;
         return { ...read, untraversed: loads.map(({ file, line }) => ({ file, line, offset: 0, form: "dynamic-import" as const })) };
       };
-      const base = await readSnapshot(baseTree, changes);
+      const base = await readSnapshot(baseTree, input.basePrepared, changes);
       if (base === undefined) return ABORTED;
-      const current = sameTree ? base : await readSnapshot(headTree, changes.filter((file) => !file.deleted));
+      const current = sameTree ? base : await readSnapshot(headTree, head.prepared, changes.filter((file) => !file.deleted));
       if (current === undefined) return ABORTED;
       moduleRead = moduleImpact(changes, base, current, request.budget);
     }
@@ -359,14 +371,16 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
     const index = await head.open();
     if (index === "aborted") return ABORTED;
     if (index === "unavailable") return unknownFact(head.base(content), "index-unavailable");
+    if ("fault" in index) return { ok: false, fault: index.fault };
     const { store, summary } = index;
     try {
-      const { relations: found, fields, locals, memberUses } = await deps.relations.extract(headTree.sources, { memberProofs: memberProofContextOf(headTree, declaredScope(request.scope)) });
+      const { relations: found, fields, locals, memberUses } = await relationsOf(head.prepared, headTree, request);
       if (signal?.aborted) return ABORTED;
       const loads = await deps.dynamicLoads.extract(headTree.sources);
       if (signal?.aborted) return ABORTED;
       const origins = deps.importOrigins?.(headTree.sources);
-      const proofs = await referenceProofsOf(origins, store, headTree, request.signal);
+      const unresolved = unresolvedOf(store, headTree);
+      const proofs = await referenceProofsOf(origins, store, headTree, request.signal, unresolved);
       if (request.signal?.aborted) return ABORTED;
       const baseSources = new Map(baseTree.sources.map((source) => [source.path, source.content]));
       const headSources = new Map(headTree.sources.map((source) => [source.path, source.content]));
@@ -383,7 +397,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
       });
       const unmodelled = await unmodelledIn(deps, headTree, validatedChanges.filter((file) => !file.deleted).map(({ path }) => path));
       if (signal?.aborted) return ABORTED;
-      const read = await impactOf({ store, changes: validatedChanges, requested: [], componentsByResource, found, fields, locals, memberUses, loads, headTree, summary, budget: request.budget ?? {}, proofs, unmodelled, origins, modules: deps.moduleDependencies === undefined ? undefined : { reader: deps.moduleDependencies, sources: headTree.sources }, signal });
+      const read = await impactOf({ store, changes: validatedChanges, requested: [], componentsByResource, found, fields, locals, memberUses, loads, headTree, summary, unresolved, budget: request.budget ?? {}, proofs, unmodelled, origins, modules: deps.moduleDependencies === undefined ? undefined : { reader: deps.moduleDependencies, sources: headTree.sources }, signal });
       if (signal?.aborted) return ABORTED;
       return { ok: true, value: impactFact(head.base(content, true), { ...value, ...read.value }, [...unaccounted([...fixed, ...read.cuts]), ...moduleCuts]) };
     } finally {
@@ -456,6 +470,8 @@ interface WalkInput {
   /** Every dynamic load the reader found in the head's sources. */
   loads: readonly DynamicLoad[];
   headTree: CommitExtraction;
+  /** The head's unresolved references, read once for the request. */
+  unresolved: readonly GraphUnresolvedReference[];
   summary: Pick<IndexSummary, "filesNotIndexed">;
   budget: ImpactBudget;
   /** The changed or targeted files whose declarations the graph cannot place. */
@@ -488,7 +504,7 @@ function missingTargets(store: CodeGraphReader, requested: readonly { file: stri
 }
 
 async function impactOf(input: WalkInput): Promise<ImpactRead> {
-  const { store, changes, requested, componentsByResource, found, fields, locals, memberUses, loads, headTree, summary } = input;
+  const { store, changes, requested, componentsByResource, found, fields, locals, memberUses, loads, headTree, summary, unresolved } = input;
   const sourceChanges = changes.filter((file) => kindOfChangedFile(file.path) === "source" && !file.deleted).map((file) => file.path);
   const componentFiles = changes.flatMap((file) => (componentsByResource.get(file.path) ?? []).map((component) => component.file));
   const symbols = store.symbolsInFiles([...new Set([...sourceChanges, ...componentFiles, ...requested.map(({ file }) => file)])]);
@@ -500,8 +516,6 @@ async function impactOf(input: WalkInput): Promise<ImpactRead> {
   const requestedSymbols = new Set(asked.flatMap(({ found: nodes }) => nodes));
   const chosen = [...[...requestedSymbols].map((symbol): SelectedSeed<GraphSymbol> => ({ symbol, basis: "requested" })), ...selection.seeds.filter(({ symbol }) => !requestedSymbols.has(symbol))];
   const seeds = chosen.toSorted((a, b) => comparePosition(a.symbol, b.symbol));
-  const sourceFiles = sourceFilesOf(headTree);
-  const unresolved = store.unresolvedReferences(sourceFiles);
   const build = (corrections: EdgeCorrections): InboundEdges => inboundEdgesOf(store, { relations: found, fields, locals, memberUses }, input.proofs, corrections);
   const { inbound, walk } = await walkInside(seeds.map(({ symbol }) => symbol), build, input.budget, input.origins === undefined ? undefined : createEdgeTargets({ origins: input.origins, store, modules: input.modules }), input.signal);
 

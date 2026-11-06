@@ -4,7 +4,7 @@ import { liveScope } from "../../domain/snapshot/live-export.ts";
 import type { DeclaredConfig, DeclaredScope, Fact, FactBase, IndexOrigin, SnapshotRef, TrustMode, UnknownFact } from "../../domain/shared/fact.ts";
 import type { Result } from "../../domain/shared/result.ts";
 import { exportSelection, pathSelection, type PathSelection, type ScopeRequest } from "../../domain/shared/scope.ts";
-import type { CodeGraph, CodeGraphReader, IndexSummary } from "../../ports/code-graph.port.ts";
+import type { CodeGraph, CodeGraphFault, CodeGraphReader, IndexSummary } from "../../ports/code-graph.port.ts";
 import type { IndexCache } from "../../ports/index-cache.port.ts";
 import type { LiveFault, LiveSelector } from "../../ports/live-queries.port.ts";
 import type { PathMatcher } from "../../ports/path-matcher.port.ts";
@@ -184,6 +184,13 @@ export interface HeadIndex {
   summary: Pick<IndexSummary, "filesNotIndexed">;
 }
 
+/** What opening a head's index answers; `fault` is the export fault that kept the index from being built. */
+export type HeadOpening = HeadIndex | "aborted" | "unavailable" | { fault: VcsFault };
+
+function exportFailure(fault: VcsFault): "aborted" | { fault: VcsFault } {
+  return fault.kind === "aborted" ? "aborted" : { fault };
+}
+
 /** The head of a query as the operation reads it: a commit's export or the mirror, with the means to index it. */
 export interface HeadReading<Tree extends Pick<CommitExtraction, "export"> = CommitExtraction> {
   tree: Tree;
@@ -192,7 +199,7 @@ export interface HeadReading<Tree extends Pick<CommitExtraction, "export"> = Com
   /** The fact base for `content`; `store` is true for a fact that read the index, which records where it came from. */
   base(content: string, store?: boolean): FactBase;
   /** The head's index; the caller closes its store. */
-  open(): Promise<HeadIndex | "aborted" | "unavailable">;
+  open(): Promise<HeadOpening>;
 }
 
 /** A revisioned request: the repository, what it selects, and the revision or the live tree it reads. */
@@ -218,8 +225,8 @@ export interface HeadReader {
   atHead<V, E>(request: Revisioned, spec: FactSpec, read: (head: HeadReading) => Promise<Result<Fact<V>, E>>): Promise<Result<Fact<V>, E | VcsFault | LiveFault>>;
   /** The fact base of a snapshot: a commit's carries the host's export budget, the live tree reads none. */
   factBase(trust: TrustMode, snapshot: SnapshotRef, content: string, spec: FactSpec, scope: DeclaredScope, origin: IndexOrigin | undefined): FactBase;
-  /** The head's index; the caller closes its store. */
-  indexHead(headTree: Pick<CommitExtraction, "export">, headDirectory: string, directory: () => Promise<string>, signal: AbortSignal | undefined): Promise<HeadIndex | "aborted" | "unavailable">;
+  /** The head's index; the caller closes its store. A kept index is reused without writing the snapshot; a build writes it first. */
+  indexHead(head: Pick<PreparedCommit, "root" | "tree" | "materialize">, directory: () => Promise<string>, signal: AbortSignal | undefined): Promise<HeadOpening>;
   /** The head of a live query: the mirror under the lock, its store opened where the engine left it. */
   liveReading<Tree extends Pick<CommitExtraction, "export">>(tree: LiveTree, extraction: Tree, trust: TrustMode, scope: DeclaredScope, selected: PathSelection, head: string, repoId: string, spec: FactSpec): HeadReading<Tree>;
   /** What a live query answers when the refresh did not finish: `unknown`, with a state id of nothing read. */
@@ -236,18 +243,29 @@ export function createHeadReader(deps: HeadReaderDeps): HeadReader {
     return { ...factBaseOf(deps, { repoId: snapshot.repo, sha, trust, scope, content, declaredConfig, engines: spec.engines, ...(origin === undefined ? {} : { origin }) }), snapshot };
   };
 
-  const indexHead = async (headTree: Pick<CommitExtraction, "export">, headDirectory: string, directory: () => Promise<string>, signal: AbortSignal | undefined): Promise<HeadIndex | "aborted" | "unavailable"> => {
+  const indexHead = async (head: Pick<PreparedCommit, "root" | "tree" | "materialize">, directory: () => Promise<string>, signal: AbortSignal | undefined): Promise<HeadOpening> => {
+    const { root, tree } = head;
+    let exportFault: VcsFault | undefined;
     if (deps.indexes !== undefined) {
-      const kept = await deps.indexes.obtain({ content: deps.digest.of(contentFingerprint(headTree.export, deps.sourceSelection)), snapshot: headDirectory, signal });
-      if (kept.ok) return { store: kept.value.store, summary: notHeldInExport(kept.value.summary.filesNotIndexed, headTree.export) };
+      const prepare = async (): Promise<Result<void, CodeGraphFault>> => {
+        const ready = await head.materialize(signal);
+        if (ready.ok) return ready;
+        exportFault = ready.fault;
+        return { ok: false, fault: { kind: ready.fault.kind === "aborted" ? "aborted" : "stage-failed", detail: ready.fault.detail } };
+      };
+      const kept = await deps.indexes.obtain({ content: deps.digest.of(contentFingerprint(tree.export, deps.sourceSelection)), snapshot: root, prepare, signal });
+      if (kept.ok) return { store: kept.value.store, summary: notHeldInExport(kept.value.summary.filesNotIndexed, tree.export) };
+      if (exportFault !== undefined) return exportFailure(exportFault);
       if (kept.fault.kind === "aborted") return "aborted";
       if (kept.fault.kind !== "cache-unavailable") return "unavailable";
     }
+    const ready = await head.materialize(signal);
+    if (!ready.ok) return exportFailure(ready.fault);
     const storeDirectory = await directory();
-    const indexed = await deps.graph.index(headDirectory, storeDirectory, signal);
+    const indexed = await deps.graph.index(root, storeDirectory, signal);
     if (!indexed.ok) return indexed.fault.kind === "aborted" ? "aborted" : "unavailable";
     const opened = deps.graph.open(storeDirectory);
-    return opened.ok ? { store: opened.value, summary: notHeldInExport(indexed.value.filesNotIndexed, headTree.export) } : "unavailable";
+    return opened.ok ? { store: opened.value, summary: notHeldInExport(indexed.value.filesNotIndexed, tree.export) } : "unavailable";
   };
 
   const liveReading = <Tree extends Pick<CommitExtraction, "export">>(tree: LiveTree, extraction: Tree, trust: TrustMode, scope: DeclaredScope, selected: PathSelection, head: string, repoId: string, spec: FactSpec): HeadReading<Tree> => {
@@ -275,7 +293,7 @@ export function createHeadReader(deps: HeadReaderDeps): HeadReader {
         if (signal?.aborted) return ABORTED;
         const { tree, scope, head } = held;
         const selected = pathSelection(scope, deps.matcher.matches);
-        const prepared: PreparedCommit = { root: tree.root, tree: { export: tree.export }, sources: held.sources, extract: held.extract };
+        const prepared: PreparedCommit = { root: tree.root, materialize: async () => ({ ok: true, value: undefined }), tree: { export: tree.export }, sources: held.sources, extract: held.extract };
         return read({ ...liveReading(tree, prepared.tree, "trusted", scope, selected, head, repoId, spec), prepared }, tree.root);
       }, unavailable: async ({ head, scope }) => ({ ok: true, value: unavailableLive("trusted", scope, head, repoId, spec) }) });
     }
@@ -297,7 +315,7 @@ export function createHeadReader(deps: HeadReaderDeps): HeadReader {
         prepared: prepared.value,
         selected,
         base: (content, store = false) => factBase(trust, snapshot, content, spec, scope, store ? { kind: "full" } : undefined),
-        open: () => indexHead(headTree, headDirectory, directory, signal),
+        open: () => indexHead(prepared.value, directory, signal),
       }, headDirectory);
     });
   };

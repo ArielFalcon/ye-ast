@@ -3,7 +3,7 @@ import type { MemberProofContext } from "../../domain/relations/member-use.ts";
 import { isTypeScriptSource } from "../../domain/languages/typescript.ts";
 import type { DeclaredScope } from "../../domain/shared/fact.ts";
 import { referenceKey, rootedName, uniqueReferenceKeys } from "../../domain/impact/impact-cuts.ts";
-import type { CodeGraphReader } from "../../ports/code-graph.port.ts";
+import type { CodeGraphReader, GraphUnresolvedReference } from "../../ports/code-graph.port.ts";
 import type { ImportOriginSite, ImportOrigins } from "../../ports/import-origins.port.ts";
 import type { CommitExtraction } from "../snapshot/read-snapshot.ts";
 
@@ -12,22 +12,26 @@ export function sourceFilesOf(headTree: Pick<CommitExtraction, "export">): strin
   return headTree.export.files.filter((file) => file.written && kindOfChangedFile(file.path) === "source").map((file) => file.path);
 }
 
+/** The references the index could not settle in the head's sources. */
+export function unresolvedOf(store: CodeGraphReader, headTree: Pick<CommitExtraction, "export">): readonly GraphUnresolvedReference[] {
+  return store.unresolvedReferences(sourceFilesOf(headTree));
+}
+
 /**
  * The two proofs a file's own imports make about the references the index could not settle: the places whose root the
  * proof places outside the repository, and the file a bare name imported from the repository resolves to. The first
  * retires a cut (`ADR-0019`); the second is what lets a bare reference be attributed to the declaration it actually
  * names instead of to a homonym (`RFC-0016` S12). A file the reader does not know proves nothing.
  */
-export async function referenceProofsOf(reader: ImportOrigins | undefined, store: CodeGraphReader, headTree: Pick<CommitExtraction, "export" | "sources">, signal?: AbortSignal): Promise<ReferenceProofs> {
+export async function referenceProofsOf(reader: ImportOrigins | undefined, store: CodeGraphReader, headTree: Pick<CommitExtraction, "export" | "sources">, signal?: AbortSignal, read: readonly GraphUnresolvedReference[] = unresolvedOf(store, headTree)): Promise<ReferenceProofs> {
   const external = new Set<string>();
   const bound = new Map<string, string>();
   const localParameters = new Set<string>();
   const validOccurrences = new Set<string>();
   const thisMemberCalls = new Set<string>();
   if (reader === undefined) return { external, bound, localParameters, validOccurrences, thisMemberCalls };
-  const references = store.unresolvedReferences(sourceFilesOf(headTree));
-  const unique = uniqueReferenceKeys(references);
-  const asked = references.flatMap((reference) => {
+  const unique = uniqueReferenceKeys(read);
+  const asked = read.flatMap((reference) => {
     const key = referenceKey(reference);
     const name = rootedName(reference.name);
     if (key === undefined || !unique.has(key) || reference.kind === "imports" || !name) return [];

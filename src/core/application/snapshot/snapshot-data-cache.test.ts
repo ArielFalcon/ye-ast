@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
-import { createSnapshotDataCache } from "./snapshot-data-cache.ts";
+import { createSnapshotDataCache, type SnapshotCacheEvent } from "./snapshot-data-cache.ts";
 import type { SnapshotData } from "./read-snapshot.ts";
 
 const empty: SnapshotData = { sources: [] };
@@ -64,4 +64,26 @@ test("stored and returned values are isolated from caller mutations", () => {
   const first = cache.get("a")!;
   (first.sources[0] as { content: string }).content = "changed again";
   assert.deepEqual(cache.get("a"), { sources: [{ path: "a", content: "original" }], findings: [] });
+});
+
+test("an observer sees each lookup and each admission, eviction and skip with the bytes the cache holds", () => {
+  const events: SnapshotCacheEvent[] = [];
+  const one = bytes("a", empty);
+  const cache = createSnapshotDataCache(one * 2, (event) => events.push(event));
+  cache.get("a");
+  cache.put("a", empty);
+  cache.get("a");
+  cache.put("b", empty);
+  cache.put("c", empty);
+  cache.put("huge", { sources: [{ path: "p", content: "x".repeat(one * 3) }] });
+
+  assert.deepEqual(events, [
+    { outcome: "miss", retainedBytes: 0 },
+    { outcome: "admitted", entryBytes: one, retainedBytes: one },
+    { outcome: "hit", entryBytes: one, retainedBytes: one },
+    { outcome: "admitted", entryBytes: one, retainedBytes: one * 2 },
+    { outcome: "evicted", entryBytes: one, retainedBytes: one },
+    { outcome: "admitted", entryBytes: one, retainedBytes: one * 2 },
+    { outcome: "oversize-skipped", entryBytes: bytes("huge", { sources: [{ path: "p", content: "x".repeat(one * 3) }] }), retainedBytes: one * 2 },
+  ]);
 });

@@ -201,16 +201,62 @@ the event worth recording is the one that costs seconds. `store_bytes` is read o
 A live mirror writes the same line: `built` for its first or a recovering full build, `synced` for the incremental
 sync of the paths that changed, so a session of edits never reads as a series of full builds.
 
-A **stage line**, one per call of a reader a request runs over the whole snapshot (the export, opening the store,
-entrypoint extraction, Angular declarations, relations, dynamic loads, module dependencies, Java imports, call sites):
+A **stage line**, one per call of a reader a request runs over the whole snapshot (the export listing, writing its files,
+opening the store, entrypoint extraction, Angular declarations, relations, dynamic loads, module dependencies, Java
+imports, call sites):
 
 ```json
-{"ye_ast":{"event":"stage","stage":"relations","outcome":"ok","duration_ms":812}}
+{"ye_ast":{"event":"stage","stage":"relations","outcome":"ok","start_ms":5230,"duration_ms":812}}
 ```
 
-`outcome` is `ok`, `threw`, or the fault a result answered. A stage line carries no request id: in the sequential use
+`start_ms` is when the call began, on the process monotonic clock (`performance.now()`, relative to the process start),
+so stages that overlap, or that follow one another with a gap, can be told apart and the gap attributed. `outcome` is
+`ok`, `threw`, or the fault a result answered. A stage line carries no request id: in the sequential use
 of one agent it precedes its query line in order; under concurrent requests lines interleave and a host correlates them
 by time only.
+
+The stages also cover the live lifecycle, each port call `openLive` makes: `live-lock`, `live-read-state`,
+`live-list` (the working-tree listing, both the refresh and the staleness re-list; `start_ms` tells them apart),
+`live-discard`, `live-reconcile`, `live-write-state`, `live-materialize`, `live-prune`, `live-touch`,
+`live-release` (the lock release), `live-staleness-compare`, and the retention sweep as `live-usage`,
+`live-discard-idle` and `live-discard-debris`. `export` is the listing of the commit, decided afresh on every SHA request; `materialize` is the writing of the listed
+files ([ADR-0028](../adr/0028-lazy-export-materialization.md)), which a request writes only when a reader needs them,
+so its absence is the sign that retained data and a kept index served the request. `unresolved-references` is one read of the opened store's unresolved
+references. The edge readers (`incomingEdges`, `outgoingEdges`, `symbolsInFiles`) are per-symbol calls, many per request,
+and stay unmeasured.
+
+A **cache line**, one per decision of the snapshot data cache ([ADR-0020](../adr/0020-host-budgeted-snapshot-memory-cache.md)), when
+measurement is configured:
+
+```json
+{"ye_ast":{"event":"cache","outcome":"evicted","entry_bytes":182340,"retained_bytes":8412770,"start_ms":5231}}
+```
+
+`outcome` is `hit` or `miss` for a lookup, and for a store `admitted`, `evicted` (one line per entry the admission
+displaced) or `oversize-skipped` (the entry alone exceeds the budget and is not kept). `entry_bytes` is the charge of
+the entry concerned (key plus serialized payload) and is absent on a `miss`; `retained_bytes` is what the cache holds
+after the decision. The key never appears: it names a repository state.
+
+The entries of the cache are the sources and findings of a snapshot and, since
+[ADR-0026](../adr/0026-snapshot-data-may-retain-reader-outputs.md), the serialized output of the relations and the
+whole-universe module-dependencies readers, each its own entry. A served output has no line of its own: its lookup is a
+`hit` and the reader's stage (`relations`, `module-dependencies`) is absent from that request.
+
+An **index-cache line**, one per kept index the cache's retention removes
+([ADR-0027](../adr/0027-retention-of-immutable-index-entries.md)), when measurement is configured:
+
+```json
+{"ye_ast":{"event":"index-cache","outcome":"discarded","entry_bytes":94371840,"retained_bytes":402653184,"start_ms":5231}}
+```
+
+`entry_bytes` is the logical bytes the removed index occupied and `retained_bytes` what the cache holds after the
+removal. The key never appears. Retention controls disk growth only; a later query that needs the removed index builds
+it again, and that build shows as an `index` line.
+
+**Child CPU is not measured.** `process.cpuUsage()` covers only the ye-ast process, so `cpu_ms` excludes the git and
+indexer children, and Node exposes neither `RUSAGE_CHILDREN` nor the resource usage of a `spawn`ed child. The cost of a
+child shows in the wall-clock of the stage or index line around it (`export`, `built`, `synced`), which is the figure a
+host can act on.
 
 **What the line cannot tell.** A host that cancels and a deadline that elapses both reach the query family as one
 aborted signal, so both read `outcome: "aborted"`; the elapsed `duration_ms` beside the deadline the host itself set is

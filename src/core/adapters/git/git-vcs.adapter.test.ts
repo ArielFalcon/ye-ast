@@ -288,6 +288,9 @@ test("a git failure after the sha resolves is a git-failed fault", async () => {
     streamLines: async () => {
       throw new Error("not reached");
     },
+    checkBlobs: async () => {
+      throw new Error("not reached");
+    },
     streamBlobs: async () => {
       throw new Error("not reached");
     },
@@ -709,6 +712,50 @@ test("the byte budget counts the content written, stops before the first selecte
     ["docs.txt", false],
   ]);
   assert.deepEqual(readdirSync(over.target).toSorted(), ["a.java", "b.java"]);
+});
+
+test("listing decides the files and the byte budget stop as the export does and writes nothing, and materializing writes exactly the files listed", async () => {
+  write("a.java", "1234");
+  write("b.java", "5678");
+  write("c.java", "9012");
+  write("docs.txt", "x".repeat(500));
+  const sha = commitAll();
+  const plan = { ...JAVA_ONLY, budget: { maxEntries: 1000, maxBytes: 11 } };
+  const vcs = createGitVcs();
+  const together = mkdtempSync(join(scratch, "together-"));
+  const exported = valueOf(await vcs.exportCommit(repo, sha, together, plan));
+
+  const listed = valueOf(await vcs.listCommit!(repo, sha, plan));
+  assert.deepEqual(listed, exported);
+  assert.deepEqual(listed.stopped, { at: "c.java", limit: 11 });
+  assert.deepEqual(readdirSync(destination), []);
+
+  valueOf(await vcs.materializeCommit!(repo, listed.files, destination));
+  assert.deepEqual(readdirSync(destination).toSorted(), ["a.java", "b.java"]);
+  assert.equal(readFileSync(join(destination, "b.java"), "utf8"), "5678");
+});
+
+test("a selected blob the object store lacks is object-missing when listing, before anything is written", async () => {
+  const present = blob("class A {}");
+  const entries = `100644 blob ${present}\tA.java\u0000100644 blob ${"1".repeat(40)}\tB.java\u0000`;
+  const root = execFileSync("git", ["mktree", "-z", "--missing"], { cwd: repo, env: GIT_ENV, input: entries, encoding: "utf8" }).trim();
+
+  const listed = await createGitVcs().listCommit!(repo, commitTree(root), JAVA_ONLY);
+
+  assert.equal(!listed.ok && listed.fault.kind, "object-missing");
+  assert.deepEqual(readdirSync(destination), []);
+});
+
+test("a file that cannot be written fails materializing, not listing", async () => {
+  write("src/a.txt", "a");
+  const sha = commitAll();
+  writeFileSync(join(destination, "src"), "in the way");
+  const vcs = createGitVcs();
+
+  const listed = valueOf(await vcs.listCommit!(repo, sha, EVERYTHING));
+  const written = await vcs.materializeCommit!(repo, listed.files, destination);
+
+  assert.equal(!written.ok && written.fault.kind, "export-write-failed");
 });
 
 test("a selected blob larger than the whole byte budget is never opened for writing", async () => {

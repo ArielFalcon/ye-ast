@@ -29,6 +29,8 @@ const STATE_FORMAT_VERSION = 3;
 const DIRECTORY_MODE = 0o700;
 const FILE_MODE = 0o600;
 const LOCK_POLL_MS = 50;
+/** Stats in flight at once: a bound on open requests to the file system, not a rule over the size of the tree. */
+const STAT_CONCURRENCY = 32;
 const SKIP_REASONS: ReadonlySet<string> = new Set(["symlink", "submodule", "unsafe-path", "collision"]);
 
 export interface LiveMirrorDeps {
@@ -300,21 +302,25 @@ export function createLiveMirror(deps: LiveMirrorDeps = defaultLiveMirrorDeps): 
       const pending: { path: string; stat: BigIntStats }[] = [];
       const directories = new Map<string, "ok" | "link" | "missing">();
 
+      const statable: string[] = [];
       for (const { path, submodule } of paths) {
-        if (signal?.aborted) return aborted();
         if (isEngineEntry(path) && !unsafe(path)) continue;
         if (submodule) { skipped.push({ path, reason: "submodule" }); continue; }
         if (unsafe(path)) { skipped.push({ path, reason: "unsafe-path" }); continue; }
-        const parents = await parentState(location.repo, path, directories);
-        if (parents === "link") { skipped.push({ path, reason: "symlink" }); continue; }
-        if (parents === "missing") continue;
-        let status: BigIntStats;
-        try {
-          status = await lstat(join(location.repo, path), { bigint: true });
-        } catch (error) {
-          if (["ENOENT", "ENOTDIR"].includes(errorCode(error) ?? "")) continue;
-          return fault("unreadable", error, path);
+        statable.push(path);
+      }
+      const probes = await mapBounded(statable, STAT_CONCURRENCY, (path) => (signal?.aborted ? null : probe(location.repo, path, directories)));
+
+      for (const [index, path] of statable.entries()) {
+        if (signal?.aborted) return aborted();
+        const found = probes[index]!;
+        if (found.parents === "link") { skipped.push({ path, reason: "symlink" }); continue; }
+        if (found.parents === "missing") continue;
+        if (found.failure !== undefined) {
+          if (["ENOENT", "ENOTDIR"].includes(errorCode(found.failure) ?? "")) continue;
+          return fault("unreadable", found.failure, path);
         }
+        const status = found.status!;
         if (status.isSymbolicLink()) { skipped.push({ path, reason: "symlink" }); continue; }
         if (!status.isFile()) { skipped.push({ path, reason: "unsafe-path" }); continue; }
         const previous = old.get(path);
@@ -359,11 +365,14 @@ export function createLiveMirror(deps: LiveMirrorDeps = defaultLiveMirrorDeps): 
       const listed = new Set<string>();
       const changed = new Set<string>();
       const directories = new Map<string, "ok" | "link" | "missing">();
-      for (const { path, submodule } of paths) {
-        if (signal?.aborted) return aborted();
-        if (isEngineEntry(path) || submodule || unsafe(path) || skippedOthers.has(path)) continue;
+      const candidates = paths.filter(({ path, submodule }) => !(isEngineEntry(path) || submodule || unsafe(path) || skippedOthers.has(path)));
+      const statuses = await mapBounded(candidates, STAT_CONCURRENCY, async ({ path }) =>
+        signal?.aborted ? null : (await parentState(location.repo, path, directories)) === "ok" ? await lstat(join(location.repo, path), { bigint: true }).catch(() => null) : null,
+      );
+      if (signal?.aborted) return aborted();
+      for (const [index, { path }] of candidates.entries()) {
         listed.add(path);
-        const status = (await parentState(location.repo, path, directories)) === "ok" ? await lstat(join(location.repo, path), { bigint: true }).catch(() => null) : null;
+        const status = statuses[index]!;
         const previous = known.get(path);
         if (previous !== undefined) {
           if (status === null || !status.isFile() || previous.size !== Number(status.size) || previous.mtimeNs !== status.mtimeNs.toString()) changed.add(path);
@@ -540,17 +549,46 @@ function lockHeld(file: string, pid: number): MirrorLock {
 
 /** The bytes a directory's regular files occupy, from `readdir` and `stat` alone; a directory that cannot be read counts as none. */
 async function directoryBytes(directory: string): Promise<number> {
-  let total = 0;
   try {
-    for (const entry of await readdir(directory, { recursive: true, withFileTypes: true })) {
-      if (!entry.isFile()) continue;
+    const files = (await readdir(directory, { recursive: true, withFileTypes: true })).filter((entry) => entry.isFile());
+    const sizes = await mapBounded(files, STAT_CONCURRENCY, async (entry) => {
       const status = await lstat(join(entry.parentPath, entry.name)).catch(() => null);
-      if (status !== null && status.isFile()) total += status.size;
-    }
+      return status !== null && status.isFile() ? status.size : 0;
+    });
+    return sizes.reduce((sum, size) => sum + size, 0);
   } catch {
     return 0;
   }
-  return total;
+}
+
+/** Runs `work` over `items` with at most `limit` in flight and answers in the order of `items`. */
+async function mapBounded<T, R>(items: readonly T[], limit: number, work: (item: T) => Promise<R> | R): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    while (next < items.length) {
+      const index = next++;
+      results[index] = await work(items[index]!);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
+}
+
+interface Probe {
+  parents: "ok" | "link" | "missing";
+  status?: BigIntStats;
+  failure?: unknown;
+}
+
+async function probe(repo: string, path: string, directories: Map<string, "ok" | "link" | "missing">): Promise<Probe> {
+  const parents = await parentState(repo, path, directories);
+  if (parents !== "ok") return { parents };
+  try {
+    return { parents, status: await lstat(join(repo, path), { bigint: true }) };
+  } catch (failure) {
+    return { parents, failure };
+  }
 }
 
 async function parentState(repo: string, path: string, cache: Map<string, "ok" | "link" | "missing">): Promise<"ok" | "link" | "missing"> {

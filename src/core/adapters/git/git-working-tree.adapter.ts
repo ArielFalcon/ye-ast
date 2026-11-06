@@ -19,17 +19,16 @@ const LISTING_PREFIX: readonly string[] = [
 
 export function createGitWorkingTree(deps: Pick<GitDeps, "runGit"> = defaultGitDeps): WorkingTree {
   async function list(repo: string, signal?: AbortSignal): Promise<Result<WorkingTreeListing, VcsFault>> {
-    const root = await ensureRepositoryRoot(deps, repo, signal);
+    const [root, tracked, untracked, format] = await Promise.all([
+      ensureRepositoryRoot(deps, repo, signal),
+      deps.runGit(repo, [...LISTING_PREFIX, "ls-files", "-z", "-s", "--cached"], signal),
+      deps.runGit(repo, [...LISTING_PREFIX, "ls-files", "-z", "--others", "--exclude-standard"], signal),
+      deps.runGit(repo, ["rev-parse", "--show-object-format"], signal),
+    ]);
+    if (signal?.aborted) return ABORTED;
     if (!root.ok) return root;
-
-    const tracked = await deps.runGit(repo, [...LISTING_PREFIX, "ls-files", "-z", "-s", "--cached"], signal);
-    if (signal?.aborted) return ABORTED;
     if (tracked.code !== 0) return gitFailed(tracked);
-    const untracked = await deps.runGit(repo, [...LISTING_PREFIX, "ls-files", "-z", "--others", "--exclude-standard"], signal);
-    if (signal?.aborted) return ABORTED;
     if (untracked.code !== 0) return gitFailed(untracked);
-    const format = await deps.runGit(repo, ["rev-parse", "--show-object-format"], signal);
-    if (signal?.aborted) return ABORTED;
     if (format.code !== 0) return gitFailed(format);
 
     const listed = new Map<string, WorkingTreePath>();
