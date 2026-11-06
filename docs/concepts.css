@@ -889,7 +889,20 @@ details[open] summary { border-bottom: 1px solid var(--line-soft); }
   letter-spacing: -.01em; line-height: .98;
 }
 .docs h2 { font-size: clamp(2.4rem, 5vw, 4rem); max-width: 20ch; }
-.docs .section-head h2 { max-width: 24ch; }
+.docs .section-head h2 { display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: .3em; max-width: 24ch; }
+.docs .section-head h2::before { content: ""; width: var(--title-mark, 1em); height: var(--title-mark, 1em); background: var(--ornament) center / contain no-repeat; }
+.docs #facts { --ornament: url("assets/orn-facts-dark.png"); }
+.docs #surfaces { --ornament: url("assets/orn-surfaces-dark.png"); }
+.docs #trust { --ornament: url("assets/orn-trust-dark.png"); }
+.docs .explorer-head { --ornament: url("assets/orn-architecture-dark.png"); }
+.docs #concept-rules { --ornament: url("assets/orn-walk-dark.png"); }
+.docs #sources { --ornament: url("assets/orn-limits-dark.png"); }
+[data-theme="light"] .docs #facts { --ornament: url("assets/orn-facts-light.png"); }
+[data-theme="light"] .docs #surfaces { --ornament: url("assets/orn-surfaces-light.png"); }
+[data-theme="light"] .docs #trust { --ornament: url("assets/orn-trust-light.png"); }
+[data-theme="light"] .docs .explorer-head { --ornament: url("assets/orn-architecture-light.png"); }
+[data-theme="light"] .docs #concept-rules { --ornament: url("assets/orn-walk-light.png"); }
+[data-theme="light"] .docs #sources { --ornament: url("assets/orn-limits-light.png"); }
 .docs .section-head h2 + .section-lede { margin-top: 18px; }
 .docs .hero-copy h1 { display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: .3em; }
 .docs .hero-copy h1::before { content: ""; width: var(--title-mark, 1em); height: var(--title-mark, 1em); background: var(--logo) center / contain no-repeat; }
