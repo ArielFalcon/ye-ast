@@ -52,7 +52,10 @@ actually runs.
    anything is written, a missing blob is reported as `object-missing` even where a single-pass export would first have
    met a write fault on an earlier file.
 6. The Vcs port offers the two halves, `listCommit` and `materializeCommit`, beside `exportCommit`, which is the two in
-   sequence and stays for the consumers that always need the files (the live base tree, the changed-file diff). A Vcs
+   sequence and stays for the consumers that always need the files (the changed files' tree of the base side of a
+   change query, which `impact-queries.ts` exports for the directory diff). The merge base of a live change query no
+   longer uses it: it is prepared like a commit base ([ADR-0030](0030-live-captures-use-the-snapshot-data-cache.md)
+   decision 6). A Vcs
    that offers neither writes in `exportCommit` alone, and a request then behaves as before. The index cache request
    carries an optional `prepare`, called once and only when an index has to be built.
 7. Everything else of ADR-0020 holds: no export is retained between requests, the temporary directory of an operation

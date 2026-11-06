@@ -3,7 +3,9 @@
 - Status: Accepted, 2026-11-06, owner
 - Decision source: the owner, 2026-11-06, answering "luego haz la implementacion completa del plan que propones" to the
   efficiency plan whose step 7 is "immutable-index retention as a disk-growth problem (ADR-0015 amendment), values from
-  measurement".
+  measurement"; and the owner, 2026-11-06: "Revisa bien todos los caches implementados para asegurarte que son
+  eficientes y seguros, que tienen políticas de validación correctas y que cubren los casos de uso, para evitar dar
+  código stale" (decision 8).
 - Amends: [ADR-0015](0015-index-reuse-by-content.md) (its "Not decided: garbage collection of kept indexes")
 - Related: [ADR-0023](0023-operation-snapshot-views-and-safe-retention.md),
   [RFC-0003](../rfc/0003-codegraph-integration.md), [RFC-0006](../rfc/0006-configuration.md),
@@ -59,14 +61,20 @@ build faster or use less memory.
    concurrent readers and has no scope lock to reserve.
 7. Each removed entry writes one `index-cache` measurement line (`"outcome":"discarded"`, `entry_bytes`,
    `retained_bytes`, `start_ms`) when measurement is configured, as documented in RFC-0012. The key never appears.
+8. The sweep removes a `.build-*` directory (a build in progress or a killed one, including a renamed-away discard)
+   when neither it nor any of its direct entries was modified for longer than the debris bound of the live mirror
+   (`DEBRIS_STALE_MS`, one hour, the age after which the mirror calls a temporary file debris). A build that writes
+   inside the last hour is kept. A build running past that bound without touching its directory or its direct entries
+   loses its directory and answers `cache-unavailable`; the next obtain builds again, so this costs time, never a wrong
+   fact. Nothing is removed without a retention policy.
 
 ## Consequences
 
 - The cache stops growing without bound: it holds at most the cap plus what readers hold and the entry just obtained.
   Retention changes neither build time nor memory; an evicted entry that is asked for again is rebuilt in full (about
   25 s for the largest measured), which is the cost of the cap.
-- The temporary `.build-*` directory a killed build leaves is not removed by this decision; it needs a signal that
-  tells a dead build from a running one, which is not measured yet.
+- The temporary `.build-*` directory a killed build leaves is removed by decision 8 once it has gone unwritten for
+  the debris bound.
 - A lease left by a killed process is removed by the next sweep that sees its pid dead; a reused pid can keep an entry
   longer than needed, which leaves disk over the cap but never deletes live data.
 - The 14 days and 512 MiB are decided for the live tree and carried over by analogy; the measured sessions do not test
