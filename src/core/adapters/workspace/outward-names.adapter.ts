@@ -108,6 +108,10 @@ function artifactsOf(file: SourceFile): string[] {
 
 /** The text of the elements directly inside a pom's root element, where the project states its own coordinates. */
 function projectTags(content: string): Map<string, string> {
+  return childTags(content, 2);
+}
+
+function childTags(content: string, childDepth: number): Map<string, string> {
   const tags = new Map<string, string>();
   let depth = 0;
   let open: { name: string; end: number } | undefined;
@@ -115,18 +119,18 @@ function projectTags(content: string): Map<string, string> {
     const [whole, closing, name = "", selfClosing] = match;
     if (selfClosing === "/") continue;
     if (closing === "/") {
-      if (depth === 2 && open?.name === name) tags.set(name, content.slice(open.end, match.index).trim());
+      if (depth === childDepth && open?.name === name) tags.set(name, content.slice(open.end, match.index).trim());
       depth -= 1;
       continue;
     }
     depth += 1;
-    open = depth === 2 ? { name, end: match.index + whole.length } : open;
+    open = depth === childDepth ? { name, end: match.index + whole.length } : open;
   }
   return tags;
 }
 
 function tagsOf(body: string): Map<string, string> {
-  return new Map([...body.matchAll(TAG)].map((match) => [match[1] ?? "", (match[2] ?? "").trim()]));
+  return childTags(body, 1);
 }
 
 function baseName(path: string): string {

@@ -27,6 +27,12 @@ test("a coordinate a Maven or npm manifest depends on is an outward name, with t
   assert.deepEqual(names([{ path: "pom.xml", content: pom }, { path: "package.json", content: manifest }]), ["dependency @shop/ui-kit@4", "dependency com.shop:events-lib@3"]);
 });
 
+test("a dependency is named by its own coordinates, never by those of an exclusion it declares", () => {
+  const pom = ["<project>", "  <dependencies>", "    <dependency>", "      <groupId>com.shop</groupId>", "      <artifactId>events-lib</artifactId>", "      <exclusions>", "        <exclusion>", "          <groupId>org.crypto</groupId>", "          <artifactId>provider</artifactId>", "        </exclusion>", "      </exclusions>", "    </dependency>", "  </dependencies>", "</project>"].join("\n");
+
+  assert.deepEqual(names([{ path: "pom.xml", content: pom }]), ["dependency com.shop:events-lib@3"]);
+});
+
 test("a registry a Maven build declares is an outward name by its host", () => {
   const pom = ["<project>", "  <repositories>", "    <repository>", "      <id>shop</id>", "      <url>https://packages.example.com/repository/maven</url>", "    </repository>", "  </repositories>", "</project>"].join("\n");
 
