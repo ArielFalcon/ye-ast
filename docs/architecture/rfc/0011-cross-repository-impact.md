@@ -101,7 +101,8 @@ literal, or a spread or computed member that may state `method` after it, leaves
 code around declares or imports is not the global one, and its call is no request.
 
 The text after the first `?` or `#` of a URL is its query or fragment, which no route serves: evaluation stops there, so
-a value the query names never leaves the path undecided. An argument of `encodeURIComponent` cut there is undecided.
+a value the query names never leaves the path undecided. An argument of `encodeURIComponent` cut there is a run-time
+value: the encoder escapes its `?` and `#`, so the whole argument stays in one segment.
 
 A method a path calls (`pageLink.toQuery()`, `this.area()`) is read when its receiver's class is in the snapshot: `this`,
 `super`, a field or a parameter whose declared type names the class. The receiver may be any subclass, so the method the
