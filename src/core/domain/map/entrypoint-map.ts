@@ -31,9 +31,9 @@ const MAP_SCOPE = { languages: ["java", "typescript"], frameworks: ["angular", "
 const SUBMODULE = "submodule";
 
 /**
- * What the export writes and digests: the Java and TypeScript sources outside tests, the
- * `.html` templates a component names, which the relation reader parses and a change to which must invalidate the fact,
- * and every configuration file an extractor reads to interpret them (`isExtractorConfiguration`).
+ * What the export writes and digests: the Java and TypeScript sources outside tests, the `.html` templates a component
+ * names, which the relation reader parses and a change to which must invalidate the fact, and every configuration file
+ * an extractor reads to interpret them (`isExtractorConfiguration`).
  */
 export function isInMapScope(path: string): boolean {
   return (isJavaSource(path) && !isJvmTestFile(path)) || isTypeScriptSource(path) || isAngularTemplate(path) || isExtractorConfiguration(path);
