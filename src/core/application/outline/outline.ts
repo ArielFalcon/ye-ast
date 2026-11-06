@@ -34,11 +34,11 @@ export function readOutline(store: CodeGraphReader, requested: readonly string[]
     if (unread.has(file) || !read.has(file)) cuts.push({ kind: "no-extractor", at: [file] });
     const dependencies = statements.get(file) ?? [];
     const reached = importBindings(store, file, dependencies);
-    const imports = [...dependencies.map((dependency) => imported(dependency, reached, cuts)), ...(references.get(file) ?? []).map(referenced)];
+    const placed = [...dependencies.map((dependency) => ({ ...dependency, entry: imported(dependency, reached, cuts) })), ...(references.get(file) ?? []).map((reference) => ({ ...reference, entry: referenced(reference) }))];
     files.push({
       file,
       declarations: containmentTree(store, nodes).map(outlined),
-      imports: imports.toSorted((left, right) => left.line - right.line),
+      imports: placed.toSorted((left, right) => left.line - right.line || (left.offset ?? 0) - (right.offset ?? 0)).map(({ entry }) => entry),
     });
   }
   return { value: { files, unheld }, cuts };

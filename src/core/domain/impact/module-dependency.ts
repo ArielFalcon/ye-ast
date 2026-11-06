@@ -35,7 +35,7 @@ export interface ModuleDependency {
   typeOnly: boolean;
   /** Absent for static statements; runtime imports remain conditional module evidence; `import-equals` is static. */
   form?: ModuleReferenceForm | "import-equals";
-  /** Source offset distinguishes references sharing a line. */
+  /** Where the statement or reference starts in its source, so those sharing a line keep their order. */
   offset?: number;
   target: ModuleTarget;
   /** What the statement binds, in source order; empty for a side-effect import or a runtime reference. */
