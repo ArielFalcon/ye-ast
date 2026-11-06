@@ -1,5 +1,6 @@
 import { z } from "zod";
-import { recoveryControlShapeFor, validRecoveryControls, recoveryControlConstraintsFor } from "./evidence-schema.ts";
+import { recoveryControlShapeFor, recoveryControlIssues, recoveryControlConstraintsFor } from "./evidence-schema.ts";
+import { crossField, type CrossField } from "./compact-schema.ts";
 import { responseModeSchema, type ToolFamily } from "./presentation.ts";
 import { isWorkspaceReplayContext } from "../core/domain/topology/workspace-replay.ts";
 import { FULL_OBJECT_ID_PATTERN, isFullObjectId } from "../core/domain/shared/revision.ts";
@@ -25,17 +26,32 @@ export const offline = z
   .optional()
   .describe("With workspace: skip refreshing trusted persisted remotes (live allowed). Without workspace: no effect; forbidden with live.");
 
+/** A violated cross-field constraint, typed by `constraint` and anchored at the field a caller must change. */
+type FieldIssue = { constraint: string; path: (string | number)[]; message: string };
+
+/** Report each violated constraint as its own path-bearing issue instead of one blanket refinement failure. */
+function reportIssues<T>(issuesOf: (value: T) => FieldIssue[]) {
+  return (value: T, ctx: z.RefinementCtx) => {
+    for (const { constraint, path, message } of issuesOf(value)) ctx.addIssue({ code: "custom", path, message, params: { constraint } });
+  };
+}
+
+/** The field schemas already report malformed controls; the refinement adds only the cross-field constraints. */
+const controlIssues = (tool: "entrypoints" | "callers" | "impact", value: { select?: unknown; page?: unknown; workspace?: unknown }) =>
+  recoveryControlIssues(tool, value).filter(({ constraint }) => constraint !== "selection-shape" && constraint !== "page-shape");
+
 /** Runtime validation and tool discovery share the same working-tree exclusions. */
 function liveSchema<S extends z.ZodRawShape>(shape: S, fields: readonly (keyof S & string)[]) {
   let schema = z.strictObject(shape);
   for (const field of fields) {
-    schema = schema.refine((value: Record<string, unknown>) => !(value["live"] === true && value[field] !== undefined), `live excludes ${field}`);
+    schema = schema.refine((value: Record<string, unknown>) => !(value["live"] === true && value[field] !== undefined), { message: `live reads the working tree; omit ${field} or live`, path: [field], params: { constraint: "live-excludes" } });
   }
-  return schema.meta({
-    allOf: fields.map((field) => ({ not: { properties: { live: { const: true } }, required: ["live", field] } })),
-  });
+  return schema.meta(crossField(...fields.map(liveExclusion)));
 }
-const liveExclusion = (field: string) => ({ not: { properties: { live: { const: true } }, required: ["live", field] } });
+function liveExclusion(field: string): CrossField {
+  // live is boolean, so with the field present it may only be false or absent.
+  return { dependentSchemas: { [field]: { properties: { live: { const: false } } } } };
+}
 const count = z.int().positive();
 
 /** Exhaustive over the fields, so a bound added to `ImpactBudget` fails to compile until it is described here. */
@@ -110,7 +126,7 @@ export const target = z.union([
     .describe("Match by declaration name."),
   z
     .strictObject({ file, start: count, end: count })
-    .refine(({ start, end }) => end >= start, "end must not precede start")
+    .refine(({ start, end }) => end >= start, { message: "end must not precede start", path: ["end"] })
     .describe("File line range, 1-based inclusive; end >= start."),
 ]);
 
@@ -122,13 +138,13 @@ const focusSelector = z.union([
 // Scope permits line terminators inside a segment; inspect every character and require the absolute end of input.
 const recipeGlob = z.string().refine(isValidGlob).meta({ pattern: "^(?![\\s\\S]*(?:^|/)\\.{0,2}(?:/|(?![\\s\\S])))[^\\\\]+(?![\\s\\S])" });
 const recipeScope = z.strictObject({ include: z.array(recipeGlob).min(1).optional(), exclude: z.array(recipeGlob).min(1).optional() });
-const pinnedRevision = z.string().refine(isFullObjectId).meta({ pattern: FULL_OBJECT_ID_PATTERN });
+const pinnedRevision = z.string().refine(isFullObjectId, "a full commit object ID").meta({ pattern: FULL_OBJECT_ID_PATTERN });
 
 export const replaySchema = z.strictObject({
   version: z.literal(1),
   declaration: z.string().regex(/^ws-r1:[0-9a-f]{64}$/),
   snapshots: z.array(z.discriminatedUnion("kind", [z.strictObject({ repo: z.string().regex(/\S/), kind: z.literal("sha"), sha: pinnedRevision }), z.strictObject({ repo: z.string().regex(/\S/), kind: z.literal("live"), head: pinnedRevision, stateId: z.string().regex(/\S/) })])).meta({ uniqueItems: true }).describe("Echo actual snapshots in repo-ID order, one per ID."),
-}).refine(isWorkspaceReplayContext);
+}).refine(isWorkspaceReplayContext, { message: "echo snapshots in repo-ID order, one per ID", path: ["snapshots"] });
 
 /** The recovery recipes: the arguments a pinned replay reruns, validated beside the family's own schema. */
 export const recipeArguments = z.union([
@@ -154,11 +170,27 @@ export const callersRecipe = z.union([
  * Callers and impact share their cross-field rule: replay requires workspace; a workspace read refuses `live: false` and
  * blank revisions; local live refuses `offline`.
  */
-function validTraversalArguments(value: { replay?: unknown; workspace?: unknown; live?: unknown; offline?: unknown }): boolean {
-  return (value.replay === undefined || value.workspace !== undefined) && !(value.workspace !== undefined && (value.live === false || ("revision" in value && typeof value.revision === "string" && !/\S/.test(value.revision)) || ("head" in value && typeof value.head === "string" && !/\S/.test(value.head)))) && !(value.live === true && value.workspace === undefined && value.offline !== undefined);
+function traversalIssues(value: { replay?: unknown; workspace?: unknown; live?: unknown; offline?: unknown; revision?: unknown; head?: unknown }): FieldIssue[] {
+  const issues: FieldIssue[] = [];
+  if (value.replay !== undefined && value.workspace === undefined) issues.push({ constraint: "replay-requires-workspace", path: ["replay"], message: "replay requires workspace" });
+  if (value.workspace !== undefined) {
+    if (value.live === false) issues.push({ constraint: "workspace-live", path: ["live"], message: "with workspace, live is true or omitted" });
+    for (const field of ["revision", "head"] as const) {
+      const ref = value[field];
+      if (typeof ref === "string" && !/\S/.test(ref)) issues.push({ constraint: "workspace-blank-ref", path: [field], message: `with workspace, ${field} must not be blank` });
+    }
+  }
+  if (value.live === true && value.workspace === undefined && value.offline !== undefined) issues.push({ constraint: "offline-requires-workspace", path: ["offline"], message: "offline only applies with workspace; omit it for a local live read" });
+  return issues;
 }
-const replayRequiresWorkspace = { if: { required: ["replay"] }, then: { required: ["workspace"] } };
-const traversalConstraints = [replayRequiresWorkspace, { if: { required: ["workspace"] }, then: { properties: { live: { const: true }, revision: { pattern: "\\S" }, head: { pattern: "\\S" } } } }, { if: { required: ["live", "offline"], properties: { live: { const: true } } }, then: { required: ["workspace"] } }];
+/** `ref` is the family's own revision field; the other one is not a property of the strict root. */
+const traversalConstraints = (ref: "revision" | "head"): CrossField => ({
+  dependentRequired: { replay: ["workspace"] },
+  dependentSchemas: {
+    workspace: { properties: { live: { const: true }, [ref]: { pattern: "\\S" } } },
+    offline: { anyOf: [{ required: ["workspace"] }, { properties: { live: { const: false } } }] },
+  },
+});
 
 const mode = responseModeSchema;
 
@@ -182,20 +214,20 @@ const outlineFields = {
   scope,
 };
 const exactlyOneSubject = (value: { files?: unknown; focus?: unknown }): boolean => (value.files === undefined) !== (value.focus === undefined);
-const subjectConstraint = { oneOf: [{ required: ["files"] }, { required: ["focus"] }] };
+const subjectConstraint: CrossField = { dependentSchemas: { files: { not: { required: ["focus"] } } }, if: { not: { required: ["files"] } }, then: { required: ["focus"] } };
 const workspaceFields = { repo, revision: workspaceRevision, live: z.literal(true).optional(), offline, scope, repos: workspaceRepos, gateways };
 
 /** The semantic inputs: what the analysis reads, without `mode`, `select`, `page` or `expect`. */
 export const SEMANTIC_INPUTS = {
   entrypoints: liveSchema(entrypointFields, ["revision"]),
   callers: liveSchema({ ...callersFields, ...crossingFields }, ["revision"])
-    .refine(validTraversalArguments)
-    .meta({ allOf: [liveExclusion("revision"), ...traversalConstraints] }),
+    .superRefine(reportIssues(traversalIssues))
+    .meta(crossField(liveExclusion("revision"), traversalConstraints("revision"))),
   impact: liveSchema({ ...impactFields, ...crossingFields }, ["head"])
-    .refine(validTraversalArguments)
-    .meta({ allOf: [liveExclusion("head"), ...traversalConstraints] }),
+    .superRefine(reportIssues(traversalIssues))
+    .meta(crossField(liveExclusion("head"), traversalConstraints("head"))),
   importers: liveSchema(fileFields, ["revision"]),
-  outline: liveSchema(outlineFields, ["revision"]).refine(exactlyOneSubject, "give exactly one of files and focus").meta({ allOf: [liveExclusion("revision"), subjectConstraint] }),
+  outline: liveSchema(outlineFields, ["revision"]).refine(exactlyOneSubject, { message: "give exactly one of files and focus", path: ["files"], params: { constraint: "one-subject" } }).meta(crossField(liveExclusion("revision"), subjectConstraint)),
   workspace: liveSchema(workspaceFields, ["revision"]),
   decisions: liveSchema(workspaceFields, ["revision"]),
 } satisfies Record<ToolFamily, z.ZodType>;
@@ -203,18 +235,18 @@ export const SEMANTIC_INPUTS = {
 /** The inputs each original tool publishes and validates: the semantic fields plus presentation and recovery controls. */
 export const TOOL_INPUTS = {
   entrypoints: liveSchema({ ...entrypointFields, mode, ...recoveryControlShapeFor("entrypoints") }, ["revision"])
-    .refine((value) => validRecoveryControls("entrypoints", value))
-    .meta({ allOf: [liveExclusion("revision"), ...recoveryControlConstraintsFor("entrypoints")] }),
+    .superRefine(reportIssues((value) => controlIssues("entrypoints", value)))
+    .meta(crossField(liveExclusion("revision"), recoveryControlConstraintsFor("entrypoints"))),
   callers: liveSchema({ ...callersFields, mode, ...crossingFields, ...recoveryControlShapeFor("callers") }, ["revision"])
-    .refine((value) => validRecoveryControls("callers", value))
-    .refine(validTraversalArguments)
-    .meta({ allOf: [liveExclusion("revision"), ...traversalConstraints, ...recoveryControlConstraintsFor("callers")] }),
+    .superRefine(reportIssues((value) => controlIssues("callers", value)))
+    .superRefine(reportIssues(traversalIssues))
+    .meta(crossField(liveExclusion("revision"), traversalConstraints("revision"), recoveryControlConstraintsFor("callers"))),
   impact: liveSchema({ ...impactFields, mode, ...crossingFields, ...recoveryControlShapeFor("impact") }, ["head"])
-    .refine((value) => validRecoveryControls("impact", value))
-    .refine(validTraversalArguments)
-    .meta({ allOf: [liveExclusion("head"), ...traversalConstraints, ...recoveryControlConstraintsFor("impact")] }),
+    .superRefine(reportIssues((value) => controlIssues("impact", value)))
+    .superRefine(reportIssues(traversalIssues))
+    .meta(crossField(liveExclusion("head"), traversalConstraints("head"), recoveryControlConstraintsFor("impact"))),
   importers: liveSchema({ ...fileFields, mode }, ["revision"]),
-  outline: liveSchema({ ...outlineFields, mode }, ["revision"]).refine(exactlyOneSubject, "give exactly one of files and focus").meta({ allOf: [liveExclusion("revision"), subjectConstraint] }),
+  outline: liveSchema({ ...outlineFields, mode }, ["revision"]).refine(exactlyOneSubject, { message: "give exactly one of files and focus", path: ["files"], params: { constraint: "one-subject" } }).meta(crossField(liveExclusion("revision"), subjectConstraint)),
   workspace: liveSchema({ ...workspaceFields, mode }, ["revision"]),
   decisions: liveSchema({ ...workspaceFields, mode }, ["revision"]),
 } satisfies Record<ToolFamily, z.ZodType>;

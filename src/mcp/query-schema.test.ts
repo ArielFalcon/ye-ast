@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { z } from "zod";
 import { SEMANTIC_INPUTS, TOOL_INPUTS } from "./query-schema.ts";
 import type { ToolFamily } from "./presentation.ts";
 
@@ -72,4 +73,53 @@ test("tool schemas default mode to summary; semantic schemas carry no presentati
   const parsed = TOOL_INPUTS.outline.parse(MINIMAL.outline);
   assert.equal(parsed.mode, "summary");
   assert.deepEqual(SEMANTIC_INPUTS.outline.parse(MINIMAL.outline), MINIMAL.outline);
+});
+
+test("each rejected cross-field constraint is reported at the control or field a caller must change", () => {
+  const replay = { version: 1, declaration: `ws-r1:${"c".repeat(64)}`, snapshots: [{ repo: "shop", kind: "sha", sha: SHA }] };
+  const cut = (owner: object) => ({ kind: "cut-places", owner, cutIndex: 0 });
+  const handler = (owner: object) => ({ kind: "handler-origins", owner, handler: { path: "a", symbol: "h", line: 1 } });
+  const page = { limit: 1 };
+  const cases: [ToolFamily, Record<string, unknown>, string, string][] = [
+    ["callers", { select: cut({ kind: "fact" }) }, "page", "select-requires-page"],
+    ["impact", { page }, "select", "page-requires-select"],
+    ["callers", { select: cut({ kind: "section", repo: "r" }), page }, "select.owner.kind", "owner-branch"],
+    ["impact", { workspace: {}, select: handler({ kind: "local" }), page }, "select.owner.kind", "owner-branch"],
+    ["callers", { select: { kind: "workspace-link-evidence", linkId: "l" }, page }, "select.kind", "kind-branch"],
+    ["callers", { select: { kind: "module-origins", owner: { kind: "local" }, module: { file: "a", snapshot: "base" } }, page }, "select.kind", "invalid_union"],
+    ["entrypoints", { select: cut({ kind: "section", repo: "r" }), page }, "select.owner", "invalid_union"],
+    ["impact", { select: cut({ kind: "fact" }), page: { limit: 0 } }, "page.limit", "too_small"],
+    ["callers", { replay }, "replay", "replay-requires-workspace"],
+    ["impact", { workspace: {}, live: false }, "live", "workspace-live"],
+    ["impact", { workspace: {}, head: " " }, "head", "workspace-blank-ref"],
+    ["callers", { live: true, offline: true }, "offline", "offline-requires-workspace"],
+    ["entrypoints", { live: true, revision: "main" }, "revision", "live-excludes"],
+    ["outline", { files: undefined }, "files", "one-subject"],
+  ];
+  for (const [family, args, path, constraint] of cases) {
+    const result = TOOL_INPUTS[family].safeParse({ ...MINIMAL[family], ...args });
+    const issues = result.error?.issues.map((issue) => [issue.path.join("."), issue.code === "custom" ? (issue.params as { constraint: string }).constraint : issue.code]);
+    assert.deepEqual(issues, [[path, constraint]], `${family} ${JSON.stringify(args)}`);
+  }
+});
+
+test("published select shapes offer exactly the owners some workspace branch of the tool accepts", () => {
+  const ownerOf = (kind: string) => ({ kind, ...(kind === "section" ? { repo: "r" } : kind === "read" ? { repo: "r", index: 0 } : {}) });
+  const subject: Record<string, object> = { "entrypoint-evidence": { findingIndex: 0 }, "handler-origins": { handler: { path: "a", symbol: "h", line: 1 } }, "module-origins": { module: { file: "a", snapshot: "head" } }, "cut-places": { cutIndex: 0 }, "workspace-link-evidence": { linkId: "l" } };
+  const allOwners = ["local", "section", "fact", "entrypoints", "read"];
+  type Branch = { properties: { kind: { const: string }; owner?: { anyOf: { properties: { kind: { const: string } } }[] } } };
+  for (const family of RECOVERABLE) {
+    const published = (z.toJSONSchema(TOOL_INPUTS[family], { target: "draft-7" }) as unknown as { properties: { select: { oneOf: Branch[] } } }).properties.select.oneOf;
+    const branches = family === "entrypoints" ? [{}] : [{}, { workspace: {} }];
+    const accepted = (select: object) => branches.some((branch) => accepts(family, { ...MINIMAL[family], ...branch, select, page: { limit: 1 } }, TOOL_INPUTS));
+    for (const kind of Object.keys(subject)) {
+      const offered = published.find((branch) => branch.properties.kind.const === kind);
+      const owners = offered?.properties.owner?.anyOf.map((owner) => owner.properties.kind.const);
+      for (const owner of kind === "entrypoint-evidence" || kind === "workspace-link-evidence" ? [undefined] : allOwners) {
+        const select = { kind, ...(owner === undefined ? {} : { owner: ownerOf(owner) }), ...subject[kind] };
+        const isOffered = offered !== undefined && (owner === undefined || owners!.includes(owner));
+        assert.equal(isOffered, accepted(select), `${family} ${kind} ${owner ?? ""}`);
+      }
+    }
+  }
 });

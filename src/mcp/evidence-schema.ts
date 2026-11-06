@@ -1,6 +1,7 @@
 import { dependencyDiagnostic } from "./dependency-schema.ts";
 import { z } from 'zod';
 import { RESULT_IDENTITY_PATTERN } from './evidence-cursor.ts';
+import type { CrossField } from './compact-schema.ts';
 
 type Tool = 'entrypoints' | 'callers' | 'impact';
 const index = z.int().nonnegative();
@@ -24,48 +25,138 @@ const linkSelection = z.strictObject({kind: z.literal('workspace-link-evidence')
 const selection = z.discriminatedUnion('kind', [handlerSelection, moduleSelection, findingSelection, cutSelection, linkSelection]);
 const pageRequest = z.strictObject({limit: positive.describe('Explicit positive safe integer counting primary records; no default page size.'), cursor: z.string().optional().describe('Returned nextCursor for the same selection and limit; source identity is verified again.')});
 
-const ORIGIN_OWNER = '{"kind":"local"} or {"kind":"section","repo":<id>}';
-const HANDLER_SHAPE = `{"kind":"handler-origins","owner":${ORIGIN_OWNER},"handler":{"path","symbol","line"}}`;
-const MODULE_SHAPE = `{"kind":"module-origins","owner":${ORIGIN_OWNER},"module":{"file","snapshot":"base"|"head"}}`;
-const FINDING_SHAPE = '{"kind":"entrypoint-evidence","findingIndex"}';
-const CUT_SHAPE = '{"kind":"cut-places","owner":{"kind":"fact"} or {"kind":"entrypoints"} or {"kind":"section","repo"} or {"kind":"read","repo","index"},"cutIndex"}';
-const LINK_SHAPE = '{"kind":"workspace-link-evidence","linkId"}';
-const shapes = (...accepted: string[]) => ({error: `select must be one of ${accepted.join('; ')}. Copy a lookup example from a previous answer.`});
-const SELECTIONS = {
-  entrypoints: z.union([findingSelection, cutSelection], shapes(FINDING_SHAPE, CUT_SHAPE)),
-  callers: z.union([handlerSelection, cutSelection, linkSelection], shapes(HANDLER_SHAPE, CUT_SHAPE, LINK_SHAPE)),
-  impact: z.union([handlerSelection, moduleSelection, cutSelection, linkSelection], shapes(HANDLER_SHAPE, MODULE_SHAPE, CUT_SHAPE, LINK_SHAPE)),
+type OwnerKind = 'local' | 'section' | 'fact' | 'entrypoints' | 'read';
+type SelectionKind = z.infer<typeof selection>['kind'];
+type Branch = Partial<Record<SelectionKind, readonly OwnerKind[]>>;
+
+/**
+ * The one eligibility policy of the recovery controls: per tool and per actual workspace branch, the selection kinds a
+ * request may name and, for owned kinds, the owners it accepts. An empty owner list marks a kind without an owner.
+ * Runtime validation, explanatory issues, the published constraints and the per-tool input shapes all derive from it.
+ */
+const ELIGIBILITY: Record<Tool, {local: Branch; workspace?: Branch}> = {
+  entrypoints: {local: {'entrypoint-evidence': [], 'cut-places': ['fact', 'entrypoints']}},
+  callers: {
+    local: {'handler-origins': ['local'], 'cut-places': ['fact']},
+    workspace: {'handler-origins': ['section'], 'cut-places': ['fact', 'section', 'read'], 'workspace-link-evidence': []},
+  },
+  impact: {
+    local: {'handler-origins': ['local'], 'module-origins': ['local'], 'cut-places': ['fact']},
+    workspace: {'handler-origins': ['section'], 'module-origins': ['section'], 'cut-places': ['fact', 'section', 'read'], 'workspace-link-evidence': []},
+  },
 };
+const KIND_ORDER: readonly SelectionKind[] = ['entrypoint-evidence', 'handler-origins', 'module-origins', 'cut-places', 'workspace-link-evidence'];
+const OWNERS: Record<OwnerKind, z.ZodType> = {local, section, fact, entrypoints, read};
+const OWNER_SHAPE: Record<OwnerKind, string> = {local: '{"kind":"local"}', section: '{"kind":"section","repo"}', fact: '{"kind":"fact"}', entrypoints: '{"kind":"entrypoints"}', read: '{"kind":"read","repo","index"}'};
+const SUBJECT_SHAPE: Record<SelectionKind, string> = {
+  'entrypoint-evidence': '"findingIndex"',
+  'handler-origins': '"handler":{"path","symbol","line"}',
+  'module-origins': '"module":{"file","snapshot":"base"|"head"}',
+  'cut-places': '"cutIndex"',
+  'workspace-link-evidence': '"linkId"',
+};
+
+const branchesOf = (tool: Tool): Branch[] => [ELIGIBILITY[tool].local, ...(ELIGIBILITY[tool].workspace ? [ELIGIBILITY[tool].workspace] : [])];
+const kindsOf = (tool: Tool): SelectionKind[] => KIND_ORDER.filter((kind) => branchesOf(tool).some((branch) => branch[kind] !== undefined));
+const ownersOf = (tool: Tool, kind: SelectionKind): OwnerKind[] => [...new Set(branchesOf(tool).flatMap((branch) => branch[kind] ?? []))];
+const branchOf = (tool: Tool, workspace: boolean): Branch => (workspace && ELIGIBILITY[tool].workspace) || ELIGIBILITY[tool].local;
+const list = (items: readonly string[]) => items.join(' or ');
+
+function shapeOf(tool: Tool, kind: SelectionKind): string {
+  const owners = ownersOf(tool, kind);
+  return `{"kind":"${kind}",${owners.length ? `"owner":${list(owners.map((owner) => OWNER_SHAPE[owner]))},` : ''}${SUBJECT_SHAPE[kind]}}`;
+}
+
+/** Which kinds and owners each branch accepts, stated only when the branches differ. */
+function branchRule(tool: Tool): string {
+  const {local: localBranch, workspace: workspaceBranch} = ELIGIBILITY[tool];
+  if (workspaceBranch === undefined) return '';
+  const describe = (branch: Branch) => KIND_ORDER.filter((kind) => branch[kind] !== undefined).map((kind) => branch[kind]!.length ? `${kind} owner ${list(branch[kind]!)}` : kind).join('; ');
+  return ` Without workspace: ${describe(localBranch)}. With workspace: ${describe(workspaceBranch)}.`;
+}
+
+/** The owners of one kind in each branch, stated only when the branches differ. */
+function ownerRule(tool: Tool, kind: SelectionKind): string {
+  const {local: localBranch, workspace: workspaceBranch} = ELIGIBILITY[tool];
+  if (workspaceBranch === undefined) return '';
+  const owners = (branch: Branch) => branch[kind] === undefined ? 'unavailable' : list(branch[kind]!);
+  return ` (without workspace: ${owners(localBranch)}; with workspace: ${owners(workspaceBranch)})`;
+}
+
+const selectionGuide = (tool: Tool) => `select must be one of ${kindsOf(tool).map((kind) => shapeOf(tool, kind)).join('; ')}.${branchRule(tool)}`;
+
+function selectionFor(tool: Tool, kind: SelectionKind) {
+  const owners = ownersOf(tool, kind);
+  // A subset of the kind's public owner union, so the parsed value keeps that union's type.
+  const owner = <T extends z.ZodType>(_full: T) => z.union(owners.map((name) => OWNERS[name]), {error: `owner for ${kind} must be ${list(owners.map((name) => OWNER_SHAPE[name]))}${ownerRule(tool, kind)}`}) as unknown as T;
+  switch (kind) {
+    case 'entrypoint-evidence': return findingSelection;
+    case 'workspace-link-evidence': return linkSelection;
+    case 'handler-origins': return handlerSelection.extend({owner: owner(impactOwner)});
+    case 'module-origins': return moduleSelection.extend({owner: owner(impactOwner)});
+    case 'cut-places': return cutSelection.extend({owner: owner(cutOwner)});
+  }
+}
+
+/** Only the kinds and owners the tool accepts in some branch; the actual branch is checked by the recovery control issues. */
+function selectionsFor(tool: Tool) {
+  const [first, ...rest] = kindsOf(tool).map((kind) => selectionFor(tool, kind));
+  return z.discriminatedUnion('kind', [first!, ...rest], {error: (issue) => issue.code === 'invalid_union' ? selectionGuide(tool) : undefined});
+}
+const SELECTIONS = {entrypoints: selectionsFor('entrypoints'), callers: selectionsFor('callers'), impact: selectionsFor('impact')};
 
 export function recoveryControlShapeFor(tool: Tool) {
   const selections = SELECTIONS[tool];
   return {select: selections.optional().describe('Recorded evidence selected by its public owner and coordinates; requires page and does not change analysis coverage.'), page: pageRequest.optional(), expect: z.string().regex(RESULT_IDENTITY_PATTERN).optional().describe('Assert the complete public source resultIdentity, with or without selection. Must agree with a supplied cursor.')};
 }
 
-export function validRecoveryControls(tool: Tool, args: {select?: unknown; page?: unknown; workspace?: unknown}): boolean {
-  if ((args.select === undefined) !== (args.page === undefined)) return false;
-  if (args.select === undefined) return true;
-  const parsed = selection.safeParse(args.select);
-  if (!parsed.success || !pageRequest.safeParse(args.page).success) return false;
-  const s = parsed.data;
-  if (tool === 'entrypoints') return s.kind === 'entrypoint-evidence' || (s.kind === 'cut-places' && (s.owner.kind === 'fact' || s.owner.kind === 'entrypoints'));
+/** The violated control constraint, typed by `constraint` and anchored at the control a caller must change. */
+export type RecoveryControlIssue = {constraint: 'select-requires-page' | 'page-requires-select' | 'selection-shape' | 'page-shape' | 'kind-branch' | 'owner-branch'; path: (string | number)[]; message: string};
+
+export function recoveryControlIssues(tool: Tool, args: {select?: unknown; page?: unknown; workspace?: unknown}): RecoveryControlIssue[] {
+  if (args.select !== undefined && args.page === undefined) return [{constraint: 'select-requires-page', path: ['page'], message: 'select requires page with an explicit positive integer limit, e.g. {"limit":20}'}];
+  if (args.select === undefined && args.page !== undefined) return [{constraint: 'page-requires-select', path: ['select'], message: 'page pages one selection and requires select'}];
+  if (args.select === undefined) return [];
+  const parsed = SELECTIONS[tool].safeParse(args.select);
+  if (!parsed.success) return parsed.error.issues.map((issue) => ({constraint: 'selection-shape', path: ['select', ...issue.path.map((key) => typeof key === 'symbol' ? String(key) : key)], message: issue.message}));
+  if (!pageRequest.safeParse(args.page).success) return [{constraint: 'page-shape', path: ['page'], message: 'page needs an explicit positive safe integer limit and an optional returned cursor'}];
   const workspace = args.workspace !== undefined;
-  if (s.kind === 'handler-origins' || s.kind === 'module-origins') return (s.kind !== 'module-origins' || tool === 'impact') && s.owner.kind === (workspace ? 'section' : 'local');
-  if (s.kind === 'cut-places') return s.owner.kind === 'fact' || (workspace && (s.owner.kind === 'section' || s.owner.kind === 'read'));
-  return s.kind === 'workspace-link-evidence' && workspace;
+  const branch = branchOf(tool, workspace);
+  const s = parsed.data;
+  const owners = branch[s.kind];
+  const needs = workspace ? 'applies only without workspace' : 'requires workspace';
+  if (owners === undefined) return [{constraint: 'kind-branch', path: ['select', 'kind'], message: `${s.kind} ${needs}`}];
+  if ('owner' in s && !owners.includes(s.owner.kind)) return [{constraint: 'owner-branch', path: ['select', 'owner', 'kind'], message: `${s.kind} owner ${s.owner.kind} ${needs}; ${workspace ? 'with' : 'without'} workspace use ${list(owners)}`}];
+  return [];
 }
 
-export function recoveryControlConstraintsFor(tool: Tool): object[] {
-  const owner = (kinds: string[]) => ({ properties: { owner: { properties: {kind: {enum: kinds}}, required: ['kind'] } }, required: ['owner'] });
-  const kind = (name: string, owners?: string[]) => ({ properties: { kind: {const: name}, ...(owners ? owner(owners).properties : {}) }, required: owners ? ['kind','owner'] : ['kind'] });
-  const entries = [kind('entrypoint-evidence'), kind('cut-places', ['fact','entrypoints'])];
-  const branches = (workspace: boolean) => [kind('handler-origins', [workspace ? 'section' : 'local']), ...(tool === 'impact' ? [kind('module-origins', [workspace ? 'section' : 'local'])] : []), kind('cut-places', workspace ? ['fact','section','read'] : ['fact']), ...(workspace ? [kind('workspace-link-evidence')] : [])];
-  const restrict = (choices: object[]) => ({properties: {select: {anyOf: choices}}});
-  return [
-    {if: {required: ['select']}, then: {required: ['page']}},
-    {if: {required: ['page']}, then: {required: ['select']}},
-    ...(tool === 'entrypoints' ? [restrict(entries)] : [{if: {required: ['workspace']}, then: restrict(branches(true)), else: restrict(branches(false))}]),
-  ];
+export function validRecoveryControls(tool: Tool, args: {select?: unknown; page?: unknown; workspace?: unknown}): boolean {
+  return recoveryControlIssues(tool, args).length === 0;
+}
+
+/**
+ * The published form of the same policy. The `select` property already admits only the tool's kind and owner pairs, so
+ * each workspace branch restricts only its kinds and owners; a policy whose branch is not that product fails here.
+ */
+export function recoveryControlConstraintsFor(tool: Tool): CrossField {
+  const pairing = {dependentRequired: {select: ['page'], page: ['select']}};
+  const {local: localBranch, workspace: workspaceBranch} = ELIGIBILITY[tool];
+  if (workspaceBranch === undefined) return pairing;
+  // Publish the excluded kinds and owners: the complement within the tool is shorter and equivalent.
+  const restrict = (branch: Branch) => {
+    const kinds = KIND_ORDER.filter((kind) => branch[kind] !== undefined);
+    const owners = [...new Set(kinds.flatMap((kind) => branch[kind]!))];
+    for (const kind of kindsOf(tool)) for (const owner of ownersOf(tool, kind)) {
+      if (kinds.includes(kind) && owners.includes(owner) && !branch[kind]!.includes(owner)) throw new Error(`${tool}: ${kind} ${owner} needs a pair constraint`);
+    }
+    const excludedKinds = kindsOf(tool).filter((kind) => !kinds.includes(kind));
+    const excludedOwners = [...new Set(kindsOf(tool).flatMap((kind) => ownersOf(tool, kind)))].filter((owner) => !owners.includes(owner));
+    return {properties: {select: {properties: {
+      ...(excludedKinds.length ? {kind: {not: {enum: excludedKinds}}} : {}),
+      ...(excludedOwners.length ? {owner: {properties: {kind: {not: {enum: excludedOwners}}}}} : {}),
+    }}}};
+  };
+  return {...pairing, dependentSchemas: {workspace: restrict(workspaceBranch), select: {anyOf: [{required: ['workspace']}, restrict(localBranch)]}}};
 }
 
 /** Existing fact primitives are supplied by the adapter so projection provenance uses its established schema. */
