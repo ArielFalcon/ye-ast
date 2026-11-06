@@ -20,10 +20,10 @@ const BASE: FactBase = {
   evidence: [],
 };
 
-function link(overrides: { file?: string; line?: number; basis?: Link["basis"]; name?: string } = {}): Link {
-  const { file = "src/owner.service.ts", line = 10, basis = "exact", name = OPERATION } = overrides;
-  const from = { repo: "web", file, line, symbol: "find" };
-  return { id: `${file}:${line}:${name}:${basis}`, from, to: { repo: "api", kind: "http-route", name, handler: { path: "Owners.java", symbol: "get", line: 5 } }, transport: "http", basis, confidence: 1 };
+function link(overrides: { file?: string; line?: number; basis?: Link["basis"]; name?: string; repo?: string } = {}): Link {
+  const { file = "src/owner.service.ts", line = 10, basis = "exact", name = OPERATION, repo = "web" } = overrides;
+  const from = { repo, file, line, symbol: "find" };
+  return { id: `${repo}:${file}:${line}:${name}:${basis}`, from, to: { repo: "api", kind: "http-route", name, handler: { path: "Owners.java", symbol: "get", line: 5 } }, transport: "http", basis, confidence: 1 };
 }
 
 const siteOf = (file = "src/owner.service.ts", line = 10) => ({ kind: "call-site" as const, repo: "web", file, line, symbol: "find" });
@@ -43,6 +43,8 @@ interface Setup {
   templates?: Record<string, FlowResult>;
   callers?: Record<string, ConsumerCallers>;
   serving?: ConsumerSession["serving"];
+  unresolvedCalls?: ConsumerSession["unresolvedCalls"];
+  ambiguousCalls?: ConsumerSession["ambiguousCalls"];
   property?: string;
   change?: string;
 }
@@ -51,12 +53,15 @@ function setup(options: Setup = {}) {
   const followed: Carrier[] = [];
   const templated: Carrier[] = [];
   const opened: string[] = [];
+  const asked: string[] = [];
   const session: ConsumerSession = {
     base: BASE,
     links: options.links ?? [link()],
     serving: options.serving ?? [{ repo: "api", handler: { path: "Owners.java", symbol: "get", line: 5 } }],
+    unresolvedCalls: options.unresolvedCalls ?? [],
+    ambiguousCalls: options.ambiguousCalls ?? [],
     cuts: [],
-    callers: (declaration) => options.callers?.[declaration.symbol] ?? { kind: "found", callers: [] },
+    callers: (declaration) => (asked.push(declaration.symbol), options.callers?.[declaration.symbol] ?? { kind: "found", callers: [] }),
     flow: { follow: (carrier) => (followed.push(carrier), options.flow?.[carrierKey(carrier.site)] ?? NO_FLOW) },
     templates: { follow: (carrier) => (templated.push(carrier), options.templates?.[carrierKey(carrier.site)] ?? NO_FLOW) },
   };
@@ -75,7 +80,7 @@ function setup(options: Setup = {}) {
     assert.notEqual(answer.value.status, "unknown");
     return answer.value as Exclude<typeof answer.value, { status: "unknown" }>;
   };
-  return { ask, followed, templated, opened, queries, request };
+  return { ask, followed, templated, opened, asked, queries, request };
 }
 
 const verdictsOf = (fact: Awaited<ReturnType<ReturnType<typeof setup>["ask"]>>) => fact.value.findings.map((finding) => (finding.status === "complete" ? finding.value.verdict.kind : finding.evidence.at(-1)?.via));
@@ -139,15 +144,15 @@ test("every qualified basis is followed", async () => {
 });
 
 const returning = (symbol = "find") => ({ [carrierKey(siteOf())]: { uses: [], next: [{ carrier: { site: returnOf(symbol), path: path("address") }, hops: [{ step: "return" as const, evidence: { path: "src/owner.service.ts", line: 12 } }] }], frontiers: [] } });
-const caller = (overrides: Partial<ConsumerCaller> = {}): ConsumerCaller => ({ file: "src/page.ts", line: 20, lines: [25], proven: true, ...overrides });
+const caller = (overrides: Partial<ConsumerCaller> = {}): ConsumerCaller => ({ file: "src/page.ts", line: 20, at: 25, kind: "call", provenance: "resolved", confidence: 1, proven: true, ...overrides });
 
-test("a function return continues at each line of each resolved caller, and the caller is a hop of the chain", async () => {
+test("a function return continues at each proven call occurrence of its callers, and the call is a hop of the chain", async () => {
   const flow = {
     ...returning(),
     [carrierKey({ kind: "call-result", repo: "web", file: "src/page.ts", line: 25, callee: "find" })]: { uses: [use(26, { operation: "dereference" })], next: [], frontiers: [] },
     [carrierKey({ kind: "call-result", repo: "web", file: "src/page.ts", line: 27, callee: "find" })]: { uses: [use(28, { operation: "dereference" })], next: [], frontiers: [] },
   };
-  const callers = { find: { kind: "found" as const, callers: [caller({ lines: [25, 27] })] } };
+  const callers = { find: { kind: "found" as const, callers: [caller({ at: 25 }), caller({ at: 27 })] } };
 
   const fact = await setup({ flow, callers }).ask();
 
@@ -158,7 +163,7 @@ test("a function return continues at each line of each resolved caller, and the 
 });
 
 test("a caller that is not a proven call, has no position, or sits in a template is a frontier, not a continuation", async () => {
-  const callers = { find: { kind: "found" as const, callers: [caller({ file: "src/a.ts", line: 1, lines: [4], proven: false }), caller({ file: "src/b.ts", line: 1, lines: [] }), caller({ file: "src/c.ts", line: 1, lines: [6], resource: "src/c.html" })] } };
+  const callers = { find: { kind: "found" as const, callers: [caller({ file: "src/a.ts", line: 1, at: 4, provenance: "heuristic", proven: false }), { file: "src/b.ts", line: 1, kind: "call" as const, provenance: "resolved" as const, confidence: 1, proven: true }, caller({ file: "src/c.ts", line: 1, at: 6, resource: "src/c.html" })] } };
   const { ask, followed } = setup({ flow: returning(), callers });
 
   const fact = await ask();
@@ -277,4 +282,147 @@ test("a frontier a reader reports keeps its place, cause and the chain that reac
   assert.ok(item?.status === "unknown");
   assert.equal(item.reason, "unresolved");
   assert.deepEqual(item.evidence.map((evidence) => [evidence.line, evidence.via]), [[10, "basis:exact"], [11, undefined], [15, "unmodelled-flow:spread"]]);
+});
+
+const UTIL = { file: "src/util.ts", symbol: "valueOrDefault", line: 3 };
+const parameterOf = { kind: "parameter" as const, repo: "web", ...UTIL, index: 0 };
+const utilReturn = { kind: "return" as const, repo: "web", ...UTIL };
+const argumentAt = (file: string, line: number) => ({ step: "argument" as const, evidence: { path: file, line } });
+const callResultAt = (file: string, line: number) => carrierKey({ kind: "call-result", repo: "web", file, line, callee: UTIL.symbol });
+
+function throughHelper(entries: readonly (readonly [string, number])[]) {
+  return {
+    [carrierKey(siteOf())]: { uses: [], next: entries.map(([file, line]) => ({ carrier: { site: parameterOf, path: path("address") }, hops: [argumentAt(file, line)] })), frontiers: [] },
+    [carrierKey(parameterOf)]: { uses: [], next: [{ carrier: { site: utilReturn, path: path("address") }, hops: [{ step: "return" as const, evidence: { path: UTIL.file, line: 5 } }] }], frontiers: [] },
+  };
+}
+
+test("a value that entered a function through an argument leaves it at the result of that call, not at every caller of the function", async () => {
+  const flow = { ...throughHelper([["src/a.ts", 12]]), [callResultAt("src/a.ts", 12)]: { uses: [use(13, { site: { path: "src/a.ts", line: 13 }, operation: "dereference" })], next: [], frontiers: [] } };
+  const callers = { valueOrDefault: { kind: "found" as const, callers: [caller({ file: "src/a.ts", line: 10, at: 12 }), caller({ file: "src/b.ts", line: 30, at: 40 })] } };
+  const { ask, followed, asked } = setup({ flow, callers });
+
+  const fact = await ask();
+
+  assert.deepEqual(followed.filter((carrier) => carrier.site.kind === "call-result").map((carrier) => carrier.site.kind === "call-result" && [carrier.site.file, carrier.site.line]), [["src/a.ts", 12]]);
+  assert.deepEqual(asked, []);
+  assert.deepEqual(verdictsOf(fact), ["incompatible"]);
+});
+
+test("the same function entered from two call sites follows both returns", async () => {
+  const flow = {
+    ...throughHelper([["src/a.ts", 12], ["src/c.ts", 7]]),
+    [callResultAt("src/a.ts", 12)]: { uses: [use(13, { site: { path: "src/a.ts", line: 13 }, operation: "dereference" })], next: [], frontiers: [] },
+    [callResultAt("src/c.ts", 7)]: { uses: [use(8, { site: { path: "src/c.ts", line: 8 }, operation: "dereference" })], next: [], frontiers: [] },
+  };
+
+  const fact = await setup({ flow }).ask();
+
+  assert.deepEqual(fact.value.findings.map((finding) => finding.evidence[0]?.path), ["src/a.ts", "src/c.ts"]);
+});
+
+test("a function that calls itself with the value terminates and leaves a frontier at the recursive call", async () => {
+  const flow = {
+    ...throughHelper([["src/a.ts", 12]]),
+    [carrierKey(parameterOf)]: { uses: [], next: [{ carrier: { site: parameterOf, path: path("address") }, hops: [argumentAt(UTIL.file, 6)] }], frontiers: [] },
+  };
+
+  const fact = await setup({ flow }).ask();
+
+  assert.deepEqual(verdictsOf(fact), ["unmodelled-flow:recursion"]);
+});
+
+test("a return that was not entered through an argument still continues at the callers of its function", async () => {
+  const { ask, asked } = setup({ flow: returning() });
+
+  await ask();
+
+  assert.deepEqual(asked, ["find"]);
+});
+
+test("an occurrence the graph only guessed is an ambiguous caller at that occurrence, beside the proven one of the same function", async () => {
+  const callers = { find: { kind: "found" as const, callers: [caller({ at: 25 }), caller({ at: 27, provenance: "heuristic", confidence: 0.8, proven: false })] } };
+  const flow = { ...returning(), [carrierKey({ kind: "call-result", repo: "web", file: "src/page.ts", line: 25, callee: "find" })]: { uses: [use(26, { operation: "dereference" })], next: [], frontiers: [] } };
+
+  const fact = await setup({ flow, callers }).ask();
+
+  assert.deepEqual(verdictsOf(fact), ["incompatible", "ambiguous-caller"]);
+  assert.deepEqual(fact.value.findings.map((finding) => finding.evidence.at(-1)?.line), [26, 27]);
+});
+
+const registrationAt = (file: string, line: number) => ({ step: "resolver-input" as const, evidence: { path: file, line } });
+
+test("the registration of a resolver the reader continued is no caller, and a function named anywhere else is an unmodelled flow", async () => {
+  const flow = {
+    ...returning(),
+    [carrierKey(returnOf())]: { uses: [], next: [{ carrier: { site: { kind: "member" as const, repo: "web", file: "src/page.ts", owner: "Page", member: "owner" }, path: path("address") }, hops: [registrationAt("src/routes.ts", 34)] }], frontiers: [] },
+  };
+  const callers = { find: { kind: "found" as const, callers: [caller({ file: "src/routes.ts", line: 30, at: 34, kind: "reference", proven: false }), caller({ file: "src/other.ts", line: 2, at: 9, kind: "reference", proven: false })] } };
+
+  const fact = await setup({ flow, callers }).ask();
+
+  assert.deepEqual(verdictsOf(fact), ["unmodelled-flow:function-reference"]);
+  assert.deepEqual(fact.value.findings.map((finding) => [finding.evidence.at(-1)?.path, finding.evidence.at(-1)?.line]), [["src/other.ts", 9]]);
+});
+
+test("a dependence that is neither a call nor a reference stays an ambiguous caller", async () => {
+  const callers = { find: { kind: "found" as const, callers: [{ file: "src/page.ts", line: 20, kind: "other" as const, provenance: "resolved" as const, confidence: 1, proven: false }] } };
+
+  assert.deepEqual(verdictsOf(await setup({ flow: returning(), callers }).ask()), ["ambiguous-caller"]);
+});
+
+test("two uses in two repositories at the same relative place are two findings, each stating its repository and the link it came through", async () => {
+  const links = [link({ repo: "web-a" }), link({ repo: "web-b" })];
+  const read = { uses: [use(30, { operation: "dereference" })], next: [], frontiers: [] };
+  const { ask } = setup({ links, flow: { [carrierKey({ ...siteOf(), repo: "web-a" })]: read, [carrierKey({ ...siteOf(), repo: "web-b" })]: read } });
+
+  const fact = await ask();
+
+  assert.equal(fact.value.findings.length, 2);
+  const [first, second] = fact.value.findings;
+  assert.ok(first?.status === "complete" && second?.status === "complete");
+  assert.deepEqual([first.value.repo, second.value.repo], ["web-a", "web-b"]);
+  assert.deepEqual(first.evidence.map((place) => "repo" in place && place.repo), ["web-a"]);
+  assert.deepEqual(first.value.link, { id: links[0]!.id, basis: "exact", call: { file: "src/owner.service.ts", line: 10, symbol: "find" }, handler: { repo: "api", path: "Owners.java", symbol: "get", line: 5 } });
+});
+
+test("an unknown item locates its evidence in the repository it was followed in", async () => {
+  const flow = { [carrierKey(siteOf())]: { uses: [], next: [], frontiers: [{ at: { path: "src/owner.service.ts", line: 15 }, cause: "unmodelled-flow" as const, reason: "unresolved" as const, hops: [] }] } };
+
+  const item = (await setup({ flow }).ask()).value.findings[0];
+
+  assert.ok(item?.status === "unknown");
+  assert.deepEqual(item.evidence.map((place) => "repo" in place && place.repo), ["web", "web"]);
+});
+
+test("no call site linked lists the call sites of the workspace whose target could not be evaluated, so the empty linkage is not proof", async () => {
+  const unresolvedCalls = [{ repo: "web", file: "src/x.service.ts", line: 4, symbol: "load" }, { repo: "web", file: "src/a.service.ts", line: 9, symbol: "save" }];
+
+  const fact = await setup({ links: [], unresolvedCalls }).ask();
+
+  const [item] = fact.value.findings;
+  assert.ok(item?.status === "unknown");
+  assert.deepEqual(item.evidence.map((place) => [place.path, place.line, place.via, "repo" in place && place.repo]), [
+    ["src/a.service.ts", 9, "unresolved-call-site", "web"],
+    ["src/x.service.ts", 4, "unresolved-call-site", "web"],
+    ["Owners.java", 5, "no-call-site", "api"],
+  ]);
+});
+
+test("a call site that may reach the operation in more than one repository is a frontier, never a link", async () => {
+  const ambiguousCalls = [{ from: { repo: "web", file: "src/owner.service.ts", line: 10, symbol: "find" }, repos: ["api", "web"] }];
+
+  const fact = await setup({ links: [], ambiguousCalls }).ask();
+
+  assert.ok(verdictsOf(fact).includes("link-basis:ambiguous:api|web"));
+  assert.ok(!verdictsOf(fact).includes("no-call-site"));
+});
+
+test("followed call sites are evidence of the answer even when no chain reaches a read", async () => {
+  const flow = { [carrierKey(siteOf())]: { uses: [], next: [], frontiers: [] } };
+
+  const fact = await setup({ flow }).ask();
+
+  assert.deepEqual(fact.value.findings, []);
+  assert.deepEqual(fact.evidence.map((place) => [place.path, place.line, "repo" in place && place.repo]), [["src/owner.service.ts", 10, "web"]]);
 });

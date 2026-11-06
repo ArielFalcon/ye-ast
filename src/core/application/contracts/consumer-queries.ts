@@ -1,12 +1,13 @@
 import { formatAccessPath, type AccessPath } from "../../domain/contracts/access-path.ts";
 import { OLD_GUARANTEE, type UseConsequence } from "../../domain/contracts/consequence-fact.ts";
-import { carrierKey, type Carrier, type FlowFrontier, type FlowResult, type Hop } from "../../domain/contracts/consumer-flow.ts";
+import { carrierKey, type Carrier, type CarrierSite, type FlowFrontier, type FlowNext, type FlowResult, type Hop } from "../../domain/contracts/consumer-flow.ts";
 import { parseHypothesis, type Hypothesis } from "../../domain/contracts/hypothesis.ts";
 import { decideUse } from "../../domain/contracts/verdict.ts";
 import { canonicalJson } from "../../domain/shared/canonical-json.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
 import { withCuts, type Cut, type Evidence, type Fact, type Finding } from "../../domain/shared/fact.ts";
-import type { LinkBasis } from "../../domain/topology/link.ts";
+import type { Link, LinkBasis } from "../../domain/topology/link.ts";
+import type { RepositoryEvidence } from "../../domain/shared/repository-evidence.ts";
 import type { ConsumerQueries } from "../../ports/consumer-queries.port.ts";
 import type { ConsequencesFault } from "../../ports/consumer-queries.port.ts";
 import type { ConsumerSession, ConsumerSources } from "../../ports/consumer-sources.port.ts";
@@ -20,10 +21,22 @@ export interface ConsumerQueriesDeps {
   sources: ConsumerSources;
 }
 
+/** The call that handed the value to a function through an argument, and the function it entered. */
+interface Entry {
+  repo: string;
+  at: Evidence;
+  callee: { file: string; symbol: string; line: number };
+}
+
+/** A boundary still to follow: the link the value came through and, nearest last, the calls that entered the functions it is inside. */
 interface Pending {
   carrier: Carrier;
   chain: readonly Hop[];
+  link: Link;
+  entries: readonly Entry[];
 }
+
+const located = (evidence: Evidence, repo: string): RepositoryEvidence => ({ ...evidence, repo });
 
 export function createConsumerQueries({ sources }: ConsumerQueriesDeps): ConsumerQueries {
   return {
@@ -43,32 +56,43 @@ function consequencesOf(session: ConsumerSession, hypothesis: Hypothesis): Resul
   const findings: Finding<UseConsequence>[] = [];
   const cuts: Cut[] = [...session.cuts];
   const queue: Pending[] = [];
-  const sites: Evidence[] = [];
+  const sites: RepositoryEvidence[] = [];
 
   const links = session.links
     .filter((link) => link.transport === "http" && link.to.kind === "http-route" && link.to.name === operation)
     .sort((a, b) => compareText(a.from.repo, b.from.repo) || compareText(a.from.file, b.from.file) || a.from.line - b.from.line || compareText(a.id, b.id));
-  for (const { from, basis } of links) {
+  for (const link of links) {
+    const { from, basis } = link;
     const at = { path: from.file, line: from.line };
-    sites.push(at);
+    sites.push(located(at, from.repo));
     if (QUALIFIED_BASES.has(basis)) {
-      queue.push({ carrier: { site: { kind: "call-site", ...from }, path: hypothesis.property }, chain: [{ step: "http-call", evidence: { ...at, via: `basis:${basis}` } }] });
+      queue.push({ carrier: { site: { kind: "call-site", ...from }, path: hypothesis.property }, chain: [{ step: "http-call", evidence: { ...at, via: `basis:${basis}` } }], link, entries: [] });
     } else {
-      findings.push(frontierItem({ at, cause: "link-basis", reason: "unresolved", detail: basis, hops: [] }, []));
+      findings.push(frontierItem({ at, cause: "link-basis", reason: "unresolved", detail: basis, hops: [] }, [], from.repo));
     }
   }
+  for (const { from, repos } of session.ambiguousCalls) {
+    const at = { path: from.file, line: from.line };
+    sites.push(located(at, from.repo));
+    findings.push(frontierItem({ at, cause: "link-basis", reason: "unresolved", detail: `ambiguous:${repos.join("|")}`, hops: [] }, [], from.repo));
+  }
 
-  if (links.length === 0) {
-    for (const { handler } of session.serving) findings.push(frontierItem({ at: { path: handler.path, line: handler.line }, cause: "no-call-site", reason: "unresolved", hops: [] }, []));
+  if (links.length === 0 && session.ambiguousCalls.length === 0) {
+    const unresolved = session.unresolvedCalls.map((call) => located({ path: call.file, line: call.line, via: "unresolved-call-site" }, call.repo)).sort(compareEvidence);
+    for (const { repo, handler } of session.serving) {
+      const evidence = [...unresolved, located({ path: handler.path, line: handler.line, via: "no-call-site" }, repo)];
+      findings.push({ status: "unknown", reason: "unresolved", evidence });
+    }
   }
 
   const seen = new Map<string, AccessPath>();
   for (let index = 0; index < queue.length; index++) {
-    const { carrier, chain } = queue[index]!;
-    const key = carrierKey(carrier.site);
+    const { carrier, chain, link, entries } = queue[index]!;
+    const repo = link.from.repo;
+    const key = `${carrierKey(carrier.site)}\0${canonicalJson(entries)}`;
     const before = seen.get(key);
     if (before !== undefined) {
-      if (!samePath(before, carrier.path)) findings.push(frontierItem({ at: placeOf(carrier, chain), cause: "path-conflict", reason: "unresolved", hops: [] }, chain));
+      if (!samePath(before, carrier.path)) findings.push(frontierItem({ at: placeOf(carrier, chain), cause: "path-conflict", reason: "unresolved", hops: [] }, chain, repo));
       continue;
     }
     seen.set(key, carrier.path);
@@ -77,15 +101,28 @@ function consequencesOf(session: ConsumerSession, hypothesis: Hypothesis): Resul
     for (const use of result.uses) {
       const verdict = decideUse(use, hypothesis.change);
       if (verdict === undefined) continue;
-      const evidence = verdict.kind === "admits" ? [use.site, verdict.guard.evidence] : [use.site];
-      findings.push({ status: "complete", evidence, value: { verdict, operation: use.operation, path: formatAccessPath(use.path), changed: formatAccessPath(use.changed), chain: [...chain, ...use.hops] } });
+      const evidence = (verdict.kind === "admits" ? [use.site, verdict.guard.evidence] : [use.site]).map((place) => located(place, repo));
+      const value: UseConsequence = {
+        repo,
+        link: { id: link.id, basis: link.basis, call: { file: link.from.file, line: link.from.line, symbol: link.from.symbol }, handler: { repo: link.to.repo, ...link.to.handler } },
+        verdict,
+        operation: use.operation,
+        path: formatAccessPath(use.path),
+        changed: formatAccessPath(use.changed),
+        chain: [...chain, ...use.hops],
+      };
+      findings.push({ status: "complete", evidence, value });
     }
-    for (const frontier of result.frontiers) findings.push(frontierItem(frontier, chain));
-    for (const next of result.next) queue.push({ carrier: next.carrier, chain: [...chain, ...next.hops] });
+    for (const frontier of result.frontiers) findings.push(frontierItem(frontier, chain, repo));
+    for (const next of result.next) {
+      const entered = entriesAfter(carrier, next, entries);
+      if (entered === "recursion") findings.push(frontierItem({ at: next.hops.at(-1)?.evidence ?? placeOf(carrier, chain), cause: "unmodelled-flow", reason: "unresolved", detail: "recursion", hops: [] }, chain, repo));
+      else queue.push({ carrier: next.carrier, chain: [...chain, ...next.hops], link, entries: entered });
+    }
     if (carrier.site.kind === "return") {
-      const callers = callersOf(session, carrier, chain, result.next.length > 0);
-      findings.push(...callers.frontiers);
-      queue.push(...callers.next);
+      const returned = returnsOf(session, carrier.site, carrier.path, chain, entries, result);
+      for (const frontier of returned.frontiers) findings.push(frontierItem(frontier, chain, repo));
+      queue.push(...returned.next.map((next) => ({ ...next, link })));
     }
   }
 
@@ -105,39 +142,55 @@ function read(session: ConsumerSession, carrier: Carrier): FlowResult {
   return { uses: [...flow.uses, ...template.uses], next: [...flow.next, ...template.next], frontiers: [...flow.frontiers, ...template.frontiers] };
 }
 
-/** The resolved callers of the function a return carrier belongs to; every other outcome is a frontier at the function. */
-function callersOf(session: ConsumerSession, carrier: Carrier, chain: readonly Hop[], continuesElsewhere: boolean): { next: Pending[]; frontiers: Finding<UseConsequence>[] } {
-  const { site } = carrier;
-  if (site.kind !== "return") return { next: [], frontiers: [] };
+/**
+ * Where a value goes when its function returns it. A value that entered the function through an argument leaves at the
+ * result of that very call; any other return continues at the places that depend on the function, each occurrence on its own.
+ */
+function returnsOf(session: ConsumerSession, site: Extract<CarrierSite, { kind: "return" }>, path: AccessPath, chain: readonly Hop[], entries: readonly Entry[], flowed: FlowResult): { next: Omit<Pending, "link">[]; frontiers: FlowFrontier[] } {
   const declaration = { path: site.file, line: site.line };
-  const stop = (frontier: FlowFrontier) => ({ next: [], frontiers: [frontierItem(frontier, chain)] });
+  const entry = entries.at(-1);
+  if (entry !== undefined) {
+    if (entry.callee.file !== site.file || entry.callee.symbol !== site.symbol || entry.callee.line !== site.line) return { next: [], frontiers: [{ at: declaration, cause: "unmodelled-flow", reason: "unresolved", detail: "return-context", hops: [] }] };
+    const call = { kind: "call-result" as const, repo: entry.repo, file: entry.at.path, line: entry.at.line, callee: site.symbol };
+    return { next: [{ carrier: { site: call, path }, chain: [...chain, { step: "caller", evidence: { path: entry.at.path, line: entry.at.line } }], entries: entries.slice(0, -1) }], frontiers: [] };
+  }
   const found = session.callers(site);
-  if (found.kind === "unavailable") return stop({ at: declaration, cause: "graph-unavailable", reason: "index-unavailable", hops: [] });
-  if (found.kind === "unresolved") return stop({ at: declaration, cause: "unresolved-caller", reason: "unresolved", hops: [] });
-  if (found.callers.length === 0) return continuesElsewhere ? { next: [], frontiers: [] } : stop({ at: declaration, cause: "no-caller", reason: "unresolved", hops: [] });
+  if (found.kind === "unavailable") return { next: [], frontiers: [{ at: declaration, cause: "graph-unavailable", reason: "index-unavailable", hops: [] }] };
+  if (found.kind === "unresolved") return { next: [], frontiers: [{ at: declaration, cause: "unresolved-caller", reason: "unresolved", hops: [] }] };
+  if (found.callers.length === 0) return { next: [], frontiers: flowed.next.length > 0 ? [] : [{ at: declaration, cause: "no-caller", reason: "unresolved", hops: [] }] };
 
-  const next: Pending[] = [];
-  const frontiers: Finding<UseConsequence>[] = [];
+  const registered = new Set([...flowed.next.flatMap(({ hops }) => hops), ...flowed.frontiers.flatMap(({ hops }) => hops), ...flowed.uses.flatMap(({ hops }) => hops)].filter((hop) => hop.step === "resolver-input").map(({ evidence }) => `${evidence.path}:${evidence.line}`));
+  const next: Omit<Pending, "link">[] = [];
+  const frontiers: FlowFrontier[] = [];
   for (const caller of found.callers) {
-    const line = caller.lines[0];
-    const at = { path: caller.resource ?? caller.file, line: line ?? caller.line };
-    const frontier = (cause: FlowFrontier["cause"], detail?: string) => frontiers.push(frontierItem({ at, cause, reason: "unresolved", ...(detail === undefined ? {} : { detail }), hops: [] }, chain));
-    if (caller.resource !== undefined) frontier("unmodelled-flow", "template-caller");
-    else if (!caller.proven) frontier("ambiguous-caller");
-    else if (line === undefined) frontier("unresolved-caller");
+    const at: Evidence = { path: caller.resource ?? caller.file, line: caller.at ?? caller.line, ...(caller.kind === "call" && caller.provenance === "heuristic" ? { confidence: caller.confidence } : {}) };
+    const lost = (cause: FlowFrontier["cause"], detail?: string) => frontiers.push({ at, cause, reason: "unresolved", ...(detail === undefined ? {} : { detail }), hops: [] });
+    if (caller.resource !== undefined) lost("unmodelled-flow", "template-caller");
+    else if (caller.kind === "reference") {
+      if (!registered.has(`${at.path}:${at.line}`)) lost("unmodelled-flow", "function-reference");
+    } else if (!caller.proven) lost("ambiguous-caller");
+    else if (caller.at === undefined) lost("unresolved-caller");
     else {
-      for (const callLine of caller.lines) {
-        const call = { kind: "call-result" as const, repo: site.repo, file: caller.file, line: callLine, callee: site.symbol };
-        next.push({ carrier: { site: call, path: carrier.path }, chain: [...chain, { step: "caller", evidence: { path: caller.file, line: callLine } }] });
-      }
+      const call = { kind: "call-result" as const, repo: site.repo, file: caller.file, line: caller.at, callee: site.symbol };
+      next.push({ carrier: { site: call, path }, chain: [...chain, { step: "caller", evidence: { path: caller.file, line: caller.at } }], entries: [] });
     }
   }
   return { next, frontiers };
 }
 
-function frontierItem(frontier: FlowFrontier, chain: readonly Hop[]): Finding<UseConsequence> {
+/** The calls that entered the functions a value is inside once it continues at `next`; a parameter pushes one, a return keeps them, anything else leaves every function. */
+function entriesAfter({ site }: Carrier, { carrier, hops }: FlowNext, entries: readonly Entry[]): readonly Entry[] | "recursion" {
+  if (carrier.site.kind === "return" || carrier.site.kind === "call-result") return entries;
+  if (carrier.site.kind !== "parameter") return [];
+  const call = hops.findLast((hop) => hop.step === "argument");
+  if (call === undefined) return [];
+  const entry: Entry = { repo: site.repo, at: { path: call.evidence.path, line: call.evidence.line }, callee: { file: carrier.site.file, symbol: carrier.site.symbol, line: carrier.site.line } };
+  return entries.some((held) => canonicalJson(held) === canonicalJson(entry)) ? "recursion" : [...entries, entry];
+}
+
+function frontierItem(frontier: FlowFrontier, chain: readonly Hop[], repo: string): Finding<UseConsequence> {
   const via = frontier.detail === undefined ? frontier.cause : `${frontier.cause}:${frontier.detail}`;
-  return { status: "unknown", reason: frontier.reason, evidence: [...chain, ...frontier.hops].map((hop) => hop.evidence).concat({ ...frontier.at, via }) };
+  return { status: "unknown", reason: frontier.reason, evidence: [...chain, ...frontier.hops].map((hop) => located(hop.evidence, repo)).concat(located({ ...frontier.at, via }, repo)) };
 }
 
 function placeOf({ site }: Carrier, chain: readonly Hop[]): Evidence {

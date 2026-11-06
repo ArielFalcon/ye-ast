@@ -11,7 +11,7 @@ import type { ImportOriginsReader } from "../core/ports/import-origins.port.ts";
 import type { Digest } from "../core/ports/digest.port.ts";
 
 /** The consequences of a contract change over the workspace read, the TypeScript flow reader and the Angular template reader. */
-export function composeConsumerQueries(deps: { operation: WorkspaceReadOperation; heads: HeadReaderDeps; digest: Digest; importOrigins: ImportOriginsReader }): ConsumerQueries {
+export function composeConsumerQueries(deps: { operation: WorkspaceReadOperation; heads: HeadReaderDeps; digest: Digest; importOrigins: ImportOriginsReader; engines: Readonly<Record<string, string>> }): ConsumerQueries {
   return createConsumerQueries({
     sources: createConsumerSources({ ...deps, flow: createConsumerFlowReader, metadata: createAngularMetadataReader(), templateFlow: createTemplateFlowReader(), relations: composeAngularRelations() }),
   });

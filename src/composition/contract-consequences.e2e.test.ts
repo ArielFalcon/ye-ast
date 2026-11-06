@@ -239,3 +239,39 @@ test("a value kept in a service field is not followed into a template: a class t
 
   assert.deepEqual(fact.value.findings.filter((finding) => finding.status === "unknown" && finding.evidence.at(-1)?.via === "template-unreadable"), []);
 });
+
+test("a call site two repositories serve equally is never linked to its own repository: the answer says it is ambiguous", async () => {
+  const webapp = Object.fromEntries(Object.entries(WEB).map(([path, content]) => [`src/main/webapp/${path}`, content]));
+  commit("app", { "src/main/java/shop/Main.java": BOOT, "src/main/java/shop/OrdersController.java": CONTROLLER, ...webapp });
+  commit("api", { "src/main/java/shop/Main.java": BOOT, "src/main/java/shop/OrdersController.java": CONTROLLER });
+
+  const fact = await consequences("nullable", ["api"], "/api/orders/{id}", "app");
+
+  assert.deepEqual(fact.value.findings.filter((finding) => finding.status === "complete"), []);
+  const ambiguous = fact.value.findings.filter((finding) => finding.status === "unknown" && finding.evidence.at(-1)?.via === "link-basis:ambiguous:api|app");
+  assert.equal(ambiguous.length, 1);
+});
+
+test("the answer records the engines the analysis read with, beside those of the workspace read", async () => {
+  workspace();
+
+  const fact = await consequences("nullable");
+
+  for (const engine of ["@angular/compiler", "@colbymchenry/codegraph", "typescript"]) assert.ok(Object.hasOwn(fact.inputs.engines, engine), engine);
+});
+
+test("a call site whose URL no read can evaluate is listed beside the missing linkage, so an empty linkage is not proof", async () => {
+  const dynamic = SERVICE.replace("find(id: number)", "find(url: string)").replace("this.http.get<Order>(`/api/orders/${id}`)", "this.http.get<Order>(url)");
+  commit("api", { "src/main/java/shop/Main.java": BOOT, "src/main/java/shop/OrdersController.java": CONTROLLER });
+  commit("web", { ...WEB, [SERVICE_FILE]: dynamic });
+
+  const fact = await consequences("nullable");
+
+  assert.equal(fact.value.findings.length, 1);
+  const [item] = fact.value.findings;
+  assert.ok(item?.status === "unknown");
+  assert.deepEqual(item.evidence.map((place) => [place.path, place.line, place.via, "repo" in place && place.repo]), [
+    [SERVICE_FILE, lineOf(dynamic, "this.http.get"), "unresolved-call-site", "web"],
+    ["src/main/java/shop/OrdersController.java", lineOf(CONTROLLER, "@GetMapping("), "no-call-site", "api"],
+  ]);
+});

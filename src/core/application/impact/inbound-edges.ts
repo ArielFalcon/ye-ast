@@ -28,6 +28,27 @@ export interface InboundEdge {
   substitutes?: readonly MemberSubstitute[];
 }
 
+/** One place a symbol depends on another: what the code does there, not the strongest witness per symbol. */
+export interface InboundOccurrence {
+  from: GraphSymbol;
+  /** The line of the dependence; absent when the store places none. */
+  line?: number;
+  /** The file `line` is in when it is not `from`'s own: the template of a component. */
+  resource?: string;
+  basis: DependenceBasis;
+  confidence: number;
+  /** What the store recorded for the edge; `null` for a dependence ye-ast derived itself and for an edge the store did not mark. */
+  provenance: GraphEdge["provenance"];
+  bridge?: "up" | "down";
+  substitutes?: readonly MemberSubstitute[];
+}
+
+/** The dependences on a symbol one by one, which `InboundEdges.callersOf` summarizes per symbol. */
+export interface InboundOccurrences {
+  /** Every dependence on `node`, one per place and basis, in position order. */
+  occurrencesOf(node: GraphSymbol): readonly InboundOccurrence[];
+}
+
 /**
  * What depends on a symbol under the edge policy: the edges codegraph holds that a row allows, the interface bridges
  * and the Angular relations ye-ast derives, and the importers' top-level code. Every list is in position order and names a symbol once.
@@ -70,7 +91,7 @@ export function createInboundEdges(
   locals: readonly LocalOrigin[] = [],
   validOccurrences?: ReadonlySet<string>,
   memberUses?: readonly MemberUseOrigin[],
-): InboundEdges {
+): InboundEdges & InboundOccurrences {
   const relationsByTargetFile = Map.groupBy(relations, (candidate) => candidate.to.path);
   /** The local names more than one owner of one file declares: an ambiguous name settles nothing. */
   const sharedLocalNames = new Map<string, number>();
@@ -416,31 +437,60 @@ export function createInboundEdges(
     return memberCallers.get(node.id) ?? [];
   }
 
+  type Gathered = InboundEdge & { provenance?: GraphEdge["provenance"] };
+  function gather(node: GraphSymbol, contractChanged: boolean, throughMember: boolean): Gathered[] {
+    const followed = followedEdgesInto(node).filter(({ edge, source }) => !isTestFile(source.file) && followsEdge({ kind: edge.kind, sourceKind: source.kind, targetKind: node.kind }));
+    const into = throughMember ? followed.filter(({ edge }) => (EDGE_POLICY.ownerThroughMember.edges as readonly string[]).includes(edge.kind)) : followed;
+    const direct: Gathered[] = into.map(({ edge, source }) => ({
+      from: source,
+      confidence: edgeConfidence(edge),
+      basis: CALL_EDGE_KINDS.includes(edge.kind) ? ("call" as const) : ("reference" as const),
+      lines: edge.line === null ? [] : [edge.line],
+      provenance: edge.provenance,
+    }));
+    const bridged = throughMember ? direct : [...direct, ...bridgesOf(node, contractChanged), ...fieldUsesOf(node), ...localUsesOf(node), ...provenMemberUsesOf(node), ...ownUsesOf(node)];
+    const found = [...bridged, ...relatedTo(node, throughMember ? EDGE_POLICY.ownerThroughMember.relations : undefined)];
+    /** Individual target lookups do not prove incoming-reference coverage. */
+    const whole = throughMember ? found : [...found, ...importersOf(node, found.length === 0)];
+    return whole.filter(({ from }) => from.id !== node.id);
+  }
+
   const callersCache = new Map<string, InboundEdge[]>();
   function callersOf(node: GraphSymbol, contractChanged: boolean, throughMember = false): InboundEdge[] {
     const key = `${node.id}:${contractChanged}:${throughMember}`;
     let callers = callersCache.get(key);
     if (callers === undefined) {
-      const followed = followedEdgesInto(node).filter(({ edge, source }) => !isTestFile(source.file) && followsEdge({ kind: edge.kind, sourceKind: source.kind, targetKind: node.kind }));
-      const into = throughMember ? followed.filter(({ edge }) => (EDGE_POLICY.ownerThroughMember.edges as readonly string[]).includes(edge.kind)) : followed;
-      const direct = into.map(({ edge, source }) => ({
-        from: source,
-        confidence: edgeConfidence(edge),
-        basis: CALL_EDGE_KINDS.includes(edge.kind) ? ("call" as const) : ("reference" as const),
-        lines: edge.line === null ? [] : [edge.line],
-      }));
-      const bridged = throughMember ? direct : [...direct, ...bridgesOf(node, contractChanged), ...fieldUsesOf(node), ...localUsesOf(node), ...provenMemberUsesOf(node), ...ownUsesOf(node)];
-      const found = [...bridged, ...relatedTo(node, throughMember ? EDGE_POLICY.ownerThroughMember.relations : undefined)];
-      /** Individual target lookups do not prove incoming-reference coverage. */
-      const whole = throughMember ? found : [...found, ...importersOf(node, found.length === 0)];
-      callers = strongestPerSymbol(whole.filter(({ from }) => from.id !== node.id)).sort((a, b) => comparePosition(a.from, b.from));
+      callers = strongestPerSymbol(gather(node, contractChanged, throughMember).map(({ provenance: _, ...edge }) => edge)).sort((a, b) => comparePosition(a.from, b.from));
       callersCache.set(key, callers);
     }
     return callers;
   }
 
+  function occurrencesOf(node: GraphSymbol): InboundOccurrence[] {
+    const kept = new Map<string, InboundOccurrence>();
+    for (const edge of gather(node, false, false)) {
+      for (const line of edge.lines.length === 0 ? [undefined] : edge.lines) {
+        const occurrence: InboundOccurrence = {
+          from: edge.from,
+          ...(line === undefined ? {} : { line }),
+          ...(edge.resource === undefined ? {} : { resource: edge.resource }),
+          basis: edge.basis,
+          confidence: edge.confidence,
+          provenance: edge.provenance ?? null,
+          ...(edge.bridge === undefined ? {} : { bridge: edge.bridge }),
+          ...(edge.substitutes === undefined ? {} : { substitutes: edge.substitutes }),
+        };
+        const key = JSON.stringify([edge.from.id, line ?? null, edge.resource ?? null, edge.basis, edge.bridge ?? null, edge.substitutes !== undefined]);
+        const held = kept.get(key);
+        if (held === undefined || (held.provenance === "heuristic" && occurrence.provenance !== "heuristic") || (held.provenance === occurrence.provenance && occurrence.confidence > held.confidence)) kept.set(key, occurrence);
+      }
+    }
+    return [...kept.values()].sort((a, b) => comparePosition(a.from, b.from) || (a.line ?? Infinity) - (b.line ?? Infinity) || compareText(a.basis, b.basis));
+  }
+
   return {
     callersOf,
+    occurrencesOf,
     ownersOf,
     settledUses: (expanded, reached) => new Set(settledUses
       .filter((use) => (expanded === undefined || expanded.has(use.target)) && (use.source === undefined || reached === undefined || reached.has(use.source)))

@@ -1,14 +1,14 @@
 import type { CarrierSite, FlowResult } from "../../domain/contracts/consumer-flow.ts";
 import { formatHypothesis } from "../../domain/contracts/hypothesis.ts";
-import { provenanceOf } from "../../domain/shared/fact.ts";
+import { provenanceOf, sortedEngines } from "../../domain/shared/fact.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
 import type { CallSite, HttpTarget } from "../../domain/topology/call-site.ts";
 import { compositeBase } from "../../domain/topology/composite-inputs.ts";
 import type { Link } from "../../domain/topology/link.ts";
-import { matchCallSite } from "../../domain/topology/link-match.ts";
+import { matchCallSite, type Gateway } from "../../domain/topology/link-match.ts";
 import type { AngularMetadataReader } from "../../ports/angular-metadata.port.ts";
 import type { CodeGraphReader } from "../../ports/code-graph.port.ts";
-import type { InboundEdges } from "../impact/inbound-edges.ts";
+import type { InboundOccurrences } from "../impact/inbound-edges.ts";
 import type { ConsumerFlowReader } from "../../ports/consumer-flow.port.ts";
 import type { ConsumerSession, ConsumerSources } from "../../ports/consumer-sources.port.ts";
 import type { ConsumerTemplateReader } from "../../ports/consumer-template.port.ts";
@@ -38,6 +38,8 @@ export interface ConsumerSourcesDeps {
   templateFlow: TemplateFlowReader;
   /** The injection and template relations, fields and locals that let the callers of a function see calls made through `inject()`. */
   relations: RelationExtractor;
+  /** The engines the analysis reads with beyond those the workspace read names: the code graph and the template compiler. */
+  engines: Readonly<Record<string, string>>;
   /** Proves which unresolved references of the code graph are real occurrences; without it no call through an injected field or local is settled. */
   importOrigins?: ImportOriginsReader;
 }
@@ -46,7 +48,7 @@ interface Reading {
   flow: ConsumerFlowReader;
   templates: ConsumerTemplateReader;
   graph: CodeGraphReader | undefined;
-  inbound: InboundEdges | undefined;
+  inbound: InboundOccurrences | undefined;
 }
 
 /**
@@ -63,7 +65,7 @@ export function createConsumerSources(deps: ConsumerSourcesDeps): ConsumerSource
       const answered = await deps.operation.withRead(planning, async (read, context) => {
         const { fact } = read;
         if (fact.status === "unknown") return { ok: false as const, fault: { kind: "git-failed" as const, detail: "the workspace read answered nothing" } };
-        const links = [...fact.value.links, ...ownLinks(fact.value.repositories)];
+        const { links, ambiguousCalls, unresolvedCalls } = httpCallsOf(fact.value.repositories, fact.value.workspace.gateways, operation);
         const serving = fact.value.repositories
           .flatMap((repository) => entrypointsOf(repository).entrypoints.flatMap((entrypoint) => (entrypoint.kind === "http-route" && entrypoint.name === operation ? [{ repo: repository.repo, handler: entrypoint.handler }] : [])))
           .sort((a, b) => compareText(a.repo, b.repo) || compareText(a.handler.path, b.handler.path) || a.handler.line - b.handler.line);
@@ -103,9 +105,11 @@ export function createConsumerSources(deps: ConsumerSourcesDeps): ConsumerSource
               { ...inputs.declaredConfig, hypothesis: formatHypothesis(hypothesis) },
             );
             const session: ConsumerSession = {
-              base,
+              base: { ...base, inputs: { ...base.inputs, engines: sortedEngines({ ...base.inputs.engines, ...deps.engines }) } },
               links,
               serving,
+              unresolvedCalls,
+              ambiguousCalls,
               cuts: fact.status === "partial" ? fact.cuts : [],
               callers: ({ repo, ...declaration }) => {
                 const reading = readings.get(repo);
@@ -125,15 +129,35 @@ export function createConsumerSources(deps: ConsumerSourcesDeps): ConsumerSource
   };
 }
 
-/** The links the HTTP calls of a repository make to its own routes, which the workspace join leaves out. */
-function ownLinks(repositories: readonly WorkspaceRepository[]): Link[] {
-  return repositories.flatMap((repository) => {
-    const own = [entrypointsOf(repository)];
-    return repository.callSites.flatMap((site) => {
-      const target = httpTargetOf(site);
-      return target === undefined ? [] : (matchCallSite(site, target, own, []).links ?? []);
-    });
-  });
+/**
+ * The HTTP call sites of the workspace decided once each, against the routes of every repository including their own: the
+ * links they make, the call sites that reach the operation in more than one repository, and those whose target no read
+ * could evaluate. A call site two repositories serve equally is ambiguous, never linked to its own.
+ */
+function httpCallsOf(repositories: readonly WorkspaceRepository[], gateways: readonly Gateway[], operation: string): Pick<ConsumerSession, "links" | "ambiguousCalls" | "unresolvedCalls"> {
+  const entrypoints = repositories.map(entrypointsOf);
+  const links = new Map<string, Link>();
+  const ambiguousCalls: ConsumerSession["ambiguousCalls"][number][] = [];
+  const unresolvedCalls: ConsumerSession["unresolvedCalls"][number][] = [];
+  for (const site of repositories.flatMap((repository) => repository.callSites)) {
+    if (site.transport !== "http") continue;
+    const target = httpTargetOf(site);
+    const from = { repo: site.repo, file: site.file, line: site.line, symbol: site.symbol };
+    if (target === undefined) {
+      if (site.target.status === "unknown") unresolvedCalls.push({ repo: site.repo, file: site.file, line: site.line, symbol: site.symbol });
+      continue;
+    }
+    const joined = matchCallSite(site, target, entrypoints, gateways);
+    for (const link of joined.links ?? []) links.set(link.id, link);
+    const repos = joined.ambiguous?.repos.toSorted(compareText);
+    if (repos !== undefined && repos.some((repo) => matchCallSite(site, target, entrypoints.filter((candidate) => candidate.repo === repo), gateways).links?.some((link) => isCallOf(link, operation)))) ambiguousCalls.push({ from, repos });
+  }
+  const byPlace = (a: { repo: string; file: string; line: number }, b: { repo: string; file: string; line: number }) => compareText(a.repo, b.repo) || compareText(a.file, b.file) || a.line - b.line;
+  return {
+    links: [...links.values()].sort((a, b) => compareText(a.id, b.id)),
+    ambiguousCalls: ambiguousCalls.sort((a, b) => byPlace(a.from, b.from)),
+    unresolvedCalls: unresolvedCalls.sort(byPlace),
+  };
 }
 
 function httpTargetOf(site: CallSite): HttpTarget | undefined {
