@@ -55,7 +55,32 @@ export interface ImportOrigins {
    * it with no default, rest or destructuring, never declared again, is `local-parameter`.
    */
   rootOrigins(sites: readonly ResolvedNameSite[], signal?: AbortSignal): Promise<readonly RootOrigin[]>;
+  /**
+   * One entry per site, in the order received: what binds, at the site's own place, the name the expression written
+   * there is rooted at (`ts` for `ts.Expression`, `f` for `f(x).g`, `Set` for `new Set(a).add(k)`). A value name is bound
+   * by the file's own scoping (ADR-0029); a type name by the type scopes around it, then the file's imports and top-level
+   * declarations. `unknown` when the place spells another root, the name is dynamic, or nothing proves a binding.
+   */
+  rootBindings(sites: readonly UseSite[], signal?: AbortSignal): Promise<readonly RootBinding[]>;
 }
+
+/** A place a declaration uses a name, where the index places the use: repository-relative and 1-based. */
+export interface UseSite {
+  file: string;
+  line: number;
+  /** 1-based UTF-16 column. */
+  column: number;
+  /** The identifier the use's spelling starts with, or `this`/`super`. */
+  root: string;
+}
+
+/** What binds a use's root: an import, a declaration of the file (by the 1-based lines of its names), the language, or `this`. */
+export type RootBinding =
+  | { kind: "import"; origin: Extract<ImportOrigin, { kind: "repository" | "external" }> }
+  | { kind: "declared"; lines: readonly number[] }
+  | { kind: "ambient" }
+  | { kind: "this" }
+  | { kind: "unknown" };
 
 /** Reads the import bindings of one snapshot; composition supplies it, so no use case imports a parser. */
 export type ImportOriginsReader = (sources: readonly SourceFile[]) => ImportOrigins;

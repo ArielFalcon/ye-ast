@@ -493,3 +493,81 @@ test("a library name a module declares at its top level is not global, so its us
 
   assert.deepEqual(await globalRootOf(module, "new Headers()", "instantiates", "Headers"), { status: "complete", value: { kind: "ambient", name: "Headers" }, evidence: [{ path: "src/use.ts", line: 2 }], bare: true });
 });
+
+const USES: SourceFile = {
+  path: "src/uses.ts",
+  content: [
+    "import ts from 'typescript';",
+    "import { helper } from './local';",
+    "export function run<T>(input: ts.Expression, value: T): T {",
+    "  const seen = new Set(input).add(value);",
+    "  helper(input).length;",
+    "  seen.size;",
+    "  process.exit();",
+    "  return value;",
+    "}",
+    "export class Holder { read(): void { this.run(); } run(): void {} }",
+    "",
+  ].join("\n"),
+};
+const USE_SOURCES = [CONFIG, { path: "package.json", content: JSON.stringify({ dependencies: { typescript: "6.0.3" } }) }, LOCAL, USES];
+
+/** The 1-based place of the first `spelling` on a line of the uses fixture. */
+function useAt(line: number, spelling: string, root: string) {
+  return { file: USES.path, line, column: USES.content.split("\n")[line - 1]!.indexOf(spelling) + 1, root };
+}
+
+test("a qualified type name is rooted at its first name, which an import binds to a package", async () => {
+  const [binding] = await createImportOrigins(USE_SOURCES).rootBindings([useAt(3, "ts.Expression", "ts")]);
+
+  assert.deepEqual(binding, { kind: "import", origin: { kind: "external", module: "typescript" } });
+});
+
+test("a member of a call's result is rooted at the callee, which an import binds to a repository file", async () => {
+  const [binding] = await createImportOrigins(USE_SOURCES).rootBindings([useAt(5, "helper(input).length", "helper")]);
+
+  assert.deepEqual(binding, { kind: "import", origin: { kind: "repository", file: "src/local.ts" } });
+});
+
+test("a member call on an instantiation placed at its new keyword is rooted at the class, which the language declares", async () => {
+  const [binding] = await createImportOrigins(USE_SOURCES).rootBindings([useAt(4, "new Set", "Set")]);
+
+  assert.deepEqual(binding, { kind: "ambient" });
+});
+
+test("a value name the file's scoping binds is declared at the line of its declaration", async () => {
+  const [binding] = await createImportOrigins(USE_SOURCES).rootBindings([useAt(6, "seen.size", "seen")]);
+
+  assert.deepEqual(binding, { kind: "declared", lines: [4] });
+});
+
+test("a type name a type parameter binds is declared at the type parameter", async () => {
+  const [binding] = await createImportOrigins(USE_SOURCES).rootBindings([useAt(3, "T {", "T")]);
+
+  assert.deepEqual(binding, { kind: "declared", lines: [3] });
+});
+
+test("a use written on this is bound to this", async () => {
+  const [binding] = await createImportOrigins(USE_SOURCES).rootBindings([useAt(10, "this.run", "this")]);
+
+  assert.deepEqual(binding, { kind: "this" });
+});
+
+test("a name nothing binds that the pinned libraries do not declare is unknown", async () => {
+  const [binding] = await createImportOrigins(USE_SOURCES).rootBindings([useAt(7, "process", "process")]);
+
+  assert.deepEqual(binding, { kind: "unknown" });
+});
+
+test("a library name the snapshot declares globally is unknown, never ambient", async () => {
+  const global: SourceFile = { path: "src/globals.d.ts", content: "declare global {\n  var Set: unknown;\n}\nexport {};\n" };
+  const [binding] = await createImportOrigins([...USE_SOURCES, global]).rootBindings([useAt(4, "new Set", "Set")]);
+
+  assert.deepEqual(binding, { kind: "unknown" });
+});
+
+test("a place that spells another root than the site's is unknown", async () => {
+  const [binding] = await createImportOrigins(USE_SOURCES).rootBindings([useAt(6, "seen.size", "size")]);
+
+  assert.deepEqual(binding, { kind: "unknown" });
+});

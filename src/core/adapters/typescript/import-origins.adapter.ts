@@ -3,13 +3,13 @@ import { matchesReferenceKind, syntaxName } from "./reference-occurrence.ts";
 import { declarationCounts, declaredNames, isStatic, scriptGlobalNames } from "./syntax-names.ts";
 import { moduleStatement } from "./import-bindings.ts";
 import { sourceTree } from "./source-tree.ts";
-import { bindFile, type LexicalBinding } from "./lexical-bindings.ts";
+import { bindFile, type BoundFile, type LexicalBinding } from "./lexical-bindings.ts";
 import { isTypeScriptSource } from "../../domain/languages/typescript.ts";
 import type { ImportOrigin } from "../../domain/relations/resolved-reference.ts";
 import type { Evidence, Finding } from "../../domain/shared/fact.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { RootOrigin } from "../../domain/impact/edge-policy.ts";
-import type { ImportOriginSite, ImportOrigins, ResolvedNameSite } from "../../ports/import-origins.port.ts";
+import type { ImportOriginSite, ImportOrigins, ResolvedNameSite, RootBinding, UseSite } from "../../ports/import-origins.port.ts";
 import { createModuleResolver, manifestPackages, packageOf } from "./module-resolver.ts";
 import { TYPESCRIPT_LIB_GLOBALS } from "./typescript-lib-globals.ts";
 
@@ -151,7 +151,128 @@ export function createImportOrigins(sources: readonly SourceFile[], parse: Parse
       }
     }
     return results;
+  }, rootBindings: async (sites, signal) => {
+    const results: RootBinding[] = sites.map(() => UNKNOWN_BINDING);
+    for (const [file, group] of Map.groupBy(sites.map((site, index) => ({ site, index })), ({ site }) => site.file)) {
+      if (signal?.aborted) break;
+      const parsed = indexOf(file);
+      if (parsed === undefined) continue;
+      const { index: tree, text } = parsed;
+      const roots = group.flatMap(({ site, index }) => {
+        const root = rootAt(tree, text, site);
+        return root === undefined ? [] : [{ root, index }];
+      });
+      /** The file is bound only when a value name asks, and its program is dropped once they are answered (ADR-0029). */
+      const bound = roots.some(({ root }) => ts.isIdentifier(root) && !isTypeName(root)) ? bindFile(file, text) : undefined;
+      for (const { root, index } of roots) results[index] = await bindingOf(file, tree, root, bound);
+    }
+    return results;
   } };
+
+  async function importBinding(file: string, specifier: string): Promise<RootBinding> {
+    const resolved = await modules.resolve(file, specifier);
+    if ("file" in resolved) return { kind: "import", origin: { kind: "repository", file: resolved.file } };
+    const module = packageOf(specifier);
+    return "external" in resolved && module !== undefined ? { kind: "import", origin: { kind: "external", module } } : UNKNOWN_BINDING;
+  }
+
+  /** Nothing in the file binds the name: the language's own libraries may, unless the snapshot declares it globally. */
+  function unbound(name: string): RootBinding {
+    return LIB_GLOBALS.has(name) && !repositoryGlobals().has(name) ? { kind: "ambient" } : UNKNOWN_BINDING;
+  }
+
+  async function bindingOf(file: string, { source, shape }: FileIndex, root: ts.Node, bound: BoundFile | undefined): Promise<RootBinding> {
+    if (!ts.isIdentifier(root)) return { kind: "this" };
+    const specifier = shape.bindings.get(root.text);
+    if (isTypeName(root)) {
+      const lines = typeScopeLines(source, root);
+      if (lines !== undefined) return { kind: "declared", lines };
+      return specifier === undefined ? unbound(root.text) : importBinding(file, specifier);
+    }
+    const binding = bound!.bindingOf(bound!.identifierAt(root.getStart(source), root.text)!);
+    if (binding.kind === "dynamic") return UNKNOWN_BINDING;
+    if (binding.kind === "none") return unbound(root.text);
+    if (binding.declarations.every(isImportDeclaration)) return specifier === undefined ? UNKNOWN_BINDING : importBinding(file, specifier);
+    if (binding.declarations.some(isImportDeclaration)) return UNKNOWN_BINDING;
+    return { kind: "declared", lines: declarationLines(source, binding.declarations) };
+  }
+}
+
+const UNKNOWN_BINDING: RootBinding = { kind: "unknown" };
+
+/**
+ * The name, `this` or `super` the expression written at the site starts with, when it is the site's root: the head of a
+ * chain of calls, member accesses and qualified names, and for an instantiation placed at its `new` keyword, the head of
+ * its class expression.
+ */
+function rootAt({ source, starting }: FileIndex, text: string, site: UseSite): ts.Node | undefined {
+  const starts = source.getLineStarts();
+  if (!Number.isInteger(site.line) || !Number.isInteger(site.column) || site.line < 1 || site.column < 1 || site.line > starts.length) return undefined;
+  const point = starts[site.line - 1]! + site.column - 1;
+  if (point >= (site.line < starts.length ? starts[site.line]! : text.length)) return undefined;
+  for (const node of starting.get(point) ?? []) {
+    const head = headOf(node);
+    if (ts.isIdentifier(head) ? head.text === site.root : (head.kind === ts.SyntaxKind.ThisKeyword || head.kind === ts.SyntaxKind.SuperKeyword) && head.getText(source) === site.root) return head;
+  }
+  return undefined;
+}
+
+function headOf(node: ts.Node): ts.Node {
+  let head = node;
+  for (;;) {
+    if (ts.isCallExpression(head) || ts.isNewExpression(head) || ts.isPropertyAccessExpression(head) || ts.isElementAccessExpression(head) || ts.isNonNullExpression(head) || ts.isExpressionWithTypeArguments(head) || ts.isDecorator(head)) head = head.expression;
+    else if (ts.isTaggedTemplateExpression(head)) head = head.tag;
+    else if (ts.isTypeReferenceNode(head)) head = head.typeName;
+    else if (ts.isQualifiedName(head)) head = head.left;
+    else if (ts.isTypeQueryNode(head)) head = head.exprName;
+    else return head;
+  }
+}
+
+/** Whether a name is read as a type: alone or as the first name of a qualified one, inside a type. */
+function isTypeName(name: ts.Identifier): boolean {
+  let whole: ts.Node = name;
+  while (ts.isQualifiedName(whole.parent) && whole.parent.left === whole) whole = whole.parent;
+  return ts.isPartOfTypeNode(whole);
+}
+
+function isImportDeclaration(declaration: ts.Declaration): boolean {
+  return ts.isImportSpecifier(declaration) || ts.isImportClause(declaration) || ts.isNamespaceImport(declaration) || ts.isImportEqualsDeclaration(declaration);
+}
+
+function declarationLines(source: ts.SourceFile, declarations: readonly ts.Node[]): number[] {
+  const lines = declarations.map((declaration) => source.getLineAndCharacterOfPosition((ts.getNameOfDeclaration(declaration as ts.Declaration) ?? declaration).getStart(source)).line + 1);
+  return [...new Set(lines)].sort((a, b) => a - b);
+}
+
+/**
+ * The declarations of the innermost type scope around a type name that declares it: a type parameter, an `infer` of the
+ * conditional whose true branch holds the name, a mapped type's key, or a declaration among the statements of an
+ * enclosing block, namespace or the file. None when no scope declares it, so the file's imports and the globals answer.
+ */
+function typeScopeLines(source: ts.SourceFile, name: ts.Identifier): number[] | undefined {
+  let inner: ts.Node = name;
+  for (let scope = name.parent; scope !== undefined; inner = scope, scope = scope.parent) {
+    const declared: ts.Node[] = [];
+    if ("typeParameters" in scope) for (const parameter of (scope.typeParameters as ts.NodeArray<ts.TypeParameterDeclaration> | undefined) ?? []) if (parameter.name.text === name.text) declared.push(parameter);
+    if (ts.isMappedTypeNode(scope) && scope.typeParameter.name.text === name.text) declared.push(scope.typeParameter);
+    if (ts.isConditionalTypeNode(scope) && inner === scope.trueType) declared.push(...inferredIn(scope.extendsType, name.text));
+    if (ts.isBlock(scope) || ts.isModuleBlock(scope) || ts.isSourceFile(scope)) declared.push(...scope.statements.filter((statement) => declaredName(statement) === name.text));
+    if (declared.length > 0) return declarationLines(source, declared);
+  }
+  return undefined;
+}
+
+function inferredIn(node: ts.Node, name: string): ts.TypeParameterDeclaration[] {
+  if (ts.isInferTypeNode(node)) return node.typeParameter.name.text === name ? [node.typeParameter] : [];
+  return node.getChildren().flatMap((child) => inferredIn(child, name));
+}
+
+function declaredName(statement: ts.Statement): string | undefined {
+  if (ts.isInterfaceDeclaration(statement) || ts.isTypeAliasDeclaration(statement) || ts.isEnumDeclaration(statement)) return statement.name.text;
+  if ((ts.isClassDeclaration(statement) || ts.isFunctionDeclaration(statement)) && statement.name !== undefined) return statement.name.text;
+  if (ts.isModuleDeclaration(statement) && ts.isIdentifier(statement.name)) return statement.name.text;
+  return undefined;
 }
 
 type SiteSyntax = "valid" | "local" | "this-member";
