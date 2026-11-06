@@ -314,6 +314,14 @@ test("each relation or connection caveat is stated on the first object of its ty
   }
 });
 
+test("a used import states once that the dependence is not proven to go through the import", () => {
+  const importers = sourceFixture("importers", { value: { files: [{ file: "src/OrderService.java", importers: ["src/OrderController.java"], users: [], unresolvedNamers: [] }] } });
+  const text = renderComposition(resultOf([importers, singleTargetCallers()]), "details");
+  const carrying = lines(text).filter((line) => line.includes("not proof the dependence goes through this import"));
+  assert.deepEqual(carrying, lines(text).filter((line) => /^C\d+ = used-import: /.test(line)), text);
+  assert.equal(carrying.length, 1, text);
+});
+
 test("an unavailable verification or repeat request is stated in text; an available one is left to the receipt", () => {
   const { result } = realCase("handler-outline");
   assert.doesNotMatch(renderComposition(result, "details"), /Verification|fresh-read|pinned-replay/);

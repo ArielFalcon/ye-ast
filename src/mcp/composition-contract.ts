@@ -263,7 +263,7 @@ export type RelationValue =
 export type RelationKind = RelationValue["kind"];
 export type RelationRecord = { id: RelationId; value: RelationValue; attestations: readonly Attestation[] };
 
-export type ConnectionRule = "handler-declaration" | "change-dependent" | "reached-handler" | "shared-file-import" | "shared-support";
+export type ConnectionRule = "handler-declaration" | "change-dependent" | "reached-handler" | "shared-file-import" | "used-import" | "shared-support";
 export type Connection = {
   id: ConnectionId;
   rule: ConnectionRule;

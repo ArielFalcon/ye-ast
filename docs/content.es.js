@@ -441,7 +441,7 @@ window.EXPLORER_ES = {
         },
         {
           title: "Conectar solo lo que coincide",
-          body: "<p>Las cinco reglas de conexión (handler-declaration, reached-handler, change-dependent, shared-file-import, shared-support) se derivan solo entre lecturas con el mismo esquema, productor, trust, engines, workspace y snapshot. Si no, la respuesta reporta un problema de cobertura context-mismatch o snapshot-difference.</p>",
+          body: "<p>Las seis reglas de conexión (handler-declaration, reached-handler, change-dependent, shared-file-import, used-import, shared-support) se derivan solo entre lecturas con el mismo esquema, productor, trust, engines, workspace y snapshot. Si no, la respuesta reporta un problema de cobertura context-mismatch o snapshot-difference.</p>",
           why: "Unir lecturas tomadas en condiciones distintas inventaría enlaces. La evidencia compartida significa el mismo lugar, nunca causalidad, y una discrepancia se reporta en vez de ocultarse.",
           calloutText: "Una conexión es un lugar compartido, no una prueba de causa.",
         },

@@ -1,7 +1,7 @@
 /**
  * Union and materialization of composed evidence. `mergeEvidence` is a pure union by canonical ids that
  * keeps every appearance (supports by source/read/pointer); `materializeEvidence` derives bindings, entities, relations,
- * the five closed connections and the issues from the whole set at once, so the result never depends on arrival order.
+ * the closed connections and the issues from the whole set at once, so the result never depends on arrival order.
  * No alias is fused irreversibly, no relation is inferred from text, no transitive walk or breakage is derived.
  */
 import { canonicalJson } from "../core/domain/shared/canonical-json.ts";
@@ -127,6 +127,7 @@ class Materializer {
     this.reachedHandlers();
     this.changeDependents();
     this.sharedFileImports();
+    this.usedImports();
     this.sharedSupports();
 
     const files = unionById(this.set.files, [...this.derivedFiles.values()], withSupports);
@@ -429,8 +430,8 @@ class Materializer {
     return id;
   }
 
-  private relationsOf<K extends RelationValue["kind"]>(kind: K): { id: RelationId; value: Extract<RelationValue, { kind: K }>; attestations: Attestation[] }[] {
-    const ofKind = (value: RelationValue): value is Extract<RelationValue, { kind: K }> => value.kind === kind;
+  private relationsOf<K extends RelationValue["kind"]>(kind: K): { id: RelationId; value: RelationValue & { kind: K }; attestations: Attestation[] }[] {
+    const ofKind = (value: RelationValue): value is RelationValue & { kind: K } => value.kind === kind;
     return [...this.relations].flatMap(([id, { value, attestations }]) => (ofKind(value) ? [{ id, value, attestations: [...attestations.values()] }] : []));
   }
 
@@ -579,7 +580,7 @@ class Materializer {
     }
   }
 
-  // The five closed connections. No transitive closure, no breakage, no unrecorded chain.
+  // The closed connections. No transitive closure, no breakage, no unrecorded chain.
 
   /** One connection per rule and members; each compatible read combination that proves it adds its supports. */
   private connect(rule: ConnectionRule, parts: readonly PartId[], relations: readonly RelationId[], reads: readonly ReadId[], entities?: readonly EntityId[]): void {
@@ -658,10 +659,9 @@ class Materializer {
 
   /** `shared-file-import`: the importers and outline attestations of one file-import, categories kept apart. */
   private sharedFileImports(): void {
-    const outlineImport = (attestation: Attestation) => attestation.parts.some((partId) => { const part = this.parts.get(partId); return part?.kind === "file-dependency" && part.category === "outline-import"; });
     for (const relation of this.relationsOf("file-import")) {
-      const outline = relation.attestations.filter(outlineImport);
-      const importers = relation.attestations.filter((attestation) => !outlineImport(attestation));
+      const outline = relation.attestations.filter((attestation) => this.outlineImport(attestation));
+      const importers = relation.attestations.filter((attestation) => !this.outlineImport(attestation));
       for (const left of importers) {
         for (const right of outline) {
           const reads = [...left.reads, ...right.reads];
@@ -669,6 +669,26 @@ class Materializer {
         }
       }
     }
+  }
+
+  /** `used-import`: an importers attestation of A → F and a recorded dependence from a declaration of A onto one of F. */
+  private usedImports(): void {
+    const dependences = this.relationsOf("symbol-dependence");
+    for (const relation of this.relationsOf("file-import")) {
+      const used = dependences.filter(({ value }) => this.declarations.get(value.from)?.file === relation.value.from && this.declarations.get(value.to)?.file === relation.value.to);
+      for (const importer of relation.attestations.filter((attestation) => !this.outlineImport(attestation))) {
+        for (const dependence of used) {
+          for (const attestation of dependence.attestations) {
+            const reads = [...importer.reads, ...attestation.reads];
+            if (this.guarded(reads)) this.connect("used-import", [...importer.parts, ...attestation.parts], [relation.id, dependence.id], reads, [dependence.value.from, dependence.value.to]);
+          }
+        }
+      }
+    }
+  }
+
+  private outlineImport(attestation: Attestation): boolean {
+    return attestation.parts.some((partId) => { const part = this.parts.get(partId); return part?.kind === "file-dependency" && part.category === "outline-import"; });
   }
 
   /** `shared-support`: two findings citing one exact evidence; no causality or equivalence between them. */

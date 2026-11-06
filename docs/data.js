@@ -633,7 +633,7 @@ window.EXPLORER_DATA = {
         },
         {
           title: "Connect only what matches",
-          body: "<p>Five connection rules (handler-declaration, reached-handler, change-dependent, shared-file-import, shared-support) are derived only between reads with the same schema, producer, trust, engines, workspace and snapshot. Otherwise the answer reports a context-mismatch or snapshot-difference coverage issue.</p>",
+          body: "<p>Six connection rules (handler-declaration, reached-handler, change-dependent, shared-file-import, used-import, shared-support) are derived only between reads with the same schema, producer, trust, engines, workspace and snapshot. Otherwise the answer reports a context-mismatch or snapshot-difference coverage issue.</p>",
           focus: ["mcp", "domain-shared"],
           edges: [["mcp", "domain-shared"]],
           callout: "mcp",

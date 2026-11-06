@@ -257,6 +257,37 @@ test("importer, user and unresolved categories stay distinct; imports are not ca
   assert.equal(relations(graph, "symbol-dependence").length, 0, "an import is never a call");
 });
 
+function usedImportCase(options: { importFrom?: string; importTo?: string; callerSnapshot?: SnapshotRef; callerContext?: ReadContext } = {}) {
+  const importers = new SetBuilder("used-importers", IMPORTERS, sha("shop"));
+  const imported = importers.part({ kind: "file-dependency", from: importers.file(options.importFrom ?? "src/C.java"), to: importers.file(options.importTo ?? "src/S.java"), category: "importer" });
+  const outline = new SetBuilder("used-outline", OUTLINE, sha("shop"));
+  const outlineImport = outline.part({ kind: "file-dependency", from: outline.file("src/C.java"), to: outline.file("src/S.java"), category: "outline-import" });
+  const callers = new SetBuilder("used-callers", CALLERS, options.callerSnapshot ?? sha("shop"), options.callerContext);
+  const target = callers.file("src/S.java");
+  const s = callers.anchor(target, "S", 5, 7);
+  callers.part({ kind: "seed", anchor: s, basis: "requested" });
+  const reach = callers.part({ kind: "symbol-reach", anchor: callers.anchor(callers.file("src/C.java"), "C", 20, 30), kindName: "method", depth: 1, confidence: 1, fanIn: 1, via: { target: { file: target, symbol: "S" }, lines: [22], basis: "call" } });
+  const { graph } = compose(importers.build(), outline.build(), callers.build());
+  return { graph, imported, outlineImport, reach };
+}
+
+test("an importer is joined with a recorded dependence from a declaration of its file onto one of the imported file", () => {
+  const { graph, imported, outlineImport, reach } = usedImportCase();
+  const [used, ...more] = connections(graph, "used-import");
+  assert.equal(more.length, 0, "the outline attestation of the same import adds no second join");
+  const [fileImport] = relations(graph, "file-import");
+  const [dependence] = relations(graph, "symbol-dependence");
+  assert.deepEqual(new Set(used?.relations), new Set([fileImport?.id, dependence?.id]));
+  assert.deepEqual(new Set(used?.entities), new Set(dependence?.value.kind === "symbol-dependence" ? [dependence.value.from, dependence.value.to] : []));
+  assert.deepEqual(new Set(used?.parts), new Set([imported, reach]));
+  assert.ok(!used?.parts.includes(outlineImport), "the outline category stays apart");
+
+  assert.equal(connections(usedImportCase({ importFrom: "src/X.java" }).graph, "used-import").length, 0, "the dependence starts in another file than the importer");
+  assert.equal(connections(usedImportCase({ importTo: "src/X.java" }).graph, "used-import").length, 0, "the dependence lands in another file than the imported one");
+  assert.equal(connections(usedImportCase({ callerSnapshot: sha("shop", SHA_B) }).graph, "used-import").length, 0, "another snapshot of the repository never joins");
+  assert.equal(connections(usedImportCase({ callerContext: { producer: { name: "ye-ast", version: "0.0.1" } } }).graph, "used-import").length, 0, "a derived join keeps the strict producer guard");
+});
+
 function workspaceLink(builder: SetBuilder, options: { handlerSnapshot: SnapshotRef | "query-context"; basis?: "exact" | "base-path"; profiles?: readonly string[]; linkId?: string; reach?: readonly string[] }) {
   const from = builder.file("src/client.ts", { snapshot: sha("web") });
   const handlerFile = builder.file(PATH, { snapshot: options.handlerSnapshot, repo: "shop" });

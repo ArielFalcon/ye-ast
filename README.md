@@ -405,12 +405,14 @@ What the result contains:
 - **Entities, relations and evidence are merged.** Identical entities and evidence are shared; every relation keeps the
   sources and categories that attest it. Different snapshots stay separate even when names and paths match.
 - **Connections only where the reads agree.** A derived connection (`handler-declaration`, `change-dependent`,
-  `reached-handler`, `shared-file-import`, `shared-support`) joins reads only when their schema, producer, trust, engines,
-  workspace and snapshot match. Otherwise the result carries a `coverage` issue (`context-mismatch`,
-  `snapshot-difference`, `ambiguous-declaration`, `unresolved-endpoint`, `missing-provenance`, and similar) instead of a join.
-- **`shares-evidence` is the same location, not causality.** A file import is not a symbol call, reachability is not
-  breakage, an outline supplies structure and no source text, and a link that calls a changed operation does not prove
-  the changed data is read.
+  `reached-handler`, `shared-file-import`, `used-import`, `shared-support`) joins reads only when their schema,
+  producer, trust, engines, workspace and snapshot match. Otherwise the result carries a `coverage` issue
+  (`context-mismatch`, `snapshot-difference`, `ambiguous-declaration`, `unresolved-endpoint`, `missing-provenance`, and
+  similar) instead of a join.
+- **`shares-evidence` is the same location, not causality.** A file import is not a symbol call (`used-import` joins an
+  import only with a recorded dependence between declarations of its two files, never states an unused import, and does
+  not prove the dependence goes through that import at runtime), reachability is not breakage, an outline supplies
+  structure and no source text, and a link that calls a changed operation does not prove the changed data is read.
 - **Absent is not empty.** Optional collection metadata separates an absent field from a present array with its recorded
   count; a present empty array is zero observations, not a positive finding.
 

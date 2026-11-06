@@ -82,6 +82,7 @@ const RULE_WARNING: Partial<Record<Connection["rule"], string>> = {
   "change-dependent": "a recorded dependence on a diff seed; not a proof of breakage",
   "reached-handler": "seed associations stay those of the reach",
   "shared-file-import": "each category kept",
+  "used-import": "a recorded use; not proof the dependence goes through this import at runtime",
   "shared-support": "the same evidence location; not causality",
 };
 
