@@ -3,7 +3,8 @@
 - Status: Accepted, 2026-11-06, owner
 - Decision source: the owner, 2026-11-06: "Usa otro para implementar la propuesta que comentas de live con el hash",
   approving that a live capture reuse the snapshot data cache keyed by its content hashes, which amends ADR-0020
-  decision 6.
+  decision 6; and the owner, 2026-11-06: "Aplica el cache de impact --live que recomiendas.", approving decision 6
+  below.
 - Related: [ADR-0020](0020-host-budgeted-snapshot-memory-cache.md) (amended),
   [ADR-0026](0026-snapshot-data-may-retain-reader-outputs.md), [ADR-0028](0028-lazy-export-materialization.md),
   [RFC-0010](../rfc/0010-impact-queries.md) "The mirror", [RFC-0006](../rfc/0006-configuration.md),
@@ -66,15 +67,23 @@ rules; it changes only the key.
    the live snapshot (`head`, `stateId`), the index origin, the cuts and the staleness notice are never cached.
 5. A held live capture (`withLiveCapture` with a pinned request) is unchanged: its consumers still share the one capture
    and its memoized reads; it may fill the cache on a miss and be served from it on a hit.
-6. The merge base side of a live change query is a commit and is still read as before; only the head side of a live
-   query is retained by this decision.
+6. The merge base side of a live change query is a commit, and it is prepared exactly as the base of a change query
+   between two commits is (`prepareCommit`, ADR-0026, ADR-0028): its key is the SHA key, `{ repo, sha, scope, trust,
+   budget }` plus the commit's listing. The scope is the request's declared scope without the live marker `ignored:
+   "git"`, which no selection reads, and the trust is `trusted`, so a base entry is the entry a SHA query at the same
+   commit, scope and trust reads and fills, and the two share it: they read the same listing through the same selection
+   and the same readers, so a shared entry answers the same bytes. The head side keeps its live key (decision 2). What
+   is not keyed stays computed on every call: the merge base itself, the changed paths between the base listing and the
+   live listing, the second export of the changed paths, the copy of their live version and the directory diff.
 7. Measurement is unchanged: the existing `cache` lines of RFC-0012 report the hits and misses of live queries too.
 
 ## Consequences
 
 - A repeated live query over an unchanged tree skips the source read, the entrypoint extraction, the relations and the
   module-dependency read; it still pays the lock, the two listings, the reconcile and the opening of the store. An edit
-  changes at least one blob and so misses.
+  changes at least one blob and so misses. A repeated `impact --live` also skips the export, the read and the
+  extraction of the merge base while the merge base, the scope and the commit's listing are unchanged; a changed live
+  head still hits the base.
 - The residual assumption (same size and nanosecond mtime) now also means that such an edit would be answered from the
   retained data of the earlier content, as it was already answered from the mirror's stale copy.
 - A pinned or a changed tree during a query is as before: the answer reflects the capture, and `stale` reports the
@@ -83,6 +92,6 @@ rules; it changes only the key.
 
 ## Not decided here
 
-- Retaining the read of the merge base of a live change query.
 - Sharing entries between a live capture and a SHA whose listing is equal. The fact schema differs (`ignored: "git"`),
-  and nothing measured asks for it.
+  and nothing measured asks for it. This concerns the head side; the merge base is a commit and shares its entry
+  (decision 6).
