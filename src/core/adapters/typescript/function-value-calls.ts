@@ -1,6 +1,6 @@
 import ts from "typescript";
 import type { FunctionValueCall, ReceiverBinding, ReceiverValue } from "../../ports/declared-member-names.port.ts";
-import { bindFile, type BoundFile, type LexicalBinding, unwrapped } from "./lexical-bindings.ts";
+import { bindFile, type BoundFile, isDirectEval, type LexicalBinding, unwrapped } from "./lexical-bindings.ts";
 
 const LOGICAL_OPERATORS: readonly ts.SyntaxKind[] = [ts.SyntaxKind.AmpersandAmpersandToken, ts.SyntaxKind.BarBarToken, ts.SyntaxKind.QuestionQuestionToken];
 /** Operators that store their right operand, or may: `a ??= f` leaves `a` holding `f` when it held nothing. */
@@ -30,8 +30,10 @@ export function localReceivers(tree: ts.SourceFile): LocalReceivers {
   const holders = new Set<string>();
   const stores: Store[] = [];
   const assignedFields = new Map<ts.ClassLikeDeclaration, Set<string>>();
+  const evals: ts.CallExpression[] = [];
   const visit = (node: ts.Node): void => {
     if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)) accesses.push(node.expression);
+    if (ts.isCallExpression(node) && isDirectEval(node)) evals.push(node);
     const declared = ts.isVariableDeclaration(node) || ts.isParameter(node) || ts.isFunctionDeclaration(node) || ts.isFunctionExpression(node) ? node.name : undefined;
     if (declared !== undefined && ts.isIdentifier(declared) && declaresFunction(node)) holders.add(declared.text);
     if (ts.isBinaryExpression(node) && isAssignment(node.operatorToken.kind)) {
@@ -106,7 +108,7 @@ export function localReceivers(tree: ts.SourceFile): LocalReceivers {
   const fileIsModule = ts.isExternalModule(tree);
   /** What every store into the binding stores, when they all store one kind of value. */
   const valueOf = (binding: Extract<LexicalBinding, { kind: "declared" }>, name: string): ReceiverValue | undefined => {
-    if (!binding.declarations.every((declaration) => isExactLocal(declaration, fileIsModule)) || !staysLocal(binding, name)) return undefined;
+    if (!binding.declarations.every((declaration) => isExactLocal(declaration, fileIsModule) && !evals.some((call) => isInside(call, scopeOf(declaration)))) || !staysLocal(binding, name)) return undefined;
     const assignments = storesOf(binding, name);
     if (assignments === undefined) return undefined;
     const values = [
@@ -145,6 +147,23 @@ export function localReceivers(tree: ts.SourceFile): LocalReceivers {
   return { functionValueCalls, receiverBindings };
 }
 
+/**
+ * The scope a variable declaration binds in: a `var`'s function, static block or file, a `let` or `const`'s block. A
+ * direct `eval` there or in a scope inside it, strict or not, may assign the binding.
+ */
+function scopeOf(declaration: ts.VariableDeclaration): ts.Node {
+  const list = declaration.parent;
+  if ((list.flags & ts.NodeFlags.BlockScoped) !== 0) return ts.isForStatement(list.parent) ? list.parent : list.parent.parent;
+  let scope: ts.Node = list;
+  while (!ts.isSourceFile(scope) && !ts.isFunctionLike(scope) && !ts.isClassStaticBlockDeclaration(scope)) scope = scope.parent;
+  return scope;
+}
+
+/** By text span: the binder's declarations belong to its own tree of the same text, not to the tree the calls come from. */
+function isInside(node: ts.Node, scope: ts.Node): boolean {
+  return scope.pos <= node.pos && node.end <= scope.end;
+}
+
 /** Whether an access is the target of an assignment, an update, a `delete` or a destructuring or iteration store. */
 function isWritten(access: ts.Expression): boolean {
   let node: ts.Node = access;
@@ -176,7 +195,7 @@ function targetNames(target: ts.Node): ts.Identifier[] {
  * parameter, catch variable, iteration variable or destructuring, no export another module could write through, and no
  * global a script shares with other scripts.
  */
-function isExactLocal(declaration: ts.Declaration, fileIsModule: boolean): boolean {
+function isExactLocal(declaration: ts.Declaration, fileIsModule: boolean): declaration is ts.VariableDeclaration {
   if (!ts.isVariableDeclaration(declaration) || !ts.isIdentifier(declaration.name) || !ts.isVariableDeclarationList(declaration.parent)) return false;
   const statement = declaration.parent.parent;
   if (!ts.isVariableStatement(statement) && !ts.isForStatement(statement)) return false;

@@ -55,6 +55,20 @@ export interface ImportOrigins {
    * it with no default, rest or destructuring, never declared again, is `local-parameter`.
    */
   rootOrigins(sites: readonly ResolvedNameSite[], signal?: AbortSignal): Promise<readonly RootOrigin[]>;
+  /**
+   * The roots under which the repository may run its own code where a library's is expected: every global the snapshot
+   * declares, every global a source writes through (`Math.max = f`, `Array.prototype.push = f`,
+   * `globalThis.fetch = f`, `Object.defineProperty(Map.prototype, …)`), or `all` when a write reaches the global object
+   * by a computed key or a prototype no name states; and every package a source writes through an import of
+   * (`_.map = f`). An external call under one of them proves nothing.
+   */
+  replacedRoots(signal?: AbortSignal): Promise<ReplacedRoots>;
+}
+
+export interface ReplacedRoots {
+  globals: ReadonlySet<string> | "all";
+  /** Package names, as an import specifier's first one or two segments name them (`lodash`, `@angular/core`). */
+  packages: ReadonlySet<string>;
 }
 
 /** Reads the import bindings of one snapshot; composition supplies it, so no use case imports a parser. */

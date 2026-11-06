@@ -493,3 +493,52 @@ test("a library name a module declares at its top level is not global, so its us
 
   assert.deepEqual(await globalRootOf(module, "new Headers()", "instantiates", "Headers"), { status: "complete", value: { kind: "ambient", name: "Headers" }, evidence: [{ path: "src/use.ts", line: 2 }], bare: true });
 });
+
+const replacedBy = async (...lines: string[]) => {
+  const manifest = { path: "package.json", content: JSON.stringify({ dependencies: { lodash: "4.0.0" } }) };
+  const roots = await createImportOrigins([manifest, { path: "src/patch.ts", content: ["export {};", ...lines].join("\n") }]).replacedRoots();
+  return { globals: roots.globals === "all" ? "all" : [...roots.globals].sort(), packages: [...roots.packages].sort() };
+};
+
+test("a source that writes through a global, directly, through the global object or a writing call, replaces that global", async () => {
+  for (const [line, global] of [
+    ["Math.max = () => 0;", "Math"],
+    ["Map.prototype.get = function get() { return 1; };", "Map"],
+    ["Math.seed += 1;", "Math"],
+    ["Math.seed++;", "Math"],
+    ["delete JSON.parse;", "JSON"],
+    ["[Math.max] = [() => 0];", "Math"],
+    ["for (Math.seed of [1]) {}", "Math"],
+    ["globalThis.Math.max = () => 0;", "Math"],
+    ["window.fetch = () => undefined;", "fetch"],
+    ["Object.defineProperty(Array.prototype, 'push', { value: () => 0 });", "Array"],
+    ["Object.assign(Math, { max: () => 0 });", "Math"],
+    ["Reflect.set(String.prototype, 'trim', () => '');", "String"],
+    ["Object.defineProperty(globalThis, 'fetch', { value: () => undefined });", "fetch"],
+    ["const A = Array; A.prototype.push = () => 0;", "Array"],
+  ] as const) assert.deepEqual(await replacedBy(line), { globals: [global], packages: [] }, line);
+});
+
+test("a write through a local named like a global, through this, into a local or into a call's result replaces nothing", async () => {
+  assert.deepEqual(await replacedBy("function f(Math: { max(): number }) { Math.max = () => 0; }", "class C { x = 0; set() { this.x = 1; } }", "let count = 0; count++;", "hasOwnProperty.call({}, \"a\"); constructor.name.at(0);", "Object.assign(Object.create(null), {});", "const made = Object.create(null); made.x = 1;"), { globals: [], packages: [] });
+});
+
+test("a computed write on the global object or a write through a prototype no name states replaces every global", async () => {
+  for (const line of ["globalThis[key] = 1;", "value.__proto__.push = () => 0;", "Object.getPrototypeOf([]).push = () => 0;", "Object.defineProperty(globalThis, key, {});"])
+    assert.equal((await replacedBy("declare const key: string, value: unknown;", line)).globals, "all", line);
+});
+
+test("a write through an import of a package replaces that package, and one of a repository module nothing", async () => {
+  assert.deepEqual(await replacedBy("import _ from 'lodash';", "import * as local from './local';", "_.map = () => [];", "local.helper = () => undefined;"), { globals: [], packages: ["lodash"] });
+});
+
+test("a name a with body or a direct eval may rebind proves no origin, while the same name outside them still does", async () => {
+  const file = "src/dynamic.ts";
+  const lines = ["function inside(scope: object) {", "  with (scope) { Math.max(1); fetch(''); }", "}", "function outside() { Math.max(1); fetch(''); }"];
+  const reader = createImportOrigins([{ path: file, content: lines.join("\n") }]);
+  const column = (line: number, text: string, from = 0) => lines[line - 1]!.indexOf(text, from) + 1;
+  const roots = await reader.rootOrigins([2, 4].map((line) => ({ file, line, column: column(line, "Math.max"), kind: "calls", name: "max" })));
+  const bare = await reader.origins([2, 4].map((line) => ({ file, line, column: column(line, "fetch("), name: "fetch", fullName: "fetch", kind: "calls" })));
+  assert.deepEqual(roots.map((root) => root.status), ["unknown", "complete"]);
+  assert.deepEqual(bare.map((origin) => origin.status), ["unknown", "complete"]);
+});

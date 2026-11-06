@@ -298,3 +298,25 @@ test("a local bound by every store to one class is held by the one class declara
     { line: 9, column: 3, receiver: "store", member: "save", holds: { kind: "constructed", name: "Store", line: 8, column: 11 } },
   ]);
 });
+
+test("a direct eval, strict or not, in the scope of a local or in a scope inside it unbinds it, and one elsewhere does not", async () => {
+  assert.deepEqual((await read([
+    "export function same(): void {",
+    "  let a = [];",
+    "  eval('a = other');",
+    "  a.push(1);",
+    "}",
+    "export function nested(): void {",
+    "  const b = [];",
+    "  (() => eval('b'))();",
+    "  b.push(1);",
+    "}",
+    "export function elsewhere(): void {",
+    "  const c = [];",
+    "  c.push(1);",
+    "}",
+    "export function unrelated(): void {",
+    "  eval('1');",
+    "}",
+  ])).receiverBindings.map(({ receiver }) => receiver), ["c"]);
+});

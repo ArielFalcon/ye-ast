@@ -3,7 +3,7 @@ import test from "node:test";
 import type { ImportOrigin } from "../../domain/relations/resolved-reference.ts";
 import type { Fact, Finding } from "../../domain/shared/fact.ts";
 import type { TraceStep, TraceValue } from "../../domain/trace/trace-fact.ts";
-import type { ImportOriginSite, ResolvedNameSite } from "../../ports/import-origins.port.ts";
+import type { ImportOriginSite, ReplacedRoots, ResolvedNameSite } from "../../ports/import-origins.port.ts";
 import type { CallersTarget } from "../../ports/impact-queries.port.ts";
 import type { TraceBudget, TraceRequest } from "../../ports/trace-queries.port.ts";
 import { fakeLive, type FakeLive } from "../live/fake-live.testing.ts";
@@ -48,6 +48,8 @@ interface Options {
   onMemberNames?: (path: string) => void;
   /** The receiver bindings each source's syntax proves, by path. */
   receiverBindings?: Readonly<Record<string, readonly ReceiverBinding[]>>;
+  /** The roots the snapshot replaces; none by default. */
+  replaced?: ReplacedRoots;
   /** The member calls the relations prove. */
   proofs?: Pick<RelationExtraction, "memberUses" | "externalUses">;
 }
@@ -80,6 +82,7 @@ function setup(options: Options) {
     sourceTrivia: { triviaLines: async (file: { path: string }) => (options.onTrivia?.(file.path), new Set(options.trivia?.[file.path] ?? [])) },
     memberNames: { memberNames: async (file: { path: string }) => (options.onMemberNames?.(file.path), { names: options.memberNames?.[file.path] ?? [], functionValueCalls: [], callables: [], receiverBindings: options.receiverBindings?.[file.path] ?? [] }) },
     importOrigins: () => ({
+      replacedRoots: async () => options.replaced ?? { globals: new Set(), packages: new Set() },
       origins: async (sites: readonly ImportOriginSite[]) => { options.onOrigins?.(); return sites.map(answer); },
       rootOrigins: async (sites: readonly ResolvedNameSite[]) => sites.map((site): Finding<ImportOrigin> => {
         const root = options.roots?.[site.name];
@@ -627,4 +630,30 @@ test("a receiver binding for another member, a class the repository file does no
   const unproven = await factOf(boundCall({ kind: "constructed", name: "Repo", line: 8, column: 17 }));
 
   for (const fact of [otherMember, elsewhere, unproven]) assert.deepEqual(cutsOf(fact), cut);
+});
+
+test("an external leaf under a global or a package the repository replaces stays a cut, wherever the walk settles it", async () => {
+  const globals = (...names: string[]): ReplacedRoots => ({ globals: new Set(names), packages: new Set() });
+  const packages = (...names: string[]): ReplacedRoots => ({ globals: new Set(), packages: new Set(names) });
+  const memberCall = (name: string): FakeUnresolved[] => [{ from: "run", name, kind: "calls", file: A, line: 9, column: 4 }];
+  const homonym = callee("max", B, 3);
+  const external = (holds: string) => ({ ...fieldCallOptions({ memberUses: [], externalUses: [{ owner: SAVE_PROOF.owner, field: "repo", holds, reference: SAVE_PROOF.reference }] }) });
+  const cases: [string, Options][] = [
+    ["edge", { nodes: [SVC, RUN, callee("fetch")], edges: [...CONTAINS, call("run", "fetch", 8, 4)], roots: { fetch: { kind: "ambient", name: "fetch" } }, replaced: globals("fetch") }],
+    ["bare", { nodes: [SVC, RUN], edges: CONTAINS, unresolved: memberCall("fetch"), origins: { fetch: { kind: "ambient", name: "fetch" } }, replaced: globals("fetch") }],
+    ["bare package", { nodes: [SVC, RUN], edges: CONTAINS, unresolved: memberCall("tap"), origins: { tap: { kind: "external", module: "rxjs" } }, replaced: packages("rxjs") }],
+    ["rooted", { nodes: [SVC, RUN, homonym], edges: CONTAINS, unresolved: memberCall("Math.max"), roots: { max: { kind: "ambient", name: "Math" } }, replaced: globals("Math") }],
+    ["rooted package", { nodes: [SVC, RUN, homonym], edges: CONTAINS, unresolved: memberCall("_.fp.max"), roots: { max: { kind: "external", module: "lodash" } }, replaced: packages("lodash") }],
+    ["literal", { ...boundCall({ kind: "literal", type: "Array" }), replaced: globals("Array") }],
+    ["constructed", { ...boundCall({ kind: "constructed", name: "Map", line: 8, column: 17 }), roots: { Map: { kind: "ambient", name: "Map", bare: true } }, replaced: globals("Map") }],
+    ["field global", { ...external("global#Map"), replaced: globals("Map") }],
+    ["field package", { ...external("@angular/common/http#HttpClient"), replaced: packages("@angular/common") }],
+    ["every global", { ...boundCall({ kind: "literal", type: "Array" }), replaced: { globals: "all", packages: new Set() } }],
+  ];
+
+  for (const [name, options] of cases) {
+    const fact = await factOf(options);
+    assert.equal(fact.status, "partial", name);
+    assert.deepEqual(valueOf(fact).steps.flatMap((step) => step.external ?? []), [], name);
+  }
 });

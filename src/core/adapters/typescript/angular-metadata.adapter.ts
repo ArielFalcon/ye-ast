@@ -1,6 +1,8 @@
 import { posix } from "node:path";
 import ts from "typescript";
 import { sourceTree } from "./source-tree.ts";
+import { bindFile, unwrapped } from "./lexical-bindings.ts";
+import { TYPESCRIPT_LIB_GLOBALS } from "./typescript-lib-globals.ts";
 import { isAngularWorkspace, isTypeScriptSource } from "../../domain/languages/typescript.ts";
 import type { AngularClass, Operand, TemplateSource } from "../../domain/relations/angular-class.ts";
 import type { ExternalMemberUseOrigin, MemberProofContext, MemberSubstitute, MemberUseOrigin } from "../../domain/relations/member-use.ts";
@@ -558,7 +560,8 @@ async function readProject(contents: ReadonlyMap<string, SourceFile>, packages: 
         const raw = rawFields[0]!;
         if (risks.reaches(field.owner, call.field) || "opaque" in raw.target || (raw.via === "inject" && angularShadow) || (template && raw.via !== "inject")) return;
         if ("external" in field.holds) {
-          if (!template && !(raw.via === "inject" && substituted.has(holdsKey(field.holds)))) externalUses.push({ owner: field.owner, field: call.field, holds: field.holds.external, reference });
+          const proven = field.holds.external.startsWith("global#") ? constructsLibraryGlobal(file, contents.get(file)?.content, call.owner, call.field) : raw.via !== "inject" || !substituted.has(holdsKey(field.holds));
+          if (!template && proven) externalUses.push({ owner: field.owner, field: call.field, holds: field.holds.external, reference });
           return;
         }
         const receiver = field.holds.class;
@@ -588,6 +591,29 @@ async function readProject(contents: ReadonlyMap<string, SourceFile>, packages: 
     }
   }
   return { classes, findings: [...findings, ...injects.values()], fields, locals, ...(proveMembers ? { memberUses, externalUses } : {}) };
+}
+
+/**
+ * Whether the field's initializer constructs a name that, by the binder (ADR-0029), binds nothing the file declares or
+ * imports and is not in a dynamic scope, and that the language's libraries declare. The unresolved-name fallback of a
+ * field origin proves neither: a generated or unavailable class is unresolved too.
+ */
+const LIBRARY_GLOBALS: ReadonlySet<string> = new Set(TYPESCRIPT_LIB_GLOBALS);
+
+function constructsLibraryGlobal(path: string, content: string | undefined, owner: { name: string; line: number }, field: string): boolean {
+  if (content === undefined) return false;
+  const { tree, bindingOf } = bindFile(path, content);
+  const initializers: ts.Expression[] = [];
+  const visit = (node: ts.Node): void => {
+    if (ts.isClassLike(node) && node.name?.text === owner.name) {
+      for (const member of node.members) if (ts.isPropertyDeclaration(member) && member.name.getText(tree) === field && member.initializer !== undefined) initializers.push(unwrapped(member.initializer));
+    }
+    node.forEachChild(visit);
+  };
+  visit(tree);
+  const only = initializers.length === 1 ? initializers[0] : undefined;
+  const name = only !== undefined && ts.isNewExpression(only) && ts.isIdentifier(only.expression) ? only.expression : undefined;
+  return name !== undefined && LIBRARY_GLOBALS.has(name.text) && bindingOf(name).kind === "none";
 }
 
 function holdsKey(holds: FieldOrigin["holds"]): string {

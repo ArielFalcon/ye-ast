@@ -369,6 +369,13 @@ test("a written field, a provider that replaces the token or incomplete source p
   assert.deepEqual(incomplete.externalUses, []);
 });
 
+test("a field constructed from a name nothing positively places, or one the file declares, proves no external use", async () => {
+  const unknown = await memberProofs("export class Owner { field = new Generated(); run() { this.field.save(); } }", undefined, COMMON);
+  const declared = await memberProofs("class Map { get() { return 1; } }\nexport class Owner { cache = new Map(); run() { this.cache.get(); } }", undefined, COMMON);
+  const typed = await memberProofs("export class Owner { constructor(private cache: Map<string, number>) {} run() { this.cache.get(''); } }", undefined, COMMON);
+  for (const meta of [unknown, declared, typed]) assert.deepEqual(meta.externalUses, []);
+});
+
 test("provider substitution and unknown provider token prevent proof", async () => {
   for (const provider of ["[{ provide: Store, useClass: Other }]", "[{ provide: Store, useExisting: Other }]", "[{ provide: Store, useFactory: () => null }]", "[{ provide: Store, useValue: {} }]", "[{ provide: choose(), useValue: {} }]"])
     assert.deepEqual((await memberProofs(OWNER, undefined, { "src/providers.ts": `import { Store } from './store'; const providers = ${provider};` })).memberUses, [], provider);

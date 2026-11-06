@@ -4,12 +4,13 @@ import { declarationCounts, declaredNames, isStatic, scriptGlobalNames } from ".
 import { moduleStatement } from "./import-bindings.ts";
 import { sourceTree } from "./source-tree.ts";
 import { bindFile, type LexicalBinding } from "./lexical-bindings.ts";
+import { addWrittenRoots, type WrittenRoots } from "./written-roots.ts";
 import { isTypeScriptSource } from "../../domain/languages/typescript.ts";
 import type { ImportOrigin } from "../../domain/relations/resolved-reference.ts";
 import type { Evidence, Finding } from "../../domain/shared/fact.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { RootOrigin } from "../../domain/impact/edge-policy.ts";
-import type { ImportOriginSite, ImportOrigins, ResolvedNameSite } from "../../ports/import-origins.port.ts";
+import type { ImportOriginSite, ImportOrigins, ReplacedRoots, ResolvedNameSite } from "../../ports/import-origins.port.ts";
 import { createModuleResolver, manifestPackages, packageOf } from "./module-resolver.ts";
 import { TYPESCRIPT_LIB_GLOBALS } from "./typescript-lib-globals.ts";
 
@@ -57,6 +58,16 @@ export function createImportOrigins(sources: readonly SourceFile[], parse: Parse
     }
     return starts.has(identifier.getStart(source));
   };
+  const dynamicStarts = new Map<string, ReadonlySet<number>>();
+  /** A name a `with` body or a direct `eval` may rebind proves no origin; only a file that has either is bound for it. */
+  const isDynamicUse: ParameterUse = (source, text, identifier) => {
+    let starts = dynamicStarts.get(source.fileName);
+    if (starts === undefined) {
+      starts = DYNAMIC_SCOPE.test(text) ? dynamicUses(source.fileName, text) : new Set();
+      dynamicStarts.set(source.fileName, starts);
+    }
+    return starts.has(identifier.getStart(source));
+  };
   const indexes = new Map<string, FileIndex | undefined>();
   /** A file is parsed once for the life of the reader; one that does not parse has no index. */
   const indexOf = (file: string): { index: FileIndex; text: string } | undefined => {
@@ -99,6 +110,18 @@ export function createImportOrigins(sources: readonly SourceFile[], parse: Parse
     globals = names;
     return names;
   };
+  let replaced: ReplacedRoots | undefined;
+  /** The globals the snapshot declares or writes through, and the packages it writes through; read when first asked. */
+  const replacedRoots = (): ReplacedRoots => {
+    if (replaced !== undefined) return replaced;
+    const written: WrittenRoots = { globals: new Set(), everyGlobal: false, packages: new Set() };
+    for (const [path, text] of texts) {
+      if (!isTypeScriptSource(path)) continue;
+      addWrittenRoots(path, text, ts.createSourceFile(path, text, ts.ScriptTarget.Latest, false), written, (name) => LIB_GLOBALS.has(name));
+    }
+    replaced = { globals: written.everyGlobal ? "all" : new Set([...repositoryGlobals(), ...written.globals]), packages: written.packages };
+    return replaced;
+  };
 
   const originOf = async (site: ImportOriginSite, syntax: SiteSyntax | "unknown"): Promise<Finding<ImportOrigin>> => {
     const evidence: Evidence[] = [{ path: site.file, line: site.line }];
@@ -121,13 +144,13 @@ export function createImportOrigins(sources: readonly SourceFile[], parse: Parse
     return { status: "unknown", reason: "unresolved", evidence };
   };
 
-  return { origins: async (sites, signal) => {
+  return { replacedRoots: async () => replacedRoots(), origins: async (sites, signal) => {
     const results: (Finding<ImportOrigin> & { occurrence?: true })[] = sites.map((site) => ({ status: "unknown", reason: "unresolved", evidence: [{ path: site.file, line: site.line }] }));
     const grouped = Map.groupBy(sites.map((site, index) => ({ site, index })), ({ site }) => site.file);
     for (const [file, group] of grouped) {
       if (signal?.aborted) break;
       const parsed = indexOf(file);
-      const checked = parsed === undefined ? undefined : checkSites(parsed.index, parsed.text, group, isParameterUse);
+      const checked = parsed === undefined ? undefined : checkSites(parsed.index, parsed.text, group, isParameterUse, isDynamicUse);
       if (checked !== undefined) shapes.set(file, checked.shape);
       const checks = checked?.matches ?? new Map<number, SiteSyntax>();
       for (const { site, index } of group) {
@@ -142,7 +165,7 @@ export function createImportOrigins(sources: readonly SourceFile[], parse: Parse
     for (const [file, group] of Map.groupBy(sites.map((site, index) => ({ site, index })), ({ site }) => site.file)) {
       if (signal?.aborted) break;
       const parsed = indexOf(file);
-      const read = parsed === undefined ? undefined : rootsAt(parsed.index, parsed.text, group, isParameterUse);
+      const read = parsed === undefined ? undefined : rootsAt(parsed.index, parsed.text, group, isParameterUse, isDynamicUse);
       if (read === undefined) continue;
       shapes.set(file, read.shape);
       for (const [index, { root, bare, local }] of read.roots) {
@@ -160,7 +183,7 @@ type SiteSyntax = "valid" | "local" | "this-member";
 type ParameterUse = (source: ts.SourceFile, text: string, identifier: ts.Identifier) => boolean;
 
 /** The root of the plain chain of names each site spells and ends in its name, read in the file's tree. */
-function rootsAt({ source, shape, starting }: FileIndex, text: string, group: readonly { site: ResolvedNameSite; index: number }[], isParameterUse: ParameterUse): { roots: Map<number, { root: string; bare: boolean; local: boolean }>; shape: FileShape } {
+function rootsAt({ source, shape, starting }: FileIndex, text: string, group: readonly { site: ResolvedNameSite; index: number }[], isParameterUse: ParameterUse, isDynamicUse: ParameterUse): { roots: Map<number, { root: string; bare: boolean; local: boolean }>; shape: FileShape } {
   const starts = source.getLineStarts();
   const wanted = new Map<number, { site: ResolvedNameSite; index: number }[]>();
   for (const item of group) {
@@ -170,16 +193,27 @@ function rootsAt({ source, shape, starting }: FileIndex, text: string, group: re
     if (point >= (line < starts.length ? starts[line]! : text.length)) continue;
     wanted.set(point, [...(wanted.get(point) ?? []), item]);
   }
+  const isDynamicRoot = (spelled: ts.Node): boolean => {
+    const root = rootIdentifier(spelled);
+    return root !== undefined && isDynamicUse(source, text, root);
+  };
   /** Chains that start at one point share their root, so the first that ends in the name settles it. */
   const roots = new Map<number, { root: string; bare: boolean; local: boolean }>();
   for (const [point, sites] of wanted) for (const node of starting.get(point) ?? []) for (const { site, index } of sites) {
     const spelled = spelledAt(node, site.kind);
     const names = spelled === undefined ? undefined : plainChain(spelled);
-    if (names === undefined || names.at(-1) !== site.name || roots.has(index)) continue;
+    if (names === undefined || names.at(-1) !== site.name || roots.has(index) || isDynamicRoot(spelled!)) continue;
     const bare = names.length === 1;
     roots.set(index, { root: names[0]!, bare, local: bare && ts.isIdentifier(spelled!) && !ts.isTypeNode(spelled.parent) && isParameterUse(source, text, spelled) });
   }
   return { roots, shape };
+}
+
+/** The identifier a chain of names, calls and indexes starts at; none when it starts at anything else. */
+function rootIdentifier(node: ts.Node): ts.Identifier | undefined {
+  let inner = node;
+  while (ts.isPropertyAccessExpression(inner) || ts.isElementAccessExpression(inner) || ts.isCallExpression(inner) || ts.isQualifiedName(inner) || ts.isParenthesizedExpression(inner) || ts.isNonNullExpression(inner)) inner = ts.isQualifiedName(inner) ? inner.left : inner.expression;
+  return ts.isIdentifier(inner) ? inner : undefined;
 }
 
 /** What a node starting at an edge's column spells for the edge's kind: a call's callee, an instantiation's class, or a name up to the whole qualified name it ends. */
@@ -216,7 +250,7 @@ function indexed(source: ts.SourceFile): FileIndex | undefined {
 }
 
 /** Check each graph spelling at its exact 1-based UTF-16 position in the file's tree. */
-function checkSites({ source, shape, starting }: FileIndex, text: string, group: readonly { site: ImportOriginSite; index: number }[], isParameterUse: ParameterUse): { matches: Map<number, SiteSyntax>; shape: FileShape } {
+function checkSites({ source, shape, starting }: FileIndex, text: string, group: readonly { site: ImportOriginSite; index: number }[], isParameterUse: ParameterUse, isDynamicUse: ParameterUse): { matches: Map<number, SiteSyntax>; shape: FileShape } {
   const result = new Map<number, SiteSyntax>();
   const starts = source.getLineStarts();
   const wanted = new Map<number, { site: ImportOriginSite; index: number }[]>();
@@ -247,6 +281,8 @@ function checkSites({ source, shape, starting }: FileIndex, text: string, group:
     if (found === undefined && ownCalls.get(index) === 1) result.set(index, "this-member");
     if (found?.length !== 1) continue;
     const node = found[0]!;
+    const root = rootIdentifier(node);
+    if (root !== undefined && isDynamicUse(source, text, root)) continue;
     result.set(index, site.kind === "calls" && ts.isIdentifier(node) && node.text === site.name && isParameterUse(source, text, node) ? "local" : "valid");
   }
   return { matches: result, shape };
@@ -299,6 +335,21 @@ function parameterUses(path: string, text: string): ReadonlySet<number> {
     node.forEachChild(visit);
   };
   if (names.size > 0) visit(tree);
+  return starts;
+}
+
+/** Text that may hold a `with` statement or a direct `eval`, the only scopes the binder calls dynamic. */
+const DYNAMIC_SCOPE = /\bwith\b|\beval\b/;
+
+/** The start of every name of the file whose binding a dynamic scope decides (ADR-0029 decision 3). */
+function dynamicUses(path: string, text: string): ReadonlySet<number> {
+  const { tree, bindingOf } = bindFile(path, text);
+  const starts = new Set<number>();
+  const visit = (node: ts.Node): void => {
+    if (ts.isIdentifier(node) && bindingOf(node).kind === "dynamic") starts.add(node.getStart(tree));
+    node.forEachChild(visit);
+  };
+  visit(tree);
   return starts;
 }
 
