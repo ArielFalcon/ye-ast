@@ -78,9 +78,10 @@ It stands for a segment only where it starts one; a run-time value that starts t
 An unshadowed global `encodeURIComponent` is a supported static transformation. It escapes `/`, `?` and `#`, so what it
 encodes stays in one segment: a text the snapshot states whole is encoded, and anything else is a run-time value, a text
 holding a run-time value or cut at its query included, unless the snapshot cannot read the argument and the argument reads
-nothing the code fills at run time. `String(x)` and `x.toString()` write what a template writes for `x`. Shadowed encoders,
-visible writes or an escaping global object in the provided snapshot keep the evaluation unknown. No repository function
-is executed. A whole run-time URL such as `fetch(url)` remains unknown when `url` names a run-time parameter.
+nothing the code fills at run time. `String(x)` and `x.toString()` write what a template writes for `x`. A shadowed
+encoder keeps the evaluation unknown. A visible write or an escaping global object in the provided snapshot
+(`fromEvent(window, 'resize')`) leaves an encoded text undecided, while what the call encodes from a run-time value stays a
+run-time value: whatever function runs, its result is filled at run time. No repository function is executed. A whole run-time URL such as `fetch(url)` remains unknown when `url` names a run-time parameter.
 
 A wrapper is a verb-named method of a class another class injects that forwards one of its parameters unchanged as the
 tail of its request's path (`this.http.get(path)`, `` `${this.url}${path}` ``, `base + '/' + path`, or through a method
@@ -100,12 +101,16 @@ literal, or a spread or computed member that may state `method` after it, leaves
 code around declares or imports is not the global one, and its call is no request.
 
 The text after the first `?` or `#` of a URL is its query or fragment, which no route serves: evaluation stops there, so
-a value the query names never leaves the path undecided. An argument of `encodeURIComponent` cut there is undecided.
+a value the query names never leaves the path undecided. An argument of `encodeURIComponent` cut there is a run-time
+value: the encoder escapes its `?` and `#`, so the whole argument stays in one segment.
 
 A method a path calls (`pageLink.toQuery()`, `this.area()`) is read when its receiver's class is in the snapshot: `this`,
 `super`, a field or a parameter whose declared type names the class. The receiver may be any subclass, so the method the
-class declares or inherits and every override a subclass declares must write the same (`super` reads only the inherited
-one). A method that reads its own parameters is not read, since its arguments are not substituted.
+class declares or inherits and every override a subclass declares must write the same, a subclass being any class whose
+`extends` resolves to that class through its own file's imports, under whatever name (`super` reads only the inherited
+one). A method that reads its own parameters is not read, since its arguments are not substituted, nor one that a class
+from the receiver's up to the declaring one, or a subclass, assigns through `this`, since the instance then holds the
+assigned function.
 
 A function a path calls, and the function an `httpResource` takes its request from, is read at every `return` of its own
 body; the functions it declares return their own. A bare `return`, and an end the body reaches without returning, return
@@ -120,7 +125,9 @@ class up to the declaring one write (`=`, compound assignments, `++`, `delete`),
 declares again or writes, and any field of a class that writes fields it does not name (`this[key] =`,
 `Object.assign(this, …)`) hold a value the code fills at run time. Writes from outside the class hierarchy are not read.
 A property of a run-time value (`category.id`, `event.data.id`) is a run-time value; a root the code binds is read
-through that binding before any class, import or constant of the same name.
+through that binding before any class, import or constant of the same name. A member of an enum the file declares or
+imports (`UserSettingsType.DOC_LINKS`) is the text its initializer states; a member without one, or initialized by any
+other expression, which may name another member of the enum, is undecided.
 
 A name that is neither a binding nor an import of its file, such as an ambient `declare const`, takes the value an
 Angular workspace's `build` target states for it in `define` (application builders), read from `angular.json` as source

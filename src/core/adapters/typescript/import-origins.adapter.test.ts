@@ -6,7 +6,7 @@ import ts from "typescript";
 import type { ImportOrigin } from "../../domain/relations/resolved-reference.ts";
 import type { Finding } from "../../domain/shared/fact.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
-import type { ImportOriginSite } from "../../ports/import-origins.port.ts";
+import type { ImportOriginSite, RootOrigin } from "../../ports/import-origins.port.ts";
 
 const CONFIG: SourceFile = {
   path: "tsconfig.json",
@@ -131,6 +131,16 @@ test("local parameter proof handles Unicode, nested parameters and same-line use
   const points = [text.indexOf("outside()"), text.indexOf("resolve(1)"), text.indexOf("resolve(2)"), text.indexOf("resolve(3)")];
   const results = await reader.origins(points.map((offset, i) => ({ file, line: 1, column: offset + 1, name: i === 0 ? "outside" : "resolve", fullName: i === 0 ? "outside" : "resolve", kind: "calls" })));
   assert.deepEqual(results.map((f) => f.status === "complete" ? f.value.kind : "unknown"), ["unknown", "local-parameter", "unknown", "local-parameter"]);
+});
+
+test("a parameter of a function declaration, a method or a constructor proves a bare call of it local", async () => {
+  const file = "src/declared.ts";
+  const text = "export function clean(text: string, redact: (v: string) => string) { return redact(text); }\nclass C { run(redact: () => void) { redact(); } constructor(redact: () => void) { redact(); } }";
+  const lines = text.split("\n");
+  const sites = [[1, lines[0]!.indexOf("redact(text)")], [2, lines[1]!.indexOf("redact();")], [2, lines[1]!.lastIndexOf("redact();")]] as const;
+  const results = await createImportOrigins([{ path: file, content: text }]).origins(sites.map(([line, offset]) => ({ file, line, column: offset + 1, name: "redact", fullName: "redact", kind: "calls" })));
+
+  assert.deepEqual(results.map((f) => (f.status === "complete" ? f.value.kind : "unknown")), ["local-parameter", "local-parameter", "local-parameter"]);
 });
 
 test("local parameter refuses unsupported syntax and malformed files", async () => {
@@ -298,7 +308,7 @@ function resolvedSite(line: number, spelled: string, kind: string, name: string)
   return { file: RESOLVED.path, line, column: RESOLVED_LINES[line - 1]!.indexOf(spelled) + 1, kind, name };
 }
 
-async function rootOf(site: ReturnType<typeof resolvedSite>): Promise<Finding<ImportOrigin>> {
+async function rootOf(site: ReturnType<typeof resolvedSite>): Promise<RootOrigin> {
   return only(await createImportOrigins([...SOURCES, RESOLVED]).rootOrigins([site]));
 }
 
@@ -326,6 +336,68 @@ test("a chain whose root is a repository import is rooted there, whatever member
   const finding = await rootOf(resolvedSite(8, "Store", "calls", "create"));
 
   assert.deepEqual(finding.status === "complete" && finding.value, { kind: "repository", file: "src/store.ts" });
+});
+
+test("only a site that spells its root alone is bare", async () => {
+  const alone = await rootOf(resolvedSite(6, "filter", "calls", "filter"));
+  const chained = await rootOf(resolvedSite(8, "Store", "calls", "create"));
+
+  assert.equal(alone.bare, true);
+  assert.equal(chained.bare, undefined);
+});
+
+test("a root spelled alone that a parameter binds is local, one a local variable binds is unknown", async () => {
+  const file = "src/shadow.ts";
+  const text = 'import { redact } from "./redact.ts";\nexport function clean(text: string, redact: (v: string) => string) { return redact(text); }\nexport function plain(text: string) { const redact = (v: string) => v; return redact(text); }\n';
+  const lines = text.split("\n");
+  const reader = createImportOrigins([...SOURCES, { path: file, content: text }]);
+  const [parameter, variable] = await reader.rootOrigins([2, 3].map((line) => ({ file, line, column: lines[line - 1]!.lastIndexOf("redact(") + 1, kind: "calls", name: "redact" })));
+
+  assert.deepEqual(parameter, { status: "complete", value: { kind: "local-parameter", name: "redact" }, evidence: [{ path: file, line: 2 }], bare: true });
+  assert.equal(variable!.status, "unknown");
+});
+
+/** The root of the last bare `redact(` call in `body`, written inside a function whose parameter is `redact`. */
+async function parameterRootOf(body: string): Promise<RootOrigin> {
+  const file = "src/scoped.ts";
+  const text = `export function outer(redact: (s: string) => string) {\n${body}\n}\n`;
+  const lines = text.split("\n");
+  const line = lines.findLastIndex((candidate) => candidate.includes("redact(")) + 1;
+  return only(await createImportOrigins([{ path: file, content: text }]).rootOrigins([{ file, line, column: lines[line - 1]!.lastIndexOf("redact(") + 1, kind: "calls", name: "redact" }]));
+}
+
+test("a call inside a class, its static block or a property initializer is not proven to use a parameter of the function around the class", async () => {
+  const plain = await parameterRootOf("  return redact('x');");
+  assert.equal(plain.status === "complete" && plain.value.kind, "local-parameter");
+  for (const body of [
+    "  class Holder {\n    static {\n      const redact = (s: string) => s;\n      redact('x');\n    }\n  }",
+    "  class Holder {\n    static {\n      redact('x');\n    }\n  }",
+    "  class Holder {\n    value = redact('x');\n  }",
+    "  const inner = () => {\n    const redact = (s: string) => s;\n    redact('x');\n  };",
+    "  const named = function redact() {\n    redact('x');\n  };",
+  ]) {
+    const root = await parameterRootOf(body);
+    assert.notEqual(root.status === "complete" && root.value.kind, "local-parameter", body);
+  }
+});
+
+test("a call inside a block, a catch clause or a loop that rebinds the parameter's name is not proven to use the parameter", async () => {
+  for (const body of [
+    "  try {\n  } catch (redact) {\n    redact('x');\n  }",
+    "  for (const redact of [(s: string) => s]) {\n    redact('x');\n  }",
+    "  {\n    let redact = (s: string) => s;\n    redact('x');\n  }",
+  ]) {
+    const root = await parameterRootOf(body);
+    assert.notEqual(root.status === "complete" && root.value.kind, "local-parameter", body);
+  }
+});
+
+test("a type spelled like a parameter is not the parameter", async () => {
+  const file = "src/typed.ts";
+  const text = "export function make(Order: number) { const made: Order | undefined = undefined; return made; }\n";
+  const [type] = await createImportOrigins([{ path: file, content: text }]).rootOrigins([{ file, line: 1, column: text.lastIndexOf("Order") + 1, kind: "references", name: "Order" }]);
+
+  assert.notEqual(type!.status === "complete" && type!.value.kind, "local-parameter");
 });
 
 test("a chain through a call, or one that ends in another name than the edge's, is unknown", async () => {
@@ -372,5 +444,5 @@ test("a library name a module declares in a declare global block is the reposito
 test("a library name a module declares at its top level is not global, so its use elsewhere stays ambient", async () => {
   const module: SourceFile = { path: "src/headers.ts", content: "export class Headers {}\n" };
 
-  assert.deepEqual(await globalRootOf(module, "new Headers()", "instantiates", "Headers"), { status: "complete", value: { kind: "ambient", name: "Headers" }, evidence: [{ path: "src/use.ts", line: 2 }] });
+  assert.deepEqual(await globalRootOf(module, "new Headers()", "instantiates", "Headers"), { status: "complete", value: { kind: "ambient", name: "Headers" }, evidence: [{ path: "src/use.ts", line: 2 }], bare: true });
 });

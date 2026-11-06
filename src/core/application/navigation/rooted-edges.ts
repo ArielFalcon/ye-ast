@@ -1,4 +1,4 @@
-import { isBoundOutside } from "../../domain/impact/edge-policy.ts";
+import { edgeVerdict } from "../../domain/impact/edge-policy.ts";
 import type { ImportOrigin } from "../../domain/relations/resolved-reference.ts";
 import type { GraphEdge, GraphSymbol } from "../../ports/code-graph.port.ts";
 import type { ImportOrigins } from "../../ports/import-origins.port.ts";
@@ -21,6 +21,6 @@ export async function edgesRootedOutside<T extends EdgeWithEnds>(origins: Import
   const roots = await origins.rootOrigins(placed.map(({ edge, source, target }) => ({ file: source.file, line: edge.line!, column: edge.column! + 1, kind: edge.kind, name: target.name })), signal);
   return placed.flatMap((edge, index) => {
     const root = roots[index];
-    return root !== undefined && isBoundOutside(root) && root.status === "complete" ? [{ edge, origin: root.value }] : [];
+    return root !== undefined && root.status === "complete" && root.value.kind !== "local-parameter" && edgeVerdict(root).kind === "drop" ? [{ edge, origin: root.value }] : [];
   });
 }

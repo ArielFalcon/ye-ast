@@ -90,7 +90,8 @@ external, ambient and reached-settlement proofs as the ordinary walk. A bare imp
 file cannot be attributed to the removed homonym. An unknown binding remains a candidate; a proof for one rooted name or
 settled reference never suppresses another reference on the same line. Proofs identify the full graph occurrence
 (file, raw line and column, source ID, full name and kind), with unique syntax and graph matches. A bare call proven
-to bind a supported callback parameter excludes a removed homonym in another file only; it does not resolve the callback
+to bind a supported simple parameter of the nearest arrow function, function expression, function declaration, method or
+constructor excludes a removed homonym in another file only; it does not resolve the callback
 target or add a call edge. Missing or ambiguous coordinates leave the candidate. A type settlement retires a cut only
 when its uniquely joined target was expanded and its joined source reached by the walk.
 
@@ -126,6 +127,8 @@ of traversal facts records the policy in its own validity key.
 | codegraph's heuristic `angular-template` and `angular-event` edges | no | ADR-0014 decision 1; rows A4 and A2 bring ye-ast's own |
 | any edge from a test file | no | tests are not callers; the declared scope says so |
 | an edge whose name, read at its position as a plain chain (`X`, `ts.X`, `pkg.a.X`) ending in the target's name, is rooted at a package import or a name only the language's libraries declare | no | codegraph matches `ts.X`, `new pkg.X()`, a call of a name imported from `node:fs` and a value imported from a package to a repository declaration of the same last name; the file's own import proves the name is not that declaration. A root that is unbound, shadowed, bound to the repository, or a chain through a call keeps the edge, with no cut: nothing contradicts it. Only the edges a walk reads are checked, and the walk runs again when one is dropped |
+| an edge whose name is a root spelled alone (`x`) that an import binds, when the module statements and the graph's `imports` edge at the binding join it to another declaration than the edge's target | to the joined declaration instead | codegraph links a use of an imported constant to a same-named function elsewhere; the binding proves which declaration the name is. A binding the join does not prove, or a longer chain (`x.m`, whose member the binding does not name), keeps the edge as the graph wrote it, with no cut. The walk also reads, for each symbol it reaches, the edges of the files that import it whose bare name the join binds to it |
+| an edge whose name is a root spelled alone (`x`) in a value position that a simple parameter of the nearest function, method or constructor binds, with no class, namespace or rebinding of the name between them | no | codegraph links a call of a parameter to a repository declaration of the same name; the parameter's value is whatever the callers pass, so the edge names no declaration. A local variable, a destructured binding, a type position or a use inside a class keeps the edge: its value may come from the declaration |
 | containment | no | structure, not dependence |
 
 Edges ye-ast derives (interface bridges, and the Angular injection and template relations of rows A2 and A4) enter through one port of
@@ -283,7 +286,9 @@ interface ImportedFile {
 }
 ```
 
-`importers` and `users` are reported information, not walk edges, so tests count and the policy table does not apply;
+`importers` and `users` are reported information, not walk edges, so tests count and the policy table does not apply,
+except for the one judgement of what an edge reaches (`EdgeTargets`): an edge whose name is rooted outside the repository,
+or that an import moves to a declaration of another file, makes no user of the file the graph matched;
 `users` is broader than the followed edges so that it contains qayaba's `importersOf`
 (qayaba@cfc69e3b `codegraph-store-reader.mjs:144`, which reads `imports`, any-kind and unresolved-name matches the same
 way). A name matches when the reference's name or its tail is a declared name, or the reference's name holds the file's
