@@ -40,7 +40,7 @@ export function faultContext(query: SemanticQuery, controls: FaultControls = {})
     family,
     live: args.live === true,
     ...(family === "outline" ? { subject: args.focus === undefined ? "files" as const : "focus" as const } : {}),
-    workspace: args.workspace !== undefined,
+    workspace: args.workspace !== undefined || family === "workspace" || family === "decisions",
     members: args.workspace?.repos !== undefined || args.repos !== undefined,
     replay: args.replay !== undefined,
     select: controls.select !== undefined,
@@ -102,8 +102,16 @@ function omitLive(query: FaultQueryContext | undefined): string {
 
 function nextStep(fault: Exclude<RenderedFault, { kind: "composition-source-fault" }>, query: FaultQueryContext | undefined): string | undefined {
   switch (fault.kind) {
-    case "unknown-revision":
-      return `${query?.family === "impact" ? (query.live ? "base" : "base or head") : commitArgument(query)} must resolve to a local commit: pass a branch, tag or sha this clone holds${query?.family === "impact" ? "" : ", or omit it to read HEAD"}${query?.members ? `; a ${membersArgument(query)}[].revision may be the one that does not resolve` : ""}.`;
+    case "unknown-revision": {
+      const argument = query?.family === "impact" ? (query.live ? "base" : "base or head") : commitArgument(query);
+      const member = query?.members
+        ? `Also check ${membersArgument(query)}[].revision.`
+        : query?.workspace ? "Also check persisted workspace member revisions in the host configuration." : undefined;
+      return [
+        `${argument} must resolve to a local commit: pass a branch, tag or sha the owning clone holds${query?.family === "impact" ? "" : ", or omit it to read HEAD"}.`,
+        ...(member === undefined ? [] : [member, "This fault does not identify which repository's revision failed."]),
+      ].join(" ");
+    }
     case "no-merge-base":
       return query?.family === "impact"
         ? "base and head share no ancestor: choose commits of one history. The diff runs from merge-base(base, head); a direct diff is not substituted."

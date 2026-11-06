@@ -2040,6 +2040,25 @@ test("root failures do not attribute an unknown owner to request workspace membe
   } finally { await session.close(); }
 });
 
+test("persisted workspace failures retain member ownership possibilities across families", async () => {
+  const root = { kind: "not-repository-root" as const, detail: "not a root" };
+  const revision = { kind: "unknown-revision" as const, detail: "missing commit" };
+  const roots = await setup({ outwardNames: async () => ({ ok: false, fault: root }), decisions: async () => ({ ok: false, fault: root }) });
+  const revisions = await setup({ workspaceOfChange: async () => ({ ok: false, fault: revision }) });
+  try {
+    for (const tool of ["ye_ast_workspace", "ye_ast_decisions"]) {
+      const result = await roots.session.callTool(tool, {});
+      assert.equal((result._meta?.[FAULT_META] as { kind: string }).kind, root.kind);
+      assert.match(stepOf(result), /persisted workspace member/);
+      assert.doesNotMatch(stepOf(result), /repos\[\]/);
+    }
+    const result = await revisions.session.callTool("ye_ast_impact", { base: "missing", live: true, workspace: {} });
+    assert.equal((result._meta?.[FAULT_META] as { kind: string }).kind, revision.kind);
+    assert.match(stepOf(result), /persisted workspace member/);
+    assert.doesNotMatch(stepOf(result), /\bhead\b|workspace\.repos/);
+  } finally { await roots.session.close(); await revisions.session.close(); }
+});
+
 test("compose names the failed queries once and corrects only at the cause, for the cause's tool", async () => {
   const fault: ImpactFault = { kind: "unknown-symbol", detail: "no such symbol", entries: [{ file: "src/a.ts", symbol: "gone", candidates: ["a"] }] };
   const { session } = await setup({ outline: async () => ({ ok: false, fault }) });
