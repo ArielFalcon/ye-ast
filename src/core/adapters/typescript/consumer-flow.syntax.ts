@@ -1,6 +1,6 @@
 import ts from "typescript";
 import { ELEMENT, type AccessPath } from "../../domain/contracts/access-path.ts";
-import type { Literal } from "../../domain/contracts/use-operation.ts";
+import type { JsonValue, Literal, Replacement } from "../../domain/contracts/use-operation.ts";
 import { bindFile } from "./lexical-bindings.ts";
 
 export type FunctionNode = ts.ArrowFunction | ts.FunctionExpression | ts.FunctionDeclaration | ts.MethodDeclaration | ts.ConstructorDeclaration | ts.GetAccessorDeclaration | ts.SetAccessorDeclaration;
@@ -54,9 +54,30 @@ export function isTransparent(node: ts.Node): boolean {
   return ts.isParenthesizedExpression(node) || ts.isAsExpression(node) || ts.isSatisfiesExpression(node) || ts.isTypeAssertionExpression(node);
 }
 
-export function excludesAbsence(expression: ts.Expression): boolean {
+function jsonOf(expression: ts.Expression): JsonValue | undefined {
   const bare = unwrap(expression);
-  return ts.isObjectLiteralExpression(bare) || ts.isArrayLiteralExpression(bare) || ts.isStringLiteralLike(bare) || ts.isTemplateExpression(bare) || ts.isNumericLiteral(bare);
+  if (bare.kind === ts.SyntaxKind.NullKeyword) return null;
+  const literal = literalOf(bare);
+  if (literal !== undefined) return literal;
+  if (ts.isArrayLiteralExpression(bare)) {
+    const items = bare.elements.map(jsonOf);
+    return items.every((item) => item !== undefined) ? items : undefined;
+  }
+  if (!ts.isObjectLiteralExpression(bare)) return undefined;
+  const entries = bare.properties.map((property): [string, JsonValue] | undefined => {
+    if (!ts.isPropertyAssignment(property)) return undefined;
+    const name = property.name;
+    const key = ts.isIdentifier(name) || ts.isStringLiteralLike(name) ? name.text : ts.isNumericLiteral(name) ? String(Number(name.text)) : undefined;
+    const value = jsonOf(property.initializer);
+    return key === undefined || value === undefined ? undefined : [key, value];
+  });
+  return entries.every((entry) => entry !== undefined) ? Object.fromEntries(entries) : undefined;
+}
+
+/** What a fallback's right side puts in place of the value: the JSON it writes literally, else opaque. */
+export function replacementOf(expression: ts.Expression): Replacement {
+  const value = jsonOf(expression);
+  return value === undefined ? { kind: "opaque" } : { kind: "literal", value };
 }
 
 export function isAsyncOrGenerator(fn: FunctionNode): "async" | "generator" | undefined {
@@ -165,6 +186,11 @@ function bindsTo(identifier: ts.Identifier, binding: Extract<Binding, { kind: "n
 /** A name whose binding is decided at run time, so no declaration can be claimed for it. */
 export function isDynamicName(identifier: ts.Identifier): boolean {
   return answerOf(identifier) === "dynamic";
+}
+
+/** Whether nothing the file declares or imports binds the name, outside any dynamic scope: it names a global. */
+export function isUndeclaredName(identifier: ts.Identifier): boolean {
+  return answerOf(identifier) === undefined;
 }
 
 const SCOPES = (node: ts.Node): boolean =>

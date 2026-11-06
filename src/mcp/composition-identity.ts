@@ -5,6 +5,7 @@
  */
 import { canonicalJson } from "../core/domain/shared/canonical-json.ts";
 import { compareText } from "../core/domain/shared/code-node.ts";
+import { sortedUnique } from "../core/domain/impact/importers-fact.ts";
 import type { Evidence, Fact, SnapshotRef } from "../core/domain/shared/fact.ts";
 import type { Digest } from "../core/ports/digest.port.ts";
 import type { RecoveryContext } from "./recovery.ts";
@@ -116,11 +117,6 @@ export function jsonPointer(segments: readonly (string | number)[]): string {
 /** Equality of values, ignoring object member order and never array order. */
 export function sameCanonical(a: unknown, b: unknown): boolean {
   return canonicalJson(a) === canonicalJson(b);
-}
-
-/** A set of strings: unique, in code-unit order. */
-export function sortedUnique<T extends string>(values: readonly T[]): T[] {
-  return [...new Set(values)].sort(compareText);
 }
 
 export function compareSupport(a: Support, b: Support): number {

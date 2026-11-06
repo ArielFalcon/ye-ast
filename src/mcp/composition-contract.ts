@@ -213,7 +213,7 @@ export type PartPayload =
   | { kind: "walk-cost"; owner: ReadId; walk: "symbols" | "modules"; expansionsUsed: number }
   | { kind: "trace-totals"; owner: ReadId; lines: number; expanded: number };
 
-// Keep domain payload fields separate from record metadata: future variants cannot silently overwrite either.
+// Payload fields never reuse a record metadata key.
 type UnionKeys<T> = T extends T ? keyof T : never;
 type NoReservedKeys<T extends never> = T;
 export type PartPayloadMetadataBoundary = NoReservedKeys<Extract<UnionKeys<PartPayload>, "id" | "supports">>;

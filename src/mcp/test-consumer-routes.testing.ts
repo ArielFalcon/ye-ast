@@ -1,4 +1,4 @@
-import type { ToolResult } from "./test-session.ts";
+import type { ToolResult } from "./test-session.testing.ts";
 
 /**
  * Offline reproductions of what known MCP clients hand on from a `tools/call` result. Each one mirrors the cited source

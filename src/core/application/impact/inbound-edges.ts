@@ -81,7 +81,7 @@ export interface EdgeCorrections {
   into: ReadonlyMap<GraphNodeId, readonly FollowedEdge[]>;
 }
 
-export const NO_CORRECTIONS: EdgeCorrections = { dropped: new Set(), into: new Map() };
+const NO_CORRECTIONS: EdgeCorrections = { dropped: new Set(), into: new Map() };
 
 function isInside(inner: GraphSymbol, outer: GraphSymbol): boolean {
   return inner.file === outer.file && outer.startLine <= inner.startLine && inner.endLine <= outer.endLine;

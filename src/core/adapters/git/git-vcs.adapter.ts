@@ -7,6 +7,7 @@ import type { Result } from "../../domain/shared/result.ts";
 import { isFullObjectId } from "../../domain/shared/revision.ts";
 import type { CommitExport, ExportBudget, ExportedFile, ExportPlan, ExportStop, RemoteRef, SkippedEntry, Vcs, VcsChanges, VcsFault } from "../../ports/vcs.port.ts";
 import { claimPath, isConfinedPath, type PathClaims } from "./export-path-rules.ts";
+import { compareText } from "../../domain/shared/code-node.ts";
 
 export interface GitRun {
   code: number;
@@ -321,11 +322,6 @@ function mainWorktreeOf(output: string): string | undefined {
   const path = record?.slice("worktree ".length);
   return path === undefined || path === "" ? undefined : path;
 }
-
-function compareText(a: string, b: string): number {
-  return a < b ? -1 : a > b ? 1 : 0;
-}
-
 function parseRemotes(output: string): RemoteRef[] {
   return output
     .split("\n")

@@ -241,6 +241,9 @@ The entries of the cache are the sources and findings of a snapshot and, since
 [ADR-0026](../adr/0026-snapshot-data-may-retain-reader-outputs.md), the serialized output of the relations and the
 whole-universe module-dependencies readers, each its own entry. A served output has no line of its own: its lookup is a
 `hit` and the reader's stage (`relations`, `module-dependencies`) is absent from that request.
+A live query writes the same lines: its lookups run after the capture is reconciled, over the listing of the capture
+([ADR-0030](../adr/0030-live-captures-use-the-snapshot-data-cache.md)), so a `hit` in a live request means the tree's
+content did not change since an earlier call, and a `miss` that it did or that nothing was retained.
 
 An **index-cache line**, one per kept index the cache's retention removes
 ([ADR-0027](../adr/0027-retention-of-immutable-index-entries.md)), when measurement is configured:

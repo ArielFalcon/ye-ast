@@ -45,5 +45,5 @@ function resourcesOf(file: string, metadata: ts.ObjectLiteralExpression): string
       for (const element of property.initializer.elements) if (ts.isStringLiteralLike(element)) urls.push(element.text);
     }
   }
-  return urls.map((url) => posix.normalize(posix.join(posix.dirname(file), url))).filter((path) => !path.startsWith(".."));
+  return urls.map((url) => posix.join(posix.dirname(file), url)).filter((path) => !path.startsWith(".."));
 }

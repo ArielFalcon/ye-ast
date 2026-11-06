@@ -2,7 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { formatAccessPath, parseAccessPath } from "../../domain/contracts/access-path.ts";
 import type { Carrier, CarrierSite, FlowResult } from "../../domain/contracts/consumer-flow.ts";
-import { operationClass } from "../../domain/contracts/use-operation.ts";
+import { operationClass, type Predicate } from "../../domain/contracts/use-operation.ts";
+import type { Guard } from "../../domain/contracts/verdict.ts";
 import { createConsumerFlowReader } from "./consumer-flow.adapter.ts";
 
 const COMMON = "import { HttpClient } from '@angular/common/http'\nimport { map, tap, switchMap, catchError } from 'rxjs'\nimport { firstValueFrom, of } from 'rxjs'\nimport { toSignal } from '@angular/core/rxjs-interop'\nimport { httpResource } from '@angular/common/http'\nimport { resource, signal, computed, input } from '@angular/core'\n";
@@ -25,6 +26,11 @@ const callSite = (file: string, line: number, symbol: string): CarrierSite => ({
 
 const dotted = (path: readonly string[]) => formatAccessPath(path) || "[]";
 const uses = (result: FlowResult) => result.uses.map((use) => `${use.site.line - HEADER_LINES} ${dotted(use.path)}|${dotted(use.changed)} ${operationClass(use.operation)} [${use.guards.map((guard) => guard.kind).join(",")}]`);
+const predicateText = (test: Predicate) =>
+  test.kind === "truthy" ? "truthy" : test.kind === "absence" ? `${test.operator} ${test.absence}` : test.kind === "literal" ? `${test.operator} ${JSON.stringify(test.literal)}` : test.kind === "typeof" ? `typeof ${test.operator} ${test.type}` : "array";
+const guardText = (guard: Guard) =>
+  "test" in guard ? `${guard.kind} ${predicateText(guard.test)} ${guard.holds}${guard.kind === "fallback" ? ` -> ${guard.replacement.kind === "opaque" ? "opaque" : JSON.stringify(guard.replacement.value)}` : ""}` : guard.kind;
+const guardsOf = (result: FlowResult) => result.uses.filter((use) => use.path.length > 0).map((use) => use.guards.map(guardText));
 const frontiers = (result: FlowResult) => result.frontiers.map((frontier) => `${frontier.at.line - HEADER_LINES} ${frontier.cause}${frontier.detail === undefined ? "" : `:${frontier.detail}`}`);
 const next = (result: FlowResult) =>
   result.next.map(({ carrier }) => {
@@ -251,28 +257,73 @@ test("each guard form protects the reads it dominates and no others", async () =
   const result = await follow([file], parameterOrder, "owner");
   assert.deepEqual(uses(result), [
     "3 owner.name|owner dereference [optional-chain]",
-    "4 owner.name|owner dereference [truthiness]",
-    "5 owner.name|owner dereference [comparison]",
-    "6 owner.name|owner dereference [comparison]",
-    "7 owner.name|owner dereference [truthiness]",
-    "8 owner.name|owner dereference [truthiness]",
+    "4 owner.name|owner dereference [condition]",
+    "5 owner.name|owner dereference [condition]",
+    "6 owner.name|owner dereference [condition]",
+    "7 owner.name|owner dereference [condition]",
+    "8 owner.name|owner dereference [condition]",
     "9 owner.name|owner dereference [non-null-assertion]",
     "10 owner.name|owner dereference []",
   ]);
-  assert.deepEqual(result.uses[3]!.guards[0]!.excludes, ["undefined"]);
-  assert.deepEqual(result.uses[2]!.guards[0]!.excludes, ["null", "undefined"]);
+  assert.deepEqual(guardsOf(result).slice(0, 3), [["optional-chain != null true"], ["condition truthy true"], ["condition != null true"]]);
 });
 
 test("an early return or throw on the negation guards the rest of the block", async () => {
   const file = guarded(["if (!order.owner) return", "show(order.owner.name)"]);
   const result = await follow([file], parameterOrder, "owner");
   assert.deepEqual(uses(result), ["4 owner.name|owner dereference [early-exit]"]);
+  assert.deepEqual(guardsOf(result), [["early-exit truthy true"]]);
+});
+
+test("an early exit on an equality states the test and the branch the rest of the block runs in", async () => {
+  const file = guarded(["if (order.owner === null) return", "show(order.owner.name)"]);
+  const result = await follow([file], parameterOrder, "owner");
+  assert.deepEqual(guardsOf(result), [["early-exit === null false"]]);
+});
+
+test("a truthiness or absence test states its operator, operand and the branch the use sits in", async () => {
+  const file = guarded([
+    "if (!order.owner) { show(order.owner.name) }",
+    "if (order.owner == null) {} else { show(order.owner.name) }",
+    "if (null !== order.owner) { show(order.owner.name) }",
+    "if (undefined === order.owner) { show(order.owner.name) }",
+  ]);
+  const result = await follow([file], parameterOrder, "owner");
+  assert.deepEqual(guardsOf(result), [["condition truthy false"], ["condition == null false"], ["condition !== null true"], ["condition === undefined true"]]);
+});
+
+test("an equality with a literal the code writes keeps the literal and its sign", async () => {
+  const file = guarded(["if (order.owner === 'a') { show(order.owner.name) }", "if (-1 !== order.owner) { show(order.owner.name) }", "if (order.owner == true) { show(order.owner.name) }"]);
+  const result = await follow([file], parameterOrder, "owner");
+  assert.deepEqual(guardsOf(result), [['condition === "a" true'], ["condition !== -1 true"], ["condition == true true"]]);
+});
+
+test("typeof of the covered path is a test in either operand order", async () => {
+  const file = guarded(["if (typeof order.owner === 'object') { show(order.owner.name) }", "if ('string' !== typeof order.owner) { show(order.owner.name) }"]);
+  const result = await follow([file], parameterOrder, "owner");
+  assert.deepEqual(guardsOf(result), [["condition typeof === object true"], ["condition typeof !== string true"]]);
+});
+
+test("Array.isArray is an array test only when Array is the global", async () => {
+  const file = source("g.ts", [
+    "class Page {",
+    "  use(order: Order) { if (Array.isArray(order.owner)) { show(order.owner.name) } }",
+    "  shadowed(order: Order, Array: Arrays) { if (Array.isArray(order.owner)) { show(order.owner.name) } }",
+    "}",
+  ]);
+  const global = await follow([file], { kind: "parameter", repo: "repo", file: "g.ts", symbol: "use", line: at(2), index: 0 }, "owner");
+  const shadowed = await follow([file], { kind: "parameter", repo: "repo", file: "g.ts", symbol: "shadowed", line: at(3), index: 0 }, "owner");
+  assert.deepEqual(guardsOf(global), [["condition array true"]]);
+  assert.deepEqual(guardsOf(shadowed), [[]]);
+  const declared = source("h.ts", ["const Array = helpers", "class Page {", "  use(order: Order) { if (Array.isArray(order.owner)) { show(order.owner.name) } }", "}"]);
+  assert.deepEqual(guardsOf(await follow([declared], { kind: "parameter", repo: "repo", file: "h.ts", symbol: "use", line: at(3), index: 0 }, "owner")), [[]]);
 });
 
 test("a guard that tests a different path or sits in the other branch does not protect", async () => {
   const file = guarded(["if (order.id) { show(order.owner.name) }", "if (order.owner) {} else { show(order.owner.name) }"]);
   const result = await follow([file], parameterOrder, "owner");
-  assert.deepEqual(uses(result), ["3 owner.name|owner dereference []", "4 owner.name|owner dereference []"]);
+  assert.deepEqual(uses(result), ["3 owner.name|owner dereference []", "4 owner.name|owner dereference [condition]"]);
+  assert.deepEqual(guardsOf(result)[1], ["condition truthy false"]);
 });
 
 test("user type guards and instanceof leave the read opaque", async () => {
@@ -292,8 +343,7 @@ test("user type guards and instanceof leave the read opaque", async () => {
 test("a fallback on the changed value guards what it flows to; a destructuring default covers undefined only", async () => {
   const file = guarded(["const owner = order.owner ?? {}", "show(owner.name)", "const { owner: second = {} } = order", "show(second.name)"]);
   const result = await follow([file], parameterOrder, "owner");
-  assert.deepEqual(uses(result), ["4 name|[] dereference [fallback]", "6 name|[] dereference [fallback]"]);
-  assert.deepEqual(result.uses[1]!.guards[0]!.excludes, ["undefined"]);
+  assert.deepEqual(guardsOf(result), [["fallback != null true -> {}"], ["fallback !== undefined true -> {}"]]);
 });
 
 test("operations on the exact changed value: dereference, consume and unmodelled", async () => {
@@ -566,7 +616,7 @@ test("a call that only reports a resource's state is no loss of its value; a cal
 test("a guard inside a closure decides its reads even when another guard sits outside it", async () => {
   const file = plain(["if (o.owner) {", "  const f = () => { if (o.owner) show(o.owner.name) }", "  f()", "}"]);
   const result = await follow([file], paramO, "owner");
-  assert.deepEqual(uses(result), ["3 owner.name|owner dereference [truthiness]"]);
+  assert.deepEqual(uses(result), ["3 owner.name|owner dereference [condition]"]);
   assert.deepEqual(frontiers(result), []);
 });
 
@@ -675,10 +725,40 @@ test("a local function declaration is the callee over a top-level one of the sam
   assert.deepEqual(next(result), ["parameter render#0@3 owner"]);
 });
 
-test("a fallback guards only when its value is proven present", async () => {
-  const file = plain(["const a = o.owner ?? null", "show(a.name)", "const b = o.owner ?? {}", "show(b.name)", "const { owner: c = null } = o", "show(c.name)"]);
+test("every fallback on the changed value is a guard whose replacement is the JSON the right side writes, or opaque", async () => {
+  const file = plain([
+    "show((o.owner ?? null).name)",
+    "show((o.owner ?? [1, 'b']).length)",
+    "show((o.owner || 'x').length)",
+    "show((o.owner ?? -1).toFixed())",
+    "show((o.owner ?? <Owner>{ a: [true], 'b': 2, 3: null }).name)",
+    "show((o.owner ?? make()).name)",
+    "show((o.owner ?? { ...rest }).name)",
+    "show((o.owner ?? { name }).name)",
+    "show((o.owner ?? [...rest]).length)",
+    "show((o.owner ?? `t`).length)",
+    "show((o.owner ?? `t${x}`).length)",
+  ]);
   const result = await follow([file], paramO, "owner");
-  assert.deepEqual(uses(result), ["3 name|[] dereference []", "5 name|[] dereference [fallback]", "7 name|[] dereference []"]);
+  assert.deepEqual(guardsOf(result), [
+    ["fallback != null true -> null"],
+    ["fallback != null true -> [1,\"b\"]"],
+    ["fallback truthy true -> \"x\""],
+    ["fallback != null true -> -1"],
+    ["fallback != null true -> {\"3\":null,\"a\":[true],\"b\":2}"],
+    ["fallback != null true -> opaque"],
+    ["fallback != null true -> opaque"],
+    ["fallback != null true -> opaque"],
+    ["fallback != null true -> opaque"],
+    ["fallback != null true -> \"t\""],
+    ["fallback != null true -> opaque"],
+  ]);
+});
+
+test("guards are listed in the order the value passes them: a fallback before the condition that tests its result", async () => {
+  const file = plain(["const owner = o.owner ?? null", "if (owner) { show(owner.name) }"]);
+  const result = await follow([file], paramO, "owner");
+  assert.deepEqual(guardsOf(result), [["fallback != null true -> null", "condition truthy true"]]);
 });
 
 test("an async or generator projection does not emit the response", async () => {

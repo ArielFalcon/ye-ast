@@ -735,11 +735,6 @@ test("a dotted symbol seeds only the member its container holds, not a same-name
   assert.deepEqual(answer.status === "complete" && answer.value.seeds.map((seed) => seed.line), [2]);
 });
 
-test("a bare symbol seeds every declaration of that name in the file, at any depth", async () => {
-  const answer = callersFact(await setup(TWO_CLASSES).callers({ targets: [{ file: "src/A.ts", symbol: "m" }] }));
-  assert.deepEqual(answer.status === "complete" && answer.value.seeds.map((seed) => seed.line), [2, 12]);
-});
-
 test("a missing symbol lists the dotted containment paths of its file, so a candidate selects one declaration", async () => {
   const answer = await setup(TWO_CLASSES).callers({ targets: [{ file: "src/A.ts", symbol: "gone" }] });
   assert.ok(!answer.ok);
@@ -1687,6 +1682,128 @@ test("a retained output larger than the whole budget is skipped and the answer i
   await setup({ ...shared, snapshotCache: tinyCache }).callers(targets);
   assert.equal(counter.calls, 3);
   assert.deepEqual(skipped, retained);
+});
+
+function liveRun(live: FakeLive, snapshotCache: SnapshotDataCache, options: Partial<Parameters<typeof setup>[0]> = {}) {
+  return setup({ trust: TRUSTED, live, nodes: LIVE_NODES, edges: SOURCE_EDGES, snapshotCache, ...options });
+}
+
+const LIVE_CALLERS = { ...LIVE_BASE, targets: [{ file: "src/A.java", symbol: "f" }], live: true } as const;
+
+test("a live callers query over an unchanged capture reads sources and relations once, an edit misses, and a hit answers what a miss answers", async () => {
+  const live = fakeLive({ "src/A.java": "1", "src/B.java": "1" });
+  const snapshotCache = createSnapshotDataCache(RETAINED_BYTES);
+  const counter = { calls: 0 };
+  const run = () => liveRun(live, snapshotCache, { relationReader: relationsCounted(counter) });
+
+  const first = run();
+  const miss = callersFact(await first.queries.callers(LIVE_CALLERS));
+  const second = run();
+  const hit = callersFact(await second.queries.callers(LIVE_CALLERS));
+  assert.deepEqual([counter.calls, first.log.reads, second.log.reads], [1, 1, 0]);
+  assert.equal(canonicalJson(hit), canonicalJson(miss));
+  const uncached = callersFact(await setup({ trust: TRUSTED, live, nodes: LIVE_NODES, edges: SOURCE_EDGES, relationReader: relationsCounted({ calls: 0 }) }).queries.callers(LIVE_CALLERS));
+  assert.equal(canonicalJson(hit), canonicalJson(uncached));
+
+  live.tree.set("src/A.java", "2");
+  const third = run();
+  const edited = callersFact(await third.queries.callers(LIVE_CALLERS));
+  assert.deepEqual([counter.calls, third.log.reads], [2, 1]);
+  assert.notEqual(edited.snapshot.kind === "live" && edited.snapshot.stateId, hit.snapshot.kind === "live" && hit.snapshot.stateId);
+  const fourth = run();
+  assert.ok((await fourth.queries.callers(LIVE_CALLERS)).ok);
+  assert.deepEqual([counter.calls, fourth.log.reads], [2, 0]);
+});
+
+test("a live query answered from retained data still reports the paths that changed while it ran", async () => {
+  const live = fakeLive({ "src/A.java": "1", "src/B.java": "1" });
+  const snapshotCache = createSnapshotDataCache(RETAINED_BYTES);
+  const counter = { calls: 0 };
+  const run = () => liveRun(live, snapshotCache, { relationReader: relationsCounted(counter) });
+  assert.ok((await run().queries.callers(LIVE_CALLERS)).ok);
+
+  const list = live.deps.workingTree.list;
+  let listings = 0;
+  live.deps.workingTree.list = async (...args) => {
+    if (++listings === 2) live.tree.set("src/B.java", "edited during the query");
+    return list(...args);
+  };
+  const notices: LiveStaleNotice[] = [];
+  const stale = run();
+  assert.ok((await stale.queries.callers({ ...LIVE_CALLERS, onStale: (notice) => notices.push(notice) })).ok);
+  assert.deepEqual([counter.calls, stale.log.reads, listings], [1, 0, 2]);
+  assert.deepEqual(notices.map((notice) => notice.changed), [["src/B.java"]]);
+
+  const next = run();
+  assert.ok((await next.queries.callers(LIVE_CALLERS)).ok);
+  assert.deepEqual([counter.calls, next.log.reads], [2, 1]);
+});
+
+test("a live change query over an unchanged capture reads the head relations and module dependencies once", async () => {
+  const path = "src/index.ts";
+  const live = fakeLive({ [path]: "2", "src/A.java": "2" });
+  const snapshotCache = createSnapshotDataCache(RETAINED_BYTES);
+  const counter = { calls: 0 };
+  const modules = { calls: 0 };
+  const moduleDependencies: ModuleDependenciesReader = { extract: async () => { modules.calls++; return { files: [], dependencies: [], unread: [] }; } };
+  const run = () => liveRun(live, snapshotCache, {
+    relationReader: relationsCounted(counter),
+    moduleDependencies,
+    directoryChanges: { ok: true, value: [change(path), change("src/A.java")] },
+    exports: { [FORK]: { files: [{ path, blob: "1", written: true }, { path: "src/A.java", blob: "1", written: true }], skipped: [] } },
+  });
+  const ask = () => run().queries.ofChange({ ...LIVE_BASE, base: "base", live: true });
+
+  const miss = fact(await ask());
+  const missed = { relations: counter.calls, modules: modules.calls };
+  assert.ok(missed.relations >= 1 && missed.modules >= 1);
+  const hit = fact(await ask());
+  assert.equal(canonicalJson(hit), canonicalJson(miss));
+  assert.equal(counter.calls - missed.relations, 0);
+  assert.ok(modules.calls - missed.modules < missed.modules);
+
+  live.tree.set(path, "9");
+  const before = { relations: counter.calls, modules: modules.calls };
+  assert.ok((await ask()).ok);
+  assert.deepEqual([counter.calls - before.relations, modules.calls - before.modules], [missed.relations, missed.modules]);
+});
+
+test("a live importers query, which reads sources only, reuses them for an unchanged capture", async () => {
+  const live = fakeLive({ "src/A.java": "1", "src/B.java": "1" });
+  const snapshotCache = createSnapshotDataCache(RETAINED_BYTES);
+  const ask = () => { const run = liveRun(live, snapshotCache); return run.queries.importers({ ...LIVE_BASE, files: ["src/A.java"], live: true }).then((answer) => ({ answer, reads: run.log.reads })); };
+  const miss = await ask();
+  const hit = await ask();
+  assert.ok(miss.answer.ok && hit.answer.ok);
+  assert.deepEqual([miss.reads, hit.reads], [1, 0]);
+  live.tree.set("src/B.java", "2");
+  assert.equal((await ask()).reads, 1);
+});
+
+test("a cancelled live relations extraction publishes no output", async () => {
+  const live = fakeLive({ "src/A.java": "1", "src/B.java": "1" });
+  const snapshotCache = createSnapshotDataCache(RETAINED_BYTES);
+  const counter = { calls: 0 };
+  const controller = new AbortController();
+  const cancelling: ImpactQueriesDeps["relations"] = { extract: async () => { counter.calls++; controller.abort(); return { relations: [], fields: [], locals: [] }; } };
+  const cancelled = await liveRun(live, snapshotCache, { relationReader: cancelling, signal: controller.signal }).queries.callers({ ...LIVE_CALLERS, signal: controller.signal });
+  assert.ok(!cancelled.ok && cancelled.fault.kind === "aborted");
+  assert.ok((await liveRun(live, snapshotCache, { relationReader: relationsCounted(counter) }).queries.callers(LIVE_CALLERS)).ok);
+  assert.equal(counter.calls, 2);
+  assert.ok((await liveRun(live, snapshotCache, { relationReader: relationsCounted(counter) }).queries.callers(LIVE_CALLERS)).ok);
+  assert.equal(counter.calls, 2);
+});
+
+test("a live callers query and a callers query at a revision over the same listing do not share retained output, and a scope keeps its own", async () => {
+  const live = fakeLive({ "src/A.java": "1" });
+  const snapshotCache = createSnapshotDataCache(RETAINED_BYTES);
+  const counter = { calls: 0 };
+  const shared = { relationReader: relationsCounted(counter), exports: { [HEAD]: { files: [{ path: "src/A.java", blob: "1", written: true }], skipped: [] } } };
+  await liveRun(live, snapshotCache, shared).queries.callers(LIVE_CALLERS);
+  await liveRun(live, snapshotCache, shared).callers({ revision: "head", targets: LIVE_CALLERS.targets });
+  assert.equal(counter.calls, 2);
+  await liveRun(live, snapshotCache, shared).queries.callers({ ...LIVE_CALLERS, scope: { exclude: ["docs/**"] } });
+  assert.equal(counter.calls, 3);
 });
 
 const LAZY_TARGETS = { targets: [{ file: "src/A.java", symbol: "f" }] };

@@ -1,4 +1,4 @@
-import { resultFields } from "../mcp/test-session.ts";
+import { resultFields } from "../mcp/test-session.testing.ts";
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";

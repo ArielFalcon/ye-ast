@@ -8,7 +8,7 @@ import type { ImportOriginSite, ImportOrigins } from "../../ports/import-origins
 import type { CommitExtraction } from "../snapshot/read-snapshot.ts";
 
 /** The head's sources the walk reads: written, in scope, and of a kind an extractor covers. */
-export function sourceFilesOf(headTree: Pick<CommitExtraction, "export">): string[] {
+function sourceFilesOf(headTree: Pick<CommitExtraction, "export">): string[] {
   return headTree.export.files.filter((file) => file.written && kindOfChangedFile(file.path) === "source").map((file) => file.path);
 }
 

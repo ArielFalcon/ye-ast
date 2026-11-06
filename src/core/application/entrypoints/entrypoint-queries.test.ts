@@ -9,6 +9,8 @@ import type { EntrypointExtractor, SourceFile } from "../../ports/entrypoint-ext
 import type { ScratchDirectory } from "../../ports/scratch-directory.port.ts";
 import type { SourceReader } from "../../ports/source-reader.port.ts";
 import type { CommitExport, ExportBudget, ExportedFile, ExportPlan, ExportStop, SkippedEntry, Vcs, VcsFault } from "../../ports/vcs.port.ts";
+import { canonicalJson } from "../../domain/shared/canonical-json.ts";
+import { createSnapshotDataCache } from "../snapshot/snapshot-data-cache.ts";
 import { declaredScope } from "../../domain/map/entrypoint-map.ts";
 import { isPackageManifest } from "../../domain/languages/typescript.ts";
 import { createEntrypointQueries, type EntrypointQueriesDeps } from "./entrypoint-queries.ts";
@@ -595,14 +597,53 @@ test("an exclude leaves the configuration out, so the sources it interprets are 
   assert.deepEqual(section.value.map((item) => item.status), ["unknown"]);
 });
 
-test("live reads bypass the cross-request SHA data cache", async () => {
-  const live = fakeLive({ "src/Orders.java": "b1" });
-  const { deps, readPaths } = setup({ live, trust: { read: async () => ({ ok: true, value: "trusted" }) } });
-  let cacheCalls = 0;
-  deps.snapshotCache = { get: () => { cacheCalls++; return undefined; }, put: () => { cacheCalls++; } };
+test("a live map over an unchanged capture reads and extracts once, an edit misses, and a hit answers what a miss answers", async () => {
+  const live = fakeLive({ "src/Orders.java": "b1" }, DIGEST);
+  let extractions = 0;
+  const { deps, readPaths } = setup({ live, trust: TRUSTED, files: [ORDERS], extract: async () => (extractions++, [route("/orders", 3)]) });
+  deps.snapshotCache = createSnapshotDataCache(1 << 20);
   const queries = createEntrypointQueries(deps);
-  for (let i = 0; i < 2; i++) assert.ok((await queries.map({ repo: REQUEST.repo, repoId: REQUEST.repoId, live: true })).ok);
-  assert.equal(cacheCalls, 0);
-  assert.deepEqual(readPaths, ["src/Orders.java", "src/Orders.java"]);
-  assert.deepEqual(live.held, { locks: 2, released: 2 });
+  const ask = () => queries.map({ repo: REQUEST.repo, repoId: REQUEST.repoId, live: true });
+
+  const miss = await ask();
+  const hit = await ask();
+  assert.ok(miss.ok && hit.ok);
+  assert.deepEqual([extractions, readPaths.length], [1, 1]);
+  assert.equal(canonicalJson(hit.value), canonicalJson(miss.value));
+
+  live.tree.set("src/Orders.java", "b9");
+  const edited = await ask();
+  assert.ok(edited.ok);
+  assert.deepEqual([extractions, readPaths.length], [2, 2]);
+  assert.notEqual(edited.value.inputs.content, miss.value.inputs.content);
+  assert.ok((await ask()).ok);
+  assert.equal(extractions, 2);
+  assert.deepEqual(live.held, { locks: 4, released: 4 });
+});
+
+test("a live map under another scope does not reuse the data retained for the first", async () => {
+  const live = fakeLive({ "src/Orders.java": "b1" }, DIGEST);
+  let extractions = 0;
+  const { deps } = setup({ live, trust: TRUSTED, files: [ORDERS], extract: async () => (extractions++, []) });
+  deps.snapshotCache = createSnapshotDataCache(1 << 20);
+  const queries = createEntrypointQueries(deps);
+  const live1 = { repo: REQUEST.repo, repoId: REQUEST.repoId, live: true } as const;
+  assert.ok((await queries.map(live1)).ok);
+  assert.ok((await queries.map({ ...live1, scope: { exclude: ["docs/**"] } })).ok);
+  assert.equal(extractions, 2);
+});
+
+test("a live map cancelled during extraction publishes nothing", async () => {
+  const live = fakeLive({ "src/Orders.java": "b1" }, DIGEST);
+  const controller = new AbortController();
+  let extractions = 0;
+  const { deps } = setup({ live, trust: TRUSTED, files: [ORDERS], extract: async () => (extractions++, controller.abort(), []) });
+  deps.snapshotCache = createSnapshotDataCache(1 << 20);
+  const queries = createEntrypointQueries(deps);
+  const cancelled = await queries.map({ repo: REQUEST.repo, repoId: REQUEST.repoId, live: true, signal: controller.signal });
+  assert.ok(!cancelled.ok && cancelled.fault.kind === "aborted");
+  assert.ok((await queries.map({ repo: REQUEST.repo, repoId: REQUEST.repoId, live: true })).ok);
+  assert.equal(extractions, 2);
+  assert.ok((await queries.map({ repo: REQUEST.repo, repoId: REQUEST.repoId, live: true })).ok);
+  assert.equal(extractions, 2);
 });

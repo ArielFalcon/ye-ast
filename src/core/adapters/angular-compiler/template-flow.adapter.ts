@@ -11,6 +11,8 @@ import {
   ImplicitReceiver,
   Interpolation,
   KeyedRead,
+  LiteralArray,
+  LiteralMap,
   LiteralPrimitive,
   NonNullAssert,
   ParenthesizedExpression,
@@ -40,8 +42,8 @@ import {
 } from "@angular/compiler";
 import { ELEMENT, relatePaths, startsWith, type AccessPath } from "../../domain/contracts/access-path.ts";
 import { RESOURCE_STATE_MEMBERS, templateUnreadable, type FlowFrontier, type FlowNext, type FlowResult, type FlowStep, type FlowUse, type FrontierCause, type Hop } from "../../domain/contracts/consumer-flow.ts";
-import type { AccessStep, Literal, UseEnd } from "../../domain/contracts/use-operation.ts";
-import type { Absence, Guard, GuardKind } from "../../domain/contracts/verdict.ts";
+import type { AccessStep, EqualityOperator, JsonValue, Literal, Predicate, Replacement, UseEnd } from "../../domain/contracts/use-operation.ts";
+import type { Absence, Guard } from "../../domain/contracts/verdict.ts";
 import type { Evidence } from "../../domain/shared/fact.ts";
 import type { SymbolRef } from "../../domain/relations/relation.ts";
 import type { MemberCarrier } from "../../ports/consumer-template.port.ts";
@@ -65,8 +67,9 @@ function follow(unit: TemplateUnit, carrier: MemberCarrier): FlowResult {
 }
 
 const BOTH: readonly Absence[] = ["null", "undefined"];
-const NULL_ONLY: readonly Absence[] = ["null"];
-const UNDEFINED_ONLY: readonly Absence[] = ["undefined"];
+const PRESENT: Predicate = { kind: "absence", operator: "!=", absence: "null" };
+const TRUTHY: Predicate = { kind: "truthy" };
+const OPAQUE: Replacement = { kind: "opaque" };
 const COMPARISONS: ReadonlySet<string> = new Set(["==", "!=", "===", "!=="]);
 const RELATIONS: ReadonlySet<string> = new Set([...COMPARISONS, "<", "<=", ">", ">="]);
 
@@ -106,6 +109,9 @@ interface Alias {
   hops: readonly Hop[];
 }
 
+/** A guard without the position the adapter gives it. */
+type Stated<G extends Guard = Guard> = G extends Guard ? Omit<G, "covers" | "evidence"> : never;
+
 interface At<T> {
   offset: number;
   value: T;
@@ -114,6 +120,44 @@ interface At<T> {
 function core(ast: AST): AST {
   if (ast instanceof ASTWithSource) return core(ast.ast);
   return ast instanceof ParenthesizedExpression ? core(ast.expression) : ast;
+}
+
+function absenceOf(ast: AST): Absence | undefined {
+  const node = core(ast);
+  if (!(node instanceof LiteralPrimitive)) return undefined;
+  return node.value === null ? "null" : node.value === undefined ? "undefined" : undefined;
+}
+
+function literalOf(ast: AST): Literal | undefined {
+  const node = core(ast);
+  if (node instanceof Unary) {
+    const operand = literalOf(node.expr);
+    return node.operator === "-" && typeof operand === "number" ? -operand : undefined;
+  }
+  return node instanceof LiteralPrimitive && (typeof node.value === "string" || typeof node.value === "number" || typeof node.value === "boolean") ? node.value : undefined;
+}
+
+/** The JSON value an expression writes literally; undefined for anything else. */
+function jsonOf(ast: AST): JsonValue | undefined {
+  const node = core(ast);
+  if (absenceOf(node) === "null") return null;
+  const literal = literalOf(node);
+  if (literal !== undefined) return literal;
+  if (node instanceof LiteralArray) {
+    const items = node.expressions.map(jsonOf);
+    return items.every((item) => item !== undefined) ? items : undefined;
+  }
+  if (node instanceof LiteralMap) {
+    const entries: [string, JsonValue][] = [];
+    for (const [index, key] of node.keys.entries()) {
+      if (key.kind !== "property") return undefined;
+      const value = jsonOf(node.values[index]!);
+      if (value === undefined) return undefined;
+      entries.push([key.key, value]);
+    }
+    return Object.fromEntries(entries);
+  }
+  return undefined;
 }
 
 class Children extends RecursiveAstVisitor {
@@ -192,9 +236,11 @@ class TemplateFlow extends CombinedRecursiveAstVisitor {
   }
 
   override visitIfBlock(block: TmplAstIfBlock): void {
+    let rejected: readonly Guard[] = [];
     for (const branch of block.branches) {
-      const established = branch.expression === null ? [] : this.guardsOf(branch.expression);
+      const established = [...rejected, ...(branch.expression === null ? [] : this.guardsOf(branch.expression))];
       if (branch.expression !== null) {
+        rejected = [...rejected, ...this.guardsOf(branch.expression, false)];
         this.expr(branch.expression, TEST);
         const tracked = this.peek(branch.expression);
         if (branch.expressionAlias !== null && tracked !== undefined) this.alias(branch.expressionAlias, tracked.offset, tracked, "template-read", branch.sourceSpan.start.offset);
@@ -240,10 +286,14 @@ class TemplateFlow extends CombinedRecursiveAstVisitor {
     return { path: this.unit.path, line: this.unit.firstLine + this.lineStarts.findLastIndex((start) => start <= offset) };
   }
 
-  private guard(kind: GuardKind, on: Tracked, excludes: readonly Absence[], node: AST): Guard {
-    const guard: Guard = { kind, covers: on.offset, excludes, evidence: this.evidence(node.sourceSpan.start) };
+  private guard(on: Tracked, node: AST, stated: Stated): Guard {
+    const guard: Guard = { ...stated, covers: on.offset, evidence: this.evidence(node.sourceSpan.start) };
     this.guardSlots.set(guard, on.slots);
     return guard;
+  }
+
+  private optionalChain(on: Tracked, node: AST): Guard {
+    return this.guard(on, node, { kind: "optional-chain", test: PRESENT, holds: true });
   }
 
   /** A guard on one element says nothing about another, so it applies only where its elements are the read's. */
@@ -302,7 +352,7 @@ class TemplateFlow extends CombinedRecursiveAstVisitor {
         receiver && {
           ...receiver,
           offset: [...receiver.offset, node.name],
-          guards: [...receiver.guards, this.guard("optional-chain", receiver, BOTH, node)],
+          guards: [...receiver.guards, this.optionalChain(receiver, node)],
           steps: this.access(receiver, { kind: "member", name: node.name, optional: true }),
         }
       );
@@ -310,7 +360,7 @@ class TemplateFlow extends CombinedRecursiveAstVisitor {
     if (node instanceof KeyedRead || node instanceof SafeKeyedRead) return this.keyed(node);
     if (node instanceof NonNullAssert) {
       const inner = this.chain(node.expression);
-      return inner && { ...inner, guards: [...inner.guards, this.guard("non-null-assertion", inner, BOTH, node)] };
+      return inner && { ...inner, guards: [...inner.guards, this.guard(inner, node, { kind: "non-null-assertion" })] };
     }
     if (node instanceof BindingPipe) return this.chain(node.exp);
     if (node instanceof Binary) return this.chain(node.left);
@@ -322,7 +372,7 @@ class TemplateFlow extends CombinedRecursiveAstVisitor {
     const receiver = this.chain(node.receiver);
     if (receiver === undefined) return undefined;
     const key = core(node.key);
-    const guards = node instanceof SafeKeyedRead ? [...receiver.guards, this.guard("optional-chain", receiver, BOTH, node)] : receiver.guards;
+    const guards = node instanceof SafeKeyedRead ? [...receiver.guards, this.optionalChain(receiver, node)] : receiver.guards;
     const optional = node instanceof SafeKeyedRead;
     if (key instanceof LiteralPrimitive && typeof key.value === "number") {
       return { ...receiver, offset: [...receiver.offset, ELEMENT], slots: [...receiver.slots, `index:${key.value}`], guards, steps: this.access(receiver, { kind: "keyed", key: key.value, optional }) };
@@ -354,14 +404,14 @@ class TemplateFlow extends CombinedRecursiveAstVisitor {
     const callee = core(node.receiver);
     if (node.args.length === 0 && this.readsSignal(callee)) {
       const read = this.chain(callee);
-      return read && (node instanceof SafeCall ? { ...read, guards: [...read.guards, this.guard("optional-chain", read, BOTH, node)] } : read);
+      return read && (node instanceof SafeCall ? { ...read, guards: [...read.guards, this.optionalChain(read, node)] } : read);
     }
     const method = callee instanceof PropertyRead || callee instanceof SafePropertyRead ? callee : undefined;
     const prefix = node.args.length === 0 ? "method" : "call";
     const holder = this.chain(method === undefined ? callee : method.receiver);
     const reportsState = method !== undefined && holder !== undefined && this.changed[holder.offset.length] === "value" && RESOURCE_STATE_MEMBERS.has(method.name);
     if (holder !== undefined && !reportsState) {
-      const guarded = node instanceof SafeCall || method instanceof SafePropertyRead ? [...holder.guards, this.guard("optional-chain", holder, BOTH, node)] : holder.guards;
+      const guarded = node instanceof SafeCall || method instanceof SafePropertyRead ? [...holder.guards, this.optionalChain(holder, node)] : holder.guards;
       const changedMethod = method !== undefined && relatePaths([...holder.offset, method.name], this.changed) === "exact";
       const called = changedMethod ? { ...holder, offset: [...holder.offset, method.name] } : { ...holder, steps: method === undefined ? holder.steps : this.access(holder, { kind: "member", name: method.name, optional: method instanceof SafePropertyRead }) };
       const steps = this.access(called, { kind: "call", optional: node instanceof SafeCall });
@@ -405,7 +455,7 @@ class TemplateFlow extends CombinedRecursiveAstVisitor {
   private conditional(node: Conditional, sink: Sink): void {
     this.expr(node.condition, TEST);
     this.within(this.guardsOf(node.condition), () => this.expr(node.trueExp, sink));
-    this.expr(node.falseExp, sink);
+    this.within(this.guardsOf(node.condition, false), () => this.expr(node.falseExp, sink));
   }
 
   private binary(node: Binary, sink: Sink): void {
@@ -425,58 +475,61 @@ class TemplateFlow extends CombinedRecursiveAstVisitor {
     const nullish = COMPARISONS.has(operation);
     const against = (other: AST): Sink => {
       if (!RELATIONS.has(operation)) return consuming({ kind: "coerce", operator: operation });
-      const literal = this.literalOf(other);
+      const literal = literalOf(other);
       return consuming({ kind: "compare", operator: operation, ...(literal === undefined ? {} : { literal }) });
     };
     this.expr(left, nullish && this.isAbsent(right) ? TEST : against(right));
     this.expr(right, nullish && this.isAbsent(left) ? TEST : against(left));
   }
 
-  private literalOf(ast: AST): Literal | undefined {
-    const node = core(ast);
-    if (node instanceof Unary) {
-      const operand = this.literalOf(node.expr);
-      return node.operator === "-" && typeof operand === "number" ? -operand : undefined;
-    }
-    return node instanceof LiteralPrimitive && (typeof node.value === "string" || typeof node.value === "number" || typeof node.value === "boolean") ? node.value : undefined;
-  }
-
-  /** `??` and `||` on the changed value: it is replaced where absent, and shown otherwise. */
+  /** `??` and `||` on the changed value: it is replaced where absent (`??`) or falsy (`||`), and shown otherwise. */
   private fallback(node: Binary, sink: Sink): void {
     if (!this.tracks(node.left)) return this.expr(node.left, sink);
     const tracked = this.chain(node.left);
     if (tracked === undefined) return;
-    if (relatePaths(tracked.offset, this.changed) === "exact") this.use(tracked, HANDED_ON, node.left, [this.guard("fallback", tracked, BOTH, node)]);
-    else this.end(tracked, sink, node.left);
+    if (relatePaths(tracked.offset, this.changed) !== "exact") return this.end(tracked, sink, node.left);
+    const replacement = jsonOf(node.right);
+    const test = node.operation === "??" ? PRESENT : TRUTHY;
+    this.use(tracked, HANDED_ON, node.left, [this.guard(tracked, node, { kind: "fallback", test, holds: true, replacement: replacement === undefined ? OPAQUE : { kind: "literal", value: replacement } })]);
   }
 
   private isAbsent(ast: AST): boolean {
-    const node = core(ast);
-    return node instanceof LiteralPrimitive && (node.value === null || node.value === undefined);
+    return absenceOf(ast) !== undefined;
   }
 
-  /** What holds where `ast` is truthy: a test of a prefix that includes the changed segment, or of an alias of it. */
-  private guardsOf(ast: AST): Guard[] {
+  /** What holds where `ast` evaluates to `holds`: a test of a prefix that includes the changed segment, or of an alias of it. */
+  private guardsOf(ast: AST, holds = true): Guard[] {
     const node = core(ast);
+    if (node instanceof PrefixNot) return this.guardsOf(node.expression, !holds);
     if (node instanceof Binary && !(node instanceof Unary)) {
-      if (node.operation === "&&") return [...this.guardsOf(node.left), ...this.guardsOf(node.right)];
-      return COMPARISONS.has(node.operation) ? this.presence(node) : [];
-    }
-    if (node instanceof PrefixNot) {
-      const inner = core(node.expression);
-      return inner instanceof PrefixNot ? this.guardsOf(inner.expression) : [];
+      if (node.operation === "&&") return holds ? [...this.guardsOf(node.left), ...this.guardsOf(node.right)] : [];
+      if (node.operation === "||") return holds ? [] : [...this.guardsOf(node.left, false), ...this.guardsOf(node.right, false)];
+      return COMPARISONS.has(node.operation) ? this.equality(node, holds) : [];
     }
     const tracked = this.peek(node);
-    return tracked === undefined ? [] : [this.guard("truthiness", tracked, BOTH, node)];
+    return tracked === undefined ? [] : [this.guard(tracked, node, { kind: "condition", test: TRUTHY, holds })];
   }
 
-  private presence(node: Binary): Guard[] {
-    if (node.operation !== "!=" && node.operation !== "!==") return [];
-    const [value, tracked] = this.isAbsent(node.right) ? [core(node.right), this.peek(node.left)] : [core(node.left), this.peek(node.right)];
-    if (tracked === undefined || !this.isAbsent(value)) return [];
-    const absent = (value as LiteralPrimitive).value;
-    const excludes = node.operation === "!=" ? BOTH : absent === null ? NULL_ONLY : UNDEFINED_ONLY;
-    return [this.guard("comparison", tracked, excludes, node)];
+  /** An equality of a tracked path with an absence, a literal the template writes, or (through `typeof`) a type name, in either order. */
+  private equality(node: Binary, holds: boolean): Guard[] {
+    const operator = node.operation as EqualityOperator;
+    const tested = this.tested(node.left, node.right, operator) ?? this.tested(node.right, node.left, operator);
+    return tested === undefined ? [] : [this.guard(tested.on, node, { kind: "condition", test: tested.test, holds })];
+  }
+
+  private tested(subject: AST, other: AST, operator: EqualityOperator): { on: Tracked; test: Predicate } | undefined {
+    const side = core(subject);
+    if (side instanceof TypeofExpression) {
+      const type = literalOf(other);
+      const on = this.peek(side.expression);
+      return on && typeof type === "string" ? { on, test: { kind: "typeof", operator, type } } : undefined;
+    }
+    const on = this.peek(side);
+    if (on === undefined) return undefined;
+    const absence = absenceOf(other);
+    if (absence !== undefined) return { on, test: { kind: "absence", operator, absence } };
+    const literal = literalOf(other);
+    return literal === undefined ? undefined : { on, test: { kind: "literal", operator, literal } };
   }
 
   private end(tracked: Tracked, sink: Sink, node: AST): void {

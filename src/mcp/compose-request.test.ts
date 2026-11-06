@@ -20,7 +20,7 @@ import { runComposition } from "./compose-request.ts";
 import {
   SHA_A, callersValue, decisionsValue, entrypointsValue, factOf, impactValue, importersValue, inputsOf, outlineValue, traceValue,
   unknownFactOf, workspaceValue,
-} from "./composition-fixtures.ts";
+} from "./composition-fixtures.testing.ts";
 
 const SECRET = /secret-[a-z]+/g;
 const digest = { of: (text: string) => createHash("sha256").update(text).digest("hex") };

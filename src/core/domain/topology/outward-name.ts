@@ -72,11 +72,11 @@ export function serviceLabel({ name, kind }: Pick<OutwardName, "name" | "kind">)
   }
 }
 
-export function compareOutwardName(a: OutwardName, b: OutwardName): number {
+function compareOutwardName(a: OutwardName, b: OutwardName): number {
   return compareText(a.name, b.name) || compareText(a.kind, b.kind);
 }
 
-export function compareCandidate(a: NameCandidate, b: NameCandidate): number {
+function compareCandidate(a: NameCandidate, b: NameCandidate): number {
   return compareText(a.name, b.name) || compareText(a.repo, b.repo) || compareText(a.basis, b.basis);
 }
 

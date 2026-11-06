@@ -12,7 +12,7 @@ import type { RefreshedRemote, RemoteRefresh, RemoteRefreshRequest } from "../..
 import { gitEnvironment } from "./git-vcs.adapter.ts";
 
 /** The transports a refresh may use; only these two reach the network (ADR-0016 decision 6). */
-export const DEFAULT_PROTOCOLS = "https:ssh";
+const DEFAULT_PROTOCOLS = "https:ssh";
 
 /** Names the process refreshing one mirror; its liveness decides whether the mirror answers or waits. */
 export const REFRESH_LOCK_SUFFIX = ".lock";

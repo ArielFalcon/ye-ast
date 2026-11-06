@@ -9,9 +9,10 @@ import { INDEX_STORE_DIRECTORY } from "../../ports/code-graph.port.ts";
 import { isEngineConfiguration, isEngineEntry } from "../../ports/staging-rules.ts";
 import type { LiveMirror, MirrorEntry, MirrorFault, MirrorLocation, MirrorLock, MirrorReconciliation, MirrorScopeUsage, MirrorState, MirrorUsage } from "../../ports/live-mirror.port.ts";
 import type { SkippedEntry } from "../../ports/vcs.port.ts";
+import { compareText } from "../../domain/shared/code-node.ts";
 
-export const LIVE_DIRECTORY = "live";
-export const STATE_SUFFIX = ".state.json";
+const LIVE_DIRECTORY = "live";
+const STATE_SUFFIX = ".state.json";
 const INDEX_TREE_DIRECTORY = "index-tree";
 const LOCK_SUFFIX = ".lock";
 const TEMPORARY_SUFFIX = ".tmp";
@@ -20,11 +21,7 @@ const STATE_TEMPORARY = /^(.*)\.state\.json\.[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3
  * Scope-bearing state temporaries become eligible only after this age and a nonblocking scope reservation.
  */
 const TEMPORARY_STALE_MS = 60 * 60 * 1000;
-/**
- * Version 2 adds the index tree: the store moved from the mirror root to `indexRoot`, so a version 1 state records a
- * full build of a store that no longer exists and is discarded, which rebuilds the scope once. Version 3 keeps only
- * the paths an export writes, so a version 2 state records copies nothing reads and is discarded the same way.
- */
+/** A state of another format version is discarded, which rebuilds its scope once. */
 const STATE_FORMAT_VERSION = 3;
 const DIRECTORY_MODE = 0o700;
 const FILE_MODE = 0o600;
@@ -351,9 +348,9 @@ export function createLiveMirror(deps: LiveMirrorDeps = defaultLiveMirrorDeps): 
       }
 
       const reconciliation: MirrorReconciliation = {
-        manifest: next.sort((a, b) => compare(a.path, b.path)),
-        skipped: skipped.sort((a, b) => compare(a.path, b.path)),
-        changed: [...changed].sort(compare),
+        manifest: next.sort((a, b) => compareText(a.path, b.path)),
+        skipped: skipped.sort((a, b) => compareText(a.path, b.path)),
+        changed: [...changed].sort(compareText),
       };
       return { ok: true, value: reconciliation };
     },
@@ -383,7 +380,7 @@ export function createLiveMirror(deps: LiveMirrorDeps = defaultLiveMirrorDeps): 
         }
       }
       for (const entry of manifest) if (!listed.has(entry.path)) changed.add(entry.path);
-      return { ok: true, value: [...changed].sort(compare) };
+      return { ok: true, value: [...changed].sort(compareText) };
     },
 
     async materialize(location, paths, destination, signal) {
@@ -471,7 +468,7 @@ export function createLiveMirror(deps: LiveMirrorDeps = defaultLiveMirrorDeps): 
       }
 
       const scopes: MirrorScopeUsage[] = [];
-      for (const scope of [...directories].sort(compare)) {
+      for (const scope of [...directories].sort(compareText)) {
         const location: MirrorLocation = { repo, scope };
         const record = await readRecord(stateOf(location));
         const holder = await readHolder(lockOf(location));
@@ -484,7 +481,7 @@ export function createLiveMirror(deps: LiveMirrorDeps = defaultLiveMirrorDeps): 
           locked: holder !== null && holder.pid !== null && deps.isAlive(holder.pid),
         });
       }
-      return { ok: true, value: { scopes, debris: debris.sort(compare) } };
+      return { ok: true, value: { scopes, debris: debris.sort(compareText) } };
     },
 
     async touch(location) {
@@ -631,11 +628,6 @@ function sameFile(a: BigIntStats, b: BigIntStats): boolean {
 function unsafe(path: string): boolean {
   return path === "" || path.startsWith("/") || /[\0\\]/.test(path) || path.split("/").some((segment) => segment === "" || segment === "." || segment === "..");
 }
-
-function compare(a: string, b: string): number {
-  return a < b ? -1 : a > b ? 1 : 0;
-}
-
 function parseState(value: unknown): MirrorState | null {
   if (!isRecord(value) || value.version !== STATE_FORMAT_VERSION) return null;
   const { versions, manifest, skipped, notHeld, indexed, fullBuildStateId, stateId, pending } = value;

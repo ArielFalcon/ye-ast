@@ -95,14 +95,14 @@ export function measuredLiveMirror(mirror: LiveMirror, deps: MeasurementDeps): L
 /** The snapshot data cache's decisions, one `cache` line each; the key never leaves the cache. */
 export function measuredSnapshotCache(deps: MeasurementDeps): (event: SnapshotCacheEvent) => void {
   return ({ outcome, entryBytes, retainedBytes }) => {
-    report({ event: "cache", outcome, ...(entryBytes === undefined ? {} : { entry_bytes: entryBytes }), retained_bytes: retainedBytes, start_ms: Math.round(performance.now()) }, deps);
+    reportBestEffort({ event: "cache", outcome, ...(entryBytes === undefined ? {} : { entry_bytes: entryBytes }), retained_bytes: retainedBytes, start_ms: Math.round(performance.now()) }, deps);
   };
 }
 
 /** The discards of the kept-index cache's retention, one `index-cache` line each; the key never leaves the cache. */
 export function measuredIndexDiscard(deps: MeasurementDeps): (discard: IndexDiscard) => void {
   return ({ entryBytes, retainedBytes }) => {
-    report({ event: "index-cache", outcome: "discarded", entry_bytes: entryBytes, retained_bytes: retainedBytes, start_ms: Math.round(performance.now()) }, deps);
+    reportBestEffort({ event: "index-cache", outcome: "discarded", entry_bytes: entryBytes, retained_bytes: retainedBytes, start_ms: Math.round(performance.now()) }, deps);
   };
 }
 
@@ -123,7 +123,7 @@ export function measuredStages<T extends object>(port: T, stages: { readonly [K 
 /** One stage line per call, synchronous or not: `ok`, `threw`, or the kind of the fault a result answered. */
 function measuredStage<T>(stage: string, call: () => T, deps: MeasurementDeps): T {
   const started = performance.now();
-  const done = (outcome: string) => report({ event: "stage", stage, outcome, start_ms: Math.round(started), duration_ms: elapsed(started) }, deps);
+  const done = (outcome: string) => reportBestEffort({ event: "stage", stage, outcome, start_ms: Math.round(started), duration_ms: elapsed(started) }, deps);
   let answer: T;
   try {
     answer = call();
@@ -145,10 +145,10 @@ async function measuredBuild<T, F extends { kind: string }>(succeeded: "built" |
     const result = await call();
     const buildMs = elapsed(started);
     const storeBytes = result.ok ? await bytesOf(store) : 0;
-    report({ event: "index", outcome: result.ok ? succeeded : result.fault.kind, build_ms: buildMs, store_bytes: storeBytes }, deps);
+    reportBestEffort({ event: "index", outcome: result.ok ? succeeded : result.fault.kind, build_ms: buildMs, store_bytes: storeBytes }, deps);
     return result;
   } catch (error) {
-    report({ event: "index", outcome: "threw", build_ms: elapsed(started) }, deps);
+    reportBestEffort({ event: "index", outcome: "threw", build_ms: elapsed(started) }, deps);
     throw error;
   }
 }
@@ -166,10 +166,10 @@ async function measured<T>(method: string, call: () => Promise<T>, deps: Measure
   const cpuAtStart = process.cpuUsage();
   try {
     const answer = await call();
-    report(queryRecord({ method, durationMs: elapsed(started), outcome: outcomeOf(answer), answer, cpu: process.cpuUsage(cpuAtStart) }), deps);
+    reportBestEffort(queryRecord({ method, durationMs: elapsed(started), outcome: outcomeOf(answer), answer, cpu: process.cpuUsage(cpuAtStart) }), deps);
     return answer;
   } catch (error) {
-    report({ event: "query", method, duration_ms: elapsed(started), outcome: "threw" }, deps);
+    reportBestEffort({ event: "query", method, duration_ms: elapsed(started), outcome: "threw" }, deps);
     throw error;
   }
 }
@@ -272,11 +272,11 @@ function elapsed(started: number): number {
 }
 
 /** A measurement channel that breaks must never fail the query it was describing: the host may have closed stderr. */
-function report(record: Record<string, unknown>, deps: MeasurementDeps): void {
+function reportBestEffort(record: Record<string, unknown>, deps: MeasurementDeps): void {
   try {
     deps.sink(deps.redaction.redact(JSON.stringify({ ye_ast: record })));
   } catch {
-    // The answer is the product; the line is a courtesy.
+    return;
   }
 }
 

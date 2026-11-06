@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { AnchorId, EvidenceSet } from "./composition-contract.ts";
 import { materializeEvidence, mergeEvidence, validateCompositionReferences } from "./compose-evidence.ts";
-import { digest, SetBuilder, sha, SHA_B } from "./compose-evidence-test-sets.ts";
+import { digest, SetBuilder, sha, SHA_B } from "./compose-evidence-test-sets.testing.ts";
 
 const PATH = "src/OrderController.java";
 const place = { path: PATH, line: 10 };

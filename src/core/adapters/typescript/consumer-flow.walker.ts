@@ -1,8 +1,8 @@
 import ts from "typescript";
 import { ELEMENT, relatePaths, rewritePath, startsWith, type AccessPath, type PathMapping } from "../../domain/contracts/access-path.ts";
 import { RESOURCE_STATE_MEMBERS, type CarrierSite, type FlowFrontier, type FlowNext, type FlowStep, type FlowUse, type FrontierCause, type Hop } from "../../domain/contracts/consumer-flow.ts";
-import type { AccessStep } from "../../domain/contracts/use-operation.ts";
-import type { Absence, Guard, GuardKind, UseOperation } from "../../domain/contracts/verdict.ts";
+import type { AccessStep, EqualityOperator, Predicate, UseOperation } from "../../domain/contracts/use-operation.ts";
+import type { FallbackGuard, Guard, TestedGuard, UntestedGuard } from "../../domain/contracts/verdict.ts";
 import type { Evidence, UnknownReason } from "../../domain/shared/fact.ts";
 import type { Origin, Program, Unit } from "./consumer-flow.index.ts";
 import {
@@ -13,10 +13,10 @@ import {
   discardsValue,
   declaringScope,
   isDynamicName,
+  isUndeclaredName,
   enclosingClass,
   enclosingFunction,
   enclosingLoop,
-  excludesAbsence,
   exits,
   isAsyncOrGenerator,
   isFunctionNode,
@@ -27,6 +27,7 @@ import {
   mayNotFollow,
   namedFunction,
   referencesOf,
+  replacementOf,
   searchRoot,
   unwrap,
   writesWithin,
@@ -54,7 +55,14 @@ export interface Held<T> {
 
 type Resolved = { kind: "function"; file: string; named: NamedFunction } | { kind: "external" };
 
-const BOTH: readonly Absence[] = ["null", "undefined"];
+const PRESENT: Predicate = { kind: "absence", operator: "!=", absence: "null" };
+const TRUTHY: Predicate = { kind: "truthy" };
+const EQUALITY: ReadonlyMap<ts.SyntaxKind, EqualityOperator> = new Map([
+  [ts.SyntaxKind.EqualsEqualsToken, "=="],
+  [ts.SyntaxKind.ExclamationEqualsToken, "!="],
+  [ts.SyntaxKind.EqualsEqualsEqualsToken, "==="],
+  [ts.SyntaxKind.ExclamationEqualsEqualsToken, "!=="],
+]);
 const KEEPING_OPERATORS: ReadonlySet<string> = new Set([
   "catchError",
   "tap",
@@ -198,8 +206,16 @@ export class Walker {
     return { origin: [...prefix, ...t.origin], hops: t.hops, guards: translate(t.guards, [{ from: [], to: prefix }]) };
   }
 
-  private guard(kind: GuardKind, covers: AccessPath, excludes: readonly Absence[], node: ts.Node): Guard {
-    return { kind, covers, excludes, evidence: this.at(node) };
+  private untested(kind: UntestedGuard["kind"], covers: AccessPath, node: ts.Node): UntestedGuard {
+    return { kind, covers, evidence: this.at(node) };
+  }
+
+  private tested(kind: TestedGuard["kind"], covers: AccessPath, test: Predicate, holds: boolean, node: ts.Node): TestedGuard {
+    return { kind, covers, test, holds, evidence: this.at(node) };
+  }
+
+  private fallback(test: Predicate, right: ts.Expression, node: ts.Node): FallbackGuard {
+    return { kind: "fallback", covers: [], test, holds: true, replacement: replacementOf(right), evidence: this.at(node) };
   }
 
   /** Reads the value `reference` holds, from the chain of reads that start there to what the code does with the result. */
@@ -213,7 +229,7 @@ export class Walker {
     const steps: AccessStep[] = [];
     let beyondAt: ts.Node | undefined;
     const advance = (segment: string, node: ts.Node, optional: boolean, parent: ts.PropertyAccessExpression | ts.ElementAccessExpression): void => {
-      if (optional) chain.push(this.guard("optional-chain", q, BOTH, node));
+      if (optional) chain.push(this.tested("optional-chain", q, PRESENT, true, node));
       if (reachesChange(q, t)) steps.push(accessStep(parent));
       q = [...q, segment];
       if (beyondAt === undefined && relatePaths(q, t.origin) === "beyond") beyondAt = node;
@@ -224,7 +240,7 @@ export class Walker {
       if (isTransparent(parent)) {
         top = parent as ts.Expression;
       } else if (ts.isNonNullExpression(parent)) {
-        chain.push(this.guard("non-null-assertion", q, BOTH, parent));
+        chain.push(this.untested("non-null-assertion", q, parent));
         top = parent;
       } else if (ts.isPropertyAccessExpression(parent) && parent.expression === top) {
         const call = parent.parent;
@@ -233,7 +249,7 @@ export class Walker {
           advance(parent.name.text, parent.name, optional, parent);
           top = call;
         } else if (ts.isCallExpression(call) && call.expression === parent && this.isMethod(parent, call, q, t)) {
-          if (optional) chain.push(this.guard("optional-chain", q, BOTH, parent.name));
+          if (optional) chain.push(this.tested("optional-chain", q, PRESENT, true, parent.name));
           return this.methodCall(top, q, parent, call, t, chain, steps);
         } else {
           advance(parent.name.text, parent.name, optional, parent);
@@ -251,7 +267,7 @@ export class Walker {
           steps.push(callStep(parent));
           top = parent;
         } else if (relation === "beyond" || relation === "exact") {
-          if (parent.questionDotToken !== undefined) chain.push(this.guard("optional-chain", q, BOTH, parent));
+          if (parent.questionDotToken !== undefined) chain.push(this.tested("optional-chain", q, PRESENT, true, parent));
           return this.dereference(parent, t, q, chain, { steps: [...steps, callStep(parent)], end: { kind: "none" } });
         } else {
           if (relation === "contains") this.frontier(parent, "unmodelled-flow", "call", t);
@@ -361,7 +377,7 @@ export class Walker {
     if (operator === ts.SyntaxKind.EqualsToken) return this.assignTo(parent, t);
     if (operator === ts.SyntaxKind.QuestionQuestionToken || operator === ts.SyntaxKind.BarBarToken) {
       if (parent.right === top) return this.read(parent, t);
-      const guards = exact && excludesAbsence(parent.right) ? [...t.guards, this.guard("fallback", [], BOTH, parent)] : t.guards;
+      const guards = exact ? [...t.guards, this.fallback(operator === ts.SyntaxKind.BarBarToken ? TRUTHY : PRESENT, parent.right, parent)] : t.guards;
       return this.read(parent, this.hopped({ ...t, guards }, "fallback", parent));
     }
     if (operator === ts.SyntaxKind.AmpersandAmpersandToken) return this.read(parent, t);
@@ -603,7 +619,7 @@ export class Walker {
         continue;
       }
       const guards = translate(t.guards, [{ from: path, to: [] }]);
-      if (element.initializer !== undefined && excludesAbsence(element.initializer)) guards.push(this.guard("fallback", [], ["undefined"], element));
+      if (element.initializer !== undefined) guards.push(this.fallback({ kind: "absence", operator: "!==", absence: "undefined" }, element.initializer, element));
       const child: Trail = { origin: t.origin.slice(path.length), hops: t.hops, guards, projected: path };
       this.bind(element.name, scope, this.hopped(child, "assign", element));
     }
@@ -658,7 +674,7 @@ export class Walker {
 
   private earlyExit(statement: ts.Statement, binding: Binding): Guard[] {
     if (ts.isIfStatement(statement) && statement.elseStatement === undefined && exits(statement.thenStatement)) {
-      return this.conditionGuards(statement.expression, false, binding).map((guard) => (guard.kind === "truthiness" || guard.kind === "comparison" ? { ...guard, kind: "early-exit" as const } : guard));
+      return this.conditionGuards(statement.expression, false, binding).map((guard) => (guard.kind === "condition" ? { ...guard, kind: "early-exit" as const } : guard));
     }
     if (!ts.isExpressionStatement(statement) || !ts.isCallExpression(statement.expression)) return [];
     const target = this.resolveFunction(statement.expression.expression);
@@ -670,7 +686,7 @@ export class Walker {
   private predicateGuards(call: ts.CallExpression, kind: "type-guard" | "assertion", binding: Binding): Guard[] {
     return call.arguments.flatMap((argument) => {
       const covers = chainPath(argument, binding);
-      return covers === undefined ? [] : [this.guard(kind, covers, [], call)];
+      return covers === undefined ? [] : [this.untested(kind, covers, call)];
     });
   }
 
@@ -684,25 +700,49 @@ export class Walker {
       if (operator === ts.SyntaxKind.BarBarToken) return holds ? [] : [...this.conditionGuards(bare.left, false, binding), ...this.conditionGuards(bare.right, false, binding)];
       if (operator === ts.SyntaxKind.InstanceOfKeyword) {
         const covers = chainPath(bare.left, binding);
-        return holds && covers !== undefined ? [this.guard("instanceof", covers, [], bare)] : [];
+        return holds && covers !== undefined ? [this.untested("instanceof", covers, bare)] : [];
       }
-      const strict = operator === ts.SyntaxKind.EqualsEqualsEqualsToken || operator === ts.SyntaxKind.ExclamationEqualsEqualsToken;
-      const negated = operator === ts.SyntaxKind.ExclamationEqualsToken || operator === ts.SyntaxKind.ExclamationEqualsEqualsToken;
-      if (!strict && operator !== ts.SyntaxKind.EqualsEqualsToken && !negated) return [];
-      const literal = isNullishLiteral(bare.right) ? bare.right : isNullishLiteral(bare.left) ? bare.left : undefined;
-      if (literal === undefined || negated !== holds) return [];
-      const covers = chainPath(literal === bare.right ? bare.left : bare.right, binding);
-      if (covers === undefined) return [];
-      const excludes: readonly Absence[] = strict ? [unwrap(literal).kind === ts.SyntaxKind.NullKeyword ? "null" : "undefined"] : BOTH;
-      return [this.guard("comparison", covers, excludes, bare)];
+      return this.equalityGuards(bare, holds, binding);
     }
     if (ts.isCallExpression(bare) && bare.arguments.length > 0) {
+      const covers = this.isArrayCheck(bare) ? chainPath(bare.arguments[0]!, binding) : undefined;
+      if (covers !== undefined) return [this.tested("condition", covers, { kind: "array" }, holds, bare)];
       const target = holds ? this.resolveFunction(bare.expression) : undefined;
       const type = target?.kind === "function" ? target.named.node.type : undefined;
       return type !== undefined && ts.isTypePredicateNode(type) && type.assertsModifier === undefined ? this.predicateGuards(bare, "type-guard", binding) : [];
     }
-    const covers = holds ? chainPath(bare, binding) : undefined;
-    return covers === undefined ? [] : [this.guard("truthiness", covers, BOTH, bare)];
+    const covers = chainPath(bare, binding);
+    return covers === undefined ? [] : [this.tested("condition", covers, TRUTHY, holds, bare)];
+  }
+
+  /** An equality of a covered path with `null`, `undefined`, a literal the code writes, or a `typeof` name, whichever side it sits on. */
+  private equalityGuards(comparison: ts.BinaryExpression, holds: boolean, binding: Binding): Guard[] {
+    const operator = EQUALITY.get(comparison.operatorToken.kind);
+    if (operator === undefined) return [];
+    for (const [tested, other] of [[comparison.left, comparison.right], [comparison.right, comparison.left]] as const) {
+      const operand = unwrap(tested);
+      const value = unwrap(other);
+      if (ts.isTypeOfExpression(operand)) {
+        const covers = chainPath(operand.expression, binding);
+        const type = literalOf(value);
+        if (covers !== undefined && typeof type === "string") return [this.tested("condition", covers, { kind: "typeof", operator, type }, holds, comparison)];
+        continue;
+      }
+      const covers = chainPath(operand, binding);
+      if (covers === undefined) continue;
+      if (isNullishLiteral(value)) return [this.tested("condition", covers, { kind: "absence", operator, absence: value.kind === ts.SyntaxKind.NullKeyword ? "null" : "undefined" }, holds, comparison)];
+      const literal = literalOf(value);
+      if (literal !== undefined) return [this.tested("condition", covers, { kind: "literal", operator, literal }, holds, comparison)];
+    }
+    return [];
+  }
+
+  /** `Array.isArray(...)` where `Array` is the global, not a name the code declares or imports. */
+  private isArrayCheck(call: ts.CallExpression): boolean {
+    const callee = unwrap(call.expression);
+    if (!ts.isPropertyAccessExpression(callee) || callee.name.text !== "isArray" || call.arguments.length !== 1) return false;
+    const receiver = unwrap(callee.expression);
+    return ts.isIdentifier(receiver) && receiver.text === "Array" && isUndeclaredName(receiver) && !this.unit.imports.has("Array");
   }
 
   private resolveFunction(callee: ts.Expression): Resolved | undefined {

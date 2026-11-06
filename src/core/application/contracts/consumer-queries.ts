@@ -1,5 +1,6 @@
 import { formatAccessPath, relatePaths, type AccessPath } from "../../domain/contracts/access-path.ts";
 import { OLD_GUARANTEE, type ConsequencesValue, type UseConsequence } from "../../domain/contracts/consequence-fact.ts";
+import { writtenChange } from "../../domain/contracts/change.ts";
 import { carrierKey, type Carrier, type CarrierSite, type FlowFrontier, type FlowNext, type FlowResult, type Hop } from "../../domain/contracts/consumer-flow.ts";
 import { parseHypothesis, type Hypothesis } from "../../domain/contracts/hypothesis.ts";
 import { decideUse } from "../../domain/contracts/verdict.ts";
@@ -102,7 +103,7 @@ function consequencesOf(session: ConsumerSession, hypothesis: Hypothesis): Resul
     for (const use of result.uses) {
       const verdict = decideUse(use, hypothesis.change);
       if (verdict === undefined) continue;
-      const evidence = (verdict.kind === "admits" ? [use.site, verdict.guard.evidence] : [use.site]).map((place) => located(place, repo));
+      const evidence = [use.site, ...(verdict.kind === "admits" ? verdict.guards.map((guard) => guard.evidence) : [])].map((place) => located(place, repo));
       const value: UseConsequence = {
         repo,
         link: { id: link.id, basis: link.basis, call: { file: link.from.file, line: link.from.line, symbol: link.from.symbol }, handler: { repo: link.to.repo, ...link.to.handler } },
@@ -128,7 +129,15 @@ function consequencesOf(session: ConsumerSession, hypothesis: Hypothesis): Resul
   }
 
   const value: ConsequencesValue = {
-    hypothesis: { method: hypothesis.method, path: hypothesis.path, target: hypothesis.target, property: formatAccessPath(hypothesis.property), change: hypothesis.change },
+    hypothesis: {
+      method: hypothesis.method,
+      path: hypothesis.path,
+      target: hypothesis.target,
+      property: formatAccessPath(hypothesis.property),
+      change: writtenChange(hypothesis.change),
+      ...(hypothesis.change.renamedTo === undefined ? {} : { renamedTo: formatAccessPath(hypothesis.change.renamedTo) }),
+      ...(hypothesis.change.elementsAt === undefined ? {} : { elementsAt: formatAccessPath(hypothesis.change.elementsAt) }),
+    },
     assumedOldGuarantee: OLD_GUARANTEE,
     findings: findings.sort(compareFindings),
   };

@@ -12,8 +12,10 @@ import type { CommitExport, Vcs, VcsFault } from "../../ports/vcs.port.ts";
 import { openLive, type LiveDeps, type LiveTree, type LiveFailure, type OpenLive } from "../live/live-tree.ts";
 import { ABORTED, extractExport, readSources, factBaseOf, LIVE_REQUIRES_TRUSTED, trustOf, withScratch, type CommitExtraction, type PreparedCommit, type SnapshotReaderDeps } from "./read-snapshot.ts";
 import { prepareCommit } from "./prepared-snapshot.ts";
+import { liveSnapshotReaders } from "./live-snapshot.ts";
 import { canonicalJson } from "../../domain/shared/canonical-json.ts";
 import { extractSources } from "./read-snapshot.ts";
+import { compareText } from "../../domain/shared/code-node.ts";
 
 /** What reading the head of a query needs: the snapshot reader plus the index of what it exported. */
 export interface HeadReaderDeps extends SnapshotReaderDeps {
@@ -38,43 +40,21 @@ export interface HeldLive {
   readonly deps: Pick<HeadReaderDeps, "vcs" | "reader" | "extractor" | "graph" | "matcher" | "live">;
   sources(signal?: AbortSignal): Promise<Result<Pick<CommitExtraction, "export" | "sources">, VcsFault>>;
   extract(signal?: AbortSignal): Promise<Result<CommitExtraction, VcsFault>>;
+  retained?: PreparedCommit["retained"];
 }
 
 /** Consumers of a capture share one operation signal; independent operations create their own capture. */
 export function createHeldLive(input: { repo: string; repoId: string; scope: DeclaredScope; head: string; tree: LiveTree; trust: "trusted"; deps: HeadReaderDeps }): HeldLive {
   const { vcs, reader, extractor, graph, matcher, live } = input.deps;
   const captureDeps = { vcs, reader, extractor, graph, matcher, ...(live === undefined ? {} : { live }) };
-  let loaded: Promise<Result<Pick<CommitExtraction, "export" | "sources">, VcsFault>> | undefined;
-  let extracted: Promise<Result<CommitExtraction, VcsFault>> | undefined;
-  const sources: HeldLive["sources"] = async (signal) => {
-    if (signal?.aborted) return ABORTED;
-    const pending = loaded ??= readSources(captureDeps, input.tree.root, input.tree.export, signal);
-    try {
-      const result = await pending;
-      if (!result.ok && loaded === pending) loaded = undefined;
-      if (signal?.aborted) return ABORTED;
-      return result;
-    } catch (error) {
-      if (loaded === pending) loaded = undefined;
-      throw error;
-    }
-  };
-  return { ...input, deps: captureDeps, kind: "live", sources, async extract(signal) {
-    if (signal?.aborted) return ABORTED;
-    const pending = extracted ??= (async () => {
-      const result = await sources(signal);
-      return result.ok ? extractSources(captureDeps, result.value, signal) : result;
-    })();
-    try {
-      const answer = await pending;
-      if (!answer.ok && extracted === pending) extracted = undefined;
-      if (signal?.aborted) return ABORTED;
-      return answer;
-    } catch (error) {
-      if (extracted === pending) extracted = undefined;
-      throw error;
-    }
-  } };
+  const readers = liveSnapshotReaders(input.deps, { repo: input.repo, scope: input.scope, trust: input.trust, root: input.tree.root, export: input.tree.export });
+  return { ...input, deps: captureDeps, kind: "live", ...readers };
+}
+
+/** The held capture as the readers of a snapshot take it: nothing to write, since the mirror already holds the files. */
+export function preparedLive(held: Pick<HeldLive, "tree" | "sources" | "extract" | "retained">): PreparedCommit {
+  const { tree, sources, extract, retained } = held;
+  return { root: tree.root, materialize: async () => ({ ok: true, value: undefined }), tree: { export: tree.export }, sources, extract, ...(retained === undefined ? {} : { retained }) };
 }
 
 export interface LiveCaptureSelection {
@@ -97,7 +77,7 @@ export async function withLiveCaptures<T>(deps: HeadReaderDeps, selections: read
   }
   if (deps.live === undefined) throw new TypeError("live dependencies required");
   const live = deps.live;
-  const ordered = [...selections].sort((a, b) => a.repo < b.repo ? -1 : a.repo > b.repo ? 1 : 0);
+  const ordered = [...selections].sort((a, b) => compareText(a.repo, b.repo));
   const captures = new Map<string, HeldLive>();
   let cancellation: { repoId: string; cause: LiveFailure } | undefined;
   const postludes: { repoId: string; run: () => void | Promise<void> }[] = [];
@@ -212,7 +192,7 @@ const LIVE_HEAD = "HEAD";
  * The files of the index's universe the store did not hold, limited to what the head export staged: the engine reads
  * the whole mirror and a commit's whole listing, so a path the export never wrote could not be read by this answer.
  */
-export function notHeldInExport(notHeld: readonly string[], exported: CommitExport): Pick<IndexSummary, "filesNotIndexed"> {
+function notHeldInExport(notHeld: readonly string[], exported: CommitExport): Pick<IndexSummary, "filesNotIndexed"> {
   const staged = new Set(exported.files.filter((file) => file.written).map((file) => file.path));
   return { filesNotIndexed: notHeld.filter((path) => staged.has(path)) };
 }
@@ -293,7 +273,7 @@ export function createHeadReader(deps: HeadReaderDeps): HeadReader {
         if (signal?.aborted) return ABORTED;
         const { tree, scope, head } = held;
         const selected = pathSelection(scope, deps.matcher.matches);
-        const prepared: PreparedCommit = { root: tree.root, materialize: async () => ({ ok: true, value: undefined }), tree: { export: tree.export }, sources: held.sources, extract: held.extract };
+        const prepared = preparedLive(held);
         return read({ ...liveReading(tree, prepared.tree, "trusted", scope, selected, head, repoId, spec), prepared }, tree.root);
       }, unavailable: async ({ head, scope }) => ({ ok: true, value: unavailableLive("trusted", scope, head, repoId, spec) }) });
     }
