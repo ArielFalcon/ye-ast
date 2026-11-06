@@ -1,3 +1,4 @@
+import { unknownTargetKey } from "../../ports/impact-queries.port.ts";
 import { isReadableFile } from "../../domain/change/changed-file.ts";
 import { sortedUnique } from "../../domain/impact/importers-fact.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
@@ -48,7 +49,7 @@ export function createOutlineQueries(deps: OutlineQueriesDeps): OutlineQueries {
         try {
           const held = new Set(headTree.export.files.map((file) => file.path));
           const focused = focus === undefined ? undefined : readFocus(store, focus.filter(({ file }) => isReadableFile(file)));
-          if (focused !== undefined && focused.unknown.length > 0) return { ok: false, fault: { kind: "unknown-symbol", detail: `no declaration at the revision for ${focused.unknown.map(({ file, symbol }) => `${file}:${symbol}`).join(", ")}`, entries: focused.unknown } };
+          if (focused !== undefined && focused.unknown.length > 0) return { ok: false, fault: { kind: "unknown-symbol", detail: `no declaration at the revision for ${focused.unknown.map(unknownTargetKey).join(", ")}`, entries: focused.unknown } };
           if (focused !== undefined && focused.topLevel.length > 0) return { ok: false, fault: { kind: "top-level-line", detail: `no declaration holds ${focused.topLevel.map(({ file, line }) => `${file}:${line}`).join(", ")}; the line is at the top level of its file`, entries: focused.topLevel } };
           const listed = focused === undefined ? readOutline(store, covered, await readModules(deps.moduleReaders, sources ?? [])) : undefined;
           if (request.signal?.aborted) return ABORTED;

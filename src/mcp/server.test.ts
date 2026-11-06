@@ -2014,6 +2014,7 @@ test("an unknown-symbol fault lists every entry that names no node and what its 
     entries: [
       { file: "src/A.java", symbol: "A.gone", candidates: ["A.other", "A.used"] },
       { file: "src/B.java", symbol: "B.gone", candidates: [] },
+      { file: "src/C.java", start: 30, end: 35, candidates: ["C"] },
     ],
   };
   const { session } = await setup({ callers: async () => ({ ok: false, fault }) });
@@ -2022,6 +2023,8 @@ test("an unknown-symbol fault lists every entry that names no node and what its 
   const text = textOf(result);
   assert.match(text, /src\/A\.java:A\.gone: declared in src\/A\.java: A\.other, A\.used/);
   assert.match(text, /src\/B\.java:B\.gone: src\/B\.java declares no symbol/);
+  assert.match(text, /src\/C\.java:30-35: declared in src\/C\.java: C/);
+  assert.match(text, /line range listed here covers no declaration and no code: call ye_ast_outline/);
   assert.ok(text.includes("targets") && text.includes("ye_ast_outline"));
   assert.deepEqual(result._meta?.["ye-ast/fault"], fault);
   await session.close();

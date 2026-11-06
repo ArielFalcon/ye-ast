@@ -39,23 +39,36 @@ export function rangeChanges(targets: readonly CallersTarget[]): FileChange[] {
     .sort((a, b) => compareText(a.path, b.path));
 }
 
+export interface RequestedRanges {
+  changes: FileChange[];
+  /** The ranges that kept no line: past the end of their file, or only trivia outside every declaration. */
+  uncovered: UnknownSymbolFault["entries"];
+}
+
 /**
  * The requested ranges without their lines that no top-level declaration holds and the language's tokenizer reads as
- * trivia: such a line selects nothing, where a changed one would select every top-level declaration of its file. A file
- * the sources do not hold, or that declares nothing, keeps its ranges.
+ * trivia: such a line selects nothing, where a changed one would select every top-level declaration of its file. A range
+ * left with no line selects nothing at all and is `uncovered`. A file the sources do not hold, or that declares nothing,
+ * keeps its ranges.
  */
-export async function requestedRanges(store: CodeGraphReader, changes: readonly FileChange[], sources: readonly SourceFile[], trivia: SourceTrivia): Promise<FileChange[]> {
+export async function requestedRanges(store: CodeGraphReader, changes: readonly FileChange[], sources: readonly SourceFile[], trivia: SourceTrivia): Promise<RequestedRanges> {
   const files = new Map(sources.map((file) => [file.path, file]));
   const symbolsByFile = Map.groupBy(store.symbolsInFiles(changes.map(({ path }) => path)).filter(isSeedable), (symbol) => symbol.file);
-  return Promise.all(changes.map(async (change) => {
+  const narrowed = await Promise.all(changes.map(async (change) => {
     const file = files.get(change.path);
-    const top = topLevelOf(symbolsByFile.get(change.path) ?? []);
-    if (file === undefined || top.length === 0) return change;
+    const symbols = symbolsByFile.get(change.path) ?? [];
+    const top = topLevelOf(symbols);
+    if (file === undefined || top.length === 0) return { change, uncovered: [] };
     const quiet = await trivia.triviaLines(file);
     const lastLine = file.content.split("\n").length;
     const selects = (line: number): boolean => !quiet.has(line) || top.some((symbol) => symbol.startLine <= line && line <= symbol.endLine);
-    return { ...change, added: change.added.flatMap(({ start, end }) => runsOf(start, Math.min(end, lastLine), selects)) };
+    const ranges = change.added.map(({ start, end }) => ({ start, end, runs: runsOf(start, Math.min(end, lastLine), selects) }));
+    return {
+      change: { ...change, added: ranges.flatMap(({ runs }) => runs) },
+      uncovered: ranges.filter(({ runs }) => runs.length === 0).map(({ start, end }) => ({ file: change.path, start, end, candidates: candidatesOf(containmentTree(store, store.symbolsInFiles([change.path]))) })),
+    };
   }));
+  return { changes: narrowed.map(({ change }) => change), uncovered: narrowed.flatMap(({ uncovered }) => uncovered) };
 }
 
 /** Asks for each file's trivia lines once, for the life of one query. */
@@ -86,13 +99,15 @@ function runsOf(start: number, end: number, selects: (line: number) => boolean):
 
 /**
  * The declarations a request starts from: each requested symbol selects every declaration its name or dotted path
- * names in its file, and the changes select what their lines, resources or top-level code touch.
+ * names in its file, and the changes select what their lines, resources or top-level code touch. A requested symbol
+ * that names nothing, or an `uncovered` range, makes it `missing`, and nothing is selected.
  */
 export function selectRoots(
   store: CodeGraphReader,
   changes: readonly FileChange[],
   requested: readonly { file: string; symbol: string }[],
   componentsByResource: ReadonlyMap<string, readonly ComponentRef[]>,
+  uncovered: UnknownSymbolFault["entries"] = [],
 ): RootSelection {
   const sourceChanges = changes.filter((file) => kindOfChangedFile(file.path) === "source" && !file.deleted).map((file) => file.path);
   const componentFiles = changes.flatMap((file) => (componentsByResource.get(file.path) ?? []).map((component) => component.file));
@@ -100,7 +115,7 @@ export function selectRoots(
   const symbolsByFile = Map.groupBy(symbols, (symbol) => symbol.file);
   const trees = new Map([...new Set(requested.map(({ file }) => file))].map((file) => [file, containmentTree(store, symbolsByFile.get(file) ?? [])]));
   const asked = requested.map((target) => ({ target, found: selectedBySymbol(trees.get(target.file) ?? [], target.symbol).map(({ declaration }) => declaration).filter(isSeedable) }));
-  const missing = asked.filter(({ found: nodes }) => nodes.length === 0).map(({ target }) => ({ ...target, candidates: candidatesOf(trees.get(target.file) ?? []) }));
+  const missing = [...asked.filter(({ found: nodes }) => nodes.length === 0).map(({ target }) => ({ ...target, candidates: candidatesOf(trees.get(target.file) ?? []) })), ...uncovered];
   if (missing.length > 0) return { seeds: [], withoutSymbols: [], removed: [], missing };
 
   const selection = selectSeeds({ files: changes }, symbolsByFile, componentsByResource);

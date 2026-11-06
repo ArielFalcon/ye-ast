@@ -1,3 +1,4 @@
+import { unknownTargetKey } from "../../ports/impact-queries.port.ts";
 import type { SourceTrivia } from "../../ports/source-trivia.port.ts";
 import type { DeclarationEvidenceReader } from "../../ports/declaration-evidence.port.ts";
 import { blastRadius, type BlastRadius } from "../../domain/change/blast-radius.ts";
@@ -134,9 +135,10 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
           if (signal?.aborted) return ABORTED;
           const proofs = await proofsOf(deps, store, headTree, request.signal);
           if (signal?.aborted) return ABORTED;
-          const read = impactOf({ store, changes: await requestedRanges(store, changes, headTree.sources, deps.sourceTrivia ?? NO_TRIVIA), requested, componentsByResource, found, fields, locals, memberUses, loads, headTree, summary, budget: request.budget ?? {}, proofs });
+          const ranges = await requestedRanges(store, changes, headTree.sources, deps.sourceTrivia ?? NO_TRIVIA);
+          const read = impactOf({ store, changes: ranges.changes, uncovered: ranges.uncovered, requested, componentsByResource, found, fields, locals, memberUses, loads, headTree, summary, budget: request.budget ?? {}, proofs });
           if (read.missing.length > 0) {
-            const names = read.missing.map(({ file, symbol }) => `${file}:${symbol}`).join(", ");
+            const names = read.missing.map(unknownTargetKey).join(", ");
             return { ok: false, fault: { kind: "unknown-symbol", detail: `no symbol at the revision for ${names}`, entries: read.missing } };
           }
           return { ok: true, value: impactFact(head.base(content, true), read.value, [...fixed, ...read.cuts]) };
@@ -458,6 +460,8 @@ interface ReferenceProofs {
 interface WalkInput {
   store: CodeGraphReader;
   changes: readonly FileChange[];
+  /** Requested ranges that select no declaration; the walk does not run when there is one. */
+  uncovered?: UnknownSymbolFault["entries"];
   /** Symbols asked for by name; each seeds every seedable node of the file it names. */
   requested: readonly { file: string; symbol: string }[];
   componentsByResource: ReadonlyMap<string, readonly ComponentRef[]>;
@@ -486,7 +490,7 @@ interface ImpactRead {
 function impactOf(input: WalkInput): ImpactRead {
   const { store, changes, requested, componentsByResource, found, fields, locals, memberUses, loads, headTree, summary } = input;
   const isTest = (path: string): boolean => kindOfChangedFile(path) === "test";
-  const selection = selectRoots(store, changes, requested, componentsByResource);
+  const selection = selectRoots(store, changes, requested, componentsByResource, input.uncovered);
   if (selection.missing.length > 0) return { value: { seeds: [], symbols: [], entrypoints: [], cost: { expansionsUsed: 0 } }, cuts: [], missing: selection.missing };
 
   const { seeds } = selection;

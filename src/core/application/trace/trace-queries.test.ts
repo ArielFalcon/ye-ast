@@ -337,6 +337,17 @@ test("a line range selects the declarations it intersects, never the file's othe
   assert.deepEqual(valueOf(fact).steps.map((step) => step.symbol), ["f", "g"]);
 });
 
+test("a line range that selects no declaration, past the end of its file or only over trivia between declarations, is an unknown-symbol fault", async () => {
+  const content = ["function f() {", "  return 1;", "}", "", "function g() {", "  return 2;", "}", "", "function h() {}", ""].join("\n");
+  const nodes = [fakeNode("f", "function", B, 1, 3), fakeNode("g", "function", B, 5, 7), fakeNode("h", "function", B, 9, 9)];
+  for (const [start, end] of [[20, 25], [4, 4]] as const) {
+    const { answer } = await trace({ nodes, sources: [{ path: B, content }], trivia: { [B]: [4, 8, 10] } }, [{ file: B, start, end }]);
+    assert.ok(!answer.ok, `${start}-${end}`);
+    assert.equal(answer.fault.kind, "unknown-symbol");
+    assert.deepEqual(answer.fault.kind === "unknown-symbol" && answer.fault.entries, [{ file: B, start, end, candidates: ["f", "g", "h"] }]);
+  }
+});
+
 test("a trace reads a file's trivia lines once, however many of its ranges it is asked", async () => {
   const content = ["function f() {", "  return 1;", "}", "", "function g() {", "  return 2;", "}", "", "function h() {}", ""].join("\n");
   const asked: string[] = [];

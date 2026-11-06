@@ -725,8 +725,17 @@ test("a requested range selects the declarations it intersects, and its blank an
     return answer.status === "unknown" ? [] : answer.value.seeds.map((seed) => [seed.symbol, seed.basis]);
   };
   assert.deepEqual(await seeds(2, 11), [["f", "lines"], ["h", "lines"]]);
-  assert.deepEqual(await seeds(5, 7), []);
   assert.deepEqual(await seeds(12, 13), [["h", "lines"]]);
+});
+
+test("a requested range that selects no declaration, past the end of its file or only over trivia between declarations, is an unknown-symbol fault with what the file declares", async () => {
+  const { callers } = setup({ nodes: RANGE_NODES, sources: [rangeFile(["", "// note", "/* block", "   still */", "", ""])], trivia: { "src/A.ts": [4, 5, 6, 7, 8, 9, 12, 13, 15, 16, 17, 18, 19, 21] } });
+  for (const [start, end] of [[30, 35], [5, 7]] as const) {
+    const answer = await callers({ targets: [{ file: "src/A.ts", start, end }, { file: "src/A.ts", start: 2, end: 2 }] });
+    assert.ok(!answer.ok, `${start}-${end}`);
+    assert.equal(answer.fault.kind, "unknown-symbol");
+    assert.deepEqual(answer.fault.kind === "unknown-symbol" && answer.fault.entries, [{ file: "src/A.ts", start, end, candidates: ["f", "g", "h"] }]);
+  }
 });
 
 test("a requested range over a top-level statement still selects every top-level declaration of its file", async () => {

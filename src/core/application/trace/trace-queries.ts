@@ -1,4 +1,6 @@
+import { unknownTargetKey } from "../../ports/impact-queries.port.ts";
 import { kindOfChangedFile } from "../../domain/change/changed-file.ts";
+import type { FileChange } from "../../domain/change/diff-reader.ts";
 import type { SourceTrivia } from "../../ports/source-trivia.port.ts";
 import type { ComponentRef } from "../../domain/change/seeds.ts";
 import { contentFingerprint, exportCuts } from "../../domain/map/entrypoint-map.ts";
@@ -8,10 +10,11 @@ import type { Result } from "../../domain/shared/result.ts";
 import { readingPlan } from "../../domain/trace/reading-plan.ts";
 import type { TraceValue } from "../../domain/trace/trace-fact.ts";
 import { traceSteps } from "../../domain/trace/trace-tree.ts";
-import type { GraphNodeId, GraphSymbol } from "../../ports/code-graph.port.ts";
+import type { CodeGraphReader, GraphNodeId, GraphSymbol } from "../../ports/code-graph.port.ts";
+import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { ImportOriginsReader } from "../../ports/import-origins.port.ts";
 import type { TraceFault, TraceQueries } from "../../ports/trace-queries.port.ts";
-import { distinctTargets, evidenceOfTarget, rangeChanges, requestedRanges, selectRoots, targetKey, triviaOncePerFile } from "../navigation/root-selection.ts";
+import { distinctTargets, evidenceOfTarget, rangeChanges, requestedRanges, selectRoots, targetKey, triviaOncePerFile, type RootSelection } from "../navigation/root-selection.ts";
 import { ABORTED } from "../snapshot/read-snapshot.ts";
 import { createHeadReader, type FactSpec, type HeadReaderDeps } from "../snapshot/head-reading.ts";
 import { walkTrace } from "./trace-walk.ts";
@@ -56,11 +59,11 @@ export function createTraceQueries(deps: TraceQueriesDeps): TraceQueries {
           const selections = await Promise.all(targets.map(async (target) => ({
             target,
             selection: "start" in target
-              ? selectRoots(store, await requestedRanges(store, rangeChanges([target]), head.tree.sources, trivia), [], NO_COMPONENTS)
+              ? await rangeRoots(store, rangeChanges([target]), head.tree.sources, trivia)
               : selectRoots(store, [], [target], NO_COMPONENTS),
           })));
           const missing = selections.flatMap(({ selection }) => selection.missing);
-          if (missing.length > 0) return { ok: false, fault: { kind: "unknown-symbol", detail: `no symbol at the revision for ${missing.map(({ file, symbol }) => `${file}:${symbol}`).join(", ")}`, entries: missing } };
+          if (missing.length > 0) return { ok: false, fault: { kind: "unknown-symbol", detail: `no symbol at the revision for ${missing.map(unknownTargetKey).join(", ")}`, entries: missing } };
 
           const roots = [...new Map(selections.flatMap(({ selection }) => selection.seeds.map(({ symbol }): [GraphNodeId, GraphSymbol] => [symbol.id, symbol]))).values()].sort(comparePosition);
           const walk = await walkTrace(roots, { store, origins: deps.importOrigins(head.tree.sources), inScope: head.selected, budget, ...(signal === undefined ? {} : { signal }) });
@@ -87,4 +90,9 @@ export function createTraceQueries(deps: TraceQueriesDeps): TraceQueries {
       });
     },
   };
+}
+
+async function rangeRoots(store: CodeGraphReader, changes: readonly FileChange[], sources: readonly SourceFile[], trivia: SourceTrivia): Promise<RootSelection> {
+  const ranges = await requestedRanges(store, changes, sources, trivia);
+  return selectRoots(store, ranges.changes, [], NO_COMPONENTS, ranges.uncovered);
 }

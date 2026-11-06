@@ -538,7 +538,7 @@ names the kind and whose `_meta["ye-ast/fault"]` holds `{ kind, detail, entries?
 | `git-failed`, `export-write-failed` | git or the snapshot export failed | Report the detail; do not retry in a loop |
 | `live-requires-trusted` | `live` used without a `trusted` declaration | Ask the user, or answer from a revision |
 | `unsupported-object-format`, `live-mirror-failed` | The live mirror could not be built or read | Answer from a revision; report the detail |
-| `unknown-symbol` | Nothing declares that symbol at that revision | The error lists the symbols each file declares; use one, or a line range |
+| `unknown-symbol` | Nothing declares that symbol at that revision, or a line range covers no declaration and no code (past the end of the file, or only blank and comment lines) | The error lists the symbols each file declares; use one, or a line range inside a declaration (`ye_ast_outline` lists their spans) |
 | `unknown-change-path` | A `changed` glob selected no changed path | Correct the globs (`globs` lists the ones that matched nothing) |
 | `unknown-repository`, `ambiguous-repository` | `repo` is not a declared ID (or is declared twice); `available` lists the IDs | Use a declared ID, or update the host registration |
 | `duplicate-repository`, `duplicate-workspace-source`, `workspace-capture-unavailable`, `workspace-replay-mismatch`, `result-changed` | A workspace request names a repository twice, a capture failed, or a replay or `expect` no longer matches the source | Fix the request, or run the query again without `expect` and report the new identity |

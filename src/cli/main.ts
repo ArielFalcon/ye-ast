@@ -1,3 +1,4 @@
+import { unknownTargetKey } from "../core/ports/impact-queries.port.ts";
 import { basename, resolve } from "node:path";
 import { readFile } from "node:fs/promises";
 import { parseArgs } from "node:util";
@@ -130,7 +131,7 @@ export async function run(argv: readonly string[], io: CliIo, deps: CliDeps): Pr
 /** Every line a fault prints: the kind and detail, then the symbol each entry named and what its file declares. */
 function faultText(fault: ImpactFault | OutlineFault | WorkspaceFault, redaction: Redaction): string[] {
   const entries =
-    fault.kind === "unknown-symbol" ? fault.entries.map((entry) => `  - ${entry.file}:${entry.symbol}: ${declarationText(entry)}`)
+    fault.kind === "unknown-symbol" ? fault.entries.map((entry) => `  - ${unknownTargetKey(entry)}: ${declarationText(entry)}`)
     : fault.kind === "top-level-line" ? fault.entries.map((entry) => `  - ${entry.file}:${entry.line}: ${declarationText(entry)}`)
     : [];
   return [`ye-ast: ${fault.kind}: ${redaction.redact(fault.detail.trim())}`, ...entries.map((line) => redaction.redact(line))];

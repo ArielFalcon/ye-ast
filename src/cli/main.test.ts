@@ -496,11 +496,11 @@ test("trace --live asks for the working tree instead of a revision", async () =>
   assert.deepEqual([requests[0]?.live, requests[0]?.revision], [true, undefined]);
 });
 
-test("trace answers an unknown symbol with the query code and nothing on stdout", async () => {
-  const { io, deps } = setupTrace({ ok: false, fault: { kind: "unknown-symbol", detail: "no symbol at the revision for A.java:gone", entries: [{ file: "A.java", symbol: "gone", candidates: ["run"] }] } });
-  assert.equal(await run(["trace", ".", "A.java:gone"], io, deps), EXIT_CODE.queryFailed);
+test("trace answers an unknown symbol or a range that selects nothing with the query code and nothing on stdout", async () => {
+  const { io, deps } = setupTrace({ ok: false, fault: { kind: "unknown-symbol", detail: "no symbol at the revision for A.java:gone, A.java:90-95", entries: [{ file: "A.java", symbol: "gone", candidates: ["run"] }, { file: "A.java", start: 90, end: 95, candidates: ["run"] }] } });
+  assert.equal(await run(["trace", ".", "A.java:gone", "A.java:90-95"], io, deps), EXIT_CODE.queryFailed);
   assert.deepEqual(io.stdout, []);
-  assert.equal(io.stderr[1], "  - A.java:gone: declared in A.java: run");
+  assert.deepEqual(io.stderr.slice(1), ["  - A.java:gone: declared in A.java: run", "  - A.java:90-95: declared in A.java: run"]);
 });
 
 test("importers asks for the files at the revision and prints the fact", async () => {

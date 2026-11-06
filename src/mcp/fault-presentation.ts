@@ -1,3 +1,4 @@
+import { unknownTargetKey } from "../core/ports/impact-queries.port.ts";
 import type { ToolFamily } from "./presentation.ts";
 import type { QueryFault } from "./query-runner.ts";
 import { familyOf, type SemanticQuery } from "./query-schema.ts";
@@ -62,7 +63,7 @@ export function controlFault(fault: CodedFault): ControlFault {
 
 /** The text of a fault: its kind first, its detail and entries, and a next step only where an argument can correct it. */
 export function renderFault(fault: RenderedFault, query?: FaultQueryContext): string {
-  const entries = "entries" in fault ? fault.entries.map((entry) => `\n  - ${entry.file}:${"line" in entry ? entry.line : entry.symbol}: ${declarationText(entry)}`).join("") : "";
+  const entries = "entries" in fault ? fault.entries.map((entry) => `\n  - ${"line" in entry ? `${entry.file}:${entry.line}` : unknownTargetKey(entry)}: ${declarationText(entry)}`).join("") : "";
   const head = `fault: ${fault.kind}\n${displayDetail(fault).trim()}${entries}`;
   if (fault.kind === "composition-source-fault") {
     return `${head}\nThe composition returned nothing: queries[${fault.requestIndices.join(", ")}] (${fault.family}) failed. Correct them as below and resend the whole composition.\n${renderFault(fault.cause, query)}`;
@@ -151,7 +152,7 @@ function nextStep(fault: Exclude<RenderedFault, { kind: "composition-source-faul
     case "unknown-symbol":
       return query?.family === "outline"
         ? "Use a listed dotted path as focus[].symbol, or a line inside a declaration as focus[].line; files lists the file whole. Candidates are alternatives, not substitutions."
-        : `Use a listed candidate as targets[].symbol, or an inclusive line range {file, start, end}; ye_ast_outline with files at the same ${query?.live ? "live state" : "revision"} lists declaration spans. Candidates are alternatives, not substitutions.`;
+        : `Use a listed candidate as targets[].symbol, or an inclusive line range {file, start, end}. A line range listed here covers no declaration and no code: call ye_ast_outline for these files at the same ${query?.live ? "live state" : "revision"} and pick a range inside a declaration's span. Candidates are alternatives, not substitutions.`;
     case "top-level-line":
       return "The line lies outside every declaration: focus on a line inside one, or on a listed dotted path as focus[].symbol; files lists the file whole.";
     case "unknown-change-path":
