@@ -492,6 +492,10 @@ test("each construct states what it does with the changed value: the accesses pa
     ["@if (order().address < other) {}", { steps: [], end: { kind: "compare", operator: "<" } }],
     ["{{ order().address + 1 }}", { steps: [], end: { kind: "coerce", operator: "+" } }],
     ["{{ -order().address }}", { steps: [], end: { kind: "coerce", operator: "-" } }],
+    ["{{ 'k' in order().address }}", { steps: [], end: { kind: "unmodelled", detail: "in" } }],
+    ["{{ other instanceof order().address }}", { steps: [], end: { kind: "unmodelled", detail: "instanceof" } }],
+    ["{{ order().address in other }}", { steps: [], end: { kind: "coerce", operator: "in" } }],
+    ["{{ order().address instanceof other }}", { steps: [], end: { kind: "coerce", operator: "instanceof" } }],
     ['<img [title]="order().address">', { steps: [], end: { kind: "consume", as: "handed-on" } }],
     ["@switch (order().address) { @case ('A') { } }", { steps: [], end: { kind: "compare", operator: "===" } }],
   ];

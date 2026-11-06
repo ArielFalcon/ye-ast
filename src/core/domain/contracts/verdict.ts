@@ -1,4 +1,4 @@
-import { evaluate, literalRepresentatives, representatives, subjectOf, testSubject, type Capability, type Representative, type Subject } from "../languages/javascript.ts";
+import { STRICT_OPERATORS, evaluate, literalRepresentatives, representatives, subjectOf, testSubject, type Capability, type Representative, type Subject } from "../languages/javascript.ts";
 import type { Evidence } from "../shared/fact.ts";
 import { relatePaths, type AccessPath } from "./access-path.ts";
 import type { Change, ValueLiterals } from "./change.ts";
@@ -67,7 +67,6 @@ type Outcome =
 
 const RUNS: Outcome = { kind: "runs" };
 const NONE: readonly Literal[] = [];
-const STRICT: ReadonlySet<string> = new Set(["===", "!=="]);
 
 /** A test of a deeper path dereferences the changed value itself and is reported as its own use; a `?.` there guards nothing before it. */
 function establishes({ kind, covers }: Guard, changed: AccessPath): boolean {
@@ -88,7 +87,7 @@ export function decideUse(use: UseSite, change: Change): Decision | undefined {
   const reaching = use.guards.filter((guard) => guard.kind !== "non-null-assertion" && establishes(guard, use.changed));
   const { added, removed } = change.values ?? { added: NONE, removed: NONE };
   const named = literalsNamed(use);
-  const classOutcomes = change.introduced.length === 0 ? [] : representatives(change.introduced, named.filter((literal) => !removed.includes(literal)), [...named, ...added, ...removed]).map((value) => outcomeOf(value, use, reaching));
+  const classOutcomes = change.introduced.length === 0 ? [] : representatives(change.introduced, named, [...named, ...added, ...removed], removed).map((value) => outcomeOf(value, use, reaching));
   const literalOutcomes = literalRepresentatives(added).map((value) => outcomeOf(value, use, reaching));
   const outcomes = [...classOutcomes, ...literalOutcomes];
   const thrown = outcomes.find((outcome) => outcome.kind === "throws");
@@ -106,20 +105,20 @@ export function decideUse(use: UseSite, change: Change): Decision | undefined {
 /** The use is the branch of a strict equality with a retired literal: it compares the value with one directly, or runs only where it equals one. */
 function comparesRetired({ operation: { steps, end }, changed }: UseSite, retired: readonly Literal[], reaching: readonly Guard[]): boolean {
   if (retired.length === 0) return false;
-  if (steps.length === 0 && end.kind === "compare" && end.literal !== undefined && STRICT.has(end.operator) && retired.includes(end.literal)) return true;
+  if (steps.length === 0 && end.kind === "compare" && end.literal !== undefined && STRICT_OPERATORS.has(end.operator) && retired.includes(end.literal)) return true;
   return reaching.some((guard) => "test" in guard && guard.kind !== "fallback" && relatePaths(guard.covers, changed) === "exact" && requiresRetired(guard.test, guard.holds, retired));
 }
 
 /** The test must give `holds` for the use to run, and holding means a strict equality with a retired literal. */
 function requiresRetired(test: Predicate, holds: boolean, retired: readonly Literal[]): boolean {
   if (test.kind === "one-of") return holds && test.literals.some((literal) => retired.includes(literal));
-  return test.kind === "literal" && STRICT.has(test.operator) && retired.includes(test.literal) && holds === (test.operator === "===");
+  return test.kind === "literal" && STRICT_OPERATORS.has(test.operator) && retired.includes(test.literal) && holds === (test.operator === "===");
 }
 
 /** The end shows the value or compares it strictly with a literal the change does not name, and no class of value runs on it or is undecided. */
 function isSilent({ operation: { end } }: UseSite, { added, removed }: ValueLiterals, classOutcomes: readonly Outcome[], literalOutcomes: readonly Outcome[]): boolean {
   const shown = end.kind === "consume" && end.as === "shown";
-  const elsewhere = end.kind === "compare" && STRICT.has(end.operator) && end.literal !== undefined && !added.includes(end.literal) && !removed.includes(end.literal);
+  const elsewhere = end.kind === "compare" && STRICT_OPERATORS.has(end.operator) && end.literal !== undefined && !added.includes(end.literal) && !removed.includes(end.literal);
   return (shown || elsewhere) && classOutcomes.every(({ kind }) => kind === "handled") && literalOutcomes.every(({ kind }) => kind === "handled" || kind === "runs");
 }
 

@@ -411,6 +411,14 @@ test("a switch compares the value it switches on strictly, as its labels do", as
   assert.deepEqual(await operations(["switch (order.tags) { case 'A': break }"], "tags"), [{ steps: [], end: { kind: "compare", operator: "===" } }]);
 });
 
+test("`in` and `instanceof` with the changed value as the right operand are unmodelled ends, and on the left it stays as it was", async () => {
+  assert.deepEqual(await operations(["'k' in order.tags", "other instanceof order.tags", "order.tags in other", "order.tags instanceof Other"], "tags"), [
+    { steps: [], end: { kind: "unmodelled", detail: "in" } },
+    { steps: [], end: { kind: "unmodelled", detail: "instanceof" } },
+    { steps: [], end: { kind: "coerce", operator: "in" } },
+  ]);
+});
+
 test("elements of an array are followed through for-of with the element path", async () => {
   const file = guarded(["for (const item of order.items) { show(item.owner.name) }"]);
   const result = await follow([file], parameterOrder, "items[].owner");

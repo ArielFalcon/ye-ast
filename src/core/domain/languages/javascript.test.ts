@@ -2,12 +2,13 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { ELEMENT } from "../contracts/access-path.ts";
 import { VALUE_CLASSES } from "../contracts/change.ts";
-import type { AccessStep, Predicate, UseEnd, UseOperation } from "../contracts/use-operation.ts";
-import { evaluate, representatives, subjectOf, testSubject } from "./javascript.ts";
+import type { AccessStep, JsonValue, Literal, Predicate, UseEnd, UseOperation } from "../contracts/use-operation.ts";
+import { evaluate, representatives, subjectOf, testSubject, type Subject } from "./javascript.ts";
 import { ARRAY_PROTOTYPE, BOOLEAN_PROTOTYPE, NUMBER_PROTOTYPE, OBJECT_PROTOTYPE, STRING_PROTOTYPE, type MemberKind } from "./javascript-prototypes.ts";
 
 const ALL = representatives(VALUE_CLASSES, []);
 const subjectOfLiteral = (literal: string) => ALL.find((representative) => representative.literal === literal)!.subject;
+const subjectNaming = (literal: string, named: readonly Literal[]) => representatives(VALUE_CLASSES, named).find((representative) => representative.literal === literal)!.subject;
 
 const member = (name: string, optional = false): AccessStep => ({ kind: "member", name, optional });
 const keyed = (key?: string | number, optional = false): AccessStep => ({ kind: "keyed", ...(key === undefined ? {} : { key }), optional });
@@ -43,7 +44,7 @@ test("a predicate is applied to a representative with the language's own operato
     [{ kind: "absence", operator: "!==", absence: "null" }, "0", true],
     [{ kind: "literal", operator: "===", literal: 0 }, '""', false],
     [{ kind: "literal", operator: "==", literal: 0 }, '""', true],
-    [{ kind: "literal", operator: "!=", literal: "a" }, '"a"', false],
+    [{ kind: "literal", operator: "!=", literal: "" }, '""', false],
     [{ kind: "typeof", operator: "===", type: "object" }, "null", true],
     [{ kind: "typeof", operator: "!==", type: "object" }, "[]", false],
     [{ kind: "array" }, "[]", true],
@@ -59,7 +60,7 @@ test("a predicate is applied to a representative with the language's own operato
 
 test("a one-of predicate is a strict equality with any of its literals and absences: no coercion, and an absence only matches itself", () => {
   const oneOf: Predicate = { kind: "one-of", literals: [0, "a"], absences: ["null"] };
-  const holds = (literal: string) => testSubject(oneOf, true, subjectOfLiteral(literal), []);
+  const holds = (literal: string) => testSubject(oneOf, true, subjectNaming(literal, [0, "a"]), []);
   assert.deepEqual(["0", '"a"', "null"].map(holds), ["passes", "passes", "passes"]);
   assert.deepEqual(["undefined", "false", '""', "1", "[]"].map(holds), ["rejects", "rejects", "rejects", "rejects", "rejects"]);
   assert.equal(testSubject(oneOf, false, subjectOfLiteral("0"), []), "rejects");
@@ -162,14 +163,29 @@ test("an iteration or an array destructuring throws unless the value is iterable
   assert.equal(outcome("0", [member("missing")], iterate), "throws 1 iterable");
 });
 
-test("compare, coerce and consume run on every value, a bare use needs a value, and a sink outside the vocabulary is unknown after the steps that throw", () => {
-  for (const end of [{ kind: "compare", operator: "===", literal: 1 }, { kind: "coerce", operator: "+" }, { kind: "consume", as: "shown" }] satisfies UseEnd[]) {
+test("a strict comparison and a consumption run on every value, a bare use needs a value, and a sink outside the vocabulary is unknown after the steps that throw", () => {
+  for (const end of [{ kind: "compare", operator: "===", literal: 1 }, { kind: "consume", as: "shown" }] satisfies UseEnd[]) {
     assert.deepEqual(new Set(ALL.map(({ literal }) => outcome(literal, [], end))), new Set(["runs"]));
   }
   assert.equal(outcome("null", [], NONE), "throws 0 readable");
   assert.equal(outcome("0", [], NONE), "runs");
   assert.equal(outcome("0", [], { kind: "unmodelled", detail: "x" }), "unknown");
   assert.equal(outcome("null", [member("a")], { kind: "unmodelled", detail: "x" }), "throws 0 readable");
+});
+
+test("a conversion to a primitive runs on the primitives and is unknown where an own key may shadow valueOf or toString", () => {
+  const converts = (end: UseEnd, subject: Subject) => evaluate({ steps: [], end }, subject).kind;
+  const plus: UseEnd = { kind: "coerce", operator: "+" };
+  const loose: UseEnd = { kind: "compare", operator: "==", literal: 1 };
+  const exact = (value: JsonValue) => subjectOf({ kind: "literal", value });
+  assert.deepEqual(ALL.map(({ literal, subject }) => [literal, converts(plus, subject)]).filter(([, kind]) => kind !== "runs"), [["[]", "unknown"], ["{}", "unknown"]]);
+  for (const end of [plus, loose]) {
+    assert.equal(converts(end, exact({})), "runs");
+    assert.equal(converts(end, exact([1, "a", null])), "runs");
+    for (const shadowing of [{ valueOf: null, toString: null }, { toString: null }, { valueOf: 1 }, [{ toString: 0 }]]) assert.equal(converts(end, exact(shadowing)), "unknown", JSON.stringify(shadowing));
+  }
+  assert.equal(converts({ kind: "compare", operator: "===", literal: 1 }, exact({ toString: null })), "runs");
+  assert.equal(converts(plus, subjectOf({ kind: "opaque" })), "unknown");
 });
 
 test("the step evaluation agrees with the running engine wherever it decides", () => {
@@ -208,6 +224,66 @@ test("the step evaluation agrees with the running engine wherever it decides", (
     }
   }
   assert.ok(decided > descriptors.length * 5);
+});
+
+test("a class sample stands for every value of its class: a predicate is decided only when all of them give one result", () => {
+  const named: readonly Literal[] = [5, "k"];
+  const result = (predicate: Predicate, literal: string, holds = true, segments: readonly string[] = []) => testSubject(predicate, holds, subjectNaming(literal, named), segments);
+  const literal = (operator: "===" | "!==" | "==" | "!=", value: Literal): Predicate => ({ kind: "literal", operator, literal: value });
+  assert.equal(result(literal("==", 1), '"a"'), "undecided");
+  assert.equal(result(literal("!=", 0), "[]"), "undecided");
+  assert.equal(result(literal("==", "7"), "1"), "undecided");
+  assert.equal(result(literal("==", true), "1"), "undecided");
+  assert.equal(result(literal("===", 9), "1"), "undecided");
+  assert.equal(result(literal("===", "9"), '"a"'), "undecided");
+  assert.equal(result({ kind: "one-of", literals: [9], absences: [] }, "1"), "undecided");
+  assert.equal(result(literal("===", 5), "1"), "rejects");
+  assert.equal(result(literal("==", 0), "1"), "rejects");
+  assert.equal(result(literal("==", "k"), '"a"'), "rejects");
+  assert.equal(result(literal("===", "7"), "1"), "rejects");
+  assert.equal(result(literal("!==", 5), "1"), "passes");
+  assert.equal(result({ kind: "one-of", literals: [5, "k"], absences: ["null"] }, "1"), "rejects");
+  assert.equal(result({ kind: "truthy" }, "1"), "passes");
+  assert.equal(result({ kind: "truthy" }, '"a"'), "passes");
+  assert.equal(result({ kind: "absence", operator: "==", absence: "undefined" }, "[]"), "rejects");
+  assert.equal(result({ kind: "typeof", operator: "===", type: "number" }, "1"), "passes");
+  assert.equal(result({ kind: "array" }, "[]"), "passes");
+});
+
+test("a length is exact on an exact string or array and any number on a sample, so a test of it is decided only for the exact ones", () => {
+  const length = (subject: Subject, test: Predicate, holds = true) => testSubject(test, holds, subject, ["length"]);
+  const isZero: Predicate = { kind: "literal", operator: "===", literal: 0 };
+  assert.equal(length(subjectOf({ kind: "literal", value: "" }), isZero), "passes");
+  assert.equal(length(subjectOf({ kind: "literal", value: [] }), { kind: "truthy" }), "rejects");
+  assert.equal(length(subjectOf({ kind: "literal", value: [1, 2] }), isZero), "rejects");
+  assert.equal(length(subjectOf({ kind: "literal", value: "xy" }), { kind: "truthy" }), "passes");
+  for (const literal of ['"a"', "[]"]) {
+    assert.equal(length(subjectOfLiteral(literal), isZero), "undecided", literal);
+    assert.equal(length(subjectOfLiteral(literal), { kind: "truthy" }), "undecided", literal);
+  }
+  assert.equal(length(subjectOfLiteral('"a"'), { kind: "typeof", operator: "===", type: "number" }), "passes");
+});
+
+test("a member that Object.prototype holds may be an own JSON value on an open object, and keeps its exact lookup on an exact one", () => {
+  const isString: Predicate = { kind: "typeof", operator: "===", type: "string" };
+  assert.equal(testSubject(isString, true, subjectOfLiteral("{}"), ["toString"]), "undecided");
+  assert.equal(testSubject(isString, true, subjectOfLiteral("{}"), ["valueOf"]), "undecided");
+  assert.equal(testSubject(isString, true, subjectOfLiteral("{}"), ["name"]), "undecided");
+  assert.equal(testSubject(isString, true, subjectOf({ kind: "literal", value: {} }), ["toString"]), "rejects");
+  assert.equal(testSubject(isString, true, subjectOf({ kind: "literal", value: { toString: "x" } }), ["toString"]), "passes");
+  assert.equal(outcome("{}", [member("toString"), call()]), "unknown");
+});
+
+test("no representative is a retired literal, the fixed samples included, and the fresh values avoid them", () => {
+  const retired: readonly Literal[] = [0, "", false];
+  assert.deepEqual(
+    representatives(VALUE_CLASSES, [], retired, retired).map(({ literal }) => literal),
+    ["null", "undefined", "true", "1", '"a"', "[]", "{}"],
+  );
+  assert.deepEqual(
+    representatives(["number", "string", "boolean"], [3, "z"], [3, "z", 1, "a"], [3, "a", true]).map(({ literal }) => literal),
+    ["0", "2", '""', '"aa"', '"z"', "false"],
+  );
 });
 
 const PROTOTYPES: readonly (readonly [object, ReadonlyMap<string, MemberKind>])[] = [

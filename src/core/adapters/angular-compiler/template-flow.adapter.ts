@@ -73,6 +73,8 @@ const TRUTHY: Predicate = { kind: "truthy" };
 const OPAQUE: Replacement = { kind: "opaque" };
 const COMPARISONS: ReadonlySet<string> = new Set(["==", "!=", "===", "!=="]);
 const RELATIONS: ReadonlySet<string> = new Set([...COMPARISONS, "<", "<=", ">", ">="]);
+/** `in` and `instanceof` throw on a right operand that is no object or no function; what they do with the value there is not modelled. */
+const MEMBERSHIP_OPERATORS: ReadonlySet<string> = new Set(["in", "instanceof"]);
 
 const NONE: UseEnd = { kind: "none" };
 const SHOWN: UseEnd = { kind: "consume", as: "shown" };
@@ -497,7 +499,7 @@ class TemplateFlow extends CombinedRecursiveAstVisitor {
       return consuming({ kind: "compare", operator: operation, ...(literal === undefined ? {} : { literal }) });
     };
     this.expr(left, nullish && this.isAbsent(right) ? TEST : against(right));
-    this.expr(right, nullish && this.isAbsent(left) ? TEST : against(left));
+    this.expr(right, nullish && this.isAbsent(left) ? TEST : MEMBERSHIP_OPERATORS.has(operation) ? opaque(operation) : against(left));
   }
 
   /** `??` and `||` on the changed value: it is replaced where absent (`??`) or falsy (`||`), and shown otherwise. */
