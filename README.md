@@ -267,7 +267,7 @@ flowchart TD
 | `ye_ast_decisions` | Find workspace configuration gaps and evidence-backed options | `repos`, `gateways`, `revision`, `live`, `offline`, `scope`, `mode` |
 | `ye_ast_compose` | Combine related queries into shared entities, relations and evidence with source provenance | `queries`, `mode`, `expect`, `deadlineMs` |
 
-Seven query families answer one question each; `ye_ast_compose` runs several of them in one call and merges what they
+Eight query families answer one question each; `ye_ast_compose` runs several of them in one call and merges what they
 share (see [Compose related queries](#compose-related-queries)).
 
 How the arguments behave:
