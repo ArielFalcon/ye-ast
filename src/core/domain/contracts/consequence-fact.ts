@@ -26,6 +26,8 @@ export interface ConsequencesValue {
   /** The hypothesis as normalized; `renamedTo` is the property's path under the new contract when it is renamed, `elementsAt` the path of the elements of a wrapped array. */
   hypothesis: { method: string; path: string; target: string; property: string; change: ChangeEntry | readonly ChangeEntry[]; renamedTo?: string; elementsAt?: string };
   assumedOldGuarantee: typeof OLD_GUARANTEE;
+  /** Under a `values` change, how many uses only show the value or compare it with another literal and so give no finding. */
+  silent?: number;
   /** A complete finding is a use with its verdict; an `unknown` one is a place the flow could not be followed. */
   findings: readonly Finding<UseConsequence>[];
 }

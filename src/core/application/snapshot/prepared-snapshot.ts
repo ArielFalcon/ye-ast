@@ -1,14 +1,12 @@
 import { canonicalJson } from "../../domain/shared/canonical-json.ts";
-import type { DeclaredScope, TrustMode } from "../../domain/shared/fact.ts";
+import type { DeclaredScope, Finding, TrustMode } from "../../domain/shared/fact.ts";
 import type { Result } from "../../domain/shared/result.ts";
 import type { PathSelection } from "../../domain/shared/scope.ts";
 import type { ScratchDirectory } from "../../ports/scratch-directory.port.ts";
 import { isInMapScope } from "../../domain/map/entrypoint-map.ts";
-import type { VcsFault } from "../../ports/vcs.port.ts";
+import type { CommitExport, VcsFault } from "../../ports/vcs.port.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
-import type { Finding } from "../../domain/shared/fact.ts";
 import type { Entrypoint } from "../../domain/entrypoints/entrypoint.ts";
-import type { CommitExport } from "../../ports/vcs.port.ts";
 import { ABORTED, extractSources, listExport, readSources, withScratch, type CommitExtraction, type SnapshotData, type SnapshotReaderDeps, type PreparedCommit, type SnapshotPreparation } from "./read-snapshot.ts";
 
 type Sources = Pick<CommitExtraction, "export" | "sources">;
@@ -31,8 +29,8 @@ export function withSnapshotPreparation<T>(scratch: ScratchDirectory, use: (prep
 
 /**
  * The snapshot data cache over one listing. `identity` names everything but the listing that the retained data
- * depends on; the key adds the whole listing, so a changed blob, written flag, skipped entry or cut misses. The first
- * `lookup` fixes the key; `output` retains nothing before it.
+ * depends on; the key adds `listing`, what every reader of the data observes. The first `lookup` fixes the key;
+ * `output` retains nothing before it.
  */
 export interface SnapshotRetention {
   lookup(): SnapshotData | undefined;
@@ -41,13 +39,13 @@ export interface SnapshotRetention {
   output<T>(slot: string, produce: () => Promise<T>, signal?: AbortSignal): Promise<T>;
 }
 
-export function snapshotRetention(deps: Pick<SnapshotReaderDeps, "snapshotCache" | "digest">, identity: string, exported: CommitExport): SnapshotRetention | undefined {
+export function snapshotRetention(deps: Pick<SnapshotReaderDeps, "snapshotCache" | "digest">, identity: string, listing: object): SnapshotRetention | undefined {
   const cache = deps.snapshotCache;
   if (cache === undefined) return undefined;
   let entry: string | undefined;
   return {
     lookup() {
-      entry ??= deps.digest.of(canonicalJson({ key: identity, export: exported }));
+      entry ??= deps.digest.of(canonicalJson({ key: identity, listing }));
       return cache.get(entry);
     },
     keepSources(sources) {
@@ -70,6 +68,11 @@ export function snapshotRetention(deps: Pick<SnapshotReaderDeps, "snapshotCache"
   };
 }
 
+/** The files a snapshot's data is read from: sources are their contents, and nothing else of the listing reaches the stored values. */
+function writtenListing(exported: CommitExport): object {
+  return exported.files.filter((file) => file.written).map(({ path, blob }) => ({ path, blob }));
+}
+
 export async function prepareCommit(
   deps: SnapshotReaderDeps,
   repo: string,
@@ -81,6 +84,7 @@ export async function prepareCommit(
 ): Promise<Result<PreparedCommit, VcsFault>> {
   if (signal?.aborted) return ABORTED;
   const key = canonicalJson({ repo, sha, ...context, budget: deps.budget ?? null });
+  const identity = canonicalJson({ ...context, budget: deps.budget ?? null });
   const build = async (root: string): Promise<Result<PreparedCommit, VcsFault>> => {
     const listed = await listExport(deps, repo, sha, root, selected, signal);
     if (!listed.ok) return listed;
@@ -91,7 +95,7 @@ export async function prepareCommit(
       const answer = await (written ??= listed.value.materialize(signal));
       return signal?.aborted ? ABORTED : answer;
     };
-    const retention = snapshotRetention(deps, key, exported.value);
+    const retention = snapshotRetention(deps, identity, writtenListing(exported.value));
     let loaded: Sources | undefined;
     let extracted: CommitExtraction | undefined;
     const sources = async (signal?: AbortSignal): Promise<Result<Sources, VcsFault>> => {

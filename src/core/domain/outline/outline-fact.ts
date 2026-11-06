@@ -52,6 +52,24 @@ export interface OutlineFile {
 /** A container of a focused declaration, without the other declarations it holds. */
 export type OutlineAncestor = Omit<OutlineDeclaration, "children">;
 
+/** Where a use leads: a declaration of the repository, a package, or a name the language's own libraries declare. */
+export type OutlineUseTarget = { declaration: { file: string; name: string; kind: string; line: number; endLine: number } } | { module: string } | { global: string };
+
+/** A place of the focused declaration's body, 1-based. */
+export interface OutlinePlace {
+  line: number;
+  /** Absent when the index records no column. */
+  column?: number;
+}
+
+/** One thing the focused declaration's own body uses that is bound outside the body, with every place it uses it. */
+export type OutlineUse = OutlineUseTarget & {
+  /** How the body uses it, by graph edge kind (`calls`, `instantiates`, `references`, `extends`, `implements`), sorted. */
+  relations: readonly string[];
+  /** The places of the uses in source order; empty when the index places none. */
+  at: readonly OutlinePlace[];
+};
+
 /** One declaration a focus selector matched, cut out of its file. */
 export interface OutlineFocus {
   file: string;
@@ -65,6 +83,12 @@ export interface OutlineFocus {
   declaration: OutlineDeclaration;
   /** How many of the file's declarations are neither an ancestor nor under the declaration: the answer is a cut of the file. */
   omitted: number;
+  /**
+   * What the declaration's own body uses that is bound outside it, in order of first use, places without a line last; a
+   * use no binding proves is an `unresolved-link` cut, and a member used on a local value is not listed. Absent when not
+   * evaluated; empty when the body uses nothing outside itself.
+   */
+  uses?: readonly OutlineUse[];
 }
 
 /** Every requested file whole. */

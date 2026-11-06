@@ -33,6 +33,7 @@ import {
   type TmplAstIfBlock,
   type TmplAstLetDeclaration,
   type TmplAstSwitchBlock,
+  type TmplAstSwitchBlockCase,
   type TmplAstTemplate,
   type TmplAstVariable,
   TypeofExpression,
@@ -72,6 +73,8 @@ const TRUTHY: Predicate = { kind: "truthy" };
 const OPAQUE: Replacement = { kind: "opaque" };
 const COMPARISONS: ReadonlySet<string> = new Set(["==", "!=", "===", "!=="]);
 const RELATIONS: ReadonlySet<string> = new Set([...COMPARISONS, "<", "<=", ">", ">="]);
+/** `in` and `instanceof` throw on a right operand that is no object or no function; what they do with the value there is not modelled. */
+const MEMBERSHIP_OPERATORS: ReadonlySet<string> = new Set(["in", "instanceof"]);
 
 const NONE: UseEnd = { kind: "none" };
 const SHOWN: UseEnd = { kind: "consume", as: "shown" };
@@ -83,6 +86,15 @@ type Sink =
   | { kind: "test" }
   | { kind: "opaque"; end: UseEnd | "frontier"; cause: FrontierCause; detail: string }
   | { kind: "bind"; name: string; ref: SymbolRef };
+
+const ITERATE: UseEnd = { kind: "iterate", tolerates: BOTH };
+
+/** What the operator at a sink does with a value read from the changed one: the ends of an operator, else the accesses alone decide. */
+function reachedBy(sink: Sink): UseEnd {
+  const end = sink.kind === "consume" || sink.kind === "opaque" ? sink.end : NONE;
+  if (end === "frontier") return NONE;
+  return end.kind === "coerce" || end.kind === "compare" || end.kind === "iterate" || (end.kind === "unmodelled" && MEMBERSHIP_OPERATORS.has(end.detail)) ? end : NONE;
+}
 
 const consuming = (end: UseEnd): Sink => ({ kind: "consume", end });
 const TEST: Sink = { kind: "test" };
@@ -259,10 +271,27 @@ class TemplateFlow extends CombinedRecursiveAstVisitor {
   override visitSwitchBlock(block: TmplAstSwitchBlock): void {
     const compared = consuming({ kind: "compare", operator: "===" });
     this.expr(block.expression, compared);
+    const on = this.peek(block.expression);
+    const labelsOf = (cases: readonly TmplAstSwitchBlockCase[]): AST[] => cases.flatMap((option) => (option.expression === null ? [] : [option.expression]));
     for (const group of block.groups) {
-      for (const option of group.cases) if (option.expression !== null) this.expr(option.expression, compared);
-      this.nodes(group.children);
+      for (const label of labelsOf(group.cases)) this.expr(label, compared);
+      const isDefault = group.cases.some((option) => option.expression === null);
+      const labels = isDefault ? labelsOf(block.groups.filter((other) => other !== group).flatMap((other) => other.cases)) :labelsOf(group.cases);
+      const established = on === undefined || labels.length === 0 ? [] : [this.caseGuard(on, block.expression, labels, !isDefault)];
+      this.within(established, () => this.nodes(group.children));
     }
+  }
+
+  /** The switched value strictly equals one of the labels; a label that is no literal leaves the test unmodelled. */
+  private caseGuard(on: Tracked, node: AST, labels: readonly AST[], holds: boolean): Guard {
+    const literals = labels.map(literalOf);
+    const absences = labels.map(absenceOf);
+    if (labels.some((_, index) => literals[index] === undefined && absences[index] === undefined)) return this.guard(on, node, { kind: "case" });
+    return this.guard(on, node, {
+      kind: "condition",
+      test: { kind: "one-of", literals: literals.filter((literal) => literal !== undefined), absences: absences.filter((absence) => absence !== undefined) },
+      holds,
+    });
   }
 
   override visitLetDeclaration(declaration: TmplAstLetDeclaration): void {
@@ -479,7 +508,7 @@ class TemplateFlow extends CombinedRecursiveAstVisitor {
       return consuming({ kind: "compare", operator: operation, ...(literal === undefined ? {} : { literal }) });
     };
     this.expr(left, nullish && this.isAbsent(right) ? TEST : against(right));
-    this.expr(right, nullish && this.isAbsent(left) ? TEST : against(left));
+    this.expr(right, nullish && this.isAbsent(left) ? TEST : MEMBERSHIP_OPERATORS.has(operation) ? opaque(operation) : against(left));
   }
 
   /** `??` and `||` on the changed value: it is replaced where absent (`??`) or falsy (`||`), and shown otherwise. */
@@ -487,7 +516,8 @@ class TemplateFlow extends CombinedRecursiveAstVisitor {
     if (!this.tracks(node.left)) return this.expr(node.left, sink);
     const tracked = this.chain(node.left);
     if (tracked === undefined) return;
-    if (relatePaths(tracked.offset, this.changed) !== "exact") return this.end(tracked, sink, node.left);
+    const relation = relatePaths(tracked.offset, this.changed);
+    if (relation !== "exact") return this.end(tracked, relation === "beyond" ? TEST : sink, node.left);
     const replacement = jsonOf(node.right);
     const test = node.operation === "??" ? PRESENT : TRUTHY;
     this.use(tracked, HANDED_ON, node.left, [this.guard(tracked, node, { kind: "fallback", test, holds: true, replacement: replacement === undefined ? OPAQUE : { kind: "literal", value: replacement } })]);
@@ -535,7 +565,7 @@ class TemplateFlow extends CombinedRecursiveAstVisitor {
   private end(tracked: Tracked, sink: Sink, node: AST): void {
     const relation = relatePaths(tracked.offset, this.changed);
     if (relation === "disjoint") return;
-    if (relation === "beyond") return this.use(tracked, NONE, node);
+    if (relation === "beyond") return this.use(tracked, reachedBy(sink), node);
     switch (sink.kind) {
       case "test":
         return;
@@ -601,14 +631,16 @@ class TemplateFlow extends CombinedRecursiveAstVisitor {
   /** `@for` and `*ngFor`: the item is the element of the iterated value, so it drops a leading `[]`. */
   private iterate(iterable: AST, item: TmplAstVariable | undefined, offset: number): void {
     const tracked = this.peek(iterable);
+    let sink = TEST;
     if (tracked !== undefined) {
       const element = [...tracked.offset, ELEMENT];
       const relation = relatePaths(tracked.offset, this.changed);
       if (item !== undefined && startsWith(this.changed, element)) this.alias(item, element, tracked, "iterate", offset, [...tracked.slots, `loop:${offset}`]);
       else if (relation === "contains") this.frontier(tracked, "unmodelled-flow", "iterate", offset);
-      else if (relation === "exact") this.use(tracked, { kind: "iterate", tolerates: BOTH }, iterable);
+      else if (relation === "exact") this.use(tracked, ITERATE, iterable);
+      else if (relation === "beyond") sink = consuming(ITERATE);
     }
-    this.expr(iterable, TEST);
+    this.expr(iterable, sink);
   }
 
   private binding(attribute: TmplAstBoundAttribute, matched: readonly DirectiveMeta[], native: Sink): void {

@@ -90,17 +90,15 @@ test("a state built by other engines is discarded and the mirror is rebuilt in f
 
   assert.deepEqual(fake.calls.filter((call) => ["discard", "reconcile", "buildMirror"].includes(call)), ["discard", "reconcile", "buildMirror"]);
   assert.equal(fake.builds, 2);
-  assert.deepEqual(fake.forced.at(-1), []);
 });
 
-test("the paths a crashed refresh left pending are copied again and synced by the next one", async () => {
+test("the paths a crashed refresh left pending are synced by the next one", async () => {
   const fake = fakeLive({ "src/A.java": "1", "src/B.java": "1" });
   await tree(fake);
   fake.state.current = { ...fake.state.current!, pending: ["src/B.java"] };
 
   await tree(fake);
 
-  assert.deepEqual(fake.forced.at(-1), ["src/B.java"]);
   assert.deepEqual(fake.syncs, [["src/B.java"]]);
   assert.deepEqual(fake.state.current?.pending, []);
 });

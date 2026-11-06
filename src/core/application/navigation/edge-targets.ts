@@ -18,6 +18,8 @@ export interface EdgeTargets {
   verdictsOf(edges: readonly FollowedEdge[], signal?: AbortSignal): Promise<readonly EdgeTarget[]>;
   /** The edges the graph matched elsewhere that an import proves reach `node`, each with `node` as its target. */
   redirectedInto(node: GraphSymbol, signal?: AbortSignal): Promise<readonly FollowedEdge[]>;
+  /** Per local name `file`'s imports bind, the declaration the join proves it reaches, when it proves exactly one. */
+  importedDeclarations(file: string): Promise<ReadonlyMap<string, GraphSymbol>>;
 }
 
 export interface EdgeTargetsDeps {
@@ -85,6 +87,7 @@ export function createEdgeTargets({ origins, store, modules }: EdgeTargetsDeps):
 
   return {
     verdictsOf,
+    importedDeclarations: bindingsOf,
     async redirectedInto(node, signal) {
       const importing = store.symbolsByIds([...new Set(store.incomingEdges([node.id], [IMPORT]).map((edge) => edge.source))]);
       const candidates: FollowedEdge[] = [];

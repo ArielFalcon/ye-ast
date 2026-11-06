@@ -137,6 +137,30 @@ test("a renamed property is decided as one that is always absent, and the answer
   assert.equal(JSON.stringify(fact.value).split("owner.location").length - 1, 1);
 });
 
+test("under a values change the uses left silent are counted, and any other change states no count", async () => {
+  const compared: UseOperation = { steps: [], end: { kind: "compare", operator: "===", literal: "B" } };
+  const flow = { [carrierKey(siteOf())]: { uses: [use(30, { path: path("address") }), use(40, { path: path("address"), operation: compared }), use(50, { operation: READ })], next: [], frontiers: [] } };
+
+  const fact = await setup({ flow, change: { values: { added: ["A"] } } }).ask();
+
+  assert.equal(fact.value.silent, 2);
+  assert.deepEqual(verdictsOf(fact), ["review"]);
+  assert.deepEqual(fact.value.hypothesis.change, { values: { added: ["A"], removed: [] } });
+  assert.equal((await setup({ flow, change: { values: { removed: ["A"] } } }).ask()).value.silent, 2);
+  assert.equal((await setup({ change: { values: { added: ["A"] } } }).ask()).value.silent, 0);
+  assert.equal("silent" in (await setup({ flow }).ask()).value, false);
+});
+
+test("a meaning note reaches the answer as written and makes every use a review", async () => {
+  const flow = { [carrierKey(siteOf())]: { uses: [use(30, { path: path("address") })], next: [], frontiers: [] } };
+
+  const fact = await setup({ flow, change: [{ meaning: "euros become cents" }] }).ask();
+
+  assert.deepEqual(fact.value.hypothesis.change, { meaning: "euros become cents" });
+  assert.deepEqual(fact.value.findings.map((finding) => finding.status === "complete" && finding.value.verdict), [{ kind: "review", reason: "meaning" }]);
+  assert.equal("silent" in fact.value, false);
+});
+
 test("a wrapped array is echoed with the path its elements move to, once", async () => {
   const fact = await setup({ property: "owner.items", change: { wrapped: "content" } }).ask();
 

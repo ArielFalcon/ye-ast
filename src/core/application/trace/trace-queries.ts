@@ -22,7 +22,8 @@ import { createEdgeTargets } from "../navigation/edge-targets.ts";
 import { retainedRelations } from "../relations/retained-relations.ts";
 import type { RelationExtractor } from "../relations/relation-extractor.ts";
 import { createHeadReader, type FactSpec, type HeadReaderDeps } from "../snapshot/head-reading.ts";
-import { isTraceRoot, unresolvedOncePerFile, walkTrace } from "./trace-walk.ts";
+import { isTraceRoot, walkTrace } from "./trace-walk.ts";
+import { unresolvedOncePerFile } from "../navigation/declaration-uses.ts";
 
 export interface TraceQueriesDeps extends HeadReaderDeps {
   /** Reads where the bare names a file calls come from, so a call to a package or a language global is external. */

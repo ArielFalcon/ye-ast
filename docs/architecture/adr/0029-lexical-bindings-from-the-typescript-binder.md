@@ -66,6 +66,9 @@ latency and 2 to 3.6 times the memory for a program with the library and depende
    `getSymbolAtLocation` on that identifier, so a declared type can be told apart from a library, primitive or package
    one. It stays no type API: no `getTypeAtLocation`, no `getTypeOfSymbol`, no inference, and the `typeCount` test is to
    cover the type positions when S5 adds them. Until then the resolver answers `none` for a name in a type position.
+   The root bindings of a use (`ImportOrigins.rootBindings`, read by outline) already answer a type name, without the
+   resolver: by the type scopes written around it (a type parameter, an `infer`, a mapped type's key, a declaration in an
+   enclosing block, namespace or the file), then the file's imports and the language's globals.
 9. Admitted for S5, not yet used: a receiver annotated with a library, primitive or package type is an external leaf
    carrying the declared type as its evidence only when no in-scope repository type extends or implements that name and
    the name is not imported from one of the repository's own packages. A type declared nowhere (generated code) stays unknown.

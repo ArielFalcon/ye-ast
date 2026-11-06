@@ -56,6 +56,14 @@ export interface ImportOrigins {
    */
   rootOrigins(sites: readonly ResolvedNameSite[], signal?: AbortSignal): Promise<readonly RootOrigin[]>;
   /**
+   * One entry per site, in the order received: what binds, at the site's own place, the name the expression written
+   * there is rooted at (`ts` for `ts.Expression` placed at either name, `f` for `f(x).g`, `Set` for `new Set(a).add(k)`).
+   * A value name is bound by the file's own scoping (ADR-0029); a type name by the type scopes around it, then the file's
+   * imports and top-level declarations; `super` by the root of its class's `extends` expression. `unknown` when the place
+   * spells another name, the name is dynamic, or nothing proves a binding.
+   */
+  rootBindings(sites: readonly UseSite[], signal?: AbortSignal): Promise<readonly RootBinding[]>;
+  /**
    * Where the repository may run its own code where a library's is expected: the path of every global the snapshot
    * declares, every member path a source writes from a global (`Math.max = f`, `Array.prototype[k] = f`,
    * `globalThis.fetch = f`, `Object.assign(process.env, vars)`), and every package a source writes through an import of
@@ -77,6 +85,37 @@ export interface ReplacedRoots {
   /** Package names, as an import specifier's first one or two segments name them (`lodash`, `@angular/core`). */
   packages: ReadonlySet<string>;
 }
+
+/** A place a declaration uses a name, where the index places the use: repository-relative and 1-based. */
+export interface UseSite {
+  file: string;
+  line: number;
+  /** 1-based UTF-16 column. */
+  column: number;
+  /**
+   * A name of the chain the site begins: the identifier, `this` or `super` the index's spelling of an unresolved use
+   * starts with, written at the site, or the name a resolved use reaches, written anywhere along the chain.
+   */
+  spelled: string;
+  /** The declaration whose body writes the use, as the index places it: its name and the 1-based lines it spans. */
+  owner: { name: string; line: number; endLine: number };
+}
+
+/**
+ * What binds a use's root, the first name of the chain written at the site: an import (with the name after the root, for
+ * a namespace), a declaration of the file outside the owner's syntax (by the 1-based lines its names are written on),
+ * a declaration the owner's own syntax holds (`local`), a declaration of a repository file by its dotted containment
+ * path, the language, or `this` (with the member after it).
+ */
+export type RootBinding =
+  | { kind: "import"; root: string; member?: string; origin: Extract<ImportOrigin, { kind: "repository" | "external" }> }
+  /** `captured`: every declaration is a value (a parameter, a variable or a catch binding) of a function around the use. */
+  | { kind: "declared"; root: string; lines: readonly number[]; captured: boolean }
+  | { kind: "local"; root: string }
+  | { kind: "located"; root: string; file: string; path: string }
+  | { kind: "ambient"; root: string }
+  | { kind: "this"; member?: string }
+  | { kind: "unknown" };
 
 /** Reads the import bindings of one snapshot; composition supplies it, so no use case imports a parser. */
 export type ImportOriginsReader = (sources: readonly SourceFile[]) => ImportOrigins;

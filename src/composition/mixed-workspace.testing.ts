@@ -7,7 +7,7 @@ import { createImpactQueries } from "../core/application/impact/impact-queries.t
 import { createWorkspaceQueries, createWorkspaceReadOperation } from "../core/application/topology/workspace-queries.ts";
 import { createCapturedWorkspaceImpactQueries } from "../core/application/topology/workspace-impact.ts";
 import { createCodeGraph, SUPPORTED_STORE } from "../core/adapters/codegraph/codegraph.adapter.ts";
-import { STAGING_RULES_VERSION } from "../core/adapters/codegraph/stage-snapshot.ts";
+import { LIVE_STAGING_VERSION } from "./compose.ts";
 import { createSha256Digest } from "../core/adapters/crypto/sha256-digest.adapter.ts";
 import { createLiveMirror, defaultLiveMirrorDeps } from "../core/adapters/fs/live-mirror.adapter.ts";
 import { createFsSourceReader } from "../core/adapters/fs/fs-source-reader.adapter.ts";
@@ -77,7 +77,7 @@ export function realWorkspaceFixture(scratchRoot: string, roots: readonly string
     return { ok: true, value: { release: async () => { try { await result.value.release(); } finally { active.delete(location.repo); } } } };
   };
   const live: LiveDeps = { workingTree: createGitWorkingTree(), mirror, graph, digest,
-    versions: { codegraph, store: JSON.stringify(SUPPORTED_STORE), staging: `${STAGING_RULES_VERSION}:json-resources-v1` },
+    versions: { codegraph, store: JSON.stringify(SUPPORTED_STORE), staging: LIVE_STAGING_VERSION },
     retention: { keepScopes: 3, unusedForMs: 14 * 24 * 60 * 60 * 1000, maxBytes: 512 * 1024 * 1024 }, now: () => 1 };
   const trust: TrustRecordReader = { read: async (root) => ({ ok: true, value: roots.includes(root) ? "trusted" : undefined }) };
   const common = { vcs, scratch, reader, extractor, digest, matcher, graph, live, trust, producer: { name: "ye-ast", version }, engines };

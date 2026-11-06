@@ -7,6 +7,7 @@ import type { Result } from "../../domain/shared/result.ts";
 import { retentionDiscards } from "../../domain/snapshot/live-retention.ts";
 import type { CodeGraph, CodeGraphFault, IndexSummary } from "../../ports/code-graph.port.ts";
 import type { Digest } from "../../ports/digest.port.ts";
+import { DEBRIS_STALE_MS } from "../../ports/live-mirror.port.ts";
 import type { IndexCache, IndexDiscard, IndexedSnapshot, IndexRetentionPolicy } from "../../ports/index-cache.port.ts";
 import { STAGING_RULES_VERSION } from "./stage-snapshot.ts";
 import { SUPPORTED_STORE } from "./store-version.ts";
@@ -163,14 +164,23 @@ export function createIndexCache(deps: IndexCacheDeps): IndexCache {
     return true;
   }
 
-  /** Removes the indexes the policy names, once per obtain; it never fails the obtain it follows. */
+  /** Whether nothing in a build directory, or the directory itself, was written for longer than the debris bound. */
+  async function abandoned(name: string): Promise<boolean> {
+    const directory = join(indexes, name);
+    const newest = await Promise.all([directory, ...(await readdir(directory)).map((child) => join(directory, child))].map((path) => lstat(path).then((status) => status.mtimeMs, () => 0)));
+    return now() - Math.max(...newest) > DEBRIS_STALE_MS;
+  }
+
+  /** Removes the indexes the policy names and the build directories a killed build left, once per obtain; it never fails the obtain it follows. */
   async function sweep(current: string): Promise<void> {
     if (deps.retention === undefined) return;
     try {
       const leased = await leasedKeys();
       const usage = new Map<string, { bytes: number; lastUsedMs: number | null }>();
       for (const item of await readdir(indexes, { withFileTypes: true })) {
-        if (item.isDirectory() && !item.name.startsWith(".")) usage.set(item.name, await measureEntry(item.name));
+        if (!item.isDirectory()) continue;
+        if (!item.name.startsWith(".")) usage.set(item.name, await measureEntry(item.name));
+        else if (item.name.startsWith(BUILD_PREFIX) && (await abandoned(item.name).catch(() => false))) await rm(join(indexes, item.name), { recursive: true, force: true });
       }
       const scopes = [...usage].map(([scope, { bytes, lastUsedMs }]) => ({ scope, bytes, lastUsedMs, locked: leased.has(scope), versionsMatch: true }));
       const discards = retentionDiscards({ scopes, debris: [] }, current, { keepScopes: Number.POSITIVE_INFINITY, ...deps.retention }, now());

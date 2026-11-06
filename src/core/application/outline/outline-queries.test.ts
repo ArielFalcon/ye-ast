@@ -4,6 +4,10 @@ import { fakeCodeGraph, fakeNode } from "../navigation/fake-code-graph.testing.t
 import { fakeLive, type FakeLive } from "../live/fake-live.testing.ts";
 import type { OutlineSelector } from "../../ports/outline-queries.port.ts";
 import type { VcsFault } from "../../ports/vcs.port.ts";
+import type { ResolvedNameSite, RootBinding, UseSite } from "../../ports/import-origins.port.ts";
+import { EDGE_POLICY, type RootOrigin } from "../../domain/impact/edge-policy.ts";
+import type { ModuleDependency } from "../../domain/impact/module-dependency.ts";
+import type { OutlineUse } from "../../domain/outline/outline-fact.ts";
 import { createSnapshotDataCache } from "../snapshot/snapshot-data-cache.ts";
 import { createOutlineQueries, type OutlineQueriesDeps } from "./outline-queries.ts";
 
@@ -24,11 +28,18 @@ interface Options {
   unmodelled?: readonly string[];
   /** The Vcs lists and writes apart; writing answers the fault when given. */
   lazy?: { materialize?: VcsFault };
+  unresolved?: Parameters<typeof fakeCodeGraph>[2];
+  /** Where each resolved edge's root is bound, by `<line>:<1-based column>`; unknown otherwise. */
+  roots?: Readonly<Record<string, RootOrigin>>;
+  /** What binds each use's root, by `<line>:<1-based column> <root>`; unknown otherwise. */
+  bindings?: Readonly<Record<string, RootBinding>>;
+  /** The module statements the TypeScript reader answers. */
+  dependencies?: readonly ModuleDependency[];
 }
 
 function setup(options: Options = {}) {
-  const log = { closed: 0, reads: 0, extractions: 0, readPaths: [] as string[][], materialized: 0, readBeforeWrite: false, moduleReads: [] as (readonly string[] | undefined)[] };
-  const store = { ...fakeCodeGraph(options.nodes ?? [], options.edges ?? []), close: () => void (log.closed += 1) };
+  const log = { closed: 0, reads: 0, extractions: 0, readPaths: [] as string[][], materialized: 0, readBeforeWrite: false, moduleReads: [] as (readonly string[] | undefined)[], scanned: [] as string[][] };
+  const store = { ...fakeCodeGraph(options.nodes ?? [], options.edges ?? [], options.unresolved ?? []), close: () => void (log.closed += 1) };
   const written = options.written ?? [];
   const deps = {
     vcs: {
@@ -47,9 +58,14 @@ function setup(options: Options = {}) {
     matcher: { matches: options.matches ?? (() => true) },
     graph: { index: async () => ({ ok: true, value: SUMMARY }), open: () => ({ ok: true, value: store }) },
     engines: {},
-    moduleReaders: [{ extract: async (_sources: unknown, read?: { files?: readonly string[] }) => { log.moduleReads.push(read?.files); return { files: written.map((file) => ({ file, statements: [], moduleOnly: true })), dependencies: [], unread: [] }; } }],
+    moduleReaders: [{ extract: async (_sources: unknown, read?: { files?: readonly string[] }) => { log.moduleReads.push(read?.files); return { files: written.map((file) => ({ file, statements: [], moduleOnly: true })), dependencies: options.dependencies ?? [], unread: [] }; } }],
+    importOrigins: () => ({
+      origins: async () => [],
+      rootOrigins: async (sites: readonly ResolvedNameSite[]) => sites.map((site): RootOrigin => options.roots?.[`${site.line}:${site.column}`] ?? { status: "unknown", reason: "unresolved", evidence: [] }),
+      rootBindings: async (sites: readonly UseSite[]) => sites.map((site): RootBinding => options.bindings?.[`${site.line}:${site.column} ${site.spelled}`] ?? { kind: "unknown" }),
+    }),
     ...(options.snapshotCache && { snapshotCache: options.snapshotCache }),
-    ...(options.unmodelled && { unmodelled: { extract: async (sources: readonly { path: string }[]) => sources.map(({ path }) => path).filter((path) => options.unmodelled!.includes(path)) } }),
+    ...(options.unmodelled && { unmodelled: { extract: async (sources: readonly { path: string }[]) => (log.scanned.push(sources.map(({ path }) => path)), sources).map(({ path }) => path).filter((path) => options.unmodelled!.includes(path)) } }),
     ...(options.live && { live: options.live.deps, trust: { read: async () => ({ ok: true, value: "trusted" }) } }),
   } as unknown as OutlineQueriesDeps;
   return { queries: createOutlineQueries(deps), log, store };
@@ -132,16 +148,6 @@ test("an aborted live outline returns the cancellation fault before acquiring it
   assert.deepEqual(mirror.held, { locks: 0, released: 0 });
 });
 
-test("a focused outline never reads nor restores source data", async () => {
-  let restored = 0;
-  const { queries, log } = setup({ written: ["src/Order.java"], nodes: [fakeNode("Order.total", "method", "src/Order.java", 20, 24, "total")], snapshotCache: { get: () => { restored++; return { sources: [] }; }, put: () => undefined } });
-  const answer = await queries.outline({ repo: "/work/shop", repoId: "shop", revision: "HEAD", focus: [{ file: "src/Order.java", symbol: "total" }] });
-  assert.ok(answer.ok && answer.value.status === "complete");
-  assert.equal(restored, 0);
-  assert.equal(log.reads, 0);
-  assert.equal(log.extractions, 0);
-});
-
 const API = "src/api.ts";
 const TWO_CLASSES = {
   written: [API],
@@ -185,6 +191,7 @@ test("a dotted focus answers only that member with its subtree and its container
       ancestors: [{ kind: "class", name: "A", line: 1, endLine: 12 }],
       declaration: { kind: "method", name: "m", line: 2, endLine: 6, children: [{ kind: "function", name: "inner", line: 3, endLine: 5 }] },
       omitted: 4,
+      uses: [],
     }],
     unheld: [],
   });
@@ -232,14 +239,14 @@ test("a listed file whose declarations the graph cannot place is cut, so its out
   assert.deepEqual(answer.value.cuts.map((cut) => [cut.kind, cut.at]), [["no-extractor", [POINT]]]);
 });
 
-test("a focus on a file the graph cannot place is cut, reading that file alone", async () => {
+test("a focus on a file the graph cannot place is cut, scanning that file alone", async () => {
   const { queries, log } = setup(POINT_INDEX);
 
   const answer = await queries.outline({ repo: "/work/shop", repoId: "shop", revision: "HEAD", focus: [{ file: POINT, symbol: "origin" }] });
 
   assert.ok(answer.ok && answer.value.status === "partial");
   assert.deepEqual(answer.value.cuts.map((cut) => [cut.kind, cut.at]), [["no-extractor", [POINT]]]);
-  assert.deepEqual(log.readPaths, [[POINT]]);
+  assert.deepEqual(log.scanned, [[POINT]]);
 });
 
 test("a focus on a written Java file writes the snapshot before reading it, once, although the index build needs it too", async () => {
@@ -265,4 +272,169 @@ test("a requested-files module read is repeated for every request and never answ
   await queries.outline({ repo: "/work/shop", repoId: "shop", revision: "HEAD", files: ["src/Order.java"] });
   await queries.outline({ repo: "/work/shop", repoId: "shop", revision: "HEAD", files: ["src/Cart.java"] });
   assert.deepEqual(log.moduleReads, [["src/Order.java"], ["src/Cart.java"]]);
+});
+
+const USE = "src/use.ts";
+const LIB = "src/lib.ts";
+const USES_INDEX: Options = {
+  written: [USE, LIB],
+  nodes: [
+    fakeNode("useFile", "file", USE, 1, 60),
+    fakeNode("top", "constant", USE, 2, 2, "top"),
+    fakeNode("run", "function", USE, 10, 20, "run"),
+    fakeNode("inner", "function", USE, 12, 14, "inner"),
+    fakeNode("Svc", "class", USE, 30, 40, "Svc"),
+    fakeNode("Svc.go", "method", USE, 31, 33, "go"),
+    fakeNode("Svc.load", "method", USE, 34, 36, "load"),
+    fakeNode("Svc.cache", "property", USE, 37, 37, "cache"),
+    fakeNode("libFile", "file", LIB, 1, 20),
+    fakeNode("helper", "function", LIB, 1, 3, "helper"),
+    fakeNode("Other", "class", LIB, 5, 9, "Other"),
+    fakeNode("Node", "interface", LIB, 11, 13, "Node"),
+  ],
+  edges: [
+    { from: "useFile", to: "top", kind: "contains" },
+    { from: "useFile", to: "run", kind: "contains" },
+    { from: "run", to: "inner", kind: "contains" },
+    { from: "useFile", to: "Svc", kind: "contains" },
+    { from: "Svc", to: "Svc.go", kind: "contains" },
+    { from: "Svc", to: "Svc.load", kind: "contains" },
+    { from: "Svc", to: "Svc.cache", kind: "contains" },
+    { from: "libFile", to: "helper", kind: "contains" },
+    { from: "libFile", to: "Other", kind: "contains" },
+    { from: "libFile", to: "Node", kind: "contains" },
+    { from: "useFile", to: "helper", kind: "imports", line: 1, column: 9 },
+    { from: "run", to: "helper", kind: "calls", line: 11, column: 2 },
+    { from: "run", to: "helper", kind: "references", line: 15, column: 4 },
+    { from: "run", to: "Other", kind: "calls", line: 16, column: 2, synthesizedBy: EDGE_POLICY.ignoredSynthesizers[0] },
+    { from: "run", to: "Node", kind: "references", line: 17, column: 10 },
+    { from: "run", to: "inner", kind: "calls", line: 18, column: 2 },
+    { from: "run", to: "Other", kind: "references" },
+    { from: "inner", to: "Other", kind: "instantiates", line: 13, column: 4 },
+  ],
+  unresolved: [
+    { from: "run", name: "helper", kind: "calls", file: USE, line: 11, column: 2 },
+    { from: "run", name: "z.object", kind: "calls", file: USE, line: 12, column: 4 },
+    { from: "run", name: "seen.size", kind: "references", file: USE, line: 13, column: 4 },
+    { from: "run", name: "top", kind: "references", file: USE, line: 14, column: 4 },
+    { from: "run", name: "inner", kind: "calls", file: USE, line: 14, column: 20 },
+    { from: "run", name: "Map.groupBy", kind: "calls", file: USE, line: 15, column: 10 },
+    { from: "run", name: "process.exit", kind: "calls", file: USE, line: 16, column: 30 },
+    { from: "run", name: "process.cwd", kind: "calls", file: USE, line: 20, column: 2 },
+    { from: "run", name: "helperAlias", kind: "calls", file: USE, line: 19, column: 2 },
+    { from: "Svc.go", name: "this.load", kind: "calls", file: USE, line: 32, column: 4 },
+    { from: "Svc.go", name: "this.cache.get", kind: "calls", file: USE, line: 32, column: 20 },
+    { from: "Svc.load", name: "lib.Other", kind: "instantiates", file: USE, line: 35, column: 4 },
+    { from: "Svc.go", name: "deps.read", kind: "calls", file: USE, line: 33, column: 4 },
+    { from: "top", name: "Other", kind: "references", file: USE, line: 2, column: 13 },
+    { from: "Svc.go", name: "orphan", kind: "calls", file: USE, line: 33, column: 20 },
+  ],
+  roots: { "17:11": { status: "complete", value: { kind: "external", module: "typescript" }, evidence: [] } },
+  bindings: {
+    "12:5 z": { kind: "import", root: "z", member: "object", origin: { kind: "external", module: "zod" } },
+    "13:5 seen": { kind: "local", root: "seen" },
+    "14:5 top": { kind: "declared", root: "top", lines: [2], captured: false },
+    "14:21 inner": { kind: "local", root: "inner" },
+    "15:11 Map": { kind: "ambient", root: "Map" },
+    "19:3 helperAlias": { kind: "import", root: "helperAlias", origin: { kind: "repository", file: LIB } },
+    "32:5 this": { kind: "this", member: "load" },
+    "32:21 this": { kind: "this", member: "cache" },
+    "33:5 deps": { kind: "declared", root: "deps", lines: [30], captured: true },
+    "33:21 orphan": { kind: "declared", root: "orphan", lines: [3], captured: false },
+    "2:14 Other": { kind: "located", root: "Other", file: LIB, path: "Other" },
+    "35:5 lib": { kind: "import", root: "lib", member: "Other", origin: { kind: "repository", file: LIB } },
+  },
+  dependencies: [{ file: USE, line: 1, endLine: 1, specifier: "./lib", kind: "import", typeOnly: false, target: { kind: "repository", file: LIB }, bindings: [{ local: "helperAlias", imported: "helper", line: 1, column: 10, typeOnly: false }] }],
+};
+
+async function usesAnswer(symbol: string) {
+  const answer = await setup(USES_INDEX).queries.outline({ repo: "/work/shop", repoId: "shop", revision: "HEAD", focus: [{ file: USE, symbol }] });
+  assert.ok(answer.ok && answer.value.status !== "unknown", JSON.stringify(answer));
+  return { uses: answer.value.value.focus?.[0]?.uses ?? [], cuts: answer.value.status === "partial" ? answer.value.cuts : [] };
+}
+
+function named(uses: readonly OutlineUse[]): string[] {
+  return uses.map((use) => ("declaration" in use ? use.declaration.name : "module" in use ? `module ${use.module}` : `global ${use.global}`));
+}
+
+test("a focused declaration lists what its body uses outside itself, in order of first use, a use the index places nowhere last", async () => {
+  const { uses } = await usesAnswer("run");
+  assert.deepEqual(named(uses), ["helper", "module zod", "top", "global Map", "module typescript", "Other"]);
+});
+
+test("a declaration reached by a call, a reference and an import alias is one use with every relation and place", async () => {
+  const { uses } = await usesAnswer("run");
+  assert.deepEqual(uses[0], { declaration: { file: LIB, name: "helper", kind: "function", line: 1, endLine: 3 }, relations: ["calls", "references"], at: [{ line: 11, column: 3 }, { line: 15, column: 5 }, { line: 19, column: 3 }] });
+});
+
+test("an edge whose root a package binds is a use of the package, never of the repository declaration the graph matched", async () => {
+  const { uses } = await usesAnswer("run");
+  assert.ok(!named(uses).includes("Node"));
+  assert.deepEqual(uses.find((use) => "module" in use && use.module === "typescript"), { module: "typescript", relations: ["references"], at: [{ line: 17, column: 11 }] });
+});
+
+test("an edge a synthesizer the policy ignores adds no use, and only the matched declaration's own edges count", async () => {
+  const { uses } = await usesAnswer("run");
+  assert.deepEqual(uses.find((use) => "declaration" in use && use.declaration.name === "Other")?.relations, ["references"]);
+});
+
+test("a declaration inside the body and a local value are not uses, and leave no cut", async () => {
+  const { uses, cuts } = await usesAnswer("run");
+  assert.ok(!named(uses).includes("inner"));
+  assert.ok(!cuts.some((cut) => cut.at.some((place) => place.includes("seen"))));
+});
+
+test("a value a function around the body declares is a local root, while another declaration the index holds no node of is a cut", async () => {
+  const { cuts } = await usesAnswer("Svc.go");
+  assert.deepEqual(cuts.map((cut) => cut.at), [[`${USE}::Svc.go`, `${USE}:33 orphan`]]);
+});
+
+test("a member written on this is a use of the member its class declares, a method or a field", async () => {
+  const { uses } = await usesAnswer("Svc.go");
+  assert.deepEqual(uses.map((use) => ("declaration" in use ? [use.declaration.name, use.declaration.kind] : [])), [["load", "method"], ["cache", "property"]]);
+});
+
+test("a name nothing proves is one unresolved-link cut at the declaration listing every place, and its use is not listed", async () => {
+  const { uses, cuts } = await usesAnswer("run");
+  assert.ok(!named(uses).some((name) => name.includes("process")));
+  assert.deepEqual(cuts.map((cut) => [cut.kind, cut.at]), [["unresolved-link", [`${USE}::run`, `${USE}:16 process.exit`, `${USE}:20 process.cwd`]]]);
+});
+
+test("a repository import the join reaches no declaration of is a cut, never a top-level homonym of the name after it", async () => {
+  const { uses, cuts } = await usesAnswer("Svc.load");
+  assert.deepEqual(uses, []);
+  assert.deepEqual(cuts.map((cut) => cut.at), [[`${USE}::Svc.load`, `${USE}:35 lib.Other`]]);
+});
+
+test("a name bound to a declaration of another file by its containment path is a use of that declaration", async () => {
+  const { uses } = await usesAnswer("top");
+  assert.deepEqual(named(uses), ["Other"]);
+});
+
+test("a declaration beside the focused one on the same line is not nested in it, so the focused body's use of it is listed", async () => {
+  const SAME = "src/same-line.ts";
+  const { queries } = setup({
+    written: [SAME],
+    nodes: [fakeNode("sameFile", "file", SAME, 1, 1), fakeNode("external", "function", SAME, 1, 1, "external"), fakeNode("limit", "constant", SAME, 1, 1, "limit"), fakeNode("together", "function", SAME, 1, 1, "together")],
+    edges: [
+      { from: "sameFile", to: "external", kind: "contains" },
+      { from: "sameFile", to: "limit", kind: "contains" },
+      { from: "sameFile", to: "together", kind: "contains" },
+      { from: "together", to: "external", kind: "calls", line: 1, column: 80 },
+    ],
+    unresolved: [{ from: "together", name: "limit", kind: "references", file: SAME, line: 1, column: 100 }],
+    bindings: { "1:101 limit": { kind: "declared", root: "limit", lines: [1], captured: false } },
+  });
+
+  const answer = await queries.outline({ repo: "/work/shop", repoId: "shop", revision: "HEAD", focus: [{ file: SAME, symbol: "together" }] });
+
+  assert.ok(answer.ok && answer.value.status === "complete", JSON.stringify(answer));
+  assert.deepEqual(named(answer.value.value.focus?.[0]?.uses ?? []), ["external", "limit"]);
+});
+
+test("a focus reads the head's sources without extracting entrypoints", async () => {
+  const { queries, log } = setup(USES_INDEX);
+  const answer = await queries.outline({ repo: "/work/shop", repoId: "shop", revision: "HEAD", focus: [{ file: USE, symbol: "run" }] });
+  assert.ok(answer.ok);
+  assert.equal(log.extractions, 0);
 });

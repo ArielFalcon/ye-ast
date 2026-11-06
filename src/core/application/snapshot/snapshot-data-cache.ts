@@ -2,7 +2,9 @@ import type { SnapshotData, SnapshotDataCache } from "./read-snapshot.ts";
 
 /**
  * What one lookup or one `put` decided. `entryBytes` is the charge of the entry concerned (absent on a miss);
- * `retainedBytes` is what the cache holds after the decision.
+ * `retainedBytes` is what the cache holds after the decision. For `oversize-skipped`, `entryBytes` is the key plus the
+ * UTF-8 bytes of the sources' contents when that alone exceeds the budget (the entry is then never serialized), the
+ * exact charge otherwise.
  */
 export interface SnapshotCacheEvent {
   outcome: "hit" | "miss" | "admitted" | "evicted" | "oversize-skipped";
@@ -36,6 +38,11 @@ export function createSnapshotDataCache(maxBytes: number, observe?: (event: Snap
         entries.delete(key);
       }
       if (budget === 0) return;
+      const lowerBound = encoder.encode(key).byteLength + data.sources.reduce((sum, source) => sum + Buffer.byteLength(source.content), 0);
+      if (lowerBound > budget) {
+        observe?.({ outcome: "oversize-skipped", entryBytes: lowerBound, retainedBytes: used });
+        return;
+      }
       const payload = encoder.encode(JSON.stringify(data));
       const size = encoder.encode(key).byteLength + payload.byteLength;
       if (size > budget) {

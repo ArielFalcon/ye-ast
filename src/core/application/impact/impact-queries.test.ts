@@ -233,6 +233,7 @@ function origins(answer: (site: ImportOriginSite) => ImportOrigin | undefined, r
       }),
     rootOrigins: async (sites) => sites.map((site) => originFinding(site, root(site))),
     replacedRoots: async () => NOTHING_REPLACED,
+    rootBindings: NO_BINDINGS,
   });
 }
 
@@ -242,6 +243,7 @@ function originFinding(site: { file: string; line: number }, value: ImportOrigin
 }
 
 const NO_ROOTS: ImportOrigins["rootOrigins"] = async (sites) => sites.map((site) => originFinding(site, undefined));
+const NO_BINDINGS: ImportOrigins["rootBindings"] = async (sites) => sites.map(() => ({ kind: "unknown" }));
 
 const SOURCE_NODES = [fakeNode("f", "function", "src/A.java", 1, 3), fakeNode("g", "function", "src/B.java", 1, 3)];
 const SOURCE_EDGES: FakeEdge[] = [{ from: "g", to: "f", kind: "calls", confidence: 0.9 }];
@@ -1364,7 +1366,7 @@ test("a bare call the import reader places on this, inside the class that declar
 test("cancellation during origin batch stops before the walk", async () => {
   const controller = new AbortController();
   const source = "src/use.ts";
-  const reader: ImportOriginsReader = () => ({ origins: async () => { controller.abort(); return []; }, rootOrigins: NO_ROOTS, replacedRoots: async () => NOTHING_REPLACED });
+  const reader: ImportOriginsReader = () => ({ origins: async () => { controller.abort(); return []; }, rootOrigins: NO_ROOTS, replacedRoots: async () => NOTHING_REPLACED, rootBindings: NO_BINDINGS });
   const result = await setup({ signal: controller.signal, changes: { ok: true, value: [change("src/target.ts")] }, nodes: [fakeNode("target", "function", "src/target.ts", 1)], unresolved: [{ from: "use", file: source, line: 1, column: 0, name: "target", kind: "calls" }], exports: { [HEAD]: { files: [source, "src/target.ts"].map((path) => ({ path, blob: path, written: true })), skipped: [] } }, importOrigins: reader }).ask();
   assert.ok(!result.ok && result.fault.kind === "aborted");
 });
@@ -1372,7 +1374,7 @@ test("cancellation during origin batch stops before the walk", async () => {
 test("field settlement does not hide a same-line unverified use", async () => {
   const target = "src/svc.ts", source = "src/cmp.ts";
   const refs = [0, 12].map((column) => ({ from: "caller", file: source, line: 2, column, name: "this.svc.hit", kind: "calls" }));
-  const validateFirst: ImportOriginsReader = () => ({ origins: async (sites) => sites.map((site) => ({ status: "unknown" as const, reason: "unresolved" as const, evidence: [], ...(site.column === 1 ? { occurrence: true as const } : {}) })), rootOrigins: NO_ROOTS, replacedRoots: async () => NOTHING_REPLACED });
+  const validateFirst: ImportOriginsReader = () => ({ origins: async (sites) => sites.map((site) => ({ status: "unknown" as const, reason: "unresolved" as const, evidence: [], ...(site.column === 1 ? { occurrence: true as const } : {}) })), rootOrigins: NO_ROOTS, replacedRoots: async () => NOTHING_REPLACED, rootBindings: NO_BINDINGS });
   const answer = fact(await setup({ changes: { ok: true, value: [change(target, { added: [{ start: 3, end: 3 }] })] }, nodes: [fakeNode("Svc", "class", target, 1, 5), fakeNode("hit", "method", target, 3, 3), fakeNode("Cmp", "class", source, 1, 5), fakeNode("caller", "method", source, 2, 2)], edges: [{ from: "Svc", to: "hit", kind: "contains" }, { from: "Cmp", to: "caller", kind: "contains" }], unresolved: refs, fields: [{ owner: { path: source, symbol: "Cmp", line: 1 }, field: "svc", holds: { class: { path: target, symbol: "Svc", line: 1 } } }], exports: { [HEAD]: { files: [target, source].map((path) => ({ path, blob: path, written: true })), skipped: [] } }, importOrigins: validateFirst }).ask());
   assert.ok(answer.status === "partial");
   assert.ok(answer.value.symbols.some((symbol) => symbol.symbol === "caller"));
@@ -1639,7 +1641,7 @@ test("a second callers request at the same snapshot and inputs reads the relatio
   assert.equal(canonicalJson(hit), canonicalJson(uncached));
 });
 
-test("each input the relations depend on, scope, export listing, revision and sources, gets its own retained output", async () => {
+test("each input the relations depend on, scope, written sources and the listing's unwritten and skipped entries, gets its own retained output, and a revision with the same listing shares it", async () => {
   const snapshotCache = createSnapshotDataCache(RETAINED_BYTES);
   const counter = { calls: 0 };
   const targets = { targets: [{ file: "src/A.java", symbol: "f" }] };
@@ -1654,9 +1656,9 @@ test("each input the relations depend on, scope, export listing, revision and so
   await setup({ ...base, exports: { [HEAD]: listed("2") } }).callers(targets);
   assert.equal(counter.calls, 4);
   await setup(base).callers({ ...targets, revision: "other" });
-  assert.equal(counter.calls, 5);
+  assert.equal(counter.calls, 4);
   await setup({ ...base, exports: { [HEAD]: listed("2") } }).callers(targets);
-  assert.equal(counter.calls, 5);
+  assert.equal(counter.calls, 4);
 });
 
 test("a cancelled relations extraction publishes no output", async () => {
@@ -1742,7 +1744,7 @@ test("a live query answered from retained data still reports the paths that chan
   assert.deepEqual([counter.calls, next.log.reads], [2, 1]);
 });
 
-test("a live change query over an unchanged capture reads the head relations and module dependencies once", async () => {
+test("a live change query over an unchanged capture reads the head relations and module dependencies once, and the merge base's module dependencies once across head edits", async () => {
   const path = "src/index.ts";
   const live = fakeLive({ [path]: "2", "src/A.java": "2" });
   const snapshotCache = createSnapshotDataCache(RETAINED_BYTES);
@@ -1763,12 +1765,56 @@ test("a live change query over an unchanged capture reads the head relations and
   const hit = fact(await ask());
   assert.equal(canonicalJson(hit), canonicalJson(miss));
   assert.equal(counter.calls - missed.relations, 0);
-  assert.ok(modules.calls - missed.modules < missed.modules);
+  assert.equal(modules.calls - missed.modules, 0);
 
   live.tree.set(path, "9");
   const before = { relations: counter.calls, modules: modules.calls };
   assert.ok((await ask()).ok);
-  assert.deepEqual([counter.calls - before.relations, modules.calls - before.modules], [missed.relations, missed.modules]);
+  assert.deepEqual([counter.calls - before.relations, modules.calls - before.modules], [missed.relations, missed.modules - 1]);
+});
+
+test("a live change query reads and extracts the merge base once, misses on another merge base or scope, keeps hitting it when the live head changes, and answers the same as uncached", async () => {
+  const live = fakeLive({ "src/A.java": "1" });
+  const snapshotCache = createSnapshotDataCache(RETAINED_BYTES);
+  const run = (options: Partial<Parameters<typeof setup>[0]> = {}) => liveRun(live, snapshotCache, options);
+  const ask = async (options: Partial<Parameters<typeof setup>[0]> = {}, overrides: { scope?: { exclude: string[] } } = {}) => {
+    const current = run(options);
+    const answer = fact(await current.queries.ofChange({ ...LIVE_BASE, base: "base", live: true, ...overrides }));
+    return { answer, reads: current.log.reads, extractions: current.log.extractions };
+  };
+
+  const miss = await ask();
+  assert.deepEqual([miss.reads, miss.extractions], [2, 2]);
+  const hit = await ask();
+  assert.deepEqual([hit.reads, hit.extractions], [0, 0]);
+  assert.equal(canonicalJson(hit.answer), canonicalJson(miss.answer));
+  const uncached = fact(await setup({ trust: TRUSTED, live, nodes: LIVE_NODES, edges: SOURCE_EDGES }).queries.ofChange({ ...LIVE_BASE, base: "base", live: true }));
+  assert.equal(canonicalJson(hit.answer), canonicalJson(uncached));
+
+  const otherFork = "d".repeat(40);
+  const sameListing = await ask({ mergeBase: otherFork });
+  assert.deepEqual([sameListing.reads, sameListing.extractions], [0, 0]);
+  const moved = await ask({ mergeBase: otherFork, exports: { [otherFork]: { files: [{ path: "src/A.java", blob: "7", written: true }], skipped: [] } } });
+  assert.deepEqual([moved.reads, moved.extractions], [1, 1]);
+  const scoped = await ask({}, { scope: { exclude: ["docs/**"] } });
+  assert.deepEqual([scoped.reads, scoped.extractions], [2, 2]);
+
+  live.tree.set("src/A.java", "2");
+  const edited = await ask();
+  assert.deepEqual([edited.reads, edited.extractions], [1, 1]);
+});
+
+test("a merge base a live change query kept answers a change query between commits, and the other way round", async () => {
+  const live = fakeLive({ "src/A.java": "1" });
+  const snapshotCache = createSnapshotDataCache(RETAINED_BYTES);
+  const liveAsk = liveRun(live, snapshotCache);
+  assert.ok((await liveAsk.queries.ofChange({ ...LIVE_BASE, base: "base", live: true })).ok);
+  const headListing = { [HEAD]: { files: [{ path: "src/A.java", blob: "2", written: true }], skipped: [] } };
+  const sha = liveRun(live, snapshotCache, { exports: headListing });
+  const between = fact(await sha.ask());
+  assert.deepEqual([sha.log.reads, sha.log.extractions], [1, 1]);
+  const fresh = fact(await setup({ trust: TRUSTED, nodes: LIVE_NODES, edges: SOURCE_EDGES, exports: headListing }).ask());
+  assert.equal(canonicalJson(between), canonicalJson(fresh));
 });
 
 test("a live importers query, which reads sources only, reuses them for an unchanged capture", async () => {
@@ -1913,6 +1959,7 @@ test("importers judge only the edges from other files, with the module statement
       judged.push(...sites.map((site) => site.file));
       return sites.map((site) => ({ ...originFinding(site, { kind: "repository", file: "src/Order.java" }), bare: true as const }));
     },
+    rootBindings: NO_BINDINGS,
   });
   const moduleDependencies: ModuleDependenciesReader = { extract: async () => { extractions++; return { files: [], dependencies: [], unread: [] }; } };
   const { importers } = setup({

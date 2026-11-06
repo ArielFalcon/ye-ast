@@ -12,6 +12,8 @@ import { createSha256Digest } from "../core/adapters/crypto/sha256-digest.adapte
 import { createPathMatcher } from "../core/adapters/fs/path-matcher.adapter.ts";
 import { isWritten, liveScope } from "../core/domain/snapshot/live-export.ts";
 import { fakeLive } from "../core/application/live/fake-live.testing.ts";
+import { openLive } from "../core/application/live/live-tree.ts";
+import { pathSelection } from "../core/domain/shared/scope.ts";
 import { withLiveCaptures, type HeadReaderDeps } from "../core/application/snapshot/head-reading.ts";
 
 test("two held mirrors retain captured bytes and report the changed repository after release", async () => {
@@ -80,5 +82,33 @@ test("two held mirrors retain captured bytes and report the changed repository a
     assert.ok(next.ok);
     assert.deepEqual(snapshots, firstSnapshots);
     assert.equal(active, 0);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("a path pending for the store is copied once by queries that read no store, and the next store query still syncs it", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "ye-ast-pending-"));
+  try {
+    const repo = join(dir, "repo"); mkdirSync(repo);
+    execFileSync("git", ["init", "-q", repo]);
+    writeFileSync(join(repo, "a.ts"), "one");
+    const fake = fakeLive();
+    const copies: string[] = [];
+    const mirror = createLiveMirror({ ...defaultLiveMirrorDeps, writes: isWritten, copyFile: async (from, to) => { copies.push(from); await defaultLiveMirrorDeps.copyFile(from, to); } });
+    const scope = liveScope();
+    const query = async (store: boolean): Promise<void> => {
+      const opened = await openLive({ ...fake.deps, mirror, workingTree: createGitWorkingTree(), digest: createSha256Digest() }, { repo, scope, selected: pathSelection(scope, () => false), store }, async () => undefined);
+      assert.ok(opened.ok);
+    };
+    await query(true);
+    writeFileSync(join(repo, "a.ts"), "changed");
+
+    await query(false);
+    const afterFirst = copies.length;
+    await query(false);
+
+    assert.equal(copies.length, afterFirst);
+    assert.deepEqual(fake.syncs, []);
+    await query(true);
+    assert.deepEqual(fake.syncs, [["a.ts"]]);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });

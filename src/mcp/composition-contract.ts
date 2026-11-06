@@ -189,7 +189,8 @@ export type PartPayload =
   | { kind: "module-reach"; file: FileId; side: ReachedModule["snapshot"]; depth: number; origins: readonly OriginReference[]; via?: NonNullable<ReachedModule["via"]> }
   | { kind: "file-dependency"; from: FileId; to: FileId; category: FileDependencyCategory }
   | { kind: "file-query"; file: FileId; categories: readonly { name: FileCategory; collection: RecordedCollectionState }[] }
-  | { kind: "outline-declaration"; anchor: AnchorId; kindName: OutlineDeclaration["kind"]; children?: readonly PartId[] }
+  /** `unproved`: the declaration uses a name no binding proves, so an empty `uses` is not "nothing". */
+  | { kind: "outline-declaration"; anchor: AnchorId; kindName: OutlineDeclaration["kind"]; children?: readonly PartId[]; uses?: readonly OutlineUseRecord[]; unproved?: true }
   | { kind: "outline-file"; file: FileId; declarations: readonly PartId[]; imports: readonly OutlineImportRecord[] }
   | { kind: "unheld-file"; file: FileId }
   | {
@@ -232,6 +233,12 @@ export interface OutlineImportRecord {
   target: { kind: "repository"; dependency: PartId } | { kind: "external"; module: string } | { kind: "unresolved"; reason: string };
   bindings: readonly { local?: string; imported: string; typeOnly?: true; declaration?: { anchor: AnchorId; kindName: string } }[];
 }
+
+/** One use of a focused declaration: a repository use holds the anchor of the declaration it reaches, so compose joins them. */
+export type OutlineUseRecord = ({ declaration: { anchor: AnchorId; kindName: string } } | { module: string } | { global: string }) & {
+  relations: readonly string[];
+  at: readonly { line: number; column?: number }[];
+};
 
 export type Part = PartPayload & { id: PartId; supports: readonly Support[] };
 export type PartOf<K extends PartKind> = Extract<Part, { kind: K }>;

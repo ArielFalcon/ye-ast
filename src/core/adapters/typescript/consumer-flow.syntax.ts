@@ -95,7 +95,7 @@ export function discardsValue(top: ts.Expression): boolean {
   if (!ts.isBinaryExpression(parent)) return false;
   const operator = parent.operatorToken.kind;
   if (operator === ts.SyntaxKind.AmpersandAmpersandToken || operator === ts.SyntaxKind.EqualsToken) return parent.left === top;
-  return operator === ts.SyntaxKind.InstanceOfKeyword;
+  return operator === ts.SyntaxKind.InstanceOfKeyword && parent.left === top;
 }
 
 /** The literal an expression is written as directly: a string, a number with its sign, `true` or `false`. */

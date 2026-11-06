@@ -3,7 +3,7 @@ import { matchesReferenceKind, syntaxName } from "./reference-occurrence.ts";
 import { declarationCounts, declaredNames, isStatic, scriptGlobalNames } from "./syntax-names.ts";
 import { moduleStatement } from "./import-bindings.ts";
 import { sourceTree } from "./source-tree.ts";
-import { bindFile, type LexicalBinding } from "./lexical-bindings.ts";
+import { bindFile, type BoundFile, type LexicalBinding } from "./lexical-bindings.ts";
 import { addWrittenRoots, GLOBAL_OBJECTS, type WrittenRoots } from "./written-roots.ts";
 import { isTypeScriptSource } from "../../domain/languages/typescript.ts";
 import type { ImportOrigin } from "../../domain/relations/resolved-reference.ts";
@@ -11,9 +11,11 @@ import type { Evidence, Finding } from "../../domain/shared/fact.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { RootOrigin } from "../../domain/impact/edge-policy.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
-import type { ImportOriginSite, ImportOrigins, ReplacedRoots, ResolvedNameSite } from "../../ports/import-origins.port.ts";
+import type { ImportOriginSite, ImportOrigins, ReplacedRoots, ResolvedNameSite, RootBinding, UseSite } from "../../ports/import-origins.port.ts";
 import { createModuleResolver, manifestPackages, packageOf } from "./module-resolver.ts";
 import { TYPESCRIPT_LIB_GLOBALS } from "./typescript-lib-globals.ts";
+import { parseAngularRouteFile } from "./angular-router.extractor.ts";
+import { createDeclarationLookup, type ModuleShape } from "./declaration-lookup.ts";
 
 /** The names the pinned `typescript` declares, held once for the process rather than rebuilt per query. */
 const LIB_GLOBALS = new Set(TYPESCRIPT_LIB_GLOBALS);
@@ -48,6 +50,16 @@ export function createImportOrigins(sources: readonly SourceFile[], parse: Parse
   const texts = new Map(sources.map((file) => [file.path, file.content]));
   const files = new Map(sources.map((file) => [file.path, file]));
   const modules = createModuleResolver(async (file) => texts.get(file), manifestPackages(sources));
+  /** What each file exports, read once and only when a namespace member asks. */
+  const moduleShapes = new Map<string, ModuleShape | undefined>();
+  function moduleShapeOf(file: string): ModuleShape | undefined {
+    if (!moduleShapes.has(file)) moduleShapes.set(file, texts.has(file) && isTypeScriptSource(file) ? parseAngularRouteFile(file, texts.get(file)!) : undefined);
+    return moduleShapes.get(file);
+  }
+  const exportedDeclaration = createDeclarationLookup(async (file) => moduleShapeOf(file), async (from, specifier) => {
+    const resolved = await modules.resolve(from, specifier);
+    return "file" in resolved ? resolved.file : undefined;
+  });
   const shapes = new Map<string, FileShape>();
   const parameterStarts = new Map<string, ReadonlySet<number>>();
   /** A file is bound once for the life of the reader, and only the places of its parameter uses are kept (ADR-0029). */
@@ -176,7 +188,223 @@ export function createImportOrigins(sources: readonly SourceFile[], parse: Parse
       }
     }
     return results;
+  }, rootBindings: async (sites, signal) => {
+    const results: RootBinding[] = sites.map(() => UNKNOWN_BINDING);
+    for (const [file, group] of Map.groupBy(sites.map((site, index) => ({ site, index })), ({ site }) => site.file)) {
+      if (signal?.aborted) break;
+      const parsed = indexOf(file);
+      if (parsed === undefined) continue;
+      const { index: tree, text } = parsed;
+      const chains = group.flatMap(({ site, index }) => {
+        const chain = chainAt(tree, text, site);
+        return chain === undefined ? [] : [{ chain, index, owner: site.owner }];
+      });
+      /** The file is bound only when a value name asks, and its program is dropped once they are answered (ADR-0029). */
+      const bound = chains.some(({ chain }) => ts.isIdentifier(chain.root) && !isTypeName(chain.root)) ? bindFile(file, text) : undefined;
+      for (const { chain, index, owner } of chains) results[index] = await bindingOf(file, tree, chain, bound, owner);
+    }
+    return results;
   } };
+
+  async function importBinding(file: string, specifier: string, root: string, member: string | undefined): Promise<RootBinding> {
+    const resolved = await modules.resolve(file, specifier);
+    /** A member of a namespace import is the declaration the module exports under its name, followed through re-exports. */
+    if ("file" in resolved && moduleShapeOf(file)?.imports.get(root)?.imported === "*") {
+      const declaration = member === undefined ? undefined : await exportedDeclaration(resolved.file, member);
+      return declaration === undefined ? UNKNOWN_BINDING : { kind: "located", root, file: declaration.file, path: declaration.name };
+    }
+    const named = { root, ...(member === undefined ? {} : { member }) };
+    if ("file" in resolved) return { kind: "import", ...named, origin: { kind: "repository", file: resolved.file } };
+    const module = packageOf(specifier);
+    return "external" in resolved && module !== undefined ? { kind: "import", ...named, origin: { kind: "external", module } } : UNKNOWN_BINDING;
+  }
+
+  /** Nothing in the file binds the name: the language's own libraries may, unless the snapshot declares it globally. */
+  function unbound(name: string): RootBinding {
+    return LIB_GLOBALS.has(name) && !repositoryGlobals().has(name) ? { kind: "ambient", root: name } : UNKNOWN_BINDING;
+  }
+
+  async function bindingOf(file: string, { source, shape }: FileIndex, { root, member }: Chain, bound: BoundFile | undefined, owner: UseSite["owner"]): Promise<RootBinding> {
+    if (!ts.isIdentifier(root)) return { kind: "this", ...(member === undefined ? {} : { member }) };
+    const name = root.text;
+    const specifier = shape.bindings.get(name);
+    if (isTypeName(root)) {
+      const scope = typeScopeOf(root);
+      if (scope !== undefined) return declaredBinding(source, root, scope, owner);
+      return specifier === undefined ? unbound(name) : importBinding(file, specifier, name, member);
+    }
+    const binding = bound!.bindingOf(bound!.identifierAt(root.getStart(source), name)!);
+    if (binding.kind === "dynamic") return UNKNOWN_BINDING;
+    if (binding.kind === "none") return unbound(name);
+    if (binding.declarations.every(isImportDeclaration)) return specifier === undefined ? UNKNOWN_BINDING : importBinding(file, specifier, name, member);
+    if (binding.declarations.some(isImportDeclaration)) return UNKNOWN_BINDING;
+    return declaredBinding(source, root, binding.declarations, owner);
+  }
+}
+
+const UNKNOWN_BINDING: RootBinding = { kind: "unknown" };
+
+/** The first name of a chain written at a site (`this` stands for itself), and the name after it when the chain has one. */
+interface Chain {
+  root: ts.Node;
+  member?: string;
+}
+
+/**
+ * The chain of calls, member accesses and qualified names written around the name, `this` or `super` the site spells,
+ * up to its whole, or around an instantiation placed at its `new` keyword when the chain names the site's spelling.
+ * `super` stands for the head of its class's `extends` expression.
+ */
+function chainAt({ source, starting }: FileIndex, text: string, site: UseSite): Chain | undefined {
+  const starts = source.getLineStarts();
+  if (!Number.isInteger(site.line) || !Number.isInteger(site.column) || site.line < 1 || site.column < 1 || site.line > starts.length) return undefined;
+  const point = starts[site.line - 1]! + site.column - 1;
+  if (point >= (site.line < starts.length ? starts[site.line]! : text.length)) return undefined;
+  for (const node of starting.get(point) ?? []) {
+    const spelled = ts.isIdentifier(node) ? node.text : node.kind === ts.SyntaxKind.ThisKeyword || node.kind === ts.SyntaxKind.SuperKeyword ? node.getText(source) : undefined;
+    const whole = ts.isNewExpression(node) || spelled !== undefined ? wholeChain(node) : undefined;
+    if (whole === undefined) continue;
+    const head = headOf(whole);
+    const names = chainNames(whole);
+    if (spelled !== site.spelled && !chainNames(throughCalls(whole)).includes(site.spelled)) continue;
+    if (head.kind !== ts.SyntaxKind.SuperKeyword) return { root: head, ...(names[1] === undefined ? {} : { member: names[1] }) };
+    const base = superclassOf(head);
+    return base === undefined ? undefined : { root: headOf(base), ...(chainNames(base)[1] === undefined ? {} : { member: chainNames(base)[1]! }) };
+  }
+  return undefined;
+}
+
+/** The chain `whole` begins, through the calls and assertions written on it: `a.b(x).c` from `a.b`. */
+function throughCalls(whole: ts.Node): ts.Node {
+  let chain = whole;
+  while ((ts.isCallExpression(chain.parent) || ts.isNonNullExpression(chain.parent) || ts.isPropertyAccessExpression(chain.parent)) && chain.parent.expression === chain) chain = chain.parent;
+  return chain;
+}
+
+function wholeChain(node: ts.Node): ts.Node {
+  let whole = node;
+  while (ts.isQualifiedName(whole.parent) || (ts.isPropertyAccessExpression(whole.parent) && (whole.parent.expression === whole || whole.parent.name === whole))) whole = whole.parent;
+  return whole;
+}
+
+/** The names of a chain from its root: `a.b.c` and `a.b(x).c` are `a`, `b`, `c`; the chain stops at anything else. */
+function chainNames(node: ts.Node): string[] {
+  if (ts.isIdentifier(node)) return [node.text];
+  if (node.kind === ts.SyntaxKind.ThisKeyword || node.kind === ts.SyntaxKind.SuperKeyword) return [node.kind === ts.SyntaxKind.ThisKeyword ? "this" : "super"];
+  if (ts.isQualifiedName(node)) return [...chainNames(node.left), node.right.text];
+  if (ts.isPropertyAccessExpression(node)) return [...chainNames(node.expression), node.name.text];
+  if (ts.isCallExpression(node) || ts.isNewExpression(node) || ts.isNonNullExpression(node) || ts.isElementAccessExpression(node)) return chainNames(node.expression);
+  return [];
+}
+
+/** The `extends` expression of the class whose code holds `keyword`. */
+function superclassOf(keyword: ts.Node): ts.Expression | undefined {
+  let node: ts.Node = keyword;
+  while (!ts.isSourceFile(node) && !ts.isClassLike(node)) node = node.parent;
+  if (!ts.isClassLike(node)) return undefined;
+  return node.heritageClauses?.find((clause) => clause.token === ts.SyntaxKind.ExtendsKeyword)?.types[0]?.expression;
+}
+
+function headOf(node: ts.Node): ts.Node {
+  let head = node;
+  for (;;) {
+    if (ts.isCallExpression(head) || ts.isNewExpression(head) || ts.isPropertyAccessExpression(head) || ts.isElementAccessExpression(head) || ts.isNonNullExpression(head) || ts.isExpressionWithTypeArguments(head) || ts.isDecorator(head)) head = head.expression;
+    else if (ts.isTaggedTemplateExpression(head)) head = head.tag;
+    else if (ts.isTypeReferenceNode(head)) head = head.typeName;
+    else if (ts.isQualifiedName(head)) head = head.left;
+    else if (ts.isTypeQueryNode(head)) head = head.exprName;
+    else return head;
+  }
+}
+
+/** Whether a name is read as a type: alone or as the first name of a qualified one, inside a type. */
+function isTypeName(name: ts.Identifier): boolean {
+  let whole: ts.Node = name;
+  while (ts.isQualifiedName(whole.parent) && whole.parent.left === whole) whole = whole.parent;
+  return ts.isPartOfTypeNode(whole) || ts.isTypeParameterDeclaration(whole.parent);
+}
+
+function isImportDeclaration(declaration: ts.Declaration): boolean {
+  return ts.isImportSpecifier(declaration) || ts.isImportClause(declaration) || ts.isNamespaceImport(declaration) || ts.isImportEqualsDeclaration(declaration);
+}
+
+/**
+ * A root `declarations` bind: `local` when every one lies inside the syntax of the declaration whose body writes the use,
+ * otherwise declared, by the 1-based lines their names are written on.
+ */
+function declaredBinding(source: ts.SourceFile, root: ts.Identifier, declarations: readonly ts.Node[], owner: UseSite["owner"]): RootBinding {
+  const around = ownerAround(source, root, owner);
+  if (around !== undefined && declarations.every((declaration) => isInside(declaration, around))) return { kind: "local", root: root.text };
+  const lines = declarations.map((declaration) => lineOf(source, nameOf(declaration) ?? declaration));
+  /** The binding is visible at the use, so a function that declares it holds the use too. */
+  const captured = declarations.length > 0 && declarations.every((declaration) => isValueBinding(declaration) && inFunction(declaration));
+  return { kind: "declared", root: root.text, lines: [...new Set(lines)].sort((a, b) => a - b), captured };
+}
+
+/** A parameter, a variable or a catch binding, destructured or not: a value, never a function, class or type declaration. */
+function isValueBinding(declaration: ts.Node): boolean {
+  return ts.isParameter(declaration) || ts.isVariableDeclaration(declaration) || ts.isBindingElement(declaration);
+}
+
+function inFunction(node: ts.Node): boolean {
+  for (let around = node.parent; around !== undefined && !ts.isSourceFile(around); around = around.parent) if (ts.isFunctionLike(around)) return true;
+  return false;
+}
+
+/** The innermost declaration around `node` that is `owner`: its name is the owner's, written on a line the owner spans. */
+function ownerAround(source: ts.SourceFile, node: ts.Node, owner: UseSite["owner"]): ts.Node | undefined {
+  for (let around = node.parent; around !== undefined && !ts.isSourceFile(around); around = around.parent) {
+    const name = nameOf(around);
+    if (name === undefined || name.getText(source) !== owner.name) continue;
+    const line = lineOf(source, name);
+    if (owner.line <= line && line <= owner.endLine) return around;
+  }
+  return undefined;
+}
+
+function nameOf(declaration: ts.Node): ts.Node | undefined {
+  if (ts.isConstructorDeclaration(declaration)) return declaration.getChildren().find((child) => child.kind === ts.SyntaxKind.ConstructorKeyword);
+  return ts.getNameOfDeclaration(declaration as ts.Declaration);
+}
+
+/** By offsets in the file's text, since the binder reads its own tree of the same text: inside, and not `around` itself. */
+function isInside(node: ts.Node, around: ts.Node): boolean {
+  const [start, aroundStart] = [node.getStart(), around.getStart()];
+  return aroundStart <= start && node.end <= around.end && (start !== aroundStart || node.end !== around.end);
+}
+
+function lineOf(source: ts.SourceFile, node: ts.Node): number {
+  return source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1;
+}
+
+/**
+ * The declarations of the innermost type scope around a type name that declares it: a type parameter, an `infer` of the
+ * conditional whose true branch holds the name, a mapped type's key, or a declaration among the statements of an
+ * enclosing block, namespace or the file. None when no scope declares it, so the file's imports and the globals answer.
+ */
+function typeScopeOf(name: ts.Identifier): ts.Node[] | undefined {
+  let inner: ts.Node = name;
+  for (let scope = name.parent; scope !== undefined; inner = scope, scope = scope.parent) {
+    const declared: ts.Node[] = [];
+    if ("typeParameters" in scope) for (const parameter of (scope.typeParameters as ts.NodeArray<ts.TypeParameterDeclaration> | undefined) ?? []) if (parameter.name.text === name.text) declared.push(parameter);
+    if (ts.isMappedTypeNode(scope) && scope.typeParameter.name.text === name.text) declared.push(scope.typeParameter);
+    if (ts.isConditionalTypeNode(scope) && inner === scope.trueType) declared.push(...inferredIn(scope.extendsType, name.text));
+    if (ts.isBlock(scope) || ts.isModuleBlock(scope) || ts.isSourceFile(scope)) declared.push(...scope.statements.filter((statement) => declaredName(statement) === name.text));
+    if (declared.length > 0) return declared;
+  }
+  return undefined;
+}
+
+function inferredIn(node: ts.Node, name: string): ts.TypeParameterDeclaration[] {
+  if (ts.isInferTypeNode(node)) return node.typeParameter.name.text === name ? [node.typeParameter] : [];
+  return node.getChildren().flatMap((child) => inferredIn(child, name));
+}
+
+function declaredName(statement: ts.Statement): string | undefined {
+  if (ts.isInterfaceDeclaration(statement) || ts.isTypeAliasDeclaration(statement) || ts.isEnumDeclaration(statement)) return statement.name.text;
+  if ((ts.isClassDeclaration(statement) || ts.isFunctionDeclaration(statement)) && statement.name !== undefined) return statement.name.text;
+  if (ts.isModuleDeclaration(statement) && ts.isIdentifier(statement.name)) return statement.name.text;
+  return undefined;
 }
 
 type SiteSyntax = "valid" | "local" | "this-member";
@@ -196,8 +424,8 @@ function rootsAt({ source, shape, starting }: FileIndex, text: string, group: re
     wanted.set(point, [...(wanted.get(point) ?? []), item]);
   }
   const isDynamicRoot = (spelled: ts.Node): boolean => {
-    const root = rootIdentifier(spelled);
-    return root !== undefined && isDynamicUse(source, text, root);
+    const root = headOf(spelled);
+    return ts.isIdentifier(root) && isDynamicUse(source, text, root);
   };
   /** Chains that start at one point share their root, so the first that ends in the name settles it. */
   const roots = new Map<number, { root: string; bare: boolean; local: boolean }>();
@@ -209,13 +437,6 @@ function rootsAt({ source, shape, starting }: FileIndex, text: string, group: re
     roots.set(index, { root: names[0]!, bare, local: bare && ts.isIdentifier(spelled!) && !ts.isTypeNode(spelled.parent) && isParameterUse(source, text, spelled) });
   }
   return { roots, shape };
-}
-
-/** The identifier a chain of names, calls and indexes starts at; none when it starts at anything else. */
-function rootIdentifier(node: ts.Node): ts.Identifier | undefined {
-  let inner = node;
-  while (ts.isPropertyAccessExpression(inner) || ts.isElementAccessExpression(inner) || ts.isCallExpression(inner) || ts.isQualifiedName(inner) || ts.isParenthesizedExpression(inner) || ts.isNonNullExpression(inner)) inner = ts.isQualifiedName(inner) ? inner.left : inner.expression;
-  return ts.isIdentifier(inner) ? inner : undefined;
 }
 
 /** What a node starting at an edge's column spells for the edge's kind: a call's callee, an instantiation's class, or a name up to the whole qualified name it ends. */
@@ -283,8 +504,8 @@ function checkSites({ source, shape, starting }: FileIndex, text: string, group:
     if (found === undefined && ownCalls.get(index) === 1) result.set(index, "this-member");
     if (found?.length !== 1) continue;
     const node = found[0]!;
-    const root = rootIdentifier(node);
-    if (root !== undefined && isDynamicUse(source, text, root)) continue;
+    const root = headOf(node);
+    if (ts.isIdentifier(root) && isDynamicUse(source, text, root)) continue;
     result.set(index, site.kind === "calls" && ts.isIdentifier(node) && node.text === site.name && isParameterUse(source, text, node) ? "local" : "valid");
   }
   return { matches: result, shape };
