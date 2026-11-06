@@ -5,7 +5,7 @@ import { fakeCodeGraph, fakeNode } from "./fake-code-graph.testing.ts";
 
 test("module forms report dynamic and type consumers separately from static imports", () => {
   const store = fakeCodeGraph([fakeNode("t", "file", "src/target.ts", 1, 1)], [], []);
-  const edge = { line: 1, endLine: 1, specifier: "./target", kind: "import" as const, typeOnly: false, target: { kind: "repository" as const, file: "src/target.ts" } };
+  const edge = { line: 1, endLine: 1, specifier: "./target", kind: "import" as const, typeOnly: false, target: { kind: "repository" as const, file: "src/target.ts" }, bindings: [] };
   const result = readImporters(store, ["src/target.ts"], [], { files: [], unread: [], dependencies: [
     { ...edge, file: "src/static.ts" },
     { ...edge, file: "src/dynamic.ts", form: "dynamic-import" },

@@ -1,8 +1,9 @@
 import ts from "typescript";
 import { isPackageManifest, isTypeScriptFile } from "../../domain/languages/typescript.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
-import type { ModuleDependencies, ModuleDependency, ModuleSource, ModuleTarget } from "../../domain/impact/module-dependency.ts";
+import type { ModuleDependencies, ModuleDependency, ModuleSource, ModuleTarget, UntraversedReference } from "../../domain/impact/module-dependency.ts";
 import type { ModuleDependenciesReader } from "../../ports/module-dependencies.port.ts";
+import { defaultDeclarationName, moduleStatement } from "./import-bindings.ts";
 import { createModuleResolver, manifestDependencies, packageOf } from "./module-resolver.ts";
 
 type PendingDependency = Omit<ModuleDependency, "target">;
@@ -16,7 +17,7 @@ export function createModuleDependenciesReader(): ModuleDependenciesReader {
       const files: ModuleSource[] = [];
       const pending: PendingDependency[] = [];
       const unread: { file: string; reason: "source-unreadable" | "no-extractor" }[] = [];
-      const untraversed: NonNullable<ModuleDependencies["untraversed"]>[number][] = [];
+      const untraversed: UntraversedReference[] = [];
 
       for (const [file, text] of [...texts].sort(([left], [right]) => compareText(left, right))) {
         if (!isTypeScriptFile(file)) continue;
@@ -55,39 +56,20 @@ export function createModuleDependenciesReader(): ModuleDependenciesReader {
             continue;
           }
           statements.push(statement.getText(tree));
-          let specifier: ts.Expression | undefined;
-          let typeOnly = false;
-          let kind: ModuleDependency["kind"] = "import";
-          if (ts.isImportDeclaration(statement)) {
-            specifier = statement.moduleSpecifier;
-            const clause = statement.importClause;
-            if (clause?.name !== undefined) imported.add(clause.name.text);
-            if (clause?.namedBindings !== undefined) {
-              if (ts.isNamespaceImport(clause.namedBindings)) imported.add(clause.namedBindings.name.text);
-              else for (const binding of clause.namedBindings.elements) imported.add(binding.name.text);
+          if (ts.isExportDeclaration(statement) && statement.moduleSpecifier === undefined) {
+            if (statement.exportClause !== undefined && ts.isNamedExports(statement.exportClause)) {
+              for (const binding of statement.exportClause.elements) exported.push((binding.propertyName ?? binding.name).text);
             }
-            typeOnly = clause?.isTypeOnly === true || (clause?.name === undefined && clause?.namedBindings !== undefined && ts.isNamedImports(clause.namedBindings) && clause.namedBindings.elements.length > 0 && clause.namedBindings.elements.every((element) => element.isTypeOnly));
-          } else if (ts.isExportDeclaration(statement)) {
-            kind = "reexport";
-            specifier = statement.moduleSpecifier;
-            typeOnly = statement.isTypeOnly || (statement.exportClause !== undefined && ts.isNamedExports(statement.exportClause) && statement.exportClause.elements.length > 0 && statement.exportClause.elements.every((element) => element.isTypeOnly));
-            if (specifier === undefined) {
-              if (statement.exportClause !== undefined && ts.isNamedExports(statement.exportClause)) {
-                for (const binding of statement.exportClause.elements) exported.push((binding.propertyName ?? binding.name).text);
-              }
-              continue;
-            }
-          } else {
-            typeOnly = statement.isTypeOnly;
-            imported.add(statement.name.text);
-            if (ts.isExternalModuleReference(statement.moduleReference)) specifier = statement.moduleReference.expression;
+            continue;
           }
-          if (specifier === undefined || !ts.isStringLiteral(specifier)) {
+          const read = moduleStatement(statement, tree)!;
+          if (read.kind === "import") for (const { local } of read.bindings) imported.add(local!);
+          if (read.specifier === undefined) {
             unsupported = true;
             moduleOnly = false;
             continue;
           }
-          pending.push({ file, line: tree.getLineAndCharacterOfPosition(statement.getStart(tree)).line + 1, endLine: tree.getLineAndCharacterOfPosition(statement.end - 1).line + 1, specifier: specifier.text, kind, typeOnly });
+          pending.push({ file, line: tree.getLineAndCharacterOfPosition(statement.getStart(tree)).line + 1, endLine: tree.getLineAndCharacterOfPosition(statement.end - 1).line + 1, specifier: read.specifier, kind: read.kind, typeOnly: read.typeOnly, ...(read.form === undefined ? {} : { form: read.form }), bindings: read.bindings });
         }
         if (moduleOnly && exported.some((name) => !imported.has(name))) {
           moduleOnly = false;
@@ -102,11 +84,13 @@ export function createModuleDependenciesReader(): ModuleDependenciesReader {
             const offset = node.getStart(tree);
             const line = tree.getLineAndCharacterOfPosition(offset).line + 1;
             const literal = call !== undefined ? call.arguments[0] : ts.isImportTypeNode(node) && ts.isLiteralTypeNode(node.argument) ? node.argument.literal : undefined;
-            if (form !== "require" && literal !== undefined && (ts.isStringLiteral(literal) || ts.isNoSubstitutionTemplateLiteral(literal))) {
-              pending.push({ file, line, endLine: tree.getLineAndCharacterOfPosition(node.end - 1).line + 1, offset, specifier: literal.text, kind: "import", typeOnly: form === "type-query", form });
-              statements.push(JSON.stringify({ reference: form, specifier: literal.text }));
+            const specifier = literal !== undefined && (ts.isStringLiteral(literal) || ts.isNoSubstitutionTemplateLiteral(literal)) ? literal.text : undefined;
+            const endLine = tree.getLineAndCharacterOfPosition(node.end - 1).line + 1;
+            if (form !== "require" && specifier !== undefined) {
+              pending.push({ file, line, endLine, offset, specifier, kind: "import", typeOnly: form === "type-query", form, bindings: [] });
+              statements.push(JSON.stringify({ reference: form, specifier }));
             } else {
-              untraversed.push({ file, line, offset, form });
+              untraversed.push({ file, line, offset, form, ...(specifier === undefined ? {} : { endLine, specifier }) });
             }
           }
           ts.forEachChild(node, visit);
@@ -117,23 +101,38 @@ export function createModuleDependenciesReader(): ModuleDependenciesReader {
       }
 
       const resolutions = new Map<string, Promise<ModuleTarget>>();
-      const dependencies = await Promise.all(pending.map(async (dependency): Promise<ModuleDependency> => {
-        const key = JSON.stringify([dependency.file, dependency.specifier]);
+      const resolve = (from: string, specifier: string): Promise<ModuleTarget> => {
+        const key = JSON.stringify([from, specifier]);
         let resolution = resolutions.get(key);
         if (resolution === undefined) {
-          resolution = resolver.resolve(dependency.file, dependency.specifier).then((result): ModuleTarget => {
+          resolution = resolver.resolve(from, specifier).then((result): ModuleTarget => {
             if ("file" in result) return { kind: "repository", file: result.file };
-            if ("external" in result) return { kind: "external", module: packageOf(dependency.specifier) ?? dependency.specifier };
+            if ("external" in result) return { kind: "external", module: packageOf(specifier) ?? specifier };
             return { kind: "unresolved", reason: result.unresolved };
           });
           resolutions.set(key, resolution);
         }
-        return { ...dependency, target: await resolution };
+        return resolution;
+      };
+      const defaults = new Map<string, string | undefined>();
+      const defaultOf = (file: string): string | undefined => {
+        if (!defaults.has(file)) {
+          const text = texts.get(file);
+          defaults.set(file, text === undefined ? undefined : defaultDeclarationName(ts.createSourceFile(file, text, ts.ScriptTarget.Latest, false, ts.ScriptKind.TS)));
+        }
+        return defaults.get(file);
+      };
+      const dependencies = await Promise.all(pending.map(async (dependency): Promise<ModuleDependency> => {
+        const target = await resolve(dependency.file, dependency.specifier);
+        if (target.kind !== "repository" || !dependency.bindings.some(({ imported }) => imported === "default")) return { ...dependency, target };
+        const exportedAs = defaultOf(target.file);
+        return { ...dependency, target, bindings: dependency.bindings.map((binding) => binding.imported === "default" && exportedAs !== undefined ? { ...binding, exportedAs } : binding) };
       }));
+      const traced = await Promise.all(untraversed.map(async (reference) => reference.specifier === undefined ? reference : { ...reference, target: await resolve(reference.file, reference.specifier) }));
       const resources = new Set(dependencies.flatMap(({ target }) => target.kind === "repository" && target.file.endsWith(".json") ? [target.file] : []));
       for (const file of [...resources].sort(compareText)) files.push({ file, statements: [texts.get(file)!], moduleOnly: true, resource: true });
       files.sort((left, right) => compareText(left.file, right.file));
-      return { files, dependencies, unread, untraversed };
+      return { files, dependencies, unread, untraversed: traced };
     },
   };
 }

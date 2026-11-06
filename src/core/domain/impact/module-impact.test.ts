@@ -6,7 +6,7 @@ import { moduleImpact } from "./module-impact.ts";
 
 const source = (file: string, statements: string[] = [], moduleOnly = true): ModuleSource => ({ file, statements, moduleOnly });
 const change = (path: string, deleted = false): FileChange => ({ path, deleted, binary: false, added: [], removals: [], removedNames: [] });
-const edge = (file: string, target: string, overrides: Partial<ModuleDependency> = {}): ModuleDependency => ({ file, line: 7, endLine: 7, specifier: "@alias/target", kind: "import", typeOnly: false, target: { kind: "repository", file: target }, ...overrides });
+const edge = (file: string, target: string, overrides: Partial<ModuleDependency> = {}): ModuleDependency => ({ file, line: 7, endLine: 7, specifier: "@alias/target", kind: "import", typeOnly: false, target: { kind: "repository", file: target }, bindings: [], ...overrides });
 
 test("referenced JSON content changes and deletions reach consumers without declaration origins", () => {
   const data = { ...source("data.json", ['{"value":1}']), resource: true as const };
@@ -19,6 +19,13 @@ test("referenced JSON content changes and deletions reach consumers without decl
   assert.ok(read.covered.has("data.json"));
   const deleted = moduleImpact([change("data.json", true)], base, snapshot([source("consumer.ts")]));
   assert.deepEqual(deleted.value.modules.map(({ snapshot, file }) => [snapshot, file]), [["base", "data.json"], ["base", "consumer.ts"]]);
+});
+
+test("an import-equals statement is a static edge of module impact, never a conditional form", () => {
+  const base = snapshot([source("root.ts", ["old"]), source("consumer.ts")], [edge("consumer.ts", "root.ts", { form: "import-equals" })]);
+  const head = { ...base, files: [source("root.ts", ["new"]), source("consumer.ts")] };
+  const reached = moduleImpact([change("root.ts")], base, head).value.modules.find(({ file }) => file === "consumer.ts");
+  assert.deepEqual(reached?.via, { file: "root.ts", line: 7, specifier: "@alias/target", kind: "import", typeOnly: false });
 });
 
 test("conditional module evidence survives traversal and exact unsupported references remain cuts", () => {

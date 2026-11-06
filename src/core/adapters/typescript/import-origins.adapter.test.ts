@@ -213,3 +213,15 @@ test("nested function bindings and eval do not contaminate an outer callback sco
   ]);
   assert.ok(results[0]?.status === "complete" && results[0].value.kind === "local-parameter");
 });
+
+test("an import-equals require binds its name to the module it names, unless the file declares the name again", async () => {
+  const bound: SourceFile = { path: "src/legacy.ts", content: "import ops = require('rxjs/operators');\nops.map();\n" };
+  const shadowed: SourceFile = { path: "src/shadow.ts", content: "import ops = require('rxjs/operators');\nops.map();\nfunction run(ops: unknown) {}\n" };
+  const site = (file: string): ImportOriginSite => ({ file, line: 2, column: 1, name: "ops", fullName: "ops.map", kind: "calls" });
+  const findings = await createImportOrigins([MANIFEST, bound, shadowed]).origins([site("src/legacy.ts"), site("src/shadow.ts")]);
+
+  assert.deepEqual(findings, [
+    { status: "complete", value: { kind: "external", module: "rxjs" }, occurrence: true, evidence: [{ path: "src/legacy.ts", line: 2 }] },
+    { status: "unknown", reason: "unresolved", occurrence: true, evidence: [{ path: "src/shadow.ts", line: 2 }] },
+  ]);
+});

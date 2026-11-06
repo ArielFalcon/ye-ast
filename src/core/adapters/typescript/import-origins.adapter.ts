@@ -1,6 +1,7 @@
 import ts from "typescript";
 import { matchesReferenceKind, syntaxName } from "./reference-occurrence.ts";
-import { declaredName, declaredNames } from "./syntax-names.ts";
+import { declarationCounts, declaredName, declaredNames } from "./syntax-names.ts";
+import { moduleStatement } from "./import-bindings.ts";
 import { sourceTree } from "./source-tree.ts";
 import { isPackageManifest, isTypeScriptSource } from "../../domain/languages/typescript.ts";
 import type { ImportOrigin } from "../../domain/relations/resolved-reference.ts";
@@ -186,20 +187,20 @@ function describe(file: SourceFile): FileShape {
   return describeTree(tree);
 }
 
+/**
+ * The local names the file's imports bind, read by the one module-statement reader. A name an `import x = require`
+ * binds is a declaration only when the file declares it again.
+ */
 function describeTree(tree: ts.SourceFile): FileShape {
   const bindings = new Map<string, string>();
+  const declared = declarationCounts(tree);
   for (const statement of tree.statements) {
-    if (ts.isImportDeclaration(statement) && ts.isStringLiteral(statement.moduleSpecifier)) bind(statement.importClause, statement.moduleSpecifier.text, bindings);
+    const read = moduleStatement(statement, tree);
+    if (read?.kind !== "import" || read.specifier === undefined) continue;
+    for (const { local } of read.bindings) {
+      bindings.set(local!, read.specifier);
+      if (read.form === "import-equals") declared.set(local!, declared.get(local!)! - 1);
+    }
   }
-  return { bindings, declared: declaredNames(tree) };
-}
-
-/** The local name each binding of one import clause takes, and the specifier it came from. */
-function bind(clause: ts.ImportClause | undefined, specifier: string, into: Map<string, string>): void {
-  if (clause === undefined) return;
-  if (clause.name !== undefined) into.set(clause.name.text, specifier);
-  const named = clause.namedBindings;
-  if (named === undefined) return;
-  if (ts.isNamespaceImport(named)) into.set(named.name.text, specifier);
-  else for (const element of named.elements) into.set(element.name.text, specifier);
+  return { bindings, declared: new Set([...declared].filter(([, count]) => count > 0).map(([name]) => name)) };
 }
