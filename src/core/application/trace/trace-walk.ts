@@ -1,19 +1,20 @@
 import { isSeedable } from "../../domain/change/seeds.ts";
 import { CALL_EDGE_KINDS, FIELD_KINDS, isIgnoredEdge } from "../../domain/impact/edge-policy.ts";
-import { declarationAnchor, placeAt, referenceKey } from "../../domain/impact/impact-cuts.ts";
+import { declarationAnchor, placeAt } from "../../domain/impact/impact-cuts.ts";
 import { NOT_DECLARED_KINDS, sortedUnique } from "../../domain/impact/importers-fact.ts";
 import { branchesOf, declarationPath } from "../../domain/shared/declaration-tree.ts";
 import type { Cut } from "../../domain/shared/fact.ts";
-import { calleeOf, compareOccurrence, ownMemberOf, receiverOf, sameOccurrence, type EdgeOccurrence, type OrderedPlace } from "../../domain/trace/call-place.ts";
+import { calleeOf, compareOccurrence, ownMemberOf, receiverOf, type OrderedPlace } from "../../domain/trace/call-place.ts";
 import type { TraceVia } from "../../domain/trace/trace-fact.ts";
 import type { ExternalCall, TraceDeclaration, WalkedStep } from "../../domain/trace/trace-tree.ts";
 import type { DeclaredCallable, DeclaredMemberNames, FunctionValueCall } from "../../ports/declared-member-names.port.ts";
-import type { CodeGraphReader, GraphEdge, GraphNodeId, GraphSymbol, GraphUnresolvedReference } from "../../ports/code-graph.port.ts";
+import type { CodeGraphReader, GraphNodeId, GraphSymbol, GraphUnresolvedReference } from "../../ports/code-graph.port.ts";
 import type { ImportOriginSite, ImportOrigins } from "../../ports/import-origins.port.ts";
 import type { TraceBudget } from "../../ports/trace-queries.port.ts";
 import { createGraphNavigation, SUPERTYPE_EDGES } from "../navigation/graph-navigation.ts";
 import { containmentTree } from "../navigation/containment-tree.ts";
-import type { EdgeTargets, FollowedEdge } from "../navigation/edge-targets.ts";
+import type { EdgeTargets } from "../navigation/edge-targets.ts";
+import { createDeclarationUses, unsettledBy, type UnresolvedIn } from "../navigation/declaration-uses.ts";
 
 /** What a body passes as a value runs later, if at all; only code can. */
 const DEFERRED_KINDS: readonly string[] = ["function", "method"];
@@ -29,13 +30,6 @@ const CALLABLE_KINDS: readonly string[] = ["method", "function"];
 
 /** Types whose methods have bodies, so a root of one of them runs what its members run. */
 const CLASS_KINDS: readonly string[] = ["class", "component"];
-
-/** A file's unresolved references, read on demand and once per file for the life of one query. */
-export type UnresolvedIn = (file: string) => readonly GraphUnresolvedReference[];
-
-export function unresolvedOncePerFile(store: CodeGraphReader): UnresolvedIn {
-  return memoizedBy((file: string) => file, (file) => store.unresolvedReferences([file]));
-}
 
 /** What a trace can start from: what an impact walk seeds, or a property or field whose initializer makes calls. */
 export function isTraceRoot(store: CodeGraphReader, unresolvedIn: UnresolvedIn): (symbol: GraphSymbol) => boolean {
@@ -101,17 +95,8 @@ interface Body {
 export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkInput): Promise<TraceWalk | "aborted"> {
   const { store, unresolvedIn, origins, targets, inScope, memberDeclarations, syntaxOf, budget, signal } = input;
   const navigation = createGraphNavigation(store, () => false);
-
-  const referencesByFile = new Map<string, ReadonlyMap<GraphNodeId, readonly GraphUnresolvedReference[]>>();
-  const callsFrom = (node: GraphSymbol): readonly GraphUnresolvedReference[] => {
-    let byNode = referencesByFile.get(node.file);
-    if (byNode === undefined) {
-      byNode = Map.groupBy(unresolvedIn(node.file).filter((reference) => CALL_EDGE_KINDS.includes(reference.kind)), (reference) => reference.from);
-      referencesByFile.set(node.file, byNode);
-    }
-    const found = byNode.get(node.id) ?? [];
-    return [...new Map(found.map((reference) => [referenceKey(reference) ?? reference, reference])).values()];
-  };
+  const uses = createDeclarationUses(store, navigation, unresolvedIn);
+  const callsFrom = (node: GraphSymbol): readonly GraphUnresolvedReference[] => uses.referencesFrom(node, CALL_EDGE_KINDS);
 
   const namedCache = new Map<string, readonly GraphSymbol[]>();
   const declarationsNamed = (name: string): readonly GraphSymbol[] => {
@@ -223,10 +208,8 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
   /** The members of a class root that run code, by their declaration: methods, and properties or fields whose initializer makes calls. */
   const membersOf = (node: GraphSymbol): Child[] => {
     if (!CLASS_KINDS.includes(node.kind)) return [];
-    const contains = store.outgoingEdges([node.id], ["contains"]);
-    navigation.load(contains.map((edge) => edge.target));
-    return contains
-      .flatMap((edge) => navigation.symbolOf(edge.target) ?? [])
+    return navigation
+      .membersOf(node)
       .filter((member) => member.kind === "method" || ((FIELD_KINDS as readonly string[]).includes(member.kind) && (callEdgesOf(store, member).length > 0 || callsFrom(member).length > 0)))
       .map((member) => childAt(member, member.startLine, null, member.name, "member"));
   };
@@ -234,13 +217,8 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
   async function bodyOf(node: GraphSymbol, root: boolean): Promise<Body> {
     const calls = callEdgesOf(store, node);
     const values = store.outgoingEdges([node.id], ["references"]);
-    navigation.load([...calls, ...values].map((edge) => edge.target));
-    const withEnds = (edges: readonly GraphEdge[]): FollowedEdge[] => edges.flatMap((edge) => {
-      const target = navigation.symbolOf(edge.target);
-      return target === undefined ? [] : [{ edge, source: node, target }];
-    });
-    const called = withEnds(calls);
-    const passed = withEnds(values).filter(({ target }) => DEFERRED_KINDS.includes(target.kind));
+    const called = uses.followed(node, calls);
+    const passed = uses.followed(node, values).filter(({ target }) => DEFERRED_KINDS.includes(target.kind));
     const verdicts = await targets.verdictsOf([...called, ...passed], signal);
     const external: ExternalCall[] = [];
     const children: Child[] = root ? membersOf(node) : [];
@@ -255,12 +233,10 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
         cuts.push({ kind: "unresolved-link", at: [placeAt(node.file, edge.line ?? node.startLine, target.name), ...sortedUnique(declarationsNamed(target.name).map(candidateOf))] });
       } else external.push(verdict.root.kind === "external" ? { kind: "import", module: verdict.root.module, name: target.name } : { kind: "global", name: target.name });
     }
-    const resolved: EdgeOccurrence[] = called.map(({ edge, target }) => ({ source: edge.source, line: edge.line, column: edge.column, targetName: target.name }));
-
     const bare: { reference: GraphUnresolvedReference; name: string }[] = [];
-    for (const reference of callsFrom(node).filter((candidate) => !resolved.some((edge) => sameOccurrence(edge, candidate)))) {
+    for (const reference of unsettledBy(callsFrom(node), called)) {
       const own = ownMemberOf(reference.name);
-      const members = own === undefined ? [] : [...new Map(navigation.ownersOf(node).flatMap((owner) => navigation.methodsOf(owner)).filter((method) => method.name === own).map((method) => [method.id, method])).values()];
+      const members = own === undefined ? [] : uses.ownMembers(node, own, ["method"]);
       if (members.length === 1) children.push(childAt(members[0]!, reference.line, reference.column, reference.name, "own-member"));
       else if (members.length > 1) cuts.push(unresolvedAt(reference, members));
       else {
