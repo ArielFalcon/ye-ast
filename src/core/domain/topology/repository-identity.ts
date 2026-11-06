@@ -1,6 +1,6 @@
 import { compareText } from "../shared/code-node.ts";
 import type { Cut, Evidence } from "../shared/fact.ts";
-import { serviceLabel, sortEvidence, type NameCandidate, type OutwardName } from "./outward-name.ts";
+import { gatherNames, lastSegmentOf, serviceLabel, sortEvidence, type NameCandidate, type OutwardName } from "./outward-name.ts";
 
 /** A remote a repository states: the name it answers to in its own configuration, and the repository name its URL ends with. */
 export interface RepositoryRemote {
@@ -56,12 +56,12 @@ export function nameCandidates(name: OutwardName, identities: readonly Repositor
     .sort((a, b) => compareText(a.repo, b.repo) || compareText(a.basis, b.basis));
 }
 
-export type DependencySelection =
+type DependencySelection =
   | { status: "selected"; repo: string }
   | { status: "unserved" }
   | { status: "unresolved"; diagnostic: NonNullable<Cut["dependency"]> };
 
-export function selectDependency(name: OutwardName, identities: readonly RepositoryIdentity[], sourceRepo: string): DependencySelection {
+function selectDependency(name: OutwardName, identities: readonly RepositoryIdentity[], sourceRepo: string): DependencySelection {
   const available = identities.filter((identity) => identity.repo !== sourceRepo);
   const maven = isMavenDependency(name);
   const coordinate = maven ? serviceLabel(name) : name.name;
@@ -82,6 +82,32 @@ export function selectDependency(name: OutwardName, identities: readonly Reposit
   };
 }
 
+export interface DependencyClosure {
+  repositories: readonly string[];
+  unresolved: readonly { repo: string; name: OutwardName; diagnostic: NonNullable<Cut["dependency"]> }[];
+}
+
+export function dependencyClosures(repositories: readonly { identity: RepositoryIdentity; names: readonly OutwardName[] }[]): ReadonlyMap<string, DependencyClosure> {
+  const identities = repositories.map(({ identity }) => identity);
+  const graph = new Map(repositories.map(({ identity, names }) => [identity.id, gatherNames(names).filter((name) => name.kind === "dependency").map((name) => ({ name, selection: selectDependency(name, identities, identity.repo) }))]));
+  const closures = new Map<string, DependencyClosure>();
+  for (const root of [...graph.keys()].sort(compareText)) {
+    const visited = new Set([root]);
+    const pending = [root];
+    const unresolved: DependencyClosure["unresolved"][number][] = [];
+    for (const repo of pending) {
+      for (const { name, selection } of graph.get(repo)!) {
+        if (selection.status === "unresolved") unresolved.push({ repo, name, diagnostic: selection.diagnostic });
+        if (selection.status !== "selected" || visited.has(selection.repo)) continue;
+        visited.add(selection.repo);
+        pending.push(selection.repo);
+      }
+    }
+    closures.set(root, { repositories: [...visited].filter((repo) => repo !== root).sort(compareText), unresolved: unresolved.sort((a, b) => compareText(a.repo, b.repo) || compareText(a.name.name, b.name.name)) });
+  }
+  return closures;
+}
+
 function isMavenDependency(name: OutwardName): boolean {
   return name.kind === "dependency" && (name.name.includes(":") || name.evidence.some(({ path }) => path.split("/").at(-1) === "pom.xml"));
 }
@@ -100,10 +126,6 @@ function recognizedBy(identity: RepositoryIdentity, basis: (typeof BASES)[number
     case "remote":
       return identity.remotes.map(({ remote, repository }) => ({ value: repository, evidence: identity.evidence.filter((place) => place.via === remote) }));
   }
-}
-
-function lastSegmentOf(coordinate: string): string {
-  return coordinate.split(/[:/]/).filter(Boolean).pop() ?? coordinate;
 }
 
 /** The last segment of a path, with either separator and any trailing one: the directory a repository root ends in. */

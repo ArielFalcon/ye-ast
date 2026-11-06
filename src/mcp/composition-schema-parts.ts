@@ -126,6 +126,7 @@ export const callSiteDiagnostic = z.strictObject({
   cause: z.enum(CALL_SITE_CAUSES),
   source: z.enum(["not-read", "read"]).exactOptional(),
   unreadableSources: z.array(evidenceValue).exactOptional(),
+  alternatives: z.array(z.string()).exactOptional(),
 });
 export const unresolvedCallSiteSchema = z.strictObject({
   path: z.string(), line: int, endLine: int.exactOptional(), symbol: z.string(), transport,

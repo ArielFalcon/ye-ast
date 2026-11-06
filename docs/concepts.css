@@ -666,8 +666,6 @@ details[open] summary { border-bottom: 1px solid var(--line-soft); }
 .verdict-body strong { color: var(--ink); }
 .license { padding-top: 10px; border-top: 1px solid var(--line-soft); font-size: 11px !important; color: var(--faint) !important; }
 
-.evidence-table { margin-top: 22px; }
-.evidence-table td:first-child { width: 42%; }
 
 .limits { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 24px; margin-top: 36px; }
 .limits ul { margin: 0; padding-left: 18px; display: grid; gap: 8px; }
@@ -864,26 +862,10 @@ details[open] summary { border-bottom: 1px solid var(--line-soft); }
 .docs .sim-readout { position: static; }
 .docs .simulator { margin-top: 0; }
 
-/* ── glossary ───────────────────────────────────────────────────────── */
-.glossary-toolbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 18px; }
-.glossary-toolbar label { font-family: var(--mono); font-size: 9px; letter-spacing: .12em; text-transform: uppercase; color: var(--faint); }
-.glossary-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
-.glossary-item { padding: 12px 14px; border: 1px solid var(--line-soft); border-radius: 7px; background: var(--panel); }
-.glossary-item[hidden] { display: none; }
-.glossary-item dt { margin: 0 0 4px; font-family: var(--mono); font-size: 11px; color: var(--cyan); }
-.glossary-item dd { margin: 0; font-size: 13px; line-height: 1.6; color: var(--muted); }
-.glossary-item .glossary-node {
-  display: inline-block; margin-top: 7px; padding: 3px 6px;
-  border: 1px solid var(--line); border-radius: 4px; background: var(--panel-2);
-  color: var(--muted); font-family: var(--mono); font-size: 8.5px; cursor: pointer;
-}
-.glossary-item .glossary-node:hover { color: var(--cyan); border-color: var(--cyan); }
-.glossary-empty { color: var(--faint); font-size: 13px; }
 .docs .definitions { margin: 0; }
 
 @media (max-width: 980px) {
   .docs-inner { padding: 0 16px; }
-  .glossary-grid { grid-template-columns: 1fr; }
 }
 
 /* ── halftone identity for the concepts ─────────────────────────────── */
@@ -919,7 +901,7 @@ details[open] summary { border-bottom: 1px solid var(--line-soft); }
 
 .docs .kicker, .docs .eyebrow, .docs .mini-kicker, .docs .status-tag, .docs .run-kind, .docs .ins-kicker,
 .docs .step-stage, .docs .output-head span, .docs .layer-label, .docs .data-table th, .docs .run-table th,
-.docs .readout-stats dt, .docs .field, .docs .glossary-toolbar label, .docs .sim-unreached strong, .docs .ins-block h4,
+.docs .readout-stats dt, .docs .field, .docs .sim-unreached strong, .docs .ins-block h4,
 .docs .step-why strong, .docs .input-chips em, .docs .checker-controls label {
   font-family: var(--display); font-stretch: condensed; font-weight: 800;
   letter-spacing: .02em; text-transform: uppercase;
@@ -929,16 +911,16 @@ details[open] summary { border-bottom: 1px solid var(--line-soft); }
 .docs .mini-kicker, .docs .output-head span, .docs .run-kind, .docs .ins-kicker, .docs .step-stage { font-size: 14px; color: var(--muted); }
 .docs .status-tag { font-size: 22px; }
 .docs .data-table th, .docs .run-table th { font-size: 13px; color: var(--ink); }
-.docs .readout-stats dt, .docs .field, .docs .glossary-toolbar label, .docs .checker-controls label { font-size: 12.5px; }
+.docs .readout-stats dt, .docs .field, .docs .checker-controls label { font-size: 12.5px; }
 .docs .readout-stats dd, .docs .stat-strip strong { font-family: var(--display); font-stretch: condensed; font-weight: 800; }
 
 /* Blocks: flat fills, a heavy outline, almost no rounding. */
 .docs .status-card, .docs .identity-card, .docs .table-wrap, .docs .playground, .docs .command-card, .docs .run-card,
-.docs .simulator, .docs .sim-readout, .docs .glossary-item, .docs details, .docs .window, .docs .inspector,
+.docs .simulator, .docs .sim-readout, .docs details, .docs .window, .docs .inspector,
 .docs .checker, .docs .code-block, .docs .step-panel, .docs .stepper, .docs .readout-stats div, .docs .cut-item, .docs .entry-item {
   border-width: var(--stroke); border-color: var(--line); border-radius: var(--radius); box-shadow: none;
 }
-.docs .status-card, .docs .run-card, .docs .glossary-item, .docs .identity-card { position: relative; overflow: hidden; }
+.docs .status-card, .docs .run-card, .docs .identity-card { position: relative; overflow: hidden; }
 .docs .status-card::after, .docs .run-card::after {
   content: ""; position: absolute; right: 0; bottom: 0; width: 45%; height: 52px; pointer-events: none;
   background-color: var(--ink); opacity: .12; transform: scaleY(-1);
@@ -955,7 +937,7 @@ details[open] summary { border-bottom: 1px solid var(--line-soft); }
 .docs .status-card[data-status="complete"]::after { background-color: var(--lime); opacity: .2; }
 .docs .status-card[data-status="partial"]::after, .docs .status-card[data-status="unknown"]::after { background-color: var(--heat); opacity: .28; }
 
-.docs .button, .docs .chip, .docs .pill, .docs .layer-link, .docs .step-evidence a, .docs .glossary-item .glossary-node,
+.docs .button, .docs .chip, .docs .pill, .docs .layer-link, .docs .step-evidence a,
 .docs .input-chips span, .docs .pipeline span, .docs .step-button {
   border-radius: 0; border-width: 1.5px;
 }
@@ -975,8 +957,7 @@ details[open] summary { border-bottom: 1px solid var(--line-soft); }
 .docs .step-button.is-active { background: color-mix(in srgb, var(--heat) 16%, var(--panel)); box-shadow: inset 3px 0 0 var(--heat); }
 .docs .step-button.is-active span { color: var(--heat); }
 .docs .step-why, .docs .info-why { border: var(--stroke) solid var(--heat); background: color-mix(in srgb, var(--heat) 9%, transparent); }
-.docs .glossary-item dt { font-family: var(--display); font-stretch: condensed; font-weight: 800; font-size: 18px; color: var(--ink); }
-.docs .glossary-item .glossary-node:hover, .docs .step-evidence a:hover, .docs .layer-link:hover { color: var(--night); background: var(--lime); border-color: var(--lime); }
+.docs .step-evidence a:hover, .docs .layer-link:hover { color: var(--night); background: var(--lime); border-color: var(--lime); }
 .docs input[type="number"], .docs input[type="search"], .docs select { border-radius: 0; border-width: var(--stroke); }
 .docs input:focus, .docs select:focus { border-color: var(--lime); box-shadow: none; }
 .docs .switch input[type="checkbox"] { border-radius: 0; }
@@ -1106,8 +1087,6 @@ details[open] summary { border-bottom: 1px solid var(--line-soft); }
 .docs .reference-fold { margin-bottom: 14px; }
 .docs .reference-fold summary { font-size: 15px; padding: 16px 18px; }
 .docs .reference-fold summary span { font-family: var(--display); font-stretch: condensed; font-weight: 800; font-size: 15px; letter-spacing: .02em; text-transform: uppercase; color: var(--heat); }
-.docs .reference-fold .evidence-table { margin-top: 0; }
-.docs .reference-fold .glossary-grid { margin-top: 4px; }
 
 .docs .surface-more { margin-top: 28px; }
 .docs .surface-facts { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
@@ -1205,3 +1184,13 @@ details[open] summary { border-bottom: 1px solid var(--line-soft); }
 .docs .compose-block { grid-template-columns: minmax(0, 1fr); }
 .docs .compose-block > * { min-width: 0; }
 .docs .compose-chip span { overflow-wrap: anywhere; }
+
+/* ── glossary terms: highlighted in the text, opened in place or in the explorer ── */
+
+.docs .term-ref { padding: 0; border: 0; background: none; font: inherit; font-weight: 700; color: var(--cyan); cursor: pointer; text-decoration: underline dotted color-mix(in srgb, var(--cyan) 55%, transparent); text-underline-offset: 3px; }
+.docs .term-ref:hover, .docs .term-ref.is-open { color: var(--night); background: var(--lime); text-decoration: none; }
+.term-pop { position: absolute; z-index: 60; width: min(340px, calc(100vw - 16px)); padding: 12px 14px; border: var(--stroke) solid var(--lime); border-radius: var(--radius); background: var(--panel); color: var(--ink); box-shadow: 4px 4px 0 var(--outline); animation: stamp-in .3s var(--ease-draw) both; }
+.term-pop strong { font-family: var(--display); font-stretch: condensed; font-weight: 800; font-size: 18px; }
+.term-pop p { margin: 4px 0 10px; font-size: 13.5px; line-height: 1.55; color: var(--muted); }
+.term-pop-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+@media (prefers-reduced-motion: reduce) { .term-pop { animation: none; } }

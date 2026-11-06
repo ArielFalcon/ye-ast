@@ -70,7 +70,7 @@ window.SIM_UI = {
     inAtlas: "en el atlas",
     why: "por qué importa",
     fanIn: "fan-in",
-    noCuts: "sin cortes: la frontera quedó vacía.",
+    noCuts: "sin cuts: la frontera quedó vacía.",
     noEntrypoint: "no se alcanzó ningún punto de entrada",
     notReached: "no alcanzados",
     none: "ninguno",

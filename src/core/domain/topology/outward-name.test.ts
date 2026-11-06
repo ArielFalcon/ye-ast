@@ -81,3 +81,30 @@ test("qualified Maven recognition keeps the existing optional version outside ar
   const candidates = nameCandidates({ name: "com.acme:clients@2", kind: "dependency", evidence: [] }, [{ repo: "library", id: "library", artifacts: ["com.acme:clients"], remotes: [], evidence: [] }], "app");
   assert.deepEqual(candidates.map(({ repo, basis }) => ({ repo, basis })), [{ repo: "library", basis: "artifact" }]);
 });
+
+function dependencyRepository(id: string, dependencies: readonly string[], artifact = `com.acme:${id}`) {
+  return { identity: { repo: id, id, artifacts: artifact === "" ? [] : [artifact], remotes: [], evidence: [] }, names: dependencies.map((name, index) => ({ name: `com.acme:${name}`, kind: "dependency" as const, evidence: [{ path: "pom.xml", line: index + 2 }] })) };
+}
+
+test("dependency closure is stable, visits a diamond once and excludes its root through a cycle", async () => {
+  const { dependencyClosures } = await import("./repository-identity.ts");
+  const repositories = [dependencyRepository("app", ["b", "d", "blocked"]), dependencyRepository("b", ["c"]), dependencyRepository("d", ["c"]), dependencyRepository("c", ["app", "blocked"]), dependencyRepository("blocked", [], "")];
+  const closure = dependencyClosures(repositories).get("app");
+  assert.deepEqual(closure?.repositories, ["b", "c", "d"]);
+  assert.deepEqual(closure?.unresolved.map(({ repo, name }) => ({ repo, name: name.name })), [{ repo: "app", name: "com.acme:blocked" }, { repo: "c", name: "com.acme:blocked" }]);
+  assert.deepEqual(dependencyClosures([...repositories].reverse().map(r => ({ ...r, names: [...r.names].reverse() }))).get("app"), closure);
+});
+
+test("dependency closure keeps each blocked hop at its owner and never traverses unproved candidates", async () => {
+  const { dependencyClosures } = await import("./repository-identity.ts");
+  const closure = dependencyClosures([
+    dependencyRepository("app", ["b"]), dependencyRepository("b", ["x", "y"]),
+    dependencyRepository("x1", ["secret"], "com.acme:x"), dependencyRepository("x2", ["secret"], "com.acme:x"),
+    dependencyRepository("y", ["secret"], ""), dependencyRepository("secret", []),
+  ]).get("app");
+  assert.deepEqual(closure?.repositories, ["b"]);
+  assert.deepEqual(closure?.unresolved.map(({ repo, name, diagnostic }) => ({ repo, name: name.name, reason: diagnostic.reason, candidates: diagnostic.candidates })), [
+    { repo: "b", name: "com.acme:x", reason: "ambiguous", candidates: ["x1", "x2"] },
+    { repo: "b", name: "com.acme:y", reason: "unproven-coordinates", candidates: ["y"] },
+  ]);
+});

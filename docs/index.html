@@ -5,6 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ye-ast — architecture explorer</title>
 <meta name="description" content="Documentation for ye-ast, a deterministic engine that derives verifiable facts about code. Explore its layers, modules, ports, adapters and the flows between them.">
+<link rel="icon" type="image/png" sizes="64x64" href="assets/favicon-light.png">
+<link rel="icon" type="image/png" sizes="64x64" href="assets/favicon-dark.png" media="(prefers-color-scheme: dark)">
+<link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
 <link rel="stylesheet" href="styles.css">
 <link rel="stylesheet" href="concepts.css">
 </head>
@@ -338,7 +341,7 @@
       <p><i class="swatch edge-wires"></i> wires</p>
     </div>
     <p class="panel-note">Arrows show the direction of a request. The dependency rule is the layer order, not the arrow direction.</p>
-    <a class="panel-link" href="#concepts">Concepts and glossary ↓</a>
+    <a class="panel-link" href="#concepts">Concepts ↓</a>
   </aside>
 
   <section class="panel graph-panel" aria-label="Architecture graph">
@@ -697,61 +700,13 @@ export class LoginComponent {
       </div>
     </section>
 
-    <section data-rail="Reference" id="sources" class="doc-section">
+    <section data-rail="Limits" id="sources" class="doc-section">
       <div class="section-head">
-        <p class="kicker">Reference</p>
-        <h2>Terms, evidence and limits</h2>
-        <p class="section-lede">Look up a term, check where a claim is decided, and see what this page does not cover. The glossary and the evidence table stay folded until you open them.</p>
+        <p class="kicker">Limits</p>
+        <h2>Limits and how to reproduce</h2>
+        <p class="section-lede">What this page leaves out, and the commands that reproduce its runs. Glossary terms are highlighted in the text: select one to read its definition.</p>
       </div>
 
-      <details class="reference-fold" id="concept-glossary">
-        <summary><span>glossary</span> Terms used by the graph and the fact <em>search a term</em></summary>
-        <div class="details-body">
-          <p>Technical labels stay in code form; each definition explains them in plain language.</p>
-          <div class="glossary-toolbar">
-        <label for="glossary-filter">Search</label>
-        <input id="glossary-filter" type="search" placeholder="fan-in, cut, seed, snapshot…">
-        <span id="glossary-count"></span>
-      </div>
-      <dl class="glossary-grid" id="glossary-grid"></dl>
-        </div>
-      </details>
-
-      <details class="reference-fold">
-        <summary><span>evidence</span> Evidence for the material claims <em>where each claim is decided</em></summary>
-        <div class="details-body">
-          <div class="table-wrap evidence-table">
-        <table class="data-table stack-mobile">
-          <caption>Evidence for the material claims</caption>
-          <thead><tr><th>Claim</th><th>Where it is decided</th></tr></thead>
-          <tbody>
-            <tr><td>The dependency rule and the placement table</td><td><code>AGENTS.md</code> · <code>.dependency-cruiser.cjs</code> · <code>docs/architecture/rfc/0001-architecture-and-layers.md</code></td></tr>
-            <tr><td>The change is <code>merge-base(base, head)..head</code></td><td><code>src/core/application/impact/impact-queries.ts:200-211</code> · RFC-0010 “The change”</td></tr>
-            <tr><td>The diff pins every option that changes hunks</td><td><code>src/core/adapters/git/git-vcs.adapter.ts:328-338</code></td></tr>
-            <tr><td>An isolated git run empties user and system config</td><td><code>src/core/adapters/git/git-vcs.adapter.ts:445-460</code></td></tr>
-            <tr><td>Seeds: lines, top-level, resource, requested</td><td><code>src/core/domain/change/seeds.ts:53-87</code> · RFC-0010 “Seeds”</td></tr>
-            <tr><td>The edge policy table</td><td><code>src/core/domain/impact/edge-policy.ts:14-58</code></td></tr>
-            <tr><td>Owner expansion and its stop</td><td><code>src/core/application/impact/walk.ts:82-87</code> · ADR-0017</td></tr>
-            <tr><td>Interface bridges, both directions</td><td><code>src/core/application/impact/inbound-edges.ts:123-169</code></td></tr>
-            <tr><td>Field-origin settlement</td><td><code>src/core/application/impact/inbound-edges.ts:265-302</code></td></tr>
-            <tr><td>Confidence is the best path, scored by its weakest edge</td><td><code>src/core/application/impact/walk.ts:172-188</code></td></tr>
-            <tr><td>The one join: file, span, simple name</td><td><code>src/core/domain/shared/code-node.ts:20-27</code></td></tr>
-            <tr><td>Entrypoint join, guards, unknown handlers</td><td><code>src/core/domain/impact/reached-entrypoints.ts:21-46</code></td></tr>
-            <tr><td>Cuts and the fact status</td><td><code>src/core/domain/impact/impact-cuts.ts</code> · <code>src/core/domain/shared/fact.ts:114-159</code></td></tr>
-            <tr><td>The fact base and its inputs</td><td><code>src/core/application/snapshot/read-snapshot.ts:168-186</code> · <code>src/core/domain/shared/fact.ts:73-90, 130-136</code></td></tr>
-            <tr><td>Trust is read from outside the repository</td><td><code>src/core/application/snapshot/read-snapshot.ts:35-44</code> · ADR-0010</td></tr>
-            <tr><td>Live head, mirror, lock, sync</td><td><code>docs/architecture/rfc/0010-impact-queries.md</code> “Live head” · <code>src/core/application/live/live-tree.ts</code></td></tr>
-            <tr><td>The MCP server is read-only by type</td><td><code>src/mcp/query-runner.ts:27-37</code></td></tr>
-            <tr><td>The instructions an agent receives: when to call each tool, how to read an answer</td><td><code>src/mcp/server.ts:50-69</code></td></tr>
-            <tr><td>Eight MCP tools, all annotated read-only</td><td><code>src/mcp/server.ts:498-595</code></td></tr>
-            <tr><td>One MCP server, several declared repositories</td><td><code>src/composition/mcp.ts:9-23</code></td></tr>
-            <tr><td><code>ye_ast_compose</code> merges reads and connects them only when they match</td><td><code>src/mcp/compose-request.ts</code> · <code>src/mcp/compose-evidence.ts:207-237, 600-682</code></td></tr>
-            <tr><td>The query protocol is JSON-RPC 2.0 over stdio</td><td><code>src/protocol/query-server.ts</code> · ADR-0011</td></tr>
-          </tbody>
-        </table>
-      </div>
-        </div>
-      </details>
 
       <div class="limits">
         <div>

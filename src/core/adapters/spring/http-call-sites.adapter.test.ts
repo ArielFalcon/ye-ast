@@ -1,5 +1,6 @@
 import { before, test } from "node:test";
 import assert from "node:assert/strict";
+import type { LibrarySource } from "../../domain/topology/library-source.ts";
 import type { CallSite, CallSiteReader } from "../../domain/topology/call-site.ts";
 import { createJavaParser, type JavaParser } from "../tree-sitter/java-parser.adapter.ts";
 import { createJavaHttpCallSites } from "./java-call-sites.adapter.ts";
@@ -43,8 +44,12 @@ function describe(sites: readonly CallSite[]): string[] {
   });
 }
 
+function inLibrary(source: { path: string; content: string }): LibrarySource {
+  return { repo: "lib", ...source };
+}
+
 async function read(files: readonly { path: string; content: string }[], libraries: readonly { path: string; content: string }[] = []): Promise<string[]> {
-  return describe(await reader.of(files, "orders-svc", libraries));
+  return describe(await reader.of(files, "orders-svc", libraries.map(inLibrary)));
 }
 
 test("a RestTemplate verb fixes the method by its name, and exchange takes it from its argument", async () => {
@@ -325,7 +330,7 @@ test("a Java source the parser rejects is one unknown source-unreadable site at 
   const broken = java("Broken", ["class Broken {", "  void send( {", "}"].join("\n"));
   const client = java("BillingClient", ["class BillingClient {", "  RestTemplate rt;", "  void send() {", "    rt.getForObject(\"http://billing/orders\", String.class);", "  }", "}"].join("\n"));
   const library = java("Library", "class Library { void broken( }");
-  const sites = await reader.of([broken, client], "orders-svc", [library]);
+  const sites = await reader.of([broken, client], "orders-svc", [inLibrary(library)]);
   assert.deepEqual(sites.filter((site) => site.file === broken.path).map((site) => ({ symbol: site.symbol, transport: site.transport, target: site.target })), [
     { symbol: "Broken", transport: "http", target: { status: "unknown", reason: "source-unreadable", evidence: [{ path: broken.path, line: 7 }] } },
   ]);
@@ -388,7 +393,7 @@ test("Map configuration keys are evaluated through library arguments in the cons
       void send(String key) { Endpoint endpoint = config.getSystems().get(key); rt.getForObject(endpoint.getUrl(), String.class); }
     }`);
   const caller = java("Consumer", `class Consumer { Gateway gateway; void load() { gateway.send("catalog"); } }`);
-  const sites = await reader.of([caller, file(RESOURCES, "clients.systems.catalog.url: http://catalog/items\n")], "service", [library]);
+  const sites = await reader.of([caller, file(RESOURCES, "clients.systems.catalog.url: http://catalog/items\n")], "service", [inLibrary(library)]);
   assert.equal(sites.length, 1);
   assert.deepEqual(sites[0]?.target.status === "complete" && sites[0].target.value, { method: "GET", base: "http://catalog", path: "/items" });
 });
@@ -454,6 +459,22 @@ test("a source URL helper follows a proven null fallback and a single array elem
     }`, ["okhttp3.OkHttpClient", "okhttp3.Request", "okhttp3.HttpUrl"]);
   const sites = await reader.of([source], "service");
   assert.deepEqual(sites[0]?.target.status === "complete" && sites[0].target.value, { method: "GET", base: "http://catalog", path: "/items" });
+});
+
+test("a run-time null check in the destination stays unknown and names the value its decided branch declares", async () => {
+  const source = java("UrlHelper", `@lombok.Builder @lombok.Data class Query { String staticUrl; }
+    interface Photos { String uri(); }
+    class UrlHelper { OkHttpClient client; Photos photos;
+      void load(String configured) {
+        Query query = Query.builder().staticUrl(photos.uri()).build();
+        String rendered = query.getStaticUrl() != null ? query.getStaticUrl() : "http://catalog/items";
+        client.newCall(new Request.Builder().url(rendered).build());
+      }
+    }`, ["okhttp3.OkHttpClient", "okhttp3.Request"]);
+  const [site] = await reader.of([source], "service");
+  assert.equal(site?.target.status, "unknown");
+  assert.deepEqual(site?.diagnostic, { cause: "destination-undecidable", alternatives: ["http://catalog/items"] });
+  assert.ok(site?.target.evidence.some(({ line }) => line === 9));
 });
 
 test("a qualifier selects the implementation constructed by a named source Bean", async () => {
@@ -547,9 +568,24 @@ test("shared mutable objects cannot recover field defaults through a source gett
   assert.equal((await reader.of([source], "service"))[0]?.target.status, "unknown");
 });
 
+test("each request a wrapper call reaches names the library of its own request, not of another one", async () => {
+  const caller = java("Caller", `class Caller { Helper helper; void load() { helper.send(); } }
+    class Helper { RestTemplate rt; String url; AcmeRestClient client; void send() { rt.getForObject(url, String.class); client.get(); } }`, [...WEB, "com.acme.AcmeRestClient"]);
+  const library = inLibrary(file("src/main/java/com/acme/AcmeRestClient.java", 'package com.acme; import org.springframework.web.client.RestTemplate; public class AcmeRestClient { RestTemplate rt; String url; public void get() { rt.getForObject(url, String.class); } }'));
+  const sites = (await reader.of([caller], "app", [library])).filter((site) => site.symbol === "Caller.load");
+  const throughLibrary = sites.filter((site) => site.target.evidence.some((place) => place.path.startsWith("(library)/")));
+  const owned = sites.filter((site) => !throughLibrary.includes(site));
+  assert.equal(throughLibrary.length, 1);
+  assert.equal(owned.length, 1);
+  assert.equal(throughLibrary[0]?.diagnostic?.source, "read");
+  assert.equal(throughLibrary[0]?.target.evidence[0]?.via, "com.acme.AcmeRestClient");
+  assert.equal(owned[0]?.diagnostic?.source, undefined);
+  assert.equal(owned[0]?.target.evidence[0]?.via, undefined);
+});
+
 test("HTTP diagnostics distinguish a missing wrapper from a read wrapper with an undecidable destination", async () => {
   const caller = java("Caller", 'class Caller { AcmeRestClient client; void load() { client.get(); } }', [...WEB, "com.acme.AcmeRestClient"]);
-  const library = file("src/main/java/com/acme/AcmeRestClient.java", 'package com.acme; import org.springframework.web.client.RestTemplate; public class AcmeRestClient { RestTemplate rt; String url; public void get() { rt.getForObject(url, String.class); } }');
+  const library = inLibrary(file("src/main/java/com/acme/AcmeRestClient.java", 'package com.acme; import org.springframework.web.client.RestTemplate; public class AcmeRestClient { RestTemplate rt; String url; public void get() { rt.getForObject(url, String.class); } }'));
   const [missing] = await reader.of([caller], "app");
   const [read] = await reader.of([caller], "app", [library]);
   assert.deepEqual(missing?.diagnostic, { cause: "source-not-read", source: "not-read" });
@@ -561,7 +597,7 @@ test("HTTP diagnostics distinguish a missing wrapper from a read wrapper with an
 
 test("HTTP diagnostics distinguish a read wrapper without a recognized request", async () => {
   const caller = java("Caller", 'class Caller { AcmeRestClient client; void load() { client.get(); } }', [...WEB, "com.acme.AcmeRestClient"]);
-  const library = file("src/main/java/com/acme/AcmeRestClient.java", 'package com.acme; public class AcmeRestClient { public void get() {} }');
+  const library = inLibrary(file("src/main/java/com/acme/AcmeRestClient.java", 'package com.acme; public class AcmeRestClient { public void get() {} }'));
   const [site] = await reader.of([caller], "app", [library]);
   assert.deepEqual(site?.diagnostic, { cause: "request-not-found", source: "read" });
   assert.ok(site?.target.evidence.some(e => e.path.includes("(library)")));
@@ -569,10 +605,10 @@ test("HTTP diagnostics distinguish a read wrapper without a recognized request",
 
 test("an unreadable library is reported as context without claiming it declares the missing wrapper", async () => {
   const caller = java("Caller", 'class Caller { AcmeRestClient client; void load() { client.get(); } }', [...WEB, "com.acme.AcmeRestClient"]);
-  const library = file("src/Broken.java", "class Broken { !!!");
+  const library = inLibrary(file("src/Broken.java", "class Broken { !!!"));
   const [site] = await reader.of([caller], "app", [library]);
   assert.equal(site?.diagnostic?.cause, "source-not-read");
-  assert.deepEqual(site?.diagnostic?.unreadableSources?.map(e => e.path), ["(library)/0/src/Broken.java"]);
+  assert.deepEqual(site?.diagnostic?.unreadableSources?.map(e => e.path), ["(library)/lib/src/Broken.java"]);
 });
 
 test("URL value diagnostics retain recursion and disagreement inside source return methods", async () => {
@@ -588,4 +624,19 @@ test("URL value diagnostics retain recursion and disagreement inside source retu
   assert.equal(sites.find(s => s.symbol === "Values.recursive")?.diagnostic?.cause, "recursive");
   assert.equal(sites.find(s => s.symbol === "Values.different")?.diagnostic?.cause, "dispatch-disagreement");
   for (const site of sites) assert.ok(site.target.evidence.some(e => e.line !== site.line));
+});
+
+test("library evidence binds equal relative paths to their repository", async () => {
+  const caller = java("Caller", 'class Caller { FirstClient first; SecondClient second; void load() { first.get(); second.get(); } }', [...WEB, "one.FirstClient", "two.SecondClient"]);
+  const libraries = [
+    { path: "src/Client.java", content: 'package one; import org.springframework.web.client.RestTemplate; public class FirstClient { RestTemplate rt; public void get() { rt.getForObject("http://one/items", String.class); } }', repo: "first/lib" },
+    { path: "src/Client.java", content: 'package two; import org.springframework.web.client.RestTemplate; public class SecondClient { RestTemplate rt; public void get() { rt.getForObject("http://two/items", String.class); } }', repo: "second" },
+  ];
+  const sites = await reader.of([caller], "app", libraries);
+  assert.equal(sites.length, 2);
+  assert.ok(sites.every(s => s.target.status === "complete"));
+  assert.deepEqual([...new Set(sites.flatMap(s => s.target.evidence.map(e => e.path).filter(path => path.startsWith("(library)/"))))].sort(), [
+    "(library)/first%2Flib/src/Client.java",
+    "(library)/second/src/Client.java",
+  ]);
 });

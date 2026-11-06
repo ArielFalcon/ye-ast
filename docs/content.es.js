@@ -48,7 +48,6 @@ window.EXPLORER_ES = {
     relations: "Relaciones activas",
     activeNodes: "Nodos activos",
     terms: "Términos",
-    glossary: "Abrir glosario",
     why: "Por qué importa",
     nodeMode: "Inspección de nodo",
     flowPaused: "Flujo en pausa",
@@ -100,7 +99,7 @@ window.EXPLORER_ES = {
     "app-outline": { sub: "declaraciones · imports" },
     "app-decisions": { sub: "huecos de workspace · opciones" },
     "domain-change": { sub: "diff · semillas · radio" },
-    "domain-impact": { sub: "política · cortes · join" },
+    "domain-impact": { sub: "política · cuts · join" },
     "domain-entrypoints": { sub: "ruta · job · listener" },
     "domain-map": { sub: "mapa de puntos de entrada" },
     "domain-outline": { sub: "spans de declaraciones" },
@@ -183,7 +182,7 @@ window.EXPLORER_ES = {
     },
     "ports-live": {
       sub: "árbol · mirror · digest",
-      role: "La frontera live: enumerar un working tree, copiarlo a un mirror, hashearlo y reportar staleness.",
+      role: "La frontera live: enumerar un working tree, copiarlo a un mirror, calcular su hash y reportar staleness.",
       may: "core/domain, core/ports",
       never: "core/application, core/adapters",
       facts: ["El mirror copia archivos, nunca crea hard links.", "Un fact live nunca afirma más frescura que la que tiene el mirror."],
@@ -236,9 +235,9 @@ window.EXPLORER_ES = {
         },
         {
           title: "Diff fijado y semillas",
-          body: "<p><code>diff-tree</code> corre con cada opción que cambia los hunks fijada. El parser convierte las líneas tocadas en semillas; un nombre eliminado sobrevive como corte.</p>",
+          body: "<p><code>diff-tree</code> corre con cada opción que cambia los hunks fijada. El parser convierte las líneas tocadas en semillas; un nombre eliminado sobrevive como cut.</p>",
           why: 'Si la configuración de git de una máquina pudiera cambiar los hunks, el fact no sería determinista. Cada opción es explícita.',
-          calloutText: "Las reglas de cambio convierten un diff en semillas y cortes.",
+          calloutText: "Las reglas de cambio convierten un diff en semillas y cuts.",
         },
         {
           title: "Entrypoints en ambos lados",
@@ -260,7 +259,7 @@ window.EXPLORER_ES = {
         },
         {
           title: "Unir y firmar el fact",
-          body: "<p>El grafo se une a los facts de puntos de entrada por archivo, línea dentro del span y nombre simple. Cada límite y cada punto ciego se convierte en un corte antes de construir el fact.</p>",
+          body: "<p>El grafo se une a los facts de puntos de entrada por archivo, línea dentro del span y nombre simple. Cada límite y cada punto ciego se convierte en un cut antes de construir el fact.</p>",
           why: 'Un segundo join sería una segunda verdad. Una sola función sirve a puntos de entrada, aristas derivadas, sitios de llamada y semillas.',
           calloutText: "Un manejador o componente nombra su punto de entrada.",
         },
@@ -287,7 +286,7 @@ window.EXPLORER_ES = {
         },
         {
           title: "Construir el fact del mapa",
-          body: "<p>La sección de puntos de entrada se convierte en un fact. Los cortes del export y los ítems unknown deciden si el mapa es complete, partial o unknown.</p>",
+          body: "<p>La sección de puntos de entrada se convierte en un fact. Los cuts del export y los ítems unknown deciden si el mapa es complete, partial o unknown.</p>",
           calloutText: "El fact del mapa declara su propia completitud.",
         },
       ],
@@ -313,7 +312,7 @@ window.EXPLORER_ES = {
         },
         {
           title: "Unir y firmar el fact",
-          body: "<p>Los manejadores y guardas alcanzados se unen a puntos de entrada, y el fact reporta sus cortes. Un símbolo desconocido es un fallo tipado que lista lo que declara el archivo.</p>",
+          body: "<p>Los manejadores y guardas alcanzados se unen a puntos de entrada, y el fact reporta sus cuts. Un símbolo desconocido es un fallo tipado que lista lo que declara el archivo.</p>",
           calloutText: "La respuesta es un fact con estado, no una lista sin contexto.",
         },
       ],
@@ -402,7 +401,7 @@ window.EXPLORER_ES = {
         },
         {
           title: "Copiar el working tree",
-          body: "<p>git lista las rutas; ye-ast las copia y hashea en su mirror. El grafo lee el mirror, nunca el checkout.</p>",
+          body: "<p>git lista las rutas; ye-ast las copia y calcula su hash en su mirror. El grafo lee el mirror, nunca el checkout.</p>",
           calloutText: "Un fact live describe los bytes del mirror.",
         },
         {
@@ -412,7 +411,7 @@ window.EXPLORER_ES = {
         },
         {
           title: "Construir el fact live",
-          body: "<p>El snapshot live lleva un <code>stateId</code> y un origen del índice. Después de la respuesta, un chequeo solo de stat reporta staleness sin cambiar el fact.</p>",
+          body: "<p>El snapshot live lleva un <code>stateId</code> y un origen del índice. Después de la respuesta, una comprobación solo de stat reporta staleness sin cambiar el fact.</p>",
           calloutText: "stateId es el digest del content fingerprint live.",
         },
       ],

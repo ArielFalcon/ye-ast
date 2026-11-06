@@ -1250,7 +1250,7 @@ function unresolvedListing(sites: readonly UnresolvedCallSite[], detail: Respons
 function unresolvedLine(site: UnresolvedCallSite, detail: ResponseMode): string {
   const through = site.via === undefined ? "" : `, through ${site.via}`;
   const stated = site.stated === undefined ? "" : ` ${site.stated.method} ${site.stated.path}`;
-  const evidence = detail === "details" ? ` <- ${site.evidence.map(evidenceText).join(", ")}${site.diagnostic?.unreadableSources === undefined ? "" : `; unreadable libraries: ${site.diagnostic.unreadableSources.map(evidenceText).join(", ")}`}` : ` ${unresolvedLabel(site)}`;
+  const evidence = detail === "details" ? ` <- ${site.evidence.map(evidenceText).join(", ")}${site.diagnostic?.unreadableSources === undefined ? "" : `; unreadable libraries: ${site.diagnostic.unreadableSources.map(evidenceText).join(", ")}`}${site.diagnostic?.alternatives === undefined ? "" : `; chosen at run time, declared alternatives: ${site.diagnostic.alternatives.join(", ")}`}` : ` ${unresolvedLabel(site)}`;
   return `      ${spanText(site.line, site.endLine)} ${site.symbol} (${site.transport}${through})${stated}${evidence}`;
 }
 

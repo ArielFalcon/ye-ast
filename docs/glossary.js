@@ -1,4 +1,4 @@
-/* Glossary terms: technical label plus English and Spanish definitions. */
+/* Glossary terms: technical label, English and Spanish definitions, and the graph module that owns each term. */
 window.GLOSSARY = {
   terms: [
     {
@@ -13,13 +13,12 @@ window.GLOSSARY = {
       label: "complete / partial / unknown",
       labelEs: "completo / parcial / desconocido",
       en: "The three possible states of a fact. A partial fact lists its cuts; an unknown fact states its reason.",
-      es: "Los tres estados posibles de un fact. Un fact partial lista sus cortes; uno unknown da su razón.",
+      es: "Los tres estados posibles de un fact. Un fact partial lista sus cuts; uno unknown da su razón.",
       node: "domain-shared",
     },
     {
       key: "cut",
       label: "cut",
-      labelEs: "corte",
       en: "A named place where the computation stopped or could not see something: a bound, an unresolved name, a file with no extractor.",
       es: "Un lugar nombrado donde el cálculo se detuvo o no pudo ver algo: un límite, un nombre sin resolver, un archivo sin extractor.",
       node: "domain-impact",
@@ -67,7 +66,7 @@ window.GLOSSARY = {
       key: "hub",
       label: "hub fan-in",
       en: "An optional budget. The walk does not expand a symbol with more call-like callers than this value; it records a hub cut there.",
-      es: "Un presupuesto opcional. El recorrido no expande un símbolo con más llamadores call-like que este valor; registra un corte de hub en él.",
+      es: "Un presupuesto opcional. El recorrido no expande un símbolo con más llamadores call-like que este valor; registra un cut de hub en él.",
       node: "domain-impact",
     },
     {
@@ -97,7 +96,6 @@ window.GLOSSARY = {
     {
       key: "handler",
       label: "handler",
-      labelEs: "manejador",
       en: "The method or class that serves an entrypoint. The graph-to-fact join matches it by file, line inside its span and simple name.",
       es: "El método o la clase que sirve un entrypoint. El join entre grafo y fact lo empareja por archivo, línea dentro de su span y nombre simple.",
       node: "domain-entrypoints",
@@ -105,7 +103,6 @@ window.GLOSSARY = {
     {
       key: "guard",
       label: "guard",
-      labelEs: "guarda",
       en: "A declaration that decides whether a UI route can be entered. A reached guard names every route that declares it.",
       es: "Una declaración que decide si se puede entrar a una ruta UI. Un guard alcanzado nombra cada ruta que lo declara.",
       node: "domain-entrypoints",
@@ -128,7 +125,6 @@ window.GLOSSARY = {
     {
       key: "store",
       label: "store",
-      labelEs: "almacén",
       en: "The on-disk database of the index. Its node ids are handles: they never reach a fact.",
       es: "La base de datos en disco del índice. Sus node ids son handles: nunca llegan a un fact.",
       node: "adapter-codegraph",
@@ -171,6 +167,7 @@ window.GLOSSARY = {
       labelEs: "outline (esquema de archivo)",
       en: "The shape of a file: the kind, name and line span of each declaration and the files it imports, never its source text. Requested files the index holds no node of are listed as unheld.",
       es: "La forma de un archivo: el tipo, el nombre y el rango de líneas de cada declaración y los archivos que importa, nunca su texto fuente. Los archivos pedidos de los que el índice no tiene nodo se listan como unheld.",
+      node: "app-outline",
     },
     {
       key: "decision",
@@ -178,6 +175,7 @@ window.GLOSSARY = {
       labelEs: "decisión",
       en: "A configuration gap the code cannot fill (membership, repository, library, gateway, revision, remote or trust), listed with the options the workspace can verify and their evidence. Reading decisions writes nothing.",
       es: "Una brecha de configuración que el código no puede llenar (membership, repository, library, gateway, revision, remote o trust), listada con las opciones que el workspace puede verificar y su evidencia. Leer decisiones no escribe nada.",
+      node: "app-decisions",
     },
     {
       key: "scope",
@@ -190,7 +188,6 @@ window.GLOSSARY = {
     {
       key: "confidence",
       label: "confidence",
-      labelEs: "confianza",
       en: "How strongly a node depends on the seed, from 0 to 1. It is the widest path: the best, over all paths, of each path's weakest edge.",
       es: "Qué tan fuerte es la dependencia de un nodo respecto de la semilla, de 0 a 1. Es el widest path: el mejor, entre todos los caminos, de la arista más débil de cada uno.",
       node: "app-impact",

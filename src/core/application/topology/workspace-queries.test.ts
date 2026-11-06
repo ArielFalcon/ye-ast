@@ -1172,3 +1172,34 @@ test("an ambiguous dependency does not suppress independently proven library sou
   const section = value.sections.app;
   assert.deepEqual(section?.status === "partial" && section.cuts.map(cut => cut.dependency?.name), ["com.acme:clients"]);
 });
+
+test("workspace supplies two-hop library sources once, each bound to its repository", async () => {
+  const libraries: { content: string; repo: string }[][] = [];
+  const queries = setup({
+    "/work/app": { files: { "src/App.java": "class App {}" }, names: [dependencyName("com.acme:b", "pom.xml", 4)] },
+    "/work/b": { files: { "src/Z.java": "class Z {}", "src/Client.java": "class Middle {}" }, names: [dependencyName("com.acme:c", "pom.xml", 7)], artifacts: ["com.acme:b"], sha: "b".repeat(40) },
+    "/work/c": { files: { "src/Client.java": "class Transport {}" }, artifacts: ["com.acme:c"], sha: "c".repeat(40) },
+  }, { of: async (_files, repo, sources) => { if (repo === "app") libraries.push((sources ?? []).map(s => ({ content: s.content, repo: s.repo }))); return []; } });
+  await queries.outwardNames({ repo: { path: "/work/app" }, repos: [{ path: "/work/c" }, { path: "/work/b" }] });
+  assert.deepEqual(libraries, [[
+    { content: "class Middle {}", repo: "b" },
+    { content: "class Z {}", repo: "b" },
+    { content: "class Transport {}", repo: "c" },
+  ]]);
+});
+
+test("a blocked transitive hop cuts the consumer at the declaring library", async () => {
+  const queries = setup({
+    "/work/app": { files: {}, names: [dependencyName("com.acme:b", "pom.xml", 4)] },
+    "/work/b": { files: {}, names: [dependencyName("com.acme:x", "pom.xml", 7)], artifacts: ["com.acme:b"], sha: "b".repeat(40) },
+    "/work/x1": { files: {}, artifacts: ["com.acme:x"] },
+    "/work/x2": { files: {}, artifacts: ["com.acme:x"] },
+  });
+  const value = valueOf(await queries.outwardNames({ repo: { path: "/work/app" }, repos: [{ path: "/work/b" }, { path: "/work/x2" }, { path: "/work/x1" }] }));
+  const section = value.sections.app;
+  assert.deepEqual(section?.status === "partial" && section.cuts, [{
+    kind: "unresolved-link", reason: "unresolved",
+    at: ["(library)/b/pom.xml", "(library)/b/pom.xml:7"],
+    dependency: { name: "com.acme:x", reason: "ambiguous", candidates: ["x1", "x2"] },
+  }]);
+});

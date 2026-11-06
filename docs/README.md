@@ -17,11 +17,11 @@ page. Every `path:line` reference opens the file in the repository on GitHub.
 | Flows | `impact`, `map`, `callers`, `importers`, `workspace`, `init`, `live` and `compose`; 36 steps in total. |
 | Step | Highlights the nodes and edges of the step, dims the rest, anchors a callout to a node with a leader line and opens an explanation with why, relations, nodes, terms and evidence. |
 | Node | Clicking a node pauses the flow and switches the header to `Node inspection`; `Back to flow` restores the exact flow and step. The panel shows role, what it may import, what it never reaches, its facts and its files. |
-| Order | Introduction, fact contract, surfaces (with evidence composition), trust, architecture graph, the walk (rules, simulator, real runs) and reference (glossary, evidence, limits): general first, mechanics after. Reference tables and the glossary are folded. |
+| Order | Introduction, fact contract, surfaces (with evidence composition), trust, architecture graph, the walk (rules, simulator, real runs) and limits (what the page leaves out, how to reproduce the runs): general first, mechanics after. The command table is folded. |
 | Section rail | A fixed rail on the left edge, one brick per section: passed bricks are solid, the current one widens and fills with the reading progress of its section, a heat line shows the progress of the whole page. The header names the current section. |
 | Compose simulator | In Surfaces: pick one of eight query combinations (for example `callers + outline`) and a response mode (`summary`, `details`, `full`); the page shows the typed request, the real merged answer, its coverage status and issues, and the response bytes against the same questions asked as separate calls. `full` shows the table sizes of the graph, not the whole JSON. |
 | Concepts | Fact contract and cuts; edge policy and mechanics; a bounds block that explains depth, `fan-in`, `hub fan-in`, expansions and deadline inline; walk simulator; real executions and fixture; trust; surfaces; glossary; sources. |
-| Glossary | 33 terms with localized labels and definitions, a filter and "show in graph" links. |
+| Glossary | 33 terms with localized labels and definitions, each owned by a graph module. The first mention of a term in each section is highlighted; selecting it opens the definition with a "show in graph" button. The info panel lists the terms of the selected module or flow and opens one definition at a time. |
 
 The graph is horizontal in reading order, but arrows show the **flow of a request**, not the import direction. The
 dependency rule is the layer order in `AGENTS.md`; the graph is a data-flow view of the same architecture.
@@ -32,13 +32,13 @@ dependency rule is the layer order in `AGENTS.md`; the graph is a data-flow view
 | --- | --- |
 | `index.html`, `es.html` | App shell, concept sections and static UI. Same ids/classes in both. |
 | `styles.css` | Application layout, graph, callout, inputs, desktop and phone breakpoints. |
-| `concepts.css` | The original document styles, scoped to `.docs`; docs shell, glossary and form controls. |
+| `concepts.css` | The original document styles, scoped to `.docs`; docs shell, form controls and the highlighted glossary terms. |
 | `graph.js` | Graph layout, SVG rendering, zoom/pan, levels, flows, callouts, terms and node details. |
 | `data.js` | English data: layers, 41 modules, 90 edges, 8 flows and UI labels. |
 | `content.es.js` | Spanish UI, module subtitles/details and all 31 flow steps. |
 | `modules.en.js`, `modules.es.js` | Module details reused from the original explainer. |
-| `glossary.js` | Terms and definitions used by the glossary and the info panel. |
-| `concepts.js` | Glossary filter, "show in graph" links, section motion and the section rail. |
+| `glossary.js` | Terms, definitions and the module that owns each one, used by the text highlights and the info panel. |
+| `concepts.js` | Glossary highlights and their definition popover, section motion, the section rail and the title marks. |
 | `compose-sim.js` | The evidence-composition simulator in Surfaces: the eight captured `ye_ast_compose` cases of `docs/evaluations/mcp-composition/runs/2026-11-05-delivery-final/` (requests from `inputs/`, summary and details text from `outputs/<case>/composed/`, table sizes from `full.json`, byte counts from `measurements.json`) embedded as data, plus the UI that picks a combination, switches the response mode and compares it with the separate calls. Static: no network request, opens from `file://`. |
 | `simulator.js` | The walk simulator: seeds, bounds, edge policy, cuts and entrypoints. |
 | `sim-ui.js` | Simulator labels in English and Spanish. |
@@ -50,8 +50,8 @@ dependency rule is the layer order in `AGENTS.md`; the graph is a data-flow view
   `extraDetails` (`data.js`) / `modules` (`content.es.js`). Add its edges to `edges`.
 - A flow: add it to `flows` in `data.js` and translate its `label`, `question` and each step's `title`, `body` and
   `calloutText` in `content.es.js`. Every `focus`, `edges` pair and `callout` key must exist in the graph.
-- A term: add it to `glossary.js` with an English `label` and, when the Spanish label differs, a `labelEs`; use the key in a
-  flow's `terms` list or in an info-panel chip.
+- A term: add it to `glossary.js` with an English `label`, a `labelEs` only when the Spanish page uses another word, and
+  the `node` of the module that owns it; list the key in a flow's `terms` to show it on that flow's steps.
 - A UI string: add it to `ui` in `data.js` and to `ui` in `content.es.js`.
 
 ## Serve
