@@ -1176,6 +1176,23 @@ test("a trace over a real index reaches the declaration an import proves a name 
   assert.deepEqual(answer.value.value.steps.map(({ symbol, leaves }) => ({ symbol, leaves })), [{ symbol: "shape", leaves: [{ symbol: "cutOwner", file: "src/parts.ts", start: 1, end: 1, deferred: true }] }]);
 });
 
+test("a trace over a real index keeps the call site as the place of a redirected step that expands", async () => {
+  writeFileSync(join(repo, "src", "parts.ts"), ["export function compute(): number {", "  return Date.now();", "}", "export const cutOwner = compute();", ""].join("\n"));
+  writeFileSync(join(repo, "src", "other.ts"), ["function cutOwner(): number {", "  return 2;", "}", "export const x = cutOwner();", ""].join("\n"));
+  writeFileSync(join(repo, "src", "schema.ts"), ["import { cutOwner } from \"./parts.ts\";", "", "export function shape(): unknown {", "  const first = 1;", "  return [first, cutOwner];", "}", ""].join("\n"));
+  git("add", "-A");
+  git("commit", "-q", "-m", "redirect at");
+  const { trace } = composeQueries({ scratchRoot });
+
+  const answer = await trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: "src/schema.ts", symbol: "shape" }] });
+
+  assert.ok(answer.ok && answer.value.status === "complete", JSON.stringify(answer));
+  assert.deepEqual(answer.value.value.steps.slice(1).map(({ file, symbol, at, via, deferred }) => ({ file, symbol, at, via, deferred })), [
+    { file: "src/parts.ts", symbol: "cutOwner", at: { line: 5, column: 18 }, via: "reference", deferred: true },
+    { file: "src/parts.ts", symbol: "compute", at: { line: 4, column: 25 }, via: "call", deferred: undefined },
+  ]);
+});
+
 test("callers over a range inside a property initializer still seeds the class that holds it", async () => {
   commitPage();
   const { impact } = composeQueries({ scratchRoot });
