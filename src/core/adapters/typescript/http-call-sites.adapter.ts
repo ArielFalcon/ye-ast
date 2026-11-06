@@ -637,7 +637,7 @@ class Reader {
     const name = expression.name.text;
     if (owner.kind === ts.SyntaxKind.ThisKeyword) {
       const enclosing = enclosingClassOf(owner);
-      return enclosing === undefined ? undefined : this.fieldOf(shape, enclosing, name, trail);
+      return enclosing === undefined ? undefined : await this.fieldOf(shape, enclosing, name, trail);
     }
     if (!ts.isIdentifier(owner)) return undefined;
     const namespace = shape.imports.get(owner.text);
@@ -646,7 +646,7 @@ class Reader {
       return target === undefined ? undefined : this.exported(target, name, trail);
     }
     const found = await this.classOf(shape, owner.text);
-    const field = found === undefined ? undefined : this.fieldOf(found.shape, found.declaration, name, trail);
+    const field = found === undefined ? undefined : await this.fieldOf(found.shape, found.declaration, name, trail);
     if (field !== undefined) return field;
     const literal = await this.objectLiteral(shape, owner.text, trail);
     if (literal === undefined) return undefined;
@@ -654,12 +654,17 @@ class Reader {
     return property === undefined ? undefined : { shape: literal.shape, expression: property.initializer, trail: literal.trail };
   }
 
-  /** The initializer of a class member, once, whatever names the class states. */
-  private fieldOf(shape: FileShape, declaration: ts.ClassDeclaration, name: string, trail: ReadonlySet<string>): Located | undefined {
+  /** The initializer of a class member, once, whatever names the class states; a member the class does not declare is its base class's. */
+  private async fieldOf(shape: FileShape, declaration: ts.ClassDeclaration, name: string, trail: ReadonlySet<string>): Promise<Located | undefined> {
     const visited = `${shape.source.fileName}\0${declaration.name?.text ?? "(anonymous)"}.${name}`;
     if (trail.has(visited)) return undefined;
-    const member = declaration.members.find((candidate): candidate is ts.PropertyDeclaration => ts.isPropertyDeclaration(candidate) && ts.isIdentifier(candidate.name) && candidate.name.text === name);
-    if (member?.initializer === undefined) return undefined;
+    const member = declaration.members.find((candidate) => candidate.name !== undefined && ts.isIdentifier(candidate.name) && candidate.name.text === name);
+    if (member === undefined) {
+      const base = baseClassName(declaration);
+      const found = base === undefined ? undefined : await this.classOf(shape, base);
+      return found === undefined ? undefined : this.fieldOf(found.shape, found.declaration, name, new Set(trail).add(visited));
+    }
+    if (!ts.isPropertyDeclaration(member) || member.initializer === undefined) return undefined;
     return { shape, expression: member.initializer, trail: new Set(trail).add(visited) };
   }
 
@@ -746,6 +751,11 @@ class Reader {
 }
 
 /** The names the file binds at run time; an ambient `declare` binds none. */
+function baseClassName(declaration: ts.ClassDeclaration): string | undefined {
+  const base = declaration.heritageClauses?.find((clause) => clause.token === ts.SyntaxKind.ExtendsKeyword)?.types[0]?.expression;
+  return base !== undefined && ts.isIdentifier(base) ? base.text : undefined;
+}
+
 function sourceBindings(source: ts.SourceFile): ReadonlySet<string> {
   const names = new Set<string>();
   for (const statement of source.statements) {

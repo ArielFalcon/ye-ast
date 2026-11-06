@@ -500,6 +500,28 @@ test("an ambient constant stays unknown when no define states it, the define is 
   assert.deepEqual(sites(await reader.of([workspace({ SERVER_API_URL: "''" }, undefined, "@angular-devkit/build-angular:browser"), constants, service], "shop-web")), unknown);
 });
 
+test("a field a class does not declare is its base class's, here or through an import; a field the class declares wins", async () => {
+  const base = source("src/app/order/order-base.ts", ["import { serverApiUrl } from '../app.constants'", "export class OrdersBase {", "  protected readonly resourceUrl = `${serverApiUrl}api/orders`", "}"].join("\n"));
+  const service = source(
+    SERVICE,
+    [
+      "import { HttpClient } from '@angular/common/http'",
+      "import { inject } from '@angular/core'",
+      "import { OrdersBase } from './order-base'",
+      "export class OrderService extends OrdersBase {",
+      "  private readonly http = inject(HttpClient)",
+      "  find(id: number): void { this.http.get(`${this.resourceUrl}/${encodeURIComponent(id)}`) }",
+      "}",
+      "export class LegacyOrderService extends OrdersBase {",
+      "  protected readonly resourceUrl = 'legacy/orders'",
+      "  private readonly http = inject(HttpClient)",
+      "  all(): void { this.http.get(this.resourceUrl) }",
+      "}",
+    ].join("\n"),
+  );
+  assert.deepEqual(sites(await reader.of([workspace({ SERVER_API_URL: "''" }), constants, base, service], "shop-web")), [`GET api/orders/{}@${SERVICE}:6`, `GET legacy/orders@${SERVICE}:11`]);
+});
+
 test("a variable the file declares is its own value, never a define of the same name", async () => {
   const service = orderService("this.http.get(this.resourceUrl)");
   for (const declaration of ["let SERVER_API_URL: string;", "var SERVER_API_URL: string;"]) {
