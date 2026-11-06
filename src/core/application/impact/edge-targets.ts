@@ -2,6 +2,7 @@ import { edgeVerdict, FOLLOWED_EDGE_KINDS, type EdgeVerdict } from "../../domain
 import type { CodeGraphReader, GraphNodeId, GraphSymbol } from "../../ports/code-graph.port.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { ImportOrigins } from "../../ports/import-origins.port.ts";
+import type { ModuleDependencies, ModuleDependency } from "../../domain/impact/module-dependency.ts";
 import type { ModuleDependenciesReader } from "../../ports/module-dependencies.port.ts";
 import { importBindings } from "../navigation/import-bindings.ts";
 import { edgeKey, type FollowedEdge } from "./inbound-edges.ts";
@@ -22,8 +23,11 @@ export interface EdgeTargets {
 export interface EdgeTargetsDeps {
   origins: ImportOrigins;
   store: CodeGraphReader;
-  /** The module statements that bind a root to a declaration; without them no edge is redirected. */
-  modules?: { reader: ModuleDependenciesReader; sources: readonly SourceFile[] } | undefined;
+  /**
+   * The module statements that bind a root to a declaration: already read, or a reader asked file by file. Without them no
+   * edge is redirected.
+   */
+  modules?: ModuleDependencies | { reader: ModuleDependenciesReader; sources: readonly SourceFile[] } | undefined;
 }
 
 const KEEP: EdgeVerdict<GraphSymbol> = { kind: "keep" };
@@ -33,11 +37,12 @@ export function createEdgeTargets({ origins, store, modules }: EdgeTargetsDeps):
   const verdicts = new Map<string, EdgeVerdict<GraphSymbol>>();
   /** Per file, the declaration each local name its imports bind reaches, when the join proves exactly one. */
   const bound = new Map<string, ReadonlyMap<string, GraphSymbol>>();
+  let extracted: ReadonlyMap<string, readonly ModuleDependency[]> | undefined;
 
   async function bindingsOf(file: string): Promise<ReadonlyMap<string, GraphSymbol>> {
     let held = bound.get(file);
     if (held === undefined) {
-      const dependencies = modules === undefined ? [] : (await modules.reader.extract(modules.sources, { files: [file] })).dependencies.filter((dependency) => dependency.file === file);
+      const dependencies = modules === undefined ? [] : "dependencies" in modules ? (extracted ??= Map.groupBy(modules.dependencies, (dependency) => dependency.file)).get(file) ?? [] : (await modules.reader.extract(modules.sources, { files: [file] })).dependencies.filter((dependency) => dependency.file === file);
       const byLocal = new Map<string, GraphSymbol[]>();
       for (const [binding, declaration] of importBindings(store, file, dependencies)) {
         if (binding.local !== undefined) byLocal.set(binding.local, [...(byLocal.get(binding.local) ?? []), declaration]);

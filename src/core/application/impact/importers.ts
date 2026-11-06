@@ -63,12 +63,15 @@ export async function readImporters(store: CodeGraphReader, requested: readonly 
   return { files, unheld };
 }
 
-/** The edges into the file's nodes that still reach the file once `targets` judged them; structure and imports are not uses to judge. */
+/**
+ * The edges into the file's nodes that still reach the file once `targets` judged them. Structure, imports and the file's
+ * own edges are not judged: none of them makes a user.
+ */
 async function reaching(targets: EdgeTargets, file: string, edges: readonly GraphEdge[], sources: ReadonlyMap<GraphNodeId, GraphSymbol>, nodes: ReadonlyMap<GraphNodeId, GraphSymbol>, signal?: AbortSignal): Promise<readonly GraphEdge[]> {
   const judged = edges.flatMap((edge) => {
     const source = sources.get(edge.source);
     const target = nodes.get(edge.target);
-    return edge.kind === CONTAINMENT || edge.kind === IMPORT || source === undefined || target === undefined ? [] : [{ edge, source, target }];
+    return edge.kind === CONTAINMENT || edge.kind === IMPORT || source === undefined || source.file === file || target === undefined ? [] : [{ edge, source, target }];
   });
   const verdicts = await targets.verdictsOf(judged, signal);
   const away = new Set(judged.filter((_, index) => { const verdict = verdicts[index]!; return verdict.kind === "drop" || (verdict.kind === "redirect" && verdict.to.file !== file); }).map(({ edge }) => edge));
