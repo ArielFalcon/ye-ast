@@ -345,6 +345,7 @@ Response shaping remains in the driving adapter, as defined by RFC-0001.
 | Layer / concern | Owner | Production consumers | Rules retained by family |
 |---|---|---|---|
 | Request, redaction, receipt and recovery assembly | `src/mcp/server.ts` | Seven registered tools | Existing schemas and dispatch |
+| Runtime fault guidance | `fault-presentation.ts`: `faultContext`, `renderFault` | Ordinary tools and composition source failures through `server.ts` | Closed public fault types, query-family controls, persisted versus explicit members, optional corrections and unchanged fault metadata |
 | Ordinary status/scope/change/snapshot and selected provenance | `presentation-context.ts`: `renderFactHeader`, `renderFactStatus`, `renderSourceContext` | All seven ordinary tools; selected entrypoints/callers/impact through `render-evidence.ts` | Ordinary field eligibility; selected read owner, analysis and overrides |
 | Exact context equality and complete UTF-8 layout scoring | `presentation-sharing.ts`: `shareExactContext`, `preferShorterText`, `blockBytes` | Family blocks in `render.ts` | Row membership, order, multiplicity, equality keys and tie rules |
 | Category recovery wording | `presentation-guidance.ts`: `categoryRecovery` | Entry point profiles/guards; impact/callers origins; workspace names/unserved; decisions dependencies | Counts, eligible modes, category meaning, own guards, permissions |
