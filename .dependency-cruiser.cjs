@@ -51,8 +51,8 @@ module.exports = {
       comment:
         "A use case answers one query family. To read a revision it goes through application/snapshot, never by composing another family's use case.",
       severity: "error",
-      from: { path: "^src/core/application/(entrypoints|impact|trace)/" },
-      to: { path: "^src/core/application/(entrypoints|impact|trace)/", pathNot: "^src/core/application/$1/" },
+      from: { path: "^src/core/application/(entrypoints|impact|outline|trace)/" },
+      to: { path: "^src/core/application/(entrypoints|impact|outline|trace)/", pathNot: "^src/core/application/$1/" },
     },
     {
       name: "adapters-never-import-use-cases",
