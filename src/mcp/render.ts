@@ -1192,7 +1192,7 @@ function tracePlaceOf(cut: Cut): { file: string; line: string; spelling: string;
 
 type TracePlace = ReturnType<typeof tracePlaceOf>;
 
-const TRACE_PLACES_OMITTED = '    Call places omitted; use mode: "details" to list each call with its file, line and candidates, or mode: "full" for the original structured fact.';
+const TRACE_PLACES_OMITTED = '    Call places omitted; mode "details" lists them, mode "full" gives the structured fact.';
 
 /** The name a call ends with, so calls of one member through different receivers share a line. */
 function trailingName(spelling: string): string {

@@ -231,7 +231,7 @@ test("a trace summary lists candidates by their containment path when shorter th
 
 test("a trace summary that groups unresolved calls ends the cut block by naming the modes that list each place", () => {
   const text = renderTrace(traceFact([{ kind: "unresolved-link", at: ["src/order.ts:15 this.handler.handle"] }]));
-  assert.ok(text.endsWith('\n    Call places omitted; use mode: "details" to list each call with its file, line and candidates, or mode: "full" for the original structured fact.'), text);
+  assert.ok(text.endsWith('\n    Call places omitted; mode "details" lists them, mode "full" gives the structured fact.'), text);
 });
 
 test("an unresolved trace call keeps its whole place when the path and the spelling hold spaces", () => {

@@ -139,7 +139,7 @@ steps:
 cuts:
   unresolved-link (1 call):
     apply ×1 in 1 file → could be: DiscountPolicy.apply
-    Call places omitted; use mode: "details" to list each call with its file, line and candidates, or mode: "full" for the original structured fact.
+    Call places omitted; mode "details" lists them, mode "full" gives the structured fact.
 ```
 
 The effects come first, since they decide the plan; steps follow the MCP depth summary and `expand` of the latency plan.
