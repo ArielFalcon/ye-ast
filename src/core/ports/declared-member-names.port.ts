@@ -8,7 +8,35 @@ export interface DeclaredMemberNames {
   functionValueCalls: readonly FunctionValueCall[];
   /** In source order. */
   callables: readonly DeclaredCallable[];
+  /** In source order. */
+  receiverBindings: readonly ReceiverBinding[];
 }
+
+/**
+ * A member call `r.m(...)` whose bare receiver `r` the source binds to one kind of value, because every store into the
+ * binding (each initializer and each assignment) stores that kind: a literal of a library type, an instance of one
+ * class the file names in `new`, or an instance of a class the file declares. A parameter, a destructured or iterated
+ * binding, an exported binding, a script's global, a binding a dynamic scope may write, and any other store bind nothing.
+ */
+export interface ReceiverBinding {
+  /** Where the call starts, 1-based. */
+  line: number;
+  column: number;
+  receiver: string;
+  member: string;
+  holds: ReceiverValue;
+}
+
+/**
+ * `literal`: a regular expression, array or string literal, an instance of that library type. `constructed`: `new name()`
+ * where the file neither declares nor binds `name` except by an import, at the place of the first such `new`, so where
+ * the name is rooted decides the class. `declared`: `new name()` of the one class declaration the file binds `name` to, at
+ * the line of its name.
+ */
+export type ReceiverValue =
+  | { kind: "literal"; type: "RegExp" | "Array" | "String" }
+  | { kind: "constructed"; name: string; line: number; column: number }
+  | { kind: "declared"; name: string; line: number };
 
 /**
  * A member call `r.m(...)` or `this.r.m(...)` whose receiver `r` the source binds to a function value: `this.r` to a

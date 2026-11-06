@@ -737,6 +737,100 @@ test("a trace over a real index leaves a library global's member call as a globa
   assert.deepEqual(shadowed.value.status === "partial" && shadowed.value.cuts.map((cut) => cut.at[0]), ["src/shadow.ts:4 Math.max"]);
 });
 
+/** Repository functions named like library members, so a member call settled by its name alone is a cut. */
+const HOMONYMS = ["export function push(): void {}", "export function test(): void {}", "export function set(): void {}", "export function save(): void {}", "export class Other {", "  save(): void {}", "}", ""].join("\n");
+
+test("a trace over a real index settles a member call on a local every store binds to one literal type, one library class or one repository class", async () => {
+  writeFileSync(join(repo, "src", "homonyms.ts"), HOMONYMS);
+  writeFileSync(join(repo, "src", "store.ts"), ["export class Store {", "  save(): void {", "    Date.now();", "  }", "}", ""].join("\n"));
+  writeFileSync(join(repo, "src", "locals.ts"), [
+    "import { Store } from './store';",
+    "class Local {",
+    "  save(): void {",
+    "    Date.now();",
+    "  }",
+    "}",
+    "export function locals(flag: boolean): void {",
+    "  let parts = ['a'];",
+    "  if (flag) parts = [];",
+    "  parts.push('b');",
+    "  const pattern = /x/;",
+    "  pattern.test('x');",
+    "  const label = `x`;",
+    "  label.toString();",
+    "  const cache = new Map();",
+    "  cache.set('k', 1);",
+    "  let local;",
+    "  local = new Local();",
+    "  local.save();",
+    "  let store;",
+    "  store = new Store();",
+    "  store.save();",
+    "}",
+    "",
+  ].join("\n"));
+  git("add", "-A");
+  git("commit", "-q", "-m", "locals");
+  const { trace } = composeQueries({ scratchRoot });
+
+  const answer = await trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: "src/locals.ts", symbol: "locals" }] });
+
+  assert.ok(answer.ok);
+  assert.equal(answer.value.status, "complete");
+  const [root, ...steps] = answer.value.status === "complete" ? answer.value.value.steps : [];
+  assert.deepEqual(root?.external, [{ kind: "global", names: ["Map", "cache.set", "label.toString", "parts.push", "pattern.test"] }]);
+  assert.deepEqual(steps.map(({ file, symbol, at }) => [file, symbol, at?.line]), [["src/locals.ts", "save", 19], ["src/store.ts", "save", 22]]);
+});
+
+test("a trace over a real index keeps a member call on a local a cut when a store disagrees, the value escapes or is written through, or the binding is not the file's own", async () => {
+  writeFileSync(join(repo, "src", "homonyms.ts"), HOMONYMS);
+  writeFileSync(join(repo, "src", "guarded.ts"), [
+    "import { other, patch } from './other';",
+    "export function guarded(param: string[]): void {",
+    "  let mixed = new Map();",
+    "  mixed = other();",
+    "  mixed.set('k', 1);",
+    "  let counted = 'a';",
+    "  counted += 'b';",
+    "  counted.test();",
+    "  const leaked: string[] = [];",
+    "  patch(leaked);",
+    "  leaked.push('a');",
+    "  const patched: string[] = [];",
+    "  patched.push = other;",
+    "  patched.push('a');",
+    "  param.push('a');",
+    "  const [first] = [[]];",
+    "  first.push('a');",
+    "  exported.push('a');",
+    "}",
+    "export const exported: string[] = [];",
+    "",
+  ].join("\n"));
+  writeFileSync(join(repo, "src", "other.ts"), ["export function other(): any { return new Map(); }", "export function patch(value: unknown): void {}", ""].join("\n"));
+  writeFileSync(join(repo, "src", "script.ts"), ["var shared = [];", "function scripted(scope) {", "  shared.push('a');", "  var dynamic = [];", "  with (scope) { dynamic = other; }", "  dynamic.push('a');", "}", ""].join("\n"));
+  git("add", "-A");
+  git("commit", "-q", "-m", "guarded");
+  const { trace } = composeQueries({ scratchRoot });
+
+  const [guarded, scripted] = await Promise.all([
+    trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: "src/guarded.ts", symbol: "guarded" }] }),
+    trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: "src/script.ts", symbol: "scripted" }] }),
+  ]);
+
+  assert.ok(guarded.ok && scripted.ok);
+  assert.deepEqual(guarded.value.status === "partial" && guarded.value.cuts.map((cut) => cut.at[0]), [
+    "src/guarded.ts:11 leaked.push",
+    "src/guarded.ts:14 patched.push",
+    "src/guarded.ts:15 param.push",
+    "src/guarded.ts:17 first.push",
+    "src/guarded.ts:18 exported.push",
+    "src/guarded.ts:5 mixed.set",
+    "src/guarded.ts:8 counted.test",
+  ]);
+  assert.deepEqual(scripted.value.status === "partial" && scripted.value.cuts.map((cut) => cut.at[0]), ["src/script.ts:3 shared.push", "src/script.ts:6 dynamic.push"]);
+});
+
 test("a trace over a real index keeps a member call to a namespace's function a cut, never a false external", async () => {
   writeFileSync(join(repo, "src", "space.ts"), [
     "export namespace N { export function nsMethod() {} }",

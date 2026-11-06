@@ -172,6 +172,7 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
         names: [...new Set([...typescript.names, ...java.names])].sort(compareText),
         functionValueCalls: [...typescript.functionValueCalls, ...java.functionValueCalls],
         callables: [...typescript.callables, ...java.callables],
+        receiverBindings: [...typescript.receiverBindings, ...java.receiverBindings],
       };
     },
   };

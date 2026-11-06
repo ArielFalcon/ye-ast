@@ -238,8 +238,8 @@ test("a computed key or index adds no name; a literal one adds its name", async 
 });
 
 test("a file that is not a TypeScript source declares none", async () => {
-  assert.deepEqual(await read(["const table = { plain: run };"], "src/a.d.ts"), { names: [], functionValueCalls: [], callables: [] });
-  assert.deepEqual(await read(["class A { void run() {} }"], "src/A.java"), { names: [], functionValueCalls: [], callables: [] });
+  assert.deepEqual(await read(["const table = { plain: run };"], "src/a.d.ts"), { names: [], functionValueCalls: [], callables: [], receiverBindings: [] });
+  assert.deepEqual(await read(["class A { void run() {} }"], "src/A.java"), { names: [], functionValueCalls: [], callables: [], receiverBindings: [] });
 });
 
 test("functions, overload signatures and ambient functions are callables that no subtype overrides, with a body only when written", async () => {
@@ -272,5 +272,29 @@ test("class methods are overridable unless static or private, abstract ones have
     { name: "hidden", start: 6, nameLine: 6, body: true, overridable: false },
     { name: "#secret", start: 7, nameLine: 7, body: true, overridable: false },
     { name: "send", start: 9, nameLine: 9, body: false, overridable: true },
+  ]);
+});
+
+test("a local bound by every store to one class is held by the one class declaration the file binds its name to, or constructed where its imported or unbound name is rooted", async () => {
+  assert.deepEqual((await read([
+    "import { Store } from './store';",
+    "class Local {}",
+    "const Factory = function () {};",
+    "export function run(): void {",
+    "  const local = new Local();",
+    "  local.save();",
+    "  let store;",
+    "  store = new Store();",
+    "  store.save();",
+    "  const made = new Factory();",
+    "  made.save();",
+    "  const merged = new Merged();",
+    "  merged.save();",
+    "}",
+    "class Merged {}",
+    "namespace Merged { export const value = 1; }",
+  ])).receiverBindings, [
+    { line: 6, column: 3, receiver: "local", member: "save", holds: { kind: "declared", name: "Local", line: 2 } },
+    { line: 9, column: 3, receiver: "store", member: "save", holds: { kind: "constructed", name: "Store", line: 8, column: 11 } },
   ]);
 });

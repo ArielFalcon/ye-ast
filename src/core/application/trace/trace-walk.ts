@@ -9,7 +9,7 @@ import { calleeOf, compareOccurrence, ownMemberOf, receiverOf, sameOccurrence, t
 import type { TraceVia } from "../../domain/trace/trace-fact.ts";
 import type { ExternalCall, TraceDeclaration, WalkedStep } from "../../domain/trace/trace-tree.ts";
 import type { SymbolRef } from "../../domain/relations/relation.ts";
-import type { DeclaredCallable, DeclaredMemberNames, FunctionValueCall } from "../../ports/declared-member-names.port.ts";
+import type { DeclaredCallable, DeclaredMemberNames, FunctionValueCall, ReceiverBinding } from "../../ports/declared-member-names.port.ts";
 import type { CodeGraphReader, GraphEdge, GraphNodeId, GraphSymbol, GraphUnresolvedReference } from "../../ports/code-graph.port.ts";
 import type { ImportOriginSite, ImportOrigins, ResolvedNameSite } from "../../ports/import-origins.port.ts";
 import type { TraceBudget } from "../../ports/trace-queries.port.ts";
@@ -93,6 +93,8 @@ type ProvenCall = { kind: "member"; receiver: SymbolRef; member: SymbolRef } | {
 
 const provenKey = (file: string, line: number, column: number, name: string): string => JSON.stringify([file, line, column, name]);
 
+const placeKey = (line: number, column: number): string => `${line}:${column}`;
+
 /** A call on a type from outside the repository, `<module>#<name>`, is a leaf under its module; `global#<name>` is a global. */
 function externalOf(holds: string, name: string): ExternalCall {
   const module = holds.slice(0, holds.lastIndexOf("#"));
@@ -164,10 +166,10 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
    */
   /** A source's callables by name and its function-value calls by place, built once per file for the walk. */
   const syntaxIndexOf = memoizedBy((file: string) => file, async (file): Promise<SyntaxIndex> => {
-    const { callables, functionValueCalls } = await syntaxOf(file);
+    const { callables, functionValueCalls, receiverBindings } = await syntaxOf(file);
     const byName = new Map<string, DeclaredCallable[]>();
     for (const callable of callables) byName.set(callable.name, [...(byName.get(callable.name) ?? []), callable]);
-    return { callables: byName, functionValueCalls: new Set(functionValueCalls.map(functionValueKey)) };
+    return { callables: byName, functionValueCalls: new Set(functionValueCalls.map(functionValueKey)), receiverBindings: new Map(receiverBindings.map((binding) => [placeKey(binding.line, binding.column), binding])) };
   });
   /**
    * What the relations prove a member call runs, by its place: a repository method of the class a field or local holds
@@ -193,6 +195,17 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
     const members = store.symbolsInFiles([call.member.path]).filter((symbol) => symbol.kind === "method" && joinsFact(symbol, call.member));
     const owners = members.length === 1 ? navigation.ownersOf(members[0]!) : [];
     return owners.length === 1 && owners[0]!.kind === "class" && joinsFact(owners[0]!, call.receiver) ? members[0] : undefined;
+  };
+  /** The receiver binding the call's own source proves at the place the call starts, for the member and receiver it spells. */
+  const boundAt = async (reference: GraphUnresolvedReference, member: string): Promise<ReceiverBinding["holds"] | undefined> => {
+    const binding = (await syntaxIndexOf(reference.file)).receiverBindings.get(placeKey(reference.line, reference.column + 1));
+    return binding !== undefined && binding.member === member && binding.receiver === receiverOf(reference.name) ? binding.holds : undefined;
+  };
+  /** The one method named `member` the one class of `name` in `file` (at `line`, when given) declares itself; none otherwise. */
+  const ownMethodOf = (file: string, name: string, member: string, line?: number): GraphSymbol | undefined => {
+    const classes = store.symbolsInFiles([file]).filter((symbol) => symbol.kind === "class" && joinsFact(symbol, { path: file, line: line ?? symbol.startLine, symbol: name }));
+    const methods = classes.length === 1 ? navigation.methodsOf(classes[0]!).filter((method) => method.name === member) : [];
+    return methods.length === 1 ? methods[0] : undefined;
   };
   const unresolvedAt = (reference: GraphUnresolvedReference, declarations: readonly GraphSymbol[]): Cut => ({
     kind: "unresolved-link",
@@ -317,6 +330,7 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
 
     const bare: { reference: GraphUnresolvedReference; name: string }[] = [];
     const rooted: { reference: GraphUnresolvedReference; name: string; named: readonly GraphSymbol[] }[] = [];
+    const constructed: { reference: GraphUnresolvedReference; name: string; named: readonly GraphSymbol[]; holds: Extract<ReceiverBinding["holds"], { kind: "constructed" }> }[] = [];
     for (const reference of callsFrom(node).filter((candidate) => !resolved.some((edge) => sameOccurrence(edge, candidate)))) {
       const own = ownMemberOf(reference.name);
       const members = own === undefined ? [] : [...new Map(navigation.ownersOf(node).flatMap((owner) => navigation.methodsOf(owner)).filter((method) => method.name === own).map((method) => [method.id, method])).values()];
@@ -328,13 +342,32 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
         else if (callee.form === "bare") bare.push({ reference, name: callee.name });
         else {
           const proven = await provenAt(reference);
+          let bound: ReceiverBinding["holds"] | undefined;
           const member = proven?.kind === "member" ? provenMember(proven) : undefined;
           const named = membersNamed(callee.name);
           if (member !== undefined) children.push(childAt(member, reference.line, reference.column, reference.name, "call"));
           else if (proven?.kind === "external") external.push(externalOf(proven.holds, reference.name));
-          else if (PLAIN_CHAIN.test(reference.name) && !reference.name.startsWith("this.")) rooted.push({ reference, name: callee.name, named });
+          else if ((bound = await boundAt(reference, callee.name)) !== undefined) {
+            const declared = bound.kind === "declared" ? ownMethodOf(reference.file, bound.name, callee.name, bound.line) : undefined;
+            if (bound.kind === "literal") external.push({ kind: "global", name: reference.name });
+            else if (bound.kind === "constructed") constructed.push({ reference, name: callee.name, named, holds: bound });
+            else if (declared !== undefined) children.push(childAt(declared, reference.line, reference.column, reference.name, "call"));
+            else await settleByName(reference, callee.name, named);
+          } else if (PLAIN_CHAIN.test(reference.name) && !reference.name.startsWith("this.")) rooted.push({ reference, name: callee.name, named });
           else await settleByName(reference, callee.name, named);
         }
+      }
+    }
+    if (constructed.length > 0) {
+      const sites = constructed.map(({ reference, holds }): ResolvedNameSite => ({ file: reference.file, line: holds.line, column: holds.column, kind: "instantiates", name: holds.name }));
+      const roots = await origins.rootOrigins(sites, signal);
+      for (const [index, { reference, name, named, holds }] of constructed.entries()) {
+        const root = roots[index];
+        const origin = root?.status === "complete" ? root.value : undefined;
+        const method = origin?.kind === "repository" ? ownMethodOf(origin.file, holds.name, name) : undefined;
+        if (origin?.kind === "ambient") external.push({ kind: "global", name: reference.name });
+        else if (method !== undefined) children.push(childAt(method, reference.line, reference.column, reference.name, "call"));
+        else await settleByName(reference, name, named);
       }
     }
     if (rooted.length > 0) {
@@ -431,6 +464,8 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
 interface SyntaxIndex {
   callables: ReadonlyMap<string, readonly DeclaredCallable[]>;
   functionValueCalls: ReadonlySet<string>;
+  /** By the place the call starts. */
+  receiverBindings: ReadonlyMap<string, ReceiverBinding>;
 }
 
 function functionValueKey({ line, receiver, member }: FunctionValueCall): string {

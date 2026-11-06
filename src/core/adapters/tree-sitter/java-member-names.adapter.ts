@@ -5,7 +5,7 @@ import type { DeclaredCallable, DeclaredMemberNames, DeclaredMemberNamesReader, 
 import { javaFunctionValueCalls } from "./java-function-value-calls.ts";
 import type { JavaParser } from "./java-parser.adapter.ts";
 
-const NONE: DeclaredMemberNames = { names: [], functionValueCalls: [], callables: [] };
+const NONE: DeclaredMemberNames = { names: [], functionValueCalls: [], callables: [], receiverBindings: [] };
 /** Modifiers that keep a subtype from overriding a method. */
 const FIXED: readonly string[] = ["static", "private", "final"];
 
@@ -50,7 +50,7 @@ export function createJavaMemberNames(createParser: () => Promise<JavaParser>): 
       } finally {
         parsed.value.dispose();
       }
-      return { names: [...names].sort(compareText), functionValueCalls, callables };
+      return { names: [...names].sort(compareText), functionValueCalls, callables, receiverBindings: [] };
     },
   };
 }

@@ -131,7 +131,7 @@ function declarationsOncePerFile(reader: DeclaredMemberNamesReader): (file: Sour
   };
 }
 
-const NOTHING_DECLARED: DeclaredMemberNames = { names: [], functionValueCalls: [], callables: [] };
+const NOTHING_DECLARED: DeclaredMemberNames = { names: [], functionValueCalls: [], callables: [], receiverBindings: [] };
 
 /** Each member name with the sources that declare it, sorted. */
 async function declaringFiles(sources: readonly SourceFile[], declaredIn: (file: SourceFile) => Promise<DeclaredMemberNames>): Promise<ReadonlyMap<string, readonly string[]>> {
