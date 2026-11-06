@@ -263,7 +263,7 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
     ...trust,
   };
   const javaImports = staged<ModuleDependenciesReader>({ extract: async (sources, options) => createJavaImportsReader(await createJavaParser()).extract(sources, options) }, { extract: "java-imports" });
-  const bareOutline = createOutlineQueries({ ...headDeps, moduleReaders: [moduleDependencies, javaImports], unmodelled });
+  const bareOutline = createOutlineQueries({ ...headDeps, moduleReaders: [moduleDependencies, javaImports], unmodelled, importOrigins: (sources: readonly SourceFile[]) => createImportOrigins(sources) });
   const outline = measurement === undefined ? bareOutline : measuredOutline(bareOutline, measurement);
   const bareTrace = createTraceQueries({
     ...snapshotCache,
