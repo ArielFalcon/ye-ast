@@ -72,7 +72,8 @@ export function createModuleDependenciesReader(): ModuleDependenciesReader {
             moduleOnly = false;
             continue;
           }
-          pending.push({ file, line: tree.getLineAndCharacterOfPosition(statement.getStart(tree)).line + 1, endLine: tree.getLineAndCharacterOfPosition(statement.end - 1).line + 1, specifier: read.specifier, kind: read.kind, typeOnly: read.typeOnly, ...(read.form === undefined ? {} : { form: read.form }), bindings: read.bindings });
+          const offset = statement.getStart(tree);
+          pending.push({ file, line: tree.getLineAndCharacterOfPosition(offset).line + 1, offset, endLine: tree.getLineAndCharacterOfPosition(statement.end - 1).line + 1, specifier: read.specifier, kind: read.kind, typeOnly: read.typeOnly, ...(read.form === undefined ? {} : { form: read.form }), bindings: read.bindings });
         }
         if (moduleOnly && exported.some((name) => !imported.has(name))) {
           moduleOnly = false;

@@ -89,6 +89,11 @@ test("a require call leads nowhere proven when the file binds its own require, i
   }
 });
 
+test("imports sharing a line come in source order, whether statements or runtime references", async () => {
+  const { file } = await outlineOf("require('./defs'); import('./defs'); import './defs';");
+  assert.deepEqual(file?.imports.map(({ form }) => form ?? "static"), ["require", "dynamic-import", "static"]);
+});
+
 test("a requested source the module reader cannot parse is a no-extractor cut, so its empty imports never read as none", async () => {
   const { status, file, cuts } = await outlineOf("import { one } from './defs';\nexport function (");
   assert.equal(status, "partial");
