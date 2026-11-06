@@ -565,7 +565,6 @@ test("a repository that depends on another one given reads its calls through tha
   const calls: { repo: string; libraries: readonly string[] }[] = [];
   const callSites: CallSiteReader = {
     of: async (_files, repo, libraries) => {
-      if (repo === "orders") assert.ok((libraries ?? []).every(source => source.snapshot === undefined));
       calls.push({ repo, libraries: (libraries ?? []).map((file) => file.path) });
       return [];
     },
@@ -1174,22 +1173,22 @@ test("an ambiguous dependency does not suppress independently proven library sou
   assert.deepEqual(section?.status === "partial" && section.cuts.map(cut => cut.dependency?.name), ["com.acme:clients"]);
 });
 
-test("workspace supplies two-hop library sources once with their captured snapshots", async () => {
-  const libraries: { content: string; snapshot: SnapshotRef | undefined }[][] = [];
+test("workspace supplies two-hop library sources once, each bound to its repository", async () => {
+  const libraries: { content: string; repo: string }[][] = [];
   const queries = setup({
     "/work/app": { files: { "src/App.java": "class App {}" }, names: [dependencyName("com.acme:b", "pom.xml", 4)] },
     "/work/b": { files: { "src/Z.java": "class Z {}", "src/Client.java": "class Middle {}" }, names: [dependencyName("com.acme:c", "pom.xml", 7)], artifacts: ["com.acme:b"], sha: "b".repeat(40) },
     "/work/c": { files: { "src/Client.java": "class Transport {}" }, artifacts: ["com.acme:c"], sha: "c".repeat(40) },
-  }, { of: async (_files, repo, sources) => { if (repo === "app") libraries.push((sources ?? []).map(s => ({ content: s.content, snapshot: s.snapshot }))); return []; } });
+  }, { of: async (_files, repo, sources) => { if (repo === "app") libraries.push((sources ?? []).map(s => ({ content: s.content, repo: s.repo }))); return []; } });
   await queries.outwardNames({ repo: { path: "/work/app" }, repos: [{ path: "/work/c" }, { path: "/work/b" }] });
   assert.deepEqual(libraries, [[
-    { content: "class Middle {}", snapshot: { repo: "b", kind: "sha", sha: "b".repeat(40) } },
-    { content: "class Z {}", snapshot: { repo: "b", kind: "sha", sha: "b".repeat(40) } },
-    { content: "class Transport {}", snapshot: { repo: "c", kind: "sha", sha: "c".repeat(40) } },
+    { content: "class Middle {}", repo: "b" },
+    { content: "class Z {}", repo: "b" },
+    { content: "class Transport {}", repo: "c" },
   ]]);
 });
 
-test("a blocked transitive hop cuts the consumer at the declaring library snapshot", async () => {
+test("a blocked transitive hop cuts the consumer at the declaring library", async () => {
   const queries = setup({
     "/work/app": { files: {}, names: [dependencyName("com.acme:b", "pom.xml", 4)] },
     "/work/b": { files: {}, names: [dependencyName("com.acme:x", "pom.xml", 7)], artifacts: ["com.acme:b"], sha: "b".repeat(40) },
@@ -1200,7 +1199,7 @@ test("a blocked transitive hop cuts the consumer at the declaring library snapsh
   const section = value.sections.app;
   assert.deepEqual(section?.status === "partial" && section.cuts, [{
     kind: "unresolved-link", reason: "unresolved",
-    at: [`(library)/b/sha/${"b".repeat(40)}/pom.xml`, `(library)/b/sha/${"b".repeat(40)}/pom.xml:7`],
+    at: ["(library)/b/pom.xml", "(library)/b/pom.xml:7"],
     dependency: { name: "com.acme:x", reason: "ambiguous", candidates: ["x1", "x2"] },
   }]);
 });

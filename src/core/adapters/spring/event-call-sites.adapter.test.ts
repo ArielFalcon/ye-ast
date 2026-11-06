@@ -1,5 +1,6 @@
 import { before, test } from "node:test";
 import assert from "node:assert/strict";
+import type { LibrarySource } from "../../domain/topology/library-source.ts";
 import type { CallSite, CallSiteReader } from "../../domain/topology/call-site.ts";
 import { createJavaParser } from "../tree-sitter/java-parser.adapter.ts";
 import { createJavaEventCallSites } from "./java-call-sites.adapter.ts";
@@ -37,7 +38,7 @@ function describe(sites: readonly CallSite[]): string[] {
 }
 
 async function read(files: readonly { path: string; content: string }[], libraries: readonly { path: string; content: string }[] = []): Promise<string[]> {
-  return describe(await reader.of(files, "orders-svc", libraries));
+  return describe(await reader.of(files, "orders-svc", libraries.map((source): LibrarySource => ({ repo: "lib", ...source }))));
 }
 
 test("a Kafka send names its topic in the first argument, whatever the key and value that follow", async () => {
@@ -173,7 +174,7 @@ test("NATS method summaries read a source event subject through forwarding calls
 
 test("event diagnostics distinguish unread wrapper sources from expanded destinations", async () => {
   const caller = java("Caller", 'class Caller { AcmeMessenger client; void load() { client.publish(); } }', ["com.acme.AcmeMessenger"]);
-  const library = file("src/main/java/com/acme/AcmeMessenger.java", 'package com.acme; import io.nats.client.Connection; public class AcmeMessenger { Connection c; String topic; public void publish() { c.publish(topic, null); } }');
+  const library = { repo: "lib", ...file("src/main/java/com/acme/AcmeMessenger.java", 'package com.acme; import io.nats.client.Connection; public class AcmeMessenger { Connection c; String topic; public void publish() { c.publish(topic, null); } }') };
   const [missing] = await reader.of([caller], "app");
   const [read] = await reader.of([caller], "app", [library]);
   assert.deepEqual(missing?.diagnostic, { cause: "source-not-read", source: "not-read" });

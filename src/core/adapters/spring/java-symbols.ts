@@ -5,7 +5,7 @@ import { charLiteralValue, integerLiteralValue, stringLiteralValue, type Literal
 
 /** The sources of the repositories a snapshot depends on, under a root no repository path can have. */
 export function asLibrarySources(sources: readonly LibrarySource[]): SourceFile[] {
-  return sources.map((source, index) => ({ ...source, path: source.snapshot === undefined ? `${LIBRARY_ROOT}/${index}/${source.path}` : libraryPath(source.snapshot, source.path) }));
+  return sources.map(({ repo, path, content }) => ({ path: libraryPath(repo, path), content }));
 }
 
 export function isLibraryPath(path: string): boolean {

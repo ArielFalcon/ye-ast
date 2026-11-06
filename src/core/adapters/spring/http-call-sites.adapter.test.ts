@@ -1,5 +1,6 @@
 import { before, test } from "node:test";
 import assert from "node:assert/strict";
+import type { LibrarySource } from "../../domain/topology/library-source.ts";
 import type { CallSite, CallSiteReader } from "../../domain/topology/call-site.ts";
 import { createJavaParser, type JavaParser } from "../tree-sitter/java-parser.adapter.ts";
 import { createJavaHttpCallSites } from "./java-call-sites.adapter.ts";
@@ -43,8 +44,12 @@ function describe(sites: readonly CallSite[]): string[] {
   });
 }
 
+function inLibrary(source: { path: string; content: string }): LibrarySource {
+  return { repo: "lib", ...source };
+}
+
 async function read(files: readonly { path: string; content: string }[], libraries: readonly { path: string; content: string }[] = []): Promise<string[]> {
-  return describe(await reader.of(files, "orders-svc", libraries));
+  return describe(await reader.of(files, "orders-svc", libraries.map(inLibrary)));
 }
 
 test("a RestTemplate verb fixes the method by its name, and exchange takes it from its argument", async () => {
@@ -325,7 +330,7 @@ test("a Java source the parser rejects is one unknown source-unreadable site at 
   const broken = java("Broken", ["class Broken {", "  void send( {", "}"].join("\n"));
   const client = java("BillingClient", ["class BillingClient {", "  RestTemplate rt;", "  void send() {", "    rt.getForObject(\"http://billing/orders\", String.class);", "  }", "}"].join("\n"));
   const library = java("Library", "class Library { void broken( }");
-  const sites = await reader.of([broken, client], "orders-svc", [library]);
+  const sites = await reader.of([broken, client], "orders-svc", [inLibrary(library)]);
   assert.deepEqual(sites.filter((site) => site.file === broken.path).map((site) => ({ symbol: site.symbol, transport: site.transport, target: site.target })), [
     { symbol: "Broken", transport: "http", target: { status: "unknown", reason: "source-unreadable", evidence: [{ path: broken.path, line: 7 }] } },
   ]);
@@ -388,7 +393,7 @@ test("Map configuration keys are evaluated through library arguments in the cons
       void send(String key) { Endpoint endpoint = config.getSystems().get(key); rt.getForObject(endpoint.getUrl(), String.class); }
     }`);
   const caller = java("Consumer", `class Consumer { Gateway gateway; void load() { gateway.send("catalog"); } }`);
-  const sites = await reader.of([caller, file(RESOURCES, "clients.systems.catalog.url: http://catalog/items\n")], "service", [library]);
+  const sites = await reader.of([caller, file(RESOURCES, "clients.systems.catalog.url: http://catalog/items\n")], "service", [inLibrary(library)]);
   assert.equal(sites.length, 1);
   assert.deepEqual(sites[0]?.target.status === "complete" && sites[0].target.value, { method: "GET", base: "http://catalog", path: "/items" });
 });
@@ -565,7 +570,7 @@ test("shared mutable objects cannot recover field defaults through a source gett
 
 test("HTTP diagnostics distinguish a missing wrapper from a read wrapper with an undecidable destination", async () => {
   const caller = java("Caller", 'class Caller { AcmeRestClient client; void load() { client.get(); } }', [...WEB, "com.acme.AcmeRestClient"]);
-  const library = file("src/main/java/com/acme/AcmeRestClient.java", 'package com.acme; import org.springframework.web.client.RestTemplate; public class AcmeRestClient { RestTemplate rt; String url; public void get() { rt.getForObject(url, String.class); } }');
+  const library = inLibrary(file("src/main/java/com/acme/AcmeRestClient.java", 'package com.acme; import org.springframework.web.client.RestTemplate; public class AcmeRestClient { RestTemplate rt; String url; public void get() { rt.getForObject(url, String.class); } }'));
   const [missing] = await reader.of([caller], "app");
   const [read] = await reader.of([caller], "app", [library]);
   assert.deepEqual(missing?.diagnostic, { cause: "source-not-read", source: "not-read" });
@@ -577,7 +582,7 @@ test("HTTP diagnostics distinguish a missing wrapper from a read wrapper with an
 
 test("HTTP diagnostics distinguish a read wrapper without a recognized request", async () => {
   const caller = java("Caller", 'class Caller { AcmeRestClient client; void load() { client.get(); } }', [...WEB, "com.acme.AcmeRestClient"]);
-  const library = file("src/main/java/com/acme/AcmeRestClient.java", 'package com.acme; public class AcmeRestClient { public void get() {} }');
+  const library = inLibrary(file("src/main/java/com/acme/AcmeRestClient.java", 'package com.acme; public class AcmeRestClient { public void get() {} }'));
   const [site] = await reader.of([caller], "app", [library]);
   assert.deepEqual(site?.diagnostic, { cause: "request-not-found", source: "read" });
   assert.ok(site?.target.evidence.some(e => e.path.includes("(library)")));
@@ -585,10 +590,10 @@ test("HTTP diagnostics distinguish a read wrapper without a recognized request",
 
 test("an unreadable library is reported as context without claiming it declares the missing wrapper", async () => {
   const caller = java("Caller", 'class Caller { AcmeRestClient client; void load() { client.get(); } }', [...WEB, "com.acme.AcmeRestClient"]);
-  const library = file("src/Broken.java", "class Broken { !!!");
+  const library = inLibrary(file("src/Broken.java", "class Broken { !!!"));
   const [site] = await reader.of([caller], "app", [library]);
   assert.equal(site?.diagnostic?.cause, "source-not-read");
-  assert.deepEqual(site?.diagnostic?.unreadableSources?.map(e => e.path), ["(library)/0/src/Broken.java"]);
+  assert.deepEqual(site?.diagnostic?.unreadableSources?.map(e => e.path), ["(library)/lib/src/Broken.java"]);
 });
 
 test("URL value diagnostics retain recursion and disagreement inside source return methods", async () => {
@@ -606,17 +611,17 @@ test("URL value diagnostics retain recursion and disagreement inside source retu
   for (const site of sites) assert.ok(site.target.evidence.some(e => e.line !== site.line));
 });
 
-test("library evidence binds equal relative paths to their repository and sha or live snapshot", async () => {
+test("library evidence binds equal relative paths to their repository", async () => {
   const caller = java("Caller", 'class Caller { FirstClient first; SecondClient second; void load() { first.get(); second.get(); } }', [...WEB, "one.FirstClient", "two.SecondClient"]);
   const libraries = [
-    { path: "src/Client.java", content: 'package one; import org.springframework.web.client.RestTemplate; public class FirstClient { RestTemplate rt; public void get() { rt.getForObject("http://one/items", String.class); } }', snapshot: { repo: "first/lib", kind: "sha" as const, sha: "b".repeat(40) } },
-    { path: "src/Client.java", content: 'package two; import org.springframework.web.client.RestTemplate; public class SecondClient { RestTemplate rt; public void get() { rt.getForObject("http://two/items", String.class); } }', snapshot: { repo: "second", kind: "live" as const, head: "c".repeat(40), stateId: "state/1" } },
+    { path: "src/Client.java", content: 'package one; import org.springframework.web.client.RestTemplate; public class FirstClient { RestTemplate rt; public void get() { rt.getForObject("http://one/items", String.class); } }', repo: "first/lib" },
+    { path: "src/Client.java", content: 'package two; import org.springframework.web.client.RestTemplate; public class SecondClient { RestTemplate rt; public void get() { rt.getForObject("http://two/items", String.class); } }', repo: "second" },
   ];
   const sites = await reader.of([caller], "app", libraries);
   assert.equal(sites.length, 2);
   assert.ok(sites.every(s => s.target.status === "complete"));
   assert.deepEqual([...new Set(sites.flatMap(s => s.target.evidence.map(e => e.path).filter(path => path.startsWith("(library)/"))))].sort(), [
-    `(library)/first%2Flib/sha/${"b".repeat(40)}/src/Client.java`,
-    `(library)/second/live/${"c".repeat(40)}/state%2F1/src/Client.java`,
+    "(library)/first%2Flib/src/Client.java",
+    "(library)/second/src/Client.java",
   ]);
 });

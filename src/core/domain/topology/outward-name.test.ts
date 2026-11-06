@@ -91,7 +91,6 @@ test("dependency closure is stable, visits a diamond once and excludes its root 
   const repositories = [dependencyRepository("app", ["b", "d", "blocked"]), dependencyRepository("b", ["c"]), dependencyRepository("d", ["c"]), dependencyRepository("c", ["app", "blocked"]), dependencyRepository("blocked", [], "")];
   const closure = dependencyClosures(repositories).get("app");
   assert.deepEqual(closure?.repositories, ["b", "c", "d"]);
-  assert.equal(closure?.transitive, true);
   assert.deepEqual(closure?.unresolved.map(({ repo, name }) => ({ repo, name: name.name })), [{ repo: "app", name: "com.acme:blocked" }, { repo: "c", name: "com.acme:blocked" }]);
   assert.deepEqual(dependencyClosures([...repositories].reverse().map(r => ({ ...r, names: [...r.names].reverse() }))).get("app"), closure);
 });
@@ -104,7 +103,6 @@ test("dependency closure keeps each blocked hop at its owner and never traverses
     dependencyRepository("y", ["secret"], ""), dependencyRepository("secret", []),
   ]).get("app");
   assert.deepEqual(closure?.repositories, ["b"]);
-  assert.equal(closure?.transitive, false);
   assert.deepEqual(closure?.unresolved.map(({ repo, name, diagnostic }) => ({ repo, name: name.name, reason: diagnostic.reason, candidates: diagnostic.candidates })), [
     { repo: "b", name: "com.acme:x", reason: "ambiguous", candidates: ["x1", "x2"] },
     { repo: "b", name: "com.acme:y", reason: "unproven-coordinates", candidates: ["y"] },

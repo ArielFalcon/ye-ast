@@ -38,6 +38,11 @@ export interface NameCandidate {
 
 const FIRST_LABEL = /^[^.:/]+/;
 
+/** The last segment of a coordinate or path, with either separator. */
+export function lastSegmentOf(coordinate: string): string {
+  return coordinate.split(/[:/]/).filter(Boolean).pop() ?? coordinate;
+}
+
 /**
  * The token of a name that can equal a repository's identity. An HTTP name is its first host label or first path segment;
  * a Maven coordinate stays qualified and a package name uses its last segment, without the version. A destination stands for itself: a repository serves a
@@ -59,8 +64,7 @@ export function serviceLabel({ name, kind }: Pick<OutwardName, "name" | "kind">)
     }
     case "dependency": {
       const coordinate = name.split("@")[0] ?? name;
-      if (coordinate.includes(":")) return coordinate;
-      return coordinate.split(/[:/]/).filter(Boolean).pop() ?? coordinate;
+      return coordinate.includes(":") ? coordinate : lastSegmentOf(coordinate);
     }
     case "remote":
     case "destination":

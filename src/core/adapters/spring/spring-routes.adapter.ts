@@ -1,3 +1,4 @@
+import type { LibrarySource } from "../../domain/topology/library-source.ts";
 import type { Entrypoint } from "../../domain/entrypoints/entrypoint.ts";
 import { sortFindings } from "../../domain/entrypoints/finding-order.ts";
 import type { BasePath, HttpMethod } from "../../domain/entrypoints/http-route.ts";
@@ -107,7 +108,7 @@ export function createSpringRoutesExtractor(parser: JavaParser, contracts: Contr
 
 type Parsed = { file: JavaFile } | { fault: Finding<never> };
 
-function extractRoutes(parser: JavaParser, files: readonly SourceFile[], libraries: readonly SourceFile[], contracts: ContractRoutes): readonly Finding<Entrypoint>[] {
+function extractRoutes(parser: JavaParser, files: readonly SourceFile[], libraries: readonly LibrarySource[], contracts: ContractRoutes): readonly Finding<Entrypoint>[] {
   const findings: Finding<MappedEntrypoint>[] = [];
   const trees: JavaSyntaxTree[] = [];
   const parsed: JavaFile[] = [];
@@ -140,7 +141,7 @@ function extractRoutes(parser: JavaParser, files: readonly SourceFile[], librari
  * The NATS listeners of the repository's own classes. With libraries, the classes are read over a project that also
  * holds the library sources, so a subscription a base class declares there is found; without, over the repository's own.
  */
-function natsListeners(project: JavaProject, text: JavaValueEvaluator, parsed: readonly JavaFile[], libraries: readonly SourceFile[], files: readonly SourceFile[], parser: JavaParser, trees: JavaSyntaxTree[]): Finding<MappedEntrypoint>[] {
+function natsListeners(project: JavaProject, text: JavaValueEvaluator, parsed: readonly JavaFile[], libraries: readonly LibrarySource[], files: readonly SourceFile[], parser: JavaParser, trees: JavaSyntaxTree[]): Finding<MappedEntrypoint>[] {
   const javaLibraries = libraries.filter((source) => isJavaSource(source.path) && !isJvmTestFile(source.path));
   const view = javaLibraries.length === 0 ? { project, text } : withLibraries(parsed, javaLibraries, files, parser, trees);
   return view.project.types
@@ -148,7 +149,7 @@ function natsListeners(project: JavaProject, text: JavaValueEvaluator, parsed: r
     .flatMap((type) => guarded(() => natsListenersOf(type, view.project, view.text), () => unknown("unresolved", [spanOf(type.file.path, type.node)])));
 }
 
-function withLibraries(parsed: readonly JavaFile[], libraries: readonly SourceFile[], files: readonly SourceFile[], parser: JavaParser, trees: JavaSyntaxTree[]): { project: JavaProject; text: JavaValueEvaluator } {
+function withLibraries(parsed: readonly JavaFile[], libraries: readonly LibrarySource[], files: readonly SourceFile[], parser: JavaParser, trees: JavaSyntaxTree[]): { project: JavaProject; text: JavaValueEvaluator } {
   const foreign = asLibrarySources(libraries).flatMap((source) => {
     const result = parseSource(parser, source, trees);
     return "file" in result ? [result.file] : [];

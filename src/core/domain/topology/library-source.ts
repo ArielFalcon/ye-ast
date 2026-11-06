@@ -1,14 +1,13 @@
-import type { SnapshotRef } from "../shared/fact.ts";
-
+/** A source file of a library repository, read on behalf of the repository that depends on it. */
 export interface LibrarySource {
+  repo: string;
   path: string;
   content: string;
-  snapshot?: SnapshotRef;
 }
 
 export const LIBRARY_ROOT = "(library)";
 
-export function libraryPath(snapshot: SnapshotRef, path: string): string {
-  const revision = snapshot.kind === "sha" ? [snapshot.sha] : [snapshot.head, snapshot.stateId];
-  return `${LIBRARY_ROOT}/${[snapshot.repo, snapshot.kind, ...revision].map(encodeURIComponent).join("/")}/${path}`;
+/** Where a library file appears in evidence: under a root no repository path can have, then the library's repository. */
+export function libraryPath(repo: string, path: string): string {
+  return `${LIBRARY_ROOT}/${encodeURIComponent(repo)}/${path}`;
 }

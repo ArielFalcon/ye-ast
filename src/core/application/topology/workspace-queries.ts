@@ -133,18 +133,16 @@ export function createWorkspaceReadOperation(deps: WorkspaceQueriesDeps): Worksp
     const byId = new Map(read.map((entry) => [entry.identity.id, entry]));
     for (const entry of read) {
       const closure = closures.get(entry.identity.id)!;
-      const selectedRepos = new Set(closure.repositories);
-      const libraries = closure.transitive ? closure.repositories.map((repo) => byId.get(repo)!) : read.filter((other) => other !== entry && selectedRepos.has(other.identity.id));
+      const libraries = closure.repositories.map((repo) => byId.get(repo)!);
       const cuts: Cut[] = [...entry.cuts, ...closure.unresolved.map(({ repo, name, diagnostic }): Cut => {
-        const snapshot = repo === entry.identity.id ? undefined : byId.get(repo)!.repository.snapshot;
-        const at = (path: string): string => snapshot === undefined ? path : libraryPath(snapshot, path);
+        const at = (path: string): string => repo === entry.identity.id ? path : libraryPath(repo, path);
         return {
           kind: "unresolved-link", reason: "unresolved",
           at: [at(name.evidence[0]?.path ?? name.name), ...name.evidence.map((place) => `${at(place.path)}:${place.line}`)],
           dependency: diagnostic,
         };
       })];
-      const librarySources = libraries.flatMap((library) => closure.transitive ? library.sources.toSorted((a, b) => compareText(a.path, b.path)).map((source) => ({ ...source, snapshot: library.repository.snapshot })) : library.sources);
+      const librarySources = libraries.flatMap((library) => library.sources.toSorted((a, b) => compareText(a.path, b.path)).map((source) => ({ ...source, repo: library.identity.id })));
       const callSites = (await deps.callSites.of(entry.sources, entry.repository.repo, librarySources)).filter((site) => selected(site.file));
       const entrypoints = librarySources.length === 0 ? entry.repository.entrypoints : selectedFindings(await deps.extractor.extract(entry.sources, librarySources), selected);
       resolved.push({ ...entry, cuts, repository: { ...entry.repository, entrypoints }, callSites, names: [...entry.stated, ...callSiteNames(entry.repository.repo, callSites)] });

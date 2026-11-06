@@ -1,7 +1,8 @@
 import type { Evidence } from "../../domain/shared/fact.ts";
 import { spanOf } from "./findings.ts";
 import { LOMBOK_VALUE, LOMBOK_BUILDER, LOMBOK_GETTERS, LOMBOK_CONSTRUCTORS } from "./java-value-vocabulary.ts";
-import type { Closure, ObjectValue, UrlScope } from "./java-values.ts";
+import type { Closure, FlowCause, ObjectValue, UrlScope } from "./java-values.ts";
+import { compareText } from "../../domain/shared/code-node.ts";
 import { bindMethod, methodsOf } from "./java-method-flow.ts";
 import type { Node } from "web-tree-sitter";
 import type { Configuration } from "./application-config.ts";
@@ -48,15 +49,15 @@ function isFinal(binding: Binding): boolean {
  * Runtime text uses `{}`; values the snapshot cannot decide, including exhausted evaluation stacks, are undefined.
  */
 export class JavaValueEvaluator {
-  private diagnostics: { cause?: "recursive" | "dispatch-disagreement"; evidence: Evidence[]; alternatives: Set<string> } | undefined;
+  private diagnostics: { cause?: FlowCause; evidence: Evidence[]; alternatives: Set<string> } | undefined;
 
-  trace<T>(evaluate: () => T): { value: T; cause?: "recursive" | "dispatch-disagreement"; evidence: Evidence[]; alternatives: string[] } {
+  trace<T>(evaluate: () => T): { value: T; cause?: FlowCause; evidence: Evidence[]; alternatives: string[] } {
     const previous = this.diagnostics;
     const trace: NonNullable<JavaValueEvaluator["diagnostics"]> = { evidence: [], alternatives: new Set() };
     this.diagnostics = trace;
     try {
       const value = evaluate();
-      return { value, ...(trace.cause === undefined ? {} : { cause: trace.cause }), evidence: trace.evidence, alternatives: [...trace.alternatives].sort() };
+      return { value, ...(trace.cause === undefined ? {} : { cause: trace.cause }), evidence: trace.evidence, alternatives: [...trace.alternatives].sort(compareText) };
     } finally {
       this.diagnostics = previous;
     }
@@ -76,7 +77,7 @@ export class JavaValueEvaluator {
     return undefined;
   }
 
-  private record(cause: "recursive" | "dispatch-disagreement", file: JavaFile, node: Node): void {
+  private record(cause: FlowCause, file: JavaFile, node: Node): void {
     if (this.diagnostics === undefined) return;
     if (this.diagnostics.cause !== "recursive") this.diagnostics.cause = cause;
     this.diagnostics.evidence.push(spanOf(file.path, node));

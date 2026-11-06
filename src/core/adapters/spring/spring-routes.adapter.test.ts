@@ -2689,7 +2689,7 @@ const INHERITING = nats("CreatedListener", `@Component class CreatedListener ext
 }`, "import lib.NatsListener;");
 
 test("a NATS subscription a base class from the libraries holds is a listener of the concrete class, placed in the repository's own source", async () => {
-  const findings = await extractor.extract([INHERITING, MAIN], [MESSENGER_BASE]);
+  const findings = await extractor.extract([INHERITING, MAIN], [{ repo: "lib", ...MESSENGER_BASE }]);
 
   assert.deepEqual(listeners(findings), ["nats orders.created@CreatedListener"]);
   const [listener] = findings;
@@ -2705,7 +2705,7 @@ test("a library class is never reported as an entrypoint, and the routes the rep
   const controller = app("Orders", `@RestController class Orders {\n  @GetMapping("/orders") String list() { return ""; }\n}`, "import org.springframework.web.bind.annotation.RestController;");
   const concrete = file("src/main/java/lib/Own.java", `package lib;\nimport io.nats.client.Connection;\npublic class Own extends NatsListener {\n  Own(Connection connection) { super(connection); }\n  public void handle(io.nats.client.Message message) {}\n  public String subject() { return "lib.own"; }\n}`);
   const bare = await extractor.extract([controller, INHERITING, MAIN]);
-  const withLibrary = await extractor.extract([controller, INHERITING, MAIN], [MESSENGER_BASE, concrete]);
+  const withLibrary = await extractor.extract([controller, INHERITING, MAIN], [MESSENGER_BASE, concrete].map((source) => ({ repo: "lib", ...source })));
 
   assert.deepEqual(withLibrary.filter((finding) => finding.evidence.every(({ path }) => path !== INHERITING.path)), bare.filter((finding) => finding.evidence.every(({ path }) => path !== INHERITING.path)));
   assert.ok(withLibrary.every((finding) => finding.evidence.every(({ path }) => !path.startsWith("(library)"))));
