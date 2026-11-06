@@ -18,10 +18,12 @@ interface Options {
   /** What the path matcher answers for a repository path and a declared glob; every glob matches by default. */
   matches?: (path: string, glob: string) => boolean;
   snapshotCache?: OutlineQueriesDeps["snapshotCache"];
+  /** The files the unmodelled-constructs reader marks among the sources it receives. */
+  unmodelled?: readonly string[];
 }
 
 function setup(options: Options = {}) {
-  const log = { closed: 0, reads: 0, extractions: 0 };
+  const log = { closed: 0, reads: 0, extractions: 0, readPaths: [] as string[][] };
   const store = { ...fakeCodeGraph(options.nodes ?? [], options.edges ?? []), close: () => void (log.closed += 1) };
   const written = options.written ?? [];
   const deps = {
@@ -30,14 +32,16 @@ function setup(options: Options = {}) {
       exportCommit: async () => ({ ok: true, value: { files: written.map((path) => ({ path, blob: "1", written: true })), skipped: [] } }),
     },
     scratch: { create: async () => "/scratch/head", remove: async () => undefined },
-    reader: { read: async () => { log.reads++; return []; } },
+    reader: { read: async (_root: string, paths: readonly string[]) => { log.reads++; log.readPaths.push([...paths]); return paths.map((path) => ({ path, content: "" })); } },
     extractor: { extract: () => { log.extractions++; return []; } },
     digest: { of: (value: string) => `digest:${value}` },
     producer: { name: "ye-ast", version: "0.0.0" },
     matcher: { matches: options.matches ?? (() => true) },
     graph: { index: async () => ({ ok: true, value: SUMMARY }), open: () => ({ ok: true, value: store }) },
     engines: {},
+    moduleReaders: [{ extract: async () => ({ files: written.map((file) => ({ file, statements: [], moduleOnly: true })), dependencies: [], unread: [] }) }],
     ...(options.snapshotCache && { snapshotCache: options.snapshotCache }),
+    ...(options.unmodelled && { unmodelled: { extract: async (sources: readonly { path: string }[]) => sources.map(({ path }) => path).filter((path) => options.unmodelled!.includes(path)) } }),
     ...(options.live && { live: options.live.deps, trust: { read: async () => ({ ok: true, value: "trusted" }) } }),
   } as unknown as OutlineQueriesDeps;
   return { queries: createOutlineQueries(deps), log, store };
@@ -85,7 +89,7 @@ test("a file the index holds answers its declarations and closes the store", asy
 });
 
 for (const live of [false, true]) {
-  test(`a ${live ? "live" : "revisioned"} outline reads the index without loading sources or extracting entrypoints`, async () => {
+  test(`a ${live ? "live" : "revisioned"} outline reads the index and its sources without extracting entrypoints`, async () => {
     const mirror = live ? fakeLive({ "src/Order.java": "1" }) : undefined;
     const { queries, log } = setup({
       written: ["src/Order.java"],
@@ -98,7 +102,6 @@ for (const live of [false, true]) {
     assert.ok(answer.ok);
     assert.equal(answer.value.status, "complete");
     assert.deepEqual(answer.value.value, { files: [{ file: "src/Order.java", declarations: [{ kind: "method", name: "total", line: 20, endLine: 24 }], imports: [] }], unheld: [] });
-    assert.equal(log.reads, 0);
     assert.equal(log.extractions, 0);
     assert.equal(log.closed, 1);
     if (mirror) assert.deepEqual(mirror.held, { locks: 1, released: 1 });
@@ -121,10 +124,10 @@ test("an aborted live outline returns the cancellation fault before acquiring it
   assert.deepEqual(mirror.held, { locks: 0, released: 0 });
 });
 
-test("an export-only outline never restores retained source data", async () => {
+test("a focused outline never reads nor restores source data", async () => {
   let restored = 0;
   const { queries, log } = setup({ written: ["src/Order.java"], nodes: [fakeNode("Order.total", "method", "src/Order.java", 20, 24, "total")], snapshotCache: { get: () => { restored++; return { sources: [] }; }, put: () => undefined } });
-  const answer = await queries.outline({ repo: "/work/shop", repoId: "shop", revision: "HEAD", files: ["src/Order.java"] });
+  const answer = await queries.outline({ repo: "/work/shop", repoId: "shop", revision: "HEAD", focus: [{ file: "src/Order.java", symbol: "total" }] });
   assert.ok(answer.ok && answer.value.status === "complete");
   assert.equal(restored, 0);
   assert.equal(log.reads, 0);
@@ -217,4 +220,26 @@ test("a focused fact records its selectors once each in a fixed order, in place 
   const answer = await focusOf([{ file: API, symbol: "m" }, { file: API, line: 16 }, { file: API, symbol: "m" }]);
   assert.ok(answer.ok);
   assert.deepEqual(answer.value.inputs.declaredConfig, { focus: [`${API}:16`, `${API}:m`] });
+});
+
+const POINT = "src/Point.java";
+const POINT_INDEX = { written: [POINT, "src/Order.java"], nodes: [fakeNode("Order.total", "method", "src/Order.java", 20, 24, "total"), fakeNode("origin", "method", POINT, 4, 6, "origin")], unmodelled: [POINT] };
+
+test("a listed file whose declarations the graph cannot place is cut, so its outline is never complete", async () => {
+  const { queries } = setup(POINT_INDEX);
+
+  const answer = await queries.outline({ repo: "/work/shop", repoId: "shop", revision: "HEAD", files: [POINT, "src/Order.java"] });
+
+  assert.ok(answer.ok && answer.value.status === "partial");
+  assert.deepEqual(answer.value.cuts.map((cut) => [cut.kind, cut.at]), [["no-extractor", [POINT]]]);
+});
+
+test("a focus on a file the graph cannot place is cut, reading that file alone", async () => {
+  const { queries, log } = setup(POINT_INDEX);
+
+  const answer = await queries.outline({ repo: "/work/shop", repoId: "shop", revision: "HEAD", focus: [{ file: POINT, symbol: "origin" }] });
+
+  assert.ok(answer.ok && answer.value.status === "partial");
+  assert.deepEqual(answer.value.cuts.map((cut) => [cut.kind, cut.at]), [["no-extractor", [POINT]]]);
+  assert.deepEqual(log.readPaths, [[POINT]]);
 });

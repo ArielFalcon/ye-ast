@@ -1,3 +1,4 @@
+import type { LibrarySource } from "../domain/topology/library-source.ts";
 import type { Entrypoint } from "../domain/entrypoints/entrypoint.ts";
 import type { Finding } from "../domain/shared/fact.ts";
 
@@ -14,5 +15,5 @@ export interface EntrypointExtractor {
    * `libraries` are the sources of repositories the files depend on: a listener the files inherit from a class they
    * declare is read, and no entrypoint is reported from the libraries themselves.
    */
-  extract(files: readonly SourceFile[], libraries?: readonly SourceFile[]): Promise<readonly Finding<Entrypoint>[]>;
+  extract(files: readonly SourceFile[], libraries?: readonly LibrarySource[]): Promise<readonly Finding<Entrypoint>[]>;
 }

@@ -98,12 +98,12 @@ test("nested literal loads and type queries retain distinct dependency evidence 
 });
 
 test("literal and computed references on the same line retain exact unsupported reference coverage", async () => {
-  const content = "import('./lib/item'); import(name); function run(require: Function) { require('pkg'); }";
+  const content = "import('./lib/item'); import(name); function run() { require('pkg'); }";
   const result = await createModuleDependenciesReader().extract([{ path: "src/use.ts", content }, item, manifest]);
   assert.equal(result.dependencies.length, 1);
   assert.deepEqual(result.untraversed, [
     { file: "src/use.ts", line: 1, offset: content.indexOf("import(name)"), form: "dynamic-import" },
-    { file: "src/use.ts", line: 1, offset: content.indexOf("require('pkg')"), form: "require" },
+    { file: "src/use.ts", line: 1, offset: content.indexOf("require('pkg')"), form: "require", endLine: 1, specifier: "pkg", target: { kind: "external", module: "pkg" } },
   ]);
 });
 
@@ -126,4 +126,60 @@ test("malformed and unsupported static declarations are explicitly unread", asyn
   assert.deepEqual(result.unread, [{ file: "broken.ts", reason: "source-unreadable" }, { file: "internal.ts", reason: "no-extractor" }]);
   assert.equal(result.files.some(({ file }) => file === "broken.ts"), false);
   assert.equal(result.files.find(({ file }) => file === "internal.ts")?.moduleOnly, false);
+});
+
+test("each module statement lists the names it binds at the position the graph writes them", async () => {
+  const lines = [
+    "import { original as local, type Kind, plain } from './lib/item';",
+    "import Widget, * as items from './lib/item';",
+    "import type { Shape } from './lib/item';",
+    "export { item as renamed } from './lib/item';",
+    "export * from './lib/item';",
+    "export * as space from './lib/item';",
+    "import data = require('pkg/sub');",
+    "import './lib/item';",
+  ];
+  const column = (line: number, name: string) => lines[line - 1]!.indexOf(name) + 1;
+  const result = await createModuleDependenciesReader().extract([item, manifest, { path: "src/use.ts", content: lines.join("\n") }]);
+  assert.deepEqual(result.dependencies.filter(({ file }) => file === "src/use.ts").map(({ line, form, bindings }) => ({ line, ...(form === undefined ? {} : { form }), bindings })), [
+    { line: 1, bindings: [
+      { local: "local", imported: "original", line: 1, column: column(1, "local"), typeOnly: false },
+      { local: "Kind", imported: "Kind", line: 1, column: column(1, "Kind"), typeOnly: true },
+      { local: "plain", imported: "plain", line: 1, column: column(1, "plain"), typeOnly: false },
+    ] },
+    { line: 2, bindings: [
+      { local: "Widget", imported: "default", line: 2, column: column(2, "Widget"), typeOnly: false },
+      { local: "items", imported: "*", line: 2, column: column(2, "items"), typeOnly: false },
+    ] },
+    { line: 3, bindings: [{ local: "Shape", imported: "Shape", line: 3, column: column(3, "Shape"), typeOnly: true }] },
+    { line: 4, bindings: [{ local: "renamed", imported: "item", line: 4, column: column(4, "item"), typeOnly: false }] },
+    { line: 5, bindings: [{ imported: "*", line: 5, column: 1, typeOnly: false }] },
+    { line: 6, bindings: [{ local: "space", imported: "*", line: 6, column: column(6, "space"), typeOnly: false }] },
+    { line: 7, form: "import-equals", bindings: [{ local: "data", imported: "*", line: 7, column: column(7, "data"), typeOnly: false }] },
+    { line: 8, bindings: [] },
+  ]);
+});
+
+test("a default import of a repository file names the declaration that file exports as default, when it is named", async () => {
+  const read = async (target: string) => (await createModuleDependenciesReader().extract([
+    { path: "src/widget.ts", content: target },
+    { path: "src/use.ts", content: "import Widget from './widget';" },
+  ])).dependencies[0]!.bindings[0]!.exportedAs;
+  assert.equal(await read("export default class Panel {}"), "Panel");
+  assert.equal(await read("const Panel = 1;\nexport default Panel;"), undefined);
+});
+
+test("a require of a string literal stays outside module traversal and carries the file it names", async () => {
+  const result = await createModuleDependenciesReader().extract([item, { path: "src/use.ts", content: "const lib = require('./lib/item');" }]);
+  assert.deepEqual(result.dependencies, []);
+  assert.deepEqual(result.untraversed, [
+    { file: "src/use.ts", line: 1, offset: 12, form: "require", endLine: 1, specifier: "./lib/item", target: { kind: "repository", file: "src/lib/item.ts" } },
+  ]);
+});
+
+test("a selection reads the statements of the selected files only, while every source still resolves them", async () => {
+  const unselected: SourceFile = { path: "src/other.ts", content: "import { item } from './lib/item';" };
+  const result = await createModuleDependenciesReader().extract([{ path: "src/use.ts", content: "import { item } from './lib/item';" }, item, unselected], { files: ["src/use.ts"] });
+  assert.deepEqual(result.files.map(({ file }) => file), ["src/use.ts"]);
+  assert.deepEqual(result.dependencies.map(({ file, target }) => ({ file, target })), [{ file: "src/use.ts", target: { kind: "repository", file: item.path } }]);
 });

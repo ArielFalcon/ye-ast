@@ -314,6 +314,14 @@ test("each relation or connection caveat is stated on the first object of its ty
   }
 });
 
+test("a used import states once that the dependence is not proven to go through the import", () => {
+  const importers = sourceFixture("importers", { value: { files: [{ file: "src/OrderService.java", importers: ["src/OrderController.java"], users: [], unresolvedNamers: [] }] } });
+  const text = renderComposition(resultOf([importers, singleTargetCallers()]), "details");
+  const carrying = lines(text).filter((line) => line.includes("not proof the dependence goes through this import"));
+  assert.deepEqual(carrying, lines(text).filter((line) => /^C\d+ = used-import: /.test(line)), text);
+  assert.equal(carrying.length, 1, text);
+});
+
 test("an unavailable verification or repeat request is stated in text; an available one is left to the receipt", () => {
   const { result } = realCase("handler-outline");
   assert.doesNotMatch(renderComposition(result, "details"), /Verification|fresh-read|pinned-replay/);
@@ -356,7 +364,8 @@ test("summary lists every declaration of an outline file, children included, as 
   const listed = file.declarations.filter((_, index) => index !== 2).flatMap((declaration) => [declaration, ...(declaration.children ?? [])]);
   for (const declaration of listed) assert.ok(text.includes(`${declaration.line}-${declaration.endLine} ${declaration.name}`), `${declaration.name}:\n${text}`);
   assert.match(text, new RegExp(`: ${listed.length} declarations,`));
-  assert.doesNotMatch(text, /uncited declarations/);
+  const reached = file.imports.flatMap(({ bindings }) => bindings.filter(({ declaration }) => declaration !== undefined)).length;
+  assert.match(text, new RegExp(`uncited declarations: ${reached};`), "only the declarations imports reach in other files are uncited");
 });
 
 test("summary locates an unknown entrypoint finding by its evidence", () => {
@@ -461,5 +470,14 @@ test("a source the lead names in no connection supports no connection, listed or
 test("composed unresolved rows retain the diagnostic and causal evidence", () => {
   const text = renderComposition(resultOf([sourceFixture("impact-workspace")]), "details");
   assert.match(text, /unresolved call site.*OrdersService.remote.*destination-undecidable.*read/);
-  assert.match(text, /\(library\)\/0\/Client.java.*17/);
+  assert.match(text, /\(library\)\/lib\/Client.java.*17/);
+});
+
+test("composition text retains dependency selection diagnostics next to their cuts", () => {
+  const value = workspaceValue();
+  const section = value.sections.web;
+  assert.ok(section && section.status !== "unknown");
+  const cut = { kind: "unresolved-link" as const, reason: "unresolved" as const, at: ["pom.xml", "pom.xml:4"], dependency: { name: "com.acme:clients", reason: "unproven-coordinates" as const, candidates: ["clients"] } };
+  const result = resultOf([sourceFixture("workspace", { value: { ...value, sections: { ...value.sections, web: { ...section, status: "partial", cuts: [cut] } } } })]);
+  for (const mode of ["summary", "details"] as const) assert.match(renderComposition(result, mode), /com.acme:clients.*unproven-coordinates.*clients/);
 });

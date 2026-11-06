@@ -39,7 +39,7 @@ window.EXPLORER_DATA = {
     { key: "ports-vcs", layer: "ports", name: "vcs", sub: "export · diff · revisions", files: ["src/core/ports/vcs.port.ts"] },
     { key: "ports-source-reader", layer: "ports", name: "source-reader", sub: "confined reads", files: ["src/core/ports/source-reader.port.ts"] },
     { key: "ports-index-cache", layer: "ports", name: "index-cache", sub: "content-keyed indexes", files: ["src/core/ports/index-cache.port.ts"] },
-    { key: "ports-fixed-layer", layer: "ports", name: "fixed-layer", sub: "ye-ast's layer", files: ["src/core/ports/fixed-layer-store.port.ts"] },
+    { key: "ports-fixed-layer", layer: "ports", name: "fixed-layer", sub: "ye-AST's layer", files: ["src/core/ports/fixed-layer-store.port.ts"] },
     { key: "ports-extractor", layer: "ports", name: "extractor", sub: "entrypoint extractors", files: ["src/core/ports/entrypoint-extractor.port.ts"] },
     { key: "ports-live", layer: "ports", name: "live", sub: "tree · mirror · digest", files: ["src/core/ports/working-tree.port.ts", "src/core/ports/live-mirror.port.ts"] },
     { key: "ports-trust", layer: "ports", name: "trust", sub: "trust record · exclude", files: ["src/core/ports/trust-record.port.ts", "src/core/ports/local-exclude.port.ts"] },
@@ -154,7 +154,6 @@ window.EXPLORER_DATA = {
     relations: "Active relations",
     activeNodes: "Active nodes",
     terms: "Terms",
-    glossary: "Open glossary",
     why: "Why it matters",
     nodeMode: "Node inspection",
     flowPaused: "Flow paused",
@@ -180,7 +179,7 @@ window.EXPLORER_DATA = {
       role: "Pure rules for a live snapshot: the listed paths, the declared scope with git ignores, and the state id over the live content fingerprint.",
       may: "core/domain only",
       never: "ports, adapters, Node built-ins",
-      facts: ["A live fact describes bytes ye-ast copied and hashed.", "stateId is the digest of the live export's content fingerprint."],
+      facts: ["A live fact describes bytes ye-AST copied and hashed.", "stateId is the digest of the live export's content fingerprint."],
     },
     "domain-topology": {
       role: "Workspace vocabulary: outward names, call sites, link matching, repository identity and the manifest.",
@@ -214,7 +213,7 @@ window.EXPLORER_DATA = {
     },
 
     "ports-fixed-layer": {
-      role: "Writes and reads ye-ast's fixed layer under .ye-ast/; it never writes repository source.",
+      role: "Writes and reads ye-AST's fixed layer under .ye-ast/; it never writes repository source.",
       may: "core/domain, core/ports",
       never: "core/application, core/adapters",
       facts: ["The layer applies the redaction patterns only."],
@@ -260,12 +259,12 @@ window.EXPLORER_DATA = {
       steps: [
         {
           title: "The request",
-          body: "<p><code>ye-ast impact &lt;repo&gt; --base &lt;rev&gt;</code> is parsed by the CLI. Flags become a scope and a budget; <code>impact.ofChange</code> is the only call.</p>",
+          body: "<p>The CLI parses <code>ye-ast impact &lt;repo&gt; --base &lt;rev&gt;</code>. Flags become a scope and a budget; <code>impact.ofChange</code> is the only call.</p>",
           focus: ["cli", "app-impact"],
           edges: [["cli", "app-impact"]],
           callout: "cli",
           calloutText: "The CLI turns argv into one query family call.",
-          why: 'The request already names the only freedom the engine has: what to read, and how far to walk.',
+          why: 'The request fixes everything the engine can vary: what to read and how far to walk.',
           refs: ["src/cli/main.ts:437-454", "src/cli/main.ts:300-303"],
         },
         {
@@ -315,7 +314,7 @@ window.EXPLORER_DATA = {
           edges: [["app-impact", "ports-code-graph"], ["ports-code-graph", "adapter-codegraph"], ["app-impact", "ports-index-cache"], ["ports-index-cache", "adapter-codegraph"]],
           callout: "adapter-codegraph",
           calloutText: "The store is opened read-only and version-checked.",
-          why: 'The build is the cost; the walk is cheap. Content-keyed reuse removes the build without letting content configure the engine.',
+          why: 'Building the index is the expensive part; the walk is cheap. Reusing an index by content skips the build without letting content configure the engine.',
           refs: ["src/core/application/snapshot/head-reading.ts:239-251", "src/core/adapters/codegraph/codegraph.adapter.ts:121-146"],
         },
         {
@@ -515,7 +514,7 @@ window.EXPLORER_DATA = {
       steps: [
         {
           title: "The request",
-          body: "<p><code>ye-ast init --trust trusted|untrusted</code> writes a declaration outside the repository and prepares ye-ast's own folders.</p>",
+          body: "<p><code>ye-ast init --trust trusted|untrusted</code> writes a declaration outside the repository and prepares ye-AST's own folders.</p>",
           focus: ["cli", "app-install"],
           edges: [["cli", "app-install"]],
           callout: "app-install",
@@ -532,7 +531,7 @@ window.EXPLORER_DATA = {
           refs: ["docs/architecture/adr/0010-trust-modes.md", "src/core/adapters/fs/trust-record.adapter.ts"],
         },
         {
-          title: "Exclude ye-ast's folders",
+          title: "Exclude ye-AST's folders",
           body: "<p>The local exclude gains <code>.ye-ast/</code> and <code>.ye-ast-graph/</code>, so the engine's own files never enter a snapshot.</p>",
           focus: ["app-install", "ports-trust", "adapter-git"],
           edges: [["app-install", "ports-trust"], ["ports-trust", "adapter-git"]],
@@ -542,7 +541,7 @@ window.EXPLORER_DATA = {
         },
         {
           title: "Write the fixed layer",
-          body: "<p>The fixed layer is written under <code>.ye-ast/</code> from the entrypoint map. It is ye-ast's own store; no repository source is touched.</p>",
+          body: "<p>The fixed layer is written under <code>.ye-ast/</code> from the entrypoint map. It is ye-AST's own store; no repository source is touched.</p>",
           focus: ["app-install", "ports-fixed-layer", "adapter-fs"],
           edges: [["app-install", "ports-fixed-layer"], ["ports-fixed-layer", "adapter-fs"]],
           callout: "ports-fixed-layer",
@@ -568,7 +567,7 @@ window.EXPLORER_DATA = {
         },
         {
           title: "Copy the working tree",
-          body: "<p>git lists the paths; ye-ast copies and hashes them into its mirror. The graph reads the mirror, never the checkout.</p>",
+          body: "<p>git lists the paths; ye-AST copies and hashes them into its mirror. The graph reads the mirror, never the checkout.</p>",
           focus: ["app-live", "ports-live", "adapter-fs", "adapter-git"],
           edges: [["app-live", "ports-live"], ["ports-live", "adapter-fs"], ["ports-live", "adapter-git"]],
           callout: "ports-live",
@@ -633,7 +632,7 @@ window.EXPLORER_DATA = {
         },
         {
           title: "Connect only what matches",
-          body: "<p>Five connection rules (handler-declaration, reached-handler, change-dependent, shared-file-import, shared-support) are derived only between reads with the same schema, producer, trust, engines, workspace and snapshot. Otherwise the answer reports a context-mismatch or snapshot-difference coverage issue.</p>",
+          body: "<p>Seven connection rules (handler-declaration, reached-handler, linked-entrypoint, change-dependent, shared-file-import, used-import, shared-support) are derived only between reads with the same schema, producer, trust, engines, workspace and snapshot. shared-file-import and shared-support only repeat an exact observation, so they also accept another version of the same producer. Otherwise the answer reports a context-mismatch or snapshot-difference coverage issue.</p>",
           focus: ["mcp", "domain-shared"],
           edges: [["mcp", "domain-shared"]],
           callout: "mcp",
@@ -643,7 +642,7 @@ window.EXPLORER_DATA = {
         },
         {
           title: "Receipt and verification",
-          body: "<p>The answer carries a verification identity (<code>mcp-c1</code>) and the requests that can be re-run. Send them back with <code>expect</code> and ye-ast checks the composition is unchanged; when a context cannot be verified, the receipt says why.</p>",
+          body: "<p>The answer carries a verification identity (<code>mcp-c1</code>) and the requests that can be re-run. Send them back with <code>expect</code> and ye-AST checks the composition is unchanged; when a context cannot be verified, the receipt says why.</p>",
           focus: ["composition", "mcp"],
           edges: [["composition", "mcp"]],
           callout: "mcp",

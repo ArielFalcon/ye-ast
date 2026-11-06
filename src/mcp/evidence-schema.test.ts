@@ -17,7 +17,6 @@ test('control schemas enforce pairing, branches, safe integers and closed subjec
     assert.equal(valid({ select: { kind: 'cut-places', owner: { kind: 'fact' }, cutIndex: -1 }, page: { limit: 1 } }), false);
     assert.equal(valid({ select: { kind: 'cut-places', owner: { kind: 'fact', extra: 1 }, cutIndex: 0 }, page: { limit: 1 } }), false);
     assert.equal(valid({ select: { kind: 'cut-places', owner: { kind: 'fact' }, cutIndex: 0 }, page: { limit: Number.MAX_SAFE_INTEGER + 1 } }), false);
-    assert.ok(recoveryControlConstraintsFor(tool).length);
   }
   const module = { kind: 'module-origins', owner: { kind: 'local' }, module: { file: 'a', snapshot: 'base' } };
   assert.equal(validRecoveryControls('callers', { select: module, page: { limit: 1 } }), false);
@@ -49,13 +48,17 @@ test('advertised control constraints match runtime for each branch', () => {
     {select:{kind:'cut-places',owner:{kind:'read',repo:'r',index:1},cutIndex:0},page:{limit:1},workspace:{}},
     {select:{kind:'entrypoint-evidence',findingIndex:0},page:{limit:1}},
     {select:{kind:'workspace-link-evidence',linkId:'id'},page:{limit:1},workspace:{}},
+    {select:{kind:'workspace-link-evidence',linkId:'id'},page:{limit:1}},
+    {select:{kind:'cut-places',owner:{kind:'entrypoints'},cutIndex:0},page:{limit:1}},
+    {select:{kind:'cut-places',owner:section,cutIndex:0},page:{limit:1}}, {select:{kind:'cut-places',owner:section,cutIndex:0},page:{limit:1},workspace:{}},
+    {select:{kind:'module-origins',owner:section,module:{file:'a',snapshot:'base'}},page:{limit:1},workspace:{}},
     {select:handler(local),page:{limit:0}}, {select:handler(local),page:{limit:1,cursor:'x',extra:1}},
     {select:handler(local),page:{limit:9007199254740992}},
   ];
   for (const tool of ['entrypoints','callers','impact'] as const) {
     const base = z.strictObject({...recoveryControlShapeFor(tool),workspace:z.strictObject({}).optional()});
-    const json = z.toJSONSchema(base,{target:'draft-7'});
-    const validate = validator({...json,allOf:recoveryControlConstraintsFor(tool)});
+    const json = z.toJSONSchema(base,{target:'draft-2020-12'});
+    const validate = validator({...json,...recoveryControlConstraintsFor(tool)});
     for (const value of options) {
       const result = base.safeParse(value);
       assert.equal(validate(value).valid, result.success && validRecoveryControls(tool,result.data), `${tool}: ${JSON.stringify(value)}`);
@@ -76,7 +79,7 @@ test('concrete categories and receipts validate in runtime and draft-7 schema', 
   const cases = [
     {select:{kind:'handler-origins',owner:{kind:'local'},handler:{path:'a',symbol:'h',line:3}},context:{owner:{kind:'local'},snapshot:snap,handler:h,matchedEntrypointCount:1,interpretation:'recorded-origin-union'},item:{seedIndex:1,seed:{file:'a',symbol:'x',line:1,basis:'requested'}}},
     {select:{kind:'module-origins',owner:{kind:'local'},module:{file:'a',snapshot:'base'}},context:{owner:{kind:'local'},snapshot:snap,module:{file:'a',snapshot:'base',depth:1},originCount:1},item:{originIndex:2,origin:{file:'a',change:'deleted'}}},
-    {select:{kind:'cut-places',owner:{kind:'fact'},cutIndex:0},context:{owner:{kind:'fact'},snapshot:snap,analysis,cutIndex:0,kind:'unresolved-link',reason:'source-unreadable',anchor:'a'},item:{atIndex:1,place:'b'}},
+    {select:{kind:'cut-places',owner:{kind:'fact'},cutIndex:0},context:{owner:{kind:'fact'},snapshot:snap,analysis,cutIndex:0,kind:'unresolved-link',reason:'source-unreadable',dependency:{name:'com.acme:clients',reason:'ambiguous',candidates:['one','two']},anchor:'a'},item:{atIndex:1,place:'b'}},
     {select:{kind:'workspace-link-evidence',linkId:'id'},context:{link,direction:'upstream',reachCount:1,endpoints:{from:{snapshot:snap,analysis},to:{snapshot:snap,analysis}}},item:{position:0,linkId:'lost',unavailable:true}},
   ];
   for (const c of cases) {

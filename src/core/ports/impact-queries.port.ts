@@ -66,8 +66,8 @@ export interface UnknownSymbolFault {
     file: string;
     symbol: string;
     /**
-     * What the file declares that could be asked instead, sorted and once each: the seedable names for `callers`, the
-     * dotted paths for an outline focus; empty when it declares none or is not indexed.
+     * What the file declares that could be asked instead, sorted and once each, as dotted containment paths: of the
+     * seedable declarations for `callers`, of every declaration for an outline focus; empty when it declares none or is not indexed.
      */
     candidates: readonly string[];
   }[];

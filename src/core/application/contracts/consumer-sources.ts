@@ -92,7 +92,7 @@ export function createConsumerSources(deps: ConsumerSourcesDeps): ConsumerSource
                 flow: await deps.flow(sources, plan.at.repoId),
                 templates: await createConsumerTemplateReader({ metadata: deps.metadata, flow: deps.templateFlow }, sources),
                 graph: indexed === "unavailable" ? undefined : indexed.store,
-                inbound: indexed === "unavailable" || origins === undefined ? undefined : inboundEdgesOf(indexed.store, origins, proofs?.validOccurrences),
+                inbound: indexed === "unavailable" || origins === undefined ? undefined : inboundEdgesOf(indexed.store, origins, proofs),
               });
             }
 

@@ -176,3 +176,14 @@ test("call-site diagnostic causes are closed in both composition schema forms", 
   assert.equal(runtime(invalid), false);
   assert.equal(ajv(invalid).valid, false);
 });
+
+test("dependency selection reasons remain closed in runtime and advertised composition schemas", () => {
+  const invalid = json(full);
+  const read = invalid.graph.reads.find(read => read.analysis.status === "partial" && read.analysis.cuts.some(cut => cut.dependency !== undefined));
+  assert.ok(read?.analysis.status === "partial");
+  const cut = read.analysis.cuts.find(cut => cut.dependency !== undefined);
+  assert.ok(cut?.dependency);
+  Object.assign(cut.dependency, { reason: "guess" });
+  assert.equal(runtime(invalid), false);
+  assert.equal(ajv(invalid).valid, false);
+});

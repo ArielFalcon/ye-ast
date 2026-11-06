@@ -213,3 +213,46 @@ test("nested function bindings and eval do not contaminate an outer callback sco
   ]);
   assert.ok(results[0]?.status === "complete" && results[0].value.kind === "local-parameter");
 });
+
+test("an import-equals require binds its name to the module it names, unless the file declares the name again", async () => {
+  const bound: SourceFile = { path: "src/legacy.ts", content: "import ops = require('rxjs/operators');\nops.map();\n" };
+  const shadowed: SourceFile = { path: "src/shadow.ts", content: "import ops = require('rxjs/operators');\nops.map();\nfunction run(ops: unknown) {}\n" };
+  const site = (file: string): ImportOriginSite => ({ file, line: 2, column: 1, name: "ops", fullName: "ops.map", kind: "calls" });
+  const findings = await createImportOrigins([MANIFEST, bound, shadowed]).origins([site("src/legacy.ts"), site("src/shadow.ts")]);
+
+  assert.deepEqual(findings, [
+    { status: "complete", value: { kind: "external", module: "rxjs" }, occurrence: true, evidence: [{ path: "src/legacy.ts", line: 2 }] },
+    { status: "unknown", reason: "unresolved", occurrence: true, evidence: [{ path: "src/shadow.ts", line: 2 }] },
+  ]);
+});
+
+/** A class whose method shares a library global's name, called as the graph spells it: the bare name, at the call. */
+const OWN_CALLS = [
+  "export class Svc {",
+  "  fetch(): void {}",
+  "  direct(): void { this.fetch(); }",
+  "  arrow = () => this.fetch();",
+  "  inherited(): void { super.fetch(); }",
+  "  rebound(): void { [1].map(function () { this.fetch(); }); }",
+  "  literal(): void { const o = { m() { this.fetch(); } }; }",
+  "}",
+];
+
+async function ownCallKinds(lines: readonly number[]): Promise<string[]> {
+  const file = "src/svc.ts";
+  const sites = lines.map((line): ImportOriginSite => {
+    const text = OWN_CALLS[line - 1]!;
+    const column = Math.max(text.indexOf("this.fetch"), text.indexOf("super.fetch")) + 1;
+    return { file, line, column, name: "fetch", fullName: "fetch", kind: "calls" };
+  });
+  const found = await createImportOrigins([{ path: file, content: OWN_CALLS.join("\n") }]).origins(sites);
+  return found.map((finding) => (finding.status === "complete" ? finding.value.kind : "unknown"));
+}
+
+test("a bare graph call written on this inside a class member names a member of that class, not a library global", async () => {
+  assert.deepEqual(await ownCallKinds([3, 4]), ["this-member", "this-member"]);
+});
+
+test("a bare graph call on super, or on a this a function or an object method rebinds, proves nothing", async () => {
+  assert.deepEqual(await ownCallKinds([5, 6, 7]), ["unknown", "unknown", "unknown"]);
+});

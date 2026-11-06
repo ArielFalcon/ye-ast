@@ -48,7 +48,6 @@ window.EXPLORER_ES = {
     relations: "Relaciones activas",
     activeNodes: "Nodos activos",
     terms: "Términos",
-    glossary: "Abrir glosario",
     why: "Por qué importa",
     nodeMode: "Inspección de nodo",
     flowPaused: "Flujo en pausa",
@@ -100,7 +99,7 @@ window.EXPLORER_ES = {
     "app-outline": { sub: "declaraciones · imports" },
     "app-decisions": { sub: "huecos de workspace · opciones" },
     "domain-change": { sub: "diff · semillas · radio" },
-    "domain-impact": { sub: "política · cortes · join" },
+    "domain-impact": { sub: "política · cuts · join" },
     "domain-entrypoints": { sub: "ruta · job · listener" },
     "domain-map": { sub: "mapa de puntos de entrada" },
     "domain-outline": { sub: "spans de declaraciones" },
@@ -119,7 +118,7 @@ window.EXPLORER_ES = {
 
     "domain-topology": {
       sub: "enlaces de workspace",
-      role: "Vocabulario de workspace: nombres hacia afuera, sitio de llamadas, matching de enlaces, identidad de repositorio y manifiesto.",
+      role: "Vocabulario de workspace: nombres hacia afuera, sitios de llamada, matching de enlaces, identidad de repositorio y manifiesto.",
       may: "solo core/domain",
       never: "ports, adapters, built-ins de Node",
       facts: [
@@ -133,7 +132,7 @@ window.EXPLORER_ES = {
       may: "solo core/domain",
       never: "ports, adapters, built-ins de Node",
       facts: [
-        "Un fact live describe bytes que ye-ast copió y hasheó.",
+        "Un fact live describe bytes que ye-AST copió y les calculó el hash.",
         "stateId es el digest del content fingerprint del export live.",
       ],
     },
@@ -150,7 +149,7 @@ window.EXPLORER_ES = {
       role: "Exporta un commit, lee un diff con opciones fijadas, resuelve revisiones y merge bases, y enumera un working tree.",
       may: "core/domain, core/ports",
       never: "core/application, core/adapters",
-      facts: ["Un blob se streamea, nunca se mantiene entero.", "El export escribe solo las rutas seleccionadas."],
+      facts: ["Un blob se transmite, nunca se carga entero.", "El export escribe solo las rutas seleccionadas."],
     },
     "ports-source-reader": {
       sub: "lecturas confinadas",
@@ -161,15 +160,15 @@ window.EXPLORER_ES = {
     },
     "ports-index-cache": {
       sub: "índices por contenido",
-      role: "Mantiene índices completos keyed por contenido staged, para que los mismos bytes reutilicen el mismo grafo.",
+      role: "Mantiene índices completos identificados por el contenido staged, para que los mismos bytes reutilicen el mismo grafo.",
       may: "core/domain, core/ports",
       never: "core/application, core/adapters",
       facts: ["La clave es el digest del contenido staged más las versiones de los engines.", "El directorio de caché debe ser privado de la cuenta."],
     },
 
     "ports-fixed-layer": {
-      sub: "capa de ye-ast",
-      role: "Escribe y lee la capa fija de ye-ast bajo .ye-ast/; nunca escribe código fuente del repositorio.",
+      sub: "capa de ye-AST",
+      role: "Escribe y lee la capa fija de ye-AST bajo .ye-ast/; nunca escribe código fuente del repositorio.",
       may: "core/domain, core/ports",
       never: "core/application, core/adapters",
       facts: ["La capa aplica solo los patrones de redaction."],
@@ -183,10 +182,10 @@ window.EXPLORER_ES = {
     },
     "ports-live": {
       sub: "árbol · mirror · digest",
-      role: "La frontera live: enumerar un working tree, copiarlo a un mirror, hashearlo y reportar staleness.",
+      role: "La frontera live: enumerar un working tree, copiarlo a un mirror, calcular su hash y reportar staleness.",
       may: "core/domain, core/ports",
       never: "core/application, core/adapters",
-      facts: ["El mirror copia archivos, nunca los hard-linkea.", "Un fact live nunca afirma más frescura que la que tiene el mirror."],
+      facts: ["El mirror copia archivos, nunca crea hard links.", "Un fact live nunca afirma más frescura que la que tiene el mirror."],
     },
     "ports-trust": {
       sub: "trust record · exclude",
@@ -204,7 +203,7 @@ window.EXPLORER_ES = {
     },
     "ports-workspace": {
       sub: "queries de workspace",
-      role: "Queries de workspace: nombres hacia afuera, sitio de llamadas, gateways y enlaces entre repositorios.",
+      role: "Queries de workspace: nombres hacia afuera, sitios de llamada, gateways y enlaces entre repositorios.",
       may: "core/domain, core/ports",
       never: "core/application, core/adapters",
       facts: ["No hace ninguna petición de red."],
@@ -218,8 +217,8 @@ window.EXPLORER_ES = {
       steps: [
         {
           title: "La petición",
-          body: "<p><code>ye-ast impact &lt;repo&gt; --base &lt;rev&gt;</code> lo parsea el CLI. Los flags se convierten en alcance y presupuesto; <code>impact.ofChange</code> es la única llamada.</p>",
-          why: 'La petición ya nombra la única libertad que tiene el motor: qué leer y hasta dónde recorrer.',
+          body: "<p>El CLI interpreta <code>ye-ast impact &lt;repo&gt; --base &lt;rev&gt;</code>. Los flags se convierten en alcance y presupuesto; <code>impact.ofChange</code> es la única llamada.</p>",
+          why: 'La petición fija todo lo que el motor puede variar: qué leer y hasta dónde recorrer.',
           calloutText: "El CLI convierte argv en una llamada a una query family.",
         },
         {
@@ -230,15 +229,15 @@ window.EXPLORER_ES = {
         },
         {
           title: "Export del head",
-          body: "<p>git lista el árbol y streamea cada blob dentro del alcance a un export scratch. No se indexa el repositorio; se indexa el export.</p>",
+          body: "<p>git lista el árbol y transmite cada blob dentro del alcance a un export scratch. No se indexa el repositorio; se indexa el export.</p>",
           why: 'Indexar el checkout dejaría que el manifiesto, el .gitignore o un índice preconstruido del repositorio decidieran lo que ve el motor. El export elimina ese canal.',
           calloutText: "El snapshot lee solo bytes exportados.",
         },
         {
           title: "Diff fijado y semillas",
-          body: "<p><code>diff-tree</code> corre con cada opción que cambia los hunks fijada. El parser convierte las líneas tocadas en semillas; un nombre eliminado sobrevive como corte.</p>",
+          body: "<p><code>diff-tree</code> corre con cada opción que cambia los hunks fijada. El parser convierte las líneas tocadas en semillas; un nombre eliminado sobrevive como cut.</p>",
           why: 'Si la configuración de git de una máquina pudiera cambiar los hunks, el fact no sería determinista. Cada opción es explícita.',
-          calloutText: "Las reglas de cambio convierten un diff en semillas y cortes.",
+          calloutText: "Las reglas de cambio convierten un diff en semillas y cuts.",
         },
         {
           title: "Entrypoints en ambos lados",
@@ -248,8 +247,8 @@ window.EXPLORER_ES = {
         },
         {
           title: "Indexar el head",
-          body: "<p>codegraph corre sobre el export en un proceso hijo. El índice se keyed por contenido staged, así que bytes iguales reutilizan el mismo store.</p>",
-          why: 'La construcción es el coste; el recorrido es barato. La reutilización por contenido elimina la construcción sin dejar que el contenido configure el motor.',
+          body: "<p>codegraph corre sobre el export en un proceso hijo. El índice se identifica por el contenido staged, así que bytes iguales reutilizan el mismo store.</p>",
+          why: 'Construir el índice es lo costoso; el recorrido es barato. Reutilizarlo por contenido evita la construcción sin dejar que el contenido configure el motor.',
           calloutText: "El store se abre en solo lectura y con versión comprobada.",
         },
         {
@@ -260,8 +259,8 @@ window.EXPLORER_ES = {
         },
         {
           title: "Unir y firmar el fact",
-          body: "<p>El grafo se une a los facts de puntos de entrada por archivo, línea dentro del span y nombre simple. Cada límite y cada punto ciego se convierte en un corte antes de construir el fact.</p>",
-          why: 'Un segundo join sería una segunda verdad. Una sola función sirve a puntos de entrada, aristas derivadas, sitio de llamadas y semillas.',
+          body: "<p>El grafo se une a los facts de puntos de entrada por archivo, línea dentro del span y nombre simple. Cada límite y cada punto ciego se convierte en un cut antes de construir el fact.</p>",
+          why: 'Un segundo join sería una segunda verdad. Una sola función sirve a puntos de entrada, aristas derivadas, sitios de llamada y semillas.',
           calloutText: "Un manejador o componente nombra su punto de entrada.",
         },
       ],
@@ -277,7 +276,7 @@ window.EXPLORER_ES = {
         },
         {
           title: "Exportar el snapshot",
-          body: "<p>git lista y streamea los archivos dentro del alcance; el lector confinado y el puerto de snapshot transportan los bytes sin ejecutar código del repositorio.</p>",
+          body: "<p>git lista y transmite los archivos dentro del alcance; el lector confinado y el puerto de snapshot transportan los bytes sin ejecutar código del repositorio.</p>",
           calloutText: "El snapshot es un export, no el checkout.",
         },
         {
@@ -287,7 +286,7 @@ window.EXPLORER_ES = {
         },
         {
           title: "Construir el fact del mapa",
-          body: "<p>La sección de puntos de entrada se convierte en un fact. Los cortes del export y los ítems unknown deciden si el mapa es complete, partial o unknown.</p>",
+          body: "<p>La sección de puntos de entrada se convierte en un fact. Los cuts del export y los ítems unknown deciden si el mapa es complete, partial o unknown.</p>",
           calloutText: "El fact del mapa declara su propia completitud.",
         },
       ],
@@ -308,13 +307,13 @@ window.EXPLORER_ES = {
         },
         {
           title: "Recorrer desde el objetivo pedido",
-          body: "<p>El símbolo pedido siembra cada nodo sembrable cuya ruta de contención con puntos termina en él (un nombre suelto a cualquier profundidad, <code>A.m</code> solo un miembro de <code>A</code>); un rango pedido siembra como las líneas añadidas de un archivo sin cambios. Después el recorrido sube inverso.</p>",
+          body: "<p>El símbolo pedido siembra cada nodo sembrable cuya ruta de contención con puntos termina en él (un nombre suelto a cualquier profundidad, <code>A.m</code> solo un miembro de <code>A</code>); un rango pedido siembra como las líneas añadidas de un archivo sin cambios. Después el recorrido sube en sentido inverso.</p>",
           calloutText: "Un símbolo pedido es una semilla con base requested.",
         },
         {
           title: "Unir y firmar el fact",
-          body: "<p>Los manejadores y guardas alcanzados se unen a puntos de entrada, y el fact reporta sus cortes. Un símbolo desconocido es un fallo tipado que lista lo que declara el archivo.</p>",
-          calloutText: "La respuesta es un fact con estado, no una lista pelada.",
+          body: "<p>Los manejadores y guardas alcanzados se unen a puntos de entrada, y el fact reporta sus cuts. Un símbolo desconocido es un fallo tipado que lista lo que declara el archivo.</p>",
+          calloutText: "La respuesta es un fact con estado, no una lista sin contexto.",
         },
       ],
     },
@@ -349,8 +348,8 @@ window.EXPLORER_ES = {
           calloutText: "Los nombres dicen qué clones leer a continuación.",
         },
         {
-          title: "Nombres hacia afuera y sitio de llamadas",
-          body: "<p>La configuración, los archivos de build y los remotes declaran nombres que el código escribe hacia afuera. Los sitio de llamadas nombran lo que llaman; ambos alimentan al reader de workspace.</p>",
+          title: "Nombres hacia afuera y sitios de llamada",
+          body: "<p>La configuración, los archivos de build y los remotes declaran nombres que el código escribe hacia afuera. Los sitios de llamada nombran lo que llaman; ambos alimentan al reader de workspace.</p>",
           calloutText: "Sin red: un nombre que nada sirve es una respuesta explícita.",
         },
         {
@@ -371,7 +370,7 @@ window.EXPLORER_ES = {
       steps: [
         {
           title: "La petición",
-          body: "<p><code>ye-ast init --trust trusted|untrusted</code> escribe una declaración fuera del repositorio y prepara las carpetas propias de ye-ast.</p>",
+          body: "<p><code>ye-ast init --trust trusted|untrusted</code> escribe una declaración fuera del repositorio y prepara las carpetas propias de ye-AST.</p>",
           calloutText: "Install es un caso de uso con su propia superficie de escritura.",
         },
         {
@@ -380,13 +379,13 @@ window.EXPLORER_ES = {
           calloutText: "El trust se declara fuera del contenido del repositorio.",
         },
         {
-          title: "Excluir las carpetas de ye-ast",
+          title: "Excluir las carpetas de ye-AST",
           body: "<p>El exclude local gana <code>.ye-ast/</code> y <code>.ye-ast-graph/</code>, así los archivos del motor nunca entran en un snapshot.</p>",
           calloutText: "El exclude se escribe en el archivo local de git.",
         },
         {
           title: "Escribir la capa fija",
-          body: "<p>La capa fija se escribe bajo <code>.ye-ast/</code> desde el mapa de puntos de entrada. Es el almacén propio de ye-ast; no se toca código fuente del repositorio.</p>",
+          body: "<p>La capa fija se escribe bajo <code>.ye-ast/</code> desde el mapa de puntos de entrada. Es el almacén propio de ye-AST; no se toca código fuente del repositorio.</p>",
           calloutText: "La capa aplica solo los patrones de redaction.",
         },
       ],
@@ -402,7 +401,7 @@ window.EXPLORER_ES = {
         },
         {
           title: "Copiar el working tree",
-          body: "<p>git lista las rutas; ye-ast las copia y hashea en su mirror. El grafo lee el mirror, nunca el checkout.</p>",
+          body: "<p>git lista las rutas; ye-AST las copia y calcula su hash en su mirror. El grafo lee el mirror, nunca el checkout.</p>",
           calloutText: "Un fact live describe los bytes del mirror.",
         },
         {
@@ -412,7 +411,7 @@ window.EXPLORER_ES = {
         },
         {
           title: "Construir el fact live",
-          body: "<p>El snapshot live lleva un <code>stateId</code> y un origen del índice. Después de la respuesta, un chequeo solo de stat reporta staleness sin cambiar el fact.</p>",
+          body: "<p>El snapshot live lleva un <code>stateId</code> y un origen del índice. Después de la respuesta, una comprobación solo de stat reporta staleness sin cambiar el fact.</p>",
           calloutText: "stateId es el digest del content fingerprint live.",
         },
       ],
@@ -441,13 +440,13 @@ window.EXPLORER_ES = {
         },
         {
           title: "Conectar solo lo que coincide",
-          body: "<p>Las cinco reglas de conexión (handler-declaration, reached-handler, change-dependent, shared-file-import, shared-support) se derivan solo entre lecturas con el mismo esquema, productor, trust, engines, workspace y snapshot. Si no, la respuesta reporta un problema de cobertura context-mismatch o snapshot-difference.</p>",
+          body: "<p>Las siete reglas de conexión (handler-declaration, reached-handler, linked-entrypoint, change-dependent, shared-file-import, used-import, shared-support) se derivan solo entre lecturas con el mismo esquema, productor, trust, engines, workspace y snapshot. shared-file-import y shared-support solo repiten una observación exacta, así que también aceptan otra versión del mismo productor. Si no, la respuesta reporta un problema de cobertura context-mismatch o snapshot-difference.</p>",
           why: "Unir lecturas tomadas en condiciones distintas inventaría enlaces. La evidencia compartida significa el mismo lugar, nunca causalidad, y una discrepancia se reporta en vez de ocultarse.",
           calloutText: "Una conexión es un lugar compartido, no una prueba de causa.",
         },
         {
           title: "Recibo y verificación",
-          body: "<p>La respuesta lleva una identidad de verificación (<code>mcp-c1</code>) y las peticiones que se pueden repetir. Envíalas de vuelta con <code>expect</code> y ye-ast comprueba que la composición no cambió; si un contexto no se puede verificar, el recibo dice por qué.</p>",
+          body: "<p>La respuesta lleva una identidad de verificación (<code>mcp-c1</code>) y las peticiones que se pueden repetir. Envíalas de vuelta con <code>expect</code> y ye-AST comprueba que la composición no cambió; si un contexto no se puede verificar, el recibo dice por qué.</p>",
           why: "Una composición solo vale la pena reutilizarla si se puede comprobar después. Una identidad y peticiones de repetición seguras convierten eso en una comparación, no en un acto de confianza.",
           calloutText: "La verificación es explícita: disponible, o no disponible con una razón.",
         },

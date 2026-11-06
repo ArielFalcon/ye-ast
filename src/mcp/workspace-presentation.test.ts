@@ -111,7 +111,7 @@ test("a workspace summary keeps the link list when it is shorter than the counts
 test("unresolved diagnostics stay compact in summaries and retain causal evidence in details", () => {
   const sites = [
     { path: "src/Calls.java", line: 4, symbol: "Calls.send", transport: "event", reason: "unresolved", evidence: [{ path: "src/Calls.java", line: 4 }], diagnostic: { cause: "source-not-read", source: "not-read" }, via: "com.acme.Messenger" },
-    { path: "src/Calls.java", line: 8, symbol: "Calls.load", transport: "http", reason: "unresolved", evidence: [{ path: "src/Calls.java", line: 8 }, { path: "(library)/0/Client.java", line: 12 }], diagnostic: { cause: "destination-undecidable", source: "read" }, via: "com.acme.RestClient" },
+    { path: "src/Calls.java", line: 8, symbol: "Calls.load", transport: "http", reason: "unresolved", evidence: [{ path: "src/Calls.java", line: 8 }, { path: "(library)/lib/Client.java", line: 12 }], diagnostic: { cause: "destination-undecidable", source: "read", alternatives: ["https://images.example"] }, via: "com.acme.RestClient" },
     { path: "src/Calls.java", line: 10, symbol: "Calls.dispatch", transport: "http", reason: "unresolved", evidence: [], diagnostic: { cause: "dispatch-disagreement" } },
     { path: "src/Calls.java", line: 11, symbol: "Calls.loop", transport: "http", reason: "unresolved", evidence: [], diagnostic: { cause: "recursive" } },
     { path: "src/Calls.java", line: 12, symbol: "Calls.bad", transport: "http", reason: "source-unreadable", evidence: [] },
@@ -128,5 +128,17 @@ test("unresolved diagnostics stay compact in summaries and retain causal evidenc
   assert.doesNotMatch(summary, /Client.java:12|source-not-read|destination-undecidable/);
   assert.match(details, /unresolved\/source-not-read.*not-read/);
   assert.match(details, /unresolved\/destination-undecidable.*read/);
-  assert.match(details, /\(library\)\/0\/Client.java:12/);
+  assert.match(details, /\(library\)\/lib\/Client.java:12/);
+  assert.match(details, /Calls.load .*chosen at run time, declared alternatives: https:\/\/images\.example/);
+  assert.doesNotMatch(summary, /images\.example/);
+});
+
+test("dependency ambiguity remains visible with its candidates in both workspace text modes", () => {
+  const cut = { kind: "unresolved-link", reason: "unresolved", at: ["pom.xml", "pom.xml:4"], dependency: { name: "com.acme:clients", reason: "ambiguous", candidates: ["one", "two"] } };
+  const value = { workspace: { repos: ["a"], source: "request" }, repositorySnapshots: [{ repo: "a", snapshot: base.snapshot }], sections: { a: { ...base, status: "partial", cuts: [cut], value: { names: [], unresolved: [] } } }, candidates: [], links: [], unlinked: [], unserved: [] };
+  for (const mode of ["summary", "details"] as const) {
+    const text = renderWorkspace({ ...base, status: "complete", value } as never, mode);
+    assert.match(text, /com.acme:clients.*ambiguous.*one, two/);
+    if (mode === "details") assert.match(text, /pom.xml.*4/);
+  }
 });

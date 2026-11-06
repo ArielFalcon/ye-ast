@@ -98,7 +98,9 @@ question an agent asks after `impact` names twelve files, and it is the one no q
   such edge places (a route or a configuration binding a framework reader adds) stays at the top level even when its span
   lies inside another declaration's. A Java member sits under its class and the class under the file's package
   declaration, because that is what the graph records; a construct the extractor does not emit, such as a Java `record`,
-  leaves its members under the nearest container it does emit.
+  leaves its members under the nearest container it does emit. ye-ast's own Java grammar finds such a file, listed or
+  focused, and the answer carries a `no-extractor` cut at it, so a misplaced listing never reads as complete; a focus
+  reads only its focused files to find it.
 - **It carries no file length and no silent elision.** A file's length needs a source read the projection does not do,
   and the caller gets it from the read it makes anyway. The listing names every declaration, so it has nothing to omit
   and no budget; a large file answers a large outline, which is still a fraction of the file, and the rule of section 1
@@ -245,7 +247,7 @@ ones the literal selectors return.
 |---|---|---|
 | 1 | A new tool, or a parameter on an existing one? `odd/tasks/mcp-latency-and-size.md` L2 chose a parameter (`expand`) over a tool, because the same fact selected differently needs no server-held handle | A new tool: `expand` selects *more of the same fact*, while an outline answers *a different fact* about a different subject (a file, not a symbol). One tool per question is what the existing names already do (`impact`, `callers`, `importers`) |
 | 2 | Does the tool take explicit `files`, or a `scope`? | Explicit `files`, resolved through the same `scope` as the other tools, because the caller's file list comes from an answer it already has |
-| 3 | Does the outline list imports at all, or only declarations? | Settled by the amendment: yes, as repo-relative files resolved from the graph's `imports` edges. A package outside the repository is not an edge, and the caller sees those by reading the header it already has |
+| 3 | Does the outline list imports at all, or only declarations? | Settled by the amendment: yes. Superseded by the [outline references plan](../../superpowers/plans/2026-11-06-outline-references.md) (D1): each module statement is read from the syntax with the names it binds, its target comes from the module resolver (a repository file, a package, or unresolved with its reason), and the graph `imports` edge at a binding's position only adds the declaration it reaches |
 | 4 | Does the rule of section 1 also apply to `structuredContent`? | No: the rule compares alternatives within one text projection, not text against structured JSON; clients may expose both channels |
 | 5 | Should one release also answer an outline for a line range? | No. Two request shapes over the same fact before one measurement exists is the complexity this RFC refuses |
 | 6 | Is a counted block ever allowed to exceed the full answer when the count is large? | Never: the rule has no exception. If the full body is shorter, the full body is the correct answer |

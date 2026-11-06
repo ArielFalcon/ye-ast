@@ -15,12 +15,13 @@ import type { Relation } from "../../domain/relations/relation.ts";
 import type { MemberUseOrigin } from "../../domain/relations/member-use.ts";
 import { isExtractorConfiguration } from "../../domain/languages/configuration.ts";
 import { isAngularTemplate, isJsonModuleResource, isTypeScriptFile, isTypeScriptSource } from "../../domain/languages/typescript.ts";
+import { isJavaSource } from "../../domain/languages/java.ts";
 import { moduleImpact, moduleResources } from "../../domain/impact/module-impact.ts";
 import type { ModuleDependencies } from "../../domain/impact/module-dependency.ts";
 import type { ModuleDependenciesReader } from "../../ports/module-dependencies.port.ts";
 import { cutsCompleteness } from "../../domain/languages/uncovered.ts";
 import { comparePosition, compareText } from "../../domain/shared/code-node.ts";
-import { selectedBySymbol } from "../../domain/shared/declaration-tree.ts";
+import { branchesOf, declarationPath, selectedBySymbol, type DeclarationBranch } from "../../domain/shared/declaration-tree.ts";
 import type { Entrypoint } from "../../domain/entrypoints/entrypoint.ts";
 import { declarationSpan, sortedEngines, type Cut, type DeclaredConfig, type Evidence, type Fact, type FactBase, type Finding, type IndexOrigin, type SnapshotRef, type TrustMode, type UnknownFact } from "../../domain/shared/fact.ts";
 import { exportSelection, pathSelection, sortedGlobs, type PathSelection, type ScopeRequest } from "../../domain/shared/scope.ts";
@@ -47,8 +48,10 @@ import { memberProofContextOf, referenceProofsOf, sourceFilesOf, type ReferenceP
 import { walkImpact } from "./walk.ts";
 import type { ImportOriginsReader } from "../../ports/import-origins.port.ts";
 import type { ContractRoutes } from "../../ports/contract-routes.port.ts";
-import { containmentTree } from "../outline/outline.ts";
+import { containmentTree } from "../navigation/containment-tree.ts";
 import { prepareCommit } from "../snapshot/prepared-snapshot.ts";
+import type { UnmodelledConstructsReader } from "../../ports/unmodelled-constructs.port.ts";
+import { unmodelledNote } from "../../domain/shared/unmodelled.ts";
 
 export interface ImpactQueriesDeps extends HeadReaderDeps {
   /** The walk reads the change between two revisions, which no other family asks for. */
@@ -69,6 +72,8 @@ export interface ImpactQueriesDeps extends HeadReaderDeps {
   importOrigins?: ImportOriginsReader;
   moduleDependencies?: ModuleDependenciesReader;
   declarationEvidence?: DeclarationEvidenceReader;
+  /** The changed or targeted files whose declarations the graph cannot place; without it no such file is cut. */
+  unmodelled?: UnmodelledConstructsReader;
 }
 
 type Answer = Result<Fact<ImpactValue>, OfChangeFault>;
@@ -88,7 +93,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
   const moduleSource = deps.moduleDependencies === undefined ? isInMapScope : isWritten;
   const changeDeps = { ...deps, sourceSelection: moduleSource };
   const changeReader = createHeadReader(changeDeps);
-  const importerSource = (file: string): boolean => moduleSource(file) || isTypeScriptFile(file);
+  const importerSource = (file: string): boolean => moduleSource(file) || isTypeScriptFile(file) || isJavaSource(file);
   const importerReader = createHeadReader({ ...deps, sourceSelection: importerSource });
 
   return {
@@ -131,10 +136,12 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
           if (signal?.aborted) return ABORTED;
           const proofs = await referenceProofsOf(deps.importOrigins, store, headTree, request.signal);
           if (signal?.aborted) return ABORTED;
-          const read = impactOf({ store, changes, requested, componentsByResource, found, fields, locals, memberUses, loads, headTree, summary, budget: request.budget ?? {}, proofs });
+          const unmodelled = await unmodelledIn(deps, headTree, [...changes.map(({ path }) => path), ...requested.map(({ file }) => file)]);
+          if (signal?.aborted) return ABORTED;
+          const read = impactOf({ store, changes, requested, componentsByResource, found, fields, locals, memberUses, loads, headTree, summary, budget: request.budget ?? {}, proofs, unmodelled });
           if (read.missing.length > 0) {
             const names = read.missing.map(({ file, symbol }) => `${file}:${symbol}`).join(", ");
-            return { ok: false, fault: { kind: "unknown-symbol", detail: `no symbol at the revision for ${names}`, entries: read.missing } };
+            return { ok: false, fault: { kind: "unknown-symbol", detail: `no symbol at the revision for ${names}${unmodelledNote(read.missing, unmodelled)}`, entries: read.missing } };
           }
           return { ok: true, value: impactFact(head.base(content, true), read.value, [...fixed, ...read.cuts]) };
         } finally {
@@ -365,8 +372,9 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
         const retained = validated.get(file.path);
         return retained === undefined ? file : { ...file, removedNames: file.removedNames.filter((name) => retained.has(name)) };
       });
+      const unmodelled = await unmodelledIn(deps, headTree, validatedChanges.filter((file) => !file.deleted).map(({ path }) => path));
       if (signal?.aborted) return ABORTED;
-      const read = impactOf({ store, changes: validatedChanges, requested: [], componentsByResource, found, fields, locals, memberUses, loads, headTree, summary, budget: request.budget ?? {}, proofs });
+      const read = impactOf({ store, changes: validatedChanges, requested: [], componentsByResource, found, fields, locals, memberUses, loads, headTree, summary, budget: request.budget ?? {}, proofs, unmodelled });
       return { ok: true, value: impactFact(head.base(content, true), { ...value, ...read.value }, [...unaccounted([...fixed, ...read.cuts]), ...moduleCuts]) };
     } finally {
       store.close();
@@ -411,9 +419,16 @@ function rangeChanges(targets: readonly CallersTarget[]): FileChange[] {
     .sort((a, b) => compareText(a.path, b.path));
 }
 
-/** What a file declares that a request can seed, so a symbol that names no node tells the caller what does. */
-function candidatesOf(symbols: readonly GraphSymbol[]): string[] {
-  return [...new Set(symbols.filter(isSeedable).map((symbol) => symbol.name))].sort(compareText);
+/** The dotted paths of what a file declares that a request can seed, so a symbol that names no node tells the caller what does. */
+function candidatesOf(tree: readonly DeclarationBranch<GraphSymbol>[]): string[] {
+  return [...new Set(branchesOf(tree).filter(({ declaration }) => isSeedable(declaration)).map(declarationPath))].sort(compareText);
+}
+
+/** Which of `files` the graph cannot place, read from the head's own sources of those files only. */
+async function unmodelledIn(deps: ImpactQueriesDeps, headTree: CommitExtraction, files: readonly string[]): Promise<readonly string[]> {
+  if (deps.unmodelled === undefined) return [];
+  const asked = new Set(files);
+  return deps.unmodelled.extract(headTree.sources.filter(({ path }) => asked.has(path)));
 }
 
 interface WalkInput {
@@ -433,6 +448,8 @@ interface WalkInput {
   headTree: CommitExtraction;
   summary: Pick<IndexSummary, "filesNotIndexed">;
   budget: ImpactBudget;
+  /** The changed or targeted files whose declarations the graph cannot place. */
+  unmodelled: readonly string[];
   /** The two proofs the head's own imports make: what is outside the repository, and what a bare name binds to. */
   proofs?: ReferenceProofs;
 }
@@ -452,7 +469,7 @@ function impactOf(input: WalkInput): ImpactRead {
   const symbolsByFile = Map.groupBy(symbols, (symbol) => symbol.file);
   const trees = new Map([...new Set(requested.map(({ file }) => file))].map((file) => [file, containmentTree(store, symbolsByFile.get(file) ?? [])]));
   const asked = requested.map((target) => ({ target, found: selectedBySymbol(trees.get(target.file) ?? [], target.symbol).map(({ declaration }) => declaration).filter(isSeedable) }));
-  const missing = asked.filter(({ found: nodes }) => nodes.length === 0).map(({ target }) => ({ ...target, candidates: candidatesOf(symbolsByFile.get(target.file) ?? []) }));
+  const missing = asked.filter(({ found: nodes }) => nodes.length === 0).map(({ target }) => ({ ...target, candidates: candidatesOf(trees.get(target.file) ?? []) }));
   if (missing.length > 0) return { value: { seeds: [], symbols: [], entrypoints: [], cost: { expansionsUsed: 0 } }, cuts: [], missing };
 
   const selection = selectSeeds({ files: changes }, symbolsByFile, componentsByResource);
@@ -461,7 +478,7 @@ function impactOf(input: WalkInput): ImpactRead {
   const seeds = chosen.toSorted((a, b) => comparePosition(a.symbol, b.symbol));
   const sourceFiles = sourceFilesOf(headTree);
   const unresolved = store.unresolvedReferences(sourceFiles);
-  const inbound = inboundEdgesOf(store, { relations: found, fields, locals, memberUses }, input.proofs?.validOccurrences);
+  const inbound = inboundEdgesOf(store, { relations: found, fields, locals, memberUses }, input.proofs);
   const walk = walkImpact(seeds.map(({ symbol }) => symbol), inbound, input.budget);
 
   const walked = walk.reached.map(({ symbol }) => symbol);
@@ -477,6 +494,7 @@ function impactOf(input: WalkInput): ImpactRead {
     ...unreadRelationCuts(unread, new Set(walked.map((symbol) => symbol.file)), templateOwners(componentsByResource)),
     ...summary.filesNotIndexed.map((file): Cut => ({ kind: "no-extractor", at: [file] })),
     ...selection.withoutSymbols.map((file): Cut => ({ kind: "no-extractor", at: [file] })),
+    ...input.unmodelled.map((file): Cut => ({ kind: "no-extractor", at: [file] })),
   ];
   const value = {
     cost: walk.cost,

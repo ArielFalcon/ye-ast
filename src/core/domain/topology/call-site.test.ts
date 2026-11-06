@@ -27,7 +27,7 @@ test("an unresolved call site keeps the library it goes through and drops a span
 });
 
 test("unresolved discovery retains the typed reason, diagnostic and every causal evidence span", () => {
-  const evidence = [{ path: "src/app/order.api.ts", line: 4 }, { path: "(library)/0/Client.java", line: 12 }];
+  const evidence = [{ path: "src/app/order.api.ts", line: 4 }, { path: "(library)/lib/Client.java", line: 12 }];
   const diagnostic = { cause: "recursive" as const, source: "read" as const };
   const result = unresolvedCallSite(site({ diagnostic, target: { status: "unknown", reason: "source-unreadable", evidence } }));
   assert.equal(result.reason, "source-unreadable");

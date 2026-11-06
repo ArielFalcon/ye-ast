@@ -8,7 +8,7 @@ import type { CodeGraph } from "../core/ports/code-graph.port.ts";
 import type { EntrypointQueries } from "../core/ports/entrypoint-queries.port.ts";
 import type { ImpactQueries } from "../core/ports/impact-queries.port.ts";
 import { REDACTED, type Redaction } from "../core/ports/redaction.port.ts";
-import { measuredEntrypoints, measuredGraph, measuredImpact, measuredOutline } from "./measurement.ts";
+import { measuredEntrypoints, measuredGraph, measuredImpact, measuredOutline, measuredStages } from "./measurement.ts";
 
 const SECRET = "s3cr3t";
 const SHA = "a".repeat(40);
@@ -203,4 +203,64 @@ test("an outline query emits its own query line", async () => {
   await measuredOutline(queries, { sink, redaction }).outline({ repo: "/work/shop", repoId: "shop", files: [] } as never);
 
   assert.equal(recordOf(lines[0]).method, "outline");
+});
+
+test("a mirror sync reports synced, so a host never mistakes an incremental sync for a full build", async () => {
+  const { lines, sink } = collecting();
+  const summary = { filesIndexed: 1, filesSkipped: 0, filesErrored: 0, filesNotIndexed: [], versions: { codegraph: "1.6.2", schema: 11, extraction: 27 } };
+  const graph: CodeGraph = {
+    index: async () => ({ ok: false, fault: { kind: "index-failed", detail: "" } }),
+    open: () => ({ ok: false, fault: { kind: "unsupported-store", detail: "" } }),
+    buildMirror: async () => ({ ok: true, value: summary }),
+    syncMirror: async () => ({ ok: true, value: { ...summary, filesFailed: [] } }),
+  };
+
+  await measuredGraph(graph, { sink, redaction }).syncMirror("/mirror", ["src/a.ts"]);
+
+  assert.equal(recordOf(lines[0]).event, "index");
+  assert.equal(recordOf(lines[0]).outcome, "synced");
+});
+
+test("opening a store writes a stage line with the fault it answered", () => {
+  const { lines, sink } = collecting();
+  const graph: CodeGraph = {
+    index: async () => ({ ok: false, fault: { kind: "index-failed", detail: "" } }),
+    open: () => ({ ok: false, fault: { kind: "unsupported-store", detail: "" } }),
+    buildMirror: async () => ({ ok: false, fault: { kind: "index-failed", detail: "" } }),
+    syncMirror: async () => ({ ok: false, fault: { kind: "index-failed", detail: "" } }),
+  };
+
+  measuredGraph(graph, { sink, redaction }).open("/store");
+
+  const record = recordOf(lines[0]);
+  assert.equal(record.event, "stage");
+  assert.equal(record.stage, "store-open");
+  assert.equal(record.outcome, "unsupported-store");
+});
+
+test("a staged port writes one line per named method once it settles, and none for the others", async () => {
+  const { lines, sink } = collecting();
+  let release: (value: string[]) => void = () => undefined;
+  const port = { extract: () => new Promise<string[]>((resolve) => (release = resolve)), other: async () => 1 };
+
+  const staged = measuredStages(port, { extract: "relations" }, { sink, redaction });
+  const pending = staged.extract();
+  assert.equal(lines.length, 0);
+  release(["a"]);
+  assert.deepEqual(await pending, ["a"]);
+  await staged.other();
+
+  assert.equal(lines.length, 1);
+  assert.equal(recordOf(lines[0]).stage, "relations");
+  assert.equal(recordOf(lines[0]).outcome, "ok");
+});
+
+test("a query line carries the process CPU the call spent and the memory it left", async () => {
+  const { lines, sink } = collecting();
+  await measuredEntrypoints(entrypointsOf(fact("complete")), { sink, redaction }).map({ repo: "/work/shop", repoId: "shop", revision: "HEAD" });
+
+  const record = recordOf(lines[0]);
+  assert.equal(typeof record.cpu_ms, "number");
+  assert.ok((record.rss_bytes as number) > 0);
+  assert.ok((record.heap_used_bytes as number) > 0);
 });

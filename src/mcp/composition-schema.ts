@@ -84,7 +84,7 @@ const relationValue = z.discriminatedUnion("kind", [
 const relationRecord = z.strictObject({ id: ids.relation, value: relationValue, attestations: z.array(attestation).min(1) });
 const connection = z.strictObject({
   id: ids.connection,
-  rule: z.enum(["handler-declaration", "change-dependent", "reached-handler", "shared-file-import", "shared-support"]),
+  rule: z.enum(["handler-declaration", "change-dependent", "reached-handler", "linked-entrypoint", "shared-file-import", "used-import", "shared-support"]),
   parts: z.array(ids.part), relations: z.array(ids.relation), supports, entities: z.array(ids.entity).exactOptional(),
 }).refine((value) => value.parts.length + value.relations.length > 0, { message: "a connection references parts or relations" });
 

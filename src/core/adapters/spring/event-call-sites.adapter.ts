@@ -1,12 +1,12 @@
 import type { UrlScope } from "./java-values.ts";
-import { agreed, JavaMethodFlow } from "./java-method-flow.ts";
+import { agreed, JavaMethodFlow, reachedDiagnostic } from "./java-method-flow.ts";
 import type { Node } from "web-tree-sitter";
 import { compareText } from "../../domain/shared/code-node.ts";
 import type { Evidence, Finding } from "../../domain/shared/fact.ts";
 import type { CallSite, CallSiteDiagnostic, EventTarget } from "../../domain/topology/call-site.ts";
 import type { Configuration } from "./application-config.ts";
 import { EVENT_CLIENT_NAME, PUBLISH_CLIENTS, PUBLISH_METHOD_NAME, type PublishClient } from "./event-vocabulary.ts";
-import { complete, spanOf, unknown, unknownAtNode, withEvidence } from "./findings.ts";
+import { complete, spanOf, unknown, withEvidence } from "./findings.ts";
 import { argumentsOf, typeNameOf } from "./java-members.ts";
 import { ancestorsOf, receiverOf, symbolOf, type Invocation } from "./java-invocations.ts";
 import { qualifiedTypeName, scopeOf, type JavaFile, type JavaProject, type TypeDecl } from "./java-symbols.ts";
@@ -51,12 +51,15 @@ export class JavaEventReader {
         for (const group of expanded) {
           const alternatives = group.map(({ leaf, scope }) => this.target(leaf, scope));
           const agreedTarget = agreed(alternatives, ({ target }) => target.status === "unknown" ? target.status : target.value);
-          const target = agreedTarget?.target ?? unknownAtNode(invocation.type.file.path, invocation.node);
-          const library = group.find(({ leaf }) => !this.owned.has(leaf.invocation.type.file))?.leaf.invocation.type;
-          const cause = group.some(({ scope }) => scope.undecidedCause === "recursive") || alternatives.some(({ diagnostic }) => diagnostic?.cause === "recursive") ? "recursive"
-            : group.some(({ scope }) => scope.undecided === true) || agreedTarget === undefined || alternatives.some(({ diagnostic }) => diagnostic?.cause === "dispatch-disagreement") ? "dispatch-disagreement" : "destination-undecidable";
-          const causal = target.status === "unknown" ? unknown(target.reason, [...target.evidence, ...alternatives.flatMap(({ target }) => target.evidence), ...group.map(({ leaf }) => spanOf(leaf.invocation.type.file.path, leaf.invocation.node))]) : target;
-          found.push(this.siteOf(repo, invocation, causal, target.status === "unknown" ? { cause, ...(library === undefined ? {} : { source: "read" }) } : undefined));
+          const target = agreedTarget?.target;
+          if (target !== undefined && target.status !== "unknown") {
+            found.push(this.siteOf(repo, invocation, target));
+            continue;
+          }
+          const library = group.find(({ leaf }) => !this.owned.has(leaf.invocation.type.file))?.leaf.invocation.type.fqn;
+          const span = spanOf(invocation.type.file.path, invocation.node);
+          const causal = unknown(target?.status === "unknown" ? target.reason : "unresolved", [library === undefined ? span : { ...span, via: library }, ...alternatives.flatMap(({ target }) => target.evidence), ...group.map(({ leaf }) => spanOf(leaf.invocation.type.file.path, leaf.invocation.node))]);
+          found.push(this.siteOf(repo, invocation, causal, reachedDiagnostic(alternatives.map(({ diagnostic }) => diagnostic), agreedTarget !== undefined, library !== undefined)));
         }
       } else {
         const library = this.libraryOf(invocation);
@@ -106,7 +109,7 @@ export class JavaEventReader {
     return evaluated.value === undefined
       ? {
           target: unknown("unresolved", [spanOf(publish.invocation.type.file.path, publish.invocation.node), ...evaluated.evidence]),
-          diagnostic: { cause: scope.undecidedCause ?? evaluated.cause ?? "destination-undecidable" },
+          diagnostic: { cause: scope.undecidedCause ?? evaluated.cause ?? "destination-undecidable", ...(evaluated.alternatives.length === 0 ? {} : { alternatives: evaluated.alternatives }) },
         }
       : { target: complete({ protocol: publish.client.protocol, destination: evaluated.value, role: "publish" }) };
   }

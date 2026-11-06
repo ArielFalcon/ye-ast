@@ -1,3 +1,4 @@
+import { dependencyDiagnostic } from "./dependency-schema.ts";
 /**
  * Closed runtime schemas of the domain values a composition carries: shared fact fields, snapshot and
  * read owners, and every `Part` variant. Private to composition-schema.ts; every object is strict and every optional
@@ -25,6 +26,7 @@ export const cut = z.strictObject({
   kind: z.enum(["depth", "hub", "caller-budget", "node-cap", "unresolved-link", "deadline", "section", "not-exported", "no-extractor"]),
   at: strings,
   reason: unknownReason.exactOptional(),
+  dependency: dependencyDiagnostic.exactOptional(),
   limit: z.number().exactOptional(),
 });
 export const snapshotRef = z.discriminatedUnion("kind", [
@@ -124,6 +126,7 @@ export const callSiteDiagnostic = z.strictObject({
   cause: z.enum(CALL_SITE_CAUSES),
   source: z.enum(["not-read", "read"]).exactOptional(),
   unreadableSources: z.array(evidenceValue).exactOptional(),
+  alternatives: z.array(z.string()).exactOptional(),
 });
 export const unresolvedCallSiteSchema = z.strictObject({
   path: z.string(), line: int, endLine: int.exactOptional(), symbol: z.string(), transport,
@@ -170,6 +173,26 @@ const decisionOption = z.strictObject({
 const fileCategory = z.enum(["importers", "reexporters", "dynamicImporters", "typeImporters", "users", "unresolvedNamers"]);
 const fileDependencyCategory = z.enum(["importer", "reexporter", "dynamic-importer", "type-importer", "user", "unresolved-namer", "outline-import"]);
 
+const outlineImport = z.strictObject({
+  line: int,
+  endLine: int,
+  specifier: z.string().exactOptional(),
+  kind: z.enum(["import", "reexport"]),
+  form: z.enum(["dynamic-import", "type-query", "require", "import-equals"]).exactOptional(),
+  typeOnly: z.boolean(),
+  target: z.discriminatedUnion("kind", [
+    z.strictObject({ kind: z.literal("repository"), dependency: ids.part }),
+    z.strictObject({ kind: z.literal("external"), module: z.string() }),
+    z.strictObject({ kind: z.literal("unresolved"), reason: z.string() }),
+  ]),
+  bindings: z.array(z.strictObject({
+    local: z.string().exactOptional(),
+    imported: z.string(),
+    typeOnly: z.literal(true).exactOptional(),
+    declaration: z.strictObject({ anchor: ids.anchor, kindName: z.string() }).exactOptional(),
+  })),
+});
+
 const part = <K extends string, S extends z.ZodRawShape>(kind: K, shape: S) =>
   z.strictObject({ kind: z.literal(kind), id: ids.part, supports, ...shape });
 
@@ -193,7 +216,7 @@ export const partSchema = z.discriminatedUnion("kind", [
   part("file-dependency", { from: ids.file, to: ids.file, category: fileDependencyCategory }),
   part("file-query", { file: ids.file, categories: z.array(z.strictObject({ name: fileCategory, collection: recordedCollectionState })) }),
   part("outline-declaration", { anchor: ids.anchor, kindName: z.string(), children: z.array(ids.part).exactOptional() }),
-  part("outline-file", { file: ids.file, declarations: z.array(ids.part), imports: z.array(ids.part) }),
+  part("outline-file", { file: ids.file, declarations: z.array(ids.part), imports: z.array(outlineImport) }),
   part("unheld-file", { file: ids.file }),
   part("outward-name", { origin: evidenceOrigin, name: z.string(), kindName: outwardKind, evidence: evidenceList, disposition: z.enum(["stated", "unserved"]) }),
   part("name-candidate", { context: ids.read, name: z.string(), repo: z.string(), basis: candidateBasis, evidence: evidenceList }),

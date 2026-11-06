@@ -13,6 +13,11 @@ test("an Angular template is in the map's scope, so the export writes it for the
   assert.equal(isInMapScope("docs/notes.md"), false);
 });
 
+test("a JVM test source is outside the map's scope, so no fact reads it; a main source is in", () => {
+  assert.equal(isInMapScope("src/test/java/app/OrderTest.java"), false);
+  assert.equal(isInMapScope("src/main/java/app/Order.java"), true);
+});
+
 test("an Angular workspace is in the map's scope, so the relation reader sees the sources it replaces at build time", () => {
   assert.equal(isInMapScope("angular.json"), true);
   assert.equal(isInMapScope("src/app/data.json"), false);

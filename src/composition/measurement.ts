@@ -50,21 +50,53 @@ export function measuredDecisions(queries: DecisionQueries, deps: MeasurementDep
 /** The index side of the graph, measured: a build is the one expensive event a session can hide. */
 export function measuredGraph(graph: CodeGraph, deps: MeasurementDeps): CodeGraph {
   return {
-    index: (snapshot, store, signal) => measuredBuild(() => graph.index(snapshot, store, signal), store, deps),
-    open: (store) => graph.open(store),
-    buildMirror: (mirror, signal) => measuredBuild(() => graph.buildMirror(mirror, signal), join(mirror, INDEX_STORE_DIRECTORY), deps),
-    syncMirror: (mirror, paths, signal) => measuredBuild(() => graph.syncMirror(mirror, paths, signal), join(mirror, INDEX_STORE_DIRECTORY), deps),
+    index: (snapshot, store, signal) => measuredBuild("built", () => graph.index(snapshot, store, signal), store, deps),
+    open: (store) => measuredStage("store-open", () => graph.open(store), deps),
+    buildMirror: (mirror, signal) => measuredBuild("built", () => graph.buildMirror(mirror, signal), join(mirror, INDEX_STORE_DIRECTORY), deps),
+    syncMirror: (mirror, paths, signal) => measuredBuild("synced", () => graph.syncMirror(mirror, paths, signal), join(mirror, INDEX_STORE_DIRECTORY), deps),
   };
 }
 
-/** One index line per build: `built` only when a store came out of it, the fault's own kind otherwise. */
-async function measuredBuild<T, F extends { kind: string }>(call: () => Promise<Result<T, F>>, store: string, deps: MeasurementDeps): Promise<Result<T, F>> {
+/**
+ * A port whose named methods each write one stage line: the readers a request runs over the whole snapshot, so a host
+ * can tell which of them its time went to. Lines carry no request id; under concurrent requests they interleave.
+ */
+export function measuredStages<T extends object>(port: T, stages: { readonly [K in keyof T]?: string }, deps: MeasurementDeps): T {
+  const measuredPort: T = Object.create(port);
+  for (const [method, stage] of Object.entries(stages) as [keyof T & string, string][]) {
+    const call = port[method];
+    if (typeof call !== "function") continue;
+    Object.defineProperty(measuredPort, method, { value: (...args: unknown[]) => measuredStage(stage, () => call.apply(port, args), deps) });
+  }
+  return measuredPort;
+}
+
+/** One stage line per call, synchronous or not: `ok`, `threw`, or the kind of the fault a result answered. */
+function measuredStage<T>(stage: string, call: () => T, deps: MeasurementDeps): T {
+  const started = performance.now();
+  const done = (outcome: string) => report({ event: "stage", stage, outcome, duration_ms: elapsed(started) }, deps);
+  let answer: T;
+  try {
+    answer = call();
+  } catch (error) {
+    done("threw");
+    throw error;
+  }
+  if (answer instanceof Promise) {
+    return answer.then((value: unknown) => { done(outcomeOf(value)); return value; }, (error: unknown) => { done("threw"); throw error; }) as T;
+  }
+  done(outcomeOf(answer));
+  return answer;
+}
+
+/** One index line per build or sync: `built` or `synced` only when a store came out of it, the fault's own kind otherwise. */
+async function measuredBuild<T, F extends { kind: string }>(succeeded: "built" | "synced", call: () => Promise<Result<T, F>>, store: string, deps: MeasurementDeps): Promise<Result<T, F>> {
   const started = performance.now();
   try {
     const result = await call();
     const buildMs = elapsed(started);
     const storeBytes = result.ok ? await bytesOf(store) : 0;
-    report({ event: "index", outcome: result.ok ? "built" : result.fault.kind, build_ms: buildMs, store_bytes: storeBytes }, deps);
+    report({ event: "index", outcome: result.ok ? succeeded : result.fault.kind, build_ms: buildMs, store_bytes: storeBytes }, deps);
     return result;
   } catch (error) {
     report({ event: "index", outcome: "threw", build_ms: elapsed(started) }, deps);
@@ -77,13 +109,15 @@ interface Measured {
   durationMs: number;
   outcome: string;
   answer: unknown;
+  cpu: NodeJS.CpuUsage;
 }
 
 async function measured<T>(method: string, call: () => Promise<T>, deps: MeasurementDeps): Promise<T> {
   const started = performance.now();
+  const cpuAtStart = process.cpuUsage();
   try {
     const answer = await call();
-    report(queryRecord({ method, durationMs: elapsed(started), outcome: outcomeOf(answer), answer }), deps);
+    report(queryRecord({ method, durationMs: elapsed(started), outcome: outcomeOf(answer), answer, cpu: process.cpuUsage(cpuAtStart) }), deps);
     return answer;
   } catch (error) {
     report({ event: "query", method, duration_ms: elapsed(started), outcome: "threw" }, deps);
@@ -91,8 +125,18 @@ async function measured<T>(method: string, call: () => Promise<T>, deps: Measure
   }
 }
 
-function queryRecord({ method, durationMs, outcome, answer }: Measured): Record<string, unknown> {
-  const record: Record<string, unknown> = { event: "query", method, duration_ms: durationMs, outcome, bytes: bytesOfAnswer(answer) };
+function queryRecord({ method, durationMs, outcome, answer, cpu }: Measured): Record<string, unknown> {
+  const memory = process.memoryUsage();
+  const record: Record<string, unknown> = {
+    event: "query",
+    method,
+    duration_ms: durationMs,
+    outcome,
+    bytes: bytesOfAnswer(answer),
+    cpu_ms: Math.round((cpu.user + cpu.system) / 1000),
+    rss_bytes: memory.rss,
+    heap_used_bytes: memory.heapUsed,
+  };
   const fact = factOf(answer);
   if (fact === undefined) return record;
   record.status = fact.status;

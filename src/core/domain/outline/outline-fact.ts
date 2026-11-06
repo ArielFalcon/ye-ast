@@ -1,3 +1,5 @@
+import type { ModuleTarget } from "../shared/module-target.ts";
+
 /** A declaration the outline names: its kind, its name, and the span a reader opens instead of the whole file. */
 export interface OutlineDeclaration {
   kind: string;
@@ -10,7 +12,32 @@ export interface OutlineDeclaration {
   children?: readonly OutlineDeclaration[];
 }
 
-/** The shape of one file: what it declares and which files it imports. */
+/** One name a module statement binds, and the declaration it reaches when that is proven. */
+export interface OutlineBinding {
+  /** The name the file uses (exposes, for a re-export); absent for `export *`. */
+  local?: string;
+  /** The exported name it takes: a name, `default`, or `*` for the module itself. */
+  imported: string;
+  typeOnly?: true;
+  /** The declaration the binding reaches, through re-exports; absent when it binds a module (`*`) or is not proven. */
+  declaration?: { file: string; name: string; kind: string; line: number; endLine: number };
+}
+
+/** One module statement or runtime module reference of a file, with where it leads and what it binds. */
+export interface OutlineImport {
+  line: number;
+  endLine: number;
+  /** The module as written; absent when a computed expression names it. */
+  specifier?: string;
+  kind: "import" | "reexport";
+  /** Absent for a static statement. */
+  form?: "dynamic-import" | "type-query" | "require" | "import-equals";
+  typeOnly: boolean;
+  target: ModuleTarget;
+  bindings: readonly OutlineBinding[];
+}
+
+/** The shape of one file: what it declares and what it imports. */
 export interface OutlineFile {
   file: string;
   /**
@@ -18,8 +45,8 @@ export interface OutlineFile {
    * no contains edge places inside a declaration of the file. Nesting comes from contains edges only, never from spans.
    */
   declarations: readonly OutlineDeclaration[];
-  /** Repo-relative files this one imports, sorted: a package outside the repository is not an edge of the graph. */
-  imports: readonly string[];
+  /** Every module statement and runtime module reference, in source order, each resolved or explicitly unresolved. */
+  imports: readonly OutlineImport[];
 }
 
 /** A container of a focused declaration, without the other declarations it holds. */

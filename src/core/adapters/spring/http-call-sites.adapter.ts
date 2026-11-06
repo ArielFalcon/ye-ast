@@ -1,5 +1,5 @@
 import type { UrlScope } from "./java-values.ts";
-import { agreed, JavaMethodFlow } from "./java-method-flow.ts";
+import { agreed, JavaMethodFlow, reachedDiagnostic } from "./java-method-flow.ts";
 import type { Node } from "web-tree-sitter";
 import type { HttpMethod } from "../../domain/entrypoints/http-route.ts";
 import type { Evidence, Finding } from "../../domain/shared/fact.ts";
@@ -77,17 +77,14 @@ export class JavaHttpReader {
       if (expanded !== undefined) {
         const targets = expanded.map((group): ReadTarget => {
           const alternatives = group.map(({ leaf, scope }) => this.target(leaf, scope));
-          const target = agreed(alternatives, (value) => value.target.status === "unknown" ? value.target.status : value.target.value)
-            ?? { target: unknownAtNode(invocation.type.file.path, invocation.node), diagnostic: { cause: "dispatch-disagreement" as const } };
-          if (target.target.status !== "unknown") return target;
-          const declaring = expanded[0]?.[0]?.leaf.invocation.type;
-          const library = declaring !== undefined && !this.owned.has(declaring.file) ? declaring.fqn : undefined;
-          const cause = group.some(({ scope }) => scope.undecidedCause === "recursive") ? "recursive" : target.diagnostic?.cause ?? "destination-undecidable";
+          const agreedTarget = agreed(alternatives, (value) => value.target.status === "unknown" ? value.target.status : value.target.value);
+          if (agreedTarget !== undefined && agreedTarget.target.status !== "unknown") return agreedTarget;
+          const library = group.find(({ leaf }) => !this.owned.has(leaf.invocation.type.file))?.leaf.invocation.type.fqn;
           const span = spanOf(invocation.type.file.path, invocation.node);
           return {
-            ...target,
-            target: unknown(target.target.reason, [library === undefined ? span : { ...span, via: library }, ...target.target.evidence, ...group.map(({ leaf }) => spanOf(leaf.invocation.type.file.path, leaf.invocation.node))]),
-            diagnostic: { cause, ...(library === undefined ? {} : { source: "read" }) },
+            ...agreedTarget,
+            target: unknown(agreedTarget?.target.status === "unknown" ? agreedTarget.target.reason : "unresolved", [library === undefined ? span : { ...span, via: library }, ...alternatives.flatMap(({ target }) => target.evidence), ...group.map(({ leaf }) => spanOf(leaf.invocation.type.file.path, leaf.invocation.node))]),
+            diagnostic: reachedDiagnostic(alternatives.map(({ diagnostic }) => diagnostic), agreedTarget !== undefined, library !== undefined),
           };
         });
         for (const target of targets) {
@@ -222,9 +219,10 @@ export class JavaHttpReader {
 
   private target(request: Request, scope: UrlScope): ReadTarget {
     const evaluated = this.text.trace(() => this.readTarget(request, scope));
-    const { value } = evaluated;
-    if (value.target.status !== "unknown" || evaluated.cause === undefined) return value;
-    return { ...value, target: unknown(value.target.reason, [...value.target.evidence, ...evaluated.evidence]), diagnostic: { cause: evaluated.cause } };
+    const { value, alternatives } = evaluated;
+    if (value.target.status !== "unknown" || (evaluated.cause === undefined && alternatives.length === 0)) return value;
+    const cause = evaluated.cause ?? value.diagnostic?.cause ?? "destination-undecidable";
+    return { ...value, target: unknown(value.target.reason, [...value.target.evidence, ...evaluated.evidence]), diagnostic: { cause, ...(alternatives.length === 0 ? {} : { alternatives }) } };
   }
 
   private readTarget(request: Request, scope: UrlScope): ReadTarget {

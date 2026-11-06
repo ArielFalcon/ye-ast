@@ -115,6 +115,8 @@ export type UnknownReason =
   | "revision-unavailable"
   | "deadline";
 
+export const DEPENDENCY_SELECTION_REASONS = ["ambiguous", "unproven-coordinates"] as const;
+
 export interface Cut {
   kind:
     | "depth"
@@ -130,6 +132,11 @@ export interface Cut {
   at: readonly string[];
   limit?: number;
   reason?: UnknownReason;
+  dependency?: {
+    name: string;
+    reason: (typeof DEPENDENCY_SELECTION_REASONS)[number];
+    candidates: readonly string[];
+  };
 }
 
 export interface FactBase {

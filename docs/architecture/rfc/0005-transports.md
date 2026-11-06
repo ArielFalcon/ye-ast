@@ -132,7 +132,7 @@ results retain `repositorySources` host read-location metadata for existing clie
 ### Errors
 
 An error is `{code, message, data: {kind}}`; `kind` names the code and `data` adds `entries` for `unknown-symbol`, each
-`{file, symbol, candidates}` where `candidates` names the seedable declarations of the file, sorted and once each, and
+`{file, symbol, candidates}` where `candidates` holds the dotted containment paths of the seedable declarations of the file, sorted and once each, and
 `globs` for `unknown-change-path`. The set is closed:
 
 | Kind | Code | Meaning |
@@ -262,8 +262,26 @@ Server runtime validation covers the common envelope, identities and principal c
 local or workspace impact/callers, importers, outline, workspace, and decisions. It does not duplicate every domain
 union. Internal workspace repository reads and `repositorySources` are excluded from public output. Faults are
 `isError` responses with redacted typed metadata under `_meta["ye-ast/fault"]`, not success receipts. Their text names
-the kind, detail and correction and ends with one `fault fields: ` JSON line holding the remaining public fault fields
+the kind and detail, adds a correction when the reported cause supports one, and ends with one `fault fields: ` JSON line holding the remaining public fault fields
 (such as `reason`, `stage`, `expected`, `actual`, `cause`), because some clients drop `_meta` or deliver only text.
+
+Continuation guidance is contextual across validation errors, faults and successful answers. It names only controls
+supported by the current tool and the observed condition; a sufficient answer needs no next-step footer. Input
+validation remains SDK validation and identifies the invalid field or control combination. Runtime fault guidance uses
+typed causes and the query family, without inferring causes from message text. A composition source failure identifies
+the failed query indices and presents the correction once, at its cause.
+
+Presentation omissions count recorded data; analysis cuts describe missing coverage. Changing mode can recover recorded
+evidence but cannot extend analysis. A cut kind alone does not identify a query budget: export and traversal limits can
+share a kind. Parameter-specific advice requires evidence of the relevant limit's origin. Starting a new query after a
+replay refusal does not retrieve the historical result; accepting a changed identity is an explicit caller choice.
+Guidance is deterministic and does not suppress itself based on previous requests or session history.
+
+Input discovery retains a root object with named properties and publishes the declared cross-field dependencies and
+conditions using the installed SDK's JSON Schema 2020-12 dialect. Selection/page pairing, supported owner branches and
+live/revision exclusions are checked against actual listed schemas as well as runtime validation. Explicitly opaque
+replay and composition argument objects still rely on the original server validators for their internal structure.
+These offline schema checks do not establish how every live client presents or interprets the constraints.
 
 `ye_ast_entrypoints`, `ye_ast_callers`, and `ye_ast_impact` deliver recovery metadata once, in
 the `recovery` result field in the text's result JSON line, for ordinary and selected responses in all modes. The presentation text points to that field rather than copying its JSON; unavailable
@@ -316,6 +334,17 @@ Selected source text retains root context, read owners and analysis (including u
 
 Each success carries the presentation and result fields once. These are wire contracts, not measured model adoption.
 
+Text-mode investigation footers appear only when recorded evidence or analysis limits need follow-up context. Owner
+guidance appears for evidence crossing repository boundaries. Text modes locate snapshots in their repository listing
+and retain literal base-module repository, file and revision coordinates; navigation through fact JSON paths belongs to
+full mode. Category-specific omission counts and valid selector examples remain beside their records.
+
+A selected page with `nextCursor` states how to continue beside its page metadata: repeat the recovery query with the
+same selection and limit, pass `nextCursor` as `page.cursor`, and assert `recovery.resultIdentity` with `expect`. A final
+page adds no continuation instruction. A partial analysis remains partial regardless of page availability. Parameter
+advice for depth or hub cuts requires the owning walk's declared bound to match the recorded cut limit; a `caller-budget`
+cut alone does not distinguish export limits from traversal expansions.
+
 `scope` changes analysis coverage; excluded paths are unknown, not counted presentation omissions. `changed` selects
 diff paths that seed impact while in-scope consumers elsewhere remain eligible. `budget` limits traversal work and
 records cuts; a presentation omission counts recorded items and does not itself make the fact partial. A related
@@ -333,6 +362,7 @@ Response shaping remains in the driving adapter, as defined by RFC-0001.
 | Layer / concern | Owner | Production consumers | Rules retained by family |
 |---|---|---|---|
 | Request, redaction, receipt and recovery assembly | `src/mcp/server.ts` | Seven registered tools | Existing schemas and dispatch |
+| Runtime fault guidance | `fault-presentation.ts`: `faultContext`, `renderFault` | Ordinary tools and composition source failures through `server.ts` | Closed public fault types, query-family controls, persisted versus explicit members, optional corrections and unchanged fault metadata |
 | Ordinary status/scope/change/snapshot and selected provenance | `presentation-context.ts`: `renderFactHeader`, `renderFactStatus`, `renderSourceContext` | All seven ordinary tools; selected entrypoints/callers/impact through `render-evidence.ts` | Ordinary field eligibility; selected read owner, analysis and overrides |
 | Exact context equality and complete UTF-8 layout scoring | `presentation-sharing.ts`: `shareExactContext`, `preferShorterText`, `blockBytes` | Family blocks in `render.ts` | Row membership, order, multiplicity, equality keys and tie rules |
 | Category recovery wording | `presentation-guidance.ts`: `categoryRecovery` | Entry point profiles/guards; impact/callers origins; workspace names/unserved; decisions dependencies | Counts, eligible modes, category meaning, own guards, permissions |

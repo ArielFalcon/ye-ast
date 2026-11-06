@@ -127,6 +127,7 @@
     playTimer: null,
     mode: "flow",
     previousFlow: null,
+    activeTerm: null,
   };
 
   /* ── DOM ──────────────────────────────────────────────────────────── */
@@ -580,9 +581,35 @@
     return `${layer ? layer.label : module.layer} · ${module.name}`;
   }
 
+  const TERMS = window.GLOSSARY ? window.GLOSSARY.terms : [];
+  const TERM_BY_KEY = new Map(TERMS.map((term) => [term.key, term]));
+
   function termLabel(key) {
-    const term = window.GLOSSARY && window.GLOSSARY.terms.find((candidate) => candidate.key === key);
+    const term = TERM_BY_KEY.get(key);
     return term ? (LANG === "es" ? term.labelEs || term.label : term.label) : key;
+  }
+
+  /** Term chips that open one definition at a time below them; the open one is state.activeTerm. */
+  function termsBlockHTML(keys) {
+    const present = keys.filter((key) => TERM_BY_KEY.has(key));
+    if (present.length === 0) return "";
+    const active = present.includes(state.activeTerm) ? TERM_BY_KEY.get(state.activeTerm) : null;
+    return `<div class="info-block"><h3>${esc(T.terms)}</h3><div class="term-chips">${present.map((key) =>
+      `<button type="button" class="term-chip${key === state.activeTerm ? " is-active" : ""}" data-term="${esc(key)}" aria-expanded="${key === state.activeTerm}">${esc(termLabel(key))}</button>`).join("")}</div>
+      ${active ? `<div class="term-card"><strong>${esc(termLabel(active.key))}</strong><p>${esc(active[LANG])}</p></div>` : ""}</div>`;
+  }
+
+  function bindTerms() {
+    for (const button of $$("[data-term]", infoPanel)) {
+      button.addEventListener("click", () => {
+        state.activeTerm = state.activeTerm === button.dataset.term ? null : button.dataset.term;
+        const scroll = infoPanel.scrollTop;
+        renderInfoPanel();
+        infoPanel.scrollTop = scroll;
+        const chip = $(`[data-term="${button.dataset.term}"]`, infoPanel);
+        if (chip) chip.focus();
+      });
+    }
   }
 
   /** The blob view of this repository: a ref names a path in it, and the site is served from docs/, not from a clone. */
@@ -625,13 +652,13 @@ function refLink(ref) {
         }).join("")}</ul>
       </div>
       <div class="info-block"><h3>${esc(T.activeNodes)}</h3><div class="term-chips">${step.focus.map((key) => `<button type="button" class="term-chip" data-info-node="${esc(key)}">${esc(moduleLabel(key))}</button>`).join("")}</div></div>
-      <div class="info-block"><h3>${esc(T.terms)}</h3><div class="term-chips">${(flow.terms || []).map((key) => `<button type="button" class="term-chip" data-term="${esc(key)}">${esc(termLabel(key))}</button>`).join("")}</div></div>
+      ${termsBlockHTML(flow.terms || [])}
       <div class="info-block"><h3>${esc(T.evidence)}</h3>${step.refs && step.refs.length ? `<div class="ref-list">${step.refs.map(refLink).join("")}</div>` : `<p class="info-role">${esc(T.noRefs)}</p>`}</div>`;
   }
 
   function bindStepInfo(onNode) {
     for (const button of $$("[data-info-node]", infoPanel)) button.addEventListener("click", () => onNode(button.dataset.infoNode));
-    for (const button of $$("[data-term]", infoPanel)) button.addEventListener("click", () => { if (window.explorerShowTerm) window.explorerShowTerm(button.dataset.term); });
+    bindTerms();
   }
 
   function renderInfoPanel() {
@@ -653,7 +680,6 @@ function refLink(ref) {
           <button type="button" class="small-button" id="focus-step">${esc(T.focusStep)}</button>
           <button type="button" class="small-button" id="inspect-module">${esc(T.inspectModule)}</button>
           <button type="button" class="small-button" id="back-modules">${esc(T.backToModules)}</button>
-          <a class="small-button" href="#concept-glossary">${esc(T.glossary)}</a>
         </div>`;
       $("#focus-step").addEventListener("click", () => fit());
       $("#inspect-module").addEventListener("click", () => { state.level = "modules"; state.layerFocus = null; syncLevelButtons(); selectNode(module.key); });
@@ -676,6 +702,7 @@ function refLink(ref) {
         <div class="info-block"><h3>${esc(T.mayImport)}</h3><p class="ok">${details.may || "—"}</p></div>
         <div class="info-block"><h3>${esc(T.never)}</h3><p class="bad">${details.never || "—"}</p></div>
         <div class="info-block"><h3>${esc(T.owns)}</h3><ul>${(details.facts || []).map((fact) => `<li>${fact}</li>`).join("")}</ul></div>
+        ${termsBlockHTML(TERMS.filter((term) => term.node === module.key).map((term) => term.key))}
         <div class="info-block"><h3>${esc(T.filesTitle)}</h3><ul class="file-list">${module.files.map((file) => `<li><code>${esc(file)}</code></li>`).join("")}</ul></div>
         <div class="info-actions">
           ${module.files.length > 0 ? `<button type="button" class="small-button" id="open-files">${esc(T.openFiles)}</button>` : ""}
@@ -684,6 +711,7 @@ function refLink(ref) {
       const openFiles = $("#open-files");
       if (openFiles) openFiles.addEventListener("click", () => { state.level = "files"; state.mode = "flow"; state.previousFlow = null; syncLevelButtons(); render(); fit(); });
       $("#back-step").addEventListener("click", clearNode);
+      bindTerms();
       return;
     }
 
@@ -717,7 +745,6 @@ function refLink(ref) {
       <div class="info-actions">
         <button type="button" class="small-button" id="focus-step">${esc(T.focusStep)}</button>
         ${state.layerFocus ? `<button type="button" class="small-button" id="clear-layer">${esc(T.showAll)}</button>` : ""}
-        <a class="small-button" href="#concept-glossary">${esc(T.glossary)}</a>
         ${state.stepIndex > 0 ? `<button type="button" class="small-button" id="back-flow">${esc(T.flowStart)}</button>` : ""}
       </div>`;
     $("#focus-step").addEventListener("click", () => fitStep());
@@ -1020,15 +1047,25 @@ function refLink(ref) {
   syncLevelButtons();
   requestAnimationFrame(() => compactLayout.matches ? fitStep() : fit());
 
-  window.explorerOpenNode = (key) => {
+  window.explorerOpenNode = (key, termKey = null) => {
     if (!MODULE_BY_KEY.has(key)) return;
+    state.activeTerm = termKey;
     state.level = "modules";
     state.layerFocus = null;
     state.playing = false;
     stopPlayback();
     syncLevelButtons();
     selectNode(key);
-    document.getElementById("graph-canvas").scrollIntoView({ behavior: prefersReduced ? "auto" : "smooth", block: "center" });
+    const behavior = prefersReduced ? "auto" : "smooth";
+    const card = termKey ? $(".term-card", infoPanel) : null;
+    if (card && compactLayout.matches) {
+      card.scrollIntoView({ behavior, block: "center" });
+      return;
+    }
+    document.getElementById("graph-canvas").scrollIntoView({ behavior, block: "center" });
+    if (!card) return;
+    const overflow = card.getBoundingClientRect().bottom - infoPanel.getBoundingClientRect().bottom;
+    if (overflow > 0) infoPanel.scrollTop += overflow + 16;
   };
 
   window.addEventListener("resize", () => {

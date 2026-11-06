@@ -33,6 +33,7 @@ test("detailed cut rows bind original indices, anchors, limits and reasons witho
   assert.doesNotMatch(associations[2]!.metadata, /reason-0/);
   assert.match(text, /cutIndex 12;.*base:same\.ts::f.*limit 2/);
   assert.match(text, /cutIndex 13;.*head:same\.ts::f.*limit 300/);
+  assert.match(text, /reference places counted; mode: "full" includes every place/);
   assert.deepEqual(fact, before);
 });
 
@@ -51,6 +52,7 @@ test("tiny cut categories retain the shorter complete literal layout", () => {
   const fact: Fact<ImpactValue> = { ...base, status: "partial", cuts: [{ kind: "depth", at: ["x"], limit: 1 }], value };
   const text = renderImpact(fact, "details");
   assert.match(text, /depth \(1\): x \(limit 1\)/);
+  assert.doesNotMatch(text, /includes every place/);
   assert.match(text, /lookup example: \{"kind":"cut-places","owner":\{"kind":"fact"\},"cutIndex":0\}/);
   assert.doesNotMatch(text, /Cut lookup:/);
 });

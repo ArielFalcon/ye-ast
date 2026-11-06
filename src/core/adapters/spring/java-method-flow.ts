@@ -5,6 +5,8 @@ import { invocationsOf, parametersOf, receiverOf, type Invocation, type FieldLoo
 import { scopeOf, type JavaProject, type MethodDecl, type TypeDecl } from "./java-symbols.ts";
 import { annotationUses, isAnnotation } from "./request-mapping.ts";
 import type { UrlScope } from "./java-values.ts";
+import type { CallSiteDiagnostic } from "../../domain/topology/call-site.ts";
+import { compareText } from "../../domain/shared/code-node.ts";
 
 export interface MethodSelection {
   method: MethodDecl;
@@ -97,6 +99,17 @@ export function methodsOf(call: Invocation, project: JavaProject, text: FieldLoo
 /** The one value every alternative agrees on; undefined when alternatives disagree. */
 export function agreed<V>(alternatives: readonly V[], identity: (value: V) => unknown): V | undefined {
   return new Set(alternatives.map((value) => JSON.stringify(identity(value)))).size === 1 ? alternatives[0] : undefined;
+}
+
+/**
+ * Why a call that reaches requests through other methods stays unresolved: recursion first, then implementations that
+ * disagree, then the requests' own cause.
+ */
+export function reachedDiagnostic(diagnostics: readonly (CallSiteDiagnostic | undefined)[], agreement: boolean, throughLibrary: boolean): CallSiteDiagnostic {
+  const causes = diagnostics.map((diagnostic) => diagnostic?.cause);
+  const cause = causes.includes("recursive") ? "recursive" : !agreement || causes.includes("dispatch-disagreement") ? "dispatch-disagreement" : causes[0] ?? "destination-undecidable";
+  const alternatives = [...new Set(diagnostics.flatMap((diagnostic) => diagnostic?.alternatives ?? []))].sort(compareText);
+  return { cause, ...(throughLibrary ? { source: "read" } : {}), ...(alternatives.length === 0 ? {} : { alternatives }) };
 }
 
 export function bindMethod(selection: MethodSelection, call: Node, scope: UrlScope): UrlScope {

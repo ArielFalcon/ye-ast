@@ -25,7 +25,7 @@ export type EntrypointEvidenceIdentity = Pick<Extract<Entrypoint, { kind: "http-
 export type HandlerOriginsContext = { owner: ImpactOwner; snapshot: SnapshotRef; handler: Handler; matchedEntrypointCount: number; interpretation: "recorded-origin-union" };
 export type ModuleOriginsContext = { owner: ImpactOwner; snapshot: SnapshotRef; module: Omit<ReachedModule, "origins">; originCount: number };
 export type EntrypointEvidenceContext = { findingIndex: number; section: Analysis; finding: { status: "complete"; identity: EntrypointEvidenceIdentity } | { status: "unknown"; reason: UnknownReason } };
-export type CutPlacesContext = { owner: CutOwner; snapshot: SnapshotRef; analysis: Analysis; cutIndex: number; kind: Cut["kind"]; reason?: UnknownReason; anchor: string; limit?: number };
+export type CutPlacesContext = { owner: CutOwner; snapshot: SnapshotRef; analysis: Analysis; cutIndex: number; kind: Cut["kind"]; reason?: UnknownReason; dependency?: NonNullable<Cut["dependency"]>; anchor: string; limit?: number };
 export type LinkEvidenceContext = { link: Link; direction: ImpactedLink["direction"]; reachCount: number; endpoints: { from: { snapshot: SnapshotRef; analysis: Analysis }; to: { snapshot: SnapshotRef; analysis: Analysis } } };
 export type HandlerOriginItem = { seedIndex: number; seed: Seed };
 export type ModuleOriginItem = { originIndex: number; origin: ModuleOrigin };
@@ -156,7 +156,7 @@ export function selectEvidence(source: EvidenceSource, selection: EvidenceSelect
     if (!cut) return missing();
     const anchor = cut.at[0];
     if (typeof anchor !== "string" || !anchor.length) return unavailable(owner);
-    return available({ availability: "available", kind: selection.kind, context: { owner: selection.owner, snapshot: owner.snapshot, analysis: analysis(owner), cutIndex: selection.cutIndex, kind: cut.kind, ...(cut.reason === undefined ? {} : { reason: cut.reason }), anchor, ...(cut.limit === undefined ? {} : { limit: cut.limit }) }, items: cut.at.slice(1).map((place, index) => ({ atIndex: index + 1, place })) });
+    return available({ availability: "available", kind: selection.kind, context: { owner: selection.owner, snapshot: owner.snapshot, analysis: analysis(owner), cutIndex: selection.cutIndex, kind: cut.kind, ...(cut.reason === undefined ? {} : { reason: cut.reason }), ...(cut.dependency === undefined ? {} : { dependency: cut.dependency }), anchor, ...(cut.limit === undefined ? {} : { limit: cut.limit }) }, items: cut.at.slice(1).map((place, index) => ({ atIndex: index + 1, place })) });
   }
   if (source.kind !== "workspace") return missing();
   const value = source.fact.value;

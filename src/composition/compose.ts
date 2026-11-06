@@ -42,6 +42,8 @@ import { createHttpCallSites } from "../core/adapters/typescript/http-call-sites
 import { createPatternRedaction } from "../core/adapters/redaction/pattern-redaction.adapter.ts";
 import { createJavaCallSites } from "../core/adapters/spring/java-call-sites.adapter.ts";
 import { createSpringRoutesExtractor } from "../core/adapters/spring/spring-routes.adapter.ts";
+import { createJavaRecordsReader } from "../core/adapters/tree-sitter/java-records.adapter.ts";
+import type { UnmodelledConstructsReader } from "../core/ports/unmodelled-constructs.port.ts";
 import { createJavaParser } from "../core/adapters/tree-sitter/java-parser.adapter.ts";
 import { createAngularDeclarationReader } from "../core/adapters/typescript/angular-declarations.adapter.ts";
 import { createAngularRoutesExtractor } from "../core/adapters/typescript/angular-routes.adapter.ts";
@@ -54,6 +56,8 @@ import type { CallSiteReader } from "../core/domain/topology/call-site.ts";
 import type { EntrypointExtractor, SourceFile } from "../core/ports/entrypoint-extractor.port.ts";
 import { createImportOrigins } from "../core/adapters/typescript/import-origins.adapter.ts";
 import { createModuleDependenciesReader } from "../core/adapters/typescript/module-dependencies.adapter.ts";
+import { createJavaImportsReader } from "../core/adapters/spring/java-imports.adapter.ts";
+import type { ModuleDependenciesReader } from "../core/ports/module-dependencies.port.ts";
 import type { EntrypointQueries } from "../core/ports/entrypoint-queries.port.ts";
 import type { ImpactQueries } from "../core/ports/impact-queries.port.ts";
 import type { OutlineQueries } from "../core/ports/outline-queries.port.ts";
@@ -66,7 +70,7 @@ import type { Redaction } from "../core/ports/redaction.port.ts";
 import type { TrustRecordReader } from "../core/ports/trust-record.port.ts";
 import type { ExportBudget, Vcs } from "../core/ports/vcs.port.ts";
 import { installedVersion, ownVersion } from "./installed-versions.ts";
-import { measuredDecisions, measuredEntrypoints, measuredGraph, measuredImpact, measuredOutline, measuredWorkspace, type MeasurementSink } from "./measurement.ts";
+import { measuredDecisions, measuredStages, measuredEntrypoints, measuredGraph, measuredImpact, measuredOutline, measuredWorkspace, type MeasurementSink } from "./measurement.ts";
 
 const PRODUCER_NAME = "ye-ast";
 const ENTRYPOINT_ENGINES = ["web-tree-sitter", "tree-sitter-java", "typescript"] as const;
@@ -127,22 +131,25 @@ export interface ComposedQueries {
 
 export function composeQueries(options: Omit<CompositionOptions, "signal"> = {}): ComposedQueries {
   const version = ownVersion();
+  const redaction = createPatternRedaction();
+  const measurement = options.measure === undefined ? undefined : { sink: options.measure, redaction };
+  const staged = <T extends object>(port: T, stages: { readonly [K in keyof T]?: string }): T => (measurement === undefined ? port : measuredStages(port, stages, measurement));
   const angular = createAngularRoutesExtractor();
   const contracts = createContractRoutes();
-  const extractor: EntrypointExtractor = {
+  const extractor = staged<EntrypointExtractor>({
     extract: async (files, libraries) => {
       const spring = await createSpringRoutesExtractor(await createJavaParser(), contracts).extract(files, libraries);
       return sortFindings([...spring, ...(await angular.extract(files))]);
     },
-  };
+  }, { extract: "entrypoints" });
   const typescriptCallSites = createHttpCallSites();
-  const callSites: CallSiteReader = {
+  const callSites = staged<CallSiteReader>({
     of: async (files, repo, libraries) => {
       const java = await createJavaCallSites(await createJavaParser()).of(files, repo, libraries);
       return [...(await typescriptCallSites.of(files, repo)), ...java].sort((a, b) => compareText(a.file, b.file) || a.line - b.line || compareText(a.symbol, b.symbol));
     },
-  };
-  const vcs = createGitVcs();
+  }, { of: "call-sites" });
+  const vcs = staged(createGitVcs(), { exportCommit: "export" });
   const scratch = createTempScratchDirectory(options.scratchRoot);
   const reader = createFsSourceReader();
   const digest = createSha256Digest();
@@ -150,8 +157,6 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
   const snapshotCache = { snapshotCache: createSnapshotDataCache(options.snapshotCacheBytes ?? SNAPSHOT_CACHE_BYTES) };
   const entrypointEngines = Object.fromEntries(ENTRYPOINT_ENGINES.map((name) => [name, installedVersion(name)]));
   const budget = options.exportBudget && { budget: options.exportBudget };
-  const redaction = createPatternRedaction();
-  const measurement = options.measure === undefined ? undefined : { sink: options.measure, redaction };
   const trust = options.trustDirectory === undefined ? undefined : { trust: reportingFaultOnce(createTrustRecords(options.trustDirectory), redaction, options.reportTrustFault) };
   const graph = measurement === undefined ? createCodeGraph() : measuredGraph(createCodeGraph(), measurement);
   const codegraph = installedVersion(CODEGRAPH_PACKAGE);
@@ -167,16 +172,18 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
   const bareEntrypoints = createEntrypointQueries({ vcs, scratch, reader, extractor, digest, matcher, producer: { name: PRODUCER_NAME, version }, engines: entrypointEngines, live, ...snapshotCache, ...budget, ...trust });
   const entrypoints = measurement === undefined ? bareEntrypoints : measuredEntrypoints(bareEntrypoints, measurement);
   const indexes = options.indexCache === undefined ? undefined : createIndexCache({ directory: options.indexCache, graph, digest, codegraph });
+  const moduleDependencies = staged(createModuleDependenciesReader(), { extract: "module-dependencies" });
+  const unmodelled = staged<UnmodelledConstructsReader>({ extract: async (sources) => createJavaRecordsReader(await createJavaParser()).extract(sources) }, { extract: "java-records" });
   const impactDeps: ImpactQueriesDeps = {
     vcs,
     scratch,
     reader,
     extractor,
     ...snapshotCache,
-    angular: createAngularDeclarationReader(),
+    angular: staged(createAngularDeclarationReader(), { read: "angular-declarations" }),
     contracts,
-    relations: composeAngularRelations(),
-    dynamicLoads: createDynamicLoadReader(),
+    relations: staged(composeAngularRelations(), { extract: "relations" }),
+    dynamicLoads: staged(createDynamicLoadReader(), { extract: "dynamic-loads" }),
     graph,
     ...(indexes && { indexes }),
     digest,
@@ -188,8 +195,9 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
     ...budget,
     ...trust,
     importOrigins: (sources: readonly SourceFile[]) => createImportOrigins(sources),
-    moduleDependencies: createModuleDependenciesReader(),
+    moduleDependencies,
     declarationEvidence: createDeclarationEvidenceReader(),
+    unmodelled,
   };
   const bareImpact = createImpactQueries(impactDeps);
   const warmLive = async (repo: string, signal?: AbortSignal): Promise<string | null> => {
@@ -219,7 +227,8 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
     ...budget,
     ...trust,
   };
-  const bareOutline = createOutlineQueries(headDeps);
+  const javaImports = staged<ModuleDependenciesReader>({ extract: async (sources, options) => createJavaImportsReader(await createJavaParser()).extract(sources, options) }, { extract: "java-imports" });
+  const bareOutline = createOutlineQueries({ ...headDeps, moduleReaders: [moduleDependencies, javaImports], unmodelled });
   const outline = measurement === undefined ? bareOutline : measuredOutline(bareOutline, measurement);
   const defaults = createWorkspaceDefaults(createFixedLayerStore());
   const refresh = options.refresh ?? (options.cacheDirectory === undefined ? undefined : createRemoteRefresh({ ...defaultRemoteRefreshDeps, cacheDirectory: options.cacheDirectory, digest }));

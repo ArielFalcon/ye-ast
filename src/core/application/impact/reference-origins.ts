@@ -23,7 +23,8 @@ export async function referenceProofsOf(reader: ImportOriginsReader | undefined,
   const bound = new Map<string, string>();
   const localParameters = new Set<string>();
   const validOccurrences = new Set<string>();
-  if (reader === undefined) return { external, bound, localParameters, validOccurrences };
+  const thisMemberCalls = new Set<string>();
+  if (reader === undefined) return { external, bound, localParameters, validOccurrences, thisMemberCalls };
   const references = store.unresolvedReferences(sourceFilesOf(headTree));
   const unique = uniqueReferenceKeys(references);
   const asked = references.flatMap((reference) => {
@@ -41,8 +42,9 @@ export async function referenceProofsOf(reader: ImportOriginsReader | undefined,
     if (finding.value.kind === "external" || finding.value.kind === "ambient") external.add(key);
     if (finding.value.kind === "repository") bound.set(key, finding.value.file);
     if (finding.value.kind === "local-parameter" && reference.name === finding.value.name && reference.kind === "calls") localParameters.add(key);
+    if (finding.value.kind === "this-member" && reference.name === finding.value.name && reference.kind === "calls") thisMemberCalls.add(key);
   }
-  return { external, bound, localParameters, validOccurrences };
+  return { external, bound, localParameters, validOccurrences, thisMemberCalls };
 }
 
 /** What a file's own imports prove about the references the index could not settle. */
@@ -53,6 +55,8 @@ export interface ReferenceProofs {
   bound: ReadonlyMap<string, string>;
   localParameters: ReadonlySet<string>;
   validOccurrences: ReadonlySet<string>;
+  /** Bare graph calls the syntax writes on `this` inside a class member, keyed by the complete occurrence. */
+  thisMemberCalls: ReadonlySet<string>;
 }
 
 export function memberProofContextOf(tree: Pick<CommitExtraction, "export" | "sources">, scope: DeclaredScope): MemberProofContext {

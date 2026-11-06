@@ -1,4 +1,4 @@
-/* Page chrome and concept sections: glossary filter, section motion and the section rail. */
+/* Page chrome and concept sections: glossary terms in the text, section motion, the section rail and title marks. */
 (() => {
   "use strict";
   const $ = (selector, root = document) => root.querySelector(selector);
@@ -6,64 +6,117 @@
   const LANG = document.documentElement.lang === "es" ? "es" : "en";
   const termLabel = (term) => (LANG === "es" ? term.labelEs || term.label : term.label);
 
-  /* ── glossary ─────────────────────────────────────────────────────── */
+  /* ── glossary terms in the text ───────────────────────────────────── */
 
-  const glossaryFold = $("#concept-glossary");
-  const openGlossary = () => {
-    if (glossaryFold && glossaryFold.tagName === "DETAILS") glossaryFold.open = true;
+  /** The first mention of a glossary term in each section becomes a button that opens the term's definition. A phrase
+   * that names more than one term is ambiguous and stays plain; headings, labels, code, links, controls and the explorer
+   * stay untouched. */
+  const TERMS = window.GLOSSARY ? window.GLOSSARY.terms : [];
+  const TERM_TEXT = {
+    show: LANG === "es" ? "Ver en el grafo" : "Show in graph",
+    close: LANG === "es" ? "Cerrar" : "Close",
+  };
+  const SKIP = "code, pre, kbd, a, button, label, summary, svg, h1, h2, h3, h4, h5, h6, input, select, textarea, .kicker, .mini-kicker, .eyebrow, .pill, .chip, .explorer, .playground, .term-pop, script, style";
+  const phraseOwners = new Map();
+  for (const term of TERMS) {
+    const label = termLabel(term);
+    if (label.includes("/")) continue;
+    const phrase = label.toLowerCase();
+    phraseOwners.set(phrase, phraseOwners.has(phrase) ? null : term);
+  }
+  const phrases = [...phraseOwners].filter(([, term]) => term).map(([phrase]) => phrase).sort((a, b) => b.length - a.length);
+  const escapeRegExp = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const phrasePattern = phrases.length ? new RegExp(`(?<![\\p{L}\\p{N}_-])(${phrases.map(escapeRegExp).join("|")})(?![\\p{L}\\p{N}_-])`, "iu") : null;
+
+  const markSection = (section) => {
+    const seen = new Set();
+    const walker = document.createTreeWalker(section, NodeFilter.SHOW_TEXT, {
+      acceptNode: (node) => (node.parentElement && !node.parentElement.closest(SKIP) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT),
+    });
+    const textNodes = [];
+    while (walker.nextNode()) textNodes.push(walker.currentNode);
+    for (let node of textNodes) {
+      let match;
+      while (node && (match = phrasePattern.exec(node.data))) {
+        const term = phraseOwners.get(match[1].toLowerCase());
+        if (seen.has(term.key)) {
+          const rest = node.splitText(match.index + match[1].length);
+          node = rest;
+          continue;
+        }
+        seen.add(term.key);
+        const word = node.splitText(match.index);
+        const rest = word.splitText(match[1].length);
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "term-ref";
+        button.dataset.term = term.key;
+        button.setAttribute("aria-expanded", "false");
+        button.textContent = word.data;
+        word.replaceWith(button);
+        node = rest;
+      }
+    }
+  };
+  if (phrasePattern) $$(".docs .doc-section").forEach(markSection);
+
+  const termPop = document.createElement("div");
+  termPop.className = "term-pop";
+  termPop.setAttribute("role", "dialog");
+  termPop.hidden = true;
+  document.body.append(termPop);
+  let termOwner = null;
+
+  const closeTerm = () => {
+    if (!termOwner) return;
+    termOwner.setAttribute("aria-expanded", "false");
+    termOwner.classList.remove("is-open");
+    termPop.hidden = true;
+    termOwner = null;
+  };
+  const openTerm = (button) => {
+    const term = TERMS.find((candidate) => candidate.key === button.dataset.term);
+    if (!term) return;
+    closeTerm();
+    termOwner = button;
+    button.setAttribute("aria-expanded", "true");
+    button.classList.add("is-open");
+    termPop.setAttribute("aria-label", termLabel(term));
+    termPop.innerHTML = `<strong>${termLabel(term)}</strong><p>${term[LANG]}</p>
+      <div class="term-pop-actions">${term.node ? `<button type="button" class="small-button" data-term-node>${TERM_TEXT.show}</button>` : ""}<button type="button" class="small-button" data-term-close>${TERM_TEXT.close}</button></div>`;
+    termPop.hidden = false;
+    const anchor = button.getBoundingClientRect();
+    const width = termPop.offsetWidth;
+    const left = Math.min(Math.max(8, anchor.left), document.documentElement.clientWidth - width - 8);
+    termPop.style.left = `${left + window.scrollX}px`;
+    termPop.style.top = `${anchor.bottom + window.scrollY + 6}px`;
+    const show = $("[data-term-node]", termPop);
+    if (show) show.addEventListener("click", () => { closeTerm(); if (typeof window.explorerOpenNode === "function") window.explorerOpenNode(term.node, term.key); });
+    $("[data-term-close]", termPop).addEventListener("click", () => { const owner = termOwner; closeTerm(); owner.focus(); });
+    (show || $("[data-term-close]", termPop)).focus({ preventScroll: true });
   };
   document.addEventListener("click", (event) => {
-    if (event.target instanceof Element && event.target.closest('a[href="#concept-glossary"]')) openGlossary();
+    if (!(event.target instanceof Element)) return;
+    const ref = event.target.closest(".term-ref");
+    if (ref) {
+      if (ref === termOwner) closeTerm();
+      else openTerm(ref);
+      return;
+    }
+    if (!event.target.closest(".term-pop")) closeTerm();
   });
-  const openGlossaryOnHash = () => {
-    if (window.location.hash === "#concept-glossary") openGlossary();
-  };
-  window.addEventListener("hashchange", openGlossaryOnHash);
-  openGlossaryOnHash();
-
-  const grid = $("#glossary-grid");
-  if (grid && window.GLOSSARY) {
-    const terms = window.GLOSSARY.terms.slice().sort((a, b) => termLabel(a).localeCompare(termLabel(b)));
-    grid.innerHTML = terms.map((term) => `
-      <div class="glossary-item" data-key="${term.key}" data-search="${(termLabel(term) + " " + (term.labelEs || "") + " " + term[LANG]).toLowerCase()}">
-        <dt>${termLabel(term)}</dt>
-        <dd>${term[LANG]}</dd>
-        ${term.node ? `<button type="button" class="glossary-node" data-node="${term.node}">${LANG === "es" ? "ver en el grafo" : "show in graph"}</button>` : ""}
-      </div>`).join("");
-    const filter = $("#glossary-filter");
-    const count = $("#glossary-count");
-    function applyFilter() {
-      const query = (filter.value || "").trim().toLowerCase();
-      let visible = 0;
-      for (const item of $$(".glossary-item", grid)) {
-        const match = query === "" || item.dataset.search.includes(query);
-        item.hidden = !match;
-        if (match) visible += 1;
-      }
-      count.textContent = `${visible} / ${terms.length}`;
-    }
-    filter.addEventListener("input", applyFilter);
-    applyFilter();
-
-    window.explorerShowTerm = (key) => {
-      filter.value = key;
-      applyFilter();
-      openGlossary();
-      $("#concept-glossary").scrollIntoView({ behavior: "smooth", block: "start" });
-    };
-
-    for (const button of $$(".glossary-node", grid)) {
-      button.addEventListener("click", () => {
-        if (typeof window.explorerOpenNode === "function") window.explorerOpenNode(button.dataset.node);
-        else $("#graph-canvas").scrollIntoView({ behavior: "smooth", block: "center" });
-      });
-    }
-  }
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape" || !termOwner) return;
+    const owner = termOwner;
+    closeTerm();
+    owner.focus();
+  });
+  window.addEventListener("resize", closeTerm);
 
   /* ── motion: sections rise from their horizon, sequences build piece by piece ── */
 
   const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-  const BUILDS = [".stat-strip", ".status-grid", ".trust-lanes", ".lane-steps", ".surface-diagram", ".compose-flow", ".fact-list", ".glossary-grid", ".input-chips"];
+  const BUILDS = [".stat-strip", ".status-grid", ".trust-lanes", ".lane-steps", ".surface-diagram", ".compose-flow", ".fact-list", ".input-chips"];
   for (const container of $$(BUILDS.map((selector) => `.docs ${selector}`).join(","))) {
     container.classList.add("build");
     Array.from(container.children).forEach((child, index) => child.style.setProperty("--i", String(Math.min(index, 12))));
@@ -159,11 +212,22 @@
     update();
   }
 
+  /* ── header mark ──────────────────────────────────────────────────── */
+
+  /** The header shows the logo only while the hero title, which carries the large logo, is out of view. */
+  const brand = $(".brand");
+  const heroTitle = $(".hero-copy h1");
+  if (brand && heroTitle) {
+    new IntersectionObserver(([entry]) => brand.classList.toggle("has-mark", !entry.isIntersecting)).observe(heroTitle);
+  }
+
   /* ── title marks ──────────────────────────────────────────────────── */
 
-  /** The mark beside a section title is as tall as the title's lines. A taller mark narrows the text and can only add
-   * lines, so growing it from zero until the line count stops changing reaches the fixed point. */
-  const titles = $$(".section-head h2");
+  /** The logo beside the hero title and the ornament beside each section title are as tall as the title's lines,
+   * between one and MAX_MARK_LINES. A taller mark narrows the text and can only add lines, so growing it from zero
+   * until the line count stops changing reaches the fixed point. */
+  const titles = $$(".hero-copy h1, .section-head h2");
+  const MAX_MARK_LINES = 2;
   const lineCount = (title) => {
     const range = document.createRange();
     range.selectNodeContents(title);
@@ -174,7 +238,7 @@
     let lines = 0;
     for (let pass = 0; pass < 6; pass += 1) {
       title.style.setProperty("--title-mark", `${lines * lineHeight}px`);
-      const next = lineCount(title);
+      const next = Math.min(Math.max(lineCount(title), 1), MAX_MARK_LINES);
       if (next === lines) return;
       lines = next;
     }

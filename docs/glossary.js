@@ -1,4 +1,4 @@
-/* Glossary terms: technical label plus English and Spanish definitions. */
+/* Glossary terms: technical label, English and Spanish definitions, and the graph module that owns each term. */
 window.GLOSSARY = {
   terms: [
     {
@@ -12,14 +12,13 @@ window.GLOSSARY = {
       key: "status",
       label: "complete / partial / unknown",
       labelEs: "completo / parcial / desconocido",
-      en: "The three possible states of a fact. Partial always carries cuts; unknown always carries a reason.",
-      es: "Los tres estados posibles de un fact. Partial siempre lleva cortes; unknown siempre lleva una razón.",
+      en: "The three possible states of a fact. A partial fact lists its cuts; an unknown fact states its reason.",
+      es: "Los tres estados posibles de un fact. Un fact partial lista sus cuts; uno unknown da su razón.",
       node: "domain-shared",
     },
     {
       key: "cut",
       label: "cut",
-      labelEs: "corte",
       en: "A named place where the computation stopped or could not see something: a bound, an unresolved name, a file with no extractor.",
       es: "Un lugar nombrado donde el cálculo se detuvo o no pudo ver algo: un límite, un nombre sin resolver, un archivo sin extractor.",
       node: "domain-impact",
@@ -36,8 +35,8 @@ window.GLOSSARY = {
       key: "walk",
       label: "walk",
       labelEs: "recorrido",
-      en: "The traversal from the seeds towards their callers. It is inbound: it follows the edges against the direction of the call.",
-      es: "El recorrido desde las semillas hacia sus llamadores. Es inverso: sigue las aristas en contra del sentido de la llamada.",
+      en: "The traversal from the seeds toward their callers. It runs inbound: it follows edges against the direction of the call.",
+      es: "El recorrido desde las semillas hacia sus llamadores. Va en sentido inverso: sigue las aristas contra el sentido de la llamada.",
       node: "app-impact",
     },
     {
@@ -59,15 +58,15 @@ window.GLOSSARY = {
     {
       key: "fan-in",
       label: "fan-in",
-      en: "The number of call-like callers a symbol has. It is a property of the graph, not a limit; it is used to rank hubs.",
-      es: "El número de llamadores call-like que tiene un símbolo. Es una propiedad del grafo, no un límite; se usa para rankear hubs.",
+      en: "The number of call-like callers a symbol has. It is a property of the graph, not a limit; it ranks hubs.",
+      es: "El número de llamadores call-like de un símbolo. Es una propiedad del grafo, no un límite; sirve para ordenar hubs.",
       node: "app-impact",
     },
     {
       key: "hub",
       label: "hub fan-in",
-      en: "An optional budget. A symbol with more call-like callers than this value is not expanded by the walk; it becomes a hub cut at that symbol.",
-      es: "Un presupuesto opcional. Un símbolo con más llamadores call-like que este valor no se expande durante el recorrido; se convierte en un corte de hub en ese símbolo.",
+      en: "An optional budget. The walk does not expand a symbol with more call-like callers than this value; it records a hub cut there.",
+      es: "Un presupuesto opcional. El recorrido no expande un símbolo con más llamadores call-like que este valor; registra un cut de hub en él.",
       node: "domain-impact",
     },
     {
@@ -97,7 +96,6 @@ window.GLOSSARY = {
     {
       key: "handler",
       label: "handler",
-      labelEs: "manejador",
       en: "The method or class that serves an entrypoint. The graph-to-fact join matches it by file, line inside its span and simple name.",
       es: "El método o la clase que sirve un entrypoint. El join entre grafo y fact lo empareja por archivo, línea dentro de su span y nombre simple.",
       node: "domain-entrypoints",
@@ -105,7 +103,6 @@ window.GLOSSARY = {
     {
       key: "guard",
       label: "guard",
-      labelEs: "guarda",
       en: "A declaration that decides whether a UI route can be entered. A reached guard names every route that declares it.",
       es: "Una declaración que decide si se puede entrar a una ruta UI. Un guard alcanzado nombra cada ruta que lo declara.",
       node: "domain-entrypoints",
@@ -128,7 +125,6 @@ window.GLOSSARY = {
     {
       key: "store",
       label: "store",
-      labelEs: "almacén",
       en: "The on-disk database of the index. Its node ids are handles: they never reach a fact.",
       es: "La base de datos en disco del índice. Sus node ids son handles: nunca llegan a un fact.",
       node: "adapter-codegraph",
@@ -153,16 +149,16 @@ window.GLOSSARY = {
       key: "composition",
       label: "composition root",
       labelEs: "raíz de composición",
-      en: "The composition root: the only place that knows both sides. It builds every adapter and injects the query families into the entrypoints. Not to be confused with evidence composition (compose).",
-      es: "La raíz de composición: el único lugar que conoce ambos lados. Construye cada adapter e inyecta las familias de consultas en los entrypoints. No se confunde con la composición de evidencia (compose).",
+      en: "The only place that knows both sides: it builds every adapter and injects the query families into the entrypoints. Not the same as evidence composition (compose).",
+      es: "El único lugar que conoce ambos lados: construye cada adapter e inyecta las familias de consultas en los entrypoints. No es lo mismo que la composición de evidencia (compose).",
       node: "composition",
     },
     {
       key: "compose",
       label: "compose",
       labelEs: "compose (composición de evidencia)",
-      en: "ye_ast_compose, MCP only: 1 to 16 typed queries in one call, run one at a time and merged into shared tables. Connections are derived only between reads with matching schema, producer, trust, engines, workspace and snapshot. It is not atomic and stores nothing.",
-      es: "ye_ast_compose, solo MCP: de 1 a 16 queries tipadas en una llamada, ejecutadas una a una y unificadas en tablas compartidas. Las conexiones se derivan solo entre lecturas con el mismo schema, producer, trust, engines, workspace y snapshot. No es atómica y no guarda nada.",
+      en: "ye_ast_compose, MCP only: 1 to 16 typed queries in one call, run one at a time and merged into shared tables. Connections are derived only between reads with matching schema, producer, trust, engines, workspace and snapshot; shared-file-import and shared-support also accept another version of the same producer. It is not atomic and stores nothing.",
+      es: "ye_ast_compose, solo MCP: de 1 a 16 queries tipadas en una llamada, ejecutadas una a una y unificadas en tablas compartidas. Las conexiones se derivan solo entre lecturas con el mismo schema, producer, trust, engines, workspace y snapshot; shared-file-import y shared-support también aceptan otra versión del mismo producer. No es atómica y no guarda nada.",
       node: "mcp",
     },
     {
@@ -171,6 +167,7 @@ window.GLOSSARY = {
       labelEs: "outline (esquema de archivo)",
       en: "The shape of a file: the kind, name and line span of each declaration and the files it imports, never its source text. Requested files the index holds no node of are listed as unheld.",
       es: "La forma de un archivo: el tipo, el nombre y el rango de líneas de cada declaración y los archivos que importa, nunca su texto fuente. Los archivos pedidos de los que el índice no tiene nodo se listan como unheld.",
+      node: "app-outline",
     },
     {
       key: "decision",
@@ -178,6 +175,7 @@ window.GLOSSARY = {
       labelEs: "decisión",
       en: "A configuration gap the code cannot fill (membership, repository, library, gateway, revision, remote or trust), listed with the options the workspace can verify and their evidence. Reading decisions writes nothing.",
       es: "Una brecha de configuración que el código no puede llenar (membership, repository, library, gateway, revision, remote o trust), listada con las opciones que el workspace puede verificar y su evidencia. Leer decisiones no escribe nada.",
+      node: "app-decisions",
     },
     {
       key: "scope",
@@ -190,9 +188,8 @@ window.GLOSSARY = {
     {
       key: "confidence",
       label: "confidence",
-      labelEs: "confianza",
-      en: "The widest path from a seed: the strongest weakest edge over all paths, between 0 and 1.",
-      es: "El widest path desde una semilla: la arista más fuerte entre las más débiles de todos los caminos, entre 0 y 1.",
+      en: "How strongly a node depends on the seed, from 0 to 1. It is the widest path: the best, over all paths, of each path's weakest edge.",
+      es: "Qué tan fuerte es la dependencia de un nodo respecto de la semilla, de 0 a 1. Es el widest path: el mejor, entre todos los caminos, de la arista más débil de cada uno.",
       node: "app-impact",
     },
     {
@@ -222,16 +219,16 @@ window.GLOSSARY = {
       key: "trust",
       label: "trust",
       labelEs: "confianza",
-      en: "The declared treatment of repository content. It is declared outside the repository; without a declaration the engine runs untrusted.",
-      es: "El tratamiento declarado del contenido del repositorio. Se declara fuera del repositorio; sin declaración, el motor corre untrusted.",
+      en: "How the repository's content is treated, declared outside the repository (trusted or untrusted). Without a declaration the engine runs untrusted.",
+      es: "Cómo se trata el contenido del repositorio, declarado fuera de él (trusted o untrusted). Sin declaración, el motor corre untrusted.",
       node: "ports-trust",
     },
     {
       key: "mirror",
       label: "mirror",
       labelEs: "espejo",
-      en: "ye-ast's private copy of a trusted working tree. The graph reads the mirror, never the checkout.",
-      es: "La copia privada que ye-ast hace de un árbol de trabajo trusted. El grafo lee el mirror, nunca el checkout.",
+      en: "ye-AST's private copy of a trusted working tree. The graph reads the mirror, never the checkout.",
+      es: "La copia privada que ye-AST hace de un árbol de trabajo trusted. El grafo lee el mirror, nunca el checkout.",
       node: "ports-live",
     },
     {
@@ -244,8 +241,8 @@ window.GLOSSARY = {
     {
       key: "mcp",
       label: "MCP",
-      en: "Model Context Protocol. ye-ast exposes a read-only stdio server with eight tools: entrypoints, impact, callers, importers, outline, workspace, decisions and compose. One server serves several declared repositories, chosen per call.",
-      es: "Model Context Protocol. ye-ast expone un servidor stdio de solo lectura con ocho tools: entrypoints, impact, callers, importers, outline, workspace, decisions y compose. Un servidor sirve varios repositorios declarados, elegidos en cada llamada.",
+      en: "Model Context Protocol. ye-AST exposes a read-only stdio server with eight tools: entrypoints, impact, callers, importers, outline, workspace, decisions and compose. One server serves several declared repositories, chosen per call.",
+      es: "Model Context Protocol. ye-AST expone un servidor stdio de solo lectura con ocho tools: entrypoints, impact, callers, importers, outline, workspace, decisions y compose. Un servidor sirve varios repositorios declarados, elegidos en cada llamada.",
       node: "mcp",
     },
     {

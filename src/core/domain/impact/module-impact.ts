@@ -92,7 +92,7 @@ export function moduleImpact(changes: readonly FileChange[], base: ModuleDepende
           const fresh = propagated & ~(record?.origins ?? 0n);
           if (fresh === 0n) continue;
           if (record === undefined) {
-            record = { file: edge.file, depth: depth + 1, origins: 0n, via: { file, line: edge.line, specifier: edge.specifier, kind: edge.kind, typeOnly: edge.typeOnly, ...(edge.form === undefined ? {} : { form: edge.form }) } };
+            record = { file: edge.file, depth: depth + 1, origins: 0n, via: { file, line: edge.line, specifier: edge.specifier, kind: edge.kind, typeOnly: edge.typeOnly, ...(edge.form === undefined || edge.form === "import-equals" ? {} : { form: edge.form }) } };
             records.set(edge.file, record);
           }
           record.origins |= fresh;

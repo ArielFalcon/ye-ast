@@ -64,7 +64,8 @@ replaces `head` or `revision` under `trusted` only ([Live head](#live-head-slice
 |---|---|
 | inside a symbol | the innermost symbol whose span holds it |
 | inside a file's symbols but in none (imports, top-level statements) | the file's top-level symbols |
-| in a file with touched lines and no symbol at all (a Java `record`, which codegraph gives no node) | none; a `no-extractor` cut at the file |
+| in a file with touched lines and no symbol at all | none; a `no-extractor` cut at the file |
+| in a file declaring a Java `record`, which codegraph gives no node and whose methods it places under the package | the symbols the graph holds, as above, and a `no-extractor` cut at the file, found by ye-ast's own Java grammar over the changed and targeted files; a `callers` target it cannot name stays an `unknown-symbol` fault whose detail says the file declares a record |
 | in `templateUrl` or `styleUrl(s)` of a component | that component, read from decorator metadata ([ADR-0014](../adr/0014-angular-and-spring-from-own-extractors.md) decision 2) |
 | removed with its symbol | none at `head`: its former callers changed too in a consistent commit and are seeds themselves; a caller left behind shows as an unresolved reference naming it. The same holds for a declaration removed from a symbol that survives (a method of a class): the holder seeds, and every name the removed lines declared, in any hunk, that no added line of the file declares again (a rename loses its name, an edited signature keeps it) also leads an `unresolved-link` cut at the references that still name it |
 
@@ -306,8 +307,8 @@ per cause:
 
 `unknown` when no answer is possible: the index cannot be built or opened (`index-unavailable`) or the diff cannot be
 read (`source-unreadable`); an unresolvable revision is a typed fault, as for `map`. A symbol `impact.callers` was asked
-for that names no node at the revision is the typed fault `unknown-symbol`, listing every such entry with the seedable
-declarations of its file (sorted, once each, empty when the file declares none or is not indexed), so the caller sees
+for that names no node at the revision is the typed fault `unknown-symbol`, listing every such entry with the dotted
+containment paths of the seedable declarations of its file (sorted, once each, empty when the file declares none or is not indexed), so the caller sees
 what it could have asked for; the CLI exits as
 for an unresolvable revision. A requested line range in a file that is not a covered source (a test, an uncovered
 language, a template no component names) is a `no-extractor` cut at that file, never an empty answer.

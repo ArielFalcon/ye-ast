@@ -1,3 +1,4 @@
+import type { LibrarySource } from "../../domain/topology/library-source.ts";
 import { basename } from "node:path";
 import { isJavaSource, isJvmTestFile } from "../../domain/languages/java.ts";
 import { isSpringConfigFile } from "../../domain/languages/spring-config.ts";
@@ -25,7 +26,7 @@ const eventSites: JavaSiteReader = { transport: "event", read: (project, configu
  * parser rejects is one site whose target is `unknown` with `source-unreadable`, at the parser's fault line and under
  * the first reader's transport: none of its calls can be read.
  */
-export function javaCallSitesOf(parser: JavaParser, files: readonly SourceFile[], libraries: readonly SourceFile[], repo: string, readers: readonly JavaSiteReader[]): CallSite[] {
+export function javaCallSitesOf(parser: JavaParser, files: readonly SourceFile[], libraries: readonly LibrarySource[], repo: string, readers: readonly JavaSiteReader[]): CallSite[] {
   const trees: JavaSyntaxTree[] = [];
   const unreadable: { path: string; line: number }[] = [];
   const unreadableLibraries: { path: string; line: number }[] = [];
