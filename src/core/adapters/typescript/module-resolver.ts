@@ -29,6 +29,26 @@ export function packageOf(specifier: string): string | undefined {
   return specifier.startsWith("@") ? parts.slice(0, 2).join("/") : parts[0];
 }
 
+/** What the snapshot's manifests say about packages: the ones they depend on, and the ones they are (`name`). */
+export interface ManifestPackages {
+  dependencies: ReadonlySet<string>;
+  declared: ReadonlySet<string>;
+}
+
+/** The dependencies and the names of every manifest given; a manifest that is not JSON says nothing. */
+export function manifestPackages(manifests: readonly string[]): ManifestPackages {
+  return { dependencies: new Set(manifests.flatMap((manifest) => [...manifestDependencies(manifest)])), declared: new Set(manifests.flatMap((manifest) => manifestName(manifest) ?? [])) };
+}
+
+function manifestName(manifest: string): string | undefined {
+  try {
+    const { name } = JSON.parse(manifest) as { name?: unknown };
+    return typeof name === "string" && name !== "" ? name : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** The packages a manifest declares in `dependencies`, `devDependencies` and `peerDependencies`; none when it is missing or not JSON. */
 export function manifestDependencies(manifest: string | undefined): Set<string> {
   if (manifest === undefined) return new Set();
@@ -50,10 +70,10 @@ export function manifestDependencies(manifest: string | undefined): Set<string> 
  * TypeScript extension or as a directory's index; any other goes through the nearest `tsconfig` or `jsconfig` (its
  * `paths`, `baseUrl` and `extends` chain) and the TypeScript compiler's resolver. The compiler's host is synchronous and
  * the reader is not, so a resolution runs again over the files it asked for until it asks for no more; a file the
- * reader cannot give is absent. A specifier no configuration resolves is external when the manifest names its package,
- * otherwise unresolved with the reason. No program is built and no file the resolution does not ask for is read.
+ * reader cannot give is absent. A specifier no configuration resolves is external when a manifest depends on its package
+ * and no manifest of the snapshot is that package, otherwise unresolved with the reason. No program is built and no file the resolution does not ask for is read.
  */
-export function createModuleResolver(read: SourceReader, dependencies: ReadonlySet<string>, options?: { jsonModules?: boolean }): ModuleResolver {
+export function createModuleResolver(read: SourceReader, packages: ManifestPackages, options?: { jsonModules?: boolean }): ModuleResolver {
   const exists = new Map<string, Promise<boolean>>();
   const present = (file: string): Promise<boolean> => {
     let held = exists.get(file);
@@ -124,9 +144,11 @@ export function createModuleResolver(read: SourceReader, dependencies: ReadonlyS
   const resolutions = new Map<string, Promise<ts.ResolvedModuleFull | undefined>>();
   const aliased = async (from: string, specifier: string): Promise<ModuleResolution> => {
     const pkg = packageOf(specifier);
-    const external = pkg !== undefined && dependencies.has(pkg);
+    /** A package the snapshot itself is never outside it: a configuration may name its file, nothing else proves one. */
+    const declared = pkg !== undefined && packages.declared.has(pkg);
+    const external = !declared && pkg !== undefined && packages.dependencies.has(pkg);
     const config = await configOf(posix.dirname(from));
-    if (config === undefined) return external ? { external: true } : { unresolved: `${specifier} is not relative and no module configuration governs ${from}` };
+    if (config === undefined) return external ? { external: true } : { unresolved: declared ? `${specifier} names a package this snapshot declares` : `${specifier} is not relative and no module configuration governs ${from}` };
     const compilerOptions = config.options;
     if (external && compilerOptions.paths === undefined && compilerOptions.baseUrl === undefined) return { external: true };
     const explicitJson = options?.jsonModules === true && specifier.endsWith(".json");
@@ -139,8 +161,8 @@ export function createModuleResolver(read: SourceReader, dependencies: ReadonlyS
       resolutions.set(key, held);
     }
     const resolved = await held;
-    if (resolved === undefined) return external ? { external: true } : { unresolved: `${specifier} matches no \`paths\` or \`baseUrl\` entry of ${config.file}` };
-    if (resolved.isExternalLibraryImport === true) return { external: true };
+    if (resolved === undefined) return external ? { external: true } : { unresolved: declared ? `${specifier} names a package this snapshot declares` : `${specifier} matches no \`paths\` or \`baseUrl\` entry of ${config.file}` };
+    if (resolved.isExternalLibraryImport === true) return declared ? { unresolved: `${specifier} names a package this snapshot declares` } : { external: true };
     const file = resolved.resolvedFileName.replace(/^\//, "");
     return (explicitJson ? file.endsWith(".json") : isTypeScriptFile(file)) ? { file } : { unresolved: `${specifier} resolves to ${file}, which is no TypeScript source` };
   };

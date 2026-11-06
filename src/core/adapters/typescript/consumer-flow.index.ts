@@ -5,7 +5,7 @@ import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import { readAngularRouteFile, type RawImport } from "./angular-router.extractor.ts";
 import { createDeclarationLookup, type Declaration, type DeclarationLookup } from "./declaration-lookup.ts";
 import { lineOf } from "./http-call-sites.adapter.ts";
-import { createModuleResolver, manifestDependencies } from "./module-resolver.ts";
+import { createModuleResolver, manifestPackages } from "./module-resolver.ts";
 import { namedFunction, type NamedFunction } from "./consumer-flow.syntax.ts";
 import { sourceTree } from "./source-tree.ts";
 
@@ -45,8 +45,7 @@ export const resolverKey = (file: string, symbol: string, line: number): string 
 
 export async function buildProgram(files: readonly SourceFile[]): Promise<Program> {
   const texts = new Map(files.map((file) => [file.path, file.content]));
-  const dependencies = new Set(files.filter((file) => isPackageManifest(file.path)).flatMap((file) => [...manifestDependencies(file.content)]));
-  const modules = createModuleResolver(async (file) => texts.get(file), dependencies);
+  const modules = createModuleResolver(async (file) => texts.get(file), manifestPackages(files.filter((file) => isPackageManifest(file.path)).map((file) => file.content)));
   const units = new Map<string, Unit>();
   const shapes = new Map<string, NonNullable<ReturnType<typeof readAngularRouteFile>>>();
   for (const file of files.filter((candidate) => isTypeScriptSource(candidate.path))) {

@@ -87,7 +87,7 @@ export function createConsumerSources(deps: ConsumerSourcesDeps): ConsumerSource
               if (indexed === "aborted") return ABORTED;
               if (indexed !== "unavailable") stores.push(indexed.store);
               const origins = indexed === "unavailable" ? undefined : await deps.relations.extract(sources, { memberProofs: memberProofContextOf(loaded.value, context.scope) });
-              const proofs = indexed === "unavailable" ? undefined : await referenceProofsOf(deps.importOrigins, indexed.store, loaded.value, context.signal);
+              const proofs = indexed === "unavailable" ? undefined : await referenceProofsOf(deps.importOrigins?.(loaded.value.sources), indexed.store, loaded.value, context.signal);
               readings.set(plan.at.repoId, {
                 flow: await deps.flow(sources, plan.at.repoId),
                 templates: await createConsumerTemplateReader({ metadata: deps.metadata, flow: deps.templateFlow }, sources),
