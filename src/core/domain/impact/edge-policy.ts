@@ -109,8 +109,13 @@ export type EdgeVerdict<D> = { kind: "keep" } | { kind: "drop" } | { kind: "redi
 /**
  * The verdict on one edge from the root of the name it spells at its position. A root bound outside the repository (imported
  * from a package, or declared by the language's own libraries) cannot name a declaration of the repository, whatever the
- * graph matched it to, so the edge is no dependence. A root that is unknown or bound inside proves nothing against it.
+ * graph matched it to, so the edge is no dependence. A root spelled alone that an import binds to `proven`, a declaration
+ * of the repository other than the edge's `target`, names `proven`. A root that is unknown, bound inside without a proven
+ * declaration, or reached through a longer chain (`a.b`, whose member the binding does not name) proves nothing against it.
  */
-export function edgeVerdict<D>(root: Finding<ImportOrigin>): EdgeVerdict<D> {
-  return root.status === "complete" && (root.value.kind === "external" || root.value.kind === "ambient") ? { kind: "drop" } : { kind: "keep" };
+export function edgeVerdict<D>(root: Finding<ImportOrigin> & { bare?: true }, proven?: D, target?: D): EdgeVerdict<D> {
+  if (root.status !== "complete") return { kind: "keep" };
+  if (root.value.kind === "external" || root.value.kind === "ambient") return { kind: "drop" };
+  if (root.value.kind === "repository" && root.bare === true && proven !== undefined && proven !== target) return { kind: "redirect", to: proven };
+  return { kind: "keep" };
 }

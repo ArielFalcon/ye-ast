@@ -7,7 +7,7 @@ import { isPackageManifest, isTypeScriptSource } from "../../domain/languages/ty
 import type { ImportOrigin } from "../../domain/relations/resolved-reference.ts";
 import type { Evidence, Finding } from "../../domain/shared/fact.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
-import type { ImportOriginSite, ImportOrigins, ResolvedNameSite } from "../../ports/import-origins.port.ts";
+import type { ImportOriginSite, ImportOrigins, ResolvedNameSite, RootOrigin } from "../../ports/import-origins.port.ts";
 import { createModuleResolver, manifestPackages, packageOf } from "./module-resolver.ts";
 import { TYPESCRIPT_LIB_GLOBALS } from "./typescript-lib-globals.ts";
 
@@ -106,14 +106,17 @@ export function createImportOrigins(sources: readonly SourceFile[]): ImportOrigi
     }
     return results;
   }, rootOrigins: async (sites, signal) => {
-    const results: Finding<ImportOrigin>[] = sites.map((site) => ({ status: "unknown", reason: "unresolved", evidence: [{ path: site.file, line: site.line }] }));
+    const results: RootOrigin[] = sites.map((site) => ({ status: "unknown", reason: "unresolved", evidence: [{ path: site.file, line: site.line }] }));
     for (const [file, group] of Map.groupBy(sites.map((site, index) => ({ site, index })), ({ site }) => site.file)) {
       if (signal?.aborted) break;
       const text = texts.get(file);
       const read = text === undefined || !isTypeScriptSource(file) ? undefined : rootsAt(file, text, group);
       if (read === undefined) continue;
       shapes.set(file, read.shape);
-      for (const [index, root] of read.roots) results[index] = await originOf({ ...sites[index]!, name: root }, "valid");
+      for (const [index, { root, bare }] of read.roots) {
+        const origin = await originOf({ ...sites[index]!, name: root }, "valid");
+        results[index] = bare ? { ...origin, bare: true } : origin;
+      }
     }
     return results;
   } };
@@ -122,7 +125,7 @@ export function createImportOrigins(sources: readonly SourceFile[]): ImportOrigi
 type SiteSyntax = "valid" | "local" | "this-member";
 
 /** The root of the plain chain of names each site spells and ends in its name, read in one temporary tree. */
-function rootsAt(file: string, text: string, group: readonly { site: ResolvedNameSite; index: number }[]): { roots: Map<number, string>; shape: FileShape } | undefined {
+function rootsAt(file: string, text: string, group: readonly { site: ResolvedNameSite; index: number }[]): { roots: Map<number, { root: string; bare: boolean }>; shape: FileShape } | undefined {
   const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
   const diagnostics = (source as ts.SourceFile & { parseDiagnostics: readonly ts.Diagnostic[] }).parseDiagnostics;
   if (diagnostics.some((diagnostic) => diagnostic.category === ts.DiagnosticCategory.Error)) return undefined;
@@ -136,12 +139,12 @@ function rootsAt(file: string, text: string, group: readonly { site: ResolvedNam
     wanted.set(point, [...(wanted.get(point) ?? []), item]);
   }
   /** Chains that start at one point share their root, so the first that ends in the name settles it. */
-  const roots = new Map<number, string>();
+  const roots = new Map<number, { root: string; bare: boolean }>();
   const visit = (node: ts.Node): void => {
     for (const { site, index } of wanted.get(node.getStart(source)) ?? []) {
       const spelled = spelledAt(node, site.kind);
       const names = spelled === undefined ? undefined : plainChain(spelled);
-      if (names !== undefined && names.at(-1) === site.name && !roots.has(index)) roots.set(index, names[0]!);
+      if (names !== undefined && names.at(-1) === site.name && !roots.has(index)) roots.set(index, { root: names[0]!, bare: names.length === 1 });
     }
     node.forEachChild(visit);
   };

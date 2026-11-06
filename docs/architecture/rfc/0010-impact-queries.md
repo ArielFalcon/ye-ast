@@ -123,6 +123,7 @@ of traversal facts records the policy in its own validity key.
 | codegraph's heuristic `angular-template` and `angular-event` edges | no | ADR-0014 decision 1; rows A4 and A2 bring ye-ast's own |
 | any edge from a test file | no | tests are not callers; the declared scope says so |
 | an edge whose name, read at its position as a plain chain (`X`, `ts.X`, `pkg.a.X`) ending in the target's name, is rooted at a package import or a name only the language's libraries declare | no | codegraph matches `ts.X`, `new pkg.X()`, a call of a name imported from `node:fs` and a value imported from a package to a repository declaration of the same last name; the file's own import proves the name is not that declaration. A root that is unbound, shadowed, bound to the repository, or a chain through a call keeps the edge, with no cut: nothing contradicts it. Only the edges a walk reads are checked, and the walk runs again when one is dropped |
+| an edge whose name is a root spelled alone (`x`) that an import binds, when the module statements and the graph's `imports` edge at the binding join it to another declaration than the edge's target | to the joined declaration instead | codegraph links a use of an imported constant to a same-named function elsewhere; the binding proves which declaration the name is. A binding the join does not prove, or a longer chain (`x.m`, whose member the binding does not name), keeps the edge as the graph wrote it, with no cut. The walk also reads, for each symbol it reaches, the edges of the files that import it whose bare name the join binds to it |
 | containment | no | structure, not dependence |
 
 Edges ye-ast derives (interface bridges, and the Angular injection and template relations of rows A2 and A4) enter through one port of
@@ -281,8 +282,8 @@ interface ImportedFile {
 ```
 
 `importers` and `users` are reported information, not walk edges, so tests count and the policy table does not apply,
-except for the one judgement of what an edge reaches (`EdgeTargets`): an edge whose name is rooted outside the repository
-makes no user, as it is no walk edge;
+except for the one judgement of what an edge reaches (`EdgeTargets`): an edge whose name is rooted outside the repository,
+or that an import moves to a declaration of another file, makes no user of the file the graph matched;
 `users` is broader than the followed edges so that it contains qayaba's `importersOf`
 (qayaba@cfc69e3b `codegraph-store-reader.mjs:144`, which reads `imports`, any-kind and unresolved-name matches the same
 way). A name matches when the reference's name or its tail is a declared name, or the reference's name holds the file's

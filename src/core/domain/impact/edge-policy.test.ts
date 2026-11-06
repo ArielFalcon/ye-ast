@@ -84,3 +84,19 @@ test("only a root a package or the language's libraries bind is outside the repo
   assert.equal(root({ kind: "local-parameter", name: "x" }), false);
   assert.equal(edgeVerdict({ status: "unknown", reason: "unresolved", evidence }).kind, "keep");
 });
+
+test("a root spelled alone that an import binds to another proven declaration redirects the edge to it", () => {
+  const evidence = [{ path: "src/a.ts", line: 1 }];
+  const repository: ImportOrigin = { kind: "repository", file: "src/parts.ts" };
+
+  assert.deepEqual(edgeVerdict({ status: "complete", value: repository, evidence, bare: true }, "constant", "function"), { kind: "redirect", to: "constant" });
+  assert.deepEqual(edgeVerdict({ status: "complete", value: repository, evidence, bare: true }, "constant", "constant"), { kind: "keep" });
+});
+
+test("an unproven binding or a root a longer chain reaches keeps the edge on the graph's target", () => {
+  const evidence = [{ path: "src/a.ts", line: 1 }];
+  const repository: ImportOrigin = { kind: "repository", file: "src/parts.ts" };
+
+  assert.deepEqual(edgeVerdict({ status: "complete", value: repository, evidence, bare: true }, undefined, "function"), { kind: "keep" });
+  assert.deepEqual(edgeVerdict({ status: "complete", value: repository, evidence }, "Logger", "error"), { kind: "keep" });
+});

@@ -67,7 +67,7 @@ export interface InboundEdges {
   /** Candidate-specific settlements, restricted to admitted expansions and reached sources when sets are supplied. */
   settledUses(expanded?: ReadonlySet<GraphNodeId>, reached?: ReadonlySet<GraphNodeId>): ReadonlySet<string>;
   memberProofs(expanded?: ReadonlySet<GraphNodeId>): MemberReferenceProofs;
-  /** Every edge read so far into a symbol, with both ends, before `dropped` is applied to it. */
+  /** Every edge the graph holds that was read so far into a symbol, with both ends, before `corrections` apply to it. */
   followed(): readonly FollowedEdge[];
 }
 
@@ -76,6 +76,16 @@ export interface FollowedEdge {
   source: GraphSymbol;
   target: GraphSymbol;
 }
+
+/** What `EdgeTargets` judged of the edges read: those that reach no declaration they name, and those it moved to another. */
+export interface EdgeCorrections {
+  /** By `edgeKey`: none of them is a dependence of its graph target. */
+  dropped: ReadonlySet<string>;
+  /** By the declaration an import proves the edge reaches, the edges the graph matched to another one. */
+  into: ReadonlyMap<GraphNodeId, readonly FollowedEdge[]>;
+}
+
+export const NO_CORRECTIONS: EdgeCorrections = { dropped: new Set(), into: new Map() };
 
 /** One edge of the store, for naming it in a set; a handle inside one store, never output. */
 export function edgeKey({ source, target, kind, line, column }: GraphEdge): string {
@@ -105,8 +115,7 @@ export function createInboundEdges(
   validOccurrences?: ReadonlySet<string>,
   memberUses?: readonly MemberUseOrigin[],
   thisMemberCalls: ReadonlySet<string> = new Set(),
-  /** The edges, by `edgeKey`, that `EdgeTargets` judged to reach no declaration they name: none of them is a dependence. */
-  dropped: ReadonlySet<string> = new Set(),
+  corrections: EdgeCorrections = NO_CORRECTIONS,
 ): InboundEdges & InboundOccurrences {
   const relationsByTargetFile = Map.groupBy(relations, (candidate) => candidate.to.path);
   /** The local names more than one owner of one file declares: an ambiguous name settles nothing. */
@@ -154,7 +163,8 @@ export function createInboundEdges(
         return source === undefined || source.id === target.id ? [] : [{ edge, source }];
       });
       for (const { edge, source } of placed) followed.push({ edge, source, target });
-      into = placed.filter(({ edge }) => !dropped.has(edgeKey(edge)));
+      const moved = (corrections.into.get(target.id) ?? []).filter(({ source }) => source.id !== target.id);
+      into = [...placed.filter(({ edge }) => !corrections.dropped.has(edgeKey(edge))), ...moved];
       intoCache.set(target.id, into);
     }
     return into;

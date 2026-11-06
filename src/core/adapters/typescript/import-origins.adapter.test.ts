@@ -4,7 +4,7 @@ import { createImportOrigins } from "./import-origins.adapter.ts";
 import type { ImportOrigin } from "../../domain/relations/resolved-reference.ts";
 import type { Finding } from "../../domain/shared/fact.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
-import type { ImportOriginSite } from "../../ports/import-origins.port.ts";
+import type { ImportOriginSite, RootOrigin } from "../../ports/import-origins.port.ts";
 
 const CONFIG: SourceFile = {
   path: "tsconfig.json",
@@ -284,7 +284,7 @@ function resolvedSite(line: number, spelled: string, kind: string, name: string)
   return { file: RESOLVED.path, line, column: RESOLVED_LINES[line - 1]!.indexOf(spelled) + 1, kind, name };
 }
 
-async function rootOf(site: ReturnType<typeof resolvedSite>): Promise<Finding<ImportOrigin>> {
+async function rootOf(site: ReturnType<typeof resolvedSite>): Promise<RootOrigin> {
   return only(await createImportOrigins([...SOURCES, RESOLVED]).rootOrigins([site]));
 }
 
@@ -312,6 +312,14 @@ test("a chain whose root is a repository import is rooted there, whatever member
   const finding = await rootOf(resolvedSite(8, "Store", "calls", "create"));
 
   assert.deepEqual(finding.status === "complete" && finding.value, { kind: "repository", file: "src/store.ts" });
+});
+
+test("only a site that spells its root alone is bare", async () => {
+  const alone = await rootOf(resolvedSite(6, "filter", "calls", "filter"));
+  const chained = await rootOf(resolvedSite(8, "Store", "calls", "create"));
+
+  assert.equal(alone.bare, true);
+  assert.equal(chained.bare, undefined);
 });
 
 test("a chain through a call, or one that ends in another name than the edge's, is unknown", async () => {
@@ -358,5 +366,5 @@ test("a library name a module declares in a declare global block is the reposito
 test("a library name a module declares at its top level is not global, so its use elsewhere stays ambient", async () => {
   const module: SourceFile = { path: "src/headers.ts", content: "export class Headers {}\n" };
 
-  assert.deepEqual(await globalRootOf(module, "new Headers()", "instantiates", "Headers"), { status: "complete", value: { kind: "ambient", name: "Headers" }, evidence: [{ path: "src/use.ts", line: 2 }] });
+  assert.deepEqual(await globalRootOf(module, "new Headers()", "instantiates", "Headers"), { status: "complete", value: { kind: "ambient", name: "Headers" }, evidence: [{ path: "src/use.ts", line: 2 }], bare: true });
 });
