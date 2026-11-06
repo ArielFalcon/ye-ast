@@ -6,12 +6,14 @@ import type { ScopeRequest } from "../core/domain/shared/scope.ts";
 import type { ImpactBudget, ImpactValue } from "../core/domain/impact/impact-fact.ts";
 import type { ImportersValue } from "../core/domain/impact/importers-fact.ts";
 import type { OutlineValue } from "../core/domain/outline/outline-fact.ts";
+import type { TraceValue } from "../core/domain/trace/trace-fact.ts";
 import type { EntrypointMap } from "../core/domain/map/entrypoint-map.ts";
 import type { Digest } from "../core/ports/digest.port.ts";
 import type { EntrypointQueries } from "../core/ports/entrypoint-queries.port.ts";
 import type { CallersTarget, ImpactFault, ImpactQueries } from "../core/ports/impact-queries.port.ts";
 import type { LiveFault, LiveStaleNotice } from "../core/ports/live-queries.port.ts";
 import type { OutlineFault, OutlineQueries } from "../core/ports/outline-queries.port.ts";
+import { TRACE_BOUND_FIELDS, type TraceQueries } from "../core/ports/trace-queries.port.ts";
 import type { Redaction } from "../core/ports/redaction.port.ts";
 import { DEFAULT_REVISION, type VcsFault } from "../core/ports/vcs.port.ts";
 import type { WorkspaceFault, WorkspaceRepositoryRequest } from "../core/ports/workspace-repos.port.ts";
@@ -29,6 +31,7 @@ export interface QueryExecutionDeps {
   entrypoints: EntrypointQueries;
   impact: ImpactQueries;
   outline: OutlineQueries;
+  trace: TraceQueries;
   workspace: WorkspaceQueries;
   workspaceImpact: WorkspaceImpactQueries;
   decisions: DecisionQueries;
@@ -53,6 +56,7 @@ export type SourcePayload =
   | { family: "impact" | "callers"; branch: "workspace"; read: PublicRead<WorkspaceImpactValue> }
   | { family: "importers"; read: PublicRead<ImportersValue> }
   | { family: "outline"; read: PublicRead<OutlineValue> }
+  | { family: "trace"; read: PublicRead<TraceValue> }
   | { family: "workspace"; read: PublicRead<PublicWorkspaceValue> }
   | { family: "decisions"; read: PublicRead<DecisionValue> };
 
@@ -89,7 +93,7 @@ export type QueryFault = VcsFault | LiveFault | ImpactFault | OutlineFault | Wor
 
 type Run = Promise<Result<ExecutedSource, QueryFault>>;
 
-/** The single semantic dispatch of the seven families, shared by the original tools and composition. */
+/** The single semantic dispatch of the eight families, shared by the original tools and composition. */
 export async function executeQuery(query: SemanticQuery, ctx: QueryExecutionContext): Run {
   try {
     const target = ctx.catalog.resolve(query.arguments.repo);
@@ -178,6 +182,12 @@ async function dispatch(query: SemanticQuery, repository: RepositoryBinding, ctx
       const result = await deps.outline.outline({ ...local, ...atRevision(a.revision, a.live, onStale), ...subject, ...scopeOf(a.scope), ...signal });
       if (!result.ok) return result;
       return finish({ fact: result.value }, query, repository, true, moved, ctx, undefined, (read, rest) => ({ family: "outline", read, query, ...rest }));
+    }
+    case "ye_ast_trace": {
+      const a = query.arguments;
+      const result = await deps.trace.walk({ ...local, ...atRevision(a.revision, a.live, onStale), targets: a.targets as CallersTarget[], ...scopeOf(a.scope), ...budgetOf(a.budget, TRACE_BOUND_FIELDS), ...signal });
+      if (!result.ok) return result;
+      return finish({ fact: result.value }, query, repository, true, moved, ctx, undefined, (read, rest) => ({ family: "trace", read, query, ...rest }));
     }
     case "ye_ast_workspace": {
       const result = await deps.workspace.outwardNames({ ...workspaceRequest(query.arguments, repository), ...signal });
@@ -290,9 +300,9 @@ function scopeOf(requested: SemanticArguments<"entrypoints">["scope"]): { scope?
   return { scope: { ...(include !== undefined && { include }), ...(exclude !== undefined && { exclude }) } };
 }
 
-function budgetOf(requested: SemanticArguments<"impact">["budget"]): { budget?: ImpactBudget } {
+function budgetOf(requested: Partial<Record<WalkBoundsField, number | undefined>> | undefined, fields: readonly WalkBoundsField[] = WALK_BOUND_FIELDS): { budget?: ImpactBudget } {
   const bounds: Partial<Record<WalkBoundsField, number>> = {};
-  for (const field of WALK_BOUND_FIELDS) {
+  for (const field of fields) {
     const value = requested?.[field];
     if (value !== undefined) bounds[field] = value;
   }

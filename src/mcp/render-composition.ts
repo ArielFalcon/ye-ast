@@ -479,6 +479,7 @@ class CompactView {
       case "outline-declaration": return `outline declaration ${this.anchor(part.anchor)} ${part.kindName}`;
       case "outline-file": return `outline ${this.file(part.file)}: ${part.declarations.length === 0 ? "no declarations" : this.outlined(part.declarations).map((declaration) => this.describe(declaration, true)).join(", ")}; ${part.imports.length} imports`;
       case "unheld-file": return `unheld ${this.file(part.file)} (not read; not an empty file)`;
+      case "trace-step": return short ? `trace step #${part.step} ${this.anchor(part.anchor)}` : `trace step #${part.step} ${this.anchor(part.anchor)} ${part.kindName} depth ${part.depth}${part.parent === undefined ? "" : ` under #${part.parent}`}${part.seen === undefined ? "" : ` seen #${part.seen}`}`;
       case "outward-name": return `${part.disposition} outward name ${part.kindName} ${quoted(part.name)}${this.context(part.origin)}${short ? "" : `, ${this.evidenceList(part.evidence)}`}`;
       case "name-candidate": return `candidate ${quoted(part.name)} served by ${part.repo} basis ${part.basis} (candidate only: no membership, trust or call)${short ? "" : `, ${this.evidenceList(part.evidence)}`}`;
       case "call-site": {

@@ -15,7 +15,7 @@ import type { AnchorId, ComposeFull, ComposeReceipt, CompositionGraph, EntityId,
 
 const everyDeclaration = (declarations: readonly any[]): any[] => declarations.flatMap((item) => [item, ...everyDeclaration(item.children ?? [])]);
 
-const OPERATIONS = ["ye_ast_callers", "ye_ast_compose", "ye_ast_decisions", "ye_ast_entrypoints", "ye_ast_importers", "ye_ast_impact", "ye_ast_outline", "ye_ast_workspace"].sort();
+const OPERATIONS = ["ye_ast_callers", "ye_ast_compose", "ye_ast_decisions", "ye_ast_entrypoints", "ye_ast_importers", "ye_ast_impact", "ye_ast_outline", "ye_ast_trace", "ye_ast_workspace"].sort();
 const FAULT = "ye-ast/fault";
 
 type Fault = { kind: string; stage?: string; queryKey?: string; family?: string; cause?: { kind: string; stage?: string } };
@@ -155,7 +155,7 @@ after(async () => {
   fixture?.dispose();
 });
 
-test("stdio discovers eight operations and composes all seven families with the facts their original tools report", async () => {
+test("stdio discovers nine operations and composes all seven families with the facts their original tools report", async () => {
   const listed = (await stdio.request("tools/list")).result.tools as { name: string; outputSchema?: unknown }[];
   assert.deepEqual(listed.map((tool) => tool.name).sort(), OPERATIONS);
   for (const tool of listed) assert.equal(tool.outputSchema, undefined, tool.name);

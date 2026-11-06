@@ -218,6 +218,7 @@ export const partSchema = z.discriminatedUnion("kind", [
   part("outline-declaration", { anchor: ids.anchor, kindName: z.string(), children: z.array(ids.part).exactOptional() }),
   part("outline-file", { file: ids.file, declarations: z.array(ids.part), imports: z.array(outlineImport) }),
   part("unheld-file", { file: ids.file }),
+  part("trace-step", { anchor: ids.anchor, kindName: z.string(), step: count, depth: count, parent: count.exactOptional(), seen: count.exactOptional() }),
   part("outward-name", { origin: evidenceOrigin, name: z.string(), kindName: outwardKind, evidence: evidenceList, disposition: z.enum(["stated", "unserved"]) }),
   part("name-candidate", { context: ids.read, name: z.string(), repo: z.string(), basis: candidateBasis, evidence: evidenceList }),
   part("call-site", {

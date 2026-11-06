@@ -54,6 +54,8 @@ export function partReferences(part: Part): Reference[] {
       return [ref("file", "file", part.file)];
     case "outline-declaration":
       return [ref("anchor", "anchor", part.anchor), ...many("part", "children", part.children ?? [])];
+    case "trace-step":
+      return [ref("anchor", "anchor", part.anchor)];
     case "outline-file":
       return [
         ref("file", "file", part.file),

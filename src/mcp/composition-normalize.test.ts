@@ -432,6 +432,17 @@ test("a proven outline binding anchors the declaration it reaches, so compose ca
   assert.deepEqual({ file: t.path(anchor.file), symbol: anchor.symbol, line: anchor.line, endLine: anchor.endLine, kindName: declaration.kindName }, { file: "src/OrderService.java", symbol: "OrderService", line: 3, endLine: 50, kindName: "class" });
 });
 
+test("a trace anchors each step at its declaration, in pre-order with its parent and seen step, on the anchor an outline of the same declaration uses", () => {
+  const t = new Tables(normalizeSource(sourceFixture("trace"), digest));
+  const steps = t.list("/value/steps", "trace-step");
+  assert.deepEqual(steps.map((s) => [s.step, s.depth, s.parent, t.handler(s.anchor)]), [
+    [0, 0, undefined, { path: "src/OrderController.java", symbol: "one", line: 6, endLine: 9 }],
+    [1, 1, 0, { path: "src/OrderService.java", symbol: "find", line: 31, endLine: 38 }],
+  ]);
+  const outline = new Tables(normalizeSource(sourceFixture("outline"), digest));
+  assert.equal(outline.partOf(outline.list("/value/files", "outline-file")[0]!.declarations[1]!, "outline-declaration").anchor, steps[0]!.anchor);
+});
+
 test("an outline focus keeps each matched declaration with its subtree, and no outline file a cut of the file would misstate", () => {
   const declaration: OutlineDeclaration = { kind: "method", name: "get", line: 10, endLine: 20, children: [{ kind: "function", name: "inner", line: 12, endLine: 14 }] };
   const value = { focus: [{ file: "src/Api.ts", selector: "Api.get", path: "Api.get", ancestors: [{ kind: "class", name: "Api", line: 3, endLine: 40 }], declaration, omitted: 4 }], unheld: [] };

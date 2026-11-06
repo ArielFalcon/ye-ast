@@ -17,6 +17,7 @@ function discoveryServer() {
     entrypoints: unused<McpDeps["entrypoints"]>(),
     impact: unused<McpDeps["impact"]>(),
     outline: unused<McpDeps["outline"]>(),
+    trace: unused<McpDeps["trace"]>(),
     workspace: unused<McpDeps["workspace"]>(),
     workspaceImpact: unused<McpDeps["workspaceImpact"]>(),
     decisions: unused<McpDeps["decisions"]>(),
@@ -40,7 +41,7 @@ test("catalogue advertises useful guides within budget", async () => {
     const bytes = Buffer.byteLength(JSON.stringify({ tools }));
     const outputs = tools.reduce((sum, tool) => sum + (tool.outputSchema === undefined ? 0 : Buffer.byteLength(JSON.stringify(tool.outputSchema))), 0);
     console.log(`discovery bytes: ${bytes}; input schema bytes: ${Buffer.byteLength(JSON.stringify(tools.map(tool => tool.inputSchema)))}; output schema bytes: ${outputs}; instructions chars: ${session.instructions?.length}`);
-    assert.ok((session.instructions?.length ?? Infinity) <= 3900);
+    assert.ok((session.instructions?.length ?? Infinity) <= 4050);
     assert.match(session.instructions!, /supply select and page together/);
     for (const rule of [
       /Content carries presentation text[^\n]*result JSON/,
@@ -54,7 +55,7 @@ test("catalogue advertises useful guides within budget", async () => {
     ]) assert.match(session.instructions!, rule);
 
     const originals = tools.filter(tool => tool.name !== "ye_ast_compose");
-    assert.ok(Buffer.byteLength(JSON.stringify({ tools: originals })) <= 32_000);
+    assert.ok(Buffer.byteLength(JSON.stringify({ tools: originals })) <= 35_700);
     assert.equal(outputs, 0);
     const compose = tools.find(tool => tool.name === "ye_ast_compose");
     assert.ok(compose);
@@ -152,10 +153,11 @@ const INPUT_CONSTRAINTS: Record<string, string> = {
   ye_ast_callers: "7ee67eedc7880c1bf1e5b7beb1d3f65de5d1ef7440de26963cc554ac217f8259",
   ye_ast_importers: "5c8a30a8565d803f111f7c0878aab0c64f902e7b58f1bb9731a7ae2c75781022",
   ye_ast_outline: "2f1a5187e37a9f464453fcc2adb15c02b469b798a37de7c5c32f6cf81a612109",
+  ye_ast_trace: "f9c1b461e65ebc55a67b9214c177030657569a133be15f4065a68e25678aeec1",
   ye_ast_workspace: "a3eb1c0ee1dbf6c86080e0215b48283bcd1d26de492fbd78d558ba49b2ee7cda",
   ye_ast_decisions: "a3eb1c0ee1dbf6c86080e0215b48283bcd1d26de492fbd78d558ba49b2ee7cda",
 };
-const COMPOSE_CONSTRAINTS = "a92ed5067d8ac46ebc38e979293f06784a52a221126b791d450b8293ecc3bb71";
+const COMPOSE_CONSTRAINTS = "75fcd7d1645e4da54259244b4fbf1755f06fcf59fb07d1bb9dc4e4281d8e66e5";
 function canonicalConstraints(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(canonicalConstraints);
   if (value === null || typeof value !== "object") return value;

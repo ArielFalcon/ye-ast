@@ -10,6 +10,7 @@ import type { EntrypointMap } from "../core/domain/map/entrypoint-map.ts";
 import type { ImpactValue } from "../core/domain/impact/impact-fact.ts";
 import type { ImportersValue } from "../core/domain/impact/importers-fact.ts";
 import type { OutlineListing, OutlineValue } from "../core/domain/outline/outline-fact.ts";
+import type { TraceValue } from "../core/domain/trace/trace-fact.ts";
 import type { CallSite } from "../core/domain/topology/call-site.ts";
 import type { WorkspaceImpactValue, RepoImpact } from "../core/ports/workspace-impact-queries.port.ts";
 import type { DecisionValue } from "../core/ports/decision-queries.port.ts";
@@ -189,6 +190,19 @@ export function importersValue(): ImportersValue {
   };
 }
 
+/** The controller method the callers fixture reaches, traced forward into the service method that fixture targets. */
+export function traceValue(): TraceValue {
+  return {
+    roots: [{ target: "src/OrderController.java:one", steps: [0] }],
+    steps: [
+      { id: 0, depth: 0, file: "src/OrderController.java", symbol: "one", kind: "method", line: 6, endLine: 9 },
+      { id: 1, parent: 0, depth: 1, file: "src/OrderService.java", symbol: "find", kind: "method", line: 31, endLine: 38, at: { line: 7, column: 12 }, via: "call", external: [{ kind: "unnamed", names: ["repository.findById"] }] },
+    ],
+    readingPlan: { ranges: [{ file: "src/OrderController.java", start: 6, end: 9, steps: [0] }, { file: "src/OrderService.java", start: 31, end: 38, steps: [1] }], lines: 12 },
+    cost: { expanded: 2 },
+  };
+}
+
 export function outlineValue(): OutlineListing {
   return {
     files: [
@@ -270,7 +284,7 @@ export function decisionsValue(): DecisionValue {
   };
 }
 
-export type FixtureKind = "entrypoints" | "impact-local" | "impact-workspace" | "callers-local" | "callers-workspace" | "importers" | "outline" | "workspace" | "decisions";
+export type FixtureKind = "entrypoints" | "impact-local" | "impact-workspace" | "callers-local" | "callers-workspace" | "importers" | "outline" | "trace" | "workspace" | "decisions";
 
 /** What a test may replace; `value` keeps the default complete envelope, `fact` replaces the whole fact. */
 export type FixtureOverrides<V, F extends ExecutedSource["family"]> = {
@@ -284,7 +298,7 @@ export type FixtureOverrides<V, F extends ExecutedSource["family"]> = {
 type AnyOverrides =
   | FixtureOverrides<EntrypointMap, "entrypoints"> | FixtureOverrides<ImpactValue, "impact"> | FixtureOverrides<ImpactValue, "callers">
   | FixtureOverrides<WorkspaceImpactValue, "impact"> | FixtureOverrides<WorkspaceImpactValue, "callers"> | FixtureOverrides<ImportersValue, "importers">
-  | FixtureOverrides<OutlineValue, "outline"> | FixtureOverrides<PublicWorkspaceValue, "workspace"> | FixtureOverrides<DecisionValue, "decisions">;
+  | FixtureOverrides<OutlineValue, "outline"> | FixtureOverrides<TraceValue, "trace"> | FixtureOverrides<PublicWorkspaceValue, "workspace"> | FixtureOverrides<DecisionValue, "decisions">;
 
 /** A family's source; impact and callers share one payload member, so their branch is fixed by intersection. */
 type Of<F extends ExecutedSource["family"], B = never> = [B] extends [never] ? Extract<ExecutedSource, { family: F }> : Extract<ExecutedSource, { branch: B }> & { family: F; query: SemanticQueryOf<F> };
@@ -308,6 +322,7 @@ export function sourceFixture(kind: "callers-local", overrides?: FixtureOverride
 export function sourceFixture(kind: "callers-workspace", overrides?: FixtureOverrides<WorkspaceImpactValue, "callers">): Of<"callers", "workspace">;
 export function sourceFixture(kind: "importers", overrides?: FixtureOverrides<ImportersValue, "importers">): Of<"importers">;
 export function sourceFixture(kind: "outline", overrides?: FixtureOverrides<OutlineValue, "outline">): Of<"outline">;
+export function sourceFixture(kind: "trace", overrides?: FixtureOverrides<TraceValue, "trace">): Of<"trace">;
 export function sourceFixture(kind: "workspace", overrides?: FixtureOverrides<PublicWorkspaceValue, "workspace">): Of<"workspace">;
 export function sourceFixture(kind: "decisions", overrides?: FixtureOverrides<DecisionValue, "decisions">): Of<"decisions">;
 export function sourceFixture(kind: FixtureKind, overrides?: AnyOverrides): ExecutedSource {
@@ -340,6 +355,10 @@ export function sourceFixture(kind: FixtureKind, overrides?: AnyOverrides): Exec
     case "outline": {
       const o = overrides as FixtureOverrides<OutlineValue, "outline"> | undefined;
       return { family: "outline", query: query("outline", o?.arguments ?? { repo: "shop", revision: SHA_A, files: ["src/OrderController.java"] }), ...build(outlineValue, o, { inputs: inputsOf({ declaredConfig: { files: ["src/OrderController.java"] } }) }) };
+    }
+    case "trace": {
+      const o = overrides as FixtureOverrides<TraceValue, "trace"> | undefined;
+      return { family: "trace", query: query("trace", o?.arguments ?? { repo: "shop", revision: SHA_A, targets: [{ file: "src/OrderController.java", symbol: "one" }] }), ...build(traceValue, o, { inputs: inputsOf({ declaredConfig: { targets: ["src/OrderController.java:one"] } }) }) };
     }
     case "workspace": {
       const o = overrides as FixtureOverrides<PublicWorkspaceValue, "workspace"> | undefined;

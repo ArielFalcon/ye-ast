@@ -9,7 +9,7 @@ export const responseModeSchema = z
   .describe("Presentation only; coverage/traversal unchanged. summary=findings; details=evidence/locations; full=complete result JSON + navigation text.");
 
 export type ResponseMode = z.infer<typeof responseModeSchema>;
-export type ToolFamily = "entrypoints" | "callers" | "impact" | "importers" | "outline" | "workspace" | "decisions";
+export type ToolFamily = "entrypoints" | "callers" | "impact" | "importers" | "outline" | "trace" | "workspace" | "decisions";
 export type RenderContext = { tool: ToolFamily; recovery?: Recovery };
 export type ResponseRenderer<T> = (fact: Fact<T>, mode: ResponseMode, context?: RenderContext) => string;
 

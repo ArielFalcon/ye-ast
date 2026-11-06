@@ -19,7 +19,7 @@ import { COMPOSE_INPUT, COMPOSE_OUTPUT } from "./composition-schema.ts";
 import { runComposition } from "./compose-request.ts";
 import { composeFull, composeReceipt, renderComposition } from "./render-composition.ts";
 import { controlFault, faultContext, renderFault, type FaultQueryContext, type PublicFault } from "./fault-presentation.ts";
-import { renderDecisions, renderEntrypointMap, renderImpact, renderImporters, renderOutline, renderRefresh, renderStale, renderWorkspace, renderWorkspaceImpact } from "./render.ts";
+import { renderDecisions, renderEntrypointMap, renderImpact, renderImporters, renderOutline, renderRefresh, renderTrace, renderStale, renderWorkspace, renderWorkspaceImpact } from "./render.ts";
 
 /** The key of the result's `_meta` that carries a stale notice. */
 export const LIVE_META = "ye-ast/live";
@@ -56,6 +56,7 @@ When to call:
 - ye_ast_impact: review a diff (base..head, or trusted live edits): what changed declarations reach; entrypoints added, removed or altered.
 - ye_ast_importers: before moving, renaming or deleting a file or changing its exports: who imports or names it.
 - ye_ast_outline: declaration spans and imports, to choose line ranges to read or target; focus on one declaration by dotted path or line after the first listing.
+- ye_ast_trace: what a declaration executes, in source order, with a reading plan of the spans to open; call it before reading a flow file by file.
 - ye_ast_workspace: which other repositories this one names (HTTP, messaging, dependencies), to choose clones.
 - ye_ast_decisions: workspace configuration gaps with evidence-backed options; it writes nothing.
 - ye_ast_compose: 1..16 of these queries in one call, merging shared entities. Queries rerun; nothing is stored and captures are not atomic, so obtain dependent coordinates first.
@@ -266,6 +267,11 @@ const shapes = {
       unheld: strings,
     }),
   ]),
+  trace: z.looseObject({
+    roots: z.array(z.looseObject({ target: z.string(), steps: z.array(z.number()) })),
+    steps: z.array(z.looseObject({ id: z.number(), depth: z.number(), file: z.string(), symbol: z.string(), kind: z.string(), line: z.number() })),
+    readingPlan: z.looseObject({ ranges: z.array(z.looseObject({ file: z.string(), start: z.number(), end: z.number(), steps: z.array(z.number()) })), lines: z.number() }),
+  }),
   workspace: z.looseObject({
     workspace: workspaceIdentity,
     repositorySnapshots: snapshots,
@@ -309,9 +315,10 @@ export const IMPACT_OUTPUT = withSelections(outputFor(shapes.impact, impactRecov
 export const CALLERS_OUTPUT = withSelections(outputFor(shapes.impact, callersRecoverySchema), "callers", callersRecoverySchema);
 export const IMPORTERS_OUTPUT = outputFor(shapes.importers);
 export const OUTLINE_OUTPUT = outputFor(shapes.outline);
+export const TRACE_OUTPUT = outputFor(shapes.trace);
 export const WORKSPACE_OUTPUT = outputFor(shapes.workspace);
 export const DECISIONS_OUTPUT = outputFor(shapes.decisions);
-const OUTPUTS: Readonly<Record<ToolFamily, z.ZodType>> = { entrypoints: ENTRYPOINTS_OUTPUT, impact: IMPACT_OUTPUT, callers: CALLERS_OUTPUT, importers: IMPORTERS_OUTPUT, outline: OUTLINE_OUTPUT, workspace: WORKSPACE_OUTPUT, decisions: DECISIONS_OUTPUT };
+const OUTPUTS: Readonly<Record<ToolFamily, z.ZodType>> = { entrypoints: ENTRYPOINTS_OUTPUT, impact: IMPACT_OUTPUT, callers: CALLERS_OUTPUT, importers: IMPORTERS_OUTPUT, outline: OUTLINE_OUTPUT, trace: TRACE_OUTPUT, workspace: WORKSPACE_OUTPUT, decisions: DECISIONS_OUTPUT };
 
 type Controls = { tool: "entrypoints" | "impact" | "callers"; select?: EvidenceSelection | undefined; page?: { limit: number; cursor?: string | undefined } | undefined; expect?: string | undefined };
 
@@ -369,6 +376,8 @@ export function createMcpServer(deps: McpDeps): McpServer {
         return respond(source, source.read, true, renderImporters, mode, controls, cursor, context);
       case "outline":
         return respond(source, source.read, true, renderOutline, mode, controls, cursor, context);
+      case "trace":
+        return respond(source, source.read, true, renderTrace, mode, controls, cursor, context);
       case "workspace":
         return respond(source, source.read, false, renderWorkspace, mode, controls, cursor, context);
       case "decisions":
@@ -601,6 +610,17 @@ export function createMcpServer(deps: McpDeps): McpServer {
       annotations,
     },
     ({ mode, ...semantic }: ToolArguments<"outline">, ctx) => answer({ name: "ye_ast_outline", arguments: semantic }, mode, ctx.mcpReq.signal),
+  );
+
+  server.registerTool(
+    "ye_ast_trace",
+    {
+      title: "What declarations execute",
+      description: "Use to follow a flow forward before reading it file by file: from each declaration a target selects (a name, possibly several declarations, or an inclusive line range), the calls its body makes in source order, then theirs, each declaration expanded once and later repeats marked seen. Branches are not evaluated. Terminal callees fold into leaves with their spans; calls leaving the repository group by module; a call no rule settles is a cut listing its candidates. The reading plan lists the spans to open, merged per file. For who depends on a declaration use ye_ast_callers.",
+      inputSchema: compactInput(TOOL_INPUTS.trace),
+      annotations,
+    },
+    ({ mode, ...semantic }: ToolArguments<"trace">, ctx) => answer({ name: "ye_ast_trace", arguments: semantic }, mode, ctx.mcpReq.signal),
   );
 
   server.registerTool(

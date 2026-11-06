@@ -12,6 +12,7 @@ const MINIMAL: Record<ToolFamily, Record<string, unknown>> = {
   impact: { base: "main" },
   importers: { files: ["src/a.ts"] },
   outline: { files: ["src/a.ts"] },
+  trace: { targets: [{ file: "src/a.ts", symbol: "run" }] },
   workspace: {},
   decisions: {},
 };

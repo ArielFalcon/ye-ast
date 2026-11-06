@@ -11,6 +11,8 @@ import type { EntrypointQueries, MapRequest } from "../core/ports/entrypoint-que
 import type { ImpactCallersRequest, ImpactFault, ImpactImportersRequest, ImpactOfChangeRequest, ImpactQueries, OfChangeFault } from "../core/ports/impact-queries.port.ts";
 import type { OutlineFault, OutlineQueries, OutlineRequest } from "../core/ports/outline-queries.port.ts";
 import type { OutlineValue } from "../core/domain/outline/outline-fact.ts";
+import type { TraceFault, TraceQueries, TraceRequest } from "../core/ports/trace-queries.port.ts";
+import type { TraceValue } from "../core/domain/trace/trace-fact.ts";
 import { REDACTED, type Redaction } from "../core/ports/redaction.port.ts";
 import type { VcsFault } from "../core/ports/vcs.port.ts";
 import type { LiveFault } from "../core/ports/live-queries.port.ts";
@@ -21,7 +23,7 @@ import type { RepoImpact } from "../core/ports/workspace-impact-queries.port.ts"
 import type { DecisionQueries, DecisionsRequest, DecisionValue } from "../core/ports/decision-queries.port.ts";
 import type { OutwardName } from "../core/domain/topology/outward-name.ts";
 import type { FactRead, WorkspaceRefresh } from "../core/ports/workspace-queries.port.ts";
-import { createMcpServer, FAULT_META, RESULT_JSON_LABEL, ENTRYPOINTS_OUTPUT, IMPACT_OUTPUT, CALLERS_OUTPUT, IMPORTERS_OUTPUT, OUTLINE_OUTPUT, WORKSPACE_OUTPUT, DECISIONS_OUTPUT } from "./server.ts";
+import { createMcpServer, FAULT_META, RESULT_JSON_LABEL, ENTRYPOINTS_OUTPUT, IMPACT_OUTPUT, CALLERS_OUTPUT, IMPORTERS_OUTPUT, OUTLINE_OUTPUT, TRACE_OUTPUT, WORKSPACE_OUTPUT, DECISIONS_OUTPUT } from "./server.ts";
 
 function resultFields(result: any): any {
   const text = result.content?.[0]?.text;
@@ -192,6 +194,8 @@ const OUTLINE: OutlineValue = {
   unheld: ["src/Gone.swift"],
 };
 
+const TRACE: TraceValue = { roots: [{ target: "src/Order.java:total", steps: [0] }], steps: [{ id: 0, depth: 0, file: "src/Order.java", symbol: "total", kind: "method", line: 20, endLine: 24 }], readingPlan: { ranges: [{ file: "src/Order.java", start: 20, end: 24, steps: [0] }], lines: 5 }, cost: { expanded: 1 } };
+
 const IMPORTERS: ImportersValue = {
   files: [{ file: "src/OrderService.java", importers: ["src/OrderController.java"], users: ["src/OrderController.java", "src/Billing.java"], unresolvedNamers: ["src/Legacy.java"] }],
 };
@@ -213,6 +217,7 @@ interface Calls {
   callers: ImpactCallersRequest[];
   importers: ImpactImportersRequest[];
   outline: OutlineRequest[];
+  trace: TraceRequest[];
   decisions: DecisionsRequest[];
 }
 
@@ -222,6 +227,7 @@ interface Answers {
   callers: (request: ImpactCallersRequest) => Promise<Result<Fact<ImpactValue>, ImpactFault>>;
   importers: (request: ImpactImportersRequest) => Promise<Result<Fact<ImportersValue>, VcsFault | LiveFault>>;
   outline: (request: OutlineRequest) => Promise<Result<Fact<OutlineValue>, OutlineFault>>;
+  trace: (request: TraceRequest) => Promise<Result<Fact<TraceValue>, TraceFault>>;
   outwardNames: (request: WorkspaceRequest) => Promise<Result<FactRead<WorkspaceValue>, WorkspaceFault>>;
   decisions: (request: DecisionsRequest) => Promise<Result<FactRead<DecisionValue>, WorkspaceFault>>;
   workspaceCallers: (request: WorkspaceCallersRequest) => Promise<Result<FactRead<WorkspaceImpactValue>, WorkspaceFault>>;
@@ -229,7 +235,7 @@ interface Answers {
 }
 
 async function setup(answers: Partial<Answers> = {}, refresh?: WorkspaceRefresh, repositories?: readonly { path: string; repoId: string }[], repository = REPOSITORY, redaction: Redaction = fakeRedaction): Promise<{ session: Session; calls: Calls }> {
-  const calls: Calls = { map: [], ofChange: [], callers: [], importers: [], outline: [], workspaceCallers: [], workspaceOfChange: [], workspaceReads: [], decisions: [] };
+  const calls: Calls = { map: [], ofChange: [], callers: [], importers: [], outline: [], trace: [], workspaceCallers: [], workspaceOfChange: [], workspaceReads: [], decisions: [] };
   /** A fact with the sidecar a read that refreshed something carries, and without one when it refreshed nothing. */
   const read = <T>(fact: Fact<T>): FactRead<T> => (refresh === undefined ? { fact } : { fact, refresh });
   const forRepo = <T>(fact: Fact<T>, repoId: string): Fact<T> => ({ ...fact, snapshot: { ...fact.snapshot, repo: repoId } });
@@ -275,13 +281,19 @@ async function setup(answers: Partial<Answers> = {}, refresh?: WorkspaceRefresh,
       return (answers.outline ?? (async (r) => ({ ok: true, value: forRepo({ ...base(), status: "complete", value: OUTLINE }, r.repoId) })))(request);
     },
   };
+  const trace: TraceQueries = {
+    walk: (request) => {
+      calls.trace.push(request);
+      return (answers.trace ?? (async (r) => ({ ok: true, value: forRepo({ ...base(), status: "complete", value: TRACE }, r.repoId) })))(request);
+    },
+  };
   const decisions: DecisionQueries = {
     decisions: (request) => {
       calls.decisions.push(request);
       return (answers.decisions ?? (async (r) => ({ ok: true, value: read(forRepo(decisionFact(), r.repo.id!)) })))(request);
     },
   };
-  const server = createMcpServer({ version: "0.0.0", entrypoints, impact, outline, workspace, workspaceImpact, decisions, digest: { of: (value) => createHash("sha256").update(value).digest("hex") }, redaction, repository, ...(repositories === undefined ? {} : { repositories }) });
+  const server = createMcpServer({ version: "0.0.0", entrypoints, impact, outline, trace, workspace, workspaceImpact, decisions, digest: { of: (value) => createHash("sha256").update(value).digest("hex") }, redaction, repository, ...(repositories === undefined ? {} : { repositories }) });
   return { session: await openSession(server), calls };
 }
 
@@ -587,6 +599,7 @@ const TOOL_CALLS: [string, Record<string, unknown>][] = [
   ["ye_ast_callers", { targets: [{ file: "src/a.ts", symbol: "A.f" }] }],
   ["ye_ast_importers", { files: ["src/a.ts"] }],
   ["ye_ast_outline", { files: ["src/Order.java"] }],
+  ["ye_ast_trace", { targets: [{ file: "src/Order.java", symbol: "total" }] }],
   ["ye_ast_workspace", {}],
   ["ye_ast_decisions", {}],
 ];
@@ -807,10 +820,31 @@ test("an outline call with both files and focus, or with neither, is refused bef
   await session.close();
 });
 
-test("lists seven query families and the composition operation", async () => {
+test("a trace forwards its targets, revision, scope and walk bounds, and answers its roots and reading plan", async () => {
+  const { session, calls } = await setup();
+  const text = textOf(await session.callTool("ye_ast_trace", { targets: [{ file: "src/Order.java", symbol: "total" }, { file: "src/Order.java", start: 3, end: 9 }], revision: "topic", scope: { include: ["src/**"] }, budget: { depth: 2, expansions: 7 } }));
+
+  assert.deepEqual(calls.trace[0]?.targets, [{ file: "src/Order.java", symbol: "total" }, { file: "src/Order.java", start: 3, end: 9 }]);
+  assert.equal(calls.trace[0]?.revision, "topic");
+  assert.deepEqual(calls.trace[0]?.scope, { include: ["src/**"] });
+  assert.deepEqual(calls.trace[0]?.budget, { depth: 2, expansions: 7 });
+  assert.match(text, /^ {2}src\/Order\.java:total matches 1: #0 total \[method\] src\/Order\.java:20-24$/m);
+  assert.match(text, /^reading plan \(1 range, 5 lines\):\n {2}src\/Order\.java:20-24$/m);
+  await session.close();
+});
+
+test("a trace refuses the caller-count bound before any walk", async () => {
+  const { session, calls } = await setup();
+  const result = await session.callTool("ye_ast_trace", { targets: [{ file: "src/Order.java", symbol: "total" }], budget: { hubFanIn: 3 } });
+  assert.equal(result.isError, true);
+  assert.deepEqual(calls.trace, []);
+  await session.close();
+});
+
+test("lists eight query families and the composition operation", async () => {
   const { session } = await setup();
   const tools = await session.listTools();
-  assert.deepEqual(tools.map((tool) => tool.name).sort(), ["ye_ast_callers", "ye_ast_compose", "ye_ast_decisions", "ye_ast_entrypoints", "ye_ast_impact", "ye_ast_importers", "ye_ast_outline", "ye_ast_workspace"]);
+  assert.deepEqual(tools.map((tool) => tool.name).sort(), ["ye_ast_callers", "ye_ast_compose", "ye_ast_decisions", "ye_ast_entrypoints", "ye_ast_impact", "ye_ast_importers", "ye_ast_outline", "ye_ast_trace", "ye_ast_workspace"]);
   for (const tool of tools) {
     assert.ok((tool.description ?? "").length > 0, tool.name);
     if (tool.name === "ye_ast_compose") {
@@ -1003,8 +1037,8 @@ test("malformed success is rejected by server runtime validation", async () => {
 
 test("output schemas validate real receipts and family payloads and reject broken required fields", async () => {
   const { session } = await setup();
-  const schemas = [ENTRYPOINTS_OUTPUT, IMPACT_OUTPUT, CALLERS_OUTPUT, IMPORTERS_OUTPUT, OUTLINE_OUTPUT, WORKSPACE_OUTPUT, DECISIONS_OUTPUT];
-  const fields = ["entrypoints", "seeds", "seeds", "files", "files", "sections", "decisions"];
+  const schemas = [ENTRYPOINTS_OUTPUT, IMPACT_OUTPUT, CALLERS_OUTPUT, IMPORTERS_OUTPUT, OUTLINE_OUTPUT, TRACE_OUTPUT, WORKSPACE_OUTPUT, DECISIONS_OUTPUT];
+  const fields = ["entrypoints", "seeds", "seeds", "files", "files", "steps", "sections", "decisions"];
   try {
     const tools = await session.listTools();
     assert.deepEqual(TOOL_CALLS.map(([name]) => name).toSorted(), tools.filter(({ name }) => name !== "ye_ast_compose").map(({ name }) => name).toSorted());

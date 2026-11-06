@@ -18,7 +18,7 @@ import { compositionIdentity } from "./composition-identity.ts";
 import { COMPOSE_LIMITS, COMPOSE_QUERY } from "./composition-input.ts";
 import { runComposition } from "./compose-request.ts";
 import {
-  SHA_A, callersValue, decisionsValue, entrypointsValue, factOf, impactValue, importersValue, inputsOf, outlineValue,
+  SHA_A, callersValue, decisionsValue, entrypointsValue, factOf, impactValue, importersValue, inputsOf, outlineValue, traceValue,
   unknownFactOf, workspaceValue,
 } from "./composition-fixtures.ts";
 
@@ -32,7 +32,7 @@ const redaction: Redaction = {
   containsSecret: (text) => /secret-[a-z]+/.test(text),
 };
 
-type Port = "map" | "ofChange" | "callers" | "importers" | "outline" | "outwardNames" | "decisions" | "workspaceCallers" | "workspaceOfChange";
+type Port = "map" | "ofChange" | "callers" | "importers" | "outline" | "walk" | "outwardNames" | "decisions" | "workspaceCallers" | "workspaceOfChange";
 type Hooks = Partial<{
   outline: (signal: AbortSignal | undefined) => Promise<Result<Fact<OutlineValue>, never>>;
   decisions: () => Promise<Result<FactRead<DecisionValue>, WorkspaceFault>>;
@@ -54,6 +54,7 @@ function spies(hooks: Hooks = {}) {
       importers: async () => (calls.push("importers"), { ok: true, value: factOf(importersValue()) }),
     },
     outline: { outline: async (r) => (calls.push("outline"), hooks.outline ? hooks.outline(r.signal) : { ok: true, value: factOf(outlineValue()) }) },
+    trace: { walk: async () => (calls.push("walk"), { ok: true, value: factOf(traceValue(), { inputs: inputsOf({ declaredConfig: { targets: ["src/OrderController.java:one"] } }) }) }) },
     workspace: { outwardNames: async () => (calls.push("outwardNames"), { ok: true, value: { fact: factOf({ ...workspaceValue(), repositories: [] }), repositoryRoots: [{ repo: "shop", path: "/work/shop" }] } }) },
     workspaceImpact: {
       callers: async () => assert.fail("workspace callers not expected"),
@@ -72,6 +73,7 @@ const Q = {
   callers: { name: "ye_ast_callers", arguments: { repo: "shop", revision: SHA_A, targets: [{ file: "src/OrderService.java", symbol: "find" }] } },
   importers: { name: "ye_ast_importers", arguments: { repo: "shop", revision: SHA_A, files: ["src/service.ts"] } },
   outline: { name: "ye_ast_outline", arguments: { repo: "shop", revision: SHA_A, files: ["src/OrderController.java"] } },
+  trace: { name: "ye_ast_trace", arguments: { repo: "shop", revision: SHA_A, targets: [{ file: "src/OrderController.java", symbol: "one" }] } },
   workspace: { name: "ye_ast_workspace", arguments: { repo: "shop", revision: SHA_A, offline: true } },
   decisions: { name: "ye_ast_decisions", arguments: { repo: "shop" } },
 } as const satisfies Record<string, ComposeInput["queries"][number]>;
@@ -192,7 +194,7 @@ test("every invocation re-executes the ports; no state survives a call", async (
   assert.deepEqual(first, second);
 });
 
-test("sources, requests and verification: pinned for the recoverable three, fresh for the other four", async () => {
+test("sources, requests and verification: pinned for the recoverable three, fresh for the other five", async () => {
   const result = ok(await runComposition({ queries: ALL }, spies().ctx()));
   const ids = result.graph.sources.map((source) => source.id);
   assert.deepEqual(ids, [...ids].sort());
@@ -213,7 +215,7 @@ test("sources, requests and verification: pinned for the recoverable three, fres
     }
   }
   assert.deepEqual(result.verification, { status: "available", identity: compositionIdentity(digest, ids) });
-  assert.equal(result.counts.sources, 7);
+  assert.equal(result.counts.sources, 8);
   assert.equal(result.counts.unknownFindings, 2, "one unknown entrypoint finding and one unknown basePath");
   assert.equal(result.counts.unknownComponents, 1);
   assert.equal(result.counts.parts, result.graph.parts.length);

@@ -13,6 +13,7 @@ import type { Entrypoint } from "../core/domain/entrypoints/entrypoint.ts";
 import type { ImpactValue } from "../core/domain/impact/impact-fact.ts";
 import type { ImportedFile, ImportersValue } from "../core/domain/impact/importers-fact.ts";
 import type { OutlineDeclaration, OutlineValue } from "../core/domain/outline/outline-fact.ts";
+import type { TraceValue } from "../core/domain/trace/trace-fact.ts";
 import type { CallSite } from "../core/domain/topology/call-site.ts";
 import type { Link } from "../core/domain/topology/link.ts";
 import type { Decision } from "../core/domain/decisions/decision.ts";
@@ -74,6 +75,7 @@ function contextOf(source: ExecutedSource): SourceContext {
     }
     case "importers":
     case "outline":
+    case "trace":
       return fresh(recoveryContext(fact, selected));
     case "workspace":
     case "decisions":
@@ -257,6 +259,8 @@ function adapt(source: ExecutedSource, b: Builder, root: ReadContext): readonly 
       return local(b, root, source.read.fact, (value) => importers(b, root, value));
     case "outline":
       return local(b, root, source.read.fact, (value) => outline(b, root, value));
+    case "trace":
+      return local(b, root, source.read.fact, (value) => trace(b, root, value));
     case "workspace":
       return workspace(b, root, source.read.fact);
     case "decisions":
@@ -501,6 +505,15 @@ function importers(b: Builder, root: ReadContext, value: ImportersValue): void {
       });
     }
     b.part({ kind: "file-query", file: target, categories }, root.id, [pointer]);
+  });
+}
+
+/** Every step anchored at its declaration, so a trace joins the other answers about the same declarations. */
+function trace(b: Builder, root: ReadContext, value: TraceValue): void {
+  value.steps.forEach((step, index) => {
+    const pointer = `/value/steps/${index}`;
+    const anchor = b.anchor(root.here, { path: step.file, symbol: step.symbol, line: step.line, ...(step.endLine === undefined ? {} : { endLine: step.endLine }) }, root.id, pointer, `${pointer}/file`);
+    b.part({ kind: "trace-step", anchor, kindName: step.kind, step: step.id, depth: step.depth, ...(step.parent === undefined ? {} : { parent: step.parent }), ...(step.seen === undefined ? {} : { seen: step.seen }) }, root.id, [pointer]);
   });
 }
 
