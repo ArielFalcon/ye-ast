@@ -29,8 +29,31 @@ test("enum constants are names", async () => {
 test("a source of another language or one that does not parse declares none, and the parser is made only for a Java source", async () => {
   let created = 0;
   const reader = createJavaMemberNames(async () => (created += 1, createJavaParser()));
-  assert.deepEqual(await read(["const a = { m() {} };"], "src/a.ts", reader), { names: [] });
+  assert.deepEqual(await read(["const a = { m() {} };"], "src/a.ts", reader), { names: [], callables: [] });
   assert.equal(created, 0);
-  assert.deepEqual(await read(["class {"], "src/A.java", reader), { names: [] });
+  assert.deepEqual(await read(["class {"], "src/A.java", reader), { names: [], callables: [] });
   assert.equal(created, 1);
+});
+
+test("every method is a callable: overridable unless static, private or final, with a body only when written", async () => {
+  assert.deepEqual((await read([
+    "public interface Port {",
+    "  void send();",
+    "  default void run() {}",
+    "  static void helper() {}",
+    "  private void inner() {}",
+    "}",
+    "abstract class Base {",
+    "  @Deprecated",
+    "  abstract void area();",
+    "  final void fixed() {}",
+    "}",
+  ])).callables, [
+    { name: "send", start: 2, nameLine: 2, body: false, overridable: true },
+    { name: "run", start: 3, nameLine: 3, body: true, overridable: true },
+    { name: "helper", start: 4, nameLine: 4, body: true, overridable: false },
+    { name: "inner", start: 5, nameLine: 5, body: true, overridable: false },
+    { name: "area", start: 8, nameLine: 9, body: false, overridable: true },
+    { name: "fixed", start: 10, nameLine: 10, body: true, overridable: false },
+  ]);
 });

@@ -12,7 +12,7 @@ import type { TraceValue } from "../../domain/trace/trace-fact.ts";
 import { traceSteps } from "../../domain/trace/trace-tree.ts";
 import type { CodeGraphReader, GraphNodeId, GraphSymbol } from "../../ports/code-graph.port.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
-import type { DeclaredMemberNamesReader } from "../../ports/declared-member-names.port.ts";
+import type { DeclaredMemberNames, DeclaredMemberNamesReader } from "../../ports/declared-member-names.port.ts";
 import type { ImportOriginsReader } from "../../ports/import-origins.port.ts";
 import type { TraceFault, TraceQueries } from "../../ports/trace-queries.port.ts";
 import { distinctTargets, evidenceOfTarget, rangeChanges, requestedRanges, selectRoots, targetKey, triviaOncePerFile, type RootSelection } from "../navigation/root-selection.ts";
@@ -70,9 +70,15 @@ export function createTraceQueries(deps: TraceQueriesDeps): TraceQueries {
           if (missing.length > 0) return { ok: false, fault: { kind: "unknown-symbol", detail: `no symbol at the revision for ${missing.map(unknownTargetKey).join(", ")}`, entries: missing } };
 
           const roots = [...new Map(selections.flatMap(({ selection }) => selection.seeds.map(({ symbol }): [GraphNodeId, GraphSymbol] => [symbol.id, symbol]))).values()].sort(comparePosition);
+          const declaredIn = declarationsOncePerFile(deps.memberNames);
+          const sources = new Map(head.tree.sources.map((file) => [file.path, file]));
           let declared: Promise<ReadonlyMap<string, readonly string[]>> | undefined;
-          const memberDeclarations = () => (declared ??= declaringFiles(head.tree.sources.filter((file) => head.selected(file.path)), deps.memberNames));
-          const walk = await walkTrace(roots, { store, origins: deps.importOrigins(head.tree.sources), inScope: head.selected, memberDeclarations, budget, ...(signal === undefined ? {} : { signal }) });
+          const memberDeclarations = () => (declared ??= declaringFiles(head.tree.sources.filter((file) => head.selected(file.path)), declaredIn));
+          const callablesIn = async (path: string) => {
+            const file = sources.get(path);
+            return file === undefined ? [] : (await declaredIn(file)).callables;
+          };
+          const walk = await walkTrace(roots, { store, origins: deps.importOrigins(head.tree.sources), inScope: head.selected, memberDeclarations, callablesIn, budget, ...(signal === undefined ? {} : { signal }) });
           if (walk === "aborted") return ABORTED;
 
           const { steps, ids } = traceSteps(walk.roots);
@@ -98,11 +104,24 @@ export function createTraceQueries(deps: TraceQueriesDeps): TraceQueries {
   };
 }
 
+/** Reads each source once for the life of one query, for its member names and its callables alike. */
+function declarationsOncePerFile(reader: DeclaredMemberNamesReader): (file: SourceFile) => Promise<DeclaredMemberNames> {
+  const read = new Map<string, Promise<DeclaredMemberNames>>();
+  return (file) => {
+    let declared = read.get(file.path);
+    if (declared === undefined) {
+      declared = reader.memberNames(file);
+      read.set(file.path, declared);
+    }
+    return declared;
+  };
+}
+
 /** Each member name with the sources that declare it, sorted. */
-async function declaringFiles(sources: readonly SourceFile[], reader: DeclaredMemberNamesReader): Promise<ReadonlyMap<string, readonly string[]>> {
+async function declaringFiles(sources: readonly SourceFile[], declaredIn: (file: SourceFile) => Promise<DeclaredMemberNames>): Promise<ReadonlyMap<string, readonly string[]>> {
   const byName = new Map<string, string[]>();
   for (const file of sources) {
-    for (const name of (await reader.memberNames(file)).names) {
+    for (const name of (await declaredIn(file)).names) {
       const files = byName.get(name);
       if (files === undefined) byName.set(name, [file.path]);
       else files.push(file.path);

@@ -7,6 +7,7 @@ import type { Cut } from "../../domain/shared/fact.ts";
 import { calleeOf, compareOccurrence, ownMemberOf, sameOccurrence, type EdgeOccurrence, type OrderedPlace } from "../../domain/trace/call-place.ts";
 import type { TraceVia } from "../../domain/trace/trace-fact.ts";
 import type { ExternalCall, TraceDeclaration, WalkedStep } from "../../domain/trace/trace-tree.ts";
+import type { DeclaredCallable } from "../../ports/declared-member-names.port.ts";
 import type { CodeGraphReader, GraphNodeId, GraphSymbol, GraphUnresolvedReference } from "../../ports/code-graph.port.ts";
 import type { ImportOriginSite, ImportOrigins } from "../../ports/import-origins.port.ts";
 import type { TraceBudget } from "../../ports/trace-queries.port.ts";
@@ -18,6 +19,9 @@ const DEFERRED_KINDS: readonly string[] = ["function", "method"];
 
 /** Kinds that name a type and never a value, so a call through a member of that name cannot reach them. */
 const TYPE_ONLY_KINDS: readonly string[] = ["interface", "type_alias"];
+
+/** Declarations whose syntax says whether they have a body and whether a subtype can override them. */
+const CALLABLE_KINDS: readonly string[] = ["method", "function"];
 
 /** Types whose methods have bodies, so a root of one of them runs what its members run. */
 const CLASS_KINDS: readonly string[] = ["class", "component"];
@@ -45,6 +49,8 @@ export interface TraceWalkInput {
    * record component), so a name only they declare still runs repository code.
    */
   memberDeclarations: () => Promise<ReadonlyMap<string, readonly string[]>>;
+  /** The callable declarations a source's syntax states, in source order; read for the file of each method the walk expands. */
+  callablesIn: (file: string) => Promise<readonly DeclaredCallable[]>;
   budget: TraceBudget;
   signal?: AbortSignal;
 }
@@ -75,7 +81,7 @@ interface Body {
  * cut that leaves it free to expand at a later, shallower one. Every read is cached for this walk only.
  */
 export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkInput): Promise<TraceWalk | "aborted"> {
-  const { store, origins, inScope, memberDeclarations, budget, signal } = input;
+  const { store, origins, inScope, memberDeclarations, callablesIn, budget, signal } = input;
   const navigation = createGraphNavigation(store, () => false);
 
   const referencesByFile = new Map<string, ReadonlyMap<GraphNodeId, readonly GraphUnresolvedReference[]>>();
@@ -123,19 +129,35 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
     kind: "unresolved-link",
     at: [placeAt(reference.file, reference.line, reference.name), ...sortedUnique([...reference.candidates, ...declarations.map(candidateOf)])],
   });
-  /**
-   * A member of an interface has no body the index proves: it runs whatever implementation dispatch picks. Until R7
-   * binds it, it is a cut at its declaration listing every repository implementation of that name, or none.
-   */
-  const unboundDispatch = (symbol: GraphSymbol): Cut | undefined => {
-    const interfaces = navigation.ownersOf(symbol).filter((owner) => owner.kind === "interface");
-    if (interfaces.length === 0) return undefined;
-    const implementations = interfaces
+  /** The methods of the same name that the non-interface types below `owners` declare. */
+  const implementationsBelow = (symbol: GraphSymbol, owners: readonly GraphSymbol[]): GraphSymbol[] =>
+    owners
       .flatMap((owner) => navigation.typesAround(owner, "down"))
       .filter(({ type }) => type.kind !== "interface")
       .flatMap(({ type }) => navigation.methodsOf(type))
       .filter((method) => method.name === symbol.name);
-    return { kind: "unresolved-link", at: [placeAt(symbol.file, symbol.startLine, symbol.name), ...sortedUnique(implementations.map(candidateOf))] };
+  const dispatchCut = (symbol: GraphSymbol, implementations: readonly GraphSymbol[]): Cut => ({
+    kind: "unresolved-link",
+    at: [placeAt(symbol.file, symbol.startLine, symbol.name), ...sortedUnique(implementations.map(candidateOf))],
+  });
+  /**
+   * What dispatch may run instead of the body the walk reads, from the declaration's own syntax: a body-less callable
+   * runs whatever implements it, so it is a cut listing every repository implementation of its name, or none; a static,
+   * private or final one with a body runs it; an overridable one with a body is a cut only when a type below its owner
+   * overrides it, listing those overriders. A declaration its syntax does not state is a cut when an interface owns it.
+   */
+  const unboundDispatch = async (symbol: GraphSymbol): Promise<Cut | undefined> => {
+    if (!CALLABLE_KINDS.includes(symbol.kind)) return undefined;
+    const declared = (await callablesIn(symbol.file)).find(({ name, start, nameLine }) => name === symbol.name && start <= symbol.startLine && symbol.startLine <= nameLine);
+    const owners = navigation.ownersOf(symbol);
+    if (declared === undefined) {
+      const interfaces = owners.filter((owner) => owner.kind === "interface");
+      return interfaces.length === 0 ? undefined : dispatchCut(symbol, implementationsBelow(symbol, interfaces));
+    }
+    if (!declared.body) return dispatchCut(symbol, implementationsBelow(symbol, owners));
+    if (!declared.overridable) return undefined;
+    const overriders = implementationsBelow(symbol, owners);
+    return overriders.length === 0 ? undefined : dispatchCut(symbol, overriders);
   };
   const childAt = (symbol: GraphSymbol, line: number | null, column: number | null, spelling: string, via: TraceVia, deferred?: true): Child => ({
     symbol,
@@ -242,7 +264,7 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
     if (depth === 0) rootExpansions.add(step);
     step.expanded = true;
     const body = await bodyOf(symbol, depth === 0);
-    const dispatch = unboundDispatch(symbol);
+    const dispatch = await unboundDispatch(symbol);
     if (dispatch !== undefined) body.cuts.push(dispatch);
     step.external = body.external;
     step.unsettled = body.cuts.length > 0;

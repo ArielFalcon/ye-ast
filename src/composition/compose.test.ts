@@ -877,6 +877,70 @@ test("a trace over a real index expands a class root into its members even when 
   assert.deepEqual(answer.value.cuts.map((cut) => cut.at[0]), ["src/make.ts:2 unknown"]);
 });
 
+test("a trace over a real index reads dispatch from syntax: a body expands, static or unoverridden ones settle, a body-less method is a step with a cut listing its implementations", async () => {
+  const files: Record<string, string[]> = {
+    "Defaults.java": ["public interface Defaults {", "  default void run() { helper(); }", "  static void helper() {}", "}"],
+    "Base.java": ["public abstract class Base {", "  @Deprecated", "  abstract void area();", "  final void fixed() { area(); }", "}"],
+    "Sq.java": ["public class Sq extends Base {", "  void area() {}", "}"],
+  };
+  for (const [name, lines] of Object.entries(files)) writeFileSync(join(repo, "src", name), [...lines, ""].join("\n"));
+  git("add", "-A");
+  git("commit", "-q", "-m", "dispatch");
+  const { trace } = composeQueries({ scratchRoot });
+  const walk = (symbol: string, file: string) => trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file, symbol }] });
+
+  const [helper, run, fixed] = await Promise.all([walk("Defaults.helper", "src/Defaults.java"), walk("Defaults.run", "src/Defaults.java"), walk("Base.fixed", "src/Base.java")]);
+
+  assert.ok(helper.ok && helper.value.status === "complete");
+  assert.ok(run.ok && run.value.status === "complete");
+  assert.deepEqual(run.value.value.steps.map(({ symbol, leaves }) => ({ symbol, leaves: leaves?.map((leaf) => leaf.symbol) })), [{ symbol: "run", leaves: ["helper"] }]);
+  assert.ok(fixed.ok && fixed.value.status === "partial");
+  assert.deepEqual(fixed.value.value.steps.map(({ symbol, parent, leaves }) => ({ symbol, parent, leaves })), [
+    { symbol: "fixed", parent: undefined, leaves: undefined },
+    { symbol: "area", parent: 0, leaves: undefined },
+  ]);
+  assert.deepEqual(fixed.value.cuts.map((cut) => [cut.kind, ...cut.at]), [["unresolved-link", "src/Base.java:2 area", "src/Sq.java::Sq.area"]]);
+});
+
+test("a trace over a real index expands an overridable method with a body and cuts it at the overriders below its owner", async () => {
+  const files: Record<string, string[]> = {
+    "Greeter.java": ["public interface Greeter {", "  default void greet() { hello(); }", "  static void hello() {}", "}"],
+    "Loud.java": ["public class Loud implements Greeter {", "  public void greet() {}", "  public static void hello() {}", "}"],
+  };
+  for (const [name, lines] of Object.entries(files)) writeFileSync(join(repo, "src", name), [...lines, ""].join("\n"));
+  git("add", "-A");
+  git("commit", "-q", "-m", "greeter");
+  const { trace } = composeQueries({ scratchRoot });
+
+  const answer = await trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: "src/Greeter.java", symbol: "Greeter.greet" }] });
+
+  assert.ok(answer.ok && answer.value.status === "partial");
+  assert.deepEqual(answer.value.value.steps.map(({ symbol, leaves }) => ({ symbol, leaves: leaves?.map((leaf) => leaf.symbol) })), [{ symbol: "greet", leaves: ["hello"] }]);
+  assert.deepEqual(answer.value.cuts.map((cut) => [cut.kind, ...cut.at]), [["unresolved-link", "src/Greeter.java:2 greet", "src/Loud.java::Loud.greet"]]);
+});
+
+test("a trace over a real index matches a decorated method to its syntax from the decorator to its name", async () => {
+  writeFileSync(join(repo, "src", "deco.ts"), [
+    "function dec(): MethodDecorator { return () => {}; }",
+    "export class Base {",
+    "  @dec()",
+    "  run(): void {}",
+    "}",
+    "export class Child extends Base {",
+    "  run(): void {}",
+    "}",
+    "",
+  ].join("\n"));
+  git("add", "-A");
+  git("commit", "-q", "-m", "deco");
+  const { trace } = composeQueries({ scratchRoot });
+
+  const answer = await trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: "src/deco.ts", symbol: "Base.run" }] });
+
+  assert.ok(answer.ok && answer.value.status === "partial");
+  assert.deepEqual(answer.value.cuts.map((cut) => [cut.kind, ...cut.at]), [["unresolved-link", "src/deco.ts:4 run", "src/deco.ts::Child.run"]]);
+});
+
 test("callers over a range inside a property initializer still seeds the class that holds it", async () => {
   commitPage();
   const { impact } = composeQueries({ scratchRoot });

@@ -46,6 +46,39 @@ test("a computed key or index adds no name; a literal one adds its name", async 
 });
 
 test("a file that is not a TypeScript source declares none", async () => {
-  assert.deepEqual(await read(["const table = { plain: run };"], "src/a.d.ts"), { names: [] });
-  assert.deepEqual(await read(["class A { void run() {} }"], "src/A.java"), { names: [] });
+  assert.deepEqual(await read(["const table = { plain: run };"], "src/a.d.ts"), { names: [], callables: [] });
+  assert.deepEqual(await read(["class A { void run() {} }"], "src/A.java"), { names: [], callables: [] });
+});
+
+test("functions, overload signatures and ambient functions are callables that no subtype overrides, with a body only when written", async () => {
+  assert.deepEqual((await read([
+    "export function pick(a: string): string;",
+    "export function pick(a: any): any { return a; }",
+    "declare function ambient(): void;",
+  ])).callables, [
+    { name: "pick", start: 1, nameLine: 1, body: false, overridable: false },
+    { name: "pick", start: 2, nameLine: 2, body: true, overridable: false },
+    { name: "ambient", start: 3, nameLine: 3, body: false, overridable: false },
+  ]);
+});
+
+test("class methods are overridable unless static or private, abstract ones have no body, and an interface method signature has none", async () => {
+  assert.deepEqual((await read([
+    "abstract class Shape {",
+    "  @dec()",
+    "  run(): void {}",
+    "  abstract area(): number;",
+    "  static make(): void {}",
+    "  private hidden(): void {}",
+    "  #secret(): void {}",
+    "}",
+    "interface Port { send(): void; size: number }",
+  ])).callables, [
+    { name: "run", start: 2, nameLine: 3, body: true, overridable: true },
+    { name: "area", start: 4, nameLine: 4, body: false, overridable: true },
+    { name: "make", start: 5, nameLine: 5, body: true, overridable: false },
+    { name: "hidden", start: 6, nameLine: 6, body: true, overridable: false },
+    { name: "#secret", start: 7, nameLine: 7, body: true, overridable: false },
+    { name: "send", start: 9, nameLine: 9, body: false, overridable: true },
+  ]);
 });

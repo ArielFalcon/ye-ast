@@ -67,7 +67,7 @@ function setup(options: Options) {
       open: () => ({ ok: true, value: store }),
     },
     sourceTrivia: { triviaLines: async (file: { path: string }) => (options.onTrivia?.(file.path), new Set(options.trivia?.[file.path] ?? [])) },
-    memberNames: { memberNames: async (file: { path: string }) => (options.onMemberNames?.(file.path), { names: options.memberNames?.[file.path] ?? [] }) },
+    memberNames: { memberNames: async (file: { path: string }) => (options.onMemberNames?.(file.path), { names: options.memberNames?.[file.path] ?? [], callables: [] }) },
     importOrigins: () => ({ origins: async (sites: readonly ImportOriginSite[]) => { options.onOrigins?.(); return sites.map(answer); } }),
     engines: {},
     ...(options.live && { live: options.live.deps, trust: { read: async () => ({ ok: true, value: "trusted" }) } }),
@@ -112,6 +112,15 @@ test("a resolved call is a step at its call site", async () => {
   const fact = await factOf({ nodes: [SVC, RUN, callee("helper")], edges: [...CONTAINS, call("run", "helper", 8, 4)], unresolved: [OUTWARD_CALL("helper")] });
   const step = valueOf(fact).steps[1]!;
   assert.deepEqual([step.symbol, step.parent, step.at, step.via], ["helper", 0, { line: 8, column: 5 }, "call"]);
+});
+
+test("a method no source's syntax states is a dispatch cut when an interface owns it, listing the implementations below", async () => {
+  const nodes = [SVC, RUN, fakeNode("Port", "interface", B, 1, 3), fakeNode("Port.send", "method", B, 2, 2, "send"), fakeNode("Impl", "class", B, 5, 7), fakeNode("Impl.send", "method", B, 6, 6, "send")];
+  const edges: FakeEdge[] = [...CONTAINS, { from: "Port", to: "Port.send", kind: "contains" }, { from: "Impl", to: "Impl.send", kind: "contains" }, { from: "Impl", to: "Port", kind: "implements" }, call("run", "Port.send", 8, 4)];
+
+  const fact = await factOf({ nodes, edges });
+
+  assert.deepEqual(cutsOf(fact), [["unresolved-link", ["src/b.ts:2 send", "src/b.ts::Impl.send"]]]);
 });
 
 test("a call codegraph synthesized from a source ye-ast ignores is not a step", async () => {
@@ -188,12 +197,12 @@ test("the member names are read once per query from each source, however many me
   assert.deepEqual(valueOf(fact).steps[0]?.external, [{ kind: "unnamed", names: ["items.map"] }]);
 });
 
-test("the member names are never read when no member call reaches the syntax rule", async () => {
+test("when no member call reaches the syntax rule, only the sources of the methods the walk expands are read", async () => {
   const read: string[] = [];
 
   await factOf({ nodes: [SVC, RUN, fakeNode("Repo.setErrors", "method", B, 3, 5, "setErrors")], edges: CONTAINS, unresolved: [MEMBER_CALLS[1]!], sources: SOURCES, onMemberNames: (path) => read.push(path) });
 
-  assert.deepEqual(read, []);
+  assert.deepEqual(read, [A]);
 });
 
 test("a source outside the declared scope is not read for member names and keeps no member call in the repository", async () => {
