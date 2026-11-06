@@ -723,7 +723,7 @@ test("a trace over a real index keeps a member call to a wrapped callable consta
   assert.deepEqual(answer.value.status === "partial" && answer.value.cuts.map((cut) => cut.at[0]), ["src/wrapped.ts:10 x.wrappedVar", "src/wrapped.ts:11 x.asserted", "src/wrapped.ts:12 x.checked", "src/wrapped.ts:9 x.wrapped"]);
 });
 
-test("a trace over a real index never folds an interface method: it stays a step with a cut listing its implementations, or none", async () => {
+test("a trace over a real index never folds an interface method: it stays a step with a cut listing every declaration of its name below it, an interface re-declaration included", async () => {
   const files: Record<string, string[]> = {
     "Repo.java": ["public interface Repo {", "  void save(String s);", "}"],
     "RepoImpl.java": ["public class RepoImpl implements Repo {", "  public void save(String s) {}", "  public void flush() {}", "}"],
@@ -758,7 +758,7 @@ test("a trace over a real index never folds an interface method: it stays a step
     { symbol: "send", file: "src/Port.java", parent: 0, leaves: undefined },
   ]);
   assert.deepEqual(cuts.map((cut) => [cut.kind, ...cut.at]), [
-    ["unresolved-link", "src/Port.java:2 send"],
+    ["unresolved-link", "src/Port.java:2 send", "src/LoudPort.java::LoudPort.send"],
     ["unresolved-link", "src/Repo.java:2 save", "src/AuditRepo.java::AuditRepo.save", "src/RepoImpl.java::RepoImpl.save"],
   ]);
 });
@@ -956,7 +956,7 @@ test("a trace over a real index lists an implementation below a parameterized su
   const answer = await trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: "src/Generic.java", symbol: "GUse.go" }] });
 
   assert.ok(answer.ok && answer.value.status === "partial");
-  assert.deepEqual(answer.value.cuts.map((cut) => [cut.kind, ...cut.at]), [["unresolved-link", "src/Generic.java:1 send", "src/Generic.java::GImpl.send"]]);
+  assert.deepEqual(answer.value.cuts.map((cut) => [cut.kind, ...cut.at]), [["unresolved-link", "src/Generic.java:1 send", "src/Generic.java::GImpl.send", "src/Generic.java::GSub.send"]]);
 });
 
 test("a trace over a real index keeps a member call a cut when a module exports a value under that name, renamed or re-exported", async () => {
@@ -1078,6 +1078,26 @@ test("a trace over a real index never follows an edge whose name a package binds
   assert.deepEqual(shape(make), [{ symbol: "make", leaves: undefined, external: [{ kind: "import", module: "pkg", names: ["Base"] }] }]);
   assert.deepEqual(shape(pass), [{ symbol: "pass", leaves: undefined, external: [{ kind: "import", module: "pkg", names: ["evaluate"] }] }]);
   assert.deepEqual(shape(real), [{ symbol: "real", leaves: ["src/model.ts", "src/model.ts"], external: undefined }]);
+});
+
+test("a trace over a real index counts every same-named declaration below an overridable method's owner, interfaces included, as a replacement", async () => {
+  const files: Record<string, string[]> = {
+    "Parent.java": ["public interface Parent {", "  default void greet() {}", "}"],
+    "Child.java": ["public interface Child extends Parent {", "  default void greet() { System.exit(1); }", "}"],
+    "Use.java": ["public class Use implements Child {", "  void entry(Parent p) { p.greet(); }", "}"],
+  };
+  for (const [name, lines] of Object.entries(files)) writeFileSync(join(repo, "src", name), [...lines, ""].join("\n"));
+  git("add", "-A");
+  git("commit", "-q", "-m", "descendants");
+  const { trace } = composeQueries({ scratchRoot });
+  const walk = (file: string, symbol: string) => trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file, symbol }] });
+
+  const [entry, greet] = await Promise.all([walk("src/Use.java", "Use.entry"), walk("src/Parent.java", "Parent.greet")]);
+
+  assert.ok(entry.ok && entry.value.status === "partial");
+  assert.deepEqual(entry.value.value.steps.map(({ symbol, leaves }) => ({ symbol, leaves })), [{ symbol: "entry", leaves: undefined }, { symbol: "greet", leaves: undefined }]);
+  assert.deepEqual(entry.value.cuts.map((cut) => [cut.kind, ...cut.at]), [["unresolved-link", "src/Parent.java:2 greet", "src/Child.java::Child.greet"]]);
+  assert.ok(greet.ok && greet.value.status === "partial");
 });
 
 test("callers over a range inside a property initializer still seeds the class that holds it", async () => {

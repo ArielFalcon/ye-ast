@@ -159,12 +159,12 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
     }
     return false;
   };
-  /** The methods of the same name that the non-interface types below `owners` declare. */
+  /** The methods of the same name that any type below `owners` declares: a re-declaration in an interface counts, since a body or a type below it may still replace the call. */
   const implementationsBelow = (symbol: GraphSymbol, owners: readonly GraphSymbol[]): GraphSymbol[] => {
     const ownerIds = new Set(owners.map((owner) => owner.id));
     return store
       .declarationsNamed([symbol.name])
-      .filter((method) => method.kind === "method" && navigation.ownersOf(method).some((type) => type.kind !== "interface" && !ownerIds.has(type.id) && isBelow(type, ownerIds)));
+      .filter((method) => method.kind === "method" && navigation.ownersOf(method).some((type) => !ownerIds.has(type.id) && isBelow(type, ownerIds)));
   };
   const dispatchCut = (symbol: GraphSymbol, implementations: readonly GraphSymbol[]): Cut => ({
     kind: "unresolved-link",
