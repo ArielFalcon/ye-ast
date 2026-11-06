@@ -94,6 +94,13 @@ test("imports sharing a line come in source order, whether statements or runtime
   assert.deepEqual(file?.imports.map(({ form }) => form ?? "static"), ["require", "dynamic-import", "static"]);
 });
 
+test("the outline asks each module reader for the statements of the requested files only", async () => {
+  const asked: (readonly string[] | undefined)[] = [];
+  const reader = createModuleDependenciesReader();
+  await outlineOf("import './defs';", { readers: [{ extract: async (sources, options) => (asked.push(options?.files), reader.extract(sources, options)) }] });
+  assert.deepEqual(asked, [[USE]]);
+});
+
 test("a requested source the module reader cannot parse is a no-extractor cut, so its empty imports never read as none", async () => {
   const { status, file, cuts } = await outlineOf("import { one } from './defs';\nexport function (");
   assert.equal(status, "partial");

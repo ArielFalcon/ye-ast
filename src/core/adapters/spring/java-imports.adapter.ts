@@ -6,13 +6,15 @@ import type { JavaParser, JavaSyntaxTree } from "../tree-sitter/java-parser.adap
 import { createJavaProject, describeFile, namedChildren, type JavaFile, type JavaProject } from "./java-symbols.ts";
 
 /**
- * The import declarations of every Java source, each resolved by the types the snapshot's Java sources declare: a type
+ * The import declarations of every Java source, or of the selected ones, each resolved by the types the snapshot's Java sources declare: a type
  * one source declares leads to its file, a name under a platform package is external, anything else is unresolved
  * with its reason. Nothing comes from the graph.
  */
 export function createJavaImportsReader(parser: JavaParser): ModuleDependenciesReader {
   return {
-    async extract(sources): Promise<ModuleDependencies> {
+    async extract(sources, options): Promise<ModuleDependencies> {
+      const selected = options?.files === undefined ? undefined : new Set(options.files);
+      if (selected !== undefined && !sources.some(({ path }) => isJavaSource(path) && selected.has(path))) return { files: [], dependencies: [], unread: [] };
       const trees: JavaSyntaxTree[] = [];
       const files: JavaFile[] = [];
       const unread: ModuleDependencies["unread"][number][] = [];
@@ -29,8 +31,8 @@ export function createJavaImportsReader(parser: JavaParser): ModuleDependenciesR
         const project = createJavaProject(files);
         const unreadable = new Set(project.unreadable);
         for (const file of project.unreadable) unread.push({ file: file.path, reason: "source-unreadable" });
-        const dependencies = files.filter((file) => !unreadable.has(file)).flatMap((file) => importsOf(file, project));
-        return { files: files.filter((file) => !unreadable.has(file)).map((file) => ({ file: file.path, statements: [], moduleOnly: false })), dependencies, unread };
+        const read = files.filter((file) => !unreadable.has(file) && (selected === undefined || selected.has(file.path)));
+        return { files: read.map((file) => ({ file: file.path, statements: [], moduleOnly: false })), dependencies: read.flatMap((file) => importsOf(file, project)), unread };
       } finally {
         for (const tree of trees) tree.dispose();
       }

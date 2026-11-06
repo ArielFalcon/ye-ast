@@ -33,3 +33,9 @@ test("a Java source the parser rejects is unread, never a file without imports",
   assert.deepEqual(read.unread, [{ file: "src/Broken.java", reason: "source-unreadable" }]);
   assert.deepEqual(read.dependencies, []);
 });
+
+test("a selection reads the imports of the selected Java files only, resolved by the types every source declares", async () => {
+  const read = await createJavaImportsReader(await createJavaParser()).extract([OWNER, CLIENT], { files: [CLIENT.path] });
+  assert.deepEqual(read.files.map(({ file }) => file), [CLIENT.path]);
+  assert.deepEqual(read.dependencies[0]?.target, { kind: "repository", file: OWNER.path });
+});

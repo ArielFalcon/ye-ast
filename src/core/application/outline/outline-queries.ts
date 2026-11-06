@@ -59,7 +59,7 @@ export function createOutlineQueries(deps: OutlineQueriesDeps): OutlineQueries {
           const focused = focus === undefined ? undefined : readFocus(store, focus.filter(({ file }) => isReadableFile(file)));
           if (focused !== undefined && focused.unknown.length > 0) return { ok: false, fault: { kind: "unknown-symbol", detail: `no declaration at the revision for ${focused.unknown.map(({ file, symbol }) => `${file}:${symbol}`).join(", ")}${unmodelledNote(focused.unknown, unmodelled)}`, entries: focused.unknown } };
           if (focused !== undefined && focused.topLevel.length > 0) return { ok: false, fault: { kind: "top-level-line", detail: `no declaration holds ${focused.topLevel.map(({ file, line }) => `${file}:${line}`).join(", ")}; the line is at the top level of its file`, entries: focused.topLevel } };
-          const listed = focused === undefined ? readOutline(store, covered, await readModules(deps.moduleReaders, sources ?? [])) : undefined;
+          const listed = focused === undefined ? readOutline(store, covered, await readModules(deps.moduleReaders, sources ?? [], covered)) : undefined;
           if (request.signal?.aborted) return ABORTED;
           const read = focused?.value ?? listed!.value;
           const cuts = [
@@ -89,9 +89,9 @@ async function focusedSources(deps: OutlineQueriesDeps, root: string, exported: 
   return written.length === 0 ? [] : deps.reader.read(root, written);
 }
 
-/** The module statements of every reader, as one read. */
-async function readModules(readers: readonly ModuleDependenciesReader[], sources: readonly SourceFile[]): Promise<ModuleDependencies> {
-  const reads = await Promise.all(readers.map((reader) => reader.extract(sources)));
+/** The module statements of the requested files from every reader, each resolved against every source, as one read. */
+async function readModules(readers: readonly ModuleDependenciesReader[], sources: readonly SourceFile[], files: readonly string[]): Promise<ModuleDependencies> {
+  const reads = await Promise.all(readers.map((reader) => reader.extract(sources, { files })));
   return {
     files: reads.flatMap((read) => read.files),
     dependencies: reads.flatMap((read) => read.dependencies),

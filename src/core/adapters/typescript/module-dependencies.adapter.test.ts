@@ -176,3 +176,10 @@ test("a require of a string literal stays outside module traversal and carries t
     { file: "src/use.ts", line: 1, offset: 12, form: "require", endLine: 1, specifier: "./lib/item", target: { kind: "repository", file: "src/lib/item.ts" } },
   ]);
 });
+
+test("a selection reads the statements of the selected files only, while every source still resolves them", async () => {
+  const unselected: SourceFile = { path: "src/other.ts", content: "import { item } from './lib/item';" };
+  const result = await createModuleDependenciesReader().extract([{ path: "src/use.ts", content: "import { item } from './lib/item';" }, item, unselected], { files: ["src/use.ts"] });
+  assert.deepEqual(result.files.map(({ file }) => file), ["src/use.ts"]);
+  assert.deepEqual(result.dependencies.map(({ file, target }) => ({ file, target })), [{ file: "src/use.ts", target: { kind: "repository", file: item.path } }]);
+});

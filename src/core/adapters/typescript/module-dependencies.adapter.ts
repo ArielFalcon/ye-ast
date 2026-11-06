@@ -13,7 +13,8 @@ export const LOCAL_REQUIRE = "the file binds its own require, so the call is not
 
 export function createModuleDependenciesReader(): ModuleDependenciesReader {
   return {
-    async extract(sources): Promise<ModuleDependencies> {
+    async extract(sources, options): Promise<ModuleDependencies> {
+      const selected = options?.files === undefined ? undefined : new Set(options.files);
       const texts = new Map(sources.map(({ path, content }) => [path, content]));
       const packages = new Set(sources.filter(({ path }) => isPackageManifest(path)).flatMap(({ content }) => [...manifestDependencies(content)]));
       const resolver = createModuleResolver(async (file) => texts.get(file), packages, { jsonModules: true });
@@ -23,7 +24,7 @@ export function createModuleDependenciesReader(): ModuleDependenciesReader {
       const untraversed: UntraversedReference[] = [];
 
       for (const [file, text] of [...texts].sort(([left], [right]) => compareText(left, right))) {
-        if (!isTypeScriptFile(file)) continue;
+        if (!isTypeScriptFile(file) || (selected !== undefined && !selected.has(file))) continue;
         const tree = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, false, ts.ScriptKind.TS);
         if ((tree as ts.SourceFile & { parseDiagnostics: readonly ts.Diagnostic[] }).parseDiagnostics.length > 0) {
           unread.push({ file, reason: "source-unreadable" });
