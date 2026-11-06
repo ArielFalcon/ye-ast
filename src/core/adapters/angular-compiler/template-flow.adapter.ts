@@ -91,12 +91,15 @@ function opaque(detail: string, outcome: OpaqueOutcome = "unmodelled", cause: Fr
 interface Tracked {
   frame: AccessPath;
   offset: AccessPath;
+  /** Which element each `[]` of `offset` stands for: a literal index or a loop item. */
+  slots: readonly string[];
   hops: readonly Hop[];
   guards: readonly Guard[];
 }
 
 interface Alias {
   frame: AccessPath;
+  slots: readonly string[];
   hops: readonly Hop[];
 }
 
@@ -127,6 +130,7 @@ class TemplateFlow extends CombinedRecursiveAstVisitor {
   private readonly next: At<FlowNext>[] = [];
   private readonly frontiers: At<FlowFrontier>[] = [];
   private readonly aliases = new Map<object, Alias>();
+  private readonly guardSlots = new WeakMap<Guard, readonly string[]>();
   private readonly lineStarts: number[];
   private readonly changed: AccessPath;
   private guards: readonly Guard[] = [];
@@ -234,16 +238,26 @@ class TemplateFlow extends CombinedRecursiveAstVisitor {
     return { path: this.unit.path, line: this.unit.firstLine + this.lineStarts.findLastIndex((start) => start <= offset) };
   }
 
-  private guard(kind: GuardKind, covers: AccessPath, excludes: readonly Absence[], node: AST): Guard {
-    return { kind, covers, excludes, evidence: this.evidence(node.sourceSpan.start) };
+  private guard(kind: GuardKind, on: Tracked, excludes: readonly Absence[], node: AST): Guard {
+    const guard: Guard = { kind, covers: on.offset, excludes, evidence: this.evidence(node.sourceSpan.start) };
+    this.guardSlots.set(guard, on.slots);
+    return guard;
+  }
+
+  /** A guard on one element says nothing about another, so it applies only where its elements are the read's. */
+  private applicable(tracked: Tracked, extra: readonly Guard[] = []): Guard[] {
+    return [...this.guards, ...tracked.guards, ...extra].filter((guard) => {
+      const own = this.guardSlots.get(guard) ?? [];
+      return own.every((slot, index) => index >= tracked.slots.length || slot === tracked.slots[index]);
+    });
   }
 
   private rootOf(read: PropertyRead | SafePropertyRead): Tracked | undefined {
     if (!(read instanceof PropertyRead) || !(read.receiver instanceof ImplicitReceiver)) return undefined;
     const target = read.receiver instanceof ThisReceiver ? null : this.template.bound.getExpressionTarget(read);
-    if (target === null) return read.name === this.carrier.site.member ? { frame: [], offset: [], hops: [], guards: [] } : undefined;
+    if (target === null) return read.name === this.carrier.site.member ? { frame: [], offset: [], slots: [], hops: [], guards: [] } : undefined;
     const alias = this.aliases.get(target);
-    return alias === undefined ? undefined : { frame: alias.frame, offset: alias.frame, hops: alias.hops, guards: [] };
+    return alias === undefined ? undefined : { frame: alias.frame, offset: alias.frame, slots: alias.slots, hops: alias.hops, guards: [] };
   }
 
   private tracks(ast: AST): boolean {
@@ -252,7 +266,14 @@ class TemplateFlow extends CombinedRecursiveAstVisitor {
     if (node instanceof SafePropertyRead || node instanceof KeyedRead || node instanceof SafeKeyedRead || node instanceof Call || node instanceof SafeCall || node instanceof NonNullAssert) {
       return this.tracks(node instanceof NonNullAssert ? node.expression : node.receiver);
     }
+    if (node instanceof Binary && (node.operation === "??" || node.operation === "||")) return this.tracks(node.left) && this.carriesContainer(node.left);
     return node instanceof BindingPipe && node.name === "async" && node.args.length === 0 && this.tracks(node.exp);
+  }
+
+  /** `a ?? b` and `a || b` carry `a` when it only contains the changed value: `b` cannot add the property. */
+  private carriesContainer(left: AST): boolean {
+    const tracked = this.peek(left);
+    return tracked !== undefined && relatePaths(tracked.offset, this.changed) === "contains";
   }
 
   private peek(ast: AST): Tracked | undefined {
@@ -275,14 +296,15 @@ class TemplateFlow extends CombinedRecursiveAstVisitor {
     }
     if (node instanceof SafePropertyRead) {
       const receiver = this.chain(node.receiver);
-      return receiver && { ...receiver, offset: [...receiver.offset, node.name], guards: [...receiver.guards, this.guard("optional-chain", receiver.offset, BOTH, node)] };
+      return receiver && { ...receiver, offset: [...receiver.offset, node.name], guards: [...receiver.guards, this.guard("optional-chain", receiver, BOTH, node)] };
     }
     if (node instanceof KeyedRead || node instanceof SafeKeyedRead) return this.keyed(node);
     if (node instanceof NonNullAssert) {
       const inner = this.chain(node.expression);
-      return inner && { ...inner, guards: [...inner.guards, this.guard("non-null-assertion", inner.offset, BOTH, node)] };
+      return inner && { ...inner, guards: [...inner.guards, this.guard("non-null-assertion", inner, BOTH, node)] };
     }
     if (node instanceof BindingPipe) return this.chain(node.exp);
+    if (node instanceof Binary) return this.chain(node.left);
     if (node instanceof Call || node instanceof SafeCall) return this.call(node);
     return undefined;
   }
@@ -291,27 +313,39 @@ class TemplateFlow extends CombinedRecursiveAstVisitor {
     const receiver = this.chain(node.receiver);
     if (receiver === undefined) return undefined;
     const key = core(node.key);
-    const guards = node instanceof SafeKeyedRead ? [...receiver.guards, this.guard("optional-chain", receiver.offset, BOTH, node)] : receiver.guards;
-    if (key instanceof LiteralPrimitive && (typeof key.value === "number" || typeof key.value === "string")) {
-      return { ...receiver, offset: [...receiver.offset, typeof key.value === "number" ? ELEMENT : key.value], guards };
+    const guards = node instanceof SafeKeyedRead ? [...receiver.guards, this.guard("optional-chain", receiver, BOTH, node)] : receiver.guards;
+    if (key instanceof LiteralPrimitive && typeof key.value === "number") {
+      return { ...receiver, offset: [...receiver.offset, ELEMENT], slots: [...receiver.slots, `index:${key.value}`], guards };
     }
+    if (key instanceof LiteralPrimitive && typeof key.value === "string") return { ...receiver, offset: [...receiver.offset, key.value], guards };
     this.end({ ...receiver, guards }, opaque("computed-key", "dereference", "dynamic-access"), node);
     this.expr(node.key, opaque("computed-key"));
     return undefined;
   }
 
-  /** A call without arguments reads a signal: the callee adds no segment. A call with arguments is a method call. */
+  /** A call without arguments reads a signal only on the carried member or alias and on `value` of a resource: the callee adds no segment. */
+  private readsSignal(callee: AST): boolean {
+    if (!(callee instanceof PropertyRead)) return false;
+    if (callee.receiver instanceof ImplicitReceiver) return this.rootOf(callee) !== undefined;
+    const root = core(callee.receiver);
+    const holder = root instanceof PropertyRead && root.receiver instanceof ImplicitReceiver ? this.rootOf(root) : undefined;
+    return callee.name === "value" && holder !== undefined && this.changed[holder.offset.length] === "value";
+  }
+
+  /** Any other call is a method call: on the changed value it dereferences it, on a container of it the value is lost. */
   private call(node: Call | SafeCall): Tracked | undefined {
     const callee = core(node.receiver);
-    if (node.args.length === 0) {
+    if (node.args.length === 0 && this.readsSignal(callee)) {
       const read = this.chain(callee);
-      return read && (node instanceof SafeCall ? { ...read, guards: [...read.guards, this.guard("optional-chain", read.offset, BOTH, node)] } : read);
+      return read && (node instanceof SafeCall ? { ...read, guards: [...read.guards, this.guard("optional-chain", read, BOTH, node)] } : read);
     }
     const method = callee instanceof PropertyRead || callee instanceof SafePropertyRead ? callee : undefined;
+    const prefix = node.args.length === 0 ? "method" : "call";
     const holder = this.chain(method === undefined ? callee : method.receiver);
     if (holder !== undefined) {
-      const guarded = node instanceof SafeCall || method instanceof SafePropertyRead ? [...holder.guards, this.guard("optional-chain", holder.offset, BOTH, node)] : holder.guards;
-      this.end({ ...holder, guards: guarded }, opaque(`call:${method?.name ?? "expression"}`, "dereference"), node);
+      const guarded = node instanceof SafeCall || method instanceof SafePropertyRead ? [...holder.guards, this.guard("optional-chain", holder, BOTH, node)] : holder.guards;
+      const called = method !== undefined && relatePaths([...holder.offset, method.name], this.changed) === "exact" ? { ...holder, offset: [...holder.offset, method.name] } : holder;
+      this.end({ ...called, guards: guarded }, opaque(`${prefix}:${method?.name ?? "expression"}`, "dereference"), node);
     }
     for (const argument of node.args) this.expr(argument, opaque(`call:${method?.name ?? "expression"}`));
     return undefined;
@@ -331,7 +365,7 @@ class TemplateFlow extends CombinedRecursiveAstVisitor {
       return;
     }
     if (node instanceof BindingPipe) {
-      this.expr(node.exp, CONSUME);
+      this.expr(node.exp, opaque(`pipe:${node.name}`, "consume"));
       for (const argument of node.args) this.expr(argument, opaque(`pipe-argument:${node.name}`));
       return;
     }
@@ -378,7 +412,7 @@ class TemplateFlow extends CombinedRecursiveAstVisitor {
     if (!this.tracks(node.left)) return this.expr(node.left, sink);
     const tracked = this.chain(node.left);
     if (tracked === undefined) return;
-    if (relatePaths(tracked.offset, this.changed) === "exact") this.use(tracked, "consume", node.left, [this.guard("fallback", tracked.offset, BOTH, node)]);
+    if (relatePaths(tracked.offset, this.changed) === "exact") this.use(tracked, "consume", node.left, [this.guard("fallback", tracked, BOTH, node)]);
     else this.end(tracked, sink, node.left);
   }
 
@@ -399,7 +433,7 @@ class TemplateFlow extends CombinedRecursiveAstVisitor {
       return inner instanceof PrefixNot ? this.guardsOf(inner.expression) : [];
     }
     const tracked = this.peek(node);
-    return tracked === undefined ? [] : [this.guard("truthiness", tracked.offset, BOTH, node)];
+    return tracked === undefined ? [] : [this.guard("truthiness", tracked, BOTH, node)];
   }
 
   private presence(node: Binary): Guard[] {
@@ -408,7 +442,7 @@ class TemplateFlow extends CombinedRecursiveAstVisitor {
     if (tracked === undefined || !this.isAbsent(value)) return [];
     const absent = (value as LiteralPrimitive).value;
     const excludes = node.operation === "!=" ? BOTH : absent === null ? NULL_ONLY : UNDEFINED_ONLY;
-    return [this.guard("comparison", tracked.offset, excludes, node)];
+    return [this.guard("comparison", tracked, excludes, node)];
   }
 
   private end(tracked: Tracked, sink: Sink, node: AST): void {
@@ -419,7 +453,7 @@ class TemplateFlow extends CombinedRecursiveAstVisitor {
       case "test":
         return;
       case "consume":
-        return this.use(tracked, "consume", node);
+        return relation === "contains" ? undefined : this.use(tracked, "consume", node);
       case "opaque":
         if (relation === "contains" || sink.outcome === "frontier") return this.frontier(tracked, sink.cause, sink.detail, node.sourceSpan.start);
         return this.use(tracked, sink.outcome, node);
@@ -442,7 +476,7 @@ class TemplateFlow extends CombinedRecursiveAstVisitor {
         path: tracked.offset.slice(tracked.frame.length),
         changed: this.changed.slice(tracked.frame.length),
         operation,
-        guards: this.inFrame([...this.guards, ...tracked.guards, ...extra], tracked.frame),
+        guards: this.inFrame(this.applicable(tracked, extra), tracked.frame),
         hops: [...tracked.hops, { step: "template-read", evidence: site }],
       },
     });
@@ -455,7 +489,7 @@ class TemplateFlow extends CombinedRecursiveAstVisitor {
 
   private bind(tracked: Tracked, sink: Extract<Sink, { kind: "bind" }>, node: AST): void {
     if (this.quiet) return;
-    const establishes = [...this.guards, ...tracked.guards].some((guard) => guard.kind !== "non-null-assertion" && startsWith(guard.covers, this.changed));
+    const establishes = this.applicable(tracked).some((guard) => guard.kind !== "non-null-assertion" && startsWith(guard.covers, this.changed));
     if (establishes) return this.frontier(tracked, "unmodelled-flow", `guarded-binding:${sink.name}`, node.sourceSpan.start);
     const from = tracked.offset.slice(tracked.frame.length);
     const hop: Hop = { step: "template-binding", evidence: this.evidence(node.sourceSpan.start), ...(from.length === 0 ? {} : { rewrite: [{ from, to: [] }] }) };
@@ -463,18 +497,18 @@ class TemplateFlow extends CombinedRecursiveAstVisitor {
     this.next.push({
       offset: node.sourceSpan.start,
       value: {
-        carrier: { site: { kind: "member", repo: site.repo, file: sink.ref.path, owner: sink.ref.symbol, member: sink.name }, path: this.changed.slice(tracked.offset.length) },
+        carrier: { site: { kind: "input", repo: site.repo, file: sink.ref.path, owner: sink.ref.symbol, name: sink.name }, path: this.changed.slice(tracked.offset.length) },
         hops: [...tracked.hops, hop],
       },
     });
   }
 
-  private alias(key: object, frame: AccessPath, tracked: Tracked, step: FlowStep, offset: number): void {
+  private alias(key: object, frame: AccessPath, tracked: Tracked, step: FlowStep, offset: number, slots: readonly string[] = tracked.slots): void {
     const relation = relatePaths(frame, this.changed);
     if (relation !== "exact" && relation !== "contains") return;
     const from = frame.slice(tracked.frame.length);
     const hop: Hop = { step, evidence: this.evidence(offset), ...(from.length === 0 ? {} : { rewrite: [{ from, to: [] }] }) };
-    this.aliases.set(key, { frame, hops: [...tracked.hops, hop] });
+    this.aliases.set(key, { frame, slots, hops: [...tracked.hops, hop] });
   }
 
   /** `@for` and `*ngFor`: the item is the element of the iterated value, so it drops a leading `[]`. */
@@ -482,8 +516,10 @@ class TemplateFlow extends CombinedRecursiveAstVisitor {
     const tracked = this.peek(iterable);
     if (tracked !== undefined) {
       const element = [...tracked.offset, ELEMENT];
-      if (item !== undefined && startsWith(this.changed, element)) this.alias(item, element, tracked, "iterate", offset);
-      else if (relatePaths(tracked.offset, this.changed) === "contains") this.frontier(tracked, "unmodelled-flow", "iterate", offset);
+      const relation = relatePaths(tracked.offset, this.changed);
+      if (item !== undefined && startsWith(this.changed, element)) this.alias(item, element, tracked, "iterate", offset, [...tracked.slots, `loop:${offset}`]);
+      else if (relation === "contains") this.frontier(tracked, "unmodelled-flow", "iterate", offset);
+      else if (relation === "exact") this.use(tracked, "consume", iterable);
     }
     this.expr(iterable, TEST);
   }

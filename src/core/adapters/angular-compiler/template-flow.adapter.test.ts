@@ -182,7 +182,7 @@ test("the value bound to the input of a child component continues as a member ca
   const [next] = result.next;
 
   assert.equal(result.next.length, 1);
-  assert.deepEqual(next?.carrier, { site: { kind: "member", repo: "shop", file: "src/app/ownercard.ts", owner: "OwnerCard", member: "owner" }, path: ["name"] });
+  assert.deepEqual(next?.carrier, { site: { kind: "input", repo: "shop", file: "src/app/ownercard.ts", owner: "OwnerCard", name: "owner" }, path: ["name"] });
   assert.deepEqual(next?.hops.map((hop) => ({ step: hop.step, line: hop.evidence.line, rewrite: hop.rewrite })), [{ step: "template-binding", line: 1, rewrite: [{ from: ["owner"], to: [] }] }]);
   assert.deepEqual(result.uses, []);
 });
@@ -236,7 +236,7 @@ test("uses, next carriers and frontiers come in source order with lines relative
 
   assert.deepEqual(uses(first), ["owner.name | owner dereference []@20", "owner | owner unmodelled []@22", "owner | owner consume []@23", "owner.id | owner dereference []@24"]);
   assert.deepEqual(frontiers(first), ["unmodelled-flow:template-call:select@20"]);
-  assert.deepEqual(first.next.map((next) => next.carrier.site.kind === "member" && next.carrier.site.member), ["owner", "other"]);
+  assert.deepEqual(first.next.map((next) => next.carrier.site.kind === "input" && next.carrier.site.name), ["owner", "other"]);
   assert.deepEqual(follow(text, ["owner"], { scope, firstLine: 20 }), first);
 });
 
@@ -251,4 +251,69 @@ test("a condition is read once: testing a call that loses the container reports 
 
   assert.deepEqual(frontiers(result), ["unmodelled-flow:call:join@1"]);
   assert.deepEqual(uses(follow("@if (order().owner.label(1)) { <p></p> }", ["owner"])), ["owner | owner dereference []@1"]);
+});
+
+test("a guard on one array element protects only reads of the same literal index, never another element or the items of a loop", () => {
+  const result = follow(
+    "@if (order.items[0].owner) {\n{{ order.items[1].owner.name }}\n{{ order.items[0].owner.name }}\n@for (item of order.items; track item) {\n{{ item.owner.name }}\n}\n}",
+    ["items", ELEMENT, "owner"],
+  );
+
+  assert.deepEqual(uses(result), [
+    "items[].owner.name | items[].owner dereference []@2",
+    "items[].owner.name | items[].owner dereference [truthiness items[].owner]@3",
+    "owner.name | owner dereference []@5",
+  ]);
+});
+
+test("a guard on a loop item protects reads of that item and not those of another loop", () => {
+  const result = follow(
+    "@for (a of order.items; track a) {\n@if (a.owner) {\n{{ a.owner.name }}\n@for (b of order.items; track b) {\n{{ b.owner.name }}\n}\n}\n}",
+    ["items", ELEMENT, "owner"],
+  );
+
+  assert.deepEqual(uses(result), ["owner.name | owner dereference [truthiness owner]@3", "owner.name | owner dereference []@5"]);
+});
+
+test("the value bound to a child input is carried by its public name for the reader to resolve, and a binding to a directive stays a frontier", () => {
+  const result = follow('<app-owner-card [publicOrder]="order"></app-owner-card>', ["owner"], { scope: [card("OwnerCard", "app-owner-card")] });
+
+  assert.deepEqual(result.next[0]?.carrier, { site: { kind: "input", repo: "shop", file: "src/app/ownercard.ts", owner: "OwnerCard", name: "publicOrder" }, path: ["owner"] });
+  assert.equal(result.next[0]?.hops[0]?.step, "template-binding");
+});
+
+test("a fallback or a let that carries a container of the changed value goes on to its destination", () => {
+  const aliased = follow("@let x = order ?? other;\n{{ x.owner.name }}", ["owner"]);
+  const nested = follow("{{ (order || other).owner.name }}", ["owner"]);
+  const bound = follow('<app-owner-card [data]="order ?? other"></app-owner-card>', ["owner"], { scope: [card("OwnerCard", "app-owner-card")] });
+
+  assert.deepEqual(uses(aliased), ["owner.name | owner dereference []@2"]);
+  assert.deepEqual(uses(nested), ["owner.name | owner dereference []@1"]);
+  assert.deepEqual(bound.next.map((next) => next.carrier.path), [["owner"]]);
+});
+
+test("a pipe other than async that transforms a container of the changed value is a frontier, and a container shown as it is has no use", () => {
+  const result = follow("{{ (order | custom).owner.name }}\n{{ order | custom }}\n{{ order }}", ["owner"]);
+
+  assert.deepEqual(uses(result), []);
+  assert.deepEqual(frontiers(result), ["unmodelled-flow:pipe:custom@1", "unmodelled-flow:pipe:custom@2"]);
+});
+
+test("a call without arguments reads a signal only on the member, an alias or the value of a resource; any other call is a method", () => {
+  const container = follow("{{ order().items.slice() }}", ["items", ELEMENT, "name"]);
+  const own = follow("{{ order().owner() }}\n{{ order.owner() }}", ["owner"]);
+  const alias = follow("@let v = order();\n{{ v().owner.name }}", ["owner"]);
+
+  assert.deepEqual(uses(container), []);
+  assert.deepEqual(frontiers(container), ["unmodelled-flow:method:slice@1"]);
+  assert.deepEqual(uses(own), ["owner | owner dereference []@1", "owner | owner dereference []@2"]);
+  assert.deepEqual(uses(alias), ["owner.name | owner dereference []@2"]);
+});
+
+test("a loop over the exact changed collection is a consume of it, and the items stay followed for a change below the element", () => {
+  const exact = follow("@for (item of order().items; track item) {\n<p></p>\n}\n<p *ngFor=\"let row of order().items\"></p>", ["items"]);
+  const below = follow("@for (item of order().items; track item) {\n{{ item.name.length }}\n}", ["items", ELEMENT, "name"]);
+
+  assert.deepEqual(uses(exact), ["items | items consume []@1", "items | items consume []@4"]);
+  assert.deepEqual(uses(below), ["name.length | name dereference []@2"]);
 });
