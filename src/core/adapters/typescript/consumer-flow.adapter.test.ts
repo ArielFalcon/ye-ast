@@ -641,6 +641,84 @@ test("a parameter that shadows a top-level function is not that function", async
   assert.deepEqual(frontiers(result), ["2 unmodelled-sink:render"]);
 });
 
+test("a var declared in a block is the whole function's binding, so its reads there are not the followed value", async () => {
+  const file = plain(["const run = () => {", "  if (o) { var o = other }", "  show(o.owner.name)", "}", "show(o.owner.id)"]);
+  const result = await follow([file], paramO, "owner");
+  assert.deepEqual(uses(result), ["6 owner.id|owner dereference []"]);
+});
+
+test("an assignment binds the declaration its case block shares, never an outer one of the same name", async () => {
+  const file = plain(["let x = o", "switch (k) {", "  case 1: let x = 0; break", "  case 2: x = o.owner", "}", "show(x.owner.id)"]);
+  const result = await follow([file], paramO, "owner");
+  assert.deepEqual(uses(result), ["7 owner.id|owner dereference []"]);
+});
+
+test("a var declared in a block holds the followed value past the block", async () => {
+  const result = await follow([plain(["if (c) { var x = o }", "show(x.owner.id)"])], paramO, "owner");
+  assert.deepEqual(uses(result), ["3 owner.id|owner dereference []"]);
+});
+
+test("a function declared in one case clause is the callee of a call in another, over a top-level one of the same name", async () => {
+  const file = source("p.ts", ["function render(x: Order) {}", "function use(o: Order) {", "  switch (k) {", "    case 1: function render(y: Order) {} break", "    case 2: render(o)", "  }", "}"]);
+  const result = await follow([file], { ...paramO, line: at(2) }, "owner");
+  assert.deepEqual(next(result), ["parameter render#0@4 owner"]);
+});
+
+const dynamicScopes = (body: string) => ({
+  eval: { path: "p.ts", content: `function use(o: Order) {\n  eval(code)\n  ${body}\n}` },
+  with: { path: "p.ts", content: `function use(o: Order) {\n  with (scope) {\n    ${body}\n  }\n}` },
+});
+const dynamicUse = { kind: "parameter" as const, repo: "repo", file: "p.ts", symbol: "use", line: 1, index: 0 };
+const raw = (result: FlowResult) => ({ uses: result.uses.map((use) => use.site.line), next: result.next.length, frontiers: result.frontiers.map((frontier) => `${frontier.at.line} ${frontier.cause}:${frontier.detail}`) });
+
+test("a read whose binding a dynamic scope leaves uncertain is a frontier at the read, never a use or a silent drop", async () => {
+  const { eval: evaluated, with: within } = dynamicScopes("show(o.owner.id)");
+
+  assert.deepEqual(raw(await follow([evaluated], dynamicUse, "owner")), { uses: [], next: 0, frontiers: ["3 unmodelled-flow:dynamic scope"] });
+  assert.deepEqual(raw(await follow([within], dynamicUse, "owner")), { uses: [], next: 0, frontiers: ["3 unmodelled-flow:dynamic scope"] });
+});
+
+test("a call passing a read a dynamic scope leaves uncertain is a frontier, never a callee claimed by name", async () => {
+  const render = "function render(y: Order) { return y.owner.id }\n";
+  const { eval: evaluated, with: within } = dynamicScopes("render(o)");
+
+  for (const file of [evaluated, within]) {
+    const result = await follow([{ ...file, content: render + file.content }], { ...dynamicUse, line: 2 }, "owner");
+    assert.equal(result.next.length, 0);
+    assert.ok(result.frontiers.some((frontier) => frontier.detail === "dynamic scope"));
+  }
+});
+
+test("a callee a dynamic scope names is no function of the repository, even when the value passed to it is certain", async () => {
+  const file = { path: "p.ts", content: "function render(y: Order) { return y.owner.id }\nclass Page {\n  held: Order\n  show() { with (scope) { render(this.held) } }\n}" };
+  const result = await follow([file], { kind: "member", repo: "repo", file: "p.ts", owner: "Page", member: "held" }, "owner");
+
+  assert.deepEqual(result.next, []);
+  assert.notDeepEqual(result.frontiers, []);
+});
+
+test("a write a dynamic scope may send elsewhere is a frontier, and the reads after it still hold the value", async () => {
+  const file = { path: "p.ts", content: "function use(o: Order) {\n  let x = o\n  with (scope) { x = other }\n  show(x.owner.id)\n}" };
+
+  assert.deepEqual(raw(await follow([file], dynamicUse, "owner")), { uses: [4], next: 0, frontiers: ["3 unmodelled-flow:dynamic scope"] });
+});
+
+test("a write a dynamic scope may make to the guarded path voids the guard: no use after it, and the write is reported", async () => {
+  const file = { path: "p.ts", content: "function use(o: Order) {\n  if (o.owner) {\n    with (scope) { o.owner = other }\n    show(o.owner.id)\n  }\n}" };
+  const result = raw(await follow([file], dynamicUse, "owner"));
+
+  assert.deepEqual(result.uses, []);
+  assert.ok(result.frontiers.includes("3 unmodelled-flow:write after guard"), result.frontiers.join(", "));
+});
+
+test("a followed value read as a destructuring default or by an export specifier stays a frontier there", async () => {
+  const defaulted = await follow([plain(["const { a = o } = {} as any", "show(a.owner.id)"])], paramO, "owner");
+  const exported = await follow([source("p.ts", ["let held: any", "function use(o: Order) { held = o }", "export { held }"])], { ...paramO, line: at(2) }, "owner");
+
+  assert.deepEqual(frontiers(defaulted), ["2 unmodelled-flow:BindingElement"]);
+  assert.deepEqual(frontiers(exported), ["3 unmodelled-flow:ExportSpecifier"]);
+});
+
 test("a local function declaration is the callee over a top-level one of the same name", async () => {
   const file = source("p.ts", ["function render(x: Order) {}", "function use(o: Order) {", "  function render(y: Order) {}", "  render(o)", "}"]);
   const result = await follow([file], { ...paramO, line: at(2) }, "owner");

@@ -6,11 +6,14 @@ import type { FallbackGuard, Guard, TestedGuard, UntestedGuard } from "../../dom
 import type { Evidence, UnknownReason } from "../../domain/shared/fact.ts";
 import type { Origin, Program, Unit } from "./consumer-flow.index.ts";
 import {
+  assignedBinding,
   chainPath,
+  declaredBinding,
   declaredScope,
   discardsValue,
   declaringScope,
-  declaresName,
+  isDynamicName,
+  isUndeclaredName,
   enclosingClass,
   enclosingFunction,
   enclosingLoop,
@@ -25,6 +28,7 @@ import {
   namedFunction,
   referencesOf,
   replacementOf,
+  searchRoot,
   unwrap,
   writesWithin,
   type Binding,
@@ -391,7 +395,8 @@ export class Walker {
     const left = unwrap(assignment.left);
     const held = this.hopped(t, "assign", assignment);
     if (ts.isPropertyAccessExpression(left) && left.expression.kind === ts.SyntaxKind.ThisKeyword) return this.assignedToMember(left.name.text, enclosingClass(assignment), assignment, held);
-    if (ts.isIdentifier(left)) return this.track({ kind: "name", name: left.text, scope: declaringScope(left) }, held, assignment);
+    const binding = ts.isIdentifier(left) ? assignedBinding(left) : undefined;
+    if (binding !== undefined) return this.track(binding, held, assignment);
     this.frontier(assignment, "unmodelled-flow", "assignment target", t);
   }
 
@@ -555,22 +560,26 @@ export class Walker {
   }
 
   private bind(name: ts.BindingName, scope: ts.Node, t: Trail, from?: ts.Node): void {
-    if (ts.isIdentifier(name)) return this.track({ kind: "name", name: name.text, scope }, t, from);
+    if (ts.isIdentifier(name)) return this.track(declaredBinding(name, scope), t, from);
     this.destructure(name, scope, t, []);
   }
 
   /** Follows the reads of `binding`; with `from`, only those the declaration or assignment at `from` can reach. */
   private track(binding: Binding, t: Trail, from?: ts.Node): void {
     const trail: Trail = { origin: t.origin, hops: t.hops, guards: t.guards, binding };
-    const references = referencesOf(binding);
-    for (const reference of from === undefined ? references : this.reachedFrom(binding, from, references, t)) this.read(reference, trail);
+    const { reads, dynamic } = referencesOf(binding);
+    for (const reference of from === undefined ? reads : this.reachedFrom(binding, from, reads, t)) this.read(reference, trail);
+    for (const reference of dynamic) if (from === undefined || reference.pos >= from.end) this.once(reference, "dynamic scope", trail);
   }
 
   private reachedFrom(binding: Binding, assignment: ts.Node, references: readonly ts.Expression[], t: Trail): ts.Expression[] {
     const loop = enclosingLoop(assignment, binding.scope);
     if (loop !== undefined && references.some((reference) => reference.pos < assignment.pos && reference.pos >= loop.pos)) this.once(assignment, "assignment in a loop", t);
     const reachable = references.filter((reference) => reference.pos >= assignment.end);
-    const rewrite = writesWithin(binding.scope, binding, assignment.end, Infinity).find((write) => write.path.length === 0);
+    const rewrites = writesWithin(searchRoot(binding), binding, assignment.end, Infinity).filter((write) => write.path.length === 0);
+    const definite = rewrites.findIndex((write) => write.dynamic === undefined);
+    for (const write of definite === -1 ? rewrites : rewrites.slice(0, definite)) this.once(write.node, "dynamic scope", t);
+    const rewrite = rewrites[definite];
     if (rewrite === undefined) return reachable;
     if (mayNotFollow(assignment, rewrite.node)) {
       this.once(rewrite.node, "conditional reassignment", t);
@@ -733,7 +742,7 @@ export class Walker {
     const callee = unwrap(call.expression);
     if (!ts.isPropertyAccessExpression(callee) || callee.name.text !== "isArray" || call.arguments.length !== 1) return false;
     const receiver = unwrap(callee.expression);
-    return ts.isIdentifier(receiver) && receiver.text === "Array" && declaringScope(receiver) === this.unit.tree && !declaresName(this.unit.tree, "Array") && !this.unit.imports.has("Array");
+    return ts.isIdentifier(receiver) && receiver.text === "Array" && isUndeclaredName(receiver) && !this.unit.imports.has("Array");
   }
 
   private resolveFunction(callee: ts.Expression): Resolved | undefined {
@@ -760,6 +769,7 @@ export class Walker {
   }
 
   private functionNamed(identifier: ts.Identifier): Resolved | undefined {
+    if (isDynamicName(identifier)) return undefined;
     const name = identifier.text;
     const scope = declaringScope(identifier);
     if (scope !== this.unit.tree) return this.localFunction(scope, name);
@@ -774,8 +784,8 @@ export class Walker {
 
   /** The function a name declares in a block, or undefined when it is a parameter or a variable holding something else. */
   private localFunction(scope: ts.Node, name: string): Resolved | undefined {
-    if (!ts.isBlock(scope) && !ts.isCaseClause(scope) && !ts.isDefaultClause(scope) && !ts.isModuleBlock(scope)) return undefined;
-    for (const statement of scope.statements) {
+    const statements = ts.isCaseBlock(scope) ? scope.clauses.flatMap((clause) => clause.statements) : ts.isBlock(scope) || ts.isModuleBlock(scope) ? scope.statements : undefined;
+    for (const statement of statements ?? []) {
       const declared = ts.isFunctionDeclaration(statement) ? [statement] : ts.isVariableStatement(statement) ? statement.declarationList.declarations.map((declaration) => declaration.initializer) : [];
       for (const candidate of declared) {
         const named = candidate !== undefined && isFunctionNode(candidate) ? namedFunction(candidate) : undefined;

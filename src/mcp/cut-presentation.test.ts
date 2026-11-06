@@ -1,8 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { renderImpact } from "./render.ts";
+import { renderImpact, renderImporters } from "./render.ts";
 import { SCHEMA, type Fact, type Cut } from "../core/domain/shared/fact.ts";
 import type { ImpactValue } from "../core/domain/impact/impact-fact.ts";
+import type { ImportersValue } from "../core/domain/impact/importers-fact.ts";
 
 const base = { schema: SCHEMA, snapshot: { repo: "repo", kind: "sha" as const, sha: "abc" }, producer: { name: "test", version: "1" }, inputs: { trust: "untrusted" as const, scope: "s", declaredScope: { languages: [], frameworks: [], include: [], exclude: [] }, content: "c", config: "c", declaredConfig: {}, engines: {} }, evidence: [] };
 const value: ImpactValue = { seeds: [], symbols: [], entrypoints: [], cost: { expansionsUsed: 0 } };
@@ -55,4 +56,16 @@ test("tiny cut categories retain the shorter complete literal layout", () => {
   assert.doesNotMatch(text, /includes every place/);
   assert.match(text, /lookup example: \{"kind":"cut-places","owner":\{"kind":"fact"\},"cutIndex":0\}/);
   assert.doesNotMatch(text, /Cut lookup:/);
+});
+
+test("a place's path ends at its line, so a path or a reason holding spaces keeps them in every view of its cut", () => {
+  const cuts: [Cut, ...Cut[]] = [
+    { kind: "unresolved-link", at: ["src/svc.ts::Service.read", "src/my app/a.ts:12 this.svc.read", "src/my app/a.ts:30 this.svc.read"] },
+    { kind: "unresolved-link", at: ["src/my app/b.ts", "src/my app/b.ts:4 import outside module traversal (offset 9)"] },
+  ];
+  const importers: Fact<ImportersValue> = { ...base, status: "partial", cuts, value: { files: [] } };
+
+  assert.match(renderImporters(importers, "summary"), /^ {6}Service\.read: src\/my app\/a\.ts$/m);
+  assert.match(renderImporters(importers, "details"), /^ {2}unresolved-link at src\/svc\.ts::Service\.read: src\/my app\/a\.ts \(this\.svc\.read\): 12, 30$/m);
+  assert.match(renderImpact({ ...base, status: "partial", cuts, value }, "details"), /^ {6}cutIndex 1; 1 reference place; reasons \["import outside module traversal \(offset 9\)"\]$/m);
 });
