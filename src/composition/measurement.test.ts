@@ -266,6 +266,16 @@ test("a query line carries the process CPU the call spent and the memory it left
   assert.ok((record.heap_used_bytes as number) > 0);
 });
 
+test("a query line splits the memory outside the JS heap from the heap the process reserved", async () => {
+  const { lines, sink } = collecting();
+  await measuredEntrypoints(entrypointsOf(fact("complete")), { sink, redaction }).map({ repo: "/work/shop", repoId: "shop", revision: "HEAD" });
+
+  const record = recordOf(lines[0]);
+  assert.ok((record.heap_total_bytes as number) >= (record.heap_used_bytes as number));
+  assert.equal(typeof record.external_bytes, "number");
+  assert.ok((record.array_buffers_bytes as number) <= (record.external_bytes as number));
+});
+
 test("a trace query emits its own query line", async () => {
   const { lines, sink } = collecting();
   const queries = { walk: async () => ({ ok: true, value: fact("complete") }) as never };
