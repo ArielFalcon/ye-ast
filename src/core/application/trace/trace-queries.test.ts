@@ -34,6 +34,8 @@ interface Options {
   sources?: readonly { path: string; content: string }[];
   /** The trivia lines a tokenizer reads in each source, by path. */
   trivia?: Readonly<Record<string, readonly number[]>>;
+  /** Runs each time the walk asks for a file's trivia lines. */
+  onTrivia?: (path: string) => void;
 }
 
 function setup(options: Options) {
@@ -60,7 +62,7 @@ function setup(options: Options) {
       index: async () => (options.indexFails ? { ok: false, fault: { kind: "index-failed", detail: "broken" } } : { ok: true, value: SUMMARY }),
       open: () => ({ ok: true, value: store }),
     },
-    sourceTrivia: { triviaLines: async (file: { path: string }) => new Set(options.trivia?.[file.path] ?? []) },
+    sourceTrivia: { triviaLines: async (file: { path: string }) => (options.onTrivia?.(file.path), new Set(options.trivia?.[file.path] ?? [])) },
     importOrigins: () => ({ origins: async (sites: readonly ImportOriginSite[]) => { options.onOrigins?.(); return sites.map(answer); } }),
     engines: {},
     ...(options.live && { live: options.live.deps, trust: { read: async () => ({ ok: true, value: "trusted" }) } }),
@@ -333,6 +335,13 @@ test("a line range selects the declarations it intersects, never the file's othe
   const fact = await factOf({ nodes, sources: [{ path: B, content }], trivia: { [B]: [4, 8, 10] } }, [{ file: B, start: 3, end: 5 }]);
   assert.deepEqual(valueOf(fact).roots, [{ target: "src/b.ts:3-5", steps: [0, 1] }]);
   assert.deepEqual(valueOf(fact).steps.map((step) => step.symbol), ["f", "g"]);
+});
+
+test("a trace reads a file's trivia lines once, however many of its ranges it is asked", async () => {
+  const content = ["function f() {", "  return 1;", "}", "", "function g() {", "  return 2;", "}", "", "function h() {}", ""].join("\n");
+  const asked: string[] = [];
+  await factOf({ nodes: [fakeNode("f", "function", B, 1, 3), fakeNode("g", "function", B, 5, 7), fakeNode("h", "function", B, 9, 9)], sources: [{ path: B, content }], trivia: { [B]: [4, 8, 10] }, onTrivia: (path) => void asked.push(path) }, [{ file: B, start: 3, end: 5 }, { file: B, start: 7, end: 9 }]);
+  assert.deepEqual(asked, [B]);
 });
 
 test("a root an earlier root already expanded is seen at that step", async () => {

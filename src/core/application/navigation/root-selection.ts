@@ -58,6 +58,21 @@ export async function requestedRanges(store: CodeGraphReader, changes: readonly 
   }));
 }
 
+/** Asks for each file's trivia lines once, for the life of one query. */
+export function triviaOncePerFile(trivia: SourceTrivia): SourceTrivia {
+  const read = new Map<string, Promise<ReadonlySet<number>>>();
+  return {
+    triviaLines: (file) => {
+      let lines = read.get(file.path);
+      if (lines === undefined) {
+        lines = trivia.triviaLines(file);
+        read.set(file.path, lines);
+      }
+      return lines;
+    },
+  };
+}
+
 function runsOf(start: number, end: number, selects: (line: number) => boolean): { start: number; end: number }[] {
   const runs: { start: number; end: number }[] = [];
   for (let line = start; line <= end; line += 1) {

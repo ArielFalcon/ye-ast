@@ -11,7 +11,7 @@ import { traceSteps } from "../../domain/trace/trace-tree.ts";
 import type { GraphNodeId, GraphSymbol } from "../../ports/code-graph.port.ts";
 import type { ImportOriginsReader } from "../../ports/import-origins.port.ts";
 import type { TraceFault, TraceQueries } from "../../ports/trace-queries.port.ts";
-import { distinctTargets, evidenceOfTarget, rangeChanges, requestedRanges, selectRoots, targetKey } from "../navigation/root-selection.ts";
+import { distinctTargets, evidenceOfTarget, rangeChanges, requestedRanges, selectRoots, targetKey, triviaOncePerFile } from "../navigation/root-selection.ts";
 import { ABORTED } from "../snapshot/read-snapshot.ts";
 import { createHeadReader, type FactSpec, type HeadReaderDeps } from "../snapshot/head-reading.ts";
 import { walkTrace } from "./trace-walk.ts";
@@ -52,10 +52,11 @@ export function createTraceQueries(deps: TraceQueriesDeps): TraceQueries {
         if (index === "unavailable") return { ok: true, value: { ...head.base(content), status: "unknown", reason: "index-unavailable" } };
         const { store, summary } = index;
         try {
+          const trivia = triviaOncePerFile(deps.sourceTrivia);
           const selections = await Promise.all(targets.map(async (target) => ({
             target,
             selection: "start" in target
-              ? selectRoots(store, await requestedRanges(store, rangeChanges([target]), head.tree.sources, deps.sourceTrivia), [], NO_COMPONENTS)
+              ? selectRoots(store, await requestedRanges(store, rangeChanges([target]), head.tree.sources, trivia), [], NO_COMPONENTS)
               : selectRoots(store, [], [target], NO_COMPONENTS),
           })));
           const missing = selections.flatMap(({ selection }) => selection.missing);

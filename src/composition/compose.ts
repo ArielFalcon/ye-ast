@@ -143,8 +143,9 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
   }, { extract: "entrypoints" });
   const typescriptCallSites = createHttpCallSites();
   const typescriptTrivia = createTypeScriptTrivia();
+  const javaTrivia = createJavaTrivia(createJavaParser);
   const sourceTrivia: SourceTrivia = {
-    triviaLines: async (file) => new Set([...(await typescriptTrivia.triviaLines(file)), ...(await createJavaTrivia(await createJavaParser()).triviaLines(file))]),
+    triviaLines: async (file) => new Set([...(await typescriptTrivia.triviaLines(file)), ...(await javaTrivia.triviaLines(file))]),
   };
   const callSites = staged<CallSiteReader>({
     of: async (files, repo, libraries) => {

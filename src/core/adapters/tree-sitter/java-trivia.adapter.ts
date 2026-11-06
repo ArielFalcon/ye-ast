@@ -5,12 +5,14 @@ import type { JavaParser } from "./java-parser.adapter.ts";
 
 const COMMENTS: readonly string[] = ["line_comment", "block_comment"];
 
-/** The lines of a Java source no token but a comment touches, read from its tree-sitter parse. */
-export function createJavaTrivia(parser: JavaParser): SourceTrivia {
+/** The lines of a Java source no token but a comment touches, read from its tree-sitter parse; the parser is made once, for the first Java source. */
+export function createJavaTrivia(createParser: () => Promise<JavaParser>): SourceTrivia {
+  let parser: Promise<JavaParser> | undefined;
   return {
     triviaLines: async (file) => {
       if (!isJavaSource(file.path)) return new Set();
-      const parsed = parser.parse(file.content);
+      parser ??= createParser();
+      const parsed = (await parser).parse(file.content);
       if (!parsed.ok) return new Set();
       const code = new Set<number>();
       const visit = (node: Node): void => {
