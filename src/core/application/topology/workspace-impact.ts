@@ -171,7 +171,6 @@ function workspaceImpactQueries(deps: WorkspaceImpactDeps, captured?: CapturedWa
     return { ok: true, value: { fact: composite(base, value), ...(read.value.workspaceReplay === undefined ? {} : { workspaceReplay: read.value.workspaceReplay }), ...(read.value.refresh === undefined ? {} : { refresh: read.value.refresh }), ...(read.value.repositoryRoots === undefined ? {} : { repositoryRoots: read.value.repositoryRoots }) } };
   }
 
-  /** The drift each section reports, from the one join of the workspace. */
   function driftOf(repositories: readonly WorkspaceRepository[], joined: readonly JoinedSite[]): Map<string, Section> {
     const parts = new Map<string, Section>(repositories.map((repository) => [repository.repo, { callSites: [], unmatched: [], external: [], ambiguous: [] }]));
     for (const { site, joined: answer } of joined) {

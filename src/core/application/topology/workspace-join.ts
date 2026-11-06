@@ -48,7 +48,6 @@ function eventTargetOf(site: CallSite): EventTarget | undefined {
   return site.transport === "event" && site.target.status === "complete" && "protocol" in site.target.value ? site.target.value : undefined;
 }
 
-/** The gateways a caller declared, out of those in force. */
 export function declaredGateways(gateways: readonly Gateway[]): GatewayDeclaration[] {
   return gateways.flatMap(({ prefix, repo, basis }) => (basis === "gateway-prefix" ? [{ prefix, repo }] : []));
 }
