@@ -29,8 +29,10 @@ interface FileShape {
   reexports: Map<string, { module: string; imported: string }>;
   /** The modules this file star-exports: `export * from './m'`. */
   stars: string[];
-  /** The expression `export default` names, when the file states one. */
-  defaultExport?: ts.Expression;
+  /** The local names this file exports under another name: `export { a as b }`, by `b`. */
+  localExports: Map<string, string>;
+  /** What `export default` holds: an expression, or the class or function it declares. */
+  defaultExport?: ts.Node;
   classes: Map<string, ts.ClassDeclaration>;
   enums: Map<string, ts.EnumDeclaration>;
 }
@@ -61,6 +63,27 @@ interface HeldClass {
   shape: FileShape;
   declaration: ts.ClassDeclaration;
 }
+
+/** A declaration an import names, with the file that declares it and the exports the resolution visited. */
+interface Resolved<T> {
+  shape: FileShape;
+  declaration: T;
+  trail: ReadonlySet<string>;
+}
+
+/** How a kind of declaration is found in a file: under the name it declares, or as what `export default` holds. */
+interface DeclarationKind<T> {
+  named(shape: FileShape, name: string): T | undefined;
+  defaulted(node: ts.Node): T | undefined;
+}
+
+const CLASSES: DeclarationKind<ts.ClassDeclaration> = { named: (shape, name) => shape.classes.get(name), defaulted: (node) => (ts.isClassDeclaration(node) ? node : undefined) };
+const ENUMS: DeclarationKind<ts.EnumDeclaration> = { named: (shape, name) => shape.enums.get(name), defaulted: () => undefined };
+const CONSTANTS: DeclarationKind<ts.Expression> = { named: (shape, name) => shape.consts.get(name), defaulted: (node) => (ts.isExpression(node) ? node : undefined) };
+const CALLABLES: DeclarationKind<ts.Expression | ts.FunctionDeclaration> = {
+  named: (shape, name) => shape.consts.get(name) ?? functionNamed(shape, name),
+  defaulted: (node) => (ts.isFunctionDeclaration(node) || ts.isExpression(node) ? node : undefined),
+};
 
 /** A method a class declares, with the file that declares it. */
 interface HeldMethod {
@@ -105,7 +128,7 @@ function compareText(a: string, b: string): number {
 
 function describe(file: SourceFile): FileShape {
   const source = sourceTree(file, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
-  const shape: FileShape = { source, bindings: sourceBindings(source), unsafeEncoder: mayOverrideEncoder(source), consts: new Map(), imports: new Map(), reexports: new Map(), stars: [], classes: new Map(), enums: new Map() };
+  const shape: FileShape = { source, bindings: sourceBindings(source), unsafeEncoder: mayOverrideEncoder(source), consts: new Map(), imports: new Map(), reexports: new Map(), stars: [], localExports: new Map(), classes: new Map(), enums: new Map() };
   for (const statement of source.statements) {
     if (ts.isImportDeclaration(statement) && ts.isStringLiteral(statement.moduleSpecifier)) {
       const module = statement.moduleSpecifier.text;
@@ -126,10 +149,16 @@ function describe(file: SourceFile): FileShape {
       }
       continue;
     }
+    if ((ts.isClassDeclaration(statement) || ts.isFunctionDeclaration(statement)) && isDefaultExport(statement)) shape.defaultExport = statement;
     if (ts.isClassDeclaration(statement) && statement.name !== undefined) shape.classes.set(statement.name.text, statement);
     if (ts.isEnumDeclaration(statement)) shape.enums.set(statement.name.text, statement);
   }
   return shape;
+}
+
+function isDefaultExport(statement: ts.ClassDeclaration | ts.FunctionDeclaration): boolean {
+  const modifiers = ts.getModifiers(statement) ?? [];
+  return modifiers.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword) && modifiers.some((modifier) => modifier.kind === ts.SyntaxKind.DefaultKeyword);
 }
 
 function collectImports(clause: ts.ImportClause | undefined, module: string, into: FileShape): void {
@@ -140,9 +169,15 @@ function collectImports(clause: ts.ImportClause | undefined, module: string, int
   else for (const element of clause.namedBindings.elements) into.imports.set(element.name.text, { module, imported: element.propertyName?.text ?? element.name.text });
 }
 
-/** The names a file re-exports, by name or through `export *`, so a name reached through a barrel is still decided. */
+/** The names a file re-exports, by name or through `export *`, and the local names it exports under another name. */
 function collectExports(statement: ts.ExportDeclaration, shape: FileShape): void {
-  if (statement.moduleSpecifier === undefined || !ts.isStringLiteral(statement.moduleSpecifier)) return;
+  if (statement.moduleSpecifier === undefined) {
+    if (statement.exportClause !== undefined && ts.isNamedExports(statement.exportClause)) {
+      for (const element of statement.exportClause.elements) shape.localExports.set(element.name.text, element.propertyName?.text ?? element.name.text);
+    }
+    return;
+  }
+  if (!ts.isStringLiteral(statement.moduleSpecifier)) return;
   const module = statement.moduleSpecifier.text;
   if (statement.exportClause === undefined) {
     shape.stars.push(module);
@@ -752,25 +787,49 @@ class Reader {
     return target === undefined ? undefined : this.exported(target, imported.imported, trail);
   }
 
-  /**
-   * The expression a module exports under a name: its own declaration, a named re-export, or one reached through
-   * `export *`, which a barrel chain answers. Undefined when the module states none, and when the chain repeats a module
-   * and a name it already visited.
-   */
+  /** The expression a module exports under a name. */
   private async exported(shape: FileShape, name: string, trail: ReadonlySet<string>): Promise<Located | undefined> {
+    const found = await this.exportedAs(shape, name, CONSTANTS, trail);
+    return found === undefined ? undefined : { shape: found.shape, expression: found.declaration, trail: found.trail };
+  }
+
+  /** The declaration a name stands for in a file: one the file declares, or the one an import names, through any re-export. */
+  private async declaredAs<T>(shape: FileShape, name: string, kind: DeclarationKind<T>, trail: ReadonlySet<string>): Promise<Resolved<T> | undefined> {
+    const own = kind.named(shape, name);
+    if (own !== undefined) return { shape, declaration: own, trail };
+    const imported = shape.imports.get(name);
+    if (imported === undefined || imported.imported === "*") return undefined;
+    const target = await this.moduleShape(shape, imported.module);
+    return target === undefined ? undefined : this.exportedAs(target, imported.imported, kind, trail);
+  }
+
+  /**
+   * The declaration a module exports under a name: its own, the one a local `export { a as b }` or `export default`
+   * names, a named re-export, or one reached through `export *`, which a barrel chain answers. Undefined when the module
+   * states none, and when the chain repeats a module and a name it already visited.
+   */
+  private async exportedAs<T>(shape: FileShape, name: string, kind: DeclarationKind<T>, trail: ReadonlySet<string>): Promise<Resolved<T> | undefined> {
     const visited = `${shape.source.fileName}\0export ${name}`;
     if (trail.has(visited)) return undefined;
     const next = new Set(trail).add(visited);
-    const held = name === "default" ? shape.defaultExport : shape.consts.get(name);
-    if (held !== undefined) return { shape, expression: held, trail: next };
+    if (name === "default") {
+      const held = shape.defaultExport;
+      if (held !== undefined && ts.isIdentifier(held)) return this.declaredAs(shape, held.text, kind, next);
+      const declaration = held === undefined ? undefined : kind.defaulted(held);
+      return declaration === undefined ? undefined : { shape, declaration, trail: next };
+    }
+    const local = shape.localExports.get(name);
+    if (local !== undefined) return this.declaredAs(shape, local, kind, next);
+    const own = kind.named(shape, name);
+    if (own !== undefined) return { shape, declaration: own, trail: next };
     const reexport = shape.reexports.get(name);
     if (reexport !== undefined) {
       const target = await this.moduleShape(shape, reexport.module);
-      return target === undefined ? undefined : this.exported(target, reexport.imported, next);
+      return target === undefined ? undefined : this.exportedAs(target, reexport.imported, kind, next);
     }
     for (const star of shape.stars) {
       const target = await this.moduleShape(shape, star);
-      const found = target === undefined ? undefined : await this.exported(target, name, next);
+      const found = target === undefined ? undefined : await this.exportedAs(target, name, kind, next);
       if (found !== undefined) return found;
     }
     return undefined;
@@ -823,7 +882,7 @@ class Reader {
     const found = await this.classOf(shape, owner.text);
     const field = found === undefined ? undefined : await this.fieldOf(found.shape, found.declaration, name, trail, found);
     if (field !== undefined) return field;
-    const enumeration = await this.declarationOf(shape, owner.text, (held, enumName) => held.enums.get(enumName));
+    const enumeration = await this.declaredAs(shape, owner.text, ENUMS, new Set());
     if (enumeration !== undefined) return enumMember(enumeration.shape, enumeration.declaration, name, trail);
     const literal = await this.objectLiteral(shape, owner.text, trail);
     if (literal === undefined) return undefined;
@@ -877,18 +936,7 @@ class Reader {
 
   /** The class a name states in this file, or the one an import names. */
   private classOf(shape: FileShape, name: string): Promise<HeldClass | undefined> {
-    return this.declarationOf(shape, name, (held, className) => held.classes.get(className));
-  }
-
-  /** The declaration a name states in this file, or the one an import names, as `pick` finds it in a file. */
-  private async declarationOf<T>(shape: FileShape, name: string, pick: (held: FileShape, name: string) => T | undefined): Promise<{ shape: FileShape; declaration: T } | undefined> {
-    const local = pick(shape, name);
-    if (local !== undefined) return { shape, declaration: local };
-    const imported = shape.imports.get(name);
-    if (imported === undefined || imported.imported === "*" || imported.imported === "default") return undefined;
-    const target = await this.moduleShape(shape, imported.module);
-    const declaration = target === undefined ? undefined : pick(target, imported.imported);
-    return target === undefined || declaration === undefined ? undefined : { shape: target, declaration };
+    return this.declaredAs(shape, name, CLASSES, new Set());
   }
 
   private async objectLiteral(shape: FileShape, name: string, trail: ReadonlySet<string>): Promise<Located<ts.ObjectLiteralExpression> | undefined> {
@@ -945,13 +993,8 @@ class Reader {
   }
 
   private async callTargetOf(shape: FileShape, name: string): Promise<{ target: FileShape; declaration: ts.Expression | ts.FunctionDeclaration } | undefined> {
-    const local = shape.consts.get(name) ?? functionNamed(shape, name);
-    if (local !== undefined) return { target: shape, declaration: local };
-    const imported = shape.imports.get(name);
-    if (imported === undefined || imported.imported === "*") return undefined;
-    const target = await this.moduleShape(shape, imported.module);
-    const declaration = target === undefined ? undefined : (target.consts.get(imported.imported) ?? functionNamed(target, imported.imported));
-    return target === undefined || declaration === undefined ? undefined : { target, declaration };
+    const found = await this.declaredAs(shape, name, CALLABLES, new Set());
+    return found === undefined ? undefined : { target: found.shape, declaration: found.declaration };
   }
 
   /** What a call writes: what every return of the function it names writes, undefined when one is undecided or two disagree. */

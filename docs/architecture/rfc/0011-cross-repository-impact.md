@@ -94,7 +94,10 @@ A receiver `this.x` is the field the class of the call declares (a constructor p
 property) or inherits from its base class, here or through an import; a bare name is the binding the code around it
 declares, then a constant of the file; a parameter's declared type names its value only while the function neither
 assigns the parameter nor declares it again with a value, and a local's initializer only while nothing assigns the local.
-The file that writes the receiver's type name decides through its imports which class it names.
+The file that writes the receiver's type name decides through its imports which class it names. A name an import brings,
+whatever it declares (a constant, a function, a class, an enum), is resolved through the module's own declarations, a
+local `export { a as b }`, `export default` (the class or function it declares, or the name it exports), named
+re-exports and `export *`, so a barrel or a default import reaches the same declaration as a direct import.
 
 `fetch(url, init)` takes its method from the init object it states, GET without one; an init that is not an object
 literal, or a spread or computed member that may state `method` after it, leaves the method undecided. An
