@@ -70,7 +70,7 @@ import type { Redaction } from "../core/ports/redaction.port.ts";
 import type { TrustRecordReader } from "../core/ports/trust-record.port.ts";
 import type { ExportBudget, Vcs } from "../core/ports/vcs.port.ts";
 import { installedVersion, ownVersion } from "./installed-versions.ts";
-import { measuredDecisions, measuredStages, measuredEntrypoints, measuredGraph, measuredImpact, measuredOutline, measuredWorkspace, type MeasurementSink } from "./measurement.ts";
+import { measuredDecisions, measuredStages, measuredEntrypoints, measuredGraph, measuredImpact, measuredLiveMirror, measuredOutline, measuredSnapshotCache, measuredWorkspace, type MeasurementSink } from "./measurement.ts";
 
 const PRODUCER_NAME = "ye-ast";
 const ENTRYPOINT_ENGINES = ["web-tree-sitter", "tree-sitter-java", "typescript"] as const;
@@ -154,15 +154,17 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
   const reader = createFsSourceReader();
   const digest = createSha256Digest();
   const matcher = createPathMatcher();
-  const snapshotCache = { snapshotCache: createSnapshotDataCache(options.snapshotCacheBytes ?? SNAPSHOT_CACHE_BYTES) };
+  const snapshotCache = { snapshotCache: createSnapshotDataCache(options.snapshotCacheBytes ?? SNAPSHOT_CACHE_BYTES, measurement === undefined ? undefined : measuredSnapshotCache(measurement)) };
   const entrypointEngines = Object.fromEntries(ENTRYPOINT_ENGINES.map((name) => [name, installedVersion(name)]));
   const budget = options.exportBudget && { budget: options.exportBudget };
   const trust = options.trustDirectory === undefined ? undefined : { trust: reportingFaultOnce(createTrustRecords(options.trustDirectory), redaction, options.reportTrustFault) };
   const graph = measurement === undefined ? createCodeGraph() : measuredGraph(createCodeGraph(), measurement);
   const codegraph = installedVersion(CODEGRAPH_PACKAGE);
+  const bareLiveMirror = createLiveMirror({ ...defaultLiveMirrorDeps, writes: isWritten });
+  const liveMirror = measurement === undefined ? bareLiveMirror : measuredLiveMirror(bareLiveMirror, measurement);
   const live: LiveDeps = {
-    workingTree: createGitWorkingTree(),
-    mirror: createLiveMirror({ ...defaultLiveMirrorDeps, writes: isWritten }),
+    workingTree: staged(createGitWorkingTree(), { list: "live-list" }),
+    mirror: liveMirror,
     graph,
     digest,
     versions: { codegraph, store: JSON.stringify(SUPPORTED_STORE), staging: `${STAGING_RULES_VERSION}:json-resources-v1` },

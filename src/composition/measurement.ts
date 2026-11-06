@@ -1,6 +1,7 @@
 import { readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { performance } from "node:perf_hooks";
+import type { SnapshotCacheEvent } from "../core/application/snapshot/snapshot-data-cache.ts";
 import type { Result } from "../core/domain/shared/result.ts";
 import { INDEX_STORE_DIRECTORY, type CodeGraph } from "../core/ports/code-graph.port.ts";
 import type { DecisionQueries } from "../core/ports/decision-queries.port.ts";
@@ -8,6 +9,7 @@ import type { OutlineQueries } from "../core/ports/outline-queries.port.ts";
 import type { WorkspaceQueries } from "../core/ports/workspace-queries.port.ts";
 import type { EntrypointQueries } from "../core/ports/entrypoint-queries.port.ts";
 import type { ImpactQueries } from "../core/ports/impact-queries.port.ts";
+import type { LiveMirror } from "../core/ports/live-mirror.port.ts";
 import type { Redaction } from "../core/ports/redaction.port.ts";
 
 /** Receives one measurement line, already redacted, one per call. */
@@ -51,9 +53,43 @@ export function measuredDecisions(queries: DecisionQueries, deps: MeasurementDep
 export function measuredGraph(graph: CodeGraph, deps: MeasurementDeps): CodeGraph {
   return {
     index: (snapshot, store, signal) => measuredBuild("built", () => graph.index(snapshot, store, signal), store, deps),
-    open: (store) => measuredStage("store-open", () => graph.open(store), deps),
+    open: (store) => {
+      const opened = measuredStage("store-open", () => graph.open(store), deps);
+      return opened.ok ? { ok: true, value: measuredStages(opened.value, { unresolvedReferences: "unresolved-references" }, deps) } : opened;
+    },
     buildMirror: (mirror, signal) => measuredBuild("built", () => graph.buildMirror(mirror, signal), join(mirror, INDEX_STORE_DIRECTORY), deps),
     syncMirror: (mirror, paths, signal) => measuredBuild("synced", () => graph.syncMirror(mirror, paths, signal), join(mirror, INDEX_STORE_DIRECTORY), deps),
+  };
+}
+
+/** The lifecycle steps of a live query: each port call `openLive` makes is a stage, so the time around the export is attributed. */
+export function measuredLiveMirror(mirror: LiveMirror, deps: MeasurementDeps): LiveMirror {
+  const stages = measuredStages(mirror, {
+    readState: "live-read-state",
+    writeState: "live-write-state",
+    discard: "live-discard",
+    reconcile: "live-reconcile",
+    changedSince: "live-staleness-compare",
+    materialize: "live-materialize",
+    prune: "live-prune",
+    touch: "live-touch",
+    usage: "live-usage",
+    discardIfIdle: "live-discard-idle",
+    discardDebris: "live-discard-debris",
+  }, deps);
+  Object.defineProperty(stages, "lock", {
+    value: async (...args: Parameters<LiveMirror["lock"]>) => {
+      const lock = await measuredStage("live-lock", () => mirror.lock(...args), deps);
+      return lock.ok ? { ok: true as const, value: { release: () => measuredStage("live-release", () => lock.value.release(), deps) } } : lock;
+    },
+  });
+  return stages;
+}
+
+/** The snapshot data cache's decisions, one `cache` line each; the key never leaves the cache. */
+export function measuredSnapshotCache(deps: MeasurementDeps): (event: SnapshotCacheEvent) => void {
+  return ({ outcome, entryBytes, retainedBytes }) => {
+    report({ event: "cache", outcome, ...(entryBytes === undefined ? {} : { entry_bytes: entryBytes }), retained_bytes: retainedBytes, start_ms: Math.round(performance.now()) }, deps);
   };
 }
 
@@ -74,7 +110,7 @@ export function measuredStages<T extends object>(port: T, stages: { readonly [K 
 /** One stage line per call, synchronous or not: `ok`, `threw`, or the kind of the fault a result answered. */
 function measuredStage<T>(stage: string, call: () => T, deps: MeasurementDeps): T {
   const started = performance.now();
-  const done = (outcome: string) => report({ event: "stage", stage, outcome, duration_ms: elapsed(started) }, deps);
+  const done = (outcome: string) => report({ event: "stage", stage, outcome, start_ms: Math.round(started), duration_ms: elapsed(started) }, deps);
   let answer: T;
   try {
     answer = call();
