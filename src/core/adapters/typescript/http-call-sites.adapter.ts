@@ -13,6 +13,9 @@ const HTTP_CLIENT_PACKAGE = "@angular/common/http";
 const PLACEHOLDER = "{}";
 const UNDECIDED = Symbol("undecided");
 const RUN_TIME_VALUE: Evaluation = { kind: "value" };
+/** A class field the code assigns at run time, so no initializer states its value. */
+const ASSIGNED_AT_RUN_TIME = Symbol("assigned at run time");
+const WRITTEN_FIELDS = new WeakMap<ts.ClassDeclaration, ReadonlySet<string>>();
 
 /** What one file declares at its top level, and the classes it holds, as the reader needs them. */
 interface FileShape {
@@ -409,6 +412,8 @@ interface ReadTarget {
 /** Reads one file's call sites, resolving the module specifiers it meets through the snapshot. */
 class Reader {
   private readonly unsafeEncoder: boolean;
+  /** The classes of the snapshot that extend a class, by the name they extend. */
+  private readonly subclasses = new Map<string, ts.ClassDeclaration[]>();
 
   constructor(
     private readonly shapes: ReadonlyMap<string, FileShape>,
@@ -417,6 +422,12 @@ class Reader {
     private readonly defines: BuildDefines,
   ) {
     this.unsafeEncoder = [...shapes.values()].some((shape) => shape.unsafeEncoder);
+    for (const shape of shapes.values()) {
+      for (const declaration of shape.classes.values()) {
+        const base = baseClassName(declaration);
+        if (base !== undefined) this.subclasses.set(base, [...(this.subclasses.get(base) ?? []), declaration]);
+      }
+    }
   }
 
   async callSite(shape: FileShape, call: ts.CallExpression, repo: string): Promise<CallSite[]> {
@@ -601,11 +612,11 @@ class Reader {
       if (left === undefined || right === undefined) return undefined;
       return right.kind === "text" && right.cut ? cutAt(written(left) + right.text) : stated(written(left) + written(right));
     }
-    if (ts.isParenthesizedExpression(expression) || ts.isAsExpression(expression) || ts.isSatisfiesExpression(expression) || ts.isTypeAssertionExpression(expression)) {
+    if (ts.isParenthesizedExpression(expression) || ts.isAsExpression(expression) || ts.isSatisfiesExpression(expression) || ts.isTypeAssertionExpression(expression) || ts.isNonNullExpression(expression)) {
       return this.evaluate(shape, expression.expression, scope, trail);
     }
     if (ts.isIdentifier(expression)) return this.evaluateName(shape, expression.text, scope, trail);
-    if (ts.isPropertyAccessExpression(expression)) return this.evaluateProperty(shape, expression, trail);
+    if (ts.isPropertyAccessExpression(expression)) return this.evaluateProperty(shape, expression, scope, trail);
     if (ts.isCallExpression(expression)) return this.evaluateCall(shape, expression, scope, trail);
     return undefined;
   }
@@ -669,18 +680,26 @@ class Reader {
     return undefined;
   }
 
-  /** A member read from a class (`this.base`, `OrderApi.BASE`), a namespace import or an object literal: the value it holds. */
-  private async evaluateProperty(shape: FileShape, expression: ts.PropertyAccessExpression, trail: ReadonlySet<string>): Promise<Evaluation | undefined> {
+  /**
+   * A member read from a class (`this.base`, `OrderApi.BASE`), a namespace import or an object literal: the value it
+   * holds. A property of a value the code fills at run time is one too; a root the code binds is read through that
+   * binding first.
+   */
+  private async evaluateProperty(shape: FileShape, expression: ts.PropertyAccessExpression, scope: Scope, trail: ReadonlySet<string>): Promise<Evaluation | undefined> {
+    const owner = expression.expression;
+    if (ts.isIdentifier(owner) && scope.names.has(owner.text)) return (await this.evaluateName(shape, owner.text, scope, trail))?.kind === "value" ? RUN_TIME_VALUE : undefined;
+    if (!ts.isIdentifier(owner) && owner.kind !== ts.SyntaxKind.ThisKeyword && (await this.evaluate(shape, owner, scope, trail))?.kind === "value") return RUN_TIME_VALUE;
     const held = await this.memberOf(shape, expression, trail);
+    if (held === ASSIGNED_AT_RUN_TIME) return RUN_TIME_VALUE;
     return held === undefined ? undefined : this.evaluate(held.shape, held.expression, NO_SCOPE, held.trail);
   }
 
-  private async memberOf(shape: FileShape, expression: ts.PropertyAccessExpression, trail: ReadonlySet<string>): Promise<Located | undefined> {
+  private async memberOf(shape: FileShape, expression: ts.PropertyAccessExpression, trail: ReadonlySet<string>): Promise<Located | typeof ASSIGNED_AT_RUN_TIME | undefined> {
     const owner = expression.expression;
     const name = expression.name.text;
     if (owner.kind === ts.SyntaxKind.ThisKeyword) {
       const enclosing = enclosingClassOf(owner);
-      return enclosing === undefined ? undefined : await this.fieldOf(shape, enclosing, name, trail);
+      return enclosing === undefined ? undefined : await this.fieldOf(shape, enclosing, name, trail, [enclosing]);
     }
     if (!ts.isIdentifier(owner)) return undefined;
     const namespace = shape.imports.get(owner.text);
@@ -689,7 +708,7 @@ class Reader {
       return target === undefined ? undefined : this.exported(target, name, trail);
     }
     const found = await this.classOf(shape, owner.text);
-    const field = found === undefined ? undefined : await this.fieldOf(found.shape, found.declaration, name, trail);
+    const field = found === undefined ? undefined : await this.fieldOf(found.shape, found.declaration, name, trail, [found.declaration]);
     if (field !== undefined) return field;
     const literal = await this.objectLiteral(shape, owner.text, trail);
     if (literal === undefined) return undefined;
@@ -697,18 +716,35 @@ class Reader {
     return property === undefined ? undefined : { shape: literal.shape, expression: property.initializer, trail: literal.trail };
   }
 
-  /** The initializer of a class member, once, whatever names the class states; a member the class does not declare is its base class's. */
-  private async fieldOf(shape: FileShape, declaration: ts.ClassDeclaration, name: string, trail: ReadonlySet<string>): Promise<Located | undefined> {
+  /**
+   * The initializer of a class member, once, whatever names the class states; a member the class does not declare is its
+   * base class's. `chain` holds the classes from the one the code reads the member of to this one. A field declared
+   * without an initializer or as a constructor parameter, or that the code assigns besides its initializer, holds a value
+   * the code assigns at run time.
+   */
+  private async fieldOf(shape: FileShape, declaration: ts.ClassDeclaration, name: string, trail: ReadonlySet<string>, chain: readonly ts.ClassDeclaration[]): Promise<Located | typeof ASSIGNED_AT_RUN_TIME | undefined> {
     const visited = `${shape.source.fileName}\0${declaration.name?.text ?? "(anonymous)"}.${name}`;
     if (trail.has(visited)) return undefined;
     const member = declaration.members.find((candidate) => candidate.name !== undefined && ts.isIdentifier(candidate.name) && candidate.name.text === name);
     if (member === undefined) {
+      if (constructorParameters(declaration).some((parameter) => ts.isIdentifier(parameter.name) && parameter.name.text === name && ts.isParameterPropertyDeclaration(parameter, parameter.parent))) return ASSIGNED_AT_RUN_TIME;
       const base = baseClassName(declaration);
       const found = base === undefined ? undefined : await this.classOf(shape, base);
-      return found === undefined ? undefined : this.fieldOf(found.shape, found.declaration, name, new Set(trail).add(visited));
+      return found === undefined ? undefined : this.fieldOf(found.shape, found.declaration, name, new Set(trail).add(visited), [...chain, found.declaration]);
     }
-    if (!ts.isPropertyDeclaration(member) || member.initializer === undefined) return undefined;
+    if (!ts.isPropertyDeclaration(member)) return undefined;
+    const [read] = chain;
+    const assigned = chain.some((held) => writes(held, name)) || (read !== undefined && this.assignedBelow(read, name, new Set()));
+    if (member.initializer === undefined || assigned) return ASSIGNED_AT_RUN_TIME;
     return { shape, expression: member.initializer, trail: new Set(trail).add(visited) };
+  }
+
+  /** Whether a subclass of the class, the instance the code may run on, declares the field again or writes it. */
+  private assignedBelow(declaration: ts.ClassDeclaration, name: string, visited: Set<ts.ClassDeclaration>): boolean {
+    if (visited.has(declaration)) return false;
+    visited.add(declaration);
+    const subclasses = declaration.name === undefined ? [] : (this.subclasses.get(declaration.name.text) ?? []);
+    return subclasses.some((subclass) => subclass.members.some((member) => member.name !== undefined && ts.isIdentifier(member.name) && member.name.text === name) || writes(subclass, name) || this.assignedBelow(subclass, name, visited));
   }
 
   /** The class a name states in this file, or the one an import names. */
@@ -877,6 +913,34 @@ function parameterType(name: ts.Identifier): string | undefined {
     if (parameter !== undefined) return parameter.type === undefined ? undefined : typeName(parameter.type);
   }
   return undefined;
+}
+
+const ANY_FIELD = "*";
+
+function writes(declaration: ts.ClassDeclaration, name: string): boolean {
+  const written = writtenFields(declaration);
+  return written.has(name) || written.has(ANY_FIELD);
+}
+
+/** The fields a class body writes through `this`, `ANY_FIELD` when it writes one it does not name. */
+function writtenFields(declaration: ts.ClassDeclaration): ReadonlySet<string> {
+  const cached = WRITTEN_FIELDS.get(declaration);
+  if (cached !== undefined) return cached;
+  const written = new Set<string>();
+  const target = (node: ts.Expression): void => {
+    if (ts.isPropertyAccessExpression(node) && node.expression.kind === ts.SyntaxKind.ThisKeyword) written.add(node.name.text);
+    if (ts.isElementAccessExpression(node) && node.expression.kind === ts.SyntaxKind.ThisKeyword) written.add(ts.isStringLiteralLike(node.argumentExpression) ? node.argumentExpression.text : ANY_FIELD);
+  };
+  const visit = (node: ts.Node): void => {
+    if (ts.isBinaryExpression(node) && node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment && node.operatorToken.kind <= ts.SyntaxKind.LastAssignment) target(node.left);
+    if ((ts.isPrefixUnaryExpression(node) || ts.isPostfixUnaryExpression(node)) && (node.operator === ts.SyntaxKind.PlusPlusToken || node.operator === ts.SyntaxKind.MinusMinusToken)) target(node.operand);
+    if (ts.isDeleteExpression(node)) target(node.expression);
+    if (ts.isCallExpression(node) && node.expression.getText() === "Object.assign" && node.arguments[0]?.kind === ts.SyntaxKind.ThisKeyword) written.add(ANY_FIELD);
+    ts.forEachChild(node, visit);
+  };
+  visit(declaration);
+  WRITTEN_FIELDS.set(declaration, written);
+  return written;
 }
 
 /** Whether an expression reads a value the code fills at run time: `this`, or a name the code around it binds. */

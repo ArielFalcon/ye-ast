@@ -242,6 +242,40 @@ test("a parameter the code fills at run time is a placeholder: `${expr}` and `:n
   assert.deepEqual(sites(await reader.of([component], "shop-web")), ["GET orders/{}/lines@src/app/app.component.ts:6", "DELETE orders/{}@src/app/app.component.ts:7"]);
 });
 
+test("a property of a value the code fills at run time is one too, its root read through the binding the code declares", async () => {
+  const file = source("props.ts", ["import { HttpClient } from '@angular/common/http'", "const category = { id: 'literal' }", "class Client { constructor(private http: HttpClient) {}", "  load(category: unknown, event: any) {", "    this.http.patch(`/categories/${category.id}/visible`, {})", "    this.http.delete('/contents/' + event.data.id)", "    this.http.delete('/pages/' + event!.data.id)", "  } }"].join("\n"));
+
+  assert.deepEqual(sites(await reader.of([file], "shop-web")), ["PATCH /categories/{}/visible@props.ts:5", "DELETE /contents/{}@props.ts:6", "DELETE /pages/{}@props.ts:7"]);
+});
+
+test("a field the class declares without an initializer, or as a constructor parameter, holds a value the code fills at run time", async () => {
+  const file = source("fields.ts", ["import { HttpClient } from '@angular/common/http'", "class Page { uniqueCode: string; content: any", "  constructor(private http: HttpClient, private readonly tenant: string) {}", "  load() {", "    this.http.get('/boxes/' + this.uniqueCode)", "    this.http.put('/boxes/' + this.content.id, {})", "    this.http.get(`/tenants/${this.tenant}/boxes`)", "  } }"].join("\n"));
+
+  assert.deepEqual(sites(await reader.of([file], "shop-web")), ["GET /boxes/{}@fields.ts:5", "PUT /boxes/{}@fields.ts:6", "GET /tenants/{}/boxes@fields.ts:7"]);
+});
+
+test("a field the code assigns besides its initializer, in its class or a subclass, or a subclass declares again, holds a value the code fills at run time", async () => {
+  const file = source("assigned.ts", [
+    "import { HttpClient } from '@angular/common/http'",
+    "class Base { constructor(protected http: HttpClient) {} protected version = 'v1'; protected kind = 'all'; protected page = 'p1'; protected area = 'a1'",
+    "  constructor2() { this.page += 'x' }",
+    "  load() { this.http.get(`/api/${this.version}/${this.kind}/${this.page}/${this.area}/items`) } }",
+    "class Child extends Base { protected kind = 'mine'; start() { this.version = 'v2'; this.area++ } }",
+  ].join("\n"));
+
+  assert.deepEqual(sites(await reader.of([file], "shop-web")), ["GET /api/{}/{}/{}/{}/items@assigned.ts:4"]);
+});
+
+test("a class that writes fields it does not name may write any of them", async () => {
+  const file = source("dynamic.ts", [
+    "import { HttpClient } from '@angular/common/http'",
+    "class A { constructor(private http: HttpClient) {} version = 'v1'; set(key: string) { this[key] = 'v2' } load() { this.http.get(`/a/${this.version}/items`) } }",
+    "class B { constructor(private http: HttpClient, init: object) { Object.assign(this, init) } version = 'v1'; load() { this.http.get(`/b/${this.version}/items`) } }",
+  ].join("\n"));
+
+  assert.deepEqual(sites(await reader.of([file], "shop-web")), ["GET /a/{}/items@dynamic.ts:2", "GET /b/{}/items@dynamic.ts:3"]);
+});
+
 test("a path part that names a field of the class is the value its initializer states", async () => {
   const service = source(
     "src/app/order/order.service.ts",

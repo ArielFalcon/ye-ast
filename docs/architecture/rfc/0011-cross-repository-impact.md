@@ -100,7 +100,13 @@ undecided. An `httpResource` function that returns `undefined` requests nothing 
 returns state. Variables the function declares are values it fills at run time.
 
 A class member the class does not declare (`this.resourceUrl`) is read from the class it extends, in the same file or
-through an import; a member the class declares itself wins.
+through an import; a member the class declares itself wins. A field's initializer is its value only while nothing else
+assigns it: a field declared without an initializer or as a constructor parameter, one the classes from the reading
+class up to the declaring one write (`=`, compound assignments, `++`, `delete`), one a subclass of the reading class
+declares again or writes, and any field of a class that writes fields it does not name (`this[key] =`,
+`Object.assign(this, …)`) hold a value the code fills at run time. Writes from outside the class hierarchy are not read.
+A property of a run-time value (`category.id`, `event.data.id`) is a run-time value; a root the code binds is read
+through that binding before any class, import or constant of the same name.
 
 A name that is neither a binding nor an import of its file, such as an ambient `declare const`, takes the value an
 Angular workspace's `build` target states for it in `define` (application builders), read from `angular.json` as source
