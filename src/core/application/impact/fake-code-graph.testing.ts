@@ -57,6 +57,7 @@ export function fakeCodeGraph(nodes: readonly FakeNode[], edges: readonly FakeEd
     versions: { codegraph: "fake", schema: 0, extraction: 0 },
     symbolsInFiles: (files) => [...symbols.values()].filter((symbol) => files.includes(symbol.file)).sort(byPosition),
     symbolsByIds: (ids) => ids.flatMap((id) => symbols.get(id) ?? []).sort(byPosition),
+    declarationsNamed: (names) => [...symbols.values()].filter((symbol) => names.includes(symbol.name)).sort(byPosition),
     incomingEdges: (targets, kinds) => edges.filter((e) => targets.includes(handle(e.to)) && (kinds === undefined || kinds.includes(e.kind))).map(edge),
     outgoingEdges: (sources, kinds) => edges.filter((e) => sources.includes(handle(e.from)) && (kinds === undefined || kinds.includes(e.kind))).map(edge),
     unresolvedReferences: (files): readonly GraphUnresolvedReference[] =>

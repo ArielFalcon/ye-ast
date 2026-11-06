@@ -537,6 +537,26 @@ test("symbols are found again by the ids they gave", async () => {
   assert.deepEqual(found, [load, list]);
 });
 
+test("declarations are found by name: every overload, member and top-level match, in symbol order", async () => {
+  const { store, result } = await indexFiles({
+    "src/b.ts": "export class Printer {\n  format(value: string): string {\n    return value;\n  }\n}\n",
+    "src/a.ts": "export function format(value: string): string {\n  return value;\n}\nexport function other(): void {}\n",
+    "java/Fmt.java": "package app;\npublic class Fmt {\n    String format(String v) { return v; }\n    String format(int v) { return \"\"; }\n}\n",
+  });
+  unwrap(result);
+  const reader = unwrap(createCodeGraph().open(store));
+  try {
+    const declared = reader.symbolsInFiles(["java/Fmt.java", "src/a.ts", "src/b.ts"]).filter((candidate) => candidate.name === "format");
+    const found = reader.declarationsNamed(["format", "missing", "format"]);
+    assert.deepEqual(found, declared);
+    assert.deepEqual(found.map(({ file, kind }) => [file, kind]), [["java/Fmt.java", "method"], ["java/Fmt.java", "method"], ["src/a.ts", "function"], ["src/b.ts", "method"]]);
+    assert.deepEqual(reader.declarationsNamed(["other", "format"]), reader.declarationsNamed(["format", "other"]));
+    assert.deepEqual(reader.declarationsNamed(["missing"]), []);
+  } finally {
+    reader.close();
+  }
+});
+
 test("incoming edges keep their kind, position and score, and can be limited to kinds", async () => {
   const s = await shared();
   const load = symbol(s.reader, "src/orders.ts", "loadOrder");

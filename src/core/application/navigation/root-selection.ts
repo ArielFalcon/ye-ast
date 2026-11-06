@@ -1,0 +1,53 @@
+import { kindOfChangedFile } from "../../domain/change/changed-file.ts";
+import type { FileChange } from "../../domain/change/diff-reader.ts";
+import { isSeedable, selectSeeds, type ComponentRef, type SeedSelection, type SelectedSeed } from "../../domain/change/seeds.ts";
+import { comparePosition, compareText } from "../../domain/shared/code-node.ts";
+import { branchesOf, declarationPath, selectedBySymbol, type DeclarationBranch } from "../../domain/shared/declaration-tree.ts";
+import type { CodeGraphReader, GraphSymbol } from "../../ports/code-graph.port.ts";
+import type { CallersTarget, UnknownSymbolFault } from "../../ports/impact-queries.port.ts";
+import { containmentTree } from "../outline/outline.ts";
+
+export interface RootSelection extends SeedSelection<GraphSymbol> {
+  /** In position order. */
+  seeds: SelectedSeed<GraphSymbol>[];
+  /** The requested symbols that name no node, with what their file declares; nothing is selected when there is one. */
+  missing: UnknownSymbolFault["entries"];
+}
+
+/** The requested line ranges as the added lines of unchanged files, so they seed as changed lines do. */
+export function rangeChanges(targets: readonly CallersTarget[]): FileChange[] {
+  const ranges = targets.flatMap((target) => ("start" in target ? [target] : []));
+  return [...Map.groupBy(ranges, ({ file }) => file)]
+    .map(([path, inFile]): FileChange => ({ path, deleted: false, binary: false, added: inFile.map(({ start, end }) => ({ start, end })), removals: [], removedNames: [] }))
+    .sort((a, b) => compareText(a.path, b.path));
+}
+
+/**
+ * The declarations a request starts from: each requested symbol selects every declaration its name or dotted path
+ * names in its file, and the changes select what their lines, resources or top-level code touch.
+ */
+export function selectRoots(
+  store: CodeGraphReader,
+  changes: readonly FileChange[],
+  requested: readonly { file: string; symbol: string }[],
+  componentsByResource: ReadonlyMap<string, readonly ComponentRef[]>,
+): RootSelection {
+  const sourceChanges = changes.filter((file) => kindOfChangedFile(file.path) === "source" && !file.deleted).map((file) => file.path);
+  const componentFiles = changes.flatMap((file) => (componentsByResource.get(file.path) ?? []).map((component) => component.file));
+  const symbols = store.symbolsInFiles([...new Set([...sourceChanges, ...componentFiles, ...requested.map(({ file }) => file)])]);
+  const symbolsByFile = Map.groupBy(symbols, (symbol) => symbol.file);
+  const trees = new Map([...new Set(requested.map(({ file }) => file))].map((file) => [file, containmentTree(store, symbolsByFile.get(file) ?? [])]));
+  const asked = requested.map((target) => ({ target, found: selectedBySymbol(trees.get(target.file) ?? [], target.symbol).map(({ declaration }) => declaration).filter(isSeedable) }));
+  const missing = asked.filter(({ found: nodes }) => nodes.length === 0).map(({ target }) => ({ ...target, candidates: candidatesOf(trees.get(target.file) ?? []) }));
+  if (missing.length > 0) return { seeds: [], withoutSymbols: [], removed: [], missing };
+
+  const selection = selectSeeds({ files: changes }, symbolsByFile, componentsByResource);
+  const requestedSymbols = new Set(asked.flatMap(({ found: nodes }) => nodes));
+  const chosen = [...[...requestedSymbols].map((symbol): SelectedSeed<GraphSymbol> => ({ symbol, basis: "requested" })), ...selection.seeds.filter(({ symbol }) => !requestedSymbols.has(symbol))];
+  return { ...selection, seeds: chosen.toSorted((a, b) => comparePosition(a.symbol, b.symbol)), missing: [] };
+}
+
+/** The dotted paths of what a file declares that a request can seed, so a symbol that names no node tells the caller what does. */
+function candidatesOf(tree: readonly DeclarationBranch<GraphSymbol>[]): string[] {
+  return [...new Set(branchesOf(tree).filter(({ declaration }) => isSeedable(declaration)).map(declarationPath))].sort(compareText);
+}

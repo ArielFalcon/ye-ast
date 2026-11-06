@@ -7,6 +7,7 @@ import type { FieldOrigin, LocalOrigin } from "../../domain/relations/field-orig
 import type { Relation, SymbolRef } from "../../domain/relations/relation.ts";
 import { comparePosition, compareText, joinsFact } from "../../domain/shared/code-node.ts";
 import type { CodeGraphReader, GraphEdge, GraphNodeId, GraphSymbol, GraphUnresolvedReference } from "../../ports/code-graph.port.ts";
+import { createGraphNavigation, SUPERTYPE_EDGES } from "../navigation/graph-navigation.ts";
 
 /**
  * A symbol that depends on another, and how sure the store is of the dependence: 0 to 1. `bridge` says the dependence
@@ -48,8 +49,6 @@ export interface InboundEdges {
   memberProofs(expanded?: ReadonlySet<GraphNodeId>): MemberReferenceProofs;
 }
 
-const SUPERTYPE_EDGES = ["extends", "implements"];
-
 function isInside(inner: GraphSymbol, outer: GraphSymbol): boolean {
   return inner.file === outer.file && outer.startLine <= inner.startLine && inner.endLine <= outer.endLine;
 }
@@ -78,28 +77,7 @@ export function createInboundEdges(
     const key = `${origin.owner.path}\0${origin.local}`;
     sharedLocalNames.set(key, (sharedLocalNames.get(key) ?? 0) + 1);
   }
-  const known = new Map<GraphNodeId, GraphSymbol | undefined>();
-  const load = (ids: readonly GraphNodeId[]): void => {
-    const missing = [...new Set(ids)].filter((id) => !known.has(id));
-    if (missing.length === 0) return;
-    for (const symbol of reader.symbolsByIds(missing)) known.set(symbol.id, symbol);
-    for (const id of missing) if (!known.has(id)) known.set(id, undefined);
-  };
-  const symbolOf = (id: GraphNodeId): GraphSymbol | undefined => known.get(id);
-  const isOwner = (symbol: GraphSymbol): boolean => (EDGE_POLICY.ownerKinds as readonly string[]).includes(symbol.kind) && !isTestFile(symbol.file);
-
-  const ownersCache = new Map<GraphNodeId, GraphSymbol[]>();
-  function ownersOf(node: GraphSymbol): GraphSymbol[] {
-    if (!(EDGE_POLICY.memberKinds as readonly string[]).includes(node.kind)) return [];
-    let owners = ownersCache.get(node.id);
-    if (owners === undefined) {
-      const edges = reader.incomingEdges([node.id], ["contains"]);
-      load(edges.map((edge) => edge.source));
-      owners = edges.map((edge) => symbolOf(edge.source)).filter((symbol): symbol is GraphSymbol => symbol !== undefined && isOwner(symbol));
-      ownersCache.set(node.id, owners);
-    }
-    return owners;
-  }
+  const { load, symbolOf, ownersOf, typesAround, methodsOf, symbolsInFile, declarationAt, referencesThrough } = createGraphNavigation(reader, isTestFile);
 
   interface Into {
     edge: GraphEdge;
@@ -118,41 +96,6 @@ export function createInboundEdges(
       intoCache.set(target.id, into);
     }
     return into;
-  }
-
-  function typesAround(type: GraphSymbol, direction: "up" | "down"): { type: GraphSymbol; confidence: number }[] {
-    const found = new Map<GraphNodeId, { type: GraphSymbol; confidence: number }>();
-    const visited = new Set<GraphNodeId>();
-    let frontier = [{ type, confidence: 1 }];
-    while (frontier.length > 0) {
-      const next: typeof frontier = [];
-      for (const current of frontier) {
-        const edges = direction === "up" ? reader.outgoingEdges([current.type.id], SUPERTYPE_EDGES) : reader.incomingEdges([current.type.id], SUPERTYPE_EDGES);
-        load(edges.map((edge) => (direction === "up" ? edge.target : edge.source)));
-        for (const edge of edges) {
-          const other = symbolOf(direction === "up" ? edge.target : edge.source);
-          if (other === undefined || visited.has(other.id) || !isOwner(other)) continue;
-          visited.add(other.id);
-          const step = { type: other, confidence: Math.min(current.confidence, edgeConfidence(edge)) };
-          found.set(other.id, step);
-          next.push(step);
-        }
-      }
-      frontier = next;
-    }
-    return [...found.values()];
-  }
-
-  const membersCache = new Map<GraphNodeId, GraphSymbol[]>();
-  function methodsOf(type: GraphSymbol): GraphSymbol[] {
-    let methods = membersCache.get(type.id);
-    if (methods === undefined) {
-      const edges = reader.outgoingEdges([type.id], ["contains"]);
-      load(edges.map((edge) => edge.target));
-      methods = edges.map((edge) => symbolOf(edge.target)).filter((symbol): symbol is GraphSymbol => symbol?.kind === "method");
-      membersCache.set(type.id, methods);
-    }
-    return methods;
   }
 
   function bridgesOf(method: GraphSymbol, contractChanged: boolean): InboundEdge[] {
@@ -193,18 +136,6 @@ export function createInboundEdges(
     return importing.filter(({ file }) => !isTestFile(file)).flatMap(({ file, confidence }) => topLevelCodeOf(file).map((from) => ({ from, confidence, basis: "import" as const, lines: [] })));
   }
 
-  const symbolsCache = new Map<string, readonly GraphSymbol[]>();
-  function symbolsInFile(path: string): readonly GraphSymbol[] {
-    let inFile = symbolsCache.get(path);
-    if (inFile === undefined) {
-      inFile = reader.symbolsInFiles([path]);
-      symbolsCache.set(path, inFile);
-    }
-    return inFile;
-  }
-  const declarationAt = (ref: SymbolRef, kinds: readonly string[] = EDGE_POLICY.relations.from): GraphSymbol | undefined =>
-    symbolsInFile(ref.path).find((candidate) => kinds.includes(candidate.kind) && joinsFact(candidate, ref));
-
   /** The classes whose injection or template use of `node` ye-ast read from the sources, only of `kinds` when given. */
   function relatedTo(node: GraphSymbol, kinds?: readonly string[]): InboundEdge[] {
     return (relationsByTargetFile.get(node.file) ?? [])
@@ -215,20 +146,6 @@ export function createInboundEdges(
           ? []
           : [{ from, confidence: EDGE_POLICY.relations.confidence, basis: "relation" as const, lines: [] }];
       });
-  }
-
-  const referencesCache = new Map<string, ReadonlyMap<string, readonly GraphUnresolvedReference[]>>();
-  /** The file's unresolved references by the name they use up to its first member: `this.svc.get` and `this.svc` under `this.svc`. */
-  function referencesThrough(file: string, receiver: string): readonly GraphUnresolvedReference[] {
-    let byReceiver = referencesCache.get(file);
-    if (byReceiver === undefined) {
-      byReceiver = Map.groupBy(
-        reader.unresolvedReferences([file]).filter((reference) => (EDGE_POLICY.fieldMemberUses as readonly string[]).includes(reference.kind)),
-        (reference) => reference.name.split(".").slice(0, 2).join("."),
-      );
-      referencesCache.set(file, byReceiver);
-    }
-    return byReceiver.get(receiver) ?? [];
   }
 
   /** The uses of `node` by name through `this`, made by code inside a type that declares it. */

@@ -295,6 +295,7 @@ function createReader(graph: SdkGraph, versions: StoreVersions): CodeGraphReader
     versions,
     symbolsInFiles: (files) => graph.getNodesInFiles(unique(files)).map(toSymbol).sort(compareSymbols),
     symbolsByIds,
+    declarationsNamed: (names) => unique(names).flatMap((name) => graph.getNodesByName(name)).map(toSymbol).sort(compareSymbols),
     incomingEdges: (targets, kinds) => {
       if (kinds?.length === 0) return [];
       return graph.getIncomingEdgesTo(unique(targets), kinds as Edge["kind"][] | undefined).map(toEdge).sort(compareEdges);
