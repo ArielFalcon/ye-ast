@@ -435,6 +435,24 @@ test("a reference whose rooted name the file imports from outside the repository
   assert.equal(withImports.status, "complete");
 });
 
+test("the head's unresolved references are read from the store once per request, for the proofs and for the walk alike", async () => {
+  const nodes = [fakeNode("tap", "function", "src/A.ts", 1, 3)];
+  const unresolved = [{ from: "f", name: "tap", kind: "calls", file: "src/A.ts", line: 7, column: 0 }];
+  const exports: Options["exports"] = { [HEAD]: { files: [{ path: "src/A.ts", blob: "1", written: true }], skipped: [] } };
+  const changes: Result<readonly FileChange[], VcsFault> = { ok: true, value: [change("src/A.ts", { added: [{ start: 2, end: 2 }] })] };
+  const reads = async (ask: (queries: ReturnType<typeof setup>) => Promise<unknown>, withOrigins: boolean): Promise<number> => {
+    const store = fakeCodeGraph(nodes, [], unresolved);
+    const counted: string[][] = [];
+    const queries = setup({ changes, nodes, unresolved, exports, ...(withOrigins && { importOrigins: externalImports(["tap"]) }), open: { ok: true, value: { ...store, unresolvedReferences: (files) => { counted.push([...files]); return store.unresolvedReferences(files); } } } });
+    await ask(queries);
+    return counted.length;
+  };
+  for (const withOrigins of [true, false]) {
+    assert.equal(await reads((queries) => queries.ask(), withOrigins), 1);
+    assert.equal(await reads((queries) => queries.callers({ targets: [{ file: "src/A.ts", symbol: "tap" }] }), withOrigins), 1);
+  }
+});
+
 test("an external proof retires its own reference, never another one that shares its line", async () => {
   const changes: Result<readonly FileChange[], VcsFault> = { ok: true, value: [change("src/A.ts", { added: [{ start: 2, end: 2 }] })] };
   const nodes = [fakeNode("tap", "function", "src/A.ts", 1, 3), fakeNode("save", "function", "src/A.ts", 1, 3)];

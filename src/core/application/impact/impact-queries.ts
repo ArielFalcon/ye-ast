@@ -29,7 +29,7 @@ import { changedPaths, isWritten } from "../../domain/snapshot/live-export.ts";
 import { contentFingerprint, declaredScope, exportCuts, holdsDeclaredSource, isInMapScope } from "../../domain/map/entrypoint-map.ts";
 import type { Result } from "../../domain/shared/result.ts";
 import type { AngularDeclarationReader } from "../../ports/angular-declarations.port.ts";
-import type { CodeGraph, CodeGraphReader, GraphSymbol, IndexSummary } from "../../ports/code-graph.port.ts";
+import type { CodeGraph, CodeGraphReader, GraphSymbol, GraphUnresolvedReference, IndexSummary } from "../../ports/code-graph.port.ts";
 import type { DynamicLoad, DynamicLoadReader } from "../../ports/dynamic-loads.port.ts";
 import type { Digest } from "../../ports/digest.port.ts";
 import type { IndexCache } from "../../ports/index-cache.port.ts";
@@ -45,7 +45,7 @@ import { createHeadReader, withLiveCapture, type FactSpec, type HeadIndex, type 
 import { readImporters } from "./importers.ts";
 import { inboundEdgesOf } from "./inbound-origins.ts";
 import { edgeKey, type InboundEdges } from "./inbound-edges.ts";
-import { memberProofContextOf, referenceProofsOf, sourceFilesOf, type ReferenceProofs } from "./reference-origins.ts";
+import { memberProofContextOf, referenceProofsOf, unresolvedOf, type ReferenceProofs } from "./reference-origins.ts";
 import { walkImpact, type Walk } from "./walk.ts";
 import type { ImportOrigins, ImportOriginsReader } from "../../ports/import-origins.port.ts";
 import { isBoundOutside } from "../../domain/impact/edge-policy.ts";
@@ -143,11 +143,12 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
           const loads = await deps.dynamicLoads.extract(headTree.sources);
           if (signal?.aborted) return ABORTED;
           const origins = deps.importOrigins?.(headTree.sources);
-          const proofs = await referenceProofsOf(origins, store, headTree, request.signal);
+          const unresolved = unresolvedOf(store, headTree);
+          const proofs = await referenceProofsOf(origins, store, headTree, request.signal, unresolved);
           if (signal?.aborted) return ABORTED;
           const unmodelled = await unmodelledIn(deps, headTree, [...changes.map(({ path }) => path), ...requested.map(({ file }) => file)]);
           if (signal?.aborted) return ABORTED;
-          const read = await impactOf({ store, changes, requested, componentsByResource, found, fields, locals, memberUses, loads, headTree, summary, budget: request.budget ?? {}, proofs, unmodelled, origins, signal });
+          const read = await impactOf({ store, changes, requested, componentsByResource, found, fields, locals, memberUses, loads, headTree, summary, unresolved, budget: request.budget ?? {}, proofs, unmodelled, origins, signal });
           if (signal?.aborted) return ABORTED;
           return { ok: true, value: impactFact(head.base(content, true), read.value, [...fixed, ...read.cuts]) };
         } finally {
@@ -364,7 +365,8 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
       const loads = await deps.dynamicLoads.extract(headTree.sources);
       if (signal?.aborted) return ABORTED;
       const origins = deps.importOrigins?.(headTree.sources);
-      const proofs = await referenceProofsOf(origins, store, headTree, request.signal);
+      const unresolved = unresolvedOf(store, headTree);
+      const proofs = await referenceProofsOf(origins, store, headTree, request.signal, unresolved);
       if (request.signal?.aborted) return ABORTED;
       const baseSources = new Map(baseTree.sources.map((source) => [source.path, source.content]));
       const headSources = new Map(headTree.sources.map((source) => [source.path, source.content]));
@@ -381,7 +383,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
       });
       const unmodelled = await unmodelledIn(deps, headTree, validatedChanges.filter((file) => !file.deleted).map(({ path }) => path));
       if (signal?.aborted) return ABORTED;
-      const read = await impactOf({ store, changes: validatedChanges, requested: [], componentsByResource, found, fields, locals, memberUses, loads, headTree, summary, budget: request.budget ?? {}, proofs, unmodelled, origins, signal });
+      const read = await impactOf({ store, changes: validatedChanges, requested: [], componentsByResource, found, fields, locals, memberUses, loads, headTree, summary, unresolved, budget: request.budget ?? {}, proofs, unmodelled, origins, signal });
       if (signal?.aborted) return ABORTED;
       return { ok: true, value: impactFact(head.base(content, true), { ...value, ...read.value }, [...unaccounted([...fixed, ...read.cuts]), ...moduleCuts]) };
     } finally {
@@ -454,6 +456,8 @@ interface WalkInput {
   /** Every dynamic load the reader found in the head's sources. */
   loads: readonly DynamicLoad[];
   headTree: CommitExtraction;
+  /** The head's unresolved references, read once for the request. */
+  unresolved: readonly GraphUnresolvedReference[];
   summary: Pick<IndexSummary, "filesNotIndexed">;
   budget: ImpactBudget;
   /** The changed or targeted files whose declarations the graph cannot place. */
@@ -484,7 +488,7 @@ function missingTargets(store: CodeGraphReader, requested: readonly { file: stri
 }
 
 async function impactOf(input: WalkInput): Promise<ImpactRead> {
-  const { store, changes, requested, componentsByResource, found, fields, locals, memberUses, loads, headTree, summary } = input;
+  const { store, changes, requested, componentsByResource, found, fields, locals, memberUses, loads, headTree, summary, unresolved } = input;
   const sourceChanges = changes.filter((file) => kindOfChangedFile(file.path) === "source" && !file.deleted).map((file) => file.path);
   const componentFiles = changes.flatMap((file) => (componentsByResource.get(file.path) ?? []).map((component) => component.file));
   const symbols = store.symbolsInFiles([...new Set([...sourceChanges, ...componentFiles, ...requested.map(({ file }) => file)])]);
@@ -496,8 +500,6 @@ async function impactOf(input: WalkInput): Promise<ImpactRead> {
   const requestedSymbols = new Set(asked.flatMap(({ found: nodes }) => nodes));
   const chosen = [...[...requestedSymbols].map((symbol): SelectedSeed<GraphSymbol> => ({ symbol, basis: "requested" })), ...selection.seeds.filter(({ symbol }) => !requestedSymbols.has(symbol))];
   const seeds = chosen.toSorted((a, b) => comparePosition(a.symbol, b.symbol));
-  const sourceFiles = sourceFilesOf(headTree);
-  const unresolved = store.unresolvedReferences(sourceFiles);
   const build = (outside: ReadonlySet<string>): InboundEdges => inboundEdgesOf(store, { relations: found, fields, locals, memberUses }, input.proofs, outside);
   const { inbound, walk } = await walkInside(seeds.map(({ symbol }) => symbol), build, input.budget, input.origins, input.signal);
 

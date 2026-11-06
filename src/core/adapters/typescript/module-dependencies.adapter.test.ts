@@ -1,4 +1,6 @@
 import { test } from "node:test";
+import ts from "typescript";
+import { sourceTree } from "./source-tree.ts";
 import assert from "node:assert/strict";
 import { createModuleDependenciesReader } from "./module-dependencies.adapter.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
@@ -182,4 +184,13 @@ test("a selection reads the statements of the selected files only, while every s
   const result = await createModuleDependenciesReader().extract([{ path: "src/use.ts", content: "import { item } from './lib/item';" }, item, unselected], { files: ["src/use.ts"] });
   assert.deepEqual(result.files.map(({ file }) => file), ["src/use.ts"]);
   assert.deepEqual(result.dependencies.map(({ file, target }) => ({ file, target })), [{ file: "src/use.ts", target: { kind: "repository", file: item.path } }]);
+});
+
+test("sources and default-export targets are read through the shared tree source, not parsed again", async () => {
+  const user: SourceFile = { path: "src/user.ts", content: "import widget from './widget';\nexport const x = widget;" };
+  const widget: SourceFile = { path: "src/widget.ts", content: "export default class Widget {}" };
+  const shared = ts.createSourceFile("other.ts", "export default class Shared {}", ts.ScriptTarget.Latest, false, ts.ScriptKind.TS);
+  Object.assign(sourceTree(widget, ts.ScriptTarget.Latest, false, ts.ScriptKind.TS), { statements: shared.statements });
+  const result = await createModuleDependenciesReader().extract([user, widget]);
+  assert.equal(result.dependencies[0]!.bindings[0]!.exportedAs, "Shared");
 });
