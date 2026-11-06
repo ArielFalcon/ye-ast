@@ -6,11 +6,13 @@ import type { CallSiteReader } from "../../domain/topology/call-site.ts";
 import type { Finding } from "../../domain/shared/fact.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import { manifestDependencies, createModuleResolver, type ModuleResolver } from "./module-resolver.ts";
+import { buildDefines, type BuildDefines } from "./url-define.ts";
 
 export const VERBS: ReadonlySet<string> = new Set(["get", "head", "post", "put", "patch", "delete", "options", "request"]);
 const HTTP_CLIENT_PACKAGE = "@angular/common/http";
 const PLACEHOLDER = "{}";
 const UNDECIDED = Symbol("undecided");
+const SCALAR_TYPES: ReadonlySet<ts.SyntaxKind> = new Set([ts.SyntaxKind.StringKeyword, ts.SyntaxKind.NumberKeyword, ts.SyntaxKind.BooleanKeyword, ts.SyntaxKind.BigIntKeyword]);
 const RUN_TIME_VALUE: Evaluation = { kind: "value" };
 
 /** What one file declares at its top level, and the classes it holds, as the reader needs them. */
@@ -33,10 +35,10 @@ interface FileShape {
 interface Scope {
   names: ReadonlySet<string>;
   locals: ReadonlyMap<string, ts.Expression>;
-  strings: ReadonlySet<string>;
+  scalars: ReadonlySet<string>;
 }
 
-const NO_SCOPE: Scope = { names: new Set(), locals: new Map(), strings: new Set() };
+const NO_SCOPE: Scope = { names: new Set(), locals: new Map(), scalars: new Set() };
 const LEXICAL_SCOPES = new WeakMap<ts.Node, Scope>();
 
 /** The names the code being evaluated binds at run time: a path part that names one is `{}`, never undecided. */
@@ -63,7 +65,7 @@ async function read(files: readonly SourceFile[], repo: string): Promise<readonl
   const dependencies = new Set(files.filter((file) => isPackageManifest(file.path)).flatMap((file) => [...manifestDependencies(file.content)]));
   const modules = createModuleResolver(async (file) => texts.get(file), dependencies);
   const wrappers = wrapperMethods(shapes);
-  const read = new Reader(shapes, modules, wrappers);
+  const read = new Reader(shapes, modules, wrappers, buildDefines(files));
   const found: CallSite[] = [];
   for (const shape of shapes.values()) {
     for (const call of calls(shape.source)) found.push(...(await read.callSite(shape, call, repo)));
@@ -349,13 +351,13 @@ function lexicalScope(point: ts.Node, includePoint = false): Scope {
   const outer = lexicalScope(node);
   const names = new Set<string>();
   const locals = new Map<string, ts.Expression>();
-  const strings = new Set<string>();
+  const scalars = new Set<string>();
   const bind = (name: ts.BindingName, initializer?: ts.Expression, type?: ts.TypeNode): void => {
     for (const text of bindingNames(name)) {
       if (names.has(text)) continue;
       names.add(text);
       if (ts.isIdentifier(name) && initializer !== undefined) locals.set(text, initializer);
-      if (ts.isIdentifier(name) && type?.kind === ts.SyntaxKind.StringKeyword) strings.add(text);
+      if (ts.isIdentifier(name) && type !== undefined && SCALAR_TYPES.has(type.kind)) scalars.add(text);
     }
   };
   if (ts.isBlock(node) || ts.isCaseBlock(node)) {
@@ -388,9 +390,9 @@ function lexicalScope(point: ts.Node, includePoint = false): Scope {
     names.add(name);
     const initializer = outer.locals.get(name);
     if (initializer !== undefined) locals.set(name, initializer);
-    if (outer.strings.has(name)) strings.add(name);
+    if (outer.scalars.has(name)) scalars.add(name);
   }
-  const scope = { names, locals, strings };
+  const scope = { names, locals, scalars };
   LEXICAL_SCOPES.set(node, scope);
   return scope;
 }
@@ -409,6 +411,7 @@ class Reader {
     private readonly shapes: ReadonlyMap<string, FileShape>,
     private readonly modules: ModuleResolver,
     private readonly wrappers: ReadonlyMap<string, ReadonlySet<string>>,
+    private readonly defines: BuildDefines,
   ) {
     this.unsafeEncoder = [...shapes.values()].some((shape) => shape.unsafeEncoder);
   }
@@ -580,7 +583,10 @@ class Reader {
     }
     if (scope.names.has(name)) return RUN_TIME_VALUE;
     const constant = await this.constantAt(shape, name, trail);
-    return constant === undefined ? undefined : this.evaluate(constant.shape, constant.expression, NO_SCOPE, constant.trail);
+    if (constant !== undefined) return this.evaluate(constant.shape, constant.expression, NO_SCOPE, constant.trail);
+    if (shape.imports.has(name)) return undefined;
+    const defined = this.defines.valueOf(shape.source.fileName, name);
+    return defined === undefined ? undefined : stated(defined);
   }
 
   /** Where a name's constant lives and the trail that visited it: a declaration of this file, or one an import names. */
@@ -683,14 +689,16 @@ class Reader {
 
   /** A function the call names, evaluated at its one returned expression: its own parameters are the run-time values. */
   private async evaluateCall(shape: FileShape, call: ts.CallExpression, scope: Scope, trail: ReadonlySet<string>): Promise<Evaluation | undefined> {
+    if (ts.isPropertyAccessExpression(call.expression) && call.expression.name.text === "toString") return this.scalarText(shape, call.arguments.length === 0 ? [call.expression.expression] : [], scope, trail);
     if (!ts.isIdentifier(call.expression)) return undefined;
     if (scope.names.has(call.expression.text)) return undefined;
+    if (call.expression.text === "String" && !shape.imports.has("String") && !shape.bindings.has("String")) return this.scalarText(shape, call.arguments, scope, trail);
     if (call.expression.text === "encodeURIComponent" && !this.unsafeEncoder && !shape.imports.has(call.expression.text) && !shape.bindings.has(call.expression.text)) {
       if (call.arguments.length !== 1) return undefined;
       const argument = call.arguments[0];
       if (argument === undefined) return undefined;
       const value = await this.evaluate(shape, argument, scope, trail);
-      if (value?.kind === "value") return ts.isIdentifier(argument) && scope.strings.has(argument.text) ? value : undefined;
+      if (value?.kind === "value") return ts.isIdentifier(argument) && scope.scalars.has(argument.text) ? value : undefined;
       if (value === undefined || value.text.includes(PLACEHOLDER)) return undefined;
       try {
         return stated(encodeURIComponent(value.text));
@@ -700,6 +708,15 @@ class Reader {
     }
     const found = await this.callTargetOf(shape, call.expression.text);
     return found === undefined ? undefined : this.evaluateReturned(found.target, found.declaration, found.scope, trail);
+  }
+
+  /** `String(x)` and `x.toString()` write what `x` is: a run-time value only when `x` is declared a scalar. */
+  private async scalarText(shape: FileShape, operands: readonly ts.Expression[], scope: Scope, trail: ReadonlySet<string>): Promise<Evaluation | undefined> {
+    const [operand, ...rest] = operands;
+    if (operand === undefined || rest.length > 0) return undefined;
+    const value = await this.evaluate(shape, operand, scope, trail);
+    if (value?.kind === "value") return ts.isIdentifier(operand) && scope.scalars.has(operand.text) ? value : undefined;
+    return value;
   }
 
   private async callTargetOf(shape: FileShape, name: string): Promise<{ target: FileShape; declaration: ts.Expression; scope: Scope } | undefined> {
