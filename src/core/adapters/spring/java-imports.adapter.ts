@@ -1,6 +1,7 @@
 import type { Node } from "web-tree-sitter";
 import { isJavaSource } from "../../domain/languages/java.ts";
-import type { ModuleBinding, ModuleDependencies, ModuleDependency, ModuleTarget } from "../../domain/impact/module-dependency.ts";
+import type { ModuleBinding, ModuleDependencies, ModuleDependency } from "../../domain/impact/module-dependency.ts";
+import type { ModuleTarget } from "../../domain/shared/module-target.ts";
 import type { ModuleDependenciesReader } from "../../ports/module-dependencies.port.ts";
 import type { JavaParser, JavaSyntaxTree } from "../tree-sitter/java-parser.adapter.ts";
 import { createJavaProject, describeFile, namedChildren, type JavaFile, type JavaProject } from "./java-symbols.ts";
