@@ -3,11 +3,11 @@ import { matchesReferenceKind, syntaxName } from "./reference-occurrence.ts";
 import { declarationCounts, declaredName, declaredNames, isStatic, scriptGlobalNames } from "./syntax-names.ts";
 import { moduleStatement } from "./import-bindings.ts";
 import { sourceTree } from "./source-tree.ts";
-import { isPackageManifest, isTypeScriptSource } from "../../domain/languages/typescript.ts";
+import { isTypeScriptSource } from "../../domain/languages/typescript.ts";
 import type { ImportOrigin } from "../../domain/relations/resolved-reference.ts";
 import type { Evidence, Finding } from "../../domain/shared/fact.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
-import type { ImportOriginSite, ImportOrigins, ResolvedNameSite } from "../../ports/import-origins.port.ts";
+import type { ImportOriginSite, ImportOrigins, ResolvedNameSite, RootOrigin } from "../../ports/import-origins.port.ts";
 import { createModuleResolver, manifestPackages, packageOf } from "./module-resolver.ts";
 import { TYPESCRIPT_LIB_GLOBALS } from "./typescript-lib-globals.ts";
 
@@ -32,7 +32,7 @@ interface FileShape {
 export function createImportOrigins(sources: readonly SourceFile[]): ImportOrigins {
   const texts = new Map(sources.map((file) => [file.path, file.content]));
   const files = new Map(sources.map((file) => [file.path, file]));
-  const modules = createModuleResolver(async (file) => texts.get(file), manifestPackages(sources.filter((file) => isPackageManifest(file.path)).map((file) => file.content)));
+  const modules = createModuleResolver(async (file) => texts.get(file), manifestPackages(sources));
   const shapes = new Map<string, FileShape>();
 
   /**
@@ -50,8 +50,8 @@ export function createImportOrigins(sources: readonly SourceFile[]): ImportOrigi
 
   /**
    * The names the snapshot declares globally: a `.d.ts` anywhere, a file that augments the global scope, and the top
-   * level of a script (a source with no import or export, whose declarations are global). A repository may spell a lib
-   * name itself, and retiring that name would hide a real declaration, so those names stay `unknown`.
+   * level of a script (a source with no import or export, whose declarations are global). A lib name among them is never
+   * `ambient`.
    */
   let globals: ReadonlySet<string> | undefined;
   const repositoryGlobals = (): ReadonlySet<string> => {
@@ -106,14 +106,17 @@ export function createImportOrigins(sources: readonly SourceFile[]): ImportOrigi
     }
     return results;
   }, rootOrigins: async (sites, signal) => {
-    const results: Finding<ImportOrigin>[] = sites.map((site) => ({ status: "unknown", reason: "unresolved", evidence: [{ path: site.file, line: site.line }] }));
+    const results: RootOrigin[] = sites.map((site) => ({ status: "unknown", reason: "unresolved", evidence: [{ path: site.file, line: site.line }] }));
     for (const [file, group] of Map.groupBy(sites.map((site, index) => ({ site, index })), ({ site }) => site.file)) {
       if (signal?.aborted) break;
       const text = texts.get(file);
       const read = text === undefined || !isTypeScriptSource(file) ? undefined : rootsAt(file, text, group);
       if (read === undefined) continue;
       shapes.set(file, read.shape);
-      for (const [index, root] of read.roots) results[index] = await originOf({ ...sites[index]!, name: root }, "valid");
+      for (const [index, { root, bare, local }] of read.roots) {
+        const origin = await originOf({ ...sites[index]!, name: root }, local ? "local" : "valid");
+        results[index] = bare ? { ...origin, bare: true } : origin;
+      }
     }
     return results;
   } };
@@ -122,7 +125,7 @@ export function createImportOrigins(sources: readonly SourceFile[]): ImportOrigi
 type SiteSyntax = "valid" | "local" | "this-member";
 
 /** The root of the plain chain of names each site spells and ends in its name, read in one temporary tree. */
-function rootsAt(file: string, text: string, group: readonly { site: ResolvedNameSite; index: number }[]): { roots: Map<number, string>; shape: FileShape } | undefined {
+function rootsAt(file: string, text: string, group: readonly { site: ResolvedNameSite; index: number }[]): { roots: Map<number, { root: string; bare: boolean; local: boolean }>; shape: FileShape } | undefined {
   const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
   const diagnostics = (source as ts.SourceFile & { parseDiagnostics: readonly ts.Diagnostic[] }).parseDiagnostics;
   if (diagnostics.some((diagnostic) => diagnostic.category === ts.DiagnosticCategory.Error)) return undefined;
@@ -136,12 +139,15 @@ function rootsAt(file: string, text: string, group: readonly { site: ResolvedNam
     wanted.set(point, [...(wanted.get(point) ?? []), item]);
   }
   /** Chains that start at one point share their root, so the first that ends in the name settles it. */
-  const roots = new Map<number, string>();
+  const roots = new Map<number, { root: string; bare: boolean; local: boolean }>();
+  const scopes = new WeakMap<ts.Node, { unsafe: boolean; names: ReadonlySet<string> }>();
   const visit = (node: ts.Node): void => {
     for (const { site, index } of wanted.get(node.getStart(source)) ?? []) {
       const spelled = spelledAt(node, site.kind);
       const names = spelled === undefined ? undefined : plainChain(spelled);
-      if (names !== undefined && names.at(-1) === site.name && !roots.has(index)) roots.set(index, names[0]!);
+      if (names === undefined || names.at(-1) !== site.name || roots.has(index)) continue;
+      const bare = names.length === 1;
+      roots.set(index, { root: names[0]!, bare, local: bare && ts.isIdentifier(spelled!) && !ts.isTypeNode(spelled.parent) && localParameter(spelled, site.name, scopes) });
     }
     node.forEachChild(visit);
   };
@@ -230,14 +236,22 @@ function isNested(declaration: ts.ClassLikeDeclaration): boolean {
   return false;
 }
 
-/** Prove only the nearest supported function-expression parameter; all uncertain scopes are refused. */
+/**
+ * A node that opens a scope the parameter proof does not read through: a function, a class (its static blocks and property
+ * initializers included) or a namespace. The walk up from a use and the scan for a rebinding both stop at one.
+ */
+function opensScope(node: ts.Node): boolean {
+  return ts.isFunctionLike(node) || ts.isClassLike(node) || ts.isModuleDeclaration(node);
+}
+
+/** Prove only a parameter of the function, method or constructor whose body holds the use with no other scope between them; all uncertain scopes are refused. */
 function localParameter(callee: ts.Identifier, name: string, scopes: WeakMap<ts.Node, { unsafe: boolean; names: ReadonlySet<string> }>): boolean {
   let node: ts.Node | undefined = callee.parent;
-  let owner: ts.ArrowFunction | ts.FunctionExpression | undefined;
+  let owner: ts.ArrowFunction | ts.FunctionExpression | ts.FunctionDeclaration | ts.MethodDeclaration | ts.ConstructorDeclaration | undefined;
   while (node !== undefined) {
     if (ts.isWithStatement(node)) return false;
-    if (ts.isFunctionLike(node)) {
-      if (!ts.isArrowFunction(node) && !ts.isFunctionExpression(node)) return false;
+    if (opensScope(node)) {
+      if (!ts.isArrowFunction(node) && !ts.isFunctionExpression(node) && !ts.isFunctionDeclaration(node) && !ts.isMethodDeclaration(node) && !ts.isConstructorDeclaration(node)) return false;
       owner = node; break;
     }
     node = node.parent;
@@ -253,7 +267,7 @@ function localParameter(callee: ts.Identifier, name: string, scopes: WeakMap<ts.
       if (ts.isWithStatement(current) || (ts.isCallExpression(current) && ts.isIdentifier(current.expression) && current.expression.text === "eval")) unsafe = true;
       const declared = declaredName(current);
       if (declared !== undefined) names.add(declared);
-      if (ts.isFunctionLike(current) || ts.isClassLike(current) || ts.isModuleDeclaration(current)) return;
+      if (opensScope(current)) return;
       current.forEachChild(visit);
     };
     visit(owner.body);

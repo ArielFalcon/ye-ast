@@ -79,6 +79,13 @@ test("a written global encoder is not evaluated as the built-in, even from anoth
   assert.deepEqual(sites(await reader.of([alias], "repo")), ["unknown unresolved@alias.ts:1"]);
 });
 
+test("whatever function encodeURIComponent names at run time, what it encodes from a run-time value is a run-time value", async () => {
+  const listener = source("resize.ts", "import { fromEvent } from 'rxjs'; fromEvent(window, 'resize').subscribe(() => {});");
+  const encoded = source("encoded.ts", "export function load(id: string) { return fetch(`/api/items/${encodeURIComponent(id)}`) }");
+  const literal = source("literal.ts", "fetch(`/api/${encodeURIComponent('x')}`)");
+  assert.deepEqual(sites(await reader.of([listener, encoded, literal], "repo")), ["GET /api/items/{}@encoded.ts:1", "unknown unresolved@literal.ts:1"]);
+});
+
 test("a class static block's var does not shadow its enclosing function's route", async () => {
   const file = source("static.ts", "const route = 'outer'; function load() { class Nested { static { var route = 'inner' } } fetch(`/api/${route}`) }");
   assert.deepEqual(sites(await reader.of([file], "repo")), ["GET /api/outer@static.ts:1"]);
@@ -104,19 +111,20 @@ test("function-scoped var bindings shadow outer constants outside their block", 
   assert.deepEqual(sites(await reader.of([file], "repo")), ["GET /api/{}@var.ts:5"]);
 });
 
-test("a top-level block var shadows the global encoder and unknown typed arguments stay undecided", async () => {
+test("a top-level block var shadows the global encoder", async () => {
   const shadow = source("shadow.ts", [
     "import { HttpClient } from '@angular/common/http'",
     "if (true) { var encodeURIComponent = custom }",
     "class Client { constructor(private http: HttpClient) {}",
     " load(id: string) { this.http.get(`/api/${encodeURIComponent(id)}`) } }",
   ].join("\n"));
-  const typed = source("typed.ts", [
-    "import { HttpClient } from '@angular/common/http'",
-    "class Client { constructor(private http: HttpClient) {}",
-    " load(id: unknown) { this.http.get(`/api/${encodeURIComponent(id)}`) } }",
-  ].join("\n"));
-  assert.deepEqual(sites(await reader.of([shadow, typed], "repo")), ["unknown unresolved@shadow.ts:4", "unknown unresolved@typed.ts:3"]);
+  assert.deepEqual(sites(await reader.of([shadow], "repo")), ["unknown unresolved@shadow.ts:4"]);
+});
+
+test("an encoded value is one segment whatever it is, unless it reads nothing the code fills at run time and the snapshot cannot read it", async () => {
+  const found = await reader.of([component("    this.http.get(`/api/${encodeURIComponent(this.identifierOf(method))}`)", "    this.http.get(`/api/${encodeURIComponent(`${method}/${method}`)}`)", "    this.http.get(`/api/${encodeURIComponent(lookup())}`)", "    this.http.get(`/api/${encodeURIComponent('\\uD800')}`)")], "shop-web");
+
+  assert.deepEqual(sites(found), ["GET /api/{}@src/app/app.component.ts:6", "GET /api/{}@src/app/app.component.ts:7", "unknown unresolved@src/app/app.component.ts:8", "unknown unresolved@src/app/app.component.ts:9"]);
 });
 
 function source(path: string, content: string): { path: string; content: string } {
@@ -190,6 +198,25 @@ test("a verb of HttpClient that a component calls is a call site with its method
   assert.deepEqual(sites(await reader.of([component], "shop-web")), ["GET orders/7@src/app/app.component.ts:6"]);
 });
 
+test("a receiver is read in the class whose code calls it: another class's HttpClient field of the same name does not make it one", async () => {
+  const file = source("two.ts", ["import { HttpClient } from '@angular/common/http'", "import { inject } from '@angular/core'", "import { Cache } from './cache'", "class A { private readonly http = inject(HttpClient) }", "class B { private readonly http = inject(Cache)", "  load() { this.http.get('/items') } }"].join("\n"));
+
+  assert.deepEqual(sites(await reader.of([file], "shop-web")), []);
+});
+
+test("an HttpClient field a class inherits from an imported base is its receiver", async () => {
+  const base = source("src/app/base.service.ts", ["import { HttpClient } from '@angular/common/http'", "import { inject } from '@angular/core'", "export class BaseService { protected readonly http = inject(HttpClient) }"].join("\n"));
+  const child = source("src/app/items.service.ts", ["import { BaseService } from './base.service'", "export class ItemsService extends BaseService {", "  load() { this.http.get('/items') } }"].join("\n"));
+
+  assert.deepEqual(sites(await reader.of([base, child], "shop-web")), ["GET /items@src/app/items.service.ts:3"]);
+});
+
+test("a constructor parameter is a field only when it declares one, and the parameter itself is a receiver where it is in scope", async () => {
+  const file = source("ctor.ts", ["import { HttpClient } from '@angular/common/http'", "class Client {", "  constructor(http: HttpClient) { http.get('/boot') }", "  load() { this.http.get('/items') } }"].join("\n"));
+
+  assert.deepEqual(sites(await reader.of([file], "shop-web")), ["GET /boot@ctor.ts:3"]);
+});
+
 test("an injected client's receiver is not the URL supplied to its verb", async () => {
   const caller = source("src/service.ts", [
     "import { HttpClient } from '@angular/common/http'",
@@ -222,6 +249,65 @@ test("a parameter the code fills at run time is a placeholder: `${expr}` and `:n
   assert.deepEqual(sites(await reader.of([component], "shop-web")), ["GET orders/{}/lines@src/app/app.component.ts:6", "DELETE orders/{}@src/app/app.component.ts:7"]);
 });
 
+test("a property of a value the code fills at run time is one too, its root read through the binding the code declares", async () => {
+  const file = source("props.ts", ["import { HttpClient } from '@angular/common/http'", "const category = { id: 'literal' }", "class Client { constructor(private http: HttpClient) {}", "  load(category: unknown, event: any) {", "    this.http.patch(`/categories/${category.id}/visible`, {})", "    this.http.delete('/contents/' + event.data.id)", "    this.http.delete('/pages/' + event!.data.id)", "  } }"].join("\n"));
+
+  assert.deepEqual(sites(await reader.of([file], "shop-web")), ["PATCH /categories/{}/visible@props.ts:5", "DELETE /contents/{}@props.ts:6", "DELETE /pages/{}@props.ts:7"]);
+});
+
+test("a field the class declares without an initializer, or as a constructor parameter, holds a value the code fills at run time", async () => {
+  const file = source("fields.ts", ["import { HttpClient } from '@angular/common/http'", "class Page { uniqueCode: string; content: any", "  constructor(private http: HttpClient, private readonly tenant: string) {}", "  load() {", "    this.http.get('/boxes/' + this.uniqueCode)", "    this.http.put('/boxes/' + this.content.id, {})", "    this.http.get(`/tenants/${this.tenant}/boxes`)", "  } }"].join("\n"));
+
+  assert.deepEqual(sites(await reader.of([file], "shop-web")), ["GET /boxes/{}@fields.ts:5", "PUT /boxes/{}@fields.ts:6", "GET /tenants/{}/boxes@fields.ts:7"]);
+});
+
+test("a field the code assigns besides its initializer, in its class or a subclass, or a subclass declares again, holds a value the code fills at run time", async () => {
+  const file = source("assigned.ts", [
+    "import { HttpClient } from '@angular/common/http'",
+    "class Base { constructor(protected http: HttpClient) {} protected version = 'v1'; protected kind = 'all'; protected page = 'p1'; protected area = 'a1'",
+    "  constructor2() { this.page += 'x' }",
+    "  load() { this.http.get(`/api/${this.version}/${this.kind}/${this.page}/${this.area}/items`) } }",
+    "class Child extends Base { protected kind = 'mine'; start() { this.version = 'v2'; this.area++ } }",
+  ].join("\n"));
+
+  assert.deepEqual(sites(await reader.of([file], "shop-web")), ["GET /api/{}/{}/{}/{}/items@assigned.ts:4"]);
+});
+
+test("a class that writes fields it does not name may write any of them", async () => {
+  const file = source("dynamic.ts", [
+    "import { HttpClient } from '@angular/common/http'",
+    "class A { constructor(private http: HttpClient) {} version = 'v1'; set(key: string) { this[key] = 'v2' } load() { this.http.get(`/a/${this.version}/items`) } }",
+    "class B { constructor(private http: HttpClient, init: object) { Object.assign(this, init) } version = 'v1'; load() { this.http.get(`/b/${this.version}/items`) } }",
+  ].join("\n"));
+
+  assert.deepEqual(sites(await reader.of([file], "shop-web")), ["GET /a/{}/items@dynamic.ts:2", "GET /b/{}/items@dynamic.ts:3"]);
+});
+
+test("a variable the code reassigns is not its initializer, so its path is undecided", async () => {
+  const file = source("let.ts", [
+    "import { HttpClient } from '@angular/common/http'",
+    "let BASE = '/a'",
+    "var ROOT = '/r'",
+    "export function move() { BASE = '/b'; ROOT = '/s' }",
+    "class Client { constructor(private http: HttpClient) {}",
+    "  load(archived: boolean, pair: string[]) {",
+    "    this.http.get(BASE + '/x')",
+    "    this.http.get(ROOT + '/y')",
+    "    let url = '/orders'; if (archived) { url = '/orders/archived' }; this.http.get(url)",
+    "    let path = '/items'; path += '/archived'; this.http.get(path)",
+    "    let next = '/pages'; [next] = pair; this.http.get(next)",
+    "  } }",
+  ].join("\n"));
+
+  assert.deepEqual(sites(await reader.of([file], "shop-web")), ["unknown unresolved@let.ts:7", "unknown unresolved@let.ts:8", "unknown unresolved@let.ts:9", "unknown unresolved@let.ts:10", "unknown unresolved@let.ts:11"]);
+});
+
+test("a variable the code only extends with a query or a fragment keeps its initializer's path", async () => {
+  const found = await reader.of([component("    let url = '/owners'; if (method) { url += '?lastName=' + method }; this.http.get(url)", "    let page = '/pages?size=10'; page += '&page=' + method; this.http.get(page)", "    this.http.get(`/r/${encodeURIComponent(url)}`)")], "shop-web");
+
+  assert.deepEqual(sites(found), ["GET /owners@src/app/app.component.ts:6", "GET /pages@src/app/app.component.ts:7", "GET /r/{}@src/app/app.component.ts:8"]);
+});
+
 test("a path part that names a field of the class is the value its initializer states", async () => {
   const service = source(
     "src/app/order/order.service.ts",
@@ -243,7 +329,7 @@ test("a path part that names a static member is the value its initializer states
 test("a field whose initializer the snapshot does not decide keeps the path undecided", async () => {
   const service = source(
     "src/app/order/order.service.ts",
-    ["import { HttpClient } from '@angular/common/http'", "import { inject } from '@angular/core'", "export class OrderService {", "  private readonly base = this.pick()", "  private readonly http = inject(HttpClient)", "  private pick(): string { return 'shop-api' }", "  load(): void {", "    this.http.get(`${this.base}/orders`)", "  }", "}"].join("\n"),
+    ["import { HttpClient } from '@angular/common/http'", "import { inject } from '@angular/core'", "export class OrderService {", "  private readonly base = this.pick()", "  private readonly http = inject(HttpClient)", "  private pick(): string { return lookup() }", "  load(): void {", "    this.http.get(`${this.base}/orders`)", "  }", "}"].join("\n"),
   );
 
   assert.deepEqual(sites(await reader.of([service], "shop-web")), ["unknown unresolved@src/app/order/order.service.ts:8"]);
@@ -257,6 +343,23 @@ test("a static member of an imported class resolves through the import", async (
   );
 
   assert.deepEqual(sites(await reader.of([api, service], "shop-web")), ["GET shop-api/orders@src/app/order/order.service.ts:7"]);
+});
+
+test("a member of an enum the snapshot holds is the text its initializer states, and only a stated text", async () => {
+  const settings = source("src/app/settings.models.ts", ["export const GENERAL = 'outer'", "export enum Settings { GENERAL = 'general', 'QUICK_LINKS' = 'quick-links', COUNT = 1, NEXT, ALIAS = GENERAL }"].join("\n"));
+  const service = source(
+    "src/app/settings.service.ts",
+    ["import { HttpClient } from '@angular/common/http'", "import { inject } from '@angular/core'", "import { Settings } from './settings.models'", "enum Local { DOCS = 'docs' }", "export class SettingsService {", "  private readonly http = inject(HttpClient)", "  load(): void {",
+      "    this.http.get(`/api/settings/${Settings.GENERAL}`)", "    this.http.get(`/api/settings/${Settings.QUICK_LINKS}`)", "    this.http.get(`/api/settings/${Local.DOCS}`)", "    this.http.get(`/api/settings/${Settings.NEXT}`)", "    this.http.get(`/api/settings/${Settings.ALIAS}`)", "  }", "}"].join("\n"),
+  );
+
+  assert.deepEqual(sites(await reader.of([settings, service], "shop-web")), [
+    "GET /api/settings/general@src/app/settings.service.ts:8",
+    "GET /api/settings/quick-links@src/app/settings.service.ts:9",
+    "GET /api/settings/docs@src/app/settings.service.ts:10",
+    "unknown unresolved@src/app/settings.service.ts:11",
+    "unknown unresolved@src/app/settings.service.ts:12",
+  ]);
 });
 
 test("a name a barrel re-exports with `export *` resolves through it", async () => {
@@ -324,10 +427,10 @@ test("a barrel cycle is undecided, never a hang", async () => {
 test("a parameter that shadows a const of the file is still a value the code fills at run time", async () => {
   const service = source(
     "src/app/order/order.service.ts",
-    ["import { HttpClient } from '@angular/common/http'", "import { inject } from '@angular/core'", "const BASE = 'orders-api'", "export class OrderService {", "  private readonly http = inject(HttpClient)", "  load(BASE: string): void {", "    this.http.get(`${BASE}/orders`)", "  }", "}"].join("\n"),
+    ["import { HttpClient } from '@angular/common/http'", "import { inject } from '@angular/core'", "const BASE = 'orders-api'", "export class OrderService {", "  private readonly http = inject(HttpClient)", "  load(BASE: string): void {", "    this.http.get(`/api/${BASE}/orders`)", "  }", "}"].join("\n"),
   );
 
-  assert.deepEqual(sites(await reader.of([service], "shop-web")), ["GET {}/orders@src/app/order/order.service.ts:7"]);
+  assert.deepEqual(sites(await reader.of([service], "shop-web")), ["GET /api/{}/orders@src/app/order/order.service.ts:7"]);
 });
 
 test("a const a method declares with a literal initializer resolves", async () => {
@@ -351,10 +454,22 @@ test("a path part imported from a module the snapshot does not hold is undecided
 test("a variable a method declares from its own parameter is still a value the code fills at run time", async () => {
   const service = source(
     "src/app/order/order.service.ts",
-    ["import { HttpClient } from '@angular/common/http'", "import { inject } from '@angular/core'", "export class OrderService {", "  private readonly http = inject(HttpClient)", "  load(orderId: string): void {", "    const url = orderId", "    this.http.get(`${url}/lines`)", "  }", "}"].join("\n"),
+    ["import { HttpClient } from '@angular/common/http'", "import { inject } from '@angular/core'", "export class OrderService {", "  private readonly http = inject(HttpClient)", "  load(orderId: string): void {", "    const url = orderId", "    this.http.get(`/orders/${url}/lines`)", "  }", "}"].join("\n"),
   );
 
-  assert.deepEqual(sites(await reader.of([service], "shop-web")), ["GET {}/lines@src/app/order/order.service.ts:7"]);
+  assert.deepEqual(sites(await reader.of([service], "shop-web")), ["GET /orders/{}/lines@src/app/order/order.service.ts:7"]);
+});
+
+test("a run-time value that does not start a path segment leaves the path undecided, since it may hold an origin or a base path", async () => {
+  const found = await reader.of([component("    this.http.get(`${method}/orders`)", "    this.http.get('' + method + '/orders')", "    this.http.get(`/api/v1${method}`)", "    this.http.get(`/api/${method}/orders`)")], "shop-web");
+
+  assert.deepEqual(sites(found), ["unknown unresolved@src/app/app.component.ts:6", "unknown unresolved@src/app/app.component.ts:7", "unknown unresolved@src/app/app.component.ts:8", "GET /api/{}/orders@src/app/app.component.ts:9"]);
+});
+
+test("a variable whose undecided initializer reads nothing the code fills at run time is undecided, and one that reads such a value is one", async () => {
+  const found = await reader.of([component("    const part = compute()", "    this.http.get(`/api/${part}/tail`)", "    const code = this.store.merchant()", "    this.http.get(`/stores/${code}/logo`)")], "shop-web");
+
+  assert.deepEqual(sites(found), ["unknown unresolved@src/app/app.component.ts:7", "GET /stores/{}/logo@src/app/app.component.ts:9"]);
 });
 
 test("a path held as a member of a constant object literal still resolves", async () => {
@@ -444,6 +559,123 @@ test("an httpResource whose function returns undefined requests nothing then, so
   assert.deepEqual(sites(found), ["GET /orders@src/app/app.component.ts:6"]);
 });
 
+test("a method called on a receiver of a class the snapshot holds is read at its returns, and every override of a subclass must agree", async () => {
+  const paging = source("src/app/paging.ts", [
+    "export class Paging { constructor(public size: number) {}",
+    "  toQuery(): string { let query = `?size=${this.size}`; if (this.size > 9) { query += '&big=1' } return query } }",
+    "export class TimePaging extends Paging { start = 0",
+    "  toQuery(): string { let query = super.toQuery(); query += `&start=${this.start}`; return query } }",
+    "export class Route { value(): string { return '/a' } }",
+    "export class OtherRoute extends Route { value(): string { return '/b' } }",
+  ].join("\n"));
+  const service = source("src/app/devices.service.ts", [
+    "import { HttpClient } from '@angular/common/http'",
+    "import { inject } from '@angular/core'",
+    "import { Paging, Route } from './paging'",
+    "export class DevicesService { private readonly http = inject(HttpClient)",
+    "  load(paging: Paging, route: Route) {",
+    "    this.http.get(`/api/devices${paging.toQuery()}`)",
+    "    this.http.get(`/api${route.value()}`)",
+    "    this.http.get(`/api/${this.area()}/devices`)",
+    "  }",
+    "  private area(): string { return 'eu' } }",
+  ].join("\n"));
+
+  assert.deepEqual(sites(await reader.of([paging, service], "shop-web")), ["GET /api/devices@src/app/devices.service.ts:6", "unknown unresolved@src/app/devices.service.ts:7", "GET /api/eu/devices@src/app/devices.service.ts:8"]);
+});
+
+test("a method that reads its own parameters is not read, so a path it builds from an argument stays undecided", async () => {
+  const file = source("helper.ts", ["import { HttpClient } from '@angular/common/http'", "class Client { constructor(private http: HttpClient) {}", "  url(path: string) { return `/items/${path}` }", "  load() { this.http.get(this.url('orders/active')) } }"].join("\n"));
+
+  assert.deepEqual(sites(await reader.of([file], "shop-web")), ["unknown unresolved@helper.ts:4"]);
+});
+
+test("an override must agree whatever name the subclass's file gives the class it extends", async () => {
+  const base = source("src/app/base.ts", "export class Base { path(): string { return '/old' } }");
+  const child = source("src/app/child.ts", "import { Base as Parent } from './base'\nexport class Child extends Parent { override path(): string { return '/new' } }");
+  const use = source("src/app/use.ts", "import { Base } from './base'\nexport function load(p: Base) { return fetch(p.path()) }");
+
+  assert.deepEqual(sites(await reader.of([base, child, use], "shop-web")), ["unknown unresolved@src/app/use.ts:2"]);
+});
+
+test("a method the class or a subclass assigns through this is not read from its declaration", async () => {
+  const file = source("paths.ts", [
+    "class Field { path = () => '/old'; constructor() { this.path = () => '/new' } }",
+    "class Method { path(): string { return '/old' } constructor() { this.path = () => '/new' } }",
+    "class Base { path(): string { return '/old' } }",
+    "class Sub extends Base { constructor() { super(); this.path = () => '/new' } }",
+    "class Kept { path(): string { return '/kept' } }",
+    "export function load(field: Field, method: Method, base: Base, kept: Kept) { fetch(field.path()); fetch(method.path()); fetch(base.path()); fetch(kept.path()) }",
+  ].join("\n"));
+
+  assert.deepEqual(sites(await reader.of([file], "shop-web")), ["unknown unresolved@paths.ts:6", "unknown unresolved@paths.ts:6", "unknown unresolved@paths.ts:6", "GET /kept@paths.ts:6"]);
+});
+
+test("a class or a function an import names is found through re-exports, local export aliases and default exports", async () => {
+  const base = source("src/app/base.ts", "export class Base { path(): string { return '/old' } }\nexport default Base");
+  const use = source("src/app/use.ts", "import { Base } from './base'\nexport function load(p: Base) { return fetch(p.path()) }");
+  const barrel = source("src/app/barrel.ts", "export { Base as Parent } from './base'");
+  const alias = source("src/app/alias.ts", "import { Base } from './base'\nexport { Base as Root }");
+  const throughBarrel = source("src/app/a.ts", "import { Parent } from './barrel'\nexport class A extends Parent { override path(): string { return '/a' } }");
+  const throughDefault = source("src/app/b.ts", "import Parent from './base'\nexport class B extends Parent { override path(): string { return '/b' } }");
+  const throughAlias = source("src/app/c.ts", "import { Root } from './alias'\nexport class C extends Root { override path(): string { return '/c' } }");
+  const anonymous = source("src/app/d.ts", "import { Base } from './base'\nexport default class extends Base { override path(): string { return '/d' } }");
+  const paths = source("src/app/paths.ts", "export function itemsPath(): string { return '/api/items' }");
+  const index = source("src/app/index.ts", "export * from './paths'");
+  const caller = source("src/app/caller.ts", "import { itemsPath } from './index'\nexport function list() { return fetch(itemsPath()) }");
+
+  assert.deepEqual(sites(await reader.of([base, use], "shop-web")), ["GET /old@src/app/use.ts:2"]);
+  assert.deepEqual(sites(await reader.of([base, use, barrel, throughBarrel], "shop-web")), ["unknown unresolved@src/app/use.ts:2"]);
+  assert.deepEqual(sites(await reader.of([base, use, throughDefault], "shop-web")), ["unknown unresolved@src/app/use.ts:2"]);
+  assert.deepEqual(sites(await reader.of([base, use, alias, throughAlias], "shop-web")), ["unknown unresolved@src/app/use.ts:2"]);
+  assert.deepEqual(sites(await reader.of([base, use, anonymous], "shop-web")), ["unknown unresolved@src/app/use.ts:2"]);
+  assert.deepEqual(sites(await reader.of([paths, index, caller], "shop-web")), ["GET /api/items@src/app/caller.ts:2"]);
+});
+
+test("a member a class anywhere in the instance's hierarchy assigns through this is not read from its declaration", async () => {
+  const file = source("hierarchy.ts", [
+    "class Base { path(): string { return '/old' } constructor() { this.path = () => '/new' } }",
+    "class Child extends Base { override path(): string { return '/child' } }",
+    "class Top { url?: string; reset() { this.url = '/reset' } }",
+    "class Mid extends Top { override url = '/mid' }",
+    "class Leaf extends Mid { load() { fetch(this.url) } }",
+    "export function load(child: Child) { fetch(child.path()) }",
+  ].join("\n"));
+
+  assert.deepEqual(sites(await reader.of([file], "shop-web")), ["unknown unresolved@hierarchy.ts:5", "unknown unresolved@hierarchy.ts:6"]);
+});
+
+test("an override the snapshot cannot read as a method leaves the call undecided", async () => {
+  const file = source("accessor.ts", ["class Base { path(): string { return '/old' } }", "class Child extends Base { get path() { return () => '/new' } }", "export function load(p: Base) { fetch(p.path()) }"].join("\n"));
+
+  assert.deepEqual(sites(await reader.of([file], "shop-web")), ["unknown unresolved@accessor.ts:3"]);
+});
+
+test("a parameter or a local the function assigns or declares again no longer types its receiver", async () => {
+  const file = source("rebound.ts", [
+    "import { HttpClient } from '@angular/common/http'",
+    "import { inject } from '@angular/core'",
+    "export function load(http: HttpClient) { var http = new Map<string, string>() as any; http.get('/cached') }",
+    "export function save(http: HttpClient) { http = other(); http.post('/saved', {}) }",
+    "export function swap() { let http = inject(HttpClient); http = other(); http.get('/swapped') }",
+    "export function keep(http: HttpClient) { const client = inject(HttpClient); http.get('/kept'); client.get('/client') }",
+  ].join("\n"));
+
+  assert.deepEqual(sites(await reader.of([file], "shop-web")), ["GET /kept@rebound.ts:6", "GET /client@rebound.ts:6"]);
+});
+
+test("a receiver a loop or a catch clause binds is not typed by an outer parameter of the same name", async () => {
+  const file = source("cache.ts", [
+    "import { HttpClient } from '@angular/common/http'",
+    "export function load(http: HttpClient) {",
+    "  for (const http of [new Map<string, string>()]) { http.get('/cached') }",
+    "  try { http.get('/api/items') } catch (http) { http.get('/failed') }",
+    "}",
+  ].join("\n"));
+
+  assert.deepEqual(sites(await reader.of([file], "shop-web")), ["GET /api/items@cache.ts:4"]);
+});
+
 function pathFunction(...body: string[]): { path: string; content: string } {
   return source("paths.ts", ["import { HttpClient } from '@angular/common/http'", "function orderPath(open: boolean) {", ...body, "}", "class Client { constructor(private http: HttpClient) {}", " load(open: boolean) { this.http.get(orderPath(open)) } }"].join("\n"));
 }
@@ -465,13 +697,13 @@ test("what follows the query or the fragment of a path never leaves it undecided
 });
 
 test("an encoded text whose query was cut is never encoded as if it were the whole value", async () => {
-  assert.deepEqual(sites(await reader.of([component("    this.http.get(`/api/${encodeURIComponent(`a?${this.page()}`)}`)")], "shop-web")), ["unknown unresolved@src/app/app.component.ts:6"]);
+  assert.deepEqual(sites(await reader.of([component("    this.http.get(`/api/${encodeURIComponent(`a?${this.page()}`)}`)")], "shop-web")), ["GET /api/{}@src/app/app.component.ts:6"]);
 });
 
 test("a text that holds a cut text is cut too, so it is never encoded whole", async () => {
   const found = await reader.of([component("    const query = `a?${this.page()}`", "    this.http.get(`/api/${encodeURIComponent(`${query}`)}`)", "    this.http.get(`/api/${encodeURIComponent('' + query)}`)")], "shop-web");
 
-  assert.deepEqual(sites(found), ["unknown unresolved@src/app/app.component.ts:7", "unknown unresolved@src/app/app.component.ts:8"]);
+  assert.deepEqual(sites(found), ["GET /api/{}@src/app/app.component.ts:7", "GET /api/{}@src/app/app.component.ts:8"]);
 });
 
 test("an encoded text that states a question mark itself is encoded whole", async () => {
@@ -482,8 +714,8 @@ test("a path function that calls itself is undecided, never a hang", async () =>
   assert.deepEqual(sites(await reader.of([pathFunction(" return orderPath(!open)")], "shop-web")), ["unknown unresolved@paths.ts:6"]);
 });
 
-test("a variable a request function declares is a value it fills at run time", async () => {
-  const found = await reader.of([component("    httpResource(() => { const id = this.pick(); return `/orders/${id}` })")], "shop-web");
+test("a variable a request function declares is read in the function's own scope", async () => {
+  const found = await reader.of([component("    httpResource(() => { const id = method; return `/orders/${id}` })")], "shop-web");
 
   assert.deepEqual(sites(found), ["GET /orders/{}@src/app/app.component.ts:6"]);
 });
@@ -523,11 +755,25 @@ test("a class another class injects that makes its requests with paths it states
 test("a wrapper's path may be computed from its parameter; a method whose name is no verb keeps its own call site, since a call to it is not read as a request", async () => {
   const client = source(
     API,
-    ["import { HttpClient } from '@angular/common/http'", "import { inject, Injectable } from '@angular/core'", "@Injectable({ providedIn: 'root' })", "export class RestClientService {", "  private readonly http = inject(HttpClient)", "  get(path: string): void {", "    const url = this.resolve(path)", "    this.http.get(url)", "  }", "  item(id: string): void {", "    this.http.get(`/items/${id}`)", "  }", "  private resolve(path: string): string {", "    return path", "  }", "}"].join("\n"),
+    ["import { HttpClient } from '@angular/common/http'", "import { inject, Injectable } from '@angular/core'", "@Injectable({ providedIn: 'root' })", "export class RestClientService {", "  private readonly http = inject(HttpClient)", "  get(path: string): void {", "    const url = this.resolve(path)", "    this.http.get(url)", "  }", "  item(id: string): void {", "    this.http.get(`/items/${id}`)", "  }", "  private resolve(path: string): string {", "    return this.base + '/' + path", "  }", "  private readonly base = 'api'", "}"].join("\n"),
   );
   const page = source("src/app/items/items.page.ts", ["import { inject } from '@angular/core'", "import { RestClientService } from '../core/rest/services/client/rest-client.service'", "export class ItemsPage {", "  private readonly rest = inject(RestClientService)", "  load(): void {", "    this.rest.get('/items')", "    this.rest.item('7')", "  }", "}"].join("\n"));
 
   assert.deepEqual(sites(await reader.of([client, page], "shop-web")), [`GET /items/{}@${API}:11`, "GET /items@src/app/items/items.page.ts:6"]);
+});
+
+test("a method that puts its parameter inside a path segment is no wrapper, so its own request is the call site and a call to it is none", async () => {
+  const service = source("src/app/items.service.ts", ["import { HttpClient } from '@angular/common/http'", "import { inject } from '@angular/core'", "export class ItemsService {", "  private readonly http = inject(HttpClient)", "  delete(name: string) { return this.http.delete(`/items/${encodeURIComponent(name)}`) }", "  put(id: string) { return this.http.put(`/items/${id}/details`, {}) }", "  get(id: string) { return this.http.get(this.itemUrl(id)) }", "  itemUrl(id: string) { return `/items/${encodeURIComponent(id)}` }", "}"].join("\n"));
+  const dialog = source("src/app/items.dialog.ts", ["import { inject } from '@angular/core'", "import { ItemsService } from './items.service'", "export class ItemsDialog {", "  private readonly items = inject(ItemsService)", "  confirm(name: string) { this.items.delete(name); this.items.put(name); this.items.get(name) }", "}"].join("\n"));
+
+  assert.deepEqual(sites(await reader.of([service, dialog], "shop-web")), ["DELETE /items/{}@src/app/items.service.ts:5", "PUT /items/{}/details@src/app/items.service.ts:6", "unknown unresolved@src/app/items.service.ts:7"]);
+});
+
+test("a call through a wrapper takes the method of the request the wrapper makes, not the wrapper's name", async () => {
+  const client = source(API, ["import { HttpClient } from '@angular/common/http'", "import { inject, Injectable } from '@angular/core'", "@Injectable({ providedIn: 'root' })", "export class RestClientService {", "  private readonly http = inject(HttpClient)", "  get(path: string) { return this.http.post(path, {}) }", "}"].join("\n"));
+  const page = source("src/app/items/items.page.ts", ["import { inject } from '@angular/core'", "import { RestClientService } from '../core/rest/services/client/rest-client.service'", "export class ItemsPage {", "  private readonly rest = inject(RestClientService)", "  load(): void { this.rest.get('/items') }", "}"].join("\n"));
+
+  assert.deepEqual(sites(await reader.of([client, page], "shop-web")), ["POST /items@src/app/items/items.page.ts:5"]);
 });
 
 const CONSTANTS = "src/app/app.constants.ts";
@@ -625,7 +871,7 @@ test("a define reaches only the sources of the project that declares it", async 
   assert.deepEqual(sites(await reader.of([reversed, inLib, libService], "shop-web")), [`GET api/orders@projects/lib/${SERVICE}:7`]);
 });
 
-test("a path parameter written as encodeURIComponent, String or toString of a scalar is a placeholder", async () => {
+test("a path parameter written as encodeURIComponent, String or toString of a run-time value is a placeholder", async () => {
   const service = orderService(
     "this.http.get(`${this.resourceUrl}/${encodeURIComponent(id)}`)",
     "this.http.get(`${this.resourceUrl}/${String(id)}`)",
@@ -641,9 +887,9 @@ test("a path parameter written as encodeURIComponent, String or toString of a sc
   ]);
 });
 
-test("String and toString of a value whose type is unknown stay undecided", async () => {
+test("String and toString write what a template writes, whatever the value's type", async () => {
   const file = source("unk.ts", ["import { HttpClient } from '@angular/common/http'", "class C { constructor(private http: HttpClient) {}", " a(id: unknown) { this.http.get(`/api/${String(id)}`) }", " b(id: unknown) { this.http.get(`/api/${id.toString()}`) } }"].join("\n"));
-  assert.deepEqual(sites(await reader.of([file], "repo")), ["unknown unresolved@unk.ts:3", "unknown unresolved@unk.ts:4"]);
+  assert.deepEqual(sites(await reader.of([file], "repo")), ["GET /api/{}@unk.ts:3", "GET /api/{}@unk.ts:4"]);
 });
 
 test("an httpResource whose url is a field resolves, as an object's url or as the returned string", async () => {

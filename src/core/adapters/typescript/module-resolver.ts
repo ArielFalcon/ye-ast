@@ -1,7 +1,8 @@
 import { posix } from "node:path";
 import { isBuiltin } from "node:module";
 import ts from "typescript";
-import { isTypeScriptFile } from "../../domain/languages/typescript.ts";
+import { isPackageManifest, isTypeScriptFile } from "../../domain/languages/typescript.ts";
+import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 
 export type SourceReader = (file: string) => Promise<string | undefined>;
 
@@ -35,8 +36,9 @@ export interface ManifestPackages {
   declared: ReadonlySet<string>;
 }
 
-/** The dependencies and the names of every manifest given; a manifest that is not JSON says nothing. */
-export function manifestPackages(manifests: readonly string[]): ManifestPackages {
+/** The dependencies and the names of every package manifest among the files; a manifest that is not JSON says nothing. */
+export function manifestPackages(files: readonly SourceFile[]): ManifestPackages {
+  const manifests = files.filter((file) => isPackageManifest(file.path)).map((file) => file.content);
   return { dependencies: new Set(manifests.flatMap((manifest) => [...manifestDependencies(manifest)])), declared: new Set(manifests.flatMap((manifest) => manifestName(manifest) ?? [])) };
 }
 
@@ -147,8 +149,9 @@ export function createModuleResolver(read: SourceReader, packages: ManifestPacka
     /** A package the snapshot itself is never outside it: a configuration may name its file, nothing else proves one. */
     const declared = pkg !== undefined && packages.declared.has(pkg);
     const external = !declared && pkg !== undefined && packages.dependencies.has(pkg);
+    const ownPackage = `${specifier} names a package this snapshot declares`;
     const config = await configOf(posix.dirname(from));
-    if (config === undefined) return external ? { external: true } : { unresolved: declared ? `${specifier} names a package this snapshot declares` : `${specifier} is not relative and no module configuration governs ${from}` };
+    if (config === undefined) return external ? { external: true } : { unresolved: declared ? ownPackage : `${specifier} is not relative and no module configuration governs ${from}` };
     const compilerOptions = config.options;
     if (external && compilerOptions.paths === undefined && compilerOptions.baseUrl === undefined) return { external: true };
     const explicitJson = options?.jsonModules === true && specifier.endsWith(".json");
@@ -161,8 +164,8 @@ export function createModuleResolver(read: SourceReader, packages: ManifestPacka
       resolutions.set(key, held);
     }
     const resolved = await held;
-    if (resolved === undefined) return external ? { external: true } : { unresolved: declared ? `${specifier} names a package this snapshot declares` : `${specifier} matches no \`paths\` or \`baseUrl\` entry of ${config.file}` };
-    if (resolved.isExternalLibraryImport === true) return declared ? { unresolved: `${specifier} names a package this snapshot declares` } : { external: true };
+    if (resolved === undefined) return external ? { external: true } : { unresolved: declared ? ownPackage : `${specifier} matches no \`paths\` or \`baseUrl\` entry of ${config.file}` };
+    if (resolved.isExternalLibraryImport === true) return declared ? { unresolved: ownPackage } : { external: true };
     const file = resolved.resolvedFileName.replace(/^\//, "");
     return (explicitJson ? file.endsWith(".json") : isTypeScriptFile(file)) ? { file } : { unresolved: `${specifier} resolves to ${file}, which is no TypeScript source` };
   };

@@ -1119,7 +1119,7 @@ export function renderOutline(fact: Fact<OutlineValue>, detail: ResponseMode = "
   if (fact.status === "unknown") return lines.join("\n");
   for (const match of fact.value.focus ?? []) {
     lines.push(`  ${match.file}:${match.selector} matches ${match.path} (${match.omitted} other declarations of the file omitted)`);
-    match.ancestors.forEach((ancestor, depth) => lines.push(`    ${"  ".repeat(depth)}${spanText(ancestor.line, ancestor.endLine)} ${ancestor.name} [${ancestor.kind}]`));
+    match.ancestors.forEach((ancestor, depth) => lines.push(...outlineLines([ancestor], `    ${"  ".repeat(depth)}`)));
     lines.push(...outlineLines([match.declaration], `    ${"  ".repeat(match.ancestors.length)}`));
   }
   for (const entry of fact.value.files ?? []) {

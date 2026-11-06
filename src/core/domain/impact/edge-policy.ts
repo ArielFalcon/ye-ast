@@ -103,11 +103,20 @@ export function edgeConfidence({ confidence, provenance }: EdgeScore): number {
   return provenance === "heuristic" ? EDGE_POLICY.unscoredHeuristicConfidence : 1;
 }
 
+/** What an edge the graph resolved really reaches: its own target, nothing, or another declaration the source proves. */
+export type EdgeVerdict<D> = { kind: "keep" } | { kind: "drop" } | { kind: "redirect"; to: D };
+
 /**
- * Whether the root of the name an edge spells is bound outside the repository: imported from a package, or declared by
- * the language's own libraries. Such a name cannot be a declaration of the repository, whatever the graph matched it
- * to, so the edge is not a dependence. A root that is unknown or bound inside proves nothing against the edge.
+ * The verdict on one edge from the root of the name it spells at its position. A root bound outside the repository (imported
+ * from a package, or declared by the language's own libraries) cannot name a declaration of the repository, whatever the
+ * graph matched it to, so the edge is no dependence; nor can a root spelled alone that a parameter binds, whose value the
+ * callers pass. A root spelled alone that an import binds to `proven`, a declaration
+ * of the repository other than the edge's `target`, names `proven`. A root that is unknown, bound inside without a proven
+ * declaration, or reached through a longer chain (`a.b`, whose member the binding does not name) proves nothing against it.
  */
-export function isBoundOutside(root: Finding<ImportOrigin>): boolean {
-  return root.status === "complete" && (root.value.kind === "external" || root.value.kind === "ambient");
+export function edgeVerdict<D>(root: Finding<ImportOrigin> & { bare?: true }, proven?: D, target?: D): EdgeVerdict<D> {
+  if (root.status !== "complete") return { kind: "keep" };
+  if (root.value.kind === "external" || root.value.kind === "ambient" || (root.value.kind === "local-parameter" && root.bare === true)) return { kind: "drop" };
+  if (root.value.kind === "repository" && root.bare === true && proven !== undefined && proven !== target) return { kind: "redirect", to: proven };
+  return { kind: "keep" };
 }

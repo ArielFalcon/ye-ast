@@ -49,10 +49,14 @@ export interface ImportOrigins {
    * One entry per site, in the order received: where the name the syntax spells at the site is rooted, as `origins`
    * answers for that root. Complete only when the site holds a chain of plain names (`a`, `a.b.c`) that ends
    * in the site's `name`; a computed chain (`f().b`, `this.b`, `a[b]`), another name or a file that does not parse is
-   * `unknown`.
+   * `unknown`. `bare` marks a site that spells its root alone (`a`), so a binding of the root is the binding of the name;
+   * such a root in a value position that a simple parameter of the nearest function, method or constructor binds is
+   * `local-parameter`.
    */
-  rootOrigins(sites: readonly ResolvedNameSite[], signal?: AbortSignal): Promise<readonly Finding<ImportOrigin>[]>;
+  rootOrigins(sites: readonly ResolvedNameSite[], signal?: AbortSignal): Promise<readonly RootOrigin[]>;
 }
+
+export type RootOrigin = Finding<ImportOrigin> & { bare?: true };
 
 /** Reads the import bindings of one snapshot; composition supplies it, so no use case imports a parser. */
 export type ImportOriginsReader = (sources: readonly SourceFile[]) => ImportOrigins;

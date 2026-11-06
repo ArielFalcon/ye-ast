@@ -65,13 +65,39 @@ is the refresh of declared remotes under `trusted` ([ADR-0016](../adr/0016-remot
 The TypeScript HTTP evaluator reads lexical bindings, including destructuring, enclosing functions, blocks, catches and
 loops; an inner binding wins and a local initializer is evaluated in its declaration's scope. Function-scoped `var`
 bindings do not escape nested functions or classes. Immutable AST scopes are memoized by node, and file bindings are
-collected once per source instead of rescanned for every request.
+collected once per source instead of rescanned for every request. A `let` or `var` the code assigns again (destructuring
+included) is not its initializer and leaves the path undecided, unless every such assignment appends a query or a
+fragment (`url += '?q=' + q`), so the path stays the initializer's.
 
-An unshadowed global `encodeURIComponent` is a supported static transformation: literal text is encoded, and an identifier
-explicitly typed `string`, `number`, `boolean` or `bigint` may remain a parameter placeholder within a known path; so may
-`String(x)` and `x.toString()` of such an identifier. Unsupported arguments, shadowed encoders, visible writes or an
-escaping global object in the provided snapshot keep the evaluation unknown. No repository function is executed. A whole
-run-time URL such as `fetch(url)` remains unknown when `url` names a run-time parameter.
+A value the code fills at run time, written `{}`, is a parameter or a variable whose initializer reads one (`this`
+included); a variable whose initializer the snapshot does not decide and reads none of them is undecided. A run-time
+value stands for one path segment, an approximation: nothing proves it nonempty, free of `/` or other than a dot segment.
+It stands for a segment only where it starts one; a run-time value that starts the URL or follows text of its segment
+(`${base}/orders`, `/api/v1${path}`) may hold an origin, a base path or several segments, so the path is undecided.
+
+An unshadowed global `encodeURIComponent` is a supported static transformation. It escapes `/`, `?` and `#`, so what it
+encodes stays in one segment: a text the snapshot states whole is encoded, and anything else is a run-time value, a text
+holding a run-time value or cut at its query included, unless the snapshot cannot read the argument and the argument reads
+nothing the code fills at run time. `String(x)` and `x.toString()` write what a template writes for `x`. A shadowed
+encoder keeps the evaluation unknown. A visible write or an escaping global object in the provided snapshot
+(`fromEvent(window, 'resize')`) leaves an encoded text undecided, while what the call encodes from a run-time value stays a
+run-time value: whatever function runs, its result is filled at run time. No repository function is executed. A whole run-time URL such as `fetch(url)` remains unknown when `url` names a run-time parameter.
+
+A wrapper is a verb-named method of a class another class injects that forwards one of its parameters unchanged as the
+tail of its request's path (`this.http.get(path)`, `` `${this.url}${path}` ``, `base + '/' + path`, or through a method
+of the class that returns its parameter that way); its callers make the requests, with the verb of the request the
+wrapper makes, and the caller's path argument joins through the base-path and suffix rungs. A method that writes its
+parameter inside a segment (`` `/items/${encodeURIComponent(id)}` ``, `` `/items/${id}/details` ``) is no wrapper: its own
+request is the call site.
+
+A receiver `this.x` is the field the class of the call declares (a constructor parameter only when it declares a
+property) or inherits from its base class, here or through an import; a bare name is the binding the code around it
+declares, then a constant of the file; a parameter's declared type names its value only while the function neither
+assigns the parameter nor declares it again with a value, and a local's initializer only while nothing assigns the local.
+The file that writes the receiver's type name decides through its imports which class it names. A name an import brings,
+whatever it declares (a constant, a function, a class, an enum), is resolved through the module's own declarations, a
+local `export { a as b }`, `export default` (the class or function it declares, or the name it exports), named
+re-exports and `export *`, so a barrel or a default import reaches the same declaration as a direct import.
 
 `fetch(url, init)` takes its method from the init object it states, GET without one; an init that is not an object
 literal, or a spread or computed member that may state `method` after it, leaves the method undecided. An
@@ -79,7 +105,17 @@ literal, or a spread or computed member that may state `method` after it, leaves
 code around declares or imports is not the global one, and its call is no request.
 
 The text after the first `?` or `#` of a URL is its query or fragment, which no route serves: evaluation stops there, so
-a value the query names never leaves the path undecided. An argument of `encodeURIComponent` cut there is undecided.
+a value the query names never leaves the path undecided. An argument of `encodeURIComponent` cut there is a run-time
+value: the encoder escapes its `?` and `#`, so the whole argument stays in one segment.
+
+A method a path calls (`pageLink.toQuery()`, `this.area()`) is read when its receiver's class is in the snapshot: `this`,
+`super`, a field or a parameter whose declared type names the class. The receiver may be any subclass, so the method the
+class declares or inherits and every override a subclass declares must write the same, a subclass being any class whose
+`extends` resolves to that class through its own file's imports, under whatever name (`super` reads only the inherited
+one). A subclass member the snapshot cannot read as a method, such as an accessor, leaves the call undecided. A method that
+reads its own parameters is not read, since its arguments are not substituted, nor one that any class of the instance's
+hierarchy assigns through `this` (the receiver's class, every class it extends, or a subclass), since the instance then
+holds the assigned function.
 
 A function a path calls, and the function an `httpResource` takes its request from, is read at every `return` of its own
 body; the functions it declares return their own. A bare `return`, and an end the body reaches without returning, return
@@ -88,7 +124,15 @@ undecided. An `httpResource` function that returns `undefined` requests nothing 
 returns state. Variables the function declares are values it fills at run time.
 
 A class member the class does not declare (`this.resourceUrl`) is read from the class it extends, in the same file or
-through an import; a member the class declares itself wins.
+through an import; a member the class declares itself wins. A field's initializer is its value only while nothing else
+assigns it: a field declared without an initializer or as a constructor parameter, one the reading class or any class it
+extends writes (`=`, compound assignments, `++`, `delete`), above the declaring class included, one a subclass of the
+reading class declares again or writes, and any field of a class that writes fields it does not name (`this[key] =`,
+`Object.assign(this, …)`) hold a value the code fills at run time. Writes from outside the class hierarchy are not read.
+A property of a run-time value (`category.id`, `event.data.id`) is a run-time value; a root the code binds is read
+through that binding before any class, import or constant of the same name. A member of an enum the file declares or
+imports (`UserSettingsType.DOC_LINKS`) is the text its initializer states; a member without one, or initialized by any
+other expression, which may name another member of the enum, is undecided.
 
 A name that is neither a binding nor an import of its file, such as an ambient `declare const`, takes the value an
 Angular workspace's `build` target states for it in `define` (application builders), read from `angular.json` as source

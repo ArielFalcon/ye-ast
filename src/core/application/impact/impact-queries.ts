@@ -30,7 +30,7 @@ import { changedPaths, isWritten } from "../../domain/snapshot/live-export.ts";
 import { contentFingerprint, declaredScope, exportCuts, holdsDeclaredSource, isInMapScope } from "../../domain/map/entrypoint-map.ts";
 import type { Result } from "../../domain/shared/result.ts";
 import type { AngularDeclarationReader } from "../../ports/angular-declarations.port.ts";
-import type { CodeGraph, CodeGraphReader, GraphSymbol, GraphUnresolvedReference, IndexSummary } from "../../ports/code-graph.port.ts";
+import type { CodeGraph, CodeGraphReader, GraphNodeId, GraphSymbol, GraphUnresolvedReference, IndexSummary } from "../../ports/code-graph.port.ts";
 import type { DynamicLoad, DynamicLoadReader } from "../../ports/dynamic-loads.port.ts";
 import type { Digest } from "../../ports/digest.port.ts";
 import type { IndexCache } from "../../ports/index-cache.port.ts";
@@ -45,11 +45,11 @@ import { ABORTED, extractCommit, factBaseOf, trustOf, withScratch, type CommitEx
 import { createHeadReader, withLiveCapture, type FactSpec, type HeadIndex, type HeadReaderDeps, type HeadReading, type Revisioned } from "../snapshot/head-reading.ts";
 import { readImporters } from "./importers.ts";
 import { inboundEdgesOf } from "./inbound-origins.ts";
-import { edgeKey, type InboundEdges } from "./inbound-edges.ts";
+import { edgeKey, type EdgeCorrections, type FollowedEdge, type InboundEdges } from "./inbound-edges.ts";
 import { memberProofContextOf, referenceProofsOf, unresolvedOf, type ReferenceProofs } from "./reference-origins.ts";
 import { walkImpact, type Walk } from "./walk.ts";
 import type { ImportOrigins, ImportOriginsReader } from "../../ports/import-origins.port.ts";
-import { isBoundOutside } from "../../domain/impact/edge-policy.ts";
+import { createEdgeTargets, type EdgeTargets, type EdgeTargetsDeps } from "./edge-targets.ts";
 import type { ContractRoutes } from "../../ports/contract-routes.port.ts";
 import { containmentTree } from "../navigation/containment-tree.ts";
 import { prepareCommit } from "../snapshot/prepared-snapshot.ts";
@@ -158,7 +158,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
           if (signal?.aborted) return ABORTED;
           const unmodelled = await unmodelledIn(deps, headTree, [...changes.map(({ path }) => path), ...requested.map(({ file }) => file)]);
           if (signal?.aborted) return ABORTED;
-          const read = await impactOf({ store, changes, requested, componentsByResource, found, fields, locals, memberUses, loads, headTree, summary, unresolved, budget: request.budget ?? {}, proofs, unmodelled, origins, signal });
+          const read = await impactOf({ store, changes, requested, componentsByResource, found, fields, locals, memberUses, loads, headTree, summary, unresolved, budget: request.budget ?? {}, proofs, unmodelled, origins, modules: deps.moduleDependencies === undefined ? undefined : { reader: deps.moduleDependencies, sources: headTree.sources }, signal });
           if (signal?.aborted) return ABORTED;
           return { ok: true, value: impactFact(head.base(content, true), read.value, [...fixed, ...read.cuts]) };
         } finally {
@@ -191,7 +191,9 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
           const references = store.unresolvedReferences(written);
           const modules = deps.moduleDependencies === undefined ? undefined : await moduleDependenciesOf(deps.moduleDependencies, head.prepared, headTree, request.signal);
           if (request.signal?.aborted) return ABORTED;
-          const read = readImporters(store, covered, references, modules);
+          const origins = deps.importOrigins?.(headTree.sources);
+          const read = await readImporters(store, covered, references, modules, origins === undefined ? undefined : createEdgeTargets({ origins, store, modules }), request.signal);
+          if (request.signal?.aborted) return ABORTED;
           const moduleOnly = new Set(modules?.files.filter((file) => file.moduleOnly).map((file) => file.file));
           const loadPlaces = await deps.dynamicLoads.extract(headTree.sources);
           if (request.signal?.aborted) return ABORTED;
@@ -395,7 +397,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
       });
       const unmodelled = await unmodelledIn(deps, headTree, validatedChanges.filter((file) => !file.deleted).map(({ path }) => path));
       if (signal?.aborted) return ABORTED;
-      const read = await impactOf({ store, changes: validatedChanges, requested: [], componentsByResource, found, fields, locals, memberUses, loads, headTree, summary, unresolved, budget: request.budget ?? {}, proofs, unmodelled, origins, signal });
+      const read = await impactOf({ store, changes: validatedChanges, requested: [], componentsByResource, found, fields, locals, memberUses, loads, headTree, summary, unresolved, budget: request.budget ?? {}, proofs, unmodelled, origins, modules: deps.moduleDependencies === undefined ? undefined : { reader: deps.moduleDependencies, sources: headTree.sources }, signal });
       if (signal?.aborted) return ABORTED;
       return { ok: true, value: impactFact(head.base(content, true), { ...value, ...read.value }, [...unaccounted([...fixed, ...read.cuts]), ...moduleCuts]) };
     } finally {
@@ -443,7 +445,7 @@ function rangeChanges(targets: readonly CallersTarget[]): FileChange[] {
 
 /** The dotted paths of what a file declares that a request can seed, so a symbol that names no node tells the caller what does. */
 function candidatesOf(tree: readonly DeclarationBranch<GraphSymbol>[]): string[] {
-  return [...new Set(branchesOf(tree).filter(({ declaration }) => isSeedable(declaration)).map(declarationPath))].sort(compareText);
+  return sortedUnique(branchesOf(tree).filter(({ declaration }) => isSeedable(declaration)).map(declarationPath));
 }
 
 /** Which of `files` the graph cannot place, read from the head's own sources of those files only. */
@@ -478,6 +480,8 @@ interface WalkInput {
   proofs?: ReferenceProofs;
   /** Where the names of the head's sources are rooted; without it every edge the graph resolved is followed. */
   origins?: ImportOrigins | undefined;
+  /** The module statements that bind a name to the declaration an edge of it reaches. */
+  modules?: EdgeTargetsDeps["modules"];
   signal?: AbortSignal | undefined;
 }
 
@@ -512,8 +516,8 @@ async function impactOf(input: WalkInput): Promise<ImpactRead> {
   const requestedSymbols = new Set(asked.flatMap(({ found: nodes }) => nodes));
   const chosen = [...[...requestedSymbols].map((symbol): SelectedSeed<GraphSymbol> => ({ symbol, basis: "requested" })), ...selection.seeds.filter(({ symbol }) => !requestedSymbols.has(symbol))];
   const seeds = chosen.toSorted((a, b) => comparePosition(a.symbol, b.symbol));
-  const build = (outside: ReadonlySet<string>): InboundEdges => inboundEdgesOf(store, { relations: found, fields, locals, memberUses }, input.proofs, outside);
-  const { inbound, walk } = await walkInside(seeds.map(({ symbol }) => symbol), build, input.budget, input.origins, input.signal);
+  const build = (corrections: EdgeCorrections): InboundEdges => inboundEdgesOf(store, { relations: found, fields, locals, memberUses }, input.proofs, corrections);
+  const { inbound, walk } = await walkInside(seeds.map(({ symbol }) => symbol), build, input.budget, input.origins === undefined ? undefined : createEdgeTargets({ origins: input.origins, store, modules: input.modules }), input.signal);
 
   const walked = walk.reached.map(({ symbol }) => symbol);
   const reachedIds = new Set(walked.map((symbol) => symbol.id));
@@ -564,22 +568,47 @@ async function impactOf(input: WalkInput): Promise<ImpactRead> {
 }
 
 /**
- * Walks from the seeds without the edges whose name is rooted outside the repository. Only the edges a walk read are
- * checked; when one is dropped the walk runs again, because a bound it frees can read edges no earlier walk read.
+ * Walks from the seeds with the edges as `EdgeTargets` judges them: the edges each walk read, and the edges an import
+ * proves reach a symbol it reached. When a verdict changes what a symbol depends on, the walk runs again, because a bound
+ * it frees, or an edge it moves, can read edges no earlier walk read.
  */
-async function walkInside(seeds: readonly GraphSymbol[], build: (outside: ReadonlySet<string>) => InboundEdges, budget: ImpactBudget, origins?: ImportOrigins, signal?: AbortSignal): Promise<{ inbound: InboundEdges; walk: Walk }> {
-  const outside = new Set<string>();
+async function walkInside(seeds: readonly GraphSymbol[], build: (corrections: EdgeCorrections) => InboundEdges, budget: ImpactBudget, targets?: EdgeTargets, signal?: AbortSignal): Promise<{ inbound: InboundEdges; walk: Walk }> {
+  const dropped = new Set<string>();
+  const into = new Map<GraphNodeId, Map<string, FollowedEdge>>();
   const checked = new Set<string>();
+  const probed = new Set<GraphNodeId>();
+  const moveTo = (to: GraphSymbol, followed: FollowedEdge): boolean => {
+    const held = into.get(to.id) ?? new Map<string, FollowedEdge>();
+    into.set(to.id, held);
+    if (held.has(edgeKey(followed.edge))) return false;
+    held.set(edgeKey(followed.edge), { ...followed, target: to });
+    return true;
+  };
   for (;;) {
-    const inbound = build(outside);
+    const inbound = build({ dropped, into: new Map([...into].map(([id, edges]) => [id, [...edges.values()]])) });
     const walk = walkImpact(seeds, inbound, budget);
-    const fresh = inbound.followed().filter(({ edge }) => edge.line !== null && edge.column !== null && !checked.has(edgeKey(edge)));
-    if (origins === undefined || fresh.length === 0 || signal?.aborted) return { inbound, walk };
+    if (targets === undefined || signal?.aborted) return { inbound, walk };
+    const fresh = inbound.followed().filter(({ edge }) => !checked.has(edgeKey(edge)));
+    const reached = [...seeds, ...walk.reached.map(({ symbol }) => symbol)].filter((symbol) => !probed.has(symbol.id));
+    if (fresh.length === 0 && reached.length === 0) return { inbound, walk };
     for (const { edge } of fresh) checked.add(edgeKey(edge));
-    const roots = await origins.rootOrigins(fresh.map(({ edge, source, target }) => ({ file: source.file, line: edge.line!, column: edge.column! + 1, kind: edge.kind, name: target.name })), signal);
-    const dropped = fresh.filter((_, index) => roots[index] !== undefined && isBoundOutside(roots[index]!));
-    if (dropped.length === 0) return { inbound, walk };
-    for (const { edge } of dropped) outside.add(edgeKey(edge));
+    for (const symbol of reached) probed.add(symbol.id);
+    let changed = false;
+    const verdicts = await targets.verdictsOf(fresh, signal);
+    for (const [index, followed] of fresh.entries()) {
+      const verdict = verdicts[index]!;
+      if (verdict.kind === "keep") continue;
+      dropped.add(edgeKey(followed.edge));
+      changed = true;
+      if (verdict.kind === "redirect") moveTo(verdict.to, followed);
+    }
+    for (const symbol of reached) {
+      for (const followed of await targets.redirectedInto(symbol, signal)) {
+        dropped.add(edgeKey(followed.edge));
+        if (moveTo(symbol, followed)) changed = true;
+      }
+    }
+    if (!changed) return { inbound, walk };
   }
 }
 

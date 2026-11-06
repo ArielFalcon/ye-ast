@@ -60,7 +60,7 @@ export function createOutlineQueries(deps: OutlineQueriesDeps): OutlineQueries {
           const focused = focus === undefined ? undefined : readFocus(store, focus.filter(({ file }) => isReadableFile(file)));
           if (focused !== undefined && focused.unknown.length > 0) return { ok: false, fault: { kind: "unknown-symbol", detail: `no declaration at the revision for ${focused.unknown.map(({ file, symbol }) => `${file}:${symbol}`).join(", ")}${unmodelledNote(focused.unknown, unmodelled)}`, entries: focused.unknown } };
           if (focused !== undefined && focused.topLevel.length > 0) return { ok: false, fault: { kind: "top-level-line", detail: `no declaration holds ${focused.topLevel.map(({ file, line }) => `${file}:${line}`).join(", ")}; the line is at the top level of its file`, entries: focused.topLevel } };
-          const listed = focused === undefined ? readOutline(store, covered, await readModules(deps.moduleReaders, sources ?? [], covered)) : undefined;
+          const listed = focused === undefined ? readOutline(store, covered, await readModules(deps.moduleReaders, sources, covered)) : undefined;
           if (request.signal?.aborted) return ABORTED;
           const read = focused?.value ?? listed!.value;
           const cuts = [

@@ -1,5 +1,5 @@
 import ts from "typescript";
-import { isPackageManifest, isTypeScriptFile } from "../../domain/languages/typescript.ts";
+import { isTypeScriptFile } from "../../domain/languages/typescript.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
 import type { ModuleDependencies, ModuleDependency, ModuleSource, UntraversedReference } from "../../domain/impact/module-dependency.ts";
 import type { ModuleTarget } from "../../domain/shared/module-target.ts";
@@ -19,7 +19,7 @@ export function createModuleDependenciesReader(): ModuleDependenciesReader {
       const selected = options?.files === undefined ? undefined : new Set(options.files);
       const held = new Map(sources.map((source) => [source.path, source]));
       const texts = new Map(sources.map(({ path, content }) => [path, content]));
-      const packages = manifestPackages(sources.filter(({ path }) => isPackageManifest(path)).map(({ content }) => content));
+      const packages = manifestPackages(sources);
       const resolver = createModuleResolver(async (file) => texts.get(file), packages, { jsonModules: true });
       const parse = (file: string): ts.SourceFile => sourceTree(held.get(file)!, ts.ScriptTarget.Latest, false, ts.ScriptKind.TS);
       const files: ModuleSource[] = [];

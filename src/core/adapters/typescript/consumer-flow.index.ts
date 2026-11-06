@@ -1,5 +1,5 @@
 import ts from "typescript";
-import { isPackageManifest, isTypeScriptSource } from "../../domain/languages/typescript.ts";
+import { isTypeScriptSource } from "../../domain/languages/typescript.ts";
 import type { Evidence } from "../../domain/shared/fact.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import { readAngularRouteFile, type RawImport } from "./angular-router.extractor.ts";
@@ -45,7 +45,7 @@ export const resolverKey = (file: string, symbol: string, line: number): string 
 
 export async function buildProgram(files: readonly SourceFile[]): Promise<Program> {
   const texts = new Map(files.map((file) => [file.path, file.content]));
-  const modules = createModuleResolver(async (file) => texts.get(file), manifestPackages(files.filter((file) => isPackageManifest(file.path)).map((file) => file.content)));
+  const modules = createModuleResolver(async (file) => texts.get(file), manifestPackages(files));
   const units = new Map<string, Unit>();
   const shapes = new Map<string, NonNullable<ReturnType<typeof readAngularRouteFile>>>();
   for (const file of files.filter((candidate) => isTypeScriptSource(candidate.path))) {

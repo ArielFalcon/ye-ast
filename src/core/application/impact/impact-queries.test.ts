@@ -1747,3 +1747,33 @@ test("a cancelled module dependencies read publishes no output", async () => {
   assert.ok((await setup({ ...base, moduleDependencies: modulesCounted(counter) }).importers(files)).ok);
   assert.equal(counter.calls, 2);
 });
+
+test("importers judge only the edges from other files, with the module statements the query already read", async () => {
+  const judged: string[] = [];
+  let extractions = 0;
+  const importOrigins: ImportOriginsReader = () => ({
+    origins: async (sites) => sites.map((site) => originFinding(site, undefined)),
+    rootOrigins: async (sites) => {
+      judged.push(...sites.map((site) => site.file));
+      return sites.map((site) => ({ ...originFinding(site, { kind: "repository", file: "src/Order.java" }), bare: true as const }));
+    },
+  });
+  const moduleDependencies: ModuleDependenciesReader = { extract: async () => { extractions++; return { files: [], dependencies: [], unread: [] }; } };
+  const { importers } = setup({
+    nodes: SHOP_NODES,
+    edges: [
+      { from: "Order", to: "Order", kind: "references", line: 5, column: 2 },
+      { from: "file:Order", to: "Order", kind: "references", line: 6, column: 2 },
+      { from: "Svc", to: "Order", kind: "references", line: 7, column: 2 },
+    ],
+    exports: { [HEAD]: SHOP_EXPORT },
+    importOrigins,
+    moduleDependencies,
+  });
+
+  const answer = importersFact(await importers({ files: ["src/Order.java"] }));
+
+  assert.deepEqual(answer.status !== "unknown" && answer.value.files.map(({ users }) => users), [["src/Svc.java"]]);
+  assert.deepEqual(judged, ["src/Svc.java"]);
+  assert.equal(extractions, 1);
+});
