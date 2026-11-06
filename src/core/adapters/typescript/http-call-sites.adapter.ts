@@ -52,6 +52,12 @@ type RunTime = ReadonlySet<string>;
  */
 type Evaluation = { readonly kind: "text"; readonly text: string; readonly cut?: true } | { readonly kind: "value" };
 
+/** A method a class declares, with the file that declares it. */
+interface HeldMethod {
+  shape: FileShape;
+  method: ts.MethodDeclaration | ts.ArrowFunction | ts.FunctionExpression;
+}
+
 /** A type name as a file writes it: the file's imports decide which class it names. */
 interface TypeNamed {
   name: string;
@@ -341,6 +347,21 @@ function forwardsAsTail(node: ts.Node, member: ts.Node, parameters: ReadonlySet<
   });
 }
 
+function memberNamed(declaration: ts.ClassDeclaration, name: string): ts.ClassElement | undefined {
+  return declaration.members.find((member) => member.name !== undefined && ts.isIdentifier(member.name) && member.name.text === name);
+}
+
+/** Whether a function reads one of its own parameters anywhere in its body. */
+function readsOwnParameters(method: ts.SignatureDeclaration): boolean {
+  const parameters = parameterNames(method.parameters);
+  if (parameters.size === 0) return false;
+  const visit = (node: ts.Node): boolean => {
+    if (ts.isIdentifier(node) && parameters.has(node.text) && !(ts.isPropertyAccessExpression(node.parent) && node.parent.name === node) && !(ts.isPropertyAssignment(node.parent) && node.parent.name === node)) return true;
+    return ts.forEachChild(node, visit) === true;
+  };
+  return "body" in method && method.body !== undefined && visit(method.body);
+}
+
 /** The function a class member is: a method, or a property initialized with an arrow or a function expression. */
 function functionOf(member: ts.Node): ts.MethodDeclaration | ts.ArrowFunction | ts.FunctionExpression | undefined {
   if (ts.isMethodDeclaration(member)) return member;
@@ -447,7 +468,7 @@ interface ReadTarget {
 class Reader {
   private readonly unsafeEncoder: boolean;
   /** The classes of the snapshot that extend a class, by the name they extend. */
-  private readonly subclasses = new Map<string, ts.ClassDeclaration[]>();
+  private readonly subclasses = new Map<string, { shape: FileShape; declaration: ts.ClassDeclaration }[]>();
 
   constructor(
     private readonly shapes: ReadonlyMap<string, FileShape>,
@@ -459,7 +480,7 @@ class Reader {
     for (const shape of shapes.values()) {
       for (const declaration of shape.classes.values()) {
         const base = baseClassName(declaration);
-        if (base !== undefined) this.subclasses.set(base, [...(this.subclasses.get(base) ?? []), declaration]);
+        if (base !== undefined) this.subclasses.set(base, [...(this.subclasses.get(base) ?? []), { shape, declaration }]);
       }
     }
   }
@@ -660,7 +681,7 @@ class Reader {
   private async evaluateName(shape: FileShape, name: string, scope: Scope, trail: ReadonlySet<string>): Promise<Evaluation | undefined> {
     const local = scope.locals.get(name);
     if (local !== undefined) {
-      const visited = `${shape.source.fileName}\0local ${name}`;
+      const visited = `${shape.source.fileName}\0local ${local.pos}`;
       if (trail.has(visited)) return undefined;
       const declared = lexicalScope(local);
       const initial = (await this.evaluate(shape, local, declared, new Set(trail).add(visited))) ?? (readsRunTime(local, declared) ? RUN_TIME_VALUE : undefined);
@@ -792,7 +813,7 @@ class Reader {
     if (visited.has(declaration)) return false;
     visited.add(declaration);
     const subclasses = declaration.name === undefined ? [] : (this.subclasses.get(declaration.name.text) ?? []);
-    return subclasses.some((subclass) => subclass.members.some((member) => member.name !== undefined && ts.isIdentifier(member.name) && member.name.text === name) || writes(subclass, name) || this.assignedBelow(subclass, name, visited));
+    return subclasses.some(({ declaration: subclass }) => memberNamed(subclass, name) !== undefined || writes(subclass, name) || this.assignedBelow(subclass, name, visited));
   }
 
   /** The class a name states in this file, or the one an import names. */
@@ -822,6 +843,7 @@ class Reader {
   /** A function the call names, evaluated at its one returned expression: its own parameters are the run-time values. */
   private async evaluateCall(shape: FileShape, call: ts.CallExpression, scope: Scope, trail: ReadonlySet<string>): Promise<Evaluation | undefined> {
     if (ts.isPropertyAccessExpression(call.expression) && call.expression.name.text === "toString") return this.scalarText(shape, call.arguments.length === 0 ? [call.expression.expression] : [], scope, trail);
+    if (ts.isPropertyAccessExpression(call.expression)) return this.evaluateMethod(shape, call.expression, trail);
     if (!ts.isIdentifier(call.expression)) return undefined;
     if (scope.names.has(call.expression.text)) return undefined;
     if (call.expression.text === "String" && isGlobalName(shape, scope, "String")) return this.scalarText(shape, call.arguments, scope, trail);
@@ -868,8 +890,68 @@ class Reader {
   }
 
   /** What a call writes: what every return of the function it names writes, undefined when one is undecided or two disagree. */
-  private async evaluateReturned(target: FileShape, declaration: ts.Expression | ts.FunctionDeclaration, trail: ReadonlySet<string>): Promise<Evaluation | undefined> {
-    if (!ts.isFunctionDeclaration(declaration) && !ts.isArrowFunction(declaration) && !ts.isFunctionExpression(declaration)) return this.evaluate(target, declaration, NO_SCOPE, trail);
+  /**
+   * What a method call writes: what the method of the receiver's class, or the one it inherits, returns, and every
+   * override a subclass declares must write the same; `super` calls only the inherited one. A method that reads its own
+   * parameters is not read, since its arguments are not substituted.
+   */
+  private async evaluateMethod(shape: FileShape, callee: ts.PropertyAccessExpression, trail: ReadonlySet<string>): Promise<Evaluation | undefined> {
+    const receiver = await this.receiverClass(shape, callee.expression);
+    if (receiver === undefined) return undefined;
+    const inherited = await this.inheritedMethod(receiver.shape, receiver.declaration, callee.name.text, new Set());
+    if (inherited === undefined) return undefined;
+    const overrides = receiver.virtual ? this.overrides(receiver.declaration, callee.name.text, new Set()) : [];
+    let agreed: Evaluation | undefined;
+    for (const { shape: held, method } of [inherited, ...overrides]) {
+      const visited = `${held.source.fileName}\0method ${method.pos}`;
+      if (trail.has(visited) || readsOwnParameters(method)) return undefined;
+      const value = await this.evaluateReturned(held, method, new Set(trail).add(visited));
+      if (value === undefined || (agreed !== undefined && (value.kind !== agreed.kind || written(value) !== written(agreed)))) return undefined;
+      agreed = value;
+    }
+    return agreed;
+  }
+
+  /** The class a method call's receiver is an instance of; `virtual` unless the call is a `super` call. */
+  private async receiverClass(shape: FileShape, receiver: ts.Expression): Promise<{ shape: FileShape; declaration: ts.ClassDeclaration; virtual: boolean } | undefined> {
+    const enclosing = enclosingClassOf(receiver);
+    if (receiver.kind === ts.SyntaxKind.ThisKeyword) return enclosing === undefined ? undefined : { shape, declaration: enclosing, virtual: true };
+    if (receiver.kind === ts.SyntaxKind.SuperKeyword) {
+      const base = enclosing === undefined ? undefined : baseClassName(enclosing);
+      const found = base === undefined ? undefined : await this.classOf(shape, base);
+      return found === undefined ? undefined : { ...found, virtual: false };
+    }
+    const named = await this.ownerClass(shape, receiver);
+    const found = named === undefined ? undefined : await this.classOf(named.shape, named.name);
+    return found === undefined ? undefined : { ...found, virtual: true };
+  }
+
+  private async inheritedMethod(shape: FileShape, declaration: ts.ClassDeclaration, name: string, visited: Set<ts.ClassDeclaration>): Promise<HeldMethod | undefined> {
+    if (visited.has(declaration)) return undefined;
+    visited.add(declaration);
+    const member = memberNamed(declaration, name);
+    if (member !== undefined) {
+      const method = functionOf(member);
+      return method === undefined ? undefined : { shape, method };
+    }
+    const base = baseClassName(declaration);
+    const found = base === undefined ? undefined : await this.classOf(shape, base);
+    return found === undefined ? undefined : this.inheritedMethod(found.shape, found.declaration, name, visited);
+  }
+
+  /** The methods of that name the subclasses of a class declare, at any depth. */
+  private overrides(declaration: ts.ClassDeclaration, name: string, visited: Set<ts.ClassDeclaration>): HeldMethod[] {
+    if (visited.has(declaration) || declaration.name === undefined) return [];
+    visited.add(declaration);
+    return (this.subclasses.get(declaration.name.text) ?? []).flatMap(({ shape, declaration: subclass }) => {
+      const member = memberNamed(subclass, name);
+      const method = member === undefined ? undefined : functionOf(member);
+      return [...(method === undefined ? [] : [{ shape, method }]), ...this.overrides(subclass, name, visited)];
+    });
+  }
+
+  private async evaluateReturned(target: FileShape, declaration: ts.Expression | ts.FunctionDeclaration | ts.MethodDeclaration, trail: ReadonlySet<string>): Promise<Evaluation | undefined> {
+    if (!ts.isFunctionDeclaration(declaration) && !ts.isMethodDeclaration(declaration) && !ts.isArrowFunction(declaration) && !ts.isFunctionExpression(declaration)) return this.evaluate(target, declaration, NO_SCOPE, trail);
     let agreed: Evaluation | undefined;
     for (const returned of returnsOf(declaration)) {
       const value = returned === undefined ? undefined : await this.evaluate(target, returned, lexicalScope(returned), trail);

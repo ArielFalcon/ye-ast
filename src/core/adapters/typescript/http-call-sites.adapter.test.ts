@@ -322,7 +322,7 @@ test("a path part that names a static member is the value its initializer states
 test("a field whose initializer the snapshot does not decide keeps the path undecided", async () => {
   const service = source(
     "src/app/order/order.service.ts",
-    ["import { HttpClient } from '@angular/common/http'", "import { inject } from '@angular/core'", "export class OrderService {", "  private readonly base = this.pick()", "  private readonly http = inject(HttpClient)", "  private pick(): string { return 'shop-api' }", "  load(): void {", "    this.http.get(`${this.base}/orders`)", "  }", "}"].join("\n"),
+    ["import { HttpClient } from '@angular/common/http'", "import { inject } from '@angular/core'", "export class OrderService {", "  private readonly base = this.pick()", "  private readonly http = inject(HttpClient)", "  private pick(): string { return lookup() }", "  load(): void {", "    this.http.get(`${this.base}/orders`)", "  }", "}"].join("\n"),
   );
 
   assert.deepEqual(sites(await reader.of([service], "shop-web")), ["unknown unresolved@src/app/order/order.service.ts:8"]);
@@ -533,6 +533,37 @@ test("an httpResource whose function returns undefined requests nothing then, so
   const found = await reader.of([component("    httpResource(() => { if (!method) { return undefined } if (method === 'none') { return } return { url: '/orders', params: { method } } })")], "shop-web");
 
   assert.deepEqual(sites(found), ["GET /orders@src/app/app.component.ts:6"]);
+});
+
+test("a method called on a receiver of a class the snapshot holds is read at its returns, and every override of a subclass must agree", async () => {
+  const paging = source("src/app/paging.ts", [
+    "export class Paging { constructor(public size: number) {}",
+    "  toQuery(): string { let query = `?size=${this.size}`; if (this.size > 9) { query += '&big=1' } return query } }",
+    "export class TimePaging extends Paging { start = 0",
+    "  toQuery(): string { let query = super.toQuery(); query += `&start=${this.start}`; return query } }",
+    "export class Route { value(): string { return '/a' } }",
+    "export class OtherRoute extends Route { value(): string { return '/b' } }",
+  ].join("\n"));
+  const service = source("src/app/devices.service.ts", [
+    "import { HttpClient } from '@angular/common/http'",
+    "import { inject } from '@angular/core'",
+    "import { Paging, Route } from './paging'",
+    "export class DevicesService { private readonly http = inject(HttpClient)",
+    "  load(paging: Paging, route: Route) {",
+    "    this.http.get(`/api/devices${paging.toQuery()}`)",
+    "    this.http.get(`/api${route.value()}`)",
+    "    this.http.get(`/api/${this.area()}/devices`)",
+    "  }",
+    "  private area(): string { return 'eu' } }",
+  ].join("\n"));
+
+  assert.deepEqual(sites(await reader.of([paging, service], "shop-web")), ["GET /api/devices@src/app/devices.service.ts:6", "unknown unresolved@src/app/devices.service.ts:7", "GET /api/eu/devices@src/app/devices.service.ts:8"]);
+});
+
+test("a method that reads its own parameters is not read, so a path it builds from an argument stays undecided", async () => {
+  const file = source("helper.ts", ["import { HttpClient } from '@angular/common/http'", "class Client { constructor(private http: HttpClient) {}", "  url(path: string) { return `/items/${path}` }", "  load() { this.http.get(this.url('orders/active')) } }"].join("\n"));
+
+  assert.deepEqual(sites(await reader.of([file], "shop-web")), ["unknown unresolved@helper.ts:4"]);
 });
 
 function pathFunction(...body: string[]): { path: string; content: string } {

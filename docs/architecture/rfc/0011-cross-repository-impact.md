@@ -102,6 +102,11 @@ code around declares or imports is not the global one, and its call is no reques
 The text after the first `?` or `#` of a URL is its query or fragment, which no route serves: evaluation stops there, so
 a value the query names never leaves the path undecided. An argument of `encodeURIComponent` cut there is undecided.
 
+A method a path calls (`pageLink.toQuery()`, `this.area()`) is read when its receiver's class is in the snapshot: `this`,
+`super`, a field or a parameter whose declared type names the class. The receiver may be any subclass, so the method the
+class declares or inherits and every override a subclass declares must write the same (`super` reads only the inherited
+one). A method that reads its own parameters is not read, since its arguments are not substituted.
+
 A function a path calls, and the function an `httpResource` takes its request from, is read at every `return` of its own
 body; the functions it declares return their own. A bare `return`, and an end the body reaches without returning, return
 `undefined`. Every return must write the same path, otherwise the path is undecided, and a function that calls itself is
