@@ -743,3 +743,43 @@ test("a trace over a real index keeps a member call to a wrapped callable consta
   assert.equal(answer.value.status, "partial");
   assert.deepEqual(answer.value.status === "partial" && answer.value.cuts.map((cut) => cut.at[0]), ["src/wrapped.ts:10 x.wrappedVar", "src/wrapped.ts:11 x.asserted", "src/wrapped.ts:12 x.checked", "src/wrapped.ts:9 x.wrapped"]);
 });
+
+test("a trace over a real index never folds an interface method: it stays a step with a cut listing its implementations, or none", async () => {
+  const files: Record<string, string[]> = {
+    "Repo.java": ["public interface Repo {", "  void save(String s);", "}"],
+    "RepoImpl.java": ["public class RepoImpl implements Repo {", "  public void save(String s) {}", "  public void flush() {}", "}"],
+    "AuditRepo.java": ["public class AuditRepo implements Repo {", "  public void save(String s) {}", "}"],
+    "Port.java": ["public interface Port {", "  void send(String s);", "}"],
+    "LoudPort.java": ["public interface LoudPort extends Port {", "  void send(String s);", "}"],
+    "Service.java": [
+      "public class Service {",
+      "  private final Repo repo;",
+      "  private final Port port;",
+      "  public Service(Repo repo, Port port) { this.repo = repo; this.port = port; }",
+      "  public void create(String s) {",
+      "    repo.save(s);",
+      "    port.send(s);",
+      "  }",
+      "}",
+    ],
+  };
+  for (const [name, lines] of Object.entries(files)) writeFileSync(join(repo, "src", name), [...lines, ""].join("\n"));
+  git("add", "-A");
+  git("commit", "-q", "-m", "ports");
+  const { trace } = composeQueries({ scratchRoot });
+
+  const answer = await trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: "src/Service.java", symbol: "Service.create" }] });
+
+  assert.ok(answer.ok);
+  assert.equal(answer.value.status, "partial");
+  const { value, cuts } = answer.value.status === "partial" ? answer.value : assert.fail("a body-less callee leaves the trace partial");
+  assert.deepEqual(value.steps.map(({ symbol, file, parent, leaves }) => ({ symbol, file, parent, leaves })), [
+    { symbol: "create", file: "src/Service.java", parent: undefined, leaves: undefined },
+    { symbol: "save", file: "src/Repo.java", parent: 0, leaves: undefined },
+    { symbol: "send", file: "src/Port.java", parent: 0, leaves: undefined },
+  ]);
+  assert.deepEqual(cuts.map((cut) => [cut.kind, ...cut.at]), [
+    ["unresolved-link", "src/Port.java:2 send"],
+    ["unresolved-link", "src/Repo.java:2 save", "src/AuditRepo.java::save", "src/RepoImpl.java::save"],
+  ]);
+});

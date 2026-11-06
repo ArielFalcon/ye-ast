@@ -89,7 +89,7 @@ tree-sitter syntax tree for Java), never a type checker, and are computed once p
 | R7 | Dispatch: a step at an interface or abstract method has as `alternatives` every implementation of it in the repository (through `implements` / `extends`, the same type walk `callers` uses). The step expands in place the one implementation when there is exactly one, or the one the framework's dispatch proves (a qualifier, `@Primary`, a named bean), noting which proof chose it; with several and no proof, none is expanded and the step carries a cut |
 | R8 | Order: children in the line and column of their call; a call inside a function passed as an argument (a callback to `subscribe`, `then`, `pipe`, `effect`, a stream lambda) is marked `deferred` |
 | R9 | Roots: a symbol, a line range or an entrypoint. An HTTP route, listener or job starts at its handler. A UI route starts at its component, whose children are its constructor and field initializers, then its lifecycle hooks in the framework's order, then the handlers its template binds to events, then its template children (`uses-component` and the rest) |
-| R10 | Folding: a proven terminal step (expanded, with no children, no cut and no effect) is a leaf `{symbol, file, start, end}` of its parent, `deferred` when the parent passes it as a value; the text lists it by name on one line under its parent, and the full answer keeps its location. A step a bound stopped or with an unsettled call stays a step. External leaves are one line per parent grouped by module (`rxjs: pipe, subscribe`); nothing is dropped |
+| R10 | Folding: a proven terminal step (expanded, with no children, no cut and no effect) is a leaf `{symbol, file, start, end}` of its parent, `deferred` when the parent passes it as a value; the text lists it by name on one line under its parent, and the full answer keeps its location. A step a bound stopped or with an unsettled call stays a step, and so does a member of an interface: the index proves no body for it, so until R7 binds it it carries an `unresolved-link` cut at its declaration listing every repository implementation of its name (none when there is none). External leaves are one line per parent grouped by module (`rxjs: pipe, subscribe`); nothing is dropped |
 | R11 | A declaration already expanded appears again as `seen` with the step that expanded it; cycles end there |
 | R12 | Effects: an external leaf whose module, type and member a plugin row declares as an effect (HTTP clients, message publishers, data-access types; RFC-0007, ADR-0013) carries its kind, and its target when RFC-0011's call-site extraction resolves one |
 | R13 | Bounds and cuts as every walk: the RFC-0010 budget, unset by default; unresolved places, unbound dispatch and unreadable templates are cuts |
@@ -222,6 +222,11 @@ Findings:
    Reproduction: `Service.create(s) { repo.save(s); }` with `interface Repo { void save(String s); }` and
    `RepoImpl implements Repo` gives `complete` with one leaf at `Repo.save`. An abstract method has no body to
    expand: it is unbound dispatch (R7, R13), a step with a cut until slice 3, never a leaf (R10).
+   Fixed for interface members (R10): BA-1, BA-3 and BB-2 now answer `partial`, each interface method a step with a cut
+   listing its implementations (`ClinicServiceImpl`, `MyBatisArticleRepository`), and the generated mappers a cut that
+   lists none. The index carries no signal for an `abstract` method of an abstract class: codegraph records it as a
+   plain `method` with `is_abstract` unset and a signature without modifiers, and indexes no node for a TypeScript
+   `abstract` method, so a call to an abstract method of an abstract class is not yet recognized as dispatch.
 2. **A call to an object-literal method is shown as external.** The index holds no node for a method written in an
    object literal (`withMethods((store) => ({ setErrors(…) {…} }))`), so no in-scope declaration has the name, the
    type-only rule holds vacuously, and `formErrorsStore.setErrors` becomes an `unnamed` external of FB-4. Reproduction:

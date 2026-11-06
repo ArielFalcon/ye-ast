@@ -88,6 +88,20 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
     kind: "unresolved-link",
     at: [placeAt(reference.file, reference.line, reference.name), ...sortedUnique([...reference.candidates, ...declarations.map(anchorOf)])],
   });
+  /**
+   * A member of an interface has no body the index proves: it runs whatever implementation dispatch picks. Until R7
+   * binds it, it is a cut at its declaration listing every repository implementation of that name, or none.
+   */
+  const unboundDispatch = (symbol: GraphSymbol): Cut | undefined => {
+    const interfaces = navigation.ownersOf(symbol).filter((owner) => owner.kind === "interface");
+    if (interfaces.length === 0) return undefined;
+    const implementations = interfaces
+      .flatMap((owner) => navigation.typesAround(owner, "down"))
+      .filter(({ type }) => type.kind !== "interface")
+      .flatMap(({ type }) => navigation.methodsOf(type))
+      .filter((method) => method.name === symbol.name);
+    return { kind: "unresolved-link", at: [placeAt(symbol.file, symbol.startLine, symbol.name), ...sortedUnique(implementations.map(anchorOf))] };
+  };
   const childAt = (symbol: GraphSymbol, line: number | null, column: number | null, spelling: string, via: TraceVia, deferred?: true): Child => ({
     symbol,
     place: { line, column, spelling, target: symbol.id },
@@ -169,6 +183,8 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
     expandedAt.set(symbol.id, step);
     step.expanded = true;
     const body = await bodyOf(symbol);
+    const dispatch = unboundDispatch(symbol);
+    if (dispatch !== undefined) body.cuts.push(dispatch);
     step.external = body.external;
     step.unsettled = body.cuts.length > 0;
     cuts.push(...body.cuts);
