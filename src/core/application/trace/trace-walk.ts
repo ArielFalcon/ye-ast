@@ -1,4 +1,5 @@
-import { CALL_EDGE_KINDS, isIgnoredEdge } from "../../domain/impact/edge-policy.ts";
+import { isSeedable } from "../../domain/change/seeds.ts";
+import { CALL_EDGE_KINDS, FIELD_KINDS, isIgnoredEdge } from "../../domain/impact/edge-policy.ts";
 import { declarationAnchor, placeAt, referenceKey } from "../../domain/impact/impact-cuts.ts";
 import { NOT_DECLARED_KINDS, sortedUnique } from "../../domain/impact/importers-fact.ts";
 import type { Cut } from "../../domain/shared/fact.ts";
@@ -15,6 +16,21 @@ const DEFERRED_KINDS: readonly string[] = ["function", "method"];
 
 /** Kinds that name a type and never a value, so a call through a member of that name cannot reach them. */
 const TYPE_ONLY_KINDS: readonly string[] = ["interface", "type_alias"];
+
+/** Types whose methods have bodies, so a root of one of them runs what its members run. */
+const CLASS_KINDS: readonly string[] = ["class", "component"];
+
+/** What a trace can start from: what an impact walk seeds, or a property or field whose initializer makes calls. */
+export function isTraceRoot(store: CodeGraphReader): (symbol: GraphSymbol) => boolean {
+  return (symbol) =>
+    isSeedable(symbol) ||
+    ((FIELD_KINDS as readonly string[]).includes(symbol.kind) &&
+      (callEdgesOf(store, symbol).length > 0 || store.unresolvedReferences([symbol.file]).some((reference) => reference.from === symbol.id && CALL_EDGE_KINDS.includes(reference.kind))));
+}
+
+function callEdgesOf(store: CodeGraphReader, symbol: GraphSymbol) {
+  return store.outgoingEdges([symbol.id], CALL_EDGE_KINDS).filter((edge) => !isIgnoredEdge(edge));
+}
 
 export interface TraceWalkInput {
   store: CodeGraphReader;
@@ -109,11 +125,22 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
     ...(deferred === undefined ? {} : { deferred }),
   });
 
-  async function bodyOf(node: GraphSymbol): Promise<Body> {
-    const calls = store.outgoingEdges([node.id], CALL_EDGE_KINDS).filter((edge) => !isIgnoredEdge(edge));
+  /** The members of a class root that run code, by their declaration: methods, and properties or fields whose initializer makes calls. */
+  const membersOf = (node: GraphSymbol): Child[] => {
+    if (!CLASS_KINDS.includes(node.kind)) return [];
+    const contains = store.outgoingEdges([node.id], ["contains"]);
+    navigation.load(contains.map((edge) => edge.target));
+    return contains
+      .flatMap((edge) => navigation.symbolOf(edge.target) ?? [])
+      .filter((member) => member.kind === "method" || ((FIELD_KINDS as readonly string[]).includes(member.kind) && (callEdgesOf(store, member).length > 0 || callsFrom(member).length > 0)))
+      .map((member) => childAt(member, member.startLine, null, member.name, "member"));
+  };
+
+  async function bodyOf(node: GraphSymbol, root: boolean): Promise<Body> {
+    const calls = callEdgesOf(store, node);
     const values = store.outgoingEdges([node.id], ["references"]);
     navigation.load([...calls, ...values].map((edge) => edge.target));
-    const children: Child[] = [];
+    const children: Child[] = root ? membersOf(node) : [];
     const resolved: EdgeOccurrence[] = [];
     for (const edge of calls) {
       const target = navigation.symbolOf(edge.target);
@@ -182,7 +209,7 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
     expansions += 1;
     expandedAt.set(symbol.id, step);
     step.expanded = true;
-    const body = await bodyOf(symbol);
+    const body = await bodyOf(symbol, depth === 0);
     const dispatch = unboundDispatch(symbol);
     if (dispatch !== undefined) body.cuts.push(dispatch);
     step.external = body.external;
@@ -191,7 +218,7 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
     for (const child of body.children) {
       const { line, column } = child.place;
       const walked = stepOf(child.symbol, {
-        ...(line === null ? {} : { at: { line, ...(column === null ? {} : { column: column + 1 }) } }),
+        ...(line === null || child.via === "member" ? {} : { at: { line, ...(column === null ? {} : { column: column + 1 }) } }),
         via: child.via,
         ...(child.deferred === undefined ? {} : { deferred: child.deferred }),
       });

@@ -88,7 +88,7 @@ tree-sitter syntax tree for Java), never a type checker, and are computed once p
 |---|---|
 | R7 | Dispatch: a step at an interface or abstract method has as `alternatives` every implementation of it in the repository (through `implements` / `extends`, the same type walk `callers` uses). The step expands in place the one implementation when there is exactly one, or the one the framework's dispatch proves (a qualifier, `@Primary`, a named bean), noting which proof chose it; with several and no proof, none is expanded and the step carries a cut |
 | R8 | Order: children in the line and column of their call; a call inside a function passed as an argument (a callback to `subscribe`, `then`, `pipe`, `effect`, a stream lambda) is marked `deferred` |
-| R9 | Roots: a symbol, a line range or an entrypoint. An HTTP route, listener or job starts at its handler. A UI route starts at its component, whose children are its constructor and field initializers, then its lifecycle hooks in the framework's order, then the handlers its template binds to events, then its template children (`uses-component` and the rest) |
+| R9 | Roots: a symbol, a line range or an entrypoint. An HTTP route, listener or job starts at its handler. A UI route starts at its component, whose children are its constructor and field initializers, then its lifecycle hooks in the framework's order, then the handlers its template binds to events, then its template children (`uses-component` and the rest). A property or field whose initializer makes calls is a root by symbol or by a range inside it, and a class root's children are its members that have a body or an initializer that makes calls, in source order, reached `via: "member"`; `callers` and `impact` seed as before |
 | R10 | Folding: a proven terminal step (expanded, with no children, no cut and no effect) is a leaf `{symbol, file, start, end}` of its parent, `deferred` when the parent passes it as a value; the text lists it by name on one line under its parent, and the full answer keeps its location. A step a bound stopped or with an unsettled call stays a step, and so does a member of an interface: the index proves no body for it, so until R7 binds it it carries an `unresolved-link` cut at its declaration listing every repository implementation of its name (none when there is none). External leaves are one line per parent grouped by module (`rxjs: pipe, subscribe`); nothing is dropped |
 | R11 | A declaration already expanded appears again as `seen` with the step that expanded it; cycles end there |
 | R12 | Effects: an external leaf whose module, type and member a plugin row declares as an effect (HTTP clients, message publishers, data-access types; RFC-0007, ADR-0013) carries its kind, and its target when RFC-0011's call-site extraction resolves one |
@@ -109,7 +109,7 @@ interface TraceStep {
   id: number; parent?: number; depth: number;
   file: string; symbol: string; kind: string; line: number; endLine?: number;
   at?: { line: number; column?: number };          // the call in the parent
-  via?: "call" | "own-member" | "reference";
+  via?: "call" | "own-member" | "reference" | "member";
   deferred?: true;
   seen?: number;
   leaves?: { symbol: string; file: string; start: number; end: number; deferred?: true }[];   // folded (R10)
@@ -237,7 +237,10 @@ Findings:
    (`readonly ownerForm = form(model, schema, { submission: { action: async () => … } })`) is a property, which no
    request can seed. A range over the action seeds the class, and a class root answers `complete` with no calls,
    although the index records the property's `calls` edges. An arrow function assigned to a property directly is indexed
-   as a method and traces correctly.
+   as a method and traces correctly. Fixed (R9): the property is a root by symbol or by the range, and answers `partial`
+   with `form`, `firstValueFrom` and `String` external, `gotoOwnersList` folded and one cut, the R3 call
+   `this.ownerService.addOwner`; the class root expands into its six members that run code, `via: "member"`: five
+   steps and `gotoOwnersList` folded.
 
 Usefulness. A trace pays off where it crosses several declarations: BA-2, BB-3, BB-4, BB-5 and FB-4 hand over 3 to 9
 ranges (19 to 116 lines) in reading order, with folded leaves and grouped externals, for 1.0 to 1.6 KB of summary

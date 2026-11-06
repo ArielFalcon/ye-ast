@@ -1,5 +1,8 @@
-/** How a step was reached from its parent's body: a resolved call or instantiation, `this.<member>`, or a function passed as a value. */
-export type TraceVia = "call" | "own-member" | "reference";
+/**
+ * How a step was reached from its parent: a resolved call or instantiation, `this.<member>`, a function passed as a
+ * value, or a member of a class root that has a body or an initializer that makes calls.
+ */
+export type TraceVia = "call" | "own-member" | "reference" | "member";
 
 /** A proven terminal declaration folded under the step that calls or passes it: expanded, with no call, external call or cut. */
 export interface TraceLeaf {
@@ -26,7 +29,7 @@ export interface TraceStep {
   kind: string;
   line: number;
   endLine?: number;
-  /** The call in the parent's body; absent on a root, and the column when the store places one (1-based). */
+  /** The call in the parent's body; absent on a root and on a member, and the column when the store places one (1-based). */
   at?: { line: number; column?: number };
   via?: TraceVia;
   /** The body passes the declaration as a value: it runs later, if at all. */

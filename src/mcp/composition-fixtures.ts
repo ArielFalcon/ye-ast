@@ -204,6 +204,7 @@ export function traceValue(): TraceValue {
       { id: 2, parent: 0, depth: 1, file: "src/Audit.java", symbol: "audit", kind: "method", line: 3, at: { line: 8 }, via: "reference", deferred: true },
       { id: 3, parent: 0, depth: 1, file: "src/OrderService.java", symbol: "find", kind: "method", line: 31, endLine: 38, at: { line: 9, column: 4 }, via: "own-member", seen: 1 },
       { id: 4, depth: 0, file: "src/OrderController.java", symbol: "drop", kind: "method", line: 30, endLine: 33 },
+      { id: 5, parent: 4, depth: 1, file: "src/OrderController.java", symbol: "one", kind: "method", line: 6, endLine: 9, via: "member", seen: 0 },
     ],
     readingPlan: {
       ranges: [

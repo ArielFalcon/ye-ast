@@ -16,7 +16,7 @@ const digest = { of: (text: string) => createHash("sha256").update(text).digest(
 const ALL = [
   sourceFixture("entrypoints"), sourceFixture("impact-local"), sourceFixture("callers-local"), sourceFixture("importers"),
   sourceFixture("outline"), sourceFixture("workspace"), sourceFixture("decisions"), sourceFixture("impact-workspace"),
-  sourceFixture("callers-workspace"),
+  sourceFixture("callers-workspace"), sourceFixture("trace"),
 ];
 
 const ownerOf = (owner: ReadOwner): CutOwner => (owner.kind === "read" ? { kind: "read", repo: owner.repo, index: owner.index } : owner);
@@ -66,11 +66,12 @@ test("full and receipt of every family and workspace branch pass the runtime sch
   for (const source of ALL) assert.equal(runtime(composeFull(resultOf([source]))), true, source.family);
 });
 
-test("full keeps every table and all 24 part kinds; graph.sources appears once with request indices", () => {
+test("full keeps every table and all 28 part kinds; graph.sources appears once with request indices", () => {
   const kinds: readonly PartKind[] = [
     "entrypoint", "unknown-finding", "seed", "symbol-reach", "entrypoint-reach", "entrypoint-change", "contract-change", "module-origin", "module-reach",
     "file-dependency", "file-query", "outline-declaration", "outline-file", "unheld-file", "outward-name", "name-candidate", "call-site",
     "unresolved-call-site", "unlinked-call-site", "workspace-link", "workspace-context", "decision", "impact-context", "walk-cost",
+    "trace-step", "trace-root", "reading-range", "trace-totals",
   ];
   const parsed = COMPOSE_OUTPUT.parse(full);
   assert.equal(parsed.kind, "composition");

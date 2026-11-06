@@ -469,7 +469,7 @@ test("a proven outline binding anchors the declaration it reaches, so compose ca
 test("a trace anchors each step and each leaf at its declaration, on the anchor an outline of the same declaration uses", () => {
   const t = new Tables(normalizeSource(sourceFixture("trace"), digest));
   const steps = t.list("/value/steps", "trace-step");
-  assert.deepEqual(steps.map((s) => [s.step, s.parent, t.handler(s.anchor).symbol]), [[0, undefined, "one"], [1, 0, "find"], [2, 0, "audit"], [3, 0, "find"], [4, undefined, "drop"]]);
+  assert.deepEqual(steps.map((s) => [s.step, s.parent, t.handler(s.anchor).symbol]), [[0, undefined, "one"], [1, 0, "find"], [2, 0, "audit"], [3, 0, "find"], [4, undefined, "drop"], [5, 4, "one"]]);
   assert.equal(steps[3]!.anchor, steps[1]!.anchor, "a seen step anchors where its first occurrence does");
   assert.deepEqual(steps[1]!.leaves?.map((leaf) => [leaf.anchor === steps[1]!.leaves![0]!.anchor, leaf.deferred]), [[true, undefined], [true, true], [false, undefined]]);
   const outline = new Tables(normalizeSource(sourceFixture("outline"), digest));

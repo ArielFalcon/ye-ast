@@ -17,7 +17,7 @@ import type { TraceFault, TraceQueries } from "../../ports/trace-queries.port.ts
 import { distinctTargets, evidenceOfTarget, rangeChanges, requestedRanges, selectRoots, targetKey, triviaOncePerFile, type RootSelection } from "../navigation/root-selection.ts";
 import { ABORTED } from "../snapshot/read-snapshot.ts";
 import { createHeadReader, type FactSpec, type HeadReaderDeps } from "../snapshot/head-reading.ts";
-import { walkTrace } from "./trace-walk.ts";
+import { isTraceRoot, walkTrace } from "./trace-walk.ts";
 
 export interface TraceQueriesDeps extends HeadReaderDeps {
   /** Reads where the bare names a file calls come from, so a call to a package or a language global is external. */
@@ -56,11 +56,12 @@ export function createTraceQueries(deps: TraceQueriesDeps): TraceQueries {
         const { store, summary } = index;
         try {
           const trivia = triviaOncePerFile(deps.sourceTrivia);
+          const isRoot = isTraceRoot(store);
           const selections = await Promise.all(targets.map(async (target) => ({
             target,
             selection: "start" in target
-              ? await rangeRoots(store, rangeChanges([target]), head.tree.sources, trivia)
-              : selectRoots(store, [], [target], NO_COMPONENTS),
+              ? await rangeRoots(store, rangeChanges([target]), head.tree.sources, trivia, isRoot)
+              : selectRoots(store, [], [target], NO_COMPONENTS, [], isRoot),
           })));
           const missing = selections.flatMap(({ selection }) => selection.missing);
           if (missing.length > 0) return { ok: false, fault: { kind: "unknown-symbol", detail: `no symbol at the revision for ${missing.map(unknownTargetKey).join(", ")}`, entries: missing } };
@@ -92,7 +93,7 @@ export function createTraceQueries(deps: TraceQueriesDeps): TraceQueries {
   };
 }
 
-async function rangeRoots(store: CodeGraphReader, changes: readonly FileChange[], sources: readonly SourceFile[], trivia: SourceTrivia): Promise<RootSelection> {
+async function rangeRoots(store: CodeGraphReader, changes: readonly FileChange[], sources: readonly SourceFile[], trivia: SourceTrivia, isRoot: (symbol: GraphSymbol) => boolean): Promise<RootSelection> {
   const ranges = await requestedRanges(store, changes, sources, trivia);
-  return selectRoots(store, ranges.changes, [], NO_COMPONENTS, ranges.uncovered);
+  return selectRoots(store, ranges.changes, [], NO_COMPONENTS, ranges.uncovered, isRoot);
 }

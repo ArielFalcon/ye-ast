@@ -108,23 +108,24 @@ export function selectRoots(
   requested: readonly { file: string; symbol: string }[],
   componentsByResource: ReadonlyMap<string, readonly ComponentRef[]>,
   uncovered: UnknownSymbolFault["entries"] = [],
+  isRoot: (symbol: GraphSymbol) => boolean = isSeedable,
 ): RootSelection {
   const sourceChanges = changes.filter((file) => kindOfChangedFile(file.path) === "source" && !file.deleted).map((file) => file.path);
   const componentFiles = changes.flatMap((file) => (componentsByResource.get(file.path) ?? []).map((component) => component.file));
   const symbols = store.symbolsInFiles([...new Set([...sourceChanges, ...componentFiles, ...requested.map(({ file }) => file)])]);
   const symbolsByFile = Map.groupBy(symbols, (symbol) => symbol.file);
   const trees = new Map([...new Set(requested.map(({ file }) => file))].map((file) => [file, containmentTree(store, symbolsByFile.get(file) ?? [])]));
-  const asked = requested.map((target) => ({ target, found: selectedBySymbol(trees.get(target.file) ?? [], target.symbol).map(({ declaration }) => declaration).filter(isSeedable) }));
-  const missing = [...asked.filter(({ found: nodes }) => nodes.length === 0).map(({ target }) => ({ ...target, candidates: candidatesOf(trees.get(target.file) ?? []) })), ...uncovered];
+  const asked = requested.map((target) => ({ target, found: selectedBySymbol(trees.get(target.file) ?? [], target.symbol).map(({ declaration }) => declaration).filter(isRoot) }));
+  const missing = [...asked.filter(({ found: nodes }) => nodes.length === 0).map(({ target }) => ({ ...target, candidates: candidatesOf(trees.get(target.file) ?? [], isRoot) })), ...uncovered];
   if (missing.length > 0) return { seeds: [], withoutSymbols: [], removed: [], missing };
 
-  const selection = selectSeeds({ files: changes }, symbolsByFile, componentsByResource);
+  const selection = selectSeeds({ files: changes }, symbolsByFile, componentsByResource, isRoot);
   const requestedSymbols = new Set(asked.flatMap(({ found: nodes }) => nodes));
   const chosen = [...[...requestedSymbols].map((symbol): SelectedSeed<GraphSymbol> => ({ symbol, basis: "requested" })), ...selection.seeds.filter(({ symbol }) => !requestedSymbols.has(symbol))];
   return { ...selection, seeds: chosen.toSorted((a, b) => comparePosition(a.symbol, b.symbol)), missing: [] };
 }
 
 /** The dotted paths of what a file declares that a request can seed, so a symbol that names no node tells the caller what does. */
-function candidatesOf(tree: readonly DeclarationBranch<GraphSymbol>[]): string[] {
-  return [...new Set(branchesOf(tree).filter(({ declaration }) => isSeedable(declaration)).map(declarationPath))].sort(compareText);
+function candidatesOf(tree: readonly DeclarationBranch<GraphSymbol>[], isRoot: (symbol: GraphSymbol) => boolean = isSeedable): string[] {
+  return [...new Set(branchesOf(tree).filter(({ declaration }) => isRoot(declaration)).map(declarationPath))].sort(compareText);
 }

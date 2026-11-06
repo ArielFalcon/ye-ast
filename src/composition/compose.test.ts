@@ -783,3 +783,75 @@ test("a trace over a real index never folds an interface method: it stays a step
     ["unresolved-link", "src/Repo.java:2 save", "src/AuditRepo.java::save", "src/RepoImpl.java::save"],
   ]);
 });
+
+const PAGE = [
+  "export function save(value: string): void {}",
+  "export function form<T>(model: T, options: { action: () => void }): T {",
+  "  return model;",
+  "}",
+  "export class Page {",
+  "  readonly label = \"page\";",
+  "  readonly stamp = Date.now();",
+  "  readonly submitForm = form(this.label, {",
+  "    action: () => {",
+  "      save(\"x\");",
+  "    },",
+  "  });",
+  "  open(): void {",
+  "    save(this.label);",
+  "  }",
+  "}",
+  "",
+].join("\n");
+
+function commitPage(): void {
+  writeFileSync(join(repo, "src", "page.ts"), PAGE);
+  git("add", "-A");
+  git("commit", "-q", "-m", "page");
+}
+
+test("a trace over a real index roots at a property whose initializer makes calls, by symbol or by a range inside it, never at one that makes none", async () => {
+  commitPage();
+  const { trace } = composeQueries({ scratchRoot });
+  const walk = (target: { file: string; symbol: string } | { file: string; start: number; end: number }) => trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [target] });
+
+  const [submit, stamp, range, label] = await Promise.all([
+    walk({ file: "src/page.ts", symbol: "Page.submitForm" }),
+    walk({ file: "src/page.ts", symbol: "Page.stamp" }),
+    walk({ file: "src/page.ts", start: 9, end: 11 }),
+    walk({ file: "src/page.ts", symbol: "Page.label" }),
+  ]);
+
+  assert.ok(submit.ok && submit.value.status === "complete");
+  assert.deepEqual(submit.value.value.steps.map(({ symbol, kind, leaves }) => ({ symbol, kind, leaves: leaves?.map((leaf) => leaf.symbol) })), [{ symbol: "submitForm", kind: "property", leaves: ["form", "save"] }]);
+  assert.ok(stamp.ok && stamp.value.status === "complete");
+  assert.deepEqual(stamp.value.value.steps.map(({ symbol, external }) => ({ symbol, external })), [{ symbol: "stamp", external: [{ kind: "unnamed", names: ["Date.now"] }] }]);
+  assert.ok(range.ok && range.value.status === "complete");
+  assert.deepEqual(range.value.value.steps.map(({ symbol }) => symbol), ["submitForm"]);
+  assert.ok(!label.ok && label.fault.kind === "unknown-symbol");
+});
+
+test("a trace over a real index expands a class root into its members that have a body or an initializer that makes calls, in source order", async () => {
+  commitPage();
+  const { trace } = composeQueries({ scratchRoot });
+
+  const answer = await trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: "src/page.ts", symbol: "Page" }] });
+
+  assert.ok(answer.ok && answer.value.status === "complete");
+  assert.deepEqual(answer.value.value.steps.map(({ symbol, parent, via, at, leaves }) => ({ symbol, parent, via, at, leaves: leaves?.map((leaf) => leaf.symbol) })), [
+    { symbol: "Page", parent: undefined, via: undefined, at: undefined, leaves: undefined },
+    { symbol: "stamp", parent: 0, via: "member", at: undefined, leaves: undefined },
+    { symbol: "submitForm", parent: 0, via: "member", at: undefined, leaves: ["form", "save"] },
+    { symbol: "open", parent: 0, via: "member", at: undefined, leaves: ["save"] },
+  ]);
+});
+
+test("callers over a range inside a property initializer still seeds the class that holds it", async () => {
+  commitPage();
+  const { impact } = composeQueries({ scratchRoot });
+
+  const answer = await impact.callers({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: "src/page.ts", start: 9, end: 11 }] });
+
+  assert.ok(answer.ok && answer.value.status !== "unknown");
+  assert.deepEqual(answer.value.value.seeds.map(({ symbol, basis }) => ({ symbol, basis })), [{ symbol: "Page", basis: "lines" }]);
+});

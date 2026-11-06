@@ -221,7 +221,7 @@ export const partSchema = z.discriminatedUnion("kind", [
   part("trace-step", {
     anchor: ids.anchor, kindName: z.string(), step: count, depth: count, parent: count.exactOptional(), seen: count.exactOptional(),
     at: z.strictObject({ line: count, column: count.exactOptional() }).exactOptional(),
-    via: z.enum(["call", "own-member", "reference"]).exactOptional(),
+    via: z.enum(["call", "own-member", "reference", "member"]).exactOptional(),
     deferred: z.literal(true).exactOptional(),
     leaves: z.array(z.strictObject({ anchor: ids.anchor, deferred: z.literal(true).exactOptional() })).exactOptional(),
     external: z.array(z.discriminatedUnion("kind", [
