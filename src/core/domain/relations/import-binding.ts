@@ -9,8 +9,8 @@ export interface PlacedImport<S> {
 
 /**
  * The declaration one binding reaches: the single `imports` edge written at the binding's own position whose target is
- * a declaration, never a file; for a binding no edge reaches, the declaration syntax names in its target file
- * (`exportedAs`). A binding of the module itself (`*`) reaches no declaration.
+ * a declaration, never a file; for a binding no edge reaches, the declaration at the containment path syntax
+ * names in its target file (`exportedAs`). A binding of the module itself (`*`) reaches no declaration.
  */
 export function bindingDeclaration<S>(binding: ModuleBinding, edges: readonly PlacedImport<S>[], isDeclaration: (target: S) => boolean, named?: S): S | undefined {
   if (binding.imported === "*") return undefined;

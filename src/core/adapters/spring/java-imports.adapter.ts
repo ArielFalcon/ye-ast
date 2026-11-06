@@ -49,7 +49,7 @@ function importsOf(file: JavaFile, project: JavaProject): ModuleDependency[] {
     const { target, declared } = resolved(container, wildcard, file, project);
     const binding: ModuleBinding = wildcard
       ? { imported: "*", ...position(node), typeOnly: false }
-      : { local: last.text, imported: last.text, ...position(last), typeOnly: false, ...(declared === undefined ? {} : { exportedAs: member ? last.text : declared }) };
+      : { local: last.text, imported: last.text, ...position(last), typeOnly: false, ...(declared === undefined ? {} : { exportedAs: member ? `${declared}.${last.text}` : declared }) };
     return [{ file: file.path, line: position(node).line, endLine: node.endPosition.row + 1, specifier: wildcard ? `${name.text}.*` : name.text, kind: "import", typeOnly: false, target, bindings: [binding] }];
   });
 }
@@ -57,7 +57,7 @@ function importsOf(file: JavaFile, project: JavaProject): ModuleDependency[] {
 function resolved(name: string, wildcard: boolean, file: JavaFile, project: JavaProject): { target: ModuleTarget; declared?: string } {
   const type = project.lookupType(name, { file, type: undefined });
   if (type === "ambiguous") return { target: { kind: "unresolved", reason: `${name} is declared by several files` } };
-  if (type !== undefined) return { target: { kind: "repository", file: type.file.path }, declared: type.name };
+  if (type !== undefined) return { target: { kind: "repository", file: type.file.path }, declared: type.fqn };
   if (wildcard && project.types.some((declared) => declared.file.packageName === name)) return { target: { kind: "unresolved", reason: `${name} is a package of the repository, not one file` } };
   if (project.isPlatformName(name)) return { target: { kind: "external", module: wildcard ? name : name.slice(0, name.lastIndexOf(".")) } };
   return { target: { kind: "unresolved", reason: `no source of the snapshot declares ${name}` } };

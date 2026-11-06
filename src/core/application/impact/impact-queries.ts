@@ -47,7 +47,7 @@ import { createInboundEdges } from "./inbound-edges.ts";
 import { walkImpact } from "./walk.ts";
 import type { ImportOriginSite, ImportOriginsReader } from "../../ports/import-origins.port.ts";
 import type { ContractRoutes } from "../../ports/contract-routes.port.ts";
-import { containmentTree } from "../outline/outline.ts";
+import { containmentTree } from "../navigation/containment-tree.ts";
 import { prepareCommit } from "../snapshot/prepared-snapshot.ts";
 import type { UnmodelledConstructsReader } from "../../ports/unmodelled-constructs.port.ts";
 import { unmodelledNote } from "../../domain/shared/unmodelled.ts";
