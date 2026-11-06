@@ -80,6 +80,17 @@ export async function prepareCommit(
           }
           return answer;
         },
+        async retained<T>(slot: string, produce: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+          if (cache === undefined || cacheKey === undefined) return produce();
+          const outputKey = deps.digest.of(canonicalJson({ entry: cacheKey, output: slot }));
+          const kept = cache.get(outputKey);
+          if (kept?.output !== undefined) return kept.output as T;
+          const output = await produce();
+          if (signal?.aborted) return output;
+          const serialized = JSON.parse(JSON.stringify(output)) as T;
+          cache.put(outputKey, { sources: [], output: serialized });
+          return serialized;
+        },
       },
     };
   };

@@ -58,6 +58,8 @@ export interface CommitExtraction {
 export interface SnapshotData {
   sources: readonly SourceFile[];
   findings?: readonly Finding<Entrypoint>[];
+  /** The serialized output of one reader over the sources of another entry; such an entry holds no sources itself. */
+  output?: unknown;
 }
 
 /** Serialized immutable data only: no scratch paths, compiler trees, readers or in-flight work. */
@@ -71,6 +73,11 @@ export interface PreparedCommit {
   tree: Pick<CommitExtraction, "export">;
   sources(signal?: AbortSignal): Promise<Result<Pick<CommitExtraction, "export" | "sources">, VcsFault>>;
   extract(signal?: AbortSignal): Promise<Result<CommitExtraction, VcsFault>>;
+  /**
+   * What `produce` answers over this snapshot's sources, kept between requests under `slot`, which names every input
+   * besides the sources the output depends on. Absent where nothing is retained.
+   */
+  retained?<T>(slot: string, produce: () => Promise<T>, signal?: AbortSignal): Promise<T>;
 }
 
 export interface SnapshotPreparation {

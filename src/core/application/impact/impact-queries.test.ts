@@ -23,6 +23,8 @@ import type { ImportOrigin } from "../../domain/relations/resolved-reference.ts"
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { ModuleDependenciesReader } from "../../ports/module-dependencies.port.ts";
 import type { ModuleDependency } from "../../domain/impact/module-dependency.ts";
+import { createSnapshotDataCache } from "../snapshot/snapshot-data-cache.ts";
+import type { SnapshotDataCache } from "../snapshot/read-snapshot.ts";
 
 const HEAD = "a".repeat(40);
 const BASE = "b".repeat(40);
@@ -62,6 +64,7 @@ interface Options {
   /** Reads the imports of those sources, as composition wires it. */
   importOrigins?: ImportOriginsReader;
   moduleDependencies?: ModuleDependenciesReader;
+  snapshotCache?: SnapshotDataCache;
   snapshotSources?: Partial<Record<string, SourceFile[]>>;
   /** The files the unmodelled-constructs reader marks among the sources it receives. */
   unmodelled?: readonly string[];
@@ -135,6 +138,7 @@ function setup(options: Options = {}) {
     ...(options.declarationEvidence && { declarationEvidence: options.declarationEvidence }),
     ...(options.importOrigins && { importOrigins: options.importOrigins }),
     ...(options.moduleDependencies && { moduleDependencies: options.moduleDependencies }),
+    ...(options.snapshotCache && { snapshotCache: options.snapshotCache }),
     ...(options.unmodelled && { unmodelled: { extract: async (sources) => sources.map(({ path }) => path).filter((path) => options.unmodelled!.includes(path)) } }),
   };
   const request: AtRevision<ImpactOfChangeRequest> = { repo: "/repo", repoId: "repo", base: "base", head: "head", ...(options.signal && { signal: options.signal }) };
@@ -1564,4 +1568,117 @@ test("an edge the walk reads only once a dropped one frees a bound is checked as
   const answer = callersFact(await setup({ nodes, edges, importOrigins: rootsAtLines([20, 40]) }).callers({ targets: [{ file: "src/t.ts", symbol: "T" }], budget: { hubFanIn: 1 } }));
 
   assert.deepEqual(reachedNames(answer), ["T", "X", "P"]);
+});
+
+const RETAINED_BYTES = 1 << 20;
+
+function relationsCounted(counter: { calls: number }, relations: Finding<Relation>[] = []): ImpactQueriesDeps["relations"] {
+  return { extract: async () => { counter.calls++; return { relations, fields: [], locals: [] }; } };
+}
+
+test("a second callers request at the same snapshot and inputs reads the relations once and answers what a miss answers", async () => {
+  const snapshotCache = createSnapshotDataCache(RETAINED_BYTES);
+  const counter = { calls: 0 };
+  const targets = { targets: [{ file: "src/A.java", symbol: "f" }] };
+  const shared = { nodes: SOURCE_NODES, edges: SOURCE_EDGES, snapshotCache, relationReader: relationsCounted(counter) };
+  const miss = callersFact(await setup(shared).callers(targets));
+  const hit = callersFact(await setup(shared).callers(targets));
+  assert.equal(counter.calls, 1);
+  assert.deepEqual(hit, miss);
+  const uncached = callersFact(await setup({ nodes: SOURCE_NODES, edges: SOURCE_EDGES, relationReader: relationsCounted({ calls: 0 }) }).callers(targets));
+  assert.equal(canonicalJson(hit), canonicalJson(uncached));
+});
+
+test("each input the relations depend on, scope, export listing, revision and sources, gets its own retained output", async () => {
+  const snapshotCache = createSnapshotDataCache(RETAINED_BYTES);
+  const counter = { calls: 0 };
+  const targets = { targets: [{ file: "src/A.java", symbol: "f" }] };
+  const base = { nodes: SOURCE_NODES, edges: SOURCE_EDGES, snapshotCache, relationReader: relationsCounted(counter) };
+  const listed = (blob: string, skipped: CommitExport["skipped"] = []): CommitExport => ({ files: [{ path: "src/A.java", blob, written: true }], skipped });
+  await setup(base).callers(targets);
+  assert.equal(counter.calls, 1);
+  await setup(base).callers({ ...targets, scope: { exclude: ["docs/**"] } });
+  assert.equal(counter.calls, 2);
+  await setup({ ...base, exports: { [HEAD]: listed("1", [{ path: "src/link.ts", reason: "symlink" }]) } }).callers(targets);
+  assert.equal(counter.calls, 3);
+  await setup({ ...base, exports: { [HEAD]: listed("2") } }).callers(targets);
+  assert.equal(counter.calls, 4);
+  await setup(base).callers({ ...targets, revision: "other" });
+  assert.equal(counter.calls, 5);
+  await setup({ ...base, exports: { [HEAD]: listed("2") } }).callers(targets);
+  assert.equal(counter.calls, 5);
+});
+
+test("a cancelled relations extraction publishes no output", async () => {
+  const snapshotCache = createSnapshotDataCache(RETAINED_BYTES);
+  const counter = { calls: 0 };
+  const controller = new AbortController();
+  const targets = { targets: [{ file: "src/A.java", symbol: "f" }] };
+  const cancelling: ImpactQueriesDeps["relations"] = { extract: async () => { counter.calls++; controller.abort(); return { relations: [], fields: [], locals: [] }; } };
+  const base = { nodes: SOURCE_NODES, edges: SOURCE_EDGES, snapshotCache };
+  const cancelled = await setup({ ...base, relationReader: cancelling, signal: controller.signal }).callers(targets);
+  assert.ok(!cancelled.ok && cancelled.fault.kind === "aborted");
+  assert.equal(counter.calls, 1);
+  assert.ok((await setup({ ...base, relationReader: relationsCounted(counter) }).callers(targets)).ok);
+  assert.equal(counter.calls, 2);
+  assert.ok((await setup({ ...base, relationReader: relationsCounted(counter) }).callers(targets)).ok);
+  assert.equal(counter.calls, 2);
+});
+
+test("a retained output larger than the whole budget is skipped and the answer is unchanged", async () => {
+  const counter = { calls: 0 };
+  const targets = { targets: [{ file: "src/A.java", symbol: "f" }] };
+  const shared = { nodes: SOURCE_NODES, edges: SOURCE_EDGES, relationReader: relationsCounted(counter) };
+  const retained = callersFact(await setup({ ...shared, snapshotCache: createSnapshotDataCache(RETAINED_BYTES) }).callers(targets));
+  const tinyCache = createSnapshotDataCache(8);
+  const skipped = callersFact(await setup({ ...shared, snapshotCache: tinyCache }).callers(targets));
+  await setup({ ...shared, snapshotCache: tinyCache }).callers(targets);
+  assert.equal(counter.calls, 3);
+  assert.deepEqual(skipped, retained);
+});
+
+function modulesCounted(counter: { calls: number; options: unknown[] }): ModuleDependenciesReader {
+  return { extract: async (sources, options) => { counter.calls++; counter.options.push(options); return { files: sources.map((source) => ({ file: source.path, statements: [source.content], moduleOnly: true })), dependencies: [], unread: [], untraversed: [] }; } };
+}
+
+test("a second importers request at the same snapshot reads the module dependencies once and answers what a miss answers", async () => {
+  const snapshotCache = createSnapshotDataCache(RETAINED_BYTES);
+  const counter = { calls: 0, options: [] as unknown[] };
+  const files = { files: ["src/A.java"] };
+  const shared = { nodes: SOURCE_NODES, edges: SOURCE_EDGES, snapshotCache, moduleDependencies: modulesCounted(counter) };
+  const miss = await setup(shared).importers(files);
+  const hit = await setup(shared).importers(files);
+  assert.ok(miss.ok && hit.ok);
+  assert.equal(counter.calls, 1);
+  assert.deepEqual(hit, miss);
+  const uncached = await setup({ nodes: SOURCE_NODES, edges: SOURCE_EDGES, moduleDependencies: modulesCounted({ calls: 0, options: [] }) }).importers(files);
+  assert.equal(canonicalJson(hit), canonicalJson(uncached));
+  await setup({ ...shared, exports: { [HEAD]: { files: [{ path: "src/A.java", blob: "2", written: true }], skipped: [] } } }).importers(files);
+  assert.equal(counter.calls, 2);
+});
+
+test("an impact of change reads each snapshot's module dependencies once across requests", async () => {
+  const snapshotCache = createSnapshotDataCache(RETAINED_BYTES);
+  const counter = { calls: 0, options: [] as unknown[] };
+  const shared = { snapshotCache, changes: { ok: true, value: [change("src/index.ts")] } as Result<readonly FileChange[], VcsFault>, moduleDependencies: modulesCounted(counter) };
+  const miss = fact(await setup(shared).ask());
+  const afterMiss = counter.calls;
+  assert.ok(afterMiss > 0);
+  const hit = fact(await setup(shared).ask());
+  assert.equal(counter.calls, afterMiss);
+  assert.deepEqual(hit, miss);
+});
+
+test("a cancelled module dependencies read publishes no output", async () => {
+  const snapshotCache = createSnapshotDataCache(RETAINED_BYTES);
+  const counter = { calls: 0, options: [] as unknown[] };
+  const controller = new AbortController();
+  const cancelling: ModuleDependenciesReader = { extract: async () => { counter.calls++; controller.abort(); return { files: [], dependencies: [], unread: [] }; } };
+  const files = { files: ["src/A.java"] };
+  const base = { nodes: SOURCE_NODES, edges: SOURCE_EDGES, snapshotCache };
+  const cancelled = await setup({ ...base, moduleDependencies: cancelling, signal: controller.signal }).importers(files);
+  assert.ok(!cancelled.ok);
+  assert.equal(counter.calls, 1);
+  assert.ok((await setup({ ...base, moduleDependencies: modulesCounted(counter) }).importers(files)).ok);
+  assert.equal(counter.calls, 2);
 });

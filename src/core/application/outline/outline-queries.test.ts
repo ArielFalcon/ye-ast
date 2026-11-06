@@ -3,6 +3,7 @@ import test from "node:test";
 import { fakeCodeGraph, fakeNode } from "../impact/fake-code-graph.testing.ts";
 import { fakeLive, type FakeLive } from "../live/fake-live.testing.ts";
 import type { OutlineSelector } from "../../ports/outline-queries.port.ts";
+import { createSnapshotDataCache } from "../snapshot/snapshot-data-cache.ts";
 import { createOutlineQueries, type OutlineQueriesDeps } from "./outline-queries.ts";
 
 const SHA = "a".repeat(40);
@@ -23,7 +24,7 @@ interface Options {
 }
 
 function setup(options: Options = {}) {
-  const log = { closed: 0, reads: 0, extractions: 0, readPaths: [] as string[][] };
+  const log = { closed: 0, reads: 0, extractions: 0, readPaths: [] as string[][], moduleReads: [] as (readonly string[] | undefined)[] };
   const store = { ...fakeCodeGraph(options.nodes ?? [], options.edges ?? []), close: () => void (log.closed += 1) };
   const written = options.written ?? [];
   const deps = {
@@ -39,7 +40,7 @@ function setup(options: Options = {}) {
     matcher: { matches: options.matches ?? (() => true) },
     graph: { index: async () => ({ ok: true, value: SUMMARY }), open: () => ({ ok: true, value: store }) },
     engines: {},
-    moduleReaders: [{ extract: async () => ({ files: written.map((file) => ({ file, statements: [], moduleOnly: true })), dependencies: [], unread: [] }) }],
+    moduleReaders: [{ extract: async (_sources: unknown, read?: { files?: readonly string[] }) => { log.moduleReads.push(read?.files); return { files: written.map((file) => ({ file, statements: [], moduleOnly: true })), dependencies: [], unread: [] }; } }],
     ...(options.snapshotCache && { snapshotCache: options.snapshotCache }),
     ...(options.unmodelled && { unmodelled: { extract: async (sources: readonly { path: string }[]) => sources.map(({ path }) => path).filter((path) => options.unmodelled!.includes(path)) } }),
     ...(options.live && { live: options.live.deps, trust: { read: async () => ({ ok: true, value: "trusted" }) } }),
@@ -242,4 +243,13 @@ test("a focus on a file the graph cannot place is cut, reading that file alone",
   assert.ok(answer.ok && answer.value.status === "partial");
   assert.deepEqual(answer.value.cuts.map((cut) => [cut.kind, cut.at]), [["no-extractor", [POINT]]]);
   assert.deepEqual(log.readPaths, [[POINT]]);
+});
+
+test("a requested-files module read is repeated for every request and never answered from a retained whole-universe output", async () => {
+  const snapshotCache = createSnapshotDataCache(1 << 20);
+  const written = ["src/Order.java", "src/Cart.java"];
+  const { queries, log } = setup({ written, snapshotCache });
+  await queries.outline({ repo: "/work/shop", repoId: "shop", revision: "HEAD", files: ["src/Order.java"] });
+  await queries.outline({ repo: "/work/shop", repoId: "shop", revision: "HEAD", files: ["src/Cart.java"] });
+  assert.deepEqual(log.moduleReads, [["src/Order.java"], ["src/Cart.java"]]);
 });

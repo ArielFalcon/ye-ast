@@ -234,6 +234,11 @@ displaced) or `oversize-skipped` (the entry alone exceeds the budget and is not 
 the entry concerned (key plus serialized payload) and is absent on a `miss`; `retained_bytes` is what the cache holds
 after the decision. The key never appears: it names a repository state.
 
+The entries of the cache are the sources and findings of a snapshot and, since
+[ADR-0026](../adr/0026-snapshot-data-may-retain-reader-outputs.md), the serialized output of the relations and the
+whole-universe module-dependencies readers, each its own entry. A served output has no line of its own: its lookup is a
+`hit` and the reader's stage (`relations`, `module-dependencies`) is absent from that request.
+
 **Child CPU is not measured.** `process.cpuUsage()` covers only the ye-ast process, so `cpu_ms` excludes the git and
 indexer children, and Node exposes neither `RUSAGE_CHILDREN` nor the resource usage of a `spawn`ed child. The cost of a
 child shows in the wall-clock of the stage or index line around it (`export`, `built`, `synced`), which is the figure a

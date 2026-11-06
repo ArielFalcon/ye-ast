@@ -3,8 +3,10 @@
 - Status: Accepted, 2026-11-04, owner
 - Decision source: the owner, 2026-11-04: "Sí, caché en memoria con presupuesto del host", approving an optional
   in-memory cache with eviction when its budget is exceeded, while Git exports remain temporary.
+- Amended by: [ADR-0026](0026-snapshot-data-may-retain-reader-outputs.md) (decision 2 also admits the serialized
+  output of the relations and whole-universe module-dependencies readers)
 - Related: [ADR-0006](0006-qayaba-graph-state-per-run.md), [ADR-0010](0010-trust-modes.md),
-  [RFC-0006](../rfc/0006-configuration.md)
+  [ADR-0021](0021-enable-snapshot-memory-cache-by-default.md), [RFC-0006](../rfc/0006-configuration.md)
 
 ## Context
 
@@ -19,7 +21,7 @@ would also keep the syntax trees weakly associated with them.
    Original decision: composition may enable a snapshot data cache with `snapshotCacheBytes`, an explicit host value. Without it no data
    is retained between requests. Zero, negative, fractional, non-finite and unsafe-integer values disable retention.
 2. The cache lives with one composition and its fixed adapters. It retains UTF-8 serialized sources and completed
-   entrypoint findings only. The budget charges the UTF-8 bytes of each key and serialized payload, including paths
+   entrypoint findings only (ADR-0026 adds the outputs of two readers). The budget charges the UTF-8 bytes of each key and serialized payload, including paths
    and metadata. It bounds retained entry bytes, not Node's total heap, map bookkeeping or transient serialization.
    No source objects, compiler trees, stores, promises, callbacks, temporary paths or final facts are retained.
 3. Reads promote entries; admission evicts least-recently-used entries until the byte budget fits. An oversized entry
