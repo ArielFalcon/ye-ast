@@ -6,8 +6,9 @@
   toScrollPage → este archivo:47`, treated as an optional extension that shares the engine of the outbound walk.
 - Coordinated with: [trace plan](2026-11-06-trace-outbound-walk.md) (slice 1 on branch
   `t3/extract-shared-graph-navigation`, commits `b6595d7..7b4dc72`, not on `main`); `RFC-0016` gap A (import origins).
-- Status: design and measurements only; nothing implemented. Phases are owner-approved in this order: (1) this design,
-  (2) the binding table exposed in `outline` as Part A, (3) Part B in focus mode once trace slice 1 is on `main`.
+- Status: phase 2 (binding table and Part A) implemented, see the task table; phase 3 not started. Phases are
+  owner-approved in this order: (1) this design, (2) the binding table exposed in `outline` as Part A, (3) Part B in
+  focus mode once trace slice 1 is on `main`.
 
 ## 1. Goal and non-goals
 
@@ -275,15 +276,33 @@ server), one rule each; break proof per AGENTS.md "Testing".
 
 | Task | Content | Placement | Tests (one rule each) |
 |---|---|---|---|
-| A1 | Shared statement helper; `ModuleDependency.bindings`, `require`/`import-equals` forms; `import-origins` reads the helper (no behavior change: `import x = require` becomes bound, a fix) | `adapters/typescript/import-bindings.ts`, `module-dependencies.adapter.ts`, `import-origins.adapter.ts`, `domain/impact/module-dependency.ts` | per form of 2.4 through `ModuleDependenciesReader.extract`; alias keeps both names; inline `type` is type-only per binding; default export name of the target; `import x = require` binds through `ImportOrigins.origins`; impact suites stay green; differential `impact` and `importers` run before/after on this repository (identical bytes) |
-| A2 | The join, by `(line, column)` | `domain/relations/import-binding.ts`, `application/navigation/import-bindings.ts` | join reaches the declaration through a re-export alias; a file edge never becomes a declaration; a default import takes `exportedAs`; no edge → no declaration |
-| A3 | Outline Part A: `OutlineImport[]`, cut per unproven repository binding; `head.sources` passed to the reader | `domain/outline/outline-fact.ts`, `application/outline/outline.ts`, `outline-queries.ts`, `composition/compose.ts` (inject the reader) | through `OutlineQueries.outline` on a fake graph + real reader: package, repository with declaration, unproven → `partial` with the cut, dynamic import listed with its file, side-effect listed with no binding |
-| A4 | MCP: output schema (`src/mcp/server.ts:248`, `imports: strings` → object shape), `renderOutline` (`render.ts:1056`) and its `full` guide (`render.ts:1045`), tool description (`server.ts:60,578`) | `mcp/` | schema accepts the new shape and rejects the old; summary text shows `target: name:line` per binding; `full` guide names the fields |
-| A5 | Compose: `outline-import` file dependencies from repository targets (`composition-normalize.ts:521-525`), plus a declaration anchor per proven binding so compose can join it with `callers`; schema parts and fixtures (`composition-schema-parts.ts:198`, `composition-fixtures.ts:192`) | `mcp/composition-*` | normalization keeps one file dependency per repository target; a proven binding anchors its declaration; reconstruction (`composition-normalize.test.ts`) round-trips; an external target creates no file part |
-| A6 | Docs: AGENTS.md command list unchanged; README/site outline description; no schema history entry (D7) | docs | structural readback |
+| A1 | Shared statement helper; `ModuleDependency.bindings`, `require`/`import-equals` forms; `import-origins` reads the helper (no behavior change: `import x = require` becomes bound, a fix) | `adapters/typescript/import-bindings.ts`, `module-dependencies.adapter.ts`, `import-origins.adapter.ts`, `domain/impact/module-dependency.ts` | per form of 2.4 through `ModuleDependenciesReader.extract`; alias keeps both names; inline `type` is type-only per binding; default export name of the target; `import x = require` binds through `ImportOrigins.origins`; impact suites stay green; differential `impact` and `importers` run before/after on this repository (identical bytes) Done: `1360680`. |
+| A2 | The join, by `(line, column)` | `domain/relations/import-binding.ts`, `application/navigation/import-bindings.ts` | join reaches the declaration through a re-export alias; a file edge never becomes a declaration; a default import takes `exportedAs`; no edge → no declaration Done: `6ffa90b`; the named-declaration fallback generalized in `4a167e8`. |
+| A3 | Outline Part A: `OutlineImport[]`, cut per unproven repository binding; `head.sources` passed to the reader | `domain/outline/outline-fact.ts`, `application/outline/outline.ts`, `outline-queries.ts`, `composition/compose.ts` (inject the reader) | through `OutlineQueries.outline` on a fake graph + real reader: package, repository with declaration, unproven → `partial` with the cut, dynamic import listed with its file, side-effect listed with no binding Done: `9f067bf`, `8407866`; Java statements from `java-symbols` in `4a167e8`. |
+| A4 | MCP: output schema (`src/mcp/server.ts:248`, `imports: strings` → object shape), `renderOutline` (`render.ts:1056`) and its `full` guide (`render.ts:1045`), tool description (`server.ts:60,578`) | `mcp/` | schema accepts the new shape and rejects the old; summary text shows `target: name:line` per binding; `full` guide names the fields Done: `9f067bf`. |
+| A5 | Compose: `outline-import` file dependencies from repository targets (`composition-normalize.ts:521-525`), plus a declaration anchor per proven binding so compose can join it with `callers`; schema parts and fixtures (`composition-schema-parts.ts:198`, `composition-fixtures.ts:192`) | `mcp/composition-*` | normalization keeps one file dependency per repository target; a proven binding anchors its declaration; reconstruction (`composition-normalize.test.ts`) round-trips; an external target creates no file part Done: `9f067bf`. |
+| A6 | Docs: AGENTS.md command list unchanged; README/site outline description; no schema history entry (D7) | docs | structural readback Done: `9f067bf`. |
 
 Risk: item 3 (contract others consume: the outline value shape and the MCP output schema change), item 1 not touched
 (no stored data). A1 gets its own commit (shared parser of `impact` and `importers`).
+
+As built (phase 2):
+
+- `require` of a string literal stays an `untraversed` reference (impact does not follow it) and now carries
+  `specifier` and `target`; the outline lists it with form `require`. `ModuleDependency.form` gains only
+  `import-equals`, and module impact's `via` never carries it, so `impact` and `importers` answers are unchanged
+  (differential runs before/after, identical bytes).
+- `import x = require` binds `*` (the module itself) and now binds its name in `ImportOrigins`.
+- `ModuleBinding.exportedAs` is the name syntax proves the target file declares the binding under: the default
+  export's declaration (TypeScript) or the imported type or member (Java); the join uses it when no edge is at the
+  binding's position.
+- Java: `adapters/spring/java-imports.adapter.ts` answers the same `ModuleDependenciesReader` port from
+  `java-symbols`; the outline reads every reader's statements. A wildcard of a repository package is `unresolved`
+  with that reason, since a target is one file.
+- A runtime reference named by a computed expression is listed with no specifier and an `unresolved` target.
+- A requested file the index holds but no module reader read (or could not parse) carries a `no-extractor` cut.
+- Open: codegraph holds no node for a Java `record`, so an import of a repository record keeps no declaration and
+  makes the outline `partial` with its `unresolved-link` cut (`spring-petclinic-microservices`: `OwnerDetails`).
 
 ### Phase 3: Part B in focus (after trace slice 1 is on `main`)
 
