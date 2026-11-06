@@ -54,13 +54,25 @@ test("a module's exported value names are names: renamed, re-exported, a namespa
   assert.deepEqual(await names(["export = run;"]), []);
 });
 
+test("a variable, property or assigned name that takes an arrow or function expression holds a function value; any other value is none", async () => {
+  assert.deepEqual((await read([
+    "const arrow = () => run();",
+    "let wrapped = (function () {}) as Handler;",
+    "const plain = run();",
+    "class Holder { field = () => run(); other = 1; }",
+    "const table = { entry: () => run(), count: 2 };",
+    "let assigned; assigned = () => run();",
+    "target.member = function () {};",
+  ])).functionValues, ["arrow", "assigned", "entry", "field", "member", "wrapped"]);
+});
+
 test("a computed key or index adds no name; a literal one adds its name", async () => {
   assert.deepEqual(await names(["const table = { [key]: run, ['literal']: run };", "target[name] = run;", "target['indexed'] = run;"]), ["indexed", "literal"]);
 });
 
 test("a file that is not a TypeScript source declares none", async () => {
-  assert.deepEqual(await read(["const table = { plain: run };"], "src/a.d.ts"), { names: [], callables: [] });
-  assert.deepEqual(await read(["class A { void run() {} }"], "src/A.java"), { names: [], callables: [] });
+  assert.deepEqual(await read(["const table = { plain: run };"], "src/a.d.ts"), { names: [], functionValues: [], callables: [] });
+  assert.deepEqual(await read(["class A { void run() {} }"], "src/A.java"), { names: [], functionValues: [], callables: [] });
 });
 
 test("functions, overload signatures and ambient functions are callables that no subtype overrides, with a body only when written", async () => {

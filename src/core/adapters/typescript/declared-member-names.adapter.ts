@@ -4,14 +4,15 @@ import { isTypeScriptSource } from "../../domain/languages/typescript.ts";
 import type { DeclaredCallable, DeclaredMemberNames, DeclaredMemberNamesReader } from "../../ports/declared-member-names.port.ts";
 import { sourceTree } from "./source-tree.ts";
 
-const NONE: DeclaredMemberNames = { names: [], callables: [] };
+const NONE: DeclaredMemberNames = { names: [], functionValues: [], callables: [] };
 
 /**
  * The member names a TypeScript source declares where a value can live: object-literal keys, properties assigned through
  * a dot or a literal index, class members and constructor parameter properties, and enum members. A type, an interface
  * or a type literal holds none of these, and an ambient (`declare`) declaration is skipped whole, as the type-only rule
  * skips types in the index. A module's exported value names count too: a renamed or re-exported specifier, a namespace
- * re-export and `default`, never a type-only export. Its callables are its functions, ambient ones and overload signatures included, the methods
+ * re-export and `default`, never a type-only export. A variable, property or assigned name that takes an arrow or a
+ * function expression holds a function value. Its callables are its functions, ambient ones and overload signatures included, the methods
  * of its classes, and the method signatures of its interfaces.
  */
 export function createTypeScriptMemberNames(): DeclaredMemberNamesReader {
@@ -21,6 +22,10 @@ export function createTypeScriptMemberNames(): DeclaredMemberNamesReader {
       const tree = sourceTree(file, ts.ScriptTarget.Latest, true);
       const names = new Set<string>();
       const callables: DeclaredCallable[] = [];
+      const functionValues = new Set<string>();
+      const holds = (name: ts.Node, value: ts.Expression | undefined): void => {
+        if (value !== undefined && isFunctionValue(value) && (ts.isIdentifier(name) || ts.isPrivateIdentifier(name))) functionValues.add(name.text);
+      };
       const lineOf = (node: ts.Node): number => tree.getLineAndCharacterOfPosition(node.getStart(tree)).line + 1;
       const callable = (node: ts.FunctionDeclaration | ts.MethodDeclaration | ts.MethodSignature, overridable: boolean): void => {
         if (node.name === undefined) return;
@@ -41,9 +46,11 @@ export function createTypeScriptMemberNames(): DeclaredMemberNamesReader {
         if (ts.isClassLike(node)) for (const member of node.members) if (!isDeclareOnly(member)) add(member.name);
         if (ts.isConstructorDeclaration(node)) for (const parameter of node.parameters) if (ts.isParameterPropertyDeclaration(parameter, node)) add(parameter.name);
         if (ts.isEnumDeclaration(node)) for (const member of node.members) add(member.name);
+        if (ts.isVariableDeclaration(node) || ts.isPropertyDeclaration(node) || ts.isPropertyAssignment(node)) holds(node.name, node.initializer);
         if (ts.isExportDeclaration(node) && !node.isTypeOnly) for (const name of exportedValueNames(node)) names.add(name);
         if ((ts.isExportAssignment(node) && !node.isExportEquals) || isDefaultExport(node)) names.add("default");
         if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
+          holds(ts.isPropertyAccessExpression(node.left) ? node.left.name : node.left, node.right);
           if (ts.isPropertyAccessExpression(node.left)) names.add(node.left.name.text);
           else if (ts.isElementAccessExpression(node.left)) {
             const index = node.left.argumentExpression;
@@ -53,9 +60,16 @@ export function createTypeScriptMemberNames(): DeclaredMemberNamesReader {
         ts.forEachChild(node, visit);
       };
       visit(tree);
-      return { names: [...names].sort(compareText), callables };
+      return { names: [...names].sort(compareText), functionValues: [...functionValues].sort(compareText), callables };
     },
   };
+}
+
+/** An arrow or function expression, through parentheses and type assertions. */
+function isFunctionValue(value: ts.Expression): boolean {
+  let inner = value;
+  while (ts.isParenthesizedExpression(inner) || ts.isAsExpression(inner) || ts.isSatisfiesExpression(inner) || ts.isTypeAssertionExpression(inner) || ts.isNonNullExpression(inner)) inner = inner.expression;
+  return ts.isArrowFunction(inner) || ts.isFunctionExpression(inner);
 }
 
 /** The names a module re-exports or exports under another name, without the ones marked type-only. */

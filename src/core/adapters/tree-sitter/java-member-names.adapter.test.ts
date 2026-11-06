@@ -29,9 +29,9 @@ test("enum constants are names", async () => {
 test("a source of another language or one that does not parse declares none, and the parser is made only for a Java source", async () => {
   let created = 0;
   const reader = createJavaMemberNames(async () => (created += 1, createJavaParser()));
-  assert.deepEqual(await read(["const a = { m() {} };"], "src/a.ts", reader), { names: [], callables: [] });
+  assert.deepEqual(await read(["const a = { m() {} };"], "src/a.ts", reader), { names: [], functionValues: [], callables: [] });
   assert.equal(created, 0);
-  assert.deepEqual(await read(["class {"], "src/A.java", reader), { names: [], callables: [] });
+  assert.deepEqual(await read(["class {"], "src/A.java", reader), { names: [], functionValues: [], callables: [] });
   assert.equal(created, 1);
 });
 
@@ -56,4 +56,21 @@ test("every method is a callable: overridable unless static, private or final, w
     { name: "area", start: 8, nameLine: 9, body: false, overridable: true },
     { name: "fixed", start: 10, nameLine: 10, body: true, overridable: false },
   ]);
+});
+
+test("a field, local or assigned name that takes a lambda or a method reference holds a function value; any other value is none", async () => {
+  assert.deepEqual((await read([
+    "public class A {",
+    "  Supplier<Integer> supply = () -> 1;",
+    "  Runnable task = this::work;",
+    "  int count = 1;",
+    "  Runnable later;",
+    "  Runnable throughThis;",
+    "  void work() {",
+    "    Runnable local = A::helper;",
+    "    later = () -> {};",
+    "    this.throughThis = this::work;",
+    "  }",
+    "}",
+  ])).functionValues, ["later", "local", "supply", "task", "throughThis"]);
 });

@@ -162,7 +162,11 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
   const memberNames: DeclaredMemberNamesReader = {
     memberNames: async (file) => {
       const [typescript, java] = [await typescriptMemberNames.memberNames(file), await javaMemberNames.memberNames(file)];
-      return { names: [...new Set([...typescript.names, ...java.names])].sort(compareText), callables: [...typescript.callables, ...java.callables] };
+      return {
+        names: [...new Set([...typescript.names, ...java.names])].sort(compareText),
+        functionValues: [...new Set([...typescript.functionValues, ...java.functionValues])].sort(compareText),
+        callables: [...typescript.callables, ...java.callables],
+      };
     },
   };
   const callSites = staged<CallSiteReader>({

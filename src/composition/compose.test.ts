@@ -992,6 +992,50 @@ test("a trace over a real index keeps a member call a cut when a module exports 
   assert.deepEqual(answer.value.value.steps[0]?.external, [{ kind: "unnamed", names: ["y.typeOnlyAlias"] }]);
 });
 
+test("a trace over a real index keeps a library member call a cut when its receiver names a function value the code declares", async () => {
+  writeFileSync(join(repo, "src", "Values.java"), [
+    "import java.util.function.Supplier;",
+    "public class Values {",
+    "  private final Supplier<Integer> supply = () -> helper();",
+    "  private final Runnable task = this::work;",
+    "  static int helper() { return 1; }",
+    "  void work() {}",
+    "  int go() {",
+    "    task.run();",
+    "    return this.supply.get();",
+    "  }",
+    "}",
+  ].join("\n"));
+  writeFileSync(join(repo, "src", "values.ts"), [
+    "export function helper(): void {}",
+    "const fn = () => helper();",
+    "let handler: () => void;",
+    "handler = function () { helper(); };",
+    "export function go(): void {",
+    "  fn.call(undefined);",
+    "  handler.apply(undefined, []);",
+    "}",
+    "",
+  ].join("\n"));
+  git("add", "-A");
+  git("commit", "-q", "-m", "values");
+  const { trace } = composeQueries({ scratchRoot });
+  const walk = (file: string, symbol: string) => trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file, symbol }] });
+
+  const [java, typescript] = await Promise.all([walk("src/Values.java", "Values.go"), walk("src/values.ts", "go")]);
+
+  assert.ok(java.ok && java.value.status === "partial");
+  assert.deepEqual(java.value.cuts.map((cut) => [cut.kind, ...cut.at]), [
+    ["unresolved-link", "src/Values.java:8 task.run", "src/Values.java::task"],
+    ["unresolved-link", "src/Values.java:9 supply.get", "src/Values.java::supply"],
+  ]);
+  assert.ok(typescript.ok && typescript.value.status === "partial");
+  assert.deepEqual(typescript.value.cuts.map((cut) => [cut.kind, ...cut.at]), [
+    ["unresolved-link", "src/values.ts:6 fn.call", "src/values.ts::fn"],
+    ["unresolved-link", "src/values.ts:7 handler.apply", "src/values.ts::handler"],
+  ]);
+});
+
 test("callers over a range inside a property initializer still seeds the class that holds it", async () => {
   commitPage();
   const { impact } = composeQueries({ scratchRoot });

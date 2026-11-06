@@ -4,7 +4,7 @@ import { declarationAnchor, placeAt, referenceKey } from "../../domain/impact/im
 import { NOT_DECLARED_KINDS, sortedUnique } from "../../domain/impact/importers-fact.ts";
 import { branchesOf, declarationPath } from "../../domain/shared/declaration-tree.ts";
 import type { Cut } from "../../domain/shared/fact.ts";
-import { calleeOf, compareOccurrence, ownMemberOf, sameOccurrence, type EdgeOccurrence, type OrderedPlace } from "../../domain/trace/call-place.ts";
+import { calleeOf, compareOccurrence, ownMemberOf, receiverOf, sameOccurrence, type EdgeOccurrence, type OrderedPlace } from "../../domain/trace/call-place.ts";
 import type { TraceVia } from "../../domain/trace/trace-fact.ts";
 import type { ExternalCall, TraceDeclaration, WalkedStep } from "../../domain/trace/trace-tree.ts";
 import type { DeclaredCallable } from "../../ports/declared-member-names.port.ts";
@@ -52,6 +52,8 @@ export interface TraceWalkInput {
    * record component), so a name only they declare still runs repository code.
    */
   memberDeclarations: () => Promise<ReadonlyMap<string, readonly string[]>>;
+  /** The in-scope sources that write a function value to each name, by name, sorted; read with `memberDeclarations`. */
+  functionValueDeclarations: () => Promise<ReadonlyMap<string, readonly string[]>>;
   /** The callable declarations a source's syntax states, in source order; read for the file of each method the walk expands. */
   callablesIn: (file: string) => Promise<readonly DeclaredCallable[]>;
   budget: TraceBudget;
@@ -84,7 +86,7 @@ interface Body {
  * cut that leaves it free to expand at a later, shallower one. Every read is cached for this walk only.
  */
 export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkInput): Promise<TraceWalk | "aborted"> {
-  const { store, origins, inScope, memberDeclarations, callablesIn, budget, signal } = input;
+  const { store, origins, inScope, memberDeclarations, functionValueDeclarations, callablesIn, budget, signal } = input;
   const navigation = createGraphNavigation(store, () => false);
 
   const referencesByFile = new Map<string, ReadonlyMap<GraphNodeId, readonly GraphUnresolvedReference[]>>();
@@ -236,9 +238,13 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
           const named = membersNamed(callee.name);
           if (named.length > 0) cuts.push(unresolvedAt(reference, named));
           else {
-            const declaring = (await memberDeclarations()).get(callee.name) ?? [];
-            if (declaring.length === 0) external.push({ kind: "unnamed", name: reference.name });
-            else cuts.push({ kind: "unresolved-link", at: [placeAt(reference.file, reference.line, reference.name), ...sortedUnique([...reference.candidates, ...declaring.map((file) => declarationAnchor(file, callee.name))])] });
+            const receiver = receiverOf(reference.name);
+            const declared = [
+              ...((await memberDeclarations()).get(callee.name) ?? []).map((file) => declarationAnchor(file, callee.name)),
+              ...(receiver === undefined ? [] : ((await functionValueDeclarations()).get(receiver) ?? []).map((file) => declarationAnchor(file, receiver))),
+            ];
+            if (declared.length === 0) external.push({ kind: "unnamed", name: reference.name });
+            else cuts.push({ kind: "unresolved-link", at: [placeAt(reference.file, reference.line, reference.name), ...sortedUnique([...reference.candidates, ...declared])] });
           }
         }
       }

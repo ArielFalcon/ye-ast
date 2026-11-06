@@ -13,6 +13,13 @@ export function calleeOf(spelling: string): Callee {
   return name === spelling ? { form: "bare", name } : { form: "member", name };
 }
 
+/** The name `x.m` and `this.x.m` call `m` on: `x`; none when the receiver ends in a call or an index. */
+export function receiverOf(spelling: string): string | undefined {
+  const receiver = spelling.slice(0, Math.max(spelling.lastIndexOf("."), 0));
+  const name = receiver.slice(receiver.lastIndexOf(".") + 1);
+  return IDENTIFIER.test(name) && name !== "this" ? name : undefined;
+}
+
 /** The member `this.<member>` and `this.<member>.<rest>` name. */
 export function ownMemberOf(spelling: string): string | undefined {
   const [receiver, member] = spelling.split(".");

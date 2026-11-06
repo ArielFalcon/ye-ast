@@ -4,6 +4,11 @@ import type { SourceFile } from "./entrypoint-extractor.port.ts";
 export interface DeclaredMemberNames {
   /** Sorted, once each. */
   names: readonly string[];
+  /**
+   * The fields, properties, variables and constants a function value is written to: a lambda, a method reference, an
+   * arrow or a function expression, as an initializer or an assignment. Sorted, once each.
+   */
+  functionValues: readonly string[];
   /** In source order. */
   callables: readonly DeclaredCallable[];
 }
