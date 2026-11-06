@@ -235,8 +235,8 @@ npx --yes ye-ast-mcp map /path/to/repo
 - [ ] stdout is one JSON object with `schema`, `snapshot`, `producer`, `inputs`, `evidence`, `status` and `value`.
 - [ ] `status` is `complete` or `partial`. Both are valid answers.
 - [ ] `value.entrypoints` is an object, not `null`.
-- [ ] If the client lists MCP tools, the eight read-only tools appear: `ye_ast_entrypoints`, `ye_ast_callers`,
-      `ye_ast_importers`, `ye_ast_impact`, `ye_ast_outline`, `ye_ast_workspace`, `ye_ast_decisions` and
+- [ ] If the client lists MCP tools, the nine read-only tools appear: `ye_ast_entrypoints`, `ye_ast_callers`,
+      `ye_ast_importers`, `ye_ast_impact`, `ye_ast_outline`, `ye_ast_trace`, `ye_ast_workspace`, `ye_ast_decisions` and
       `ye_ast_compose`. The client may need a restart to pick up a new server. The server also sends the client short
       instructions: when to call each tool and how to read an answer.
 
@@ -250,6 +250,7 @@ flowchart TD
     Q -->|"Orient in an unfamiliar repo,<br/>find a route/listener/job handler"| E["ye_ast_entrypoints"]
     Q -->|"Change, move or delete<br/>a symbol or line range"| C["ye_ast_callers"]
     Q -->|"Move, rename or delete a file,<br/>or change its exports"| I["ye_ast_importers"]
+    Q -->|"Follow what a declaration executes<br/>before reading the flow file by file"| T["ye_ast_trace"]
     Q -->|"Report work done<br/>or open a pull request"| P["ye_ast_impact"]
     Q -->|"The work crosses repositories:<br/>who calls this from another clone"| W["ye_ast_workspace, then<br/>callers or impact with workspace"]
 ```
@@ -261,6 +262,7 @@ flowchart TD
 | `ye_ast_importers` | Investigate file moves, renames and export changes | `files`, `revision`, `live`, `scope`, `mode` |
 | `ye_ast_impact` | Investigate consequences of a diff | `base`, `head`, `live`, `changed`, `scope`, `budget`, `workspace`, `mode`, `select`, `page`, `expect` |
 | `ye_ast_outline` | Find declarations, spans and imports in selected files, members nested under their container; or focus on declarations by dotted path or line | `files` or `focus`, `revision`, `live`, `scope`, `mode` |
+| `ye_ast_trace` | Follow what declarations execute, in source order, with a reading plan of the spans to open; branches are not evaluated | `targets`, `revision`, `live`, `scope`, `budget` (`depth`, `expansions`), `mode` |
 | `ye_ast_workspace` | Discover outward names and candidate local repositories | `repos`, `gateways`, `revision`, `live`, `offline`, `scope`, `mode` |
 | `ye_ast_decisions` | Find workspace configuration gaps and evidence-backed options | `repos`, `gateways`, `revision`, `live`, `offline`, `scope`, `mode` |
 | `ye_ast_compose` | Combine related queries into shared entities, relations and evidence with source provenance | `queries`, `mode`, `expect`, `deadlineMs` |
@@ -383,7 +385,7 @@ Working rules:
 
 ### Compose related queries
 
-`ye_ast_compose` takes `queries` (1 to 16, each `{ name, arguments }` of one of the seven families above), `mode`,
+`ye_ast_compose` takes `queries` (1 to 16, each `{ name, arguments }` of one of the eight families above), `mode`,
 and optionally `expect` and `deadlineMs`:
 
 ```json
@@ -447,7 +449,7 @@ reruns every query and keeps no final results, so it can cost more analysis time
 A CLI or query-protocol fact has this envelope; MCP text modes return a smaller receipt as described below:
 
 ```text
-schema     contract version of the envelope (currently "0.21.0")
+schema     contract version of the envelope (currently "0.22.0")
 snapshot   what was read: { repo, kind: "sha", sha } or { repo, kind: "live", head, stateId }
 producer   ye-ast name and version
 inputs     trust mode, declared scope, change selection, budget
@@ -575,6 +577,7 @@ ye-ast callers . src/checkout.ts:placeOrder     # who depends on a symbol
 ye-ast callers . src/checkout.ts:40-72          # who depends on a line range
 ye-ast importers . src/checkout.ts              # who imports or uses a file
 ye-ast outline . src/checkout.ts                # declarations with spans, and imports
+ye-ast trace . src/checkout.ts:placeOrder       # what a declaration executes, with a reading plan
 ye-ast map --live .                             # the working tree (trusted only)
 ```
 
@@ -586,6 +589,7 @@ ye-ast map --live .                             # the working tree (trusted only
 | `ye-ast importers [--revision <rev> \| --live] [scope] <repo> <file> …` | Per file: importers, users and unresolved namers |
 | `ye-ast outline [--revision <rev> \| --live] [scope] <repo> <file> …` | Per file: its declarations with their spans, members under the declaration the graph's `contains` edges place them in, and every import: where it leads (a repository file, a package, or unresolved with its reason) and the names it binds, each with the declaration it reaches when proven |
 | `ye-ast outline [--revision <rev> \| --live] [scope] --focus <file>:<path> \| --focus <file>:<line> … <repo>` | Only the declarations a dotted path (`Class.member`, a bare name at any depth) or a line selects, each with its containers, its subtree and how many of the file's declarations were omitted; the path is the one `callers` accepts |
+| `ye-ast trace [--revision <rev> \| --live] [scope] [--depth <n>] [--expansions <n>] <repo> <file>:<symbol> \| <file>:<start>-<end> …` | What the selected declarations execute, in the order their bodies call it: each declaration expanded once, proven terminal callees folded into leaves, calls leaving the repository grouped by module, unsettled calls as `unresolved-link` cuts with their candidates, and the reading plan of the spans to open |
 | `ye-ast workspace [--revision <rev>] [--offline] [scope] <repo>` | The outward names the bound repository and the workspace it persists state, the local repository that serves each, and the names nothing serves |
 | `ye-ast decisions [--revision <rev>] [--offline] [scope] <repo>` | The gaps the same workspace leaves to the user, each with every option the workspace can verify |
 | `ye-ast init --trust trusted\|untrusted [--workspace <file>] [<repo>]` | Declares the trust mode (the repository defaults to `.`), writes the fixed layer (and the workspace manifest given, once every repository it names is a readable repository root), prints the MCP registration |
@@ -597,8 +601,8 @@ ye-ast map --live .                             # the working tree (trusted only
 |---|---|
 | `scope` | `[--include <glob>]… [--exclude <glob>]…` over repository-relative paths, on every query command; without `--include` every path is included; `--exclude` wins |
 | `changed` | `[--changed <glob>]…` on `impact` only: globs over the changed paths that seed the walk; a glob that selects no changed path is an error (`unknown-change-path`) |
-| `budget` | `[--depth <n>] [--hub-fan-in <n>] [--expansions <n>]` on `impact` and `callers`; positive integers, no defaults |
-| `--live` | Reads the working tree of a repository declared `trusted` from ye-AST's own mirror, instead of a revision. Replaces `--revision` (`map`, `callers`, `importers`, `outline`) or `--head` (`impact`; `--base` stays). Using both is a usage error (exit `2`); `workspace` and `decisions` take no `--live`. A stale answer adds one stderr line |
+| `budget` | `[--depth <n>] [--hub-fan-in <n>] [--expansions <n>]` on `impact` and `callers`, `[--depth <n>] [--expansions <n>]` on `trace`; positive integers, no defaults |
+| `--live` | Reads the working tree of a repository declared `trusted` from ye-AST's own mirror, instead of a revision. Replaces `--revision` (`map`, `callers`, `importers`, `outline`, `trace`) or `--head` (`impact`; `--base` stays). Using both is a usage error (exit `2`); `workspace` and `decisions` take no `--live`. A stale answer adds one stderr line |
 | `--offline` | `workspace` and `decisions` only: read every repository from its own clone and refresh no declared remote, as under `untrusted` |
 | `--repo-id` | Names the repository in every snapshot; without it the name is the directory of the repository's main worktree, so every linked worktree of one repository answers the same name |
 | `--measure` | Writes one JSON measurement line per query and per index build to stderr, never stdout |

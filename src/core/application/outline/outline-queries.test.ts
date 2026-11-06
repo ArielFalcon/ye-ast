@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { fakeCodeGraph, fakeNode } from "../impact/fake-code-graph.testing.ts";
+import { fakeCodeGraph, fakeNode } from "../navigation/fake-code-graph.testing.ts";
 import { fakeLive, type FakeLive } from "../live/fake-live.testing.ts";
 import type { OutlineSelector } from "../../ports/outline-queries.port.ts";
 import { createOutlineQueries, type OutlineQueriesDeps } from "./outline-queries.ts";

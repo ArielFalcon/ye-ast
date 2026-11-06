@@ -13,7 +13,7 @@ import type { AtRevision } from "../../ports/live-queries.port.ts";
 import type { ImportersValue } from "../../domain/impact/importers-fact.ts";
 import type { CommitExport, Vcs, VcsChanges, VcsFault } from "../../ports/vcs.port.ts";
 import type { AngularDeclaration } from "../../ports/angular-declarations.port.ts";
-import { fakeCodeGraph, fakeNode, type FakeEdge, type FakeNode, type FakeUnresolved } from "./fake-code-graph.testing.ts";
+import { fakeCodeGraph, fakeNode, type FakeEdge, type FakeNode, type FakeUnresolved } from "../navigation/fake-code-graph.testing.ts";
 import type { TrustRecordReader } from "../../ports/trust-record.port.ts";
 import { fakeLive, type FakeLive } from "../live/fake-live.testing.ts";
 import type { LiveStaleNotice } from "../../ports/live-queries.port.ts";

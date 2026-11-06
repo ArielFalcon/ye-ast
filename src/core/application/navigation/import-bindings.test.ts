@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { ModuleBinding, ModuleDependency } from "../../domain/impact/module-dependency.ts";
-import { fakeCodeGraph, fakeNode, type FakeEdge } from "../impact/fake-code-graph.testing.ts";
+import { fakeCodeGraph, fakeNode, type FakeEdge } from "./fake-code-graph.testing.ts";
 import { importBindings } from "./import-bindings.ts";
 
 const NODES = [

@@ -3,7 +3,7 @@ import test from "node:test";
 import { createJavaImportsReader } from "../core/adapters/spring/java-imports.adapter.ts";
 import { createJavaParser } from "../core/adapters/tree-sitter/java-parser.adapter.ts";
 import { createModuleDependenciesReader } from "../core/adapters/typescript/module-dependencies.adapter.ts";
-import { fakeCodeGraph, fakeNode, type FakeEdge, type FakeNode } from "../core/application/impact/fake-code-graph.testing.ts";
+import { fakeCodeGraph, fakeNode, type FakeEdge, type FakeNode } from "../core/application/navigation/fake-code-graph.testing.ts";
 import { createOutlineQueries, type OutlineQueriesDeps } from "../core/application/outline/outline-queries.ts";
 import type { OutlineFile } from "../core/domain/outline/outline-fact.ts";
 import type { Cut } from "../core/domain/shared/fact.ts";

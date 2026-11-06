@@ -1,6 +1,7 @@
 # RFC-0013: Trace and patterns
 
-- Status: Draft, 2026-11-01; open questions accepted by the owner ("Acepto las recomendaciones"); `patterns` deferred
+- Status: Draft, 2026-11-01; open questions accepted by the owner ("Acepto las recomendaciones"); `patterns` deferred;
+  trace slice 1 implemented, 2026-11-06 (schema 0.22.0)
 - Related: [RFC-0002](0002-facts-contract.md), [RFC-0007](0007-extension-model.md), [RFC-0010](0010-impact-queries.md),
   [RFC-0011](0011-cross-repository-impact.md), [ADR-0013](../adr/0013-coverage-grows-only-with-evidence.md),
   [ADR-0015](../adr/0015-index-reuse-by-content.md), [ADR-0017](../adr/0017-owner-of-a-member-expands-only-whole-type-edges.md)
@@ -54,11 +55,23 @@ A call is `callee(args)` or `receiver.member(args)`; each rule settles it to one
 |---|---|---|
 | R1 | A call edge the index resolved, unless its synthesizer is ignored by `EDGE_POLICY` | a step |
 | R2 | `this.<member>` and `this.<member>.<rest>` inside the class that declares the member (the inbound rule of RFC-0010, applied forward) | a step at the member |
-| R3 | `this.<field>.<member>`: the field's `FieldOrigin` holds a repository class (a step at its member, with dispatch R7 when it is an interface), an external type (a leaf), or nothing known (R6) | a step or a leaf |
+| R3 | `this.<field>.<member>`: the field's `FieldOrigin` holds a repository class (a step at its member, with dispatch R7 when it is an interface), an external type (a leaf), or nothing known (R6). Slice 2: it needs the call-binding port | a step or a leaf |
 | R4 | A bare name or a receiver identifier bound in the file: a local or a parameter whose declaration fixes its origin (`inject(T)`, `new T()`, `const x = this.f`, a type annotation `: T`), an import (a repository file: its export; a package: external with the package name), or no binding at all (a global: `global#Math`) | a step, a leaf |
 | R5 | A chain on a call result `head(...).m(...)`: the head is settled first; when it is a repository declaration with a declared return type, `m` is looked up in that type; when the type is external or absent, `m` is external of it | a step or a leaf per link of the chain |
-| R6 | Closed world: an unsettled call whose last name no declaration of the repository (within the declared scope) has cannot run repository code | a leaf `external`, unknown module |
+| R6 | Closed world, narrowed to what a name lookup proves (below): an unsettled call proven not to reach repository code | a leaf `external` |
 | R6b | Otherwise | a cut `unresolved-link` at the place, listing the repository declarations of that name as candidates |
+
+R6 applies only where the name at the call is the name of the callee:
+
+| Spelling | External leaf when | Otherwise |
+|---|---|---|
+| member call `x.m(...)` | no declaration within the declared scope is named `m` (`unnamed`) | R6b cut |
+| bare call `f(...)` | the import origins say the file imports `f` from a package (`import`, with the module) or the language's own libraries declare it (`global`) | cut: a local parameter, an alias or a computed callee may be a repository function passed under another name |
+| computed call `x[k](...)`, `(expr)(...)` | never | cut |
+
+Limitation, verified on a real index: an object literal's property keys are not declarations, so a call through an
+object-literal key whose name no declaration has is reported external `unnamed`, even when the key holds a repository
+function.
 
 R4 and R5 read the syntax tree of the file (the TypeScript compiler API in `core/adapters/typescript`, ADR-0008; the
 tree-sitter syntax tree for Java), never a type checker, and are computed once per file content.
@@ -67,35 +80,35 @@ tree-sitter syntax tree for Java), never a type checker, and are computed once p
 
 | # | Rule |
 |---|---|
-| R7 | Dispatch: a step at an interface or abstract method has as `alternatives` every implementation of it in the repository (through `implements` / `extends`, the same type walk `callers` uses); one implementation is expanded in place; none is a leaf and a cut |
+| R7 | Dispatch: a step at an interface or abstract method has as `alternatives` every implementation of it in the repository (through `implements` / `extends`, the same type walk `callers` uses). The step expands in place the one implementation when there is exactly one, or the one the framework's dispatch proves (a qualifier, `@Primary`, a named bean), noting which proof chose it; with several and no proof, none is expanded and the step carries a cut |
 | R8 | Order: children in the line and column of their call; a call inside a function passed as an argument (a callback to `subscribe`, `then`, `pipe`, `effect`, a stream lambda) is marked `deferred` |
 | R9 | Roots: a symbol, a line range or an entrypoint. An HTTP route, listener or job starts at its handler. A UI route starts at its component, whose children are its constructor and field initializers, then its lifecycle hooks in the framework's order, then the handlers its template binds to events, then its template children (`uses-component` and the rest) |
-| R10 | Folding: a step with no children and no effect is a leaf, listed by name on one line under its parent; external leaves are one line per parent grouped by module (`rxjs: pipe, subscribe`); nothing is dropped |
+| R10 | Folding: a proven terminal step (expanded, with no children, no cut and no effect) is a leaf `{symbol, file, start, end}` of its parent, `deferred` when the parent passes it as a value; the text lists it by name on one line under its parent, and the full answer keeps its location. A step a bound stopped or with an unsettled call stays a step. External leaves are one line per parent grouped by module (`rxjs: pipe, subscribe`); nothing is dropped |
 | R11 | A declaration already expanded appears again as `seen` with the step that expanded it; cycles end there |
 | R12 | Effects: an external leaf whose module, type and member a plugin row declares as an effect (HTTP clients, message publishers, data-access types; RFC-0007, ADR-0013) carries its kind, and its target when RFC-0011's call-site extraction resolves one |
 | R13 | Bounds and cuts as every walk: the RFC-0010 budget, unset by default; unresolved places, unbound dispatch and unreadable templates are cuts |
 
 ### The fact
 
+Slice 1 answers this shape; `effects` (R12) and `alternatives` (R7) join it in their slices.
+
 ```ts
 interface TraceValue {
-  root: { file: string; symbol: string; line: number; entrypoint?: { kind: string; name: string } };
-  steps: TraceStep[];                       // pre-order
-  effects: { kind: EffectKind; step: number; target?: Finding<HttpTarget | EventTarget>; api: string }[];
+  roots: { target: string; steps: number[] }[];   // per requested target, the root steps it selected
+  steps: TraceStep[];                              // pre-order
+  readingPlan: { ranges: { file: string; start: number; end: number; steps: number[] }[]; lines: number };
   cost: { expanded: number };
 }
 interface TraceStep {
   id: number; parent?: number; depth: number;
-  file: string; symbol: string; kind: string; line: number;
-  at: { line: number; column: number };     // the call in the parent
-  via: "call" | "dispatch" | "field" | "own-member" | "binding" | "chain" | "template-event" | "template-use" | "lifecycle";
+  file: string; symbol: string; kind: string; line: number; endLine?: number;
+  at?: { line: number; column?: number };          // the call in the parent
+  via?: "call" | "own-member" | "reference";
   deferred?: true;
-  alternatives?: number[];
   seen?: number;
-  leaves?: string[];                        // folded repository leaves (R10)
-  external?: { module: string; names: string[] }[];   // folded external leaves (R10)
+  leaves?: { symbol: string; file: string; start: number; end: number; deferred?: true }[];   // folded (R10)
+  external?: ({ kind: "import"; module: string; names: string[] } | { kind: "global" | "unnamed"; names: string[] })[];
 }
-type EffectKind = "http" | "message" | "data";
 ```
 
 ### Text for the agent
@@ -232,8 +245,8 @@ created with: a feature api file 9/11 (example 5b6ec5ca), a page that injects it
 
 | Slice | Delivers | Accepted by |
 |---|---|---|
-| 1 | R1-R3, R6-R6b, R8 (order), R10, R11, R13 over resolved edges, own members and field origins; roots by symbol and line range; `ye_ast_trace` and `ye-ast trace` | fixtures per rule; the frontend API trace reaches the wrapper and the framework HTTP call |
-| 2 | R4-R5: bindings, locals, parameters, imports, globals, chains through declared return types, in TypeScript and Java | fixtures per binding kind; the settled share on the probe measured and recorded |
+| 1 (implemented) | R1, R2, R6 narrowed, R6b, R8 (order), R10, R11, R13 over resolved edges and own members, with a reading plan of the spans to open; roots by symbol and line range; `ye_ast_trace` (and in `ye_ast_compose`), `ye-ast trace`, protocol `trace.walk` | fixtures per rule; real indexed fixtures for callback attribution and object-literal keys; parity across CLI, protocol and MCP |
+| 2 | R3 and R4-R5: field origins, bindings, locals, parameters, imports, globals, chains through declared return types, in TypeScript and Java | fixtures per binding kind; the settled share on the probe measured and recorded |
 | 3 | R7 dispatch and R9 entrypoint roots, with the template's event handlers read by the Angular adapter | the service checkout trace and the page trace |
 | 4 | R12 effects with RFC-0011 call-site targets | each effect of the acceptance table |
 

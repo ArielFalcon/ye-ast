@@ -7,7 +7,7 @@ import type { ImportOriginSite } from "../../ports/import-origins.port.ts";
 import type { CallersTarget } from "../../ports/impact-queries.port.ts";
 import type { TraceBudget, TraceRequest } from "../../ports/trace-queries.port.ts";
 import { fakeLive, type FakeLive } from "../live/fake-live.testing.ts";
-import { fakeCodeGraph, fakeNode, type FakeEdge, type FakeNode, type FakeUnresolved } from "../impact/fake-code-graph.testing.ts";
+import { fakeCodeGraph, fakeNode, type FakeEdge, type FakeNode, type FakeUnresolved } from "../navigation/fake-code-graph.testing.ts";
 import { createTraceQueries, type TraceQueriesDeps } from "./trace-queries.ts";
 
 const SHA = "a".repeat(40);
