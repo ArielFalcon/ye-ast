@@ -575,7 +575,7 @@ test("a repository that depends on another one given reads its calls through tha
         files: { "pom.xml": "<project/>", "src/main/java/orders/Orders.java": "class Orders {}" },
         names: [dependencyName("com.shop:shop-clients", "pom.xml", 20)],
       },
-      "/work/shop-clients": { files: { "src/main/java/clients/RestClient.java": "interface RestClient {}" } },
+      "/work/shop-clients": { files: { "src/main/java/clients/RestClient.java": "interface RestClient {}" }, artifacts: ["com.shop:shop-clients"] },
       "/work/billing": { files: { "pom.xml": "<project/>" } },
     },
     callSites,
@@ -1086,4 +1086,89 @@ test("without a dependency on a repository given, a listener that repository's s
   const value = valueOf(await queries.outwardNames({ repo: { path: "/work/shop-web" }, repos: [{ path: "/work/orders" }, { path: "/work/messenger" }] }));
 
   assert.deepEqual(value.links, []);
+});
+
+test("duplicate dependency coordinates are a typed cut and never a union of library sources", async () => {
+  const libraries: string[][] = [];
+  const queries = setup({
+    "/work/app": { files: { "pom.xml": "<project/>" }, names: [dependencyName("com.acme:clients", "pom.xml", 4)] },
+    "/work/one": { files: { "One.java": "class One {}" }, artifacts: ["com.acme:clients"] },
+    "/work/two": { files: { "Two.java": "class Two {}" }, artifacts: ["com.acme:clients"] },
+  }, { of: async (_files, repo, sources) => { if (repo === "app") libraries.push((sources ?? []).map(s => s.path)); return []; } });
+  const ask = { repo: { path: "/work/app" }, repos: [{ path: "/work/two" }, { path: "/work/one" }] };
+  const first = readOf(await queries.outwardNames(ask)).fact;
+  assert.deepEqual(libraries, [[]]);
+  assert.notEqual(first.status, "unknown");
+  if (first.status === "unknown") return;
+  const section = first.value.sections.app;
+  assert.equal(section?.status, "partial");
+  assert.deepEqual(section?.status === "partial" && section.cuts, [{ kind: "unresolved-link", reason: "unresolved", at: ["pom.xml", "pom.xml:4"], dependency: { name: "com.acme:clients", reason: "ambiguous", candidates: ["one", "two"] } }]);
+  assert.deepEqual(readOf(await queries.outwardNames({ ...ask, repos: [...ask.repos].reverse() })).fact, first);
+});
+
+test("a dependency matching only a clone name stays an explicit unproven-coordinate cut", async () => {
+  for (const id of ["clients", "com.acme:clients"]) {
+    const libraries: string[][] = [];
+    const queries = setup({
+      "/work/app": { files: { "pom.xml": "<project/>" }, names: [dependencyName("com.acme:clients", "pom.xml", 7)] },
+      "/work/clients": { files: { "Client.java": "class Client {}" } },
+    }, { of: async (_files, repo, sources) => { if (repo === "app") libraries.push((sources ?? []).map(s => s.path)); return []; } });
+    const value = valueOf(await queries.outwardNames({ repo: { path: "/work/app" }, repos: [{ path: "/work/clients", id }] }));
+    assert.deepEqual(libraries, [[]]);
+    const section = value.sections.app;
+    assert.deepEqual(section?.status === "partial" && section.cuts[0]?.dependency, { name: "com.acme:clients", reason: "unproven-coordinates", candidates: [id] });
+  }
+});
+
+test("a unique proven dependency ignores a same-artifact repository from another Maven group", async () => {
+  const libraries: string[][] = [];
+  const queries = setup({
+    "/work/app": { files: { "pom.xml": "<project/>" }, names: [dependencyName("com.acme:clients", "pom.xml", 4)] },
+    "/work/clients": { files: { "Correct.java": "class Correct {}" }, artifacts: ["com.acme:clients"] },
+    "/work/wrong": { files: { "Wrong.java": "class Wrong {}" }, artifacts: ["org.other:clients"] },
+  }, { of: async (_files, repo, sources) => { if (repo === "app") libraries.push((sources ?? []).map(s => s.path)); return []; } });
+  const value = valueOf(await queries.outwardNames({ repo: { path: "/work/app" }, repos: [{ path: "/work/clients" }, { path: "/work/wrong" }] }));
+  assert.deepEqual(libraries, [["Correct.java"]]);
+  assert.equal(value.sections.app?.status, "complete");
+});
+
+test("Maven coordinates that are incomplete or still contain properties cannot authorize library sources", async () => {
+  for (const coordinate of ["clients", "\u0024{group}:clients"]) {
+    const libraries: string[][] = [];
+    const queries = setup({
+      "/work/app": { files: { "pom.xml": "<project/>" }, names: [dependencyName(coordinate, "pom.xml", 4)] },
+      "/work/clients": { files: { "Client.java": "class Client {}" }, artifacts: [coordinate] },
+    }, { of: async (_files, repo, sources) => { if (repo === "app") libraries.push((sources ?? []).map(s => s.path)); return []; } });
+    const value = valueOf(await queries.outwardNames({ repo: { path: "/work/app" }, repos: [{ path: "/work/clients" }] }));
+    assert.deepEqual(libraries, [[]]);
+    assert.deepEqual(value.candidates, []);
+    const section = value.sections.app;
+    assert.equal(section?.status === "partial" && section.cuts[0]?.dependency?.reason, "unproven-coordinates");
+  }
+});
+
+test("a conflicting Maven group is unserved rather than a speculative dependency ambiguity", async () => {
+  const libraries: string[][] = [];
+  const queries = setup({
+    "/work/app": { files: { "pom.xml": "<project/>" }, names: [dependencyName("com.acme:clients", "pom.xml", 4)] },
+    "/work/clients": { files: { "Wrong.java": "class Wrong {}" }, artifacts: ["org.other:clients"] },
+  }, { of: async (_files, repo, sources) => { if (repo === "app") libraries.push((sources ?? []).map(s => s.path)); return []; } });
+  const value = valueOf(await queries.outwardNames({ repo: { path: "/work/app" }, repos: [{ path: "/work/clients" }] }));
+  assert.deepEqual(libraries, [[]]);
+  assert.equal(value.sections.app?.status, "complete");
+  assert.deepEqual(value.unserved.map(({ name }) => name), ["com.acme:clients"]);
+});
+
+test("an ambiguous dependency does not suppress independently proven library sources", async () => {
+  const libraries: string[][] = [];
+  const queries = setup({
+    "/work/app": { files: { "pom.xml": "<project/>" }, names: [dependencyName("com.acme:clients", "pom.xml", 4), dependencyName("com.acme:safe", "pom.xml", 5)] },
+    "/work/one": { files: { "One.java": "class One {}" }, artifacts: ["com.acme:clients"] },
+    "/work/two": { files: { "Two.java": "class Two {}" }, artifacts: ["com.acme:clients"] },
+    "/work/safe": { files: { "Safe.java": "class Safe {}" }, artifacts: ["com.acme:safe"] },
+  }, { of: async (_files, repo, sources) => { if (repo === "app") libraries.push((sources ?? []).map(s => s.path)); return []; } });
+  const value = valueOf(await queries.outwardNames({ repo: { path: "/work/app" }, repos: [{ path: "/work/one" }, { path: "/work/two" }, { path: "/work/safe" }] }));
+  assert.deepEqual(libraries, [["Safe.java"]]);
+  const section = value.sections.app;
+  assert.deepEqual(section?.status === "partial" && section.cuts.map(cut => cut.dependency?.name), ["com.acme:clients"]);
 });

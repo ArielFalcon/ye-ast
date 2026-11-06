@@ -225,8 +225,9 @@ test("link endpoint preserves unknown analysis when its provenance is present", 
   deepStrictEqual(result.context.endpoints.to, { snapshot: unknownEndpoint.snapshot, analysis: { status: "unknown", reason: "deadline" } });
 });
 
-test("cut projections keep the typed reason that discovery recorded", () => {
-  const source = { ...fact, status: "partial" as const, cuts: [{ kind: "unresolved-link" as const, reason: "source-unreadable" as const, at: ["broken.java", "broken.java:3"] }] as const };
+test("cut projections keep the typed reason and dependency diagnostic that discovery recorded", () => {
+  const source = { ...fact, status: "partial" as const, cuts: [{ kind: "unresolved-link" as const, reason: "source-unreadable" as const, at: ["broken.java", "broken.java:3"], dependency: { name: "com.acme:clients", reason: "ambiguous" as const, candidates: ["one", "two"] } }] as const };
   const result = selected(selectEvidence({ kind: "local", fact: source }, { kind: "cut-places", owner: { kind: "fact" }, cutIndex: 0 }));
   strictEqual(result.kind === "cut-places" && result.context.reason, "source-unreadable");
+  deepStrictEqual(result.kind === "cut-places" && result.context.dependency, source.cuts[0].dependency);
 });

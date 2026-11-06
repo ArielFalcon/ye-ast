@@ -64,3 +64,20 @@ test("evidence identity includes span, confidence and via with deterministic ord
   assert.equal(forward.length, 3);
   assert.deepEqual(sortEvidence([...places].reverse()), forward);
 });
+
+test("Maven dependency candidates require the complete declared coordinates, while service names keep their existing recognition", async () => {
+  const { nameCandidates } = await import("./repository-identity.ts");
+  const identities = [
+    { repo: "correct", id: "correct", artifacts: ["com.acme:clients"], remotes: [], evidence: [] },
+    { repo: "clients", id: "clients", artifacts: ["org.other:clients"], remotes: [], evidence: [] },
+  ];
+  const dependency = { name: "com.acme:clients", kind: "dependency" as const, evidence: [{ path: "pom.xml", line: 4 }] };
+  assert.deepEqual(nameCandidates(dependency, identities, "app").map(({ repo, basis }) => ({ repo, basis })), [{ repo: "correct", basis: "artifact" }]);
+  assert.deepEqual(nameCandidates({ ...dependency, name: "http://clients/items", kind: "http-host" }, identities, "app").map(({ repo }) => repo), ["clients", "correct"]);
+});
+
+test("qualified Maven recognition keeps the existing optional version outside artifact identity", async () => {
+  const { nameCandidates } = await import("./repository-identity.ts");
+  const candidates = nameCandidates({ name: "com.acme:clients@2", kind: "dependency", evidence: [] }, [{ repo: "library", id: "library", artifacts: ["com.acme:clients"], remotes: [], evidence: [] }], "app");
+  assert.deepEqual(candidates.map(({ repo, basis }) => ({ repo, basis })), [{ repo: "library", basis: "artifact" }]);
+});

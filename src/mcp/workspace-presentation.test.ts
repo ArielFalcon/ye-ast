@@ -130,3 +130,13 @@ test("unresolved diagnostics stay compact in summaries and retain causal evidenc
   assert.match(details, /unresolved\/destination-undecidable.*read/);
   assert.match(details, /\(library\)\/0\/Client.java:12/);
 });
+
+test("dependency ambiguity remains visible with its candidates in both workspace text modes", () => {
+  const cut = { kind: "unresolved-link", reason: "unresolved", at: ["pom.xml", "pom.xml:4"], dependency: { name: "com.acme:clients", reason: "ambiguous", candidates: ["one", "two"] } };
+  const value = { workspace: { repos: ["a"], source: "request" }, repositorySnapshots: [{ repo: "a", snapshot: base.snapshot }], sections: { a: { ...base, status: "partial", cuts: [cut], value: { names: [], unresolved: [] } } }, candidates: [], links: [], unlinked: [], unserved: [] };
+  for (const mode of ["summary", "details"] as const) {
+    const text = renderWorkspace({ ...base, status: "complete", value } as never, mode);
+    assert.match(text, /com.acme:clients.*ambiguous.*one, two/);
+    if (mode === "details") assert.match(text, /pom.xml.*4/);
+  }
+});

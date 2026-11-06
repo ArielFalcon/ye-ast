@@ -40,7 +40,7 @@ const FIRST_LABEL = /^[^.:/]+/;
 
 /**
  * The token of a name that can equal a repository's identity. An HTTP name is its first host label or first path segment;
- * a coordinate is its last segment, without the version; a destination stands for itself, since a repository serves a
+ * a Maven coordinate stays qualified and a package name uses its last segment, without the version. A destination stands for itself: a repository serves a
  * message subject by listening to it, which only the join decides.
  */
 export function serviceLabel({ name, kind }: Pick<OutwardName, "name" | "kind">): string {
@@ -59,6 +59,7 @@ export function serviceLabel({ name, kind }: Pick<OutwardName, "name" | "kind">)
     }
     case "dependency": {
       const coordinate = name.split("@")[0] ?? name;
+      if (coordinate.includes(":")) return coordinate;
       return coordinate.split(/[:/]/).filter(Boolean).pop() ?? coordinate;
     }
     case "remote":

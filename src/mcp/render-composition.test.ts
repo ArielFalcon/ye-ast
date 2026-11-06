@@ -463,3 +463,12 @@ test("composed unresolved rows retain the diagnostic and causal evidence", () =>
   assert.match(text, /unresolved call site.*OrdersService.remote.*destination-undecidable.*read/);
   assert.match(text, /\(library\)\/0\/Client.java.*17/);
 });
+
+test("composition text retains dependency selection diagnostics next to their cuts", () => {
+  const value = workspaceValue();
+  const section = value.sections.web;
+  assert.ok(section && section.status !== "unknown");
+  const cut = { kind: "unresolved-link" as const, reason: "unresolved" as const, at: ["pom.xml", "pom.xml:4"], dependency: { name: "com.acme:clients", reason: "unproven-coordinates" as const, candidates: ["clients"] } };
+  const result = resultOf([sourceFixture("workspace", { value: { ...value, sections: { ...value.sections, web: { ...section, status: "partial", cuts: [cut] } } } })]);
+  for (const mode of ["summary", "details"] as const) assert.match(renderComposition(result, mode), /com.acme:clients.*unproven-coordinates.*clients/);
+});

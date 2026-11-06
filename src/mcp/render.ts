@@ -1,4 +1,4 @@
-import { unresolvedLabel } from "./presentation.ts";
+import { dependencyDiagnosticText, unresolvedLabel } from "./presentation.ts";
 import { canSelect, categoryRecovery, literalSelection, sharedLookup } from "./presentation-guidance.ts";
 import type { CutOwner, ImpactOwner, EvidenceSelection } from "./select-evidence.ts";
 import { renderFactHeader as headerLines, renderFactStatus as statusLines, snapshotLine, evidenceText, cutsByKind } from "./presentation-context.ts";
@@ -178,7 +178,15 @@ function unresolvedDeclarations(cuts: readonly Cut[]): string[] {
 
 /** Every cut once: those that name a single path grouped per kind with every path listed, the rest one line each. Under
  * a summary, an unresolved link keeps only what it could not settle to. */
+function dependencyCutLines(cuts: readonly Cut[], detail: ResponseMode): string[] {
+  return cuts.flatMap((cut) => cut.dependency === undefined ? [] : [`  ${dependencyDiagnosticText(cut.dependency)}${detail === "details" ? ` at ${cutPlaces(cut)}` : ""}`]);
+}
+
+/** Cuts, grouped once by kind; a single-path kind puts all its paths on one line (many skipped files are one fact). In
+ * a summary, an unresolved link keeps only what it could not settle to. */
 function cutLines(cuts: readonly Cut[], detail: ResponseMode): string[] {
+  const dependencies = dependencyCutLines(cuts, detail);
+  if (dependencies.length > 0) return [...dependencies, ...cutLines(cuts.filter((cut) => cut.dependency === undefined), detail)];
   return cutsByKind(cuts).flatMap(([kind, ofKind]) => {
     if (kind === "unresolved-link" && detail !== "details") return unresolvedDeclarations(ofKind);
     const single = ofKind.filter((cut) => cut.at.length === 1);
@@ -813,6 +821,8 @@ function groupedSeeds(seeds: readonly Seed[]): string[] {
 
 function impactCuts(cuts: readonly Cut[], detail: ResponseMode): string[] {
   if (cuts.length === 0) return [];
+  const dependencies = dependencyCutLines(cuts, detail);
+  if (dependencies.length > 0) return [CUTS, ...dependencies, ...impactCuts(cuts.filter((cut) => cut.dependency === undefined), detail).slice(1)];
   const groups = cutsByKind(cuts);
   if (detail === "summary") return [CUTS, ...groups.map(([kind, group]) => {
     const limits = [...new Set(group.flatMap((cut) => cut.limit === undefined ? [] : [cut.limit]))].toSorted((a, b) => a - b);

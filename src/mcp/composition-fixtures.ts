@@ -222,7 +222,7 @@ export function workspaceValue(): PublicWorkspaceValue {
           ],
           unresolved: [{ reason: "unresolved", diagnostic: { cause: "destination-undecidable", source: "read" }, evidence: [{ path: "(library)/0/Client.java", line: 17 }], path: "src/dyn.ts", line: 4, symbol: "Dyn.call", transport: "http", via: "httpClient", stated: { method: "POST", path: "/x" } }, { reason: "source-unreadable", evidence: [{ path: "src/dyn.ts", line: 9 }], path: "src/dyn.ts", line: 9, endLine: 11, symbol: "Dyn.emit", transport: "event" }],
         },
-        { snapshot: liveRef("web", "state-1"), cuts: [{ kind: "unresolved-link", at: ["src/dyn.ts"] }] },
+        { snapshot: liveRef("web", "state-1"), cuts: [{ kind: "unresolved-link", at: ["src/dyn.ts"], dependency: { name: "com.acme:clients", reason: "ambiguous", candidates: ["one", "two"] } }] },
       ),
       shop: unknownFactOf("index-unavailable", { snapshot: shaRef("shop") }),
     },

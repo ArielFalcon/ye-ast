@@ -11,7 +11,7 @@ import { entrypointsOf, joinWorkspace, linkMapOf } from "./workspace-join.ts";
 import type { HeadReaderDeps, HeldLive } from "../snapshot/head-reading.ts";
 import type { WorkspaceReadOperation } from "./workspace-operation.ts";
 import { callSiteEvidence, unresolvedCallSite, type CallSite, type CallSiteReader } from "../../domain/topology/call-site.ts";
-import { nameCandidates, repositoryNameOf, type RepositoryIdentity } from "../../domain/topology/repository-identity.ts";
+import { nameCandidates, selectDependency, repositoryNameOf, type RepositoryIdentity } from "../../domain/topology/repository-identity.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { PathMatcher } from "../../ports/path-matcher.port.ts";
 import type { RemoteRefresh } from "../../ports/remote-refresh.port.ts";
@@ -123,19 +123,24 @@ export function createWorkspaceReadOperation(deps: WorkspaceQueriesDeps): Worksp
 
   /**
    * The call sites and the entrypoints of each repository. A repository that depends on another one given, by the
-   * artifact or name the dependency states, reads the calls it makes through that repository's classes, and the
+   * uniquely proven artifact the dependency states, reads the calls it makes through that repository's classes, and the
    * listeners it inherits from them, with its sources.
    */
   async function withDependencies(read: readonly ReadRepository[], identities: readonly RepositoryIdentity[], selected: PathSelection): Promise<Resolved[]> {
     const resolved: Resolved[] = [];
     for (const entry of read) {
-      const libraries = read.filter(
-        (other) => other !== entry && entry.stated.some((name) => name.kind === "dependency" && nameCandidates(name, identities, entry.repository.repo).some((candidate) => candidate.repo === other.identity.id)),
-      );
+      const dependencies = entry.stated.filter((name) => name.kind === "dependency").map((name) => ({ name, selection: selectDependency(name, identities, entry.repository.repo) }));
+      const selectedRepos = new Set(dependencies.flatMap(({ selection }) => selection.status === "selected" ? [selection.repo] : []));
+      const libraries = read.filter((other) => other !== entry && selectedRepos.has(other.identity.id));
+      const cuts: Cut[] = [...entry.cuts, ...dependencies.flatMap(({ name, selection }): Cut[] => selection.status !== "unresolved" ? [] : [{
+        kind: "unresolved-link", reason: "unresolved",
+        at: [name.evidence[0]?.path ?? name.name, ...name.evidence.map((place) => `${place.path}:${place.line}`)],
+        dependency: selection.diagnostic,
+      }])];
       const librarySources = libraries.flatMap((library) => library.sources);
       const callSites = (await deps.callSites.of(entry.sources, entry.repository.repo, librarySources)).filter((site) => selected(site.file));
       const entrypoints = librarySources.length === 0 ? entry.repository.entrypoints : selectedFindings(await deps.extractor.extract(entry.sources, librarySources), selected);
-      resolved.push({ ...entry, repository: { ...entry.repository, entrypoints }, callSites, names: [...entry.stated, ...callSiteNames(entry.repository.repo, callSites)] });
+      resolved.push({ ...entry, cuts, repository: { ...entry.repository, entrypoints }, callSites, names: [...entry.stated, ...callSiteNames(entry.repository.repo, callSites)] });
     }
     return resolved;
   }

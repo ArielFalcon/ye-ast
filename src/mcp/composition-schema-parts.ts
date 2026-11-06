@@ -1,3 +1,4 @@
+import { dependencyDiagnostic } from "./dependency-schema.ts";
 /**
  * Closed runtime schemas of the domain values a composition carries: shared fact fields, snapshot and
  * read owners, and every `Part` variant. Private to composition-schema.ts; every object is strict and every optional
@@ -25,6 +26,7 @@ export const cut = z.strictObject({
   kind: z.enum(["depth", "hub", "caller-budget", "node-cap", "unresolved-link", "deadline", "section", "not-exported", "no-extractor"]),
   at: strings,
   reason: unknownReason.exactOptional(),
+  dependency: dependencyDiagnostic.exactOptional(),
   limit: z.number().exactOptional(),
 });
 export const snapshotRef = z.discriminatedUnion("kind", [

@@ -1,3 +1,4 @@
+import { dependencyDiagnostic } from "./dependency-schema.ts";
 import { callSiteDiagnostic, unresolvedCallSiteSchema } from "./composition-schema-parts.ts";
 import { compactInput } from "./compact-schema.ts";
 import { selectedOutputFor } from "./evidence-schema.ts";
@@ -92,7 +93,7 @@ const snapshot = z.discriminatedUnion("kind", [
   z.looseObject({ repo: z.string(), kind: z.literal("sha"), sha: z.string() }),
   z.looseObject({ repo: z.string(), kind: z.literal("live"), head: z.string(), stateId: z.string() }),
 ]);
-const cut = z.looseObject({ kind: z.string(), at: z.array(z.string()) });
+const cut = z.looseObject({ kind: z.string(), at: z.array(z.string()), dependency: dependencyDiagnostic.optional() });
 const baseFact = {
   schema: z.string(),
   snapshot,
