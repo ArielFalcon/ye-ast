@@ -25,12 +25,13 @@ function dispatchIndex(project: JavaProject): DispatchIndex {
   const index: DispatchIndex = { implementations: new Map(), named: new Map(), primary: new Set() };
   const register = (name: string, type: TypeDecl) => {
     const types = index.named.get(name) ?? new Set<TypeDecl>();
-    types.add(type); index.named.set(name, types);
+    index.named.set(name, types.add(type));
   };
   for (const type of project.types) {
     if (type.kind === "class" && !type.isAbstract) for (const parent of project.hierarchy(type).types) {
       const types = index.implementations.get(parent) ?? [];
-      types.push(type); index.implementations.set(parent, types);
+      types.push(type);
+      index.implementations.set(parent, types);
     }
     for (const use of annotationUses(type.node, scopeOf(type))) {
       if (isAnnotation(use, PRIMARY)) index.primary.add(type);
@@ -164,7 +165,8 @@ export class JavaMethodFlow<T extends { invocation: Invocation }> {
 
   expand(call: Invocation, scope: UrlScope): { leaf: T; scope: UrlScope }[][] | undefined {
     type Group = { leaf: T; scope: UrlScope }[];
-    type Frame = { selection: MethodSelection; scope: UrlScope; active: ReadonlySet<number>; key: string; groups: Group[]; edges: Group[][][]; done: (groups: Group[]) => void };
+    type Frame = { groups: Group[]; edges: Group[][][] };
+    type Done = (groups: Group[]) => void;
     const cache = new Map<string, Group[]>();
     const scopeIds = new WeakMap<UrlScope, number>();
     let serial = 0;
@@ -191,7 +193,7 @@ export class JavaMethodFlow<T extends { invocation: Invocation }> {
     if (!selections.some(({ method }) => (this.reachable.get(method.node.id)?.size ?? 0) > 0)) return undefined;
     const roots: Group[][] = [];
     const pending: (() => void)[] = [];
-    const schedule = (selection: MethodSelection, bound: UrlScope, active: ReadonlySet<number>, done: Frame["done"]) => {
+    const schedule = (selection: MethodSelection, bound: UrlScope, active: ReadonlySet<number>, done: Done) => {
       pending.push(() => {
         const method = selection.method.node.id;
         if (active.has(method)) {
@@ -201,7 +203,7 @@ export class JavaMethodFlow<T extends { invocation: Invocation }> {
         const key = `${method}:${selection.receiver.node.id}:${bound.configurationFile?.path}:${[...bound.env].map(([name, value]) => `${name}=${closureKey(value.node, value.scope)}`).join(";")}`;
         const cached = cache.get(key);
         if (cached !== undefined) { done(cached); return; }
-        const frame: Frame = { selection, scope: bound, active, key, groups: (this.leaves.get(method) ?? []).map((leaf) => [{ leaf, scope: { ...bound, locals: leaf.invocation.locals } }]), edges: [], done };
+        const frame: Frame = { groups: (this.leaves.get(method) ?? []).map((leaf) => [{ leaf, scope: { ...bound, locals: leaf.invocation.locals } }]), edges: [] };
         pending.push(() => {
           const groups = [...frame.groups, ...frame.edges.flatMap(merge)];
           cache.set(key, groups); done(groups);

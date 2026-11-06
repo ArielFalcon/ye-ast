@@ -544,8 +544,8 @@ function investigationSymbols(value: ImpactValue): readonly ImpactedSymbol[] {
 }
 
 const plural = (count: number, noun: string) => `${count} ${noun}${count === 1 ? "" : "s"}`;
-const byCodePoint = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 const segmentsOf = (file: string) => file.split("/");
+const symbolKey = (file: string, symbol: string) => `${file}\0${symbol}`;
 
 /** A `changed` glob over changed files and the narrower areas inside it. */
 interface ChangeArea {
@@ -562,7 +562,7 @@ function directoryAreas(files: readonly string[], depth: number): ChangeArea[] {
     let end = depth + 1;
     while (inside.every((file) => { const segments = segmentsOf(file); return segments.length > end + 1 && segments[end] === first[end]; })) end++;
     return { glob: `${first.slice(0, end).join("/")}/**`, files: inside, children: directoryAreas(inside, end) };
-  }).toSorted((a, b) => byCodePoint(a.glob, b.glob));
+  }).toSorted((a, b) => compareText(a.glob, b.glob));
 }
 
 /**
@@ -571,14 +571,14 @@ function directoryAreas(files: readonly string[], depth: number): ChangeArea[] {
  * to it repeats the request.
  */
 function changeAreas(changed: readonly string[]): readonly ChangeArea[] | undefined {
-  const files = [...new Set(changed)].toSorted(byCodePoint);
+  const files = [...new Set(changed)].toSorted(compareText);
   const first = segmentsOf(files[0] ?? "");
   let shared = 0;
   while (files.every((file) => { const segments = segmentsOf(file); return segments.length > shared + 1 && segments[shared] === first[shared]; })) shared++;
   const roots = [
     ...files.filter((file) => segmentsOf(file).length === shared + 1).map((file) => ({ glob: file, files: [file], children: [] })),
     ...directoryAreas(files, shared),
-  ].toSorted((a, b) => byCodePoint(a.glob, b.glob));
+  ].toSorted((a, b) => compareText(a.glob, b.glob));
   return roots.length > 1 ? roots : undefined;
 }
 
@@ -587,7 +587,7 @@ function seedFileOf(symbol: ImpactedSymbol, seedFiles: ReadonlyMap<string, strin
   const visited = new Set<ImpactedSymbol>();
   for (let current: ImpactedSymbol | undefined = symbol; current?.via !== undefined && !visited.has(current);) {
     visited.add(current);
-    const key = `${current.via.file}\0${current.via.symbol}`;
+    const key = symbolKey(current.via.file, current.via.symbol);
     const file = seedFiles.get(key);
     if (file !== undefined) return file;
     current = byKey.get(key);
@@ -597,9 +597,12 @@ function seedFileOf(symbol: ImpactedSymbol, seedFiles: ReadonlyMap<string, strin
 
 /** A change's impacted symbols and module dependencies counted per changed area, so a large change answers where to narrow. */
 function areaLines(value: ImpactValue, areas: readonly ChangeArea[], symbols: readonly ImpactedSymbol[]): string[] {
-  const seedFiles = new Map(value.seeds.map((seed) => [`${seed.file}\0${seed.symbol}`, seed.file]));
+  const seedFiles = new Map(value.seeds.map((seed) => [symbolKey(seed.file, seed.symbol), seed.file]));
   const byKey = new Map<string, ImpactedSymbol>();
-  for (const symbol of symbols) if (!byKey.has(`${symbol.file}\0${symbol.symbol}`)) byKey.set(`${symbol.file}\0${symbol.symbol}`, symbol);
+  for (const symbol of symbols) {
+    const key = symbolKey(symbol.file, symbol.symbol);
+    if (!byKey.has(key)) byKey.set(key, symbol);
+  }
   type Tally = { seeds: number; direct: number; deeper: number; entrypoints: Set<number>; modules: Set<number> };
   const tallies = new Map<string, Tally>();
   const tally = (file: string) => tallies.get(file) ?? tallies.set(file, { seeds: 0, direct: 0, deeper: 0, entrypoints: new Set(), modules: new Set() }).get(file)!;
@@ -612,12 +615,13 @@ function areaLines(value: ImpactValue, areas: readonly ChangeArea[], symbols: re
     else tally(file).deeper++;
   }
   value.entrypoints.forEach((entrypoint, index) => { for (const seed of entrypoint.seeds) if (value.seeds[seed] !== undefined) tally(value.seeds[seed].file).entrypoints.add(index); });
-  value.modules?.modules.forEach((module, index) => { for (const origin of module.origins) if (value.modules!.origins[origin] !== undefined) tally(value.modules!.origins[origin].file).modules.add(index); });
+  const modules = value.modules;
+  modules?.modules.forEach((module, index) => { for (const origin of module.origins) if (modules.origins[origin] !== undefined) tally(modules.origins[origin].file).modules.add(index); });
   const row = (area: ChangeArea, level: number): string[] => {
     const parts = area.files.map((file) => tally(file));
     const sum = (count: (part: Tally) => number) => parts.reduce((total, part) => total + count(part), 0);
     const union = (members: (part: Tally) => Set<number>) => new Set(parts.flatMap((part) => [...members(part)])).size;
-    const counts = [plural(sum((part) => part.seeds), "seed"), `${sum((part) => part.direct)} direct`, `${sum((part) => part.deeper)} deeper`, plural(union((part) => part.entrypoints), "entrypoint"), ...(value.modules === undefined ? [] : [plural(union((part) => part.modules), "module")])];
+    const counts = [plural(sum((part) => part.seeds), "seed"), `${sum((part) => part.direct)} direct`, `${sum((part) => part.deeper)} deeper`, plural(union((part) => part.entrypoints), "entrypoint"), ...(modules === undefined ? [] : [plural(union((part) => part.modules), "module")])];
     return [`${"  ".repeat(level)}${area.glob}: ${counts.join(", ")}`, ...area.children.flatMap((child) => row(child, level + 1))];
   };
   return [
@@ -663,7 +667,7 @@ function impactBody(value: ImpactValue, detail: ResponseMode, owner: ImpactOwner
     ...(detail === "details" && value.entrypoints.some((entrypoint) => entrypoint.seeds.length > 0) ? ["  A recorded origin is an association, not a complete call chain."] : []),
     ...(detail === "summary" && value.entrypoints.some((entrypoint) => entrypoint.seeds.length > 0) ? [`  origin associations (${value.entrypoints.reduce((total, entrypoint) => total + entrypoint.seeds.length, 0)}): counted below; mode "details" shows one per entrypoint; ${categoryRecovery({ full: "includes all" })}`] : []),
     ...reachedGroup(value, detail, owner, handler === undefined || selectable({ kind: "handler-origins", owner, handler: { path: handler.path, symbol: handler.symbol, line: handler.line } })),
-    ...consequenceLines(value, detail, narrowable, module === undefined || selectable({ kind: "module-origins", owner, module: { file: module.file, snapshot: module.snapshot } }), owner),
+    ...consequenceLines(value, detail, owner, module === undefined || selectable({ kind: "module-origins", owner, module: { file: module.file, snapshot: module.snapshot } }), narrowable),
   ];
 }
 
@@ -671,7 +675,7 @@ function impactBody(value: ImpactValue, detail: ResponseMode, owner: ImpactOwner
  * Impacted symbols and module dependencies. A change's summary that the request can narrow with `changed` counts both
  * per changed area instead, when that is not longer.
  */
-function consequenceLines(value: ImpactValue, detail: ResponseMode, narrowable: boolean, selectable: boolean, owner: ImpactOwner): string[] {
+function consequenceLines(value: ImpactValue, detail: ResponseMode, owner: ImpactOwner, selectable: boolean, narrowable: boolean): string[] {
   const listed = [...impactedSymbols(value, detail), ...(value.modules === undefined ? [] : moduleLines(value.modules, detail, owner, selectable))];
   const symbols = consequenceSymbols(value);
   const areas = detail === "summary" && narrowable && value.mergeBase !== undefined && symbols.length > 0
