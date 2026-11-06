@@ -73,6 +73,11 @@ explicitly typed `string`, `number`, `boolean` or `bigint` may remain a paramete
 escaping global object in the provided snapshot keep the evaluation unknown. No repository function is executed. A whole
 run-time URL such as `fetch(url)` remains unknown when `url` names a run-time parameter.
 
+`fetch(url, init)` takes its method from the init object it states, GET without one; an init that is not an object
+literal, or a spread or computed member that may state `method` after it, leaves the method undecided. An
+`httpResource` request object's `url` and `method` are read the same way, shorthand included. A `fetch` the file or the
+code around declares or imports is not the global one, and its call is no request.
+
 The text after the first `?` or `#` of a URL is its query or fragment, which no route serves: evaluation stops there, so
 a value the query names never leaves the path undecided. An argument of `encodeURIComponent` cut there is undecided.
 

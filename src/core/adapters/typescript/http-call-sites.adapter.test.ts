@@ -422,6 +422,22 @@ test("an httpResource is a call site: a URL its function returns is a GET, a req
   assert.deepEqual(sites(found), ["GET /orders/{}@src/app/app.component.ts:6", "POST /receipts@src/app/app.component.ts:7"]);
 });
 
+test("a fetch takes its method from the init object it states, GET when that names none, and is undecided when the init may state another", async () => {
+  const found = await reader.of([component("    fetch('/items', { method: 'DELETE' })", "    fetch('/items', { headers: {} })", "    fetch('/items', { ...this.defaults })", "    fetch('/items', this.options)", "    fetch('/items', { ...this.defaults, method: 'PUT' })")], "shop-web");
+
+  assert.deepEqual(sites(found), ["DELETE /items@src/app/app.component.ts:6", "GET /items@src/app/app.component.ts:7", "unknown unresolved@src/app/app.component.ts:8", "unknown unresolved@src/app/app.component.ts:9", "PUT /items@src/app/app.component.ts:10"]);
+});
+
+test("a fetch the code declares itself is not the global fetch, so its call is no request", async () => {
+  assert.deepEqual(sites(await reader.of([component("    { const fetch = (url: string) => url; fetch('/items') }")], "shop-web")), []);
+});
+
+test("a request object's url and method may be shorthand, and a spread after them may replace them", async () => {
+  const found = await reader.of([component("    const url = '/receipts'", "    httpResource(() => ({ url, method: 'POST' }))", "    httpResource(() => ({ url: '/receipts', ...this.request }))")], "shop-web");
+
+  assert.deepEqual(sites(found), ["POST /receipts@src/app/app.component.ts:7", "unknown unresolved@src/app/app.component.ts:8"]);
+});
+
 test("an httpResource whose function returns undefined requests nothing then, so its request is the one it returns otherwise", async () => {
   const found = await reader.of([component("    httpResource(() => { if (!method) { return undefined } if (method === 'none') { return } return { url: '/orders', params: { method } } })")], "shop-web");
 

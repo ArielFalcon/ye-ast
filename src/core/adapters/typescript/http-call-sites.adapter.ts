@@ -441,7 +441,7 @@ class Reader {
   /** The target of the call when it is a request the project makes out of itself; undefined for every other call. */
   private async target(shape: FileShape, call: ts.CallExpression): Promise<ReadTarget | undefined> {
     const callee = call.expression;
-    if (ts.isIdentifier(callee) && callee.text === "fetch") return this.request(shape, call, call.arguments[0], "GET");
+    if (ts.isIdentifier(callee) && callee.text === "fetch") return isGlobalName(shape, scopeOfCall(call), "fetch") ? this.fetched(shape, call) : undefined;
     if (isHttpResource(shape, callee)) return this.resource(shape, call);
     if (!ts.isPropertyAccessExpression(callee)) return undefined;
     const name = callee.name.text;
@@ -453,6 +453,21 @@ class Reader {
     if (!isHttpClient && !isWrapper) return undefined;
     if (name !== "request") return this.request(shape, call, call.arguments[0], name === "fetch" ? "GET" : verbOf(name));
     return this.explicitRequest(shape, call);
+  }
+
+  /** `fetch(url, init)`: the method is the one the init object states, GET without an init. */
+  private async fetched(shape: FileShape, call: ts.CallExpression): Promise<ReadTarget> {
+    const [resource, init] = call.arguments;
+    const stated = init === undefined ? undefined : objectOf(init);
+    const method = init === undefined ? "GET" : stated === undefined ? undefined : await this.requestMethod(shape, stated, scopeOfCall(call));
+    return this.request(shape, call, resource, method);
+  }
+
+  /** The method a request object states, GET when it states none; undefined when the snapshot does not decide it. */
+  private async requestMethod(shape: FileShape, object: ts.ObjectLiteralExpression, scope: Scope): Promise<HttpTarget["method"] | undefined> {
+    const method = memberOf(object, "method");
+    if (method === UNDECIDED) return undefined;
+    return method === undefined ? "GET" : this.methodOf(shape, method, scope);
   }
 
   /** `request(method, url)`, or `request(new HttpRequest(method, url))`: the method is an argument, never assumed. */
@@ -484,12 +499,12 @@ class Reader {
     const scope = lexicalScope(returned);
     const described = objectOf(returned);
     if (described === undefined) return this.request(shape, call, returned, "GET", scope);
-    const method = propertyOf(described, "method");
-    return this.request(shape, call, propertyOf(described, "url"), method === undefined ? "GET" : await this.methodOf(shape, method), scope);
+    const url = memberOf(described, "url");
+    return this.request(shape, call, url === UNDECIDED ? undefined : url, await this.requestMethod(shape, described, scope), scope);
   }
 
-  private async methodOf(shape: FileShape, expression: ts.Expression): Promise<HttpTarget["method"] | undefined> {
-    const text = textOf(await this.evaluate(shape, expression));
+  private async methodOf(shape: FileShape, expression: ts.Expression, scope: Scope = NO_SCOPE): Promise<HttpTarget["method"] | undefined> {
+    const text = textOf(await this.evaluate(shape, expression, scope));
     return text === undefined ? undefined : verbOf(text.toLowerCase());
   }
 
@@ -717,8 +732,8 @@ class Reader {
     if (ts.isPropertyAccessExpression(call.expression) && call.expression.name.text === "toString") return this.scalarText(shape, call.arguments.length === 0 ? [call.expression.expression] : [], scope, trail);
     if (!ts.isIdentifier(call.expression)) return undefined;
     if (scope.names.has(call.expression.text)) return undefined;
-    if (call.expression.text === "String" && !shape.imports.has("String") && !shape.bindings.has("String")) return this.scalarText(shape, call.arguments, scope, trail);
-    if (call.expression.text === "encodeURIComponent" && !this.unsafeEncoder && !shape.imports.has(call.expression.text) && !shape.bindings.has(call.expression.text)) {
+    if (call.expression.text === "String" && isGlobalName(shape, scope, "String")) return this.scalarText(shape, call.arguments, scope, trail);
+    if (call.expression.text === "encodeURIComponent" && !this.unsafeEncoder && isGlobalName(shape, scope, "encodeURIComponent")) {
       if (call.arguments.length !== 1) return undefined;
       const argument = call.arguments[0];
       if (argument === undefined) return undefined;
@@ -840,6 +855,26 @@ function mayOverrideEncoder(source: ts.SourceFile): boolean {
     return ts.forEachChild(node, (child) => visit(child) || undefined) === true;
   };
   return visit(source);
+}
+
+/** Whether a name is the global of that name where the code reads it: nothing the file or the code around declares or imports it. */
+function isGlobalName(shape: FileShape, scope: Scope, name: string): boolean {
+  return !scope.names.has(name) && !shape.imports.has(name) && !shape.bindings.has(name);
+}
+
+/**
+ * The expression an object literal states for a member, a shorthand's name included; `UNDECIDED` when a spread or a
+ * computed name after it may state the member instead.
+ */
+function memberOf(object: ts.ObjectLiteralExpression, name: string): ts.Expression | typeof UNDECIDED | undefined {
+  let found: ts.Expression | typeof UNDECIDED | undefined;
+  for (const property of object.properties) {
+    if (ts.isSpreadAssignment(property) || (property.name !== undefined && ts.isComputedPropertyName(property.name))) found = UNDECIDED;
+    else if (property.name !== undefined && (ts.isIdentifier(property.name) || ts.isStringLiteral(property.name)) && property.name.text === name) {
+      found = ts.isPropertyAssignment(property) ? property.initializer : ts.isShorthandPropertyAssignment(property) ? property.name : UNDECIDED;
+    }
+  }
+  return found;
 }
 
 function functionNamed(shape: FileShape, name: string): ts.FunctionDeclaration | undefined {
