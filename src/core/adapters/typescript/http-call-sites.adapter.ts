@@ -461,14 +461,29 @@ class Reader {
     return this.request(shape, call, path, method === undefined ? undefined : await this.methodOf(shape, method));
   }
 
-  /** `httpResource(() => url)` is a GET of the URL; `httpResource(() => ({ url, method }))` states its method, GET when it names none. */
+  /**
+   * `httpResource(() => url)` is a GET of the URL; `httpResource(() => ({ url, method }))` states its method, GET when it
+   * names none. A function that returns undefined requests nothing then, so the request is the one every other return
+   * states; returns that disagree leave it undecided.
+   */
   private async resource(shape: FileShape, call: ts.CallExpression): Promise<ReadTarget> {
     const [first] = call.arguments;
-    const returned = first !== undefined && (ts.isArrowFunction(first) || ts.isFunctionExpression(first)) ? bodyExpression(first) : first;
-    const described = returned === undefined ? undefined : objectOf(returned);
-    if (described === undefined) return this.request(shape, call, returned, "GET");
+    const requests = first === undefined ? [] : ts.isArrowFunction(first) || ts.isFunctionExpression(first) ? returnsOf(first).filter(requestsSomething) : [first];
+    let agreed: ReadTarget | undefined;
+    for (const returned of requests) {
+      const read = await this.resourceRequest(shape, call, returned);
+      if (agreed !== undefined && JSON.stringify(read) !== JSON.stringify(agreed)) return unresolvedAt(shape, call);
+      agreed = read;
+    }
+    return agreed ?? unresolvedAt(shape, call);
+  }
+
+  private async resourceRequest(shape: FileShape, call: ts.CallExpression, returned: ts.Expression): Promise<ReadTarget> {
+    const scope = lexicalScope(returned);
+    const described = objectOf(returned);
+    if (described === undefined) return this.request(shape, call, returned, "GET", scope);
     const method = propertyOf(described, "method");
-    return this.request(shape, call, propertyOf(described, "url"), method === undefined ? "GET" : await this.methodOf(shape, method));
+    return this.request(shape, call, propertyOf(described, "url"), method === undefined ? "GET" : await this.methodOf(shape, method), scope);
   }
 
   private async methodOf(shape: FileShape, expression: ts.Expression): Promise<HttpTarget["method"] | undefined> {
@@ -476,15 +491,14 @@ class Reader {
     return text === undefined ? undefined : verbOf(text.toLowerCase());
   }
 
-  private async request(shape: FileShape, call: ts.CallExpression, pathExpression: ts.Expression | undefined, method: HttpTarget["method"] | undefined): Promise<ReadTarget> {
-    const at = { path: shape.source.fileName, line: lineOf(shape.source, call) };
-    const unknown: ReadTarget = { target: { status: "unknown", reason: "unresolved", evidence: [at] } };
-    const path = pathExpression === undefined ? undefined : textOf(await this.evaluate(shape, pathExpression, scopeOfCall(call)));
+  private async request(shape: FileShape, call: ts.CallExpression, pathExpression: ts.Expression | undefined, method: HttpTarget["method"] | undefined, scope = scopeOfCall(call)): Promise<ReadTarget> {
+    const unknown = unresolvedAt(shape, call);
+    const path = pathExpression === undefined ? undefined : textOf(await this.evaluate(shape, pathExpression, scope));
     if (path === undefined || method === undefined) return unknown;
     const base = await this.baseUrl(shape, call);
     const written = normalizePath(path);
     if (base === UNDECIDED) return { ...unknown, stated: { method, path: written } };
-    return { target: { status: "complete", value: { method, path: written, ...(base === undefined ? {} : { base }) }, evidence: [at] } };
+    return { target: { status: "complete", value: { method, path: written, ...(base === undefined ? {} : { base }) }, evidence: unknown.target.evidence } };
   }
 
   /** The base URL the call's options declare: undefined when they declare none, `UNDECIDED` when the snapshot does not decide it. */
@@ -711,8 +725,10 @@ class Reader {
         return undefined;
       }
     }
+    const visited = `${shape.source.fileName}\0call ${call.expression.text}`;
+    if (trail.has(visited)) return undefined;
     const found = await this.callTargetOf(shape, call.expression.text);
-    return found === undefined ? undefined : this.evaluateReturned(found.target, found.declaration, found.scope, trail);
+    return found === undefined ? undefined : this.evaluateReturned(found.target, found.declaration, new Set(trail).add(visited));
   }
 
   /** `String(x)` and `x.toString()` write what `x` is: a run-time value only when `x` is declared a scalar. */
@@ -724,24 +740,26 @@ class Reader {
     return value;
   }
 
-  private async callTargetOf(shape: FileShape, name: string): Promise<{ target: FileShape; declaration: ts.Expression; scope: Scope } | undefined> {
-    const local = shape.consts.get(name);
-    if (local !== undefined) return { target: shape, declaration: local, scope: NO_SCOPE };
-    const localFunction = [...shape.source.statements].find((statement): statement is ts.FunctionDeclaration => ts.isFunctionDeclaration(statement) && statement.name?.text === name);
-    if (localFunction !== undefined) return { target: shape, declaration: firstReturn(localFunction), scope: scopeOf(localFunction) };
+  private async callTargetOf(shape: FileShape, name: string): Promise<{ target: FileShape; declaration: ts.Expression | ts.FunctionDeclaration } | undefined> {
+    const local = shape.consts.get(name) ?? functionNamed(shape, name);
+    if (local !== undefined) return { target: shape, declaration: local };
     const imported = shape.imports.get(name);
     if (imported === undefined || imported.imported === "*") return undefined;
     const target = await this.moduleShape(shape, imported.module);
-    if (target === undefined) return undefined;
-    const declaration = target.consts.get(imported.imported);
-    if (declaration !== undefined) return { target, declaration, scope: NO_SCOPE };
-    const fn = [...target.source.statements].find((statement): statement is ts.FunctionDeclaration => ts.isFunctionDeclaration(statement) && statement.name?.text === imported.imported);
-    return fn === undefined ? undefined : { target, declaration: firstReturn(fn), scope: scopeOf(fn) };
+    const declaration = target === undefined ? undefined : (target.consts.get(imported.imported) ?? functionNamed(target, imported.imported));
+    return target === undefined || declaration === undefined ? undefined : { target, declaration };
   }
 
-  private async evaluateReturned(target: FileShape, declaration: ts.Expression, scope: Scope, trail: ReadonlySet<string>): Promise<Evaluation | undefined> {
-    if (ts.isArrowFunction(declaration) || ts.isFunctionExpression(declaration)) return this.evaluate(target, bodyExpression(declaration), scopeOf(declaration), trail);
-    return this.evaluate(target, declaration, scope, trail);
+  /** What a call writes: what every return of the function it names writes, undefined when one is undecided or two disagree. */
+  private async evaluateReturned(target: FileShape, declaration: ts.Expression | ts.FunctionDeclaration, trail: ReadonlySet<string>): Promise<Evaluation | undefined> {
+    if (!ts.isFunctionDeclaration(declaration) && !ts.isArrowFunction(declaration) && !ts.isFunctionExpression(declaration)) return this.evaluate(target, declaration, NO_SCOPE, trail);
+    let agreed: Evaluation | undefined;
+    for (const returned of returnsOf(declaration)) {
+      const value = returned === undefined ? undefined : await this.evaluate(target, returned, lexicalScope(returned), trail);
+      if (value === undefined || (agreed !== undefined && (value.kind !== agreed.kind || written(value) !== written(agreed)))) return undefined;
+      agreed = value;
+    }
+    return agreed;
   }
 
   private async moduleShape(shape: FileShape, specifier: string): Promise<FileShape | undefined> {
@@ -818,38 +836,36 @@ function mayOverrideEncoder(source: ts.SourceFile): boolean {
   return visit(source);
 }
 
-function firstReturn(node: ts.FunctionDeclaration | ts.ArrowFunction | ts.FunctionExpression): ts.Expression {
-  if (!ts.isFunctionDeclaration(node)) return bodyExpression(node);
-  /* A function declaration's returned expression; the declaration itself when it returns nothing, which reads as unresolved. */
-  let returned: ts.Expression | undefined;
-  const visit = (child: ts.Node): void => {
-    if (returned !== undefined) return;
-    if (ts.isReturnStatement(child) && child.expression !== undefined) {
-      returned = child.expression;
-      return;
-    }
-    ts.forEachChild(child, visit);
-  };
-  visit(node);
-  return returned ?? ts.factory.createIdentifier("undefined");
+function functionNamed(shape: FileShape, name: string): ts.FunctionDeclaration | undefined {
+  return shape.source.statements.find((statement): statement is ts.FunctionDeclaration => ts.isFunctionDeclaration(statement) && statement.name?.text === name);
 }
 
-function bodyExpression(node: ts.ArrowFunction | ts.FunctionExpression): ts.Expression {
-  return ts.isBlock(node.body) ? firstReturnInBlock(node.body) : node.body;
-}
-
-function firstReturnInBlock(block: ts.Block): ts.Expression {
-  let returned: ts.Expression | undefined;
+/**
+ * What a function returns from its own body, the functions it declares aside: its expression body, or the expression of
+ * every `return`, with undefined for a bare `return` and for an end the body reaches without returning.
+ */
+function returnsOf(node: ts.FunctionDeclaration | ts.ArrowFunction | ts.FunctionExpression): (ts.Expression | undefined)[] {
+  if (node.body === undefined) return [undefined];
+  if (!ts.isBlock(node.body)) return [node.body];
+  const returned: (ts.Expression | undefined)[] = [];
   const visit = (child: ts.Node): void => {
-    if (returned !== undefined) return;
-    if (ts.isReturnStatement(child) && child.expression !== undefined) {
-      returned = child.expression;
-      return;
-    }
+    if (ts.isFunctionLike(child)) return;
+    if (ts.isReturnStatement(child)) returned.push(child.expression);
     ts.forEachChild(child, visit);
   };
-  visit(block);
-  return returned ?? ts.factory.createIdentifier("undefined");
+  visit(node.body);
+  const last = node.body.statements.at(-1);
+  if (last === undefined || !(ts.isReturnStatement(last) || ts.isThrowStatement(last))) returned.push(undefined);
+  return returned;
+}
+
+/** Whether a returned value states a request: `undefined`, `void x` and no value at all state none. */
+function requestsSomething(returned: ts.Expression | undefined): returned is ts.Expression {
+  return returned !== undefined && !(ts.isIdentifier(returned) && returned.text === "undefined") && !ts.isVoidExpression(returned);
+}
+
+function unresolvedAt(shape: FileShape, call: ts.CallExpression): ReadTarget {
+  return { target: { status: "unknown", reason: "unresolved", evidence: [{ path: shape.source.fileName, line: lineOf(shape.source, call) }] } };
 }
 
 /** The object literal an initializer is, through the wrappers TypeScript lets an author write around it. */

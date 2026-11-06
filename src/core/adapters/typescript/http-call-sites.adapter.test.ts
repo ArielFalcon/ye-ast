@@ -422,6 +422,40 @@ test("an httpResource is a call site: a URL its function returns is a GET, a req
   assert.deepEqual(sites(found), ["GET /orders/{}@src/app/app.component.ts:6", "POST /receipts@src/app/app.component.ts:7"]);
 });
 
+test("an httpResource whose function returns undefined requests nothing then, so its request is the one it returns otherwise", async () => {
+  const found = await reader.of([component("    httpResource(() => { if (!method) { return undefined } if (method === 'none') { return } return { url: '/orders', params: { method } } })")], "shop-web");
+
+  assert.deepEqual(sites(found), ["GET /orders@src/app/app.component.ts:6"]);
+});
+
+function pathFunction(...body: string[]): { path: string; content: string } {
+  return source("paths.ts", ["import { HttpClient } from '@angular/common/http'", "function orderPath(open: boolean) {", ...body, "}", "class Client { constructor(private http: HttpClient) {}", " load(open: boolean) { this.http.get(orderPath(open)) } }"].join("\n"));
+}
+
+test("requests and paths a function returns in different branches are undecided, never its first branch", async () => {
+  const resource = component("    httpResource(() => { if (method) { return '/orders/open' } return '/orders' })");
+
+  assert.deepEqual(sites(await reader.of([resource, pathFunction(" if (open) { return '/orders/open' }", " return '/orders'")], "shop-web")), ["unknown unresolved@paths.ts:7", "unknown unresolved@src/app/app.component.ts:6"]);
+});
+
+test("a path function is read at its own returns, never at a return of a function it declares", async () => {
+  assert.deepEqual(sites(await reader.of([pathFunction(" const pick = () => { return '/wrong' }", " return '/orders'")], "shop-web")), ["GET /orders@paths.ts:7"]);
+});
+
+test("a path function that calls itself is undecided, never a hang", async () => {
+  assert.deepEqual(sites(await reader.of([pathFunction(" return orderPath(!open)")], "shop-web")), ["unknown unresolved@paths.ts:6"]);
+});
+
+test("a variable a request function declares is a value it fills at run time", async () => {
+  const found = await reader.of([component("    httpResource(() => { const id = this.pick(); return `/orders/${id}` })")], "shop-web");
+
+  assert.deepEqual(sites(found), ["GET /orders/{}@src/app/app.component.ts:6"]);
+});
+
+test("a path function whose end is reachable without a return may return undefined, so its path is undecided", async () => {
+  assert.deepEqual(sites(await reader.of([pathFunction(" if (open) { return '/orders' }")], "shop-web")), ["unknown unresolved@paths.ts:6"]);
+});
+
 test("a base URL the call declares but the snapshot does not decide is an unknown target, never a call with no base", async () => {
   assert.deepEqual(sites(await reader.of([component("    this.http.get('/route', { baseUrl: method })")], "shop-web")), ["unknown unresolved@src/app/app.component.ts:6"]);
 });

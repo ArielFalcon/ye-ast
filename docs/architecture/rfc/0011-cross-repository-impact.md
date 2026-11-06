@@ -73,6 +73,12 @@ explicitly typed `string`, `number`, `boolean` or `bigint` may remain a paramete
 escaping global object in the provided snapshot keep the evaluation unknown. No repository function is executed. A whole
 run-time URL such as `fetch(url)` remains unknown when `url` names a run-time parameter.
 
+A function a path calls, and the function an `httpResource` takes its request from, is read at every `return` of its own
+body; the functions it declares return their own. A bare `return`, and an end the body reaches without returning, return
+`undefined`. Every return must write the same path, otherwise the path is undecided, and a function that calls itself is
+undecided. An `httpResource` function that returns `undefined` requests nothing then, so its request is the one its other
+returns state. Variables the function declares are values it fills at run time.
+
 A class member the class does not declare (`this.resourceUrl`) is read from the class it extends, in the same file or
 through an import; a member the class declares itself wins.
 
