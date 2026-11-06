@@ -22,6 +22,7 @@ import type { ImportOriginsReader, ImportOriginSite } from "../../ports/import-o
 import type { ImportOrigin } from "../../domain/relations/resolved-reference.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { ModuleDependenciesReader } from "../../ports/module-dependencies.port.ts";
+import type { ModuleDependency } from "../../domain/impact/module-dependency.ts";
 
 const HEAD = "a".repeat(40);
 const BASE = "b".repeat(40);
@@ -1462,4 +1463,29 @@ test("callers of a symbol in a file the graph cannot place cut the answer at tha
   const answer = callersFact(await setup(RECORDS).callers({ targets: [{ file: "src/Point.java", symbol: "origin" }] }));
 
   assert.deepEqual(answer.status === "partial" && answer.cuts, [{ kind: "no-extractor", at: ["src/Point.java"] }]);
+});
+
+test("importers cut each file's unresolved module statements once, anchored at the file with its places after it", async () => {
+  const unresolved = (file: string, line: number, specifier: string): ModuleDependency => ({ file, line, endLine: line, specifier, kind: "import", typeOnly: false, target: { kind: "unresolved", reason: "not found" }, bindings: [] });
+  const moduleDependencies: ModuleDependenciesReader = {
+    extract: async () => ({ files: [], dependencies: [unresolved("src/b.ts", 9, "geojson"), unresolved("src/a.ts", 4, "@/env"), unresolved("src/b.ts", 2, "@/env")], unread: [] }),
+  };
+  const { importers } = setup({ nodes: SHOP_NODES, exports: { [HEAD]: SHOP_EXPORT }, moduleDependencies });
+
+  const answer = importersFact(await importers({ files: ["src/Order.java"] }));
+
+  assert.deepEqual(answer.status === "partial" && answer.cuts.filter((cut) => cut.kind === "unresolved-link"), [
+    { kind: "unresolved-link", at: ["src/a.ts", "src/a.ts:4 @/env"] },
+    { kind: "unresolved-link", at: ["src/b.ts", "src/b.ts:2 @/env", "src/b.ts:9 geojson"] },
+  ]);
+});
+
+test("a callers target that names no declaration faults before the relations reader reads the snapshot", async () => {
+  let reads = 0;
+  const relationReader: ImpactQueriesDeps["relations"] = { extract: async () => { reads++; return { relations: [], fields: [], locals: [] }; } };
+
+  const answer = await setup({ ...TWO_CLASSES, relationReader }).callers({ targets: [{ file: "src/A.ts", symbol: "gone" }] });
+
+  assert.equal(!answer.ok && answer.fault.kind, "unknown-symbol");
+  assert.equal(reads, 0);
 });

@@ -57,7 +57,7 @@ test("a repository binding no edge proves makes the outline partial with one unr
   const { status, file, cuts } = await outlineOf("import { one } from './defs';");
   assert.equal(status, "partial");
   assert.deepEqual(file?.imports[0]?.bindings, [{ local: "one", imported: "one" }]);
-  assert.deepEqual(cuts, [{ kind: "unresolved-link", at: ["src/use.ts:1 one"], reason: "unresolved" }]);
+  assert.deepEqual(cuts, [{ kind: "unresolved-link", at: ["src/use.ts", "src/use.ts:1 one"], reason: "unresolved" }]);
 });
 
 test("a namespace binding binds the module itself, so it reaches no declaration and is no cut", async () => {
@@ -153,7 +153,7 @@ test("a Java static import of a member the named type only inherits reaches no d
   });
   assert.equal(status, "partial");
   assert.deepEqual(file?.imports[0]?.bindings, [{ local: "LIMIT", imported: "LIMIT" }]);
-  assert.deepEqual(cuts, [{ kind: "unresolved-link", at: ["app/Client.java:2 LIMIT"], reason: "unresolved" }]);
+  assert.deepEqual(cuts, [{ kind: "unresolved-link", at: ["app/Client.java", "app/Client.java:2 LIMIT"], reason: "unresolved" }]);
 });
 
 test("a Java import reaches the declaration at its qualified name from the file's top level, never a nested one ending the same", async () => {

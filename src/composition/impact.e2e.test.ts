@@ -454,7 +454,7 @@ test("a changed contract whose reference the snapshot cannot follow is a partial
   const result = await impact("--base", "HEAD~1");
 
   assert.equal(result.fact.status, "partial");
-  assert.deepEqual(result.fact.cuts, [{ kind: "unresolved-link", at: [`${document}:16 https://example.com/items.yaml#/Items`] }]);
+  assert.deepEqual(result.fact.cuts, [{ kind: "unresolved-link", at: [document, `${document}:16 https://example.com/items.yaml#/Items`] }]);
 });
 
 test("changed seeds only the selected changed paths, while a caller in an unselected changed file is still reached", async () => {
