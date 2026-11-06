@@ -96,6 +96,12 @@ test("a requested source the module reader cannot parse is a no-extractor cut, s
   assert.deepEqual(cuts, [{ kind: "no-extractor", at: [USE] }]);
 });
 
+test("a requested source the module reader reads only in part is a no-extractor cut, so its imports never read as all of them", async () => {
+  const { status, cuts } = await outlineOf("namespace N { export class Member {} }\nimport Alias = N.Member;\n");
+  assert.equal(status, "partial");
+  assert.deepEqual(cuts, [{ kind: "no-extractor", at: [USE] }]);
+});
+
 test("a requested file no module reader reads is a no-extractor cut, so its empty imports never read as none", async () => {
   const { status, file, cuts } = await outlineOf("import { one } from './defs';", { readers: [createJavaImportsReader(await createJavaParser())] });
   assert.equal(status, "partial");
