@@ -23,15 +23,15 @@ export function unresolvedOf(store: CodeGraphReader, headTree: Pick<CommitExtrac
  * retires a cut (`ADR-0019`); the second is what lets a bare reference be attributed to the declaration it actually
  * names instead of to a homonym (`RFC-0016` S12). A file the reader does not know proves nothing.
  */
-export async function referenceProofsOf(reader: ImportOrigins | undefined, store: CodeGraphReader, headTree: Pick<CommitExtraction, "export" | "sources">, signal?: AbortSignal, read: readonly GraphUnresolvedReference[] = unresolvedOf(store, headTree)): Promise<ReferenceProofs> {
+export async function referenceProofsOf(reader: ImportOrigins | undefined, store: CodeGraphReader, headTree: Pick<CommitExtraction, "export" | "sources">, signal?: AbortSignal, unresolved: readonly GraphUnresolvedReference[] = unresolvedOf(store, headTree)): Promise<ReferenceProofs> {
   const external = new Set<string>();
   const bound = new Map<string, string>();
   const localParameters = new Set<string>();
   const validOccurrences = new Set<string>();
   const thisMemberCalls = new Set<string>();
   if (reader === undefined) return { external, bound, localParameters, validOccurrences, thisMemberCalls };
-  const unique = uniqueReferenceKeys(read);
-  const asked = read.flatMap((reference) => {
+  const unique = uniqueReferenceKeys(unresolved);
+  const asked = unresolved.flatMap((reference) => {
     const key = referenceKey(reference);
     const name = rootedName(reference.name);
     if (key === undefined || !unique.has(key) || reference.kind === "imports" || !name) return [];

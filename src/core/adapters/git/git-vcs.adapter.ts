@@ -322,6 +322,7 @@ function mainWorktreeOf(output: string): string | undefined {
   const path = record?.slice("worktree ".length);
   return path === undefined || path === "" ? undefined : path;
 }
+
 function parseRemotes(output: string): RemoteRef[] {
   return output
     .split("\n")

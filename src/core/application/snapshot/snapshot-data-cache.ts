@@ -38,7 +38,7 @@ export function createSnapshotDataCache(maxBytes: number, observe?: (event: Snap
         entries.delete(key);
       }
       if (budget === 0) return;
-      const lowerBound = encoder.encode(key).byteLength + data.sources.reduce((sum, source) => sum + utf8Length(source.content), 0);
+      const lowerBound = encoder.encode(key).byteLength + data.sources.reduce((sum, source) => sum + Buffer.byteLength(source.content), 0);
       if (lowerBound > budget) {
         observe?.({ outcome: "oversize-skipped", entryBytes: lowerBound, retainedBytes: used });
         return;
@@ -61,17 +61,4 @@ export function createSnapshotDataCache(maxBytes: number, observe?: (event: Snap
       observe?.({ outcome: "admitted", entryBytes: size, retainedBytes: used });
     },
   };
-}
-
-/** The UTF-8 bytes of a string without encoding it: a lone surrogate counts as the three bytes of U+FFFD. */
-function utf8Length(text: string): number {
-  let bytes = 0;
-  for (let index = 0; index < text.length; index++) {
-    const unit = text.charCodeAt(index);
-    if (unit < 0x80) bytes += 1;
-    else if (unit < 0x800) bytes += 2;
-    else if (unit >= 0xd800 && unit < 0xdc00 && index + 1 < text.length && (text.charCodeAt(index + 1) & 0xfc00) === 0xdc00) { bytes += 4; index++; }
-    else bytes += 3;
-  }
-  return bytes;
 }

@@ -629,6 +629,7 @@ function sameFile(a: BigIntStats, b: BigIntStats): boolean {
 function unsafe(path: string): boolean {
   return path === "" || path.startsWith("/") || /[\0\\]/.test(path) || path.split("/").some((segment) => segment === "" || segment === "." || segment === "..");
 }
+
 function parseState(value: unknown): MirrorState | null {
   if (!isRecord(value) || value.version !== STATE_FORMAT_VERSION) return null;
   const { versions, manifest, skipped, notHeld, indexed, fullBuildStateId, stateId, pending } = value;

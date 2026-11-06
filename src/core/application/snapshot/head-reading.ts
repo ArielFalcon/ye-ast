@@ -14,7 +14,6 @@ import { ABORTED, extractExport, readSources, factBaseOf, LIVE_REQUIRES_TRUSTED,
 import { prepareCommit } from "./prepared-snapshot.ts";
 import { liveSnapshotReaders } from "./live-snapshot.ts";
 import { canonicalJson } from "../../domain/shared/canonical-json.ts";
-import { extractSources } from "./read-snapshot.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
 
 /** What reading the head of a query needs: the snapshot reader plus the index of what it exported. */
