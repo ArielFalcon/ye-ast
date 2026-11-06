@@ -15,7 +15,7 @@ export interface AngularProject {
 /** Every directory that holds a `package.json` outside `node_modules`, with its dependencies. */
 export function manifestsOf(files: readonly SourceFile[]): AngularProject[] {
   const manifests = files.filter((file) => isPackageManifest(file.path));
-  const { declared } = manifestPackages(manifests.map((file) => file.content));
+  const { declared } = manifestPackages(manifests);
   return manifests.map((file) => {
     const dependencies = manifestDependencies(file.content);
     return { directory: file.path.slice(0, Math.max(0, file.path.length - "package.json".length - 1)), dependencies, packages: { dependencies, declared } };

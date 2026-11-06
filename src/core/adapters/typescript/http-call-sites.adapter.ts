@@ -1,6 +1,6 @@
 import ts from "typescript";
 import { sourceTree } from "./source-tree.ts";
-import { isPackageManifest, isTypeScriptSource } from "../../domain/languages/typescript.ts";
+import { isTypeScriptSource } from "../../domain/languages/typescript.ts";
 import type { CallSite, HttpTarget, StatedRequest } from "../../domain/topology/call-site.ts";
 import type { CallSiteReader } from "../../domain/topology/call-site.ts";
 import type { Finding } from "../../domain/shared/fact.ts";
@@ -112,7 +112,7 @@ async function read(files: readonly SourceFile[], repo: string): Promise<readonl
   /* The module resolver reads the config files of the snapshot too, so the map holds every source it was given. */
   const texts = new Map(files.map((file) => [file.path, file.content]));
   const shapes = new Map(files.filter((file) => isTypeScriptSource(file.path)).map((file) => [file.path, describe(file)]));
-  const modules = createModuleResolver(async (file) => texts.get(file), manifestPackages(files.filter((file) => isPackageManifest(file.path)).map((file) => file.content)));
+  const modules = createModuleResolver(async (file) => texts.get(file), manifestPackages(files));
   const wrappers = wrapperMethods(shapes);
   const read = new Reader(shapes, modules, wrappers, buildDefines(files));
   const found: CallSite[] = [];

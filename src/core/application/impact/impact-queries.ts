@@ -431,7 +431,7 @@ function rangeChanges(targets: readonly CallersTarget[]): FileChange[] {
 
 /** The dotted paths of what a file declares that a request can seed, so a symbol that names no node tells the caller what does. */
 function candidatesOf(tree: readonly DeclarationBranch<GraphSymbol>[]): string[] {
-  return [...new Set(branchesOf(tree).filter(({ declaration }) => isSeedable(declaration)).map(declarationPath))].sort(compareText);
+  return sortedUnique(branchesOf(tree).filter(({ declaration }) => isSeedable(declaration)).map(declarationPath));
 }
 
 /** Which of `files` the graph cannot place, read from the head's own sources of those files only. */
