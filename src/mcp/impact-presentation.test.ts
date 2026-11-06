@@ -340,6 +340,24 @@ test("workspace base guides retain each owner's own merge base", () => {
   assert.match(output, /Base modules: repo "c", revision unavailable/);
 });
 
+test("text base guides keep every module coordinate when JSON navigation would be shorter", () => {
+  const modules = Array.from({ length: 5 }, (_, i) => ({ file: `src/base-${i}.ts`, snapshot: "base" as const, depth: 0, origins: [] }));
+  const local: ImpactValue = { ...impact, mergeBase: "base-a", modules: { origins: [], modules, cost: { expansionsUsed: 0 } } };
+  const section: Fact<RepoImpact> = { ...base, status: "complete", value: { reads: [], callSites: [], unmatched: [], external: [], unresolved: [], impact: local } };
+  const value: WorkspaceImpactValue = { workspace: { repos: ["a", "b"], gateways: [], unmatchedGateways: [], unserved: [], source: "request" }, repositorySnapshots: [], trigger: { repo: "a" }, sections: { a: section, b: section }, links: [] };
+  for (const mode of ["summary", "details"] as const) {
+    const localGuide = renderImpact({ ...fact, value: local }, mode).split("Investigation guide:")[1]!;
+    const workspaceGuide = renderWorkspaceImpact({ ...base, status: "complete", value }, mode).split("Investigation guide:")[1]!;
+    for (const guide of [localGuide, workspaceGuide]) {
+      assert.doesNotMatch(guide, /value\.(repositorySnapshots|sections|modules)/);
+      for (const module of modules) assert.ok(guide.includes(JSON.stringify(module.file)));
+    }
+    for (const repo of ["a", "b"]) {
+      for (const module of modules) assert.ok(workspaceGuide.includes(`repo ${JSON.stringify(repo)}, revision "base-a", file ${JSON.stringify(module.file)}`));
+    }
+  }
+});
+
 test("reached handlers share selector owner while preserving every origin association", () => {
   const entrypoints = Array.from({ length: 8 }, (_, i) => ({ ...impact.entrypoints[0]!, name: `GET /route-${i}`, handler: { path: `src/route-${i}.ts`, symbol: `handler${i}`, line: i + 1 }, seeds: [0] }));
   const text = renderImpact({ ...fact, value: { ...impact, entrypoints } }, "details");
