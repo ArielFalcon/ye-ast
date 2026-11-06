@@ -796,7 +796,7 @@ function mayOverrideEncoder(source: ts.SourceFile): boolean {
   const visit = (node: ts.Node): boolean => {
     if (globalObject(node)) {
       const directParent = node.parent;
-      if ((ts.isPropertyAccessExpression(directParent) || ts.isPropertyAssignment(directParent) || ts.isVariableDeclaration(directParent)) && directParent.name === node) return false;
+      if ((ts.isPropertyAccessExpression(directParent) || ts.isPropertyAssignment(directParent) || ts.isVariableDeclaration(directParent) || ts.isModuleDeclaration(directParent)) && directParent.name === node) return false;
       let reference: ts.Expression = node;
       while (true) {
         const parent = reference.parent;

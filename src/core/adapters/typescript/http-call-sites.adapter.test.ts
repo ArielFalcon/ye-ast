@@ -89,6 +89,8 @@ test("global object inspection and unrelated property names do not count as esca
   assert.deepEqual(sites(await reader.of([file], "repo")), ["GET /api/x@read.ts:1"]);
   const copied = source("copy.ts", "const copy = { ...window }; const other = { ...(globalThis as any) };");
   assert.deepEqual(sites(await reader.of([copied, file], "repo")), ["GET /api/x@read.ts:1"]);
+  const augmented = source("support.ts", "declare global { interface Window { app: string } }\nexport {};");
+  assert.deepEqual(sites(await reader.of([augmented, file], "repo")), ["GET /api/x@read.ts:1"]);
 });
 
 test("function-scoped var bindings shadow outer constants outside their block", async () => {
