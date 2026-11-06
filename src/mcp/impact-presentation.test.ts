@@ -2,7 +2,7 @@ import { test } from "node:test";
 import { z } from "zod";
 import { recoveryControlShapeFor, validRecoveryControls } from "./evidence-schema.ts";
 import assert from "node:assert/strict";
-import { SCHEMA, type Fact, type FactBase } from "../core/domain/shared/fact.ts";
+import { SCHEMA, type Cut, type Fact, type FactBase, type WalkBounds } from "../core/domain/shared/fact.ts";
 import type { ImpactValue } from "../core/domain/impact/impact-fact.ts";
 import type { RepoImpact, WorkspaceImpactValue } from "../core/ports/workspace-impact-queries.port.ts";
 import { renderImpact, renderImporters, renderWorkspaceImpact } from "./render.ts";
@@ -178,8 +178,9 @@ test("summary counts omitted origin associations per entrypoint rather than coun
 test("impact guidance explains contextual full lookups and the origin-index join", () => {
   const value: ImpactValue = { ...impact, symbols: [{ file: "caller.ts", symbol: "use", kind: "function", line: 12, depth: 1, confidence: 1, fanIn: 0, via: { file: "first.ts", symbol: "first", lines: [15], basis: "reference" } }] };
   for (const detail of ["summary", "details"] as const) {
-    const guide = renderImpact({ ...fact, value }, detail).split("Investigation guide:")[1] ?? "";
-    assert.match(guide, /mode: "full"/);
+    const [body, guide = ""] = renderImpact({ ...fact, value }, detail).split("Investigation guide:");
+    assert.match(body!, /mode: "full" (includes|has) all/);
+    assert.doesNotMatch(guide, /mode: "full"/);
     assert.doesNotMatch(guide, /value\.entrypoints|value\.symbols|value\.seeds/);
   }
   {
@@ -212,9 +213,18 @@ test("workspace guidance qualifies repository payloads and joins reach IDs rathe
 });
 
 test("unknown and verified-empty impact guidance distinguishes missing analysis from scoped emptiness", () => {
-  const unknown = renderImpact({ ...base, status: "unknown", reason: "index-unavailable" }, "details").split("Investigation guide:")[1] ?? "";
-  assert.ok(unknown.includes("reason") && unknown.includes("evidence"));
-  assert.doesNotMatch(unknown, /value\.|no recorded consequences/);
+  const unknownFact: Fact<ImpactValue> = { ...base, status: "unknown", reason: "no-extractor", evidence: [{ path: "src/legacy.cob", line: 3 }] };
+  for (const detail of ["summary", "details"] as const) {
+    const unknown = renderImpact(unknownFact, detail);
+    assert.match(unknown, /status: unknown \(no-extractor\)\n {2}evidence: src\/legacy\.cob:3/);
+    assert.doesNotMatch(unknown, /result JSON|value\.[a-z]|no recorded consequences|budget|narrower/);
+    assert.doesNotMatch(unknown, /mode "details" (locates|shows|lists)|mode: "full" (includes|lists|returns)/);
+  }
+  const unknownFull = renderImpact(unknownFact, "full");
+  assert.match(unknownFull, /reason and evidence in the result JSON/);
+  assert.doesNotMatch(unknownFull, /value\.[a-z]/);
+  const deadline = renderImpact({ ...base, status: "unknown", reason: "deadline" }, "summary", { tool: "callers" });
+  assert.match(deadline, /narrower scope or fewer targets/);
   const emptyFact = { ...fact, value: { ...impact, seeds: [], symbols: [], entrypoints: [] } };
   const empty = renderImpact(emptyFact, "details");
   assert.match(empty, /status: complete/);
@@ -500,4 +510,46 @@ test("a change summary counted per changed area counts module dependencies per a
   assert.match(summary, /src\/app\/order\/\*\*: 1 seed, 6 direct, 0 deeper, 0 entrypoints, 6 modules\n/);
   assert.match(summary, /module dependencies \(6, not symbol or entrypoint impact\): counted per changed area above;/);
   assert.doesNotMatch(summary, /a-consumer-with-a-long-name/);
+});
+
+test("established walk bounds name their budget field; ambiguous or unrecorded bounds name none", () => {
+  const cuts: [Cut, ...Cut[]] = [{ kind: "depth", at: ["a.ts::a"], limit: 2 }, { kind: "hub", at: ["b.ts::b"], limit: 40 }, { kind: "caller-budget", at: ["c.ts::c"], limit: 9 }];
+  const withWalk = (walk?: WalkBounds): Fact<ImpactValue> => ({ ...base, inputs: { ...base.inputs, declaredConfig: walk === undefined ? {} : { walk } }, status: "partial", cuts, value: { ...impact, entrypoints: [] } });
+  for (const detail of ["summary", "details", "full"] as const) {
+    const established = renderImpact(withWalk({ depth: 2, hubFanIn: 40, expansions: 9 }), detail);
+    assert.match(established, /budget\.depth 2/, detail);
+    assert.match(established, /budget\.hubFanIn 40/, detail);
+    assert.doesNotMatch(established, /budget\.expansions/, detail);
+    assert.doesNotMatch(renderImpact(withWalk(), detail), /budget\./, detail);
+    assert.doesNotMatch(renderImpact(withWalk({ depth: 3, hubFanIn: 41 }), detail), /budget\./, detail);
+  }
+  const workspace: WorkspaceImpactValue = {
+    workspace: { repos: ["a"], gateways: [], unmatchedGateways: [], unserved: [], source: "none" }, repositorySnapshots: [], trigger: { repo: "a" },
+    sections: { a: { ...base, inputs: { ...base.inputs, declaredConfig: { walk: { depth: 2 } } }, status: "partial", cuts, value: { reads: [], impact: { ...impact, entrypoints: [] }, callSites: [], unmatched: [], external: [], unresolved: [] } } }, links: [],
+  };
+  const sectionText = renderWorkspaceImpact({ ...base, status: "partial", cuts: [{ kind: "section", at: ["a"] }], value: workspace }, "summary").split("cuts for repository a:")[1] ?? "";
+  assert.match(sectionText, /depth cuts stopped at the walk bound budget\.depth 2/);
+  assert.doesNotMatch(sectionText, /budget\.(hubFanIn|expansions)/);
+});
+
+test("workspace follow-up guidance appears only where its condition holds", () => {
+  const empty: ImpactValue = { seeds: [], symbols: [], entrypoints: [], cost: { expansionsUsed: 0 } };
+  const section = (value: ImpactValue): Fact<RepoImpact> => ({ ...base, status: "complete", value: { reads: [], impact: value, callSites: [], unmatched: [], external: [], unresolved: [] } });
+  const workspace = (sections: WorkspaceImpactValue["sections"], links: WorkspaceImpactValue["links"] = []): Fact<WorkspaceImpactValue> => ({
+    ...base, status: "complete",
+    value: { workspace: { repos: Object.keys(sections), gateways: [], unmatchedGateways: [], unserved: [], source: "request" }, repositorySnapshots: [], trigger: { repo: "a" }, sections, links },
+  });
+  const link = { id: "link-a", from: { repo: "b", file: "call.ts", symbol: "send", line: 4 }, to: { repo: "a", kind: "http-route" as const, name: "GET /x", handler: { path: "route.ts", line: 9, symbol: "handler" } }, transport: "http" as const, basis: "route-overlap" as const, confidence: 1 };
+  const unavailable = { tool: "impact" as const, recovery: { version: 1 as const, status: "unavailable" as const, reason: "redacted-context" as const } };
+  for (const detail of ["summary", "details"] as const) {
+    assert.doesNotMatch(renderWorkspaceImpact(workspace({ a: section(empty) }), detail), /Investigation guide:/, detail);
+    const bound = renderWorkspaceImpact(workspace({ a: section(impact) }), detail);
+    assert.match(bound, /Investigation guide:/, detail);
+    assert.doesNotMatch(bound, /recorded owner/, detail);
+    const linked = renderWorkspaceImpact(workspace({ a: section(impact), b: section(impact) }, [{ link, direction: "upstream", reach: ["link-a"] }]), detail, unavailable);
+    assert.match(linked, /recorded owner/, detail);
+    assert.equal(linked.split("Recovery unavailable (redacted-context)").length - 1, 1, detail);
+  }
+  assert.doesNotMatch(renderWorkspaceImpact(workspace({ a: section(impact) }), "full"), /recorded owner/);
+  assert.match(renderWorkspaceImpact(workspace({ a: section(impact), b: section(impact) }), "full"), /recorded owner/);
 });
