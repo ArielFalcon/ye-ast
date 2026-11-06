@@ -235,6 +235,9 @@ const OWN_CALLS = [
   "  inherited(): void { super.fetch(); }",
   "  rebound(): void { [1].map(function () { this.fetch(); }); }",
   "  literal(): void { const o = { m() { this.fetch(); } }; }",
+  "  static run(): void { this.fetch(); }",
+  "  static field = this.fetch();",
+  "  nest(): void { class Inner { fetch(): void {} go(): void { this.fetch(); } } }",
   "}",
 ];
 
@@ -255,4 +258,8 @@ test("a bare graph call written on this inside a class member names a member of 
 
 test("a bare graph call on super, or on a this a function or an object method rebinds, proves nothing", async () => {
   assert.deepEqual(await ownCallKinds([5, 6, 7]), ["unknown", "unknown", "unknown"]);
+});
+
+test("a bare graph call on the this of a static member, or of a class declared inside a function, proves nothing", async () => {
+  assert.deepEqual(await ownCallKinds([8, 9, 10]), ["unknown", "unknown", "unknown"]);
 });
