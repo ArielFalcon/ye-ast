@@ -47,8 +47,7 @@ export function createJavaRootBindings(parser: Promise<JavaParser>, sources: rea
 function bindingAt(site: UseSite, file: JavaFile, project: JavaProject): RootBinding {
   const spelled = spelledAt(file.root, site);
   if (spelled === undefined) return UNKNOWN;
-  let whole = spelled;
-  while (whole.parent !== null && CHAIN_LINKS.includes(whole.parent.type) && whole.parent.childForFieldName("arguments")?.id !== whole.id) whole = whole.parent;
+  const whole = chainFrom(spelled);
   const names = chainNames(whole);
   const head = headOf(whole);
   const member = names[1];
@@ -96,6 +95,8 @@ function typeBinding(name: Node, file: JavaFile, project: JavaProject, owner: Us
   if (variable !== undefined) return declaredBinding(name, variable, owner);
   const declared = project.lookupType(name.text, { file, type });
   if (declared === "ambiguous") return UNKNOWN;
+  /** A type only a wildcard import supplies may also be one `java.lang` supplies, so the sources do not prove it. */
+  if (declared !== undefined && project.lookupType(name.text, { file: { ...file, onDemandImports: [] }, type }) === undefined) return UNKNOWN;
   if (declared !== undefined) return { kind: "located", root: name.text, file: declared.file.path, path: declared.fqn };
   const named = qualifiedTypeName(name.text, { file, type }, project);
   return named !== undefined && project.isPlatformName(named) ? { kind: "import", root: name.text, origin: { kind: "external", module: named.slice(0, named.lastIndexOf(".")) } } : UNKNOWN;
@@ -109,9 +110,16 @@ function spelledAt(root: Node, site: UseSite): Node | undefined {
       const created = node.childForFieldName("type");
       return created === null ? undefined : headOf(created).text === site.spelled ? headOf(created) : undefined;
     }
-    if (["identifier", "type_identifier", "this", "super"].includes(node.type) && node.text === site.spelled) return node;
+    if (["identifier", "type_identifier", "this", "super"].includes(node.type) && (node.text === site.spelled || chainNames(chainFrom(node)).includes(site.spelled))) return node;
   }
   return undefined;
+}
+
+/** The chain of member accesses, calls and qualified names `node` begins, up to its whole. */
+function chainFrom(node: Node): Node {
+  let whole = node;
+  while (whole.parent !== null && CHAIN_LINKS.includes(whole.parent.type) && whole.parent.childForFieldName("arguments")?.id !== whole.id) whole = whole.parent;
+  return whole;
 }
 
 function headOf(node: Node): Node {

@@ -848,6 +848,21 @@ test("compose records an outline focus read whole, as the outline tool answers i
   } finally { await session.close(); }
 });
 
+test("a focused declaration with no proven use but an unproved one never reads as using nothing, alone or composed", async () => {
+  const value: OutlineValue = { focus: [{ file: "src/Api.ts", selector: "get", path: "get", ancestors: [], declaration: { kind: "function", name: "get", line: 10, endLine: 20 }, omitted: 0, uses: [] }], unheld: [] };
+  const cuts: [Cut] = [{ kind: "unresolved-link", at: ["src/Api.ts::get", "src/Api.ts:11 Buffer.byteLength"], reason: "unresolved" }];
+  const fact = { ...base(), inputs: { ...base().inputs, declaredConfig: { focus: ["src/Api.ts:get"] } }, status: "partial", value, cuts } as Fact<OutlineValue>;
+  const { session } = await setup({ outline: async () => ({ ok: true, value: fact }) });
+  try {
+    const focus = [{ file: "src/Api.ts", symbol: "get" }];
+    const alone = textOf(await session.callTool("ye_ast_outline", { focus, mode: "summary" }));
+    const composed = textOf(await session.callTool("ye_ast_compose", { queries: [{ name: "ye_ast_outline", arguments: { focus } }], mode: "details" }));
+    assert.match(alone, /10-20 get \[function\]/);
+    assert.match(composed, /outline declaration .*get/);
+    for (const text of [alone, composed]) assert.doesNotMatch(text, /nothing outside its body/);
+  } finally { await session.close(); }
+});
+
 test("an outline call with both files and focus, or with neither, is refused before any query", async () => {
   const { session, calls } = await setup();
   for (const args of [{ files: ["src/Api.ts"], focus: [{ file: "src/Api.ts", line: 3 }] }, {}]) assert.equal((await session.callTool("ye_ast_outline", args)).isError, true, JSON.stringify(args));

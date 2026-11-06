@@ -348,7 +348,6 @@ export function composeCli(options: CompositionOptions = {}): (argv: readonly st
 
 const MCP_PACKAGE = "ye-ast-mcp";
 
-/** The entrypoint beside the running module: `main.ts` from a source checkout, `main.js` from the published build. */
 /** The TypeScript origins, with the root of a use in a Java source bound by the Java reader. */
 function withJavaRootBindings(origins: ImportOrigins, sources: readonly SourceFile[]): ImportOrigins {
   const java = createJavaRootBindings(createJavaParser(), sources);
@@ -361,6 +360,7 @@ function withJavaRootBindings(origins: ImportOrigins, sources: readonly SourceFi
   };
 }
 
+/** The entrypoint beside the running module: `main.ts` from a source checkout, `main.js` from the published build. */
 function ownEntrypoint(): string {
   const own = fileURLToPath(import.meta.url);
   return join(dirname(own), `main${extname(own)}`);

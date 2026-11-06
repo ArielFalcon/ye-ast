@@ -345,11 +345,17 @@ As built (phase 3):
   declaration whose body writes it (its name and lines); a binding whose declarations lie inside that declaration's
   syntax is `local`, and any other declared binding carries the lines its names are written on and whether every
   declaration is a value (a parameter, a variable or a catch binding) of a function, which the binder's visibility
-  places around the use (`captured`).
+  places around the use (`captured`). A site may be placed at any name of its chain, past its calls (a resolved edge
+  sits at the callee's start and names the member it reaches). A member of a namespace import is the declaration the
+  module exports under that name, followed through renames, `export … from`, `export *` and re-exported imports by the
+  adapter's declaration lookup (`located`); a module that exports no such name, or two, leaves it `unknown`, never a
+  private homonym the module declares.
 - B2: the acquisition shared with trace is `application/navigation/declaration-uses.ts` (`followed`, `referencesFrom`,
   `ownMembers`, `unsettledBy`); trace reads it, and its answers are byte-identical before and after (differential on
   four targets). `usesOf` settles every edge through `EdgeTargets.verdictsOf` (D5) and every reference no edge records at
-  its place through `rootBindings`; the grouping and the cuts are `domain/outline/outline-uses.ts`. A declared binding
+  its place through `rootBindings`; an edge whose root `rootBindings` answers as a local value (the body's own, or a
+  captured local root) is no use either (D4 holds for resolved edges as for unresolved references), and a repository
+  import the join reaches no declaration of is a cut; the grouping and the cuts are `domain/outline/outline-uses.ts`. A declared binding
   settles in order: the single node of its name whose lines hold a line its name is written on is a use (the index
   stores no name column, and every node's lines hold its own name, whatever decorators, modifiers or line breaks precede
   it); with no such node, a captured value is a local root and not a use (D4; a parameter of the encloser, `deps` in
@@ -361,10 +367,12 @@ As built (phase 3):
   exist and reads `tsconfig` and manifests; the `ambient` proof needs every source that may declare a global), so a
   focus reads the head's sources as a listing does; the Java-record scan still reads only the focused files.
 - B3: `adapters/spring/java-root-bindings.ts`, joined to the TypeScript reader in composition by file. A name only a
-  wildcard import could supply stays unknown, since `java.lang` may supply it too.
+  wildcard import could supply stays unknown, since `java.lang` may supply it too, even when a source declares it in the
+  wildcard's package.
 - B4: `OutlineFocus.uses`; the text prints one line per use, `name → file:line (relations; at lines)`, a package or a
-  global otherwise, and "uses nothing outside its body" when evaluated empty; compose anchors each repository use on
-  the focused declaration's part. The tool description points to `ye_ast_compose` for callers.
+  global otherwise, and "uses nothing outside its body" when evaluated empty and no use of it is unproved (an
+  `unresolved-link` cut anchored at it; `hasUnprovedUses`, shared by the outline text and compose's part); compose
+  anchors each repository use on the focused declaration's part. The tool description points to `ye_ast_compose` for callers.
 - B5: `one-query-family-never-imports-another` covers `outline`; a planted `outline → trace` import fails
   `npm run arch:check` (break proof, not committed).
 - Measured on this repository at `bcc73fa`, every non-test function, method and constructor focused by its start line
@@ -372,6 +380,12 @@ As built (phase 3):
   library does not declare (`Buffer` 40, `process` 10, `NodeJS.ProcessEnv` 7, kept unknown per Q3) and `this` members
   the index holds no node of (constructor parameter properties, inherited members; 30). Uses per declaration p50 3, p90
   10, max 86.
+- Re-measured after the review corrections, same 2,631 declarations at `bcc73fa`: 95.2% complete (125 with a cut;
+  `b7976aa` 95.0%, 131). The D4 rule on resolved edges removed 415 listed uses, every one a repository member reached
+  through a local value (`io.out`, `deps.redaction.redact`).
+- Known limits, not extracted or not decided by this part: a static member's `this.target()` may settle to an instance
+  homonym; `super.load(1)` does not pick among overloads; a static import shadowed by a local declaration; enum-member
+  reads, `typeof` queries, getter reads, field increments and annotations are not uses the index records.
 
 ## 6. Risks
 

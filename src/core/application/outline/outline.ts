@@ -93,13 +93,13 @@ export interface FocusRead {
   unknown: UnknownSymbolFault["entries"];
   /** The line selectors no declaration of their file holds. */
   topLevel: TopLevelLineFault["entries"];
-  /** The matched declaration of each entry of `value.focus`, in the same order. */
-  matched: readonly GraphSymbol[];
+  /** The matched declaration of each entry of `value.focus` with what it contains, in the same order. */
+  matched: readonly DeclarationBranch<GraphSymbol>[];
 }
 
 /** The declarations the selectors match, each with its containers and the count of its file's declarations left out. */
 export function readFocus(store: CodeGraphReader, selectors: readonly OutlineSelector[]): FocusRead {
-  const focus: { entry: OutlineFocus; symbol: GraphSymbol }[] = [];
+  const focus: { entry: OutlineFocus; branch: DeclarationBranch<GraphSymbol> }[] = [];
   const unheld: string[] = [];
   const unknown: FocusRead["unknown"][number][] = [];
   const topLevel: FocusRead["topLevel"][number][] = [];
@@ -117,11 +117,11 @@ export function readFocus(store: CodeGraphReader, selectors: readonly OutlineSel
       if (matched.length === 0 && "symbol" in selector) unknown.push({ file, symbol: selector.symbol, candidates });
       if (matched.length === 0 && "line" in selector) topLevel.push({ file, line: selector.line, candidates });
       const text = "symbol" in selector ? selector.symbol : String(selector.line);
-      focus.push(...matched.map((branch) => ({ entry: focused(file, text, branch, declared.length), symbol: branch.declaration })));
+      focus.push(...matched.map((branch) => ({ entry: focused(file, text, branch, declared.length), branch })));
     }
   }
   const ordered = focus.toSorted((a, b) => compareText(a.entry.file, b.entry.file) || a.entry.declaration.line - b.entry.declaration.line);
-  return { value: { focus: ordered.map(({ entry }) => entry), unheld }, unknown, topLevel, matched: ordered.map(({ symbol }) => symbol) };
+  return { value: { focus: ordered.map(({ entry }) => entry), unheld }, unknown, topLevel, matched: ordered.map(({ branch }) => branch) };
 }
 
 function focused(file: string, selector: string, branch: DeclarationBranch<GraphSymbol>, declarations: number): OutlineFocus {
@@ -139,13 +139,13 @@ export async function focusWithUses(store: CodeGraphReader, read: FocusRead, ori
   const settled = new Map<GraphSymbol["id"], { uses: readonly OutlineUse[]; cuts: Cut[] }>();
   const focus: OutlineFocus[] = [];
   for (const [index, entry] of read.value.focus.entries()) {
-    const symbol = read.matched[index]!;
-    let answer = settled.get(symbol.id);
+    const branch = read.matched[index]!;
+    let answer = settled.get(branch.declaration.id);
     if (answer === undefined) {
-      const { found, unproved } = await usesOf(symbol, input);
+      const { found, unproved } = await usesOf(branch, input);
       if (signal?.aborted) return "aborted";
       answer = { uses: outlineUses(found), cuts: unprovedUseCuts(entry.file, entry.path, unproved) };
-      settled.set(symbol.id, answer);
+      settled.set(branch.declaration.id, answer);
     }
     focus.push({ ...entry, uses: answer.uses });
   }

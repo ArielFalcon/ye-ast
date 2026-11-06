@@ -228,7 +228,7 @@ export const partSchema = z.discriminatedUnion("kind", [
   part("module-reach", { file: ids.file, side: z.enum(["base", "head"]), depth: count, origins: z.array(originReference), via: moduleVia.exactOptional() }),
   part("file-dependency", { from: ids.file, to: ids.file, category: fileDependencyCategory }),
   part("file-query", { file: ids.file, categories: z.array(z.strictObject({ name: fileCategory, collection: recordedCollectionState })) }),
-  part("outline-declaration", { anchor: ids.anchor, kindName: z.string(), children: z.array(ids.part).exactOptional(), uses: z.array(outlineUse).exactOptional() }),
+  part("outline-declaration", { anchor: ids.anchor, kindName: z.string(), children: z.array(ids.part).exactOptional(), uses: z.array(outlineUse).exactOptional(), unproved: z.literal(true).exactOptional() }),
   part("outline-file", { file: ids.file, declarations: z.array(ids.part), imports: z.array(outlineImport) }),
   part("unheld-file", { file: ids.file }),
   part("trace-step", {

@@ -12,6 +12,7 @@ import type { ModuleImpactValue } from "../core/domain/impact/module-dependency.
 import { declarationAnchor } from "../core/domain/impact/impact-cuts.ts";
 import type { ImportedFile, ImportersValue } from "../core/domain/impact/importers-fact.ts";
 import type { OutlineBinding, OutlineDeclaration, OutlineImport, OutlineUse, OutlineValue } from "../core/domain/outline/outline-fact.ts";
+import { hasUnprovedUses } from "../core/domain/outline/outline-uses.ts";
 import type { ExternalCalls, TraceStep, TraceValue } from "../core/domain/trace/trace-fact.ts";
 import type { EntrypointMap } from "../core/domain/map/entrypoint-map.ts";
 import type { Decision, DecisionKind, DecisionOption } from "../core/domain/decisions/decision.ts";
@@ -35,6 +36,7 @@ import { blockBytes as size, preferShorterText, shareExactContext } from "./pres
 const NONE = "  (none)";
 const DECISIONS_HINT = "ye_ast_decisions lists the declarations that would resolve these gaps, with evidence-backed options.";
 const CUTS = "cuts:";
+const NO_PROVEN_USE = "uses nothing proven outside its body; its unresolved-link cuts list the uses not proven";
 const MODULE_LISTED_DEPTH = 1;
 
 /** What each source of the repositories in force is called in the text; `none` says what the answer then covers. */
@@ -1102,9 +1104,12 @@ function importLines(imports: readonly OutlineImport[]): string[] {
   return [...groups].toSorted(([a], [b]) => compareText(a, b)).map(([key, names]) => `      ${key}${names.size === 0 ? "" : `: ${[...names].toSorted(compareText).join(", ")}`}`);
 }
 
-/** One line per use: `name → file:line` for a declaration, the package or the global otherwise, then relations and use lines. */
-function useLines(uses: readonly OutlineUse[]): string[] {
-  if (uses.length === 0) return ["    uses nothing outside its body"];
+/**
+ * One line per use: `name → file:line` for a declaration, the package or the global otherwise, then relations and use
+ * lines. No use is "nothing" only when no use is unproved.
+ */
+function useLines(uses: readonly OutlineUse[], unproved: boolean): string[] {
+  if (uses.length === 0) return [unproved ? `    ${NO_PROVEN_USE}` : "    uses nothing outside its body"];
   return ["    uses:", ...uses.map((use) => {
     const target = "declaration" in use ? `${use.declaration.name} → ${use.declaration.file}:${use.declaration.line}` : "module" in use ? `${use.module} (package)` : `${use.global} (global)`;
     const at = use.at.length === 0 ? "" : `; at ${use.at.map(({ line }) => line).filter((line, index, all) => all.indexOf(line) === index).join(", ")}`;
@@ -1132,7 +1137,7 @@ export function renderOutline(fact: Fact<OutlineValue>, detail: ResponseMode = "
     lines.push(`  ${match.file}:${match.selector} matches ${match.path} (${match.omitted} other declarations of the file omitted)`);
     match.ancestors.forEach((ancestor, depth) => lines.push(...outlineLines([ancestor], `    ${"  ".repeat(depth)}`)));
     lines.push(...outlineLines([match.declaration], `    ${"  ".repeat(match.ancestors.length)}`));
-    if (match.uses !== undefined) lines.push(...useLines(match.uses));
+    if (match.uses !== undefined) lines.push(...useLines(match.uses, hasUnprovedUses(cutsOf(fact), match.file, match.path)));
   }
   for (const entry of fact.value.files ?? []) {
     lines.push(`  ${entry.file}`);

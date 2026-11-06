@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { composeQueries } from "./compose.ts";
 
 /** Declarations whose first line is not the line of their name, used outside the body that uses them. */
@@ -12,6 +12,12 @@ const FILES: Record<string, string> = {
   "captured.ts": "export function outer() {\n  const\n  external = () => 1;\n  function together() { return external.call(null); }\n  return together;\n}\n",
   "decorated.ts": "function decorate(value: any, context: any) {}\n@decorate\nexport class External {}\nexport function together() { return External.bind(null); }\n",
   "multiline.ts": "export\nfunction\nexternal() { return 1; }\nexport function together() { return external.call(null); }\n",
+  "defs.ts": "export function real() { return 1; }\n",
+  "barrel-hidden.ts": "function alias() { return 99; }\nexport { real as alias } from './defs';\n",
+  "ns-hidden.ts": "import * as N from './barrel-hidden';\nexport function together() { return N.alias.call(null); }\n",
+  "service.ts": "export class Service { load() { return 1; } }\nexport function together(svc: Service) { return svc.load(); }\n",
+  "src/main/java/app/Peer.java": "package app;\npublic class Peer {\n  public void touch() {}\n}\n",
+  "src/main/java/app/Local.java": "package app;\npublic class Local {\n  void together(Peer peer) {\n    peer.touch();\n  }\n}\n",
   "factory.ts": "export function make(deps: { graph: { open(): number } }) {\n  return function together() { return deps.graph.open(); };\n}\n",
   "ambiguous.ts": "export function handler() {\n  const handler = () => 1;\n  function together() { return handler.call(null); }\n  return together;\n}\n",
 };
@@ -28,7 +34,10 @@ before(async () => {
   await mkdir(repo);
   await mkdir(scratchRoot);
   execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repo, env });
-  for (const [path, text] of Object.entries(FILES)) await writeFile(join(repo, path), text);
+  for (const [path, text] of Object.entries(FILES)) {
+    await mkdir(dirname(join(repo, path)), { recursive: true });
+    await writeFile(join(repo, path), text);
+  }
   execFileSync("git", ["add", "."], { cwd: repo, env });
   execFileSync("git", ["commit", "-qm", "fixture"], { cwd: repo, env });
 });
@@ -65,4 +74,17 @@ test("a captured value two indexed declarations could be is a cut, never a local
   assert.ok(answer.ok, JSON.stringify(answer));
   assert.equal(answer.value.status, "partial", JSON.stringify(answer.value));
   assert.deepEqual(answer.value.value.focus?.[0]?.uses, []);
+});
+
+test("a member of a namespace import is what the module exports under that name, never a private homonym it declares", async () => {
+  assert.deepEqual(await usesOf("ns-hidden.ts"), [{ declaration: { file: "defs.ts", name: "real", kind: "function", line: 1, endLine: 1 }, relations: ["calls"], at: [{ line: 2, column: 37 }] }]);
+});
+
+test("a member reached through a parameter of the body is no use even when the graph resolved it; the parameter's type is", async () => {
+  assert.deepEqual(await usesOf("service.ts"), [{ declaration: { file: "service.ts", name: "Service", kind: "class", line: 1, endLine: 1 }, relations: ["references"], at: [{ line: 2, column: 31 }] }]);
+});
+
+test("a Java method reached through a parameter of the body is no use; the parameter's type is", async () => {
+  const uses = (await usesOf("src/main/java/app/Local.java")) as { declaration?: { name: string } }[];
+  assert.deepEqual(uses.map((use) => use.declaration?.name), ["Peer"]);
 });
