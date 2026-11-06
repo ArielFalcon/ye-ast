@@ -2645,3 +2645,28 @@ test("a source NATS template subscription evaluates the subject override per con
   const findings = await extractor.extract([source, MAIN]);
   assert.deepEqual(listeners(findings), ["nats catalog.created@FirstConsumer.listen", "nats catalog.updated@SecondConsumer.listen"]);
 });
+
+test("a NATS Dispatcher subscription is a listener, from a constructor a base class runs for each concrete bean and from a dispatcher the connection creates in place", async () => {
+  const source = nats("Consumers", `abstract class ListenerDelegate {
+    protected final Dispatcher dispatcher;
+    protected ListenerDelegate(Connection connection) {
+      dispatcher = connection.createDispatcher();
+      dispatcher.subscribe(getSubject(), getQueueName(), this::handleMessage);
+    }
+    public abstract void handleMessage(Message message);
+    public abstract String getSubject();
+    public abstract String getQueueName();
+  }
+  @Component class CreatedListener extends ListenerDelegate {
+    CreatedListener(Connection connection) { super(connection); }
+    public void handleMessage(Message message) {}
+    public String getSubject() { return "orders.created"; }
+    public String getQueueName() { return "workers"; }
+  }
+  @Component class PaidListener {
+    private final Connection connection;
+    void listen() { connection.createDispatcher().subscribe("orders.paid"); }
+  }`, "import io.nats.client.Dispatcher;");
+  const findings = await extractor.extract([source, MAIN]);
+  assert.deepEqual(listeners(findings), ["nats orders.created@CreatedListener", "nats orders.paid@PaidListener.listen"]);
+});

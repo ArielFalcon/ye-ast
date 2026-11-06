@@ -492,7 +492,9 @@ Accepted by the owner on 2026-11-01: "Confirmo todo".
   `publish`; a part the code fills at run time is one `{}` token, and a destination it does not state is unknown. A
   publish through a messenger type whose source is not given is one `unresolved-link` cut naming the library, by the
   same name heuristic the HTTP reader uses. A listener is read from the existing annotations and, for NATS, from
-  `Connection.subscribe` and `JetStream.subscribe`, as `nats <subject>`. The join matches a publish to a listener of
+  `Connection.subscribe`, `JetStream.subscribe` and `Dispatcher.subscribe` (a dispatcher held in a field or created in
+  place with `connection.createDispatcher()`), as `nats <subject>`, in a method or in a constructor, whose listener names
+  the class. The join matches a publish to a listener of
   another repository with the same protocol and a destination that takes it, basis `event-destination` at confidence 1;
   for NATS a listener's `*` stands for one token and its `>` for one or more trailing tokens, and a token the publisher
   fills at run time for one (decision 9). A destination two listeners consume is a cut, never a pick, whether they are

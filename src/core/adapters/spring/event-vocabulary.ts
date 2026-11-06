@@ -35,10 +35,13 @@ export const PUBLISH_CLIENTS: ReadonlyMap<string, PublishClient> = new Map([
   ["io.nats.client.JetStreamContext", { protocol: "nats", destinations: new Map([["publish", FIRST]]) }],
 ]);
 
-/** The clients whose `subscribe` consumes a subject, which their first argument names. */
-export const NATS_SUBSCRIBE_TYPES: ReadonlySet<string> = new Set(["io.nats.client.Connection", "io.nats.client.JetStream", "io.nats.client.JetStreamContext"]);
+/** The clients whose `subscribe` consumes a subject, which their first argument names; a `Dispatcher` delivers asynchronously. */
+export const NATS_SUBSCRIBE_TYPES: ReadonlySet<string> = new Set(["io.nats.client.Connection", "io.nats.client.Dispatcher", "io.nats.client.JetStream", "io.nats.client.JetStreamContext"]);
 
 export const SUBSCRIBE = "subscribe";
+
+/** The connection method that creates a `Dispatcher` in place: `connection.createDispatcher().subscribe(subject)`. */
+export const CREATE_DISPATCHER = { owner: "io.nats.client.Connection", method: "createDispatcher", creates: "io.nats.client.Dispatcher" } as const;
 
 /** The method names a messenger publishes with; a call through a type whose source is unknown is a cut naming it. */
 export const PUBLISH_METHOD_NAME = /^(publish|send|emit|dispatch|produce)/;
