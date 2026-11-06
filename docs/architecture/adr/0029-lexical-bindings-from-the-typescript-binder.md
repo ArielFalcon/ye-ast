@@ -61,13 +61,14 @@ latency and 2 to 3.6 times the memory for a program with the library and depende
 7. Trace's receiver bindings are a consumer: the binding of a receiver's root name, and of every store into a receiver
    bound in the file (its initializer and each assignment), comes from the resolver. A receiver whose root is dynamic
    stays a cut.
-8. A name in a type position (a type annotation's type reference, an `implements` or `extends` clause) is looked up as a
-   name, through `getSymbolAtLocation` on that identifier, so a declared type can be told apart from a library,
-   primitive or package one. It is still no type API: no `getTypeAtLocation`, no `getTypeOfSymbol`, no inference, and
-   the `typeCount` test covers the type positions too.
-9. A receiver annotated with a library, primitive or package type is an external leaf carrying the declared type as its
-   evidence only when no in-scope repository type extends or implements that name and the name is not imported from one
-   of the repository's own packages. A type declared nowhere (generated code) stays unknown.
+8. Admitted for trace slice 2's declared external annotations (S5), not yet used: a name in a type position (a type
+   annotation's type reference, an `implements` or `extends` clause) may be looked up as a name, through
+   `getSymbolAtLocation` on that identifier, so a declared type can be told apart from a library, primitive or package
+   one. It stays no type API: no `getTypeAtLocation`, no `getTypeOfSymbol`, no inference, and the `typeCount` test is to
+   cover the type positions when S5 adds them. Until then the resolver answers `none` for a name in a type position.
+9. Admitted for S5, not yet used: a receiver annotated with a library, primitive or package type is an external leaf
+   carrying the declared type as its evidence only when no in-scope repository type extends or implements that name and
+   the name is not imported from one of the repository's own packages. A type declared nowhere (generated code) stays unknown.
 
 ## Consequences
 
