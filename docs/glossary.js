@@ -161,8 +161,8 @@ window.GLOSSARY = {
       key: "compose",
       label: "compose",
       labelEs: "compose (composición de evidencia)",
-      en: "ye_ast_compose, MCP only: 1 to 16 typed queries in one call, run one at a time and merged into shared tables. Connections are derived only between reads with matching schema, producer, trust, engines, workspace and snapshot. It is not atomic and stores nothing.",
-      es: "ye_ast_compose, solo MCP: de 1 a 16 queries tipadas en una llamada, ejecutadas una a una y unificadas en tablas compartidas. Las conexiones se derivan solo entre lecturas con el mismo schema, producer, trust, engines, workspace y snapshot. No es atómica y no guarda nada.",
+      en: "ye_ast_compose, MCP only: 1 to 16 typed queries in one call, run one at a time and merged into shared tables. Connections are derived only between reads with matching schema, producer, trust, engines, workspace and snapshot; shared-file-import and shared-support also accept another version of the same producer. It is not atomic and stores nothing.",
+      es: "ye_ast_compose, solo MCP: de 1 a 16 queries tipadas en una llamada, ejecutadas una a una y unificadas en tablas compartidas. Las conexiones se derivan solo entre lecturas con el mismo schema, producer, trust, engines, workspace y snapshot; shared-file-import y shared-support también aceptan otra versión del mismo producer. No es atómica y no guarda nada.",
       node: "mcp",
     },
     {
