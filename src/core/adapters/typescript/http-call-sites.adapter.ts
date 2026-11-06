@@ -520,7 +520,7 @@ class Reader {
   private async indexSubclasses(): Promise<ReadonlyMap<ts.ClassDeclaration, readonly HeldClass[]>> {
     const index = new Map<ts.ClassDeclaration, HeldClass[]>();
     for (const shape of this.shapes.values()) {
-      for (const declaration of shape.classes.values()) {
+      for (const declaration of shape.source.statements.filter(ts.isClassDeclaration)) {
         const base = baseClassName(declaration);
         const extended = base === undefined ? undefined : await this.classOf(shape, base);
         if (extended !== undefined) index.set(extended.declaration, [...(index.get(extended.declaration) ?? []), { shape, declaration }]);
@@ -812,7 +812,7 @@ class Reader {
     const name = expression.name.text;
     if (owner.kind === ts.SyntaxKind.ThisKeyword) {
       const enclosing = enclosingClassOf(owner);
-      return enclosing === undefined ? undefined : await this.fieldOf(shape, enclosing, name, trail, [enclosing]);
+      return enclosing === undefined ? undefined : await this.fieldOf(shape, enclosing, name, trail, { shape, declaration: enclosing });
     }
     if (!ts.isIdentifier(owner)) return undefined;
     const namespace = shape.imports.get(owner.text);
@@ -821,7 +821,7 @@ class Reader {
       return target === undefined ? undefined : this.exported(target, name, trail);
     }
     const found = await this.classOf(shape, owner.text);
-    const field = found === undefined ? undefined : await this.fieldOf(found.shape, found.declaration, name, trail, [found.declaration]);
+    const field = found === undefined ? undefined : await this.fieldOf(found.shape, found.declaration, name, trail, found);
     if (field !== undefined) return field;
     const enumeration = await this.declarationOf(shape, owner.text, (held, enumName) => held.enums.get(enumName));
     if (enumeration !== undefined) return enumMember(enumeration.shape, enumeration.declaration, name, trail);
@@ -833,11 +833,11 @@ class Reader {
 
   /**
    * The initializer of a class member, once, whatever names the class states; a member the class does not declare is its
-   * base class's. `chain` holds the classes from the one the code reads the member of to this one. A field declared
-   * without an initializer or as a constructor parameter, or that the code assigns besides its initializer, holds a value
-   * the code assigns at run time.
+   * base class's. `read` is the class the code reads the member of. A field declared without an initializer or as a
+   * constructor parameter, or that a class of the instance's hierarchy assigns besides its initializer, holds a value the
+   * code assigns at run time.
    */
-  private async fieldOf(shape: FileShape, declaration: ts.ClassDeclaration, name: string, trail: ReadonlySet<string>, chain: readonly ts.ClassDeclaration[]): Promise<Located | typeof ASSIGNED_AT_RUN_TIME | undefined> {
+  private async fieldOf(shape: FileShape, declaration: ts.ClassDeclaration, name: string, trail: ReadonlySet<string>, read: HeldClass): Promise<Located | typeof ASSIGNED_AT_RUN_TIME | undefined> {
     const visited = `${shape.source.fileName}\0${declaration.name?.text ?? "(anonymous)"}.${name}`;
     if (trail.has(visited)) return undefined;
     const member = declaration.members.find((candidate) => candidate.name !== undefined && ts.isIdentifier(candidate.name) && candidate.name.text === name);
@@ -845,13 +845,24 @@ class Reader {
       if (constructorParameters(declaration).some((parameter) => ts.isIdentifier(parameter.name) && parameter.name.text === name && ts.isParameterPropertyDeclaration(parameter, parameter.parent))) return ASSIGNED_AT_RUN_TIME;
       const base = baseClassName(declaration);
       const found = base === undefined ? undefined : await this.classOf(shape, base);
-      return found === undefined ? undefined : this.fieldOf(found.shape, found.declaration, name, new Set(trail).add(visited), [...chain, found.declaration]);
+      return found === undefined ? undefined : this.fieldOf(found.shape, found.declaration, name, new Set(trail).add(visited), read);
     }
     if (!ts.isPropertyDeclaration(member)) return undefined;
-    const [read] = chain;
-    const assigned = chain.some((held) => writes(held, name)) || (read !== undefined && (await this.assignedBelow(read, name, new Set())));
+    const assigned = (await this.assignedAbove(read, name)) || (await this.assignedBelow(read.declaration, name, new Set()));
     if (member.initializer === undefined || assigned) return ASSIGNED_AT_RUN_TIME;
     return { shape, expression: member.initializer, trail: new Set(trail).add(visited) };
+  }
+
+  /** Whether the class, or a base class it extends at any depth, assigns the member through `this`. */
+  private async assignedAbove(held: HeldClass, name: string): Promise<boolean> {
+    const seen = new Set<ts.ClassDeclaration>();
+    for (let current: HeldClass | undefined = held; current !== undefined && !seen.has(current.declaration); ) {
+      if (writes(current.declaration, name)) return true;
+      seen.add(current.declaration);
+      const base = baseClassName(current.declaration);
+      current = base === undefined ? undefined : await this.classOf(current.shape, base);
+    }
+    return false;
   }
 
   /** Whether a subclass of the class, the instance the code may run on, declares the field again or writes it. */
@@ -951,7 +962,7 @@ class Reader {
    */
   private async evaluateMethod(shape: FileShape, callee: ts.PropertyAccessExpression, trail: ReadonlySet<string>): Promise<Evaluation | undefined> {
     const receiver = await this.receiverClass(shape, callee.expression);
-    if (receiver === undefined) return undefined;
+    if (receiver === undefined || (await this.assignedAbove(receiver, callee.name.text))) return undefined;
     const inherited = await this.inheritedMethod(receiver.shape, receiver.declaration, callee.name.text, new Set());
     if (inherited === undefined) return undefined;
     const overrides = receiver.virtual ? await this.overrides(receiver.declaration, callee.name.text, new Set()) : [];
@@ -981,9 +992,9 @@ class Reader {
     return found === undefined ? undefined : { ...found, virtual: true };
   }
 
-  /** The method a class declares or inherits under a name; none once a class on the way assigns that name through `this`. */
+  /** The method a class declares or inherits under a name. */
   private async inheritedMethod(shape: FileShape, declaration: ts.ClassDeclaration, name: string, visited: Set<ts.ClassDeclaration>): Promise<HeldMethod | undefined> {
-    if (visited.has(declaration) || writes(declaration, name)) return undefined;
+    if (visited.has(declaration)) return undefined;
     visited.add(declaration);
     const member = memberNamed(declaration, name);
     if (member !== undefined) {
@@ -995,7 +1006,10 @@ class Reader {
     return found === undefined ? undefined : this.inheritedMethod(found.shape, found.declaration, name, visited);
   }
 
-  /** The methods of that name the subclasses of a class declare, at any depth; none once a subclass assigns the name through `this`. */
+  /**
+   * The methods of that name the subclasses of a class declare, at any depth; none once a subclass assigns the name
+   * through `this` or declares it as something the snapshot cannot read as a function.
+   */
   private async overrides(declaration: ts.ClassDeclaration, name: string, visited: Set<ts.ClassDeclaration>): Promise<HeldMethod[] | undefined> {
     if (visited.has(declaration)) return [];
     visited.add(declaration);
@@ -1003,8 +1017,11 @@ class Reader {
     for (const { shape, declaration: subclass } of await this.subclassesOf(declaration)) {
       if (writes(subclass, name)) return undefined;
       const member = memberNamed(subclass, name);
-      const method = member === undefined ? undefined : functionOf(member);
-      if (method !== undefined) found.push({ shape, method });
+      if (member !== undefined) {
+        const method = functionOf(member);
+        if (method === undefined) return undefined;
+        found.push({ shape, method });
+      }
       const below = await this.overrides(subclass, name, visited);
       if (below === undefined) return undefined;
       found.push(...below);

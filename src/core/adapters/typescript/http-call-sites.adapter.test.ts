@@ -624,6 +624,25 @@ test("a parameter or a local the function assigns or declares again no longer ty
   assert.deepEqual(sites(await reader.of([file], "shop-web")), ["GET /kept@rebound.ts:6", "GET /client@rebound.ts:6"]);
 });
 
+test("a member a class anywhere in the instance's hierarchy assigns through this is not read from its declaration", async () => {
+  const file = source("hierarchy.ts", [
+    "class Base { path(): string { return '/old' } constructor() { this.path = () => '/new' } }",
+    "class Child extends Base { override path(): string { return '/child' } }",
+    "class Top { url?: string; reset() { this.url = '/reset' } }",
+    "class Mid extends Top { override url = '/mid' }",
+    "class Leaf extends Mid { load() { fetch(this.url) } }",
+    "export function load(child: Child) { fetch(child.path()) }",
+  ].join("\n"));
+
+  assert.deepEqual(sites(await reader.of([file], "shop-web")), ["unknown unresolved@hierarchy.ts:5", "unknown unresolved@hierarchy.ts:6"]);
+});
+
+test("an override the snapshot cannot read as a method leaves the call undecided", async () => {
+  const file = source("accessor.ts", ["class Base { path(): string { return '/old' } }", "class Child extends Base { get path() { return () => '/new' } }", "export function load(p: Base) { fetch(p.path()) }"].join("\n"));
+
+  assert.deepEqual(sites(await reader.of([file], "shop-web")), ["unknown unresolved@accessor.ts:3"]);
+});
+
 test("a receiver a loop or a catch clause binds is not typed by an outer parameter of the same name", async () => {
   const file = source("cache.ts", [
     "import { HttpClient } from '@angular/common/http'",
