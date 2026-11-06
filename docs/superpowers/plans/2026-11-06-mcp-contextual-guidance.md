@@ -41,3 +41,5 @@
 
 - Setup: parent `feature/mcp-contextual-guidance`, baseline `7a9c3425fae894b9153a3f06dd198b9bba21da18`. Original dirty topology work is excluded.
 - Ruling: ambiguous `caller-budget` provenance receives no parameter-specific remedy. Reason: export cuts are folded into impact facts alongside walk cuts. Cost: less specific advice for this ambiguous case; no new core provenance contract is needed for this scope.
+- F1 first review: three medium findings in `26303c8`: control metadata values changed, live impact advice named excluded head, and persisted workspace membership was treated as explicit request paths. Lead applies bounded corrections and MCP regressions before a fresh scoped re-review.
+- Ruling: preserve existing control-fault `detail` values in public metadata and explain their meaning in presentation only. Reason: retain the wire payload while removing duplicated codes from the readable text. Cost: the machine field stays less descriptive; consumers still receive typed fields and contextual presentation.

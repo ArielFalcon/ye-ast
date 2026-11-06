@@ -262,8 +262,20 @@ Server runtime validation covers the common envelope, identities and principal c
 local or workspace impact/callers, importers, outline, workspace, and decisions. It does not duplicate every domain
 union. Internal workspace repository reads and `repositorySources` are excluded from public output. Faults are
 `isError` responses with redacted typed metadata under `_meta["ye-ast/fault"]`, not success receipts. Their text names
-the kind, detail and correction and ends with one `fault fields: ` JSON line holding the remaining public fault fields
+the kind and detail, adds a correction when the reported cause supports one, and ends with one `fault fields: ` JSON line holding the remaining public fault fields
 (such as `reason`, `stage`, `expected`, `actual`, `cause`), because some clients drop `_meta` or deliver only text.
+
+Continuation guidance is contextual across validation errors, faults and successful answers. It names only controls
+supported by the current tool and the observed condition; a sufficient answer needs no next-step footer. Input
+validation remains SDK validation and identifies the invalid field or control combination. Runtime fault guidance uses
+typed causes and the query family, without inferring causes from message text. A composition source failure identifies
+the failed query indices and presents the correction once, at its cause.
+
+Presentation omissions count recorded data; analysis cuts describe missing coverage. Changing mode can recover recorded
+evidence but cannot extend analysis. A cut kind alone does not identify a query budget: export and traversal limits can
+share a kind. Parameter-specific advice requires evidence of the relevant limit's origin. Starting a new query after a
+replay refusal does not retrieve the historical result; accepting a changed identity is an explicit caller choice.
+Guidance is deterministic and does not suppress itself based on previous requests or session history.
 
 `ye_ast_entrypoints`, `ye_ast_callers`, and `ye_ast_impact` deliver recovery metadata once, in
 the `recovery` result field in the text's result JSON line, for ordinary and selected responses in all modes. The presentation text points to that field rather than copying its JSON; unavailable
