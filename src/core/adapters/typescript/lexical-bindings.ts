@@ -6,7 +6,10 @@ export type LexicalBinding = { kind: "declared"; symbol: ts.Symbol; declarations
 export interface BoundFile {
   /** The file's own tree, bound; `bindingOf` answers for its identifiers. */
   tree: ts.SourceFile;
+  /** Answers only for a name read in a lexical position; a key, a member name, a type or a JSX name answers `none`. */
   bindingOf(identifier: ts.Identifier): LexicalBinding;
+  /** How many types the program's checker holds; ADR-0026 keeps it at the count the program started with. */
+  typeCount(): number;
   /** The identifier spelled `name` that starts at `start`, an offset into the file's text. */
   identifierAt(start: number, name: string): ts.Identifier | undefined;
 }
@@ -34,7 +37,8 @@ export function bindFile(path: string, content: string): BoundFile {
     fileExists: (name) => name === fileName,
     readFile: (name) => (name === fileName ? content : undefined),
   };
-  const checker = ts.createProgram({ rootNames: [fileName], options: OPTIONS, host }).getTypeChecker();
+  const program = ts.createProgram({ rootNames: [fileName], options: OPTIONS, host });
+  const checker = program.getTypeChecker();
   const dynamicScopes = evalScopes(tree);
   let starting: Map<number, ts.Identifier[]> | undefined;
 
@@ -46,12 +50,14 @@ export function bindFile(path: string, content: string): BoundFile {
   return {
     tree,
     bindingOf(identifier) {
+      if (!isLexicalReference(identifier)) return NONE;
       if (isDynamic(identifier)) return DYNAMIC;
       const parent = identifier.parent;
       const symbol = ts.isShorthandPropertyAssignment(parent) && parent.name === identifier ? checker.getShorthandAssignmentValueSymbol(parent) : checker.getSymbolAtLocation(identifier);
       const declarations = symbol?.declarations ?? [];
       return symbol === undefined || declarations.length === 0 ? NONE : { kind: "declared", symbol, declarations };
     },
+    typeCount: () => program.getTypeCount(),
     identifierAt(start, name) {
       if (starting === undefined) {
         const index = new Map<number, ts.Identifier[]>();
@@ -71,7 +77,7 @@ export function bindFile(path: string, content: string): BoundFile {
 function evalScopes(tree: ts.SourceFile): ReadonlySet<ts.Node> {
   const scopes = new Set<ts.Node>();
   const visit = (node: ts.Node, scope: ts.Node, strict: boolean): void => {
-    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === "eval" && !strict) scopes.add(scope);
+    if (ts.isCallExpression(node) && isDirectEval(node) && !strict) scopes.add(scope);
     if (ts.isClassLike(node)) return node.forEachChild((child) => visit(child, scope, true));
     if (ts.isFunctionLike(node) && "body" in node && node.body !== undefined) {
       const inner = strict || (ts.isBlock(node.body) && declaresStrict(node.body.statements));
@@ -82,6 +88,27 @@ function evalScopes(tree: ts.SourceFile): ReadonlySet<ts.Node> {
   const strict = ts.isExternalModule(tree) || declaresStrict(tree.statements);
   tree.forEachChild((child) => visit(child, tree, strict));
   return scopes;
+}
+
+/**
+ * A name read where the binder alone answers what it binds. Elsewhere `getSymbolAtLocation` reaches the checker's types:
+ * a destructuring key, a member or property name, a qualified or type name, a JSX tag or attribute.
+ */
+function isLexicalReference(identifier: ts.Identifier): boolean {
+  if (ts.isPartOfTypeNode(identifier)) return false;
+  const parent = identifier.parent;
+  if (ts.isShorthandPropertyAssignment(parent)) return parent.name === identifier;
+  if (ts.isPropertyAccessExpression(parent)) return parent.expression === identifier;
+  if (ts.isBindingElement(parent) || ts.isQualifiedName(parent) || ts.isJsxAttribute(parent) || ts.isJsxOpeningLikeElement(parent) || ts.isJsxClosingElement(parent) || ts.isJsxNamespacedName(parent) || ts.isMetaProperty(parent)) return false;
+  return !(("name" in parent && parent.name === identifier) || ("propertyName" in parent && parent.propertyName === identifier) || ("label" in parent && parent.label === identifier));
+}
+
+/** A call of `eval` itself, parentheses included; `(0, eval)(...)` and `eval?.(...)` are indirect and see only the global scope. */
+function isDirectEval(call: ts.CallExpression): boolean {
+  if (call.questionDotToken !== undefined) return false;
+  let callee: ts.Expression = call.expression;
+  while (ts.isParenthesizedExpression(callee)) callee = callee.expression;
+  return ts.isIdentifier(callee) && callee.text === "eval";
 }
 
 function declaresStrict(statements: readonly ts.Statement[]): boolean {

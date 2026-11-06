@@ -391,11 +391,14 @@ test("a call reaches the parameter of the function around it through a closure o
   }
 });
 
-test("a call inside with, or in a script that calls eval directly around it, is never proven a parameter; strict code that calls eval is", async () => {
+test("a call inside with, or in a script that calls eval directly around it, is never proven a parameter; strict code or an indirect eval is", async () => {
   const cases = [
     { file: "src/with.ts", text: "function run(redact: () => void) { with (other) { redact(); } }\n", local: false },
     { file: "src/sloppy.ts", text: "function run(redact: () => void) { eval('var redact = 1'); redact(); }\n", local: false },
     { file: "src/sloppy-outer.ts", text: "function run(redact: () => void) { eval('x'); return () => redact(); }\n", local: false },
+    { file: "src/parenthesized.ts", text: "function run(redact: () => void) { (eval)('var redact = 1'); return () => redact(); }\n", local: false },
+    { file: "src/comma.ts", text: "function run(redact: () => void) { (0, eval)('x'); redact(); }\n", local: true },
+    { file: "src/optional.ts", text: "function run(redact: () => void) { eval?.('x'); redact(); }\n", local: true },
     { file: "src/directive.ts", text: "function run(redact: () => void) { 'use strict'; eval('x'); redact(); }\n", local: true },
     { file: "src/module.ts", text: "export function run(redact: () => void) { eval('x'); redact(); }\n", local: true },
     { file: "src/class.ts", text: "class Runner { run(redact: () => void) { eval('x'); redact(); } }\n", local: true },

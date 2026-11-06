@@ -281,8 +281,7 @@ function bindsParameter(binding: LexicalBinding, name: string): boolean {
 }
 
 /**
- * The start of every name of the file that `bindsParameter` proves. Only names spelled like a parameter are asked, and
- * never the member name of an access, whose symbol needs a type.
+ * The start of every name of the file that `bindsParameter` proves. Only names spelled like a parameter are asked.
  */
 function parameterUses(path: string, text: string): ReadonlySet<number> {
   const { tree, bindingOf } = bindFile(path, text);
@@ -294,16 +293,11 @@ function parameterUses(path: string, text: string): ReadonlySet<number> {
   collect(tree);
   const starts = new Set<number>();
   const visit = (node: ts.Node): void => {
-    if (ts.isIdentifier(node) && names.has(node.text) && !isMemberName(node) && bindsParameter(bindingOf(node), node.text)) starts.add(node.getStart(tree));
+    if (ts.isIdentifier(node) && names.has(node.text) && bindsParameter(bindingOf(node), node.text)) starts.add(node.getStart(tree));
     node.forEachChild(visit);
   };
   if (names.size > 0) visit(tree);
   return starts;
-}
-
-function isMemberName(identifier: ts.Identifier): boolean {
-  const parent = identifier.parent;
-  return (ts.isPropertyAccessExpression(parent) && parent.name === identifier) || (ts.isQualifiedName(parent) && parent.right === identifier);
 }
 
 function topLevelNames(statement: ts.Statement): string[] {
