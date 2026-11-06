@@ -1,9 +1,11 @@
 # RFC-0013: Trace and patterns
 
-- Status: Draft, 2026-11-01; open questions accepted by the owner ("Acepto las recomendaciones"); `patterns` deferred
+- Status: Draft, 2026-11-01; open questions accepted by the owner ("Acepto las recomendaciones"); `patterns` deferred;
+  trace slice 1 implemented, 2026-11-06
 - Related: [RFC-0002](0002-facts-contract.md), [RFC-0007](0007-extension-model.md), [RFC-0010](0010-impact-queries.md),
   [RFC-0011](0011-cross-repository-impact.md), [ADR-0013](../adr/0013-coverage-grows-only-with-evidence.md),
-  [ADR-0015](../adr/0015-index-reuse-by-content.md), [ADR-0017](../adr/0017-owner-of-a-member-expands-only-whole-type-edges.md)
+  [ADR-0015](../adr/0015-index-reuse-by-content.md), [ADR-0017](../adr/0017-owner-of-a-member-expands-only-whole-type-edges.md),
+  [ADR-0029](../adr/0029-lexical-bindings-from-the-typescript-binder.md)
 
 **In short:** two read-only query families for an agent that must understand a repository and plan a change. `trace`
 answers what an entrypoint or a symbol executes, as a tree in source order that ends at effects (HTTP calls, data
@@ -52,13 +54,35 @@ A call is `callee(args)` or `receiver.member(args)`; each rule settles it to one
 
 | # | Rule | Settles |
 |---|---|---|
-| R1 | A call edge the index resolved, unless its synthesizer is ignored by `EDGE_POLICY` | a step |
+| R1 | A call edge the index resolved, unless its synthesizer is ignored by `EDGE_POLICY`, judged by the one owner of where an edge points, the same impact, callers and importers use (`EdgeTargets`, RFC-0010) from the root its name spells at its place: kept; dropped when the root is bound by a package or the language's libraries (`new pkg.Base()`, a `pkg` import named like a repository declaration) or is a parameter of a function around the call ([ADR-0029](../adr/0029-lexical-bindings-from-the-typescript-binder.md) reads that binding); redirected when an import proves the bare name binds another repository declaration than the one the index matched | a step, at the redirected declaration for a redirected edge (its place unchanged); a dropped edge whose root is a package or a library is an external call under the package, or a global, by the name it reaches; one whose root is a parameter runs the parameter's value, so it is an `unresolved-link` cut at the place listing the declarations of its name, never a step |
 | R2 | `this.<member>` and `this.<member>.<rest>` inside the class that declares the member (the inbound rule of RFC-0010, applied forward) | a step at the member |
-| R3 | `this.<field>.<member>`: the field's `FieldOrigin` holds a repository class (a step at its member, with dispatch R7 when it is an interface), an external type (a leaf), or nothing known (R6) | a step or a leaf |
+| R3 | `this.<field>.<member>`: the field's `FieldOrigin` holds a repository class (a step at its member, with dispatch R7 when it is an interface), an external type (a leaf), or nothing known (R6). Slice 2: it needs the call-binding port | a step or a leaf |
 | R4 | A bare name or a receiver identifier bound in the file: a local or a parameter whose declaration fixes its origin (`inject(T)`, `new T()`, `const x = this.f`, a type annotation `: T`), an import (a repository file: its export; a package: external with the package name), or no binding at all (a global: `global#Math`) | a step, a leaf |
 | R5 | A chain on a call result `head(...).m(...)`: the head is settled first; when it is a repository declaration with a declared return type, `m` is looked up in that type; when the type is external or absent, `m` is external of it | a step or a leaf per link of the chain |
-| R6 | Closed world: an unsettled call whose last name no declaration of the repository (within the declared scope) has cannot run repository code | a leaf `external`, unknown module |
-| R6b | Otherwise | a cut `unresolved-link` at the place, listing the repository declarations of that name as candidates |
+| R6 | Closed world, narrowed to what a name lookup proves (below): an unsettled call proven not to reach repository code | a leaf `external` |
+| R6b | Otherwise | a cut `unresolved-link` at the place, listing the repository declarations of that name as candidates, each `file::path` with the dotted containment path the outline gives it (`src/a.ts::Store.get`; a top-level one `src/a.ts::get`) |
+
+R6 applies only where the name at the call is the name of the callee:
+
+| Spelling | External leaf when | Otherwise |
+|---|---|---|
+| member call `x.m(...)` | no declaration within the declared scope is named `m` except declarations that name only a type (`interface`, `type_alias`), and no in-scope source declares `m` in a value position: an object-literal key at any depth and in any context, a property assigned as `<expr>.m = ...` or `<expr>['m'] = ...`, a member of a class, record, enum, or local or anonymous class, a constructor parameter property, a value name a module exports (a renamed or re-exported specifier, `export * as name`, `default`; never a type-only export); a type, an interface, a type literal or an ambient (`declare`) declaration declares none. Any other kind in the index (function, method, property, field, constant, variable, class, enum, or one ye-ast does not know) may hold what the call runs, and so may a value-position name the index holds no node for, so either keeps the call a cut | R6b cut listing those declarations; when only the sources declare `m`, the files that do, each `file::m`, sorted |
+| member call `x.m(...)` on a function value | the call's own source binds its receiver, read through parentheses, `as`, `satisfies`, `<T>` and `!`, to a function value: `this.x` to that field of the enclosing class, a bare `x` to its innermost local, parameter or module binding (in Java, else to the field of the enclosing type; in TypeScript the binding is the compiler binder's ([ADR-0029](../adr/0029-lexical-bindings-from-the-typescript-binder.md)), under JavaScript scoping: a `var` belongs to its function, module or static block across nested blocks, `let`, `const`, `class` and a function declaration to their block, a switch's to its whole case block, a catch variable to its catch block; every declaration of the binding counts); the binding's initializer or an assignment to it (in TypeScript `??=`, `||=` and `&&=` included) is a lambda, a method reference, an arrow or a function expression, read through every wrapper (parentheses and casts; in TypeScript also `as`, `satisfies`, `<T>` and `!`), through either branch of a conditional or operand of `&&`, `||` and `??`, and through the last operand of a comma or an assignment, it is a function declaration, or (TypeScript) its declared type is a function type. A receiver imported from another module is the index's: it resolves the call to the value it holds | cut, never external: a library member such as `get`, `run`, `call` or `apply` runs the repository function the value holds; the source is the candidate, `file::x`, beside any that declare `m`. Limitation: a value that arrives through a parameter or field typed with a library functional interface (Java `Supplier`, `Runnable`) and no function-valued initializer or assignment in the file, or a Java bare name an inner or anonymous class reads from its outer class, stays as the rule above decides; receiver typing (slice 2) addresses it. Which method of a functional interface runs the value is not resolved (slice 2 or 3, behind a language port) |
+| bare call `f(...)` | the import origins say the file imports `f` from a package (`import`, with the module) or the language's own libraries declare it (`global`) | cut: a local parameter, an alias or a computed callee may be a repository function passed under another name |
+| computed call `x[k](...)`, `(expr)(...)` | never | cut |
+
+The value-position names are read from every in-scope source by the language's own parser (the TypeScript compiler
+API, ADR-0008; tree-sitter for Java), once per query and only when a member call first reaches this rule; the sources of the methods the walk expands are
+read for their callables (R10) by the same per-file read. Building the
+set took 18 to 75 ms on the probe repositories and 238 ms on this one, against 1.1 to 1.9 s per query, so it is not
+cached across queries.
+
+Limitation: a member defined under a computed name (`{ [key]: fn }`, `target[name] = fn`) has no name to read, so a
+call through such a member is still reported external `unnamed` when no other source declares its name.
+
+The rule matches names, not receivers, so a library call whose name the code also declares in a value position is a
+cut: on this repository's `composeQueries` trace, 269 calls moved from external to cut (191 `Map.set`, 52
+`RegExp.test`, 15 `Math.max` and `Math.min`), 2,033 cuts became 2,326. Receiver bindings (R4) settle them.
 
 R4 and R5 read the syntax tree of the file (the TypeScript compiler API in `core/adapters/typescript`, ADR-0008; the
 tree-sitter syntax tree for Java), never a type checker, and are computed once per file content.
@@ -67,35 +91,35 @@ tree-sitter syntax tree for Java), never a type checker, and are computed once p
 
 | # | Rule |
 |---|---|
-| R7 | Dispatch: a step at an interface or abstract method has as `alternatives` every implementation of it in the repository (through `implements` / `extends`, the same type walk `callers` uses); one implementation is expanded in place; none is a leaf and a cut |
+| R7 | Dispatch: a step at an interface or abstract method has as `alternatives` every implementation of it in the repository (through `implements` / `extends`, the same type walk `callers` uses). The step expands in place the one implementation when there is exactly one, or the one the framework's dispatch proves (a qualifier, `@Primary`, a named bean), noting which proof chose it; with several and no proof, none is expanded and the step carries a cut |
 | R8 | Order: children in the line and column of their call; a call inside a function passed as an argument (a callback to `subscribe`, `then`, `pipe`, `effect`, a stream lambda) is marked `deferred` |
-| R9 | Roots: a symbol, a line range or an entrypoint. An HTTP route, listener or job starts at its handler. A UI route starts at its component, whose children are its constructor and field initializers, then its lifecycle hooks in the framework's order, then the handlers its template binds to events, then its template children (`uses-component` and the rest) |
-| R10 | Folding: a step with no children and no effect is a leaf, listed by name on one line under its parent; external leaves are one line per parent grouped by module (`rxjs: pipe, subscribe`); nothing is dropped |
+| R9 | Roots: a symbol, a line range or an entrypoint. An HTTP route, listener or job starts at its handler. A UI route starts at its component, whose children are its constructor and field initializers, then its lifecycle hooks in the framework's order, then the handlers its template binds to events, then its template children (`uses-component` and the rest). A property or field whose initializer makes calls is a root by symbol or by a range inside it, and a class root's children are its members that have a body or an initializer that makes calls, in source order, reached `via: "member"`, an obligation of the root that an earlier expansion of the class below another root never meets; `callers` and `impact` seed as before |
+| R10 | Folding: a proven terminal step (expanded, with no children, no cut and no effect) is a leaf `{symbol, file, start, end}` of its parent, `deferred` when the parent passes it as a value; the text lists it by name on one line under its parent, and the full answer keeps its location. A step a bound stopped or with an unsettled call stays a step, and so does a method dispatch may replace. The index records neither bodies nor modifiers, so the declaration's own syntax decides, read by the parsers of R6 from the same parse, per file and once per query, and matched to the index node by name and by the lines from its first token (a decorator or annotation) to its name: a body-less callable (a TypeScript `abstract` method, overload signature, ambient function or interface method signature; a Java `abstract` method or interface method without `default`, `static` or `private` body) is a step with an `unresolved-link` cut at its declaration listing every repository declaration of its name in any type below its owners, an interface's included (none when there is none); a `static`, `private` or `final` method with a body expands it and never gets a dispatch cut; an overridable method with a body (a Java `default` method, a class method) expands it and gets a cut only when a type below its owner declares a method of its name, listing those declarations. A declaration in an interface below counts, whether a `default` override or a re-abstraction: a class below that interface may supply yet another body. A method its syntax does not state keeps the interface-owner rule: a cut when an interface declares it. The types below an owner follow the index's `extends` and `implements` edges (the index records no TypeScript `interface B extends A`, so a type below such an interface is not found from `A`); the index leaves a parameterized supertype (`interface Sub extends Port<String>`) as an unresolved reference spelled with its type arguments, so that reference names every type declaration of its raw name (`Port`), and a homonym adds its implementations to the candidates. Until R7 binds dispatch these cuts stay. So does a property or field a call reaches: the call runs the value the property holds, which its initializer built at construction, so the step is not expanded and carries an `unresolved-link` cut at the property's declaration (the value is unknown); an arrow function assigned to a property is indexed as a method and expands, and a property root (R9) still traces its initializer. External leaves are one line per parent grouped by module (`rxjs: pipe, subscribe`); nothing is dropped |
 | R11 | A declaration already expanded appears again as `seen` with the step that expanded it; cycles end there |
 | R12 | Effects: an external leaf whose module, type and member a plugin row declares as an effect (HTTP clients, message publishers, data-access types; RFC-0007, ADR-0013) carries its kind, and its target when RFC-0011's call-site extraction resolves one |
 | R13 | Bounds and cuts as every walk: the RFC-0010 budget, unset by default; unresolved places, unbound dispatch and unreadable templates are cuts |
 
 ### The fact
 
+Slice 1 answers this shape; `effects` (R12) and `alternatives` (R7) join it in their slices.
+
 ```ts
 interface TraceValue {
-  root: { file: string; symbol: string; line: number; entrypoint?: { kind: string; name: string } };
-  steps: TraceStep[];                       // pre-order
-  effects: { kind: EffectKind; step: number; target?: Finding<HttpTarget | EventTarget>; api: string }[];
+  roots: { target: string; steps: number[] }[];   // per requested target, the root steps it selected
+  steps: TraceStep[];                              // pre-order
+  readingPlan: { ranges: { file: string; start: number; end: number; steps: number[] }[]; lines: number };
   cost: { expanded: number };
 }
 interface TraceStep {
   id: number; parent?: number; depth: number;
-  file: string; symbol: string; kind: string; line: number;
-  at: { line: number; column: number };     // the call in the parent
-  via: "call" | "dispatch" | "field" | "own-member" | "binding" | "chain" | "template-event" | "template-use" | "lifecycle";
+  file: string; symbol: string; kind: string; line: number; endLine?: number;
+  at?: { line: number; column?: number };          // the call in the parent
+  via?: "call" | "own-member" | "reference" | "member";
   deferred?: true;
-  alternatives?: number[];
   seen?: number;
-  leaves?: string[];                        // folded repository leaves (R10)
-  external?: { module: string; names: string[] }[];   // folded external leaves (R10)
+  leaves?: { symbol: string; file: string; start: number; end: number; deferred?: true }[];   // folded (R10)
+  external?: ({ kind: "import"; module: string; names: string[] } | { kind: "global" | "unnamed"; names: string[] })[];
 }
-type EffectKind = "http" | "message" | "data";
 ```
 
 ### Text for the agent
@@ -104,6 +128,10 @@ type EffectKind = "http" | "message" | "data";
 trace POST /orders/checkout -> OrdersController.orderCheckout (src/.../OrdersController.java:35)
 status: partial (cuts: 1 unresolved-link)
 effects (3): http GET /restaurants/{id} at RestaurantsRepositoryAdapter.java:36, http POST .../reward-points/quote at RewardPointsRepositoryAdapter.java:34, data OrderRepository.save at ...
+reading plan (6 ranges, 74 lines):
+  src/.../OrdersController.java: 35-52 (18 lines)
+  src/.../OrdersApplicationServiceImpl.java: 95-118, 120-131 (36 lines)
+  ...
 steps:
   35 orderCheckout
     41 checkoutOrderUseCase  dispatch: OrdersApplicationServiceImpl (1 of 1)
@@ -114,10 +142,16 @@ steps:
       leaves: getCustomerId, getRestaurantId, getItems (+4)
       external: slf4j: info; lombok builder: discountRequest, customerId, checkout, build
 cuts:
-  unresolved-link at ...
+  unresolved-link (1 call):
+    apply ×1 in 1 file → could be: DiscountPolicy.apply
+    Call places omitted; mode "details" lists them, mode "full" gives the structured fact.
 ```
 
 The effects come first, since they decide the plan; steps follow the MCP depth summary and `expand` of the latency plan.
+In `summary` the reading plan takes one line per file, files in their first appearance, and the unresolved calls one
+line per trailing name and candidate set, most calls first, with the candidates listed by their containment path or
+counted, whichever is shorter (RFC-0017), and counted when two of them share a path; `details` lists each range and
+each call with its file, line and candidates, each with its file.
 
 ### Acceptance
 
@@ -133,6 +167,101 @@ fixtures per rule in the repository:
 
 Measured on each: the share of call places settled by R1-R6, the cuts R6b leaves (each with candidates), and the text
 size before and after folding.
+
+### Slice 1 measured (2026-11-06)
+
+Fifteen traces over four probe repositories, at the head of each clone, `untrusted`, through `ye-ast trace`; each ran
+twice and answered the same bytes. Frontend A is Angular with standalone components and signals, frontend B an Nx
+workspace with NgRx signal stores; backend A is Spring REST with service interfaces and MapStruct mappers, backend B
+Spring Boot with repository interfaces and MyBatis read services. Roots: an HTTP handler (BA-1, BA-3, BB-1, BB-3,
+BB-4), the application method it calls (BA-2, BB-2, BB-5), a frontend API method that posts or gets (FA-1, FB-1), a
+component method bound to a user action (FA-2, FA-3, FB-2, FB-3) and a whole signal store (FB-4).
+
+*Settled* counts the call places that became a step (seen and deferred included), the folded leaves and the external
+names; *cut* counts the `unresolved-link` cuts, one per place. Leaves and external names are listed once per parent,
+so settled is a lower bound of the settled places. Text bytes come from the MCP renderer; wall time is the second
+run, with a warm index cache and process start included.
+
+| Trace | Status | Steps / expanded / seen / leaves | Settled / cut (share) | Top cut tails | External groups | Plan ranges / lines | Summary / details bytes | Wall s |
+|---|---|---|---|---|---|---|---|---|
+| FA-1 | complete | 1 / 2 / 0 / 1 | 4 / 0 (1) | — | 2 | 1 / 5 | 453 / 630 | 4.06 |
+| FA-2 | partial | 3 / 3 / 0 / 0 | 9 / 1 (0.9) | `deleteVet` | 3 | 3 / 10 | 736 / 1184 | 1.12 |
+| FA-3 | partial | 3 / 3 / 0 / 0 | 9 / 1 (0.9) | `deletePetType` | 3 | 3 / 10 | 815 / 1256 | 2.65 |
+| FB-1 | partial | 1 / 1 / 0 / 0 | 0 / 1 (0) | `post` | 0 | 1 / 5 | 694 / 834 | 2.55 |
+| FB-2 | partial | 1 / 1 / 0 / 0 | 2 / 1 (0.67) | `login` | 1 | 1 / 4 | 661 / 861 | 2.66 |
+| FB-3 | partial | 1 / 1 / 0 / 0 | 0 / 1 (0) | `addComment` | 0 | 1 / 3 | 679 / 831 | 1.40 |
+| FB-4 | partial | 7 / 10 / 0 / 3 | 32 / 8 (0.8) | `post`×3, `callState`×3, `get`, `put` | 7 | 7 / 116 | 1290 / 3133 | 1.09 |
+| BA-1 | partial | 1 / 9 / 0 / 8 | 12 / 5 (0.71) | `ResponseEntity`×2, `HttpHeaders`, `setName`, `path` | 1 | 1 / 18 | 991 / 2031 | 1.29 |
+| BA-2 | partial | 3 / 7 / 0 / 4 | 7 / 1 (0.88) | `getId` | 1 | 3 / 19 | 982 / 1329 | 1.19 |
+| BA-3 | partial | 1 / 4 / 0 / 3 | 4 / 2 (0.67) | `ResponseEntity`×2 | 1 | 1 / 14 | 861 / 1209 | 1.27 |
+| BB-1 | partial | 2 / 9 / 0 / 7 | 9 / 1 (0.9) | `HashMap` | 1 | 2 / 22 | 693 / 1009 | 1.20 |
+| BB-2 | complete | 1 / 8 / 0 / 7 | 7 / 0 (1) | — | 0 | 1 / 11 | 581 / 778 | 1.14 |
+| BB-3 | partial | 3 / 13 / 0 / 11 | 18 / 4 (0.82) | `body`, `HashMap`, `setFollowing`, `getId` | 2 | 3 / 32 | 964 / 2629 | 1.15 |
+| BB-4 | partial | 11 / 26 / 2 / 18 | 36 / 8 (0.82) | `DateTime`×3, `isEmpty`, `HashMap`, `setFollowing` | 3 | 9 / 79 | 1556 / 4507 | 1.05 |
+| BB-5 | partial | 5 / 19 / 0 / 16 | 39 / 11 (0.78) | `getId`×3, `toList`×3, `setFollowing`, `HashMap` | 4 | 5 / 71 | 1328 / 5312 | 1.12 |
+
+In total 198 outcomes settled against 45 cuts (0.81). Not all of them are sound: 26 leaves are abstract methods and one
+external is a repository method (findings 1 and 2 below), which leaves 171 sound outcomes (0.70).
+
+What would settle each cut: all 32 cuts of the four cut-heavy traces (FB-4, BB-4, BB-5, BA-1), and all 45:
+
+| Settled by | Cut-heavy (32) | All (45) | Example |
+|---|---|---|---|
+| R3 field origin | 5 | 10 | `this.apiService.post`; 8 of the 10 fields hold a repository class, 2 hold a signal store (finding 2) |
+| R4 import binding in Java: an imported class constructed or called | 13 | 18 | `new ResponseEntity<>(…)`, `new HashMap<>()`, `toList()`, `UriComponentsBuilder.newInstance().path` |
+| R4 local or parameter binding | 7 | 7 | `value.isEmpty()` on a `String` parameter, a lambda parameter `item.getCount()`, a destructured `callState()` |
+| R5 chain through a declared return type | 7 | 10 | `articleData.getProfileData().setFollowing` |
+| R7 dispatch | 0 | 0 | none is a cut: dispatch hides behind leaves (finding 1) |
+| Genuinely ambiguous | 0 | 0 | — |
+
+Every cut has a slice 2 rule that settles it, but the rules do not yield equally. R3 is where the frontend flow stops:
+five of the six frontend roots below the store end at their first repository hop, a `this.<field>.<member>` cut, so
+the reading plan stops at the component. R4 and R5 mostly turn cuts into external leaves or terminal getters, which
+removes noise without opening flow. On the backends the hidden flow sits in dispatch: each of the 26 abstract-method
+leaves stands for an implementation the trace never opens.
+
+Findings:
+
+1. **An abstract method folds as a proven terminal leaf.** In Java, a call to an interface method (a service, a
+   repository port, a mapper, a MyBatis read service) settles on the abstract declaration. The walk reads no call from
+   it and folds it into its caller's `leaves`, so BB-2 answers `complete` while its repository write is never reached.
+   Reproduction: `Service.create(s) { repo.save(s); }` with `interface Repo { void save(String s); }` and
+   `RepoImpl implements Repo` gives `complete` with one leaf at `Repo.save`. An abstract method has no body to
+   expand: it is unbound dispatch (R7, R13), a step with a cut until slice 3, never a leaf (R10).
+   Fixed for interface members (R10): BA-1, BA-3 and BB-2 now answer `partial`, each interface method a step with a cut
+   listing its implementations (`ClinicServiceImpl`, `MyBatisArticleRepository`), and the generated mappers a cut that
+   lists none. The index carries no signal for an `abstract` method of an abstract class: codegraph records it as a
+   plain `method` with `is_abstract` unset and a signature without modifiers, and indexes no node for a TypeScript
+   `abstract` method. Fixed for abstract methods too: the parsers of R6 read whether a declaration has a body and can
+   be overridden (R10), so a reached abstract method is a step with a cut listing its subclass implementations, and a
+   `static` or `private` interface method, or a `default` one nothing overrides, is no longer a cut.
+2. **A call to an object-literal method is shown as external.** The index holds no node for a method written in an
+   object literal (`withMethods((store) => ({ setErrors(…) {…} }))`), so no in-scope declaration has the name, the
+   type-only rule holds vacuously, and `formErrorsStore.setErrors` becomes an `unnamed` external of FB-4. Reproduction:
+   `const store = make({ setErrors(e: string) { … } })` and `function run(s: typeof store) { s.setErrors("x"); }` gives
+   `complete` with `s.setErrors` external. Repository code shown as external contradicts R6. The same gap makes
+   `this.authStore.login` (FB-2) list only `AuthService.login`. Fixed (R6): the sources' value-position names keep the
+   call a cut, so FB-4's four `formErrorsStore.setErrors` calls are cuts listing the store's file; over the 15 traces
+   settled outcomes went from 188 to 185 and cuts from 71 to 77, the other change being `resource.value` in FA-2 and
+   FA-3, which a `value` key elsewhere now keeps a cut.
+3. **A callback held by a property's initializer call is unreachable.** A signal-form submission
+   (`readonly ownerForm = form(model, schema, { submission: { action: async () => … } })`) is a property, which no
+   request can seed. A range over the action seeds the class, and a class root answers `complete` with no calls,
+   although the index records the property's `calls` edges. An arrow function assigned to a property directly is indexed
+   as a method and traces correctly. Fixed (R9): the property is a root by symbol or by the range, and answers `partial`
+   with `form`, `firstValueFrom` and `String` external, `gotoOwnersList` folded and one cut, the R3 call
+   `this.ownerService.addOwner`; the class root expands into its six members that run code, `via: "member"`: five
+   steps and `gotoOwnersList` folded.
+
+Usefulness. A trace pays off where it crosses several declarations: BA-2, BB-3, BB-4, BB-5 and FB-4 hand over 3 to 9
+ranges (19 to 116 lines) in reading order, with folded leaves and grouped externals, for 1.0 to 1.6 KB of summary
+text, which is less than opening the files one by one. A trace that stops at its first hop (FA-2, FA-3, FB-1, FB-2,
+FB-3) adds little beyond `ye_ast_outline` plus the cut's candidates. A handler trace on backend A (BA-1, BA-3) shows
+the service calls as terminal leaves, which is misleading (finding 1).
+
+Reading for the next slice: findings 1 and 2 are unsound answers, so they come first. Of slice 2, R3 and the Java
+import binding settle 28 of the 45 cuts and R3 opens the stopped frontend flows; on the backends, R7 (slice 3) opens
+more flow than R4-R5.
 
 ## Patterns (deferred)
 
@@ -232,8 +361,8 @@ created with: a feature api file 9/11 (example 5b6ec5ca), a page that injects it
 
 | Slice | Delivers | Accepted by |
 |---|---|---|
-| 1 | R1-R3, R6-R6b, R8 (order), R10, R11, R13 over resolved edges, own members and field origins; roots by symbol and line range; `ye_ast_trace` and `ye-ast trace` | fixtures per rule; the frontend API trace reaches the wrapper and the framework HTTP call |
-| 2 | R4-R5: bindings, locals, parameters, imports, globals, chains through declared return types, in TypeScript and Java | fixtures per binding kind; the settled share on the probe measured and recorded |
+| 1 (implemented) | R1, R2, R6 narrowed, R6b, R8 (order), R10, R11, R13 over resolved edges and own members, with a reading plan of the spans to open; roots by symbol and line range; `ye_ast_trace` (and in `ye_ast_compose`), `ye-ast trace`, protocol `trace.walk` | fixtures per rule; real indexed fixtures for callback attribution and object-literal keys; parity across CLI, protocol and MCP |
+| 2 | R3 and R4-R5: field origins, bindings, locals, parameters, imports, globals, chains through declared return types, in TypeScript and Java | fixtures per binding kind; the settled share on the probe measured and recorded |
 | 3 | R7 dispatch and R9 entrypoint roots, with the template's event handlers read by the Angular adapter | the service checkout trace and the page trace |
 | 4 | R12 effects with RFC-0011 call-site targets | each effect of the acceptance table |
 

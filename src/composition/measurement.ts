@@ -6,6 +6,7 @@ import type { Result } from "../core/domain/shared/result.ts";
 import { INDEX_STORE_DIRECTORY, type CodeGraph } from "../core/ports/code-graph.port.ts";
 import type { DecisionQueries } from "../core/ports/decision-queries.port.ts";
 import type { OutlineQueries } from "../core/ports/outline-queries.port.ts";
+import type { TraceQueries } from "../core/ports/trace-queries.port.ts";
 import type { WorkspaceQueries } from "../core/ports/workspace-queries.port.ts";
 import type { EntrypointQueries } from "../core/ports/entrypoint-queries.port.ts";
 import type { ImpactQueries } from "../core/ports/impact-queries.port.ts";
@@ -40,6 +41,10 @@ export function measuredImpact(queries: ImpactQueries, deps: MeasurementDeps): I
 /** The index side of the graph, measured: a build is the one expensive event a session can hide. */
 export function measuredOutline(queries: OutlineQueries, deps: MeasurementDeps): OutlineQueries {
   return { outline: (request) => measured("outline", () => queries.outline(request), deps) };
+}
+
+export function measuredTrace(queries: TraceQueries, deps: MeasurementDeps): TraceQueries {
+  return { walk: (request) => measured("trace.walk", () => queries.walk(request), deps) };
 }
 
 export function measuredWorkspace(queries: WorkspaceQueries, deps: MeasurementDeps): WorkspaceQueries {

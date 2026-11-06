@@ -69,10 +69,10 @@ function verificationLine(result: CompositionResult): string {
 const PART_ORDER: readonly PartKind[] = [
   "entrypoint", "unknown-finding", "entrypoint-change", "contract-change", "seed", "symbol-reach", "entrypoint-reach", "module-origin", "module-reach",
   "file-dependency", "call-site", "unresolved-call-site", "unlinked-call-site", "workspace-link", "outward-name", "name-candidate", "unheld-file",
-  "outline-declaration", "outline-file", "file-query",
+  "outline-declaration", "outline-file", "file-query", "trace-root", "trace-step", "reading-range",
 ];
 /** Kinds summary counts instead of listing: bulk observations already represented by subjects, relations or coverage. */
-const SUMMARY_COUNTED: ReadonlySet<PartKind> = new Set(["outline-declaration", "outline-file", "file-query"]);
+const SUMMARY_COUNTED: ReadonlySet<PartKind> = new Set(["outline-declaration", "outline-file", "file-query", "trace-step", "reading-range"]);
 /** Families whose own summary lists cut places, so a composition summary lists them for their reads too. */
 const SUMMARY_LOCATED_CUTS: ReadonlySet<string | undefined> = new Set(["importers"]);
 /** Kinds a source line counts as its holdings; context, cost and bookkeeping parts are stated elsewhere. */
@@ -479,6 +479,18 @@ class CompactView {
       case "outline-declaration": return `outline declaration ${this.anchor(part.anchor)} ${part.kindName}`;
       case "outline-file": return `outline ${this.file(part.file)}: ${part.declarations.length === 0 ? "no declarations" : this.outlined(part.declarations).map((declaration) => this.describe(declaration, true)).join(", ")}; ${part.imports.length} imports`;
       case "unheld-file": return `unheld ${this.file(part.file)} (not read; not an empty file)`;
+      case "trace-step": return short ? `trace step #${part.step} ${this.anchor(part.anchor)}` : [
+        `trace step #${part.step} ${this.anchor(part.anchor)} ${part.kindName} depth ${part.depth}`,
+        part.parent === undefined ? "" : ` under #${part.parent}`,
+        part.at === undefined ? "" : ` at line ${part.at.line}${part.at.column === undefined ? "" : ` column ${part.at.column}`}`,
+        part.via === undefined ? "" : ` via ${part.via}`,
+        part.deferred ? " deferred" : "",
+        part.seen === undefined ? "" : ` seen #${part.seen}`,
+        part.leaves === undefined ? "" : `; leaves ${part.leaves.map((leaf) => `${this.anchor(leaf.anchor)}${leaf.deferred ? " (deferred)" : ""}`).join(", ")}`,
+        part.external === undefined ? "" : `; external ${part.external.map((group) => `${group.kind === "import" ? group.module : group.kind}: ${group.names.join(", ")}`).join("; ")}`,
+      ].join("");
+      case "trace-root": return `trace root ${quoted(part.target)} selects ${part.steps.map((step) => `#${step}`).join(", ") || "nothing"}`;
+      case "reading-range": return `reading range ${this.file(part.file)}:${part.start}-${part.end} for ${part.steps.map((step) => `#${step}`).join(", ")}`;
       case "outward-name": return `${part.disposition} outward name ${part.kindName} ${quoted(part.name)}${this.context(part.origin)}${short ? "" : `, ${this.evidenceList(part.evidence)}`}`;
       case "name-candidate": return `candidate ${quoted(part.name)} served by ${part.repo} basis ${part.basis} (candidate only: no membership, trust or call)${short ? "" : `, ${this.evidenceList(part.evidence)}`}`;
       case "call-site": {
@@ -497,6 +509,7 @@ class CompactView {
       case "decision": return `decision ${part.kindName} ${quoted(part.subject)}`;
       case "impact-context": return `impact context ${this.readLabel(part.owner)}`;
       case "walk-cost": return `${part.walk} walk used ${part.expansionsUsed} expansions (${this.readLabel(part.owner)})`;
+      case "trace-totals": return `trace read ${part.expanded} bodies; reading plan ${part.lines} lines (${this.readLabel(part.owner)})`;
     }
   }
 

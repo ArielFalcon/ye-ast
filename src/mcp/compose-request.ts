@@ -266,6 +266,7 @@ function repeatRequestOf(source: ExecutedSource): RepeatRequest {
     }
     case "importers":
     case "outline":
+    case "trace":
     case "workspace":
     case "decisions": {
       if (source.identityGuard.changedArguments) return unavailable("redacted-context");

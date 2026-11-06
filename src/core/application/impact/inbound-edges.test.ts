@@ -6,7 +6,7 @@ import type { LocalOrigin } from "../../domain/relations/field-origin.ts";
 import type { MemberUseOrigin } from "../../domain/relations/member-use.ts";
 import type { GraphSymbol } from "../../ports/code-graph.port.ts";
 import { createInboundEdges, type InboundEdges } from "./inbound-edges.ts";
-import { fakeCodeGraph, fakeNode, type FakeEdge, type FakeNode, type FakeUnresolved } from "./fake-code-graph.testing.ts";
+import { fakeCodeGraph, fakeNode, type FakeEdge, type FakeNode, type FakeUnresolved } from "../navigation/fake-code-graph.testing.ts";
 import { walkImpact } from "./walk.ts";
 
 const isTestFile = (path: string): boolean => path.includes("/test/");

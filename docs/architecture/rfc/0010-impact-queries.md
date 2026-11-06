@@ -70,7 +70,10 @@ replaces `head` or `revision` under `trusted` only ([Live head](#live-head-slice
 | removed with its symbol | none at `head`: its former callers changed too in a consistent commit and are seeds themselves; a caller left behind shows as an unresolved reference naming it. The same holds for a declaration removed from a symbol that survives (a method of a class): the holder seeds, and every name the removed lines declared, in any hunk, that no added line of the file declares again (a rename loses its name, an edited signature keeps it) also leads an `unresolved-link` cut at the references that still name it |
 
 `Seed.basis` is `lines`, `top-level` or `resource`, or `requested` for a symbol `impact.callers` was asked for by name.
-A requested line range seeds through the rows above, as the added lines of a file; a requested symbol seeds every
+A requested line range seeds through the rows above, as the added lines of a file, except that a line of the range no
+symbol holds and no code is on (blank, a comment) selects nothing: a range across the gap between two declarations
+seeds those two, not the file's top-level symbols. A range left with no line at all (wholly past the end of its file,
+or only such lines) selects no declaration and is the `unknown-symbol` fault below, never an empty answer. A requested symbol seeds every
 seedable node of its file whose dotted path in the file's `contains` tree ends with it at whole names (a bare name at
 any depth, `A.m` only an `m` that `A` contains directly), so overloads all seed; a symbol that is both requested
 and inside a requested range is one seed, `requested`.
@@ -313,8 +316,9 @@ per cause:
 
 `unknown` when no answer is possible: the index cannot be built or opened (`index-unavailable`) or the diff cannot be
 read (`source-unreadable`); an unresolvable revision is a typed fault, as for `map`. A symbol `impact.callers` was asked
-for that names no node at the revision is the typed fault `unknown-symbol`, listing every such entry with the dotted
-containment paths of the seedable declarations of its file (sorted, once each, empty when the file declares none or is not indexed), so the caller sees
+for that names no node at the revision, or a line range that selects no declaration, is the typed fault
+`unknown-symbol`, listing every such entry (`{file, symbol}` or `{file, start, end}`) with the dotted containment
+paths of the seedable declarations of its file (sorted, once each, empty when the file declares none or is not indexed), so the caller sees
 what it could have asked for; the CLI exits as
 for an unresolvable revision. A requested line range in a file that is not a covered source (a test, an uncovered
 language, a template no component names) is a `no-extractor` cut at that file, never an empty answer.

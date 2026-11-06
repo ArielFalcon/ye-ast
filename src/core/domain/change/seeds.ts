@@ -54,6 +54,7 @@ export function selectSeeds<S extends SeedSymbol>(
   radius: Pick<BlastRadius, "files">,
   symbolsByFile: ReadonlyMap<string, readonly S[]>,
   componentsByResource: ReadonlyMap<string, readonly ComponentRef[]>,
+  isRoot: (symbol: S) => boolean = isSeedable,
 ): SeedSelection<S> {
   const chosen = new Map<S, SeedBasis>();
   const withoutSymbols: string[] = [];
@@ -64,11 +65,11 @@ export function selectSeeds<S extends SeedSymbol>(
   };
   for (const change of radius.files) {
     for (const component of componentsByResource.get(change.path) ?? []) {
-      const owner = (symbolsByFile.get(component.file) ?? []).find((symbol) => isSeedable(symbol) && joinsFact(symbol, { path: component.file, line: component.line, symbol: component.name }));
+      const owner = (symbolsByFile.get(component.file) ?? []).find((symbol) => isRoot(symbol) && joinsFact(symbol, { path: component.file, line: component.line, symbol: component.name }));
       if (owner !== undefined) take(owner, "resource");
     }
     if (kindOfChangedFile(change.path) !== "source") continue;
-    const symbols = (symbolsByFile.get(change.path) ?? []).filter(isSeedable);
+    const symbols = (symbolsByFile.get(change.path) ?? []).filter(isRoot);
     for (const removal of change.removals) {
       const holder = innermostHolding(symbols, removal.after, removal.after + 1);
       if (holder !== undefined) take(holder, "lines");

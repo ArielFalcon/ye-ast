@@ -12,6 +12,7 @@ import type { ModuleImpactValue } from "../core/domain/impact/module-dependency.
 import { declarationAnchor } from "../core/domain/impact/impact-cuts.ts";
 import type { ImportedFile, ImportersValue } from "../core/domain/impact/importers-fact.ts";
 import type { OutlineBinding, OutlineDeclaration, OutlineImport, OutlineValue } from "../core/domain/outline/outline-fact.ts";
+import type { ExternalCalls, TraceStep, TraceValue } from "../core/domain/trace/trace-fact.ts";
 import type { EntrypointMap } from "../core/domain/map/entrypoint-map.ts";
 import type { Decision, DecisionKind, DecisionOption } from "../core/domain/decisions/decision.ts";
 import { compareText } from "../core/domain/shared/code-node.ts";
@@ -1130,6 +1131,127 @@ export function renderOutline(fact: Fact<OutlineValue>, detail: ResponseMode = "
   if (fact.value.unheld.length > 0) lines.push(`unheld files (${fact.value.unheld.length}): ${fact.value.unheld.join(", ")}; their declarations are unknown.`);
   lines.push(...cutsBlock(cutsOf(fact), detail));
   return lines.join("\n");
+}
+
+const TRACE_FULL_GUIDE = "Select value.steps in pre-order: id, parent, depth, file, symbol, kind, line, endLine, at (the call in the parent), via, deferred, seen (the id that expanded it), leaves (folded terminal declarations with file, start, end) and external (calls leaving the repository by module). value.roots lists the root step ids per target; value.readingPlan.ranges lists file, start, end and the step ids each range covers, with the total lines. When partial, an unresolved-link cut is at[0] \"file:line spelling\" followed by its candidates, each \"file::Owner.member\" by containment path.";
+
+const TRACE_BRANCHES = "branches are not evaluated: every call in a body is listed, whichever branch makes it";
+
+function traceRootLines(value: TraceValue): string[] {
+  const byId = new Map(value.steps.map((step) => [step.id, step]));
+  return [
+    `roots (${value.steps.filter((step) => step.parent === undefined).length}):`,
+    ...value.roots.map(({ target, steps }) => {
+      const roots = steps.map((id) => byId.get(id)!).map((step) => `#${step.id} ${step.symbol} [${step.kind}] ${placeText(step.file, step.line, step.endLine)}`);
+      return `  ${target} matches ${steps.length}: ${roots.join(", ")}`;
+    }),
+  ];
+}
+
+/** The ranges to open: one per line in details; in summary one line per file, files in their first appearance. */
+function readingPlanLines(value: TraceValue, detail: ResponseMode): string[] {
+  const { ranges, lines } = value.readingPlan;
+  const span = (start: number, end: number): string => (end === start ? `${start}` : `${start}-${end}`);
+  const listed = detail === "details"
+    ? ranges.map(({ file, start, end }) => `  ${placeText(file, start, end === start ? undefined : end)}`)
+    : [...Map.groupBy(ranges, ({ file }) => file)].map(([file, inFile]) => {
+        const count = inFile.reduce((sum, { start, end }) => sum + end - start + 1, 0);
+        return `  ${file}: ${inFile.map(({ start, end }) => span(start, end)).join(", ")} (${count} ${count === 1 ? "line" : "lines"})`;
+      });
+  return [`reading plan (${ranges.length} ${ranges.length === 1 ? "range" : "ranges"}, ${lines} lines):`, ...listed];
+}
+
+function externalText(group: ExternalCalls): string {
+  return `${group.kind === "import" ? group.module : group.kind}: ${group.names.join(", ")}`;
+}
+
+/** Each step on its own line under its parent: the call's line, then its span when its file is not its parent's. */
+function traceTreeLines(steps: readonly TraceStep[]): string[] {
+  const byId = new Map(steps.map((step) => [step.id, step]));
+  return steps.flatMap((step) => {
+    const indent = `  ${"  ".repeat(step.depth)}`;
+    const parent = step.parent === undefined ? undefined : byId.get(step.parent);
+    const span = parent?.file === step.file ? "" : ` (${placeText(step.file, step.line, step.endLine)})`;
+    const notes = [step.via !== undefined && step.via !== "call" ? step.via : undefined, step.deferred ? "deferred" : undefined, step.seen === undefined ? undefined : `seen #${step.seen}`].filter((note) => note !== undefined);
+    const leaves = step.leaves ?? [];
+    return [
+      `${indent}#${step.id} ${step.at?.line ?? step.line} ${step.symbol}${step.parent === undefined ? ` [${step.kind}]` : ""}${span}${notes.length === 0 ? "" : ` ${notes.join(", ")}`}`,
+      ...(leaves.length === 0 ? [] : [`${indent}  leaves: ${leaves.map((leaf) => (leaf.deferred ? `${leaf.symbol} (deferred)` : leaf.symbol)).join(", ")}`]),
+      ...(step.external === undefined ? [] : [`${indent}  external: ${step.external.map(externalText).join("; ")}`]),
+    ];
+  });
+}
+
+/** The first `:<line>` followed by a space or the end closes the path, as the walk builds the place. */
+const TRACE_PLACE = /^(.*?):(\d+)(?: (.*))?$/s;
+
+/** An unresolved call of a trace: the place and spelling leading the cut, then its candidates. */
+function tracePlaceOf(cut: Cut): { file: string; line: string; spelling: string; candidates: readonly string[] } {
+  const [place = "", ...candidates] = cut.at;
+  const [, file = place, line = "", spelling = ""] = TRACE_PLACE.exec(place) ?? [];
+  return { file, line, spelling, candidates };
+}
+
+type TracePlace = ReturnType<typeof tracePlaceOf>;
+
+const TRACE_PLACES_OMITTED = '    Call places omitted; mode "details" lists them, mode "full" gives the structured fact.';
+
+/** The name a call ends with, so calls of one member through different receivers share a line. */
+function trailingName(spelling: string): string {
+  return /[\w$]+$/.exec(spelling.trimEnd())?.[0] ?? spelling.trim();
+}
+
+/** Each unresolved call with every candidate. */
+function tracePlaceLine(place: TracePlace): string {
+  return `    ${place.file}:${place.line} ${place.spelling}${place.candidates.length === 0 ? "" : ` (${place.candidates.join(", ")})`}`;
+}
+
+/** A candidate without its file: `src/a.ts::Store.get` reads `Store.get`. */
+function candidatePath(candidate: string): string {
+  const separator = candidate.indexOf("::");
+  return separator === -1 ? candidate : candidate.slice(separator + 2);
+}
+
+/**
+ * One line per trailing name and candidate set, most calls first, then by name: its calls, its files and its candidates
+ * by containment path, counted when that is shorter or when two candidates share a path.
+ */
+function traceCallGroupLines(places: readonly TracePlace[]): string[] {
+  const groups = [...Map.groupBy(places, (place) => JSON.stringify([trailingName(place.spelling), place.candidates.toSorted(compareText)]))]
+    .map(([key, inGroup]) => ({ key, name: trailingName(inGroup[0]!.spelling), candidates: inGroup[0]!.candidates.toSorted(compareText), calls: inGroup.length, files: new Set(inGroup.map(({ file }) => file)).size }))
+    .sort((a, b) => b.calls - a.calls || compareText(a.name, b.name) || compareText(a.key, b.key));
+  return groups.map(({ name, candidates, calls, files }) => {
+    const shown = [...new Set(candidates.map(candidatePath))].sort(compareText);
+    const listed = shown.join(", ");
+    const counted = `${candidates.length} ${candidates.length === 1 ? "candidate" : "candidates"}`;
+    const listable = shown.length === candidates.length && preferShorterText(listed, counted) === listed;
+    const could = candidates.length === 0 ? "" : listable ? ` → could be: ${listed}` : ` → ${counted}`;
+    return `    ${name} ×${calls} in ${files} ${files === 1 ? "file" : "files"}${could}`;
+  });
+}
+
+/** The calls no rule settled: grouped by call in summary, then the modes that list each place; one per line with every candidate in details. */
+function traceCutLines(cuts: readonly Cut[], detail: ResponseMode): string[] {
+  const unresolved = cuts.filter((cut) => cut.kind === "unresolved-link").map(tracePlaceOf);
+  const lines = cutLines(cuts.filter((cut) => cut.kind !== "unresolved-link"), detail);
+  if (unresolved.length === 0) return lines.length === 0 ? [] : [CUTS, ...lines];
+  const places = detail === "details" ? unresolved.map(tracePlaceLine) : [...traceCallGroupLines(unresolved), TRACE_PLACES_OMITTED];
+  return [CUTS, ...lines, `  unresolved-link (${unresolved.length} ${unresolved.length === 1 ? "call" : "calls"}):`, ...places];
+}
+
+export function renderTrace(fact: Fact<TraceValue>, detail: ResponseMode = "summary"): string {
+  if (detail === "full") return fact.status === "unknown" ? "Inspect reason and evidence; the result has no value." : TRACE_FULL_GUIDE;
+  const lines = headerLines(fact);
+  if (fact.status === "unknown") return lines.join("\n");
+  lines.push(...traceRootLines(fact.value), TRACE_BRANCHES, ...readingPlanLines(fact.value, detail));
+  if (detail === "details") lines.push("steps:", ...traceTreeLines(fact.value.steps));
+  lines.push(...traceCutLines(cutsOf(fact), detail));
+  return lines.join("\n");
+}
+
+/** What a fault entry can be told to the caller: the declarations of the file that could have been asked instead. */
+function declarationText(entry: { file: string; candidates: readonly string[] }): string {
+  return entry.candidates.length === 0 ? `${entry.file} declares no symbol` : `declared in ${entry.file}: ${entry.candidates.join(", ")}`;
 }
 
 /** One link as every answer lists it: its number, both ends, the basis and what the answer adds about how it was reached. */

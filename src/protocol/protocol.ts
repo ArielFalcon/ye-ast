@@ -9,6 +9,7 @@ export const METHOD = {
   impactCallers: "impact.callers",
   impactImporters: "impact.importers",
   outlineFiles: "outline.files",
+  traceWalk: "trace.walk",
   workspaceOutwardNames: "workspace.outwardNames",
   decisionsDecisions: "decisions.decisions",
 } as const;

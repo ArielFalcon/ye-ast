@@ -18,10 +18,10 @@ window.MODULE_DETAILS_EN = {
       may: "core/ports, core/domain",
       never: "core/adapters, a write of any kind",
       facts: [
-        "McpDeps extends QueryExecutionDeps, which holds only read query families (entrypoints, impact, outline, workspace, workspace impact, decisions) plus redaction and digest, so a write is impossible by type.",
-        "Eight tools: ye_ast_entrypoints, ye_ast_impact, ye_ast_callers, ye_ast_importers, ye_ast_outline, ye_ast_workspace, ye_ast_decisions and ye_ast_compose.",
+        "McpDeps extends QueryExecutionDeps, which holds only read query families (entrypoints, impact, outline, trace, workspace, workspace impact, decisions) plus redaction and digest, so a write is impossible by type.",
+        "Nine tools: ye_ast_entrypoints, ye_ast_impact, ye_ast_callers, ye_ast_importers, ye_ast_outline, ye_ast_trace, ye_ast_workspace, ye_ast_decisions and ye_ast_compose.",
         "The server instructions tell the agent how to read an answer: complete is relative to the declared scope, partial lists its cuts, and unknown never means no impact.",
-        "ye_ast_compose combines 1 to 16 queries of the seven families into one set of evidence with a verification identity; it exists only over MCP.",
+        "ye_ast_compose combines 1 to 16 queries of the eight families into one set of evidence with a verification identity; it exists only over MCP.",
       ],
       files: ["src/mcp/server.ts", "src/mcp/query-runner.ts", "src/mcp/composition-input.ts", "src/mcp/compose-request.ts", "src/mcp/compose-evidence.ts", "src/mcp/composition-schema.ts", "src/mcp/composition-contract.ts", "src/mcp/render-composition.ts", "src/composition/mcp.ts"],
     },
@@ -32,7 +32,7 @@ window.MODULE_DETAILS_EN = {
       never: "core/adapters, another entrypoint",
       facts: [
         "stdout carries only protocol lines; measurements and diagnostics go to stderr.",
-        "The seven per-repository operations: entrypoints.map, impact.ofChange, impact.callers, impact.importers, outline.files, workspace.outwardNames, decisions.decisions.",
+        "The eight per-repository operations: entrypoints.map, impact.ofChange, impact.callers, impact.importers, outline.files, trace.walk, workspace.outwardNames, decisions.decisions.",
         "trust.declare is the protocol's one administrative call; it declares the trust mode outside the repository.",
       ],
       files: ["src/protocol/query-server.ts", "src/protocol/query-client.ts"],

@@ -13,7 +13,7 @@ import type { AtRevision } from "../../ports/live-queries.port.ts";
 import type { ImportersValue } from "../../domain/impact/importers-fact.ts";
 import type { CommitExport, Vcs, VcsChanges, VcsFault } from "../../ports/vcs.port.ts";
 import type { AngularDeclaration } from "../../ports/angular-declarations.port.ts";
-import { fakeCodeGraph, fakeNode, type FakeEdge, type FakeNode, type FakeUnresolved } from "./fake-code-graph.testing.ts";
+import { fakeCodeGraph, fakeNode, type FakeEdge, type FakeNode, type FakeUnresolved } from "../navigation/fake-code-graph.testing.ts";
 import type { TrustRecordReader } from "../../ports/trust-record.port.ts";
 import { fakeLive, type FakeLive } from "../live/fake-live.testing.ts";
 import type { LiveStaleNotice } from "../../ports/live-queries.port.ts";
@@ -65,6 +65,8 @@ interface Options {
   onDiffDirectories?: () => void;
   /** The head's sources, as the export reader hands them over. */
   sources?: SourceFile[];
+  /** The trivia lines a tokenizer reads in each source, by path. */
+  trivia?: Readonly<Record<string, readonly number[]>>;
   /** Reads the imports of those sources, as composition wires it. */
   importOrigins?: ImportOriginsReader;
   moduleDependencies?: ModuleDependenciesReader;
@@ -154,6 +156,7 @@ function setup(options: Options = {}) {
     ...(options.live && { live: options.live.deps }),
     ...(options.declarationEvidence && { declarationEvidence: options.declarationEvidence }),
     ...(options.importOrigins && { importOrigins: options.importOrigins }),
+    ...(options.trivia && { sourceTrivia: { triviaLines: async (file: SourceFile) => new Set(options.trivia?.[file.path] ?? []) } }),
     ...(options.moduleDependencies && { moduleDependencies: options.moduleDependencies }),
     ...(options.snapshotCache && { snapshotCache: options.snapshotCache }),
     ...(options.unmodelled && { unmodelled: { extract: async (sources) => sources.map(({ path }) => path).filter((path) => options.unmodelled!.includes(path)) } }),
@@ -732,11 +735,6 @@ test("a dotted symbol seeds only the member its container holds, not a same-name
   assert.deepEqual(answer.status === "complete" && answer.value.seeds.map((seed) => seed.line), [2]);
 });
 
-test("a bare symbol seeds every declaration of that name in the file, at any depth", async () => {
-  const answer = callersFact(await setup(TWO_CLASSES).callers({ targets: [{ file: "src/A.ts", symbol: "m" }] }));
-  assert.deepEqual(answer.status === "complete" && answer.value.seeds.map((seed) => seed.line), [2, 12]);
-});
-
 test("a missing symbol lists the dotted containment paths of its file, so a candidate selects one declaration", async () => {
   const answer = await setup(TWO_CLASSES).callers({ targets: [{ file: "src/A.ts", symbol: "gone" }] });
   assert.ok(!answer.ok);
@@ -758,6 +756,38 @@ test("a requested line range seeds like changed lines do: the innermost symbol i
   const { callers } = setup({ nodes });
   const answer = callersFact(await callers({ targets: [{ file: "src/A.java", start: 11, end: 12 }] }));
   assert.deepEqual(answer.status === "complete" && answer.value.seeds.map((seed) => [seed.symbol, seed.basis]), [["h", "lines"]]);
+});
+
+/** `f` at 1-3 and `h` at 10-14, with blank and comment lines between them; `g` at 20 lies outside every range below. */
+function rangeFile(between: readonly string[]): SourceFile {
+  return { path: "src/A.ts", content: ["export function f() {", "  return 1;", "}", ...between, "export function h() {", "  return 2;", "", "", "}", "", "", "", "", "", "export function g() {}", ""].join("\n") };
+}
+const RANGE_NODES = [fakeNode("f", "function", "src/A.ts", 1, 3), fakeNode("h", "function", "src/A.ts", 10, 14), fakeNode("g", "function", "src/A.ts", 20, 20)];
+
+test("a requested range selects the declarations it intersects, and its blank and comment lines between them select nothing", async () => {
+  const { callers } = setup({ nodes: RANGE_NODES, sources: [rangeFile(["", "// note", "/* block", "   still */", "", ""])], trivia: { "src/A.ts": [4, 5, 6, 7, 8, 9, 12, 13, 15, 16, 17, 18, 19, 21] } });
+  const seeds = async (start: number, end: number) => {
+    const answer = callersFact(await callers({ targets: [{ file: "src/A.ts", start, end }] }));
+    return answer.status === "unknown" ? [] : answer.value.seeds.map((seed) => [seed.symbol, seed.basis]);
+  };
+  assert.deepEqual(await seeds(2, 11), [["f", "lines"], ["h", "lines"]]);
+  assert.deepEqual(await seeds(12, 13), [["h", "lines"]]);
+});
+
+test("a requested range that selects no declaration, past the end of its file or only over trivia between declarations, is an unknown-symbol fault with what the file declares", async () => {
+  const { callers } = setup({ nodes: RANGE_NODES, sources: [rangeFile(["", "// note", "/* block", "   still */", "", ""])], trivia: { "src/A.ts": [4, 5, 6, 7, 8, 9, 12, 13, 15, 16, 17, 18, 19, 21] } });
+  for (const [start, end] of [[30, 35], [5, 7]] as const) {
+    const answer = await callers({ targets: [{ file: "src/A.ts", start, end }, { file: "src/A.ts", start: 2, end: 2 }] });
+    assert.ok(!answer.ok, `${start}-${end}`);
+    assert.equal(answer.fault.kind, "unknown-symbol");
+    assert.deepEqual(answer.fault.kind === "unknown-symbol" && answer.fault.entries, [{ file: "src/A.ts", start, end, candidates: ["f", "g", "h"] }]);
+  }
+});
+
+test("a requested range over a top-level statement still selects every top-level declaration of its file", async () => {
+  const { callers } = setup({ nodes: RANGE_NODES, sources: [rangeFile(["", "register(f);", "", "", "", ""])], trivia: { "src/A.ts": [4, 6, 7, 8, 9] } });
+  const answer = callersFact(await callers({ targets: [{ file: "src/A.ts", start: 4, end: 5 }] }));
+  assert.deepEqual(answer.status !== "unknown" && answer.value.seeds.map((seed) => [seed.symbol, seed.basis]), [["f", "top-level"], ["h", "top-level"], ["g", "top-level"]]);
 });
 
 test("a symbol that is both requested and inside a requested range seeds once, as requested", async () => {

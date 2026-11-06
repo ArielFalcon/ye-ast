@@ -19,6 +19,7 @@ import { createFixedLayerAdmin } from "../core/application/fixed-layer/fixed-lay
 import { createInstall } from "../core/application/install/install.ts";
 import { createImpactQueries } from "../core/application/impact/impact-queries.ts";
 import { createOutlineQueries } from "../core/application/outline/outline-queries.ts";
+import { createTraceQueries } from "../core/application/trace/trace-queries.ts";
 import { createWorkspaceQueries, createWorkspaceReadOperation } from "../core/application/topology/workspace-queries.ts";
 import { createCapturedWorkspaceImpactQueries } from "../core/application/topology/workspace-impact.ts";
 import { createCapturedDecisionQueries } from "../core/application/decisions/decision-queries.ts";
@@ -46,6 +47,12 @@ import { createSpringRoutesExtractor } from "../core/adapters/spring/spring-rout
 import { createJavaRecordsReader } from "../core/adapters/tree-sitter/java-records.adapter.ts";
 import type { UnmodelledConstructsReader } from "../core/ports/unmodelled-constructs.port.ts";
 import { createJavaParser } from "../core/adapters/tree-sitter/java-parser.adapter.ts";
+import { createJavaMemberNames } from "../core/adapters/tree-sitter/java-member-names.adapter.ts";
+import { createJavaTrivia } from "../core/adapters/tree-sitter/java-trivia.adapter.ts";
+import { createTypeScriptMemberNames } from "../core/adapters/typescript/declared-member-names.adapter.ts";
+import { createTypeScriptTrivia } from "../core/adapters/typescript/source-trivia.adapter.ts";
+import type { DeclaredMemberNamesReader } from "../core/ports/declared-member-names.port.ts";
+import type { SourceTrivia } from "../core/ports/source-trivia.port.ts";
 import { createAngularDeclarationReader } from "../core/adapters/typescript/angular-declarations.adapter.ts";
 import { createAngularRoutesExtractor } from "../core/adapters/typescript/angular-routes.adapter.ts";
 import { createDynamicLoadReader } from "../core/adapters/typescript/dynamic-loads.adapter.ts";
@@ -62,6 +69,7 @@ import type { ModuleDependenciesReader } from "../core/ports/module-dependencies
 import type { EntrypointQueries } from "../core/ports/entrypoint-queries.port.ts";
 import type { ImpactQueries } from "../core/ports/impact-queries.port.ts";
 import type { OutlineQueries } from "../core/ports/outline-queries.port.ts";
+import type { TraceQueries } from "../core/ports/trace-queries.port.ts";
 import type { WorkspaceQueries } from "../core/ports/workspace-queries.port.ts";
 import type { WorkspaceImpactQueries } from "../core/ports/workspace-impact-queries.port.ts";
 import type { ConsumerQueries } from "../core/ports/consumer-queries.port.ts";
@@ -71,7 +79,7 @@ import type { Redaction } from "../core/ports/redaction.port.ts";
 import type { TrustRecordReader } from "../core/ports/trust-record.port.ts";
 import type { ExportBudget, Vcs } from "../core/ports/vcs.port.ts";
 import { installedVersion, ownVersion } from "./installed-versions.ts";
-import { measuredDecisions, measuredStages, measuredEntrypoints, measuredGraph, measuredImpact, measuredIndexDiscard, measuredLiveMirror, measuredOutline, measuredSnapshotCache, measuredWorkspace, type MeasurementSink } from "./measurement.ts";
+import { measuredDecisions, measuredStages, measuredEntrypoints, measuredGraph, measuredImpact, measuredIndexDiscard, measuredLiveMirror, measuredOutline, measuredSnapshotCache, measuredTrace, measuredWorkspace, type MeasurementSink } from "./measurement.ts";
 
 const PRODUCER_NAME = "ye-ast";
 const ENTRYPOINT_ENGINES = ["web-tree-sitter", "tree-sitter-java", "typescript"] as const;
@@ -118,6 +126,7 @@ export interface ComposedQueries {
   entrypoints: EntrypointQueries;
   impact: ImpactQueries;
   outline: OutlineQueries;
+  trace: TraceQueries;
   workspace: WorkspaceQueries;
   workspaceImpact: WorkspaceImpactQueries;
   /** What changing one property of an operation's response does to the code that consumes it (RFC-0022); a library surface only. */
@@ -149,6 +158,23 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
     },
   }, { extract: "entrypoints" });
   const typescriptCallSites = createHttpCallSites();
+  const typescriptTrivia = createTypeScriptTrivia();
+  const javaTrivia = createJavaTrivia(createJavaParser);
+  const sourceTrivia: SourceTrivia = {
+    triviaLines: async (file) => new Set([...(await typescriptTrivia.triviaLines(file)), ...(await javaTrivia.triviaLines(file))]),
+  };
+  const typescriptMemberNames = createTypeScriptMemberNames();
+  const javaMemberNames = createJavaMemberNames(createJavaParser);
+  const memberNames: DeclaredMemberNamesReader = {
+    memberNames: async (file) => {
+      const [typescript, java] = [await typescriptMemberNames.memberNames(file), await javaMemberNames.memberNames(file)];
+      return {
+        names: [...new Set([...typescript.names, ...java.names])].sort(compareText),
+        functionValueCalls: [...typescript.functionValueCalls, ...java.functionValueCalls],
+        callables: [...typescript.callables, ...java.callables],
+      };
+    },
+  };
   const callSites = staged<CallSiteReader>({
     of: async (files, repo, libraries) => {
       const java = await createJavaCallSites(await createJavaParser()).of(files, repo, libraries);
@@ -203,6 +229,7 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
     ...budget,
     ...trust,
     importOrigins: (sources: readonly SourceFile[]) => createImportOrigins(sources),
+    sourceTrivia,
     moduleDependencies,
     declarationEvidence: createDeclarationEvidenceReader(),
     unmodelled,
@@ -238,6 +265,27 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
   const javaImports = staged<ModuleDependenciesReader>({ extract: async (sources, options) => createJavaImportsReader(await createJavaParser()).extract(sources, options) }, { extract: "java-imports" });
   const bareOutline = createOutlineQueries({ ...headDeps, moduleReaders: [moduleDependencies, javaImports], unmodelled });
   const outline = measurement === undefined ? bareOutline : measuredOutline(bareOutline, measurement);
+  const bareTrace = createTraceQueries({
+    ...snapshotCache,
+    vcs,
+    scratch,
+    reader,
+    extractor,
+    graph,
+    ...(indexes && { indexes }),
+    digest,
+    matcher,
+    producer: { name: PRODUCER_NAME, version },
+    engines: { ...entrypointEngines, [CODEGRAPH_PACKAGE]: codegraph },
+    live,
+    ...budget,
+    ...trust,
+    importOrigins: (sources: readonly SourceFile[]) => createImportOrigins(sources),
+    moduleDependencies,
+    sourceTrivia,
+    memberNames,
+  });
+  const trace = measurement === undefined ? bareTrace : measuredTrace(bareTrace, measurement);
   const defaults = createWorkspaceDefaults(createFixedLayerStore());
   const refresh = options.refresh ?? (options.cacheDirectory === undefined ? undefined : createRemoteRefresh({ ...defaultRemoteRefreshDeps, cacheDirectory: options.cacheDirectory, digest }));
   const workspaceDeps: WorkspaceQueriesDeps = {
@@ -274,7 +322,7 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
   const consumers = composeConsumerQueries({ operation, heads: headDeps, digest, engines: { ...headDeps.engines, ...impactDeps.angularEngines }, importOrigins: createImportOrigins });
   const bareDecisions = createCapturedDecisionQueries({ operation, defaults, vcs, digest });
   const decisions = measurement === undefined ? bareDecisions : measuredDecisions(bareDecisions, measurement);
-  return { version, entrypoints, impact, outline, workspace, workspaceImpact, consumers, decisions, redaction, repositoryName: (repo, signal) => vcs.repositoryName(repo, signal), canonicalRepositoryRoot: (repo, signal) => vcs.canonicalRoot(repo, signal), warmLive };
+  return { version, entrypoints, impact, outline, trace, workspace, workspaceImpact, consumers, decisions, redaction, repositoryName: (repo, signal) => vcs.repositoryName(repo, signal), canonicalRepositoryRoot: (repo, signal) => vcs.canonicalRoot(repo, signal), warmLive };
 }
 
 export function composeCli(options: CompositionOptions = {}): (argv: readonly string[], io: CliIo) => Promise<number> {

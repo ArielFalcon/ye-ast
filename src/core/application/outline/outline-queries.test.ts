@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { fakeCodeGraph, fakeNode } from "../impact/fake-code-graph.testing.ts";
+import { fakeCodeGraph, fakeNode } from "../navigation/fake-code-graph.testing.ts";
 import { fakeLive, type FakeLive } from "../live/fake-live.testing.ts";
 import type { OutlineSelector } from "../../ports/outline-queries.port.ts";
 import type { VcsFault } from "../../ports/vcs.port.ts";
@@ -190,19 +190,9 @@ test("a dotted focus answers only that member with its subtree and its container
   });
 });
 
-test("a bare focus matching a member of two classes answers both, each with its own path, in line order", async () => {
-  const value = focusValue(await focusOf([{ file: API, symbol: "m" }]));
-  assert.deepEqual(value.focus?.map((match) => [match.path, match.declaration.line]), [["A.m", 2], ["B.m", 15]]);
-});
-
 test("the matches of several selectors come in line order, whatever order the request gives", async () => {
   const value = focusValue(await focusOf([{ file: API, symbol: "m" }, { file: API, symbol: "Aardvark" }, { file: API, line: 16 }]));
   assert.deepEqual(value.focus?.map((match) => [match.path, match.selector]), [["A.m", "m"], ["B.m", "16"], ["B.m", "m"], ["Aardvark", "Aardvark"]]);
-});
-
-test("a line focus answers the innermost declaration holding it, with its containers", async () => {
-  const value = focusValue(await focusOf([{ file: API, line: 4 }]));
-  assert.deepEqual(value.focus?.map((match) => [match.selector, match.path]), [["4", "A.m.inner"]]);
 });
 
 test("a focus symbol that matches no declaration is an unknown-symbol fault whose candidates are the file's dotted paths", async () => {

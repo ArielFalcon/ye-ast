@@ -36,6 +36,7 @@ export const COMPOSE_QUERY = z.discriminatedUnion("name", [
   recoverable("callers"),
   fresh("importers"),
   fresh("outline"),
+  fresh("trace"),
   fresh("workspace"),
   fresh("decisions"),
 ]);
@@ -45,7 +46,7 @@ export const COMPOSE_INPUT = z.strictObject({
     .array(COMPOSE_QUERY)
     .min(COMPOSE_LIMITS.minQueries)
     .max(COMPOSE_LIMITS.maxQueries)
-    .describe("1..16 typed queries of the seven families, before deduplication; executed sequentially in a fixed order."),
+    .describe("1..16 typed queries of the eight families, before deduplication; executed sequentially in a fixed order."),
   mode: responseModeSchema,
   expect: compositionExpect.exactOptional(),
   deadlineMs: z.int().min(1).max(COMPOSE_LIMITS.maxDeadlineMs).exactOptional().describe("Batch deadline in milliseconds; no default."),

@@ -57,7 +57,7 @@ export type WalkBounds = { readonly [Field in WalkBoundsField]?: number };
  */
 export interface DeclaredConfig {
   walk?: WalkBounds;
-  /** The targets `impact.callers` was asked about, in the request's fixed order. */
+  /** The targets `impact.callers` or `trace.walk` was asked about, in the request's fixed order. */
   targets?: readonly string[];
   /** The files `impact.importers` was asked about. */
   files?: readonly string[];

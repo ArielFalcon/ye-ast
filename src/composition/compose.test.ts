@@ -439,8 +439,8 @@ test("a trusted sibling whose remote is passed is read at the remote's sha, and 
   assert.equal(snapshot?.kind === "sha" ? snapshot.sha : "", remoteSha);
   assert.equal(read.repositorySources?.find(({ repo: id }) => id === "orders")?.path, join(cacheDirectory, "remotes", digest.of(url)));
 
-  const { version, entrypoints, impact, outline, workspace: workspaceQueries, workspaceImpact, decisions, redaction } = composeQueries({ scratchRoot, trustDirectory, refresh });
-  const session = await openSession(createMcpServer({ version, entrypoints, impact, outline, workspace: workspaceQueries, workspaceImpact, decisions, digest: createSha256Digest(), redaction, repository: { path: repo, repoId: "shop-service" } }));
+  const { version, entrypoints, impact, outline, trace, workspace: workspaceQueries, workspaceImpact, decisions, redaction } = composeQueries({ scratchRoot, trustDirectory, refresh });
+  const session = await openSession(createMcpServer({ version, entrypoints, impact, outline, trace, workspace: workspaceQueries, workspaceImpact, decisions, digest: createSha256Digest(), redaction, repository: { path: repo, repoId: "shop-service" } }));
   try {
     const answer = await session.callTool("ye_ast_callers", { targets: [{ file: "src/OrderController.java", symbol: "OrderController.one" }], workspace: {}, mode: "full" });
     assert.notEqual(answer.isError, true);
@@ -647,4 +647,777 @@ test("a measured live map attributes its lock, listing and reconcile as stages",
 
   const stages = lines.map((line) => JSON.parse(line).ye_ast as { event: string; stage?: string }).flatMap((record) => (record.event === "stage" && record.stage?.startsWith("live-") ? [record.stage] : []));
   for (const stage of ["live-lock", "live-read-state", "live-list", "live-reconcile", "live-touch", "live-release", "live-usage"]) assert.ok(stages.includes(stage), stage);
+});
+
+test("a trace over a real index charges an anonymous callback to its encloser, defers a named one passed as a value, and never reaches an unused nested function", async () => {
+  writeFileSync(join(repo, "src", "flow.ts"), [
+    "export function run(items: number[]): number[] {",
+    "  function unused(): void {}",
+    "  const named = (value: number): number => value + 1;",
+    "  items.forEach((item) => helper(item));",
+    "  return items.map(named);",
+    "}",
+    "export function helper(value: number): number {",
+    "  return value * 2;",
+    "}",
+    "",
+  ].join("\n"));
+  git("add", "-A");
+  git("commit", "-q", "-m", "flow");
+  const { trace } = composeQueries({ scratchRoot });
+
+  const answer = await trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: "src/flow.ts", symbol: "run" }] });
+
+  assert.ok(answer.ok);
+  assert.equal(answer.value.status, "complete");
+  assert.deepEqual(answer.value.status === "complete" && answer.value.value.steps, [{
+    id: 0, depth: 0, file: "src/flow.ts", symbol: "run", kind: "function", line: 1, endLine: 6,
+    leaves: [{ symbol: "helper", file: "src/flow.ts", start: 7, end: 9 }, { symbol: "named", file: "src/flow.ts", start: 3, end: 3, deferred: true }],
+    external: [{ kind: "unnamed", names: ["items.forEach", "items.map"] }],
+  }]);
+});
+
+test("a trace over a real index follows a call to an object literal's function, and keeps a member call named after a top-level function a cut", async () => {
+  writeFileSync(join(repo, "src", "table.ts"), [
+    "export const table = { pick: (value: number): number => value };",
+    "export function format(value: number): string {",
+    "  return String(value);",
+    "}",
+    "export function run(price: number): number {",
+    "  price.toFixed(2).format();",
+    "  return table.pick(price);",
+    "}",
+    "",
+  ].join("\n"));
+  git("add", "-A");
+  git("commit", "-q", "-m", "table");
+  const { trace } = composeQueries({ scratchRoot });
+
+  const answer = await trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: "src/table.ts", symbol: "run" }] });
+
+  assert.ok(answer.ok);
+  assert.equal(answer.value.status, "partial");
+  assert.deepEqual(answer.value.status === "partial" && answer.value.value.steps[0]?.leaves, [{ symbol: "pick", file: "src/table.ts", start: 1, end: 1 }]);
+  assert.deepEqual(answer.value.status === "partial" && answer.value.value.steps[0]?.external, [{ kind: "unnamed", names: ["price.toFixed"] }]);
+  assert.deepEqual(answer.value.status === "partial" && answer.value.cuts.map((cut) => cut.at), [["src/table.ts:6 price.toFixed().format", "src/table.ts::format"]]);
+});
+
+test("a trace over a real index keeps a member call to a namespace's function a cut, never a false external", async () => {
+  writeFileSync(join(repo, "src", "space.ts"), [
+    "export namespace N { export function nsMethod() {} }",
+    "export function runNamespace(x: any) { x.nsMethod(); }",
+    "export function entry() { runNamespace(N); }",
+    "",
+  ].join("\n"));
+  git("add", "-A");
+  git("commit", "-q", "-m", "namespace");
+  const { trace } = composeQueries({ scratchRoot });
+
+  const answer = await trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: "src/space.ts", symbol: "entry" }] });
+
+  assert.ok(answer.ok);
+  assert.equal(answer.value.status, "partial");
+  assert.deepEqual(answer.value.status === "partial" && answer.value.cuts.map((cut) => [cut.kind, cut.at[0]]), [["unresolved-link", "src/space.ts:2 x.nsMethod"]]);
+});
+
+test("a requested range over a top-level statement after a template literal that opens a comment selects every top-level declaration, never nothing", async () => {
+  writeFileSync(join(repo, "src", "marker.ts"), ["const marker = \"`\";", "const template = `", "/*", "`;", "register();", "export function f() {}", ""].join("\n"));
+  git("add", "-A");
+  git("commit", "-q", "-m", "marker");
+  const { impact, trace } = composeQueries({ scratchRoot });
+
+  const callers = await impact.callers({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: "src/marker.ts", start: 5, end: 5 }] });
+  const traced = await trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: "src/marker.ts", start: 5, end: 5 }] });
+
+  assert.ok(callers.ok && traced.ok);
+  assert.deepEqual(callers.value.status !== "unknown" && callers.value.value.seeds.map((seed) => [seed.symbol, seed.basis]), [["marker", "top-level"], ["template", "top-level"], ["f", "top-level"]]);
+  assert.deepEqual(traced.value.status !== "unknown" && traced.value.value.steps.map((step) => step.symbol), ["marker", "template", "f"]);
+});
+
+test("a trace over a real index keeps a member call to a wrapped callable constant or variable a cut, never a false external", async () => {
+  writeFileSync(join(repo, "src", "wrapped.ts"), [
+    "type Handler = () => void;",
+    "export namespace N {",
+    "  export const wrapped = (() => {});",
+    "  export let wrappedVar = (function() {});",
+    "  export const asserted = (() => {}) as Handler;",
+    "  export const checked = (() => {}) satisfies Handler;",
+    "}",
+    "export function invoke(x: typeof N) {",
+    "  x.wrapped();",
+    "  x.wrappedVar();",
+    "  x.asserted();",
+    "  x.checked();",
+    "}",
+    "export function entry() { invoke(N); }",
+    "",
+  ].join("\n"));
+  git("add", "-A");
+  git("commit", "-q", "-m", "wrapped");
+  const { trace } = composeQueries({ scratchRoot });
+
+  const answer = await trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: "src/wrapped.ts", symbol: "entry" }] });
+
+  assert.ok(answer.ok);
+  assert.equal(answer.value.status, "partial");
+  assert.deepEqual(answer.value.status === "partial" && answer.value.cuts.map((cut) => cut.at[0]), ["src/wrapped.ts:10 x.wrappedVar", "src/wrapped.ts:11 x.asserted", "src/wrapped.ts:12 x.checked", "src/wrapped.ts:9 x.wrapped"]);
+});
+
+test("a trace over a real index never folds an interface method: it stays a step with a cut listing every declaration of its name below it, an interface re-declaration included", async () => {
+  const files: Record<string, string[]> = {
+    "Repo.java": ["public interface Repo {", "  void save(String s);", "}"],
+    "RepoImpl.java": ["public class RepoImpl implements Repo {", "  public void save(String s) {}", "  public void flush() {}", "}"],
+    "AuditRepo.java": ["public class AuditRepo implements Repo {", "  public void save(String s) {}", "}"],
+    "Port.java": ["public interface Port {", "  void send(String s);", "}"],
+    "LoudPort.java": ["public interface LoudPort extends Port {", "  void send(String s);", "}"],
+    "Service.java": [
+      "public class Service {",
+      "  private final Repo repo;",
+      "  private final Port port;",
+      "  public Service(Repo repo, Port port) { this.repo = repo; this.port = port; }",
+      "  public void create(String s) {",
+      "    repo.save(s);",
+      "    port.send(s);",
+      "  }",
+      "}",
+    ],
+  };
+  for (const [name, lines] of Object.entries(files)) writeFileSync(join(repo, "src", name), [...lines, ""].join("\n"));
+  git("add", "-A");
+  git("commit", "-q", "-m", "ports");
+  const { trace } = composeQueries({ scratchRoot });
+
+  const answer = await trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: "src/Service.java", symbol: "Service.create" }] });
+
+  assert.ok(answer.ok);
+  assert.equal(answer.value.status, "partial");
+  const { value, cuts } = answer.value.status === "partial" ? answer.value : assert.fail("a body-less callee leaves the trace partial");
+  assert.deepEqual(value.steps.map(({ symbol, file, parent, leaves }) => ({ symbol, file, parent, leaves })), [
+    { symbol: "create", file: "src/Service.java", parent: undefined, leaves: undefined },
+    { symbol: "save", file: "src/Repo.java", parent: 0, leaves: undefined },
+    { symbol: "send", file: "src/Port.java", parent: 0, leaves: undefined },
+  ]);
+  assert.deepEqual(cuts.map((cut) => [cut.kind, ...cut.at]), [
+    ["unresolved-link", "src/Port.java:2 send", "src/LoudPort.java::LoudPort.send"],
+    ["unresolved-link", "src/Repo.java:2 save", "src/AuditRepo.java::AuditRepo.save", "src/RepoImpl.java::RepoImpl.save"],
+  ]);
+});
+
+const PAGE = [
+  "export function save(value: string): void {}",
+  "export function form<T>(model: T, options: { action: () => void }): T {",
+  "  return model;",
+  "}",
+  "export class Page {",
+  "  readonly label = \"page\";",
+  "  readonly stamp = Date.now();",
+  "  readonly submitForm = form(this.label, {",
+  "    action: () => {",
+  "      save(\"x\");",
+  "    },",
+  "  });",
+  "  open(): void {",
+  "    save(this.label);",
+  "  }",
+  "}",
+  "",
+].join("\n");
+
+function commitPage(): void {
+  writeFileSync(join(repo, "src", "page.ts"), PAGE);
+  git("add", "-A");
+  git("commit", "-q", "-m", "page");
+}
+
+test("a trace over a real index roots at a property whose initializer makes calls, by symbol or by a range inside it, never at one that makes none", async () => {
+  commitPage();
+  const { trace } = composeQueries({ scratchRoot });
+  const walk = (target: { file: string; symbol: string } | { file: string; start: number; end: number }) => trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [target] });
+
+  const [submit, stamp, range, label] = await Promise.all([
+    walk({ file: "src/page.ts", symbol: "Page.submitForm" }),
+    walk({ file: "src/page.ts", symbol: "Page.stamp" }),
+    walk({ file: "src/page.ts", start: 9, end: 11 }),
+    walk({ file: "src/page.ts", symbol: "Page.label" }),
+  ]);
+
+  assert.ok(submit.ok && submit.value.status === "complete");
+  assert.deepEqual(submit.value.value.steps.map(({ symbol, kind, leaves }) => ({ symbol, kind, leaves: leaves?.map((leaf) => leaf.symbol) })), [{ symbol: "submitForm", kind: "property", leaves: ["form", "save"] }]);
+  assert.ok(stamp.ok && stamp.value.status === "complete");
+  assert.deepEqual(stamp.value.value.steps.map(({ symbol, external }) => ({ symbol, external })), [{ symbol: "stamp", external: [{ kind: "unnamed", names: ["Date.now"] }] }]);
+  assert.ok(range.ok && range.value.status === "complete");
+  assert.deepEqual(range.value.value.steps.map(({ symbol }) => symbol), ["submitForm"]);
+  assert.ok(!label.ok && label.fault.kind === "unknown-symbol");
+});
+
+test("a trace over a real index expands a class root into its members that have a body or an initializer that makes calls, in source order", async () => {
+  commitPage();
+  const { trace } = composeQueries({ scratchRoot });
+
+  const answer = await trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: "src/page.ts", symbol: "Page" }] });
+
+  assert.ok(answer.ok && answer.value.status === "complete");
+  assert.deepEqual(answer.value.value.steps.map(({ symbol, parent, via, at, leaves }) => ({ symbol, parent, via, at, leaves: leaves?.map((leaf) => leaf.symbol) })), [
+    { symbol: "Page", parent: undefined, via: undefined, at: undefined, leaves: undefined },
+    { symbol: "stamp", parent: 0, via: "member", at: undefined, leaves: undefined },
+    { symbol: "submitForm", parent: 0, via: "member", at: undefined, leaves: ["form", "save"] },
+    { symbol: "open", parent: 0, via: "member", at: undefined, leaves: ["save"] },
+  ]);
+});
+
+test("a trace over a real index never expands the initializer of a property a call reaches: the call runs its value, a cut at the property; an arrow-valued property still expands", async () => {
+  writeFileSync(join(repo, "src", "owner.ts"), [
+    "export function emptyOwnerForm(): () => string { return () => \"x\"; }",
+    "export function render(): void {}",
+    "export class OwnerPage {",
+    "  readonly owner = emptyOwnerForm();",
+    "  readonly refresh = () => { render(); };",
+    "  ownerForm(): void {",
+    "    this.owner();",
+    "    this.refresh();",
+    "  }",
+    "}",
+    "",
+  ].join("\n"));
+  git("add", "-A");
+  git("commit", "-q", "-m", "owner");
+  const { trace } = composeQueries({ scratchRoot });
+
+  const [call, root] = await Promise.all([
+    trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: "src/owner.ts", symbol: "OwnerPage.ownerForm" }] }),
+    trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: "src/owner.ts", symbol: "OwnerPage.owner" }] }),
+  ]);
+
+  assert.ok(call.ok && call.value.status === "partial");
+  assert.deepEqual(call.value.value.steps.map(({ symbol, kind, parent, leaves }) => ({ symbol, kind, parent, leaves: leaves?.map((leaf) => leaf.symbol) })), [
+    { symbol: "ownerForm", kind: "method", parent: undefined, leaves: undefined },
+    { symbol: "owner", kind: "property", parent: 0, leaves: undefined },
+    { symbol: "refresh", kind: "method", parent: 0, leaves: ["render"] },
+  ]);
+  assert.deepEqual(call.value.cuts.map((cut) => [cut.kind, ...cut.at]), [["unresolved-link", "src/owner.ts:4 owner"]]);
+  assert.ok(root.ok && root.value.status === "complete");
+  assert.deepEqual(root.value.value.steps.map(({ symbol, leaves }) => ({ symbol, leaves: leaves?.map((leaf) => leaf.symbol) })), [{ symbol: "owner", leaves: ["emptyOwnerForm"] }]);
+});
+
+test("a trace over a real index expands a class root into its members even when an earlier root reached the class below it, and a later call still sees the first expansion", async () => {
+  writeFileSync(join(repo, "src", "make.ts"), ["export function make() { return new Page(); }", "export class Page { work() { unknown(); } }", "export function again() { return new Page(); }", ""].join("\n"));
+  git("add", "-A");
+  git("commit", "-q", "-m", "make");
+  const { trace } = composeQueries({ scratchRoot });
+
+  const answer = await trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: "src/make.ts", symbol: "make" }, { file: "src/make.ts", symbol: "Page" }, { file: "src/make.ts", symbol: "again" }] });
+
+  assert.ok(answer.ok && answer.value.status === "partial");
+  assert.deepEqual(answer.value.value.steps.map(({ symbol, parent, via, seen, leaves }) => ({ symbol, parent, via, seen, leaves: leaves?.map((leaf) => leaf.symbol) })), [
+    { symbol: "make", parent: undefined, via: undefined, seen: undefined, leaves: ["Page"] },
+    { symbol: "Page", parent: undefined, via: undefined, seen: undefined, leaves: undefined },
+    { symbol: "work", parent: 1, via: "member", seen: undefined, leaves: undefined },
+    { symbol: "again", parent: undefined, via: undefined, seen: undefined, leaves: ["Page"] },
+  ]);
+  assert.deepEqual(answer.value.cuts.map((cut) => cut.at[0]), ["src/make.ts:2 unknown"]);
+});
+
+test("a trace over a real index reads dispatch from syntax: a body expands, static or unoverridden ones settle, a body-less method is a step with a cut listing its implementations", async () => {
+  const files: Record<string, string[]> = {
+    "Defaults.java": ["public interface Defaults {", "  default void run() { helper(); }", "  static void helper() {}", "}"],
+    "Base.java": ["public abstract class Base {", "  @Deprecated", "  abstract void area();", "  final void fixed() { area(); }", "}"],
+    "Sq.java": ["public class Sq extends Base {", "  void area() {}", "}"],
+  };
+  for (const [name, lines] of Object.entries(files)) writeFileSync(join(repo, "src", name), [...lines, ""].join("\n"));
+  git("add", "-A");
+  git("commit", "-q", "-m", "dispatch");
+  const { trace } = composeQueries({ scratchRoot });
+  const walk = (symbol: string, file: string) => trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file, symbol }] });
+
+  const [helper, run, fixed] = await Promise.all([walk("Defaults.helper", "src/Defaults.java"), walk("Defaults.run", "src/Defaults.java"), walk("Base.fixed", "src/Base.java")]);
+
+  assert.ok(helper.ok && helper.value.status === "complete");
+  assert.ok(run.ok && run.value.status === "complete");
+  assert.deepEqual(run.value.value.steps.map(({ symbol, leaves }) => ({ symbol, leaves: leaves?.map((leaf) => leaf.symbol) })), [{ symbol: "run", leaves: ["helper"] }]);
+  assert.ok(fixed.ok && fixed.value.status === "partial");
+  assert.deepEqual(fixed.value.value.steps.map(({ symbol, parent, leaves }) => ({ symbol, parent, leaves })), [
+    { symbol: "fixed", parent: undefined, leaves: undefined },
+    { symbol: "area", parent: 0, leaves: undefined },
+  ]);
+  assert.deepEqual(fixed.value.cuts.map((cut) => [cut.kind, ...cut.at]), [["unresolved-link", "src/Base.java:2 area", "src/Sq.java::Sq.area"]]);
+});
+
+test("a trace over a real index expands an overridable method with a body and cuts it at the overriders below its owner", async () => {
+  const files: Record<string, string[]> = {
+    "Greeter.java": ["public interface Greeter {", "  default void greet() { hello(); }", "  static void hello() {}", "}"],
+    "Loud.java": ["public class Loud implements Greeter {", "  public void greet() {}", "  public static void hello() {}", "}"],
+  };
+  for (const [name, lines] of Object.entries(files)) writeFileSync(join(repo, "src", name), [...lines, ""].join("\n"));
+  git("add", "-A");
+  git("commit", "-q", "-m", "greeter");
+  const { trace } = composeQueries({ scratchRoot });
+
+  const answer = await trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: "src/Greeter.java", symbol: "Greeter.greet" }] });
+
+  assert.ok(answer.ok && answer.value.status === "partial");
+  assert.deepEqual(answer.value.value.steps.map(({ symbol, leaves }) => ({ symbol, leaves: leaves?.map((leaf) => leaf.symbol) })), [{ symbol: "greet", leaves: ["hello"] }]);
+  assert.deepEqual(answer.value.cuts.map((cut) => [cut.kind, ...cut.at]), [["unresolved-link", "src/Greeter.java:2 greet", "src/Loud.java::Loud.greet"]]);
+});
+
+test("a trace over a real index matches a decorated method to its syntax from the decorator to its name", async () => {
+  writeFileSync(join(repo, "src", "deco.ts"), [
+    "function dec(): MethodDecorator { return () => {}; }",
+    "export class Base {",
+    "  @dec()",
+    "  run(): void {}",
+    "}",
+    "export class Child extends Base {",
+    "  run(): void {}",
+    "}",
+    "",
+  ].join("\n"));
+  git("add", "-A");
+  git("commit", "-q", "-m", "deco");
+  const { trace } = composeQueries({ scratchRoot });
+
+  const answer = await trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: "src/deco.ts", symbol: "Base.run" }] });
+
+  assert.ok(answer.ok && answer.value.status === "partial");
+  assert.deepEqual(answer.value.cuts.map((cut) => [cut.kind, ...cut.at]), [["unresolved-link", "src/deco.ts:4 run", "src/deco.ts::Child.run"]]);
+});
+
+test("a trace over a real index lists an implementation below a parameterized supertype the index left unresolved", async () => {
+  writeFileSync(join(repo, "src", "Generic.java"), [
+    "interface GPort<T> { void send(T x); }",
+    "interface GSub extends GPort<String> { void send(String x); }",
+    "class GImpl implements GSub { public void send(String x) {} }",
+    "class GUse { void go(GPort<String> p) { p.send(\"x\"); } }",
+    "",
+  ].join("\n"));
+  git("add", "-A");
+  git("commit", "-q", "-m", "generic");
+  const { trace } = composeQueries({ scratchRoot });
+
+  const answer = await trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: "src/Generic.java", symbol: "GUse.go" }] });
+
+  assert.ok(answer.ok && answer.value.status === "partial");
+  assert.deepEqual(answer.value.cuts.map((cut) => [cut.kind, ...cut.at]), [["unresolved-link", "src/Generic.java:1 send", "src/Generic.java::GImpl.send", "src/Generic.java::GSub.send"]]);
+});
+
+test("a trace over a real index keeps a member call a cut when a module exports a value under that name, renamed or re-exported", async () => {
+  writeFileSync(join(repo, "src", "other.ts"), ["export function other(): void {}", ""].join("\n"));
+  writeFileSync(join(repo, "src", "ns.ts"), [
+    "function local(): void {}",
+    "export { local as exportedAlias };",
+    "export { other as reexportedAlias } from \"./other\";",
+    "export type { Shape as typeOnlyAlias } from \"./shape\";",
+    "",
+  ].join("\n"));
+  writeFileSync(join(repo, "src", "shape.ts"), ["export interface Shape { area(): number }", ""].join("\n"));
+  writeFileSync(join(repo, "src", "run.ts"), [
+    "import * as ns from \"./ns\";",
+    "export function run(x: typeof ns, y: { typeOnlyAlias(): void }): void {",
+    "  x.exportedAlias();",
+    "  x.reexportedAlias();",
+    "  y.typeOnlyAlias();",
+    "}",
+    "",
+  ].join("\n"));
+  git("add", "-A");
+  git("commit", "-q", "-m", "aliases");
+  const { trace } = composeQueries({ scratchRoot });
+
+  const answer = await trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: "src/run.ts", symbol: "run" }] });
+
+  assert.ok(answer.ok && answer.value.status === "partial");
+  assert.deepEqual(answer.value.cuts.map((cut) => [cut.kind, ...cut.at]), [
+    ["unresolved-link", "src/run.ts:3 x.exportedAlias", "src/ns.ts::exportedAlias"],
+    ["unresolved-link", "src/run.ts:4 x.reexportedAlias", "src/ns.ts::reexportedAlias"],
+  ]);
+  assert.deepEqual(answer.value.value.steps[0]?.external, [{ kind: "unnamed", names: ["y.typeOnlyAlias"] }]);
+});
+
+test("a trace over a real index keeps a library member call a cut when its receiver names a function value the code declares", async () => {
+  writeFileSync(join(repo, "src", "Values.java"), [
+    "import java.util.function.Supplier;",
+    "public class Values {",
+    "  private final Supplier<Integer> supply = () -> helper();",
+    "  private final Runnable task = this::work;",
+    "  static int helper() { return 1; }",
+    "  void work() {}",
+    "  int go() {",
+    "    task.run();",
+    "    return this.supply.get();",
+    "  }",
+    "}",
+  ].join("\n"));
+  writeFileSync(join(repo, "src", "values.ts"), [
+    "export function helper(): void {}",
+    "const fn = () => helper();",
+    "let handler: () => void;",
+    "handler = function () { helper(); };",
+    "export function go(): void {",
+    "  fn.call(undefined);",
+    "  handler.apply(undefined, []);",
+    "}",
+    "",
+  ].join("\n"));
+  git("add", "-A");
+  git("commit", "-q", "-m", "values");
+  const { trace } = composeQueries({ scratchRoot });
+  const walk = (file: string, symbol: string) => trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file, symbol }] });
+
+  const [java, typescript] = await Promise.all([walk("src/Values.java", "Values.go"), walk("src/values.ts", "go")]);
+
+  assert.ok(java.ok && java.value.status === "partial");
+  assert.deepEqual(java.value.cuts.map((cut) => [cut.kind, ...cut.at]), [
+    ["unresolved-link", "src/Values.java:8 task.run", "src/Values.java::task"],
+    ["unresolved-link", "src/Values.java:9 supply.get", "src/Values.java::supply"],
+  ]);
+  assert.ok(typescript.ok && typescript.value.status === "partial");
+  assert.deepEqual(typescript.value.cuts.map((cut) => [cut.kind, ...cut.at]), [
+    ["unresolved-link", "src/values.ts:6 fn.call", "src/values.ts::fn"],
+    ["unresolved-link", "src/values.ts:7 handler.apply", "src/values.ts::handler"],
+  ]);
+});
+
+test("a trace over a real index binds a var receiver at its function scope, wherever in the function's blocks it is declared", async () => {
+  writeFileSync(join(repo, "src", "hoisted.ts"), ["export function entry(): void {", "  if (Date.now() > 0) { var cb = () => console.log(\"x\"); }", "  cb.call(null);", "}", ""].join("\n"));
+  git("add", "-A");
+  git("commit", "-q", "-m", "hoisted");
+  const { trace } = composeQueries({ scratchRoot });
+
+  const answer = await trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: "src/hoisted.ts", symbol: "entry" }] });
+
+  assert.ok(answer.ok && answer.value.status === "partial", JSON.stringify(answer));
+  assert.deepEqual(answer.value.cuts.map((cut) => [cut.kind, ...cut.at]), [["unresolved-link", "src/hoisted.ts:3 cb.call", "src/hoisted.ts::cb"]]);
+});
+
+test("a trace over a real index sees a function value through every wrapper expression and either branch of a choice", async () => {
+  writeFileSync(join(repo, "src", "Wrapped.java"), [
+    "import java.util.function.Supplier;",
+    "public class Wrapped {",
+    "  String go(boolean flag, Supplier<String> other) {",
+    "    Supplier<String> paren = (() -> \"x\");",
+    "    Supplier<String> cast = (Supplier<String>) () -> \"x\";",
+    "    Supplier<String> chosen = flag ? other : () -> \"x\";",
+    "    return paren.get() + cast.get() + chosen.get();",
+    "  }",
+    "}",
+  ].join("\n"));
+  writeFileSync(join(repo, "src", "wrapped-values.ts"), [
+    "export function go(flag: boolean, other: unknown): void {",
+    "  const chosen = flag ? other : () => 1;",
+    "  const fallback = other ?? (() => 1);",
+    "  const either = other || (() => 1);",
+    "  chosen.call(null);",
+    "  fallback.call(null);",
+    "  either.call(null);",
+    "}",
+    "",
+  ].join("\n"));
+  git("add", "-A");
+  git("commit", "-q", "-m", "wrapped values");
+  const { trace } = composeQueries({ scratchRoot });
+  const walk = (file: string, symbol: string) => trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file, symbol }] });
+
+  const [java, typescript] = await Promise.all([walk("src/Wrapped.java", "Wrapped.go"), walk("src/wrapped-values.ts", "go")]);
+
+  assert.ok(java.ok && java.value.status === "partial", JSON.stringify(java));
+  assert.deepEqual(java.value.cuts.map((cut) => cut.at[0]), ["src/Wrapped.java:7 cast.get", "src/Wrapped.java:7 chosen.get", "src/Wrapped.java:7 paren.get"]);
+  assert.ok(typescript.ok && typescript.value.status === "partial", JSON.stringify(typescript));
+  assert.deepEqual(typescript.value.cuts.map((cut) => cut.at[0]), ["src/wrapped-values.ts:5 chosen.call", "src/wrapped-values.ts:6 fallback.call", "src/wrapped-values.ts:7 either.call"]);
+});
+
+test("a trace over a real index binds a receiver through every declaration of its name and through wrappers around it", async () => {
+  writeFileSync(join(repo, "src", "receivers.ts"), [
+    "export function redeclared(): void {",
+    "  var f;",
+    "  { var f = () => 1; }",
+    "  f.call(null);",
+    "}",
+    "export function wrapped(): void {",
+    "  const g = () => 1;",
+    "  (g).call(null);",
+    "  (g as () => number).apply(null);",
+    "  g!.bind(null);",
+    "}",
+    "",
+  ].join("\n"));
+  git("add", "-A");
+  git("commit", "-q", "-m", "receivers");
+  const { trace } = composeQueries({ scratchRoot });
+  const walk = (symbol: string) => trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: "src/receivers.ts", symbol }] });
+
+  const [redeclared, wrapped] = await Promise.all([walk("redeclared"), walk("wrapped")]);
+
+  for (const answer of [redeclared, wrapped]) assert.ok(answer.ok && answer.value.status === "partial", JSON.stringify(answer));
+  assert.deepEqual([redeclared, wrapped].flatMap((answer) => (answer.ok && answer.value.status === "partial" ? answer.value.cuts.map((cut) => cut.at[0]) : [])), [
+    "src/receivers.ts:4 f.call",
+    "src/receivers.ts:10 g.bind",
+    "src/receivers.ts:8 g.call",
+    "src/receivers.ts:9 g.apply",
+  ]);
+});
+
+test("a trace over a real index binds a receiver in its own file, so a function value of that name in another file leaves an unrelated call as R6 decides", async () => {
+  writeFileSync(join(repo, "src", "holder.ts"), ["export const value = () => 1;", ""].join("\n"));
+  writeFileSync(join(repo, "src", "use.ts"), ["export function use(value: { describe(): void }): void {", "  value.describe();", "}", ""].join("\n"));
+  git("add", "-A");
+  git("commit", "-q", "-m", "binding");
+  const { trace } = composeQueries({ scratchRoot });
+
+  const answer = await trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: "src/use.ts", symbol: "use" }] });
+
+  assert.ok(answer.ok && answer.value.status === "complete");
+  assert.deepEqual(answer.value.value.steps[0]?.external, [{ kind: "unnamed", names: ["value.describe"] }]);
+});
+
+test("a trace over a real index never follows an edge whose name a package binds to a repository homonym: the call leaves under the package, and a repository import still expands", async () => {
+  writeFileSync(join(repo, "package.json"), JSON.stringify({ name: "fixture", dependencies: { pkg: "1.0.0" } }));
+  writeFileSync(join(repo, "src", "model.ts"), ["export class Base {}", "export function evaluate(value: number): number {", "  return value;", "}", ""].join("\n"));
+  writeFileSync(join(repo, "src", "uses-package.ts"), [
+    "import * as pkg from \"pkg\";",
+    "import { evaluate } from \"pkg\";",
+    "export function make(): unknown {",
+    "  return new pkg.Base();",
+    "}",
+    "export function pass(): unknown {",
+    "  return [1].map(evaluate);",
+    "}",
+    "",
+  ].join("\n"));
+  writeFileSync(join(repo, "src", "uses-repo.ts"), ["import { Base, evaluate } from \"./model\";", "export function real(): unknown {", "  return [new Base(), evaluate(1)];", "}", ""].join("\n"));
+  git("add", "-A");
+  git("commit", "-q", "-m", "homonyms");
+  const { trace } = composeQueries({ scratchRoot });
+  const walk = (symbol: string, file: string) => trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file, symbol }] });
+
+  const [make, pass, real] = await Promise.all([walk("make", "src/uses-package.ts"), walk("pass", "src/uses-package.ts"), walk("real", "src/uses-repo.ts")]);
+
+  const shape = (answer: typeof make) => {
+    assert.ok(answer.ok && answer.value.status === "complete", JSON.stringify(answer));
+    return answer.value.value.steps.map(({ symbol, leaves, external }) => ({ symbol, leaves: leaves?.map((leaf) => leaf.file), external }));
+  };
+  assert.deepEqual(shape(make), [{ symbol: "make", leaves: undefined, external: [{ kind: "import", module: "pkg", names: ["Base"] }] }]);
+  assert.deepEqual(shape(pass), [{ symbol: "pass", leaves: undefined, external: [{ kind: "import", module: "pkg", names: ["evaluate"] }] }]);
+  assert.deepEqual(shape(real), [{ symbol: "real", leaves: ["src/model.ts", "src/model.ts"], external: undefined }]);
+});
+
+test("a trace over a real index counts every same-named declaration below an overridable method's owner, interfaces included, as a replacement", async () => {
+  const files: Record<string, string[]> = {
+    "Parent.java": ["public interface Parent {", "  default void greet() {}", "}"],
+    "Child.java": ["public interface Child extends Parent {", "  default void greet() { System.exit(1); }", "}"],
+    "Use.java": ["public class Use implements Child {", "  void entry(Parent p) { p.greet(); }", "}"],
+  };
+  for (const [name, lines] of Object.entries(files)) writeFileSync(join(repo, "src", name), [...lines, ""].join("\n"));
+  git("add", "-A");
+  git("commit", "-q", "-m", "descendants");
+  const { trace } = composeQueries({ scratchRoot });
+  const walk = (file: string, symbol: string) => trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file, symbol }] });
+
+  const [entry, greet] = await Promise.all([walk("src/Use.java", "Use.entry"), walk("src/Parent.java", "Parent.greet")]);
+
+  assert.ok(entry.ok && entry.value.status === "partial");
+  assert.deepEqual(entry.value.value.steps.map(({ symbol, leaves }) => ({ symbol, leaves })), [{ symbol: "entry", leaves: undefined }, { symbol: "greet", leaves: undefined }]);
+  assert.deepEqual(entry.value.cuts.map((cut) => [cut.kind, ...cut.at]), [["unresolved-link", "src/Parent.java:2 greet", "src/Child.java::Child.greet"]]);
+  assert.ok(greet.ok && greet.value.status === "partial");
+});
+
+test("a trace over a real index cuts a call its function's own parameter binds, never following it into a repository homonym", async () => {
+  writeFileSync(join(repo, "src", "redact.ts"), ["export function redact(text: string): string {", "  return text;", "}", ""].join("\n"));
+  writeFileSync(join(repo, "src", "clean.ts"), ["export function clean(text: string, redact: (value: string) => string): string {", "  return redact(text);", "}", ""].join("\n"));
+  git("add", "-A");
+  git("commit", "-q", "-m", "parameter");
+  const { trace } = composeQueries({ scratchRoot });
+
+  const answer = await trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: "src/clean.ts", symbol: "clean" }] });
+
+  assert.ok(answer.ok && answer.value.status === "partial", JSON.stringify(answer));
+  assert.deepEqual(answer.value.value.steps.map(({ symbol, leaves, external }) => ({ symbol, leaves, external })), [{ symbol: "clean", leaves: undefined, external: undefined }]);
+  assert.deepEqual(answer.value.cuts.map((cut) => [cut.kind, ...cut.at]), [["unresolved-link", "src/clean.ts:2 redact", "src/redact.ts::redact"]]);
+});
+
+test("a trace over a real index reaches the declaration an import proves a name binds, not the homonym the index matched", async () => {
+  writeFileSync(join(repo, "src", "parts.ts"), ["export const cutOwner = 1;", ""].join("\n"));
+  writeFileSync(join(repo, "src", "other.ts"), ["function cutOwner(): number {", "  return 2;", "}", "export const x = cutOwner();", ""].join("\n"));
+  writeFileSync(join(repo, "src", "schema.ts"), ["import { cutOwner } from \"./parts.ts\";", "", "export function shape(): unknown {", "  return [cutOwner];", "}", ""].join("\n"));
+  git("add", "-A");
+  git("commit", "-q", "-m", "redirect");
+  const { trace } = composeQueries({ scratchRoot });
+
+  const answer = await trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: "src/schema.ts", symbol: "shape" }] });
+
+  assert.ok(answer.ok && answer.value.status === "complete", JSON.stringify(answer));
+  assert.deepEqual(answer.value.value.steps.map(({ symbol, leaves }) => ({ symbol, leaves })), [{ symbol: "shape", leaves: [{ symbol: "cutOwner", file: "src/parts.ts", start: 1, end: 1, deferred: true }] }]);
+});
+
+test("a trace over a real index keeps the call site as the place of a redirected step that expands", async () => {
+  writeFileSync(join(repo, "src", "parts.ts"), ["export function compute(): number {", "  return Date.now();", "}", "export const cutOwner = compute();", ""].join("\n"));
+  writeFileSync(join(repo, "src", "other.ts"), ["function cutOwner(): number {", "  return 2;", "}", "export const x = cutOwner();", ""].join("\n"));
+  writeFileSync(join(repo, "src", "schema.ts"), ["import { cutOwner } from \"./parts.ts\";", "", "export function shape(): unknown {", "  const first = 1;", "  return [first, cutOwner];", "}", ""].join("\n"));
+  git("add", "-A");
+  git("commit", "-q", "-m", "redirect at");
+  const { trace } = composeQueries({ scratchRoot });
+
+  const answer = await trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: "src/schema.ts", symbol: "shape" }] });
+
+  assert.ok(answer.ok && answer.value.status === "complete", JSON.stringify(answer));
+  assert.deepEqual(answer.value.value.steps.slice(1).map(({ file, symbol, at, via, deferred }) => ({ file, symbol, at, via, deferred })), [
+    { file: "src/parts.ts", symbol: "cutOwner", at: { line: 5, column: 18 }, via: "reference", deferred: true },
+    { file: "src/parts.ts", symbol: "compute", at: { line: 4, column: 25 }, via: "call", deferred: undefined },
+  ]);
+});
+
+const PARAMETER_FILES: Record<string, string[]> = {
+  "callback.ts": ["export function callback(): number {", "  return 1;", "}", ""],
+  "runners.ts": [
+    "export function defaultRun(callback: () => number, other = 0): number {",
+    "  return callback() + other;",
+    "}",
+    "export function capture(callback: () => number): () => number {",
+    "  return () => callback();",
+    "}",
+    "export function nested(callback: () => number): unknown {",
+    "  return [1].map(() => () => callback());",
+    "}",
+    "",
+  ],
+};
+
+function writeParameterFiles(): void {
+  for (const [name, lines] of Object.entries(PARAMETER_FILES)) writeFileSync(join(repo, "src", name), lines.join("\n"));
+}
+
+test("a trace over a real index cuts a call through a parameter of a function around it, beside a defaulted parameter or from a closure", async () => {
+  writeParameterFiles();
+  git("add", "-A");
+  git("commit", "-q", "-m", "parameters");
+  const { trace } = composeQueries({ scratchRoot });
+  const walk = (symbol: string) => trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: "src/runners.ts", symbol }] });
+
+  const answers = await Promise.all(["defaultRun", "capture", "nested"].map(walk));
+
+  for (const [index, line] of [2, 5, 8].entries()) {
+    const answer = answers[index]!;
+    assert.ok(answer.ok && answer.value.status === "partial", JSON.stringify(answer));
+    assert.deepEqual(answer.value.value.steps.flatMap(({ leaves }) => leaves ?? []), []);
+    assert.deepEqual(answer.value.cuts.map((cut) => [cut.kind, ...cut.at]), [["unresolved-link", `src/runners.ts:${line} callback`, "src/callback.ts::callback"]]);
+  }
+});
+
+test("callers and impact over a real index never count a call through a parameter of a function around it as a use of a repository homonym", async () => {
+  writeParameterFiles();
+  git("add", "-A");
+  git("commit", "-q", "-m", "parameters");
+  writeFileSync(join(repo, "src", "callback.ts"), ["export function callback(): number {", "  return 2;", "}", ""].join("\n"));
+  git("add", "-A");
+  git("commit", "-q", "-m", "change callback");
+  const { impact } = composeQueries({ scratchRoot });
+  const symbols = (answer: Awaited<ReturnType<typeof impact.callers>>) => {
+    assert.ok(answer.ok && answer.value.status !== "unknown", JSON.stringify(answer));
+    return answer.value.value.symbols.map(({ symbol }) => symbol);
+  };
+
+  const [callers, change] = await Promise.all([
+    impact.callers({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: "src/callback.ts", symbol: "callback" }] }),
+    impact.ofChange({ repo, repoId: "shop-service", base: "HEAD~1", head: "HEAD" }),
+  ]);
+
+  assert.deepEqual(symbols(callers), ["callback"]);
+  assert.deepEqual(symbols(change), ["callback"]);
+});
+
+test("callers over a range inside a property initializer still seeds the class that holds it", async () => {
+  commitPage();
+  const { impact } = composeQueries({ scratchRoot });
+
+  const answer = await impact.callers({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: "src/page.ts", start: 9, end: 11 }] });
+
+  assert.ok(answer.ok && answer.value.status !== "unknown");
+  assert.deepEqual(answer.value.value.seeds.map(({ symbol, basis }) => ({ symbol, basis })), [{ symbol: "Page", basis: "lines" }]);
+});
+
+test("a trace over a real index names each candidate by its file and dotted containment path, a top-level one by its name", async () => {
+  writeFileSync(join(repo, "src", "Outer.java"), ["public class Outer {", "  static class Inner {", "    int pick() { return 1; }", "  }", "}", ""].join("\n"));
+  writeFileSync(join(repo, "src", "store.ts"), ["export class Store {", "  pick(): number {", "    return 2;", "  }", "}", ""].join("\n"));
+  writeFileSync(join(repo, "src", "util.ts"), ["export function pick(): number {", "  return 3;", "}", "export function run(x: any): number {", "  return x.get().pick();", "}", ""].join("\n"));
+  git("add", "-A");
+  git("commit", "-q", "-m", "picks");
+  const { trace } = composeQueries({ scratchRoot });
+
+  const answer = await trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: "src/util.ts", symbol: "run" }] });
+
+  assert.ok(answer.ok && answer.value.status === "partial");
+  assert.deepEqual(answer.value.cuts.map((cut) => cut.at), [["src/util.ts:5 x.get().pick", "src/Outer.java::Outer.Inner.pick", "src/store.ts::Store.pick", "src/util.ts::pick"]]);
+});
+
+test("a trace over a real index keeps a member call a cut when the code declares its name in a value position the index holds no node for, and external when only types or nothing declare it", async () => {
+  const lines = [
+    "export function repoFn(): void {}",
+    "function make<T>(value: T): T {",
+    "  return value;",
+    "}",
+    "export const store = make({ setErrors(errors: string): void { repoFn(); } });",
+    "export const outer = { inner: { nestedMethod(): void {} } };",
+    "export function factory() {",
+    "  return { returnedMethod(): void {} };",
+    "}",
+    "export class Holder {",
+    "  table = { fieldMethod(): void {} };",
+    "}",
+    "export const alias = { aliasKey: repoFn };",
+    "export const target: Record<string, () => void> = {};",
+    "target.assigned = repoFn;",
+    "export type Deep = { outer: { deepOnly(): void } };",
+    "export function take(options: { paramOnly(): void }): void {}",
+    "export function run(s: any, items: number[]): void {",
+    "  s.setErrors(\"x\");",
+    "  s.nestedMethod();",
+    "  s.returnedMethod();",
+    "  s.fieldMethod();",
+    "  s.aliasKey();",
+    "  s.assigned();",
+    "  s.deepOnly();",
+    "  s.paramOnly();",
+    "  items.map(String);",
+    "}",
+    "",
+  ];
+  writeFileSync(join(repo, "src", "members.ts"), lines.join("\n"));
+  git("add", "-A");
+  git("commit", "-q", "-m", "members");
+  const { trace } = composeQueries({ scratchRoot });
+  const lineOf = (text: string): number => lines.indexOf(text) + 1;
+
+  const answer = await trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: "src/members.ts", symbol: "run" }] });
+
+  assert.ok(answer.ok && answer.value.status === "partial");
+  assert.deepEqual(answer.value.value.steps[0]?.external, [{ kind: "unnamed", names: ["items.map", "s.deepOnly", "s.paramOnly"] }]);
+  const cut = (call: string, name: string): string[] => [`src/members.ts:${lineOf(`  ${call}(${call === "s.setErrors" ? "\"x\"" : ""});`)} ${call}`, `src/members.ts::${name}`];
+  assert.deepEqual(answer.value.cuts.map((entry) => entry.at), [
+    cut("s.aliasKey", "aliasKey"), cut("s.assigned", "assigned"), cut("s.fieldMethod", "fieldMethod"),
+    cut("s.nestedMethod", "nestedMethod"), cut("s.returnedMethod", "returnedMethod"), cut("s.setErrors", "setErrors"),
+  ].sort((a, b) => (a[0]! < b[0]! ? -1 : 1)));
+});
+
+test("a trace over a real index keeps a call to a Java record accessor a cut, and a call to an anonymous class method never external", async () => {
+  writeFileSync(join(repo, "src", "Point.java"), ["public record Point(int coordinate) {}", ""].join("\n"));
+  writeFileSync(join(repo, "src", "Shapes.java"), [
+    "public class Shapes {",
+    "  Runnable task = new Runnable() {",
+    "    public void run() {}",
+    "    public void anonymousOnly() {}",
+    "  };",
+    "  void use(Point p, Shapes t) {",
+    "    p.coordinate();",
+    "    t.task.anonymousOnly();",
+    "  }",
+    "}",
+    "",
+  ].join("\n"));
+  git("add", "-A");
+  git("commit", "-q", "-m", "shapes");
+  const { trace } = composeQueries({ scratchRoot });
+
+  const answer = await trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: "src/Shapes.java", symbol: "Shapes.use" }] });
+
+  assert.ok(answer.ok && answer.value.status === "partial");
+  assert.equal(answer.value.value.steps[0]?.external, undefined);
+  assert.deepEqual(answer.value.cuts.map((entry) => entry.at), [["src/Shapes.java:7 p.coordinate", "src/Point.java::coordinate"]]);
 });

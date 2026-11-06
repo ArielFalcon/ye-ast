@@ -132,7 +132,7 @@ results retain `repositorySources` host read-location metadata for existing clie
 ### Errors
 
 An error is `{code, message, data: {kind}}`; `kind` names the code and `data` adds `entries` for `unknown-symbol`, each
-`{file, symbol, candidates}` where `candidates` holds the dotted containment paths of the seedable declarations of the file, sorted and once each, and
+`{file, symbol, candidates}`, or `{file, start, end, candidates}` for a line range that selects no declaration, where `candidates` holds the dotted containment paths of the seedable declarations of the file, sorted and once each, and
 `globs` for `unknown-change-path`. The set is closed:
 
 | Kind | Code | Meaning |
@@ -149,7 +149,7 @@ An error is `{code, message, data: {kind}}`; `kind` names the code and `data` ad
 | `no-merge-base` | -32004 | base and head share no history |
 | `export-write-failed` | -32005 | the snapshot export could not be written |
 | `aborted` | -32006 | the call was aborted by `cancel` or by shutdown |
-| `unknown-symbol` | -32007 | a target names no symbol |
+| `unknown-symbol` | -32007 | a target names no symbol, or a line range selects no declaration |
 | `deadline` | -32008 | `deadlineMs` elapsed |
 | `trust-unsupported` | -32009 | the declared trust mode has no path yet |
 | `trust-not-declared` | -32010 | a query came before `trust.declare` |
