@@ -1,6 +1,7 @@
 import ts from "typescript";
 import { ELEMENT, relatePaths, rewritePath, type AccessPath, type PathMapping } from "../../domain/contracts/access-path.ts";
 import { RESOURCE_STATE_MEMBERS, type CarrierSite, type FlowFrontier, type FlowNext, type FlowStep, type FlowUse, type FrontierCause, type Hop } from "../../domain/contracts/consumer-flow.ts";
+import type { AccessStep } from "../../domain/contracts/use-operation.ts";
 import type { Absence, Guard, GuardKind, UseOperation } from "../../domain/contracts/verdict.ts";
 import type { Evidence, UnknownReason } from "../../domain/shared/fact.ts";
 import type { Origin, Program, Unit } from "./consumer-flow.index.ts";
@@ -17,6 +18,8 @@ import {
   isAsyncOrGenerator,
   isFunctionNode,
   isNullishLiteral,
+  isNumericUnary,
+  literalOf,
   isTransparent,
   mayNotFollow,
   namedFunction,
@@ -207,9 +210,11 @@ export class Walker {
     let top = reference;
     let q: AccessPath = [];
     const chain: Guard[] = [];
+    const steps: AccessStep[] = [];
     let beyondAt: ts.Node | undefined;
-    const advance = (segment: string, node: ts.Node, optional: boolean, parent: ts.Expression): void => {
+    const advance = (segment: string, node: ts.Node, optional: boolean, parent: ts.PropertyAccessExpression | ts.ElementAccessExpression): void => {
       if (optional) chain.push(this.guard("optional-chain", q, BOTH, node));
+      if (reachesChange(q, t)) steps.push(accessStep(parent));
       q = [...q, segment];
       if (beyondAt === undefined && relatePaths(q, t.origin) === "beyond") beyondAt = node;
       top = parent;
@@ -229,7 +234,7 @@ export class Walker {
           top = call;
         } else if (ts.isCallExpression(call) && call.expression === parent && this.isMethod(parent, call, q, t)) {
           if (optional) chain.push(this.guard("optional-chain", q, BOTH, parent.name));
-          return this.methodCall(top, q, parent, call, t, chain);
+          return this.methodCall(top, q, parent, call, t, chain, steps);
         } else {
           advance(parent.name.text, parent.name, optional, parent);
         }
@@ -240,11 +245,14 @@ export class Walker {
       } else if (ts.isCallExpression(parent) && parent.expression === top) {
         const relation = relatePaths(q, t.origin);
         const bare = parent.arguments.length === 0;
-        if ((q.length === 0 && bare) || (relation === "beyond" && bare)) {
+        if (q.length === 0 && bare) {
+          top = parent;
+        } else if (relation === "beyond" && bare) {
+          steps.push(callStep(parent));
           top = parent;
         } else if (relation === "beyond" || relation === "exact") {
           if (parent.questionDotToken !== undefined) chain.push(this.guard("optional-chain", q, BOTH, parent));
-          return this.dereference(parent, t, q, chain);
+          return this.dereference(parent, t, q, chain, { steps: [...steps, callStep(parent)], end: { kind: "none" } });
         } else {
           if (relation === "contains") this.frontier(parent, "unmodelled-flow", "call", t);
           return;
@@ -257,17 +265,17 @@ export class Walker {
     if (relation === "disjoint") return;
     if (relation === "beyond") {
       const site = beyondAt ?? top;
-      this.dereference(site, t, q, chain);
+      this.dereference(site, t, q, chain, { steps, end: { kind: "none" } });
       return;
     }
-    if (discardsValue(top)) return;
+    if (discardsValue(top) && !(relation === "exact" && isNumericUnary(top.parent))) return;
     const attached = this.atTop(t, top, q, chain);
     if (attached !== undefined) this.sink(top, attached);
   }
 
-  private dereference(node: ts.Node, t: Trail, q: AccessPath, chain: readonly Guard[]): void {
+  private dereference(node: ts.Node, t: Trail, q: AccessPath, chain: readonly Guard[], operation: UseOperation): void {
     const held = this.dominating(node, t);
-    if (held !== undefined) this.use(node, t, q, "dereference", [...t.guards, ...chain, ...held]);
+    if (held !== undefined) this.use(node, t, q, operation, [...t.guards, ...chain, ...held]);
   }
 
   /** `value()` of a resource or `json()` of a fetch response: the change sits under the accessor the carrier was wrapped in. */
@@ -301,10 +309,11 @@ export class Walker {
   }
 
   /** A method called with arguments on a value that holds, or is, the changed value. */
-  private methodCall(receiver: ts.Expression, q: AccessPath, access: ts.PropertyAccessExpression, call: ts.CallExpression, t: Trail, chain: readonly Guard[]): void {
+  private methodCall(receiver: ts.Expression, q: AccessPath, access: ts.PropertyAccessExpression, call: ts.CallExpression, t: Trail, chain: readonly Guard[], steps: readonly AccessStep[]): void {
     const relation = relatePaths(q, t.origin);
     if (relation === "disjoint") return;
-    if (relation === "beyond") return this.dereference(access.name, t, q, chain);
+    const called: UseOperation = { steps: [...steps, accessStep(access), callStep(call)], end: { kind: "none" } };
+    if (relation === "beyond") return this.dereference(access.name, t, q, chain, called);
     const name = access.name.text;
     if (q.length === 0 && STREAM_WRITES.has(name)) return;
     const attached = this.atTop(t, receiver, q, chain);
@@ -318,7 +327,7 @@ export class Walker {
       else this.frontier(call, "unmodelled-flow", "then handler", attached);
       return;
     }
-    if (relation === "exact") this.use(access.name, attached, [], "dereference", attached.guards);
+    if (relation === "exact") this.use(access.name, attached, [], called, attached.guards);
     if (attached.origin.length > 0) this.frontier(access.name, "unmodelled-flow", `method:${name}`, attached);
   }
 
@@ -340,8 +349,9 @@ export class Walker {
     if (ts.isSpreadAssignment(parent)) return this.frontier(parent, "unmodelled-flow", "object spread", t);
     if (ts.isForOfStatement(parent) && parent.expression === top) return this.iterate(parent, t);
     if (ts.isPropertyDeclaration(parent) && parent.initializer === top && ts.isIdentifier(parent.name)) return this.assignedToMember(parent.name.text, enclosingClass(parent), parent, this.hopped(t, "assign", parent));
-    if (ts.isTemplateSpan(parent)) return exact ? this.use(parent, t, [], "consume", t.guards) : undefined;
-    if (exact) return this.use(parent, t, [], "unmodelled", t.guards);
+    if (exact && isNumericUnary(parent)) return this.use(parent, t, [], { steps: [], end: { kind: "coerce", operator: ts.tokenToString(parent.operator)! } }, t.guards);
+    if (ts.isTemplateSpan(parent)) return exact ? this.use(parent, t, [], { steps: [], end: { kind: "coerce", operator: "${}" } }, t.guards) : undefined;
+    if (exact) return this.use(parent, t, [], { steps: [], end: { kind: "unmodelled", detail: ts.SyntaxKind[parent.kind] } }, t.guards);
     this.frontier(parent, "unmodelled-flow", ts.SyntaxKind[parent.kind], t);
   }
 
@@ -358,7 +368,11 @@ export class Walker {
     if (!exact) return;
     const equality = [ts.SyntaxKind.EqualsEqualsToken, ts.SyntaxKind.EqualsEqualsEqualsToken, ts.SyntaxKind.ExclamationEqualsToken, ts.SyntaxKind.ExclamationEqualsEqualsToken].includes(operator);
     if (equality && isNullishLiteral(parent.left === top ? parent.right : parent.left)) return;
-    this.use(parent, t, [], "consume", t.guards);
+    const other = parent.left === top ? parent.right : parent.left;
+    const text = parent.operatorToken.getText(this.unit.tree);
+    if (!COMPARISONS.has(operator)) return this.use(parent, t, [], { steps: [], end: { kind: "coerce", operator: text } }, t.guards);
+    const literal = literalOf(other);
+    this.use(parent, t, [], { steps: [], end: { kind: "compare", operator: text, ...(literal === undefined ? {} : { literal }) } }, t.guards);
   }
 
   private assignTo(assignment: ts.BinaryExpression, t: Trail): void {
@@ -388,13 +402,13 @@ export class Walker {
 
   private spread(spread: ts.SpreadElement, t: Trail): void {
     const holder = spread.parent;
-    if (t.origin.length === 0) return this.use(spread, t, [], "dereference", t.guards);
+    if (t.origin.length === 0) return this.use(spread, t, [], { steps: [], end: { kind: "iterate", tolerates: [] } }, t.guards);
     if (ts.isArrayLiteralExpression(holder) && t.origin[0] === ELEMENT) return this.read(holder, t);
     this.frontier(spread, "unmodelled-flow", "spread", t);
   }
 
   private iterate(loop: ts.ForOfStatement, t: Trail): void {
-    if (t.origin.length === 0) return this.use(loop.expression, t, [], "dereference", t.guards);
+    if (t.origin.length === 0) return this.use(loop.expression, t, [], { steps: [], end: { kind: "iterate", tolerates: [] } }, t.guards);
     const initializer = loop.initializer;
     if (t.origin[0] !== ELEMENT || !ts.isVariableDeclarationList(initializer) || initializer.declarations.length !== 1) return this.frontier(loop, "unmodelled-flow", "iteration", t);
     const element: Trail = { origin: t.origin.slice(1), hops: t.hops, guards: translate(t.guards, [{ from: [ELEMENT], to: [] }]) };
@@ -523,8 +537,9 @@ export class Walker {
       if (owner === undefined) return this.frontier(call, "unmodelled-flow", "callee source", t);
       return this.leave(call, { kind: "parameter", repo: this.repo, file: target.file, symbol: target.named.name, line: lineOf(owner.tree, target.named.declaration), index }, t);
     }
-    if (t.origin.length === 0) return this.use(call, t, [], "consume", t.guards);
-    this.frontier(call, "unmodelled-sink", callee.getText(this.unit.tree).slice(0, 80), t);
+    const detail = callee.getText(this.unit.tree).slice(0, 80);
+    if (t.origin.length === 0) return this.use(call, t, [], { steps: [], end: { kind: "consume", as: "handed-on", detail } }, t.guards);
+    this.frontier(call, "unmodelled-sink", detail, t);
   }
 
   private bind(name: ts.BindingName, scope: ts.Node, t: Trail, from?: ts.Node): void {
@@ -559,8 +574,9 @@ export class Walker {
     this.frontier(node, "unmodelled-flow", detail, t);
   }
 
-  private destructure(pattern: ts.BindingPattern, scope: ts.Node, t: Trail, prefix: AccessPath): void {
-    if (pattern.elements.length === 0 && ["exact", "beyond"].includes(relatePaths(prefix, t.origin))) this.use(pattern, t, prefix, "dereference", t.guards);
+  private destructure(pattern: ts.BindingPattern, scope: ts.Node, t: Trail, prefix: AccessPath, inherited = patternShape(pattern)): void {
+    const shape = relatePaths(prefix, t.origin) === "exact" ? patternShape(pattern) : inherited;
+    if (pattern.elements.length === 0 && ["exact", "beyond"].includes(relatePaths(prefix, t.origin))) this.use(pattern, t, prefix, { steps: [], end: { kind: "destructure", shape } }, t.guards);
     for (const element of pattern.elements) {
       if (ts.isOmittedExpression(element)) continue;
       const key = ts.isObjectBindingPattern(pattern) ? (element.propertyName ?? element.name) : undefined;
@@ -577,8 +593,8 @@ export class Walker {
       const relation = relatePaths(path, t.origin);
       if (relation === "disjoint") continue;
       if (relation === "beyond") {
-        this.use(element, t, path, "dereference", t.guards);
-        if (!ts.isIdentifier(element.name)) this.destructure(element.name, scope, t, path);
+        this.use(element, t, path, { steps: [], end: { kind: "destructure", shape } }, t.guards);
+        if (!ts.isIdentifier(element.name)) this.destructure(element.name, scope, t, path, shape);
         continue;
       }
       const guards = translate(t.guards, [{ from: path, to: [] }]);
@@ -842,6 +858,32 @@ export class Walker {
     const name = this.unit.tree.getLineAndCharacterOfPosition(callee.getStart(this.unit.tree)).character;
     return [start, start + 1, name, name + 1];
   }
+}
+
+const COMPARISONS: ReadonlySet<ts.SyntaxKind> = new Set([
+  ts.SyntaxKind.EqualsEqualsToken,
+  ts.SyntaxKind.ExclamationEqualsToken,
+  ts.SyntaxKind.EqualsEqualsEqualsToken,
+  ts.SyntaxKind.ExclamationEqualsEqualsToken,
+  ts.SyntaxKind.LessThanToken,
+  ts.SyntaxKind.LessThanEqualsToken,
+  ts.SyntaxKind.GreaterThanToken,
+  ts.SyntaxKind.GreaterThanEqualsToken,
+]);
+
+const reachesChange = (q: AccessPath, t: Trail): boolean => ["exact", "beyond"].includes(relatePaths(q, t.origin));
+
+const patternShape = (pattern: ts.BindingPattern): "object" | "array" => (ts.isObjectBindingPattern(pattern) ? "object" : "array");
+
+const callStep = (call: ts.CallExpression): AccessStep => ({ kind: "call", optional: call.questionDotToken !== undefined });
+
+function accessStep(access: ts.PropertyAccessExpression | ts.ElementAccessExpression): AccessStep {
+  const optional = access.questionDotToken !== undefined;
+  if (ts.isPropertyAccessExpression(access)) return { kind: "member", name: access.name.text, optional };
+  const key = access.argumentExpression;
+  if (ts.isStringLiteralLike(key)) return { kind: "keyed", key: key.text, optional };
+  if (ts.isNumericLiteral(key)) return { kind: "keyed", key: Number(key.text), optional };
+  return { kind: "keyed", optional };
 }
 
 function calleeName(call: ts.CallExpression): string | undefined {

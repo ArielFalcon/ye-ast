@@ -119,7 +119,7 @@ contradictions and refused.
 **Operations.** An adapter describes, where the syntax is at hand, what the code does past the changed segment, as one
 descriptor: its ordered steps, each a `member` (its name), a `keyed` read (its key when the code writes a literal one) or
 a `call`, each marked when optional (`?.`); then how the chain ends: `iterate` (with the absences the construct
-tolerates: `@for` accepts `null` and `undefined`), `destructure` (`object` or `array`; empty or not), `compare` (its exact
+tolerates: `@for` accepts `null` and `undefined`), `destructure` (`object` or `array`, the pattern that destructures the value), `compare` (its exact
 operator and the literal when one is written directly), `coerce` (its operator: arithmetic, unary, text), `consume`
 (shown or handed on), `unmodelled`, or nothing beyond the steps. The descriptor reaches the answer unchanged.
 
@@ -161,8 +161,10 @@ each walked once over the use's steps; one normalization per hypothesis; no new 
 independent oracle for each new change, and latency, peak memory and answer size on the same corpus queries:
 
 1. The descriptor through both adapters, `FlowUse` and the answer, with no verdict change. Each construct says what it
-   does (the TypeScript walker drops prefix unary operators today, and the two adapters disagree on a loop over the
-   exact value); template method and pipe names reach the descriptor; a guard re-run of a chain emits nothing.
+   does: a numeric unary operator (`-`, `+`, `~`, `++`, `--`) on the value coerces it, while `!`, `typeof` and `void`
+   only test it; an assignment target is no use of the value it replaces; a loop states the absences it tolerates, so
+   `for...of` and `@for` agree through their descriptors. Template method and pipe names reach the descriptor; a guard
+   re-run of a chain emits nothing.
 2. Representative values, normalization and contradictions, guards as predicates; `optional`, `renamed`, combined
    changes; the answer carries witness, failing step, capability and replacement.
 3. The prototype table and step evaluation, `type`, `wrapped`, `typeof` and `Array.isArray` guards, fallback

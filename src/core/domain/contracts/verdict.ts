@@ -1,8 +1,9 @@
 import type { Evidence } from "../shared/fact.ts";
 import { relatePaths, type AccessPath } from "./access-path.ts";
 import type { ChangeKind } from "./hypothesis.ts";
+import { operationClass, type Absence, type UseOperation } from "./use-operation.ts";
 
-export type Absence = "null" | "undefined";
+export type { Absence, UseOperation } from "./use-operation.ts";
 
 export type Counterexample = "null" | "absent";
 
@@ -20,12 +21,6 @@ export const CHANGE_RULES: Readonly<Record<ChangeKind, ChangeRule>> = {
   nullable: { violates: "null", counterexample: "null", guarded: "admits" },
   removed: { violates: "undefined", counterexample: "absent", guarded: "review" },
 };
-
-/**
- * What the code does with the value at a path: an operation that fails on null or undefined (member read, call, keyed
- * read, array spread, iteration, destructuring); hands it on or shows it; anything else.
- */
-export type UseOperation = "dereference" | "consume" | "unmodelled";
 
 export type GuardKind = "optional-chain" | "truthiness" | "comparison" | "early-exit" | "fallback" | "non-null-assertion" | "type-guard" | "assertion" | "instanceof";
 
@@ -82,7 +77,8 @@ function establishes({ kind, covers }: Guard, changed: AccessPath): boolean {
 export function decideUse(use: UseSite, change: ChangeKind): Verdict | undefined {
   const relation = relatePaths(use.path, use.changed);
   if (relation === "contains" || relation === "disjoint") return undefined;
-  if (relation === "exact" && use.operation !== "dereference") return { kind: "review", reason: use.operation === "consume" ? "consumed" : "unmodelled-sink" };
+  const operation = operationClass(use.operation);
+  if (relation === "exact" && operation !== "dereference") return { kind: "review", reason: operation === "consume" ? "consumed" : "unmodelled-sink" };
   const rule = CHANGE_RULES[change];
   const reaching = use.guards.filter((guard) => GUARD_EFFECT[guard.kind] !== "none" && establishes(guard, use.changed));
   const sufficient = reaching.find((guard) => GUARD_EFFECT[guard.kind] === "protects" && guard.excludes.includes(rule.violates));

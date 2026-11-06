@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { parseAccessPath } from "../../domain/contracts/access-path.ts";
 import { carrierKey, NO_FLOW, type Carrier, type FlowResult, type FlowUse } from "../../domain/contracts/consumer-flow.ts";
-import type { Guard } from "../../domain/contracts/verdict.ts";
+import type { Guard, UseOperation } from "../../domain/contracts/verdict.ts";
 import type { FactBase } from "../../domain/shared/fact.ts";
 import type { Link } from "../../domain/topology/link.ts";
 import type { ConsequencesRequest, ConsumerQueries } from "../../ports/consumer-queries.port.ts";
@@ -33,8 +33,12 @@ function guard(overrides: Partial<Guard> = {}): Guard {
   return { kind: "optional-chain", covers: path("address"), excludes: ["null", "undefined"], evidence: { path: "src/page.ts", line: 31 }, ...overrides };
 }
 
+const READ: UseOperation = { steps: [{ kind: "member", name: "city", optional: false }], end: { kind: "none" } };
+const SHOWN: UseOperation = { steps: [], end: { kind: "consume", as: "shown" } };
+const UNMODELLED: UseOperation = { steps: [], end: { kind: "unmodelled", detail: "expression" } };
+
 function use(line: number, overrides: Partial<FlowUse> = {}): FlowUse {
-  return { site: { path: "src/page.ts", line }, path: path("address.city"), changed: path("address"), operation: "consume", guards: [], hops: [{ step: "subscribe", evidence: { path: "src/page.ts", line } }], ...overrides };
+  return { site: { path: "src/page.ts", line }, path: path("address.city"), changed: path("address"), operation: SHOWN, guards: [], hops: [{ step: "subscribe", evidence: { path: "src/page.ts", line } }], ...overrides };
 }
 
 interface Setup {
@@ -86,7 +90,7 @@ function setup(options: Setup = {}) {
 const verdictsOf = (fact: Awaited<ReturnType<ReturnType<typeof setup>["ask"]>>) => fact.value.findings.map((finding) => (finding.status === "complete" ? finding.value.verdict.kind : finding.evidence.at(-1)?.via));
 
 test("each use gets its verdict, with the chain from the call site that proves it", async () => {
-  const flow = { [carrierKey(siteOf())]: { uses: [use(30, { operation: "dereference" }), use(40, { operation: "dereference", guards: [guard()] }), use(50, { operation: "unmodelled", path: path("address") })], next: [], frontiers: [] } };
+  const flow = { [carrierKey(siteOf())]: { uses: [use(30, { operation: READ }), use(40, { operation: READ, guards: [guard()] }), use(50, { operation: UNMODELLED, path: path("address") })], next: [], frontiers: [] } };
   const fact = await setup({ flow }).ask();
 
   assert.deepEqual(verdictsOf(fact), ["incompatible", "admits", "review"]);
@@ -149,8 +153,8 @@ const caller = (overrides: Partial<ConsumerCaller> = {}): ConsumerCaller => ({ f
 test("a function return continues at each proven call occurrence of its callers, and the call is a hop of the chain", async () => {
   const flow = {
     ...returning(),
-    [carrierKey({ kind: "call-result", repo: "web", file: "src/page.ts", line: 25, callee: "find" })]: { uses: [use(26, { operation: "dereference" })], next: [], frontiers: [] },
-    [carrierKey({ kind: "call-result", repo: "web", file: "src/page.ts", line: 27, callee: "find" })]: { uses: [use(28, { operation: "dereference" })], next: [], frontiers: [] },
+    [carrierKey({ kind: "call-result", repo: "web", file: "src/page.ts", line: 25, callee: "find" })]: { uses: [use(26, { operation: READ })], next: [], frontiers: [] },
+    [carrierKey({ kind: "call-result", repo: "web", file: "src/page.ts", line: 27, callee: "find" })]: { uses: [use(28, { operation: READ })], next: [], frontiers: [] },
   };
   const callers = { find: { kind: "found" as const, callers: [caller({ at: 25 }), caller({ at: 27 })] } };
 
@@ -244,11 +248,11 @@ test("a class member is read by the code and by its template, and a child input 
   const child = { kind: "member" as const, repo: "web", file: "src/card.ts", owner: "Card", member: "owner", line: 6 };
   const flow = {
     [carrierKey(siteOf())]: { uses: [], next: [{ carrier: { site: parent, path: path("address") }, hops: [] }], frontiers: [] },
-    [carrierKey(parent)]: { uses: [use(14, { operation: "dereference" })], next: [], frontiers: [] },
+    [carrierKey(parent)]: { uses: [use(14, { operation: READ })], next: [], frontiers: [] },
   };
   const templates = {
-    [carrierKey(parent)]: { uses: [use(3, { site: { path: "src/page.html", line: 3 }, operation: "dereference", guards: [guard()] })], next: [{ carrier: { site: child, path: path("address") }, hops: [{ step: "template-binding" as const, evidence: { path: "src/page.html", line: 5 } }] }], frontiers: [] },
-    [carrierKey(child)]: { uses: [use(2, { site: { path: "src/card.html", line: 2 }, operation: "dereference" })], next: [], frontiers: [] },
+    [carrierKey(parent)]: { uses: [use(3, { site: { path: "src/page.html", line: 3 }, operation: READ, guards: [guard()] })], next: [{ carrier: { site: child, path: path("address") }, hops: [{ step: "template-binding" as const, evidence: { path: "src/page.html", line: 5 } }] }], frontiers: [] },
+    [carrierKey(child)]: { uses: [use(2, { site: { path: "src/card.html", line: 2 }, operation: READ })], next: [], frontiers: [] },
   };
   const { ask, templated } = setup({ flow, templates });
 
@@ -262,8 +266,8 @@ test("the answer is the same whatever order the links arrive in, sorted by the p
   const early = link({ file: "src/a.service.ts", line: 2 });
   const late = link({ file: "src/b.service.ts", line: 9 });
   const flow = {
-    [carrierKey(siteOf("src/a.service.ts", 2))]: { uses: [use(80, { site: { path: "src/z.ts", line: 80 }, operation: "dereference" })], next: [], frontiers: [] },
-    [carrierKey(siteOf("src/b.service.ts", 9))]: { uses: [use(5, { site: { path: "src/m.ts", line: 5 }, operation: "dereference" })], next: [], frontiers: [] },
+    [carrierKey(siteOf("src/a.service.ts", 2))]: { uses: [use(80, { site: { path: "src/z.ts", line: 80 }, operation: READ })], next: [], frontiers: [] },
+    [carrierKey(siteOf("src/b.service.ts", 9))]: { uses: [use(5, { site: { path: "src/m.ts", line: 5 }, operation: READ })], next: [], frontiers: [] },
   };
 
   const forward = await setup({ links: [early, late], flow }).ask();
@@ -298,7 +302,7 @@ function throughHelper(entries: readonly (readonly [string, number])[]) {
 }
 
 test("a value that entered a function through an argument leaves it at the result of that call, not at every caller of the function", async () => {
-  const flow = { ...throughHelper([["src/a.ts", 12]]), [callResultAt("src/a.ts", 12)]: { uses: [use(13, { site: { path: "src/a.ts", line: 13 }, operation: "dereference" })], next: [], frontiers: [] } };
+  const flow = { ...throughHelper([["src/a.ts", 12]]), [callResultAt("src/a.ts", 12)]: { uses: [use(13, { site: { path: "src/a.ts", line: 13 }, operation: READ })], next: [], frontiers: [] } };
   const callers = { valueOrDefault: { kind: "found" as const, callers: [caller({ file: "src/a.ts", line: 10, at: 12 }), caller({ file: "src/b.ts", line: 30, at: 40 })] } };
   const { ask, followed, asked } = setup({ flow, callers });
 
@@ -312,8 +316,8 @@ test("a value that entered a function through an argument leaves it at the resul
 test("the same function entered from two call sites follows both returns", async () => {
   const flow = {
     ...throughHelper([["src/a.ts", 12], ["src/c.ts", 7]]),
-    [callResultAt("src/a.ts", 12)]: { uses: [use(13, { site: { path: "src/a.ts", line: 13 }, operation: "dereference" })], next: [], frontiers: [] },
-    [callResultAt("src/c.ts", 7)]: { uses: [use(8, { site: { path: "src/c.ts", line: 8 }, operation: "dereference" })], next: [], frontiers: [] },
+    [callResultAt("src/a.ts", 12)]: { uses: [use(13, { site: { path: "src/a.ts", line: 13 }, operation: READ })], next: [], frontiers: [] },
+    [callResultAt("src/c.ts", 7)]: { uses: [use(8, { site: { path: "src/c.ts", line: 8 }, operation: READ })], next: [], frontiers: [] },
   };
 
   const fact = await setup({ flow }).ask();
@@ -342,7 +346,7 @@ test("a return that was not entered through an argument still continues at the c
 
 test("an occurrence the graph only guessed is an ambiguous caller at that occurrence, beside the proven one of the same function", async () => {
   const callers = { find: { kind: "found" as const, callers: [caller({ at: 25 }), caller({ at: 27, provenance: "heuristic", confidence: 0.8, proven: false })] } };
-  const flow = { ...returning(), [carrierKey({ kind: "call-result", repo: "web", file: "src/page.ts", line: 25, callee: "find" })]: { uses: [use(26, { operation: "dereference" })], next: [], frontiers: [] } };
+  const flow = { ...returning(), [carrierKey({ kind: "call-result", repo: "web", file: "src/page.ts", line: 25, callee: "find" })]: { uses: [use(26, { operation: READ })], next: [], frontiers: [] } };
 
   const fact = await setup({ flow, callers }).ask();
 
@@ -373,7 +377,7 @@ test("a dependence that is neither a call nor a reference stays an ambiguous cal
 
 test("two uses in two repositories at the same relative place are two findings, each stating its repository and the link it came through", async () => {
   const links = [link({ repo: "web-a" }), link({ repo: "web-b" })];
-  const read = { uses: [use(30, { operation: "dereference" })], next: [], frontiers: [] };
+  const read = { uses: [use(30, { operation: READ })], next: [], frontiers: [] };
   const { ask } = setup({ links, flow: { [carrierKey({ ...siteOf(), repo: "web-a" })]: read, [carrierKey({ ...siteOf(), repo: "web-b" })]: read } });
 
   const fact = await ask();
