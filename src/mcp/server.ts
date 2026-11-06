@@ -66,7 +66,7 @@ Repositories and snapshots: declared repository IDs: ${available.join(", ")}. re
 
 Narrowing and paging: scope globs limit coverage (exclude wins). impact changed picks the diff paths that start the walk (the seeds); unlike scope, it does not limit where consequences are found. Unmatched globs are errors. budget limits traversal, not response length; raise a bound only when a cut names it. Entrypoints, callers and impact page evidence the text omits: supply select and page together, page.limit required; a cursor needs the same selection and limit. Answers give the coordinates and owner each selection needs; select lists the kinds per tool. expect asserts the recovery identity; replay reruns the query and fails if the result changed (no old capture is kept) and requires workspace.
 
-Errors: isError is a fault, not an empty fact: follow its next step when one is given, and "fault fields:". unknown-symbol: use a listed candidate path or a line range (ye_ast_outline lists them); top-level-line: focus on a line inside a declaration; unknown-change-path: correct the changed globs.`;
+Errors: isError is a fault, not an empty fact: follow its next step if given, and "fault fields:". unknown-symbol: use a listed candidate path or a line range (ye_ast_outline lists them); top-level-line: focus on a line inside a declaration; unknown-change-path: correct the changed globs.`;
 }
 
 const REPLAY_GUIDE = { replay: "Copy verbatim from the recovery recipe of a previous workspace answer; requires workspace." };
