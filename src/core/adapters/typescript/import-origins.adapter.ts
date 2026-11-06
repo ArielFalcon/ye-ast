@@ -4,16 +4,18 @@ import { declarationCounts, declaredNames, isStatic, scriptGlobalNames } from ".
 import { moduleStatement } from "./import-bindings.ts";
 import { sourceTree } from "./source-tree.ts";
 import { bindFile, type BoundFile, type LexicalBinding } from "./lexical-bindings.ts";
+import { addWrittenRoots, GLOBAL_OBJECTS, type WrittenRoots } from "./written-roots.ts";
 import { isTypeScriptSource } from "../../domain/languages/typescript.ts";
 import type { ImportOrigin } from "../../domain/relations/resolved-reference.ts";
 import type { Evidence, Finding } from "../../domain/shared/fact.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { RootOrigin } from "../../domain/impact/edge-policy.ts";
-import type { ImportOriginSite, ImportOrigins, ResolvedNameSite, RootBinding, UseSite } from "../../ports/import-origins.port.ts";
+import { compareText } from "../../domain/shared/code-node.ts";
+import type { ImportOriginSite, ImportOrigins, ReplacedRoots, ResolvedNameSite, RootBinding, UseSite } from "../../ports/import-origins.port.ts";
 import { createModuleResolver, manifestPackages, packageOf } from "./module-resolver.ts";
 import { TYPESCRIPT_LIB_GLOBALS } from "./typescript-lib-globals.ts";
 import { parseAngularRouteFile } from "./angular-router.extractor.ts";
-import { createDeclarationLookup, type ModuleShape } from "./declaration-lookup.ts";
+import { createExportLookup, type ModuleShape } from "./declaration-lookup.ts";
 
 /** The names the pinned `typescript` declares, held once for the process rather than rebuilt per query. */
 const LIB_GLOBALS = new Set(TYPESCRIPT_LIB_GLOBALS);
@@ -54,7 +56,7 @@ export function createImportOrigins(sources: readonly SourceFile[], parse: Parse
     if (!moduleShapes.has(file)) moduleShapes.set(file, texts.has(file) && isTypeScriptSource(file) ? parseAngularRouteFile(file, texts.get(file)!) : undefined);
     return moduleShapes.get(file);
   }
-  const exportedDeclaration = createDeclarationLookup(async (file) => moduleShapeOf(file), async (from, specifier) => {
+  const exportedDeclaration = createExportLookup(async (file) => moduleShapeOf(file), async (from, specifier) => {
     const resolved = await modules.resolve(from, specifier);
     return "file" in resolved ? resolved.file : undefined;
   });
@@ -66,6 +68,16 @@ export function createImportOrigins(sources: readonly SourceFile[], parse: Parse
     if (starts === undefined) {
       starts = parameterUses(source.fileName, text);
       parameterStarts.set(source.fileName, starts);
+    }
+    return starts.has(identifier.getStart(source));
+  };
+  const dynamicStarts = new Map<string, ReadonlySet<number>>();
+  /** A name a `with` body or a direct `eval` may rebind proves no origin; only a file that has either is bound for it. */
+  const isDynamicUse: ParameterUse = (source, text, identifier) => {
+    let starts = dynamicStarts.get(source.fileName);
+    if (starts === undefined) {
+      starts = DYNAMIC_SCOPE.test(text) ? dynamicUses(source.fileName, text) : new Set();
+      dynamicStarts.set(source.fileName, starts);
     }
     return starts.has(identifier.getStart(source));
   };
@@ -111,6 +123,19 @@ export function createImportOrigins(sources: readonly SourceFile[], parse: Parse
     globals = names;
     return names;
   };
+  let replaced: ReplacedRoots | undefined;
+  /** The globals the snapshot declares, the member paths it writes and the packages it writes through; read when first asked. */
+  const replacedRoots = (): ReplacedRoots => {
+    if (replaced !== undefined) return replaced;
+    const written: WrittenRoots = { paths: new Map([...repositoryGlobals()].map((name) => [name, [name]])), packages: new Set() };
+    for (const [path, text] of texts) {
+      if (!isTypeScriptSource(path)) continue;
+      addWrittenRoots(path, text, ts.createSourceFile(path, text, ts.ScriptTarget.Latest, false), written, (name) => LIB_GLOBALS.has(name));
+    }
+    const paths = [...written.paths].sort(([a], [b]) => compareText(a, b)).map(([, segments]) => segments);
+    replaced = { paths, globalObjects: GLOBAL_OBJECTS, packages: written.packages };
+    return replaced;
+  };
 
   const originOf = async (site: ImportOriginSite, syntax: SiteSyntax | "unknown"): Promise<Finding<ImportOrigin>> => {
     const evidence: Evidence[] = [{ path: site.file, line: site.line }];
@@ -133,13 +158,13 @@ export function createImportOrigins(sources: readonly SourceFile[], parse: Parse
     return { status: "unknown", reason: "unresolved", evidence };
   };
 
-  return { origins: async (sites, signal) => {
+  return { replacedRoots: async () => replacedRoots(), origins: async (sites, signal) => {
     const results: (Finding<ImportOrigin> & { occurrence?: true })[] = sites.map((site) => ({ status: "unknown", reason: "unresolved", evidence: [{ path: site.file, line: site.line }] }));
     const grouped = Map.groupBy(sites.map((site, index) => ({ site, index })), ({ site }) => site.file);
     for (const [file, group] of grouped) {
       if (signal?.aborted) break;
       const parsed = indexOf(file);
-      const checked = parsed === undefined ? undefined : checkSites(parsed.index, parsed.text, group, isParameterUse);
+      const checked = parsed === undefined ? undefined : checkSites(parsed.index, parsed.text, group, isParameterUse, isDynamicUse);
       if (checked !== undefined) shapes.set(file, checked.shape);
       const checks = checked?.matches ?? new Map<number, SiteSyntax>();
       for (const { site, index } of group) {
@@ -154,7 +179,7 @@ export function createImportOrigins(sources: readonly SourceFile[], parse: Parse
     for (const [file, group] of Map.groupBy(sites.map((site, index) => ({ site, index })), ({ site }) => site.file)) {
       if (signal?.aborted) break;
       const parsed = indexOf(file);
-      const read = parsed === undefined ? undefined : rootsAt(parsed.index, parsed.text, group, isParameterUse);
+      const read = parsed === undefined ? undefined : rootsAt(parsed.index, parsed.text, group, isParameterUse, isDynamicUse);
       if (read === undefined) continue;
       shapes.set(file, read.shape);
       for (const [index, { root, bare, local }] of read.roots) {
@@ -186,6 +211,7 @@ export function createImportOrigins(sources: readonly SourceFile[], parse: Parse
     /** A member of a namespace import is the declaration the module exports under its name, followed through re-exports. */
     if ("file" in resolved && moduleShapeOf(file)?.imports.get(root)?.imported === "*") {
       const declaration = member === undefined ? undefined : await exportedDeclaration(resolved.file, member);
+      if (declaration === "ambiguous") return { kind: "ambiguous", root };
       return declaration === undefined ? UNKNOWN_BINDING : { kind: "located", root, file: declaration.file, path: declaration.name };
     }
     const named = { root, ...(member === undefined ? {} : { member }) };
@@ -239,14 +265,18 @@ function chainAt({ source, starting }: FileIndex, text: string, site: UseSite): 
     const spelled = ts.isIdentifier(node) ? node.text : node.kind === ts.SyntaxKind.ThisKeyword || node.kind === ts.SyntaxKind.SuperKeyword ? node.getText(source) : undefined;
     const whole = ts.isNewExpression(node) || spelled !== undefined ? wholeChain(node) : undefined;
     if (whole === undefined) continue;
-    const head = headOf(whole);
-    const names = chainNames(whole);
     if (spelled !== site.spelled && !chainNames(throughCalls(whole)).includes(site.spelled)) continue;
-    if (head.kind !== ts.SyntaxKind.SuperKeyword) return { root: head, ...(names[1] === undefined ? {} : { member: names[1] }) };
+    const head = headOf(whole);
+    if (head.kind !== ts.SyntaxKind.SuperKeyword) return chainOf(whole);
     const base = superclassOf(head);
-    return base === undefined ? undefined : { root: headOf(base), ...(chainNames(base)[1] === undefined ? {} : { member: chainNames(base)[1]! }) };
+    return base === undefined ? undefined : chainOf(base);
   }
   return undefined;
+}
+
+function chainOf(whole: ts.Node): Chain {
+  const member = chainNames(whole)[1];
+  return { root: headOf(whole), ...(member === undefined ? {} : { member }) };
 }
 
 /** The chain `whole` begins, through the calls and assertions written on it: `a.b(x).c` from `a.b`. */
@@ -311,7 +341,6 @@ function declaredBinding(source: ts.SourceFile, root: ts.Identifier, declaration
   const around = ownerAround(source, root, owner);
   if (around !== undefined && declarations.every((declaration) => isInside(declaration, around))) return { kind: "local", root: root.text };
   const lines = declarations.map((declaration) => lineOf(source, nameOf(declaration) ?? declaration));
-  /** The binding is visible at the use, so a function that declares it holds the use too. */
   const captured = declarations.length > 0 && declarations.every((declaration) => isValueBinding(declaration) && inFunction(declaration));
   return { kind: "declared", root: root.text, lines: [...new Set(lines)].sort((a, b) => a - b), captured };
 }
@@ -388,7 +417,7 @@ type SiteSyntax = "valid" | "local" | "this-member";
 type ParameterUse = (source: ts.SourceFile, text: string, identifier: ts.Identifier) => boolean;
 
 /** The root of the plain chain of names each site spells and ends in its name, read in the file's tree. */
-function rootsAt({ source, shape, starting }: FileIndex, text: string, group: readonly { site: ResolvedNameSite; index: number }[], isParameterUse: ParameterUse): { roots: Map<number, { root: string; bare: boolean; local: boolean }>; shape: FileShape } {
+function rootsAt({ source, shape, starting }: FileIndex, text: string, group: readonly { site: ResolvedNameSite; index: number }[], isParameterUse: ParameterUse, isDynamicUse: ParameterUse): { roots: Map<number, { root: string; bare: boolean; local: boolean }>; shape: FileShape } {
   const starts = source.getLineStarts();
   const wanted = new Map<number, { site: ResolvedNameSite; index: number }[]>();
   for (const item of group) {
@@ -398,12 +427,16 @@ function rootsAt({ source, shape, starting }: FileIndex, text: string, group: re
     if (point >= (line < starts.length ? starts[line]! : text.length)) continue;
     wanted.set(point, [...(wanted.get(point) ?? []), item]);
   }
+  const isDynamicRoot = (spelled: ts.Node): boolean => {
+    const root = headOf(spelled);
+    return ts.isIdentifier(root) && isDynamicUse(source, text, root);
+  };
   /** Chains that start at one point share their root, so the first that ends in the name settles it. */
   const roots = new Map<number, { root: string; bare: boolean; local: boolean }>();
   for (const [point, sites] of wanted) for (const node of starting.get(point) ?? []) for (const { site, index } of sites) {
     const spelled = spelledAt(node, site.kind);
     const names = spelled === undefined ? undefined : plainChain(spelled);
-    if (names === undefined || names.at(-1) !== site.name || roots.has(index)) continue;
+    if (names === undefined || names.at(-1) !== site.name || roots.has(index) || isDynamicRoot(spelled!)) continue;
     const bare = names.length === 1;
     roots.set(index, { root: names[0]!, bare, local: bare && ts.isIdentifier(spelled!) && !ts.isTypeNode(spelled.parent) && isParameterUse(source, text, spelled) });
   }
@@ -444,7 +477,7 @@ function indexed(source: ts.SourceFile): FileIndex | undefined {
 }
 
 /** Check each graph spelling at its exact 1-based UTF-16 position in the file's tree. */
-function checkSites({ source, shape, starting }: FileIndex, text: string, group: readonly { site: ImportOriginSite; index: number }[], isParameterUse: ParameterUse): { matches: Map<number, SiteSyntax>; shape: FileShape } {
+function checkSites({ source, shape, starting }: FileIndex, text: string, group: readonly { site: ImportOriginSite; index: number }[], isParameterUse: ParameterUse, isDynamicUse: ParameterUse): { matches: Map<number, SiteSyntax>; shape: FileShape } {
   const result = new Map<number, SiteSyntax>();
   const starts = source.getLineStarts();
   const wanted = new Map<number, { site: ImportOriginSite; index: number }[]>();
@@ -475,6 +508,8 @@ function checkSites({ source, shape, starting }: FileIndex, text: string, group:
     if (found === undefined && ownCalls.get(index) === 1) result.set(index, "this-member");
     if (found?.length !== 1) continue;
     const node = found[0]!;
+    const root = headOf(node);
+    if (ts.isIdentifier(root) && isDynamicUse(source, text, root)) continue;
     result.set(index, site.kind === "calls" && ts.isIdentifier(node) && node.text === site.name && isParameterUse(source, text, node) ? "local" : "valid");
   }
   return { matches: result, shape };
@@ -527,6 +562,21 @@ function parameterUses(path: string, text: string): ReadonlySet<number> {
     node.forEachChild(visit);
   };
   if (names.size > 0) visit(tree);
+  return starts;
+}
+
+/** Text that may hold a `with` statement or a direct `eval`, the only scopes the binder calls dynamic. */
+const DYNAMIC_SCOPE = /\bwith\b|\beval\b/;
+
+/** The start of every name of the file whose binding a dynamic scope decides (ADR-0029 decision 3). */
+function dynamicUses(path: string, text: string): ReadonlySet<number> {
+  const { tree, bindingOf } = bindFile(path, text);
+  const starts = new Set<number>();
+  const visit = (node: ts.Node): void => {
+    if (ts.isIdentifier(node) && bindingOf(node).kind === "dynamic") starts.add(node.getStart(tree));
+    node.forEachChild(visit);
+  };
+  visit(tree);
   return starts;
 }
 

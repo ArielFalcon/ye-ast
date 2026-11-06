@@ -56,9 +56,9 @@ A call is `callee(args)` or `receiver.member(args)`; each rule settles it to one
 |---|---|---|
 | R1 | A call edge the index resolved, unless its synthesizer is ignored by `EDGE_POLICY`, judged by the one owner of where an edge points, the same impact, callers and importers use (`EdgeTargets`, RFC-0010) from the root its name spells at its place: kept; dropped when the root is bound by a package or the language's libraries (`new pkg.Base()`, a `pkg` import named like a repository declaration) or is a parameter of a function around the call ([ADR-0029](../adr/0029-lexical-bindings-from-the-typescript-binder.md) reads that binding); redirected when an import proves the bare name binds another repository declaration than the one the index matched | a step, at the redirected declaration for a redirected edge (its place unchanged); a dropped edge whose root is a package or a library is an external call under the package, or a global, by the name it reaches; one whose root is a parameter runs the parameter's value, so it is an `unresolved-link` cut at the place listing the declarations of its name, never a step |
 | R2 | `this.<member>` and `this.<member>.<rest>` inside the class that declares the member (the inbound rule of RFC-0010, applied forward) | a step at the member |
-| R3 | `this.<field>.<member>`: the field's `FieldOrigin` holds a repository class (a step at its member, with dispatch R7 when it is an interface), an external type (a leaf), or nothing known (R6). Slice 2: it needs the call-binding port | a step or a leaf |
-| R4 | A bare name or a receiver identifier bound in the file: a local or a parameter whose declaration fixes its origin (`inject(T)`, `new T()`, `const x = this.f`, a type annotation `: T`), an import (a repository file: its export; a package: external with the package name), or no binding at all (a global: `global#Math`) | a step, a leaf |
-| R5 | A chain on a call result `head(...).m(...)`: the head is settled first; when it is a repository declaration with a declared return type, `m` is looked up in that type; when the type is external or absent, `m` is external of it | a step or a leaf per link of the chain |
+| R3 | `this.<field>.<member>`: the field's `FieldOrigin` holds a repository class (a step at its member, with dispatch R7 when it is an interface), an external type (a leaf), or nothing known (R6). Trace reads the relations impact reads, under the same retained key, and settles only the calls they prove at their place: a `memberUses` proof is a step at its member, unless a provider may replace its receiver (`useClass`, `useExisting`); an `externalUses` proof (a field that holds a package or global type, never written and never replaced by a provider) is a leaf under its module, or a global. A place two proofs name, or a member the index does not place in the proven class, stays a cut | a step or a leaf |
+| R4 | A bare name or a receiver identifier bound in the file: a local or a parameter whose declaration fixes its origin (`inject(T)`, `new T()`, `const x = this.f`, a type annotation `: T`), an import (a repository file: its export; a package: external with the package name), or no binding at all (a global: `global#Math`). A member call spelled as a chain of plain names (`Math.max`, `_.fp.map`, never `f().m` or `this.x.m`) asks the import origins for its root, as an edge's root is asked (R1): a package import is a leaf under the package, a name only the language's libraries declare a global leaf; a file that declares the name anywhere, or a repository global of that name, proves nothing, so the call stays as R6 decides. A member call on a bare local is settled when every store into the binding (each initializer and each assignment, by the binder's scoping, ADR-0029) stores one kind of value, and every other place the file names the binding only reads one of its members: a regular expression, array or string literal is a global leaf of that type; `new C()` of the one class the file declares as `C` is a step at `C`'s own method; `new C()` where `C` is rooted at a library global is a global leaf, and at a repository file a step at the own method of that file's one class `C`. A parameter, a catch, iteration or destructured binding, an exported binding, a script's global, a compound or update store, a store a dynamic scope may make, and a binding passed, returned, copied, indexed or written through bind nothing. Read per file and keyed by the line and column where the call starts. Limitation: a method of the class that replaces itself on the instance (`this.m = ...`) is not seen | a step, a leaf |
+| R5 | A chain on a call result `head(...).m(...)`: the head is settled first; when it is a repository declaration with a declared return type, `m` is looked up in that type. When the head is an external call, or its return type is absent, the value `m` is called on is unknown, never external: a library call may return a repository object (`find`, `get`, a callback's result), so `m` is external only by the closed world of R6 and is otherwise a cut (R6b). Corrected 2026-11-06 by the trace slice 2 research | a step, a leaf or a cut per link of the chain |
 | R6 | Closed world, narrowed to what a name lookup proves (below): an unsettled call proven not to reach repository code | a leaf `external` |
 | R6b | Otherwise | a cut `unresolved-link` at the place, listing the repository declarations of that name as candidates, each `file::path` with the dotted containment path the outline gives it (`src/a.ts::Store.get`; a top-level one `src/a.ts::get`) |
 
@@ -77,8 +77,9 @@ read for their callables (R10) by the same per-file read. Building the
 set took 18 to 75 ms on the probe repositories and 238 ms on this one, against 1.1 to 1.9 s per query, so it is not
 cached across queries.
 
-Limitation: a member defined under a computed name (`{ [key]: fn }`, `target[name] = fn`) has no name to read, so a
-call through such a member is still reported external `unnamed` when no other source declares its name.
+Limitation: a member a repository object defines under a computed name (`{ [key]: fn }`, `target[name] = fn`) has no
+name to read, so a call through such a member is still reported external `unnamed` when no other source declares its
+name. A computed member written on a global's prototype is covered by the written paths below.
 
 The rule matches names, not receivers, so a library call whose name the code also declares in a value position is a
 cut: on this repository's `composeQueries` trace, 269 calls moved from external to cut (191 `Map.set`, 52
@@ -86,6 +87,31 @@ cut: on this repository's `composeQueries` trace, 269 calls moved from external 
 
 R4 and R5 read the syntax tree of the file (the TypeScript compiler API in `core/adapters/typescript`, ADR-0008; the
 tree-sitter syntax tree for Java), never a type checker, and are computed once per file content.
+
+Every external leaf, of R1, R3, R4 or R6 (the `unnamed` one included), names what the repository must not replace. The
+import origins read once per query, from every source the snapshot holds, the member paths it writes: an assignment,
+compound assignment, update, `delete`, destructuring or iteration target whose path starts at a global (directly or
+through `globalThis`, `window`, `self` or `global`) or at an import of a package, and the first argument of
+`Object.defineProperty`, `Object.assign`, `Object.setPrototypeOf`, `Reflect.set` and their kin, with roots resolved by
+the binder (ADR-0029). A local declared from a path stands for that path: a variable's initializer, a parameter's
+default, a destructured element by its key, rename or index, at any nesting, a literal's member (`const { prototype } =
+Array; prototype.push = f` writes `Array.prototype.push`). A name a write does not state is a `*` that covers every name
+in its place and below: `Array.prototype[k] = f` and a polyfill loop write `Array.prototype.*`, and
+`Object.assign(process.env, vars)` writes `process.env.*`, never `process.cwd`; a computed key on the global object
+writes `*`, every global. A write through `__proto__`, `constructor` or `getPrototypeOf` writes `*.prototype` and its
+member. A global the snapshot declares is written whole. A leaf stays the cut it would otherwise be when a written path
+covers the path it calls (`Array.prototype.push` for a call on an array literal, `Map.prototype.get` for `new Map()`,
+`Math.max` for a rooted call, the global itself for a bare call), when its package is written through, or when its
+member is written on any prototype: no syntax proves a receiver's whole prototype chain (`Element.prototype.appendChild`
+replaces `document.body.appendChild`). A call found replaced never falls back to an `unnamed` external.
+
+External leaves are relative to the fact's declared scope (RFC-0002 rule 4, `scope.languages`): the snapshot holds the
+`.ts`, `.mts` and `.cts` sources the map scope exports, so a write in a `.js`, `.jsx` or `.tsx` file is outside the
+promise and is not read. A write through a parameter with no default (`function patch(p) { p.push = f }`) or through
+a call's result stays outside the paths. A name a `with` body
+or a direct `eval` may rebind has no origin, and a local in the scope of a direct `eval`, strict or not, is not bound. An
+R3 field leaf under a global needs a library global the binder confirms at the field's `new`, never the unresolved-name
+fallback of a field origin.
 
 ### Tree rules
 

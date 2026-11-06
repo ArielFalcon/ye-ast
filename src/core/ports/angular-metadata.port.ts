@@ -1,4 +1,4 @@
-import type { MemberUseOrigin, MemberProofContext } from "../domain/relations/member-use.ts";
+import type { ExternalMemberUseOrigin, MemberUseOrigin, MemberProofContext } from "../domain/relations/member-use.ts";
 import type { AngularClass } from "../domain/relations/angular-class.ts";
 import type { FieldOrigin, LocalOrigin } from "../domain/relations/field-origin.ts";
 import type { Relation } from "../domain/relations/relation.ts";
@@ -17,6 +17,8 @@ export interface AngularMetadata {
   locals: readonly LocalOrigin[];
   /** When present, this is the sole member-settlement evidence; an empty list authorizes no settlement. */
   memberUses?: readonly MemberUseOrigin[];
+  /** Present with `memberUses`: the proven calls through a field that holds a type from outside the repository. */
+  externalUses?: readonly ExternalMemberUseOrigin[];
 }
 
 export interface AngularMetadataReadOptions {

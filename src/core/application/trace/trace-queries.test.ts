@@ -3,11 +3,13 @@ import test from "node:test";
 import type { ImportOrigin } from "../../domain/relations/resolved-reference.ts";
 import type { Fact, Finding } from "../../domain/shared/fact.ts";
 import type { TraceStep, TraceValue } from "../../domain/trace/trace-fact.ts";
-import type { ImportOriginSite, ResolvedNameSite } from "../../ports/import-origins.port.ts";
+import type { ImportOriginSite, ReplacedRoots, ResolvedNameSite } from "../../ports/import-origins.port.ts";
 import type { CallersTarget } from "../../ports/impact-queries.port.ts";
 import type { TraceBudget, TraceRequest } from "../../ports/trace-queries.port.ts";
 import { fakeLive, type FakeLive } from "../live/fake-live.testing.ts";
 import { fakeCodeGraph, fakeNode, type FakeEdge, type FakeNode, type FakeUnresolved } from "../navigation/fake-code-graph.testing.ts";
+import type { ReceiverBinding } from "../../ports/declared-member-names.port.ts";
+import type { RelationExtraction } from "../relations/relation-extractor.ts";
 import { createTraceQueries, type TraceQueriesDeps } from "./trace-queries.ts";
 
 const SHA = "a".repeat(40);
@@ -17,6 +19,8 @@ const B = "src/b.ts";
 
 type Origin = Finding<ImportOrigin> & { occurrence?: true };
 
+const written = (...paths: string[][]): ReplacedRoots => ({ paths, globalObjects: new Set(["globalThis", "window"]), packages: new Set() });
+
 interface Options {
   nodes: readonly FakeNode[];
   edges?: readonly FakeEdge[];
@@ -25,8 +29,8 @@ interface Options {
   origins?: Readonly<Record<string, ImportOrigin>>;
   /** Runs when the walk asks for origins. */
   onOrigins?: () => void;
-  /** Where the root of an edge's spelled name is bound, by the name the edge reaches; unknown otherwise. */
-  roots?: Readonly<Record<string, ImportOrigin>>;
+  /** Where the root of an edge's spelled name is bound, by the name the edge reaches, `bare` when the site spells the root alone; unknown otherwise. */
+  roots?: Readonly<Record<string, ImportOrigin & { bare?: true }>>;
   matches?: (path: string, glob: string) => boolean;
   indexFails?: boolean;
   live?: FakeLive;
@@ -44,6 +48,12 @@ interface Options {
   memberNames?: Readonly<Record<string, readonly string[]>>;
   /** Runs each time the walk reads a source's member names. */
   onMemberNames?: (path: string) => void;
+  /** The receiver bindings each source's syntax proves, by path. */
+  receiverBindings?: Readonly<Record<string, readonly ReceiverBinding[]>>;
+  /** The roots the snapshot replaces; none by default. */
+  replaced?: ReplacedRoots;
+  /** The member calls the relations prove. */
+  proofs?: Pick<RelationExtraction, "memberUses" | "externalUses">;
 }
 
 function setup(options: Options) {
@@ -72,14 +82,18 @@ function setup(options: Options) {
       open: () => ({ ok: true, value: store }),
     },
     sourceTrivia: { triviaLines: async (file: { path: string }) => (options.onTrivia?.(file.path), new Set(options.trivia?.[file.path] ?? [])) },
-    memberNames: { memberNames: async (file: { path: string }) => (options.onMemberNames?.(file.path), { names: options.memberNames?.[file.path] ?? [], functionValueCalls: [], callables: [] }) },
+    memberNames: { memberNames: async (file: { path: string }) => (options.onMemberNames?.(file.path), { names: options.memberNames?.[file.path] ?? [], functionValueCalls: [], callables: [], receiverBindings: options.receiverBindings?.[file.path] ?? [] }) },
     importOrigins: () => ({
+      replacedRoots: async () => options.replaced ?? written(),
       origins: async (sites: readonly ImportOriginSite[]) => { options.onOrigins?.(); return sites.map(answer); },
       rootOrigins: async (sites: readonly ResolvedNameSite[]) => sites.map((site): Finding<ImportOrigin> => {
         const root = options.roots?.[site.name];
-        return root === undefined ? { status: "unknown", reason: "unresolved", evidence: [] } : { status: "complete", value: root, evidence: [] };
+        if (root === undefined) return { status: "unknown", reason: "unresolved", evidence: [] };
+        const { bare, ...value } = root;
+        return { status: "complete", value, evidence: [], ...(bare === undefined ? {} : { bare }) };
       }),
     }),
+    relations: { extract: async () => ({ relations: [], fields: [], locals: [], ...options.proofs }) },
     engines: {},
     ...(options.live && { live: options.live.deps, trust: { read: async () => ({ ok: true, value: "trusted" }) } }),
   } as unknown as TraceQueriesDeps;
@@ -514,4 +528,156 @@ test("a store that fails while the walk reads it closes and fails with its own e
 
   await assert.rejects(queries.walk({ repo: "/work/shop", repoId: "shop", revision: "HEAD", targets: [{ file: A, symbol: "run" }] }), (error) => error === failure);
   assert.equal(log.closed, 1);
+});
+
+/** A class `Repo` in `src/b.ts` whose method `save` a call `this.repo.save` at line 9 of `run` may reach. */
+const REPO = fakeNode("Repo", "class", B, 1, 10);
+const REPO_SAVE = fakeNode("Repo.save", "method", B, 3, 5, "save");
+const FIELD_CALL: FakeUnresolved = { from: "run", name: "this.repo.save", kind: "calls", file: A, line: 9, column: 4 };
+const SAVE_PROOF = {
+  owner: { path: A, symbol: "Svc", line: 1 },
+  receiver: { path: B, symbol: "Repo", line: 1 },
+  member: { path: B, symbol: "save", line: 3 },
+  reference: { file: A, line: 9, column: 5, name: "this.repo.save", kind: "calls" as const },
+};
+const fieldCallOptions = (proofs: NonNullable<Options["proofs"]>): Options => ({
+  nodes: [SVC, RUN, REPO, REPO_SAVE],
+  edges: [...CONTAINS, { from: "Repo", to: "Repo.save", kind: "contains" }],
+  unresolved: [FIELD_CALL, OUTWARD_CALL("Repo.save", B, 4)],
+  proofs,
+});
+
+test("a member call the relations prove runs a repository method is a step at that method, not a cut at its name", async () => {
+  const fact = await factOf(fieldCallOptions({ memberUses: [SAVE_PROOF], externalUses: [] }));
+
+  assert.equal(fact.status, "complete");
+  const step = valueOf(fact).steps[1]!;
+  assert.deepEqual([step.symbol, step.parent, step.at, step.via], ["save", 0, { line: 9, column: 5 }, "call"]);
+});
+
+test("a member proof whose receiver a provider may replace, that names its place twice, or whose class the index does not place as the method's owner leaves the call a cut", async () => {
+  const substitutes = [{ class: { path: B, symbol: "Other", line: 20 }, at: { path: A, line: 2 } }];
+  const replaced = await factOf(fieldCallOptions({ memberUses: [{ ...SAVE_PROOF, substitutes }], externalUses: [] }));
+  const twice = await factOf(fieldCallOptions({ memberUses: [SAVE_PROOF], externalUses: [{ owner: SAVE_PROOF.owner, field: "repo", holds: "pkg#Repo", reference: SAVE_PROOF.reference }] }));
+  const misplaced = await factOf(fieldCallOptions({ memberUses: [{ ...SAVE_PROOF, receiver: { path: B, symbol: "Other", line: 20 } }], externalUses: [] }));
+
+  for (const fact of [replaced, twice, misplaced]) assert.deepEqual(cutsOf(fact), [["unresolved-link", ["src/a.ts:9 this.repo.save", "src/b.ts::Repo.save"]]]);
+});
+
+test("a call the relations prove runs on a field holding a package type is a leaf under that package, and a global type a global", async () => {
+  const proved = (holds: string) => fieldCallOptions({ memberUses: [], externalUses: [{ owner: SAVE_PROOF.owner, field: "repo", holds, reference: SAVE_PROOF.reference }] });
+
+  const [packaged, global] = await Promise.all([factOf(proved("@angular/common/http#HttpClient")), factOf(proved("global#Map"))]);
+
+  assert.equal(packaged.status, "complete");
+  assert.deepEqual(valueOf(packaged).steps[0]?.external, [{ kind: "import", module: "@angular/common/http", names: ["this.repo.save"] }]);
+  assert.deepEqual(valueOf(global).steps[0]?.external, [{ kind: "global", names: ["this.repo.save"] }]);
+});
+
+test("a member call whose plain receiver root the language's libraries bind is a global leaf, even when a repository declaration has its name", async () => {
+  const fact = await factOf({ nodes: [SVC, RUN, callee("max", B, 3)], edges: CONTAINS, unresolved: [{ from: "run", name: "Math.max", kind: "calls", file: A, line: 9, column: 4 }], roots: { max: { kind: "ambient", name: "Math" } } });
+
+  assert.equal(fact.status, "complete");
+  assert.deepEqual(valueOf(fact).steps[0]?.external, [{ kind: "global", names: ["Math.max"] }]);
+});
+
+test("a member call whose receiver root a package binds is a leaf under that package", async () => {
+  const fact = await factOf({ nodes: [SVC, RUN, callee("map", B, 3)], edges: CONTAINS, unresolved: [{ from: "run", name: "_.fp.map", kind: "calls", file: A, line: 9, column: 4 }], roots: { map: { kind: "external", module: "lodash" } } });
+
+  assert.equal(fact.status, "complete");
+  assert.deepEqual(valueOf(fact).steps[0]?.external, [{ kind: "import", module: "lodash", names: ["_.fp.map"] }]);
+});
+
+test("a member call on a call result or on this keeps its cut whatever its root is bound to", async () => {
+  const unresolved: FakeUnresolved[] = [{ from: "run", name: "Math.random().max", kind: "calls", file: A, line: 9, column: 4 }, { from: "run", name: "this.cache.max", kind: "calls", file: A, line: 10, column: 4 }];
+  const fact = await factOf({ nodes: [SVC, RUN, callee("max", B, 3)], edges: CONTAINS, unresolved, roots: { max: { kind: "ambient", name: "Math" } } });
+
+  assert.deepEqual(cutsOf(fact).map(([, at]) => (at as string[])[0]), ["src/a.ts:10 this.cache.max", "src/a.ts:9 Math.random().max"]);
+});
+
+/** A call `store.save()` at line 9, column 5 of `run`, whose receiver the source binds as `holds` says. */
+const boundCall = (holds: ReceiverBinding["holds"], member = "save"): Options => ({
+  nodes: [SVC, RUN, REPO, REPO_SAVE, fakeNode("Other.save", "method", A, 30, 32, "save")],
+  edges: [...CONTAINS, { from: "Repo", to: "Repo.save", kind: "contains" }],
+  unresolved: [{ from: "run", name: "store.save", kind: "calls", file: A, line: 9, column: 4 }, OUTWARD_CALL("Repo.save", B, 4)],
+  receiverBindings: { [A]: [{ line: 9, column: 5, receiver: "store", member, holds }] },
+  sources: [{ path: A, content: "" }],
+});
+
+test("a member call on a local the source binds to a class it declares, or to one whose name is rooted at a repository file, is a step at that class's method", async () => {
+  const declared = await factOf({ ...boundCall({ kind: "declared", name: "Repo", line: 1 }), nodes: [SVC, RUN, fakeNode("Repo", "class", A, 22, 28), fakeNode("Repo.save", "method", A, 24, 26, "save"), fakeNode("Other.save", "method", B, 30, 32, "save")], edges: [...CONTAINS, { from: "Repo", to: "Repo.save", kind: "contains" }], unresolved: [{ from: "run", name: "store.save", kind: "calls", file: A, line: 9, column: 4 }, OUTWARD_CALL("Repo.save", A, 25)], receiverBindings: { [A]: [{ line: 9, column: 5, receiver: "store", member: "save", holds: { kind: "declared", name: "Repo", line: 22 } }] }, sources: [{ path: A, content: "" }] });
+  const constructed = await factOf({ ...boundCall({ kind: "constructed", name: "Repo", line: 8, column: 17 }), roots: { Repo: { kind: "repository", file: B, bare: true } } });
+
+  for (const fact of [declared, constructed]) {
+    assert.equal(fact.status, "complete");
+    assert.deepEqual(valueOf(fact).steps.slice(1).map(({ symbol, at, via }) => [symbol, at, via]), [["save", { line: 9, column: 5 }, "call"]]);
+  }
+  assert.deepEqual([valueOf(declared).steps[1]?.file, valueOf(constructed).steps[1]?.file], [A, B]);
+});
+
+test("a member call on a local bound to a literal, or constructed from a name only the libraries declare, is a global leaf", async () => {
+  const literal = await factOf(boundCall({ kind: "literal", type: "Array" }));
+  const library = await factOf({ ...boundCall({ kind: "constructed", name: "Map", line: 8, column: 17 }), roots: { Map: { kind: "ambient", name: "Map", bare: true } } });
+
+  for (const fact of [literal, library]) {
+    assert.equal(fact.status, "complete");
+    assert.deepEqual(valueOf(fact).steps[0]?.external, [{ kind: "global", names: ["store.save"] }]);
+  }
+});
+
+test("a receiver binding for another member, a class the repository file does not declare, or an unproven root leaves the call a cut", async () => {
+  const cut = [["unresolved-link", ["src/a.ts:9 store.save", "src/a.ts::save", "src/b.ts::Repo.save"]]];
+  const otherMember = await factOf({ ...boundCall({ kind: "literal", type: "Array" }, "push") });
+  const elsewhere = await factOf({ ...boundCall({ kind: "constructed", name: "Repo", line: 8, column: 17 }), roots: { Repo: { kind: "repository", file: "src/c.ts", bare: true } } });
+  const unproven = await factOf(boundCall({ kind: "constructed", name: "Repo", line: 8, column: 17 }));
+
+  for (const fact of [otherMember, elsewhere, unproven]) assert.deepEqual(cutsOf(fact), cut);
+});
+
+test("an external leaf at or below a path the repository writes, under a package it writes through, or calling a member it writes on a prototype the receiver may inherit, stays a cut, wherever the walk settles it", async () => {
+  const globals = (...names: string[]): ReplacedRoots => written(...names.map((name) => [name]));
+  const packages = (...names: string[]): ReplacedRoots => ({ ...written(), packages: new Set(names) });
+  const memberCall = (name: string): FakeUnresolved[] => [{ from: "run", name, kind: "calls", file: A, line: 9, column: 4 }];
+  const homonym = callee("max", B, 3);
+  const external = (holds: string) => ({ ...fieldCallOptions({ memberUses: [], externalUses: [{ owner: SAVE_PROOF.owner, field: "repo", holds, reference: SAVE_PROOF.reference }] }) });
+  const cases: [string, Options][] = [
+    ["edge", { nodes: [SVC, RUN, callee("fetch")], edges: [...CONTAINS, call("run", "fetch", 8, 4)], roots: { fetch: { kind: "ambient", name: "fetch" } }, replaced: globals("fetch") }],
+    ["bare", { nodes: [SVC, RUN], edges: CONTAINS, unresolved: memberCall("fetch"), origins: { fetch: { kind: "ambient", name: "fetch" } }, replaced: globals("fetch") }],
+    ["bare package", { nodes: [SVC, RUN], edges: CONTAINS, unresolved: memberCall("tap"), origins: { tap: { kind: "external", module: "rxjs" } }, replaced: packages("rxjs") }],
+    ["rooted", { nodes: [SVC, RUN, homonym], edges: CONTAINS, unresolved: memberCall("Math.max"), roots: { max: { kind: "ambient", name: "Math" } }, replaced: globals("Math") }],
+    ["rooted package", { nodes: [SVC, RUN, homonym], edges: CONTAINS, unresolved: memberCall("_.fp.max"), roots: { max: { kind: "external", module: "lodash" } }, replaced: packages("lodash") }],
+    ["literal", { ...boundCall({ kind: "literal", type: "Array" }), replaced: globals("Array") }],
+    ["constructed", { ...boundCall({ kind: "constructed", name: "Map", line: 8, column: 17 }), roots: { Map: { kind: "ambient", name: "Map", bare: true } }, replaced: globals("Map") }],
+    ["field global", { ...external("global#Map"), replaced: globals("Map") }],
+    ["field package", { ...external("@angular/common/http#HttpClient"), replaced: packages("@angular/common") }],
+    ["every global", { ...boundCall({ kind: "literal", type: "Array" }), replaced: written(["*"]) }],
+    ["polyfill on a literal's type", { ...boundCall({ kind: "literal", type: "Array" }), replaced: written(["Array", "prototype", "*"]) }],
+    ["named member on a literal's type", { ...boundCall({ kind: "literal", type: "Array" }), replaced: written(["Array", "prototype", "save"]) }],
+    ["member every object inherits", { nodes: [SVC, RUN], edges: CONTAINS, unresolved: memberCall("Math.max"), roots: { max: { kind: "ambient", name: "Math" } }, replaced: written(["Object", "prototype", "max"]) }],
+    ["through the global object", { nodes: [SVC, RUN], edges: CONTAINS, unresolved: memberCall("window.fetch"), roots: { fetch: { kind: "ambient", name: "window" } }, replaced: written(["fetch"]) }],
+    ["unnamed, named on a prototype", { nodes: [SVC, RUN], edges: CONTAINS, unresolved: memberCall("list.push"), replaced: written(["Array", "prototype", "push"]) }],
+    ["unnamed, polyfill", { nodes: [SVC, RUN], edges: CONTAINS, unresolved: memberCall("list.push"), replaced: written(["Array", "prototype", "*"]) }],
+    ["rooted, on a prototype its receiver inherits", { nodes: [SVC, RUN], edges: CONTAINS, unresolved: memberCall("document.body.appendChild"), roots: { appendChild: { kind: "ambient", name: "document" } }, replaced: written(["Element", "prototype", "appendChild"]) }],
+    ["bare, on a prototype the global object inherits", { nodes: [SVC, RUN, callee("addEventListener")], edges: [...CONTAINS, call("run", "addEventListener", 8, 4)], roots: { addEventListener: { kind: "ambient", name: "addEventListener" } }, replaced: written(["EventTarget", "prototype", "addEventListener"]) }],
+    ["constructed, on a prototype its class inherits", { ...boundCall({ kind: "constructed", name: "Map", line: 8, column: 17 }), roots: { Map: { kind: "ambient", name: "Map", bare: true } }, replaced: written(["Base", "prototype", "save"]) }],
+  ];
+
+  for (const [name, options] of cases) {
+    const fact = await factOf(options);
+    assert.equal(fact.status, "partial", name);
+    assert.deepEqual(valueOf(fact).steps.flatMap((step) => step.external ?? []), [], name);
+  }
+});
+
+test("a write below another path, beside the called member, or on an object no receiver inherits from leaves the leaf external", async () => {
+  const memberCall = (name: string): FakeUnresolved[] => [{ from: "run", name, kind: "calls", file: A, line: 9, column: 4 }];
+  const cases: [string, Options][] = [
+    ["process.cwd beside process.env", { nodes: [SVC, RUN], edges: CONTAINS, unresolved: memberCall("process.cwd"), roots: { cwd: { kind: "ambient", name: "process" } }, replaced: written(["process", "env", "*"]) }],
+    ["unnamed beside process.env", { nodes: [SVC, RUN], edges: CONTAINS, unresolved: memberCall("list.push"), replaced: written(["process", "env", "*"]) }],
+    ["unnamed beside another prototype member", { nodes: [SVC, RUN], edges: CONTAINS, unresolved: memberCall("list.push"), replaced: written(["Array", "prototype", "flat"]) }],
+    ["literal beside another member", { ...boundCall({ kind: "literal", type: "Array" }), replaced: written(["Array", "prototype", "flat"]) }],
+    ["rooted below its member", { nodes: [SVC, RUN], edges: CONTAINS, unresolved: memberCall("Math.max"), roots: { max: { kind: "ambient", name: "Math" } }, replaced: written(["Math", "max", "extra"]) }],
+  ];
+
+  for (const [name, options] of cases) assert.equal(valueOf(await factOf(options)).steps.flatMap((step) => step.external ?? []).length, 1, name);
 });

@@ -1,5 +1,4 @@
 import { kindOfChangedFile } from "../../domain/change/changed-file.ts";
-import type { MemberProofContext } from "../../domain/relations/member-use.ts";
 import { isTypeScriptSource } from "../../domain/languages/typescript.ts";
 import type { DeclaredScope } from "../../domain/shared/fact.ts";
 import { referenceKey, rootedName, uniqueReferenceKeys } from "../../domain/impact/impact-cuts.ts";
@@ -63,8 +62,3 @@ export interface ReferenceProofs {
   thisMemberCalls: ReadonlySet<string>;
 }
 
-export function memberProofContextOf(tree: Pick<CommitExtraction, "export" | "sources">, scope: DeclaredScope): MemberProofContext {
-  if (scope.include.length > 0 || scope.exclude.length > 0 || tree.export.stopped !== undefined || tree.export.skipped.length > 0) return { completeSource: false };
-  const sources = new Set(tree.sources.map(({ path }) => path));
-  return { completeSource: tree.export.files.every(({ path, written }) => !isTypeScriptSource(path) || (written && sources.has(path))) };
-}

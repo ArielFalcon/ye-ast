@@ -63,6 +63,27 @@ export interface ImportOrigins {
    * spells another name, the name is dynamic, or nothing proves a binding.
    */
   rootBindings(sites: readonly UseSite[], signal?: AbortSignal): Promise<readonly RootBinding[]>;
+  /**
+   * Where the repository may run its own code where a library's is expected: the path of every global the snapshot
+   * declares, every member path a source writes from a global (`Math.max = f`, `Array.prototype[k] = f`,
+   * `globalThis.fetch = f`, `Object.assign(process.env, vars)`), and every package a source writes through an import of
+   * (`_.map = f`). An external call at or below one of them proves nothing.
+   */
+  replacedRoots(signal?: AbortSignal): Promise<ReplacedRoots>;
+}
+
+export interface ReplacedRoots {
+  /**
+   * Member paths from the global they start at (`["Array", "prototype", "push"]`), sorted. A `*` segment is a name no
+   * write states and stands for every name in its place, so `["process", "env", "*"]` covers `process.env.HOME` and not
+   * `process.cwd`; a path that starts at `*` starts at a global no name states (`*.prototype.push` for
+   * `value.__proto__.push = f`).
+   */
+  paths: readonly (readonly string[])[];
+  /** Names that hold the global object itself: a call's path through one starts at the global after it. */
+  globalObjects: ReadonlySet<string>;
+  /** Package names, as an import specifier's first one or two segments name them (`lodash`, `@angular/core`). */
+  packages: ReadonlySet<string>;
 }
 
 /** A place a declaration uses a name, where the index places the use: repository-relative and 1-based. */
@@ -93,6 +114,8 @@ export type RootBinding =
   | { kind: "local"; root: string }
   | { kind: "located"; root: string; file: string; path: string }
   | { kind: "ambient"; root: string }
+  /** The sources name more than one declaration the root could be, or only a wildcard import could supply it. */
+  | { kind: "ambiguous"; root: string }
   | { kind: "this"; member?: string }
   | { kind: "unknown" };
 

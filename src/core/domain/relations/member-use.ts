@@ -20,3 +20,15 @@ export interface MemberSubstitute {
 export interface MemberProofContext {
   completeSource: boolean;
 }
+
+/**
+ * A call through a field whose initializer holds a type from outside the repository, `<module>#<name>` or
+ * `global#<name>`, proven by the same evidence as a `MemberUseOrigin`: the call runs on an instance of the owner, nothing
+ * writes the field, and no provider replaces its token.
+ */
+export interface ExternalMemberUseOrigin {
+  owner: SymbolRef;
+  field: string;
+  holds: string;
+  reference: ReferenceSite & { name: string; kind: "calls" };
+}

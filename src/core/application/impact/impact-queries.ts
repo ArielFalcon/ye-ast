@@ -46,7 +46,8 @@ import { createHeadReader, preparedLive, withLiveCapture, type FactSpec, type He
 import { readImporters } from "./importers.ts";
 import { inboundEdgesOf } from "./inbound-origins.ts";
 import type { EdgeCorrections, InboundEdges } from "./inbound-edges.ts";
-import { memberProofContextOf, referenceProofsOf, unresolvedOf, type ReferenceProofs } from "./reference-origins.ts";
+import { retainedRelations } from "../relations/retained-relations.ts";
+import { referenceProofsOf, unresolvedOf, type ReferenceProofs } from "./reference-origins.ts";
 import { walkImpact, type Walk } from "./walk.ts";
 import type { ImportOrigins, ImportOriginsReader } from "../../ports/import-origins.port.ts";
 import { createEdgeTargets, edgeKey, type EdgeTargets, type EdgeTargetsDeps, type FollowedEdge } from "../navigation/edge-targets.ts";
@@ -98,10 +99,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
   };
   const retainedOf = <T>(prepared: PreparedCommit | undefined, slot: string, produce: () => Promise<T>, signal: AbortSignal | undefined): Promise<T> =>
     prepared?.retained === undefined ? produce() : prepared.retained(slot, produce, signal);
-  const relationsOf = (prepared: PreparedCommit | undefined, tree: CommitExtraction, request: { scope?: ScopeRequest; signal?: AbortSignal }) => {
-    const memberProofs = memberProofContextOf(tree, declaredScope(request.scope));
-    return retainedOf(prepared, canonicalJson({ output: "relations", memberProofs }), () => deps.relations.extract(tree.sources, { memberProofs }), request.signal);
-  };
+  const relationsOf = (prepared: PreparedCommit | undefined, tree: CommitExtraction, request: { scope?: ScopeRequest; signal?: AbortSignal }) => retainedRelations(deps.relations, prepared, tree, request);
   const moduleDependenciesOf = (reader: ModuleDependenciesReader, prepared: PreparedCommit | undefined, tree: Pick<CommitExtraction, "sources">, signal: AbortSignal | undefined) =>
     retainedOf(prepared, canonicalJson({ output: "module-dependencies" }), () => reader.extract(tree.sources), signal);
   const headReader = createHeadReader(deps);

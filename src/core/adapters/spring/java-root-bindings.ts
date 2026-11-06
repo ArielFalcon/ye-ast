@@ -14,7 +14,9 @@ const CHAIN_LINKS: readonly string[] = ["field_access", "method_invocation", "sc
  * `ImportOrigins.rootBindings` for Java sources, from the types the snapshot's Java sources declare (`java-symbols`): a
  * local or parameter is declared in the file, a field or a method of the enclosing types is a member of `this`, a type
  * the sources declare is located by its fully qualified name, and a type a single import or `java.lang` names under a
- * platform package is external. A name only a wildcard import could supply stays unknown: `java.lang` may supply it too. Every Java source is read when a site asks, and released after.
+ * platform package is external. A name only a wildcard import supplies is not proved, since `java.lang` may supply it
+ * too: ambiguous when the sources declare it, unknown otherwise. Every Java source is read when a site asks, and
+ * released after.
  */
 export function createJavaRootBindings(parser: Promise<JavaParser>, sources: readonly SourceFile[]): ImportOrigins["rootBindings"] {
   const java = sources.filter(({ path }) => isJavaSource(path));
@@ -48,9 +50,8 @@ function bindingAt(site: UseSite, file: JavaFile, project: JavaProject): RootBin
   const spelled = spelledAt(file.root, site);
   if (spelled === undefined) return UNKNOWN;
   const whole = chainFrom(spelled);
-  const names = chainNames(whole);
   const head = headOf(whole);
-  const member = names[1];
+  const member = chainNames(whole)[1];
   if (head.type === "this") return { kind: "this", ...(member === undefined ? {} : { member }) };
   if (head.type === "super") {
     const base = enclosingType(head, file, project)?.node.childForFieldName("superclass")?.namedChildren[0];
@@ -94,12 +95,15 @@ function typeBinding(name: Node, file: JavaFile, project: JavaProject, owner: Us
   const variable = typeVariableAround(name);
   if (variable !== undefined) return declaredBinding(name, variable, owner);
   const declared = project.lookupType(name.text, { file, type });
-  if (declared === "ambiguous") return UNKNOWN;
-  /** A type only a wildcard import supplies may also be one `java.lang` supplies, so the sources do not prove it. */
-  if (declared !== undefined && project.lookupType(name.text, { file: { ...file, onDemandImports: [] }, type }) === undefined) return UNKNOWN;
+  if (declared === "ambiguous") return { kind: "ambiguous", root: name.text };
+  if (declared !== undefined && project.lookupType(name.text, { file: { ...file, onDemandImports: [] }, type }) === undefined) return { kind: "ambiguous", root: name.text };
   if (declared !== undefined) return { kind: "located", root: name.text, file: declared.file.path, path: declared.fqn };
   const named = qualifiedTypeName(name.text, { file, type }, project);
-  return named !== undefined && project.isPlatformName(named) ? { kind: "import", root: name.text, origin: { kind: "external", module: named.slice(0, named.lastIndexOf(".")) } } : UNKNOWN;
+  return (named === undefined ? undefined : platformImport(name.text, named, project)) ?? UNKNOWN;
+}
+
+function platformImport(root: string, qualifiedName: string, project: JavaProject): RootBinding | undefined {
+  return project.isPlatformName(qualifiedName) ? { kind: "import", root, origin: { kind: "external", module: qualifiedName.slice(0, qualifiedName.lastIndexOf(".")) } } : undefined;
 }
 
 /** The identifier, type name, `this` or `super` the site spells, starting where the index places it; an instantiation stands for its class. */
@@ -169,5 +173,5 @@ function staticImport(name: string, file: JavaFile, project: JavaProject): RootB
   const { className } = imported[0]!;
   const declared = project.lookupType(className, { file, type: undefined });
   if (declared !== undefined && declared !== "ambiguous") return { kind: "located", root: name, file: declared.file.path, path: `${declared.fqn}.${name}` };
-  return project.isPlatformName(className) ? { kind: "import", root: name, origin: { kind: "external", module: className.slice(0, className.lastIndexOf(".")) } } : undefined;
+  return platformImport(name, className, project);
 }

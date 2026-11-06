@@ -702,6 +702,135 @@ test("a trace over a real index follows a call to an object literal's function, 
   assert.deepEqual(answer.value.status === "partial" && answer.value.cuts.map((cut) => cut.at), [["src/table.ts:6 price.toFixed().format", "src/table.ts::format"]]);
 });
 
+test("callers and a trace at one snapshot read the relations once, under the one retained key", async () => {
+  writeFileSync(join(repo, "src", "shared.ts"), ["export function shared(items: number[]): void {", "  items.forEach(String);", "}", ""].join("\n"));
+  git("add", "-A");
+  git("commit", "-q", "-m", "shared");
+  const lines: string[] = [];
+  const { impact, trace } = composeQueries({ scratchRoot, measure: (line) => lines.push(line) });
+  const relationReads = (): number => lines.filter((line) => { const record = JSON.parse(line).ye_ast as { event: string; stage?: string }; return record.event === "stage" && record.stage === "relations"; }).length;
+  const target = { file: "src/shared.ts", symbol: "shared" };
+
+  assert.ok((await impact.callers({ repo, repoId: "shop-service", revision: "HEAD", targets: [target] })).ok);
+  assert.equal(relationReads(), 1);
+  assert.ok((await trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [target] })).ok);
+
+  assert.equal(relationReads(), 1);
+});
+
+test("a trace over a real index leaves a library global's member call as a global leaf, and keeps it a cut where a local shadows the global", async () => {
+  writeFileSync(join(repo, "src", "clamp.ts"), ["export function clamp(value: number): number {", "  return Math.max(value, 0);", "}", "export function max(value: number): number {", "  return value;", "}", ""].join("\n"));
+  writeFileSync(join(repo, "src", "shadow.ts"), ["import { max } from './clamp';", "export function shadowed(value: number): number {", "  const Math = { max };", "  return Math.max(value);", "}", ""].join("\n"));
+  git("add", "-A");
+  git("commit", "-q", "-m", "roots");
+  const { trace } = composeQueries({ scratchRoot });
+
+  const [plain, shadowed] = await Promise.all([
+    trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: "src/clamp.ts", symbol: "clamp" }] }),
+    trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: "src/shadow.ts", symbol: "shadowed" }] }),
+  ]);
+
+  assert.ok(plain.ok && shadowed.ok);
+  assert.equal(plain.value.status, "complete");
+  assert.deepEqual(plain.value.status === "complete" && plain.value.value.steps[0]?.external, [{ kind: "global", names: ["Math.max"] }]);
+  assert.equal(shadowed.value.status, "partial");
+  assert.deepEqual(shadowed.value.status === "partial" && shadowed.value.cuts.map((cut) => cut.at[0]), ["src/shadow.ts:4 Math.max"]);
+});
+
+/** Repository functions named like library members, so a member call settled by its name alone is a cut. */
+const HOMONYMS = ["export function push(): void {}", "export function test(): void {}", "export function set(): void {}", "export function save(): void {}", "export class Other {", "  save(): void {}", "}", ""].join("\n");
+
+test("a trace over a real index settles a member call on a local every store binds to one literal type, one library class or one repository class", async () => {
+  writeFileSync(join(repo, "src", "homonyms.ts"), HOMONYMS);
+  writeFileSync(join(repo, "src", "store.ts"), ["export class Store {", "  save(): void {", "    Date.now();", "  }", "}", ""].join("\n"));
+  writeFileSync(join(repo, "src", "locals.ts"), [
+    "import { Store } from './store';",
+    "class Local {",
+    "  save(): void {",
+    "    Date.now();",
+    "  }",
+    "}",
+    "export function locals(flag: boolean): void {",
+    "  let parts = ['a'];",
+    "  if (flag) parts = [];",
+    "  parts.push('b');",
+    "  const pattern = /x/;",
+    "  pattern.test('x');",
+    "  const label = `x`;",
+    "  label.toString();",
+    "  const cache = new Map();",
+    "  cache.set('k', 1);",
+    "  let local;",
+    "  local = new Local();",
+    "  local.save();",
+    "  let store;",
+    "  store = new Store();",
+    "  store.save();",
+    "}",
+    "",
+  ].join("\n"));
+  git("add", "-A");
+  git("commit", "-q", "-m", "locals");
+  const { trace } = composeQueries({ scratchRoot });
+
+  const answer = await trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: "src/locals.ts", symbol: "locals" }] });
+
+  assert.ok(answer.ok);
+  assert.equal(answer.value.status, "complete");
+  const [root, ...steps] = answer.value.status === "complete" ? answer.value.value.steps : [];
+  assert.deepEqual(root?.external, [{ kind: "global", names: ["Map", "cache.set", "label.toString", "parts.push", "pattern.test"] }]);
+  assert.deepEqual(steps.map(({ file, symbol, at }) => [file, symbol, at?.line]), [["src/locals.ts", "save", 19], ["src/store.ts", "save", 22]]);
+});
+
+test("a trace over a real index keeps a member call on a local a cut when a store disagrees, the value escapes or is written through, or the binding is not the file's own", async () => {
+  writeFileSync(join(repo, "src", "homonyms.ts"), HOMONYMS);
+  writeFileSync(join(repo, "src", "guarded.ts"), [
+    "import { other, patch } from './other';",
+    "export function guarded(param: string[]): void {",
+    "  let mixed = new Map();",
+    "  mixed = other();",
+    "  mixed.set('k', 1);",
+    "  let counted = 'a';",
+    "  counted += 'b';",
+    "  counted.test();",
+    "  const leaked: string[] = [];",
+    "  patch(leaked);",
+    "  leaked.push('a');",
+    "  const patched: string[] = [];",
+    "  patched.push = other;",
+    "  patched.push('a');",
+    "  param.push('a');",
+    "  const [first] = [[]];",
+    "  first.push('a');",
+    "  exported.push('a');",
+    "}",
+    "export const exported: string[] = [];",
+    "",
+  ].join("\n"));
+  writeFileSync(join(repo, "src", "other.ts"), ["export function other(): any { return new Map(); }", "export function patch(value: unknown): void {}", ""].join("\n"));
+  writeFileSync(join(repo, "src", "script.ts"), ["var shared = [];", "function scripted(scope) {", "  shared.push('a');", "  var dynamic = [];", "  with (scope) { dynamic = other; }", "  dynamic.push('a');", "}", ""].join("\n"));
+  git("add", "-A");
+  git("commit", "-q", "-m", "guarded");
+  const { trace } = composeQueries({ scratchRoot });
+
+  const [guarded, scripted] = await Promise.all([
+    trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: "src/guarded.ts", symbol: "guarded" }] }),
+    trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: "src/script.ts", symbol: "scripted" }] }),
+  ]);
+
+  assert.ok(guarded.ok && scripted.ok);
+  assert.deepEqual(guarded.value.status === "partial" && guarded.value.cuts.map((cut) => cut.at[0]), [
+    "src/guarded.ts:11 leaked.push",
+    "src/guarded.ts:14 patched.push",
+    "src/guarded.ts:15 param.push",
+    "src/guarded.ts:17 first.push",
+    "src/guarded.ts:18 exported.push",
+    "src/guarded.ts:5 mixed.set",
+    "src/guarded.ts:8 counted.test",
+  ]);
+  assert.deepEqual(scripted.value.status === "partial" && scripted.value.cuts.map((cut) => cut.at[0]), ["src/script.ts:3 shared.push", "src/script.ts:6 dynamic.push"]);
+});
+
 test("a trace over a real index keeps a member call to a namespace's function a cut, never a false external", async () => {
   writeFileSync(join(repo, "src", "space.ts"), [
     "export namespace N { export function nsMethod() {} }",
@@ -844,7 +973,7 @@ test("a trace over a real index roots at a property whose initializer makes call
   assert.ok(submit.ok && submit.value.status === "complete");
   assert.deepEqual(submit.value.value.steps.map(({ symbol, kind, leaves }) => ({ symbol, kind, leaves: leaves?.map((leaf) => leaf.symbol) })), [{ symbol: "submitForm", kind: "property", leaves: ["form", "save"] }]);
   assert.ok(stamp.ok && stamp.value.status === "complete");
-  assert.deepEqual(stamp.value.value.steps.map(({ symbol, external }) => ({ symbol, external })), [{ symbol: "stamp", external: [{ kind: "unnamed", names: ["Date.now"] }] }]);
+  assert.deepEqual(stamp.value.value.steps.map(({ symbol, external }) => ({ symbol, external })), [{ symbol: "stamp", external: [{ kind: "global", names: ["Date.now"] }] }]);
   assert.ok(range.ok && range.value.status === "complete");
   assert.deepEqual(range.value.value.steps.map(({ symbol }) => symbol), ["submitForm"]);
   assert.ok(!label.ok && label.fault.kind === "unknown-symbol");

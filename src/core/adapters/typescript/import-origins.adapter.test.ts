@@ -494,6 +494,104 @@ test("a library name a module declares at its top level is not global, so its us
   assert.deepEqual(await globalRootOf(module, "new Headers()", "instantiates", "Headers"), { status: "complete", value: { kind: "ambient", name: "Headers" }, evidence: [{ path: "src/use.ts", line: 2 }], bare: true });
 });
 
+const replacedRootsOf = (...lines: string[]) => {
+  const manifest = { path: "package.json", content: JSON.stringify({ dependencies: { lodash: "4.0.0" } }) };
+  return createImportOrigins([manifest, { path: "src/patch.ts", content: ["export {};", ...lines].join("\n") }]).replacedRoots();
+};
+
+const writtenBy = async (...lines: string[]) => {
+  const roots = await replacedRootsOf(...lines);
+  return { paths: roots.paths.map((path) => path.join(".")), packages: [...roots.packages].sort() };
+};
+
+const pathsWrittenBy = async (...lines: string[]) => (await writtenBy(...lines)).paths;
+
+test("a source that writes through a global, directly, through the global object or a writing call, writes the member path from that global", async () => {
+  for (const [line, path] of [
+    ["Math.max = () => 0;", "Math.max"],
+    ["Map.prototype.get = function get() { return 1; };", "Map.prototype.get"],
+    ["Math.seed += 1;", "Math.seed"],
+    ["Math.seed++;", "Math.seed"],
+    ["delete JSON.parse;", "JSON.parse"],
+    ["[Math.max] = [() => 0];", "Math.max"],
+    ["for (Math.seed of [1]) {}", "Math.seed"],
+    ["globalThis.Math.max = () => 0;", "Math.max"],
+    ["window.fetch = () => undefined;", "fetch"],
+    ["Object.defineProperty(Array.prototype, 'push', { value: () => 0 });", "Array.prototype.push"],
+    ["Reflect.set(String.prototype, 'trim', () => '');", "String.prototype.trim"],
+    ["Object.defineProperty(globalThis, 'fetch', { value: () => undefined });", "fetch"],
+    ["Array.prototype = [];", "Array.prototype.*"],
+  ] as const) assert.deepEqual(await writtenBy(line), { paths: [path], packages: [] }, line);
+  assert.deepEqual(await pathsWrittenBy("Object.assign(Math, { max: () => 0, min: () => 0 });"), ["Math.max", "Math.min"]);
+});
+
+test("a member a write does not state is every member below its path, and only below it", async () => {
+  for (const [line, path] of [
+    ["for (const key of keys) Array.prototype[key] = impl[key];", "Array.prototype.*"],
+    ["Array.prototype[name] = () => 0;", "Array.prototype.*"],
+    ["Object.assign(process.env, vars);", "process.env.*"],
+    ["const host = process.env; host[name] = 'on';", "process.env.*"],
+    ["Object.setPrototypeOf(Array.prototype, impl);", "Array.prototype.*"],
+    ["globalThis[name] = 1;", "*"],
+    ["Object.defineProperty(globalThis, name, {});", "*"],
+    ["value.__proto__.push = () => 0;", "*.prototype.push"],
+    ["Object.getPrototypeOf([]).push = () => 0;", "*.prototype.push"],
+  ] as const) assert.deepEqual(await pathsWrittenBy("declare const keys: string[], name: string, impl: any, vars: object, value: any;", line), [path], line);
+});
+
+test("an alias stands for the path it is declared from: an initializer, a destructured key, index or rename, a nested pattern, a parameter's default, or a literal's member", async () => {
+  for (const [line, path] of [
+    ["const { prototype } = Array; prototype.push = () => 0;", "Array.prototype.push"],
+    ["const { prototype: proto } = Array; proto.push = () => 0;", "Array.prototype.push"],
+    ["const { prototype: { push } } = Array; push.extra = 1;", "Array.prototype.push.extra"],
+    ["const [entry] = Array.prototype; entry.extra = 1;", "Array.prototype.0.extra"],
+    ["const A = Array; const P = A.prototype; P.push = () => 0;", "Array.prototype.push"],
+    ["const { prototype } = Array; Object.defineProperty(prototype, 'push', { value: () => 0 });", "Array.prototype.push"],
+    ["function patch(proto = Array.prototype) { proto.push = () => 0; }", "Array.prototype.push"],
+    ["function patch({ prototype } = Array) { prototype.push = () => 0; }", "Array.prototype.push"],
+    ["const { Array: List } = globalThis; List.prototype.push = () => 0;", "Array.prototype.push"],
+    ["[Array][0].prototype.push = () => 0;", "Array.prototype.push"],
+    ["const holder = { list: Array }; holder.list.prototype.push = () => 0;", "Array.prototype.push"],
+    ["const holder = { ...mixin, list: Array }; holder.list.prototype.push = () => 0;", "Array.prototype.push"],
+    ["const { [name]: picked } = Array; picked.push = () => 0;", "Array.*.push"],
+    ["const { ...rest } = Math; rest.max = () => 0;", "Math.*.max"],
+  ] as const) assert.deepEqual(await pathsWrittenBy("declare const name: string, mixin: object;", line), [path], line);
+  assert.deepEqual(await pathsWrittenBy("declare const flag: boolean;", "(flag ? Array : Map).prototype.push = () => 0;"), ["Array.prototype.push", "Map.prototype.push"]);
+});
+
+test("a write through a local named like a global, through this, into a local or into a call's result writes nothing global", async () => {
+  assert.deepEqual(
+    await writtenBy(
+      "const { inner } = { inner: { y: 0 } }; inner.y = 1;",
+      "let current = { entries: 0, list: [] as Item[], max: Math.max }; current.entries++; current.list = [];",
+      "const kinds = { list: Array }; kinds.list = Map;",
+      "function g({ x }: { x: { y: number } }) { x.y = 1; }",
+      "function f(Math: { max(): number }) { Math.max = () => 0; }",
+      "class C { x = 0; set() { this.x = 1; } }",
+      "let count = 0; count++;",
+      "hasOwnProperty.call({}, \"a\"); constructor.name.at(0);",
+      "Object.assign(Object.create(null), {});",
+      "const made = Object.create(null); made.x = 1;",
+    ),
+    { paths: [], packages: [] },
+  );
+});
+
+test("a write through an import of a package replaces that package, and one of a repository module nothing", async () => {
+  assert.deepEqual(await writtenBy("import _ from 'lodash';", "import * as local from './local';", "_.map = () => [];", "local.helper = () => undefined;"), { paths: [], packages: ["lodash"] });
+});
+
+test("a name a with body or a direct eval may rebind proves no origin, while the same name outside them still does", async () => {
+  const file = "src/dynamic.ts";
+  const lines = ["function inside(scope: object) {", "  with (scope) { Math.max(1); fetch(''); }", "}", "function outside() { Math.max(1); fetch(''); }"];
+  const reader = createImportOrigins([{ path: file, content: lines.join("\n") }]);
+  const column = (line: number, text: string, from = 0) => lines[line - 1]!.indexOf(text, from) + 1;
+  const roots = await reader.rootOrigins([2, 4].map((line) => ({ file, line, column: column(line, "Math.max"), kind: "calls", name: "max" })));
+  const bare = await reader.origins([2, 4].map((line) => ({ file, line, column: column(line, "fetch("), name: "fetch", fullName: "fetch", kind: "calls" })));
+  assert.deepEqual(roots.map((root) => root.status), ["unknown", "complete"]);
+  assert.deepEqual(bare.map((origin) => origin.status), ["unknown", "complete"]);
+});
+
 const USES: SourceFile = {
   path: "src/uses.ts",
   content: [

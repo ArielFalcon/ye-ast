@@ -1,9 +1,11 @@
 import { posix } from "node:path";
 import ts from "typescript";
 import { sourceTree } from "./source-tree.ts";
+import { bindFile, unwrapped } from "./lexical-bindings.ts";
+import { TYPESCRIPT_LIB_GLOBALS } from "./typescript-lib-globals.ts";
 import { isAngularWorkspace, isTypeScriptSource } from "../../domain/languages/typescript.ts";
 import type { AngularClass, Operand, TemplateSource } from "../../domain/relations/angular-class.ts";
-import type { MemberProofContext, MemberSubstitute, MemberUseOrigin } from "../../domain/relations/member-use.ts";
+import type { ExternalMemberUseOrigin, MemberProofContext, MemberSubstitute, MemberUseOrigin } from "../../domain/relations/member-use.ts";
 import type { FieldOrigin, LocalOrigin } from "../../domain/relations/field-origin.ts";
 import { relation, type Relation, type SymbolRef } from "../../domain/relations/relation.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
@@ -50,6 +52,7 @@ async function readMetadata(files: readonly SourceFile[], proof?: MemberProofCon
   const fields: FieldOrigin[] = [];
   const locals: LocalOrigin[] = [];
   const memberUses: MemberUseOrigin[] = [];
+  const externalUses: ExternalMemberUseOrigin[] = [];
   const manifests = manifestsOf(files);
   const replaced = replacedFiles(files);
   for (const [project, sources] of byProject) {
@@ -62,13 +65,14 @@ async function readMetadata(files: readonly SourceFile[], proof?: MemberProofCon
     fields.push(...metadata.fields);
     locals.push(...metadata.locals);
     memberUses.push(...(metadata.memberUses ?? []));
+    externalUses.push(...(metadata.externalUses ?? []));
   }
   return {
     classes: classes.sort((a, b) => (a.ref.path < b.ref.path ? -1 : a.ref.path > b.ref.path ? 1 : a.ref.line - b.ref.line)),
     findings,
     fields: fields.sort((a, b) => compareText(a.owner.path, b.owner.path) || a.owner.line - b.owner.line || compareText(a.field, b.field)),
     locals: locals.sort((a, b) => compareText(a.owner.path, b.owner.path) || a.owner.line - b.owner.line || compareText(a.local, b.local)),
-    ...(proof === undefined ? {} : { memberUses }),
+    ...(proof === undefined ? {} : { memberUses, externalUses }),
   };
 }
 
@@ -499,6 +503,7 @@ async function readProject(contents: ReadonlyMap<string, SourceFile>, packages: 
     };
   }
   const memberUses: MemberUseOrigin[] = [];
+  const externalUses: ExternalMemberUseOrigin[] = [];
   const risks = scope === undefined ? undefined : await risksOf(scope);
   if (scope !== undefined && risks !== undefined) {
     const fieldsByOwner = Map.groupBy(proofFields, (field) => `${field.owner.path}\0${field.owner.line}\0${field.field}`);
@@ -553,7 +558,12 @@ async function readProject(contents: ReadonlyMap<string, SourceFile>, packages: 
         if (candidates.length !== 1 || rawFields.length !== 1) return;
         const field = candidates[0]!;
         const raw = rawFields[0]!;
-        if (risks.reaches(field.owner, call.field) || !("class" in field.holds) || "opaque" in raw.target || (raw.via === "inject" && angularShadow) || (template && raw.via !== "inject")) return;
+        if (risks.reaches(field.owner, call.field) || "opaque" in raw.target || (raw.via === "inject" && angularShadow) || (template && raw.via !== "inject")) return;
+        if ("external" in field.holds) {
+          const proven = field.holds.external.startsWith("global#") ? constructsLibraryGlobal(file, contents.get(file)?.content, call.owner, call.field) : raw.via !== "inject" || !substituted.has(holdsKey(field.holds));
+          if (!template && proven) externalUses.push({ owner: field.owner, field: call.field, holds: field.holds.external, reference });
+          return;
+        }
         const receiver = field.holds.class;
         const proof = await memberOf(file, source, raw.target.reference, receiver, call.member);
         if (proof !== undefined) memberUses.push({ ...proven(field.owner, receiver, proof, reference), ...(template ? { template: true as const } : {}) });
@@ -580,7 +590,30 @@ async function readProject(contents: ReadonlyMap<string, SourceFile>, packages: 
       }
     }
   }
-  return { classes, findings: [...findings, ...injects.values()], fields, locals, ...(proveMembers ? { memberUses } : {}) };
+  return { classes, findings: [...findings, ...injects.values()], fields, locals, ...(proveMembers ? { memberUses, externalUses } : {}) };
+}
+
+/**
+ * Whether the field's initializer constructs a name that, by the binder (ADR-0029), binds nothing the file declares or
+ * imports and is not in a dynamic scope, and that the language's libraries declare. The unresolved-name fallback of a
+ * field origin proves neither: a generated or unavailable class is unresolved too.
+ */
+const LIBRARY_GLOBALS: ReadonlySet<string> = new Set(TYPESCRIPT_LIB_GLOBALS);
+
+function constructsLibraryGlobal(path: string, content: string | undefined, owner: { name: string; line: number }, field: string): boolean {
+  if (content === undefined) return false;
+  const { tree, bindingOf } = bindFile(path, content);
+  const initializers: ts.Expression[] = [];
+  const visit = (node: ts.Node): void => {
+    if (ts.isClassLike(node) && node.name?.text === owner.name) {
+      for (const member of node.members) if (ts.isPropertyDeclaration(member) && member.name.getText(tree) === field && member.initializer !== undefined) initializers.push(unwrapped(member.initializer));
+    }
+    node.forEachChild(visit);
+  };
+  visit(tree);
+  const only = initializers.length === 1 ? initializers[0] : undefined;
+  const name = only !== undefined && ts.isNewExpression(only) && ts.isIdentifier(only.expression) ? only.expression : undefined;
+  return name !== undefined && LIBRARY_GLOBALS.has(name.text) && bindingOf(name).kind === "none";
 }
 
 function holdsKey(holds: FieldOrigin["holds"]): string {

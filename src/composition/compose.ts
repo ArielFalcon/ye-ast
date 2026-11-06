@@ -176,6 +176,7 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
         names: [...new Set([...typescript.names, ...java.names])].sort(compareText),
         functionValueCalls: [...typescript.functionValueCalls, ...java.functionValueCalls],
         callables: [...typescript.callables, ...java.callables],
+        receiverBindings: [...typescript.receiverBindings, ...java.receiverBindings],
       };
     },
   };
@@ -282,7 +283,7 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
     digest,
     matcher,
     producer: { name: PRODUCER_NAME, version },
-    engines: { ...entrypointEngines, [CODEGRAPH_PACKAGE]: codegraph },
+    engines: { ...entrypointEngines, [CODEGRAPH_PACKAGE]: codegraph, ...impactDeps.angularEngines },
     live,
     ...budget,
     ...trust,
@@ -290,6 +291,7 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
     moduleDependencies,
     sourceTrivia,
     memberNames,
+    relations: impactDeps.relations,
     sourceSelection: isWritten,
   });
   const trace = measurement === undefined ? bareTrace : measuredTrace(bareTrace, measurement);

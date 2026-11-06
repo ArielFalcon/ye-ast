@@ -115,7 +115,7 @@ function isLexicalReference(identifier: ts.Identifier): boolean {
 }
 
 /** A call of `eval` itself, through parentheses or erased type syntax; `(0, eval)(...)` and `eval?.(...)` are indirect and see only the global scope. */
-function isDirectEval(call: ts.CallExpression): boolean {
+export function isDirectEval(call: ts.CallExpression): boolean {
   if (call.questionDotToken !== undefined) return false;
   const callee = unwrapped(call.expression);
   return ts.isIdentifier(callee) && callee.text === "eval";

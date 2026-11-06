@@ -9,9 +9,8 @@ import type { Result } from "../../domain/shared/result.ts";
 import type { OutlineValue } from "../../domain/outline/outline-fact.ts";
 import type { OutlineFault, OutlineQueries, OutlineSelector } from "../../ports/outline-queries.port.ts";
 import { ABORTED } from "../snapshot/read-snapshot.ts";
-import { createHeadReader, type FactSpec, type HeadReaderDeps, type HeadReading } from "../snapshot/head-reading.ts";
+import { createHeadReader, type FactSpec, type HeadReaderDeps } from "../snapshot/head-reading.ts";
 import type { ModuleDependencies } from "../../domain/impact/module-dependency.ts";
-import type { CommitExtraction } from "../snapshot/read-snapshot.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { ModuleDependenciesReader } from "../../ports/module-dependencies.port.ts";
 import type { UnmodelledConstructsReader } from "../../ports/unmodelled-constructs.port.ts";
@@ -40,8 +39,9 @@ export function createOutlineQueries(deps: OutlineQueriesDeps): OutlineQueries {
       const files = sortedUnique(focus === undefined ? request.files ?? [] : focus.map(({ file }) => file));
       const spec: FactSpec = { declaredConfig: focus === undefined ? { files } : { focus: focus.map(selectorKey) }, engines };
 
-      const answer = async (head: HeadReading<Pick<CommitExtraction, "export">>, sources: readonly SourceFile[]): Promise<Result<Fact<OutlineValue>, OutlineFault>> => {
+      return headReader.atSources(request, spec, async (head): Promise<Result<Fact<OutlineValue>, OutlineFault>> => {
         const headTree = head.tree;
+        const sources = headTree.sources;
         const content = contentFingerprint(headTree.export);
         const outside = files.filter((file) => !head.selected(file));
         if (outside.length > 0) return { ok: true, value: { ...head.base(content), evidence: outside.map((path): Evidence => ({ path, line: 1 })), status: "unknown", reason: "out-of-scope" } };
@@ -79,8 +79,7 @@ export function createOutlineQueries(deps: OutlineQueriesDeps): OutlineQueries {
         } finally {
           store.close();
         }
-      };
-      return headReader.atSources(request, spec, (head) => answer(head, head.tree.sources));
+      });
     },
   };
 }
