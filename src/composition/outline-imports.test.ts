@@ -97,8 +97,55 @@ test("a requested file no module reader reads is a no-extractor cut, so its empt
 
 test("a Java import of a type the sources declare reaches that type's declaration, without any graph edge", async () => {
   const owner: SourceFile = { path: "src/app/owner/Owner.java", content: "package app.owner;\npublic class Owner {}\n" };
-  const nodes = [fakeNode("client", "file", "src/app/api/Client.java", 1, 3), fakeNode("Client", "class", "src/app/api/Client.java", 3, 3, "Client"), fakeNode("Owner", "class", owner.path, 2, 2, "Owner")];
-  const { status, file } = await outlineOf("package app.api;\nimport app.owner.Owner;\nclass Client {}\n", { file: "src/app/api/Client.java", nodes, sources: [owner], readers: [createModuleDependenciesReader(), createJavaImportsReader(await createJavaParser())] });
+  const client = javaGraph("src/app/api/Client.java", "app.api", [{ id: "Client", kind: "class", line: 3 }]);
+  const owners = javaGraph(owner.path, "app.owner", [{ id: "Owner", kind: "class", line: 2 }]);
+  const { status, file } = await outlineOf("package app.api;\nimport app.owner.Owner;\nclass Client {}\n", { file: "src/app/api/Client.java", nodes: [...client.nodes, ...owners.nodes], edges: [...client.edges, ...owners.edges], sources: [owner], readers: [createModuleDependenciesReader(), createJavaImportsReader(await createJavaParser())] });
   assert.equal(status, "complete");
   assert.deepEqual(file?.imports, [{ line: 2, endLine: 2, specifier: "app.owner.Owner", kind: "import", typeOnly: false, target: { kind: "repository", file: owner.path }, bindings: [{ local: "Owner", imported: "Owner", declaration: { file: owner.path, name: "Owner", kind: "class", line: 2, endLine: 2 } }] }]);
+});
+
+/** The graph codegraph writes for a Java file: its package as a namespace that contains each type, and each type its members. */
+function javaGraph(file: string, packageName: string, members: readonly { id: string; kind: string; line: number; in?: string }[]): { nodes: FakeNode[]; edges: FakeEdge[] } {
+  const namespace = `${file}#${packageName}`;
+  const nodes = [fakeNode(`${file}#file`, "file", file, 1, 9), fakeNode(namespace, "namespace", file, 1, 1, packageName), ...members.map(({ id, kind, line }) => fakeNode(`${file}#${id}`, kind, file, line, line, id.slice(id.lastIndexOf(".") + 1)))];
+  const edges = members.map(({ id, in: container }): FakeEdge => ({ from: container === undefined ? namespace : `${file}#${container}`, to: `${file}#${id}`, kind: "contains" }));
+  return { nodes, edges };
+}
+
+test("a Java static import of a member the named type only inherits reaches no declaration, even one of that name in the same file", async () => {
+  const parent: SourceFile = { path: "app/Parent.java", content: "package app;\nclass Parent { public static int LIMIT = 1; }\n" };
+  const owner: SourceFile = { path: "app/Owner.java", content: "package app;\nclass Owner extends Parent {}\nclass Other { public static int LIMIT = 2; }\n" };
+  const client = javaGraph("app/Client.java", "app", [{ id: "Client", kind: "class", line: 3 }]);
+  const owners = javaGraph(owner.path, "app", [{ id: "Owner", kind: "class", line: 2 }, { id: "Other", kind: "class", line: 3 }, { id: "Other.LIMIT", kind: "field", line: 3, in: "Other" }]);
+  const parents = javaGraph(parent.path, "app", [{ id: "Parent", kind: "class", line: 2 }, { id: "Parent.LIMIT", kind: "field", line: 2, in: "Parent" }]);
+  const { status, file, cuts } = await outlineOf("package app;\nimport static app.Owner.LIMIT;\nclass Client {}\n", {
+    file: "app/Client.java",
+    nodes: [...client.nodes, ...owners.nodes, ...parents.nodes],
+    edges: [...client.edges, ...owners.edges, ...parents.edges],
+    sources: [parent, owner],
+    readers: [createJavaImportsReader(await createJavaParser())],
+  });
+  assert.equal(status, "partial");
+  assert.deepEqual(file?.imports[0]?.bindings, [{ local: "LIMIT", imported: "LIMIT" }]);
+  assert.deepEqual(cuts, [{ kind: "unresolved-link", at: ["app/Client.java:2 LIMIT"], reason: "unresolved" }]);
+});
+
+test("a Java import reaches the declaration at its qualified name from the file's top level, never a nested one ending the same", async () => {
+  const owner: SourceFile = { path: "app/Owner.java", content: "package app;\nclass Owner {}\nclass Other {\n  public static int LIMIT = 2;\n  static class Owner { static int LIMIT = 3; }\n}\n" };
+  const client = javaGraph("app/Client.java", "app", [{ id: "Client", kind: "class", line: 4 }]);
+  const owners = javaGraph(owner.path, "app", [
+    { id: "Owner", kind: "class", line: 2 },
+    { id: "Other", kind: "class", line: 3 },
+    { id: "Other.LIMIT", kind: "field", line: 4, in: "Other" },
+    { id: "Other.Owner", kind: "class", line: 5, in: "Other" },
+    { id: "Other.Owner.LIMIT", kind: "field", line: 5, in: "Other.Owner" },
+  ]);
+  const { file } = await outlineOf("package app;\nimport static app.Owner.LIMIT;\nimport static app.Other.LIMIT;\nclass Client {}\n", {
+    file: "app/Client.java",
+    nodes: [...client.nodes, ...owners.nodes],
+    edges: [...client.edges, ...owners.edges],
+    sources: [owner],
+    readers: [createJavaImportsReader(await createJavaParser())],
+  });
+  assert.deepEqual(file?.imports.map(({ bindings }) => bindings[0]?.declaration), [undefined, { file: owner.path, name: "LIMIT", kind: "field", line: 4, endLine: 4 }]);
 });

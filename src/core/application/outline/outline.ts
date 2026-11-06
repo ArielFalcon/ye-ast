@@ -1,21 +1,14 @@
-import { NOT_DECLARED_KINDS, sortedUnique } from "../../domain/impact/importers-fact.ts";
+import { sortedUnique } from "../../domain/impact/importers-fact.ts";
 import type { ModuleBinding, ModuleDependencies, ModuleDependency, UntraversedReference } from "../../domain/impact/module-dependency.ts";
 import type { OutlineBinding, OutlineDeclaration, OutlineFile, OutlineFocus, OutlineFocusValue, OutlineImport, OutlineListing } from "../../domain/outline/outline-fact.ts";
 import type { Cut } from "../../domain/shared/fact.ts";
+import { containmentTree } from "../navigation/containment-tree.ts";
 import { importBindings } from "../navigation/import-bindings.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
-import { branchesOf, declarationPath, declarationTree, innermostAt, selectedBySymbol, type DeclarationBranch } from "../../domain/shared/declaration-tree.ts";
+import { branchesOf, declarationPath, innermostAt, selectedBySymbol, type DeclarationBranch } from "../../domain/shared/declaration-tree.ts";
 import type { CodeGraphReader, GraphSymbol } from "../../ports/code-graph.port.ts";
 import type { UnknownSymbolFault } from "../../ports/impact-queries.port.ts";
 import type { OutlineSelector, TopLevelLineFault } from "../../ports/outline-queries.port.ts";
-
-const CONTAINMENT = "contains";
-
-/** The containment tree of one file's declarations, from the graph's `contains` edges between them. */
-export function containmentTree(store: CodeGraphReader, nodes: readonly GraphSymbol[]): DeclarationBranch<GraphSymbol>[] {
-  const declared = nodes.filter((node) => !NOT_DECLARED_KINDS.includes(node.kind));
-  return declarationTree(declared, store.outgoingEdges(declared.map((node) => node.id), [CONTAINMENT]));
-}
 
 export interface ListingRead {
   value: OutlineListing;

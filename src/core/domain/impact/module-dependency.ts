@@ -19,8 +19,9 @@ export interface ModuleBinding {
   column: number;
   typeOnly: boolean;
   /**
-   * The name the repository file it leads to declares the bound value under, when syntax proves it: the declaration a
-   * TypeScript file exports as default, or the type or member a Java import names.
+   * The dotted containment path, from the top level of the repository file it leads to, of the declaration the bound
+   * value is, when syntax proves it: the declaration a TypeScript file exports as default, or the qualified name of the
+   * type or member a Java import names (its package is the namespace that contains the file's types).
    */
   exportedAs?: string;
 }
