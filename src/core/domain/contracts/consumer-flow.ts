@@ -10,14 +10,17 @@ import type { Guard, UseOperation } from "./verdict.ts";
 export type CarrierSite =
   /** The value an HTTP call written at this call site returns, as the workspace join reports the site. */
   | { kind: "call-site"; repo: string; file: string; line: number; symbol: string }
-  /** The value of the call expression written at a resolved caller's edge. */
-  | { kind: "call-result"; repo: string; file: string; line: number; column?: number }
+  /** The value of the call of `callee` (a function's own name, as on a return carrier) at a resolved caller's edge. */
+  | { kind: "call-result"; repo: string; file: string; line: number; column?: number; callee: string }
   /** The value a function or method returns. */
   | { kind: "return"; repo: string; file: string; symbol: string; line: number }
   /** The value a resolved function or method receives as its parameter at `index`, 0-based. */
   | { kind: "parameter"; repo: string; file: string; symbol: string; line: number; index: number }
-  /** The value a class member holds: a field, an `input()`, a signal, an `@Input()`. */
-  | { kind: "member"; repo: string; file: string; owner: string; member: string; line: number };
+  /**
+   * The value a class member holds: a field, an `input()`, a signal, an `@Input()`. `line` is the member's first line,
+   * absent when the producer reads only a template; a member is the same carrier whatever line it comes with.
+   */
+  | { kind: "member"; repo: string; file: string; owner: string; member: string; line?: number };
 
 /** A value being followed, and where the changed property sits inside it. */
 export interface Carrier {
@@ -27,7 +30,9 @@ export interface Carrier {
 
 /** The code identity of a carrier, which is how the worklist knows it has been there. */
 export function carrierKey(site: CarrierSite): string {
-  return canonicalJson(site);
+  if (site.kind !== "member") return canonicalJson(site);
+  const { kind, repo, file, owner, member } = site;
+  return canonicalJson({ kind, repo, file, owner, member });
 }
 
 export const FLOW_STEPS = [

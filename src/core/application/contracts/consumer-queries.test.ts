@@ -143,7 +143,7 @@ test("every qualified basis is followed", async () => {
 test("a function return continues at each resolved caller, and the caller is a hop of the chain", async () => {
   const nodes = [fakeNode("find", "method", "src/owner.service.ts", 8, 14, "find"), fakeNode("load", "method", "src/page.ts", 20, 30, "load")];
   const edges = [{ from: "load", to: "find", kind: "calls", line: 25 }];
-  const caller = { kind: "call-result" as const, repo: "web", file: "src/page.ts", line: 25 };
+  const caller = { kind: "call-result" as const, repo: "web", file: "src/page.ts", line: 25, callee: "find" };
   const flow = {
     [carrierKey(siteOf())]: { uses: [], next: [{ carrier: { site: returnOf(), path: path("address") }, hops: [{ step: "return" as const, evidence: { path: "src/owner.service.ts", line: 12 } }] }], frontiers: [] },
     [carrierKey(caller)]: { uses: [use(26, { operation: "dereference" })], next: [], frontiers: [] },
@@ -194,6 +194,20 @@ test("a flow that loops back to a boundary already followed terminates, followin
   const fact = await ask();
 
   assert.equal(followed.length, 3);
+  assert.deepEqual(fact.value.findings, []);
+});
+
+test("a member is one boundary whether it arrives with its line or from a template that does not know it", async () => {
+  const declared = { kind: "member" as const, repo: "web", file: "src/card.ts", owner: "Card", member: "owner", line: 6 };
+  const { line: _, ...bound } = declared;
+  const flow = {
+    [carrierKey(siteOf())]: { uses: [], next: [{ carrier: { site: declared, path: path("address") }, hops: [] }, { carrier: { site: bound, path: path("address") }, hops: [] }], frontiers: [] },
+  };
+  const { ask, followed } = setup({ flow });
+
+  const fact = await ask();
+
+  assert.equal(followed.length, 2);
   assert.deepEqual(fact.value.findings, []);
 });
 

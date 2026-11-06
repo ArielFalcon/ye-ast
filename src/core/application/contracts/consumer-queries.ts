@@ -60,7 +60,7 @@ function consequencesOf(session: ConsumerSession, hypothesis: Hypothesis): Fact<
     const key = carrierKey(carrier.site);
     const before = seen.get(key);
     if (before !== undefined) {
-      if (!samePath(before, carrier.path)) findings.push(frontierItem({ at: placeOf(carrier), cause: "path-conflict", reason: "unresolved", hops: [] }, chain));
+      if (!samePath(before, carrier.path)) findings.push(frontierItem({ at: placeOf(carrier, chain), cause: "path-conflict", reason: "unresolved", hops: [] }, chain));
       continue;
     }
     seen.set(key, carrier.path);
@@ -125,7 +125,7 @@ function callersOf(session: ConsumerSession, carrier: Carrier, chain: readonly H
     } else if (edge.provenance === "heuristic") {
       frontiers.push(frontierItem({ at, cause: "ambiguous-caller", reason: "unresolved", hops: [] }, chain));
     } else {
-      const call = { kind: "call-result" as const, repo: site.repo, file: caller.file, line: edge.line, ...(edge.column === null ? {} : { column: edge.column }) };
+      const call = { kind: "call-result" as const, repo: site.repo, file: caller.file, line: edge.line, callee: site.symbol, ...(edge.column === null ? {} : { column: edge.column }) };
       next.push({ carrier: { site: call, path: carrier.path }, chain: [...chain, { step: "caller", evidence: at }] });
     }
   }
@@ -137,8 +137,8 @@ function frontierItem(frontier: FlowFrontier, chain: readonly Hop[]): Finding<Us
   return { status: "unknown", reason: frontier.reason, evidence: [...chain, ...frontier.hops].map((hop) => hop.evidence).concat({ ...frontier.at, via }) };
 }
 
-function placeOf({ site }: Carrier): Evidence {
-  return { path: site.file, line: site.line };
+function placeOf({ site }: Carrier, chain: readonly Hop[]): Evidence {
+  return site.line === undefined ? chain.at(-1)!.evidence : { path: site.file, line: site.line };
 }
 
 function samePath(a: AccessPath, b: AccessPath): boolean {
