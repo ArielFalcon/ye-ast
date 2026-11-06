@@ -589,3 +589,18 @@ test("URL value diagnostics retain recursion and disagreement inside source retu
   assert.equal(sites.find(s => s.symbol === "Values.different")?.diagnostic?.cause, "dispatch-disagreement");
   for (const site of sites) assert.ok(site.target.evidence.some(e => e.line !== site.line));
 });
+
+test("library evidence binds equal relative paths to their repository and sha or live snapshot", async () => {
+  const caller = java("Caller", 'class Caller { FirstClient first; SecondClient second; void load() { first.get(); second.get(); } }', [...WEB, "one.FirstClient", "two.SecondClient"]);
+  const libraries = [
+    { path: "src/Client.java", content: 'package one; import org.springframework.web.client.RestTemplate; public class FirstClient { RestTemplate rt; public void get() { rt.getForObject("http://one/items", String.class); } }', snapshot: { repo: "first/lib", kind: "sha" as const, sha: "b".repeat(40) } },
+    { path: "src/Client.java", content: 'package two; import org.springframework.web.client.RestTemplate; public class SecondClient { RestTemplate rt; public void get() { rt.getForObject("http://two/items", String.class); } }', snapshot: { repo: "second", kind: "live" as const, head: "c".repeat(40), stateId: "state/1" } },
+  ];
+  const sites = await reader.of([caller], "app", libraries);
+  assert.equal(sites.length, 2);
+  assert.ok(sites.every(s => s.target.status === "complete"));
+  assert.deepEqual([...new Set(sites.flatMap(s => s.target.evidence.map(e => e.path).filter(path => path.startsWith("(library)/"))))].sort(), [
+    `(library)/first%2Flib/sha/${"b".repeat(40)}/src/Client.java`,
+    `(library)/second/live/${"c".repeat(40)}/state%2F1/src/Client.java`,
+  ]);
+});

@@ -1,6 +1,6 @@
 import { compareText } from "../shared/code-node.ts";
 import type { Cut, Evidence } from "../shared/fact.ts";
-import { serviceLabel, sortEvidence, type NameCandidate, type OutwardName } from "./outward-name.ts";
+import { gatherNames, serviceLabel, sortEvidence, type NameCandidate, type OutwardName } from "./outward-name.ts";
 
 /** A remote a repository states: the name it answers to in its own configuration, and the repository name its URL ends with. */
 export interface RepositoryRemote {
@@ -80,6 +80,35 @@ export function selectDependency(name: OutwardName, identities: readonly Reposit
     status: "unresolved",
     diagnostic: { name: name.name, reason: proven.length > 1 ? "ambiguous" : "unproven-coordinates", candidates: repos },
   };
+}
+
+export interface DependencyClosure {
+  repositories: readonly string[];
+  transitive: boolean;
+  unresolved: readonly { repo: string; name: OutwardName; diagnostic: NonNullable<Cut["dependency"]> }[];
+}
+
+export function dependencyClosures(repositories: readonly { identity: RepositoryIdentity; names: readonly OutwardName[] }[]): ReadonlyMap<string, DependencyClosure> {
+  const identities = repositories.map(({ identity }) => identity);
+  const graph = new Map(repositories.map(({ identity, names }) => [identity.id, gatherNames(names).filter((name) => name.kind === "dependency").map((name) => ({ name, selection: selectDependency(name, identities, identity.repo) }))]));
+  const closures = new Map<string, DependencyClosure>();
+  for (const root of [...graph.keys()].sort(compareText)) {
+    const direct = new Set(graph.get(root)!.flatMap(({ selection }) => selection.status === "selected" ? [selection.repo] : []));
+    const visited = new Set([root]);
+    const pending = [root];
+    const unresolved: DependencyClosure["unresolved"][number][] = [];
+    for (const repo of pending) {
+      for (const { name, selection } of graph.get(repo)!) {
+        if (selection.status === "unresolved") unresolved.push({ repo, name, diagnostic: selection.diagnostic });
+        if (selection.status !== "selected" || visited.has(selection.repo)) continue;
+        visited.add(selection.repo);
+        pending.push(selection.repo);
+      }
+    }
+    const reached = [...visited].filter((repo) => repo !== root).sort(compareText);
+    closures.set(root, { repositories: reached, transitive: reached.some((repo) => !direct.has(repo)), unresolved: unresolved.sort((a, b) => compareText(a.repo, b.repo) || compareText(a.name.name, b.name.name)) });
+  }
+  return closures;
 }
 
 function isMavenDependency(name: OutwardName): boolean {

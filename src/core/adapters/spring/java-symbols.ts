@@ -1,12 +1,11 @@
+import { LIBRARY_ROOT, libraryPath, type LibrarySource } from "../../domain/topology/library-source.ts";
 import type { Node } from "web-tree-sitter";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import { charLiteralValue, integerLiteralValue, stringLiteralValue, type LiteralValue } from "./java-literals.ts";
 
-const LIBRARY_ROOT = "(library)";
-
 /** The sources of the repositories a snapshot depends on, under a root no repository path can have. */
-export function asLibrarySources(sources: readonly SourceFile[]): SourceFile[] {
-  return sources.map((source, index) => ({ ...source, path: `${LIBRARY_ROOT}/${index}/${source.path}` }));
+export function asLibrarySources(sources: readonly LibrarySource[]): SourceFile[] {
+  return sources.map((source, index) => ({ ...source, path: source.snapshot === undefined ? `${LIBRARY_ROOT}/${index}/${source.path}` : libraryPath(source.snapshot, source.path) }));
 }
 
 export function isLibraryPath(path: string): boolean {

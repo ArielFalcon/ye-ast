@@ -1,3 +1,4 @@
+import type { LibrarySource } from "./library-source.ts";
 import type { HttpMethod } from "../entrypoints/http-route.ts";
 import { declarationSpan, type Evidence, type Finding, type UnknownReason } from "../shared/fact.ts";
 
@@ -59,7 +60,7 @@ export interface CallSiteReader {
    * `libraries` are the sources of repositories the snapshot depends on: a call through a class they declare is read
    * through their code, and none of their own calls is reported.
    */
-  of(files: readonly { path: string; content: string }[], repo: string, libraries?: readonly { path: string; content: string }[]): Promise<readonly CallSite[]>;
+  of(files: readonly { path: string; content: string }[], repo: string, libraries?: readonly LibrarySource[]): Promise<readonly CallSite[]>;
 }
 
 /**
