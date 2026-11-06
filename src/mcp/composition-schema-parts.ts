@@ -6,7 +6,7 @@ import { dependencyDiagnostic } from "./dependency-schema.ts";
  */
 import { z } from "zod";
 import { CALL_SITE_CAUSES } from "../core/domain/topology/call-site.ts";
-import { TRUST_MODES } from "../core/domain/shared/fact.ts";
+import { TRUST_MODES, type DeclaredConfig } from "../core/domain/shared/fact.ts";
 import type { Part } from "./composition-contract.ts";
 import { compositionIdSchema as idOf } from "./composition-id-schema.ts";
 
@@ -50,12 +50,18 @@ export const factInputs = z.strictObject({
     walk: z.strictObject({ depth: z.number().exactOptional(), hubFanIn: z.number().exactOptional(), expansions: z.number().exactOptional() }).exactOptional(),
     targets: strings.exactOptional(),
     files: strings.exactOptional(),
+    focus: strings.exactOptional(),
     changed: strings.exactOptional(),
+    hypothesis: z.string().exactOptional(),
     exportBudget: z.strictObject({ maxEntries: z.number(), maxBytes: z.number() }).exactOptional(),
   }),
   origin: z.discriminatedUnion("kind", [z.strictObject({ kind: z.literal("full") }), z.strictObject({ kind: z.literal("sync"), base: z.string() })]).exactOptional(),
   engines: z.record(z.string(), z.string()),
 });
+
+/** The strict schema refuses a key the fact may carry, so it names every key of `DeclaredConfig`, and only those. */
+type SameKeys<A, B> = [keyof A] extends [keyof B] ? ([keyof B] extends [keyof A] ? true : false) : false;
+true satisfies SameKeys<z.infer<typeof factInputs>["declaredConfig"], DeclaredConfig>;
 
 const ownerBase = [
   z.strictObject({ kind: z.literal("fact") }),
