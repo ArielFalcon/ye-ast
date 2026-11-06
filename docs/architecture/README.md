@@ -31,6 +31,7 @@ marked **Proposed** awaits the owner's acceptance.
 | [0022](adr/0022-typed-query-replay-and-selective-evidence.md) | Typed selection on existing tools, explicit projections, verified query replay, declared repository targeting, mixed snapshots and result-bound pagination | Accepted |
 | [0024](adr/0024-one-producer-version-for-every-family.md) | Every query family stamps one producer version; the edge-policy suffix is removed. Supersedes 0017 decision 3 | Accepted |
 | [0025](adr/0025-template-member-calls-join-as-component-calls.md) | A template call through a component's injected field joins as a call of the component, with the template as evidence; amends the ADR-0017 amendment | Accepted |
+| [0026](adr/0026-lexical-bindings-from-the-typescript-binder.md) | The TypeScript compiler's binder, through a one-file program with no library and no resolution, is the one source of lexical bindings, for import origins and function-value calls alike | Accepted |
 
 ## Designs (RFC)
 
