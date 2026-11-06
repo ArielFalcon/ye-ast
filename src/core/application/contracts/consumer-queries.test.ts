@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { parseAccessPath } from "../../domain/contracts/access-path.ts";
 import { carrierKey, NO_FLOW, type Carrier, type FlowResult, type FlowUse } from "../../domain/contracts/consumer-flow.ts";
+import type { HypothesisInput } from "../../domain/contracts/hypothesis.ts";
 import type { Guard, UseOperation } from "../../domain/contracts/verdict.ts";
 import type { FactBase } from "../../domain/shared/fact.ts";
 import type { Link } from "../../domain/topology/link.ts";
@@ -50,7 +51,7 @@ interface Setup {
   unresolvedCalls?: ConsumerSession["unresolvedCalls"];
   ambiguousCalls?: ConsumerSession["ambiguousCalls"];
   property?: string;
-  change?: string;
+  change?: HypothesisInput["change"];
 }
 
 function setup(options: Setup = {}) {
@@ -107,6 +108,42 @@ test("the answer echoes the normalized hypothesis and the old guarantee it assum
   assert.deepEqual(fact.value.hypothesis, { method: "GET", path: "/owners/{id}", target: "response", property: "[].address", change: "nullable" });
   assert.equal(fact.value.assumedOldGuarantee, "present-and-non-null");
   assert.deepEqual(fact.value.findings, []);
+});
+
+test("an optional property is admitted behind a test that excludes undefined, not behind one that excludes only null, with undefined as the witness", async () => {
+  const undefinedTest = guard({ kind: "comparison", excludes: ["undefined"] });
+  const nullTest = guard({ kind: "comparison", excludes: ["null"], evidence: { path: "src/page.ts", line: 39 } });
+  const flow = { [carrierKey(siteOf())]: { uses: [use(30, { operation: READ, guards: [undefinedTest] }), use(40, { operation: READ, guards: [nullTest] })], next: [], frontiers: [] } };
+
+  const fact = await setup({ flow, change: "optional" }).ask();
+
+  assert.deepEqual(fact.value.findings.map((finding) => finding.status === "complete" && finding.value.verdict), [
+    { kind: "admits", guards: [undefinedTest] },
+    { kind: "incompatible", witness: "undefined", failing: READ.steps[0], capability: "readable" },
+  ]);
+});
+
+test("a renamed property is decided as one that is always absent, and the answer states its new path once", async () => {
+  const flow = { [carrierKey(siteOf())]: { uses: [use(30, { operation: READ, guards: [guard()] })], next: [], frontiers: [] } };
+
+  const fact = await setup({ flow, property: "owner.address", change: { renamed: "location" } }).ask();
+
+  assert.deepEqual(fact.value.hypothesis, { method: "GET", path: "/owners/{id}", target: "response", property: "owner.address", change: { renamed: "location" }, renamedTo: "owner.location" });
+  assert.deepEqual(verdictsOf(fact), ["review"]);
+  assert.equal(JSON.stringify(fact.value).split("owner.location").length - 1, 1);
+});
+
+test("an admitted use names in its evidence every guard that kept an introduced value from it", async () => {
+  const nullTest = guard({ kind: "comparison", excludes: ["null"], evidence: { path: "src/page.ts", line: 28 } });
+  const undefinedTest = guard({ kind: "comparison", excludes: ["undefined"], evidence: { path: "src/page.ts", line: 29 } });
+  const flow = { [carrierKey(siteOf())]: { uses: [use(30, { operation: READ, guards: [undefinedTest, nullTest] })], next: [], frontiers: [] } };
+
+  const fact = await setup({ flow, change: ["nullable", "optional"] }).ask();
+
+  const [admitted] = fact.value.findings;
+  assert.ok(admitted?.status === "complete");
+  assert.deepEqual(admitted.value.verdict, { kind: "admits", guards: [nullTest, undefinedTest] });
+  assert.deepEqual(admitted.evidence.map((place) => place.line), [30, 28, 29]);
 });
 
 test("an invalid hypothesis is refused before any snapshot is read", async () => {

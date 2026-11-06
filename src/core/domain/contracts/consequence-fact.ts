@@ -2,7 +2,7 @@ import type { Finding } from "../shared/fact.ts";
 import type { RepositoryEvidence } from "../shared/repository-evidence.ts";
 import type { Handler } from "../entrypoints/http-route.ts";
 import type { LinkBasis } from "../topology/link.ts";
-import type { ChangeKind } from "./hypothesis.ts";
+import type { ChangeEntry } from "./change.ts";
 import type { Hop } from "./consumer-flow.ts";
 import type { UseOperation, Verdict } from "./verdict.ts";
 
@@ -23,7 +23,8 @@ export interface UseConsequence {
 export const OLD_GUARANTEE = "present-and-non-null";
 
 export interface ConsequencesValue {
-  hypothesis: { method: string; path: string; target: string; property: string; change: ChangeKind };
+  /** The hypothesis as normalized; `renamedTo` is the property's path under the new contract when it is renamed. */
+  hypothesis: { method: string; path: string; target: string; property: string; change: ChangeEntry | readonly ChangeEntry[]; renamedTo?: string };
   assumedOldGuarantee: typeof OLD_GUARANTEE;
   /** A complete finding is a use with its verdict; an `unknown` one is a place the flow could not be followed. */
   findings: readonly Finding<UseConsequence>[];

@@ -20,26 +20,29 @@ value reaches each one.
 ## Model
 
 - **Hypothesis.** An operation (HTTP method and path as its handler declares them), the response, a property path
-  (`a.b`, `[]` for an array element: `[].owner.name`) and a change. F0 changes: `nullable` and `removed`. The old
-  guarantee is "present and non-null" and the answer states that assumption. Changes are data: a new kind extends the
-  guarantee vocabulary, never a code path per case.
+  (`a.b`, `[]` for an array element: `[].owner.name`) and a change: `nullable`, `optional`, `removed`,
+  `{ "renamed": "<name>" }`, or a non-empty list of them on the same property. The old guarantee is "present and
+  non-null" and the answer states that assumption. Changes are data: a change is the set of values it introduces,
+  normalized once per hypothesis (see "Change algebra"), never a code path per case.
 - **Chain.** Operation → qualified link → call site → flow steps → use. Each step carries its evidence and its path
   rewrite. The chain is the provenance. A declared type is never provenance: `http.get<T>` is an unchecked assertion,
   and two declarations that share a type are not connected by it.
-- **Use.** An operation applied to the value at the property path. F0 requirements: a dereference beyond the changed
-  segment (member read, call, keyed read) requires the value to be present and non-null; display, comparison or passing
-  the changed value itself requires nothing the slice can decide.
+- **Use.** An operation applied to the value at the property path, described as its steps past the changed segment and
+  how it ends. Each value the change introduces (`null`, `undefined`) is decided on its own: a guard that rejects it
+  keeps it from the use; otherwise the first step (a member read, a keyed read, a call) throws on it and, without steps,
+  the end decides: an iteration throws unless it tolerates the value, a destructuring and a bare dereference throw, a
+  display, comparison, coercion or hand-on runs, and a sink outside the vocabulary is undecided.
 - **Verdicts,** per use and scoped to its chain:
 
   | Verdict | When |
   |---|---|
-  | `incompatible` | An unguarded dereference of a value the new contract permits to be null or absent. Carries the counterexample (`null`, absent) and the requirement. |
-  | `admits` | A guard is proven between the changed segment and the dereference. |
-  | `review` | The value reaches the use but the slice cannot decide: no failing operation, a removed property behind a guard, a sink outside the vocabulary. |
+  | `incompatible` | An introduced value reaches, unguarded, a step or end that throws on it. Carries the witness (`null` or `undefined`, `null` first when both throw), the failing step or end of the descriptor, and the capability the value lacks there (`readable`, as a member read or an object destructuring needs, `function`, `iterable`). |
+  | `admits` | Proven guards keep every introduced value from the use; carries those guards. |
+  | `review` | No introduced value is shown to throw, but the slice cannot admit: a value reaches a use that runs on it (`consumed`), a removed or renamed property behind a guard, a guard outside the vocabulary before a failing step, a sink outside the vocabulary. |
   | frontier (`unknown` item) | The flow cannot be followed past this place; location and reason. |
 
-- **Asymmetry.** `admits` needs a sufficient guard; `incompatible` needs an unguarded failing operation on a modelled
-  chain. Anything else is `review` or a frontier. `!` is not a guard. `?.` guards only the segments it covers.
+- **Asymmetry.** `admits` needs a sufficient guard for every introduced value; `incompatible` needs an unguarded step or
+  end that fails on one of them, on a modelled chain. Anything else is `review` or a frontier. `!` is not a guard. `?.` guards only the segments it covers.
 
 ## F0 flow steps (TypeScript and Angular)
 
@@ -60,7 +63,7 @@ A value is followed only through these steps; anything else it flows into is a f
 | a component input by its public name: `@Input()`, `@Input('alias')`, `input()`, `input.required()`, `model()` with `alias` | the member that declares it; no such input is a frontier |
 | the same resolver, read in that route's component through `ActivatedRoute` `data` (`data.subscribe(({ key }) => ...)`, `snapshot.data[key]`) | bound to the destructured or read value |
 | template property binding `[name]="path"` on a child component | the child input whose public name is `name` |
-| a read of a component field, input or signal in its template (`x()`, `@if (x(); as y)`, `*ngIf="x as y"`, `@for (i of x)`) | bound to the alias or item; `@for` over the changed collection itself is a `review` use |
+| a read of a component field, input or signal in its template (`x()`, `@if (x(); as y)`, `*ngIf="x as y"`, `@for (i of x)`) | bound to the alias or item; `@for` over the changed collection itself is a use that tolerates `null` and `undefined` |
 
 A zero-argument call is a signal read only when the callee is the carried value itself or a resource's `value`; calling
 the changed value is a dereference; a resource member that only reports or replaces its state (`isLoading`, `error`,
@@ -165,21 +168,26 @@ independent oracle for each new change, and latency, peak memory and answer size
    only test it; an assignment target is no use of the value it replaces; a loop states the absences it tolerates, so
    `for...of` and `@for` agree through their descriptors. Template method and pipe names reach the descriptor; a guard
    re-run of a chain emits nothing.
-2. Representative values, normalization and contradictions, guards as predicates; `optional`, `renamed`, combined
-   changes; the answer carries witness, failing step, capability and replacement.
-3. The prototype table and step evaluation, `type`, `wrapped`, `typeof` and `Array.isArray` guards, fallback
-   replacements.
+2. Changes as value sets, normalized once with their contradictions refused; `optional`, `renamed` and combined
+   changes; each introduced value is walked over the use's guards and descriptor; the answer carries the witness, the
+   failing step or end and the capability it lacks. Every value these changes introduce is `null` or `undefined`, on
+   which a guard's exclusions already are its predicate.
+3. Representative values of every class, the prototype table and step evaluation; guards as predicates by exact
+   operator, operand and polarity, `typeof` and `Array.isArray` included; `type`, `wrapped`, fallback replacements and
+   the replacement in the answer.
 4. `values`, strict comparisons, the silent-and-counted rule. `switch` afterwards, on its own.
 
 ## Output
 
-The RFC-0002 envelope. Uses are complete findings with their verdict, chain, requirement, counterexample or guard
-evidence, the repository they are in and the link they came through (its id, basis, call site and handler); frontiers
+The RFC-0002 envelope. Uses are complete findings with their verdict (the witness, failing step or end and capability
+of an `incompatible` one; the guards of an `admits` one, whose places join its evidence), descriptor, chain, the
+repository they are in and the link they came through (its id, basis, call site and handler); frontiers
 are `unknown` findings with a reason and evidence, every place with its repository. Each HTTP call site is matched once
 over every repository of the workspace, its own included: a call two repositories serve is an ambiguous frontier. The
 call sites whose target no read could evaluate are always listed as one `unknown` item, since any of them may call the
 operation; when no call site links, that item also names the handler. Output is
-sorted and reproducible; the hypothesis is echoed with its assumed old guarantee. F0 has no MCP, CLI or protocol
+sorted and reproducible; the hypothesis is echoed as normalized (a single change as written, a combined one as its
+list), with its assumed old guarantee and, for a rename, the property's new path, once. F0 has no MCP, CLI or protocol
 surface.
 
 ## Ownership
