@@ -1,8 +1,8 @@
 import type { Node } from "web-tree-sitter";
 import type { Job, Listener } from "../../domain/entrypoints/entrypoint.ts";
 import type { HttpRoute } from "../../domain/entrypoints/http-route.ts";
-import type { Evidence, Finding } from "../../domain/shared/fact.ts";
-import type { Gap, GapReason, MethodDecl } from "./java-symbols.ts";
+import type { Evidence, Finding, UnknownReason } from "../../domain/shared/fact.ts";
+import type { Gap, MethodDecl } from "./java-symbols.ts";
 
 /** A route as the code maps it, before the configuration's base path is added. */
 export type MappedRoute = Omit<HttpRoute, "basePath">;
@@ -15,7 +15,7 @@ export function spanOf(path: string, node: { startPosition: { row: number }; end
 }
 
 /** An unknown item. Its evidence never repeats a line: a span that starts where an earlier one starts and ends no later adds nothing. */
-export function unknown(reason: GapReason, evidence: readonly Evidence[]): Finding<never> {
+export function unknown(reason: UnknownReason, evidence: readonly Evidence[]): Finding<never> {
   return { status: "unknown", reason, evidence: evidence.filter((span, index) => !evidence.slice(0, index).some((earlier) => covers(earlier, span))) };
 }
 
@@ -38,7 +38,7 @@ export function complete<T>(value: T): Finding<T> {
 export function withEvidence<T>(target: Finding<T>, span: Evidence): Finding<T> {
   if (target.status === "unknown") {
     const via = target.evidence[0]?.via;
-    return { ...target, evidence: [via === undefined ? span : { ...span, via }] };
+    return { ...target, evidence: [via === undefined ? span : { ...span, via }, ...target.evidence.filter((cause) => !covers(span, cause))] };
   }
   return { ...target, evidence: [{ path: span.path, line: span.line }] };
 }

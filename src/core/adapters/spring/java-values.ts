@@ -16,6 +16,7 @@ export interface UrlScope {
   receiver?: TypeDecl;
   instance?: ObjectValue;
   undecided?: boolean;
+  undecidedCause?: "recursive" | "dispatch-disagreement";
   configurationFile?: JavaFile;
 }
 

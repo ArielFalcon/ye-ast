@@ -1,5 +1,5 @@
 import type { HttpMethod } from "../entrypoints/http-route.ts";
-import { declarationSpan, type Evidence, type Finding } from "../shared/fact.ts";
+import { declarationSpan, type Evidence, type Finding, type UnknownReason } from "../shared/fact.ts";
 
 /** A call one repository makes out of itself: an HTTP request or a published message, with where it is written. */
 export interface CallSite {
@@ -14,8 +14,18 @@ export interface CallSite {
   ancestors?: readonly { symbol: string; line: number; endLine: number }[];
   transport: "http" | "event";
   target: Finding<HttpTarget | EventTarget>;
+  diagnostic?: CallSiteDiagnostic;
   /** The request the code writes, when the snapshot decides everything about it but the base it reaches. */
   stated?: StatedRequest;
+}
+
+export const CALL_SITE_CAUSES = ["source-not-read", "request-not-found", "dispatch-disagreement", "recursive", "destination-undecidable"] as const;
+
+export interface CallSiteDiagnostic {
+  cause: (typeof CALL_SITE_CAUSES)[number];
+  source?: "not-read" | "read";
+  /** Library files rejected by the parser; none is asserted to declare the intermediary. */
+  unreadableSources?: readonly Evidence[];
 }
 
 /** The request an HTTP call writes when the snapshot cannot decide its base: the method and the path. */
@@ -63,6 +73,9 @@ export interface UnresolvedCallSite {
   endLine?: number;
   symbol: string;
   transport: CallSite["transport"];
+  reason: UnknownReason;
+  evidence: readonly Evidence[];
+  diagnostic?: CallSiteDiagnostic;
   /** The library the call goes through, when the snapshot names one. */
   via?: string;
   /** The request the code writes, when the snapshot decides everything but where it goes. */
@@ -83,6 +96,9 @@ export function unresolvedCallSite(site: CallSite): UnresolvedCallSite {
     ...declarationSpan(site.line, site.endLine),
     symbol: site.symbol,
     transport: site.transport,
+    reason: site.target.status === "unknown" ? site.target.reason : "unresolved",
+    evidence: site.target.evidence,
+    ...(site.diagnostic === undefined ? {} : { diagnostic: site.diagnostic }),
     ...(via === undefined ? {} : { via }),
     ...(site.stated === undefined ? {} : { stated: site.stated }),
   };

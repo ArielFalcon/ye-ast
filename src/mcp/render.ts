@@ -1,3 +1,4 @@
+import { unresolvedLabel } from "./presentation.ts";
 import { canSelect, categoryRecovery, literalSelection, sharedLookup } from "./presentation-guidance.ts";
 import type { CutOwner, ImpactOwner, EvidenceSelection } from "./select-evidence.ts";
 import { renderFactHeader as headerLines, renderFactStatus as statusLines, snapshotLine, evidenceText, cutsByKind } from "./presentation-context.ts";
@@ -1096,7 +1097,7 @@ function repoImpactLines(repo: string, section: Fact<RepoImpact>, detail: Respon
     ...(value.impact === undefined || repo === bound ? [] : impactBody(value.impact, detail, { kind: "section", repo }, context, false).map((line) => `    ${line}`)),
     ...callSiteBlock("unmatched", value.unmatched),
     ...callSiteBlock("external", value.external),
-    ...(value.unresolved.length === 0 ? [] : [`    unresolved call sites (${value.unresolved.length}):`, ...unresolvedListing(value.unresolved).map((line) => `  ${line}`)]),
+    ...(value.unresolved.length === 0 ? [] : [`    unresolved call sites (${value.unresolved.length}):`, ...unresolvedListing(value.unresolved, detail).map((line) => `  ${line}`)]),
   ];
 }
 
@@ -1254,19 +1255,26 @@ function unservedBlock(unserved: readonly RepositoryOutwardName[], detail: Respo
 }
 
 /** The unresolved call sites under the file that holds them, sorted, each with the request it writes when the code states it. */
-function unresolvedListing(sites: readonly UnresolvedCallSite[]): string[] {
+function unresolvedListing(sites: readonly UnresolvedCallSite[], detail: ResponseMode): string[] {
   const sorted = [...sites].toSorted((a, b) => compareText(a.path, b.path) || a.line - b.line || compareText(a.symbol, b.symbol));
-  return [...Map.groupBy(sorted, (site) => site.path)].flatMap(([path, inFile]) => [`    ${path}`, ...inFile.map(unresolvedLine)]);
+  return [...Map.groupBy(sorted, (site) => site.path)].flatMap(([path, inFile]) => [
+    `    ${path}`,
+    ...[...Map.groupBy(inFile, (site) => `${site.reason}${site.diagnostic === undefined ? "" : `/${site.diagnostic.cause}`}${site.diagnostic?.source === undefined ? "" : ` source=${site.diagnostic.source}`}`)].flatMap(([reason, group]) => [
+      ...(detail === "details" ? [`      ${reason}:`] : []),
+      ...group.map((site) => unresolvedLine(site, detail)),
+    ]),
+  ]);
 }
 
-function unresolvedLine(site: UnresolvedCallSite): string {
+function unresolvedLine(site: UnresolvedCallSite, detail: ResponseMode): string {
   const through = site.via === undefined ? "" : `, through ${site.via}`;
   const stated = site.stated === undefined ? "" : ` ${site.stated.method} ${site.stated.path}`;
-  return `      ${spanText(site.line, site.endLine)} ${site.symbol} (${site.transport}${through})${stated}`;
+  const evidence = detail === "details" ? ` <- ${site.evidence.map(evidenceText).join(", ")}${site.diagnostic?.unreadableSources === undefined ? "" : `; unreadable libraries: ${site.diagnostic.unreadableSources.map(evidenceText).join(", ")}`}` : ` ${unresolvedLabel(site)}`;
+  return `      ${spanText(site.line, site.endLine)} ${site.symbol} (${site.transport}${through})${stated}${evidence}`;
 }
 
 /** The call sites no repository given decides, so the caller settles each one by reading its declaration, never the file. */
-function unresolvedBlock(value: Omit<WorkspaceValue, "repositories">): string[] {
+function unresolvedBlock(value: Omit<WorkspaceValue, "repositories">, detail: ResponseMode): string[] {
   const sections = value.workspace.repos.flatMap((repo) => {
     const section = value.sections[repo];
     return section === undefined || section.status === "unknown" || section.value.unresolved.length === 0 ? [] : [[repo, section.value.unresolved] as const];
@@ -1274,7 +1282,7 @@ function unresolvedBlock(value: Omit<WorkspaceValue, "repositories">): string[] 
   if (sections.length === 0) return [];
   return [
     `unresolved call sites (${sections.reduce((total, [, sites]) => total + sites.length, 0)}):`,
-    ...sections.flatMap(([repo, sites]) => [`  ${repo}:`, ...unresolvedListing(sites)]),
+    ...sections.flatMap(([repo, sites]) => [`  ${repo}:`, ...unresolvedListing(sites, detail)]),
   ];
 }
 
@@ -1346,7 +1354,7 @@ export function renderWorkspace(fact: Fact<Omit<WorkspaceValue, "repositories">>
   lines.push(...best);
   if (value.unserved.length > 0) lines.push(DECISIONS_HINT);
   lines.push(...linkMapLines(value.links, value.unlinked, detail));
-  lines.push(...unresolvedBlock(value));
+  lines.push(...unresolvedBlock(value, detail));
   lines.push(...cutsBlock(cutsOf(fact), detail));
   for (const [repo, section] of Object.entries(value.sections)) {
     if (section.status !== "partial") continue;

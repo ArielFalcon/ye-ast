@@ -364,6 +364,8 @@ test("interface dispatch evaluates all source implementations without selecting 
   assert.equal(sites.length, 1);
   assert.equal(sites[0]?.symbol, "Dispatch.load");
   assert.equal(sites[0]?.target.status, "unknown");
+  assert.equal(sites[0]?.diagnostic?.cause, "dispatch-disagreement");
+  assert.equal(sites[0]?.target.evidence.length, 3);
 });
 
 test("source constructors and Lombok builders retain distinct object fields for getters", async () => {
@@ -423,6 +425,7 @@ test("recursive client summaries retain an explicit unknown instead of disappear
   const sites = await reader.of([source], "service");
   assert.ok(sites.length > 0);
   assert.ok(sites.every((site) => site.target.status === "unknown"));
+  assert.ok(sites.some((site) => site.diagnostic?.cause === "recursive"));
 });
 
 test("configuration defaults apply only to absent keys and never to conflicting values", async () => {
@@ -542,4 +545,47 @@ test("shared mutable objects cannot recover field defaults through a source gett
       void load() { retarget(); rt.getForObject("http://catalog" + query.getPath(), String.class); }
     }`);
   assert.equal((await reader.of([source], "service"))[0]?.target.status, "unknown");
+});
+
+test("HTTP diagnostics distinguish a missing wrapper from a read wrapper with an undecidable destination", async () => {
+  const caller = java("Caller", 'class Caller { AcmeRestClient client; void load() { client.get(); } }', [...WEB, "com.acme.AcmeRestClient"]);
+  const library = file("src/main/java/com/acme/AcmeRestClient.java", 'package com.acme; import org.springframework.web.client.RestTemplate; public class AcmeRestClient { RestTemplate rt; String url; public void get() { rt.getForObject(url, String.class); } }');
+  const [missing] = await reader.of([caller], "app");
+  const [read] = await reader.of([caller], "app", [library]);
+  assert.deepEqual(missing?.diagnostic, { cause: "source-not-read", source: "not-read" });
+  assert.deepEqual(read?.diagnostic, { cause: "destination-undecidable", source: "read" });
+  assert.equal(read?.target.status, "unknown");
+  assert.ok(read?.target.evidence.some(e => e.path.includes("(library)")));
+  assert.equal(read?.target.evidence[0]?.via, "com.acme.AcmeRestClient");
+});
+
+test("HTTP diagnostics distinguish a read wrapper without a recognized request", async () => {
+  const caller = java("Caller", 'class Caller { AcmeRestClient client; void load() { client.get(); } }', [...WEB, "com.acme.AcmeRestClient"]);
+  const library = file("src/main/java/com/acme/AcmeRestClient.java", 'package com.acme; public class AcmeRestClient { public void get() {} }');
+  const [site] = await reader.of([caller], "app", [library]);
+  assert.deepEqual(site?.diagnostic, { cause: "request-not-found", source: "read" });
+  assert.ok(site?.target.evidence.some(e => e.path.includes("(library)")));
+});
+
+test("an unreadable library is reported as context without claiming it declares the missing wrapper", async () => {
+  const caller = java("Caller", 'class Caller { AcmeRestClient client; void load() { client.get(); } }', [...WEB, "com.acme.AcmeRestClient"]);
+  const library = file("src/Broken.java", "class Broken { !!!");
+  const [site] = await reader.of([caller], "app", [library]);
+  assert.equal(site?.diagnostic?.cause, "source-not-read");
+  assert.deepEqual(site?.diagnostic?.unreadableSources?.map(e => e.path), ["(library)/0/src/Broken.java"]);
+});
+
+test("URL value diagnostics retain recursion and disagreement inside source return methods", async () => {
+  const source = java("Values", `interface Base { String url(); }
+    class First implements Base { public String url() { return "http://one/items"; } }
+    class Second implements Base { public String url() { return "http://two/items"; } }
+    class Values { RestTemplate rt; Base base;
+      String loop() { return loop(); }
+      void recursive() { rt.getForObject(loop(), String.class); }
+      void different() { rt.getForObject(base.url(), String.class); }
+    }`);
+  const sites = await reader.of([source], "app");
+  assert.equal(sites.find(s => s.symbol === "Values.recursive")?.diagnostic?.cause, "recursive");
+  assert.equal(sites.find(s => s.symbol === "Values.different")?.diagnostic?.cause, "dispatch-disagreement");
+  for (const site of sites) assert.ok(site.target.evidence.some(e => e.line !== site.line));
 });

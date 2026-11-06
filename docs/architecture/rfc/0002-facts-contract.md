@@ -169,7 +169,9 @@ names are settled in the first slice; the union, the cuts and the inputs are the
    with its `basis`; a published destination is an outward name, and `NameCandidate.basis` adds `event-destination`.
    `0.19.0` adds optional `OutlineDeclaration.children`, the declarations a `contains` edge places directly inside one, and
    `OutlineFile.declarations` now holds only the top level, so a consumer of the flat list finds members under their
-   container.
+   container. `0.20.0` adds unresolved call-site reasons, causal evidence and typed diagnostics, and the reason of an
+   unresolved-link cut. Source availability describes whether an intermediary was read; it does not assert that an
+   unreadable library file declares that intermediary.
 7. **Redaction at egress.** Values and evidence pass redaction when they leave ye-ast's process toward a host: the
    patterns always, by-value secrets only in the process that already holds them
    ([ADR-0010](../adr/0010-trust-modes.md)). The success report `ye-ast init` writes for the user who ran it is not

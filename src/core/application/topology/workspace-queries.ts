@@ -188,7 +188,7 @@ export function createWorkspaceReadOperation(deps: WorkspaceQueriesDeps): Worksp
           const section: FactBase & { evidence: readonly { path: string; line: number }[] } = { ...(entry.base as FactBase), evidence: sortEvidence(names.flatMap((name) => name.evidence)) };
           const cuts = [
             ...entry.cuts,
-            ...unresolved.map((place) => ({ kind: "unresolved-link" as const, at: [place.path, `${place.path}:${place.line}`, ...(place.via === undefined ? [] : [`library ${place.via}`])] })),
+            ...unresolved.map((place) => ({ kind: "unresolved-link" as const, reason: place.reason, at: [place.path, `${place.path}:${place.line}`, ...(place.via === undefined ? [] : [`library ${place.via}`])] })),
             ...ambiguous.map((site) => ({ kind: "unresolved-link" as const, at: [site.file, `${site.file}:${site.line}`] })),
           ];
           sections[entry.repository.repo] = withCuts(section, { names, unresolved }, cuts);

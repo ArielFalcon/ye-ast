@@ -459,3 +459,9 @@ test("a source the lead names in no connection supports no connection, listed or
     }
   }
 });
+
+test("composed unresolved rows retain the diagnostic and causal evidence", () => {
+  const text = renderComposition(resultOf([sourceFixture("impact-workspace")]), "details");
+  assert.match(text, /unresolved call site.*OrdersService.remote.*destination-undecidable.*read/);
+  assert.match(text, /\(library\)\/0\/Client.java.*17/);
+});

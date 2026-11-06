@@ -1,3 +1,4 @@
+import { callSiteDiagnostic, unresolvedCallSiteSchema } from "./composition-schema-parts.ts";
 import { compactInput } from "./compact-schema.ts";
 import { selectedOutputFor } from "./evidence-schema.ts";
 import { selectEvidence, type EvidenceSelection, type EvidenceSource, type EvidenceSelectionResult } from "./select-evidence.ts";
@@ -182,8 +183,9 @@ const callSite = z.looseObject({
   symbol: z.string(),
   transport: z.enum(["http", "event"]),
   target: callTarget,
+  diagnostic: callSiteDiagnostic.optional(),
 });
-const unresolvedCallSite = z.looseObject({ path: z.string(), line: z.number(), symbol: z.string() });
+const unresolvedCallSite = unresolvedCallSiteSchema;
 const workspaceImpact = z.looseObject({
   workspace: workspaceIdentity,
   repositorySnapshots: snapshots,

@@ -4,7 +4,7 @@ import { compareText } from "./code-node.ts";
 export type SchemaVersion = `${number}.${number}.${number}`;
 
 /** The schema version of every fact this build produces. */
-export const SCHEMA: SchemaVersion = "0.19.0";
+export const SCHEMA: SchemaVersion = "0.20.0";
 
 export type SnapshotRef =
   | { repo: string; kind: "sha"; sha: string }
@@ -125,6 +125,7 @@ export interface Cut {
   /** Where the computation stopped: repo-relative paths or symbols, or the section of a composite. */
   at: readonly string[];
   limit?: number;
+  reason?: UnknownReason;
 }
 
 export interface FactBase {

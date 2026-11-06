@@ -448,15 +448,15 @@ test("a call site whose target is undecided joins nothing and stays a cut naming
 });
 
 test("each section carries the unresolved call sites its own repository's discovery read, with the request they state", async () => {
-  const stated = { ...undecidedCallSite("shop-web", 21), stated: { method: "GET" as const, path: "/orders" } };
+  const stated = { ...undecidedCallSite("shop-web", 21), diagnostic: { cause: "destination-undecidable" as const, source: "read" as const }, stated: { method: "GET" as const, path: "/orders" } };
   const { queries } = setup({
     repositories: { orders: ORDERS, "shop-web": { callSites: [stated] }, billing: { callSites: [undecidedCallSite("billing", 9)] } },
   });
 
   const value = valueOf(await queries.callers({ ...ASK, repos: [{ path: "/work/shop-web" }, { path: "/work/billing" }] }));
 
-  assert.deepEqual(repoImpact(value, "shop-web").unresolved, [{ path: "src/app/shop-web.api.ts", line: 21, symbol: "shop-web.call21", transport: "http", stated: { method: "GET", path: "/orders" } }]);
-  assert.deepEqual(repoImpact(value, "billing").unresolved, [{ path: "src/app/billing.api.ts", line: 9, symbol: "billing.call9", transport: "http" }]);
+  assert.deepEqual(repoImpact(value, "shop-web").unresolved, [{ path: "src/app/shop-web.api.ts", line: 21, symbol: "shop-web.call21", transport: "http", reason: "unresolved", evidence: [{ path: "src/app/shop-web.api.ts", line: 21 }], diagnostic: { cause: "destination-undecidable", source: "read" }, stated: { method: "GET", path: "/orders" } }]);
+  assert.deepEqual(repoImpact(value, "billing").unresolved, [{ path: "src/app/billing.api.ts", line: 9, symbol: "billing.call9", transport: "http", reason: "unresolved", evidence: [{ path: "src/app/billing.api.ts", line: 9 }] }]);
   assert.deepEqual(value.links, []);
 });
 

@@ -28,6 +28,7 @@ const eventSites: JavaSiteReader = { transport: "event", read: (project, configu
 export function javaCallSitesOf(parser: JavaParser, files: readonly SourceFile[], libraries: readonly SourceFile[], repo: string, readers: readonly JavaSiteReader[]): CallSite[] {
   const trees: JavaSyntaxTree[] = [];
   const unreadable: { path: string; line: number }[] = [];
+  const unreadableLibraries: { path: string; line: number }[] = [];
   const parse = (sources: readonly SourceFile[], owned: boolean): JavaFile[] =>
     sources
       .filter((source) => isJavaSource(source.path) && !isJvmTestFile(source.path))
@@ -38,9 +39,9 @@ export function javaCallSitesOf(parser: JavaParser, files: readonly SourceFile[]
             trees.push(result.value);
             return [describeFile(source.path, result.value.root)];
           }
-          if (owned) unreadable.push({ path: source.path, line: result.fault.line });
+          (owned ? unreadable : unreadableLibraries).push({ path: source.path, line: result.fault.line });
         } catch {
-          if (owned) unreadable.push({ path: source.path, line: 1 });
+          (owned ? unreadable : unreadableLibraries).push({ path: source.path, line: 1 });
         }
         return [];
       });
@@ -52,7 +53,11 @@ export function javaCallSitesOf(parser: JavaParser, files: readonly SourceFile[]
     const held = new Set(owned);
     const transport = readers[0]?.transport;
     const unread = transport === undefined ? [] : unreadable.map((at): CallSite => ({ repo, file: at.path, line: at.line, symbol: basename(at.path, ".java"), transport, target: { status: "unknown", reason: "source-unreadable", evidence: [at] } }));
-    return [...readers.flatMap((reader) => reader.read(project, configuration, held, repo)), ...unread].sort(compareSite);
+    const sites = readers.flatMap((reader) => reader.read(project, configuration, held, repo));
+    for (const site of sites) if (site.diagnostic?.source === "not-read" && unreadableLibraries.length > 0) {
+      site.diagnostic = { ...site.diagnostic, unreadableSources: unreadableLibraries };
+    }
+    return [...sites, ...unread].sort(compareSite);
   } finally {
     for (const tree of trees) tree.dispose();
   }

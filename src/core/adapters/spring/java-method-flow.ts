@@ -186,7 +186,7 @@ export class JavaMethodFlow<T extends { invocation: Invocation }> {
       return Array.from({ length }, (_, index) => {
         const present = [...new Set(branches.flatMap((branch) => branch[index] ?? []))];
         return branches.some((branch) => branch[index] === undefined)
-          ? present.map(({ leaf, scope }) => ({ leaf, scope: { ...scope, undecided: true } })) : present;
+          ? present.map(({ leaf, scope }) => ({ leaf, scope: { ...scope, undecided: true, undecidedCause: scope.undecidedCause ?? "dispatch-disagreement" } })) : present;
       });
     };
     const selections = methodsOf(call, this.project, this.text, scope.receiver ?? scope.type);
@@ -197,7 +197,7 @@ export class JavaMethodFlow<T extends { invocation: Invocation }> {
       pending.push(() => {
         const method = selection.method.node.id;
         if (active.has(method)) {
-          done([...(this.reachable.get(method) ?? [])].map((leaf) => [{ leaf, scope: { ...bound, undecided: true } }]));
+          done([...(this.reachable.get(method) ?? [])].map((leaf) => [{ leaf, scope: { ...bound, undecided: true, undecidedCause: "recursive" } }]));
           return;
         }
         const key = `${method}:${selection.receiver.node.id}:${bound.configurationFile?.path}:${[...bound.env].map(([name, value]) => `${name}=${closureKey(value.node, value.scope)}`).join(";")}`;

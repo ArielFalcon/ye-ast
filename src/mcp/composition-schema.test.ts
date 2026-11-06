@@ -167,3 +167,12 @@ test("coverage issues cannot reference sources or parts absent from the full gra
     assert.equal(COMPOSE_OUTPUT.safeParse(invalid).success, false);
   }
 });
+
+test("call-site diagnostic causes are closed in both composition schema forms", () => {
+  const invalid = json(full);
+  const part = invalid.graph.parts.find(p => p.kind === "unresolved-call-site");
+  assert.ok(part?.kind === "unresolved-call-site");
+  Object.assign(part.site, { diagnostic: { cause: "guess" } });
+  assert.equal(runtime(invalid), false);
+  assert.equal(ajv(invalid).valid, false);
+});

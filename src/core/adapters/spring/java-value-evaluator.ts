@@ -1,3 +1,5 @@
+import type { Evidence } from "../../domain/shared/fact.ts";
+import { spanOf } from "./findings.ts";
 import { LOMBOK_VALUE, LOMBOK_BUILDER, LOMBOK_GETTERS, LOMBOK_CONSTRUCTORS } from "./java-value-vocabulary.ts";
 import type { Closure, ObjectValue, UrlScope } from "./java-values.ts";
 import { bindMethod, methodsOf } from "./java-method-flow.ts";
@@ -46,6 +48,25 @@ function isFinal(binding: Binding): boolean {
  * Runtime text uses `{}`; values the snapshot cannot decide, including exhausted evaluation stacks, are undefined.
  */
 export class JavaValueEvaluator {
+  private diagnostics: { cause?: "recursive" | "dispatch-disagreement"; evidence: Evidence[] } | undefined;
+
+  trace<T>(evaluate: () => T): { value: T; cause?: "recursive" | "dispatch-disagreement"; evidence: Evidence[] } {
+    const previous = this.diagnostics;
+    const trace: NonNullable<JavaValueEvaluator["diagnostics"]> = { evidence: [] };
+    this.diagnostics = trace;
+    try {
+      return { value: evaluate(), ...trace };
+    } finally {
+      this.diagnostics = previous;
+    }
+  }
+
+  private record(cause: "recursive" | "dispatch-disagreement", file: JavaFile, node: Node): void {
+    if (this.diagnostics === undefined) return;
+    if (this.diagnostics.cause !== "recursive") this.diagnostics.cause = cause;
+    this.diagnostics.evidence.push(spanOf(file.path, node));
+  }
+
   constructor(
     private readonly project: JavaProject,
     private readonly configurationOf: (file: JavaFile) => Configuration,
@@ -213,7 +234,7 @@ export class JavaValueEvaluator {
       const value = this.property(held.key, scope.configurationFile ?? scope.type.file);
       return value === undefined ? undefined : this.resolve(value, scope.configurationFile ?? scope.type.file);
     }
-    if (trail.has(call.id)) return undefined;
+    if (trail.has(call.id)) { this.record("recursive", scope.type.file, call); return undefined; }
     const next = new Set(trail).add(call.id);
     const receiver = object === null || object.type === "this" ? scope.instance : this.held(object, scope, next);
     const property = propertyOf(name);
@@ -231,13 +252,14 @@ export class JavaValueEvaluator {
     const sourceOwner = receiver?.kind === "record" ? this.project.classChain(receiver.type).find((type) => declared(type).length > 0) : undefined;
     const ownSelections = sourceOwner === undefined || receiver?.kind !== "record" ? selections : declared(sourceOwner).map((method) => ({ method, receiver: receiver.type }));
     const values = ownSelections.map((selection) => {
-      if (next.has(selection.method.node.id)) return undefined;
+      if (next.has(selection.method.node.id)) { this.record("recursive", selection.method.owner.file, selection.method.node); return undefined; }
       const returns = descendants(selection.method.node).filter((node) => node.type === "return_statement");
       if (returns.length !== 1) return undefined;
       const expression = returns[0]?.namedChildren[0];
       return expression === undefined ? undefined : this.of(expression, { ...bindMethod(selection, call, scope), ...(receiver?.kind === "record" ? { instance: receiver } : {}) }, new Set(next).add(selection.method.node.id));
     });
     const distinct = new Set(values);
+    if (distinct.size > 1) for (const { method } of ownSelections) this.record("dispatch-disagreement", method.owner.file, method.node);
     return distinct.size === 1 ? values[0] : undefined;
   }
 

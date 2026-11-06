@@ -2,11 +2,11 @@ import type { UrlScope } from "./java-values.ts";
 import { agreed, JavaMethodFlow } from "./java-method-flow.ts";
 import type { Node } from "web-tree-sitter";
 import type { HttpMethod } from "../../domain/entrypoints/http-route.ts";
-import type { Finding } from "../../domain/shared/fact.ts";
+import type { Evidence, Finding } from "../../domain/shared/fact.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
-import type { CallSite, HttpTarget, StatedRequest } from "../../domain/topology/call-site.ts";
+import type { CallSite, CallSiteDiagnostic, HttpTarget, StatedRequest } from "../../domain/topology/call-site.ts";
 import type { Configuration } from "./application-config.ts";
-import { complete, spanOf, unknownAtNode, withEvidence } from "./findings.ts";
+import { complete, spanOf, unknown, unknownAtNode, withEvidence } from "./findings.ts";
 import {
   EXCHANGE_VERBS,
   FEIGN_CLIENT,
@@ -44,6 +44,7 @@ interface Request {
 interface ReadTarget {
   target: Finding<HttpTarget>;
   stated?: StatedRequest;
+  diagnostic?: CallSiteDiagnostic;
 }
 
 
@@ -74,20 +75,29 @@ export class JavaHttpReader {
       }
       const expanded = flow.expand(invocation, scope);
       if (expanded !== undefined) {
-        const targets = expanded.map((group) => {
+        const targets = expanded.map((group): ReadTarget => {
           const alternatives = group.map(({ leaf, scope }) => this.target(leaf, scope));
-          return agreed(alternatives, (value) => (value.target.status === "unknown" ? value.target.status : value.target.value)) ?? { target: unknownAtNode(invocation.type.file.path, invocation.node) };
-        });
-        for (const target of targets) {
+          const target = agreed(alternatives, (value) => value.target.status === "unknown" ? value.target.status : value.target.value)
+            ?? { target: unknownAtNode(invocation.type.file.path, invocation.node), diagnostic: { cause: "dispatch-disagreement" as const } };
+          if (target.target.status !== "unknown") return target;
           const declaring = expanded[0]?.[0]?.leaf.invocation.type;
           const library = declaring !== undefined && !this.owned.has(declaring.file) ? declaring.fqn : undefined;
-          const site = this.siteOf(repo, invocation, target.target.status === "unknown" && library !== undefined ? { ...target, target: unknownAtNode(invocation.type.file.path, invocation.node, library) } : target);
+          const cause = group.some(({ scope }) => scope.undecidedCause === "recursive") ? "recursive" : target.diagnostic?.cause ?? "destination-undecidable";
+          const span = spanOf(invocation.type.file.path, invocation.node);
+          return {
+            ...target,
+            target: unknown(target.target.reason, [library === undefined ? span : { ...span, via: library }, ...target.target.evidence, ...group.map(({ leaf }) => spanOf(leaf.invocation.type.file.path, leaf.invocation.node))]),
+            diagnostic: { cause, ...(library === undefined ? {} : { source: "read" }) },
+          };
+        });
+        for (const target of targets) {
+          const site = this.siteOf(repo, invocation, target);
           if (site.target.status !== "unknown") site.target = { ...site.target, evidence: [...site.target.evidence, ...expanded.flat().map(({ leaf }) => spanOf(leaf.invocation.type.file.path, leaf.invocation.node))] };
           found.push(site);
         }
       } else {
         const library = this.libraryOf(invocation);
-        if (library !== undefined) found.push(this.siteOf(repo, invocation, { target: unknownAtNode(invocation.type.file.path, invocation.node, library) }));
+        if (library !== undefined) found.push(this.siteOf(repo, invocation, { target: unknown("unresolved", [{ ...spanOf(invocation.type.file.path, invocation.node), via: library.via }, ...library.evidence]), diagnostic: { cause: library.source === "read" ? "request-not-found" : "source-not-read", source: library.source } }));
       }
     }
     for (const type of this.project.types.filter((candidate) => this.owned.has(candidate.file))) found.push(...this.declarations(repo, type));
@@ -98,9 +108,9 @@ export class JavaHttpReader {
     return { type: invocation.type, locals: invocation.locals, env };
   }
 
-  private siteOf(repo: string, invocation: Invocation, { target, stated }: ReadTarget): CallSite {
+  private siteOf(repo: string, invocation: Invocation, { target, stated, diagnostic }: ReadTarget): CallSite {
     const span = spanOf(invocation.type.file.path, invocation.node);
-    return { repo, file: span.path, line: span.line, ...(span.endLine === span.line ? {} : { endLine: span.endLine }), symbol: symbolOf(invocation), ancestors: ancestorsOf(invocation.node), transport: "http", target: withEvidence(target, span), ...(stated === undefined ? {} : { stated }) };
+    return { repo, file: span.path, line: span.line, ...(span.endLine === span.line ? {} : { endLine: span.endLine }), symbol: symbolOf(invocation), ancestors: ancestorsOf(invocation.node), transport: "http", target: withEvidence(target, span), ...(diagnostic === undefined ? {} : { diagnostic }), ...(stated === undefined ? {} : { stated }) };
   }
 
   private receiverOf(object: Node, invocation: Invocation) {
@@ -201,24 +211,31 @@ export class JavaHttpReader {
   }
 
   /** The library a call goes through when the sources of its client type are not read to the request. */
-  private libraryOf(invocation: Invocation): string | undefined {
+  private libraryOf(invocation: Invocation): { via: string; source: "read" | "not-read"; evidence: readonly Evidence[] } | undefined {
     const object = invocation.node.childForFieldName("object");
     const receiver = object === null ? undefined : this.receiverOf(object, invocation);
     if (receiver === undefined) return undefined;
     const { resolved } = receiver;
-    if ("decl" in resolved) return !this.owned.has(resolved.decl.file) && HTTP_CLIENT_NAME.test(resolved.decl.name) ? resolved.decl.fqn : undefined;
-    return !this.project.isPlatformName(resolved.fqn) && HTTP_CLIENT_NAME.test(resolved.fqn) ? resolved.fqn : undefined;
+    if ("decl" in resolved) return !this.owned.has(resolved.decl.file) && HTTP_CLIENT_NAME.test(resolved.decl.name) ? { via: resolved.decl.fqn, source: "read", evidence: [spanOf(resolved.decl.file.path, resolved.decl.node)] } : undefined;
+    return !this.project.isPlatformName(resolved.fqn) && HTTP_CLIENT_NAME.test(resolved.fqn) ? { via: resolved.fqn, source: "not-read", evidence: [] } : undefined;
   }
 
   private target(request: Request, scope: UrlScope): ReadTarget {
-    if (scope.undecided === true) return { target: unknownAtNode(request.invocation.type.file.path, request.invocation.node) };
+    const evaluated = this.text.trace(() => this.readTarget(request, scope));
+    const { value } = evaluated;
+    if (value.target.status !== "unknown" || evaluated.cause === undefined) return value;
+    return { ...value, target: unknown(value.target.reason, [...value.target.evidence, ...evaluated.evidence]), diagnostic: { cause: evaluated.cause } };
+  }
+
+  private readTarget(request: Request, scope: UrlScope): ReadTarget {
+    if (scope.undecided === true) return { target: unknownAtNode(request.invocation.type.file.path, request.invocation.node), diagnostic: { cause: scope.undecidedCause ?? "dispatch-disagreement" } };
     const method = typeof request.method === "string" ? request.method : request.method === undefined ? undefined : this.methodOf(request.method, scope);
     const text = request.url === undefined ? undefined : this.text.of(request.url, scope);
     const resolved = text === undefined || method === undefined ? undefined : targetOf(text, request.base);
     const unknown = unknownAtNode(request.invocation.type.file.path, request.invocation.node);
-    if (resolved === undefined || method === undefined) return { target: unknown };
+    if (resolved === undefined || method === undefined) return { target: unknown, diagnostic: { cause: "destination-undecidable" } };
     const { base, path } = resolved;
-    if (base === UNDECIDED) return { target: unknown, stated: { method, path } };
+    if (base === UNDECIDED) return { target: unknown, stated: { method, path }, diagnostic: { cause: "destination-undecidable" } };
     return { target: complete({ method, ...(base === undefined ? {} : { base }), path }) };
   }
 
@@ -243,9 +260,9 @@ export class JavaHttpReader {
     return type.methods.flatMap((method) => {
       const uses = annotationUses(method.node, scopeOf(type));
       const declared = feign === undefined ? this.exchangeOf(uses, scope, exchange).map((target): ReadTarget => ({ target })) : this.feignOf(uses, scope, feign);
-      return declared.map(({ target, stated }) => {
+      return declared.map(({ target, stated, diagnostic }) => {
         const span = spanOf(type.file.path, method.node);
-        return { repo, file: span.path, line: span.line, ...(span.endLine === span.line ? {} : { endLine: span.endLine }), symbol: `${type.qualifiedName}.${method.name}`, ancestors: ancestorsOf(method.node), transport: "http" as const, target: withEvidence(target, span), ...(stated === undefined ? {} : { stated }) };
+        return { repo, file: span.path, line: span.line, ...(span.endLine === span.line ? {} : { endLine: span.endLine }), symbol: `${type.qualifiedName}.${method.name}`, ancestors: ancestorsOf(method.node), transport: "http" as const, target: withEvidence(target, span), ...(diagnostic === undefined ? {} : { diagnostic }), ...(stated === undefined ? {} : { stated }) };
       });
     });
   }

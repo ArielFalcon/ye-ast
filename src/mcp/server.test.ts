@@ -100,7 +100,7 @@ function workspaceImpactFact(): Fact<WorkspaceImpactValue> {
     trigger: { repo: "shop", mergeBase: "b".repeat(40) },
     sections: {
       shop: section({ impact: IMPACT, callSites: [], unmatched: [], external: [], unresolved: [] }),
-      "shop-web": section({ callSites: [SITE], unmatched: [{ ...SITE, line: 9, target: { status: "complete", value: { method: "GET", path: "orders-api/missing" }, evidence: [] } }], external: [{ ...SITE, line: 11, target: { status: "complete", value: { method: "GET", path: "geo-api/provinces" }, evidence: [] } }], unresolved: [{ path: "src/app/order.api.ts", line: 13, symbol: "OrderApi.load", transport: "http", stated: { method: "GET", path: "/orders" } }] }),
+      "shop-web": section({ callSites: [SITE], unmatched: [{ ...SITE, line: 9, target: { status: "complete", value: { method: "GET", path: "orders-api/missing" }, evidence: [] } }], external: [{ ...SITE, line: 11, target: { status: "complete", value: { method: "GET", path: "geo-api/provinces" }, evidence: [] } }], unresolved: [{ reason: "unresolved", evidence: [], path: "src/app/order.api.ts", line: 13, symbol: "OrderApi.load", transport: "http", stated: { method: "GET", path: "/orders" } }] }),
     },
     links: [{ link, direction: "upstream", reach: ["link-1"] }],
   };
@@ -154,7 +154,7 @@ function workspaceFact(): Fact<WorkspaceValue> {
   const section: Fact<WorkspaceSection> = {
     ...base(),
     status: "partial",
-    value: { names, unresolved: [{ path: "src/app/order.api.ts", line: 9, endLine: 12, symbol: "OrderApi.create", transport: "http", stated: { method: "GET", path: "/orders" } }] },
+    value: { names, unresolved: [{ reason: "unresolved", evidence: [], path: "src/app/order.api.ts", line: 9, endLine: 12, symbol: "OrderApi.create", transport: "http", stated: { method: "GET", path: "/orders" } }] },
     cuts: [{ kind: "unresolved-link", at: ["src/app/order.api.ts", "src/app/order.api.ts:9"] }],
   };
   return {

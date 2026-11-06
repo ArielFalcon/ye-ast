@@ -1,3 +1,4 @@
+import { unresolvedLabel } from "./presentation.ts";
 /**
  * Deterministic text of a composition. Summary and details are self-sufficient: every subject they
  * cite is declared once in a local legend (S sources, V snapshots, N subjects, L relations, C connections), the first
@@ -482,7 +483,7 @@ class CompactView {
         const target = this.finding(site.target, (value) => ("method" in value ? `${value.method} ${value.path}${value.base === undefined ? "" : ` base ${value.base}`}${value.operationId === undefined ? "" : ` operation ${value.operationId}`}` : `${value.protocol} ${value.destination} ${value.role}`));
         return `${part.disposition} call site ${site.repo} ${this.file(site.location.file)}:${span(site.location.line, site.location.endLine)} ${site.symbol} ${site.transport}${short ? "" : `; target ${target}${site.stated === undefined ? "" : `; stated ${site.stated.method} ${site.stated.path}`}`}`;
       }
-      case "unresolved-call-site": return `unresolved call site ${part.site.path}:${span(part.site.line, part.site.endLine)} ${part.site.symbol} ${part.site.transport}${part.site.via === undefined ? "" : ` via ${part.site.via}`}${part.site.stated === undefined ? "" : ` stated ${part.site.stated.method} ${part.site.stated.path}`}`;
+      case "unresolved-call-site": return `unresolved call site ${part.site.path}:${span(part.site.line, part.site.endLine)} ${part.site.symbol} ${part.site.transport}${part.site.via === undefined ? "" : ` via ${part.site.via}`}${part.site.stated === undefined ? "" : ` stated ${part.site.stated.method} ${part.site.stated.path}`}${this.details ? `; diagnostic ${JSON.stringify({ reason: part.site.reason, ...part.site.diagnostic, evidence: part.site.evidence })}` : ` ${unresolvedLabel(part.site)}`}`;
       case "workspace-link": {
         const link = part.link;
         const reach = part.reach?.map((reference) => (reference.status === "present" ? (reference.part === part.id ? "self" : "present") : `missing ${reference.linkId}`));

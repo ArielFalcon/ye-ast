@@ -2,11 +2,11 @@ import type { UrlScope } from "./java-values.ts";
 import { agreed, JavaMethodFlow } from "./java-method-flow.ts";
 import type { Node } from "web-tree-sitter";
 import { compareText } from "../../domain/shared/code-node.ts";
-import type { Finding } from "../../domain/shared/fact.ts";
-import type { CallSite, EventTarget } from "../../domain/topology/call-site.ts";
+import type { Evidence, Finding } from "../../domain/shared/fact.ts";
+import type { CallSite, CallSiteDiagnostic, EventTarget } from "../../domain/topology/call-site.ts";
 import type { Configuration } from "./application-config.ts";
 import { EVENT_CLIENT_NAME, PUBLISH_CLIENTS, PUBLISH_METHOD_NAME, type PublishClient } from "./event-vocabulary.ts";
-import { complete, spanOf, unknownAtNode, withEvidence } from "./findings.ts";
+import { complete, spanOf, unknown, unknownAtNode, withEvidence } from "./findings.ts";
 import { argumentsOf, typeNameOf } from "./java-members.ts";
 import { ancestorsOf, receiverOf, symbolOf, type Invocation } from "./java-invocations.ts";
 import { qualifiedTypeName, scopeOf, type JavaFile, type JavaProject, type TypeDecl } from "./java-symbols.ts";
@@ -42,19 +42,25 @@ export class JavaEventReader {
       const scope = this.scopeOf(invocation, new Map());
       const direct = this.publishOf(invocation);
       if (direct !== undefined) {
-        found.push(this.siteOf(repo, invocation, this.target(direct, scope)));
+        const read = this.target(direct, scope);
+        found.push(this.siteOf(repo, invocation, read.target, read.diagnostic));
         continue;
       }
       const expanded = flow.expand(invocation, scope);
       if (expanded !== undefined) {
-        const targets = expanded.map((group) => {
+        for (const group of expanded) {
           const alternatives = group.map(({ leaf, scope }) => this.target(leaf, scope));
-          return agreed(alternatives, (value) => (value.status === "unknown" ? value.status : value.value)) ?? unknownAtNode(invocation.type.file.path, invocation.node);
-        });
-        for (const target of targets) found.push(this.siteOf(repo, invocation, target));
+          const agreedTarget = agreed(alternatives, ({ target }) => target.status === "unknown" ? target.status : target.value);
+          const target = agreedTarget?.target ?? unknownAtNode(invocation.type.file.path, invocation.node);
+          const library = group.find(({ leaf }) => !this.owned.has(leaf.invocation.type.file))?.leaf.invocation.type;
+          const cause = group.some(({ scope }) => scope.undecidedCause === "recursive") || alternatives.some(({ diagnostic }) => diagnostic?.cause === "recursive") ? "recursive"
+            : group.some(({ scope }) => scope.undecided === true) || agreedTarget === undefined || alternatives.some(({ diagnostic }) => diagnostic?.cause === "dispatch-disagreement") ? "dispatch-disagreement" : "destination-undecidable";
+          const causal = target.status === "unknown" ? unknown(target.reason, [...target.evidence, ...alternatives.flatMap(({ target }) => target.evidence), ...group.map(({ leaf }) => spanOf(leaf.invocation.type.file.path, leaf.invocation.node))]) : target;
+          found.push(this.siteOf(repo, invocation, causal, target.status === "unknown" ? { cause, ...(library === undefined ? {} : { source: "read" }) } : undefined));
+        }
       } else {
         const library = this.libraryOf(invocation);
-        if (library !== undefined) found.push(this.siteOf(repo, invocation, unknownAtNode(invocation.type.file.path, invocation.node, library)));
+        if (library !== undefined) found.push(this.siteOf(repo, invocation, unknown("unresolved", [{ ...spanOf(invocation.type.file.path, invocation.node), via: library.via }, ...library.evidence]), { cause: library.source === "read" ? "request-not-found" : "source-not-read", source: library.source }));
       }
     }
     return found.sort((a, b) => compareText(a.file, b.file) || a.line - b.line || compareText(a.symbol, b.symbol) || compareText(a.target.status, b.target.status));
@@ -64,9 +70,9 @@ export class JavaEventReader {
     return { type: invocation.type, locals: invocation.locals, env };
   }
 
-  private siteOf(repo: string, invocation: Invocation, target: Finding<EventTarget>): CallSite {
+  private siteOf(repo: string, invocation: Invocation, target: Finding<EventTarget>, diagnostic?: CallSiteDiagnostic): CallSite {
     const span = spanOf(invocation.type.file.path, invocation.node);
-    return { repo, file: span.path, line: span.line, ...(span.endLine === span.line ? {} : { endLine: span.endLine }), symbol: symbolOf(invocation), ancestors: ancestorsOf(invocation.node), transport: "event", target: withEvidence(target, span) };
+    return { repo, file: span.path, line: span.line, ...(span.endLine === span.line ? {} : { endLine: span.endLine }), symbol: symbolOf(invocation), ancestors: ancestorsOf(invocation.node), transport: "event", target: withEvidence(target, span), ...(target.status === "unknown" ? { diagnostic: diagnostic ?? { cause: "destination-undecidable" } } : {}) };
   }
 
   /** The publish a call makes, when its receiver is a client the vocabulary knows and its method names a destination. */
@@ -85,21 +91,24 @@ export class JavaEventReader {
   }
 
   /** The library a publish goes through when the sources of its client type are not read to the destination. */
-  private libraryOf(invocation: Invocation): string | undefined {
+  private libraryOf(invocation: Invocation): { via: string; source: "read" | "not-read"; evidence: readonly Evidence[] } | undefined {
     if (!PUBLISH_METHOD_NAME.test(invocation.node.childForFieldName("name")?.text ?? "")) return undefined;
     const object = invocation.node.childForFieldName("object");
     const receiver = object === null ? undefined : receiverOf(object, invocation, this.project, this.text);
     if (receiver === undefined) return undefined;
     const { resolved } = receiver;
-    if ("decl" in resolved) return !this.owned.has(resolved.decl.file) && EVENT_CLIENT_NAME.test(resolved.decl.name) ? resolved.decl.fqn : undefined;
-    return !this.project.isPlatformName(resolved.fqn) && EVENT_CLIENT_NAME.test(simpleNameOf(resolved.fqn)) ? resolved.fqn : undefined;
+    if ("decl" in resolved) return !this.owned.has(resolved.decl.file) && EVENT_CLIENT_NAME.test(resolved.decl.name) ? { via: resolved.decl.fqn, source: "read", evidence: [spanOf(resolved.decl.file.path, resolved.decl.node)] } : undefined;
+    return !this.project.isPlatformName(resolved.fqn) && EVENT_CLIENT_NAME.test(simpleNameOf(resolved.fqn)) ? { via: resolved.fqn, source: "not-read", evidence: [] } : undefined;
   }
 
-  private target(publish: Publish, scope: UrlScope): Finding<EventTarget> {
-    const destination = scope.undecided === true ? undefined : this.destination(publish, scope);
-    return destination === undefined
-      ? unknownAtNode(publish.invocation.type.file.path, publish.invocation.node)
-      : complete({ protocol: publish.client.protocol, destination, role: "publish" });
+  private target(publish: Publish, scope: UrlScope): { target: Finding<EventTarget>; diagnostic?: CallSiteDiagnostic } {
+    const evaluated = this.text.trace(() => scope.undecided === true ? undefined : this.destination(publish, scope));
+    return evaluated.value === undefined
+      ? {
+          target: unknown("unresolved", [spanOf(publish.invocation.type.file.path, publish.invocation.node), ...evaluated.evidence]),
+          diagnostic: { cause: scope.undecidedCause ?? evaluated.cause ?? "destination-undecidable" },
+        }
+      : { target: complete({ protocol: publish.client.protocol, destination: evaluated.value, role: "publish" }) };
   }
 
   /** The destination a publish names, `{}` for a part the code fills at run time; undefined when it names none. */

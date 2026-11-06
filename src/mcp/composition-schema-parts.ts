@@ -4,6 +4,7 @@
  * field exact, so an unknown key or an `undefined` member is rejected instead of passed through.
  */
 import { z } from "zod";
+import { CALL_SITE_CAUSES } from "../core/domain/topology/call-site.ts";
 import { TRUST_MODES } from "../core/domain/shared/fact.ts";
 import type { Part } from "./composition-contract.ts";
 import { compositionIdSchema as idOf } from "./composition-id-schema.ts";
@@ -23,6 +24,7 @@ export const unknownReason = z.enum(["no-extractor", "no-project", "out-of-scope
 export const cut = z.strictObject({
   kind: z.enum(["depth", "hub", "caller-budget", "node-cap", "unresolved-link", "deadline", "section", "not-exported", "no-extractor"]),
   at: strings,
+  reason: unknownReason.exactOptional(),
   limit: z.number().exactOptional(),
 });
 export const snapshotRef = z.discriminatedUnion("kind", [
@@ -118,6 +120,17 @@ export const moduleVia = z.strictObject({
 export const callLocation = z.strictObject({ file: ids.file, line: int, endLine: int.exactOptional() });
 const stated = z.strictObject({ method: httpMethod, path: z.string() });
 const transport = z.enum(["http", "event"]);
+export const callSiteDiagnostic = z.strictObject({
+  cause: z.enum(CALL_SITE_CAUSES),
+  source: z.enum(["not-read", "read"]).exactOptional(),
+  unreadableSources: z.array(evidenceValue).exactOptional(),
+});
+export const unresolvedCallSiteSchema = z.strictObject({
+  path: z.string(), line: int, endLine: int.exactOptional(), symbol: z.string(), transport,
+  reason: unknownReason, evidence: z.array(evidenceValue), diagnostic: callSiteDiagnostic.exactOptional(),
+  via: z.string().exactOptional(), stated: stated.exactOptional(),
+});
+
 export const linkBasis = z.enum(["exact", "base-path", "suffix", "operation-id", "event-destination", "gateway-prefix", "route-overlap"]);
 export const linkEndpoints = {
   from: z.strictObject({ ...callLocation.shape, repo: z.string(), symbol: z.string() }),
@@ -188,7 +201,7 @@ export const partSchema = z.discriminatedUnion("kind", [
     site: z.strictObject({
       repo: z.string(), symbol: z.string(),
       ancestors: z.array(z.strictObject({ symbol: z.string(), line: int, endLine: int })).exactOptional(),
-      transport, stated: stated.exactOptional(), location: callLocation,
+      transport, diagnostic: callSiteDiagnostic.exactOptional(), stated: stated.exactOptional(), location: callLocation,
       target: evidenceFinding(z.union([
         z.strictObject({ method: httpMethod, path: z.string(), base: z.string().exactOptional(), operationId: z.string().exactOptional() }),
         z.strictObject({ protocol, destination: z.string(), role: z.literal("publish") }),
@@ -197,10 +210,7 @@ export const partSchema = z.discriminatedUnion("kind", [
     disposition: z.enum(["matched", "unmatched", "external"]),
   }),
   part("unresolved-call-site", {
-    site: z.strictObject({
-      path: z.string(), line: int, endLine: int.exactOptional(), symbol: z.string(), transport,
-      via: z.string().exactOptional(), stated: stated.exactOptional(),
-    }),
+    site: unresolvedCallSiteSchema,
   }),
   part("unlinked-call-site", {
     site: z.strictObject({ from: linkEndpoints.from, transport, outcome: z.enum(["unmatched", "ambiguous"]), name: z.string(), repos: strings.exactOptional() }),

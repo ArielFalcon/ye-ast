@@ -224,3 +224,9 @@ test("link endpoint preserves unknown analysis when its provenance is present", 
   if (result.kind !== "workspace-link-evidence") throw new Error("wrong kind");
   deepStrictEqual(result.context.endpoints.to, { snapshot: unknownEndpoint.snapshot, analysis: { status: "unknown", reason: "deadline" } });
 });
+
+test("cut projections keep the typed reason that discovery recorded", () => {
+  const source = { ...fact, status: "partial" as const, cuts: [{ kind: "unresolved-link" as const, reason: "source-unreadable" as const, at: ["broken.java", "broken.java:3"] }] as const };
+  const result = selected(selectEvidence({ kind: "local", fact: source }, { kind: "cut-places", owner: { kind: "fact" }, cutIndex: 0 }));
+  strictEqual(result.kind === "cut-places" && result.context.reason, "source-unreadable");
+});

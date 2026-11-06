@@ -170,3 +170,22 @@ test("NATS method summaries read a source event subject through forwarding calls
   assert.equal(sites[0]?.symbol, "Publisher.send");
   assert.deepEqual(sites[0]?.target.status === "complete" && sites[0].target.value, { protocol: "nats", destination: "catalog.created", role: "publish" });
 });
+
+test("event diagnostics distinguish unread wrapper sources from expanded destinations", async () => {
+  const caller = java("Caller", 'class Caller { AcmeMessenger client; void load() { client.publish(); } }', ["com.acme.AcmeMessenger"]);
+  const library = file("src/main/java/com/acme/AcmeMessenger.java", 'package com.acme; import io.nats.client.Connection; public class AcmeMessenger { Connection c; String topic; public void publish() { c.publish(topic, null); } }');
+  const [missing] = await reader.of([caller], "app");
+  const [read] = await reader.of([caller], "app", [library]);
+  assert.deepEqual(missing?.diagnostic, { cause: "source-not-read", source: "not-read" });
+  assert.deepEqual(read?.diagnostic, { cause: "destination-undecidable", source: "read" });
+  assert.ok(read?.target.evidence.some(e => e.path.includes("(library)")));
+});
+
+test("event destinations retain recursion diagnosed inside a source getter", async () => {
+  const source = java("Events", `class Events { Connection c;
+    String topic() { return topic(); }
+    void publish() { c.publish(topic(), null); }
+  }`, ["io.nats.client.Connection"]);
+  const [site] = await reader.of([source], "app");
+  assert.equal(site?.diagnostic?.cause, "recursive");
+});

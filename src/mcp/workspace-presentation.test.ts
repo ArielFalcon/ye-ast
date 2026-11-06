@@ -8,7 +8,7 @@ test("mixed unserved references reconstruct original order, multiplicity and qua
   const snapshot = (repo: string) => ({ ...base.snapshot, repo });
   const name = (i: number) => ({ kind: "http-host", name: `a-long-service-name-${i}.example`, evidence: [{ path: "src/a-long-shared-location.ts", line: i + 1, ...(i === 1 ? { via: "client", confidence: 0.75 } : {}) }] });
   const names = Array.from({ length: 20 }, (_, i) => name(i));
-  const section = (repo: string, status: string) => ({ ...base, snapshot: snapshot(repo), status, ...(status === "partial" ? { cuts: [] } : {}), value: { names, unresolved: [{ path: "src/shared.ts", line: 4, symbol: "call", transport: "http", via: "client", stated: { method: "GET", path: "/route" } }] } });
+  const section = (repo: string, status: string) => ({ ...base, snapshot: snapshot(repo), status, ...(status === "partial" ? { cuts: [] } : {}), value: { names, unresolved: [{ reason: "unresolved", evidence: [{ path: "src/shared.ts", line: 4 }], path: "src/shared.ts", line: 4, symbol: "call", transport: "http", via: "client", stated: { method: "GET", path: "/route" } }] } });
   const qualified = (repo: string, i: number) => ({ ...names[i]!, evidence: names[i]!.evidence.map(e => ({ ...e, repo })) });
   const unserved = [qualified("b", 1), qualified("a", 0), qualified("b", 1), ...names.slice(2).map((_, i) => qualified("a", i + 2)), { ...qualified("a", 1), evidence: [{ path: "different.ts", line: 88, repo: "a" }] }, { ...name(0), evidence: [] }];
   const value = { workspace: { repos: ["a", "b", "unknown"], source: "request" }, repositorySnapshots: ["a", "b", "unknown"].map(repo => ({ repo, snapshot: snapshot(repo) })), sections: { a: section("a", "partial"), b: section("b", "complete"), unknown: { ...base, snapshot: snapshot("unknown"), status: "unknown", reason: "unavailable" } }, candidates: [], links: [], unlinked: [], unserved };
@@ -106,4 +106,27 @@ test("a workspace summary keeps the link list when it is shorter than the counts
 
   assert.match(summary, /links between the repositories read \(1\):\n  - 1\. a:x\.ts:7 f -> b GET \/ -> y\.java:1 g \(exact\)\n/);
   assert.match(summary, /call sites the join reached without a link \(1\):\n  - a:x\.ts:9 h http shared: ambiguous \(b, c\)/);
+});
+
+test("unresolved diagnostics stay compact in summaries and retain causal evidence in details", () => {
+  const sites = [
+    { path: "src/Calls.java", line: 4, symbol: "Calls.send", transport: "event", reason: "unresolved", evidence: [{ path: "src/Calls.java", line: 4 }], diagnostic: { cause: "source-not-read", source: "not-read" }, via: "com.acme.Messenger" },
+    { path: "src/Calls.java", line: 8, symbol: "Calls.load", transport: "http", reason: "unresolved", evidence: [{ path: "src/Calls.java", line: 8 }, { path: "(library)/0/Client.java", line: 12 }], diagnostic: { cause: "destination-undecidable", source: "read" }, via: "com.acme.RestClient" },
+    { path: "src/Calls.java", line: 10, symbol: "Calls.dispatch", transport: "http", reason: "unresolved", evidence: [], diagnostic: { cause: "dispatch-disagreement" } },
+    { path: "src/Calls.java", line: 11, symbol: "Calls.loop", transport: "http", reason: "unresolved", evidence: [], diagnostic: { cause: "recursive" } },
+    { path: "src/Calls.java", line: 12, symbol: "Calls.bad", transport: "http", reason: "source-unreadable", evidence: [] },
+  ];
+  const value = { workspace: { repos: ["a"], source: "request" }, repositorySnapshots: [{ repo: "a", snapshot: base.snapshot }], sections: { a: { ...base, status: "complete", value: { names: [], unresolved: sites } } }, candidates: [], links: [], unlinked: [], unserved: [] };
+  const fact = { ...base, status: "complete", value } as never;
+  const summary = renderWorkspace(fact, "summary");
+  const details = renderWorkspace(fact, "details");
+  assert.match(summary, /Calls.send .* missing$/m);
+  assert.match(summary, /Calls.load .* target$/m);
+  assert.match(summary, /Calls.dispatch .* conflict$/m);
+  assert.match(summary, /Calls.loop .* cycle$/m);
+  assert.match(summary, /Calls.bad .* parse$/m);
+  assert.doesNotMatch(summary, /Client.java:12|source-not-read|destination-undecidable/);
+  assert.match(details, /unresolved\/source-not-read.*not-read/);
+  assert.match(details, /unresolved\/destination-undecidable.*read/);
+  assert.match(details, /\(library\)\/0\/Client.java:12/);
 });
