@@ -191,6 +191,22 @@ test("a parameter binds in its function and a catch variable in its catch block,
   ])).functionValueCalls, [{ line: 7, receiver: "caught", member: "call" }]);
 });
 
+test("a receiver holds a function value when any declaration of its binding does, and through every wrapper around it", async () => {
+  assert.deepEqual((await read([
+    "export function run(): void {",
+    "  var f;",
+    "  { var f = () => 1; }",
+    "  f.call(undefined);",
+    "  const g = () => 1;",
+    "  (g).call(undefined);",
+    "  (g as () => number).call(undefined);",
+    "  (g satisfies () => number).call(undefined);",
+    "  (<() => number>g).call(undefined);",
+    "  g!.call(undefined);",
+    "}",
+  ])).functionValueCalls, [6, 4, 7, 8, 9, 10].sort((a, b) => a - b).map((line) => ({ line, receiver: line === 4 ? "f" : "g", member: "call" })));
+});
+
 test("this.<field> binds to the field of the enclosing class, through an arrow; an object-literal method or a function rebinds this", async () => {
   assert.deepEqual((await read([
     "class Holder {",

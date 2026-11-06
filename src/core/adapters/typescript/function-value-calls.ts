@@ -1,28 +1,52 @@
 import ts from "typescript";
 import type { FunctionValueCall } from "../../ports/declared-member-names.port.ts";
+import { bindFile, type BoundFile } from "./lexical-bindings.ts";
 
 const LOGICAL_OPERATORS: readonly ts.SyntaxKind[] = [ts.SyntaxKind.AmpersandAmpersandToken, ts.SyntaxKind.BarBarToken, ts.SyntaxKind.QuestionQuestionToken];
 /** Operators that store their right operand, or may: `a ??= f` leaves `a` holding `f` when it held nothing. */
 const ASSIGNMENTS: readonly ts.SyntaxKind[] = [ts.SyntaxKind.EqualsToken, ts.SyntaxKind.BarBarEqualsToken, ts.SyntaxKind.AmpersandAmpersandEqualsToken, ts.SyntaxKind.QuestionQuestionEqualsToken];
 
-/** The member calls of a TypeScript tree whose receiver the file binds to a function value (see `FunctionValueCall`). */
+/**
+ * The member calls of a TypeScript tree whose receiver the file binds to a function value (see `FunctionValueCall`): a
+ * bare receiver by the binder's own scoping (ADR-0026), bound only when the file declares or assigns a function value
+ * under its name; `this.x` by the field of the enclosing class.
+ */
 export function functionValueCalls(tree: ts.SourceFile): FunctionValueCall[] {
   const accesses: ts.PropertyAccessExpression[] = [];
-  const assignedBindings = new Set<ts.Node>();
+  const holders = new Set<string>();
+  const assignedNames: ts.Identifier[] = [];
   const assignedFields = new Map<ts.ClassLikeDeclaration, Set<string>>();
   const visit = (node: ts.Node): void => {
     if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)) accesses.push(node.expression);
+    const declared = ts.isVariableDeclaration(node) || ts.isParameter(node) || ts.isFunctionDeclaration(node) || ts.isFunctionExpression(node) ? node.name : undefined;
+    if (declared !== undefined && ts.isIdentifier(declared) && declaresFunction(node)) holders.add(declared.text);
     if (ts.isBinaryExpression(node) && ASSIGNMENTS.includes(node.operatorToken.kind) && isFunctionValue(node.right)) {
-      const binding = ts.isIdentifier(node.left) ? bindingOf(node.left) : undefined;
-      if (binding !== undefined) assignedBindings.add(binding);
+      if (ts.isIdentifier(node.left)) {
+        holders.add(node.left.text);
+        assignedNames.push(node.left);
+      }
       const owner = isThisMember(node.left) ? thisClassOf(node.left) : undefined;
       if (owner !== undefined && isThisMember(node.left)) assignedFields.set(owner, new Set([...(assignedFields.get(owner) ?? []), node.left.name.text]));
     }
     ts.forEachChild(node, visit);
   };
   visit(tree);
+
+  let bound: BoundFile | undefined;
+  const bindingOf = (identifier: ts.Identifier) => {
+    bound ??= bindFile(tree.fileName, tree.text);
+    const same = bound.identifierAt(identifier.getStart(tree), identifier.text);
+    return same === undefined ? undefined : bound.bindingOf(same);
+  };
+  let assigned: ReadonlySet<ts.Symbol> | undefined;
+  const assignedSymbols = (): ReadonlySet<ts.Symbol> =>
+    (assigned ??= new Set(assignedNames.flatMap((name) => {
+      const binding = bindingOf(name);
+      return binding?.kind === "declared" ? [binding.symbol] : [];
+    })));
+
   return accesses.flatMap((access): FunctionValueCall[] => {
-    const receiver = access.expression;
+    const receiver = unwrapped(access.expression);
     const line = tree.getLineAndCharacterOfPosition(access.getStart(tree)).line + 1;
     if (isThisMember(receiver)) {
       const owner = thisClassOf(receiver);
@@ -30,11 +54,18 @@ export function functionValueCalls(tree: ts.SourceFile): FunctionValueCall[] {
       const holds = owner !== undefined && (fieldHoldsFunction(owner, name) || (assignedFields.get(owner)?.has(name) ?? false));
       return holds ? [{ line, receiver: name, member: access.name.text }] : [];
     }
-    if (!ts.isIdentifier(receiver)) return [];
+    if (!ts.isIdentifier(receiver) || !holders.has(receiver.text)) return [];
     const binding = bindingOf(receiver);
-    const holds = binding !== undefined && (declaresFunction(binding) || assignedBindings.has(binding));
+    const holds = binding?.kind === "declared" && (binding.declarations.some(declaresFunction) || assignedSymbols().has(binding.symbol));
     return holds ? [{ line, receiver: receiver.text, member: access.name.text }] : [];
   });
+}
+
+/** The expression inside parentheses, type assertions and non-null, which leave its value unchanged. */
+function unwrapped(expression: ts.Expression): ts.Expression {
+  let inner = expression;
+  while (ts.isParenthesizedExpression(inner) || ts.isAsExpression(inner) || ts.isSatisfiesExpression(inner) || ts.isTypeAssertionExpression(inner) || ts.isNonNullExpression(inner)) inner = inner.expression;
+  return inner;
 }
 
 /**
@@ -42,7 +73,7 @@ export function functionValueCalls(tree: ts.SourceFile): FunctionValueCall[] {
  * operator is one when either operand may be, a comma or an assignment when its last operand is.
  */
 function isFunctionValue(value: ts.Expression): boolean {
-  if (ts.isParenthesizedExpression(value) || ts.isAsExpression(value) || ts.isSatisfiesExpression(value) || ts.isTypeAssertionExpression(value) || ts.isNonNullExpression(value)) return isFunctionValue(value.expression);
+  if (unwrapped(value) !== value) return isFunctionValue(unwrapped(value));
   if (ts.isConditionalExpression(value)) return isFunctionValue(value.whenTrue) || isFunctionValue(value.whenFalse);
   if (ts.isBinaryExpression(value)) {
     const operator = value.operatorToken.kind;
@@ -75,76 +106,9 @@ function thisClassOf(node: ts.Node): ts.ClassLikeDeclaration | undefined {
 function fieldHoldsFunction(owner: ts.ClassLikeDeclaration, name: string): boolean {
   return owner.members.some((member) => {
     if (ts.isPropertyDeclaration(member)) return member.name.getText() === name && ((member.initializer !== undefined && isFunctionValue(member.initializer)) || isFunctionType(member.type));
-    if (ts.isConstructorDeclaration(member)) return member.parameters.some((parameter) => ts.isParameterPropertyDeclaration(parameter, member) && declaresName(parameter.name, name) && isFunctionType(parameter.type));
+    if (ts.isConstructorDeclaration(member)) return member.parameters.some((parameter) => ts.isParameterPropertyDeclaration(parameter, member) && ts.isIdentifier(parameter.name) && parameter.name.text === name && isFunctionType(parameter.type));
     return false;
   });
-}
-
-/** The innermost local, parameter or function that declares the identifier's name around it; an import is none, its value the index's to resolve. */
-function bindingOf(identifier: ts.Identifier): ts.Node | undefined {
-  for (let scope: ts.Node | undefined = identifier.parent; scope !== undefined; scope = scope.parent) {
-    const found = declarationIn(scope, identifier.text);
-    if (found !== undefined) return found;
-  }
-  return undefined;
-}
-
-/**
- * The declaration of `name` that `scope` itself owns under JavaScript scoping: a function its parameters, a `var` its
- * function, module or static block across nested blocks, a block its `let`, `const`, `class` and function declarations
- * (modules and classes are strict code), a switch's case block those of every clause, a loop its head, a catch clause its
- * variable.
- */
-function declarationIn(scope: ts.Node, name: string): ts.Node | undefined {
-  if (ts.isFunctionLike(scope)) {
-    const parameter = scope.parameters.find((candidate) => declaresName(candidate.name, name));
-    if (parameter !== undefined) return parameter;
-    if (ts.isFunctionExpression(scope) && scope.name?.text === name) return scope;
-  }
-  const lexical = lexicalStatements(scope);
-  for (const statement of lexical) {
-    if (ts.isVariableStatement(statement)) {
-      const declaration = statement.declarationList.declarations.find((candidate) => declaresName(candidate.name, name));
-      if (declaration !== undefined) return declaration;
-    }
-    if ((ts.isFunctionDeclaration(statement) || ts.isClassDeclaration(statement)) && statement.name?.text === name) return statement;
-  }
-  if (isVarScope(scope)) {
-    const hoisted = hoistedVar(scope, name);
-    if (hoisted !== undefined) return hoisted;
-  }
-  if ((ts.isForStatement(scope) || ts.isForOfStatement(scope) || ts.isForInStatement(scope)) && scope.initializer !== undefined && ts.isVariableDeclarationList(scope.initializer)) {
-    return scope.initializer.declarations.find((candidate) => declaresName(candidate.name, name));
-  }
-  if (ts.isCatchClause(scope) && scope.variableDeclaration !== undefined && declaresName(scope.variableDeclaration.name, name)) return scope.variableDeclaration;
-  return undefined;
-}
-
-function lexicalStatements(scope: ts.Node): readonly ts.Statement[] {
-  if (ts.isBlock(scope) || ts.isSourceFile(scope) || ts.isModuleBlock(scope)) return scope.statements;
-  if (ts.isCaseBlock(scope)) return scope.clauses.flatMap((clause) => clause.statements);
-  return [];
-}
-
-function isVarScope(node: ts.Node): boolean {
-  return ts.isFunctionLike(node) || ts.isSourceFile(node) || ts.isModuleBlock(node) || ts.isClassStaticBlockDeclaration(node);
-}
-
-/** The `var` declaration of `name` anywhere in `scope`'s body, short of a nested var scope. */
-function hoistedVar(scope: ts.Node, name: string): ts.VariableDeclaration | undefined {
-  let found: ts.VariableDeclaration | undefined;
-  const visit = (node: ts.Node): void => {
-    if (found !== undefined || isVarScope(node)) return;
-    if (ts.isVariableDeclarationList(node) && (node.flags & ts.NodeFlags.BlockScoped) === 0) found = node.declarations.find((candidate) => declaresName(candidate.name, name));
-    ts.forEachChild(node, visit);
-  };
-  ts.forEachChild(scope, visit);
-  return found;
-}
-
-function declaresName(binding: ts.BindingName, name: string): boolean {
-  if (ts.isIdentifier(binding)) return binding.text === name;
-  return binding.elements.some((element) => !ts.isOmittedExpression(element) && declaresName(element.name, name));
 }
 
 /** A binding whose declaration holds a function value. */
