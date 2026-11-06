@@ -4,7 +4,7 @@ import { formatAccessPath, parseAccessPath } from "../../domain/contracts/access
 import type { Carrier, CarrierSite, FlowResult } from "../../domain/contracts/consumer-flow.ts";
 import { createConsumerFlowReader } from "./consumer-flow.adapter.ts";
 
-const COMMON = "import { HttpClient } from '@angular/common/http'\nimport { map, tap, switchMap, catchError } from 'rxjs'\nimport { firstValueFrom, of } from 'rxjs'\nimport { toSignal } from '@angular/core/rxjs-interop'\nimport { httpResource } from '@angular/common/http'\nimport { resource, signal, computed } from '@angular/core'\n";
+const COMMON = "import { HttpClient } from '@angular/common/http'\nimport { map, tap, switchMap, catchError } from 'rxjs'\nimport { firstValueFrom, of } from 'rxjs'\nimport { toSignal } from '@angular/core/rxjs-interop'\nimport { httpResource } from '@angular/common/http'\nimport { resource, signal, computed, input } from '@angular/core'\n";
 const HEADER_LINES = COMMON.split("\n").length - 1;
 
 /** A source whose body starts at line `HEADER_LINES + 1`. */
@@ -289,7 +289,7 @@ test("user type guards and instanceof leave the read opaque", async () => {
 });
 
 test("a fallback on the changed value guards what it flows to; a destructuring default covers undefined only", async () => {
-  const file = guarded(["const owner = order.owner ?? other", "show(owner.name)", "const { owner: second = other } = order", "show(second.name)"]);
+  const file = guarded(["const owner = order.owner ?? {}", "show(owner.name)", "const { owner: second = {} } = order", "show(second.name)"]);
   const result = await follow([file], parameterOrder, "owner");
   assert.deepEqual(uses(result), ["4 name|[] dereference [fallback]", "6 name|[] dereference [fallback]"]);
   assert.deepEqual(result.uses[1]!.guards[0]!.excludes, ["undefined"]);
@@ -328,7 +328,7 @@ test("a value that contains the changed property reaching code outside the repos
     "this.dyn[order.key]",
   ]);
   const result = await follow([file], parameterOrder, "items[].owner");
-  assert.deepEqual(frontiers(result), ["3 unmodelled-sink:this.form.patchValue", "4 unmodelled-flow:method map", "5 unmodelled-flow:object spread", "6 unmodelled-sink:Library.use"]);
+  assert.deepEqual(frontiers(result), ["3 unmodelled-sink:this.form.patchValue", "4 unmodelled-flow:method:map", "5 unmodelled-flow:object spread", "6 unmodelled-sink:Library.use"]);
 });
 
 test("an operator the slice does not model is a frontier at the operator", async () => {
@@ -374,12 +374,12 @@ const ROUTES = (extra: string) => [
 const resolverReturn = { kind: "return" as const, repo: "repo", file: "order.resolver.ts", symbol: "orderResolver", line: at(1) };
 
 test("a route resolver continues to the component input when input binding is enabled, and to its route data reads", async () => {
-  const files = ROUTES("import { provideRouter, withComponentInputBinding } from '@angular/router'\nexport const config = [provideRouter(routes, withComponentInputBinding())]").map((file) => ({ ...file, content: file.content.replace("export const orderResolver", "export const orderResolver") }));
+  const files = ROUTES("import { provideRouter, withComponentInputBinding } from '@angular/router'\nexport const config = [provideRouter(routes, withComponentInputBinding())]");
   const result = await follow(files, resolverReturn, "owner");
-  assert.deepEqual(next(result), ["member OrderComponent.order@2 owner"]);
+  assert.deepEqual(next(result), ["input order@- owner"]);
   assert.deepEqual(steps(result), ["resolver-input"]);
   assert.deepEqual(uses(result), ["4 owner.name|owner dereference []"]);
-  assert.deepEqual(result.uses[0]!.hops.map((hop) => hop.step), ["route-data", "subscribe", "assign"]);
+  assert.deepEqual(result.uses[0]!.hops.map((hop) => hop.step), ["resolver-input", "route-data", "subscribe", "assign"]);
 });
 
 test("without input binding the component input is a frontier with its reason, route data is still read", async () => {
@@ -466,4 +466,166 @@ test("assignment and set on a field hand back the member carrier", async () => {
   ]);
   const result = await follow([file], callSite("a.ts", 6, "Page.load"), "owner");
   assert.deepEqual(next(result), ["member Page.order@2 owner", "member Page.state@3 owner"]);
+});
+
+function plain(lines: readonly string[]) {
+  return source("p.ts", ["function use(o: Order) {", ...lines.map((line) => `  ${line}`), "}"]);
+}
+
+const paramO = { kind: "parameter" as const, repo: "repo", file: "p.ts", symbol: "use", line: at(1), index: 0 };
+
+test("a method called on a container of the changed property is a frontier, whatever its argument count", async () => {
+  const file = plain(["const copy = o.items.slice()", "show(copy[0].owner.name)", "o.items.map((i) => i.owner.name)"]);
+  const result = await follow([file], paramO, "items[].owner");
+  assert.deepEqual(frontiers(result), ["2 unmodelled-flow:method:slice", "4 unmodelled-flow:method:map"]);
+  assert.deepEqual(uses(result), []);
+});
+
+test("calling the changed value is a dereference, optional call included", async () => {
+  const file = plain(["o.owner()", "o.owner?.()"]);
+  const result = await follow([file], paramO, "owner");
+  assert.deepEqual(uses(result), ["2 owner|owner dereference []", "3 owner|owner dereference [optional-chain]"]);
+});
+
+test("an optional chain guards a method call with arguments on the changed value", async () => {
+  const file = plain(["show(o.owner?.name(1))", "show(o.owner.name(1))"]);
+  const result = await follow([file], paramO, "owner");
+  assert.deepEqual(uses(result), ["2 []|[] dereference [optional-chain]", "3 []|[] dereference []"]);
+});
+
+test("a read after a write to the guarded path reads the written value: no use, and the write is reported", async () => {
+  const file = plain(["if (o.owner) {", "  o.owner = make()", "  show(o.owner.name)", "}"]);
+  const result = await follow([file], paramO, "owner");
+  assert.deepEqual(uses(result), []);
+  assert.deepEqual(frontiers(result), ["3 unmodelled-flow:write after guard"]);
+});
+
+test("a guard outside a closure is not proven where the closure runs: the read is reported, neither guarded nor unguarded", async () => {
+  const file = plain(["if (o.owner) {", "  const f = () => o.owner.name", "  o.owner = null", "  f()", "}", "list.map(() => o.owner.id)"]);
+  const result = await follow([file], paramO, "owner");
+  assert.deepEqual(uses(result), ["7 owner.id|owner dereference []"]);
+  assert.deepEqual(frontiers(result), ["3 unmodelled-flow:guard across closure"]);
+});
+
+test("reads of a name before it is assigned the followed value are not the followed value", async () => {
+  const file = plain(["let x = other", "show(x.owner.name)", "x = o", "show(x.owner.id)", "x = another", "show(x.owner.size)"]);
+  const result = await follow([file], paramO, "owner");
+  assert.deepEqual(uses(result), ["5 owner.id|owner dereference []"]);
+  assert.deepEqual(frontiers(result), []);
+});
+
+test("an assignment that may or may not run keeps the later reads and reports the conditional write", async () => {
+  const file = plain(["let x = o", "if (flag) { x = other }", "show(x.owner.name)"]);
+  const result = await follow([file], paramO, "owner");
+  assert.deepEqual(uses(result), ["4 owner.name|owner dereference []"]);
+  assert.deepEqual(frontiers(result), ["3 unmodelled-flow:conditional reassignment"]);
+});
+
+test("a parameter that shadows a top-level function is not that function", async () => {
+  const file = source("p.ts", ["function render(x: Order) { return x.owner.name }", "function use(o: Order, render: Fn) { render(o) }"]);
+  const result = await follow([file], { ...paramO, line: at(2) }, "owner");
+  assert.deepEqual(next(result), []);
+  assert.deepEqual(frontiers(result), ["2 unmodelled-sink:render"]);
+});
+
+test("a local function declaration is the callee over a top-level one of the same name", async () => {
+  const file = source("p.ts", ["function render(x: Order) {}", "function use(o: Order) {", "  function render(y: Order) {}", "  render(o)", "}"]);
+  const result = await follow([file], { ...paramO, line: at(2) }, "owner");
+  assert.deepEqual(next(result), ["parameter render#0@3 owner"]);
+});
+
+test("a fallback guards only when its value is proven present", async () => {
+  const file = plain(["const a = o.owner ?? null", "show(a.name)", "const b = o.owner ?? {}", "show(b.name)", "const { owner: c = null } = o", "show(c.name)"]);
+  const result = await follow([file], paramO, "owner");
+  assert.deepEqual(uses(result), ["3 name|[] dereference []", "5 name|[] dereference [fallback]", "7 name|[] dereference []"]);
+});
+
+test("an async or generator projection does not emit the response", async () => {
+  const file = source("a.ts", [
+    "class Page {",
+    "  constructor(private http: HttpClient) {}",
+    "  load() {",
+    "    this.http.get<Order>('/orders/1').pipe(map(async (o) => o)).subscribe((v) => show(v.owner.name))",
+    "    this.http.get<Order>('/orders/1').pipe(map(function* (o) { return o })).subscribe((v) => show(v.owner.name))",
+    "  }",
+    "}",
+  ]);
+  const first = await follow([file], callSite("a.ts", 4, "Page.load"), "owner");
+  assert.deepEqual(uses(first), []);
+  assert.deepEqual(frontiers(first), ["4 unmodelled-flow:async projection"]);
+  const second = await follow([file], callSite("a.ts", 5, "Page.load"), "owner");
+  assert.deepEqual(uses(second), []);
+  assert.deepEqual(frontiers(second), ["5 unmodelled-flow:generator projection"]);
+});
+
+test("destructuring the changed value is a dereference even with an empty pattern", async () => {
+  const file = plain(["const {} = o.owner", "const [] = o.owner"]);
+  const result = await follow([file], paramO, "owner");
+  assert.deepEqual(uses(result), ["2 []|[] dereference []", "3 []|[] dereference []"]);
+});
+
+const INPUTS = [
+  "import { Input, model } from '@angular/core'",
+  "export class OrderComponent {",
+  "  @Input() plain: Order",
+  "  @Input('aliased') renamed: Order",
+  "  @Input({ alias: 'objAlias' }) objRenamed: Order",
+  "  sig = input<Order>()",
+  "  req = input.required<Order>({ alias: 'reqAlias' })",
+  "  both = model<Order>(undefined, { alias: 'modelAlias' })",
+  "  field: any",
+  "}",
+];
+
+const inputSite = (name: string): CarrierSite => ({ kind: "input", repo: "repo", file: "order.component.ts", owner: "OrderComponent", name });
+
+test("an input carrier resolves its public name to the member that declares the input", async () => {
+  const file = source("order.component.ts", INPUTS);
+  const names: Record<string, string> = { plain: "plain", aliased: "renamed", objAlias: "objRenamed", sig: "sig", reqAlias: "req", modelAlias: "both" };
+  for (const [publicName, member] of Object.entries(names)) {
+    const result = await follow([file], inputSite(publicName), "owner");
+    assert.deepEqual(next(result).map((line) => line.split("@")[0]), [`member OrderComponent.${member}`], publicName);
+    assert.deepEqual(steps(result), ["input"], publicName);
+    assert.deepEqual(frontiers(result), [], publicName);
+  }
+});
+
+test("a name that no input declares is a frontier at the class, the original name of an aliased input included", async () => {
+  const file = source("order.component.ts", INPUTS);
+  for (const name of ["field", "renamed", "missing"]) {
+    const result = await follow([file], inputSite(name), "owner");
+    assert.deepEqual(next(result), [], name);
+    assert.deepEqual(frontiers(result), [`2 unsupported-binding:not-an-input:${name}`], name);
+  }
+});
+
+test("input binding is proven only by withComponentInputBinding() inside the provideRouter call that registers the routes", async () => {
+  const unused = ROUTES("import { provideRouter, withComponentInputBinding } from '@angular/router'\nconst unused = withComponentInputBinding()\nexport const config = [provideRouter(routes)]");
+  const refused = await follow(unused, resolverReturn, "owner");
+  assert.deepEqual(next(refused), []);
+  assert.equal(refused.frontiers[0]!.cause, "unsupported-binding");
+  const other = ROUTES("import { provideRouter, withComponentInputBinding } from '@angular/router'\nexport const config = [provideRouter(elsewhere, withComponentInputBinding())]");
+  assert.deepEqual(next(await follow(other, resolverReturn, "owner")), []);
+  const module = ROUTES("import { RouterModule } from '@angular/router'\nexport const config = [RouterModule.forRoot(routes, { bindToComponentInputs: true })]");
+  assert.deepEqual(next(await follow(module, resolverReturn, "owner")), ["input order@- owner"]);
+});
+
+test("a resolver key reaches the input carrier by its public name, not a member", async () => {
+  const files = ROUTES("import { provideRouter, withComponentInputBinding } from '@angular/router'\nexport const config = [provideRouter(routes, withComponentInputBinding())]");
+  const result = await follow(files, resolverReturn, "owner");
+  assert.deepEqual(next(result), ["input order@- owner"]);
+  assert.deepEqual(steps(result), ["resolver-input"]);
+});
+
+test("input binding registered in another file reaches the routes it imports", async () => {
+  const [resolver, component, routes] = ROUTES("");
+  const main = source("main.ts", ["import { provideRouter, withComponentInputBinding } from '@angular/router'", "import { routes } from './app.routes'", "export const config = [provideRouter(routes, withComponentInputBinding())]"]);
+  const result = await follow([resolver!, component!, routes!, main], resolverReturn, "owner");
+  assert.deepEqual(next(result), ["input order@- owner"]);
+});
+
+test("an assignment inside a loop reports that earlier reads of the name may follow it", async () => {
+  const file = plain(["let x = other", "while (flag) {", "  show(x.owner.name)", "  x = o", "}"]);
+  const result = await follow([file], paramO, "owner");
+  assert.deepEqual(frontiers(result), ["5 unmodelled-flow:assignment in a loop"]);
 });

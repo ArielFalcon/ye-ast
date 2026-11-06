@@ -10,13 +10,19 @@ import {
   declaringScope,
   enclosingClass,
   enclosingFunction,
+  enclosingLoop,
+  excludesAbsence,
   exits,
+  isAsyncOrGenerator,
   isFunctionNode,
   isNullishLiteral,
   isTransparent,
+  mayNotFollow,
   namedFunction,
   referencesOf,
+  startsWith,
   unwrap,
+  writesWithin,
   type Binding,
   type FunctionNode,
   type NamedFunction,
@@ -69,6 +75,7 @@ const KEEPING_OPERATORS: ReadonlySet<string> = new Set([
 ]);
 const CALLBACK_OPERATORS: ReadonlySet<string> = new Set(["tap", "filter"]);
 const STREAM_WRITES: ReadonlySet<string> = new Set(["set", "update", "mutate", "next"]);
+const ACCESSORS: ReadonlySet<string> = new Set(["value", "json"]);
 const ROUTE_HOLDER = "ActivatedRoute";
 
 const isRxjs = (module: string | undefined): boolean => module === "rxjs" || module?.startsWith("rxjs/") === true;
@@ -93,6 +100,7 @@ export class Walker {
   readonly next: Held<FlowNext>[] = [];
   readonly frontiers: Held<FlowFrontier>[] = [];
   private readonly visited = new Set<string>();
+  private readonly reported = new Set<string>();
 
   constructor(
     private readonly repo: string,
@@ -214,18 +222,32 @@ export class Walker {
         top = parent;
       } else if (ts.isPropertyAccessExpression(parent) && parent.expression === top) {
         const call = parent.parent;
-        if (ts.isCallExpression(call) && call.expression === parent && call.arguments.length > 0) return this.methodCall(top, q, parent, call, t, chain);
-        advance(parent.name.text, parent.name, parent.questionDotToken !== undefined, parent);
+        const optional = parent.questionDotToken !== undefined;
+        if (ts.isCallExpression(call) && call.expression === parent && this.readsAccessor(parent, call, q, t)) {
+          advance(parent.name.text, parent.name, optional, parent);
+          top = call;
+        } else if (ts.isCallExpression(call) && call.expression === parent && this.isMethod(parent, call, q, t)) {
+          if (optional) chain.push(this.guard("optional-chain", q, BOTH, parent.name));
+          return this.methodCall(top, q, parent, call, t, chain);
+        } else {
+          advance(parent.name.text, parent.name, optional, parent);
+        }
       } else if (ts.isElementAccessExpression(parent) && parent.expression === top) {
         const segment = this.keySegment(parent, q, t);
         if (segment === undefined) return;
         advance(segment, parent.argumentExpression, parent.questionDotToken !== undefined, parent);
       } else if (ts.isCallExpression(parent) && parent.expression === top) {
-        if (parent.arguments.length > 0) {
-          if (relatePaths(q, t.origin) === "beyond" || relatePaths(q, t.origin) === "exact") this.use(parent, t, q, "dereference", [...t.guards, ...chain, ...this.dominating(parent, t.binding)]);
+        const relation = relatePaths(q, t.origin);
+        const bare = parent.arguments.length === 0;
+        if ((q.length === 0 && bare) || (relation === "beyond" && bare)) {
+          top = parent;
+        } else if (relation === "beyond" || relation === "exact") {
+          if (parent.questionDotToken !== undefined) chain.push(this.guard("optional-chain", q, BOTH, parent));
+          return this.dereference(parent, t, q, chain);
+        } else {
+          if (relation === "contains") this.frontier(parent, "unmodelled-flow", "call", t);
           return;
         }
-        top = parent;
       } else {
         break;
       }
@@ -234,14 +256,33 @@ export class Walker {
     if (relation === "disjoint") return;
     if (relation === "beyond") {
       const site = beyondAt ?? top;
-      this.use(site, t, q, "dereference", [...t.guards, ...chain, ...this.dominating(site, t.binding)]);
+      this.dereference(site, t, q, chain);
       return;
     }
-    this.sink(top, this.atTop(t, top, q, chain));
+    const attached = this.atTop(t, top, q, chain);
+    if (attached !== undefined) this.sink(top, attached);
   }
 
-  private atTop(t: Trail, top: ts.Node, q: AccessPath, chain: readonly Guard[]): Trail {
-    const guards = translate([...t.guards, ...chain, ...this.dominating(top, t.binding)], [{ from: q, to: [] }]);
+  private dereference(node: ts.Node, t: Trail, q: AccessPath, chain: readonly Guard[]): void {
+    const held = this.dominating(node, t);
+    if (held !== undefined) this.use(node, t, q, "dereference", [...t.guards, ...chain, ...held]);
+  }
+
+  /** `value()` of a resource or `json()` of a fetch response: the change sits under the accessor the carrier was wrapped in. */
+  private readsAccessor(access: ts.PropertyAccessExpression, call: ts.CallExpression, q: AccessPath, t: Trail): boolean {
+    return call.arguments.length === 0 && q.length === 0 && ACCESSORS.has(access.name.text) && t.origin[0] === access.name.text;
+  }
+
+  /** A call of a method of the value at `q`, as opposed to a call of a property on the way to the changed value. */
+  private isMethod(access: ts.PropertyAccessExpression, call: ts.CallExpression, q: AccessPath, t: Trail): boolean {
+    if (relatePaths(q, t.origin) !== "contains") return call.arguments.length > 0;
+    return relatePaths([...q, access.name.text], t.origin) === "disjoint";
+  }
+
+  private atTop(t: Trail, top: ts.Node, q: AccessPath, chain: readonly Guard[]): Trail | undefined {
+    const held = this.dominating(top, t);
+    if (held === undefined) return undefined;
+    const guards = translate([...t.guards, ...chain, ...held], [{ from: q, to: [] }]);
     return { origin: t.origin.slice(q.length), hops: t.hops, guards, projected: q };
   }
 
@@ -261,10 +302,11 @@ export class Walker {
   private methodCall(receiver: ts.Expression, q: AccessPath, access: ts.PropertyAccessExpression, call: ts.CallExpression, t: Trail, chain: readonly Guard[]): void {
     const relation = relatePaths(q, t.origin);
     if (relation === "disjoint") return;
-    if (relation === "beyond") return this.use(access.name, t, q, "dereference", [...t.guards, ...chain, ...this.dominating(access, t.binding)]);
+    if (relation === "beyond") return this.dereference(access.name, t, q, chain);
     const name = access.name.text;
     if (q.length === 0 && STREAM_WRITES.has(name)) return;
     const attached = this.atTop(t, receiver, q, chain);
+    if (attached === undefined) return;
     if (name === "pipe") return this.applyPipe(call, 0, this.hopped(attached, "pipe", call));
     if (name === "subscribe") return this.subscribeTo(call, attached);
     if (name === "then") {
@@ -274,14 +316,14 @@ export class Walker {
       return;
     }
     if (relation === "exact") this.use(access.name, attached, [], "dereference", attached.guards);
-    if (attached.origin.length > 0) this.frontier(access.name, "unmodelled-flow", `method ${name}`, attached);
+    if (attached.origin.length > 0) this.frontier(access.name, "unmodelled-flow", `method:${name}`, attached);
   }
 
   /** What the code does with the expression that evaluates to the value: `t.origin` is where the change sits in it. */
   private sink(top: ts.Expression, t: Trail): void {
     const parent = top.parent;
     const exact = t.origin.length === 0;
-    if (ts.isVariableDeclaration(parent) && parent.initializer === top) return this.bind(parent.name, declaredScope(parent), ts.isIdentifier(parent.name) ? this.hopped(t, "assign", parent) : t);
+    if (ts.isVariableDeclaration(parent) && parent.initializer === top) return this.bind(parent.name, declaredScope(parent), ts.isIdentifier(parent.name) ? this.hopped(t, "assign", parent) : t, parent);
     if (ts.isBinaryExpression(parent)) return this.sinkBinary(top, parent, t);
     if (ts.isConditionalExpression(parent)) return parent.condition === top ? undefined : this.read(parent, t);
     if (ts.isPrefixUnaryExpression(parent) || ts.isTypeOfExpression(parent) || ts.isVoidExpression(parent) || ts.isExpressionStatement(parent)) return;
@@ -309,7 +351,7 @@ export class Walker {
     if (operator === ts.SyntaxKind.EqualsToken) return parent.right === top ? this.assignTo(parent, t) : undefined;
     if (operator === ts.SyntaxKind.QuestionQuestionToken || operator === ts.SyntaxKind.BarBarToken) {
       if (parent.right === top) return this.read(parent, t);
-      const guards = exact ? [...t.guards, this.guard("fallback", [], BOTH, parent)] : t.guards;
+      const guards = exact && excludesAbsence(parent.right) ? [...t.guards, this.guard("fallback", [], BOTH, parent)] : t.guards;
       return this.read(parent, this.hopped({ ...t, guards }, "fallback", parent));
     }
     if (operator === ts.SyntaxKind.AmpersandAmpersandToken) return parent.right === top ? this.read(parent, t) : undefined;
@@ -324,7 +366,7 @@ export class Walker {
     const left = unwrap(assignment.left);
     const held = this.hopped(t, "assign", assignment);
     if (ts.isPropertyAccessExpression(left) && left.expression.kind === ts.SyntaxKind.ThisKeyword) return this.assignedToMember(left.name.text, enclosingClass(assignment), assignment, held);
-    if (ts.isIdentifier(left)) return this.track({ kind: "name", name: left.text, scope: declaringScope(left) }, held);
+    if (ts.isIdentifier(left)) return this.track({ kind: "name", name: left.text, scope: declaringScope(left) }, held, assignment);
     this.frontier(assignment, "unmodelled-flow", "assignment target", t);
   }
 
@@ -377,6 +419,11 @@ export class Walker {
         const imported = this.unit.imports.get(callee.text);
         if (imported === undefined) return false;
         if (isRxjs(imported.module) && imported.imported === "map") {
+          const kind = isAsyncOrGenerator(fn);
+          if (kind !== undefined) {
+            this.frontier(fn, "unmodelled-flow", `${kind} projection`, t);
+            return true;
+          }
           const pipe = holder.parent;
           if (!ts.isCallExpression(pipe) || !isPipe(pipe) || !pipe.arguments.some((argument) => argument === holder)) return false;
           this.applyPipe(pipe, pipe.arguments.indexOf(holder) + 1, t);
@@ -481,17 +528,40 @@ export class Walker {
     this.frontier(call, "unmodelled-sink", callee.getText(this.unit.tree).slice(0, 80), t);
   }
 
-  private bind(name: ts.BindingName, scope: ts.Node, t: Trail): void {
-    if (ts.isIdentifier(name)) return this.track({ kind: "name", name: name.text, scope }, t);
+  private bind(name: ts.BindingName, scope: ts.Node, t: Trail, from?: ts.Node): void {
+    if (ts.isIdentifier(name)) return this.track({ kind: "name", name: name.text, scope }, t, from);
     this.destructure(name, scope, t, []);
   }
 
-  private track(binding: Binding, t: Trail): void {
+  /** Follows the reads of `binding`; with `from`, only those the declaration or assignment at `from` can reach. */
+  private track(binding: Binding, t: Trail, from?: ts.Node): void {
     const trail: Trail = { origin: t.origin, hops: t.hops, guards: t.guards, binding };
-    for (const reference of referencesOf(binding)) this.read(reference, trail);
+    const references = referencesOf(binding);
+    for (const reference of from === undefined ? references : this.reachedFrom(binding, from, references, t)) this.read(reference, trail);
+  }
+
+  private reachedFrom(binding: Binding, assignment: ts.Node, references: readonly ts.Expression[], t: Trail): ts.Expression[] {
+    const loop = enclosingLoop(assignment, binding.scope);
+    if (loop !== undefined && references.some((reference) => reference.pos < assignment.pos && reference.pos >= loop.pos)) this.once(assignment, "assignment in a loop", t);
+    const reachable = references.filter((reference) => reference.pos >= assignment.end);
+    const rewrite = writesWithin(binding.scope, binding, assignment.end, Infinity).find((write) => write.path.length === 0);
+    if (rewrite === undefined) return reachable;
+    if (mayNotFollow(assignment, rewrite.node)) {
+      this.once(rewrite.node, "conditional reassignment", t);
+      return reachable;
+    }
+    return reachable.filter((reference) => reference.pos < rewrite.node.end);
+  }
+
+  private once(node: ts.Node, detail: string, t: Trail): void {
+    const key = `${node.pos}\0${detail}`;
+    if (this.reported.has(key)) return;
+    this.reported.add(key);
+    this.frontier(node, "unmodelled-flow", detail, t);
   }
 
   private destructure(pattern: ts.BindingPattern, scope: ts.Node, t: Trail, prefix: AccessPath): void {
+    if (pattern.elements.length === 0 && ["exact", "beyond"].includes(relatePaths(prefix, t.origin))) this.use(pattern, t, prefix, "dereference", t.guards);
     for (const element of pattern.elements) {
       if (ts.isOmittedExpression(element)) continue;
       const key = ts.isObjectBindingPattern(pattern) ? (element.propertyName ?? element.name) : undefined;
@@ -513,31 +583,58 @@ export class Walker {
         continue;
       }
       const guards = translate(t.guards, [{ from: path, to: [] }]);
-      if (element.initializer !== undefined) guards.push(this.guard("fallback", [], ["undefined"], element));
+      if (element.initializer !== undefined && excludesAbsence(element.initializer)) guards.push(this.guard("fallback", [], ["undefined"], element));
       const child: Trail = { origin: t.origin.slice(path.length), hops: t.hops, guards, projected: path };
       this.bind(element.name, scope, this.hopped(child, "assign", element));
     }
   }
 
-  private dominating(node: ts.Node, binding: Binding | undefined): Guard[] {
+  /**
+   * The guards that hold on the binding where `node` runs: those of the function around it. Undefined, and reported,
+   * when the read is not the followed value's to decide: a write replaced the guarded value before it, or only a guard
+   * outside a closure would protect it, which holds where the closure is written, not where it runs.
+   */
+  private dominating(node: ts.Node, t: Trail): Guard[] | undefined {
+    const binding = t.binding;
     if (binding === undefined) return [];
-    const guards: Guard[] = [];
+    const found: { guard: Guard; from: number; captured: boolean }[] = [];
+    let closure: ts.Node | undefined;
+    const add = (guards: Guard[], from: number): void => void guards.forEach((guard) => found.push({ guard, from, captured: closure !== undefined }));
     for (let child: ts.Node = node, parent = node.parent; parent !== undefined && child !== binding.scope; child = parent, parent = parent.parent) {
+      if (isFunctionNode(parent)) {
+        closure ??= parent;
+        continue;
+      }
       if (ts.isIfStatement(parent)) {
-        if (child === parent.thenStatement) guards.push(...this.conditionGuards(parent.expression, true, binding));
-        else if (child === parent.elseStatement) guards.push(...this.conditionGuards(parent.expression, false, binding));
+        if (child === parent.thenStatement) add(this.conditionGuards(parent.expression, true, binding), parent.expression.end);
+        else if (child === parent.elseStatement) add(this.conditionGuards(parent.expression, false, binding), parent.expression.end);
       } else if (ts.isConditionalExpression(parent)) {
-        if (child === parent.whenTrue) guards.push(...this.conditionGuards(parent.condition, true, binding));
-        else if (child === parent.whenFalse) guards.push(...this.conditionGuards(parent.condition, false, binding));
+        if (child === parent.whenTrue) add(this.conditionGuards(parent.condition, true, binding), parent.condition.end);
+        else if (child === parent.whenFalse) add(this.conditionGuards(parent.condition, false, binding), parent.condition.end);
       } else if (ts.isBinaryExpression(parent) && parent.right === child) {
-        if (parent.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken) guards.push(...this.conditionGuards(parent.left, true, binding));
-        else if (parent.operatorToken.kind === ts.SyntaxKind.BarBarToken) guards.push(...this.conditionGuards(parent.left, false, binding));
+        if (parent.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken) add(this.conditionGuards(parent.left, true, binding), parent.left.end);
+        else if (parent.operatorToken.kind === ts.SyntaxKind.BarBarToken) add(this.conditionGuards(parent.left, false, binding), parent.left.end);
       } else if (ts.isBlock(parent) || ts.isCaseClause(parent) || ts.isDefaultClause(parent)) {
         const before = parent.statements.indexOf(child as ts.Statement);
-        for (const statement of parent.statements.slice(0, Math.max(before, 0))) guards.push(...this.earlyExit(statement, binding));
+        for (const statement of parent.statements.slice(0, Math.max(before, 0))) add(this.earlyExit(statement, binding), statement.end);
       }
     }
-    return guards;
+    const protecting = (guard: Guard) => guard.kind !== "non-null-assertion" && startsWith(guard.covers, t.origin);
+    if (found.some(({ guard, captured }) => captured && protecting(guard))) {
+      this.once(node, "guard across closure", t);
+      return undefined;
+    }
+    const own = found.filter(({ captured }) => !captured);
+    const kept = own.filter(({ guard, from }) => !this.overwritten(guard, closure ?? binding.scope, binding, from, node, t));
+    if (own.some(({ guard }) => protecting(guard) && !kept.some((held) => held.guard === guard))) return undefined;
+    return kept.map(({ guard }) => guard);
+  }
+
+  private overwritten(guard: Guard, limit: ts.Node, binding: Binding, from: number, read: ts.Node, t: Trail): boolean {
+    const write = writesWithin(limit, binding, from, read.getStart(this.unit.tree)).find((candidate) => startsWith(guard.covers, candidate.path));
+    if (write === undefined) return false;
+    this.once(write.node, "write after guard", t);
+    return true;
   }
 
   private earlyExit(statement: ts.Statement, binding: Binding): Guard[] {
@@ -591,7 +688,7 @@ export class Walker {
 
   private resolveFunction(callee: ts.Expression): Resolved | undefined {
     const expression = unwrap(callee);
-    if (ts.isIdentifier(expression)) return this.functionNamed(expression.text);
+    if (ts.isIdentifier(expression)) return this.functionNamed(expression);
     if (!ts.isPropertyAccessExpression(expression)) return undefined;
     const cls = enclosingClass(expression);
     const receiver = unwrap(expression.expression);
@@ -612,7 +709,10 @@ export class Walker {
     return unit === undefined || cls === undefined ? undefined : this.methodOf(unit.file, cls, method);
   }
 
-  private functionNamed(name: string): Resolved | undefined {
+  private functionNamed(identifier: ts.Identifier): Resolved | undefined {
+    const name = identifier.text;
+    const scope = declaringScope(identifier);
+    if (scope !== this.unit.tree) return this.localFunction(scope, name);
     const local = this.unit.functions.get(name);
     if (local !== undefined) return { kind: "function", file: this.unit.file, named: local };
     if (!this.unit.imports.has(name)) return undefined;
@@ -620,6 +720,19 @@ export class Walker {
     if (origin === "external") return { kind: "external" };
     const named = origin === undefined ? undefined : this.program.index.units.get(origin.file)?.functions.get(origin.name);
     return origin === undefined || named === undefined ? undefined : { kind: "function", file: origin.file, named };
+  }
+
+  /** The function a name declares in a block, or undefined when it is a parameter or a variable holding something else. */
+  private localFunction(scope: ts.Node, name: string): Resolved | undefined {
+    if (!ts.isBlock(scope) && !ts.isCaseClause(scope) && !ts.isDefaultClause(scope) && !ts.isModuleBlock(scope)) return undefined;
+    for (const statement of scope.statements) {
+      const declared = ts.isFunctionDeclaration(statement) ? [statement] : ts.isVariableStatement(statement) ? statement.declarationList.declarations.map((declaration) => declaration.initializer) : [];
+      for (const candidate of declared) {
+        const named = candidate !== undefined && isFunctionNode(candidate) ? namedFunction(candidate) : undefined;
+        if (named?.name === name) return { kind: "function", file: this.unit.file, named };
+      }
+    }
+    return undefined;
   }
 
   private methodOf(file: string, cls: ts.ClassLikeDeclaration, name: string): Resolved | undefined {
@@ -753,6 +866,35 @@ function injectedClass(expression: ts.Expression): string | undefined {
   if (!ts.isCallExpression(expression) || !ts.isIdentifier(expression.expression) || expression.expression.text !== "inject") return undefined;
   const [first] = expression.arguments;
   return first !== undefined && ts.isIdentifier(first) ? first.text : undefined;
+}
+
+/** The member that declares the component input whose public name is `publicName`. */
+export function declaredInput(unit: Unit, cls: ts.ClassLikeDeclaration, publicName: string): ts.ClassElement | undefined {
+  return cls.members.find((member) => inputName(unit, member) === publicName);
+}
+
+function inputName(unit: Unit, member: ts.ClassElement): string | undefined {
+  if (member.name === undefined || !ts.isIdentifier(member.name)) return undefined;
+  const own = member.name.text;
+  for (const decorator of ts.canHaveDecorators(member) ? (ts.getDecorators(member) ?? []) : []) {
+    const call = decorator.expression;
+    const callee = ts.isCallExpression(call) ? call.expression : call;
+    if (ts.isIdentifier(callee) && unit.imports.get(callee.text)?.imported === "Input") return aliasIn(ts.isCallExpression(call) ? call.arguments : [], own, true);
+  }
+  const initializer = ts.isPropertyDeclaration(member) && member.initializer !== undefined ? unwrap(member.initializer) : undefined;
+  if (initializer === undefined || !ts.isCallExpression(initializer)) return undefined;
+  const callee = ts.isPropertyAccessExpression(initializer.expression) && initializer.expression.name.text === "required" ? initializer.expression.expression : initializer.expression;
+  const imported = ts.isIdentifier(callee) ? unit.imports.get(callee.text)?.imported : undefined;
+  return imported === "input" || imported === "model" ? aliasIn(initializer.arguments, own, false) : undefined;
+}
+
+function aliasIn(args: readonly ts.Expression[], own: string, stringAlias: boolean): string {
+  for (const argument of args) {
+    if (stringAlias && ts.isStringLiteralLike(argument)) return argument.text;
+    const alias = ts.isObjectLiteralExpression(argument) ? propertyOf(argument, "alias") : undefined;
+    if (alias !== undefined && ts.isStringLiteralLike(alias)) return alias.text;
+  }
+  return own;
 }
 
 export function hasMember(cls: ts.ClassLikeDeclaration, name: string): boolean {

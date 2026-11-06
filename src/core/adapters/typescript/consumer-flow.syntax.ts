@@ -52,6 +52,16 @@ export function isTransparent(node: ts.Node): boolean {
   return ts.isParenthesizedExpression(node) || ts.isAsExpression(node) || ts.isSatisfiesExpression(node) || ts.isTypeAssertionExpression(node);
 }
 
+export function excludesAbsence(expression: ts.Expression): boolean {
+  const bare = unwrap(expression);
+  return ts.isObjectLiteralExpression(bare) || ts.isArrayLiteralExpression(bare) || ts.isStringLiteralLike(bare) || ts.isTemplateExpression(bare) || ts.isNumericLiteral(bare);
+}
+
+export function isAsyncOrGenerator(fn: FunctionNode): "async" | "generator" | undefined {
+  if (ts.getModifiers(fn)?.some((modifier) => modifier.kind === ts.SyntaxKind.AsyncKeyword) === true) return "async";
+  return "asteriskToken" in fn && fn.asteriskToken !== undefined ? "generator" : undefined;
+}
+
 export function isNullishLiteral(expression: ts.Expression): boolean {
   const bare = unwrap(expression);
   return bare.kind === ts.SyntaxKind.NullKeyword || (ts.isIdentifier(bare) && bare.text === "undefined");
@@ -152,6 +162,56 @@ export function referencesOf(binding: Binding): ts.Expression[] {
   };
   binding.scope.forEachChild(visit);
   return found;
+}
+
+/** A write to a binding or to a path below it: the assigned or deleted expression, as a path from the binding. */
+export interface Write {
+  node: ts.Node;
+  path: AccessPath;
+}
+
+/** The writes to `binding` inside `root` that end after `from` and before `to`, in source order. */
+export function writesWithin(root: ts.Node, binding: Binding, from: number, to: number): Write[] {
+  const found: Write[] = [];
+  const visit = (node: ts.Node): void => {
+    if (node.end <= from || node.pos >= to || ts.isTypeNode(node) || shadows(node, binding)) return;
+    const target = ts.isBinaryExpression(node) && ASSIGNMENTS.has(node.operatorToken.kind) ? node.left : ts.isDeleteExpression(node) ? node.expression : undefined;
+    const path = target === undefined ? undefined : chainPath(target, binding);
+    if (path !== undefined && node.pos >= from && node.end <= to) found.push({ node, path });
+    node.forEachChild(visit);
+  };
+  root.forEachChild(visit);
+  return found;
+}
+
+const CONDITIONAL_PARENTS = (node: ts.Node): boolean =>
+  ts.isIfStatement(node) ||
+  ts.isIterationStatement(node, false) ||
+  ts.isSwitchStatement(node) ||
+  ts.isCaseClause(node) ||
+  ts.isDefaultClause(node) ||
+  ts.isTryStatement(node) ||
+  ts.isCatchClause(node) ||
+  ts.isConditionalExpression(node) ||
+  isFunctionNode(node) ||
+  (ts.isBinaryExpression(node) && [ts.SyntaxKind.AmpersandAmpersandToken, ts.SyntaxKind.BarBarToken, ts.SyntaxKind.QuestionQuestionToken].includes(node.operatorToken.kind));
+
+/** Whether `later` may run without `earlier` having run before it, or not run after it, within one function. */
+export function mayNotFollow(earlier: ts.Node, later: ts.Node): boolean {
+  const above = new Set<ts.Node>();
+  for (let current: ts.Node | undefined = earlier; current !== undefined; current = current.parent) above.add(current);
+  let current: ts.Node = later;
+  while (!above.has(current)) {
+    if (CONDITIONAL_PARENTS(current)) return true;
+    current = current.parent;
+  }
+  return CONDITIONAL_PARENTS(current) && current !== earlier;
+}
+
+/** The loop between `node` and `scope` that contains `node`, when there is one. */
+export function enclosingLoop(node: ts.Node, scope: ts.Node): ts.IterationStatement | undefined {
+  for (let current = node.parent; current !== undefined && current !== scope; current = current.parent) if (ts.isIterationStatement(current, false)) return current;
+  return undefined;
 }
 
 /** The path a tested expression reads from the binding, when it reads from it at all. */

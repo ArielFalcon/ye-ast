@@ -1,8 +1,10 @@
-import type { Carrier, FlowFrontier, FlowNext, FlowResult, FlowUse } from "../../domain/contracts/consumer-flow.ts";
+import ts from "typescript";
+import type { Carrier, CarrierSite, FlowFrontier, FlowNext, FlowResult, FlowUse } from "../../domain/contracts/consumer-flow.ts";
 import type { ConsumerFlowReader } from "../../ports/consumer-flow.port.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
-import { buildProgram, resolverKey, type Program } from "./consumer-flow.index.ts";
-import { hasMember, memberSite, Walker, type Held } from "./consumer-flow.walker.ts";
+import { lineOf } from "./http-call-sites.adapter.ts";
+import { buildProgram, resolverKey, type Program, type Unit } from "./consumer-flow.index.ts";
+import { declaredInput, memberSite, Walker, type Held } from "./consumer-flow.walker.ts";
 
 /**
  * Follows a value through the TypeScript sources of one repository. Reading is syntax only: every name is resolved
@@ -25,13 +27,25 @@ function follow(program: Program, repo: string, { site, path }: Carrier): FlowRe
   else if (site.kind === "call-result") walker.startCallResult(site, path);
   else if (site.kind === "parameter") walker.startParameter(site, path);
   else if (site.kind === "member") walker.startMember(site, path);
-  else if (site.kind === "input") return { uses: [], next: [], frontiers: [{ at: { path: site.file, line: 1 }, cause: "unsupported-binding", reason: "unresolved", detail: `input:${site.name}`, hops: [] }] };
+  else if (site.kind === "input") return followInput(repo, unit, site, path);
   else walkers.push(...resolverContinuation(program, repo, walker, site, path));
   return {
     uses: ordered(walkers.flatMap((held) => held.uses)),
     next: ordered(walkers.flatMap((held) => held.next)),
     frontiers: ordered(walkers.flatMap((held) => held.frontiers)),
   };
+}
+
+/** An input carrier continues as the member that declares the input of that public name, or is lost at the class. */
+function followInput(repo: string, unit: Unit, site: Extract<CarrierSite, { kind: "input" }>, path: Carrier["path"]): FlowResult {
+  const cls = unit.classes.get(site.owner);
+  const member = cls === undefined ? undefined : declaredInput(unit, cls, site.name);
+  if (cls === undefined || member === undefined || member.name === undefined || !ts.isIdentifier(member.name)) {
+    const at = { path: unit.file, line: cls === undefined ? 1 : lineOf(unit.tree, cls) };
+    return { uses: [], next: [], frontiers: [{ at, cause: "unsupported-binding", reason: "unresolved", detail: `not-an-input:${site.name}`, hops: [] }] };
+  }
+  const hops = [{ step: "input" as const, evidence: { path: unit.file, line: lineOf(unit.tree, member) } }];
+  return { uses: [], next: [{ carrier: { site: memberSite(repo, unit, cls, site.owner, member.name.text), path }, hops }], frontiers: [] };
 }
 
 /** A route resolver continues to the component input it feeds and to the component's reads of the route data. */
@@ -46,15 +60,13 @@ function resolverContinuation(program: Program, repo: string, walker: Walker, si
       continue;
     }
     const hops = [{ step: "resolver-input" as const, evidence: registration.at }];
-    if (hasMember(cls, registration.key)) {
-      if (program.routes.inputBinding) {
-        walker.next.push({ file: registration.at.path, pos: 0, value: { carrier: { site: memberSite(repo, owner, cls, component.name, registration.key), path }, hops } });
-      } else {
-        walker.frontiers.push({ file: registration.at.path, pos: 0, value: { at: registration.at, cause: "unsupported-binding", reason: "unresolved", detail: "component input binding is not enabled", hops } });
-      }
+    if (registration.inputBinding) {
+      walker.next.push({ file: registration.at.path, pos: 0, value: { carrier: { site: { kind: "input", repo, file: owner.file, owner: component.name, name: registration.key }, path }, hops } });
+    } else if (declaredInput(owner, cls, registration.key) !== undefined) {
+      walker.frontiers.push({ file: registration.at.path, pos: 0, value: { at: registration.at, cause: "unsupported-binding", reason: "unresolved", detail: "component input binding is not enabled", hops } });
     }
     const reads = new Walker(repo, program, owner);
-    reads.startRouteData(component.name, registration.key, path, []);
+    reads.startRouteData(component.name, registration.key, path, hops);
     walkers.push(reads);
   }
   return walkers;
