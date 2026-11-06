@@ -859,6 +859,24 @@ test("a trace over a real index never expands the initializer of a property a ca
   assert.deepEqual(root.value.value.steps.map(({ symbol, leaves }) => ({ symbol, leaves: leaves?.map((leaf) => leaf.symbol) })), [{ symbol: "owner", leaves: ["emptyOwnerForm"] }]);
 });
 
+test("a trace over a real index expands a class root into its members even when an earlier root reached the class below it, and a later call still sees the first expansion", async () => {
+  writeFileSync(join(repo, "src", "make.ts"), ["export function make() { return new Page(); }", "export class Page { work() { unknown(); } }", "export function again() { return new Page(); }", ""].join("\n"));
+  git("add", "-A");
+  git("commit", "-q", "-m", "make");
+  const { trace } = composeQueries({ scratchRoot });
+
+  const answer = await trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: "src/make.ts", symbol: "make" }, { file: "src/make.ts", symbol: "Page" }, { file: "src/make.ts", symbol: "again" }] });
+
+  assert.ok(answer.ok && answer.value.status === "partial");
+  assert.deepEqual(answer.value.value.steps.map(({ symbol, parent, via, seen, leaves }) => ({ symbol, parent, via, seen, leaves: leaves?.map((leaf) => leaf.symbol) })), [
+    { symbol: "make", parent: undefined, via: undefined, seen: undefined, leaves: ["Page"] },
+    { symbol: "Page", parent: undefined, via: undefined, seen: undefined, leaves: undefined },
+    { symbol: "work", parent: 1, via: "member", seen: undefined, leaves: undefined },
+    { symbol: "again", parent: undefined, via: undefined, seen: undefined, leaves: ["Page"] },
+  ]);
+  assert.deepEqual(answer.value.cuts.map((cut) => cut.at[0]), ["src/make.ts:2 unknown"]);
+});
+
 test("callers over a range inside a property initializer still seeds the class that holds it", async () => {
   commitPage();
   const { impact } = composeQueries({ scratchRoot });

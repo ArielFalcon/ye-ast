@@ -210,6 +210,7 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
   }
 
   const expandedAt = new Map<GraphNodeId, WalkedStep>();
+  const rootExpansions = new Set<WalkedStep>();
   const stopped = { depth: new Set<string>(), expansions: new Set<string>() };
   const cuts: Cut[] = [];
   let expansions = 0;
@@ -222,7 +223,9 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
       return;
     }
     const first = expandedAt.get(symbol.id);
-    if (first !== undefined) {
+    /** A class root also owes its members, which no expansion below a root made. */
+    const owesMembers = depth === 0 && CLASS_KINDS.includes(symbol.kind) && (first === undefined || !rootExpansions.has(first));
+    if (first !== undefined && !owesMembers) {
       step.seen = first;
       return;
     }
@@ -235,7 +238,8 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
       return;
     }
     expansions += 1;
-    expandedAt.set(symbol.id, step);
+    if (first === undefined) expandedAt.set(symbol.id, step);
+    if (depth === 0) rootExpansions.add(step);
     step.expanded = true;
     const body = await bodyOf(symbol, depth === 0);
     const dispatch = unboundDispatch(symbol);
