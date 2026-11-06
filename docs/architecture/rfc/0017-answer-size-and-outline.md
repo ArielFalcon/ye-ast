@@ -100,7 +100,7 @@ question an agent asks after `impact` names twelve files, and it is the one no q
   declaration, because that is what the graph records; a construct the extractor does not emit, such as a Java `record`,
   leaves its members under the nearest container it does emit. ye-ast's own Java grammar finds such a file, listed or
   focused, and the answer carries a `no-extractor` cut at it, so a misplaced listing never reads as complete; a focus
-  reads only its focused files to find it.
+  scans only its focused files to find it.
 - **It carries no file length and no silent elision.** A file's length needs a source read the projection does not do,
   and the caller gets it from the read it makes anyway. The listing names every declaration, so it has nothing to omit
   and no budget; a large file answers a large outline, which is still a fraction of the file, and the rule of section 1
@@ -109,8 +109,12 @@ question an agent asks after `impact` names twelve files, and it is the one no q
   selectors: `<file>:<path>` matches the declarations whose dotted path in the `contains` tree ends with it at whole
   names (a bare name at any depth, `A.m` only an `m` that `A` contains directly), and `<file>:<line>` the innermost
   declaration the tree places around the line. Each match carries its `ancestors` (kind, name and span only, no
-  siblings), the declaration with its whole subtree, and `omitted`, how many of the file's declarations it leaves out;
-  no imports. Several matches are all answered, in line order, never one picked. A symbol that matches nothing is
+  siblings), the declaration with its whole subtree, `omitted`, how many of the file's declarations it leaves out, and
+  `uses`, what the declaration's own body uses outside itself (plan `2026-11-06-outline-references.md` Part B): each
+  use is a repository declaration (file and span), a package or a language global, with its relations and the places of
+  the uses; a use no binding proves is an `unresolved-link` cut at the declaration, and a member used on a local value is
+  not a use. Settling a use reads what binds its name at its place, so a focus reads the snapshot's sources as a listing
+  does; who calls the declaration is `callers`, and `compose` asks both at once. No imports. Several matches are all answered, in line order, never one picked. A symbol that matches nothing is
   `unknown-symbol` with the file's dotted paths as candidates, a line no declaration holds is `top-level-line` with the
   same candidates, and a file the index does not hold is `unheld`. The path is the one `callers` resolves, through the
   same resolver over the same tree, so a path the outline prints targets exactly the same declarations there.

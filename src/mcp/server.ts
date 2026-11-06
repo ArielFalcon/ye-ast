@@ -263,7 +263,7 @@ const shapes = {
       unheld: strings,
     }),
     z.looseObject({
-      focus: z.array(z.looseObject({ file: z.string(), selector: z.string(), path: z.string(), ancestors: z.array(outlineDeclaration), declaration: outlineDeclaration, omitted: z.number() })),
+      focus: z.array(z.looseObject({ file: z.string(), selector: z.string(), path: z.string(), ancestors: z.array(outlineDeclaration), declaration: outlineDeclaration, omitted: z.number(), uses: z.array(z.looseObject({ relations: strings, at: z.array(z.looseObject({ line: z.number() })) })).optional() })),
       unheld: strings,
     }),
   ]),
@@ -605,7 +605,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
     "ye_ast_outline",
     {
       title: "Shape of files",
-      description: "Use to choose line ranges before reading or targeting code: indexed declaration spans and imports of files, without source. Each import gives its target (repository file, package, or unresolved with a reason) and the names it binds, with their proven declaration and line. Members sit under the declaration a contains edge places them in; others stay top level. Instead of files, focus on declarations: {file, symbol} takes a dotted path (Class.member, a bare name at any depth), {file, line} the innermost declaration holding the line; each match comes with its containers, its subtree and the count of omitted declarations, without imports; its path works verbatim in ye_ast_callers. Unavailable files report cuts, not empty lists. Match revision/live to the source you inspect.",
+      description: "Use to choose line ranges before reading or targeting code: indexed declaration spans and imports of files, without source. Each import gives its target (repository file, package, or unresolved with a reason) and the names it binds, with their proven declaration and line. Members nest under their contains edge; others stay top level. Instead of files, focus on declarations: {file, symbol} takes a dotted path (Class.member, a bare name at any depth), {file, line} the innermost declaration holding the line; a match gives its containers, subtree, omitted count and uses outside its body (file:line, package, global, else a cut), no imports. Its path works verbatim in ye_ast_callers; for callers too, use ye_ast_compose. Unavailable files report cuts, not empty lists. Match revision/live to the source you inspect.",
       inputSchema: compactInput(TOOL_INPUTS.outline),
       annotations,
     },
