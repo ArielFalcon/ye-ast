@@ -1,0 +1,510 @@
+import {
+  type AST,
+  ASTWithSource,
+  Binary,
+  BindingPipe,
+  BindingType,
+  Call,
+  Chain,
+  CombinedRecursiveAstVisitor,
+  Conditional,
+  ImplicitReceiver,
+  Interpolation,
+  KeyedRead,
+  LiteralPrimitive,
+  NonNullAssert,
+  ParenthesizedExpression,
+  PrefixNot,
+  PropertyRead,
+  RecursiveAstVisitor,
+  SafeCall,
+  SafeKeyedRead,
+  SafePropertyRead,
+  ThisReceiver,
+  TmplAstBoundAttribute,
+  TmplAstBoundDeferredTrigger,
+  type TmplAstBoundEvent,
+  type TmplAstBoundText,
+  type TmplAstDeferredTrigger,
+  type TmplAstElement,
+  type TmplAstForLoopBlock,
+  type TmplAstIfBlock,
+  type TmplAstLetDeclaration,
+  type TmplAstSwitchBlock,
+  type TmplAstTemplate,
+  type TmplAstVariable,
+  TypeofExpression,
+  Unary,
+  VoidExpression,
+  type DirectiveMeta,
+} from "@angular/compiler";
+import { ELEMENT, relatePaths, type AccessPath } from "../../domain/contracts/access-path.ts";
+import type { FlowFrontier, FlowNext, FlowResult, FlowStep, FlowUse, FrontierCause, Hop } from "../../domain/contracts/consumer-flow.ts";
+import type { Absence, Guard, GuardKind, UseOperation } from "../../domain/contracts/verdict.ts";
+import type { Evidence } from "../../domain/shared/fact.ts";
+import type { SymbolRef } from "../../domain/relations/relation.ts";
+import type { MemberCarrier } from "../../ports/consumer-template.port.ts";
+import type { TemplateFlowReader } from "../../ports/consumer-template-flow.port.ts";
+import type { TemplateUnit } from "../../ports/template-usage.port.ts";
+import { bindTemplate, type BoundTemplate } from "./template-binding.ts";
+
+/**
+ * Follows one component member through the template of its owner: the reads of the member, the guards that cover them,
+ * the aliases and loop items that carry it, and the child component inputs it is bound to. Positions are template
+ * offsets until the result is sorted into source order.
+ */
+export function createTemplateFlowReader(): TemplateFlowReader {
+  return { follow };
+}
+
+function follow(unit: TemplateUnit, carrier: MemberCarrier): FlowResult {
+  const template = bindTemplate(unit);
+  if ("errorLine" in template) {
+    const at = { path: unit.path, line: unit.firstLine + template.errorLine };
+    return { uses: [], next: [], frontiers: [{ at, cause: "template-unreadable", reason: "source-unreadable", hops: [] }] };
+  }
+  return new TemplateFlow(unit, carrier, template).run();
+}
+
+const BOTH: readonly Absence[] = ["null", "undefined"];
+const NULL_ONLY: readonly Absence[] = ["null"];
+const UNDEFINED_ONLY: readonly Absence[] = ["undefined"];
+const COMPARISONS: ReadonlySet<string> = new Set(["==", "!=", "===", "!=="]);
+
+type OpaqueOutcome = UseOperation | "frontier";
+
+/** What the value that reaches the end of an expression flows into. */
+type Sink =
+  | { kind: "consume" }
+  | { kind: "test" }
+  | { kind: "opaque"; outcome: OpaqueOutcome; cause: FrontierCause; detail: string }
+  | { kind: "bind"; name: string; ref: SymbolRef };
+
+const CONSUME: Sink = { kind: "consume" };
+const TEST: Sink = { kind: "test" };
+
+function opaque(detail: string, outcome: OpaqueOutcome = "unmodelled", cause: FrontierCause = "unmodelled-flow"): Sink {
+  return { kind: "opaque", outcome, cause, detail };
+}
+
+/** A value of the member read in the template: `offset` is where it sits in the member, `frame` where its alias starts. */
+interface Tracked {
+  frame: AccessPath;
+  offset: AccessPath;
+  hops: readonly Hop[];
+  guards: readonly Guard[];
+}
+
+interface Alias {
+  frame: AccessPath;
+  hops: readonly Hop[];
+}
+
+interface At<T> {
+  offset: number;
+  value: T;
+}
+
+const startsWith = (path: AccessPath, prefix: AccessPath): boolean => relatePaths(path, prefix) === "exact" || relatePaths(path, prefix) === "beyond";
+
+function core(ast: AST): AST {
+  if (ast instanceof ASTWithSource) return core(ast.ast);
+  return ast instanceof ParenthesizedExpression ? core(ast.expression) : ast;
+}
+
+class Children extends RecursiveAstVisitor {
+  constructor(private readonly each: (ast: AST) => void) {
+    super();
+  }
+
+  override visit(ast: AST): void {
+    this.each(ast);
+  }
+}
+
+class TemplateFlow extends CombinedRecursiveAstVisitor {
+  private readonly uses: At<FlowUse>[] = [];
+  private readonly next: At<FlowNext>[] = [];
+  private readonly frontiers: At<FlowFrontier>[] = [];
+  private readonly aliases = new Map<object, Alias>();
+  private readonly lineStarts: number[];
+  private readonly changed: AccessPath;
+  private guards: readonly Guard[] = [];
+  private quiet = false;
+
+  constructor(
+    private readonly unit: TemplateUnit,
+    private readonly carrier: MemberCarrier,
+    private readonly template: BoundTemplate,
+  ) {
+    super();
+    this.lineStarts = [0, ...[...unit.text.matchAll(/\n/g)].map((match) => match.index + 1)];
+    this.changed = carrier.path;
+  }
+
+  run(): FlowResult {
+    for (const node of this.template.nodes) this.visit(node);
+    const inOrder = <T>(items: At<T>[]): T[] => items.toSorted((a, b) => a.offset - b.offset).map((item) => item.value);
+    return { uses: inOrder(this.uses), next: inOrder(this.next), frontiers: inOrder(this.frontiers) };
+  }
+
+  override visitElement(element: TmplAstElement): void {
+    const matched = this.template.bound.getDirectivesOfNode(element) ?? [];
+    for (const input of element.inputs) this.binding(input, matched, CONSUME);
+    for (const output of element.outputs) this.expr(output.handler, CONSUME);
+    this.nodes(element.children);
+  }
+
+  override visitTemplate(template: TmplAstTemplate): void {
+    const matched = this.template.bound.getDirectivesOfNode(template) ?? [];
+    const inputs = [...template.templateAttrs, ...template.inputs].filter((attribute) => attribute instanceof TmplAstBoundAttribute);
+    let established: readonly Guard[] = [];
+    for (const input of inputs) {
+      if (input.name === "ngIf") {
+        this.expr(input.value, TEST);
+        established = this.guardsOf(input.value);
+        const alias = template.variables.find((variable) => variable.value === "ngIf");
+        const tracked = this.peek(input.value);
+        if (alias !== undefined && tracked !== undefined) this.alias(alias, tracked.offset, tracked, "template-read", template.sourceSpan.start.offset);
+      } else if (input.name === "ngForOf") {
+        this.iterate(input.value, template.variables.find((variable) => variable.value === "$implicit"), template.sourceSpan.start.offset);
+      } else this.binding(input, matched, opaque(`binding:${input.name}`));
+    }
+    for (const output of template.outputs) this.expr(output.handler, CONSUME);
+    this.within(established, () => this.nodes(template.children));
+  }
+
+  override visitBoundText(text: TmplAstBoundText): void {
+    this.expr(text.value, CONSUME);
+  }
+
+  override visitBoundEvent(event: TmplAstBoundEvent): void {
+    this.expr(event.handler, CONSUME);
+  }
+
+  override visitDeferredTrigger(trigger: TmplAstDeferredTrigger): void {
+    if (trigger instanceof TmplAstBoundDeferredTrigger) this.expr(trigger.value, TEST);
+  }
+
+  override visitIfBlock(block: TmplAstIfBlock): void {
+    for (const branch of block.branches) {
+      const established = branch.expression === null ? [] : this.guardsOf(branch.expression);
+      if (branch.expression !== null) {
+        this.expr(branch.expression, TEST);
+        const tracked = this.peek(branch.expression);
+        if (branch.expressionAlias !== null && tracked !== undefined) this.alias(branch.expressionAlias, tracked.offset, tracked, "template-read", branch.sourceSpan.start.offset);
+      }
+      this.within(established, () => this.nodes(branch.children));
+    }
+  }
+
+  override visitForLoopBlock(block: TmplAstForLoopBlock): void {
+    this.iterate(block.expression, block.item, block.sourceSpan.start.offset);
+    if (block.trackBy !== null) this.expr(block.trackBy, TEST);
+    this.nodes(block.children);
+    if (block.empty !== null) this.nodes(block.empty.children);
+  }
+
+  override visitSwitchBlock(block: TmplAstSwitchBlock): void {
+    this.expr(block.expression, CONSUME);
+    for (const group of block.groups) {
+      for (const option of group.cases) if (option.expression !== null) this.expr(option.expression, CONSUME);
+      this.nodes(group.children);
+    }
+  }
+
+  override visitLetDeclaration(declaration: TmplAstLetDeclaration): void {
+    const tracked = this.peek(declaration.value);
+    if (tracked !== undefined && startsWith(this.changed, tracked.offset)) this.alias(declaration, tracked.offset, tracked, "template-read", declaration.sourceSpan.start.offset);
+    else this.expr(declaration.value, CONSUME);
+  }
+
+  private nodes(nodes: readonly Parameters<CombinedRecursiveAstVisitor["visit"]>[0][]): void {
+    for (const node of nodes) this.visit(node);
+  }
+
+  private within(established: readonly Guard[], body: () => void): void {
+    const outer = this.guards;
+    this.guards = [...outer, ...established];
+    body();
+    this.guards = outer;
+  }
+
+  private evidence(offset: number): Evidence {
+    return { path: this.unit.path, line: this.unit.firstLine + this.lineStarts.findLastIndex((start) => start <= offset) };
+  }
+
+  private guard(kind: GuardKind, covers: AccessPath, excludes: readonly Absence[], node: AST): Guard {
+    return { kind, covers, excludes, evidence: this.evidence(node.sourceSpan.start) };
+  }
+
+  private rootOf(read: PropertyRead | SafePropertyRead): Tracked | undefined {
+    if (!(read instanceof PropertyRead) || !(read.receiver instanceof ImplicitReceiver)) return undefined;
+    const target = read.receiver instanceof ThisReceiver ? null : this.template.bound.getExpressionTarget(read);
+    if (target === null) return read.name === this.carrier.site.member ? { frame: [], offset: [], hops: [], guards: [] } : undefined;
+    const alias = this.aliases.get(target);
+    return alias === undefined ? undefined : { frame: alias.frame, offset: alias.frame, hops: alias.hops, guards: [] };
+  }
+
+  private tracks(ast: AST): boolean {
+    const node = core(ast);
+    if (node instanceof PropertyRead) return node.receiver instanceof ImplicitReceiver ? this.rootOf(node) !== undefined : this.tracks(node.receiver);
+    if (node instanceof SafePropertyRead || node instanceof KeyedRead || node instanceof SafeKeyedRead || node instanceof Call || node instanceof SafeCall || node instanceof NonNullAssert) {
+      return this.tracks(node instanceof NonNullAssert ? node.expression : node.receiver);
+    }
+    return node instanceof BindingPipe && node.name === "async" && node.args.length === 0 && this.tracks(node.exp);
+  }
+
+  private peek(ast: AST): Tracked | undefined {
+    const outer = this.quiet;
+    this.quiet = true;
+    try {
+      return this.tracks(ast) ? this.chain(ast) : undefined;
+    } finally {
+      this.quiet = outer;
+    }
+  }
+
+  /** The tracked value an expression rooted at the member or an alias evaluates to; undefined when the chain loses it. */
+  private chain(ast: AST): Tracked | undefined {
+    const node = core(ast);
+    if (node instanceof PropertyRead) {
+      if (node.receiver instanceof ImplicitReceiver) return this.rootOf(node);
+      const receiver = this.chain(node.receiver);
+      return receiver && { ...receiver, offset: [...receiver.offset, node.name] };
+    }
+    if (node instanceof SafePropertyRead) {
+      const receiver = this.chain(node.receiver);
+      return receiver && { ...receiver, offset: [...receiver.offset, node.name], guards: [...receiver.guards, this.guard("optional-chain", receiver.offset, BOTH, node)] };
+    }
+    if (node instanceof KeyedRead || node instanceof SafeKeyedRead) return this.keyed(node);
+    if (node instanceof NonNullAssert) {
+      const inner = this.chain(node.expression);
+      return inner && { ...inner, guards: [...inner.guards, this.guard("non-null-assertion", inner.offset, BOTH, node)] };
+    }
+    if (node instanceof BindingPipe) return this.chain(node.exp);
+    if (node instanceof Call || node instanceof SafeCall) return this.call(node);
+    return undefined;
+  }
+
+  private keyed(node: KeyedRead | SafeKeyedRead): Tracked | undefined {
+    const receiver = this.chain(node.receiver);
+    if (receiver === undefined) return undefined;
+    const key = core(node.key);
+    const guards = node instanceof SafeKeyedRead ? [...receiver.guards, this.guard("optional-chain", receiver.offset, BOTH, node)] : receiver.guards;
+    if (key instanceof LiteralPrimitive && (typeof key.value === "number" || typeof key.value === "string")) {
+      return { ...receiver, offset: [...receiver.offset, typeof key.value === "number" ? ELEMENT : key.value], guards };
+    }
+    this.end({ ...receiver, guards }, opaque("computed-key", "dereference", "dynamic-access"), node);
+    this.expr(node.key, opaque("computed-key"));
+    return undefined;
+  }
+
+  /** A call without arguments reads a signal: the callee adds no segment. A call with arguments is a method call. */
+  private call(node: Call | SafeCall): Tracked | undefined {
+    const callee = core(node.receiver);
+    if (node.args.length === 0) {
+      const read = this.chain(callee);
+      return read && (node instanceof SafeCall ? { ...read, guards: [...read.guards, this.guard("optional-chain", read.offset, BOTH, node)] } : read);
+    }
+    const method = callee instanceof PropertyRead || callee instanceof SafePropertyRead ? callee : undefined;
+    const holder = this.chain(method === undefined ? callee : method.receiver);
+    if (holder !== undefined) {
+      const guarded = node instanceof SafeCall || method instanceof SafePropertyRead ? [...holder.guards, this.guard("optional-chain", holder.offset, BOTH, node)] : holder.guards;
+      this.end({ ...holder, guards: guarded }, opaque(`call:${method?.name ?? "expression"}`, "dereference"), node);
+    }
+    for (const argument of node.args) this.expr(argument, opaque(`call:${method?.name ?? "expression"}`));
+    return undefined;
+  }
+
+  private expr(ast: AST, sink: Sink): void {
+    const node = core(ast);
+    if (node instanceof Interpolation) return node.expressions.forEach((part) => this.expr(part, CONSUME));
+    if (node instanceof Chain) return node.expressions.forEach((part) => this.expr(part, sink));
+    if (node instanceof Conditional) return this.conditional(node, sink);
+    if (node instanceof Unary) return this.expr(node.expr, CONSUME);
+    if (node instanceof Binary) return this.binary(node, sink);
+    if (node instanceof PrefixNot || node instanceof TypeofExpression || node instanceof VoidExpression) return this.expr(node.expression, TEST);
+    if (this.tracks(node)) {
+      const tracked = this.chain(node);
+      if (tracked !== undefined) this.end(tracked, sink, node);
+      return;
+    }
+    if (node instanceof BindingPipe) {
+      this.expr(node.exp, CONSUME);
+      for (const argument of node.args) this.expr(argument, opaque(`pipe-argument:${node.name}`));
+      return;
+    }
+    if (node instanceof Call || node instanceof SafeCall) return this.untrackedCall(node);
+    node.visit(new Children((child) => this.expr(child, opaque("expression"))));
+  }
+
+  private untrackedCall(node: Call | SafeCall): void {
+    const callee = core(node.receiver);
+    const named = callee instanceof PropertyRead || callee instanceof SafePropertyRead ? callee : undefined;
+    const own = callee instanceof PropertyRead && callee.receiver instanceof ImplicitReceiver && this.template.bound.getExpressionTarget(callee) === null;
+    const detail = named?.name === "$any" ? "$any" : own ? `template-call:${named?.name}` : `call:${named?.name ?? "expression"}`;
+    this.expr(node.receiver, opaque("expression"));
+    for (const argument of node.args) this.expr(argument, opaque(detail));
+  }
+
+  private conditional(node: Conditional, sink: Sink): void {
+    this.expr(node.condition, TEST);
+    this.within(this.guardsOf(node.condition), () => this.expr(node.trueExp, sink));
+    this.expr(node.falseExp, sink);
+  }
+
+  private binary(node: Binary, sink: Sink): void {
+    const { operation, left, right } = node;
+    if (operation === "&&") {
+      this.expr(left, TEST);
+      return this.within(this.guardsOf(left), () => this.expr(right, sink));
+    }
+    if (operation === "||" || operation === "??") {
+      this.fallback(node, sink);
+      return this.expr(right, sink);
+    }
+    if (Binary.isAssignmentOperation(operation)) {
+      this.expr(left, CONSUME);
+      return this.expr(right, opaque("assignment"));
+    }
+    const nullish = COMPARISONS.has(operation);
+    this.expr(left, nullish && this.isAbsent(right) ? TEST : CONSUME);
+    this.expr(right, nullish && this.isAbsent(left) ? TEST : CONSUME);
+  }
+
+  /** `??` and `||` on the changed value: it is replaced where absent, and shown otherwise. */
+  private fallback(node: Binary, sink: Sink): void {
+    if (!this.tracks(node.left)) return this.expr(node.left, sink);
+    const tracked = this.chain(node.left);
+    if (tracked === undefined) return;
+    if (relatePaths(tracked.offset, this.changed) === "exact") this.use(tracked, "consume", node.left, [this.guard("fallback", tracked.offset, BOTH, node)]);
+    else this.end(tracked, sink, node.left);
+  }
+
+  private isAbsent(ast: AST): boolean {
+    const node = core(ast);
+    return node instanceof LiteralPrimitive && (node.value === null || node.value === undefined);
+  }
+
+  /** What holds where `ast` is truthy: a test of a prefix that includes the changed segment, or of an alias of it. */
+  private guardsOf(ast: AST): Guard[] {
+    const node = core(ast);
+    if (node instanceof Binary && !(node instanceof Unary)) {
+      if (node.operation === "&&") return [...this.guardsOf(node.left), ...this.guardsOf(node.right)];
+      return COMPARISONS.has(node.operation) ? this.presence(node) : [];
+    }
+    if (node instanceof PrefixNot) {
+      const inner = core(node.expression);
+      return inner instanceof PrefixNot ? this.guardsOf(inner.expression) : [];
+    }
+    const tracked = this.peek(node);
+    return tracked === undefined ? [] : [this.guard("truthiness", tracked.offset, BOTH, node)];
+  }
+
+  private presence(node: Binary): Guard[] {
+    if (node.operation !== "!=" && node.operation !== "!==") return [];
+    const [value, tracked] = this.isAbsent(node.right) ? [core(node.right), this.peek(node.left)] : [core(node.left), this.peek(node.right)];
+    if (tracked === undefined || !this.isAbsent(value)) return [];
+    const absent = (value as LiteralPrimitive).value;
+    const excludes = node.operation === "!=" ? BOTH : absent === null ? NULL_ONLY : UNDEFINED_ONLY;
+    return [this.guard("comparison", tracked.offset, excludes, node)];
+  }
+
+  private end(tracked: Tracked, sink: Sink, node: AST): void {
+    const relation = relatePaths(tracked.offset, this.changed);
+    if (relation === "disjoint") return;
+    if (relation === "beyond") return this.use(tracked, "dereference", node);
+    switch (sink.kind) {
+      case "test":
+        return;
+      case "consume":
+        return this.use(tracked, "consume", node);
+      case "opaque":
+        if (relation === "contains" || sink.outcome === "frontier") return this.frontier(tracked, sink.cause, sink.detail, node.sourceSpan.start);
+        return this.use(tracked, sink.outcome, node);
+      case "bind":
+        return this.bind(tracked, sink, node);
+    }
+  }
+
+  private inFrame(guards: readonly Guard[], frame: AccessPath): Guard[] {
+    return guards.filter((guard) => startsWith(guard.covers, frame)).map((guard) => ({ ...guard, covers: guard.covers.slice(frame.length) }));
+  }
+
+  private use(tracked: Tracked, operation: UseOperation, node: AST, extra: readonly Guard[] = []): void {
+    if (this.quiet) return;
+    const site = this.evidence(node.sourceSpan.start);
+    this.uses.push({
+      offset: node.sourceSpan.start,
+      value: {
+        site,
+        path: tracked.offset.slice(tracked.frame.length),
+        changed: this.changed.slice(tracked.frame.length),
+        operation,
+        guards: this.inFrame([...this.guards, ...tracked.guards, ...extra], tracked.frame),
+        hops: [...tracked.hops, { step: "template-read", evidence: site }],
+      },
+    });
+  }
+
+  private frontier(tracked: Tracked, cause: FrontierCause, detail: string, offset: number): void {
+    if (this.quiet) return;
+    this.frontiers.push({ offset, value: { at: this.evidence(offset), cause, reason: "unresolved", detail, hops: tracked.hops } });
+  }
+
+  private bind(tracked: Tracked, sink: Extract<Sink, { kind: "bind" }>, node: AST): void {
+    if (this.quiet) return;
+    const establishes = [...this.guards, ...tracked.guards].some((guard) => guard.kind !== "non-null-assertion" && startsWith(guard.covers, this.changed));
+    if (establishes) return this.frontier(tracked, "unmodelled-flow", `guarded-binding:${sink.name}`, node.sourceSpan.start);
+    const from = tracked.offset.slice(tracked.frame.length);
+    const hop: Hop = { step: "template-binding", evidence: this.evidence(node.sourceSpan.start), ...(from.length === 0 ? {} : { rewrite: [{ from, to: [] }] }) };
+    const { site } = this.carrier;
+    this.next.push({
+      offset: node.sourceSpan.start,
+      value: {
+        carrier: { site: { kind: "member", repo: site.repo, file: sink.ref.path, owner: sink.ref.symbol, member: sink.name }, path: this.changed.slice(tracked.offset.length) },
+        hops: [...tracked.hops, hop],
+      },
+    });
+  }
+
+  private alias(key: object, frame: AccessPath, tracked: Tracked, step: FlowStep, offset: number): void {
+    const relation = relatePaths(frame, this.changed);
+    if (relation !== "exact" && relation !== "contains") return;
+    const from = frame.slice(tracked.frame.length);
+    const hop: Hop = { step, evidence: this.evidence(offset), ...(from.length === 0 ? {} : { rewrite: [{ from, to: [] }] }) };
+    this.aliases.set(key, { frame, hops: [...tracked.hops, hop] });
+  }
+
+  /** `@for` and `*ngFor`: the item is the element of the iterated value, so it drops a leading `[]`. */
+  private iterate(iterable: AST, item: TmplAstVariable | undefined, offset: number): void {
+    const tracked = this.peek(iterable);
+    if (tracked !== undefined) {
+      const element = [...tracked.offset, ELEMENT];
+      if (item !== undefined && startsWith(this.changed, element)) this.alias(item, element, tracked, "iterate", offset);
+      else if (relatePaths(tracked.offset, this.changed) === "contains") this.frontier(tracked, "unmodelled-flow", "iterate", offset);
+    }
+    this.expr(iterable, TEST);
+  }
+
+  private binding(attribute: TmplAstBoundAttribute, matched: readonly DirectiveMeta[], native: Sink): void {
+    const value = core(attribute.value);
+    if (value instanceof Interpolation || (attribute.type !== BindingType.Property && attribute.type !== BindingType.TwoWay)) return this.expr(value, CONSUME);
+    this.expr(value, this.sinkOf(attribute, matched, native));
+  }
+
+  private sinkOf(attribute: TmplAstBoundAttribute, matched: readonly DirectiveMeta[], native: Sink): Sink {
+    const unsupported = (detail: string) => opaque(detail, "frontier", "unsupported-binding");
+    if (attribute.type === BindingType.TwoWay) return unsupported(`two-way:${attribute.name}`);
+    const components = matched.filter((meta) => meta.isComponent);
+    const [only] = components;
+    if (components.length > 1) return unsupported(`ambiguous-component:${attribute.name}`);
+    if (only !== undefined) {
+      const member = this.template.members.get(only.ref.key);
+      return member === undefined ? unsupported(`unreadable-component:${attribute.name}`) : { kind: "bind", name: attribute.name, ref: member.ref };
+    }
+    const [directive] = matched;
+    return directive === undefined ? native : unsupported(`directive:${directive.name}:${attribute.name}`);
+  }
+}
