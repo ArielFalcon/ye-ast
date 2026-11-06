@@ -8,6 +8,7 @@ import type { TrustRecords } from "../../ports/trust-record.port.ts";
 import { DEFAULT_REVISION, type Vcs, type VcsFault } from "../../ports/vcs.port.ts";
 import { parseWorkspaceManifest, renderWorkspaceManifest, type WorkspaceManifest } from "../../domain/topology/workspace-manifest.ts";
 import { WORKSPACE_MANIFEST_FILE, type WorkspaceDefaults } from "../../ports/workspace-defaults.port.ts";
+import { compareText } from "../../domain/shared/code-node.ts";
 
 /** What `install` keeps out of git through the repository's local exclude file. */
 export const IGNORED_LINES: readonly string[] = [`${FIXED_LAYER_DIRECTORY}/`, `${INDEX_STORE_DIRECTORY}/`];
@@ -204,7 +205,7 @@ async function runBatch(request: BatchInstallRequest, install: Install, vcs: Ins
   targets.sort((a, b) => {
     const left = a.canonicalRoot ?? a.requestedPaths[0]!;
     const right = b.canonicalRoot ?? b.requestedPaths[0]!;
-    return left < right ? -1 : left > right ? 1 : 0;
+    return compareText(left, right);
   });
   if (targets.some((target) => target.status === "failed")) return { targets };
   for (const target of targets) {

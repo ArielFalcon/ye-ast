@@ -19,7 +19,7 @@ import { isCompositionId, jsonPointer } from "./composition-identity.ts";
 import {
   MERGE_BASE, SHA_A, SHA_B, entrypointsValue, factOf, impactValue, inputsOf, shaRef, sourceFixture, unknownFactOf, workspaceImpactValue,
   type FixtureKind,
-} from "./composition-fixtures.ts";
+} from "./composition-fixtures.testing.ts";
 import { normalizeSource } from "./composition-normalize.ts";
 import type { ExecutedSource } from "./query-runner.ts";
 

@@ -4,7 +4,7 @@ import { ELEMENT, formatAccessPath, parseAccessPath, type AccessPath } from "./a
 
 const HTTP_METHODS: readonly HttpMethod[] = ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "TRACE", "ANY"];
 
-export const CHANGE_KINDS = ["nullable", "removed"] as const;
+const CHANGE_KINDS = ["nullable", "removed"] as const;
 
 export type ChangeKind = (typeof CHANGE_KINDS)[number];
 

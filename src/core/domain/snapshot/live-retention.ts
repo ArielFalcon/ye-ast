@@ -1,3 +1,5 @@
+import { compareText } from "../shared/code-node.ts";
+
 /**
  * How the live tree keeps its mirrors: RFC-0010 "Retention", RFC-0006's `store` row. The values are configuration, so a
  * host supplies them through composition; the rule below is pure and reads no clock.
@@ -41,13 +43,8 @@ const NONE: LiveDiscards = { scopes: [], debris: [] };
 function lastUsed(scope: LiveScopeUsage): number {
   return scope.lastUsedMs ?? 0;
 }
-
-function compare(a: string, b: string): number {
-  return a < b ? -1 : a > b ? 1 : 0;
-}
-
 function leastRecentFirst(a: LiveScopeUsage, b: LiveScopeUsage): number {
-  return lastUsed(a) - lastUsed(b) || compare(a.scope, b.scope);
+  return lastUsed(a) - lastUsed(b) || compareText(a.scope, b.scope);
 }
 
 /**
@@ -89,5 +86,5 @@ export function retentionDiscards(sweep: LiveSweep, current: string, policy: Liv
   }
 
   if (discarded.length === 0 && sweep.debris.length === 0) return NONE;
-  return { scopes: discarded, debris: [...new Set(sweep.debris)].sort(compare) };
+  return { scopes: discarded, debris: [...new Set(sweep.debris)].sort(compareText) };
 }

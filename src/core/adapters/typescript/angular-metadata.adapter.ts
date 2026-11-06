@@ -104,7 +104,7 @@ function replacedFiles(files: readonly SourceFile[]): ReadonlySet<string> | unde
         for (const entry of nested) {
           const source = (entry as { replace?: unknown } | null)?.replace;
           if (typeof source !== "string") return undefined;
-          replaced.add(posix.normalize(posix.join(posix.dirname(file.path), source)));
+          replaced.add(posix.join(posix.dirname(file.path), source));
         }
       }
     }
@@ -195,7 +195,7 @@ async function readProject(contents: ReadonlyMap<string, SourceFile>, packages: 
     if (template === undefined) return undefined;
     if ("inline" in template) return { inline: template.inline };
     const at = { path: file, line: template.line };
-    return "unreadable" in template ? { unreadable: at } : { file: { path: posix.normalize(posix.join(posix.dirname(file), template.url)), at } };
+    return "unreadable" in template ? { unreadable: at } : { file: { path: posix.join(posix.dirname(file), template.url), at } };
   };
   const classOf = async (file: string, raw: RawAngularClass): Promise<AngularClass> => {
     const ref = { path: file, symbol: raw.name, line: raw.line };

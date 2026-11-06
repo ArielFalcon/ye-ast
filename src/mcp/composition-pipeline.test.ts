@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { canonicalJson } from "../core/domain/shared/canonical-json.ts";
-import { sourceFixture } from "./composition-fixtures.ts";
+import { sourceFixture } from "./composition-fixtures.testing.ts";
 import { normalizeSource } from "./composition-normalize.ts";
 import { mergeEvidence, materializeEvidence, validateCompositionReferences } from "./compose-evidence.ts";
 import type { EvidenceSet } from "./composition-contract.ts";

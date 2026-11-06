@@ -3,6 +3,7 @@ import { isEngineEntry } from "../../ports/staging-rules.ts";
 import type { VcsFault } from "../../ports/vcs.port.ts";
 import type { WorkingTree, WorkingTreeListing, WorkingTreePath } from "../../ports/working-tree.port.ts";
 import { ABORTED, defaultGitDeps, ensureRepositoryRoot, gitFailed, type GitDeps } from "./git-vcs.adapter.ts";
+import { compareText } from "../../domain/shared/code-node.ts";
 
 const SUBMODULE_MODE = "160000";
 
@@ -43,7 +44,7 @@ export function createGitWorkingTree(deps: Pick<GitDeps, "runGit"> = defaultGitD
       const path = nested ? record.slice(0, -1) : record;
       listed.set(path, { path, submodule: nested });
     }
-    const paths = [...listed.values()].filter((entry) => !isEngineEntry(entry.path)).sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+    const paths = [...listed.values()].filter((entry) => !isEngineEntry(entry.path)).sort((a, b) => compareText(a.path, b.path));
     return { ok: true, value: { paths, objectFormat: format.stdout.toString("utf8").trim() } };
   }
 

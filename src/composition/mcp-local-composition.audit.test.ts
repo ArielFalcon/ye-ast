@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { composeQueries } from './compose.ts';
 import { createMcpServer } from '../mcp/server.ts';
 import { createSha256Digest } from '../core/adapters/crypto/sha256-digest.adapter.ts';
-import { openSession, resultFields } from '../mcp/test-session.ts';
+import { openSession, resultFields } from '../mcp/test-session.testing.ts';
 
 const everyDeclaration = (declarations: readonly any[]): any[] => declarations.flatMap((item) => [item, ...everyDeclaration(item.children ?? [])]);
 

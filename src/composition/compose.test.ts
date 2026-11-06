@@ -15,7 +15,7 @@ import type { WorkspaceValue } from "../core/ports/workspace-queries.port.ts";
 import { composeCli, composeQueries, mcpCommandFor } from "./compose.ts";
 import { installedVersion } from "./installed-versions.ts";
 import { createMcpServer, RESULT_JSON_LABEL } from "../mcp/server.ts";
-import { openSession } from "../mcp/test-session.ts";
+import { openSession } from "../mcp/test-session.testing.ts";
 
 const GIT_ENV = {
   ...process.env,

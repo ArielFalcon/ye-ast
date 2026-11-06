@@ -6,7 +6,7 @@ import type {
   PartId, ReadId, RelationKind, RelationRecord, SourceFamilyRef,
 } from "./composition-contract.ts";
 import { materializeEvidence, mergeEvidence, validateCompositionReferences } from "./compose-evidence.ts";
-import { digest, SetBuilder, sha, SHA_A, SHA_B, type ReadContext } from "./compose-evidence-test-sets.ts";
+import { digest, SetBuilder, sha, SHA_A, SHA_B, type ReadContext } from "./compose-evidence-test-sets.testing.ts";
 
 const ENTRYPOINTS: SourceFamilyRef = { family: "entrypoints" };
 const OUTLINE: SourceFamilyRef = { family: "outline" };

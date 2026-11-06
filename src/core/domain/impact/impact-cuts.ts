@@ -53,7 +53,7 @@ export function declarationAnchor(file: string, name: string): string {
 }
 
 /** An entry of a `Cut.at` after its lead: a line of a file, followed by the reason it is named when there is one. */
-export function placeAt(file: string, line: number, reason?: string): string {
+function placeAt(file: string, line: number, reason?: string): string {
   return reason === undefined ? `${file}:${line}` : `${file}:${line} ${reason}`;
 }
 

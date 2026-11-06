@@ -20,7 +20,7 @@ import type { EntrypointMap } from "../core/domain/map/entrypoint-map.ts";
 import type { Digest } from "../core/ports/digest.port.ts";
 import type { RepoImpact, WorkspaceImpactValue } from "../core/ports/workspace-impact-queries.port.ts";
 import type { DecisionValue } from "../core/ports/decision-queries.port.ts";
-import type { Analysis } from "./select-evidence.ts";
+import { analysis } from "./select-evidence.ts";
 import type { ExecutedSource, PublicWorkspaceValue } from "./query-runner.ts";
 import { recoveryContext, type RecoveryContext } from "./recovery.ts";
 import type {
@@ -42,7 +42,7 @@ export function normalizeSource(source: ExecutedSource, digest: Digest, options?
   const builder = new Builder(digest, id, source.identityGuard.changedIdentityPointers);
   const root = builder.read({ kind: "fact" }, "", source.read.fact);
   const vector = adapt(source, builder, root);
-  return builder.finish({ ...family, id, rootRead: root.id, snapshotVector: vector, analysis: analysisOf(source.read.fact) });
+  return builder.finish({ ...family, id, rootRead: root.id, snapshotVector: vector, analysis: analysis(source.read.fact) });
 }
 
 function familyRef(source: ExecutedSource): SourceFamilyRef {
@@ -81,10 +81,6 @@ function contextOf(source: ExecutedSource): SourceContext {
     default:
       return unreachable(source);
   }
-}
-
-function analysisOf(fact: FactProvenance): Analysis {
-  return fact.status === "unknown" ? { status: "unknown", reason: fact.reason } : { status: fact.status };
 }
 
 function readAnalysisOf(fact: FactProvenance): ReadAnalysis {

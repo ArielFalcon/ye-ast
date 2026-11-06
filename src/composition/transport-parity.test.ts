@@ -15,7 +15,7 @@ import type { DecisionQueries } from "../core/ports/decision-queries.port.ts";
 import type { Install } from "../core/ports/install.port.ts";
 import { REDACTED, type Redaction } from "../core/ports/redaction.port.ts";
 import { createMcpServer } from "../mcp/server.ts";
-import { openSession, type ToolResult } from "../mcp/test-session.ts";
+import { openSession, type ToolResult } from "../mcp/test-session.testing.ts";
 import { serveQueries } from "../protocol/query-server.ts";
 
 const REPO = "/work/shop";

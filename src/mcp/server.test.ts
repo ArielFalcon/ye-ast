@@ -30,8 +30,8 @@ function resultFields(result: any): any {
   assert.notEqual(at, -1);
   return { text: text.slice(0, at), ...JSON.parse(text.slice(at + 1 + RESULT_JSON_LABEL.length)) };
 }
-import { openSession, type Session } from "./test-session.ts";
-import { CONSUMER_ROUTES } from "./test-consumer-routes.ts";
+import { openSession, type Session } from "./test-session.testing.ts";
+import { CONSUMER_ROUTES } from "./test-consumer-routes.testing.ts";
 import { createHash } from "node:crypto";
 import { encodeCursor, selectionDigest } from "./evidence-cursor.ts";
 

@@ -5,7 +5,7 @@ import { z } from "zod";
 import { AjvJsonSchemaValidator } from "@modelcontextprotocol/server/validators/ajv";
 import { compactInput, crossField } from "./compact-schema.ts";
 import { createMcpServer, type McpDeps } from "./server.ts";
-import { openSession } from "./test-session.ts";
+import { openSession } from "./test-session.testing.ts";
 import { TOOL_INPUTS } from "./query-schema.ts";
 import type { ToolFamily } from "./presentation.ts";
 

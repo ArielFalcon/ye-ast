@@ -4,6 +4,7 @@ import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import { scopeOf, type JavaProject, type TypeDecl } from "./java-symbols.ts";
 import { unknownAt, type MappedRoute } from "./findings.ts";
 import { annotationUses, COMPONENTS, type SpringAnnotations } from "./request-mapping.ts";
+import { compareText } from "../../domain/shared/code-node.ts";
 
 /**
  * The first build file by path that declares a source generator, at the line of its declaration. Generated interfaces
@@ -12,7 +13,7 @@ import { annotationUses, COMPONENTS, type SpringAnnotations } from "./request-ma
 export function sourceGeneratorIn(files: readonly SourceFile[]): Evidence | undefined {
   const declaring = files
     .filter((file) => isJvmBuildFile(file.path))
-    .toSorted((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0))
+    .toSorted((a, b) => compareText(a.path, b.path))
     .flatMap((file) => {
       const declaration = sourceGeneratorDeclaration(file.path, file.content);
       return declaration === undefined ? [] : [{ path: file.path, line: declaration.line }];

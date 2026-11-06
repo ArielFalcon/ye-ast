@@ -22,7 +22,7 @@ import { controlFault, faultContext, renderFault, type CodedFault, type FaultQue
 import { renderDecisions, renderEntrypointMap, renderImpact, renderImporters, renderOutline, renderRefresh, renderStale, renderWorkspace, renderWorkspaceImpact } from "./render.ts";
 
 /** The key of the result's `_meta` that carries a stale notice. */
-export const LIVE_META = "ye-ast/live";
+const LIVE_META = "ye-ast/live";
 export const WORKSPACE_LIVE_META = "ye-ast/workspace-live";
 /** The key of the result's `_meta` that carries the fault of an `isError` answer, beside the text that names its kind first. */
 export const FAULT_META = "ye-ast/fault";

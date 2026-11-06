@@ -199,7 +199,7 @@ export function composeSections<S extends Sections>(base: FactBase, sections: S)
 
 /** The engines by name, sorted, so provenance does not depend on the order the composition built them in. */
 export function sortedEngines(engines: Readonly<Record<string, string>>): Record<string, string> {
-  return Object.fromEntries(Object.entries(engines).toSorted(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)));
+  return Object.fromEntries(Object.entries(engines).toSorted(([a], [b]) => compareText(a, b)));
 }
 
 /** A fact's identity for RFC-0002 rule 5: its schema, its inputs and its producer, whatever order the keys were written in. */

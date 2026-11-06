@@ -40,7 +40,7 @@ export function carrierKey(site: CarrierSite): string {
   return canonicalJson({ kind, repo, file, owner, member });
 }
 
-export const FLOW_STEPS = [
+const FLOW_STEPS = [
   "http-call",
   "response-body",
   "return",

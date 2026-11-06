@@ -85,7 +85,7 @@ export interface EdgeCorrections {
   into: ReadonlyMap<GraphNodeId, readonly FollowedEdge[]>;
 }
 
-export const NO_CORRECTIONS: EdgeCorrections = { dropped: new Set(), into: new Map() };
+const NO_CORRECTIONS: EdgeCorrections = { dropped: new Set(), into: new Map() };
 
 /** One edge of the store, for naming it in a set; a handle inside one store, never output. */
 export function edgeKey({ source, target, kind, line, column }: GraphEdge): string {
