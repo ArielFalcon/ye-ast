@@ -29,9 +29,9 @@ test("enum constants are names", async () => {
 test("a source of another language or one that does not parse declares none, and the parser is made only for a Java source", async () => {
   let created = 0;
   const reader = createJavaMemberNames(async () => (created += 1, createJavaParser()));
-  assert.deepEqual(await read(["const a = { m() {} };"], "src/a.ts", reader), { names: [], functionValues: [], callables: [] });
+  assert.deepEqual(await read(["const a = { m() {} };"], "src/a.ts", reader), { names: [], functionValueCalls: [], callables: [] });
   assert.equal(created, 0);
-  assert.deepEqual(await read(["class {"], "src/A.java", reader), { names: [], functionValues: [], callables: [] });
+  assert.deepEqual(await read(["class {"], "src/A.java", reader), { names: [], functionValueCalls: [], callables: [] });
   assert.equal(created, 1);
 });
 
@@ -58,19 +58,41 @@ test("every method is a callable: overridable unless static, private or final, w
   ]);
 });
 
-test("a field, local or assigned name that takes a lambda or a method reference holds a function value; any other value is none", async () => {
+test("a member call is a function-value call when its own file binds the receiver to a lambda or a method reference: this.<field>, a bare field, a local or an assignment", async () => {
   assert.deepEqual((await read([
     "public class A {",
     "  Supplier<Integer> supply = () -> 1;",
     "  Runnable task = this::work;",
-    "  int count = 1;",
     "  Runnable later;",
     "  Runnable throughThis;",
     "  void work() {",
     "    Runnable local = A::helper;",
     "    later = () -> {};",
     "    this.throughThis = this::work;",
+    "    this.supply.get();",
+    "    task.run();",
+    "    local.run();",
+    "    later.run();",
+    "    throughThis.run();",
     "  }",
     "}",
-  ])).functionValues, ["later", "local", "supply", "task", "throughThis"]);
+  ])).functionValueCalls, [
+    { line: 10, receiver: "supply", member: "get" },
+    { line: 11, receiver: "task", member: "run" },
+    { line: 12, receiver: "local", member: "run" },
+    { line: 13, receiver: "later", member: "run" },
+    { line: 14, receiver: "throughThis", member: "run" },
+  ]);
+});
+
+test("a receiver bound to a non-function value, or shadowed by a parameter or a local, is no function-value call", async () => {
+  assert.deepEqual((await read([
+    "public class B {",
+    "  Supplier<Integer> supply = () -> 1;",
+    "  List<Integer> items = new ArrayList<>();",
+    "  void take(Supplier<Integer> supply) { supply.get(); }",
+    "  void list() { items.add(1); }",
+    "  void shadow() { Supplier<Integer> supply = other(); supply.get(); }",
+    "}",
+  ])).functionValueCalls, []);
 });

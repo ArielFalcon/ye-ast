@@ -54,16 +54,66 @@ test("a module's exported value names are names: renamed, re-exported, a namespa
   assert.deepEqual(await names(["export = run;"]), []);
 });
 
-test("a variable, property or assigned name that takes an arrow or function expression holds a function value; any other value is none", async () => {
+test("a member call is a function-value call when its own file binds the receiver to a function value: an initializer, an assignment, a function declaration or a function type", async () => {
   assert.deepEqual((await read([
-    "const arrow = () => run();",
-    "let wrapped = (function () {}) as Handler;",
-    "const plain = run();",
-    "class Holder { field = () => run(); other = 1; }",
-    "const table = { entry: () => run(), count: 2 };",
-    "let assigned; assigned = () => run();",
-    "target.member = function () {};",
-  ])).functionValues, ["arrow", "assigned", "entry", "field", "member", "wrapped"]);
+    "const fn = () => 1;",
+    "let handler: () => void;",
+    "let later; later = function () {};",
+    "function helper(): void {}",
+    "export function run(cb: () => void): void {",
+    "  fn.call(undefined);",
+    "  handler.apply(undefined, []);",
+    "  later.call(undefined);",
+    "  helper.bind(undefined);",
+    "  cb.call(undefined);",
+    "}",
+  ])).functionValueCalls, [
+    { line: 6, receiver: "fn", member: "call" },
+    { line: 7, receiver: "handler", member: "apply" },
+    { line: 8, receiver: "later", member: "call" },
+    { line: 9, receiver: "helper", member: "bind" },
+    { line: 10, receiver: "cb", member: "call" },
+  ]);
+});
+
+test("a receiver bound to a non-function value, shadowed by a parameter, imported, or written nowhere in the file is no function-value call", async () => {
+  assert.deepEqual((await read([
+    "import { imported } from './elsewhere';",
+    "const fn = () => 1;",
+    "const data = [1];",
+    "export function run(fn: { call(): void }): void {",
+    "  fn.call();",
+    "  data.map(String);",
+    "  imported.call(undefined);",
+    "  unknown.call(undefined);",
+    "}",
+  ])).functionValueCalls, []);
+});
+
+test("this.<field> binds to the field of the enclosing class, through an arrow; an object-literal method or a function rebinds this", async () => {
+  assert.deepEqual((await read([
+    "class Holder {",
+    "  private fn = () => 1;",
+    "  private typed?: () => void;",
+    "  private plain = 1;",
+    "  private assigned;",
+    "  constructor(private readonly injected: () => void) { this.assigned = () => 2; }",
+    "  run(): void {",
+    "    this.fn.call(this);",
+    "    this.typed.call(this);",
+    "    this.plain.toFixed();",
+    "    const later = () => this.assigned.call(this);",
+    "    this.injected.call(this);",
+    "    const o = { k() { this.fn.call(this); } };",
+    "    function inner() { this.fn.call(this); }",
+    "  }",
+    "}",
+  ])).functionValueCalls, [
+    { line: 8, receiver: "fn", member: "call" },
+    { line: 9, receiver: "typed", member: "call" },
+    { line: 11, receiver: "assigned", member: "call" },
+    { line: 12, receiver: "injected", member: "call" },
+  ]);
 });
 
 test("a computed key or index adds no name; a literal one adds its name", async () => {
@@ -71,8 +121,8 @@ test("a computed key or index adds no name; a literal one adds its name", async 
 });
 
 test("a file that is not a TypeScript source declares none", async () => {
-  assert.deepEqual(await read(["const table = { plain: run };"], "src/a.d.ts"), { names: [], functionValues: [], callables: [] });
-  assert.deepEqual(await read(["class A { void run() {} }"], "src/A.java"), { names: [], functionValues: [], callables: [] });
+  assert.deepEqual(await read(["const table = { plain: run };"], "src/a.d.ts"), { names: [], functionValueCalls: [], callables: [] });
+  assert.deepEqual(await read(["class A { void run() {} }"], "src/A.java"), { names: [], functionValueCalls: [], callables: [] });
 });
 
 test("functions, overload signatures and ambient functions are callables that no subtype overrides, with a body only when written", async () => {

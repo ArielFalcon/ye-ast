@@ -1036,6 +1036,19 @@ test("a trace over a real index keeps a library member call a cut when its recei
   ]);
 });
 
+test("a trace over a real index binds a receiver in its own file, so a function value of that name in another file leaves an unrelated call as R6 decides", async () => {
+  writeFileSync(join(repo, "src", "holder.ts"), ["export const value = () => 1;", ""].join("\n"));
+  writeFileSync(join(repo, "src", "use.ts"), ["export function use(value: { describe(): void }): void {", "  value.describe();", "}", ""].join("\n"));
+  git("add", "-A");
+  git("commit", "-q", "-m", "binding");
+  const { trace } = composeQueries({ scratchRoot });
+
+  const answer = await trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: "src/use.ts", symbol: "use" }] });
+
+  assert.ok(answer.ok && answer.value.status === "complete");
+  assert.deepEqual(answer.value.value.steps[0]?.external, [{ kind: "unnamed", names: ["value.describe"] }]);
+});
+
 test("callers over a range inside a property initializer still seeds the class that holds it", async () => {
   commitPage();
   const { impact } = composeQueries({ scratchRoot });

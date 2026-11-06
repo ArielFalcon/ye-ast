@@ -7,7 +7,7 @@ import type { Cut } from "../../domain/shared/fact.ts";
 import { calleeOf, compareOccurrence, ownMemberOf, receiverOf, sameOccurrence, type EdgeOccurrence, type OrderedPlace } from "../../domain/trace/call-place.ts";
 import type { TraceVia } from "../../domain/trace/trace-fact.ts";
 import type { ExternalCall, TraceDeclaration, WalkedStep } from "../../domain/trace/trace-tree.ts";
-import type { DeclaredCallable } from "../../ports/declared-member-names.port.ts";
+import type { DeclaredMemberNames } from "../../ports/declared-member-names.port.ts";
 import type { CodeGraphReader, GraphNodeId, GraphSymbol, GraphUnresolvedReference } from "../../ports/code-graph.port.ts";
 import type { ImportOriginSite, ImportOrigins } from "../../ports/import-origins.port.ts";
 import type { TraceBudget } from "../../ports/trace-queries.port.ts";
@@ -52,10 +52,11 @@ export interface TraceWalkInput {
    * record component), so a name only they declare still runs repository code.
    */
   memberDeclarations: () => Promise<ReadonlyMap<string, readonly string[]>>;
-  /** The in-scope sources that write a function value to each name, by name, sorted; read with `memberDeclarations`. */
-  functionValueDeclarations: () => Promise<ReadonlyMap<string, readonly string[]>>;
-  /** The callable declarations a source's syntax states, in source order; read for the file of each method the walk expands. */
-  callablesIn: (file: string) => Promise<readonly DeclaredCallable[]>;
+  /**
+   * What a source's syntax states, read once per file: its callables, for each method the walk expands, and the member
+   * calls whose receiver it binds to a function value, for a member call R6 reaches.
+   */
+  syntaxOf: (file: string) => Promise<DeclaredMemberNames>;
   budget: TraceBudget;
   signal?: AbortSignal;
 }
@@ -86,7 +87,7 @@ interface Body {
  * cut that leaves it free to expand at a later, shallower one. Every read is cached for this walk only.
  */
 export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkInput): Promise<TraceWalk | "aborted"> {
-  const { store, origins, inScope, memberDeclarations, functionValueDeclarations, callablesIn, budget, signal } = input;
+  const { store, origins, inScope, memberDeclarations, syntaxOf, budget, signal } = input;
   const navigation = createGraphNavigation(store, () => false);
 
   const referencesByFile = new Map<string, ReadonlyMap<GraphNodeId, readonly GraphUnresolvedReference[]>>();
@@ -176,7 +177,7 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
    */
   const unboundDispatch = async (symbol: GraphSymbol): Promise<Cut | undefined> => {
     if (!CALLABLE_KINDS.includes(symbol.kind)) return undefined;
-    const declared = (await callablesIn(symbol.file)).find(({ name, start, nameLine }) => name === symbol.name && start <= symbol.startLine && symbol.startLine <= nameLine);
+    const declared = (await syntaxOf(symbol.file)).callables.find(({ name, start, nameLine }) => name === symbol.name && start <= symbol.startLine && symbol.startLine <= nameLine);
     const owners = navigation.ownersOf(symbol);
     if (declared === undefined) {
       const interfaces = owners.filter((owner) => owner.kind === "interface");
@@ -187,6 +188,9 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
     const overriders = implementationsBelow(symbol, owners);
     return overriders.length === 0 ? undefined : dispatchCut(symbol, overriders);
   };
+  /** Whether the call's own source binds its receiver to a function value, which a library member such as `call` runs. */
+  const holdsFunctionValue = async (reference: GraphUnresolvedReference, receiver: string, member: string): Promise<boolean> =>
+    (await syntaxOf(reference.file)).functionValueCalls.some((call) => call.line === reference.line && call.receiver === receiver && call.member === member);
   const childAt = (symbol: GraphSymbol, line: number | null, column: number | null, spelling: string, via: TraceVia, deferred?: true): Child => ({
     symbol,
     place: { line, column, spelling, target: symbol.id },
@@ -241,7 +245,7 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
             const receiver = receiverOf(reference.name);
             const declared = [
               ...((await memberDeclarations()).get(callee.name) ?? []).map((file) => declarationAnchor(file, callee.name)),
-              ...(receiver === undefined ? [] : ((await functionValueDeclarations()).get(receiver) ?? []).map((file) => declarationAnchor(file, receiver))),
+              ...(receiver !== undefined && (await holdsFunctionValue(reference, receiver, callee.name)) ? [declarationAnchor(reference.file, receiver)] : []),
             ];
             if (declared.length === 0) external.push({ kind: "unnamed", name: reference.name });
             else cuts.push({ kind: "unresolved-link", at: [placeAt(reference.file, reference.line, reference.name), ...sortedUnique([...reference.candidates, ...declared])] });

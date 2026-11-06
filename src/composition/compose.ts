@@ -164,7 +164,7 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
       const [typescript, java] = [await typescriptMemberNames.memberNames(file), await javaMemberNames.memberNames(file)];
       return {
         names: [...new Set([...typescript.names, ...java.names])].sort(compareText),
-        functionValues: [...new Set([...typescript.functionValues, ...java.functionValues])].sort(compareText),
+        functionValueCalls: [...typescript.functionValueCalls, ...java.functionValueCalls],
         callables: [...typescript.callables, ...java.callables],
       };
     },

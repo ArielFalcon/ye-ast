@@ -1,12 +1,11 @@
 import type { Node } from "web-tree-sitter";
 import { compareText } from "../../domain/shared/code-node.ts";
 import { isJavaSource } from "../../domain/languages/java.ts";
-import type { DeclaredCallable, DeclaredMemberNames, DeclaredMemberNamesReader } from "../../ports/declared-member-names.port.ts";
+import type { DeclaredCallable, DeclaredMemberNames, DeclaredMemberNamesReader, FunctionValueCall } from "../../ports/declared-member-names.port.ts";
+import { javaFunctionValueCalls } from "./java-function-value-calls.ts";
 import type { JavaParser } from "./java-parser.adapter.ts";
 
-const NONE: DeclaredMemberNames = { names: [], functionValues: [], callables: [] };
-/** Expressions that are a function value. */
-const FUNCTION_VALUES: readonly string[] = ["lambda_expression", "method_reference"];
+const NONE: DeclaredMemberNames = { names: [], functionValueCalls: [], callables: [] };
 /** Modifiers that keep a subtype from overriding a method. */
 const FIXED: readonly string[] = ["static", "private", "final"];
 
@@ -17,8 +16,7 @@ const MEMBER_FIELDS: readonly string[] = ["field_declaration", "constant_declara
 
 /**
  * The member names a Java source declares: the methods and fields of every type, local and anonymous classes included,
- * enum constants, and a record's components, which name its accessors; every field, local or assigned name that takes a
- * lambda or a method reference as a function value; and every method as a callable. The tree is
+ * enum constants, and a record's components, which name its accessors; and every method as a callable. The tree is
  * freed before they return.
  */
 export function createJavaMemberNames(createParser: () => Promise<JavaParser>): DeclaredMemberNamesReader {
@@ -31,19 +29,12 @@ export function createJavaMemberNames(createParser: () => Promise<JavaParser>): 
       if (!parsed.ok) return NONE;
       const names = new Set<string>();
       const callables: DeclaredCallable[] = [];
-      const functionValues = new Set<string>();
-      const nameOf = (node: Node, into: Set<string> = names): void => {
+      const nameOf = (node: Node): void => {
         const name = node.childForFieldName("name");
-        if (name !== null) into.add(name.text);
+        if (name !== null) names.add(name.text);
       };
       const visit = (node: Node): void => {
         if (node.type === "variable_declarator" ? MEMBER_FIELDS.includes(node.parent?.type ?? "") : NAMED.includes(node.type)) nameOf(node);
-        if (node.type === "variable_declarator" && FUNCTION_VALUES.includes(node.childForFieldName("value")?.type ?? "")) nameOf(node, functionValues);
-        if (node.type === "assignment_expression" && FUNCTION_VALUES.includes(node.childForFieldName("right")?.type ?? "")) {
-          const left = node.childForFieldName("left");
-          const name = left?.type === "field_access" ? left.childForFieldName("field") : left;
-          if (name?.type === "identifier") functionValues.add(name.text);
-        }
         if (node.type === "method_declaration") {
           const name = node.childForFieldName("name");
           const modifiers = node.namedChildren.find((child) => child?.type === "modifiers")?.children ?? [];
@@ -52,12 +43,14 @@ export function createJavaMemberNames(createParser: () => Promise<JavaParser>): 
         if (node.type === "record_declaration") for (const component of node.childForFieldName("parameters")?.namedChildren ?? []) if (component?.type === "formal_parameter") nameOf(component);
         for (const child of node.namedChildren) if (child !== null) visit(child);
       };
+      let functionValueCalls: FunctionValueCall[];
       try {
         visit(parsed.value.root);
+        functionValueCalls = javaFunctionValueCalls(parsed.value.root);
       } finally {
         parsed.value.dispose();
       }
-      return { names: [...names].sort(compareText), functionValues: [...functionValues].sort(compareText), callables };
+      return { names: [...names].sort(compareText), functionValueCalls, callables };
     },
   };
 }

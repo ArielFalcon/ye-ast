@@ -72,15 +72,13 @@ export function createTraceQueries(deps: TraceQueriesDeps): TraceQueries {
           const roots = [...new Map(selections.flatMap(({ selection }) => selection.seeds.map(({ symbol }): [GraphNodeId, GraphSymbol] => [symbol.id, symbol]))).values()].sort(comparePosition);
           const declaredIn = declarationsOncePerFile(deps.memberNames);
           const sources = new Map(head.tree.sources.map((file) => [file.path, file]));
-          let declared: Promise<DeclaringFiles> | undefined;
-          const declaring = () => (declared ??= declaringFiles(head.tree.sources.filter((file) => head.selected(file.path)), declaredIn));
-          const memberDeclarations = async () => (await declaring()).members;
-          const functionValueDeclarations = async () => (await declaring()).functionValues;
-          const callablesIn = async (path: string) => {
+          let declared: Promise<ReadonlyMap<string, readonly string[]>> | undefined;
+          const memberDeclarations = () => (declared ??= declaringFiles(head.tree.sources.filter((file) => head.selected(file.path)), declaredIn));
+          const syntaxOf = async (path: string): Promise<DeclaredMemberNames> => {
             const file = sources.get(path);
-            return file === undefined ? [] : (await declaredIn(file)).callables;
+            return file === undefined ? NOTHING_DECLARED : declaredIn(file);
           };
-          const walk = await walkTrace(roots, { store, origins: deps.importOrigins(head.tree.sources), inScope: head.selected, memberDeclarations, functionValueDeclarations, callablesIn, budget, ...(signal === undefined ? {} : { signal }) });
+          const walk = await walkTrace(roots, { store, origins: deps.importOrigins(head.tree.sources), inScope: head.selected, memberDeclarations, syntaxOf, budget, ...(signal === undefined ? {} : { signal }) });
           if (walk === "aborted") return ABORTED;
 
           const { steps, ids } = traceSteps(walk.roots);
@@ -119,27 +117,19 @@ function declarationsOncePerFile(reader: DeclaredMemberNamesReader): (file: Sour
   };
 }
 
-interface DeclaringFiles {
-  members: ReadonlyMap<string, readonly string[]>;
-  functionValues: ReadonlyMap<string, readonly string[]>;
-}
+const NOTHING_DECLARED: DeclaredMemberNames = { names: [], functionValueCalls: [], callables: [] };
 
-/** Each member name, and each name a function value is written to, with the sources that declare it, sorted. */
-async function declaringFiles(sources: readonly SourceFile[], declaredIn: (file: SourceFile) => Promise<DeclaredMemberNames>): Promise<DeclaringFiles> {
-  const members = new Map<string, string[]>();
-  const functionValues = new Map<string, string[]>();
-  const record = (into: Map<string, string[]>, name: string, file: string): void => {
-    const files = into.get(name);
-    if (files === undefined) into.set(name, [file]);
-    else files.push(file);
-  };
+/** Each member name with the sources that declare it, sorted. */
+async function declaringFiles(sources: readonly SourceFile[], declaredIn: (file: SourceFile) => Promise<DeclaredMemberNames>): Promise<ReadonlyMap<string, readonly string[]>> {
+  const byName = new Map<string, string[]>();
   for (const file of sources) {
-    const declared = await declaredIn(file);
-    for (const name of declared.names) record(members, name, file.path);
-    for (const name of declared.functionValues) record(functionValues, name, file.path);
+    for (const name of (await declaredIn(file)).names) {
+      const files = byName.get(name);
+      if (files === undefined) byName.set(name, [file.path]);
+      else files.push(file.path);
+    }
   }
-  const sorted = (byName: Map<string, string[]>) => new Map([...byName].map(([name, files]) => [name, files.sort(compareText)]));
-  return { members: sorted(members), functionValues: sorted(functionValues) };
+  return new Map([...byName].map(([name, files]) => [name, files.sort(compareText)]));
 }
 
 async function rangeRoots(store: CodeGraphReader, changes: readonly FileChange[], sources: readonly SourceFile[], trivia: SourceTrivia, isRoot: (symbol: GraphSymbol) => boolean): Promise<RootSelection> {
