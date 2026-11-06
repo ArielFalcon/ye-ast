@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="https://capsule-render.vercel.app/api?type=waving&height=180&color=0:111111,100:3a3a3a&text=ye-ast&fontColor=ffffff&fontSize=64&fontAlignY=38&desc=Your%20AI%20agent%20stops%20guessing%20how%20your%20code%20fits%20together&descAlignY=60&descSize=16" alt="ye-ast" width="100%" />
+<img src="https://capsule-render.vercel.app/api?type=waving&height=180&color=0:111111,100:3a3a3a&text=ye-ast&fontColor=ffffff&fontSize=64&fontAlignY=38&desc=Your%20agent%27s%20IDE&descAlignY=60&descSize=16" alt="ye-ast" width="100%" />
 
 <i>"What breaks if I rename this?" · "Which screen uses this?" · "Is this file really dead?" · "What does my branch touch?"</i>
 
@@ -17,20 +17,24 @@
 
 ## What is ye-ast
 
-Your AI agent reads a handful of files and guesses the rest: it renames a function, says "done", and two days later a
-screen that called it through a path the agent never opened is broken.
+You work with an IDE: go to definition, find every reference, see who calls what. Your AI agent works with a handful of
+files and a guess. It renames a function, says "done", and two days later a screen that reached it through a file the
+agent never opened is broken.
 
-ye-ast gives the agent **the map**: every answer carries the file and line it came from, or an explicit "I cannot tell",
-never a silent empty list. The questions it settles:
+ye-ast is your agent's IDE. Ask it:
 
-- **What does my branch touch?** Everything downstream of the change, plus the routes it adds, removes or alters.
-- **Who calls this?** Every caller of a function or a line range (in every repository related, not just the current one), before you rename or delete it.
+- **What does my branch touch?** Everything downstream of the change, and the routes it adds, removes or alters.
+- **Who calls this?** Every caller of a function or a line range, in the related repositories too, before a rename or a delete.
 - **Which screen or endpoint ends up running this?** UI routes, HTTP endpoints, message listeners and scheduled jobs.
-- **Is this file really dead?** Who imports it and who uses it, file by file.
+- **Is this file really dead?** Who imports it and who actually uses it.
+- **What's in this file?** Its declarations, nested the way the code nests them.
 
-It is deterministic and read-only: the answers come from your code and your git history, never from a model, so the same
-repository gives the same bytes. It runs nothing from your repository, needs no secret, and under the default
-`untrusted` mode makes no network request. It speaks MCP, so Claude Code, OpenCode, Codex and any other client can use it.
+Several questions fit in one call, and the answers come back joined.
+
+Every answer points to the file and line it came from. When ye-ast can't see something, it says so and says where it
+stopped: an empty list never means "nothing". No model runs inside; the answers come from your code and your git
+history, so the same repository always gives the same answer. It runs nothing from your repository and, by default,
+makes no network request. It speaks MCP, so Claude Code, OpenCode, Codex and any other client can use it.
 
 ```bash
 npx ye-ast-mcp init --trust untrusted .   # one command; paste the line it prints into your agent
