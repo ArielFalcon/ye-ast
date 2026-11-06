@@ -276,6 +276,31 @@ test("a class that writes fields it does not name may write any of them", async 
   assert.deepEqual(sites(await reader.of([file], "shop-web")), ["GET /a/{}/items@dynamic.ts:2", "GET /b/{}/items@dynamic.ts:3"]);
 });
 
+test("a variable the code reassigns is not its initializer, so its path is undecided", async () => {
+  const file = source("let.ts", [
+    "import { HttpClient } from '@angular/common/http'",
+    "let BASE = '/a'",
+    "var ROOT = '/r'",
+    "export function move() { BASE = '/b'; ROOT = '/s' }",
+    "class Client { constructor(private http: HttpClient) {}",
+    "  load(archived: boolean, pair: string[]) {",
+    "    this.http.get(BASE + '/x')",
+    "    this.http.get(ROOT + '/y')",
+    "    let url = '/orders'; if (archived) { url = '/orders/archived' }; this.http.get(url)",
+    "    let path = '/items'; path += '/archived'; this.http.get(path)",
+    "    let next = '/pages'; [next] = pair; this.http.get(next)",
+    "  } }",
+  ].join("\n"));
+
+  assert.deepEqual(sites(await reader.of([file], "shop-web")), ["unknown unresolved@let.ts:7", "unknown unresolved@let.ts:8", "unknown unresolved@let.ts:9", "unknown unresolved@let.ts:10", "unknown unresolved@let.ts:11"]);
+});
+
+test("a variable the code only extends with a query or a fragment keeps its initializer's path", async () => {
+  const found = await reader.of([component("    let url = '/owners'; if (method) { url += '?lastName=' + method }; this.http.get(url)", "    let page = '/pages?size=10'; page += '&page=' + method; this.http.get(page)", "    this.http.get(`/r/${encodeURIComponent(url)}`)")], "shop-web");
+
+  assert.deepEqual(sites(found), ["GET /owners@src/app/app.component.ts:6", "GET /pages@src/app/app.component.ts:7", "GET /r/{}@src/app/app.component.ts:8"]);
+});
+
 test("a path part that names a field of the class is the value its initializer states", async () => {
   const service = source(
     "src/app/order/order.service.ts",

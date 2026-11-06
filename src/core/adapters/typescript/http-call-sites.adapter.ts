@@ -16,6 +16,7 @@ const RUN_TIME_VALUE: Evaluation = { kind: "value" };
 /** A class field the code assigns at run time, so no initializer states its value. */
 const ASSIGNED_AT_RUN_TIME = Symbol("assigned at run time");
 const WRITTEN_FIELDS = new WeakMap<ts.ClassDeclaration, ReadonlySet<string>>();
+const VARIABLE_WRITES = new WeakMap<ts.Node, ReadonlyMap<string, readonly ts.Expression[] | null>>();
 
 /** What one file declares at its top level, and the classes it holds, as the reader needs them. */
 interface FileShape {
@@ -633,11 +634,12 @@ class Reader {
       const visited = `${shape.source.fileName}\0local ${name}`;
       if (trail.has(visited)) return undefined;
       const declared = lexicalScope(local);
-      return (await this.evaluate(shape, local, declared, new Set(trail).add(visited))) ?? (readsRunTime(local, declared) ? RUN_TIME_VALUE : undefined);
+      const initial = (await this.evaluate(shape, local, declared, new Set(trail).add(visited))) ?? (readsRunTime(local, declared) ? RUN_TIME_VALUE : undefined);
+      return this.afterWrites(shape, local, initial, trail);
     }
     if (scope.names.has(name)) return RUN_TIME_VALUE;
     const constant = await this.constantAt(shape, name, trail);
-    if (constant !== undefined) return this.evaluate(constant.shape, constant.expression, NO_SCOPE, constant.trail);
+    if (constant !== undefined) return this.afterWrites(constant.shape, constant.expression, await this.evaluate(constant.shape, constant.expression, NO_SCOPE, constant.trail), constant.trail);
     if (shape.imports.has(name) || shape.bindings.has(name)) return undefined;
     const defined = this.defines.valueOf(shape.source.fileName, name);
     return defined === undefined ? undefined : stated(defined);
@@ -691,7 +693,24 @@ class Reader {
     if (!ts.isIdentifier(owner) && owner.kind !== ts.SyntaxKind.ThisKeyword && (await this.evaluate(shape, owner, scope, trail))?.kind === "value") return RUN_TIME_VALUE;
     const held = await this.memberOf(shape, expression, trail);
     if (held === ASSIGNED_AT_RUN_TIME) return RUN_TIME_VALUE;
-    return held === undefined ? undefined : this.evaluate(held.shape, held.expression, NO_SCOPE, held.trail);
+    return held === undefined ? undefined : this.afterWrites(held.shape, held.expression, await this.evaluate(held.shape, held.expression, NO_SCOPE, held.trail), held.trail);
+  }
+
+  /**
+   * What a variable holds where the code reads it, given what its initializer holds: the initializer's path while the code
+   * only extends it with a query or a fragment (`url += '?q=' + q`), undecided once it writes it any other way.
+   */
+  private async afterWrites(shape: FileShape, initializer: ts.Expression, initial: Evaluation | undefined, trail: ReadonlySet<string>): Promise<Evaluation | undefined> {
+    const appended = appendsTo(initializer);
+    if (appended === null) return undefined;
+    if (appended.length === 0 || initial === undefined) return initial;
+    if (initial.kind !== "text") return undefined;
+    if (endsPath(initial.text)) return cutAt(initial.text);
+    for (const part of appended) {
+      const text = textOf(await this.evaluate(shape, part, lexicalScope(part), trail));
+      if (text === undefined || !(text.startsWith("?") || text.startsWith("#"))) return undefined;
+    }
+    return cutAt(initial.text);
   }
 
   private async memberOf(shape: FileShape, expression: ts.PropertyAccessExpression, trail: ReadonlySet<string>): Promise<Located | typeof ASSIGNED_AT_RUN_TIME | undefined> {
@@ -913,6 +932,50 @@ function parameterType(name: ts.Identifier): string | undefined {
     if (parameter !== undefined) return parameter.type === undefined ? undefined : typeName(parameter.type);
   }
   return undefined;
+}
+
+/** What the code appends with `+=` to the variable an initializer declares; null when it writes the variable any other way. */
+function appendsTo(initializer: ts.Expression): readonly ts.Expression[] | null {
+  const declaration = initializer.parent;
+  if (!ts.isVariableDeclaration(declaration) || declaration.initializer !== initializer || !ts.isIdentifier(declaration.name)) return [];
+  const list = declaration.parent;
+  if (!ts.isVariableDeclarationList(list) || (list.flags & ts.NodeFlags.Const) !== 0) return [];
+  const writes = writesIn(regionOf(list)).get(declaration.name.text);
+  return writes === undefined ? [] : writes;
+}
+
+/** Where a declaration's variable is visible: its block or loop for `let`, its function or file for `var`. */
+function regionOf(list: ts.VariableDeclarationList): ts.Node {
+  if ((list.flags & ts.NodeFlags.BlockScoped) !== 0) return ts.isVariableStatement(list.parent) ? list.parent.parent : list.parent;
+  for (let current: ts.Node = list.parent; ; current = current.parent) {
+    if (ts.isSourceFile(current) || ts.isFunctionLike(current)) return current;
+  }
+}
+
+/** The assignments to each name a region makes, destructuring included: what `+=` appends, or null for any other. */
+function writesIn(region: ts.Node): ReadonlyMap<string, readonly ts.Expression[] | null> {
+  const cached = VARIABLE_WRITES.get(region);
+  if (cached !== undefined) return cached;
+  const writes = new Map<string, ts.Expression[] | null>();
+  const record = (name: string, appended: ts.Expression | null): void => {
+    const held = writes.get(name);
+    if (appended === null) writes.set(name, null);
+    else if (held !== null) writes.set(name, [...(held ?? []), appended]);
+  };
+  const names = (node: ts.Node): void => {
+    if (ts.isIdentifier(node)) record(node.text, null);
+    else ts.forEachChild(node, names);
+  };
+  const visit = (node: ts.Node): void => {
+    if (ts.isBinaryExpression(node) && node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment && node.operatorToken.kind <= ts.SyntaxKind.LastAssignment) {
+      if (ts.isIdentifier(node.left)) record(node.left.text, node.operatorToken.kind === ts.SyntaxKind.PlusEqualsToken ? node.right : null);
+      else if (ts.isObjectLiteralExpression(node.left) || ts.isArrayLiteralExpression(node.left)) names(node.left);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(region);
+  VARIABLE_WRITES.set(region, writes);
+  return writes;
 }
 
 const ANY_FIELD = "*";

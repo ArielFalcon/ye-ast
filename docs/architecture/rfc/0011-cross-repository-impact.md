@@ -65,7 +65,9 @@ is the refresh of declared remotes under `trusted` ([ADR-0016](../adr/0016-remot
 The TypeScript HTTP evaluator reads lexical bindings, including destructuring, enclosing functions, blocks, catches and
 loops; an inner binding wins and a local initializer is evaluated in its declaration's scope. Function-scoped `var`
 bindings do not escape nested functions or classes. Immutable AST scopes are memoized by node, and file bindings are
-collected once per source instead of rescanned for every request.
+collected once per source instead of rescanned for every request. A `let` or `var` the code assigns again (destructuring
+included) is not its initializer and leaves the path undecided, unless every such assignment appends a query or a
+fragment (`url += '?q=' + q`), so the path stays the initializer's.
 
 A value the code fills at run time, written `{}`, is a parameter or a variable whose initializer reads one (`this`
 included); a variable whose initializer the snapshot does not decide and reads none of them is undecided. A run-time
