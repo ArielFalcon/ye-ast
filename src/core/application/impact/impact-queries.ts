@@ -139,6 +139,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
         const index = await head.open();
         if (index === "aborted") return ABORTED;
         if (index === "unavailable") return { ok: true, value: { ...head.base(content), status: "unknown", reason: "index-unavailable" } };
+        if ("fault" in index) return { ok: false, fault: index.fault };
         const { store, summary } = index;
         try {
           const missing = missingTargets(store, requested);
@@ -182,6 +183,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
         const index = await head.open();
         if (index === "aborted") return ABORTED;
         if (index === "unavailable") return { ok: true, value: { ...head.base(content), status: "unknown", reason: "index-unavailable" } };
+        if ("fault" in index) return { ok: false, fault: index.fault };
         const { store, summary } = index;
         try {
           const written = headTree.export.files.filter((file) => file.written && isReadableFile(file.path)).map((file) => file.path);
@@ -239,7 +241,6 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
     return withScratch(deps.scratch, async (directory): Promise<Answer> => {
       const preparedHead = await prepareCommit(changeDeps, repo, head.value, directory, exported, { scope, trust }, signal);
       if (!preparedHead.ok) return preparedHead;
-      const headDirectory = preparedHead.value.root;
       const headTree = await preparedHead.value.extract(signal);
       if (!headTree.ok) return headTree;
       const preparedBase = mergeBase === head.value ? preparedHead : await prepareCommit(changeDeps, repo, mergeBase, directory, exported, { scope, trust }, signal);
@@ -251,7 +252,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
         prepared: preparedHead.value,
         selected,
         base: (content, store = false) => (store ? changeReader.factBase(trust, snapshot, content, spec, scope, { kind: "full" }) : baseOfHead(content)),
-        open: () => changeReader.indexHead(headTree.value, headDirectory, directory, signal),
+        open: () => changeReader.indexHead(preparedHead.value, directory, signal),
       };
       return readChange({ request, radius, head: reading, baseTree: baseTree.value, basePrepared: preparedBase.value, sameTree: baseTree === headTree, unreadable: JSON.stringify([mergeBase, head.value]) });
     });
@@ -368,6 +369,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
     const index = await head.open();
     if (index === "aborted") return ABORTED;
     if (index === "unavailable") return unknownFact(head.base(content), "index-unavailable");
+    if ("fault" in index) return { ok: false, fault: index.fault };
     const { store, summary } = index;
     try {
       const { relations: found, fields, locals, memberUses } = await relationsOf(head.prepared, headTree, request);

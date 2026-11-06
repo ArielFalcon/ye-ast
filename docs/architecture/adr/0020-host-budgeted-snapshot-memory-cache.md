@@ -5,6 +5,8 @@
   in-memory cache with eviction when its budget is exceeded, while Git exports remain temporary.
 - Amended by: [ADR-0026](0026-snapshot-data-may-retain-reader-outputs.md) (decision 2 also admits the serialized
   output of the relations and whole-universe module-dependencies readers)
+- Amended by: [ADR-0028](0028-lazy-export-materialization.md) (decisions 4 and 5: the listing is fresh on every
+  request, the files are written only when a reader needs them)
 - Related: [ADR-0006](0006-qayaba-graph-state-per-run.md), [ADR-0010](0010-trust-modes.md),
   [ADR-0021](0021-enable-snapshot-memory-cache-by-default.md), [RFC-0006](../rfc/0006-configuration.md)
 

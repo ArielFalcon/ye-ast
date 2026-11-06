@@ -14,6 +14,11 @@ export interface IndexRequest {
    */
   content: string;
   snapshot: string;
+  /**
+   * Makes `snapshot` hold the files of the snapshot. Called once, and only when an index has to be built, never when a
+   * kept index is reused: a snapshot whose content is kept need not be written. A fault fails the obtain with it.
+   */
+  prepare?: () => Promise<Result<void, CodeGraphFault>>;
   signal: AbortSignal | undefined;
 }
 

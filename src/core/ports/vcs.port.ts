@@ -87,6 +87,20 @@ export interface Vcs {
    */
   exportCommit(repo: string, sha: string, destination: string, plan: ExportPlan, signal?: AbortSignal): Promise<Result<CommitExport, VcsFault>>;
   /**
+   * `exportCommit` without the writing: the same listing, classification, budgets and `written` flags, decided from the
+   * object store (a blob's size is read without its content), so the answer is the one `exportCommit` would give and an
+   * `object-missing` fault is raised here. Nothing is written. A Vcs offers `listCommit` and `materializeCommit`
+   * together or neither; one that offers neither writes in `exportCommit` alone.
+   */
+  listCommit?(repo: string, sha: string, plan: ExportPlan, signal?: AbortSignal): Promise<Result<CommitExport, VcsFault>>;
+  /**
+   * Writes under `destination`, an empty directory, the files `listCommit` or `exportCommit` marked `written`, chunk by
+   * chunk from the object store, as `exportCommit` writes them. A blob that has left the object store is
+   * `object-missing`, a file that cannot be written `export-write-failed`. On a fault `destination` holds an
+   * unspecified part of the files and the caller discards it.
+   */
+  materializeCommit?(repo: string, files: readonly ExportedFile[], destination: string, signal?: AbortSignal): Promise<Result<void, VcsFault>>;
+  /**
    * The remotes the repository declares, by name and URL, sorted by name then URL. Read from the repository's own
    * configuration under an empty user and system configuration, so no `insteadOf` rewrite of the machine changes a URL.
    * A repository with no remote answers an empty list.

@@ -69,7 +69,7 @@ export function createIndexCache(deps: IndexCacheDeps): IndexCache {
     );
   }
 
-  async function produce(entry: string, { snapshot, signal }: Parameters<IndexCache["obtain"]>[0]): Promise<Result<IndexedSnapshot, CodeGraphFault>> {
+  async function produce(entry: string, { snapshot, signal, prepare }: Parameters<IndexCache["obtain"]>[0]): Promise<Result<IndexedSnapshot, CodeGraphFault>> {
     for (const directory of [deps.directory, indexes]) {
       const reachable = await reachableByOthers(directory);
       if (reachable !== null) return unavailable(reachable);
@@ -80,6 +80,8 @@ export function createIndexCache(deps: IndexCacheDeps): IndexCache {
     const building = await mkdtemp(join(indexes, BUILD_PREFIX));
     let published = false;
     try {
+      const prepared = await prepare?.();
+      if (prepared !== undefined && !prepared.ok) return prepared;
       const built = await deps.graph.index(snapshot, building, signal);
       if (!built.ok) return built;
       const { versions: _versions, ...summary } = built.value;

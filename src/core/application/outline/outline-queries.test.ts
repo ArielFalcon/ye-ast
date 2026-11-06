@@ -3,6 +3,7 @@ import test from "node:test";
 import { fakeCodeGraph, fakeNode } from "../impact/fake-code-graph.testing.ts";
 import { fakeLive, type FakeLive } from "../live/fake-live.testing.ts";
 import type { OutlineSelector } from "../../ports/outline-queries.port.ts";
+import type { VcsFault } from "../../ports/vcs.port.ts";
 import { createSnapshotDataCache } from "../snapshot/snapshot-data-cache.ts";
 import { createOutlineQueries, type OutlineQueriesDeps } from "./outline-queries.ts";
 
@@ -21,19 +22,25 @@ interface Options {
   snapshotCache?: OutlineQueriesDeps["snapshotCache"];
   /** The files the unmodelled-constructs reader marks among the sources it receives. */
   unmodelled?: readonly string[];
+  /** The Vcs lists and writes apart; writing answers the fault when given. */
+  lazy?: { materialize?: VcsFault };
 }
 
 function setup(options: Options = {}) {
-  const log = { closed: 0, reads: 0, extractions: 0, readPaths: [] as string[][], moduleReads: [] as (readonly string[] | undefined)[] };
+  const log = { closed: 0, reads: 0, extractions: 0, readPaths: [] as string[][], materialized: 0, readBeforeWrite: false, moduleReads: [] as (readonly string[] | undefined)[] };
   const store = { ...fakeCodeGraph(options.nodes ?? [], options.edges ?? []), close: () => void (log.closed += 1) };
   const written = options.written ?? [];
   const deps = {
     vcs: {
       resolveCommit: async () => ({ ok: true, value: SHA }),
       exportCommit: async () => ({ ok: true, value: { files: written.map((path) => ({ path, blob: "1", written: true })), skipped: [] } }),
+      ...(options.lazy && {
+        listCommit: async () => ({ ok: true, value: { files: written.map((path) => ({ path, blob: "1", written: true })), skipped: [] } }),
+        materializeCommit: async () => (log.materialized++, options.lazy!.materialize ? { ok: false, fault: options.lazy!.materialize } : { ok: true, value: undefined }),
+      }),
     },
     scratch: { create: async () => "/scratch/head", remove: async () => undefined },
-    reader: { read: async (_root: string, paths: readonly string[]) => { log.reads++; log.readPaths.push([...paths]); return paths.map((path) => ({ path, content: "" })); } },
+    reader: { read: async (_root: string, paths: readonly string[]) => { log.reads++; if (options.lazy && log.materialized === 0) log.readBeforeWrite = true; log.readPaths.push([...paths]); return paths.map((path) => ({ path, content: "" })); } },
     extractor: { extract: () => { log.extractions++; return []; } },
     digest: { of: (value: string) => `digest:${value}` },
     producer: { name: "ye-ast", version: "0.0.0" },
@@ -243,6 +250,22 @@ test("a focus on a file the graph cannot place is cut, reading that file alone",
   assert.ok(answer.ok && answer.value.status === "partial");
   assert.deepEqual(answer.value.cuts.map((cut) => [cut.kind, cut.at]), [["no-extractor", [POINT]]]);
   assert.deepEqual(log.readPaths, [[POINT]]);
+});
+
+test("a focus on a written Java file writes the snapshot before reading it, once, although the index build needs it too", async () => {
+  const placed = setup({ ...POINT_INDEX, lazy: {} });
+  await placed.queries.outline({ repo: "/work/shop", repoId: "shop", revision: "HEAD", focus: [{ file: "src/Order.java", symbol: "total" }] });
+  assert.deepEqual([placed.log.materialized, placed.log.reads], [1, 1]);
+  assert.equal(placed.log.readBeforeWrite, false);
+});
+
+test("a focus whose file cannot be written answers the export fault, not an unavailable index", async () => {
+  const { queries, log } = setup({ ...POINT_INDEX, lazy: { materialize: { kind: "export-write-failed", detail: "disk" } } });
+
+  const answer = await queries.outline({ repo: "/work/shop", repoId: "shop", revision: "HEAD", focus: [{ file: POINT, symbol: "origin" }] });
+
+  assert.ok(!answer.ok && answer.fault.kind === "export-write-failed");
+  assert.equal(log.reads, 0);
 });
 
 test("a requested-files module read is repeated for every request and never answered from a retained whole-universe output", async () => {

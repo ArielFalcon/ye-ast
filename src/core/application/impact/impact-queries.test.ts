@@ -54,6 +54,10 @@ interface Options {
   signal?: AbortSignal;
   /** Gives the queries an index cache that answers with the fault, or with the fake store when `true`. */
   cache?: true | CodeGraphFault;
+  /** With `cache`, the kept index is absent: the cache asks the caller to prepare the snapshot, as it does before a build. */
+  buildIndex?: true;
+  /** The Vcs lists and writes apart; `materialize` answers the fault when given. */
+  lazy?: { list?: VcsFault; materialize?: VcsFault };
   trust?: TrustRecordReader;
   live?: FakeLive;
   /** What `diffDirectories` answers. */
@@ -71,7 +75,7 @@ interface Options {
 }
 
 function setup(options: Options = {}) {
-  const log = { exported: [] as string[], plans: [] as { sha: string; destination: string; wanted: string[] }[], compared: [] as [string, string][], created: [] as string[], removed: [] as string[], indexed: 0, closed: 0, reads: 0, extractions: 0, obtained: [] as string[] };
+  const log = { exported: [] as string[], plans: [] as { sha: string; destination: string; wanted: string[] }[], compared: [] as [string, string][], created: [] as string[], removed: [] as string[], indexed: 0, closed: 0, reads: 0, extractions: 0, obtained: [] as string[], listed: [] as string[], materialized: [] as string[] };
   const nodes = options.nodes ?? [];
   const reader: CodeGraphReader = { ...fakeCodeGraph(nodes, options.edges ?? [], options.unresolved ?? []), close: () => void log.closed++ };
   const vcs: Vcs & VcsChanges = {
@@ -94,6 +98,17 @@ function setup(options: Options = {}) {
       return { ok: true, value: listed };
     },
   };
+  if (options.lazy) {
+    const lazy = options.lazy;
+    vcs.listCommit = async (_repo, sha) => {
+      log.listed.push(sha);
+      return lazy.list ? { ok: false, fault: lazy.list } : { ok: true, value: options.exports?.[sha] ?? { files: [{ path: "src/A.java", blob: "1", written: true }], skipped: [] } };
+    };
+    vcs.materializeCommit = async (_repo, _files, destination) => {
+      log.materialized.push(destination);
+      return lazy.materialize ? { ok: false, fault: lazy.materialize } : { ok: true, value: undefined };
+    };
+  }
   const graph: CodeGraph = {
     buildMirror: async () => ({ ok: false, fault: { kind: "index-failed", detail: "not used" } }),
     syncMirror: async () => ({ ok: false, fault: { kind: "index-failed", detail: "not used" } }),
@@ -121,8 +136,10 @@ function setup(options: Options = {}) {
     graph,
     ...(options.cache && {
       indexes: {
-        obtain: async ({ content }) => {
+        obtain: async ({ content, prepare }) => {
           log.obtained.push(content);
+          const ready = options.buildIndex ? await prepare?.() : undefined;
+          if (ready && !ready.ok) return ready;
           return options.cache === true ? { ok: true, value: { store: reader, summary: SUMMARY } } : { ok: false, fault: options.cache! };
         },
       },
@@ -1635,6 +1652,54 @@ test("a retained output larger than the whole budget is skipped and the answer i
   await setup({ ...shared, snapshotCache: tinyCache }).callers(targets);
   assert.equal(counter.calls, 3);
   assert.deepEqual(skipped, retained);
+});
+
+const LAZY_TARGETS = { targets: [{ file: "src/A.java", symbol: "f" }] };
+
+test("a kept index and retained snapshot data need no file written, and a snapshot that needs both writes once", async () => {
+  const snapshotCache = createSnapshotDataCache(RETAINED_BYTES);
+  const shared = { nodes: SOURCE_NODES, edges: SOURCE_EDGES, snapshotCache, cache: true as const, lazy: {} };
+  const built = setup({ ...shared, buildIndex: true });
+  const miss = callersFact(await built.callers(LAZY_TARGETS));
+  const kept = setup(shared);
+  const hit = callersFact(await kept.callers(LAZY_TARGETS));
+
+  assert.deepEqual(built.log.listed, [HEAD]);
+  assert.equal(built.log.materialized.length, 1);
+  assert.deepEqual(kept.log.listed, [HEAD]);
+  assert.deepEqual(kept.log.materialized, []);
+  assert.deepEqual(hit, miss);
+});
+
+test("a snapshot written apart answers what one written while it was listed answers", async () => {
+  const shared = { nodes: SOURCE_NODES, edges: SOURCE_EDGES, cache: true as const, buildIndex: true as const };
+  const apart = callersFact(await setup({ ...shared, lazy: {} }).callers(LAZY_TARGETS));
+  const together = callersFact(await setup(shared).callers(LAZY_TARGETS));
+
+  assert.equal(canonicalJson(apart), canonicalJson(together));
+});
+
+test("a file that cannot be written is the fault of the source read, and of the index build that needs it, with its own kind", async () => {
+  const lazy = { materialize: { kind: "export-write-failed", detail: "disk" } } as const;
+  const sources = await setup({ nodes: SOURCE_NODES, edges: SOURCE_EDGES, lazy }).callers(LAZY_TARGETS);
+  assert.ok(!sources.ok && sources.fault.kind === "export-write-failed");
+
+  const snapshotCache = createSnapshotDataCache(RETAINED_BYTES);
+  const shared = { nodes: SOURCE_NODES, edges: SOURCE_EDGES, snapshotCache, cache: true as const, buildIndex: true as const };
+  callersFact(await setup({ ...shared, lazy: {} }).callers(LAZY_TARGETS));
+  const build = await setup({ ...shared, lazy }).callers(LAZY_TARGETS);
+  assert.ok(!build.ok && build.fault.kind === "export-write-failed");
+});
+
+test("a current listing fault wins over retained data and a kept index, and writes nothing", async () => {
+  const snapshotCache = createSnapshotDataCache(RETAINED_BYTES);
+  const shared = { nodes: SOURCE_NODES, edges: SOURCE_EDGES, snapshotCache, cache: true as const };
+  callersFact(await setup({ ...shared, lazy: {} }).callers(LAZY_TARGETS));
+  const faulty = setup({ ...shared, lazy: { list: { kind: "object-missing", detail: "gone" } } });
+  const answer = await faulty.callers(LAZY_TARGETS);
+
+  assert.ok(!answer.ok && answer.fault.kind === "object-missing");
+  assert.deepEqual(faulty.log.materialized, []);
 });
 
 function modulesCounted(counter: { calls: number; options: unknown[] }): ModuleDependenciesReader {

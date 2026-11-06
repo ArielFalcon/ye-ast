@@ -155,7 +155,7 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
       return [...(await typescriptCallSites.of(files, repo)), ...java].sort((a, b) => compareText(a.file, b.file) || a.line - b.line || compareText(a.symbol, b.symbol));
     },
   }, { of: "call-sites" });
-  const vcs = staged(createGitVcs(), { exportCommit: "export" });
+  const vcs = staged(createGitVcs(), { exportCommit: "export", listCommit: "export", materializeCommit: "materialize" });
   const scratch = createTempScratchDirectory(options.scratchRoot);
   const reader = createFsSourceReader();
   const digest = createSha256Digest();

@@ -344,6 +344,21 @@ test("a discard reports the bytes it freed and the bytes the cache keeps", async
   assert.ok(discards[0]!.entryBytes > 0);
 });
 
+test("a build prepares its snapshot first, a reuse prepares nothing, and a failed preparation builds nothing", async () => {
+  const { graph, log } = fakeGraph();
+  const cache = cacheOf(graph);
+  let prepared = 0;
+  const prepare = async () => (prepared++, { ok: true as const, value: undefined });
+
+  assert.ok((await cache.obtain({ ...request("content-1"), prepare })).ok);
+  assert.ok((await cache.obtain({ ...request("content-1"), prepare })).ok);
+  const failed = await cache.obtain({ ...request("content-2"), prepare: async () => ({ ok: false as const, fault: { kind: "index-failed" as const, detail: "export-write-failed" } }) });
+
+  assert.equal(prepared, 1);
+  assert.equal(log.built, 1);
+  assert.deepEqual(failed, { ok: false, fault: { kind: "index-failed", detail: "export-write-failed" } });
+});
+
 test("a discard whose index another process leases and republishes meanwhile leaves no renamed-away copy behind", async () => {
   const { graph } = fakeGraph();
   let armed = false;

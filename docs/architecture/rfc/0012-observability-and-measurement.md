@@ -201,8 +201,9 @@ the event worth recording is the one that costs seconds. `store_bytes` is read o
 A live mirror writes the same line: `built` for its first or a recovering full build, `synced` for the incremental
 sync of the paths that changed, so a session of edits never reads as a series of full builds.
 
-A **stage line**, one per call of a reader a request runs over the whole snapshot (the export, opening the store,
-entrypoint extraction, Angular declarations, relations, dynamic loads, module dependencies, Java imports, call sites):
+A **stage line**, one per call of a reader a request runs over the whole snapshot (the export listing, writing its files,
+opening the store, entrypoint extraction, Angular declarations, relations, dynamic loads, module dependencies, Java
+imports, call sites):
 
 ```json
 {"ye_ast":{"event":"stage","stage":"relations","outcome":"ok","start_ms":5230,"duration_ms":812}}
@@ -218,7 +219,9 @@ The stages also cover the live lifecycle, each port call `openLive` makes: `live
 `live-list` (the working-tree listing, both the refresh and the staleness re-list; `start_ms` tells them apart),
 `live-discard`, `live-reconcile`, `live-write-state`, `live-materialize`, `live-prune`, `live-touch`,
 `live-release` (the lock release), `live-staleness-compare`, and the retention sweep as `live-usage`,
-`live-discard-idle` and `live-discard-debris`. `unresolved-references` is one read of the opened store's unresolved
+`live-discard-idle` and `live-discard-debris`. `export` is the listing of the commit, decided afresh on every SHA request; `materialize` is the writing of the listed
+files ([ADR-0028](../adr/0028-lazy-export-materialization.md)), which a request writes only when a reader needs them,
+so its absence is the sign that retained data and a kept index served the request. `unresolved-references` is one read of the opened store's unresolved
 references. The edge readers (`incomingEdges`, `outgoingEdges`, `symbolsInFiles`) are per-symbol calls, many per request,
 and stay unmeasured.
 

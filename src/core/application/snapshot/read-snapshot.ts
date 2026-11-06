@@ -69,7 +69,13 @@ export interface SnapshotDataCache {
 }
 
 export interface PreparedCommit {
+  /** Holds the exported files once `materialize` answered `ok`; before that it may be empty. */
   root: string;
+  /**
+   * Writes the exported files under `root`, once: later calls answer the first one's result. Every reader of `root`
+   * (the index builder, the source reader) calls it first; a snapshot served from retained data never does.
+   */
+  materialize(signal?: AbortSignal): Promise<Result<void, VcsFault>>;
   tree: Pick<CommitExtraction, "export">;
   sources(signal?: AbortSignal): Promise<Result<Pick<CommitExtraction, "export" | "sources">, VcsFault>>;
   extract(signal?: AbortSignal): Promise<Result<CommitExtraction, VcsFault>>;
@@ -98,7 +104,33 @@ export async function withScratch<T>(scratch: ScratchDirectory, use: (directory:
   }
 }
 
-/** Exports selected map-scope files, preserving the listing and cuts used by every snapshot consumer. */
+/** A listed export and the means to write the files it marked written; a Vcs that lists and writes apart writes only on demand. */
+export interface ExportListing {
+  export: CommitExport;
+  /** Writes the files under the destination the listing was made for; a Vcs that wrote them while listing answers `ok`. */
+  materialize(signal?: AbortSignal): Promise<Result<void, VcsFault>>;
+}
+
+/** Lists the selected map-scope files, preserving the listing and cuts used by every snapshot consumer; writes them only when the Vcs lists apart. */
+export async function listExport(
+  deps: Pick<SnapshotReaderDeps, "vcs" | "budget" | "sourceSelection">,
+  repo: string,
+  sha: string,
+  destination: string,
+  selected: PathSelection,
+  signal?: AbortSignal,
+): Promise<Result<ExportListing, VcsFault>> {
+  const { vcs } = deps;
+  const plan = { write: (path: string) => selected(path) && (deps.sourceSelection ?? isInMapScope)(path), ...(deps.budget && { budget: deps.budget }) };
+  const apart = vcs.listCommit && vcs.materializeCommit ? { list: vcs.listCommit.bind(vcs), write: vcs.materializeCommit.bind(vcs) } : undefined;
+  const listed = apart ? await apart.list(repo, sha, plan, signal) : await vcs.exportCommit(repo, sha, destination, plan, signal);
+  if (!listed.ok) return listed;
+  if (signal?.aborted) return ABORTED;
+  const exported: CommitExport = { ...listed.value, files: listed.value.files.filter((file) => selected(file.path)), skipped: listed.value.skipped.filter((entry) => selected(entry.path)) };
+  return { ok: true, value: { export: exported, materialize: apart ? (later) => apart.write(repo, exported.files, destination, later) : async () => ({ ok: true, value: undefined }) } };
+}
+
+/** Exports selected map-scope files into `destination`, preserving the listing and cuts used by every snapshot consumer. */
 export async function exportCommit(
   deps: Pick<SnapshotReaderDeps, "vcs" | "budget" | "sourceSelection">,
   repo: string,
@@ -107,10 +139,11 @@ export async function exportCommit(
   selected: PathSelection,
   signal?: AbortSignal,
 ): Promise<Result<CommitExport, VcsFault>> {
-  const listed = await deps.vcs.exportCommit(repo, sha, destination, { write: (path) => selected(path) && (deps.sourceSelection ?? isInMapScope)(path), ...(deps.budget && { budget: deps.budget }) }, signal);
+  const listed = await listExport(deps, repo, sha, destination, selected, signal);
   if (!listed.ok) return listed;
-  if (signal?.aborted) return ABORTED;
-  return { ok: true, value: { ...listed.value, files: listed.value.files.filter((file) => selected(file.path)), skipped: listed.value.skipped.filter((entry) => selected(entry.path)) } };
+  const written = await listed.value.materialize(signal);
+  if (!written.ok) return written;
+  return signal?.aborted ? ABORTED : { ok: true, value: listed.value.export };
 }
 
 export async function extractCommit(

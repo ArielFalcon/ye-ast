@@ -53,7 +53,7 @@ passed to the core as typed values by composition:
 | Budget | Counts | When it runs out |
 |---|---|---|
 | `maxEntries` | Entries of the commit listed (`git ls-tree -r`), of every kind: files, symlinks, submodules | The listing stops at the first entry beyond the budget |
-| `maxBytes` | Bytes of file content written to the export directory | The export stops before the first selected file that does not fit |
+| `maxBytes` | Bytes of file content the export writes to its directory, decided from blob sizes in git's order | The export stops before the first selected file that does not fit |
 
 Both are deterministic count budgets ([RFC-0002](0002-facts-contract.md) rule 3): the entries are taken in git's order
 and the size of a blob is known before a byte of it is written. Exhaustion is a cut, never a silent truncation and never
@@ -61,7 +61,8 @@ a crash: the export answers `ok` with the stop, everything before it is exported
 `caller-budget` cut at the first path not taken and `limit` the budget that ran out. The budget is a profile value, so
 it is part of `inputs.config`: the same commit under another budget is another fact.
 
-Besides the budget, the export holds one chunk of one blob and one listing record at a time, and reads from git only the
+Both budgets are decided by the listing, which reads blob sizes without their content, so the stop is the same whether or
+not the files are then written ([ADR-0028](../adr/0028-lazy-export-materialization.md)). Besides the budget, the export holds one chunk of one blob and one listing record at a time, and reads from git only the
 files the caller selects (for the map, the in-scope sources), so a large asset costs nothing and the listing's bytes
 are never buffered whole.
 
@@ -92,8 +93,9 @@ least-recently-used entries until they fit; an entry larger than the whole budge
 Node's heap bookkeeping, in-flight query data and transient serialization buffers. The cache stores serialized bytes,
 so it holds no source objects, ASTs, temporary-directory paths, open stores or final facts.
 
-Every query still resolves its revision, reads current trust and exports Git into a fresh temporary directory.
-Reuse additionally checks the effective source, SHA, scope, export budget and exact current export listing and cuts.
+Every query still resolves its revision, reads current trust and lists the commit afresh; it writes the listed files
+into a fresh temporary directory only when a reader needs them ([ADR-0028](../adr/0028-lazy-export-materialization.md)):
+a source read that retained data does not serve, or an index build. Reuse additionally checks the effective source, SHA, scope, export budget and exact current export listing and cuts.
 Only successfully completed stages are retained, without shared in-flight work or cancellation. `live` bypasses this
 cache; export-only queries do not restore source data. The lifetime is one composition; dropping it releases retention.
 Cache settings affect cost only and are not fact inputs. The default allocates entries lazily; it reserves no memory up front and retains no export on disk.
