@@ -154,7 +154,6 @@ window.EXPLORER_DATA = {
     relations: "Active relations",
     activeNodes: "Active nodes",
     terms: "Terms",
-    glossary: "Open glossary",
     why: "Why it matters",
     nodeMode: "Node inspection",
     flowPaused: "Flow paused",

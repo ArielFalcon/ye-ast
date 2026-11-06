@@ -41,7 +41,7 @@
       <div class="stat-strip build" aria-label="De un vistazo">
           <div><strong>7</strong><span>comandos de lectura</span><small>map · impact · callers · importers · outline · workspace · decisions</small></div>
           <div><strong>2</strong><span>trust modes</span><small>untrusted por defecto; trusted se declara</small></div>
-          <div><strong>9</strong><span>tipos de corte</span><small>cada punto ciego tiene nombre</small></div>
+          <div><strong>9</strong><span>tipos de cut</span><small>cada punto ciego tiene nombre</small></div>
           <div><strong>0</strong><span>llamadas a un LLM</span><small>el motor decide, el agente lee</small></div>
       </div>
         <figure class="flowline-wrap" aria-labelledby="hero-flow-caption">
@@ -86,8 +86,8 @@
         <article class="status-card" data-status="partial">
           <p class="status-tag">partial</p>
           <h3>Algo detuvo el recorrido.</h3>
-          <p>Cada causa es un <strong>corte</strong>, y cada corte nombra dónde se detuvo: un límite, un nombre sin resolver, un archivo sin extractor o una ruta fuera del export.</p>
-          <p class="status-foot">Léelo como: <strong>lo que está más allá de un corte no se conoce.</strong></p>
+          <p>Cada causa es un <strong>cut</strong>, y cada cut nombra dónde se detuvo: un límite, un nombre sin resolver, un archivo sin extractor o una ruta fuera del export.</p>
+          <p class="status-foot">Léelo como: <strong>lo que está más allá de un cut no se conoce.</strong></p>
         </article>
         <article class="status-card" data-status="unknown">
           <p class="status-tag">unknown</p>
@@ -117,14 +117,14 @@
       <div class="cut-block">
         <div class="cut-copy">
           <p class="mini-kicker">Cómo leer un fact partial</p>
-          <h3>Nueve tipos de corte</h3>
-          <p>Todo fact partial lista sus cortes con estos nombres (<code>src/core/domain/shared/fact.ts:114-128</code>). Las instrucciones del servidor MCP indican a un agente que una respuesta partial conserva sus hallazgos conocidos y lista sus cortes, y que solo debe subir un límite cuando un corte lo nombra (<code>src/mcp/server.ts:50-69</code>). La tabla indica qué hacer con cada uno.</p>
+          <h3>Nueve tipos de cut</h3>
+          <p>Todo fact partial lista sus cuts con estos nombres (<code>src/core/domain/shared/fact.ts:114-128</code>). Las instrucciones del servidor MCP indican a un agente que una respuesta partial conserva sus hallazgos conocidos y lista sus cuts, y que solo debe subir un límite cuando un cut lo nombra (<code>src/mcp/server.ts:50-69</code>). La tabla indica qué hacer con cada uno.</p>
         </div>
         <div class="table-wrap">
           <table class="data-table stack-mobile">
             <thead><tr><th>Corte</th><th>Qué significa</th><th>Qué hacer</th></tr></thead>
             <tbody>
-              <tr><td><code>depth</code></td><td>El recorrido se detuvo en el límite de profundidad.</td><td>Sube <code>budget.depth</code>, o pregunta por el símbolo del corte con <code>callers</code>.</td></tr>
+              <tr><td><code>depth</code></td><td>El recorrido se detuvo en el límite de profundidad.</td><td>Sube <code>budget.depth</code>, o pregunta por el símbolo del cut con <code>callers</code>.</td></tr>
               <tr><td><code>hub</code></td><td>Un símbolo alcanzado tiene más llamadores de tipo llamada que el presupuesto <code>hubFanIn</code>, así que el recorrido no lo expandió. El símbolo sigue en la respuesta; lo que se detiene es el ascenso a través de él.</td><td>Sube <code>hubFanIn</code>, o pregunta con <code>callers</code> solo por ese símbolo.</td></tr>
               <tr><td><code>caller-budget</code></td><td>Se agotó <code>expansions</code>, o un presupuesto de export detuvo el snapshot.</td><td>Sube el límite, o acota la petición con alcance.</td></tr>
               <tr><td><code>unresolved-link</code></td><td>Un nombre que el índice no pudo resolver puede apuntar a un símbolo recorrido.</td><td>Abre cada lugar y decide; tras una eliminación, cada lugar que aún lo nombra se rompe.</td></tr>
@@ -180,7 +180,7 @@
 
       <div class="mcp-note">
         <p><strong>Solo lectura por tipo.</strong> El servidor MCP recibe solo query families de lectura: <code>EntrypointQueries</code>, <code>ImpactQueries</code>, <code>OutlineQueries</code>, <code>WorkspaceQueries</code>, <code>WorkspaceImpactQueries</code> y <code>DecisionQueries</code>. No existe ningún método de escritura, y las ocho tools están anotadas como de solo lectura.</p>
-        <p>El servidor también incluye instrucciones: cuándo llamar a cada tool y cómo leer una respuesta. Complete es relativo al alcance declarado, partial conserva los hallazgos conocidos y lista sus cortes, unknown nunca significa sin impacto, y un límite se sube solo cuando un corte lo nombra.</p>
+        <p>El servidor también incluye instrucciones: cuándo llamar a cada tool y cómo leer una respuesta. Complete es relativo al alcance declarado, partial conserva los hallazgos conocidos y lista sus cuts, unknown nunca significa sin impacto, y un límite se sube solo cuando un cut lo nombra.</p>
         <p>Un servidor sirve varios repositorios declarados: <code>ye-ast mcp [&lt;launch-root&gt;] [--repo &lt;id&gt; &lt;root&gt;]...</code> los declara y cada llamada elige uno con <code>repo</code> (por defecto, el repositorio de arranque). Registrar un repositorio no le concede trust.</p>
         <p class="ref"><code>src/mcp/query-runner.ts:27-37</code> · <code>src/mcp/server.ts:50-69</code> · <code>src/composition/mcp.ts:9-23</code></p>
       </div>
@@ -279,7 +279,7 @@
             <li><span>01</span> El mismo camino de export en un sha.</li>
             <li><span>02</span> <code>--live</code> sustituye <code>head</code>/<code>revision</code> por el working tree.</li>
             <li><span>03</span> git lista las rutas rastreadas con <code>ls-files -z -s --cached</code> y las no rastreadas con <code>ls-files -z --others --exclude-standard</code>.</li>
-            <li><span>04</span> ye-ast las copia y hashea en su espejo; codegraph lee el espejo.</li>
+            <li><span>04</span> ye-ast las copia y calcula su hash en su espejo; codegraph lee el espejo.</li>
             <li><span>05</span> Un lock, un state file y <code>sync({ paths })</code> mantienen el grafo de esos bytes.</li>
           </ol>
           <ul class="lane-invariants">
@@ -338,7 +338,7 @@
       <p><i class="swatch edge-wires"></i> cableado</p>
     </div>
     <p class="panel-note">Las flechas muestran el sentido de una petición. La regla de dependencias es el orden de las capas, no el sentido de la flecha.</p>
-    <a class="panel-link" href="#concepts">Conceptos y glosario ↓</a>
+    <a class="panel-link" href="#concepts">Conceptos ↓</a>
   </aside>
 
   <section class="panel graph-panel" aria-label="Grafo de arquitectura">
@@ -407,7 +407,7 @@
           <dt>profundidad</dt>
           <dd>Cuántos saltos desde la semilla puede subir el recorrido. La semilla está en profundidad 0; sus llamadores directos en profundidad 1.</dd>
           <dt>hub fan-in</dt>
-          <dd>El <strong>fan-in</strong> es el número de llamadores de tipo llamada que tiene un símbolo: cada arista de llamada que apunta a él, la haya seguido el recorrido o no. El <strong>hub fan-in</strong> es un presupuesto opcional sobre esa cuenta. Cuando un símbolo alcanzado lo supera, el recorrido deja de expandirlo y emite un corte <code>hub</code> en ese símbolo. El símbolo sigue en la respuesta; el presupuesto solo evita que el recorrido suba a través de una utilidad compartida que, de otro modo, arrastraría todo el repositorio. No cuenta las llamadas que hace el símbolo.</dd>
+          <dd>El <strong>fan-in</strong> es el número de llamadores de tipo llamada que tiene un símbolo: cada arista de llamada que apunta a él, la haya seguido el recorrido o no. El <strong>hub fan-in</strong> es un presupuesto opcional sobre esa cuenta. Cuando un símbolo alcanzado lo supera, el recorrido deja de expandirlo y emite un cut <code>hub</code> en ese símbolo. El símbolo sigue en la respuesta; el presupuesto solo evita que el recorrido suba a través de una utilidad compartida que, de otro modo, arrastraría todo el repositorio. No cuenta las llamadas que hace el símbolo.</dd>
           <dt>expansiones</dt>
           <dd>Cuántos símbolos alcanzados puede expandir el recorrido. Cuenta símbolos expandidos, no nodos alcanzados.</dd>
           <dt>deadline</dt>
@@ -480,7 +480,7 @@
           <div>
             <p class="mini-kicker">Simulador del recorrido</p>
             <h3>La política, en un repositorio de ejemplo.</h3>
-            <p>El motor no se ejecuta en esta página. Es un modelo fiel del recorrido sobre un grafo pequeño, con la misma política de aristas, expansión de tipos declarantes, confianza y cortes. Cada regla que aplica está citada abajo.</p>
+            <p>El motor no se ejecuta en esta página. Es un modelo fiel del recorrido sobre un grafo pequeño, con la misma política de aristas, expansión de tipos declarantes, confianza y cuts. Cada regla que aplica está citada abajo.</p>
           </div>
           <div class="sim-scenarios" role="group" aria-label="Escenarios de semilla">
             <button class="chip is-active" type="button" data-scenario="token">cambiar validateToken</button>
@@ -504,7 +504,7 @@
             <button class="button small" type="button" id="sim-step">Paso</button>
             <button class="button small" type="button" id="sim-reset">Reiniciar</button>
           </div>
-          <p class="sim-help"><strong>hub fan-in</strong> es un presupuesto sobre el fan-in: el número de llamadores de tipo llamada que puede tener un símbolo antes de que el recorrido deje de expandirlo y emita un corte <code>hub</code>. Déjalo vacío para no aplicar límite. La <strong>profundidad</strong> cuenta saltos desde la semilla; las <strong>expansiones</strong> cuentan símbolos expandidos.</p>
+          <p class="sim-help"><strong>hub fan-in</strong> es un presupuesto sobre el fan-in: el número de llamadores de tipo llamada que puede tener un símbolo antes de que el recorrido deje de expandirlo y emita un cut <code>hub</code>. Déjalo vacío para no aplicar límite. La <strong>profundidad</strong> cuenta saltos desde la semilla; las <strong>expansiones</strong> cuentan símbolos expandidos.</p>
         </div>
 
         <div class="sim-legend" aria-label="Leyenda">
@@ -544,7 +544,7 @@
               <div><dt>profundidad</dt><dd id="sim-depth-out">0</dd></div>
               <div><dt>expansiones</dt><dd id="sim-expansions-out">0</dd></div>
               <div><dt>puntos de entrada</dt><dd id="sim-entry-out">0</dd></div>
-              <div><dt>cortes</dt><dd id="sim-cuts-out">0</dd></div>
+              <div><dt>cuts</dt><dd id="sim-cuts-out">0</dd></div>
             </dl>
             <div id="sim-cuts" class="readout-cuts"></div>
             <div id="sim-entrypoints" class="readout-entrypoints"></div>
@@ -618,7 +618,7 @@
             <span class="pill warn">partial</span>
           </header>
           <pre class="command small">ye-ast impact &lt;repo&gt; --base HEAD~1</pre>
-          <p class="run-note">El mismo cambio, ahora con una tabla de rutas. El recorrido alcanza <code>LoginComponent</code> a través de <code>onSubmit</code>, y el join hace aparecer <code>/login</code>. El corte viene del snapshot, no del cambio: un archivo <code>.rb</code> no tiene extractor.</p>
+          <p class="run-note">El mismo cambio, ahora con una tabla de rutas. El recorrido alcanza <code>LoginComponent</code> a través de <code>onSubmit</code>, y el join hace aparecer <code>/login</code>. El cut viene del snapshot, no del cambio: un archivo <code>.rb</code> no tiene extractor.</p>
           <div class="run-table" data-render="partial"><div class="fact-list">
       <div class="fact-row seed">
         <span class="fact-depth">0</span>
@@ -697,61 +697,13 @@ export class LoginComponent {
       </div>
     </section>
 
-    <section data-rail="Referencia" id="sources" class="doc-section">
+    <section data-rail="Límites" id="sources" class="doc-section">
       <div class="section-head">
-        <p class="kicker">Referencia</p>
-        <h2>Términos, evidencia y límites</h2>
-        <p class="section-lede">Busca un término, comprueba dónde se decide una afirmación y mira qué no cubre esta página. El glosario y la tabla de evidencia quedan plegados hasta que los abras.</p>
+        <p class="kicker">Límites</p>
+        <h2>Límites y cómo reproducirlo</h2>
+        <p class="section-lede">Lo que esta página deja fuera y los comandos que reproducen sus ejecuciones. Los términos del glosario aparecen resaltados en el texto: selecciona uno para leer su definición.</p>
       </div>
 
-      <details class="reference-fold" id="concept-glossary">
-        <summary><span>glosario</span> Términos que usan el grafo y el fact <em>busca un término</em></summary>
-        <div class="details-body">
-          <p>Las etiquetas técnicas se quedan en forma de código; cada definición las explica en lenguaje llano.</p>
-          <div class="glossary-toolbar">
-        <label for="glossary-filter">Buscar</label>
-        <input id="glossary-filter" type="search" placeholder="fan-in, cut, semilla, snapshot…">
-        <span id="glossary-count"></span>
-      </div>
-      <dl class="glossary-grid" id="glossary-grid"></dl>
-        </div>
-      </details>
-
-      <details class="reference-fold">
-        <summary><span>evidencia</span> Evidencia de las afirmaciones materiales <em>dónde se decide cada afirmación</em></summary>
-        <div class="details-body">
-          <div class="table-wrap evidence-table">
-        <table class="data-table stack-mobile">
-          <caption>Evidencia de las afirmaciones materiales</caption>
-          <thead><tr><th>Afirmación</th><th>Dónde se decide</th></tr></thead>
-          <tbody>
-            <tr><td>La regla de dependencias y la tabla de placement</td><td><code>AGENTS.md</code> · <code>.dependency-cruiser.cjs</code> · <code>docs/architecture/rfc/0001-architecture-and-layers.md</code></td></tr>
-            <tr><td>El cambio es <code>merge-base(base, head)..head</code></td><td><code>src/core/application/impact/impact-queries.ts:200-211</code> · RFC-0010 “The change”</td></tr>
-            <tr><td>El diff fija cada opción que cambia los hunks</td><td><code>src/core/adapters/git/git-vcs.adapter.ts:328-338</code></td></tr>
-            <tr><td>Una ejecución aislada de git vacía la config del usuario y del sistema</td><td><code>src/core/adapters/git/git-vcs.adapter.ts:445-460</code></td></tr>
-            <tr><td>Semillas: lines, top-level, resource, requested</td><td><code>src/core/domain/change/seeds.ts:53-87</code> · RFC-0010 “Seeds”</td></tr>
-            <tr><td>La tabla de política de aristas</td><td><code>src/core/domain/impact/edge-policy.ts:14-58</code></td></tr>
-            <tr><td>Expansión de tipo declarante y su parada</td><td><code>src/core/application/impact/walk.ts:82-87</code> · ADR-0017</td></tr>
-            <tr><td>Puentes de interfaz, en ambos sentidos</td><td><code>src/core/application/impact/inbound-edges.ts:123-169</code></td></tr>
-            <tr><td>Resolución de origen de campo</td><td><code>src/core/application/impact/inbound-edges.ts:265-302</code></td></tr>
-            <tr><td>La confianza es la del mejor camino, medida por su arista más débil</td><td><code>src/core/application/impact/walk.ts:172-188</code></td></tr>
-            <tr><td>El único join: archivo, span, simple name</td><td><code>src/core/domain/shared/code-node.ts:20-27</code></td></tr>
-            <tr><td>El join de puntos de entrada, guards y handlers unknown</td><td><code>src/core/domain/impact/reached-entrypoints.ts:21-46</code></td></tr>
-            <tr><td>Cortes y el estado del fact</td><td><code>src/core/domain/impact/impact-cuts.ts</code> · <code>src/core/domain/shared/fact.ts:114-159</code></td></tr>
-            <tr><td>La base del fact y sus inputs</td><td><code>src/core/application/snapshot/read-snapshot.ts:168-186</code> · <code>src/core/domain/shared/fact.ts:73-90, 130-136</code></td></tr>
-            <tr><td>El trust se lee fuera del repositorio</td><td><code>src/core/application/snapshot/read-snapshot.ts:35-44</code> · ADR-0010</td></tr>
-            <tr><td>Live head, espejo, lock, sync</td><td><code>docs/architecture/rfc/0010-impact-queries.md</code> “Live head” · <code>src/core/application/live/live-tree.ts</code></td></tr>
-            <tr><td>El servidor MCP es de solo lectura por tipo</td><td><code>src/mcp/query-runner.ts:27-37</code></td></tr>
-            <tr><td>Las instrucciones que recibe un agente: cuándo llamar a cada tool y cómo leer una respuesta</td><td><code>src/mcp/server.ts:50-69</code></td></tr>
-            <tr><td>Ocho tools MCP, todas anotadas como de solo lectura</td><td><code>src/mcp/server.ts:498-595</code></td></tr>
-            <tr><td>Un servidor MCP, varios repositorios declarados</td><td><code>src/composition/mcp.ts:9-23</code></td></tr>
-            <tr><td><code>ye_ast_compose</code> fusiona lecturas y las conecta solo cuando coinciden</td><td><code>src/mcp/compose-request.ts</code> · <code>src/mcp/compose-evidence.ts:207-237, 600-682</code></td></tr>
-            <tr><td>El protocolo de query es JSON-RPC 2.0 sobre stdio</td><td><code>src/protocol/query-server.ts</code> · ADR-0011</td></tr>
-          </tbody>
-        </table>
-      </div>
-        </div>
-      </details>
 
       <div class="limits">
         <div>

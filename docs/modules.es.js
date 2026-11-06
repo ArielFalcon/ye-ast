@@ -7,7 +7,7 @@ window.MODULE_DETAILS_ES = {
       facts: [
         "Códigos de salida: 0 ok, 1 fault tipado, 2 uso, 70 interno, 130 interrumpido.",
         "Cada cadena que sale del proceso pasa por redaction.",
-        "El uso y el parseo viven en un archivo; composition inyecta las query families.",
+        "El uso y el análisis de argumentos viven en un archivo; composition inyecta las query families.",
       ],
     },
     mcp: {
@@ -131,7 +131,7 @@ window.MODULE_DETAILS_ES = {
       ],
     },
     "domain-impact": {
-      role: "Las reglas puras de impact: la política de aristas, la taxonomía de cortes, el join de puntos de entrada, los puntos de entrada cambiados y el orden del fact.",
+      role: "Las reglas puras de impact: la política de aristas, la taxonomía de cuts, el join de puntos de entrada, los puntos de entrada cambiados y el orden del fact.",
       may: "solo core/domain",
       never: "ports, adaptadores, built-ins de Node",
       facts: [
@@ -161,7 +161,7 @@ window.MODULE_DETAILS_ES = {
       ],
     },
     "domain-map": {
-      role: "El fact del mapa de puntos de entrada: reglas de rutas dentro del scope, fingerprint de contenido, cortes del export y el section fact anidado.",
+      role: "El fact del mapa de puntos de entrada: reglas de rutas dentro del scope, fingerprint de contenido, cuts del export y el section fact anidado.",
       may: "solo core/domain",
       never: "ports, adaptadores, built-ins de Node",
       facts: [
@@ -194,7 +194,7 @@ window.MODULE_DETAILS_ES = {
       may: "solo core/domain",
       never: "ports, adaptadores, built-ins de Node",
       facts: [
-        "Un fact es complete, partial con cortes, o unknown con una razón. No existe un cuarto estado.",
+        "Un fact es complete, partial con cuts, o unknown con una razón. No existe un cuarto estado.",
         "El join es archivo, línea dentro del span y el mismo simple name.",
         "La identidad de un fact es schema + inputs + producer.",
       ],
@@ -260,7 +260,7 @@ window.MODULE_DETAILS_ES = {
       ],
     },
     "adapter-treesitter": {
-      role: "Parsea Java a árboles de sintaxis para el adapter de Spring. Decide sintaxis, no rutas.",
+      role: "Convierte Java en árboles de sintaxis para el adapter de Spring. Decide sintaxis, no rutas.",
       may: "core/domain, core/ports, librerías",
       never: "core/application, otro adapter",
       facts: [
