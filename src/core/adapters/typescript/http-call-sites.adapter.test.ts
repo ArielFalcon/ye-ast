@@ -500,6 +500,14 @@ test("an ambient constant stays unknown when no define states it, the define is 
   assert.deepEqual(sites(await reader.of([workspace({ SERVER_API_URL: "''" }, undefined, "@angular-devkit/build-angular:browser"), constants, service], "shop-web")), unknown);
 });
 
+test("a variable the file declares is its own value, never a define of the same name", async () => {
+  const service = orderService("this.http.get(this.resourceUrl)");
+  for (const declaration of ["let SERVER_API_URL: string;", "var SERVER_API_URL: string;"]) {
+    const bound = source(CONSTANTS, [declaration, "SERVER_API_URL = '/runtime/';", "export const serverApiUrl = SERVER_API_URL;"].join("\n"));
+    assert.deepEqual(sites(await reader.of([workspace({ SERVER_API_URL: "'/build/'" }), bound, service], "shop-web")), [`unknown unresolved@${SERVICE}:7`]);
+  }
+});
+
 test("a configuration's own define replaces the whole define of the options, as the Angular CLI merges them", async () => {
   const service = orderService("this.http.get(this.resourceUrl)");
   const replaced = workspace({ SERVER_API_URL: "''" }, { production: { define: { OTHER: "''" } } });

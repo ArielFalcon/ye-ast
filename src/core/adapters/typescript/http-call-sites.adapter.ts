@@ -584,7 +584,7 @@ class Reader {
     if (scope.names.has(name)) return RUN_TIME_VALUE;
     const constant = await this.constantAt(shape, name, trail);
     if (constant !== undefined) return this.evaluate(constant.shape, constant.expression, NO_SCOPE, constant.trail);
-    if (shape.imports.has(name)) return undefined;
+    if (shape.imports.has(name) || shape.bindings.has(name)) return undefined;
     const defined = this.defines.valueOf(shape.source.fileName, name);
     return defined === undefined ? undefined : stated(defined);
   }
@@ -745,19 +745,25 @@ class Reader {
   }
 }
 
+/** The names the file binds at run time; an ambient `declare` binds none. */
 function sourceBindings(source: ts.SourceFile): ReadonlySet<string> {
   const names = new Set<string>();
   for (const statement of source.statements) {
+    if (isAmbient(statement)) continue;
     if (ts.isVariableStatement(statement)) for (const declaration of statement.declarationList.declarations) for (const name of bindingNames(declaration.name)) names.add(name);
     if ((ts.isFunctionDeclaration(statement) || ts.isClassDeclaration(statement) || ts.isEnumDeclaration(statement) || ts.isModuleDeclaration(statement)) && statement.name !== undefined) names.add(statement.name.text);
   }
   const visit = (node: ts.Node): void => {
-    if (ts.isFunctionLike(node) || ts.isClassLike(node) || ts.isModuleDeclaration(node)) return;
+    if (ts.isFunctionLike(node) || ts.isClassLike(node) || ts.isModuleDeclaration(node) || isAmbient(node)) return;
     if (ts.isVariableDeclarationList(node) && (node.flags & ts.NodeFlags.BlockScoped) === 0) for (const declaration of node.declarations) for (const name of bindingNames(declaration.name)) names.add(name);
     ts.forEachChild(node, visit);
   };
   visit(source);
   return names;
+}
+
+function isAmbient(node: ts.Node): boolean {
+  return ts.canHaveModifiers(node) && (ts.getModifiers(node)?.some((modifier) => modifier.kind === ts.SyntaxKind.DeclareKeyword) ?? false);
 }
 
 function mayOverrideEncoder(source: ts.SourceFile): boolean {
