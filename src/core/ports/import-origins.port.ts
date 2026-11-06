@@ -71,7 +71,10 @@ export interface UseSite {
   line: number;
   /** 1-based UTF-16 column. */
   column: number;
-  /** The identifier, `this` or `super` the index's spelling of the use starts with, written at the site. */
+  /**
+   * A name of the chain the site begins: the identifier, `this` or `super` the index's spelling of an unresolved use
+   * starts with, written at the site, or the name a resolved use reaches, written anywhere along the chain.
+   */
   spelled: string;
   /** The declaration whose body writes the use, as the index places it: its name and the 1-based lines it spans. */
   owner: { name: string; line: number; endLine: number };

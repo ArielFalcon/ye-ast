@@ -189,7 +189,8 @@ export type PartPayload =
   | { kind: "module-reach"; file: FileId; side: ReachedModule["snapshot"]; depth: number; origins: readonly OriginReference[]; via?: NonNullable<ReachedModule["via"]> }
   | { kind: "file-dependency"; from: FileId; to: FileId; category: FileDependencyCategory }
   | { kind: "file-query"; file: FileId; categories: readonly { name: FileCategory; collection: RecordedCollectionState }[] }
-  | { kind: "outline-declaration"; anchor: AnchorId; kindName: OutlineDeclaration["kind"]; children?: readonly PartId[]; uses?: readonly OutlineUseRecord[] }
+  /** `unproved`: the declaration uses a name no binding proves, so an empty `uses` is not "nothing". */
+  | { kind: "outline-declaration"; anchor: AnchorId; kindName: OutlineDeclaration["kind"]; children?: readonly PartId[]; uses?: readonly OutlineUseRecord[]; unproved?: true }
   | { kind: "outline-file"; file: FileId; declarations: readonly PartId[]; imports: readonly OutlineImportRecord[] }
   | { kind: "unheld-file"; file: FileId }
   | {

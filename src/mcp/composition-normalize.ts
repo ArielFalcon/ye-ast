@@ -7,12 +7,13 @@
  */
 import { canonicalJson } from "../core/domain/shared/canonical-json.ts";
 import { compareText } from "../core/domain/shared/code-node.ts";
-import type { Evidence, Fact, FactProvenance, Finding, SnapshotRef } from "../core/domain/shared/fact.ts";
+import type { Cut, Evidence, Fact, FactProvenance, Finding, SnapshotRef } from "../core/domain/shared/fact.ts";
 import type { RepositoryEvidence } from "../core/domain/shared/repository-evidence.ts";
 import type { Entrypoint } from "../core/domain/entrypoints/entrypoint.ts";
 import type { ImpactValue } from "../core/domain/impact/impact-fact.ts";
 import type { ImportedFile, ImportersValue } from "../core/domain/impact/importers-fact.ts";
 import type { OutlineDeclaration, OutlineValue } from "../core/domain/outline/outline-fact.ts";
+import { hasUnprovedUses } from "../core/domain/outline/outline-uses.ts";
 import type { TraceValue } from "../core/domain/trace/trace-fact.ts";
 import type { CallSite } from "../core/domain/topology/call-site.ts";
 import type { Link } from "../core/domain/topology/link.ts";
@@ -254,7 +255,7 @@ function adapt(source: ExecutedSource, b: Builder, root: ReadContext): readonly 
     case "importers":
       return local(b, root, source.read.fact, (value) => importers(b, root, value));
     case "outline":
-      return local(b, root, source.read.fact, (value) => outline(b, root, value));
+      return local(b, root, source.read.fact, (value) => outline(b, root, value, source.read.fact.status === "partial" ? source.read.fact.cuts : []));
     case "trace":
       return local(b, root, source.read.fact, (value) => trace(b, root, value));
     case "workspace":
@@ -534,11 +535,11 @@ function trace(b: Builder, root: ReadContext, value: TraceValue): void {
   b.part({ kind: "trace-totals", owner: root.id, lines: value.readingPlan.lines, expanded: value.cost.expanded }, root.id, ["/value/readingPlan/lines", "/value/cost"]);
 }
 
-function outline(b: Builder, root: ReadContext, value: OutlineValue): void {
-  const declared = (path: string, fileAt: string, declaration: OutlineDeclaration, at: string, uses?: readonly OutlineUseRecord[]): PartId => {
+function outline(b: Builder, root: ReadContext, value: OutlineValue, cuts: readonly Cut[]): void {
+  const declared = (path: string, fileAt: string, declaration: OutlineDeclaration, at: string, uses?: readonly OutlineUseRecord[], unproved?: boolean): PartId => {
     const anchor = b.anchor(root.here, { path, symbol: declaration.name, line: declaration.line, endLine: declaration.endLine }, root.id, at, fileAt);
     const children = declaration.children?.map((child, k) => declared(path, fileAt, child, `${at}/children/${k}`));
-    return b.part({ kind: "outline-declaration", anchor, kindName: declaration.kind, ...(children !== undefined && { children }), ...(uses !== undefined && { uses }) }, root.id, [at]);
+    return b.part({ kind: "outline-declaration", anchor, kindName: declaration.kind, ...(children !== undefined && { children }), ...(uses !== undefined && { uses }), ...(unproved === true && { unproved }) }, root.id, [at]);
   };
   value.focus?.forEach((match, index) => {
     const pointer = `/value/focus/${index}`;
@@ -549,7 +550,7 @@ function outline(b: Builder, root: ReadContext, value: OutlineValue): void {
       const anchor = b.anchor(root.here, { path: declaration.file, symbol: declaration.name, line: declaration.line, endLine: declaration.endLine }, root.id, place, `${place}/file`);
       return { ...rest, declaration: { anchor, kindName: declaration.kind } };
     });
-    declared(match.file, `${pointer}/file`, match.declaration, `${pointer}/declaration`, uses);
+    declared(match.file, `${pointer}/file`, match.declaration, `${pointer}/declaration`, uses, hasUnprovedUses(cuts, match.file, match.path));
   });
   value.files?.forEach((held, index) => {
     const pointer = `/value/files/${index}`;

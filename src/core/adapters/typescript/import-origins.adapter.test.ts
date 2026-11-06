@@ -591,10 +591,10 @@ test("a library name the snapshot declares globally is unknown, never ambient", 
   assert.deepEqual(binding, { kind: "unknown" });
 });
 
-test("a place that spells another root than the site's is unknown", async () => {
-  const [binding] = await createImportOrigins(USE_SOURCES).rootBindings([useAt(6, "seen.size", "size")]);
+test("a site placed at any name of a chain, or past its calls, is rooted at its first name; a chain without the name is unknown", async () => {
+  const bindings = await createImportOrigins(USE_SOURCES).rootBindings([useAt(6, "seen.size", "size"), useAt(5, "helper(input).length", "length"), useAt(6, "seen.size", "other")]);
 
-  assert.deepEqual(binding, { kind: "unknown" });
+  assert.deepEqual(bindings, [{ kind: "local", root: "seen" }, { kind: "import", root: "helper", origin: { kind: "repository", file: "src/local.ts" } }, { kind: "unknown" }]);
 });
 
 test("super is rooted at its class's extends expression, bound as that name is", async () => {

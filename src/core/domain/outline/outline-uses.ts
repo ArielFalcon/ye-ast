@@ -41,6 +41,12 @@ export function unprovedUseCuts(file: string, path: string, unproved: readonly U
   }));
 }
 
+/** Whether the declaration at `path` of `file` uses a name no binding proves: an `unresolved-link` cut is anchored at it. */
+export function hasUnprovedUses(cuts: readonly Cut[], file: string, path: string): boolean {
+  const anchor = declarationAnchor(file, path);
+  return cuts.some((cut) => cut.kind === "unresolved-link" && cut.at[0] === anchor);
+}
+
 function targetKey(target: OutlineUseTarget): string {
   if ("declaration" in target) return JSON.stringify(["declaration", target.declaration.file, target.declaration.line, target.declaration.name]);
   return "module" in target ? JSON.stringify(["module", target.module]) : JSON.stringify(["global", target.global]);
