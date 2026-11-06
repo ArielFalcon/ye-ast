@@ -100,8 +100,11 @@ export async function usesOf(branch: DeclarationBranch<GraphSymbol>, input: Uses
   const owner = { name: node.name, line: node.startLine, endLine: node.endLine };
   const found: FoundUse[] = [];
   const unproved: UnprovedUse[] = [];
+  const use = (target: OutlineUseTarget, relation: string, place: OutlinePlace | undefined): void => {
+    found.push({ target, relation, ...(place === undefined ? {} : { place }) });
+  };
   const declared = (symbol: GraphSymbol, relation: string, place: OutlinePlace | undefined): void => {
-    if (!nested.has(symbol.id)) found.push({ target: { declaration: { file: symbol.file, name: symbol.name, kind: symbol.kind, line: symbol.startLine, endLine: symbol.endLine } }, relation, ...(place === undefined ? {} : { place }) });
+    if (!nested.has(symbol.id)) use({ declaration: { file: symbol.file, name: symbol.name, kind: symbol.kind, line: symbol.startLine, endLine: symbol.endLine } }, relation, place);
   };
 
   const edges = uses.followed(node, store.outgoingEdges([node.id], USE_EDGE_KINDS).filter((edge) => !isIgnoredEdge(edge)));
@@ -112,7 +115,6 @@ export async function usesOf(branch: DeclarationBranch<GraphSymbol>, input: Uses
   for (const [index, { edge, target }] of edges.entries()) {
     const binding = edgeBinding.get(index);
     if (binding !== undefined && isLocalRoot(node.file, binding)) continue;
-    /** The sources could bind the root to another declaration than the one the graph matched, so the edge proves no use. */
     if (binding?.kind === "ambiguous") {
       unproved.push({ root: binding.root, line: edge.line!, spelling: target.name });
       continue;
@@ -120,8 +122,8 @@ export async function usesOf(branch: DeclarationBranch<GraphSymbol>, input: Uses
     const verdict = verdicts[index]!;
     const place = edge.line === null ? undefined : { line: edge.line, ...(edge.column === null ? {} : { column: edge.column + 1 }) };
     if (verdict.kind !== "drop") declared(verdict.kind === "redirect" ? verdict.to : target, edge.kind, place);
-    else if (verdict.root.kind === "external") found.push({ target: { module: verdict.root.module }, relation: edge.kind, ...(place === undefined ? {} : { place }) });
-    else if (verdict.root.kind === "ambient") found.push({ target: { global: verdict.root.name }, relation: edge.kind, ...(place === undefined ? {} : { place }) });
+    else if (verdict.root.kind === "external") use({ module: verdict.root.module }, edge.kind, place);
+    else if (verdict.root.kind === "ambient") use({ global: verdict.root.name }, edge.kind, place);
   }
 
   const references = unsettledBy(uses.referencesFrom(node, USE_EDGE_KINDS), edges);
@@ -136,7 +138,7 @@ export async function usesOf(branch: DeclarationBranch<GraphSymbol>, input: Uses
     if (settled === "local") continue;
     if (settled === undefined) unproved.push({ root: "root" in binding ? binding.root : name ?? reference.name, line: reference.line, spelling: reference.name });
     else if ("id" in settled) declared(settled, reference.kind, place);
-    else found.push({ target: settled, relation: reference.kind, place });
+    else use(settled, reference.kind, place);
   }
   return { found, unproved };
 
