@@ -3,7 +3,9 @@
 - Status: Accepted, 2026-11-06, owner
 - Decision source: the owner, 2026-11-06: "Apruebo" (I approve), on the design reported after the binder probe: one
   shared TypeScript binding resolver in `core/adapters/typescript`, used by both `rootOrigins` and the function-value
-  reader, replacing both hand-written scopings.
+  reader, replacing both hand-written scopings. Amended 2026-11-06 by the owner's "Acepto" (I accept) on trace slice 2:
+  a declared external type counts as a proof, with two guards and its limitation written here; the third and fourth
+  consumers and the names in type positions follow from it (decisions 6 to 9).
 - Related: [ADR-0008](0008-typescript-compiler-api-source.md),
   [ADR-0018](0018-type-information-as-a-fact-input.md), [ADR-0019](0019-cuts-retired-on-a-proven-external-target.md),
   [RFC-0010](../rfc/0010-impact-queries.md), [RFC-0013](../rfc/0013-trace-and-patterns.md)
@@ -53,6 +55,19 @@ latency and 2 to 3.6 times the memory for a program with the library and depende
 4. A program lives for the file it binds and is dropped once that file's names are answered; only the answers stay for
    the query.
 5. `rootOrigins` and the function-value reader read bindings only from the resolver.
+6. The consumer-flow reader of contract consequences is a consumer: the binding a read, a write or a call of a name
+   reaches comes from the resolver, and a name inside a dynamic scope (a `with` body, or a function a sloppy direct
+   `eval` can extend) is reported as a frontier, never as a binding or as no binding.
+7. Trace's receiver bindings are a consumer: the binding of a receiver's root name, and of every store into a receiver
+   bound in the file (its initializer and each assignment), comes from the resolver. A receiver whose root is dynamic
+   stays a cut.
+8. A name in a type position (a type annotation's type reference, an `implements` or `extends` clause) is looked up as a
+   name, through `getSymbolAtLocation` on that identifier, so a declared type can be told apart from a library,
+   primitive or package one. It is still no type API: no `getTypeAtLocation`, no `getTypeOfSymbol`, no inference, and
+   the `typeCount` test covers the type positions too.
+9. A receiver annotated with a library, primitive or package type is an external leaf carrying the declared type as its
+   evidence only when no in-scope repository type extends or implements that name and the name is not imported from one
+   of the repository's own packages. A type declared nowhere (generated code) stays unknown.
 
 ## Consequences
 
@@ -63,8 +78,15 @@ latency and 2 to 3.6 times the memory for a program with the library and depende
   root exists.
 - In sloppy JavaScript a function declared in a block is block-scoped for the binder, while the runtime also hoists it
   to the function. A call to it outside the block finds no binding.
+- Decision 9 trusts a declaration, not a value. TypeScript types are structural: a repository object that has the
+  members of a library type can be passed where that type is declared without extending or implementing it, and an
+  `any` or a cast can put any value there. A receiver declared as such a type is reported external although it may run
+  repository code; the guards of decision 9 only catch the nominal cases. The owner accepted this limitation with the
+  decision.
 
 ## Not decided here
 
-- Using the binder for any other fact than the two consumers above.
+- Using the binder for any other fact than the consumers above.
+- Narrowing a receiver to a repository type, and following a chain through declared return types (RFC-0013 R5): trace
+  slice 3, with dispatch (R7).
 - Java bindings, which have their own reader.
