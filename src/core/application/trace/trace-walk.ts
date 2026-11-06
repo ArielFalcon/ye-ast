@@ -172,9 +172,10 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
   });
   /**
    * What dispatch may run instead of the body the walk reads, from the declaration's own syntax: a body-less callable
-   * runs whatever implements it, so it is a cut listing every repository implementation of its name, or none; a static,
-   * private or final one with a body runs it; an overridable one with a body is a cut only when a type below its owner
-   * overrides it, listing those overriders. A declaration its syntax does not state is a cut when an interface owns it.
+   * runs whatever implements it, so it is a cut listing every declaration of its name below its owners, or none; a
+   * static, private or final one with a body runs it; an overridable one with a body is a cut only when a type below its
+   * owner declares its name, listing those declarations. A declaration its syntax does not state is a cut when an
+   * interface owns it.
    */
   const unboundDispatch = async (symbol: GraphSymbol): Promise<Cut | undefined> => {
     if (!CALLABLE_KINDS.includes(symbol.kind)) return undefined;
