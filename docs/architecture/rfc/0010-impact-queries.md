@@ -306,8 +306,8 @@ per cause:
 
 `unknown` when no answer is possible: the index cannot be built or opened (`index-unavailable`) or the diff cannot be
 read (`source-unreadable`); an unresolvable revision is a typed fault, as for `map`. A symbol `impact.callers` was asked
-for that names no node at the revision is the typed fault `unknown-symbol`, listing every such entry with the seedable
-declarations of its file (sorted, once each, empty when the file declares none or is not indexed), so the caller sees
+for that names no node at the revision is the typed fault `unknown-symbol`, listing every such entry with the dotted
+containment paths of the seedable declarations of its file (sorted, once each, empty when the file declares none or is not indexed), so the caller sees
 what it could have asked for; the CLI exits as
 for an unresolvable revision. A requested line range in a file that is not a covered source (a test, an uncovered
 language, a template no component names) is a `no-extractor` cut at that file, never an empty answer.

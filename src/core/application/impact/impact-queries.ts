@@ -20,7 +20,7 @@ import type { ModuleDependencies } from "../../domain/impact/module-dependency.t
 import type { ModuleDependenciesReader } from "../../ports/module-dependencies.port.ts";
 import { cutsCompleteness } from "../../domain/languages/uncovered.ts";
 import { comparePosition, compareText } from "../../domain/shared/code-node.ts";
-import { selectedBySymbol } from "../../domain/shared/declaration-tree.ts";
+import { branchesOf, declarationPath, selectedBySymbol, type DeclarationBranch } from "../../domain/shared/declaration-tree.ts";
 import type { Entrypoint } from "../../domain/entrypoints/entrypoint.ts";
 import { declarationSpan, sortedEngines, type Cut, type DeclaredConfig, type DeclaredScope, type Evidence, type Fact, type FactBase, type Finding, type IndexOrigin, type SnapshotRef, type TrustMode, type UnknownFact } from "../../domain/shared/fact.ts";
 import { exportSelection, pathSelection, sortedGlobs, type PathSelection, type ScopeRequest } from "../../domain/shared/scope.ts";
@@ -416,9 +416,9 @@ function rangeChanges(targets: readonly CallersTarget[]): FileChange[] {
     .sort((a, b) => compareText(a.path, b.path));
 }
 
-/** What a file declares that a request can seed, so a symbol that names no node tells the caller what does. */
-function candidatesOf(symbols: readonly GraphSymbol[]): string[] {
-  return [...new Set(symbols.filter(isSeedable).map((symbol) => symbol.name))].sort(compareText);
+/** The dotted paths of what a file declares that a request can seed, so a symbol that names no node tells the caller what does. */
+function candidatesOf(tree: readonly DeclarationBranch<GraphSymbol>[]): string[] {
+  return [...new Set(branchesOf(tree).filter(({ declaration }) => isSeedable(declaration)).map(declarationPath))].sort(compareText);
 }
 
 /** The head's sources the walk reads: written, in scope, and of a kind an extractor covers. */
@@ -515,7 +515,7 @@ function impactOf(input: WalkInput): ImpactRead {
   const symbolsByFile = Map.groupBy(symbols, (symbol) => symbol.file);
   const trees = new Map([...new Set(requested.map(({ file }) => file))].map((file) => [file, containmentTree(store, symbolsByFile.get(file) ?? [])]));
   const asked = requested.map((target) => ({ target, found: selectedBySymbol(trees.get(target.file) ?? [], target.symbol).map(({ declaration }) => declaration).filter(isSeedable) }));
-  const missing = asked.filter(({ found: nodes }) => nodes.length === 0).map(({ target }) => ({ ...target, candidates: candidatesOf(symbolsByFile.get(target.file) ?? []) }));
+  const missing = asked.filter(({ found: nodes }) => nodes.length === 0).map(({ target }) => ({ ...target, candidates: candidatesOf(trees.get(target.file) ?? []) }));
   if (missing.length > 0) return { value: { seeds: [], symbols: [], entrypoints: [], cost: { expansionsUsed: 0 } }, cuts: [], missing };
 
   const selection = selectSeeds({ files: changes }, symbolsByFile, componentsByResource);

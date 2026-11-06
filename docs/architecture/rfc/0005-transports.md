@@ -132,7 +132,7 @@ results retain `repositorySources` host read-location metadata for existing clie
 ### Errors
 
 An error is `{code, message, data: {kind}}`; `kind` names the code and `data` adds `entries` for `unknown-symbol`, each
-`{file, symbol, candidates}` where `candidates` names the seedable declarations of the file, sorted and once each, and
+`{file, symbol, candidates}` where `candidates` holds the dotted containment paths of the seedable declarations of the file, sorted and once each, and
 `globs` for `unknown-change-path`. The set is closed:
 
 | Kind | Code | Meaning |

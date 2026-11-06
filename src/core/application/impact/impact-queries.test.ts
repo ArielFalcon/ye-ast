@@ -686,6 +686,12 @@ test("a bare symbol seeds every declaration of that name in the file, at any dep
   assert.deepEqual(answer.status === "complete" && answer.value.seeds.map((seed) => seed.line), [2, 12]);
 });
 
+test("a missing symbol lists the dotted containment paths of its file, so a candidate selects one declaration", async () => {
+  const answer = await setup(TWO_CLASSES).callers({ targets: [{ file: "src/A.ts", symbol: "gone" }] });
+  assert.ok(!answer.ok);
+  assert.deepEqual(answer.fault.kind === "unknown-symbol" && answer.fault.entries.flatMap((entry) => entry.candidates), ["A", "A.m", "B", "B.m"]);
+});
+
 test("a declaration carries its last line only when it spans more than one line", async () => {
   const nodes = [fakeNode("f", "function", "src/A.java", 1, 3), fakeNode("one", "function", "src/B.java", 7, 7)];
   const answer = callersFact(await setup({ nodes }).callers({ targets: [{ file: "src/A.java", symbol: "f" }, { file: "src/B.java", symbol: "one" }] }));
