@@ -29,10 +29,11 @@ export interface AmbiguousMatch {
 }
 
 export interface JoinResult {
-  link?: Link;
+  /** One link for an HTTP call; one per consuming listener for a published message, which every subscriber receives. */
+  links?: Link[];
   /** The call reached a service the workspace declares and matched none of its routes: the service's drift. */
   unmatched?: string;
-  /** Two repositories matched the call at one rung of the ladder, or two listeners consume its destination. */
+  /** Two repositories matched the call at one rung of the ladder. */
   ambiguous?: AmbiguousMatch;
 }
 
@@ -178,7 +179,7 @@ export function matchCallSite(site: CallSite, target: HttpTarget, repositories: 
   const settled = (landed: ReturnType<typeof atRung>, basis?: Gateway["basis"]): JoinResult | undefined => {
     if (landed === undefined) return undefined;
     if ("ambiguous" in landed) return { ambiguous: { key: prefix ?? target.path, repos: landed.ambiguous } };
-    return { link: linkTo(site, landed.repo, basis === undefined ? landed.match : { ...landed.match, basis, confidence: landed.match.confidence }) };
+    return { links: [linkTo(site, landed.repo, basis === undefined ? landed.match : { ...landed.match, basis, confidence: landed.match.confidence })] };
   };
   const exact = settled(atRung(exactMatch, target, repositories));
   if (exact !== undefined) return exact;
@@ -261,15 +262,12 @@ function eventLinkTo(site: CallSite, repo: string, listener: Listener): Link {
 
 /**
  * The link a published message makes against the listeners of the repositories given: those of another repository, with
- * the protocol the message declares and a destination that takes it. One listener is one link; two listeners are a cut,
- * whether they are in two repositories or in one.
+ * the protocol the message declares and a destination that takes it. Every consuming listener is one link, whether the
+ * listeners are in several repositories or in one: pub/sub delivers a message to each subscriber.
  */
 export function matchEventCallSite(site: CallSite, target: EventTarget, repositories: readonly RepositoryEntrypoints[]): JoinResult {
   const reached = repositories
     .filter((repository) => repository.repo !== site.repo)
     .flatMap((repository) => listenersOf(repository).flatMap((listener) => (consumes(target, listener) ? [{ repo: repository.repo, listener }] : [])));
-  const [only, ...others] = reached;
-  if (only === undefined) return {};
-  if (others.length > 0) return { ambiguous: { key: target.destination, repos: [...new Set(reached.map(({ repo }) => repo))].sort(compareText) } };
-  return { link: eventLinkTo(site, only.repo, only.listener) };
+  return reached.length === 0 ? {} : { links: reached.map(({ repo, listener }) => eventLinkTo(site, repo, listener)) };
 }

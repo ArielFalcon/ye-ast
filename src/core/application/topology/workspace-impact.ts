@@ -396,7 +396,7 @@ function withOperations(links: readonly ImpactedLink[], trigger: string, contrac
 function drift(part: Section, site: CallSite, joined: JoinResult): void {
   if (joined.ambiguous !== undefined) part.ambiguous.push(site);
   else if (joined.unmatched !== undefined) part.unmatched.push(site);
-  else if (joined.link === undefined) part.external.push(site);
+  else if (joined.links === undefined) part.external.push(site);
 }
 
 /** A route the change removed no longer exists at head, so it is rebuilt from the name the change reports: `METHOD path`. */

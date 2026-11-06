@@ -273,8 +273,8 @@ function destinationCandidates(joined: readonly JoinedSite[]): Map<string, NameC
     if (site.target.status !== "complete" || !("destination" in site.target.value)) continue;
     const name = site.target.value.destination;
     const published = { ...callSiteEvidence(site), repo: site.repo };
-    const served = answer.link !== undefined
-      ? [{ name, repo: answer.link.to.repo, basis: "event-destination" as const, evidence: sortEvidence([published, { path: answer.link.to.handler.path, line: answer.link.to.handler.line, repo: answer.link.to.repo }]) }]
+    const served = answer.links !== undefined
+      ? answer.links.map(({ to }) => ({ name, repo: to.repo, basis: "event-destination" as const, evidence: sortEvidence([published, { path: to.handler.path, line: to.handler.line, repo: to.repo }]) }))
       : (answer.ambiguous?.repos ?? []).map((repo) => ({ name, repo, basis: "event-destination" as const, evidence: [published] }));
     const key = `${site.repo}\0${name}`;
     listened.set(key, gatherCandidates([...(listened.get(key) ?? []), ...served]));

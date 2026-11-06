@@ -60,9 +60,8 @@ export function linkGraphOf(trigger: string, handlers: Iterable<string>): LinkGr
 export function admitUpstream(graph: LinkGraph, joined: readonly JoinedSite[]): LinkGraph {
   const links = new Map(graph.links);
   const pending = new Map(graph.pending);
-  for (const { site, joined: settled } of joined) {
-    const link = settled.link;
-    if (link === undefined || links.has(link.id)) continue;
+  for (const { site, joined: settled } of joined) for (const link of settled.links ?? []) {
+    if (links.has(link.id)) continue;
     const reached = graph.fed.get(link.to.repo)?.get(handlerKey(link.to.handler));
     if (reached === undefined) continue;
     const reach = [...reached, link.id];
@@ -130,9 +129,8 @@ export function downstreamGraph(): DownstreamGraph {
 export function admitDownstream(graph: DownstreamGraph, joined: readonly JoinedSite[], egress: ReadonlyMap<string, ReadonlyMap<string, Reach>>): DownstreamGraph {
   const links = new Map(graph.links);
   const fed = new Map(graph.fed);
-  for (const { site, joined: settled } of joined) {
-    const link = settled.link;
-    if (link === undefined || links.has(link.id)) continue;
+  for (const { site, joined: settled } of joined) for (const link of settled.links ?? []) {
+    if (links.has(link.id)) continue;
     const sent = egress.get(site.repo)?.get(callSiteKey(site));
     if (sent === undefined) continue;
     const reach = [...sent, link.id];

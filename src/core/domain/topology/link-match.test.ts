@@ -26,9 +26,10 @@ function repositories(entrypoints: readonly HttpRoute[], repo = "orders"): Repos
 }
 
 function joined(result: ReturnType<typeof matchCallSite>): string {
-  if (result.link === undefined) return result.ambiguous === undefined ? `none ${result.unmatched ?? ""}`.trim() : `ambiguous ${result.ambiguous.repos.join(",")}`;
-  const { basis, confidence, profiles } = result.link;
-  return `${basis} ${confidence}${profiles === undefined ? "" : ` ${profiles.join(",")}`} -> ${result.link.to.repo} ${result.link.to.name}`;
+  const [link] = result.links ?? [];
+  if (link === undefined) return result.ambiguous === undefined ? `none ${result.unmatched ?? ""}`.trim() : `ambiguous ${result.ambiguous.repos.join(",")}`;
+  const { basis, confidence, profiles } = link;
+  return `${basis} ${confidence}${profiles === undefined ? "" : ` ${profiles.join(",")}`} -> ${link.to.repo} ${link.to.name}`;
 }
 
 test("gateway prefixes come from URL paths, never schemes or authorities", () => {
@@ -57,7 +58,7 @@ test("URL authority cannot select one of two repositories with the same exact pa
   const call = site("//orders.example/orders");
   const repos = [...repositories([route("GET", "/orders")]), ...repositories([route("GET", "/orders")], "billing")];
   const result = matchCallSite(call, targetOf(call), repos, []);
-  assert.equal(result.link, undefined);
+  assert.equal(result.links, undefined);
   assert.deepEqual(result.ambiguous?.repos, ["billing", "orders"]);
 });
 
@@ -182,9 +183,8 @@ function eventTargetOf(call: CallSite): EventTarget {
 }
 
 function consumed(result: ReturnType<typeof matchEventCallSite>): string {
-  if (result.link === undefined) return result.ambiguous === undefined ? "none" : `ambiguous ${result.ambiguous.repos.join(",")}`;
-  const { basis, confidence, transport, to } = result.link;
-  return `${basis} ${confidence} ${transport} -> ${to.repo} ${to.kind} ${to.name} at ${to.handler.symbol}`;
+  if (result.links === undefined) return result.ambiguous === undefined ? "none" : `ambiguous ${result.ambiguous.repos.join(",")}`;
+  return result.links.map(({ basis, confidence, transport, to }) => `${basis} ${confidence} ${transport} -> ${to.repo} ${to.kind} ${to.name} at ${to.handler.symbol}`).join(" | ");
 }
 
 function consumedBy(call: CallSite, listeners: readonly Listener[], repo = "orders"): string {
@@ -227,18 +227,24 @@ test("a token the publisher fills at run time stands for exactly one listener to
   assert.equal(consumedBy(published("nats", "orders.created"), [listener("nats", "orders.eu.created")]), "none");
 });
 
-test("a destination two repositories consume is a cut, never a pick", () => {
+test("a destination two repositories consume is one link per listener, since a published message reaches every subscriber", () => {
   const call = published("kafka", "orders.created");
   const shared: RepositoryEntrypoints[] = [
     { repo: "orders", entrypoints: [listener("kafka", "orders.created", { ...CONSUMER, symbol: "OrdersListener.on", line: 8 })] },
     { repo: "billing", entrypoints: [listener("kafka", "orders.created", { ...CONSUMER, symbol: "BillingListener.on", line: 3 })] },
   ];
 
-  assert.equal(consumed(matchEventCallSite(call, eventTargetOf(call), shared)), "ambiguous billing,orders");
+  assert.equal(
+    consumed(matchEventCallSite(call, eventTargetOf(call), shared)),
+    "event-destination 1 event -> orders listener kafka orders.created at OrdersListener.on | event-destination 1 event -> billing listener kafka orders.created at BillingListener.on",
+  );
 });
 
-test("a destination one repository consumes with two listeners is a cut as well", () => {
+test("a destination one repository consumes with two listeners is one link per listener as well", () => {
   const call = published("kafka", "orders.created");
 
-  assert.equal(consumedBy(call, [listener("kafka", "orders.created"), listener("kafka", "orders.created", { ...CONSUMER, symbol: "OrdersListener.audit", line: 20 })]), "ambiguous orders");
+  assert.equal(
+    consumedBy(call, [listener("kafka", "orders.created"), listener("kafka", "orders.created", { ...CONSUMER, symbol: "OrdersListener.audit", line: 20 })]),
+    "event-destination 1 event -> orders listener kafka orders.created at OrdersListener.on | event-destination 1 event -> orders listener kafka orders.created at OrdersListener.audit",
+  );
 });

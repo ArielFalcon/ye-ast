@@ -500,8 +500,8 @@ Accepted by the owner on 2026-11-01: "Confirmo todo".
   the class. The join matches a publish to a listener of
   another repository with the same protocol and a destination that takes it, basis `event-destination` at confidence 1;
   for NATS a listener's `*` stands for one token and its `>` for one or more trailing tokens, and a token the publisher
-  fills at run time for one (decision 9). A destination two listeners consume is a cut, never a pick, whether they are
-  in one repository or in two; fan-out from one publish to two links is not modelled. On the probe workspace the five
+  fills at run time for one (decision 9). A destination several listeners consume is one link per listener, whether they are
+  in one repository or in several, since pub/sub delivers a message to every subscriber; queue groups are not modelled. On the probe workspace the five
   publishers are cuts naming the messenger library, whose source the workspace does not hold, and the five listeners
   extend a base class of that library, so no listener is read and no pair links: the slice accepts the cut on the
   publisher side, and the listener side stays silent until that library's source is passed as a repository.

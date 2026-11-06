@@ -576,19 +576,16 @@ test("an event link that lands in a listener the walk did not reach is neither a
   assert.deepEqual(section.external, []);
 });
 
-test("an event two repositories consume is a cut of the section, never a pick", async () => {
+test("an event two repositories consume is not a cut: the repository whose listener the walk reached is linked, the other one is no drift", async () => {
   const { queries } = setup({
-    repositories: { orders: { entrypoints: [listener("orders.created")] }, billing: { entrypoints: [listener("orders.created")] }, "shop-web": { callSites: [eventSite("shop-web", "orders.created")] } },
+    repositories: { orders: { entrypoints: [listener("orders.created")] }, billing: { entrypoints: [listener("orders.created", "kafka", { ...CONSUMER, symbol: "BillingListener.on", line: 3 })] }, "shop-web": { callSites: [eventSite("shop-web", "orders.created")] } },
     trigger: impactOf(EVENT_REACHED),
   });
 
-  const result = await queries.callers({ ...ASK, repos: [{ path: "/work/shop-web" }, { path: "/work/billing" }] });
+  const value = valueOf(await queries.callers({ ...ASK, repos: [{ path: "/work/shop-web" }, { path: "/work/billing" }] }));
 
-  const value = valueOf(result);
-  const section = value.sections["shop-web"];
-  assert.deepEqual(value.links, []);
-  assert.ok(section?.status === "partial");
-  assert.deepEqual(section.cuts, [{ kind: "unresolved-link", at: ["src/main/java/app/shop-web/Orders.java", "src/main/java/app/shop-web/Orders.java:7"] }]);
+  assert.deepEqual(value.links.map(({ link }) => `${link.from.repo} -> ${link.to.repo}`), ["shop-web -> orders"]);
+  assert.equal(value.sections["shop-web"]?.status, "complete");
 });
 
 const CHARGES = { path: "src/main/java/app/payments/PaymentController.java", symbol: "PaymentController.charge", line: 12 };
