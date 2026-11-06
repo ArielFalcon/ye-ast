@@ -161,9 +161,11 @@
 
   /* ── title marks ──────────────────────────────────────────────────── */
 
-  /** The mark beside a section title is as tall as the title's lines. A taller mark narrows the text and can only add
-   * lines, so growing it from zero until the line count stops changing reaches the fixed point. */
+  /** The mark beside a section title is as tall as the title's lines, between one and MAX_MARK_LINES. A taller mark
+   * narrows the text and can only add lines, so growing it from zero until the line count stops changing reaches the
+   * fixed point. */
   const titles = $$(".section-head h2");
+  const MAX_MARK_LINES = 2;
   const lineCount = (title) => {
     const range = document.createRange();
     range.selectNodeContents(title);
@@ -174,7 +176,7 @@
     let lines = 0;
     for (let pass = 0; pass < 6; pass += 1) {
       title.style.setProperty("--title-mark", `${lines * lineHeight}px`);
-      const next = lineCount(title);
+      const next = Math.min(Math.max(lineCount(title), 1), MAX_MARK_LINES);
       if (next === lines) return;
       lines = next;
     }
