@@ -145,6 +145,6 @@ function isCallOf(link: Link, operation: string): boolean {
 }
 
 function unread(site: CarrierSite): FlowResult {
-  const at = { path: site.file, line: site.kind === "member" ? (site.line ?? 1) : site.line };
+  const at = { path: site.file, line: site.kind === "input" ? 1 : site.kind === "member" ? (site.line ?? 1) : site.line };
   return { uses: [], next: [], frontiers: [{ at, cause: "unmodelled-flow", reason: "source-unreadable", hops: [] }] };
 }

@@ -17,6 +17,11 @@ export type CarrierSite =
   /** The value a resolved function or method receives as its parameter at `index`, 0-based. */
   | { kind: "parameter"; repo: string; file: string; symbol: string; line: number; index: number }
   /**
+   * The value a component receives through the input whose public name is `name`: the alias when the input declares
+   * one. The TypeScript reader resolves it to the member that declares the input, or reports that none does.
+   */
+  | { kind: "input"; repo: string; file: string; owner: string; name: string }
+  /**
    * The value a class member holds: a field, an `input()`, a signal, an `@Input()`. `line` is the member's first line,
    * absent when the producer reads only a template; a member is the same carrier whatever line it comes with.
    */
@@ -51,6 +56,7 @@ export const FLOW_STEPS = [
   "resource",
   "iterate",
   "resolver-input",
+  "input",
   "route-data",
   "template-binding",
   "template-read",

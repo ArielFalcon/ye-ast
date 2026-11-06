@@ -141,7 +141,7 @@ function frontierItem(frontier: FlowFrontier, chain: readonly Hop[]): Finding<Us
 }
 
 function placeOf({ site }: Carrier, chain: readonly Hop[]): Evidence {
-  return site.line === undefined ? chain.at(-1)!.evidence : { path: site.file, line: site.line };
+  return site.kind === "input" || site.line === undefined ? chain.at(-1)!.evidence : { path: site.file, line: site.line };
 }
 
 function samePath(a: AccessPath, b: AccessPath): boolean {

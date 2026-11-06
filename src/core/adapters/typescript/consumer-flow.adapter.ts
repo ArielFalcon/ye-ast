@@ -16,7 +16,7 @@ export async function createConsumerFlowReader(files: readonly SourceFile[], rep
 function follow(program: Program, repo: string, { site, path }: Carrier): FlowResult {
   const unit = program.index.units.get(site.file);
   if (unit === undefined) {
-    const at = { path: site.file, line: site.kind === "member" ? (site.line ?? 1) : site.line };
+    const at = { path: site.file, line: site.kind === "member" || site.kind === "input" ? ("line" in site ? (site.line ?? 1) : 1) : site.line };
     return { uses: [], next: [], frontiers: [{ at, cause: "unmodelled-flow", reason: "source-unreadable", hops: [] }] };
   }
   const walker = new Walker(repo, program, unit);
@@ -25,6 +25,7 @@ function follow(program: Program, repo: string, { site, path }: Carrier): FlowRe
   else if (site.kind === "call-result") walker.startCallResult(site, path);
   else if (site.kind === "parameter") walker.startParameter(site, path);
   else if (site.kind === "member") walker.startMember(site, path);
+  else if (site.kind === "input") return { uses: [], next: [], frontiers: [{ at: { path: site.file, line: 1 }, cause: "unsupported-binding", reason: "unresolved", detail: `input:${site.name}`, hops: [] }] };
   else walkers.push(...resolverContinuation(program, repo, walker, site, path));
   return {
     uses: ordered(walkers.flatMap((held) => held.uses)),

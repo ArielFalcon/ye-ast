@@ -28,8 +28,8 @@ const frontiers = (result: FlowResult) => result.frontiers.map((frontier) => `${
 const next = (result: FlowResult) =>
   result.next.map(({ carrier }) => {
     const { site } = carrier;
-    const where = site.kind === "member" ? `${site.owner}.${site.member}` : site.kind === "parameter" ? `${site.symbol}#${site.index}` : "symbol" in site ? site.symbol : site.callee;
-    return `${site.kind} ${where}@${site.kind === "member" ? (site.line === undefined ? "-" : site.line - HEADER_LINES) : site.line - HEADER_LINES} ${dotted(carrier.path)}`;
+    const where = site.kind === "member" ? `${site.owner}.${site.member}` : site.kind === "parameter" ? `${site.symbol}#${site.index}` : "symbol" in site ? site.symbol : site.kind === "input" ? site.name : site.callee;
+    return `${site.kind} ${where}@${site.kind === "member" ? (site.line === undefined ? "-" : site.line - HEADER_LINES) : site.kind === "input" ? "-" : site.line - HEADER_LINES} ${dotted(carrier.path)}`;
   });
 const steps = (result: FlowResult) => result.next.map(({ hops }) => hops.map((hop) => hop.step).join(">"));
 
