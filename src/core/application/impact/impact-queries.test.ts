@@ -1636,7 +1636,7 @@ test("a second callers request at the same snapshot and inputs reads the relatio
   assert.equal(canonicalJson(hit), canonicalJson(uncached));
 });
 
-test("each input the relations depend on, scope, export listing, revision and sources, gets its own retained output", async () => {
+test("each input the relations depend on, scope, written sources and the listing's unwritten and skipped entries, gets its own retained output, and a revision with the same listing shares it", async () => {
   const snapshotCache = createSnapshotDataCache(RETAINED_BYTES);
   const counter = { calls: 0 };
   const targets = { targets: [{ file: "src/A.java", symbol: "f" }] };
@@ -1651,9 +1651,9 @@ test("each input the relations depend on, scope, export listing, revision and so
   await setup({ ...base, exports: { [HEAD]: listed("2") } }).callers(targets);
   assert.equal(counter.calls, 4);
   await setup(base).callers({ ...targets, revision: "other" });
-  assert.equal(counter.calls, 5);
+  assert.equal(counter.calls, 4);
   await setup({ ...base, exports: { [HEAD]: listed("2") } }).callers(targets);
-  assert.equal(counter.calls, 5);
+  assert.equal(counter.calls, 4);
 });
 
 test("a cancelled relations extraction publishes no output", async () => {
@@ -1787,7 +1787,9 @@ test("a live change query reads and extracts the merge base once, misses on anot
   assert.equal(canonicalJson(hit.answer), canonicalJson(uncached));
 
   const otherFork = "d".repeat(40);
-  const moved = await ask({ mergeBase: otherFork });
+  const sameListing = await ask({ mergeBase: otherFork });
+  assert.deepEqual([sameListing.reads, sameListing.extractions], [0, 0]);
+  const moved = await ask({ mergeBase: otherFork, exports: { [otherFork]: { files: [{ path: "src/A.java", blob: "7", written: true }], skipped: [] } } });
   assert.deepEqual([moved.reads, moved.extractions], [1, 1]);
   const scoped = await ask({}, { scope: { exclude: ["docs/**"] } });
   assert.deepEqual([scoped.reads, scoped.extractions], [2, 2]);
@@ -1802,10 +1804,11 @@ test("a merge base a live change query kept answers a change query between commi
   const snapshotCache = createSnapshotDataCache(RETAINED_BYTES);
   const liveAsk = liveRun(live, snapshotCache);
   assert.ok((await liveAsk.queries.ofChange({ ...LIVE_BASE, base: "base", live: true })).ok);
-  const sha = liveRun(live, snapshotCache);
+  const headListing = { [HEAD]: { files: [{ path: "src/A.java", blob: "2", written: true }], skipped: [] } };
+  const sha = liveRun(live, snapshotCache, { exports: headListing });
   const between = fact(await sha.ask());
   assert.deepEqual([sha.log.reads, sha.log.extractions], [1, 1]);
-  const fresh = fact(await setup({ trust: TRUSTED, nodes: LIVE_NODES, edges: SOURCE_EDGES }).ask());
+  const fresh = fact(await setup({ trust: TRUSTED, nodes: LIVE_NODES, edges: SOURCE_EDGES, exports: headListing }).ask());
   assert.equal(canonicalJson(between), canonicalJson(fresh));
 });
 

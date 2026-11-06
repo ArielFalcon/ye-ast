@@ -167,19 +167,51 @@ test("independent requests reuse sources and findings but each exports into its 
   assert.deepEqual(log.removed.toSorted(), log.created.toSorted());
 });
 
-test("cross-request reuse revalidates SHA, source, scope, trust and export budgets", async () => {
+test("cross-request reuse revalidates scope, trust and export budgets", async () => {
   const { log, query, request } = setup();
   const snapshotCache = dataCache();
   const queries = query({ snapshotCache });
   await queries.map(request);
-  await queries.map({ ...request, repo: "/another" });
-  await queries.map({ ...request, revision: "other" });
   await queries.map({ ...request, scope: { exclude: ["src/**"] } });
   await query({ snapshotCache, trust: { read: async () => ({ ok: true, value: "trusted" }) } }).map(request);
   await query({ snapshotCache, budget: { maxBytes: 0, maxEntries: 0 } }).map(request);
-  assert.equal(log.exports, 6);
-  assert.equal(log.reads, 6);
-  assert.equal(log.extracts, 6);
+  assert.equal(log.exports, 4);
+  assert.equal(log.reads, 4);
+  assert.equal(log.extracts, 4);
+});
+
+function lists(deps: SnapshotReaderDeps, files: { path: string; blob: string; written: boolean }[], skipped: { path: string; reason: "symlink" }[] = []) {
+  deps.vcs.exportCommit = async () => ({ ok: true, value: { files, skipped } });
+}
+
+test("data is keyed by the written files, so another commit, repository, unwritten file or skipped entry shares it and answers what a miss answers", async () => {
+  const { deps, log, query, request } = setup();
+  const snapshotCache = dataCache();
+  lists(deps, [{ path: "src/app.ts", blob: "blob", written: true }, { path: "README.md", blob: "r1", written: false }]);
+  await query({ snapshotCache }).map(request);
+  lists(deps, [{ path: "README.md", blob: "r2", written: false }, { path: "src/app.ts", blob: "blob", written: true }, { path: "docs/guide.md", blob: "g", written: false }], [{ path: "link", reason: "symlink" }]);
+  const later = { ...request, repo: "/another", revision: "other" };
+  const hit = await query({ snapshotCache }).map(later);
+  const miss = await query({}).map(later);
+  assert.deepEqual([log.reads, log.extracts], [2, 2]);
+  assert.ok(hit.ok && miss.ok);
+  assert.deepEqual(hit.value.value, miss.value.value);
+});
+
+test("data is not shared when a written file changes its blob, a file becomes written or a written file is added", async () => {
+  const { deps, log, query, request } = setup();
+  const snapshotCache = dataCache();
+  lists(deps, [{ path: "src/app.ts", blob: "blob", written: true }, { path: "src/b.ts", blob: "b", written: false }]);
+  await query({ snapshotCache }).map(request);
+  lists(deps, [{ path: "src/app.ts", blob: "changed", written: true }, { path: "src/b.ts", blob: "b", written: false }]);
+  await query({ snapshotCache }).map(request);
+  assert.equal(log.reads, 2);
+  lists(deps, [{ path: "src/app.ts", blob: "blob", written: true }, { path: "src/b.ts", blob: "b", written: true }]);
+  await query({ snapshotCache }).map(request);
+  assert.equal(log.reads, 3);
+  lists(deps, [{ path: "src/app.ts", blob: "blob", written: true }, { path: "src/b.ts", blob: "b", written: true }, { path: "src/c.ts", blob: "c", written: true }]);
+  await query({ snapshotCache }).map(request);
+  assert.equal(log.reads, 4);
 });
 
 function listsApart(deps: SnapshotReaderDeps, materialize: () => Promise<Result<void, VcsFault>>) {
@@ -241,13 +273,13 @@ test("the current export listing and its caller-budget stop cannot be replaced b
   const { deps, log, query, request } = setup();
   const queries = query({ snapshotCache: dataCache() });
   await queries.map(request);
-  deps.vcs.exportCommit = async () => ({ ok: true, value: { files: [], skipped: [], stopped: { at: "src/app.ts", limit: 0 } } });
+  deps.vcs.exportCommit = async () => ({ ok: true, value: { files: [{ path: "src/app.ts", blob: "blob", written: true }], skipped: [], stopped: { at: "src/z.ts", limit: 0 } } });
   const answer = await queries.map(request);
   assert.ok(answer.ok && answer.value.status === "partial");
   const section = answer.value.value.entrypoints;
   assert.ok(section.status === "partial" && section.cuts.some((cut) => cut.kind === "caller-budget"));
-  assert.equal(log.reads, 2);
-  assert.equal(log.extracts, 2);
+  assert.equal(log.reads, 1);
+  assert.equal(log.extracts, 1);
 });
 
 test("a cancelled extraction is repeated by the next independent request", async () => {

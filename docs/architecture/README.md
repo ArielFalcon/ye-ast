@@ -36,6 +36,7 @@ marked **Proposed** awaits the owner's acceptance.
 | [0028](adr/0028-lazy-export-materialization.md) | A SHA request lists the export afresh every time and writes its files only when a reader needs them (source read miss, index build, focused Java read); amends ADR-0020 decisions 4 and 5 | Accepted |
 | [0029](adr/0029-lexical-bindings-from-the-typescript-binder.md) | The TypeScript compiler's binder, through a one-file program with no library and no resolution, is the one source of lexical bindings, for import origins and function-value calls alike | Accepted |
 | [0030](adr/0030-live-captures-use-the-snapshot-data-cache.md) | A live capture uses the snapshot data cache, keyed by the content hashes of its reconciled listing and never by HEAD; amends ADR-0020 decision 6 | Accepted |
+| [0031](adr/0031-snapshot-data-is-keyed-by-the-written-files.md) | SHA snapshot data is keyed by the scope, trust, export budget and the path and blob of every written file, never by the commit or the repository; amends ADR-0020 decision 4 | Accepted |
 
 ## Designs (RFC)
 

@@ -7,6 +7,8 @@
   below; and the owner, 2026-11-06: "Revisa bien todos los caches implementados para asegurarte que son eficientes y
   seguros, que tienen políticas de validación correctas y que cubren los casos de uso, para evitar dar código stale",
   which decides decisions 8 to 10 below.
+- Amended by: [ADR-0031](0031-snapshot-data-is-keyed-by-the-written-files.md) (decision 6: the merge base entry is
+  keyed by the written files, not by the sha and the repository)
 - Related: [ADR-0020](0020-host-budgeted-snapshot-memory-cache.md) (amended),
   [ADR-0026](0026-snapshot-data-may-retain-reader-outputs.md), [ADR-0028](0028-lazy-export-materialization.md),
   [RFC-0010](../rfc/0010-impact-queries.md) "The mirror", [RFC-0006](../rfc/0006-configuration.md),

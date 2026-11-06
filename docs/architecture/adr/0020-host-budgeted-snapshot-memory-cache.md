@@ -9,6 +9,8 @@
   request, the files are written only when a reader needs them)
 - Amended by: [ADR-0030](0030-live-captures-use-the-snapshot-data-cache.md) (decision 6: a reconciled live capture
   uses this cache, keyed by the content hashes of its listing)
+- Amended by: [ADR-0031](0031-snapshot-data-is-keyed-by-the-written-files.md) (decision 4: a SHA entry is keyed by the
+  written files, not by the commit or the repository)
 - Related: [ADR-0006](0006-qayaba-graph-state-per-run.md), [ADR-0010](0010-trust-modes.md),
   [ADR-0021](0021-enable-snapshot-memory-cache-by-default.md), [RFC-0006](../rfc/0006-configuration.md)
 

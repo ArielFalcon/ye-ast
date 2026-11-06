@@ -527,8 +527,9 @@ consulted after the reconcile and keyed by the repository, scope, trust and the 
 `written` flags, skipped entries), never by HEAD. A file whose stat moved but whose bytes did not keeps its blob id and so
 its key; an edit changes a blob and misses. The assumption stays the mirror's own, stated in "The mirror" above: the
 coarse clock of the file system, which can leave two same-size writes inside one ctime tick as one stat.
-The merge base of a live change query is a commit and takes the key of a commit at that scope and trust, so its entry is
-shared with a change query at that sha and survives an edit of the working tree.
+The merge base of a live change query is a commit and takes the key of a commit at that scope and trust (the written
+files' paths and blobs, [ADR-0031](../adr/0031-snapshot-data-is-keyed-by-the-written-files.md)), so its entry is shared
+with a change query at any commit whose written files are equal and survives an edit of the working tree.
 
 **The `sync` parity test** (ADR-0015 decision 4).
 

@@ -95,7 +95,7 @@ so it holds no source objects, ASTs, temporary-directory paths, open stores or f
 
 Every query still resolves its revision, reads current trust and lists the commit afresh; it writes the listed files
 into a fresh temporary directory only when a reader needs them ([ADR-0028](../adr/0028-lazy-export-materialization.md)):
-a source read that retained data does not serve, or an index build. Reuse additionally checks the effective source, SHA, scope, export budget and exact current export listing and cuts.
+a source read that retained data does not serve, or an index build. Reuse additionally checks the declared scope, trust, export budget and the path and blob of every written file, never the SHA or the repository ([ADR-0031](../adr/0031-snapshot-data-is-keyed-by-the-written-files.md)); the listing and cuts a request reports are always its own current ones.
 Only successfully completed stages are retained, without shared in-flight work or cancellation. A live query consults it only after the mirror is reconciled, keyed by the content hashes of its listing and never by HEAD ([ADR-0030](../adr/0030-live-captures-use-the-snapshot-data-cache.md));
 export-only queries do not restore source data. The lifetime is one composition; dropping it releases retention.
 Cache settings affect cost only and are not fact inputs. The default allocates entries lazily; it reserves no memory up front and retains no export on disk.

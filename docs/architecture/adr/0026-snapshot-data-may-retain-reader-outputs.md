@@ -5,6 +5,8 @@
   efficiency plan whose step 4 amends ADR-0020 decision 2.
 - Amended by: [ADR-0030](0030-live-captures-use-the-snapshot-data-cache.md) (decisions 1 to 3: a reconciled live
   capture offers retention to its consumers)
+- Amended by: [ADR-0031](0031-snapshot-data-is-keyed-by-the-written-files.md) (decision 3: the sources entry is keyed
+  by the written files, not by the sha and the repository)
 - Related: [ADR-0020](0020-host-budgeted-snapshot-memory-cache.md) (amended),
   [ADR-0021](0021-enable-snapshot-memory-cache-by-default.md), [RFC-0010](../rfc/0010-impact-queries.md),
   [RFC-0012](../rfc/0012-observability-and-measurement.md)
