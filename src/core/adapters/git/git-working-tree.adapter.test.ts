@@ -155,3 +155,45 @@ test("a subdirectory answers not-repository-root and an aborted signal answers a
 test("reports the object format of the repository", async () => {
   assert.equal(valueOf(await createGitWorkingTree().list(repo)).objectFormat, "sha1");
 });
+
+function recordingGit(answer: (args: readonly string[]) => { code: number; stdout: string }) {
+  let running = 0;
+  let peak = 0;
+  return {
+    peak: () => peak,
+    runGit: async (_repo: string, args: readonly string[]) => {
+      running += 1;
+      peak = Math.max(peak, running);
+      await new Promise((resolve) => setImmediate(resolve));
+      running -= 1;
+      const { code, stdout } = answer(args);
+      return { code, stdout: Buffer.from(stdout), stderr: `exit ${code}` };
+    },
+  };
+}
+
+const healthy = (args: readonly string[]) => ({ code: 0, stdout: args.includes("--show-object-format") ? "sha1\n" : "" });
+
+test("the listing starts its git commands together rather than one after another", async () => {
+  const git = recordingGit(healthy);
+
+  valueOf(await createGitWorkingTree(git).list(repo));
+
+  assert.equal(git.peak(), 4);
+});
+
+test("a repository subdirectory is reported even when the listing commands fail too", async () => {
+  const git = recordingGit((args) => (args.includes("--show-prefix") ? { code: 0, stdout: "sub/\n" } : { code: 128, stdout: "" }));
+
+  const listing = await createGitWorkingTree(git).list(repo);
+
+  assert.equal(!listing.ok && listing.fault.kind, "not-repository-root");
+});
+
+test("a failed tracked listing wins over a failed untracked one", async () => {
+  const git = recordingGit((args) => (args.includes("--cached") ? { code: 3, stdout: "" } : args.includes("--others") ? { code: 4, stdout: "" } : healthy(args)));
+
+  const listing = await createGitWorkingTree(git).list(repo);
+
+  assert.deepEqual(!listing.ok && listing.fault, { kind: "git-failed", detail: "exit 3" });
+});

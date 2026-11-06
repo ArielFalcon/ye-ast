@@ -783,3 +783,32 @@ test("a thrown debris cleanup failure releases its scope reservation", async () 
   const held = ok(await mirror.lock(location));
   await held.release();
 });
+
+test("reconcile and changedSince give the same exact answer over more files than are statted at once", async () => {
+  const { repo, location } = await fresh();
+  const names = Array.from({ length: 150 }, (_, index) => `f${String(index).padStart(3, "0")}.ts`);
+  for (const name of names) await writeFile(join(repo, name), name);
+  const mirror = createLiveMirror();
+  const first = ok(await mirror.reconcile(location, listed(...names), [], []));
+  await writeFile(join(repo, "f007.ts"), "edited");
+  await rm(join(repo, "f099.ts"));
+  await writeFile(join(repo, "f149.ts"), "edited too");
+
+  const changed = ok(await mirror.changedSince(location, listed(...names), first, undefined));
+  const second = ok(await mirror.reconcile(location, listed(...names), first.manifest, []));
+
+  assert.deepEqual(changed, ["f007.ts", "f099.ts", "f149.ts"]);
+  assert.deepEqual(second.changed, ["f007.ts", "f099.ts", "f149.ts"]);
+  assert.deepEqual(second.manifest.map((entry) => entry.path), names.filter((name) => name !== "f099.ts"));
+});
+
+test("changedSince answers aborted when its signal is aborted", async () => {
+  const { repo, location } = await fresh();
+  await writeFile(join(repo, "a.ts"), "a");
+  const mirror = createLiveMirror();
+  const first = ok(await mirror.reconcile(location, listed("a.ts"), [], []));
+  const controller = new AbortController();
+  controller.abort();
+
+  assert.equal(faultKind(await mirror.changedSince(location, listed("a.ts"), first, controller.signal)), "aborted");
+});
