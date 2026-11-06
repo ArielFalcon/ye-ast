@@ -77,26 +77,57 @@ function bindingOf(identifier: ts.Identifier): ts.Node | undefined {
   return undefined;
 }
 
+/**
+ * The declaration of `name` that `scope` itself owns under JavaScript scoping: a function its parameters, a `var` its
+ * function, module or static block across nested blocks, a block its `let`, `const`, `class` and function declarations
+ * (modules and classes are strict code), a switch's case block those of every clause, a loop its head, a catch clause its
+ * variable.
+ */
 function declarationIn(scope: ts.Node, name: string): ts.Node | undefined {
   if (ts.isFunctionLike(scope)) {
     const parameter = scope.parameters.find((candidate) => declaresName(candidate.name, name));
     if (parameter !== undefined) return parameter;
     if (ts.isFunctionExpression(scope) && scope.name?.text === name) return scope;
   }
-  if (ts.isBlock(scope) || ts.isSourceFile(scope) || ts.isModuleBlock(scope) || ts.isCaseClause(scope) || ts.isDefaultClause(scope)) {
-    for (const statement of scope.statements) {
-      if (ts.isVariableStatement(statement)) {
-        const declaration = statement.declarationList.declarations.find((candidate) => declaresName(candidate.name, name));
-        if (declaration !== undefined) return declaration;
-      }
-      if (ts.isFunctionDeclaration(statement) && statement.name?.text === name) return statement;
+  const lexical = lexicalStatements(scope);
+  for (const statement of lexical) {
+    if (ts.isVariableStatement(statement)) {
+      const declaration = statement.declarationList.declarations.find((candidate) => declaresName(candidate.name, name));
+      if (declaration !== undefined) return declaration;
     }
+    if ((ts.isFunctionDeclaration(statement) || ts.isClassDeclaration(statement)) && statement.name?.text === name) return statement;
+  }
+  if (isVarScope(scope)) {
+    const hoisted = hoistedVar(scope, name);
+    if (hoisted !== undefined) return hoisted;
   }
   if ((ts.isForStatement(scope) || ts.isForOfStatement(scope) || ts.isForInStatement(scope)) && scope.initializer !== undefined && ts.isVariableDeclarationList(scope.initializer)) {
     return scope.initializer.declarations.find((candidate) => declaresName(candidate.name, name));
   }
   if (ts.isCatchClause(scope) && scope.variableDeclaration !== undefined && declaresName(scope.variableDeclaration.name, name)) return scope.variableDeclaration;
   return undefined;
+}
+
+function lexicalStatements(scope: ts.Node): readonly ts.Statement[] {
+  if (ts.isBlock(scope) || ts.isSourceFile(scope) || ts.isModuleBlock(scope)) return scope.statements;
+  if (ts.isCaseBlock(scope)) return scope.clauses.flatMap((clause) => clause.statements);
+  return [];
+}
+
+function isVarScope(node: ts.Node): boolean {
+  return ts.isFunctionLike(node) || ts.isSourceFile(node) || ts.isModuleBlock(node) || ts.isClassStaticBlockDeclaration(node);
+}
+
+/** The `var` declaration of `name` anywhere in `scope`'s body, short of a nested var scope. */
+function hoistedVar(scope: ts.Node, name: string): ts.VariableDeclaration | undefined {
+  let found: ts.VariableDeclaration | undefined;
+  const visit = (node: ts.Node): void => {
+    if (found !== undefined || isVarScope(node)) return;
+    if (ts.isVariableDeclarationList(node) && (node.flags & ts.NodeFlags.BlockScoped) === 0) found = node.declarations.find((candidate) => declaresName(candidate.name, name));
+    ts.forEachChild(node, visit);
+  };
+  ts.forEachChild(scope, visit);
+  return found;
 }
 
 function declaresName(binding: ts.BindingName, name: string): boolean {

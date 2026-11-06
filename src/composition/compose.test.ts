@@ -1036,6 +1036,18 @@ test("a trace over a real index keeps a library member call a cut when its recei
   ]);
 });
 
+test("a trace over a real index binds a var receiver at its function scope, wherever in the function's blocks it is declared", async () => {
+  writeFileSync(join(repo, "src", "hoisted.ts"), ["export function entry(): void {", "  if (Date.now() > 0) { var cb = () => console.log(\"x\"); }", "  cb.call(null);", "}", ""].join("\n"));
+  git("add", "-A");
+  git("commit", "-q", "-m", "hoisted");
+  const { trace } = composeQueries({ scratchRoot });
+
+  const answer = await trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: "src/hoisted.ts", symbol: "entry" }] });
+
+  assert.ok(answer.ok && answer.value.status === "partial", JSON.stringify(answer));
+  assert.deepEqual(answer.value.cuts.map((cut) => [cut.kind, ...cut.at]), [["unresolved-link", "src/hoisted.ts:3 cb.call", "src/hoisted.ts::cb"]]);
+});
+
 test("a trace over a real index binds a receiver in its own file, so a function value of that name in another file leaves an unrelated call as R6 decides", async () => {
   writeFileSync(join(repo, "src", "holder.ts"), ["export const value = () => 1;", ""].join("\n"));
   writeFileSync(join(repo, "src", "use.ts"), ["export function use(value: { describe(): void }): void {", "  value.describe();", "}", ""].join("\n"));

@@ -90,6 +90,64 @@ test("a receiver bound to a non-function value, shadowed by a parameter, importe
   ])).functionValueCalls, []);
 });
 
+test("a var or a nested var-declared loop variable binds at its function or module scope across nested blocks, never across a function, static block or namespace boundary", async () => {
+  assert.deepEqual((await read([
+    "if (ready) { var top = () => 1; }",
+    "top.call(undefined);",
+    "export function run(): void {",
+    "  try { if (ready) { var cb = () => 1; } } finally {}",
+    "  for (var each = () => 1; ; ) break;",
+    "  cb.call(undefined);",
+    "  each.call(undefined);",
+    "  const inner = function () { var hidden = () => 1; };",
+    "  hidden.call(undefined);",
+    "}",
+    "class Holder { static { if (ready) { var held = () => 1; } held.call(undefined); } }",
+    "namespace Space { if (ready) { var spaced = () => 1; } spaced.call(undefined); }",
+    "held.call(undefined);",
+    "spaced.call(undefined);",
+  ])).functionValueCalls, [
+    { line: 2, receiver: "top", member: "call" },
+    { line: 6, receiver: "cb", member: "call" },
+    { line: 7, receiver: "each", member: "call" },
+    { line: 11, receiver: "held", member: "call" },
+    { line: 12, receiver: "spaced", member: "call" },
+  ]);
+});
+
+test("let, const, class and a function declaration bind in their block, a switch's in its whole case block, and the innermost binding shadows", async () => {
+  assert.deepEqual((await read([
+    "const fn = () => 1;",
+    "const data = { call() {} };",
+    "export function run(kind: number): void {",
+    "  { let fn = { call() {} }; fn.call(); }",
+    "  { class fn {} fn.call(undefined); }",
+    "  { let data = () => 1; data.call(undefined); }",
+    "  { function local() {} }",
+    "  local.call(undefined);",
+    "  switch (kind) { case 1: let cased = () => 1; break; case 2: cased.call(undefined); }",
+    "  fn.call(undefined);",
+    "}",
+  ])).functionValueCalls, [
+    { line: 6, receiver: "data", member: "call" },
+    { line: 9, receiver: "cased", member: "call" },
+    { line: 10, receiver: "fn", member: "call" },
+  ]);
+});
+
+test("a parameter binds in its function and a catch variable in its catch block, each shadowing an outer function value", async () => {
+  assert.deepEqual((await read([
+    "const fn = () => 1;",
+    "export function run(fn: { call(): void }): void {",
+    "  fn.call();",
+    "  try {} catch (fn) { fn.call(); }",
+    "  const caught = () => 1;",
+    "  try {} catch (caught) { caught.call(); }",
+    "  caught.call(undefined);",
+    "}",
+  ])).functionValueCalls, [{ line: 7, receiver: "caught", member: "call" }]);
+});
+
 test("this.<field> binds to the field of the enclosing class, through an arrow; an object-literal method or a function rebinds this", async () => {
   assert.deepEqual((await read([
     "class Holder {",
