@@ -235,6 +235,176 @@ independent oracle for each new change, and latency, peak memory and answer size
 5. `switch` clauses (TypeScript) and `@switch` cases (templates) as guards: the `one-of` predicate, fallthrough groups, the
    untested `case` guard.
 
+## Flow coverage (P3, proposed)
+
+**Invariant.** A carrier that holds the changed path ends in a use, in a next carrier, or in a frontier. Dropping it is
+allowed only by a rule this section names, and each such rule says why no consumer can read the change there. P3 starts
+by enforcing this, because a silent stop is the one failure an answer cannot show.
+
+**Measured baseline** (24 corpus queries, P3.0). One silent stop: a value stored in a service member and read by
+components through the injected service is never followed, because the readers of a member are searched only as
+`this.member` inside the declaring class. Frontiers, by share: a value handed to a request body or an unresolved helper
+(32%, requests are P5); a template event handler that passes the value to a component method (25%); signal views and
+callback results (`asReadonly`, `linkedSignal`, a callback that returns the value); array methods on the changed
+collection; object spreads and form writes; conditional reassignment. Not seen on response data: stores, validators,
+conversions and `@let` aliases (three untracked ones in the whole corpus, none on responses), so P3 builds nothing for
+stores, validators or conversions; an untracked alias that holds the change becomes a frontier.
+
+**What a carried value is.** Every step that could replace the followed value with another object ends the chain (a
+construction, a conversion, a call the reader cannot resolve, a write to the path). So the value a carrier holds is the
+parsed response itself or a part of it: an array it holds is an intrinsic `Array`, an object is a plain object, and
+parsing gives neither an own function member. A write to a member of a carried value (`items.map = f`, `Object.assign`
+or `Object.defineProperty` with it as target) ends its chain with a frontier at the write, wherever the chain reaches
+it, so a method the chain later calls on that value is the language's built-in one (a program that patches the built-in
+prototypes is outside the model). Containers the reader knows (observables, signals, promises, resources) are told apart
+from it by the step that produced them.
+
+**Member readers.** A member that holds the value is read through every receiver that provably denotes the instance that
+was written: `this` in the class and its subclasses, an instance the framework injects (`inject()`, a constructor
+parameter the injector fills), and the component instance in its template. Candidates come from the code graph's
+occurrences of the member, as the callers of a returning function do: the application expands them, the adapters read
+each one's syntax from its place. An occurrence through any other receiver (a local `new S()`, a parameter of unknown
+origin) is a frontier, since two instances of one class do not share a field's value; a member the graph cannot
+enumerate is a frontier too. A subclass that redeclares the member, or overrides an accessor, is a frontier at that
+declaration.
+
+**Template calls.** A template expression that passes the value to a method of its component (`(click)="add(owner())"`,
+`{{ label(owner()) }}`) follows it into that method's parameter, resolved on the component class or its bases, with the
+guard-boundary policy of a TypeScript argument. The carrier of the method's result names the template expression by its
+place in the template resource (start and end offset, callee, argument position), so two calls on one line stay apart,
+and the template reader resumes that expression. An event handler's result is read by the framework (`false` cancels
+the event's default action): it is a strict comparison with `false`, the use the descriptor already expresses.
+
+**One callee table.** Which calls keep the value, project it, or bind it to a callback parameter is one table of the
+TypeScript adapter, read by every step that meets a call; the scattered conditions it replaces move into it. Each row
+names its receiver kind (the carried value, or a known container), the callee (a built-in method of that kind, or an
+imported function whose module the reader resolves, as RxJS operators are today), the argument and callback parameter
+that receive the value or an element, and the path of the result (the same value, an element, a callback's return, or
+none). `reduce` binds the accumulator to the callback's return, so its element is a frontier; `flatMap` flattens one
+level. A method called on the changed value itself is a use (`steps` ending in a call), already decided by P2.
+
+**Copies.** An object spread carries the properties of its source in order: a later member the reader knows overrides
+a property, a later spread it cannot read makes every following path unknown (a frontier). `Object.assign` is followed
+only onto a fresh object literal target, whose result and target are the same object; any other target is a frontier.
+Spreading the changed value itself is a use: an array spread iterates it (`iterate`), an object spread of `null` or
+`undefined` copies nothing, which the copy's later reads cannot express, so it ends `unmodelled`.
+
+**Conditional reassignment.** A read that the followed value and a conditional write may both reach keeps its use and
+its frontier, and the use carries an untested `reassigned` guard: the value is not proven to reach it on the path that
+runs, so its verdict is `review`, never `incompatible` or `admits`.
+
+**Deduplication.** Two trails that reach the same place with different guards are both kept, keyed by their guard state
+(the second may lack the guard that made the first `admits`); a carrier reached through a second link keeps that link's
+attribution.
+
+**Cost.** A workspace is prepared once for a set of hypotheses: its snapshots, sources, code graphs, framework metadata,
+call sites and readers. Selecting the operation's links and serving handlers, and the fact envelope that declares the
+hypothesis, belong to each hypothesis, never to the preparation. A second hypothesis on the same workspace, and every
+hypothesis P4 derives from one diff, pays only its selection and its walk. Measured before P3 (P3.0): the walk is
+0.1-2 s; repeated preparation is 1.5-70 s per query. The preparation is released when its holder releases it, so memory
+is held for the hypotheses that use it and no longer.
+
+**Seams landed before the writers.** The prepared workspace and the per-hypothesis session as two port types; the
+member-occurrence query of the session (found, unresolved, unavailable) with the receiver's provenance; the template
+call carriers (into a method's parameter, and back to the template expression); the `reassigned` untested guard.
+
+**Delivery,** each step gated by `npm run check`, the measured silent stop as the first oracle case, and the cost of the
+same corpus queries before and after:
+
+1. The invariant: member readers, guard-distinct trails, every silent drop either a named rule or a frontier,
+   conditional reassignment as `review`.
+2. Template calls into component methods and back; untracked aliases and bindings that hold the change end in a
+   frontier.
+3. The callee table and copies.
+4. The prepared workspace reused across hypotheses.
+
+## Hypotheses from a diff (P4, proposed)
+
+A hypothesis written by hand answers "what if"; a change already made should not need one. Given a base and a head, P4
+derives what the change did to each response property, from the contract both snapshots declare, and answers it with
+the same evaluator a declared hypothesis uses.
+
+**Value sets.** What a place of a payload may hold is a value set: for each JSON class, either every value of the class
+or a list of literals, plus `null` and absence. Whether a property is required is read apart from whether it is
+declared. A declared property holds its declared shape; an undeclared one holds every value when the object is open,
+and nothing when it is closed. A property that is not required may also be absent; a required one may not, so a
+required property that a closed object does not declare can hold nothing, and its place is `unknown`. A shape is a domain value: the value set of each place, the properties of an object (and whether the object is
+open), the shape of array elements. A place the reader cannot state is `unknown` there, with its evidence and reason,
+and nothing below it is derived.
+
+**Derivation** (domain, pure). For each property path of the base shape, compared with the same path in the head: the
+introduced values are the head's value set minus the base's, and the retired values are the base's minus the head's.
+That is the whole rule; the change kinds are its names:
+
+| Introduced (head minus base) | Change |
+|---|---|
+| absence | `optional` (`removed` when absence is all the head allows) |
+| `null` | `nullable` |
+| every value of a class the base did not allow | `{ "type": class }`, one per class |
+| the values of a class the base allowed only as literals (an enumeration opened) | that class, with the base's literals named so no representative equals them |
+| literals | `{ "values": { "added" } }` |
+
+Retired literals are `values.removed`, read as P2 reads them (a strict comparison with one is `review`). A retired `null`
+or a retired absence (a property made non-nullable or required) is reported as a gained guarantee, with its place, and
+is not followed: a branch that tested for it may now be dead, which this phase does not search. A path where nothing is
+introduced or retired derives nothing. `renamed`, `wrapped` and `meaning` are never derived. The derived change is built
+normalized, as the parser builds a declared one; the parser stays the input of a written hypothesis, and its refusal of
+two `type` entries or of a literal outside a new type guards written input only. The base value set is the old
+guarantee the answer states, replacing the assumed one. A delta at the response root or at an array element itself (a
+path ending in `[]`) is an `unsupported-delta` frontier at its contract place until the hypothesis can address them.
+
+**Shared schemas.** Each pair of base and head schema nodes is compared once, and its relative delta is reported under
+every path that reaches it (`billing.city` and `shipping.city` both). A path that re-enters a pair it is already inside
+(a recursive type) stops there with a `recursive-shape` frontier naming the place.
+
+**Sources.** One driven port, the shapes of operations' success responses at a snapshot, with two adapters:
+
+- OpenAPI 3.x and Swagger 2.0 documents, through the adapter's existing reference resolution (one owner). Keywords
+  constrain together: `type` (a list in 3.1), `nullable` (3.0, restricting its own `type`), `enum`, `required`,
+  `properties`, `additionalProperties` (open unless `false`), `items`. `allOf` is read only when every branch is an
+  open object schema (no `additionalProperties: false`, since a closed branch forbids what the other branches declare)
+  and the branches declare disjoint properties or the same one identically: the result is open, declares every
+  branch's properties and requires every branch's required names. Any other `allOf`, and `oneOf`, `anyOf`, `not`, a
+  schema in `additionalProperties`, are `unknown` at that place. An operation whose success responses or media types do not all
+  declare the same schema (a `200` body beside a `204` without one) is `unknown` at its root.
+- Spring handlers of operations no contract document declares, under Jackson's default configuration: the handler's
+  return type, unwrapping `ResponseEntity<T>` and `Optional<T>`; collections and arrays are arrays of their element. A
+  class is an object of its logical wire properties, merged once from public getters (`getX`, `isX` for `boolean`),
+  public fields, record components and Lombok `@Data`, `@Getter` and `@Value`: `@JsonProperty` and `@JsonGetter` name a
+  property, `@JsonIgnore` and `access = WRITE_ONLY` drop it, `@JsonInclude(NON_NULL)` on the class or the member turns
+  `null` into absence. A primitive is never `null`; every other reference may be `null`, whatever annotation it
+  carries, since an annotation does not prove what is serialized. An enumeration is a string listing its constants'
+  wire names (`@JsonProperty` on a constant names it). `unknown` at their place: other `@JsonInclude` values
+  (`NON_EMPTY`, `NON_DEFAULT`, `NON_ABSENT`, `CUSTOM`), `@JsonValue`, `@JsonFormat` on an enumeration, `@JsonAnyGetter`,
+  `@JsonUnwrapped`, `@JsonSerialize`, `@JsonIgnoreProperties`, mixins, `Map`, `Page<T>` and any unresolved type. A
+  repository that configures the mapper (a naming strategy, a default inclusion, a customizer or an `ObjectMapper` it
+  builds) makes its Java shapes `unknown`.
+- A declared contract document wins over the code that implements it; a declared document the reader cannot read is
+  `unknown`, never replaced by the code's shape. The application decides this precedence.
+
+**Answer.** One fact over the change: for each property path with a delta, the derived change (normalized, with the base
+value set as the old guarantee), the base and head places in the contract as evidence, and its consequences as P2
+answers them, on the head snapshot, from one prepared workspace (P3). Gained guarantees are listed, not followed. An
+`unknown` shape or an unsupported delta is a frontier at its contract place. Operations the head no longer declares, or
+newly declares, are listed by name (the `impact` family reports them) and derive no hypothesis.
+
+**Cost.** Shapes are read only for operations whose contract files the change touched; each pair of schema nodes is
+compared once; the consequence walks are those of the declared form, over one prepared workspace.
+
+**Out of P4.** Java code that consumes another service's responses (only one corpus repository has it, a client of its
+own server); whether the producer still fills a property; dead branches behind a gained guarantee; request payloads (P5,
+which reuses value sets and their derivation with the opposite polarity: a value the server stops accepting breaks
+producers).
+
+**Seams landed before the writers.** The shape and value set types, the derived change built from a delta, the old
+guarantee in the answer, the shape port, and the use case's entry that answers one hypothesis on a prepared workspace.
+
+**Delivery.** (1) Shapes from contract documents, the derivation, the use case and the answer; oracle cases: the corpus
+commit that removes a property from a published schema, plus an enumeration opened to a string, one schema reached by two
+paths, an open object losing a declared property, and a recursive schema. (2) Shapes from Spring handlers, measured on the
+corpus DTO styles (plain getters, records, Lombok), with negative controls: a field renamed with its wire name pinned by
+`@JsonProperty` derives nothing, and a `NON_EMPTY` or `NON_DEFAULT` member is `unknown`.
+
 ## Output
 
 The RFC-0002 envelope. Uses are complete findings with their verdict (the witness, failing step or end and capability
@@ -253,12 +423,14 @@ surface.
 
 | Layer | Owns |
 |---|---|
-| `core/domain/contracts` | hypothesis, access path, path rewrites, value sets, change normalization, guard and verdict rules |
+| `core/domain/contracts` | hypothesis, access path, path rewrites, value sets, change normalization, guard and verdict rules, payload shapes and the hypotheses a pair of them derives |
 | `core/domain/languages` | the step semantics and prototype table of a consumer language (JavaScript for both adapters, from P2) |
 | `core/ports` | the driven port for flow steps and uses, the driving query family |
 | `core/application/contracts` | the worklist over chains, frontier accounting, the fact |
 | `core/adapters/typescript` | flow steps in classes and functions, router resolvers and component inputs |
 | `core/adapters/angular-compiler` | template uses, guards, aliases and child bindings |
+| `core/adapters/openapi` | payload shapes of operations from contract documents (P4) |
+| `core/adapters/spring` | payload shapes of operations from handler return types (P4) |
 
 ## Validation (F0 gate)
 
@@ -276,5 +448,5 @@ and consumers, validators, stores (NgRx, signal stores: frontier only), attribut
 
 1. Links matched by `suffix`, `route-overlap` or `gateway-prefix`. Recommended: a frontier with the basis, not followed.
 2. Attribution when the old contract is not declared. Recommended for F0: the assumed old guarantee, stated.
-3. A flow step that converts the value (`new Date(x)`, `Number(x)`) ends the chain today, so the JSON classes always
-   describe the value at the use. Recommended for P3: such a step carries the class it produces, not a frontier.
+3. A flow step that converts the value (`new Date(x)`, `Number(x)`) ends the chain, so the JSON classes always describe
+   the value at the use. P3 keeps it so: no conversion reached response data in the P3.0 baseline.
