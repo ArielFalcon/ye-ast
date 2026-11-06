@@ -123,6 +123,17 @@ test("a method no source's syntax states is a dispatch cut when an interface own
   assert.deepEqual(cutsOf(fact), [["unresolved-link", ["src/b.ts:2 send", "src/b.ts::Impl.send"]]]);
 });
 
+test("a supertype the index left unresolved names a type only when type arguments are what kept it unresolved", async () => {
+  const nodes = [SVC, RUN, fakeNode("Port", "interface", B, 1, 3), fakeNode("Port.send", "method", B, 2, 2, "send"), fakeNode("Impl", "class", B, 5, 7), fakeNode("Impl.send", "method", B, 6, 6, "send")];
+  const edges: FakeEdge[] = [...CONTAINS, { from: "Port", to: "Port.send", kind: "contains" }, { from: "Impl", to: "Impl.send", kind: "contains" }, call("run", "Port.send", 8, 4)];
+  const supertype = (name: string): FakeUnresolved => ({ from: "Impl", name, kind: "implements", file: B, line: 5, column: 20 });
+
+  const [plain, parameterized] = await Promise.all([factOf({ nodes, edges, unresolved: [supertype("lib.Port")] }), factOf({ nodes, edges, unresolved: [supertype("Port<String>")] })]);
+
+  assert.deepEqual(cutsOf(plain), [["unresolved-link", ["src/b.ts:2 send"]]]);
+  assert.deepEqual(cutsOf(parameterized), [["unresolved-link", ["src/b.ts:2 send", "src/b.ts::Impl.send"]]]);
+});
+
 test("a call codegraph synthesized from a source ye-ast ignores is not a step", async () => {
   const fact = await factOf({ nodes: [SVC, RUN, callee("bridge")], edges: [...CONTAINS, call("run", "bridge", 8, 4, { synthesizedBy: "interface-impl" })] });
   assert.deepEqual(valueOf(fact).steps.map((step) => [step.symbol, step.leaves]), [["run", undefined]]);

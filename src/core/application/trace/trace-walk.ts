@@ -11,7 +11,7 @@ import type { DeclaredCallable } from "../../ports/declared-member-names.port.ts
 import type { CodeGraphReader, GraphNodeId, GraphSymbol, GraphUnresolvedReference } from "../../ports/code-graph.port.ts";
 import type { ImportOriginSite, ImportOrigins } from "../../ports/import-origins.port.ts";
 import type { TraceBudget } from "../../ports/trace-queries.port.ts";
-import { createGraphNavigation } from "../navigation/graph-navigation.ts";
+import { createGraphNavigation, SUPERTYPE_EDGES } from "../navigation/graph-navigation.ts";
 import { containmentTree } from "../navigation/containment-tree.ts";
 
 /** What a body passes as a value runs later, if at all; only code can. */
@@ -19,6 +19,9 @@ const DEFERRED_KINDS: readonly string[] = ["function", "method"];
 
 /** Kinds that name a type and never a value, so a call through a member of that name cannot reach them. */
 const TYPE_ONLY_KINDS: readonly string[] = ["interface", "type_alias"];
+
+/** Declarations a supertype reference can name. */
+const TYPE_KINDS: readonly string[] = ["class", "interface", "component"];
 
 /** Declarations whose syntax says whether they have a body and whether a subtype can override them. */
 const CALLABLE_KINDS: readonly string[] = ["method", "function"];
@@ -129,13 +132,36 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
     kind: "unresolved-link",
     at: [placeAt(reference.file, reference.line, reference.name), ...sortedUnique([...reference.candidates, ...declarations.map(candidateOf)])],
   });
+  /**
+   * The types a type extends or implements: the index's edges, and a parameterized supertype (`Port<T>`) the index left
+   * unresolved, which names every type declaration of its raw name.
+   */
+  const supertypesOf = (type: GraphSymbol): readonly GraphSymbol[] => {
+    const edges = store.outgoingEdges([type.id], SUPERTYPE_EDGES);
+    navigation.load(edges.map((edge) => edge.target));
+    const parameterized = store
+      .unresolvedReferences([type.file])
+      .filter((reference) => reference.from === type.id && SUPERTYPE_EDGES.includes(reference.kind) && reference.name.includes("<"))
+      .flatMap((reference) => store.declarationsNamed([rawTypeName(reference.name)]).filter((declared) => TYPE_KINDS.includes(declared.kind)));
+    return [...edges.flatMap((edge) => navigation.symbolOf(edge.target) ?? []), ...parameterized];
+  };
+  const isBelow = (type: GraphSymbol, owners: ReadonlySet<GraphNodeId>): boolean => {
+    const visited = new Set<GraphNodeId>([type.id]);
+    for (let frontier = [type]; frontier.length > 0; ) {
+      const next = frontier.flatMap(supertypesOf).filter((above) => !visited.has(above.id));
+      if (next.some((above) => owners.has(above.id))) return true;
+      for (const above of next) visited.add(above.id);
+      frontier = next;
+    }
+    return false;
+  };
   /** The methods of the same name that the non-interface types below `owners` declare. */
-  const implementationsBelow = (symbol: GraphSymbol, owners: readonly GraphSymbol[]): GraphSymbol[] =>
-    owners
-      .flatMap((owner) => navigation.typesAround(owner, "down"))
-      .filter(({ type }) => type.kind !== "interface")
-      .flatMap(({ type }) => navigation.methodsOf(type))
-      .filter((method) => method.name === symbol.name);
+  const implementationsBelow = (symbol: GraphSymbol, owners: readonly GraphSymbol[]): GraphSymbol[] => {
+    const ownerIds = new Set(owners.map((owner) => owner.id));
+    return store
+      .declarationsNamed([symbol.name])
+      .filter((method) => method.kind === "method" && navigation.ownersOf(method).some((type) => type.kind !== "interface" && !ownerIds.has(type.id) && isBelow(type, ownerIds)));
+  };
   const dispatchCut = (symbol: GraphSymbol, implementations: readonly GraphSymbol[]): Cut => ({
     kind: "unresolved-link",
     at: [placeAt(symbol.file, symbol.startLine, symbol.name), ...sortedUnique(implementations.map(candidateOf))],
@@ -294,6 +320,11 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
     cuts: [...cuts, ...boundCuts("depth", stopped.depth, budget.depth), ...boundCuts("caller-budget", stopped.expansions, budget.expansions)],
     expanded: expansions,
   };
+}
+
+/** `Port` for `Port<T>` and for `pkg.Port<T>`. */
+function rawTypeName(name: string): string {
+  return name.slice(0, name.indexOf("<")).split(".").at(-1)!;
 }
 
 /** A call that reaches a property or field runs the value it holds, which its initializer built at construction. */

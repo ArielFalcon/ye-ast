@@ -941,6 +941,24 @@ test("a trace over a real index matches a decorated method to its syntax from th
   assert.deepEqual(answer.value.cuts.map((cut) => [cut.kind, ...cut.at]), [["unresolved-link", "src/deco.ts:4 run", "src/deco.ts::Child.run"]]);
 });
 
+test("a trace over a real index lists an implementation below a parameterized supertype the index left unresolved", async () => {
+  writeFileSync(join(repo, "src", "Generic.java"), [
+    "interface GPort<T> { void send(T x); }",
+    "interface GSub extends GPort<String> { void send(String x); }",
+    "class GImpl implements GSub { public void send(String x) {} }",
+    "class GUse { void go(GPort<String> p) { p.send(\"x\"); } }",
+    "",
+  ].join("\n"));
+  git("add", "-A");
+  git("commit", "-q", "-m", "generic");
+  const { trace } = composeQueries({ scratchRoot });
+
+  const answer = await trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: "src/Generic.java", symbol: "GUse.go" }] });
+
+  assert.ok(answer.ok && answer.value.status === "partial");
+  assert.deepEqual(answer.value.cuts.map((cut) => [cut.kind, ...cut.at]), [["unresolved-link", "src/Generic.java:1 send", "src/Generic.java::GImpl.send"]]);
+});
+
 test("callers over a range inside a property initializer still seeds the class that holds it", async () => {
   commitPage();
   const { impact } = composeQueries({ scratchRoot });
