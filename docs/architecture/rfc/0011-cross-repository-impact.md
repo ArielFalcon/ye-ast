@@ -107,7 +107,9 @@ A method a path calls (`pageLink.toQuery()`, `this.area()`) is read when its rec
 `super`, a field or a parameter whose declared type names the class. The receiver may be any subclass, so the method the
 class declares or inherits and every override a subclass declares must write the same, a subclass being any class whose
 `extends` resolves to that class through its own file's imports, under whatever name (`super` reads only the inherited
-one). A method that reads its own parameters is not read, since its arguments are not substituted.
+one). A method that reads its own parameters is not read, since its arguments are not substituted, nor one that a class
+from the receiver's up to the declaring one, or a subclass, assigns through `this`, since the instance then holds the
+assigned function.
 
 A function a path calls, and the function an `httpResource` takes its request from, is read at every `return` of its own
 body; the functions it declares return their own. A bare `return`, and an end the body reaches without returning, return

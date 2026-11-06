@@ -598,6 +598,19 @@ test("an override must agree whatever name the subclass's file gives the class i
   assert.deepEqual(sites(await reader.of([base, child, use], "shop-web")), ["unknown unresolved@src/app/use.ts:2"]);
 });
 
+test("a method the class or a subclass assigns through this is not read from its declaration", async () => {
+  const file = source("paths.ts", [
+    "class Field { path = () => '/old'; constructor() { this.path = () => '/new' } }",
+    "class Method { path(): string { return '/old' } constructor() { this.path = () => '/new' } }",
+    "class Base { path(): string { return '/old' } }",
+    "class Sub extends Base { constructor() { super(); this.path = () => '/new' } }",
+    "class Kept { path(): string { return '/kept' } }",
+    "export function load(field: Field, method: Method, base: Base, kept: Kept) { fetch(field.path()); fetch(method.path()); fetch(base.path()); fetch(kept.path()) }",
+  ].join("\n"));
+
+  assert.deepEqual(sites(await reader.of([file], "shop-web")), ["unknown unresolved@paths.ts:6", "unknown unresolved@paths.ts:6", "unknown unresolved@paths.ts:6", "GET /kept@paths.ts:6"]);
+});
+
 test("a receiver a loop or a catch clause binds is not typed by an outer parameter of the same name", async () => {
   const file = source("cache.ts", [
     "import { HttpClient } from '@angular/common/http'",

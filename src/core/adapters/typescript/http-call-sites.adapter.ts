@@ -950,6 +950,7 @@ class Reader {
     const inherited = await this.inheritedMethod(receiver.shape, receiver.declaration, callee.name.text, new Set());
     if (inherited === undefined) return undefined;
     const overrides = receiver.virtual ? await this.overrides(receiver.declaration, callee.name.text, new Set()) : [];
+    if (overrides === undefined) return undefined;
     let agreed: Evaluation | undefined;
     for (const { shape: held, method } of [inherited, ...overrides]) {
       const visited = `${held.source.fileName}\0method ${method.pos}`;
@@ -975,8 +976,9 @@ class Reader {
     return found === undefined ? undefined : { ...found, virtual: true };
   }
 
+  /** The method a class declares or inherits under a name; none once a class on the way assigns that name through `this`. */
   private async inheritedMethod(shape: FileShape, declaration: ts.ClassDeclaration, name: string, visited: Set<ts.ClassDeclaration>): Promise<HeldMethod | undefined> {
-    if (visited.has(declaration)) return undefined;
+    if (visited.has(declaration) || writes(declaration, name)) return undefined;
     visited.add(declaration);
     const member = memberNamed(declaration, name);
     if (member !== undefined) {
@@ -988,16 +990,19 @@ class Reader {
     return found === undefined ? undefined : this.inheritedMethod(found.shape, found.declaration, name, visited);
   }
 
-  /** The methods of that name the subclasses of a class declare, at any depth. */
-  private async overrides(declaration: ts.ClassDeclaration, name: string, visited: Set<ts.ClassDeclaration>): Promise<HeldMethod[]> {
+  /** The methods of that name the subclasses of a class declare, at any depth; none once a subclass assigns the name through `this`. */
+  private async overrides(declaration: ts.ClassDeclaration, name: string, visited: Set<ts.ClassDeclaration>): Promise<HeldMethod[] | undefined> {
     if (visited.has(declaration)) return [];
     visited.add(declaration);
     const found: HeldMethod[] = [];
     for (const { shape, declaration: subclass } of await this.subclassesOf(declaration)) {
+      if (writes(subclass, name)) return undefined;
       const member = memberNamed(subclass, name);
       const method = member === undefined ? undefined : functionOf(member);
       if (method !== undefined) found.push({ shape, method });
-      found.push(...(await this.overrides(subclass, name, visited)));
+      const below = await this.overrides(subclass, name, visited);
+      if (below === undefined) return undefined;
+      found.push(...below);
     }
     return found;
   }
