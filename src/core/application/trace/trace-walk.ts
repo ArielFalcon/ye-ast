@@ -2,6 +2,7 @@ import { isSeedable } from "../../domain/change/seeds.ts";
 import { CALL_EDGE_KINDS, FIELD_KINDS, isIgnoredEdge } from "../../domain/impact/edge-policy.ts";
 import { declarationAnchor, placeAt, referenceKey } from "../../domain/impact/impact-cuts.ts";
 import { NOT_DECLARED_KINDS, sortedUnique } from "../../domain/impact/importers-fact.ts";
+import { branchesOf, declarationPath } from "../../domain/shared/declaration-tree.ts";
 import type { Cut } from "../../domain/shared/fact.ts";
 import { calleeOf, compareOccurrence, ownMemberOf, sameOccurrence, type EdgeOccurrence, type OrderedPlace } from "../../domain/trace/call-place.ts";
 import type { TraceVia } from "../../domain/trace/trace-fact.ts";
@@ -10,6 +11,7 @@ import type { CodeGraphReader, GraphNodeId, GraphSymbol, GraphUnresolvedReferenc
 import type { ImportOriginSite, ImportOrigins } from "../../ports/import-origins.port.ts";
 import type { TraceBudget } from "../../ports/trace-queries.port.ts";
 import { createGraphNavigation } from "../navigation/graph-navigation.ts";
+import { containmentTree } from "../outline/outline.ts";
 
 /** What a body passes as a value runs later, if at all; only code can. */
 const DEFERRED_KINDS: readonly string[] = ["function", "method"];
@@ -95,6 +97,17 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
   const membersNamed = (name: string): readonly GraphSymbol[] => declarationsNamed(name).filter((symbol) => !TYPE_ONLY_KINDS.includes(symbol.kind));
 
   const anchorOf = (symbol: GraphSymbol): string => declarationAnchor(symbol.file, symbol.name);
+
+  const pathsByFile = new Map<string, ReadonlyMap<GraphNodeId, string>>();
+  /** A candidate by its file and the dotted containment path the outline gives it, so two members of one name tell their owners apart. */
+  const candidateOf = (symbol: GraphSymbol): string => {
+    let paths = pathsByFile.get(symbol.file);
+    if (paths === undefined) {
+      paths = new Map(branchesOf(containmentTree(store, store.symbolsInFiles([symbol.file]))).map((branch) => [branch.declaration.id, declarationPath(branch)]));
+      pathsByFile.set(symbol.file, paths);
+    }
+    return declarationAnchor(symbol.file, paths.get(symbol.id) ?? symbol.name);
+  };
   /**
    * The place reads `<path>:<line> <spelling>`: the path is repository-relative and the line digits, so the first
    * `:<digits>` followed by a space ends the path, whatever spaces the path or the spelling hold; only a path that
@@ -102,7 +115,7 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
    */
   const unresolvedAt = (reference: GraphUnresolvedReference, declarations: readonly GraphSymbol[]): Cut => ({
     kind: "unresolved-link",
-    at: [placeAt(reference.file, reference.line, reference.name), ...sortedUnique([...reference.candidates, ...declarations.map(anchorOf)])],
+    at: [placeAt(reference.file, reference.line, reference.name), ...sortedUnique([...reference.candidates, ...declarations.map(candidateOf)])],
   });
   /**
    * A member of an interface has no body the index proves: it runs whatever implementation dispatch picks. Until R7
@@ -116,7 +129,7 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
       .filter(({ type }) => type.kind !== "interface")
       .flatMap(({ type }) => navigation.methodsOf(type))
       .filter((method) => method.name === symbol.name);
-    return { kind: "unresolved-link", at: [placeAt(symbol.file, symbol.startLine, symbol.name), ...sortedUnique(implementations.map(anchorOf))] };
+    return { kind: "unresolved-link", at: [placeAt(symbol.file, symbol.startLine, symbol.name), ...sortedUnique(implementations.map(candidateOf))] };
   };
   const childAt = (symbol: GraphSymbol, line: number | null, column: number | null, spelling: string, via: TraceVia, deferred?: true): Child => ({
     symbol,

@@ -1131,7 +1131,7 @@ export function renderOutline(fact: Fact<OutlineValue>, detail: ResponseMode = "
   return lines.join("\n");
 }
 
-const TRACE_FULL_GUIDE = "Select value.steps in pre-order: id, parent, depth, file, symbol, kind, line, endLine, at (the call in the parent), via, deferred, seen (the id that expanded it), leaves (folded terminal declarations with file, start, end) and external (calls leaving the repository by module). value.roots lists the root step ids per target; value.readingPlan.ranges lists file, start, end and the step ids each range covers, with the total lines. When partial, an unresolved-link cut is at[0] \"file:line spelling\" followed by its candidates.";
+const TRACE_FULL_GUIDE = "Select value.steps in pre-order: id, parent, depth, file, symbol, kind, line, endLine, at (the call in the parent), via, deferred, seen (the id that expanded it), leaves (folded terminal declarations with file, start, end) and external (calls leaving the repository by module). value.roots lists the root step ids per target; value.readingPlan.ranges lists file, start, end and the step ids each range covers, with the total lines. When partial, an unresolved-link cut is at[0] \"file:line spelling\" followed by its candidates, each \"file::Owner.member\" by containment path.";
 
 const TRACE_BRANCHES = "branches are not evaluated: every call in a body is listed, whichever branch makes it";
 
@@ -1204,15 +1204,26 @@ function tracePlaceLine(place: TracePlace): string {
   return `    ${place.file}:${place.line} ${place.spelling}${place.candidates.length === 0 ? "" : ` (${place.candidates.join(", ")})`}`;
 }
 
-/** One line per trailing name and candidate set, most calls first, then by name: its calls, its files and its candidates, counted when shorter. */
+/** A candidate without its file: `src/a.ts::Store.get` reads `Store.get`. */
+function candidatePath(candidate: string): string {
+  const separator = candidate.indexOf("::");
+  return separator === -1 ? candidate : candidate.slice(separator + 2);
+}
+
+/**
+ * One line per trailing name and candidate set, most calls first, then by name: its calls, its files and its candidates
+ * by containment path, counted when that is shorter or when two candidates share a path.
+ */
 function traceCallGroupLines(places: readonly TracePlace[]): string[] {
   const groups = [...Map.groupBy(places, (place) => JSON.stringify([trailingName(place.spelling), place.candidates.toSorted(compareText)]))]
     .map(([key, inGroup]) => ({ key, name: trailingName(inGroup[0]!.spelling), candidates: inGroup[0]!.candidates.toSorted(compareText), calls: inGroup.length, files: new Set(inGroup.map(({ file }) => file)).size }))
     .sort((a, b) => b.calls - a.calls || compareText(a.name, b.name) || compareText(a.key, b.key));
   return groups.map(({ name, candidates, calls, files }) => {
-    const listed = candidates.join(", ");
+    const shown = [...new Set(candidates.map(candidatePath))].sort(compareText);
+    const listed = shown.join(", ");
     const counted = `${candidates.length} ${candidates.length === 1 ? "candidate" : "candidates"}`;
-    const could = candidates.length === 0 ? "" : preferShorterText(listed, counted) === listed ? ` → could be: ${listed}` : ` → ${counted}`;
+    const listable = shown.length === candidates.length && preferShorterText(listed, counted) === listed;
+    const could = candidates.length === 0 ? "" : listable ? ` → could be: ${listed}` : ` → ${counted}`;
     return `    ${name} ×${calls} in ${files} ${files === 1 ? "file" : "files"}${could}`;
   });
 }

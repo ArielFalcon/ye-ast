@@ -218,6 +218,17 @@ test("a trace summary groups unresolved calls by trailing name and sorted candid
   assert.ok(text.includes("  unresolved-link (4 calls):\n    get ×2 in 2 files → could be: A, B\n    get ×1 in 1 file → could be: C\n    run ×1 in 1 file\n"), text);
 });
 
+test("a trace summary lists candidates by their containment path when shorter than their count, and counts them when longer or when two share a path", () => {
+  const text = renderTrace(traceFact([
+    { kind: "unresolved-link", at: ["src/a.ts:3 x.get", "src/store.ts::Store.get"] },
+    { kind: "unresolved-link", at: ["src/a.ts:5 y.put", "src/cache.ts::LocalCache.put", "src/store.ts::Store.put"] },
+    { kind: "unresolved-link", at: ["src/a.ts:7 z.run", "src/a.ts::A.run", "src/b.ts::A.run"] },
+  ]));
+  assert.ok(text.includes("    get ×1 in 1 file → could be: Store.get\n"), text);
+  assert.ok(text.includes("    put ×1 in 1 file → 2 candidates\n"), text);
+  assert.ok(text.includes("    run ×1 in 1 file → 2 candidates\n"), text);
+});
+
 test("a trace summary that groups unresolved calls ends the cut block by naming the modes that list each place", () => {
   const text = renderTrace(traceFact([{ kind: "unresolved-link", at: ["src/order.ts:15 this.handler.handle"] }]));
   assert.ok(text.endsWith('\n    Call places omitted; use mode: "details" to list each call with its file, line and candidates, or mode: "full" for the original structured fact.'), text);

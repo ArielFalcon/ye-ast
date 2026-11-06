@@ -59,7 +59,7 @@ A call is `callee(args)` or `receiver.member(args)`; each rule settles it to one
 | R4 | A bare name or a receiver identifier bound in the file: a local or a parameter whose declaration fixes its origin (`inject(T)`, `new T()`, `const x = this.f`, a type annotation `: T`), an import (a repository file: its export; a package: external with the package name), or no binding at all (a global: `global#Math`) | a step, a leaf |
 | R5 | A chain on a call result `head(...).m(...)`: the head is settled first; when it is a repository declaration with a declared return type, `m` is looked up in that type; when the type is external or absent, `m` is external of it | a step or a leaf per link of the chain |
 | R6 | Closed world, narrowed to what a name lookup proves (below): an unsettled call proven not to reach repository code | a leaf `external` |
-| R6b | Otherwise | a cut `unresolved-link` at the place, listing the repository declarations of that name as candidates |
+| R6b | Otherwise | a cut `unresolved-link` at the place, listing the repository declarations of that name as candidates, each `file::path` with the dotted containment path the outline gives it (`src/a.ts::Store.get`; a top-level one `src/a.ts::get`) |
 
 R6 applies only where the name at the call is the name of the callee:
 
@@ -138,14 +138,15 @@ steps:
       external: slf4j: info; lombok builder: discountRequest, customerId, checkout, build
 cuts:
   unresolved-link (1 call):
-    apply ×1 in 1 file → 2 candidates
+    apply ×1 in 1 file → could be: DiscountPolicy.apply
     Call places omitted; use mode: "details" to list each call with its file, line and candidates, or mode: "full" for the original structured fact.
 ```
 
 The effects come first, since they decide the plan; steps follow the MCP depth summary and `expand` of the latency plan.
 In `summary` the reading plan takes one line per file, files in their first appearance, and the unresolved calls one
-line per trailing name and candidate set, most calls first, with the candidates listed or counted, whichever is
-shorter (RFC-0017); `details` lists each range and each call with its file, line and candidates.
+line per trailing name and candidate set, most calls first, with the candidates listed by their containment path or
+counted, whichever is shorter (RFC-0017), and counted when two of them share a path; `details` lists each range and
+each call with its file, line and candidates, each with its file.
 
 ### Acceptance
 
