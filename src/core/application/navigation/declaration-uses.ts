@@ -136,9 +136,9 @@ export async function usesOf(node: GraphSymbol, input: UsesInput): Promise<{ fou
     }
     if (binding.kind === "local") return "local";
     if (binding.kind === "declared") {
-      const declaration = single(navigation.symbolsInFile(reference.file).filter((symbol) => symbol.name === binding.root && binding.lines.some((line) => symbol.startLine <= line && line <= symbol.endLine)));
+      const candidates = navigation.symbolsInFile(reference.file).filter((symbol) => symbol.name === binding.root && binding.lines.some((line) => symbol.startLine <= line && line <= symbol.endLine));
       /** A value a function around the body declares and the index holds no node of is a local root (plan D4). */
-      return declaration ?? (binding.captured ? "local" : undefined);
+      return candidates.length === 0 && binding.captured ? "local" : single(candidates);
     }
     if (binding.kind === "located") return single(branchesOf(containmentTree(store, navigation.symbolsInFile(binding.file))).filter((branch) => declarationPath(branch) === binding.path).map((branch) => branch.declaration));
     if (binding.kind !== "import") return undefined;

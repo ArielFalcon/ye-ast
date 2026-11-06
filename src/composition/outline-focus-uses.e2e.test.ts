@@ -13,6 +13,7 @@ const FILES: Record<string, string> = {
   "decorated.ts": "function decorate(value: any, context: any) {}\n@decorate\nexport class External {}\nexport function together() { return External.bind(null); }\n",
   "multiline.ts": "export\nfunction\nexternal() { return 1; }\nexport function together() { return external.call(null); }\n",
   "factory.ts": "export function make(deps: { graph: { open(): number } }) {\n  return function together() { return deps.graph.open(); };\n}\n",
+  "ambiguous.ts": "export function handler() {\n  const handler = () => 1;\n  function together() { return handler.call(null); }\n  return together;\n}\n",
 };
 
 let root: string;
@@ -57,4 +58,11 @@ test("a function whose signature spans several lines, used by the focused body, 
 
 test("a parameter of a factory around the focused function is a local root: no use and no cut", async () => {
   assert.deepEqual(await usesOf("factory.ts"), []);
+});
+
+test("a captured value two indexed declarations could be is a cut, never a local root", async () => {
+  const answer = await composeQueries({ scratchRoot }).outline.outline({ repo, repoId: "outline-focus-uses", revision: "HEAD", focus: [{ file: "ambiguous.ts", symbol: "together" }] });
+  assert.ok(answer.ok, JSON.stringify(answer));
+  assert.equal(answer.value.status, "partial", JSON.stringify(answer.value));
+  assert.deepEqual(answer.value.value.focus?.[0]?.uses, []);
 });
