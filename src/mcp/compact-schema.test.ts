@@ -98,7 +98,7 @@ const INPUT_CONSTRAINTS: Record<string, string> = {
   ye_ast_impact: "f62a8a60a9877663f22d720fc0d41694adb6db660bb5003a7e7b21145e253d20",
   ye_ast_callers: "894a7aa967a3fb5502c54c57884941655d33886c7dab3831bb54c3316d6f60cd",
   ye_ast_importers: "d99d6f4643edcc0cfd0114018fe1faa2a7a2df6e2930e2c767acd9960ae39aca",
-  ye_ast_outline: "d99d6f4643edcc0cfd0114018fe1faa2a7a2df6e2930e2c767acd9960ae39aca",
+  ye_ast_outline: "5c00d30f7ede25fe714036ce42580878a8e98297394ed0af1675dbcd0fe31280",
   ye_ast_workspace: "be2953f74d297b7d286e974b18b488c4137a6f1f9c5c94385701b1fdd2893244",
   ye_ast_decisions: "be2953f74d297b7d286e974b18b488c4137a6f1f9c5c94385701b1fdd2893244",
 };

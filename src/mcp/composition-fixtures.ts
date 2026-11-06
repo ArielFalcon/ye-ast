@@ -9,7 +9,7 @@ import type { RepositoryEvidence } from "../core/domain/shared/repository-eviden
 import type { EntrypointMap } from "../core/domain/map/entrypoint-map.ts";
 import type { ImpactValue } from "../core/domain/impact/impact-fact.ts";
 import type { ImportersValue } from "../core/domain/impact/importers-fact.ts";
-import type { OutlineValue } from "../core/domain/outline/outline-fact.ts";
+import type { OutlineListing, OutlineValue } from "../core/domain/outline/outline-fact.ts";
 import type { CallSite } from "../core/domain/topology/call-site.ts";
 import type { WorkspaceImpactValue, RepoImpact } from "../core/ports/workspace-impact-queries.port.ts";
 import type { DecisionValue } from "../core/ports/decision-queries.port.ts";
@@ -189,7 +189,7 @@ export function importersValue(): ImportersValue {
   };
 }
 
-export function outlineValue(): OutlineValue {
+export function outlineValue(): OutlineListing {
   return {
     files: [
       {

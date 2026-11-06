@@ -483,15 +483,19 @@ function importers(b: Builder, root: ReadContext, value: ImportersValue): void {
 }
 
 function outline(b: Builder, root: ReadContext, value: OutlineValue): void {
-  value.files.forEach((held, index) => {
+  const declared = (path: string, fileAt: string, declaration: OutlineDeclaration, at: string): PartId => {
+    const anchor = b.anchor(root.here, { path, symbol: declaration.name, line: declaration.line, endLine: declaration.endLine }, root.id, at, fileAt);
+    const children = declaration.children?.map((child, k) => declared(path, fileAt, child, `${at}/children/${k}`));
+    return b.part({ kind: "outline-declaration", anchor, kindName: declaration.kind, ...(children !== undefined && { children }) }, root.id, [at]);
+  };
+  value.focus?.forEach((match, index) => {
+    const pointer = `/value/focus/${index}`;
+    declared(match.file, `${pointer}/file`, match.declaration, `${pointer}/declaration`);
+  });
+  value.files?.forEach((held, index) => {
     const pointer = `/value/files/${index}`;
     const file = b.file(root.here, held.file, root.id, `${pointer}/file`);
-    const declared = (declaration: OutlineDeclaration, at: string): PartId => {
-      const anchor = b.anchor(root.here, { path: held.file, symbol: declaration.name, line: declaration.line, endLine: declaration.endLine }, root.id, at, `${pointer}/file`);
-      const children = declaration.children?.map((child, k) => declared(child, `${at}/children/${k}`));
-      return b.part({ kind: "outline-declaration", anchor, kindName: declaration.kind, ...(children !== undefined && { children }) }, root.id, [at]);
-    };
-    const declarations = held.declarations.map((declaration, j) => declared(declaration, `${pointer}/declarations/${j}`));
+    const declarations = held.declarations.map((declaration, j) => declared(held.file, `${pointer}/file`, declaration, `${pointer}/declarations/${j}`));
     const imports = held.imports.map((imported, j) => {
       const at = `${pointer}/imports/${j}`;
       return b.part({ kind: "file-dependency", from: file, to: b.file(root.here, imported, root.id, at), category: "outline-import" }, root.id, [at]);

@@ -56,7 +56,7 @@ When to call:
 - ye_ast_callers: before changing, renaming or deleting a declaration (name or line range): its dependents and reaching entrypoints.
 - ye_ast_impact: review a diff (base..head, or trusted live edits): what changed declarations reach; entrypoints added, removed or altered.
 - ye_ast_importers: before moving, renaming or deleting a file or changing its exports: who imports or names it.
-- ye_ast_outline: declaration spans and imports, to choose line ranges to read or target.
+- ye_ast_outline: declaration spans and imports, to choose line ranges to read or target; focus on one declaration by dotted path or line after the first listing.
 - ye_ast_workspace: which other repositories this one names (HTTP, messaging, dependencies), to choose clones.
 - ye_ast_decisions: workspace configuration gaps with evidence-backed options; it writes nothing.
 - ye_ast_compose: 1..16 of these queries in one call, merging shared entities. Queries rerun; nothing is stored and captures are not atomic, so obtain dependent coordinates first.
@@ -67,7 +67,7 @@ Repositories and snapshots: declared repository IDs: ${available.join(", ")}. re
 
 Narrowing and paging: scope globs limit coverage (exclude wins). impact changed picks the diff paths that start the walk (the seeds); unlike scope, it does not limit where consequences are found. Unmatched globs are errors. budget limits traversal, not response length; raise a bound only when a cut names it. Entrypoints, callers and impact page evidence the text omits: supply select and page together, page.limit required; a cursor needs the same selection and limit. Answers give the coordinates and owner each selection needs; select lists the kinds per tool. expect asserts the recovery identity; replay reruns the query and fails if the result changed (no old capture is kept) and requires workspace.
 
-Errors: isError is a fault, not an empty fact: follow its next step and "fault fields:". unknown-symbol: use a declared name or line range (ye_ast_outline lists them); unknown-change-path: correct the changed globs.`;
+Errors: isError is a fault, not an empty fact: follow its next step and "fault fields:". unknown-symbol: use a declared name or line range (ye_ast_outline lists them); top-level-line: focus on a line inside a declaration; unknown-change-path: correct the changed globs.`;
 }
 
 const REPLAY_GUIDE = { replay: "Copy verbatim from the recovery recipe of a previous workspace answer; requires workspace." };
@@ -232,20 +232,27 @@ const finding = z.discriminatedUnion("status", [
     .refine((item) => !("value" in item))
     .meta({ not: { required: ["value"] } }),
 ]);
+const outlineDeclaration = z.looseObject({ kind: z.string(), name: z.string(), line: z.number(), endLine: z.number() });
 const shapes = {
   entrypoints: z.looseObject({ entrypoints: factOf(z.array(finding)) }),
   impact: z.union([impact, workspaceImpact]),
   importers: z.looseObject({
     files: z.array(z.looseObject({ file: z.string(), importers: strings, users: strings, unresolvedNamers: strings })),
   }),
-  outline: z.looseObject({
-    files: z.array(z.looseObject({
-      file: z.string(),
-      declarations: z.array(z.looseObject({ kind: z.string(), name: z.string(), line: z.number(), endLine: z.number() })),
-      imports: strings,
-    })),
-    unheld: strings,
-  }),
+  outline: z.union([
+    z.looseObject({
+      files: z.array(z.looseObject({
+        file: z.string(),
+        declarations: z.array(outlineDeclaration),
+        imports: strings,
+      })),
+      unheld: strings,
+    }),
+    z.looseObject({
+      focus: z.array(z.looseObject({ file: z.string(), selector: z.string(), path: z.string(), ancestors: z.array(outlineDeclaration), declaration: outlineDeclaration, omitted: z.number() })),
+      unheld: strings,
+    }),
+  ]),
   workspace: z.looseObject({
     workspace: workspaceIdentity,
     repositorySnapshots: snapshots,
@@ -567,7 +574,7 @@ export function createMcpServer(deps: McpDeps): McpServer {
     "ye_ast_outline",
     {
       title: "Shape of files",
-      description: "Use to choose line ranges before reading or targeting code: indexed declaration spans and imports of files, without source. Members are listed under the declaration the graph's contains edges place them in; one no edge places stays at the top level. Unavailable files report cuts, not empty lists. Match revision/live to the source you inspect.",
+      description: "Use to choose line ranges before reading or targeting code: indexed declaration spans and imports of files, without source. Members are listed under the declaration the graph's contains edges place them in; one no edge places stays at the top level. Instead of files, focus on declarations: {file, symbol} takes a dotted path (Class.member, a bare name at any depth), {file, line} the innermost declaration holding the line; each match comes with its containers, its subtree and how many of the file's declarations were omitted, without imports, and its path is accepted verbatim by ye_ast_callers. Unavailable files report cuts, not empty lists. Match revision/live to the source you inspect.",
       inputSchema: compactInput(TOOL_INPUTS.outline),
       annotations,
     },

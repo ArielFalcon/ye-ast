@@ -4,7 +4,7 @@ import { compareText } from "./code-node.ts";
 export type SchemaVersion = `${number}.${number}.${number}`;
 
 /** The schema version of every fact this build produces. */
-export const SCHEMA: SchemaVersion = "0.20.0";
+export const SCHEMA: SchemaVersion = "0.21.0";
 
 export type SnapshotRef =
   | { repo: string; kind: "sha"; sha: string }
@@ -61,6 +61,8 @@ export interface DeclaredConfig {
   targets?: readonly string[];
   /** The files `impact.importers` was asked about. */
   files?: readonly string[];
+  /** The selectors an outline was asked to focus on, as `<file>:<symbol>` or `<file>:<line>`, in the request's fixed order. */
+  focus?: readonly string[];
   /** The globs over the changed paths `impact.ofChange` was asked to seed from, in their fixed order. */
   changed?: readonly string[];
   /** What the export may take from a commit, when the host bounded it. */

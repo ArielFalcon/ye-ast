@@ -57,3 +57,14 @@ export function selectedBySymbol<D extends TreeDeclaration>(tree: readonly Decla
     return names.some((_, start) => names.slice(start).join(".") === symbol);
   });
 }
+
+/**
+ * The innermost declarations whose span holds a 1-based line: a container is passed over when a declaration the tree
+ * places inside it also holds the line, whatever their spans say about each other. Several only when unrelated
+ * declarations hold it; none when the line lies at the file's top level.
+ */
+export function innermostAt<D extends TreeDeclaration>(tree: readonly DeclarationBranch<D>[], line: number): DeclarationBranch<D>[] {
+  const holds = ({ declaration }: DeclarationBranch<D>): boolean => declaration.startLine <= line && line <= declaration.endLine;
+  const heldInside = (branch: DeclarationBranch<D>): boolean => branch.children.some((child) => holds(child) || heldInside(child));
+  return branchesOf(tree).filter((branch) => holds(branch) && !heldInside(branch));
+}

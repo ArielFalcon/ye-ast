@@ -4,7 +4,7 @@ import { createInterface } from "node:readline";
 import { PassThrough } from "node:stream";
 import type { EntrypointQueries } from "../core/ports/entrypoint-queries.port.ts";
 import type { ImpactFault, ImpactQueries } from "../core/ports/impact-queries.port.ts";
-import type { OutlineQueries } from "../core/ports/outline-queries.port.ts";
+import type { OutlineFault, OutlineQueries } from "../core/ports/outline-queries.port.ts";
 import type { WorkspaceQueries } from "../core/ports/workspace-queries.port.ts";
 import type { DecisionQueries } from "../core/ports/decision-queries.port.ts";
 import { REDACTED, type Redaction } from "../core/ports/redaction.port.ts";
@@ -31,7 +31,7 @@ const redaction: Redaction = {
   containsSecret: (text) => text.includes(SECRET),
 };
 
-type Answer = Result<unknown, ImpactFault>;
+type Answer = Result<unknown, ImpactFault | OutlineFault>;
 type Call = { operation: string; request: Record<string, unknown> };
 
 interface Fakes {
@@ -238,6 +238,43 @@ test("impact.ofChange passes changed to ofChange as a typed value", async () => 
   await session.receive();
 
   assert.deepEqual(calls[0]?.request.changed, ["src/a/**"]);
+});
+
+test("outline.files passes focus selectors to outline in place of files", async () => {
+  const { deps, calls } = fakes();
+  const session = await untrusted(deps);
+  const { files: _, ...base } = OPERATIONS[4].params;
+  const focus = [{ file: "a.ts", symbol: "Api.get" }, { file: "a.ts", line: 97 }];
+
+  session.send(request(1, METHOD.outlineFiles, { ...base, focus }));
+  await session.receive();
+
+  assert.deepEqual(calls[0]?.request.focus, focus);
+  assert.equal("files" in (calls[0]?.request ?? {}), false);
+});
+
+test("outline params with both files and focus, neither, or a focus line that is not positive are invalid", async () => {
+  const { deps, calls } = fakes();
+  const session = await untrusted(deps);
+  const { files, ...base } = OPERATIONS[4].params;
+  const invalid: unknown[] = [{ ...base, files, focus: [{ file: "a.ts", line: 3 }] }, base, { ...base, focus: [{ file: "a.ts", line: 0 }] }];
+
+  for (const [id, params] of invalid.entries()) session.send(request(id, METHOD.outlineFiles, params));
+  for (let n = 0; n < invalid.length; n++) assert.equal((await session.receive()).error?.code, ERROR_CODE["invalid-params"]);
+
+  assert.deepEqual(calls, []);
+});
+
+test("a top-level line answers its code and names every entry, redacted", async () => {
+  const { deps, behave } = fakes();
+  behave("outline", async () => ({ ok: false, fault: { kind: "top-level-line", detail: "no declaration", entries: [{ file: "a.ts", line: 1, candidates: [`Api${SECRET}`] }] } }));
+  const session = await untrusted(deps);
+
+  session.send(request(1, METHOD.outlineFiles, OPERATIONS[4].params));
+  const answer = await session.receive();
+
+  assert.equal(answer.error?.code, ERROR_CODE["top-level-line"]);
+  assert.deepEqual(answer.error?.data.entries, [{ file: "a.ts", line: 1, candidates: [`Api${REDACTED}`] }]);
 });
 
 test("a changed list that is empty or not a valid glob list is an invalid param", async () => {

@@ -42,6 +42,7 @@ export const ERROR_CODE = {
   "live-requires-trusted": -32019,
   "unsupported-object-format": -32020,
   "live-mirror-failed": -32021,
+  "top-level-line": -32022,
 } as const;
 
 export type ErrorKind = keyof typeof ERROR_CODE;

@@ -256,7 +256,7 @@ flowchart TD
 | `ye_ast_callers` | Find dependents and reached entrypoints for a declaration or line range | `targets`, `revision`, `live`, `scope`, `budget`, `workspace`, `mode`, `select`, `page`, `expect` |
 | `ye_ast_importers` | Investigate file moves, renames and export changes | `files`, `revision`, `live`, `scope`, `mode` |
 | `ye_ast_impact` | Investigate consequences of a diff | `base`, `head`, `live`, `changed`, `scope`, `budget`, `workspace`, `mode`, `select`, `page`, `expect` |
-| `ye_ast_outline` | Find declarations, spans and imports in selected files, members nested under their container | `files`, `revision`, `live`, `scope`, `mode` |
+| `ye_ast_outline` | Find declarations, spans and imports in selected files, members nested under their container; or focus on declarations by dotted path or line | `files` or `focus`, `revision`, `live`, `scope`, `mode` |
 | `ye_ast_workspace` | Discover outward names and candidate local repositories | `repos`, `gateways`, `revision`, `live`, `offline`, `scope`, `mode` |
 | `ye_ast_decisions` | Find workspace configuration gaps and evidence-backed options | `repos`, `gateways`, `revision`, `live`, `offline`, `scope`, `mode` |
 | `ye_ast_compose` | Combine related queries into shared entities, relations and evidence with source provenance | `queries`, `mode`, `expect`, `deadlineMs` |
@@ -439,7 +439,7 @@ reruns every query and keeps no final results, so it can cost more analysis time
 A CLI or query-protocol fact has this envelope; MCP text modes return a smaller receipt as described below:
 
 ```text
-schema     contract version of the envelope (currently "0.20.0")
+schema     contract version of the envelope (currently "0.21.0")
 snapshot   what was read: { repo, kind: "sha", sha } or { repo, kind: "live", head, stateId }
 producer   ye-ast name and version
 inputs     trust mode, declared scope, change selection, budget
@@ -577,6 +577,7 @@ ye-ast map --live .                             # the working tree (trusted only
 | `ye-ast callers [--revision <rev> \| --live] [scope] [budget] <repo> <file>:<symbol> \| <file>:<start>-<end> …` | What depends on symbols or line ranges |
 | `ye-ast importers [--revision <rev> \| --live] [scope] <repo> <file> …` | Per file: importers, users and unresolved namers |
 | `ye-ast outline [--revision <rev> \| --live] [scope] <repo> <file> …` | Per file: its declarations with their spans, members under the declaration the graph's `contains` edges place them in, and what it imports |
+| `ye-ast outline [--revision <rev> \| --live] [scope] --focus <file>:<path> \| --focus <file>:<line> … <repo>` | Only the declarations a dotted path (`Class.member`, a bare name at any depth) or a line selects, each with its containers, its subtree and how many of the file's declarations were omitted; the path is the one `callers` accepts |
 | `ye-ast workspace [--revision <rev>] [--offline] [scope] <repo>` | The outward names the bound repository and the workspace it persists state, the local repository that serves each, and the names nothing serves |
 | `ye-ast decisions [--revision <rev>] [--offline] [scope] <repo>` | The gaps the same workspace leaves to the user, each with every option the workspace can verify |
 | `ye-ast init --trust trusted\|untrusted [--workspace <file>] [<repo>]` | Declares the trust mode (the repository defaults to `.`), writes the fixed layer (and the workspace manifest given, once every repository it names is a readable repository root), prints the MCP registration |

@@ -760,6 +760,34 @@ test("the outline lists each declaration with its span and the files it imports,
   await session.close();
 });
 
+test("the outline focus forwards its selectors and answers each match under its containers, with the count omitted", async () => {
+  const value: OutlineValue = {
+    focus: [{
+      file: "src/Api.ts",
+      selector: "Api.get",
+      path: "app.Api.get",
+      ancestors: [{ kind: "namespace", name: "app", line: 1, endLine: 1 }, { kind: "class", name: "Api", line: 3, endLine: 40 }],
+      declaration: { kind: "method", name: "get", line: 10, endLine: 20, children: [{ kind: "function", name: "inner", line: 12, endLine: 14 }] },
+      omitted: 14,
+    }],
+    unheld: [],
+  };
+  const { session, calls } = await setup({ outline: async () => ({ ok: true, value: { ...base(), status: "complete", value } as Fact<OutlineValue> }) });
+  const text = textOf(await session.callTool("ye_ast_outline", { focus: [{ file: "src/Api.ts", symbol: "Api.get" }, { file: "src/Api.ts", line: 12 }] }));
+
+  assert.deepEqual(calls.outline[0]?.focus, [{ file: "src/Api.ts", symbol: "Api.get" }, { file: "src/Api.ts", line: 12 }]);
+  assert.equal(calls.outline[0]?.files, undefined);
+  assert.match(text, /^ {2}src\/Api\.ts:Api\.get matches app\.Api\.get \(14 other declarations of the file omitted\)\n {4}1-1 app \[namespace\]\n {6}3-40 Api \[class\]\n {8}10-20 get \[method\]\n {10}12-14 inner \[function\]$/m);
+  await session.close();
+});
+
+test("an outline call with both files and focus, or with neither, is refused before any query", async () => {
+  const { session, calls } = await setup();
+  for (const args of [{ files: ["src/Api.ts"], focus: [{ file: "src/Api.ts", line: 3 }] }, {}]) assert.equal((await session.callTool("ye_ast_outline", args)).isError, true, JSON.stringify(args));
+  assert.deepEqual(calls.outline, []);
+  await session.close();
+});
+
 test("lists seven query families and the composition operation", async () => {
   const { session } = await setup();
   const tools = await session.listTools();
@@ -776,7 +804,7 @@ test("lists seven query families and the composition operation", async () => {
   const required = (name: string): readonly string[] => tools.find((tool) => tool.name === name)?.inputSchema.required ?? [];
   assert.deepEqual(required("ye_ast_impact"), ["base"]);
   assert.deepEqual(required("ye_ast_importers"), ["files"]);
-  assert.deepEqual(required("ye_ast_outline"), ["files"]);
+  assert.deepEqual(required("ye_ast_outline"), []);
   assert.deepEqual(required("ye_ast_callers"), ["targets"]);
   assert.deepEqual(required("ye_ast_entrypoints"), []);
   assert.deepEqual(required("ye_ast_workspace"), []);

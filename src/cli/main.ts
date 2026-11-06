@@ -8,7 +8,7 @@ import type { ImpactBudget } from "../core/domain/impact/impact-fact.ts";
 import { isPositiveCount } from "../core/domain/shared/count.ts";
 import { WALK_BOUND_FIELDS, type WalkBoundsField } from "../core/domain/shared/fact.ts";
 import type { CallersTarget, ImpactCallersRequest, ImpactFault, ImpactImportersRequest, ImpactOfChangeRequest, ImpactQueries } from "../core/ports/impact-queries.port.ts";
-import type { OutlineQueries, OutlineRequest } from "../core/ports/outline-queries.port.ts";
+import type { OutlineFault, OutlineQueries, OutlineRequest, OutlineSelector } from "../core/ports/outline-queries.port.ts";
 import type { WorkspaceQueries, WorkspaceRequest } from "../core/ports/workspace-queries.port.ts";
 import type { WorkspaceFault } from "../core/ports/workspace-repos.port.ts";
 import type { DecisionQueries, DecisionsRequest } from "../core/ports/decision-queries.port.ts";
@@ -61,6 +61,7 @@ const USAGE = [
   "       ye-ast callers [--revision <rev> | --live] [--repo-id <id>] [scope] [budget] <repo> <file>:<symbol> | <file>:<start>-<end> ...",
   "       ye-ast importers [--revision <rev> | --live] [--repo-id <id>] [scope] <repo> <file> ...",
   "       ye-ast outline [--revision <rev> | --live] [--repo-id <id>] [scope] <repo> <file> ...",
+  "       ye-ast outline [--revision <rev> | --live] [--repo-id <id>] [scope] --focus <file>:<symbol> | --focus <file>:<line> ... <repo>",
   "       ye-ast workspace [--revision <rev>] [--repo-id <id>] [--offline] [scope] <repo>",
   "       ye-ast decisions [--revision <rev>] [--repo-id <id>] [--offline] [scope] <repo>",
   "       ye-ast init --trust trusted|untrusted [--workspace <file>] [<repo>]   (declares the trust mode, writes the fixed layer under .ye-ast/, ignores ye-ast's folders locally, prints the MCP registration)",
@@ -69,6 +70,7 @@ const USAGE = [
   "       ye-ast mcp [<launch-root>] [--repo <id> <root>]...   (read-only stdio MCP server)",
   "--repo-id: the name every fact carries; the directory name of the repository's main worktree when omitted, so every worktree of one repository answers the same name",
   "--live: reads the working tree of a repository declared trusted (ye-ast init --trust trusted) instead of a revision; the first run builds ye-ast's mirror of it, and a stale answer is reported on stderr and as a live sibling of the fact in the JSON",
+  "--focus: outline only, repeatable, instead of files: <file>:<symbol> selects the declarations whose dotted containment path ends with it at whole names (Class.member, or a bare name at any depth); <file>:<line> the innermost declaration holding that line. Each match comes with its containers and how many of the file's declarations were left out, without imports",
   "--offline: reads every repository from its own clone and refreshes no declared remote, as under untrusted; only workspace and decisions take it",
   "scope: [--include <glob>]... [--exclude <glob>]...   (globs over repository-relative paths, on map, impact, callers, importers, outline, workspace and decisions; without --include every path is included; --exclude wins)",
   "changed: [--changed <glob>]...   (impact only: globs over the changed paths; only the change's paths they select seed the walk, while the repository is read whole, so callers outside them are known; a glob that selects no changed path is an error)",
@@ -77,7 +79,7 @@ const USAGE = [
   "measure: --measure   (one JSON measurement line per query and per index build, on stderr; never on stdout)",
 ].join("\n");
 
-type Query = () => Promise<Result<unknown, ImpactFault | WorkspaceFault>>;
+type Query = () => Promise<Result<unknown, ImpactFault | OutlineFault | WorkspaceFault>>;
 
 /** The stale notice a live query reports once its answer is built, when the working tree moved. */
 interface StaleWatch {
@@ -123,8 +125,11 @@ export async function run(argv: readonly string[], io: CliIo, deps: CliDeps): Pr
 }
 
 /** Every line a fault prints: the kind and detail, then the symbol each entry named and what its file declares. */
-function faultText(fault: ImpactFault | WorkspaceFault, redaction: Redaction): string[] {
-  const entries = fault.kind === "unknown-symbol" ? fault.entries.map((entry) => `  - ${entry.file}:${entry.symbol}: ${declarationText(entry)}`) : [];
+function faultText(fault: ImpactFault | OutlineFault | WorkspaceFault, redaction: Redaction): string[] {
+  const entries =
+    fault.kind === "unknown-symbol" ? fault.entries.map((entry) => `  - ${entry.file}:${entry.symbol}: ${declarationText(entry)}`)
+    : fault.kind === "top-level-line" ? fault.entries.map((entry) => `  - ${entry.file}:${entry.line}: ${declarationText(entry)}`)
+    : [];
   return [`ye-ast: ${fault.kind}: ${redaction.redact(fault.detail.trim())}`, ...entries.map((line) => redaction.redact(line))];
 }
 
@@ -476,17 +481,30 @@ async function parseOutlineRequest(args: readonly string[], deps: RepositoryNami
   try {
     const { values, positionals } = parseArgs({
       args: [...args],
-      options: { revision: { type: "string" }, live: { type: "boolean" }, "repo-id": { type: "string" }, ...SCOPE_OPTIONS },
+      options: { revision: { type: "string" }, live: { type: "boolean" }, "repo-id": { type: "string" }, focus: { type: "string", multiple: true }, ...SCOPE_OPTIONS },
       allowPositionals: true,
     });
     const [path, ...files] = positionals;
     const scope = parseScope(values);
     const at = atRevision(values);
-    if (path === undefined || files.length === 0 || scope === undefined || at === undefined) return undefined;
-    return { ...(await repositoryOf(deps, path, values["repo-id"])), ...at, files, ...scope };
+    const focus = (values.focus ?? []).map(parseSelector);
+    if (path === undefined || (files.length === 0) === (focus.length === 0) || scope === undefined || at === undefined || focus.some((selector) => selector === undefined)) return undefined;
+    const subject = focus.length === 0 ? { files } : { focus: focus as OutlineSelector[] };
+    return { ...(await repositoryOf(deps, path, values["repo-id"])), ...at, ...subject, ...scope };
   } catch {
     return undefined;
   }
+}
+
+/** `<file>:<symbol>` or `<file>:<line>`: what follows the last colon is a line when it is digits only, since no name is. */
+function parseSelector(spec: string): OutlineSelector | undefined {
+  const colon = spec.lastIndexOf(":");
+  const file = spec.slice(0, colon);
+  const rest = spec.slice(colon + 1);
+  if (colon <= 0 || rest === "") return undefined;
+  if (!/^\d/.test(rest)) return { file, symbol: rest };
+  const line = Number(rest);
+  return /^[1-9]\d*$/.test(rest) && Number.isSafeInteger(line) ? { file, line } : undefined;
 }
 
 async function parseWorkspaceRequest(args: readonly string[], deps: RepositoryNaming): Promise<WorkspaceRequest | undefined> {

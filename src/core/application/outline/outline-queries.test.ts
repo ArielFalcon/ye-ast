@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { fakeCodeGraph, fakeNode } from "../impact/fake-code-graph.testing.ts";
 import { fakeLive, type FakeLive } from "../live/fake-live.testing.ts";
+import type { OutlineSelector } from "../../ports/outline-queries.port.ts";
 import { createOutlineQueries, type OutlineQueriesDeps } from "./outline-queries.ts";
 
 const SHA = "a".repeat(40);
@@ -13,6 +14,7 @@ interface Options {
   /** The paths the commit export wrote, so the index's own list of what it could not hold is meaningful. */
   written?: readonly string[];
   nodes?: Parameters<typeof fakeCodeGraph>[0];
+  edges?: Parameters<typeof fakeCodeGraph>[1];
   /** What the path matcher answers for a repository path and a declared glob; every glob matches by default. */
   matches?: (path: string, glob: string) => boolean;
   snapshotCache?: OutlineQueriesDeps["snapshotCache"];
@@ -20,7 +22,7 @@ interface Options {
 
 function setup(options: Options = {}) {
   const log = { closed: 0, reads: 0, extractions: 0 };
-  const store = { ...fakeCodeGraph(options.nodes ?? [], []), close: () => void (log.closed += 1) };
+  const store = { ...fakeCodeGraph(options.nodes ?? [], options.edges ?? []), close: () => void (log.closed += 1) };
   const written = options.written ?? [];
   const deps = {
     vcs: {
@@ -127,4 +129,92 @@ test("an export-only outline never restores retained source data", async () => {
   assert.equal(restored, 0);
   assert.equal(log.reads, 0);
   assert.equal(log.extractions, 0);
+});
+
+const API = "src/api.ts";
+const TWO_CLASSES = {
+  written: [API],
+  nodes: [
+    fakeNode("api", "file", API, 1, 40),
+    fakeNode("A", "class", API, 1, 12, "A"),
+    fakeNode("A.m", "method", API, 2, 6, "m"),
+    fakeNode("A.m.inner", "function", API, 3, 5, "inner"),
+    fakeNode("A.n", "method", API, 8, 10, "n"),
+    fakeNode("B", "class", API, 14, 24, "B"),
+    fakeNode("B.m", "method", API, 15, 18, "m"),
+    fakeNode("Aardvark", "constant", API, 30, 30, "Aardvark"),
+  ],
+  edges: [
+    { from: "api", to: "A", kind: "contains" },
+    { from: "api", to: "B", kind: "contains" },
+    { from: "A", to: "A.m", kind: "contains" },
+    { from: "A.m", to: "A.m.inner", kind: "contains" },
+    { from: "A", to: "A.n", kind: "contains" },
+    { from: "B", to: "B.m", kind: "contains" },
+    { from: "api", to: "other", kind: "imports", line: 1 },
+  ],
+};
+
+async function focusOf(focus: readonly OutlineSelector[]) {
+  return setup(TWO_CLASSES).queries.outline({ repo: "/work/shop", repoId: "shop", revision: "HEAD", focus });
+}
+
+function focusValue(answer: Awaited<ReturnType<typeof focusOf>>) {
+  assert.ok(answer.ok && answer.value.status === "complete", JSON.stringify(answer));
+  return answer.value.value;
+}
+
+test("a dotted focus answers only that member with its subtree and its containers, without siblings nor imports", async () => {
+  const value = focusValue(await focusOf([{ file: API, symbol: "A.m" }]));
+  assert.deepEqual(value, {
+    focus: [{
+      file: API,
+      selector: "A.m",
+      path: "A.m",
+      ancestors: [{ kind: "class", name: "A", line: 1, endLine: 12 }],
+      declaration: { kind: "method", name: "m", line: 2, endLine: 6, children: [{ kind: "function", name: "inner", line: 3, endLine: 5 }] },
+      omitted: 4,
+    }],
+    unheld: [],
+  });
+});
+
+test("a bare focus matching a member of two classes answers both, each with its own path, in line order", async () => {
+  const value = focusValue(await focusOf([{ file: API, symbol: "m" }]));
+  assert.deepEqual(value.focus?.map((match) => [match.path, match.declaration.line]), [["A.m", 2], ["B.m", 15]]);
+});
+
+test("the matches of several selectors come in line order, whatever order the request gives", async () => {
+  const value = focusValue(await focusOf([{ file: API, symbol: "m" }, { file: API, symbol: "Aardvark" }, { file: API, line: 16 }]));
+  assert.deepEqual(value.focus?.map((match) => [match.path, match.selector]), [["A.m", "m"], ["B.m", "16"], ["B.m", "m"], ["Aardvark", "Aardvark"]]);
+});
+
+test("a line focus answers the innermost declaration holding it, with its containers", async () => {
+  const value = focusValue(await focusOf([{ file: API, line: 4 }]));
+  assert.deepEqual(value.focus?.map((match) => [match.selector, match.path]), [["4", "A.m.inner"]]);
+});
+
+test("a focus symbol that matches no declaration is an unknown-symbol fault whose candidates are the file's dotted paths", async () => {
+  const answer = await focusOf([{ file: API, symbol: "B.n" }]);
+  assert.ok(!answer.ok);
+  assert.deepEqual(answer.fault.kind === "unknown-symbol" && answer.fault.entries, [{ file: API, symbol: "B.n", candidates: ["A", "A.m", "A.m.inner", "A.n", "Aardvark", "B", "B.m"] }]);
+});
+
+test("a focus line outside every declaration is a top-level-line fault with the file's dotted paths", async () => {
+  const answer = await focusOf([{ file: API, symbol: "A" }, { file: API, line: 27 }]);
+  assert.ok(!answer.ok);
+  assert.deepEqual(answer.fault.kind === "top-level-line" && answer.fault.entries, [{ file: API, line: 27, candidates: ["A", "A.m", "A.m.inner", "A.n", "Aardvark", "B", "B.m"] }]);
+});
+
+test("a focus on a file the index holds nothing of leaves it unheld with its cut instead of a fault", async () => {
+  const answer = await setup(TWO_CLASSES).queries.outline({ repo: "/work/shop", repoId: "shop", revision: "HEAD", focus: [{ file: "src/gone.ts", symbol: "A" }] });
+  assert.ok(answer.ok && answer.value.status === "partial");
+  assert.deepEqual(answer.value.value, { focus: [], unheld: ["src/gone.ts"] });
+  assert.deepEqual(answer.value.cuts.map((cut) => cut.kind), ["not-exported"]);
+});
+
+test("a focused fact records its selectors once each in a fixed order, in place of files", async () => {
+  const answer = await focusOf([{ file: API, symbol: "m" }, { file: API, line: 16 }, { file: API, symbol: "m" }]);
+  assert.ok(answer.ok);
+  assert.deepEqual(answer.value.inputs.declaredConfig, { focus: [`${API}:16`, `${API}:m`] });
 });

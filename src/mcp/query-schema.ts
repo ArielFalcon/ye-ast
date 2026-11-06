@@ -114,6 +114,11 @@ export const target = z.union([
     .describe("File line range, 1-based inclusive; end >= start."),
 ]);
 
+const focusSelector = z.union([
+  z.strictObject({ file, symbol: z.string().min(1).describe("Dotted path as ye_ast_outline nests it, e.g. Class.member; matches every declaration whose path ends with it at whole names. A bare name matches at any depth.") }).describe("Focus by name."),
+  z.strictObject({ file, line: count.describe("1-based line; selects the innermost declaration holding it.") }).describe("Focus by line."),
+]);
+
 // Scope permits line terminators inside a segment; inspect every character and require the absolute end of input.
 const recipeGlob = z.string().refine(isValidGlob).meta({ pattern: "^(?![\\s\\S]*(?:^|/)\\.{0,2}(?:/|(?![\\s\\S])))[^\\\\]+(?![\\s\\S])" });
 const recipeScope = z.strictObject({ include: z.array(recipeGlob).min(1).optional(), exclude: z.array(recipeGlob).min(1).optional() });
@@ -170,6 +175,14 @@ const impactFields = {
 };
 const crossingFields = { workspace, replay: replaySchema.optional() };
 const fileFields = { repo, revision, live, files: z.array(z.string().min(1)).min(1).describe("Repository-relative paths."), scope };
+const outlineFields = {
+  repo, revision, live,
+  files: fileFields.files.optional().describe("Repository-relative paths to list whole; exclusive with focus."),
+  focus: z.array(focusSelector).min(1).optional().describe("Instead of files: the declarations to answer, each with its containers, its subtree and the count of its file's declarations omitted, without imports."),
+  scope,
+};
+const exactlyOneSubject = (value: { files?: unknown; focus?: unknown }): boolean => (value.files === undefined) !== (value.focus === undefined);
+const subjectConstraint = { oneOf: [{ required: ["files"] }, { required: ["focus"] }] };
 const workspaceFields = { repo, revision: workspaceRevision, live: z.literal(true).optional(), offline, scope, repos: workspaceRepos, gateways };
 
 /** The semantic inputs: what the analysis reads, without `mode`, `select`, `page` or `expect`. */
@@ -182,7 +195,7 @@ export const SEMANTIC_INPUTS = {
     .refine(validTraversalArguments)
     .meta({ allOf: [liveExclusion("head"), ...traversalConstraints] }),
   importers: liveSchema(fileFields, ["revision"]),
-  outline: liveSchema(fileFields, ["revision"]),
+  outline: liveSchema(outlineFields, ["revision"]).refine(exactlyOneSubject, "give exactly one of files and focus").meta({ allOf: [liveExclusion("revision"), subjectConstraint] }),
   workspace: liveSchema(workspaceFields, ["revision"]),
   decisions: liveSchema(workspaceFields, ["revision"]),
 } satisfies Record<ToolFamily, z.ZodType>;
@@ -201,7 +214,7 @@ export const TOOL_INPUTS = {
     .refine(validTraversalArguments)
     .meta({ allOf: [liveExclusion("head"), ...traversalConstraints, ...recoveryControlConstraintsFor("impact")] }),
   importers: liveSchema({ ...fileFields, mode }, ["revision"]),
-  outline: liveSchema({ ...fileFields, mode }, ["revision"]),
+  outline: liveSchema({ ...outlineFields, mode }, ["revision"]).refine(exactlyOneSubject, "give exactly one of files and focus").meta({ allOf: [liveExclusion("revision"), subjectConstraint] }),
   workspace: liveSchema({ ...workspaceFields, mode }, ["revision"]),
   decisions: liveSchema({ ...workspaceFields, mode }, ["revision"]),
 } satisfies Record<ToolFamily, z.ZodType>;

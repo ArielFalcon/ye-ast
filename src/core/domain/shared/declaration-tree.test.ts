@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { declarationPath, declarationTree, selectedBySymbol, type TreeDeclaration } from "./declaration-tree.ts";
+import { declarationPath, declarationTree, innermostAt, selectedBySymbol, type TreeDeclaration } from "./declaration-tree.ts";
 
 function declaration(id: string, name: string, startLine: number, endLine: number): TreeDeclaration {
   return { id, name, startLine, endLine };
@@ -43,4 +43,11 @@ test("a declaration no containment pair places is a root, so a dotted symbol can
   const tree = declarationTree([declaration("A", "A", 1, 20), declaration("route", "get", 5, 5)], []);
   assert.deepEqual(selected(tree, "A.get"), []);
   assert.deepEqual(selected(tree, "get"), ["get"]);
+});
+
+test("a line selects the innermost declaration the tree places around it, even under a container whose span ends before it", () => {
+  const tree = declarationTree(DECLARATIONS, CONTAINMENT);
+  assert.deepEqual(innermostAt(tree, 9).map(declarationPath), ["com.shop.A.Inner.m"]);
+  assert.deepEqual(innermostAt(tree, 7).map(declarationPath), ["com.shop.A"]);
+  assert.deepEqual(innermostAt(tree, 21), []);
 });

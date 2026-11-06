@@ -11,7 +11,7 @@ import type { Digest } from "../core/ports/digest.port.ts";
 import type { EntrypointQueries } from "../core/ports/entrypoint-queries.port.ts";
 import type { CallersTarget, ImpactFault, ImpactQueries } from "../core/ports/impact-queries.port.ts";
 import type { LiveFault, LiveStaleNotice } from "../core/ports/live-queries.port.ts";
-import type { OutlineQueries } from "../core/ports/outline-queries.port.ts";
+import type { OutlineFault, OutlineQueries } from "../core/ports/outline-queries.port.ts";
 import type { Redaction } from "../core/ports/redaction.port.ts";
 import { DEFAULT_REVISION, type VcsFault } from "../core/ports/vcs.port.ts";
 import type { WorkspaceFault, WorkspaceRepositoryRequest } from "../core/ports/workspace-repos.port.ts";
@@ -85,7 +85,7 @@ export type ExecutedSource = WithQuery<SourcePayload> & {
 /** A workspace replay that no longer matches is reported as a changed result of the original query. */
 export type ReplayChangedFault = { kind: "result-changed"; detail: string; stage: "workspace-replay" };
 export type InternalFault = { kind: "internal-fault"; detail: string };
-export type QueryFault = VcsFault | LiveFault | ImpactFault | WorkspaceFault | RepositoryTargetFault | ReplayChangedFault | InternalFault;
+export type QueryFault = VcsFault | LiveFault | ImpactFault | OutlineFault | WorkspaceFault | RepositoryTargetFault | ReplayChangedFault | InternalFault;
 
 type Run = Promise<Result<ExecutedSource, QueryFault>>;
 
@@ -174,7 +174,8 @@ async function dispatch(query: SemanticQuery, repository: RepositoryBinding, ctx
     }
     case "ye_ast_outline": {
       const a = query.arguments;
-      const result = await deps.outline.outline({ ...local, ...atRevision(a.revision, a.live, onStale), files: a.files, ...scopeOf(a.scope), ...signal });
+      const subject = a.focus === undefined ? { files: a.files ?? [] } : { focus: a.focus };
+      const result = await deps.outline.outline({ ...local, ...atRevision(a.revision, a.live, onStale), ...subject, ...scopeOf(a.scope), ...signal });
       if (!result.ok) return result;
       return finish({ fact: result.value }, query, repository, true, moved, ctx, undefined, (read, rest) => ({ family: "outline", read, query, ...rest }));
     }

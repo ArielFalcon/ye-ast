@@ -6,7 +6,7 @@ import type { AtRevision } from "../core/ports/live-queries.port.ts";
 import { isWalkBoundField, WALK_BOUND_FIELDS, type WalkBoundsField } from "../core/domain/shared/fact.ts";
 import type { MapRequest } from "../core/ports/entrypoint-queries.port.ts";
 import type { CallersTarget, ImpactCallersRequest, ImpactImportersRequest, ImpactOfChangeRequest } from "../core/ports/impact-queries.port.ts";
-import type { OutlineRequest } from "../core/ports/outline-queries.port.ts";
+import type { OutlineRequest, OutlineSelector } from "../core/ports/outline-queries.port.ts";
 import type { WorkspaceRequest } from "../core/ports/workspace-queries.port.ts";
 import type { DecisionsRequest } from "../core/ports/decision-queries.port.ts";
 import type { WorkspaceRepositoryRequest } from "../core/ports/workspace-repos.port.ts";
@@ -94,6 +94,17 @@ function targetOf(value: unknown): CallersTarget {
   return { file, start, end };
 }
 
+function selectorOf(value: unknown): OutlineSelector {
+  if (!isRecord(value)) throw new InvalidParamsError("a focus selector must be an object");
+  const file = text(value, "file");
+  if ("symbol" in value) {
+    only(value, ["file", "symbol"]);
+    return { file, symbol: text(value, "symbol") };
+  }
+  only(value, ["file", "line"]);
+  return { file, line: positive(value.line, "line") };
+}
+
 function fileOf(value: unknown): string {
   if (typeof value !== "string" || value === "") throw new InvalidParamsError("files must be non-empty strings");
   return value;
@@ -160,9 +171,14 @@ export function readImporters(params: unknown): Omit<AtRevision<ImpactImportersR
   return { repo: text(p, "repo"), repoId: text(p, "repoId"), revision: text(p, "revision"), files: list(p, "files", fileOf), ...scopeOf(p) };
 }
 
-export function readOutline(params: unknown): Omit<Extract<OutlineRequest, { live?: undefined }>, "signal"> {
-  const p = only(params, ["repo", "repoId", "revision", "files", "scope"]);
-  return { repo: text(p, "repo"), repoId: text(p, "repoId"), revision: text(p, "revision"), files: list(p, "files", fileOf), ...scopeOf(p) };
+/** `Omit` over each member of a union, so the members stay told apart. */
+type Unsignaled<T> = T extends unknown ? Omit<T, "signal"> : never;
+
+export function readOutline(params: unknown): Unsignaled<Extract<OutlineRequest, { live?: undefined }>> {
+  const p = only(params, ["repo", "repoId", "revision", "files", "focus", "scope"]);
+  if ((p.files === undefined) === (p.focus === undefined)) throw new InvalidParamsError("give exactly one of files and focus");
+  const subject = p.focus === undefined ? { files: list(p, "files", fileOf) } : { focus: list(p, "focus", selectorOf) };
+  return { repo: text(p, "repo"), repoId: text(p, "repoId"), revision: text(p, "revision"), ...subject, ...scopeOf(p) };
 }
 
 export function readWorkspace(params: unknown): Omit<WorkspaceRequest, "signal"> {

@@ -65,7 +65,10 @@ export interface UnknownSymbolFault {
   entries: readonly {
     file: string;
     symbol: string;
-    /** The seedable declarations of the file, sorted and once each; empty when it declares none or is not indexed. */
+    /**
+     * What the file declares that could be asked instead, sorted and once each: the seedable names for `callers`, the
+     * dotted paths for an outline focus; empty when it declares none or is not indexed.
+     */
     candidates: readonly string[];
   }[];
 }

@@ -412,6 +412,16 @@ test("outline keeps duplicate declarations by reference, empty files and unheld 
   assert.equal(t.set.parts.some((p) => p.kind === "symbol-reach"), false, "no inferred dependency");
 });
 
+test("an outline focus keeps each matched declaration with its subtree, and no outline file a cut of the file would misstate", () => {
+  const declaration: OutlineDeclaration = { kind: "method", name: "get", line: 10, endLine: 20, children: [{ kind: "function", name: "inner", line: 12, endLine: 14 }] };
+  const value = { focus: [{ file: "src/Api.ts", selector: "Api.get", path: "Api.get", ancestors: [{ kind: "class", name: "Api", line: 3, endLine: 40 }], declaration, omitted: 4 }], unheld: [] };
+  const t = new Tables(normalizeSource(sourceFixture("outline", { value, arguments: { repo: "shop", revision: SHA_A, focus: [{ file: "src/Api.ts", symbol: "Api.get" }] } }), digest));
+  const [matched] = t.at("/value/focus/0/declaration").filter((p) => p.kind === "outline-declaration");
+  assert.ok(matched);
+  assert.deepEqual(rebuildDeclaration(t, matched.id), declaration);
+  assert.equal(t.set.parts.some((p) => p.kind === "outline-file"), false);
+});
+
 test("workspace impact keeps reads with their kinds, call-site ancestors and stated requests, and link reach", () => {
   const set = normalizeSource(sourceFixture("impact-workspace"), digest);
   const t = new Tables(set);

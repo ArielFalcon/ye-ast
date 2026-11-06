@@ -99,10 +99,19 @@ question an agent asks after `impact` names twelve files, and it is the one no q
   lies inside another declaration's. A Java member sits under its class and the class under the file's package
   declaration, because that is what the graph records; a construct the extractor does not emit, such as a Java `record`,
   leaves its members under the nearest container it does emit.
-- **It carries no file length and no elision.** Both were in the first draft and both are gone: a file's length needs a
-  source read the projection does not do, and the caller gets it from the read it makes anyway; and with every
-  declaration listed there is nothing to omit, so there is no budget and no `omitted` field to keep honest. A large file
-  answers a large outline, which is still a fraction of the file, and the rule of section 1 protects the caller.
+- **It carries no file length and no silent elision.** A file's length needs a source read the projection does not do,
+  and the caller gets it from the read it makes anyway. The listing names every declaration, so it has nothing to omit
+  and no budget; a large file answers a large outline, which is still a fraction of the file, and the rule of section 1
+  protects the caller.
+- **A focus is a cut the caller asked for, and says so.** After a first listing, `focus` replaces `files` with
+  selectors: `<file>:<path>` matches the declarations whose dotted path in the `contains` tree ends with it at whole
+  names (a bare name at any depth, `A.m` only an `m` that `A` contains directly), and `<file>:<line>` the innermost
+  declaration the tree places around the line. Each match carries its `ancestors` (kind, name and span only, no
+  siblings), the declaration with its whole subtree, and `omitted`, how many of the file's declarations it leaves out;
+  no imports. Several matches are all answered, in line order, never one picked. A symbol that matches nothing is
+  `unknown-symbol` with the file's dotted paths as candidates, a line no declaration holds is `top-level-line` with the
+  same candidates, and a file the index does not hold is `unheld`. The path is the one `callers` resolves, through the
+  same resolver over the same tree, so a path the outline prints targets exactly the same declarations there.
 - **The pointer is a coordinate, not a handle.** `file:line-endLine`; the agent expands it with its own file reader. No
   hash, no cache, no TTL, no server-held state: the same request over the same revision gives the same bytes
   (RFC-0002 rule 3, RFC-0015).

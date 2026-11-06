@@ -8,7 +8,7 @@ import { SCHEMA, type Fact } from "../core/domain/shared/fact.ts";
 import type { Result } from "../core/domain/shared/result.ts";
 import type { EntrypointQueries, MapRequest } from "../core/ports/entrypoint-queries.port.ts";
 import type { ImpactCallersRequest, ImpactFault, ImpactImportersRequest, ImpactOfChangeRequest, ImpactQueries } from "../core/ports/impact-queries.port.ts";
-import type { OutlineQueries, OutlineRequest } from "../core/ports/outline-queries.port.ts";
+import type { OutlineFault, OutlineQueries, OutlineRequest } from "../core/ports/outline-queries.port.ts";
 import type { FactRead, WorkspaceQueries, WorkspaceRequest, WorkspaceValue } from "../core/ports/workspace-queries.port.ts";
 import type { WorkspaceFault } from "../core/ports/workspace-repos.port.ts";
 import type { DecisionQueries, DecisionsRequest, DecisionValue } from "../core/ports/decision-queries.port.ts";
@@ -156,7 +156,7 @@ function setupCallers(answer: Result<Fact<ImpactValue>, ImpactFault> = { ok: tru
 
 const OUTLINE_VALUE: OutlineValue = { files: [{ file: "src/A.java", declarations: [{ kind: "method", name: "run", line: 3, endLine: 9 }], imports: [] }], unheld: [] };
 
-function setupOutline(answer?: Result<Fact<OutlineValue>, VcsFault | LiveFault>) {
+function setupOutline(answer?: Result<Fact<OutlineValue>, OutlineFault>) {
   const base = setup();
   const requests: OutlineRequest[] = [];
   const outline: OutlineQueries = {
@@ -482,6 +482,26 @@ test("outline without a repository or without files is a usage error", async () 
     assert.equal(await run(argv, io, deps), EXIT_CODE.usage, argv.join(" "));
     assert.deepEqual(requests, []);
   }
+});
+
+test("outline --focus asks for each selector, a dotted name or a line, instead of files", async () => {
+  const { io, deps, requests, signal } = setupOutline();
+  assert.equal(await run(["outline", "--focus", "src/A.ts:Api.get", "--focus", "src/A.ts:97", "some/checkout"], io, deps), EXIT_CODE.ok);
+  assert.deepEqual(requests, [{ repo: resolve("some/checkout"), repoId: "checkout", revision: "HEAD", focus: [{ file: "src/A.ts", symbol: "Api.get" }, { file: "src/A.ts", line: 97 }], signal }]);
+});
+
+test("outline with both focus and files, or a focus line that is not a positive integer, is a usage error", async () => {
+  for (const argv of [["outline", "--focus", "src/A.ts:Api", ".", "src/A.ts"], ["outline", "--focus", "src/A.ts:0", "."], ["outline", "--focus", "src/A.ts:9x", "."]]) {
+    const { io, deps, requests } = setupOutline();
+    assert.equal(await run(argv, io, deps), EXIT_CODE.usage, argv.join(" "));
+    assert.deepEqual(requests, []);
+  }
+});
+
+test("outline answers a top-level line with the query code, one line per entry on stderr naming the file's dotted paths", async () => {
+  const { io, deps } = setupOutline({ ok: false, fault: { kind: "top-level-line", detail: "no declaration holds A.ts:1", entries: [{ file: "A.ts", line: 1, candidates: ["Api", "Api.get"] }] } });
+  assert.equal(await run(["outline", "--focus", "A.ts:1", "."], io, deps), EXIT_CODE.queryFailed);
+  assert.deepEqual(io.stderr, ["ye-ast: top-level-line: no declaration holds A.ts:1", "  - A.ts:1: declared in A.ts: Api, Api.get"]);
 });
 
 test("workspace asks for the bound repository at the revision and prints the fact", async () => {

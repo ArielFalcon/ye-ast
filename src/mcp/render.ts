@@ -12,6 +12,7 @@ import type { ModuleImpactValue } from "../core/domain/impact/module-dependency.
 import { declarationAnchor } from "../core/domain/impact/impact-cuts.ts";
 import type { ImportedFile, ImportersValue } from "../core/domain/impact/importers-fact.ts";
 import type { OutlineDeclaration, OutlineValue } from "../core/domain/outline/outline-fact.ts";
+import type { OutlineFault } from "../core/ports/outline-queries.port.ts";
 import type { EntrypointMap } from "../core/domain/map/entrypoint-map.ts";
 import type { Decision, DecisionKind, DecisionOption } from "../core/domain/decisions/decision.ts";
 import { compareText } from "../core/domain/shared/code-node.ts";
@@ -1031,10 +1032,15 @@ function outlineLines(declarations: readonly OutlineDeclaration[], indent: strin
 }
 
 export function renderOutline(fact: Fact<OutlineValue>, detail: ResponseMode = "summary"): string {
-  if (detail === "full") return fact.status === "unknown" ? "Inspect reason and evidence; the result has no value." : "Select value.files by file; declarations are the top-level ones and contain name, kind, line, endLine and, when a contains edge places declarations inside one, children of the same shape; imports are paths. Inspect value.unheld for unavailable files and cuts when partial.";
+  if (detail === "full") return fact.status === "unknown" ? "Inspect reason and evidence; the result has no value." : fact.value.focus !== undefined ? "Select value.focus: one entry per matched declaration with file, selector, path (a dotted path ye_ast_callers accepts verbatim), ancestors outermost first (kind, name, line, endLine), declaration (kind, name, line, endLine and children of the same shape) and omitted, how many of the file's declarations were left out; imports are not listed. Inspect value.unheld for unavailable files and cuts when partial." : "Select value.files by file; declarations are the top-level ones and contain name, kind, line, endLine and, when a contains edge places declarations inside one, children of the same shape; imports are paths. Inspect value.unheld for unavailable files and cuts when partial.";
   const lines = headerLines(fact);
   if (fact.status === "unknown") return lines.join("\n");
-  for (const entry of fact.value.files) {
+  for (const match of fact.value.focus ?? []) {
+    lines.push(`  ${match.file}:${match.selector} matches ${match.path} (${match.omitted} other declarations of the file omitted)`);
+    match.ancestors.forEach((ancestor, depth) => lines.push(`    ${"  ".repeat(depth)}${spanText(ancestor.line, ancestor.endLine)} ${ancestor.name} [${ancestor.kind}]`));
+    lines.push(...outlineLines([match.declaration], `    ${"  ".repeat(match.ancestors.length)}`));
+  }
+  for (const entry of fact.value.files ?? []) {
     lines.push(`  ${entry.file}`);
     lines.push(...(entry.declarations.length === 0 ? ["    declares nothing"] : outlineLines(entry.declarations, "    ")));
     if (entry.imports.length > 0) lines.push(`    imports: ${entry.imports.join(", ")}`);
@@ -1143,7 +1149,8 @@ export function renderWorkspaceImpact(fact: Fact<WorkspaceImpactValue>, detail: 
 function faultRecovery(kind: string): string {
   switch (kind) {
     case "unknown-change-path": return "Correct the nonmatching changed globs. Remove changed to investigate all changes within the declared scope; changing mode or a larger walk budget cannot fix a path-selection mismatch.";
-    case "unknown-symbol": return "Use a listed declaration or an inclusive line range in targets. If needed, call ye_ast_outline for these files at the same revision to locate declaration spans; candidate names are alternatives, not an automatic substitution.";
+    case "top-level-line": return "The line lies outside every declaration of its file. Focus on a listed dotted path or on a line inside a declaration; ye_ast_outline with files lists the file whole.";
+    case "unknown-symbol": return "Use a listed declaration or an inclusive line range in targets, or a listed dotted path or a line in focus. If needed, call ye_ast_outline for these files at the same revision to locate declaration spans; candidate names are alternatives, not an automatic substitution.";
     case "unknown-revision": return "Select a revision that resolves to a local commit. For impact check base/head, for other queries check revision, and for workspace check the identified repository's revision; inspect the reported cause before retrying.";
     case "no-merge-base": return "Choose base/head commits with a common ancestor. This query uses a merge-base diff; unrelated histories cannot be replaced silently with a direct diff.";
     case "not-repository-root": return "Use the repository root for the bound server or the indicated workspace repository path, rather than a subdirectory.";
@@ -1163,8 +1170,8 @@ function faultRecovery(kind: string): string {
   }
 }
 
-export function renderFault(fault: { kind: string; detail: string } | ImpactFault): string {
-  const entries = "entries" in fault ? fault.entries.map((entry) => `\n  - ${entry.file}:${entry.symbol}: ${declarationText(entry)}`).join("") : "";
+export function renderFault(fault: { kind: string; detail: string } | ImpactFault | OutlineFault): string {
+  const entries = "entries" in fault ? fault.entries.map((entry) => `\n  - ${entry.file}:${"line" in entry ? entry.line : entry.symbol}: ${declarationText(entry)}`).join("") : "";
   return `fault: ${fault.kind}\n${fault.detail.trim()}${entries}\nNext step: ${faultRecovery(fault.kind)}`;
 }
 
