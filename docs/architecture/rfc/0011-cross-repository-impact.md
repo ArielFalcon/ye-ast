@@ -67,6 +67,12 @@ loops; an inner binding wins and a local initializer is evaluated in its declara
 bindings do not escape nested functions or classes. Immutable AST scopes are memoized by node, and file bindings are
 collected once per source instead of rescanned for every request.
 
+A value the code fills at run time, written `{}`, is a parameter or a variable whose initializer reads one (`this`
+included); a variable whose initializer the snapshot does not decide and reads none of them is undecided. A run-time
+value stands for one path segment, an approximation: nothing proves it nonempty, free of `/` or other than a dot segment.
+It stands for a segment only where it starts one; a run-time value that starts the URL or follows text of its segment
+(`${base}/orders`, `/api/v1${path}`) may hold an origin, a base path or several segments, so the path is undecided.
+
 An unshadowed global `encodeURIComponent` is a supported static transformation: literal text is encoded, and an identifier
 explicitly typed `string`, `number`, `boolean` or `bigint` may remain a parameter placeholder within a known path; so may
 `String(x)` and `x.toString()` of such an identifier. Unsupported arguments, shadowed encoders, visible writes or an

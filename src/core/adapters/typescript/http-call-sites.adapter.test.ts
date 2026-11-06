@@ -343,10 +343,10 @@ test("a barrel cycle is undecided, never a hang", async () => {
 test("a parameter that shadows a const of the file is still a value the code fills at run time", async () => {
   const service = source(
     "src/app/order/order.service.ts",
-    ["import { HttpClient } from '@angular/common/http'", "import { inject } from '@angular/core'", "const BASE = 'orders-api'", "export class OrderService {", "  private readonly http = inject(HttpClient)", "  load(BASE: string): void {", "    this.http.get(`${BASE}/orders`)", "  }", "}"].join("\n"),
+    ["import { HttpClient } from '@angular/common/http'", "import { inject } from '@angular/core'", "const BASE = 'orders-api'", "export class OrderService {", "  private readonly http = inject(HttpClient)", "  load(BASE: string): void {", "    this.http.get(`/api/${BASE}/orders`)", "  }", "}"].join("\n"),
   );
 
-  assert.deepEqual(sites(await reader.of([service], "shop-web")), ["GET {}/orders@src/app/order/order.service.ts:7"]);
+  assert.deepEqual(sites(await reader.of([service], "shop-web")), ["GET /api/{}/orders@src/app/order/order.service.ts:7"]);
 });
 
 test("a const a method declares with a literal initializer resolves", async () => {
@@ -370,10 +370,22 @@ test("a path part imported from a module the snapshot does not hold is undecided
 test("a variable a method declares from its own parameter is still a value the code fills at run time", async () => {
   const service = source(
     "src/app/order/order.service.ts",
-    ["import { HttpClient } from '@angular/common/http'", "import { inject } from '@angular/core'", "export class OrderService {", "  private readonly http = inject(HttpClient)", "  load(orderId: string): void {", "    const url = orderId", "    this.http.get(`${url}/lines`)", "  }", "}"].join("\n"),
+    ["import { HttpClient } from '@angular/common/http'", "import { inject } from '@angular/core'", "export class OrderService {", "  private readonly http = inject(HttpClient)", "  load(orderId: string): void {", "    const url = orderId", "    this.http.get(`/orders/${url}/lines`)", "  }", "}"].join("\n"),
   );
 
-  assert.deepEqual(sites(await reader.of([service], "shop-web")), ["GET {}/lines@src/app/order/order.service.ts:7"]);
+  assert.deepEqual(sites(await reader.of([service], "shop-web")), ["GET /orders/{}/lines@src/app/order/order.service.ts:7"]);
+});
+
+test("a run-time value that does not start a path segment leaves the path undecided, since it may hold an origin or a base path", async () => {
+  const found = await reader.of([component("    this.http.get(`${method}/orders`)", "    this.http.get('' + method + '/orders')", "    this.http.get(`/api/v1${method}`)", "    this.http.get(`/api/${method}/orders`)")], "shop-web");
+
+  assert.deepEqual(sites(found), ["unknown unresolved@src/app/app.component.ts:6", "unknown unresolved@src/app/app.component.ts:7", "unknown unresolved@src/app/app.component.ts:8", "GET /api/{}/orders@src/app/app.component.ts:9"]);
+});
+
+test("a variable whose undecided initializer reads nothing the code fills at run time is undecided, and one that reads such a value is one", async () => {
+  const found = await reader.of([component("    const part = compute()", "    this.http.get(`/api/${part}/tail`)", "    const code = this.store.merchant()", "    this.http.get(`/stores/${code}/logo`)")], "shop-web");
+
+  assert.deepEqual(sites(found), ["unknown unresolved@src/app/app.component.ts:7", "GET /stores/{}/logo@src/app/app.component.ts:9"]);
 });
 
 test("a path held as a member of a constant object literal still resolves", async () => {
@@ -501,8 +513,8 @@ test("a path function that calls itself is undecided, never a hang", async () =>
   assert.deepEqual(sites(await reader.of([pathFunction(" return orderPath(!open)")], "shop-web")), ["unknown unresolved@paths.ts:6"]);
 });
 
-test("a variable a request function declares is a value it fills at run time", async () => {
-  const found = await reader.of([component("    httpResource(() => { const id = this.pick(); return `/orders/${id}` })")], "shop-web");
+test("a variable a request function declares is read in the function's own scope", async () => {
+  const found = await reader.of([component("    httpResource(() => { const id = method; return `/orders/${id}` })")], "shop-web");
 
   assert.deepEqual(sites(found), ["GET /orders/{}@src/app/app.component.ts:6"]);
 });

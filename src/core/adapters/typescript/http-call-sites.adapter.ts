@@ -517,7 +517,7 @@ class Reader {
   private async request(shape: FileShape, call: ts.CallExpression, pathExpression: ts.Expression | undefined, method: HttpTarget["method"] | undefined, scope = scopeOfCall(call)): Promise<ReadTarget> {
     const unknown = unresolvedAt(shape, call);
     const path = pathExpression === undefined ? undefined : textOf(await this.evaluate(shape, pathExpression, scope));
-    if (path === undefined || method === undefined) return unknown;
+    if (path === undefined || method === undefined || !startsSegments(path)) return unknown;
     const base = await this.baseUrl(shape, call);
     const written = normalizePath(path);
     if (base === UNDECIDED) return { ...unknown, stated: { method, path: written } };
@@ -618,14 +618,16 @@ class Reader {
   /**
    * A name the code binds is what it was bound to: the initializer of a variable declared where the call sits, a value
    * the code fills at run time, or the constant a top-level declaration or an import names. The code's own binding wins,
-   * so a parameter that shadows a const of the file stays a value the code fills.
+   * so a parameter that shadows a const of the file stays a value the code fills. An initializer the snapshot does not
+   * decide is a value the code fills only when it reads one, so a value computed from nothing it holds stays undecided.
    */
   private async evaluateName(shape: FileShape, name: string, scope: Scope, trail: ReadonlySet<string>): Promise<Evaluation | undefined> {
     const local = scope.locals.get(name);
     if (local !== undefined) {
       const visited = `${shape.source.fileName}\0local ${name}`;
-      const held = trail.has(visited) ? undefined : await this.evaluate(shape, local, lexicalScope(local), new Set(trail).add(visited));
-      return held ?? RUN_TIME_VALUE;
+      if (trail.has(visited)) return undefined;
+      const declared = lexicalScope(local);
+      return (await this.evaluate(shape, local, declared, new Set(trail).add(visited))) ?? (readsRunTime(local, declared) ? RUN_TIME_VALUE : undefined);
     }
     if (scope.names.has(name)) return RUN_TIME_VALUE;
     const constant = await this.constantAt(shape, name, trail);
@@ -878,6 +880,16 @@ function parameterType(name: ts.Identifier): string | undefined {
   return undefined;
 }
 
+/** Whether an expression reads a value the code fills at run time: `this`, or a name the code around it binds. */
+function readsRunTime(node: ts.Node, scope: Scope): boolean {
+  if (node.kind === ts.SyntaxKind.ThisKeyword) return true;
+  if (ts.isIdentifier(node)) return scope.names.has(node.text);
+  if (ts.isPropertyAccessExpression(node)) return readsRunTime(node.expression, scope);
+  if (ts.isPropertyAssignment(node)) return readsRunTime(node.initializer, scope);
+  if (ts.isFunctionLike(node)) return false;
+  return ts.forEachChild(node, (child) => readsRunTime(child, scope) || undefined) === true;
+}
+
 /** Whether a name is the global of that name where the code reads it: nothing the file or the code around declares or imports it. */
 function isGlobalName(shape: FileShape, scope: Scope, name: string): boolean {
   return !scope.names.has(name) && !shape.imports.has(name) && !shape.bindings.has(name);
@@ -948,6 +960,17 @@ function verbOf(name: string): HttpTarget["method"] {
  */
 function endsPath(text: string): boolean {
   return text.includes("?") || text.includes("#");
+}
+
+/**
+ * Whether every run-time value of a path starts a segment of it. One that starts the URL, or follows text of its segment,
+ * may hold an origin, a base path or several segments, so it stands for no segment.
+ */
+function startsSegments(path: string): boolean {
+  for (let at = path.indexOf(PLACEHOLDER); at !== -1; at = path.indexOf(PLACEHOLDER, at + PLACEHOLDER.length)) {
+    if (path[at - 1] !== "/") return false;
+  }
+  return true;
 }
 
 /** `:name` stands for a value the code fills, like `${expr}`; the query string and the fragment are not part of the path a route serves. */
