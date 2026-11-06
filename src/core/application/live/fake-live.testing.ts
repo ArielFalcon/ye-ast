@@ -22,8 +22,7 @@ export interface FakeLive {
   state: { current: MirrorState | null };
   calls: string[];
   held: { locks: number; released: number };
-  /** Paths each `reconcile` was told to copy again, in call order. */
-  forced: string[][];
+  /** Paths each `syncMirror` was asked to bring up to date, in call order. */
   syncs: string[][];
   /** Paths each `materialize` was asked to copy, in call order; a staging into the index tree is recorded in `staged`. */
   materialized: string[][];
@@ -62,7 +61,6 @@ export function fakeLive(initial: Record<string, string> = {}, digest: Digest = 
     state: { current: null },
     calls: [],
     held: { locks: 0, released: 0 },
-    forced: [],
     syncs: [],
     materialized: [],
     staged: [],
@@ -85,7 +83,7 @@ export function fakeLive(initial: Record<string, string> = {}, digest: Digest = 
     },
     deps: undefined as unknown as LiveDeps,
   };
-  const entryOf = (path: string, blob: string): MirrorEntry => ({ path, size: blob.length, mtimeNs: blob, blob });
+  const entryOf = (path: string, blob: string): MirrorEntry => ({ path, size: blob.length, mtimeNs: blob, ctimeNs: blob, ino: "1", blob });
 
   const workingTree: WorkingTree = {
     list: async () => {
@@ -109,13 +107,12 @@ export function fakeLive(initial: Record<string, string> = {}, digest: Digest = 
       fake.state.current = structuredClone(state);
       return { ok: true, value: undefined };
     },
-    reconcile: async (_location, paths, manifest, force) => {
+    reconcile: async (_location, paths, manifest) => {
       fake.calls.push("reconcile");
-      fake.forced.push([...force]);
       const old = new Map(manifest.map((entry) => [entry.path, entry]));
       const next = paths.map(({ path }) => entryOf(path, fake.tree.get(path) ?? ""));
       const changed = new Set<string>();
-      for (const entry of next) if (old.get(entry.path)?.blob !== entry.blob || force.includes(entry.path)) changed.add(entry.path);
+      for (const entry of next) if (old.get(entry.path)?.blob !== entry.blob) changed.add(entry.path);
       for (const entry of manifest) if (!next.some((candidate) => candidate.path === entry.path)) changed.add(entry.path);
       return { ok: true, value: { manifest: next, skipped: [...fake.skipped], changed: [...changed].sort() } };
     },

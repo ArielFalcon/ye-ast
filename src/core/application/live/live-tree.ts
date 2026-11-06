@@ -182,7 +182,7 @@ async function refresh(deps: LiveDeps, request: OpenLive, location: MirrorLocati
   }
   const paths = listing.value.paths.filter((entry) => request.selected(entry.path));
 
-  const reconciled = await mirror.reconcile(location, paths, state?.manifest ?? [], state?.pending ?? [], signal);
+  const reconciled = await mirror.reconcile(location, paths, state?.manifest ?? [], signal);
   if (!reconciled.ok) return mirrorFailure(reconciled.fault);
   const { manifest, skipped, changed } = reconciled.value;
   const exported = liveExport(manifest, skipped);

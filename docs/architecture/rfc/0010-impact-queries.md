@@ -390,7 +390,8 @@ ids below are computed in process.
 - **The content.** ye-ast reads it itself; git never does, because `diff-files` and `status` re-hash files through
   clean filters defined in configuration.
   - Each listed path is checked with `lstat`.
-  - A regular file keeps its recorded blob id when its size and nanosecond mtime match the mirror's manifest.
+  - A regular file keeps its recorded blob id when its size, nanosecond mtime, nanosecond ctime and inode match the
+    mirror's manifest.
     Otherwise it is copied into the mirror and its git blob id is computed in process over the copied bytes, so the
     listing and the mirror agree by construction.
   - A symbolic link, a submodule, an unsafe path or a collision is a skipped entry with the export's own reason
@@ -404,8 +405,13 @@ ids below are computed in process.
     equals the sha `value` byte for byte. That equality is an acceptance test.
   - A fact over a change digests both sides, as `ofChange` already does (`impact-queries.ts:144`): the merge base's
     content and the `stateId`.
-  - An edit that keeps a file's size and nanosecond mtime goes unseen, by ye-ast and by codegraph's `sync`
-    (codegraph 1.6.2 `extraction/index.js:3183-3200`). The fact never claims more freshness than the index holds.
+  - An edit that keeps a file's size and nanosecond mtime is seen by ye-ast, since the kernel moves the file's ctime
+    on every write and no user tool can set it back (`cp -p`, `rsync -t`, `tar x` and `utimes` set mtime alone), and
+    a replaced file has another inode. What remains is the clock of the file system: two writes of the same size
+    inside one ctime tick are one stat to every stat-based check, and a file system that keeps no status-change time
+    gives ctime no more than mtime does. The engine's `sync` has its own size and
+    millisecond mtime check (codegraph 1.6.2 `extraction/index.js:3183-3200`), but it reads the index tree, where
+    every changed path is a fresh copy with a new mtime. The fact never claims more freshness than the index holds.
     The retained snapshot data of a live capture ([ADR-0030](../adr/0030-live-captures-use-the-snapshot-data-cache.md))
     rests on the same assumption and adds no other: its key is the manifest's blob ids.
 
@@ -447,7 +453,7 @@ files all count. A moved HEAD is just a new merge base.
 - **The state file.** It lives beside the lock, at `live/<scope digest>.state.json`, not inside the mirror: a full build
   deletes the engine's store, and `discard` removes the mirror and the state but never the lock. It records:
   - the codegraph version, the range of `SUPPORTED_STORE` as one string and `STAGING_RULES_VERSION`;
-  - the manifest (path, size, mtime, blob id) and the skipped entries;
+  - the manifest (path, size, mtime, ctime, inode, blob id) and the skipped entries;
   - the files the store does not hold;
   - the `stateId` of the last full build (empty while none has completed) and the current `stateId`;
   - `pending`: the mirror paths the store may not reflect yet.
@@ -467,8 +473,8 @@ files all count. A moved HEAD is just a new merge base.
   discarded, so the cap is best effort and a single mirror over it stays; a state file with no directory, a directory
   with no state and a leftover temporary file are debris and go as well. The sweep is `readdir` and `stat` plus each
   state file's own bytes, never a mirrored file's content, and a sweep that cannot read or remove a mirror leaves it in
-  place: it never fails a query and never changes a fact. ADR-0015's garbage collection of kept indexes is a different
-  store and stays undecided; [RFC-0006](0006-configuration.md) carries this policy in its `store` row.
+  place: it never fails a query and never changes a fact. ADR-0027's retention of kept indexes is a different
+  store; [RFC-0006](0006-configuration.md) carries this policy in its `store` row.
 
 **One live query.** A live query holds ye-ast's lock from its refresh until its answer is built.
 
@@ -482,7 +488,10 @@ files all count. A moved HEAD is just a new merge base.
    reconcile (`index.js:841`). A query that reads no store (`map`) stops after copying: it adds the changed paths to
    `pending` and leaves the engine alone, so the next query that reads the store syncs them.
 3. **`pending`.** It writes the new manifest and the changed paths, with the paths still pending, to the state file as
-   `pending`. The next refresh copies them again whatever their stat says.
+   `pending`. `pending` says what the store must index again, not what the mirror must copy again: the manifest is
+   written after the copy, so a path whose entry is current is not copied twice, however many queries that read no
+   store run before the next one that does. The next query that reads the store stages every pending path into the
+   index tree and syncs it.
 4. **The update.** It copies or deletes those paths in the mirror and runs `sync({ paths })` with all of them,
    deletions included, in the child started with `--liftoff-only`. `sync` removes only the tracked paths it is
    handed (`extraction/index.js:3119-3160`). It then recomputes the files the store does not hold, with the full
@@ -504,7 +513,7 @@ current `stateId` equals the last full build's, otherwise `{ kind: "sync", base:
 (ADR-0015 decision 3). A live `map` reads no store and carries none.
 
 **Staleness.** After the answer is built, the query takes the listing again and compares each path's size and
-modification time with the manifest (`LiveMirror.changedSince`), reading no content. If any differs, the request's
+modification time, status-change time and inode with the manifest (`LiveMirror.changedSince`), reading no content. If any differs, the request's
 `onStale` is called with the `stateId` the answer reflects and the changed paths; the transport says the answer is stale
 as a response-level sibling of the fact — under `live` beside it on the CLI's stdout, and beside the fact in the MCP's
 `structuredContent` and `_meta` (RFC-0002 rule 8; RFC-0005 "Live freshness"). The state the tree is in now is not
@@ -516,9 +525,8 @@ the reconciled capture (sources, findings, relations, module dependencies) comes
 fresh listing, the reconcile, the staleness re-list and the retention sweep still run on every call; the cache is
 consulted after the reconcile and keyed by the repository, scope, trust and the capture's whole listing (blob ids,
 `written` flags, skipped entries), never by HEAD. A file whose stat moved but whose bytes did not keeps its blob id and so
-its key; an edit changes a blob and misses. The assumption stays the mirror's own, stated in "The mirror" above: an edit
-that keeps a file's size and nanosecond mtime goes unseen, so it is also answered from the retained data of the earlier
-content.
+its key; an edit changes a blob and misses. The assumption stays the mirror's own, stated in "The mirror" above: the
+coarse clock of the file system, which can leave two same-size writes inside one ctime tick as one stat.
 The merge base of a live change query is a commit and takes the key of a commit at that scope and trust, so its entry is
 shared with a change query at that sha and survives an edit of the working tree.
 
