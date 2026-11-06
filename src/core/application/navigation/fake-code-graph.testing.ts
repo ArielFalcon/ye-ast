@@ -20,6 +20,7 @@ export interface FakeEdge {
   confidence?: number | null;
   provenance?: GraphEdge["provenance"];
   synthesizedBy?: string | null;
+  resolvedFrom?: GraphEdge["resolvedFrom"];
 }
 
 export interface FakeUnresolved {
@@ -52,6 +53,7 @@ export function fakeCodeGraph(nodes: readonly FakeNode[], edges: readonly FakeEd
     confidence: e.confidence ?? null,
     provenance: e.provenance ?? null,
     synthesizedBy: e.synthesizedBy ?? null,
+    resolvedFrom: e.resolvedFrom ?? null,
   });
   const byPosition = (a: GraphSymbol, b: GraphSymbol): number => (a.file < b.file ? -1 : a.file > b.file ? 1 : a.startLine - b.startLine || (a.id < b.id ? -1 : 1));
   return {
