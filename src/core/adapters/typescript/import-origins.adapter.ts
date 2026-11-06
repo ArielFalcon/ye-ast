@@ -3,7 +3,7 @@ import { matchesReferenceKind, syntaxName } from "./reference-occurrence.ts";
 import { declarationCounts, declaredName, declaredNames, isStatic, scriptGlobalNames } from "./syntax-names.ts";
 import { moduleStatement } from "./import-bindings.ts";
 import { sourceTree } from "./source-tree.ts";
-import { isPackageManifest, isTypeScriptSource } from "../../domain/languages/typescript.ts";
+import { isTypeScriptSource } from "../../domain/languages/typescript.ts";
 import type { ImportOrigin } from "../../domain/relations/resolved-reference.ts";
 import type { Evidence, Finding } from "../../domain/shared/fact.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
@@ -32,7 +32,7 @@ interface FileShape {
 export function createImportOrigins(sources: readonly SourceFile[]): ImportOrigins {
   const texts = new Map(sources.map((file) => [file.path, file.content]));
   const files = new Map(sources.map((file) => [file.path, file]));
-  const modules = createModuleResolver(async (file) => texts.get(file), manifestPackages(sources.filter((file) => isPackageManifest(file.path)).map((file) => file.content)));
+  const modules = createModuleResolver(async (file) => texts.get(file), manifestPackages(sources));
   const shapes = new Map<string, FileShape>();
 
   /**
@@ -50,8 +50,8 @@ export function createImportOrigins(sources: readonly SourceFile[]): ImportOrigi
 
   /**
    * The names the snapshot declares globally: a `.d.ts` anywhere, a file that augments the global scope, and the top
-   * level of a script (a source with no import or export, whose declarations are global). A repository may spell a lib
-   * name itself, and retiring that name would hide a real declaration, so those names stay `unknown`.
+   * level of a script (a source with no import or export, whose declarations are global). A lib name among them is never
+   * `ambient`.
    */
   let globals: ReadonlySet<string> | undefined;
   const repositoryGlobals = (): ReadonlySet<string> => {

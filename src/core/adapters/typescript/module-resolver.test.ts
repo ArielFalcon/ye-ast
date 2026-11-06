@@ -51,7 +51,11 @@ test("a non-relative specifier with no governing configuration is external only 
 });
 
 test("a package a manifest of the snapshot names is never external, whether a configuration governs the importer or not", async () => {
-  const packages = manifestPackages([JSON.stringify({ name: "@r/shared" }), JSON.stringify({ name: "app", dependencies: { "@r/shared": "workspace:*", rxjs: "1" } }), "{ nope"]);
+  const packages = manifestPackages([
+    { path: "shared/package.json", content: JSON.stringify({ name: "@r/shared" }) },
+    { path: "app/package.json", content: JSON.stringify({ name: "app", dependencies: { "@r/shared": "workspace:*", rxjs: "1" } }) },
+    { path: "broken/package.json", content: "{ nope" },
+  ]);
   const files: Record<string, string> = { "app/tsconfig.json": "{}" };
   const resolver = createModuleResolver(async (file) => files[file], packages);
 
