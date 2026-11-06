@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ye-ast — architecture explorer</title>
-<meta name="description" content="Interactive architecture graph of ye-ast: layers, modules, ports, adapters and the flows that cross them.">
+<meta name="description" content="Documentation for ye-ast, a deterministic engine that derives verifiable facts about code. Explore its layers, modules, ports, adapters and the flows between them.">
 <link rel="stylesheet" href="styles.css">
 <link rel="stylesheet" href="concepts.css">
 </head>
@@ -30,13 +30,13 @@
     <section id="intro" class="doc-section hero" data-rail="Introduction">
       <div class="section-head hero-copy">
         <p class="kicker">Deterministic code truth</p>
-        <h1>Code truth, drawn out.</h1>
-        <p class="section-lede lede">ye-ast answers what code depends on, where that dependence surfaces, and how complete the answer is. Every answer is derived from code, git and declared contracts, and it says what it could not see.</p>
+        <h1>Verifiable facts, gaps included.</h1>
+        <p class="section-lede lede">ye-ast tells you what depends on a change, where that dependence surfaces, and how complete the answer is. It derives every answer from code, git and declared contracts, and states what it could not see.</p>
         <div class="hero-actions">
           <a class="button primary" href="#facts">Read the fact contract</a>
           <a class="button" href="#explorer">Explore the architecture</a>
         </div>
-        <p class="hero-foot">No LLM runs inside the engine. <strong>“Unknown” is an explicit answer</strong>: an empty result never stands for “no impact”.</p>
+        <p class="hero-foot">No LLM runs inside the engine. <strong>“Unknown” is an explicit answer</strong>, and an empty result never means “no impact”.</p>
       </div>
       <div class="stat-strip build" aria-label="At a glance">
           <div><strong>7</strong><span>read commands</span><small>map · impact · callers · importers · outline · workspace · decisions</small></div>
@@ -65,34 +65,34 @@
             <path d="M827 120 V137 H662 V150" class="fl-edge dashed" marker-end="url(#hero-arrow)"></path>
             <path d="M455 120 V137 H318 V150" class="fl-edge dashed" marker-end="url(#hero-arrow)"></path>
           </svg>
-          <figcaption id="hero-flow-caption">The core decides; everything around it carries. The same use case is reached from the CLI, the MCP server or the query protocol because composition injects it.</figcaption>
+          <figcaption id="hero-flow-caption">The core decides; the layers around it only carry requests in and results out. The CLI, the MCP server and the query protocol reach the same use case because composition injects it.</figcaption>
         </figure>
     </section>
 
     <section data-rail="Fact contract" id="facts" class="doc-section">
       <div class="section-head">
         <p class="kicker">The fact contract</p>
-        <h2>An answer that can say “I don't know”.</h2>
-        <p class="section-lede">Every query returns a <code>Fact</code>. The status is not a footnote: it decides whether an empty result means “none” or “not seen”.</p>
+        <h2>Answers that can say “I don't know”</h2>
+        <p class="section-lede">Every query returns a <code>Fact</code>. Its status decides whether an empty result means “none” or “not seen”.</p>
       </div>
 
       <div class="status-grid">
         <article class="status-card" data-status="complete">
           <p class="status-tag">complete</p>
-          <h3>The frontier emptied.</h3>
-          <p>Nothing that could add a caller was unseen. The value is everything inside the declared scope.</p>
+          <h3>The walk finished.</h3>
+          <p>Nothing that could add a caller went unseen. The value covers everything inside the declared scope.</p>
           <p class="status-foot">Read it as: <strong>within this scope, this is the whole answer.</strong></p>
         </article>
         <article class="status-card" data-status="partial">
           <p class="status-tag">partial</p>
-          <h3>Something stopped the work.</h3>
-          <p>Every cause is a <strong>cut</strong>, and each cut names where it stopped: a bound, an unresolved name, a file with no extractor, a path left out of the export.</p>
+          <h3>Something stopped the walk.</h3>
+          <p>Each cause is a <strong>cut</strong>, and each cut names where it stopped: a bound, an unresolved name, a file with no extractor, or a path left out of the export.</p>
           <p class="status-foot">Read it as: <strong>what lies past a cut is not known.</strong></p>
         </article>
         <article class="status-card" data-status="unknown">
           <p class="status-tag">unknown</p>
           <h3>No answer is possible.</h3>
-          <p>The reason says why: <code>index-unavailable</code>, <code>source-unreadable</code>, <code>out-of-scope</code>…</p>
+          <p>The reason names the cause: <code>index-unavailable</code>, <code>source-unreadable</code>, <code>out-of-scope</code>…</p>
           <p class="status-foot">Never read it as <strong>“no impact”.</strong></p>
         </article>
       </div>
@@ -116,13 +116,13 @@
 
       <div class="cut-block">
         <div class="cut-copy">
-          <p class="mini-kicker">The cut taxonomy</p>
-          <h3>Nine ways to be honest.</h3>
-          <p>These are the names every partial fact lists (<code>src/core/domain/shared/fact.ts:114-128</code>). The MCP server's instructions tell an agent that a partial answer keeps its known findings and lists its cuts, and to raise a bound only when a cut names it (<code>src/mcp/server.ts:50-69</code>); the table spells out what each cut asks for.</p>
+          <p class="mini-kicker">Reading a partial fact</p>
+          <h3>Nine kinds of cut</h3>
+          <p>Every partial fact lists its cuts by these names (<code>src/core/domain/shared/fact.ts:114-128</code>). The MCP server's instructions tell an agent that a partial answer keeps its known findings and lists its cuts, and that it should raise a bound only when a cut names it (<code>src/mcp/server.ts:50-69</code>). The table shows what to do about each one.</p>
         </div>
         <div class="table-wrap">
           <table class="data-table stack-mobile">
-            <thead><tr><th>Cut</th><th>What it means</th><th>What a consumer should do</th></tr></thead>
+            <thead><tr><th>Cut</th><th>What it means</th><th>What to do</th></tr></thead>
             <tbody>
               <tr><td><code>depth</code></td><td>The walk stopped at the depth bound.</td><td>Raise <code>budget.depth</code>, or ask <code>callers</code> about the symbol at the cut.</td></tr>
               <tr><td><code>hub</code></td><td>A reached symbol has more call-like callers than the <code>hubFanIn</code> budget, so the walk did not expand it. The symbol is still in the answer; what stops is the climb through it.</td><td>Raise <code>hubFanIn</code>, or ask <code>callers</code> about that symbol alone.</td></tr>
@@ -142,8 +142,8 @@
     <section data-rail="Surfaces" id="surfaces" class="doc-section">
       <div class="section-head">
         <p class="kicker">Surfaces</p>
-        <h2>Three ways in, one set of decisions.</h2>
-        <p class="section-lede">A driving adapter turns an outside request into a call and shapes the answer. It never reaches an adapter or a use case directly; composition injects the query families.</p>
+        <h2>Three ways in, one core</h2>
+        <p class="section-lede">A driving adapter turns an outside request into a call and shapes the answer. It never calls an adapter or a use case directly; composition injects the query families.</p>
       </div>
 
       <div class="surface-diagram" aria-hidden="true">
@@ -163,14 +163,14 @@
               <thead><tr><th>Surface</th><th>What it exposes</th><th>Where</th></tr></thead>
               <tbody>
                 <tr><td><code>ye-ast map</code></td><td>The entrypoints of a revision; <code>--live</code> for a trusted working tree.</td><td><code>src/cli/main.ts:296-299</code></td></tr>
-                <tr><td><code>ye-ast impact</code></td><td>The change from the merge base to head; bounds; scope.</td><td><code>src/cli/main.ts:300-303</code></td></tr>
-                <tr><td><code>ye-ast callers</code></td><td>Inbound reachability from symbols or line ranges.</td><td><code>src/cli/main.ts:304-307</code></td></tr>
+                <tr><td><code>ye-ast impact</code></td><td>The change from the merge base to head, with bound and scope options.</td><td><code>src/cli/main.ts:300-303</code></td></tr>
+                <tr><td><code>ye-ast callers</code></td><td>What depends on symbols or line ranges.</td><td><code>src/cli/main.ts:304-307</code></td></tr>
                 <tr><td><code>ye-ast importers</code></td><td>Importers, users and unresolved namers per file.</td><td><code>src/cli/main.ts:308-311</code></td></tr>
-                <tr><td><code>ye-ast outline</code></td><td>Declaration spans and imports of the listed files; files the index holds no node of are listed as unheld.</td><td><code>src/cli/main.ts:312-315</code></td></tr>
+                <tr><td><code>ye-ast outline</code></td><td>Declaration spans and imports of the listed files; files with no node in the index are listed as unheld.</td><td><code>src/cli/main.ts:312-315</code></td></tr>
                 <tr><td><code>ye-ast workspace</code></td><td>The outward names a repository uses, the candidate repositories for each and the names no repository serves; <code>--offline</code> refreshes no remote.</td><td><code>src/cli/main.ts:316-319</code></td></tr>
                 <tr><td><code>ye-ast decisions</code></td><td>The configuration gaps the code cannot fill, each with evidence-backed options; it writes nothing.</td><td><code>src/cli/main.ts:320-323</code></td></tr>
                 <tr><td><code>ye-ast init</code></td><td>Writes the trust record, the local exclude and the fixed layer; prints the MCP registration.</td><td><code>src/cli/main.ts:104</code> · <code>src/core/application/install/install.ts:26</code></td></tr>
-                <tr><td><code>ye-ast mcp</code></td><td>stdio MCP server with read-only tools; it serves the declared repositories and each call picks one with <code>repo</code>.</td><td><code>src/composition/mcp.ts:9-23</code></td></tr>
+                <tr><td><code>ye-ast mcp</code></td><td>MCP server over stdio with read-only tools; it serves the declared repositories, and each call picks one with <code>repo</code>.</td><td><code>src/composition/mcp.ts:9-23</code></td></tr>
                 <tr><td><code>ye-ast serve</code></td><td>The query protocol over stdio; stdout carries only protocol lines.</td><td><code>src/protocol/query-server.ts</code></td></tr>
               </tbody>
             </table>
@@ -179,8 +179,8 @@
       </details>
 
       <div class="mcp-note">
-        <p><strong>Read-only by type.</strong> The MCP server receives only read query families: <code>EntrypointQueries</code>, <code>ImpactQueries</code>, <code>OutlineQueries</code>, <code>WorkspaceQueries</code>, <code>WorkspaceImpactQueries</code> and <code>DecisionQueries</code>. There is no write method to call, so an agent cannot reach one by mistake, and all eight tools are annotated read-only.</p>
-        <p>The server also ships instructions: when to call each tool and how to read an answer. Complete is relative to the declared scope, partial keeps its known findings and lists its cuts, unknown never means no impact, and a bound is raised only when a cut names it.</p>
+        <p><strong>Read-only by type.</strong> The MCP server receives only read query families: <code>EntrypointQueries</code>, <code>ImpactQueries</code>, <code>OutlineQueries</code>, <code>WorkspaceQueries</code>, <code>WorkspaceImpactQueries</code> and <code>DecisionQueries</code>. No write method exists, and all eight tools are annotated read-only.</p>
+        <p>The server also includes instructions: when to call each tool and how to read an answer. Complete is relative to the declared scope, partial keeps its known findings and lists its cuts, unknown never means no impact, and a bound is raised only when a cut names it.</p>
         <p>One server serves several declared repositories: <code>ye-ast mcp [&lt;launch-root&gt;] [--repo &lt;id&gt; &lt;root&gt;]...</code> declares them, and each call chooses one with <code>repo</code> (the launch repository by default). Registering a repository grants it no trust.</p>
         <p class="ref"><code>src/mcp/query-runner.ts:27-37</code> · <code>src/mcp/server.ts:50-69</code> · <code>src/composition/mcp.ts:9-23</code></p>
       </div>
@@ -192,7 +192,7 @@
           <li><code>ye_ast_workspace</code> returns the outward names a repository uses (HTTP, messaging, dependencies), the candidate repositories for each and the names no repository serves. Local clones you supply are used as given, never downloaded.</li>
           <li><code>ye_ast_decisions</code> returns the gaps the code cannot fill (membership, repository, library, gateway, revision, remote, trust), each with evidence-backed options. It writes nothing.</li>
           <li><code>mode</code> changes presentation only, never coverage: <code>summary</code> gives findings, <code>details</code> evidence and locations, <code>full</code> the complete result JSON with navigation text.</li>
-          <li>Entrypoints, callers and impact page the evidence the text omits: <code>select</code> and <code>page</code> go together and <code>page.limit</code> is required. <code>expect</code> asserts a result identity; <code>replay</code> reruns the query and fails if the result changed, since no old capture is kept.</li>
+          <li>Entrypoints, callers and impact page the evidence the text omits: <code>select</code> and <code>page</code> go together, and <code>page.limit</code> is required. <code>expect</code> asserts a result identity; <code>replay</code> reruns the query and fails if the result changed, because ye-ast keeps no earlier capture.</li>
         </ul>
         <p class="ref"><code>src/mcp/server.ts:50-69</code> · <code>src/mcp/query-schema.ts:158-205</code> · <code>src/mcp/presentation.ts:5-8</code> · <code>src/core/domain/outline/outline-fact.ts</code> · <code>src/core/domain/decisions/decision.ts:4</code></p>
       </div>
@@ -228,7 +228,7 @@
             <p class="compose-about" id="compose-about"></p>
             <div class="output-head compose-compare-head"><span>response size</span></div>
             <div class="compose-compare" id="compose-compare"></div>
-            <p class="playground-note">Real answers captured on a two-repository fixture (shop and web). Compose pays for its envelope: a lone query, queries that share nothing, or the full mode can cost more than the separate calls; what it adds is one merged answer with its connections and coverage.</p>
+            <p class="playground-note">Real answers captured on a two-repository fixture (shop and web). Composing adds overhead: a lone query, queries that share nothing, or full mode can cost more than separate calls. In return you get one merged answer with its connections and coverage.</p>
           </div>
           <div class="compose-answer">
             <div class="output-head"><span>answer</span><strong id="compose-status" class="pill">complete</strong></div>
@@ -250,8 +250,8 @@
     <section data-rail="Trust" id="trust" class="doc-section">
       <div class="section-head">
         <p class="kicker">Trust &amp; snapshots</p>
-        <h2>Two modes, one rule: the repository never raises its own trust.</h2>
-        <p class="section-lede">Trust describes the repository content, never the machine. It is declared outside the repository: by a host through the library or the protocol, by a user through <code>ye-ast init</code> or a flag. Without a declaration, the CLI and the MCP server run <code>untrusted</code>.</p>
+        <h2>Two trust modes, one rule</h2>
+        <p class="section-lede">A repository never raises its own trust. Trust describes the repository's content, never the machine, and you declare it outside the repository: a host does it through the library or the protocol, a user through <code>ye-ast init</code> or a flag. Without a declaration, the CLI and the MCP server run <code>untrusted</code>.</p>
       </div>
 
       <div class="trust-lanes">
@@ -267,7 +267,7 @@
           </ol>
           <ul class="lane-invariants">
             <li>No repository code runs.</li>
-            <li>No repository manifest, <code>.gitignore</code>, engine config or pre-built index is honoured.</li>
+            <li>No repository manifest, <code>.gitignore</code>, engine config or pre-built index is honored.</li>
             <li>No symlinks, no network.</li>
           </ul>
         </article>
@@ -315,7 +315,7 @@
       <section class="doc-section explorer-head">
         <div class="section-head">
           <p class="kicker">Architecture</p>
-          <h2>Follow one request through the layers.</h2>
+          <h2>Follow one request through the layers</h2>
           <p class="section-lede">Pick a flow and step through it: each step lights the modules and edges it crosses and explains why. Select a module to see what it may import and what it never reaches. Hold <kbd>Ctrl</kbd> (<kbd>⌘</kbd> on a Mac) while scrolling to zoom the graph.</p>
         </div>
       </section>
@@ -397,17 +397,17 @@
     <section data-rail="The walk" class="doc-section" id="concept-rules">
       <div class="section-head">
         <p class="kicker">The walk</p>
-        <h2>What is a dependence, and what is a cut.</h2>
-        <p class="section-lede">The graph shows the modules. These are the rules that decide which edges a traversal follows and what the answer can see; the simulator below applies them to a toy repository, and two real runs show the result.</p>
+        <h2>What the walk follows and where it ends</h2>
+        <p class="section-lede">These rules decide which edges a traversal follows and what the answer can see. The simulator applies them to a toy repository, and two real runs show the result.</p>
       </div>
 
       <div class="bounds-help">
-        <h3>The bounds, and what each one names</h3>
+        <h3>The four bounds</h3>
         <dl>
           <dt>depth</dt>
           <dd>How many hops from the seed the walk may climb. The seed is depth 0; its direct callers are depth 1.</dd>
           <dt>hub fan-in</dt>
-          <dd><strong>Fan-in</strong> is the number of call-like callers a symbol has: the count of call edges pointing at it, whether or not the walk followed them. <strong>Hub fan-in</strong> is an optional budget over that count. When a reached symbol has more call-like callers than the budget, the walk does not expand it and emits a <code>hub</code> cut at that symbol. It is not the number of calls the symbol makes, and it does not remove the symbol from the answer: it stops the walk from climbing through a shared utility that would otherwise pull in the whole repository.</dd>
+          <dd><strong>Fan-in</strong> is the number of call-like callers a symbol has: every call edge pointing at it, followed or not. <strong>Hub fan-in</strong> is an optional budget on that count. When a reached symbol exceeds it, the walk stops expanding that symbol and emits a <code>hub</code> cut there. The symbol stays in the answer; the budget only stops the walk from climbing through a shared utility that would otherwise pull in the whole repository. It does not count the calls the symbol makes.</dd>
           <dt>expansions</dt>
           <dd>How many reached symbols the walk may expand. It counts expanded symbols, not nodes reached.</dd>
           <dt>deadline</dt>
@@ -419,7 +419,7 @@
         <details>
           <summary><span>01</span> Owner at the same depth, then stop <em>ADR-0017</em></summary>
           <div class="details-body">
-            <p>A route names a class, not a method. When the walk reaches a method, it also reaches the type that declares it, at the same depth and with confidence 1 (<code>walk.ts:82-87</code>). That type then expands only through whole-type edges: <code>extends</code>, <code>implements</code>, and Angular <code>uses-component</code> / <code>uses-directive</code> / <code>uses-pipe</code>. It does not expand into whoever injects or imports it — otherwise a single reached member would drag in the world.</p>
+            <p>A route names a class, not a method. When the walk reaches a method, it also reaches the type that declares it, at the same depth and with confidence 1 (<code>walk.ts:82-87</code>). That type then expands only through whole-type edges: <code>extends</code>, <code>implements</code>, and Angular <code>uses-component</code> / <code>uses-directive</code> / <code>uses-pipe</code>. It does not expand into whoever injects or imports it — otherwise a single reached member would pull in everything.</p>
             <p class="ref"><code>src/core/domain/impact/edge-policy.ts:33-39</code> · <code>src/core/application/impact/inbound-edges.ts:92-102</code></p>
           </div>
         </details>
@@ -438,9 +438,9 @@
           </div>
         </details>
         <details>
-          <summary><span>04</span> Confidence is a widest path, not a count <em>max-min</em></summary>
+          <summary><span>04</span> Confidence is the best path, not a count <em>max-min</em></summary>
           <div class="details-body">
-            <p>A path is as sure as its least sure edge. The walk computes the strongest weakest edge from any seed over all paths; a heuristic edge without a score counts 0.3. In the real run: <code>1</code> at the seed, <code>0.9</code> at <code>login</code>, <code>0.85</code> at <code>onSubmit</code>. Fan-in is separate: it counts call-like callers, whether or not the walk followed them, so a renderer can rank or collapse hubs without the fact cutting them.</p>
+            <p>A path is only as sure as its least sure edge, and the walk reports the best such path from any seed. A heuristic edge without a score counts 0.3. In the real run: <code>1</code> at the seed, <code>0.9</code> at <code>login</code>, <code>0.85</code> at <code>onSubmit</code>. Fan-in is separate: it counts call-like callers, whether or not the walk followed them, so a renderer can rank or collapse hubs without the fact cutting them.</p>
             <p class="ref"><code>src/core/application/impact/walk.ts:172-188</code> · <code>src/core/domain/impact/edge-policy.ts:77-101</code></p>
           </div>
         </details>
@@ -480,7 +480,7 @@
           <div>
             <p class="mini-kicker">Walk simulator</p>
             <h3>The policy, on a toy repository.</h3>
-            <p>The engine is not running in this page. This is a faithful model of the walk on a small graph: the same edge policy, owner expansion, confidence and cuts. Every rule it applies is cited below.</p>
+            <p>The engine does not run in this page. This is a faithful model of the walk on a small graph, using the same edge policy, owner expansion, confidence and cuts. Each rule it applies is cited below.</p>
           </div>
           <div class="sim-scenarios" role="group" aria-label="Seed scenarios">
             <button class="chip is-active" type="button" data-scenario="token">change validateToken</button>
@@ -565,7 +565,7 @@
           </table>
         </div>
 
-        <p class="sim-note">The toy graph is illustrative; the rules are not. Only reached symbols are drawn: the strip below lists the rest, and the policy trace names every edge the walk refused and why. The walk expands each symbol once, enters a reached method's declaring type at the same depth, and follows only the rows of the edge policy. A test file is never a caller. Navigation is not dependence. A file import leads nowhere.</p>
+        <p class="sim-note">The toy graph is illustrative; the rules are not. Only reached symbols are drawn: the strip below lists the rest, and the policy trace names every edge the walk refused and why. The walk expands each symbol once, enters a reached method's declaring type at the same depth, and follows only the rows of the edge policy: a test file is never a caller, navigation is not dependence, and a file import leads nowhere.</p>
       </div>
 
       <div id="concept-runs">
@@ -573,7 +573,7 @@
         <div class="real-head reveal">
           <p class="mini-kicker">Reference run</p>
           <h3>Two real runs, captured from this checkout.</h3>
-          <p>Both fixtures were created outside the worktree, read <code>untrusted</code>, and queried with this build. The values below are copied from the JSON, not invented.</p>
+          <p>Both fixtures were created outside the worktree, read as <code>untrusted</code>, and queried with this build. The values below are copied from the JSON output.</p>
         </div>
 
         <article class="run-card reveal" data-run="complete">
@@ -582,7 +582,7 @@
             <span class="pill ok">complete</span>
           </header>
           <pre class="command small">ye-ast impact &lt;repo&gt; --base HEAD~1</pre>
-          <p class="run-note">The seed is <code>validateToken</code>. The walk climbs to <code>AuthService.login</code> and <code>AuthController.loginHandler</code>; the classes join at the same depth as their methods. No entrypoints exist in this fixture, and that is not a failure.</p>
+          <p class="run-note">The seed is <code>validateToken</code>. The walk climbs to <code>AuthService.login</code> and <code>AuthController.loginHandler</code>; the classes join at the same depth as their methods. This fixture has no entrypoints, and that is not a failure.</p>
           <div class="run-table" data-render="complete"><div class="fact-list">
       <div class="fact-row seed">
         <span class="fact-depth">0</span>
@@ -618,7 +618,7 @@
             <span class="pill warn">partial</span>
           </header>
           <pre class="command small">ye-ast impact &lt;repo&gt; --base HEAD~1</pre>
-          <p class="run-note">The same change, now with a route table. The component <code>LoginComponent</code> is reached through <code>onSubmit</code>, and the join surfaces <code>/login</code>. The cut comes from the snapshot: a <code>.rb</code> file has no extractor. The change never touched it.</p>
+          <p class="run-note">The same change, now with a route table. The walk reaches <code>LoginComponent</code> through <code>onSubmit</code>, and the join surfaces <code>/login</code>. The cut comes from the snapshot, not the change: a <code>.rb</code> file has no extractor.</p>
           <div class="run-table" data-render="partial"><div class="fact-list">
       <div class="fact-row seed">
         <span class="fact-depth">0</span>
@@ -691,7 +691,7 @@ export class LoginComponent {
 ];</code></pre>
             </div>
           </div>
-          <p class="fixture-note">This is the Angular fixture behind the partial run; the plain run differs only in the caller, an <code>AuthController</code> instead of the component. The change touches one line of <code>token.ts</code>. The walk climbs three hops, and the join turns the component into <code>/login</code>. The test file that also calls <code>login</code> is in the repository but is never a caller: tests are outside the walk by policy.</p>
+          <p class="fixture-note">This is the Angular fixture behind the partial run; the plain run differs only in the caller, an <code>AuthController</code> instead of the component. The change touches one line of <code>token.ts</code>. The walk climbs three hops, and the join turns the component into <code>/login</code>. The test file that also calls <code>login</code> is in the repository but is never a caller, by policy.</p>
         </div>
       </details>
       </div>
@@ -700,14 +700,14 @@ export class LoginComponent {
     <section data-rail="Reference" id="sources" class="doc-section">
       <div class="section-head">
         <p class="kicker">Reference</p>
-        <h2>Terms, evidence and limits.</h2>
+        <h2>Terms, evidence and limits</h2>
         <p class="section-lede">Look up a term, check where a claim is decided, and see what this page does not cover. The glossary and the evidence table stay folded until you open them.</p>
       </div>
 
       <details class="reference-fold" id="concept-glossary">
         <summary><span>glossary</span> Terms used by the graph and the fact <em>search a term</em></summary>
         <div class="details-body">
-          <p>Search for a term; technical labels stay in code form, the definition explains them in plain language.</p>
+          <p>Technical labels stay in code form; each definition explains them in plain language.</p>
           <div class="glossary-toolbar">
         <label for="glossary-filter">Search</label>
         <input id="glossary-filter" type="search" placeholder="fan-in, cut, seed, snapshot…">
@@ -734,7 +734,7 @@ export class LoginComponent {
             <tr><td>Owner expansion and its stop</td><td><code>src/core/application/impact/walk.ts:82-87</code> · ADR-0017</td></tr>
             <tr><td>Interface bridges, both directions</td><td><code>src/core/application/impact/inbound-edges.ts:123-169</code></td></tr>
             <tr><td>Field-origin settlement</td><td><code>src/core/application/impact/inbound-edges.ts:265-302</code></td></tr>
-            <tr><td>Confidence is the widest path</td><td><code>src/core/application/impact/walk.ts:172-188</code></td></tr>
+            <tr><td>Confidence is the best path, scored by its weakest edge</td><td><code>src/core/application/impact/walk.ts:172-188</code></td></tr>
             <tr><td>The one join: file, span, simple name</td><td><code>src/core/domain/shared/code-node.ts:20-27</code></td></tr>
             <tr><td>Entrypoint join, guards, unknown handlers</td><td><code>src/core/domain/impact/reached-entrypoints.ts:21-46</code></td></tr>
             <tr><td>Cuts and the fact status</td><td><code>src/core/domain/impact/impact-cuts.ts</code> · <code>src/core/domain/shared/fact.ts:114-159</code></td></tr>
@@ -756,12 +756,12 @@ export class LoginComponent {
       <div class="limits">
         <div>
           <p class="mini-kicker">Limits of this page</p>
-          <h3>Honest edges</h3>
+          <h3>What it does not show</h3>
         </div>
         <ul>
           <li>The simulator models the algorithm; it is not the engine. It uses the same policy rows on a smaller graph, but codegraph, the TypeScript compiler and git are not running.</li>
           <li>The real runs are from two local fixture repositories created for this page. They are not part of the test suite and are not committed.</li>
-          <li>The page covers the MVP surfaces (library, CLI, MCP, protocol). Hooks and the daemon are later; the atlas marks them “later” on purpose.</li>
+          <li>The page covers the MVP surfaces (library, CLI, MCP, protocol). Hooks and the daemon are later; the graph marks them “later” on purpose.</li>
           <li>Line numbers are from this checkout (2026-11-06, package 0.4.0, schema 0.21.0). A refactor moves them.</li>
         </ul>
       </div>

@@ -119,7 +119,7 @@ window.EXPLORER_ES = {
 
     "domain-topology": {
       sub: "enlaces de workspace",
-      role: "Vocabulario de workspace: nombres hacia afuera, sitio de llamadas, matching de enlaces, identidad de repositorio y manifiesto.",
+      role: "Vocabulario de workspace: nombres hacia afuera, sitios de llamada, matching de enlaces, identidad de repositorio y manifiesto.",
       may: "solo core/domain",
       never: "ports, adapters, built-ins de Node",
       facts: [
@@ -150,7 +150,7 @@ window.EXPLORER_ES = {
       role: "Exporta un commit, lee un diff con opciones fijadas, resuelve revisiones y merge bases, y enumera un working tree.",
       may: "core/domain, core/ports",
       never: "core/application, core/adapters",
-      facts: ["Un blob se streamea, nunca se mantiene entero.", "El export escribe solo las rutas seleccionadas."],
+      facts: ["Un blob se transmite, nunca se carga entero.", "El export escribe solo las rutas seleccionadas."],
     },
     "ports-source-reader": {
       sub: "lecturas confinadas",
@@ -161,7 +161,7 @@ window.EXPLORER_ES = {
     },
     "ports-index-cache": {
       sub: "índices por contenido",
-      role: "Mantiene índices completos keyed por contenido staged, para que los mismos bytes reutilicen el mismo grafo.",
+      role: "Mantiene índices completos identificados por el contenido staged, para que los mismos bytes reutilicen el mismo grafo.",
       may: "core/domain, core/ports",
       never: "core/application, core/adapters",
       facts: ["La clave es el digest del contenido staged más las versiones de los engines.", "El directorio de caché debe ser privado de la cuenta."],
@@ -186,7 +186,7 @@ window.EXPLORER_ES = {
       role: "La frontera live: enumerar un working tree, copiarlo a un mirror, hashearlo y reportar staleness.",
       may: "core/domain, core/ports",
       never: "core/application, core/adapters",
-      facts: ["El mirror copia archivos, nunca los hard-linkea.", "Un fact live nunca afirma más frescura que la que tiene el mirror."],
+      facts: ["El mirror copia archivos, nunca crea hard links.", "Un fact live nunca afirma más frescura que la que tiene el mirror."],
     },
     "ports-trust": {
       sub: "trust record · exclude",
@@ -204,7 +204,7 @@ window.EXPLORER_ES = {
     },
     "ports-workspace": {
       sub: "queries de workspace",
-      role: "Queries de workspace: nombres hacia afuera, sitio de llamadas, gateways y enlaces entre repositorios.",
+      role: "Queries de workspace: nombres hacia afuera, sitios de llamada, gateways y enlaces entre repositorios.",
       may: "core/domain, core/ports",
       never: "core/application, core/adapters",
       facts: ["No hace ninguna petición de red."],
@@ -218,8 +218,8 @@ window.EXPLORER_ES = {
       steps: [
         {
           title: "La petición",
-          body: "<p><code>ye-ast impact &lt;repo&gt; --base &lt;rev&gt;</code> lo parsea el CLI. Los flags se convierten en alcance y presupuesto; <code>impact.ofChange</code> es la única llamada.</p>",
-          why: 'La petición ya nombra la única libertad que tiene el motor: qué leer y hasta dónde recorrer.',
+          body: "<p>El CLI interpreta <code>ye-ast impact &lt;repo&gt; --base &lt;rev&gt;</code>. Los flags se convierten en alcance y presupuesto; <code>impact.ofChange</code> es la única llamada.</p>",
+          why: 'La petición fija todo lo que el motor puede variar: qué leer y hasta dónde recorrer.',
           calloutText: "El CLI convierte argv en una llamada a una query family.",
         },
         {
@@ -230,7 +230,7 @@ window.EXPLORER_ES = {
         },
         {
           title: "Export del head",
-          body: "<p>git lista el árbol y streamea cada blob dentro del alcance a un export scratch. No se indexa el repositorio; se indexa el export.</p>",
+          body: "<p>git lista el árbol y transmite cada blob dentro del alcance a un export scratch. No se indexa el repositorio; se indexa el export.</p>",
           why: 'Indexar el checkout dejaría que el manifiesto, el .gitignore o un índice preconstruido del repositorio decidieran lo que ve el motor. El export elimina ese canal.',
           calloutText: "El snapshot lee solo bytes exportados.",
         },
@@ -248,8 +248,8 @@ window.EXPLORER_ES = {
         },
         {
           title: "Indexar el head",
-          body: "<p>codegraph corre sobre el export en un proceso hijo. El índice se keyed por contenido staged, así que bytes iguales reutilizan el mismo store.</p>",
-          why: 'La construcción es el coste; el recorrido es barato. La reutilización por contenido elimina la construcción sin dejar que el contenido configure el motor.',
+          body: "<p>codegraph corre sobre el export en un proceso hijo. El índice se identifica por el contenido staged, así que bytes iguales reutilizan el mismo store.</p>",
+          why: 'Construir el índice es lo costoso; el recorrido es barato. Reutilizarlo por contenido evita la construcción sin dejar que el contenido configure el motor.',
           calloutText: "El store se abre en solo lectura y con versión comprobada.",
         },
         {
@@ -261,7 +261,7 @@ window.EXPLORER_ES = {
         {
           title: "Unir y firmar el fact",
           body: "<p>El grafo se une a los facts de puntos de entrada por archivo, línea dentro del span y nombre simple. Cada límite y cada punto ciego se convierte en un corte antes de construir el fact.</p>",
-          why: 'Un segundo join sería una segunda verdad. Una sola función sirve a puntos de entrada, aristas derivadas, sitio de llamadas y semillas.',
+          why: 'Un segundo join sería una segunda verdad. Una sola función sirve a puntos de entrada, aristas derivadas, sitios de llamada y semillas.',
           calloutText: "Un manejador o componente nombra su punto de entrada.",
         },
       ],
@@ -277,7 +277,7 @@ window.EXPLORER_ES = {
         },
         {
           title: "Exportar el snapshot",
-          body: "<p>git lista y streamea los archivos dentro del alcance; el lector confinado y el puerto de snapshot transportan los bytes sin ejecutar código del repositorio.</p>",
+          body: "<p>git lista y transmite los archivos dentro del alcance; el lector confinado y el puerto de snapshot transportan los bytes sin ejecutar código del repositorio.</p>",
           calloutText: "El snapshot es un export, no el checkout.",
         },
         {
@@ -308,13 +308,13 @@ window.EXPLORER_ES = {
         },
         {
           title: "Recorrer desde el objetivo pedido",
-          body: "<p>El símbolo pedido siembra cada nodo sembrable cuya ruta de contención con puntos termina en él (un nombre suelto a cualquier profundidad, <code>A.m</code> solo un miembro de <code>A</code>); un rango pedido siembra como las líneas añadidas de un archivo sin cambios. Después el recorrido sube inverso.</p>",
+          body: "<p>El símbolo pedido siembra cada nodo sembrable cuya ruta de contención con puntos termina en él (un nombre suelto a cualquier profundidad, <code>A.m</code> solo un miembro de <code>A</code>); un rango pedido siembra como las líneas añadidas de un archivo sin cambios. Después el recorrido sube en sentido inverso.</p>",
           calloutText: "Un símbolo pedido es una semilla con base requested.",
         },
         {
           title: "Unir y firmar el fact",
           body: "<p>Los manejadores y guardas alcanzados se unen a puntos de entrada, y el fact reporta sus cortes. Un símbolo desconocido es un fallo tipado que lista lo que declara el archivo.</p>",
-          calloutText: "La respuesta es un fact con estado, no una lista pelada.",
+          calloutText: "La respuesta es un fact con estado, no una lista sin contexto.",
         },
       ],
     },
@@ -349,8 +349,8 @@ window.EXPLORER_ES = {
           calloutText: "Los nombres dicen qué clones leer a continuación.",
         },
         {
-          title: "Nombres hacia afuera y sitio de llamadas",
-          body: "<p>La configuración, los archivos de build y los remotes declaran nombres que el código escribe hacia afuera. Los sitio de llamadas nombran lo que llaman; ambos alimentan al reader de workspace.</p>",
+          title: "Nombres hacia afuera y sitios de llamada",
+          body: "<p>La configuración, los archivos de build y los remotes declaran nombres que el código escribe hacia afuera. Los sitios de llamada nombran lo que llaman; ambos alimentan al reader de workspace.</p>",
           calloutText: "Sin red: un nombre que nada sirve es una respuesta explícita.",
         },
         {

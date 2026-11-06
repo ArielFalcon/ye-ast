@@ -127,7 +127,7 @@ window.MODULE_DETAILS_EN = {
       never: "core/adapters",
       facts: [
         "Each declaration carries its first and last line, so a caller reads exactly that range instead of the whole file.",
-        "A requested file the index holds no node of is reported as unheld: what it declares cannot be told, which is not nothing.",
+        "A requested file with no node in the index is reported as unheld: what it declares is unknown, which is not the same as nothing.",
         "It reads the same exported snapshot and index as the other families, and cuts files with no extractor or not exported.",
       ],
       files: ["src/core/application/outline/outline-queries.ts", "src/core/application/outline/outline.ts"],
@@ -233,7 +233,7 @@ window.MODULE_DETAILS_EN = {
       may: "core/domain only",
       never: "ports, adapters, Node built-ins",
       facts: [
-        "A fact is complete, partial with cuts, or unknown with a reason. There is no fourth state.",
+        "A fact is complete, partial with cuts, or unknown with a reason. It has no fourth state.",
         "The join is file, line inside the span, and the same simple name.",
         "A fact's identity is schema + inputs + producer.",
       ],

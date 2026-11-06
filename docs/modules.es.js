@@ -11,7 +11,7 @@ window.MODULE_DETAILS_ES = {
       ],
     },
     mcp: {
-      role: "Un servidor MCP stdio atado a un repositorio. Expone tools de solo lectura y devuelve el fact junto con la guía que un agente necesita para leerlo: qué significan complete, partial y unknown, y qué es un cut.",
+      role: "Un servidor MCP stdio vinculado a un repositorio. Expone tools de solo lectura y devuelve el fact junto con la guía que un agente necesita para leerlo: qué significan complete, partial y unknown, y qué es un cut.",
       may: "core/ports, core/domain",
       never: "core/adaptadores, cualquier escritura",
       facts: [
@@ -106,8 +106,8 @@ window.MODULE_DETAILS_ES = {
       never: "core/adaptadores",
       facts: [
         "Cada declaración lleva su primera y su última línea, así que quien llama lee exactamente ese rango en vez del archivo entero.",
-        "Un archivo pedido del que el índice no tiene ningún nodo se reporta como unheld: lo que declara no se puede saber, y eso no es nada.",
-        "Lee el mismo snapshot exportado e índice que las demás familias, y recorta con cuts los archivos sin extractor o no exportados.",
+        "Un archivo pedido sin nodo en el índice se reporta como unheld: lo que declara se desconoce, y eso no es lo mismo que nada.",
+        "Lee el mismo snapshot exportado e índice que las demás familias, y marca con un cut los archivos sin extractor o no exportados.",
       ],
     },
     "app-decisions": {
@@ -157,7 +157,7 @@ window.MODULE_DETAILS_ES = {
       facts: [
         "Una ruta se identifica por método, path, versión y manejador; el base path es un finding aparte.",
         "Una ruta UI nombra el componente que muestra, o unknown cuando las fuentes no nombran uno.",
-        "Un guarda es una declaración, unida por archivo y nombre.",
+        "Un guard es una declaración, unida por archivo y nombre.",
       ],
     },
     "domain-map": {
@@ -167,7 +167,7 @@ window.MODULE_DETAILS_ES = {
       facts: [
         "El map cubre Java, TypeScript, plantillas Angular, configuración Spring, OpenAPI y archivos de build.",
         "Una parada por budget es un cut caller-budget, nunca un truncamiento silencioso.",
-        "Una ruta fuera del scope declarado no se lee; la completitud es relativa a ese scope.",
+        "El scope selecciona el contenido sobre el que trata la respuesta; la configuración que lo interpreta siempre se lee. La completitud es relativa al scope.",
       ],
     },
     "domain-outline": {
@@ -194,7 +194,7 @@ window.MODULE_DETAILS_ES = {
       may: "solo core/domain",
       never: "ports, adaptadores, built-ins de Node",
       facts: [
-        "Un fact es complete, partial con cortes, o unknown con una razón. No hay un cuarto estado.",
+        "Un fact es complete, partial con cortes, o unknown con una razón. No existe un cuarto estado.",
         "El join es archivo, línea dentro del span y el mismo simple name.",
         "La identidad de un fact es schema + inputs + producer.",
       ],
@@ -216,7 +216,7 @@ window.MODULE_DETAILS_ES = {
       facts: [
         "El SQL crudo contra el store vive solo aquí; el resto del código ve un reader.",
         "DO_NOT_TRACK=1 siempre; el shim de CLI de codegraph nunca se llama.",
-        "Un índice se keyed por contenido staged; un store no soportado se rechaza, no se repara.",
+        "Un índice se identifica por el contenido staged; un store no soportado se rechaza, no se repara.",
       ],
     },
     "adapter-git": {
@@ -224,7 +224,7 @@ window.MODULE_DETAILS_ES = {
       may: "core/domain, core/ports, librerías",
       never: "core/application, otro adapter",
       facts: [
-        "ls-tree lista; cat-file streamea cada blob. Un blob nunca se mantiene entero.",
+        "ls-tree lista; cat-file transmite cada blob. Un blob nunca se carga entero.",
         "diff-tree fija cada opción que cambia los hunks, incluidos --text y --unified=0.",
         "Una ejecución aislada de git vacía la configuración del usuario y del sistema.",
       ],
@@ -235,7 +235,7 @@ window.MODULE_DETAILS_ES = {
       never: "core/application, otro adapter",
       facts: [
         "Cada ruta del repositorio pasa por el lector confinado.",
-        "El mirror copia archivos, nunca los hard-linkea.",
+        "El mirror copia archivos, nunca crea hard links.",
         "Un mirror o un directorio de caché debe ser privado de la cuenta.",
       ],
     },
@@ -244,7 +244,7 @@ window.MODULE_DETAILS_ES = {
       may: "core/domain, core/ports, librerías",
       never: "core/application, otro adapter",
       facts: [
-        "Cada uso de la API del compilador vive bajo core/adaptadores/typescript.",
+        "Cada uso de la API del compilador vive bajo core/adapters/typescript.",
         "TypeScript se queda en 6.0.3, la última línea con la API del compilador que necesitan los extractores.",
         "El extractor de rutas Angular lee fuentes; nada se construye ni se ejecuta.",
       ],

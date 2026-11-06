@@ -260,12 +260,12 @@ window.EXPLORER_DATA = {
       steps: [
         {
           title: "The request",
-          body: "<p><code>ye-ast impact &lt;repo&gt; --base &lt;rev&gt;</code> is parsed by the CLI. Flags become a scope and a budget; <code>impact.ofChange</code> is the only call.</p>",
+          body: "<p>The CLI parses <code>ye-ast impact &lt;repo&gt; --base &lt;rev&gt;</code>. Flags become a scope and a budget; <code>impact.ofChange</code> is the only call.</p>",
           focus: ["cli", "app-impact"],
           edges: [["cli", "app-impact"]],
           callout: "cli",
           calloutText: "The CLI turns argv into one query family call.",
-          why: 'The request already names the only freedom the engine has: what to read, and how far to walk.',
+          why: 'The request fixes everything the engine can vary: what to read and how far to walk.',
           refs: ["src/cli/main.ts:437-454", "src/cli/main.ts:300-303"],
         },
         {
@@ -315,7 +315,7 @@ window.EXPLORER_DATA = {
           edges: [["app-impact", "ports-code-graph"], ["ports-code-graph", "adapter-codegraph"], ["app-impact", "ports-index-cache"], ["ports-index-cache", "adapter-codegraph"]],
           callout: "adapter-codegraph",
           calloutText: "The store is opened read-only and version-checked.",
-          why: 'The build is the cost; the walk is cheap. Content-keyed reuse removes the build without letting content configure the engine.',
+          why: 'Building the index is the expensive part; the walk is cheap. Reusing an index by content skips the build without letting content configure the engine.',
           refs: ["src/core/application/snapshot/head-reading.ts:239-251", "src/core/adapters/codegraph/codegraph.adapter.ts:121-146"],
         },
         {
