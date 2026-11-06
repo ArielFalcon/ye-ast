@@ -4,12 +4,13 @@ import { declarationCounts, declaredNames, isStatic, scriptGlobalNames } from ".
 import { moduleStatement } from "./import-bindings.ts";
 import { sourceTree } from "./source-tree.ts";
 import { bindFile, type LexicalBinding } from "./lexical-bindings.ts";
-import { addWrittenRoots, type WrittenRoots } from "./written-roots.ts";
+import { addWrittenRoots, GLOBAL_OBJECTS, type WrittenRoots } from "./written-roots.ts";
 import { isTypeScriptSource } from "../../domain/languages/typescript.ts";
 import type { ImportOrigin } from "../../domain/relations/resolved-reference.ts";
 import type { Evidence, Finding } from "../../domain/shared/fact.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { RootOrigin } from "../../domain/impact/edge-policy.ts";
+import { compareText } from "../../domain/shared/code-node.ts";
 import type { ImportOriginSite, ImportOrigins, ReplacedRoots, ResolvedNameSite } from "../../ports/import-origins.port.ts";
 import { createModuleResolver, manifestPackages, packageOf } from "./module-resolver.ts";
 import { TYPESCRIPT_LIB_GLOBALS } from "./typescript-lib-globals.ts";
@@ -111,15 +112,16 @@ export function createImportOrigins(sources: readonly SourceFile[], parse: Parse
     return names;
   };
   let replaced: ReplacedRoots | undefined;
-  /** The globals the snapshot declares or writes through, and the packages it writes through; read when first asked. */
+  /** The globals the snapshot declares, the member paths it writes and the packages it writes through; read when first asked. */
   const replacedRoots = (): ReplacedRoots => {
     if (replaced !== undefined) return replaced;
-    const written: WrittenRoots = { globals: new Set(), everyGlobal: false, packages: new Set(), members: new Set() };
+    const written: WrittenRoots = { paths: new Map([...repositoryGlobals()].map((name) => [name, [name]])), packages: new Set() };
     for (const [path, text] of texts) {
       if (!isTypeScriptSource(path)) continue;
       addWrittenRoots(path, text, ts.createSourceFile(path, text, ts.ScriptTarget.Latest, false), written, (name) => LIB_GLOBALS.has(name));
     }
-    replaced = { globals: written.everyGlobal ? "all" : new Set([...repositoryGlobals(), ...written.globals]), packages: written.packages, members: written.members };
+    const paths = [...written.paths].sort(([a], [b]) => compareText(a, b)).map(([, segments]) => segments);
+    replaced = { paths, globalObjects: GLOBAL_OBJECTS, packages: written.packages };
     return replaced;
   };
 

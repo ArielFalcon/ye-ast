@@ -19,6 +19,8 @@ const B = "src/b.ts";
 
 type Origin = Finding<ImportOrigin> & { occurrence?: true };
 
+const written = (...paths: string[][]): ReplacedRoots => ({ paths, globalObjects: new Set(["globalThis", "window"]), packages: new Set() });
+
 interface Options {
   nodes: readonly FakeNode[];
   edges?: readonly FakeEdge[];
@@ -82,7 +84,7 @@ function setup(options: Options) {
     sourceTrivia: { triviaLines: async (file: { path: string }) => (options.onTrivia?.(file.path), new Set(options.trivia?.[file.path] ?? [])) },
     memberNames: { memberNames: async (file: { path: string }) => (options.onMemberNames?.(file.path), { names: options.memberNames?.[file.path] ?? [], functionValueCalls: [], callables: [], receiverBindings: options.receiverBindings?.[file.path] ?? [] }) },
     importOrigins: () => ({
-      replacedRoots: async () => options.replaced ?? { globals: new Set(), packages: new Set(), members: new Set() },
+      replacedRoots: async () => options.replaced ?? written(),
       origins: async (sites: readonly ImportOriginSite[]) => { options.onOrigins?.(); return sites.map(answer); },
       rootOrigins: async (sites: readonly ResolvedNameSite[]) => sites.map((site): Finding<ImportOrigin> => {
         const root = options.roots?.[site.name];
@@ -632,10 +634,9 @@ test("a receiver binding for another member, a class the repository file does no
   for (const fact of [otherMember, elsewhere, unproven]) assert.deepEqual(cutsOf(fact), cut);
 });
 
-test("an external leaf under a global or a package the repository replaces, or a call no root names to a member it writes, stays a cut, wherever the walk settles it", async () => {
-  const globals = (...names: string[]): ReplacedRoots => ({ globals: new Set(names), packages: new Set(), members: new Set() });
-  const packages = (...names: string[]): ReplacedRoots => ({ globals: new Set(), packages: new Set(names), members: new Set() });
-  const members = (...names: string[]): ReplacedRoots => ({ globals: new Set(), packages: new Set(), members: new Set(names) });
+test("an external leaf at or below a path the repository writes, under a package it writes through, or calling a member it writes on a prototype the receiver may inherit, stays a cut, wherever the walk settles it", async () => {
+  const globals = (...names: string[]): ReplacedRoots => written(...names.map((name) => [name]));
+  const packages = (...names: string[]): ReplacedRoots => ({ ...written(), packages: new Set(names) });
   const memberCall = (name: string): FakeUnresolved[] => [{ from: "run", name, kind: "calls", file: A, line: 9, column: 4 }];
   const homonym = callee("max", B, 3);
   const external = (holds: string) => ({ ...fieldCallOptions({ memberUses: [], externalUses: [{ owner: SAVE_PROOF.owner, field: "repo", holds, reference: SAVE_PROOF.reference }] }) });
@@ -649,8 +650,13 @@ test("an external leaf under a global or a package the repository replaces, or a
     ["constructed", { ...boundCall({ kind: "constructed", name: "Map", line: 8, column: 17 }), roots: { Map: { kind: "ambient", name: "Map", bare: true } }, replaced: globals("Map") }],
     ["field global", { ...external("global#Map"), replaced: globals("Map") }],
     ["field package", { ...external("@angular/common/http#HttpClient"), replaced: packages("@angular/common") }],
-    ["every global", { ...boundCall({ kind: "literal", type: "Array" }), replaced: { globals: "all", packages: new Set(), members: new Set() } }],
-    ["unnamed", { nodes: [SVC, RUN], edges: CONTAINS, unresolved: memberCall("list.push"), replaced: members("push") }],
+    ["every global", { ...boundCall({ kind: "literal", type: "Array" }), replaced: written(["*"]) }],
+    ["polyfill on a literal's type", { ...boundCall({ kind: "literal", type: "Array" }), replaced: written(["Array", "prototype", "*"]) }],
+    ["named member on a literal's type", { ...boundCall({ kind: "literal", type: "Array" }), replaced: written(["Array", "prototype", "save"]) }],
+    ["member every object inherits", { nodes: [SVC, RUN], edges: CONTAINS, unresolved: memberCall("Math.max"), roots: { max: { kind: "ambient", name: "Math" } }, replaced: written(["Object", "prototype", "max"]) }],
+    ["through the global object", { nodes: [SVC, RUN], edges: CONTAINS, unresolved: memberCall("window.fetch"), roots: { fetch: { kind: "ambient", name: "window" } }, replaced: written(["fetch"]) }],
+    ["unnamed, named on a prototype", { nodes: [SVC, RUN], edges: CONTAINS, unresolved: memberCall("list.push"), replaced: written(["Array", "prototype", "push"]) }],
+    ["unnamed, polyfill", { nodes: [SVC, RUN], edges: CONTAINS, unresolved: memberCall("list.push"), replaced: written(["Array", "prototype", "*"]) }],
   ];
 
   for (const [name, options] of cases) {
@@ -658,4 +664,17 @@ test("an external leaf under a global or a package the repository replaces, or a
     assert.equal(fact.status, "partial", name);
     assert.deepEqual(valueOf(fact).steps.flatMap((step) => step.external ?? []), [], name);
   }
+});
+
+test("a write below another path, beside the called member, or on an object no receiver inherits from leaves the leaf external", async () => {
+  const memberCall = (name: string): FakeUnresolved[] => [{ from: "run", name, kind: "calls", file: A, line: 9, column: 4 }];
+  const cases: [string, Options][] = [
+    ["process.cwd beside process.env", { nodes: [SVC, RUN], edges: CONTAINS, unresolved: memberCall("process.cwd"), roots: { cwd: { kind: "ambient", name: "process" } }, replaced: written(["process", "env", "*"]) }],
+    ["unnamed beside process.env", { nodes: [SVC, RUN], edges: CONTAINS, unresolved: memberCall("list.push"), replaced: written(["process", "env", "*"]) }],
+    ["unnamed beside another prototype member", { nodes: [SVC, RUN], edges: CONTAINS, unresolved: memberCall("list.push"), replaced: written(["Array", "prototype", "flat"]) }],
+    ["literal beside another member", { ...boundCall({ kind: "literal", type: "Array" }), replaced: written(["Array", "prototype", "flat"]) }],
+    ["rooted below its member", { nodes: [SVC, RUN], edges: CONTAINS, unresolved: memberCall("Math.max"), roots: { max: { kind: "ambient", name: "Math" } }, replaced: written(["Math", "max", "extra"]) }],
+  ];
+
+  for (const [name, options] of cases) assert.equal(valueOf(await factOf(options)).steps.flatMap((step) => step.external ?? []).length, 1, name);
 });

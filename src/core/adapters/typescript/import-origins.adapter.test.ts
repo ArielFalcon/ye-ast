@@ -499,77 +499,86 @@ const replacedRootsOf = (...lines: string[]) => {
   return createImportOrigins([manifest, { path: "src/patch.ts", content: ["export {};", ...lines].join("\n") }]).replacedRoots();
 };
 
-const replacedBy = async (...lines: string[]) => {
+const writtenBy = async (...lines: string[]) => {
   const roots = await replacedRootsOf(...lines);
-  return { globals: roots.globals === "all" ? "all" : [...roots.globals].sort(), packages: [...roots.packages].sort() };
+  return { paths: roots.paths.map((path) => path.join(".")), packages: [...roots.packages].sort() };
 };
 
-const membersWrittenBy = async (...lines: string[]) => [...(await replacedRootsOf(...lines)).members].sort();
+const pathsWrittenBy = async (...lines: string[]) => (await writtenBy(...lines)).paths;
 
-test("a source that writes through a global, directly, through the global object or a writing call, replaces that global", async () => {
-  for (const [line, global] of [
-    ["Math.max = () => 0;", "Math"],
-    ["Map.prototype.get = function get() { return 1; };", "Map"],
-    ["Math.seed += 1;", "Math"],
-    ["Math.seed++;", "Math"],
-    ["delete JSON.parse;", "JSON"],
-    ["[Math.max] = [() => 0];", "Math"],
-    ["for (Math.seed of [1]) {}", "Math"],
-    ["globalThis.Math.max = () => 0;", "Math"],
+test("a source that writes through a global, directly, through the global object or a writing call, writes the member path from that global", async () => {
+  for (const [line, path] of [
+    ["Math.max = () => 0;", "Math.max"],
+    ["Map.prototype.get = function get() { return 1; };", "Map.prototype.get"],
+    ["Math.seed += 1;", "Math.seed"],
+    ["Math.seed++;", "Math.seed"],
+    ["delete JSON.parse;", "JSON.parse"],
+    ["[Math.max] = [() => 0];", "Math.max"],
+    ["for (Math.seed of [1]) {}", "Math.seed"],
+    ["globalThis.Math.max = () => 0;", "Math.max"],
     ["window.fetch = () => undefined;", "fetch"],
-    ["Object.defineProperty(Array.prototype, 'push', { value: () => 0 });", "Array"],
-    ["Object.assign(Math, { max: () => 0 });", "Math"],
-    ["Reflect.set(String.prototype, 'trim', () => '');", "String"],
+    ["Object.defineProperty(Array.prototype, 'push', { value: () => 0 });", "Array.prototype.push"],
+    ["Reflect.set(String.prototype, 'trim', () => '');", "String.prototype.trim"],
     ["Object.defineProperty(globalThis, 'fetch', { value: () => undefined });", "fetch"],
-    ["const A = Array; A.prototype.push = () => 0;", "Array"],
-  ] as const) assert.deepEqual(await replacedBy(line), { globals: [global], packages: [] }, line);
+    ["Array.prototype = [];", "Array.prototype.*"],
+  ] as const) assert.deepEqual(await writtenBy(line), { paths: [path], packages: [] }, line);
+  assert.deepEqual(await pathsWrittenBy("Object.assign(Math, { max: () => 0, min: () => 0 });"), ["Math.max", "Math.min"]);
 });
 
-test("an alias that stands for a global's path, by an initializer, a destructured key, index or rename, a nested pattern or a parameter's default, writes through that global", async () => {
-  for (const line of [
-    "const { prototype } = Array; prototype.push = () => 0;",
-    "const { prototype: proto } = Array; proto.push = () => 0;",
-    "const { prototype: { push } } = Array; push.extra = 1;",
-    "const [entry] = Array.prototype; entry.extra = 1;",
-    "const A = Array; const P = A.prototype; P.push = () => 0;",
-    "const { prototype } = Array; Object.defineProperty(prototype, 'push', { value: () => 0 });",
-    "function patch(proto = Array.prototype) { proto.push = () => 0; }",
-    "function patch({ prototype } = Array) { prototype.push = () => 0; }",
-    "const { Array: List } = globalThis; List.prototype.push = () => 0;",
-    "[Array][0].prototype.push = () => 0;",
-    "const holder = { list: Array }; holder.list.prototype.push = () => 0;",
-  ]) assert.deepEqual(await replacedBy(line), { globals: ["Array"], packages: [] }, line);
+test("a member a write does not state is every member below its path, and only below it", async () => {
+  for (const [line, path] of [
+    ["for (const key of keys) Array.prototype[key] = impl[key];", "Array.prototype.*"],
+    ["Array.prototype[name] = () => 0;", "Array.prototype.*"],
+    ["Object.assign(process.env, vars);", "process.env.*"],
+    ["const host = process.env; host[name] = 'on';", "process.env.*"],
+    ["Object.setPrototypeOf(Array.prototype, impl);", "Array.prototype.*"],
+    ["globalThis[name] = 1;", "*"],
+    ["Object.defineProperty(globalThis, name, {});", "*"],
+    ["value.__proto__.push = () => 0;", "*.prototype.push"],
+    ["Object.getPrototypeOf([]).push = () => 0;", "*.prototype.push"],
+  ] as const) assert.deepEqual(await pathsWrittenBy("declare const keys: string[], name: string, impl: any, vars: object, value: any;", line), [path], line);
 });
 
-test("an alias no path names over a global, or a value that holds one where the path names no member it states, replaces every global", async () => {
-  for (const line of ["const { [key]: picked } = Array; picked.push = () => 0;", "const { ...rest } = Math; rest.max = () => 0;", "(flag ? Array : Map).prototype.push = () => 0;", "const holder = { ...mixin, list: Array }; holder.list.prototype.push = () => 0;"])
-    assert.equal((await replacedBy("declare const key: string, flag: boolean, mixin: object;", line)).globals, "all", line);
+test("an alias stands for the path it is declared from: an initializer, a destructured key, index or rename, a nested pattern, a parameter's default, or a literal's member", async () => {
+  for (const [line, path] of [
+    ["const { prototype } = Array; prototype.push = () => 0;", "Array.prototype.push"],
+    ["const { prototype: proto } = Array; proto.push = () => 0;", "Array.prototype.push"],
+    ["const { prototype: { push } } = Array; push.extra = 1;", "Array.prototype.push.extra"],
+    ["const [entry] = Array.prototype; entry.extra = 1;", "Array.prototype.0.extra"],
+    ["const A = Array; const P = A.prototype; P.push = () => 0;", "Array.prototype.push"],
+    ["const { prototype } = Array; Object.defineProperty(prototype, 'push', { value: () => 0 });", "Array.prototype.push"],
+    ["function patch(proto = Array.prototype) { proto.push = () => 0; }", "Array.prototype.push"],
+    ["function patch({ prototype } = Array) { prototype.push = () => 0; }", "Array.prototype.push"],
+    ["const { Array: List } = globalThis; List.prototype.push = () => 0;", "Array.prototype.push"],
+    ["[Array][0].prototype.push = () => 0;", "Array.prototype.push"],
+    ["const holder = { list: Array }; holder.list.prototype.push = () => 0;", "Array.prototype.push"],
+    ["const holder = { ...mixin, list: Array }; holder.list.prototype.push = () => 0;", "Array.prototype.push"],
+    ["const { [name]: picked } = Array; picked.push = () => 0;", "Array.*.push"],
+    ["const { ...rest } = Math; rest.max = () => 0;", "Math.*.max"],
+  ] as const) assert.deepEqual(await pathsWrittenBy("declare const name: string, mixin: object;", line), [path], line);
+  assert.deepEqual(await pathsWrittenBy("declare const flag: boolean;", "(flag ? Array : Map).prototype.push = () => 0;"), ["Array.prototype.push", "Map.prototype.push"]);
 });
 
-test("a write through a global states the members it sets by its last link, a writing call's key or literal keys, and none it computes", async () => {
-  for (const [line, members] of [
-    ["Object.defineProperty(Array.prototype, 'push', { value: () => 0 });", ["push"]],
-    ["Array.prototype.flat = () => [];", ["flat"]],
-    ["Object.assign(Math, { max: () => 0, min: () => 0 });", ["max", "min"]],
-    ["const { prototype } = Array; prototype.push = () => 0;", ["push"]],
-    ["const made = {}; made.push = 1;", []],
-    ["Array.prototype[key] = () => 0;", []],
-    ["Object.assign(Math, mixin);", []],
-    ["Object.setPrototypeOf(Array.prototype, mixin);", []],
-  ] as const) assert.deepEqual(await membersWrittenBy("declare const key: string, mixin: object;", line), members, line);
-});
-
-test("a write through a local named like a global, through this, into a local or into a call's result replaces nothing", async () => {
-  assert.deepEqual(await replacedBy("const { inner } = { inner: { y: 0 } }; inner.y = 1;", "let current = { entries: 0, list: [] as Item[], max: Math.max }; current.entries++; current.list = [];", "const kinds = { list: Array }; kinds.list = Map;", "declare const defaults: object; let state = { ...defaults, items: [] as Item[] }; state.items.length = 0;", "function g({ x }: { x: { y: number } }) { x.y = 1; }", "function f(Math: { max(): number }) { Math.max = () => 0; }", "class C { x = 0; set() { this.x = 1; } }", "let count = 0; count++;", "hasOwnProperty.call({}, \"a\"); constructor.name.at(0);", "Object.assign(Object.create(null), {});", "const made = Object.create(null); made.x = 1;"), { globals: [], packages: [] });
-});
-
-test("a computed write on the global object or a write through a prototype no name states replaces every global", async () => {
-  for (const line of ["globalThis[key] = 1;", "value.__proto__.push = () => 0;", "Object.getPrototypeOf([]).push = () => 0;", "Object.defineProperty(globalThis, key, {});"])
-    assert.equal((await replacedBy("declare const key: string, value: unknown;", line)).globals, "all", line);
+test("a write through a local named like a global, through this, into a local or into a call's result writes nothing global", async () => {
+  assert.deepEqual(
+    await writtenBy(
+      "const { inner } = { inner: { y: 0 } }; inner.y = 1;",
+      "let current = { entries: 0, list: [] as Item[], max: Math.max }; current.entries++; current.list = [];",
+      "const kinds = { list: Array }; kinds.list = Map;",
+      "function g({ x }: { x: { y: number } }) { x.y = 1; }",
+      "function f(Math: { max(): number }) { Math.max = () => 0; }",
+      "class C { x = 0; set() { this.x = 1; } }",
+      "let count = 0; count++;",
+      "hasOwnProperty.call({}, \"a\"); constructor.name.at(0);",
+      "Object.assign(Object.create(null), {});",
+      "const made = Object.create(null); made.x = 1;",
+    ),
+    { paths: [], packages: [] },
+  );
 });
 
 test("a write through an import of a package replaces that package, and one of a repository module nothing", async () => {
-  assert.deepEqual(await replacedBy("import _ from 'lodash';", "import * as local from './local';", "_.map = () => [];", "local.helper = () => undefined;"), { globals: [], packages: ["lodash"] });
+  assert.deepEqual(await writtenBy("import _ from 'lodash';", "import * as local from './local';", "_.map = () => [];", "local.helper = () => undefined;"), { paths: [], packages: ["lodash"] });
 });
 
 test("a name a with body or a direct eval may rebind proves no origin, while the same name outside them still does", async () => {

@@ -56,22 +56,26 @@ export interface ImportOrigins {
    */
   rootOrigins(sites: readonly ResolvedNameSite[], signal?: AbortSignal): Promise<readonly RootOrigin[]>;
   /**
-   * The roots under which the repository may run its own code where a library's is expected: every global the snapshot
-   * declares, every global a source writes through (`Math.max = f`, `Array.prototype.push = f`,
-   * `globalThis.fetch = f`, `Object.defineProperty(Map.prototype, …)`), or `all` when a write reaches the global object
-   * by a computed key or a prototype no name states; and every package a source writes through an import of
-   * (`_.map = f`). An external call under one of them proves nothing. `members` names the members those writes
-   * state (`push` in `Object.defineProperty(Array.prototype, "push", …)`), so a member call no declaration names is no
-   * external call when the repository writes a member of that name.
+   * Where the repository may run its own code where a library's is expected: the path of every global the snapshot
+   * declares, every member path a source writes from a global (`Math.max = f`, `Array.prototype[k] = f`,
+   * `globalThis.fetch = f`, `Object.assign(process.env, vars)`), and every package a source writes through an import of
+   * (`_.map = f`). An external call at or below one of them proves nothing.
    */
   replacedRoots(signal?: AbortSignal): Promise<ReplacedRoots>;
 }
 
 export interface ReplacedRoots {
-  globals: ReadonlySet<string> | "all";
+  /**
+   * Member paths from the global they start at (`["Array", "prototype", "push"]`), sorted. A `*` segment is a name no
+   * write states and stands for every name in its place, so `["process", "env", "*"]` covers `process.env.HOME` and not
+   * `process.cwd`; a path that starts at `*` starts at a global no name states (`*.prototype.push` for
+   * `value.__proto__.push = f`).
+   */
+  paths: readonly (readonly string[])[];
+  /** Names that hold the global object itself: a call's path through one starts at the global after it. */
+  globalObjects: ReadonlySet<string>;
   /** Package names, as an import specifier's first one or two segments name them (`lodash`, `@angular/core`). */
   packages: ReadonlySet<string>;
-  members: ReadonlySet<string>;
 }
 
 /** Reads the import bindings of one snapshot; composition supplies it, so no use case imports a parser. */

@@ -95,14 +95,34 @@ const provenKey = (file: string, line: number, column: number, name: string): st
 
 const placeKey = (line: number, column: number): string => `${line}:${column}`;
 
-/** What an external leaf names: a global by its root name, a module, or, for a call nothing roots, the member it calls. */
-type LeafRoot = { global: string } | { module: string } | { member: string };
+/**
+ * What an external leaf names: a module, or the member path it calls from a global (none for a call nothing roots) and
+ * the member. `open` when the call may run anything below its path. `inherits` is what the receiver's prototype chain may
+ * hold beyond its path: `Object.prototype` for a named receiver, any prototype for a receiver nothing names.
+ */
+type LeafRoot = { module: string } | { path: readonly string[]; member: string; open?: true; inherits?: "object" | "any" };
 
-/** The root a field's external type names: the global after `global#`, or the module before `#`. */
-function rootOfHolds(holds: string): LeafRoot {
+/** The leaf root of a call on an instance of a type from outside the repository: its module, or `<global>.prototype.<member>`. */
+function rootOfHolds(holds: string, member: string): LeafRoot {
   const at = holds.lastIndexOf("#");
   const module = holds.slice(0, at);
-  return module === "global" ? { global: holds.slice(at + 1) } : { module };
+  return module === "global" ? instanceOf(holds.slice(at + 1), member) : { module };
+}
+
+function instanceOf(global: string, member: string): LeafRoot {
+  return { path: [global, "prototype", member], member, inherits: "object" };
+}
+
+/** Whether a written path covers a call's path: it names the call's path or a path above it, `*` for any name; `open` lets it lie below too. */
+function covers(written: readonly string[], path: readonly string[], open = false): boolean {
+  return (open || written.length <= path.length) && written.every((segment, index) => index >= path.length || segment === "*" || segment === path[index]);
+}
+
+/** A call's path from the global after any name that holds the global object itself. */
+function fromGlobal(path: readonly string[], globalObjects: ReadonlySet<string>): readonly string[] {
+  let start = 0;
+  while (start < path.length - 1 && globalObjects.has(path[start]!)) start += 1;
+  return path.slice(start);
 }
 
 /** A call on a type from outside the repository, `<module>#<name>`, is a leaf under its module; `global#<name>` is a global. */
@@ -207,12 +227,16 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
     return owners.length === 1 && owners[0]!.kind === "class" && joinsFact(owners[0]!, call.receiver) ? members[0] : undefined;
   };
   let replacedRoots: Promise<ReplacedRoots> | undefined;
-  /** Whether the repository declares or writes over the global an external leaf is rooted at, or writes through its package. */
+  /**
+   * Whether the repository declares or writes a path that covers what an external leaf calls, writes the member on a
+   * prototype the receiver may inherit, or writes through the leaf's package.
+   */
   const isReplaced = async (root: LeafRoot): Promise<boolean> => {
-    const { globals, packages, members } = await (replacedRoots ??= origins.replacedRoots(signal));
-    if ("global" in root) return globals === "all" || globals.has(root.global);
-    if ("member" in root) return members.has(root.member);
-    return [...packages].some((name) => root.module === name || root.module.startsWith(`${name}/`));
+    const { paths, globalObjects, packages } = await (replacedRoots ??= origins.replacedRoots(signal));
+    if ("module" in root) return [...packages].some((name) => root.module === name || root.module.startsWith(`${name}/`));
+    const path = fromGlobal(root.path, globalObjects);
+    const onPrototype = (written: readonly string[]): boolean => (written.at(-2) === "prototype" || written.at(-2) === "*") && (written.at(-1) === "*" || written.at(-1) === root.member);
+    return paths.some((written) => (path.length > 0 && covers(written, path, root.open)) || (root.inherits === "any" && onPrototype(written)) || (root.inherits === "object" && covers(written, ["Object", "prototype", root.member])));
   };
   /** The receiver binding the call's own source proves at the place the call starts, for the member and receiver it spells. */
   const boundAt = async (reference: GraphUnresolvedReference, member: string): Promise<ReceiverBinding["holds"] | undefined> => {
@@ -336,14 +360,14 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
       } else {
         const dropped = verdict.root;
         const place: Cut = { kind: "unresolved-link", at: [placeAt(node.file, edge.line ?? node.startLine, target.name), ...sortedUnique(declarationsNamed(target.name).map(candidateOf))] };
-        await leafUnlessReplaced(dropped.kind === "external" ? { kind: "import", module: dropped.module, name: target.name } : { kind: "global", name: target.name }, dropped.kind === "external" ? { module: dropped.module } : { global: "name" in dropped ? dropped.name : target.name }, () => cuts.push(place));
+        await leafUnlessReplaced(dropped.kind === "external" ? { kind: "import", module: dropped.module, name: target.name } : { kind: "global", name: target.name }, dropped.kind === "external" ? { module: dropped.module } : { path: ["name" in dropped ? dropped.name : target.name], member: target.name, open: true, inherits: "object" }, () => cuts.push(place));
       }
     }
     /**
      * A member call nothing settled by its receiver: a cut listing the declarations of its name, or, when no declaration and
-     * no source names it, an external call (R6).
+     * no source names it and the repository replaces nothing the call was found to name, an external call (R6).
      */
-    const settleByName = async (reference: GraphUnresolvedReference, name: string, named: readonly GraphSymbol[]): Promise<void> => {
+    const settleByName = async (reference: GraphUnresolvedReference, name: string, named: readonly GraphSymbol[], replaced = false): Promise<void> => {
       if (named.length > 0) return void cuts.push(unresolvedAt(reference, named));
       const receiver = receiverOf(reference.name);
       const declared = [
@@ -351,7 +375,7 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
         ...(receiver !== undefined && (await holdsFunctionValue(reference, receiver, name)) ? [declarationAnchor(reference.file, receiver)] : []),
       ];
       const cut = () => cuts.push({ kind: "unresolved-link", at: [placeAt(reference.file, reference.line, reference.name), ...sortedUnique([...reference.candidates, ...declared])] });
-      if (declared.length === 0) await leafUnlessReplaced({ kind: "unnamed", name: reference.name }, { member: name }, cut);
+      if (declared.length === 0 && !replaced) await leafUnlessReplaced({ kind: "unnamed", name: reference.name }, { path: [], member: name, inherits: "any" }, cut);
       else cut();
     };
     const resolved: EdgeOccurrence[] = called.map(({ edge, target }) => ({ source: edge.source, line: edge.line, column: edge.column, targetName: target.name }));
@@ -374,10 +398,10 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
           const member = proven?.kind === "member" ? provenMember(proven) : undefined;
           const named = membersNamed(callee.name);
           if (member !== undefined) children.push(childAt(member, reference.line, reference.column, reference.name, "call"));
-          else if (proven?.kind === "external") await leafUnlessReplaced(externalOf(proven.holds, reference.name), rootOfHolds(proven.holds), () => settleByName(reference, callee.name, named));
+          else if (proven?.kind === "external") await leafUnlessReplaced(externalOf(proven.holds, reference.name), rootOfHolds(proven.holds, callee.name), () => settleByName(reference, callee.name, named, true));
           else if ((bound = await boundAt(reference, callee.name)) !== undefined) {
             const declared = bound.kind === "declared" ? ownMethodOf(reference.file, bound.name, callee.name, bound.line) : undefined;
-            if (bound.kind === "literal") await leafUnlessReplaced({ kind: "global", name: reference.name }, { global: bound.type }, () => settleByName(reference, callee.name, named));
+            if (bound.kind === "literal") await leafUnlessReplaced({ kind: "global", name: reference.name }, instanceOf(bound.type, callee.name), () => settleByName(reference, callee.name, named, true));
             else if (bound.kind === "constructed") constructed.push({ reference, name: callee.name, named, holds: bound });
             else if (declared !== undefined) children.push(childAt(declared, reference.line, reference.column, reference.name, "call"));
             else await settleByName(reference, callee.name, named);
@@ -393,7 +417,7 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
         const root = roots[index];
         const origin = root?.status === "complete" ? root.value : undefined;
         const method = origin?.kind === "repository" ? ownMethodOf(origin.file, holds.name, name) : undefined;
-        if (origin?.kind === "ambient") await leafUnlessReplaced({ kind: "global", name: reference.name }, { global: origin.name }, () => settleByName(reference, name, named));
+        if (origin?.kind === "ambient") await leafUnlessReplaced({ kind: "global", name: reference.name }, instanceOf(origin.name, name), () => settleByName(reference, name, named, true));
         else if (method !== undefined) children.push(childAt(method, reference.line, reference.column, reference.name, "call"));
         else await settleByName(reference, name, named);
       }
@@ -404,8 +428,8 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
       for (const [index, { reference, name, named }] of rooted.entries()) {
         const root = roots[index];
         const origin = root?.status === "complete" ? root.value : undefined;
-        if (origin?.kind === "external") await leafUnlessReplaced({ kind: "import", module: origin.module, name: reference.name }, { module: origin.module }, () => settleByName(reference, name, named));
-        else if (origin?.kind === "ambient") await leafUnlessReplaced({ kind: "global", name: reference.name }, { global: origin.name }, () => settleByName(reference, name, named));
+        if (origin?.kind === "external") await leafUnlessReplaced({ kind: "import", module: origin.module, name: reference.name }, { module: origin.module }, () => settleByName(reference, name, named, true));
+        else if (origin?.kind === "ambient") await leafUnlessReplaced({ kind: "global", name: reference.name }, { path: reference.name.split("."), member: name, inherits: "object" }, () => settleByName(reference, name, named, true));
         else await settleByName(reference, name, named);
       }
     }
@@ -417,7 +441,7 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
         const origin = finding?.status === "complete" && finding.occurrence === true ? finding.value : undefined;
         const cut = () => cuts.push(unresolvedAt(reference, declarationsNamed(name)));
         if (origin?.kind === "external") await leafUnlessReplaced({ kind: "import", module: origin.module, name: reference.name }, { module: origin.module }, cut);
-        else if (origin?.kind === "ambient") await leafUnlessReplaced({ kind: "global", name: reference.name }, { global: origin.name }, cut);
+        else if (origin?.kind === "ambient") await leafUnlessReplaced({ kind: "global", name: reference.name }, { path: [origin.name], member: name, open: true }, cut);
         else cut();
       }
     }

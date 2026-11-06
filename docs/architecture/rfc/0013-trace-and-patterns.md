@@ -77,8 +77,9 @@ read for their callables (R10) by the same per-file read. Building the
 set took 18 to 75 ms on the probe repositories and 238 ms on this one, against 1.1 to 1.9 s per query, so it is not
 cached across queries.
 
-Limitation: a member defined under a computed name (`{ [key]: fn }`, `target[name] = fn`) has no name to read, so a
-call through such a member is still reported external `unnamed` when no other source declares its name.
+Limitation: a member a repository object defines under a computed name (`{ [key]: fn }`, `target[name] = fn`) has no
+name to read, so a call through such a member is still reported external `unnamed` when no other source declares its
+name. A computed member written on a global's prototype is covered by the written paths below.
 
 The rule matches names, not receivers, so a library call whose name the code also declares in a value position is a
 cut: on this repository's `composeQueries` trace, 269 calls moved from external to cut (191 `Map.set`, 52
@@ -88,19 +89,27 @@ R4 and R5 read the syntax tree of the file (the TypeScript compiler API in `core
 tree-sitter syntax tree for Java), never a type checker, and are computed once per file content.
 
 Every external leaf, of R1, R3, R4 or R6 (the `unnamed` one included), names what the repository must not replace. The
-import origins read once per query, from every source the snapshot holds, the roots it writes through: an assignment,
-compound assignment, update, `delete`, destructuring or iteration target whose member path starts at a global (directly
-or through `globalThis`, `window`, `self` or `global`) or at an import of a package, and the first argument of
+import origins read once per query, from every source the snapshot holds, the member paths it writes: an assignment,
+compound assignment, update, `delete`, destructuring or iteration target whose path starts at a global (directly or
+through `globalThis`, `window`, `self` or `global`) or at an import of a package, and the first argument of
 `Object.defineProperty`, `Object.assign`, `Object.setPrototypeOf`, `Reflect.set` and their kin, with roots resolved by
 the binder (ADR-0029). A local declared from a path stands for that path: a variable's initializer, a parameter's
-default, a destructured element by its key, rename or index, at any nesting (`const { prototype } = Array;
-prototype.push = f` writes through `Array`); a computed key or a rest element over a global, a literal holding one, and
-an alias chain past its bound keep every global leaf a cut. A global the snapshot declares counts too. A leaf whose global root (for a literal, its type: `Array`, `String`, `RegExp`;
-for `new Map()`, `Map`) or whose package is among them stays the cut it would otherwise be; a computed write on the global
-object, or one through `__proto__`, `constructor` or `getPrototypeOf`, keeps every global leaf a cut. The same writes
-state the members they set (the last link, a writing call's key or literal keys), and an `unnamed` leaf whose member is
-among them stays a cut; a member they compute falls under the computed-name limitation above. The snapshot holds the `.ts`, `.mts` and `.cts` sources the map
-scope exports; a write in a `.js`, `.jsx` or `.tsx` file is not read. A name a `with` body
+default, a destructured element by its key, rename or index, at any nesting, a literal's member (`const { prototype } =
+Array; prototype.push = f` writes `Array.prototype.push`). A name a write does not state is a `*` that covers every name
+in its place and below: `Array.prototype[k] = f` and a polyfill loop write `Array.prototype.*`, and
+`Object.assign(process.env, vars)` writes `process.env.*`, never `process.cwd`; a computed key on the global object
+writes `*`, every global. A write through `__proto__`, `constructor` or `getPrototypeOf` writes `*.prototype` and its
+member. A global the snapshot declares is written whole. A leaf stays the cut it would otherwise be when a written path
+covers the path it calls (`Array.prototype.push` for a call on an array literal, `Map.prototype.get` for `new Map()`,
+`Math.max` for a rooted call, the global itself for a bare call), when its package is written through, when a receiver
+it names inherits a member written on `Object.prototype`, or, for an `unnamed` call whose receiver nothing names, when
+its member is written on any prototype. A call found replaced never falls back to an `unnamed` external.
+
+External leaves are relative to the fact's declared scope (RFC-0002 rule 4, `scope.languages`): the snapshot holds the
+`.ts`, `.mts` and `.cts` sources the map scope exports, so a write in a `.js`, `.jsx` or `.tsx` file is outside the
+promise and is not read. Two writes stay outside the paths: one through a parameter with no default
+(`function patch(p) { p.push = f }`) or a call's result, and one on a prototype a named receiver inherits without
+naming it (`Element.prototype.appendChild = f` against `document.body.appendChild`). A name a `with` body
 or a direct `eval` may rebind has no origin, and a local in the scope of a direct `eval`, strict or not, is not bound. An
 R3 field leaf under a global needs a library global the binder confirms at the field's `new`, never the unresolved-name
 fallback of a field origin.

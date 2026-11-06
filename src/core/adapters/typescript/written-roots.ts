@@ -3,18 +3,17 @@ import { bindFile, type LexicalBinding, unwrapped } from "./lexical-bindings.ts"
 import { packageOf } from "./module-resolver.ts";
 
 /**
- * What the snapshot's sources write through: global names or every global at once, packages by name, and the member
- * names those writes state.
+ * What the snapshot's sources write: member paths from the global they start at, keyed by their joined segments, and
+ * packages by name. A `*` segment is a name the write does not state (`Array.prototype[k] = f` writes
+ * `Array.prototype.*`); a path that starts at `*` starts at a global no name states.
  */
 export interface WrittenRoots {
-  globals: Set<string>;
-  everyGlobal: boolean;
+  paths: Map<string, readonly string[]>;
   packages: Set<string>;
-  members: Set<string>;
 }
 
 /** Names that hold the global object itself, so `globalThis.Math.max = f` writes through `Math`. */
-const GLOBAL_OBJECTS: ReadonlySet<string> = new Set(["globalThis", "window", "self", "global"]);
+export const GLOBAL_OBJECTS: ReadonlySet<string> = new Set(["globalThis", "window", "self", "global"]);
 
 /** How a writing call states the members it writes: its second argument as a key, the keys of its later arguments, or not at all. */
 type MemberForm = "key" | "keys" | "unstated";
@@ -46,47 +45,38 @@ interface Path {
   links: readonly string[];
 }
 
-/** Where a write lands: under a global, under a package, on the global object itself, under any global, or on nothing global. */
-type Landing =
-  | { kind: "global"; name: string; links: readonly string[] }
-  | { kind: "package"; name: string; links: readonly string[] }
-  | { kind: "global-object" }
-  | { kind: "every"; links: readonly string[] }
-  | { kind: "local" };
+/** Where a write lands: at a member path from the global object (`[]` is the global object itself), or under a package. */
+type Landing = { kind: "global"; path: readonly string[] } | { kind: "package"; name: string };
 
 type BindingOf = (identifier: ts.Identifier) => LexicalBinding;
 
 /**
- * Adds to `into` the roots one source writes through, and the members it writes: an assignment, compound assignment,
+ * Adds to `into` the member paths one source writes, and the packages it writes through: an assignment, compound assignment,
  * update, `delete`, destructuring or iteration target whose member path starts at a global (directly or through
  * `globalThis`, `window`, `self` or `global`) or at an imported binding, and the first argument of
  * `Object.defineProperty`, `Object.assign`, `Object.setPrototypeOf`, `Reflect.set` and their kin. What a name stands for
  * comes from the binder (ADR-0029): a local named like a global writes nothing global; a local declared from a path (a
  * variable's initializer, a parameter's default, a destructured element by its key or index) stands for that path, so a
- * write through it lands where the path starts. A chain through a call writes the call's result, not its root. A write
- * that reaches a prototype through `__proto__`, `constructor` or `getPrototypeOf`, a computed write on the global object,
- * an alias no path names (a computed key or a rest element over a global) and a literal that holds a global land on every
- * global.
+ * write through it lands where the path starts. A chain through a call writes the call's result, not its root. A name the
+ * write does not state is a `*` segment: a computed key or index, a member a writing call computes, a destructured element
+ * by a computed key or the rest. A write that reaches a prototype through `__proto__`, `constructor` or `getPrototypeOf`
+ * writes `*.prototype` and what follows, and one through a value that holds globals writes under each of them.
  */
 export function addWrittenRoots(path: string, text: string, parsed: ts.SourceFile, into: WrittenRoots, isGlobalName: (name: string) => boolean): void {
   if (!targetsOf(parsed).some((target) => mayWriteRoot(target, isGlobalName))) return;
   const { tree, bindingOf } = bindFile(path, text);
-  for (const target of targetsOf(tree)) record(landing(pathOf(target.expression), bindingOf, 0, target.members !== undefined), target, into);
+  for (const target of targetsOf(tree)) for (const landed of landing(pathOf(target.expression), bindingOf, 0, target.members !== undefined)) record(landed, target, into);
 }
 
+/**
+ * Records where a write lands. A store writes its path, a path's every member when it ends at the global object or a
+ * prototype; a writing call writes the members it states below its path, or every member when it states none.
+ */
 function record(landed: Landing, target: Target, into: WrittenRoots): void {
-  if (landed.kind === "local") return;
-  if (landed.kind === "global-object") {
-    if (target.members === undefined || target.members === "unstated" || target.members.includes(COMPUTED)) into.everyGlobal = true;
-    else for (const name of target.members) into.globals.add(name);
-    return;
-  }
-  if (landed.kind === "every") into.everyGlobal = true;
-  else if (landed.kind === "global") into.globals.add(landed.name);
-  else into.packages.add(landed.name);
-  const last = landed.links.at(-1);
-  const members = target.members ?? (last === undefined ? [] : [last]);
-  if (members !== "unstated") for (const member of members) if (member !== COMPUTED) into.members.add(member);
+  if (landed.kind === "package") return void into.packages.add(landed.name);
+  const { path } = landed;
+  const written = target.members === undefined ? [path.length === 0 || path.at(-1) === "prototype" ? [...path, COMPUTED] : path] : target.members === "unstated" ? [[...path, COMPUTED]] : target.members.map((member) => [...path, member]);
+  for (const segments of written) into.paths.set(segments.join("\u0000"), segments);
 }
 
 function targetsOf(tree: ts.SourceFile): Target[] {
@@ -166,31 +156,29 @@ function mayWriteRoot(target: Target, isGlobalName: (name: string) => boolean): 
  * Where a write through `path` lands, following the aliases it starts at. `stated` is true when a writing call names the
  * path's value itself as the object it writes, so a path of no links writes through what its start stands for.
  */
-function landing({ start, links }: Path, bindingOf: BindingOf, depth: number, stated: boolean): Landing {
-  if (links.some((link) => PROTOTYPE_LINKS.has(link))) return { kind: "every", links };
-  if (links.some(isCall)) return { kind: "local" };
+function landing({ start, links }: Path, bindingOf: BindingOf, depth: number, stated: boolean): Landing[] {
+  const prototypeAt = links.findLastIndex((link) => PROTOTYPE_LINKS.has(link));
+  if (prototypeAt >= 0) {
+    const below = links.slice(prototypeAt + 1);
+    return [{ kind: "global", path: [COMPUTED, "prototype", ...(below[0] === "prototype" ? below.slice(1) : below)] }];
+  }
+  if (links.some(isCall)) return [];
   if (!ts.isIdentifier(start)) return throughValue(start, links, bindingOf, depth, stated);
   const binding = bindingOf(start);
-  if (binding.kind !== "declared") {
-    if (!GLOBAL_OBJECTS.has(start.text)) return { kind: "global", name: start.text, links };
-    const [first, ...below] = links;
-    if (first === undefined) return { kind: "global-object" };
-    return first === COMPUTED ? { kind: "every", links } : { kind: "global", name: first, links: below };
-  }
-  if (links.length === 0 && !stated) return { kind: "local" };
-  if (depth >= ALIAS_DEPTH) return { kind: "every", links };
-  const landings = binding.declarations.map((declaration): Landing => {
+  if (binding.kind !== "declared") return [{ kind: "global", path: GLOBAL_OBJECTS.has(start.text) ? links : [start.text, ...links] }];
+  if (links.length === 0 && !stated) return [];
+  if (depth >= ALIAS_DEPTH) return [{ kind: "global", path: [COMPUTED] }];
+  return binding.declarations.flatMap((declaration): Landing[] => {
     const specifier = importSpecifierOf(declaration);
     if (specifier !== undefined) {
       const module = packageOf(specifier);
-      return module === undefined ? { kind: "local" } : { kind: "package", name: module, links };
+      return module === undefined ? [] : [{ kind: "package", name: module }];
     }
     const source = sourceOf(declaration);
-    if (source === undefined) return { kind: "local" };
-    if (source === "unnamed") return everyIfGlobal(declaration, bindingOf, depth, links);
+    if (source === undefined) return [];
+    if (source === "unnamed") return throughOpaqueAlias(declaration, bindingOf, depth, links, stated);
     return landing({ start: source.start, links: [...source.links, ...links] }, bindingOf, depth + 1, stated);
   });
-  return landings.find((landed) => landed.kind === "every") ?? landings.find((landed) => landed.kind !== "local") ?? { kind: "local" };
 }
 
 /**
@@ -216,27 +204,49 @@ function keyOf(element: ts.BindingElement): string | undefined {
   return undefined;
 }
 
-/** An alias no path names lands on every global when the pattern it comes from starts at one, and on nothing global otherwise. */
-function everyIfGlobal(element: ts.Declaration, bindingOf: BindingOf, depth: number, links: readonly string[]): Landing {
+/** An alias a pattern takes by a computed key or the rest stands for an unstated member of the whole pattern's path. */
+function throughOpaqueAlias(element: ts.Declaration, bindingOf: BindingOf, depth: number, links: readonly string[], stated: boolean): Landing[] {
   let holder: ts.Node = element;
   while (ts.isBindingElement(holder)) holder = holder.parent.parent;
   const whole = sourceOf(holder);
-  if (whole === undefined || whole === "unnamed") return { kind: "local" };
-  const landed = landing({ start: whole.start, links: [...whole.links, COMPUTED] }, bindingOf, depth + 1, true);
-  return landed.kind === "local" ? landed : { kind: "every", links };
+  return whole === undefined || whole === "unnamed" ? [] : landing({ start: whole.start, links: [...whole.links, COMPUTED, ...links] }, bindingOf, depth + 1, stated);
 }
 
 /**
  * Where a path that starts at a value, not a name, lands: through a literal's member or element the links name, at what
- * that member holds; a write on the literal's own member is local. When the links name no member the literal states, the
- * path lands on every global if the value holds one anywhere, and on nothing global otherwise.
+ * that member holds; a write on the literal's own member is local. When the links name no member the literal states, at
+ * every value the expression may hold, each at the links below its place in the literal.
  */
-function throughValue(start: ts.Expression, links: readonly string[], bindingOf: BindingOf, depth: number, stated: boolean): Landing {
+function throughValue(start: ts.Expression, links: readonly string[], bindingOf: BindingOf, depth: number, stated: boolean): Landing[] {
+  if (depth >= ALIAS_DEPTH) return [{ kind: "global", path: [COMPUTED] }];
   const [first, ...below] = links;
-  if (first === undefined || (below.length === 0 && !stated)) return { kind: "local" };
-  const held = depth < ALIAS_DEPTH ? memberOf(start, first) : undefined;
+  const held = first === undefined || (below.length === 0 && !stated) ? undefined : memberOf(start, first);
   if (held !== undefined) return landing({ start: held.start, links: [...held.links, ...below] }, bindingOf, depth + 1, stated);
-  return holdsGlobal(start, bindingOf) ? { kind: "every", links } : { kind: "local" };
+  return valuesIn(start, 0).flatMap(({ value, nesting }) => {
+    const rest = links.slice(nesting);
+    return nesting > links.length || (rest.length === 0 && !stated) ? [] : landing({ start: value.start, links: [...value.links, ...rest] }, bindingOf, depth + 1, stated);
+  });
+}
+
+/**
+ * The paths an expression may hold, each with how many members deep a literal holds it: both branches of a conditional or
+ * a logical operator, the members and elements of a literal one level deeper, a spread at its own level. A value no name
+ * or literal starts (a call, `new`, `this`, a function) holds none.
+ */
+function valuesIn(expression: ts.Expression, nesting: number): { value: Path; nesting: number }[] {
+  const node = unwrapped(expression);
+  if (ts.isConditionalExpression(node)) return [...valuesIn(node.whenTrue, nesting), ...valuesIn(node.whenFalse, nesting)];
+  if (ts.isBinaryExpression(node)) {
+    const operator = node.operatorToken.kind;
+    if (operator === ts.SyntaxKind.BarBarToken || operator === ts.SyntaxKind.AmpersandAmpersandToken || operator === ts.SyntaxKind.QuestionQuestionToken) return [...valuesIn(node.left, nesting), ...valuesIn(node.right, nesting)];
+    return operator === ts.SyntaxKind.CommaToken || operator === ts.SyntaxKind.EqualsToken ? valuesIn(node.right, nesting) : [];
+  }
+  if (ts.isArrayLiteralExpression(node)) return node.elements.flatMap((element) => (ts.isSpreadElement(element) ? valuesIn(element.expression, nesting) : ts.isOmittedExpression(element) ? [] : valuesIn(element, nesting + 1)));
+  if (ts.isObjectLiteralExpression(node)) {
+    return node.properties.flatMap((property) => (ts.isPropertyAssignment(property) ? valuesIn(property.initializer, nesting + 1) : ts.isSpreadAssignment(property) ? valuesIn(property.expression, nesting) : ts.isShorthandPropertyAssignment(property) ? [{ value: { start: property.name, links: [] }, nesting: nesting + 1 }] : []));
+  }
+  const value = pathOf(node);
+  return ts.isIdentifier(value.start) || ts.isArrayLiteralExpression(value.start) || ts.isObjectLiteralExpression(value.start) ? [{ value, nesting }] : [];
 }
 
 /** The path a literal states for one of its members, when nothing computed or spread can override it. */
@@ -251,24 +261,6 @@ function memberOf(literal: ts.Expression, key: string): Path | undefined {
   if (ts.isPropertyAssignment(property)) return pathOf(property.initializer);
   if (ts.isShorthandPropertyAssignment(property)) return { start: property.name, links: [] };
   return undefined;
-}
-
-/** Whether a value that is not a name holds a global inside it, so a path through it may reach that global. */
-function holdsGlobal(start: ts.Expression, bindingOf: BindingOf): boolean {
-  let found = false;
-  const visit = (node: ts.Node): void => {
-    if (found || ts.isTypeNode(node) || ts.isFunctionLike(node) || ts.isClassLike(node) || ts.isNewExpression(node) || ts.isCallExpression(node)) return;
-    if (ts.isIdentifier(node) && !isMemberName(node) && bindingOf(node).kind !== "declared") found = true;
-    node.forEachChild(visit);
-  };
-  visit(start);
-  return found;
-}
-
-/** A name that labels a member, `b` in `a.b` or in `{ b: v }`, not one that reads a binding. */
-function isMemberName(identifier: ts.Identifier): boolean {
-  const parent = identifier.parent;
-  return (ts.isPropertyAccessExpression(parent) || ts.isPropertyAssignment(parent)) && parent.name === identifier;
 }
 
 /** The module an import declaration of the binding names; none for any other declaration. */
