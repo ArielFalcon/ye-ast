@@ -46,8 +46,11 @@ actually runs.
    `export-write-failed`) is raised by the reader that needed the files, with its typed kind, in the place the export
    fault was raised: it is the answer of the request, never an `index-unavailable` unknown and never retained data. A
    fault is remembered for the operation, because the directory then holds an unspecified part of the files. A request
-   that needs no file cannot meet a write fault; this is the one difference from a single-pass export, and it concerns
-   only the faults of a write the answer did not need.
+   that needs no file cannot meet a fault of reading or writing blob content (`export-write-failed`, a `git-failed` on
+   a blob whose header lists but whose body cannot be read); this is the one difference from a single-pass export, and
+   it concerns only the faults of content the answer did not need. Since the listing finds a missing object before
+   anything is written, a missing blob is reported as `object-missing` even where a single-pass export would first have
+   met a write fault on an earlier file.
 6. The Vcs port offers the two halves, `listCommit` and `materializeCommit`, beside `exportCommit`, which is the two in
    sequence and stays for the consumers that always need the files (the live base tree, the changed-file diff). A Vcs
    that offers neither writes in `exportCommit` alone, and a request then behaves as before. The index cache request
