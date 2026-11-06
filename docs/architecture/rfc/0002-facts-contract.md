@@ -174,10 +174,7 @@ names are settled in the first slice; the union, the cuts and the inputs are the
    unreadable library file declares that intermediary. `0.21.0` makes `OutlineValue` either the listing (`files`,
    `unheld`) or a focus (`focus`, `unheld`): each `OutlineFocus` names the `file`, the `selector` asked, the
    declaration's dotted `path`, its `ancestors` outermost first, the `declaration` with its subtree and `omitted`,
-   the count of the file's declarations left out; `inputs.declaredConfig.focus` records the selectors. `0.22.0` adds
-   `TraceValue`, the steps a declaration executes in pre-order with their folded `leaves`, grouped `external` calls,
-   `seen` and `deferred` steps, the roots each target selected and a `readingPlan`; `inputs.declaredConfig.targets` also
-   records the targets of a trace.
+   the count of the file's declarations left out; `inputs.declaredConfig.focus` records the selectors.
 7. **Redaction at egress.** Values and evidence pass redaction when they leave ye-ast's process toward a host: the
    patterns always, by-value secrets only in the process that already holds them
    ([ADR-0010](../adr/0010-trust-modes.md)). The success report `ye-ast init` writes for the user who ran it is not

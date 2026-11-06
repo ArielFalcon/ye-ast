@@ -449,7 +449,7 @@ reruns every query and keeps no final results, so it can cost more analysis time
 A CLI or query-protocol fact has this envelope; MCP text modes return a smaller receipt as described below:
 
 ```text
-schema     contract version of the envelope (currently "0.22.0")
+schema     contract version of the envelope (currently "0.21.0")
 snapshot   what was read: { repo, kind: "sha", sha } or { repo, kind: "live", head, stateId }
 producer   ye-ast name and version
 inputs     trust mode, declared scope, change selection, budget
