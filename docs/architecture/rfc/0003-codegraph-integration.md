@@ -119,7 +119,10 @@ A full index is kept by the content it was built from, not by sha ([ADR-0015](..
 key is the content digest of the staged files, the codegraph version, the supported schema and extraction versions and
 the version of ye-ast's staging rules (`STAGING_RULES_VERSION`, changed with any change to staging). The cache adapter
 builds into a temporary directory inside the cache, writes the index summary beside the store, publishes with an atomic
-rename and opens the published directory, so a fresh and a reused index are read the same way. Kept indexes are retained by last use (`summary.json` modification time), 14 days unused and 512 MiB of logical bytes,
+rename and opens the published directory, so a fresh and a reused index are read the same way. The staged files are one
+universe per snapshot, `isWritten` (the map scope plus JSON module resources), for every family that builds or opens an
+index at a sha (callers, importers, impact, outline, trace, contract consumers) and for the live mirror, so one snapshot
+yields one kept index; importers additionally stage test sources, so a repository with tests keeps a second index for them. Kept indexes are retained by last use (`summary.json` modification time), 14 days unused and 512 MiB of logical bytes,
 and an entry an open reader holds, through a lease file beside the entries, is never removed
 ([ADR-0027](../adr/0027-retention-of-immutable-index-entries.md)); retention bounds disk, not build time. The determinism check
 that allowed this is in ADR-0015 (two builds of 10,429 nodes, 18,103 edges and 23,167 unresolved references, equal on

@@ -11,7 +11,7 @@ import { trustOf } from "../core/application/snapshot/read-snapshot.ts";
 import { openLive, type LiveDeps } from "../core/application/live/live-tree.ts";
 import { declaredScope } from "../core/domain/map/entrypoint-map.ts";
 import { exportSelection, pathSelection } from "../core/domain/shared/scope.ts";
-import { isWritten, liveScope } from "../core/domain/snapshot/live-export.ts";
+import { WRITTEN_UNIVERSE_VERSION, isWritten, liveScope } from "../core/domain/snapshot/live-export.ts";
 import { isExtractorConfiguration } from "../core/domain/languages/configuration.ts";
 import type { IndexRetentionPolicy } from "../core/ports/index-cache.port.ts";
 import type { LiveRetentionPolicy } from "../core/domain/snapshot/live-retention.ts";
@@ -82,6 +82,7 @@ import { installedVersion, ownVersion } from "./installed-versions.ts";
 import { measuredDecisions, measuredStages, measuredEntrypoints, measuredGraph, measuredImpact, measuredIndexDiscard, measuredLiveMirror, measuredOutline, measuredSnapshotCache, measuredTrace, measuredWorkspace, type MeasurementSink } from "./measurement.ts";
 
 const PRODUCER_NAME = "ye-ast";
+export const LIVE_STAGING_VERSION = `${STAGING_RULES_VERSION}:${WRITTEN_UNIVERSE_VERSION}`;
 const ENTRYPOINT_ENGINES = ["web-tree-sitter", "tree-sitter-java", "typescript"] as const;
 const TEMPLATE_ENGINE = "@angular/compiler";
 const CODEGRAPH_PACKAGE = "@colbymchenry/codegraph";
@@ -199,7 +200,7 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
     mirror: liveMirror,
     graph,
     digest,
-    versions: { codegraph, store: JSON.stringify(SUPPORTED_STORE), staging: `${STAGING_RULES_VERSION}:json-resources-v1` },
+    versions: { codegraph, store: JSON.stringify(SUPPORTED_STORE), staging: LIVE_STAGING_VERSION },
     retention: options.liveRetention ?? LIVE_RETENTION,
     now: () => Date.now(),
   };
@@ -233,6 +234,7 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
     moduleDependencies,
     declarationEvidence: createDeclarationEvidenceReader(),
     unmodelled,
+    sourceSelection: isWritten,
   };
   const bareImpact = createImpactQueries(impactDeps);
   const warmLive = async (repo: string, signal?: AbortSignal): Promise<string | null> => {
@@ -261,6 +263,7 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
     live,
     ...budget,
     ...trust,
+    sourceSelection: isWritten,
   };
   const javaImports = staged<ModuleDependenciesReader>({ extract: async (sources, options) => createJavaImportsReader(await createJavaParser()).extract(sources, options) }, { extract: "java-imports" });
   const bareOutline = createOutlineQueries({ ...headDeps, moduleReaders: [moduleDependencies, javaImports], unmodelled });
@@ -284,6 +287,7 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
     moduleDependencies,
     sourceTrivia,
     memberNames,
+    sourceSelection: isWritten,
   });
   const trace = measurement === undefined ? bareTrace : measuredTrace(bareTrace, measurement);
   const defaults = createWorkspaceDefaults(createFixedLayerStore());
