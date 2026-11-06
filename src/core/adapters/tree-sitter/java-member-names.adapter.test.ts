@@ -29,8 +29,8 @@ test("enum constants are names", async () => {
 test("a source of another language or one that does not parse declares none, and the parser is made only for a Java source", async () => {
   let created = 0;
   const reader = createJavaMemberNames(async () => (created += 1, createJavaParser()));
-  assert.deepEqual(await read(["const a = { m() {} };"], "src/a.ts", reader), { names: [], computed: false });
+  assert.deepEqual(await read(["const a = { m() {} };"], "src/a.ts", reader), { names: [] });
   assert.equal(created, 0);
-  assert.deepEqual(await read(["class {"], "src/A.java", reader), { names: [], computed: false });
+  assert.deepEqual(await read(["class {"], "src/A.java", reader), { names: [] });
   assert.equal(created, 1);
 });

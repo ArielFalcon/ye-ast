@@ -41,13 +41,11 @@ test("a name only a type, an interface, a type literal or an ambient declaration
   ]), []);
 });
 
-test("a computed key or index flags the file and adds no name; a literal one adds its name", async () => {
-  assert.deepEqual(await read(["const table = { [key]: run, ['literal']: run };"]), { names: ["literal"], computed: true });
-  assert.deepEqual(await read(["target[name] = run;"]), { names: [], computed: true });
-  assert.deepEqual(await read(["const table = { plain: run };"]), { names: ["plain"], computed: false });
+test("a computed key or index adds no name; a literal one adds its name", async () => {
+  assert.deepEqual(await names(["const table = { [key]: run, ['literal']: run };", "target[name] = run;", "target['indexed'] = run;"]), ["indexed", "literal"]);
 });
 
 test("a file that is not a TypeScript source declares none", async () => {
-  assert.deepEqual(await read(["const table = { plain: run };"], "src/a.d.ts"), { names: [], computed: false });
-  assert.deepEqual(await read(["class A { void run() {} }"], "src/A.java"), { names: [], computed: false });
+  assert.deepEqual(await read(["const table = { plain: run };"], "src/a.d.ts"), { names: [] });
+  assert.deepEqual(await read(["class A { void run() {} }"], "src/A.java"), { names: [] });
 });

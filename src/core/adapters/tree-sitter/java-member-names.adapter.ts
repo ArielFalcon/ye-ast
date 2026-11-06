@@ -4,7 +4,7 @@ import { isJavaSource } from "../../domain/languages/java.ts";
 import type { DeclaredMemberNames, DeclaredMemberNamesReader } from "../../ports/declared-member-names.port.ts";
 import type { JavaParser } from "./java-parser.adapter.ts";
 
-const NONE: DeclaredMemberNames = { names: [], computed: false };
+const NONE: DeclaredMemberNames = { names: [] };
 
 /** Nodes that declare one name under their `name` field. */
 const NAMED: readonly string[] = ["method_declaration", "enum_constant", "variable_declarator"];
@@ -38,7 +38,7 @@ export function createJavaMemberNames(createParser: () => Promise<JavaParser>): 
       } finally {
         parsed.value.dispose();
       }
-      return { names: [...names].sort(compareText), computed: false };
+      return { names: [...names].sort(compareText) };
     },
   };
 }

@@ -4,7 +4,7 @@ import { isTypeScriptSource } from "../../domain/languages/typescript.ts";
 import type { DeclaredMemberNames, DeclaredMemberNamesReader } from "../../ports/declared-member-names.port.ts";
 import { sourceTree } from "./source-tree.ts";
 
-const NONE: DeclaredMemberNames = { names: [], computed: false };
+const NONE: DeclaredMemberNames = { names: [] };
 
 /**
  * The member names a TypeScript source declares where a value can live: object-literal keys, properties assigned through
@@ -18,12 +18,10 @@ export function createTypeScriptMemberNames(): DeclaredMemberNamesReader {
       if (!isTypeScriptSource(file.path)) return NONE;
       const tree = sourceTree(file, ts.ScriptTarget.Latest, true);
       const names = new Set<string>();
-      let computed = false;
       const add = (name: ts.PropertyName | ts.BindingName | undefined): void => {
         if (name === undefined || ts.isObjectBindingPattern(name) || ts.isArrayBindingPattern(name)) return;
         if (!ts.isComputedPropertyName(name)) return void names.add(name.text);
         if (ts.isStringLiteralLike(name.expression) || ts.isNumericLiteral(name.expression)) names.add(name.expression.text);
-        else computed = true;
       };
       const visit = (node: ts.Node): void => {
         if (isDeclareOnly(node)) return;
@@ -36,13 +34,12 @@ export function createTypeScriptMemberNames(): DeclaredMemberNamesReader {
           else if (ts.isElementAccessExpression(node.left)) {
             const index = node.left.argumentExpression;
             if (ts.isStringLiteralLike(index) || ts.isNumericLiteral(index)) names.add(index.text);
-            else computed = true;
           }
         }
         ts.forEachChild(node, visit);
       };
       visit(tree);
-      return { names: [...names].sort(compareText), computed };
+      return { names: [...names].sort(compareText) };
     },
   };
 }

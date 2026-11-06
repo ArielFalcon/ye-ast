@@ -74,9 +74,8 @@ API, ADR-0008; tree-sitter for Java), once per query and only when a member call
 set took 18 to 75 ms on the probe repositories and 238 ms on this one, against 1.1 to 1.9 s per query, so it is not
 cached across queries.
 
-Limitation: a member defined under a computed name (`{ [key]: fn }`, `target[name] = fn`) has no name to read. The
-reader flags the file, and a call through such a member is still reported external `unnamed` when no other source
-declares its name.
+Limitation: a member defined under a computed name (`{ [key]: fn }`, `target[name] = fn`) has no name to read, so a
+call through such a member is still reported external `unnamed` when no other source declares its name.
 
 The rule matches names, not receivers, so a library call whose name the code also declares in a value position is a
 cut: on this repository's `composeQueries` trace, 269 calls moved from external to cut (191 `Map.set`, 52

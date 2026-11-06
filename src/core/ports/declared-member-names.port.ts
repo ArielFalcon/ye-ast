@@ -4,8 +4,6 @@ import type { SourceFile } from "./entrypoint-extractor.port.ts";
 export interface DeclaredMemberNames {
   /** Sorted, once each. */
   names: readonly string[];
-  /** The source defines a member under a computed name (`{ [key]: f }`, `target[key] = f`), which no name can be read from. */
-  computed: boolean;
 }
 
 /**
