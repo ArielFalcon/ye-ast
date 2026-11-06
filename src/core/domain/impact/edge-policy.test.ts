@@ -100,3 +100,11 @@ test("an unproven binding or a root a longer chain reaches keeps the edge on the
   assert.deepEqual(edgeVerdict({ status: "complete", value: repository, evidence, bare: true }, undefined, "function"), { kind: "keep" });
   assert.deepEqual(edgeVerdict({ status: "complete", value: repository, evidence }, "Logger", "error"), { kind: "keep" });
 });
+
+test("a root spelled alone that a parameter binds drops the edge, whatever the graph matched it to", () => {
+  const evidence = [{ path: "src/a.ts", line: 1 }];
+  const parameter: ImportOrigin = { kind: "local-parameter", name: "redact" };
+
+  assert.deepEqual(edgeVerdict({ status: "complete", value: parameter, evidence, bare: true }), { kind: "drop" });
+  assert.deepEqual(edgeVerdict({ status: "complete", value: parameter, evidence }), { kind: "keep" });
+});

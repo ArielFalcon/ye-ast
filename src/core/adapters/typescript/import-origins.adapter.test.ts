@@ -131,6 +131,16 @@ test("local parameter proof handles Unicode, nested parameters and same-line use
   assert.deepEqual(results.map((f) => f.status === "complete" ? f.value.kind : "unknown"), ["unknown", "local-parameter", "unknown", "local-parameter"]);
 });
 
+test("a parameter of a function declaration, a method or a constructor proves a bare call of it local", async () => {
+  const file = "src/declared.ts";
+  const text = "export function clean(text: string, redact: (v: string) => string) { return redact(text); }\nclass C { run(redact: () => void) { redact(); } constructor(redact: () => void) { redact(); } }";
+  const lines = text.split("\n");
+  const sites = [[1, lines[0]!.indexOf("redact(text)")], [2, lines[1]!.indexOf("redact();")], [2, lines[1]!.lastIndexOf("redact();")]] as const;
+  const results = await createImportOrigins([{ path: file, content: text }]).origins(sites.map(([line, offset]) => ({ file, line, column: offset + 1, name: "redact", fullName: "redact", kind: "calls" })));
+
+  assert.deepEqual(results.map((f) => (f.status === "complete" ? f.value.kind : "unknown")), ["local-parameter", "local-parameter", "local-parameter"]);
+});
+
 test("local parameter refuses unsupported syntax and malformed files", async () => {
   const examples = [
     "run((...resolve) => resolve());", "run((resolve = other) => resolve());", "run(({resolve}) => resolve());",
@@ -320,6 +330,25 @@ test("only a site that spells its root alone is bare", async () => {
 
   assert.equal(alone.bare, true);
   assert.equal(chained.bare, undefined);
+});
+
+test("a root spelled alone that a parameter binds is local, one a local variable binds is unknown", async () => {
+  const file = "src/shadow.ts";
+  const text = 'import { redact } from "./redact.ts";\nexport function clean(text: string, redact: (v: string) => string) { return redact(text); }\nexport function plain(text: string) { const redact = (v: string) => v; return redact(text); }\n';
+  const lines = text.split("\n");
+  const reader = createImportOrigins([...SOURCES, { path: file, content: text }]);
+  const [parameter, variable] = await reader.rootOrigins([2, 3].map((line) => ({ file, line, column: lines[line - 1]!.lastIndexOf("redact(") + 1, kind: "calls", name: "redact" })));
+
+  assert.deepEqual(parameter, { status: "complete", value: { kind: "local-parameter", name: "redact" }, evidence: [{ path: file, line: 2 }], bare: true });
+  assert.equal(variable!.status, "unknown");
+});
+
+test("a type spelled like a parameter is not the parameter", async () => {
+  const file = "src/typed.ts";
+  const text = "export function make(Order: number) { const made: Order | undefined = undefined; return made; }\n";
+  const [type] = await createImportOrigins([{ path: file, content: text }]).rootOrigins([{ file, line: 1, column: text.lastIndexOf("Order") + 1, kind: "references", name: "Order" }]);
+
+  assert.notEqual(type!.status === "complete" && type!.value.kind, "local-parameter");
 });
 
 test("a chain through a call, or one that ends in another name than the edge's, is unknown", async () => {

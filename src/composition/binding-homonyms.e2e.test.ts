@@ -8,11 +8,16 @@ import { composeQueries } from "./compose.ts";
 import type { ImpactValue } from "../core/domain/impact/impact-fact.ts";
 import type { Fact } from "../core/domain/shared/fact.ts";
 
-/** `schema.ts` imports the constant `cutOwner`; the graph matches its uses to the function of the same name in `other.ts`. */
+/**
+ * `schema.ts` imports the constant `cutOwner`; the graph matches its uses to the function of the same name in `other.ts`.
+ * `use.ts` calls its parameter `redact`; the graph matches the call to the function of the same name in `redact.ts`.
+ */
 const FILES: Record<string, string> = {
   "package.json": JSON.stringify({ name: "fixture" }),
   "src/parts.ts": "export const cutOwner = 1;\n",
   "src/other.ts": "function cutOwner(): number {\n  return 2;\n}\n\nexport const x = cutOwner();\n",
+  "src/redact.ts": "export function redact(text: string): string {\n  return text;\n}\n",
+  "src/use.ts": "export function clean(text: string, redact: (value: string) => string): string {\n  return redact(text);\n}\n",
   "src/schema.ts": 'import { cutOwner } from "./parts.ts";\n\nexport function shape(): unknown {\n  return { owner: cutOwner };\n}\n\nexport function pass(): unknown {\n  return String(cutOwner);\n}\n',
 };
 
@@ -58,4 +63,8 @@ test("a file whose uses the graph matched to a homonym of what it imports is no 
   assert.ok(result.ok && result.value.status !== "unknown", JSON.stringify(result));
 
   assert.deepEqual(result.value.value.files.map(({ file, users }) => ({ file, users })), [{ file: "src/other.ts", users: [] }, { file: "src/parts.ts", users: ["src/schema.ts"] }]);
+});
+
+test("a call of a parameter is no use of a declaration the graph matched by the parameter's name", async () => {
+  assert.deepEqual(await callersOf("src/redact.ts", "redact"), [{ symbol: "redact" }]);
 });

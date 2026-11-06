@@ -113,8 +113,8 @@ export function createImportOrigins(sources: readonly SourceFile[]): ImportOrigi
       const read = text === undefined || !isTypeScriptSource(file) ? undefined : rootsAt(file, text, group);
       if (read === undefined) continue;
       shapes.set(file, read.shape);
-      for (const [index, { root, bare }] of read.roots) {
-        const origin = await originOf({ ...sites[index]!, name: root }, "valid");
+      for (const [index, { root, bare, local }] of read.roots) {
+        const origin = await originOf({ ...sites[index]!, name: root }, local ? "local" : "valid");
         results[index] = bare ? { ...origin, bare: true } : origin;
       }
     }
@@ -125,7 +125,7 @@ export function createImportOrigins(sources: readonly SourceFile[]): ImportOrigi
 type SiteSyntax = "valid" | "local" | "this-member";
 
 /** The root of the plain chain of names each site spells and ends in its name, read in one temporary tree. */
-function rootsAt(file: string, text: string, group: readonly { site: ResolvedNameSite; index: number }[]): { roots: Map<number, { root: string; bare: boolean }>; shape: FileShape } | undefined {
+function rootsAt(file: string, text: string, group: readonly { site: ResolvedNameSite; index: number }[]): { roots: Map<number, { root: string; bare: boolean; local: boolean }>; shape: FileShape } | undefined {
   const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
   const diagnostics = (source as ts.SourceFile & { parseDiagnostics: readonly ts.Diagnostic[] }).parseDiagnostics;
   if (diagnostics.some((diagnostic) => diagnostic.category === ts.DiagnosticCategory.Error)) return undefined;
@@ -139,12 +139,15 @@ function rootsAt(file: string, text: string, group: readonly { site: ResolvedNam
     wanted.set(point, [...(wanted.get(point) ?? []), item]);
   }
   /** Chains that start at one point share their root, so the first that ends in the name settles it. */
-  const roots = new Map<number, { root: string; bare: boolean }>();
+  const roots = new Map<number, { root: string; bare: boolean; local: boolean }>();
+  const scopes = new WeakMap<ts.Node, { unsafe: boolean; names: ReadonlySet<string> }>();
   const visit = (node: ts.Node): void => {
     for (const { site, index } of wanted.get(node.getStart(source)) ?? []) {
       const spelled = spelledAt(node, site.kind);
       const names = spelled === undefined ? undefined : plainChain(spelled);
-      if (names !== undefined && names.at(-1) === site.name && !roots.has(index)) roots.set(index, { root: names[0]!, bare: names.length === 1 });
+      if (names === undefined || names.at(-1) !== site.name || roots.has(index)) continue;
+      const bare = names.length === 1;
+      roots.set(index, { root: names[0]!, bare, local: bare && ts.isIdentifier(spelled!) && !ts.isTypeNode(spelled.parent) && localParameter(spelled, site.name, scopes) });
     }
     node.forEachChild(visit);
   };
@@ -233,14 +236,14 @@ function isNested(declaration: ts.ClassLikeDeclaration): boolean {
   return false;
 }
 
-/** Prove only the nearest supported function-expression parameter; all uncertain scopes are refused. */
+/** Prove only a parameter of the nearest function, method or constructor that holds the name; all uncertain scopes are refused. */
 function localParameter(callee: ts.Identifier, name: string, scopes: WeakMap<ts.Node, { unsafe: boolean; names: ReadonlySet<string> }>): boolean {
   let node: ts.Node | undefined = callee.parent;
-  let owner: ts.ArrowFunction | ts.FunctionExpression | undefined;
+  let owner: ts.ArrowFunction | ts.FunctionExpression | ts.FunctionDeclaration | ts.MethodDeclaration | ts.ConstructorDeclaration | undefined;
   while (node !== undefined) {
     if (ts.isWithStatement(node)) return false;
     if (ts.isFunctionLike(node)) {
-      if (!ts.isArrowFunction(node) && !ts.isFunctionExpression(node)) return false;
+      if (!ts.isArrowFunction(node) && !ts.isFunctionExpression(node) && !ts.isFunctionDeclaration(node) && !ts.isMethodDeclaration(node) && !ts.isConstructorDeclaration(node)) return false;
       owner = node; break;
     }
     node = node.parent;
