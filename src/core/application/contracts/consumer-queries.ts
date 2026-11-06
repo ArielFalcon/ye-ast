@@ -1,5 +1,5 @@
-import { formatAccessPath, type AccessPath } from "../../domain/contracts/access-path.ts";
-import { OLD_GUARANTEE, type UseConsequence } from "../../domain/contracts/consequence-fact.ts";
+import { formatAccessPath, relatePaths, type AccessPath } from "../../domain/contracts/access-path.ts";
+import { OLD_GUARANTEE, type ConsequencesValue, type UseConsequence } from "../../domain/contracts/consequence-fact.ts";
 import { carrierKey, type Carrier, type CarrierSite, type FlowFrontier, type FlowNext, type FlowResult, type Hop } from "../../domain/contracts/consumer-flow.ts";
 import { parseHypothesis, type Hypothesis } from "../../domain/contracts/hypothesis.ts";
 import { decideUse } from "../../domain/contracts/verdict.ts";
@@ -8,11 +8,10 @@ import { compareText } from "../../domain/shared/code-node.ts";
 import { withCuts, type Cut, type Evidence, type Fact, type Finding } from "../../domain/shared/fact.ts";
 import type { Link, LinkBasis } from "../../domain/topology/link.ts";
 import type { RepositoryEvidence } from "../../domain/shared/repository-evidence.ts";
-import type { ConsumerQueries } from "../../ports/consumer-queries.port.ts";
-import type { ConsequencesFault } from "../../ports/consumer-queries.port.ts";
+import type { ConsequencesFault, ConsumerQueries } from "../../ports/consumer-queries.port.ts";
 import type { ConsumerSession, ConsumerSources } from "../../ports/consumer-sources.port.ts";
 import type { Result } from "../../domain/shared/result.ts";
-import type { ConsequencesValue } from "../../domain/contracts/consequence-fact.ts";
+import { isCallOf } from "./consumer-sources.ts";
 
 /** The bases that say the call reaches this operation; the others say it may, and are reported where they stop. */
 const QUALIFIED_BASES: ReadonlySet<LinkBasis> = new Set(["exact", "base-path", "operation-id"]);
@@ -59,7 +58,7 @@ function consequencesOf(session: ConsumerSession, hypothesis: Hypothesis): Resul
   const sites: RepositoryEvidence[] = [];
 
   const links = session.links
-    .filter((link) => link.transport === "http" && link.to.kind === "http-route" && link.to.name === operation)
+    .filter((link) => isCallOf(link, operation))
     .sort((a, b) => compareText(a.from.repo, b.from.repo) || compareText(a.from.file, b.from.file) || a.from.line - b.from.line || compareText(a.id, b.id));
   for (const link of links) {
     const { from, basis } = link;
@@ -94,7 +93,7 @@ function consequencesOf(session: ConsumerSession, hypothesis: Hypothesis): Resul
     const key = `${carrierKey(carrier.site)}\0${canonicalJson(entries)}`;
     const before = seen.get(key);
     if (before !== undefined) {
-      if (!samePath(before, carrier.path)) findings.push(frontierItem({ at: placeOf(carrier, chain), cause: "path-conflict", reason: "unresolved", hops: [] }, chain, repo));
+      if (relatePaths(before, carrier.path) !== "exact") findings.push(frontierItem({ at: placeOf(carrier, chain), cause: "path-conflict", reason: "unresolved", hops: [] }, chain, repo));
       continue;
     }
     seen.set(key, carrier.path);
@@ -197,10 +196,6 @@ function frontierItem(frontier: FlowFrontier, chain: readonly Hop[], repo: strin
 
 function placeOf({ site }: Carrier, chain: readonly Hop[]): Evidence {
   return site.kind === "input" || site.line === undefined ? chain.at(-1)!.evidence : { path: site.file, line: site.line };
-}
-
-function samePath(a: AccessPath, b: AccessPath): boolean {
-  return a.length === b.length && a.every((segment, index) => segment === b[index]);
 }
 
 function compareEvidence(a: Evidence, b: Evidence): number {

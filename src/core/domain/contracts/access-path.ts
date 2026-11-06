@@ -24,7 +24,7 @@ export function formatAccessPath(path: AccessPath): string {
   return path.reduce((text, segment, index) => (segment === ELEMENT || index === 0 ? text + segment : `${text}.${segment}`), "");
 }
 
-function startsWith(path: AccessPath, prefix: AccessPath): boolean {
+export function startsWith(path: AccessPath, prefix: AccessPath): boolean {
   return prefix.length <= path.length && prefix.every((segment, index) => path[index] === segment);
 }
 

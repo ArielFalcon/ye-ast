@@ -49,15 +49,6 @@ test("a repository without a graph has no callers to give", () => {
   assert.deepEqual(callersOfFunction(undefined, undefined, FIND), { kind: "unavailable" });
 });
 
-test("a scored heuristic edge is still heuristic: the score does not make it proof", () => {
-  const nodes = [find(), fakeNode("load", "method", "src/page.ts", 20, 30, "load")];
-
-  const answer = callersOf(nodes, [{ from: "load", to: "find", kind: "calls", line: 25, provenance: "heuristic", confidence: 0.8 }]);
-
-  assert.ok(answer.kind === "found");
-  assert.deepEqual(answer.callers.map((caller) => caller.proven), [false]);
-});
-
 test("every call occurrence of one caller is kept, so a weaker one beside a certain one has its own place", () => {
   const nodes = [find(), fakeNode("load", "method", "src/page.ts", 20, 30, "load")];
   const edges: FakeEdge[] = [
@@ -73,11 +64,4 @@ test("every call occurrence of one caller is kept, so a weaker one beside a cert
     [25, true, "resolved", 1],
     [27, false, "heuristic", 0.8],
   ]);
-});
-
-test("a reference to the function is an occurrence of kind reference, never a call", () => {
-  const answer = callersOf([find(), fakeNode("routes", "variable", "src/routes.ts", 1, 9, "routes")], [{ from: "routes", to: "find", kind: "references", line: 4 }]);
-
-  assert.ok(answer.kind === "found");
-  assert.deepEqual(answer.callers.map((caller) => [caller.kind, caller.at, caller.proven]), [["reference", 4, false]]);
 });

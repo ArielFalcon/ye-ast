@@ -1,5 +1,6 @@
 import ts from "typescript";
-import type { Carrier, CarrierSite, FlowFrontier, FlowNext, FlowResult, FlowUse } from "../../domain/contracts/consumer-flow.ts";
+import { sourceUnreadable, type Carrier, type CarrierSite, type FlowFrontier, type FlowNext, type FlowResult, type FlowUse } from "../../domain/contracts/consumer-flow.ts";
+import { compareText } from "../../domain/shared/code-node.ts";
 import type { ConsumerFlowReader } from "../../ports/consumer-flow.port.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import { lineOf } from "./http-call-sites.adapter.ts";
@@ -17,10 +18,7 @@ export async function createConsumerFlowReader(files: readonly SourceFile[], rep
 
 function follow(program: Program, repo: string, { site, path }: Carrier): FlowResult {
   const unit = program.index.units.get(site.file);
-  if (unit === undefined) {
-    const at = { path: site.file, line: site.kind === "member" || site.kind === "input" ? ("line" in site ? (site.line ?? 1) : 1) : site.line };
-    return { uses: [], next: [], frontiers: [{ at, cause: "unmodelled-flow", reason: "source-unreadable", hops: [] }] };
-  }
+  if (unit === undefined) return sourceUnreadable(site);
   const walker = new Walker(repo, program, unit);
   const walkers = [walker];
   if (site.kind === "call-site") walker.startCallSite(site, path);
@@ -73,5 +71,5 @@ function resolverContinuation(program: Program, repo: string, walker: Walker, si
 }
 
 function ordered<T extends FlowUse | FlowNext | FlowFrontier>(items: readonly Held<T>[]): T[] {
-  return [...items].sort((a, b) => (a.file < b.file ? -1 : a.file > b.file ? 1 : a.pos - b.pos)).map(({ value }) => value);
+  return [...items].sort((a, b) => compareText(a.file, b.file) || a.pos - b.pos).map(({ value }) => value);
 }

@@ -1,4 +1,4 @@
-import type { CarrierSite, FlowResult } from "../../domain/contracts/consumer-flow.ts";
+import { sourceUnreadable } from "../../domain/contracts/consumer-flow.ts";
 import { formatHypothesis } from "../../domain/contracts/hypothesis.ts";
 import { provenanceOf, sortedEngines } from "../../domain/shared/fact.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
@@ -116,8 +116,8 @@ export function createConsumerSources(deps: ConsumerSourcesDeps): ConsumerSource
                 const reading = readings.get(repo);
                 return callersOfFunction(reading?.graph, reading?.inbound, declaration);
               },
-              flow: { follow: (carrier) => readings.get(carrier.site.repo)?.flow.follow(carrier) ?? unread(carrier.site) },
-              templates: { follow: (carrier) => readings.get(carrier.site.repo)?.templates.follow(carrier) ?? unread(carrier.site) },
+              flow: { follow: (carrier) => readings.get(carrier.site.repo)?.flow.follow(carrier) ?? sourceUnreadable(carrier.site) },
+              templates: { follow: (carrier) => readings.get(carrier.site.repo)?.templates.follow(carrier) ?? sourceUnreadable(carrier.site) },
             };
             return { ok: true, value: await use(session) };
           } finally {
@@ -165,11 +165,6 @@ function httpTargetOf(site: CallSite): HttpTarget | undefined {
   return site.transport === "http" && site.target.status === "complete" && "path" in site.target.value ? site.target.value : undefined;
 }
 
-function isCallOf(link: Link, operation: string): boolean {
+export function isCallOf(link: Link, operation: string): boolean {
   return link.transport === "http" && link.to.kind === "http-route" && link.to.name === operation;
-}
-
-function unread(site: CarrierSite): FlowResult {
-  const at = { path: site.file, line: site.kind === "input" ? 1 : site.kind === "member" ? (site.line ?? 1) : site.line };
-  return { uses: [], next: [], frontiers: [{ at, cause: "unmodelled-flow", reason: "source-unreadable", hops: [] }] };
 }

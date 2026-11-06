@@ -131,3 +131,12 @@ export interface FlowResult {
 }
 
 export const NO_FLOW: FlowResult = { uses: [], next: [], frontiers: [] };
+
+export function sourceUnreadable(site: CarrierSite): FlowResult {
+  const line = site.kind === "input" ? 1 : site.kind === "member" ? (site.line ?? 1) : site.line;
+  return { uses: [], next: [], frontiers: [{ at: { path: site.file, line }, cause: "unmodelled-flow", reason: "source-unreadable", hops: [] }] };
+}
+
+export function templateUnreadable(at: Evidence): FlowResult {
+  return { uses: [], next: [], frontiers: [{ at, cause: "template-unreadable", reason: "source-unreadable", hops: [] }] };
+}

@@ -9,7 +9,7 @@ export type Counterexample = "null" | "absent";
 
 /**
  * What a change does to the old guarantee: the absence it introduces, the counterexample that shows it, and the verdict a
- * sufficient guard earns. A new change kind is a row here, never a branch in the rule.
+ * sufficient guard earns.
  */
 export interface ChangeRule {
   violates: Absence;

@@ -38,8 +38,8 @@ import {
   VoidExpression,
   type DirectiveMeta,
 } from "@angular/compiler";
-import { ELEMENT, relatePaths, type AccessPath } from "../../domain/contracts/access-path.ts";
-import { RESOURCE_STATE_MEMBERS, type FlowFrontier, type FlowNext, type FlowResult, type FlowStep, type FlowUse, type FrontierCause, type Hop } from "../../domain/contracts/consumer-flow.ts";
+import { ELEMENT, relatePaths, startsWith, type AccessPath } from "../../domain/contracts/access-path.ts";
+import { RESOURCE_STATE_MEMBERS, templateUnreadable, type FlowFrontier, type FlowNext, type FlowResult, type FlowStep, type FlowUse, type FrontierCause, type Hop } from "../../domain/contracts/consumer-flow.ts";
 import type { AccessStep, Literal, UseEnd } from "../../domain/contracts/use-operation.ts";
 import type { Absence, Guard, GuardKind } from "../../domain/contracts/verdict.ts";
 import type { Evidence } from "../../domain/shared/fact.ts";
@@ -60,10 +60,7 @@ export function createTemplateFlowReader(): TemplateFlowReader {
 
 function follow(unit: TemplateUnit, carrier: MemberCarrier): FlowResult {
   const template = bindTemplate(unit);
-  if ("errorLine" in template) {
-    const at = { path: unit.path, line: unit.firstLine + template.errorLine };
-    return { uses: [], next: [], frontiers: [{ at, cause: "template-unreadable", reason: "source-unreadable", hops: [] }] };
-  }
+  if ("errorLine" in template) return templateUnreadable({ path: unit.path, line: unit.firstLine + template.errorLine });
   return new TemplateFlow(unit, carrier, template).run();
 }
 
@@ -113,8 +110,6 @@ interface At<T> {
   offset: number;
   value: T;
 }
-
-const startsWith = (path: AccessPath, prefix: AccessPath): boolean => relatePaths(path, prefix) === "exact" || relatePaths(path, prefix) === "beyond";
 
 function core(ast: AST): AST {
   if (ast instanceof ASTWithSource) return core(ast.ast);
