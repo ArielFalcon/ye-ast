@@ -403,10 +403,8 @@ test("a link the workspace map and a workspace callers answer both admit is one 
   assert.deepEqual(naming.filter((line) => line.startsWith("  link ")), []);
 });
 
-const catalogAndCallers = () => resultOf([sourceFixture("entrypoints"), singleTargetCallers()]);
-
 test("beside a read that declares a subject, summary counts what only enumerating reads hold and keeps what a connection joins", () => {
-  const result = catalogAndCallers();
+  const result = resultOf([sourceFixture("entrypoints"), singleTargetCallers()]);
   const text = renderComposition(result, "summary");
   assert.match(text, /^C\d+ = reached-handler: /m);
   assert.ok(definition(text, labelOf(text, ["http GET /orders,"])).length === 1, text);

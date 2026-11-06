@@ -129,6 +129,8 @@ class CompactView {
   /** Connections the text lists, with their position in the connection table. */
   private readonly listedConnections: readonly { connection: Connection; index: number }[];
   private readonly joinedRelations: ReadonlySet<RelationId>;
+  /** Sources in request order: `S1` first. */
+  private readonly orderedSources: readonly SourceDescriptor[];
   private readonly unjoined = { sources: new Set<SourceId>(), connections: 0, relations: 0, observations: 0 };
 
   constructor(private readonly result: CompositionResult, private readonly details: boolean) {
@@ -147,11 +149,12 @@ class CompactView {
       const snapshots = unique(entries.map((entry) => entry.snapshot));
       if (snapshots.length === 1 && snapshots[0] !== undefined) this.primary.set(repo, snapshots[0]);
     }
+    this.orderedSources = graph.sources.toSorted((a, b) => a.requestIndex - b.requestIndex);
     this.asking = new Set(graph.reads.filter((read) => declaresSubject(read)).map((read) => read.source));
     this.countsContext = !details && this.asking.size > 0;
     this.listedConnections = graph.connections.flatMap((connection, index) => {
-      if (this.asks(connection.supports)) return [{ connection, index }];
-      this.countContext(connection.supports, "connections");
+      if (this.isListed(connection.supports)) return [{ connection, index }];
+      this.countUnjoined(connection.supports, "connections");
       return [];
     });
     this.joinedRelations = new Set(this.listedConnections.flatMap(({ connection }) => connection.relations));
@@ -196,7 +199,7 @@ class CompactView {
       return `Joined: no connection${this.result.graph.connections.length === 0 ? "" : " with a read that declares a subject"}; each source answers alone below.`;
     }
     const rules = [...Map.groupBy(this.listedConnections, ({ connection }) => connection.rule)].map(([rule, members]) => `${rule} ${members.length}`);
-    const alone = this.result.graph.sources.toSorted((a, b) => a.requestIndex - b.requestIndex).filter((source) => !this.result.graph.connections.some((connection) => connection.supports.some((support) => support.source === source.id)));
+    const alone = this.orderedSources.filter((source) => !this.result.graph.connections.some((connection) => connection.supports.some((support) => support.source === source.id)));
     return `Joined: ${rules.join(", ")}${alone.length === 0 ? "" : `; ${alone.map((source) => this.sourceLabel(source.id)).join(", ")} in no connection`}.`;
   }
 
@@ -208,8 +211,7 @@ class CompactView {
       const text = value.kind === "sha" ? `${value.repo} @ ${value.sha}` : `${value.repo} live head ${value.head} state ${value.stateId}`;
       return `${this.snapshotLabels.get(snapshot.id)} = ${text}${snapshot.identity === "redacted" ? " (redacted identity: local, never joined)" : ""}`;
     });
-    const sources = graph.sources.toSorted((a, b) => a.requestIndex - b.requestIndex);
-    for (const source of sources) lines.push(this.sourceLine(source));
+    for (const source of this.orderedSources) lines.push(this.sourceLine(source));
     if (graph.snapshots.some((snapshot) => this.primary.get(snapshot.value.repo) !== snapshot.id)) {
       lines.push(`Unmarked locations: ${[...this.primary].toSorted(([a], [b]) => a.localeCompare(b)).map(([repo, snapshot]) => `${repo} ${this.snapshotLabels.get(snapshot)}`).join(", ") || "none"}; others are marked @V#.`);
     }
@@ -639,9 +641,9 @@ class CompactView {
 
   private relationLines(): string[] {
     return this.result.graph.relations.flatMap((relation, index) => {
-      const supports = relation.attestations.flatMap((attestation) => attestation.reads.flatMap((id) => { const read = this.reads.get(id); return read === undefined ? [] : [{ source: read.source }]; }));
-      if (this.joinedRelations.has(relation.id) || this.asks(supports)) return [this.relationLine(relation, index)];
-      this.countContext(supports, "relations");
+      const reads = relation.attestations.flatMap((attestation) => attestation.reads.flatMap((id) => this.reads.get(id) ?? []));
+      if (this.joinedRelations.has(relation.id) || this.isListed(reads)) return [this.relationLine(relation, index)];
+      this.countUnjoined(reads, "relations");
       return [];
     });
   }
@@ -693,8 +695,8 @@ class CompactView {
         continue;
       }
       for (const part of parts) {
-        if (lacksSubject(part) || this.asks(part.supports)) lines.push(`  ${this.describe(part)} [${this.supportLabels(part)}]`);
-        else this.countContext(part.supports, "observations");
+        if (lacksSubject(part) || this.isListed(part.supports)) lines.push(`  ${this.describe(part)} [${this.supportLabels(part)}]`);
+        else this.countUnjoined(part.supports, "observations");
       }
     }
     const costs = this.result.graph.parts.filter((part): part is PartOf<"walk-cost"> => part.kind === "walk-cost");
@@ -767,7 +769,7 @@ class CompactView {
       const { sources, ...unjoined } = this.unjoined;
       const tallied = Object.entries(unjoined).filter(([, count]) => count > 0).map(([name, count]) => `${name} ${count}`);
       if (tallied.length > 0) {
-        const held = this.result.graph.sources.filter((source) => sources.has(source.id)).toSorted((a, b) => a.requestIndex - b.requestIndex).map((source) => this.sourceLabel(source.id));
+        const held = this.orderedSources.filter((source) => sources.has(source.id)).map((source) => this.sourceLabel(source.id));
         lines.push(`Enumeration context not joined (held only by ${held.join(", ")}; no target, file or change declared): ${tallied.join(", ")}; details lists them.`);
       }
     }
@@ -775,11 +777,11 @@ class CompactView {
   }
 
   /** Whether a record is listed: always outside the context count, otherwise when a source that asks supports it. */
-  private asks(supports: readonly { source: SourceId }[]): boolean {
+  private isListed(supports: readonly { source: SourceId }[]): boolean {
     return !this.countsContext || supports.some((support) => this.asking.has(support.source));
   }
 
-  private countContext(supports: readonly { source: SourceId }[], kind: "connections" | "relations" | "observations"): void {
+  private countUnjoined(supports: readonly { source: SourceId }[], kind: "connections" | "relations" | "observations"): void {
     for (const support of supports) this.unjoined.sources.add(support.source);
     this.unjoined[kind] += 1;
   }
