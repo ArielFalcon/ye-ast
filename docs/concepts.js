@@ -1,4 +1,4 @@
-/* Page chrome and concept sections: glossary filter, fact-status playground, section motion and the section rail. */
+/* Page chrome and concept sections: glossary filter, section motion and the section rail. */
 (() => {
   "use strict";
   const $ = (selector, root = document) => root.querySelector(selector);
@@ -59,60 +59,6 @@
       });
     }
   }
-
-  /* ── fact playground ──────────────────────────────────────────────── */
-
-  const CUT_RANK = { depth: 0, hub: 1, "caller-budget": 2, "node-cap": 3, deadline: 4, "unresolved-link": 5, "no-extractor": 6, "not-exported": 7, section: 8 };
-  const CUT_EXAMPLE = {
-    depth: { kind: "depth", at: ["src/api/orders.ts::applyDiscount"], limit: 2 },
-    hub: { kind: "hub", at: ["src/shared/logger.ts::log"], limit: 10 },
-    "unresolved-link": { kind: "unresolved-link", at: ["src/auth/auth.service.ts::login", "src/auth/auth.service.ts:42 computed member"] },
-    "no-extractor": { kind: "no-extractor", at: ["src/legacy/report.rb"] },
-    "not-exported": { kind: "not-exported", at: ["vendor/generated"] },
-  };
-  const factUnknown = $("#fact-unknown");
-  const factStatus = $("#fact-status");
-  const factJson = $("#fact-json");
-
-  function highlightJSON(text) {
-    const escaped = text.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
-    return escaped.replace(/("(?:\\.|[^"\\])*")(\s*:)?|\b(true|false|null)\b|-?\b\d+(?:\.\d+)?\b/g, (match, string, colon, bool) => {
-      if (string) return colon ? `<span class="c-key">${string}</span>${colon}` : `<span class="c-str">${string}</span>`;
-      if (bool) return `<span class="c-warn">${bool}</span>`;
-      return `<span class="c-num">${match}</span>`;
-    });
-  }
-
-  function renderFact() {
-    if (!factStatus || !factJson || !factUnknown) return;
-    const cuts = $$("[data-cut-toggle]").filter((input) => input.checked).map((input) => CUT_EXAMPLE[input.dataset.cutToggle]).filter(Boolean);
-    cuts.sort((a, b) => CUT_RANK[a.kind] - CUT_RANK[b.kind]);
-    const unknown = factUnknown.checked;
-    const status = unknown ? "unknown" : cuts.length > 0 ? "partial" : "complete";
-    const changed = factStatus.textContent !== status;
-    factStatus.textContent = status;
-    if (changed) {
-      factStatus.classList.remove("is-stamped");
-      void factStatus.getBoundingClientRect();
-      factStatus.classList.add("is-stamped");
-    }
-    factStatus.classList.toggle("ok", status === "complete");
-    factStatus.classList.toggle("warn", status === "partial");
-    factStatus.classList.toggle("bad", status === "unknown");
-    const value = unknown ? { status, reason: "index-unavailable" } : { status, ...(cuts.length > 0 ? { cuts } : {}) };
-    factJson.innerHTML = highlightJSON(JSON.stringify(value, null, 2));
-  }
-  for (const input of $$("[data-cut-toggle]")) input.addEventListener("change", renderFact);
-  if (factUnknown) factUnknown.addEventListener("change", renderFact);
-  const reset = $("#fact-reset");
-  if (reset) {
-    reset.addEventListener("click", () => {
-      for (const input of $$("[data-cut-toggle]")) input.checked = false;
-      factUnknown.checked = false;
-      renderFact();
-    });
-  }
-  renderFact();
 
   /* ── motion: sections rise from their horizon, sequences build piece by piece ── */
 

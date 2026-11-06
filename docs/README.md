@@ -19,6 +19,7 @@ page. Every `path:line` reference opens the file in the repository on GitHub.
 | Node | Clicking a node pauses the flow and switches the header to `Node inspection`; `Back to flow` restores the exact flow and step. The panel shows role, what it may import, what it never reaches, its facts and its files. |
 | Order | Introduction, fact contract, surfaces (with evidence composition), trust, architecture graph, the walk (rules, simulator, real runs) and reference (glossary, evidence, limits): general first, mechanics after. Reference tables and the glossary are folded. |
 | Section rail | A fixed rail on the left edge, one brick per section: passed bricks are solid, the current one widens and fills with the reading progress of its section, a heat line shows the progress of the whole page. The header names the current section. |
+| Compose simulator | In Surfaces: pick one of eight query combinations (for example `callers + outline`) and a response mode (`summary`, `details`, `full`); the page shows the typed request, the real merged answer, its coverage status and issues, and the response bytes against the same questions asked as separate calls. `full` shows the table sizes of the graph, not the whole JSON. |
 | Concepts | Fact contract and cuts; edge policy and mechanics; a bounds block that explains depth, `fan-in`, `hub fan-in`, expansions and deadline inline; walk simulator; real executions and fixture; trust; surfaces; glossary; sources. |
 | Glossary | 33 terms with localized labels and definitions, a filter and "show in graph" links. |
 
@@ -37,7 +38,8 @@ dependency rule is the layer order in `AGENTS.md`; the graph is a data-flow view
 | `content.es.js` | Spanish UI, module subtitles/details and all 31 flow steps. |
 | `modules.en.js`, `modules.es.js` | Module details reused from the original explainer. |
 | `glossary.js` | Terms and definitions used by the glossary and the info panel. |
-| `concepts.js` | Glossary filter, "show in graph" links, the fact-status playground, section motion and the section rail. |
+| `concepts.js` | Glossary filter, "show in graph" links, section motion and the section rail. |
+| `compose-sim.js` | The evidence-composition simulator in Surfaces: the eight captured `ye_ast_compose` cases of `docs/evaluations/mcp-composition/runs/2026-11-05-delivery-final/` (requests from `inputs/`, summary and details text from `outputs/<case>/composed/`, table sizes from `full.json`, byte counts from `measurements.json`) embedded as data, plus the UI that picks a combination, switches the response mode and compares it with the separate calls. Static: no network request, opens from `file://`. |
 | `simulator.js` | The walk simulator: seeds, bounds, edge policy, cuts and entrypoints. |
 | `sim-ui.js` | Simulator labels in English and Spanish. |
 | `README.md` | This file. |
@@ -66,7 +68,7 @@ tailscale serve --bg --https=8444 http://127.0.0.1:8081
 
 - `node --check` on every JS file.
 - Both languages, both viewports (1440 × 1000 and 390 × 844): 41 modules, 90 edges, 8 flows, 36 steps, 33 glossary
-  terms, simulator and fact playground working, 0 console/page errors, no page-level horizontal overflow.
+  terms, walk simulator working, 0 console/page errors, no page-level horizontal overflow.
 - `Files` keeps the flow header, the step list and the step explanation, so prev/next, play and every step item work
   without leaving the level; selecting a step moves the hub to that step's callout or focus module, and the step's modules
   remain selectable chips.

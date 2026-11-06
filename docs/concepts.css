@@ -1142,3 +1142,48 @@ details[open] summary { border-bottom: 1px solid var(--line-soft); }
 @media (prefers-reduced-motion: reduce) {
   .docs .compose-flow li + li::before { animation: none; }
 }
+
+/* ── compose simulator: real captured compositions, chosen by the queries they combine ── */
+
+.docs .compose-sim { margin-top: 0; }
+.docs .compose-field { margin: 14px 0 0; padding: 0; border: 0; min-width: 0; }
+.docs .compose-field legend { padding: 0; margin-bottom: 8px; font-family: var(--display); font-stretch: condensed; font-weight: 800; font-size: 14px; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
+.docs .chip-row { display: flex; flex-wrap: wrap; gap: 8px; }
+.docs .compose-chip { position: relative; display: inline-flex; cursor: pointer; }
+.docs .compose-chip input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
+.docs .compose-chip:has(input:focus-visible) { outline: var(--stroke) solid var(--frost); outline-offset: 2px; }
+.docs .compose-about { margin: 14px 0 0; padding: 10px 12px; border-left: 4px solid var(--lime); background: color-mix(in srgb, var(--ink) 4%, transparent); font-size: 13px; line-height: 1.55; color: var(--muted); }
+.docs .compose-sim .playground-controls > .output-head { margin-top: 16px; }
+.docs .compose-sim .code-block { min-height: 0; max-height: 340px; }
+.docs .compose-sim #compose-text { min-height: 220px; max-height: 460px; white-space: pre; }
+.docs .compose-stamps { display: flex; flex-wrap: wrap; gap: 8px; }
+.docs .compose-stamps:not(:empty) { margin-bottom: 10px; }
+.docs .compose-live { margin: 0 0 10px; font-size: 12.5px; line-height: 1.5; color: var(--muted); }
+.docs .compose-compare-head { margin-top: 16px; }
+.docs .compose-compare { display: grid; gap: 8px; }
+.docs .compose-row { display: grid; grid-template-columns: minmax(0, 14rem) minmax(0, 1fr) 6.5rem; gap: 10px; align-items: center; font-size: 12.5px; color: var(--muted); }
+.docs .compose-row-label strong { font-family: var(--display); font-stretch: condensed; font-weight: 800; font-size: 14px; color: var(--ink); }
+.docs .compose-row-value { text-align: right; font-family: var(--mono); font-size: 11.5px; color: var(--ink); }
+.docs .compose-bar { display: block; height: 16px; border: var(--stroke) solid var(--outline); background: color-mix(in srgb, var(--ink) 6%, transparent); }
+.docs .compose-bar i { display: block; height: 100%; width: var(--w); background: var(--block); transition: width .5s var(--ease-draw); }
+.docs .compose-row[data-tone="compose"] .compose-bar i { background: var(--lime); }
+.docs .compose-fullnote { margin: 4px 0 0; font-size: 12px; color: var(--muted); }
+.docs .compose-sim .code-block.is-printing { animation: compose-print .45s var(--ease-draw) both; }
+@keyframes compose-print {
+  from { clip-path: inset(0 0 100% 0); }
+  to { clip-path: inset(0 0 0 0); }
+}
+@media (max-width: 709px) {
+  .docs .compose-row { grid-template-columns: minmax(0, 1fr) 6rem; }
+  .docs .compose-row .compose-bar { grid-column: 1 / -1; grid-row: 2; }
+  .docs .compose-row-value { grid-row: 1; grid-column: 2; }
+  .docs .compose-sim { padding: 16px; }
+  .docs .compose-sim #compose-text { max-height: 380px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .docs .compose-sim .code-block.is-printing { animation: none; }
+  .docs .compose-bar i { transition: none; }
+}
+.docs .compose-block { grid-template-columns: minmax(0, 1fr); }
+.docs .compose-block > * { min-width: 0; }
+.docs .compose-chip span { overflow-wrap: anywhere; }

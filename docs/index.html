@@ -138,25 +138,6 @@
           </table>
         </div>
       </div>
-
-      <div class="playground">
-        <div class="playground-controls">
-          <p class="mini-kicker">Build a status</p>
-          <h3>Choose what the engine saw.</h3>
-          <label class="switch"><input type="checkbox" data-cut-toggle="depth"> a depth bound stopped the walk</label>
-          <label class="switch"><input type="checkbox" data-cut-toggle="hub"> a hub exceeded <code>hubFanIn</code></label>
-          <label class="switch"><input type="checkbox" data-cut-toggle="unresolved-link"> a name never resolved</label>
-          <label class="switch"><input type="checkbox" data-cut-toggle="no-extractor"> a source file has no extractor</label>
-          <label class="switch"><input type="checkbox" data-cut-toggle="not-exported"> a path was left out of the export</label>
-          <label class="switch"><input type="checkbox" id="fact-unknown"> the index could not be opened</label>
-          <button class="button small" type="button" id="fact-reset">Reset</button>
-        </div>
-        <div class="playground-output">
-          <div class="output-head"><span>status</span><strong id="fact-status" class="pill">complete</strong></div>
-          <pre id="fact-json" class="code-block"></pre>
-          <p class="playground-note">A partial fact can be born from a file the change never touched: any source with no extractor is a cut. The Angular fixture below shows exactly that.</p>
-        </div>
-      </div>
     </section>
 
     <section data-rail="Surfaces" id="surfaces" class="doc-section">
@@ -229,6 +210,36 @@
           <li data-tone="merge"><strong>merged tables</strong><span>one entry per file, declaration, evidence or relation; every source kept</span></li>
           <li data-tone="result"><strong>connections + coverage</strong><span>derived only between matching reads</span></li>
         </ol>
+        <div class="playground compose-sim" id="compose-sim">
+          <div class="playground-controls">
+            <p class="mini-kicker">Try a combination</p>
+            <h3>Pick the queries, read the merged answer.</h3>
+            <fieldset class="compose-field">
+              <legend>Queries combined</legend>
+              <div class="chip-row" id="compose-cases"></div>
+            </fieldset>
+            <p class="compose-about" id="compose-about"></p>
+            <fieldset class="compose-field">
+              <legend>Response mode</legend>
+              <div class="chip-row" id="compose-modes">
+                <label class="chip compose-chip is-active"><input type="radio" name="compose-mode" value="summary" checked><span>summary</span></label>
+                <label class="chip compose-chip"><input type="radio" name="compose-mode" value="details"><span>details</span></label>
+                <label class="chip compose-chip"><input type="radio" name="compose-mode" value="full"><span>full</span></label>
+              </div>
+            </fieldset>
+            <div class="output-head"><span>request · ye_ast_compose</span></div>
+            <pre id="compose-request" class="code-block" tabindex="0"></pre>
+          </div>
+          <div class="playground-output">
+            <div class="output-head"><span>answer</span><strong id="compose-status" class="pill">complete</strong></div>
+            <div class="compose-stamps" id="compose-stamps"></div>
+            <p class="compose-live" id="compose-live" aria-live="polite"></p>
+            <pre id="compose-text" class="code-block" tabindex="0"></pre>
+            <div class="output-head compose-compare-head"><span>response size</span></div>
+            <div class="compose-compare" id="compose-compare"></div>
+            <p class="playground-note">Real answers captured on a two-repository fixture (shop and web). Compose pays for its envelope: a lone query, or the full mode, can cost more than the separate calls; what it adds is one merged answer with its connections and coverage.</p>
+          </div>
+        </div>
         <dl class="compose-notes">
           <div data-tone="fault"><dt>Not a transaction</dt><dd>The queries run through the same runner as the single tools. The call is not atomic and stores nothing; the first source fault ends it with <code>composition-source-fault</code>.</dd></div>
           <div><dt>Merged, not blended</dt><dd>Facts are normalized into shared tables. Identical files, declarations, evidence and relations merge and keep every source, so each source keeps its own coverage.</dd></div>
@@ -786,6 +797,7 @@ npm run check</pre>
 <script src="glossary.js"></script>
 <script src="graph.js"></script>
 <script src="concepts.js"></script>
+<script src="compose-sim.js"></script>
 <script src="simulator.js"></script>
 </body>
 </html>
