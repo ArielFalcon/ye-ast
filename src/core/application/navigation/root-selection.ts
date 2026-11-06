@@ -3,6 +3,7 @@ import type { FileChange } from "../../domain/change/diff-reader.ts";
 import { isSeedable, selectSeeds, type ComponentRef, type SeedSelection, type SelectedSeed } from "../../domain/change/seeds.ts";
 import { comparePosition, compareText } from "../../domain/shared/code-node.ts";
 import { branchesOf, declarationPath, selectedBySymbol, type DeclarationBranch } from "../../domain/shared/declaration-tree.ts";
+import type { Evidence } from "../../domain/shared/fact.ts";
 import type { CodeGraphReader, GraphSymbol } from "../../ports/code-graph.port.ts";
 import type { CallersTarget, UnknownSymbolFault } from "../../ports/impact-queries.port.ts";
 import { containmentTree } from "../outline/outline.ts";
@@ -12,6 +13,20 @@ export interface RootSelection extends SeedSelection<GraphSymbol> {
   seeds: SelectedSeed<GraphSymbol>[];
   /** The requested symbols that name no node, with what their file declares; nothing is selected when there is one. */
   missing: UnknownSymbolFault["entries"];
+}
+
+/** The targets once each, in a fixed order, so the same request in any order is the same fact. */
+export function distinctTargets(targets: readonly CallersTarget[]): CallersTarget[] {
+  const byKey = new Map(targets.map((target) => [JSON.stringify(target), target]));
+  return [...byKey].sort(([a], [b]) => compareText(a, b)).map(([, target]) => target);
+}
+
+export function targetKey(target: CallersTarget): string {
+  return "start" in target ? `${target.file}:${target.start}-${target.end}` : `${target.file}:${target.symbol}`;
+}
+
+export function evidenceOfTarget(target: CallersTarget): Evidence {
+  return "start" in target ? { path: target.file, line: target.start, endLine: target.end } : { path: target.file, line: 1 };
 }
 
 /** The requested line ranges as the added lines of unchanged files, so they seed as changed lines do. */

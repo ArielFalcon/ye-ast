@@ -557,6 +557,85 @@ test("declarations are found by name: every overload, member and top-level match
   }
 });
 
+/** The attribution a trace's bodies rest on: what codegraph makes a node, and which node it charges a call to. */
+const BODIES = `export function helper(): number {
+  return 1;
+}
+export function repoFn(): void {}
+export class Svc {
+  run(items: number[]): void {
+    items.map((x) => helper());
+    function inner(): void { helper(); }
+    const bound = () => helper();
+    inner();
+    const table = { m: repoFn };
+    table.m();
+    head().tail();
+  }
+}
+function head(): { tail(): void } {
+  return { tail() {} };
+}
+`;
+
+let bodiesStore: Promise<SharedStore> | undefined;
+
+async function bodies(): Promise<CodeGraphReader> {
+  bodiesStore ??= (async () => {
+    const root = mkdtempSync(join(tmpdir(), "ye-ast-graph-bodies-"));
+    const snapshot = join(root, "snapshot");
+    mkdirSync(snapshot);
+    writeTree(snapshot, { "src/bodies.ts": BODIES });
+    const store = join(root, "store");
+    const graph = createCodeGraph();
+    unwrap(await graph.index(snapshot, store));
+    return { store, reader: unwrap(graph.open(store)), root };
+  })();
+  return (await bodiesStore).reader;
+}
+
+after(async () => {
+  if (bodiesStore === undefined) return;
+  const { reader, root } = await bodiesStore.catch(() => ({ reader: undefined, root: undefined }));
+  reader?.close();
+  if (root !== undefined) rmSync(root, { recursive: true, force: true });
+});
+
+function bodyCalls(reader: CodeGraphReader, name: string): string[] {
+  const node = symbol(reader, "src/bodies.ts", name);
+  const names = new Map(reader.symbolsInFiles(["src/bodies.ts"]).map((candidate) => [candidate.id, candidate.name]));
+  const resolved = reader.outgoingEdges([node.id], ["calls"]).map((edge) => `${names.get(edge.target)}@${edge.line}`);
+  const unresolved = reader.unresolvedReferences(["src/bodies.ts"]).filter((reference) => reference.from === node.id && reference.kind === "calls").map((reference) => `${reference.name}@${reference.line}`);
+  return [...resolved, ...unresolved].sort();
+}
+
+test("a call inside an anonymous callback belongs to the declaration that encloses the callback", async () => {
+  const reader = await bodies();
+  assert.ok(bodyCalls(reader, "run").includes("helper@7"));
+});
+
+test("a named nested function and an arrow bound to a name are declarations of their own, which own their calls", async () => {
+  const reader = await bodies();
+  const nested = reader.symbolsInFiles(["src/bodies.ts"]).filter((candidate) => candidate.name === "inner" || candidate.name === "bound");
+  assert.deepEqual(nested.map(({ kind, name, qualifiedName }) => [kind, name, qualifiedName]), [["function", "inner", "Svc::run::inner"], ["function", "bound", "Svc::run::bound"]]);
+  assert.deepEqual(bodyCalls(reader, "inner"), ["helper@8"]);
+  assert.deepEqual(bodyCalls(reader, "bound"), ["helper@9"]);
+  assert.ok(!bodyCalls(reader, "run").includes("helper@8"));
+});
+
+test("an object literal's property key is no declaration, so a call through it names only the key", async () => {
+  const reader = await bodies();
+  assert.deepEqual(reader.declarationsNamed(["m"]), []);
+  assert.ok(bodyCalls(reader, "run").includes("table.m@12"));
+});
+
+test("a call on a call's result keeps the head resolved and the whole chain as the member's spelling", async () => {
+  const reader = await bodies();
+  const calls = bodyCalls(reader, "run");
+  assert.ok(calls.includes("head@13"));
+  assert.ok(calls.includes("head().tail@13"));
+});
+
 test("incoming edges keep their kind, position and score, and can be limited to kinds", async () => {
   const s = await shared();
   const load = symbol(s.reader, "src/orders.ts", "loadOrder");

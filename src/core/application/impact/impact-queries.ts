@@ -20,7 +20,6 @@ import { moduleImpact, moduleResources } from "../../domain/impact/module-impact
 import type { ModuleDependencies } from "../../domain/impact/module-dependency.ts";
 import type { ModuleDependenciesReader } from "../../ports/module-dependencies.port.ts";
 import { cutsCompleteness } from "../../domain/languages/uncovered.ts";
-import { compareText } from "../../domain/shared/code-node.ts";
 import type { Entrypoint } from "../../domain/entrypoints/entrypoint.ts";
 import { declarationSpan, sortedEngines, type Cut, type DeclaredConfig, type DeclaredScope, type Evidence, type Fact, type FactBase, type Finding, type IndexOrigin, type SnapshotRef, type TrustMode, type UnknownFact } from "../../domain/shared/fact.ts";
 import { exportSelection, pathSelection, sortedGlobs, type PathSelection, type ScopeRequest } from "../../domain/shared/scope.ts";
@@ -32,7 +31,7 @@ import type { CodeGraph, CodeGraphReader, IndexSummary } from "../../ports/code-
 import type { DynamicLoad, DynamicLoadReader } from "../../ports/dynamic-loads.port.ts";
 import type { Digest } from "../../ports/digest.port.ts";
 import type { IndexCache } from "../../ports/index-cache.port.ts";
-import type { CallersTarget, ImpactFault, ImpactOfChangeRequest, ImpactQueries, OfChangeFault, UnknownSymbolFault } from "../../ports/impact-queries.port.ts";
+import type { ImpactFault, ImpactOfChangeRequest, ImpactQueries, OfChangeFault, UnknownSymbolFault } from "../../ports/impact-queries.port.ts";
 import type { AtRevision, LiveSelector } from "../../ports/live-queries.port.ts";
 import type { PathMatcher } from "../../ports/path-matcher.port.ts";
 import { isEngineConfiguration } from "../../ports/staging-rules.ts";
@@ -46,7 +45,7 @@ import { createInboundEdges } from "./inbound-edges.ts";
 import { walkImpact } from "./walk.ts";
 import type { ImportOriginSite, ImportOriginsReader } from "../../ports/import-origins.port.ts";
 import type { ContractRoutes } from "../../ports/contract-routes.port.ts";
-import { rangeChanges, selectRoots } from "../navigation/root-selection.ts";
+import { distinctTargets, evidenceOfTarget, rangeChanges, selectRoots, targetKey } from "../navigation/root-selection.ts";
 import { prepareCommit } from "../snapshot/prepared-snapshot.ts";
 
 export interface ImpactQueriesDeps extends HeadReaderDeps {
@@ -393,20 +392,6 @@ function unknownFact(base: FactBase, reason: "index-unavailable" | "source-unrea
   return { ok: true, value: { ...base, status: "unknown", reason } };
 }
 
-
-/** The targets once each, in a fixed order, so the same request in any order is the same fact. */
-function distinctTargets(targets: readonly CallersTarget[]): CallersTarget[] {
-  const byKey = new Map(targets.map((target) => [JSON.stringify(target), target]));
-  return [...byKey].sort(([a], [b]) => compareText(a, b)).map(([, target]) => target);
-}
-
-function targetKey(target: CallersTarget): string {
-  return "start" in target ? `${target.file}:${target.start}-${target.end}` : `${target.file}:${target.symbol}`;
-}
-
-function evidenceOfTarget(target: CallersTarget): Evidence {
-  return "start" in target ? { path: target.file, line: target.start, endLine: target.end } : { path: target.file, line: 1 };
-}
 
 /** The head's sources the walk reads: written, in scope, and of a kind an extractor covers. */
 function sourceFilesOf(headTree: CommitExtraction): string[] {
