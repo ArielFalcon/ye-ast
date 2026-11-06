@@ -37,3 +37,20 @@ export function declaredName(node: ts.Node): string | undefined {
   const name = node.name;
   return name !== undefined && ts.isIdentifier(name) ? name.text : undefined;
 }
+
+/** The names a script's top-level statements declare, the bindings of its variable statements included: in a file with no import or export they are global. */
+export function scriptGlobalNames(tree: ts.SourceFile): ReadonlySet<string> {
+  const names = new Set<string>();
+  const bind = (name: ts.BindingName): void => {
+    if (ts.isIdentifier(name)) names.add(name.text);
+    else for (const element of name.elements) if (!ts.isOmittedExpression(element)) bind(element.name);
+  };
+  for (const statement of tree.statements) {
+    if (ts.isVariableStatement(statement)) for (const declaration of statement.declarationList.declarations) bind(declaration.name);
+    else if (ts.isClassDeclaration(statement) || ts.isFunctionDeclaration(statement) || ts.isEnumDeclaration(statement) || ts.isInterfaceDeclaration(statement) || ts.isTypeAliasDeclaration(statement) || ts.isModuleDeclaration(statement)) {
+      const name = statement.name;
+      if (name !== undefined && ts.isIdentifier(name)) names.add(name.text);
+    }
+  }
+  return names;
+}

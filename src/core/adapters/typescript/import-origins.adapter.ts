@@ -1,6 +1,6 @@
 import ts from "typescript";
 import { matchesReferenceKind, syntaxName } from "./reference-occurrence.ts";
-import { declarationCounts, declaredName, declaredNames } from "./syntax-names.ts";
+import { declarationCounts, declaredName, declaredNames, scriptGlobalNames } from "./syntax-names.ts";
 import { moduleStatement } from "./import-bindings.ts";
 import { sourceTree } from "./source-tree.ts";
 import { isPackageManifest, isTypeScriptSource } from "../../domain/languages/typescript.ts";
@@ -49,16 +49,20 @@ export function createImportOrigins(sources: readonly SourceFile[]): ImportOrigi
   };
 
   /**
-   * The names the snapshot declares globally: a `.d.ts` anywhere, or a file that augments the global scope. A repository
-   * may spell a lib name itself, and retiring that name would hide a real declaration, so those names stay `unknown`.
+   * The names the snapshot declares globally: a `.d.ts` anywhere, a file that augments the global scope, and the top
+   * level of a script (a source with no import or export, whose declarations are global). A repository may spell a lib
+   * name itself, and retiring that name would hide a real declaration, so those names stay `unknown`.
    */
   let globals: ReadonlySet<string> | undefined;
   const repositoryGlobals = (): ReadonlySet<string> => {
     if (globals !== undefined) return globals;
     const names = new Set<string>();
     for (const [path, text] of texts) {
-      if (!path.endsWith(".d.ts") && !text.includes("declare global")) continue;
-      for (const name of declaredNames(ts.createSourceFile(path, text, ts.ScriptTarget.Latest, false))) names.add(name);
+      const augments = path.endsWith(".d.ts") || text.includes("declare global");
+      if (!augments && !isTypeScriptSource(path)) continue;
+      const tree = ts.createSourceFile(path, text, ts.ScriptTarget.Latest, false);
+      const declared = augments ? declaredNames(tree) : ts.isExternalModule(tree) ? [] : scriptGlobalNames(tree);
+      for (const name of declared) names.add(name);
     }
     globals = names;
     return names;
