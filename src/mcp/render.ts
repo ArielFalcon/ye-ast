@@ -925,7 +925,9 @@ function baseModuleGuides(value: ImpactValue, repo: string, mergeBase = value.me
   const coordinate = reuseLocalBase && Buffer.byteLength("the base recorded below") < Buffer.byteLength(literalCoordinate) ? "the base recorded below" : literalCoordinate;
   const literal = modules.map((module) => `  Base module: repo ${JSON.stringify(repo)}, ${coordinate}, file ${JSON.stringify(module.file)}; use outline only at that recorded merge base.`);
   const shared = [`  Base modules: repo ${JSON.stringify(repo)}, ${coordinate}; inspect ${path}.modules.modules[] for each base module's file; use outline only at that recorded merge base.`];
-  return full && size(shared) < size(literal) ? shared : literal;
+  const listed = [`  Base modules (${modules.length}): repo ${JSON.stringify(repo)}, ${coordinate}; each base module's file is in the module dependencies above where listed, and mode: "full" lists every one; use outline only at that recorded merge base.`];
+  const bounded = full ? shared : listed;
+  return size(bounded) < size(literal) ? bounded : literal;
 }
 
 /**
