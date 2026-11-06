@@ -510,11 +510,32 @@ function importers(b: Builder, root: ReadContext, value: ImportersValue): void {
 
 /** Every step anchored at its declaration, so a trace joins the other answers about the same declarations. */
 function trace(b: Builder, root: ReadContext, value: TraceValue): void {
+  value.roots.forEach(({ target, steps }, index) => b.part({ kind: "trace-root", target, steps }, root.id, [`/value/roots/${index}`]));
   value.steps.forEach((step, index) => {
     const pointer = `/value/steps/${index}`;
     const anchor = b.anchor(root.here, { path: step.file, symbol: step.symbol, line: step.line, ...(step.endLine === undefined ? {} : { endLine: step.endLine }) }, root.id, pointer, `${pointer}/file`);
-    b.part({ kind: "trace-step", anchor, kindName: step.kind, step: step.id, depth: step.depth, ...(step.parent === undefined ? {} : { parent: step.parent }), ...(step.seen === undefined ? {} : { seen: step.seen }) }, root.id, [pointer]);
+    /** A leaf spans `start`-`end` and anchors as a step of one line would, so both join the same declaration. */
+    const leaves = step.leaves?.map((leaf, k) => {
+      const at = `${pointer}/leaves/${k}`;
+      const leafAnchor = b.anchor(root.here, { path: leaf.file, symbol: leaf.symbol, line: leaf.start, ...(leaf.end === leaf.start ? {} : { endLine: leaf.end }) }, root.id, at, `${at}/file`);
+      return { anchor: leafAnchor, ...(leaf.deferred === undefined ? {} : { deferred: leaf.deferred }) };
+    });
+    b.part({
+      kind: "trace-step", anchor, kindName: step.kind, step: step.id, depth: step.depth,
+      ...(step.parent === undefined ? {} : { parent: step.parent }),
+      ...(step.seen === undefined ? {} : { seen: step.seen }),
+      ...(step.at === undefined ? {} : { at: step.at }),
+      ...(step.via === undefined ? {} : { via: step.via }),
+      ...(step.deferred === undefined ? {} : { deferred: step.deferred }),
+      ...(leaves === undefined ? {} : { leaves }),
+      ...(step.external === undefined ? {} : { external: step.external }),
+    }, root.id, [pointer]);
   });
+  value.readingPlan.ranges.forEach(({ file, start, end, steps }, index) => {
+    const pointer = `/value/readingPlan/ranges/${index}`;
+    b.part({ kind: "reading-range", file: b.file(root.here, file, root.id, `${pointer}/file`), start, end, steps }, root.id, [pointer]);
+  });
+  b.part({ kind: "trace-totals", owner: root.id, lines: value.readingPlan.lines, expanded: value.cost.expanded }, root.id, ["/value/readingPlan/lines", "/value/cost"]);
 }
 
 function outline(b: Builder, root: ReadContext, value: OutlineValue): void {

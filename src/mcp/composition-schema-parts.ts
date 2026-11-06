@@ -218,7 +218,19 @@ export const partSchema = z.discriminatedUnion("kind", [
   part("outline-declaration", { anchor: ids.anchor, kindName: z.string(), children: z.array(ids.part).exactOptional() }),
   part("outline-file", { file: ids.file, declarations: z.array(ids.part), imports: z.array(outlineImport) }),
   part("unheld-file", { file: ids.file }),
-  part("trace-step", { anchor: ids.anchor, kindName: z.string(), step: count, depth: count, parent: count.exactOptional(), seen: count.exactOptional() }),
+  part("trace-step", {
+    anchor: ids.anchor, kindName: z.string(), step: count, depth: count, parent: count.exactOptional(), seen: count.exactOptional(),
+    at: z.strictObject({ line: count, column: count.exactOptional() }).exactOptional(),
+    via: z.enum(["call", "own-member", "reference"]).exactOptional(),
+    deferred: z.literal(true).exactOptional(),
+    leaves: z.array(z.strictObject({ anchor: ids.anchor, deferred: z.literal(true).exactOptional() })).exactOptional(),
+    external: z.array(z.discriminatedUnion("kind", [
+      z.strictObject({ kind: z.literal("import"), module: z.string(), names: strings }),
+      z.strictObject({ kind: z.enum(["global", "unnamed"]), names: strings }),
+    ])).exactOptional(),
+  }),
+  part("trace-root", { target: z.string(), steps: z.array(count) }),
+  part("reading-range", { file: ids.file, start: count, end: count, steps: z.array(count) }),
   part("outward-name", { origin: evidenceOrigin, name: z.string(), kindName: outwardKind, evidence: evidenceList, disposition: z.enum(["stated", "unserved"]) }),
   part("name-candidate", { context: ids.read, name: z.string(), repo: z.string(), basis: candidateBasis, evidence: evidenceList }),
   part("call-site", {
@@ -259,6 +271,7 @@ export const partSchema = z.discriminatedUnion("kind", [
   }),
   part("impact-context", { owner: ids.read, mergeBase: z.string().exactOptional(), changedEntrypoints: recordedCollectionState, changedContracts: recordedCollectionState }),
   part("walk-cost", { owner: ids.read, walk: z.enum(["symbols", "modules"]), expansionsUsed: count }),
+  part("trace-totals", { owner: ids.read, lines: count, expanded: count }),
 ]);
 
 /** Compile-time guard: whatever a schema accepts is its contract shape. */

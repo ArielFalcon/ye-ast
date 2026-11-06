@@ -193,13 +193,28 @@ export function importersValue(): ImportersValue {
 /** The controller method the callers fixture reaches, traced forward into the service method that fixture targets. */
 export function traceValue(): TraceValue {
   return {
-    roots: [{ target: "src/OrderController.java:one", steps: [0] }],
+    roots: [{ target: "src/OrderController.java:30-33", steps: [4] }, { target: "src/OrderController.java:one", steps: [0] }],
     steps: [
       { id: 0, depth: 0, file: "src/OrderController.java", symbol: "one", kind: "method", line: 6, endLine: 9 },
-      { id: 1, parent: 0, depth: 1, file: "src/OrderService.java", symbol: "find", kind: "method", line: 31, endLine: 38, at: { line: 7, column: 12 }, via: "call", external: [{ kind: "unnamed", names: ["repository.findById"] }] },
+      {
+        id: 1, parent: 0, depth: 1, file: "src/OrderService.java", symbol: "find", kind: "method", line: 31, endLine: 38, at: { line: 7, column: 12 }, via: "call",
+        leaves: [{ symbol: "check", file: "src/OrderService.java", start: 40, end: 41 }, { symbol: "check", file: "src/OrderService.java", start: 40, end: 41, deferred: true }, { symbol: "id", file: "src/Order.java", start: 5, end: 5 }],
+        external: [{ kind: "import", module: "org.slf4j", names: ["debug", "info"] }, { kind: "unnamed", names: ["repository.findById"] }],
+      },
+      { id: 2, parent: 0, depth: 1, file: "src/Audit.java", symbol: "audit", kind: "method", line: 3, at: { line: 8 }, via: "reference", deferred: true },
+      { id: 3, parent: 0, depth: 1, file: "src/OrderService.java", symbol: "find", kind: "method", line: 31, endLine: 38, at: { line: 9, column: 4 }, via: "own-member", seen: 1 },
+      { id: 4, depth: 0, file: "src/OrderController.java", symbol: "drop", kind: "method", line: 30, endLine: 33 },
     ],
-    readingPlan: { ranges: [{ file: "src/OrderController.java", start: 6, end: 9, steps: [0] }, { file: "src/OrderService.java", start: 31, end: 38, steps: [1] }], lines: 12 },
-    cost: { expanded: 2 },
+    readingPlan: {
+      ranges: [
+        { file: "src/OrderController.java", start: 6, end: 9, steps: [0] },
+        { file: "src/OrderController.java", start: 30, end: 33, steps: [4] },
+        { file: "src/OrderService.java", start: 31, end: 38, steps: [1] },
+        { file: "src/Audit.java", start: 3, end: 3, steps: [2] },
+      ],
+      lines: 17,
+    },
+    cost: { expanded: 4 },
   };
 }
 

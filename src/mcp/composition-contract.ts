@@ -14,6 +14,7 @@ import type { ChangedContract } from "../core/domain/impact/changed-contracts.ts
 import type { ModuleOrigin, ReachedModule } from "../core/domain/impact/module-dependency.ts";
 import type { ImportedFile } from "../core/domain/impact/importers-fact.ts";
 import type { OutlineDeclaration, OutlineImport } from "../core/domain/outline/outline-fact.ts";
+import type { ExternalCalls, TraceStep } from "../core/domain/trace/trace-fact.ts";
 import type { CallSite, EventTarget, HttpTarget, UnresolvedCallSite } from "../core/domain/topology/call-site.ts";
 import type { ImpactedLink, Link, LinkBasis, UnlinkedCallSite } from "../core/domain/topology/link.ts";
 import type { NameCandidate, OutwardKind } from "../core/domain/topology/outward-name.ts";
@@ -191,7 +192,15 @@ export type PartPayload =
   | { kind: "outline-declaration"; anchor: AnchorId; kindName: OutlineDeclaration["kind"]; children?: readonly PartId[] }
   | { kind: "outline-file"; file: FileId; declarations: readonly PartId[]; imports: readonly OutlineImportRecord[] }
   | { kind: "unheld-file"; file: FileId }
-  | { kind: "trace-step"; anchor: AnchorId; kindName: string; step: number; depth: number; parent?: number; seen?: number }
+  | {
+      kind: "trace-step"; anchor: AnchorId; kindName: string; step: number; depth: number; parent?: number; seen?: number;
+      at?: NonNullable<TraceStep["at"]>; via?: NonNullable<TraceStep["via"]>; deferred?: true;
+      /** Folded declarations, in the fact's order; one anchor may appear twice, once direct and once deferred. */
+      leaves?: readonly { anchor: AnchorId; deferred?: true }[];
+      external?: readonly ExternalCalls[];
+    }
+  | { kind: "trace-root"; target: string; steps: readonly number[] }
+  | { kind: "reading-range"; file: FileId; start: number; end: number; steps: readonly number[] }
   | { kind: "outward-name"; origin: EvidenceOrigin; name: string; kindName: OutwardKind; evidence: readonly EvidenceId[]; disposition: "stated" | "unserved" }
   | { kind: "name-candidate"; context: ReadId; name: string; repo: string; basis: NameCandidate["basis"]; evidence: readonly EvidenceId[] }
   | { kind: "call-site"; site: CallSiteData; disposition: "matched" | "unmatched" | "external" }
@@ -201,7 +210,8 @@ export type PartPayload =
   | { kind: "workspace-context"; context: WorkspaceContextData }
   | { kind: "decision"; context: ReadId; decisionId: Decision["id"]; kindName: DecisionKind; subject: string; outwardKinds?: readonly OutwardKind[]; allowsFreeText: boolean; required: boolean; evidence: readonly EvidenceId[]; options: readonly DecisionOptionData[] }
   | { kind: "impact-context"; owner: ReadId; mergeBase?: string; changedEntrypoints: RecordedCollectionState; changedContracts: RecordedCollectionState }
-  | { kind: "walk-cost"; owner: ReadId; walk: "symbols" | "modules"; expansionsUsed: number };
+  | { kind: "walk-cost"; owner: ReadId; walk: "symbols" | "modules"; expansionsUsed: number }
+  | { kind: "trace-totals"; owner: ReadId; lines: number; expanded: number };
 
 // Keep domain payload fields separate from record metadata: future variants cannot silently overwrite either.
 type UnionKeys<T> = T extends T ? keyof T : never;
