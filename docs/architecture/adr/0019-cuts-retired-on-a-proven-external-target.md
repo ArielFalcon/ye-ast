@@ -99,9 +99,15 @@ population did not.
   verdict, from the root its name has by Java's scoping (`java-name-bindings.adapter.ts`): an edge whose name is a
   qualified platform type, or a simple name a single import binds to one, is no dependence, which is the one case the
   measured repositories show (codegraph resolves `org.springframework...User` through the file's import of a homonym).
+- A simple Java type name bound to a type of the repository names that type alone, wherever the scoping finds it (a
+  member type, the file's package, an on-demand import). An edge into the type's own file stays; an edge into another
+  file moves to the type when the graph places it at its qualified name, and is no dependence when the graph places it
+  nowhere, which is the measured case: codegraph gives a record no node and matches its name to the constructor of a
+  homonym record elsewhere. The record's own answers already say so (an `unknown-symbol` fault naming the record, a
+  `no-extractor` cut on its changed file), so the dropped edge hides no dependence the graph represented.
 
 ## Not decided here
 
 - A Java cut retired by an import-binding proof, a call on a type name (`T.m()`) whose type declares no such member, a
-  use of a name of the file's package or of a nested type moved to the declaration it binds, and a call on a typed
-  receiver: each needs a proof the verdict does not take yet.
+  use moved to a declaration from a file that does not import it (only the edges of the files that import a reached
+  symbol are read for it), and a call on a typed receiver: each needs a proof the verdict does not take yet.

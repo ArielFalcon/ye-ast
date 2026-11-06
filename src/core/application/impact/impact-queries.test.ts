@@ -1980,3 +1980,36 @@ test("importers judge only the edges from other files, with the module statement
   assert.deepEqual(judged, ["src/Svc.java"]);
   assert.equal(extractions, 1);
 });
+
+test("a graph edge whose bare root Java places in another file leaves the graph's target: dropped when that declaration has no node, moved to it when the containment path finds one", async () => {
+  const nodes = [
+    fakeNode("dto", "namespace", "src/dto/Visits.java", 1, 20, "app.dto"),
+    fakeNode("dtoVisits", "function", "src/dto/Visits.java", 5, 7, "Visits"),
+    fakeNode("gateway", "namespace", "src/gateway/Visits.java", 1, 20, "app.gateway"),
+    fakeNode("gatewayVisits", "function", "src/gateway/Visits.java", 5, 7, "Visits"),
+    fakeNode("read", "method", "src/web/Resource.java", 3, 5),
+    fakeNode("list", "method", "src/gateway/Client.java", 3, 5),
+  ];
+  const edges: FakeEdge[] = [
+    { from: "dto", to: "dtoVisits", kind: "contains" },
+    { from: "gateway", to: "gatewayVisits", kind: "contains" },
+    { from: "read", to: "dtoVisits", kind: "references", line: 4, column: 2 },
+    { from: "list", to: "dtoVisits", kind: "references", line: 4, column: 2 },
+  ];
+  const roots: Record<string, ImportOrigin> = {
+    "src/web/Resource.java": { kind: "repository", file: "src/web/Resource.java", declared: "app.web.Resource.Visits" },
+    "src/gateway/Client.java": { kind: "repository", file: "src/gateway/Visits.java", declared: "app.gateway.Visits" },
+  };
+  const importOrigins: ImportOriginsReader = () => ({
+    origins: async (sites) => sites.map((site) => originFinding(site, undefined)),
+    rootOrigins: async (sites) => sites.map((site) => ({ ...originFinding(site, roots[site.file]), bare: true as const })),
+    replacedRoots: async () => NOTHING_REPLACED,
+    rootBindings: NO_BINDINGS,
+  });
+  const { callers } = setup({ nodes, edges, importOrigins });
+
+  const answer = callersFact(await callers({ targets: [{ file: "src/dto/Visits.java", symbol: "Visits" }, { file: "src/gateway/Visits.java", symbol: "Visits" }] }));
+
+  assert.ok(answer.status !== "unknown", JSON.stringify(answer));
+  assert.deepEqual(answer.value.symbols.filter(({ depth }) => depth > 0).map(({ file, symbol, via }) => [file, symbol, via?.file]), [["src/gateway/Client.java", "list", "src/gateway/Visits.java"]]);
+});

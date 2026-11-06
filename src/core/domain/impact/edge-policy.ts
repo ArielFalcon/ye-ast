@@ -112,13 +112,19 @@ export type EdgeVerdict<D> = { kind: "keep" } | { kind: "drop" } | { kind: "redi
  * The verdict on one edge from the root of the name it spells at its position. A root bound outside the repository (imported
  * from a package, or declared by the language's own libraries) cannot name a declaration of the repository, whatever the
  * graph matched it to, so the edge is no dependence; nor can a root spelled alone that a parameter binds, whose value the
- * callers pass. A root spelled alone that an import binds to `proven`, a declaration
- * of the repository other than the edge's `target`, names `proven`. A root that is unknown, bound inside without a proven
+ * callers pass. A root spelled alone whose origin names its declaration (`declared`) names that declaration only: an edge
+ * into its declaring file stays, and one into another file names `proven` when the graph places the declaration, and
+ * nothing when it does not. Otherwise a root spelled alone that an import binds to `proven`, a declaration of the
+ * repository other than the edge's `target`, names `proven`. A root that is unknown, bound inside without a proven
  * declaration, or reached through a longer chain (`a.b`, whose member the binding does not name) proves nothing against it.
  */
-export function edgeVerdict<D>(root: RootOrigin, proven?: D, target?: D): EdgeVerdict<D> {
+export function edgeVerdict<D>(root: RootOrigin, proven: D | undefined, target: { id: D; file: string }): EdgeVerdict<D> {
   if (root.status !== "complete") return { kind: "keep" };
   if (root.value.kind === "external" || root.value.kind === "ambient" || (root.value.kind === "local-parameter" && root.bare === true)) return { kind: "drop" };
-  if (root.value.kind === "repository" && root.bare === true && proven !== undefined && proven !== target) return { kind: "redirect", to: proven };
-  return { kind: "keep" };
+  if (root.value.kind !== "repository" || root.bare !== true) return { kind: "keep" };
+  if (root.value.declared !== undefined) {
+    if (target.file === root.value.file) return { kind: "keep" };
+    if (proven === undefined) return { kind: "drop" };
+  }
+  return proven !== undefined && proven !== target.id ? { kind: "redirect", to: proven } : { kind: "keep" };
 }

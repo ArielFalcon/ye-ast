@@ -84,7 +84,7 @@ function rootOf(site: ResolvedNameSite, file: JavaFile, project: JavaProject): {
   if (!bare && PACKAGE_SEGMENT.test(head) && project.lookupType(head, { file, type: enclosing[0] }) === undefined) return packageQualified(segments, spelled.typePosition, file, project);
   const bound = typeBinding(head, file, enclosing, project);
   if (bound === "unknown" || bound === undefined) return undefined;
-  return bound.kind === "repository" ? { origin: { kind: "repository", file: bound.type.file.path }, bare } : { origin: { kind: "external", module: packageOf(bound.fqn) }, bare };
+  return bound.kind === "repository" ? { origin: declaredBy(bound.type), bare } : { origin: { kind: "external", module: packageOf(bound.fqn) }, bare };
 }
 
 /**
@@ -211,9 +211,14 @@ function packageQualified(segments: readonly string[], typePosition: boolean, fi
   for (let end = segments.length; end > 1; end--) {
     const declared = project.lookupType(segments.slice(0, end).join("."), { file, type: undefined });
     if (declared === "ambiguous") return undefined;
-    if (declared !== undefined) return { origin: { kind: "repository", file: declared.file.path }, bare: false };
+    if (declared !== undefined) return { origin: declaredBy(declared), bare: false };
   }
   return project.isPlatformName(typeName) ? { origin: { kind: "external", module: packageOf(typeName) }, bare: false } : undefined;
+}
+
+/** The origin of a name bound to a type of the repository: its file, and its path in the file's containment, its package first. */
+function declaredBy(type: TypeDecl): ImportOrigin {
+  return { kind: "repository", file: type.file.path, declared: type.fqn };
 }
 
 /** The package of a qualified type name: the segments before the first one that starts uppercase. */

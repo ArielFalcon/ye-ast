@@ -53,14 +53,21 @@ test("a type name a single import binds to a type of the repository is rooted at
   const use = java("src/main/java/app/api/Accounts.java", ["package app.api;", "", "import app.domain.User;", "", "class Accounts {", "  User load() { return null; }", "}"]);
   const site = at(use, "User load", "references", "User");
 
-  assert.deepEqual(await rootOf([USER, use], site), { status: "complete", value: { kind: "repository", file: USER.path }, bare: true, evidence: [{ path: use.path, line: site.line }] });
+  assert.deepEqual(await rootOf([USER, use], site), { status: "complete", value: { kind: "repository", file: USER.path, declared: "app.domain.User" }, bare: true, evidence: [{ path: use.path, line: site.line }] });
 });
 
 test("a type of the file's own package wins over a type an on-demand import offers", async () => {
   const use = java("src/main/java/app/service/Accounts.java", ["package app.service;", "", "import app.domain.*;", "", "class Accounts {", "  User load() { return null; }", "}"]);
   const site = at(use, "User load", "references", "User");
 
-  assert.deepEqual(await rootOf([USER, LOCAL_USER, use], site), { status: "complete", value: { kind: "repository", file: LOCAL_USER.path }, bare: true, evidence: [{ path: use.path, line: site.line }] });
+  assert.deepEqual(await rootOf([USER, LOCAL_USER, use], site), { status: "complete", value: { kind: "repository", file: LOCAL_USER.path, declared: "app.service.User" }, bare: true, evidence: [{ path: use.path, line: site.line }] });
+});
+
+test("a member type of the enclosing class, a record included, is rooted at the file that declares it, by its containment path", async () => {
+  const use = java("src/main/java/app/web/VisitResource.java", ["package app.web;", "", "class VisitResource {", "  Visits read() { return new Visits(); }", "", "  record Visits() {}", "}"]);
+  const site = at(use, "Visits read", "references", "Visits");
+
+  assert.deepEqual(await rootOf([use], site), { status: "complete", value: { kind: "repository", file: use.path, declared: "app.web.VisitResource.Visits" }, bare: true, evidence: [{ path: use.path, line: site.line }] });
 });
 
 test("a nested type that shadows an import of the same name proves nothing about the name", async () => {
@@ -92,7 +99,7 @@ test("a call on a type name is rooted at that type and is not bare", async () =>
   const use = java("src/main/java/app/api/Meter.java", ["package app.api;", "", "import app.other.Limits;", "", "class Meter {", "  int a() { return Limits.limit(); }", "}"]);
   const site = at(use, "Limits.limit", "calls", "limit");
 
-  assert.deepEqual(await rootOf([LIMITS, use], site), { status: "complete", value: { kind: "repository", file: LIMITS.path }, evidence: [{ path: use.path, line: site.line }] });
+  assert.deepEqual(await rootOf([LIMITS, use], site), { status: "complete", value: { kind: "repository", file: LIMITS.path, declared: "app.other.Limits" }, evidence: [{ path: use.path, line: site.line }] });
 });
 
 test("a call whose receiver a variable of the same name as a type holds proves nothing about the type", async () => {

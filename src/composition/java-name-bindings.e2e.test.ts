@@ -10,11 +10,26 @@ import type { Fact } from "../core/domain/shared/fact.ts";
 
 /**
  * `Accounts` imports the repository's `User` and also spells a platform `User` by its qualified name; the graph resolves
- * both spellings through the import.
+ * both spellings through the import. `VisitResource` uses its own nested record `Visits`, which the graph gives no node,
+ * and the graph matches the name to the constructor of the homonym record of another package.
  */
 const USER = "src/main/java/app/domain/User.java";
+const VISITS = "src/main/java/app/dto/Visits.java";
 const FILES: Record<string, string> = {
   [USER]: "package app.domain;\n\npublic class User {}\n",
+  [VISITS]: ["package app.dto;", "", "public record Visits(int count) {", "  public Visits() {", "    this(0);", "  }", "}", ""].join("\n"),
+  "src/main/java/app/web/VisitResource.java": [
+    "package app.web;",
+    "",
+    "public class VisitResource {",
+    "  public Visits read() {",
+    "    return new Visits(1);",
+    "  }",
+    "",
+    "  record Visits(int count) {}",
+    "}",
+    "",
+  ].join("\n"),
   "src/main/java/app/service/Accounts.java": [
     "package app.service;",
     "",
@@ -64,4 +79,13 @@ test("a Java type spelled with a platform package is no use of the repository's 
   assert.ok(answer.status !== "unknown", JSON.stringify(answer));
 
   assert.deepEqual(answer.value.symbols.map(({ file, symbol }) => `${file}:${symbol}`).filter((reached) => !reached.startsWith(USER)), ["src/main/java/app/service/Accounts.java:Accounts", "src/main/java/app/service/Accounts.java:load"]);
+});
+
+test("a Java name a nested record binds is no use of the homonym record of another package the graph matched it to", async () => {
+  const result = await composeQueries({ scratchRoot }).impact.callers({ repo, repoId: "java-name-bindings", revision: "HEAD", targets: [{ file: VISITS, symbol: "Visits" }] });
+  assert.ok(result.ok, JSON.stringify(result));
+  const answer: Fact<ImpactValue> = result.value;
+  assert.ok(answer.status !== "unknown", JSON.stringify(answer));
+
+  assert.deepEqual(answer.value.symbols.filter(({ depth }) => depth > 0), []);
 });
