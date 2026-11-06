@@ -1,5 +1,6 @@
 import ts from "typescript";
 import { ELEMENT, type AccessPath } from "../../domain/contracts/access-path.ts";
+import type { Literal } from "../../domain/contracts/use-operation.ts";
 
 export type FunctionNode = ts.ArrowFunction | ts.FunctionExpression | ts.FunctionDeclaration | ts.MethodDeclaration | ts.ConstructorDeclaration | ts.GetAccessorDeclaration | ts.SetAccessorDeclaration;
 
@@ -73,6 +74,22 @@ export function discardsValue(top: ts.Expression): boolean {
   const operator = parent.operatorToken.kind;
   if (operator === ts.SyntaxKind.AmpersandAmpersandToken || operator === ts.SyntaxKind.EqualsToken) return parent.left === top;
   return operator === ts.SyntaxKind.InstanceOfKeyword;
+}
+
+/** The literal an expression is written as directly: a string, a number with its sign, `true` or `false`. */
+export function literalOf(expression: ts.Expression): Literal | undefined {
+  if (ts.isStringLiteralLike(expression)) return expression.text;
+  if (ts.isNumericLiteral(expression)) return Number(expression.text);
+  if (ts.isPrefixUnaryExpression(expression) && expression.operator === ts.SyntaxKind.MinusToken && ts.isNumericLiteral(expression.operand)) return -Number(expression.operand.text);
+  if (expression.kind === ts.SyntaxKind.TrueKeyword) return true;
+  if (expression.kind === ts.SyntaxKind.FalseKeyword) return false;
+  return undefined;
+}
+
+const NUMERIC_UNARY: ReadonlySet<ts.PrefixUnaryOperator> = new Set([ts.SyntaxKind.MinusToken, ts.SyntaxKind.PlusToken, ts.SyntaxKind.TildeToken, ts.SyntaxKind.PlusPlusToken, ts.SyntaxKind.MinusMinusToken]);
+
+export function isNumericUnary(node: ts.Node): node is ts.PrefixUnaryExpression | ts.PostfixUnaryExpression {
+  return ts.isPostfixUnaryExpression(node) || (ts.isPrefixUnaryExpression(node) && NUMERIC_UNARY.has(node.operator));
 }
 
 export function isNullishLiteral(expression: ts.Expression): boolean {

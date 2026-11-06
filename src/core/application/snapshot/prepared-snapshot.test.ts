@@ -5,6 +5,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createEntrypointQueries } from "../entrypoints/entrypoint-queries.ts";
 import { withSnapshotPreparation } from "./prepared-snapshot.ts";
+import type { Result } from "../../domain/shared/result.ts";
+import type { VcsFault } from "../../ports/vcs.port.ts";
 import type { SnapshotReaderDeps, SnapshotData, SnapshotDataCache } from "./read-snapshot.ts";
 
 const SHA = "a".repeat(40);
@@ -178,6 +180,50 @@ test("cross-request reuse revalidates SHA, source, scope, trust and export budge
   assert.equal(log.exports, 6);
   assert.equal(log.reads, 6);
   assert.equal(log.extracts, 6);
+});
+
+function listsApart(deps: SnapshotReaderDeps, materialize: () => Promise<Result<void, VcsFault>>) {
+  const calls = { listed: 0, materialized: 0 };
+  deps.vcs.listCommit = async (_repo, _sha, plan) => {
+    calls.listed++;
+    return { ok: true, value: { files: [{ path: "src/app.ts", blob: "blob", written: plan.write("src/app.ts") }], skipped: [] } };
+  };
+  deps.vcs.materializeCommit = async () => {
+    calls.materialized++;
+    return materialize();
+  };
+  return calls;
+}
+
+test("a request lists the commit every time but writes its files only before reading them, and only when the data is not retained", async () => {
+  const { deps, log, query, request } = setup();
+  const calls = listsApart(deps, async () => ({ ok: true, value: undefined }));
+  const read = deps.reader.read;
+  deps.reader.read = async (...args) => {
+    assert.equal(calls.materialized, 1);
+    return read(...args);
+  };
+  const snapshotCache = dataCache();
+  const first = await query({ snapshotCache }).map(request);
+  const second = await query({ snapshotCache }).map({ ...request, revision: "alias" });
+
+  assert.deepEqual(second, first);
+  assert.deepEqual(calls, { listed: 2, materialized: 1 });
+  assert.equal(log.exports, 0);
+  assert.equal(log.reads, 1);
+});
+
+test("a file that cannot be written fails the read with its own kind, and the next request writes again", async () => {
+  const { deps, log, query, request } = setup();
+  const attempts: Result<void, VcsFault>[] = [{ ok: false, fault: { kind: "export-write-failed", detail: "disk" } }, { ok: true, value: undefined }];
+  listsApart(deps, async () => attempts.shift()!);
+  const queries = query({ snapshotCache: dataCache() });
+  const failed = await queries.map(request);
+
+  assert.ok(!failed.ok && failed.fault.kind === "export-write-failed");
+  assert.equal(log.reads, 0);
+  assert.ok((await queries.map(request)).ok);
+  assert.equal(attempts.length, 0);
 });
 
 test("a current export fault is returned even when the same SHA has retained source data", async () => {

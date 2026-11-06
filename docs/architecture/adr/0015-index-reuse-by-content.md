@@ -6,6 +6,7 @@
   facts on a `sync`-updated index with the index's origin recorded in `inputs`, and bring the `sync` parity test
   forward".
 - Supersedes: [ADR-0006](0006-qayaba-graph-state-per-run.md) decision 2.
+- Amended by: [ADR-0027](0027-retention-of-immutable-index-entries.md) (retention of kept indexes)
 - Related: [ADR-0010](0010-trust-modes.md), [RFC-0002](../rfc/0002-facts-contract.md),
   [RFC-0003](../rfc/0003-codegraph-integration.md), [RFC-0005](../rfc/0005-transports.md),
   [RFC-0010](../rfc/0010-impact-queries.md)
@@ -89,5 +90,6 @@ record that origin in their inputs; `sha` facts keep reading full builds until t
   another account or open to other accounts is refused, never repaired, since an entry planted there would be a false fact source; the
   query then builds a per-call index. Where indexes live under `untrusted`
   without a host is [RFC-0006](../rfc/0006-configuration.md) open question 4.
-- Not decided: garbage collection of kept indexes. There is no cap, retention or cleanup until measurements justify
-  one; a build that is killed leaves its temporary `.build-*` directory in the cache.
+- Garbage collection of kept indexes is decided by [ADR-0027](0027-retention-of-immutable-index-entries.md): last use,
+  14 days unused and 512 MiB, never an entry an open reader holds. Still not decided: a build that is killed leaves its
+  temporary `.build-*` directory in the cache.

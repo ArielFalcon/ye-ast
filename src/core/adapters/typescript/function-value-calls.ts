@@ -8,7 +8,7 @@ const ASSIGNMENTS: readonly ts.SyntaxKind[] = [ts.SyntaxKind.EqualsToken, ts.Syn
 
 /**
  * The member calls of a TypeScript tree whose receiver the file binds to a function value (see `FunctionValueCall`): a
- * bare receiver by the binder's own scoping (ADR-0026), bound only when the file declares or assigns a function value
+ * bare receiver by the binder's own scoping (ADR-0029), bound only when the file declares or assigns a function value
  * under its name; `this.x` by the field of the enclosing class.
  */
 export function functionValueCalls(tree: ts.SourceFile): FunctionValueCall[] {

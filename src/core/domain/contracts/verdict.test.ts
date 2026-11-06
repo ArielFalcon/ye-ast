@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { parseAccessPath } from "./access-path.ts";
-import { decideUse, type Guard, type UseSite } from "./verdict.ts";
+import { decideUse, type Guard, type UseOperation, type UseSite } from "./verdict.ts";
 
 const path = (text: string) => parseAccessPath(text)!;
 
@@ -9,8 +9,10 @@ function guard(overrides: Partial<Guard> = {}): Guard {
   return { kind: "truthiness", covers: path("address"), excludes: ["null", "undefined"], evidence: { path: "src/a.ts", line: 9 }, ...overrides };
 }
 
+const READ_CITY: UseOperation = { steps: [{ kind: "member", name: "city", optional: false }], end: { kind: "none" } };
+
 function use(overrides: Partial<UseSite> = {}): UseSite {
-  return { path: path("address.city"), changed: path("address"), operation: "consume", guards: [], ...overrides };
+  return { path: path("address.city"), changed: path("address"), operation: READ_CITY, guards: [], ...overrides };
 }
 
 test("an unguarded read inside a value the contract now lets be null is incompatible, with null as the counterexample", () => {
@@ -67,10 +69,12 @@ test("a guard outside the vocabulary leaves the read for review, and a recognize
 });
 
 test("operating on the changed value itself is incompatible only when the operation dereferences it", () => {
-  const exact = { path: path("address"), changed: path("address") };
-  assert.equal(decideUse(use({ ...exact, operation: "dereference" }), "nullable")?.kind, "incompatible");
-  assert.deepEqual(decideUse(use({ ...exact, operation: "consume" }), "nullable"), { kind: "review", reason: "consumed" });
-  assert.deepEqual(decideUse(use({ ...exact, operation: "unmodelled" }), "nullable"), { kind: "review", reason: "unmodelled-sink" });
+  const exact = (operation: UseOperation) => decideUse(use({ path: path("address"), changed: path("address"), operation }), "nullable");
+  assert.equal(exact({ steps: [{ kind: "member", name: "trim", optional: false }, { kind: "call", optional: false }], end: { kind: "none" } })?.kind, "incompatible");
+  assert.equal(exact({ steps: [], end: { kind: "iterate", tolerates: [] } })?.kind, "incompatible");
+  assert.deepEqual(exact({ steps: [], end: { kind: "iterate", tolerates: ["null", "undefined"] } }), { kind: "review", reason: "consumed" });
+  assert.deepEqual(exact({ steps: [], end: { kind: "coerce", operator: "-" } }), { kind: "review", reason: "consumed" });
+  assert.deepEqual(exact({ steps: [], end: { kind: "unmodelled", detail: "call:format" } }), { kind: "review", reason: "unmodelled-sink" });
 });
 
 test("a read that does not reach into the changed value is no use of it", () => {

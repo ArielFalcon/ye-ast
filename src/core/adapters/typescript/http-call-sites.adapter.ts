@@ -1,6 +1,6 @@
 import ts from "typescript";
 import { sourceTree } from "./source-tree.ts";
-import { isPackageManifest, isTypeScriptSource } from "../../domain/languages/typescript.ts";
+import { isTypeScriptSource } from "../../domain/languages/typescript.ts";
 import type { CallSite, HttpTarget, StatedRequest } from "../../domain/topology/call-site.ts";
 import type { CallSiteReader } from "../../domain/topology/call-site.ts";
 import type { Finding } from "../../domain/shared/fact.ts";
@@ -29,8 +29,10 @@ interface FileShape {
   reexports: Map<string, { module: string; imported: string }>;
   /** The modules this file star-exports: `export * from './m'`. */
   stars: string[];
-  /** The expression `export default` names, when the file states one. */
-  defaultExport?: ts.Expression;
+  /** The local names this file exports under another name: `export { a as b }`, by `b`. */
+  localExports: Map<string, string>;
+  /** What `export default` holds: an expression, or the class or function it declares. */
+  defaultExport?: ts.Node;
   classes: Map<string, ts.ClassDeclaration>;
   enums: Map<string, ts.EnumDeclaration>;
 }
@@ -45,6 +47,7 @@ const NO_SCOPE: Scope = { names: new Set(), locals: new Map() };
 const LEXICAL_SCOPES = new WeakMap<ts.Node, Scope>();
 const OWN_BINDINGS = new WeakMap<ts.Node, ReadonlyMap<string, Binding>>();
 const LOCAL_INITIALIZERS = new WeakMap<ts.Node, ReadonlyMap<string, ts.Expression>>();
+const REBOUND_NAMES = new WeakMap<ts.Node, ReadonlySet<string>>();
 
 /** The names the code being evaluated binds at run time: a path part that names one is `{}`, never undecided. */
 type RunTime = ReadonlySet<string>;
@@ -60,6 +63,27 @@ interface HeldClass {
   shape: FileShape;
   declaration: ts.ClassDeclaration;
 }
+
+/** A declaration an import names, with the file that declares it and the exports the resolution visited. */
+interface Resolved<T> {
+  shape: FileShape;
+  declaration: T;
+  trail: ReadonlySet<string>;
+}
+
+/** How a kind of declaration is found in a file: under the name it declares, or as what `export default` holds. */
+interface DeclarationKind<T> {
+  named(shape: FileShape, name: string): T | undefined;
+  defaulted(node: ts.Node): T | undefined;
+}
+
+const CLASSES: DeclarationKind<ts.ClassDeclaration> = { named: (shape, name) => shape.classes.get(name), defaulted: (node) => (ts.isClassDeclaration(node) ? node : undefined) };
+const ENUMS: DeclarationKind<ts.EnumDeclaration> = { named: (shape, name) => shape.enums.get(name), defaulted: () => undefined };
+const CONSTANTS: DeclarationKind<ts.Expression> = { named: (shape, name) => shape.consts.get(name), defaulted: (node) => (ts.isExpression(node) ? node : undefined) };
+const CALLABLES: DeclarationKind<ts.Expression | ts.FunctionDeclaration> = {
+  named: (shape, name) => shape.consts.get(name) ?? functionNamed(shape, name),
+  defaulted: (node) => (ts.isFunctionDeclaration(node) || ts.isExpression(node) ? node : undefined),
+};
 
 /** A method a class declares, with the file that declares it. */
 interface HeldMethod {
@@ -88,7 +112,7 @@ async function read(files: readonly SourceFile[], repo: string): Promise<readonl
   /* The module resolver reads the config files of the snapshot too, so the map holds every source it was given. */
   const texts = new Map(files.map((file) => [file.path, file.content]));
   const shapes = new Map(files.filter((file) => isTypeScriptSource(file.path)).map((file) => [file.path, describe(file)]));
-  const modules = createModuleResolver(async (file) => texts.get(file), manifestPackages(files.filter((file) => isPackageManifest(file.path)).map((file) => file.content)));
+  const modules = createModuleResolver(async (file) => texts.get(file), manifestPackages(files));
   const wrappers = wrapperMethods(shapes);
   const read = new Reader(shapes, modules, wrappers, buildDefines(files));
   const found: CallSite[] = [];
@@ -104,7 +128,7 @@ function compareText(a: string, b: string): number {
 
 function describe(file: SourceFile): FileShape {
   const source = sourceTree(file, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
-  const shape: FileShape = { source, bindings: sourceBindings(source), unsafeEncoder: mayOverrideEncoder(source), consts: new Map(), imports: new Map(), reexports: new Map(), stars: [], classes: new Map(), enums: new Map() };
+  const shape: FileShape = { source, bindings: sourceBindings(source), unsafeEncoder: mayOverrideEncoder(source), consts: new Map(), imports: new Map(), reexports: new Map(), stars: [], localExports: new Map(), classes: new Map(), enums: new Map() };
   for (const statement of source.statements) {
     if (ts.isImportDeclaration(statement) && ts.isStringLiteral(statement.moduleSpecifier)) {
       const module = statement.moduleSpecifier.text;
@@ -125,10 +149,16 @@ function describe(file: SourceFile): FileShape {
       }
       continue;
     }
+    if ((ts.isClassDeclaration(statement) || ts.isFunctionDeclaration(statement)) && isDefaultExport(statement)) shape.defaultExport = statement;
     if (ts.isClassDeclaration(statement) && statement.name !== undefined) shape.classes.set(statement.name.text, statement);
     if (ts.isEnumDeclaration(statement)) shape.enums.set(statement.name.text, statement);
   }
   return shape;
+}
+
+function isDefaultExport(statement: ts.ClassDeclaration | ts.FunctionDeclaration): boolean {
+  const modifiers = ts.getModifiers(statement) ?? [];
+  return modifiers.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword) && modifiers.some((modifier) => modifier.kind === ts.SyntaxKind.DefaultKeyword);
 }
 
 function collectImports(clause: ts.ImportClause | undefined, module: string, into: FileShape): void {
@@ -139,9 +169,15 @@ function collectImports(clause: ts.ImportClause | undefined, module: string, int
   else for (const element of clause.namedBindings.elements) into.imports.set(element.name.text, { module, imported: element.propertyName?.text ?? element.name.text });
 }
 
-/** The names a file re-exports, by name or through `export *`, so a name reached through a barrel is still decided. */
+/** The names a file re-exports, by name or through `export *`, and the local names it exports under another name. */
 function collectExports(statement: ts.ExportDeclaration, shape: FileShape): void {
-  if (statement.moduleSpecifier === undefined || !ts.isStringLiteral(statement.moduleSpecifier)) return;
+  if (statement.moduleSpecifier === undefined) {
+    if (statement.exportClause !== undefined && ts.isNamedExports(statement.exportClause)) {
+      for (const element of statement.exportClause.elements) shape.localExports.set(element.name.text, element.propertyName?.text ?? element.name.text);
+    }
+    return;
+  }
+  if (!ts.isStringLiteral(statement.moduleSpecifier)) return;
   const module = statement.moduleSpecifier.text;
   if (statement.exportClause === undefined) {
     shape.stars.push(module);
@@ -519,7 +555,7 @@ class Reader {
   private async indexSubclasses(): Promise<ReadonlyMap<ts.ClassDeclaration, readonly HeldClass[]>> {
     const index = new Map<ts.ClassDeclaration, HeldClass[]>();
     for (const shape of this.shapes.values()) {
-      for (const declaration of shape.classes.values()) {
+      for (const declaration of shape.source.statements.filter(ts.isClassDeclaration)) {
         const base = baseClassName(declaration);
         const extended = base === undefined ? undefined : await this.classOf(shape, base);
         if (extended !== undefined) index.set(extended.declaration, [...(index.get(extended.declaration) ?? []), { shape, declaration }]);
@@ -652,7 +688,7 @@ class Reader {
     const scope = lexicalScope(receiver);
     if (scope.names.has(receiver.text)) {
       const local = scope.locals.get(receiver.text);
-      const named = local === undefined ? parameterType(receiver) : this.injectedType(shape, local);
+      const named = local === undefined ? parameterType(receiver) : appendsTo(local)?.length === 0 ? this.injectedType(shape, local) : undefined;
       return named === undefined ? undefined : { name: named, shape };
     }
     const constant = shape.consts.get(receiver.text);
@@ -751,25 +787,49 @@ class Reader {
     return target === undefined ? undefined : this.exported(target, imported.imported, trail);
   }
 
-  /**
-   * The expression a module exports under a name: its own declaration, a named re-export, or one reached through
-   * `export *`, which a barrel chain answers. Undefined when the module states none, and when the chain repeats a module
-   * and a name it already visited.
-   */
+  /** The expression a module exports under a name. */
   private async exported(shape: FileShape, name: string, trail: ReadonlySet<string>): Promise<Located | undefined> {
+    const found = await this.exportedAs(shape, name, CONSTANTS, trail);
+    return found === undefined ? undefined : { shape: found.shape, expression: found.declaration, trail: found.trail };
+  }
+
+  /** The declaration a name stands for in a file: one the file declares, or the one an import names, through any re-export. */
+  private async declaredAs<T>(shape: FileShape, name: string, kind: DeclarationKind<T>, trail: ReadonlySet<string>): Promise<Resolved<T> | undefined> {
+    const own = kind.named(shape, name);
+    if (own !== undefined) return { shape, declaration: own, trail };
+    const imported = shape.imports.get(name);
+    if (imported === undefined || imported.imported === "*") return undefined;
+    const target = await this.moduleShape(shape, imported.module);
+    return target === undefined ? undefined : this.exportedAs(target, imported.imported, kind, trail);
+  }
+
+  /**
+   * The declaration a module exports under a name: its own, the one a local `export { a as b }` or `export default`
+   * names, a named re-export, or one reached through `export *`, which a barrel chain answers. Undefined when the module
+   * states none, and when the chain repeats a module and a name it already visited.
+   */
+  private async exportedAs<T>(shape: FileShape, name: string, kind: DeclarationKind<T>, trail: ReadonlySet<string>): Promise<Resolved<T> | undefined> {
     const visited = `${shape.source.fileName}\0export ${name}`;
     if (trail.has(visited)) return undefined;
     const next = new Set(trail).add(visited);
-    const held = name === "default" ? shape.defaultExport : shape.consts.get(name);
-    if (held !== undefined) return { shape, expression: held, trail: next };
+    if (name === "default") {
+      const held = shape.defaultExport;
+      if (held !== undefined && ts.isIdentifier(held)) return this.declaredAs(shape, held.text, kind, next);
+      const declaration = held === undefined ? undefined : kind.defaulted(held);
+      return declaration === undefined ? undefined : { shape, declaration, trail: next };
+    }
+    const local = shape.localExports.get(name);
+    if (local !== undefined) return this.declaredAs(shape, local, kind, next);
+    const own = kind.named(shape, name);
+    if (own !== undefined) return { shape, declaration: own, trail: next };
     const reexport = shape.reexports.get(name);
     if (reexport !== undefined) {
       const target = await this.moduleShape(shape, reexport.module);
-      return target === undefined ? undefined : this.exported(target, reexport.imported, next);
+      return target === undefined ? undefined : this.exportedAs(target, reexport.imported, kind, next);
     }
     for (const star of shape.stars) {
       const target = await this.moduleShape(shape, star);
-      const found = target === undefined ? undefined : await this.exported(target, name, next);
+      const found = target === undefined ? undefined : await this.exportedAs(target, name, kind, next);
       if (found !== undefined) return found;
     }
     return undefined;
@@ -811,7 +871,7 @@ class Reader {
     const name = expression.name.text;
     if (owner.kind === ts.SyntaxKind.ThisKeyword) {
       const enclosing = enclosingClassOf(owner);
-      return enclosing === undefined ? undefined : await this.fieldOf(shape, enclosing, name, trail, [enclosing]);
+      return enclosing === undefined ? undefined : await this.fieldOf(shape, enclosing, name, trail, { shape, declaration: enclosing });
     }
     if (!ts.isIdentifier(owner)) return undefined;
     const namespace = shape.imports.get(owner.text);
@@ -820,9 +880,9 @@ class Reader {
       return target === undefined ? undefined : this.exported(target, name, trail);
     }
     const found = await this.classOf(shape, owner.text);
-    const field = found === undefined ? undefined : await this.fieldOf(found.shape, found.declaration, name, trail, [found.declaration]);
+    const field = found === undefined ? undefined : await this.fieldOf(found.shape, found.declaration, name, trail, found);
     if (field !== undefined) return field;
-    const enumeration = await this.declarationOf(shape, owner.text, (held, enumName) => held.enums.get(enumName));
+    const enumeration = await this.declaredAs(shape, owner.text, ENUMS, new Set());
     if (enumeration !== undefined) return enumMember(enumeration.shape, enumeration.declaration, name, trail);
     const literal = await this.objectLiteral(shape, owner.text, trail);
     if (literal === undefined) return undefined;
@@ -832,11 +892,11 @@ class Reader {
 
   /**
    * The initializer of a class member, once, whatever names the class states; a member the class does not declare is its
-   * base class's. `chain` holds the classes from the one the code reads the member of to this one. A field declared
-   * without an initializer or as a constructor parameter, or that the code assigns besides its initializer, holds a value
-   * the code assigns at run time.
+   * base class's. `read` is the class the code reads the member of. A field declared without an initializer or as a
+   * constructor parameter, or that a class of the instance's hierarchy assigns besides its initializer, holds a value the
+   * code assigns at run time.
    */
-  private async fieldOf(shape: FileShape, declaration: ts.ClassDeclaration, name: string, trail: ReadonlySet<string>, chain: readonly ts.ClassDeclaration[]): Promise<Located | typeof ASSIGNED_AT_RUN_TIME | undefined> {
+  private async fieldOf(shape: FileShape, declaration: ts.ClassDeclaration, name: string, trail: ReadonlySet<string>, read: HeldClass): Promise<Located | typeof ASSIGNED_AT_RUN_TIME | undefined> {
     const visited = `${shape.source.fileName}\0${declaration.name?.text ?? "(anonymous)"}.${name}`;
     if (trail.has(visited)) return undefined;
     const member = declaration.members.find((candidate) => candidate.name !== undefined && ts.isIdentifier(candidate.name) && candidate.name.text === name);
@@ -844,13 +904,24 @@ class Reader {
       if (constructorParameters(declaration).some((parameter) => ts.isIdentifier(parameter.name) && parameter.name.text === name && ts.isParameterPropertyDeclaration(parameter, parameter.parent))) return ASSIGNED_AT_RUN_TIME;
       const base = baseClassName(declaration);
       const found = base === undefined ? undefined : await this.classOf(shape, base);
-      return found === undefined ? undefined : this.fieldOf(found.shape, found.declaration, name, new Set(trail).add(visited), [...chain, found.declaration]);
+      return found === undefined ? undefined : this.fieldOf(found.shape, found.declaration, name, new Set(trail).add(visited), read);
     }
     if (!ts.isPropertyDeclaration(member)) return undefined;
-    const [read] = chain;
-    const assigned = chain.some((held) => writes(held, name)) || (read !== undefined && (await this.assignedBelow(read, name, new Set())));
+    const assigned = (await this.assignedAbove(read, name)) || (await this.assignedBelow(read.declaration, name, new Set()));
     if (member.initializer === undefined || assigned) return ASSIGNED_AT_RUN_TIME;
     return { shape, expression: member.initializer, trail: new Set(trail).add(visited) };
+  }
+
+  /** Whether the class, or a base class it extends at any depth, assigns the member through `this`. */
+  private async assignedAbove(held: HeldClass, name: string): Promise<boolean> {
+    const seen = new Set<ts.ClassDeclaration>();
+    for (let current: HeldClass | undefined = held; current !== undefined && !seen.has(current.declaration); ) {
+      if (writes(current.declaration, name)) return true;
+      seen.add(current.declaration);
+      const base = baseClassName(current.declaration);
+      current = base === undefined ? undefined : await this.classOf(current.shape, base);
+    }
+    return false;
   }
 
   /** Whether a subclass of the class, the instance the code may run on, declares the field again or writes it. */
@@ -865,18 +936,7 @@ class Reader {
 
   /** The class a name states in this file, or the one an import names. */
   private classOf(shape: FileShape, name: string): Promise<HeldClass | undefined> {
-    return this.declarationOf(shape, name, (held, className) => held.classes.get(className));
-  }
-
-  /** The declaration a name states in this file, or the one an import names, as `pick` finds it in a file. */
-  private async declarationOf<T>(shape: FileShape, name: string, pick: (held: FileShape, name: string) => T | undefined): Promise<{ shape: FileShape; declaration: T } | undefined> {
-    const local = pick(shape, name);
-    if (local !== undefined) return { shape, declaration: local };
-    const imported = shape.imports.get(name);
-    if (imported === undefined || imported.imported === "*" || imported.imported === "default") return undefined;
-    const target = await this.moduleShape(shape, imported.module);
-    const declaration = target === undefined ? undefined : pick(target, imported.imported);
-    return target === undefined || declaration === undefined ? undefined : { shape: target, declaration };
+    return this.declaredAs(shape, name, CLASSES, new Set());
   }
 
   private async objectLiteral(shape: FileShape, name: string, trail: ReadonlySet<string>): Promise<Located<ts.ObjectLiteralExpression> | undefined> {
@@ -933,13 +993,8 @@ class Reader {
   }
 
   private async callTargetOf(shape: FileShape, name: string): Promise<{ target: FileShape; declaration: ts.Expression | ts.FunctionDeclaration } | undefined> {
-    const local = shape.consts.get(name) ?? functionNamed(shape, name);
-    if (local !== undefined) return { target: shape, declaration: local };
-    const imported = shape.imports.get(name);
-    if (imported === undefined || imported.imported === "*") return undefined;
-    const target = await this.moduleShape(shape, imported.module);
-    const declaration = target === undefined ? undefined : (target.consts.get(imported.imported) ?? functionNamed(target, imported.imported));
-    return target === undefined || declaration === undefined ? undefined : { target, declaration };
+    const found = await this.declaredAs(shape, name, CALLABLES, new Set());
+    return found === undefined ? undefined : { target: found.shape, declaration: found.declaration };
   }
 
   /** What a call writes: what every return of the function it names writes, undefined when one is undecided or two disagree. */
@@ -950,7 +1005,7 @@ class Reader {
    */
   private async evaluateMethod(shape: FileShape, callee: ts.PropertyAccessExpression, trail: ReadonlySet<string>): Promise<Evaluation | undefined> {
     const receiver = await this.receiverClass(shape, callee.expression);
-    if (receiver === undefined) return undefined;
+    if (receiver === undefined || (await this.assignedAbove(receiver, callee.name.text))) return undefined;
     const inherited = await this.inheritedMethod(receiver.shape, receiver.declaration, callee.name.text, new Set());
     if (inherited === undefined) return undefined;
     const overrides = receiver.virtual ? await this.overrides(receiver.declaration, callee.name.text, new Set()) : [];
@@ -980,9 +1035,9 @@ class Reader {
     return found === undefined ? undefined : { ...found, virtual: true };
   }
 
-  /** The method a class declares or inherits under a name; none once a class on the way assigns that name through `this`. */
+  /** The method a class declares or inherits under a name. */
   private async inheritedMethod(shape: FileShape, declaration: ts.ClassDeclaration, name: string, visited: Set<ts.ClassDeclaration>): Promise<HeldMethod | undefined> {
-    if (visited.has(declaration) || writes(declaration, name)) return undefined;
+    if (visited.has(declaration)) return undefined;
     visited.add(declaration);
     const member = memberNamed(declaration, name);
     if (member !== undefined) {
@@ -994,7 +1049,10 @@ class Reader {
     return found === undefined ? undefined : this.inheritedMethod(found.shape, found.declaration, name, visited);
   }
 
-  /** The methods of that name the subclasses of a class declare, at any depth; none once a subclass assigns the name through `this`. */
+  /**
+   * The methods of that name the subclasses of a class declare, at any depth; none once a subclass assigns the name
+   * through `this` or declares it as something the snapshot cannot read as a function.
+   */
   private async overrides(declaration: ts.ClassDeclaration, name: string, visited: Set<ts.ClassDeclaration>): Promise<HeldMethod[] | undefined> {
     if (visited.has(declaration)) return [];
     visited.add(declaration);
@@ -1002,8 +1060,11 @@ class Reader {
     for (const { shape, declaration: subclass } of await this.subclassesOf(declaration)) {
       if (writes(subclass, name)) return undefined;
       const member = memberNamed(subclass, name);
-      const method = member === undefined ? undefined : functionOf(member);
-      if (method !== undefined) found.push({ shape, method });
+      if (member !== undefined) {
+        const method = functionOf(member);
+        if (method === undefined) return undefined;
+        found.push({ shape, method });
+      }
       const below = await this.overrides(subclass, name, visited);
       if (below === undefined) return undefined;
       found.push(...below);
@@ -1096,15 +1157,33 @@ function mayOverrideEncoder(source: ts.SourceFile): boolean {
   return visit(source);
 }
 
-/** The type name a name's nearest binding declares, when that binding is a function parameter. */
+/**
+ * The type name a name's nearest binding declares, when that binding is a function parameter the function never assigns
+ * nor declares again with a value: then it holds only its argument.
+ */
 function parameterType(name: ts.Identifier): string | undefined {
   for (let current: ts.Node | undefined = name.parent; current !== undefined; current = current.parent) {
     const binding = ownBindings(current).get(name.text);
     if (binding === undefined) continue;
     const declaration = binding.declaration;
-    return ts.isParameter(declaration) && ts.isIdentifier(declaration.name) && declaration.type !== undefined ? typeName(declaration.type) : undefined;
+    if (!ts.isParameter(declaration) || !ts.isIdentifier(declaration.name) || declaration.type === undefined) return undefined;
+    return reboundIn(current).has(name.text) ? undefined : typeName(declaration.type);
   }
   return undefined;
+}
+
+/** The names a function assigns, or declares with a value, anywhere in its body. */
+function reboundIn(declaration: ts.Node): ReadonlySet<string> {
+  const cached = REBOUND_NAMES.get(declaration);
+  if (cached !== undefined) return cached;
+  const names = new Set(writesIn(declaration).keys());
+  const visit = (node: ts.Node): void => {
+    if (ts.isVariableDeclaration(node) && node.initializer !== undefined) for (const text of bindingNames(node.name)) names.add(text);
+    ts.forEachChild(node, visit);
+  };
+  visit(declaration);
+  REBOUND_NAMES.set(declaration, names);
+  return names;
 }
 
 /** What the code appends with `+=` to the variable an initializer declares; null when it writes the variable any other way. */

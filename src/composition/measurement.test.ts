@@ -8,7 +8,8 @@ import type { CodeGraph } from "../core/ports/code-graph.port.ts";
 import type { EntrypointQueries } from "../core/ports/entrypoint-queries.port.ts";
 import type { ImpactQueries } from "../core/ports/impact-queries.port.ts";
 import { REDACTED, type Redaction } from "../core/ports/redaction.port.ts";
-import { measuredEntrypoints, measuredGraph, measuredImpact, measuredOutline, measuredStages, measuredTrace } from "./measurement.ts";
+import type { LiveMirror } from "../core/ports/live-mirror.port.ts";
+import { measuredEntrypoints, measuredGraph, measuredImpact, measuredIndexDiscard, measuredLiveMirror, measuredOutline, measuredSnapshotCache, measuredStages, measuredTrace } from "./measurement.ts";
 
 const SECRET = "s3cr3t";
 const SHA = "a".repeat(40);
@@ -272,4 +273,86 @@ test("a trace query emits its own query line", async () => {
   await measuredTrace(queries, { sink, redaction }).walk({ repo: "/work/shop", repoId: "shop", targets: [] } as never);
 
   assert.equal(recordOf(lines[0]).method, "trace.walk");
+});
+
+test("a stage line carries its start offset on the process monotonic clock, so overlapping stages can be told apart", async () => {
+  const { lines, sink } = collecting();
+  const staged = measuredStages({ slow: () => new Promise<void>((resolve) => setTimeout(resolve, 30)), quick: () => 1 }, { slow: "first", quick: "second" }, { sink, redaction });
+
+  await staged.slow();
+  staged.quick();
+
+  const [first, second] = lines.map(recordOf);
+  assert.ok(Number.isInteger(first?.start_ms) && (first?.start_ms as number) > 0);
+  assert.ok((second?.start_ms as number) >= (first?.start_ms as number) + (first?.duration_ms as number) - 1);
+});
+
+test("the unresolved references an opened store answers are their own stage", () => {
+  const { lines, sink } = collecting();
+  const reader = { versions: {}, unresolvedReferences: () => [], close: () => undefined };
+  const graph = { open: () => ({ ok: true, value: reader }) } as unknown as CodeGraph;
+
+  const opened = measuredGraph(graph, { sink, redaction }).open("/store");
+  assert.ok(opened.ok);
+  opened.value.unresolvedReferences(["a.ts"]);
+
+  assert.deepEqual(lines.map((line) => recordOf(line).stage), ["store-open", "unresolved-references"]);
+});
+
+test("a live mirror writes a stage per lifecycle step, the lock release included", async () => {
+  const { lines, sink } = collecting();
+  const ok = async () => ({ ok: true, value: undefined });
+  const mirror = {
+    lock: async () => ({ ok: true, value: { release: async () => undefined } }),
+    readState: async () => ({ ok: true, value: null }),
+    discard: ok,
+    reconcile: ok,
+    changedSince: ok,
+    touch: ok,
+    usage: ok,
+    discardIfIdle: ok,
+    discardDebris: ok,
+    root: () => "/mirror",
+  } as unknown as LiveMirror;
+
+  const measured = measuredLiveMirror(mirror, { sink, redaction });
+  const lock = await measured.lock({ repo: "/r", scope: "s" });
+  assert.ok(lock.ok);
+  await lock.value.release();
+  await measured.readState({ repo: "/r", scope: "s" });
+  await measured.discard({ repo: "/r", scope: "s" });
+  await measured.reconcile({ repo: "/r", scope: "s" }, [], [], []);
+  await measured.touch({ repo: "/r", scope: "s" });
+  await measured.changedSince({ repo: "/r", scope: "s" }, [], { manifest: [], skipped: [] });
+  await measured.usage("/r");
+  await measured.discardIfIdle({ repo: "/r", scope: "s" });
+  await measured.discardDebris("/r", []);
+  assert.equal(measured.root({ repo: "/r", scope: "s" }), "/mirror");
+
+  assert.deepEqual(lines.map((line) => recordOf(line).stage), [
+    "live-lock", "live-release", "live-read-state", "live-discard", "live-reconcile", "live-touch", "live-staleness-compare", "live-usage", "live-discard-idle", "live-discard-debris",
+  ]);
+});
+
+test("a snapshot cache decision is a cache line with its bytes and no key", () => {
+  const { lines, sink } = collecting();
+  const observe = measuredSnapshotCache({ sink, redaction });
+
+  observe({ outcome: "evicted", entryBytes: 120, retainedBytes: 480 });
+  observe({ outcome: "miss", retainedBytes: 480 });
+
+  const [evicted, miss] = lines.map(recordOf);
+  assert.deepEqual({ ...evicted, start_ms: undefined }, { event: "cache", outcome: "evicted", entry_bytes: 120, retained_bytes: 480, start_ms: undefined });
+  assert.ok(Number.isInteger(evicted?.start_ms));
+  assert.deepEqual({ ...miss, start_ms: undefined }, { event: "cache", outcome: "miss", retained_bytes: 480, start_ms: undefined });
+});
+
+test("an index discard is an index-cache line with the bytes freed and kept and no key", () => {
+  const { lines, sink } = collecting();
+
+  measuredIndexDiscard({ sink, redaction })({ entryBytes: 90, retainedBytes: 300 });
+
+  const [discarded] = lines.map(recordOf);
+  assert.deepEqual({ ...discarded, start_ms: undefined }, { event: "index-cache", outcome: "discarded", entry_bytes: 90, retained_bytes: 300, start_ms: undefined });
+  assert.ok(Number.isInteger(discarded?.start_ms));
 });

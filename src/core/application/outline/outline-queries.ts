@@ -12,7 +12,7 @@ import { ABORTED } from "../snapshot/read-snapshot.ts";
 import { createHeadReader, type FactSpec, type HeadReaderDeps, type HeadReading } from "../snapshot/head-reading.ts";
 import type { ModuleDependencies } from "../../domain/impact/module-dependency.ts";
 import type { CommitExtraction } from "../snapshot/read-snapshot.ts";
-import type { CommitExport } from "../../ports/vcs.port.ts";
+import type { VcsFault } from "../../ports/vcs.port.ts";
 import { isJavaSource } from "../../domain/languages/java.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { ModuleDependenciesReader } from "../../ports/module-dependencies.port.ts";
@@ -54,13 +54,14 @@ export function createOutlineQueries(deps: OutlineQueriesDeps): OutlineQueries {
         const index = await head.open();
         if (index === "aborted") return ABORTED;
         if (index === "unavailable") return { ok: true, value: { ...head.base(content), status: "unknown", reason: "index-unavailable" } };
+        if ("fault" in index) return { ok: false, fault: index.fault };
         const { store, summary } = index;
         try {
           const held = new Set(headTree.export.files.map((file) => file.path));
           const focused = focus === undefined ? undefined : readFocus(store, focus.filter(({ file }) => isReadableFile(file)));
           if (focused !== undefined && focused.unknown.length > 0) return { ok: false, fault: { kind: "unknown-symbol", detail: `no declaration at the revision for ${focused.unknown.map(unknownTargetKey).join(", ")}${unmodelledNote(focused.unknown, unmodelled)}`, entries: focused.unknown } };
           if (focused !== undefined && focused.topLevel.length > 0) return { ok: false, fault: { kind: "top-level-line", detail: `no declaration holds ${focused.topLevel.map(({ file, line }) => `${file}:${line}`).join(", ")}; the line is at the top level of its file`, entries: focused.topLevel } };
-          const listed = focused === undefined ? readOutline(store, covered, await readModules(deps.moduleReaders, sources ?? [], covered)) : undefined;
+          const listed = focused === undefined ? readOutline(store, covered, await readModules(deps.moduleReaders, sources, covered)) : undefined;
           if (request.signal?.aborted) return ABORTED;
           const read = focused?.value ?? listed!.value;
           const cuts = [
@@ -77,17 +78,23 @@ export function createOutlineQueries(deps: OutlineQueriesDeps): OutlineQueries {
       };
       return focus === undefined
         ? headReader.atSources(request, spec, (head) => answer(head, head.tree.sources))
-        : headReader.atExport(request, spec, async (head, root) => answer(head, await focusedSources(deps, root, head.tree.export, files)));
+        : headReader.atExport(request, spec, async (head, root) => {
+          const focused = await focusedSources(deps, root, head, files, request.signal);
+          return focused.ok ? answer(head, focused.value) : focused;
+        });
     },
   };
 }
 
 /** The written Java sources among the focused files, read alone: a focus never loads the whole snapshot. */
-async function focusedSources(deps: OutlineQueriesDeps, root: string, exported: CommitExport, files: readonly string[]): Promise<readonly SourceFile[]> {
-  if (deps.unmodelled === undefined) return [];
+async function focusedSources(deps: OutlineQueriesDeps, root: string, head: HeadReading<Pick<CommitExtraction, "export">>, files: readonly string[], signal: AbortSignal | undefined): Promise<Result<readonly SourceFile[], VcsFault>> {
+  if (deps.unmodelled === undefined) return { ok: true, value: [] };
   const asked = new Set(files.filter(isJavaSource));
-  const written = exported.files.filter((file) => file.written && asked.has(file.path)).map((file) => file.path);
-  return written.length === 0 ? [] : deps.reader.read(root, written);
+  const written = head.tree.export.files.filter((file) => file.written && asked.has(file.path)).map((file) => file.path);
+  if (written.length === 0) return { ok: true, value: [] };
+  const ready = await head.prepared?.materialize(signal);
+  if (ready !== undefined && !ready.ok) return ready;
+  return { ok: true, value: await deps.reader.read(root, written) };
 }
 
 /** The module statements of the requested files from every reader, each resolved against every source, as one read. */

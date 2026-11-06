@@ -92,8 +92,12 @@ request is the call site.
 
 A receiver `this.x` is the field the class of the call declares (a constructor parameter only when it declares a
 property) or inherits from its base class, here or through an import; a bare name is the binding the code around it
-declares, then a constant of the file. The file that writes the receiver's type name decides through its imports which
-class it names.
+declares, then a constant of the file; a parameter's declared type names its value only while the function neither
+assigns the parameter nor declares it again with a value, and a local's initializer only while nothing assigns the local.
+The file that writes the receiver's type name decides through its imports which class it names. A name an import brings,
+whatever it declares (a constant, a function, a class, an enum), is resolved through the module's own declarations, a
+local `export { a as b }`, `export default` (the class or function it declares, or the name it exports), named
+re-exports and `export *`, so a barrel or a default import reaches the same declaration as a direct import.
 
 `fetch(url, init)` takes its method from the init object it states, GET without one; an init that is not an object
 literal, or a spread or computed member that may state `method` after it, leaves the method undecided. An
@@ -108,9 +112,10 @@ A method a path calls (`pageLink.toQuery()`, `this.area()`) is read when its rec
 `super`, a field or a parameter whose declared type names the class. The receiver may be any subclass, so the method the
 class declares or inherits and every override a subclass declares must write the same, a subclass being any class whose
 `extends` resolves to that class through its own file's imports, under whatever name (`super` reads only the inherited
-one). A method that reads its own parameters is not read, since its arguments are not substituted, nor one that a class
-from the receiver's up to the declaring one, or a subclass, assigns through `this`, since the instance then holds the
-assigned function.
+one). A subclass member the snapshot cannot read as a method, such as an accessor, leaves the call undecided. A method that
+reads its own parameters is not read, since its arguments are not substituted, nor one that any class of the instance's
+hierarchy assigns through `this` (the receiver's class, every class it extends, or a subclass), since the instance then
+holds the assigned function.
 
 A function a path calls, and the function an `httpResource` takes its request from, is read at every `return` of its own
 body; the functions it declares return their own. A bare `return`, and an end the body reaches without returning, return
@@ -120,9 +125,9 @@ returns state. Variables the function declares are values it fills at run time.
 
 A class member the class does not declare (`this.resourceUrl`) is read from the class it extends, in the same file or
 through an import; a member the class declares itself wins. A field's initializer is its value only while nothing else
-assigns it: a field declared without an initializer or as a constructor parameter, one the classes from the reading
-class up to the declaring one write (`=`, compound assignments, `++`, `delete`), one a subclass of the reading class
-declares again or writes, and any field of a class that writes fields it does not name (`this[key] =`,
+assigns it: a field declared without an initializer or as a constructor parameter, one the reading class or any class it
+extends writes (`=`, compound assignments, `++`, `delete`), above the declaring class included, one a subclass of the
+reading class declares again or writes, and any field of a class that writes fields it does not name (`this[key] =`,
 `Object.assign(this, …)`) hold a value the code fills at run time. Writes from outside the class hierarchy are not read.
 A property of a run-time value (`category.id`, `event.data.id`) is a run-time value; a root the code binds is read
 through that binding before any class, import or constant of the same name. A member of an enum the file declares or

@@ -1,11 +1,12 @@
 import ts from "typescript";
-import { isPackageManifest, isTypeScriptFile } from "../../domain/languages/typescript.ts";
+import { isTypeScriptFile } from "../../domain/languages/typescript.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
 import type { ModuleDependencies, ModuleDependency, ModuleSource, UntraversedReference } from "../../domain/impact/module-dependency.ts";
 import type { ModuleTarget } from "../../domain/shared/module-target.ts";
 import type { ModuleDependenciesReader } from "../../ports/module-dependencies.port.ts";
 import { defaultDeclarationName, moduleStatement } from "./import-bindings.ts";
 import { createModuleResolver, manifestPackages, packageOf } from "./module-resolver.ts";
+import { sourceTree } from "./source-tree.ts";
 import { declaredNames } from "./syntax-names.ts";
 
 type PendingDependency = Omit<ModuleDependency, "target">;
@@ -16,17 +17,19 @@ export function createModuleDependenciesReader(): ModuleDependenciesReader {
   return {
     async extract(sources, options): Promise<ModuleDependencies> {
       const selected = options?.files === undefined ? undefined : new Set(options.files);
+      const held = new Map(sources.map((source) => [source.path, source]));
       const texts = new Map(sources.map(({ path, content }) => [path, content]));
-      const packages = manifestPackages(sources.filter(({ path }) => isPackageManifest(path)).map(({ content }) => content));
+      const packages = manifestPackages(sources);
       const resolver = createModuleResolver(async (file) => texts.get(file), packages, { jsonModules: true });
+      const parse = (file: string): ts.SourceFile => sourceTree(held.get(file)!, ts.ScriptTarget.Latest, false, ts.ScriptKind.TS);
       const files: ModuleSource[] = [];
       const pending: PendingDependency[] = [];
       const unread: { file: string; reason: "source-unreadable" | "no-extractor" }[] = [];
       const untraversed: UntraversedReference[] = [];
 
-      for (const [file, text] of [...texts].sort(([left], [right]) => compareText(left, right))) {
+      for (const file of [...texts.keys()].sort(compareText)) {
         if (!isTypeScriptFile(file) || (selected !== undefined && !selected.has(file))) continue;
-        const tree = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, false, ts.ScriptKind.TS);
+        const tree = parse(file);
         if ((tree as ts.SourceFile & { parseDiagnostics: readonly ts.Diagnostic[] }).parseDiagnostics.length > 0) {
           unread.push({ file, reason: "source-unreadable" });
           continue;
@@ -124,8 +127,7 @@ export function createModuleDependenciesReader(): ModuleDependenciesReader {
       const defaults = new Map<string, string | undefined>();
       const defaultOf = (file: string): string | undefined => {
         if (!defaults.has(file)) {
-          const text = texts.get(file);
-          defaults.set(file, text === undefined ? undefined : defaultDeclarationName(ts.createSourceFile(file, text, ts.ScriptTarget.Latest, false, ts.ScriptKind.TS)));
+          defaults.set(file, held.has(file) ? defaultDeclarationName(parse(file)) : undefined);
         }
         return defaults.get(file);
       };

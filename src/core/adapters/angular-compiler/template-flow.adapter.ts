@@ -40,7 +40,8 @@ import {
 } from "@angular/compiler";
 import { ELEMENT, relatePaths, type AccessPath } from "../../domain/contracts/access-path.ts";
 import { RESOURCE_STATE_MEMBERS, type FlowFrontier, type FlowNext, type FlowResult, type FlowStep, type FlowUse, type FrontierCause, type Hop } from "../../domain/contracts/consumer-flow.ts";
-import type { Absence, Guard, GuardKind, UseOperation } from "../../domain/contracts/verdict.ts";
+import type { AccessStep, Literal, UseEnd } from "../../domain/contracts/use-operation.ts";
+import type { Absence, Guard, GuardKind } from "../../domain/contracts/verdict.ts";
 import type { Evidence } from "../../domain/shared/fact.ts";
 import type { SymbolRef } from "../../domain/relations/relation.ts";
 import type { MemberCarrier } from "../../ports/consumer-template.port.ts";
@@ -70,21 +71,24 @@ const BOTH: readonly Absence[] = ["null", "undefined"];
 const NULL_ONLY: readonly Absence[] = ["null"];
 const UNDEFINED_ONLY: readonly Absence[] = ["undefined"];
 const COMPARISONS: ReadonlySet<string> = new Set(["==", "!=", "===", "!=="]);
+const RELATIONS: ReadonlySet<string> = new Set([...COMPARISONS, "<", "<=", ">", ">="]);
 
-type OpaqueOutcome = UseOperation | "frontier";
+const NONE: UseEnd = { kind: "none" };
+const SHOWN: UseEnd = { kind: "consume", as: "shown" };
+const HANDED_ON: UseEnd = { kind: "consume", as: "handed-on" };
 
-/** What the value that reaches the end of an expression flows into. */
+/** What the value that reaches the end of an expression flows into; a use states how it ends. */
 type Sink =
-  | { kind: "consume" }
+  | { kind: "consume"; end: UseEnd }
   | { kind: "test" }
-  | { kind: "opaque"; outcome: OpaqueOutcome; cause: FrontierCause; detail: string }
+  | { kind: "opaque"; end: UseEnd | "frontier"; cause: FrontierCause; detail: string }
   | { kind: "bind"; name: string; ref: SymbolRef };
 
-const CONSUME: Sink = { kind: "consume" };
+const consuming = (end: UseEnd): Sink => ({ kind: "consume", end });
 const TEST: Sink = { kind: "test" };
 
-function opaque(detail: string, outcome: OpaqueOutcome = "unmodelled", cause: FrontierCause = "unmodelled-flow"): Sink {
-  return { kind: "opaque", outcome, cause, detail };
+function opaque(detail: string, end: UseEnd | "frontier" = { kind: "unmodelled", detail }, cause: FrontierCause = "unmodelled-flow"): Sink {
+  return { kind: "opaque", end, cause, detail };
 }
 
 /** A value of the member read in the template: `offset` is where it sits in the member, `frame` where its alias starts. */
@@ -95,6 +99,8 @@ interface Tracked {
   slots: readonly string[];
   hops: readonly Hop[];
   guards: readonly Guard[];
+  /** The accesses written on the value once the chain has reached the changed segment. */
+  steps: readonly AccessStep[];
 }
 
 interface Alias {
@@ -154,8 +160,8 @@ class TemplateFlow extends CombinedRecursiveAstVisitor {
 
   override visitElement(element: TmplAstElement): void {
     const matched = this.template.bound.getDirectivesOfNode(element) ?? [];
-    for (const input of element.inputs) this.binding(input, matched, CONSUME);
-    for (const output of element.outputs) this.expr(output.handler, CONSUME);
+    for (const input of element.inputs) this.binding(input, matched, consuming(HANDED_ON));
+    for (const output of element.outputs) this.expr(output.handler, consuming(HANDED_ON));
     this.nodes(element.children);
   }
 
@@ -174,16 +180,16 @@ class TemplateFlow extends CombinedRecursiveAstVisitor {
         this.iterate(input.value, template.variables.find((variable) => variable.value === "$implicit"), template.sourceSpan.start.offset);
       } else this.binding(input, matched, opaque(`binding:${input.name}`));
     }
-    for (const output of template.outputs) this.expr(output.handler, CONSUME);
+    for (const output of template.outputs) this.expr(output.handler, consuming(HANDED_ON));
     this.within(established, () => this.nodes(template.children));
   }
 
   override visitBoundText(text: TmplAstBoundText): void {
-    this.expr(text.value, CONSUME);
+    this.expr(text.value, consuming(SHOWN));
   }
 
   override visitBoundEvent(event: TmplAstBoundEvent): void {
-    this.expr(event.handler, CONSUME);
+    this.expr(event.handler, consuming(HANDED_ON));
   }
 
   override visitDeferredTrigger(trigger: TmplAstDeferredTrigger): void {
@@ -210,9 +216,10 @@ class TemplateFlow extends CombinedRecursiveAstVisitor {
   }
 
   override visitSwitchBlock(block: TmplAstSwitchBlock): void {
-    this.expr(block.expression, CONSUME);
+    const compared = consuming({ kind: "compare", operator: "===" });
+    this.expr(block.expression, compared);
     for (const group of block.groups) {
-      for (const option of group.cases) if (option.expression !== null) this.expr(option.expression, CONSUME);
+      for (const option of group.cases) if (option.expression !== null) this.expr(option.expression, compared);
       this.nodes(group.children);
     }
   }
@@ -220,7 +227,7 @@ class TemplateFlow extends CombinedRecursiveAstVisitor {
   override visitLetDeclaration(declaration: TmplAstLetDeclaration): void {
     const tracked = this.peek(declaration.value);
     if (tracked !== undefined && startsWith(this.changed, tracked.offset)) this.alias(declaration, tracked.offset, tracked, "template-read", declaration.sourceSpan.start.offset);
-    else this.expr(declaration.value, CONSUME);
+    else this.expr(declaration.value, consuming(HANDED_ON));
   }
 
   private nodes(nodes: readonly Parameters<CombinedRecursiveAstVisitor["visit"]>[0][]): void {
@@ -255,9 +262,9 @@ class TemplateFlow extends CombinedRecursiveAstVisitor {
   private rootOf(read: PropertyRead | SafePropertyRead): Tracked | undefined {
     if (!(read instanceof PropertyRead) || !(read.receiver instanceof ImplicitReceiver)) return undefined;
     const target = read.receiver instanceof ThisReceiver ? null : this.template.bound.getExpressionTarget(read);
-    if (target === null) return read.name === this.carrier.site.member ? { frame: [], offset: [], slots: [], hops: [], guards: [] } : undefined;
+    if (target === null) return read.name === this.carrier.site.member ? { frame: [], offset: [], slots: [], hops: [], guards: [], steps: [] } : undefined;
     const alias = this.aliases.get(target);
-    return alias === undefined ? undefined : { frame: alias.frame, offset: alias.frame, slots: alias.slots, hops: alias.hops, guards: [] };
+    return alias === undefined ? undefined : { frame: alias.frame, offset: alias.frame, slots: alias.slots, hops: alias.hops, guards: [], steps: [] };
   }
 
   private tracks(ast: AST): boolean {
@@ -292,11 +299,18 @@ class TemplateFlow extends CombinedRecursiveAstVisitor {
     if (node instanceof PropertyRead) {
       if (node.receiver instanceof ImplicitReceiver) return this.rootOf(node);
       const receiver = this.chain(node.receiver);
-      return receiver && { ...receiver, offset: [...receiver.offset, node.name] };
+      return receiver && { ...receiver, offset: [...receiver.offset, node.name], steps: this.access(receiver, { kind: "member", name: node.name, optional: false }) };
     }
     if (node instanceof SafePropertyRead) {
       const receiver = this.chain(node.receiver);
-      return receiver && { ...receiver, offset: [...receiver.offset, node.name], guards: [...receiver.guards, this.guard("optional-chain", receiver, BOTH, node)] };
+      return (
+        receiver && {
+          ...receiver,
+          offset: [...receiver.offset, node.name],
+          guards: [...receiver.guards, this.guard("optional-chain", receiver, BOTH, node)],
+          steps: this.access(receiver, { kind: "member", name: node.name, optional: true }),
+        }
+      );
     }
     if (node instanceof KeyedRead || node instanceof SafeKeyedRead) return this.keyed(node);
     if (node instanceof NonNullAssert) {
@@ -314,13 +328,21 @@ class TemplateFlow extends CombinedRecursiveAstVisitor {
     if (receiver === undefined) return undefined;
     const key = core(node.key);
     const guards = node instanceof SafeKeyedRead ? [...receiver.guards, this.guard("optional-chain", receiver, BOTH, node)] : receiver.guards;
+    const optional = node instanceof SafeKeyedRead;
     if (key instanceof LiteralPrimitive && typeof key.value === "number") {
-      return { ...receiver, offset: [...receiver.offset, ELEMENT], slots: [...receiver.slots, `index:${key.value}`], guards };
+      return { ...receiver, offset: [...receiver.offset, ELEMENT], slots: [...receiver.slots, `index:${key.value}`], guards, steps: this.access(receiver, { kind: "keyed", key: key.value, optional }) };
     }
-    if (key instanceof LiteralPrimitive && typeof key.value === "string") return { ...receiver, offset: [...receiver.offset, key.value], guards };
-    this.end({ ...receiver, guards }, opaque("computed-key", "dereference", "dynamic-access"), node);
+    if (key instanceof LiteralPrimitive && typeof key.value === "string") {
+      return { ...receiver, offset: [...receiver.offset, key.value], guards, steps: this.access(receiver, { kind: "keyed", key: key.value, optional }) };
+    }
+    this.end({ ...receiver, guards, steps: this.access(receiver, { kind: "keyed", optional }) }, opaque("computed-key", NONE, "dynamic-access"), node);
     this.expr(node.key, opaque("computed-key"));
     return undefined;
+  }
+
+  private access(receiver: Tracked, step: AccessStep): readonly AccessStep[] {
+    const relation = relatePaths(receiver.offset, this.changed);
+    return relation === "exact" || relation === "beyond" ? [...receiver.steps, step] : receiver.steps;
   }
 
   /** A call without arguments reads a signal only on the carried member or alias and on `value` of a resource: the callee adds no segment. */
@@ -345,8 +367,10 @@ class TemplateFlow extends CombinedRecursiveAstVisitor {
     const reportsState = method !== undefined && holder !== undefined && this.changed[holder.offset.length] === "value" && RESOURCE_STATE_MEMBERS.has(method.name);
     if (holder !== undefined && !reportsState) {
       const guarded = node instanceof SafeCall || method instanceof SafePropertyRead ? [...holder.guards, this.guard("optional-chain", holder, BOTH, node)] : holder.guards;
-      const called = method !== undefined && relatePaths([...holder.offset, method.name], this.changed) === "exact" ? { ...holder, offset: [...holder.offset, method.name] } : holder;
-      this.end({ ...called, guards: guarded }, opaque(`${prefix}:${method?.name ?? "expression"}`, "dereference"), node);
+      const changedMethod = method !== undefined && relatePaths([...holder.offset, method.name], this.changed) === "exact";
+      const called = changedMethod ? { ...holder, offset: [...holder.offset, method.name] } : { ...holder, steps: method === undefined ? holder.steps : this.access(holder, { kind: "member", name: method.name, optional: method instanceof SafePropertyRead }) };
+      const steps = this.access(called, { kind: "call", optional: node instanceof SafeCall });
+      this.end({ ...called, steps, guards: guarded }, opaque(`${prefix}:${method?.name ?? "expression"}`, NONE), node);
     }
     for (const argument of node.args) this.expr(argument, opaque(`call:${method?.name ?? "expression"}`));
     return undefined;
@@ -354,10 +378,10 @@ class TemplateFlow extends CombinedRecursiveAstVisitor {
 
   private expr(ast: AST, sink: Sink): void {
     const node = core(ast);
-    if (node instanceof Interpolation) return node.expressions.forEach((part) => this.expr(part, CONSUME));
+    if (node instanceof Interpolation) return node.expressions.forEach((part) => this.expr(part, consuming(SHOWN)));
     if (node instanceof Chain) return node.expressions.forEach((part) => this.expr(part, sink));
     if (node instanceof Conditional) return this.conditional(node, sink);
-    if (node instanceof Unary) return this.expr(node.expr, CONSUME);
+    if (node instanceof Unary) return this.expr(node.expr, consuming({ kind: "coerce", operator: node.operator }));
     if (node instanceof Binary) return this.binary(node, sink);
     if (node instanceof PrefixNot || node instanceof TypeofExpression || node instanceof VoidExpression) return this.expr(node.expression, TEST);
     if (this.tracks(node)) {
@@ -366,7 +390,7 @@ class TemplateFlow extends CombinedRecursiveAstVisitor {
       return;
     }
     if (node instanceof BindingPipe) {
-      this.expr(node.exp, opaque(`pipe:${node.name}`, "consume"));
+      this.expr(node.exp, opaque(`pipe:${node.name}`, { kind: "consume", as: "handed-on", detail: `pipe:${node.name}` }));
       for (const argument of node.args) this.expr(argument, opaque(`pipe-argument:${node.name}`));
       return;
     }
@@ -400,12 +424,26 @@ class TemplateFlow extends CombinedRecursiveAstVisitor {
       return this.expr(right, sink);
     }
     if (Binary.isAssignmentOperation(operation)) {
-      this.expr(left, CONSUME);
+      this.expr(left, operation === "=" ? TEST : consuming({ kind: "coerce", operator: operation }));
       return this.expr(right, opaque("assignment"));
     }
     const nullish = COMPARISONS.has(operation);
-    this.expr(left, nullish && this.isAbsent(right) ? TEST : CONSUME);
-    this.expr(right, nullish && this.isAbsent(left) ? TEST : CONSUME);
+    const against = (other: AST): Sink => {
+      if (!RELATIONS.has(operation)) return consuming({ kind: "coerce", operator: operation });
+      const literal = this.literalOf(other);
+      return consuming({ kind: "compare", operator: operation, ...(literal === undefined ? {} : { literal }) });
+    };
+    this.expr(left, nullish && this.isAbsent(right) ? TEST : against(right));
+    this.expr(right, nullish && this.isAbsent(left) ? TEST : against(left));
+  }
+
+  private literalOf(ast: AST): Literal | undefined {
+    const node = core(ast);
+    if (node instanceof Unary) {
+      const operand = this.literalOf(node.expr);
+      return node.operator === "-" && typeof operand === "number" ? -operand : undefined;
+    }
+    return node instanceof LiteralPrimitive && (typeof node.value === "string" || typeof node.value === "number" || typeof node.value === "boolean") ? node.value : undefined;
   }
 
   /** `??` and `||` on the changed value: it is replaced where absent, and shown otherwise. */
@@ -413,7 +451,7 @@ class TemplateFlow extends CombinedRecursiveAstVisitor {
     if (!this.tracks(node.left)) return this.expr(node.left, sink);
     const tracked = this.chain(node.left);
     if (tracked === undefined) return;
-    if (relatePaths(tracked.offset, this.changed) === "exact") this.use(tracked, "consume", node.left, [this.guard("fallback", tracked, BOTH, node)]);
+    if (relatePaths(tracked.offset, this.changed) === "exact") this.use(tracked, HANDED_ON, node.left, [this.guard("fallback", tracked, BOTH, node)]);
     else this.end(tracked, sink, node.left);
   }
 
@@ -449,15 +487,15 @@ class TemplateFlow extends CombinedRecursiveAstVisitor {
   private end(tracked: Tracked, sink: Sink, node: AST): void {
     const relation = relatePaths(tracked.offset, this.changed);
     if (relation === "disjoint") return;
-    if (relation === "beyond") return this.use(tracked, "dereference", node);
+    if (relation === "beyond") return this.use(tracked, NONE, node);
     switch (sink.kind) {
       case "test":
         return;
       case "consume":
-        return relation === "contains" ? undefined : this.use(tracked, "consume", node);
+        return relation === "contains" ? undefined : this.use(tracked, sink.end, node);
       case "opaque":
-        if (relation === "contains" || sink.outcome === "frontier") return this.frontier(tracked, sink.cause, sink.detail, node.sourceSpan.start);
-        return this.use(tracked, sink.outcome, node);
+        if (relation === "contains" || sink.end === "frontier") return this.frontier(tracked, sink.cause, sink.detail, node.sourceSpan.start);
+        return this.use(tracked, sink.end, node);
       case "bind":
         return this.bind(tracked, sink, node);
     }
@@ -467,7 +505,7 @@ class TemplateFlow extends CombinedRecursiveAstVisitor {
     return guards.filter((guard) => startsWith(guard.covers, frame)).map((guard) => ({ ...guard, covers: guard.covers.slice(frame.length) }));
   }
 
-  private use(tracked: Tracked, operation: UseOperation, node: AST, extra: readonly Guard[] = []): void {
+  private use(tracked: Tracked, end: UseEnd, node: AST, extra: readonly Guard[] = []): void {
     if (this.quiet) return;
     const site = this.evidence(node.sourceSpan.start);
     this.uses.push({
@@ -476,7 +514,7 @@ class TemplateFlow extends CombinedRecursiveAstVisitor {
         site,
         path: tracked.offset.slice(tracked.frame.length),
         changed: this.changed.slice(tracked.frame.length),
-        operation,
+        operation: { steps: tracked.steps, end },
         guards: this.inFrame(this.applicable(tracked, extra), tracked.frame),
         hops: [...tracked.hops, { step: "template-read", evidence: site }],
       },
@@ -520,14 +558,16 @@ class TemplateFlow extends CombinedRecursiveAstVisitor {
       const relation = relatePaths(tracked.offset, this.changed);
       if (item !== undefined && startsWith(this.changed, element)) this.alias(item, element, tracked, "iterate", offset, [...tracked.slots, `loop:${offset}`]);
       else if (relation === "contains") this.frontier(tracked, "unmodelled-flow", "iterate", offset);
-      else if (relation === "exact") this.use(tracked, "consume", iterable);
+      else if (relation === "exact") this.use(tracked, { kind: "iterate", tolerates: BOTH }, iterable);
     }
     this.expr(iterable, TEST);
   }
 
   private binding(attribute: TmplAstBoundAttribute, matched: readonly DirectiveMeta[], native: Sink): void {
     const value = core(attribute.value);
-    if (value instanceof Interpolation || (attribute.type !== BindingType.Property && attribute.type !== BindingType.TwoWay)) return this.expr(value, CONSUME);
+    if (value instanceof Interpolation || (attribute.type !== BindingType.Property && attribute.type !== BindingType.TwoWay)) {
+      return this.expr(value, consuming(value instanceof Interpolation ? SHOWN : HANDED_ON));
+    }
     this.expr(value, this.sinkOf(attribute, matched, native));
   }
 

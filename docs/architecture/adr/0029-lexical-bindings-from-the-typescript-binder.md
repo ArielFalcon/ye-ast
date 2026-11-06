@@ -1,4 +1,4 @@
-# ADR-0026: The TypeScript compiler's binder is the one source of lexical bindings
+# ADR-0029: The TypeScript compiler's binder is the one source of lexical bindings
 
 - Status: Accepted, 2026-11-06, owner
 - Decision source: the owner, 2026-11-06: "Apruebo" (I approve), on the design reported after the binder probe: one

@@ -2,6 +2,7 @@ import { kindOfChangedFile } from "../../domain/change/changed-file.ts";
 import type { FileChange } from "../../domain/change/diff-reader.ts";
 import { isSeedable, selectSeeds, topLevelOf, type ComponentRef, type SeedSelection, type SelectedSeed } from "../../domain/change/seeds.ts";
 import { comparePosition, compareText } from "../../domain/shared/code-node.ts";
+import { sortedUnique } from "../../domain/impact/importers-fact.ts";
 import { branchesOf, declarationPath, selectedBySymbol, type DeclarationBranch } from "../../domain/shared/declaration-tree.ts";
 import type { Evidence } from "../../domain/shared/fact.ts";
 import type { CodeGraphReader, GraphSymbol } from "../../ports/code-graph.port.ts";
@@ -139,5 +140,5 @@ export function missingTargets(store: CodeGraphReader, requested: readonly { fil
 
 /** The dotted paths of what a file declares that a request can seed, so a symbol that names no node tells the caller what does. */
 function candidatesOf(tree: readonly DeclarationBranch<GraphSymbol>[], isRoot: (symbol: GraphSymbol) => boolean = isSeedable): string[] {
-  return [...new Set(branchesOf(tree).filter(({ declaration }) => isRoot(declaration)).map(declarationPath))].sort(compareText);
+  return sortedUnique(branchesOf(tree).filter(({ declaration }) => isRoot(declaration)).map(declarationPath));
 }

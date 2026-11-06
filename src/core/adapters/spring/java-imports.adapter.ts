@@ -7,9 +7,9 @@ import type { JavaParser, JavaSyntaxTree } from "../tree-sitter/java-parser.adap
 import { createJavaProject, describeFile, namedChildren, type JavaFile, type JavaProject } from "./java-symbols.ts";
 
 /**
- * The import declarations of every Java source, or of the selected ones, each resolved by the types the snapshot's Java sources declare: a type
- * one source declares leads to its file, a name under a platform package is external, anything else is unresolved
- * with its reason. Nothing comes from the graph.
+ * The import declarations of every Java source, or of the selected ones, each resolved by the types the snapshot's Java
+ * sources declare: a type one source declares leads to its file, a name under a platform package is external, anything
+ * else is unresolved with its reason. Nothing comes from the graph.
  */
 export function createJavaImportsReader(parser: JavaParser): ModuleDependenciesReader {
   return {

@@ -39,7 +39,7 @@ the host, never from the repository, so the repository cannot raise a limit.
 | `walk` | depth, hub fan-in, caller-query budget, each optional with no default ([RFC-0010](0010-impact-queries.md)); the score of a heuristic edge without one ([RFC-0003](0003-codegraph-integration.md)) |
 | `budgets` | per-call deadline, answer token budget, fixed-layer size, and the export budget (entries listed, bytes written; [below](#export-budget)). A deadline is wall-clock and not deterministic: a fact it cuts is never stored ([RFC-0002](0002-facts-contract.md) rule 3). Count budgets are deterministic |
 | `redaction` | extra patterns, applied at egress with the built-in ones; by-value secrets only in a process that already holds them (ye-ast's own when the host runs it in that zone, otherwise the host's, with the library's redaction module), passed at run time and never stored. Stored facts are not redacted; the fixed layer applies the patterns only ([RFC-0002](0002-facts-contract.md) rule 7) |
-| `store` | location, disk cap, retention. `.ye-ast/` under `trusted`, the host's location under `untrusted`; codegraph's data directory is `.ye-ast-graph/` ([RFC-0003](0003-codegraph-integration.md)). Without a host the CLI keeps full indexes in a per-user cache, by content ([ADR-0015](../adr/0015-index-reuse-by-content.md), question 4); that cache has no cap or retention yet. The live mirrors under `.ye-ast-graph/live/` are retained: `keepScopes: 3`, `unusedForMs: 14 days`, `maxBytes: 512 MiB` of logical bytes for the whole tree, the scope being answered and any scope a live pid holds never discarded, last use from the state file's mtime ([RFC-0010](0010-impact-queries.md) "Retention") |
+| `store` | location, disk cap, retention. `.ye-ast/` under `trusted`, the host's location under `untrusted`; codegraph's data directory is `.ye-ast-graph/` ([RFC-0003](0003-codegraph-integration.md)). Without a host the CLI keeps full indexes in a per-user cache, by content ([ADR-0015](../adr/0015-index-reuse-by-content.md), question 4); that cache is retained by last use: `unusedForMs: 14 days` and `maxBytes: 512 MiB` of logical bytes, never an entry an open reader holds, a host overriding both through `indexRetention` ([ADR-0027](../adr/0027-retention-of-immutable-index-entries.md)). The live mirrors under `.ye-ast-graph/live/` are retained: `keepScopes: 3`, `unusedForMs: 14 days`, `maxBytes: 512 MiB` of logical bytes for the whole tree, the scope being answered and any scope a live pid holds never discarded, last use from the state file's mtime ([RFC-0010](0010-impact-queries.md) "Retention") |
 | `daemon` (later) | memory caps, idle timeout, indexer concurrency, socket directory |
 | `hooks` (later) | enabled events, latency budget, maximum injected tokens |
 | `telemetry` | off by default; dependency telemetry always off |
@@ -53,7 +53,7 @@ passed to the core as typed values by composition:
 | Budget | Counts | When it runs out |
 |---|---|---|
 | `maxEntries` | Entries of the commit listed (`git ls-tree -r`), of every kind: files, symlinks, submodules | The listing stops at the first entry beyond the budget |
-| `maxBytes` | Bytes of file content written to the export directory | The export stops before the first selected file that does not fit |
+| `maxBytes` | Bytes of file content the export writes to its directory, decided from blob sizes in git's order | The export stops before the first selected file that does not fit |
 
 Both are deterministic count budgets ([RFC-0002](0002-facts-contract.md) rule 3): the entries are taken in git's order
 and the size of a blob is known before a byte of it is written. Exhaustion is a cut, never a silent truncation and never
@@ -61,7 +61,8 @@ a crash: the export answers `ok` with the stop, everything before it is exported
 `caller-budget` cut at the first path not taken and `limit` the budget that ran out. The budget is a profile value, so
 it is part of `inputs.config`: the same commit under another budget is another fact.
 
-Besides the budget, the export holds one chunk of one blob and one listing record at a time, and reads from git only the
+Both budgets are decided by the listing, which reads blob sizes without their content, so the stop is the same whether or
+not the files are then written ([ADR-0028](../adr/0028-lazy-export-materialization.md)). Besides the budget, the export holds one chunk of one blob and one listing record at a time, and reads from git only the
 files the caller selects (for the map, the in-scope sources), so a large asset costs nothing and the listing's bytes
 are never buffered whole.
 
@@ -82,7 +83,8 @@ bookkeeping with the entry count, about 1 KB per listed entry; that is the case 
 ## Snapshot data retained between requests
 
 [ADR-0020](../adr/0020-host-budgeted-snapshot-memory-cache.md) permits an optional in-memory cache for completed SHA
-source reads and entrypoint extraction. [ADR-0021](../adr/0021-enable-snapshot-memory-cache-by-default.md) enables it by default with 32 MiB. A host overrides
+source reads and entrypoint extraction; [ADR-0026](../adr/0026-snapshot-data-may-retain-reader-outputs.md) adds the
+serialized relations and whole-universe module-dependency outputs, each as its own entry. [ADR-0021](../adr/0021-enable-snapshot-memory-cache-by-default.md) enables it by default with 32 MiB. A host overrides
 the budget with `composeQueries({ snapshotCacheBytes })` (also accepted by `composeCli`); an explicit zero disables it. It is a composition setting, never a repository setting
 or an agent tool argument. Zero or an invalid byte budget disables retention.
 
@@ -91,8 +93,9 @@ least-recently-used entries until they fit; an entry larger than the whole budge
 Node's heap bookkeeping, in-flight query data and transient serialization buffers. The cache stores serialized bytes,
 so it holds no source objects, ASTs, temporary-directory paths, open stores or final facts.
 
-Every query still resolves its revision, reads current trust and exports Git into a fresh temporary directory.
-Reuse additionally checks the effective source, SHA, scope, export budget and exact current export listing and cuts.
+Every query still resolves its revision, reads current trust and lists the commit afresh; it writes the listed files
+into a fresh temporary directory only when a reader needs them ([ADR-0028](../adr/0028-lazy-export-materialization.md)):
+a source read that retained data does not serve, or an index build. Reuse additionally checks the effective source, SHA, scope, export budget and exact current export listing and cuts.
 Only successfully completed stages are retained, without shared in-flight work or cancellation. `live` bypasses this
 cache; export-only queries do not restore source data. The lifetime is one composition; dropping it releases retention.
 Cache settings affect cost only and are not fact inputs. The default allocates entries lazily; it reserves no memory up front and retains no export on disk.

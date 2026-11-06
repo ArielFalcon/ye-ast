@@ -611,6 +611,59 @@ test("a method the class or a subclass assigns through this is not read from its
   assert.deepEqual(sites(await reader.of([file], "shop-web")), ["unknown unresolved@paths.ts:6", "unknown unresolved@paths.ts:6", "unknown unresolved@paths.ts:6", "GET /kept@paths.ts:6"]);
 });
 
+test("a class or a function an import names is found through re-exports, local export aliases and default exports", async () => {
+  const base = source("src/app/base.ts", "export class Base { path(): string { return '/old' } }\nexport default Base");
+  const use = source("src/app/use.ts", "import { Base } from './base'\nexport function load(p: Base) { return fetch(p.path()) }");
+  const barrel = source("src/app/barrel.ts", "export { Base as Parent } from './base'");
+  const alias = source("src/app/alias.ts", "import { Base } from './base'\nexport { Base as Root }");
+  const throughBarrel = source("src/app/a.ts", "import { Parent } from './barrel'\nexport class A extends Parent { override path(): string { return '/a' } }");
+  const throughDefault = source("src/app/b.ts", "import Parent from './base'\nexport class B extends Parent { override path(): string { return '/b' } }");
+  const throughAlias = source("src/app/c.ts", "import { Root } from './alias'\nexport class C extends Root { override path(): string { return '/c' } }");
+  const anonymous = source("src/app/d.ts", "import { Base } from './base'\nexport default class extends Base { override path(): string { return '/d' } }");
+  const paths = source("src/app/paths.ts", "export function itemsPath(): string { return '/api/items' }");
+  const index = source("src/app/index.ts", "export * from './paths'");
+  const caller = source("src/app/caller.ts", "import { itemsPath } from './index'\nexport function list() { return fetch(itemsPath()) }");
+
+  assert.deepEqual(sites(await reader.of([base, use], "shop-web")), ["GET /old@src/app/use.ts:2"]);
+  assert.deepEqual(sites(await reader.of([base, use, barrel, throughBarrel], "shop-web")), ["unknown unresolved@src/app/use.ts:2"]);
+  assert.deepEqual(sites(await reader.of([base, use, throughDefault], "shop-web")), ["unknown unresolved@src/app/use.ts:2"]);
+  assert.deepEqual(sites(await reader.of([base, use, alias, throughAlias], "shop-web")), ["unknown unresolved@src/app/use.ts:2"]);
+  assert.deepEqual(sites(await reader.of([base, use, anonymous], "shop-web")), ["unknown unresolved@src/app/use.ts:2"]);
+  assert.deepEqual(sites(await reader.of([paths, index, caller], "shop-web")), ["GET /api/items@src/app/caller.ts:2"]);
+});
+
+test("a member a class anywhere in the instance's hierarchy assigns through this is not read from its declaration", async () => {
+  const file = source("hierarchy.ts", [
+    "class Base { path(): string { return '/old' } constructor() { this.path = () => '/new' } }",
+    "class Child extends Base { override path(): string { return '/child' } }",
+    "class Top { url?: string; reset() { this.url = '/reset' } }",
+    "class Mid extends Top { override url = '/mid' }",
+    "class Leaf extends Mid { load() { fetch(this.url) } }",
+    "export function load(child: Child) { fetch(child.path()) }",
+  ].join("\n"));
+
+  assert.deepEqual(sites(await reader.of([file], "shop-web")), ["unknown unresolved@hierarchy.ts:5", "unknown unresolved@hierarchy.ts:6"]);
+});
+
+test("an override the snapshot cannot read as a method leaves the call undecided", async () => {
+  const file = source("accessor.ts", ["class Base { path(): string { return '/old' } }", "class Child extends Base { get path() { return () => '/new' } }", "export function load(p: Base) { fetch(p.path()) }"].join("\n"));
+
+  assert.deepEqual(sites(await reader.of([file], "shop-web")), ["unknown unresolved@accessor.ts:3"]);
+});
+
+test("a parameter or a local the function assigns or declares again no longer types its receiver", async () => {
+  const file = source("rebound.ts", [
+    "import { HttpClient } from '@angular/common/http'",
+    "import { inject } from '@angular/core'",
+    "export function load(http: HttpClient) { var http = new Map<string, string>() as any; http.get('/cached') }",
+    "export function save(http: HttpClient) { http = other(); http.post('/saved', {}) }",
+    "export function swap() { let http = inject(HttpClient); http = other(); http.get('/swapped') }",
+    "export function keep(http: HttpClient) { const client = inject(HttpClient); http.get('/kept'); client.get('/client') }",
+  ].join("\n"));
+
+  assert.deepEqual(sites(await reader.of([file], "shop-web")), ["GET /kept@rebound.ts:6", "GET /client@rebound.ts:6"]);
+});
+
 test("a receiver a loop or a catch clause binds is not typed by an outer parameter of the same name", async () => {
   const file = source("cache.ts", [
     "import { HttpClient } from '@angular/common/http'",

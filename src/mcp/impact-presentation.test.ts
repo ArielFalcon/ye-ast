@@ -340,22 +340,45 @@ test("workspace base guides retain each owner's own merge base", () => {
   assert.match(output, /Base modules: repo "c", revision unavailable/);
 });
 
-test("text base guides keep every module coordinate when JSON navigation would be shorter", () => {
+test("text base guides keep the literal coordinate and never point at JSON the answer lacks", () => {
   const modules = Array.from({ length: 5 }, (_, i) => ({ file: `src/base-${i}.ts`, snapshot: "base" as const, depth: 0, origins: [] }));
   const local: ImpactValue = { ...impact, mergeBase: "base-a", modules: { origins: [], modules, cost: { expansionsUsed: 0 } } };
   const section: Fact<RepoImpact> = { ...base, status: "complete", value: { reads: [], callSites: [], unmatched: [], external: [], unresolved: [], impact: local } };
   const value: WorkspaceImpactValue = { workspace: { repos: ["a", "b"], gateways: [], unmatchedGateways: [], unserved: [], source: "request" }, repositorySnapshots: [], trigger: { repo: "a" }, sections: { a: section, b: section }, links: [] };
   for (const mode of ["summary", "details"] as const) {
-    const localGuide = renderImpact({ ...fact, value: local }, mode).split("Investigation guide:")[1]!;
-    const workspaceGuide = renderWorkspaceImpact({ ...base, status: "complete", value }, mode).split("Investigation guide:")[1]!;
-    for (const guide of [localGuide, workspaceGuide]) {
-      assert.doesNotMatch(guide, /value\.(repositorySnapshots|sections|modules)/);
-      for (const module of modules) assert.ok(guide.includes(JSON.stringify(module.file)));
+    const localText = renderImpact({ ...fact, value: local }, mode);
+    const workspaceText = renderWorkspaceImpact({ ...base, status: "complete", value }, mode);
+    for (const text of [localText, workspaceText]) {
+      assert.doesNotMatch(text.split("Investigation guide:")[1]!, /value\.(repositorySnapshots|sections|modules)/);
+      for (const module of modules) assert.ok(text.includes(JSON.stringify(module.file)) || text.includes(module.file));
     }
-    for (const repo of ["a", "b"]) {
-      for (const module of modules) assert.ok(workspaceGuide.includes(`repo ${JSON.stringify(repo)}, revision "base-a", file ${JSON.stringify(module.file)}`));
-    }
+    for (const repo of ["a", "b"]) assert.match(workspaceText, new RegExp(`Base modules \\(5\\): repo "${repo}", revision "base-a"`));
   }
+});
+
+test("text base guides stay bounded as base modules grow and name the full-mode recovery", () => {
+  const guideFor = (count: number, mode: "summary" | "details"): string => {
+    const modules = Array.from({ length: count }, (_, i) => ({ file: `src/base-${i}.ts`, snapshot: "base" as const, depth: 0, origins: [] }));
+    const local: ImpactValue = { ...impact, mergeBase: "base-a", modules: { origins: [], modules, cost: { expansionsUsed: 0 } } };
+    return renderImpact({ ...fact, value: local }, mode).split("Investigation guide:")[1]!;
+  };
+  for (const mode of ["summary", "details"] as const) {
+    const small = guideFor(40, mode);
+    const large = guideFor(400, mode);
+    assert.equal(large.split("\n").length, small.split("\n").length);
+    assert.match(large, /Base modules \(400\): repo "a", revision "base-a"/);
+    assert.match(large, /mode: "full" lists every one/);
+    assert.doesNotMatch(large, /Base module: /);
+    assert.doesNotMatch(large, /value\.modules/);
+  }
+});
+
+test("full mode keeps its base module guide", () => {
+  const modules = Array.from({ length: 400 }, (_, i) => ({ file: `src/base-${i}.ts`, snapshot: "base" as const, depth: 0, origins: [] }));
+  const local: ImpactValue = { ...impact, mergeBase: "base-a", modules: { origins: [], modules, cost: { expansionsUsed: 0 } } };
+  const guide = renderImpact({ ...fact, value: local }, "full").split("Investigation guide:")[1]!;
+  assert.match(guide, /Base modules: repo "a", revision "base-a"; inspect value\.modules\.modules\[\] for each base module's file/);
+  assert.doesNotMatch(guide, /Base module: /);
 });
 
 test("reached handlers share selector owner while preserving every origin association", () => {

@@ -23,6 +23,8 @@ import type { ImportOrigin } from "../../domain/relations/resolved-reference.ts"
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { ModuleDependenciesReader } from "../../ports/module-dependencies.port.ts";
 import type { ModuleDependency } from "../../domain/impact/module-dependency.ts";
+import { createSnapshotDataCache } from "../snapshot/snapshot-data-cache.ts";
+import type { SnapshotDataCache } from "../snapshot/read-snapshot.ts";
 
 const HEAD = "a".repeat(40);
 const BASE = "b".repeat(40);
@@ -52,6 +54,10 @@ interface Options {
   signal?: AbortSignal;
   /** Gives the queries an index cache that answers with the fault, or with the fake store when `true`. */
   cache?: true | CodeGraphFault;
+  /** With `cache`, the kept index is absent: the cache asks the caller to prepare the snapshot, as it does before a build. */
+  buildIndex?: true;
+  /** The Vcs lists and writes apart; `materialize` answers the fault when given. */
+  lazy?: { list?: VcsFault; materialize?: VcsFault };
   trust?: TrustRecordReader;
   live?: FakeLive;
   /** What `diffDirectories` answers. */
@@ -64,13 +70,14 @@ interface Options {
   /** Reads the imports of those sources, as composition wires it. */
   importOrigins?: ImportOriginsReader;
   moduleDependencies?: ModuleDependenciesReader;
+  snapshotCache?: SnapshotDataCache;
   snapshotSources?: Partial<Record<string, SourceFile[]>>;
   /** The files the unmodelled-constructs reader marks among the sources it receives. */
   unmodelled?: readonly string[];
 }
 
 function setup(options: Options = {}) {
-  const log = { exported: [] as string[], plans: [] as { sha: string; destination: string; wanted: string[] }[], compared: [] as [string, string][], created: [] as string[], removed: [] as string[], indexed: 0, closed: 0, reads: 0, extractions: 0, obtained: [] as string[] };
+  const log = { exported: [] as string[], plans: [] as { sha: string; destination: string; wanted: string[] }[], compared: [] as [string, string][], created: [] as string[], removed: [] as string[], indexed: 0, closed: 0, reads: 0, extractions: 0, obtained: [] as string[], listed: [] as string[], materialized: [] as string[] };
   const nodes = options.nodes ?? [];
   const reader: CodeGraphReader = { ...fakeCodeGraph(nodes, options.edges ?? [], options.unresolved ?? []), close: () => void log.closed++ };
   const vcs: Vcs & VcsChanges = {
@@ -93,6 +100,17 @@ function setup(options: Options = {}) {
       return { ok: true, value: listed };
     },
   };
+  if (options.lazy) {
+    const lazy = options.lazy;
+    vcs.listCommit = async (_repo, sha) => {
+      log.listed.push(sha);
+      return lazy.list ? { ok: false, fault: lazy.list } : { ok: true, value: options.exports?.[sha] ?? { files: [{ path: "src/A.java", blob: "1", written: true }], skipped: [] } };
+    };
+    vcs.materializeCommit = async (_repo, _files, destination) => {
+      log.materialized.push(destination);
+      return lazy.materialize ? { ok: false, fault: lazy.materialize } : { ok: true, value: undefined };
+    };
+  }
   const graph: CodeGraph = {
     buildMirror: async () => ({ ok: false, fault: { kind: "index-failed", detail: "not used" } }),
     syncMirror: async () => ({ ok: false, fault: { kind: "index-failed", detail: "not used" } }),
@@ -120,8 +138,10 @@ function setup(options: Options = {}) {
     graph,
     ...(options.cache && {
       indexes: {
-        obtain: async ({ content }) => {
+        obtain: async ({ content, prepare }) => {
           log.obtained.push(content);
+          const ready = options.buildIndex ? await prepare?.() : undefined;
+          if (ready && !ready.ok) return ready;
           return options.cache === true ? { ok: true, value: { store: reader, summary: SUMMARY } } : { ok: false, fault: options.cache! };
         },
       },
@@ -138,6 +158,7 @@ function setup(options: Options = {}) {
     ...(options.importOrigins && { importOrigins: options.importOrigins }),
     ...(options.trivia && { sourceTrivia: { triviaLines: async (file: SourceFile) => new Set(options.trivia?.[file.path] ?? []) } }),
     ...(options.moduleDependencies && { moduleDependencies: options.moduleDependencies }),
+    ...(options.snapshotCache && { snapshotCache: options.snapshotCache }),
     ...(options.unmodelled && { unmodelled: { extract: async (sources) => sources.map(({ path }) => path).filter((path) => options.unmodelled!.includes(path)) } }),
   };
   const request: AtRevision<ImpactOfChangeRequest> = { repo: "/repo", repoId: "repo", base: "base", head: "head", ...(options.signal && { signal: options.signal }) };
@@ -436,6 +457,24 @@ test("a reference whose rooted name the file imports from outside the repository
 
   assert.deepEqual(withoutImports.status === "partial" && withoutImports.cuts, [{ kind: "unresolved-link", at: ["src/A.ts::tap", "src/A.ts:7"] }]);
   assert.equal(withImports.status, "complete");
+});
+
+test("the head's unresolved references are read from the store once per request, for the proofs and for the walk alike", async () => {
+  const nodes = [fakeNode("tap", "function", "src/A.ts", 1, 3)];
+  const unresolved = [{ from: "f", name: "tap", kind: "calls", file: "src/A.ts", line: 7, column: 0 }];
+  const exports: Options["exports"] = { [HEAD]: { files: [{ path: "src/A.ts", blob: "1", written: true }], skipped: [] } };
+  const changes: Result<readonly FileChange[], VcsFault> = { ok: true, value: [change("src/A.ts", { added: [{ start: 2, end: 2 }] })] };
+  const reads = async (ask: (queries: ReturnType<typeof setup>) => Promise<unknown>, withOrigins: boolean): Promise<number> => {
+    const store = fakeCodeGraph(nodes, [], unresolved);
+    const counted: string[][] = [];
+    const queries = setup({ changes, nodes, unresolved, exports, ...(withOrigins && { importOrigins: externalImports(["tap"]) }), open: { ok: true, value: { ...store, unresolvedReferences: (files) => { counted.push([...files]); return store.unresolvedReferences(files); } } } });
+    await ask(queries);
+    return counted.length;
+  };
+  for (const withOrigins of [true, false]) {
+    assert.equal(await reads((queries) => queries.ask(), withOrigins), 1);
+    assert.equal(await reads((queries) => queries.callers({ targets: [{ file: "src/A.ts", symbol: "tap" }] }), withOrigins), 1);
+  }
 });
 
 test("an external proof retires its own reference, never another one that shares its line", async () => {
@@ -1581,6 +1620,167 @@ test("an edge the walk reads only once a dropped one frees a bound is checked as
   const answer = callersFact(await setup({ nodes, edges, importOrigins: rootsAtLines([20, 40]) }).callers({ targets: [{ file: "src/t.ts", symbol: "T" }], budget: { hubFanIn: 1 } }));
 
   assert.deepEqual(reachedNames(answer), ["T", "X", "P"]);
+});
+
+const RETAINED_BYTES = 1 << 20;
+
+function relationsCounted(counter: { calls: number }, relations: Finding<Relation>[] = []): ImpactQueriesDeps["relations"] {
+  return { extract: async () => { counter.calls++; return { relations, fields: [], locals: [] }; } };
+}
+
+test("a second callers request at the same snapshot and inputs reads the relations once and answers what a miss answers", async () => {
+  const snapshotCache = createSnapshotDataCache(RETAINED_BYTES);
+  const counter = { calls: 0 };
+  const targets = { targets: [{ file: "src/A.java", symbol: "f" }] };
+  const shared = { nodes: SOURCE_NODES, edges: SOURCE_EDGES, snapshotCache, relationReader: relationsCounted(counter) };
+  const miss = callersFact(await setup(shared).callers(targets));
+  const hit = callersFact(await setup(shared).callers(targets));
+  assert.equal(counter.calls, 1);
+  assert.deepEqual(hit, miss);
+  const uncached = callersFact(await setup({ nodes: SOURCE_NODES, edges: SOURCE_EDGES, relationReader: relationsCounted({ calls: 0 }) }).callers(targets));
+  assert.equal(canonicalJson(hit), canonicalJson(uncached));
+});
+
+test("each input the relations depend on, scope, export listing, revision and sources, gets its own retained output", async () => {
+  const snapshotCache = createSnapshotDataCache(RETAINED_BYTES);
+  const counter = { calls: 0 };
+  const targets = { targets: [{ file: "src/A.java", symbol: "f" }] };
+  const base = { nodes: SOURCE_NODES, edges: SOURCE_EDGES, snapshotCache, relationReader: relationsCounted(counter) };
+  const listed = (blob: string, skipped: CommitExport["skipped"] = []): CommitExport => ({ files: [{ path: "src/A.java", blob, written: true }], skipped });
+  await setup(base).callers(targets);
+  assert.equal(counter.calls, 1);
+  await setup(base).callers({ ...targets, scope: { exclude: ["docs/**"] } });
+  assert.equal(counter.calls, 2);
+  await setup({ ...base, exports: { [HEAD]: listed("1", [{ path: "src/link.ts", reason: "symlink" }]) } }).callers(targets);
+  assert.equal(counter.calls, 3);
+  await setup({ ...base, exports: { [HEAD]: listed("2") } }).callers(targets);
+  assert.equal(counter.calls, 4);
+  await setup(base).callers({ ...targets, revision: "other" });
+  assert.equal(counter.calls, 5);
+  await setup({ ...base, exports: { [HEAD]: listed("2") } }).callers(targets);
+  assert.equal(counter.calls, 5);
+});
+
+test("a cancelled relations extraction publishes no output", async () => {
+  const snapshotCache = createSnapshotDataCache(RETAINED_BYTES);
+  const counter = { calls: 0 };
+  const controller = new AbortController();
+  const targets = { targets: [{ file: "src/A.java", symbol: "f" }] };
+  const cancelling: ImpactQueriesDeps["relations"] = { extract: async () => { counter.calls++; controller.abort(); return { relations: [], fields: [], locals: [] }; } };
+  const base = { nodes: SOURCE_NODES, edges: SOURCE_EDGES, snapshotCache };
+  const cancelled = await setup({ ...base, relationReader: cancelling, signal: controller.signal }).callers(targets);
+  assert.ok(!cancelled.ok && cancelled.fault.kind === "aborted");
+  assert.equal(counter.calls, 1);
+  assert.ok((await setup({ ...base, relationReader: relationsCounted(counter) }).callers(targets)).ok);
+  assert.equal(counter.calls, 2);
+  assert.ok((await setup({ ...base, relationReader: relationsCounted(counter) }).callers(targets)).ok);
+  assert.equal(counter.calls, 2);
+});
+
+test("a retained output larger than the whole budget is skipped and the answer is unchanged", async () => {
+  const counter = { calls: 0 };
+  const targets = { targets: [{ file: "src/A.java", symbol: "f" }] };
+  const shared = { nodes: SOURCE_NODES, edges: SOURCE_EDGES, relationReader: relationsCounted(counter) };
+  const retained = callersFact(await setup({ ...shared, snapshotCache: createSnapshotDataCache(RETAINED_BYTES) }).callers(targets));
+  const tinyCache = createSnapshotDataCache(8);
+  const skipped = callersFact(await setup({ ...shared, snapshotCache: tinyCache }).callers(targets));
+  await setup({ ...shared, snapshotCache: tinyCache }).callers(targets);
+  assert.equal(counter.calls, 3);
+  assert.deepEqual(skipped, retained);
+});
+
+const LAZY_TARGETS = { targets: [{ file: "src/A.java", symbol: "f" }] };
+
+test("a kept index and retained snapshot data need no file written, and a snapshot that needs both writes once", async () => {
+  const snapshotCache = createSnapshotDataCache(RETAINED_BYTES);
+  const shared = { nodes: SOURCE_NODES, edges: SOURCE_EDGES, snapshotCache, cache: true as const, lazy: {} };
+  const built = setup({ ...shared, buildIndex: true });
+  const miss = callersFact(await built.callers(LAZY_TARGETS));
+  const kept = setup(shared);
+  const hit = callersFact(await kept.callers(LAZY_TARGETS));
+
+  assert.deepEqual(built.log.listed, [HEAD]);
+  assert.equal(built.log.materialized.length, 1);
+  assert.deepEqual(kept.log.listed, [HEAD]);
+  assert.deepEqual(kept.log.materialized, []);
+  assert.deepEqual(hit, miss);
+});
+
+test("a snapshot written apart answers what one written while it was listed answers", async () => {
+  const shared = { nodes: SOURCE_NODES, edges: SOURCE_EDGES, cache: true as const, buildIndex: true as const };
+  const apart = callersFact(await setup({ ...shared, lazy: {} }).callers(LAZY_TARGETS));
+  const together = callersFact(await setup(shared).callers(LAZY_TARGETS));
+
+  assert.equal(canonicalJson(apart), canonicalJson(together));
+});
+
+test("a file that cannot be written is the fault of the source read, and of the index build that needs it, with its own kind", async () => {
+  const lazy = { materialize: { kind: "export-write-failed", detail: "disk" } } as const;
+  const sources = await setup({ nodes: SOURCE_NODES, edges: SOURCE_EDGES, lazy }).callers(LAZY_TARGETS);
+  assert.ok(!sources.ok && sources.fault.kind === "export-write-failed");
+
+  const snapshotCache = createSnapshotDataCache(RETAINED_BYTES);
+  const shared = { nodes: SOURCE_NODES, edges: SOURCE_EDGES, snapshotCache, cache: true as const, buildIndex: true as const };
+  callersFact(await setup({ ...shared, lazy: {} }).callers(LAZY_TARGETS));
+  const build = await setup({ ...shared, lazy }).callers(LAZY_TARGETS);
+  assert.ok(!build.ok && build.fault.kind === "export-write-failed");
+});
+
+test("a current listing fault wins over retained data and a kept index, and writes nothing", async () => {
+  const snapshotCache = createSnapshotDataCache(RETAINED_BYTES);
+  const shared = { nodes: SOURCE_NODES, edges: SOURCE_EDGES, snapshotCache, cache: true as const };
+  callersFact(await setup({ ...shared, lazy: {} }).callers(LAZY_TARGETS));
+  const faulty = setup({ ...shared, lazy: { list: { kind: "object-missing", detail: "gone" } } });
+  const answer = await faulty.callers(LAZY_TARGETS);
+
+  assert.ok(!answer.ok && answer.fault.kind === "object-missing");
+  assert.deepEqual(faulty.log.materialized, []);
+});
+
+function modulesCounted(counter: { calls: number; options: unknown[] }): ModuleDependenciesReader {
+  return { extract: async (sources, options) => { counter.calls++; counter.options.push(options); return { files: sources.map((source) => ({ file: source.path, statements: [source.content], moduleOnly: true })), dependencies: [], unread: [], untraversed: [] }; } };
+}
+
+test("a second importers request at the same snapshot reads the module dependencies once and answers what a miss answers", async () => {
+  const snapshotCache = createSnapshotDataCache(RETAINED_BYTES);
+  const counter = { calls: 0, options: [] as unknown[] };
+  const files = { files: ["src/A.java"] };
+  const shared = { nodes: SOURCE_NODES, edges: SOURCE_EDGES, snapshotCache, moduleDependencies: modulesCounted(counter) };
+  const miss = await setup(shared).importers(files);
+  const hit = await setup(shared).importers(files);
+  assert.ok(miss.ok && hit.ok);
+  assert.equal(counter.calls, 1);
+  assert.deepEqual(hit, miss);
+  const uncached = await setup({ nodes: SOURCE_NODES, edges: SOURCE_EDGES, moduleDependencies: modulesCounted({ calls: 0, options: [] }) }).importers(files);
+  assert.equal(canonicalJson(hit), canonicalJson(uncached));
+  await setup({ ...shared, exports: { [HEAD]: { files: [{ path: "src/A.java", blob: "2", written: true }], skipped: [] } } }).importers(files);
+  assert.equal(counter.calls, 2);
+});
+
+test("an impact of change reads each snapshot's module dependencies once across requests", async () => {
+  const snapshotCache = createSnapshotDataCache(RETAINED_BYTES);
+  const counter = { calls: 0, options: [] as unknown[] };
+  const shared = { snapshotCache, changes: { ok: true, value: [change("src/index.ts")] } as Result<readonly FileChange[], VcsFault>, moduleDependencies: modulesCounted(counter) };
+  const miss = fact(await setup(shared).ask());
+  const afterMiss = counter.calls;
+  assert.ok(afterMiss > 0);
+  const hit = fact(await setup(shared).ask());
+  assert.equal(counter.calls, afterMiss);
+  assert.deepEqual(hit, miss);
+});
+
+test("a cancelled module dependencies read publishes no output", async () => {
+  const snapshotCache = createSnapshotDataCache(RETAINED_BYTES);
+  const counter = { calls: 0, options: [] as unknown[] };
+  const controller = new AbortController();
+  const cancelling: ModuleDependenciesReader = { extract: async () => { counter.calls++; controller.abort(); return { files: [], dependencies: [], unread: [] }; } };
+  const files = { files: ["src/A.java"] };
+  const base = { nodes: SOURCE_NODES, edges: SOURCE_EDGES, snapshotCache };
+  const cancelled = await setup({ ...base, moduleDependencies: cancelling, signal: controller.signal }).importers(files);
+  assert.ok(!cancelled.ok);
+  assert.equal(counter.calls, 1);
+  assert.ok((await setup({ ...base, moduleDependencies: modulesCounted(counter) }).importers(files)).ok);
+  assert.equal(counter.calls, 2);
 });
 
 test("importers judge only the edges from other files, with the module statements the query already read", async () => {

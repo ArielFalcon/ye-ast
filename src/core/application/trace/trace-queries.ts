@@ -60,6 +60,7 @@ export function createTraceQueries(deps: TraceQueriesDeps): TraceQueries {
         const index = await head.open();
         if (index === "aborted") return ABORTED;
         if (index === "unavailable") return { ok: true, value: { ...head.base(content), status: "unknown", reason: "index-unavailable" } };
+        if ("fault" in index) return { ok: false, fault: index.fault };
         const { store, summary } = index;
         try {
           const trivia = triviaOncePerFile(deps.sourceTrivia);

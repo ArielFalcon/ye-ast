@@ -5,7 +5,7 @@ import type { PathSelection } from "../../domain/shared/scope.ts";
 import type { ScratchDirectory } from "../../ports/scratch-directory.port.ts";
 import { isInMapScope } from "../../domain/map/entrypoint-map.ts";
 import type { VcsFault } from "../../ports/vcs.port.ts";
-import { ABORTED, exportCommit, extractSources, readSources, withScratch, type CommitExtraction, type SnapshotReaderDeps, type PreparedCommit, type SnapshotPreparation } from "./read-snapshot.ts";
+import { ABORTED, extractSources, listExport, readSources, withScratch, type CommitExtraction, type SnapshotReaderDeps, type PreparedCommit, type SnapshotPreparation } from "./read-snapshot.ts";
 
 type Sources = Pick<CommitExtraction, "export" | "sources">;
 
@@ -37,8 +37,15 @@ export async function prepareCommit(
   if (signal?.aborted) return ABORTED;
   const key = canonicalJson({ repo, sha, ...context, budget: deps.budget ?? null });
   const build = async (root: string): Promise<Result<PreparedCommit, VcsFault>> => {
-    const exported = await exportCommit(deps, repo, sha, root, selected, signal);
-    if (!exported.ok) return exported;
+    const listed = await listExport(deps, repo, sha, root, selected, signal);
+    if (!listed.ok) return listed;
+    const exported = { ok: true as const, value: listed.value.export };
+    let written: Promise<Result<void, VcsFault>> | undefined;
+    const materialize = async (signal?: AbortSignal): Promise<Result<void, VcsFault>> => {
+      if (signal?.aborted) return ABORTED;
+      const answer = await (written ??= listed.value.materialize(signal));
+      return signal?.aborted ? ABORTED : answer;
+    };
     const cache = deps.snapshotCache;
     let cacheKey: string | undefined;
     let loaded: Sources | undefined;
@@ -53,6 +60,8 @@ export async function prepareCommit(
         if (retained.findings !== undefined) extracted = { ...loaded, findings: retained.findings };
         return { ok: true, value: loaded };
       }
+      const ready = await materialize(signal);
+      if (!ready.ok) return ready;
       const answer = await readSources(deps, root, exported.value, signal);
       if (answer.ok) {
         loaded = answer.value;
@@ -64,6 +73,7 @@ export async function prepareCommit(
       ok: true,
       value: {
         root,
+        materialize,
         tree: { export: exported.value },
         sources,
         async extract(signal?: AbortSignal) {
@@ -79,6 +89,17 @@ export async function prepareCommit(
             if (cacheKey !== undefined && !extracted.findings.some((finding) => finding.status === "unknown" && finding.reason === "deadline")) cache?.put(cacheKey, { sources: extracted.sources, findings: extracted.findings });
           }
           return answer;
+        },
+        async retained<T>(slot: string, produce: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+          if (cache === undefined || cacheKey === undefined) return produce();
+          const outputKey = deps.digest.of(canonicalJson({ entry: cacheKey, output: slot }));
+          const kept = cache.get(outputKey);
+          if (kept?.output !== undefined) return kept.output as T;
+          const output = await produce();
+          if (signal?.aborted) return output;
+          const serialized = JSON.parse(JSON.stringify(output)) as T;
+          cache.put(outputKey, { sources: [], output: serialized });
+          return serialized;
         },
       },
     };

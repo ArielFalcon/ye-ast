@@ -42,6 +42,11 @@ export interface GitDeps {
    * configuration empty; a line is valid only during the call. When `onLine` throws, the git process is killed.
    */
   streamLines(repo: string, args: readonly string[], onLine: (line: string) => void, signal?: AbortSignal): Promise<GitRun>;
+  /**
+   * Streams the byte length of each blob, in order, through `cat-file --batch-check`, without its content: `null` for a
+   * blob the object store lacks. When `onSize` throws, the git process is killed.
+   */
+  checkBlobs(repo: string, blobs: readonly string[], onSize: (size: number | null) => void, signal?: AbortSignal): Promise<GitRun>;
   /** Streams the content of each blob, in order, through `cat-file --batch`. When the sink throws, the git process is killed. */
   streamBlobs(repo: string, blobs: readonly string[], sink: BlobSink, signal?: AbortSignal): Promise<GitRun>;
 }
@@ -91,6 +96,8 @@ export const defaultGitDeps: GitDeps = {
   streamRecords: (repo, args, onRecord, signal) => spawnGit(repo, args, (stdout) => readRecords(stdout, onRecord, NUL), "", false, signal),
   streamLines: (repo, args, onLine, signal) =>
     spawnGit(repo, args, (stdout) => readRecords(stdout, (line) => onLine(line.toString("utf8")), NEWLINE), "", true, signal),
+  checkBlobs: (repo, blobs, onSize, signal) =>
+    spawnGit(repo, ["cat-file", "--batch-check"], (stdout) => readRecords(stdout, (line) => onSize(blobSize(line)), NEWLINE), `${blobs.join("\n")}\n`, false, signal),
   streamBlobs: (repo, blobs, sink, signal) =>
     spawnGit(repo, ["cat-file", "--batch"], (stdout) => readBatch(stdout, blobs.length, sink), `${blobs.join("\n")}\n`, false, signal),
 };
@@ -121,7 +128,7 @@ export function createGitVcs(deps: GitDeps = defaultGitDeps): Vcs & VcsChanges {
     return { ok: true, value: run.stdout.toString("utf8").trim() };
   }
 
-  async function exportCommit(repo: string, sha: string, destination: string, plan: ExportPlan, signal?: AbortSignal): Promise<Result<CommitExport, VcsFault>> {
+  async function listCommit(repo: string, sha: string, plan: ExportPlan, signal?: AbortSignal): Promise<Result<CommitExport, VcsFault>> {
     const resolved = await resolveCommit(repo, sha, signal);
     if (!resolved.ok) return resolved;
     if (resolved.value !== sha) return { ok: false, fault: { kind: "unknown-revision", detail: `${sha} is not a full commit sha` } };
@@ -160,49 +167,80 @@ export function createGitVcs(deps: GitDeps = defaultGitDeps): Vcs & VcsChanges {
     let failure: VcsFault | undefined;
     let blobStop: ExportStop | undefined;
     let bytes = 0;
+    let index = 0;
+    const checked = selected.length === 0 ? undefined : await deps.checkBlobs(
+      repo,
+      selected.map((file) => file.blob),
+      (size) => {
+        const file = selected[index++];
+        if (file === undefined) return;
+        if (signal?.aborted) {
+          failure = ABORTED_FAULT;
+          throw new ExportStopped(ABORTED_FAULT);
+        }
+        if (size === null) {
+          failure = { kind: "object-missing", detail: `${file.blob} of ${file.path} is not in the local object store` };
+          throw new ExportStopped(failure);
+        }
+        if (bytes + size > maxBytes) {
+          blobStop = { at: file.path, limit: maxBytes };
+          throw new BudgetExhausted();
+        }
+        bytes += size;
+        file.written = true;
+      },
+      signal,
+    );
+    if (failure !== undefined) return { ok: false, fault: failure };
+    if (signal?.aborted) return ABORTED;
+    if (checked !== undefined && blobStop === undefined && checked.code !== 0) return gitFailed(checked);
+    const stopped = blobStop ?? listingStop;
+    return { ok: true, value: { files, skipped, ...(stopped === undefined ? {} : { stopped }) } };
+  }
+
+  async function materializeCommit(repo: string, files: readonly ExportedFile[], destination: string, signal?: AbortSignal): Promise<Result<void, VcsFault>> {
+    const written = files.filter((file) => file.written);
+    if (written.length === 0) return { ok: true, value: undefined };
+    let failure: VcsFault | undefined;
     let output: FileHandle | undefined;
-    let current: ExportedFile | undefined;
     const guarded = <Args extends unknown[]>(step: (...args: Args) => Promise<void>) => async (...args: Args): Promise<void> => {
       try {
         await step(...args);
       } catch (error) {
-        if (!(error instanceof BudgetExhausted)) {
-          failure = error instanceof ExportStopped ? error.fault : { kind: "export-write-failed", detail: errorDetail(error) };
-        }
+        failure = error instanceof ExportStopped ? error.fault : { kind: "export-write-failed", detail: errorDetail(error) };
         throw error;
       }
     };
     const sink: BlobSink = {
       start: guarded(async (index, size) => {
         if (signal?.aborted) throw new ExportStopped(ABORTED_FAULT);
-        const file = selected[index]!;
+        const file = written[index]!;
         if (size === null) {
           throw new ExportStopped({ kind: "object-missing", detail: `${file.blob} of ${file.path} is not in the local object store` });
-        }
-        if (bytes + size > maxBytes) {
-          blobStop = { at: file.path, limit: maxBytes };
-          throw new BudgetExhausted();
         }
         const target = join(destination, file.path);
         await mkdir(dirname(target), { recursive: true });
         output = await open(target, "wx");
-        current = file;
-        bytes += size;
       }),
       write: guarded((chunk) => output!.writeFile(chunk)),
       finish: guarded(async () => {
         await output!.close();
         output = undefined;
-        current!.written = true;
       }),
     };
-    const streamed = await deps.streamBlobs(repo, selected.map((file) => file.blob), sink, signal);
+    const streamed = await deps.streamBlobs(repo, written.map((file) => file.blob), sink, signal);
     await output?.close().catch(() => undefined);
     if (failure !== undefined) return { ok: false, fault: failure };
     if (signal?.aborted) return ABORTED;
-    if (blobStop === undefined && streamed.code !== 0) return gitFailed(streamed);
-    const stopped = blobStop ?? listingStop;
-    return { ok: true, value: { files, skipped, ...(stopped === undefined ? {} : { stopped }) } };
+    if (streamed.code !== 0) return gitFailed(streamed);
+    return { ok: true, value: undefined };
+  }
+
+  async function exportCommit(repo: string, sha: string, destination: string, plan: ExportPlan, signal?: AbortSignal): Promise<Result<CommitExport, VcsFault>> {
+    const listed = await listCommit(repo, sha, plan, signal);
+    if (!listed.ok) return listed;
+    const written = await materializeCommit(repo, listed.value.files, destination, signal);
+    return written.ok ? listed : written;
   }
 
   async function mergeBase(repo: string, first: string, second: string, signal?: AbortSignal): Promise<Result<string, VcsFault>> {
@@ -270,7 +308,7 @@ export function createGitVcs(deps: GitDeps = defaultGitDeps): Vcs & VcsChanges {
     return { ok: true, value: basename(main) };
   }
 
-  return { canonicalRoot, resolveCommit, exportCommit, mergeBase, diffCommits, diffDirectories, remotes, headBranch, repositoryName };
+  return { canonicalRoot, resolveCommit, exportCommit, listCommit, materializeCommit, mergeBase, diffCommits, diffDirectories, remotes, headBranch, repositoryName };
 }
 
 /**
@@ -397,6 +435,14 @@ async function readRecords(stdout: AsyncIterable<Buffer>, onRecord: (record: Buf
     pending = Buffer.concat([pending, chunk.subarray(start)]);
   }
   return Buffer.alloc(0);
+}
+
+/** The length a `cat-file --batch-check` line states, or `null` for a blob the object store lacks. */
+function blobSize(line: Buffer): number | null {
+  const fields = line.toString("utf8").split(" ");
+  if (fields[1] === "missing") return null;
+  if (fields[1] !== "blob") throw new CatFileProtocolError(fields.join(" "));
+  return Number(fields[2]);
 }
 
 async function readBatch(stdout: AsyncIterable<Buffer>, count: number, sink: BlobSink): Promise<Buffer> {

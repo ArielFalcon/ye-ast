@@ -8,19 +8,19 @@ export interface BoundFile {
   tree: ts.SourceFile;
   /** Answers only for a name read in a lexical position; a key, a member name, a type or a JSX name answers `none`. */
   bindingOf(identifier: ts.Identifier): LexicalBinding;
-  /** How many types the program's checker holds; ADR-0026 keeps it at the count the program started with. */
+  /** How many types the program's checker holds; ADR-0029 keeps it at the count the program started with. */
   typeCount(): number;
   /** The identifier spelled `name` that starts at `start`, an offset into the file's text. */
   identifierAt(start: number, name: string): ts.Identifier | undefined;
 }
 
-/** One file alone: no library, no module resolution, no configuration; the binder sees nothing but the file (ADR-0026). */
+/** One file alone: no library, no module resolution, no configuration; the binder sees nothing but the file (ADR-0029). */
 const OPTIONS: ts.CompilerOptions = { noLib: true, noResolve: true, types: [], allowJs: true, noEmit: true, target: ts.ScriptTarget.Latest };
 const NONE: LexicalBinding = { kind: "none" };
 const DYNAMIC: LexicalBinding = { kind: "dynamic" };
 
 /**
- * Binds one source through a program over that file alone, with the compiler's own scoping (ADR-0026). The caller asks
+ * Binds one source through a program over that file alone, with the compiler's own scoping (ADR-0029). The caller asks
  * the names it needs and drops the result; nothing here asks for a type.
  */
 export function bindFile(path: string, content: string): BoundFile {

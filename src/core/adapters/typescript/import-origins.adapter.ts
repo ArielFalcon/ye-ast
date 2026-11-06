@@ -4,7 +4,7 @@ import { declarationCounts, declaredNames, isStatic, scriptGlobalNames } from ".
 import { moduleStatement } from "./import-bindings.ts";
 import { sourceTree } from "./source-tree.ts";
 import { bindFile, type LexicalBinding } from "./lexical-bindings.ts";
-import { isPackageManifest, isTypeScriptSource } from "../../domain/languages/typescript.ts";
+import { isTypeScriptSource } from "../../domain/languages/typescript.ts";
 import type { ImportOrigin } from "../../domain/relations/resolved-reference.ts";
 import type { Evidence, Finding } from "../../domain/shared/fact.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
@@ -44,10 +44,10 @@ const parseWithParents: ParseSource = (file) => sourceTree(file, ts.ScriptTarget
 export function createImportOrigins(sources: readonly SourceFile[], parse: ParseSource = parseWithParents): ImportOrigins {
   const texts = new Map(sources.map((file) => [file.path, file.content]));
   const files = new Map(sources.map((file) => [file.path, file]));
-  const modules = createModuleResolver(async (file) => texts.get(file), manifestPackages(sources.filter((file) => isPackageManifest(file.path)).map((file) => file.content)));
+  const modules = createModuleResolver(async (file) => texts.get(file), manifestPackages(sources));
   const shapes = new Map<string, FileShape>();
   const parameterStarts = new Map<string, ReadonlySet<number>>();
-  /** A file is bound once for the life of the reader, and only the places of its parameter uses are kept (ADR-0026). */
+  /** A file is bound once for the life of the reader, and only the places of its parameter uses are kept (ADR-0029). */
   const isParameterUse: ParameterUse = (source, text, identifier) => {
     let starts = parameterStarts.get(source.fileName);
     if (starts === undefined) {
@@ -78,8 +78,8 @@ export function createImportOrigins(sources: readonly SourceFile[], parse: Parse
 
   /**
    * The names the snapshot declares globally: a `.d.ts` anywhere, a file that augments the global scope, and the top
-   * level of a script (a source with no import or export, whose declarations are global). A repository may spell a lib
-   * name itself, and retiring that name would hide a real declaration, so those names stay `unknown`.
+   * level of a script (a source with no import or export, whose declarations are global). A lib name among them is never
+   * `ambient`.
    */
   let globals: ReadonlySet<string> | undefined;
   const repositoryGlobals = (): ReadonlySet<string> => {
