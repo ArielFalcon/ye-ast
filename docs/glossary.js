@@ -227,8 +227,8 @@ window.GLOSSARY = {
       key: "mirror",
       label: "mirror",
       labelEs: "espejo",
-      en: "ye-ast's private copy of a trusted working tree. The graph reads the mirror, never the checkout.",
-      es: "La copia privada que ye-ast hace de un árbol de trabajo trusted. El grafo lee el mirror, nunca el checkout.",
+      en: "ye-AST's private copy of a trusted working tree. The graph reads the mirror, never the checkout.",
+      es: "La copia privada que ye-AST hace de un árbol de trabajo trusted. El grafo lee el mirror, nunca el checkout.",
       node: "ports-live",
     },
     {
@@ -241,8 +241,8 @@ window.GLOSSARY = {
     {
       key: "mcp",
       label: "MCP",
-      en: "Model Context Protocol. ye-ast exposes a read-only stdio server with eight tools: entrypoints, impact, callers, importers, outline, workspace, decisions and compose. One server serves several declared repositories, chosen per call.",
-      es: "Model Context Protocol. ye-ast expone un servidor stdio de solo lectura con ocho tools: entrypoints, impact, callers, importers, outline, workspace, decisions y compose. Un servidor sirve varios repositorios declarados, elegidos en cada llamada.",
+      en: "Model Context Protocol. ye-AST exposes a read-only stdio server with eight tools: entrypoints, impact, callers, importers, outline, workspace, decisions and compose. One server serves several declared repositories, chosen per call.",
+      es: "Model Context Protocol. ye-AST expone un servidor stdio de solo lectura con ocho tools: entrypoints, impact, callers, importers, outline, workspace, decisions y compose. Un servidor sirve varios repositorios declarados, elegidos en cada llamada.",
       node: "mcp",
     },
     {

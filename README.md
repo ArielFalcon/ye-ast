@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="https://capsule-render.vercel.app/api?type=waving&height=180&color=0:111111,100:3a3a3a&text=ye-ast&fontColor=ffffff&fontSize=64&fontAlignY=38&desc=Your%20agent%27s%20IDE&descAlignY=60&descSize=16" alt="ye-ast" width="100%" />
+<img src="https://capsule-render.vercel.app/api?type=waving&height=180&color=0:111111,100:3a3a3a&text=ye-AST&fontColor=ffffff&fontSize=64&fontAlignY=38&desc=Your%20agent%27s%20IDE&descAlignY=60&descSize=16" alt="ye-ast" width="100%" />
 
 <i>"What breaks if I rename this?" · "Which screen uses this?" · "Is this file really dead?" · "What does my branch touch?"</i>
 
@@ -9,19 +9,19 @@
 [![node](https://img.shields.io/node/v/ye-ast-mcp?style=flat-square&color=111111&logo=nodedotjs)](package.json)
 [![MCP](https://img.shields.io/badge/MCP-stdio-111111?style=flat-square)](#3-register-the-mcp-server)
 
-**[What is ye-ast](#what-is-ye-ast) · [Live explorer →](https://arielfalcon.github.io/ye-ast/) · [For AI agents →](#for-ai-agents-install-and-configure-ye-ast)**
+**[What is ye-AST](#what-is-ye-ast) · [Live explorer →](https://arielfalcon.github.io/ye-ast/) · [For AI agents →](#for-ai-agents-install-and-configure-ye-ast)**
 
 </div>
 
 ---
 
-## What is ye-ast
+## What is ye-AST
 
 You work with an IDE: go to definition, find every reference, see who calls what. Your AI agent works with a handful of
 files and a guess. It renames a function, says "done", and two days later a screen that reached it through a file the
 agent never opened is broken.
 
-ye-ast is your agent's IDE. Ask it:
+ye-AST is your agent's IDE. Ask it:
 
 - **What does my branch touch?** Everything downstream of the change, and the routes it adds, removes or alters.
 - **Who calls this?** Every caller of a function or a line range, in the related repositories too, before a rename or a delete.
@@ -31,7 +31,7 @@ ye-ast is your agent's IDE. Ask it:
 
 Several questions fit in one call, and the answers come back joined.
 
-Every answer points to the file and line it came from. When ye-ast can't see something, it says so and says where it
+Every answer points to the file and line it came from. When ye-AST can't see something, it says so and says where it
 stopped: an empty list never means "nothing". No model runs inside; the answers come from your code and your git
 history, so the same repository always gives the same answer. It runs nothing from your repository and, by default,
 makes no network request. It speaks MCP, so Claude Code, OpenCode, Codex and any other client can use it.
@@ -49,13 +49,13 @@ structure, not intent: "what reaches this?", never "is this code good?". Version
 
 <div align="center">
 
-## For AI agents: install and configure ye-ast
+## For AI agents: install and configure ye-AST
 
 <sub>Everything below is written for an agent. Humans are welcome, but it gets technical from here.</sub>
 
 </div>
 
-You are an agent asked to add ye-ast to a repository and use it. Follow the steps in order. Every command is exact and
+You are an agent asked to add ye-AST to a repository and use it. Follow the steps in order. Every command is exact and
 every expected result is stated.
 
 > [!IMPORTANT]
@@ -106,10 +106,10 @@ through `npx --yes ye-ast-mcp …`. With `npm install -g ye-ast-mcp`, replace `n
 The two modes describe the **repository content**, not the machine, and are recorded **outside** the repository.
 Nothing inside a repository can raise its own mode. With no declaration, the CLI and the MCP server run `untrusted`.
 
-| Mode | What ye-ast does | Use when |
+| Mode | What ye-AST does | Use when |
 |---|---|---|
 | `untrusted` (default) | Reads only a snapshot exported from git at a sha. No network request, no repository manifest, no repository `.gitignore`, no repository code, no symlinks. | Always, unless the user says otherwise. Every query against a committed revision works. |
-| `trusted` | Also allows `live`: reads the working tree (uncommitted and untracked files included) from ye-ast's own mirror, and refreshes declared remotes with the user's git. | Only when the user explicitly says the repository content is trusted. |
+| `trusted` | Also allows `live`: reads the working tree (uncommitted and untracked files included) from ye-AST's own mirror, and refreshes declared remotes with the user's git. | Only when the user explicitly says the repository content is trusted. |
 
 Ask the user only if you cannot decide from context. Never infer consent from the fact that the repository is theirs.
 
@@ -460,7 +460,7 @@ value      the fact itself (in MCP structured content when mode is "full" and st
 |---|---|---|
 | `complete` | Everything inside `inputs.declaredScope`, and the part of the change `inputs.declaredConfig.changed` selects, was read | The answer, and that it holds **inside** the declared scope and selection only |
 | `partial` | The answer stops at each entry in `cuts`; what lies past a cut is **not known** | Inspect cuts whose missing information matters to the task. Increase a traversal bound when applicable; ambiguous targets, dynamic URLs and missing extractors require source evidence or a declaration, not a larger walk budget. |
-| `unknown` | ye-ast cannot tell; `reason` says why | The reason. **Never** translate it into "no impact" |
+| `unknown` | ye-AST cannot tell; `reason` says why | The reason. **Never** translate it into "no impact" |
 
 > [!WARNING]
 > A complete empty list means no recorded result within its declared scope. `unknown` or a cut is not proof of absence; report the limitation.
@@ -477,7 +477,7 @@ or the section name) and the following entries are places (`path:line`). The nin
 | `unresolved-link` | A reference or call target the code does not decide (dynamic URL, ambiguous target) | Needs source evidence or a declaration, not a larger budget |
 | `deadline` | A wall-clock deadline cut the read; such a fact is never stored | Retry narrower (`scope`, `changed`) |
 | `section` | One section of a composite answer is itself incomplete | Read that section's own cuts |
-| `not-exported` | An in-scope path was left out of the git export (symlink, unsafe path, case collision, submodule) | Not recoverable by ye-ast; report it |
+| `not-exported` | An in-scope path was left out of the git export (symlink, unsafe path, case collision, submodule) | Not recoverable by ye-AST; report it |
 | `no-extractor` | A source file whose language has no extractor yet (for example Kotlin or JavaScript) | Not covered; read it yourself |
 
 An `unknown` answer (or an item inside a complete one) carries a `reason`: `no-extractor`, `no-project`, `out-of-scope`,
@@ -541,7 +541,7 @@ names the kind and whose `_meta["ye-ast/fault"]` holds `{ kind, detail, entries?
 | `unknown-repository`, `ambiguous-repository` | `repo` is not a declared ID (or is declared twice); `available` lists the IDs | Use a declared ID, or update the host registration |
 | `duplicate-repository`, `duplicate-workspace-source`, `workspace-capture-unavailable`, `workspace-replay-mismatch`, `result-changed` | A workspace request names a repository twice, a capture failed, or a replay or `expect` no longer matches the source | Fix the request, or run the query again without `expect` and report the new identity |
 | `composition-*`, `replay-unavailable` | A `ye_ast_compose` request failed validation, its size limit, an assertion or one of its sources | See [Compose related queries](#compose-related-queries) |
-| `deadline`, `aborted`, `internal-fault` | `deadlineMs` expired, the call was cancelled, or ye-ast failed unexpectedly | Retry narrower, or report the message |
+| `deadline`, `aborted`, `internal-fault` | `deadlineMs` expired, the call was cancelled, or ye-AST failed unexpectedly | Retry narrower, or report the message |
 | Tools missing in the client | Server not registered, or client not restarted | Re-run step 3, restart the client, re-check step 4 |
 
 A deadline or a budget that stops an ordinary query is not a fault: the answer is `partial` with a `deadline`,
@@ -557,10 +557,10 @@ A deadline or a budget that stops an ordinary query is not a fault: the answer i
 
 ### 8. Rules you must respect
 
-- ye-ast is **read-only** toward the repository. Never write, edit or delete files to make a query succeed.
+- ye-AST is **read-only** toward the repository. Never write, edit or delete files to make a query succeed.
 - Never fabricate a fact. If the answer is `unknown` or cut, report that.
 - Never mark a repository `trusted` on your own initiative.
-- Under `untrusted` ye-ast makes no network request; do not work around that by fetching the repository yourself.
+- Under `untrusted` ye-AST makes no network request; do not work around that by fetching the repository yourself.
 - The fixed layer under `.ye-ast/` belongs to `ye-ast init`. Do not edit it by hand.
 
 ### 9. CLI reference
@@ -598,7 +598,7 @@ ye-ast map --live .                             # the working tree (trusted only
 | `scope` | `[--include <glob>]… [--exclude <glob>]…` over repository-relative paths, on every query command; without `--include` every path is included; `--exclude` wins |
 | `changed` | `[--changed <glob>]…` on `impact` only: globs over the changed paths that seed the walk; a glob that selects no changed path is an error (`unknown-change-path`) |
 | `budget` | `[--depth <n>] [--hub-fan-in <n>] [--expansions <n>]` on `impact` and `callers`; positive integers, no defaults |
-| `--live` | Reads the working tree of a repository declared `trusted` from ye-ast's own mirror, instead of a revision. Replaces `--revision` (`map`, `callers`, `importers`, `outline`) or `--head` (`impact`; `--base` stays). Using both is a usage error (exit `2`); `workspace` and `decisions` take no `--live`. A stale answer adds one stderr line |
+| `--live` | Reads the working tree of a repository declared `trusted` from ye-AST's own mirror, instead of a revision. Replaces `--revision` (`map`, `callers`, `importers`, `outline`) or `--head` (`impact`; `--base` stays). Using both is a usage error (exit `2`); `workspace` and `decisions` take no `--live`. A stale answer adds one stderr line |
 | `--offline` | `workspace` and `decisions` only: read every repository from its own clone and refresh no declared remote, as under `untrusted` |
 | `--repo-id` | Names the repository in every snapshot; without it the name is the directory of the repository's main worktree, so every linked worktree of one repository answers the same name |
 | `--measure` | Writes one JSON measurement line per query and per index build to stderr, never stdout |
@@ -606,7 +606,7 @@ ye-ast map --live .                             # the working tree (trusted only
 `--workspace <file>` on `init` persists the manifest as `.ye-ast/workspace.json`:
 `{ "repos": [{ "path", "id", "revision", "remote" }], "gateways": [{ "prefix", "repo" }] }`. A relative repository path is
 stored as written and resolved against the installed repository; a `remote` is the source of truth a trusted
-repository's queries refresh into ye-ast's own mirror. Use `ye_ast_decisions` to see which entries the workspace leaves
+repository's queries refresh into ye-AST's own mirror. Use `ye_ast_decisions` to see which entries the workspace leaves
 to the user.
 
 #### Query protocol
@@ -659,7 +659,7 @@ const result = await impact.callers({
 ```mermaid
 flowchart LR
     subgraph Entry["Driving adapters"]
-        CLI["ye-ast CLI"]
+        CLI["ye-AST CLI"]
         MCP["ye-ast mcp"]
         PROTO["ye-ast serve"]
     end

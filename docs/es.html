@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ye-ast — explorador de arquitectura</title>
-<meta name="description" content="Documentación de ye-ast, un motor determinista que deriva facts verificables sobre el código. Explora sus capas, módulos, puertos, adapters y los flujos entre ellos.">
+<title>ye-AST — explorador de arquitectura</title>
+<meta name="description" content="Documentación de ye-AST, un motor determinista que deriva facts verificables sobre el código. Explora sus capas, módulos, puertos, adapters y los flujos entre ellos.">
 <link rel="icon" type="image/png" sizes="64x64" href="assets/favicon-light.png">
 <link rel="icon" type="image/png" sizes="64x64" href="assets/favicon-dark.png" media="(prefers-color-scheme: dark)">
 <link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
@@ -15,9 +15,9 @@
 <a class="skip" href="#main">Saltar al contenido</a>
 
 <header class="bar">
-  <a class="brand" href="#intro" aria-label="Documentación de ye-ast">
+  <a class="brand" href="#intro" aria-label="Documentación de ye-AST">
     <span class="brand-mark" aria-hidden="true"></span>
-    <span class="brand-text">ye-ast <span>/ docs</span></span>
+    <span class="brand-text">ye-AST <span>/ docs</span></span>
   </a>
   <p class="bar-section" id="bar-section" aria-hidden="true"></p>
   <div class="bar-tools">
@@ -34,8 +34,8 @@
     <section id="intro" class="doc-section hero" data-rail="Introducción">
       <div class="section-head hero-copy">
         <p class="kicker">Verdad de código determinista</p>
-        <h1>El <span class="hero-accent">IDE</span> de tu agente.</h1>
-        <p class="section-lede lede">ye-ast le da a tu agente lo que un IDE te da a ti: quién llama a un símbolo, qué depende de un cambio, dónde aparece esa dependencia y cuán completa es la respuesta. Deriva cada respuesta de código, git y contratos declarados, e indica lo que no pudo ver.</p>
+        <h1><span>El <span class="hero-accent">IDE</span> de tu agente.</span></h1>
+        <p class="section-lede lede">ye-AST le da a tu agente lo que un IDE te da a ti: quién llama a un símbolo, qué depende de un cambio, dónde aparece esa dependencia y cuán completa es la respuesta. Deriva cada respuesta de código, git y contratos declarados, e indica lo que no pudo ver.</p>
         <div class="hero-actions">
           <a class="button primary" href="#facts">Leer el contrato de los facts</a>
           <a class="button" href="#explorer">Explorar la arquitectura</a>
@@ -132,7 +132,7 @@
               <tr><td><code>hub</code></td><td>Un símbolo alcanzado tiene más llamadores de tipo llamada que el presupuesto <code>hubFanIn</code>, así que el recorrido no lo expandió. El símbolo sigue en la respuesta; lo que se detiene es el ascenso a través de él.</td><td>Sube <code>hubFanIn</code>, o pregunta con <code>callers</code> solo por ese símbolo.</td></tr>
               <tr><td><code>caller-budget</code></td><td>Se agotó <code>expansions</code>, o un presupuesto de export detuvo el snapshot.</td><td>Sube el límite, o acota la petición con alcance.</td></tr>
               <tr><td><code>unresolved-link</code></td><td>Un nombre que el índice no pudo resolver puede apuntar a un símbolo recorrido.</td><td>Abre cada lugar y decide; tras una eliminación, cada lugar que aún lo nombra se rompe.</td></tr>
-              <tr><td><code>no-extractor</code></td><td>Un archivo que ye-ast no puede leer: una plantilla, una hoja de estilos, un lenguaje sin extractor.</td><td>Léelo tú cuando importe para la tarea.</td></tr>
+              <tr><td><code>no-extractor</code></td><td>Un archivo que ye-AST no puede leer: una plantilla, una hoja de estilos, un lenguaje sin extractor.</td><td>Léelo tú cuando importe para la tarea.</td></tr>
               <tr><td><code>not-exported</code></td><td>Una ruta que el snapshot dejó fuera (symlink, submódulo, ruta insegura).</td><td>Léela tú; no se leyó nada debajo.</td></tr>
               <tr><td><code>deadline</code></td><td>Se acabó el tiempo antes de que la respuesta estuviera completa.</td><td>Pregunta otra vez; acota el alcance si se repite.</td></tr>
               <tr><td><code>section</code></td><td>Una sección de una respuesta compuesta no se pudo producir.</td><td>El resto se mantiene; volver a preguntar puede completarla.</td></tr>
@@ -196,7 +196,7 @@
           <li><code>ye_ast_workspace</code> devuelve los nombres externos que usa un repositorio (HTTP, mensajería, dependencias), los repositorios candidatos de cada uno y los nombres que ningún repositorio sirve. Los clones locales que aportes se usan tal cual, nunca se descargan.</li>
           <li><code>ye_ast_decisions</code> devuelve los huecos que el código no puede cubrir (membership, repository, library, gateway, revision, remote, trust), cada uno con opciones respaldadas por evidencia. No escribe nada.</li>
           <li><code>mode</code> cambia solo la presentación, nunca la cobertura: <code>summary</code> da los hallazgos, <code>details</code> la evidencia y las ubicaciones, <code>full</code> el JSON completo del resultado con texto de navegación.</li>
-          <li>Entrypoints, callers e impact paginan la evidencia que omite el texto: <code>select</code> y <code>page</code> van juntos, y <code>page.limit</code> es obligatorio. <code>expect</code> verifica la identidad de un resultado; <code>replay</code> vuelve a ejecutar la query y falla si el resultado cambió, porque ye-ast no guarda ninguna captura anterior.</li>
+          <li>Entrypoints, callers e impact paginan la evidencia que omite el texto: <code>select</code> y <code>page</code> van juntos, y <code>page.limit</code> es obligatorio. <code>expect</code> verifica la identidad de un resultado; <code>replay</code> vuelve a ejecutar la query y falla si el resultado cambió, porque ye-AST no guarda ninguna captura anterior.</li>
         </ul>
         <p class="ref"><code>src/mcp/server.ts:50-69</code> · <code>src/mcp/query-schema.ts:158-205</code> · <code>src/mcp/presentation.ts:5-8</code> · <code>src/core/domain/outline/outline-fact.ts</code> · <code>src/core/domain/decisions/decision.ts:4</code></p>
       </div>
@@ -278,12 +278,12 @@
 
         <article class="lane" data-trust="trusted">
           <header><span class="pill ok">declarado</span><h3>trusted</h3></header>
-          <p>Añade el working tree y el refresh de remotes, siempre hacia el store propio de ye-ast.</p>
+          <p>Añade el working tree y el refresh de remotes, siempre hacia el store propio de ye-AST.</p>
           <ol class="lane-steps">
             <li><span>01</span> El mismo camino de export en un sha.</li>
             <li><span>02</span> <code>--live</code> sustituye <code>head</code>/<code>revision</code> por el working tree.</li>
             <li><span>03</span> git lista las rutas rastreadas con <code>ls-files -z -s --cached</code> y las no rastreadas con <code>ls-files -z --others --exclude-standard</code>.</li>
-            <li><span>04</span> ye-ast las copia y calcula su hash en su espejo; codegraph lee el espejo.</li>
+            <li><span>04</span> ye-AST las copia y calcula su hash en su espejo; codegraph lee el espejo.</li>
             <li><span>05</span> Un lock, un state file y <code>sync({ paths })</code> mantienen el grafo de esos bytes.</li>
           </ol>
           <ul class="lane-invariants">
@@ -295,7 +295,7 @@
       </div>
 
       <div class="callout">
-        <p><strong>La regla de live:</strong> un fact live describe bytes que ye-ast copió y hasheó, y el grafo que lee es el grafo de esos mismos bytes. El motor nunca recorre el repositorio.</p>
+        <p><strong>La regla de live:</strong> un fact live describe bytes que ye-AST copió y les calculó el hash, y el grafo que lee es el grafo de esos mismos bytes. El motor nunca recorre el repositorio.</p>
         <p class="ref"><code>docs/architecture/rfc/0010-impact-queries.md</code> “Live head” · <code>src/core/application/live/live-tree.ts</code></p>
       </div>
 
@@ -428,16 +428,16 @@
           </div>
         </details>
         <details>
-          <summary><span>02</span> Dispatch de interfaz, en ambos sentidos <em>derivado por ye-ast</em></summary>
+          <summary><span>02</span> Dispatch de interfaz, en ambos sentidos <em>derivado por ye-AST</em></summary>
           <div class="details-body">
-            <p>Los puentes <code>interface-impl</code> de codegraph se detienen en silencio después de 40 por par clase-supertipo, así que ye-ast deriva los suyos: un método y el método del mismo nombre de un tipo por encima, para cada nodo alcanzado; hacia abajo solo cuando la declaración alcanzada es el contrato que cambió, porque una declaración cambiada cambia lo que sus implementaciones deben cumplir. Un camino que subió nunca vuelve a bajar a un hermano.</p>
+            <p>Los puentes <code>interface-impl</code> de codegraph se detienen en silencio después de 40 por par clase-supertipo, así que ye-AST deriva los suyos: un método y el método del mismo nombre de un tipo por encima, para cada nodo alcanzado; hacia abajo solo cuando la declaración alcanzada es el contrato que cambió, porque una declaración cambiada cambia lo que sus implementaciones deben cumplir. Un camino que subió nunca vuelve a bajar a un hermano.</p>
             <p class="ref"><code>src/core/application/impact/inbound-edges.ts:123-169</code> · <code>src/core/domain/impact/edge-policy.ts:50-55</code></p>
           </div>
         </details>
         <details>
           <summary><span>03</span> El problema de <code>this.field.member</code> <em>origen de campo</em></summary>
           <div class="details-body">
-            <p><code>this.auth.login()</code> es una referencia sin resolver, no una arista de llamada. Si la clase declara <code>auth</code> con un origen fijo, ye-ast resuelve el uso: un campo que contiene el tipo del miembro convierte el código en llamador; un campo que contiene un tipo no relacionado lo descarta como uso; un campo que contiene un subtipo lo deja sin resolver. Por eso el recorrido puede seguir dispatch real sin convertir cada método del mismo nombre en llamador.</p>
+            <p><code>this.auth.login()</code> es una referencia sin resolver, no una arista de llamada. Si la clase declara <code>auth</code> con un origen fijo, ye-AST resuelve el uso: un campo que contiene el tipo del miembro convierte el código en llamador; un campo que contiene un tipo no relacionado lo descarta como uso; un campo que contiene un subtipo lo deja sin resolver. Por eso el recorrido puede seguir dispatch real sin convertir cada método del mismo nombre en llamador.</p>
             <p class="ref"><code>src/core/application/impact/inbound-edges.ts:265-302</code> · <code>src/core/domain/impact/edge-policy.ts:40-45</code></p>
           </div>
         </details>
@@ -461,14 +461,14 @@
                   <tr><td><code>references</code> hacia una función, método, valor o clase</td><td>sí</td><td>La fuente lo usa.</td></tr>
                   <tr><td><code>references</code> hacia una interfaz o type alias (un DTO)</td><td>sí</td><td>Un cambio de tipo rompe a sus usuarios; qayaba no sigue estas.</td></tr>
                   <tr><td><code>extends</code>, <code>implements</code> hacia una clase o interfaz</td><td>sí</td><td>Un subtipo depende de su supertipo.</td></tr>
-                  <tr><td>Método de interfaz → método de implementación del mismo nombre, derivado por ye-ast</td><td>sí, ambos sentidos</td><td>Dispatch en tiempo de ejecución; los puentes <code>interface-impl</code> de codegraph se detienen en silencio después de 40 por par.</td></tr>
+                  <tr><td>Método de interfaz → método de implementación del mismo nombre, derivado por ye-AST</td><td>sí, ambos sentidos</td><td>Dispatch en tiempo de ejecución; los puentes <code>interface-impl</code> de codegraph se detienen en silencio después de 40 por par.</td></tr>
                   <tr><td>Un método alcanzado → su tipo, a la misma profundidad; desde ese tipo solo <code>extends</code>/<code>implements</code> y <code>uses-*</code></td><td>sí</td><td>Las rutas y componentes nombran la clase, no el método; ADR-0017 conserva la clase y evita que se expanda hacia los injectors.</td></tr>
                   <tr><td><code>imports</code> hacia un nodo de archivo</td><td>no</td><td>Un nodo de archivo no lleva a ningún lado.</td></tr>
                   <tr><td><code>imports</code> hacia un símbolo</td><td>sí cuando se usa</td><td>Solo cuando el código top-level del archivo que importa lo usa.</td></tr>
                   <tr><td>Una clase inyectable sin llamador → el código top-level de sus importers</td><td>sí</td><td>Inyección sin una llamada estática.</td></tr>
                   <tr><td><code>injects</code>, <code>uses-component</code>, <code>uses-directive</code>, <code>uses-pipe</code></td><td>sí, confianza 1</td><td>Se leen de las fuentes Angular, no se adivinan.</td></tr>
                   <tr><td><code>navigates</code></td><td>no</td><td>Un enlace del router es navegación, no dependencia.</td></tr>
-                  <tr><td>Las aristas <code>angular-template</code> y <code>angular-event</code> de codegraph</td><td>no</td><td>ADR-0014; las relaciones A2/A4 propias de ye-ast traen las suyas.</td></tr>
+                  <tr><td>Las aristas <code>angular-template</code> y <code>angular-event</code> de codegraph</td><td>no</td><td>ADR-0014; las relaciones A2/A4 propias de ye-AST traen las suyas.</td></tr>
                   <tr><td>Cualquier arista desde un archivo de test</td><td>no</td><td>Los tests no son llamadores; el alcance declarado lo dice.</td></tr>
                   <tr><td>Contención</td><td>no</td><td>Estructura, no dependencia.</td></tr>
                 </tbody>
@@ -735,7 +735,7 @@ npm run check</pre>
       </div>
 
       <footer class="page-footer">
-        <p><strong>ye-ast</strong> · motor determinista de verdad de código · Apache-2.0</p>
+        <p><strong>ye-AST</strong> · motor determinista de verdad de código · Apache-2.0</p>
         <p>Página construida desde el código, no desde una descripción del código. <a href="#intro">Volver arriba ↑</a></p>
       </footer>
     </section>

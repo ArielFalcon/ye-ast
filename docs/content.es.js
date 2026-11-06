@@ -132,7 +132,7 @@ window.EXPLORER_ES = {
       may: "solo core/domain",
       never: "ports, adapters, built-ins de Node",
       facts: [
-        "Un fact live describe bytes que ye-ast copió y hasheó.",
+        "Un fact live describe bytes que ye-AST copió y les calculó el hash.",
         "stateId es el digest del content fingerprint del export live.",
       ],
     },
@@ -167,8 +167,8 @@ window.EXPLORER_ES = {
     },
 
     "ports-fixed-layer": {
-      sub: "capa de ye-ast",
-      role: "Escribe y lee la capa fija de ye-ast bajo .ye-ast/; nunca escribe código fuente del repositorio.",
+      sub: "capa de ye-AST",
+      role: "Escribe y lee la capa fija de ye-AST bajo .ye-ast/; nunca escribe código fuente del repositorio.",
       may: "core/domain, core/ports",
       never: "core/application, core/adapters",
       facts: ["La capa aplica solo los patrones de redaction."],
@@ -370,7 +370,7 @@ window.EXPLORER_ES = {
       steps: [
         {
           title: "La petición",
-          body: "<p><code>ye-ast init --trust trusted|untrusted</code> escribe una declaración fuera del repositorio y prepara las carpetas propias de ye-ast.</p>",
+          body: "<p><code>ye-ast init --trust trusted|untrusted</code> escribe una declaración fuera del repositorio y prepara las carpetas propias de ye-AST.</p>",
           calloutText: "Install es un caso de uso con su propia superficie de escritura.",
         },
         {
@@ -379,13 +379,13 @@ window.EXPLORER_ES = {
           calloutText: "El trust se declara fuera del contenido del repositorio.",
         },
         {
-          title: "Excluir las carpetas de ye-ast",
+          title: "Excluir las carpetas de ye-AST",
           body: "<p>El exclude local gana <code>.ye-ast/</code> y <code>.ye-ast-graph/</code>, así los archivos del motor nunca entran en un snapshot.</p>",
           calloutText: "El exclude se escribe en el archivo local de git.",
         },
         {
           title: "Escribir la capa fija",
-          body: "<p>La capa fija se escribe bajo <code>.ye-ast/</code> desde el mapa de puntos de entrada. Es el almacén propio de ye-ast; no se toca código fuente del repositorio.</p>",
+          body: "<p>La capa fija se escribe bajo <code>.ye-ast/</code> desde el mapa de puntos de entrada. Es el almacén propio de ye-AST; no se toca código fuente del repositorio.</p>",
           calloutText: "La capa aplica solo los patrones de redaction.",
         },
       ],
@@ -401,7 +401,7 @@ window.EXPLORER_ES = {
         },
         {
           title: "Copiar el working tree",
-          body: "<p>git lista las rutas; ye-ast las copia y calcula su hash en su mirror. El grafo lee el mirror, nunca el checkout.</p>",
+          body: "<p>git lista las rutas; ye-AST las copia y calcula su hash en su mirror. El grafo lee el mirror, nunca el checkout.</p>",
           calloutText: "Un fact live describe los bytes del mirror.",
         },
         {
@@ -446,7 +446,7 @@ window.EXPLORER_ES = {
         },
         {
           title: "Recibo y verificación",
-          body: "<p>La respuesta lleva una identidad de verificación (<code>mcp-c1</code>) y las peticiones que se pueden repetir. Envíalas de vuelta con <code>expect</code> y ye-ast comprueba que la composición no cambió; si un contexto no se puede verificar, el recibo dice por qué.</p>",
+          body: "<p>La respuesta lleva una identidad de verificación (<code>mcp-c1</code>) y las peticiones que se pueden repetir. Envíalas de vuelta con <code>expect</code> y ye-AST comprueba que la composición no cambió; si un contexto no se puede verificar, el recibo dice por qué.</p>",
           why: "Una composición solo vale la pena reutilizarla si se puede comprobar después. Una identidad y peticiones de repetición seguras convierten eso en una comparación, no en un acto de confianza.",
           calloutText: "La verificación es explícita: disponible, o no disponible con una razón.",
         },
