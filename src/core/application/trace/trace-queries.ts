@@ -14,6 +14,7 @@ import type { CodeGraphReader, GraphNodeId, GraphSymbol } from "../../ports/code
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { DeclaredMemberNames, DeclaredMemberNamesReader } from "../../ports/declared-member-names.port.ts";
 import type { ImportOriginsReader } from "../../ports/import-origins.port.ts";
+import type { ModuleDependenciesReader } from "../../ports/module-dependencies.port.ts";
 import type { TraceFault, TraceQueries } from "../../ports/trace-queries.port.ts";
 import { distinctTargets, evidenceOfTarget, rangeChanges, requestedRanges, selectRoots, targetKey, triviaOncePerFile, type RootSelection } from "../navigation/root-selection.ts";
 import { ABORTED } from "../snapshot/read-snapshot.ts";
@@ -24,6 +25,8 @@ import { isTraceRoot, walkTrace } from "./trace-walk.ts";
 export interface TraceQueriesDeps extends HeadReaderDeps {
   /** Reads where the bare names a file calls come from, so a call to a package or a language global is external. */
   importOrigins: ImportOriginsReader;
+  /** Reads the module statements that prove which declaration an imported name reaches; without it no edge is redirected. */
+  moduleDependencies?: ModuleDependenciesReader;
   /** Reads the member names each source declares in value positions, so a member call R6 cannot place in the index is still a cut when the code declares its name. */
   memberNames: DeclaredMemberNamesReader;
   /** Tells the trivia lines of a requested range apart, so they select nothing. */
@@ -80,7 +83,7 @@ export function createTraceQueries(deps: TraceQueriesDeps): TraceQueries {
             return file === undefined ? NOTHING_DECLARED : declaredIn(file);
           };
           const origins = deps.importOrigins(head.tree.sources);
-          const edgeTargets = createEdgeTargets({ origins, store });
+          const edgeTargets = createEdgeTargets({ origins, store, modules: deps.moduleDependencies === undefined ? undefined : { reader: deps.moduleDependencies, sources: head.tree.sources } });
           const walk = await walkTrace(roots, { store, origins, targets: edgeTargets, inScope: head.selected, memberDeclarations, syntaxOf, budget, ...(signal === undefined ? {} : { signal }) });
           if (walk === "aborted") return ABORTED;
 

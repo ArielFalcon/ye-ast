@@ -1148,6 +1148,34 @@ test("a trace over a real index counts every same-named declaration below an ove
   assert.ok(greet.ok && greet.value.status === "partial");
 });
 
+test("a trace over a real index cuts a call its function's own parameter binds, never following it into a repository homonym", async () => {
+  writeFileSync(join(repo, "src", "redact.ts"), ["export function redact(text: string): string {", "  return text;", "}", ""].join("\n"));
+  writeFileSync(join(repo, "src", "clean.ts"), ["export function clean(text: string, redact: (value: string) => string): string {", "  return redact(text);", "}", ""].join("\n"));
+  git("add", "-A");
+  git("commit", "-q", "-m", "parameter");
+  const { trace } = composeQueries({ scratchRoot });
+
+  const answer = await trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: "src/clean.ts", symbol: "clean" }] });
+
+  assert.ok(answer.ok && answer.value.status === "partial", JSON.stringify(answer));
+  assert.deepEqual(answer.value.value.steps.map(({ symbol, leaves, external }) => ({ symbol, leaves, external })), [{ symbol: "clean", leaves: undefined, external: undefined }]);
+  assert.deepEqual(answer.value.cuts.map((cut) => [cut.kind, ...cut.at]), [["unresolved-link", "src/clean.ts:2 redact", "src/redact.ts::redact"]]);
+});
+
+test("a trace over a real index reaches the declaration an import proves a name binds, not the homonym the index matched", async () => {
+  writeFileSync(join(repo, "src", "parts.ts"), ["export const cutOwner = 1;", ""].join("\n"));
+  writeFileSync(join(repo, "src", "other.ts"), ["function cutOwner(): number {", "  return 2;", "}", "export const x = cutOwner();", ""].join("\n"));
+  writeFileSync(join(repo, "src", "schema.ts"), ["import { cutOwner } from \"./parts.ts\";", "", "export function shape(): unknown {", "  return [cutOwner];", "}", ""].join("\n"));
+  git("add", "-A");
+  git("commit", "-q", "-m", "redirect");
+  const { trace } = composeQueries({ scratchRoot });
+
+  const answer = await trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: "src/schema.ts", symbol: "shape" }] });
+
+  assert.ok(answer.ok && answer.value.status === "complete", JSON.stringify(answer));
+  assert.deepEqual(answer.value.value.steps.map(({ symbol, leaves }) => ({ symbol, leaves })), [{ symbol: "shape", leaves: [{ symbol: "cutOwner", file: "src/parts.ts", start: 1, end: 1, deferred: true }] }]);
+});
+
 test("callers over a range inside a property initializer still seeds the class that holds it", async () => {
   commitPage();
   const { impact } = composeQueries({ scratchRoot });

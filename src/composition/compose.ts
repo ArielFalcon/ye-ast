@@ -273,6 +273,7 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
     ...budget,
     ...trust,
     importOrigins: (sources: readonly SourceFile[]) => createImportOrigins(sources),
+    moduleDependencies,
     sourceTrivia,
     memberNames,
   });

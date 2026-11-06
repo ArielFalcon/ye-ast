@@ -233,20 +233,22 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
     });
     const called = withEnds(calls);
     const passed = withEnds(values).filter(({ target }) => DEFERRED_KINDS.includes(target.kind));
-    const read = [...called, ...passed];
-    const verdicts = await targets.verdictsOf(read, signal);
-    const outside = read.flatMap((edge, index) => {
-      const verdict = verdicts[index]!;
-      return verdict.kind === "drop" && verdict.root.kind !== "local-parameter" ? [{ edge, origin: verdict.root }] : [];
-    });
-    const followed = (edge: FollowedEdge): boolean => !outside.some((dropped) => dropped.edge === edge);
-    const external: ExternalCall[] = outside.map(({ edge, origin }) => (origin.kind === "external" ? { kind: "import", module: origin.module, name: edge.target.name } : { kind: "global", name: edge.target.name }));
+    const verdicts = await targets.verdictsOf([...called, ...passed], signal);
+    const external: ExternalCall[] = [];
     const children: Child[] = root ? membersOf(node) : [];
-    const resolved: EdgeOccurrence[] = called.map(({ edge, target }) => ({ source: edge.source, line: edge.line, column: edge.column, targetName: target.name }));
-    for (const { edge, target } of called.filter(followed)) children.push(childAt(target, edge.line, edge.column, target.name, "call"));
-    for (const { edge, target } of passed.filter(followed)) children.push(childAt(target, edge.line, edge.column, target.name, "reference", true));
-
     const cuts: Cut[] = [];
+    for (const [index, { edge, target }] of [...called, ...passed].entries()) {
+      const verdict = verdicts[index]!;
+      const value = index >= called.length;
+      if (verdict.kind === "keep" || verdict.kind === "redirect") {
+        const reached = verdict.kind === "redirect" ? verdict.to : target;
+        children.push(value ? childAt(reached, edge.line, edge.column, target.name, "reference", true) : childAt(reached, edge.line, edge.column, target.name, "call"));
+      } else if (verdict.root.kind === "local-parameter") {
+        cuts.push({ kind: "unresolved-link", at: [placeAt(node.file, edge.line ?? node.startLine, target.name), ...sortedUnique(declarationsNamed(target.name).map(candidateOf))] });
+      } else external.push(verdict.root.kind === "external" ? { kind: "import", module: verdict.root.module, name: target.name } : { kind: "global", name: target.name });
+    }
+    const resolved: EdgeOccurrence[] = called.map(({ edge, target }) => ({ source: edge.source, line: edge.line, column: edge.column, targetName: target.name }));
+
     const bare: { reference: GraphUnresolvedReference; name: string }[] = [];
     for (const reference of callsFrom(node).filter((candidate) => !resolved.some((edge) => sameOccurrence(edge, candidate)))) {
       const own = ownMemberOf(reference.name);
