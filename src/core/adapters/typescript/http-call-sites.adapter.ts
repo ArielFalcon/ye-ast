@@ -43,6 +43,7 @@ interface Scope {
 
 const NO_SCOPE: Scope = { names: new Set(), locals: new Map() };
 const LEXICAL_SCOPES = new WeakMap<ts.Node, Scope>();
+const OWN_BINDINGS = new WeakMap<ts.Node, ReadonlyMap<string, Binding>>();
 
 /** The names the code being evaluated binds at run time: a path part that names one is `{}`, never undecided. */
 type RunTime = ReadonlySet<string>;
@@ -415,40 +416,14 @@ function lexicalScope(point: ts.Node, includePoint = false): Scope {
   const cached = LEXICAL_SCOPES.get(node);
   if (cached !== undefined) return cached;
   const outer = lexicalScope(node);
-  const names = new Set<string>();
-  const locals = new Map<string, ts.Expression>();
-  const bind = (name: ts.BindingName, initializer?: ts.Expression): void => {
-    for (const text of bindingNames(name)) {
-      if (names.has(text)) continue;
-      names.add(text);
-      if (ts.isIdentifier(name) && initializer !== undefined) locals.set(text, initializer);
-    }
-  };
-  if (ts.isBlock(node) || ts.isCaseBlock(node)) {
-    const statements = ts.isBlock(node) ? node.statements : node.clauses.flatMap((clause) => [...clause.statements]);
-    for (const statement of statements) {
-      if (ts.isVariableStatement(statement) && (statement.declarationList.flags & ts.NodeFlags.BlockScoped) !== 0) for (const declaration of statement.declarationList.declarations) bind(declaration.name, declaration.initializer);
-      if ((ts.isFunctionDeclaration(statement) || ts.isClassDeclaration(statement)) && statement.name !== undefined) bind(statement.name);
-    }
-  }
-  if ((ts.isFunctionExpression(node) || ts.isClassExpression(node)) && node.name !== undefined) bind(node.name);
-  if ((ts.isFunctionLike(node) && "parameters" in node) || ts.isClassStaticBlockDeclaration(node)) {
-    if ("parameters" in node) for (const parameter of node.parameters) bind(parameter.name);
-    const visitVar = (child: ts.Node): void => {
-      if (ts.isFunctionLike(child) || ts.isClassLike(child) || ts.isModuleDeclaration(child)) return;
-      if (ts.isVariableDeclarationList(child) && (child.flags & ts.NodeFlags.BlockScoped) === 0) for (const declaration of child.declarations) bind(declaration.name);
-      ts.forEachChild(child, visitVar);
-    };
-    if ("body" in node && node.body !== undefined) visitVar(node.body);
-  }
-  if (ts.isCatchClause(node) && node.variableDeclaration !== undefined) bind(node.variableDeclaration.name);
-  if ((ts.isForStatement(node) || ts.isForInStatement(node) || ts.isForOfStatement(node)) && node.initializer !== undefined && ts.isVariableDeclarationList(node.initializer)) {
-    for (const declaration of node.initializer.declarations) bind(declaration.name, declaration.initializer);
-  }
-  if (names.size === 0) {
+  const own = ownBindings(node);
+  if (own.size === 0) {
     LEXICAL_SCOPES.set(node, outer);
     return outer;
   }
+  const names = new Set(own.keys());
+  const locals = new Map<string, ts.Expression>();
+  for (const [name, { initializer }] of own) if (initializer !== undefined) locals.set(name, initializer);
   for (const name of outer.names) {
     if (names.has(name)) continue;
     names.add(name);
@@ -458,6 +433,51 @@ function lexicalScope(point: ts.Node, includePoint = false): Scope {
   const scope = { names, locals };
   LEXICAL_SCOPES.set(node, scope);
   return scope;
+}
+
+/** A name a node itself binds: the declaration that binds it, and what it is initialized to when a variable states it. */
+interface Binding {
+  declaration: ts.Node;
+  initializer?: ts.Expression;
+}
+
+/**
+ * The names a node itself binds, the first declaration of each winning: a block's `let`, `const`, functions and
+ * classes, a function's parameters and the `var`s of its body, a named function or class expression, a catch clause's
+ * variable, a loop's variables.
+ */
+function ownBindings(node: ts.Node): ReadonlyMap<string, Binding> {
+  const cached = OWN_BINDINGS.get(node);
+  if (cached !== undefined) return cached;
+  const own = new Map<string, Binding>();
+  const bind = (name: ts.BindingName, declaration: ts.Node, initializer?: ts.Expression): void => {
+    for (const text of bindingNames(name)) {
+      if (!own.has(text)) own.set(text, ts.isIdentifier(name) && initializer !== undefined ? { declaration, initializer } : { declaration });
+    }
+  };
+  if (ts.isBlock(node) || ts.isCaseBlock(node)) {
+    const statements = ts.isBlock(node) ? node.statements : node.clauses.flatMap((clause) => [...clause.statements]);
+    for (const statement of statements) {
+      if (ts.isVariableStatement(statement) && (statement.declarationList.flags & ts.NodeFlags.BlockScoped) !== 0) for (const declaration of statement.declarationList.declarations) bind(declaration.name, declaration, declaration.initializer);
+      if ((ts.isFunctionDeclaration(statement) || ts.isClassDeclaration(statement)) && statement.name !== undefined) bind(statement.name, statement);
+    }
+  }
+  if ((ts.isFunctionExpression(node) || ts.isClassExpression(node)) && node.name !== undefined) bind(node.name, node);
+  if ((ts.isFunctionLike(node) && "parameters" in node) || ts.isClassStaticBlockDeclaration(node)) {
+    if ("parameters" in node) for (const parameter of node.parameters) bind(parameter.name, parameter);
+    const visitVar = (child: ts.Node): void => {
+      if (ts.isFunctionLike(child) || ts.isClassLike(child) || ts.isModuleDeclaration(child)) return;
+      if (ts.isVariableDeclarationList(child) && (child.flags & ts.NodeFlags.BlockScoped) === 0) for (const declaration of child.declarations) bind(declaration.name, declaration);
+      ts.forEachChild(child, visitVar);
+    };
+    if ("body" in node && node.body !== undefined) visitVar(node.body);
+  }
+  if (ts.isCatchClause(node) && node.variableDeclaration !== undefined) bind(node.variableDeclaration.name, node.variableDeclaration);
+  if ((ts.isForStatement(node) || ts.isForInStatement(node) || ts.isForOfStatement(node)) && node.initializer !== undefined && ts.isVariableDeclarationList(node.initializer)) {
+    for (const declaration of node.initializer.declarations) bind(declaration.name, declaration, declaration.initializer);
+  }
+  OWN_BINDINGS.set(node, own);
+  return own;
 }
 
 /** A call's target, and the request the code states when the snapshot cannot decide where it goes. */
@@ -1045,12 +1065,13 @@ function mayOverrideEncoder(source: ts.SourceFile): boolean {
   return visit(source);
 }
 
-/** The type name the innermost function parameter of that name declares around a node. */
+/** The type name a name's nearest binding declares, when that binding is a function parameter. */
 function parameterType(name: ts.Identifier): string | undefined {
   for (let current: ts.Node | undefined = name.parent; current !== undefined; current = current.parent) {
-    if (!ts.isFunctionLike(current)) continue;
-    const parameter = current.parameters.find((candidate) => ts.isIdentifier(candidate.name) && candidate.name.text === name.text);
-    if (parameter !== undefined) return parameter.type === undefined ? undefined : typeName(parameter.type);
+    const binding = ownBindings(current).get(name.text);
+    if (binding === undefined) continue;
+    const declaration = binding.declaration;
+    return ts.isParameter(declaration) && ts.isIdentifier(declaration.name) && declaration.type !== undefined ? typeName(declaration.type) : undefined;
   }
   return undefined;
 }

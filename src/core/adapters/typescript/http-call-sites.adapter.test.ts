@@ -590,6 +590,18 @@ test("a method that reads its own parameters is not read, so a path it builds fr
   assert.deepEqual(sites(await reader.of([file], "shop-web")), ["unknown unresolved@helper.ts:4"]);
 });
 
+test("a receiver a loop or a catch clause binds is not typed by an outer parameter of the same name", async () => {
+  const file = source("cache.ts", [
+    "import { HttpClient } from '@angular/common/http'",
+    "export function load(http: HttpClient) {",
+    "  for (const http of [new Map<string, string>()]) { http.get('/cached') }",
+    "  try { http.get('/api/items') } catch (http) { http.get('/failed') }",
+    "}",
+  ].join("\n"));
+
+  assert.deepEqual(sites(await reader.of([file], "shop-web")), ["GET /api/items@cache.ts:4"]);
+});
+
 function pathFunction(...body: string[]): { path: string; content: string } {
   return source("paths.ts", ["import { HttpClient } from '@angular/common/http'", "function orderPath(open: boolean) {", ...body, "}", "class Client { constructor(private http: HttpClient) {}", " load(open: boolean) { this.http.get(orderPath(open)) } }"].join("\n"));
 }
