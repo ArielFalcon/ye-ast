@@ -461,7 +461,8 @@ async function proofsOf(deps: ImpactQueriesDeps, store: CodeGraphReader, headTre
   const bound = new Map<string, string>();
   const localParameters = new Set<string>();
   const validOccurrences = new Set<string>();
-  if (reader === undefined) return { external, bound, localParameters, validOccurrences };
+  const thisMemberCalls = new Set<string>();
+  if (reader === undefined) return { external, bound, localParameters, validOccurrences, thisMemberCalls };
   const references = store.unresolvedReferences(sourceFilesOf(headTree));
   const unique = uniqueReferenceKeys(references);
   const asked = references.flatMap((reference) => {
@@ -479,8 +480,9 @@ async function proofsOf(deps: ImpactQueriesDeps, store: CodeGraphReader, headTre
     if (finding.value.kind === "external" || finding.value.kind === "ambient") external.add(key);
     if (finding.value.kind === "repository") bound.set(key, finding.value.file);
     if (finding.value.kind === "local-parameter" && reference.name === finding.value.name && reference.kind === "calls") localParameters.add(key);
+    if (finding.value.kind === "this-member" && reference.name === finding.value.name && reference.kind === "calls") thisMemberCalls.add(key);
   }
-  return { external, bound, localParameters, validOccurrences };
+  return { external, bound, localParameters, validOccurrences, thisMemberCalls };
 }
 
 /** What a file's own imports prove about the references the index could not settle. */
@@ -491,6 +493,8 @@ interface ReferenceProofs {
   bound: ReadonlyMap<string, string>;
   localParameters: ReadonlySet<string>;
   validOccurrences: ReadonlySet<string>;
+  /** Bare graph calls the syntax writes on `this` inside a class member, keyed by the complete occurrence. */
+  thisMemberCalls: ReadonlySet<string>;
 }
 
 interface WalkInput {
@@ -541,7 +545,7 @@ function impactOf(input: WalkInput): ImpactRead {
   const seeds = chosen.toSorted((a, b) => comparePosition(a.symbol, b.symbol));
   const sourceFiles = sourceFilesOf(headTree);
   const unresolved = store.unresolvedReferences(sourceFiles);
-  const inbound = createInboundEdges(store, isTest, found.flatMap((finding) => (finding.status === "complete" ? [finding.value] : [])), fields, locals, input.proofs?.validOccurrences ?? new Set(), memberUses);
+  const inbound = createInboundEdges(store, isTest, found.flatMap((finding) => (finding.status === "complete" ? [finding.value] : [])), fields, locals, input.proofs?.validOccurrences ?? new Set(), memberUses, input.proofs?.thisMemberCalls);
   const walk = walkImpact(seeds.map(({ symbol }) => symbol), inbound, input.budget);
 
   const walked = walk.reached.map(({ symbol }) => symbol);

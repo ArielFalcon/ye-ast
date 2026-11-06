@@ -70,6 +70,7 @@ export function createInboundEdges(
   locals: readonly LocalOrigin[] = [],
   validOccurrences?: ReadonlySet<string>,
   memberUses?: readonly MemberUseOrigin[],
+  thisMemberCalls: ReadonlySet<string> = new Set(),
 ): InboundEdges {
   const relationsByTargetFile = Map.groupBy(relations, (candidate) => candidate.to.path);
   /** The local names more than one owner of one file declares: an ambiguous name settles nothing. */
@@ -231,15 +232,34 @@ export function createInboundEdges(
     return byReceiver.get(receiver) ?? [];
   }
 
-  /** The uses of `node` by name through `this`, made by code inside a type that declares it. */
+  /**
+   * The uses of `node` by name through `this`, made by code inside a type that declares it. The graph spells a call on
+   * `this` of a member named like a library global by the bare name; the syntax proof makes it a call that settles its cut.
+   */
   function ownUsesOf(node: GraphSymbol): InboundEdge[] {
     const owners = ownersOf(node);
-    const uses = owners.length === 0 ? [] : referencesThrough(node.file, `this.${node.name}`);
-    load(uses.map((use) => use.from));
-    return uses.flatMap((use) => {
+    if (owners.length === 0) return [];
+    const throughThis = referencesThrough(node.file, `this.${node.name}`);
+    const bare = referencesThrough(node.file, node.name).filter((use) => use.kind === "calls" && use.name === node.name && thisMemberCalls.has(referenceKey(use) ?? ""));
+    load([...throughThis, ...bare].map((use) => use.from));
+    const inOwner = (use: GraphUnresolvedReference): GraphSymbol | undefined => {
       const from = symbolOf(use.from);
-      return from !== undefined && owners.some((owner) => isInside(from, owner)) ? [{ from, confidence: EDGE_POLICY.relations.confidence, basis: use.kind === "calls" && use.name === `this.${node.name}` ? "call" : "reference", lines: [use.line] }] : [];
-    });
+      return from !== undefined && owners.some((owner) => isInside(from, owner)) ? from : undefined;
+    };
+    const anchor = declarationAnchor(node.file, node.name);
+    return [
+      ...throughThis.flatMap((use) => {
+        const from = inOwner(use);
+        return from === undefined ? [] : [{ from, confidence: EDGE_POLICY.relations.confidence, basis: use.kind === "calls" && use.name === `this.${node.name}` ? "call" as const : "reference" as const, lines: [use.line] }];
+      }),
+      ...bare.flatMap((use) => {
+        const from = inOwner(use);
+        if (from === undefined) return [];
+        const occurrence = uniqueUse(use);
+        if (occurrence !== undefined && uniqueAnchor(node)) settledUses.push({ key: declarationUseKey(anchor, occurrence), target: node.id, source: from.id });
+        return [{ from, confidence: EDGE_POLICY.relations.confidence, basis: "call" as const, lines: [use.line] }];
+      }),
+    ];
   }
 
   const settledUses: { key: string; target: GraphNodeId; source?: GraphNodeId }[] = [];

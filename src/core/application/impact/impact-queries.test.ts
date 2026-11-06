@@ -1262,6 +1262,24 @@ test("local callback proof excludes only its own removed-declaration occurrence 
   assert.deepEqual(onlyLocal.value.symbols, []);
 });
 
+test("a bare call the import reader places on this, inside the class that declares the member, is its caller and no cut", async () => {
+  const file = "src/svc.ts";
+  const unresolved = [{ from: "load", file, line: 3, column: 22, name: "fetch", kind: "calls" }];
+  const common: Options = {
+    nodes: [fakeNode("Svc", "class", file, 1, 9), fakeNode("fetch", "method", file, 2, 2), fakeNode("load", "method", file, 3, 3)],
+    edges: [{ from: "Svc", to: "fetch", kind: "contains" }, { from: "Svc", to: "load", kind: "contains" }],
+    unresolved,
+    exports: { [HEAD]: { files: [{ path: file, blob: "1", written: true }], skipped: [] } },
+  };
+  const ask = async (reader: ImportOriginsReader) => callersFact(await setup({ ...common, importOrigins: reader }).callers({ targets: [{ file, symbol: "fetch" }] }));
+  const proven = await ask(origins((site) => (site.column === 23 ? { kind: "this-member", name: "fetch" } : undefined)));
+  assert.equal(proven.status, "complete");
+  assert.deepEqual(proven.status === "complete" && proven.value.symbols.find((symbol) => symbol.symbol === "load")?.via, { file, symbol: "fetch", lines: [3], basis: "call" });
+  const unproven = await ask(origins(() => undefined));
+  assert.equal(unproven.status, "partial");
+  assert.equal(unproven.status === "partial" && unproven.value.symbols.some((symbol) => symbol.symbol === "load"), false);
+});
+
 test("cancellation during origin batch stops before the walk", async () => {
   const controller = new AbortController();
   const source = "src/use.ts";

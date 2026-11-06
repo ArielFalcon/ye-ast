@@ -30,7 +30,8 @@ export interface ImportOrigins {
    * declaration may shadow proves nothing, and a hidden dependence is worse than a false cut.
    *
    * `ambient` is the second proof of an external target (`RFC-0016` S10): nothing binds the name here, the language's own
-   * libraries declare it, and the snapshot declares no global of that name.
+   * libraries declare it, and the snapshot declares no global of that name. `this-member` is a bare call written on
+   * `this` inside a class member, which names that class's member.
    */
   origins(sites: readonly ImportOriginSite[], signal?: AbortSignal): Promise<readonly (Finding<ImportOrigin> & { occurrence?: true })[]>;
 }
