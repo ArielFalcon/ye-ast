@@ -328,6 +328,17 @@ Selected source text retains root context, read owners and analysis (including u
 
 Each success carries the presentation and result fields once. These are wire contracts, not measured model adoption.
 
+Text-mode investigation footers appear only when recorded evidence or analysis limits need follow-up context. Owner
+guidance appears for evidence crossing repository boundaries. Text modes locate snapshots in their repository listing
+and retain literal base-module repository, file and revision coordinates; navigation through fact JSON paths belongs to
+full mode. Category-specific omission counts and valid selector examples remain beside their records.
+
+A selected page with `nextCursor` states how to continue beside its page metadata: repeat the recovery query with the
+same selection and limit, pass `nextCursor` as `page.cursor`, and assert `recovery.resultIdentity` with `expect`. A final
+page adds no continuation instruction. A partial analysis remains partial regardless of page availability. Parameter
+advice for depth or hub cuts requires the owning walk's declared bound to match the recorded cut limit; a `caller-budget`
+cut alone does not distinguish export limits from traversal expansions.
+
 `scope` changes analysis coverage; excluded paths are unknown, not counted presentation omissions. `changed` selects
 diff paths that seed impact while in-scope consumers elsewhere remain eligible. `budget` limits traversal work and
 records cuts; a presentation omission counts recorded items and does not itself make the fact partial. A related
