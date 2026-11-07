@@ -40,7 +40,7 @@ interface ReadFile {
  * may only return a subtype, which dispatch covers. No method, beyond what `dispatchTargets` refuses, when the type is a
  * type variable, an enum or an annotation type; when a type at or above it is outside the repository, whose members the
  * sources do not state; when its members of the name, its own and inherited, are not exactly one signature of the call's
- * arity with no varargs and no inherited private declaration, or the name is one of `Object`'s methods; when the call sits in an
+ * arity with no varargs and no inaccessible private declaration, or the name is one of `Object`'s methods; when the call sits in an
  * anonymous or a local class; when a source holds an annotation by which a processor adds overloads or rewrites calls
  * (`CALL_REWRITING_ANNOTATIONS`); or when the declared hierarchy does not settle the member. Declaration selection and
  * runtime dispatch are separate obligations. An unproven value receiver or declared repository member remains a cut;
@@ -146,7 +146,7 @@ function createResolver(project: JavaProject) {
   const methodNamed = (invocation: Node, source: ReadFile): MethodDecl | undefined => {
     const type = receiverOf(invocation, source);
     const name = invocation.childForFieldName("name")?.text;
-    return type === undefined || name === undefined ? undefined : memberOf(type, name, argumentCount(invocation));
+    return type === undefined || name === undefined ? undefined : memberOf(type, name, argumentCount(invocation), enclosingType(invocation, source.file, project));
   };
 
   /** The repository type a method declares it returns: none for a type variable, an array, a primitive or a type outside the repository. */
@@ -165,7 +165,7 @@ function createResolver(project: JavaProject) {
    * declared and inherited, must be one signature, so overload resolution has one candidate; the type's own, else the
    * nearest up its class chain, else the only one.
    */
-  const memberOf = (type: TypeDecl, name: string, arity: number): MethodDecl | undefined => {
+  const memberOf = (type: TypeDecl, name: string, arity: number, caller: TypeDecl | undefined): MethodDecl | undefined => {
     if (OBJECT_METHODS.has(name)) return undefined;
     const above = declaredHierarchy(type);
     if (above.gaps.length > 0) return undefined;
@@ -174,7 +174,7 @@ function createResolver(project: JavaProject) {
     const candidates = named.filter((method) => method.parameterTypes.length === arity);
     const [first] = candidates;
     if (first === undefined) return undefined;
-    if (candidates.some((method) => (method.modifiers.includes("private") && method.owner !== type) || (method !== first && !sameStatedSignature(method, first)))) return undefined;
+    if (candidates.some((method) => (method.modifiers.includes("private") && (method.owner !== type || method.owner !== caller)) || (method !== first && !sameStatedSignature(method, first)))) return undefined;
     for (const current of project.classChain(type)) {
       const own = candidates.find((method) => method.owner === current);
       if (own !== undefined) return own;
@@ -192,12 +192,7 @@ function createResolver(project: JavaProject) {
   return {
     hasDeclaredReceiver: (invocation: Node, source: ReadFile): boolean => receiverOf(invocation, source) !== undefined,
     /** The method the call names through its declared receiver and one settled signature; dispatch decides its body separately. */
-    methodOf: (invocation: Node, source: ReadFile): MethodDecl | undefined => {
-      const type = receiverOf(invocation, source);
-      const name = invocation.childForFieldName("name")?.text;
-      const method = type === undefined || name === undefined ? undefined : memberOf(type, name, argumentCount(invocation));
-      return method;
-    },
+    methodOf: methodNamed,
     /**
      * Whether the call's receiver is a value the call reads, whose class the call's own place does not state: a variable
      * (a parameter, a local or a field, `this.f` included), a member read through another value (`a.b`), or what another
