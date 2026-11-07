@@ -4,7 +4,7 @@ import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { ImportOrigins, RootBinding, UseSite } from "../../ports/import-origins.port.ts";
 import { enclosingBody, fieldsOf, localBinding } from "../tree-sitter/java-function-value-calls.ts";
 import type { JavaParser, JavaSyntaxTree } from "../tree-sitter/java-parser.adapter.ts";
-import { createJavaProject, describeFile, qualifiedTypeName, type JavaFile, type JavaProject, type TypeDecl } from "./java-symbols.ts";
+import { createJavaProject, describeFile, qualifiedTypeName, typeVariableAround, type JavaFile, type JavaProject, type TypeDecl } from "./java-symbols.ts";
 
 const UNKNOWN: RootBinding = { kind: "unknown" };
 /** Links of a chain whose first name is the root: a member access, a call on a receiver, a qualified name. */
@@ -152,15 +152,6 @@ function chainNames(node: Node): string[] {
 function fieldIn(name: Node): boolean {
   for (let body = enclosingBody(name); body !== undefined; body = enclosingBody(body)) if (fieldsOf(body).some((declarator) => declarator.childForFieldName("name")?.text === name.text)) return true;
   return false;
-}
-
-export function typeVariableAround(name: Node): Node | undefined {
-  for (let scope = name.parent; scope !== null; scope = scope.parent) {
-    const parameters = scope.childForFieldName("type_parameters");
-    const found = parameters?.namedChildren.find((parameter) => parameter?.namedChildren[0]?.text === name.text);
-    if (found !== undefined && found !== null) return found;
-  }
-  return undefined;
 }
 
 export function enclosingType(node: Node, file: JavaFile, project: JavaProject): TypeDecl | undefined {

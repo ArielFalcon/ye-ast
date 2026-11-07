@@ -37,6 +37,19 @@ import { CONSUMER_ROUTES } from "./test-consumer-routes.testing.ts";
 import { createHash } from "node:crypto";
 import { encodeCursor, selectionDigest } from "./evidence-cursor.ts";
 
+const validators = new Map<string, ReturnType<AjvJsonSchemaValidator["getValidator"]>>();
+const ajv = new AjvJsonSchemaValidator();
+/** Compiles each schema once per file: a schema compiles to the same validator every time. */
+function validatorOf(schema: Parameters<AjvJsonSchemaValidator["getValidator"]>[0]): ReturnType<AjvJsonSchemaValidator["getValidator"]> {
+  const key = JSON.stringify(schema);
+  let validator = validators.get(key);
+  if (validator === undefined) {
+    validator = ajv.getValidator(schema);
+    validators.set(key, validator);
+  }
+  return validator;
+}
+
 const SECRET = "hunter2-secret";
 const REPOSITORY = { path: "/work/shop", repoId: "shop" };
 
@@ -535,7 +548,7 @@ test("entrypoint recovery schema rejects malformed variants in runtime and full 
   const { session } = await setup();
   try {
     const advertised = ENTRYPOINTS_OUTPUT['~standard'].jsonSchema.output({target:'draft-07'});
-    const validate = new AjvJsonSchemaValidator().getValidator(ENTRYPOINTS_OUTPUT['~standard'].jsonSchema.output({target:'draft-07'}));
+    const validate = validatorOf(ENTRYPOINTS_OUTPUT['~standard'].jsonSchema.output({target:'draft-07'}));
     const receipt = resultFields((await session.callTool("ye_ast_entrypoints", {}))) as Record<string, unknown>;
     const recovery = receipt.recovery as Record<string, unknown>;
     const query = recovery.query as Record<string, unknown>;
@@ -943,7 +956,7 @@ test("input guides publish live combination exclusions alongside runtime validat
     for (const [name, args, fields] of cases) {
       const schema = tools.find((tool) => tool.name === name)?.inputSchema;
       assert.ok(schema, name);
-      const validate = new AjvJsonSchemaValidator().getValidator(schema);
+      const validate = validatorOf(schema);
       for (const field of fields) {
         const value = field === "offline" ? false : field === "workspace" ? {} : "main";
         assert.equal(validate({ ...args, live: true, [field]: value }).valid, false, name);
@@ -994,7 +1007,7 @@ test("workspace membership advice uses the publishing tool's accepted argument s
       { name: "ye_ast_callers", args: { targets: [{ file: "src/OrderService.java", symbol: "OrderService.find" }], workspace: {} } },
     ];
     for (const { name, args } of cases) {
-      const validate = new AjvJsonSchemaValidator().getValidator(tools.find(tool => tool.name === name)!.inputSchema);
+      const validate = validatorOf(tools.find(tool => tool.name === name)!.inputSchema);
       for (const mode of ["summary", "details"] as const) {
         const response = await session.callTool(name, { ...args, mode });
         assert.notEqual(response.isError, true, name);
@@ -1036,7 +1049,7 @@ test("cut lookup categories share context while every coordinate reconstructs a 
       const context = JSON.parse(example) as Record<string, unknown>;
       const selectors = [...text.matchAll(/^\s+cutIndex (\d+)/gm)].map(match => ({ ...context, cutIndex: Number(match[1]) }));
       assert.deepEqual(selectors, cuts.map((_, cutIndex) => ({ kind: "cut-places", owner: { kind: "fact" }, cutIndex })));
-      const schema = new AjvJsonSchemaValidator().getValidator(tools.find(tool => tool.name === name)!.inputSchema);
+      const schema = validatorOf(tools.find(tool => tool.name === name)!.inputSchema);
       for (const select of selectors) assert.equal(schema({ ...args, select, page: { limit: 1 }, mode: "full" }).valid, true);
       const selected = await session.callTool(name, { ...args, select: selectors.at(-1), page: { limit: 1 }, mode: "full" });
       assert.notEqual(selected.isError, true);
@@ -1053,7 +1066,7 @@ test("handler and module rows print one compact coordinate each that rebuilds a 
   const { session } = await setup({ ofChange: async () => ({ ok: true, value: fact }) });
   try {
     const tools = await session.listTools();
-    const schema = new AjvJsonSchemaValidator().getValidator(tools.find(tool => tool.name === "ye_ast_impact")!.inputSchema);
+    const schema = validatorOf(tools.find(tool => tool.name === "ye_ast_impact")!.inputSchema);
     for (const mode of ["summary", "details"] as const) {
       const text = textOf(await session.callTool("ye_ast_impact", { base: "main", mode }));
       assert.equal(text.split('"path":').length - 1, 1, mode);
@@ -1095,7 +1108,7 @@ test("output schemas validate real receipts and family payloads and reject broke
     for (const [index, [name, args]] of TOOL_CALLS.entries()) {
       const advertised = tools.find((tool) => tool.name === name)?.outputSchema;
       assert.equal(advertised, undefined, name);
-      const validate = new AjvJsonSchemaValidator().getValidator(schemas[index]!['~standard'].jsonSchema.output({target:'draft-07'}));
+      const validate = validatorOf(schemas[index]!['~standard'].jsonSchema.output({target:'draft-07'}));
       const runtime = schemas[index]!;
       const check = (payload: unknown, valid: boolean) => {
         assert.equal(runtime.safeParse(payload).success, valid, `${name}: runtime`);
@@ -1123,7 +1136,7 @@ test("runtime and full JSON impact schemas preserve unknown, partial and live id
     const { session } = await setup({ ofChange: async () => ({ ok: true, value: fact }) });
     try {
       const schema = IMPACT_OUTPUT['~standard'].jsonSchema.output({target:'draft-07'});
-      const validate = new AjvJsonSchemaValidator().getValidator(IMPACT_OUTPUT['~standard'].jsonSchema.output({target:'draft-07'}));
+      const validate = validatorOf(IMPACT_OUTPUT['~standard'].jsonSchema.output({target:'draft-07'}));
       const check = (value: unknown, expected: boolean) => {
         assert.equal(IMPACT_OUTPUT.safeParse(value).success, expected, "runtime");
         assert.equal(validate(value).valid, expected, "full JSON schema");
@@ -1159,7 +1172,7 @@ test("workspace impact full accepts nested unknowns and rejects incomplete contr
   const { session } = await setup({ workspaceOfChange: async () => ({ ok: true, value: { fact } }) });
   try {
     const schema = IMPACT_OUTPUT['~standard'].jsonSchema.output({target:'draft-07'});
-    const validate = new AjvJsonSchemaValidator().getValidator(IMPACT_OUTPUT['~standard'].jsonSchema.output({target:'draft-07'}));
+    const validate = validatorOf(IMPACT_OUTPUT['~standard'].jsonSchema.output({target:'draft-07'}));
     const result = await session.callTool("ye_ast_impact", { base: "main", workspace: WORKSPACE, mode: "full" });
     assert.notEqual(result.isError, true);
     const content = resultFields(result) as Record<string, unknown>;
@@ -1185,7 +1198,7 @@ test("entrypoint full accepts an unknown nested section and finding", async () =
     const { session } = await setup({ map: async () => ({ ok: true, value: fact }) });
     try {
       const schema = ENTRYPOINTS_OUTPUT['~standard'].jsonSchema.output({target:'draft-07'});
-      const validate = new AjvJsonSchemaValidator().getValidator(schema);
+      const validate = validatorOf(schema);
       const result = await session.callTool("ye_ast_entrypoints", { mode: "full" });
       assert.notEqual(result.isError, true);
       assert.equal(ENTRYPOINTS_OUTPUT.safeParse(resultFields(result)).success, true);
@@ -1199,7 +1212,7 @@ for (const validation of ["runtime", "full JSON"] as const) {
     const { session } = await setup();
     try {
       const schema = ENTRYPOINTS_OUTPUT['~standard'].jsonSchema.output({target:'draft-07'});
-      const validate = new AjvJsonSchemaValidator().getValidator(ENTRYPOINTS_OUTPUT['~standard'].jsonSchema.output({target:'draft-07'}));
+      const validate = validatorOf(ENTRYPOINTS_OUTPUT['~standard'].jsonSchema.output({target:'draft-07'}));
       const result = await session.callTool("ye_ast_entrypoints", { mode: "full" });
       assert.notEqual(result.isError, true);
       const content = resultFields(result) as Record<string, unknown>;
@@ -1219,7 +1232,7 @@ for (const validation of ["runtime", "full JSON"] as const) {
     const { session } = await setup();
     try {
       const schema = IMPACT_OUTPUT['~standard'].jsonSchema.output({target:'draft-07'});
-      const validate = new AjvJsonSchemaValidator().getValidator(IMPACT_OUTPUT['~standard'].jsonSchema.output({target:'draft-07'}));
+      const validate = validatorOf(IMPACT_OUTPUT['~standard'].jsonSchema.output({target:'draft-07'}));
       const result = await session.callTool("ye_ast_impact", { base: "main", workspace: WORKSPACE, mode: "full" });
       assert.notEqual(result.isError, true);
       const content = resultFields(result) as Record<string, unknown>;
@@ -1273,7 +1286,7 @@ test("full schemas accept UI component and unknown and additive workspace target
     const cases: [string, Record<string, unknown>, { safeParse(value: unknown): { success: boolean } }][] = [["ye_ast_entrypoints", {}, ENTRYPOINTS_OUTPUT], ["ye_ast_impact", { base: "main", workspace: WORKSPACE }, IMPACT_OUTPUT]];
     for (const [name, args, runtime] of cases) {
       const schema = (name === 'ye_ast_entrypoints' ? ENTRYPOINTS_OUTPUT : IMPACT_OUTPUT)['~standard'].jsonSchema.output({target:'draft-07'});
-      const validate = new AjvJsonSchemaValidator().getValidator((name === "ye_ast_entrypoints" ? ENTRYPOINTS_OUTPUT : IMPACT_OUTPUT)['~standard'].jsonSchema.output({target:'draft-07'}));
+      const validate = validatorOf((name === "ye_ast_entrypoints" ? ENTRYPOINTS_OUTPUT : IMPACT_OUTPUT)['~standard'].jsonSchema.output({target:'draft-07'}));
       const result = await session.callTool(name, { ...args, mode: "full" });
       assert.notEqual(result.isError, true, name);
       assert.equal(runtime.safeParse(resultFields(result)).success, true, name);
@@ -3194,7 +3207,7 @@ test("selector discovery, schema and runtime reject empty and unknown IDs withou
     assert.match(session.instructions!, /__proto__.*constructor.*shop.*z/s);
     for (const [name, args] of TOOL_CALLS) {
       const schema = (await session.listTools()).find((tool) => tool.name === name)!.inputSchema;
-      const validate = new AjvJsonSchemaValidator().getValidator(schema);
+      const validate = validatorOf(schema);
       assert.equal(validate({ ...args, repo: "" }).valid, false, name);
       assert.equal(validate({ ...args, repo: "constructor" }).valid, true, name);
       for (const id of ["", "missing", "Shop", "/work/z"]) {
@@ -3404,8 +3417,8 @@ test("callers input and full output schemas enforce replay and recovery shapes",
   const { session } = await setup();
   try {
     const tool = (await session.listTools()).find((item) => item.name === "ye_ast_callers")!;
-    const input = new AjvJsonSchemaValidator().getValidator(tool.inputSchema);
-    const output = new AjvJsonSchemaValidator().getValidator(CALLERS_OUTPUT['~standard'].jsonSchema.output({target:'draft-07'}));
+    const input = validatorOf(tool.inputSchema);
+    const output = validatorOf(CALLERS_OUTPUT['~standard'].jsonSchema.output({target:'draft-07'}));
     const targets = [{ file: "a", symbol: "f" }];
     const replay = { version: 1, declaration: `ws-r1:${"d".repeat(64)}`, snapshots: [{ repo: "shop", kind: "sha", sha: "a".repeat(40) }] };
     assert.equal(input({ targets, workspace: {}, replay }).valid, true);
@@ -3511,8 +3524,8 @@ test("impact replay input and full recovery output enforce strict matching schem
   const { session } = await setup();
   try {
     const tool = (await session.listTools()).find((item) => item.name === "ye_ast_impact")!;
-    const input = new AjvJsonSchemaValidator().getValidator(tool.inputSchema);
-    const output = new AjvJsonSchemaValidator().getValidator(IMPACT_OUTPUT['~standard'].jsonSchema.output({target:'draft-07'}));
+    const input = validatorOf(tool.inputSchema);
+    const output = validatorOf(IMPACT_OUTPUT['~standard'].jsonSchema.output({target:'draft-07'}));
     const replay = { version: 1, declaration: `ws-r1:${"d".repeat(64)}`, snapshots: [{ repo: "shop", kind: "sha", sha: "a".repeat(40) }] };
     assert.equal(input({ base: "main", workspace: {}, replay }).valid, true);
     for (const args of [{ base: "main", replay }, { base: "main", workspace: {}, replay: { ...replay, version: 2 } }]) {
@@ -3719,7 +3732,7 @@ test("semantic recipe redaction disables recovery and leaks no secret", async ()
     const tools = await session.listTools();
     for (const [name, args] of cases) for (const mode of ["summary", "details", "full"]) {
       const result = await session.callTool(name, { ...args, mode });
-      assert.equal(new AjvJsonSchemaValidator().getValidator((name === 'ye_ast_entrypoints' ? ENTRYPOINTS_OUTPUT : name === 'ye_ast_callers' ? CALLERS_OUTPUT : IMPACT_OUTPUT)['~standard'].jsonSchema.output({target:'draft-07'}))(resultFields(result)).valid, true);
+      assert.equal(validatorOf((name === 'ye_ast_entrypoints' ? ENTRYPOINTS_OUTPUT : name === 'ye_ast_callers' ? CALLERS_OUTPUT : IMPACT_OUTPUT)['~standard'].jsonSchema.output({target:'draft-07'}))(resultFields(result)).valid, true);
       assert.deepEqual((resultFields(result) as Record<string, unknown>).recovery, { version: 1, status: "unavailable", reason: "redacted-context" }, `${name}: ${JSON.stringify(args)}`);
       assert.doesNotMatch(JSON.stringify(result), new RegExp(SECRET));
     }
@@ -3752,7 +3765,7 @@ test("replay semantic validation rejects unsorted members before core", async ()
     for (const name of ["ye_ast_callers", "ye_ast_impact"] as const) {
       const args = name === "ye_ast_callers" ? { targets: [{ file: "a", symbol: "f" }], workspace: {}, replay } : { base: "main", workspace: {}, replay };
       const tool = (await session.listTools()).find((item) => item.name === name)!;
-      assert.equal(new AjvJsonSchemaValidator().getValidator(tool.inputSchema)(args).valid, true);
+      assert.equal(validatorOf(tool.inputSchema)(args).valid, true);
       const answer = await session.callTool(name, args);
       assert.equal(answer.isError, true);
       assert.equal(answer.structuredContent, undefined);
@@ -3767,7 +3780,7 @@ test("impact and callers recovery schemas agree on bounds, globs and hash line e
   try {
     for (const name of ["ye_ast_callers", "ye_ast_impact"] as const) {
       const schema = name === "ye_ast_callers" ? CALLERS_OUTPUT : IMPACT_OUTPUT;
-      const validate = new AjvJsonSchemaValidator().getValidator(schema['~standard'].jsonSchema.output({target:'draft-07'}));
+      const validate = validatorOf(schema['~standard'].jsonSchema.output({target:'draft-07'}));
       const baseArgs = name === "ye_ast_callers" ? { targets: [{ file: "a", symbol: "f" }] } : { base: "main" };
       const replay = { version: 1, declaration: `ws-r1:${"d".repeat(64)}`, snapshots: [{ repo: "shop", kind: "sha", sha: "a".repeat(40) }] };
       for (const bad of [{ ...baseArgs, replay }, { ...baseArgs, workspace: {}, replay: { ...replay, extra: true } }, { ...baseArgs, workspace: {}, replay: { ...replay, snapshots: [{ repo: "shop", kind: "live", sha: "a".repeat(40) }] } }, ...["\n", "\r", "\u2028", "\u2029"].map((newline) => ({ ...baseArgs, workspace: {}, replay: { ...replay, declaration: replay.declaration + newline } }))]) {
@@ -3914,7 +3927,7 @@ test("mixed workspace selector schemas and runtime agree before dispatch", async
       ["ye_ast_impact", { base: "main" }, "head", "workspace"],
     ] as const) {
       const schema = (await session.listTools()).find((tool) => tool.name === name)!.inputSchema;
-      const validate = new AjvJsonSchemaValidator().getValidator(schema);
+      const validate = validatorOf(schema);
       const member = { path: "/work/other", id: "other", live: true };
       const container = memberKey === "repos" ? { repos: [member] } : { workspace: { repos: [member] } };
       const good = { ...baseArgs, ...container, live: true, offline: true };
@@ -3944,7 +3957,7 @@ test("mixed recovery preserves live replay and redacts workspace notices in ever
   const { session } = await setup({ workspaceCallers: async (request) => changed && request.replay ? { ok: false, fault: { kind: "workspace-replay-mismatch", detail: "changed" } } : { ok: true, value: { fact, workspaceReplay: replay, workspaceLive: notices } } });
   try {
     const tool = (await session.listTools()).find((item) => item.name === "ye_ast_callers")!;
-    const validate = new AjvJsonSchemaValidator().getValidator((tool.name === 'ye_ast_entrypoints' ? ENTRYPOINTS_OUTPUT : tool.name === 'ye_ast_callers' ? CALLERS_OUTPUT : IMPACT_OUTPUT)['~standard'].jsonSchema.output({target:'draft-07'}));
+    const validate = validatorOf((tool.name === 'ye_ast_entrypoints' ? ENTRYPOINTS_OUTPUT : tool.name === 'ye_ast_callers' ? CALLERS_OUTPUT : IMPACT_OUTPUT)['~standard'].jsonSchema.output({target:'draft-07'}));
     let recipe: { name: string; arguments: Record<string, unknown> } | undefined;
     let identity: string | undefined;
     for (const mode of ["summary", "details", "full"]) {
@@ -4008,7 +4021,7 @@ test("selected evidence pages replay the source and reject changed identities be
   const {session, calls} = await setup({map: async () => ({ok:true,value: changed ? {...fact, producer:{...fact.producer,version:"changed"}} : fact})});
   try {
     const tool = (await session.listTools()).find((t) => t.name === "ye_ast_entrypoints")!;
-    const validate = new AjvJsonSchemaValidator().getValidator((tool.name === 'ye_ast_entrypoints' ? ENTRYPOINTS_OUTPUT : tool.name === 'ye_ast_callers' ? CALLERS_OUTPUT : IMPACT_OUTPUT)['~standard'].jsonSchema.output({target:'draft-07'}));
+    const validate = validatorOf((tool.name === 'ye_ast_entrypoints' ? ENTRYPOINTS_OUTPUT : tool.name === 'ye_ast_callers' ? CALLERS_OUTPUT : IMPACT_OUTPUT)['~standard'].jsonSchema.output({target:'draft-07'}));
     const select = {kind:"entrypoint-evidence",findingIndex:0};
     const request = {mode:"full",select,page:{limit:1}};
     const first = await session.callTool(tool.name, request);
@@ -4083,7 +4096,7 @@ test("selected SDK responses bind all categories and modes to actual public sche
       const tool = tools.find((t)=>t.name===c.name)!;
       const result = await session.callTool(c.name,{...c.args,select:c.select,page:{limit:1},mode});
       assert.equal(result.isError,undefined,JSON.stringify(result));
-      assert.equal(new AjvJsonSchemaValidator().getValidator((tool.name === 'ye_ast_entrypoints' ? ENTRYPOINTS_OUTPUT : tool.name === 'ye_ast_callers' ? CALLERS_OUTPUT : IMPACT_OUTPUT)['~standard'].jsonSchema.output({target:'draft-07'}))(resultFields(result)).valid,true,JSON.stringify(resultFields(result)));
+      assert.equal(validatorOf((tool.name === 'ye_ast_entrypoints' ? ENTRYPOINTS_OUTPUT : tool.name === 'ye_ast_callers' ? CALLERS_OUTPUT : IMPACT_OUTPUT)['~standard'].jsonSchema.output({target:'draft-07'}))(resultFields(result)).valid,true,JSON.stringify(resultFields(result)));
       const response = resultFields(result) as {kind:string;items?:unknown[]};
       assert.equal(response.kind,mode === "full" ? "projection" : "projection-receipt");
       if (mode === "full") assert.deepEqual(response.items,[c.item]);
@@ -4108,7 +4121,7 @@ test("invalid selection controls and cursor bindings fail before querying", asyn
     ];
     for (const c of cases) {
       const schema = tools.find((t)=>t.name===c.name)!.inputSchema;
-      assert.equal(new AjvJsonSchemaValidator().getValidator(schema)(c.args).valid, false);
+      assert.equal(validatorOf(schema)(c.args).valid, false);
       assert.equal((await session.callTool(c.name,c.args)).isError,true);
     }
     assert.equal(calls.map.length+calls.callers.length+calls.ofChange.length+calls.importers.length,0);
@@ -4187,7 +4200,7 @@ test("continuation cannot invent a page for an unavailable evidence owner", asyn
     assert.equal(first.isError, undefined);
     assert.equal((resultFields(first) as { availability: string }).availability, "unavailable");
     const tool = (await session.listTools()).find(tool => tool.name === "ye_ast_entrypoints")!;
-    assert.equal(new AjvJsonSchemaValidator().getValidator((tool.name === 'ye_ast_entrypoints' ? ENTRYPOINTS_OUTPUT : tool.name === 'ye_ast_callers' ? CALLERS_OUTPUT : IMPACT_OUTPUT)['~standard'].jsonSchema.output({target:'draft-07'}))(resultFields(first)).valid, true);
+    assert.equal(validatorOf((tool.name === 'ye_ast_entrypoints' ? ENTRYPOINTS_OUTPUT : tool.name === 'ye_ast_callers' ? CALLERS_OUTPUT : IMPACT_OUTPUT)['~standard'].jsonSchema.output({target:'draft-07'}))(resultFields(first)).valid, true);
     assert.equal(calls.map.length, 3);
   } finally { await session.close(); }
 });
@@ -4202,7 +4215,7 @@ test("selected UI evidence preserves known and unknown components through all pu
   const { session } = await setup({ map: async () => ({ ok: true, value: fact }) });
   try {
     const tool = (await session.listTools()).find(({ name }) => name === "ye_ast_entrypoints")!;
-    const validate = new AjvJsonSchemaValidator().getValidator((tool.name === 'ye_ast_entrypoints' ? ENTRYPOINTS_OUTPUT : tool.name === 'ye_ast_callers' ? CALLERS_OUTPUT : IMPACT_OUTPUT)['~standard'].jsonSchema.output({target:'draft-07'}));
+    const validate = validatorOf((tool.name === 'ye_ast_entrypoints' ? ENTRYPOINTS_OUTPUT : tool.name === 'ye_ast_callers' ? CALLERS_OUTPUT : IMPACT_OUTPUT)['~standard'].jsonSchema.output({target:'draft-07'}));
     for (const [findingIndex, finding] of findings.entries()) {
       for (const mode of ["summary", "details", "full"] as const) {
         const result = await session.callTool(tool.name, { mode, select: { kind: "entrypoint-evidence", findingIndex }, page: { limit: 2 } });

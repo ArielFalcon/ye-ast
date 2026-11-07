@@ -1,11 +1,10 @@
 import type { Node } from "web-tree-sitter";
 import { compareText } from "../../domain/shared/code-node.ts";
 import { isJavaSource } from "../../domain/languages/java.ts";
-import type { DeclaredCallable, DeclaredMemberNames, DeclaredMemberNamesReader, FunctionValueCall } from "../../ports/declared-member-names.port.ts";
+import type { DeclaredCallable, DeclaredMemberNames, DeclaredMemberNamesReader, FunctionValueCall, ReceiverBinding } from "../../ports/declared-member-names.port.ts";
 import { isFunctionValueNode, javaFunctionValueCalls } from "./java-function-value-calls.ts";
 import type { SourceSpan } from "../../domain/trace/owning-body.ts";
 import { javaReceiverBindings } from "./java-receiver-bindings.ts";
-import type { ReceiverBinding } from "../../ports/declared-member-names.port.ts";
 import type { JavaParser } from "./java-parser.adapter.ts";
 
 const NONE: DeclaredMemberNames = { names: [], functionValueCalls: [], callables: [], receiverBindings: [], functionValues: [] };

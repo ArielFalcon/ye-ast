@@ -56,19 +56,17 @@ export function createImportOrigins(sources: readonly SourceFile[], parse: Parse
     if (!moduleShapes.has(file)) moduleShapes.set(file, texts.has(file) && isTypeScriptSource(file) ? parseAngularRouteFile(file, texts.get(file)!) : undefined);
     return moduleShapes.get(file);
   }
-  const exportedDeclaration = createExportLookup(async (file) => moduleShapeOf(file), async (from, specifier) => {
+  const resolvedFile = async (from: string, specifier: string): Promise<string | undefined> => {
     const resolved = await modules.resolve(from, specifier);
     return "file" in resolved ? resolved.file : undefined;
-  });
+  };
+  const exportedDeclaration = createExportLookup(async (file) => moduleShapeOf(file), resolvedFile);
   /** What a file exports with its top-level types beside its values: what a heritage name may name. */
   const typeShapes = new Map<string, ModuleShape | undefined>();
   const exportedType = createExportLookup(async (file) => {
     if (!typeShapes.has(file)) typeShapes.set(file, withTypes(moduleShapeOf(file), indexOf(file)?.index.source));
     return typeShapes.get(file);
-  }, async (from, specifier) => {
-    const resolved = await modules.resolve(from, specifier);
-    return "file" in resolved ? resolved.file : undefined;
-  });
+  }, resolvedFile);
   const shapes = new Map<string, FileShape>();
   const parameterStarts = new Map<string, ReadonlySet<number>>();
   /** A file is bound once for the life of the reader, and only the places of its parameter uses are kept (ADR-0029). */
@@ -89,6 +87,13 @@ export function createImportOrigins(sources: readonly SourceFile[], parse: Parse
       dynamicStarts.set(source.fileName, starts);
     }
     return starts.has(identifier.getStart(source));
+  };
+  const bindsOncePerFile = (): ((path: string) => BoundFile) => {
+    const bound = new Map<string, BoundFile>();
+    return (path) => {
+      if (!bound.has(path)) bound.set(path, bindFile(path, texts.get(path)!));
+      return bound.get(path)!;
+    };
   };
   const indexes = new Map<string, FileIndex | undefined>();
   /** A file is parsed once for the life of the reader; one that does not parse has no index. */
@@ -243,11 +248,7 @@ export function createImportOrigins(sources: readonly SourceFile[], parse: Parse
   async function nominalAt(file: string, tree: FileIndex, text: string, site: UseSite): Promise<DeclaredType> {
     const head = nodesAt(tree, text, site).find((node): node is ts.Identifier => ts.isIdentifier(node) && node.text === site.spelled && isTypeName(node));
     if (head === undefined || ts.isQualifiedName(head.parent)) return UNKNOWN_TYPE;
-    const bound = new Map<string, BoundFile>();
-    const boundOf = (path: string): BoundFile => {
-      if (!bound.has(path)) bound.set(path, bindFile(path, texts.get(path)!));
-      return bound.get(path)!;
-    };
+    const boundOf = bindsOncePerFile();
     const named = classOf(await heritageOf(file, head, boundOf, 0));
     if (named === undefined || !ts.isClassDeclaration(named.declaration) || named.declaration.name === undefined || !declaresRestricted(named.declaration)) return UNKNOWN_TYPE;
     return { kind: "nominal", file: named.file, name: named.declaration.name.text, line: lineOf(named.declaration.getSourceFile(), named.declaration.name) };
@@ -282,11 +283,7 @@ export function createImportOrigins(sources: readonly SourceFile[], parse: Parse
   async function subtypedTypes(): Promise<ReadonlySet<string> | undefined> {
     if (subtyped !== undefined) return subtyped === UNPROVEN ? undefined : subtyped;
     const keys = new Set<string>();
-    const bound = new Map<string, BoundFile>();
-    const boundOf = (path: string): BoundFile => {
-      if (!bound.has(path)) bound.set(path, bindFile(path, texts.get(path)!));
-      return bound.get(path)!;
-    };
+    const boundOf = bindsOncePerFile();
     for (const [path, text] of texts) {
       if (!isTypeScriptSource(path) || !HERITAGE.test(text)) continue;
       const parsed = indexOf(path);
@@ -485,12 +482,9 @@ interface Chain {
  * up to its whole, or around an instantiation placed at its `new` keyword when the chain names the site's spelling.
  * `super` stands for the head of its class's `extends` expression.
  */
-function chainAt({ source, starting }: FileIndex, text: string, site: UseSite): Chain | undefined {
-  const starts = source.getLineStarts();
-  if (!Number.isInteger(site.line) || !Number.isInteger(site.column) || site.line < 1 || site.column < 1 || site.line > starts.length) return undefined;
-  const point = starts[site.line - 1]! + site.column - 1;
-  if (point >= (site.line < starts.length ? starts[site.line]! : text.length)) return undefined;
-  for (const node of starting.get(point) ?? []) {
+function chainAt(index: FileIndex, text: string, site: UseSite): Chain | undefined {
+  const { source } = index;
+  for (const node of nodesAt(index, text, site)) {
     const spelled = ts.isIdentifier(node) ? node.text : node.kind === ts.SyntaxKind.ThisKeyword || node.kind === ts.SyntaxKind.SuperKeyword ? node.getText(source) : undefined;
     const whole = ts.isNewExpression(node) || spelled !== undefined ? wholeChain(node) : undefined;
     if (whole === undefined) continue;

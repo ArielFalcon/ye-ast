@@ -79,7 +79,7 @@ function nameOf(node: Node): string | undefined {
 }
 
 /** `f` for `this.f`. */
-function thisField(node: Node): string | undefined {
+export function thisField(node: Node): string | undefined {
   return node.type === "field_access" && node.childForFieldName("object")?.type === "this" ? node.childForFieldName("field")?.text : undefined;
 }
 
