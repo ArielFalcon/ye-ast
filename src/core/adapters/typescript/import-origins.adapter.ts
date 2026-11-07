@@ -107,7 +107,7 @@ export function createImportOrigins(sources: readonly SourceFile[], parse: Parse
     let held = shapes.get(file);
     if (held === undefined) {
       const text = texts.get(file);
-      held = text === undefined || !isTypeScriptSource(file) ? { bindings: new Map<string, string>(), declared: new Set<string>() } : describe(files.get(file)!);
+      held = text === undefined || !isTypeScriptSource(file) ? { bindings: new Map<string, string>(), declared: new Set<string>() } : describeTree(parseShared(files.get(file)!));
       shapes.set(file, held);
     }
     return held;
@@ -783,12 +783,6 @@ function topLevelNames(statement: ts.Statement): string[] {
   if (ts.isVariableStatement(statement)) return statement.declarationList.declarations.flatMap((declaration) => (ts.isIdentifier(declaration.name) ? [declaration.name.text] : []));
   if ((ts.isFunctionDeclaration(statement) || ts.isClassDeclaration(statement)) && statement.name !== undefined) return [statement.name.text];
   return [];
-}
-
-/** What one file imports and what it binds. */
-function describe(file: SourceFile): FileShape {
-  const tree = sourceTree(file, ts.ScriptTarget.Latest, ts.ScriptKind.TS);
-  return describeTree(tree);
 }
 
 /**

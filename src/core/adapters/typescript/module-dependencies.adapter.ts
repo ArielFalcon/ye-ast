@@ -18,7 +18,6 @@ export function createModuleDependenciesReader(): ModuleDependenciesReader {
     async extract(sources, options): Promise<ModuleDependencies> {
       const selected = options?.files === undefined ? undefined : new Set(options.files);
       const held = new Map(sources.map((source) => [source.path, source]));
-      const texts = new Map(sources.map(({ path, content }) => [path, content]));
       const resolver = moduleResolverOf(sources, { jsonModules: true });
       const parse = (file: string): ts.SourceFile => sourceTree(held.get(file)!, ts.ScriptTarget.Latest, ts.ScriptKind.TS);
       const files: ModuleSource[] = [];
@@ -26,7 +25,7 @@ export function createModuleDependenciesReader(): ModuleDependenciesReader {
       const unread: { file: string; reason: "source-unreadable" | "no-extractor" }[] = [];
       const untraversed: UntraversedReference[] = [];
 
-      for (const file of [...texts.keys()].sort(compareText)) {
+      for (const file of [...held.keys()].sort(compareText)) {
         if (!isTypeScriptFile(file) || (selected !== undefined && !selected.has(file))) continue;
         const tree = parse(file);
         if ((tree as ts.SourceFile & { parseDiagnostics: readonly ts.Diagnostic[] }).parseDiagnostics.length > 0) {
@@ -138,7 +137,7 @@ export function createModuleDependenciesReader(): ModuleDependenciesReader {
       }));
       const traced = await Promise.all(untraversed.map(async (reference) => reference.specifier === undefined || reference.target !== undefined ? reference : { ...reference, target: await resolve(reference.file, reference.specifier) }));
       const resources = new Set(dependencies.flatMap(({ target }) => target.kind === "repository" && target.file.endsWith(".json") ? [target.file] : []));
-      for (const file of [...resources].sort(compareText)) files.push({ file, statements: [texts.get(file)!], moduleOnly: true, resource: true });
+      for (const file of [...resources].sort(compareText)) files.push({ file, statements: [held.get(file)!.content], moduleOnly: true, resource: true });
       files.sort((left, right) => compareText(left.file, right.file));
       return { files, dependencies, unread, untraversed: traced };
     },
