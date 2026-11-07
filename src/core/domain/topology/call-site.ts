@@ -120,6 +120,11 @@ export function compareCallPlaces(a: CallPlace, b: CallPlace): number {
   return compareText(a.repo, b.repo) || compareText(a.file, b.file) || a.line - b.line || compareText(a.symbol, b.symbol);
 }
 
+/** The order of the unresolved call sites of one repository: by the place each is written. */
+export function compareUnresolvedCallSites(a: UnresolvedCallSite, b: UnresolvedCallSite): number {
+  return compareText(a.path, b.path) || a.line - b.line || compareText(a.symbol, b.symbol);
+}
+
 /** The order of call sites: by place, then by the status of the target at one place. */
 export function compareCallSites(a: CallSite, b: CallSite): number {
   return compareCallPlaces(a, b) || compareText(a.target.status, b.target.status);

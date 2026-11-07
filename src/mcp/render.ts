@@ -1,7 +1,7 @@
 import { dependencyDiagnosticText, effectText, unresolvedLabel } from "./presentation.ts";
 import { canSelect, categoryRecovery, literalSelection, sharedLookup } from "./presentation-guidance.ts";
 import type { CutOwner, ImpactOwner, EvidenceSelection } from "./select-evidence.ts";
-import { renderFactHeader as headerLines, renderFactStatus as statusLines, snapshotLine, evidenceText, cutsByKind } from "./presentation-context.ts";
+import { renderFactHeader as headerLines, renderFactStatus as statusLines, evidenceText, cutsByKind } from "./presentation-context.ts";
 import type { ResponseMode, RenderContext } from "./presentation.ts";
 import type { Entrypoint } from "../core/domain/entrypoints/entrypoint.ts";
 import type { Handler } from "../core/domain/entrypoints/http-route.ts";
@@ -9,7 +9,6 @@ import type { ChangedContract } from "../core/domain/impact/changed-contracts.ts
 import type { ChangedEntrypoint } from "../core/domain/impact/changed-entrypoints.ts";
 import type { ImpactedSymbol, ImpactValue, ReachedEntrypoint, Seed } from "../core/domain/impact/impact-fact.ts";
 import type { ModuleImpactValue } from "../core/domain/impact/module-dependency.ts";
-import { declarationAnchor } from "../core/domain/impact/impact-cuts.ts";
 import type { ImportedFile, ImportersValue } from "../core/domain/impact/importers-fact.ts";
 import type { OutlineBinding, OutlineDeclaration, OutlineImport, OutlineUse, OutlineValue } from "../core/domain/outline/outline-fact.ts";
 import { hasUnprovedUses } from "../core/domain/outline/outline-uses.ts";
@@ -18,13 +17,13 @@ import type { EntrypointMap } from "../core/domain/map/entrypoint-map.ts";
 import type { Decision, DecisionKind, DecisionOption } from "../core/domain/decisions/decision.ts";
 import type { ChangeFrontier, ClassifiedDifference, ConsequenceFinding, ConsequencesValue, HypothesisAnswer, ProducerConsequence, UseConsequence } from "../core/domain/contracts/consequence-fact.ts";
 import { compareText } from "../core/domain/shared/code-node.ts";
-import type { Cut, Evidence, Fact, Finding, SnapshotRef, WalkBounds } from "../core/domain/shared/fact.ts";
+import type { Cut, Fact, Finding, SnapshotRef, WalkBounds } from "../core/domain/shared/fact.ts";
 import type { LiveStaleNotice } from "../core/ports/live-queries.port.ts";
 import type { NameCandidate, OutwardKind, OutwardName, RepositoryOutwardName } from "../core/domain/topology/outward-name.ts";
 import type { RepositoryEvidence } from "../core/domain/shared/repository-evidence.ts";
 import type { WorkspaceRefresh, WorkspaceValue } from "../core/ports/workspace-queries.port.ts";
 import type { DecisionValue } from "../core/ports/decision-queries.port.ts";
-import type { CallSite, UnresolvedCallSite } from "../core/domain/topology/call-site.ts";
+import { compareUnresolvedCallSites, type CallSite, type UnresolvedCallSite } from "../core/domain/topology/call-site.ts";
 import type { ImpactedLink, Link, UnlinkedCallSite } from "../core/domain/topology/link.ts";
 import type { RepositoryResolution } from "../core/domain/topology/remote-snapshot.ts";
 import type { RepoImpact, WorkspaceImpactValue } from "../core/ports/workspace-impact-queries.port.ts";
@@ -38,7 +37,6 @@ const NONE = "  (none)";
 const DECISIONS_HINT = "ye_ast_decisions lists the declarations that would resolve these gaps, with evidence-backed options.";
 const CUTS = "cuts:";
 const NO_PROVEN_USE = "uses nothing proven outside its body; its unresolved-link cuts list the uses not proven";
-const MODULE_LISTED_DEPTH = 1;
 
 /** What each source of the repositories in force is called in the text; `none` says what the answer then covers. */
 const SOURCE_TEXT: Readonly<Record<WorkspaceSource, string>> = {
@@ -1272,11 +1270,6 @@ export function renderTrace(fact: Fact<TraceValue>, detail: ResponseMode = "summ
   return lines.join("\n");
 }
 
-/** What a fault entry can be told to the caller: the declarations of the file that could have been asked instead. */
-function declarationText(entry: { file: string; candidates: readonly string[] }): string {
-  return entry.candidates.length === 0 ? `${entry.file} declares no symbol` : `declared in ${entry.file}: ${entry.candidates.join(", ")}`;
-}
-
 /** One link as every answer lists it: its number, both ends, the basis and what the answer adds about how it was reached. */
 function linkLine(link: Link, number: number | undefined, reached = ""): string {
   const confidence = link.confidence < 1 ? `, confidence ${link.confidence}` : "";
@@ -1457,7 +1450,7 @@ function unservedBlock(unserved: readonly RepositoryOutwardName[], detail: Respo
 
 /** The unresolved call sites under the file that holds them, sorted, each with the request it writes when the code states it. */
 function unresolvedListing(sites: readonly UnresolvedCallSite[], detail: ResponseMode): string[] {
-  const sorted = [...sites].toSorted((a, b) => compareText(a.path, b.path) || a.line - b.line || compareText(a.symbol, b.symbol));
+  const sorted = [...sites].toSorted(compareUnresolvedCallSites);
   return [...Map.groupBy(sorted, (site) => site.path)].flatMap(([path, inFile]) => [
     `    ${path}`,
     ...[...Map.groupBy(inFile, (site) => `${site.reason}${site.diagnostic === undefined ? "" : `/${site.diagnostic.cause}`}${site.diagnostic?.source === undefined ? "" : ` source=${site.diagnostic.source}`}`)].flatMap(([reason, group]) => [

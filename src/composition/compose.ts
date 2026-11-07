@@ -9,8 +9,7 @@ import { run, type CliIo } from "../cli/main.ts";
 import { createEntrypointQueries } from "../core/application/entrypoints/entrypoint-queries.ts";
 import { trustOf } from "../core/application/snapshot/read-snapshot.ts";
 import { openLive, type LiveDeps } from "../core/application/live/live-tree.ts";
-import { declaredScope } from "../core/domain/map/entrypoint-map.ts";
-import { exportSelection, pathSelection } from "../core/domain/shared/scope.ts";
+import { exportSelection } from "../core/domain/shared/scope.ts";
 import { WRITTEN_UNIVERSE_VERSION, isWritten, liveScope } from "../core/domain/snapshot/live-export.ts";
 import { isExtractorConfiguration } from "../core/domain/languages/configuration.ts";
 import type { IndexRetentionPolicy } from "../core/ports/index-cache.port.ts";
@@ -60,7 +59,7 @@ import { composeAngularRelations } from "./angular-relations.ts";
 import { composeConsumerSources, composeContractConsequences } from "./consumer-queries.ts";
 import { sortFindings } from "../core/domain/entrypoints/finding-order.ts";
 import { compareText } from "../core/domain/shared/code-node.ts";
-import type { CallSite, CallSiteReader, PlacedCallSiteReader } from "../core/domain/topology/call-site.ts";
+import { compareCallPlaces, type CallSiteReader, type PlacedCallSiteReader } from "../core/domain/topology/call-site.ts";
 import type { EntrypointExtractor, SourceFile } from "../core/ports/entrypoint-extractor.port.ts";
 import { createImportOrigins } from "../core/adapters/typescript/import-origins.adapter.ts";
 import { createJavaNameBindings } from "../core/adapters/spring/java-name-bindings.adapter.ts";
@@ -185,13 +184,13 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
   const callSites = staged<CallSiteReader>({
     of: async (files, repo, libraries) => {
       const java = await createJavaCallSites(await createJavaParser()).of(files, repo, libraries);
-      return [...(await typescriptCallSites.of(files, repo)), ...java].sort(compareSites);
+      return [...(await typescriptCallSites.of(files, repo)), ...java].sort(compareCallPlaces);
     },
   }, { of: "call-sites" });
   const placedCallSites = staged<PlacedCallSiteReader>({
     placed: async (files, repo) => {
       const java = await createJavaCallSites(await createJavaParser()).placed(files, repo);
-      return [...(await typescriptCallSites.placed(files, repo)), ...java].sort(({ site: a }, { site: b }) => compareSites(a, b));
+      return [...(await typescriptCallSites.placed(files, repo)), ...java].sort(({ site: a }, { site: b }) => compareCallPlaces(a, b));
     },
   }, { placed: "call-sites" });
   const vcs = staged(createGitVcs(), { exportCommit: "export", listCommit: "export", materializeCommit: "materialize" });
@@ -368,12 +367,7 @@ export function composeCli(options: CompositionOptions = {}): (argv: readonly st
 
 const MCP_PACKAGE = "ye-ast-mcp";
 
-/** The TypeScript origins, with the root of a use in a Java source bound by the Java reader. */
 /** The entrypoint beside the running module: `main.ts` from a source checkout, `main.js` from the published build. */
-function compareSites(a: CallSite, b: CallSite): number {
-  return compareText(a.file, b.file) || a.line - b.line || compareText(a.symbol, b.symbol);
-}
-
 function ownEntrypoint(): string {
   const own = fileURLToPath(import.meta.url);
   return join(dirname(own), `main${extname(own)}`);

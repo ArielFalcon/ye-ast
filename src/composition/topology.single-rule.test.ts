@@ -17,7 +17,7 @@ const RULES: readonly { concept: string; pattern: RegExp; owner: string; pending
     concept: "the order of call sites",
     owner: "core/domain/topology/call-site.ts",
     pattern: /a\.(?:from\.)?line - b\.(?:from\.)?line \|\| compareText\(a\.(?:from\.)?symbol, b\.(?:from\.)?symbol\)/,
-    pending: ["composition/compose.ts", "mcp/render.ts"],
+    pending: [],
   },
   {
     concept: "reading the scheme and authority a URL starts with",
