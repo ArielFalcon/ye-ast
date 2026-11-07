@@ -9,8 +9,10 @@ import {
   NonNullAssert,
   ParenthesizedExpression,
   PrefixNot,
+  SafeCall,
   SafeKeyedRead,
   SafePropertyRead,
+  TaggedTemplateLiteral,
   TypeofExpression,
   ParseErrorLevel,
   parseTemplate,
@@ -75,6 +77,13 @@ function effects(template: Pick<TemplateUnit, "path" | "text" | "firstLine">): T
     const index = lineOf(offset);
     return { file: template.path, line: template.firstLine + index, column: offset - lineStarts[index]! + 1 };
   };
+  /** Every call an event binding makes, whatever its shape: an own method is a handler, anything else an event call. */
+  const eventCall = (call: AST, callee: AST): void => {
+    if (!inEvent) return;
+    const own = ownField(callee);
+    if (own !== undefined) handlers.push({ ...placeOf(call.sourceSpan.start), member: own.name });
+    else eventCalls.push({ ...placeOf(call.sourceSpan.start), name: template.text.slice(callee.sourceSpan.start, callee.sourceSpan.end) });
+  };
   const visitor = new (class extends CombinedRecursiveAstVisitor {
     override visitBoundEvent(event: TmplAstBoundEvent): void {
       inEvent = true;
@@ -110,9 +119,18 @@ function effects(template: Pick<TemplateUnit, "path" | "text" | "firstLine">): T
       const callee = peel(call.receiver);
       const field = callee instanceof PropertyRead ? ownField(callee.receiver) : undefined;
       if (callee instanceof PropertyRead && field !== undefined) calls.push({ ...placeOf(call.sourceSpan.start), field: field.name, member: callee.name });
-      if (inEvent && ownField(callee) !== undefined) handlers.push({ ...placeOf(call.sourceSpan.start), member: (callee as PropertyRead).name });
-      else if (inEvent) eventCalls.push({ ...placeOf(call.sourceSpan.start), name: template.text.slice(call.receiver.sourceSpan.start, call.receiver.sourceSpan.end) });
+      eventCall(call, call.receiver);
       super.visitCall(call, context);
+    }
+
+    override visitSafeCall(call: SafeCall, context?: unknown): void {
+      eventCall(call, call.receiver);
+      super.visitSafeCall(call, context);
+    }
+
+    override visitTaggedTemplateLiteral(tagged: TaggedTemplateLiteral, context?: unknown): void {
+      eventCall(tagged, tagged.tag);
+      super.visitTaggedTemplateLiteral(tagged, context);
     }
 
     override visitPrefixNot(not: PrefixNot, context?: unknown): void {

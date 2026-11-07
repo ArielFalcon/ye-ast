@@ -286,8 +286,12 @@ test("the three transports answer an unknown entrypoint as its own fault with th
   assert.deepEqual([result.isError, /fault: unknown-entrypoint/.test(text), text.includes("http-route POST /orders: the map's http-route names: GET /orders")], [true, true, true]);
 });
 
-test("the three transports refuse declaration targets together with entrypoint targets, asking nothing", async () => {
-  const { asked, cliCode, reply, result } = await traceThroughEach(["src/a.ts:run", "--entrypoint", "ui-route:/orders"], [{ file: "src/a.ts", symbol: "run" }, { kind: "ui-route", name: "/orders" }], { ok: true, value: TRACE_FACT });
-  assert.deepEqual([cliCode, reply?.error?.code, result.isError], [2, -32602, true]);
-  assert.deepEqual(asked, [[], [], []]);
+test("declaration targets together with entrypoint targets are refused before any query: a CLI usage error, protocol invalid params, and the MCP's invalid-argument tool error", async () => {
+  const mixed = await traceThroughEach(["src/a.ts:run", "--entrypoint", "ui-route:/orders"], [{ file: "src/a.ts", symbol: "run" }, { kind: "ui-route", name: "/orders" }], { ok: true, value: TRACE_FACT });
+  const badKind = await traceThroughEach(["--entrypoint", "page:/orders"], [{ kind: "page", name: "/orders" }], { ok: true, value: TRACE_FACT });
+  const shape = (result: ToolResult) => [result.isError, result.content.map((part) => ("text" in part ? part.text.slice(0, part.text.indexOf(": targets")) : "")).join("")];
+  assert.deepEqual([mixed.cliCode, mixed.reply?.error?.code], [2, -32602]);
+  assert.deepEqual(shape(mixed.result), shape(badKind.result));
+  assert.equal(shape(mixed.result)[0], true);
+  assert.deepEqual(mixed.asked, [[], [], []]);
 });

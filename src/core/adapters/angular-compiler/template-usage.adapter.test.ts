@@ -130,3 +130,26 @@ test("the declarations a template uses are listed in the order they first appear
     { component: twice, uses: [ref("Mark"), ref("Child")] },
   ]);
 });
+
+test("every call an event binding makes, whatever its shape, is an own-method handler or an event call; none is dropped", () => {
+  const shapes: readonly [string, readonly string[]][] = [
+    ["save()", ["handler save"]],
+    ["this.save()", ["handler save"]],
+    ["save?.()", ["handler save"]],
+    ["store.save()", ["call store.save"]],
+    ["store.save?.()", ["call store.save"]],
+    ["store?.save()", ["call store?.save"]],
+    ["store['save']()", ["call store['save']"]],
+    ["items.forEach(i => save(i))", ["call items.forEach", "handler save"]],
+    ["$any(store).save()", ["call $any(store).save", "handler $any"]],
+    ["save(load())", ["handler load", "handler save"]],
+    ["make()()", ["call make()", "handler make"]],
+    ["tag`x`", ["handler tag"]],
+    ["store.tag`x`", ["call store.tag"]],
+  ];
+  for (const [handler, expected] of shapes) {
+    const effects = createTemplateUsageReader().effects({ path: "src/app/host.html", text: `<button (click)="${handler.replaceAll('"', "&quot;")}"></button>`, firstLine: 1 });
+    const found = [...effects.handlers.map(({ member }) => `handler ${member}`), ...effects.eventCalls.map(({ name }) => `call ${name}`)].sort();
+    assert.deepEqual([effects.unreadable, found], [undefined, [...expected].sort()], handler);
+  }
+});
