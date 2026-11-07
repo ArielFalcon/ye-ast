@@ -7,7 +7,7 @@ import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { JavaParser, JavaSyntaxTree } from "../tree-sitter/java-parser.adapter.ts";
 import { createJavaProject, describeFile, namedChildren, type JavaFile, type JavaProject } from "./java-symbols.ts";
 
-/** Every Java source of one list read: the imports of each file it could read, in list order, and what it could not. */
+/** The imports of every readable Java source of one list, in list order, and the sources that could not be read. */
 interface JavaUniverse {
   read: readonly { file: string; dependencies: readonly ModuleDependency[] }[];
   unread: ModuleDependencies["unread"];
@@ -21,21 +21,17 @@ interface JavaUniverse {
  */
 export function createJavaImportsReader(parser: JavaParser): ModuleDependenciesReader {
   const universes = new WeakMap<readonly SourceFile[], JavaUniverse>();
-  const universeOf = (sources: readonly SourceFile[]): JavaUniverse => {
-    let universe = universes.get(sources);
-    if (universe === undefined) {
-      universe = readUniverse(parser, sources);
-      universes.set(sources, universe);
-    }
-    return universe;
-  };
   return {
     async extract(sources, options): Promise<ModuleDependencies> {
       const selected = options?.files === undefined ? undefined : new Set(options.files);
       if (selected !== undefined && !sources.some(({ path }) => isJavaSource(path) && selected.has(path))) return { files: [], dependencies: [], unread: [] };
-      const { read, unread } = universeOf(sources);
-      const chosen = selected === undefined ? read : read.filter(({ file }) => selected.has(file));
-      return { files: chosen.map(({ file }) => ({ file, statements: [], moduleOnly: false })), dependencies: chosen.flatMap(({ dependencies }) => dependencies), unread: [...unread] };
+      let universe = universes.get(sources);
+      if (universe === undefined) {
+        universe = readUniverse(parser, sources);
+        universes.set(sources, universe);
+      }
+      const chosen = selected === undefined ? universe.read : universe.read.filter(({ file }) => selected.has(file));
+      return { files: chosen.map(({ file }) => ({ file, statements: [], moduleOnly: false })), dependencies: chosen.flatMap(({ dependencies }) => dependencies), unread: universe.unread };
     },
   };
 }
