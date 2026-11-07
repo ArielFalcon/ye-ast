@@ -111,7 +111,7 @@ test("a call binds the declaration its callee's name binds by type, a package's 
   );
 });
 
-test("a source takes the options of the configuration that owns it through references, and one no configuration owns is named", async () => {
+test("a source takes the options of the configuration that owns it through references, one no configuration owns is named, and a test file is not bound", async () => {
   const answer = await createTypeBindings({ digest: DIGEST, trees: declared({}) }).of(
     sources({
       "tsconfig.json": JSON.stringify({ files: [], references: [{ path: "./tsconfig.app.json" }] }),
@@ -120,11 +120,13 @@ test("a source takes the options of the configuration that owns it through refer
       "src/core/util.ts": "export function helper(): void {}",
       "src/app.ts": 'import { helper } from "@core/util";\nhelper();',
       "scripts/tool.ts": "export const tool = 1;",
+      "src/app.spec.ts": 'import { helper } from "@core/util";\nhelper();',
     }),
     [],
   );
   assert.deepEqual(bound(answer).bindings.filter(({ file }) => file === "src/app.ts").map(({ target }) => target), [{ kind: "repository", file: "src/core/util.ts", line: 1, name: "helper" }]);
   assert.deepEqual(bound(answer).unowned, [{ file: "scripts/tool.ts", configurations: ["tsconfig.json"] }]);
+  assert.deepEqual(bound(answer).bindings.filter(({ file }) => file === "src/app.spec.ts"), []);
 });
 
 test("a package linked into the repository binds the repository's declaration, and a link refused by the tree is named", async () => {

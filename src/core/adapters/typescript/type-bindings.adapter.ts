@@ -1,5 +1,6 @@
 import { posix } from "node:path";
 import ts from "typescript";
+import { kindOfChangedFile } from "../../domain/change/changed-file.ts";
 import { isTypeScriptFile } from "../../domain/languages/typescript.ts";
 import { canonicalJson } from "../../domain/shared/canonical-json.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
@@ -51,7 +52,8 @@ interface Derivation {
 const SLOT = "ts-type-bindings";
 
 /**
- * Binds every call and `new` of the snapshot's TypeScript sources by type, in one pass over programs that live only for
+ * Binds every call and `new` of the snapshot's TypeScript sources by type, test files left out as no answer follows
+ * their calls (`kindOfChangedFile`), in one pass over programs that live only for
  * that pass (ADR-0037 decisions 5, 7 and 8). A source's options come from the nearest `tsconfig.json` that includes it,
  * or from the one of its references, transitively, that does; sources whose owners state equal options share a program.
  * With `facts`, the answer is kept by the snapshot's content, the declarations and their install records, and a kept
@@ -193,7 +195,7 @@ function projectsOf(sources: readonly SourceFile[], confined: ConfinedHost): { g
 
   const groups = new Map<string, Group>();
   const unowned: UnownedSource[] = [];
-  for (const path of [...present].filter(isTypeScriptFile).toSorted(compareText)) {
+  for (const path of [...present].filter((file) => isTypeScriptFile(file) && kindOfChangedFile(file) !== "test").toSorted(compareText)) {
     const nearest = nearestConfig(path, present);
     const file = `${REPOSITORY_ROOT}/${path}`;
     const owners = nearest === undefined ? [] : [...new Set(ownersOf(`${REPOSITORY_ROOT}/${nearest}`, file, new Set()))];
