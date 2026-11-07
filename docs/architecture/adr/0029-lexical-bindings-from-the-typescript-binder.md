@@ -102,6 +102,18 @@ latency and 2 to 3.6 times the memory for a program with the library and depende
    its own member (`System.out.println`, `other.logger.flush`, `document.body.appendChild`) is not settled by its root,
    whether the index left it pending or resolved it into an edge: trace, impact, callers, importers and outline keep such an edge instead of dropping it, and keep such a pending call a cut (ADR-0019, amendment). The leaf's evidence is the module or the global it is rooted at, as for every other
    leaf; the answer gains no field, so the declared type itself is not written.
+10. A call the index resolved into a method of a repository class, on a receiver whose root is a value (a parameter or
+   a variable, by the binder's scoping, not a class, a function, an import or `this`), is not proof that the method runs:
+   the index matched the call by name, and TypeScript types structurally, so any object with that member may stand
+   there (trace slice 3, S6). Trace takes it as a step only when the receiver's origin proves the class (a store-bound
+   local of decision 7, or a member proof of the relations, such as an `inject(T)` local), or when the receiver's one
+   annotation names a nominal class: a repository class that, or a class it extends through the heritage proof of
+   decision 9, declares a `private`, `protected` or `#` instance member, which TypeScript compares by declaration, so
+   only an instance of it or of a subclass fits. The step is the method the class or its nearest ancestor declares;
+   a subclass that overrides it is the step's dispatch cut (RFC-0013 R7). The rule holds only while every heritage of
+   the snapshot is proven (decision 9) and the index resolves the heritage of every class that declares the member, so
+   no subclass is unseen. Otherwise the call is a cut listing the declarations of its name. A call into an interface
+   keeps its dispatch cut. Impact, callers, importers and outline still read such an edge as a possible dependence.
 
 ## Consequences
 
@@ -116,8 +128,9 @@ latency and 2 to 3.6 times the memory for a program with the library and depende
   members of a library type can be passed where that type is declared without extending or implementing it, and an
   `any` or a cast can put any value there. A receiver declared as such a type is reported external although it may run
   repository code; the guards of decision 9 only catch the nominal cases. The same holds for a TypeScript `private` field
-  written from outside its class through an `any` or a cast (`(page as any).cache.get = f`). The owner accepted this
-  limitation with the decision.
+  written from outside its class through an `any` or a cast (`(page as any).cache.get = f`), and for a nominal class of
+  decision 10 (`const s: Store = { save() {} } as any`): trace reports a step at the class's method. The owner accepted
+  this limitation with decision 9, and decision 10 inherits it.
 
 ## Not decided here
 
