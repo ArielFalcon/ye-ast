@@ -335,7 +335,7 @@ function toSymbol(node: Node): GraphSymbol {
 }
 
 function toEdge(edge: Edge): GraphEdge {
-  const { confidence, synthesizedBy } = edge.metadata ?? {};
+  const { confidence, synthesizedBy, refName, refKind } = edge.metadata ?? {};
   return {
     source: edge.source as GraphNodeId,
     target: edge.target as GraphNodeId,
@@ -345,6 +345,7 @@ function toEdge(edge: Edge): GraphEdge {
     confidence: typeof confidence === "number" ? confidence : null,
     provenance: edge.provenance ?? null,
     synthesizedBy: typeof synthesizedBy === "string" ? synthesizedBy : null,
+    resolvedFrom: typeof refName === "string" && typeof refKind === "string" && refKind !== edge.kind ? { name: refName, kind: refKind } : null,
   };
 }
 
