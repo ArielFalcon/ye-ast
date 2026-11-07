@@ -153,3 +153,38 @@ test("overloads of one name and arity whose parameter types mention a type param
     assert.deepEqual(await targetsOf([sub, lambda, sender], portWith(overload), 4), { kind: "unknown" }, overload);
   }
 });
+
+test("a class below that declares the method's name over a parameter type the strict reading settles to another type declares an overload, so the bodies are unknown", async () => {
+  const value = java("Value.java", ["package app;", "", "public class Value {}"]);
+  const homonym = java("other/Value.java", ["package app.other;", "", "public class Value {}"]);
+  const port = java("Port.java", ["package app;", "", "public interface Port {", "  void send(Value value);", "}"]);
+  const base = java("Base.java", ["package app;", "", "public class Base implements Port {", "  public void send(Value value) {}", "}"]);
+  const overload = java("other/Sub.java", ["package app.other;", "", "public class Sub extends app.Base {", "  public void send(Value value) {}", "}"]);
+  const override = java("other/Sub.java", ["package app.other;", "", "import app.Value;", "", "public class Sub extends app.Base {", "  public void send(Value value) {}", "}"]);
+
+  assert.deepEqual(await targetsOf([value, homonym, base, overload], port), { kind: "unknown" });
+  assert.deepEqual(await targetsOf([value, homonym, base, override], port), { kind: "bodies", bodies: [body(base, 4), body(override, 6)] });
+});
+
+test("a type name nothing in the repository binds is one type only for files that read it from the same package and on-demand imports, and array dimensions tell signatures apart", async () => {
+  const port = java("Port.java", ["package app;", "", "public interface Port {", "  void send(Text text);", "}"]);
+  const near = java("Near.java", ["package app;", "", "public class Near implements Port {", "  public void send(Text text) {}", "}"]);
+  const far = java("other/Far.java", ["package app.other;", "", "public class Far implements app.Port {", "  public void send(Text text) {}", "}"]);
+  const arrays = java("Near.java", ["package app;", "", "public class Near implements Port {", "  public void send(Text[] text) {}", "}"]);
+
+  assert.deepEqual(await targetsOf([near], port), { kind: "bodies", bodies: [body(near, 4)] });
+  assert.deepEqual(await targetsOf([near, far], port), { kind: "unknown" });
+  assert.deepEqual(await targetsOf([arrays], port), { kind: "unknown" });
+});
+
+test("a type variable in the method's signature, or a name the strict reading leaves unsettled, is not certainly the type an implementation states, so the bodies are unknown", async () => {
+  const generic = java("Port.java", ["package app;", "", "public interface Port<T> {", "  void send(T value);", "}"]);
+  const sender = java("Sender.java", ["package app;", "", "public class Sender implements Port<Text> {", "  public void send(Text value) {}", "}"]);
+  const port = java("Port.java", ["package app;", "", "public interface Port {", "  void send(Text text);", "}"]);
+  const listed = java("Listed.java", ["package app;", "", "public class Listed extends java.util.ArrayList<String> implements Port {", "  public void send(Text text) {}", "}"]);
+
+  assert.deepEqual(await targetsOf([sender], generic), { kind: "unknown" });
+  const relay = java("Sender.java", ["package app;", "", "public class Sender<U> implements Port<String> {", "  public void send(U value) {}", "}"]);
+  assert.deepEqual(await targetsOf([relay], generic), { kind: "unknown" });
+  assert.deepEqual(await targetsOf([listed], port), { kind: "unknown" });
+});

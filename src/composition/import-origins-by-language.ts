@@ -23,6 +23,10 @@ export function importOriginsByLanguage(readers: readonly ImportOrigins[]): Impo
       const answers = await Promise.all(readers.map((reader) => reader.dispatchTargets(sites, signal)));
       return sites.map((_, index) => answers.find((answer) => answer[index]?.kind !== "unknown")?.[index] ?? { kind: "unknown" });
     },
+    receiverMethods: async (sites, signal) => {
+      const answers = await Promise.all(readers.map((reader) => reader.receiverMethods(sites, signal)));
+      return sites.map((_, index) => answers.find((answer) => answer[index]?.kind !== "unknown")?.[index] ?? { kind: "unknown" });
+    },
     replacedRoots: async (signal) => {
       const replaced = await Promise.all(readers.map((reader) => reader.replacedRoots(signal)));
       return { paths: replaced.flatMap(({ paths }) => paths).toSorted((a, b) => compareText(a.join("\u0000"), b.join("\u0000"))), globalObjects: new Set(replaced.flatMap(({ globalObjects }) => [...globalObjects])), packages: new Set(replaced.flatMap(({ packages }) => [...packages])) };

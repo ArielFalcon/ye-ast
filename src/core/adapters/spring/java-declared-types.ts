@@ -128,7 +128,7 @@ export function isAspect(node: Node): boolean {
 }
 
 /** The whole type name an annotation's first name `spelled` begins at the 1-based place. */
-function annotationAt(root: Node, line: number, column: number, spelled: string): Node | undefined {
+export function annotationAt(root: Node, line: number, column: number, spelled: string): Node | undefined {
   const leaf = root.descendantForPosition({ row: line - 1, column: column - 1 });
   if (leaf === null || leaf.type !== "type_identifier" || leaf.text !== spelled || leaf.startPosition.column !== column - 1) return undefined;
   let name: Node = leaf;
