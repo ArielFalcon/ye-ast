@@ -65,7 +65,7 @@ export function createConsumerQueries({ sources }: ConsumerQueriesDeps): Consume
 type Answer = Result<Fact<ConsequencesValue>, ConsequencesFault>;
 
 /** The consequences of one hypothesis on a workspace already prepared, so a caller with several hypotheses prepares once. */
-export async function consequencesOn(workspace: PreparedWorkspace, hypothesis: Hypothesis): Promise<Result<Fact<ConsequencesValue>, ConsequencesFault>> {
+export async function consequencesOn(workspace: PreparedWorkspace, hypothesis: Hypothesis): Promise<Answer> {
   const session = await workspace.session(hypothesis);
   return session.ok ? consequencesOf(session.value, hypothesis) : session;
 }

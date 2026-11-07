@@ -641,12 +641,16 @@ class TemplateFlow extends CombinedRecursiveAstVisitor {
     return this.applicable(tracked).some((guard) => guard.kind !== "non-null-assertion" && startsWith(guard.covers, this.changed));
   }
 
+  private handedOn(tracked: Tracked, step: "argument" | "template-binding", node: AST): Hop {
+    const from = tracked.offset.slice(tracked.frame.length);
+    return { step, evidence: this.evidence(node.sourceSpan.start), ...(from.length === 0 ? {} : { rewrite: [{ from, to: [] }] }) };
+  }
+
   /** The value goes into a parameter of a component method; the call's result comes back to the expression that made it. */
   private enter(tracked: Tracked, sink: Extract<Sink, { kind: "argument" }>, node: AST): void {
     if (this.quiet) return;
     if (this.establishes(tracked)) return this.frontier(tracked, "unmodelled-flow", `guarded-argument:${sink.callee}`, node.sourceSpan.start);
-    const from = tracked.offset.slice(tracked.frame.length);
-    const hop: Hop = { step: "argument", evidence: this.evidence(node.sourceSpan.start), ...(from.length === 0 ? {} : { rewrite: [{ from, to: [] }] }) };
+    const hop = this.handedOn(tracked, "argument", node);
     const { repo } = this.carrier.site;
     const shift = this.unit.offset ?? 0;
     this.next.push({
@@ -662,8 +666,7 @@ class TemplateFlow extends CombinedRecursiveAstVisitor {
   private bind(tracked: Tracked, sink: Extract<Sink, { kind: "bind" }>, node: AST): void {
     if (this.quiet) return;
     if (this.establishes(tracked)) return this.frontier(tracked, "unmodelled-flow", `guarded-binding:${sink.name}`, node.sourceSpan.start);
-    const from = tracked.offset.slice(tracked.frame.length);
-    const hop: Hop = { step: "template-binding", evidence: this.evidence(node.sourceSpan.start), ...(from.length === 0 ? {} : { rewrite: [{ from, to: [] }] }) };
+    const hop = this.handedOn(tracked, "template-binding", node);
     this.next.push({
       offset: node.sourceSpan.start,
       value: {

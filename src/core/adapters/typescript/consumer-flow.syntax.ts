@@ -375,7 +375,7 @@ export function mutationsWithin(root: ts.Node, binding: Binding, from: number, m
   return found;
 }
 
-const CONDITIONAL_PARENTS =(node: ts.Node): boolean =>
+const CONDITIONAL_PARENTS = (node: ts.Node): boolean =>
   ts.isIfStatement(node) ||
   ts.isIterationStatement(node, false) ||
   ts.isSwitchStatement(node) ||

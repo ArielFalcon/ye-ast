@@ -100,9 +100,6 @@ const STREAM_WRITES: ReadonlySet<string> = new Set(["set", "next"]);
 const ACCESSORS: ReadonlySet<string> = new Set(["value", "json"]);
 const ROUTE_HOLDER = "ActivatedRoute";
 
-const isRxjs = (module: string | undefined): boolean => module === "rxjs" || module?.startsWith("rxjs/") === true;
-const isCore = (module: string | undefined): boolean => module === "@angular/core" || module?.startsWith("@angular/core/") === true;
-
 function translate(guards: readonly Guard[], mappings: readonly PathMapping[]): Guard[] {
   return guards.flatMap((guard) => {
     const [covers] = rewritePath(guard.covers, mappings);
@@ -605,7 +602,7 @@ export class Walker {
       if (ts.isIdentifier(callee)) {
         const imported = this.unit.imports.get(callee.text);
         if (imported === undefined) return false;
-        if (isRxjs(imported.module) && imported.imported === "map") {
+        if (isModule(imported.module, "rxjs") && imported.imported === "map") {
           const kind = isAsyncOrGenerator(fn);
           if (kind !== undefined) {
             this.frontier(fn, "unmodelled-flow", `${kind} projection`, t);
@@ -616,11 +613,11 @@ export class Walker {
           this.applyPipe(pipe, pipe.arguments.indexOf(holder) + 1, t);
           return true;
         }
-        if (isCore(imported.module) && imported.imported === "computed") {
+        if (isModule(imported.module, "@angular/core") && imported.imported === "computed") {
           this.read(holder, t);
           return true;
         }
-        return (isRxjs(imported.module) && KEEPING_OPERATORS.has(imported.imported)) || (isCore(imported.module) && imported.imported === "effect");
+        return (isModule(imported.module, "rxjs") && KEEPING_OPERATORS.has(imported.imported)) || (isModule(imported.module, "@angular/core") && imported.imported === "effect");
       }
       if (ts.isPropertyAccessExpression(callee)) {
         if (callee.name.text === "then") {
@@ -638,7 +635,7 @@ export class Walker {
     if (ts.isPropertyAccessExpression(call.expression) && call.expression.name.text === "subscribe") return member.name.text === "next";
     if (!ts.isIdentifier(call.expression)) return false;
     const imported = this.unit.imports.get(call.expression.text);
-    if (!isCore(imported?.module) || (imported?.imported !== "resource" && imported?.imported !== "rxResource") || (member.name.text !== "loader" && member.name.text !== "stream")) return false;
+    if (!isModule(imported?.module, "@angular/core") || (imported?.imported !== "resource" && imported?.imported !== "rxResource") || (member.name.text !== "loader" && member.name.text !== "stream")) return false;
     this.read(call, this.hopped(this.rewrapped(t, ["value"]), "resource", at, [{ from: [], to: ["value"] }]));
     return true;
   }
@@ -666,7 +663,7 @@ export class Walker {
   private operatorName(operator: ts.Expression): string | undefined {
     if (!ts.isCallExpression(operator) || !ts.isIdentifier(operator.expression)) return undefined;
     const imported = this.unit.imports.get(operator.expression.text);
-    return imported !== undefined && isRxjs(imported.module) ? imported.imported : undefined;
+    return imported !== undefined && isModule(imported.module, "rxjs") ? imported.imported : undefined;
   }
 
   private subscribeTo(call: ts.CallExpression, t: Trail): void {
