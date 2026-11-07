@@ -1,5 +1,9 @@
-import { edgeVerdict, FOLLOWED_EDGE_KINDS, type EdgeVerdict } from "../../domain/impact/edge-policy.ts";
+import { EDGE_POLICY, edgeVerdict, FOLLOWED_EDGE_KINDS, type EdgeVerdict } from "../../domain/impact/edge-policy.ts";
 import { isTypeScriptFile } from "../../domain/languages/typescript.ts";
+import type { FieldOrigin, LocalOrigin } from "../../domain/relations/field-origin.ts";
+import type { MemberUseOrigin } from "../../domain/relations/member-use.ts";
+import type { SymbolRef } from "../../domain/relations/relation.ts";
+import { joinsFact } from "../../domain/shared/code-node.ts";
 import type { CodeGraphReader, GraphEdge, GraphNodeId, GraphSymbol } from "../../ports/code-graph.port.ts";
 import type { DeclaredMemberNames, ReceiverBinding } from "../../ports/declared-member-names.port.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
@@ -15,7 +19,7 @@ import { declarationAt, importBindings } from "./import-bindings.ts";
  * the source file's own bindings (`ImportOrigins.rootOrigins`) and, for a root an import binds, the declaration the
  * module statements and the graph's `imports` edges join it to (`importBindings`). An edge whose root proof reads past
  * its root (`RootOrigin.pastRoot`) is kept: the root says where the chain starts, not what the call runs. A kept edge of a
- * TypeScript source into a member of a class whose receiver is a value names that receiver (`EdgeTarget.receiver`): the
+ * TypeScript source into a member of a class or interface whose receiver is a value names that receiver (`EdgeTarget.receiver`): the
  * index matched such a call by name, and the language types structurally, so another object may stand there (ADR-0029
  * decision 11). The one owner of that decision for every family that reads graph edges as dependences.
  */
@@ -42,7 +46,22 @@ export interface EdgeTargetsDeps {
   modules?: ModuleDependencies | { reader: ModuleDependenciesReader; sources: readonly SourceFile[] } | undefined;
   /** What a source's syntax states, read once per file; without it no kept edge names a receiver. */
   syntaxOf?: ((file: string) => Promise<DeclaredMemberNames>) | undefined;
+  /**
+   * The relations' origins and member proofs, read when an edge's receiver first needs them; with them every kept edge
+   * that names a receiver is settled (`EdgeTarget.derivation`).
+   */
+  proofs?: (() => Promise<ReceiverProofs>) | undefined;
 }
+
+/** What the relations prove a receiver holds: a field's or an `inject()` local's origin, and the member calls they prove. */
+export interface ReceiverProofs {
+  fields: readonly FieldOrigin[];
+  locals: readonly LocalOrigin[];
+  memberUses?: readonly MemberUseOrigin[] | undefined;
+}
+
+/** The syntax of a source no reader parses: it states nothing. */
+export const NOTHING_DECLARED: DeclaredMemberNames = { names: [], functionValueCalls: [], callables: [], receiverBindings: [], functionValues: [] };
 
 /** A graph edge with both of its ends. */
 export interface FollowedEdge {
@@ -58,39 +77,62 @@ export function edgeKey({ source, target, kind, line, column }: GraphEdge): stri
 
 /**
  * What an edge reaches (`EdgeVerdict`); a dropped one carries the root that binds its name outside the repository's
- * declarations. `receiver` is the value a kept member call is made on: the field's name for `this.f.m`, the parameter's or
- * variable's root for `v.m`, and empty for a call result or another expression.
+ * declarations. `receiver` is the value a kept call into a member of a class or interface is made on: the field's name for `this.f.m`, the parameter's or
+ * variable's root for `v.m`, and empty for a call result or another expression. With the relations' proofs such an edge is
+ * `proven` when a source proof binds the receiver to the class of the member it reaches, and a `name-match` otherwise.
  */
-export type EdgeTarget = Exclude<EdgeVerdict<GraphSymbol>, { kind: "keep" | "drop" }> | { kind: "keep"; receiver?: string } | { kind: "drop"; root: ImportOrigin };
+export type EdgeTarget =
+  | Exclude<EdgeVerdict<GraphSymbol>, { kind: "keep" | "drop" }>
+  | { kind: "keep"; receiver?: string; derivation?: "proven" | "name-match" }
+  | { kind: "drop"; root: ImportOrigin };
 
 const KEEP: EdgeTarget = { kind: "keep" };
 const IMPORT = "imports";
 /** Declarations that hold a value, which a call may find any object in. */
 const VALUE_KINDS: readonly string[] = ["constant", "variable"];
-/** The types whose members a value receiver may stand for. */
-const CLASS_KINDS: readonly string[] = ["class", "component"];
+/** The types whose members a value receiver may stand for, and a receiver's store or annotation may name. */
+const TYPE_KINDS: readonly string[] = ["class", "component", "interface"];
+/** The declarations that can own a local an `inject()` call initializes. */
+const LOCAL_OWNER_KINDS: readonly string[] = [...EDGE_POLICY.relations.from, "function"];
 
 const bindingKey = (line: number, column: number, member: string): string => `${line}:${column}:${member}`;
 
-export function createEdgeTargets({ origins, store, modules, syntaxOf }: EdgeTargetsDeps): EdgeTargets {
+interface SyntaxIndex {
+  receiverBindings: ReadonlyMap<string, ReceiverBinding | "ambiguous">;
+  /** The callee each call starting at a place spells, without white space, by `line:column`. */
+  callees: ReadonlyMap<string, readonly string[]>;
+}
+
+function isInside(inner: GraphSymbol, outer: GraphSymbol): boolean {
+  return inner.file === outer.file && outer.startLine <= inner.startLine && inner.endLine <= outer.endLine;
+}
+
+export function createEdgeTargets({ origins, store, modules, syntaxOf, proofs }: EdgeTargetsDeps): EdgeTargets {
   const verdicts = new Map<string, EdgeTarget>();
   const navigation = createGraphNavigation(store, () => false);
-  const receiverBindings = new Map<string, Promise<ReadonlyMap<string, ReceiverBinding | "ambiguous">>>();
-  const bindingsIn = (read: (file: string) => Promise<DeclaredMemberNames>, file: string): Promise<ReadonlyMap<string, ReceiverBinding | "ambiguous">> => {
-    let held = receiverBindings.get(file);
+  const syntaxIndexes = new Map<string, Promise<SyntaxIndex>>();
+  const syntaxIn = (read: (file: string) => Promise<DeclaredMemberNames>, file: string): Promise<SyntaxIndex> => {
+    let held = syntaxIndexes.get(file);
     if (held === undefined) {
-      held = read(file).then(({ receiverBindings: found }) => {
+      held = read(file).then(({ receiverBindings: found, calls }) => {
         const byPlace = new Map<string, ReceiverBinding | "ambiguous">();
         for (const binding of found) {
           const key = bindingKey(binding.line, binding.column, binding.member);
           byPlace.set(key, byPlace.has(key) ? "ambiguous" : binding);
         }
-        return byPlace;
+        const callees = Map.groupBy(calls ?? [], (call) => `${call.line}:${call.column}`);
+        return { receiverBindings: byPlace, callees: new Map([...callees].map(([place, at]) => [place, at.map((call) => call.name.replace(/\s+/g, ""))])) };
       });
-      receiverBindings.set(file, held);
+      syntaxIndexes.set(file, held);
     }
     return held;
   };
+  let proofsRead: Promise<{ held: ReceiverProofs; byPlace: ReadonlyMap<string, MemberUseOrigin> }> | undefined;
+  const provenReceivers = (read: () => Promise<ReceiverProofs>) =>
+    (proofsRead ??= read().then((held) => {
+      const byPlace = Map.groupBy((held.memberUses ?? []).filter((use) => use.template !== true), (use) => JSON.stringify([use.reference.file, use.reference.line, use.reference.column, use.reference.name.slice(use.reference.name.lastIndexOf(".") + 1)]));
+      return { held, byPlace: new Map([...byPlace].flatMap(([place, uses]) => (uses.length === 1 ? [[place, uses[0]!] as const] : []))) };
+    }));
   /** Per file, the declaration each local name its imports bind reaches, when the join proves exactly one. */
   const bound = new Map<string, ReadonlyMap<string, GraphSymbol>>();
   let extracted: ReadonlyMap<string, readonly ModuleDependency[]> | undefined;
@@ -124,9 +166,11 @@ export function createEdgeTargets({ origins, store, modules, syntaxOf }: EdgeTar
         else kept.push(followed);
       }
       const receivers = await receiversOf(kept, signal);
-      for (const [index, { edge }] of kept.entries()) {
+      for (const [index, followed] of kept.entries()) {
         const receiver = receivers[index];
-        verdicts.set(edgeKey(edge), receiver === undefined ? KEEP : { kind: "keep", receiver });
+        if (receiver === undefined) verdicts.set(edgeKey(followed.edge), KEEP);
+        else if (proofs === undefined) verdicts.set(edgeKey(followed.edge), { kind: "keep", receiver });
+        else verdicts.set(edgeKey(followed.edge), { kind: "keep", receiver, derivation: (await bindsClass(followed, receiver, proofs)) ? "proven" : "name-match" });
       }
     }
     return edges.map(({ edge }) => verdicts.get(edgeKey(edge)) ?? KEEP);
@@ -141,7 +185,7 @@ export function createEdgeTargets({ origins, store, modules, syntaxOf }: EdgeTar
   async function receiversOf(edges: readonly FollowedEdge[], signal?: AbortSignal): Promise<readonly (string | undefined)[]> {
     const read = syntaxOf;
     if (read === undefined) return [];
-    const asked = edges.flatMap((followed, index) => (isTypeScriptFile(followed.source.file) && navigation.ownersOf(followed.target).some((owner) => CLASS_KINDS.includes(owner.kind)) ? [{ ...followed, index }] : []));
+    const asked = edges.flatMap((followed, index) => (isTypeScriptFile(followed.source.file) && navigation.ownersOf(followed.target).some((owner) => TYPE_KINDS.includes(owner.kind)) ? [{ ...followed, index }] : []));
     if (asked.length === 0) return [];
     const bindings = await origins.rootBindings(asked.map(({ edge, source, target }): UseSite => ({ file: source.file, line: edge.line!, column: edge.column! + 1, spelled: target.name, owner: { name: source.name, line: source.startLine, endLine: source.endLine } })), signal);
     /** The body's own binding, or a declaration of the file the index holds as no class, function or other non-value node. */
@@ -150,13 +194,61 @@ export function createEdgeTargets({ origins, store, modules, syntaxOf }: EdgeTar
       (binding?.kind === "declared" && !navigation.symbolsInFile(file).some((symbol) => symbol.name === binding.root && !VALUE_KINDS.includes(symbol.kind) && binding.lines.some((line) => symbol.startLine <= line && line <= symbol.endLine)));
     const receivers: (string | undefined)[] = [];
     for (const [k, { edge, source, target, index }] of asked.entries()) {
-      const bound = (await bindingsIn(read, source.file)).get(bindingKey(edge.line!, edge.column! + 1, target.name));
+      const bound = (await syntaxIn(read, source.file)).receiverBindings.get(bindingKey(edge.line!, edge.column! + 1, target.name));
       const binding = bindings[k];
       if (bound !== undefined) receivers[index] = bound === "ambiguous" ? "" : bound.receiver;
       else if (binding?.kind === "this") receivers[index] = binding.member === undefined || binding.member === target.name ? undefined : binding.member;
       else if (isValue(source.file, binding)) receivers[index] = binding.root;
     }
     return receivers;
+  }
+
+  /**
+   * Whether a source proof binds an edge's value receiver to the class that declares the member it reaches, or to a class
+   * below it: a member proof of the call itself, or, for an immediate receiver (`this.f.m`, `v.m`), the class a field's or
+   * an `inject()` local's origin holds, or the class the receiver's one store or declared annotation names. Dependence is
+   * the binding the language makes at compile time, so a declared type proves it even where what runs is unproven. A
+   * receiver further down a chain (`this.f.g.m`) is bound by nothing here.
+   */
+  async function bindsClass({ edge, source, target }: FollowedEdge, receiver: string, read: () => Promise<ReceiverProofs>): Promise<boolean> {
+    const line = edge.line!;
+    const column = edge.column! + 1;
+    const owners = navigation.ownersOf(target);
+    const declares = (type: GraphSymbol | undefined): boolean =>
+      type !== undefined && [type, ...navigation.typesAround(type, "up").map((around) => around.type)].some((candidate) => owners.some((owner) => owner.id === candidate.id));
+    const { held, byPlace } = await provenReceivers(read);
+    const proof = byPlace.get(JSON.stringify([source.file, line, column, target.name]));
+    if (proof !== undefined) return joinsFact(target, proof.member) && owners.some((owner) => joinsFact(owner, proof.receiver));
+    if (receiver === "" || syntaxOf === undefined) return false;
+    const syntax = await syntaxIn(syntaxOf, source.file);
+    const callees = syntax.callees.get(`${line}:${column}`) ?? [];
+    const declaredAt = (ref: SymbolRef, kinds: readonly string[]): GraphSymbol | undefined => navigation.declarationAt(ref, kinds);
+    const enclosing = (owner: SymbolRef, kinds: readonly string[]): boolean => {
+      const declaration = declaredAt(owner, kinds);
+      return declaration !== undefined && isInside(source, declaration);
+    };
+    const origin = callees.includes(`this.${receiver}.${target.name}`)
+      ? single(held.fields.filter((field) => field.field === receiver && enclosing(field.owner, EDGE_POLICY.relations.from)))
+      : callees.includes(`${receiver}.${target.name}`)
+        ? single(held.locals.filter((local) => local.local === receiver && enclosing(local.owner, LOCAL_OWNER_KINDS)))
+        : "unbound";
+    if (origin === "unbound") return false;
+    if (origin !== undefined) return "class" in origin.holds && declares(declaredAt(origin.holds.class, TYPE_KINDS));
+    const bound = syntax.receiverBindings.get(bindingKey(line, column, target.name));
+    if (bound === undefined || bound === "ambiguous" || bound.receiver !== receiver) return false;
+    const holds = bound.holds;
+    if (holds.kind === "declared") return declares(declaredAt({ path: source.file, line: holds.line, symbol: holds.name }, TYPE_KINDS));
+    if (holds.kind === "annotated") return declares(await typeNamed(source.file, holds.type));
+    if (holds.kind === "constructed") return declares(await typeNamed(source.file, holds.name));
+    return false;
+  }
+
+  /** The one type `name` names in `file`: the declaration an import of it binds, or the one the file declares. */
+  async function typeNamed(file: string, name: string): Promise<GraphSymbol | undefined> {
+    const imported = (await bindingsOf(file)).get(name);
+    if (imported !== undefined) return TYPE_KINDS.includes(imported.kind) ? imported : undefined;
+    const declared = navigation.symbolsInFile(file).filter((symbol) => symbol.name === name && TYPE_KINDS.includes(symbol.kind));
+    return declared.length === 1 ? declared[0] : undefined;
   }
 
   return {
@@ -199,4 +291,8 @@ export function createEdgeTargets({ origins, store, modules, syntaxOf }: EdgeTar
     collect(store.incomingEdges(homonyms.map((symbol) => symbol.id), FOLLOWED_EDGE_KINDS), () => true);
     return [...candidates.values()];
   }
+}
+
+function single<T>(items: readonly T[]): T | undefined {
+  return items.length === 1 ? items[0] : undefined;
 }

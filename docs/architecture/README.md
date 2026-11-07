@@ -40,6 +40,7 @@ marked **Proposed** awaits the owner's acceptance.
 | [0032](adr/0032-a-query-family-is-done-when-every-surface-exposes-it.md) | A query family is delivered only when it answers the fact contract and every surface (library, MCP, compose, CLI, protocol) reaches it; a deferred surface names its phase | Accepted |
 | [0033](adr/0033-contract-consequences-as-one-query-family.md) | Contract consequences become one family, `contractConsequences` (written hypotheses or a diff), answering one composite fact on every surface as `ye_ast_contract_consequences`; a fresh family | Accepted |
 | [0034](adr/0034-name-contract-consequences-explicitly.md) | Name the family `contractConsequences`, MCP and compose `ye_ast_contract_consequences`, and CLI `contract-consequences`; supersedes the naming in 0033 | Accepted |
+| [0035](adr/0035-dependence-is-the-compile-time-binding.md) | A graph edge on a value receiver is a name match (confidence 0.3) until a source proof binds the receiver to the member's class; every followed dependence carries its derivation | Accepted |
 
 ## Designs (RFC)
 

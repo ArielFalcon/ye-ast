@@ -243,6 +243,7 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
     ...budget,
     ...trust,
     importOrigins,
+    memberNames,
     sourceTrivia,
     moduleDependencies,
     moduleReaders: [moduleDependencies, javaImports],

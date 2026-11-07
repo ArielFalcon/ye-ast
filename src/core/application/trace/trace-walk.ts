@@ -432,8 +432,13 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
     });
     const passed = uses.followed(node, values).filter(({ target }) => DEFERRED_KINDS.includes(target.kind));
     const verdicts = await targets.verdictsOf([...called, ...passed], signal);
-    /** The kept edges the index matched by name on a value receiver (ADR-0029 decision 11), by their index. */
-    const valueRoots = new Map(verdicts.flatMap((verdict, index) => (verdict.kind === "keep" && verdict.receiver !== undefined ? [[index, verdict.receiver] as const] : [])));
+    /** The kept edges into a member of a class the index matched by name on a value receiver (ADR-0029 decision 11), by their index. */
+    const valueRoots = new Map(
+      [...called, ...passed].flatMap(({ target }, index) => {
+        const verdict = verdicts[index]!;
+        return verdict.kind === "keep" && verdict.receiver !== undefined && navigation.ownersOf(target).some((owner) => CLASS_KINDS.includes(owner.kind)) ? [[index, verdict.receiver] as const] : [];
+      }),
+    );
     const external: ExternalCall[] = [];
     const children: Child[] = root ? await membersOf(node) : [];
     const cuts: Cut[] = unplaced.map((reference) => unresolvedAt(reference, []));

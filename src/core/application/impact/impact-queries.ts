@@ -51,7 +51,10 @@ import { referenceProofsOf, unresolvedOf, type ReferenceProofs } from "./referen
 import { unresolvedReferencesIn } from "../navigation/declaration-uses.ts";
 import { walkImpact, type Walk } from "./walk.ts";
 import type { ImportOrigins, ImportOriginsReader } from "../../ports/import-origins.port.ts";
-import { createEdgeTargets, edgeKey, type EdgeTargets, type EdgeTargetsDeps, type FollowedEdge } from "../navigation/edge-targets.ts";
+import type { DeclaredMemberNames, DeclaredMemberNamesReader } from "../../ports/declared-member-names.port.ts";
+import type { ReceiverSettlement } from "../../domain/impact/edge-policy.ts";
+import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
+import { createEdgeTargets, edgeKey, NOTHING_DECLARED, type EdgeTargets, type EdgeTargetsDeps, type FollowedEdge } from "../navigation/edge-targets.ts";
 import { combinedModuleReader } from "../navigation/module-readers.ts";
 import type { ContractRoutes } from "../../ports/contract-routes.port.ts";
 import { distinctTargets, evidenceOfTarget, missingTargets, rangeChanges, requestedRanges, selectRoots, targetKey } from "../navigation/root-selection.ts";
@@ -76,6 +79,11 @@ export interface ImpactQueriesDeps extends HeadReaderDeps {
    * repository stops being a cut (`RFC-0016` gap A). Without it every answer is the one ye-ast gave before.
    */
   importOrigins?: ImportOriginsReader;
+  /**
+   * Reads what a source's syntax states, so a graph edge the index matched on a value receiver is settled by what the
+   * sources bind the receiver to (ADR-0035); without it every kept edge counts as the index resolved it.
+   */
+  memberNames?: DeclaredMemberNamesReader;
   /** Tells the trivia lines of a requested range apart; without it every line of a range is code. */
   sourceTrivia?: SourceTrivia;
   moduleDependencies?: ModuleDependenciesReader;
@@ -171,7 +179,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
           if (signal?.aborted) return ABORTED;
           const unmodelled = await unmodelledIn(deps, headTree, [...changes.map(({ path }) => path), ...requested.map(({ file }) => file)]);
           if (signal?.aborted) return ABORTED;
-          const read = await impactOf({ store, changes: ranges.changes, requested, componentsByResource, found, fields, locals, memberUses, loads, headTree, summary, unresolved, budget: request.budget ?? {}, proofs, unmodelled, origins, modules: bindingModules === undefined ? undefined : { reader: bindingModules, sources: headTree.sources }, signal });
+          const read = await impactOf({ store, changes: ranges.changes, requested, componentsByResource, found, fields, locals, memberUses, loads, headTree, summary, unresolved, budget: request.budget ?? {}, proofs, unmodelled, origins, modules: bindingModules === undefined ? undefined : { reader: bindingModules, sources: headTree.sources }, syntaxOf: syntaxOfSources(deps.memberNames, headTree.sources), signal });
           if (signal?.aborted) return ABORTED;
           return { ok: true, value: impactFact(head.base(content, true), read.value, [...fixed, ...read.cuts]) };
         } finally {
@@ -412,7 +420,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
       });
       const unmodelled = await unmodelledIn(deps, headTree, validatedChanges.filter((file) => !file.deleted).map(({ path }) => path));
       if (signal?.aborted) return ABORTED;
-      const read = await impactOf({ store, changes: validatedChanges, requested: [], componentsByResource, found, fields, locals, memberUses, loads, headTree, summary, unresolved, budget: request.budget ?? {}, proofs, unmodelled, origins, modules: bindingModules === undefined ? undefined : { reader: bindingModules, sources: headTree.sources }, signal });
+      const read = await impactOf({ store, changes: validatedChanges, requested: [], componentsByResource, found, fields, locals, memberUses, loads, headTree, summary, unresolved, budget: request.budget ?? {}, proofs, unmodelled, origins, modules: bindingModules === undefined ? undefined : { reader: bindingModules, sources: headTree.sources }, syntaxOf: syntaxOfSources(deps.memberNames, headTree.sources), signal });
       if (signal?.aborted) return ABORTED;
       return { ok: true, value: impactFact(head.base(content, true), { ...value, ...read.value }, [...unaccounted([...fixed, ...read.cuts]), ...moduleCuts]) };
     } finally {
@@ -437,6 +445,16 @@ function unknownFact(base: FactBase, reason: "index-unavailable" | "source-unrea
 
 
 /** Which of `files` the graph cannot place, read from the head's own sources of those files only. */
+/** What each of `sources` states in its syntax; nothing without a reader. */
+function syntaxOfSources(reader: DeclaredMemberNamesReader | undefined, sources: readonly SourceFile[]): EdgeTargetsDeps["syntaxOf"] {
+  if (reader === undefined) return undefined;
+  const byPath = new Map(sources.map((file) => [file.path, file]));
+  return async (path): Promise<DeclaredMemberNames> => {
+    const file = byPath.get(path);
+    return file === undefined ? NOTHING_DECLARED : reader.memberNames(file);
+  };
+}
+
 async function unmodelledIn(deps: ImpactQueriesDeps, headTree: CommitExtraction, files: readonly string[]): Promise<readonly string[]> {
   if (deps.unmodelled === undefined) return [];
   const asked = new Set(files);
@@ -470,6 +488,8 @@ interface WalkInput {
   origins?: ImportOrigins | undefined;
   /** The module statements that bind a name to the declaration an edge of it reaches. */
   modules?: EdgeTargetsDeps["modules"];
+  /** What each source's syntax states, for settling the edges on value receivers. */
+  syntaxOf?: EdgeTargetsDeps["syntaxOf"];
   signal?: AbortSignal | undefined;
 }
 
@@ -485,7 +505,8 @@ async function impactOf(input: WalkInput): Promise<ImpactRead> {
 
   const { seeds } = selection;
   const build = (corrections: EdgeCorrections): InboundEdges => inboundEdgesOf(store, { relations: found, fields, locals, memberUses }, input.proofs, corrections);
-  const { inbound, walk } = await walkInside(seeds.map(({ symbol }) => symbol), build, input.budget, input.origins === undefined ? undefined : createEdgeTargets({ origins: input.origins, store, modules: input.modules }), input.signal);
+  const targets = input.origins === undefined ? undefined : createEdgeTargets({ origins: input.origins, store, modules: input.modules, syntaxOf: input.syntaxOf, proofs: async () => ({ fields, locals, memberUses }) });
+  const { inbound, walk } = await walkInside(seeds.map(({ symbol }) => symbol), build, input.budget, targets, input.signal);
 
   const walked = walk.reached.map(({ symbol }) => symbol);
   const reachedIds = new Set(walked.map((symbol) => symbol.id));
@@ -523,6 +544,7 @@ async function impactOf(input: WalkInput): Promise<ImpactRead> {
               ...(via.resource === undefined ? {} : { resource: via.resource }),
               ...(via.lines.length === 0 ? {} : { lines: via.lines }),
               basis: via.basis,
+              derivation: via.derivation,
               ...(via.substitutes === undefined ? {} : { substitutes: via.substitutes.map(({ class: { path, symbol, line }, at }) => ({ file: path, symbol, line, at: { file: at.path, line: at.line } })) }),
             },
           }),
@@ -542,6 +564,7 @@ async function impactOf(input: WalkInput): Promise<ImpactRead> {
  */
 async function walkInside(seeds: readonly GraphSymbol[], build: (corrections: EdgeCorrections) => InboundEdges, budget: ImpactBudget, targets?: EdgeTargets, signal?: AbortSignal): Promise<{ inbound: InboundEdges; walk: Walk }> {
   const dropped = new Set<string>();
+  const settled = new Map<string, ReceiverSettlement>();
   const into = new Map<GraphNodeId, Map<string, FollowedEdge>>();
   const checked = new Set<string>();
   const probed = new Set<GraphNodeId>();
@@ -553,7 +576,7 @@ async function walkInside(seeds: readonly GraphSymbol[], build: (corrections: Ed
     return true;
   };
   for (;;) {
-    const inbound = build({ dropped, into: new Map([...into].map(([id, edges]) => [id, [...edges.values()]])) });
+    const inbound = build({ dropped, into: new Map([...into].map(([id, edges]) => [id, [...edges.values()]])), settled });
     const walk = walkImpact(seeds, inbound, budget);
     if (targets === undefined || signal?.aborted) return { inbound, walk };
     const fresh = inbound.followed().filter(({ edge }) => !checked.has(edgeKey(edge)));
@@ -565,7 +588,13 @@ async function walkInside(seeds: readonly GraphSymbol[], build: (corrections: Ed
     const verdicts = await targets.verdictsOf(fresh, signal);
     for (const [index, followed] of fresh.entries()) {
       const verdict = verdicts[index]!;
-      if (verdict.kind === "keep") continue;
+      if (verdict.kind === "keep") {
+        if (verdict.derivation !== undefined) {
+          settled.set(edgeKey(followed.edge), verdict.derivation);
+          changed = true;
+        }
+        continue;
+      }
       dropped.add(edgeKey(followed.edge));
       changed = true;
       if (verdict.kind === "redirect") moveTo(verdict.to, followed);
