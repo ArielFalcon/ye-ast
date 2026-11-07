@@ -3,11 +3,14 @@ import ts from "typescript";
 import { isTypeScriptFile } from "../../domain/languages/typescript.ts";
 import { canonicalJson } from "../../domain/shared/canonical-json.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
-import type { DeclaredBuildOutput } from "../../domain/shared/build-outputs.ts";
-import type { DeclaredTrees } from "../../ports/declared-tree.port.ts";
+import { installVerdict, type DeclaredBuildOutput } from "../../domain/shared/build-outputs.ts";
+import type { DeclaredEntry, DeclaredTrees } from "../../ports/declared-tree.port.ts";
+import type { DerivedFacts } from "../../ports/derived-facts.port.ts";
+import type { Digest } from "../../ports/digest.port.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
-import type { TypeBinding, TypeBindings, TypeBindingsAnswer, TypeTarget, UnownedSource } from "../../ports/type-bindings.port.ts";
-import { REPOSITORY_ROOT, createConfinedHost, type ConfinedHost, type DirectoryEntries } from "./confined-compiler-host.ts";
+import type { TypeBinding, TypeBindings, TypeBindingsAnswer, TypeTarget, UnownedSource, UnusedOutput, UsedOutput } from "../../ports/type-bindings.port.ts";
+import { REPOSITORY_ROOT, createConfinedHost, type ConfinedHost, type DeclaredRead, type DirectoryEntries } from "./confined-compiler-host.ts";
+import { LOCKFILE_NAMES, installPathOf, lockedVersions } from "./installed-packages.ts";
 import { packageOf } from "./module-resolver.ts";
 
 /** The compiler's own `include`/`exclude` matcher; internal in 6.0.3 (ADR-0008 pins that version, a test holds the call). */
@@ -33,20 +36,118 @@ interface Group {
   owned: string[];
 }
 
+/** A declared path the derivation asked about, with what it found, as one comparable tag. */
+interface AskedPath {
+  output: number;
+  path: string;
+  found: string;
+}
+
+interface Derivation {
+  answer: TypeBindingsAnswer;
+  asked: readonly AskedPath[];
+}
+
+const SLOT = "ts-type-bindings";
+
 /**
  * Binds every call and `new` of the snapshot's TypeScript sources by type, in one pass over programs that live only for
- * that pass (ADR-0037 decisions 7 and 8). A source's options come from the nearest `tsconfig.json` that includes it, or
- * from the one of its references, transitively, that does; sources whose owners state equal options share a program.
+ * that pass (ADR-0037 decisions 5, 7 and 8). A source's options come from the nearest `tsconfig.json` that includes it,
+ * or from the one of its references, transitively, that does; sources whose owners state equal options share a program.
+ * With `facts`, the answer is kept by the snapshot's content, the declarations and their install records, and a kept
+ * answer is used only while every declared path it asked about answers the same; requests for one key share one pass.
  */
-export function createTypeBindings({ trees }: { trees: DeclaredTrees }): TypeBindings {
+export function createTypeBindings({ trees, digest, facts }: { trees: DeclaredTrees; digest: Digest; facts?: DerivedFacts | undefined }): TypeBindings {
+  const running = new Map<string, Promise<Derivation>>();
+  const tagOf = (entry: DeclaredEntry): string => {
+    if (entry.kind === "file") return `file:${entry.path}:${digest.of(entry.content)}`;
+    if (entry.kind === "directory") return `directory:${entry.path}:${entry.names.join("/")}`;
+    if (entry.kind === "snapshot") return `snapshot:${entry.path}`;
+    if (entry.kind === "refused") return `refused:${entry.link}`;
+    return "absent";
+  };
+  const derive = (sources: readonly SourceFile[], outputs: readonly DeclaredBuildOutput[], signal?: AbortSignal): Derivation => {
+    const opened = outputs.map((output) => trees.open(output));
+    const { answer, reads } = bindAll(sources, outputs, trees, signal);
+    const asked = new Map<string, AskedPath>();
+    const ask = (output: number, path: string, entry: DeclaredEntry) => asked.set(`${output}\0${path}`, { output, path, found: tagOf(entry) });
+    for (const { output, path, entry } of reads) ask(output, path, entry);
+    const used: UsedOutput[] = [];
+    const unused: UnusedOutput[] = [];
+    for (const [index, output] of outputs.entries()) {
+      const read = reads.filter((each) => each.output === index && each.entry.kind === "file");
+      const installed = [...new Set(read.flatMap(({ path }) => installPathOf(path) ?? []))].toSorted(compareText).map((path) => {
+        const manifest = opened[index]!.entry(`${path}/package.json`);
+        ask(index, `${path}/package.json`, manifest);
+        return { path, version: manifest.kind === "file" ? versionOf(manifest.content) : undefined };
+      });
+      const verdict = installVerdict(lockedVersions(lockfileOf(sources, output)), installed);
+      if (!verdict.usable) unused.push({ kind: output.kind, at: output.at, ...(verdict.reason === "stale" ? { reason: "stale", stale: verdict.stale } : { reason: "no-lockfile" }) });
+      else {
+        const lines = [...asked.values()].filter((each) => each.output === index).map(({ path, found }) => `${path}\0${found}`).toSorted(compareText);
+        used.push({ kind: output.kind, at: output.at, verified: verdict.verified, digest: digest.of(lines.join("\n")) });
+      }
+    }
+    return { answer: unused.length > 0 ? { status: "unused", outputs: unused } : { ...answer, outputs: used }, asked: [...asked.values()] };
+  };
+  const unchanged = (outputs: readonly DeclaredBuildOutput[], asked: readonly AskedPath[]): boolean => {
+    const opened = outputs.map((output) => trees.open(output));
+    return asked.every(({ output, path, found }) => opened[output] !== undefined && tagOf(opened[output].entry(path)) === found);
+  };
   return {
     async of(sources, outputs, signal) {
-      return bindAll(sources, outputs, trees, signal);
+      if (facts === undefined) return derive(sources, outputs, signal).answer;
+      const inputs = {
+        layout: facts.fingerprint(sources.map(({ path, content }) => [path, content]).toSorted(([a], [b]) => compareText(a!, b!))),
+        outputs: outputs.map((output) => {
+          const tree = trees.open(output);
+          return { ...output, record: tagOf(tree.entry(".package-lock.json")), listing: tagOf(tree.entry("")) };
+        }),
+      };
+      const key = facts.fingerprint(inputs);
+      let fresh = false;
+      let pass = running.get(key);
+      const shared = pass !== undefined;
+      if (pass === undefined) {
+        pass = facts.ofInputs(SLOT, inputs, async () => {
+          fresh = true;
+          return derive(sources, outputs, signal);
+        });
+        running.set(key, pass);
+        void pass.then(
+          () => running.delete(key),
+          () => running.delete(key),
+        );
+      }
+      const kept = await pass.catch((error: unknown) => {
+        if (!shared || signal?.aborted) throw error;
+        fresh = true;
+        return derive(sources, outputs, signal);
+      });
+      return fresh || unchanged(outputs, kept.asked) ? kept.answer : derive(sources, outputs, signal).answer;
     },
   };
 }
 
-function bindAll(sources: readonly SourceFile[], outputs: readonly DeclaredBuildOutput[], trees: DeclaredTrees, signal?: AbortSignal): TypeBindingsAnswer {
+function lockfileOf(sources: readonly SourceFile[], output: DeclaredBuildOutput): string | undefined {
+  const directory = output.at === "" ? "" : `${output.at}/`;
+  for (const name of LOCKFILE_NAMES) {
+    const found = sources.find(({ path }) => path === `${directory}${name}`);
+    if (found !== undefined) return found.content;
+  }
+  return undefined;
+}
+
+function versionOf(manifest: string): string | undefined {
+  try {
+    const { version } = JSON.parse(manifest) as { version?: unknown };
+    return typeof version === "string" ? version : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function bindAll(sources: readonly SourceFile[], outputs: readonly DeclaredBuildOutput[], trees: DeclaredTrees, signal?: AbortSignal): { answer: Omit<Extract<TypeBindingsAnswer, { status: "bound" }>, "outputs">; reads: readonly DeclaredRead[] } {
   const confined = createConfinedHost(sources, outputs, trees);
   const { groups, unowned } = projectsOf(sources, confined);
   const bindings: TypeBinding[] = [];
@@ -61,7 +162,7 @@ function bindAll(sources: readonly SourceFile[], outputs: readonly DeclaredBuild
     }
   }
   bindings.sort((a, b) => compareText(a.file, b.file) || a.line - b.line || a.column - b.column || compareText(a.name, b.name));
-  return { bindings, unowned, refused: [...confined.refused].toSorted(compareText) };
+  return { answer: { status: "bound", bindings, unowned, refused: [...confined.refused].toSorted(compareText) }, reads: confined.reads };
 }
 
 function projectsOf(sources: readonly SourceFile[], confined: ConfinedHost): { groups: Group[]; unowned: UnownedSource[] } {
