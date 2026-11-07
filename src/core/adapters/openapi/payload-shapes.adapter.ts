@@ -205,7 +205,7 @@ function createReader(referenced: ReferencedDocuments, place: Evidence, document
       if ("kind" in response) return response;
       if (!isRecord(response.node)) return unknown("response");
       const media = isRecord(response.node.content) ? Object.values(response.node.content) : [response.node];
-      for (const entry of media) declared.push(isRecord(entry) && entry.schema !== undefined ? resolve(response.file, entry.schema) : undefined);
+      for (const entry of media.length === 0 ? [undefined] : media) declared.push(isRecord(entry) && entry.schema !== undefined ? resolve(response.file, entry.schema) : undefined);
     }
     const unreadable = declared.find((entry): entry is UnknownShape => entry !== undefined && "kind" in entry);
     if (unreadable !== undefined) return unreadable;

@@ -163,6 +163,11 @@ test("@JsonGetter names a property through its getter, and a field annotation re
   assert.deepEqual(Object.keys(properties(shape)), ["a", "b"]);
 });
 
+test("@JsonGetter and @JsonProperty on a method make it a property whatever the method is called", async () => {
+  const shape = await shapeOf(controller("Item"), source("Item", 'class Item { @JsonGetter("a") public String value() { return null; } @JsonProperty("b") String other() { return null; } public String plain() { return null; } }'));
+  assert.deepEqual(propertyShapes(shape), { a: "string|null", b: "string|null" });
+});
+
 test("@JsonIgnore on any accessor and write-only access drop a property", async () => {
   const dto = source("Item", "@Data class Item { @JsonIgnore private String ignored; @JsonProperty(access = JsonProperty.Access.WRITE_ONLY) private String password; private String kept; public String getSecret() { return null; } @JsonIgnore public void setSecret(String value) {} }");
   assert.deepEqual(Object.keys(properties(await shapeOf(controller("Item"), dto))), ["kept"]);
@@ -279,6 +284,55 @@ test("code that configures the mapper makes every Java shape unknown, with the p
   );
   const yaml: SourceFile = { path: "src/main/resources/application.yml", content: "spring:\n  jackson:\n    default-property-inclusion: non_null\n" };
   assert.equal((await shapeOf(controller("Item"), dto, yaml)).kind, "unknown");
+});
+
+const yamlAt = (content: string, path = "src/main/resources/application.yml"): SourceFile => ({ path, content });
+
+test("a mapper setting that changes what a body holds makes the shapes unknown at that key, and one that only presents it does not", async () => {
+  const files = [controller("Item"), source("Item", "class Item { public String name; }")];
+  for (const harmless of ["serialization:\n      indent-output: false", "time-zone: UTC", "locale: en", "deserialization:\n      fail-on-unknown-properties: false", "serialization:\n      INDENT_OUTPUT: true"]) {
+    assert.equal((await shapeOf(...files, yamlAt(`spring:\n  jackson:\n    ${harmless}\n`))).kind, "known", harmless);
+  }
+  for (const changing of ["default-property-inclusion: non_null", "property-naming-strategy: SNAKE_CASE", "serialization:\n      write-enums-using-to-string: true", "mapper:\n      use-annotations: false"]) {
+    assert.equal((await shapeOf(...files, yamlAt(`spring:\n  jackson:\n    ${changing}\n`))).kind, "unknown", changing);
+  }
+  const shape = await shapeOf(...files, yamlAt("# jackson\nspring:\n  jackson:\n    time-zone: UTC\n    default-property-inclusion: non_null\n"));
+  assert.ok(shape.kind === "unknown");
+  assert.deepEqual(shape.evidence, [{ path: "src/main/resources/application.yml", line: 5 }]);
+});
+
+test("a mapper setting of another module, or text that only mentions jackson, does not change a module's shapes", async () => {
+  const dto = source("Item", "class Item { public String name; }");
+  const other = yamlAt("spring:\n  jackson:\n    default-property-inclusion: non_null\n", "other/src/main/resources/application.yml");
+  assert.equal((await shapeOf(controller("Item"), dto, other, yamlAt("app:\n  note: jackson\n"))).kind, "known");
+});
+
+test("a converter hook that only registers the default Jackson converter changes nothing; any other statement in it may", async () => {
+  const dto = source("Item", "class Item { public String name; }");
+  const hook = (body: string) => source("WebConfig", `class WebConfig { public void configureMessageConverters(List<HttpMessageConverter<?>> converters) { ${body} } }`);
+  assert.equal((await shapeOf(controller("Item"), dto, hook("converters.add(new MappingJackson2HttpMessageConverter());"))).kind, "known");
+  assert.equal((await shapeOf(controller("Item"), dto, hook("converters.add(new MappingJackson2HttpMessageConverter(custom));"))).kind, "unknown");
+  assert.equal((await shapeOf(controller("Item"), dto, hook("converters.add(build());"))).kind, "unknown");
+  assert.equal((await shapeOf(controller("Item"), dto, hook("converters.clear();"))).kind, "unknown");
+  const own = source("MappingJackson2HttpMessageConverter", "class MappingJackson2HttpMessageConverter { }");
+  assert.equal((await shapeOf(controller("Item"), dto, own, hook("converters.add(new MappingJackson2HttpMessageConverter());"))).kind, "unknown");
+});
+
+test("the files a shape depends on include every file that declares a mapper setting, harmless or not, and the places of code that configure it", async () => {
+  const files = [controller("Item"), source("Item", "class Item { public String name; }")];
+  const filesOf = async (...more: SourceFile[]) => {
+    const [only] = await responses(...files, ...more);
+    assert.ok(only?.status === "complete");
+    return only.value.files;
+  };
+  const item = "src/main/java/app/Item.java";
+  const handler = "src/main/java/app/ItemController.java";
+  const settings = "src/main/resources/application.yml";
+  assert.deepEqual(await filesOf(), [item, handler]);
+  assert.deepEqual(await filesOf(yamlAt("spring:\n  jackson:\n    time-zone: UTC\n")), [item, handler, settings]);
+  assert.deepEqual(await filesOf(yamlAt("spring:\n  jackson:\n    default-property-inclusion: non_null\n")), [handler, settings]);
+  const mapper = "@org.springframework.context.annotation.Configuration class Mapper { @org.springframework.context.annotation.Bean ObjectMapper mapper() { return null; } }";
+  assert.deepEqual(await filesOf(source("Mapper", mapper)), [handler, "src/main/java/app/Mapper.java"]);
 });
 
 test("one handler mapped to several routes gives each the same shape, and a source with no route gives none", async () => {

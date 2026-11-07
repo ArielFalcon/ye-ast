@@ -113,6 +113,13 @@ test("success responses that do not all declare the same schema make the root un
   assert.equal(root({ "200": { description: "ok", content: { "application/json": { schema: ref }, "application/xml": { schema: ref } } }, "201": response(ref) }).kind, "known");
 });
 
+test("a success response with an empty content map is a response without a body: it takes part in the agreement and, alone, holds nothing", () => {
+  const root = (responses: unknown) => rootOf([document({ Root: { type: "object" } }, responses)]).shape;
+  const ref = { $ref: "#/components/schemas/Root" };
+  assert.equal(root({ "200": response(ref), "204": { description: "none", content: {} } }).kind, "unknown");
+  assert.deepEqual(known(root({ "204": { description: "none", content: {} } })).values, known(root({ "204": { description: "none" } })).values);
+});
+
 test("an operation with success responses but no body has a place that holds nothing, and one with no success response is unknown", () => {
   const root = (responses: unknown) => rootOf([document({}, responses)]).shape;
   assert.deepEqual(known(root({ "204": { description: "none" } })).values, { literals: { boolean: [], number: [], string: [] }, array: false, object: false, null: false, absent: false });

@@ -110,9 +110,20 @@ export function basePathOf(files: readonly SourceFile[]): Finding<BasePath> {
 
 export type ConfiguredValue = { status: "found"; value: string } | { status: "absent" } | { status: "undecided" };
 
+/** A key a configuration file declares, in its canonical spelling, and where. */
+export interface ConfiguredKey {
+  key: string;
+  evidence: Evidence;
+}
+
 export interface Configuration {
   /** The string a key holds in the files; `undecided` when two files give it different values or the files cannot all be read. */
   valueOf(key: string): ConfiguredValue;
+  /**
+   * Every key declared at or under a prefix, whatever its value, in whichever profile. `undecided` holds the places the files
+   * could not be read at (a syntax error, an XML file, an import): they may declare any key.
+   */
+  keysUnder(prefix: string): { keys: readonly ConfiguredKey[]; undecided: readonly Evidence[] };
 }
 
 /**
@@ -121,24 +132,34 @@ export interface Configuration {
  */
 export function configurationOf(files: readonly SourceFile[]): Configuration {
   const declared = new Map<string, (string | undefined)[]>();
-  let undecided = false;
+  const keys: ConfiguredKey[] = [];
+  const gaps: Evidence[] = [];
+  let unplaced = false;
   for (const file of files) {
     const read = file.path.endsWith(".xml") ? ({ ok: false, line: 1 } as const) : readConfig(file, EVERY_KEY);
     if (!read.ok) {
-      undecided = true;
+      gaps.push({ path: file.path, line: read.line });
       continue;
     }
     for (const document of read.documents) {
-      if (documentProfile(document, profileOfConfigFile(file.path)) === null) undecided = true;
-      for (const { key, value } of document) {
-        if (key === IMPORT || key.startsWith(`${IMPORT}[`)) undecided = true;
-        else if (!key.startsWith(`${ACTIVATE}.`)) declared.set(key, [...(declared.get(key) ?? []), value]);
+      if (documentProfile(document, profileOfConfigFile(file.path)) === null) unplaced = true;
+      for (const { key, value, line } of document) {
+        if (key === IMPORT || key.startsWith(`${IMPORT}[`)) gaps.push({ path: file.path, line });
+        else if (!key.startsWith(`${ACTIVATE}.`)) {
+          declared.set(key, [...(declared.get(key) ?? []), value]);
+          keys.push({ key, evidence: { path: file.path, line } });
+        }
       }
     }
   }
+  const undecided = unplaced || gaps.length > 0;
   return {
+    keysUnder(prefix) {
+      const root = canonicalKey(prefix);
+      return { keys: keys.filter(({ key }) => key === root || key.startsWith(`${root}.`) || key.startsWith(`${root}[`)), undecided: sortSpans(gaps) };
+    },
     valueOf(key) {
-      const values = new Set(declared.get(canonical(key)));
+      const values = new Set(declared.get(canonicalKey(key)));
       const [only] = values;
       if (undecided || values.size > 1 || (values.size === 1 && only === undefined)) return { status: "undecided" };
       return only === undefined ? { status: "absent" } : { status: "found", value: only };
@@ -191,7 +212,7 @@ function readYaml(content: string, keys: ReadKeys): ConfigRead {
 }
 
 function walkYaml(node: unknown, path: readonly string[], line: number, out: Declaration[], lines: LineCounter, keys: ReadKeys): void {
-  const key = canonical(path.join("."));
+  const key = canonicalKey(path.join("."));
   if (isAlias(node) || path.at(-1) === "<<") {
     if (keys.leads(key.replace(/\.?<<$/, ""))) out.push({ key, value: undefined, line });
     return;
@@ -246,7 +267,7 @@ function readProperties(content: string, keys: ReadKeys): ConfigRead {
     const entry = splitEntry(logical);
     if (entry === undefined) return { ok: false, line: start + 1 };
     current.entries++;
-    const key = canonical(entry.key);
+    const key = canonicalKey(entry.key);
     if (keys.reads(key)) current.declarations.push({ key, value: NON_ASCII.test(entry.raw) ? undefined : entry.value, line: start + 1 });
   }
   if (current.entries > 0) documents.push(current);
@@ -285,7 +306,8 @@ function unescape(text: string): string | undefined {
   return out;
 }
 
-function canonical(key: string): string {
+/** Spring's relaxed binding spelling of a key: lower case, without dashes or underscores. */
+export function canonicalKey(key: string): string {
   return key.toLowerCase().replace(/[-_]/g, "");
 }
 

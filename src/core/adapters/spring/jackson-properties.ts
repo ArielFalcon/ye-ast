@@ -227,7 +227,7 @@ function accessorsOf(type: TypeDecl, project: JavaProject): Accessor[] {
     const returns = method.node.childForFieldName("type");
     const notes = notesOf(method.node, scope, project);
     if (parameters.length === 0 && returns !== null && returns.type !== "void_type") {
-      const implicit = getterName(method.name, returns);
+      const implicit = getterName(method.name, returns) ?? (isExplicit({ notes } as Accessor) ? method.name : undefined);
       if (implicit !== undefined) accessors.push({ implicit, role: "getter", visible: modifiers.includes("public"), type: returns, scope, notes, node: method.node });
     } else if (parameters.length === 1 && method.name.startsWith("set") && method.name.length > 3) {
       accessors.push({ implicit: mangle(method.name.slice(3)), role: "setter", visible: modifiers.includes("public"), type: null, scope, notes, node: method.node });

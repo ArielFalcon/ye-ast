@@ -8,6 +8,7 @@ import type { Evidence, Finding, UnknownReason } from "../../domain/shared/fact.
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { OperationShape, PayloadShapes } from "../../ports/payload-shapes.port.ts";
 import type { JavaParser, JavaSyntaxTree } from "../tree-sitter/java-parser.adapter.ts";
+import { canonicalKey, configurationsOf, type Configuration } from "./application-config.ts";
 import { spanOf } from "./findings.ts";
 import { enumerationNames, serializedProperties, type WireProperty } from "./jackson-properties.ts";
 import { createJavaProject, describeFile, externalNames, scopeOf, type JavaFile, type JavaProject, type MethodDecl, type Scope, type TypeDecl } from "./java-symbols.ts";
@@ -47,6 +48,15 @@ const MAPPER_BEANS: ReadonlySet<string> = new Set([
   "HttpMessageConverter",
 ]);
 const CONVERTER_HOOKS: ReadonlySet<string> = new Set(["configureMessageConverters", "extendMessageConverters"]);
+const DEFAULT_CONVERTER = "MappingJackson2HttpMessageConverter";
+/** The configuration prefixes that choose or configure the mapper writing HTTP bodies. */
+const MAPPER_PREFIXES = ["spring.jackson", "spring.mvc.converters", "spring.http.converters"];
+/** Under `spring.jackson`: the settings that change how a body is laid out or how its dates are written, never which properties it holds (dates have no modelled shape). */
+const PRESENTATION_KEYS: ReadonlySet<string> = new Set(
+  ["serialization.indent-output", "serialization.order-map-entries-by-keys", "serialization.fail-on-empty-beans", "serialization.close-closeable", "serialization.flush-after-write-value", "serialization.wrap-exceptions", "time-zone", "locale", "date-format"].map((key) => canonicalKey(`spring.jackson.${key}`)),
+);
+/** Under `spring.jackson`: the settings that only affect reading a request. */
+const READING_PREFIXES = ["deserialization", "parser"].map((key) => canonicalKey(`spring.jackson.${key}`));
 const MAX_UNWRAPPING = 4;
 
 const NO_LITERALS = { boolean: [], number: [], string: [] } as const;
@@ -311,20 +321,70 @@ function handlerIndex(project: JavaProject): Map<string, MethodDecl> {
   return index;
 }
 
+function isPresentation(key: string): boolean {
+  return PRESENTATION_KEYS.has(key) || READING_PREFIXES.some((prefix) => key === prefix || key.startsWith(`${prefix}.`) || key.startsWith(`${prefix}[`));
+}
+
+/** What the configuration files of a module say about the mapper: the places that can change what a body holds, and every file that declares a setting of it. */
+interface MapperSettings {
+  changing: Evidence[];
+  files: string[];
+}
+
+function mapperSettings(configuration: Configuration): MapperSettings {
+  const changing: Evidence[] = [];
+  const files = new Set<string>();
+  for (const prefix of MAPPER_PREFIXES) {
+    const { keys, undecided } = configuration.keysUnder(prefix);
+    for (const { key, evidence } of keys) {
+      files.add(evidence.path);
+      if (!isPresentation(key)) changing.push(evidence);
+    }
+    for (const evidence of undecided) {
+      files.add(evidence.path);
+      changing.push(evidence);
+    }
+  }
+  return { changing, files: [...files] };
+}
+
+/** Whether a converter hook only registers the mapper Spring would build by default, so it changes nothing about what bodies hold. */
+function keepsDefaultMapper(method: MethodDecl, project: JavaProject): boolean {
+  const statements = method.node.childForFieldName("body")?.namedChildren.filter((child) => !child.type.endsWith("comment")) ?? [];
+  const scope = scopeOf(method.owner);
+  return statements.every((statement) => {
+    const call = statement.type === "expression_statement" ? statement.namedChildren[0] : undefined;
+    if (call?.type !== "method_invocation" || call.childForFieldName("name")?.text !== "add") return false;
+    const [added, ...others] = call.childForFieldName("arguments")?.namedChildren ?? [];
+    const type = added?.type === "object_creation_expression" ? added.childForFieldName("type") : null;
+    if (others.length > 0 || type === null || type === undefined || added?.childForFieldName("arguments")?.namedChildren.length !== 0) return false;
+    const simple = nameOf(type).split(".").pop() ?? "";
+    return simple === DEFAULT_CONVERTER && project.lookupType(simple, scope) === undefined;
+  });
+}
+
 /** Where the repository's code configures the mapper that writes HTTP bodies; the bodies of an application that does are not the default's. */
-function mapperConfiguration(project: JavaProject, files: readonly SourceFile[]): Evidence[] {
-  const found: Evidence[] = files.filter((file) => isSpringConfigFile(file.path) && file.content.toLowerCase().includes("jackson")).map((file) => ({ path: file.path, line: 1 }));
+function codeMapperConfiguration(project: JavaProject): Evidence[] {
+  const found: Evidence[] = [];
   for (const type of project.types) {
     const scope = scopeOf(type);
     if (annotationUses(type.node, scope).some((use) => isAnnotation(use, JSON_COMPONENT))) found.push(spanOf(type.file.path, type.node));
     for (const method of type.methods) {
-      if (CONVERTER_HOOKS.has(method.name)) found.push(spanOf(type.file.path, method.node));
+      if (CONVERTER_HOOKS.has(method.name) && !keepsDefaultMapper(method, project)) found.push(spanOf(type.file.path, method.node));
       const returns = method.node.childForFieldName("type");
       const simple = returns === null ? "" : (nameOf(returns).split(".").pop() ?? "");
       if (MAPPER_BEANS.has(simple) && annotationUses(method.node, scope).some((use) => isAnnotation(use, BEAN))) found.push(spanOf(type.file.path, method.node));
     }
   }
-  return found.toSorted((a, b) => compareText(a.path, b.path) || a.line - b.line);
+  return found;
+}
+
+function bySpan(a: Evidence, b: Evidence): number {
+  return compareText(a.path, b.path) || a.line - b.line;
+}
+
+function withFiles(read: ReadShape, ...more: readonly (readonly string[])[]): ReadShape {
+  return { ...read, files: [...new Set([...read.files, ...more.flat()])].toSorted(compareText) };
 }
 
 /** Whether Spring writes the handler's return value as the body: the class or the method says so, or the value is an entity. */
@@ -380,7 +440,9 @@ export function createSpringPayloadShapes(parser: JavaParser, readRoutes: RouteR
         }
         const project = createJavaProject(parsed);
         const handlers = handlerIndex(project);
-        const configured = mapperConfiguration(project, files);
+        const code = codeMapperConfiguration(project);
+        const configurationOf = configurationsOf(files.filter((file) => isSpringConfigFile(file.path)));
+        const settingsOf = new Map<Configuration, MapperSettings>();
         const reader = new ShapeReader(project);
         const shapes = new Map<string, ReadShape>();
         return routes.map(({ route, evidence }): Finding<OperationShape> => {
@@ -389,12 +451,17 @@ export function createSpringPayloadShapes(parser: JavaParser, readRoutes: RouteR
           const method = handlers.get(key);
           let read = shapes.get(key);
           if (read === undefined) {
-            read =
-              method === undefined
-                ? { shape: unknownShape("source-unreadable", { path: handler.path, line: handler.line }), files: [handler.path] }
-                : configured.length > 0
-                  ? { shape: unknownShape("no-extractor", ...configured), files: [handler.path] }
-                  : responseOf(method, reader, project);
+            if (method === undefined) read = { shape: unknownShape("source-unreadable", { path: handler.path, line: handler.line }), files: [handler.path] };
+            else {
+              const configuration = configurationOf(method.owner.file);
+              const settings = settingsOf.get(configuration) ?? mapperSettings(configuration);
+              settingsOf.set(configuration, settings);
+              const configured = [...code, ...settings.changing].toSorted(bySpan);
+              read =
+                configured.length > 0
+                  ? withFiles({ shape: unknownShape("no-extractor", ...configured), files: [handler.path] }, configured.map(({ path }) => path), settings.files)
+                  : withFiles(responseOf(method, reader, project), settings.files);
+            }
             shapes.set(key, read);
           }
           return { status: "complete", value: { operationId: undefined, method: route.method, path: route.path, basePath: "", ...read }, evidence };
