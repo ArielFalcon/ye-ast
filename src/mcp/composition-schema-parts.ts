@@ -130,7 +130,7 @@ export const moduleVia = z.strictObject({
 export const callLocation = z.strictObject({ file: ids.file, line: int, endLine: int.exactOptional() });
 const stated = z.strictObject({ method: httpMethod, path: z.string() });
 const transport = z.enum(["http", "event"]);
-const httpTarget = z.strictObject({ method: httpMethod, path: z.string(), base: z.string().exactOptional(), operationId: z.string().exactOptional() });
+const httpTarget = z.strictObject({ method: httpMethod, path: z.string(), base: z.string().exactOptional() });
 const eventTarget = z.strictObject({ protocol, destination: z.string(), role: z.literal("publish") });
 export const callSiteDiagnostic = z.strictObject({
   cause: z.enum(CALL_SITE_CAUSES),
@@ -144,7 +144,7 @@ export const unresolvedCallSiteSchema = z.strictObject({
   via: z.string().exactOptional(), stated: stated.exactOptional(),
 });
 
-export const linkBasis = z.enum(["exact", "base-path", "suffix", "operation-id", "event-destination", "gateway-prefix", "route-overlap"]);
+export const linkBasis = z.enum(["exact", "base-path", "suffix", "event-destination", "gateway-prefix", "route-overlap"]);
 export const linkEndpoints = {
   from: z.strictObject({ ...callLocation.shape, repo: z.string(), symbol: z.string() }),
   to: <H extends z.ZodType>(handler: H) => z.strictObject({ repo: z.string(), kind: entrypointKind, name: z.string(), handler }),
@@ -329,7 +329,7 @@ export const partSchema = z.discriminatedUnion("kind", [
     site: unresolvedCallSiteSchema,
   }),
   part("unlinked-call-site", {
-    site: z.strictObject({ from: linkEndpoints.from, transport, outcome: z.enum(["unmatched", "ambiguous"]), name: z.string(), repos: strings.exactOptional() }),
+    site: z.strictObject({ from: linkEndpoints.from, transport, outcome: z.enum(["unmatched", "ambiguous", "could-match"]), name: z.string(), repos: strings.exactOptional(), routes: strings.exactOptional() }),
   }),
   part("workspace-link", {
     link: z.strictObject({

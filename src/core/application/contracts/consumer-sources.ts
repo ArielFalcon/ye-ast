@@ -205,10 +205,8 @@ function joinHttpCalls(repositories: readonly WorkspaceRepository[], entrypoints
     }
     const joined = matchCallSite(site, target, entrypoints, gateways);
     for (const link of joined.links ?? []) links.set(link.id, link);
-    const repos = joined.ambiguous?.repos.toSorted(compareText);
-    if (repos === undefined) continue;
-    const reaching = new Set(repos.flatMap((repo) => (matchCallSite(site, target, entrypoints.filter((candidate) => candidate.repo === repo), gateways).links ?? []).flatMap((link) => httpRouteName(link) ?? [])));
-    ambiguousCalls.push({ from, repos, reaching });
+    if (joined.ambiguous === undefined) continue;
+    ambiguousCalls.push({ from, repos: joined.ambiguous.repos.toSorted(compareText), reaching: new Set(joined.ambiguous.routes) });
   }
   const byPlace = (a: { repo: string; file: string; line: number }, b: { repo: string; file: string; line: number }) => compareText(a.repo, b.repo) || compareText(a.file, b.file) || a.line - b.line;
   const serving = new Map<string, { repo: string; handler: Handler }[]>();
