@@ -858,6 +858,7 @@ function parameterType(parameter: Node): string {
   return parameter.type === "spread_parameter" ? `${erased}[]` : erased;
 }
 
+/** The type declarations a block or an anonymous class body may hold: every kind but an annotation interface, which javac rejects there. */
 const LOCAL_TYPE_DECLARATIONS: ReadonlySet<string> = new Set(["class_declaration", "interface_declaration", "enum_declaration", "record_declaration"]);
 const BLOCKS: ReadonlySet<string> = new Set(["block", "constructor_body", "switch_block_statement_group"]);
 
