@@ -14,6 +14,9 @@ export interface ContractChangeRule {
 
 export type OperationDelta = "added" | "removed";
 
+/** What a change did to a response: at a place of its success body, or to the rest of what it answers. */
+export type ResponseDelta = ShapeDelta | "errors-changed" | "envelope-changed";
+
 const rule = (id: string, level: RuleLevel): ContractChangeRule => Object.freeze({ id, level });
 
 /**
@@ -22,7 +25,7 @@ const rule = (id: string, level: RuleLevel): ContractChangeRule => Object.freeze
  */
 export const CONTRACT_CHANGE_RULES: {
   operation: Readonly<Record<OperationDelta, ContractChangeRule>>;
-  response: Readonly<Record<ShapeDelta, ContractChangeRule>>;
+  response: Readonly<Record<ResponseDelta, ContractChangeRule>>;
 } = Object.freeze({
   operation: Object.freeze({
     added: rule("operation-added", "compatible"),
@@ -44,6 +47,8 @@ export const CONTRACT_CHANGE_RULES: {
     "constraint-widened": rule("response-property-constraint-widened", "review"),
     "constraint-changed": rule("response-property-constraint-changed", "review"),
     "annotation-changed": rule("response-property-annotation-changed", "compatible"),
+    "errors-changed": rule("response-error-changed", "review"),
+    "envelope-changed": rule("response-success-envelope-changed", "review"),
   }),
 });
 

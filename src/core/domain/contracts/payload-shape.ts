@@ -59,5 +59,15 @@ export const ANYTHING: KnownShape = Object.freeze({
   values: Object.freeze({ literals: Object.freeze({ boolean: "every", number: "every", string: "every" } as const), array: true, object: true, null: true, absent: false }),
 });
 
-/** The shape of the success response of one operation. */
-export type OperationShape = Pick<ContractOperation, "operationId" | "method" | "path" | "basePath"> & ReadShape;
+/**
+ * Digests of what an operation exchanges beside its success body, each differing exactly when that part differs: its
+ * request, its non-success responses, and its success responses without their schemas (status, media types, headers).
+ */
+export interface ExchangeDigests {
+  request: string;
+  errors: string;
+  envelope: string;
+}
+
+/** The shape of the success response of one operation; `digests` is absent when its reader cannot state them. */
+export type OperationShape = Pick<ContractOperation, "operationId" | "method" | "path" | "basePath"> & ReadShape & { digests?: ExchangeDigests };

@@ -65,7 +65,7 @@ only the port and the answer's assembly change.
 | `answers[].status` | `complete`, `partial` with its cuts, or `unknown` with its reason (an operation no repository serves, a workspace read that failed for it) |
 | `answers[].findings` | uses or producers with their verdicts, and frontiers as `unknown` findings, as today |
 | `change` | `ofChange` only: `base`, `head`, the resolved `snapshots`, and the `derivation` section; retained even when `answers` is empty |
-| `change.derivation` | a fact whose value holds every classified difference (rule, level, side, operation, property, delta, places; RFC-0022 P6) and the frontiers of the derivation (unreadable contract, unsupported delta, unclassified difference, unserved or ambiguous operation) as `unknown` findings; `partial` preserves the source-read cuts from both base and head, and `unknown` carries its reason and evidence without a value |
+| `change.derivation` | a fact whose value holds every classified difference (rule, level, side, operation, property, delta, places; RFC-0022 P6) and the frontiers of the derivation (unreadable contract, unsupported delta, unclassified difference, unread request, unserved or ambiguous operation) as `unknown` findings; `partial` preserves the source-read cuts from both base and head, and `unknown` carries its reason and evidence without a value |
 
 **Status.** The fact is a composite of its hypothesis sections and, for `ofChange`, the `change.derivation` section
 (RFC-0002 rule 2). It is `complete` only when every section is complete; otherwise it is `partial`, retaining its value

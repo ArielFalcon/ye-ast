@@ -216,10 +216,10 @@ const UPPER_BOUNDS: ReadonlySet<string> = new Set(["maximum", "exclusiveMaximum"
 const LOWER_BOUNDS: ReadonlySet<string> = new Set(["minimum", "exclusiveMinimum", "minLength", "minItems", "minProperties"]);
 /** Keywords whose presence narrows the place and whose value has no order. */
 const NARROWING: ReadonlySet<string> = new Set(["pattern", "format", "multipleOf", "uniqueItems"]);
-/** Keywords that describe the place without restricting the values a reader receives. */
-const ANNOTATIONS: ReadonlySet<string> = new Set(["default", "deprecated", "xml"]);
+/** Keywords that describe the place without restricting the values a reader receives (`readOnly` restricts only what a writer sends). */
+const ANNOTATIONS: ReadonlySet<string> = new Set(["default", "deprecated", "readOnly", "xml"]);
 /** A keyword at its default value says what its absence says. */
-const DEFAULTS: Readonly<Record<string, unknown>> = { uniqueItems: false, deprecated: false };
+const DEFAULTS: Readonly<Record<string, unknown>> = { uniqueItems: false, deprecated: false, readOnly: false };
 
 /** What a change did to the keywords of one place: a bound, a narrowing keyword or an annotation is a difference, any other keyword a frontier. */
 function compareKeywords(base: Readonly<Record<string, unknown>>, head: Readonly<Record<string, unknown>>): Entry[] {

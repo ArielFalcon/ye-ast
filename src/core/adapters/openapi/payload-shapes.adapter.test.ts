@@ -47,15 +47,32 @@ test("keywords constrain together: nullable and an enumeration restrict their ow
   assert.equal(values("either").null, true);
 });
 
-test("the keywords a value set does not state are kept at their place, without documentation or extensions, and a place without them carries none", () => {
-  const root = rootOf([document({ Root: { type: "object", properties: { name: { type: "string", maxLength: 3, pattern: "^a", readOnly: true, default: "a", description: "d", title: "t", example: "x", "x-tag": 1 }, plain: STRING } } })]).shape;
-  assert.deepEqual(known(property(root, "name").shape).keywords, { default: "a", maxLength: 3, pattern: "^a", readOnly: true });
+test("the keywords a value set does not state are kept at their place, extensions included and documentation left out, and a place without them carries none", () => {
+  const root = rootOf([document({ Root: { type: "object", properties: { name: { type: "string", maxLength: 3, pattern: "^a", readOnly: true, default: "a", description: "d", title: "t", example: "x", "x-tag": 1, "x-nullable": true }, plain: STRING } } })]).shape;
+  assert.deepEqual(known(property(root, "name").shape).keywords, { default: "a", maxLength: 3, pattern: "^a", readOnly: true, "x-tag": 1 });
   assert.equal("keywords" in known(property(root, "plain").shape), false);
 });
 
 test("an allOf keeps the keywords of the schema that holds it and of every branch, each value once and every distinct value of one keyword listed", () => {
   const root = known(rootOf([document({ Root: { allOf: [{ $ref: "#/components/schemas/Base" }, { type: "object", minProperties: 1, properties: { name: STRING } }], readOnly: true }, Base: { type: "object", minProperties: 2, deprecated: true, properties: { id: STRING } } })]).shape);
   assert.deepEqual(root.keywords, { deprecated: true, minProperties: [1, 2], readOnly: true });
+});
+
+test("the digests of an operation change exactly with its request, its non-success responses, and its success responses' status, media types and headers, never with its success schema", () => {
+  const read = (operationOf: (schema: unknown) => Record<string, unknown>, components: Record<string, unknown> = {}) => {
+    const content = JSON.stringify({ openapi: "3.0.3", paths: { "/pets": { get: { operationId: "list", ...operationOf({ $ref: "#/components/schemas/Root" }) } } }, components: { schemas: { Root: STRING }, ...components } });
+    return rootOf([{ path: "api/openapi.yml", content }]).digests!;
+  };
+  const ok = (schema: unknown) => ({ "200": { description: "ok", content: { "application/json": { schema } } } });
+  const base = read((schema) => ({ responses: ok(schema) }));
+  const differing = (digests: typeof base) => (["request", "errors", "envelope"] as const).filter((part) => digests[part] !== base[part]);
+  assert.deepEqual(differing(read((schema) => ({ parameters: [{ in: "query", name: "page", schema: STRING }], responses: ok(schema) }))), ["request"]);
+  assert.deepEqual(differing(read((schema) => ({ responses: { ...ok(schema), "404": { description: "missing", content: { "application/json": { schema } } } } }))), ["errors"]);
+  assert.deepEqual(differing(read((schema) => ({ responses: { "201": ok(schema)["200"] } }))), ["envelope"]);
+  assert.deepEqual(differing(read((schema) => ({ responses: { "200": { description: "ok", content: { "application/hal+json": { schema } } } } }))), ["envelope"]);
+  assert.deepEqual(differing(read((schema) => ({ responses: { "200": { ...ok(schema)["200"], headers: { "X-Total": { $ref: "#/components/headers/Total" } } } } }), { headers: { Total: { schema: STRING } } })), ["envelope"]);
+  assert.deepEqual(differing(read((schema) => ({ responses: { "200": { ...ok(schema)["200"], headers: { "X-Total": { $ref: "#/components/headers/Total" } } } } }), { headers: { Total: { schema: { type: "integer" } } } })), ["envelope"]);
+  assert.deepEqual(differing(read((schema) => ({ responses: ok(schema) }), { schemas: { Root: { type: "integer" } } })), []);
 });
 
 test("a Swagger 2.0 document gives its response schema and the base path the contract declares", () => {

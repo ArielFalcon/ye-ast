@@ -3,12 +3,11 @@ import type { RepositoryEvidence } from "../shared/repository-evidence.ts";
 import type { Handler } from "../entrypoints/http-route.ts";
 import type { LinkBasis } from "../topology/link.ts";
 import type { ChangeEntry } from "./change.ts";
-import type { OperationDelta, RuleLevel, RuleTarget } from "./contract-change-rules.ts";
+import type { OperationDelta, ResponseDelta, RuleLevel, RuleTarget } from "./contract-change-rules.ts";
 import type { Hop } from "./consumer-flow.ts";
 import type { ValueSet } from "./payload-shape.ts";
 import type { RequestEntry } from "./request-change.ts";
 import type { ProducerVerdict } from "./request-origin.ts";
-import type { ShapeDelta } from "./shape-derivation.ts";
 import type { UseOperation, Verdict } from "./verdict.ts";
 
 /** A step of a chain, placed in the repository it happens in. */
@@ -76,7 +75,7 @@ export interface ClassifiedDifference {
   operation: string;
   /** The property of the payload the difference is at; absent for the operation itself. */
   property?: string;
-  delta: ShapeDelta | OperationDelta;
+  delta: ResponseDelta | OperationDelta;
   /** The class or keyword the delta names. */
   subject?: string;
   /** The keyword's value at each revision, absent where the revision does not carry it. */
@@ -90,7 +89,7 @@ export interface ClassifiedDifference {
 export interface ChangeFrontier {
   status: "unknown";
   reason: UnknownReason;
-  kind: "unsupported-delta" | "recursive-shape" | "unknown-shape" | "unclassified-difference" | "ambiguous-operation" | "unserved-operation" | "unreadable-contract";
+  kind: "unsupported-delta" | "recursive-shape" | "unknown-shape" | "unclassified-difference" | "request-unread" | "ambiguous-operation" | "unserved-operation" | "unreadable-contract";
   operation?: string;
   property?: string;
   side?: "base" | "head";

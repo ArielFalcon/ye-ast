@@ -1,8 +1,8 @@
 import { formatAccessPath } from "../../domain/contracts/access-path.ts";
 import type { ChangeFrontier, ClassifiedDifference, ConsequencesValue, DerivationValue } from "../../domain/contracts/consequence-fact.ts";
 import type { ResponseHypothesis } from "../../domain/contracts/hypothesis.ts";
-import { CONTRACT_CHANGE_RULES, type ContractChangeRule, type OperationDelta, type RuleTarget } from "../../domain/contracts/contract-change-rules.ts";
-import type { OperationShape } from "../../domain/contracts/payload-shape.ts";
+import { CONTRACT_CHANGE_RULES, type ContractChangeRule, type OperationDelta, type ResponseDelta, type RuleTarget } from "../../domain/contracts/contract-change-rules.ts";
+import type { ExchangeDigests, OperationShape } from "../../domain/contracts/payload-shape.ts";
 import { deriveChanges, type DerivationFrontier, type ShapeDelta } from "../../domain/contracts/shape-derivation.ts";
 import type { HttpMethod } from "../../domain/entrypoints/http-route.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
@@ -79,7 +79,7 @@ export interface PlannedDifference {
   operation: string;
   /** The property of the payload the difference is at; absent for the operation itself. */
   property?: string;
-  delta: ShapeDelta | OperationDelta;
+  delta: ResponseDelta | OperationDelta;
   subject?: string;
   base?: unknown;
   head?: unknown;
@@ -89,7 +89,7 @@ export interface PlannedDifference {
 
 /** A place the change could not be derived at, before it is placed in a repository. */
 interface PlannedFrontier {
-  kind: DerivationFrontier["kind"] | "ambiguous-operation" | "unserved-operation" | "unreadable-contract";
+  kind: DerivationFrontier["kind"] | "request-unread" | "ambiguous-operation" | "unserved-operation" | "unreadable-contract";
   operation?: string;
   property?: string;
   side?: "base" | "head";
@@ -146,6 +146,7 @@ export function planChange(baseFiles: readonly SourceFile[], headFiles: readonly
   const changed = changedSources(baseFiles, headFiles);
 
   const unreadable = new Map([...before.unreadable, ...after.unreadable].filter((place) => changed(place.path)).map((place) => [`${place.path}:${place.line}`, place]));
+  const requestUnread: Evidence[] = [];
   for (const place of unreadable.values()) frontiers.push({ kind: "unreadable-contract", evidence: [place] });
 
   for (const operation of [...new Set([...before.held.keys(), ...after.held.keys()])].sort(compareText)) {
@@ -162,6 +163,12 @@ export function planChange(baseFiles: readonly SourceFile[], headFiles: readonly
         continue;
       }
       const places = { base: base.place, head: head.place };
+      const exchange = exchangeDifferences(base.shape.digests, head.shape.digests);
+      if (exchange === undefined) requestUnread.push(head.place);
+      else {
+        for (const delta of exchange.responses) differences.push({ rule: CONTRACT_CHANGE_RULES.response[delta], target: "response", operation, delta, places });
+        if (exchange.request) frontiers.push({ kind: "unclassified-difference", operation, detail: "request", evidence: [base.place, head.place] });
+      }
       const derivation = deriveChanges(base.shape.shape, head.shape.shape);
       const { method, path } = head.identity;
       const ruleOf = (delta: ShapeDelta) => CONTRACT_CHANGE_RULES.response[delta];
@@ -173,7 +180,20 @@ export function planChange(baseFiles: readonly SourceFile[], headFiles: readonly
       for (const { path: at, evidence, ...frontier } of derivation.frontiers) frontiers.push({ ...frontier, operation, property: formatAccessPath(at), evidence: evidence ?? [base.place, head.place] });
     }
   }
+  if (requestUnread.length > 0) frontiers.push({ kind: "request-unread", reason: "no-extractor", evidence: requestUnread });
   return { hypotheses, differences, frontiers };
+}
+
+/**
+ * What differs beside the success body, from the digests both revisions state: the response parts a rule names, and
+ * whether the request differs, which no rule classifies yet. `undefined` when a revision's reader states no digests.
+ */
+function exchangeDifferences(base: ExchangeDigests | undefined, head: ExchangeDigests | undefined): { responses: ResponseDelta[]; request: boolean } | undefined {
+  if (base === undefined || head === undefined) return undefined;
+  const responses: ResponseDelta[] = [];
+  if (base.errors !== head.errors) responses.push("errors-changed");
+  if (base.envelope !== head.envelope) responses.push("envelope-changed");
+  return { responses, request: base.request !== head.request };
 }
 
 const operationDifference = (delta: OperationDelta, operation: string, places: PlannedDifference["places"]): PlannedDifference => ({ rule: CONTRACT_CHANGE_RULES.operation[delta], target: "operation", operation, delta, places });

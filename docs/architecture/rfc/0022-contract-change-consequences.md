@@ -535,14 +535,16 @@ it is derived), and a keyword the value set does not state:
 | a lower bound (`minimum`, `exclusiveMinimum`, `minLength`, `minItems`, `minProperties`) | raised or added: `constraint-narrowed`; lowered or dropped: `constraint-widened` |
 | `pattern`, `format`, `multipleOf`, `uniqueItems` | added: `constraint-narrowed`; dropped: `constraint-widened`; replaced: `constraint-changed` |
 | a bound whose value is not a number at either revision | `constraint-changed` |
-| `default`, `deprecated`, `xml` | `annotation-changed` |
-| any other keyword | an `unclassified-difference` frontier naming it, never silence |
+| `default`, `deprecated`, `readOnly`, `xml` | `annotation-changed` (`readOnly` restricts what a writer sends, never what a reader receives) |
+| any other keyword (`writeOnly`, `discriminator`, an extension) | an `unclassified-difference` frontier naming it, never silence |
 
-A keyword at its default value (`uniqueItems: false`, `deprecated: false`) is its absence. The shape carries these
-keywords: the OpenAPI reader keeps every keyword it does not turn into the value set or the structure, leaving out
-documentation (`description`, `summary`, `example`, `examples`, `externalDocs`, `title`, `$comment`, `$id`, `$schema`)
-and extensions (`x-`, except the `x-nullable` it models); an `allOf` keeps the keywords of the schema that holds it and
-of every branch, several distinct values of one keyword as their list. Shapes read from Spring handlers carry none.
+A keyword at its default value (`uniqueItems: false`, `deprecated: false`, `readOnly: false`) is its absence. The shape
+carries these keywords: the OpenAPI reader keeps every keyword it does not turn into the value set or the structure,
+leaving out documentation (`description`, `summary`, `example`, `examples`, `externalDocs`, `title`, `$comment`, `$id`,
+`$schema`); an `allOf` keeps the keywords of the schema that holds it and of every branch, several distinct values of
+one keyword as their list. An extension (`x-`, except the `x-nullable` it models) is kept: in the corpus, generator
+extensions such as one that adds `@JsonInclude(NON_NULL)` change what the wire carries. Shapes read from Spring handlers
+carry none.
 
 **The catalog classifies.** `core/domain/contracts/contract-change-rules.ts` holds one row per delta and side of the
 exchange: a stable id and a level. `breaking`: a party that conforms to the old contract can fail under the new one;
@@ -567,10 +569,23 @@ cannot.
 | `constraint-widened` | `response-property-constraint-widened` | review |
 | `constraint-changed` | `response-property-constraint-changed` | review |
 | `annotation-changed` | `response-property-annotation-changed` | compatible |
+| `errors-changed` | `response-error-changed` | review |
+| `envelope-changed` | `response-success-envelope-changed` | review |
 
 An operation only the head declares is `operation-added` (compatible); one only the base declares is
 `operation-removed` (breaking). The rows are typed as one per delta, so a delta without a rule does not compile. Rule
 ids are part of the answer and change with the producer version (ADR-0024); no fact that holds them is stored.
+
+**Fail closed.** The body shape is not all an operation exchanges. The OpenAPI reader states three digests per
+operation, with the digest the `impact` family already computes (one owner, documentation left out, references
+followed): the request (parameters, body, consumed media), the non-success responses, and the success responses without
+their schemas (status codes, media types, headers). A changed operation whose non-success responses differ is
+`errors-changed`; one whose success responses differ beyond their schemas is `envelope-changed`; neither is followed,
+since no consumer reader follows error handling or headers. A request that differs is an `unclassified-difference`
+frontier at the operation until request differences are classified (P5's server shapes). A reader that states no
+digests (Spring handlers) leaves the request of its changed operations unread: one `request-unread` frontier
+(`no-extractor`) for the whole change, with the place of each, rather than one marker per operation. A refactor that
+keeps every value set, keyword and digest (an `allOf` split, a schema moved behind a reference) reports nothing.
 
 **Answer.** The derivation section lists every difference once, in the order of the operations (each operation's own
 first, then its properties'), with its rule id, level, side of the exchange (`operation` or `response`), operation,
@@ -582,8 +597,9 @@ differences are listed and not followed.
 **Ownership.** `impact` keeps its digest comparison: it answers which code a change reaches, and the consequences family
 is the one owner of what the difference means.
 
-**Out of P6 so far.** Request bodies and parameters derived from a diff (P5's server shapes, awaiting the owner's
-decision on P5's growth), Spring Bean Validation annotations, security schemes, callbacks.
+**Out of P6 so far.** Request bodies and parameters classified from a diff (P5's server shapes, awaiting the owner's
+decision on P5's growth; until then a request difference is a frontier), Spring Bean Validation annotations and Spring
+response headers or status codes, security schemes, callbacks.
 
 ## Output
 

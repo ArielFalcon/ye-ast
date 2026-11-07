@@ -26,6 +26,8 @@ interface Declared {
   shape?: Shape;
   basePath?: string | null;
   files?: string[];
+  /** What the reader states beyond the success body; `null` for a reader that states none. */
+  digests?: { request: string; errors: string; envelope: string } | null;
 }
 
 function fileOf(path: string, operations: Declared[] | "unreadable"): SourceFile {
@@ -41,13 +43,15 @@ function reader(name: string, calls: string[] = []): PayloadShapes {
         if (declared === "unreadable") return [{ status: "unknown", reason: "source-unreadable", evidence: [{ path: file.path, line: 1 }] }];
         return declared.map((operation, index) => ({
           status: "complete",
-          value: { operationId: undefined, method: (operation.method ?? "GET") as OperationShape["method"], path: operation.path, basePath: operation.basePath === null ? undefined : (operation.basePath ?? ""), shape: operation.shape ?? TEXT, files: [file.path, ...(operation.files ?? [])] },
+          value: { operationId: undefined, method: (operation.method ?? "GET") as OperationShape["method"], path: operation.path, basePath: operation.basePath === null ? undefined : (operation.basePath ?? ""), shape: operation.shape ?? TEXT, files: [file.path, ...(operation.files ?? [])], ...(operation.digests === null ? {} : { digests: operation.digests ?? DIGESTS }) },
           evidence: [{ path: file.path, line: index + 1, via: name }],
         }));
       });
     },
   };
 }
+
+const DIGESTS = { request: "r", errors: "e", envelope: "s" };
 
 /** Every declared operation is served as it is written. */
 const asWritten: ServingWorkspace["serving"] = ({ method, path }) => ({ kind: "served", method, path });
@@ -190,6 +194,29 @@ for (const [rule, baseShape, headShape, at, level] of RESPONSE_RULES) {
     assert.deepEqual(plan.differences[0]!.places, { base: { path: "api/openapi.json", line: 1, via: "declared" }, head: { path: "api/openapi.json", line: 1, via: "declared" } });
   });
 }
+
+test("non-success responses that differ are a review difference, and success responses that differ beyond their schema are another", () => {
+  const plan = changeOf([fileOf("api/openapi.json", [{ path: "/pets", digests: DIGESTS }])], [fileOf("api/openapi.json", [{ path: "/pets", digests: { ...DIGESTS, errors: "e2", envelope: "s2" } }])], [reader("declared")]);
+  assert.deepEqual(plan.differences.map(({ rule, target, operation, property: at, delta }) => [rule.id, rule.level, target, operation, at, delta]), [
+    ["response-error-changed", "review", "response", "GET /pets", undefined, "errors-changed"],
+    ["response-success-envelope-changed", "review", "response", "GET /pets", undefined, "envelope-changed"],
+  ]);
+  assert.deepEqual(plan.frontiers, []);
+});
+
+test("a request that differs is an unclassified difference at the operation, never silence, and equal digests report nothing", () => {
+  const plan = changeOf([fileOf("api/openapi.json", [{ path: "/pets", digests: DIGESTS }])], [fileOf("api/openapi.json", [{ path: "/pets", digests: { ...DIGESTS, request: "r2" } }])], [reader("declared")]);
+  assert.deepEqual([plan.differences, plan.frontiers.map(({ kind, operation, detail, evidence }) => [kind, operation, detail, evidence.length])], [[], [["unclassified-difference", "GET /pets", "request", 2]]]);
+  const same = changeOf([fileOf("api/openapi.json", [{ path: "/pets", digests: DIGESTS }])], [fileOf("api/openapi.json", [{ path: "/pets", digests: DIGESTS, files: ["api/other.json"] }])], [reader("declared")]);
+  assert.deepEqual([same.differences, same.frontiers], [[], []]);
+});
+
+test("changed operations whose reader states no request are one request-unread frontier for the whole change, with each one's place", () => {
+  const base = [fileOf("api/code.json", [{ path: "/vets", digests: null }, { path: "/owners", shape: PET_BASE, digests: null }, { path: "/pets", shape: PET_BASE, digests: null }])];
+  const head = [fileOf("api/code.json", [{ path: "/pets", shape: PET_HEAD, digests: null }, { path: "/owners", shape: PET_HEAD, digests: null }, { path: "/vets", digests: null }])];
+  const plan = changeOf(base, head, [reader("code")]);
+  assert.deepEqual(plan.frontiers.map(({ kind, operation, reason, evidence }) => [kind, operation, reason, evidence.map(({ line }) => line)]), [["request-unread", undefined, "no-extractor", [2, 1, 3]]]);
+});
 
 test("a derived hypothesis names the rules of every difference it answers, and a keyword difference keeps both values", () => {
   const base = [fileOf("api/openapi.json", [{ path: "/pets", shape: object(property("a", keyed(TEXT, { maxLength: 4 }))) }])];

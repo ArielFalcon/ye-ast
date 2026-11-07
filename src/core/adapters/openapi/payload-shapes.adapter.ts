@@ -7,7 +7,7 @@ import type { Evidence, Finding } from "../../domain/shared/fact.ts";
 import type { Literal } from "../../domain/contracts/use-operation.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { PayloadShapes } from "../../ports/payload-shapes.port.ts";
-import { DOCUMENTATION, declaredOperations, parseContract, referencedDocuments, targetOf, type ReferencedDocuments } from "./contract-document.adapter.ts";
+import { createDigester, DOCUMENTATION, declaredOperations, parseContract, producesOf, referencedDocuments, requestOf, targetOf, type Digester, type ReferencedDocuments } from "./contract-document.adapter.ts";
 
 type Json = Record<string, unknown>;
 type Kind = LiteralKindName | "array" | "object" | "null";
@@ -47,11 +47,11 @@ const UNMODELLED: readonly string[] = ["oneOf", "anyOf", "not", "patternProperti
 /** Keywords the reader turns into the value set or the structure of a place. */
 const MODELLED: ReadonlySet<string> = new Set(["type", "nullable", "x-nullable", "enum", "const", "properties", "required", "additionalProperties", "items", "allOf", "$ref"]);
 
-/** Keywords that only document a schema; an extension (`x-`) does too, unless the reader models it. */
+/** Keywords that only document a schema. An extension (`x-`) is kept: a generator may turn it into what the wire carries. */
 const DOCUMENTING: ReadonlySet<string> = new Set([...DOCUMENTATION, "title", "$comment", "$id", "$schema"]);
 
 /** The keywords of one schema node its value set does not state, which the shape keeps for the derivation to compare. */
-const keptKeywords = (node: Json): [string, unknown][] => Object.entries(node).filter(([keyword]) => !MODELLED.has(keyword) && !DOCUMENTING.has(keyword) && !keyword.startsWith("x-"));
+const keptKeywords = (node: Json): [string, unknown][] => Object.entries(node).filter(([keyword]) => !MODELLED.has(keyword) && !DOCUMENTING.has(keyword));
 
 /** The keywords several nodes hold together: one value as itself, several distinct values of one keyword as their sorted list. */
 function joinedKeywords(nodes: readonly Json[]): Readonly<Record<string, unknown>> {
@@ -79,11 +79,19 @@ function shapesOf(file: SourceFile, referenced: ReferencedDocuments): readonly F
   const contract = parseContract(file);
   if (contract === undefined) return [];
   if ("status" in contract) return [contract];
-  return declaredOperations(contract).map(({ path, verb, operation, operationId, line }): Finding<OperationShape> => {
+  return declaredOperations(contract).map((declared): Finding<OperationShape> => {
+    const { path, verb, operation, operationId, line } = declared;
     const place = { path: file.path, line };
     const reader = createReader(referenced, place, file.path);
     const shape = reader.success(operation.responses);
-    const value: OperationShape = { operationId, method: verb.toUpperCase() as HttpMethod, path, basePath: contract.basePath, shape, files: [...reader.files].sort(compareText) };
+    const digester = createDigester(file.path, referenced);
+    const digests = {
+      request: digester.digest(requestOf(contract, declared)),
+      errors: digester.digest(isRecord(operation.responses) ? Object.fromEntries(Object.entries(operation.responses).filter(([code]) => !SUCCESS.test(code))) : operation.responses),
+      envelope: digester.digest({ responses: reader.envelope(operation.responses, digester.digest), produces: producesOf(contract, declared) }),
+    };
+    const files = new Set([...reader.files, ...digester.files(), ...digester.unresolved().flatMap(({ file: named }) => named ?? [])]);
+    const value: OperationShape = { operationId, method: verb.toUpperCase() as HttpMethod, path, basePath: contract.basePath, shape, files: [...files].sort(compareText), digests };
     return { status: "complete", value, evidence: [place] };
   });
 }
@@ -236,7 +244,18 @@ function createReader(referenced: ReferencedDocuments, place: Evidence, document
     return first === undefined ? NO_BODY : shapeOf(first.file, first.node);
   }
 
-  return { files, success };
+  /** The success responses without their schemas, each digested from the file it is declared in: what a reader receives beside the body. */
+  function envelope(responses: unknown, digest: Digester["digest"]): unknown {
+    if (!isRecord(responses)) return responses;
+    return Object.keys(responses).filter((code) => SUCCESS.test(code)).sort(compareText).map((code) => {
+      const response = resolve(document, responses[code]);
+      if ("kind" in response || !isRecord(response.node)) return [code, digest(responses[code])];
+      const { content, schema: _schema, ...rest } = response.node;
+      return [code, digest({ ...rest, media: isRecord(content) ? Object.keys(content).sort(compareText) : undefined }, response.file)];
+    });
+  }
+
+  return { files, success, envelope };
 }
 
 const NO_BODY: KnownShape = Object.freeze({ kind: "known", values: Object.freeze({ literals: Object.freeze({ boolean: [], number: [], string: [] }), array: false, object: false, null: false, absent: false }) });

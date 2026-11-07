@@ -94,15 +94,15 @@ test("a pattern, format, multiple or uniqueness added narrows the place, dropped
   ]);
 });
 
-test("a default, a deprecation or an XML name that changed is an annotation change, and equal keywords derive nothing", () => {
-  const base = object([property("a", keyed(TEXT, { default: "x", maxLength: 3 })), property("b", TEXT)]);
-  const head = object([property("a", keyed(TEXT, { default: "y", maxLength: 3 })), property("b", keyed(TEXT, { deprecated: true }))]);
-  assert.deepEqual(differences(base, head), [["a", "annotation-changed", "default"], ["b", "annotation-changed", "deprecated"]]);
+test("a default, a deprecation, a read-only mark or an XML name that changed is an annotation change, and equal keywords derive nothing", () => {
+  const base = object([property("a", keyed(TEXT, { default: "x", maxLength: 3 })), property("b", TEXT), property("c", keyed(TEXT, { readOnly: true }))]);
+  const head = object([property("a", keyed(TEXT, { default: "y", maxLength: 3 })), property("b", keyed(TEXT, { deprecated: true })), property("c", TEXT)]);
+  assert.deepEqual(differences(base, head), [["a", "annotation-changed", "default"], ["b", "annotation-changed", "deprecated"], ["c", "annotation-changed", "readOnly"]]);
 });
 
 test("a keyword the derivation does not classify that changed is an unclassified difference at its place, never silence", () => {
-  const derived = deriveChanges(object([property("id", keyed(NUMBER, { readOnly: true }))]), object([property("id", NUMBER)]));
-  assert.deepEqual([derived.differences, derived.frontiers], [[], [{ path: ["id"], kind: "unclassified-difference", detail: "readOnly" }]]);
+  const derived = deriveChanges(object([property("id", keyed(NUMBER, { writeOnly: true }))]), object([property("id", NUMBER)]));
+  assert.deepEqual([derived.differences, derived.frontiers], [[], [{ path: ["id"], kind: "unclassified-difference", detail: "writeOnly" }]]);
 });
 
 test("an open object that stops declaring a property holds every value there: each class the base did not allow is introduced", () => {
