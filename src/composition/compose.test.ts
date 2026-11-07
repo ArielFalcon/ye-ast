@@ -810,6 +810,32 @@ test("a Java trace keeps a call a cut when a dynamic proxy may implement its pla
   assert.deepEqual(await javaTraceCuts("kotlin", { "Use.java": kotlin, "Repo.kt": "class Repo: Runnable { override fun run() { println(\"repo\") } }\n" }), [["unresolved-link", "Use.java:2 task.run", "Use.java::Other.run"], ["no-extractor", "Repo.kt"]]);
 });
 
+/** The status, cuts and steps (symbol and external calls) a Java trace of `Use.entry` gives over a fresh repository holding `files`. */
+async function javaTraceOf(name: string, files: Readonly<Record<string, string>>) {
+  const root = join(workspace, name);
+  mkdirSync(root);
+  const run = (...args: string[]): string => execFileSync("git", args, { cwd: root, env: GIT_ENV, encoding: "utf8" }).trim();
+  run("init", "-q");
+  for (const [file, content] of Object.entries(files)) writeFileSync(join(root, file), content);
+  run("add", "-A");
+  run("commit", "-q", "-m", name);
+  const answer = await composeQueries({ scratchRoot }).trace.walk({ repo: root, repoId: name, revision: "HEAD", targets: [{ file: "Use.java", symbol: "Use.entry" }] });
+  assert.ok(answer.ok);
+  const { status } = answer.value;
+  return { status, cuts: status === "partial" ? answer.value.cuts.map((cut) => [cut.kind, ...cut.at]) : [], steps: status === "unknown" ? [] : answer.value.value.steps.map((step) => [step.symbol, step.external ?? null]) };
+}
+
+test("a Java trace never settles a call by a root it reads past, whether the graph resolved the call or left it pending", async () => {
+  const stream = ["class RepoStream extends java.io.PrintStream {", "  RepoStream() { super(new java.io.ByteArrayOutputStream()); }", "  public void println(String text) { System.err.println(\"REPOSITORY_PRINTLN\"); }", "}", ""];
+  const qualified = ["import java.lang.System;", "public class Use {", "  public void entry() { java.lang.System.out.println(\"x\"); }", "  public static void main(String[] args) {", "    System.setOut(new RepoStream());", "    new Use().entry();", "  }", "}", ...stream].join("\n");
+  const field = ["public class Use {", "  public void entry() { java.util.Collections.EMPTY_LIST.size(); }", "}", "class Other { int size() { return 1; } }", ""].join("\n");
+  const alias = ["public class Use {", "  public void entry() { var o = System.out; o.println(\"x\"); }", "  public static void main(String[] args) { System.setOut(new RepoStream()); new Use().entry(); }", "}", ...stream].join("\n");
+
+  assert.deepEqual(await javaTraceOf("qualified", { "Use.java": qualified }), { status: "partial", cuts: [["unresolved-link", "Use.java:11 System.err.println", "Use.java::RepoStream.println"]], steps: [["entry", null], ["println", null]] });
+  assert.deepEqual(await javaTraceOf("qualifiedfield", { "Use.java": field }), { status: "complete", cuts: [], steps: [["entry", null]] });
+  assert.deepEqual(await javaTraceOf("varalias", { "Use.java": alias }), { status: "complete", cuts: [], steps: [["entry", null], ["println", null], ["println", null]] });
+});
+
 /** Repository functions named like library members, so a member call settled by its name alone is a cut. */
 const HOMONYMS = ["export function push(): void {}", "export function test(): void {}", "export function set(): void {}", "export function save(): void {}", "export class Other {", "  save(): void {}", "}", ""].join("\n");
 
