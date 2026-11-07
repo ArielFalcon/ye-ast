@@ -21,11 +21,15 @@ export interface ConsumerQueriesDeps {
   sources: ConsumerSources;
 }
 
-/** The call that handed the value to a function through an argument, and the function it entered. */
+/**
+ * The call that handed the value to a function through an argument, and the function it entered. A template expression
+ * that handed it to a component method also names where the method's result goes back to, and the method by its name only.
+ */
 interface Entry {
   repo: string;
   at: Evidence;
   callee: { file: string; symbol: string; line: number };
+  returnsTo?: Extract<CarrierSite, { kind: "template-call-result" }>;
 }
 
 /** A boundary still to follow: the link the value came through and, nearest last, the calls that entered the functions it is inside. */
@@ -98,7 +102,7 @@ function consequencesOf(session: ConsumerSession, hypothesis: Hypothesis): Resul
   for (let index = 0; index < queue.length; index++) {
     const { carrier, chain, link, entries } = queue[index]!;
     const repo = link.from.repo;
-    const key = `${carrierKey(carrier.site)}\0${canonicalJson(entries)}`;
+    const key = `${link.id}\0${carrierKey(carrier.site)}\0${canonicalJson(entries)}`;
     const before = seen.get(key);
     if (before !== undefined) {
       if (relatePaths(before, carrier.path) !== "exact") findings.push(frontierItem({ at: placeOf(carrier, chain), cause: "path-conflict", reason: "unresolved", hops: [] }, chain, repo));
@@ -132,6 +136,11 @@ function consequencesOf(session: ConsumerSession, hypothesis: Hypothesis): Resul
       if (entered === "recursion") findings.push(frontierItem({ at: next.hops.at(-1)?.evidence ?? placeOf(carrier, chain), cause: "unmodelled-flow", reason: "unresolved", detail: "recursion", hops: [] }, chain, repo));
       else queue.push({ carrier: next.carrier, chain: [...chain, ...next.hops], link, entries: entered });
     }
+    if (carrier.site.kind === "member") {
+      const readers = readersOfMember(session, carrier.site, carrier.path, chain);
+      for (const frontier of readers.frontiers) findings.push(frontierItem(frontier, chain, repo));
+      queue.push(...readers.next.map((next) => ({ ...next, link })));
+    }
     if (carrier.site.kind === "return") {
       const returned = returnsOf(session, carrier.site, carrier.path, chain, entries, result);
       for (const frontier of returned.frontiers) findings.push(frontierItem(frontier, chain, repo));
@@ -157,11 +166,31 @@ function consequencesOf(session: ConsumerSession, hypothesis: Hypothesis): Resul
 }
 
 function read(session: ConsumerSession, carrier: Carrier): FlowResult {
-  const flow = session.flow.follow(carrier);
   const { site } = carrier;
-  if (site.kind !== "member") return flow;
-  const template = session.templates.follow({ site, path: carrier.path });
+  if (site.kind === "template-call-result") return session.templates.follow({ site, path: carrier.path });
+  const flow = session.flow.follow(carrier);
+  const template = site.kind === "member" ? session.templates.follow({ site, path: carrier.path }) : undefined;
+  if (template === undefined) return flow;
   return { uses: [...flow.uses, ...template.uses], next: [...flow.next, ...template.next], frontiers: [...flow.frontiers, ...template.frontiers] };
+}
+
+/**
+ * The places outside the declaring class that read a member holding the value. The reads in a template are the template
+ * reader's; one through any receiver the graph did not resolve is lost, since two instances of a class share no field.
+ */
+function readersOfMember(session: ConsumerSession, site: Extract<CarrierSite, { kind: "member" }>, path: AccessPath, chain: readonly Hop[]): { next: Omit<Pending, "link">[]; frontiers: FlowFrontier[] } {
+  const declaration = { path: site.file, line: site.line ?? 1 };
+  const found = session.memberOccurrences(site);
+  if (found.kind === "unavailable") return { next: [], frontiers: [{ at: declaration, cause: "graph-unavailable", reason: "index-unavailable", detail: "member-readers", hops: [] }] };
+  if (found.kind === "unresolved") return { next: [], frontiers: [{ at: declaration, cause: "unresolved-caller", reason: "unresolved", detail: "member-readers", hops: [] }] };
+  const next: Omit<Pending, "link">[] = [];
+  const frontiers: FlowFrontier[] = [];
+  for (const { file, line, column, receiver } of found.occurrences) {
+    if (receiver === "template") continue;
+    if (receiver === "other") frontiers.push({ at: { path: file, line }, cause: "unmodelled-flow", reason: "unresolved", detail: "member-receiver", hops: [] });
+    else next.push({ carrier: { site: { kind: "member-read", repo: site.repo, file, line, column, owner: site.owner, member: site.member }, path }, chain, entries: [] });
+  }
+  return { next, frontiers };
 }
 
 /**
@@ -171,6 +200,10 @@ function read(session: ConsumerSession, carrier: Carrier): FlowResult {
 function returnsOf(session: ConsumerSession, site: Extract<CarrierSite, { kind: "return" }>, path: AccessPath, chain: readonly Hop[], entries: readonly Entry[], flowed: FlowResult): { next: Omit<Pending, "link">[]; frontiers: FlowFrontier[] } {
   const declaration = { path: site.file, line: site.line };
   const entry = entries.at(-1);
+  if (entry?.returnsTo !== undefined) {
+    if (entry.callee.symbol !== site.symbol) return { next: [], frontiers: [{ at: declaration, cause: "unmodelled-flow", reason: "unresolved", detail: "return-context", hops: [] }] };
+    return { next: [{ carrier: { site: entry.returnsTo, path }, chain: [...chain, { step: "caller", evidence: entry.at }], entries: entries.slice(0, -1) }], frontiers: [] };
+  }
   if (entry !== undefined) {
     if (entry.callee.file !== site.file || entry.callee.symbol !== site.symbol || entry.callee.line !== site.line) return { next: [], frontiers: [{ at: declaration, cause: "unmodelled-flow", reason: "unresolved", detail: "return-context", hops: [] }] };
     const call = { kind: "call-result" as const, repo: entry.repo, file: entry.at.path, line: entry.at.line, callee: site.symbol };
@@ -201,12 +234,18 @@ function returnsOf(session: ConsumerSession, site: Extract<CarrierSite, { kind: 
 }
 
 /** The calls that entered the functions a value is inside once it continues at `next`; a parameter pushes one, a return keeps them, anything else leaves every function. */
-function entriesAfter({ site }: Carrier, { carrier, hops }: FlowNext, entries: readonly Entry[]): readonly Entry[] | "recursion" {
+function entriesAfter({ site }: Carrier, { carrier, hops, returnsTo }: FlowNext, entries: readonly Entry[]): readonly Entry[] | "recursion" {
   if (carrier.site.kind === "return" || carrier.site.kind === "call-result") return entries;
-  if (carrier.site.kind !== "parameter") return [];
-  const call = hops.findLast((hop) => hop.step === "argument");
-  if (call === undefined) return [];
-  const entry: Entry = { repo: site.repo, at: { path: call.evidence.path, line: call.evidence.line }, callee: { file: carrier.site.file, symbol: carrier.site.symbol, line: carrier.site.line } };
+  let entry: Entry;
+  if (carrier.site.kind === "method-parameter") {
+    if (returnsTo === undefined) return [];
+    entry = { repo: site.repo, at: hops.at(-1)?.evidence ?? { path: returnsTo.resource, line: 1 }, callee: { file: carrier.site.file, symbol: carrier.site.method, line: 0 }, returnsTo };
+  } else {
+    if (carrier.site.kind !== "parameter") return [];
+    const call = hops.findLast((hop) => hop.step === "argument");
+    if (call === undefined) return [];
+    entry = { repo: site.repo, at: { path: call.evidence.path, line: call.evidence.line }, callee: { file: carrier.site.file, symbol: carrier.site.symbol, line: carrier.site.line } };
+  }
   return entries.some((held) => canonicalJson(held) === canonicalJson(entry)) ? "recursion" : [...entries, entry];
 }
 

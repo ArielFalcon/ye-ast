@@ -233,9 +233,14 @@ const ASSIGNMENTS: ReadonlySet<ts.SyntaxKind> = new Set([
   ts.SyntaxKind.QuestionQuestionEqualsToken,
 ]);
 
-function isWriteTarget(node: ts.Node): boolean {
+export function isWriteTarget(node: ts.Node): boolean {
   const parent = node.parent;
   return ts.isBinaryExpression(parent) && parent.left === node && ASSIGNMENTS.has(parent.operatorToken.kind);
+}
+
+/** Whether the node is what an assignment or a deletion replaces; an increment also reads, and stays a use of the value. */
+export function isModified(node: ts.Node): boolean {
+  return ts.isDeleteExpression(node.parent) || isWriteTarget(node);
 }
 
 function isValueIdentifier(node: ts.Identifier): boolean {
@@ -300,7 +305,37 @@ export function writesWithin(root: ts.Node, binding: Binding, from: number, to: 
   return found;
 }
 
-const CONDITIONAL_PARENTS = (node: ts.Node): boolean =>
+const MUTATORS: ReadonlySet<string> = new Set(["assign", "defineProperty", "defineProperties", "setPrototypeOf"]);
+
+/** The name of the static method of the global `Object` the call invokes. */
+export function staticObjectMethod(call: ts.CallExpression): string | undefined {
+  const callee = unwrap(call.expression);
+  if (!ts.isPropertyAccessExpression(callee)) return undefined;
+  const object = unwrap(callee.expression);
+  return ts.isIdentifier(object) && object.text === "Object" && isUndeclaredName(object) ? callee.name.text : undefined;
+}
+
+/** The first argument of `Object.assign` and the other static `Object` methods that change it. */
+export function mutatedTarget(call: ts.CallExpression): ts.Expression | undefined {
+  const method = staticObjectMethod(call);
+  return method !== undefined && MUTATORS.has(method) ? call.arguments[0] : undefined;
+}
+
+/** The calls inside `root` after `from` that mutate the value of `binding` or a path below it for which `matters` holds. */
+export function mutationsWithin(root: ts.Node, binding: Binding, from: number, matters: (path: AccessPath) => boolean): ts.CallExpression[] {
+  const found: ts.CallExpression[] = [];
+  const visit = (node: ts.Node): void => {
+    if (node.end <= from || ts.isTypeNode(node) || shadows(node, binding)) return;
+    const target = ts.isCallExpression(node) ? mutatedTarget(node) : undefined;
+    const written = target === undefined ? undefined : pathFrom(target, binding);
+    if (ts.isCallExpression(node) && written !== undefined && !written.dynamic && node.pos >= from && matters(written.path)) found.push(node);
+    node.forEachChild(visit);
+  };
+  root.forEachChild(visit);
+  return found;
+}
+
+const CONDITIONAL_PARENTS =(node: ts.Node): boolean =>
   ts.isIfStatement(node) ||
   ts.isIterationStatement(node, false) ||
   ts.isSwitchStatement(node) ||

@@ -13,7 +13,7 @@ import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 const VERBS: ReadonlySet<string> = new Set(["get", "head", "post", "put", "patch", "delete", "options", "trace"]);
 const OPENAPI = /^3\./;
 const SWAGGER = "2.0";
-const DOCUMENTATION: ReadonlySet<string> = new Set(["description", "summary", "example", "examples", "externalDocs"]);
+export const DOCUMENTATION: ReadonlySet<string> = new Set(["description", "summary", "example", "examples", "externalDocs"]);
 const NAMED_MEMBERS: ReadonlySet<string> = new Set(["properties", "patternProperties"]);
 const LITERAL_MEMBERS: ReadonlySet<string> = new Set(["default", "enum", "const"]);
 
@@ -27,21 +27,16 @@ export function createContractRoutes(): ContractRoutes {
 }
 
 function operationsOf(file: SourceFile, referenced: ReferencedDocuments): readonly Finding<ContractOperation>[] {
-  const lineCounter = new LineCounter();
-  let document: Document.Parsed;
-  let content: ContractContent | null;
-  try {
-    document = parseDocument(file.content, { lineCounter });
-    const first = document.errors[0];
-    if (first !== undefined) return [unreadable(file.path, first.linePos?.[0]?.line ?? 1)];
-    content = document.toJS() as ContractContent | null;
-  } catch {
-    return [unreadable(file.path, 1)];
-  }
-  if (!declaresContract(content) || typeof content?.paths !== "object" || content.paths === null) return [];
-  const basePath = basePathOf(content);
-  const at = { file, document, lineCounter, basePath, content, referenced };
-  return Object.entries(content.paths as Record<string, unknown>).flatMap(([path, item]) => operationsAt(at, path, item));
+  const contract = parseContract(file);
+  if (contract === undefined) return [];
+  if ("status" in contract) return [contract];
+  return declaredOperations(contract).flatMap(({ path, verb, operation, shared, operationId, line }) => {
+    const { parameters, requestBody, responses, consumes, produces } = operation;
+    const request = { parameters: [...asList(shared), ...asList(parameters)], requestBody, consumes: consumes ?? contract.content.consumes };
+    const response = { responses, produces: produces ?? contract.content.produces };
+    const data = dataOf(file.path, { request, response }, referenced);
+    return [{ status: "complete", value: { operationId, method: verb.toUpperCase() as HttpMethod, path, basePath: contract.basePath, document: file.path, line, data }, evidence: [{ path: file.path, line }] }];
+  });
 }
 
 interface ContractContent {
@@ -52,6 +47,32 @@ interface ContractContent {
   servers?: unknown;
   consumes?: unknown;
   produces?: unknown;
+}
+
+/** A source that declares a contract, parsed once: the readers of operations and of shapes share it. */
+export interface ParsedContract {
+  file: SourceFile;
+  document: Document.Parsed;
+  lineCounter: LineCounter;
+  basePath: string | undefined;
+  content: ContractContent & { paths: Record<string, unknown> };
+}
+
+/** The contract a source declares, `undefined` when it declares none, or an `unknown` finding when it cannot be read. */
+export function parseContract(file: SourceFile): ParsedContract | Finding<never> | undefined {
+  const lineCounter = new LineCounter();
+  let document: Document.Parsed;
+  let content: ContractContent | null;
+  try {
+    document = parseDocument(file.content, { lineCounter });
+    const first = document.errors[0];
+    if (first !== undefined) return unreadable(file.path, first.linePos?.[0]?.line ?? 1);
+    content = document.toJS() as ContractContent | null;
+  } catch {
+    return unreadable(file.path, 1);
+  }
+  if (!declaresContract(content) || typeof content?.paths !== "object" || content.paths === null) return undefined;
+  return { file, document, lineCounter, basePath: basePathOf(content), content: content as ParsedContract["content"] };
 }
 
 /** The path every operation is served under: Swagger 2.0 `basePath`, or the path part of the OpenAPI `servers`; `undefined` when the servers disagree. */
@@ -74,27 +95,28 @@ function declaresContract(content: { openapi?: unknown; swagger?: unknown } | nu
   return String(content?.swagger ?? "") === SWAGGER;
 }
 
-interface DocumentAt {
-  file: SourceFile;
-  document: Document.Parsed;
-  lineCounter: LineCounter;
-  basePath: string | undefined;
-  content: ContractContent;
-  referenced: ReferencedDocuments;
+export interface DeclaredOperation {
+  path: string;
+  verb: string;
+  operation: Record<string, unknown>;
+  /** The parameters its path item shares with every operation of the path. */
+  shared: unknown;
+  operationId: string | undefined;
+  /** The line of the `operationId`, or of the verb when there is none. */
+  line: number;
 }
 
-function operationsAt(at: DocumentAt, path: string, item: unknown): Finding<ContractOperation>[] {
-  if (typeof item !== "object" || item === null) return [];
-  const shared = (item as { parameters?: unknown }).parameters;
-  return Object.entries(item as Record<string, unknown>).flatMap(([verb, operation]) => {
-    if (!VERBS.has(verb) || typeof operation !== "object" || operation === null) return [];
-    const { operationId: declared, parameters, requestBody, responses, consumes, produces } = operation as Record<string, unknown>;
-    const operationId = typeof declared === "string" && declared !== "" ? declared : undefined;
-    const line = operationId === undefined ? keyLine(at.document, at.lineCounter, ["paths", path], verb) : lineOf(at.document, at.lineCounter, ["paths", path, verb, "operationId"]);
-    const request = { parameters: [...asList(shared), ...asList(parameters)], requestBody, consumes: consumes ?? at.content.consumes };
-    const response = { responses, produces: produces ?? at.content.produces };
-    const data = dataOf(at.file.path, { request, response }, at.referenced);
-    return [{ status: "complete", value: { operationId, method: verb.toUpperCase() as HttpMethod, path, basePath: at.basePath, document: at.file.path, line, data }, evidence: [{ path: at.file.path, line }] }];
+export function declaredOperations({ document, lineCounter, content }: ParsedContract): DeclaredOperation[] {
+  return Object.entries(content.paths).flatMap(([path, item]) => {
+    if (typeof item !== "object" || item === null) return [];
+    const shared = (item as { parameters?: unknown }).parameters;
+    return Object.entries(item as Record<string, unknown>).flatMap(([verb, operation]) => {
+      if (!VERBS.has(verb) || typeof operation !== "object" || operation === null) return [];
+      const declared = (operation as { operationId?: unknown }).operationId;
+      const operationId = typeof declared === "string" && declared !== "" ? declared : undefined;
+      const line = operationId === undefined ? keyLine(document, lineCounter, ["paths", path], verb) : lineOf(document, lineCounter, ["paths", path, verb, "operationId"]);
+      return [{ path, verb, operation: operation as Record<string, unknown>, shared, operationId, line }];
+    });
   });
 }
 
@@ -103,11 +125,11 @@ function asList(value: unknown): readonly unknown[] {
 }
 
 /** The parsed content of every source a reference may name, read once per call; `undefined` for one that does not parse. */
-interface ReferencedDocuments {
+export interface ReferencedDocuments {
   get(path: string): { content: unknown } | undefined;
 }
 
-function referencedDocuments(files: readonly SourceFile[]): ReferencedDocuments {
+export function referencedDocuments(files: readonly SourceFile[]): ReferencedDocuments {
   const sources = new Map(files.map((file) => [file.path, file.content]));
   const parsed = new Map<string, { content: unknown } | undefined>();
   return {
@@ -183,10 +205,10 @@ function withoutDocumentation(node: unknown, parentKey: string | undefined, onRe
   return Object.fromEntries(kept);
 }
 
-type Target = { file: string; pointer: string; node: unknown } | { unresolved: UnresolvedReference };
+export type Target = { file: string; pointer: string; node: unknown } | { unresolved: UnresolvedReference };
 
 /** The place a reference names: a JSON pointer into its own document or into another source of the repository. */
-function targetOf(from: string, ref: string, referenced: ReferencedDocuments): Target {
+export function targetOf(from: string, ref: string, referenced: ReferencedDocuments): Target {
   const hash = ref.indexOf("#");
   const location = hash === -1 ? ref : ref.slice(0, hash);
   const pointer = hash === -1 ? "" : ref.slice(hash + 1);

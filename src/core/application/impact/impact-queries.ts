@@ -48,6 +48,7 @@ import { inboundEdgesOf } from "./inbound-origins.ts";
 import type { EdgeCorrections, InboundEdges } from "./inbound-edges.ts";
 import { retainedRelations } from "../relations/retained-relations.ts";
 import { referenceProofsOf, unresolvedOf, type ReferenceProofs } from "./reference-origins.ts";
+import { unresolvedReferencesIn } from "../navigation/declaration-uses.ts";
 import { walkImpact, type Walk } from "./walk.ts";
 import type { ImportOrigins, ImportOriginsReader } from "../../ports/import-origins.port.ts";
 import { createEdgeTargets, edgeKey, type EdgeTargets, type EdgeTargetsDeps, type FollowedEdge } from "../navigation/edge-targets.ts";
@@ -200,7 +201,7 @@ export function createImpactQueries(deps: ImpactQueriesDeps): ImpactQueries {
         try {
           const written = headTree.export.files.filter((file) => file.written && isReadableFile(file.path)).map((file) => file.path);
           const held = new Set(headTree.export.files.map((file) => file.path));
-          const references = store.unresolvedReferences(written);
+          const references = unresolvedReferencesIn(store, written);
           const modules = deps.moduleDependencies === undefined ? undefined : await moduleDependenciesOf(deps.moduleDependencies, head.prepared, headTree, request.signal);
           if (request.signal?.aborted) return ABORTED;
           const origins = deps.importOrigins?.(headTree.sources);

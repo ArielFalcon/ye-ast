@@ -111,3 +111,12 @@ population did not.
 - A Java cut retired by an import-binding proof, a call on a type name (`T.m()`) whose type declares no such member, a
   use moved to a declaration from a file that does not import it (only the edges of the files that import a reached
   symbol are read for it), and a call on a typed receiver: each needs a proof the verdict does not take yet.
+
+## Amendment: a root proves only the member below it
+
+A root proves where a chain starts, not what a call runs past it. The repository may store its own object in a member of
+a package or a platform class (`other.setLogger(new Sink())`, `System.setOut(new RepoStream())`), so a call that reads a
+member between its root and its own member (`other.logger.flush()`, `java.lang.System.out.println()`) is neither retired
+as a cut nor dropped as an edge by its root, in impact, callers, importers, outline and trace alike. The rule is the one ADR-0029 decision 9 states
+(`readsPastRoot`: a call spelling more than two names from its root, a Java root counted after its package); a call one
+member below its root (`Math.max`, `_.map`) keeps decision 1.

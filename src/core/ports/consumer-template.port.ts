@@ -6,6 +6,12 @@ export interface MemberCarrier {
   path: AccessPath;
 }
 
+/** The value a component method returned, back at the template expression that called it. */
+export interface TemplateCallCarrier {
+  site: Extract<CarrierSite, { kind: "template-call-result" }>;
+  path: AccessPath;
+}
+
 /**
  * Follows a component member into the template of its owner: reads of the member with the guards that cover them
  * (`?.`, `@if` and `*ngIf` tests on a prefix that includes the changed segment, `as` aliases, `@for` items, `??` and `||`),
@@ -13,5 +19,5 @@ export interface MemberCarrier {
  * An owner without a template, or one that does not parse, is a frontier.
  */
 export interface ConsumerTemplateReader {
-  follow(carrier: MemberCarrier): FlowResult;
+  follow(carrier: MemberCarrier | TemplateCallCarrier): FlowResult;
 }
