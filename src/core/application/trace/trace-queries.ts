@@ -4,8 +4,11 @@ import type { FileChange } from "../../domain/change/diff-reader.ts";
 import type { SourceTrivia } from "../../ports/source-trivia.port.ts";
 import type { ComponentRef } from "../../domain/change/seeds.ts";
 import { contentFingerprint, exportCuts } from "../../domain/map/entrypoint-map.ts";
-import { comparePosition, compareText } from "../../domain/shared/code-node.ts";
-import { sortedEngines, withCuts, type Cut, type Fact } from "../../domain/shared/fact.ts";
+import { comparePosition, compareText, joinsFact } from "../../domain/shared/code-node.ts";
+import type { Entrypoint } from "../../domain/entrypoints/entrypoint.ts";
+import { placeAt } from "../../domain/impact/impact-cuts.ts";
+import { sortedUnique } from "../../domain/impact/importers-fact.ts";
+import { sortedEngines, withCuts, type Cut, type Fact, type Finding } from "../../domain/shared/fact.ts";
 import type { Result } from "../../domain/shared/result.ts";
 import { readingPlan } from "../../domain/trace/reading-plan.ts";
 import type { TraceValue } from "../../domain/trace/trace-fact.ts";
@@ -15,13 +18,15 @@ import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { DeclaredMemberNames, DeclaredMemberNamesReader } from "../../ports/declared-member-names.port.ts";
 import type { ImportOriginsReader } from "../../ports/import-origins.port.ts";
 import type { ModuleDependenciesReader } from "../../ports/module-dependencies.port.ts";
-import type { TraceFault, TraceQueries } from "../../ports/trace-queries.port.ts";
+import type { CallersTarget } from "../../ports/impact-queries.port.ts";
+import type { EntrypointTarget, TraceFault, TraceQueries, TraceTarget, UnknownEntrypointFault } from "../../ports/trace-queries.port.ts";
 import { distinctTargets, evidenceOfTarget, rangeChanges, requestedRanges, selectRoots, targetKey, triviaOncePerFile, type RootSelection } from "../navigation/root-selection.ts";
 import { ABORTED } from "../snapshot/read-snapshot.ts";
 import { createEdgeTargets } from "../navigation/edge-targets.ts";
 import { retainedRelations } from "../relations/retained-relations.ts";
 import type { RelationExtractor } from "../relations/relation-extractor.ts";
-import { createHeadReader, type FactSpec, type HeadReaderDeps } from "../snapshot/head-reading.ts";
+import { createHeadReader, type FactSpec, type HeadReaderDeps, type HeadReading } from "../snapshot/head-reading.ts";
+import type { CommitExtraction } from "../snapshot/read-snapshot.ts";
 import { isTraceRoot, walkTrace } from "./trace-walk.ts";
 import { unresolvedOncePerFile } from "../navigation/declaration-uses.ts";
 
@@ -50,16 +55,20 @@ export function createTraceQueries(deps: TraceQueriesDeps): TraceQueries {
     async walk(request) {
       const { signal } = request;
       const targets = distinctTargets(request.targets);
+      const declarations = targets.filter(isDeclarationTarget);
+      const entrypoints = targets.filter(isEntrypointTarget);
       const budget = request.budget ?? {};
-      const spec: FactSpec = { declaredConfig: { ...(request.budget === undefined ? {} : { walk: { ...request.budget } }), targets: targets.map(targetKey) }, engines };
+      const spec: FactSpec = { declaredConfig: { ...(request.budget === undefined ? {} : { walk: { ...request.budget } }), targets: targets.map(traceTargetKey) }, engines };
 
-      return headReader.atSources(request, spec, async (head): Promise<Result<Fact<TraceValue>, TraceFault>> => {
+      const read = async (head: HeadReading<Pick<CommitExtraction, "export" | "sources">>, findings: readonly Finding<Entrypoint>[]): Promise<Result<Fact<TraceValue>, TraceFault>> => {
         const content = contentFingerprint(head.tree.export);
-        const outside = targets.filter((target) => !head.selected(target.file));
+        const outside = declarations.filter((target) => !head.selected(target.file));
         if (outside.length > 0) return { ok: true, value: { ...head.base(content), evidence: outside.map(evidenceOfTarget), status: "unknown", reason: "out-of-scope" } };
+        const handlers = entrypointHandlers(findings, entrypoints);
+        if (handlers.unknown.length > 0) return { ok: false, fault: { kind: "unknown-entrypoint", detail: `no entrypoint of the map at the revision for ${handlers.unknown.map(traceTargetKey).join(", ")}`, entries: handlers.unknown } };
         const fixed = [
           ...exportCuts(head.tree.export),
-          ...rangeChanges(targets).filter((file) => kindOfChangedFile(file.path) !== "source").map((file): Cut => ({ kind: "no-extractor", at: [file.path] })),
+          ...rangeChanges(declarations).filter((file) => kindOfChangedFile(file.path) !== "source").map((file): Cut => ({ kind: "no-extractor", at: [file.path] })),
         ];
 
         const index = await head.open();
@@ -71,11 +80,13 @@ export function createTraceQueries(deps: TraceQueriesDeps): TraceQueries {
           const trivia = triviaOncePerFile(deps.sourceTrivia);
           const unresolvedIn = unresolvedOncePerFile(store);
           const isRoot = isTraceRoot(store, unresolvedIn);
-          const selections = await Promise.all(targets.map(async (target) => ({
+          const selections = await Promise.all(targets.map(async (target): Promise<{ target: TraceTarget; selection: Pick<RootSelection, "seeds" | "missing" | "withoutSymbols"> }> => ({
             target,
-            selection: "start" in target
-              ? await rangeRoots(store, rangeChanges([target]), head.tree.sources, trivia, isRoot)
-              : selectRoots(store, [], [target], NO_COMPONENTS, [], isRoot),
+            selection: isEntrypointTarget(target)
+              ? handlerRoots(store, handlers.byTarget.get(traceTargetKey(target)) ?? [], isRoot)
+              : "start" in target
+                ? await rangeRoots(store, rangeChanges([target]), head.tree.sources, trivia, isRoot)
+                : selectRoots(store, [], [target], NO_COMPONENTS, [], isRoot),
           })));
           const missing = selections.flatMap(({ selection }) => selection.missing);
           if (missing.length > 0) return { ok: false, fault: { kind: "unknown-symbol", detail: `no symbol at the revision for ${missing.map(unknownTargetKey).join(", ")}`, entries: missing } };
@@ -99,7 +110,7 @@ export function createTraceQueries(deps: TraceQueriesDeps): TraceQueries {
           const { steps, ids } = traceSteps(walk.roots);
           const rootIds = new Map(roots.map((root, index) => [root.id, ids.get(walk.roots[index]!)!]));
           const value: TraceValue = {
-            roots: selections.map(({ target, selection }) => ({ target: targetKey(target), steps: selection.seeds.map(({ symbol }) => rootIds.get(symbol.id)!).sort((a, b) => a - b) })),
+            roots: selections.map(({ target, selection }) => ({ target: traceTargetKey(target), steps: selection.seeds.map(({ symbol }) => rootIds.get(symbol.id)!).sort((a, b) => a - b) })),
             steps,
             readingPlan: readingPlan(steps),
             cost: { expanded: walk.expanded },
@@ -108,15 +119,79 @@ export function createTraceQueries(deps: TraceQueriesDeps): TraceQueries {
             ...fixed,
             ...summary.filesNotIndexed.map((file): Cut => ({ kind: "no-extractor", at: [file] })),
             ...selections.flatMap(({ selection }) => selection.withoutSymbols.map((file): Cut => ({ kind: "no-extractor", at: [file] }))),
+            ...handlers.unplaced,
+            ...selections.flatMap(({ target, selection }) => (isEntrypointTarget(target) ? unplacedHandlers(handlers.byTarget.get(traceTargetKey(target)) ?? [], selection) : [])),
             ...walk.cuts,
           ];
           return { ok: true, value: withCuts(head.base(content, true), value, cuts) };
         } finally {
           store.close();
         }
-      });
+      };
+      return entrypoints.length === 0
+        ? headReader.atSources(request, spec, (head) => read(head, []))
+        : headReader.atHead(request, spec, (head) => read(head, head.tree.findings));
     },
   };
+}
+
+function isEntrypointTarget(target: TraceTarget): target is EntrypointTarget {
+  return "kind" in target;
+}
+
+function isDeclarationTarget(target: TraceTarget): target is CallersTarget {
+  return !isEntrypointTarget(target);
+}
+
+function traceTargetKey(target: TraceTarget): string {
+  return isEntrypointTarget(target) ? `${target.kind} ${target.name}` : targetKey(target);
+}
+
+type HandlerPlace = { path: string; symbol: string; line: number };
+
+interface EntrypointHandlers {
+  /** The handlers, or a UI route's component, of the map's entrypoints each target names, by the target's key. */
+  byTarget: ReadonlyMap<string, readonly HandlerPlace[]>;
+  /** A UI route of a target whose component the sources do not name, as a cut at the route. */
+  unplaced: readonly Cut[];
+  unknown: UnknownEntrypointFault["entries"];
+}
+
+/** What each entrypoint target starts at: the handler of every complete map entrypoint of its kind and name. */
+function entrypointHandlers(findings: readonly Finding<Entrypoint>[], targets: readonly EntrypointTarget[]): EntrypointHandlers {
+  const entrypoints = findings.flatMap((finding) => (finding.status === "complete" ? [{ entrypoint: finding.value, evidence: finding.evidence }] : []));
+  const byTarget = new Map<string, HandlerPlace[]>();
+  const unplaced: Cut[] = [];
+  const unknown: UnknownEntrypointFault["entries"][number][] = [];
+  for (const target of targets) {
+    const named = entrypoints.filter(({ entrypoint }) => entrypoint.kind === target.kind && entrypoint.name === target.name);
+    if (named.length === 0) {
+      unknown.push({ ...target, candidates: sortedUnique(entrypoints.filter(({ entrypoint }) => entrypoint.kind === target.kind).map(({ entrypoint }) => entrypoint.name)) });
+      continue;
+    }
+    const places: HandlerPlace[] = [];
+    for (const { entrypoint, evidence } of named) {
+      const handler = entrypoint.kind === "ui-route" ? entrypoint.component : entrypoint.handler;
+      if (handler === "unknown") unplaced.push({ kind: "unresolved-link", at: evidence.map((at) => placeAt(at.path, at.line, entrypoint.name)) });
+      else places.push({ path: handler.path, symbol: handler.symbol, line: handler.line });
+    }
+    byTarget.set(traceTargetKey(target), places);
+  }
+  return { byTarget, unplaced, unknown };
+}
+
+/** The declarations of the index the handlers name: the one join of a map fact and a node (file, line in span, name). */
+function handlerRoots(store: CodeGraphReader, handlers: readonly HandlerPlace[], isRoot: (symbol: GraphSymbol) => boolean): Pick<RootSelection, "seeds" | "missing" | "withoutSymbols"> {
+  const symbols = store.symbolsInFiles(sortedUnique(handlers.map(({ path }) => path)));
+  const joined = symbols.filter((symbol) => isRoot(symbol) && handlers.some((handler) => joinsFact(symbol, handler)));
+  return { seeds: joined.sort(comparePosition).map((symbol) => ({ symbol, basis: "requested" })), missing: [], withoutSymbols: [] };
+}
+
+/** A handler no declaration of the index joins is a cut at the handler, never a root silently missing. */
+function unplacedHandlers(handlers: readonly HandlerPlace[], selection: Pick<RootSelection, "seeds">): Cut[] {
+  return handlers
+    .filter((handler) => !selection.seeds.some(({ symbol }) => joinsFact(symbol, handler)))
+    .map((handler): Cut => ({ kind: "unresolved-link", at: [placeAt(handler.path, handler.line, handler.symbol)] }));
 }
 
 /** Reads each source once for the life of one query, for its member names and its callables alike. */

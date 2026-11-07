@@ -6,7 +6,7 @@ import { isWorkspaceReplayContext } from "../core/domain/topology/workspace-repl
 import { FULL_OBJECT_ID_PATTERN, isFullObjectId } from "../core/domain/shared/revision.ts";
 import type { WalkBoundsField } from "../core/domain/shared/fact.ts";
 import { isValidGlob } from "../core/domain/shared/scope.ts";
-import type { TRACE_BOUND_FIELDS } from "../core/ports/trace-queries.port.ts";
+import { ENTRYPOINT_KINDS, type TRACE_BOUND_FIELDS } from "../core/ports/trace-queries.port.ts";
 
 /**
  * The input contracts of the eight query families. Each family has a semantic schema, which carries only the fields that
@@ -226,7 +226,11 @@ const outlineFields = {
 const exactlyOneSubject = (value: { files?: unknown; focus?: unknown }): boolean => (value.files === undefined) !== (value.focus === undefined);
 const ONE_SUBJECT = { message: "give exactly one of files and focus", path: ["files"], params: { constraint: "one-subject" } };
 const subjectConstraint: CrossField = { dependentSchemas: { files: { not: { required: ["focus"] } } }, if: { not: { required: ["files"] } }, then: { required: ["focus"] } };
-const traceFields = { repo, revision, live, targets: z.array(target).min(1).describe("Declarations to start from; every declaration a target selects is a root."), scope, budget: traceBudget };
+const traceTarget = z.union([
+  ...target.options,
+  z.strictObject({ kind: z.enum(ENTRYPOINT_KINDS), name: z.string().min(1) }).describe("Entrypoint as ye_ast_entrypoints names it; starts at its handler, a UI route at its component."),
+]);
+const traceFields = { repo, revision, live, targets: z.array(traceTarget).min(1).describe("Declarations to start from; every declaration a target selects is a root."), scope, budget: traceBudget };
 const workspaceFields = { repo, revision: workspaceRevision, live: z.literal(true).optional(), offline, scope, repos: workspaceRepos, gateways };
 
 /** The semantic inputs: what the analysis reads, without `mode`, `select`, `page` or `expect`. */

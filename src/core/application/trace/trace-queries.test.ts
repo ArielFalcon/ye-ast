@@ -4,8 +4,8 @@ import type { ImportOrigin } from "../../domain/relations/resolved-reference.ts"
 import type { Fact, Finding } from "../../domain/shared/fact.ts";
 import type { TraceStep, TraceValue } from "../../domain/trace/trace-fact.ts";
 import type { DeclaredType, DispatchSite, DispatchTargets, ImportOriginSite, ReplacedRoots, ResolvedNameSite, UseSite } from "../../ports/import-origins.port.ts";
-import type { CallersTarget } from "../../ports/impact-queries.port.ts";
-import type { TraceBudget, TraceRequest } from "../../ports/trace-queries.port.ts";
+import type { TraceBudget, TraceRequest, TraceTarget } from "../../ports/trace-queries.port.ts";
+import type { Entrypoint } from "../../domain/entrypoints/entrypoint.ts";
 import { fakeLive, type FakeLive } from "../live/fake-live.testing.ts";
 import { fakeCodeGraph, fakeNode, type FakeEdge, type FakeNode, type FakeUnresolved } from "../navigation/fake-code-graph.testing.ts";
 import type { DeclaredCallable, ReceiverBinding } from "../../ports/declared-member-names.port.ts";
@@ -60,6 +60,10 @@ interface Options {
   callables?: Readonly<Record<string, readonly DeclaredCallable[]>>;
   /** The bodies the declared hierarchy proves a body-less method runs, by its name; unknown by default. */
   dispatch?: Readonly<Record<string, DispatchTargets>>;
+  /** The entrypoints the map reads at the head; none by default. */
+  findings?: readonly Finding<Entrypoint>[];
+  /** Runs each time the map's entrypoints are read. */
+  onExtract?: () => void;
 }
 
 function setup(options: Options) {
@@ -79,7 +83,7 @@ function setup(options: Options) {
     },
     scratch: { create: async () => "/scratch/head", remove: async () => undefined },
     reader: { read: async () => options.sources ?? [] },
-    extractor: { extract: () => [] },
+    extractor: { extract: async () => (options.onExtract?.(), options.findings ?? []) },
     digest: { of: (value: string) => `digest:${value}` },
     producer: { name: "ye-ast", version: "0.0.0" },
     matcher: { matches: options.matches ?? (() => true) },
@@ -108,13 +112,13 @@ function setup(options: Options) {
   return { queries: createTraceQueries(deps), log };
 }
 
-async function trace(options: Options, targets: readonly CallersTarget[] = [{ file: A, symbol: "run" }], extra: Partial<TraceRequest> & { budget?: TraceBudget } = {}) {
+async function trace(options: Options, targets: readonly TraceTarget[] = [{ file: A, symbol: "run" }], extra: Partial<TraceRequest> & { budget?: TraceBudget } = {}) {
   const { queries, log } = setup(options);
   const answer = await queries.walk({ repo: "/work/shop", repoId: "shop", revision: "HEAD", targets, ...extra } as TraceRequest);
   return { answer, log };
 }
 
-async function factOf(options: Options, targets?: readonly CallersTarget[], extra?: Partial<TraceRequest>): Promise<Fact<TraceValue>> {
+async function factOf(options: Options, targets?: readonly TraceTarget[], extra?: Partial<TraceRequest>): Promise<Fact<TraceValue>> {
   const { answer } = await trace(options, targets, extra);
   assert.ok(answer.ok, answer.ok ? "" : answer.fault.kind);
   return answer.value;
@@ -756,4 +760,52 @@ test("a write below another path, beside the called member, or on an object no r
   ];
 
   for (const [name, options] of cases) assert.equal(valueOf(await factOf(options)).steps.flatMap((step) => step.external ?? []).length, 1, name);
+});
+
+const handlerAt = (path: string, symbol: string, line: number) => ({ path, symbol, line });
+const route = (name: string, handler: ReturnType<typeof handlerAt>): Finding<Entrypoint> => ({ status: "complete", value: { kind: "http-route", name, method: "POST", path: name.slice(name.indexOf(" ") + 1), handler, basePath: { status: "complete", value: { path: "", source: "none" }, evidence: [] } } as unknown as Entrypoint, evidence: [{ path: handler.path, line: handler.line }] });
+const job = (name: string, handler: ReturnType<typeof handlerAt>): Finding<Entrypoint> => ({ status: "complete", value: { kind: "job", name, trigger: { attribute: "cron", value: "0" }, handler }, evidence: [{ path: handler.path, line: handler.line }] });
+const page = (name: string, component: ReturnType<typeof handlerAt> | "unknown", at = { path: B, line: 9 }): Finding<Entrypoint> => ({ status: "complete", value: { kind: "ui-route", name, path: name, component, guards: [] }, evidence: [at] });
+
+/** `Api` declares two overloads of `handle` (lines 3 and 7) and `other` (line 12). */
+const API: FakeNode[] = [fakeNode("Api", "class", A, 1, 20), fakeNode("Api.handle#1", "method", A, 3, 5, "handle"), fakeNode("Api.handle#2", "method", A, 7, 10, "handle"), fakeNode("Api.other", "method", A, 12, 14, "other")];
+const API_EDGES: FakeEdge[] = ["Api.handle#1", "Api.handle#2", "Api.other"].map((to) => ({ from: "Api", to, kind: "contains" }));
+
+test("an entrypoint target roots at the handler of each map entrypoint of its kind and name, at the handler's line", async () => {
+  const findings = [route("POST /orders", handlerAt(A, "Api.handle", 7)), route("GET /orders", handlerAt(A, "Api.other", 12)), job("POST /orders", handlerAt(A, "Api.other", 12))];
+  const fact = await factOf({ nodes: API, edges: API_EDGES, findings }, [{ kind: "http-route", name: "POST /orders" }]);
+  assert.deepEqual(valueOf(fact).steps.map((step) => [step.id, step.symbol, step.line]), [[0, "handle", 7]]);
+  assert.deepEqual(valueOf(fact).roots, [{ target: "http-route POST /orders", steps: [0] }]);
+});
+
+test("a UI route target roots at its component", async () => {
+  const fact = await factOf({ nodes: API, edges: API_EDGES, findings: [page("/orders", handlerAt(A, "Api", 1))] }, [{ kind: "ui-route", name: "/orders" }]);
+  assert.deepEqual(valueOf(fact).roots, [{ target: "ui-route /orders", steps: [0] }]);
+  assert.equal(valueOf(fact).steps[0]!.symbol, "Api");
+});
+
+test("a UI route whose component the sources do not name is a cut at the route, with no root", async () => {
+  const fact = await factOf({ nodes: API, edges: API_EDGES, findings: [page("/orders", "unknown", { path: B, line: 9 })] }, [{ kind: "ui-route", name: "/orders" }]);
+  assert.deepEqual(valueOf(fact).roots, [{ target: "ui-route /orders", steps: [] }]);
+  assert.deepEqual(cutsOf(fact), [["unresolved-link", [`${B}:9 /orders`]]]);
+});
+
+test("a handler no declaration of the index holds is a cut at the handler, never a silent empty root", async () => {
+  const fact = await factOf({ nodes: API, edges: API_EDGES, findings: [route("POST /orders", handlerAt(B, "Gone.handle", 4))] }, [{ kind: "http-route", name: "POST /orders" }]);
+  assert.deepEqual(valueOf(fact).roots, [{ target: "http-route POST /orders", steps: [] }]);
+  assert.deepEqual(cutsOf(fact), [["unresolved-link", [`${B}:4 Gone.handle`]]]);
+});
+
+test("an entrypoint the map does not hold is an unknown-entrypoint fault listing the map's names of that kind", async () => {
+  const findings = [route("GET /orders", handlerAt(A, "Api.other", 12)), route("DELETE /orders", handlerAt(A, "Api.other", 12)), job("POST /orders", handlerAt(A, "Api.other", 12))];
+  const { answer } = await trace({ nodes: API, edges: API_EDGES, findings }, [{ kind: "http-route", name: "POST /orders" }, { file: A, symbol: "other" }]);
+  assert.ok(!answer.ok);
+  assert.equal(answer.fault.kind, "unknown-entrypoint");
+  assert.deepEqual(answer.fault.kind === "unknown-entrypoint" && answer.fault.entries, [{ kind: "http-route", name: "POST /orders", candidates: ["DELETE /orders", "GET /orders"] }]);
+});
+
+test("a trace by declaration never reads the map's entrypoints", async () => {
+  let extracted = 0;
+  await factOf({ nodes: API, edges: API_EDGES, onExtract: () => void (extracted += 1) }, [{ file: A, symbol: "other" }]);
+  assert.equal(extracted, 0);
 });

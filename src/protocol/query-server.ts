@@ -3,7 +3,7 @@ import type { Result } from "../core/domain/shared/result.ts";
 import type { EntrypointQueries } from "../core/ports/entrypoint-queries.port.ts";
 import type { ImpactFault, ImpactQueries } from "../core/ports/impact-queries.port.ts";
 import type { OutlineFault, OutlineQueries } from "../core/ports/outline-queries.port.ts";
-import type { TraceQueries } from "../core/ports/trace-queries.port.ts";
+import type { TraceFault, TraceQueries } from "../core/ports/trace-queries.port.ts";
 import type { WorkspaceQueries } from "../core/ports/workspace-queries.port.ts";
 import type { DecisionQueries } from "../core/ports/decision-queries.port.ts";
 import type { WorkspaceFault } from "../core/ports/workspace-repos.port.ts";
@@ -33,7 +33,7 @@ export interface QueryServerStreams {
   signal?: AbortSignal;
 }
 
-type Call = (signal: AbortSignal) => Promise<Result<unknown, ImpactFault | OutlineFault | WorkspaceFault>>;
+type Call = (signal: AbortSignal) => Promise<Result<unknown, ImpactFault | OutlineFault | WorkspaceFault | TraceFault>>;
 
 /** Each operation reads and validates its params up front, so an invalid one is answered before any work starts. */
 const OPERATIONS = new Map<string, (deps: QueryServerDeps, params: unknown) => Call>([
@@ -146,7 +146,7 @@ export async function serveQueries(deps: QueryServerDeps, streams: QueryServerSt
       if (fault.kind === "aborted" && timedOut) return fail(id, "deadline", `the deadline of ${deadline} ms elapsed`);
       if (isLiveFault(fault)) return fail(id, fault.kind, /[\\/]/.test(fault.detail) ? "[path omitted]" : redaction.redact(fault.detail.trim()));
       const safeCaptureText = (text: string): string => /[\\/]/.test(text) ? "[path omitted]" : redaction.redact(text);
-      const data = fault.kind === "unknown-symbol" || fault.kind === "top-level-line" ? { entries: redaction.redactValue(fault.entries) } : fault.kind === "unknown-change-path" ? { globs: redaction.redactValue(fault.globs) } : fault.kind === "workspace-capture-unavailable" ? { repo: redaction.redact(fault.repo), cause: { kind: fault.cause.kind, detail: safeCaptureText(fault.cause.detail) } } : {};
+      const data = fault.kind === "unknown-symbol" || fault.kind === "top-level-line" || fault.kind === "unknown-entrypoint" ? { entries: redaction.redactValue(fault.entries) } : fault.kind === "unknown-change-path" ? { globs: redaction.redactValue(fault.globs) } : fault.kind === "workspace-capture-unavailable" ? { repo: redaction.redact(fault.repo), cause: { kind: fault.cause.kind, detail: safeCaptureText(fault.cause.detail) } } : {};
       fail(id, fault.kind, fault.kind === "workspace-capture-unavailable" ? safeCaptureText(fault.detail.trim()) : redaction.redact(fault.detail.trim()), data);
     } catch (error) {
       fail(id, "internal-error", firstLine(redaction.redactError(error)));
