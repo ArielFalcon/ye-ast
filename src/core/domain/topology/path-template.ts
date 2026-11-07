@@ -5,9 +5,12 @@ type TemplatePart = { kind: "text"; text: string } | { kind: "hole" };
 
 /**
  * One segment of a path: text and holes, or a wildcard only a route states (`*` one segment, `**` or `{*name}` the rest
- * of the path, none of it included).
+ * of the path, none of it included). A tail with a `minimum` takes at least that many segments.
  */
-export type TemplateSegment = { kind: "parts"; parts: readonly TemplatePart[] } | { kind: "any-segment" } | { kind: "any-tail" };
+export type TemplateSegment = { kind: "parts"; parts: readonly TemplatePart[] } | { kind: "any-segment" } | { kind: "any-tail"; minimum?: number };
+
+/** How one segment of a call unifies with the segment of a route at the same place. */
+export type SegmentRule = (call: TemplateSegment, route: TemplateSegment) => Unification;
 
 /** A call path as segments, with the scheme and authority it states when it states them. */
 export interface CallTemplate {
@@ -19,7 +22,7 @@ export interface CallTemplate {
 export type Unification = { outcome: "matches"; literals: number; parity: boolean } | { outcome: "could-match" } | { outcome: "cannot-match" };
 
 export const CANNOT_MATCH: Unification = { outcome: "cannot-match" };
-const COULD: Unification = { outcome: "could-match" };
+export const COULD_MATCH: Unification = { outcome: "could-match" };
 const SCHEME = /^[a-z][a-z0-9+.-]*:/i;
 /** A scheme and authority, the authority captured: it ends where the path, the query or the fragment starts. */
 const ORIGIN = /^(?:[a-z][a-z0-9+.-]*:)?\/\/([^/?#]*)/i;
@@ -116,10 +119,10 @@ export function statedLength(segments: readonly TemplateSegment[]): number {
 }
 
 /** Whether a call path is a route path: segment by segment, a route's `**` taking the rest of the call. */
-export function unify(call: readonly TemplateSegment[], route: readonly TemplateSegment[]): Unification {
+export function unify(call: readonly TemplateSegment[], route: readonly TemplateSegment[], unifySegment: SegmentRule = unifyPathSegment): Unification {
   const tail = route.findIndex((segment) => segment.kind === "any-tail");
   if (tail === -1 && call.length !== route.length) return CANNOT_MATCH;
-  if (tail !== -1 && call.length < tail) return CANNOT_MATCH;
+  if (tail !== -1 && call.length < tail + tailMinimum(route[tail]!)) return CANNOT_MATCH;
   const compared = tail === -1 ? call : call.slice(0, tail);
   const swallowed = tail === -1 ? [] : call.slice(tail);
   let literals = 0;
@@ -134,10 +137,14 @@ export function unify(call: readonly TemplateSegment[], route: readonly Template
       parity ||= unified.parity;
     }
   }
-  return could ? COULD : { outcome: "matches", literals, parity };
+  return could ? COULD_MATCH : { outcome: "matches", literals, parity };
 }
 
-function unifySegment(call: TemplateSegment, route: TemplateSegment): Unification {
+function tailMinimum(segment: TemplateSegment): number {
+  return segment.kind === "any-tail" ? (segment.minimum ?? 0) : 0;
+}
+
+function unifyPathSegment(call: TemplateSegment, route: TemplateSegment): Unification {
   if (call.kind !== "parts") return CANNOT_MATCH;
   if (route.kind === "any-segment" || route.kind === "any-tail") return { outcome: "matches", literals: 0, parity: holdsValue(call) };
   const callText = literalText(call);
@@ -148,8 +155,35 @@ function unifySegment(call: TemplateSegment, route: TemplateSegment): Unificatio
   if (wholeHole(route.parts)) return { outcome: "matches", literals: 0, parity: true };
   if (wholeHole(call.parts)) return CANNOT_MATCH;
   if (shapeOf(call.parts) === shapeOf(route.parts)) return { outcome: "matches", literals: 1, parity: true };
-  if (routeText !== undefined) return patternOf(call.parts).test(routeText) ? COULD : CANNOT_MATCH;
-  return edgesAgree(call.parts, route.parts) ? COULD : CANNOT_MATCH;
+  if (routeText !== undefined) return patternOf(call.parts).test(routeText) ? COULD_MATCH : CANNOT_MATCH;
+  return edgesAgree(call.parts, route.parts) ? COULD_MATCH : CANNOT_MATCH;
+}
+
+/** Whether a segment that holds values could be a text: what it states around them agrees with the text. */
+export function mayHold(segment: TemplateSegment, text: string): boolean {
+  return segment.kind === "parts" && patternOf(segment.parts).test(text);
+}
+
+/** Whether two segments that both hold values could be the same text: the text they start and end with agrees. */
+export function mayShare(first: TemplateSegment, second: TemplateSegment): boolean {
+  return first.kind === "parts" && second.kind === "parts" && edgesAgree(first.parts, second.parts);
+}
+
+/** Whether a segment is one value the code fills at run time and states nothing else. */
+export function isRunTimeValue(segment: TemplateSegment): boolean {
+  return segment.kind === "parts" && segment.parts.length === 1 && segment.parts[0]?.kind === "hole";
+}
+
+/**
+ * A destination as segments: the tokens between its separator, or the whole name when its protocol has none. A token
+ * that is one of a listener's `wildcards` stands for one token, or for one or more trailing tokens.
+ */
+export function destinationSegments(text: string, separator: string | undefined, wildcards?: { one: string; rest: string }): TemplateSegment[] {
+  return (separator === undefined ? [text] : text.split(separator)).map((token): TemplateSegment => {
+    if (token === wildcards?.one) return { kind: "any-segment" };
+    if (token === wildcards?.rest) return { kind: "any-tail", minimum: 1 };
+    return { kind: "parts", parts: partsOf(token) };
+  });
 }
 
 function holdsValue(segment: TemplateSegment): boolean {
@@ -198,6 +232,11 @@ function segmentsOf(path: string, side: "call" | "route"): TemplateSegment[] {
 function segmentOf(segment: string, side: "call" | "route"): TemplateSegment {
   if (side === "route" && segment === "*") return { kind: "any-segment" };
   if (side === "route" && (segment === "**" || /^\{\*[^/{}]*\}$/.test(segment))) return { kind: "any-tail" };
+  return { kind: "parts", parts: partsOf(segment) };
+}
+
+function partsOf(segment: string): TemplatePart[] {
+  if (segment === "") return [{ kind: "text", text: "" }];
   const parts: TemplatePart[] = [];
   let at = 0;
   for (const hole of segment.matchAll(HOLE)) {
@@ -206,5 +245,5 @@ function segmentOf(segment: string, side: "call" | "route"): TemplateSegment {
     at = hole.index + hole[0].length;
   }
   if (at < segment.length) parts.push({ kind: "text", text: segment.slice(at) });
-  return { kind: "parts", parts };
+  return parts;
 }

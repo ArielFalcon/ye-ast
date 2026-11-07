@@ -769,6 +769,16 @@ test("a path function that calls itself is undecided, never a hang", async () =>
   assert.deepEqual(sites(await reader.of([pathFunction(" return orderPath(!open)")], "shop-web")), ["unknown unresolved@paths.ts:6"]);
 });
 
+test("an undecided call carries its cause: a path function that calls itself, overrides that disagree, or a base the snapshot does not decide", async () => {
+  const routes = source("src/app/routes.ts", ["export class Route { value(): string { return '/a' } }", "export class OtherRoute extends Route { value(): string { return '/b' } }"].join("\n"));
+  const service = source("src/app/devices.service.ts", ["import { HttpClient } from '@angular/common/http'", "import { inject } from '@angular/core'", "import { Route } from './routes'", "export class DevicesService { private readonly http = inject(HttpClient)", "  load(route: Route) { this.http.get(`/api${route.value()}`) } }"].join("\n"));
+  const causes = async (files: readonly { path: string; content: string }[]) => (await reader.of(files, "shop-web")).map((site) => [site.target.status, site.diagnostic?.cause, site.stated]);
+
+  assert.deepEqual(await causes([pathFunction(" return orderPath(!open)")]), [["unknown", "recursive", undefined]]);
+  assert.deepEqual(await causes([routes, service]), [["unknown", "dispatch-disagreement", undefined]]);
+  assert.deepEqual(await causes([component("    this.http.get('/route', { baseUrl: method })")]), [["unknown", "destination-undecidable", { method: "GET", path: "/route" }]]);
+});
+
 test("a variable a request function declares is read in the function's own scope", async () => {
   const found = await reader.of([component("    httpResource(() => { const id = method; return `/orders/${id}` })")], "shop-web");
 
