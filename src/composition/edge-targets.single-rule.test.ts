@@ -13,7 +13,8 @@ const RULES: readonly { concept: string; pattern: RegExp; owner: string; pending
   { concept: "what a receiver's binding at a place holds", pattern: /!== "ambiguous" && \w+\.receiver === receiver/, owner: "core/application/navigation/edge-targets.ts", pending: [] },
   { concept: "the member proofs by call place", pattern: /\.template !== true/, owner: "core/application/navigation/proven-calls.ts", pending: [] },
   { concept: "the declarations that can own an inject() local", pattern: /\[\.\.\.EDGE_POLICY\.relations\.from, "function"\]/, owner: "core/domain/impact/edge-policy.ts", pending: [] },
-  { concept: "the declarations that hold a value", pattern: /VALUE_KINDS: readonly string\[\] = \["constant", "variable"\]/, owner: "core/application/navigation/edge-targets.ts", pending: ["core/application/trace/syntax-calls.ts"] },
+  { concept: "the declarations that hold a value", pattern: /= \["constant", "variable"\]/, owner: "core/domain/impact/edge-policy.ts", pending: [] },
+  { concept: "the declarations that are classes", pattern: /= \["class", "component"\]/, owner: "core/domain/impact/edge-policy.ts", pending: [] },
 ];
 
 function sourceFiles(directory: string): string[] {

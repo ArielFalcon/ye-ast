@@ -13,7 +13,10 @@ const REFERENCED_KINDS = ["function", "method", "constant", "variable", "class",
 /** Class fields: their initializer is code that runs, so it calls and instantiates; what a field references is its type. */
 export const FIELD_KINDS = ["property", "field"] as const;
 const TYPE_KINDS = ["class", "component", "interface"] as const;
-const ANGULAR_CLASS_KINDS = ["class", "component"] as const;
+/** Declarations that are classes: a class, or a component an Angular decorator declares. */
+const CLASS_KINDS = ["class", "component"] as const;
+/** Declarations that hold a value, which a call may find any object in. */
+const VALUE_KINDS = ["constant", "variable"] as const;
 
 export const EDGE_POLICY = {
   rules: [
@@ -26,7 +29,7 @@ export const EDGE_POLICY = {
    * template or as a host directive. The source depends on the target, as with a reference. They are read, not guessed,
    * so each is as certain as a resolved edge.
    */
-  relations: { kinds: ["injects", "uses-component", "uses-directive", "uses-pipe"], from: ANGULAR_CLASS_KINDS, to: ANGULAR_CLASS_KINDS, confidence: 1 },
+  relations: { kinds: ["injects", "uses-component", "uses-directive", "uses-pipe"], from: CLASS_KINDS, to: CLASS_KINDS, confidence: 1 },
   /** A member stands for the type that declares it, at the same depth. */
   ownerKinds: TYPE_KINDS,
   /**
@@ -87,6 +90,14 @@ export const CALL_EDGE_KINDS: readonly string[] = ["calls", "instantiates"];
 
 /** The declarations a relation ends at, and the only ones that can own a local an `inject()` call initializes. */
 export const LOCAL_OWNER_KINDS: readonly string[] = [...EDGE_POLICY.relations.from, "function"];
+
+export function isClassKind(kind: string): boolean {
+  return (CLASS_KINDS as readonly string[]).includes(kind);
+}
+
+export function holdsValue(kind: string): boolean {
+  return (VALUE_KINDS as readonly string[]).includes(kind);
+}
 
 /** The followed edges' kinds, for asking a store only for them. */
 export const FOLLOWED_EDGE_KINDS: readonly string[] = EDGE_POLICY.rules.flatMap((rule) => rule.edges);

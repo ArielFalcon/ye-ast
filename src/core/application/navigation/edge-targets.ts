@@ -1,4 +1,4 @@
-import { EDGE_POLICY, edgeVerdict, FOLLOWED_EDGE_KINDS, LOCAL_OWNER_KINDS, type EdgeVerdict } from "../../domain/impact/edge-policy.ts";
+import { EDGE_POLICY, edgeVerdict, FOLLOWED_EDGE_KINDS, holdsValue, LOCAL_OWNER_KINDS, type EdgeVerdict } from "../../domain/impact/edge-policy.ts";
 import { isTypeScriptFile } from "../../domain/languages/typescript.ts";
 import type { FieldOrigin, LocalOrigin } from "../../domain/relations/field-origin.ts";
 import type { ExternalMemberUseOrigin, MemberUseOrigin } from "../../domain/relations/member-use.ts";
@@ -103,8 +103,6 @@ export type EdgeTarget =
 
 const KEEP: EdgeTarget = { kind: "keep" };
 const IMPORT = "imports";
-/** Declarations that hold a value, which a call may find any object in. */
-const VALUE_KINDS: readonly string[] = ["constant", "variable"];
 /** The types whose members a value receiver may stand for, and a receiver's store or annotation may name. */
 const TYPE_KINDS: readonly string[] = EDGE_POLICY.ownerKinds;
 
@@ -207,7 +205,7 @@ export function createEdgeTargets({ origins, store, modules, syntaxOf, proofs }:
     /** The body's own binding, or a declaration of the file the index holds as no class, function or other non-value node. */
     const isValue = (file: string, binding: RootBinding | undefined): binding is Extract<RootBinding, { kind: "local" | "declared" }> =>
       binding?.kind === "local" ||
-      (binding?.kind === "declared" && !navigation.symbolsInFile(file).some((symbol) => symbol.name === binding.root && !VALUE_KINDS.includes(symbol.kind) && binding.lines.some((line) => symbol.startLine <= line && line <= symbol.endLine)));
+      (binding?.kind === "declared" && !navigation.symbolsInFile(file).some((symbol) => symbol.name === binding.root && !holdsValue(symbol.kind) && binding.lines.some((line) => symbol.startLine <= line && line <= symbol.endLine)));
     const receivers: (string | undefined)[] = [];
     for (const [k, { edge, source, target, index }] of asked.entries()) {
       const bound = (await syntaxIn(read, source.file)).receiverBindings.get(bindingKey(edge.line!, edge.column! + 1, target.name));

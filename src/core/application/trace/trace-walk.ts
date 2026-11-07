@@ -1,7 +1,7 @@
 import { declarationSpan, executesInBody, owningBody } from "../../domain/trace/owning-body.ts";
 import { callsByOwner, matchOwnedCall, positionedBodies, type OwnedCall } from "./syntax-calls.ts";
 import { isSeedable } from "../../domain/change/seeds.ts";
-import { CALL_EDGE_KINDS, EDGE_POLICY, FIELD_KINDS, isIgnoredEdge } from "../../domain/impact/edge-policy.ts";
+import { CALL_EDGE_KINDS, EDGE_POLICY, FIELD_KINDS, isClassKind, isIgnoredEdge } from "../../domain/impact/edge-policy.ts";
 import { declarationAnchor, placeAt } from "../../domain/impact/impact-cuts.ts";
 import { NOT_DECLARED_KINDS, sortedUnique } from "../../domain/impact/importers-fact.ts";
 import { branchesOf, declarationPath } from "../../domain/shared/declaration-tree.ts";
@@ -33,8 +33,6 @@ const TYPE_KINDS: readonly string[] = EDGE_POLICY.ownerKinds;
 /** Declarations whose syntax says whether they have a body and whether a subtype can override them. */
 const CALLABLE_KINDS: readonly string[] = ["method", "function"];
 
-/** Types whose methods have bodies, so a root of one of them runs what its members run. */
-const CLASS_KINDS: readonly string[] = ["class", "component"];
 
 /** What a trace can start from: what an impact walk seeds, or a property or field whose initializer makes calls. */
 export function isTraceRoot(store: CodeGraphReader, unresolvedIn: UnresolvedIn, syntaxCalls: ReadonlySet<GraphNodeId> = new Set()): (symbol: GraphSymbol) => boolean {
@@ -290,7 +288,7 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
       line.add(declaring.id);
       const own = navigation.methodsOf(declaring).filter((candidate) => candidate.name === member);
       if (own.length > 1) return undefined;
-      const above = supertypesOf(declaring).filter((supertype) => CLASS_KINDS.includes(supertype.kind));
+      const above = supertypesOf(declaring).filter((supertype) => isClassKind(supertype.kind));
       [method, declaring] = [own[0], above.length === 1 ? above[0] : undefined];
     }
     const hidden = store.declarationsNamed([member]).some((declared) => declared.kind === "method" && navigation.ownersOf(declared).some((owner) => !line.has(owner.id) && !heritageResolved(owner)));
@@ -358,7 +356,7 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
     positionedBodies(store.symbolsInFiles([file]), (await syntaxOf(file)).calls ?? []).map((body) => ({ ...body, ...declarationSpan(body) })));
 
   const membersOf = async (node: GraphSymbol): Promise<Child[]> => {
-    if (!CLASS_KINDS.includes(node.kind)) return [];
+    if (!isClassKind(node.kind)) return [];
     const syntax = await syntaxCallsIn(node.file);
     return navigation
       .membersOf(node)
@@ -405,7 +403,7 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
     const valueRoots = new Map(
       [...called, ...passed].flatMap(({ target }, index) => {
         const verdict = verdicts[index]!;
-        return verdict.kind === "keep" && verdict.receiver !== undefined && navigation.ownersOf(target).some((owner) => CLASS_KINDS.includes(owner.kind)) ? [[index, verdict.receiver] as const] : [];
+        return verdict.kind === "keep" && verdict.receiver !== undefined && navigation.ownersOf(target).some((owner) => isClassKind(owner.kind)) ? [[index, verdict.receiver] as const] : [];
       }),
     );
     const external: ExternalCall[] = [];
@@ -619,9 +617,9 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
     const first = expandedAt.get(symbol.id);
     /** A class root, and a declaration a page's template uses, run their members. */
     const ownsMembers = depth === 0 || step.via === "template";
-    const page = ownsMembers && pages !== undefined && CLASS_KINDS.includes(symbol.kind) && (step.via === "template" || pages.roots.has(symbol.id));
+    const page = ownsMembers && pages !== undefined && isClassKind(symbol.kind) && (step.via === "template" || pages.roots.has(symbol.id));
     /** Such a class also owes its members, which no expansion below a root made. */
-    const owesMembers = ownsMembers && CLASS_KINDS.includes(symbol.kind) && (first === undefined || !rootExpansions.has(first));
+    const owesMembers = ownsMembers && isClassKind(symbol.kind) && (first === undefined || !rootExpansions.has(first));
     if (first !== undefined && !owesMembers) {
       step.seen = first;
       return;
