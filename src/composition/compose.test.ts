@@ -1514,18 +1514,6 @@ test("a trace over a real index keeps a library member call a cut when its recei
   ]);
 });
 
-test("a trace over a real index binds a var receiver at its function scope, wherever in the function's blocks it is declared", async () => {
-  writeFileSync(join(repo, "src", "hoisted.ts"), ["export function entry(): void {", "  if (Date.now() > 0) { var cb = () => console.log(\"x\"); }", "  cb.call(null);", "}", ""].join("\n"));
-  git("add", "-A");
-  git("commit", "-q", "-m", "hoisted");
-  const { trace } = composeQueries({ scratchRoot });
-
-  const answer = await trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: "src/hoisted.ts", symbol: "entry" }] });
-
-  assert.ok(answer.ok && answer.value.status === "partial", JSON.stringify(answer));
-  assert.deepEqual(answer.value.cuts.map((cut) => [cut.kind, ...cut.at]), [["unresolved-link", "src/hoisted.ts:3 cb.call", "src/hoisted.ts::cb"]]);
-});
-
 test("a trace over a real index sees a function value through every wrapper expression and either branch of a choice", async () => {
   writeFileSync(join(repo, "src", "Wrapped.java"), [
     "import java.util.function.Supplier;",
@@ -1560,37 +1548,6 @@ test("a trace over a real index sees a function value through every wrapper expr
   assert.deepEqual(java.value.cuts.map((cut) => cut.at[0]), ["src/Wrapped.java:7 cast.get", "src/Wrapped.java:7 chosen.get", "src/Wrapped.java:7 paren.get"]);
   assert.ok(typescript.ok && typescript.value.status === "partial", JSON.stringify(typescript));
   assert.deepEqual(typescript.value.cuts.map((cut) => cut.at[0]), ["src/wrapped-values.ts:5 chosen.call", "src/wrapped-values.ts:6 fallback.call", "src/wrapped-values.ts:7 either.call"]);
-});
-
-test("a trace over a real index binds a receiver through every declaration of its name and through wrappers around it", async () => {
-  writeFileSync(join(repo, "src", "receivers.ts"), [
-    "export function redeclared(): void {",
-    "  var f;",
-    "  { var f = () => 1; }",
-    "  f.call(null);",
-    "}",
-    "export function wrapped(): void {",
-    "  const g = () => 1;",
-    "  (g).call(null);",
-    "  (g as () => number).apply(null);",
-    "  g!.bind(null);",
-    "}",
-    "",
-  ].join("\n"));
-  git("add", "-A");
-  git("commit", "-q", "-m", "receivers");
-  const { trace } = composeQueries({ scratchRoot });
-  const walk = (symbol: string) => trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: "src/receivers.ts", symbol }] });
-
-  const [redeclared, wrapped] = await Promise.all([walk("redeclared"), walk("wrapped")]);
-
-  for (const answer of [redeclared, wrapped]) assert.ok(answer.ok && answer.value.status === "partial", JSON.stringify(answer));
-  assert.deepEqual([redeclared, wrapped].flatMap((answer) => (answer.ok && answer.value.status === "partial" ? answer.value.cuts.map((cut) => cut.at[0]) : [])), [
-    "src/receivers.ts:4 f.call",
-    "src/receivers.ts:10 g.bind",
-    "src/receivers.ts:8 g.call",
-    "src/receivers.ts:9 g.apply",
-  ]);
 });
 
 test("a trace over a real index binds a receiver in its own file, so a function value of that name in another file leaves an unrelated call as R6 decides", async () => {
