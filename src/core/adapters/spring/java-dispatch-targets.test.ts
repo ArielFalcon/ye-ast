@@ -188,3 +188,12 @@ test("a type variable in the method's signature, or a name the strict reading le
   assert.deepEqual(await targetsOf([relay], generic), { kind: "unknown" });
   assert.deepEqual(await targetsOf([listed], port), { kind: "unknown" });
 });
+
+test("an annotation type in the sources is read like any type declaration: a class implementing it keeps other owners' bodies, and its elements name no body", async () => {
+  const marker = java("Marker.java", ["package app;", "", "public @interface Marker {", "  String value();", "}"]);
+  const tagged = java("Tagged.java", ["package app;", "", "public class Tagged extends Sender implements Marker {", "  public String value() { return \"\"; }", "  public Class<? extends java.lang.annotation.Annotation> annotationType() { return Marker.class; }", "}"]);
+
+  assert.deepEqual(await targetsOf([SENDER, marker, tagged]), { kind: "bodies", bodies: [body(SENDER, 4)] });
+  const [element] = await createJavaNameBindings(createJavaParser, [PORT, SENDER, marker, tagged]).dispatchTargets([{ file: marker.path, line: 4, name: "value" }]);
+  assert.deepEqual(element, { kind: "unknown" });
+});

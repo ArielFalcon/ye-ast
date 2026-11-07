@@ -4,10 +4,9 @@ import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { DeclaredType, ImportOrigins } from "../../ports/import-origins.port.ts";
 import type { JavaParser } from "../tree-sitter/java-parser.adapter.ts";
 import { enclosingType, withJavaSources } from "./java-project.ts";
-import { createJavaProject, qualifiedTypeName, typeVariableAround, type JavaFile, type JavaProject, type TypeDecl } from "./java-symbols.ts";
+import { createJavaProject, isTypeDeclaration, qualifiedTypeName, typeVariableAround, type JavaFile, type JavaProject, type TypeDecl } from "./java-symbols.ts";
 
 const UNKNOWN: DeclaredType = { kind: "unknown" };
-export const TYPE_DECLARATIONS: ReadonlySet<string> = new Set(["class_declaration", "interface_declaration", "enum_declaration", "record_declaration"]);
 /** Values whose class is one no declaration names: an implementation of an interface the sources do not state. */
 export const FUNCTION_VALUES: ReadonlySet<string> = new Set(["lambda_expression", "method_reference"]);
 const QUALIFIED = /^[A-Za-z_$][\w$]*(\.[A-Za-z_$][\w$]*)*$/;
@@ -74,7 +73,7 @@ function subtypedTypes(files: readonly JavaFile[], project: JavaProject): Readon
     const pending: Node[] = [file.root];
     for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
       if (FUNCTION_VALUES.has(node.type) || isAspect(node) || namesDynamicImplementation(node, file, project)) return undefined;
-      const scope = TYPE_DECLARATIONS.has(node.type) || isAnonymous(node) ? enclosingType(node.parent ?? node, file, project) : undefined;
+      const scope = isTypeDeclaration(node) || isAnonymous(node) ? enclosingType(node.parent ?? node, file, project) : undefined;
       for (const supertype of supertypesOf(node)) if (resolve(supertype, file, project, scope, supertype)?.kind !== "repository") return undefined;
       for (const child of node.namedChildren) if (child !== null) pending.push(child);
     }
@@ -85,7 +84,7 @@ function subtypedTypes(files: readonly JavaFile[], project: JavaProject): Readon
 /** The supertypes a declaration writes: a class's superclass and interfaces, an interface's, and an anonymous class's type. */
 export function supertypesOf(node: Node): Node[] {
   if (isAnonymous(node)) return [node.childForFieldName("type")!];
-  if (!TYPE_DECLARATIONS.has(node.type)) return [];
+  if (!isTypeDeclaration(node)) return [];
   const superclass = node.childForFieldName("superclass")?.namedChildren[0];
   const clause = node.childForFieldName("interfaces") ?? node.namedChildren.find((child) => child?.type === "extends_interfaces");
   const listed = clause?.namedChildren.find((child) => child?.type === "type_list")?.namedChildren ?? [];

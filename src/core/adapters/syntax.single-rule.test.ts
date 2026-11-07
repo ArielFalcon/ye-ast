@@ -92,7 +92,7 @@ const RULES: readonly Rule[] = [
     concept: "the node kinds that declare a Java type",
     pattern: /"(?:class|interface|enum|record|annotation_type)_declaration",\s*"(?:class|interface|enum|record|annotation_type)_declaration"/,
     owners: ["spring/java-symbols.ts"],
-    pending: ["spring/java-declared-types.ts", "tree-sitter/java-member-names.adapter.ts"],
+    pending: ["tree-sitter/java-member-names.adapter.ts"],
   },
 ];
 

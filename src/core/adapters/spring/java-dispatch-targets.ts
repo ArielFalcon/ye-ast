@@ -4,8 +4,8 @@ import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { DispatchTargets, ImportOrigins } from "../../ports/import-origins.port.ts";
 import type { JavaParser } from "../tree-sitter/java-parser.adapter.ts";
 import { enclosingType, withJavaSources } from "./java-project.ts";
-import { FUNCTION_VALUES, isAnonymous, isAspect, namesDynamicImplementation, resolve, supertypesOf, TYPE_DECLARATIONS, UNREAD_JVM_SOURCE } from "./java-declared-types.ts";
-import { createJavaProject, readSignature, sameSignature, type Signature, type JavaFile, type JavaProject, type MethodDecl, type TypeDecl } from "./java-symbols.ts";
+import { FUNCTION_VALUES, isAnonymous, isAspect, namesDynamicImplementation, resolve, supertypesOf, UNREAD_JVM_SOURCE } from "./java-declared-types.ts";
+import { createJavaProject, isTypeDeclaration, readSignature, sameSignature, type Signature, type JavaFile, type JavaProject, type MethodDecl, type TypeDecl } from "./java-symbols.ts";
 
 const UNKNOWN: DispatchTargets = { kind: "unknown" };
 const PARAMETERS: ReadonlySet<string> = new Set(["formal_parameter", "spread_parameter"]);
@@ -217,7 +217,7 @@ export function hierarchyOf(files: readonly JavaFile[], project: JavaProject): H
     for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
       if (isAspect(node) || namesDynamicImplementation(node, file, project)) return undefined;
       if (FUNCTION_VALUES.has(node.type)) functionValues = true;
-      if (TYPE_DECLARATIONS.has(node.type) || isAnonymous(node)) {
+      if (isTypeDeclaration(node) || isAnonymous(node)) {
         const scope = enclosingType(node.parent ?? node, file, project);
         const declared = placed.get(node.id);
         const superclass = node.type === "class_declaration" ? node.childForFieldName("superclass")?.namedChildren[0] : undefined;
