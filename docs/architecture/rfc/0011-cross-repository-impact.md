@@ -123,6 +123,10 @@ body; the functions it declares return their own. A bare `return`, and an end th
 undecided. An `httpResource` function that returns `undefined` requests nothing then, so its request is the one its other
 returns state. Variables the function declares are values it fills at run time.
 
+An undecided call carries its cause, through the same `Evaluated<T>` and mapping as the Java readers (RFC-0021):
+`recursive` for a function or method that calls itself, `dispatch-disagreement` for overrides that write different
+paths, and `destination-undecidable` otherwise, a base the snapshot does not decide and returns that disagree included.
+
 A class member the class does not declare (`this.resourceUrl`) is read from the class it extends, in the same file or
 through an import; a member the class declares itself wins. A field's initializer is its value only while nothing else
 assigns it: a field declared without an initializer or as a constructor parameter, one the reading class or any class it
