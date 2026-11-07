@@ -35,7 +35,7 @@ interface FileIndex {
 
 export type ParseSource = (file: SourceFile) => ts.SourceFile;
 
-const parseShared: ParseSource = (file) => sourceTree(file, ts.ScriptTarget.Latest);
+const parseShared: ParseSource = (file) => sourceTree(file, ts.ScriptTarget.Latest, ts.ScriptKind.TS);
 
 /**
  * Reads, per file, the name each import binds to the specifier it came from, and resolves that specifier through the
