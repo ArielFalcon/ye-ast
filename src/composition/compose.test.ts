@@ -1633,9 +1633,7 @@ test("a trace over a real index never follows an edge whose name a package binds
     return answer.value.value.steps.map(({ symbol, leaves, external }) => ({ symbol, leaves: leaves?.map((leaf) => leaf.file), external }));
   };
   assert.deepEqual(shape(make), [{ symbol: "make", leaves: undefined, external: [{ kind: "import", module: "pkg", names: ["Base"] }] }]);
-  assert.ok(pass.ok && pass.value.status === "partial");
-  assert.deepEqual(pass.value.cuts.map((cut) => cut.at), [["src/uses-package.ts:7 [1].map"]]);
-  assert.deepEqual(shape(pass, "partial"), [{ symbol: "pass", leaves: undefined, external: [{ kind: "import", module: "pkg", names: ["evaluate"] }] }]);
+  assert.deepEqual(shape(pass), [{ symbol: "pass", leaves: undefined, external: [{ kind: "import", module: "pkg", names: ["evaluate"] }, { kind: "global", names: ["[1].map"] }] }]);
   assert.deepEqual(shape(real), [{ symbol: "real", leaves: ["src/model.ts", "src/model.ts"], external: undefined }]);
 });
 
@@ -1737,7 +1735,7 @@ test("a trace over a real index cuts a call through a parameter of a function ar
     const answer = answers[index]!;
     assert.ok(answer.ok && answer.value.status === "partial", JSON.stringify(answer));
     assert.deepEqual(answer.value.value.steps.flatMap(({ leaves }) => leaves ?? []), []);
-    assert.deepEqual(answer.value.cuts.map((cut) => [cut.kind, ...cut.at]), [...(line === 8 ? [["unresolved-link", "src/runners.ts:8 [1].map"]] : []), ["unresolved-link", `src/runners.ts:${line} callback`, "src/callback.ts::callback"]]);
+    assert.deepEqual(answer.value.cuts.map((cut) => [cut.kind, ...cut.at]), [["unresolved-link", `src/runners.ts:${line} callback`, "src/callback.ts::callback"]]);
   }
 });
 
@@ -1928,4 +1926,28 @@ test("a page orders render calls before event handlers and cuts every unbound te
   assert.deepEqual(answer.value.value.steps.filter((step) => ["total", "label", "clicked"].includes(step.symbol)).map((step) => step.symbol), ["total", "label", "clicked"]);
   assert.ok(answer.value.cuts.some((cut) => cut.at[0] === "src/page.html:2 missing"));
   assert.ok(answer.value.cuts.some((cut) => cut.at[0] === "src/page.html:2 value.invoke"));
+});
+
+test("missing syntax calls use the same import, ambient, receiver and repository settlement as indexed pending calls", async () => {
+  writeFileSync(join(repo, "package.json"), JSON.stringify({ dependencies: { "@angular/core": "22.0.0" } }));
+  writeFileSync(join(repo, "src/settlement.ts"), [
+    "import { Injectable, computed } from '@angular/core';",
+    "@Injectable()",
+    "export class Settled {",
+    "  value = computed(() => [1].map(x => x));",
+    "  run() { return new Set([1]); }",
+    "}",
+    "export function unknown(x: any) { return x.map(); }",
+    "declare function register(value: unknown): void; register({ map: 1 });",
+  ].join("\n"));
+  git("add", "-A");
+  git("commit", "-qm", "settlement");
+  const { trace } = composeQueries({ scratchRoot });
+  const settled = await trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: "src/settlement.ts", symbol: "Settled" }] });
+  assert.ok(settled.ok && settled.value.status === "complete", JSON.stringify(settled));
+  assert.ok(settled.value.value.steps.flatMap((step) => step.external ?? []).some((leaf) => leaf.kind === "import" && leaf.module === "@angular/core"));
+  assert.ok(settled.value.value.steps.flatMap((step) => step.external ?? []).some((leaf) => leaf.kind === "global" && leaf.names.includes("[1].map")));
+  const unknown = await trace.walk({ repo, repoId: "shop-service", revision: "HEAD", targets: [{ file: "src/settlement.ts", symbol: "unknown" }] });
+  assert.ok(unknown.ok && unknown.value.status === "partial");
+  assert.ok(unknown.value.cuts.some((cut) => cut.at[0] === "src/settlement.ts:7 x.map"));
 });

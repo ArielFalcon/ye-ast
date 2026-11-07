@@ -252,7 +252,7 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
     return paths.some((written) => (path.length > 0 && covers(written, path, root.open)) || onPrototype(written));
   };
   /** The receiver binding the call's own source proves at the place the call starts, for the member and receiver it spells. */
-  const boundAt = async (reference: GraphUnresolvedReference, member: string, receiver = receiverOf(reference.name)): Promise<ReceiverBinding["holds"] | undefined> => {
+  const boundAt = async (reference: GraphUnresolvedReference, member: string, receiver = receiverOf(reference.name) ?? ""): Promise<ReceiverBinding["holds"] | undefined> => {
     const binding = (await syntaxIndexOf(reference.file)).receiverBindings.get(bindingKey(reference.line, reference.column + 1, member));
     return binding !== undefined && binding !== "ambiguous" && binding.receiver === receiver ? binding.holds : undefined;
   };
@@ -512,6 +512,7 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
       else cuts.push(unresolvedAt(reference, named));
     }
     const indexed = callsFrom(node);
+    const missing: GraphUnresolvedReference[] = [];
     for (const call of (await syntaxCallsIn(node.file)).get(node.id) ?? []) {
       const column = call.column - 1;
       const callee = calleeOf(call.name);
@@ -522,9 +523,9 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
       };
       if (indexed.some((reference) => reference.line === call.line && reference.column === column && matchesName(reference.name)) ||
         called.some(({ edge, target }) => edge.line === call.line && edge.column === column && matchesName(target.name))) continue;
-      cuts.push(unresolvedAt({ from: node.id, file: node.file, line: call.line, column, name: call.name, kind: "calls", candidates: [] }, []));
+      missing.push({ from: node.id, file: node.file, line: call.line, column, name: call.name, kind: call.kind, candidates: [] });
     }
-    for (const reference of unsettledBy(callsFrom(node), called)) {
+    for (const reference of unsettledBy([...indexed, ...missing], called)) {
       const own = ownMemberOf(reference.name);
       const members = own === undefined ? [] : uses.ownMembers(node, own, ["method"]);
       if (members.length === 1) children.push(childAt(members[0]!, reference.line, reference.column, reference.name, "own-member"));

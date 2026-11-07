@@ -466,11 +466,11 @@ Accepted by the owner on 2026-11-01: "Acepto las recomendaciones". Question 5 la
 
 R1/R10: before a body can be complete or folded, every call written in that body must be represented by a call edge, a pending reference, or an unresolved-link cut. The existing TypeScript and Java readers enumerate calls and constructions (TypeScript tags included) in their existing parse. Syntax owner chains assign calls to declarations, including field initializers; anonymous callbacks remain with their enclosing body. This avoids treating a method already included under a class as an unaccounted class call, including when both declarations share a line. A field with only unindexed calls is still a trace root and a class member to expand.
 
-Reconciliation uses the occurrence's line, UTF-16 column and syntactic callee name. Argument text in a receiver is not identity; Java constructions name their type rather than the `new` keyword. Computed callees without a name reconcile by exact spelling only. A site with neither edge nor pending reference is a cut at its written place, never a guessed step or external. No schema change, checker, second binder or shared navigation change is needed. The other families still consume their existing indexed dependency inventory: a missing execution site does not prove an inbound dependency on a declaration, so these trace cuts are not manufactured dependency edges.
+Reconciliation uses the occurrence's line, UTF-16 column and syntactic callee name. Argument text in a receiver is not identity; Java constructions name their type rather than the `new` keyword. Computed callees without a name reconcile by exact spelling only. A site with neither edge nor pending reference becomes a pending reference with its syntactic call kind, and enters the same R1–R6 settlement as indexed unresolved references. Only an unsettled site becomes a cut. A nameless receiver uses the same empty receiver key as the binding reader, so literal receivers reach R4 rather than falling through. No schema change, checker, second binder or shared navigation change is needed. The other families still consume their existing indexed dependency inventory: a missing execution site does not prove an inbound dependency on a declaration, so these trace cuts are not manufactured dependency edges.
 
 Existing-test classification:
 
-- **(a) silent drops:** package/repository homonym test (`pass`) and enclosing-parameter callback test (`nested`) omitted `[1].map`. Expectations now include that call's cut; the package callback and parameter cut remain as before.
+- **(a) silent drops, corrected settlement:** package/repository homonym test (`pass`) and enclosing-parameter callback test (`nested`) omitted `[1].map`. The first implementation added a noisy cut; the corrected expectation retains a proven global Array leaf. The callback parameter remains cut and the package callback remains external.
 - **(b) matching errors:** the object-literal call test duplicated `price.toFixed().format` because syntax includes argument text; the Java non-private-field/var/aspect test duplicated a construction named `new Plain`; the class-reexpansion test charged `work`'s call to `Page` as well. Callee identity and syntax ownership fix these without expectation changes.
 - **(b) definition-time ownership:** the decorated-method test exposed a decorator factory charged to the method body. Decorator expressions belong to the enclosing class definition; its original expectation remains unchanged. RED observed and GREEN after correcting syntax ownership.
 - Earlier ENOSPC failures in Java platform/root/record tests were not reproduced after recovery. Function-value/wrapper tests and the package/global-root test pass with the name-based reconciliation; their existing pending references account for the calls.
@@ -483,25 +483,72 @@ Render calls use the same compiler walk and origin proofs as event calls. Page o
 
 The injected-field alias follow-up stays cut. The public AngularMetadataReader experiment compared a direct call, a local field copy, and a copy passed to a separate function that writes an unknown member (`value[key()] = () => {}`). Baseline member proofs: direct 1, safe alias 0, escaped alias followed by a direct call 0. A type-correct experiment treating local variable initializers as non-escapes produced 1,0,1: it still established no origin for the alias and incorrectly proved the direct call after a possible replacement. The change was restored. `localSites` admits only `RawInjection` locals initialized by `inject()`, not copies of fields; relaxing `escapes` alone therefore changes proofs shared by impact/callers without recovering the alias call. A sound future extension must bind the copied local and account for every subsequent use and transitive escape before admitting its member calls. The present change preserves the existing proof boundary rather than weakening it.
 
-### Follow-up measurement
+### Follow-up measurement (corrected after parent review)
 
-Baseline: local main at task start, `15f44afa`; one source export reused. Probe selection reproduces slice 3's runner: the 15 largest source files per repository, excluding specs/tests, then retain those declaring a class, plus the two ye-ast function traces. This yields pfe14/pbr15/rwf8/rwb15/shop10/ord13/web15/self2, exactly 92 (49 TS, 43 Java). The self probes target the worktree's explicit baseline SHA in both runners because the concurrently used main checkout moved to a revision without trace-walk.ts. HOME and XDG paths are absolute and isolated below the scratch. All 184 probe invocations exit 0.
+Baseline: local main at task start, `15f44afa`; the same single source export and the same 92-probe manifest are reused. Selection: 15 largest source files per repository excluding tests, retain files declaring classes, plus two ye-ast function traces. Counts: pfe14/pbr15/rwf8/rwb15/shop10/ord13/web15/self2 = 49 TS + 43 Java. Self probes use the worktree's explicit baseline SHA because the concurrently used main checkout moved to a revision without trace-walk.ts. HOME and XDG paths are absolute within the scratch. All before/after commands exit 0, with no unknown probe answers.
 
-| Probe | Traces | Steps before → after | Cuts before → after | Complete before → after |
+Parent rejected d7b6b9cb's unconditional cuts: the syntax inventory bypassed settlement, adding 1,003 cuts and taking complete answers from 3 to 0. Missing calls now enter the existing unresolved-reference loop and all its import, ambient, receiver, chain and closed-world proofs. The call kind distinguishes calls from constructions; no method-name list or second settlement implementation is added. The new public composed-query fixture was RED under unconditional cuts and GREEN through the shared path; a type-correct mutation removing missing sites from that path fails the fixture's external-leaf assertion. Its Array receiver assertion requires the actual global proof; its unknown receiver retains the R6b cut in the presence of a repository value-position member name. Existing R6c closed-world semantics are unchanged.
+
+| Probe | Traces | Steps baseline → corrected | Cuts baseline → rejected → corrected | Complete baseline → corrected |
 |---|---:|---:|---:|---:|
-| pfe | 14 | 301 → 301 | 48 → 99 | 0 → 0 |
-| pbr | 15 | 325 → 327 | 250 → 252 | 0 → 0 |
-| rwf | 8 | 97 → 97 | 40 → 55 | 2 → 0 |
-| rwb | 15 | 347 → 347 | 325 → 340 | 0 → 0 |
-| shop | 10 | 345 → 345 | 190 → 251 | 1 → 0 |
-| ord | 13 | 210 → 223 | 259 → 265 | 0 → 0 |
-| web | 15 | 2445 → 2449 | 1071 → 1327 | 0 → 0 |
-| self | 2 | 4957 → 4988 | 2559 → 3156 | 0 → 0 |
+| pfe | 14 | 301 → 301 | 48 → 99 → 48 | 0 → 0 |
+| pbr | 15 | 325 → 327 | 250 → 252 → 252 | 0 → 0 |
+| rwf | 8 | 97 → 97 | 40 → 55 → 40 | 2 → 2 |
+| rwb | 15 | 347 → 347 | 325 → 340 → 340 | 0 → 0 |
+| shop | 10 | 345 → 345 | 190 → 251 → 190 | 1 → 1 |
+| ord | 13 | 210 → 223 | 259 → 265 → 265 | 0 → 0 |
+| web | 15 | 2445 → 2451 | 1071 → 1327 → 1133 | 0 → 0 |
+| self | 2 | 4957 → 4988 | 2559 → 3156 → 2719 | 0 → 0 |
 
-Totals: 9,027 → 9,077 steps, 4,742 → 5,745 cuts, 3 → 0 complete answers. 61/92 traces change. Expansion count is unchanged at 5,125: previously folded declarations with unaccounted calls now remain steps; no extra body is claimed from those calls. Added Java sites include explicit `this`/`super` constructor invocations and calls in anonymous-class initializers. The three formerly complete class traces are realworld ApiService/IconComponent and shop SmartTableService; new cuts expose unindexed class-definition decorator calls (and ApiService's HttpParams construction).
+Totals: 9,027 → 9,079 steps; 4,742 → 4,987 cuts (rejected: 5,745); 3 → 3 complete; 5,125 → 5,127 body expansions. All 92 probes were re-run. Every one of the previous 1,003 extra cut places matched a measured settlement outcome, with no unmatched or mixed places:
 
-Acceptance page `/user/orders`: 109 steps/39 cuts → 109/56, with render methods now placed from the template and unresolved template calls explicit. Checkout `POST /orders/checkout`: 4 steps/3 cuts → 4/3, unchanged. The Java signature comparison files were not edited.
+| Outcome at the previous extra cut place | Count |
+|---|---:|
+| External leaf (package or existing R6c unnamed leaf) | 422 |
+| Ambient/global terminal, outside repository traversal | 288 |
+| Proven step | 52 |
+| Unresolved-link cut | 241 |
+| Total | 1003 |
 
-The 17-command differential is byte-identical for stdout, stderr and exit code, all exit 0: six maps (ord/pbr/web/pfe/rwb/shop), four callers (ord/pbr/rwb/web), two importers (ord/rwf), two outlines (ord/shop), and three impacts (ord HEAD~3, rwb HEAD~5, web HEAD~3). The exact manifest and per-command results are retained in `diff.json` and `summary.json` in the scratch; the original temporary 17-command file had been externally removed, so this manifest preserves the earlier 14-command family/repository coverage plus the three maps.
+Global terminals retain the existing public `global` leaf representation; they are not repository steps. The 1,006 raw missing-call occurrences, before deduplication by public place, yield external 422/global 290/step 53/cut 241; there is no unaccounted occurrence. The remaining 241 site cuts plus four cuts in two newly reached bodies produce 245 cuts beyond baseline, rather than 1,003. Remaining `.map` cuts include unproven call-result chains such as `this.shownFeed().value.map` and `unique(files).flatMap(...).map`; no builtin return-type whitelist is introduced.
 
-Final verification: `npm run check` exited 0: typecheck and architecture passed; 3,662 tests passed, 0 failed/cancelled/skipped, including the strengthened Java constructor row and render test. `git diff --check` passed.
+Top 30 new cut names against baseline (public `at[0]` places, deduplicated per probe exactly as in the parent's count):
+
+| Name | New cuts |
+|---|---:|
+| `map` | 83 |
+| `optional` | 21 |
+| `has` | 18 |
+| `get` | 17 |
+| `put` | 10 |
+| `find` | 9 |
+| `parse` | 8 |
+| `add` | 6 |
+| `impactFact` | 6 |
+| `at` | 6 |
+| `this` | 5 |
+| `focus` | 4 |
+| `safeParse` | 4 |
+| `getSlug` | 3 |
+| `super` | 3 |
+| `remove` | 3 |
+| `replace` | 3 |
+| `push` | 3 |
+| `test` | 3 |
+| `digest` | 3 |
+| `unresolvedOncePerFile` | 2 |
+| `follow` | 2 |
+| `receiverOf` | 2 |
+| `getId` | 1 |
+| `getMessage` | 1 |
+| `addLabel` | 1 |
+| `resize` | 1 |
+| `scrollIntoView` | 1 |
+| `set` | 1 |
+| `count` | 1 |
+
+The 245 new places are 32 bare and 213 member/computed calls. The three S2 public-query repros still answer partial, with cuts at `flow.ts:2 (p ? p : p).save`, `flow.ts:3 [p][0].save`, and `flow.ts:4 (0, p).save`, each listing `flow.ts::Port.save` as a candidate.
+
+The same 17-command differential remains byte-identical in stdout, stderr and exit code, all exit 0: six maps (ord/pbr/web/pfe/rwb/shop), four callers (ord/pbr/rwb/web), two importers (ord/rwf), two outlines (ord/shop), three impacts (ord HEAD~3, rwb HEAD~5, web HEAD~3). Manifest: `diff.json`. Probe manifest: `probes.json`. Per-site settlement evidence: `measure/head/probes/*.sites`, collected by temporary local instrumentation that was removed before verification. Baseline and rejected outputs remain in `measure/base` and `measure/rejected`; no second baseline export was created. Summary: `correction-summary.json`, in scratch `/private/tmp/ye-ast-unaccounted.9WC4fO`.
+
+C2's render order and the accepted alias boundary are unchanged by this correction. Final foreground `npm run check` exited 0: typecheck and architecture passed; 3,663 tests passed, 0 failed/cancelled/skipped. The public S2 table, render test and new settlement fixture all pass. The missing-site-disconnection mutation was RED and restored before this check. `git diff --check` passed.

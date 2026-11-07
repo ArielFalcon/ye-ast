@@ -98,6 +98,7 @@ export interface DeclaredMemberNamesReader {
 
 /** A written call and the enclosing declarations that can own its execution, outermost first. */
 export interface SyntaxCall {
+  kind: "calls" | "instantiates";
   line: number;
   column: number;
   name: string;

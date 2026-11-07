@@ -61,7 +61,7 @@ export function createTypeScriptMemberNames(): DeclaredMemberNamesReader {
           const written = ts.isTaggedTemplateExpression(node) ? node.tag : node.expression;
           const expression = unwrapped(written);
           const callee = ts.isIdentifier(expression) ? expression.text : ts.isPropertyAccessExpression(expression) ? expression.name.text : undefined;
-          calls.push({ line: point.line + 1, column: point.character + 1, name: written.getText(tree), ...(callee === undefined ? {} : { callee }), owners: [...owners] });
+          calls.push({ kind: ts.isNewExpression(node) ? "instantiates" : "calls", line: point.line + 1, column: point.character + 1, name: written.getText(tree), ...(callee === undefined ? {} : { callee }), owners: [...owners] });
         }
         if (ts.isMethodDeclaration(node) && ts.isClassLike(node.parent)) callable(node, isOverridable(node));
         if (ts.isMethodSignature(node) && ts.isInterfaceDeclaration(node.parent)) callable(node, true);
