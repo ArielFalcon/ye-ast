@@ -1,3 +1,4 @@
+import { PLATFORM_TYPE_NAMES } from "./java-platform-type-names.ts";
 import { LIBRARY_ROOT, libraryPath, type LibrarySource } from "../../domain/topology/library-source.ts";
 import type { Node } from "web-tree-sitter";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
@@ -18,6 +19,7 @@ export interface JavaFile {
   packageName: string;
   /** Simple name to fully qualified name of each `import a.b.C;`. */
   singleImports: ReadonlyMap<string, string>;
+  conflictingSingleImports: ReadonlySet<string>;
   /** The package or type of each `import a.b.*;`. */
   onDemandImports: readonly string[];
   /** The class and member of each `import static a.b.C.NAME;`. */
@@ -112,6 +114,8 @@ export interface JavaProject {
   /** The files whose declarations could not be read; none of their types is in the project. */
   unreadable: readonly JavaFile[];
   lookupType(name: string, scope: Scope): TypeLookup;
+  /** Signature identity: a declaration name or an equal unresolved context; no target or external proof. */
+  typeIdentity(name: string, scope: Scope): string | undefined;
   /**
    * The type a simple name denotes in a scope, in Java's order (JLS 6.4): a local type an enclosing block declares before
    * the scope's place, a member type of a type around it, declared or inherited, then a single-type import, the scope's
@@ -177,6 +181,7 @@ export function scopeOf(type: TypeDecl): Scope {
 
 export function describeFile(path: string, root: Node): JavaFile {
   const singleImports = new Map<string, string>();
+  const conflictingSingleImports = new Set<string>();
   const onDemandImports: string[] = [];
   const staticImports: { className: string; member: string }[] = [];
   const staticOnDemandImports: string[] = [];
@@ -192,10 +197,14 @@ export function describeFile(path: string, root: Node): JavaFile {
       if (isStatic && wildcard) staticOnDemandImports.push(name);
       else if (isStatic) staticImports.push({ className: name.slice(0, name.lastIndexOf(".")), member: name.slice(name.lastIndexOf(".") + 1) });
       else if (wildcard) onDemandImports.push(name);
-      else singleImports.set(name.slice(name.lastIndexOf(".") + 1), name);
+      else {
+        const simple = name.slice(name.lastIndexOf(".") + 1);
+        if (singleImports.has(simple) && singleImports.get(simple) !== name) conflictingSingleImports.add(simple);
+        singleImports.set(simple, name);
+      }
     }
   }
-  return { path, root, packageName, singleImports, onDemandImports, staticImports, staticOnDemandImports };
+  return { path, root, packageName, singleImports, conflictingSingleImports, onDemandImports, staticImports, staticOnDemandImports };
 }
 
 /**
@@ -264,15 +273,22 @@ export function createJavaProject(files: readonly JavaFile[]): JavaProject {
     return found === undefined ? undefined : found.length === 1 ? found[0] : "ambiguous";
   }
 
-  function resolveSimple(head: string, scope: Scope, strict: boolean): TypeLookup | "unsettled" | LocalType {
+  function lexicalType(head: string, scope: Scope, strict: boolean, conflict = true): TypeLookup | "unsettled" | LocalType {
     const inside = scope.at === undefined ? undefined : boundInside(head, scope.at, scope, strict);
     if (inside !== undefined) return inside;
     const { file } = scope;
     for (let type = scope.type; type !== undefined; type = type.outer) {
       const member = type.members.get(head) ?? inheritedMember(type, head, strict);
-      if (member !== undefined) return strict && typeof member === "object" && file.singleImports.has(head) ? "unsettled" : member;
+      if (member !== undefined) return conflict && strict && typeof member === "object" && file.singleImports.has(head) ? "unsettled" : member;
       if (type.name === head) return type;
     }
+    return undefined;
+  }
+
+  function resolveSimple(head: string, scope: Scope, strict: boolean): TypeLookup | "unsettled" | LocalType {
+    const lexical = lexicalType(head, scope, strict);
+    if (lexical !== undefined) return lexical;
+    const { file } = scope;
     if (strict && (file.staticImports.some(({ member }) => member === head) || file.staticOnDemandImports.length > 0)) return "unsettled";
     const imported = file.singleImports.get(head);
     if (imported !== undefined) return byFqn(imported);
@@ -285,6 +301,91 @@ export function createJavaProject(files: readonly JavaFile[]): JavaProject {
     const found = offered.filter((type): type is TypeDecl => type !== undefined);
     const repositoryPackage = (container: string): boolean => types.some((type) => type.file.packageName === container);
     return found.length === 1 && file.onDemandImports.every((container, index) => offered[index] !== undefined || repositoryPackage(container)) ? found[0] : "unsettled";
+  }
+
+  function typeIdentity(name: string, scope: Scope): string | undefined {
+    const [head = "", ...rest] = name.split(".");
+    const lexical = lexicalType(head, scope, true, false);
+    if (lexical !== undefined) {
+      if (typeof lexical !== "object" || "local" in lexical) return undefined;
+      return memberIdentity(lexical, rest);
+    }
+    const { file } = scope;
+    if (file.conflictingSingleImports.has(head)) return undefined;
+    const direct = file.singleImports.get(head);
+    const statics = file.staticImports.filter(({ member }) => member === head);
+    if (direct !== undefined || statics.length > 0) {
+      const unit = types.filter((type) => type.file === file && type.outer === undefined && type.name === head);
+      const choices = [
+        ...(direct === undefined ? [] : [qualifiedIdentity(direct)]),
+        ...statics.map(({ className }) => demandIdentity(className, head, true)),
+      ];
+      if (unit.some((type) => choices.some((choice) => choice !== type.fqn))) return undefined;
+      const identity = uniqueIdentity(choices);
+      return identity === undefined || identity === "" ? undefined : extendIdentity(identity, rest);
+    }
+    const own = byFqn(file.packageName === "" ? head : `${file.packageName}.${head}`);
+    if (own !== undefined) return typeof own === "object" ? memberIdentity(own, rest) : undefined;
+    if (rest.length > 0 && /^[a-z]/.test(head)) return qualifiedIdentity(name);
+    const offers = [
+      ...new Set(["java.lang", ...file.onDemandImports]),
+    ].map((container) => demandIdentity(container, head, false));
+    offers.push(...file.staticOnDemandImports.map((container) => demandIdentity(container, head, true)));
+    if (new Set(offers.filter((offer) => offer !== undefined && offer !== "")).size > 1) return undefined;
+    if (offers.includes(undefined)) return rest.length === 0
+      ? `context:${file.packageName}|${[...file.onDemandImports].sort().join(",")}|${[...file.staticOnDemandImports].sort().join(",")}|${head}`
+      : undefined;
+    const identity = uniqueIdentity(offers.filter((offer) => offer !== ""));
+    if (identity !== undefined) return extendIdentity(identity, rest);
+    return rest.length === 0 ? `context:${file.packageName}|${head}` : undefined;
+  }
+
+  function uniqueIdentity(identities: readonly (string | undefined)[]): string | undefined {
+    return identities.length > 0 && identities[0] !== undefined && identities.every((identity) => identity === identities[0]) ? identities[0] : undefined;
+  }
+
+  function qualifiedIdentity(name: string): string | undefined {
+    const declared = byFqn(name);
+    if (declared !== undefined) return typeof declared === "object" ? declared.fqn : undefined;
+    const parts = name.split(".");
+    for (let end = parts.length - 1; end > 0; end--) {
+      const owner = byFqn(parts.slice(0, end).join("."));
+      if (owner !== undefined) return typeof owner === "object" ? memberIdentity(owner, parts.slice(end)) : undefined;
+    }
+    return name;
+  }
+
+  function extendIdentity(identity: string, rest: readonly string[]): string | undefined {
+    const type = byFqn(identity);
+    return typeof type === "object" ? memberIdentity(type, rest) : rest.length === 0 ? identity : undefined;
+  }
+
+  function memberIdentity(type: TypeDecl, rest: readonly string[]): string | undefined {
+    if (rest.length === 0) return type.fqn;
+    const [head = "", ...tail] = rest;
+    const member = type.members.get(head) ?? inheritedMember(type, head, true);
+    return typeof member === "object" ? memberIdentity(member, tail) : undefined;
+  }
+
+  /** Empty means a known supplier has no such type; undefined means its declarations are unknown. */
+  function demandIdentity(container: string, name: string, onlyStatic: boolean): string | undefined {
+    const owner = byFqn(container);
+    if (owner !== undefined) {
+      if (typeof owner !== "object") return undefined;
+      const member = owner.members.get(name) ?? inheritedMember(owner, name, true);
+      if (member === undefined) return "";
+      if (typeof member !== "object") return undefined;
+      const modifiers = modifierWords(member.node);
+      if (!modifiers.includes("public") && owner.kind !== "interface") return undefined;
+      if (onlyStatic && !modifiers.includes("static") && owner.kind !== "interface" && member.kind !== "interface") return "";
+      return member.fqn;
+    }
+    if (onlyStatic) return undefined;
+    const declared = byFqn(`${container}.${name}`);
+    if (declared !== undefined) return typeof declared === "object" && modifierWords(declared.node).includes("public") ? declared.fqn : undefined;
+    const platform = PLATFORM_TYPE_NAMES.get(container);
+    if (platform !== undefined && isPlatformName(`${container}.${name}`)) return platform.has(name) ? `${container}.${name}` : "";
+    return types.some((type) => type.file.packageName === container) ? "" : undefined;
   }
 
   /**
@@ -550,6 +651,7 @@ export function createJavaProject(files: readonly JavaFile[]): JavaProject {
     types,
     unreadable,
     lookupType,
+    typeIdentity,
     bindName,
     isPlatformName,
     hierarchy,
@@ -755,3 +857,65 @@ function modifierWords(declaration: Node): string[] {
   const modifiers = declaration.namedChildren.find((child) => child.type === "modifiers");
   return modifiers === undefined ? [] : modifiers.children.filter((child) => !child.isNamed).map((child) => child.text);
 }
+
+/**
+ * A parameter type by what its erasure names: a type variable of a declaration around it, or the qualified name of the
+ * repository or platform type the strict reading settles (a keyword names itself), with its array dimensions.
+ */
+export type Signature = readonly ({ variable: true; dimensions: number } | { name: string; dimensions: number })[];
+
+/**
+ * Whether two signatures certainly declare the same parameter types: equal settled names at equal dimensions. A type
+ * variable on either side is never certainly one type (what an implementation binds it to is not read), so two methods
+ * not proven the same may still be one, and nothing narrows to either.
+ */
+export function sameSignature(first: Signature, second: Signature): boolean {
+  return first.length === second.length && first.every((parameter, index) => {
+    const other = second[index]!;
+    return parameter.dimensions === other.dimensions && !("variable" in parameter) && !("variable" in other) && parameter.name === other.name;
+  });
+}
+
+/** Nodes the grammar places among a method's parameters that declare none. */
+const NOT_PARAMETERS: ReadonlySet<string> = new Set(["line_comment", "block_comment"]);
+const KEYWORD_TYPES: ReadonlySet<string> = new Set(["integral_type", "floating_point_type", "boolean_type"]);
+
+export function readSignature(method: MethodDecl, project: JavaProject): Signature | undefined {
+  const parameters = (method.node.childForFieldName("parameters")?.namedChildren ?? []).filter((parameter): parameter is Node => parameter !== null && !NOT_PARAMETERS.has(parameter.type));
+  const signature: Signature[number][] = [];
+  for (const parameter of parameters) {
+    if (parameter.type !== "formal_parameter" && parameter.type !== "spread_parameter") return undefined;
+    const written = parameter.childForFieldName("type") ?? parameter.namedChildren.find((child) => child !== null && child.type !== "modifiers");
+    if (written === null || written === undefined) return undefined;
+    const element = written.type === "array_type" ? written.childForFieldName("element") : written;
+    const dimensions = dimensionsOf(written) + dimensionsOf(parameter) + (parameter.type === "spread_parameter" ? 1 : 0);
+    const erased = element?.type === "generic_type" ? element.namedChildren[0] : element;
+    if (erased === null || erased === undefined) return undefined;
+    if (KEYWORD_TYPES.has(erased.type)) signature.push({ name: erased.text, dimensions });
+    else if (erased.type === "type_identifier" && typeVariableAround(erased) !== undefined) signature.push({ variable: true, dimensions });
+    else {
+      const file = method.owner.file;
+      const scope = method.owner;
+      const name = project.typeIdentity(erased.text.replace(/\s+/g, ""), { file, type: scope, at: erased });
+      if (name === undefined) return undefined;
+      signature.push({ name, dimensions });
+    }
+  }
+  return signature;
+}
+
+/** The `[]` pairs a node writes directly: an array type's, or a parameter's after its name (`String args[]`). */
+function dimensionsOf(node: Node): number {
+  const dimensions = node.type === "array_type" ? node.childForFieldName("dimensions") : node.namedChildren.find((child) => child?.type === "dimensions");
+  return (dimensions?.text.match(/\[/g) ?? []).length;
+}
+
+export function typeVariableAround(name: Node): Node | undefined {
+  for (let scope = name.parent; scope !== null; scope = scope.parent) {
+    const parameters = scope.childForFieldName("type_parameters");
+    const found = parameters?.namedChildren.find((parameter) => parameter?.namedChildren[0]?.text === name.text);
+    if (found !== undefined && found !== null) return found;
+  }
+  return undefined;
+}
+

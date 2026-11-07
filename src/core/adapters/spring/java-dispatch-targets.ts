@@ -3,9 +3,9 @@ import { isJavaSource } from "../../domain/languages/java.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { DispatchTargets, ImportOrigins } from "../../ports/import-origins.port.ts";
 import type { JavaParser, JavaSyntaxTree } from "../tree-sitter/java-parser.adapter.ts";
-import { enclosingType, typeVariableAround } from "./java-root-bindings.ts";
+import { enclosingType } from "./java-root-bindings.ts";
 import { FUNCTION_VALUES, isAnonymous, isAspect, namesDynamicImplementation, resolve, supertypesOf, TYPE_DECLARATIONS, UNREAD_JVM_SOURCE } from "./java-declared-types.ts";
-import { createJavaProject, describeFile, type JavaFile, type JavaProject, type MethodDecl, type TypeDecl } from "./java-symbols.ts";
+import { createJavaProject, describeFile, readSignature, sameSignature, type Signature, type JavaFile, type JavaProject, type MethodDecl, type TypeDecl } from "./java-symbols.ts";
 
 const UNKNOWN: DispatchTargets = { kind: "unknown" };
 const PARAMETERS: ReadonlySet<string> = new Set(["formal_parameter", "spread_parameter"]);
@@ -33,24 +33,6 @@ export interface Hierarchy {
   functionValues: boolean;
   /** A method's parameter types as the strict reading settles them; `undefined` when one of them is not settled. */
   signatureOf(method: MethodDecl): Signature | undefined;
-}
-
-/**
- * A parameter type by what its erasure names: a type variable of a declaration around it, or the qualified name of the
- * repository or platform type the strict reading settles (a keyword names itself), with its array dimensions.
- */
-export type Signature = readonly ({ variable: true; dimensions: number } | { name: string; dimensions: number })[];
-
-/**
- * Whether two signatures certainly declare the same parameter types: equal settled names at equal dimensions. A type
- * variable on either side is never certainly one type (what an implementation binds it to is not read), so two methods
- * not proven the same may still be one, and nothing narrows to either.
- */
-export function sameSignature(first: Signature, second: Signature): boolean {
-  return first.length === second.length && first.every((parameter, index) => {
-    const other = second[index]!;
-    return parameter.dimensions === other.dimensions && !("variable" in parameter) && !("variable" in other) && parameter.name === other.name;
-  });
 }
 
 /**
@@ -276,52 +258,6 @@ export function hierarchyOf(files: readonly JavaFile[], project: JavaProject): H
   return { subtypes, supertypes, superclasses, outside, unsettled, unplaced, functionValues, signatureOf };
 }
 
-/** Nodes the grammar places among a method's parameters that declare none. */
-const NOT_PARAMETERS: ReadonlySet<string> = new Set(["line_comment", "block_comment"]);
-const KEYWORD_TYPES: ReadonlySet<string> = new Set(["integral_type", "floating_point_type", "boolean_type"]);
-
-function readSignature(method: MethodDecl, project: JavaProject): Signature | undefined {
-  const parameters = (method.node.childForFieldName("parameters")?.namedChildren ?? []).filter((parameter): parameter is Node => parameter !== null && !NOT_PARAMETERS.has(parameter.type));
-  const signature: Signature[number][] = [];
-  for (const parameter of parameters) {
-    if (parameter.type !== "formal_parameter" && parameter.type !== "spread_parameter") return undefined;
-    const written = parameter.childForFieldName("type") ?? parameter.namedChildren.find((child) => child !== null && child.type !== "modifiers");
-    if (written === null || written === undefined) return undefined;
-    const element = written.type === "array_type" ? written.childForFieldName("element") : written;
-    const dimensions = dimensionsOf(written) + dimensionsOf(parameter) + (parameter.type === "spread_parameter" ? 1 : 0);
-    const erased = element?.type === "generic_type" ? element.namedChildren[0] : element;
-    if (erased === null || erased === undefined) return undefined;
-    if (KEYWORD_TYPES.has(erased.type)) signature.push({ name: erased.text, dimensions });
-    else if (erased.type === "type_identifier" && typeVariableAround(erased) !== undefined) signature.push({ variable: true, dimensions });
-    else {
-      const file = method.owner.file;
-      const scope = enclosingType(erased, file, project);
-      const resolved = resolve(erased, file, project, scope, erased);
-      const name = resolved?.kind === "platform" ? resolved.fqn : resolved?.kind === "repository" ? resolved.type?.fqn : unboundName(erased, file, project, scope);
-      if (name === undefined) return undefined;
-      signature.push({ name, dimensions });
-    }
-  }
-  return signature;
-}
-
-/**
- * A simple type name nothing in the repository binds and no single import names, by what decides its meaning: the file's
- * package and on-demand imports (JLS 6.4.1), so two such names are one type only when both files read it from the same
- * places. `undefined` when the strict reading binds it, leaves it unsettled or finds it ambiguous.
- */
-function unboundName(name: Node, file: JavaFile, project: JavaProject, scope: TypeDecl | undefined): string | undefined {
-  if (name.type !== "type_identifier" || file.singleImports.has(name.text)) return undefined;
-  if (project.bindName(name.text, { file, type: scope, at: name }, "strict") !== undefined) return undefined;
-  return `${file.packageName}|${[...file.onDemandImports].sort().join(",")}|${name.text}`;
-}
-
-/** The `[]` pairs a node writes directly: an array type's, or a parameter's after its name (`String args[]`). */
-function dimensionsOf(node: Node): number {
-  const dimensions = node.type === "array_type" ? node.childForFieldName("dimensions") : node.namedChildren.find((child) => child?.type === "dimensions");
-  return (dimensions?.text.match(/\[/g) ?? []).length;
-}
-
 function isAnnotated(declaration: Node): boolean {
   const modifiers = declaration.namedChildren.find((child) => child?.type === "modifiers");
   return (modifiers?.namedChildren ?? []).some((child) => (child?.type === "marker_annotation" || child?.type === "annotation") && !LANGUAGE_ANNOTATIONS.has(child.childForFieldName("name")?.text.split(".").at(-1) ?? ""));
@@ -335,3 +271,5 @@ function simpleName(type: Node): string {
 function spansLine(declaration: Node, line: number): boolean {
   return declaration.startPosition.row + 1 <= line && line <= (declaration.childForFieldName("name") ?? declaration).startPosition.row + 1;
 }
+
+export { sameSignature } from "./java-symbols.ts";

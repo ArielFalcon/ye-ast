@@ -1,3 +1,4 @@
+import { typeVariableAround } from "./java-symbols.ts";
 import type { Node } from "web-tree-sitter";
 import { isJavaSource } from "../../domain/languages/java.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
@@ -154,15 +155,6 @@ function fieldIn(name: Node): boolean {
   return false;
 }
 
-export function typeVariableAround(name: Node): Node | undefined {
-  for (let scope = name.parent; scope !== null; scope = scope.parent) {
-    const parameters = scope.childForFieldName("type_parameters");
-    const found = parameters?.namedChildren.find((parameter) => parameter?.namedChildren[0]?.text === name.text);
-    if (found !== undefined && found !== null) return found;
-  }
-  return undefined;
-}
-
 export function enclosingType(node: Node, file: JavaFile, project: JavaProject): TypeDecl | undefined {
   return project.types.filter((type) => type.file === file && type.node.startIndex <= node.startIndex && node.endIndex <= type.node.endIndex).sort((a, b) => b.node.startIndex - a.node.startIndex)[0];
 }
@@ -176,3 +168,5 @@ function staticImport(name: string, file: JavaFile, project: JavaProject): RootB
   if (declared !== undefined && declared !== "ambiguous") return { kind: "located", root: name, file: declared.file.path, path: `${declared.fqn}.${name}` };
   return platformImport(name, className, project);
 }
+
+export { typeVariableAround } from "./java-symbols.ts";
