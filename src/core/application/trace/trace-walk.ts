@@ -349,9 +349,9 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
 
   /**
    * By the index of each kept edge of a TypeScript source into a member of a class, the receiver it is called on when
-   * that receiver is a value (a parameter or a variable, by the binder's scoping, ADR-0029) rather than a class, a
-   * function, an import or `this`: the index matched such a call by name, and TypeScript types structurally, so another
-   * object may stand there (ADR-0029 decision 10).
+   * that receiver is a value (a parameter or a variable, by the binder's scoping, ADR-0029) or a field read through
+   * `this` (`this.f.m`), rather than a class, a function, an import or `this` itself: the index matched such a call by
+   * name, and TypeScript types structurally, so another object may stand there (ADR-0029 decision 10).
    */
   async function valueReceivers(node: GraphSymbol, edges: readonly FollowedEdge[], verdicts: readonly EdgeTarget[]): Promise<ReadonlyMap<number, string>> {
     if (!isTypeScriptFile(node.file)) return new Map();
@@ -365,6 +365,7 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
       (binding?.kind === "declared" && !navigation.symbolsInFile(node.file).some((symbol) => symbol.name === binding.root && !VALUE_KINDS.includes(symbol.kind) && binding.lines.some((line) => symbol.startLine <= line && line <= symbol.endLine)));
     return new Map(kept.flatMap(({ index }, k) => {
       const binding = bindings[k];
+      if (binding?.kind === "this") return binding.member === undefined || binding.member === kept[k]!.target.name ? [] : [[index, binding.member] as const];
       return isValue(binding) ? [[index, binding.root] as const] : [];
     }));
   }
@@ -430,8 +431,8 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
       else await settleByName(reference, name, named);
     };
     /**
-     * A resolved call whose receiver is a value the walk has not proven: settled by what the relations or the source's
-     * binding prove the receiver holds, otherwise a cut listing the declarations of its name.
+     * A resolved call whose receiver is a value or a field the walk has not proven: settled by what the relations or the
+     * source's binding prove the receiver holds, otherwise a cut listing the declarations of its name.
      */
     for (const { edge, target, receiver } of unproven) {
       const reference: GraphUnresolvedReference = { from: node.id, file: node.file, line: edge.line!, column: edge.column!, kind: edge.kind, name: target.name, candidates: [] };
@@ -440,6 +441,7 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
       const member = proven?.kind === "member" ? provenMember(proven) : undefined;
       const bound = await boundAt(reference, target.name, receiver);
       if (member !== undefined) children.push(childAt(member, edge.line, edge.column, target.name, "call"));
+      else if (proven?.kind === "external") await leafUnlessReplaced(externalOf(proven.holds, target.name), rootOfHolds(proven.holds, target.name), () => cuts.push(unresolvedAt(reference, named)));
       else if (bound !== undefined) await settleBound(reference, target.name, named, bound);
       else cuts.push(unresolvedAt(reference, named));
     }

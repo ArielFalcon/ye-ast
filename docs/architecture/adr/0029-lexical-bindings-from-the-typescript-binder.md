@@ -103,16 +103,18 @@ latency and 2 to 3.6 times the memory for a program with the library and depende
    whether the index left it pending or resolved it into an edge: trace, impact, callers, importers and outline keep such an edge instead of dropping it, and keep such a pending call a cut (ADR-0019, amendment). The leaf's evidence is the module or the global it is rooted at, as for every other
    leaf; the answer gains no field, so the declared type itself is not written.
 10. A call the index resolved into a method of a repository class, on a receiver whose root is a value (a parameter or
-   a variable, by the binder's scoping, not a class, a function, an import or `this`), is not proof that the method runs:
+   a variable, by the binder's scoping, not a class, a function or an import) or a field read through `this`
+   (`this.f.m`, not `this.m`), is not proof that the method runs:
    the index matched the call by name, and TypeScript types structurally, so any object with that member may stand
    there (trace slice 3, S6). Trace takes it as a step only when the receiver's origin proves the class (a store-bound
-   local of decision 7, or a member proof of the relations, such as an `inject(T)` local), or when the receiver's one
-   annotation names a nominal class: a repository class that, or a class it extends through the heritage proof of
+   local of decision 7, or a member proof of the relations, such as an `inject(T)` local or a field's `FieldOrigin`), or
+   when the receiver's one annotation (for a field, a `#` or `private` one decision 9 admits) names a nominal class: a repository class that, or a class it extends through the heritage proof of
    decision 9, declares a `private`, `protected` or `#` instance member, which TypeScript compares by declaration, so
    only an instance of it or of a subclass fits. The step is the method the class or its nearest ancestor declares;
    a subclass that overrides it is the step's dispatch cut (RFC-0013 R7). The rule holds only while every heritage of
    the snapshot is proven (decision 9) and the index resolves the heritage of every class that declares the member, so
-   no subclass is unseen. Otherwise the call is a cut listing the declarations of its name. A call into an interface
+   no subclass is unseen. A field the relations prove holds a package or global type makes the call a leaf under it.
+   Otherwise the call is a cut listing the declarations of its name. A call into an interface
    keeps its dispatch cut. Impact, callers, importers and outline still read such an edge as a possible dependence.
 
 ## Consequences

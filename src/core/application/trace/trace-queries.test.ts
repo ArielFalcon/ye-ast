@@ -747,7 +747,7 @@ test("a call the index resolved on a class, an import, this or a root nothing bi
   for (const binding of [
     { kind: "declared", root: "Repo", lines: [1], captured: false },
     { kind: "import", root: "store", origin: { kind: "repository", file: B } },
-    { kind: "this", member: "store" },
+    { kind: "this", member: "save" },
     { kind: "unknown" },
   ] satisfies RootBinding[]) {
     const fact = await factOf({ ...resolvedOnParameter(), nodes: [...resolvedOnParameter().nodes, fakeNode("Repo", "class", A, 1, 3)], receiverRoots: { save: binding } });
@@ -812,4 +812,17 @@ test("a nominal class's inherited method is the step, and a class the index does
 
   assert.deepEqual(valueOf(inherited).steps.slice(1).map(({ symbol, file }) => [symbol, file]), [["save", "src/c.ts"]]);
   for (const fact of [unplaced, unresolvedHeritage, heritageOnValue]) assert.deepEqual(valueOf(fact).steps.map((step) => step.symbol), ["run"]);
+});
+
+test("a call the index resolved on a field of this is a step only at what the relations or the field's binding prove, otherwise a cut", async () => {
+  const onField: Options = { ...resolvedOnParameter(), receiverRoots: { save: { kind: "this", member: "store" } } };
+  const unproven = await factOf(onField);
+  const proven = await factOf({ ...onField, proofs: { memberUses: [{ ...SAVE_PROOF, reference: { ...SAVE_PROOF.reference, name: "this.store.save" } }], externalUses: [] } });
+  const external = await factOf({ ...onField, proofs: { memberUses: [], externalUses: [{ owner: SAVE_PROOF.owner, field: "store", holds: "@ngrx/store#Store", reference: { ...SAVE_PROOF.reference, name: "this.store.save" } }] } });
+  const nominal = await factOf({ ...nominalCall(), receiverRoots: { save: { kind: "this", member: "store" } } });
+
+  assert.deepEqual(cutsOf(unproven), PARAMETER_CUT);
+  assert.deepEqual(valueOf(unproven).steps.map((step) => step.symbol), ["run"]);
+  for (const fact of [proven, nominal]) assert.deepEqual(valueOf(fact).steps.slice(1).map(({ symbol, file }) => [symbol, file]), [["save", B]]);
+  assert.deepEqual(valueOf(external).steps.map(({ symbol, external }) => [symbol, external]), [["run", [{ kind: "import", module: "@ngrx/store", names: ["save"] }]]]);
 });
