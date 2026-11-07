@@ -30,7 +30,7 @@ import { createHeadReader, type FactSpec, type HeadReaderDeps, type HeadReading 
 import type { CommitExtraction } from "../snapshot/read-snapshot.ts";
 import { isTraceRoot, walkTrace } from "./trace-walk.ts";
 import { placeEffects } from "./trace-effects.ts";
-import type { DataEffectReader } from "../../domain/trace/data-effect-site.ts";
+import { comparePlacement, type DataEffectReader } from "../../domain/trace/data-effect-site.ts";
 import type { PlacedCallSiteReader } from "../../domain/topology/call-site.ts";
 import { pagePlans } from "./page-plans.ts";
 import { unresolvedOncePerFile } from "../navigation/declaration-uses.ts";
@@ -125,7 +125,7 @@ export function createTraceQueries(deps: TraceQueriesDeps): TraceQueries {
           const pages = pageRoots.size === 0 ? {} : { pages: { roots: pageRoots, of: pagePlans(store, memberProofs) } };
           const walk = await walkTrace(roots, { store, unresolvedIn, origins, targets: edgeTargets, inScope: head.selected, memberDeclarations, syntaxOf, memberProofs, budget, ...pages, ...(signal === undefined ? {} : { signal }) });
           if (walk === "aborted") return ABORTED;
-          const effectCuts = await placeEffects(walk.roots, { store, unresolvedIn, sites: async () => [...(await deps.callSites.placed(head.tree.sources, request.repoId)), ...(await deps.dataEffects?.placed(head.tree.sources) ?? [])].sort((a, b) => compareText(a.site.file, b.site.file) || a.site.line - b.site.line || (a.column ?? 0) - (b.column ?? 0)).filter(({ site }) => head.selected(site.file)), lineOf: linesOncePerFile(sources), functionValuesOf: async (file) => (sources.has(file) ? (await syntaxOf(file)).functionValues : undefined) });
+          const effectCuts = await placeEffects(walk.roots, { store, unresolvedIn, sites: async () => [...(await deps.callSites.placed(head.tree.sources, request.repoId)), ...(await deps.dataEffects?.placed(head.tree.sources) ?? [])].sort(comparePlacement).filter(({ site }) => head.selected(site.file)), lineOf: linesOncePerFile(sources), functionValuesOf: async (file) => (sources.has(file) ? (await syntaxOf(file)).functionValues : undefined) });
 
           const { steps, ids } = traceSteps(walk.roots);
           const rootIds = new Map(roots.map((root, index) => [root.id, ids.get(walk.roots[index]!)!]));

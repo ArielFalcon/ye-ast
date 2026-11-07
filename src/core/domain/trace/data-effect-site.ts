@@ -1,3 +1,4 @@
+import { compareText } from "../shared/code-node.ts";
 import type { DataEffect } from "./trace-fact.ts";
 
 export interface DataEffectSite {
@@ -13,4 +14,10 @@ export interface PlacedDataEffect {
 
 export interface DataEffectReader {
   placed(files: readonly { path: string; content: string }[]): Promise<readonly PlacedDataEffect[]>;
+}
+
+type Placement = { site: { file: string; line: number }; column?: number };
+
+export function comparePlacement(a: Placement, b: Placement): number {
+  return compareText(a.site.file, b.site.file) || a.site.line - b.site.line || (a.column ?? 0) - (b.column ?? 0);
 }

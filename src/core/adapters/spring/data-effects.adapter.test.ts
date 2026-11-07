@@ -29,9 +29,9 @@ test("JPA records execution, including a chained query, and class literals prove
   for (const namespace of ["javax", "jakarta"]) {
     const sites = await createJavaDataEffects(await createJavaParser()).placed([{ path: "src/Jpa.java", content: source("jpa").replace("jakarta.persistence", `${namespace}.persistence`) }]);
     assert.deepEqual(sites.filter(({ site }) => site.effect !== undefined).map(({ site }) => site.effect), [
-    { kind: "data", line: 8, operation: "find", access: "read", target: { kind: "entity", name: "shop.Order" } },
-    { kind: "data", line: 9, operation: "persist", access: "write" },
-    { kind: "data", line: 11, operation: "getResultList", access: "read" },
+      { kind: "data", line: 8, operation: "find", access: "read", target: { kind: "entity", name: "shop.Order" } },
+      { kind: "data", line: 9, operation: "persist", access: "write" },
+      { kind: "data", line: 11, operation: "getResultList", access: "read" },
     ]);
   }
 });
@@ -158,7 +158,6 @@ class Overload { void run(Repo r) { r.findByCode("x"); } }`;
     assert.equal(sites[0]!.site.effect?.access, access);
   }
 });
-
 
 test("an open method type variable or inherited declarations leave the called signature unproven", async () => {
   const cases = [

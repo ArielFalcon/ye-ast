@@ -12,8 +12,8 @@ export const REPOSITORY_OPERATIONS = operations(
   ["findById", "findAll", "findAllById", "count", "existsById", "getOne", "getById", "getReferenceById"],
   ["save", "saveAll", "saveAndFlush", "saveAllAndFlush", "delete", "deleteById", "deleteAll", "deleteAllById", "deleteInBatch", "deleteAllInBatch", "deleteAllByIdInBatch", "flush"],
 );
-export const JDBC_OPERATIONS = operations(["query", "queryForObject", "queryForList", "queryForMap", "queryForRowSet", "queryForStream"], ["update", "batchUpdate"], ["execute", "call"]);
-export const INSERT_OPERATIONS = operations([], ["execute", "executeAndReturnKey", "executeAndReturnKeyHolder", "executeBatch"]);
+const JDBC_OPERATIONS = operations(["query", "queryForObject", "queryForList", "queryForMap", "queryForRowSet", "queryForStream"], ["update", "batchUpdate"], ["execute", "call"]);
+const INSERT_OPERATIONS = operations([], ["execute", "executeAndReturnKey", "executeAndReturnKeyHolder", "executeBatch"]);
 export const ENTITY_OPERATIONS = operations(["find", "refresh"], ["persist", "merge", "remove", "flush"]);
 export const QUERY_OPERATIONS = operations(["getResultList", "getSingleResult", "getSingleResultOrNull", "getResultStream"], ["executeUpdate"]);
 export const DATA_CLIENTS: ReadonlyMap<string, ReadonlyMap<string, Access>> = new Map([
@@ -22,5 +22,4 @@ export const DATA_CLIENTS: ReadonlyMap<string, ReadonlyMap<string, Access>> = ne
   ...["javax.persistence", "jakarta.persistence"].flatMap((pkg) => [[`${pkg}.EntityManager`, ENTITY_OPERATIONS], [`${pkg}.Query`, QUERY_OPERATIONS], [`${pkg}.TypedQuery`, QUERY_OPERATIONS]] as const),
 ]);
 export const QUERY_FACTORIES: ReadonlySet<string> = new Set(["createQuery", "createNamedQuery", "createNativeQuery"]);
-
 export const QUERY_CONFIGURATION: ReadonlySet<string> = new Set(["setParameter", "setMaxResults", "setFirstResult", "setHint", "setFlushMode", "setLockMode"]);

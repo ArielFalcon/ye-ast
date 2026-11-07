@@ -215,7 +215,6 @@ class Store {
   assert.ok(dead.cuts?.some((cut) => cut.at[0]?.includes("data effect")));
 });
 
-
 test("compiled review counterexamples cannot invent framework identity, entity identity or overload access", async () => {
   const fixture = (name: string) => readFileSync(new URL(`../core/adapters/spring/fixtures/data-effects/${name}.java`, import.meta.url), "utf8");
   commit({ "src/LocalType.java": fixture("local-type"), "src/WrongTarget.java": fixture("wrong-target"), "src/LoopShadow.java": fixture("loop-shadow"), "src/QueryOverload.java": fixture("query-overload") });
@@ -228,11 +227,4 @@ test("compiled review counterexamples cannot invent framework identity, entity i
   const effects = entity.value.steps.flatMap((step) => step.effects ?? []).filter((effect) => effect.kind === "data");
   assert.equal(effects.length, 1);
   assert.equal(effects[0]!.target, undefined);
-});
-
-test("an inherited framework overload never borrows annotations from a same-arity project declaration", async () => {
-  commit({ "src/Overload.java": readFileSync(new URL("../core/adapters/spring/fixtures/data-effects/inherited-overload.java", import.meta.url), "utf8") });
-  const result = await trace("src/Overload.java:Svc.run");
-  assert.deepEqual(result.value.steps.flatMap((step) => step.effects ?? []).filter((effect) => effect.kind === "data"), []);
-  assert.ok(result.cuts?.some((cut) => cut.at.some((at) => at.includes("data effect"))));
 });

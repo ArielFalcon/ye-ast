@@ -1,6 +1,5 @@
 import { isJavaSource, isJvmTestFile } from "../../domain/languages/java.ts";
-import { compareText } from "../../domain/shared/code-node.ts";
-import type { DataEffectReader, PlacedDataEffect } from "../../domain/trace/data-effect-site.ts";
+import { comparePlacement, type DataEffectReader, type PlacedDataEffect } from "../../domain/trace/data-effect-site.ts";
 import type { DataEffect } from "../../domain/trace/trace-fact.ts";
 import type { JavaParser, JavaSyntaxTree } from "../tree-sitter/java-parser.adapter.ts";
 import type { Node } from "web-tree-sitter";
@@ -10,6 +9,7 @@ import { annotationAt, resolve } from "./java-declared-types.ts";
 import { enclosingType } from "./java-root-bindings.ts";
 import { argumentsOf, typeNameOf } from "./java-members.ts";
 import { invocationsOf, type Invocation } from "./java-invocations.ts";
+import { callKey, hasVarargs } from "./java-receiver-methods.ts";
 import { createJavaProject, describeFile, readArgumentSignature, readSignature, sameSignature, type JavaProject, type MethodDecl, type TypeDecl } from "./java-symbols.ts";
 import { DATA_CLIENTS, ENTITY_OPERATIONS, QUERY_CONFIGURATION, QUERY_FACTORIES, QUERY_OPERATIONS, REPOSITORY_OPERATIONS, REPOSITORY_TYPES } from "./data-vocabulary.ts";
 
@@ -28,12 +28,12 @@ export function createJavaDataEffects(parser: JavaParser): DataEffectReader {
         return [describeFile(path, parsed.value.root)];
       });
       const project = createJavaProject(files);
-      const bindings = new Map(files.map((file) => [file, new Map(javaReceiverBindings(file.root, true).map((binding) => [`${binding.line}:${binding.column}:${binding.member}`, binding]))]));
+      const bindings = new Map(files.map((file) => [file, new Map(javaReceiverBindings(file.root, true).map((binding) => [callKey(binding.line, binding.column, binding.member), binding]))]));
       for (const type of project.types) for (const call of invocationsOf(type)) {
         const effect = effectAt(call, project, bindings.get(type.file)!);
         if (effect !== undefined) sites.push({ site: { file: type.file.path, line: call.node.startPosition.row + 1, effect: effect === false ? undefined : effect }, column: call.node.startPosition.column });
       }
-      return sites.sort((a, b) => compareText(a.site.file, b.site.file) || a.site.line - b.site.line || (a.column ?? 0) - (b.column ?? 0));
+      return sites.sort(comparePlacement);
     } finally {
       for (const tree of trees) tree.dispose();
     }
@@ -46,7 +46,7 @@ function effectAt(call: Invocation, project: JavaProject, bindings: ReadonlyMap<
   if (object === null) return undefined;
   const candidate = REPOSITORY_OPERATIONS.has(operation) || [...DATA_CLIENTS.values()].some((row) => row.has(operation));
   const receiverAt = (invocation: Node) => {
-    const binding = bindings.get(`${invocation.startPosition.row + 1}:${invocation.startPosition.column + 1}:${invocation.childForFieldName("name")?.text ?? ""}`);
+    const binding = bindings.get(callKey(invocation.startPosition.row + 1, invocation.startPosition.column + 1, invocation.childForFieldName("name")?.text ?? ""));
     if (binding?.holds.kind !== "annotated") return undefined;
     let node = annotationAt(call.type.file.root, binding.holds.line, binding.holds.column, binding.holds.type);
     if (node === undefined) return undefined;
@@ -87,7 +87,7 @@ function effectAt(call: Invocation, project: JavaProject, bindings: ReadonlyMap<
     if (receiver?.unproven === true) return false;
     const named = project.hierarchy(type).types.flatMap((owner) => owner.methods.filter((method) => method.name === operation));
     let methods = named.filter((method) => method.parameterTypes.length === argumentsOf(call.node).length);
-    if (named.some((method) => method.node.childForFieldName("parameters")?.namedChildren.some((node) => node.type === "spread_parameter"))) return false;
+    if (named.some(hasVarargs)) return false;
     const signatures = methods.map((method) => readSignature(method, project));
     if (methods.length > 0) {
       const argumentsSignature = readArgumentSignature(call.node, { file: call.type.file, type: call.type, at: call.node }, project);
@@ -108,20 +108,24 @@ function effectAt(call: Invocation, project: JavaProject, bindings: ReadonlyMap<
     if (access === undefined) return methods.length > 0 ? false : undefined;
     const distinct = [...new Set(entities)];
     const entity = distinct.length === 1 ? distinct[0] : undefined;
-    return { kind: "data", line: call.node.startPosition.row + 1, operation, access, ...(entity === undefined ? {} : { target: { kind: "entity", name: entity } }) };
+    return dataEffect(call, operation, access, entity);
   }
   if (receiver?.unproven === true && candidate && (REPOSITORY_TYPES.has(resolved.fqn) || DATA_CLIENTS.has(resolved.fqn))) return false;
   if (REPOSITORY_TYPES.has(resolved.fqn)) {
     const access = REPOSITORY_OPERATIONS.get(operation);
     if (access === undefined) return undefined;
     const entity = actuals[0] === undefined ? undefined : entityName(actuals[0], call.type, project);
-    return { kind: "data", line: call.node.startPosition.row + 1, operation, access, ...(entity === undefined ? {} : { target: { kind: "entity", name: entity } }) };
+    return dataEffect(call, operation, access, entity);
   }
   const vocabulary = DATA_CLIENTS.get(resolved.fqn);
   const access = vocabulary?.get(operation);
   if (access === undefined) return undefined;
   const first = argumentsOf(call.node)[0];
   const entity = vocabulary === ENTITY_OPERATIONS && operation === "find" && first?.type === "class_literal" && first.namedChildren[0] !== undefined ? entityName(first.namedChildren[0], call.type, project) : undefined;
+  return dataEffect(call, operation, access, entity);
+}
+
+function dataEffect(call: Invocation, operation: string, access: DataEffect["access"], entity: string | undefined): DataEffect {
   return { kind: "data", line: call.node.startPosition.row + 1, operation, access, ...(entity === undefined ? {} : { target: { kind: "entity", name: entity } }) };
 }
 
@@ -132,7 +136,7 @@ function entityName(node: Node, type: TypeDecl, project: JavaProject, scope = { 
 }
 
 /** Undefined entries retain proven repository membership without inventing an entity for a raw or open generic. */
-function repositoryEntities(type: TypeDecl, project: JavaProject, env: ReadonlyMap<string, string | undefined> = new Map(), seen = new Set<TypeDecl>()): (string | undefined)[] {
+function repositoryEntities(type: TypeDecl, project: JavaProject, env: ReadonlyMap<string, string | undefined>, seen = new Set<TypeDecl>()): (string | undefined)[] {
   if (seen.has(type)) return [];
   const next = new Set([...seen, type]);
   const clause = type.kind === "interface" ? type.node.namedChildren.find((child) => child.type === "extends_interfaces") : type.node.childForFieldName("interfaces");

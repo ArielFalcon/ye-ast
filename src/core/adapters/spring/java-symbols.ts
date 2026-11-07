@@ -916,19 +916,21 @@ export function readSignature(method: MethodDecl, project: JavaProject): Signatu
   return signature;
 }
 
+const INTEGER_LITERALS: ReadonlySet<string> = new Set(["decimal_integer_literal", "hex_integer_literal", "octal_integer_literal", "binary_integer_literal"]);
+
 /** Exact static argument types only; conversions, inference and expressions without a declared type remain unproven. */
 export function readArgumentSignature(invocation: Node, scope: Scope, project: JavaProject): Signature | undefined {
-  const args = invocation.childForFieldName("arguments")?.namedChildren.filter((node) => !NOT_PARAMETERS.has(node.type)) ?? [];
+  const list = invocation.childForFieldName("arguments");
   const signature: Signature[number][] = [];
-  for (const argument of args) {
-    let node = argument;
-    while (node.type === "parenthesized_expression" && node.namedChildren[0] !== undefined) node = node.namedChildren[0];
+  for (const argument of list === null ? [] : namedChildren(list)) {
+    let node = unwrapParentheses(argument);
+    if (node === undefined) return undefined;
     if (node.type === "unary_expression") {
       const operand = node.childForFieldName("operand");
-      if (operand === null || !["decimal_integer_literal", "hex_integer_literal", "octal_integer_literal", "binary_integer_literal"].includes(operand.type)) return undefined;
+      if (operand === null || !INTEGER_LITERALS.has(operand.type)) return undefined;
       node = operand;
     }
-    if (["decimal_integer_literal", "hex_integer_literal", "octal_integer_literal", "binary_integer_literal"].includes(node.type)) {
+    if (INTEGER_LITERALS.has(node.type)) {
       signature.push({ name: /[lL]$/.test(node.text) ? "long" : "int", dimensions: 0 });
       continue;
     }
