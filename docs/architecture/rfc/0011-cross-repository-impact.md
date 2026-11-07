@@ -183,7 +183,9 @@ writes; `{name}`, `{name:regex}` and `:name` are parameters. A route also states
 `{*name}` (the rest of the path, none of it included). Every call-site reader states its target through the same
 reading of a URL (`callUrl`): the origin is `scheme://authority` or `//authority`, and the authority ends at the path,
 the query, the fragment or a value the code fills, since that value may hold the start of the path. The target carries
-the URL the call reaches as written, origin included, without query or fragment: a URL that states its origin states
+the URL the call reaches as written, origin included, without query or fragment, and with its path in the grammar's
+one form (a slash before each segment, so `management/env` reads `/management/env` in both readers; matching never told
+a relative path from a root one): a URL that states its origin states
 it whole, whatever base the call declares, and a relative one comes under the base the call declares. A target keeps a
 separate base only for a service its client names without a URL (a Feign `name`). The origin, read back by the same
 grammar, is the host a call names. Segment by segment:
@@ -566,7 +568,9 @@ Accepted by the owner on 2026-11-01: "Confirmo todo".
   (several entrypoints at one rung, with the repositories and, for HTTP, the routes) or `could-match` (a run-time value
   could still route it, row 4), and an ambiguous or could-match one is also a cut of its section, as in the impact. `workspace.gateways` is the gateways in force, declared (`gateway-prefix`) and inferred (`route-overlap`).
   A published destination is an outward name of kind `destination`; the repositories that serve it are those the join
-  linked or found ambiguous for it, with basis `event-destination`, never a name compared with an identity. Composed
+  linked or found ambiguous for it, with basis `event-destination`, never a name compared with an identity. The host and
+  the path prefix of an HTTP call the join links are served by the repository the link reaches, so they are never
+  unserved, whatever identity they name. Composed
   with `ye_ast_callers` or `ye_ast_impact` over the same snapshots, a link both admit is one `workspace-match` relation
   with one attestation per answer.
 - Slice 2 (frontend call sites): RFC-0007 row A3 "as built" holds the shapes; the reader is the same one the join uses.

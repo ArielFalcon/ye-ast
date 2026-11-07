@@ -1065,6 +1065,16 @@ test("a published destination is an outward name the repository whose listener t
   assert.deepEqual(value.unserved.map(({ name }) => name), ["audit.logged"]);
 });
 
+test("the host and prefix of a call the join links are served by the repository it reaches; those of a call that links nowhere stay unserved", async () => {
+  const repositories: Repositories = { "/work/shop-web": { files: {} }, "/work/orders": { files: {}, entrypoints: [postRoute("/api/orders")] } };
+  const queries = setup(repositories, sitesOf({ "shop-web": [postSite("shop-web", "http://localhost:9966/api/orders"), postSite("shop-web", "http://billing.example/charges", 9)] }));
+
+  const value = valueOf(await queries.outwardNames(LINKED));
+
+  assert.deepEqual(value.links.map(({ to }) => `${to.repo} ${to.name}`), ["orders POST /api/orders"]);
+  assert.deepEqual(value.unserved.map(({ name, kind }) => `${kind} ${name}`), ["path-prefix charges", "http-host http://billing.example"]);
+});
+
 test("a destination is never served by a repository whose name equals it: only a listener the join linked serves it", async () => {
   const repositories: Repositories = { "/work/shop-web": { files: {} }, "/work/audit": { files: {} } };
   const queries = setup(repositories, sitesOf({ "shop-web": [publishSite("shop-web", "audit")] }));
