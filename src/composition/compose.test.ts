@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { EXIT_CODE } from "../cli/main.ts";
 import { REDACTED } from "../core/ports/redaction.port.ts";
@@ -816,7 +816,10 @@ function committedRepository(name: string, files: Readonly<Record<string, string
   mkdirSync(root);
   const run = (...args: string[]): string => execFileSync("git", args, { cwd: root, env: GIT_ENV, encoding: "utf8" }).trim();
   run("init", "-q");
-  for (const [file, content] of Object.entries(files)) writeFileSync(join(root, file), content);
+  for (const [file, content] of Object.entries(files)) {
+    mkdirSync(dirname(join(root, file)), { recursive: true });
+    writeFileSync(join(root, file), content);
+  }
   run("add", "-A");
   run("commit", "-q", "-m", name);
   return root;
@@ -918,6 +921,21 @@ test("a Java call on a parameter whose declared type is a record steps at the re
     cuts: [],
     steps: [["Use.java:2 entry", null, null, null, ["Order.java:2 total"]]],
   });
+});
+
+test("a Java method that names a parameter type like an inherited one's, from another package, is an overload: the call through the declared type is not proven to run it", async () => {
+  const files = {
+    "Use.java": ["class Factory {", " b.Sub get() { return new b.Sub(); }", "}", "class Use {", " void entry(Factory f, a.X x) { f.get().save(x); }", "}"],
+    "a/Base.java": ["package a;", "public class Base {", " public void save(X arg) { baseBody(); }", " void baseBody() {}", "}"],
+    "a/X.java": ["package a;", "public class X {}"],
+    "b/Sub.java": ["package b;", "public class Sub extends a.Base {", " public void save(X arg) { subBody(); }", " void subBody() {}", "}"],
+    "b/X.java": ["package b;", "public class X {}"],
+  };
+
+  const answer = await javaTrace("homonym-signature", files);
+
+  assert.equal(answer.status, "partial");
+  assert.ok(!answer.steps.some(([place]) => place === "b/Sub.java:3 save"));
 });
 
 test("a Java call the index resolved on a non-private field or a var local stays a step under an aspect, since nothing falsifies the declared type", async () => {

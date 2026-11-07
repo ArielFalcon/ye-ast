@@ -115,7 +115,13 @@ latency and 2 to 3.6 times the memory for a program with the library and depende
    variable, an enum or an annotation type (a record is a final class); when a type at or above it names a supertype
    outside the repository, whose members the sources do not state; when its members of the name are an overload, a
    varargs, a `private` method or one of `Object`'s; or when a source holds Lombok's `@Delegate` or `@ExtensionMethod`,
-   by which a processor adds an overload or rewrites a call with no declaration in the sources. Decision 9's global guard
+   by which a processor adds an overload or rewrites a call with no declaration in the sources. Signatures, here and in
+   R7's overrides, compare parameter types as the strict reading resolves them, after imports, nesting and the file's
+   package, never by their text: `save(X)` in another package may name another `X`, an overload. A name nothing in the
+   repository binds and no single import names is one type only for files that read it from the same package and
+   on-demand imports. Two methods whose parameter types are not certainly one declared type may still be one (a name the
+   reading leaves unsettled, a type variable, whose binding by an implementation is not read): nothing narrows to either,
+   so dispatch proves no body and a call names no method (trace slice 3 close-out rule, fail closed). Decision 9's global guard
    is scoped here, as R7 scopes it: a supertype outside the repository, an anonymous or local class and a lambda or method
    reference withhold the proof only inside the declared type's hierarchy (at or above it for a supertype, below it for
    an anonymous or local class, the type itself being a functional interface for a lambda). That is sound because Java

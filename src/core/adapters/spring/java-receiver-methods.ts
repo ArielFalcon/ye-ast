@@ -8,8 +8,8 @@ import type { JavaParser, JavaSyntaxTree } from "../tree-sitter/java-parser.adap
 import { javaReceiverBindings } from "../tree-sitter/java-receiver-bindings.ts";
 import { annotationAt, namesDynamicImplementation, resolve, UNREAD_JVM_SOURCE } from "./java-declared-types.ts";
 import { enclosingType } from "./java-root-bindings.ts";
-import { ancestorsOf, hierarchyOf, targetsOf, type Hierarchy, type Superclass } from "./java-dispatch-targets.ts";
-import { createJavaProject, describeFile, sameParameters, type JavaFile, type JavaProject, type MethodDecl, type TypeDecl } from "./java-symbols.ts";
+import { ancestorsOf, hierarchyOf, sameSignature, targetsOf, type Hierarchy, type Superclass } from "./java-dispatch-targets.ts";
+import { createJavaProject, describeFile, type JavaFile, type JavaProject, type MethodDecl, type TypeDecl } from "./java-symbols.ts";
 
 const UNKNOWN: ReceiverMethod = { kind: "unknown" };
 const UNPROVEN: ReceiverMethod = { kind: "unproven" };
@@ -156,12 +156,19 @@ function createResolver(project: JavaProject, hierarchy: Hierarchy | undefined) 
     const candidates = above.flatMap((ancestor) => ancestor.methods.filter((method) => method.name === name));
     const [first] = candidates;
     if (first === undefined || first.parameterTypes.length !== arity) return undefined;
-    if (candidates.some((method) => method.modifiers.includes("private") || hasVarargs(method) || !sameParameters(method, first, (a, _, b) => a === b))) return undefined;
+    if (candidates.some((method) => method.modifiers.includes("private") || hasVarargs(method) || (method !== first && !sameStatedSignature(method, first)))) return undefined;
     for (let current: Superclass = type; typeof current === "object"; current = hierarchy.superclasses.get(current) ?? "outside") {
       const own = candidates.find((method) => method.owner === current);
       if (own !== undefined) return own;
     }
     return candidates.length === 1 ? first : undefined;
+  };
+
+  /** Whether two members certainly state the same parameter types, each as the strict reading settles them. */
+  const sameStatedSignature = (method: MethodDecl, other: MethodDecl): boolean => {
+    const own = hierarchy?.signatureOf(method);
+    const others = hierarchy?.signatureOf(other);
+    return own !== undefined && others !== undefined && sameSignature(own, others);
   };
 
   return {

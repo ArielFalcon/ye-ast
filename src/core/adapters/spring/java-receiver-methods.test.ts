@@ -74,6 +74,18 @@ test("members of the name that are not one signature of the call's arity, a vara
   assert.deepEqual(await methodAt([named, use("plain.toString()", [], "Plain plain")], "toString"), { kind: "unknown" });
 });
 
+test("members whose parameter types the strict reading settles to different types are overloads, and the same type however it is spelled is one signature", async () => {
+  const value = java("Value.java", ["package app;", "", "public class Value {}"]);
+  const homonym = java("other/Value.java", ["package app.other;", "", "public class Value {}"]);
+  const base = java("Base.java", ["package app;", "", "public class Base {", "  public void save(Value value) {}", "}"]);
+  const overload = java("other/Sub.java", ["package app.other;", "", "public class Sub extends app.Base {", "  public void save(Value value) {}", "}"]);
+  const override = java("other/Sub.java", ["package app.other;", "", "import app.Value;", "", "public class Sub extends app.Base {", "  public void save(Value value) {}", "}"]);
+  const call = java("Use.java", ["package app;", "", "class Use {", "  void run(app.other.Sub sub, Value value) { sub.save(value); }", "}"]);
+
+  assert.deepEqual(await methodAt([value, homonym, base, overload, call]), { kind: "unknown" });
+  assert.deepEqual(await methodAt([value, homonym, base, override, call]), method(override, 6));
+});
+
 test("an enum names no method, since a constant may declare its own body", async () => {
   const kinds = java("Kinds.java", ["package app;", "", "enum Kinds {", "  ONE;", "  void save(String value) {}", "}"]);
 
