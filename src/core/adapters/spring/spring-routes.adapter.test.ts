@@ -683,8 +683,8 @@ test("overloaded handlers keep their own lines", async () => {
 
 test("an overload is matched to the declaration it implements by its parameter types", async () => {
   const findings = await extractor.extract([
-    app("Api", `interface Api<T> {\n  @GetMapping("/by-id") void find(List<T> id);\n  @GetMapping("/by-name") void find(Map<String, List<T>> name);\n}`),
-    app("Impl", `@RestController class Impl implements Api<User> {\n  public void find(final java.util.Map<String, List<User>> name) {}\n  public void find(List<User> id) {}\n}`),
+    app("Api", `interface Api<T> {\n  @GetMapping("/by-id") void find(List<T> id);\n  @GetMapping("/by-name") void find(Map<String, List<T>> name);\n}`, "import java.util.List; import java.util.Map;"),
+    app("Impl", `@RestController class Impl implements Api<User> {\n  public void find(final java.util.Map<String, List<User>> name) {}\n  public void find(List<User> id) {}\n}`, "import java.util.List; import java.util.Map;"),
   ]);
 
   assert.deepEqual(
@@ -1252,10 +1252,10 @@ test("an HTTP interface method implemented by a controller is an unknown item no
   const findings = await extractor.extract([
     app(
       "OrdersExchange",
-      `@HttpExchange("/orders") interface OrdersExchange {\n  @GetExchange("/{id}") String one(String id);\n}`,
+      `@HttpExchange("/orders") interface OrdersExchange {\n  @GetExchange("/{id}") String one(java.lang.String id);\n}`,
       "import org.springframework.web.service.annotation.*;",
     ),
-    app("OrdersController", `@RestController class OrdersController implements OrdersExchange {\n  @Override public String one(String id) { return id; }\n}`),
+    app("OrdersController", `@RestController class OrdersController implements OrdersExchange {\n  @Override public String one(java.lang.String id) { return id; }\n}`),
   ]);
 
   assert.deepEqual(routes(findings), []);
@@ -1760,10 +1760,10 @@ test("a class whose only link to a class mapping is an interface is not a handle
   const findings = await extractor.extract([
     app(
       "OrdersClient",
-      `@FeignClient(name = "orders") @RequestMapping("/orders") interface OrdersClient {\n  @GetMapping("/{id}") String one(String id);\n}`,
+      `@FeignClient(name = "orders") @RequestMapping("/orders") interface OrdersClient {\n  @GetMapping("/{id}") String one(java.lang.String id);\n}`,
       "import org.springframework.cloud.openfeign.FeignClient;",
     ),
-    app("OrdersFallback", `@Component class OrdersFallback implements OrdersClient {\n  @Override public String one(String id) { return id; }\n}`, "import org.springframework.stereotype.Component;"),
+    app("OrdersFallback", `@Component class OrdersFallback implements OrdersClient {\n  @Override public String one(java.lang.String id) { return id; }\n}`, "import org.springframework.stereotype.Component;"),
     app("Annotated", `@Component @RequestMapping("/annotated") class Annotated {\n  @GetMapping("/{id}") void one() {}\n}`, "import org.springframework.stereotype.Component;"),
   ]);
 
@@ -2709,4 +2709,25 @@ test("a library class is never reported as an entrypoint, and the routes the rep
 
   assert.deepEqual(withLibrary.filter((finding) => finding.evidence.every(({ path }) => path !== INHERITING.path)), bare.filter((finding) => finding.evidence.every(({ path }) => path !== INHERITING.path)));
   assert.ok(withLibrary.every((finding) => finding.evidence.every(({ path }) => !path.startsWith("(library)"))));
+});
+
+test("mapping inheritance compares declaration identities rather than equally spelled qualified parameter tails", async () => {
+  const api = app("Api", 'public interface Api { @GetMapping("/identity") void send(left.Value value); }');
+  const controller = app("Controller", '@RestController public class Controller implements Api {\n public void send(right.Value value) {}\n public void send(left.Value value) {}\n}');
+  const result = await extractor.extract([MAIN, api, controller,
+    file("src/main/java/left/Value.java", "package left; public class Value {}"),
+    file("src/main/java/right/Value.java", "package right; public class Value {}"),
+  ]);
+  assert.deepEqual(routes(result), ["GET /identity"]);
+  const route = result.find((finding) => finding.status === "complete" && finding.value.kind === "http-route");
+  assert.equal(route?.evidence[0]?.line, 6);
+});
+
+test("a possible mapping match with unknown import suppliers is an unresolved item instead of a dropped route", async () => {
+  const findings = await extractor.extract([
+    app("Api", 'interface Api { @GetMapping("/uncertain") void send(Value value); }', "import missing.one.*;"),
+    app("Controller", '@RestController class Controller implements Api { public void send(Value value) {} }', "import missing.two.*;"),
+  ]);
+  assert.deepEqual(routes(findings), []);
+  assert.deepEqual(gaps(findings), ["unresolved@4"]);
 });

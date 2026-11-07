@@ -305,14 +305,14 @@ export function createJavaProject(files: readonly JavaFile[]): JavaProject {
 
   function typeIdentity(name: string, scope: Scope): string | undefined {
     const [head = "", ...rest] = name.split(".");
+    const { file } = scope;
+    const direct = file.singleImports.get(head);
+    if (file.conflictingSingleImports.has(head) || (direct !== undefined && types.some((type) => type.file === file && type.outer === undefined && type.name === head && type.fqn !== direct))) return undefined;
     const lexical = lexicalType(head, scope, true, false);
     if (lexical !== undefined) {
       if (typeof lexical !== "object" || "local" in lexical) return undefined;
       return memberIdentity(lexical, rest);
     }
-    const { file } = scope;
-    if (file.conflictingSingleImports.has(head)) return undefined;
-    const direct = file.singleImports.get(head);
     const statics = file.staticImports.filter(({ member }) => member === head);
     if (direct !== undefined || statics.length > 0) {
       const unit = types.filter((type) => type.file === file && type.outer === undefined && type.name === head);
@@ -377,7 +377,7 @@ export function createJavaProject(files: readonly JavaFile[]): JavaProject {
       if (typeof member !== "object") return undefined;
       const modifiers = modifierWords(member.node);
       if (!modifiers.includes("public") && owner.kind !== "interface") return undefined;
-      if (onlyStatic && !modifiers.includes("static") && owner.kind !== "interface" && member.kind !== "interface") return "";
+      if (onlyStatic && !modifiers.includes("static") && owner.kind !== "interface" && member.node.type === "class_declaration") return "";
       return member.fqn;
     }
     if (onlyStatic) return undefined;
@@ -724,39 +724,59 @@ export type Counterpart = MethodDecl | "ambiguous" | undefined;
  * The method of `type` that `method` overrides or is overridden by: same name and arity, told apart by parameter types.
  * Declarations that match only through a type variable and that several methods claim equally are `"ambiguous"`.
  */
-export function counterpart(type: TypeDecl, method: MethodDecl): Counterpart {
+export function counterpart(type: TypeDecl, method: MethodDecl, project: JavaProject): Counterpart {
   const compatibleWith = (candidates: readonly MethodDecl[], target: MethodDecl) =>
-    candidates.filter((candidate) => candidate.name === target.name && sameParameters(candidate, target, parameterCompatible));
+    candidates.filter((candidate) => candidate.name === target.name && compatibleParameters(candidate, target, project));
   const candidates = compatibleWith(type.methods, method);
-  const exact = candidates.filter((candidate) => sameParameters(candidate, method, (a, _, b) => a === b));
+  const exact = candidates.filter((candidate) => certainParameters(candidate, method, project));
   const chosen = exact.length > 0 ? exact : candidates;
   const [found] = chosen;
   if (chosen.length > 1) return "ambiguous";
   if (found === undefined || exact.length > 0) return found;
+  if (uncertainParameters(found, method, project)) return "ambiguous";
   const rivals = compatibleWith(
     method.owner.methods.filter((rival) => rival !== method),
     found,
-  ).filter((rival) => !type.methods.some((other) => other !== found && sameParameters(other, rival, (a, _, b) => a === b)));
-  if (rivals.some((rival) => sameParameters(rival, found, (a, _, b) => a === b))) return undefined;
+  ).filter((rival) => !type.methods.some((other) => other !== found && certainParameters(other, rival, project)));
+  if (rivals.some((rival) => certainParameters(rival, found, project))) return undefined;
   return rivals.length > 0 ? "ambiguous" : found;
 }
 
-export function sameParameters(
-  first: MethodDecl,
-  second: MethodDecl,
-  matches: (a: string, aVariables: ReadonlySet<string>, b: string, bVariables: ReadonlySet<string>) => boolean,
-): boolean {
-  return (
-    first.parameterTypes.length === second.parameterTypes.length &&
-    first.parameterTypes.every((parameter, index) => matches(parameter, first.typeVariables, second.parameterTypes[index] ?? "", second.typeVariables))
-  );
+function identityTail(name: string): string {
+  return name.slice(Math.max(name.lastIndexOf("|"), name.lastIndexOf(".")) + 1);
 }
 
-export function parameterCompatible(a: string, aVariables: ReadonlySet<string>, b: string, bVariables: ReadonlySet<string>): boolean {
-  if (a === b) return true;
-  const [elementA = "", dimensionsA = ""] = /^(.*?)((?:\[\])*)$/.exec(a)?.slice(1) ?? [];
-  const [elementB = "", dimensionsB = ""] = /^(.*?)((?:\[\])*)$/.exec(b)?.slice(1) ?? [];
-  return dimensionsA === dimensionsB && (aVariables.has(elementA) || bVariables.has(elementB));
+function uncertainParameters(first: MethodDecl, second: MethodDecl, project: JavaProject): boolean {
+  const a = readSignature(first, project);
+  const b = readSignature(second, project);
+  return a === undefined || b === undefined || a.some((parameter, index) => {
+    const other = b[index];
+    return other !== undefined && !("variable" in parameter) && !("variable" in other) && parameter.name !== other.name
+      && (parameter.name.startsWith("context:") || other.name.startsWith("context:"));
+  });
+}
+
+function certainParameters(first: MethodDecl, second: MethodDecl, project: JavaProject): boolean {
+  const a = readSignature(first, project);
+  const b = readSignature(second, project);
+  return a !== undefined && b !== undefined && a.length === b.length && a.every((parameter, index) => {
+    const other = b[index]!;
+    return parameter.dimensions === other.dimensions && ("variable" in parameter && "variable" in other
+      ? first.parameterTypes[index] === second.parameterTypes[index]
+      : !("variable" in parameter) && !("variable" in other) && parameter.name === other.name);
+  });
+}
+
+function compatibleParameters(first: MethodDecl, second: MethodDecl, project: JavaProject): boolean {
+  if (first.parameterTypes.length !== second.parameterTypes.length) return false;
+  if (certainParameters(first, second, project)) return true;
+  const a = readSignature(first, project);
+  const b = readSignature(second, project);
+  if (a === undefined || b === undefined) return true;
+  return a.length === b.length && a.every((parameter, index) => {
+    const other = b[index]!;
+    return parameter.dimensions === other.dimensions && ("variable" in parameter || "variable" in other || parameter.name === other.name || ((parameter.name.startsWith("context:") || other.name.startsWith("context:")) && identityTail(parameter.name) === identityTail(other.name)));
+  });
 }
 
 /** Declares the types of a file and their members; a nested type waits on a stack, since nesting depth is the file's. */

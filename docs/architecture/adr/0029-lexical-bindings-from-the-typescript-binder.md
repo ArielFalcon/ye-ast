@@ -166,14 +166,15 @@ latency and 2 to 3.6 times the memory for a program with the library and depende
    keeps its dispatch cut. Impact, callers, importers and outline still read such an edge as a possible dependence.
 
 12. Java signature identity has one owner, `JavaProject.typeIdentity` and `readSignature`, shared by trace dispatch,
-    receiver-method comparison. This is an identity comparison, not an extension of the
+    receiver-method comparison and Spring's `counterpart`. This is an identity comparison, not an extension of the
     strict resolver's external-leaf or dependency proof. Its lexical walk is the existing resolver's: local and
     enclosing member types, including inherited member types, precede imports. A type parameter remains variable,
     never a concrete signature proof. Local types without a placed declaration, inaccessible or ambiguous members,
     and an unknown superclass retain the cut. A member type can shadow a single-type import (JLS 6.4.1).
     Single-type and single-static imports precede the file's package and on-demand imports; conflicting single imports
     or a conflicting top-level declaration in the compilation unit prove nothing. Static imports resolve a public
-    static member type through its declaring repository type, including inherited members. Unread external member
+    static member type through its declaring repository type, including inherited members and implicitly static
+    member interfaces, annotation types, enums and records. Unread external member
     suppliers remain unknown. The file's own package precedes ordinary and static on-demand imports. `java.lang` is
     an implicit on-demand supplier, not a higher-priority import. Known demand suppliers must agree on one identity;
     a known collision stays cut even beside an unknown supplier. A missing supplier is never assumed empty merely
@@ -189,7 +190,9 @@ latency and 2 to 3.6 times the memory for a program with the library and depende
     same-context rule did; they select no supplier and prove no repository target or external leaf. Different contexts
     do not prove equality, and known collisions never use this fallback. Qualified repository member names resolve
     to their declaring member, so inherited spellings compare canonically. Array dimensions remain part of identity.
-    No schema or persisted graph shape changes. `bindName`'s strict and lenient query behavior is unchanged.
+    Spring's concrete signature comparisons use this same proof: a possible but unproven mapping match becomes an
+    unresolved item rather than a route or a silently dropped mapping. Its existing type-variable matching policy is
+    unchanged. No schema or persisted graph shape changes. `bindName`'s strict and lenient query behavior is unchanged.
     The owner's J1 instruction authorizes choosing the root fix and testing this shared comparison; S3's proposed
     import precedence and compilability assumption are corrected by these rules.
 

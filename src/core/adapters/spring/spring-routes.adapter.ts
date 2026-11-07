@@ -303,7 +303,7 @@ function firstLookup(lookups: readonly MappingLookup[]): MappingLookup {
 
 function routesOf(controller: Controller): Finding<MappedRoute>[] {
   const { type, project, annotations } = controller;
-  const { handlers, undecided } = handlerCandidates(project.classChain(type), controller.hierarchy);
+  const { handlers, undecided } = handlerCandidates(project.classChain(type), controller.hierarchy, project);
   const served = handlers.flatMap((method) => findingsOfHandler(controller, method));
   if (controller.speculative) return served;
   const classLibrary = controller.classMapping === undefined ? annotations.libraryAnnotationIn(annotationUses(type.node, scopeOf(type))) : undefined;
@@ -334,12 +334,12 @@ function contractCoversOverrides(controller: Controller, handlers: readonly Meth
 }
 
 /** The methods that serve a request: those of the class chain that no nearer class overrides, and the default methods of its interfaces that nothing overrides. */
-function handlerCandidates(chain: readonly TypeDecl[], hierarchy: Hierarchy): { handlers: MethodDecl[]; undecided: MethodDecl[] } {
+function handlerCandidates(chain: readonly TypeDecl[], hierarchy: Hierarchy, project: JavaProject): { handlers: MethodDecl[]; undecided: MethodDecl[] } {
   const handlers: MethodDecl[] = [];
   const undecided: MethodDecl[] = [];
   const classify = (method: MethodDecl, nearer: readonly TypeDecl[]): void => {
     for (const type of nearer) {
-      const match = counterpart(type, method);
+      const match = counterpart(type, method, project);
       if (match === "ambiguous") return void undecided.push(method);
       if (match !== undefined) return;
     }
@@ -416,7 +416,7 @@ function unmappedGap(controller: Controller, method: MethodDecl): Gap | undefine
 
 function mappingOfMethod(method: MethodDecl, project: JavaProject, annotations: SpringAnnotations): MappingLookup {
   for (const type of project.hierarchy(method.owner).types) {
-    const declaration = type === method.owner ? method : counterpart(type, method);
+    const declaration = type === method.owner ? method : counterpart(type, method, project);
     if (declaration === "ambiguous") return { gap: { reason: "unresolved", file: method.owner.file, node: method.node } };
     const found = declaration && annotations.mappingIn(annotationUses(declaration.node, scopeOf(declaration.owner)));
     if (found !== undefined) return found;

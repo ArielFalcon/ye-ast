@@ -37,6 +37,8 @@ test("single-static imports bind member types, including inherited ones, but unk
   const child = source("c/Child", "package c; public class Child extends Base {}");
   assert.deepEqual(await dispatch("c.Base.Value", "import static c.Child.Value;", [base, child], "Value"), BODY);
   assert.deepEqual(await dispatch("c.Base.Value", "import static missing.Child.Value;", [base], "Value"), UNKNOWN);
+  for (const declaration of ["public enum Value { ONE }", "public record Value(int x) {}", "public @interface Value {}"])
+    assert.deepEqual(await dispatch("c.Base.Value", "import static c.Base.Value;", [source("c/Base", `package c; public class Base { ${declaration} }`)], "Value"), BODY);
 });
 
 test("static-on-demand imports participate with ordinary demands and java.lang, and collisions stay cuts", async () => {
@@ -51,6 +53,7 @@ test("a single-type import shadows own-package types and demands, while a compil
   const own = source("b/Value", "package b; public class Value {}");
   assert.deepEqual(await dispatch("dto.Value", "import dto.Value; import missing.*;", [dto, own], "Value"), BODY);
   assert.deepEqual(await dispatch("dto.Value", "import dto.Value; class Value {}", [dto], "Value"), UNKNOWN);
+  assert.deepEqual(await dispatch("b.Sender", "import other.Sender;", [source("other/Sender", "package other; public class Sender {}")], "Sender"), UNKNOWN);
 });
 
 test("type parameters shadow platform and imported types and never prove a concrete override", async () => {
