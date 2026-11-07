@@ -722,3 +722,12 @@ Fresh paired measurements against current main2f3569b8, at identical pinned corp
 Evidence: callback-final-summary.json, callback-red.log, callback-green2.log, callback-mutant-typecheck.log, callback-mutation.log, callback-pair/results.json, measure/base and measure/head under the same owned scratch. Prior rejected c600 raw outputs are preserved under measure/rejected-c600. Main source export is reused; HOME/XDG/TMPDIR stay isolated. The earlier c600 table records a rejected result and does not establish correctness.
 
 Final bounded-round verification: Node v24.22.2 foreground `npm run check` exited0; typecheck, architecture and all3,700 tests pass, none failed/cancelled/skipped. Global/repo cleanup reviewed only this correction and reused existing range/settlement components; no other production rule changed. `git diff --check` passes. No source implementation changed after this check.
+
+
+### Unproven TypeScript property-call targets (2026-11-07)
+
+The R1 receiver proof applies to indexed edges into fields, including interface fields, as well as class members.
+An index match to a property name never proves that a value receiver calls that property. The existing binder,
+receiver bindings and member proofs must establish the target; otherwise R6 retains a cut with the candidates.
+The RWN-1 paired run at the pinned evaluation revision removes four false steps (28 → 24), keeps 15 cuts and
+zero effects, and remains partial. No complete status changes in this paired case.

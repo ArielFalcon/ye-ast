@@ -185,3 +185,26 @@ export class Api {
   assert.deepEqual([effectsOf(run.value), run.cuts?.filter((cut) => cut.at[0]?.includes(" effect")).map((cut) => cut.at[0])], [[], ["src/main/java/shop/Events.java:7 message effect"]]);
   assert.deepEqual([effectsOf(load.value), load.cuts?.filter((cut) => cut.at[0]?.includes(" effect")).map((cut) => cut.at[0])], [[], ["api.ts:5 http effect"]]);
 });
+
+test("unproven signal reads never step into interface or unrelated model fields", async () => {
+  commit({
+    "src/article.ts": `export interface Article { title: string; body: string; }`,
+    "src/comment.ts": `export interface Comment { body: string; }`,
+    "src/state.ts": `import { inject } from '@angular/core';
+import { signalStore, withState } from '@ngrx/signals';
+import { Article } from './article';
+const Store = signalStore(withState({ data: {} as Article }));
+export class Editor {
+  private store = inject(Store);
+  edit() {
+    this.store.data.title();
+    this.store.data.body();
+  }
+}
+`,
+  });
+  const result = await trace("src/state.ts:Editor.edit");
+  assert.deepEqual(result.value.steps.map((step) => step.symbol), ["edit"]);
+  assert.equal(result.status, "partial");
+  assert.equal(result.cuts?.filter((cut) => cut.kind === "unresolved-link").length, 2);
+});

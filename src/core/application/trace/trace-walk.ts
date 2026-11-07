@@ -401,7 +401,7 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
   };
 
   /**
-   * By the index of each kept edge of a TypeScript source into a member of a class, the receiver it is called on when
+   * By the index of each kept edge of a TypeScript source into a field or a member of a class, the receiver it is called on when
    * that receiver is a value (a parameter or a variable, by the binder's scoping, ADR-0029), a field read through
    * `this` (`this.f.m`) or no name at all (a call result, `f().m`, empty), rather than a class, a function, an import or
    * `this` itself: the index matched such a call by
@@ -409,7 +409,7 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
    */
   async function valueReceivers(node: GraphSymbol, edges: readonly FollowedEdge[], verdicts: readonly EdgeTarget[]): Promise<ReadonlyMap<number, string>> {
     if (!isTypeScriptFile(node.file)) return new Map();
-    const kept = edges.flatMap(({ edge, target }, index) => (verdicts[index]!.kind === "keep" && edge.line !== null && edge.column !== null && navigation.ownersOf(target).some((owner) => CLASS_KINDS.includes(owner.kind)) ? [{ index, edge, target }] : []));
+    const kept = edges.flatMap(({ edge, target }, index) => (verdicts[index]!.kind === "keep" && edge.line !== null && edge.column !== null && ((FIELD_KINDS as readonly string[]).includes(target.kind) || navigation.ownersOf(target).some((owner) => CLASS_KINDS.includes(owner.kind))) ? [{ index, edge, target }] : []));
     if (kept.length === 0) return new Map();
     const syntax = (await syntaxIndexOf(node.file)).receiverBindings;
     /** The receiver the source's syntax binds at the call, whatever it holds: its rules decide, never the root alone. */
