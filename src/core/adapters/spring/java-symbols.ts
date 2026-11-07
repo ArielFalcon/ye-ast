@@ -1,8 +1,8 @@
-import { PLATFORM_TYPE_NAMES } from "./java-platform-type-names.ts";
 import { LIBRARY_ROOT, libraryPath, type LibrarySource } from "../../domain/topology/library-source.ts";
 import type { Node } from "web-tree-sitter";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import { charLiteralValue, integerLiteralValue, stringLiteralValue, type LiteralValue } from "./java-literals.ts";
+import { PLATFORM_TYPE_NAMES } from "./java-platform-type-names.ts";
 
 /** The sources of the repositories a snapshot depends on, under a root no repository path can have. */
 export function asLibrarySources(sources: readonly LibrarySource[]): SourceFile[] {
@@ -334,9 +334,9 @@ export function createJavaProject(files: readonly JavaFile[]): JavaProject {
     const own = byFqn(file.packageName === "" ? head : `${file.packageName}.${head}`);
     if (own !== undefined) return typeof own === "object" ? memberIdentity(own, rest) : undefined;
     const offers = [
-      ...new Set(["java.lang", ...file.onDemandImports]),
-    ].map((container) => demandIdentity(container, head, false));
-    offers.push(...file.staticOnDemandImports.map((container) => demandIdentity(container, head, true)));
+      ...[...new Set(["java.lang", ...file.onDemandImports])].map((container) => demandIdentity(container, head, false)),
+      ...file.staticOnDemandImports.map((container) => demandIdentity(container, head, true)),
+    ];
     if (new Set(offers.filter((offer) => offer !== undefined && offer !== "")).size > 1) return undefined;
     if (offers.includes(undefined)) return rest.length === 0
       ? `context:${file.packageName}|${[...file.onDemandImports].sort().join(",")}|${[...file.staticOnDemandImports].sort().join(",")}|${head}`
@@ -906,9 +906,7 @@ export function readSignature(method: MethodDecl, project: JavaProject): Signatu
     if (KEYWORD_TYPES.has(erased.type)) signature.push({ name: erased.text, dimensions });
     else if (erased.type === "type_identifier" && typeVariableAround(erased) !== undefined) signature.push({ variable: true, dimensions });
     else {
-      const file = method.owner.file;
-      const scope = method.owner;
-      const name = project.typeIdentity(erased.text.replace(/\s+/g, ""), { file, type: scope, at: erased });
+      const name = project.typeIdentity(erased.text.replace(/\s+/g, ""), { file: method.owner.file, type: method.owner, at: erased });
       if (name === undefined) return undefined;
       signature.push({ name, dimensions });
     }
