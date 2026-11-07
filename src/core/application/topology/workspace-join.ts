@@ -2,7 +2,7 @@ import { httpTargetOf, type CallSite, type EventTarget } from "../../domain/topo
 import type { JoinedSite } from "../../domain/topology/link-graph.ts";
 import type { Link, UnlinkedCallSite } from "../../domain/topology/link.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
-import { inferGateways, matchCallSite, matchEventCallSite, type Gateway, type GatewayDeclaration, type RepositoryEntrypoints } from "../../domain/topology/link-match.ts";
+import { inferGateways, matchCallSite, matchEventCallSite, type Gateway, type GatewayDeclaration, type JoinResult, type RepositoryEntrypoints } from "../../domain/topology/link-match.ts";
 import type { WorkspaceRepository } from "../../ports/workspace-repos.port.ts";
 
 /** Every call site of a workspace joined once against the entrypoints of the other repositories read. */
@@ -20,7 +20,8 @@ export function entrypointsOf(repository: WorkspaceRepository): RepositoryEntryp
 
 /**
  * The one join of a workspace: a published message against the listeners of the other repositories, an HTTP call by the
- * ladder of RFC-0011 under the gateways in force. A call site whose target its snapshot does not decide joins nothing.
+ * ladder of RFC-0011 under the gateways in force, against every repository's routes: one its own repository serves is
+ * internal, never a link across repositories nor drift. A call site whose target its snapshot does not decide joins nothing.
  */
 export function joinWorkspace(repositories: readonly WorkspaceRepository[], entrypoints: readonly RepositoryEntrypoints[], declared: readonly GatewayDeclaration[]): WorkspaceJoin {
   const gateways = inferGateways(repositories.flatMap((repository) => repository.callSites), entrypoints, declared);
@@ -34,10 +35,14 @@ export function joinWorkspace(repositories: readonly WorkspaceRepository[], entr
         continue;
       }
       const target = httpTargetOf(site);
-      if (target !== undefined) joined.push({ site, joined: matchCallSite(site, target, others, gateways) });
+      if (target !== undefined) joined.push({ site, joined: acrossRepositories(site, matchCallSite(site, target, entrypoints, gateways)) });
     }
   }
   return { gateways, joined };
+}
+
+function acrossRepositories(site: CallSite, joined: JoinResult): JoinResult {
+  return joined.links !== undefined && joined.links.every((link) => link.to.repo === site.repo) ? { internal: true } : joined;
 }
 
 function eventTargetOf(site: CallSite): EventTarget | undefined {
@@ -57,6 +62,7 @@ export function linkMapOf(joined: readonly JoinedSite[]): { links: Link[]; unlin
     for (const link of answer.links ?? []) links.set(link.id, link);
     if (answer.links !== undefined) continue;
     if (answer.ambiguous !== undefined) unlinked.push({ from, transport: site.transport, outcome: "ambiguous", name: answer.ambiguous.key, repos: answer.ambiguous.repos, ...(answer.ambiguous.routes === undefined ? {} : { routes: answer.ambiguous.routes }) });
+    else if (answer.undecided !== undefined) unlinked.push({ from, transport: site.transport, outcome: "could-match", name: answer.undecided });
     else if (answer.unmatched !== undefined) unlinked.push({ from, transport: site.transport, outcome: "unmatched", name: answer.unmatched });
   }
   return {

@@ -34,10 +34,16 @@ export interface AmbiguousMatch {
 export interface JoinResult {
   /** One link for an HTTP call; one per consuming listener for a published message, which every subscriber receives. */
   links?: Link[];
-  /** The call reached a service the workspace declares and matched none of its routes: the service's drift. */
+  /** The path of an HTTP call that matched no route and names no host: drift of a service the workspace holds, or of one it does not declare. */
   unmatched?: string;
-  /** Two repositories matched the call at one rung of the ladder. */
+  /** Two repositories, or two routes of one, matched the call at one rung of the ladder. */
   ambiguous?: AmbiguousMatch;
+  /** The path of an HTTP call some route could take, depending on the value the code fills at run time: neither a link nor drift. */
+  undecided?: string;
+  /** No route takes an HTTP call that names a host, or no listener consumes a message: the call leaves the workspace. */
+  external?: true;
+  /** Only the call's own repository serves it: no link across repositories. */
+  internal?: true;
 }
 
 export interface Match {
@@ -48,6 +54,7 @@ export interface Match {
 }
 
 const ANY_METHOD = "ANY";
+const CANNOT_MATCH: Unification = { outcome: "cannot-match" };
 const SUFFIX_CONFIDENCE = 0.5;
 const PARITY_CONFIDENCE = 0.6;
 
@@ -105,19 +112,32 @@ function withBasis(landing: Landing | undefined, basis: LinkBasis): Landing | un
   return landing === undefined || "tie" in landing ? landing : { match: { ...landing.match, basis, confidence: basis === "suffix" ? SUFFIX_CONFIDENCE : landing.match.confidence } };
 }
 
-type Rung = (call: CallTemplate, method: HttpTarget["method"], routes: readonly HttpRoute[]) => Landing | undefined;
+/** What a rung finds in one repository: a landing, `could` when only routes the call could match depending on its run-time values take it, or nothing. */
+type Rung = (call: CallTemplate, method: HttpTarget["method"], routes: readonly HttpRoute[]) => Landing | "could" | undefined;
 
-const exactRung: Rung = (call, method, routes) =>
-  mostSpecific(routes.flatMap((route) => {
-    const unified = accepts(route, method) ? matched(unify(call.segments, routeSegments(route.path))) : undefined;
-    return unified === undefined ? [] : [{ route, unified }];
-  }));
+/** The routes a rung took, or `could` when it took none and the call could match one of them. */
+function landingOf(taken: readonly Taken[], could: boolean, basis: LinkBasis): Landing | "could" | undefined {
+  const landing = withBasis(mostSpecific(taken), basis);
+  return landing ?? (could ? "could" : undefined);
+}
+
+const exactRung: Rung = (call, method, routes) => {
+  const unified = routes.filter((route) => accepts(route, method)).map((route) => ({ route, unified: unify(call.segments, routeSegments(route.path)) }));
+  return landingOf(takenOf(unified), unified.some(({ unified: found }) => found.outcome === "could-match"), "exact");
+};
+
+function takenOf(unified: readonly { route: HttpRoute; unified: Unification }[]): Taken[] {
+  return unified.flatMap(({ route, unified: found }) => (found.outcome === "matches" ? [{ route, unified: found }] : []));
+}
 
 const basePathRung: Rung = (call, method, routes) => {
+  let could = false;
   const taken = routes.flatMap((route): Taken[] => {
     if (!accepts(route, method)) return [];
     const via = basePathKeys(route).flatMap(({ keys, profile }) => {
-      const unified = keys.map((key) => matched(unify(call.segments, [...routeSegments(key), ...routeSegments(route.path)]))).find((found) => found !== undefined);
+      const tried = keys.map((key) => unify(call.segments, [...routeSegments(key), ...routeSegments(route.path)]));
+      could ||= tried.some((found) => found.outcome === "could-match");
+      const unified = tried.map(matched).find((found) => found !== undefined);
       return unified === undefined ? [] : [{ unified, profile }];
     });
     const [first] = via;
@@ -126,28 +146,27 @@ const basePathRung: Rung = (call, method, routes) => {
     const profiles = via.flatMap(({ profile }) => (profile === undefined ? [] : [profile])).toSorted(compareText);
     return [{ route, unified: first.unified, ...(underDefault ? {} : { profiles }) }];
   });
-  return withBasis(mostSpecific(taken), "base-path");
+  return landingOf(taken, could, "base-path");
 };
 
 /**
  * One path ends with the other: the extra leading segments of the longer state only text, and one segment both paths
  * state as text agrees. A call that states its origin states its whole path, so a longer route cannot end with it.
  */
-function suffixUnify(call: CallTemplate, route: readonly TemplateSegment[]): Matched | undefined {
+function suffixUnify(call: CallTemplate, route: readonly TemplateSegment[]): Unification {
   const routeLonger = route.length > call.segments.length;
-  if (routeLonger && call.origin !== undefined) return undefined;
+  if (routeLonger && call.origin !== undefined) return CANNOT_MATCH;
   const [shorter, longer] = routeLonger ? [call.segments, route] : [route, call.segments];
   const cut = longer.length - shorter.length;
-  if (cut === 0 || shorter.length === 0 || !longer.slice(0, cut).every((segment) => literalText(segment) !== undefined)) return undefined;
-  const unified = matched(routeLonger ? unify(call.segments, route.slice(cut)) : unify(call.segments.slice(cut), route));
-  return unified !== undefined && unified.literals > 0 ? unified : undefined;
+  if (cut === 0 || shorter.length === 0 || !longer.slice(0, cut).every((segment) => literalText(segment) !== undefined)) return CANNOT_MATCH;
+  const unified = routeLonger ? unify(call.segments, route.slice(cut)) : unify(call.segments.slice(cut), route);
+  return unified.outcome === "matches" && unified.literals === 0 ? CANNOT_MATCH : unified;
 }
 
-const suffixRung: Rung = (call, method, routes) =>
-  withBasis(mostSpecific(routes.flatMap((route) => {
-    const unified = accepts(route, method) ? suffixUnify(call, routeSegments(route.path)) : undefined;
-    return unified === undefined ? [] : [{ route, unified }];
-  })), "suffix");
+const suffixRung: Rung = (call, method, routes) => {
+  const unified = routes.filter((route) => accepts(route, method)).map((route) => ({ route, unified: suffixUnify(call, routeSegments(route.path)) }));
+  return landingOf(takenOf(unified), unified.some(({ unified: found }) => found.outcome === "could-match"), "suffix");
+};
 
 /** What the call takes once its gateway prefix is removed: equal paths and configured base paths, never a suffix, and only with a segment both state as text. */
 const behindGatewayRung: Rung = (call, method, routes) => {
@@ -157,7 +176,9 @@ const behindGatewayRung: Rung = (call, method, routes) => {
     const unified = matched(unify(stripped.segments, routeSegments(route.path))) ?? basePathKeys(route).flatMap(({ keys }) => keys).map((key) => matched(unify(stripped.segments, [...routeSegments(key), ...routeSegments(route.path)]))).find((found) => found !== undefined);
     return unified !== undefined && unified.literals > 0;
   });
-  return exactRung(stripped, method, evidenced) ?? basePathRung(stripped, method, evidenced);
+  const landing = [exactRung(stripped, method, evidenced), basePathRung(stripped, method, evidenced)].find((found) => found !== undefined && found !== "could");
+  if (landing !== undefined) return landing;
+  return [exactRung(stripped, method, routes), basePathRung(stripped, method, routes)].includes("could") ? "could" : undefined;
 };
 
 function httpRoutes(repository: RepositoryEntrypoints): HttpRoute[] {
@@ -174,7 +195,7 @@ export function prefixOf(target: HttpTarget): string | undefined {
 /** The routes a call takes once its gateway prefix is removed, by equal paths and configured base paths: one, or several equally. */
 export function servedBehindGateway(target: HttpTarget, routes: readonly HttpRoute[]): readonly HttpRoute[] {
   const landing = behindGatewayRung(callTemplate({ path: target.path }), target.method, routes);
-  return landing === undefined ? [] : "tie" in landing ? landing.tie : [landing.match.route];
+  return landing === undefined || landing === "could" ? [] : "tie" in landing ? landing.tie : [landing.match.route];
 }
 
 function linkTo(site: CallSite, repo: string, match: Match): Link {
@@ -191,14 +212,15 @@ function linkTo(site: CallSite, repo: string, match: Match): Link {
 
 type Landed = { repo: string; match: Match } | { ambiguous: readonly string[]; routes: readonly string[] };
 
-/** The one repository a rung of the ladder lands in, on one route; two repositories, or two routes taken equally, are ambiguous, never a pick. */
-function atRung(rung: Rung, call: CallTemplate, method: HttpTarget["method"], repositories: readonly RepositoryEntrypoints[]): Landed | undefined {
-  const landed = repositories.flatMap((repository) => {
-    const landing = rung(call, method, httpRoutes(repository));
-    return landing === undefined ? [] : [{ repo: repository.repo, landing }];
-  });
+/**
+ * The one repository a rung of the ladder lands in, on one route; two repositories, or two routes taken equally, are
+ * ambiguous, never a pick. `could` when no repository lands and one could, depending on the call's run-time values.
+ */
+function atRung(rung: Rung, call: CallTemplate, method: HttpTarget["method"], repositories: readonly RepositoryEntrypoints[]): Landed | "could" | undefined {
+  const found = repositories.map((repository) => ({ repo: repository.repo, landing: rung(call, method, httpRoutes(repository)) }));
+  const landed = found.flatMap(({ repo, landing }) => (landing === undefined || landing === "could" ? [] : [{ repo, landing }]));
   const [first, ...rest] = landed;
-  if (first === undefined) return undefined;
+  if (first === undefined) return found.some(({ landing }) => landing === "could") ? "could" : undefined;
   if (rest.length === 0 && "match" in first.landing) return { repo: first.repo, match: first.landing.match };
   const routes = landed.flatMap(({ landing }) => ("match" in landing ? [landing.match.route.name] : landing.tie.map((route) => route.name)));
   return { ambiguous: landed.map((candidate) => candidate.repo).sort(compareText), routes: [...new Set(routes)].sort(compareText) };
@@ -213,8 +235,9 @@ export type DeclaredOperationMatch = { repo: string; route: HttpRoute } | { ambi
  */
 export function matchDeclaredOperation(target: HttpTarget, repositories: readonly RepositoryEntrypoints[]): DeclaredOperationMatch | undefined {
   const call = callTemplate(target);
-  const landed = atRung(exactRung, call, target.method, repositories) ?? atRung(basePathRung, call, target.method, repositories);
-  if (landed === undefined) return undefined;
+  const exact = atRung(exactRung, call, target.method, repositories);
+  const landed = exact === undefined || exact === "could" ? atRung(basePathRung, call, target.method, repositories) : exact;
+  if (landed === undefined || landed === "could") return undefined;
   return "ambiguous" in landed ? { ambiguous: landed.ambiguous } : { repo: landed.repo, route: landed.match.route };
 }
 
@@ -227,22 +250,32 @@ export function matchDeclaredOperation(target: HttpTarget, repositories: readonl
 export function matchCallSite(site: CallSite, target: HttpTarget, repositories: readonly RepositoryEntrypoints[], gateways: readonly Gateway[]): JoinResult {
   const call = callTemplate(target);
   const prefix = prefixOf(target);
-  const settled = (landed: Landed | undefined, basis?: Gateway["basis"]): JoinResult | undefined => {
-    if (landed === undefined) return undefined;
+  let could = false;
+  const settled = (landed: Landed | "could" | undefined, basis?: Gateway["basis"]): JoinResult | undefined => {
+    if (landed === "could") could = true;
+    if (landed === undefined || landed === "could") return undefined;
+    if (could) return { undecided: target.path };
     if ("ambiguous" in landed) return { ambiguous: { key: prefix ?? target.path, repos: landed.ambiguous, routes: landed.routes } };
     return { links: [linkTo(site, landed.repo, basis === undefined ? landed.match : { ...landed.match, basis })] };
   };
+  const missed = (): JoinResult => (could ? { undecided: target.path } : { unmatched: target.path });
   const exact = settled(atRung(exactRung, call, target.method, repositories));
   if (exact !== undefined) return exact;
 
   const gateway = gateways.find((candidate) => candidate.prefix === prefix);
   if (gateway !== undefined) {
     const served = repositories.filter((repository) => repository.repo === gateway.repo);
-    return settled(atRung(behindGatewayRung, call, target.method, served), gateway.basis) ?? { unmatched: target.path };
+    return settled(atRung(behindGatewayRung, call, target.method, served), gateway.basis) ?? missed();
   }
   const found = settled(atRung(basePathRung, call, target.method, repositories)) ?? settled(atRung(suffixRung, call, target.method, repositories));
   if (found !== undefined) return found;
-  return prefix !== undefined && repositories.some((repository) => repository.repo === prefix) ? { unmatched: target.path } : {};
+  const named = prefix !== undefined && repositories.some((repository) => repository.repo === prefix);
+  return named || !namesHost(call) ? missed() : could ? { undecided: target.path } : { external: true };
+}
+
+/** Whether a call names the host it reaches; a host the code fills at run time names none. */
+function namesHost(call: CallTemplate): boolean {
+  return call.origin !== undefined && !/^(?:[a-z][a-z0-9+.-]*:)?\/\/(?:$|\{)/i.test(call.origin);
 }
 
 /**
@@ -320,5 +353,5 @@ export function matchEventCallSite(site: CallSite, target: EventTarget, reposito
   const reached = repositories
     .filter((repository) => repository.repo !== site.repo)
     .flatMap((repository) => listenersOf(repository).flatMap((listener) => (consumes(target, listener) ? [{ repo: repository.repo, listener }] : [])));
-  return reached.length === 0 ? {} : { links: reached.map(({ repo, listener }) => eventLinkTo(site, repo, listener)) };
+  return reached.length === 0 ? { external: true } : { links: reached.map(({ repo, listener }) => eventLinkTo(site, repo, listener)) };
 }

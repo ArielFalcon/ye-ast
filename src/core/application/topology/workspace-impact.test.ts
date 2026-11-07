@@ -402,10 +402,13 @@ test("a gateway the caller declares links with basis gateway-prefix, whatever th
   assert.deepEqual(value.links.map(({ link }) => link.basis), ["gateway-prefix"]);
 });
 
-test("a call a repository makes to its own route is not a link across repositories", async () => {
+test("a call a repository makes to its own route is internal: no link across repositories, and neither drift nor external", async () => {
   const { queries } = setup({ repositories: { orders: { ...ORDERS, callSites: [callSite("orders", "orders")] }, "shop-web": {} } });
 
-  assert.deepEqual(valueOf(await queries.callers(ASK)).links, []);
+  const value = valueOf(await queries.callers(ASK));
+
+  assert.deepEqual(value.links, []);
+  assert.deepEqual([repoImpact(value, "orders").unmatched, repoImpact(value, "orders").external], [[], []]);
 });
 
 test("a call to a route the walk did not reach is not impacted, and not drift either", async () => {
@@ -418,15 +421,18 @@ test("a call to a route the walk did not reach is not impacted, and not drift ei
   assert.deepEqual(section.unmatched, []);
 });
 
-test("a call that reaches a declared service and matches none of its routes is unmatched; one that names no declared service is external", async () => {
+test("a call that matches no route is unmatched unless it names a host, which makes it external; one that could match is a cut, neither", async () => {
   const { queries } = setup({
-    repositories: { orders: ORDERS, "shop-web": { callSites: [callSite("shop-web", "orders-api/orders"), callSite("shop-web", "orders-api/missing", "POST", 8), callSite("shop-web", "geo-api/provinces", "GET", 9)] } },
+    repositories: { orders: { entrypoints: [...ORDERS.entrypoints, route("GET", "/user-admin", "Orders.admin", 40)] }, "shop-web": { callSites: [callSite("shop-web", "orders-api/orders"), callSite("shop-web", "orders-api/missing", "POST", 8), callSite("shop-web", "geo-api/provinces", "GET", 9), callSite("shop-web", "https://geo.example/provinces", "GET", 11), callSite("shop-web", "/user-{}", "GET", 12)] } },
   });
 
-  const section = repoImpact(valueOf(await queries.callers(ASK)), "shop-web");
+  const value = valueOf(await queries.callers(ASK));
+  const section = repoImpact(value, "shop-web");
+  const fact = value.sections["shop-web"];
 
-  assert.deepEqual(section.unmatched.map(pathOf), ["orders-api/missing"]);
-  assert.deepEqual(section.external.map(pathOf), ["geo-api/provinces"]);
+  assert.deepEqual(section.unmatched.map(pathOf), ["orders-api/missing", "geo-api/provinces"]);
+  assert.deepEqual(section.external.map(pathOf), ["https://geo.example/provinces"]);
+  assert.deepEqual(fact?.status === "partial" && fact.cuts, [{ kind: "unresolved-link", at: ["src/app/shop-web.api.ts", "src/app/shop-web.api.ts:12"] }]);
 });
 
 test("a call site whose target is undecided joins nothing and stays a cut naming its place", async () => {

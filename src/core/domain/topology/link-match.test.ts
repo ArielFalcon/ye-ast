@@ -27,7 +27,10 @@ function repositories(entrypoints: readonly HttpRoute[], repo = "orders"): Repos
 
 function joined(result: ReturnType<typeof matchCallSite>): string {
   const [link] = result.links ?? [];
-  if (link === undefined) return result.ambiguous === undefined ? `none ${result.unmatched ?? ""}`.trim() : `ambiguous ${result.ambiguous.repos.join(",")}`;
+  if (link === undefined) {
+    if (result.ambiguous !== undefined) return `ambiguous ${result.ambiguous.repos.join(",")}`;
+    return result.undecided !== undefined ? `undecided ${result.undecided}` : result.external === true ? "external" : `none ${result.unmatched ?? ""}`.trim();
+  }
   const { basis, confidence, profiles } = link;
   return `${basis} ${confidence}${profiles === undefined ? "" : ` ${profiles.join(",")}`} -> ${link.to.repo} ${link.to.name}`;
 }
@@ -274,7 +277,7 @@ test("a route's `*` segment takes exactly one segment of the call", () => {
   const owners = repositories([route("GET", "/owners/*/pets/{petId}")]);
 
   assert.equal(joined(matchCallSite(site("/owners/7/pets/{}"), targetOf(site("/owners/7/pets/{}")), owners, [])), "exact 0.6 -> orders GET /owners/*/pets/{petId}");
-  assert.equal(joined(matchCallSite(site("/owners/7/8/pets/{}"), targetOf(site("/owners/7/8/pets/{}")), owners, [])), "none");
+  assert.equal(joined(matchCallSite(site("/owners/7/8/pets/{}"), targetOf(site("/owners/7/8/pets/{}")), owners, [])), "none /owners/7/8/pets/{}");
 });
 
 test("a route's `**` or `{*rest}` takes the rest of the call's path, none of it included", () => {
@@ -283,8 +286,8 @@ test("a route's `**` or `{*rest}` takes the rest of the call's path, none of it 
 
   assert.equal(name("/files/a/b"), "exact 1 -> orders GET /files/**");
   assert.equal(name("/docs"), "exact 1 -> orders GET /docs/{*path}");
-  assert.equal(name("/other/a"), "none");
-  assert.equal(name("/assets"), "none");
+  assert.equal(name("/other/a"), "none /other/a");
+  assert.equal(name("/assets"), "none /assets");
 });
 
 test("a route segment that states part of the call's text wins over a bare parameter there", () => {
@@ -298,8 +301,8 @@ test("a route segment that states part of the call's text wins over a bare param
 test("a value the call fills at run time never stands for a literal segment the route names, on any rung", () => {
   const latest = repositories([route("GET", "/api/orders/latest")], "shop-api");
 
-  assert.equal(joined(matchCallSite(site("/api/orders/{}"), targetOf(site("/api/orders/{}")), latest, [])), "none");
-  assert.equal(joined(matchCallSite(site("/orders/{}"), targetOf(site("/orders/{}")), latest, [])), "none");
+  assert.equal(joined(matchCallSite(site("/api/orders/{}"), targetOf(site("/api/orders/{}")), latest, [])), "none /api/orders/{}");
+  assert.equal(joined(matchCallSite(site("/orders/{}"), targetOf(site("/orders/{}")), latest, [])), "none /orders/{}");
 });
 
 test("on the suffix rung a route parameter takes a literal of the call, whichever path is longer", () => {
@@ -311,7 +314,7 @@ test("on the suffix rung a route parameter takes a literal of the call, whicheve
 test("a suffix match needs one literal segment both paths state", () => {
   const call = site("/v1/manufacturers/{}");
 
-  assert.equal(joined(matchCallSite(call, targetOf(call), repositories([route("GET", "/static/files/{store}/{type}/{name}")]), [])), "none");
+  assert.equal(joined(matchCallSite(call, targetOf(call), repositories([route("GET", "/static/files/{store}/{type}/{name}")]), [])), "none /v1/manufacturers/{}");
 });
 
 test("a call that states its origin states its whole path, so a longer route cannot end with it; a relative call still can", () => {
@@ -320,8 +323,8 @@ test("a call that states its origin states its whole path, so a longer route can
   const inPath = site("http://customers-service/owners/{}");
   const relative = site("/owners/{}");
 
-  assert.equal(joined(matchCallSite(absolute, targetOf(absolute), owners, [])), "none");
-  assert.equal(joined(matchCallSite(inPath, targetOf(inPath), owners, [])), "none");
+  assert.equal(joined(matchCallSite(absolute, targetOf(absolute), owners, [])), "external");
+  assert.equal(joined(matchCallSite(inPath, targetOf(inPath), owners, [])), "external");
   assert.equal(joined(matchCallSite(relative, targetOf(relative), owners, [])), "suffix 0.5 -> orders GET /api/owners/{ownerId}");
 });
 
@@ -354,4 +357,25 @@ test("a literal of the call that fills a route parameter keeps full confidence; 
 
   assert.equal(joined(matchCallSite(site("/orders/7"), targetOf(site("/orders/7")), orders, [])), "exact 1 -> orders GET /orders/{id}");
   assert.equal(joined(matchCallSite(site("/orders/{}"), targetOf(site("/orders/{}")), orders, [])), "exact 0.6 -> orders GET /orders/{id}");
+});
+
+test("a call that matches no route is unmatched when it states no host, and external when it names one", () => {
+  const orders = repositories([route("GET", "/orders")], "shop-api");
+  const relative = site("/geo/provinces");
+  const hosted = site("https://geo.example/provinces");
+  const hostedByBase = site("/provinces", "GET", "https://geo.example");
+
+  assert.deepEqual(matchCallSite(relative, targetOf(relative), orders, []), { unmatched: "/geo/provinces" });
+  assert.deepEqual(matchCallSite(hosted, targetOf(hosted), orders, []), { external: true });
+  assert.deepEqual(matchCallSite(hostedByBase, targetOf(hostedByBase), orders, []), { external: true });
+  const runTimeHost = site("/provinces", "GET", "http://");
+  assert.deepEqual(matchCallSite(runTimeHost, targetOf(runTimeHost), orders, []), { unmatched: "/provinces" });
+});
+
+test("a segment the call fills partly that some route text could hold is undecided, and so is a later rung's match behind it", () => {
+  const call = site("/api/user-{}");
+  const admin = repositories([route("GET", "/api/user-admin")], "shop-api");
+
+  assert.deepEqual(matchCallSite(call, targetOf(call), admin, []), { undecided: "/api/user-{}" });
+  assert.deepEqual(matchCallSite(call, targetOf(call), [...admin, ...repositories([route("GET", "/user-{id}")], "users")], []), { undecided: "/api/user-{}" });
 });

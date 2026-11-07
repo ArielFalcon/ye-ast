@@ -163,7 +163,7 @@ or its base) states its whole path; a base the call declares comes before its pa
 - text against text matches only when equal; a route parameter takes any text of the call;
 - a whole segment the call fills at run time takes a route parameter, never text the route states;
 - a segment the call fills partly (`user-{}`) matches a route segment of the same shape (`user-{id}`); against other text
-  that could hold it, it could match, which never links;
+  that could hold it, it could match: the call is `could-match`, an `unresolved-link` cut, never a link;
 - of the routes one rung takes in one repository, the most specific wins: fewer segments that take any text, then more
   text stated, then a stated verb over `ANY`. Two routes equal on all three take the call equally: an ambiguous outcome
   naming both routes, never a pick.
@@ -179,7 +179,7 @@ profile picked and the keys not joined ([ADR-0014](../adr/0014-angular-and-sprin
 | 1 | `exact` | call path equals the route's `path` | link, no `profiles` |
 | 2 | `base-path` | call path equals one key of the base path plus the route's `path`, under the default or a profile expression | link; `profiles` lists every expression under which it holds, so a match that exists under `prod` only is visible as such |
 | 3 | `suffix` | one path ends with the other, the extra leading segments of the longer are all text, and one segment both paths state as text agrees (qayaba's rule, `cross-repo-impact.ts:17-28`, made symmetric); a route longer than a call that states its origin never holds | link, confidence capped at 0.5; for a route whose `basePath` is `unknown`, and for a gateway prefix the workspace declares in `boundaries[]` (RFC-0006) |
-| 4 | none | no rule holds | no link; if the call site reached a declared service prefix, an item `unmatched` (qayaba's drift) |
+| 4 | none | no rule holds | no link. A call whose route a run-time value could still decide at an earlier rung is `could-match`, a cut. Otherwise a call that names a host (`scheme://host`, in its path or its base, a host the code fills at run time naming none) is `external`; any other, and one under a declared service prefix, is an item `unmatched` (qayaba's drift): no declared repository serves the path it states, which is drift or a service the workspace does not declare, never proof that it leaves the workspace |
 
 qayaba's pattern also allows up to three unconstrained prefix segments and bounds the source at 200 characters
 (`operation-url-pattern.ts:9-12`); both are size constants, which AGENTS.md forbids ("signals, never size thresholds"),
@@ -330,7 +330,9 @@ A cold repository costs one index build; the content key removes the repeats.
 | a remote whose refresh failed | the response's freshness | nothing in the fact: the section is about the pinned sha; the freshness says `unverified` with the reason |
 | a changed or walked file with no extractor, or outside the declared scope, in any repository | RFC-0010 cuts of that section | unchanged; reach the composite as a `section` cut |
 | a language with no call-site extractor in a consumer (Kotlin, for example) | that repository's source files | cut `no-extractor` at the files; the repository is never counted as "no consumers" |
-| a call site that targets a service no declared repository serves | the call site | item `external` in the section, not a cut: the boundary of the workspace is its declared repositories, and the fact says so in `workspace.repos` |
+| a call site that names a host no route of the declared repositories takes, or a message no listener consumes | the call site | item `external` in the section, not a cut: the boundary of the workspace is its declared repositories, and the fact says so in `workspace.repos` |
+| a call site that names no host and that no route of the declared repositories takes | the call site | item `unmatched` in the section, and an `unmatched` entry of `unlinked`, not a cut: it is visible drift, or a service the workspace does not declare |
+| a call site that only its own repository serves | the call site | `internal`: neither a link across repositories nor drift, and not listed |
 | a repository that consumes B but is not declared | nowhere | invisible by construction; the stated scope is the only protection (RFC-0002 rule 4) |
 | a budget stopped a walk (RFC-0010 `budget`) | that section | the section's `depth`, `hub` or `caller-budget` cut |
 
@@ -543,12 +545,13 @@ Accepted by the owner on 2026-11-01: "Confirmo todo".
   `live` is refused with it, because a workspace reads committed snapshots only. The bound repository is the trigger: its
   walk (`impact.callers`, or `impact.ofChange` for a change) gives the routes reached, and a removed route is rebuilt from
   the change's `METHOD path` name so its consumers still link. Every other repository's call sites are matched, one hop
-  upstream, against the routes of the repositories given other than their own, by the ladder `exact`, `gateway-prefix`
+  upstream, against the routes of every repository given, their own included, by the ladder `exact`, `gateway-prefix`
   (declared), `route-overlap` (inferred), `base-path`, `suffix`; at one rung a literal segment beats a parameter, and two
   repositories at one rung are a cut, never a pick. A call under a gateway prefix never falls to a lower rung: when it
   matches no route of the repository the prefix routes to, it is `unmatched`. Removing a gateway prefix is evidence only
   when one segment the rest of the call states as text agrees with the route, so a prefix that leaves nothing to compare
-  neither infers a gateway nor links. A link counts only when it lands in a
+  neither infers a gateway nor links. A call its own repository serves is internal: neither a link across repositories
+  nor drift. A link counts only when it lands in a
   reached route; a call to a route the walk did not reach is neither a link nor drift. `reach` of a one-hop link is its own
   `Link.id`. A repository holding an impacted call site is walked with `impact.callers` over that call site's line, at the
   snapshot read, so the answer also names what depends on the call site there (a frontend's UI routes, for instance). A
