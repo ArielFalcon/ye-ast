@@ -220,7 +220,7 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
   const indexes = options.indexCache === undefined ? undefined : createIndexCache({ directory: options.indexCache, graph, digest, codegraph, retention: options.indexRetention ?? INDEX_RETENTION, ...(measurement && { onDiscard: measuredIndexDiscard(measurement) }) });
   const moduleDependencies = staged(createModuleDependenciesReader(), { extract: "module-dependencies" });
   const javaImports = staged<ModuleDependenciesReader>({ extract: async (sources, options) => createJavaImportsReader(await createJavaParser()).extract(sources, options) }, { extract: "java-imports" });
-  const importOrigins = (sources: readonly SourceFile[], paths?: readonly string[]) => importOriginsByLanguage([createImportOrigins(sources), createJavaNameBindings(createJavaParser, sources, paths)]);
+  const importOrigins = (sources: readonly SourceFile[], paths?: readonly string[]) => staged(importOriginsByLanguage([createImportOrigins(sources), createJavaNameBindings(createJavaParser, sources, paths)]), { origins: "import-origins", rootOrigins: "root-origins" });
   const unmodelled = staged<UnmodelledConstructsReader>({ extract: async (sources) => createJavaRecordsReader(await createJavaParser()).extract(sources) }, { extract: "java-records" });
   const impactDeps: ImpactQueriesDeps = {
     vcs,

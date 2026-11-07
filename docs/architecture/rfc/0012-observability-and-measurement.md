@@ -204,7 +204,8 @@ sync of the paths that changed, so a session of edits never reads as a series of
 
 A **stage line**, one per call of a reader a request runs over the whole snapshot (the export listing, writing its files,
 opening the store, entrypoint extraction, Angular declarations, relations, dynamic loads, module dependencies, Java
-imports, call sites):
+imports, call sites), and one per origin read of a reference proof (`import-origins` for the origins of imported names,
+`root-origins` for the origins of resolved root names):
 
 ```json
 {"ye_ast":{"event":"stage","stage":"relations","outcome":"ok","start_ms":5230,"duration_ms":812}}
