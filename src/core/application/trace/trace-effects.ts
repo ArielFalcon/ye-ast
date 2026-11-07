@@ -41,9 +41,18 @@ export async function placeEffects(roots: readonly WalkedStep[], { store, unreso
   if (expanded.size === 0) return [];
   const files = new Set([...expanded.values()].map((step) => step.declaration.file));
   const cuts: Cut[] = [];
+  const knownBodies = new Map<string, Body[]>();
+  const bodiesOf = (file: string): Body[] => {
+    let bodies = knownBodies.get(file);
+    if (bodies === undefined) {
+      bodies = store.symbolsInFiles([file]).filter((symbol) => !NOT_DECLARED_KINDS.includes(symbol.kind)).map((symbol) => ({ symbol, ...declarationSpan(symbol) }));
+      knownBodies.set(file, bodies);
+    }
+    return bodies;
+  };
   const byFile = Map.groupBy((await sites()).filter(({ site }) => files.has(site.file)), ({ site }) => site.file);
   for (const [file, inFile] of byFile) {
-    const bodies: Body[] = store.symbolsInFiles([file]).filter((symbol) => !NOT_DECLARED_KINDS.includes(symbol.kind)).map((symbol) => ({ symbol, ...declarationSpan(symbol) }));
+    const bodies = bodiesOf(file);
     const values = await functionValuesOf(file);
     const lines = new Map<GraphNodeId, ReadonlySet<number>>();
     const callLinesOf = (symbol: GraphSymbol) => lines.get(symbol.id) ?? lines.set(symbol.id, callLines(store, unresolvedIn, symbol)).get(symbol.id)!;
@@ -63,8 +72,25 @@ export async function placeEffects(roots: readonly WalkedStep[], { store, unreso
         markCut(step, unplacedEffect(site), cuts);
         continue;
       }
+      let proven = true;
+      for (const origin of placed.origins ?? []) {
+        const sourceBodies = bodiesOf(origin.file);
+        const body = owningBody(sourceBodies, origin);
+        const ranges = await functionValuesOf(origin.file);
+        if (body === undefined || !expanded.has(body.symbol.id) || !countedAlike(origin.column, lineOf(origin.file, origin.line) ?? "") || ranges === undefined || !executesInBody(body, ranges, origin)) {
+          proven = false;
+          break;
+        }
+      }
+      if (!proven) {
+        markCut(step, unplacedEffect(site), cuts);
+        continue;
+      }
       const read = effectOf(site);
-      if ("effect" in read) (step.effects ??= []).push(read.effect);
+      if ("effect" in read) {
+        const effects = (step.effects ??= []);
+        if (!effects.some((effect) => JSON.stringify(effect) === JSON.stringify(read.effect))) effects.push(read.effect);
+      }
       else markCut(step, read.cut, cuts);
     }
   }

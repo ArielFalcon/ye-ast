@@ -78,6 +78,8 @@ export interface PlacedCallSite {
   site: CallSite;
   column?: number;
   declaration?: true;
+  /** Source bodies and effect occurrences traversed by interprocedural extraction; trace must prove each runs. */
+  origins?: readonly { file: string; line: number; column: number }[];
 }
 
 /** The call sites of a snapshot with their exact places, read as `CallSiteReader.of` reads them. */

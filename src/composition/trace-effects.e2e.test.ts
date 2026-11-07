@@ -208,3 +208,44 @@ export class Editor {
   assert.equal(result.status, "partial");
   assert.equal(result.cuts?.filter((cut) => cut.kind === "unresolved-link").length, 2);
 });
+
+test("effects propagated through an unexpanded Java body remain cuts", async () => {
+  commit({
+    "src/Flow.java": `import org.springframework.context.ApplicationEventPublisher;
+import org.aspectj.lang.annotation.Aspect;
+interface Processor { void process(); }
+class ImageEvent {}
+class Worker implements Processor {
+  private ApplicationEventPublisher publisher;
+  public void process() { publisher.publishEvent(new ImageEvent()); }
+}
+@Aspect class Advice {}
+class Flow {
+  private Processor processor;
+  public void run() { processor.process(); }
+}
+`,
+  });
+  const result = await trace("src/Flow.java:Flow.run");
+  assert.deepEqual(effectsOf(result.value), []);
+  assert.equal(result.status, "partial");
+  assert.ok(result.cuts?.some((cut) => cut.at[0]?.includes("message effect")));
+});
+
+test("identical effects at one propagated Java call are deduplicated", async () => {
+  commit({
+    "src/Flow.java": `import org.springframework.context.ApplicationEventPublisher;
+class ImageEvent {}
+class Flow {
+  private ApplicationEventPublisher publisher;
+  public void run() { publish(); }
+  private void publish() {
+    publisher.publishEvent(new ImageEvent());
+    publisher.publishEvent(new ImageEvent());
+  }
+}
+`,
+  });
+  const result = await trace("src/Flow.java:Flow.run");
+  assert.equal(result.value.steps.find((step) => step.symbol === "run")?.effects?.length, 1);
+});

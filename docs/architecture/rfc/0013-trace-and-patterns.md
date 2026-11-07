@@ -731,3 +731,12 @@ An index match to a property name never proves that a value receiver calls that 
 receiver bindings and member proofs must establish the target; otherwise R6 retains a cut with the candidates.
 The RWN-1 paired run at the pinned evaluation revision removes four false steps (28 → 24), keeps 15 cuts and
 zero effects, and remains partial. No complete status changes in this paired case.
+
+
+### Effect extraction provenance (2026-11-07)
+
+A Java call site derived through other methods carries its extraction bodies and leaf occurrences only in
+`PlacedCallSite` metadata. A propagated target is an effect only when trace expanded every owning body and the
+occurrences pass the existing function-value execution boundary. Otherwise it remains an effect cut at the caller.
+The same rule applies to HTTP and messages. Identical effects at the same step and line are reported once.
+This adds no public call-site fields and changes no stored schema.

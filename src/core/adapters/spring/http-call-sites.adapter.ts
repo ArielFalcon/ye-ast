@@ -6,7 +6,7 @@ import type { Evidence, Finding } from "../../domain/shared/fact.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
 import type { CallSite, CallSiteDiagnostic, HttpTarget, StatedRequest } from "../../domain/topology/call-site.ts";
 import type { Configuration } from "./application-config.ts";
-import { complete, placed, spanOf, unknown, unknownAtNode, withEvidence } from "./findings.ts";
+import { complete, fromBodies, placed, spanOf, unknown, unknownAtNode, withEvidence } from "./findings.ts";
 import {
   EXCHANGE_VERBS,
   FEIGN_CLIENT,
@@ -87,10 +87,10 @@ export class JavaHttpReader {
             diagnostic: reachedDiagnostic(alternatives.map(({ diagnostic }) => diagnostic), agreedTarget !== undefined, library !== undefined),
           };
         });
-        for (const target of targets) {
+        for (const [index, target] of targets.entries()) {
           const site = this.siteOf(repo, invocation, target);
           if (site.target.status !== "unknown") site.target = { ...site.target, evidence: [...site.target.evidence, ...expanded.flat().map(({ leaf }) => spanOf(leaf.invocation.type.file.path, leaf.invocation.node))] };
-          found.push(site);
+          found.push(fromBodies(site, expanded[index]!));
         }
       } else {
         const library = this.libraryOf(invocation);
