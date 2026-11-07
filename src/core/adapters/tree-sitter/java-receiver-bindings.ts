@@ -1,6 +1,6 @@
 import type { Node } from "web-tree-sitter";
 import type { ReceiverBinding } from "../../ports/declared-member-names.port.ts";
-import { enclosingBody, fieldsOf, localBinding } from "./java-function-value-calls.ts";
+import { enclosingBody, fieldsOf, localBinding, thisField } from "./java-function-value-calls.ts";
 
 /** Nodes that declare a variable under their `name` field, besides the ones `localBinding` reads. */
 const VARIABLE_DECLARATIONS: ReadonlySet<string> = new Set(["variable_declarator", "formal_parameter", "spread_parameter", "catch_formal_parameter", "resource", "enhanced_for_statement"]);
@@ -45,9 +45,10 @@ export function javaReceiverBindings(root: Node): ReceiverBinding[] {
     const member = invocation.childForFieldName("name")?.text;
     let receiver: string | undefined;
     let type: Node | undefined;
-    if (object.type === "field_access" && object.childForFieldName("object")?.type === "this") {
-      receiver = object.childForFieldName("field")?.text;
-      type = receiver === undefined ? undefined : fieldType(object, receiver);
+    const field = thisField(object);
+    if (field !== undefined) {
+      receiver = field;
+      type = fieldType(object, field);
     } else if (object.type === "identifier") {
       receiver = object.text;
       const local = localBinding(object);

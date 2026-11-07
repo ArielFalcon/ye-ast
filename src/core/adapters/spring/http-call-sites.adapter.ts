@@ -6,7 +6,7 @@ import type { Evidence, Finding } from "../../domain/shared/fact.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
 import type { CallSite, CallSiteDiagnostic, HttpTarget, StatedRequest } from "../../domain/topology/call-site.ts";
 import type { Configuration } from "./application-config.ts";
-import { complete, spanOf, unknown, unknownAtNode, withEvidence } from "./findings.ts";
+import { complete, placed, spanOf, unknown, unknownAtNode, withEvidence } from "./findings.ts";
 import {
   EXCHANGE_VERBS,
   FEIGN_CLIENT,
@@ -107,7 +107,7 @@ export class JavaHttpReader {
 
   private siteOf(repo: string, invocation: Invocation, { target, stated, diagnostic }: ReadTarget): CallSite {
     const span = spanOf(invocation.type.file.path, invocation.node);
-    return { repo, file: span.path, line: span.line, ...(span.endLine === span.line ? {} : { endLine: span.endLine }), symbol: symbolOf(invocation), ancestors: ancestorsOf(invocation.node), transport: "http", target: withEvidence(target, span), ...(diagnostic === undefined ? {} : { diagnostic }), ...(stated === undefined ? {} : { stated }) };
+    return placed({ repo, file: span.path, line: span.line, ...(span.endLine === span.line ? {} : { endLine: span.endLine }), symbol: symbolOf(invocation), ancestors: ancestorsOf(invocation.node), transport: "http", target: withEvidence(target, span), ...(diagnostic === undefined ? {} : { diagnostic }), ...(stated === undefined ? {} : { stated }) }, invocation.node);
   }
 
   private receiverOf(object: Node, invocation: Invocation) {
@@ -260,7 +260,7 @@ export class JavaHttpReader {
       const declared = feign === undefined ? this.exchangeOf(uses, scope, exchange).map((target): ReadTarget => ({ target })) : this.feignOf(uses, scope, feign);
       return declared.map(({ target, stated, diagnostic }) => {
         const span = spanOf(type.file.path, method.node);
-        return { repo, file: span.path, line: span.line, ...(span.endLine === span.line ? {} : { endLine: span.endLine }), symbol: `${type.qualifiedName}.${method.name}`, ancestors: ancestorsOf(method.node), transport: "http" as const, target: withEvidence(target, span), ...(diagnostic === undefined ? {} : { diagnostic }), ...(stated === undefined ? {} : { stated }) };
+        return placed({ repo, file: span.path, line: span.line, ...(span.endLine === span.line ? {} : { endLine: span.endLine }), symbol: `${type.qualifiedName}.${method.name}`, ancestors: ancestorsOf(method.node), transport: "http" as const, target: withEvidence(target, span), ...(diagnostic === undefined ? {} : { diagnostic }), ...(stated === undefined ? {} : { stated }) }, method.node, true);
       });
     });
   }

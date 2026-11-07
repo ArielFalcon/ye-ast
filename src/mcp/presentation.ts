@@ -1,6 +1,7 @@
 import type { UnresolvedCallSite } from "../core/domain/topology/call-site.ts";
 import { z } from "zod";
 import type { Cut, Fact } from "../core/domain/shared/fact.ts";
+import type { TraceEffect } from "../core/domain/trace/trace-fact.ts";
 import type { Recovery } from "./recovery.ts";
 
 export const responseModeSchema = z
@@ -20,4 +21,10 @@ export function unresolvedLabel(site: UnresolvedCallSite): string {
 
 export function dependencyDiagnosticText(dependency: NonNullable<Cut["dependency"]>): string {
   return `dependency ${dependency.name}: ${dependency.reason} (${dependency.candidates.join(", ")})`;
+}
+
+/** An effect as one phrase: the request a call makes, or the message it publishes. */
+export function effectText(effect: TraceEffect): string {
+  if (effect.kind === "http") return `http ${effect.target.method} ${effect.target.path}${effect.target.base === undefined ? "" : ` base ${effect.target.base}`}`;
+  return `message ${effect.target.protocol} ${effect.target.destination}`;
 }

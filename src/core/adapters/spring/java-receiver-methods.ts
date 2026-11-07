@@ -8,8 +8,8 @@ import type { JavaParser, JavaSyntaxTree } from "../tree-sitter/java-parser.adap
 import { javaReceiverBindings } from "../tree-sitter/java-receiver-bindings.ts";
 import { annotationAt, namesDynamicImplementation, resolve, UNREAD_JVM_SOURCE } from "./java-declared-types.ts";
 import { enclosingType } from "./java-root-bindings.ts";
-import { ancestorsOf, hierarchyOf, sameSignature, targetsOf, type Hierarchy, type Superclass } from "./java-dispatch-targets.ts";
-import { createJavaProject, describeFile, type JavaFile, type JavaProject, type MethodDecl, type TypeDecl } from "./java-symbols.ts";
+import { ancestorsOf, hierarchyOf, targetsOf, type Hierarchy, type Superclass } from "./java-dispatch-targets.ts";
+import { createJavaProject, describeFile, sameSignature, type JavaFile, type JavaProject, type MethodDecl, type TypeDecl } from "./java-symbols.ts";
 
 const UNKNOWN: ReceiverMethod = { kind: "unknown" };
 const UNPROVEN: ReceiverMethod = { kind: "unproven" };

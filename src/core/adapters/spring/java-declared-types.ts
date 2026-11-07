@@ -3,8 +3,8 @@ import { isJavaSource } from "../../domain/languages/java.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { DeclaredType, ImportOrigins } from "../../ports/import-origins.port.ts";
 import type { JavaParser, JavaSyntaxTree } from "../tree-sitter/java-parser.adapter.ts";
-import { enclosingType, typeVariableAround } from "./java-root-bindings.ts";
-import { createJavaProject, describeFile, qualifiedTypeName, type JavaFile, type JavaProject, type TypeDecl } from "./java-symbols.ts";
+import { enclosingType } from "./java-root-bindings.ts";
+import { createJavaProject, describeFile, qualifiedTypeName, typeVariableAround, type JavaFile, type JavaProject, type TypeDecl } from "./java-symbols.ts";
 
 const UNKNOWN: DeclaredType = { kind: "unknown" };
 export const TYPE_DECLARATIONS: ReadonlySet<string> = new Set(["class_declaration", "interface_declaration", "enum_declaration", "record_declaration"]);

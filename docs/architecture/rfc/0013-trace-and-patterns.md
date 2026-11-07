@@ -121,17 +121,17 @@ fallback of a field origin.
 
 | # | Rule |
 |---|---|
-| R7 | Dispatch: a step at an interface or abstract method has as `alternatives` every implementation of it in the repository (through `implements` / `extends`, the same type walk `callers` uses). The step expands in place the one implementation when there is exactly one, or the one the framework's dispatch proves (a qualifier, `@Primary`, a named bean), noting which proof chose it; with several and no proof, none is expanded and the step carries a cut. Implemented (slice 3) for a body-less method (R10) with the import origins' `dispatchTargets`: for each concrete class below the method's owner, by the strict reading of every supertype the sources write (Java's one resolver, ADR-0029 decision 9), the body its own declaration or the nearest one up its class chain gives; a class that declares the name with the method's arity only as another signature, or whose chain ends with no declaration, proves nothing; parameter types are compared as the strict reading resolves them, never by their text (ADR-0029 decision 10), so a homonym from another package is another signature, and a type the reading does not settle or a type variable proves no override. The one body is a child `via: "dispatch"` with no call place, and the step lists it as its one alternative; several bodies are a cut listing them, each an alternative; no body, or no proof, keeps the cut of R10. No proof when a value the sources do not place may implement the owner: a source that does not parse, a JVM language no extractor reads, an aspect or a JDK API that implements an interface at run time anywhere (as in R4); an annotation on the owner or the method other than the language's own (`@Override`, `@Deprecated`, `@SuppressWarnings`, `@FunctionalInterface`), since a generator or a proxy may implement it (`@Mapper`, a client interface); a supertype of the owner or of a type above it outside the repository (`extends JpaRepository`); a supertype the strict reading leaves unsettled under the name of the owner or a type below it; an anonymous or local class, or an enum, below it; or a lambda or method reference anywhere while the owner or an interface below it is functional: at most one abstract method beside `Object`'s among those it declares or inherits by Java's rules (a declaration overrides what it inherits under its signature, a more specific interface's method overrides those above it, abstract methods of one signature merge), or two methods of one name and arity anywhere in its hierarchy unless every parameter type of both is written concrete (no type variable of the method or of its interface, bounded or not, no wildcard, no type arguments): `send(T)`, `<U extends T> send(U)` or `send(List<?>)` beside `send(String)` may be one signature under a type argument, for that interface and every one below it. A framework's choice among several (a qualifier, `@Primary`, a profile) is not read. TypeScript types structurally, so any object with the members may stand where the type is declared: no hierarchy proves its bodies and the cut stays. Measured before the resolved-type signature comparison: on backend B 13 of 24 single-implementation cuts expand; backend A holds an aspect, so none does; the checkout service opens its application service (4 to 34 steps), while its one-method repository ports stay cut, since the service holds lambdas and a lambda may implement a functional interface. The comparison takes the checkout back to 4 steps: the implementation reads its parameter types through wildcard imports the strict reading does not settle (slice 3 measured) |
+| R7 | Dispatch: a step at an interface or abstract method has as `alternatives` every implementation of it in the repository (through `implements` / `extends`, the same type walk `callers` uses). The step expands in place the one implementation when there is exactly one, or the one the framework's dispatch proves (a qualifier, `@Primary`, a named bean), noting which proof chose it; with several and no proof, none is expanded and the step carries a cut. Implemented (slice 3) for a body-less method (R10) with the import origins' `dispatchTargets`: for each concrete class below the method's owner, by the strict reading of every supertype the sources write (Java's one resolver, ADR-0029 decision 9), the body its own declaration or the nearest one up its class chain gives; a class that declares the name with the method's arity only as another signature, or whose chain ends with no declaration, proves nothing; parameter identities are compared by the shared Java signature reading, never by their text (ADR-0029 decision 12), so a homonym from another package is another signature, and a type the reading does not settle or a type variable proves no override. The one body is a child `via: "dispatch"` with no call place, and the step lists it as its one alternative; several bodies are a cut listing them, each an alternative; no body, or no proof, keeps the cut of R10. No proof when a value the sources do not place may implement the owner: a source that does not parse, a JVM language no extractor reads, an aspect or a JDK API that implements an interface at run time anywhere (as in R4); an annotation on the owner or the method other than the language's own (`@Override`, `@Deprecated`, `@SuppressWarnings`, `@FunctionalInterface`), since a generator or a proxy may implement it (`@Mapper`, a client interface); a supertype of the owner or of a type above it outside the repository (`extends JpaRepository`); a supertype the strict reading leaves unsettled under the name of the owner or a type below it; an anonymous or local class, or an enum, below it; or a lambda or method reference anywhere while the owner or an interface below it is functional: at most one abstract method beside `Object`'s among those it declares or inherits by Java's rules (a declaration overrides what it inherits under its signature, a more specific interface's method overrides those above it, abstract methods of one signature merge), or two methods of one name and arity anywhere in its hierarchy unless every parameter type of both is written concrete (no type variable of the method or of its interface, bounded or not, no wildcard, no type arguments): `send(T)`, `<U extends T> send(U)` or `send(List<?>)` beside `send(String)` may be one signature under a type argument, for that interface and every one below it. A framework's choice among several (a qualifier, `@Primary`, a profile) is not read. TypeScript types structurally, so any object with the members may stand where the type is declared: no hierarchy proves its bodies and the cut stays. Measured before the resolved-type signature comparison: on backend B 13 of 24 single-implementation cuts expand; backend A holds an aspect, so none does; the checkout service opens its application service (4 to 34 steps), while its one-method repository ports stay cut, since the service holds lambdas and a lambda may implement a functional interface. The initial comparison took the checkout back to 4 steps; the Java signature follow-up recovers the proven wildcard and implicit java.lang identities (measured below) |
 | R8 | Order: children in the line and column of their call; a call inside a function passed as an argument (a callback to `subscribe`, `then`, `pipe`, `effect`, a stream lambda) is marked `deferred` |
 | R9 | Roots: a symbol, a line range or an entrypoint. An HTTP route, listener or job starts at its handler. A UI route starts at its component, whose children are its constructor and field initializers, then its lifecycle hooks in the framework's order, then the handlers its template binds to events, then its template children (`uses-component` and the rest). A property or field whose initializer makes calls is a root by symbol or by a range inside it, and a class root's children are its members that have a body or an initializer that makes calls, in source order, reached `via: "member"`, an obligation of the root that an earlier expansion of the class below another root never meets; `callers` and `impact` seed as before. Implemented (slice 3) for entrypoints: a target `{kind, name}` (CLI `--entrypoint <kind>:<name>`) reads the map at the same snapshot only when one is given; every complete entrypoint of that kind and name roots at its handler, a UI route at its component, each the declaration of the index that joins the map's place (same file, the place's line in its span, the same simple name); a UI route whose component is `unknown`, or a handler no declaration joins, is an `unresolved-link` cut at that place, and a kind and name the map does not hold is the `unknown-entrypoint` fault listing the map's names of that kind. A class an entrypoint starts at, a UI route's component, runs as a page: its constructor, field initializers and class-body calls in source order, then its lifecycle hooks in Angular's order (`ngOnChanges` to `ngOnDestroy`), then what its template's event bindings call, in template order: an own method (`(click)="save()"`), or the method the relations prove a call runs (`store.save()` through an injected field, `via: "template"`), then the components, directives and pipes its template uses, in the order the template text first uses them, each `via: "template"` and run as a page itself, then its other members in source order. Any other event call (a template local's, `$event`'s, an unproven field's), a handler the class runs no member of, a template item the relations cannot place, a used declaration the index does not hold, a template that cannot be read or that the component does not name, and a page component the relations know no template of are `unresolved-link` cuts at their place; a class root by symbol keeps source order. Declaration and entrypoint targets are not mixed in one request |
 | R10 | Folding: a proven terminal step (expanded, with no children, no cut and no effect) is a leaf `{symbol, file, start, end}` of its parent, `deferred` when the parent passes it as a value; the text lists it by name on one line under its parent, and the full answer keeps its location. A step a bound stopped or with an unsettled call stays a step, and so does a method dispatch may replace. The index records neither bodies nor modifiers, so the declaration's own syntax decides, read by the parsers of R6 from the same parse, per file and once per query, and matched to the index node by name and by the lines from its first token (a decorator or annotation) to its name: a body-less callable (a TypeScript `abstract` method, overload signature, ambient function or interface method signature; a Java `abstract` method or interface method without `default`, `static` or `private` body) is a step with an `unresolved-link` cut at its declaration listing every repository declaration of its name in any type below its owners, an interface's included (none when there is none); a `static`, `private` or `final` method with a body expands it and never gets a dispatch cut; an overridable method with a body (a Java `default` method, a class method) expands it and gets a cut only when a type below its owner declares a method of its name, listing those declarations. A declaration in an interface below counts, whether a `default` override or a re-abstraction: a class below that interface may supply yet another body. A method its syntax does not state keeps the interface-owner rule: a cut when an interface declares it. The types below an owner follow the index's `extends` and `implements` edges (the index records no TypeScript `interface B extends A`, so a type below such an interface is not found from `A`); the index leaves a parameterized supertype (`interface Sub extends Port<String>`) as an unresolved reference spelled with its type arguments, so that reference names every type declaration of its raw name (`Port`), and a homonym adds its implementations to the candidates. Until R7 binds dispatch these cuts stay. So does a property or field a call reaches: the call runs the value the property holds, which its initializer built at construction, so the step is not expanded and carries an `unresolved-link` cut at the property's declaration (the value is unknown); an arrow function assigned to a property is indexed as a method and expands, and a property root (R9) still traces its initializer. External leaves are one line per parent grouped by module (`rxjs: pipe, subscribe`); nothing is dropped |
 | R11 | A declaration already expanded appears again as `seen` with the step that expanded it; cycles end there |
-| R12 | Effects: an external leaf whose module, type and member a plugin row declares as an effect (HTTP clients, message publishers, data-access types; RFC-0007, ADR-0013) carries its kind, and its target when RFC-0011's call-site extraction resolves one |
+| R12 | Effects: an external leaf whose module, type and member a plugin row declares as an effect (HTTP clients, message publishers, data-access types; RFC-0007, ADR-0013) carries its kind, and its target when RFC-0011's call-site extraction resolves one. Implemented (slice 4) for HTTP and messages: the rows are the call-site extraction's own vocabularies (the standard HTTP clients, `@HttpExchange`, Feign, the brokers' templates and NATS's client API, Angular's `HttpClient` and the wrappers it derives), read once per query over the snapshot's sources. A call site joins the trace by its exact place: it belongs to the innermost declaration of the index whose span, by line and column, contains where its call starts (an arrow, function expression, lambda, method reference or anonymous class body the index declares no body for is not proven to run: the walk proves no run of a function value, since a call through one, or of a computed callee, is a cut, so a site inside one is an `unresolved-link` cut of the body around it, never its effect), and it is an effect of a step only when that declaration is the body the step expanded and the index records a call of that body on the site's line (or the site is the client method a declaration states, Feign or `@HttpExchange`): `http` with the method, path and base, or `message` with the protocol and destination. A site a sibling on the same line or a nested function the walk did not expand owns is not the step's, neither an effect nor a cut. A wrapper's request is the caller's effect, as RFC-0011 places it. A site whose column cannot be compared with the index's (no column, or a column past its line's first character outside ASCII, where parsers may count apart) is a cut when an expanded body may own it, never an effect. A call site whose target the extraction does not decide (a library whose source the snapshot lacks, an undecided URL) is an `unresolved-link` cut at its place, `<kind> effect through <library>`, never an effect whose kind a name suggests. A site the expanded body owns at no recorded call is the same cut, never dropped. Data-access types have no row yet and stay out |
 | R13 | Bounds and cuts as every walk: the RFC-0010 budget, unset by default; unresolved places, unbound dispatch and unreadable templates are cuts |
 
 ### The fact
 
-Slice 1 answers this shape; `alternatives` (R7) joined it in slice 3 and `effects` (R12) joins it in its slice.
+Slice 1 answers this shape; `alternatives` (R7) joined it in slice 3 and `effects` (R12) in slice 4.
 
 ```ts
 interface TraceValue {
@@ -150,6 +150,7 @@ interface TraceStep {
   leaves?: { symbol: string; file: string; start: number; end: number; deferred?: true }[];   // folded (R10)
   external?: ({ kind: "import"; module: string; names: string[] } | { kind: "global" | "unnamed"; names: string[] })[];
   alternatives?: { symbol: string; file: string; start: number; end: number }[];   // every body dispatch may run (R7)
+  effects?: ({ kind: "http"; line: number; target: HttpTarget } | { kind: "message"; line: number; target: EventTarget })[];   // R12, RFC-0011 targets
 }
 ```
 
@@ -345,6 +346,91 @@ slice 3 on every probe repository.
   and field aliases moved up to 95 steps into cuts on the repository with the most constructor-injected services,
   and fewer than 60 on the others. Java traces were unchanged by S6.
 
+### Java signature follow-up measured (2026-11-07)
+
+J1, against local main `15f44afa73c817520b5ac1e13ce987248ebe04c1`, `untrusted`, pinned repository revisions.
+The original temporary probe scripts were no longer present; the documented largest-class selection was reconstructed
+explicitly: the 15 largest non-test Java source files by blob bytes that declare a class named after their file,
+traced through that class symbol. This records 45 traces, rather than claiming byte parity with the earlier 43-target
+list. The orders symbol and HTTP-entrypoint acceptance traces were also measured separately.
+
+| Repository | Revision | Class traces | Steps main → J1 | Cuts main → J1 | Changed traces |
+|---|---|---|---|---|---|
+| petclinic-rest | `5180cc9bd0163393c4e628bedc1bc4c27cfaab1b` | 15 | 330 → 330 | 268 → 268 | 0 |
+| realworld backend | `ee17e31aafe733d98c4853c8b9a74d7f2f6c924a` | 15 | 347 → 357 | 325 → 324 | 3 |
+| orders | `93535d5d14d1c44533f878ca0a4883244b0937ac` | 15 | 217 → 268 | 263 → 355 | 1 |
+
+`OrdersController.orderCheckout`, both by symbol and by `http-route:POST /orders/checkout`: 4 → 42 steps,
+4 → 64 expanded, 3 → 91 unresolved-link cuts. More cuts accompany the newly reached bodies; the walk does not claim
+completion. Realworld's changed roots are `ArticleMutation` (45 → 49 steps), `CommentsApi` (23 → 27), and `ArticleApi`
+(36 → 38). Orders' changed class root is `OrdersController` (10 → 61). Every other class trace is byte-identical.
+
+The identity reading (ADR-0029 decision 12) proves implicit `java.lang` and repository wildcard-imported parameter
+names without choosing an unknown supplier. Its platform inventory never classifies an external leaf. A qualified
+name first resolves its leftmost segment through the lexical/import/demand reading; a proven type leads through
+member declarations, while a proven package leads through known package prefixes to a declared type and its members.
+Capitalization and equal spelling establish no identity. Unread qualifiers or terminal declarations stay cuts.
+The compilable review repro (`q.X` supplied by `a.*` versus `b.*`) therefore stays unknown instead of listing a false
+subclass body. Package-qualified, type-qualified, inherited, mixed and imported-qualifier forms share that rule.
+Spring's `counterpart` and route adapter are restored exactly to main's behavior. Its text comparison remains an
+advisory: changing that separate query requires a compilable false-fact reproduction and a correction scoped to
+removing that fact. The previously added orders map uncertainty did not meet that criterion and is withdrawn.
+
+Differential: map, impact, callers, importers and outline on each of those three repositories (15 commands). Callers,
+importers and outline use the largest selected class file; impact compares the pinned revision's third first-parent ancestor with
+that revision. After the review correction, stdout, stderr and exit status are compared: **15/15 byte-identical**,
+including all three maps, all exit 0. The added unresolved item in orders is absent; `counterpart` and the route adapter
+match main exactly. The correction re-ran all 45 class traces, both checkout targets and all 15 differential commands
+on the same pinned revisions; the trace measurements in the table are retained unchanged. Two public-seam tests
+built from the review repros were observed RED, then GREEN; reverting qualified identity to text or reintroducing the
+uncertain counterpart each fails its test, and both mutation variants pass typecheck. The qualified-name matrix and
+the review's minimal map source compile with `javac` (10 source sets). Foreground `npm run check` on Node 24.22.2:
+3,671 passed, zero failed or cancelled.
+
+Measurements use one exported main tree and shared graph cache, with absolute XDG cache/config paths, isolated HOME
+and TMPDIR under one system-temp scratch. The correction measures baseline and final head afresh using that same
+export and cache. The scratch retains pinned
+targets, exit codes, hashes, metrics, compiler evidence and the RED/mutation/check logs; intermediate exports and
+caches are removed after verification. No schema bump or CLI/help change is required.
+
+### Slice 4 measured (2026-11-07)
+
+The slice 3 probe repositories at their head (ye-ast's own sources at the same fixed commit), the 15 largest class
+files of each (107 traces, two on ye-ast) plus the four acceptance traces, through `ye-ast trace`, `untrusted`, against
+main before slice 4. An effect is a call site with a decided target; an effect cut is a call site the extraction reads
+whose target it does not decide.
+
+| Probe | Traces | Effects | Effect cuts | Traces changed |
+|---|---|---|---|---|
+| frontend A | 15 | 48 http | 0 | 12 |
+| frontend B | 15 | 12 http | 1 | 2 |
+| frontend C | 15 | 44 http | 0 | 7 |
+| the acceptance frontend | 15 | 0 | 0 | 0 |
+| backend A | 15 | 0 | 0 | 0 |
+| backend B | 15 | 0 | 0 | 0 |
+| the acceptance service | 15 | 0 | 5 | 5 |
+| ye-ast | 2 | 0 | 0 | 0 |
+| acceptance traces | 4 | 0 | 1 | 1 |
+
+- Every other part of every trace answered the same bytes as main: 84 of 111 traces are byte-identical, and the other
+  27 differ only by their effects and effect cuts; one acceptance trace turned `partial` by its effect cut, every
+  other changed trace was already `partial`. Map, impact, callers, importers and outline answered the same bytes on 14
+  commands over the probes. The warm cost of a trace is unchanged within noise (1.4 to 5.2 s against 1.5 to 6.0 s).
+- Joining by exact place (a site belongs to the declaration that owns its line and column, and a site inside a function
+  value the index declares no body for is a cut) left every count above
+  unchanged on the probes (no probe effect sat inside a callback) and removed the false effects a line-only join gave
+  on a same-line sibling method, an uninvoked inner function and an uninvoked lambda; map, impact, callers, importers and outline still answer the same bytes on the 14 commands.
+- The frontends whose clients the extraction derives (`HttpClient` through a wrapper the RFC-0011 rule recognises)
+  carry each request at the caller that names its path; a path a condition chooses is a cut.
+- Every effect of the acceptance probes is `unknown` today: the service publishes and calls through the company's
+  NATS and REST client libraries, whose source the snapshot does not hold, so each of its six call sites is a cut
+  naming the library; the acceptance frontend's wrapper builds its URL through a helper the wrapper rule does not
+  follow, so its call sites sit inside the wrapper with undecided targets, and its page and API traces reach no call
+  site before their own cuts. The acceptance traces show the effects once the library's source is given or the
+  wrapper rule grows (RFC-0011), with no change to trace.
+- The backends that make no outgoing call through a known client have no effect, as expected. Data access has no row
+  and is not reported.
+
 ## Patterns (deferred)
 
 Deferred by the owner on 2026-11-01 (translated): "the architecture part does not convince me yet; I do not see what
@@ -445,8 +531,8 @@ created with: a feature api file 9/11 (example 5b6ec5ca), a page that injects it
 |---|---|---|
 | 1 (implemented) | R1, R2, R6 narrowed, R6b, R8 (order), R10, R11, R13 over resolved edges and own members, with a reading plan of the spans to open; roots by symbol and line range; `ye_ast_trace` (and in `ye_ast_compose`), `ye-ast trace`, protocol `trace.walk` | fixtures per rule; real indexed fixtures for callback attribution and object-literal keys; parity across CLI, protocol and MCP |
 | 2 | R3 and R4-R5: field origins, bindings, locals, parameters, imports, globals, chains through declared return types, in TypeScript and Java | fixtures per binding kind; the settled share on the probe measured and recorded |
-| 3 (implemented: R7 for Java, R9 entrypoint and page roots, R5 for Java, TypeScript unproven receivers as cuts) | R7 dispatch and R9 entrypoint roots, with the template's event handlers read by the Angular adapter | the service checkout trace and the page trace; the checkout's dispatch stays cut under the fail-closed signature comparison (slice 3 measured) |
-| 4 | R12 effects with RFC-0011 call-site targets | each effect of the acceptance table |
+| 3 (implemented: R7 for Java, R9 entrypoint and page roots, R5 for Java, TypeScript unproven receivers as cuts) | R7 dispatch and R9 entrypoint roots, with the template's event handlers read by the Angular adapter | the service checkout trace and the page trace; the checkout's dispatch uses the shared Java identity proof (Java signature follow-up measured) |
+| 4 (implemented: R12 for HTTP and messages) | R12 effects with RFC-0011 call-site targets | each effect of the acceptance table (slice 4 measured) |
 
 The patterns slices are deferred with that section.
 

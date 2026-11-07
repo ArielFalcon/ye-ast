@@ -238,8 +238,8 @@ test("a computed key or index adds no name; a literal one adds its name", async 
 });
 
 test("a file that is not a TypeScript source declares none", async () => {
-  assert.deepEqual(await read(["const table = { plain: run };"], "src/a.d.ts"), { names: [], functionValueCalls: [], callables: [], receiverBindings: [] });
-  assert.deepEqual(await read(["class A { void run() {} }"], "src/A.java"), { names: [], functionValueCalls: [], callables: [], receiverBindings: [] });
+  assert.deepEqual(await read(["const table = { plain: run };"], "src/a.d.ts"), { names: [], functionValueCalls: [], callables: [], receiverBindings: [], functionValues: [] });
+  assert.deepEqual(await read(["class A { void run() {} }"], "src/A.java"), { names: [], functionValueCalls: [], callables: [], receiverBindings: [], functionValues: [] });
 });
 
 test("functions, overload signatures and ambient functions are callables that no subtype overrides, with a body only when written", async () => {
@@ -561,4 +561,14 @@ test("a copy of a protected field, of two fields, of a field copied elsewhere to
     ["  private handler: ErrorHandler;", "  run(): void { const local = this.handler; const again = this.handler; local.handle(); again.handle(); }"],
     ["  private handler: ErrorHandler;", "  run(): void { const local = this.handler; keep(local); local.handle(); }"],
   ]) assert.deepEqual((await read(["export class Page {", ...lines, "}"])).receiverBindings.filter(({ receiver }) => receiver === "local"), [], lines.at(-1));
+});
+
+test("arrows and function expressions are function values, each whole; a method or a function declaration is not", async () => {
+  const values = (await read([
+    "class A {",
+    "  run() { const f = () => go(); call(function named() { go(); }); }",
+    "}",
+    "function top() {}",
+  ])).functionValues;
+  assert.deepEqual(values.map(({ start, end }) => [start.line, start.column, end.line, end.column]), [[2, 20, 2, 30], [2, 37, 2, 63]]);
 });

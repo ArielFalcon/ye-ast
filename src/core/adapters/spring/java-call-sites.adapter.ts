@@ -3,7 +3,8 @@ import { basename } from "node:path";
 import { isJavaSource, isJvmTestFile } from "../../domain/languages/java.ts";
 import { isSpringConfigFile } from "../../domain/languages/spring-config.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
-import type { CallSite, CallSiteReader } from "../../domain/topology/call-site.ts";
+import type { CallSite, CallSiteReader, PlacedCallSiteReader } from "../../domain/topology/call-site.ts";
+import { CALL_PLACES } from "./findings.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
 import type { JavaParser, JavaSyntaxTree } from "../tree-sitter/java-parser.adapter.ts";
 import { configurationsOf, type Configuration } from "./application-config.ts";
@@ -73,8 +74,11 @@ export function createJavaEventCallSites(parser: JavaParser): CallSiteReader {
 }
 
 /** Every call site a Java snapshot states: the HTTP requests it makes and the messages it publishes, in one parse. */
-export function createJavaCallSites(parser: JavaParser): CallSiteReader {
-  return { of: async (files, repo, libraries = []) => javaCallSitesOf(parser, files, libraries, repo, [httpSites, eventSites]) };
+export function createJavaCallSites(parser: JavaParser): CallSiteReader & PlacedCallSiteReader {
+  return {
+    of: async (files, repo, libraries = []) => javaCallSitesOf(parser, files, libraries, repo, [httpSites, eventSites]),
+    placed: async (files, repo) => javaCallSitesOf(parser, files, [], repo, [httpSites, eventSites]).map((site) => ({ site, ...CALL_PLACES.get(site) })),
+  };
 }
 
 function compareSite(a: CallSite, b: CallSite): number {

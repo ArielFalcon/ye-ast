@@ -1,4 +1,4 @@
-import { dependencyDiagnosticText, unresolvedLabel } from "./presentation.ts";
+import { dependencyDiagnosticText, effectText, unresolvedLabel } from "./presentation.ts";
 import { canSelect, categoryRecovery, literalSelection, sharedLookup } from "./presentation-guidance.ts";
 import type { CutOwner, ImpactOwner, EvidenceSelection } from "./select-evidence.ts";
 import { renderFactHeader as headerLines, renderFactStatus as statusLines, snapshotLine, evidenceText, cutsByKind } from "./presentation-context.ts";
@@ -1149,7 +1149,7 @@ export function renderOutline(fact: Fact<OutlineValue>, detail: ResponseMode = "
   return lines.join("\n");
 }
 
-const TRACE_FULL_GUIDE = "Select value.steps in pre-order: id, parent, depth, file, symbol, kind, line, endLine, at (the call in the parent), via, deferred, seen (the id that expanded it), leaves (folded terminal declarations with file, start, end) and external (calls leaving the repository by module), alternatives (every body a body-less method may run, when proven; one expands below it via dispatch). value.roots lists the root step ids per target; value.readingPlan.ranges lists file, start, end and the step ids each range covers, with the total lines. When partial, an unresolved-link cut is at[0] \"file:line spelling\" followed by its candidates, each \"file::Owner.member\" by containment path.";
+const TRACE_FULL_GUIDE = "Select value.steps in pre-order: id, parent, depth, file, symbol, kind, line, endLine, at (the call in the parent), via, deferred, seen (the id that expanded it), leaves (folded terminal declarations with file, start, end) and external (calls leaving the repository by module), alternatives (every body a body-less method may run, when proven; one expands below it via dispatch) and effects (each HTTP request or published message a declared client makes in its body: kind http with target method, path and base, or kind message with target protocol and destination, at its line). value.roots lists the root step ids per target; value.readingPlan.ranges lists file, start, end and the step ids each range covers, with the total lines. When partial, an unresolved-link cut is at[0] \"file:line spelling\" followed by its candidates, each \"file::Owner.member\" by containment path.";
 
 const TRACE_BRANCHES = "branches are not evaluated: every call in a body is listed, whichever branch makes it";
 
@@ -1177,6 +1177,12 @@ function readingPlanLines(value: TraceValue, detail: ResponseMode): string[] {
   return [`reading plan (${ranges.length} ${ranges.length === 1 ? "range" : "ranges"}, ${lines} lines):`, ...listed];
 }
 
+/** Every effect of the trace, in pre-order; a site whose target is undecided is among the cuts. */
+function effectLines(steps: readonly TraceStep[]): string[] {
+  const effects = steps.flatMap((step) => (step.effects ?? []).map((effect) => `${effectText(effect)} at ${placeText(step.file, effect.line)}`));
+  return [`effects (${effects.length})${effects.length === 0 ? "" : `: ${effects.join(", ")}`}`];
+}
+
 function externalText(group: ExternalCalls): string {
   return `${group.kind === "import" ? group.module : group.kind}: ${group.names.join(", ")}`;
 }
@@ -1194,6 +1200,7 @@ function traceTreeLines(steps: readonly TraceStep[]): string[] {
       `${indent}#${step.id} ${step.at?.line ?? step.line} ${step.symbol}${step.parent === undefined ? ` [${step.kind}]` : ""}${span}${notes.length === 0 ? "" : ` ${notes.join(", ")}`}`,
       ...(leaves.length === 0 ? [] : [`${indent}  leaves: ${leaves.map((leaf) => (leaf.deferred ? `${leaf.symbol} (deferred)` : leaf.symbol)).join(", ")}`]),
       ...(step.external === undefined ? [] : [`${indent}  external: ${step.external.map(externalText).join("; ")}`]),
+      ...(step.effects === undefined ? [] : [`${indent}  effects: ${step.effects.map((effect) => `${effectText(effect)} at ${effect.line}`).join("; ")}`]),
       ...(step.alternatives === undefined ? [] : [`${indent}  dispatch alternatives (${step.alternatives.length}): ${step.alternatives.map((body) => placeText(body.file, body.start, body.end)).join(", ")}`]),
     ];
   });
@@ -1257,7 +1264,7 @@ export function renderTrace(fact: Fact<TraceValue>, detail: ResponseMode = "summ
   if (detail === "full") return fact.status === "unknown" ? "Inspect reason and evidence; the result has no value." : TRACE_FULL_GUIDE;
   const lines = headerLines(fact);
   if (fact.status === "unknown") return lines.join("\n");
-  lines.push(...traceRootLines(fact.value), TRACE_BRANCHES, ...readingPlanLines(fact.value, detail));
+  lines.push(...traceRootLines(fact.value), ...effectLines(fact.value.steps), TRACE_BRANCHES, ...readingPlanLines(fact.value, detail));
   if (detail === "details") lines.push("steps:", ...traceTreeLines(fact.value.steps));
   lines.push(...traceCutLines(cutsOf(fact), detail));
   return lines.join("\n");

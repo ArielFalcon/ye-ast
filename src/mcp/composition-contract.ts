@@ -14,7 +14,7 @@ import type { ChangedContract } from "../core/domain/impact/changed-contracts.ts
 import type { ModuleOrigin, ReachedModule } from "../core/domain/impact/module-dependency.ts";
 import type { ImportedFile } from "../core/domain/impact/importers-fact.ts";
 import type { OutlineDeclaration, OutlineImport } from "../core/domain/outline/outline-fact.ts";
-import type { ExternalCalls, TraceStep } from "../core/domain/trace/trace-fact.ts";
+import type { ExternalCalls, TraceEffect, TraceStep } from "../core/domain/trace/trace-fact.ts";
 import type { CallSite, EventTarget, HttpTarget, UnresolvedCallSite } from "../core/domain/topology/call-site.ts";
 import type { ImpactedLink, Link, LinkBasis, UnlinkedCallSite } from "../core/domain/topology/link.ts";
 import type { NameCandidate, OutwardKind } from "../core/domain/topology/outward-name.ts";
@@ -201,6 +201,8 @@ export type PartPayload =
       external?: readonly ExternalCalls[];
       /** Every body a call to this body-less method may run, when the declared hierarchy names them all. */
       alternatives?: readonly AnchorId[];
+      /** The requests and messages its body makes through a declared client (RFC-0013 R12). */
+      effects?: readonly TraceEffect[];
     }
   | { kind: "trace-root"; target: string; steps: readonly number[] }
   | { kind: "reading-range"; file: FileId; start: number; end: number; steps: readonly number[] }

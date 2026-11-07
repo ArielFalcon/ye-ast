@@ -3,6 +3,7 @@ import type { Job, Listener } from "../../domain/entrypoints/entrypoint.ts";
 import type { HttpRoute } from "../../domain/entrypoints/http-route.ts";
 import type { Evidence, Finding, UnknownReason } from "../../domain/shared/fact.ts";
 import type { Gap, MethodDecl } from "./java-symbols.ts";
+import type { CallSite, PlacedCallSite } from "../../domain/topology/call-site.ts";
 
 /** A route as the code maps it, before the configuration's base path is added. */
 export type MappedRoute = Omit<HttpRoute, "basePath">;
@@ -45,4 +46,13 @@ export function withEvidence<T>(target: Finding<T>, span: Evidence): Finding<T> 
 
 function covers(earlier: Evidence, span: Evidence): boolean {
   return earlier.path === span.path && earlier.line === span.line && (earlier.endLine ?? earlier.line) >= (span.endLine ?? span.line);
+}
+
+/** Where each site a Java reader builds starts, kept beside the site so the facts that report call sites never carry it. */
+export const CALL_PLACES = new WeakMap<CallSite, Omit<PlacedCallSite, "site">>();
+
+/** The site, with its place recorded: the column its call node starts at, or the declaration that states it. */
+export function placed(site: CallSite, node: { startPosition: { column: number } }, declaration = false): CallSite {
+  CALL_PLACES.set(site, declaration ? { declaration: true } : { column: node.startPosition.column });
+  return site;
 }

@@ -531,6 +531,7 @@ function trace(b: Builder, root: ReadContext, value: TraceValue): void {
       ...(leaves === undefined ? {} : { leaves }),
       ...(step.external === undefined ? {} : { external: step.external }),
       ...(alternatives === undefined ? {} : { alternatives }),
+      ...(step.effects === undefined ? {} : { effects: step.effects }),
     }, root.id, [pointer]);
   });
   value.readingPlan.ranges.forEach(({ file, start, end, steps }, index) => {

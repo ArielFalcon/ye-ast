@@ -1,3 +1,5 @@
+import type { EventTarget, HttpTarget } from "../topology/call-site.ts";
+
 /**
  * How a step was reached from its parent: a resolved call or instantiation, `this.<member>`, a function passed as a
  * value, a member of a class root that has a body or an initializer that makes calls, or the one body a body-less
@@ -14,6 +16,12 @@ export interface TraceLeaf {
   /** The caller passes it as a value: it runs later, if at all. */
   deferred?: true;
 }
+
+/**
+ * A call the RFC-0011 call-site extraction proves leaves the process through a declared client (an HTTP request, a
+ * published message), with the target it resolves, at its line in the step's file.
+ */
+export type TraceEffect = { kind: "http"; line: number; target: HttpTarget } | { kind: "message"; line: number; target: EventTarget };
 
 /**
  * Calls that leave the repository, once per name. `import` names the package a file imports the callee from, `global` a
@@ -39,6 +47,8 @@ export interface TraceStep {
   seen?: number;
   leaves?: readonly TraceLeaf[];
   external?: readonly ExternalCalls[];
+  /** The effects its body makes, by line (R12). */
+  effects?: readonly TraceEffect[];
   /** Every body a call to this body-less method may run, when the declared hierarchy names them all (R7); one is expanded below it `via: "dispatch"`. */
   alternatives?: readonly Omit<TraceLeaf, "deferred">[];
 }
