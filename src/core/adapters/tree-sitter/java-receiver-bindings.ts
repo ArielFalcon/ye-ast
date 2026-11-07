@@ -16,9 +16,10 @@ const REFLECTIVE = /Field|VarHandle|Getter|Setter/;
  * parameters first) to a parameter, a local or a loop or catch variable with a stated class type, or, when no variable of
  * the name is declared in the type body, to a field; `this.r` to a field. A field counts only when the enclosing type
  * body declares it once and `private`, and the file names it through no receiver but `this` and reads no field by
- * reflection. The binding holds the type where it is written, by its first name (ADR-0029 decision 9).
+ * reflection. `declaredFields` admits other fields for nominal repository-member selection, never external-leaf proof.
+ * The binding holds the type where it is written, by its first name (ADR-0029 decision 9).
  */
-export function javaReceiverBindings(root: Node): ReceiverBinding[] {
+export function javaReceiverBindings(root: Node, declaredFields = false): ReceiverBinding[] {
   const invocations: Node[] = [];
   const otherReceivers = new Set<string>();
   let reflects = false;
@@ -36,7 +37,7 @@ export function javaReceiverBindings(root: Node): ReceiverBinding[] {
     const body = enclosingBody(at);
     const declared = body === undefined ? [] : fieldsOf(body).filter((declarator) => declarator.childForFieldName("name")?.text === name);
     const field = declared.length === 1 ? declared[0]!.parent : undefined;
-    if (field?.type !== "field_declaration" || reflects || otherReceivers.has(name) || !isPrivate(field)) return undefined;
+    if (field?.type !== "field_declaration" || (!declaredFields && (reflects || otherReceivers.has(name) || !isPrivate(field)))) return undefined;
     return field.childForFieldName("type") ?? undefined;
   };
 
@@ -52,7 +53,7 @@ export function javaReceiverBindings(root: Node): ReceiverBinding[] {
     } else if (object.type === "identifier") {
       receiver = object.text;
       const local = localBinding(object);
-      type = local !== undefined ? statedType(local) : declaresVariable(enclosingBody(object), receiver) ? undefined : fieldType(object, receiver);
+      type = local !== undefined ? statedType(local) : declaresVariable(enclosingBody(object), receiver, declaredFields ? object : undefined) ? undefined : fieldType(object, receiver);
     }
     const head = type === undefined ? undefined : headOf(type);
     if (receiver === undefined || member === undefined || head === undefined) return [];
@@ -84,9 +85,10 @@ function isPrivate(field: Node): boolean {
 }
 
 /** Whether a type body declares a variable of the name anywhere but as a field: it may shadow the field where it is used. */
-function declaresVariable(body: Node | undefined, name: string): boolean {
+function declaresVariable(body: Node | undefined, name: string, at?: Node): boolean {
   const pending: Node[] = body === undefined ? [] : [body];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
+    if (at !== undefined && (node.type === "method_declaration" || node.type === "constructor_declaration") && !(node.startIndex <= at.startIndex && at.endIndex <= node.endIndex)) continue;
     if (VARIABLE_DECLARATIONS.has(node.type) && node.parent?.type !== "field_declaration" && node.childForFieldName("name")?.text === name) return true;
     if (node.type === "identifier" && node.text === name && PATTERN_OR_LAMBDA.has(node.parent?.type ?? "")) return true;
     for (const child of node.namedChildren) if (child !== null) pending.push(child);

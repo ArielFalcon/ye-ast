@@ -276,3 +276,29 @@ class Flow {
   assert.equal(unsettled.status, "partial");
   assert.ok(unsettled.cuts?.some((cut) => cut.at.includes("src/Flow.java:4 Facade.ambiguous") && cut.at.includes("src/Flow.java:5 Facade.ambiguous")));
 });
+
+test("Java inherited members follow the declared receiver instead of a sibling name match", async () => {
+  commit({
+    "src/base/Port.java": `package base; public interface Port<T> { void create(T value); }`,
+    "src/left/Left.java": `package left; public interface Left extends base.Port<String> { }`,
+    "src/right/Right.java": `package right; public interface Right extends base.Port<Integer> { void create(Integer value); }`,
+    "src/base/Base.java": `package base; public class Base { public void create(String value) { } }`,
+    "src/Flow.java": `import left.Left;
+class Flow extends base.Base {
+  Left receiver;
+  Flow(Left receiver) { this.receiver = receiver; }
+  void run() { receiver.create("value"); this.create("value"); }
+  <T extends Left> void unknown(T value) { value.create("value"); }
+}
+`,
+  });
+  const result = await trace("src/Flow.java:Flow.run");
+  const declarations = result.value.steps.flatMap((step) => [step.file, ...(step.leaves ?? []).map((leaf) => leaf.file)]);
+  assert.ok(!declarations.includes("src/right/Right.java"));
+  assert.ok(declarations.includes("src/base/Port.java"));
+  assert.ok(declarations.includes("src/base/Base.java"));
+  assert.equal(result.status, "partial");
+  const unknown = await trace("src/Flow.java:Flow.unknown");
+  assert.equal(unknown.status, "partial");
+  assert.deepEqual(unknown.value.steps.map((step) => step.symbol), ["unknown"]);
+});

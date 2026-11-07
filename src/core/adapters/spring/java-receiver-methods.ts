@@ -78,7 +78,7 @@ export function createJavaReceiverMethods(parser: () => Promise<JavaParser>, sou
         if (file === undefined) return undefined;
         let known = readFiles.get(path);
         if (known === undefined) {
-          known = { file, bindings: new Map(javaReceiverBindings(file.root).map((binding) => [callKey(binding.line, binding.column, binding.member), binding])), invocations: invocationsOf(file.root) };
+          known = { file, bindings: new Map(javaReceiverBindings(file.root, true).map((binding) => [callKey(binding.line, binding.column, binding.member), binding])), invocations: invocationsOf(file.root) };
           readFiles.set(path, known);
         }
         return known;
@@ -92,7 +92,7 @@ export function createJavaReceiverMethods(parser: () => Promise<JavaParser>, sou
         const method = proves ? resolver.methodOf(invocations[0]!, source) : undefined;
         if (method !== undefined) {
           results[index] = { kind: "method", file: method.owner.file.path, start: method.node.startPosition.row + 1, nameLine: (method.node.childForFieldName("name") ?? method.node).startPosition.row + 1 };
-        } else if (resolver.hasDeclaredReceiver(invocations[0]!, source) || (falsified && resolver.holdsValue(invocations[0]!, source.file))) results[index] = UNPROVEN;
+        } else if (resolver.hasDeclaredReceiver(invocations[0]!, source) || resolver.holdsValue(invocations[0]!, source.file)) results[index] = UNPROVEN;
       }
       return results;
     } finally {
@@ -114,7 +114,9 @@ function createResolver(project: JavaProject, hierarchy: Hierarchy | undefined) 
     }
     const binding = source.bindings.get(callKey(invocation.startPosition.row + 1, invocation.startPosition.column + 1, invocation.childForFieldName("name")?.text ?? ""));
     const receiver = object.type === "identifier" ? object.text : object.type === "field_access" ? object.childForFieldName("field")?.text : undefined;
-    if (binding === undefined || binding.receiver !== receiver || binding.holds.kind !== "annotated") return undefined;
+    if (binding === undefined || binding.receiver !== receiver || binding.holds.kind !== "annotated") {
+      return object.type === "identifier" ? repositoryType(object, source.file, object) : undefined;
+    }
     const name = annotationAt(source.file.root, binding.holds.line, binding.holds.column, binding.holds.type);
     return name === undefined ? undefined : repositoryType(name, source.file, name);
   };

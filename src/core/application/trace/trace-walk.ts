@@ -612,7 +612,7 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
         const origin = root?.status === "complete" && root.pastRoot !== true ? root.value : undefined;
         if (origin?.kind === "external") await leafUnlessReplaced({ kind: "import", module: origin.module, name: reference.name }, { module: origin.module }, () => settleByName(reference, name, named, true));
         else if (origin?.kind === "ambient") await leafUnlessReplaced({ kind: "global", name: reference.name }, { path: reference.name.split("."), member: name }, () => settleByName(reference, name, named, true));
-        else await settleByName(reference, name, named);
+        else typed.push({ reference, name, named });
       }
     }
     /**

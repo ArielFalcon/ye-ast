@@ -750,3 +750,13 @@ ambiguity; distinct or unsettled signatures at the same arity, and varargs, reta
 A known repository receiver whose signature cannot be selected never falls back to the index's guessed target.
 Selecting a declared method and proving its runtime implementation are separate obligations: R7/R10 still decide
 whether the selected declaration's body may expand.
+
+
+### Declared Java receivers before name lookup (2026-11-07)
+
+An unresolved named receiver call now consults the existing receiver-method resolver before R6 name lookup, just as
+a resolved edge does. Repository-member selection reads declared field types regardless of field visibility: Java
+assignments preserve that nominal type. The stricter private-field rule for external-leaf proofs is unchanged.
+The shared strict Java name resolver and hierarchy locate inherited members; an unproved receiver or signature
+retains a cut and never a step at a name-only indexed target. A `var` with no declared-type proof remains a cut.
+No type inference, second resolver or change to the aspect-dispatch rule is introduced.
