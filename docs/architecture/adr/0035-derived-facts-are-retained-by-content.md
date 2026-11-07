@@ -45,7 +45,8 @@ requests, across snapshots (the base and head of a change) or after an edit to a
    equal value.
 5. The view a reader receives is created with the snapshot's retention, so it exists only where retention does, and
    carries that snapshot's trust. Under `untrusted` it holds only what ye-ast derived from its own export.
-6. Derived facts write no `cache` line each. A measured composition writes one `derived-facts` line per reader call
+6. Keeping or finding a derived fact writes no `cache` line; an entry a fact evicts writes its `evicted` line, as
+   every eviction does. A measured composition writes one `derived-facts` line per reader call
    with what the call kept and found (RFC-0012).
 
 ## Consequences
