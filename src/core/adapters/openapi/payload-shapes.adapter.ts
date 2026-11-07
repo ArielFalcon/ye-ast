@@ -57,7 +57,8 @@ const keptKeywords = (node: Json): [string, unknown][] => Object.entries(node).f
 function joinedKeywords(nodes: readonly Json[]): Readonly<Record<string, unknown>> {
   const values = new Map<string, Map<string, unknown>>();
   for (const [keyword, value] of nodes.flatMap(keptKeywords)) values.set(keyword, (values.get(keyword) ?? new Map()).set(canonicalJson(value), value));
-  return Object.fromEntries([...values].sort(([a], [b]) => compareText(a, b)).map(([keyword, distinct]) => [keyword, distinct.size === 1 ? [...distinct.values()][0] : [...distinct].sort(([a], [b]) => compareText(a, b)).map(([, value]) => value)]));
+  const joined = (distinct: Map<string, unknown>): unknown => (distinct.size === 1 ? [...distinct.values()][0] : [...distinct].sort(([a], [b]) => compareText(a, b)).map(([, value]) => value));
+  return Object.fromEntries([...values].sort(([a], [b]) => compareText(a, b)).map(([keyword, distinct]) => [keyword, joined(distinct)]));
 }
 
 /** The keywords a branch of an `allOf` may hold for the branches to be a plain merge of open object schemas. */
@@ -250,8 +251,9 @@ function createReader(referenced: ReferencedDocuments, place: Evidence, document
     return Object.keys(responses).filter((code) => SUCCESS.test(code)).sort(compareText).map((code) => {
       const response = resolve(document, responses[code]);
       if ("kind" in response || !isRecord(response.node)) return [code, digest(responses[code])];
-      const { content, schema: _schema, ...rest } = response.node;
-      return [code, digest({ ...rest, media: isRecord(content) ? Object.keys(content).sort(compareText) : undefined }, response.file)];
+      const { content } = response.node;
+      const besideBody = Object.fromEntries(Object.entries(response.node).filter(([key]) => key !== "content" && key !== "schema"));
+      return [code, digest({ ...besideBody, media: isRecord(content) ? Object.keys(content).sort(compareText) : undefined }, response.file)];
     });
   }
 

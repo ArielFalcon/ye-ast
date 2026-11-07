@@ -146,9 +146,9 @@ export function planChange(baseFiles: readonly SourceFile[], headFiles: readonly
   const changed = changedSources(baseFiles, headFiles);
 
   const unreadable = new Map([...before.unreadable, ...after.unreadable].filter((place) => changed(place.path)).map((place) => [`${place.path}:${place.line}`, place]));
-  const requestUnread: Evidence[] = [];
   for (const place of unreadable.values()) frontiers.push({ kind: "unreadable-contract", evidence: [place] });
 
+  const requestUnread: Evidence[] = [];
   for (const operation of [...new Set([...before.held.keys(), ...after.held.keys()])].sort(compareText)) {
     const [base, ...otherBase] = before.held.get(operation) ?? [];
     const [head, ...otherHead] = after.held.get(operation) ?? [];
@@ -171,7 +171,6 @@ export function planChange(baseFiles: readonly SourceFile[], headFiles: readonly
       }
       const derivation = deriveChanges(base.shape.shape, head.shape.shape);
       const { method, path } = head.identity;
-      const ruleOf = (delta: ShapeDelta) => CONTRACT_CHANGE_RULES.response[delta];
       for (const { property, change, differences: answered } of derivation.hypotheses) {
         const rules = answered.map(({ delta }) => ruleOf(delta).id).sort(compareText);
         hypotheses.push({ hypothesis: { method, path, target: "response", property, change }, operation, property: formatAccessPath(property), rules, places });
@@ -195,6 +194,8 @@ function exchangeDifferences(base: ExchangeDigests | undefined, head: ExchangeDi
   if (base.envelope !== head.envelope) responses.push("envelope-changed");
   return { responses, request: base.request !== head.request };
 }
+
+const ruleOf = (delta: ShapeDelta): ContractChangeRule => CONTRACT_CHANGE_RULES.response[delta];
 
 const operationDifference = (delta: OperationDelta, operation: string, places: PlannedDifference["places"]): PlannedDifference => ({ rule: CONTRACT_CHANGE_RULES.operation[delta], target: "operation", operation, delta, places });
 
