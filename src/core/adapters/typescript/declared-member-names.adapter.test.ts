@@ -248,7 +248,7 @@ test("functions, overload signatures and ambient functions are callables that no
     "export function pick(a: any): any { return a; }",
     "declare function ambient(): void;",
   ])).callables, [
-    { name: "pick", start: 1, nameLine: 1, body: false, overridable: false },
+    { name: "pick", start: 1, nameLine: 1, body: false, overridable: false, returns: { kind: "annotated", type: "string", line: 1, column: 34 } },
     { name: "pick", start: 2, nameLine: 2, body: true, overridable: false },
     { name: "ambient", start: 3, nameLine: 3, body: false, overridable: false },
   ]);
@@ -267,11 +267,46 @@ test("class methods are overridable unless static or private, abstract ones have
     "interface Port { send(): void; size: number }",
   ])).callables, [
     { name: "run", start: 2, nameLine: 3, body: true, overridable: true },
-    { name: "area", start: 4, nameLine: 4, body: false, overridable: true },
+    { name: "area", start: 4, nameLine: 4, body: false, overridable: true, returns: { kind: "annotated", type: "number", line: 4, column: 20 } },
     { name: "make", start: 5, nameLine: 5, body: true, overridable: false },
     { name: "hidden", start: 6, nameLine: 6, body: true, overridable: false },
     { name: "#secret", start: 7, nameLine: 7, body: true, overridable: false },
     { name: "send", start: 9, nameLine: 9, body: false, overridable: true },
+  ]);
+});
+
+test("a callable states the type it returns as an annotation states a receiver's: its first name, through readonly and a union with null", async () => {
+  assert.deepEqual((await read([
+    "export function make(): Repo | null { return null; }",
+    "export class Shop { open(): readonly ns.Door[] { return []; } close(): ns.Door { return door; } leave() {} }",
+  ])).callables.map(({ name, returns }) => [name, returns]), [
+    ["make", { kind: "annotated", type: "Repo", line: 1, column: 25 }],
+    ["open", { kind: "annotated", type: "Array", line: 2, column: 38 }],
+    ["close", { kind: "annotated", type: "ns", line: 2, column: 72 }],
+    ["leave", undefined],
+  ]);
+});
+
+test("a member call on a call result is held by what the callee's last name returns, and one on another expression no name roots by nothing a rule binds", async () => {
+  assert.deepEqual((await read([
+    "export async function run(list: Repo[]): Promise<void> {",
+    "  make().save();",
+    "  this.factory.create(1).save();",
+    "  make()?.save();",
+    "  list[0].save();",
+    "  (await load()).save();",
+    "  (list as Repo[]).at(0);",
+    "  list.save();",
+    "  this.store.save();",
+    "  make()!.save();",
+    "}",
+  ])).receiverBindings, [
+    { line: 2, column: 3, receiver: "", member: "save", holds: { kind: "returned", name: "make", line: 2, column: 3 } },
+    { line: 3, column: 3, receiver: "", member: "save", holds: { kind: "returned", name: "create", line: 3, column: 3 } },
+    { line: 4, column: 3, receiver: "", member: "save", holds: { kind: "returned", name: "make", line: 4, column: 3 } },
+    { line: 5, column: 3, receiver: "", member: "save", holds: { kind: "computed" } },
+    { line: 6, column: 3, receiver: "", member: "save", holds: { kind: "computed" } },
+    { line: 10, column: 3, receiver: "", member: "save", holds: { kind: "returned", name: "make", line: 10, column: 3 } },
   ]);
 });
 

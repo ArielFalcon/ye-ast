@@ -91,7 +91,7 @@ type ProvenCall = { kind: "member"; receiver: SymbolRef; member: SymbolRef } | {
 
 const provenKey = (file: string, line: number, column: number, name: string): string => JSON.stringify([file, line, column, name]);
 
-const placeKey = (line: number, column: number): string => `${line}:${column}`;
+const bindingKey = (line: number, column: number, member: string): string => `${line}:${column}:${member}`;
 
 /**
  * What an external leaf names: a module, or the member path it calls from a global (none for a call nothing roots) and
@@ -189,7 +189,12 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
     const { callables, functionValueCalls, receiverBindings } = await syntaxOf(file);
     const byName = new Map<string, DeclaredCallable[]>();
     for (const callable of callables) byName.set(callable.name, [...(byName.get(callable.name) ?? []), callable]);
-    return { callables: byName, functionValueCalls: new Set(functionValueCalls.map(functionValueKey)), receiverBindings: new Map(receiverBindings.map((binding) => [placeKey(binding.line, binding.column), binding])) };
+    const bindings = new Map<string, ReceiverBinding | "ambiguous">();
+    for (const binding of receiverBindings) {
+      const key = bindingKey(binding.line, binding.column, binding.member);
+      bindings.set(key, bindings.has(key) ? "ambiguous" : binding);
+    }
+    return { callables: byName, functionValueCalls: new Set(functionValueCalls.map(functionValueKey)), receiverBindings: bindings };
   });
   /**
    * What the relations prove a member call runs, by its place: a repository method of the class a field or local holds
@@ -232,8 +237,8 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
   };
   /** The receiver binding the call's own source proves at the place the call starts, for the member and receiver it spells. */
   const boundAt = async (reference: GraphUnresolvedReference, member: string, receiver = receiverOf(reference.name)): Promise<ReceiverBinding["holds"] | undefined> => {
-    const binding = (await syntaxIndexOf(reference.file)).receiverBindings.get(placeKey(reference.line, reference.column + 1));
-    return binding !== undefined && binding.member === member && binding.receiver === receiver ? binding.holds : undefined;
+    const binding = (await syntaxIndexOf(reference.file)).receiverBindings.get(bindingKey(reference.line, reference.column + 1, member));
+    return binding !== undefined && binding !== "ambiguous" && binding.receiver === receiver ? binding.holds : undefined;
   };
   /** The one method named `member` the one class of `name` in `file` (at `line`, when given) declares itself; none otherwise. */
   const ownMethodOf = (file: string, name: string, member: string, line?: number): GraphSymbol | undefined => {
@@ -349,14 +354,20 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
 
   /**
    * By the index of each kept edge of a TypeScript source into a member of a class, the receiver it is called on when
-   * that receiver is a value (a parameter or a variable, by the binder's scoping, ADR-0029) or a field read through
-   * `this` (`this.f.m`), rather than a class, a function, an import or `this` itself: the index matched such a call by
+   * that receiver is a value (a parameter or a variable, by the binder's scoping, ADR-0029), a field read through
+   * `this` (`this.f.m`) or no name at all (a call result, `f().m`, empty), rather than a class, a function, an import or
+   * `this` itself: the index matched such a call by
    * name, and TypeScript types structurally, so another object may stand there (ADR-0029 decision 10).
    */
   async function valueReceivers(node: GraphSymbol, edges: readonly FollowedEdge[], verdicts: readonly EdgeTarget[]): Promise<ReadonlyMap<number, string>> {
     if (!isTypeScriptFile(node.file)) return new Map();
     const kept = edges.flatMap(({ edge, target }, index) => (verdicts[index]!.kind === "keep" && edge.line !== null && edge.column !== null && navigation.ownersOf(target).some((owner) => CLASS_KINDS.includes(owner.kind)) ? [{ index, edge, target }] : []));
     if (kept.length === 0) return new Map();
+    const syntax = (await syntaxIndexOf(node.file)).receiverBindings;
+    const resultOf = (edge: GraphEdge, target: GraphSymbol): boolean => {
+      const binding = syntax.get(bindingKey(edge.line!, edge.column! + 1, target.name));
+      return binding === "ambiguous" || binding?.holds.kind === "returned" || binding?.holds.kind === "computed";
+    };
     const owner = { name: node.name, line: node.startLine, endLine: node.endLine };
     const bindings = await origins.rootBindings(kept.map(({ edge, target }): UseSite => ({ file: node.file, line: edge.line!, column: edge.column! + 1, spelled: target.name, owner })), signal);
     /** The body's own binding, or a declaration of the file the index holds as no class, function or other non-value node. */
@@ -365,6 +376,7 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
       (binding?.kind === "declared" && !navigation.symbolsInFile(node.file).some((symbol) => symbol.name === binding.root && !VALUE_KINDS.includes(symbol.kind) && binding.lines.some((line) => symbol.startLine <= line && line <= symbol.endLine)));
     return new Map(kept.flatMap(({ index }, k) => {
       const binding = bindings[k];
+      if (resultOf(kept[k]!.edge, kept[k]!.target)) return [[index, ""] as const];
       if (binding?.kind === "this") return binding.member === undefined || binding.member === kept[k]!.target.name ? [] : [[index, binding.member] as const];
       return isValue(binding) ? [[index, binding.root] as const] : [];
     }));
@@ -431,6 +443,22 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
       else await settleByName(reference, name, named);
     };
     /**
+     * The method `member` names on what a call returns, when the call is a resolved edge of this body whose own receiver
+     * needs no proof and whose declaration states a nominal class as its return type (RFC-0013 R5).
+     */
+    const returnedMethod = async (head: Extract<ReceiverBinding["holds"], { kind: "returned" }>, member: string): Promise<GraphSymbol | undefined> => {
+      const placed = called.flatMap(({ edge, target }, index) => {
+        const verdict = verdicts[index]!;
+        const at = edge.line === head.line && edge.column !== null && edge.column + 1 === head.column && target.name === head.name;
+        return at && !receivers.has(index) && verdict.kind !== "drop" ? [verdict.kind === "redirect" ? verdict.to : target] : [];
+      });
+      const callee = placed.length === 1 ? placed[0]! : undefined;
+      const returns = callee === undefined ? undefined : (await syntaxIndexOf(callee.file)).callables.get(callee.name)?.find(({ start, nameLine }) => start <= callee.startLine && callee.startLine <= nameLine)?.returns;
+      if (callee === undefined || returns === undefined) return undefined;
+      const [type] = await origins.declaredTypes([{ file: callee.file, line: returns.line, column: returns.column, spelled: returns.type, owner: { name: callee.name, line: callee.startLine, endLine: callee.endLine } }], signal);
+      return type?.kind === "nominal" ? nominalMethod(type, member) : undefined;
+    };
+    /**
      * A resolved call whose receiver is a value or a field the walk has not proven: settled by what the relations or the
      * source's binding prove the receiver holds, otherwise a cut listing the declarations of its name.
      */
@@ -442,7 +470,11 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
       const bound = await boundAt(reference, target.name, receiver);
       if (member !== undefined) children.push(childAt(member, edge.line, edge.column, target.name, "call"));
       else if (proven?.kind === "external") await leafUnlessReplaced(externalOf(proven.holds, target.name), rootOfHolds(proven.holds, target.name), () => cuts.push(unresolvedAt(reference, named)));
-      else if (bound !== undefined) await settleBound(reference, target.name, named, bound);
+      else if (bound?.kind === "returned") {
+        const method = await returnedMethod(bound, target.name);
+        if (method !== undefined) children.push(childAt(method, edge.line, edge.column, target.name, "call"));
+        else cuts.push(unresolvedAt(reference, named));
+      } else if (bound !== undefined) await settleBound(reference, target.name, named, bound);
       else cuts.push(unresolvedAt(reference, named));
     }
     for (const reference of unsettledBy(callsFrom(node), called)) {
@@ -587,7 +619,8 @@ interface SyntaxIndex {
   callables: ReadonlyMap<string, readonly DeclaredCallable[]>;
   functionValueCalls: ReadonlySet<string>;
   /** By the place the call starts. */
-  receiverBindings: ReadonlyMap<string, ReceiverBinding>;
+  /** By the place the call starts and the member it calls; `ambiguous` when two calls start there under one member name. */
+  receiverBindings: ReadonlyMap<string, ReceiverBinding | "ambiguous">;
 }
 
 function functionValueKey({ line, receiver, member }: FunctionValueCall): string {

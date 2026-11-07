@@ -826,3 +826,35 @@ test("a call the index resolved on a field of this is a step only at what the re
   for (const fact of [proven, nominal]) assert.deepEqual(valueOf(fact).steps.slice(1).map(({ symbol, file }) => [symbol, file]), [["save", B]]);
   assert.deepEqual(valueOf(external).steps.map(({ symbol, external }) => [symbol, external]), [["run", [{ kind: "import", module: "@ngrx/store", names: ["save"] }]]]);
 });
+
+/** `this.make().save()` at line 9 of `run`: the index resolved both links, `make` to `Svc.make` and `save` to `Repo.save`. */
+const resultCall = (holds: ReceiverBinding["holds"], returns?: string): Options => {
+  const base = nominalCall();
+  return {
+    ...base,
+    nodes: [...base.nodes, fakeNode("make", "method", A, 34, 36)],
+    edges: [...base.edges!, { from: "Svc", to: "make", kind: "contains" }, call("run", "make", 9, 4)],
+    unresolved: [...base.unresolved!, OUTWARD_CALL("make", A, 35)],
+    receiverRoots: { save: { kind: "this", member: "make" }, make: { kind: "this", member: "make" } },
+    receiverBindings: { [A]: [{ line: 9, column: 5, receiver: "", member: "save", holds }] },
+    callables: { ...base.callables, [A]: [{ name: "make", start: 34, nameLine: 34, body: true, overridable: false, ...(returns === undefined ? {} : { returns: { kind: "annotated", type: returns, line: 34, column: 30 } }) }] },
+  };
+};
+const MADE: ReceiverBinding["holds"] = { kind: "returned", name: "make", line: 9, column: 5 };
+
+test("a call the index resolved on a call result is a step only when the call's declaration returns a nominal class, otherwise a cut", async () => {
+  const nominal = await factOf(resultCall(MADE, "Repo"));
+  const unstated = await factOf(resultCall(MADE));
+  const other = await factOf(resultCall(MADE, "Promise"));
+  const computed = await factOf(resultCall({ kind: "computed" }, "Repo"));
+
+  assert.deepEqual(valueOf(nominal).steps.slice(1).map(({ symbol, file }) => [symbol, file]), [["make", A], ["save", B]]);
+  for (const fact of [unstated, other, computed]) assert.deepEqual(valueOf(fact).steps.map((step) => step.symbol), ["run", "make"]);
+});
+
+test("a call result proves nothing when its call is itself unproven, or when two calls under the member's name start at its place", async () => {
+  const unprovenHead = await factOf({ ...resultCall(MADE, "Repo"), receiverRoots: { save: { kind: "this", member: "make" }, make: { kind: "local", root: "factory" } } });
+  const twice = await factOf({ ...resultCall(MADE, "Repo"), receiverBindings: { [A]: [{ line: 9, column: 5, receiver: "", member: "save", holds: MADE }, { line: 9, column: 5, receiver: "", member: "save", holds: MADE }] } });
+
+  for (const fact of [unprovenHead, twice]) assert.deepEqual(valueOf(fact).steps.map((step) => step.symbol).filter((symbol) => symbol === "save"), []);
+});
