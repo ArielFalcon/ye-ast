@@ -187,6 +187,6 @@ latency and 2 to 3.6 times the memory for a program with the library and depende
 
 - Using the binder for any other fact than the consumers above.
 - Narrowing a receiver to a repository type in TypeScript, and following a chain there through declared return types
-  (RFC-0013 R5): structural typing lets a compatible object of another class stand where the type is declared (trace
-  slice 3, S4b, research).
+  (RFC-0013 R5), beyond the nominal classes of decision 11: structural typing lets a compatible object of another
+  class stand where the type is declared (trace slice 3, S4b, research).
 - Java bindings, which have their own reader.
