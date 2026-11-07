@@ -346,6 +346,40 @@ slice 3 on every probe repository.
   and field aliases moved up to 95 steps into cuts on the repository with the most constructor-injected services,
   and fewer than 60 on the others. Java traces were unchanged by S6.
 
+### Slice 4 measured (2026-11-07)
+
+The slice 3 probe repositories at their head (ye-ast's own sources at the same fixed commit), the 15 largest class
+files of each (107 traces, two on ye-ast) plus the four acceptance traces, through `ye-ast trace`, `untrusted`, against
+main before slice 4. An effect is a call site with a decided target; an effect cut is a call site the extraction reads
+whose target it does not decide.
+
+| Probe | Traces | Effects | Effect cuts | Traces changed |
+|---|---|---|---|---|
+| frontend A | 15 | 48 http | 0 | 12 |
+| frontend B | 15 | 12 http | 1 | 2 |
+| frontend C | 15 | 44 http | 0 | 7 |
+| the acceptance frontend | 15 | 0 | 0 | 0 |
+| backend A | 15 | 0 | 0 | 0 |
+| backend B | 15 | 0 | 0 | 0 |
+| the acceptance service | 15 | 0 | 5 | 5 |
+| ye-ast | 2 | 0 | 0 | 0 |
+| acceptance traces | 4 | 0 | 1 | 1 |
+
+- Every other part of every trace answered the same bytes as main: 84 of 111 traces are byte-identical, and the other
+  27 differ only by their effects and effect cuts; one acceptance trace turned `partial` by its effect cut, every
+  other changed trace was already `partial`. Map, impact, callers, importers and outline answered the same bytes on 14
+  commands over the probes. The warm cost of a trace is unchanged within noise (1.4 to 5.2 s against 1.5 to 6.0 s).
+- The frontends whose clients the extraction derives (`HttpClient` through a wrapper the RFC-0011 rule recognises)
+  carry each request at the caller that names its path; a path a condition chooses is a cut.
+- Every effect of the acceptance probes is `unknown` today: the service publishes and calls through the company's
+  NATS and REST client libraries, whose source the snapshot does not hold, so each of its six call sites is a cut
+  naming the library; the acceptance frontend's wrapper builds its URL through a helper the wrapper rule does not
+  follow, so its call sites sit inside the wrapper with undecided targets, and its page and API traces reach no call
+  site before their own cuts. The acceptance traces show the effects once the library's source is given or the
+  wrapper rule grows (RFC-0011), with no change to trace.
+- The backends that make no outgoing call through a known client have no effect, as expected. Data access has no row
+  and is not reported.
+
 ## Patterns (deferred)
 
 Deferred by the owner on 2026-11-01 (translated): "the architecture part does not convince me yet; I do not see what
