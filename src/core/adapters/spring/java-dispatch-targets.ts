@@ -8,6 +8,7 @@ import { FUNCTION_VALUES, isAnonymous, isAspect, namesDynamicImplementation, res
 import { createJavaProject, describeFile, parameterCompatible, sameParameters, type JavaFile, type JavaProject, type MethodDecl, type TypeDecl } from "./java-symbols.ts";
 
 const UNKNOWN: DispatchTargets = { kind: "unknown" };
+const PARAMETERS: ReadonlySet<string> = new Set(["formal_parameter", "spread_parameter"]);
 /** Annotations the language itself defines, which no generator or proxy reads to implement a type. */
 const LANGUAGE_ANNOTATIONS: ReadonlySet<string> = new Set(["Override", "Deprecated", "SuppressWarnings", "FunctionalInterface"]);
 /** The public methods of `Object` by name and arity, which do not count against a functional interface's one abstract method (JLS 9.8). */
@@ -112,8 +113,7 @@ function bodyIn(type: TypeDecl, method: MethodDecl, hierarchy: Hierarchy): Metho
 interface Member {
   abstract: boolean;
   from: TypeDecl;
-  /** A parameter type is or holds a type variable of the declaring interface, which a type argument may make any type. */
-  generic: boolean;
+  method: MethodDecl;
 }
 
 /**
@@ -131,9 +131,8 @@ function isFunctional(type: TypeDecl, hierarchy: Hierarchy): boolean {
  * The methods an interface declares or inherits (JLS 9.4.1), by name and parameter types: its own declaration overrides
  * every inherited method of the same signature, and an inherited one overrides those of the interfaces above the one
  * that declares it; abstract methods of one signature from unrelated interfaces merge into one. `undefined` when the
- * sources do not settle it: a supertype outside the repository, a cycle, or two methods of one name and arity that
- * different interfaces spell with different parameter types, or of which one has a parameter type that is or holds a type
- * variable of its interface, which a type argument or a qualified name may make the same signature.
+ * sources do not settle it: a supertype outside the repository, a cycle, or two methods of one name and arity that are not
+ * proven distinct, which a type argument may make one signature.
  */
 function membersOf(type: TypeDecl, hierarchy: Hierarchy, known: Map<TypeDecl, ReadonlyMap<string, Member> | undefined>): ReadonlyMap<string, Member> | undefined {
   if (known.has(type)) return known.get(type);
@@ -141,7 +140,7 @@ function membersOf(type: TypeDecl, hierarchy: Hierarchy, known: Map<TypeDecl, Re
   if (hierarchy.outside.has(type)) return undefined;
   const members = new Map<string, Member>();
   for (const method of type.methods) {
-    if (!method.modifiers.includes("static") && !method.modifiers.includes("private")) members.set(signatureOf(method), { abstract: !method.hasBody, from: type, generic: method.parameterTypes.some((parameter) => (parameter.match(/[A-Za-z_$][\w$]*/g) ?? []).some((name) => type.typeVariables.has(name))) });
+    if (!method.modifiers.includes("static") && !method.modifiers.includes("private")) members.set(signatureOf(method), { abstract: !method.hasBody, from: type, method });
   }
   const inherited = new Map<string, Member[]>();
   for (const supertype of hierarchy.supertypes.get(type) ?? []) {
@@ -155,9 +154,25 @@ function membersOf(type: TypeDecl, hierarchy: Hierarchy, known: Map<TypeDecl, Re
     members.set(signature, { ...kept[0]!, abstract });
   }
   const entries = [...members];
-  if (entries.some(([signature, member], index) => entries.some(([other, rival], later) => later > index && (rival.from !== member.from || rival.generic || member.generic) && arityOf(other) === arityOf(signature)))) return undefined;
+  if (entries.some(([signature, member], index) => entries.some(([other, rival], later) => later > index && arityOf(other) === arityOf(signature) && !provenDistinct(member.method, rival.method)))) return undefined;
   known.set(type, members);
   return members;
+}
+
+/**
+ * Whether two methods of one name and arity are distinct signatures whatever the type arguments: every parameter type of
+ * both, as written, is concrete (no type variable of the method or its type, no wildcard, no type arguments). Members are
+ * keyed by their erased parameter types, so two of them always differ there.
+ */
+function provenDistinct(first: MethodDecl, second: MethodDecl): boolean {
+  const concrete = (method: MethodDecl) => writtenParameterTypes(method).every((parameter) => !/[<?]/.test(parameter) && !(parameter.match(/[A-Za-z_$][\w$]*/g) ?? []).some((name) => method.typeVariables.has(name)));
+  return concrete(first) && concrete(second);
+}
+
+/** The parameter types as the declaration writes them, type arguments included. */
+function writtenParameterTypes(method: MethodDecl): string[] {
+  const parameters = method.node.childForFieldName("parameters")?.namedChildren ?? [];
+  return parameters.flatMap((parameter) => (parameter !== null && PARAMETERS.has(parameter.type) ? [(parameter.childForFieldName("type") ?? parameter.namedChildren.find((child) => child?.type.endsWith("type")))?.text ?? "?"] : []));
 }
 
 function signatureOf(method: MethodDecl): string {

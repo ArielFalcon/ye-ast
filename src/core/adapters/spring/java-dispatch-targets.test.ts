@@ -142,3 +142,14 @@ test("overloads of one name and arity whose parameter types hold a type variable
   assert.deepEqual(await targetsOf([sub, lambda, sender], port, 4), { kind: "unknown" });
   assert.deepEqual(await targetsOf([SENDER, mid, deeper, lambda]), { kind: "unknown" });
 });
+
+test("overloads of one name and arity whose parameter types mention a type parameter of the method, bounded or not, a wildcard or a parameterized type may be one abstract method, so a lambda makes the bodies unknown", async () => {
+  const lambda = java("Refs.java", ["package app;", "class Refs { Sub p = s -> {}; }"]);
+  const sub = java("Sub.java", ["package app;", "interface Sub extends Port<String> {}"]);
+  const sender = java("Sender.java", ["package app;", "class Sender implements Port<String> { public void send(String s) {} }"]);
+  const portWith = (overload: string) => java("Port.java", ["package app;", "interface Port<T> {", ` ${overload}`, " void send(String s);", "}"]);
+
+  for (const overload of ["<U extends T> void send(U s);", "<U> void send(U s);", "void send(java.util.List<?> s);", "void send(java.util.List<String> s);"]) {
+    assert.deepEqual(await targetsOf([sub, lambda, sender], portWith(overload), 4), { kind: "unknown" }, overload);
+  }
+});
