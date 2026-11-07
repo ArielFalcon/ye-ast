@@ -18,7 +18,7 @@ export interface CallTemplate {
 /** How a call path and a route path unify: a match counts the segments whose text both state and says whether a run-time value filled a route parameter. */
 export type Unification = { outcome: "matches"; literals: number; parity: boolean } | { outcome: "could-match" } | { outcome: "cannot-match" };
 
-const CANNOT: Unification = { outcome: "cannot-match" };
+export const CANNOT_MATCH: Unification = { outcome: "cannot-match" };
 const COULD: Unification = { outcome: "could-match" };
 const ORIGIN = /^((?:[a-z][a-z0-9+.-]*:)?\/\/[^/]*)/i;
 const NAMED_PARAMETER = /^:[A-Za-z_][A-Za-z0-9_]*$/;
@@ -31,6 +31,11 @@ export function callTemplate(target: { path: string; base?: string }): CallTempl
   if (own.origin !== undefined || target.base === undefined) return withOrigin(own.origin, segmentsOf(own.rest, "call"));
   const base = splitOrigin(target.base);
   return withOrigin(base.origin, [...segmentsOf(base.rest, "call"), ...segmentsOf(own.rest, "call")]);
+}
+
+/** Whether a call names the host it reaches; a host the code fills at run time names none. */
+export function namesHost(call: CallTemplate): boolean {
+  return call.origin !== undefined && !/^(?:[a-z][a-z0-9+.-]*:)?\/\/(?:$|\{)/i.test(call.origin);
 }
 
 /** The segments of a route path or of a base path a route's configuration adds. */
@@ -58,8 +63,8 @@ export function statedLength(segments: readonly TemplateSegment[]): number {
 /** Whether a call path is a route path: segment by segment, a route's `**` taking the rest of the call. */
 export function unify(call: readonly TemplateSegment[], route: readonly TemplateSegment[]): Unification {
   const tail = route.findIndex((segment) => segment.kind === "any-tail");
-  if (tail === -1 && call.length !== route.length) return CANNOT;
-  if (tail !== -1 && call.length < tail) return CANNOT;
+  if (tail === -1 && call.length !== route.length) return CANNOT_MATCH;
+  if (tail !== -1 && call.length < tail) return CANNOT_MATCH;
   const compared = tail === -1 ? call : call.slice(0, tail);
   const swallowed = tail === -1 ? [] : call.slice(tail);
   let literals = 0;
@@ -67,7 +72,7 @@ export function unify(call: readonly TemplateSegment[], route: readonly Template
   let could = false;
   for (const [index, segment] of compared.entries()) {
     const unified = unifySegment(segment, route[index]!);
-    if (unified.outcome === "cannot-match") return CANNOT;
+    if (unified.outcome === "cannot-match") return CANNOT_MATCH;
     if (unified.outcome === "could-match") could = true;
     else {
       literals += unified.literals;
@@ -78,18 +83,18 @@ export function unify(call: readonly TemplateSegment[], route: readonly Template
 }
 
 function unifySegment(call: TemplateSegment, route: TemplateSegment): Unification {
-  if (call.kind !== "parts") return CANNOT;
+  if (call.kind !== "parts") return CANNOT_MATCH;
   if (route.kind === "any-segment" || route.kind === "any-tail") return { outcome: "matches", literals: 0, parity: holdsValue(call) };
   const callText = literalText(call);
   const routeText = literalText(route);
-  if (callText !== undefined && routeText !== undefined) return callText === routeText ? { outcome: "matches", literals: 1, parity: false } : CANNOT;
-  if (callText !== undefined) return patternOf(route.parts).test(callText) ? { outcome: "matches", literals: statesText(route) ? 1 : 0, parity: false } : CANNOT;
+  if (callText !== undefined && routeText !== undefined) return callText === routeText ? { outcome: "matches", literals: 1, parity: false } : CANNOT_MATCH;
+  if (callText !== undefined) return patternOf(route.parts).test(callText) ? { outcome: "matches", literals: statesText(route) ? 1 : 0, parity: false } : CANNOT_MATCH;
   const wholeHole = (parts: readonly TemplatePart[]) => parts.length === 1 && parts[0]?.kind === "hole";
   if (wholeHole(route.parts)) return { outcome: "matches", literals: 0, parity: true };
-  if (wholeHole(call.parts)) return CANNOT;
+  if (wholeHole(call.parts)) return CANNOT_MATCH;
   if (shapeOf(call.parts) === shapeOf(route.parts)) return { outcome: "matches", literals: 1, parity: true };
-  if (routeText !== undefined) return patternOf(call.parts).test(routeText) ? COULD : CANNOT;
-  return edgesAgree(call.parts, route.parts) ? COULD : CANNOT;
+  if (routeText !== undefined) return patternOf(call.parts).test(routeText) ? COULD : CANNOT_MATCH;
+  return edgesAgree(call.parts, route.parts) ? COULD : CANNOT_MATCH;
 }
 
 function holdsValue(segment: TemplateSegment): boolean {

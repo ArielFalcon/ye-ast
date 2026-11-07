@@ -3,7 +3,7 @@ import type { HttpRoute } from "../entrypoints/http-route.ts";
 import { compareText } from "../shared/code-node.ts";
 import type { CallSite, EventTarget, HttpTarget } from "./call-site.ts";
 import { linkIdentity, type Link, type LinkBasis } from "./link.ts";
-import { callTemplate, literalText, looseness, routeSegments, RUN_TIME_HOLE, statedLength, unify, type CallTemplate, type TemplateSegment, type Unification } from "./path-template.ts";
+import { callTemplate, CANNOT_MATCH, literalText, looseness, namesHost, routeSegments, RUN_TIME_HOLE, statedLength, unify, type CallTemplate, type TemplateSegment, type Unification } from "./path-template.ts";
 
 /** A repository's entrypoints, as the join reads them. */
 export interface RepositoryEntrypoints {
@@ -54,7 +54,6 @@ export interface Match {
 }
 
 const ANY_METHOD = "ANY";
-const CANNOT_MATCH: Unification = { outcome: "cannot-match" };
 const SUFFIX_CONFIDENCE = 0.5;
 const PARITY_CONFIDENCE = 0.6;
 
@@ -91,7 +90,7 @@ function basePathKeys(route: HttpRoute): { keys: readonly string[]; profile?: st
  * Of the routes a rung took, the one that is most specific: fewer segments that take any text, then more text stated,
  * then a stated verb over none. Routes equal on every count take the call equally, so they are a tie, never a pick.
  */
-function mostSpecific(taken: readonly Taken[]): Landing | undefined {
+function mostSpecific(taken: readonly Taken[], basis: LinkBasis): Landing | undefined {
   const rank = ({ route }: Taken): readonly number[] => {
     const segments = routeSegments(route.path);
     return [looseness(segments), -statedLength(segments), route.method === ANY_METHOD ? 1 : 0];
@@ -100,7 +99,7 @@ function mostSpecific(taken: readonly Taken[]): Landing | undefined {
   const [first, ...rest] = taken.toSorted(order);
   if (first === undefined) return undefined;
   const tied = rest.filter((candidate) => order(candidate, first) === 0 && candidate.route !== first.route);
-  return tied.length === 0 ? { match: matchOf(first, "exact") } : { tie: [first.route, ...tied.map(({ route }) => route)] };
+  return tied.length === 0 ? { match: matchOf(first, basis) } : { tie: [first.route, ...tied.map(({ route }) => route)] };
 }
 
 function matchOf({ route, unified, profiles }: Taken, basis: LinkBasis): Match {
@@ -108,17 +107,12 @@ function matchOf({ route, unified, profiles }: Taken, basis: LinkBasis): Match {
   return { route, basis, confidence, ...(profiles === undefined ? {} : { profiles }) };
 }
 
-function withBasis(landing: Landing | undefined, basis: LinkBasis): Landing | undefined {
-  return landing === undefined || "tie" in landing ? landing : { match: { ...landing.match, basis, confidence: basis === "suffix" ? SUFFIX_CONFIDENCE : landing.match.confidence } };
-}
-
 /** What a rung finds in one repository: a landing, `could` when only routes the call could match depending on its run-time values take it, or nothing. */
 type Rung = (call: CallTemplate, method: HttpTarget["method"], routes: readonly HttpRoute[]) => Landing | "could" | undefined;
 
 /** The routes a rung took, or `could` when it took none and the call could match one of them. */
 function landingOf(taken: readonly Taken[], could: boolean, basis: LinkBasis): Landing | "could" | undefined {
-  const landing = withBasis(mostSpecific(taken), basis);
-  return landing ?? (could ? "could" : undefined);
+  return mostSpecific(taken, basis) ?? (could ? "could" : undefined);
 }
 
 const exactRung: Rung = (call, method, routes) => {
@@ -270,12 +264,7 @@ export function matchCallSite(site: CallSite, target: HttpTarget, repositories: 
   const found = settled(atRung(basePathRung, call, target.method, repositories)) ?? settled(atRung(suffixRung, call, target.method, repositories));
   if (found !== undefined) return found;
   const named = prefix !== undefined && repositories.some((repository) => repository.repo === prefix);
-  return named || !namesHost(call) ? missed() : could ? { undecided: target.path } : { external: true };
-}
-
-/** Whether a call names the host it reaches; a host the code fills at run time names none. */
-function namesHost(call: CallTemplate): boolean {
-  return call.origin !== undefined && !/^(?:[a-z][a-z0-9+.-]*:)?\/\/(?:$|\{)/i.test(call.origin);
+  return could || named || !namesHost(call) ? missed() : { external: true };
 }
 
 /**
