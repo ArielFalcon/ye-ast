@@ -1,7 +1,7 @@
-import { EDGE_POLICY, edgeVerdict, FOLLOWED_EDGE_KINDS, type EdgeVerdict } from "../../domain/impact/edge-policy.ts";
+import { EDGE_POLICY, edgeVerdict, FOLLOWED_EDGE_KINDS, LOCAL_OWNER_KINDS, type EdgeVerdict } from "../../domain/impact/edge-policy.ts";
 import { isTypeScriptFile } from "../../domain/languages/typescript.ts";
 import type { FieldOrigin, LocalOrigin } from "../../domain/relations/field-origin.ts";
-import type { MemberUseOrigin } from "../../domain/relations/member-use.ts";
+import type { ExternalMemberUseOrigin, MemberUseOrigin } from "../../domain/relations/member-use.ts";
 import type { SymbolRef } from "../../domain/relations/relation.ts";
 import { joinsFact } from "../../domain/shared/code-node.ts";
 import type { CodeGraphReader, GraphEdge, GraphNodeId, GraphSymbol } from "../../ports/code-graph.port.ts";
@@ -13,6 +13,7 @@ import type { ModuleDependencies, ModuleDependency } from "../../domain/impact/m
 import type { ModuleDependenciesReader } from "../../ports/module-dependencies.port.ts";
 import { createGraphNavigation, isInside } from "./graph-navigation.ts";
 import { declarationAt, importBindings } from "./import-bindings.ts";
+import { provenCallsOf, provenKey, type ProvenCalls } from "./proven-calls.ts";
 
 /**
  * What the edges the graph resolved really reach, read from the root of the name each spells at its position through
@@ -58,6 +59,7 @@ export interface ReceiverProofs {
   fields: readonly FieldOrigin[];
   locals: readonly LocalOrigin[];
   memberUses?: readonly MemberUseOrigin[] | undefined;
+  externalUses?: readonly ExternalMemberUseOrigin[] | undefined;
 }
 
 /** The syntax of a source no reader parses: it states nothing. */
@@ -105,8 +107,6 @@ const IMPORT = "imports";
 const VALUE_KINDS: readonly string[] = ["constant", "variable"];
 /** The types whose members a value receiver may stand for, and a receiver's store or annotation may name. */
 const TYPE_KINDS: readonly string[] = EDGE_POLICY.ownerKinds;
-/** The declarations that can own a local an `inject()` call initializes. */
-const LOCAL_OWNER_KINDS: readonly string[] = [...EDGE_POLICY.relations.from, "function"];
 
 export const bindingKey = (line: number, column: number, member: string): string => `${line}:${column}:${member}`;
 
@@ -141,12 +141,8 @@ export function createEdgeTargets({ origins, store, modules, syntaxOf, proofs }:
     }
     return held;
   };
-  let proofsRead: Promise<{ held: ReceiverProofs; byPlace: ReadonlyMap<string, MemberUseOrigin> }> | undefined;
-  const provenReceivers = (read: () => Promise<ReceiverProofs>) =>
-    (proofsRead ??= read().then((held) => {
-      const byPlace = Map.groupBy((held.memberUses ?? []).filter((use) => use.template !== true), (use) => JSON.stringify([use.reference.file, use.reference.line, use.reference.column, use.reference.name.slice(use.reference.name.lastIndexOf(".") + 1)]));
-      return { held, byPlace: new Map([...byPlace].flatMap(([place, uses]) => (uses.length === 1 ? [[place, uses[0]!] as const] : []))) };
-    }));
+  let proofsRead: Promise<{ held: ReceiverProofs; calls: ProvenCalls }> | undefined;
+  const provenReceivers = (read: () => Promise<ReceiverProofs>) => (proofsRead ??= read().then((held) => ({ held, calls: provenCallsOf(held.memberUses, held.externalUses) })));
   /** Per file, the declaration each local name its imports bind reaches, when the join proves exactly one. */
   const bound = new Map<string, ReadonlyMap<string, GraphSymbol>>();
   let extracted: ReadonlyMap<string, readonly ModuleDependency[]> | undefined;
@@ -230,9 +226,10 @@ export function createEdgeTargets({ origins, store, modules, syntaxOf, proofs }:
     const owners = navigation.ownersOf(target);
     const declares = (type: GraphSymbol | undefined): boolean =>
       type !== undefined && [type, ...navigation.typesAround(type, "up").map((around) => around.type)].some((candidate) => owners.some((owner) => owner.id === candidate.id));
-    const { held, byPlace } = await provenReceivers(read);
-    const proof = byPlace.get(JSON.stringify([source.file, line, column, target.name]));
-    if (proof !== undefined) return joinsFact(target, proof.member) && owners.some((owner) => joinsFact(owner, proof.receiver));
+    const { held, calls } = await provenReceivers(read);
+    const proof = calls.byMember.get(provenKey(source.file, line, column, target.name));
+    if (proof?.kind === "member") return joinsFact(target, proof.member) && owners.some((owner) => joinsFact(owner, proof.receiver));
+    if (proof?.kind === "external") return false;
     if (receiver === "" || syntaxOf === undefined) return false;
     const syntax = await syntaxIn(syntaxOf, source.file);
     const callees = syntax.callees.get(`${line}:${column}`) ?? [];

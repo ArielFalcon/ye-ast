@@ -10,7 +10,6 @@ import type { Cut } from "../../domain/shared/fact.ts";
 import { calleeOf, compareOccurrence, ownMemberOf, receiverOf, type OrderedPlace } from "../../domain/trace/call-place.ts";
 import type { TraceVia } from "../../domain/trace/trace-fact.ts";
 import type { ExternalCall, TraceDeclaration, WalkedStep } from "../../domain/trace/trace-tree.ts";
-import type { SymbolRef } from "../../domain/relations/relation.ts";
 import type { DeclaredCallable, DeclaredMemberNames, FunctionValueCall, ReceiverBinding } from "../../ports/declared-member-names.port.ts";
 import type { CodeGraphReader, GraphEdge, GraphNodeId, GraphSymbol, GraphUnresolvedReference } from "../../ports/code-graph.port.ts";
 import type { DeclaredType, DispatchTargets, ImportOriginSite, ImportOrigins, ReceiverMethod, ReplacedRoots, ResolvedNameSite } from "../../ports/import-origins.port.ts";
@@ -19,6 +18,7 @@ import { createGraphNavigation, SUPERTYPE_EDGES } from "../navigation/graph-navi
 import { containmentTree } from "../navigation/containment-tree.ts";
 import type { RelationExtraction } from "../relations/relation-extractor.ts";
 import { bindingKey, receiverBindingsByPlace, type EdgeTargets, type FollowedEdge } from "../navigation/edge-targets.ts";
+import { provenCallsOf, provenKey, type ProvenCall, type ProvenCalls } from "../navigation/proven-calls.ts";
 import { createDeclarationUses, unsettledBy, type UnresolvedIn } from "../navigation/declaration-uses.ts";
 
 /** What a body passes as a value runs later, if at all; only code can. */
@@ -98,11 +98,6 @@ export interface TraceWalk {
 
 /** A spelling that is a chain of plain names, `a.b.m`: no call, index or computed link the value could come from. */
 const PLAIN_CHAIN = /^[A-Za-z_$][\w$]*(\.[A-Za-z_$][\w$]*)+$/;
-
-/** What the relations prove a member call runs. */
-type ProvenCall = { kind: "member"; receiver: SymbolRef; member: SymbolRef } | { kind: "external"; holds: string } | { kind: "replaceable" };
-
-const provenKey = (file: string, line: number, column: number, name: string): string => JSON.stringify([file, line, column, name]);
 
 /**
  * What an external leaf names: a module, or the member path it calls from a global (none for a call nothing roots) and
@@ -202,24 +197,8 @@ export async function walkTrace(roots: readonly GraphSymbol[], input: TraceWalkI
     for (const callable of callables) byName.set(callable.name, [...(byName.get(callable.name) ?? []), callable]);
     return { callables: byName, functionValueCalls: new Set(functionValueCalls.map(functionValueKey)), receiverBindings: receiverBindingsByPlace(receiverBindings) };
   });
-  /**
-   * What the relations prove a member call runs, by its place: a repository method of the class a field or local holds
-   * (RFC-0013 R3), or a type from outside the repository a field holds. A place two proofs name, a template's call and a
-   * receiver a provider may replace prove nothing here.
-   */
-  let provenByPlace: Promise<{ bySpelling: ReadonlyMap<string, ProvenCall>; byMember: ReadonlyMap<string, ProvenCall> }> | undefined;
-  const provenProofs = () =>
-    (provenByPlace ??= memberProofs().then(({ memberUses, externalUses }) => {
-      const bySpelling = new Map<string, ProvenCall[]>();
-      const byMember = new Map<string, ProvenCall[]>();
-      const add = (site: { file: string; line: number; column: number; name: string }, call: ProvenCall): void => {
-        for (const [byPlace, key] of [[bySpelling, provenKey(site.file, site.line, site.column, site.name)], [byMember, provenKey(site.file, site.line, site.column, site.name.slice(site.name.lastIndexOf(".") + 1))]] as const) byPlace.set(key, [...(byPlace.get(key) ?? []), call]);
-      };
-      for (const use of memberUses ?? []) if (use.template !== true) add(use.reference, use.substitutes === undefined ? { kind: "member", receiver: use.receiver, member: use.member } : { kind: "replaceable" });
-      for (const use of externalUses ?? []) add(use.reference, { kind: "external", holds: use.holds });
-      const unique = (byPlace: Map<string, ProvenCall[]>) => new Map([...byPlace].flatMap(([key, calls]) => (calls.length === 1 ? [[key, calls[0]!]] : [])));
-      return { bySpelling: unique(bySpelling), byMember: unique(byMember) };
-    }));
+  let provenByPlace: Promise<ProvenCalls> | undefined;
+  const provenProofs = () => (provenByPlace ??= memberProofs().then(({ memberUses, externalUses }) => provenCallsOf(memberUses, externalUses)));
   const provenAt = async (reference: GraphUnresolvedReference): Promise<ProvenCall | undefined> => (await provenProofs()).bySpelling.get(provenKey(reference.file, reference.line, reference.column + 1, reference.name));
   /** What the relations prove the call that starts at an edge's place runs, by the member the edge reaches. */
   const provenAtEdge = async (file: string, edge: GraphEdge, member: string): Promise<ProvenCall | undefined> => (await provenProofs()).byMember.get(provenKey(file, edge.line!, edge.column! + 1, member));

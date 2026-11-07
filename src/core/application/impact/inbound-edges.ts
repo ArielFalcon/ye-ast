@@ -1,7 +1,7 @@
 import type { DependenceBasis, DependenceDerivation } from "../../domain/impact/impact-fact.ts";
 import { topLevelOf, isSeedable } from "../../domain/change/seeds.ts";
 import { declarationAnchor, declarationUseKey, referenceKey, uniqueReferenceKeys, type MemberReferenceProofs } from "../../domain/impact/impact-cuts.ts";
-import { CALL_EDGE_KINDS, EDGE_POLICY, edgeConfidence, FOLLOWED_EDGE_KINDS, followedEdge, followsEdge, followsRelation, isIgnoredEdge, type ReceiverSettlement } from "../../domain/impact/edge-policy.ts";
+import { CALL_EDGE_KINDS, EDGE_POLICY, edgeConfidence, FOLLOWED_EDGE_KINDS, followedEdge, followsEdge, followsRelation, isIgnoredEdge, LOCAL_OWNER_KINDS, type ReceiverSettlement } from "../../domain/impact/edge-policy.ts";
 import type { MemberSubstitute, MemberUseOrigin } from "../../domain/relations/member-use.ts";
 import type { FieldOrigin, LocalOrigin } from "../../domain/relations/field-origin.ts";
 import type { Relation, SymbolRef } from "../../domain/relations/relation.ts";
@@ -91,9 +91,6 @@ export interface EdgeCorrections {
 const NO_CORRECTIONS: EdgeCorrections = { dropped: new Set(), into: new Map() };
 
 const USAGE_EDGES = ["calls", "instantiates", "references"];
-
-/** The declarations a relation ends at, and the only ones that can own a local an `inject()` call initializes. */
-const DECLARATION_KINDS: readonly string[] = [...EDGE_POLICY.relations.from, "function"];
 
 function holdsReference(source: GraphSymbol, use: Pick<GraphUnresolvedReference, "file" | "line">): boolean {
   return source.file === use.file && source.startLine <= use.line && use.line <= source.endLine;
@@ -290,7 +287,7 @@ export function createInboundEdges(
       const held = origin.holds.class;
       if ((sharedLocalNames.get(`${origin.owner.path}\0${origin.local}`) ?? 0) > 1) continue;
       if (!owners.some((owner) => joinsFact(owner, { path: held.path, line: held.line, symbol: held.symbol }))) continue;
-      const holder = declarationAt(origin.owner, DECLARATION_KINDS);
+      const holder = declarationAt(origin.owner, LOCAL_OWNER_KINDS);
       if (holder === undefined || isTestFile(holder.file)) continue;
       const name = `${origin.local}.${node.name}`;
       const uses = referencesThrough(holder.file, name).filter((reference) => reference.name === name);

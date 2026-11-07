@@ -85,6 +85,9 @@ export function followsRelation({ kind, sourceKind, targetKind }: PolicyEdge): b
  */
 export const CALL_EDGE_KINDS: readonly string[] = ["calls", "instantiates"];
 
+/** The declarations a relation ends at, and the only ones that can own a local an `inject()` call initializes. */
+export const LOCAL_OWNER_KINDS: readonly string[] = [...EDGE_POLICY.relations.from, "function"];
+
 /** The followed edges' kinds, for asking a store only for them. */
 export const FOLLOWED_EDGE_KINDS: readonly string[] = EDGE_POLICY.rules.flatMap((rule) => rule.edges);
 
