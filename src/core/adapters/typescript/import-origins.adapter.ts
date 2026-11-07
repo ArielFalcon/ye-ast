@@ -9,7 +9,7 @@ import { isTypeScriptSource } from "../../domain/languages/typescript.ts";
 import type { ImportOrigin } from "../../domain/relations/resolved-reference.ts";
 import type { Evidence, Finding } from "../../domain/shared/fact.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
-import type { RootOrigin } from "../../domain/impact/edge-policy.ts";
+import { readsPastRoot, type RootOrigin } from "../../domain/impact/edge-policy.ts";
 import { compareText } from "../../domain/shared/code-node.ts";
 import type { DeclaredType, ImportOriginSite, ImportOrigins, ReplacedRoots, ResolvedNameSite, RootBinding, UseSite } from "../../ports/import-origins.port.ts";
 import { createModuleResolver, manifestPackages, packageOf } from "./module-resolver.ts";
@@ -192,9 +192,9 @@ export function createImportOrigins(sources: readonly SourceFile[], parse: Parse
       const read = parsed === undefined ? undefined : rootsAt(parsed.index, parsed.text, group, isParameterUse, isDynamicUse);
       if (read === undefined) continue;
       shapes.set(file, read.shape);
-      for (const [index, { root, bare, local }] of read.roots) {
+      for (const [index, { root, bare, local, pastRoot }] of read.roots) {
         const origin = await originOf({ ...sites[index]!, name: root }, local ? "local" : "valid");
-        results[index] = bare ? { ...origin, bare: true } : origin;
+        results[index] = { ...origin, ...(bare ? { bare: true as const } : {}), ...(pastRoot ? { pastRoot: true as const } : {}) };
       }
     }
     return results;
@@ -616,7 +616,7 @@ type SiteSyntax = "valid" | "local" | "this-member";
 type ParameterUse = (source: ts.SourceFile, text: string, identifier: ts.Identifier) => boolean;
 
 /** The root of the plain chain of names each site spells and ends in its name, read in the file's tree. */
-function rootsAt({ source, shape, starting }: FileIndex, text: string, group: readonly { site: ResolvedNameSite; index: number }[], isParameterUse: ParameterUse, isDynamicUse: ParameterUse): { roots: Map<number, { root: string; bare: boolean; local: boolean }>; shape: FileShape } {
+function rootsAt({ source, shape, starting }: FileIndex, text: string, group: readonly { site: ResolvedNameSite; index: number }[], isParameterUse: ParameterUse, isDynamicUse: ParameterUse): { roots: Map<number, { root: string; bare: boolean; local: boolean; pastRoot: boolean }>; shape: FileShape } {
   const starts = source.getLineStarts();
   const wanted = new Map<number, { site: ResolvedNameSite; index: number }[]>();
   for (const item of group) {
@@ -631,13 +631,13 @@ function rootsAt({ source, shape, starting }: FileIndex, text: string, group: re
     return ts.isIdentifier(root) && isDynamicUse(source, text, root);
   };
   /** Chains that start at one point share their root, so the first that ends in the name settles it. */
-  const roots = new Map<number, { root: string; bare: boolean; local: boolean }>();
+  const roots = new Map<number, { root: string; bare: boolean; local: boolean; pastRoot: boolean }>();
   for (const [point, sites] of wanted) for (const node of starting.get(point) ?? []) for (const { site, index } of sites) {
     const spelled = spelledAt(node, site.kind);
     const names = spelled === undefined ? undefined : plainChain(spelled);
     if (names === undefined || names.at(-1) !== site.name || roots.has(index) || isDynamicRoot(spelled!)) continue;
     const bare = names.length === 1;
-    roots.set(index, { root: names[0]!, bare, local: bare && ts.isIdentifier(spelled!) && !ts.isTypeNode(spelled.parent) && isParameterUse(source, text, spelled) });
+    roots.set(index, { root: names[0]!, bare, local: bare && ts.isIdentifier(spelled!) && !ts.isTypeNode(spelled.parent) && isParameterUse(source, text, spelled), pastRoot: readsPastRoot(site.kind, names.length) });
   }
   return { roots, shape };
 }

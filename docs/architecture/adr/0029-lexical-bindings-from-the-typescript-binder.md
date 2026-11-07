@@ -96,9 +96,10 @@ latency and 2 to 3.6 times the memory for a program with the library and depende
    (`java.lang.Object`, `Enum` and the interfaces it implements, `Record`) stay unknown. Reflection keeps the declared type: the runtime checks every
    reflective write against the field's type. A dynamic proxy is a value of that type that runs repository code, so the
    JDK APIs that make one fire the guard above, wherever their value is stored (a write through `sun.misc.Unsafe` is
-   outside the promise, as an `any` cast is in TypeScript). A Java root proves where a call's chain starts, not what it
-   runs past the root: Java records nothing the repository stores in a platform class's fields (`System.setOut`), so a
-   call that reads a member between its root and its own member (`System.out.println`) is not settled by its root,
+   outside the promise, as an `any` cast is in TypeScript). A root, in Java as in TypeScript, proves where a call's chain
+   starts, not what it runs past the root: nothing records what the repository stores in a platform class's fields or a
+   package's or global's members (`System.setOut`, `other.setLogger`), so a call that reads a member between its root and
+   its own member (`System.out.println`, `other.logger.flush`, `document.body.appendChild`) is not settled by its root,
    whether the index left it pending or resolved it into an edge: trace keeps such an edge instead of dropping it. The leaf's evidence is the module or the global it is rooted at, as for every other
    leaf; the answer gains no field, so the declared type itself is not written.
 

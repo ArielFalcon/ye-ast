@@ -105,10 +105,18 @@ export function edgeConfidence({ confidence, provenance }: EdgeScore): number {
 
 /**
  * `bare`: the site spells its root alone. `pastRoot`: a call that reads a member, or calls, between its root and its own
- * member (`System.out.println`), under a reader that records nothing the repository stores there, so the root proves where
- * the chain starts and not what the call runs.
+ * member (`readsPastRoot`), so the root proves where the chain starts and not what the call runs.
  */
 export type RootOrigin = Finding<ImportOrigin> & { bare?: true; pastRoot?: true };
+
+/**
+ * Whether a site of `kind` whose chain spells `names` names from its root on (the root type after a Java package) reads
+ * past its root: a call below the root's own member (`System.out.println`, `other.logger.flush`), whose receiver is a
+ * value the repository may have stored there.
+ */
+export function readsPastRoot(kind: string, names: number): boolean {
+  return kind === "calls" && names > 2;
+}
 
 /** What an edge the graph resolved really reaches: its own target, nothing, or another declaration the source proves. */
 export type EdgeVerdict<D> = { kind: "keep" } | { kind: "drop" } | { kind: "redirect"; to: D };

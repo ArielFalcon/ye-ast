@@ -3,7 +3,7 @@ import { isJavaSource } from "../../domain/languages/java.ts";
 import type { ImportOrigin } from "../../domain/relations/resolved-reference.ts";
 import type { Finding } from "../../domain/shared/fact.ts";
 import type { SourceFile } from "../../ports/entrypoint-extractor.port.ts";
-import type { RootOrigin } from "../../domain/impact/edge-policy.ts";
+import { readsPastRoot, type RootOrigin } from "../../domain/impact/edge-policy.ts";
 import type { ImportOrigins, ResolvedNameSite } from "../../ports/import-origins.port.ts";
 import { createJavaRootBindings } from "./java-root-bindings.ts";
 import { createJavaDeclaredTypes } from "./java-declared-types.ts";
@@ -73,11 +73,7 @@ function unresolved(site: { file: string; line: number }): Finding<ImportOrigin>
   return { status: "unknown", reason: "unresolved", evidence: [{ path: site.file, line: site.line }] };
 }
 
-/**
- * Where a site's spelled chain is rooted; `pastRoot` for a call whose receiver is not its root type itself but a member read
- * below it (`System.out.println`, `Map.Entry.comparingByKey`), since Java records nothing the repository stores in a
- * platform class's fields.
- */
+/** Where a site's spelled chain is rooted; `pastRoot` counted from the root type, after its package (`readsPastRoot`). */
 function rootOf(site: ResolvedNameSite, file: JavaFile, project: JavaProject): { origin: ImportOrigin; bare: boolean; pastRoot: boolean } | undefined {
   const spelled = spelledAt(site, file.root);
   if (spelled === undefined) return undefined;
@@ -85,7 +81,7 @@ function rootOf(site: ResolvedNameSite, file: JavaFile, project: JavaProject): {
   if (found === undefined) return undefined;
   const segments = spelled.chain.split(".");
   const root = segments.findIndex((segment) => !PACKAGE_SEGMENT.test(segment));
-  return { ...found, pastRoot: site.kind === "calls" && segments.length - root > 2 };
+  return { ...found, pastRoot: readsPastRoot(site.kind, segments.length - root) };
 }
 
 function chainRootOf(spelled: Spelled, file: JavaFile, project: JavaProject): { origin: ImportOrigin; bare: boolean } | undefined {

@@ -810,8 +810,8 @@ test("a Java trace keeps a call a cut when a dynamic proxy may implement its pla
   assert.deepEqual(await javaTraceCuts("kotlin", { "Use.java": kotlin, "Repo.kt": "class Repo: Runnable { override fun run() { println(\"repo\") } }\n" }), [["unresolved-link", "Use.java:2 task.run", "Use.java::Other.run"], ["no-extractor", "Repo.kt"]]);
 });
 
-/** The status, cuts and steps (symbol and external calls) a Java trace of `Use.entry` gives over a fresh repository holding `files`. */
-async function javaTraceOf(name: string, files: Readonly<Record<string, string>>) {
+/** The status, cuts and steps (symbol and external calls) a trace of `target` gives over a fresh repository holding `files`. */
+async function traceOf(name: string, files: Readonly<Record<string, string>>, target = { file: "Use.java", symbol: "Use.entry" }) {
   const root = join(workspace, name);
   mkdirSync(root);
   const run = (...args: string[]): string => execFileSync("git", args, { cwd: root, env: GIT_ENV, encoding: "utf8" }).trim();
@@ -819,7 +819,7 @@ async function javaTraceOf(name: string, files: Readonly<Record<string, string>>
   for (const [file, content] of Object.entries(files)) writeFileSync(join(root, file), content);
   run("add", "-A");
   run("commit", "-q", "-m", name);
-  const answer = await composeQueries({ scratchRoot }).trace.walk({ repo: root, repoId: name, revision: "HEAD", targets: [{ file: "Use.java", symbol: "Use.entry" }] });
+  const answer = await composeQueries({ scratchRoot }).trace.walk({ repo: root, repoId: name, revision: "HEAD", targets: [target] });
   assert.ok(answer.ok);
   const { status } = answer.value;
   return { status, cuts: status === "partial" ? answer.value.cuts.map((cut) => [cut.kind, ...cut.at]) : [], steps: status === "unknown" ? [] : answer.value.value.steps.map((step) => [step.symbol, step.external ?? null]) };
@@ -831,9 +831,18 @@ test("a Java trace never settles a call by a root it reads past, whether the gra
   const field = ["public class Use {", "  public void entry() { java.util.Collections.EMPTY_LIST.size(); }", "}", "class Other { int size() { return 1; } }", ""].join("\n");
   const alias = ["public class Use {", "  public void entry() { var o = System.out; o.println(\"x\"); }", "  public static void main(String[] args) { System.setOut(new RepoStream()); new Use().entry(); }", "}", ...stream].join("\n");
 
-  assert.deepEqual(await javaTraceOf("qualified", { "Use.java": qualified }), { status: "partial", cuts: [["unresolved-link", "Use.java:11 System.err.println", "Use.java::RepoStream.println"]], steps: [["entry", null], ["println", null]] });
-  assert.deepEqual(await javaTraceOf("qualifiedfield", { "Use.java": field }), { status: "complete", cuts: [], steps: [["entry", null]] });
-  assert.deepEqual(await javaTraceOf("varalias", { "Use.java": alias }), { status: "complete", cuts: [], steps: [["entry", null], ["println", null], ["println", null]] });
+  assert.deepEqual(await traceOf("qualified", { "Use.java": qualified }), { status: "partial", cuts: [["unresolved-link", "Use.java:11 System.err.println", "Use.java::RepoStream.println"]], steps: [["entry", null], ["println", null]] });
+  assert.deepEqual(await traceOf("qualifiedfield", { "Use.java": field }), { status: "complete", cuts: [], steps: [["entry", null]] });
+  assert.deepEqual(await traceOf("varalias", { "Use.java": alias }), { status: "complete", cuts: [], steps: [["entry", null], ["println", null], ["println", null]] });
+});
+
+test("a TypeScript trace settles a call by its package or global root only when the call reads one member below it", async () => {
+  const manifest = JSON.stringify({ name: "use", dependencies: { "other-lib": "1.0.0" } });
+  const logger = ["import * as other from \"other-lib\";", "class Sink {", "  flush(): void { console.log(\"REPOSITORY_FLUSH\"); }", "}", "export function entry(): void {", "  other.setLogger(new Sink());", "  other.logger.flush();", "}", ""].join("\n");
+  const dom = ["export function entry(node: Node): void {", "  document.body.appendChild(node);", "}", ""].join("\n");
+
+  assert.deepEqual(await traceOf("tslogger", { "package.json": manifest, "use.ts": logger }, { file: "use.ts", symbol: "entry" }), { status: "partial", cuts: [["unresolved-link", "use.ts:7 other.logger.flush", "use.ts::Sink.flush"]], steps: [["entry", [{ kind: "import", module: "other-lib", names: ["other.setLogger"] }]]] });
+  assert.deepEqual(await traceOf("tsdom", { "package.json": manifest, "use.ts": dom }, { file: "use.ts", symbol: "entry" }), { status: "complete", cuts: [], steps: [["entry", [{ kind: "unnamed", names: ["document.body.appendChild"] }]]] });
 });
 
 /** Repository functions named like library members, so a member call settled by its name alone is a cut. */

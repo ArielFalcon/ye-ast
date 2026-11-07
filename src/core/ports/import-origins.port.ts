@@ -52,7 +52,8 @@ export interface ImportOrigins {
    * in the site's `name`; a computed chain (`f().b`, `this.b`, `a[b]`), another name or a file that does not parse is
    * `unknown`. `bare` marks a site that spells its root alone (`a`), so a binding of the root is the binding of the name;
    * such a root in a value position that, by the file's own scoping (ADR-0029), binds a parameter of a function around
-   * it with no default, rest or destructuring, never declared again, is `local-parameter`.
+   * it with no default, rest or destructuring, never declared again, is `local-parameter`. `pastRoot` marks a call that
+   * reads past its root (`readsPastRoot`: `a.b.c()`), whose root proves where the chain starts and not what the call runs.
    */
   rootOrigins(sites: readonly ResolvedNameSite[], signal?: AbortSignal): Promise<readonly RootOrigin[]>;
   /**
