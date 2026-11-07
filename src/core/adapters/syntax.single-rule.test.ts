@@ -22,7 +22,7 @@ const RULES: readonly Rule[] = [
     concept: "parsing a file",
     pattern: /\bts\.createSourceFile\(/,
     owners: ["typescript/source-tree.ts", "typescript/url-define.ts", "typescript/typescript-lib-globals.extract.ts"],
-    pending: ["typescript/import-origins.adapter.ts", "typescript/lexical-bindings.ts"],
+    pending: ["typescript/lexical-bindings.ts"],
   },
   {
     concept: "a program over a file",
@@ -35,7 +35,7 @@ const RULES: readonly Rule[] = [
     pattern: /while\s*\((?:\s*ts\.is(?:Parenthesized|As|Satisfies|TypeAssertion|NonNull)Expression\((\w+)\)\s*\|\|)+[^;]*?\)\s*\1\s*=\s*\1\.expression/,
     /* function-value-calls keeps its own stricter rule: the wrappers that keep both the value and its type. */
     owners: ["typescript/syntax.ts", "typescript/function-value-calls.ts"],
-    pending: ["typescript/import-origins.adapter.ts"],
+    pending: [],
   },
   {
     concept: "the class `this` denotes",
@@ -60,7 +60,7 @@ const RULES: readonly Rule[] = [
     pattern: /(?<!JSON)\.parse\(\s*(?:source|file)\.content\s*\)/,
     /* The tree-sitter readers parse one file at a time for a per-file answer and build no project. */
     owners: ["spring/java-project.ts", "tree-sitter/java-member-names.adapter.ts", "tree-sitter/java-records.adapter.ts", "tree-sitter/java-trivia.adapter.ts"],
-    pending: ["spring/java-imports.adapter.ts", "spring/spring-payload-shapes.adapter.ts"],
+    pending: ["spring/spring-payload-shapes.adapter.ts"],
   },
   {
     concept: "the Java type `this` and `super` denote, read from the type body around a node",

@@ -15,7 +15,8 @@ import { compareText } from "../../domain/shared/code-node.ts";
 import type { DeclaredType, ImportOriginSite, ImportOrigins, ReplacedRoots, ResolvedNameSite, RootBinding, UseSite } from "../../ports/import-origins.port.ts";
 import { moduleResolverOf, packageOf, rememberedModuleResolver } from "./module-resolver.ts";
 import { TYPESCRIPT_LIB_GLOBALS } from "./typescript-lib-globals.ts";
-import { readAngularRouteFile } from "./angular-router.extractor.ts";
+import { moduleShape } from "./module-shape.ts";
+import { unwrapped } from "./syntax.ts";
 import { createExportLookup, type ModuleShape } from "./declaration-lookup.ts";
 
 /** The names the pinned `typescript` declares, held once for the process rather than rebuilt per query. */
@@ -66,7 +67,7 @@ export function createImportOrigins(sources: readonly SourceFile[], { parse = pa
   /** What each file exports, read once and only when a namespace member asks. */
   const moduleShapes = new Map<string, ModuleShape | undefined>();
   function moduleShapeOf(file: string): ModuleShape | undefined {
-    if (!moduleShapes.has(file)) moduleShapes.set(file, texts.has(file) && isTypeScriptSource(file) ? readAngularRouteFile(treeOf(file)) : undefined);
+    if (!moduleShapes.has(file)) moduleShapes.set(file, texts.has(file) && isTypeScriptSource(file) ? moduleShape(treeOf(file)) : undefined);
     return moduleShapes.get(file);
   }
   const resolvedFile = async (from: string, specifier: string): Promise<string | undefined> => {
@@ -369,7 +370,7 @@ export function createImportOrigins(sources: readonly SourceFile[], { parse = pa
     if (declarations.length > 0 && declarations.every((declaration) => ts.isClassLike(declaration) || ts.isInterfaceDeclaration(declaration))) return { file, declarations };
     const [only, ...others] = declarations;
     if (only === undefined || others.length > 0) return undefined;
-    if (ts.isVariableDeclaration(only) && only.initializer !== undefined && (ts.getCombinedNodeFlags(only) & ts.NodeFlags.Const) !== 0) return heritageOf(file, unwrappedValue(only.initializer), boundOf, depth + 1);
+    if (ts.isVariableDeclaration(only) && only.initializer !== undefined && (ts.getCombinedNodeFlags(only) & ts.NodeFlags.Const) !== 0) return heritageOf(file, unwrapped(only.initializer), boundOf, depth + 1);
     if (ts.isTypeAliasDeclaration(only) && ts.isTypeLiteralNode(only.type)) return { file, declarations };
     if (ts.isTypeAliasDeclaration(only) && ts.isTypeReferenceNode(only.type)) return heritageOf(file, only.type, boundOf, depth + 1);
     return undefined;
@@ -458,12 +459,6 @@ function withTypes(shape: ModuleShape | undefined, source: ts.SourceFile | undef
 }
 
 const NO_SPAN = { line: 0, endLine: 0 };
-
-function unwrappedValue(expression: ts.Expression): ts.Expression {
-  let inner = expression;
-  while (ts.isParenthesizedExpression(inner) || ts.isAsExpression(inner) || ts.isSatisfiesExpression(inner) || ts.isNonNullExpression(inner)) inner = inner.expression;
-  return inner;
-}
 
 /** The library type a primitive keyword annotation names. */
 const KEYWORD_TYPES: ReadonlyMap<ts.SyntaxKind, string> = new Map([

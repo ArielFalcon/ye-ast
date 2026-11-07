@@ -770,6 +770,13 @@ test("a repository type whose heritage follows constants, type aliases and impor
   ] as const) assert.deepEqual(await declaredTypeOf(annotation, spelled, lines, [aliases, bases]), { kind: "unknown" }, annotation);
 });
 
+test("a constant behind any wrapper that keeps its value proves the heritage it holds", async () => {
+  for (const initializer of ["(Error)", "Error as ErrorConstructor", "Error satisfies ErrorConstructor", "<ErrorConstructor>Error", "Error!"]) {
+    const heritage: SourceFile = { path: "src/heritage.ts", content: [`const Fault = ${initializer};`, "export class RepoError extends Fault {}"].join("\n") };
+    assert.deepEqual(await declaredTypeOf("Map<string, number>", "Map", [], [heritage]), { kind: "global", name: "Map" }, initializer);
+  }
+});
+
 test("heritage that names no repository class or interface and no library type makes every annotation unknown", async () => {
   const holder: SourceFile = { path: "src/holder.ts", content: "export class Holder { static Inner = Map; }" };
   for (const heritage of [
