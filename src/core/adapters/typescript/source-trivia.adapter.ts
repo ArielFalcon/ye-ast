@@ -11,7 +11,7 @@ export function createTypeScriptTrivia(): SourceTrivia {
   return {
     triviaLines: async (file) => {
       if (!isTypeScriptSource(file.path)) return new Set();
-      const tree = sourceTree(file, ts.ScriptTarget.Latest, true);
+      const tree = sourceTree(file, ts.ScriptTarget.Latest);
       const diagnostics = (tree as ts.SourceFile & { parseDiagnostics: readonly ts.Diagnostic[] }).parseDiagnostics;
       if (diagnostics.length > 0) return new Set();
       const code = new Set<number>();
