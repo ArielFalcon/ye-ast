@@ -42,6 +42,7 @@ import { createContractRoutes } from "../core/adapters/openapi/contract-document
 import { createWorkspaceEvidence } from "../core/adapters/workspace/outward-names.adapter.ts";
 import { createHttpCallSites } from "../core/adapters/typescript/http-call-sites.adapter.ts";
 import { createPatternRedaction } from "../core/adapters/redaction/pattern-redaction.adapter.ts";
+import { createJavaDataEffects } from "../core/adapters/spring/data-effects.adapter.ts";
 import { createJavaCallSites } from "../core/adapters/spring/java-call-sites.adapter.ts";
 import { createSpringRoutesExtractor } from "../core/adapters/spring/spring-routes.adapter.ts";
 import { createJavaRecordsReader } from "../core/adapters/tree-sitter/java-records.adapter.ts";
@@ -302,6 +303,7 @@ export function composeQueries(options: Omit<CompositionOptions, "signal"> = {})
     memberNames,
     relations: impactDeps.relations,
     callSites: placedCallSites,
+    dataEffects: { placed: async (files) => createJavaDataEffects(await createJavaParser()).placed(files) },
     sourceSelection: isWritten,
   });
   const trace = measurement === undefined ? bareTrace : measuredTrace(bareTrace, measurement);

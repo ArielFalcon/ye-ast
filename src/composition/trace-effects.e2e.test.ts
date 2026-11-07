@@ -185,3 +185,32 @@ export class Api {
   assert.deepEqual([effectsOf(run.value), run.cuts?.filter((cut) => cut.at[0]?.includes(" effect")).map((cut) => cut.at[0])], [[], ["src/main/java/shop/Events.java:7 message effect"]]);
   assert.deepEqual([effectsOf(load.value), load.cuts?.filter((cut) => cut.at[0]?.includes(" effect")).map((cut) => cut.at[0])], [[], ["api.ts:5 http effect"]]);
 });
+
+test("data effects belong to project method bodies, preserve exact ownership and cut an uninvoked function value", async () => {
+  commit({
+    "src/main/java/shop/Store.java": `package shop;
+import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.jdbc.core.JdbcTemplate;
+import jakarta.persistence.EntityManager;
+class Order {}
+interface Orders extends JpaRepository<Order, Long> {}
+class Store {
+ private Orders orders;
+ private JdbcTemplate jdbc;
+ private EntityManager em;
+ void save(Order o) { orders.save(o); } void other() { jdbc.update("delete from other"); }
+ void run(Order o) { this.save(o); em.find(Order.class, 1L); }
+ void dead() { Runnable value = () -> jdbc.update("delete from orders"); System.out.println("x"); }
+}
+`,
+  });
+  const run = await trace("src/main/java/shop/Store.java:Store.run");
+  const saved = await trace("src/main/java/shop/Store.java:Store.save");
+  assert.deepEqual([...run.value.steps, ...saved.value.steps].flatMap((step) => step.effects ?? []).filter((effect) => effect.kind === "data").map(({ operation, access, target }) => [operation, access, target]), [
+    ["find", "read", { kind: "entity", name: "shop.Order" }],
+    ["save", "write", { kind: "entity", name: "shop.Order" }],
+  ]);
+  const dead = await trace("src/main/java/shop/Store.java:Store.dead");
+  assert.deepEqual(effectsOf(dead.value), []);
+  assert.ok(dead.cuts?.some((cut) => cut.at[0]?.includes("data effect")));
+});

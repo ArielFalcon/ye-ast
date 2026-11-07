@@ -2,7 +2,7 @@
 
 Objective: report framework-proven data-access effects at their exact call sites without guessing targets or amplifying getter noise.
 Branch: `feat/trace-data-effects`, base `b4b421439792b2eb108e6342402dcce1aec24890` (local main).
-Status: design checkpoint; implementation not started.
+Status: implementation and measurement in progress; owner cleared the contract checkpoint.
 
 ## Specs
 
@@ -11,7 +11,7 @@ Status: design checkpoint; implementation not started.
 - S3: preserve slice 4 exact-position ownership and function-value cuts; no type checker, no tool-description growth.
 - S4: facts carry the operation; entity/table/collection only with source proof. Unknown targets are optional, never inferred from names.
 - S5: isolate HOME, XDG_CONFIG_HOME and XDG_CACHE_HOME; never use ThingsBoard; never push.
-- S6: RFC-0002 rule 6 versions added fact fields as a minor change. Report any unavoidable SCHEMA change before applying it.
+- S6: Owner standing rule, reaffirmed in this task: no SCHEMA bump or compatibility arguments while MCP has no consumers; add data in place.
 
 ## Tasks
 
@@ -19,9 +19,9 @@ Status: design checkpoint; implementation not started.
 |---|---|
 | Copy and read instructions, create branch and isolated scratch | done |
 | Discover corpus, collect initial framework evidence | done; call inventory reconciliation pending |
-| Record design and contract decision | done; owner decision pending |
+| Record design and contract decision | done; owner confirmed no bump and MyBatis deferral |
 | Freeze baseline workload and measure all 111 traces plus differential | pending |
-| RED conformance fixtures, GREEN implementation, break-proof | pending |
+| RED conformance fixtures, GREEN implementation, break-proof | done |
 | Measure candidate, cleanup, final Node 24.22.2 check | pending |
 
 ## Log
@@ -57,7 +57,8 @@ No MongoTemplate, RedisTemplate or TypeScript ORM was found in this initial scan
 
 | Alternative | Advantage | Reason discarded / cost |
 |---|---|---|
-| Recommended: explicit data variant and minor fact-schema version | Truthful typed payload, optional proven target, read/write distinction | Changes global schema bytes; requires owner checkpoint before implementation |
+| Recommended and accepted: explicit data variant in place | Truthful typed payload, optional proven target, read/write distinction | SCHEMA stays unchanged under the owner rule |
+| Bump the fact schema | Follows the general versioning RFC | Discarded by the owner: no MCP consumers, so no bump or compatibility argument |
 | Put data into existing message/http targets | Avoids version edit | Changes transport meaning and creates false workspace links; violates facts contract |
 | Reuse external names or cut text as data output | Leaves schema unchanged | Does not implement the requested data effect contract or structured compose behavior |
 | Drop all reads | Reduces text | Hides data dependencies; no measurement supports that loss |
@@ -66,10 +67,20 @@ No MongoTemplate, RedisTemplate or TypeScript ORM was found in this initial scan
 
 ### Contract checkpoint
 
-Confirmed: `trace-fact.ts:24` admits only HTTP/message variants, `call-site.ts` only HTTP/event transports; RFC-0002 rule 6 requires minor versioning for added fields. SCHEMA currently is 0.21.0. The proposed structured data operation/access/target fields cannot be expressed faithfully in those variants. Recommendation: authorize a minor bump (next free minor at integration), then implement. No SCHEMA edit has been made. This is a public-contract decision, not a parser limitation.
+Confirmed: the owner reaffirmed that SCHEMA remains 0.21.0 while MCP has no consumers. The explicit data variant and compose schema are added in place, independently of HTTP/message shapes. MyBatis stays deferred. The previous request for a schema decision was superseded by this instruction.
 
 ### Verification plan and current results
 
-Freeze the 15-largest-class workload for each slice 4 repository, the two self symbols and four acceptance traces, pinned to identical input SHAs for both engine versions. Preserve raw text and structured output under scratch; count resolved data/read/write effects and cuts per repo, total UTF-8 trace text bytes, and validate every added effect against source. Run the existing 14-command differential and compare bytes after excluding only explicitly versioned schema metadata if the bump is approved; report raw byte differences as well. RED per row, GREEN, type-correct mutations, then one final `npm run check` with Node 24.22.2.
+Freeze the 15-largest-class workload for each slice 4 repository, the two self symbols and four acceptance traces, pinned to identical input SHAs for both engine versions. Preserve raw text and structured output under scratch; count resolved data/read/write effects and cuts per repo, total UTF-8 trace text bytes, and validate every added effect against source. Run the existing 14-command differential and compare raw bytes; SCHEMA remains unchanged. RED per row, GREEN, type-correct mutations, then one final `npm run check` with Node 24.22.2.
 
-Before/after data counts, text-size delta, 14-command differential: not measured (design checkpoint). Historical slice 4 counts are not a baseline for this branch. `npm run check`: not run; implementation and final verification pending. No success claim.
+At the design checkpoint, the before/after and checks were not measured. Historical slice 4 counts are not this branch's baseline; final measurements are recorded below.
+
+
+- L4: Owner explicitly rejected the schema checkpoint: no bump or compatibility argument while MCP has no consumers. Implement structured data in place; defer MyBatis; continue full process. The checkpoint discussion above is historical and superseded.
+- L5: RED adapter fixtures failed with empty sites; GREEN Spring Data generic ancestry, raw generics, framework direct bindings, JDBC and JPA execution fixtures. Additional RED caught @Modifying being mistaken for read; GREEN annotation precedence. Integration RED had no data effects; GREEN exact owning method, same-line sibling exclusion and uninvoked Java lambda cut. Existing walk limitation observed separately: an internal method named save may remain a receiver-resolution cut; this change does not alter that walk rule.
+- L6: Baseline and candidate run-owned artifacts retained under scratch. Initial manifest accidentally matched the word class inside an advice comment (target handles); both versions returned unknown-symbol. Corrected the target to ExceptionControllerAdvice and retain both failed attempts; correction re-run pending. Frozen differential: 3 maps, 4 callers, 2 importers, 2 outlines, 3 impacts = 14 commands. No target-repository state changed.
+
+- L7: Complete syntax inventory before fluent JPA execution: pbr 138, shop 294, ord 1 data sites; all other corpora zero. A broad terminal-call reconciliation found 2 additional JPA executions in the REST backend and 9 in the commerce backend through standard query setters. RED reproduced empty extraction for createQuery().setParameter().setMaxResults().getResultList(); GREEN follows only declared Query configuration members, never an arbitrary fluent method. Final syntax inventory: pbr 140, shop 303, ord 1; zero conflicting single imports in every corpus snapshot. The premature full check was terminated before completion; its log is check-interrupted.log. The completed final gate is check-final.log.
+- L8: Preserve all earlier candidate attempts. Candidate refresh reuses only facts whose expanded steps and folded leaves do not touch any of the three files with newly admitted fluent sites; changed/unmeasured traces are re-run with the final reader. Baseline correction artifacts override the invalid advice target and supply the four acceptance traces. Manifests, raw stdout/stderr, render text and exact pinned SHAs are retained under scratch. Inventory is extraction evidence, distinct from effects reached by traces.
+
+- L9: Final Node v24.22.2 gate: npm run check exited 0; 3714 tests, 3714 pass, 0 fail (154736.923 ms), typecheck and arch:check clean. Catalogue measurement is exactly 36,100 bytes for original tools, with unchanged descriptions. Cleanup over the implementation diff found no remaining issue; broad effect-kind consumers were searched and the old test helper's union narrowing was updated. SCHEMA remains 0.21.0. Final completed full gate log: check-final.log; one earlier run was intentionally interrupted to fix the newly reproduced fluent-query gap.

@@ -263,3 +263,19 @@ test("an unresolved trace call keeps its whole place when the path and the spell
   assert.ok(renderTrace(fact, "details").includes("    src/my dir/a.ts:15 (async (x) => x)().run (src/b.ts:run)"), renderTrace(fact, "details"));
   assert.ok(renderTrace(fact).includes("    run ×1 in 1 file → 1 candidate"), renderTrace(fact));
 });
+
+test("data effects render access and operation with optional proven targets in summaries and step details", () => {
+  const fact = traceFact();
+  assert.notEqual(fact.status, "unknown");
+  if (fact.status === "unknown") return;
+  fact.value.steps[0]!.effects = [
+    { kind: "data", line: 4, operation: "findById", access: "read", target: { kind: "entity", name: "shop.Order" } },
+    { kind: "data", line: 5, operation: "update", access: "write" },
+  ];
+  for (const mode of ["summary", "details"] as const) {
+    const text = renderTrace(fact, mode);
+    assert.ok(text.includes("data read findById entity shop.Order"));
+    assert.ok(text.includes("data write update"));
+    assert.ok(!text.includes("undefined"));
+  }
+});

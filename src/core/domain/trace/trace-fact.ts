@@ -18,10 +18,12 @@ export interface TraceLeaf {
 }
 
 /**
- * A call the RFC-0011 call-site extraction proves leaves the process through a declared client (an HTTP request, a
- * published message), with the target it resolves, at its line in the step's file.
+ * A framework data operation, with its access class and only the entity or storage target the source proves.
  */
-export type TraceEffect = { kind: "http"; line: number; target: HttpTarget } | { kind: "message"; line: number; target: EventTarget };
+export type DataEffect = { kind: "data"; line: number; operation: string; access: "read" | "write" | "unknown"; target?: { kind: "entity" | "table" | "collection"; name: string } };
+
+/** A declared framework effect, at its line in the step's file. */
+export type TraceEffect = DataEffect | { kind: "http"; line: number; target: HttpTarget } | { kind: "message"; line: number; target: EventTarget };
 
 /**
  * Calls that leave the repository, once per name. `import` names the package a file imports the callee from, `global` a

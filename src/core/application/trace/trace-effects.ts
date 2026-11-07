@@ -1,5 +1,6 @@
 import { NOT_DECLARED_KINDS } from "../../domain/impact/importers-fact.ts";
 import type { Cut } from "../../domain/shared/fact.ts";
+import type { PlacedDataEffect } from "../../domain/trace/data-effect-site.ts";
 import type { PlacedCallSite } from "../../domain/topology/call-site.ts";
 import { effectOf, unplacedEffect } from "../../domain/trace/trace-effects.ts";
 import { declarationSpan, executesInBody, owningBody, type SourceSpan } from "../../domain/trace/owning-body.ts";
@@ -16,7 +17,7 @@ export interface TraceEffectsInput {
   store: CodeGraphReader;
   unresolvedIn: UnresolvedIn;
   /** The snapshot's call sites with their places. */
-  sites: () => Promise<readonly PlacedCallSite[]>;
+  sites: () => Promise<readonly (PlacedCallSite | PlacedDataEffect)[]>;
   /** A line of a source as the snapshot holds it; undefined when the snapshot does not hold the file. */
   lineOf: (file: string, line: number) => string | undefined;
   /** The function values a source's syntax states, each whole; undefined when the snapshot does not hold the source. */
@@ -59,7 +60,7 @@ export async function placeEffects(roots: readonly WalkedStep[], { store, unreso
       const owner = owningBody(bodies, at);
       const step = owner === undefined ? undefined : expanded.get(owner.symbol.id);
       if (owner === undefined || step === undefined) continue;
-      if (placed.declaration !== true && (!callLinesOf(owner.symbol).has(site.line) || (values === undefined || !executesInBody(owner, values, at)))) {
+      if (!("declaration" in placed && placed.declaration === true) && (!callLinesOf(owner.symbol).has(site.line) || (values === undefined || !executesInBody(owner, values, at)))) {
         markCut(step, unplacedEffect(site), cuts);
         continue;
       }

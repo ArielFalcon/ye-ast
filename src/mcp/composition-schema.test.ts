@@ -188,3 +188,20 @@ test("dependency selection reasons remain closed in runtime and advertised compo
   assert.equal(runtime(invalid), false);
   assert.equal(ajv(invalid).valid, false);
 });
+
+test("compose accepts structured data effects with and without an entity and rejects invalid access", () => {
+  const source = sourceFixture("trace");
+  const built = composeFull(resultOf([source]));
+  const step = built.graph.parts.find((part) => part.kind === "trace-step");
+  assert.ok(step?.kind === "trace-step");
+  step.effects = [
+    { kind: "data", line: 11, operation: "save", access: "write", target: { kind: "entity", name: "shop.Order" } },
+    { kind: "data", line: 12, operation: "query", access: "read" },
+  ];
+  assert.equal(COMPOSE_OUTPUT.safeParse(built).success, true);
+  const invalid = structuredClone(built);
+  const changed = invalid.graph.parts.find((part) => part.kind === "trace-step");
+  assert.ok(changed?.kind === "trace-step");
+  Object.assign(changed.effects![0]!, { access: "guessed" });
+  assert.equal(COMPOSE_OUTPUT.safeParse(invalid).success, false);
+});
